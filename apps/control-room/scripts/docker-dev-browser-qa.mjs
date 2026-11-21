@@ -12,7 +12,6 @@ import { runViewportLayoutBrowserQa } from "./lib/viewport-layout-browser-qa.mjs
 import { runViewportQaFixtureBrowser } from "./lib/viewport-qa-fixture-browser.mjs";
 import { runViewportCameraBrowserQa } from "./lib/viewport-camera-browser-qa.mjs";
 import { runTerminalFooterTelemetryBrowserQa } from "./docker-dev-terminal-telemetry.mjs";
-import { assertPlanarEvidenceReady } from "./lib/planar-field-evidence.mjs";
 
 const require = createRequire(import.meta.url);
 const playwrightPackage = require("playwright/package.json");
@@ -53,6 +52,8 @@ const expectAmbiguousComputeFieldsSetting =
 const expectAmbiguousComputeFields = expectAmbiguousComputeFieldsSetting === "1";
 const expectTerminalTelemetrySetting = process.env.CONTROL_ROOM_BROWSER_QA_EXPECT_TERMINAL_TELEMETRY;
 const expectTerminalTelemetry = expectTerminalTelemetrySetting === "1";
+const expectFdmCellPhysicsSetting = process.env.CONTROL_ROOM_BROWSER_QA_EXPECT_FDM_CELL_PHYSICS;
+const expectFdmCellPhysics = expectFdmCellPhysicsSetting === "1";
 const expectRunPerformanceSetting = process.env.CONTROL_ROOM_BROWSER_QA_EXPECT_RUN_PERFORMANCE;
 const expectRunPerformance = expectRunPerformanceSetting === "1";
 const expectPlanarAirboxSetting = process.env.CONTROL_ROOM_BROWSER_QA_EXPECT_PLANAR_AIRBOX ?? "0";
@@ -181,6 +182,167 @@ const readHarnessSourceHashes = async () => {
 const sameHarnessSourceHashes = (left, right) =>
   Object.keys(left).every((key) => left[key] === right[key]);
 
+// Check the rendered decimal itself, including the precision used by the panel.
+function assertVisibleCellNumber({ raw, text }) {
+  const literal = text.trim();
+  if (!/^[+-]?(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?(?:e[+-]?\d+)?$/i.test(literal)) throw new Error("Cell Inspector displayed a malformed number");
+  const visible = Number(literal.replaceAll(",", ""));
+  if (!Number.isFinite(raw) || !Number.isFinite(visible)) throw new Error("Cell Inspector displayed a non-finite number");
+  if (visible === raw) return;
+  const absolute = Math.abs(raw);
+  const digits = absolute < 1e-3 || absolute >= 1e6 ? 4 : 6;
+  const tolerance = absolute === 0 ? 0 : 0.5 * 10 ** (Math.floor(Math.log10(absolute)) - digits + 1) + absolute * Number.EPSILON * 4;
+  if (Math.abs(visible - raw) > tolerance) throw new Error("Cell Inspector visible text differs from its numeric value");
+}
+
+// Terminal FDM inspection is read-only: real pointer picking, public probes and visible values.
+async function proveFdmCellPhysics(page) {
+  const originalViewport = page.viewportSize();
+  const inspector = page.getByTestId("panel-right");
+  const originalWidth = (await inspector.boundingBox())?.width;
+  const themeBefore = await page.evaluate(() => document.documentElement.dataset.theme);
+  let resizeInspector = null;
+  const toggleTheme = async () => {
+    const previous = await page.evaluate(() => document.documentElement.dataset.theme);
+    await page.keyboard.press("Control+Shift+T");
+    await page.waitForFunction((theme) => document.documentElement.dataset.theme !== theme, previous, { timeout: 5000 });
+  };
+  const samples = [];
+  const pending = new Set();
+  const onResponse = (response) => {
+    if (!/\/data\/fields\/[^/]+\/planar-default\/probe\?/.test(response.url())) return;
+    const task = response.json().then((body) => {
+      if (response.ok() && samples.length < 64) samples.push(body);
+    }).catch(() => {}).finally(() => pending.delete(task));
+    pending.add(task);
+  };
+  page.on("response", onResponse);
+  try {
+    await page.setViewportSize({ width: 1600, height: 1280 });
+    const canvas = page.locator(".fm-viewport-3d canvas");
+    const tabs = page.getByRole("tablist", { name: "FDM Cell details", exact: true });
+    const box = await canvas.boundingBox();
+    if (!box) throw new Error("FDM cell picking requires a visible canvas");
+    // Pick actual rendered cells, never inject selection or write model state.
+    for (const [fx, fy] of [[0.5, 0.5], [0.45, 0.5], [0.55, 0.5], [0.5, 0.45], [0.5, 0.55]]) {
+      await canvas.click({ position: { x: box.width * fx, y: box.height * fy } });
+      if (await tabs.waitFor({ state: "visible", timeout: 1000 }).then(() => true).catch(() => false)) break;
+    }
+    await tabs.getByRole("tab", { name: "Physics", exact: true }).waitFor({ timeout: 15_000 });
+    const panel = page.locator("[data-fdm-cell-physics-status]");
+    await page.waitForFunction(() => document.querySelector("[data-fdm-cell-physics-status]")?.getAttribute("data-fdm-cell-physics-status") === "ready", null, { timeout: 30_000 });
+    await Promise.all([...pending]);
+    const observation = await panel.evaluate((node) => ({
+      ordinal: Number(node.getAttribute("data-fdm-cell-ordinal")),
+      rows: [...node.querySelectorAll("[data-fdm-quantity-id]")].map((row) => ({
+        id: row.getAttribute("data-fdm-quantity-id"), status: row.getAttribute("data-fdm-sample-status"),
+        values: [...row.querySelectorAll("data[data-fdm-value]")].map((value) => ({
+          kind: value.getAttribute("data-fdm-value"), raw: Number(value.getAttribute("value")), text: value.textContent?.trim() ?? "",
+        })),
+      })),
+    }));
+    if (!Number.isSafeInteger(observation.ordinal) || observation.ordinal < 0) throw new Error("Inspector omitted selected cell ordinal");
+    for (const row of observation.rows) {
+      for (const value of row.values) assertVisibleCellNumber(value);
+    }
+    for (const id of ["m", "mat_ms", "mat_aex", "mat_alpha", "eden_total"]) {
+      const row = observation.rows.find((r) => r.id === id);
+      const sample = samples.findLast((r) => r.quantity_id === id && r.cell_id === observation.ordinal);
+      if (!row || row.status !== "ready" || !sample) throw new Error(`FDM cell inspection missing ready ${id} and exact public probe`);
+      if (id === "m") {
+        for (const [i, label] of ["mx", "my", "mz"].entries()) {
+          const value = row.values.find((v) => v.kind === label);
+          const visible = value?.text ? value.raw : NaN;
+          if (!Number.isFinite(visible) || Math.abs(visible - sample.vector[i]) > 5e-6) throw new Error(`Visible ${label} disagrees with selected-cell probe`);
+        }
+      } else {
+        const numeric = row.values.filter((v) => v.kind === "scalar" && v.text.length > 0).map((v) => v.raw).filter(Number.isFinite);
+        if (!numeric.some((v) => Math.abs(v - sample.scalar) <= Math.max(Math.abs(sample.scalar) * 5e-6, 1e-30))) throw new Error(`Visible ${id} disagrees with exact public probe`);
+      }
+    }
+    const domainResponse = await page.request.get(new URL("/v2/sessions/current/data/domain/meta", page.url()).toString());
+    if (!domainResponse.ok()) throw new Error("Cell energy check requires current domain metadata");
+    const domain = await domainResponse.json();
+    const volume = domain.grid?.spacing?.reduce((a, b) => a * b, 1);
+    const total = observation.rows.find((r) => r.id === "eden_total");
+    const density = samples.findLast((r) => r.quantity_id === "eden_total" && r.cell_id === observation.ordinal)?.scalar;
+    const cellEnergy = total.values.find((v) => v.kind === "cell-energy" && v.text.length > 0)?.raw;
+    if (!(volume > 0) || !Number.isFinite(cellEnergy) || Math.abs(cellEnergy - density * volume) > Math.max(Math.abs(density * volume) * 1e-5, 1e-40)) throw new Error("Visible cell energy does not equal signed density times cell volume");
+    await tabs.getByRole("tab", { name: "Grid", exact: true }).focus();
+    await page.keyboard.press("Enter");
+    await page.getByText("Current Cell", { exact: true }).waitFor({ timeout: 5000 });
+    await tabs.getByRole("tab", { name: "Physics", exact: true }).focus();
+    await page.keyboard.press("Enter");
+    await panel.waitFor({ state: "visible" });
+    await page.waitForFunction(() => document.querySelector("[data-fdm-cell-physics-status]")?.getAttribute("data-fdm-cell-physics-status") === "ready", null, { timeout: 30_000 });
+    if (Number(await panel.getAttribute("data-fdm-cell-ordinal")) !== observation.ordinal) throw new Error("Cell selection changed across inspector tabs");
+    const handle = page.getByRole("separator", { name: /Resize .* and Inspector panels/i });
+    resizeInspector = async (width) => {
+      const bounds = await inspector.boundingBox();
+      const grip = await handle.boundingBox();
+      if (!bounds || !grip) throw new Error("Inspector resize requires a visible dock handle");
+      await page.mouse.move(grip.x + grip.width / 2, grip.y + grip.height / 2);
+      await page.mouse.down();
+      await page.mouse.move(grip.x + grip.width / 2 + bounds.width - width, grip.y + grip.height / 2, { steps: 12 });
+      await page.mouse.up();
+      await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+      const measured = (await inspector.boundingBox())?.width;
+      if (!Number.isFinite(measured) || Math.abs(measured - width) > 3) throw new Error(`Inspector resize requested ${width}px, measured ${measured}px`);
+    };
+    const checkLayout = async () => panel.evaluate((node) => {
+      const values = [...node.querySelectorAll("data[data-fdm-value]")];
+      const clipped = values.filter((value) => value.getBoundingClientRect().width > value.parentElement.clientWidth + 1).map((value) => value.textContent);
+      const total = node.querySelector('[data-fdm-energy-term="total"]')?.getBoundingClientRect();
+      const inspectorWidth = document.querySelector('[data-testid="panel-right"]')?.getBoundingClientRect().width;
+      const details = node.querySelector('[data-slot="inspector-group"]:last-child')?.getBoundingClientRect();
+      const summary = node.querySelector('.fm-fdm-cell-physics__summary')?.getBoundingClientRect();
+      const tabs = document.querySelector('[role="tablist"][aria-label="FDM Cell details"]')?.getBoundingClientRect();
+      const footer = document.querySelector('[data-testid="panel-right"] .fm-inspector__action-bar')?.getBoundingClientRect();
+      return { inspector_width: inspectorWidth, summary_top: summary?.top, tabs_bottom: tabs?.bottom, details_bottom: details?.bottom, width: node.clientWidth, scroll_width: node.scrollWidth, clipped_values: clipped, total_bottom: total?.bottom, footer_top: footer?.top };
+    });
+    let screenshot, topScreenshot, alternateScreenshot, narrowScreenshot, workspaceScreenshot;
+    let layout, narrowLayout;
+    {
+      await resizeInspector(380);
+      await panel.locator(".fm-fdm-cell-physics__summary").scrollIntoViewIfNeeded();
+      if (themeBefore !== "light") await toggleTheme();
+      const overview = await checkLayout();
+      if (!(overview.details_bottom <= overview.footer_top && overview.total_bottom <= overview.footer_top && overview.summary_top >= overview.tabs_bottom - 1)) throw new Error("Full Inspector overview does not fit its visible body");
+      topScreenshot = await inspector.screenshot({ type: "png" });
+      workspaceScreenshot = await page.screenshot({ type: "png" });
+      await panel.locator('[data-fdm-energy-term="total"]').scrollIntoViewIfNeeded();
+      layout = await checkLayout();
+      screenshot = await inspector.screenshot({ type: "png" });
+      await toggleTheme();
+      await panel.locator(".fm-fdm-cell-physics__summary").scrollIntoViewIfNeeded();
+      alternateScreenshot = await inspector.screenshot({ type: "png" });
+      await resizeInspector(300);
+      await panel.locator(".fm-fdm-cell-physics__summary").scrollIntoViewIfNeeded();
+      narrowLayout = await checkLayout();
+      if (!(narrowLayout.details_bottom <= narrowLayout.footer_top && narrowLayout.total_bottom <= narrowLayout.footer_top && narrowLayout.summary_top >= narrowLayout.tabs_bottom - 1)) throw new Error("Full narrow Inspector does not fit its visible body");
+      narrowScreenshot = await inspector.screenshot({ type: "png" });
+      for (const current of [layout, narrowLayout]) {
+        if (current.scroll_width > current.width + 1 || current.clipped_values.length) throw new Error(`Cell physics clips at inspector width ${current.width}: ${JSON.stringify(current)}`);
+        if (current.footer_top && current.total_bottom > current.footer_top) throw new Error("Cell energy total is covered by the Inspector footer");
+      }
+    }
+    if ([screenshot, topScreenshot, alternateScreenshot, narrowScreenshot, workspaceScreenshot].some((png) => png.length > maxCanvasScreenshotBytes)) throw new Error("Cell inspector screenshot exceeds proof budget");
+    return { state: "passed", real_pointer_pick: true, keyboard_tabs: true, observation, public_probes: samples, layout, narrow_layout: narrowLayout, themes: ["light", "dark"], inspector_png_base64: screenshot.toString("base64"), inspector_top_png_base64: topScreenshot.toString("base64"), inspector_alternate_theme_png_base64: alternateScreenshot.toString("base64"), inspector_narrow_png_base64: narrowScreenshot.toString("base64"), workspace_png_base64: workspaceScreenshot.toString("base64"), canvas: await assertCanvas(page, "after FDM cell Physics inspection") };
+  } finally {
+    page.off("response", onResponse);
+    try {
+      await Promise.all([...pending]);
+      if (originalViewport) await page.setViewportSize(originalViewport);
+    } finally {
+      try {
+        if (resizeInspector && originalWidth) await resizeInspector(originalWidth);
+      } finally {
+        if (await page.evaluate(() => document.documentElement.dataset.theme) !== themeBefore) await toggleTheme();
+      }
+    }
+  }
+}
+
 const sessionIdentity = async (page) => {
   const endpoint = new URL("/v2/sessions/current/status", page.url()).toString();
   const response = await page.request.get(endpoint, { timeout });
@@ -271,7 +433,17 @@ const canvasState = async (page) => page.locator(".fm-viewport-3d canvas").first
 const viewportDomObservation = async (page) => page.locator(".fm-viewport-3d").evaluate((viewport) => {
   const datasetEntries = Object.entries(viewport.dataset);
   const quantityLabels = [...viewport.querySelectorAll("[data-quantity-id]")];
+  const refresh = viewport.querySelector(".fm-viewport-3d__refresh-countdown");
+  const refreshRect = refresh?.getBoundingClientRect();
   return {
+    field_refresh: refresh ? {
+      aria_label: refresh.getAttribute("aria-label")?.slice(0, 256) ?? "",
+      detail: refresh.querySelector(".fm-viewport-3d__refresh-countdown-detail")?.textContent?.trim().slice(0, 128) ?? "",
+      pulse_id: refresh.getAttribute("data-pulse-id"),
+      state: refresh.getAttribute("data-refresh-state"),
+      title: refresh.querySelector(".fm-viewport-3d__refresh-countdown-title")?.textContent?.trim().slice(0, 128) ?? "",
+      visible: Boolean(refreshRect?.width > 0 && refreshRect?.height > 0),
+    } : null,
     dataset: Object.fromEntries(datasetEntries.slice(0, 64).map(([key, value]) => [key, value.slice(0, 1024)])),
     dataset_entry_count: datasetEntries.length,
     dataset_truncated: datasetEntries.length > 64 || datasetEntries.some(([, value]) => value.length > 1024),
@@ -374,10 +546,6 @@ const canonicalizeJsonValue = (value) => {
 const sameCanonicalJsonValue = (left, right) =>
   JSON.stringify(canonicalizeJsonValue(left)) === JSON.stringify(canonicalizeJsonValue(right));
 
-const planarProfileRangeIsRestorable = (range) =>
-  (range?.mode === "auto" && range.min === null && range.max === null) ||
-  (range?.mode === "manual" && Number.isFinite(range.min) && Number.isFinite(range.max) && range.min < range.max);
-
 const expectedAirboxDefaultFrame = (layout, planar) => {
   const airbox = layout?.airbox;
   const cells = airbox?.cells;
@@ -394,9 +562,10 @@ const expectedAirboxDefaultFrame = (layout, planar) => {
   };
   const defaultSlice = planar?.default_slice;
   const plane = defaultSlice?.plane;
-  const positionFraction = defaultSlice?.position_fraction;
+  const positionFraction = defaultSlice?.position_fraction ?? Number.NaN;
   const operatorKind = defaultSlice?.operator?.kind;
-  if (!(["xy", "xz", "yz"].includes(plane)) || !Number.isFinite(positionFraction) ||
+  if (!(["xy", "xz", "yz"].includes(plane)) || typeof positionFraction !== "number" ||
+      !Number.isFinite(positionFraction) ||
       positionFraction < 0 || positionFraction > 1 || !["plane_sample", "slab_average"].includes(operatorKind)) {
     throw new Error("Current default planar slice presentation is not a supported axis-aligned slice");
   }
@@ -472,28 +641,6 @@ const waitForPlanarAirboxMeta = async (firstIndex) => {
     await new Promise((resolve) => setTimeout(resolve, 50));
   }
   throw new Error("The browser did not load planar-default metadata for scope_kind=airbox without scope_id");
-};
-
-const assertPlanarFieldMapCanvas = async (page) => {
-  const canvas = page.locator(".fm-field-map__canvas[aria-label='Planar scalar field']:visible").first();
-  await canvas.waitFor({ state: "visible", timeout });
-  await page.waitForFunction(() => {
-    const node = [...document.querySelectorAll(".fm-field-map__canvas[aria-label='Planar scalar field']")]
-      .find((candidate) => getComputedStyle(candidate).visibility !== "hidden");
-    if (!(node instanceof HTMLCanvasElement) || node.width <= 0 || node.height <= 0) return false;
-    const rect = node.getBoundingClientRect();
-    const style = getComputedStyle(node);
-    if (rect.width <= 0 || rect.height <= 0 || style.display === "none" || style.visibility === "hidden" || Number(style.opacity) <= 0) return false;
-    const context = node.getContext("2d");
-    if (!context) return false;
-    const pixels = context.getImageData(0, 0, node.width, node.height).data;
-    for (let index = 3; index < pixels.length; index += 4) if (pixels[index] !== 0) return true;
-    return false;
-  }, null, { timeout });
-  return canvas.evaluate((node) => {
-    const rect = node.getBoundingClientRect();
-    return { visible: rect.width > 0 && rect.height > 0, width: node.width, height: node.height, non_transparent: true };
-  });
 };
 
 const capturePlanarFieldMapScreenshot = async (page) => {
@@ -623,29 +770,49 @@ const exportVisiblePlanarComposition = async (page, expected) => {
   }
 };
 
-const selectToolbarOption = async (page, trigger, label, description) => {
-  await trigger.click();
-  const option = page.getByRole("option", { name: label, exact: true });
-  await option.waitFor({ state: "visible", timeout });
-  if ((await option.getAttribute("aria-disabled")) === "true") {
-    throw new Error(`${description} is disabled in the current field catalog`);
-  }
-  if ((await option.getAttribute("aria-selected")) === "true") {
-    await page.keyboard.press("Escape");
-    return false;
-  }
+/** Run one UI action and wait for the display-state PATCH it causes. */
+const withDisplayStatePatch = async (page, action, description) => {
   const acknowledgement = page.waitForResponse((response) => {
     const url = new URL(response.url());
     return response.request().method() === "PATCH" && url.pathname === "/v2/sessions/current/visualization/state";
   }, { timeout });
-  await option.click();
+  await action();
   const response = await acknowledgement;
   if (response.status() < 200 || response.status() >= 300) {
     throw new Error(`${description} display-state acknowledgement returned ${response.status()}`);
   }
-  return true;
 };
 
+/** Pixel proof of one field layer's raster canvas in the visible composition slot. */
+const assertPlanarLayerRasterCanvas = async (page, layerId) => {
+  const handle = await page.waitForFunction((id) => {
+    const slot = document.querySelector('[data-planar-composition-slot][aria-hidden="false"]');
+    const node = slot && [...slot.querySelectorAll("canvas[data-planar-overlay-id]")]
+      .find((candidate) => candidate.getAttribute("data-planar-overlay-id") === id &&
+        candidate.getAttribute("data-planar-overlay-layer") === "raster");
+    if (!(node instanceof HTMLCanvasElement) || node.width <= 0 || node.height <= 0) return null;
+    const rect = node.getBoundingClientRect();
+    const style = getComputedStyle(node);
+    if (rect.width <= 0 || rect.height <= 0 || style.display === "none" || style.visibility === "hidden" || Number(style.opacity) <= 0) return null;
+    const context = node.getContext("2d");
+    if (!context) return null;
+    const pixels = context.getImageData(0, 0, node.width, node.height).data;
+    for (let index = 3; index < pixels.length; index += 4) {
+      if (pixels[index] !== 0) return { visible: true, width: node.width, height: node.height, non_transparent: true };
+    }
+    return null;
+  }, layerId, { timeout });
+  return handle.jsonValue();
+};
+
+/**
+ * Airbox H_demag through the 2D field layers (ADR 0080). Quantity and scope
+ * left the canvas toolbar ("2D view tools"); the Airbox field is a layer in
+ * the inspector's layer list whose quantity and component are set in the
+ * selected-layer editor. The base sample only names the frame, so the proof
+ * binds the Airbox layer's own metadata, overlay canvases and export, and
+ * restores the original layer list exactly.
+ */
 const runPlanarAirboxBrowserQa = async (page, expectedSession) => {
   const sessionBefore = await currentSessionRunIdentity(page);
   for (const key of ["session_id", "session_epoch", "request_scope_epoch"]) {
@@ -658,20 +825,14 @@ const runPlanarAirboxBrowserQa = async (page, expectedSession) => {
   if (planar?.source?.kind !== "default") {
     throw new Error("Planar Airbox QA requires the loaded session's existing default field source");
   }
-  const originalScopeKind = planar.view_scope?.kind;
-  if (!["monitor_target", "airbox"].includes(originalScopeKind)) {
-    throw new Error(`Planar Airbox QA cannot safely restore the existing ${String(originalScopeKind)} scope`);
+  if (planar.layer_model !== "layers") {
+    throw new Error("Planar Airbox QA requires the field-layer model (layer_model = layers)");
   }
-  if (!["m", "H_demag"].includes(planar.quantity_id) || planar.component !== "magnitude") {
-    throw new Error("Planar Airbox QA supports only restorable m or H_demag magnitude profiles");
+  if (planar.layers?.raster !== true) {
+    throw new Error("Planar Airbox QA requires the toolbar raster mask to be on");
   }
-  if (planar.quantity_id === "m" && originalScopeKind !== "monitor_target") {
-    throw new Error("Planar Airbox QA requires an m field to start in Monitor target scope");
-  }
-  if (planar.quantity_id === "m" &&
-      (!["viridis", "hsl_direction"].includes(planar.colormap) || !planarProfileRangeIsRestorable(planar.range))) {
-    throw new Error("Planar Airbox QA cannot safely restore the existing m palette and color range");
-  }
+  const originalLayers = Array.isArray(planar.field_overlays) ? planar.field_overlays : [];
+  const originalAirboxLayer = originalLayers.find((layer) => layer.id === "airbox") ?? null;
   const layout = await readPlanarAirboxJson(
     page, "/v2/sessions/current/data/domain/fdm-multilayer-layout", "FDM multilayer layout",
   );
@@ -685,15 +846,17 @@ const runPlanarAirboxBrowserQa = async (page, expectedSession) => {
   const open2d = page.getByRole("tab", { name: "2D View", exact: true });
   const originalViewWas2d = (await open2d.getAttribute("aria-selected")) === "true";
   if (!originalViewWas2d) await open2d.click();
-  const toolbar = page.getByRole("toolbar", { name: "2D view controls", exact: true });
+  const toolbar = page.getByRole("toolbar", { name: "2D view tools", exact: true });
   await toolbar.waitFor({ state: "visible", timeout });
-  const quantity = toolbar.getByRole("combobox", { name: "Quantity", exact: true });
-  const scope = toolbar.getByRole("combobox", { name: "Scope", exact: true });
-  if (await quantity.count() !== 1 || await scope.count() !== 1) {
-    throw new Error("2D Field Map did not expose one Quantity and one Scope selector");
+  for (const name of ["Quantity", "Scope"]) {
+    if (await toolbar.getByRole("combobox", { name, exact: true }).count() !== 0) {
+      throw new Error(`2D view tools still expose a ${name} selector; it belongs to the inspector's field layers`);
+    }
   }
-  const originalQuantityLabel = (await quantity.innerText()).trim();
-  const originalScopeLabel = (await scope.innerText()).trim();
+  await openPlanarViewGroup(page);
+  const layerList = page.locator('[data-slot="planar-field-layer-list"]');
+  await layerList.waitFor({ state: "visible", timeout });
+  const airboxRow = layerList.locator('li[data-layer-id="airbox"]');
   const metadataStart = planarAirboxMetaResponses.length;
   const patchStart = displayPatchRequestCount;
   const catalog = await readPlanarAirboxJson(
@@ -704,56 +867,84 @@ const runPlanarAirboxBrowserQa = async (page, expectedSession) => {
   if (demagEntries.length !== 1 || demagEntries[0].available !== true) {
     throw new Error("The live field catalog did not expose one available H_demag quantity");
   }
-  const demagLabel = `${demagEntries[0].label}${demagEntries[0].unit ? ` (${demagEntries[0].unit})` : ""}`;
   let presentationRestored = false;
   let originalViewRestored = originalViewWas2d;
   let observation = null;
+  const selectAirboxLayer = async () => {
+    await airboxRow.waitFor({ state: "visible", timeout });
+    await airboxRow.getByRole("button", { name: /^Edit / }).click();
+    const quantity = page.getByRole("combobox", { name: "Quantity", exact: true });
+    const component = page.getByRole("combobox", { name: "Component", exact: true });
+    await quantity.waitFor({ state: "visible", timeout });
+    if (await quantity.count() !== 1 || await component.count() !== 1) {
+      throw new Error("The selected-layer editor did not expose one Quantity and one Component selector");
+    }
+    return { quantity, component };
+  };
+  const setSelect = async (select, value, description) => {
+    if ((await select.inputValue()) === value) return;
+    await withDisplayStatePatch(page, () => select.selectOption(value), description);
+  };
+  const setPressed = async (button, pressed, description) => {
+    if (((await button.getAttribute("aria-pressed")) === "true") === pressed) return;
+    await withDisplayStatePatch(page, () => button.click(), description);
+  };
   try {
-    await selectToolbarOption(page, quantity, demagLabel, "H_demag quantity");
-    await selectToolbarOption(page, scope, "Universe / Airbox", "Universe / Airbox scope");
+    if (!originalAirboxLayer) {
+      await layerList.getByRole("button", { name: "Add field", exact: true }).click();
+      const item = layerList.getByRole("menu", { name: "Add field for" })
+        .getByRole("menuitem").filter({ hasText: /airbox/i });
+      if (await item.count() !== 1) throw new Error("The Add field menu did not offer one Airbox target");
+      await withDisplayStatePatch(page, () => item.click(), "Add Airbox field layer");
+    }
+    const editor = await selectAirboxLayer();
+    await setSelect(editor.quantity, "H_demag", "Airbox layer H_demag quantity");
+    await setSelect(editor.component, "magnitude", "Airbox layer magnitude component");
+    await setPressed(airboxRow.getByRole("button", { name: /^(Show|Hide) / }), true, "Show Airbox layer");
+    await setPressed(airboxRow.getByRole("button", { name: /^Raster for / }), true, "Airbox layer raster");
     const metaRequest = await waitForPlanarAirboxMeta(metadataStart);
     const meta = metaRequest.payload;
-    const evidenceHandle = await page.waitForFunction((expected) => {
+    const evidenceHandle = await page.waitForFunction(() => {
       const raw = document.querySelector("[aria-label='Planar field evidence']")?.getAttribute("data-planar-evidence");
       if (!raw) return null;
       try {
         const evidence = JSON.parse(raw);
-        return evidence.status === "ready" && evidence.quantityId === "H_demag" &&
-          evidence.sourceKind === "default" && evidence.sourceId === "default" &&
-          evidence.component === "magnitude" && evidence.metaIdentity === expected.etag &&
-          evidence.sampleToken === expected.sample_token ? evidence : null;
+        return evidence.status === "ready" && evidence.sourceKind === "default" && evidence.sourceId === "default" &&
+          Number.isFinite(evidence.resolvedCoordinateM) ? evidence : null;
       } catch {
         return null;
       }
-    }, { etag: meta.etag, sample_token: meta.sample_token }, { timeout });
+    }, null, { timeout });
+    // The base evidence names the shared frame; every layer samples its exact plane.
     const evidence = await evidenceHandle.jsonValue();
-    assertPlanarEvidenceReady(evidence, {
-      component: "magnitude",
-      sourceKind: "default",
-      sourceId: "default",
-      operatorKind: expectedFrame.operatorKind,
-      quantityId: "H_demag",
-      defaultPlane: expectedFrame.plane,
-      positionFraction: expectedFrame.positionFraction,
-      resolvedCoordinateM: expectedFrame.resolvedCoordinateM,
-    }, meta);
-    const matchedFrame = assertPlanarFrameMatchesAirbox(meta, expectedFrame);
-    if (evidence.domainGenerationId !== layout.domain_generation_id ||
-        !evidence.sampleToken || evidence.sampleToken !== meta.sample_token ||
-        !evidence.raster?.checksum || evidence.raster.sampleCount <= 0) {
-      throw new Error("Planar Airbox raster evidence is not bound to the current metadata/layout identities");
+    if (evidence.domainGenerationId !== layout.domain_generation_id) {
+      throw new Error("Planar base evidence is not bound to the current domain layout");
     }
-    const canvas = await assertPlanarFieldMapCanvas(page);
-    const requestedLayers = (planar.field_overlays ?? [])
-      .filter((layer) => layer.raster_visible || layer.vectors_visible)
+    const normalAxis = expectedFrame.normal.findIndex((value) => value !== 0);
+    const layerFrame = {
+      ...expectedFrame,
+      originM: expectedFrame.originM.map((value, axis) => axis === normalAxis ? evidence.resolvedCoordinateM : value),
+    };
+    const matchedFrame = assertPlanarFrameMatchesAirbox(meta, layerFrame);
+    if (meta.quantity_id !== "H_demag" || meta.component !== "magnitude" || !meta.sample_token) {
+      throw new Error("Airbox layer metadata does not describe the H_demag magnitude sample");
+    }
+    const layerState = await readPlanarAirboxJson(
+      page, "/v2/sessions/current/visualization/state", "Airbox layer state",
+    );
+    const requestedLayers = (layerState?.planar?.field_overlays ?? [])
+      .filter((layer) => layer.visible !== false && (layer.raster_visible || layer.vectors_visible))
       .map((layer) => ({
         id: layer.id,
         quantity_id: layer.quantity_id,
         raster_visible: layer.raster_visible,
         vectors_visible: layer.vectors_visible,
       }));
+    if (!requestedLayers.some((layer) => layer.id === "airbox" && layer.quantity_id === "H_demag")) {
+      throw new Error("Visualization state has no visible Airbox H_demag field layer");
+    }
     let composition = null;
-    if (requestedLayers.length) {
+    {
       const handle = await page.waitForFunction((expected) => {
         const buffers = document.querySelector("[data-planar-composition-state]");
         if (!buffers || !["verified", "unverified"].includes(buffers.getAttribute("data-planar-composition-state"))) return null;
@@ -791,6 +982,12 @@ const runPlanarAirboxBrowserQa = async (page, expectedSession) => {
       }, requestedLayers, { timeout });
       composition = await handle.jsonValue();
     }
+    const airboxSurface = composition?.layers?.find((layer) => layer.id === "airbox")
+      ?.surfaces?.find((surface) => surface.kind === "raster");
+    if (!airboxSurface || airboxSurface.sample_identity !== meta.etag) {
+      throw new Error("Airbox layer raster is not bound to the Airbox layer metadata identity");
+    }
+    const canvas = await assertPlanarLayerRasterCanvas(page, "airbox");
     const screenshot = await capturePlanarFieldMapScreenshot(page);
     const exportProof = await exportVisiblePlanarComposition(page, {
       expectedFrame,
@@ -805,6 +1002,8 @@ const runPlanarAirboxBrowserQa = async (page, expectedSession) => {
       source_id: "default",
       scope_kind: "airbox",
       scope_id: null,
+      layer_id: "airbox",
+      layer_added: originalAirboxLayer === null,
       session_before: sessionBefore,
       session_after: null,
       meta_request: {
@@ -831,7 +1030,7 @@ const runPlanarAirboxBrowserQa = async (page, expectedSession) => {
           cell_size_m: airbox.cell_size_m,
         },
       },
-      expected_frame: expectedFrame,
+      expected_frame: layerFrame,
       matched_frame: matchedFrame,
       canvas,
       composition,
@@ -844,25 +1043,24 @@ const runPlanarAirboxBrowserQa = async (page, expectedSession) => {
       presentation_restored: false,
     };
   } finally {
-    const currentScopeLabel = (await scope.innerText().catch(() => "")).trim();
-    if (currentScopeLabel !== originalScopeLabel) {
-      await selectToolbarOption(page, scope, originalScopeLabel, "Original scope restoration");
-    }
-    const restoredScopeState = await readPlanarAirboxJson(
-      page, "/v2/sessions/current/visualization/state", "Restored planar scope",
-    );
-    if (!sameCanonicalJsonValue(restoredScopeState?.planar?.view_scope, planar.view_scope)) {
-      throw new Error("Planar Airbox QA could not restore the original scope before restoring quantity");
-    }
-    const currentQuantityLabel = (await quantity.innerText().catch(() => "")).trim();
-    if (currentQuantityLabel !== originalQuantityLabel) {
-      await selectToolbarOption(page, quantity, originalQuantityLabel, "Original quantity restoration");
+    if (!originalAirboxLayer) {
+      if (await airboxRow.count() === 1) {
+        await withDisplayStatePatch(
+          page, () => airboxRow.getByRole("button", { name: /^Remove / }).click(), "Airbox layer removal",
+        );
+      }
+    } else if (await airboxRow.count() === 1) {
+      const editor = await selectAirboxLayer();
+      await setSelect(editor.quantity, originalAirboxLayer.quantity_id, "Original Airbox quantity restoration");
+      await setSelect(editor.component, String(originalAirboxLayer.component), "Original Airbox component restoration");
+      await setPressed(airboxRow.getByRole("button", { name: /^Raster for / }), Boolean(originalAirboxLayer.raster_visible), "Original Airbox raster restoration");
+      await setPressed(airboxRow.getByRole("button", { name: /^(Show|Hide) / }), originalAirboxLayer.visible !== false, "Original Airbox visibility restoration");
     }
     const restoredState = await readPlanarAirboxJson(
       page, "/v2/sessions/current/visualization/state", "Restored visualization state",
     );
     presentationRestored = sameCanonicalJsonValue(planar, restoredState?.planar);
-    if (!presentationRestored) throw new Error("Planar Airbox QA could not restore the original default-source presentation");
+    if (!presentationRestored) throw new Error("Planar Airbox QA could not restore the original field layers");
     if (!originalViewWas2d) {
       await page.getByRole("tab", { name: "3D Viewport", exact: true }).click();
     }
@@ -1527,6 +1725,8 @@ const requireRunPerformanceInteger = (value, label) => {
 
 const RUN_PERFORMANCE_MAX_SNAPSHOTS = 8;
 const RUN_PERFORMANCE_MAX_OBSERVATION_MS = 20_000;
+// Spread the bounded reads across the observation window, including busy reads.
+const RUN_PERFORMANCE_SNAPSHOT_INTERVAL_MS = 2_500;
 const RUN_PERFORMANCE_REQUEST_TIMEOUT_MS = 1_000;
 
 const readRunPerformanceApiContext = async (page, expectedSession) => {
@@ -1822,12 +2022,21 @@ const runAutomaticPerformanceBrowserQa = async (page, expectedSession) => {
         break;
       }
     }
-    if (attempt + 1 < RUN_PERFORMANCE_MAX_SNAPSHOTS && Date.now() + 750 < deadline) {
-      await new Promise((resolve) => setTimeout(resolve, 750));
+    if (attempt + 1 < RUN_PERFORMANCE_MAX_SNAPSHOTS &&
+        Date.now() + RUN_PERFORMANCE_SNAPSHOT_INTERVAL_MS < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, RUN_PERFORMANCE_SNAPSHOT_INTERVAL_MS));
     }
   }
   if (!selectedMetric || panelMatches.length === 0) {
-    throw new Error(`Automatic performance panel did not match any scoped API snapshot within ${RUN_PERFORMANCE_MAX_OBSERVATION_MS} ms`);
+    const error = new Error(`Automatic performance panel did not match any scoped API snapshot within ${RUN_PERFORMANCE_MAX_OBSERVATION_MS} ms`);
+    error.partialProof = {
+      state: "not-verified",
+      window_ms: Date.now() - (deadline - RUN_PERFORMANCE_MAX_OBSERVATION_MS),
+      api_requests: apiContext.requests,
+      api_snapshots: apiSnapshots,
+      panel: await observeRunPerformancePanel(panel),
+    };
+    throw error;
   }
   const refreshedPair = panelMatches.find((first, index) => panelMatches.slice(index + 1).some((second) =>
     first.api.state === "running" && second.api.state === "running" &&
@@ -1946,6 +2155,9 @@ const main = async () => {
   if (expectTerminalTelemetrySetting !== undefined && expectTerminalTelemetrySetting !== "1") {
     throw new Error("CONTROL_ROOM_BROWSER_QA_EXPECT_TERMINAL_TELEMETRY must be absent or exactly 1");
   }
+  if (expectFdmCellPhysicsSetting !== undefined && expectFdmCellPhysicsSetting !== "1") {
+    throw new Error("CONTROL_ROOM_BROWSER_QA_EXPECT_FDM_CELL_PHYSICS must be absent or exactly 1");
+  }
   if (expectRunPerformanceSetting !== undefined && expectRunPerformanceSetting !== "1") {
     throw new Error("CONTROL_ROOM_BROWSER_QA_EXPECT_RUN_PERFORMANCE must be absent or exactly 1");
   }
@@ -1958,6 +2170,12 @@ const main = async () => {
       expectFemAirboxVectors || expectAmbiguousComputeFields || scenarioSetting !== "standard" ||
       process.env.CONTROL_ROOM_PREPARE_VIEWPORT_FIXTURE === "1")) {
     throw new Error("Terminal telemetry QA requires canvas-only primary m observation and excludes mutation scenarios");
+  }
+  if (expectFdmCellPhysics && (!canvasOnly || expectedLiveField !== "m" || expectAirboxVectors ||
+      expectFemAirboxVectors || expectAmbiguousComputeFields || expectTerminalTelemetry ||
+      expectRunPerformance || expectPlanarAirbox || scenarioSetting !== "standard" ||
+      process.env.CONTROL_ROOM_PREPARE_VIEWPORT_FIXTURE === "1")) {
+    throw new Error("FDM cell physics QA requires its standalone canvas-only m profile");
   }
   if (!["0", "1"].includes(expectAmbiguousComputeFieldsSetting)) {
     throw new Error("CONTROL_ROOM_BROWSER_QA_EXPECT_AMBIGUOUS_COMPUTE_FIELDS must be exactly 0 or 1");
@@ -2183,6 +2401,7 @@ const main = async () => {
           throw new Error(`Viewport QA fixture unavailable: ${partialProof.fixture_preparation.reason}`);
         }
       }
+      try {
       appearanceQa = await runViewportAppearanceBrowserQa(page, {
         assertCanvas: (label) => assertCanvas(page, label),
         expectedSession: sessionBefore,
@@ -2190,6 +2409,10 @@ const main = async () => {
         pngDecoder: PNG,
         timeout,
       });
+      } catch (error) {
+        if (error.partialProof) partialProof.viewport_appearance = error.partialProof;
+        throw error;
+      }
       partialProof.viewport_appearance = appearanceQa;
       try {
         partialProof.viewport_camera = await runViewportCameraBrowserQa(page, {
@@ -2201,7 +2424,7 @@ const main = async () => {
         throw error;
       }
       exportQa = await runViewportExportBrowserQa(page, {
-        assertCanvas: (label) => assertCanvas(page, label), pngDecoder: PNG, timeout,
+        assertCanvas: (label) => assertCanvas(page, label), pngDecoder: PNG, timeout, expectedCaptureDpr: 1,
       });
       partialProof.viewport_export = exportQa;
       layoutQa = await runViewportLayoutBrowserQa(page, {
@@ -2410,6 +2633,14 @@ const main = async () => {
         throw error;
       }
     }
+    let fdmCellPhysics = null;
+    if (expectFdmCellPhysics && liveFieldAfter?.solver_family !== "fdm") {
+      throw new Error("FDM cell physics profile requires a live FDM field");
+    }
+    if (expectFdmCellPhysics || (expectTerminalTelemetry && liveFieldAfter?.solver_family === "fdm")) {
+      fdmCellPhysics = await proveFdmCellPhysics(page);
+      partialProof.fdm_cell_physics = fdmCellPhysics;
+    }
     if (pageErrors.length || consoleErrors.length || requestFailures.length || httpErrors.length) {
       throw new Error("Browser flow recorded page, console, transport, or HTTP failures");
     }
@@ -2420,6 +2651,7 @@ const main = async () => {
       state: "passed",
       qa_scope: expectRunPerformance ? runPerformanceQaScope :
         expectPlanarAirbox ? "canvas-home-planar-airbox" :
+        expectFdmCellPhysics ? "canvas-home-fdm-cell-physics" :
         expectAmbiguousComputeFields ? "canvas-home-ambiguous-compute-fields" :
         expectFemAirboxVectors ? "canvas-home-fem-airbox-vectors" :
         expectAirboxVectors ? "canvas-home-live-field-airbox" :
@@ -2438,9 +2670,11 @@ const main = async () => {
       expect_planar_airbox: expectPlanarAirbox,
       expect_ambiguous_compute_fields: expectAmbiguousComputeFields,
       ...(expectFemAirboxVectors ? { expect_fem_airbox_vectors: true } : {}),
+      ...(expectFdmCellPhysics ? { expect_fdm_cell_physics: true, fdm_cell_physics: fdmCellPhysics } : {}),
       ...(expectTerminalTelemetry ? {
         expect_terminal_telemetry: true,
         terminal_telemetry: terminalTelemetry,
+        ...(fdmCellPhysics ? { fdm_cell_physics: fdmCellPhysics } : {}),
       } : {}),
       ...(expectRunPerformance ? {
         expect_run_performance: true,
@@ -2578,10 +2812,12 @@ try {
     expect_planar_airbox: expectPlanarAirbox,
     expect_ambiguous_compute_fields: expectAmbiguousComputeFields,
     ...(expectFemAirboxVectors ? { expect_fem_airbox_vectors: true } : {}),
+    ...(expectFdmCellPhysics ? { expect_fdm_cell_physics: true } : {}),
     ...(expectTerminalTelemetry ? { expect_terminal_telemetry: true } : {}),
     ...(expectRunPerformance ? { expect_run_performance: true } : {}),
     qa_scope: expectRunPerformance ? "canvas-engine-run-performance" :
       expectPlanarAirbox ? "canvas-home-planar-airbox" :
+      expectFdmCellPhysics ? "canvas-home-fdm-cell-physics" :
       expectAmbiguousComputeFields ? "canvas-home-ambiguous-compute-fields" :
       expectFemAirboxVectors ? "canvas-home-fem-airbox-vectors" :
       expectAirboxVectors ? "canvas-home-live-field-airbox" :
@@ -2606,4 +2842,11 @@ try {
     partial_proof: partialProof,
   }));
   process.exitCode = 1;
+}
+
+/** Opens the collapsible "2D view" Inspector group that holds the field layer list (spec 23 §5). */
+async function openPlanarViewGroup(scope) {
+  const trigger = scope.locator('[data-slot="inspector-group-trigger"]').filter({ hasText: /^2D view/ }).first();
+  await trigger.waitFor({ state: "visible", timeout: 30_000 });
+  if ((await trigger.getAttribute("aria-expanded")) !== "true") await trigger.click();
 }

@@ -36,7 +36,10 @@ export interface ScientificInspectorContextProps {
 }
 
 export interface ScientificInspectorTemplateProps {
-  /** The host Inspector owns identity for nested panels. */
+  /**
+   * InspectorShell owns the one identity header (specs/frontend-v2/13 §1a).
+   * Only a template rendered outside the shell may opt in to its own.
+   */
   showIdentity?: boolean;
   actions?: ReactNode;
   children?: ReactNode;
@@ -129,7 +132,7 @@ export function ScientificInspectorContext({
 }
 
 export function ScientificInspectorTemplate({
-  showIdentity = true,
+  showIdentity = false,
   actions,
   breadcrumbs = [],
   children,
@@ -149,9 +152,11 @@ export function ScientificInspectorTemplate({
         physicalLabel={physicalLabel}
         title={title}
       /> : null}
+      {/* Facts: the strip omits unknown statuses and keeps the first four. */}
       <InspectorMetricStrip
         metrics={[
           { label: "Scope", value: physicalLabel },
+          { label: "Method", value: methodLabel },
           { label: "Resource", value: status.resource },
           { label: "Execution", value: status.execution },
           { label: "Availability", value: status.availability },

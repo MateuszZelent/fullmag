@@ -115,14 +115,9 @@ import {
   DEFAULT_VIEWPORT_3D_CAMERA_STATE,
   type Viewport3DCommandState,
 } from "../viewport3dStore";
-import {
-  identifyVectorGlyphBuildResult,
-  recordVectorFieldAdoption,
-} from "../layers/VectorFieldLayer";
-import {
-  recordFdmCuboidSurfaceAdoption,
-  resolveFdmVectorGlyphScaleForCellSize,
-} from "../layers/FdmCuboidLayer";
+import { identifyVectorGlyphBuildResult, recordVectorFieldAdoption } from "../layers/VectorFieldLayer.model";
+import { resolveFdmVectorGlyphScaleForCellSize } from "../layers/FdmCuboidLayer";
+import { recordFdmCuboidSurfaceAdoption } from "../layers/FdmCuboidLayer.model";
 import { createViewport3DRenderAdoptionRegistry } from "../model/viewport3DRenderAdoptionRegistry";
 import { resolveViewport3DFieldVectorForDomain } from "../model/viewport3DFieldDomainCompatibility";
 import { buildFdmSampledScalarColors } from "../viewport3dFieldMapping";
@@ -1476,7 +1471,7 @@ describe("useViewport3DSceneModel", () => {
       "fdmSettings: fdmDomain ? fdmSettings : null,",
     );
     expect(source).toContain(
-      "const tet4FmmqQualitySupported = topologySupportsTet4FmmqQuality(topology.data);",
+      "const tet4FmmqQualitySupported = useMemo(\n    () => topologySupportsTet4FmmqQuality(topology.data),\n    [topology.data],\n  );",
     );
     expect(source).toContain(
       "useViewport3DMeshQualityData(\n    Boolean(\n      liveViewportResourcesEnabled &&\n        fieldCompatibleTopologyRenderModel &&\n        meshQualityOverlayVisible &&\n        tet4FmmqQualitySupported,\n    ),\n  )",
@@ -1764,6 +1759,30 @@ describe("useViewport3DSceneModel", () => {
         scope_kind: "part",
       }),
     });
+  });
+
+  it.each([undefined, null])("uses the Airbox H_demag target field when its quantity is %s", (airboxQuantityId) => {
+    const query = { component: "full", scope_id: "airbox", scope_kind: "airbox" } as const;
+    const requestId = fieldVectorResourceKey("H_demag", query);
+    const resolved = resolveViewport3DResolvedPartFieldBuffers({
+      airboxQuantityCompatible: true,
+      airboxQuantityId,
+      getPartSettings: () => DEFAULT_OBJECT_VISUALIZATION,
+      targetQuantityFieldRequests: new Map([[requestId, {
+        consumers: ["airbox:surface"],
+        quantityId: "H_demag",
+        query,
+        requestId,
+      }]]),
+      targetQuantityFieldVectors: new Map([[requestId, fieldVectorFixture({ quantityId: "H_demag" })]]),
+      topology: {
+        airboxParts: [{ part: { id: "airbox", label: "Airbox", role: "air" } }],
+        magneticParts: [],
+        nodeCount: 4,
+      } as never,
+    });
+
+    expect(resolved.partTargetFieldBuffers.get("airbox")).toMatchObject({ quantityId: "H_demag", scopeKind: "airbox" });
   });
 
   it("keeps synthetic airbox vectors as target buffers instead of legacy fields", () => {
@@ -2940,12 +2959,16 @@ describe("useViewport3DSceneModel", () => {
     expect(source).toContain("useRenderableAnalysisFieldOverlay");
     expect(source).toContain("startAnalysisFieldOverlayPhaseAnimation");
     expect(source).toContain("const primaryFieldQuantityId = analysisOverlay?.fieldId ??");
-    expect(source).toContain('(pinnedObservationActive ? "m" : selectedSnapshotId ? quantityId : modelQuantityId);');
+    expect(source).toContain('(pinnedObservationActive || preparedSource ? "m" : selectedSnapshotId ? quantityId : modelQuantityId);');
     expect(source).toContain("const analysisPrimaryFieldDemandPlan = useMemo(() => {");
     expect(source).toContain("query: analysisOverlay.query,");
     expect(source).toContain("consumers: [\"primary-field-vector\"],");
-    expect(source).toContain("visualizationPhaseRad:");
-    expect(source).toContain("analysisOverlay?.visualizationPhaseRad ??");
+    // The phase reaches materials through the clock's shared uniform, never
+    // through React state or render options.
+    expect(source).toContain("complexPhaseUniform: analysisOverlayPhaseUniform,");
+    expect(source).toContain("analysisFieldOverlay.phaseClock.uniform");
+    expect(source).not.toContain("analysisOverlay?.visualizationPhaseRad");
+    expect(source).toContain("{ ignorePhase: true },");
     expect(source).toContain("resolveViewport3DAnalysisComplexFieldQuery");
     expect(source).toContain("asDecodedComplexFieldVector");
     expect(source).toContain("Boolean(analysisOverlay) ||");
@@ -5356,7 +5379,7 @@ describe("useViewport3DSceneModel", () => {
     expect(source).toContain("resolveViewport3DPrimaryFieldDemandPlan({");
     expect(source).toContain("const primaryFieldRequest = primaryFieldDemandPlan.request;");
     expect(source).toContain(
-      "resolveViewport3DFieldVectorRequestResourceKey(primaryFieldRequest)",
+      "resolveViewport3DFieldVectorRequestResourceKey(primaryFieldRequest, preparedSource)",
     );
     expect(source).toContain("useViewport3DFieldVectorRequest(");
     expect(source).toContain("primaryFieldRequest,");
@@ -5936,15 +5959,15 @@ describe("useViewport3DSceneModel", () => {
       notifyOnError: false,
     });
     expect(source).toMatch(
-      /const liveFieldVector = useViewport3DFieldVectorRequest\([\s\S]*?VIEWPORT3D_PRIMARY_FIELD_VECTOR_REQUEST_OPTIONS,\n {2}\);/,
+      /const liveFieldVector = useViewport3DFieldVectorRequest\([\s\S]*?\{\s*\.\.\.VIEWPORT3D_PRIMARY_FIELD_VECTOR_REQUEST_OPTIONS,\s*pauseLoad: waitingForAuthoredFieldCatalog,\s*preparedSource,?\s*\},\s*\);/,
     );
     expect(source).toMatch(
       /const observationFieldVector = useViewport3DObservationFrameMagnetization\([\s\S]*?VIEWPORT3D_PRIMARY_FIELD_VECTOR_REQUEST_OPTIONS,\n {2}\);/,
     );
     // Other field-vector consumers have no banner and keep the default toast.
     expect(
-      source.match(/VIEWPORT3D_PRIMARY_FIELD_VECTOR_REQUEST_OPTIONS,\n/g),
-    ).toHaveLength(2);
+      source.match(/\bVIEWPORT3D_PRIMARY_FIELD_VECTOR_REQUEST_OPTIONS\b/g),
+    ).toHaveLength(3);
     expect(source).toContain(": hudStatus,");
   });
 
@@ -6172,7 +6195,10 @@ describe("useViewport3DSceneModel", () => {
     expect(source).toContain("useFdmCuboidBuildResult");
     expect(source).toContain("modelFieldVector: fdmInstanceModelFieldVector");
     expect(source).toContain("realizedRegionIds: fdmRealizedRegionIds");
-    expect(source).toContain("membership=${fdmRegionMembership.revision ?? \"none\"}");
+    expect(source).toContain("membership=${fdmRegionMembershipDataRevision ?? \"none\"}");
+    // A1: FDM build keys use the settled payload identity, not the pending revision.
+    expect(source).toContain("const fdmRegionMembershipDataRevision =");
+    expect(source).not.toContain("domainMeta.revision == null ? null : String(domainMeta.revision)");
     expect(source).toContain("const fdmRealizedRegionIds = useMemo");
     expect(source).toContain("adaptDomainPresentation({");
     expect(source).toContain("expectedFdmGridFingerprint:");

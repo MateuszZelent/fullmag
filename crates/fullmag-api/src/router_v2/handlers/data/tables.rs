@@ -3,6 +3,8 @@
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+use base64::Engine;
 use axum::extract::{Path, Query, State};
 use axum::http::{header, HeaderValue};
 use axum::response::IntoResponse;
@@ -14,7 +16,8 @@ use crate::schemas::tables::{
     TableColumnMeta, TableDecimationMeta, TableListResource, TableResource,
     TableRowsBinaryDescriptor, TableRowsResource,
 };
-use crate::types::{AppState, ScalarRow};
+use crate::schemas::scalars::ScalarSeriesIdentity;
+use crate::types::{AppState, ScalarRow, SessionStateResponse};
 
 const DEFAULT_TABLE_LIMIT: u64 = 5_000;
 const MAX_TABLE_LIMIT: u64 = 50_000;
@@ -175,9 +178,10 @@ pub async fn get_table_rows(
             .current_live_session_epoch
             .load(std::sync::atomic::Ordering::Acquire),
     )?;
-    let all_rows = &snapshot.scalar_rows[..];
-    let window =
+    let (all_rows, series) = current_table_rows(snapshot, request_context.run_id.as_deref())?;
+    let mut window =
         build_table_rows_resource(table_id, all_rows, &query, table_columns(Some(snapshot)))?;
+    window.series = series;
 
     Ok(Json(window))
 }
@@ -199,7 +203,7 @@ pub async fn get_table_rows(
         ("columns" = Option<String>, Query, description = "Comma-separated table columns to return"),
     ),
     responses(
-        (status = 200, description = "Binary table row window", content_type = "application/vnd.fullmag.table-rows.v1+octet-stream", body = TableRowsBinaryDescriptor),
+        (status = 200, description = "Binary table row window", content_type = "application/vnd.fullmag.table-rows.v1+octet-stream", body = TableRowsBinaryDescriptor, headers(("x-fullmag-table-series" = String, description = "none, or v1 followed by base64url JSON for the exact accepted scalar series owning this payload"))),
         (status = 404, description = "Unknown table id"),
     ),
     tag = "data"
@@ -223,9 +227,10 @@ pub async fn get_table_rows_binary(
             .current_live_session_epoch
             .load(std::sync::atomic::Ordering::Acquire),
     )?;
-    let all_rows = &snapshot.scalar_rows[..];
-    let window =
+    let (all_rows, series) = current_table_rows(snapshot, request_context.run_id.as_deref())?;
+    let mut window =
         build_table_rows_resource(table_id, all_rows, &query, table_columns(Some(snapshot)))?;
+    window.series = series;
     let payload = encode_table_rows_binary(&window);
     let mut headers = axum::http::HeaderMap::new();
     headers.insert(
@@ -236,7 +241,41 @@ pub async fn get_table_rows_binary(
         "x-fullmag-table-rows-format",
         HeaderValue::from_static("FMTB.v1.row-major-f64le"),
     );
+    headers.insert(
+        "x-fullmag-table-series",
+        scalar_series_header(window.series.as_ref())?,
+    );
     Ok((headers, payload))
+}
+
+fn current_table_rows<'a>(
+    snapshot: &'a SessionStateResponse,
+    current_run_id: Option<&str>,
+) -> Result<(&'a [ScalarRow], Option<ScalarSeriesIdentity>), ApiError> {
+    let rows = &snapshot.scalar_rows[..];
+    let Some(series) = snapshot.latest_scalar_source.as_ref().and_then(|source| source.series.as_ref()) else {
+        return Ok((rows, None));
+    };
+    if current_run_id != Some(series.identity.run_id.as_str()) {
+        return Ok((&[], None));
+    }
+    if series.row_revisions.len() != rows.len() {
+        return Err(ApiError::conflict("scalar table row ownership does not match its source revisions"));
+    }
+    Ok((rows, Some(series.identity.clone())))
+}
+
+fn scalar_series_header(series: Option<&ScalarSeriesIdentity>) -> Result<HeaderValue, ApiError> {
+    let value = match series {
+        Some(series) => {
+            let json = serde_json::to_vec(series)
+                .map_err(|error| ApiError::internal(format!("serialize scalar series identity: {error}")))?;
+            format!("v1.{}", URL_SAFE_NO_PAD.encode(json))
+        }
+        None => "none".to_string(),
+    };
+    HeaderValue::from_str(&value)
+        .map_err(|error| ApiError::internal(format!("encode scalar series response header: {error}")))
 }
 
 fn ensure_default_table(table_id: &str) -> Result<(), ApiError> {
@@ -363,6 +402,7 @@ fn build_table_rows_resource(
         cursor_end,
         total_rows,
         returned_rows,
+        series: None,
         columns,
         rows,
         decimation,
@@ -921,6 +961,66 @@ mod modal_history_tests {
             "max_dm_dt": 0.0, "max_h_eff": 0.0, "max_h_demag": 0.0
         }))
         .unwrap()
+    }
+
+    #[test]
+    fn live_view_continuity_binary_rows_header_pins_exact_a1_and_b1_attempts() {
+        let identity = |step_id: &str, attempt_id: &str| ScalarSeriesIdentity {
+            run_id: "run-1".into(),
+            task_id: format!("task-{step_id}"),
+            step_id: step_id.into(),
+            case_id: "default".into(),
+            attempt_id: attempt_id.into(),
+            ownership_epoch: 4,
+        };
+        let a1 = identity("A1", "attempt-a1");
+        let b1 = identity("B1", "attempt-b1");
+        let decode = |header: &HeaderValue| {
+            let value = header.to_str().unwrap();
+            let encoded = value.strip_prefix("v1.").unwrap();
+            let bytes = URL_SAFE_NO_PAD.decode(encoded).unwrap();
+            serde_json::from_slice::<ScalarSeriesIdentity>(&bytes).unwrap()
+        };
+
+        let a1_header = scalar_series_header(Some(&a1)).unwrap();
+        let b1_header = scalar_series_header(Some(&b1)).unwrap();
+        assert_eq!(decode(&a1_header), a1);
+        assert_eq!(decode(&b1_header), b1);
+        assert_ne!(decode(&a1_header), decode(&b1_header));
+        assert_eq!(scalar_series_header(None).unwrap(), "none");
+    }
+
+    #[tokio::test]
+    async fn live_view_continuity_rejects_unbound_scalar_table_rows() {
+        let state = crate::router_v2::tests::test_app_state_with_live_session().await;
+        let mut guard = state.current_live_state.write().await;
+        let snapshot = guard.as_mut().unwrap();
+        snapshot.scalar_rows = vec![table_row(1, 1e-12, 0.0)];
+        let identity = ScalarSeriesIdentity {
+            run_id: "run-b".into(),
+            task_id: "task-b".into(),
+            step_id: "B1".into(),
+            case_id: "default".into(),
+            attempt_id: "attempt-b".into(),
+            ownership_epoch: 1,
+        };
+        snapshot.latest_scalar_source = Some(crate::types::CurrentScalarSourceState {
+            series: Some(crate::types::CurrentScalarSeries {
+                identity: identity.clone(),
+                row_revisions: vec![1],
+            }),
+            ..Default::default()
+        });
+
+        let (rows, series) = current_table_rows(snapshot, Some("run-b")).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(series, Some(identity));
+        let (rows, series) = current_table_rows(snapshot, Some("run-a")).unwrap();
+        assert!(rows.is_empty());
+        assert!(series.is_none());
+
+        snapshot.scalar_rows.push(table_row(2, 2e-12, 0.0));
+        assert!(current_table_rows(snapshot, Some("run-b")).is_err());
     }
 
     fn hidden_modal_row(step: u64, time: f64) -> ScalarRow {

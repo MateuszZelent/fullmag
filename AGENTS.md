@@ -42,6 +42,7 @@ Instrukcje dotyczą GPT-Astra, GPT-Sol, GPT-Luna oraz innych agentów pracujący
 - Przed dodaniem lub zmianą fizyki/numerics uzupełnij notę naukową. Dla tworzenia, zmiany, przeglądu lub publikacji dokumentacji naukowej agenci MUST use `scientific-documentation-contract`. Zachowaj równania, jednostki, parametry, Python→IR, mapy źródeł i bramki walidacji.
 - Encje sceny mają oddzielne niezmienne `object_id`, nazwę użytkownika `name`, prezentacyjny `type` i jawnie zadane moduły fizyki. Nazwa lub typ nie aktywują fizyki.
 - Control Room ma jeden workspace, jeden viewport, jeden klient typowany i warstwę resource hooks. JSON control plane jest cienki i revision-driven; pola i topologia używają binary data plane. Komponenty nie tworzą własnych endpointów ani osobnych drzew FDM/FEM.
+- Jakość interfejsu Control Room jest wymaganiem produktu: celem jest poziom najlepszych profesjonalnych narzędzi, co najmniej taki jak w makiecie `docs/design/inspector-redesign/`, a najlepiej wyższy. Szkło nad viewportem, skala cieni i promieni, kolory domen, animacje, View Transitions i płynne przejścia są dozwolonymi i oczekiwanymi narzędziami w granicach wydajności, dostępności i stabilności z [reguł frontendu](.agents/instructions/frontend.md). Wszystkie Inspectory używają jednego szablonu, a cała powłoka jednego języka wizualnego; rozbieżny wygląd paneli jest błędem do poprawienia, nie wariantem.
 
 ## Build i dowody
 
@@ -123,6 +124,17 @@ BuildKit i krótkie zarządzane probe nie są osobnymi backendami aplikacji.
 Przed startem launcher może też przez BuildKit przygotować brakujący zgodny
 obraz development-base/helper; nie zastępuje to buildu aplikacji w `backend`.
 Nie uruchamiaj usługi `fem-gpu-toolchain` przez `compose up` jako backendu.
+
+**Architektura CUDA w DEV.** Przed budowaniem kodu CUDA w Docker DEV ustal
+compute capability GPU wybranego na hoście i użyj wyłącznie odpowiadającego
+celu, np. `86-real`. Przekaż potwierdzony cel do CMake przez launcher i
+zapisz go w receipcie buildu. Gdy kontener nie widzi sterownika (również w
+profilu wykonawczym CPU), użyj zweryfikowanego wyniku z hosta albo zakończ
+próbę przed kompilacją z komunikatem, jak podać potwierdzony cel. W DEV
+wyklucz `all` oraz fallback do pełnej macierzy obrazu po błędzie wykrywania.
+Macierz wielu architektur pozostaje częścią jawnie wybranej recepty wydania
+lub kwalifikacji. Bieżący fallback launchera do macierzy obrazu wymaga
+dostosowania do tej reguły.
 
 Oba etapy muszą wskazywać ten sam checkout/projekt. Recepta
 `docker-dev-toolchain` wybiera checkout z `repo_root` bieżącego `justfile`, nie
@@ -231,7 +243,7 @@ Poniższe pliki są wiążącym rozwinięciem tego AGENTS.md. Przed zmianą lub 
 |---|---|
 | Architektura, publiczny Python/IR, runtime, planowanie, cross-layer refaktor, kryteria ukończenia | [Kontrakty aplikacji](.agents/instructions/contracts.md) — sekcje właściwe dla zmiany |
 | Backend, FEM/FDM, siatka, relaksacja, integratory, eigensolve, build, launcher, storage | [Backend i wykonanie](.agents/instructions/backend.md) |
-| `apps/control-room`, API v2, resource hooks, workspace, Inspector, wykresy, viewport | [Frontend i API](.agents/instructions/frontend.md) |
+| `apps/control-room`, API v2, resource hooks, workspace, Inspector, wykresy, viewport, wygląd i ruch UI | [Frontend i API](.agents/instructions/frontend.md) oraz makieta `docs/design/inspector-redesign/` |
 | Fizyka, metody numeryczne, dokumentacja naukowa, publiczne przykłady i referencje | [Publikacje i przykłady](.agents/instructions/scientific.md) oraz właściwy skill domenowy |
 
 W `.agents/skills` wybierz skill pasujący do konkretnej czynności. Dla backendów używaj `backend-golden-masterplan`, dla obecnego FEM również `fem-native-backend-architecture`; dla API/workspace `resource-first-api-check` i tylko właściwe `frontend-v2-*`; dla Python/IR odpowiednio `python-api-class` i `problem-ir-design`.

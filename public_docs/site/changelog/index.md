@@ -50,38 +50,3 @@ The tabs use separate Git scopes. **Documentation** covers commits that change t
 :code-limit: 40
 :show-paths:
 ```
-
-## Recording future changes
-
-Use Sphinx's native directives next to the affected public contract:
-
-````text
-```{versionadded} development
-Description of the newly exposed user-facing contract.
-```
-
-```{versionchanged} development
-Description of the changed behavior, units, defaults, or support boundary.
-```
-
-```{deprecated} development
-Migration target and removal policy.
-```
-
-```{versionremoved} development
-Replacement, rationale, and compatibility consequence.
-```
-````
-
-The documentation workflow builds the native Sphinx `changes` builder after the strict HTML build
-and publishes its output under `/version-changes/`. A documentation change is therefore visible
-both through Git history and, when it affects a public contract, through an explicit semantic
-change directive.
-
-## Bibliography
-
-No independent scientific model is introduced by this navigation page. Use the bibliography on the selected terminal page; this statement is an explicit applicability boundary, not an omitted reference.
-
-## Source-code index
-
-This is a navigation page and introduces no standalone implementation symbol. The exact source-code index is maintained by the selected terminal page.

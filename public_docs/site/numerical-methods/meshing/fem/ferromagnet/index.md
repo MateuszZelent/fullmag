@@ -14,8 +14,6 @@ source_of_truth: "PerObjectMeshRecipe, Gmsh object generators, object policy res
 (public-docs-numerical-methods-meshing-fem-ferromagnet-index)=
 # FEM ferromagnet meshes
 
-**Last changes: 12:31 24.08.2026**
-
 The magnetic mesh resolves the vector magnetization and local interactions inside each ferromagnetic region. Topology, order, size fields and region markers must match the active physics and solver lane.
 
 ::::{admonition} Implementation status
@@ -266,7 +264,3 @@ boundary-layers
 imported-mesh
 mixed-elements
 ```
-
-## Source-code index
-
-This is a navigation page and introduces no standalone implementation symbol. The exact source-code index is maintained by the selected terminal page.

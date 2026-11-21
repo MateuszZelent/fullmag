@@ -167,6 +167,9 @@ pub enum StudyIRV04 {
         sampling: SamplingIR,
         spatial_representation: SpatialRepresentationIR,
     },
+    // The camel-case `mT` suffix is a public SI-unit field name and part of the
+    // serialized ProblemIR contract.
+    #[allow(non_snake_case)]
     Hysteresis {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         field_min_mT: Option<f64>,
@@ -595,7 +598,10 @@ pub(crate) fn validate_v04_study_wire(value: &Value) -> Result<(), String> {
             let boundary = value.as_str().ok_or_else(|| {
                 "/study/magnetostatic_bc: expected a non-null boundary condition string".to_string()
             })?;
-            if !matches!(boundary, "open" | "periodic_airbox_k0" | "floquet_airbox") {
+            if !matches!(
+                boundary,
+                "open" | "periodic_airbox_k0" | "floquet_airbox" | "open_airbox_k0"
+            ) {
                 return Err(format!(
                     "/study/magnetostatic_bc: unsupported boundary condition '{boundary}'"
                 ));

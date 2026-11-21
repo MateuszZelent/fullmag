@@ -393,5 +393,129 @@ class FrontendOnlyResumeTests(unittest.TestCase):
         self.assertFalse(self.last_fixture.control.operation.called)
 
 
+class PlainResumePrivateGroupStorageTests(unittest.TestCase):
+    def run_resume(self, *, previous_layout, owner_marker):
+        from contextlib import ExitStack
+        import copy
+        import hashlib
+        from test_docker_volume_idle_stop import (
+            DockerVolumeIdleStopTests, IdleStopFixture, IMAGE,
+        )
+
+        fixture = IdleStopFixture()
+        self.last_fixture = fixture
+        fixture.backend_stopped = True
+        fixture.frontend_stopped = True
+        fixture.previous["state"] = "failed-confirmed"
+        if previous_layout is None:
+            fixture.previous.pop("private_group_storage", None)
+        else:
+            fixture.previous["private_group_storage"] = previous_layout
+        fixture.args.restart_backend = True
+        fixture.args.port = 3197
+        fixture.environment["FULLMAG_TOOLCHAIN_IMAGE_ID"] = IMAGE
+        fixture.environment["FULLMAG_SOURCE_GIT_COMMON"] = "/source-git"
+        fixture.args.config_sha256 = hashlib.sha256(
+            docker_dev.canonical(fixture.document)
+        ).hexdigest()
+
+        operation_records = []
+        receipt_writes = {}
+        frontend_modes = []
+
+        class ResumeOperation:
+            def __init__(self, inputs):
+                self.value = {
+                    "root": "resume/attempts/" + "e" * 32,
+                    "receipt": {"phase": "resume", "attempt": "e" * 32, "inputs": inputs},
+                }
+
+            def __enter__(self):
+                operation_records.append(self.value)
+                return self.value
+
+            def __exit__(self, exception_type, exception, traceback):
+                return False
+
+        old_read = fixture.read
+
+        def read(relative, optional=False):
+            if relative == "private/.owner.json":
+                fixture.events.append(("read", relative))
+                return owner_marker
+            return old_read(relative, optional=optional)
+
+        def write(relative, value):
+            fixture.events.append(("write", relative))
+            receipt_writes[relative] = copy.deepcopy(value)
+
+        def start_frontend(control, operation, *_args):
+            grouped = docker_dev._uses_private_group_storage(control, operation)
+            frontend_modes.append(grouped)
+            volume = control.volume if grouped else "fullmag-legacy-frontend"
+            operation["receipt"]["frontend_volume"] = volume
+            return {}, volume
+
+        fixture.control.read.side_effect = read
+        fixture.control.write.side_effect = write
+        fixture.control.operation.side_effect = lambda _phase, inputs, **_kw: ResumeOperation(inputs)
+
+        helper = DockerVolumeIdleStopTests()
+        with ExitStack() as stack:
+            mocks = [stack.enter_context(patcher) for patcher in helper._patches(fixture, (b"", {}))]
+            # The full resume dispatcher, terminal receipt, service pinning, and
+            # private-layout guard remain real; only the frontend seed boundary is stubbed.
+            mocks[6].side_effect = lambda document, *args, **kwargs: (
+                fixture.events.append(("compose-start", args[1])) if args[0] == "start" else None,
+                fixture.compose(document, *args, **kwargs),
+            )[1]
+            fixture.control.read.side_effect = read
+            fixture.control.write.side_effect = write
+            fixture.control.operation.side_effect = lambda _phase, inputs, **_kw: ResumeOperation(inputs)
+            stack.enter_context(patch.object(docker_dev, "_frontend", side_effect=start_frontend))
+            stack.enter_context(patch.object(docker_dev, "_retained_ledger_profile", return_value={}))
+            stack.enter_context(patch.object(docker_dev, "_retained_prepared_fresh_contracts", return_value=()))
+            stack.enter_context(patch("docker_volume_terminal_prestart_recovery.continuation", return_value=None))
+            stack.enter_context(patch("docker_volume_prestart_recovery.continuation", return_value=None))
+            docker_dev.resume(fixture.args)
+
+        return fixture, operation_records, receipt_writes, frontend_modes
+
+    def test_plain_restart_inherits_and_persists_previous_private_group_layout(self):
+        owner = {"schema": "fullmag.docker-group-storage-owner.v1"}
+        fixture, operations, writes, frontend_modes = self.run_resume(
+            previous_layout="group-volume-v1", owner_marker=owner,
+        )
+        self.assertEqual(frontend_modes, [True])
+        self.assertEqual(operations[0]["receipt"]["private_group_storage"], "group-volume-v1")
+        receipt = writes["resume/attempts/" + "e" * 32 + "/receipt.json"]
+        self.assertEqual(receipt["private_group_storage"], "group-volume-v1")
+        self.assertEqual(receipt["backend_container"], fixture.previous["backend_container"])
+        self.assertEqual(receipt["frontend_container"], fixture.previous["frontend_container"])
+        self.assertEqual(receipt["backend_started_at"], "2026-10-20T10:00:00Z")
+        self.assertEqual(receipt["frontend_started_at"], "2026-10-20T10:00:00Z")
+        self.assertEqual(
+            [event[1] for event in fixture.events if event[0] == "compose-start"],
+            ["frontend", "backend"],
+        )
+
+    def test_plain_restart_preserves_legacy_layout_and_refuses_missing_or_unknown_group_pin(self):
+        _, operations, writes, frontend_modes = self.run_resume(
+            previous_layout=None, owner_marker=None,
+        )
+        self.assertEqual(frontend_modes, [False])
+        self.assertNotIn("private_group_storage", operations[0]["receipt"])
+        self.assertNotIn(
+            "private_group_storage",
+            writes["resume/attempts/" + "e" * 32 + "/receipt.json"],
+        )
+
+        owner = {"schema": "fullmag.docker-group-storage-owner.v1"}
+        with self.assertRaisesRegex(docker_dev.BuildControlError, "Single-volume group cannot fall back"):
+            self.run_resume(previous_layout=None, owner_marker=owner)
+        with self.assertRaisesRegex(docker_dev.BuildControlError, "Unknown previous private group storage layout"):
+            self.run_resume(previous_layout="group-volume-v2", owner_marker=owner)
+
+
 if __name__ == "__main__":
     unittest.main()

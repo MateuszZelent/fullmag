@@ -334,15 +334,13 @@ impl NativeRestartPump {
             guard.poll_development_candidate_preparation(repo_root, job)
         };
         match poll {
-            crate::development_api_owner::CandidatePreparationPoll::Pending { .. } => Ok(()),
-            crate::development_api_owner::CandidatePreparationPoll::Unconfirmed { .. } => {
+            crate::development_api_owner::CandidatePreparationPoll::Pending => Ok(()),
+            crate::development_api_owner::CandidatePreparationPoll::Unconfirmed => {
                 // Keep ownership of the helper and its I/O transports. A new
                 // identity cannot start until process and transport cleanup is confirmed.
                 Ok(())
             }
-            crate::development_api_owner::CandidatePreparationPoll::Unavailable {
-                helper_pid: _,
-            } => {
+            crate::development_api_owner::CandidatePreparationPoll::Unavailable => {
                 let completed_identity = self
                     .candidate_preparation
                     .take()

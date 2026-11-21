@@ -9,7 +9,7 @@ from fullmag.init import InitialMagnetization, SampledMagnetization
 from fullmag.init.magnetization import UniformMagnetization
 from fullmag.model.discretization import PerObjectMeshRecipe
 from fullmag.model.geometry import Geometry
-from fullmag.model.absorbing_boundary import AbsorbingBoundaryLayer
+from fullmag.model.absorbing_boundary import AbsorbingBoundaryLayer, AbsorbingBoundaryLayers
 
 
 @dataclass(frozen=True, slots=True)
@@ -323,6 +323,15 @@ class RegionTextureOverride:
 
 
 @dataclass(frozen=True, slots=True)
+class MagnetizationAssignment:
+    """An explicit authored texture operation, in script order."""
+
+    object_id: str
+    region_id: str | None
+    initializer: InitialMagnetization | None
+
+
+@dataclass(frozen=True, slots=True)
 class MaterialTransitionSpec:
     kind: str
     cells: int | None = None
@@ -391,6 +400,12 @@ class ObjectRegion:
     texture_override: RegionTextureOverride | None = None
     _delete_callback: Callable[[], None] | None = field(default=None, repr=False, compare=False)
     _context_guard: Callable[[], None] | None = field(default=None, repr=False, compare=False)
+    _texture_assignment_callback: Callable[[ObjectRegion], None] | None = field(
+        default=None, repr=False, compare=False
+    )
+    _simpleantenna_factory: Callable[[], object] | None = field(
+        default=None, repr=False, compare=False
+    )
     material: ObjectRegionMaterialProxy = field(init=False, repr=False)
     _magnetization_constraints: list[object] = field(
         default_factory=list, repr=False, compare=False
@@ -424,6 +439,19 @@ class ObjectRegion:
         self.material = ObjectRegionMaterialProxy(self)
 
     @property
+    def add_simpleantenna(self) -> object:
+        """Antennas that act on this region: ``region.add_simpleantenna.arbitrary_mask(...)``."""
+        if self._context_guard is not None:
+            self._context_guard()
+        factory = self._simpleantenna_factory
+        if factory is None:
+            raise RuntimeError(
+                "region.add_simpleantenna is available for regions created with "
+                "magnet.add_region(...) in an active study"
+            )
+        return factory()
+
+    @property
     def texture(self) -> InitialMagnetization | None:
         if self.texture_override is None:
             return None
@@ -432,15 +460,26 @@ class ObjectRegion:
     @texture.setter
     def texture(self, value: InitialMagnetization | None) -> None:
         if value is None:
-            self.texture_override = None
+            self._assign_texture_override(None)
         else:
             self.set_texture(value)
 
     def set_texture(self, value: InitialMagnetization) -> "ObjectRegion":
         if self._context_guard is not None:
             self._context_guard()
-        self.texture_override = RegionTextureOverride(value)
+        self._assign_texture_override(RegionTextureOverride(value))
         return self
+
+    def _assign_texture_override(self, override: RegionTextureOverride | None) -> None:
+        callback = self._texture_assignment_callback
+        if callback is None:
+            self.texture_override = override
+            return
+        from fullmag.live._hooks import dsl_call
+
+        with dsl_call():
+            self.texture_override = override
+            callback(self)
 
     def set_material(
         self,
@@ -703,6 +742,10 @@ def _validate_material_parameter_field(parameter: str, field_value: MaterialPara
     unit = payload.get("unit")
     if field_kind == "sampled" and not isinstance(unit, str):
         raise ValueError(f"{parameter} sampled field unit must be {expected_unit!r}")
+    if field_kind == "function" and parameter == "AnisotropyAxis":
+        raise ValueError(
+            "AnisotropyAxis is a vector parameter; fm.fields.function gives a scalar field"
+        )
     if parameter in {"Alpha", "AnisotropyAxis"}:
         allowed_units = {expected_unit, "dimensionless"}
     else:
@@ -734,12 +777,19 @@ def _region_shape_to_ir(shape: object) -> dict[str, object]:
         raise TypeError("region shape must be a Fullmag geometry or shape IR dict")
 
     kind = shape_ir.get("kind")
+    if kind in {"difference", "union", "intersection"}:
+        return {"kind": "csg", "expression": shape_ir}
     if kind == "translate":
         base = shape_ir.get("base")
         if not isinstance(base, dict):
             raise TypeError("translated region shape base must be a shape IR dict")
         translated = _region_shape_to_ir(base)
         offset = as_vector3(shape_ir.get("by"), "shape.center")
+        if translated["kind"] == "csg":
+            # A CSG region carries its placement in the geometry expression.
+            return {"kind": "csg", "expression": {
+                **shape_ir, "base": translated["expression"], "by": list(offset),
+            }}
         center = as_vector3(translated.get("center", (0.0, 0.0, 0.0)), "shape.center")
         translated["center"] = [center[index] + offset[index] for index in range(3)]
         return translated
@@ -783,7 +833,7 @@ class Ferromagnet:
     object_regions: tuple[ObjectRegion, ...] = ()
     allocated_region_ids: tuple[str, ...] = ()
     material_parameter_fields: tuple[MaterialParameterAssignment, ...] = ()
-    absorbing_boundary: AbsorbingBoundaryLayer | None = None
+    absorbing_boundary: AbsorbingBoundaryLayer | AbsorbingBoundaryLayers | None = None
     _magnetization_constraints: list[object] = field(
         default_factory=list, repr=False, compare=False
     )
@@ -792,6 +842,8 @@ class Ferromagnet:
         object.__setattr__(self, "name", require_non_empty(self.name, "name"))
         if self.object_id is not None:
             object.__setattr__(self, "object_id", require_non_empty(self.object_id, "object_id"))
+        if isinstance(self.absorbing_boundary, AbsorbingBoundaryLayers):
+            self.absorbing_boundary.validate_regions({region.region_id for region in self.object_regions})
         if self.region is not None and self.region.geometry.geometry_name != self.geometry.geometry_name:
             raise ValueError("region geometry must match magnet geometry")
         if self.m0 is None:

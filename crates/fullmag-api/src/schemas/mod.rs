@@ -36,6 +36,7 @@ pub mod runtime;
 pub mod runtime_service;
 pub mod saved_field_geometry;
 pub mod scalars;
+pub mod stage_results;
 #[allow(dead_code)]
 pub mod session_clients;
 pub mod sessions;
@@ -46,8 +47,9 @@ pub mod visualization_state;
 pub mod workspace;
 pub mod workspace_items;
 
-pub use authoring::{ParallelExecutionModeResource, ParallelExecutionResource};
 pub use frozen_spins::*;
 pub use planar_fields::*;
 pub use planar_monitors::*;
 pub use postprocessing_definitions::*;
+
+pub mod imported_surface;

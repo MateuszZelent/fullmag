@@ -1,5 +1,7 @@
 # Plan wdrożenia mechanizmu clipping / cutaway w widoku 3D Control Room
 
+> **Dokument historyczny — ponowny audyt 2026-11-18:** aktualny stan, błędy i kolejność domknięcia opisuje [audyt najnowszego mastera](viewport-3d-clipping-cutaway-reassessment-2026-11-18.md). Poniższy plan zachowano jako zapis pierwotnych założeń, nie jako aktualną specyfikację ani dowód wdrożenia. W szczególności nieaktualne są tezy o braku clippingu w shaderach, niezależności `clip` i `trim` oraz automatycznej widoczności wnętrza FDM.
+
 > **Data:** 2026-08-23
 > **Zakres:** `apps/control-room` (frontend v2), warstwa viewport-3d + ribbon/inspector + kontrakt wizualizacyjny `/v2/sessions/current/visualization/state`
 > **Charakter:** funkcja czysto prezentacyjna (visualization-only). Nie zmienia semantyki fizycznej, `ProblemIR`, planera ani wyników solvera. Notatka `docs/physics/` **nie jest wymagana** — brak semantyki fizycznej; obowiązuje natomiast `resource-first-api-check` przy każdej zmianie kontraktu JSON.

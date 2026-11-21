@@ -8,6 +8,7 @@ import { Eye } from "lucide-react";
 import React, {
   useCallback,
   useEffect,
+  useEffectEvent,
   useMemo,
   useReducer,
   useRef,
@@ -88,10 +89,7 @@ import type { InspectorPanelProps } from "../inspectorTypes";
 import { useRegisterInspectorEditSession } from "../InspectorEditSession";
 import { ViewportCameraControls } from "../visualization/ViewportCameraControls";
 import { ViewportClippingControls } from "../visualization/ViewportClippingControls";
-import {
-  ScientificInspectorContext,
-  ScientificInspectorIdentity,
-} from "../components/ScientificInspectorTemplate";
+import { ScientificInspectorContext } from "../components/ScientificInspectorTemplate";
 import { FieldRow } from "../primitives/FieldRow";
 import { FeedbackBanner } from "../primitives/FeedbackBanner";
 import { InspectorGroup } from "../primitives/InspectorGroup";
@@ -260,6 +258,7 @@ import {
   VisualizationWireframeSection,
   VisualizationVectorsSection,
   VisualizationGeometryScopeSection,
+  VisualizationWireframeGeometryScopeSection,
   VisualizationOverridesSection,
   ColorField,
   VisualizationRadioGroup,
@@ -385,9 +384,9 @@ function useObjectVisualizationPanelState(
     if (resolvedTarget?.kind !== "airbox") return null;
     const airboxPartIds =
       lane === "fem"
-        ? manifestRenderableCarriers(manifest.data)
-            .filter(isVisualizationAirboxIdentity)
-            .map((part) => part.id)
+        ? manifestRenderableCarriers(manifest.data).flatMap((part) =>
+            isVisualizationAirboxIdentity(part) ? [part.id] : [],
+          )
         : [];
     return resolveAirboxFieldCarrierIdentity({ airboxPartIds, lane });
   }, [lane, manifest.data, resolvedTarget?.kind]);
@@ -757,6 +756,7 @@ function useObjectVisualizationPanelState(
   const sections = settings && effectiveSettings
     ? buildVisualizationPanelSections({
     artifactInspection,
+        lane,
         effectiveSettings: renderResolution?.finalSettings ?? effectiveSettings,
         settings,
         target: resolvedTarget ?? undefined,
@@ -1169,6 +1169,7 @@ function useObjectVisualizationPanelState(
           : "Ready";
 
   return {
+    lane,
     visualizationState,
     meshState,
     artifactInspection,
@@ -1325,22 +1326,21 @@ export function VisualizationTargetInspectorPanel({
     targetId,
     topologyHash: vectorTopologyHash,
   });
+  const canRetainPanel = visualizationBaselineReady && resolvedPanel !== null;
+  const panelRevision = panel.visualizationResourceRevision;
+  const readResolvedPanel = useEffectEvent(() => resolvedPanel);
   useEffect(() => {
-    if (visualizationBaselineReady && resolvedPanel && targetId && panelIdentityKey) {
+    if (!canRetainPanel || !targetId || !panelIdentityKey) return;
+    const snapshot = readResolvedPanel();
+    if (snapshot) {
       retainLastGoodPanel({
-        panel: resolvedPanel,
+        panel: snapshot,
         identityKey: panelIdentityKey,
-        revision: panel.visualizationResourceRevision,
+        revision: panelRevision,
         targetKey: targetId,
       });
     }
-  }, [
-    panel.visualizationResourceRevision,
-    panelIdentityKey,
-    resolvedPanel,
-    targetId,
-    visualizationBaselineReady,
-  ]);
+  }, [canRetainPanel, panelIdentityKey, panelRevision, targetId]);
   const stablePanel = visualizationBaselineReady
     ? resolvedPanel
     : lastGoodPanel?.identityKey === panelIdentityKey
@@ -1359,13 +1359,6 @@ export function VisualizationTargetInspectorPanel({
     }, planar.resolution, planar.vector_style);
     if (presentationPatch) visualizationSync.queuePatch({ planar: presentationPatch });
   }, [activeSettings?.vectorBudget, activeSettings?.vectorColorMode, activeSettings?.vectorLengthScale, planarVisualizationState, visualizationSync]);
-  const scientificInspectorIdentity = (
-    <ScientificInspectorIdentity
-      methodLabel="Display controls"
-      physicalLabel={owner.targetLabel}
-      title={owner.title}
-    />
-  );
   const scientificInspectorContext = (
     <ScientificInspectorContext
       collapsible
@@ -1398,7 +1391,6 @@ export function VisualizationTargetInspectorPanel({
   if (!target || !stablePanel) {
     return (
       <div className="fm-inspector-panel fm-scientific-inspector" data-inspector-owner={owner.id}>
-        {scientificInspectorIdentity}
         <EmptyState
           description={`Select an Explorer node that supports ${owner.targetLabel} visualization.`}
           heading="No visualization target selected"
@@ -1414,7 +1406,6 @@ export function VisualizationTargetInspectorPanel({
   if (visualizationViewContext === "planar") {
     return (
       <div className="fm-inspector-panel fm-scientific-inspector" data-inspector-owner={owner.id}>
-        {scientificInspectorIdentity}
         <InspectorGroup title="View">
           <VisualizationContextSwitchControl onPlanarActivate={syncSharedQuiverIntent} />
         </InspectorGroup>
@@ -1427,7 +1418,6 @@ export function VisualizationTargetInspectorPanel({
 
   return (
     <div className="fm-inspector-panel fm-scientific-inspector" data-inspector-owner={owner.id}>
-      {scientificInspectorIdentity}
       <InspectorGroup title="View">
         <VisualizationContextSwitchControl onPlanarActivate={syncSharedQuiverIntent} />
       </InspectorGroup>
@@ -1454,7 +1444,9 @@ function ObjectVisualizationPanelView({
   panel: ResolvedObjectVisualizationPanelState;
 }) {
   const { analysisFieldOverlay } = useKernel();
-  const shownAnalysisField = useRenderableAnalysisFieldOverlay(analysisFieldOverlay);
+  const shownAnalysisField = useRenderableAnalysisFieldOverlay(analysisFieldOverlay, {
+    ignorePhase: true,
+  });
   const {
     appliedBaseline: currentAppliedBaseline,
     airboxFieldCarrierIdentity,
@@ -1465,6 +1457,7 @@ function ObjectVisualizationPanelView({
     feedback,
     fdmNotice,
     fdmTarget,
+    lane,
     fieldCatalog,
     quantityCatalog,
     hasTargetOverride,
@@ -1625,6 +1618,7 @@ function ObjectVisualizationPanelView({
                 />
                 <VisualizationRenderModeSection
               artifactInspection={panel.artifactInspection}
+              settings={settings}
               displaySettings={displaySettings}
               passControlsDisabled={passControlsDisabled}
               isFieldPending={isFieldPending}
@@ -1742,6 +1736,14 @@ function ObjectVisualizationPanelView({
         vectorBudgetRange={vectorBudgetRange}
         vectorBudgetRanges={vectorBudgetRanges}
       /> : null}
+      {lane === "fem" && capabilities.showWireframeGeometryScopeControl ? (
+        <VisualizationWireframeGeometryScopeSection
+          passControlsDisabled={passControlsDisabled}
+          isFieldPending={isFieldPending}
+          patch={patch}
+          settings={settings}
+        />
+      ) : null}
       {renderWarning ? (
         <div className="fm-inspector__diagnostic-warning">{renderWarning}</div>
       ) : null}

@@ -20,7 +20,7 @@ import { antennaStageValidationMessages } from "@/shared/domain/physics/antennaS
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/shared/ui/Select";
 
 import type { InspectorPanelProps } from "../../inspectorTypes";
-import { ScientificInspectorContext, ScientificInspectorIdentity } from "../../components/ScientificInspectorTemplate";
+import { ScientificInspectorContext } from "../../components/ScientificInspectorTemplate";
 import { FieldRow } from "../../primitives/FieldRow";
 import { FormField } from "../../primitives/FormField";
 import { InspectorGroup } from "../../primitives/InspectorGroup";
@@ -63,7 +63,6 @@ function AntennaLegacyVisualizationView({ selection, scene }: InspectorPanelProp
   const [preferredStage, setPreferredStage] = useState("");
   const stage = stages.find((candidate) => candidate.id === preferredStage) ?? stages[0];
   return <div className="fm-inspector-panel fm-scientific-inspector" data-inspector-owner="object.antenna.visualization">
-    <ScientificInspectorIdentity title="Antenna visualization" physicalLabel="Conductor / Oersted field" methodLabel="Display controls" />
     <AntennaPublishedVisualization objectId={objectId} stageId={stage?.id ?? null} scene={scene.data} sceneStatus={scene.status} />
     <InspectorGroup title="Source" collapsible defaultOpen={false}>
       <FieldRow label="Source object" value={objectId ?? "none"} mono />
@@ -169,7 +168,8 @@ function AntennaPublishedVisualization({ objectId, stageId, scene, sceneStatus }
         <FieldRow label="Quantity" value={quantitySpec.label} />
         <Select disabled={!available} value={effectiveQuantity} onValueChange={(value) => { setQuantity(value as AntennaFieldQuantity); setDisplay({ quantity: value as AntennaFieldQuantity, surface: false, wireframe: false, vectors: value === "electric_potential_per_ampere" || value === "device_potential" ? false : active?.vectors ?? false }); }}>
           <SelectTrigger aria-label="Antenna quantity"><SelectValue /></SelectTrigger>
-          <SelectContent className="fm-inspector-select-content">{Object.entries(inspectionMode ? closed ? ANTENNA_CLOSED_LOOP_QUANTITIES : ANTENNA_RAW_QUANTITIES : ANTENNA_BASIS_QUANTITIES).filter(([id]) => id !== "current_density" || currentAvailable).map(([id, spec]) => <SelectItem key={id} value={id}>{spec.label} [{spec.unit}]</SelectItem>)}</SelectContent>
+          <SelectContent className="fm-inspector-select-content">{Object.entries(inspectionMode ? closed ? ANTENNA_CLOSED_LOOP_QUANTITIES : ANTENNA_RAW_QUANTITIES : ANTENNA_BASIS_QUANTITIES).map(([id, spec]) => id !== "current_density" || currentAvailable
+             ? <SelectItem key={id} value={id}>{spec.label} [{spec.unit}]</SelectItem> : null)}</SelectContent>
         </Select>
         <FormField label="Snapshot" type="select" value={inspectionMode ? "inspection" : "basis"} onChange={(event) => { setQuantity(effectiveQuantity); setDisplaySource(event.target.value); visualization.setAntennaFieldIntent(null); }}><option value="basis" disabled={!basisAvailable}>Published per-ampere basis</option><option value="inspection" disabled={!rawAvailable}>Inspection only · raw current · NOT VERIFIED</option></FormField>
         <FormField label="Port mode" type="select" disabled={!available} value={port} onChange={(event) => { setPreferredPort(event.target.value); setDisplay({ portModeId: event.target.value }); }}><option value="" disabled>Select a published port</option>{ports.map((id) => <option key={id} value={id}>{id}</option>)}</FormField>

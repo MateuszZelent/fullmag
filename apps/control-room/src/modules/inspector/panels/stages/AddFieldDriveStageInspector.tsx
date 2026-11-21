@@ -159,7 +159,7 @@ export function AddFieldDriveStageInspector(props: StageInspectorFrameProps) {
                 aria-label={`Direction ${axis}`}
                 className="fm-inspector-input"
                 disabled={!drive}
-                key={index}
+                key={axis}
                 step="0.01"
                 type="number"
                 value={drive?.direction[index] ?? 0}
@@ -668,13 +668,15 @@ function SpatialSincFields({
             <input
               aria-label={`Spatial axis ${axisName}`}
               className="fm-inspector-input"
-              key={index}
+              key={axisName}
               step="0.01"
               type="number"
               value={profile.axis[index] ?? 0}
               onChange={(event) => {
+                const value = event.currentTarget.valueAsNumber;
+                if (!Number.isFinite(value)) return;
                 const axis = [...profile.axis];
-                axis[index] = Number(event.target.value);
+                axis[index] = value;
                 onChange({ ...profile, axis });
               }}
             />
@@ -736,7 +738,10 @@ function NumberField({
         className="fm-inspector-input"
         type="number"
         value={value}
-        onChange={(event) => onChange(Number(event.target.value))}
+        onChange={(event) => {
+          const value = event.currentTarget.valueAsNumber;
+          if (Number.isFinite(value)) onChange(value);
+        }}
       />
     </label>
   );

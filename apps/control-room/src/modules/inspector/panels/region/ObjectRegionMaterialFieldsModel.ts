@@ -113,6 +113,62 @@ export function isEditableMaterialField(
   );
 }
 
+/**
+ * Read-only view of a `function` field (`fm.fields.function`): an equation of
+ * `x, y, z` in metres with named parameter values. The Control Room shows it
+ * and preserves it unchanged; it has no editor.
+ */
+export interface MaterialFunctionFieldSummary {
+  assignmentId: string;
+  parameter: SceneMaterialParameterName;
+  frame: string;
+  /** `def` name, or `null` for an equation string. */
+  definition: string | null;
+  locals: { name: string; expression: string }[];
+  equation: string;
+  parameters: { name: string; value: number }[];
+  unit: string;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+// The schema types the `function` payload as an open record, so its members are
+// checked here before they are shown.
+export function materialFunctionFieldSummary(
+  field: SceneMaterialParameterAssignment,
+): MaterialFunctionFieldSummary | null {
+  const value = field.value;
+  if (value.kind !== "function" || !isRecord(value.function)) {
+    return null;
+  }
+  const fn = value.function;
+  const outputs = Array.isArray(fn.outputs) ? fn.outputs : [];
+  if (outputs.length !== 1 || typeof outputs[0] !== "string") return null;
+  const parameters = (Array.isArray(fn.parameters) ? fn.parameters : []).flatMap((entry) =>
+    isRecord(entry) && typeof entry.name === "string" && typeof entry.value === "number"
+      ? [{ name: entry.name, value: entry.value }]
+      : [],
+  );
+  const locals = (Array.isArray(fn.locals) ? fn.locals : []).flatMap((entry) =>
+    isRecord(entry) && typeof entry.name === "string" && typeof entry.expression === "string"
+      ? [{ name: entry.name, expression: entry.expression }]
+      : [],
+  );
+  return {
+    assignmentId: field.assignment_id,
+    definition: typeof fn.name === "string" ? fn.name : null,
+    equation: outputs[0],
+    frame: typeof value.frame === "string" ? value.frame : "object",
+    locals,
+    parameter: field.parameter,
+    parameters,
+    unit:
+      typeof value.unit === "string" ? value.unit : unitForMaterialParameter(field.parameter),
+  };
+}
+
 export function materialFieldDraftFromAssignment(
   field: SceneMaterialParameterAssignment,
 ): MaterialFieldDraft | null {

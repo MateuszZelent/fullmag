@@ -1424,11 +1424,20 @@ bool v6_validate_view(
             return false;
         }
     }
-    if (view.generator_relation_count == 0 || view.generator_relations == nullptr ||
-        !safe_binding_count(view.generator_relation_count) ||
-        (view.require_complete_closure &&
-         (view.closure_relation_count == 0 || view.closure_relations == nullptr)) ||
-        !safe_binding_count(view.closure_relation_count)) {
+    // An identity view (open_airbox_k0, note 0830) has no node on a periodic
+    // boundary, hence no generator or closure relation: every class is one
+    // node. Any boundary-axis mask with zero relations stays rejected.
+    bool identity_view =
+        view.generator_relation_count == 0 && view.closure_relation_count == 0;
+    for (std::uint64_t index = 0; identity_view && index < view.node_count; ++index) {
+        identity_view = view.boundary_axis_masks[index] == 0u;
+    }
+    if (!identity_view &&
+        (view.generator_relation_count == 0 || view.generator_relations == nullptr ||
+         !safe_binding_count(view.generator_relation_count) ||
+         (view.require_complete_closure &&
+          (view.closure_relation_count == 0 || view.closure_relations == nullptr)) ||
+         !safe_binding_count(view.closure_relation_count))) {
         reason = "periodic_mesh_certificate_v6_relations_missing";
         return false;
     }

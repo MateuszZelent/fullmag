@@ -3739,6 +3739,7 @@ class BackendPackageTests(unittest.TestCase):
             self.assertEqual(owner.read_bytes(), before)
             self.assertEqual((workspace / ".fullmag-build/cargo-fingerprint").read_bytes(), b"cache")
 
+    @patch.dict(os.environ, {backend.DEV_CUDA_ARCHITECTURES_ENV: "86-real"})
     def test_direct_build_keeps_runner_workspace_and_sets_explicit_mode(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -3767,6 +3768,7 @@ class BackendPackageTests(unittest.TestCase):
             self.assertIn("/direct/release/build/", environment["FULLMAG_FEM_NATIVE_BUILD_ROOT"])
             self.assertNotIn("backend-dev", environment["FULLMAG_FEM_NATIVE_BUILD_ROOT"])
 
+    @patch.dict(os.environ, {backend.DEV_CUDA_ARCHITECTURES_ENV: "86-real"})
     def test_direct_build_native_cache_roots_are_stable_and_cache_scoped(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -3800,6 +3802,23 @@ class BackendPackageTests(unittest.TestCase):
                 Path(first_environment["FULLMAG_FDM_NATIVE_BUILD_ROOT"]),
                 Path(first_environment["FULLMAG_FEM_NATIVE_BUILD_ROOT"]),
             )
+
+
+class LiveSourceCopyErrorTests(unittest.TestCase):
+    def test_live_source_copy_preserves_io_error_with_normalized_inventory_entry(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "source.rs"
+            source.write_bytes(b"source")
+            entry = backend._source_manifest_inventory(
+                BackendPackageTests._capsule("a" * 64, {"source.rs": b"source"})
+            )["source.rs"]
+            with patch.object(backend.os, "read", side_effect=OSError("source read failed")):
+                with self.assertRaisesRegex(
+                    backend.BackendBuildError,
+                    "cannot synchronize live source source.rs: source read failed",
+                ):
+                    backend._copy_live_regular_file(source, root / "shadow/source.rs", "source.rs", entry)
 
 
 if __name__ == "__main__":

@@ -2,12 +2,7 @@
 
 import { useState } from "react";
 
-import type {
-  ModeCompositionLayer,
-  ModeCompositionResource,
-  ModeFieldComponent,
-  ModeFieldRepresentation,
-} from "@/kernel/visualization/ModeCompositionController";
+import type { ModeCompositionLayer, ModeCompositionResource, ModeFieldComponent, ModeFieldRepresentation } from "@/kernel/visualization/ModeCompositionController";
 import { Button } from "@/shared/ui/Button";
 import {
   Select,
@@ -29,6 +24,8 @@ import type {
   ModeCompositionSpectrumMode,
   ModeCompositionSpectrumSample,
 } from "./modeCompositionInspectorTypes";
+import { legalModeLayerComponents, eigenModeLayerAppearanceDefaults } from "./ModeCompositionInspectors.model";
+
 export type {
   ModeCompositionCompatibleObject,
   ModeCompositionInspectorDependencies,
@@ -49,55 +46,6 @@ const SIGNED_REPRESENTATIONS = new Set<ModeFieldRepresentation>([
   "real",
   "imag",
 ]);
-
-export function legalModeLayerComponents(
-  representation: ModeFieldRepresentation,
-): readonly ModeFieldComponent[] {
-  if (representation === "phase") return ["x", "y", "z"];
-  if (representation === "abs") return ["x", "y", "z", "magnitude"];
-  return ["x", "y", "z", "magnitude", "vector"];
-}
-
-export function eigenModeLayerAppearanceDefaults(
-  representation: ModeFieldRepresentation,
-): ModeCompositionLayer["appearance"] {
-  if (representation === "phase") {
-    return {
-      auto_range: false,
-      colorbar_visible: true,
-      colormap: "twilight",
-      opacity: 1,
-      range_max: Math.PI,
-      range_min: -Math.PI,
-      symmetric_zero: false,
-      vector_budget: 512,
-      vector_length_scale: 1,
-      vectors_visible: false,
-    };
-  }
-  if (representation === "abs") {
-    return {
-      auto_range: true,
-      colorbar_visible: true,
-      colormap: "viridis",
-      opacity: 1,
-      symmetric_zero: false,
-      vector_budget: 512,
-      vector_length_scale: 1,
-      vectors_visible: false,
-    };
-  }
-  return {
-    auto_range: true,
-    colorbar_visible: true,
-    colormap: "coolwarm",
-    opacity: 1,
-    symmetric_zero: true,
-    vector_budget: 512,
-    vector_length_scale: 1,
-    vectors_visible: false,
-  };
-}
 
 export function EigenSpectrumCompositionInspectorPanel({
   dependencies,
@@ -353,14 +301,14 @@ function ModeCompositionObjectLayerEditor({
       </InspectorGroup>
       <InspectorGroup title="Phase and animation">
         <div className="fm-mode-composition-inspector__controls">
-          <label className="fm-mode-composition-inspector__control"><span>Phase (rad)</span><Slider aria-label="Phase (rad)" disabled={!layer} max={Math.PI} min={-Math.PI} step={0.01} value={[layer?.phase_rad ?? 0]} onValueChange={([phase_rad]) => updateLayer({ phase_rad })} /></label>
+          <label className="fm-mode-composition-inspector__control"><span>Phase (rad)</span><Slider aria-label="Phase (rad)" valueText={(v) => `${v.toFixed(2)} rad`} disabled={!layer} max={Math.PI} min={-Math.PI} step={0.01} value={[layer?.phase_rad ?? 0]} onValueChange={([phase_rad]) => updateLayer({ phase_rad })} /></label>
           <label className="fm-mode-composition-inspector__control"><span>Animation rate (Hz)</span><input aria-label="Animation rate (Hz)" className="fm-mode-composition-inspector__number" disabled={!layer} min="0" step="0.1" type="number" value={layer?.animation.rate_hz ?? 0} onChange={(event) => { const value = event.currentTarget.value; if (value === "" || !layer) return; const rate_hz = Number(value); if (Number.isFinite(rate_hz) && rate_hz >= 0) updateLayer({ animation: { ...layer.animation, rate_hz } }); }} /></label>
           <div className="fm-mode-composition-inspector__inline-control"><Switch aria-label="Animate mode layer" checked={layer?.animation.enabled ?? false} disabled={!layer} onCheckedChange={(enabled) => layer && updateLayer({ animation: { ...layer.animation, enabled } })} /><span>Animate mode layer</span></div>
         </div>
       </InspectorGroup>
       <InspectorGroup title="Appearance">
         <div className="fm-mode-composition-inspector__controls">
-          <label className="fm-mode-composition-inspector__control"><span>Opacity</span><Slider aria-label="Mode opacity" disabled={!layer} max={1} min={0} step={0.01} value={[layer?.appearance.opacity ?? 1]} onValueChange={([opacity]) => layer && updateLayer({ appearance: { ...layer.appearance, opacity } })} /></label>
+          <label className="fm-mode-composition-inspector__control"><span>Opacity</span><Slider aria-label="Mode opacity" valueText={(v) => `${Math.round(v * 100)}%`} disabled={!layer} max={1} min={0} step={0.01} value={[layer?.appearance.opacity ?? 1]} onValueChange={([opacity]) => layer && updateLayer({ appearance: { ...layer.appearance, opacity } })} /></label>
           <div className="fm-mode-composition-inspector__inline-control"><Switch aria-label="Show mode colorbar" checked={layer?.appearance.colorbar_visible ?? false} disabled={!layer} onCheckedChange={(colorbar_visible) => layer && updateLayer({ appearance: { ...layer.appearance, colorbar_visible } })} /><span>Show colorbar</span></div>
           <div className="fm-mode-composition-inspector__inline-control"><Switch aria-label="Show modal vectors" checked={layer?.appearance.vectors_visible ?? false} disabled={!layer || !SIGNED_REPRESENTATIONS.has(layer.representation)} onCheckedChange={(vectors_visible) => layer && updateLayer({ appearance: { ...layer.appearance, vectors_visible } })} /><span>Show modal vectors</span></div>
         </div>

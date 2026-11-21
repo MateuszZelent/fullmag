@@ -1,6 +1,6 @@
 import { readFileSync as readSourceFileSync } from "node:fs";
 
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import {
   ANALYSIS_FREQUENCY_DOMAIN_EIGEN_DISPERSION_PATH,
@@ -48,9 +48,11 @@ import type {
 } from "../api/apiTypes";
 import { ControlRoomApiError } from "../api/ControlRoomApi";
 import { activeLaneCapabilityFixture } from "./activeLaneCapabilityFixture.testSupport";
+import { ResourceRuntimeStore } from "./ResourceRuntimeStore";
 
 import {
   STUDY_RUNTIME_CONTROL_RESOURCE_KEYS,
+  RUN_PERFORMANCE_RETRY_POLICY,
   hasPublishedFemMeshEvidence,
   isRunPerformanceObservationBusyError,
   readyCommandResourceData,
@@ -71,12 +73,17 @@ import {
   shouldLoadRuntimeMeshManifest,
   shouldLoadRuntimeMeshSummary,
   shouldLoadRuntimeScalars,
+  shouldLoadSolverEnergyCurrent,
+  solverEnergyCurrentDataForStatus,
+  solverEnergyCurrentStatusForResource,
+  solverEnergyCurrentStatusRevision,
   shouldLoadRuntimeStageExecution,
   shouldNotifyRunPerformanceResourceError,
   selectStageExecutionSessionIdentity,
   stageExecutionMatchesSessionIdentity,
   stageExecutionSessionIdentityEquals,
   studyRuntimeCommandSessionStatusEquals,
+  tableRowsBinaryResourceKey,
 } from "./studyRuntimeResources";
 
 const capability = (status: string, reason = "test fixture") => ({ status, reason });
@@ -616,6 +623,22 @@ describe("study runtime command resource bundles", () => {
     expect(studyRuntimeCommandSessionStatusEquals(previous, next)).toBe(false);
   });
 
+  it.each([
+    "region_topology_revision",
+    "region_membership_revision",
+    "region_coefficients_revision",
+    "region_initial_state_revision",
+  ] as const)("publishes %s changes to both runtime command selectors", (key) => {
+    const previous = statusWith({ resources: { [key]: 3 } }) as LiveStatusResource;
+    const next = statusWith({ resources: { [key]: 4 } }) as LiveStatusResource;
+    const previousStudy = selectStudyRuntimeCommandSessionStatus({ data: previous });
+    const nextStudy = selectStudyRuntimeCommandSessionStatus({ data: next });
+
+    expect(nextStudy?.resources[key]).toBe(4);
+    expect(studyRuntimeCommandSessionStatusEquals(previousStudy, nextStudy)).toBe(false);
+    expect(runtimeCommandControlSessionStatusEquals(previous, next)).toBe(false);
+  });
+
   it("treats domain generation changes as full runtime command state changes", () => {
     const previous = selectStudyRuntimeCommandSessionStatus({
       data: statusWith({
@@ -705,7 +728,7 @@ describe("study runtime command resource bundles", () => {
     expect(dataHooks).toContain("useSessionScopedResourceKey");
     expect(dataHooks).toContain("unscopedResourceKey");
     expect(dataHooks).toContain("enabled: enabled && sessionIdentity !== null");
-    expect(dataHooks).toContain("#binary");
+    expect(source).toContain("tableRowsBinaryResourceKey(");
     expect(dataHooks).toContain("DATA_FIELDS_PATH");
     // Row hooks derive their unscoped key through the shared helper, which
     // is the single place that expands DATA_TABLE_ROWS_PATH.
@@ -1740,6 +1763,70 @@ describe("study runtime command resource bundles", () => {
     ).toBe(true);
   });
 
+  it("gates current solver energy on source-qualified availability and current run identity", () => {
+    const staleScalarStatus = statusWith({
+      resources: { scalars_revision: 7 },
+    });
+    const readyZeroEnergyStatus = {
+      ...staleScalarStatus,
+      energies: { total: 0 },
+      solver_energy_current_available: true,
+    };
+
+    expect(shouldLoadSolverEnergyCurrent(true, staleScalarStatus)).toBe(false);
+    expect(
+      shouldLoadSolverEnergyCurrent(true, {
+        ...staleScalarStatus,
+        solver_energy_current_available: false,
+      }),
+    ).toBe(false);
+    expect(shouldLoadSolverEnergyCurrent(true, readyZeroEnergyStatus)).toBe(true);
+    expect(shouldLoadSolverEnergyCurrent(false, readyZeroEnergyStatus)).toBe(false);
+
+    const readyRunStatus = {
+      ...readyZeroEnergyStatus,
+      run: {
+        requested_device: "cpu",
+        resolved_device: "cpu",
+        run_id: "run-a",
+        selection_reason: "explicit_device_request",
+        solver_steps: 1,
+        solver_time: 0,
+        stage_count: 1,
+        stage_index: 0,
+        stage_label: "relax",
+        started_at: "0",
+      },
+    };
+    const nextStageStatus = {
+      ...readyRunStatus,
+      resources: { ...readyRunStatus.resources, stages_revision: 2 },
+    };
+    const nextRunStatus = {
+      ...readyRunStatus,
+      run: { ...readyRunStatus.run, run_id: "run-b" },
+    };
+
+    expect(solverEnergyCurrentStatusRevision(nextStageStatus)).not.toBe(
+      solverEnergyCurrentStatusRevision(readyRunStatus),
+    );
+    expect(solverEnergyCurrentStatusRevision(nextRunStatus)).not.toBe(
+      solverEnergyCurrentStatusRevision(readyRunStatus),
+    );
+    const resource = {
+      step: 1,
+      time_seconds: 0,
+      revision: 1,
+      total: 0,
+      source_identity: solverEnergyCurrentStatusForResource(readyRunStatus),
+    };
+    expect(solverEnergyCurrentDataForStatus(resource, readyRunStatus)).toBe(resource);
+    expect(solverEnergyCurrentDataForStatus(resource, nextRunStatus)).toBeNull();
+    expect(solverEnergyCurrentDataForStatus(resource, nextStageStatus)).toBeNull();
+    expect(solverEnergyCurrentDataForStatus(resource, staleScalarStatus)).toBeNull();
+    expect(solverEnergyCurrentDataForStatus(resource, { ...readyRunStatus, solver_energy_current_available: false })).toBeNull();
+  });
+
   it("uses a revision-driven table rows resource without interval polling", () => {
     const source = readFileSync(studyRuntimeResourcesUrl, "utf8");
     const tableHook = source.slice(
@@ -1766,11 +1853,10 @@ describe("study runtime command resource bundles", () => {
     expect(tableHook).toContain("api.data.tables");
     expect(rowsHook).toContain(".rows(");
     expect(binaryRowsHook).toContain(".rowsBinary(");
-    expect(binaryRowsHook).toContain("}#binary`");
     expect(binaryRowsHook).toContain("pauseLoad = false");
     expect(binaryRowsHook).toContain("pauseLoad,");
     expect(rowsHook).toContain("tableRowsResourceKey");
-    expect(binaryRowsHook).toContain("tableRowsResourceKey");
+    expect(binaryRowsHook).toContain("tableRowsBinaryResourceKey");
     expect(rowsHook).toContain("minRefetchIntervalMs");
     expect(binaryRowsHook).toContain("minRefetchIntervalMs");
     expect(tableHook).not.toContain("setInterval");
@@ -1786,6 +1872,23 @@ describe("study runtime command resource bundles", () => {
     expect(DATA_TABLE_ROWS_PATH).toBe(
       ["", "v2", "sessions", "current", "data", "tables", "{table_id}", "rows"].join("/"),
     );
+  });
+
+  it("isolates binary row cache keys by accepted scalar series identity", () => {
+    const query = { columns: ["step", "mx"], limit: 5_000 };
+    const a1 = tableRowsBinaryResourceKey("default", query, JSON.stringify([
+      "run-1", "task-a1", "A1", "default", "attempt-a1", 4,
+    ]));
+    const b1 = tableRowsBinaryResourceKey("default", query, JSON.stringify([
+      "run-1", "task-b1", "B1", "default", "attempt-b1", 4,
+    ]));
+    const b2 = tableRowsBinaryResourceKey("default", query, JSON.stringify([
+      "run-1", "task-b2", "B2", "default", "attempt-b2", 4,
+    ]));
+
+    expect(new Set([a1, b1, b2]).size).toBe(3);
+    expect(a1).toContain("#binary#series:");
+    expect(a1).not.toContain("series_scope=");
   });
 
   it("exposes dedicated field-sweep and FMR hooks with status-gated resource keys", () => {
@@ -1841,5 +1944,81 @@ describe("study runtime command resource bundles", () => {
         content_digest: "sha256:two",
       }),
     ).not.toBe(revision);
+  });
+});
+
+
+describe("run performance resource loading budget", () => {
+  it("preserves a slow first response before retrying a typed busy conflict", async () => {
+    vi.useFakeTimers();
+    try {
+      const store = new ResourceRuntimeStore<string>();
+      const signals: AbortSignal[] = [];
+      let calls = 0;
+      const load = vi.fn(({ signal }: { signal: AbortSignal }) => {
+        signals.push(signal);
+        calls += 1;
+        if (calls > 1) return Promise.resolve("ready");
+        return new Promise<string>((_resolve, reject) => {
+          const timer = setTimeout(() => reject(new ControlRoomApiError(
+            "observation busy", 409, null, "performance_observation_busy",
+          )), 4000);
+          signal.addEventListener("abort", () => {
+            clearTimeout(timer);
+            reject(new DOMException("Aborted", "AbortError"));
+          }, { once: true });
+        });
+      });
+      const resourceKey = "diagnostics/performance|slow-first-read";
+      const pending = store.ensureLoad({
+        resourceKey, load, externalRevision: "attempt-1",
+        retryPolicy: RUN_PERFORMANCE_RETRY_POLICY,
+      } as never);
+      await vi.advanceTimersByTimeAsync(3500);
+      expect(load).toHaveBeenCalledTimes(1);
+      expect(signals[0]?.aborted).toBe(false);
+      await vi.advanceTimersByTimeAsync(500);
+      await pending;
+      await vi.advanceTimersByTimeAsync(RUN_PERFORMANCE_RETRY_POLICY.retryAfterMs ?? 500);
+      expect(load).toHaveBeenCalledTimes(2);
+      expect(store.getSnapshot(resourceKey)).toMatchObject({ data: "ready", status: "ready" });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("retries eight typed busy conflicts at 500 ms before performance becomes ready", async () => {
+    vi.useFakeTimers();
+    try {
+      const store = new ResourceRuntimeStore<string>();
+      const signals: AbortSignal[] = [];
+      let calls = 0;
+      const load = vi.fn(({ signal }: { signal: AbortSignal }) => {
+        signals.push(signal);
+        calls += 1;
+        if (calls <= 8) {
+          return Promise.reject(new ControlRoomApiError(
+            "observation busy", 409, null, "performance_observation_busy",
+          ));
+        }
+        return Promise.resolve("ready");
+      });
+      const resourceKey = "diagnostics/performance|busy-then-ready";
+      const pending = store.ensureLoad({
+        resourceKey, load, externalRevision: "attempt-1",
+        retryPolicy: RUN_PERFORMANCE_RETRY_POLICY,
+      } as never);
+      await pending;
+      for (let expectedCalls = 2; expectedCalls <= 9; expectedCalls += 1) {
+        await vi.advanceTimersByTimeAsync(500);
+        await vi.waitFor(() => expect(load).toHaveBeenCalledTimes(expectedCalls));
+      }
+      expect(load).toHaveBeenCalledTimes(9);
+      expect(signals).toHaveLength(9);
+      expect(signals.every((signal) => !signal.aborted)).toBe(true);
+      expect(store.getSnapshot(resourceKey)).toMatchObject({ data: "ready", status: "ready" });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

@@ -33,7 +33,7 @@ use crate::router_v2::handlers::analysis::frequency_domain::{
 };
 use crate::router_v2::handlers::analysis::spin_wave_response::{
     dynamic_structure_factor_axis_indices, DynamicStructureFactorResource, SpinWaveGammaResource,
-    SpinWavePeakResource, MAX_DYNAMIC_STRUCTURE_FACTOR_CELLS,
+    MAX_DYNAMIC_STRUCTURE_FACTOR_CELLS,
 };
 use crate::schemas::hysteresis::HysteresisPointSchema;
 use crate::types::{AppState, StageExecutionRecord, StageLifecycleState};
@@ -1258,9 +1258,13 @@ async fn load_result_indices(state: &Arc<AppState>) -> Result<ResultIndexCollect
         )?);
     }
 
-    // Prefer v2, but preserve the legal v1 publisher when v2 is absent.
-    // A present malformed v2 remains an error, never a reason to use stale v1.
-    let response_snapshot = match read_result_artifact_snapshot_with_identity_in_generation(
+    // Prefer the compact v3 projection; preserve historical v2/v1 readers.
+    // A present malformed current version is an error, never a stale fallback.
+    let response_snapshot = if let Some((value, digest, byte_length)) = read_result_artifact_snapshot_with_identity_in_generation(
+        &artifact_dir, "response/magnetic_response_sweep.v3.json", generation.as_ref(),
+    )? {
+        Some(("response/magnetic_response_sweep.v3.json", value, digest, byte_length))
+    } else { match read_result_artifact_snapshot_with_identity_in_generation(
         &artifact_dir,
         "response/magnetic_response_sweep.v2.json",
         generation.as_ref(),
@@ -1271,7 +1275,7 @@ async fn load_result_indices(state: &Arc<AppState>) -> Result<ResultIndexCollect
             "response/magnetic_response_sweep.v1.json",
             generation.as_ref(),
         )?.map(|(value, digest, byte_length)| ("response/magnetic_response_sweep.v1.json", value, digest, byte_length)),
-    };
+    }};
     if let Some((source_artifact, value, digest, byte_length)) = response_snapshot {
         let payload = match decode_frequency_domain_artifact_payload(
             source_artifact,
@@ -2016,6 +2020,7 @@ fn hex_digit(byte: u8) -> Option<u8> {
     }
 }
 
+#[cfg(test)]
 fn field_sweep_item(
     run_id: &str,
     dataset_id: &str,
@@ -2137,6 +2142,7 @@ fn result_mesh_ref(
     })
 }
 
+#[cfg(test)]
 fn build_spectrum_v3_index(
     payload: FrequencyDomainSpectrumV3ArtifactPayload,
     source_digest: String,
@@ -2419,8 +2425,14 @@ fn build_response_index(
     let dataset_id = format!("result:{run_id}:{stage_id}:driven-response");
     let source_revision = source_digest.clone();
     let mut items = Vec::new();
+    let mut amplitudes = Vec::new();
     let sample_id = "response-sample-0000".to_string();
     for point in payload.points.unwrap_or_default() {
+        let amplitude = (payload.schema_version == "magnetic_response_sweep.v3")
+            .then(|| point.extra.0.get("response_amplitude")?.as_f64())
+            .flatten()
+            .filter(|value| value.is_finite() && *value >= 0.0);
+        amplitudes.push(amplitude);
         items.push(response_item(
             run_id,
             &dataset_id,
@@ -2494,8 +2506,14 @@ fn build_response_index(
     }];
     let dataset_revision =
         derived_dataset_revision(&dataset_id, &source_revision, &axes, &source_artifacts);
-    let projections =
-        build_response_projection(run_id, &dataset_id, &dataset_revision, &items, &status);
+    let projections = build_response_projection(
+        run_id,
+        &dataset_id,
+        &dataset_revision,
+        &items,
+        &amplitudes,
+        &status,
+    );
     let manifest = build_manifest(
         dataset_id,
         dataset_revision,
@@ -3457,6 +3475,7 @@ fn build_dsf_projection(
     BTreeMap::from([(projection_id, projection)])
 }
 
+#[cfg(test)]
 fn spectrum_v3_item(
     run_id: &str,
     dataset_id: &str,
@@ -4067,6 +4086,7 @@ fn build_response_projection(
     dataset_id: &str,
     dataset_revision: &str,
     items: &[AnalysisResultSpectralItemSummary],
+    amplitudes: &[Option<f64>],
     status: &AnalysisResultStatusFacets,
 ) -> BTreeMap<String, AnalysisResultProjectionResource> {
     let projection_id = "response-sweep";
@@ -4081,21 +4101,36 @@ fn build_response_projection(
             branch_id: item.branch_id.clone(),
         })
         .collect::<Vec<_>>();
-    let projection_revision = digest_json(&selection_index);
     let points = items
         .iter()
+        .zip(amplitudes.iter().copied())
         .enumerate()
-        .map(|(ordinal, item)| AnalysisResultProjectionPoint {
+        .map(|(ordinal, (item, amplitude))| AnalysisResultProjectionPoint {
             ordinal: ordinal as u64,
             x: item.frequency_hz,
-            y: None,
-            value: None,
+            y: amplitude,
+            value: amplitude,
             sample_id: Some(item.sample_id.clone()),
             item_id: Some(item.item_id.clone()),
             branch_id: item.branch_id.clone(),
             status: item.status.completeness.clone(),
         })
         .collect::<Vec<_>>();
+    let has_amplitude = points.iter().any(|point| point.x.is_some() && point.y.is_some());
+    let projection_revision = if has_amplitude {
+        digest_json(&(&points, &selection_index))
+    } else {
+        digest_json(&selection_index)
+    };
+    let (label, observable) = if has_amplitude {
+        ("Response amplitude", "response_amplitude")
+    } else {
+        ("Response observable", "response-observable")
+    };
+    let mut axis_units = BTreeMap::from([("x".to_string(), "Hz".to_string())]);
+    if has_amplitude {
+        axis_units.insert("y".to_string(), "1".to_string());
+    }
     let projection = AnalysisResultProjectionResource {
         schema_version: ANALYSIS_RESULT_INDEX_SCHEMA_VERSION.to_string(),
         run_id: run_id.to_string(),
@@ -4105,24 +4140,24 @@ fn build_response_projection(
         projection_revision,
         axis_labels: BTreeMap::from([
             (String::from("x"), String::from("Drive frequency")),
-            (String::from("y"), String::from("Response observable")),
+            (String::from("y"), String::from(label)),
         ]),
         axis_mapping: BTreeMap::from([
             (String::from("x"), String::from("drive-frequency")),
-            (String::from("y"), String::from("response-observable")),
+            (String::from("y"), String::from(observable)),
         ]),
-        axis_units: BTreeMap::from([(String::from("x"), String::from("Hz"))]),
+        axis_units,
         fixed_coordinates: Vec::new(),
         series: vec![AnalysisResultProjectionSeries {
             series_id: String::from("response"),
-            label: String::from("Response observable"),
+            label: String::from(label),
             points,
         }],
         selection_index,
         status: status.clone(),
-        unsupported_reason: Some(String::from(
-            "response observable is not published by the typed response-point artifact",
-        )),
+        unsupported_reason: (!has_amplitude).then(|| {
+            "response observable is not published by the typed response-point artifact".to_string()
+        }),
     };
     BTreeMap::from([(projection_id.to_string(), projection)])
 }
@@ -4214,28 +4249,6 @@ fn dataset_summary(dataset: &ResultDatasetIndex) -> AnalysisResultDatasetSummary
             .sample_index_resource
             .replace("/samples", ""),
     }
-}
-
-/// Read once, then derive both the decoded value and revision from those bytes.
-/// A pathname replaced between hash and decode must never pair two generations.
-pub(super) fn read_result_artifact_snapshot(
-    artifact_dir: &Path,
-    artifact_path: &str,
-) -> Result<Option<(Value, String)>, ApiError> {
-    let Some(path) = try_resolve_artifact_path(artifact_dir, artifact_path)? else {
-        return Ok(None);
-    };
-    let file = std::fs::File::open(path).map_err(|error| {
-        ApiError::internal(format!(
-            "failed to open result artifact '{artifact_path}': {error}"
-        ))
-    })?;
-    if !file.metadata()?.is_file() {
-        return Err(ApiError::internal(format!(
-            "RESULT_ARTIFACT_NOT_REGULAR: '{artifact_path}' must be a regular file"
-        )));
-    }
-    decode_result_artifact_snapshot(file, artifact_path, MAX_RESULT_ARTIFACT_BYTES).map(Some)
 }
 
 fn read_result_artifact_snapshot_with_identity_and_generation_fallback(
@@ -5329,6 +5342,37 @@ fn item_matches(
 mod tests {
     use super::*;
     use crate::router_v2::handlers::analysis::frequency_domain::FrequencyDomainArtifactExtras;
+    use crate::router_v2::handlers::analysis::spin_wave_response::SpinWavePeakResource;
+
+    #[test]
+    fn accepted_response_reader_tests_compact_sweep_projects_native_amplitude() {
+        let index = |schema: &str, amplitude: f64| {
+            let payload = serde_json::from_value(serde_json::json!({
+                "schema_version": schema, "status": "ready", "complete": true,
+                "points": [
+                    {"frequency_index": 0, "frequency_hz": 1e9, "response_amplitude": amplitude},
+                    {"frequency_index": 1, "frequency_hz": 2e9}
+                ]
+            })).unwrap();
+            build_response_index(payload, "source".into(), "run", "stage", "response.json").unwrap()
+        };
+        let ready = index("magnetic_response_sweep.v3", 0.25);
+        let projection = &ready.projections["response-sweep"];
+        let points = &projection.series[0].points;
+        assert!(projection.unsupported_reason.is_none());
+        assert_eq!(projection.axis_mapping["y"], "response_amplitude");
+        assert_eq!(projection.axis_units["y"], "1");
+        assert_eq!((points[0].x, points[0].y, points[0].value), (Some(1e9), Some(0.25), Some(0.25)));
+        assert_eq!(points[1].y, None);
+        assert_eq!(points[0].item_id, projection.selection_index[0].item_id);
+        let updated = index("magnetic_response_sweep.v3", 0.50);
+        assert_ne!(projection.projection_revision, updated.projections["response-sweep"].projection_revision);
+
+        let legacy = index("magnetic_response_sweep.v2", 0.25);
+        let projection = &legacy.projections["response-sweep"];
+        assert!(projection.unsupported_reason.is_some());
+        assert_eq!(projection.series[0].points[0].y, None);
+    }
 
     #[test]
     fn generation_binding_replaces_every_payload_generation_query_without_changing_legacy_keys() {

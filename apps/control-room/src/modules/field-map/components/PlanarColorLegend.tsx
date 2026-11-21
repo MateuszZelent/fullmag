@@ -6,6 +6,8 @@ import { formatValueWithUnit } from "@/shared/domain/physics/displayUnits";
 import { scalarColorPaletteGradientCss } from "@/shared/visualization/scalarColorPalette";
 
 interface PlanarColorLegendProps {
+  /** One compact card of a layer stack (plan §2.1 C). */
+  compact?: boolean;
   targetLabel?: string;
   colormap: string;
   component: string;
@@ -17,6 +19,7 @@ interface PlanarColorLegendProps {
 }
 
 export function PlanarColorLegend({
+  compact = false,
   targetLabel,
   colormap,
   component,
@@ -27,11 +30,14 @@ export function PlanarColorLegend({
   rangeState,
 }: PlanarColorLegendProps) {
   if (isDirectionColormap(colormap)) {
-    return <PlanarDirectionLegend quantityId={quantityId} targetLabel={targetLabel} />;
+    return <PlanarDirectionLegend compact={compact} quantityId={quantityId} targetLabel={targetLabel} />;
   }
   const rangeLabel = resolvePlanarColorRangeLabel(range, rangeState);
   return (
-    <aside aria-label="Scalar color range" className="fm-field-map__colorbar">
+    <aside
+      aria-label={targetLabel ? `${targetLabel} color range` : "Scalar color range"}
+      className={`fm-field-map__colorbar${compact ? " fm-field-map__colorbar--compact" : ""}`}
+    >
       <div className="fm-field-map__colorbar-header">
         <div className="fm-field-map__colorbar-identity">
           <span className="fm-field-map__colorbar-context">{targetLabel ?? "2D field"}</span>
@@ -129,12 +135,12 @@ function DirectionHemisphere({ sign, label }: { sign: 1 | -1; label: string }) {
  * Legend of the mumax3 direction wheel: hue is the in-plane angle in the world
  * XY plane (+X red), lightness the z component (+Z white, -Z black).
  */
-function PlanarDirectionLegend({ quantityId, targetLabel }: { quantityId: string; targetLabel?: string }) {
+function PlanarDirectionLegend({ compact, quantityId, targetLabel }: { compact: boolean; quantityId: string; targetLabel?: string }) {
   const name = quantityDisplayName(quantityId);
   return (
     <aside
       aria-label={`${name} direction colours: hue is the in-plane angle in the XY plane, lightness is the z component`}
-      className="fm-field-map__colorbar fm-field-map__colorbar--direction"
+      className={`fm-field-map__colorbar fm-field-map__colorbar--direction${compact ? " fm-field-map__colorbar--compact" : ""}`}
     >
       <div className="fm-field-map__colorbar-header">
         <div className="fm-field-map__colorbar-identity">
@@ -147,10 +153,58 @@ function PlanarDirectionLegend({ quantityId, targetLabel }: { quantityId: string
       <div className="fm-field-map__direction-legend">
         <DirectionHemisphere label="z > 0" sign={1} />
         <DirectionHemisphere label="z < 0" sign={-1} />
-        <p className="fm-field-map__direction-note">
-          Hue: angle in XY (+X red). Lightness: z (+Z white, −Z black). Magnitude is not shown; use |v|.
-        </p>
+        {compact ? null : (
+          <p className="fm-field-map__direction-note">
+            Hue: angle in XY (+X red). Lightness: z (+Z white, −Z black). Magnitude is not shown; use |v|.
+          </p>
+        )}
       </div>
     </aside>
+  );
+}
+
+export interface PlanarLayerLegendEntry {
+  id: string;
+  colormap: string;
+  component: string;
+  legendUnit: string;
+  probeScale: number;
+  quantityId: string;
+  range: { max: number; min: number } | null;
+  targetLabel: string;
+}
+
+/**
+ * Legend of the field layer stack: one compact card per drawn layer, in list
+ * order (top layer first). The toolbar legend toggle
+ * (`planar.viewport_colorbar_visible`) hides the whole stack.
+ */
+export function PlanarLayerLegendList({
+  layers,
+  rangeState,
+  visible,
+}: {
+  layers: readonly PlanarLayerLegendEntry[];
+  rangeState?: PlanarColorLegendProps["rangeState"];
+  visible: boolean;
+}) {
+  if (!visible || layers.length === 0) return null;
+  return (
+    <div aria-label="Field layer legends" className="fm-field-map__layer-legends" role="group">
+      {layers.map((layer) => (
+        <PlanarColorLegend
+          key={layer.id}
+          compact
+          colormap={layer.colormap}
+          component={layer.component}
+          legendUnit={layer.legendUnit}
+          probeScale={layer.probeScale}
+          quantityId={layer.quantityId}
+          range={layer.range}
+          rangeState={rangeState}
+          targetLabel={layer.targetLabel}
+        />
+      ))}
+    </div>
   );
 }

@@ -210,28 +210,57 @@ impl ExchangeLlgProblem {
     }
 
     pub(crate) fn direct_torques_add_into(&self, magnetization: &[Vector3], out: &mut [Vector3]) {
+        self.direct_torques_add_into_with_slonczewski_multiplier(magnetization, out, 1.0);
+    }
+
+    pub(crate) fn direct_torques_add_into_with_slonczewski_multiplier(
+        &self,
+        magnetization: &[Vector3],
+        out: &mut [Vector3],
+        current_multiplier: f64,
+    ) {
         let n = magnetization.len();
         if let Some(ref zl) = self.terms.zhang_li_stt {
             self.zhang_li_stt_torque_add_into(magnetization, zl, &mut out[..n]);
         }
         if let Some(ref slon) = self.terms.slonczewski_stt {
-            self.slonczewski_stt_torque_add_into(magnetization, slon, &mut out[..n]);
+            self.slonczewski_stt_torque_add_into_scaled(
+                magnetization,
+                slon,
+                &mut out[..n],
+                current_multiplier,
+            );
         }
         if let Some(ref sot) = self.terms.sot {
             self.sot_torque_add_into(magnetization, sot, &mut out[..n]);
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn direct_torques_add_into_soa(
         &self,
         magnetization: &VectorFieldSoA,
         out: &mut VectorFieldSoA,
     ) {
+        self.direct_torques_add_into_soa_with_slonczewski_multiplier(magnetization, out, 1.0);
+    }
+
+    pub(crate) fn direct_torques_add_into_soa_with_slonczewski_multiplier(
+        &self,
+        magnetization: &VectorFieldSoA,
+        out: &mut VectorFieldSoA,
+        current_multiplier: f64,
+    ) {
         if let Some(ref zl) = self.terms.zhang_li_stt {
             self.zhang_li_stt_torque_add_into_soa(magnetization, zl, out);
         }
         if let Some(ref slon) = self.terms.slonczewski_stt {
-            self.slonczewski_stt_torque_add_into_soa(magnetization, slon, out);
+            self.slonczewski_stt_torque_add_into_soa_scaled(
+                magnetization,
+                slon,
+                out,
+                current_multiplier,
+            );
         }
         if let Some(ref sot) = self.terms.sot {
             self.sot_torque_add_into_soa(magnetization, sot, out);
@@ -782,11 +811,22 @@ impl ExchangeLlgProblem {
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn slonczewski_stt_torque_add_into(
         &self,
         magnetization: &[Vector3],
         cfg: &SlonczewskiSttConfig,
         out: &mut [Vector3],
+    ) {
+        self.slonczewski_stt_torque_add_into_scaled(magnetization, cfg, out, 1.0);
+    }
+
+    pub(crate) fn slonczewski_stt_torque_add_into_scaled(
+        &self,
+        magnetization: &[Vector3],
+        cfg: &SlonczewskiSttConfig,
+        out: &mut [Vector3],
+        current_multiplier: f64,
     ) {
         let n = self.grid.cell_count();
 
@@ -799,13 +839,16 @@ impl ExchangeLlgProblem {
             {
                 return;
             }
-            let torque = slonczewski_torque_from_config(
+            let mut torque = slonczewski_torque_from_config(
                 magnetization[flat],
                 cfg,
                 self.alpha_at(flat),
                 self.dynamics.gyromagnetic_ratio,
                 self.ms_at(flat),
             );
+            if current_multiplier != 1.0 {
+                torque = scale(torque, current_multiplier);
+            }
             o[0] += torque[0];
             o[1] += torque[1];
             o[2] += torque[2];
@@ -825,11 +868,22 @@ impl ExchangeLlgProblem {
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn slonczewski_stt_torque_add_into_soa(
         &self,
         magnetization: &VectorFieldSoA,
         cfg: &SlonczewskiSttConfig,
         out: &mut VectorFieldSoA,
+    ) {
+        self.slonczewski_stt_torque_add_into_soa_scaled(magnetization, cfg, out, 1.0);
+    }
+
+    pub(crate) fn slonczewski_stt_torque_add_into_soa_scaled(
+        &self,
+        magnetization: &VectorFieldSoA,
+        cfg: &SlonczewskiSttConfig,
+        out: &mut VectorFieldSoA,
+        current_multiplier: f64,
     ) {
         for flat in 0..self.grid.cell_count() {
             if !self.is_active(flat)
@@ -840,7 +894,7 @@ impl ExchangeLlgProblem {
             {
                 continue;
             }
-            let torque = slonczewski_torque_from_config(
+            let mut torque = slonczewski_torque_from_config(
                 [
                     magnetization.x[flat],
                     magnetization.y[flat],
@@ -851,6 +905,9 @@ impl ExchangeLlgProblem {
                 self.dynamics.gyromagnetic_ratio,
                 self.ms_at(flat),
             );
+            if current_multiplier != 1.0 {
+                torque = scale(torque, current_multiplier);
+            }
             out.x[flat] += torque[0];
             out.y[flat] += torque[1];
             out.z[flat] += torque[2];

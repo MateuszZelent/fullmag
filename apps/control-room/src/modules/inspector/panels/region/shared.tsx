@@ -1,4 +1,6 @@
 import { Button } from "@/shared/ui/Button";
+import { DisabledReason } from "@/shared/ui/DisabledReason";
+import type { InspectorChildDraftRegistry } from "../../inspectorChildDraftRegistry";
 import { FieldRow } from "../../primitives/FieldRow";
 import { FeedbackBanner } from "../../primitives/FeedbackBanner";
 import { InspectorGroup } from "../../primitives/InspectorGroup";
@@ -43,10 +45,7 @@ export interface RegionSubPanelProps {
   materialFields: MaterialParameterFieldListResource | null;
   couplingDependencies: RegionCouplingDependency[];
   auxiliaryDraftOwnerKey?: string;
-  reportAuxiliaryDraftSession?: (
-    ownerKey: string,
-    session: RegionAuxiliaryDraftSession | null,
-  ) => void;
+  auxiliaryDraftRegistry?: InspectorChildDraftRegistry<RegionAuxiliaryDraftSession>;
   applyRegion: () => Promise<boolean>;
   duplicateRegion: () => Promise<void>;
   deleteRegion: () => Promise<void>;
@@ -229,28 +228,41 @@ export function ObjectRegionActionsSection({
         </>
       )}
       <div className="fm-inspector-toolbar">
-        <Button
-          disabled={!sessionAvailable || pending || !canWriteRegion}
-          size="sm"
-          type="button"
-          variant="primary"
-          title={canWriteRegion ? undefined : "Select an authored object region"}
-          onClick={() => void applyRegion()}
-        >
-          Apply Region
-        </Button>
-        {meshLane === "fem" ? (
-          <Button
-            disabled={!sessionAvailable || pending || buildPending || !meshWritesAllowed || femMeshLifecycle?.status === "unsupported"}
-            size="sm"
-            type="button"
-            variant="primary"
-            title={meshWritesAllowed ? femMeshLifecycle?.reason : "FEM mesh realization is unavailable"}
-            onClick={() => void buildRegion()}
-          >
-            {buildPending ? "Waiting for mesh build…" : draftDirty ? "Apply & Build Mesh" : "Build Mesh"}
-          </Button>
-        ) : null}
+        {(() => {
+          const applyRegionButton = (
+            <Button
+              disabled={!sessionAvailable || pending || !canWriteRegion}
+              size="sm"
+              type="button"
+              variant="primary"
+              onClick={() => void applyRegion()}
+            >
+              Apply Region
+            </Button>
+          );
+          return canWriteRegion ? applyRegionButton : (
+            <DisabledReason reason="Select an authored object region">{applyRegionButton}</DisabledReason>
+          );
+        })()}
+        {meshLane === "fem" ? (() => {
+          const buildReason = meshWritesAllowed ? femMeshLifecycle?.reason : "FEM mesh realization is unavailable";
+          const buildBlocked = !meshWritesAllowed || femMeshLifecycle?.status === "unsupported";
+          const buildButton = (
+            <Button
+              disabled={!sessionAvailable || pending || buildPending || buildBlocked}
+              size="sm"
+              type="button"
+              variant="primary"
+              title={buildBlocked ? undefined : buildReason}
+              onClick={() => void buildRegion()}
+            >
+              {buildPending ? "Waiting for mesh build…" : draftDirty ? "Apply & Build Mesh" : "Build Mesh"}
+            </Button>
+          );
+          return buildBlocked && buildReason ? (
+            <DisabledReason reason={buildReason}>{buildButton}</DisabledReason>
+          ) : buildButton;
+        })() : null}
         <Button
           size="sm"
           type="button"

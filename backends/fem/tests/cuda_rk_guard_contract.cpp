@@ -7,6 +7,7 @@
 #include "gpu/cuda/fields/vector_field_kernels.hpp"
 #include "gpu/cuda/integrators/llg/llg_rhs_kernels.hpp"
 #include "gpu/cuda/integrators/rk/rk_step_transaction_device.hpp"
+#include "gpu/cuda/integrators/rk/rk_fsal_policy.hpp"
 #include "gpu/cuda/integrators/rk/rk_workspace_memory.hpp"
 #include "gpu/cuda/runtime/gpu_state_runtime.hpp"
 #include "gpu/cuda/state/gpu_state.hpp"
@@ -341,6 +342,16 @@ void minimal_rk_transaction_restores_only_authoritative_gpu_state()
     check(ctx.adaptive_dt.prev_error_norm == 6.0 && ctx.adaptive_dt.has_prev_error_norm,
           "GPU transaction controller-history rollback");
     check(gpu.rk.fsal_valid, "GPU transaction FSAL validity rollback");
+    fullmag::fem::gpu_rk_retain_restored_fsal_on_retry(ctx);
+    check(gpu.rk.fsal_valid,
+          "adaptive retry must preserve the restored deterministic FSAL derivative");
+    check_component(gpu.rk.k[0], 4.0, "adaptive retry retains the restored derivative values");
+    ctx.thermal_brown.temperature = 1.0;
+    fullmag::fem::gpu_rk_retain_restored_fsal_on_retry(ctx);
+    check(!gpu.rk.fsal_valid, "adaptive retry must reject stochastic FSAL reuse");
+    ctx.thermal_brown.temperature = 0.0;
+    fullmag::fem::gpu_rk_retain_restored_fsal_on_retry(ctx);
+    check(!gpu.rk.fsal_valid, "adaptive retry must never promote an invalid FSAL derivative");
     check(!gpu.fields.accepted_observables_valid,
           "GPU RK rollback must invalidate derived accepted-endpoint observables");
     check(ctx.poisson_demag.fresh_initial_guess_required,

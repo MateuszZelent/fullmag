@@ -1,7 +1,8 @@
 "use client";
 
 import dynamic from "next/dynamic";
-import { useEffect, useMemo, useRef } from "react";
+import { useMemo, useRef } from "react";
+import type { MouseHandlerDataParam } from "recharts/types/synchronisation/types";
 
 import type {
   MeshQualityHistogramBin,
@@ -133,50 +134,11 @@ function ChartTooltipContent({
 
 function SizeDistributionTooltipContent({
   active,
-  activeIndex,
-  distribution,
-  onHoverBin,
   payload,
 }: {
   active?: boolean;
-  activeIndex?: number | string;
-  distribution: MeshSizeDistribution;
-  onHoverBin?: (bin: MeshSizeDistributionHoverBin | null) => void;
   payload?: ReadonlyArray<{ payload?: BinPayload }>;
 }) {
-  const activeIndexFromTooltip = resolveActiveHistogramBinIndex(
-    {
-      activeTooltipIndex: activeIndex,
-      isTooltipActive: active ?? false,
-    },
-    distribution.histogram.length,
-  );
-  const activeIndexFromPayload =
-    typeof payload?.[0]?.payload?.binIndex === "number"
-      ? payload[0].payload.binIndex
-      : null;
-  const index = activeIndexFromTooltip ?? activeIndexFromPayload;
-  const hoverBin = useMemo(
-    () =>
-      index === null
-        ? null
-        : buildMeshSizeDistributionHoverBin(distribution, index),
-    [distribution, index],
-  );
-  const hoverKey = meshSizeDistributionHoverKey(hoverBin);
-  const lastEmittedHoverKeyRef = useRef<string | null>(null);
-
-  useEffect(() => {
-    if (!onHoverBin) {
-      return;
-    }
-    if (lastEmittedHoverKeyRef.current === hoverKey) {
-      return;
-    }
-    lastEmittedHoverKeyRef.current = hoverKey;
-    onHoverBin(hoverBin);
-  }, [hoverBin, hoverKey, onHoverBin]);
-
   return <ChartTooltipContent active={active} payload={payload} />;
 }
 
@@ -231,7 +193,7 @@ export function MetricHistogramChart({ metric }: MetricHistogramChartProps) {
   if (data.length === 0) return null;
 
   return (
-    <div
+    <div role="img"
       aria-label={data
         .map((bin) => `${bin.binLabel}: ${bin.count.toLocaleString("en-US")}`)
         .join(", ")}
@@ -331,6 +293,7 @@ export function SizeDistributionChart({
   onHoverBin,
 }: SizeDistributionChartProps) {
   const colors = useChartColors();
+  const lastEmittedHoverKeyRef = useRef<string | null>(null);
   const data = useMemo(
     () =>
       distribution.histogram.map((bin, binIndex) => ({
@@ -348,20 +311,32 @@ export function SizeDistributionChart({
   if (data.length === 0) return null;
 
   return (
-    <div
+    <div role="img"
       aria-label={data
         .map((bin) => `${bin.binLabel}: ${bin.count.toLocaleString("en-US")}`)
         .join(", ")}
       className="fm-mesh-quality-chart"
       data-distribution={distribution.id}
       data-hoverable={onHoverBin ? "true" : "false"}
-      onMouseLeave={() => onHoverBin?.(null)}
+      onMouseLeave={() => {
+        lastEmittedHoverKeyRef.current = meshSizeDistributionHoverKey(null);
+        onHoverBin?.(null);
+      }}
     >
       <ResponsiveContainer width="100%" height={100}>
         <BarChart
           data={data}
           margin={{ top: 4, right: 4, bottom: 0, left: -20 }}
           barCategoryGap="12%"
+          onMouseMove={(state: Pick<MouseHandlerDataParam, "activeTooltipIndex" | "isTooltipActive">) => {
+            if (!onHoverBin) return;
+            const index = resolveActiveHistogramBinIndex(state, distribution.histogram.length);
+            const bin = index === null ? null : buildMeshSizeDistributionHoverBin(distribution, index);
+            const hoverKey = meshSizeDistributionHoverKey(bin);
+            if (lastEmittedHoverKeyRef.current === hoverKey) return;
+            lastEmittedHoverKeyRef.current = hoverKey;
+            onHoverBin(bin);
+          }}
         >
           <defs>
             <linearGradient id="accentGradient" x1="0" y1="0" x2="0" y2="1">
@@ -386,8 +361,6 @@ export function SizeDistributionChart({
           <Tooltip
             content={
               <SizeDistributionTooltipContent
-                distribution={distribution}
-                onHoverBin={onHoverBin}
               />
             }
             cursor={{ fill: colors.accentMuted, radius: 2 }}

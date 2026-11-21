@@ -141,6 +141,94 @@ class AdmissionTests(unittest.TestCase):
             with self.assertRaises(HistoryError):
                 validate_control_pins(root, {"../outside.json": None})
 
+    def recovered_fixture(self):
+        control, receipt, terminal, compose, source = self.fixture()
+        backend, frontend = "b" * 64, "c" * 64
+        terminal.update(state="failed-confirmed", started_at=1.0, finished_at=2.0)
+        receipt.update(started_at=5.0, backend_container=backend)
+        receipt["inputs"]["backend_container"] = backend
+        witness = {
+            "schema": "fullmag.docker-build-operation.v1", "phase": "iteration",
+            "state": "succeeded", "attempt": "d" * 32,
+            "compose_project": control.project, "control_volume": control.volume,
+            "config_sha256": receipt["config_sha256"], "state_root": terminal["state_root"],
+            "backend_container": backend, "frontend_container": frontend,
+            "source_commit": "e" * 40, "source_digest": "f" * 64,
+            "source_snapshot_sha256": "1" * 64, "backend_build_receipt_sha256": "2" * 64,
+            "started_at": 3.0, "finished_at": 4.0,
+            "inputs": {"attempt": terminal["attempt"], "config_sha256": receipt["config_sha256"],
+                       "source_root": str(source), "image_id": receipt["image_id"]},
+        }
+        path = "iteration/attempts/" + witness["attempt"] + "/terminal.json"
+        records = {path: canonical(witness), path.replace("terminal.json", "receipt.json"): canonical(witness)}
+        control.read_pins = {}
+        def read(relative, **kwargs):
+            raw = records[relative]
+            control.read_pins[relative] = digest(raw)
+            return raw
+        control.read_bytes = read
+        return control, receipt, terminal, compose, source, path, records
+
+    def test_historical_failed_start_requires_exact_pre_activation_recovery_witness(self):
+        control, receipt, terminal, compose, source, path, records = self.recovered_fixture()
+        with self.assertRaises(HistoryError):
+            historical_mounts(control, receipt, terminal, compose, source)
+        self.assertEqual(historical_mounts(control, receipt, terminal, compose, source,
+            runtime_witness=(path, digest(records[path]))),
+            (Path("/storage/runtime"), Path("/storage/results")))
+        self.assertEqual(control.read_pins, {p: digest(raw) for p, raw in records.items()})
+
+    def test_historical_recovery_witness_rejects_identity_timing_and_receipt_changes(self):
+        mutations = ("state", "phase", "original-attempt", "backend", "activation-backend",
+            "config", "source", "image", "volume", "namespace", "state-root", "stop-only",
+            "missing-build", "before-parent-failure", "after-activation", "backward-time",
+            "nan-time", "bool-time", "missing-time", "receipt", "receipt-format-only")
+        for mutation in mutations:
+            control, receipt, terminal, compose, source, path, records = self.recovered_fixture()
+            witness = json.loads(records[path])
+            if mutation == "state": witness["state"] = "failed-confirmed"
+            elif mutation == "phase": witness["phase"] = "resume"
+            elif mutation == "original-attempt": witness["inputs"]["attempt"] = "9" * 32
+            elif mutation == "backend": witness["backend_container"] = "9" * 64
+            elif mutation == "activation-backend": receipt["inputs"]["backend_container"] = "9" * 64
+            elif mutation == "config": witness["config_sha256"] = "9" * 64
+            elif mutation == "source": witness["inputs"]["source_root"] = "/foreign"
+            elif mutation == "image": witness["inputs"]["image_id"] = "sha256:" + "9" * 64
+            elif mutation == "volume": witness["control_volume"] = "foreign"
+            elif mutation == "namespace": witness["control_namespace"] = "namespaces/foreign"
+            elif mutation == "state-root": witness["state_root"] = "/foreign"
+            elif mutation == "stop-only": witness["idle_backend_stopped"] = True
+            elif mutation == "missing-build": del witness["backend_build_receipt_sha256"]
+            elif mutation == "before-parent-failure": witness.update(started_at=0.5, finished_at=1.0)
+            elif mutation == "after-activation": witness.update(started_at=6.0, finished_at=7.0)
+            elif mutation == "backward-time": witness.update(started_at=4.5, finished_at=4.0)
+            elif mutation == "nan-time": witness["finished_at"] = float("nan")
+            elif mutation == "bool-time": receipt["started_at"] = True
+            elif mutation == "missing-time": del terminal["finished_at"]
+            records[path] = (json.dumps(witness).encode() if mutation == "nan-time"
+                             else canonical(witness))
+            if mutation == "receipt":
+                records[path.replace("terminal.json", "receipt.json")] = b"{}"
+            elif mutation == "receipt-format-only":
+                records[path.replace("terminal.json", "receipt.json")] = json.dumps(witness, indent=2).encode()
+            else:
+                records[path.replace("terminal.json", "receipt.json")] = records[path]
+            with self.subTest(mutation=mutation), self.assertRaises((HistoryError, BuildControlError)):
+                historical_mounts(control, receipt, terminal, compose, source,
+                    runtime_witness=(path, digest(records[path])))
+
+    def test_historical_recovery_witness_requires_bounded_explicit_path_and_raw_digest(self):
+        control, receipt, terminal, compose, source, path, records = self.recovered_fixture()
+        for pin in ((path, "0" * 64), ("../" + path, digest(records[path])),
+                    (path.replace("terminal.json", "receipt.json"), digest(records[path])),
+                    ("/" + path, digest(records[path])), (path, None), path):
+            with self.subTest(pin=pin), self.assertRaises(HistoryError):
+                historical_mounts(control, receipt, terminal, compose, source, runtime_witness=pin)
+        terminal["state"] = "succeeded"
+        with self.assertRaises(HistoryError):
+            historical_mounts(control, receipt, terminal, compose, source,
+                runtime_witness=(path, digest(records[path])))
+
 
 @unittest.skipUnless(os.name == "posix", "managed helper runs on Linux")
 class WriterBarrierTests(unittest.TestCase):
@@ -150,9 +238,13 @@ class WriterBarrierTests(unittest.TestCase):
         self.root = Path(temp.name).resolve()
         self.store, self.ledger = self.root / "store", self.root / "ledger"
         self.store.mkdir(); self.ledger.mkdir()
+        self.registry = self.root / "host-ledger-roots"
+        self.registry.mkdir()
         self.locks = [self.store / "WRITER.lock", self.ledger / "WRITER.lock"]
         for path in self.locks:
             path.touch()
+        self.registry_lock = self.registry / "WRITER.lock"
+        self.registry_lock.touch()
 
     def test_existing_writer_refuses_without_creating_or_replacing_any_lock(self):
         import fcntl
@@ -184,6 +276,37 @@ class WriterBarrierTests(unittest.TestCase):
                 self.locks[0].rename(self.store / "old-lock")
                 self.locks[0].touch()
                 check()
+
+    def test_registry_writer_is_first_barrier_and_blocks_before_ledger_or_store(self):
+        import fcntl
+        with self.registry_lock.open("rb") as registry_writer, \
+                self.locks[1].open("rb") as ledger_writer:
+            fcntl.flock(registry_writer, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            fcntl.flock(ledger_writer, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            with self.assertRaisesRegex(HistoryError, "host-ledger-roots/WRITER.lock"):
+                with writer_barriers(self.store, self.ledger, self.registry):
+                    self.fail("registry writer must block before ledger/store barriers")
+
+    def test_linked_registry_writer_lock_is_refused_before_open(self):
+        self.registry_lock.unlink()
+        self.registry_lock.symlink_to(self.locks[0])
+        with self.assertRaisesRegex(HistoryError, "linked, nonregular or replaced"):
+            with writer_barriers(self.store, self.ledger, self.registry):
+                self.fail("linked registry lock must not be admitted")
+
+    def test_registry_barrier_is_held_for_transaction_and_replacement_is_detected(self):
+        import fcntl
+        with self.assertRaisesRegex(HistoryError, "inode changed"):
+            with writer_barriers(self.store, self.ledger, self.registry) as check:
+                check()
+                for path in [self.registry_lock, *self.locks]:
+                    with path.open("rb") as writer, self.assertRaises(BlockingIOError):
+                        fcntl.flock(writer, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                old_lock = self.registry / "WRITER.lock.old"
+                self.registry_lock.rename(old_lock)
+                self.registry_lock.touch()
+                check()
+
     def test_healthy_inventory_owner_lifetime_fence_does_not_block_archival(self):
         import fcntl
         inventory = self.ledger / "HOST_INVENTORY_OWNER.lock"

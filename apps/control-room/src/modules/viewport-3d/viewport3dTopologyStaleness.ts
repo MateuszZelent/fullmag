@@ -59,13 +59,12 @@ export function resolveUnknownTopologyProvenanceRefreshKey(
   const sceneRevision = resolveSceneRevision(scene);
   const manifestRecord = asRecord(manifest);
   const manifestRevision = asFiniteNumber(manifestRecord?.revision);
-  const sourceSceneRevision = asFiniteNumber(
-    manifestRecord?.source_scene_revision,
-  );
+  const qualifiedSceneRevision = asFiniteNumber(manifestRecord?.validated_for_scene_revision) ??
+    asFiniteNumber(manifestRecord?.source_scene_revision);
   if (
     sceneRevision === null ||
     manifestRevision === null ||
-    sourceSceneRevision !== null
+    qualifiedSceneRevision !== null
   ) {
     return null;
   }

@@ -7,8 +7,9 @@
   min-height: var(--fm-ribbon-height);
   flex-direction: column;
   overflow: visible;
-  border-bottom: 1px solid var(--fm-border-subtle);
-  background: var(--fm-bg-chrome);
+  border-bottom: 0;
+  /* The ribbon slot draws the translucent chrome surface. */
+  background: transparent;
 }
 
 /* Tab navigation and view preferences remain available at narrow widths. */
@@ -16,7 +17,7 @@
   display: flex;
   min-width: 0;
   align-items: stretch;
-  border-bottom: 1px solid var(--fm-border-subtle);
+  border-bottom: 1px solid var(--fm-border-muted);
 }
 
 /* ── Tab strip ── */
@@ -26,12 +27,12 @@
   min-width: 0;
   height: 40px;
   flex-shrink: 0;
-  align-items: flex-end;
-  gap: 2px;
+  align-items: center;
+  gap: var(--fm-space-1);
   overflow-x: auto;
   overflow-y: hidden;
   scrollbar-width: thin;
-  scrollbar-color: var(--fm-border-default) var(--fm-bg-chrome);
+  scrollbar-color: var(--fm-scrollbar-thumb) var(--fm-bg-chrome);
   padding-inline: var(--fm-space-3);
 }
 
@@ -48,45 +49,33 @@
 .fm-ribbon__tab {
   position: relative;
   display: flex;
-  height: var(--fm-control-height-regular);
+  height: var(--fm-control-height-compact);
   align-items: center;
   padding-inline: var(--fm-space-3);
   border: none;
-  border-radius: var(--fm-radius-sm) var(--fm-radius-sm) 0 0;
+  border-radius: var(--fm-radius-pill);
   background: transparent;
   color: var(--fm-text-muted);
   cursor: pointer;
   font-size: var(--fm-font-size-sm);
-  font-weight: 600;
-  letter-spacing: 0.05em;
-  text-transform: uppercase;
+  font-weight: 500;
   transition:
-    background-color var(--fm-transition-fast),
-    color var(--fm-transition-fast);
+    background-color var(--fm-duration-micro) var(--fm-ease-out-soft),
+    box-shadow var(--fm-duration-micro) var(--fm-ease-out-soft),
+    color var(--fm-duration-micro) var(--fm-ease-out-soft);
   white-space: nowrap;
   user-select: none;
 }
 
 .fm-ribbon__tab:hover {
-  background: var(--fm-bg-panel-raised);
-  color: var(--fm-text-secondary);
-}
-
-.fm-ribbon__tab[data-active="true"] {
-  background: var(--fm-bg-app);
   color: var(--fm-text-primary);
 }
 
-.fm-ribbon__tab[data-active="true"]::after {
-  position: absolute;
-  right: var(--fm-space-1);
-  bottom: -1px;
-  left: var(--fm-space-1);
-  height: 2px;
-  border-radius: var(--fm-radius-xs) var(--fm-radius-xs) 0 0;
-  background: var(--fm-accent);
-  content: "";
-  z-index: var(--fm-z-base);
+/* The active tab is lifted on the raised surface (specs/frontend-v2/09 §1a). */
+.fm-ribbon__tab[data-active="true"] {
+  background: var(--fm-raised-bg);
+  box-shadow: var(--fm-elevation-sm);
+  color: var(--fm-text-primary);
 }
 
 /* ── Groups row ──
@@ -102,7 +91,7 @@
   overflow-y: hidden;
   padding-inline: var(--fm-space-2);
   scrollbar-width: thin;
-  scrollbar-color: var(--fm-border-default) var(--fm-bg-chrome);
+  scrollbar-color: var(--fm-scrollbar-thumb) var(--fm-bg-chrome);
 }
 
 .fm-ribbon__groups::-webkit-scrollbar {
@@ -117,7 +106,7 @@
   flex-shrink: 0;
   min-width: 0;
   padding-inline: var(--fm-space-2);
-  border-right: 1px solid color-mix(in srgb, var(--fm-ribbon-group-accent) 34%, var(--fm-border-subtle));
+  border-right: 1px solid var(--fm-border-muted);
   transition: background-color var(--fm-transition-fast);
 }
 
@@ -149,22 +138,22 @@
 
 .fm-ribbon-group[data-category="runtime"] {
   --fm-ribbon-group-accent: var(--fm-category-runtime);
-  background: color-mix(in srgb, var(--fm-category-runtime) 6%, transparent);
+  --fm-ribbon-icon-color: var(--fm-category-runtime);
 }
 
 .fm-ribbon-group[data-category="solver"] {
   --fm-ribbon-group-accent: var(--fm-category-solver);
-  background: color-mix(in srgb, var(--fm-category-solver) 5%, transparent);
+  --fm-ribbon-icon-color: var(--fm-category-solver);
 }
 
 .fm-ribbon-group[data-category="magnetization"] {
   --fm-ribbon-group-accent: var(--fm-category-magnetization);
-  background: color-mix(in srgb, var(--fm-category-magnetization) 5%, transparent);
+  --fm-ribbon-icon-color: var(--fm-category-magnetization);
 }
 
 .fm-ribbon-group[data-category="energy"] {
   --fm-ribbon-group-accent: var(--fm-category-energy);
-  background: color-mix(in srgb, var(--fm-category-energy) 5%, transparent);
+  --fm-ribbon-icon-color: var(--fm-category-energy);
 }
 
 /* ── Group label (bottom) ──
@@ -181,10 +170,8 @@
   overflow: hidden;
   color: var(--fm-text-muted);
   font-size: var(--fm-font-size-xs);
-  font-weight: 600;
-  letter-spacing: 0.06em;
+  font-weight: 500;
   line-height: 18px;
-  text-transform: uppercase;
   white-space: nowrap;
 }
 
@@ -193,6 +180,7 @@
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .fm-ribbon-group__label small {
@@ -204,6 +192,7 @@
   font-weight: 500;
   letter-spacing: 0.02em;
   text-overflow: ellipsis;
+  white-space: nowrap;
   text-transform: none;
 }
 
@@ -258,7 +247,7 @@
   gap: 2px;
   overflow: hidden;
   border: none;
-  border-radius: var(--fm-radius-sm);
+  border-radius: var(--fm-radius-field);
   background: transparent;
   color: var(--fm-text-secondary);
   cursor: pointer;
@@ -272,10 +261,8 @@
 }
 
 .fm-ribbon-action:hover {
-  background: var(--fm-bg-panel-raised);
+  background: color-mix(in srgb, var(--fm-text-primary) 5%, transparent);
   color: var(--fm-text-primary);
-  transform: translateY(-1px);
-  box-shadow: 0 1px 0 color-mix(in srgb, var(--fm-ribbon-icon-color) 34%, transparent) inset;
 }
 
 .fm-ribbon-action[data-size="large"] {
@@ -290,8 +277,9 @@
 
 .fm-ribbon-action[data-active="true"] {
   --fm-ribbon-icon-color: var(--fm-accent);
-  background: var(--fm-accent-soft);
-  color: var(--fm-accent);
+  background: var(--fm-raised-bg);
+  box-shadow: var(--fm-elevation-sm);
+  color: var(--fm-text-primary);
 }
 
 .fm-ribbon-action[data-accent="true"] {
@@ -386,11 +374,14 @@
 .fm-ribbon-action__icon {
   position: relative;
   display: flex;
-  width: var(--fm-space-6);
-  height: 22px;
+  width: 28px;
+  height: 28px;
   align-items: center;
   justify-content: center;
   flex-shrink: 0;
+  /* Hue tile behind the glyph, as in the mockup ribbon. */
+  border-radius: var(--fm-radius-field);
+  background: color-mix(in srgb, var(--fm-ribbon-icon-color) 14%, transparent);
   color: var(--fm-ribbon-icon-color);
   line-height: 1;
   transition:
@@ -402,31 +393,9 @@
   transform: translateY(-1px);
 }
 
-/* Left accent bar on icon — only visible when the action has a custom icon color */
-.fm-ribbon-action__icon::before {
-  position: absolute;
-  top: 2px;
-  bottom: 2px;
-  left: -5px;
-  width: 2px;
-  border-radius: var(--fm-radius-xs);
-  background: color-mix(in srgb, var(--fm-ribbon-icon-color) 62%, transparent);
-  content: "";
-  opacity: 0.72;
-  transition:
-    opacity var(--fm-transition-fast),
-    transform var(--fm-transition-fast);
-}
-
-.fm-ribbon-action:hover .fm-ribbon-action__icon::before,
-.fm-ribbon-action[data-active="true"] .fm-ribbon-action__icon::before {
-  opacity: 1;
-  transform: scaleY(1.18);
-}
-
 .fm-ribbon-action__icon svg {
-  width: var(--fm-ribbon-chevron-size);
-  height: 22px;
+  width: 18px;
+  height: 18px;
 }
 
 /* ── Action label ──
@@ -442,8 +411,8 @@
   line-clamp: 2;
   color: inherit;
   min-width: 0;
-  font-size: var(--fm-font-size-sm);
-  font-weight: 600;
+  font-size: var(--fm-font-size-xs);
+  font-weight: 500;
   letter-spacing: 0;
   line-height: 1.15;
   overflow-wrap: anywhere;
@@ -567,4 +536,20 @@
   background: var(--fm-border-subtle);
   flex-shrink: 0;
   align-self: center;
+}
+
+/* Reduced motion: transform transitions snap; colour/shadow transitions remain. */
+@media (prefers-reduced-motion: reduce) {
+  .fm-ribbon-action {
+    transition-property: background-color, box-shadow, color;
+  }
+
+  .fm-ribbon-action:hover .fm-ribbon-action__icon {
+    transform: none;
+  }
+
+  .fm-ribbon-action__icon {
+    transition-property: color;
+  }
+
 }

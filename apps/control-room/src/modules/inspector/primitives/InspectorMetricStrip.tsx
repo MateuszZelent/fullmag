@@ -1,6 +1,7 @@
 import type { ReactNode } from "react";
 
 import { cn } from "@/shared/utils/className";
+import { isKnownMetricValue } from "./InspectorMetricStrip.model";
 
 export type InspectorMetricTone =
   | "accent"
@@ -17,18 +18,10 @@ export interface InspectorMetric {
   value: ReactNode;
 }
 
-type InspectorMetricSet =
-  | readonly [InspectorMetric, InspectorMetric]
-  | readonly [
-      InspectorMetric,
-      InspectorMetric,
-      InspectorMetric,
-      InspectorMetric,
-    ];
-
 export interface InspectorMetricStripProps {
   className?: string;
-  metrics: InspectorMetricSet;
+  /** Key facts for the selected node; the strip shows at most four. */
+  metrics: readonly InspectorMetric[];
 }
 
 const toneClasses: Record<InspectorMetricTone, string> = {
@@ -41,23 +34,35 @@ const toneClasses: Record<InspectorMetricTone, string> = {
   warning: "text-fm-warning",
 };
 
+const MAX_METRICS = 4;
+
+const columnClasses: Record<number, string> = {
+  1: "grid-cols-1",
+  2: "grid-cols-2",
+  3: "grid-cols-3",
+  4: "grid-cols-2 @[26rem]:grid-cols-4",
+};
+
 export function InspectorMetricStrip({
   className,
   metrics,
 }: InspectorMetricStripProps) {
+  const visible = metrics
+    .filter((metric) => isKnownMetricValue(metric.value))
+    .slice(0, MAX_METRICS);
+  if (visible.length === 0) return null;
+
   return (
     <ul
       className={cn(
         "fm-inspector-metric-strip m-0 grid min-w-0 list-none p-0",
-        metrics.length === 4
-          ? "grid-cols-4 gap-2"
-          : "grid-cols-2 gap-2",
+        columnClasses[visible.length],
         className,
       )}
-      data-count={metrics.length}
+      data-count={visible.length}
       data-slot="inspector-metric-strip"
     >
-      {metrics.map((metric) => {
+      {visible.map((metric) => {
         const tone = metric.tone ?? "neutral";
         return (
           <li

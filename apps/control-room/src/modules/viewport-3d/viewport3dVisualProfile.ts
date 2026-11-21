@@ -5,6 +5,8 @@ import {
   type WebGLRenderer,
 } from "three";
 
+import { VIEWPORT_3D_QUALITY_PROFILE_LABELS } from "@/shared/viewport3dQualityLabels";
+
 export type Viewport3DVisualProfileId =
   | "interactive-lite"
   | "interactive"
@@ -16,7 +18,6 @@ export interface Viewport3DVisualProfile {
   id: Viewport3DVisualProfileId;
   label: string;
   antialias: boolean;
-  captureScale: number;
   dprCap: number;
   edgeBoost: number;
   edgeOpacity: number;
@@ -43,9 +44,8 @@ const VIEWPORT_3D_VISUAL_PROFILES: Record<
 > = {
   "interactive-lite": {
     id: "interactive-lite",
-    label: "Interactive Lite",
+    label: VIEWPORT_3D_QUALITY_PROFILE_LABELS["interactive-lite"],
     antialias: false,
-    captureScale: 1,
     dprCap: 1,
     edgeBoost: 0.85,
     edgeOpacity: 0.3,
@@ -64,9 +64,8 @@ const VIEWPORT_3D_VISUAL_PROFILES: Record<
   },
   interactive: {
     id: "interactive",
-    label: "Interactive",
+    label: VIEWPORT_3D_QUALITY_PROFILE_LABELS.interactive,
     antialias: true,
-    captureScale: 1,
     dprCap: 1.25,
     edgeBoost: 1,
     edgeOpacity: 0.42,
@@ -85,9 +84,8 @@ const VIEWPORT_3D_VISUAL_PROFILES: Record<
   },
   balanced: {
     id: "balanced",
-    label: "Balanced",
+    label: VIEWPORT_3D_QUALITY_PROFILE_LABELS.balanced,
     antialias: true,
-    captureScale: 1,
     dprCap: 1.5,
     edgeBoost: 1.1,
     edgeOpacity: 0.55,
@@ -106,9 +104,8 @@ const VIEWPORT_3D_VISUAL_PROFILES: Record<
   },
   figure: {
     id: "figure",
-    label: "Figure",
+    label: VIEWPORT_3D_QUALITY_PROFILE_LABELS.figure,
     antialias: true,
-    captureScale: 2,
     dprCap: 2,
     edgeBoost: 1.25,
     edgeOpacity: 0.72,
@@ -129,7 +126,6 @@ const VIEWPORT_3D_VISUAL_PROFILES: Record<
     id: "capture",
     label: "Capture",
     antialias: true,
-    captureScale: 4,
     dprCap: 2,
     edgeBoost: 1.35,
     edgeOpacity: 0.82,
@@ -166,7 +162,12 @@ export function resolveViewport3DCanvasDpr({
   const safeRatio = Number.isFinite(devicePixelRatio)
     ? Math.max(1, devicePixelRatio)
     : 1;
-  return Math.min(safeRatio, profile.dprCap);
+  // Figure and Detailed supersample ordinary displays as well as high-density
+  // ones, so they differ from Standard at 100% zoom. Fast and Standard keep
+  // their native-density caps for interactive navigation.
+  return profile.id === "figure" || profile.id === "balanced"
+    ? profile.dprCap
+    : Math.min(safeRatio, profile.dprCap);
 }
 
 /**

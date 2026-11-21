@@ -1,9 +1,23 @@
+import { visitSequentially } from "./visitSequentially.mjs";
+
 const MAX_ACTION_TIMEOUT_MS = 30_000;
 const MAX_EXPORT_DOWNLOAD_TIMEOUT_MS = 20_000;
 const MAX_RESTORE_ACTION_TIMEOUT_MS = 3_000;
 const MAX_BUFFER_RESTORE_TIMEOUT_MS = 8_000;
 const CAPTURE_DIMENSION_TOLERANCE_PX = 1;
 const INTERACTIVE_DPR = 1.25;
+export const VIEWPORT_SETTINGS_REGION_NAME = "3D View Settings";
+export const VIEWPORT_EXPORT_REGION_NAME = "3D Export";
+export const VIEWPORT_CAMERA_REGION_NAME = "3D camera parameters";
+
+const RIGHT_RAIL_SELECTOR = '.fm-side-rail[data-side="right"]';
+const INSPECTOR_CONTEXT_ITEMS = Object.freeze({
+  selection: "selection",
+  view: "view",
+  export: "export",
+});
+const SETTINGS_SECTIONS = new Set(["View", "Appearance", "Quality"]);
+const EXPORT_MODES = new Set(["PNG", "3D model"]);
 
 const BACKGROUND_OPTIONS = Object.freeze({
   matchViewport: "Match viewport",
@@ -13,6 +27,198 @@ const FRAME_OPTIONS = Object.freeze({
   floor: "Floor",
   off: "Off",
 });
+const SETTING_SECTIONS_BY_LABEL = Object.freeze({
+  "Grid and axes": "View",
+  "Scale coordinates": "View",
+  "Quality profile": "Quality",
+  "PNG background": "Export",
+  "PNG resolution": "Export",
+});
+
+export async function readViewportInspectorState(page, timeout = MAX_ACTION_TIMEOUT_MS) {
+  const rightRail = page.locator(RIGHT_RAIL_SELECTOR);
+  await rightRail.waitFor({ state: "attached", timeout });
+  const activeContext = await page.evaluate((railSelector) => {
+    const rail = document.querySelector(railSelector);
+    if (!rail) return null;
+    for (const id of ["selection", "view", "export"]) {
+      const button = rail.querySelector(`[data-rail-item="${id}"]`);
+      if (button?.getAttribute("data-active") === "true") {
+        return {
+          context: id,
+          open: button.getAttribute("aria-pressed") === "true",
+        };
+      }
+    }
+    return null;
+  }, RIGHT_RAIL_SELECTOR);
+
+  if (!activeContext) {
+    throw new Error("Viewport Inspector right rail must expose an active context item");
+  }
+  const { context, open } = activeContext;
+  if (context === "selection") return { context, open, section: null };
+  if (context === "export") {
+    const exportRegion = page.locator(`[aria-label="${VIEWPORT_EXPORT_REGION_NAME}"]`);
+    await exportRegion.waitFor({ state: "attached", timeout });
+    const selectedModeTabs = exportRegion.locator('[role="tab"][aria-selected="true"]');
+    if (await selectedModeTabs.count() !== 1) {
+      throw new Error("3D Export must expose exactly one selected mode tab");
+    }
+    const mode = normalizeText(await selectedModeTabs.first().innerText());
+    if (!EXPORT_MODES.has(mode)) {
+      throw new Error(`Unexpected 3D Export mode: ${mode}`);
+    }
+    return { context, open, section: mode };
+  }
+
+  const settings = page.locator(`[aria-label="${VIEWPORT_SETTINGS_REGION_NAME}"]`);
+  await settings.waitFor({ state: "attached", timeout });
+  const selectedSectionTabs = settings.locator('[role="tab"][aria-selected="true"]');
+  if (await selectedSectionTabs.count() !== 1) {
+    throw new Error("3D View Settings must expose exactly one selected section tab");
+  }
+  const section = normalizeText(await selectedSectionTabs.first().innerText());
+  if (!SETTINGS_SECTIONS.has(section)) {
+    throw new Error(`Unexpected 3D View Settings section: ${section}`);
+  }
+  return { context, open, section };
+}
+
+export function getViewportSettingsRegion(page) {
+  return page.getByRole("region", {
+    name: VIEWPORT_SETTINGS_REGION_NAME,
+    exact: true,
+  });
+}
+
+export function getViewportExportRegion(page) {
+  return page.getByRole("region", {
+    name: VIEWPORT_EXPORT_REGION_NAME,
+    exact: true,
+  });
+}
+
+export function getViewportCameraRegion(page) {
+  return page.getByRole("region", {
+    name: VIEWPORT_CAMERA_REGION_NAME,
+    exact: true,
+  });
+}
+
+export async function selectViewportInspectorContext(page, context, timeout) {
+  const railItem = INSPECTOR_CONTEXT_ITEMS[context];
+  if (!railItem) throw new Error(`Unknown Inspector context ${context}`);
+  const item = page.locator(`${RIGHT_RAIL_SELECTOR} [data-rail-item="${railItem}"]`);
+  await item.waitFor({ state: "visible", timeout });
+  if (await item.getAttribute("aria-pressed") !== "true") {
+    await item.click({ timeout });
+  }
+  await page.waitForFunction(({ railSelector, expected }) => {
+    const button = document.querySelector(`${railSelector} [data-rail-item="${expected}"]`);
+    return button?.getAttribute("aria-pressed") === "true";
+  }, { railSelector: RIGHT_RAIL_SELECTOR, expected: railItem }, { timeout });
+
+  if (context === "view") {
+    await getViewportSettingsRegion(page).waitFor({ state: "visible", timeout });
+  } else if (context === "export") {
+    await getViewportExportRegion(page).waitFor({ state: "visible", timeout });
+  }
+}
+
+export async function ensureViewportExportMode(page, mode = "PNG", timeout = MAX_ACTION_TIMEOUT_MS) {
+  if (!EXPORT_MODES.has(mode)) {
+    throw new Error(`Unknown 3D Export mode ${mode}`);
+  }
+  await selectViewportInspectorContext(page, "export", timeout);
+  const exportRegion = getViewportExportRegion(page);
+  const modeTab = exportRegion.getByRole("tab", { name: mode, exact: true });
+  await modeTab.waitFor({ state: "visible", timeout });
+  if (await modeTab.getAttribute("aria-selected") !== "true") {
+    await modeTab.click({ timeout });
+  }
+  await page.waitForFunction(({ expected }) => {
+    const region = document.querySelector('[aria-label="3D Export"]');
+    const selected = region?.querySelector('[role="tab"][aria-selected="true"]');
+    return (selected?.textContent ?? "").replace(/\s+/g, " ").trim() === expected;
+  }, { expected: mode }, { timeout });
+  return exportRegion;
+}
+
+export async function ensureViewportSettingsSection(page, section, timeout, {
+  commandTitle = "Open 3D Viewport Settings",
+  forceCommand = false,
+} = {}) {
+  if (section === "Export") {
+    return ensureViewportExportMode(page, "PNG", timeout);
+  }
+  if (!SETTINGS_SECTIONS.has(section)) {
+    throw new Error(`Unknown 3D View Settings section ${section}`);
+  }
+  let inspectorState = await readViewportInspectorState(page, timeout);
+  if (forceCommand && inspectorState.context === "view" && inspectorState.open) {
+    await selectViewportInspectorContext(page, "selection", timeout);
+    inspectorState = await readViewportInspectorState(page, timeout);
+  }
+  if (inspectorState.context !== "view" || !inspectorState.open) {
+    if (forceCommand) {
+      await executeSettingsCommand(page, commandTitle, timeout);
+    } else {
+      await selectViewportInspectorContext(page, "view", timeout);
+    }
+    await getViewportSettingsRegion(page).waitFor({ state: "visible", timeout });
+  }
+
+  const settings = getViewportSettingsRegion(page);
+  const sectionTab = settings.getByRole("tab", { name: section, exact: true });
+  await sectionTab.waitFor({ state: "visible", timeout });
+  if (await sectionTab.getAttribute("aria-selected") !== "true") {
+    await sectionTab.click({ timeout });
+  }
+  await page.waitForFunction(({ expected }) => {
+    const region = document.querySelector('[aria-label="3D View Settings"]');
+    const selected = region?.querySelector('[role="tab"][aria-selected="true"]');
+    return (selected?.textContent ?? "").replace(/\s+/g, " ").trim() === expected;
+  }, { expected: section }, { timeout });
+  return settings;
+}
+
+export async function restoreViewportInspectorState(page, state, timeout) {
+  if (state?.context === "selection") {
+    await selectViewportInspectorContext(page, "selection", timeout);
+  } else if (state?.context === "export") {
+    await ensureViewportExportMode(page, state.section ?? "PNG", timeout);
+  } else if (state?.context === "view") {
+    await ensureViewportSettingsSection(page, state.section ?? "View", timeout);
+  } else {
+    throw new Error(`Cannot restore unknown Inspector context: ${state?.context ?? "missing"}`);
+  }
+  if (state.open === false) {
+    const activeItem = page.locator(`${RIGHT_RAIL_SELECTOR} [data-rail-item="${state.context}"]`);
+    if (await activeItem.getAttribute("aria-pressed") === "true") {
+      await activeItem.click({ timeout });
+    }
+  }
+}
+
+async function executeSettingsCommand(page, title, timeout) {
+  const palette = page.getByRole("dialog", { name: "Command palette", exact: true });
+  if (!await palette.isVisible().catch(() => false)) {
+    const searchButton = page.getByRole("button", { name: /Command search/i });
+    await searchButton.waitFor({ state: "visible", timeout });
+    await searchButton.click({ timeout });
+    await palette.waitFor({ state: "visible", timeout });
+  }
+  const input = palette.getByPlaceholder("Search commands", { exact: true });
+  await input.fill(title, { timeout });
+  const result = palette.getByText(title, { exact: true });
+  await result.waitFor({ state: "visible", timeout });
+  if (await result.count() !== 1) {
+    throw new Error(`Expected one visible command result for ${title}`);
+  }
+  await result.click({ timeout });
+  await palette.waitFor({ state: "hidden", timeout });
+}
 
 export async function runViewportExportBrowserQa(page, {
   assertCanvas,
@@ -36,8 +242,8 @@ export async function runViewportExportBrowserQa(page, {
     : 15_000;
   const routeBefore = page.url();
   const viewport = page.locator(".fm-viewport-3d");
-  const dialog = page.getByRole("dialog", { name: "3D View Settings", exact: true });
-  const originalDialogOpen = await dialog.isVisible().catch(() => false);
+  const settings = getViewportSettingsRegion(page);
+  let originalInspectorState = null;
   let originalSettings = null;
   let canvasHandle = null;
   let operationError = null;
@@ -48,11 +254,12 @@ export async function runViewportExportBrowserQa(page, {
   try {
     await viewport.waitFor({ state: "visible", timeout: timeoutMs });
     await withTimeout(assertCanvas("before viewport PNG export QA"), timeoutMs, "initial canvas assertion");
-    await ensureSettingsOpen(page, dialog, timeoutMs);
-    originalSettings = await readSettings(page, dialog, timeoutMs);
-    if (expectedCaptureDpr === 2 && originalSettings.quality !== "Interactive") {
+    originalInspectorState = await readViewportInspectorState(page);
+    await ensureSettingsOpen(page, "Export", timeoutMs);
+    originalSettings = await readSettings(page, timeoutMs);
+    if (expectedCaptureDpr === 2 && originalSettings.quality !== "Standard") {
       throw new Error(
-        "A 2x capture-resolution check requires the Interactive quality profile as its 1.25x baseline; found " +
+        "A 2x capture-resolution check requires the Standard quality profile as its 1.25x baseline; found " +
         originalSettings.quality,
       );
     }
@@ -61,8 +268,11 @@ export async function runViewportExportBrowserQa(page, {
       if (!canvasHandle) throw new Error("Could not retain the viewport canvas for capture-resolution QA");
     }
 
+    if (expectedCaptureDpr !== undefined) {
+      await choose(page, "PNG resolution", `${expectedCaptureDpr}× viewport`, "fm-view-export-scale", timeoutMs);
+    }
     if (originalSettings.frame !== FRAME_OPTIONS.floor) {
-      await choose(page, "Reference frame", FRAME_OPTIONS.floor, "fm-view-frame", timeoutMs);
+      await choose(page, "Grid and axes", FRAME_OPTIONS.floor, "fm-view-frame", timeoutMs);
     }
     await choose(
       page,
@@ -71,9 +281,9 @@ export async function runViewportExportBrowserQa(page, {
       "fm-view-export-background",
       timeoutMs,
     );
-    await setAnnotations(page, dialog, true, timeoutMs);
+    await setAnnotations(page, settings, true, timeoutMs);
     await waitForRenderedFrame(page);
-    const opaqueWithAnnotations = await exportPng(page, dialog, {
+    const opaqueWithAnnotations = await exportPng(page, settings, {
       assertCanvas,
       expectedQuality: originalSettings.quality,
       label: "opaque with annotations",
@@ -87,9 +297,9 @@ export async function runViewportExportBrowserQa(page, {
       "opaque export with annotations",
     );
 
-    await setAnnotations(page, dialog, false, timeoutMs);
+    await setAnnotations(page, settings, false, timeoutMs);
     await waitForRenderedFrame(page);
-    const opaqueWithoutAnnotations = await exportPng(page, dialog, {
+    const opaqueWithoutAnnotations = await exportPng(page, settings, {
       assertCanvas,
       expectedQuality: originalSettings.quality,
       label: "opaque without annotations",
@@ -117,10 +327,10 @@ export async function runViewportExportBrowserQa(page, {
       "fm-view-export-background",
       timeoutMs,
     );
-    await choose(page, "Reference frame", FRAME_OPTIONS.off, "fm-view-frame", timeoutMs);
-    await setAnnotations(page, dialog, false, timeoutMs);
+    await choose(page, "Grid and axes", FRAME_OPTIONS.off, "fm-view-frame", timeoutMs);
+    await setAnnotations(page, settings, false, timeoutMs);
     await waitForRenderedFrame(page);
-    const transparentWithoutAnnotations = await exportPng(page, dialog, {
+    const transparentWithoutAnnotations = await exportPng(page, settings, {
       assertCanvas,
       expectedQuality: originalSettings.quality,
       label: "transparent geometry",
@@ -133,7 +343,7 @@ export async function runViewportExportBrowserQa(page, {
       transparentWithoutAnnotations.decoded,
     );
 
-    const qualityAfter = await readChoice(page, "Render quality", timeoutMs);
+    const qualityAfter = await readChoice(page, "Quality profile", timeoutMs);
     if (qualityAfter !== originalSettings.quality) {
       throw new Error(
         "Export changed the selected render quality from " +
@@ -197,13 +407,13 @@ export async function runViewportExportBrowserQa(page, {
         screenshot_written_to_disk: false,
       },
       original_settings_restored: false,
-      original_dialog_open_state_restored: false,
+      original_inspector_state_restored: false,
     };
   } catch (error) {
     operationError = error;
     failureDiagnostics = await collectFailureDiagnostics({
       assertCanvas,
-      dialog,
+      settings,
       page,
       routeBefore,
       timeout: timeoutMs,
@@ -212,10 +422,10 @@ export async function runViewportExportBrowserQa(page, {
     const restoreTimeoutMs = Math.min(timeoutMs, MAX_RESTORE_ACTION_TIMEOUT_MS);
     if (originalSettings) {
       await restoreSetting(restorationErrors, "open settings", async () => {
-        await ensureSettingsOpen(page, dialog, restoreTimeoutMs);
+        await ensureSettingsOpen(page, "Export", restoreTimeoutMs);
       });
       await restoreSetting(restorationErrors, "reference frame", async () => {
-        await choose(page, "Reference frame", originalSettings.frame, "fm-view-frame", restoreTimeoutMs);
+        await choose(page, "Grid and axes", originalSettings.frame, "fm-view-frame", restoreTimeoutMs);
       });
       await restoreSetting(restorationErrors, "PNG background", async () => {
         await choose(
@@ -226,17 +436,20 @@ export async function runViewportExportBrowserQa(page, {
           restoreTimeoutMs,
         );
       });
+      await restoreSetting(restorationErrors, "PNG resolution", async () => {
+        await choose(page, "PNG resolution", originalSettings.scale, "fm-view-export-scale", restoreTimeoutMs);
+      });
       await restoreSetting(restorationErrors, "Include annotations", async () => {
-        await setAnnotations(page, dialog, originalSettings.annotations, restoreTimeoutMs);
+        await setAnnotations(page, settings, originalSettings.annotations, restoreTimeoutMs);
       });
       await restoreSetting(restorationErrors, "render quality", async () => {
-        const quality = await readChoice(page, "Render quality", restoreTimeoutMs);
+        const quality = await readChoice(page, "Quality profile", restoreTimeoutMs);
         if (quality !== originalSettings.quality) {
           throw new Error("expected " + originalSettings.quality + ", found " + quality);
         }
       });
       await restoreSetting(restorationErrors, "settings verification", async () => {
-        const restored = await readSettings(page, dialog, restoreTimeoutMs);
+        const restored = await readSettings(page, restoreTimeoutMs);
         if (!sameSettings(originalSettings, restored)) {
           throw new Error(
             "expected " +
@@ -248,16 +461,9 @@ export async function runViewportExportBrowserQa(page, {
       });
     }
 
-    if (originalDialogOpen) {
-      await restoreSetting(restorationErrors, "original dialog-open state", async () => {
-        await ensureSettingsOpen(page, dialog, restoreTimeoutMs);
-      });
-    } else {
-      await restoreSetting(restorationErrors, "original dialog-closed state", async () => {
-        if (await dialog.isVisible().catch(() => false)) {
-          await dialog.getByRole("button", { name: "Close", exact: true }).click({ timeout: restoreTimeoutMs });
-          await dialog.waitFor({ state: "hidden", timeout: restoreTimeoutMs });
-        }
+    if (originalInspectorState) {
+      await restoreSetting(restorationErrors, "original Inspector context and section", async () => {
+        await restoreViewportInspectorState(page, originalInspectorState, restoreTimeoutMs);
       });
     }
 
@@ -289,42 +495,62 @@ export async function runViewportExportBrowserQa(page, {
   }
 
   result.original_settings_restored = true;
-  result.original_dialog_open_state_restored = true;
+  result.original_inspector_state_restored = true;
   return result;
 }
 
-async function ensureSettingsOpen(page, dialog, timeout) {
-  if (await dialog.isVisible().catch(() => false)) return;
-  const button = page.getByRole("button", { name: /view settings/i });
-  await button.waitFor({ state: "visible", timeout });
-  await button.click({ timeout });
-  await dialog.waitFor({ state: "visible", timeout });
+async function ensureSettingsOpen(page, section, timeout) {
+  return ensureViewportSettingsSection(page, section, timeout);
 }
 
-async function readSettings(page, dialog, timeout) {
-  const [background, annotations, quality, frame] = await Promise.all([
-    readChoice(page, "PNG background", timeout),
-    dialog.getByRole("switch", { name: "Include annotations", exact: true }).isChecked({ timeout }),
-    readChoice(page, "Render quality", timeout),
-    readChoice(page, "Reference frame", timeout),
-  ]);
+async function readSettings(page, timeout) {
+  const values = {};
+  await visitSequentially(["Export", "Quality", "View"], async (section) => {
+    const sectionSettings = await ensureSettingsOpen(page, section, timeout);
+    if (section === "Export") {
+      const [background, annotations, scale] = await Promise.all([
+        readChoiceInRegion(sectionSettings, "PNG background", timeout),
+        sectionSettings.getByRole("switch", {
+          name: "Include annotations",
+          exact: true,
+        }).isChecked({ timeout }),
+        readChoiceInRegion(sectionSettings, "PNG resolution", timeout),
+      ]);
+      Object.assign(values, { background, annotations, scale });
+    } else if (section === "Quality") {
+      values.quality = await readChoiceInRegion(sectionSettings, "Quality profile", timeout);
+    } else {
+      values.frame = await readChoiceInRegion(sectionSettings, "Grid and axes", timeout);
+    }
+  });
+  const { background, annotations, scale, quality, frame } = values;
   if (!Object.values(BACKGROUND_OPTIONS).includes(background)) {
     throw new Error("PNG background control exposed an unknown option: " + background);
   }
   if (!Object.values(FRAME_OPTIONS).includes(frame) && frame !== "Floor and vertical planes") {
     throw new Error("Reference frame control exposed an unknown option: " + frame);
   }
-  return { annotations, background, frame, quality };
+  return { annotations, background, frame, quality, scale };
 }
 
 async function readChoice(page, label, timeout = MAX_ACTION_TIMEOUT_MS) {
+  const section = SETTING_SECTIONS_BY_LABEL[label];
+  if (!section) throw new Error(`No 3D View Settings section is registered for ${label}`);
+  const settings = await ensureViewportSettingsSection(page, section, timeout);
+  return readChoiceInRegion(settings, label, timeout);
+}
+
+async function readChoiceInRegion(region, label, timeout = MAX_ACTION_TIMEOUT_MS) {
   return normalizeText(
-    await page.getByRole("combobox", { name: label, exact: true }).innerText({ timeout }),
+    await region.getByRole("combobox", { name: label, exact: true }).innerText({ timeout }),
   );
 }
 
 async function choose(page, label, option, controlId, timeout) {
-  const trigger = page.getByRole("combobox", { name: label, exact: true });
+  const section = SETTING_SECTIONS_BY_LABEL[label];
+  if (!section) throw new Error(`No 3D View Settings section is registered for ${label}`);
+  const settings = await ensureViewportSettingsSection(page, section, timeout);
+  const trigger = settings.getByRole("combobox", { name: label, exact: true });
   if (await readChoice(page, label, timeout) === option) return;
   await trigger.scrollIntoViewIfNeeded({ timeout });
   await trigger.click({ timeout });
@@ -338,18 +564,19 @@ async function choose(page, label, option, controlId, timeout) {
   }, { id: controlId, expected: option }, { timeout });
 }
 
-async function setAnnotations(page, dialog, enabled, timeout) {
-  const control = dialog.getByRole("switch", {
+async function setAnnotations(page, _settings, enabled, timeout) {
+  const exportRegion = await ensureSettingsOpen(page, "Export", timeout);
+  const control = exportRegion.getByRole("switch", {
     name: "Include annotations",
     exact: true,
   });
   if (await control.isChecked({ timeout }) !== enabled) await control.click({ timeout });
   await page.waitForFunction((expected) =>
-    document.getElementById("fm-view-export-annotations")?.checked === expected,
+    document.getElementById("fm-view-export-annotations")?.getAttribute("aria-checked") === String(expected),
   enabled, { timeout });
 }
 
-async function exportPng(page, dialog, {
+async function exportPng(page, _settings, {
   assertCanvas,
   canvasHandle,
   expectedQuality,
@@ -358,7 +585,8 @@ async function exportPng(page, dialog, {
   pngDecoder,
   timeout,
 }) {
-  const button = dialog.getByRole("button", { name: "Export PNG", exact: true });
+  const exportRegion = await ensureSettingsOpen(page, "Export", timeout);
+  const button = exportRegion.getByRole("button", { name: "Export PNG", exact: true });
   await button.scrollIntoViewIfNeeded({ timeout });
   const canvasBaseline = expectedCaptureDpr === undefined
     ? null
@@ -369,7 +597,6 @@ async function exportPng(page, dialog, {
     downloadPromise,
     button.click({ timeout }),
   ]);
-  await dialog.waitFor({ state: "hidden", timeout });
   await withTimeout(assertCanvas("viewport PNG export " + label), timeout, "canvas assertion after " + label);
   const failure = await withTimeout(download.failure(), downloadTimeout, "download completion for " + label);
   if (failure) throw new Error("PNG download failed: " + failure);
@@ -401,11 +628,11 @@ async function exportPng(page, dialog, {
     throw new Error("Unexpected PNG download filename: " + filename);
   }
 
-  await ensureSettingsOpen(page, dialog, timeout);
-  const quality = await readChoice(page, "Render quality", timeout);
+  await ensureSettingsOpen(page, "Export", timeout);
+  const quality = await readChoice(page, "Quality profile", timeout);
   if (quality !== expectedQuality) {
     throw new Error(
-      "Render quality was not restored after " +
+      "Quality profile was not restored after " +
       label +
       ": expected " +
       expectedQuality +
@@ -459,7 +686,7 @@ async function verifyCaptureResolution(page, {
       baseline.drawingBuffer,
       baseline.cssRect,
       INTERACTIVE_DPR,
-      "Interactive baseline",
+      "Standard baseline",
       label,
     );
   }
@@ -480,7 +707,7 @@ async function verifyCaptureResolution(page, {
     );
   }, baseline.drawingBuffer, { timeout: waitTimeout, polling: 50 }).catch((error) => {
     throw new Error(
-      "Viewport drawing buffer did not return to its pre-export Interactive dimensions after " +
+      "Viewport drawing buffer did not return to its pre-export Standard dimensions after " +
       label +
       ": " +
       (error?.message ?? String(error)),
@@ -627,11 +854,11 @@ async function waitForRenderedFrame(page) {
   await page.waitForTimeout(40);
 }
 
-async function collectFailureDiagnostics({ assertCanvas, dialog, page, routeBefore, timeout }) {
+async function collectFailureDiagnostics({ assertCanvas, settings, page, routeBefore, timeout }) {
   let canvas = null;
   let canvasError = null;
   let settingsVisible = false;
-  let settings = null;
+  let settingsSnapshot = null;
   let settingsError = null;
   let alerts = [];
   try {
@@ -640,8 +867,8 @@ async function collectFailureDiagnostics({ assertCanvas, dialog, page, routeBefo
     canvasError = error?.message ?? String(error);
   }
   try {
-    settingsVisible = await dialog.isVisible();
-    if (settingsVisible) settings = await readSettings(page, dialog, Math.min(timeout, 5_000));
+    settingsVisible = await settings.isVisible();
+    if (settingsVisible) settingsSnapshot = await readSettings(page, Math.min(timeout, 5_000));
   } catch (error) {
     settingsError = error?.message ?? String(error);
   }
@@ -655,8 +882,8 @@ async function collectFailureDiagnostics({ assertCanvas, dialog, page, routeBefo
     route_at_failure: page.url(),
     canvas,
     canvas_error: canvasError,
-    settings_dialog_visible: settingsVisible,
-    settings,
+    settings_panel_visible: settingsVisible,
+    settings: settingsSnapshot,
     settings_error: settingsError,
     ui_alerts: alerts,
     checked_at: "natural operation failure; no failure was injected",
@@ -690,7 +917,8 @@ function sameSettings(left, right) {
   return left.annotations === right.annotations &&
     left.background === right.background &&
     left.frame === right.frame &&
-    left.quality === right.quality;
+    left.quality === right.quality &&
+    left.scale === right.scale;
 }
 
 function normalizeText(value) {

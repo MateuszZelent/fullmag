@@ -639,6 +639,15 @@
       "symbol": "DOC-ANCHOR:fdm-rk-research-proposals",
       "responsibility": "Historical proposed controller/RK families, not executable support evidence.",
       "evidence_status": "planned_contract"
+    },
+    {
+      "id": "adaptive-cuda-identity",
+      "path": "crates/fullmag-runner/src/lib.rs",
+      "symbol": "adaptive_fdm_cuda_identity_is_explicit_but_unvalidated_until_controller_artifact",
+      "responsibility": "Distinct adaptive FP32 and FP64 execution identity and fail-closed validation state",
+      "solver_backend": "FDM GPU",
+      "evidence_status": "source_visible",
+      "evidence": "Registry21/21 PASS after RED missing row; A9 public CUDA/single two Run Completed with exact identity, native device/no-fallback receipt and bounded m/total-energy oracle PASS; publication clock/energy decomposition remain RED. No registry promotion."
     }
   ],
   "public_api": {

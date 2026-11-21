@@ -1,6 +1,10 @@
 import type { SincPulsePreviewModel } from "@/shared/domain/physics/sincPulsePreview";
 import { formatEngineering } from "./stages/samplingPresentation";
 
+const PREVIEW_PLOT_WIDTH = 320;
+const PREVIEW_PLOT_HEIGHT = 112;
+const PREVIEW_PLOT_INSET = { left: 34, right: 10, top: 18, bottom: 24 };
+
 export function SincPulsePreview({
   model,
   solverDtS,
@@ -9,7 +13,7 @@ export function SincPulsePreview({
   solverDtS: number | null;
 }) {
   return (
-    <div className="fm-sinc-preview" aria-label="Sinc pulse and source FFT preview">
+    <div role="group" className="fm-sinc-preview" aria-label="Sinc pulse and source FFT preview">
       <PreviewPlot
         points={model.waveform.map((point) => [point.timeS, point.value])}
         marker={model.t0S}
@@ -26,7 +30,7 @@ export function SincPulsePreview({
         xUnit="Hz"
         markerLabel="fc"
       />
-      <div className="fm-sinc-preview__metrics" role="list" aria-label="FFT sampling parameters">
+      <ul className="fm-sinc-preview__metrics" aria-label="FFT sampling parameters">
         <Metric label="t0" value={formatEngineering(model.t0S, "s")} />
         <Metric label="window before t0" value={formatEngineering(model.leftOfCenterS, "s")} />
         <Metric label="window after t0" value={formatEngineering(model.rightOfCenterS, "s")} />
@@ -41,17 +45,15 @@ export function SincPulsePreview({
           label="maximum t_sampling for fc"
           value={formatEngineering(model.maximumSamplePeriodForCutoffS, "s")}
         />
-      </div>
+      </ul>
       <p
         className={`fm-sinc-preview__message fm-sinc-preview__message--${model.isSymmetricWindow ? "ready" : "preview_only"}`}
-        role="status"
       >
         {model.symmetryMessage} Symmetry is assessed with τ = t - t0; the horizontal axis remains the authored time t and t0 is never recentered silently.
       </p>
       {model.message ? <p className={`fm-sinc-preview__message fm-sinc-preview__message--${model.status}`}>{model.message}</p> : null}
       <p
         className={`fm-sinc-preview__message fm-sinc-preview__message--${model.nyquistStatus === "pass" ? "ready" : model.nyquistStatus === "fail" ? "unavailable" : "preview_only"}`}
-        role="status"
       >
         {model.nyquistMessage}
       </p>
@@ -74,9 +76,9 @@ function PreviewPlot({
   xUnit: string;
   markerLabel: string;
 }) {
-  const width = 320;
-  const height = 112;
-  const inset = { left: 34, right: 10, top: 18, bottom: 24 };
+  const width = PREVIEW_PLOT_WIDTH;
+  const height = PREVIEW_PLOT_HEIGHT;
+  const inset = PREVIEW_PLOT_INSET;
   const xMin = points[0]?.[0] ?? 0;
   const xMax = points.at(-1)?.[0] ?? 1;
   const yExtent = points.reduce(
@@ -105,5 +107,5 @@ function PreviewPlot({
 }
 
 function Metric({ label, value }: { label: string; value: string }) {
-  return <span role="listitem"><small>{label}</small><strong>{value}</strong></span>;
+  return <li><small>{label}</small><strong>{value}</strong></li>;
 }

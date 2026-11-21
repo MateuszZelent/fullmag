@@ -23,10 +23,8 @@ import { Button } from "@/shared/ui/Button";
 
 import { useRegisterInspectorEditSession } from "../InspectorEditSession";
 import { MeshResourceEmpty } from "./MeshResourceView";
-import {
-  PlanarMonitorDefinitionEditor,
-  planarMonitorDefinitionAvailabilityErrors,
-} from "./PlanarMonitorDefinitionEditor";
+import { PlanarMonitorDefinitionEditor } from "./PlanarMonitorDefinitionEditor";
+import { planarMonitorDefinitionAvailabilityErrors } from "./PlanarMonitorDefinitionEditor.model";
 import { usePlanarMonitorDefinitionAvailability } from "./usePlanarMonitorDefinitionAvailability";
 
 export function PlanarMonitorDraftInspectorPanel() {
@@ -243,7 +241,7 @@ export function PlanarMonitorDraftInspectorPanel() {
       </div>
       {validationErrors.length > 0 ? (
         <div className="fm-help-text" role="alert">
-          {validationErrors.map((error) => <p key={error}>{error}</p>)}
+          {[...new Set(validationErrors)].map((error) => <p key={error}>{error}</p>)}
         </div>
       ) : null}
       {feedback ? <p role="alert">{feedback}</p> : null}

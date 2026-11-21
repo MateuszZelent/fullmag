@@ -1,5 +1,9 @@
 import type { components, paths } from "./generated/openapi-v2-types";
 
+export type AbsorbingBoundaryConfig = components["schemas"]["AbsorbingBoundaryIR"];
+export type SpatialAbsorbingLayer = components["schemas"]["SpatialAbsorbingLayerIR"];
+export type AbsorbingBoundaryGeometry = components["schemas"]["SpatialAbsorbingGeometryIR"];
+
 export type ResourceRevision = string | number;
 type JsonPrimitive = boolean | null | number | string;
 export type JsonValue = JsonPrimitive | JsonObject | JsonValue[];
@@ -9,7 +13,18 @@ export type SessionListResource = components["schemas"]["SessionListResource"];
 export type InstanceDiscoveryResource = components["schemas"]["InstanceDiscoveryResource"];
 export type DiscoveredInstance = components["schemas"]["DiscoveredInstance"];
 export type ModelReadinessResource =
-  components["schemas"]["ModelReadinessResource"];
+  components["schemas"]["ModelReadinessResource"] & {
+    prepared_initial_state?: PreparedInitialStateResource | null;
+  };
+
+export interface PreparedInitialStateResource {
+  scene_revision: number;
+  initial_state_revision: number;
+  publication_id: string;
+  observation_frame_id: string;
+  domain_generation_id: string;
+  values_sha256: string;
+}
 export type ModelReadinessCheck = components["schemas"]["ModelReadinessCheck"];
 
 export type ObjectInteractionKind =
@@ -22,10 +37,23 @@ interface BaseAuthoringTransaction {
   base_revision?: number | null;
 }
 
-export type CommandDetailResource = components["schemas"]["CommandDetailResource"];
+/** Pending managed OpenAPI export of accepted command provenance. */
+export interface CommandExecutionBinding {
+  requested_target?: RuntimeCommandTarget | null;
+  run_id: string;
+  step_id?: string | null;
+}
+
+export type CommandDetailResource =
+  components["schemas"]["CommandDetailResource"] & {
+    precondition?: RuntimeCommandPrecondition | null;
+    execution_binding?: CommandExecutionBinding | null;
+  };
 export type CommandQueueStatusResource =
   components["schemas"]["CommandQueueStatusResource"];
-export type CommandResponse = components["schemas"]["CommandResponse"];
+export type CommandResponse = components["schemas"]["CommandResponse"] & {
+  execution_binding?: CommandExecutionBinding | null;
+};
 export type CommandFailureRequest = components["schemas"]["CommandFailureRequest"];
 export type CheckpointCreateRequest =
   components["schemas"]["CheckpointCreateRequest"];
@@ -207,6 +235,16 @@ export interface PlanarFieldQuery {
   snapshot_id?: string;
   stage_id?: string;
   vector_budget?: number;
+  /**
+   * Sampling window in frame coordinates (ADR 0080, note 0970
+   * `eq-planar-sampling-window`): all four or none. Kept as the exact
+   * decimal strings sent on the wire so the window is part of the
+   * canonical query identity without float re-formatting.
+   */
+  window_u_min_m?: string;
+  window_u_max_m?: string;
+  window_v_min_m?: string;
+  window_v_max_m?: string;
 }
 export interface PlanarFieldProbeQuery
   extends Pick<
@@ -229,12 +267,19 @@ export interface PlanarFieldProbeQuery
     | "scope_region_id"
     | "snapshot_id"
     | "stage_id"
+    | "window_u_min_m"
+    | "window_u_max_m"
+    | "window_v_min_m"
+    | "window_v_max_m"
   > {
+  /** `node` also returns the nearest FEM node or FDM cell centre (ADR 0080). */
+  nearest?: "node";
   u_m: number;
   v_m: number;
 }
 /** Line profile of one planar sample (note 0970, `eq-planar-line-profile`). */
-export interface PlanarFieldProfileQuery extends Omit<PlanarFieldProbeQuery, "u_m" | "v_m"> {
+export interface PlanarFieldProfileQuery
+  extends Omit<PlanarFieldProbeQuery, "nearest" | "u_m" | "v_m"> {
   samples?: number;
   u0_m: number;
   u1_m: number;
@@ -480,7 +525,9 @@ export interface MeshSharedDomainConfigReplaceRequest {
   config: JsonObject;
 }
 export type MeshSharedDomainManifestResource =
-  components["schemas"]["MeshSharedDomainManifestResource"];
+  components["schemas"]["MeshSharedDomainManifestResource"] & {
+    validated_for_scene_revision?: number | null;
+  };
 export type CouplingListResource =
   components["schemas"]["CouplingListResource"];
 export type SpinWaveGammaResource =
@@ -595,6 +642,25 @@ export type FieldDriveReplaceRequest =
   components["schemas"]["FieldDriveReplaceRequest"];
 export type FieldDriveDeleteRequest =
   components["schemas"]["FieldDriveDeleteRequest"];
+export type MaskFieldDriveListResource =
+  components["schemas"]["MaskFieldDriveListResource"];
+export type MaskFieldDriveResource =
+  components["schemas"]["MaskFieldDriveResource"];
+export type MaskFieldDriveCreateRequest =
+  components["schemas"]["MaskFieldDriveCreateRequest"];
+export type MaskFieldDriveReplaceRequest =
+  components["schemas"]["MaskFieldDriveReplaceRequest"];
+export type MaskTermResource = components["schemas"]["MaskTermResource"];
+export type MaskFunctionResource =
+  components["schemas"]["MaskFunctionResource"];
+export type ReadyAntennaListResource =
+  components["schemas"]["ReadyAntennaListResource"];
+export type ReadyAntennaResource =
+  components["schemas"]["ReadyAntennaResource"];
+export type ReadyAntennaTermsRequest =
+  components["schemas"]["ReadyAntennaTermsRequest"];
+export type ReadyAntennaTermsResource =
+  components["schemas"]["ReadyAntennaTermsResource"];
 export type RegionListResource = components["schemas"]["RegionListResource"];
 export type RegionDiagnosticsResource =
   components["schemas"]["RegionDiagnosticsResource"];
@@ -656,9 +722,23 @@ export type StudyRuntimePatchRequest =
   components["schemas"]["StudyRuntimePatchRequest"];
 export type StudyRuntimeResource =
   components["schemas"]["StudyRuntimeResource"];
+export type MagnetizationApplyTarget =
+  | { kind: "object"; object_id: string; asset: JsonObject | null }
+  | { kind: "region"; object_id: string; region_id: string; texture_override: components["schemas"]["SceneTextureOverride"] | null };
+
+export interface MagnetizationApplyReceipt {
+  operation_id: string;
+  scene_revision: number;
+  scopes: { object_id: string; region_id?: string | null }[];
+  status: "initial_state_ready" | "initial_state_pending";
+  reason?: string | null;
+  prepared_initial_state?: PreparedInitialStateResource | null;
+}
+
 export type AuthoringTransactionRequest =
   | { base_revision: number; kind: "assign_study_execution"; execution_profile: ExecutionProfile; execution_layers: ExecutionRequestLayer[] }
   | { base_revision?: number | null; kind: "replace_scene"; scene: JsonObject }
+  | { base_revision: number; kind: "apply_magnetization"; operation_id: string; target: MagnetizationApplyTarget }
   | (BaseAuthoringTransaction & {
       kind: "merge_patch";
       merge_patch: JsonObject;
@@ -679,6 +759,8 @@ export type AuthoringTransactionRequest =
     })
   | (BaseAuthoringTransaction & {
       kind: "create_material";
+      source?: SceneMaterialSource | null;
+      assign_to_object_id?: string | null;
       material_id: string;
       name: string;
       properties: MaterialPropertiesResource;
@@ -752,6 +834,7 @@ export type AuthoringTransactionRequest =
       kind: "delete_coupling";
     });
 export interface AuthoringTransactionResponse {
+  magnetization_apply?: MagnetizationApplyReceipt | null;
   committed_scene: SceneResource;
   scene_revision: number;
   transaction_kind: string;
@@ -798,7 +881,7 @@ export interface ObjectInteractionResource {
   scene_revision: number;
 }
 export interface ObjectPatchRequest extends BaseAuthoringTransaction {
-  absorbing_boundary?: JsonObject | null;
+  absorbing_boundary?: AbsorbingBoundaryConfig | null;
   geometry?: JsonObject | null;
   magnetization_ref?: string | null;
   material_ref?: string | null;
@@ -873,7 +956,11 @@ export type OerstedFieldMutationRequest = components["schemas"]["OerstedFieldMut
 export type OerstedFieldCommitResource = components["schemas"]["OerstedFieldCommitResource"];
 export type SpinAuthoringDeleteRequest = components["schemas"]["SpinAuthoringDeleteRequest"];
 export type RuntimeCommandPrecondition =
-  components["schemas"]["RuntimeCommandPrecondition"];
+  components["schemas"]["RuntimeCommandPrecondition"] & {
+    // Pending managed OpenAPI export.
+    current_run?: { kind: "none" } | { kind: "run"; run_id: string };
+    domain_generation_id?: string;
+  };
 export type RuntimeCommandTarget =
   components["schemas"]["RuntimeCommandTarget"];
 export type ScalarWindowResource = components["schemas"]["ScalarWindow"];
@@ -887,6 +974,7 @@ export type TableRowsResource = components["schemas"]["TableRowsResource"];
 export type TableColumnMeta = components["schemas"]["TableColumnMeta"];
 export type TableListResource = components["schemas"]["TableListResource"];
 export type TableResource = components["schemas"]["TableResource"];
+export type TableSeriesResponseMetadata = StudyResultSeriesIdentity | null | undefined;
 export interface TableRowsQuery {
   columns?: readonly string[];
   cursor?: number;
@@ -1018,13 +1106,162 @@ type FdmGridRefreshCommandRequest = RuntimeCommandIntent & {
   kind: "fdm_grid_refresh";
   mesh_options?: JsonObject | null;
 };
+/** Pending managed OpenAPI export from schemas/commands.rs. */
+export type RuntimeStageInitialStateRequest =
+  | { kind: "default_for_target" }
+  | { kind: "authored_initial_state"; source:
+      | { kind: "study"; scene_revision: number }
+      | { kind: "stage"; stage_id: string; scene_revision: number }
+      | { kind: "prepared"; scene_revision: number; initial_state_revision: number; publication_id: string }
+    }
+  | { kind: "latest_compatible_state" }
+  | {
+      kind: "stage_result";
+      run_id: string;
+      step_id: string;
+      case_id: string;
+      artifact_id: string;
+      content_sha256: string;
+      allow_stale_model?: boolean;
+    };
+
+/** Pending managed OpenAPI export from schemas/stage_results.rs. */
+export interface StudyStageResult {
+  project_id: string;
+  study_id: string;
+  source: StudyResultSeriesIdentity;
+  authored_stage_id?: string;
+  artifact_id: string;
+  artifact_sha256: string;
+  codec_id: string;
+  codec_version: string;
+  accepted_at: string;
+  authored_relation: "matching_authored_input" | "authored_input_changed" | "stage_absent" | "authoring_unavailable";
+  domain_relation?: "matching_published_layout" | "different_published_layout" | "unavailable";
+  predecessor_relation?:
+    | "newer_different_output"
+    | "earlier_predecessor_changed"
+    | "newer_same_output"
+    | "no_later_matching_input"
+    | "not_applicable"
+    | "unavailable";
+  supports_magnetization_input: boolean;
+  completion?: StudyResultCompletion;
+  initial_state?: StudyResultInitialState;
+}
+
+export interface StudyResultCompletion {
+  converged?: boolean;
+  reason?: components["schemas"]["StageStopReason"];
+  metric_kind?: components["schemas"]["StageMetricKind"];
+  metric_unit?: components["schemas"]["StageMetricUnit"];
+  metric_name?: string;
+  metric_value?: number;
+  threshold?: number;
+}
+
+export interface StudyResultInitialState {
+  source:
+    | { kind: "authored"; reference: string }
+    | { kind: "prepared"; publication_id: string; artifact_id: string; content_sha256: string }
+    | {
+        kind: "stage_result";
+        run_id: string;
+        step_id: string;
+        case_id: string;
+        artifact_id: string;
+        content_sha256: string;
+        selection: "predecessor" | "selected_result" | "latest_compatible" | "pinned_result";
+      };
+  reset_scopes: { object_id: string; region_id?: string }[];
+}
+
+export interface StudyResultSeriesIdentity {
+  run_id: string;
+  task_id: string;
+  step_id: string;
+  case_id: string;
+  attempt_id: string;
+  ownership_epoch: number;
+}
+
+export interface StudyResultGridGeometry {
+  grid_cells: [number, number, number];
+  origin_m: [number, number, number];
+  cell_size_m: [number, number, number];
+}
+
+export interface StudyResultLayerGeometry extends StudyResultGridGeometry {
+  layer_id: string;
+  object_id: string;
+  value_offset: number;
+  value_count: number;
+}
+
+export type StudyResultGeometry =
+  | (StudyResultGridGeometry & { kind: "fdm" })
+  | { kind: "fdm_multilayer"; layers: StudyResultLayerGeometry[] }
+  | { kind: "fem"; node_count: number; element_count: number };
+
+export interface StudyResultStateResource {
+  project_id: string;
+  source: StudyResultSeriesIdentity;
+  artifact_id: string;
+  artifact_sha256: string;
+  step: number;
+  time_s: number;
+  sample_count: number;
+  domain_generation_id: string;
+  topology_fingerprint: string;
+  geometry: StudyResultGeometry;
+  support_available: boolean;
+}
+
+export interface StudyResultScalarWindow {
+  series: StudyResultSeriesIdentity;
+  artifact_id: string;
+  content_sha256: string;
+  coverage: "solver_series" | "terminal_sample";
+  total_rows: number;
+  next_start?: number | null;
+  columns: string[];
+  rows: number[][];
+}
+
+export interface StudyStageResultsResource {
+  revision: string;
+  project_id: string;
+  scene_revision: number | null;
+  authored_input_sha256: string | null;
+  authored_stage_ids: string[];
+  results: StudyStageResult[];
+  next_cursor: string | null;
+}
+
+export interface StudyStageResultsQuery {
+  stage_id?: string;
+  run_id?: string;
+  cursor?: string;
+  limit?: number;
+}
+
+/** Exact authored-stage requests use the captured settings and state policy. */
+type AuthoredPhysicalStageCommandRequest = Omit<
+  Extract<GeneratedStructuredCommandRequest, { kind: "run" | "relax" }>,
+  "target" | "until_seconds" | "initial_state"
+> & {
+  initial_state: RuntimeStageInitialStateRequest;
+  target: Extract<RuntimeCommandTarget, { kind: "stage_id" }>;
+  until_seconds?: never;
+};
 export type StructuredCommandRequest =
   | Exclude<
       GeneratedStructuredCommandRequest,
       { kind: "mesh_build" } | { kind: "fdm_grid_refresh" }
     >
   | MeshBuildCommandRequest
-  | FdmGridRefreshCommandRequest;
+  | FdmGridRefreshCommandRequest
+  | AuthoredPhysicalStageCommandRequest;
 export type UniversePatchRequest = components["schemas"]["UniversePatchRequest"];
 export type UniverseResource = components["schemas"]["UniverseResource"];
 /** Pending managed export: schemas/visualization_state.rs tensor and planar serde fields. */
@@ -1047,6 +1284,9 @@ type PlanarFieldComponent = components["schemas"]["PlanarFieldComponent"] | impo
 export type PlanarFieldOverlayState = Omit<components["schemas"]["PlanarFieldOverlayState"], "component"> & {
   component: PlanarFieldComponent;
 };
+export type PlanarCropState = components["schemas"]["PlanarCropState"];
+export type PlanarLayerModel = components["schemas"]["PlanarLayerModel"];
+export type PlanarProbeNodeResource = components["schemas"]["PlanarProbeNodeResource"];
 type PlanarVisualizationPatch = Omit<components["schemas"]["PlanarVisualizationPatch"], "component" | "field_overlays"> & {
   field_overlays?: PlanarFieldOverlayState[] | null;
   component?: PlanarFieldComponent | null;
@@ -1126,6 +1366,7 @@ export interface FieldVectorResponseMetadata {
   encoding: string | null;
   fieldIndexing: string | null;
   fieldGenerationId?: string | null;
+  preparedObservationFrameId?: string;
   fieldRevision: string | null;
   identityIssues: FieldVectorIdentityIssue[];
   meshTopologyHash: string | null;
@@ -1238,3 +1479,20 @@ export interface WorkspaceRootWire {
   readonly recursive: boolean;
   readonly enabled: boolean;
 }
+
+export type ImportedSourceSurfaceResource = components["schemas"]["ImportedSourceSurfaceResource"];
+export type ImportedSourceSurfaceQuery = components["schemas"]["ImportedSourceSurfaceQuery"];
+
+export type MaterialLibraryResource = components["schemas"]["MaterialLibraryResource"];
+export type MaterialLibraryMutationResource = components["schemas"]["MaterialLibraryMutationResource"];
+export type MaterialLibraryEntryResource = components["schemas"]["MaterialLibraryEntryResource"];
+export type MaterialLibraryWriteRequest = components["schemas"]["MaterialLibraryWriteRequest"];
+export type MaterialLibraryUpdateRequest = components["schemas"]["MaterialLibraryUpdateRequest"];
+export type MaterialLibraryDeleteRequest = components["schemas"]["MaterialLibraryDeleteRequest"];
+export type MaterialLibraryDeleteResource = components["schemas"]["MaterialLibraryDeleteResource"];
+export type SceneMaterialSource = components["schemas"]["SceneMaterialSource"];
+export type PublishedMaterialVersion = components["schemas"]["PublishedMaterialVersion"];
+export type MaterialVersionPublishRequest = components["schemas"]["MaterialVersionPublishRequest"];
+export type MaterialVersionUpdateRequest = components["schemas"]["MaterialVersionUpdateRequest"];
+export type MaterialVersionMutationResource = components["schemas"]["MaterialVersionMutationResource"];
+export type SceneMaterialResource = components["schemas"]["SceneMaterialResource"];

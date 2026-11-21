@@ -64,7 +64,7 @@ def _half(name: str, sign: float):
     return body.add_region(
         name,
         fm.Box(size=(SIZE[0] / 2.0, SIZE[1], SIZE[2])).translate((sign * SIZE[0] / 4.0, 0.0, 0.0)),
-    )
+    ).material_transition(kind="sharp")
 
 
 if CASE in ("two_materials", "two_materials_scaled"):
@@ -95,6 +95,7 @@ elif CASE == "grains":
                 fm.Box(size=(width, height, SIZE[2])).translate((x0, y0, 0.0)),
                 priority=gy * GRAINS_X + gx,
             )
+            grain.material_transition(kind="sharp")
             grain.material.Ms = 800e3 * rng.uniform(0.9, 1.1)
             grain.material.Aex = 13e-12 * rng.uniform(0.9, 1.1)
             grain.material.alpha = 0.02 * rng.uniform(0.9, 1.1)

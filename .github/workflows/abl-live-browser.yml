@@ -1,0 +1,114 @@
+name: ABL live browser
+
+on:
+  workflow_call:
+  workflow_dispatch:
+permissions:
+  contents: read
+
+concurrency:
+  group: abl-live-browser-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  alpha:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        backend: [fdm, fem]
+    env:
+      CARGO_PROFILE_DEV_DEBUG: "0"
+      CARGO_INCREMENTAL: "0"
+      RUST_MIN_STACK: "16777216"
+      NEXT_TELEMETRY_DISABLED: "1"
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.11"
+      - name: Bind the API and its command consumer to the same source snapshot
+        run: |
+          identity="$RUNNER_TEMP/abl-source.json"
+          python -B scripts/capture_source_snapshot_identity.py --repo-root . --ignore-non-runtime-dirty --output "$identity"
+          jq -e --arg sha "$GITHUB_SHA" '.head_commit_full == $sha and .source_snapshot_dirty == false' "$identity"
+          jq -r '"FULLMAG_SOURCE_GIT_COMMIT=" + .head_commit_full,
+                 "FULLMAG_SOURCE_WORKTREE_STATE=clean",
+                 "FULLMAG_SOURCE_SNAPSHOT_SHA256=" + .source_snapshot_sha256' "$identity" >> "$GITHUB_ENV"
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: abl-live-browser
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 10.8.1
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24.18.0
+          cache: pnpm
+      - name: Install application and browser dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y libglu1-mesa
+          python -m pip install -e 'packages/fullmag-py[meshing]'
+          pnpm install --frozen-lockfile
+          pnpm --dir apps/control-room exec playwright install --with-deps chromium
+      - name: Build the API and CLI for the pinned CI checkout
+        id: build
+        run: cargo build --locked -p fullmag-api --bin fullmag-api -p fullmag-cli --bin fullmag
+      - name: Verify prepared FDM material publication
+        if: matrix.backend == 'fdm'
+        run: |
+          pnpm --dir apps/control-room exec vitest run src/modules/inspector/panels/ObjectVisualizationPanel.accessibility.test.tsx -t 'keeps Shaded selected'
+          pnpm --dir apps/control-room exec vitest run src/modules/ribbon/absorbingBoundaryCommand.test.ts src/modules/ribbon/ribbonStructure.test.ts src/modules/inspector/panels/ObjectAbsorbingBoundaryPanelModel.test.ts
+          cargo test --locked -p fullmag-cli --bin fullmag grid_receipt_publishes_prepared_plan_only_after_a_successful_build
+          cargo test --locked -p fullmag-api --bin fullmag-api desktop_grid_receipt_restores_plan_owned_damping_only_for_the_current_scene
+          cargo test --locked -p fullmag-api --bin fullmag-api absorbing_boundary_patch_moves_and_clears_live_alpha_without_rebuilding_grid
+      - name: Verify FEM mesh ownership and material publication
+        if: matrix.backend == 'fem'
+        run: |
+          pnpm --dir apps/control-room exec vitest run src/kernel/resources/geometryLifecycleResources.test.ts src/kernel/visualization/visualizationDisplayResolution.test.ts src/modules/viewport-3d/viewport3dTopologyStaleness.test.ts
+          cargo test --locked -p fullmag-api --bin fullmag-api mesh_build_command_preserves_absorbing_layer_and_region_damping
+          cargo test --locked -p fullmag-api --bin fullmag-api desktop_completed_fem_build_and_regional_edits_publish_only_current_nodes
+          cargo test --locked -p fullmag-api --bin fullmag-api absorbing_boundary_build_mesh_and_patch_publish_fem_nodes_without_solve
+          cargo test --locked -p fullmag-api --bin fullmag-api completed_remesh_reinitializes_same_topology_fields_only_once
+          cargo test --locked -p fullmag-cli --bin fullmag completed_remesh_supersedes_pending_terminal_fields
+          cargo test --locked -p fullmag-cli --bin fullmag parse_remesh_cli_response_preserves_fresh_object_region_markers
+          cargo test --locked -p fullmag-cli --bin fullmag scene_patch_rebinds_fem_mesh_assets_by_object_identity
+          cargo test --locked -p fullmag-cli --bin fullmag body_remesh_rejects_distinct_geometries_before_generating_one_mesh
+      - name: Compare live alpha to the analytical profile in Chromium
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        env:
+          ABL_BACKEND: ${{ matrix.backend }}
+          FULLMAG_QA_URL: http://127.0.0.1:3246
+          FULLMAG_API_PROXY_TARGET: http://127.0.0.1:8081
+          FULLMAG_API_BIND_IP: 127.0.0.1
+          FULLMAG_QA_ALLOW_ABL_WRITE: "1"
+        run: |
+          set -euo pipefail
+          export ABL_EVIDENCE="$RUNNER_TEMP/abl-browser"
+          mkdir "$ABL_EVIDENCE"
+          export FULLMAG_QA_FIXTURE="$ABL_EVIDENCE/fixture.json"
+          layout="$(python -B scripts/fullmag_storage.py resolve --profile ci-rust-contracts --create)"
+          export FULLMAG_PROJECT_STORAGE_ROOT="$(jq -er '.storage_root' <<< "$layout")"
+          export FULLMAG_RUNS_ROOT="$(jq -er '.runs_root' <<< "$layout")"
+          export FULLMAG_WORKTREE_ID="$(jq -er '.worktree_id' <<< "$layout")"
+          export FULLMAG_STATE_ROOT="$FULLMAG_PROJECT_STORAGE_ROOT/abl-live-$ABL_BACKEND"
+          export FULLMAG_REPO_ROOT="$GITHUB_WORKSPACE" FULLMAG_PYTHON="$(command -v python)"
+          export FULLMAG_API_PORT=8081 FULLMAG_WEB_HOST=127.0.0.1
+          mkdir "$FULLMAG_STATE_ROOT"
+          printf '%s\n' "$GITHUB_SHA" > "$ABL_EVIDENCE/commit.txt"
+          install -m 755 tests/fixtures/abl_browser_fdm/run-browser.sh target/debug/fullmag-ui
+          target/debug/fullmag ui --dev --web-port 3246 > "$ABL_EVIDENCE/launcher.log" 2>&1
+          cat "$ABL_EVIDENCE/browser.log"
+          test "$(cat "$ABL_EVIDENCE/browser.exit")" = 0
+      - name: Preserve screenshots and measured field evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: abl-live-${{ matrix.backend }}-${{ github.run_id }}
+          path: ${{ runner.temp }}/abl-browser
+          if-no-files-found: warn

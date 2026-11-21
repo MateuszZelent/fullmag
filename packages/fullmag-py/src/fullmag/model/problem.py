@@ -25,7 +25,9 @@ from fullmag._progress import (
 from fullmag._validation import ensure_unique_names, require_non_empty
 from fullmag.cuda_device_identity import legacy_cuda_binding
 from fullmag.model._incomplete import IncompletePhysicsError
+from fullmag.model.bb_pipeline import is_gpu_bb_only_pipeline
 from fullmag.init.textures import PresetTexture
+from fullmag.model.mask_field_drive import MaskAntenna
 from fullmag.model.antenna import (
     AntennaFieldSolveStage,
     AntennaSpectrumRequest,
@@ -888,6 +890,7 @@ def build_geometry_assets_for_request(
     requested_backend: "BackendTarget",
     geometries: Sequence[object],
     discretization: DiscretizationHints | None,
+    source_root: str | Path | None = None,
     study_universe: dict[str, object] | None = None,
     mesh_workflow: dict[str, object] | None = None,
     per_object_recipes: Mapping[str, PerObjectMeshRecipe] | None = None,
@@ -1081,7 +1084,10 @@ def build_geometry_assets_for_request(
                 if explicit_source is not None:
                     if discretization.fem.order != 1:
                         raise ValueError("explicit owner-bound MeshData source requires FEM P1")
-                    mesh = MeshData.load(Path(explicit_source).expanduser())
+                    mesh_path = Path(explicit_source).expanduser()
+                    if not mesh_path.is_absolute() and source_root is not None:
+                        mesh_path = (Path(source_root).expanduser() / mesh_path).resolve()
+                    mesh = MeshData.load(mesh_path)
                     mesh.validate_strict(require_positive_orientation=True)
                     if any(cell_type != "tet4" for cell_type in mesh.cell_types):
                         raise ValueError("explicit owner-bound MeshData source requires Tet4 cells")
@@ -2748,6 +2754,7 @@ class Problem:
     auxiliary_geometry_object_ids: Mapping[str, str] = field(default_factory=dict)
     current_modules: Sequence[CurrentModule] = ()
     field_drives: Sequence[RegionalFieldDrive] = ()
+    mask_field_drives: Sequence[MaskAntenna] = ()
     # Composition-first microwave antenna resources.  These are immutable
     # authoring records; the solved field asset is produced by a dedicated
     # stage and is never inferred from a field drive.
@@ -2856,7 +2863,13 @@ class Problem:
         if field_only:
             if not self.auxiliary_geometries:
                 raise ValueError("FieldOnly requires explicitly authored non-magnetic geometry")
-            if self.magnets or self.energy or self.field_drives or self.solved_antenna_drives:
+            if (
+                self.magnets
+                or self.energy
+                or self.field_drives
+                or self.mask_field_drives
+                or self.solved_antenna_drives
+            ):
                 raise ValueError("FieldOnly cannot contain magnetic state, energy or LLG drives")
             if self.spin_torque is not None or self.spin_torques or self.spin_transports or self.magnetization_constraints:
                 raise ValueError("FieldOnly cannot contain magnetic torque, spin transport or constraints")
@@ -2970,6 +2983,13 @@ class Problem:
         ensure_unique_names((drive.name for drive in self.field_drives), "field drive names")
         if any(not isinstance(drive, RegionalFieldDrive) for drive in self.field_drives):
             raise TypeError("Problem.field_drives must contain RegionalFieldDrive objects")
+        if any(not isinstance(drive, MaskAntenna) for drive in self.mask_field_drives):
+            raise TypeError("Problem.mask_field_drives must contain MaskAntenna objects")
+        ensure_unique_names(
+            [drive.id for drive in self.field_drives]
+            + [drive.id for drive in self.mask_field_drives],
+            "field drive ids",
+        )
         for name, values, expected in (
             ("antenna_port_modes", self.antenna_port_modes, AntennaPortMode),
             ("antenna_field_solve_stages", self.antenna_field_solve_stages, AntennaFieldSolveStage),
@@ -2987,6 +3007,21 @@ class Problem:
         geometry_ids = {
             getattr(geometry, "geometry_name", "") for geometry in self._collect_geometries()
         }
+        magnet_aliases = magnetic_object_ids | {
+            magnet.object_id for magnet in self.magnets if magnet.object_id is not None
+        }
+        for antenna in self.mask_field_drives:
+            target = antenna.target
+            if target.kind == "object" and target.object_id not in magnet_aliases:
+                raise ValueError(
+                    f"mask_target_unknown: antenna {antenna.id!r} target "
+                    f"{target.object_id!r} is not a magnet"
+                )
+            if target.kind == "region" and (target.object_id, target.region_id) not in region_ids:
+                raise ValueError(
+                    f"mask_target_unknown: antenna {antenna.id!r} target region "
+                    f"{target.object_id!r}/{target.region_id!r} does not exist"
+                )
         for drive in self.field_drives:
             target = drive.target
             if target.kind in {"object", "region"} and target.object_id not in magnetic_object_ids:
@@ -3167,6 +3202,22 @@ class Problem:
             for geometry in self._collect_geometries()
         ]
         discretization = self._resolve_discretization(runtime.backend_target)
+        if discretization is not None and discretization.fem is not None and discretization.fem.gpu_bb_preconditioner is not None:
+            effective_device_is_gpu = (
+                runtime_device_override == "gpu"
+                if runtime_device_override is not None
+                else runtime.device_target is DeviceTarget.GPU
+            )
+            if (runtime.backend_target is not BackendTarget.FEM
+                    or not effective_device_is_gpu
+                    or not (
+                        isinstance(self.study, Relaxation) and self.study.algorithm == "projected_gradient_bb"
+                        or isinstance(self.study, TimeEvolution)
+                        and entrypoint_kind == "flat_workspace"
+                        and "active_stage_id" not in self.runtime_metadata
+                        and is_gpu_bb_only_pipeline(study_pipeline if study_pipeline is not None else self.runtime_metadata.get("study_pipeline"))
+                    )):
+                raise ValueError("gpu_bb_preconditioner requires explicit FEM GPU projected_gradient_bb relaxation")
         pbc_ir = _pbc_to_ir(self.pbc)
         if (
             runtime.backend_target == BackendTarget.FDM
@@ -3212,6 +3263,8 @@ class Problem:
             runtime_metadata.pop("execution_layers", None)
         if isinstance(self.study, Eigenmodes) and self.study.solver_policy is not None:
             runtime_metadata["modal_solver_policy"] = self.study.solver_policy.to_ir()
+        if isinstance(self.study, Eigenmodes) and self.study.equilibrium_acceptance == "force":
+            runtime_metadata["modal_equilibrium_acceptance"] = "force"
         effective_study_pipeline = _normalize_study_pipeline_value(study_pipeline)
         if effective_study_pipeline is None:
             effective_study_pipeline = _normalize_study_pipeline_value(
@@ -3305,6 +3358,7 @@ class Problem:
                 requested_backend=runtime.backend_target,
                 geometries=geometries,
                 discretization=discretization,
+                source_root=source_root,
                 study_universe=study_universe,
                 mesh_workflow=mesh_workflow,
                 per_object_recipes=per_object_recipes,
@@ -3386,6 +3440,11 @@ class Problem:
             "couplings": [coupling.to_ir() for coupling in self.couplings],
             "planar_monitors": [monitor.to_ir() for monitor in self.monitors],
             "field_drives": [drive.to_ir() for drive in self.field_drives],
+            **(
+                {"mask_field_drives": [antenna.to_ir() for antenna in self.mask_field_drives]}
+                if self.mask_field_drives
+                else {}
+            ),
             "antenna_port_modes": [mode.to_ir() for mode in self.antenna_port_modes],
             "antenna_field_solve_stages": [
                 stage.to_ir() for stage in self.antenna_field_solve_stages

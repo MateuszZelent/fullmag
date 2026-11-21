@@ -6,6 +6,7 @@ import {
   ControlRoomApiError,
   MAX_ANTENNA_INSPECTION_BYTES,
   MAX_TOPOLOGY_BYTES,
+  parseTableSeriesIdentityHeader,
   parseFieldVectorResponseMetadata,
   transformFieldMetaForDisplay,
   transformFieldVectorForDisplay,
@@ -23,6 +24,7 @@ import type {
   LivePreparationMaterializationRequest,
   LivePreparationMaterializationResource,
   SimulationPreparationResource,
+  StudyStageResult,
   AnalysisResultPageQuery,
   OutputStorageSettings,
   ProjectBatchCasesQuery,
@@ -46,6 +48,7 @@ import {
   SESSIONS_PATH,
   SIMULATION_PREPARATION_MATERIALIZATION_PATH,
   SIMULATION_PREPARATION_PATH,
+  PROJECT_STUDY_RESULT_SCALARS_PATH,
 } from "./apiPaths";
 import type { DecodedFieldVector } from "./codecs";
 import { RequestDiagnosticsController } from "./RequestDiagnosticsController";
@@ -581,6 +584,91 @@ describe("field vector response metadata", () => {
   });
 });
 
+describe("table row series response metadata", () => {
+  const identity = {
+    run_id: "run-1",
+    task_id: "task-b1",
+    step_id: "B1",
+    case_id: "default",
+    attempt_id: "attempt-b1",
+    ownership_epoch: 4,
+  };
+
+  it("parses the identity attached to the exact binary rows response", () => {
+    const encoded = btoa(JSON.stringify(identity)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+    expect(parseTableSeriesIdentityHeader(`v1.${encoded}`)).toEqual(identity);
+    expect(parseTableSeriesIdentityHeader("none")).toBeNull();
+    expect(parseTableSeriesIdentityHeader(null)).toBeUndefined();
+    expect(() => parseTableSeriesIdentityHeader("v2.invalid")).toThrow(/invalid series identity/);
+  });
+
+  it("keeps a legacy rows.bin response without the optional identity header readable", async () => {
+    const api = new ControlRoomApi({
+      baseUrl: "http://127.0.0.1:8765",
+      fetchImpl: async () => binaryResponse(
+        makeTableRowsBuffer([1, 0.1], { columnCount: 2, rowCount: 1 }),
+        { headers: { "content-type": "application/vnd.fullmag.table-rows.v1+octet-stream" } },
+      ),
+    });
+    const rows = await api.data.tables.rowsBinary("default", { columns: ["step", "mx"], limit: 1 });
+    expect(rows.status).toBe("ready");
+    if (rows.status === "ready") expect(rows.responseMetadata).toBeUndefined();
+  });
+});
+
+describe("bounded Study scalar history reads", () => {
+  it("forwards a bounded final-page request through the existing Study result facade", async () => {
+    const series = {
+      run_id: "run-1",
+      task_id: "task-b1",
+      step_id: "B1",
+      case_id: "default",
+      attempt_id: "attempt-b1",
+      ownership_epoch: 4,
+    };
+    const result: StudyStageResult = {
+      project_id: "project-1",
+      study_id: "study-1",
+      source: series,
+      authored_stage_id: "B1",
+      artifact_id: "final-state-b1",
+      artifact_sha256: "a".repeat(64),
+      codec_id: "test-codec",
+      codec_version: "1",
+      accepted_at: "2026-11-19T00:00:00Z",
+      authored_relation: "matching_authored_input",
+      supports_magnetization_input: true,
+    };
+    let observedUrl = "";
+    const api = new ControlRoomApi({
+      baseUrl: "http://127.0.0.1:8765",
+      fetchImpl: async (url) => {
+        observedUrl = String(url);
+        return jsonResponse({
+          series,
+          artifact_id: "scalar-index-b1",
+          content_sha256: "b".repeat(64),
+          coverage: "solver_series",
+          total_rows: 100_001,
+          next_start: null,
+          columns: ["step", "time", "mx"],
+          rows: [[99_999, 9.9999e-8, 0.1], [100_000, 1e-7, 0.2]],
+        });
+      },
+    });
+
+    const window = await api.persistence.projects.studyResultScalars(result, 99_999, { limit: 2_048 });
+    const url = new URL(observedUrl);
+    expect(url.pathname).toBe(PROJECT_STUDY_RESULT_SCALARS_PATH
+      .replace("{project_id}", "project-1")
+      .replace("{run_id}", "run-1")
+      .replace("{artifact_id}", "final-state-b1"));
+    expect(url.searchParams.get("start")).toBe("99999");
+    expect(url.searchParams.get("limit")).toBe("2048");
+    expect(window.rows).toHaveLength(2);
+  });
+});
+
 const resourceRevisions: LiveStatusResource["resources"] = {
   artifact_revision: 0,
   artifacts_revision: 0,
@@ -720,7 +808,10 @@ function parseRequestJsonBody(body: unknown): unknown {
   return JSON.parse(String(body));
 }
 
-function makeTableRowsBuffer(values: readonly number[]): ArrayBuffer {
+function makeTableRowsBuffer(
+  values: readonly number[],
+  { rowCount = 2, columnCount = 3 }: { rowCount?: number; columnCount?: number } = {},
+): ArrayBuffer {
   const buffer = new ArrayBuffer(60 + values.length * Float64Array.BYTES_PER_ELEMENT);
   const bytes = new Uint8Array(buffer);
   bytes.set([70, 77, 84, 66], 0);
@@ -732,8 +823,8 @@ function makeTableRowsBuffer(values: readonly number[]): ArrayBuffer {
   view.setBigUint64(24, BigInt(11), true);
   view.setBigUint64(32, BigInt(12), true);
   view.setBigUint64(40, BigInt(12), true);
-  view.setBigUint64(48, BigInt(2), true);
-  view.setUint32(56, 3, true);
+  view.setBigUint64(48, BigInt(rowCount), true);
+  view.setUint32(56, columnCount, true);
   for (let i = 0; i < values.length; i++) {
     view.setFloat64(60 + i * 8, values[i], true);
   }
@@ -1099,6 +1190,54 @@ describe("ControlRoomApi", () => {
     expect(requests.every((request) => !request.url.includes("session="))).toBe(true);
   });
 
+  it("returns null for an absent current energy sample with session and API instance pins", async () => {
+    const pin = "12345678-1234-4234-8234-123456789abc";
+    const sessionScopeKey = "session=project-a&epoch=project-a%40123";
+    let observedUrl = "";
+    let observedHeaders = new Headers();
+    const api = new ControlRoomApi({
+      baseUrl: "http://127.0.0.1:8765",
+      expectedApiInstance: pin,
+      fetchImpl: async (url, init) => {
+        observedUrl = String(url);
+        observedHeaders = new Headers(init?.headers);
+        return new Response(null, {
+          headers: { ...contractHeaders, "x-fullmag-api-instance": pin },
+          status: 204,
+        });
+      },
+    });
+
+    await expect(
+      api.simulation.solver.energies.current({ sessionScopeKey }),
+    ).resolves.toBeNull();
+
+    expect(observedUrl).toBe(
+      "http://127.0.0.1:8765/v2/sessions/current/simulation/solver/energies/current",
+    );
+    expect(observedHeaders.get("x-fullmag-session-scope")).toBe(sessionScopeKey);
+    expect(observedHeaders.get("x-fullmag-api-instance")).toBe(pin);
+  });
+
+  it("keeps the API instance fence on a no-content current energy response", async () => {
+    const api = new ControlRoomApi({
+      expectedApiInstance: "12345678-1234-4234-8234-123456789abc",
+      fetchImpl: async () =>
+        new Response(null, {
+          headers: {
+            ...contractHeaders,
+            "x-fullmag-api-instance": "87654321-1234-4234-8234-123456789abc",
+          },
+          status: 204,
+        }),
+    });
+
+    await expect(api.simulation.solver.energies.current()).rejects.toMatchObject({
+      code: "API_INSTANCE_MISMATCH",
+      status: 409,
+    });
+  });
+
   it("routes full visualization replacements through scoped typed PUT requests", async () => {
     const scope = "session=project-a&epoch=project-a%40123";
     const requests: Array<{ method: string | undefined; scope: string | null; url: string }> = [];
@@ -1375,10 +1514,10 @@ describe("ControlRoomApi", () => {
     type CreateScratchSessionInput = Parameters<typeof api.sessions.create>[0];
     expectTypeOf<CreateScratchSessionInput>().toEqualTypeOf<{
       backend: "fdm" | "fem";
-      device: "cpu";
+      device: "cpu" | "gpu";
       name: string;
       output_storage?: OutputStorageSettings | null;
-      precision: "double";
+      precision: "double" | "single";
       replace_current?: boolean;
     }>();
     expectTypeOf<typeof created.scene_document.schema_version>().toEqualTypeOf<"0.3">();
@@ -2610,6 +2749,38 @@ describe("ControlRoomApi", () => {
     );
   });
 
+  it("serves prepared magnetization only from the requested observation frame", async () => {
+    const source = { observation_frame_id: "prepared-frame-1", domain_generation_id: "domain-1" };
+    for (const [responseFrame, responseDomain] of [
+      ["prepared-frame-1", "domain-1"], ["later-frame", "domain-1"],
+      [null, "domain-1"], ["prepared-frame-1", "other-domain"],
+    ]) {
+      let observedFrame: string | null = null;
+      let observedDomain: string | null = null;
+      const api = new ControlRoomApi({
+        baseUrl: "http://127.0.0.1:8765",
+        fetchImpl: async (url, init) => {
+          observedFrame = new Headers(init?.headers).get("x-fullmag-expected-observation-frame-id");
+          observedDomain = new URL(String(url)).searchParams.get("expected_generation_id");
+          return binaryResponse(makeFieldVectorBuffer(), {
+            headers: {
+              ...(responseFrame ? { "x-fullmag-observation-frame-id": responseFrame } : {}),
+              ...(responseDomain ? { "x-fullmag-domain-generation-id": responseDomain } : {}),
+            },
+          });
+        },
+      });
+      const result = api.data.fields.preparedMagnetization(source);
+      if (responseFrame === source.observation_frame_id && responseDomain === source.domain_generation_id) {
+        await expect(result).resolves.toMatchObject({ status: "ready" });
+      } else {
+        await expect(result).rejects.toMatchObject({ status: 409 });
+      }
+      expect(observedFrame).toBe(source.observation_frame_id);
+      expect(observedDomain).toBe(source.domain_generation_id);
+    }
+  });
+
   it("sends the artifact generation precondition and rejects missing or mismatched response headers", async () => {
     let observedUrl = "";
     const api = new ControlRoomApi({
@@ -3203,9 +3374,18 @@ describe("ControlRoomApi", () => {
         ]);
       }
       if (requestUrl.includes("/rows.bin?")) {
+        const series = btoa(JSON.stringify({
+          run_id: "run-1",
+          task_id: "task-b1",
+          step_id: "B1",
+          case_id: "default",
+          attempt_id: "attempt-b1",
+          ownership_epoch: 4,
+        })).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
         return binaryResponse(makeTableRowsBuffer([11, 1.1e-12, 7.1, 12, 1.2e-12, 7.2]), {
           headers: {
             "content-type": "application/vnd.fullmag.table-rows.v1+octet-stream",
+            "x-fullmag-table-series": `v1.${series}`,
           },
         });
       }
@@ -3238,6 +3418,14 @@ describe("ControlRoomApi", () => {
     }
     expect(binary.data.rowCount).toBe(2);
     expect(binary.data.columnCount).toBe(3);
+    expect(binary.responseMetadata).toEqual({
+      run_id: "run-1",
+      task_id: "task-b1",
+      step_id: "B1",
+      case_id: "default",
+      attempt_id: "attempt-b1",
+      ownership_epoch: 4,
+    });
     expect(Array.from(binary.data.values)).toEqual([
       11,
       1.1e-12,
@@ -3461,6 +3649,27 @@ describe("ControlRoomApi", () => {
       status: 404,
       message: "No active workspace",
     });
+  });
+
+  it.each([
+    { kind: "solve" },
+    { kind: "run", until_seconds: 1 },
+    { kind: "relax", max_steps: 10 },
+  ] as const)("binds the $kind request key to its client intent", async (command) => {
+    const fetchImpl = vi.fn(async (_url: RequestInfo | URL, init?: RequestInit) => {
+      expect(new Headers(init?.headers).get("Idempotency-Key")).toBe("compute-intent");
+      return jsonResponse({ accepted: true, command_id: "cmd-first" });
+    });
+    const api = new ControlRoomApi({
+      baseUrl: "http://127.0.0.1:8765",
+      diagnostics: new RequestDiagnosticsController(),
+      fetchImpl,
+      requestIdFactory: () => "req-compute",
+    });
+
+    await expect(api.commands.submit({ ...command, client_intent_id: "compute-intent" }))
+      .resolves.toMatchObject({ command_id: "cmd-first" });
+    expect(fetchImpl).toHaveBeenCalledOnce();
   });
 
   it("submits structured commands through the v2 simulation command resource", async () => {
@@ -6152,6 +6361,47 @@ describe("ControlRoomApi", () => {
     });
   });
 
+  it("replays only the same scoped magnetization Apply after a lost HTTP response", async () => {
+    const writes: { operation: string; scope: string | null; body: unknown }[] = [];
+    const api = new ControlRoomApi({
+      baseUrl: "http://127.0.0.1:8765",
+      retryDelayMs: 0,
+      fetchImpl: async (_url, init) => {
+        const headers = new Headers(init?.headers);
+        const operation = headers.get("idempotency-key") ?? "";
+        const body = parseRequestBody(init?.body);
+        writes.push({ operation, scope: headers.get("x-fullmag-session-scope"), body });
+        if (writes.length === 1) throw new TypeError("response lost");
+        return jsonResponse({
+          committed_scene: { objects: [], revision: 11 },
+          scene_revision: 11,
+          magnetization_apply: {
+            operation_id: operation, scene_revision: 11,
+            scopes: [{ object_id: "body", region_id: "core" }],
+            status: "initial_state_pending", reason: "Build the grid.",
+          },
+        });
+      },
+    });
+    const target = {
+      kind: "region", object_id: "body", region_id: "core",
+      texture_override: { initial_magnetization: { kind: "uniform", value: [1, 0, 0] } },
+    } as const;
+    const sessionScopeKey = "session=A&epoch=1&request_scope_epoch=1";
+    await expect(api.model.applyMagnetization({
+      ...target, texture_override: { initial_magnetization: { kind: "uniform", value: [1, 0, 0] } },
+    }, { baseRevision: 10, sessionScopeKey })).resolves.toMatchObject({
+      magnetization_apply: { status: "initial_state_pending" },
+    });
+    expect(writes).toHaveLength(2);
+    expect(writes[0].operation).toMatch(/^[a-f0-9]{32}$/);
+    expect(writes[0].scope).toBe(sessionScopeKey);
+    expect(writes[0].body).toEqual({
+      kind: "apply_magnetization", base_revision: 10, operation_id: writes[0].operation, target,
+    });
+    expect(writes[1]).toEqual(writes[0]);
+  });
+
   it("commits object region and coupling writes through model transactions", async () => {
     const requests: Array<{ body: unknown; method: string | undefined; url: string }> = [];
     const api = new ControlRoomApi({
@@ -7038,5 +7288,35 @@ describe("API instance fence", () => {
     await expect(api.sessions.current.status()).rejects.toMatchObject({ code: "API_INSTANCE_MISMATCH" });
     await expect(api.sessions.current.status()).rejects.toMatchObject({ code: "API_INSTANCE_MISMATCH" });
     expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+});
+
+
+describe("imported STL source-surface facade", () => {
+  it("pins object, scene and byte identity on the typed conditional binary read", async () => {
+    let observedUrl = "";
+    let observedHeaders = new Headers();
+    const api = new ControlRoomApi({ baseUrl: "http://127.0.0.1:8765",
+      fetchImpl: async (url, init) => {
+        observedUrl = String(url); observedHeaders = new Headers(init?.headers);
+        return new Response(null, { status: 304, headers: { ...contractHeaders, etag: '"source-a"' } });
+      } });
+    const result = await api.model.sourceSurfaceTopology("body-a", {
+      scene_revision: 7, source_sha256: "a".repeat(64),
+    }, { etag: '"source-a"', sessionScopeKey: "session=one&epoch=one%401" });
+    const url = new URL(observedUrl);
+    expect(url.pathname).toBe("/v2/sessions/current/model/objects/body-a/source-surface/topology");
+    expect(url.searchParams.get("scene_revision")).toBe("7");
+    expect(url.searchParams.get("source_sha256")).toBe("a".repeat(64));
+    expect(observedHeaders.get("if-none-match")).toBe('"source-a"');
+    expect(observedHeaders.get("x-fullmag-session-scope")).toBe("session=one&epoch=one%401");
+    expect(result.status).toBe("not-modified");
+  });
+  it("surfaces stale source conflicts instead of silently reading another topology", async () => {
+    const api = new ControlRoomApi({ baseUrl: "http://127.0.0.1:8765",
+      fetchImpl: async () => jsonResponse({ error: "source changed" }, { status: 409 }) });
+    await expect(api.model.sourceSurfaceTopology("body-a", {
+      scene_revision: 7, source_sha256: "a".repeat(64),
+    })).rejects.toMatchObject({ status: 409 });
   });
 });

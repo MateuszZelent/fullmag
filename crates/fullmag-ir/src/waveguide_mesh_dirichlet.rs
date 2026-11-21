@@ -39,24 +39,32 @@ impl Error for FiniteAirDirichletBindingsError {}
 #[derive(Debug)]
 pub(crate) struct ValidatedFiniteAirDirichletBindings<'b, 'i> {
     registry: &'b ValidatedWaveguideRegistryBindings<'i>,
+    #[cfg(test)]
     boundary_component_indices: Vec<usize>,
+    #[cfg(test)]
     essential_node_indices: Vec<u64>,
+    #[cfg(test)]
     selected_edge_counts_by_component: Vec<usize>,
+    #[cfg(test)]
     essential_node_counts_by_component: Vec<usize>,
 }
 impl<'b, 'i> ValidatedFiniteAirDirichletBindings<'b, 'i> {
     pub(crate) fn registry(&self) -> &'b ValidatedWaveguideRegistryBindings<'i> {
         self.registry
     }
+    #[cfg(test)]
     pub(crate) fn boundary_component_indices(&self) -> &[usize] {
         &self.boundary_component_indices
     }
+    #[cfg(test)]
     pub(crate) fn essential_node_indices(&self) -> &[u64] {
         &self.essential_node_indices
     }
+    #[cfg(test)]
     pub(crate) fn selected_edge_counts_by_component(&self) -> &[usize] {
         &self.selected_edge_counts_by_component
     }
+    #[cfg(test)]
     pub(crate) fn essential_node_counts_by_component(&self) -> &[usize] {
         &self.essential_node_counts_by_component
     }
@@ -107,6 +115,7 @@ pub(crate) fn validate_finite_air_dirichlet_bindings<'b, 'i>(
     let component_count = incidence.scalar_mesh_component_count();
     let mut edge_counts = vec![0usize; component_count];
     let mut nodes_by_component = vec![BTreeSet::<u64>::new(); component_count];
+    #[cfg(test)]
     let mut all_nodes = BTreeSet::new();
     for &boundary_index in &selected {
         let boundary = &mesh.boundary_components[boundary_index];
@@ -156,6 +165,7 @@ pub(crate) fn validate_finite_air_dirichlet_bindings<'b, 'i>(
             edge_counts[component] += 1;
             for node in nodes {
                 nodes_by_component[component].insert(node);
+                #[cfg(test)]
                 all_nodes.insert(node);
             }
         }
@@ -167,9 +177,13 @@ pub(crate) fn validate_finite_air_dirichlet_bindings<'b, 'i>(
     }
     Ok(ValidatedFiniteAirDirichletBindings {
         registry,
+        #[cfg(test)]
         boundary_component_indices: selected.into_iter().collect(),
+        #[cfg(test)]
         essential_node_indices: all_nodes.into_iter().collect(),
+        #[cfg(test)]
         selected_edge_counts_by_component: edge_counts,
+        #[cfg(test)]
         essential_node_counts_by_component: nodes_by_component.iter().map(BTreeSet::len).collect(),
     })
 }

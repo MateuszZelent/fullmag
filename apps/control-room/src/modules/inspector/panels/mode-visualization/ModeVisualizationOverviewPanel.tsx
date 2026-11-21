@@ -2,7 +2,7 @@
 
 import { createCommandContext } from "@/kernel/commands/commandContext";
 import { useKernel } from "@/kernel/KernelContext";
-import type { SelectionRef } from "@/kernel/selection/selectionTypes";
+
 import { useAnalysisFieldOverlayContext } from "@/kernel/visualization/AnalysisFieldOverlayController";
 import { AnalysisFieldOverlayContextNotice } from "@/kernel/visualization/AnalysisFieldOverlayContextNotice";
 
@@ -13,38 +13,7 @@ import {
   type VisualizationInspectorOwner,
 } from "../ObjectVisualizationPanel";
 import { ModeVisualizationBreadcrumbs } from "./ModeVisualizationBreadcrumbs";
-
-export type ModeVisualizationSelectionRef = Extract<
-  SelectionRef,
-  { type: "mode-visualization" }
->;
-
-export function modeVisualizationSelectionRef(
-  selection: InspectorPanelProps["selection"],
-): ModeVisualizationSelectionRef | null {
-  return selection.ref?.type === "mode-visualization" ? selection.ref : null;
-}
-
-export function modeVisualizationSourceLabel(
-  target: ModeVisualizationSelectionRef,
-): string {
-  return target.source === "eigen-mode" ? "Eigenmode" : "Driven response";
-}
-
-export function modeVisualizationSelectionLabel(
-  target: ModeVisualizationSelectionRef,
-): string {
-  if (
-    target.source === "frequency-response" &&
-    target.frequencyIndex !== undefined
-  ) {
-    return `Frequency ${target.frequencyIndex}`;
-  }
-  if (target.sampleIndex !== undefined && target.modeIndex !== undefined) {
-    return `Sample ${target.sampleIndex}, mode ${target.modeIndex}`;
-  }
-  return "Published field";
-}
+import { modeVisualizationSelectionRef, modeVisualizationSourceLabel, modeVisualizationSelectionLabel } from "./ModeVisualizationOverviewPanel.model";
 
 export function ModeVisualizationOverviewPanel({
   selection,
@@ -53,6 +22,7 @@ export function ModeVisualizationOverviewPanel({
   const kernel = useKernel();
   const overlayContext = useAnalysisFieldOverlayContext(
     kernel.analysisFieldOverlay,
+    { ignorePhase: true },
   );
   const commandContext = createCommandContext("inspector", kernel, {
     sourceDetail: "active-analysis-overlay-context",

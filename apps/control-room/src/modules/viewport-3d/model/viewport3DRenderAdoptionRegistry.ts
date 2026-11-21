@@ -197,14 +197,22 @@ export function createViewport3DRenderAdoptionRegistry({
     for (const owned of owners?.values() ?? []) {
       for (const targetId of ownerTargetIds(owned)) targetIds.add(targetId);
     }
+    const ownersByTargetId = new Map<string, OwnedAdoption[]>();
+    for (const owned of owners?.values() ?? []) {
+      for (const targetId of new Set(ownerTargetIds(owned))) {
+        const candidates = ownersByTargetId.get(targetId) ?? [];
+        candidates.push(owned);
+        ownersByTargetId.set(targetId, candidates);
+      }
+    }
     for (const targetId of targetIds) {
       if ((demandCounts.get(targetId) ?? 0) === 0) {
         removeReceipt(targetId, key);
         continue;
       }
-      const selected = [...(owners?.values() ?? [])]
-        .filter((owned) => ownerTargetIds(owned).includes(targetId))
-        .sort((left, right) => right.receipt.adoptionSequence - left.receipt.adoptionSequence)[0];
+      const selected = ownersByTargetId.get(targetId)?.toSorted(
+        (left, right) => right.receipt.adoptionSequence - left.receipt.adoptionSequence,
+      )[0];
       if (!selected) {
         removeReceipt(targetId, key);
         continue;

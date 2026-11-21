@@ -39,6 +39,23 @@ SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 CONTROL_NAMESPACE_RE = re.compile(r"^namespaces/[0-9a-f]{32}$")
 DIRECT_CODEGEN_SCHEMA = "fullmag.direct-compose-openapi-codegen.v1"
 FAILURE_RECEIPT_PATH = "/opt/fullmag/control/backend/codegen/openapi-v2/last-failure.json"
+API_ENTRYPOINT_PATH = "/opt/fullmag/entrypoint.py"
+API_BINARY_PATH = "/opt/fullmag/package/bin/fullmag-api"
+API_EXPORT_PYTHON = "/usr/local/bin/python3"
+API_OPENAPI_EXPORT_SCRIPT = r'''
+import importlib.util
+import os
+import sys
+
+entrypoint_path, api_binary, *api_arguments = sys.argv[1:]
+spec = importlib.util.spec_from_file_location("fullmag_image_entrypoint", entrypoint_path)
+if spec is None or spec.loader is None:
+    raise RuntimeError("image entrypoint could not be imported")
+entrypoint = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(entrypoint)
+entrypoint._configure_device_access()
+os.execv(api_binary, [api_binary, *api_arguments])
+'''
 
 SOURCE_PROBE_SCRIPT = r'''
 import shutil
@@ -439,6 +456,24 @@ def _exec(container: str, arguments: Sequence[object], *, timeout: int = 120,
     command.extend(arguments)
     return _capture(command, timeout=timeout, input_bytes=input_bytes,
                     stdout_limit=stdout_limit, stderr_limit=stderr_limit)
+
+
+def _api_openapi_export_arguments(
+    *,
+    python: str = API_EXPORT_PYTHON,
+    entrypoint_path: str = API_ENTRYPOINT_PATH,
+    api_binary: str = API_BINARY_PATH,
+) -> tuple[str, ...]:
+    return (
+        python,
+        "-I",
+        "-B",
+        "-c",
+        API_OPENAPI_EXPORT_SCRIPT,
+        entrypoint_path,
+        api_binary,
+        "--print-openapi-v2",
+    )
 
 
 def _inspect(container: str) -> dict[str, Any]:
@@ -1114,7 +1149,7 @@ def run(repo_root: Path, source_root: Path | None) -> int:
         if not _source_matches(probe_before, backend):
             raise CodegenError("backend package is stale relative to the mounted source")
         phase = "openapi-export"
-        raw, api_stderr = _exec(backend_id, ("/opt/fullmag/package/bin/fullmag-api", "--print-openapi-v2"),
+        raw, api_stderr = _exec(backend_id, _api_openapi_export_arguments(),
                                 timeout=180, stdout_limit=MAX_OPENAPI_BYTES, stderr_limit=MAX_TOOL_OUTPUT_BYTES)
         document = _read_json_bytes(raw, "backend OpenAPI export", MAX_OPENAPI_BYTES)
         raw_identity = document.get("x-fullmag-build-identity")

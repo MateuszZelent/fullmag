@@ -234,7 +234,6 @@ pub(super) fn execute_resident_bb(
             s.max_torque_Apm,
             accepted_steps,
         ) {
-            converged = true;
             break;
         }
         if accepted_steps >= control.stop.max_steps.unwrap_or(u64::MAX) {
@@ -455,7 +454,6 @@ pub(super) fn execute_resident_bb(
         final_observables: current.state,
         final_stats: s,
         accepted_steps,
-        converged,
         torque_confirmed: confirmation.confirmed(),
         final_energy_plateau_range_j: plateau.range(),
         cancelled,

@@ -35,7 +35,7 @@
   --fm-inspector-row-gap: 2px;
   --fm-inspector-control-gap: 2px;
   --fm-inspector-control-height: 35px;
-  --fm-inspector-control-radius: 8px;
+  --fm-inspector-control-radius: var(--fm-radius-field);
   --fm-inspector-control-font-size: 13px;
   --fm-inspector-group-gap: 8px;
   --fm-inspector-tab-height: 44px;
@@ -164,6 +164,31 @@
 
   /* Pill border-radius — replaces magic 999px */
   --fm-radius-pill: 9999px;
+
+  /*
+   * Visual language 2026-11 (docs/specs/frontend-v2/09-css-design-system.md §1a,
+   * reference docs/design/inspector-redesign). Theme-specific glass, field,
+   * raised and hue colours live in theme.css.
+   */
+  /* Elevation scale (beautiful-shadows): sm controls, md panels/popovers, lg dialogs */
+  --fm-elevation-sm: 0px 2px 3px -1px rgba(0, 0, 0, 0.1), 0px 1px 0px 0px rgba(25, 28, 33, 0.02), 0px 0px 0px 1px rgba(25, 28, 33, 0.08);
+  --fm-elevation-md: 0px 0px 0px 1px rgba(0, 0, 0, 0.06), 0px 1px 1px -0.5px rgba(0, 0, 0, 0.06), 0px 3px 3px -1.5px rgba(0, 0, 0, 0.06), 0px 6px 6px -3px rgba(0, 0, 0, 0.06), 0px 12px 12px -6px rgba(0, 0, 0, 0.06), 0px 24px 24px -12px rgba(0, 0, 0, 0.06);
+  --fm-elevation-lg: 0 2.8px 2.2px rgba(0, 0, 0, 0.034), 0 6.7px 5.3px rgba(0, 0, 0, 0.048), 0 12.5px 10px rgba(0, 0, 0, 0.06), 0 22.3px 17.9px rgba(0, 0, 0, 0.072), 0 41.8px 33.4px rgba(0, 0, 0, 0.086), 0 100px 80px rgba(0, 0, 0, 0.12);
+  /* Radius scale for glass layers */
+  --fm-radius-field: 10px;
+  --fm-radius-section: 16px;
+  --fm-radius-panel: 22px;
+  --fm-radius-window: 28px;
+  /* Glass backdrop */
+  --fm-glass-blur: 22px;
+  --fm-glass-saturate: 1.7;
+  --fm-glass-backdrop: blur(var(--fm-glass-blur)) saturate(var(--fm-glass-saturate));
+  /* Motion */
+  --fm-ease-out-soft: cubic-bezier(0.3, 0.7, 0.2, 1);
+  --fm-duration-micro: 150ms;
+  --fm-duration-panel: 300ms;
+  /* Physics symbols (Ms, A_ex, alpha, xi_DL) */
+  --fm-font-symbol: "STIX Two Text", "Cambria Math", "Times New Roman", serif;
 }
 
 /* ── Spacing utilities ── */

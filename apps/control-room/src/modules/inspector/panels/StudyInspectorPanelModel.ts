@@ -10,6 +10,7 @@ import type {
 import type { ActiveLaneCapabilitySnapshot } from "@/kernel/resources/useActiveLaneCapabilities";
 import type { ResourceStatus } from "@/kernel/resources/resourceTypes";
 import { readStudyStageSource } from "@/shared/domain/study/studyStageSource";
+import { runtimeStageOwnerId, runtimeStagesByOwner } from "@/shared/domain/study/stageExecutionIdentity";
 import {
   apmFromTesla,
   formatScientific,
@@ -149,6 +150,7 @@ function isNonEmptyIdentity(value: unknown): value is string {
 }
 
 export type StudyStageModel = StudyStageSnapshot & {
+  active?: boolean;
   artifactRefs: readonly string[];
   checkpointRef: string | null;
   commandId: string | null;
@@ -321,11 +323,15 @@ export function resolveStudyInspectorModel({
   solverStatus,
   stageExecution,
 }: ResolveStudyInspectorModelInput): StudyInspectorModel {
-  const runtimeActiveIndex = stageExecution?.active_stage_index ?? currentRun?.active_stage_index ?? null;
-  const activeRuntimeId = stageExecution?.stages.find((stage) => stage.index === runtimeActiveIndex)?.stage_id;
-  const authoredActiveIndex = snapshot.stages.findIndex((stage) => stage.pipelineNodeId === activeRuntimeId);
+  const runtimeActiveIndex = stageExecution
+    ? stageExecution.active_stage_index ?? null
+    : currentRun?.active_stage_index ?? null;
+  const activeRuntimeStage = stageExecution?.stages.find(
+    (stage) => stage.index === runtimeActiveIndex,
+  );
+  const activeOwnerId = activeRuntimeStage ? runtimeStageOwnerId(activeRuntimeStage) : null;
   const activeStageIndex = snapshot.stages.some((stage) => stage.pipelineNodeId)
-    ? authoredActiveIndex >= 0 && activeRuntimeId ? authoredActiveIndex : null
+    ? snapshot.stages.find((stage) => stage.pipelineNodeId === activeOwnerId)?.index ?? null
     : runtimeActiveIndex;
   const selectedStageIndex =
     selectedStageIndexFromId(
@@ -352,9 +358,10 @@ export function resolveStudyInspectorModel({
     ] as const),
   );
 
+  const runtimeByOwnerId = runtimeStagesByOwner(stageExecution);
   const stages = snapshot.stages.map((stage) => {
     const runtimeRecord = stage.pipelineNodeId
-      ? stageExecution?.stages.find((entry) => entry.stage_id === stage.pipelineNodeId) ?? null
+      ? runtimeByOwnerId.get(stage.pipelineNodeId) ?? null
       : runtimeStageByIndex.get(stage.index) ?? null;
     const status =
       runtimeRecord?.status ??
@@ -368,6 +375,7 @@ export function resolveStudyInspectorModel({
         : null;
     return {
       ...stage,
+      active: stage.index === activeStageIndex,
       artifactRefs: runtimeRecord?.artifact_refs ?? [],
       checkpointRef: runtimeRecord?.checkpoint_ref ?? null,
       commandId: runtimeRecord?.command_id ?? null,
@@ -621,21 +629,10 @@ export function resolveCommandSummary(
   }
 
   const commands = [...commandQueue.commands].reverse();
-  const problem = commands.find((command) =>
-    PROBLEM_COMMAND_STATUSES.has(command.status),
-  );
-  if (problem) {
-    return commandSummaryFromEntry(problem);
-  }
-
   const active = commands.find((command) =>
     ACTIVE_COMMAND_STATUSES.has(command.status),
   );
-  if (active) {
-    return commandSummaryFromEntry(active);
-  }
-
-  const latest = commands[0] ?? null;
+  const latest = active ?? commands[0] ?? null;
   return latest
     ? commandSummaryFromEntry(latest)
     : {
@@ -650,7 +647,9 @@ function commandSummaryFromEntry(command: CommandQueueEntry): CommandSummary {
   return {
     badge: command.status,
     commandId: command.command_id,
-    error: command.error ?? null,
+    error: PROBLEM_COMMAND_STATUSES.has(command.status)
+      ? command.error ?? null
+      : null,
     label: `${titleCase(command.kind)} ${command.status}`,
   };
 }
@@ -932,7 +931,12 @@ function selectedStageIndexFromId(
   if (!stageId) return null;
   const snapshotIndex = stages.findIndex((stage) => stage.stageId === stageId);
   if (snapshotIndex >= 0) return snapshotIndex;
-  if (stages.some((stage) => stage.pipelineNodeId)) return null;
+  if (stages.some((stage) => stage.pipelineNodeId)) {
+    const runtimeStage = stageExecution?.stages.find((stage) => stage.stage_id === stageId);
+    return runtimeStage
+      ? stages.find((stage) => stage.pipelineNodeId === runtimeStageOwnerId(runtimeStage))?.index ?? null
+      : null;
+  }
   const index = Number(stageId);
   if (Number.isInteger(index) && index >= 0) return index;
   const runtimeIndex = stageExecution?.stages.findIndex(

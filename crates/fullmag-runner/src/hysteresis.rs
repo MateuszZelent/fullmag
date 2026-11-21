@@ -2674,7 +2674,7 @@ fn execute_settle_step_at_field(
             let grid = [fdm.grid.cells[0], fdm.grid.cells[1], fdm.grid.cells[2]];
             let live = LiveStepConsumer {
                 grid,
-                field_every_n,
+                field_cadence: crate::LiveFieldCadence::every_n_steps(field_every_n),
                 initial_snapshot,
                 display_selection: live_display_selection,
                 interrupt_requested,
@@ -2730,7 +2730,7 @@ fn execute_settle_step_at_field(
             let grid = [mutated_fem.initial_magnetization.len() as u32, 1, 1];
             let live = LiveStepConsumer {
                 grid,
-                field_every_n,
+                field_cadence: crate::LiveFieldCadence::every_n_steps(field_every_n),
                 initial_snapshot,
                 display_selection: live_display_selection,
                 interrupt_requested,
@@ -6560,6 +6560,7 @@ mod tests {
     #[test]
     fn hysteresis_fem_average_uses_p1_lumped_ms_volume_weights() {
         let plan = fullmag_ir::FemPlanIR {
+            gpu_bb_preconditioner: None,
             mesh_name: "two_tets".to_string(),
             mesh_source: None,
             mesh: fullmag_ir::MeshIR {
@@ -6625,6 +6626,7 @@ mod tests {
             solved_antenna_drive_bases: Vec::new(),
             field_drives: Vec::new(),
             field_drive_geometry_masks: Vec::new(),
+            mask_field_term_bases: Vec::new(),
             time_stage: Default::default(),
             current_modules: Vec::new(),
             charge_transport_plans: Vec::new(),

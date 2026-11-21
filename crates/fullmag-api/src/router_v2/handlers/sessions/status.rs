@@ -424,6 +424,11 @@ pub(crate) fn build_live_status(
         total_steps,
         steps_per_second,
     };
+    let solver_energy_current_available = crate::router_v2::handlers::simulation::runtime::current_solver_energy_resource_for_snapshot(
+        snapshot,
+        request_scope_epoch,
+    )
+    .is_some();
 
     LiveStatus {
         api_contract_version: "1.0.0".into(),
@@ -437,6 +442,7 @@ pub(crate) fn build_live_status(
         resources,
         capabilities,
         energies,
+        solver_energy_current_available,
         metrics,
     }
 }
@@ -596,16 +602,6 @@ fn session_lifecycle_solver_code(snapshot: &SessionStateResponse) -> String {
     } else {
         crate::session::effective_runtime_status_code(snapshot)
     }
-}
-
-pub(crate) fn snapshot_session_epoch(snapshot: &SessionStateResponse) -> String {
-    let solver = session_lifecycle_solver_code(snapshot);
-    session_epoch(
-        &snapshot.session.session_id,
-        snapshot.session.started_at_unix_ms,
-        snapshot.session.finished_at_unix_ms,
-        terminal_solver_lifecycle(&solver),
-    )
 }
 
 pub(crate) fn session_epoch(
@@ -1795,10 +1791,12 @@ mod tests {
             run_id: "run".into(),
             task_id: task_id.into(),
             step_id: "relax-stage".into(),
+            case_id: "default".into(),
             attempt_id: attempt_id.into(),
             ownership_epoch: 5,
         };
         crate::types::CurrentScalarSourceState {
+            series: None,
             public_source: Some(crate::schemas::scalars::ScalarObservationSource {
                 session_id: "session".into(),
                 run_id: "run".into(),

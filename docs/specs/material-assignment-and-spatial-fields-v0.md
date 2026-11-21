@@ -94,6 +94,66 @@ Example:
 
 This mode must not require manufacturing large numbers of artificial regions.
 
+#### 3.3 Function fields (`fm.fields.function`, 2026-11-20)
+
+A scalar parameter may be written as an equation of position with named
+parameters, the way mumax3 users write position-dependent quantities. The main
+form is an equation string; a `def` is the alternative:
+
+```python
+film.alpha = fm.fields.function(
+    "a0 + a_max*max(0.0, (x - x_edge)/L)**3",
+    a0=0.01, a_max=0.5, x_edge=2e-6, L=600e-9,
+)
+
+def alpha(x, y, z, a0, a_max, x_edge, L):
+    return a0 + a_max * max(0.0, (x - x_edge) / L) ** 3
+
+film.alpha = fm.fields.function(alpha, a0=0.01, a_max=0.5, x_edge=2e-6, L=600e-9)
+```
+
+Contract:
+
+- Signature: `fm.fields.function(source, /, *, frame="object", unit=None, **values)`.
+  `source` is a string or a `def` whose first three parameters are `x, y, z`
+  (metres, in the object frame or the world frame); `values` are finite
+  `numbers.Real` (not `bool`), one per named parameter. The value is in the SI
+  unit of the parameter it is assigned to.
+- A string is checked with the syntax-tree checker of the formula language
+  (`ast.parse(mode="eval")` plus the token rules of `field_expr.v1`) and is never
+  evaluated by Python. Every free name must be `x`, `y`, `z`, `pi`, a function
+  of the field kind or a name given in `values`; a missing value and an unused
+  value are errors that name the parameter. A `def` follows the restricted
+  Python of masks (`docs/specs/mask-function-v1.md`, section 2): defaults and
+  captured numbers are allowed. A parameter may not be named `frame` or `unit`
+  (the keywords of the call). Errors are `FieldFunctionError` (a `ValueError`)
+  with `character N:`, `line N:` or `parameter 'name':`.
+- `ProblemIR`: `MaterialParameterFieldIR::Function { function: FunctionIR, frame, unit }`
+  with `kind: "function"`. Both forms give the same `FunctionIR` of the field
+  kind (`docs/specs/mask-function-v1.md`, section 9); `FunctionIR.name` is
+  present for a `def` and absent for a string, so the exporter writes the field
+  back in the authored form. Parameter values are stored as numbers only.
+- Scalar only: a function field for `anisotropy_axis` is rejected in Python and
+  in `ProblemIR` validation.
+- Validation: `ProblemIR` and SceneDocument validation compile the equation
+  (version, finite values, a valid function name, the field-kind rules). The
+  planner compiles it once per resolution, evaluates it at every FDM cell centre
+  or FEM node, and applies the parameter's range rules (`Ms > 0`, `Aex >= 0`,
+  `alpha >= 0`, finite) to every sampled value; a violation names the assignment
+  and the world point.
+- Where `fm.fields.linear(...)` is accepted (`set_material_field`,
+  `ObjectRegion.set_material`), `fm.fields.function(...)` is accepted.
+  `film.alpha = <field>` assigns any field to the whole object with the
+  assignment id `<object>:object:alpha`; assigning another field replaces it and
+  a later number changes only the base value.
+- The absorbing boundary layer adds its damping on top of the resolved alpha,
+  as for every other field kind.
+- Out of scope: vector-valued function fields, `fm.init.from_function`, a
+  Control Room editor (the Control Room shows a function field read-only).
+
+Physics owner: `docs/physics/0104-material-regions-parameter-fields-and-interface-couplings.md`,
+section "Function fields".
+
 ### 4. Shared semantics stay backend-neutral
 
 The public Python API and canonical `ProblemIR` may describe:
@@ -325,7 +385,8 @@ It must not be mistaken for the long-term material architecture.
 
 These are intentionally deferred, but the architecture must leave room for them:
 
-- sampled scalar coefficient fields from Python callables,
+- sampled scalar coefficient fields from Python callables that are not
+  expressible as a `field_expr.v1` equation (equation fields: section 3.3),
 - imported scalar fields from files,
 - interface-specific exchange models,
 - parameter interpolation policies during mesh-grid projection,

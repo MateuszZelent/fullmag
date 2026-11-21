@@ -22,8 +22,14 @@ export const antennaPlaneOrientations = [
 export function antennaPlaneOrientation(values: AntennaPlaneFrameDraft): string {
   const u = antennaVectorDraftCells(values.axisU), v = antennaVectorDraftCells(values.axisV);
   if (!u || !v || [...u, ...v].some(cell => !cell.trim() || !Number.isFinite(Number(cell)))) return "custom";
-  return antennaPlaneOrientations.find(option => option.axisU.split(",").every((cell,index) => Number(cell) === Number(u[index]))
-    && option.axisV.split(",").every((cell,index) => Number(cell) === Number(v[index])))?.id ?? "custom";
+  const sameAxis = (expected: string, actual: readonly string[]) => {
+    const cells = expected.split(",");
+    return cells.length === actual.length &&
+      cells.every((cell, index) => Number(cell) === Number(actual[index]));
+  };
+  return antennaPlaneOrientations.find(option =>
+    sameAxis(option.axisU, u) && sameAxis(option.axisV, v)
+  )?.id ?? "custom";
 }
 
 export function buildAntennaPlaneVector(value: string, label: string): [number, number, number] {

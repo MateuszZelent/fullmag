@@ -32,9 +32,9 @@ h_t\approx\frac{t}{N_t}.
 
 | Symbol | Meaning | SI unit |
 | --- | --- | --- |
-| $t$ | film thickness | m |
-| $N_t$ | requested through-thickness count | 1 |
-| $h_t$ | nominal thickness spacing | m |
+| $t$ | film thickness | $\mathrm{m}$ |
+| $N_t$ | requested through-thickness count | $1$ |
+| $h_t$ | nominal thickness spacing | $\mathrm{m}$ |
 
 (thin-film-tetrahedral-assumptions-and-validity)=
 ## Assumptions and validity
@@ -48,29 +48,29 @@ The table is exhaustive for this public family entry point. Alias rows are alter
 
 | Python | Type | Default | SI unit | Validation | Meaning | Backend support | ProblemIR |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| `hmax` | `float \| str \| None` | `None` | m | positive length or auto; alias | body maximum-size alias | FEM CPU source-backed; FEM GPU capability-gated | `mesh_workflow.per_geometry[].hmax` |
-| `maximum_element_size` | `float \| str \| None` | `None` | m | positive length or auto | body maximum size | FEM CPU source-backed; FEM GPU capability-gated | `mesh_workflow.per_geometry[].maximum_element_size` |
-| `hmin` | `float \| None` | `None` | m | positive length; alias | body minimum-size alias | FEM CPU source-backed; FEM GPU capability-gated | `mesh_workflow.per_geometry[].hmin` |
-| `minimum_element_size` | `float \| None` | `None` | m | positive length | body minimum size | FEM CPU source-backed; FEM GPU capability-gated | `mesh_workflow.per_geometry[].minimum_element_size` |
-| `order` | `int \| None` | `None` | 1 | integer; prismatic topology permits only 1 | FEM order | FEM CPU source-backed; FEM GPU capability-gated | `mesh_workflow.per_geometry[].order` |
-| `curvature_factor` | `float \| None` | `None` | 1 | finite and > 0 | curvature refinement | FEM CPU source-backed; FEM GPU capability-gated | `mesh_workflow.per_geometry[].curvature_factor` |
-| `narrow_region_resolution` | `float \| None` | `None` | 1 | finite and > 0 | narrow-region refinement | FEM CPU source-backed; FEM GPU capability-gated | `mesh_workflow.per_geometry[].narrow_region_resolution` |
-| `layers` | `int` | `1` | 1 | integer >= 1 | through-thickness element count | FEM CPU source-backed; FEM GPU capability-gated | `mesh_workflow.per_geometry[].through_thickness_elements` |
-| `topology` | `Literal["tetrahedral", "prismatic"] \| None` | `None` | 1 | one of the two values | tetrahedral route or strict prism request | FEM CPU source-backed; FEM GPU capability-gated | `mesh_workflow.per_geometry[].mesh_strategy` |
-| `exact_layers` | `bool \| None` | `None` | 1 | requires prismatic; strict mode rejects False | exact prism-layer requirement | FEM CPU source-backed; FEM GPU capability-gated | `mesh_workflow.per_geometry[].exact_layer_count` |
-| `transition` | `Literal["pyramid_to_tetrahedra", "reject"] \| None` | `None` | 1 | prismatic requires pyramid_to_tetrahedra | shared-domain transition request | FEM CPU source-backed; FEM GPU capability-gated | `mesh_workflow.per_geometry[].transition_policy` |
-| `interface_maximum_element_size` | `float \| None` | `None` | m | finite and > 0 | interface size | FEM CPU source-backed; FEM GPU capability-gated | `mesh_workflow.per_geometry[].interface_hmax` |
-| `surface_maximum_element_size` | `float \| None` | `None` | m | finite and > 0; overrides interface alias | surface size alias | FEM CPU source-backed; FEM GPU capability-gated | `mesh_workflow.per_geometry[].interface_hmax` |
-| `interface_thickness` | `float \| None` | `None` | m | finite and > 0 | interface shell | FEM CPU source-backed; FEM GPU capability-gated | `mesh_workflow.per_geometry[].interface_thickness` |
-| `surface_thickness` | `float \| None` | `None` | m | finite and > 0; overrides interface alias | surface shell alias | FEM CPU source-backed; FEM GPU capability-gated | `mesh_workflow.per_geometry[].interface_thickness` |
-| `transition_distance` | `float \| str \| None` | `None` | m | zero or positive length, or supported automatic value | interface transition | FEM CPU source-backed; FEM GPU capability-gated | `mesh_workflow.per_geometry[].transition_distance` |
-| `surface_transition_distance` | `float \| str \| None` | `None` | m | zero or positive length, or supported automatic value | surface transition alias | FEM CPU source-backed; FEM GPU capability-gated | `mesh_workflow.per_geometry[].transition_distance` |
-| `edge_maximum_element_size` | `float \| None` | `None` | m | finite and > 0 | edge size | FEM CPU source-backed; FEM GPU capability-gated | `mesh_workflow.per_geometry[].edge_hmax` |
-| `edge_thickness` | `float \| None` | `None` | m | finite and > 0 | edge shell | FEM CPU source-backed; FEM GPU capability-gated | `mesh_workflow.per_geometry[].edge_thickness` |
-| `edge_transition_distance` | `float \| str \| None` | `None` | m | positive length or supported automatic value | edge transition | FEM CPU source-backed; FEM GPU capability-gated | `mesh_workflow.per_geometry[].edge_transition_distance` |
-| `corner_maximum_element_size` | `float \| None` | `None` | m | finite and > 0 | corner size | FEM CPU source-backed; FEM GPU capability-gated | `mesh_workflow.per_geometry[].corner_hmax` |
-| `corner_extent` | `float \| None` | `None` | m | finite and > 0 | corner extent | FEM CPU source-backed; FEM GPU capability-gated | `mesh_workflow.per_geometry[].corner_extent` |
-| `corner_transition_distance` | `float \| str \| None` | `None` | m | positive length or supported automatic value | corner transition | FEM CPU source-backed; FEM GPU capability-gated | `mesh_workflow.per_geometry[].corner_transition_distance` |
+| `hmax` | `float \| str \| None` | `None` | $\mathrm{m}$ | positive length or auto; alias | body maximum-size alias | FEM CPU source-backed; FEM GPU capability-gated | `mesh_workflow.per_geometry[].hmax` |
+| `maximum_element_size` | `float \| str \| None` | `None` | $\mathrm{m}$ | positive length or auto | body maximum size | FEM CPU source-backed; FEM GPU capability-gated | `mesh_workflow.per_geometry[].maximum_element_size` |
+| `hmin` | `float \| None` | `None` | $\mathrm{m}$ | positive length; alias | body minimum-size alias | FEM CPU source-backed; FEM GPU capability-gated | `mesh_workflow.per_geometry[].hmin` |
+| `minimum_element_size` | `float \| None` | `None` | $\mathrm{m}$ | positive length | body minimum size | FEM CPU source-backed; FEM GPU capability-gated | `mesh_workflow.per_geometry[].minimum_element_size` |
+| `order` | `int \| None` | `None` | $1$ | integer; prismatic topology permits only 1 | FEM order | FEM CPU source-backed; FEM GPU capability-gated | `mesh_workflow.per_geometry[].order` |
+| `curvature_factor` | `float \| None` | `None` | $1$ | finite and > 0 | curvature refinement | FEM CPU source-backed; FEM GPU capability-gated | `mesh_workflow.per_geometry[].curvature_factor` |
+| `narrow_region_resolution` | `float \| None` | `None` | $1$ | finite and > 0 | narrow-region refinement | FEM CPU source-backed; FEM GPU capability-gated | `mesh_workflow.per_geometry[].narrow_region_resolution` |
+| `layers` | `int` | `1` | $1$ | integer >= 1 | through-thickness element count | FEM CPU source-backed; FEM GPU capability-gated | `mesh_workflow.per_geometry[].through_thickness_elements` |
+| `topology` | `Literal["tetrahedral", "prismatic"] \| None` | `None` | $1$ | one of the two values | tetrahedral route or strict prism request | FEM CPU source-backed; FEM GPU capability-gated | `mesh_workflow.per_geometry[].mesh_strategy` |
+| `exact_layers` | `bool \| None` | `None` | $1$ | requires prismatic; strict mode rejects False | exact prism-layer requirement | FEM CPU source-backed; FEM GPU capability-gated | `mesh_workflow.per_geometry[].exact_layer_count` |
+| `transition` | `Literal["pyramid_to_tetrahedra", "reject"] \| None` | `None` | $1$ | prismatic requires pyramid_to_tetrahedra | shared-domain transition request | FEM CPU source-backed; FEM GPU capability-gated | `mesh_workflow.per_geometry[].transition_policy` |
+| `interface_maximum_element_size` | `float \| None` | `None` | $\mathrm{m}$ | finite and > 0 | interface size | FEM CPU source-backed; FEM GPU capability-gated | `mesh_workflow.per_geometry[].interface_hmax` |
+| `surface_maximum_element_size` | `float \| None` | `None` | $\mathrm{m}$ | finite and > 0; overrides interface alias | surface size alias | FEM CPU source-backed; FEM GPU capability-gated | `mesh_workflow.per_geometry[].interface_hmax` |
+| `interface_thickness` | `float \| None` | `None` | $\mathrm{m}$ | finite and > 0 | interface shell | FEM CPU source-backed; FEM GPU capability-gated | `mesh_workflow.per_geometry[].interface_thickness` |
+| `surface_thickness` | `float \| None` | `None` | $\mathrm{m}$ | finite and > 0; overrides interface alias | surface shell alias | FEM CPU source-backed; FEM GPU capability-gated | `mesh_workflow.per_geometry[].interface_thickness` |
+| `transition_distance` | `float \| str \| None` | `None` | $\mathrm{m}$ | zero or positive length, or supported automatic value | interface transition | FEM CPU source-backed; FEM GPU capability-gated | `mesh_workflow.per_geometry[].transition_distance` |
+| `surface_transition_distance` | `float \| str \| None` | `None` | $\mathrm{m}$ | zero or positive length, or supported automatic value | surface transition alias | FEM CPU source-backed; FEM GPU capability-gated | `mesh_workflow.per_geometry[].transition_distance` |
+| `edge_maximum_element_size` | `float \| None` | `None` | $\mathrm{m}$ | finite and > 0 | edge size | FEM CPU source-backed; FEM GPU capability-gated | `mesh_workflow.per_geometry[].edge_hmax` |
+| `edge_thickness` | `float \| None` | `None` | $\mathrm{m}$ | finite and > 0 | edge shell | FEM CPU source-backed; FEM GPU capability-gated | `mesh_workflow.per_geometry[].edge_thickness` |
+| `edge_transition_distance` | `float \| str \| None` | `None` | $\mathrm{m}$ | positive length or supported automatic value | edge transition | FEM CPU source-backed; FEM GPU capability-gated | `mesh_workflow.per_geometry[].edge_transition_distance` |
+| `corner_maximum_element_size` | `float \| None` | `None` | $\mathrm{m}$ | finite and > 0 | corner size | FEM CPU source-backed; FEM GPU capability-gated | `mesh_workflow.per_geometry[].corner_hmax` |
+| `corner_extent` | `float \| None` | `None` | $\mathrm{m}$ | finite and > 0 | corner extent | FEM CPU source-backed; FEM GPU capability-gated | `mesh_workflow.per_geometry[].corner_extent` |
+| `corner_transition_distance` | `float \| str \| None` | `None` | $\mathrm{m}$ | positive length or supported automatic value | corner transition | FEM CPU source-backed; FEM GPU capability-gated | `mesh_workflow.per_geometry[].corner_transition_distance` |
 
 ```python
 # %% imports
@@ -134,6 +134,7 @@ The following values are generated before `_mesh_spec_to_metadata` writes the pe
 | corner `hmax` | explicit corner size, else resolved edge `hmax` | explicit corner input | `mesh_workflow.per_geometry[].corner_hmax` |
 | corner extent | explicit extent, else resolved edge thickness | explicit corner input | `mesh_workflow.per_geometry[].corner_extent` |
 | corner transition | explicit corner transition, else resolved edge transition | explicit corner input | `mesh_workflow.per_geometry[].corner_transition_distance` |
+
 (thin-film-tetrahedral-round-trip-and-failure-semantics)=
 ## Round-trip and failure semantics
 
@@ -152,6 +153,7 @@ The source index maps public authoring, lowering, realization, reporting, and ba
 ### FEM CPU/GPU plan and runtime consumption
 
 `plan_fem` resolves the domain or per-object mesh asset, validates typed MeshIR and region ownership, and places that mesh in `FemPlanIR`; this is the planning consumer after Python realization. The production runner enters `execute_fem_with_context_in_mode`, normalizes the FEM plan, resolves CPU/GPU behavior, and calls the configuration-selected `execute_native_fem` implementation for native execution. `apply_native_fem_runtime_contract` is not a gate: after runtime observations exist, it returns `()` and only populates `ExecutionProvenance` fields such as execution mode, qualification status, data residency, CUDA-kernel use, GPU Poisson use, and hot-loop synchronization counts. A source-backed Python mesh build is therefore not itself CPU or GPU runtime proof; actual execution and its populated provenance provide that evidence.
+
 (thin-film-tetrahedral-validation)=
 ## Validation
 

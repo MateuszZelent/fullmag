@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
 use crate::schemas::commands::{
-    RuntimeCommandPrecondition, RuntimeCommandTarget, SolverPolicyRequest,
+    CommandExecutionBinding, RuntimeCommandPrecondition, RuntimeCommandTarget, SolverPolicyRequest,
 };
 use crate::schemas::relaxation::{
     RelaxationAlgorithm, StageMetricKind, StageMetricUnit, StageStopReason,
@@ -198,6 +198,9 @@ impl From<&fullmag_runner::AntennaOperationProgress> for AntennaOperationProgres
 #[derive(Debug, Serialize, Deserialize, ToSchema)]
 pub struct StageExecutionRecordResource {
     pub stage_id: String,
+    /// Authored pipeline node owning this compiled execution.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub authored_stage_id: Option<String>,
     /// Exact authored antenna definition ID, not the study node or runtime ID.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub antenna_solve_stage_id: Option<String>,
@@ -573,6 +576,8 @@ pub struct CommandDetailResource {
     pub stage_index: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub run_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub execution_binding: Option<CommandExecutionBinding>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub requested_execution: Option<CommandExecutionReadbackResource>,
     #[serde(skip_serializing_if = "Option::is_none")]

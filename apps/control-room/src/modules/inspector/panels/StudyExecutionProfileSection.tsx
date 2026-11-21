@@ -6,6 +6,8 @@ import type { ExecutionProfile } from "@/kernel/api/apiTypes";
 import { useExecutionProfilesResource } from "@/kernel/resources/useExecutionProfilesResource";
 import { Button } from "@/shared/ui/Button";
 
+import type { InspectorChildDraftRegistry } from "../inspectorChildDraftRegistry";
+import { useInspectorChildDraftRegistration } from "../useInspectorChildDraftRegistration";
 import { FeedbackBanner } from "../primitives/FeedbackBanner";
 import { FieldRow } from "../primitives/FieldRow";
 import { FormField } from "../primitives/FormField";
@@ -55,7 +57,7 @@ export interface StudyExecutionProfileSectionProps {
     assignment: StudyExecutionProfileAssignment,
     baseRevision: number,
   ) => Promise<StudyExecutionProfileApplyResult>;
-  onEditSessionChange: (session: StudyExecutionProfileEditSession | null) => void;
+  draftRegistry: InspectorChildDraftRegistry<StudyExecutionProfileEditSession>;
 }
 
 interface CanonicalDraft {
@@ -207,7 +209,7 @@ function StudyExecutionProfileEditor({
   authoringBusy,
   otherAuthoringDirty,
   onApply,
-  onEditSessionChange,
+  draftRegistry,
   scene,
   sceneRevision,
   sceneStatus,
@@ -371,36 +373,19 @@ function StudyExecutionProfileEditor({
     state.stale,
   ]);
 
-  useEffect(() => {
-    onEditSessionChange({
-      apply: applyDraft,
-      dirty,
-      profileBound: state.draft.profile !== null,
-      reset: resetDraft,
-      valid:
-        !dirty ||
-        (!validationError &&
-          !hasChangeDeviceConflict &&
-          !state.stale &&
-          sceneReady &&
-          (state.draft.profile === null || resourceReady)),
-    });
-  }, [
-    applyDraft,
+  useInspectorChildDraftRegistration(draftRegistry, "execution-profile", {
+    apply: applyDraft,
     dirty,
-    hasChangeDeviceConflict,
-    onEditSessionChange,
-    resetDraft,
-    state.draft.profile,
-    state.stale,
-    resourceReady,
-    sceneReady,
-    validationError,
-  ]);
-  useEffect(
-    () => () => onEditSessionChange(null),
-    [onEditSessionChange],
-  );
+    profileBound: state.draft.profile !== null,
+    reset: resetDraft,
+    valid:
+      !dirty ||
+      (!validationError &&
+        !hasChangeDeviceConflict &&
+        !state.stale &&
+        sceneReady &&
+        (state.draft.profile === null || resourceReady)),
+  });
 
   const chooseProfile = (key: string) => {
     const profile = key === "__legacy__"

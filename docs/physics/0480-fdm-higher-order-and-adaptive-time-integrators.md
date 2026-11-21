@@ -3,7 +3,7 @@
 
 - Status: implementation-mapped design note; runtime qualification is workload-specific
 - Owners: Fullmag core
-- Last updated: 2026-11-03
+- Last updated: 2026-11-08
 - Related ADRs:
   - `docs/adr/0001-physics-first-python-api.md`
 - Related specs:
@@ -55,6 +55,14 @@ Requested `rk32` or `bs23` authoring selects the existing `rk23` method. It
 cannot bypass the public multilayer adaptive gate. SSPRK3/RK56 and the
 proportional-controller research formulas below are retained as proposals;
 they are not a statement that every backend implements them.
+
+Adaptacyjne CUDA single i double mają odrębne tożsamości wykonania:
+`explicit_adaptive_fdm_cuda_single` oraz `explicit_adaptive_fdm_cuda_double`.
+Runner wybiera wpis zgodny z rzeczywistą precyzją, bez fallbacku lub
+dziedziczenia kwalifikacji FP64/fixed-step. Wpis FP32 pozostaje `unvalidated`
+do niezależnej promocji z czystym, związanym ze źródłem artefaktem. Brak
+takiej promocji nie usuwa istniejącej realizacji executable; pojedynczy
+test numeryczny nie jest kwalifikacją całej macierzy interakcji.
 
 (governing-equations)=
 ### 2.1 Governing equation
@@ -709,3 +717,4 @@ rejection/floor handling and CPU/GPU parity for the requested workload.
 | backends/fdm/gpu/cuda/integrators/multilayer_explicit_rk.cu | launch_multilayer_rk23_step_fp64 | Fixed staged CUDA FP64 RK23 realization. |
 | packages/fullmag-py/tests/test_rk32_alias.py | class Rk32AliasTests | Executable runtime-independent normalization and mutual-exclusion tests. |
 | docs/physics/0480-fdm-higher-order-and-adaptive-time-integrators.md | DOC-ANCHOR:fdm-rk-research-proposals | Historical proposed controller/RK families, not executable support evidence. |
+| crates/fullmag-runner/src/lib.rs | adaptive_fdm_cuda_identity_is_explicit_but_unvalidated_until_controller_artifact | Separate adaptive CUDA FP32/FP64 identity, without qualification inheritance. |

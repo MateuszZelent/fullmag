@@ -1,6 +1,5 @@
 import type { RegionalFieldDriveResource } from "../../../kernel/api/apiTypes";
 
-const MU_0 = 4e-7 * Math.PI;
 
 export function teslaToMilliTesla(valueT: number): number {
   return valueT * 1e3;
@@ -8,10 +7,6 @@ export function teslaToMilliTesla(valueT: number): number {
 
 export function milliTeslaToTesla(valueMilliT: number): number {
   return valueMilliT * 1e-3;
-}
-
-export function driveAmplitudeApm(drive: RegionalFieldDriveResource): number {
-  return drive.amplitude_B_T / MU_0;
 }
 
 export function evaluateDriveWaveform(

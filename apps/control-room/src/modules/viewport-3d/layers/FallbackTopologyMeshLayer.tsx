@@ -1,7 +1,7 @@
 "use client";
 
 import { type ThreeEvent } from "@react-three/fiber";
-import { useCallback, useEffect, useId, useMemo, useState } from "react";
+import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useState } from "react";
 import { BufferAttribute, BufferGeometry } from "three";
 import {
   RENDER_POLICIES,
@@ -33,13 +33,16 @@ import {
   canApplyVertexScalarColorBuffer,
 } from "../viewport3dGeometryColors";
 import { useViewport3DGeometryUpload } from "../hooks/useViewport3DGeometryUpload";
+import { Viewport3DInteractionWireframe } from "./Viewport3DInteractionWireframe";
 import {
   useViewport3DScalarColorUpload,
   useViewport3DScalarShaderColorUpload,
 } from "../hooks/useViewport3DScalarColorUpload";
 import { resolveViewport3DScalarColorBufferKey, type ScalarColorBuffer } from "../viewport3dFieldMapping";
-import { selectVisibleSurfaceChoice, visibleColorScaleFromBuffer, type Viewport3DVisibleSurfaceChoice, type Viewport3DVisibleColorScale, type Viewport3DVisibleColorScaleReport } from "../model/viewport3DVisibleColorScale";
+import { selectVisibleSurfaceChoice, visibleColorScaleFromBuffer, type Viewport3DVisibleSurfaceChoice, type Viewport3DVisibleColorScale } from "../model/viewport3DVisibleColorScale";
+import type { Viewport3DVisibleColorScaleStore } from "../model/viewport3DVisibleColorScaleStore";
 import type {
+  Viewport3DComplexGlyphPass,
   Viewport3DFieldRenderModel,
   Viewport3DTopologyRenderModel,
 } from "../viewport3dRenderModel";
@@ -50,8 +53,10 @@ import {
   updateScalarSurfaceShaderMaterial,
 } from "../viewport3dScalarSurfaceShader";
 import type { Viewport3DColors } from "../viewport3dTypes";
+import { prepareViewport3DFieldPresentationNormals } from "../viewport3dFieldPresentationMaterial";
+import { ComplexGlyphPassLayer } from "./ComplexVectorGlyphLayer";
 import { VectorFieldLayer } from "./VectorFieldLayer";
-import type { VectorFieldLayerVectorStyle } from "./VectorFieldLayer";
+import type { VectorFieldLayerVectorStyle } from "./VectorFieldLayer.model";
 import { eventIntersectsRegionOverlay } from "./regionOverlayPicking";
 import {
   resolveViewport3DTargetSurfaceLayerInput,
@@ -77,7 +82,7 @@ const FALLBACK_TOPOLOGY_GEOMETRY_UPLOAD_FRAME_BUDGET_MS = 3;
 export function FallbackTopologyMeshLayer({
   colors,
   colorScopeKey,
-  onVisibleColorScale,
+  visibleColorScaleStore,
   sessionIdentity,
   vectorColorMode,
   fallbackSettings,
@@ -93,7 +98,7 @@ export function FallbackTopologyMeshLayer({
 }: {
   colors: Viewport3DColors;
   colorScopeKey?: string | null;
-  onVisibleColorScale?: (report: Viewport3DVisibleColorScaleReport) => void;
+  visibleColorScaleStore?: Viewport3DVisibleColorScaleStore;
   sessionIdentity?: SessionResourceIdentity | null;
   vectorColorMode: string;
   fallbackSettings: VisualizationTargetSettings;
@@ -145,7 +150,7 @@ export function FallbackTopologyMeshLayer({
   });
 
   const edgeIndices =
-    renderSettings.geometryScope === "full"
+    renderSettings.wireframeGeometryScope === "full"
       ? topologyModel?.fallbackVolumeEdgeIndices ?? null
       : topologyModel?.fallbackSurfaceEdgeIndices ?? null;
   const createEdgeGeometry = useCallback(() => {
@@ -163,7 +168,7 @@ export function FallbackTopologyMeshLayer({
       (topologyModel?.positions.byteLength ?? 0) + (edgeIndices?.byteLength ?? 0),
     invalidate,
     itemCount: edgeIndices?.length ?? 0,
-    key: `fallback-topology-wireframe:scope=${renderSettings.geometryScope}:topology=${topologyRevision ?? "none"}:positions=${topologyModel?.positions.byteLength ?? 0}:indices=${edgeIndices?.byteLength ?? 0}`,
+    key: `fallback-topology-wireframe:scope=${renderSettings.wireframeGeometryScope ?? "surface"}:topology=${topologyRevision ?? "none"}:positions=${topologyModel?.positions.byteLength ?? 0}:indices=${edgeIndices?.byteLength ?? 0}`,
     lane: "topology-index",
     targetRevision: topologyRevision === null ? null : String(topologyRevision),
     tracker,
@@ -308,13 +313,16 @@ export function FallbackTopologyMeshLayer({
       createScalarSurfaceShaderMaterial(shaderSurfaceBuffer, {
         ...surfacePolicy,
         opacity: surfaceOpacity,
-        shadeStrength: 0,
+        shadeStrength: materialProfile.magneticSurface.shadeStrength,
         toneMapped: materialProfile.magneticSurface.toneMapped,
+        presentation: materialProfile.magneticSurface.presentation,
       }),
     );
   }, [
     fieldColorLayersEnabled,
     materialProfile.magneticSurface.toneMapped,
+    materialProfile.magneticSurface.shadeStrength,
+    materialProfile.magneticSurface.presentation,
     meshQualityColors,
     shaderSurfaceBuffer,
     surfaceOpacity,
@@ -332,8 +340,13 @@ export function FallbackTopologyMeshLayer({
       scalarShaderMaterial,
       shaderSurfaceBuffer,
       surfaceOpacity,
+      materialProfile.magneticSurface.shadeStrength,
+      materialProfile.magneticSurface.presentation,
     );
-  }, [scalarShaderMaterial, shaderSurfaceBuffer, surfaceOpacity]);
+  }, [scalarShaderMaterial, shaderSurfaceBuffer, surfaceOpacity, materialProfile.magneticSurface]);
+  useLayoutEffect(() => {
+    if (prepareViewport3DFieldPresentationNormals(geometry, Boolean(materialProfile.magneticSurface.presentation))) invalidate();
+  }, [geometry, invalidate, materialProfile.magneticSurface.presentation]);
 
   const surfaceOwnerId = `saved-surface:${useId()}`;
   const visibleSurfaceBuffer = renderSettings.visible && renderPlan.surface.visible && !meshQualityColors
@@ -341,13 +354,13 @@ export function FallbackTopologyMeshLayer({
     : null;
   const surfaceScale = useMemo(() => visibleColorScaleFromBuffer(visibleSurfaceBuffer), [visibleSurfaceBuffer]);
   useEffect(() => {
-    if (colorScopeKey) onVisibleColorScale?.({ scopeKey: colorScopeKey, ownerId: surfaceOwnerId,
+    if (colorScopeKey) visibleColorScaleStore?.report({ scopeKey: colorScopeKey, ownerId: surfaceOwnerId,
       pass: "surface", scale: surfaceScale });
-  }, [colorScopeKey, onVisibleColorScale, surfaceOwnerId, surfaceScale]);
+  }, [colorScopeKey, surfaceOwnerId, surfaceScale, visibleColorScaleStore]);
   useEffect(() => () => {
-    if (colorScopeKey) onVisibleColorScale?.({ scopeKey: colorScopeKey, ownerId: surfaceOwnerId,
+    if (colorScopeKey) visibleColorScaleStore?.report({ scopeKey: colorScopeKey, ownerId: surfaceOwnerId,
       pass: "surface", scale: null, removed: true });
-  }, [colorScopeKey, onVisibleColorScale, surfaceOwnerId]);
+  }, [colorScopeKey, surfaceOwnerId, visibleColorScaleStore]);
   const vectorColorBuffer = fieldModel?.scalarColorsByMode.get(vectorColorModeFromSettings(renderSettings, vectorColorMode));
   const vectorColorScale = useMemo(() => visibleColorScaleFromBuffer(vectorColorBuffer), [vectorColorBuffer]);
 
@@ -383,9 +396,10 @@ export function FallbackTopologyMeshLayer({
     <FallbackTopologyMeshPrimitives
       colors={colors}
       colorScopeKey={colorScopeKey}
-      onVisibleColorScale={onVisibleColorScale}
+      visibleColorScaleStore={visibleColorScaleStore}
       vectorColorScale={vectorColorScale}
       edgeGeometry={edgeGeometry}
+      surfaceEdgeIndices={topologyModel?.fallbackSurfaceEdgeIndices}
       geometry={geometry}
       hasScalarColors={hasScalarColors}
       materialProfile={materialProfile}
@@ -400,6 +414,7 @@ export function FallbackTopologyMeshLayer({
       tracker={tracker}
       vectorBuildReference={vectorLayerInput.buildReference}
       vectorColorMode={vectorColorMode}
+      vectorComplexGlyphs={vectorLayerInput.complexGlyphs ?? null}
       vectorGlyphColors={vectorLayerInput.glyphColors ?? null}
       vectorSegments={vectorLayerInput.segments}
       vectorStyle={vectorStyle}
@@ -410,9 +425,10 @@ export function FallbackTopologyMeshLayer({
 function FallbackTopologyMeshPrimitives({
   colors,
   colorScopeKey,
-  onVisibleColorScale,
+  visibleColorScaleStore,
   vectorColorScale,
   edgeGeometry,
+  surfaceEdgeIndices,
   geometry,
   hasScalarColors,
   materialProfile,
@@ -427,15 +443,17 @@ function FallbackTopologyMeshPrimitives({
   tracker,
   vectorBuildReference,
   vectorColorMode,
+  vectorComplexGlyphs,
   vectorGlyphColors,
   vectorSegments,
   vectorStyle,
 }: {
   colors: Viewport3DColors;
   colorScopeKey?: string | null;
-  onVisibleColorScale?: (report: Viewport3DVisibleColorScaleReport) => void;
+  visibleColorScaleStore?: Viewport3DVisibleColorScaleStore;
   vectorColorScale: Viewport3DVisibleColorScale | null;
   edgeGeometry: BufferGeometry | null;
+  surfaceEdgeIndices?: Uint32Array | null;
   geometry: BufferGeometry | null;
   hasScalarColors: boolean;
   materialProfile: Viewport3DMaterialProfile;
@@ -450,6 +468,7 @@ function FallbackTopologyMeshPrimitives({
   tracker: Viewport3DResourceTracker;
   vectorBuildReference: Viewport3DFieldRenderModel["fullVectorBuild"];
   vectorColorMode: string;
+  vectorComplexGlyphs: Viewport3DComplexGlyphPass | null;
   vectorGlyphColors: Float32Array | null;
   vectorSegments: Viewport3DFieldRenderModel["fullVectorSegments"];
   vectorStyle: VectorFieldLayerVectorStyle;
@@ -458,7 +477,9 @@ function FallbackTopologyMeshPrimitives({
     <group onPointerDown={onPointerDown}>
       {renderPlan.surface.visible && geometry ? (
         <mesh
+          castShadow={materialProfile.magneticSurface.presentation?.shadows ?? false}
           geometry={geometry}
+          receiveShadow={materialProfile.magneticSurface.presentation?.shadows ?? false}
           renderOrder={
             surfacePolicy.transparent
               ? RENDER_POLICIES.contextSurface.renderOrder
@@ -467,6 +488,16 @@ function FallbackTopologyMeshPrimitives({
         >
           {scalarShaderMaterial ? (
             <primitive attach="material" object={scalarShaderMaterial} />
+          ) : materialProfile.magneticSurface.presentation ? (
+            <meshStandardMaterial
+              color={surfaceMaterialColorFromSettings(renderSettings, colors.mesh, hasScalarColors)}
+              opacity={surfaceOpacity}
+              roughness={materialProfile.magneticSurface.presentation.roughness}
+              metalness={materialProfile.magneticSurface.presentation.metalness}
+              toneMapped={materialProfile.magneticSurface.toneMapped}
+              vertexColors={hasScalarColors}
+              {...surfacePolicy}
+            />
           ) : (
             <meshBasicMaterial
               key={hasScalarColors ? "fallback-vertex-colors" : "fallback-solid"}
@@ -476,7 +507,7 @@ function FallbackTopologyMeshPrimitives({
                 hasScalarColors,
               )}
               opacity={surfaceOpacity}
-              {...materialProfile.magneticSurface}
+              toneMapped={materialProfile.magneticSurface.toneMapped}
               vertexColors={hasScalarColors}
               {...surfacePolicy}
             />
@@ -484,16 +515,18 @@ function FallbackTopologyMeshPrimitives({
         </mesh>
       ) : null}
       {renderPlan.wireframe.visible && edgeGeometry ? (
-        <lineSegments
+        <Viewport3DInteractionWireframe
           geometry={edgeGeometry}
           renderOrder={RENDER_POLICIES.featureEdges.renderOrder}
+          surfaceIndices={surfaceEdgeIndices}
+          tracker={tracker}
         >
           <lineBasicMaterial
             color={wireframeColorFromSettings(renderSettings, colors.wire)}
             opacity={renderPlan.wireframe.opacity}
             {...materialPolicyProps("featureEdges")}
           />
-        </lineSegments>
+        </Viewport3DInteractionWireframe>
       ) : null}
       {renderPlan.points.visible && pointGeometry ? (
         <points
@@ -510,13 +543,24 @@ function FallbackTopologyMeshPrimitives({
         </points>
       ) : null}
       {viewport3DVectorLayersEnabledFromBrowserConfig() &&
+      renderPlan.vectors.visible &&
+      vectorComplexGlyphs ? (
+        <ComplexGlyphPassLayer
+          fallbackColor={String(colors.field)}
+          opacity={renderPlan.vectors.opacity}
+          pass={vectorComplexGlyphs}
+          sessionIdentity={sessionIdentity}
+          style={vectorStyleFromSettings(renderSettings, vectorStyle)}
+          tracker={tracker}
+        />
+      ) : viewport3DVectorLayersEnabledFromBrowserConfig() &&
       renderPlan.vectors.visible ? (
         <VectorFieldLayer
           buildReference={vectorBuildReference}
           glyphColorsOverride={vectorGlyphColors}
           colorScale={vectorColorScale}
           colorScopeKey={colorScopeKey}
-          onVisibleColorScale={onVisibleColorScale}
+          visibleColorScaleStore={visibleColorScaleStore}
           colors={colors}
           colorMode={vectorColorModeFromSettings(
             renderSettings,

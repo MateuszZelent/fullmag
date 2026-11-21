@@ -356,7 +356,7 @@ fn execute_bias_field_sweep(
     plan: &FemEigenPlanIR,
     outputs: &[OutputIR],
     try_gpu: bool,
-    mut progress: Option<&mut FemEigenProgressCallback<'_>>,
+    progress: Option<&mut FemEigenProgressCallback<'_>>,
 ) -> Result<ExecutedRun, RunError> {
     execute_bias_field_sweep_with_producer_identity(
         plan,
@@ -413,7 +413,7 @@ fn execute_planned_bias_field_sweep(
     execution: PlannedFemEigenExecution<'_>,
     plan: &FemEigenPlanIR,
     outputs: &[OutputIR],
-    mut progress: Option<&mut FemEigenProgressCallback<'_>>,
+    progress: Option<&mut FemEigenProgressCallback<'_>>,
 ) -> Result<ExecutedRun, RunError> {
     execute_planned_bias_field_sweep_with_producer_identity(
         execution,
@@ -655,6 +655,7 @@ pub(crate) fn decode_bias_field_relaxation_artifact_with_bytes<T: serde::de::Des
 /// per-sample control contract.
 fn bias_field_relax_plan(plan: &FemEigenPlanIR) -> fullmag_ir::FemPlanIR {
     fullmag_ir::FemPlanIR {
+        gpu_bb_preconditioner: None,
         mesh_name: plan.mesh_name.clone(),
         mesh_source: plan.mesh_source.clone(),
         mesh: plan.mesh.clone(),
@@ -679,6 +680,7 @@ fn bias_field_relax_plan(plan: &FemEigenPlanIR) -> fullmag_ir::FemPlanIR {
         solved_antenna_drive_bases: Vec::new(),
         field_drives: Vec::new(),
         field_drive_geometry_masks: Vec::new(),
+        mask_field_term_bases: Vec::new(),
         time_stage: Default::default(),
         current_modules: Vec::new(),
         charge_transport_plans: Vec::new(),

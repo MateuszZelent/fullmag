@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useReducer, useState } from "react";
 
 import type {
   ProjectBatchCommandAction,
@@ -98,6 +98,67 @@ type SelectedBatchResult = {
   readonly solution: SolutionSetDiscoveryPageResource["items"][number];
 };
 
+type BatchNavigation = {
+  readonly batchCursor: string | null;
+  readonly selectedBatchId: string | null;
+  readonly caseCursor: string | null;
+  readonly selectedRunId: string | null;
+  readonly resultCursor: string | null;
+  readonly selectedBatchResult: SelectedBatchResult | null;
+};
+
+type BatchNavigationAction =
+  | { type: "selectBatch"; batchId: string }
+  | { type: "toggleRun"; runId: string }
+  | { type: "batchPage"; cursor: string | null }
+  | { type: "casePage"; cursor: string | null }
+  | { type: "resultPage"; cursor: string | null }
+  | { type: "openResult"; result: SelectedBatchResult }
+  | { type: "closeResult" };
+
+const INITIAL_BATCH_NAVIGATION: BatchNavigation = {
+  batchCursor: null,
+  selectedBatchId: null,
+  caseCursor: null,
+  selectedRunId: null,
+  resultCursor: null,
+  selectedBatchResult: null,
+};
+
+function updateBatchNavigation(state: BatchNavigation, action: BatchNavigationAction): BatchNavigation {
+  switch (action.type) {
+    case "selectBatch":
+      return {
+        ...INITIAL_BATCH_NAVIGATION,
+        batchCursor: state.batchCursor,
+        selectedBatchId: state.selectedBatchId === action.batchId ? null : action.batchId,
+      };
+    case "toggleRun":
+      return {
+        ...state,
+        selectedRunId: state.selectedRunId === action.runId ? null : action.runId,
+        resultCursor: null,
+        selectedBatchResult: null,
+      };
+    case "batchPage":
+      return { ...INITIAL_BATCH_NAVIGATION, batchCursor: action.cursor };
+    case "casePage":
+      return {
+        ...state,
+        caseCursor: action.cursor,
+        selectedRunId: null,
+        resultCursor: null,
+        selectedBatchResult: null,
+      };
+    case "resultPage":
+      return { ...state, resultCursor: action.cursor, selectedBatchResult: null };
+    case "openResult":
+      return { ...state, selectedBatchResult: action.result };
+    case "closeResult":
+      return { ...state, selectedBatchResult: null };
+  }
+}
+
 export function ProjectBatchesSection() {
   const project = useProjectDocumentSnapshot();
   if (project.state !== "ready") return null;
@@ -105,12 +166,8 @@ export function ProjectBatchesSection() {
 }
 
 function ProjectBatchesPage({ projectId }: { readonly projectId: string }) {
-  const [batchCursor, setBatchCursor] = useState<string | null>(null);
-  const [selectedBatchId, setSelectedBatchId] = useState<string | null>(null);
-  const [caseCursor, setCaseCursor] = useState<string | null>(null);
-  const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
-  const [resultCursor, setResultCursor] = useState<string | null>(null);
-  const [selectedBatchResult, setSelectedBatchResult] = useState<SelectedBatchResult | null>(null);
+  const [navigation, navigate] = useReducer(updateBatchNavigation, INITIAL_BATCH_NAVIGATION);
+  const { batchCursor, selectedBatchId, caseCursor, selectedRunId, resultCursor, selectedBatchResult } = navigation;
   const [pendingTaskId, setPendingTaskId] = useState<string | null>(null);
   const [pendingMaterializationRunId, setPendingMaterializationRunId] = useState<string | null>(null);
   const [materializationFeedback, setMaterializationFeedback] = useState<MaterializationFeedback | null>(null);
@@ -157,20 +214,14 @@ function ProjectBatchesPage({ projectId }: { readonly projectId: string }) {
   });
 
   const selectBatch = (batchId: string) => {
-    setCaseCursor(null);
-    setResultCursor(null);
-    setSelectedBatchResult(null);
     setRetryFeedback(null);
-    setSelectedRunId(null);
-    setSelectedBatchId((current) => current === batchId ? null : batchId);
+    navigate({ type: "selectBatch", batchId });
   };
 
   const toggleRunDetails = (runId: string) => {
-    setResultCursor(null);
-    setSelectedBatchResult(null);
     setCancelError(null);
     setRetryFeedback(null);
-    setSelectedRunId((current) => current === runId ? null : runId);
+    navigate({ type: "toggleRun", runId });
   };
 
   const handleCancelTask = async (taskId: string) => {
@@ -672,11 +723,7 @@ function ProjectBatchesPage({ projectId }: { readonly projectId: string }) {
   };
 
   const loadNextBatchPage = () => {
-    setSelectedBatchId(null);
-    setCaseCursor(null);
-    setResultCursor(null);
-    setSelectedRunId(null);
-    setBatchCursor(batches.data?.next_cursor ?? null);
+    navigate({ type: "batchPage", cursor: batches.data?.next_cursor ?? null });
   };
 
   return (
@@ -758,7 +805,7 @@ function ProjectBatchesPage({ projectId }: { readonly projectId: string }) {
               {` · max parallel ${batch.max_parallel_cases ?? "Auto"}`}
               {` · on failure: ${failurePolicyLabel(batch.failure_policy)}`}
             </div>
-            <div aria-live="polite" className="mt-1 flex min-w-0 flex-wrap items-center gap-1">
+            <div className="mt-1 flex min-w-0 flex-wrap items-center gap-1">
               {commandActions.map((action) => (
                 <Button
                   aria-label={`${batchCommandActionLabel(action)} for batch ${batch.batch_id}`}
@@ -857,7 +904,7 @@ function ProjectBatchesPage({ projectId }: { readonly projectId: string }) {
               {lifecycleError ? <span className="text-fm-xs text-fm-danger" role="alert">{lifecycleError}</span> : null}
             </div>
             {selected ? (
-              <div aria-live="polite" className="mt-2 grid min-w-0 gap-2 rounded-md border border-fm-subtle p-2">
+              <div className="mt-2 grid min-w-0 gap-2 rounded-md border border-fm-subtle p-2">
                 {cases.status === "loading" && !cases.data ? <p>Loading batch cases…</p> : null}
                 {cases.error ? <p role="alert">Could not load batch cases: {cases.error.message}</p> : null}
                 {cases.data?.cases.map((batchCase) => {
@@ -977,7 +1024,7 @@ function ProjectBatchesPage({ projectId }: { readonly projectId: string }) {
                         </p>
                       ) : null}
                       {publishedRun && selectedRunId === publishedRun.run_id ? (
-                        <div aria-live="polite" className="grid min-w-0 gap-1 rounded-md border border-fm-subtle p-2">
+                        <div className="grid min-w-0 gap-1 border-t border-fm-subtle pt-2">
                           {selectedRun.status === "loading" && !selectedRun.data ? <p>Loading run details…</p> : null}
                           {selectedRun.error ? <p role="alert">Could not load run details: {selectedRun.error.message}</p> : null}
                           {selectedRunResource ? (
@@ -1098,7 +1145,7 @@ function ProjectBatchesPage({ projectId }: { readonly projectId: string }) {
                                     variant={isSelected ? "primary" : "secondary"}
                                     onClick={() => {
                                       if (selectedRunId) {
-                                        setSelectedBatchResult({ runId: selectedRunId, solution: item });
+                                        navigate({ type: "openResult", result: { runId: selectedRunId, solution: item } });
                                       }
                                     }}
                                   >
@@ -1113,10 +1160,7 @@ function ProjectBatchesPage({ projectId }: { readonly projectId: string }) {
                                 className="justify-self-start"
                                 size="sm"
                                 variant="secondary"
-                                onClick={() => {
-                                  setSelectedBatchResult(null);
-                                  setResultCursor(selectedRunResults.data?.next_cursor ?? null);
-                                }}
+                                onClick={() => navigate({ type: "resultPage", cursor: selectedRunResults.data?.next_cursor ?? null })}
                               >
                                 Next result sets
                               </Button>
@@ -1128,7 +1172,7 @@ function ProjectBatchesPage({ projectId }: { readonly projectId: string }) {
                               projectId={projectId}
                               runId={selectedRunId}
                               solution={selectedBatchResult.solution}
-                              onClose={() => setSelectedBatchResult(null)}
+                              onClose={() => navigate({ type: "closeResult" })}
                             />
                           ) : null}
                         </div>
@@ -1141,12 +1185,7 @@ function ProjectBatchesPage({ projectId }: { readonly projectId: string }) {
                   <Button
                     size="sm"
                     variant="secondary"
-                    onClick={() => {
-                      setSelectedRunId(null);
-                      setResultCursor(null);
-                    setSelectedBatchResult(null);
-                      setCaseCursor(cases.data?.next_cursor ?? null);
-                    }}
+                    onClick={() => navigate({ type: "casePage", cursor: cases.data?.next_cursor ?? null })}
                   >
                     Next cases
                   </Button>

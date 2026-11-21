@@ -286,6 +286,10 @@ const fdmCuboidLayerPath = path.join(
   appRoot,
   "src/modules/viewport-3d/layers/FdmCuboidLayer.tsx",
 );
+const fdmCuboidLayerModelPath = path.join(
+  appRoot,
+  "src/modules/viewport-3d/layers/FdmCuboidLayer.model.ts",
+);
 const vectorFieldLayerPath = path.join(
   appRoot,
   "src/modules/viewport-3d/layers/VectorFieldLayer.tsx",
@@ -438,7 +442,7 @@ function checkStudyRunCommandInvalidationScope() {
   const submitHelper = blockBetween(
     source,
     "async function submitRuntimeCommand",
-    "function record",
+    "type RuntimeCommandSubmissionReconciliation",
   );
   const studyRun = blockBetween(
     source,
@@ -654,13 +658,13 @@ function checkExplorerModuleSessionStatusSelector() {
 
 function checkRibbonModuleSessionStatusSelector() {
   const source = readFileSync(ribbonModulePath, "utf8");
+  const model = readFileSync(path.join(appRoot, "src/modules/ribbon/RibbonModule.model.ts"), "utf8");
+  requireTokens(model, "RibbonModule status projection", ["field_revision", "fields_revision"]);
   requireTokens(source, "RibbonModule session status selector", [
     "selectRibbonRuntimeStatus",
     "ribbonRuntimeStatusEquals",
     "useSessionStatusSelector",
     "isEqual: ribbonRuntimeStatusEquals",
-    "field_revision",
-    "fields_revision",
     "shouldLoadRuntimeMeshBuild(needsMeshResources, sessionStatusData)",
     "shouldLoadRuntimeMeshManifest(",
     "shouldLoadRuntimeMeshSummary(",
@@ -1043,9 +1047,12 @@ function checkMeshBuildDialogSessionStatusSelector() {
     "runtimeStatus",
 
   ]);
+  const model = readFileSync(path.join(appRoot, "src/modules/overlay/MeshBuildDialog.model.ts"), "utf8");
+  requireTokens(model.replace(/\s+/g, ""), "MeshBuildDialog explicit FEM predicate", [
+    'returnopen&&lane==="fem";',
+  ]);
   const compact = source.replace(/\s+/g, "");
   requireTokens(compact, "MeshBuildDialog open FEM resource gate", [
-    'returnopen&&lane==="fem";',
     "constexplicitFemLane=shouldLoadMeshBuildDialogFemResources(state.open,lane,);",
     "useMeshBuildCurrent({enabled:explicitFemLane,})",
     "useMeshBuildLatestSuccessful({enabled:explicitFemLane,})",
@@ -1316,8 +1323,9 @@ function checkReactRenderProfilerInstrumentation() {
   );
   const smoke = readFileSync(viewportSmokePath, "utf8");
 
-  requireTokens(profiler, "react render profiler", [
-    "export function WorkspaceRenderProfiler",
+  const model = readFileSync(path.join(appRoot, "src/kernel/performance/reactRenderProfiler.model.ts"), "utf8");
+  requireTokens(profiler, "react render profiler component", ["export function WorkspaceRenderProfiler"]);
+  requireTokens(model, "react render profiler model", [
     'REACT_RENDER_PROFILE_MEASURE_PREFIX = "fullmag.react.render."',
     "shouldEnableReactRenderProfiler",
     "window.__FULLMAG_REACT_PROFILER__",
@@ -1585,7 +1593,8 @@ function checkMeshQualityVertexColorCache() {
 }
 
 function checkFdmCuboidRetainedCarrierBulkUpload() {
-  const source = readFileSync(fdmCuboidLayerPath, "utf8");
+  const source = readFileSync(fdmCuboidLayerModelPath, "utf8");
+  const componentSource = readFileSync(fdmCuboidLayerPath, "utf8");
   const preparedPayload = blockBetween(
     source,
     "export interface FdmCuboidPreparedInstances",
@@ -1597,7 +1606,7 @@ function checkFdmCuboidRetainedCarrierBulkUpload() {
     "export function handleFdmCuboidContextLost",
   );
   const carrierUpload = blockBetween(
-    source,
+    componentSource,
     "const uploadPreparedCarriers = useCallback",
     "useEffect(() => {\n    uploadPreparedCarriers();",
   );
@@ -1636,10 +1645,12 @@ function checkFdmCuboidRetainedCarrierBulkUpload() {
     "const abortController = new AbortController();",
     "active.controller.abort();",
     "signal: abortController.signal",
+    "event.preventDefault();",
+  ]);
+  requireTokens(componentSource, "FdmCuboidLayer retained carrier lifecycle", [
     "rawInspectListenerEnabled",
     'canvas.removeEventListener("pointermove", handleInspectPointerMove)',
     'canvas.removeEventListener("pointerleave", handleInspectPointerLeave)',
-    "event.preventDefault();",
     'canvas.addEventListener("webglcontextlost", handleContextLost)',
     'canvas.addEventListener("webglcontextrestored", restore)',
     "fullmag.viewport3d.uploadFdmCuboidMatrices",
@@ -1682,11 +1693,11 @@ function checkVectorGlyphChunkedUpload() {
 }
 
 function checkFdmVectorSegmentCache() {
-  const source = readFileSync(fdmCuboidLayerPath, "utf8");
+  const source = readFileSync(fdmCuboidLayerModelPath, "utf8");
   const buildSegments = blockBetween(
     source,
     "export function buildFdmVectorSegments",
-    "interface FdmInspectProjectionFallbackInput",
+    "export function resolveFdmCuboidSourceInstanceOrdinal",
   );
 
   requireTokens(source, "FdmCuboidLayer vector segment cache", [
@@ -1747,6 +1758,14 @@ function checkFdmCuboidSceneModelReuse() {
     "instanceModel?: FdmCuboidInstanceModel | null",
     "const model = instanceModel ?? null",
   ]);
+  requireTokens(layerSource, "FdmCuboidLayer precomputed instance model", [
+    "resolveFdmCuboidBuildState",
+    "createFdmCuboidBuildStateController",
+    "store.begin(buildKey)",
+    "store.resolve(buildKey, result)",
+    "store.reject(buildKey, error)",
+    "() => EMPTY_FDM_CUBOID_BUILD_SNAPSHOT",
+  ]);
   forbidTokens(layerSource, "FdmCuboidLayer precomputed instance model", [
     "instanceModel !== undefined",
   ]);
@@ -1777,7 +1796,8 @@ function checkFooterTelemetryIsOptIn() {
   forbidTokens(source, "FooterModule selective session status", [
     "(sessionStatus) => sessionStatus.data",
   ]);
-  requireTokens(telemetrySource, "FooterTelemetry status projection", [
+  const telemetryModel = readFileSync(path.join(appRoot, "src/modules/footer/FooterTelemetry.model.ts"), "utf8");
+  requireTokens(telemetryModel, "FooterTelemetry status projection", [
     "export function selectFooterTelemetryStatus",
     "export function footerTelemetryStatusEquals",
   ]);

@@ -7,6 +7,7 @@ import {
   soloSeriesId,
   toggleSelectedSeriesId,
 } from "./chartSeriesSelection";
+import { chartColorNameForIndex } from "./ChartLegend.model";
 
 export interface ChartLegendItem {
   /** Stable series ID */
@@ -33,29 +34,9 @@ interface ChartLegendProps {
   ariaLabel?: string;
 }
 
-const COLOR_NAMES = [
-  "blue",
-  "green",
-  "yellow",
-  "red",
-  "mauve",
-  "peach",
-  "teal",
-  "sky",
-  "pink",
-  "lavender",
-  "flamingo",
-  "rosewater",
-] as const;
-
 function chartLegendUnitLabel(unit: string): string {
   const normalized = unit.trim();
   return normalized === "dimensionless" ? "1" : normalized;
-}
-
-/** Derives a color name from a 0-based index, cycling through the 12-token palette. */
-export function chartColorNameForIndex(index: number): string {
-  return COLOR_NAMES[index % COLOR_NAMES.length] ?? "blue";
 }
 
 /**
@@ -157,7 +138,7 @@ export function ChartLegend({
                 </span>
               ) : null}
             </span>
-            <span
+            <span role="group"
               aria-label={`latest value: ${item.latestValue}`}
               className="fm-chart-legend__latest"
               data-slot="chart-legend-reading"

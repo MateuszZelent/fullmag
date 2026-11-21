@@ -1,7 +1,9 @@
 //! CUDA FDM artifact and field-output helpers.
 
 use crate::artifact_pipeline::ArtifactRecorder;
-use crate::fdm::cpu::reference::resolved_antenna_zeeman_field_for_count;
+use crate::fdm::cpu::reference::{
+    resolved_antenna_zeeman_field_for_count, resolved_drive_field_for_count,
+};
 use crate::fdm::gpu::cuda::native::NativeFdmBackend;
 use crate::preview::build_grid_preview_field;
 use crate::quantities::normalized_quantity_name;
@@ -30,6 +32,60 @@ fn capture_cuda_field_snapshot_after_pool_drain<T>(
 pub(crate) fn is_antenna_field_quantity(name: &str) -> bool {
     let base = name.split_once('.').map_or(name, |(base, _)| base);
     normalized_quantity_name(base).ok() == Some("H_ant")
+}
+
+pub(crate) fn is_drive_field_quantity(name: &str) -> bool {
+    let base = name.split_once('.').map_or(name, |(base, _)| base);
+    normalized_quantity_name(base).ok() == Some("H_drive")
+}
+
+/// Fields resolved on the host from the plan's immutable bases (`H_ant`,
+/// `H_drive`); the native ABI has no observable for them.
+pub(crate) fn is_host_resolved_field_quantity(name: &str) -> bool {
+    is_antenna_field_quantity(name) || is_drive_field_quantity(name)
+}
+
+pub(super) fn copy_resolved_host_field(
+    plan: &FdmPlanIR,
+    name: &str,
+    cell_count: usize,
+    solver_time_seconds: f64,
+) -> Result<Vec<[f64; 3]>, RunError> {
+    if is_drive_field_quantity(name) {
+        copy_resolved_drive_field(plan, name, cell_count, solver_time_seconds)
+    } else {
+        copy_resolved_antenna_field(plan, name, cell_count, solver_time_seconds)
+    }
+}
+
+/// `H_drive` (regional, solved-antenna and mask drive terms) at the solver time.
+pub(super) fn copy_resolved_drive_field(
+    plan: &FdmPlanIR,
+    name: &str,
+    cell_count: usize,
+    solver_time_seconds: f64,
+) -> Result<Vec<[f64; 3]>, RunError> {
+    let physical_time_seconds = super::canonical_fdm_time(plan, solver_time_seconds);
+    let values = resolved_drive_field_for_count(plan, cell_count, physical_time_seconds)?;
+    let Some((_, component)) = name.split_once('.') else {
+        return Ok(values);
+    };
+    let index = match component {
+        "x" => 0,
+        "y" => 1,
+        "z" => 2,
+        other => {
+            return Err(RunError {
+                message: format!(
+                    "unsupported CUDA drive snapshot component '{other}' in '{name}'"
+                ),
+            });
+        }
+    };
+    Ok(values
+        .into_iter()
+        .map(|value| [value[index], 0.0, 0.0])
+        .collect())
 }
 
 pub(super) fn copy_resolved_antenna_field(
@@ -80,7 +136,7 @@ pub(crate) fn copy_cuda_live_preview_field(
     active_mask: Option<&[bool]>,
     time_seconds: f64,
 ) -> Result<LivePreviewField, RunError> {
-    if !is_antenna_field_quantity(&request.quantity) {
+    if !is_host_resolved_field_quantity(&request.quantity) {
         return backend.copy_live_preview_field(request, original_grid, active_mask);
     }
     let cell_count = original_grid
@@ -198,13 +254,13 @@ pub(crate) fn capture_initial_cuda_fields(
     );
 
     for name in capture_ledger.uncaptured_names(due_field_names, stats.step, stats.time) {
-        if is_antenna_field_quantity(&name) {
+        if is_host_resolved_field_quantity(&name) {
             let values =
                 copy_cuda_field_snapshot_with_plan(backend, plan, &name, cell_count, stats.time)?;
             artifacts.record_field_snapshot(FieldSnapshot {
                 name: name.clone(),
                 step: stats.step,
-                time: stats.time,
+                time: super::canonical_fdm_publication_time(plan, stats.time),
                 solver_dt: stats.dt,
                 component_count: 3,
                 component_order: "xyz".into(),
@@ -215,7 +271,7 @@ pub(crate) fn capture_initial_cuda_fields(
             })?;
         } else if artifacts.is_streaming() {
             let snapshot = capture_cuda_field_snapshot_after_pool_drain(
-                || backend.begin_field_snapshot(&name, stats.step, stats.time, stats.dt),
+                || backend.begin_field_snapshot(&name, stats.step, super::canonical_fdm_publication_time(plan, stats.time), stats.dt),
                 || artifacts.drain_prior_native_field_snapshots(),
             )?;
             artifacts.record_native_field_snapshot(snapshot)?;
@@ -224,7 +280,7 @@ pub(crate) fn capture_initial_cuda_fields(
             artifacts.record_field_snapshot(FieldSnapshot {
                 name: name.clone(),
                 step: stats.step,
-                time: stats.time,
+                time: super::canonical_fdm_publication_time(plan, stats.time),
                 solver_dt: stats.dt,
                 component_count: 3,
                 component_order: "xyz".into(),
@@ -267,6 +323,7 @@ fn select_due_scalar_stats(
 /// Emit the initialized scalar state before the first CUDA FDM solver step
 /// when the default trace, a physical-time output, or an accepted-step table is due.
 pub(crate) fn record_cuda_initial_scalar(
+    plan: &FdmPlanIR,
     stats: &StepStats,
     default_scalar_trace: bool,
     scalar_schedules: &mut [OutputSchedule],
@@ -282,8 +339,9 @@ pub(crate) fn record_cuda_initial_scalar(
         return Ok(());
     }
 
-    artifacts.record_scalar(stats)?;
-    steps.push(stats.clone());
+    let published = super::canonical_fdm_publication_stats(plan, stats.clone());
+    artifacts.record_scalar(&published)?;
+    steps.push(published);
     advance_due_schedules(scalar_schedules, stats.time);
     Ok(())
 }
@@ -322,8 +380,9 @@ pub(crate) fn record_cuda_due_outputs(
         &sampled_stats,
         stage_table_stats,
     )? {
-        artifacts.record_scalar(&sampled_stats)?;
-        steps.push(sampled_stats);
+        let published = super::canonical_fdm_publication_stats(plan, sampled_stats);
+        artifacts.record_scalar(&published)?;
+        steps.push(published);
         if output_ir_due {
             advance_due_schedules(scalar_schedules, stats.time);
         }
@@ -343,13 +402,13 @@ pub(crate) fn record_cuda_due_outputs(
         artifacts.due_accepted_step_fields(stats.step, false),
     );
     for name in capture_ledger.uncaptured_names(due_field_names, stats.step, stats.time) {
-        if is_antenna_field_quantity(&name) {
+        if is_host_resolved_field_quantity(&name) {
             let values =
                 copy_cuda_field_snapshot_with_plan(backend, plan, &name, cell_count, stats.time)?;
             artifacts.record_field_snapshot(FieldSnapshot {
                 name: name.clone(),
                 step: stats.step,
-                time: stats.time,
+                time: super::canonical_fdm_publication_time(plan, stats.time),
                 solver_dt: stats.dt,
                 component_count: 3,
                 component_order: "xyz".into(),
@@ -360,7 +419,7 @@ pub(crate) fn record_cuda_due_outputs(
             })?;
         } else if artifacts.is_streaming() {
             let snapshot = capture_cuda_field_snapshot_after_pool_drain(
-                || backend.begin_field_snapshot(&name, stats.step, stats.time, stats.dt),
+                || backend.begin_field_snapshot(&name, stats.step, super::canonical_fdm_publication_time(plan, stats.time), stats.dt),
                 || artifacts.drain_prior_native_field_snapshots(),
             )?;
             artifacts.record_native_field_snapshot(snapshot)?;
@@ -369,7 +428,7 @@ pub(crate) fn record_cuda_due_outputs(
             artifacts.record_field_snapshot(FieldSnapshot {
                 name: name.clone(),
                 step: stats.step,
-                time: stats.time,
+                time: super::canonical_fdm_publication_time(plan, stats.time),
                 solver_dt: stats.dt,
                 component_count: 3,
                 component_order: "xyz".into(),
@@ -400,12 +459,14 @@ pub(crate) fn record_cuda_final_outputs(
         return Ok(());
     };
 
-    let need_scalar = !steps_end_at_same_accepted_state(steps, &latest_stats);
+    let published = super::canonical_fdm_publication_stats(plan, latest_stats.clone());
+    let need_scalar = !steps_end_at_same_accepted_state(steps, &published);
     if need_scalar {
         let mut final_stats = latest_stats.clone();
         backend.apply_average_m_to_step_stats(&mut final_stats)?;
-        artifacts.record_scalar(&final_stats)?;
-        steps.push(final_stats);
+        let published = super::canonical_fdm_publication_stats(plan, final_stats);
+        artifacts.record_scalar(&published)?;
+        steps.push(published);
     }
     let _ = scalar_schedules;
 
@@ -433,7 +494,7 @@ pub(crate) fn record_cuda_final_outputs(
         latest_stats.step,
         latest_stats.time,
     ) {
-        if is_antenna_field_quantity(&name) {
+        if is_host_resolved_field_quantity(&name) {
             let values = copy_cuda_field_snapshot_with_plan(
                 backend,
                 plan,
@@ -444,7 +505,7 @@ pub(crate) fn record_cuda_final_outputs(
             artifacts.record_field_snapshot(FieldSnapshot {
                 name: name.clone(),
                 step: latest_stats.step,
-                time: latest_stats.time,
+                time: super::canonical_fdm_publication_time(plan, latest_stats.time),
                 solver_dt: latest_stats.dt,
                 component_count: 3,
                 component_order: "xyz".into(),
@@ -459,7 +520,7 @@ pub(crate) fn record_cuda_final_outputs(
                     backend.begin_field_snapshot(
                         &name,
                         latest_stats.step,
-                        latest_stats.time,
+                        super::canonical_fdm_publication_time(plan, latest_stats.time),
                         latest_stats.dt,
                     )
                 },
@@ -471,7 +532,7 @@ pub(crate) fn record_cuda_final_outputs(
             artifacts.record_field_snapshot(FieldSnapshot {
                 name: name.clone(),
                 step: latest_stats.step,
-                time: latest_stats.time,
+                time: super::canonical_fdm_publication_time(plan, latest_stats.time),
                 solver_dt: latest_stats.dt,
                 component_count: 3,
                 component_order: "xyz".into(),
@@ -516,8 +577,8 @@ pub(crate) fn copy_cuda_field_snapshot_with_plan(
     cell_count: usize,
     time_seconds: f64,
 ) -> Result<Vec<[f64; 3]>, RunError> {
-    if is_antenna_field_quantity(name) {
-        return copy_resolved_antenna_field(plan, name, cell_count, time_seconds);
+    if is_host_resolved_field_quantity(name) {
+        return copy_resolved_host_field(plan, name, cell_count, time_seconds);
     }
     copy_cuda_field_snapshot(backend, name, cell_count)
 }
@@ -711,6 +772,7 @@ mod tests {
         let mut no_schedules = Vec::new();
 
         record_cuda_initial_scalar(
+            &FdmPlanIR::default(),
             &stats,
             false,
             &mut no_schedules,
@@ -721,6 +783,7 @@ mod tests {
         assert!(steps.is_empty());
 
         record_cuda_initial_scalar(
+            &FdmPlanIR::default(),
             &stats,
             true,
             &mut no_schedules,

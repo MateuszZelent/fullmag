@@ -46,6 +46,7 @@ export function LiveChartInspectorPanel({
     seriesOptions,
     preset.defaultSeriesIds,
   );
+  const selectedSeriesIdSet = new Set(selectedSeriesIds);
 
   const execute = (commandId: string, input: Record<string, unknown>) => {
     if (!kernel) return;
@@ -147,7 +148,7 @@ export function LiveChartInspectorPanel({
           <fieldset className="fm-live-chart-inspector__series">
             <legend className="fm-live-chart-inspector__legend">Signals</legend>
             {seriesOptions.map((series) => {
-              const checked = selectedSeriesIds.includes(series.id);
+              const checked = selectedSeriesIdSet.has(series.id);
               return (
                 <label className="fm-live-chart-inspector__series-row" key={series.id}>
                   <input
@@ -155,12 +156,11 @@ export function LiveChartInspectorPanel({
                     checked={checked}
                     className="fm-live-chart-inspector__checkbox"
                     type="checkbox"
-                    onChange={(event) => {
+                    onChange={() => {
                       const next = checked
                         ? selectedSeriesIds.filter((id) => id !== series.id)
                         : [...selectedSeriesIds, series.id];
                       execute("live-charts.set-selected-series", { descriptorId: presetId, selectedSeriesIds: next });
-                      event.currentTarget.blur();
                     }}
                   />
                   <span>{series.quantity}</span>

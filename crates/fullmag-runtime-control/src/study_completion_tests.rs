@@ -79,6 +79,10 @@ fn event(fixture: &mut Fixture, sequence: u64, event: WorkerEvent) {
 }
 
 fn fixture() -> Fixture {
+    fixture_with_consumer_preparation_pending(false)
+}
+
+fn fixture_with_consumer_preparation_pending(preparation_pending: bool) -> Fixture {
     let directory = tempfile::tempdir().unwrap();
     let store = SessionStore::open(directory.path().join("store")).unwrap();
     let study: StudyPlan = serde_json::from_value(json!({
@@ -132,7 +136,12 @@ fn fixture() -> Fixture {
             device: "cpu".into(),
             precision: "double".into(),
             mode: "strict".into(),
-            minimum_resources: None,
+            minimum_resources: Some(fullmag_application::RequestedResourceBudget {
+                cpu_millis: 100,
+                memory_bytes: 1,
+                gpu_memory_bytes: 0,
+                storage_bytes: 1,
+            }),
         },
     );
     let mut intent = FmsRunIntent::new(
@@ -161,10 +170,18 @@ fn fixture() -> Fixture {
             input_fingerprint: task.input_fingerprint.clone(),
             lifecycle: if claim.is_some() {
                 FmsTaskLifecycle::Preparing
+            } else if preparation_pending {
+                FmsTaskLifecycle::Accepted
             } else {
                 FmsTaskLifecycle::Queued
             },
-            readiness: FmsTaskReadiness::Ready,
+            readiness: if claim.is_none() && preparation_pending {
+                FmsTaskReadiness::Blocked {
+                    reason: crate::ACCEPTED_TASK_AWAITING_DEPENDENCY_RESOLUTION.into(),
+                }
+            } else {
+                FmsTaskReadiness::Ready
+            },
             observation: None,
             attempt_id: claim.map(|claim| claim.attempt_id.as_str().into()),
             ownership_epoch: claim.map(|claim| claim.ownership_epoch.value()),
@@ -465,15 +482,28 @@ fn existing_store_writer_excludes_foreign_handle_during_dependency_gate() {
 
 #[test]
 fn prepare_and_start_rehydration_refuse_completion_changed_after_publication() {
-    let mut fixture = fixture();
+    let mut fixture = fixture_with_consumer_preparation_pending(true);
     finish(&mut fixture);
-    let mut task = new_task(&fixture.accepted, "consumer");
-    let claim = task.claim(offer("consumer-cpu")).unwrap();
-    crate::commit_claimed_task_admission(&fixture.store, &task, &claim).unwrap();
+    let task = new_task(&fixture.accepted, "consumer");
     let receipt = fixture
         .accepted
-        .materialize_fdm_preparation_receipt("consumer-preparation", "consumer")
+        .materialize_fdm_preparation_receipt(format!("prep-{}", task.task_id.as_str()), "consumer")
         .unwrap();
+    fixture.store.commit_task_preparation_receipt(
+        &fullmag_session::FmsTaskPreparationReceipt::new(
+            task.run_id.as_str(),
+            "consumer",
+            task.input_fingerprint.clone(),
+            receipt.preparation_id.clone(),
+            receipt.plan_fingerprint.clone(),
+            serde_json::to_value(&receipt).unwrap(),
+        ).unwrap(),
+    ).unwrap();
+    let mut task = crate::study::queue_accepted_study_task_from_snapshot(
+        &fixture.store, &fixture.accepted, &task.run_id, "consumer", Default::default(),
+    ).unwrap().task;
+    let claim = task.claim(offer("consumer-cpu")).unwrap();
+    crate::commit_claimed_task_admission(&fixture.store, &task, &claim).unwrap();
     let resolved_input = fixture
         .accepted
         .resolve_task_input(
@@ -519,6 +549,19 @@ fn prepare_and_start_rehydration_refuse_completion_changed_after_publication() {
         )
         .unwrap();
     let start = crate::publish_accepted_task_start(&fixture.store, &mut coordinator).unwrap();
+    // A second shared reader can reconstruct the same Start even when
+    // acquiring a writer would fail. Observation must not repair the journal.
+    let expected = crate::load_accepted_worker_step_for_start_from_snapshot(
+        &fixture.store, &fixture.accepted, &start,
+    ).unwrap();
+    let shared = fixture.store.read_transaction().unwrap();
+    assert_eq!(
+        crate::load_accepted_worker_step_for_observation(
+            &fixture.store, &fixture.accepted, &start, std::time::Duration::ZERO,
+        ).unwrap(),
+        expected,
+    );
+    drop(shared);
     let artifacts = fixture
         .store
         .read_artifact_catalog(claim.run_id.as_str())
@@ -548,6 +591,10 @@ fn prepare_and_start_rehydration_refuse_completion_changed_after_publication() {
         crate::load_accepted_worker_step_for_start(&fixture.store, project, &start).unwrap_err();
     assert!(format!("{prepare_error:#}").contains("manifest"));
     assert!(format!("{start_error:#}").contains("manifest"));
+    let observation_error = crate::load_accepted_worker_step_for_observation(
+        &fixture.store, &fixture.accepted, &start, std::time::Duration::ZERO,
+    ).unwrap_err();
+    assert!(format!("{observation_error:#}").contains("manifest"));
     assert_eq!(
         fixture
             .store

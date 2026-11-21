@@ -35,6 +35,9 @@ pub struct HostRuntimeAdmission {
 }
 
 #[cfg(test)]
+pub(crate) use recovery_tests::with_admission_fixture;
+
+#[cfg(test)]
 mod recovery_tests {
     use super::*;
     use fullmag_session::host_resource_ledger::{
@@ -65,6 +68,11 @@ mod recovery_tests {
 
     fn recovery_fixture() -> RecoveryFixture {
         recovery_fixture_with_sample(true)
+    }
+
+    pub(crate) fn with_admission_fixture(test: impl FnOnce(&HostRuntimeAdmission)) {
+        let fixture = recovery_fixture();
+        test(&fixture.context);
     }
 
     fn recovery_fixture_without_sample() -> RecoveryFixture {
@@ -296,6 +304,23 @@ mod recovery_tests {
             fixture.context.compute_snapshot_admission_failure().unwrap(),
             Some("compute-node snapshot is missing".into())
         );
+    }
+
+    #[test]
+    fn missing_gpu_sample_does_not_change_the_immutable_ordinal_match() {
+        let fixture = recovery_fixture_without_sample();
+        let mut problem = fullmag_ir::ProblemIR::bootstrap_example();
+        problem.problem_meta.runtime_metadata.insert(
+            "runtime_selection".into(),
+            serde_json::json!({"device": "gpu", "device_index": null}),
+        );
+        let placement = HostTaskPlacement {
+            cpu_ids: BTreeSet::new(),
+            gpu_uuid: Some("GPU-00000000-0000-4000-8000-000000000001".into()),
+        };
+
+        assert!(!fixture.context.gpu_request_matches_placement(&problem, &placement).unwrap());
+        assert!(fixture.context.gpu_ordinal_matches_placement(&problem, &placement).unwrap());
     }
 
     #[test]
@@ -1196,6 +1221,14 @@ impl HostRuntimeAdmission {
         if placement.gpu_uuid.is_some() && !self.current_gpu_inventory_is_available()? {
             return Ok(false);
         }
+        self.gpu_ordinal_matches_placement(problem, placement)
+    }
+
+    fn gpu_ordinal_matches_placement(
+        &self,
+        problem: &fullmag_ir::ProblemIR,
+        placement: &HostTaskPlacement,
+    ) -> Result<bool> {
         if crate::host_allocation::legacy_cuda_device_index(problem)?.is_none() {
             return Ok(true);
         }
@@ -1784,7 +1817,10 @@ impl HostRuntimeAdmission {
                 if fullmag_session::task_id_for_study_step(claim.run_id.as_str(), entry.step_id())?
                     == claim.task_id.as_str()
                 {
-                    if !self.gpu_request_matches_placement(
+                    // The committed request check below verifies current capacity and
+                    // preserves retryable snapshot/inventory errors. Ordinal matching only
+                    // checks the immutable mapping for the selected placement.
+                    if !self.gpu_ordinal_matches_placement(
                         entry.problem(),
                         self.solver_placement(&claim.lease.resource_id)?,
                     )? {

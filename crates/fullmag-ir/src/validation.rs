@@ -1368,6 +1368,16 @@ pub(crate) fn validate_physics_object_problem(problem: &ProblemIRV04) -> Result<
             &object_region_ids,
             &mut errors,
         );
+        if let Some(config) = &module.absorbing_boundary {
+            let path = format!("magnetization_modules[{index}].absorbing_boundary");
+            crate::validate_absorbing_boundary_config(&path, config, &mut errors);
+            let owner = module.target.object_id.as_str();
+            for region_id in config.referenced_regions() {
+                if !object_region_ids.contains(&(owner, region_id)) {
+                    errors.push(format!("{path} references missing region '{region_id}' on '{owner}'"));
+                }
+            }
+        }
         if !material_ids.contains(module.material_id.as_str()) {
             errors.push(format!(
                 "magnetization_modules[{index}] missing material '{}'",
@@ -3224,6 +3234,7 @@ pub(crate) fn validate_spin_torque_modules(problem: &ProblemIR, errors: &mut Vec
                 free_layer_thickness_m,
                 fixed_layer_position,
                 realization,
+                time_expression,
                 ..
             } => {
                 validate_vector_binding(
@@ -3233,6 +3244,16 @@ pub(crate) fn validate_spin_torque_modules(problem: &ProblemIR, errors: &mut Vec
                     current_source,
                     errors,
                 );
+                if let Some(expression) = time_expression {
+                    if formula_version != "slonczewski.fullmag.v2" || current_density.is_none()
+                        || !matches!(realization, Some(crate::SlonczewskiRealizationIR::ThinLayerHomogenized { .. }))
+                    {
+                        errors.push(format!("spin_torque_modules[{index}].time_expression requires canonical thin-layer prescribed current density"));
+                    }
+                    if let Err(error) = expression.compile() {
+                        errors.push(format!("spin_torque_modules[{index}].time_expression: {error}"));
+                    }
+                }
                 if !vector3_is_finite(spin_polarization) {
                     errors.push(format!(
                         "spin_torque_modules[{index}] slonczewski spin_polarization must contain finite values"
@@ -3835,6 +3856,20 @@ pub(crate) fn validate_spin_transport_modules(problem: &ProblemIR, errors: &mut 
             {
                 errors.push(format!("{prefix}.materials[{material_index}] theta_sh must be finite and lambda_sf_m > 0"));
             }
+            for (name, length) in [
+                ("lambda_j_m", &material.lambda_j_m),
+                ("lambda_phi_m", &material.lambda_phi_m),
+            ] {
+                // An infinite length is the explicit `disabled` reaction, never
+                // a zero or non-finite coefficient in sigma_s / (2 lambda^2).
+                if let crate::ReactionLengthIR::Enabled(value) = length {
+                    if !value.is_finite() || *value <= 0.0 {
+                        errors.push(format!(
+                            "{prefix}.materials[{material_index}].{name} must be finite and > 0 or 'disabled'"
+                        ));
+                    }
+                }
+            }
             let density_of_states = material.density_of_states_per_spin_j_inv_m3;
             let has_physical_capacitance_source =
                 material.spin_capacitance_as_per_v_m3.is_some() || density_of_states.is_some();
@@ -4103,6 +4138,14 @@ pub(crate) fn validate_spin_transport_modules(problem: &ProblemIR, errors: &mut 
         {
             errors.push(format!(
                 "{prefix}.solver carries unsupported operator/residual version"
+            ));
+        }
+        if !matches!(
+            module.solver.default_external_boundary.as_str(),
+            "spin_insulating" | "reject_unassigned"
+        ) {
+            errors.push(format!(
+                "{prefix}.solver.default_external_boundary must be 'spin_insulating' or 'reject_unassigned'"
             ));
         }
         if reciprocal {
@@ -4391,7 +4434,11 @@ pub(crate) fn is_supported_llg_integrator(integrator: &str) -> bool {
     )
 }
 
-pub(crate) fn validate_runtime_selection(problem: &crate::ProblemIR, errors: &mut Vec<String>) {
+pub(crate) fn validate_runtime_selection(
+    problem: &crate::ProblemIR,
+    require_qualified_execution: bool,
+    errors: &mut Vec<String>,
+) {
     if let Some(value) = problem
         .problem_meta
         .runtime_metadata
@@ -4562,7 +4609,7 @@ pub(crate) fn validate_runtime_selection(problem: &crate::ProblemIR, errors: &mu
         crate::ExecutionPrecision::Single => "single",
         crate::ExecutionPrecision::Double => "double",
     };
-    if device == Some("auto") && typed == "single" {
+    if require_qualified_execution && device == Some("auto") && typed == "single" {
         errors.push("runtime_metadata.runtime_selection device='auto' with execution_precision='single' is not qualified; select device='gpu' explicitly".to_string());
     }
     if precision.is_some_and(|value| value != typed) {

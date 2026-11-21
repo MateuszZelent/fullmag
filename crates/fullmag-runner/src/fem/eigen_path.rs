@@ -2160,7 +2160,6 @@ pub(crate) mod test_support {
 /// owns native execution and artifact production; branch tracking remains in
 /// this parent process so completion order cannot change branch identities.
 pub(crate) fn parse_worker_single_k_result(
-    plan: &FemEigenPlanIR,
     point_plan: &FemEigenPlanIR,
     outputs: &[OutputIR],
     sample: &KSampleDescriptor,
@@ -2425,7 +2424,6 @@ pub(super) fn track_bias_field_sweep_samples(
             k_vector: authored_k_vector,
         };
         let (parsed, published_mode_artifacts) = parse_worker_single_k_result(
-            plan,
             point_plan,
             &tracking_outputs,
             &sample,

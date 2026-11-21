@@ -1,12 +1,12 @@
 name: contract-guard
 
 on:
+  workflow_call:
+  workflow_dispatch:
   push:
     branches: [master, main]
-  pull_request:
-
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
+  group: contract-guard-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:

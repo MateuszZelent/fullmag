@@ -12,6 +12,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import shlex
 import textwrap
 from typing import Any, Callable, Mapping
 
@@ -418,7 +419,13 @@ _INITIALIZER_PYTHON = textwrap.dedent(r'''
             raise SystemExit(2) from error
 ''')
 
-INITIALIZER_SCRIPT = "python3 - <<'FULLMAG_SHARED_BUILD_STORAGE_INIT'\n" + _INITIALIZER_PYTHON + "\nFULLMAG_SHARED_BUILD_STORAGE_INIT"
+
+def _initializer_script(program: str) -> str:
+    # Bash may spool a here-document into /tmp, which is read-only in helpers.
+    return "python3 -c " + shlex.quote(program)
+
+
+INITIALIZER_SCRIPT = _initializer_script(_INITIALIZER_PYTHON)
 
 
 def _normal_volume_document(value: Any, expected_name: str) -> dict[str, Any]:

@@ -21,7 +21,7 @@ from types import MappingProxyType
 import fullmag_storage as storage
 from docker_build_control import (BuildControl, BuildControlError, DockerObservationBudgetExceeded, canonical, control_read_script, docker_capture,
                                   compose_capture, build_volume_toolchain, build_volume_runtime_images, bounded_capture,
-                                  mirror_console)
+                                  DEV_CUDA_TARGET_ENV, mirror_console, receipt_dev_cuda_target)
 from docker_dev_host import docker_argv, require_host, local_volume, validate_host_path
 import docker_preclaim_cancelled_restart as preclaim_restart
 import docker_saved_authoring_history as retained_history
@@ -39,6 +39,44 @@ def _session_host():
     else:
         import linux_native_host as host
     return host
+
+
+def _prepare_script_output_permissions(document):
+    """Grant UID 65532 access only to the explicitly opted-in Linux output tree."""
+    from docker_script_output_mounts import OUTPUT_ROOT
+
+    backend = document["services"]["backend"]
+    outputs = [mount for mount in backend.get("volumes", [])
+               if mount.get("target") == OUTPUT_ROOT]
+    if not outputs:
+        return 0
+    if len(outputs) != 1 or outputs[0].get("type") != "bind" or outputs[0].get("read_only") is not False:
+        raise BuildControlError("Script output permission setup requires one explicit writable alias")
+    if os.name == "nt":
+        return 0
+    if not sys.platform.startswith("linux"):
+        raise BuildControlError("Script output permission setup supports only Linux or Windows hosts")
+
+    output_directory = Path(outputs[0].get("source", ""))
+    if not output_directory.is_absolute() or ".." in output_directory.parts:
+        raise BuildControlError("Script output permission setup requires an absolute child directory")
+    try:
+        filesystem = storage.filesystem_type(output_directory)
+    except (OSError, ValueError) as error:
+        raise BuildControlError("Cannot inspect opted-in script-output filesystem: " + str(error)) from error
+    if filesystem not in {"ext4", "xfs", "btrfs"}:
+        raise BuildControlError(
+            "Script output permission setup requires local ext4, xfs or btrfs storage; observed "
+            + repr(filesystem)
+        )
+    try:
+        import docker_script_output_permissions as permissions
+        return permissions.prepare_output_tree(output_directory)
+    except (OSError, ValueError) as error:
+        raise BuildControlError(
+            "Cannot safely admit the opted-in script-output directory to backend UID 65532: "
+            + str(error)
+        ) from error
 
 
 def _capture_helper_source_binding(args, selected_source):
@@ -652,10 +690,13 @@ def _owned_volume(control, role, key):
 
 
 def _frontend(control, operation, selected, state, port, image):
-    from docker_development_inputs import metadata_cache_key, seed
+    from docker_development_inputs import metadata_cache_key, seed, _next_generated_seed_variants
     files = []
     inputs = seed(selected, state, port, write_file=lambda relative, data: files.append({
         "relative": relative, "data": base64.b64encode(data).decode("ascii")}))
+    for record in files:
+        record["generated_sha256"] = [hashlib.sha256(value).hexdigest() for value in
+            _next_generated_seed_variants(record["relative"], base64.b64decode(record["data"]))]
     previous_inputs = control.read("frontend/development-inputs.json", optional=True)
     if (isinstance(previous_inputs, dict)
             and all(previous_inputs.get(key) == inputs.get(key) for key in
@@ -669,6 +710,17 @@ def _frontend(control, operation, selected, state, port, image):
     else:
         volume = _owned_volume(control, "frontend", key)
     operation["receipt"]["frontend_volume"] = volume
+    if grouped and isinstance(previous_inputs, dict):
+        previous_hashes = {item["relative"]: item["sha256"] for item in previous_inputs.get("files", [])}
+        for record in files:
+            if record["relative"] not in ("apps/control-room/tsconfig.json", "apps/control-room/next-env.d.ts"):
+                continue
+            # A legitimate tsconfig edit can follow a Next rewrite of the old
+            # seed. Authenticate its frozen original before accepting variants.
+            previous_source = control.read_bytes("private/frontend/frozen-inputs/" + record["relative"], optional=True)
+            if previous_source is not None and hashlib.sha256(previous_source).hexdigest() == previous_hashes.get(record["relative"]):
+                record["generated_sha256"].extend(hashlib.sha256(value).hexdigest() for value in
+                    _next_generated_seed_variants(record["relative"], previous_source))
     request = canonical({"files": files, "inputs": inputs, "previous_inputs": previous_inputs, "group_storage": grouped})
     if len(request) > 8 * 1024 * 1024:
         raise BuildControlError("Frontend metadata exceeds transfer budget")
@@ -695,10 +747,12 @@ if grouped:
             for part in relative.parts:
                 node=node/part
                 if node.is_symlink(): raise RuntimeError('Frontend metadata ancestry is a link')
-            if node.exists() and record['relative'] not in ('apps/control-room/tsconfig.json','apps/control-room/next-env.d.ts'):
+            if node.exists():
                 actual=hashlib.sha256(node.read_bytes()).hexdigest()
                 requested=hashlib.sha256(base64.b64decode(record['data'],validate=True)).hexdigest()
-                if actual not in (requested,allowed.get(record['relative'])):
+                generated=record['relative'] in ('apps/control-room/tsconfig.json','apps/control-room/next-env.d.ts')
+                accepted=record.get('generated_sha256',[]) if generated else (requested,allowed.get(record['relative']))
+                if actual not in accepted:
                     raise RuntimeError('Frontend metadata has unknown changes; all state retained')
 freeze=pathlib.Path('/data/inputs-freeze.json')
 if freeze.exists() or freeze.is_symlink():
@@ -761,11 +815,15 @@ for record in request['files']:
     data=base64.b64decode(record['data'],validate=True)
     if target.is_symlink(): raise RuntimeError('Frontend seed is a link')
     if target.exists():
-        if target.read_bytes()!=data and record['relative'] not in ('apps/control-room/tsconfig.json','apps/control-room/next-env.d.ts'):
+        if target.read_bytes()!=data:
+            generated=record['relative'] in ('apps/control-room/tsconfig.json','apps/control-room/next-env.d.ts')
+            if generated and not grouped:
+                continue
             if not grouped or not isinstance(previous,dict):
                 raise RuntimeError('Frontend metadata changed; cache retained')
             allowed={item['relative']:item['sha256'] for item in previous.get('files',[])}
-            if hashlib.sha256(target.read_bytes()).hexdigest()!=allowed.get(record['relative']):
+            accepted=record.get('generated_sha256',[]) if generated else (allowed.get(record['relative']),)
+            if hashlib.sha256(target.read_bytes()).hexdigest() not in accepted:
                 raise RuntimeError('Frontend metadata contains unknown changes; retained')
             temporary=target.with_name(target.name+'.group-seed.tmp')
             if temporary.is_symlink(): raise RuntimeError('Frontend metadata staging is a link')
@@ -2080,9 +2138,15 @@ def _native_contracts(values):
     if values is None:
         return ()
     if (not isinstance(values, (list, tuple))
-            or any(value != "fem-demag-poisson" for value in values)
+            or any(not isinstance(value, str)
+                   or value not in {"fem-demag-poisson", "fem-cuda-activity-trace",
+                                    "fem-cuda-pgbb-reuse", "fem-cuda-rk-guard",
+                                    "fem-cpu-pgbb-reuse", "fem-cuda-object-average", "fem-cpu-threads",
+                                    "fem-cuda-bb-exchange-mass"}
+                   for value in values)
+            or len(values) > 1
             or len(set(values)) != len(values)):
-        raise BuildControlError("Native contracts must be unique allowlisted identifiers")
+        raise BuildControlError("Native contracts must contain at most one unique allowlisted identifier")
     return tuple(sorted(values))
 
 
@@ -2274,6 +2338,10 @@ def start(args, *, reuse_state=None, control=None, operation=None, prepared=None
     validate_host_path(selected, "source checkout")
     local_volume(Path(layout["storage_root"]))
     identity = _compose_identity(layout)
+    from docker_dev_network import parse_requested_subnet, check_requested_subnet_available
+    requested_network_subnet = parse_requested_subnet(getattr(args, "network_subnet", None))
+    if requested_network_subnet is not None:
+        check_requested_subnet_available(requested_network_subnet, identity["network_name"])
     if validated_post_build_generation is not None:
         if (validated_post_build_generation["compose_project"] != identity["project_name"]
                 or validated_post_build_generation["source_root"] != str(selected)):
@@ -2331,6 +2399,7 @@ def start(args, *, reuse_state=None, control=None, operation=None, prepared=None
     device_access = _resolve_gpu_access(policy) if retained_device_access is None else retained_device_access
     if provided_operation is None:
         toolchain = build_volume_toolchain(selected)
+        cuda_target = receipt_dev_cuda_target(toolchain, required=True)
         control = BuildControl(identity, toolchain["inputs"]["build_args"]["FULLMAG_CUDA_BASE_IMAGE"])
         helper_repo = Path(helper_source_binding["root"]) if helper_source_binding is not None else selected
         _revalidate_helper_source_binding(helper_source_binding, selected)
@@ -2343,6 +2412,7 @@ def start(args, *, reuse_state=None, control=None, operation=None, prepared=None
     else:
         control = provided_control
         toolchain, images = _validate_prepared_start_context(prepared)
+        cuda_target = receipt_dev_cuda_target(toolchain)
     snapshot = _active_isolated_snapshot(control)
     if snapshot is not None and (snapshot["source_root"] != str(selected) or args.script is not None
           or getattr(args, "fresh_state", False)):
@@ -2655,6 +2725,7 @@ def start(args, *, reuse_state=None, control=None, operation=None, prepared=None
         environment = {**os.environ, "FULLMAG_COMPOSE_PROJECT": control.project,
             "FULLMAG_COMPOSE_NETWORK": identity["network_name"],
             "FULLMAG_DOCKER_DEVICE_ACCESS": device_access,
+            DEV_CUDA_TARGET_ENV: cuda_target or "",
             "FULLMAG_BUILD_CONTROL_VOLUME": control.volume,
             "FULLMAG_SOURCE_COMMIT": storage.git(selected, "rev-parse", "HEAD"),
             "FULLMAG_DEVELOPMENT_INPUTS_PATH": "/opt/fullmag/control/frontend/development-inputs.json",
@@ -2687,6 +2758,11 @@ def start(args, *, reuse_state=None, control=None, operation=None, prepared=None
         if configured.returncode or len(configured.stdout) > 1024 * 1024:
             raise BuildControlError("DEV Compose render failed: " + configured.stderr.decode("utf-8", "replace"))
         document = json.loads(configured.stdout)
+        backend_environment = document["services"]["backend"]["environment"]
+        if backend_environment.get(DEV_CUDA_TARGET_ENV, "") != (cuda_target or ""):
+            raise BuildControlError("DEV Compose backend CUDA target differs from the toolchain receipt")
+        from docker_dev_network import apply_requested_subnet
+        apply_requested_subnet(document, requested_network_subnet)
         from docker_dev_defaults import configured_group_budget
         from docker_volume_resources import apply_development_budget
         if prepared_budget_render is None:
@@ -2859,6 +2935,7 @@ def start(args, *, reuse_state=None, control=None, operation=None, prepared=None
         from docker_script_output_mounts import configure as configure_script_output, validate as validate_script_output
         configure_script_output(document, selected)
         validate_script_output(document)
+        _prepare_script_output_permissions(document)
         # All writable bind destinations are runtime/user stores, never build data.
         for service in (backend, frontend):
             for mount in service["volumes"]:
@@ -3403,12 +3480,10 @@ def rejected_startup_marker(status,identity):
                 or not isinstance(source_sha,str)
                 or re.fullmatch(r"[0-9a-f]{64}",source_sha) is None):
             continue
-        expected_session="docker-startup-"+hashlib.sha256(
-            (request_id+"\0"+source_sha).encode("utf-8")).hexdigest()
-        if expected_session!=identity[0]: continue
         authorization=marker.get("authorization")
         if not isinstance(authorization,dict):
             raise RuntimeError("startup activation receipt has no authorization")
+        session_identity=request_id+"\0"+source_sha
         solver_profile_sha256=None
         authorization_fields={"schema","authorization","source_root","source_path","source_relative","source_sha256","source_size_bytes","source_commit","container_source_root","container_script_path","request_id","execution_policy"}
         if "solver_profile" in authorization:
@@ -3428,6 +3503,25 @@ def rejected_startup_marker(status,identity):
             solver_profile_sha256=hashlib.sha256(json.dumps(profile,
                 ensure_ascii=False,sort_keys=True,separators=(",",":")).encode("utf-8")).hexdigest()
             authorization_fields.add("solver_profile")
+            session_identity+="\0"+solver_profile_sha256
+        cuda_trace_sha256=None
+        if "cuda_trace" in authorization:
+            trace=authorization.get("cuda_trace")
+            if (not isinstance(trace,dict)
+                    or set(trace)!={"schema_version","max_bytes","max_duration_ms"}
+                    or trace.get("schema_version")!="accepted_cuda_trace.v1"
+                    or type(trace.get("max_bytes")) is not int
+                    or trace.get("max_bytes") not in {67108864,134217728,536870912}
+                    or type(trace.get("max_duration_ms")) is not int
+                    or trace.get("max_duration_ms")!=60000):
+                raise RuntimeError("startup authorization cuda trace differs from the supported preset")
+            cuda_trace_sha256=hashlib.sha256(json.dumps(trace,
+                ensure_ascii=False,sort_keys=True,separators=(",",":")).encode("utf-8")).hexdigest()
+            authorization_fields.add("cuda_trace")
+            session_identity+="\0cuda_trace\0"+cuda_trace_sha256
+        expected_session="docker-startup-"+hashlib.sha256(
+            session_identity.encode("utf-8")).hexdigest()
+        if expected_session!=identity[0]: continue
         if (hashlib.sha256(request_id.encode("utf-8")).hexdigest()!=key
                 or marker.get("schema")!="fullmag.docker-startup-activation-receipt.v1"
                 or marker.get("state")!="rejected"
@@ -3473,7 +3567,7 @@ def rejected_startup_marker(status,identity):
                 or result.get("source_relative")!=relative):
             raise RuntimeError("startup activation rejection result differs from its receipt")
         rejection=result.get("rejection")
-        rejection_codes={"bad_request","validation_error","unprocessable_entity","unsupported_capability","accepted_execution_command_unsupported","accepted_study_plan_invalid","accepted_execution_stage_missing","accepted_gpu_scope_unsupported","accepted_execution_plan_invalid","accepted_backend_unsupported","accepted_study_step_unsupported","accepted_study_step_ambiguous","invalid_solver_profile","accepted_solver_profile_unsupported","docker_startup_output_mapping_required","docker_startup_output_mapping_invalid"}
+        rejection_codes={"bad_request","validation_error","unprocessable_entity","unsupported_capability","accepted_execution_command_unsupported","accepted_study_plan_invalid","accepted_execution_stage_missing","accepted_gpu_scope_unsupported","accepted_execution_plan_invalid","accepted_backend_unsupported","accepted_frequency_response_unsupported","accepted_study_step_unsupported","accepted_study_step_ambiguous","accepted_script_capture_invalid","accepted_script_capture_required","accepted_script_compilation_failed","invalid_solver_profile","accepted_solver_profile_unsupported","invalid_cuda_trace","accepted_cuda_trace_unsupported","docker_startup_output_mapping_required","docker_startup_output_mapping_invalid"}
         if (not isinstance(rejection,dict)
                 or set(rejection)!={"http_status","code","message"}
                 or type(rejection.get("http_status")) is not int
@@ -3486,6 +3580,8 @@ def rejected_startup_marker(status,identity):
             "source_sha256":source_sha,"source_relative":relative,"rejection":rejection}
         if solver_profile_sha256 is not None:
             match["solver_profile_sha256"]=solver_profile_sha256
+        if cuda_trace_sha256 is not None:
+            match["cuda_trace_sha256"]=cuda_trace_sha256
         matches.append(match)
     if len(matches)!=1:
         raise RuntimeError("startup_failed session has no unique exact rejected activation receipt")
@@ -3535,7 +3631,8 @@ def startup_failed_preacceptance(status,run,identity):
             or isinstance(preparation.get("started_at_unix_ms"),bool)
             or not isinstance(preparation.get("completed_at_unix_ms"),int)
             or isinstance(preparation.get("completed_at_unix_ms"),bool)
-            or preparation["completed_at_unix_ms"]<preparation["started_at_unix_ms"]
+            or preparation["started_at_unix_ms"]<0
+            or preparation["completed_at_unix_ms"]<0
             or not isinstance(failure,dict)
             or not failure_code_matches
             or not isinstance(failure.get("summary"),str) or not failure["summary"].strip()
@@ -3592,9 +3689,16 @@ def startup_failed_preacceptance(status,run,identity):
             "source_relative":activation["source_relative"],
             "rejection":activation["rejection"],
             **({"solver_profile_sha256":activation["solver_profile_sha256"]}
-               if "solver_profile_sha256" in activation else {})},
+               if "solver_profile_sha256" in activation else {}),
+            **({"cuda_trace_sha256":activation["cuda_trace_sha256"]}
+               if "cuda_trace_sha256" in activation else {})},
         "session_status":{"solver":status.get("solver"),"lifecycle":status.get("lifecycle"),
             "resources":status.get("resources"),"session":session},
+        # Wall-clock order is diagnostic metadata. Admission is pinned by the
+        # original rejection, two stable API views and empty queues; graceful
+        # native drain remains mandatory. Keep both original times unchanged.
+        "preparation_wall_clock_order":("reversed" if
+            preparation["completed_at_unix_ms"]<preparation["started_at_unix_ms"] else "ordered"),
         "preparation":preparation,"compute_queue":queue,"commands":commands,
         "runtime_service":runtime}
 def held_run_proofs(items):
@@ -3698,7 +3802,7 @@ else:
             or run.get("session_id")!=identity[0]
             or status.get("run",{}).get("run_id")!=run_id
             or status.get("solver",{}).get("state") not in
-                (terminal|{"idle"}|({"awaiting_command"} if prepared else set()))):
+                (terminal|{"idle","awaiting_command"})):
         raise RuntimeError("terminal run differs from the current session")
     queue=get("/v2/platform/compute/queue")
     runtime=get("/v2/platform/runtime-service")
@@ -3736,7 +3840,8 @@ else:
             or after_run.get("run_id")!=run_id
             or after_run.get("session_id")!=identity[0]
             or after_run.get("status")!=run.get("status")
-            or after_run.get("revision")!=run.get("revision")):
+            or after_run.get("revision")!=run.get("revision")
+            or (after.get("resources") or {}).get("scene_revision")!=(status.get("resources") or {}).get("scene_revision")):
         raise RuntimeError("terminal session changed before drain")
     if prepared and any((after.get("resources") or {}).get(key)!=(status.get("resources") or {}).get(key)
             for key in ("scene_revision","mesh_revision","stages_revision","commands_revision",
@@ -3749,6 +3854,9 @@ else:
         "api_instance_id":instance,"session_id":identity[0],"session_epoch":identity[1],
         "request_scope_epoch":identity[2],"run":run,"compute_queue":queue,
         "runtime_service":runtime}
+    scene_revision=(status.get("resources") or {}).get("scene_revision")
+    if type(scene_revision) is int and scene_revision>=0:
+        result["scene_revision"]=scene_revision
     if held_runs: result["held_run_intent_sha256"]=held_runs
     print(json.dumps(result,sort_keys=True))
 '''
@@ -4752,6 +4860,16 @@ def _retained_startup_enabled(container):
 
 
 _SAVED_AUTHORING_MAX_ARCHIVE_BYTES = 64 * 1024 * 1024
+_SAVED_AUTHORING_IMPORTED_STL_SNAPSHOT_ROOT = (
+    '/opt/fullmag/runtime-control/local-live/current/imported-stl-snapshots'
+)
+_SAVED_AUTHORING_MAX_IMPORTED_STL_BYTES = 64 * 1024 * 1024
+_SAVED_AUTHORING_API_RESPONSE_MAX_BYTES = 8 * 1024 * 1024
+_SAVED_AUTHORING_PROJECT_OPEN_RESPONSE_METADATA_MAX_BYTES = _SAVED_AUTHORING_API_RESPONSE_MAX_BYTES
+_SAVED_AUTHORING_PROJECT_OPEN_RESPONSE_MAX_BYTES = (
+    ((_SAVED_AUTHORING_MAX_ARCHIVE_BYTES + 2) // 3) * 4
+    + _SAVED_AUTHORING_PROJECT_OPEN_RESPONSE_METADATA_MAX_BYTES
+)
 _SAVED_EMPTY_AUTHORING_RESTART_SCHEMA = 'fullmag.saved-empty-authoring-restart.v1'
 
 
@@ -4772,6 +4890,54 @@ def _saved_authoring_require(value, message):
 
 def _saved_authoring_sha(value):
     return hashlib.sha256(value).hexdigest()
+
+
+def _saved_authoring_imported_stl_bindings(scene):
+    objects = scene.get('objects', [])
+    _saved_authoring_require(isinstance(objects, list), 'scene objects list is invalid')
+    bindings = []
+    object_ids = set()
+    for obj in objects:
+        if not isinstance(obj, dict):
+            continue
+        geometry = obj.get('geometry')
+        if not isinstance(geometry, dict) or geometry.get('geometry_kind') != 'ImportedGeometry':
+            continue
+        source_asset = geometry.get('source_asset')
+        if not isinstance(source_asset, dict):
+            continue
+        archive_path = source_asset.get('archive_path')
+        match = re.fullmatch(
+            r'project/assets/imported-geometry/([0-9a-f]{64})\.stl',
+            archive_path if isinstance(archive_path, str) else '',
+        )
+        if match is None:
+            continue
+        digest = match.group(1)
+        _saved_authoring_require(set(source_asset) == {'archive_path', 'asset_id', 'content_sha256'}
+            and source_asset.get('content_sha256') == digest
+            and source_asset.get('asset_id') == 'stl-sha256-' + digest,
+            'imported STL source identity differs')
+        params = geometry.get('geometry_params')
+        _saved_authoring_require(isinstance(params, dict) and params.get('source') == archive_path,
+            'imported STL archive source differs from source asset')
+        object_id = obj.get('id')
+        _saved_authoring_require(isinstance(object_id, str) and object_id and object_id.strip() == object_id
+            and len(object_id.encode('utf-8')) <= 256
+            and not any(ord(char) < 32 or ord(char) == 127 for char in object_id),
+            'imported STL object id is invalid')
+        _saved_authoring_require(object_id not in object_ids
+            and sum(isinstance(candidate, dict) and candidate.get('id') == object_id for candidate in objects) == 1,
+            'imported STL object id is ambiguous')
+        object_ids.add(object_id)
+        bindings.append({
+            'object_id': object_id,
+            'archive_path': archive_path,
+            'asset_id': 'stl-sha256-' + digest,
+            'content_sha256': digest,
+        })
+    _saved_authoring_require(len(bindings) <= 8192, 'imported STL binding count exceeds budget')
+    return bindings
 
 
 def _saved_authoring_document(raw):
@@ -4919,10 +5085,23 @@ def _saved_authoring_validate_archive(raw, pin, *, generated_source=None):
         _saved_authoring_require(isinstance(assets, list) and isinstance(opaque, list), 'manifest lists missing')
         if source_less:
             _saved_authoring_require(assets == [], 'empty UI authoring cannot contain unbound assets')
+        asset_paths = set()
         for asset in assets:
-            _saved_authoring_require(isinstance(asset, dict) and isinstance(asset.get('path'), str)
-                and asset['path'].startswith('assets/'), 'unexpected asset path')
-            allowed.add(asset['path'])
+            _saved_authoring_require(isinstance(asset, dict) and isinstance(asset.get('path'), str),
+                'unexpected asset path')
+            asset_path = asset['path']
+            imported_stl = re.fullmatch(
+                r'project/assets/imported-geometry/([0-9a-f]{64})\.stl', asset_path)
+            if not asset_path.startswith('assets/'):
+                _saved_authoring_require(imported_stl is not None, 'unexpected asset path')
+                asset_digest = hashlib.sha256()
+                with archive.open(asset_path) as member:
+                    for block in iter(lambda: member.read(1024 * 1024), b''):
+                        asset_digest.update(block)
+                _saved_authoring_require(asset_digest.hexdigest() == imported_stl.group(1),
+                    'imported STL asset digest differs')
+            allowed.add(asset_path)
+            asset_paths.add(asset_path)
         for name in opaque:
             if source_less:
                 _saved_authoring_require(isinstance(name, str) and name == 'project/provenance.json',
@@ -4943,6 +5122,9 @@ def _saved_authoring_validate_archive(raw, pin, *, generated_source=None):
             and definition.get('scene') == scene and scene.get('version') == 'scene.v2'
             and scene.get('revision') == pin['scene_revision']
             and _saved_authoring_sha(canonical(scene)) == pin['scene_sha256'], 'saved project/revision/scene differs')
+        for binding in _saved_authoring_imported_stl_bindings(scene):
+            _saved_authoring_require(binding['archive_path'] in asset_paths,
+                'imported STL source asset is not declared in the archive manifest')
         if source_less:
             nested_scene = scene.get('scene')
             _saved_authoring_require(isinstance(nested_scene, dict)
@@ -4979,6 +5161,72 @@ def _saved_authoring_read_archive(request, state):
     return raw, _saved_authoring_validate_archive(raw, request['archive'])
 
 
+def _saved_authoring_validate_imported_stl_scene(archived_scene, live_scene, bindings, observations):
+    _saved_authoring_require(isinstance(observations, list) and len(observations) == len(bindings),
+        'imported STL snapshot observation count differs')
+    expected = {}
+    for binding in bindings:
+        object_id = binding['object_id']
+        expected[object_id] = {
+            'source_path': _SAVED_AUTHORING_IMPORTED_STL_SNAPSHOT_ROOT + '/' + binding['content_sha256'] + '.stl',
+            'content_sha256': binding['content_sha256'],
+        }
+    observed = {}
+    for observation in observations:
+        _saved_authoring_require(isinstance(observation, dict)
+            and set(observation) == {'object_id', 'source_path', 'content_sha256', 'bytes'},
+            'imported STL snapshot observation fields differ')
+        object_id = observation.get('object_id')
+        _saved_authoring_require(isinstance(object_id, str) and object_id in expected and object_id not in observed,
+            'imported STL snapshot observation binding differs')
+        binding = expected[object_id]
+        size = observation.get('bytes')
+        _saved_authoring_require(observation.get('source_path') == binding['source_path']
+            and observation.get('content_sha256') == binding['content_sha256']
+            and type(size) is int and 0 < size <= _SAVED_AUTHORING_MAX_IMPORTED_STL_BYTES,
+            'imported STL snapshot path/hash/size differs')
+        observed[object_id] = observation
+    _saved_authoring_require(set(observed) == set(expected), 'imported STL snapshot binding is missing')
+
+    import copy
+    normalized = copy.deepcopy(live_scene)
+    archived_objects = archived_scene.get('objects')
+    live_objects = normalized.get('objects')
+    _saved_authoring_require(isinstance(archived_objects, list) and isinstance(live_objects, list),
+        'imported STL scene object list is invalid')
+    for binding in bindings:
+        object_id = binding['object_id']
+        archived_matches = [obj for obj in archived_objects
+            if isinstance(obj, dict) and obj.get('id') == object_id]
+        live_matches = [obj for obj in live_objects
+            if isinstance(obj, dict) and obj.get('id') == object_id]
+        _saved_authoring_require(len(archived_matches) == 1 and len(live_matches) == 1,
+            'imported STL live object identity differs')
+        archived_geometry = archived_matches[0].get('geometry')
+        live_geometry = live_matches[0].get('geometry')
+        expected_source_asset = {
+            'archive_path': binding['archive_path'],
+            'asset_id': binding['asset_id'],
+            'content_sha256': binding['content_sha256'],
+        }
+        _saved_authoring_require(isinstance(archived_geometry, dict)
+            and archived_geometry.get('geometry_kind') == 'ImportedGeometry'
+            and archived_geometry.get('source_asset') == expected_source_asset,
+            'imported STL archive source identity differs')
+        _saved_authoring_require(isinstance(live_geometry, dict)
+            and live_geometry.get('geometry_kind') == 'ImportedGeometry'
+            and live_geometry.get('source_asset') == archived_geometry.get('source_asset'),
+            'imported STL live source identity differs')
+        live_params = live_geometry.get('geometry_params')
+        archive_params = archived_geometry.get('geometry_params')
+        _saved_authoring_require(isinstance(live_params, dict) and isinstance(archive_params, dict)
+            and live_params.get('source') == expected[object_id]['source_path'],
+            'imported STL live snapshot path differs')
+        live_params['source'] = binding['archive_path']
+    _saved_authoring_require(normalized == archived_scene,
+        'live authored scene differs from durable archive')
+
+
 def _saved_authoring_validate_probe(probe, request, scene):
     generated_authoring.validate_probe(probe, request)
     generated = request.get("schema") in (generated_authoring.SCHEMA, generated_authoring.SCHEMA_V2)
@@ -4991,6 +5239,14 @@ def _saved_authoring_validate_probe(probe, request, scene):
     def body(name, status=200):
         _saved_authoring_require(rows[name].get('status') == status, 'unexpected HTTP result: ' + name)
         return rows[name]['body']
+    imported_stl_bindings = _saved_authoring_imported_stl_bindings(scene)
+    snapshot_rows = probe.get('imported_stl_snapshots')
+    if imported_stl_bindings:
+        _saved_authoring_require(isinstance(snapshot_rows, dict) and set(snapshot_rows) == {'before', 'after'},
+            'imported STL snapshot observations are missing')
+    else:
+        _saved_authoring_require(snapshot_rows is None or snapshot_rows == {},
+            'unexpected imported STL snapshot observations')
     for suffix in ('before', 'after'):
         current = body('current_' + suffix)
         status = body('status_' + suffix)
@@ -5006,7 +5262,13 @@ def _saved_authoring_validate_probe(probe, request, scene):
             and status.get('resources', {}).get('scene_revision') == scene['revision']
             and status.get('solver', {}).get('state') in ({'cancelled'} if terminal_cancelled else {'idle', 'awaiting_command'}), 'session epoch/run/readiness differs')
         live = body('scene_' + suffix)
-        _saved_authoring_require({k: live[k] for k in _SAVED_AUTHORING_SCENE_FIELDS if k in live} == scene, 'live authored scene differs from durable archive')
+        live_scene = {k: live[k] for k in _SAVED_AUTHORING_SCENE_FIELDS if k in live}
+        if imported_stl_bindings:
+            _saved_authoring_validate_imported_stl_scene(
+                scene, live_scene, imported_stl_bindings, snapshot_rows[suffix],
+            )
+        else:
+            _saved_authoring_require(live_scene == scene, 'live authored scene differs from durable archive')
     health = body('health')
     _saved_authoring_require(health.get('status') == 'ok' and health.get('active_session') is True, 'pinned authoring session lost')
     _saved_authoring_require(body('queue').get('schema_version') == 'compute_queue.v1'
@@ -5076,11 +5338,120 @@ def _saved_authoring_validate_probe(probe, request, scene):
     preclaim_restart.validate_historical_binding(probe, request)
 
 
+_SAVED_AUTHORING_PROBE_API_RESPONSE_HELPERS = f"""\
+API_RESPONSE_MAX={_SAVED_AUTHORING_API_RESPONSE_MAX_BYTES}
+PROJECT_OPEN_RESPONSE_MAX={_SAVED_AUTHORING_PROJECT_OPEN_RESPONSE_MAX_BYTES}
+def read_api_response(response, path):
+    limit = PROJECT_OPEN_RESPONSE_MAX if path == '/v2/persistence/projects/open' else API_RESPONSE_MAX
+    raw = response.read(limit + 1)
+    if len(raw) > limit:
+        raise RuntimeError('API response exceeded budget')
+    return raw
+"""
+
+_SAVED_AUTHORING_PROBE_IMPORTED_STL_HELPERS = """\
+import hashlib, os, pathlib, re, stat
+IMPORTED_STL_SNAPSHOT_ROOT = __IMPORTED_STL_SNAPSHOT_ROOT__
+IMPORTED_STL_MAX_BYTES = __IMPORTED_STL_MAX_BYTES__
+def read_imported_stl_snapshot(binding):
+    if not isinstance(binding, dict) or set(binding) != {'object_id', 'archive_path', 'asset_id', 'content_sha256'}:
+        raise RuntimeError('invalid imported STL snapshot binding')
+    object_id = binding['object_id']
+    archive_path = binding['archive_path']
+    digest = binding['content_sha256']
+    if (not isinstance(object_id, str) or not object_id or not isinstance(digest, str)
+            or re.fullmatch(r'[0-9a-f]{64}', digest) is None
+            or archive_path != 'project/assets/imported-geometry/' + digest + '.stl'
+            or binding['asset_id'] != 'stl-sha256-' + digest):
+        raise RuntimeError('invalid imported STL snapshot identity')
+    root = pathlib.PurePosixPath(IMPORTED_STL_SNAPSHOT_ROOT)
+    if not root.is_absolute() or '..' in root.parts:
+        raise RuntimeError('invalid imported STL snapshot root')
+    directory_fd = os.open('/', os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    file_fd = None
+    try:
+        for component in root.parts[1:]:
+            next_fd = os.open(component, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+                               dir_fd=directory_fd)
+            if not stat.S_ISDIR(os.fstat(next_fd).st_mode):
+                os.close(next_fd)
+                raise RuntimeError('invalid imported STL snapshot parent')
+            os.close(directory_fd)
+            directory_fd = next_fd
+        file_fd = os.open(digest + '.stl', os.O_RDONLY | os.O_NOFOLLOW, dir_fd=directory_fd)
+    finally:
+        os.close(directory_fd)
+    try:
+        before = os.fstat(file_fd)
+        if (not stat.S_ISREG(before.st_mode) or before.st_nlink != 1
+                or before.st_size > IMPORTED_STL_MAX_BYTES):
+            raise RuntimeError('invalid bounded imported STL snapshot')
+        hasher = hashlib.sha256()
+        total = 0
+        while True:
+            block = os.read(file_fd, min(1024 * 1024, IMPORTED_STL_MAX_BYTES + 1 - total))
+            if not block:
+                break
+            total += len(block)
+            if total > IMPORTED_STL_MAX_BYTES:
+                raise RuntimeError('imported STL snapshot exceeds byte budget')
+            hasher.update(block)
+        after = os.fstat(file_fd)
+        before_state = (before.st_dev, before.st_ino, before.st_size, before.st_nlink,
+                        before.st_mtime_ns, before.st_ctime_ns)
+        after_state = (after.st_dev, after.st_ino, after.st_size, after.st_nlink,
+                       after.st_mtime_ns, after.st_ctime_ns)
+        observed_digest = hasher.hexdigest()
+        if total != before.st_size or before_state != after_state or observed_digest != digest:
+            raise RuntimeError('imported STL snapshot changed or digest differs')
+        return {'object_id': object_id,
+                'source_path': str(root / (digest + '.stl')),
+                'content_sha256': observed_digest, 'bytes': total}
+    finally:
+        os.close(file_fd)
+
+def observe_imported_stl_snapshots(scene, bindings):
+    if not isinstance(bindings, list) or len(bindings) > 8192:
+        raise RuntimeError('invalid imported STL snapshot binding list')
+    objects = scene.get('objects') if isinstance(scene, dict) else None
+    if not isinstance(objects, list):
+        raise RuntimeError('invalid imported STL live scene')
+    observed = []
+    seen = set()
+    for binding in bindings:
+        if not isinstance(binding, dict) or set(binding) != {'object_id', 'archive_path', 'asset_id', 'content_sha256'}:
+            raise RuntimeError('invalid imported STL snapshot binding')
+        object_id = binding['object_id']
+        if object_id in seen:
+            raise RuntimeError('duplicate imported STL snapshot object id')
+        seen.add(object_id)
+        matches = [obj for obj in objects if isinstance(obj, dict) and obj.get('id') == object_id]
+        if len(matches) != 1:
+            raise RuntimeError('imported STL live object identity differs')
+        geometry = matches[0].get('geometry')
+        expected_source_asset = {'archive_path': binding['archive_path'],
+                                 'asset_id': binding['asset_id'],
+                                 'content_sha256': binding['content_sha256']}
+        params = geometry.get('geometry_params') if isinstance(geometry, dict) else None
+        expected_path = IMPORTED_STL_SNAPSHOT_ROOT + '/' + binding['content_sha256'] + '.stl'
+        if (not isinstance(geometry, dict) or geometry.get('geometry_kind') != 'ImportedGeometry'
+                or geometry.get('source_asset') != expected_source_asset
+                or not isinstance(params, dict) or params.get('source') != expected_path):
+            raise RuntimeError('imported STL live source binding differs')
+        observed.append(read_imported_stl_snapshot(binding))
+    return observed
+""".replace('__IMPORTED_STL_SNAPSHOT_ROOT__', repr(_SAVED_AUTHORING_IMPORTED_STL_SNAPSHOT_ROOT)) \
+    .replace('__IMPORTED_STL_MAX_BYTES__', str(_SAVED_AUTHORING_MAX_IMPORTED_STL_BYTES))
+
 _SAVED_AUTHORING_PROBE_SCRIPT = (retained_history.PROBE_FUNCTION + "\n"
-    + generated_authoring.PROBE_FUNCTION + "\n") + r"""import base64,fcntl,hashlib,json,os,pathlib,stat,sys,time,urllib.error,urllib.parse,urllib.request,uuid
+    + generated_authoring.PROBE_FUNCTION + "\n"
+    + _SAVED_AUTHORING_PROBE_API_RESPONSE_HELPERS + "\n"
+    + _SAVED_AUTHORING_PROBE_IMPORTED_STL_HELPERS + "\n"
+    + r"""import base64,fcntl,hashlib,json,os,pathlib,stat,sys,time,urllib.error,urllib.parse,urllib.request,uuid
 MAX=8*1024*1024
 request=json.load(sys.stdin)
 pin=request['checkpoint']; session=pin['session']
+imported_stl_bindings=request.get('imported_stl_bindings',[])
 def canon(value): return json.dumps(value,sort_keys=True,separators=(',',':'),ensure_ascii=False).encode()
 def regular(path):
  path=pathlib.Path(path)
@@ -5126,8 +5497,7 @@ def api(path,payload=None):
  try: response=urllib.request.urlopen(req,timeout=10)
  except urllib.error.HTTPError as error: response=error
  with response:
-  raw=response.read(MAX+1)
-  if len(raw)>MAX: raise RuntimeError('API response exceeded budget')
+  raw=read_api_response(response,path)
   if response.status==204 and not raw: value=None
   else:
    value=json.loads(raw)
@@ -5140,6 +5510,10 @@ if pin.get('generated_source') is not None:
  generated_source_before=observe_generated_source(pin['generated_source'],runtime_service.canonical_paths().state_root/'local-live'/'current')
 for suffix in ('before',):
  for name,path in [('current',''),('status','/status'),('scene','/model/scene')]: rows[name+'_'+suffix]=api('/v2/sessions/current'+path)
+imported_stl_snapshots={}
+if imported_stl_bindings:
+ imported_stl_snapshots['before']=observe_imported_stl_snapshots(
+  rows['scene_before']['body'],imported_stl_bindings)
 for name,path in [('health','/v2/platform/health'),('queue','/v2/platform/compute/queue'),('runtime','/v2/platform/runtime-service'),('commands','/v2/sessions/current/simulation/commands'),('run','/v2/sessions/current/simulation/runs/current'),('preparation','/v2/sessions/current/simulation/preparation'),('mesh','/v2/sessions/current/meshing/builds/current'),('mesh_history','/v2/sessions/current/meshing/builds'),('mesh_manifest','/v2/sessions/current/meshing/meshes/shared-domain/manifest')]: rows[name]=api(path)
 rows['project_open']=api('/v2/persistence/projects/open',{'display_name':pin['archive']['path'].replace('\\','/').split('/')[-1],'archive_base64':request['archive_base64']})
 # Do not retain the archive copy returned by the memory-only project parser.
@@ -5231,18 +5605,25 @@ if 'cancelled_preclaim' in pin or 'historical_preclaim' in pin: extra.update(pre
 for name,path in [('current',''),('status','/status'),('scene','/model/scene')]: rows[name+'_after']=api('/v2/sessions/current'+path)
 if generated_source_before is not None:
  extra['generated_source']={'before':generated_source_before,'after':observe_generated_source(pin['generated_source'],paths.state_root/'local-live'/'current')}
-print(json.dumps({'schema':'fullmag.saved-authoring-restart-probe.v1','resources':rows,'run_directories':run_directories,'retained_run_catalogs':retained_catalogs,'transient_files':transient_files,'reservation_states':reservation_states,'accepted_store_id':store_id,'foreign_reservations_observed':foreign_reservations,'process_receipt':receipt,'provenance_sha256':hashlib.sha256(provenance_raw).hexdigest(),'source_snapshot_sha256':provenance.get('source_snapshot_sha256'),**extra},sort_keys=True))
-"""
+if imported_stl_bindings:
+ imported_stl_snapshots['after']=observe_imported_stl_snapshots(
+  rows['scene_after']['body'],imported_stl_bindings)
+result={'schema':'fullmag.saved-authoring-restart-probe.v1','resources':rows,'run_directories':run_directories,'retained_run_catalogs':retained_catalogs,'transient_files':transient_files,'reservation_states':reservation_states,'accepted_store_id':store_id,'foreign_reservations_observed':foreign_reservations,'process_receipt':receipt,'provenance_sha256':hashlib.sha256(provenance_raw).hexdigest(),'source_snapshot_sha256':provenance.get('source_snapshot_sha256'),**extra}
+if imported_stl_bindings: result['imported_stl_snapshots']=imported_stl_snapshots
+print(json.dumps(result,sort_keys=True))
+""")
 
 
 def _saved_authoring_probe(backend_id, request, raw, scene, certificate):
     cancelled = preclaim_restart.validate_checkpoint(request)
     historical = preclaim_restart.validate_historical_checkpoint(request)
     script = (preclaim_restart.PROBE_FUNCTION if cancelled or historical else '') + _SAVED_AUTHORING_PROBE_SCRIPT
+    imported_stl_bindings = _saved_authoring_imported_stl_bindings(scene)
     result = docker_capture('exec', '-i', '--env',
         'PYTHONPATH=/opt/fullmag:/opt/fullmag/package:/build/workspace/packages/fullmag-py/src',
         backend_id, '/usr/local/bin/python3', '-B', '-c', script,
         data=canonical({'checkpoint': request, 'archive_base64': base64.b64encode(raw).decode('ascii'),
+                        'imported_stl_bindings': imported_stl_bindings,
                         'host_certificate': certificate}), timeout=180)
     observed = _saved_authoring_document(result.stdout)
     _saved_authoring_validate_probe(observed, request, scene)
@@ -6786,9 +7167,10 @@ def _verified_frontend_recovery_image(control, selected):
     from bootstrap_docker_toolchain import read_input, tracked_input_files
     from docker_dev import BASE_CONTEXT_FILES, RUNTIME_IMAGE_CONTEXT_FILES
     from docker_build_control import toolchain_configuration
-    configured = toolchain_configuration(selected, control.identity)
-    build = configured['services']['fem-gpu-toolchain']['build']
     toolchain = control.read('toolchain/verified.json')
+    cuda_target = receipt_dev_cuda_target(toolchain)
+    configured = toolchain_configuration(selected, control.identity, cuda_target=cuda_target)
+    build = configured['services']['fem-gpu-toolchain']['build']
     expected = {'source_inputs': [{'path': p.as_posix(), 'sha256': hashlib.sha256(read_input(selected, p)).hexdigest()}
                                  for p in tracked_input_files(selected)],
                 'build_args': build.get('args', {}), 'target': build['target']}
@@ -7084,6 +7466,8 @@ def _refresh_frontend_services(control, args, previous_root, previous, document,
     inputs.pop('config_sha256', None)
     carry_documents = _frontend_refresh_carry_documents(control, previous_root, document, image)
     bind_reconcile = _frontend_refresh_bind_reconciler(document)
+    # A refused preflight must not displace the still-live verified DEV fence.
+    inspect_services(ids['frontend']); healthy_idle()
     with control.operation('development', inputs) as operation:
         _pin_private_group_storage(control, operation, new_render=False, previous=previous)
         operation['receipt'].update(operator_probe_record)
@@ -7698,6 +8082,38 @@ def _retained_operation(
     resume_recreation_id=None, refresh_frontend_service=False, retire_only=False,
 ):
     """Resume one exact retained start; a frontend-only recovery never restarts the backend."""
+    capture_terminal = getattr(args, "capture_terminal_observation", False)
+    quiesce_api = getattr(args, "quiesce_api", False)
+    from docker_volume_prelaunch_failure_stop import validate_options as prelaunch_failure_options
+    capture_prelaunch_failure, prelaunch_failure_pin = prelaunch_failure_options(
+        args, recreate_services=recreate_services, restart_idle_service=restart_idle_service,
+        stop_after_drain=stop_after_drain, resume_recreation_id=resume_recreation_id,
+        refresh_frontend_service=refresh_frontend_service, retire_only=retire_only,
+    )
+    legacy_mode_args = args
+    if capture_prelaunch_failure:
+        # This is a separate offline-preservation capability. Do not let the
+        # existing all-Succeeded native-terminal validators interpret it.
+        from copy import copy as shallow_copy
+        legacy_mode_args = shallow_copy(args)
+        legacy_mode_args.quiesce_api = False
+        legacy_mode_args.capture_prelaunch_failure = False
+    from docker_volume_native_terminal_stop import validate_options as native_terminal_options
+    capture_native, native_terminal_pin = native_terminal_options(
+        legacy_mode_args, recreate_services=recreate_services, restart_idle_service=restart_idle_service,
+        stop_after_drain=stop_after_drain, resume_recreation_id=resume_recreation_id,
+        refresh_frontend_service=refresh_frontend_service, retire_only=retire_only,
+    )
+    from docker_volume_empty_api_abort import fresh_pin as empty_api_abort_fresh_pin
+    empty_api_abort_pin = empty_api_abort_fresh_pin(
+        legacy_mode_args, recreate_services=recreate_services, restart_idle_service=restart_idle_service,
+        stop_after_drain=stop_after_drain, resume_recreation_id=resume_recreation_id,
+        refresh_frontend_service=refresh_frontend_service, retire_only=retire_only,
+    )
+    if capture_terminal and (not restart_idle_service or not stop_after_drain
+            or getattr(args, "saved_authoring_checkpoint", None)
+            or getattr(args, "saved_authoring_checkpoint_sha256", None)):
+        raise BuildControlError("Terminal observation capture requires a plain managed stop-only operation")
     if retire_only and (not recreate_services or restart_idle_service or stop_after_drain
             or resume_recreation_id is not None or refresh_frontend_service
             or getattr(args, "fresh_state", False) is not True
@@ -7734,6 +8150,18 @@ def _retained_operation(
     selected, layout = _select_source(Path(args.repo_root).resolve(strict=True), args.source_root)
     if selected_before_runtime is not None and selected_before_runtime != selected:
         raise BuildControlError("Selected app checkout changed during helper-source validation")
+    prelaunch_source_binding = None
+    if capture_prelaunch_failure:
+        import docker_volume_prelaunch_failure_stop as prelaunch_stop
+        launcher_module = sys.modules.get("docker_dev")
+        launcher_path = getattr(launcher_module, "__file__", None)
+        if not isinstance(launcher_path, str):
+            raise BuildControlError("Prelaunch-failure controller source cannot be located")
+        prelaunch_source_binding = prelaunch_stop.capture_source_binding({
+            "launcher": launcher_path,
+            "controller": __file__,
+            "recovery_helper": prelaunch_stop.__file__,
+        })
     identity = _compose_identity(layout)
     from docker_build_control import toolchain_configuration
     configured = toolchain_configuration(selected, identity)
@@ -7753,6 +8181,10 @@ def _retained_operation(
     document = control.read(previous_root + "/compose.json")
     if hashlib.sha256(canonical(document)).hexdigest() != args.config_sha256 or document.get("name") != control.project:
         raise BuildControlError("Resume Compose identity/CAS differs")
+    from docker_dev_network import retained_requested_subnet
+    retained_subnet = retained_requested_subnet(document, getattr(args, "network_subnet", None))
+    if retained_subnet is not None:
+        args.network_subnet = retained_subnet
     from docker_volume_cancelled_activation_guard import require_fresh_recreation
     require_fresh_recreation(control, args, previous, recreate_services=recreate_services)
     from docker_volume_preparation_abort import require_fresh_archive
@@ -7792,7 +8224,8 @@ def _retained_operation(
         and not refresh_frontend_service and resume_recreation_id is None
     )
     if (retained_terminal_observation
-            and not getattr(args, "terminal_observation_proof", None)
+            and not (getattr(args, "terminal_observation_proof", None)
+                     or getattr(args, "terminal_observation_stop", None))
             and not terminal_observation_exit
             and not terminal_observation_failed_resume):
         raise BuildControlError(
@@ -7833,7 +8266,11 @@ def _retained_operation(
     observation_sha = getattr(args, "terminal_observation_proof_sha256", None)
     if bool(observation_path) != bool(observation_sha):
         raise BuildControlError("Terminal observation requires paired proof pins")
-    if observation_path and (not recreate_services or getattr(args, "fresh_state", False)
+    observation_stop = getattr(args, "terminal_observation_stop", None)
+    if observation_stop and (not isinstance(observation_stop, str)
+            or not re.fullmatch(r"[0-9a-f]{32}", observation_stop) or observation_path):
+        raise BuildControlError("Terminal observation requires one exact stop attempt or one proof")
+    if (observation_path or observation_stop) and (not recreate_services or getattr(args, "fresh_state", False)
             or args.script is not None or successor_path or resume_recreation_id is not None
             or getattr(args, "completed_recreation_attempt", None)
             or getattr(args, "recovery_authorization", None)):
@@ -7927,7 +8364,9 @@ def _retained_operation(
         certificate = _retained_certificate(state, document)
         environment = document["services"]["backend"]["environment"]
         startup_enabled = _retained_startup_enabled(actual["backend"])
-        if startup_enabled:
+        if startup_enabled and capture_prelaunch_failure:
+            raise BuildControlError("Prelaunch-failure preservation cannot resume startup activation")
+        if startup_enabled and not (capture_terminal or capture_native):
             raise BuildControlError("Startup activation requires dedicated recovery; idle restart will not repeat Solve")
         if _read_cancelled_activation_bytes(control, "active", optional=True) is not None:
             raise BuildControlError("Original accepted activation helper still holds the control lease")
@@ -7944,6 +8383,11 @@ def _retained_operation(
         with control.operation("iteration", {"source_root": str(selected), "image_id": image,
                                             "attempt": args.attempt, "config_sha256": args.config_sha256,
                                             "ui_mode": ui_mode,
+                                            **({"capture_native_terminal": True} if capture_native else {}),
+                                            **({"capture_prelaunch_failure": True} if capture_prelaunch_failure else {}),
+                                            **({"quiesce_api": True} if quiesce_api else {}),
+                                            **({"prelaunch_failure_source_binding": prelaunch_source_binding}
+                                               if prelaunch_source_binding is not None else {}),
                                             **({"saved_authoring_checkpoint_sha256": checkpoint_sha} if saved_authoring else {}),
                                             **operator_probe_record}) as operation:
             operation["receipt"].update(operator_probe_record)
@@ -7954,6 +8398,9 @@ def _retained_operation(
             if actual["frontend"]["State"].get("Running"):
                 docker_capture("stop", "--time", "60", ids["frontend"], timeout=90)
             operation["daemon_pending"] = False
+            api_quiescence_started = False
+            native_terminal_capture = None
+            prelaunch_failure_capture = None
             try:
                 fresh = {service: json.loads(docker_text("inspect", identifier))[0]
                          for service, identifier in ids.items()}
@@ -8004,27 +8451,127 @@ with urllib.request.urlopen('http://127.0.0.1:8081/v2/platform/health',timeout=5
                         raise BuildControlError("Diagnostic process changed before stop archival")
                     control.write_bytes(operation["root"] + "/diagnostic-terminal-process-before.json", diagnostic_process)
                 elif active_session is True:
-                    if startup_enabled:
-                        raise BuildControlError("Backend has an active session; idle restart refused")
-                    terminal_session = _terminal_session_restart_probe(
-                        ids["backend"], allow_prepared=getattr(args, "allow_prepared_session", False),
-                    )
-                    if terminal_session is not None:
-                        control.write(operation["root"] + "/terminal-session-preflight.json", terminal_session)
-                        operation["receipt"]["terminal_session_preflight_sha256"] = hashlib.sha256(
-                            canonical(terminal_session)
-                        ).hexdigest()
+                    if capture_native or capture_prelaunch_failure:
+                        pass  # The separate native capture below authenticates this stale Running case.
                     else:
-                        cancelled_activation = _validate_cancelled_activation_preflight(
-                            control, previous_root, previous, document, selected, args.config_sha256,
-                            ids["backend"], environment, require_quiesced_activation=False,
+                        if startup_enabled and not capture_terminal:
+                            raise BuildControlError("Backend has an active session; idle restart refused")
+                        terminal_session = _terminal_session_restart_probe(
+                            ids["backend"], allow_prepared=getattr(args, "allow_prepared_session", False),
                         )
-                        health = cancelled_activation["probe"]["health"]
-                        operation["receipt"]["accepted_then_cancelled_proof_sha256"] = (
-                            cancelled_activation["proof_sha256"]
-                        )
+                        if terminal_session is not None:
+                            control.write(operation["root"] + "/terminal-session-preflight.json", terminal_session)
+                            operation["receipt"]["terminal_session_preflight_sha256"] = hashlib.sha256(
+                                canonical(terminal_session)
+                            ).hexdigest()
+                        elif capture_terminal:
+                            raise BuildControlError("There is no terminal run to capture")
+                        else:
+                            cancelled_activation = _validate_cancelled_activation_preflight(
+                                control, previous_root, previous, document, selected, args.config_sha256,
+                                ids["backend"], environment, require_quiesced_activation=False,
+                            )
+                            health = cancelled_activation["probe"]["health"]
+                            operation["receipt"]["accepted_then_cancelled_proof_sha256"] = (
+                                cancelled_activation["proof_sha256"]
+                            )
                 elif active_session is not False:
                     raise BuildControlError("Backend has an active or unknown session; idle restart refused")
+                if capture_terminal:
+                    if diagnostic_terminal is not None or active_session is not True:
+                        raise BuildControlError("Terminal observation capture requires a healthy current terminal run")
+                    from docker_volume_terminal_observation import capture_terminal_observation
+                    store_root = storage.validate_path(
+                        state / "runs" / "docker-all" / "session-store", state, "retained accepted session store",
+                    )
+                    native_capture = capture_terminal_observation(ids["backend"], store_root, terminal_session)
+                    if _terminal_session_restart_probe(
+                        ids["backend"], allow_prepared=getattr(args, "allow_prepared_session", False),
+                    ) != terminal_session:
+                        raise BuildControlError("Terminal session changed during native capture")
+                    capture_raw = canonical(native_capture) + b"\n"
+                    control.write_bytes(operation["root"] + "/terminal-native-observation.json", capture_raw)
+                    operation["receipt"]["terminal_native_observation_sha256"] = hashlib.sha256(capture_raw).hexdigest()
+                if capture_prelaunch_failure:
+                    if diagnostic_terminal is not None or active_session is not True:
+                        raise BuildControlError("Prelaunch-failure capture requires the exact active waiting Study")
+                    import docker_volume_prelaunch_failure_stop as prelaunch_stop
+                    prepared = prelaunch_stop.prepare(ids["backend"])
+                    quiescence_services = {service: json.loads(docker_text("inspect", identifier))[0]
+                                           for service, identifier in ids.items()}
+                    for service, observed in quiescence_services.items():
+                        before = fresh[service]
+                        if (any(observed.get(key) != before.get(key)
+                                for key in ("Id", "Image", "Config", "HostConfig", "Mounts"))
+                                or observed.get("State", {}).get("StartedAt") != before.get("State", {}).get("StartedAt")
+                                or observed.get("State", {}).get("Running") is not (service == "backend")):
+                            raise BuildControlError("Prelaunch API quiescence service incarnation changed before intent")
+                    _assert_private_restart_network(quiescence_services, ids, control.project)
+                    prelaunch_stop.assert_source_binding_current(prelaunch_source_binding)
+                    intent = {"schema": prelaunch_stop.QUIESCE_INTENT_SCHEMA,
+                              "prepared": prepared, "services": quiescence_services,
+                              "source_binding": prelaunch_source_binding}
+                    intent_raw = canonical(intent) + b"\n"
+                    control.write_bytes(operation["root"] + "/prelaunch-failure-quiescence-intent.json", intent_raw)
+                    operation["receipt"]["api_quiescence_intent_sha256"] = hashlib.sha256(intent_raw).hexdigest()
+                    api_quiescence_started = True
+                    operation["daemon_pending"] = True
+                    operation["receipt"]["api_quiescence_outcome"] = "intent-published-outcome-unknown"
+                    prelaunch_failure_capture = prelaunch_stop.quiesce_api_and_capture(ids["backend"], intent)
+                    prelaunch_stop.assert_source_binding_current(prelaunch_source_binding)
+                    operation["daemon_pending"] = False
+                    operation["receipt"]["api_quiescence_outcome"] = "api-closed-prelaunch-failure-captured"
+                    capture_raw = canonical(prelaunch_failure_capture) + b"\n"
+                    control.write_bytes(operation["root"] + "/prelaunch-failure-stop.json", capture_raw)
+                    operation["receipt"]["prelaunch_failure_capture_sha256"] = hashlib.sha256(capture_raw).hexdigest()
+                if capture_native:
+                    if diagnostic_terminal is not None or active_session is not True:
+                        raise BuildControlError("Native terminal capture requires a healthy active stale Running session")
+                    from docker_volume_native_terminal_stop import capture as capture_native_terminal
+                    store_root = storage.validate_path(
+                        state / "runs" / "docker-all" / "session-store", state, "native terminal accepted store",
+                    )
+                    if quiesce_api:
+                        from docker_volume_native_terminal_stop import (
+                            QUIESCE_INTENT_SCHEMA, prepare_api_quiescence, quiesce_api_and_capture,
+                        )
+                        prepared = prepare_api_quiescence(ids["backend"], store_root)
+                        quiescence_services = {service: json.loads(docker_text("inspect", identifier))[0]
+                                               for service, identifier in ids.items()}
+                        for service, observed in quiescence_services.items():
+                            before = fresh[service]
+                            if (any(observed.get(key) != before.get(key)
+                                    for key in ("Id", "Image", "Config", "HostConfig", "Mounts"))
+                                    or observed.get("State", {}).get("StartedAt") != before.get("State", {}).get("StartedAt")
+                                    or observed.get("State", {}).get("Running") is not (service == "backend")):
+                                raise BuildControlError("API quiescence service incarnation changed before intent")
+                        _assert_private_restart_network(quiescence_services, ids, control.project)
+                        intent = {"schema": QUIESCE_INTENT_SCHEMA, "prepared": prepared, "services": quiescence_services}
+                        intent_raw = canonical(intent) + b"\n"
+                        control.write_bytes(operation["root"] + "/api-quiescence-intent.json", intent_raw)
+                        operation["receipt"]["api_quiescence_intent_sha256"] = hashlib.sha256(intent_raw).hexdigest()
+                        # A failed/unknown call can have closed the API. Never roll it back or signal again.
+                        api_quiescence_started = True
+                        operation["daemon_pending"] = True
+                        operation["receipt"]["api_quiescence_outcome"] = "intent-published-outcome-unknown"
+                        native_terminal_capture = quiesce_api_and_capture(ids["backend"], store_root, intent)
+                        operation["daemon_pending"] = False
+                        operation["receipt"]["api_quiescence_outcome"] = "api-closed-native-terminal-confirmed"
+                    else:
+                        native_terminal_capture = capture_native_terminal(ids["backend"], store_root)
+                    captured_services = {service: json.loads(docker_text("inspect", identifier))[0]
+                                         for service, identifier in ids.items()}
+                    for service, observed in captured_services.items():
+                        before = fresh[service]
+                        if (any(observed.get(key) != before.get(key)
+                                for key in ("Id", "Image", "Config", "HostConfig", "Mounts"))
+                                or observed.get("State", {}).get("StartedAt") != before.get("State", {}).get("StartedAt")
+                                or observed.get("State", {}).get("Running") is not (service == "backend")):
+                            raise BuildControlError("Native terminal capture service incarnation changed")
+                    _assert_private_restart_network(captured_services, ids, control.project)
+                    capture_raw = canonical(native_terminal_capture) + b"\n"
+                    control.write_bytes(operation["root"] + "/native-terminal-stop.json", capture_raw)
+                    operation["receipt"]["native_terminal_capture_sha256"] = hashlib.sha256(capture_raw).hexdigest()
                 if saved_authoring:
                     # The operator window is explicit; repeat archive, API, ledger and
                     # service pins immediately before crossing the backend stop boundary.
@@ -8037,6 +8584,17 @@ with urllib.request.urlopen('http://127.0.0.1:8081/v2/platform/health',timeout=5
                     _saved_authoring_read_archive(saved_authoring, state)
                     control.write(operation["root"] + "/saved-authoring-final-preflight.json", authoring_probe)
             except Exception as error:
+                if api_quiescence_started:
+                    operation["daemon_pending"] = True
+                    capture_preserved = native_terminal_capture is not None or prelaunch_failure_capture is not None
+                    operation["receipt"].update(
+                        api_quiescence_outcome=("api-closed-retained" if capture_preserved else "outcome-unknown-retained"),
+                        frontend_restore="retained-stopped", api_respawned=False, backend_stop_issued=False,
+                    )
+                    raise BuildControlError(
+                        "API quiescence failed after durable intent; backend/native owner retained, "
+                        "API closed or outcome unknown, frontend retained stopped; no signal replay or API respawn: " + str(error)
+                    ) from error
                 _idle_preflight_failed(
                     error, saved_authoring, operation, ids["frontend"],
                     restore_frontend=actual["frontend"]["State"].get("Running") is True,
@@ -8047,6 +8605,8 @@ with urllib.request.urlopen('http://127.0.0.1:8081/v2/platform/health',timeout=5
             operation["receipt"].update(state="restarting-idle-backend", state_root=str(state),
                 backend_volumes=previous["backend_volumes"], frontend_volume=previous["frontend_volume"])
             operation["daemon_pending"] = True
+            if quiesce_api:
+                operation["receipt"]["backend_stop_issued"] = True
             docker_capture("stop", "--time", "60", ids["backend"], timeout=90)
             stopped = json.loads(docker_text("inspect", ids["backend"]))[0]
             if (stopped.get("Id") != actual["backend"].get("Id")
@@ -8054,10 +8614,16 @@ with urllib.request.urlopen('http://127.0.0.1:8081/v2/platform/health',timeout=5
                     != actual["backend"].get("State", {}).get("StartedAt")
                     or stopped["State"].get("Running") is not False
                     or stopped["State"].get("OOMKilled") is not False
-                    or stopped["State"].get("ExitCode") != (1 if diagnostic_terminal else 0)):
+                    or stopped["State"].get("ExitCode") != (1 if diagnostic_terminal or quiesce_api else 0)):
                 raise BuildControlError("Backend termination is not confirmed graceful; restart withheld")
             from docker_volume_stop_unadmitted import _read_terminal_process_receipt
             drained_raw, drained = _read_terminal_process_receipt(stopped, control)
+            if capture_native:
+                from docker_volume_native_terminal_stop import validate_drain as validate_native_terminal_drain
+                validate_native_terminal_drain(native_terminal_capture, drained)
+            if capture_prelaunch_failure:
+                from docker_volume_prelaunch_failure_stop import validate_drain as validate_prelaunch_failure_drain
+                validate_prelaunch_failure_drain(prelaunch_failure_capture, drained)
             if saved_authoring:
                 _saved_authoring_validate_drain(authoring_probe, drained)
                 _saved_authoring_verify_retained_history(saved_authoring, state)
@@ -8068,6 +8634,18 @@ with urllib.request.urlopen('http://127.0.0.1:8081/v2/platform/health',timeout=5
                 "process_receipt_sha256": hashlib.sha256(drained_raw).hexdigest(),
                 "process_receipt": drained,
             })
+            if capture_prelaunch_failure:
+                from docker_volume_prelaunch_failure_stop import verify_stopped_locked
+                postdrain = verify_stopped_locked(
+                    ids["backend"], stopped.get("Image"),
+                    prelaunch_failure_capture["store_binding"]["run_id"],
+                    prelaunch_failure_capture["store_binding"]["store_id"],
+                    prelaunch_failure_capture["store_binding"],
+                )
+                postdrain_raw = canonical(postdrain) + b"\n"
+                control.write_bytes(operation["root"] + "/prelaunch-failure-postdrain-lock.json", postdrain_raw)
+                operation["receipt"]["prelaunch_failure_postdrain_sha256"] = hashlib.sha256(postdrain_raw).hexdigest()
+                operation["receipt"]["offline_prelaunch_preservation_only"] = True
             _record_service_pins(control, operation, document, ids["backend"], ids["frontend"])
             if stop_after_drain:
                 stopped_services = {service: json.loads(docker_text("inspect", identifier))[0]
@@ -8107,9 +8685,49 @@ with urllib.request.urlopen('http://127.0.0.1:8081/v2/platform/health',timeout=5
     if recreate_services:
         if actual["backend"]["State"]["Running"]:
             raise BuildControlError("Recreation requires the backend stopped; an active build/runtime is never interrupted")
+        prelaunch_failure_archive = None
+        prelaunch_failure_store = None
+        if prelaunch_failure_pin is not None:
+            from docker_volume_prelaunch_failure_stop import validate_fresh as validate_prelaunch_failure_fresh
+            prelaunch_state = storage.validate_path(
+                Path(previous["state_root"]), layout["runtime_root"], "prelaunch-failure retained sessions",
+            )
+            prelaunch_failure_store = storage.validate_path(
+                prelaunch_state / "runs" / "docker-all" / "session-store", prelaunch_state,
+                "prelaunch-failure retained accepted store",
+            )
+            if _read_cancelled_activation_bytes(control, "active", optional=True) is not None:
+                raise BuildControlError("Fresh-state prelaunch archival refuses an active activation owner")
+            prelaunch_failure_archive = validate_prelaunch_failure_fresh(
+                control, stop_attempt=prelaunch_failure_pin[0], stop_sha256=prelaunch_failure_pin[1],
+                source_root=str(selected), attempt=args.attempt, config_sha256=args.config_sha256,
+                actual=actual, store_root=prelaunch_failure_store,
+            )
+        empty_api_abort_archive = None
+        if empty_api_abort_pin is not None:
+            from docker_volume_empty_api_abort import validate_fresh as validate_empty_api_abort_fresh
+            empty_api_abort_archive = validate_empty_api_abort_fresh(
+                control, args, selected, actual, empty_api_abort_pin,
+            )
+        native_terminal_archive = None
+        if native_terminal_pin is not None:
+            from docker_volume_native_terminal_stop import validate_fresh as validate_native_terminal_fresh
+            native_terminal_state = storage.validate_path(
+                Path(previous["state_root"]), layout["runtime_root"], "native terminal retained sessions",
+            )
+            native_terminal_store = storage.validate_path(
+                native_terminal_state / "runs" / "docker-all" / "session-store", native_terminal_state,
+                "native terminal retained accepted store",
+            )
+            native_terminal_archive = validate_native_terminal_fresh(
+                control, stop_attempt=native_terminal_pin[0], stop_sha256=native_terminal_pin[1],
+                source_root=str(selected), attempt=args.attempt, config_sha256=args.config_sha256,
+                actual=actual, store_root=native_terminal_store,
+            )
         pre_activation_stop = None
         if (document["services"]["backend"]["environment"].get("FULLMAG_STARTUP_ENABLED") == "1"
-                and preparation_abort is None):
+                and preparation_abort is None and native_terminal_pin is None
+                and prelaunch_failure_pin is None):
             stop_path = "verification/stop-failed-" + ids["backend"] + ".json"
             stop = control.read(stop_path)
             failure = stop.get("failure_receipt", {}).get("receipt", {})
@@ -8190,7 +8808,11 @@ with urllib.request.urlopen('http://127.0.0.1:8081/v2/platform/health',timeout=5
         # marker and only lets that helper release its own technical lease.
         from docker_volume_activation_reconcile import reconcile_unknown_activation
         offline_attempt = getattr(args, "offline_reconciliation", None)
-        if offline_attempt is not None:
+        if prelaunch_failure_pin is not None:
+            if offline_attempt is not None or getattr(args, "script", None) is not None:
+                raise BuildControlError("Prelaunch failure archival cannot reconcile or replay an old operation")
+            reconciliation = None
+        elif offline_attempt is not None:
             if fresh_state or getattr(args, "script", None) is not None:
                 raise BuildControlError("Offline reconciliation must preserve the session and cannot replay a script")
             from docker_volume_offline_reconcile import validate_for_recreate
@@ -8242,16 +8864,26 @@ with urllib.request.urlopen('http://127.0.0.1:8081/v2/platform/health',timeout=5
                 "accepted_reattach_metadata": accepted_pins,
             }
         terminal_observation = None
-        if observation_path:
+        if observation_path or observation_stop:
             if accepted_reattach_context or reconciliation is not None:
                 raise BuildControlError("Terminal observation cannot combine with accepted run reattach")
-            from docker_volume_terminal_observation import prepare_context
-            terminal_observation = prepare_context(
-                control, proof_relative=observation_path, proof_sha256=observation_sha,
-                store_root=state / "runs" / "docker-all" / "session-store",
-                source_root=str(selected), attempt=args.attempt, config_sha256=args.config_sha256,
-                actual=actual,
+            from docker_volume_terminal_observation import prepare_captured_context, prepare_context
+            store_root = storage.validate_path(
+                state / "runs" / "docker-all" / "session-store", state, "retained accepted session store",
             )
+            observation_context = {
+                "store_root": store_root, "source_root": str(selected), "attempt": args.attempt,
+                "config_sha256": args.config_sha256, "actual": actual,
+            }
+            if observation_stop:
+                terminal_observation = prepare_captured_context(
+                    control, stop_attempt=observation_stop, **observation_context,
+                )
+            else:
+                terminal_observation = prepare_context(
+                    control, proof_relative=observation_path, proof_sha256=observation_sha,
+                    **observation_context,
+                )
         native_recovery_context = dict(recovery_context)
         post_build_generation = None
         # A validated pre-API cancellation pins byte-identical native config;
@@ -8428,6 +9060,10 @@ with urllib.request.urlopen('http://127.0.0.1:8081/v2/platform/health',timeout=5
                 helper_ids.append(helper_document["Id"])
         recreate_inputs = {"attempt": args.attempt, "config_sha256": args.config_sha256,
                            **operator_probe_record}
+        if prelaunch_failure_pin is not None:
+            recreate_inputs["prelaunch_failure_stop"] = {
+                "attempt": prelaunch_failure_pin[0], "terminal_sha256": prelaunch_failure_pin[1],
+            }
         if helper_source_binding is not None:
             recreate_inputs["helper_source"] = helper_source_binding
         if offline_attempt is not None:
@@ -8504,6 +9140,29 @@ with urllib.request.urlopen('http://127.0.0.1:8081/v2/platform/health',timeout=5
                     if service == "backend" and observed.get("State", {}).get("Running"):
                         raise BuildControlError("Fresh session requires the backend stopped")
                     actual[service] = observed
+            if prelaunch_failure_pin is not None:
+                leased_prelaunch_archive = validate_prelaunch_failure_fresh(
+                    control, stop_attempt=prelaunch_failure_pin[0], stop_sha256=prelaunch_failure_pin[1],
+                    source_root=str(selected), attempt=args.attempt, config_sha256=args.config_sha256,
+                    actual=actual, store_root=prelaunch_failure_store,
+                )
+                if leased_prelaunch_archive != prelaunch_failure_archive:
+                    raise BuildControlError("Prelaunch failure offline-preservation proof changed under recreation lease")
+                operation["receipt"]["prelaunch_failure_fresh_archive"] = leased_prelaunch_archive
+            if empty_api_abort_pin is not None:
+                leased_empty_api_abort = validate_empty_api_abort_fresh(control, args, selected, actual, empty_api_abort_pin)
+                if leased_empty_api_abort != empty_api_abort_archive:
+                    raise BuildControlError("Empty API-abort fresh-state proof changed under recreation lease")
+                operation["receipt"]["empty_api_abort_fresh_archive"] = leased_empty_api_abort
+            if native_terminal_pin is not None:
+                leased_native_terminal = validate_native_terminal_fresh(
+                    control, stop_attempt=native_terminal_pin[0], stop_sha256=native_terminal_pin[1],
+                    source_root=str(selected), attempt=args.attempt, config_sha256=args.config_sha256,
+                    actual=actual, store_root=native_terminal_store,
+                )
+                if leased_native_terminal != native_terminal_archive:
+                    raise BuildControlError("Native terminal fresh-state proof changed under recreation lease")
+                operation["receipt"]["native_terminal_fresh_archive"] = leased_native_terminal
             if reconciliation is not None:
                 operation["receipt"]["activation_reconciliation"] = {
                     key: reconciliation[key]
@@ -8569,8 +9228,9 @@ with urllib.request.urlopen('http://127.0.0.1:8081/v2/platform/health',timeout=5
                 if terminal_observation is not None:
                     from docker_volume_terminal_observation import revalidate_context
                     preowner_successor = revalidate_context(
-                        control, terminal_observation, source_root=str(selected),
-                        attempt=args.attempt, config_sha256=args.config_sha256, actual=leased_actual,
+                        control, terminal_observation, store_root=observation_context["store_root"],
+                        source_root=str(selected), attempt=args.attempt,
+                        config_sha256=args.config_sha256, actual=leased_actual,
                     )
                     if preowner_successor is not None:
                         context_key = ("terminal_diagnostic_successor"
@@ -8920,6 +9580,7 @@ with urllib.request.urlopen('http://127.0.0.1:8081/v2/platform/health',timeout=5
         operation["receipt"].update(state="resuming-observation", state_root=str(state),
             backend_volumes=previous["backend_volumes"], frontend_volume=previous["frontend_volume"])
         _record_service_pins(control, operation, document, ids["backend"], ids["frontend"])
+        _pin_private_group_storage(control, operation, new_render=False, previous=previous)
         if terminal_context is not None:
             fresh = {name: json.loads(docker_text("inspect", identifier))[0] for name, identifier in ids.items()}
             _assert_private_restart_network(fresh, ids, control.project)

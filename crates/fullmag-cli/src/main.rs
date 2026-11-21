@@ -1544,6 +1544,7 @@ mod tests {
                 projection_policy: None,
             }),
             fem: Some(FemHintsIR {
+                gpu_bb_preconditioner: None,
                 order: 1,
                 hmax: 2e-9,
                 mesh: None,
@@ -1682,6 +1683,7 @@ mod tests {
             per_domain_quality: Default::default(),
         };
         let plan = BackendPlanIR::Fem(FemPlanIR {
+            gpu_bb_preconditioner: None,
             mesh_name: mesh.mesh_name.clone(),
             mesh_source: None,
             mesh: mesh.clone(),
@@ -1731,6 +1733,7 @@ mod tests {
             solved_antenna_drive_bases: Vec::new(),
             field_drives: Vec::new(),
             field_drive_geometry_masks: Vec::new(),
+            mask_field_term_bases: Vec::new(),
             time_stage: Default::default(),
             current_modules: vec![],
             charge_transport_plans: vec![],

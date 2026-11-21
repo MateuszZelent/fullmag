@@ -103,6 +103,56 @@ def file_link_fixture():
     return value, mapping, [{"path": r"lib\alias.so", "native_entry_kind": "file", "target_kind": "file", "hops": [hop], "final": final}]
 
 
+def junction_proof():
+    value = proof()
+    value["schema"] = isolation.JUNCTION_SCHEMA
+    value["provider_sha256"] = isolation._sha(isolation.WINDOWS_JUNCTION_PROVIDER.encode("utf-8"))
+
+    root_native = native()
+    root_links = [
+        {"path": r".fullmag\inventory", "tag": "0xa0000003", "kind": "directory",
+         "target": r"E:\work\one"},
+        {"path": r"cargo-target", "tag": "0xa0000003", "kind": "directory",
+         "target": r"F:\cache\cargo-target"},
+    ]
+    root_native["candidate"]["descendants"].update(
+        entries=2, directories=2, reparse_points=2, links=root_links)
+    root_native["candidate"]["descendants"]["sha256"] = isolation._sha(b"external-junctions")
+
+    observation = value["before"]
+    observation["native"] = root_native
+    observation["contained_links"] = []
+    observation["external_junctions"] = {}
+    root_mapping = observation["mapping"]
+    for index, target in enumerate((r"E:\work\one", r"F:\cache\cargo-target"), start=1):
+        target_native = native()
+        target_native["candidate"] = native_identity(target, 100 + index, [102 + index, 101 + index, 1],
+                                                      "directory", volume=target[:2])
+        target_native["candidate"]["serial"] = "A1B2C3D" + str(index)
+        for backing in target_native["backings"].values():
+            if backing["serial"] != target_native["candidate"]["serial"]:
+                backing["hardlinks"] = None
+        target_path = "/mnt/" + target[0].lower() + target[2:].replace("\\", "/").replace(" ", "")
+        target_mapping = {
+            "path": target_path,
+            "roundtrip": target,
+            "mount": {"target": "/mnt/" + target[0].lower(), "source": target[:2] + "\\",
+                      "fstype": "9p", "fsroot": "/"},
+            "device": 777 + index, "inode": 800 + index,
+            "mode": stat.S_IFDIR | 0o755, "nlink": 1,
+        }
+        relative = isolation._native_link_relative(root_links[index - 1]["path"])
+        observation["external_junctions"][relative] = {
+            "link": {"device": root_mapping["device"], "inode": 900 + index,
+                     "mode": stat.S_IFLNK | 0o777, "raw_target": target_path},
+            "mapping": target_mapping,
+            "native": target_native,
+            "contained_links": [],
+        }
+    value["after"] = copy.deepcopy(observation)
+    return value
+
+
 class WindowsIsolationTests(unittest.TestCase):
     def check_native(self, value, source=SOURCE):
         return isolation._validate_native(value, source, "Ubuntu")
@@ -646,6 +696,150 @@ class WindowsIsolationTests(unittest.TestCase):
             with self.assertRaises(BuildControlError):
                 isolation.prove_windows_bind_disjoint(SimpleNamespace(), own, foreign, SOURCE, "/home/user/storage")
             archive.assert_not_called()
+
+    def test_two_exact_external_directory_junctions_have_a_separate_proof_schema(self):
+        value = junction_proof()
+        self.assertEqual(isolation.validate_windows_junction_bind_disjoint_proof(
+            value, source=SOURCE, container_id=FOREIGN), value)
+        self.assertEqual(value["schema"], isolation.JUNCTION_SCHEMA)
+        self.assertEqual(set(value["before"]["external_junctions"]),
+                         {".fullmag/inventory", "cargo-target"})
+
+    def test_windows_junction_producer_repeats_context_and_archives_the_new_schema(self):
+        expected = junction_proof()
+        own, foreign = container(BACKEND), container(FOREIGN)
+        inspected = [own, foreign, own, foreign, own, foreign]
+        with mock.patch.object(isolation, "_inspect", side_effect=lambda _identifier: copy.deepcopy(inspected.pop(0))), \
+             mock.patch.object(isolation, "_context", return_value=expected["context"]), \
+             mock.patch.object(isolation, "_junction_observation",
+                               side_effect=[expected["before"], expected["after"]]), \
+             mock.patch.object(isolation, "_engine", return_value=expected["before"]["engine"]), \
+             mock.patch("docker_bind_overlap_probe._archive_foreign_proof") as archive:
+            result = isolation.prove_windows_junction_bind_disjoint(
+                SimpleNamespace(), own, foreign, SOURCE, "/home/user/storage")
+        self.assertEqual(result, expected)
+        archive.assert_called_once_with(mock.ANY, expected)
+
+    def test_external_junction_coverage_rejects_missing_and_extra_entries(self):
+        missing = junction_proof()
+        del missing["before"]["external_junctions"]["cargo-target"]
+        missing["after"] = copy.deepcopy(missing["before"])
+        with self.assertRaisesRegex(BuildControlError, "exact native inventory"):
+            isolation.validate_windows_junction_bind_disjoint_proof(
+                missing, source=SOURCE, container_id=FOREIGN)
+
+        extra = junction_proof()
+        extra["before"]["external_junctions"]["unlisted"] = copy.deepcopy(
+            extra["before"]["external_junctions"]["cargo-target"])
+        extra["after"] = copy.deepcopy(extra["before"])
+        with self.assertRaisesRegex(BuildControlError, "exact native inventory"):
+            isolation.validate_windows_junction_bind_disjoint_proof(
+                extra, source=SOURCE, container_id=FOREIGN)
+
+    def test_external_target_mapping_and_live_link_fields_are_requalified(self):
+        mutations = (
+            ("target", lambda entry: entry["native"]["candidate"].update(path=r"E:\other")),
+            ("roundtrip", lambda entry: entry["mapping"].update(roundtrip=r"G:\work\one")),
+            ("drive", lambda entry: entry["mapping"]["mount"].update(source="G:\\")),
+            ("device", lambda entry: entry["mapping"].update(device=2128)),
+            ("raw_target", lambda entry: entry["link"].update(raw_target="/mnt/e/changed")),
+            ("link_inode", lambda entry: entry["link"].update(inode=0)),
+            ("link_mode", lambda entry: entry["link"].update(mode=stat.S_IFDIR | 0o755)),
+        )
+        for name, mutate in mutations:
+            value = junction_proof()
+            mutate(value["before"]["external_junctions"][".fullmag/inventory"])
+            value["after"] = copy.deepcopy(value["before"])
+            with self.subTest(change=name), self.assertRaises(BuildControlError):
+                isolation.validate_windows_junction_bind_disjoint_proof(
+                    value, source=SOURCE, container_id=FOREIGN)
+
+    def test_target_native_proof_rejects_protected_backing_overlap_and_snapshot_drift(self):
+        overlap = junction_proof()
+        entry = overlap["before"]["external_junctions"][".fullmag/inventory"]
+        protected_parent = r"D:\git\fullmag\wsl\Ubuntu"
+        overlap["before"]["native"]["candidate"]["descendants"]["links"][0]["target"] = protected_parent
+        entry["mapping"].update(path="/mnt/d/git/fullmag/wsl/Ubuntu", roundtrip=protected_parent,
+                                mount={"target": "/mnt/d", "source": "D:\\", "fstype": "9p", "fsroot": "/"})
+        entry["link"]["raw_target"] = "/mnt/d/git/fullmag/wsl/Ubuntu"
+        entry["native"]["candidate"] = native_identity(protected_parent, 12, [11, 1], "directory")
+        entry["native"]["candidate"]["serial"] = "12ABCDEF"
+        entry["native"]["backings"]["wsl-current"]["hardlinks"] = [
+            entry["native"]["backings"]["wsl-current"]["path"]]
+        overlap["after"] = copy.deepcopy(overlap["before"])
+        with self.assertRaisesRegex(BuildControlError, "overlaps a protected"):
+            isolation.validate_windows_junction_bind_disjoint_proof(
+                overlap, source=SOURCE, container_id=FOREIGN)
+
+        drift = junction_proof()
+        drift["before"]["external_junctions"]["cargo-target"]["native"]["settings_sha256"] = "0" * 64
+        drift["after"] = copy.deepcopy(drift["before"])
+        with self.assertRaisesRegex(BuildControlError, "Desktop/settings/backing snapshot"):
+            isolation.validate_windows_junction_bind_disjoint_proof(
+                drift, source=SOURCE, container_id=FOREIGN)
+
+    def test_nested_external_and_unknown_target_links_are_not_skipped(self):
+        nested = junction_proof()
+        target = nested["before"]["external_junctions"][".fullmag/inventory"]["native"]
+        target["candidate"]["descendants"].update(
+            entries=1, directories=1, reparse_points=1,
+            links=[{"path": "nested", "tag": "0xa0000003", "kind": "directory",
+                    "target": r"G:\outside"}])
+        nested["after"] = copy.deepcopy(nested["before"])
+        with self.assertRaisesRegex(BuildControlError, "nested external junction"):
+            isolation.validate_windows_junction_bind_disjoint_proof(
+                nested, source=SOURCE, container_id=FOREIGN)
+
+        unknown = junction_proof()
+        target = unknown["before"]["external_junctions"][".fullmag/inventory"]["native"]
+        target["candidate"]["descendants"]["links"].append(
+            {"path": "unknown", "tag": "0xa0000004", "kind": "directory", "target": r"E:\x"})
+        unknown["after"] = copy.deepcopy(unknown["before"])
+        with self.assertRaisesRegex(BuildControlError, "Unknown or unqualified"):
+            isolation.validate_windows_junction_bind_disjoint_proof(
+                unknown, source=SOURCE, container_id=FOREIGN)
+
+    def test_provider_schema_count_and_before_after_drift_are_refused(self):
+        for field in ("provider_sha256", "schema"):
+            value = junction_proof()
+            value[field] = "0" * 64 if field == "provider_sha256" else isolation.SCHEMA
+            with self.subTest(field=field), self.assertRaises(BuildControlError):
+                isolation.validate_windows_junction_bind_disjoint_proof(
+                    value, source=SOURCE, container_id=FOREIGN)
+
+        too_many = junction_proof()
+        inventory = too_many["before"]["native"]["candidate"]["descendants"]
+        inventory["links"].extend(
+            {"path": "overflow" + str(index), "tag": "0xa0000003", "kind": "directory",
+             "target": r"G:\overflow" + str(index)}
+            for index in range(7))
+        inventory["links"].sort(key=lambda item: item["path"].encode("utf-16-be"))
+        inventory.update(entries=9, directories=9, reparse_points=9)
+        too_many["after"] = copy.deepcopy(too_many["before"])
+        with self.assertRaisesRegex(BuildControlError, "fixed bound"):
+            isolation.validate_windows_junction_bind_disjoint_proof(
+                too_many, source=SOURCE, container_id=FOREIGN)
+
+        drift = junction_proof()
+        drift["after"]["external_junctions"]["cargo-target"]["link"]["inode"] += 1
+        with self.assertRaisesRegex(BuildControlError, "identities drifted"):
+            isolation.validate_windows_junction_bind_disjoint_proof(
+                drift, source=SOURCE, container_id=FOREIGN)
+
+    def test_only_exact_legacy_provider_escape_maps_to_typed_external_junction_signal(self):
+        exact = BuildControlError(
+            "Read-only Windows bind identity command failed: exit_code=1; "
+            "junction target escapes candidate root\r\nAt line:180 char:25\r\n"
+            "+ ... throw 'junction target escapes candidate root'")
+        other = BuildControlError(
+            "Read-only Windows bind identity command failed: exit_code=1; "
+            "unknown descendant reparse tag refused\r\n"
+            "+ throw 'junction target escapes candidate root'")
+        with mock.patch.object(isolation, "_capture", side_effect=[exact, other]):
+            with self.assertRaises(isolation.WindowsExternalJunctionDetected):
+                isolation._native(SOURCE, "Ubuntu")
+            with self.assertRaisesRegex(BuildControlError, "unknown descendant reparse"):
+                isolation._native(SOURCE, "Ubuntu")
 
 
 if __name__ == "__main__":

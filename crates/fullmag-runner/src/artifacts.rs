@@ -1,6 +1,9 @@
 //! Artifact writing: metadata, scalars CSV, field snapshots.
 
-use crate::artifact_pipeline::ArtifactPipelineSummary;
+use crate::artifact_pipeline::{
+    ArtifactPipelineSummary, RegularZarrCompletionTarget, StageAutosaveCompletionTarget,
+    completion_stage_id_for_problem,
+};
 use crate::dispatch::{
     effective_fem_device_request, normalized_runtime_element_markers,
     requested_registry_device_for_fdm, runtime_device, runtime_precision,
@@ -1147,6 +1150,7 @@ fn demag_amg_profile_metadata(
     serde_json::json!({
         "provider": "mfem_hypre_boomeramg",
         "relax_type": stats.demag_amg_relax_type,
+        "coarse_relax_type": stats.demag_amg_coarse_relax_type,
         "coarsening": stats.demag_amg_coarsening,
         "interpolation": stats.demag_amg_interpolation,
         "aggressive_coarsening": stats.demag_amg_aggressive_coarsening,
@@ -1922,9 +1926,58 @@ pub fn fem_p1_magnetization_field_semantics(
     .map_err(|error| error.to_string())
 }
 
+/// Describe magnetic support for the real FEM H1/P1 equilibrium M0 input of
+/// a frequency-response plan. This is intentionally separate from response
+/// field output semantics and uses the same validated marker normalization as
+/// ordinary FEM magnetization.
+pub(crate) fn fem_frequency_response_equilibrium_field_semantics(
+    plan: &fullmag_ir::ExecutionPlanIR,
+) -> Result<Option<FemP1MagnetizationFieldSemantics>, String> {
+    let BackendPlanIR::FemFrequencyResponse(response) = &plan.backend_plan else {
+        return Ok(None);
+    };
+    if response.fe_order != 1 {
+        return Ok(None);
+    }
+    fullmag_ir::validate_mesh_for_execution(&response.mesh)
+        .map_err(|errors| errors.join("; "))?;
+    if response.equilibrium_magnetization.len() != response.mesh.nodes.len() {
+        return Err(format!(
+            "FEM frequency-response equilibrium M0 has {} samples for {} canonical mesh nodes",
+            response.equilibrium_magnetization.len(),
+            response.mesh.nodes.len()
+        ));
+    }
+
+    // Reuse the FEM marker contract without changing the frequency-response
+    // output layout or borrowing its native response-node map.
+    let mut support_plan = fullmag_ir::FemPlanIR::default();
+    support_plan.mesh = response.mesh.clone();
+    support_plan.mesh_build_report = response.mesh_build_report.clone();
+    support_plan.object_segments = response.object_segments.clone();
+    support_plan.mesh_parts = response.mesh_parts.clone();
+    let normalized_markers = normalized_runtime_element_markers(&support_plan)
+        .map_err(|error| error.message)?;
+    let active_node_mask = crate::preview::mesh_quantity_active_mask_with_element_markers(
+        "m",
+        &response.mesh,
+        &normalized_markers,
+    )
+    .ok_or_else(|| "FEM frequency-response equilibrium magnetic support is unavailable".to_string())?;
+    let topology_fingerprint = response.mesh.topology_fingerprint_v6();
+    FemP1MagnetizationFieldSemantics::new(
+        &topology_fingerprint,
+        response.mesh.nodes.len(),
+        active_node_mask,
+    )
+    .map(Some)
+    .map_err(|error| error.to_string())
+}
+
 fn collect_streamed_provenance_files(
     directory: &Path,
     files: &mut Vec<std::path::PathBuf>,
+    include_zarr: bool,
 ) -> std::io::Result<()> {
     if !directory.is_dir() {
         return Ok(());
@@ -1932,7 +1985,10 @@ fn collect_streamed_provenance_files(
     for entry in fs::read_dir(directory)? {
         let path = entry?.path();
         if path.is_dir() {
-            collect_streamed_provenance_files(&path, files)?;
+            if !include_zarr && path.extension().and_then(|value| value.to_str()) == Some("zarr") {
+                continue;
+            }
+            collect_streamed_provenance_files(&path, files, include_zarr)?;
             continue;
         }
         let is_zarr_attributes = path.file_name().and_then(|name| name.to_str()) == Some(".zattrs");
@@ -1945,30 +2001,254 @@ fn collect_streamed_provenance_files(
     Ok(())
 }
 
-/// Complete provenance for field artifacts written by the asynchronous
-/// pipeline before the final execution resolution was known.
+/// Complete legacy JSON field provenance. Zarr stores are finalized only via
+/// the exact paths returned by their writer in `ArtifactPipelineSummary`.
 pub(crate) fn finalize_streamed_artifact_provenance(
     output_dir: &Path,
     resolution: &FinalExecutionResolutionProvenance,
 ) -> std::io::Result<()> {
     let fields_dir = output_dir.join("fields");
     let mut files = Vec::new();
-    collect_streamed_provenance_files(&fields_dir, &mut files)?;
+    collect_streamed_provenance_files(&fields_dir, &mut files, false)?;
     finalize_provenance_files(&files, resolution, false)
 }
 
-/// Finalize metadata emitted by a stage-autosave writer.  Unlike regular
-/// streamed field output, autosave metadata is spread across the root
-/// `.zattrs`, stage manifests, continuous-index metadata, and field metadata;
-/// every JSON metadata object in that tree therefore receives the same final
-/// execution resolution.
+/// Legacy single-stage fixture helper. Production must use the exact writer
+/// identity through `finalize_streamed_stage_artifacts` instead.
+#[cfg(test)]
 pub(crate) fn finalize_stage_autosave_provenance(
     autosave_root: &Path,
     resolution: &FinalExecutionResolutionProvenance,
 ) -> std::io::Result<()> {
     let mut files = Vec::new();
-    collect_streamed_provenance_files(autosave_root, &mut files)?;
+    collect_streamed_provenance_files(autosave_root, &mut files, true)?;
     finalize_provenance_files(&files, resolution, true)
+}
+
+fn expected_artifact_producer_identity(
+    problem: &fullmag_ir::ProblemIR,
+) -> crate::artifact_pipeline::ArtifactProducerIdentity {
+    crate::artifact_pipeline::ArtifactProducerIdentity {
+        problem_name: problem.problem_meta.name.clone(),
+        ir_version: problem.ir_version.clone(),
+        source_hash: problem.problem_meta.source_hash.clone(),
+    }
+}
+
+fn finalize_streamed_stage_artifacts(
+    output_dir: &Path,
+    problem: &fullmag_ir::ProblemIR,
+    summary: &ArtifactPipelineSummary,
+    final_provenance: &serde_json::Value,
+    completion: Option<&fullmag_ir::StageCompletionIR>,
+) -> std::io::Result<()> {
+    if summary.stage_autosave_completion_target.is_none()
+        && summary.regular_zarr_completion_targets.is_empty()
+    {
+        return Ok(());
+    }
+    if summary.output_dir.as_deref() != Some(output_dir)
+        || summary.producer_identity.as_ref() != Some(&expected_artifact_producer_identity(problem))
+    {
+        return Err(Error::new(
+            ErrorKind::InvalidData,
+            "streamed completion summary does not belong to this artifact output and problem",
+        ));
+    }
+    let stage_id = completion_stage_id_for_problem(problem);
+    if let Some(target) = summary.stage_autosave_completion_target.as_ref() {
+        finalize_stage_autosave_completion(
+            summary,
+            target,
+            problem,
+            &stage_id,
+            final_provenance,
+            completion,
+        )?;
+    }
+    finalize_regular_zarr_completion(
+        output_dir,
+        &summary.regular_zarr_completion_targets,
+        problem,
+        &stage_id,
+        final_provenance,
+        completion,
+    )
+}
+
+fn finalize_stage_autosave_completion(
+    summary: &ArtifactPipelineSummary,
+    target: &StageAutosaveCompletionTarget,
+    problem: &fullmag_ir::ProblemIR,
+    stage_id: &str,
+    final_provenance: &serde_json::Value,
+    completion: Option<&fullmag_ir::StageCompletionIR>,
+) -> std::io::Result<()> {
+    let policy = problem
+        .study
+        .sampling()
+        .stage_autosave
+        .as_ref()
+        .filter(|policy| policy.format == fullmag_ir::AutosaveFormatIR::Zarr)
+        .ok_or_else(|| {
+            Error::new(
+                ErrorKind::InvalidData,
+                "Zarr stage completion target has no matching stage-autosave policy",
+            )
+        })?;
+    if target.identity.target != policy.target || target.identity.stage_id != stage_id {
+        return Err(Error::new(
+            ErrorKind::InvalidData,
+            "Zarr stage completion identity does not match the current problem stage",
+        ));
+    }
+    let root = summary.autosave_root.as_deref().ok_or_else(|| {
+        Error::new(
+            ErrorKind::InvalidData,
+            "Zarr stage completion target has no autosave root",
+        )
+    })?;
+    let expected_stage = root
+        .join(format!("{}.zarr", target.identity.target))
+        .join("stages")
+        .join(format!(
+            "stage_{:04}_{}",
+            target.identity.stage_index, target.identity.stage_id
+        ))
+        .join("manifest.json");
+    let expected_artifact = root.join(format!("{}.autosave.json", target.identity.target));
+    if target.stage_manifest_path != expected_stage
+        || target.artifact_manifest_path != expected_artifact
+    {
+        return Err(Error::new(
+            ErrorKind::InvalidData,
+            "Zarr completion paths do not match the exact writer target",
+        ));
+    }
+    crate::autosave_storage::finalize_stage_completion(
+        &target.stage_manifest_path,
+        &target.artifact_manifest_path,
+        &target.identity,
+        final_provenance,
+        completion,
+    )
+}
+
+fn finalize_regular_zarr_completion(
+    output_dir: &Path,
+    targets: &[RegularZarrCompletionTarget],
+    problem: &fullmag_ir::ProblemIR,
+    stage_id: &str,
+    final_provenance: &serde_json::Value,
+    completion: Option<&fullmag_ir::StageCompletionIR>,
+) -> std::io::Result<()> {
+    let expected = expected_artifact_producer_identity(problem);
+    let fields_root = output_dir.join("fields");
+    for target in targets {
+        let store_name = target
+            .attrs_path
+            .parent()
+            .and_then(|path| path.file_name())
+            .and_then(|name| name.to_str());
+        if target.stage_id != stage_id
+            || target.attrs_path.parent().and_then(Path::parent) != Some(fields_root.as_path())
+            || target.attrs_path.file_name().and_then(|name| name.to_str()) != Some(".zattrs")
+            || store_name.map_or(true, |name| !name.ends_with(".zarr"))
+        {
+            return Err(Error::new(
+                ErrorKind::InvalidData,
+                "regular Zarr completion target is outside the current stage's opened field stores",
+            ));
+        }
+        let bytes = fs::read(&target.attrs_path)?;
+        let mut attrs: serde_json::Value = serde_json::from_slice(&bytes).map_err(|error| {
+            Error::new(
+                ErrorKind::InvalidData,
+                format!(
+                    "regular Zarr attributes '{}' are invalid JSON: {error}",
+                    target.attrs_path.display()
+                ),
+            )
+        })?;
+        let object = attrs.as_object_mut().ok_or_else(|| {
+            Error::new(
+                ErrorKind::InvalidData,
+                "regular Zarr attributes must be a JSON object",
+            )
+        })?;
+        let provenance = object
+            .get("provenance")
+            .and_then(serde_json::Value::as_object)
+            .ok_or_else(|| {
+                Error::new(
+                    ErrorKind::InvalidData,
+                    format!(
+                        "regular Zarr attributes '{}' have no producer provenance",
+                        target.attrs_path.display()
+                    ),
+                )
+            })?;
+        for (key, value) in [
+            ("problem_name", serde_json::json!(&expected.problem_name)),
+            ("ir_version", serde_json::json!(&expected.ir_version)),
+            (
+                "source_hash",
+                serde_json::to_value(&expected.source_hash).expect("source hash serializes"),
+            ),
+        ] {
+            if provenance.get(key) != Some(&value) {
+                return Err(Error::new(
+                    ErrorKind::InvalidData,
+                    format!(
+                        "regular Zarr attributes '{}' have a different producer {key}",
+                        target.attrs_path.display()
+                    ),
+                ));
+            }
+        }
+        let producer = serde_json::json!({
+            "problem_name": final_provenance.get("problem_name"),
+            "ir_version": final_provenance.get("ir_version"),
+            "source_hash": final_provenance.get("source_hash"),
+            "build_identity": final_provenance.get("build_identity"),
+            "execution_engine": final_provenance.get("execution_engine"),
+        });
+        crate::autosave_storage::merge_final_provenance(
+            &mut attrs,
+            final_provenance,
+            &target.attrs_path,
+        )?;
+        let object = attrs
+            .as_object_mut()
+            .expect("attributes object checked above");
+        if let Some(completion) = completion {
+            object.insert(
+                "completion".into(),
+                serde_json::to_value(completion).map_err(|error| {
+                    Error::new(
+                        ErrorKind::InvalidData,
+                        format!("stage completion cannot be serialized: {error}"),
+                    )
+                })?,
+            );
+        } else {
+            object.remove("completion");
+        }
+        object.insert(
+            "completion_stage_identity".into(),
+            serde_json::json!({"stage_id": stage_id, "producer": producer}),
+        );
+        crate::autosave_zarr::write_json_atomic(&target.attrs_path, &attrs).map_err(|error| {
+            Error::new(
+                ErrorKind::Other,
+                format!(
+                    "failed to update regular Zarr attributes '{}': {error}",
+                    target.attrs_path.display()
+                ),
+            )
+        })?;
+    }
+    Ok(())
 }
 
 fn finalize_provenance_files(
@@ -2443,10 +2723,15 @@ pub(crate) fn write_artifacts(
     field_context.execution_resolution = Some(execution_resolution.clone());
     fs::create_dir_all(output_dir)?;
     finalize_streamed_artifact_provenance(output_dir, &execution_resolution)?;
-    if let Some(autosave_root) = streamed.and_then(|summary| summary.autosave_root.as_deref()) {
-        if autosave_root != output_dir {
-            finalize_stage_autosave_provenance(autosave_root, &execution_resolution)?;
-        }
+    if let Some(summary) = streamed {
+        let final_provenance = artifact_provenance_json(&field_context, &execution_provenance);
+        finalize_streamed_stage_artifacts(
+            output_dir,
+            problem,
+            summary,
+            &final_provenance,
+            executed.result.completion.as_ref(),
+        )?;
     }
     write_sampling_resolution_artifact(output_dir, sampling_resolution)?;
     let physics_graph_artifact = physics_graph_provenance_artifact(problem, plan, Some(executed))?;
@@ -2529,20 +2814,29 @@ pub(crate) fn write_artifacts(
         )?;
     }
 
+    let initial_time = if matches!(problem.study, fullmag_ir::StudyIR::TimeEvolution { .. }) {
+        match &plan.backend_plan {
+            BackendPlanIR::Fdm(plan) => plan.time_stage.start_time_s,
+            BackendPlanIR::Fem(plan) => plan.time_stage.start_time_s,
+            _ => 0.0,
+        }
+    } else {
+        0.0
+    };
     write_field_file(
         &output_dir.join("m_initial.json"),
         &field_context,
         &execution_provenance,
         "m",
         0,
-        0.0,
+        initial_time,
         0.0,
         &executed.initial_magnetization,
     )?;
 
     let mut final_stats = accepted_steps.last().cloned().unwrap_or(StepStats {
         step: 0,
-        time: 0.0,
+        time: initial_time,
         dt: 0.0,
         e_ex: 0.0,
         e_demag: 0.0,
@@ -5904,6 +6198,409 @@ pub(crate) fn field_unit(observable: &str) -> &'static str {
 mod tests {
     use super::*;
 
+    fn stage_completion_fixture(
+        root: &Path,
+        autosave_root: &Path,
+        stage_id: &str,
+        device: &str,
+        completion: Option<fullmag_ir::StageCompletionIR>,
+    ) -> (
+        fullmag_ir::ProblemIR,
+        ExecutionPlanIR,
+        ArtifactPipelineSummary,
+        ExecutedRun,
+        PathBuf,
+    ) {
+        let mut problem = fdm_execution_problem(device, ExecutionMode::Strict);
+        problem.problem_meta.source_hash = Some(format!("source-{device}"));
+        problem
+            .problem_meta
+            .runtime_metadata
+            .insert("active_stage_id".into(), serde_json::json!(stage_id));
+        problem.study.sampling_mut().stage_autosave = Some(fullmag_ir::StageAutosaveIR {
+            kind: "stage_autosave".into(),
+            target: "state".into(),
+            layout: fullmag_ir::AutosaveLayoutIR::Separate,
+            format: fullmag_ir::AutosaveFormatIR::Zarr,
+            table: None,
+            fields: vec![fullmag_ir::FieldAutosaveIR {
+                kind: "field_autosave".into(),
+                quantity: "m".into(),
+                every_seconds: None,
+                sample_period_policy: None,
+                every_steps: Some(1),
+            }],
+        });
+        let plan = test_execution_plan(None);
+        let output_dir = root.join(format!("run-{stage_id}"));
+        let provenance = ExecutionProvenance {
+            execution_engine: if device == "gpu" {
+                "fdm_gpu_native"
+            } else {
+                "fdm_cpu_reference"
+            }
+            .into(),
+            precision: "double".into(),
+            ..ExecutionProvenance::default()
+        };
+        let mut pipeline = crate::artifact_pipeline::ArtifactPipeline::start_for_problem_and_plan_with_autosave_root(
+            &problem, &plan, output_dir.clone(), autosave_root.to_path_buf(),
+            build_field_context(&problem, &plan), 2,
+        ).expect("start stage-autosave pipeline");
+        let mut recorder = crate::artifact_pipeline::ArtifactRecorder::streaming(
+            provenance.clone(),
+            pipeline.sender(),
+        );
+        recorder
+            .record_field_snapshot(
+                crate::types::FieldSnapshot::new(
+                    "m",
+                    1,
+                    1.0e-13,
+                    1.0e-13,
+                    3,
+                    "xyz",
+                    "cell",
+                    "full",
+                    1,
+                    vec![[1.0, 0.0, 0.0]; 8].into_iter().flatten().collect(),
+                )
+                .expect("valid magnetization snapshot"),
+            )
+            .expect("enqueue field snapshot");
+        let _ = recorder.finish();
+        let summary = pipeline.finish().expect("drain stage-autosave writer");
+        let executed = ExecutedRun {
+            result: RunResult {
+                status: RunStatus::Completed,
+                steps: vec![StepStats {
+                    step: 1,
+                    max_torque_Apm: 4.0e-4,
+                    ..StepStats::default()
+                }],
+                final_magnetization: vec![[1.0, 0.0, 0.0]; 8],
+                completion,
+            },
+            initial_magnetization: vec![[1.0, 0.0, 0.0]; 8],
+            field_snapshots: Vec::new(),
+            field_snapshot_count: 0,
+            auxiliary_artifacts: Vec::new(),
+            provenance,
+        };
+        (problem, plan, summary, executed, output_dir)
+    }
+
+    fn assert_owner_bound_stage_finalization(separate_root: bool) {
+        let root =
+            std::env::temp_dir().join(format!("fullmag-stage-owner-{}", uuid::Uuid::new_v4()));
+        // Same-root mode deliberately reuses the output root across stages.
+        let autosave_root = if separate_root {
+            root.join("autosave")
+        } else {
+            root.join("run-relax")
+        };
+        let torque = fullmag_ir::StageCompletionIR {
+            status: "completed".into(),
+            converged: true,
+            reason: Some(fullmag_ir::StageStopReason::Torque),
+            metric: Some(fullmag_ir::StageMetricKind::MaxTorqueApm),
+            metric_name: Some("max_torque_apm".into()),
+            metric_value: Some(4.0e-4),
+            threshold: Some(1.0e-3),
+        };
+        let max_steps = fullmag_ir::StageCompletionIR {
+            status: "completed".into(),
+            converged: false,
+            reason: Some(fullmag_ir::StageStopReason::MaxSteps),
+            metric: Some(fullmag_ir::StageMetricKind::Steps),
+            metric_name: Some("step".into()),
+            metric_value: Some(8.0),
+            threshold: Some(8.0),
+        };
+        // Repeating the authored ID exercises the actual writer-assigned index.
+        let cases = [
+            ("cpu", Some(torque)),
+            ("gpu", Some(max_steps)),
+            ("cpu", None),
+        ];
+        let mut retained_stage_files: Vec<(PathBuf, Vec<u8>)> = Vec::new();
+        let mut retained_entries = Vec::new();
+        for (index, (device, completion)) in cases.iter().enumerate() {
+            let (problem, plan, summary, executed, output) = stage_completion_fixture(
+                &root,
+                &autosave_root,
+                "relax",
+                device,
+                completion.clone(),
+            );
+            let target = summary.stage_autosave_completion_target.as_ref().unwrap();
+            assert_eq!(
+                (
+                    target.identity.target.as_str(),
+                    target.identity.stage_id.as_str(),
+                    target.identity.stage_index
+                ),
+                ("state", "relax", index as u64)
+            );
+            assert_eq!(output == autosave_root, !separate_root);
+            let stage_root = autosave_root
+                .join("state.zarr/stages")
+                .join(format!("stage_{index:04}_relax"));
+            let payloads = [
+                stage_root.join("fields/m/0.0"),
+                stage_root.join("fields/m/.zarray"),
+            ];
+            let before: Vec<_> = payloads
+                .iter()
+                .map(|path| (path.clone(), fs::read(path).unwrap()))
+                .collect();
+            let mut wrong = summary.clone();
+            wrong
+                .stage_autosave_completion_target
+                .as_mut()
+                .unwrap()
+                .identity
+                .stage_index += 1;
+            let manifest_before = fs::read(&target.stage_manifest_path).unwrap();
+            let aggregate_before = fs::read(&target.artifact_manifest_path).unwrap();
+            let mut context = build_field_context(&problem, &plan);
+            context.execution_resolution = Some(
+                final_execution_resolution_provenance(&problem, &plan, &executed.provenance)
+                    .unwrap(),
+            );
+            let final_provenance = artifact_provenance_json(&context, &executed.provenance);
+            assert!(
+                finalize_streamed_stage_artifacts(
+                    &output,
+                    &problem,
+                    &wrong,
+                    &final_provenance,
+                    completion.as_ref()
+                )
+                .is_err()
+            );
+            assert_eq!(
+                fs::read(&target.stage_manifest_path).unwrap(),
+                manifest_before
+            );
+            assert_eq!(
+                fs::read(&target.artifact_manifest_path).unwrap(),
+                aggregate_before
+            );
+            write_artifacts(&output, &problem, &plan, &executed, Some(&summary))
+                .expect("write artifacts");
+            for (path, bytes) in &retained_stage_files {
+                assert_eq!(&fs::read(path).unwrap(), bytes);
+            }
+            for (path, bytes) in &before {
+                assert_eq!(&fs::read(path).unwrap(), bytes);
+            }
+            let artifact: serde_json::Value = serde_json::from_slice(
+                &fs::read(autosave_root.join("state.autosave.json")).unwrap(),
+            )
+            .unwrap();
+            for (old_index, entry) in retained_entries.iter().enumerate() {
+                assert_eq!(&artifact["stages"][old_index], entry);
+            }
+            let stage: serde_json::Value =
+                serde_json::from_slice(&fs::read(&target.stage_manifest_path).unwrap()).unwrap();
+            let field_path = stage_root.join("fields/m/.zattrs");
+            let field: serde_json::Value =
+                serde_json::from_slice(&fs::read(&field_path).unwrap()).unwrap();
+            assert_eq!(stage["provenance"], artifact["stages"][index]["provenance"]);
+            assert_eq!(field["provenance"], stage["provenance"]);
+            assert_eq!(
+                stage["provenance"]["execution_resolution"]["resolved_execution"]["device"],
+                *device
+            );
+            assert_eq!(
+                stage["provenance"]["source_hash"],
+                format!("source-{device}")
+            );
+            assert_eq!(
+                stage["completion"],
+                serde_json::to_value(completion).unwrap()
+            );
+            assert_eq!(field["completion"], stage["completion"]);
+            assert_eq!(field["completion_stage_identity"]["stage_index"], index);
+            assert_eq!(stage["complete"], true);
+            if completion.is_none() {
+                assert!(stage.get("completion").is_none());
+            }
+            let root_attrs: serde_json::Value = serde_json::from_slice(
+                &fs::read(autosave_root.join("state.zarr/.zattrs")).unwrap(),
+            )
+            .unwrap();
+            assert!(root_attrs.get("completion").is_none());
+            retained_entries.push(artifact["stages"][index].clone());
+            retained_stage_files.extend(before);
+            retained_stage_files.push((
+                target.stage_manifest_path.clone(),
+                fs::read(&target.stage_manifest_path).unwrap(),
+            ));
+            retained_stage_files.push((field_path.clone(), fs::read(field_path).unwrap()));
+        }
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn write_artifacts_finalizes_stage_completion_in_separate_zarr_autosave() {
+        assert_owner_bound_stage_finalization(true);
+    }
+
+    #[test]
+    fn write_artifacts_finalizes_stage_completion_in_same_root_zarr_autosave() {
+        assert_owner_bound_stage_finalization(false);
+    }
+
+    #[test]
+    fn regular_zarr_completion_updates_only_exact_attrs_and_preserves_payloads() {
+        let root = std::env::temp_dir().join(format!(
+            "fullmag-regular-zarr-completion-{}",
+            uuid::Uuid::new_v4()
+        ));
+        let mut problem = fullmag_ir::ProblemIR::bootstrap_example();
+        problem.problem_meta.name = "producer-fixture".into();
+        problem.problem_meta.source_hash = Some("source-fixture".into());
+        problem
+            .problem_meta
+            .runtime_metadata
+            .insert("active_stage_id".into(), serde_json::json!("relax"));
+        let attrs_path = root.join("fields/m.zarr/.zattrs");
+        fs::create_dir_all(attrs_path.parent().unwrap()).unwrap();
+        let resolution = serde_json::json!({"resolution_mode":"exact"});
+        let attrs = serde_json::json!({"observable":"m", "provenance": {
+            "problem_name":"producer-fixture", "ir_version":problem.ir_version.clone(),
+            "source_hash":"source-fixture", "build_identity":{"git_commit":"fixture"},
+            "execution_engine":"fdm_cpu_reference", "execution_resolution":resolution,
+        }});
+        fs::write(&attrs_path, serde_json::to_vec_pretty(&attrs).unwrap()).unwrap();
+        let payloads = [
+            (root.join("fields/m.zarr/.zarray"), b"zarray".as_slice()),
+            (
+                root.join("fields/m.zarr/samples.csv"),
+                b"sample,step\n0,1\n".as_slice(),
+            ),
+            (root.join("fields/m.zarr/0.0.0"), b"chunk".as_slice()),
+        ];
+        for (path, bytes) in &payloads {
+            fs::write(path, *bytes).unwrap();
+        }
+        let payloads_before: Vec<_> = payloads
+            .iter()
+            .map(|(path, _)| (path.clone(), fs::read(path).unwrap()))
+            .collect();
+        let foreign_path = root.join("fields/unopened.zarr/.zattrs");
+        fs::create_dir_all(foreign_path.parent().unwrap()).unwrap();
+        fs::write(&foreign_path, b"{\"foreign\":true}").unwrap();
+        let foreign_before = fs::read(&foreign_path).unwrap();
+        let target = RegularZarrCompletionTarget {
+            stage_id: "relax".into(),
+            attrs_path: attrs_path.clone(),
+        };
+        let completion = fullmag_ir::StageCompletionIR {
+            status: "completed".into(),
+            converged: true,
+            reason: Some(fullmag_ir::StageStopReason::Torque),
+            metric: Some(fullmag_ir::StageMetricKind::MaxTorqueApm),
+            metric_name: Some("max_torque_apm".into()),
+            metric_value: Some(2.0e-4),
+            threshold: Some(1.0e-3),
+        };
+        let final_provenance = attrs["provenance"].clone();
+        let before_wrong_identity = fs::read(&attrs_path).unwrap();
+        let wrong = RegularZarrCompletionTarget {
+            stage_id: "other".into(),
+            attrs_path: attrs_path.clone(),
+        };
+        assert!(
+            finalize_regular_zarr_completion(
+                &root,
+                &[wrong],
+                &problem,
+                "relax",
+                &final_provenance,
+                Some(&completion)
+            )
+            .is_err()
+        );
+        assert_eq!(fs::read(&attrs_path).unwrap(), before_wrong_identity);
+
+        finalize_regular_zarr_completion(
+            &root,
+            &[target.clone()],
+            &problem,
+            "relax",
+            &final_provenance,
+            Some(&completion),
+        )
+        .unwrap();
+        let written: serde_json::Value =
+            serde_json::from_slice(&fs::read(&attrs_path).unwrap()).unwrap();
+        assert_eq!(
+            written["completion"],
+            serde_json::to_value(&completion).unwrap()
+        );
+        assert_eq!(written["completion_stage_identity"]["stage_id"], "relax");
+        assert_eq!(
+            written["completion_stage_identity"]["producer"]["problem_name"],
+            "producer-fixture"
+        );
+        assert_eq!(written["provenance"]["execution_resolution"], resolution);
+        finalize_regular_zarr_completion(
+            &root,
+            &[target],
+            &problem,
+            "relax",
+            &final_provenance,
+            None,
+        )
+        .unwrap();
+        let without_completion: serde_json::Value =
+            serde_json::from_slice(&fs::read(&attrs_path).unwrap()).unwrap();
+        assert!(without_completion.get("completion").is_none());
+        assert_eq!(without_completion["provenance"], final_provenance);
+        for (path, before) in payloads_before {
+            assert_eq!(fs::read(path).unwrap(), before);
+        }
+        assert_eq!(fs::read(&foreign_path).unwrap(), foreign_before);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn resumed_run_artifacts_preserve_stage_start_without_accepted_steps() {
+        let problem = fullmag_ir::ProblemIR::bootstrap_example();
+        for mut plan in [test_execution_plan(None), test_fem_execution_plan()] {
+            let (count, engine) = match &mut plan.backend_plan {
+                BackendPlanIR::Fdm(fdm) => {
+                    fdm.time_stage.start_time_s = 2e-12;
+                    (fdm.initial_magnetization.len(), "cpu_reference")
+                }
+                BackendPlanIR::Fem(fem) => {
+                    fem.time_stage.start_time_s = 2e-12;
+                    (fem.mesh.nodes.len(), "fem_cpu_native")
+                }
+                _ => unreachable!(),
+            };
+            let output_dir = std::env::temp_dir().join(format!("fullmag-stage-clock-{engine}-{}-{}",
+                std::process::id(), SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos()));
+            let executed = ExecutedRun {
+                result: RunResult {status: RunStatus::Completed, steps: Vec::new(),
+                    final_magnetization: vec![[1.0,0.0,0.0]; count], completion: None},
+                initial_magnetization: vec![[1.0,0.0,0.0]; count], field_snapshots: Vec::new(),
+                field_snapshot_count: 0, auxiliary_artifacts: Vec::new(),
+                provenance: ExecutionProvenance {execution_engine: engine.into(), precision: "double".into(), ..Default::default()},
+            };
+            write_artifacts(&output_dir, &problem, &plan, &executed, None).unwrap();
+            for name in ["m_initial.json", "m_final.json"] {
+                let payload: serde_json::Value = serde_json::from_slice(&fs::read(output_dir.join(name)).unwrap()).unwrap();
+                assert_eq!(payload["time"], serde_json::json!(2e-12));
+                assert_eq!(payload["step"], 0);
+            }
+            fs::remove_dir_all(output_dir).unwrap();
+        }
+    }
+
     #[test]
     fn scalar_csv_publishes_drive_energy_between_external_and_anisotropy() {
         let mut stats = StepStats::default();
@@ -6489,6 +7186,7 @@ mod tests {
     };
     use std::collections::HashMap;
     use std::fs;
+    use std::path::PathBuf;
     use std::sync::Mutex;
     use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -7714,6 +8412,7 @@ mod tests {
                 material_field_plans: Vec::new(),
             },
             backend_plan: BackendPlanIR::Fem(FemPlanIR {
+                gpu_bb_preconditioner: None,
                 mesh_name: "unit_tet".to_string(),
                 mesh_source: Some("meshes/unit_tet.msh".to_string()),
                 mesh: MeshIR {
@@ -7787,6 +8486,7 @@ mod tests {
                 solved_antenna_drive_bases: Vec::new(),
                 field_drives: Vec::new(),
                 field_drive_geometry_masks: Vec::new(),
+                mask_field_term_bases: Vec::new(),
                 time_stage: Default::default(),
                 current_modules: Vec::new(),
                 charge_transport_plans: Vec::new(),
@@ -7984,6 +8684,7 @@ mod tests {
                 dispersion_validation: None,
                 k0_kittel_validation: None,
                 solver_policy: None,
+                magnetostatic_bc: Default::default(),
             }),
             output_plan: OutputPlanIR {
                 outputs: Vec::new(),
@@ -9719,6 +10420,7 @@ mod tests {
             realization: Some(fullmag_ir::SlonczewskiRealizationIR::ThinLayerHomogenized {
                 realization_version: "slonczewski_thin_layer_homogenized.v1".to_string(),
             }),
+            time_expression: None,
         }];
         let mut plan = test_fem_execution_plan();
         plan.common.execution_mode = ExecutionMode::Extended;
@@ -9872,6 +10574,7 @@ mod tests {
             field_snapshot_writer_wall_time_ns: 80,
             native_field_snapshot_writer_wall_time_ns: 0,
             autosave_root: None,
+            ..ArtifactPipelineSummary::default()
         };
 
         write_artifacts(&output_dir, &problem, &plan, &executed, Some(&streamed))
@@ -10049,6 +10752,7 @@ mod tests {
                 demag_solver_apply_wall_time_ns: 19,
                 demag_solver_setup_reused: true,
                 demag_amg_relax_type: 6,
+                demag_amg_coarse_relax_type: Some(18),
                 demag_amg_coarsening: 10,
                 demag_amg_interpolation: 7,
                 demag_amg_aggressive_coarsening: 2,
@@ -10081,6 +10785,7 @@ mod tests {
         assert_eq!(metadata["policy_source"], "resolved_default");
         assert_eq!(metadata["amg_profile"]["provider"], "mfem_hypre_boomeramg");
         assert_eq!(metadata["amg_profile"]["relax_type"], 6);
+        assert_eq!(metadata["amg_profile"]["coarse_relax_type"], 18);
         assert_eq!(metadata["amg_profile"]["coarsening"], 10);
         assert_eq!(metadata["amg_profile"]["interpolation"], 7);
         assert_eq!(metadata["amg_profile"]["aggressive_coarsening"], 2);
@@ -10103,6 +10808,7 @@ mod tests {
         let unset = demag_amg_profile_metadata("AMG", Some(&StepStats::default()));
         assert_eq!(unset["strength_threshold"], serde_json::Value::Null);
         assert_eq!(unset["max_levels"], serde_json::Value::Null);
+        assert_eq!(unset["coarse_relax_type"], serde_json::Value::Null);
         assert_eq!(metadata["requested_linear_solver"], serde_json::Value::Null);
         assert_eq!(
             metadata["requested_preconditioner"],

@@ -1,13 +1,6 @@
 "use client";
 
-import {
-  createRoot,
-  extend,
-  type CanvasProps,
-  type Catalogue,
-  type RootState,
-  type Size,
-} from "@react-three/fiber";
+import { createRoot, extend, type CanvasProps, type RootState } from "@react-three/fiber";
 import * as React from "react";
 import {
   forwardRef,
@@ -18,25 +11,67 @@ import {
   useRef,
   useState,
 } from "react";
-import * as THREE from "three";
+import {
+  AmbientLight,
+  BoxGeometry,
+  ConeGeometry,
+  CylinderGeometry,
+  DirectionalLight,
+  Group,
+  HemisphereLight,
+  InstancedMesh,
+  LineBasicMaterial,
+  LineSegments,
+  Mesh,
+  MeshBasicMaterial,
+  MeshLambertMaterial,
+  MeshMatcapMaterial,
+  MeshStandardMaterial,
+  OrthographicCamera,
+  PlaneGeometry,
+  Points,
+  PointsMaterial,
+  PerspectiveCamera,
+  RingGeometry,
+  SphereGeometry,
+  Sprite,
+  SpriteMaterial,
+  TorusGeometry,
+} from "three";
 
 import { recordVisualizationDebugCanvasLifecycle } from "@/kernel/performance/visualizationDebugPerformanceProbe";
 import { Viewport3DInvalidationProvider } from "./viewport3dBatchedInvalidate";
+import { type Viewport3DCanvasSize, createViewport3DCanvasLifecycleController, sanitizeViewport3DCanvasMeasure } from "./Viewport3DCanvas.model";
 
 type Viewport3DCanvasProps = Omit<CanvasProps, "resize" | "size">;
 
-type Viewport3DCanvasSize = Pick<Size, "height" | "left" | "top" | "width">;
-
-export function sanitizeViewport3DCanvasMeasure(
-  rect: Pick<DOMRectReadOnly, "height" | "width">,
-): Viewport3DCanvasSize {
-  return {
-    height: rect.height,
-    left: 0,
-    top: 0,
-    width: rect.width,
-  };
-}
+extend({
+  AmbientLight,
+  BoxGeometry,
+  ConeGeometry,
+  CylinderGeometry,
+  DirectionalLight,
+  Group,
+  HemisphereLight,
+  InstancedMesh,
+  LineBasicMaterial,
+  LineSegments,
+  Mesh,
+  MeshBasicMaterial,
+  MeshLambertMaterial,
+  MeshMatcapMaterial,
+  MeshStandardMaterial,
+  OrthographicCamera,
+  PlaneGeometry,
+  Points,
+  PointsMaterial,
+  PerspectiveCamera,
+  RingGeometry,
+  SphereGeometry,
+  Sprite,
+  SpriteMaterial,
+  TorusGeometry,
+});
 
 function sameViewport3DCanvasSize(
   previous: Viewport3DCanvasSize | null,
@@ -48,98 +83,6 @@ function sameViewport3DCanvasSize(
     previous.top === next.top &&
     previous.width === next.width
   );
-}
-
-export interface Viewport3DCanvasLifecycleSnapshot {
-  activeRoots: number;
-  configureCompleted: number;
-  configureStarted: number;
-  contextCreated: number;
-  contextDisposed: number;
-  eventConnections: number;
-  eventDisconnections: number;
-  rootsCreated: number;
-  rootsUnmounted: number;
-}
-
-export function createViewport3DCanvasLifecycleController() {
-  let activeRoot = false;
-  let configureGeneration = 0;
-  let contextActive = false;
-  let eventsConnected = false;
-  const snapshot: Viewport3DCanvasLifecycleSnapshot = {
-    activeRoots: 0,
-    configureCompleted: 0,
-    configureStarted: 0,
-    contextCreated: 0,
-    contextDisposed: 0,
-    eventConnections: 0,
-    eventDisconnections: 0,
-    rootsCreated: 0,
-    rootsUnmounted: 0,
-  };
-
-  return {
-    configureCompleted(generation: number): boolean {
-      if (generation !== configureGeneration || !activeRoot) return false;
-      snapshot.configureCompleted += 1;
-      return true;
-    },
-    contextCreated(): boolean {
-      if (contextActive) return false;
-      contextActive = true;
-      snapshot.contextCreated += 1;
-      return true;
-    },
-    eventsConnected(): boolean {
-      if (eventsConnected) return false;
-      eventsConnected = true;
-      snapshot.eventConnections += 1;
-      return true;
-    },
-    getSnapshot(): Viewport3DCanvasLifecycleSnapshot {
-      return { ...snapshot };
-    },
-    isCurrentConfigure(generation: number): boolean {
-      return activeRoot && generation === configureGeneration;
-    },
-    mountRoot(): void {
-      if (activeRoot) {
-        throw new Error("Viewport3DCanvas root is already active");
-      }
-      activeRoot = true;
-      snapshot.activeRoots = 1;
-      snapshot.rootsCreated += 1;
-    },
-    startConfigure(): number {
-      if (!activeRoot) {
-        throw new Error("Viewport3DCanvas root must mount before configure");
-      }
-      configureGeneration += 1;
-      snapshot.configureStarted += 1;
-      return configureGeneration;
-    },
-    unmountRoot(): { disposeContext: boolean; disconnectEvents: boolean } {
-      if (!activeRoot) {
-        return { disconnectEvents: false, disposeContext: false };
-      }
-      activeRoot = false;
-      configureGeneration += 1;
-      snapshot.activeRoots = 0;
-      snapshot.rootsUnmounted += 1;
-      const disconnectEvents = eventsConnected;
-      const disposeContext = contextActive;
-      if (disconnectEvents) {
-        eventsConnected = false;
-        snapshot.eventDisconnections += 1;
-      }
-      if (disposeContext) {
-        contextActive = false;
-        snapshot.contextDisposed += 1;
-      }
-      return { disconnectEvents, disposeContext };
-    },
-  };
 }
 
 function Viewport3DCanvasErrorBridge({
@@ -207,15 +150,13 @@ export const Viewport3DCanvas = forwardRef<
   },
   ref,
 ) {
-  useMemo(() => extend(THREE as unknown as Catalogue), []);
-
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
   const rootRef = useRef<ReturnType<typeof createRoot<HTMLCanvasElement>> | null>(
     null,
   );
   const rootConfiguredRef = useRef(false);
-  const lifecycleRef = useRef(createViewport3DCanvasLifecycleController());
+  const [lifecycle] = useState(() => createViewport3DCanvasLifecycleController());
   const rootStateRef = useRef<RootState | null>(null);
   const latestPointerMissedRef = useRef(onPointerMissed);
   const latestCreatedRef = useRef(onCreated);
@@ -279,10 +220,10 @@ export const Viewport3DCanvas = forwardRef<
 
     const root = rootRef.current ?? createRoot(canvas);
     if (!rootRef.current) {
-      lifecycleRef.current.mountRoot();
+      lifecycle.mountRoot();
       rootRef.current = root;
     }
-    const configureGeneration = lifecycleRef.current.startConfigure();
+    const configureGeneration = lifecycle.startConfigure();
     recordVisualizationDebugCanvasLifecycle("root-configure-started");
 
     void root
@@ -302,11 +243,11 @@ export const Viewport3DCanvas = forwardRef<
               ? eventSource.current
               : eventSource
             : container;
-          if (lifecycleRef.current.eventsConnected()) {
+          if (lifecycle.eventsConnected()) {
             state.events.connect?.(eventTarget);
             recordVisualizationDebugCanvasLifecycle("events-connected");
           }
-          if (lifecycleRef.current.contextCreated()) {
+          if (lifecycle.contextCreated()) {
             recordVisualizationDebugCanvasLifecycle("context-created");
           }
           if (eventPrefix) {
@@ -339,13 +280,13 @@ export const Viewport3DCanvas = forwardRef<
         size,
       })
       .then((configuredRoot) => {
-        if (!lifecycleRef.current.configureCompleted(configureGeneration)) return;
+        if (!lifecycle.configureCompleted(configureGeneration)) return;
         rootConfiguredRef.current = true;
         recordVisualizationDebugCanvasLifecycle("root-configure-completed");
         configuredRoot.render(latestSceneRef.current);
       })
       .catch((configureError: unknown) => {
-        if (lifecycleRef.current.isCurrentConfigure(configureGeneration)) {
+        if (lifecycle.isCurrentConfigure(configureGeneration)) {
           setError(configureError);
         }
       });
@@ -358,6 +299,7 @@ export const Viewport3DCanvas = forwardRef<
     flat,
     frameloop,
     gl,
+    lifecycle,
     legacy,
     linear,
     orthographic,
@@ -369,7 +311,6 @@ export const Viewport3DCanvas = forwardRef<
   ]);
 
   useEffect(() => {
-    const lifecycle = lifecycleRef.current;
     return () => {
       const teardown = lifecycle.unmountRoot();
       const rootState = rootStateRef.current;
@@ -397,7 +338,7 @@ export const Viewport3DCanvas = forwardRef<
       rootConfiguredRef.current = false;
       rootRef.current = null;
     };
-  }, []);
+  }, [lifecycle]);
 
   if (error) throw error;
 

@@ -206,6 +206,60 @@ fn robin_reference_extent_m(
     }
 }
 
+fn periodic_translation_axes(mesh: &fullmag_ir::MeshIR) -> [bool; 3] {
+    let mut periodic_axis = [false; 3];
+    for pair in &mesh.periodic_boundary_pairs {
+        if let Some(translation) = pair.translation {
+            for axis in 0..3 {
+                periodic_axis[axis] |= translation[axis].abs() > 1.0e-15;
+            }
+        }
+    }
+    periodic_axis
+}
+
+/// Outer boundary realized by the shared-domain K0 modal operator.
+///
+/// A film periodic along two axes has an exact k=0 outer condition: the
+/// in-plane-averaged (G=0) potential has zero normal derivative outside the
+/// film, so the open faces carry pure Neumann with the mean-zero gauge. A
+/// dipolar Robin coefficient there imposes a spurious return flux
+/// (N_zz = 13/15 instead of 1 for a 10 nm film between 20 nm air layers).
+/// Isolated bodies and one-axis periodic structures keep the planned
+/// airbox condition.
+pub(super) fn shared_domain_modal_outer_boundary(
+    plan: &FemEigenPlanIR,
+) -> Result<(&'static str, f64), RunError> {
+    let config = plan.air_box_config.as_ref().ok_or_else(|| RunError {
+        message: "shared-domain modal production scope requires air_box_config".to_string(),
+    })?;
+    let planned = match config.bc_kind.as_deref() {
+        Some("dirichlet") => "dirichlet",
+        Some("pure_neumann") => "pure_neumann",
+        Some("robin") | None => "robin",
+        Some(other) => {
+            return Err(RunError {
+                message: format!("unsupported shared-domain modal airbox boundary kind '{other}'"),
+            });
+        }
+    };
+    if planned != "robin" {
+        return Ok((planned, 0.0));
+    }
+    let film_periodic = periodic_translation_axes(&plan.mesh)
+        .iter()
+        .filter(|periodic| **periodic)
+        .count()
+        == 2;
+    if film_periodic {
+        return Ok(("pure_neumann", 0.0));
+    }
+    let beta = shared_domain_robin_beta_m(plan)?.ok_or_else(|| RunError {
+        message: "shared-domain modal Robin beta is unavailable".to_string(),
+    })?;
+    Ok(("robin", beta))
+}
+
 pub(super) fn shared_domain_robin_beta_m(plan: &FemEigenPlanIR) -> Result<Option<f64>, RunError> {
     let Some(config) = plan.air_box_config.as_ref() else {
         return Ok(None);
@@ -230,14 +284,7 @@ pub(super) fn shared_domain_robin_beta_m(plan: &FemEigenPlanIR) -> Result<Option
             max_corner[axis] = max_corner[axis].max(node[axis]);
         }
     }
-    let mut periodic_axis = [false; 3];
-    for pair in &plan.mesh.periodic_boundary_pairs {
-        if let Some(translation) = pair.translation {
-            for axis in 0..3 {
-                periodic_axis[axis] |= translation[axis].abs() > 1.0e-15;
-            }
-        }
-    }
+    let periodic_axis = periodic_translation_axes(&plan.mesh);
     let reference_extent = robin_reference_extent_m(min_corner, max_corner, periodic_axis);
     if !(reference_extent.is_finite() && reference_extent > 0.0) {
         return Err(RunError {

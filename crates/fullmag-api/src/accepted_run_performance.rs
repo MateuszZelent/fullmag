@@ -89,13 +89,14 @@ fn is_observation_busy(error: &anyhow::Error) -> bool {
 }
 
 pub(crate) fn load(root: &Path, run_id: &str, stage_ids: &[String]) -> Result<RunPerformanceResource> {
+    let _elapsed = crate::live_accepted_projection::ProjectionPhaseTimer::new("performance_load");
     match load_verified(root, run_id, stage_ids) {
         Ok(resource) => Ok(resource),
         // A busy read observed no new authority. Let resource-hook error
         // semantics retain the previous sample instead of publishing N/A.
         Err(error) if is_observation_busy(&error) => Err(error),
         Err(error) => {
-            tracing::debug!(error = %error, "automatic performance unavailable for the pinned attempt");
+            tracing::debug!(error = %format!("{error:#}"), "automatic performance unavailable for the pinned attempt");
             Ok(unavailable(Some(run_id.into()), "No verified performance snapshot for the current attempt"))
         }
     }
@@ -105,7 +106,10 @@ fn load_verified(root: &Path, run_id: &str, stage_ids: &[String]) -> Result<RunP
     fullmag_session::repository_path::validate_store_id(run_id)?;
     let store = SessionStore::open_existing(root)?;
     // Fence task selection and receipt/lease checks against an epoch transition.
-    let _read = store.read_transaction()?;
+    let _read = {
+        let _elapsed = crate::live_accepted_projection::ProjectionPhaseTimer::new("performance_fence");
+        store.read_transaction().context("read accepted performance fence")?
+    };
     let catalog = store.read_run_catalog(run_id)?.context("performance run catalog missing")?;
     let mut candidates = Vec::new();
     for (order, step_id) in stage_ids.iter().enumerate() {
@@ -455,7 +459,9 @@ pub(crate) async fn publish_if_changed(
         (run_id, stages)
     };
     let load_run = run_id.clone();
-    let loaded = tokio::task::spawn_blocking(move || load(&root, &load_run, &stage_ids)).await;
+    let loaded = crate::live_accepted_projection::observe_projection_phase(
+        "performance", tokio::task::spawn_blocking(move || load(&root, &load_run, &stage_ids)),
+    ).await;
     // Contention observes nothing; an actual missing/changed proof publishes
     // unavailable once so a previous attempt cannot remain current.
     let Ok(Ok(resource)) = loaded else { return Ok(()); };

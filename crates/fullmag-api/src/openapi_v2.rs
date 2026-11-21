@@ -6,6 +6,8 @@ use utoipa::OpenApi;
 #[derive(OpenApi)]
 #[openapi(
     paths(
+        crate::router_v2::handlers::model::imported_surface::get_imported_source_surface,
+        crate::router_v2::handlers::model::imported_surface::get_imported_source_surface_topology,
         crate::router_v2::handlers::platform::compute_profiles::get_compute_profiles,
         crate::router_v2::handlers::platform::compute_profiles::post_compute_profile,
         crate::router_v2::handlers::platform::compute_preview::post_compute_preview,
@@ -73,6 +75,14 @@ use utoipa::OpenApi;
         crate::router_v2::handlers::data::planar_fields::planar_profile::get_planar_default_field_profile,
         crate::router_v2::handlers::data::planar_fields::get_planar_default_field_render_png,
         crate::router_v2::handlers::data::scalars::get_scalars,
+        crate::router_v2::handlers::data::scalars::get_historical_scalars,
+        crate::router_v2::handlers::data::stage_results::get_study_stage_results,
+        crate::router_v2::handlers::persistence::solutions::study_state::list_project_study_results,
+        crate::router_v2::handlers::persistence::solutions::study_state::get_study_result_state,
+        crate::router_v2::handlers::persistence::solutions::study_state::get_study_result_magnetization,
+        crate::router_v2::handlers::persistence::solutions::study_state::get_study_result_topology,
+        crate::router_v2::handlers::persistence::solutions::study_state::get_study_result_support,
+        crate::router_v2::handlers::persistence::solutions::study_state::get_study_result_scalars,
         crate::router_v2::handlers::data::tables::list_tables,
         crate::router_v2::handlers::data::tables::get_table,
         crate::router_v2::handlers::data::tables::get_table_columns,
@@ -99,6 +109,12 @@ use utoipa::OpenApi;
         crate::router_v2::handlers::workspace::workspace::replace_workspace_ribbon,
         crate::router_v2::handlers::workspace::workspace::get_workspace_layout,
         crate::router_v2::handlers::workspace::workspace::replace_workspace_layout,
+        crate::router_v2::handlers::material_library::list_materials,
+        crate::router_v2::handlers::material_library::create_material,
+        crate::router_v2::handlers::material_library::update_material,
+        crate::router_v2::handlers::material_library::delete_material,
+        crate::router_v2::handlers::material_library::publish_version,
+        crate::router_v2::handlers::material_library::patch_version,
         crate::router_v2::handlers::workspace_items::list_items,
         crate::router_v2::handlers::workspace_items::post_item,
         crate::router_v2::handlers::workspace_items::get_item,
@@ -207,6 +223,12 @@ use utoipa::OpenApi;
         crate::router_v2::handlers::model::authoring::create_authoring_field_drive,
         crate::router_v2::handlers::model::authoring::replace_authoring_field_drive,
         crate::router_v2::handlers::model::authoring::delete_authoring_field_drive,
+        crate::router_v2::handlers::model::authoring::get_authoring_mask_field_drives,
+        crate::router_v2::handlers::model::authoring::create_authoring_mask_field_drive,
+        crate::router_v2::handlers::model::authoring::replace_authoring_mask_field_drive,
+        crate::router_v2::handlers::model::authoring::delete_authoring_mask_field_drive,
+        crate::router_v2::handlers::model::authoring::get_ready_antennas,
+        crate::router_v2::handlers::model::authoring::build_ready_antenna_terms,
         crate::router_v2::handlers::model::authoring::patch_authoring_region,
         crate::router_v2::handlers::model::authoring::commit_authoring_transaction,
         crate::router_v2::handlers::model::authoring::get_authoring_study_runtime,
@@ -384,6 +406,7 @@ use utoipa::OpenApi;
         crate::router_v2::handlers::platform::output_storage::put_output_storage_defaults,
     ),
     components(schemas(
+        crate::schemas::imported_surface::ImportedSourceSurfaceQuery,
         crate::schemas::instances::InstanceSessionSummary,
         crate::schemas::instances::DiscoveredInstance,
         crate::schemas::instances::InstanceDiscoveryResource,
@@ -396,6 +419,22 @@ use utoipa::OpenApi;
         crate::schemas::output_storage::OutputStorageSettingsSchema,
         crate::schemas::output_storage::OutputStorageDefaultsRequest,
         crate::schemas::output_storage::OutputStorageDefaultsResource,
+        crate::material_library::MaterialLibraryResource,
+        crate::material_library::MaterialLibraryEntryResource,
+        crate::material_library::MaterialLibraryMutationResource,
+        crate::material_library::MaterialLibraryWriteRequest,
+        crate::material_library::MaterialVersionPublishRequest,
+        crate::material_library::MaterialVersionUpdateRequest,
+        crate::material_library::MaterialVersionMutationResource,
+        crate::material_library::PublishedMaterialVersion,
+        crate::router_v2::handlers::material_library::MaterialLibraryUpdateRequest,
+        crate::router_v2::handlers::material_library::MaterialLibraryDeleteRequest,
+        crate::router_v2::handlers::material_library::MaterialLibraryDeleteResource,
+        fullmag_authoring::SceneMaterialSource,
+        fullmag_authoring::SceneMaterialVersionSource,
+        fullmag_authoring::SceneMaterialSourceKind,
+        fullmag_authoring::SceneMaterialSourceProperties,
+        fullmag_authoring::SceneMaterialReference,
         crate::schemas::workspace_items::WorkspaceItemKind,
         crate::schemas::workspace_items::WorkspaceItemStatus,
         crate::schemas::workspace_items::WorkspaceItem,
@@ -514,6 +553,7 @@ use utoipa::OpenApi;
         crate::schemas::fields::TargetFieldAvailabilityState,
         crate::schemas::fields::FieldMeta,
         crate::schemas::common::AcceptedObservationFrameRef,
+        crate::schemas::common::AuthoredInitialStateOrigin,
         crate::schemas::common::AcceptedStateRefResource,
         crate::schemas::common::AcceptedStateIdResource,
         crate::schemas::solutions::SolutionScalarResource,
@@ -672,11 +712,28 @@ use utoipa::OpenApi;
         crate::schemas::planar_fields::PlanarFieldMetaResource,
         crate::schemas::planar_fields::PlanarSectionResource,
         crate::schemas::planar_fields::PlanarFieldProbeResource,
+        crate::schemas::planar_fields::PlanarProbeNodeResource,
         crate::schemas::planar_fields::PlanarFieldProfileResource,
         crate::schemas::planar_fields::PlanarProfilePointResource,
         crate::schemas::planar_fields::PlanarSampleSourceResource,
         crate::schemas::logs::EngineLogResource,
         crate::schemas::scalars::ScalarWindow,
+        crate::schemas::scalars::ScalarSeriesIdentity,
+        crate::schemas::scalars::HistoricalScalarWindow,
+        crate::schemas::stage_results::StudyResultAuthoredRelation,
+        crate::schemas::stage_results::StudyResultCompletion,
+        crate::schemas::stage_results::StudyResultDomainRelation,
+        crate::schemas::stage_results::StudyResultPredecessorRelation,
+        crate::schemas::stage_results::StudyResultInputSelection,
+        crate::schemas::stage_results::StudyResultInitialStateSource,
+        crate::schemas::stage_results::StudyResultResetScope,
+        crate::schemas::stage_results::StudyResultInitialState,
+        crate::schemas::stage_results::StudyStageResult,
+        crate::schemas::stage_results::StudyStageResultsResource,
+        crate::schemas::stage_results::StudyResultLayerGeometry,
+        crate::schemas::stage_results::StudyResultGeometry,
+        crate::schemas::stage_results::StudyResultStateResource,
+        crate::schemas::scalars::HistoricalScalarCoverage,
         crate::schemas::scalars::ScalarObservationSource,
         crate::schemas::tables::TableColumnMeta,
         crate::schemas::tables::TableListResource,
@@ -744,6 +801,8 @@ use utoipa::OpenApi;
         crate::schemas::visualization_state::DefaultPlanarSliceState,
         crate::schemas::visualization_state::PlanarAxisPlane,
         crate::schemas::visualization_state::DefaultPlanarOperatorState,
+        crate::schemas::visualization_state::PlanarLayerModel,
+        crate::schemas::visualization_state::PlanarCropState,
         crate::schemas::workspace::WorkspaceSelectionResource,
         crate::schemas::workspace::WorkspaceSelectionReplaceRequest,
         crate::schemas::workspace::WorkspaceActiveNodeResource,
@@ -860,13 +919,18 @@ use utoipa::OpenApi;
         crate::schemas::mesh::MeshBuildHistoryResource,
         crate::schemas::mesh::MeshLastSuccessfulBuildResource,
         crate::schemas::mesh::MeshBuildCommandRequest,
+        crate::schemas::commands::RuntimeCommandRunPrecondition,
+        crate::schemas::commands::RuntimeInitialStateRequest,
+        crate::schemas::commands::RuntimeAuthoredInitialStateSource,
         crate::schemas::commands::StructuredCommandRequest,
         crate::schemas::commands::CommandResponse,
+        crate::schemas::commands::CommandExecutionBinding,
         crate::schemas::relaxation::RelaxationAlgorithm,
         crate::schemas::relaxation::StageStopReason,
         crate::schemas::relaxation::StageMetricKind,
         crate::schemas::relaxation::StageMetricUnit,
         crate::schemas::authoring::SceneResource,
+        crate::schemas::authoring::ThermalNoiseResource,
         crate::schemas::authoring::SceneMetadataResource,
         crate::schemas::authoring::SceneObjectResource,
         crate::schemas::authoring::SceneMaterialResource,
@@ -948,6 +1012,12 @@ use utoipa::OpenApi;
         fullmag_authoring::SceneOerstedField,
         crate::schemas::authoring::AuthoringTransactionRequest,
         crate::schemas::authoring::AuthoringTransactionResponse,
+        crate::schemas::authoring::MagnetizationApplyRequest,
+        crate::schemas::authoring::MagnetizationApplyTarget,
+        crate::schemas::authoring::MagnetizationApplyScope,
+        crate::schemas::authoring::MagnetizationApplyReceiptResource,
+        crate::schemas::authoring::MagnetizationApplyStatus,
+        crate::schemas::authoring::PreparedInitialStateResource,
         crate::schemas::authoring::StudyRuntimeResource,
         crate::schemas::authoring::StudyRuntimePatchRequest,
         crate::schemas::authoring::ParallelExecutionResource,
@@ -1191,6 +1261,18 @@ fn openapi_json_on_large_stack() -> Value {
     doc["x-fullmag-study-primitive-stage-kinds"] =
         serde_json::to_value(fullmag_authoring::StudyPrimitiveStageKind::ALL)
             .expect("study primitive stage catalog should serialize");
+    doc["components"]["schemas"]["ThermalNoiseResource"]["properties"]["temperature"]
+        ["exclusiveMinimum"] = json!(0.0);
+    doc["components"]["schemas"]["ThermalNoiseResource"]["properties"]["seed"]
+        ["pattern"] = json!("^[1-9][0-9]{0,19}$");
+    // Keep extensible study metadata while exposing the lossless thermal contract.
+    doc["components"]["schemas"]["SceneResource"]["properties"]["study"]
+        ["properties"]["thermal_noise"] = json!({
+            "anyOf": [
+                {"$ref": "#/components/schemas/ThermalNoiseResource"},
+                {"type": "null"}
+            ]
+        });
     normalize_operation_ids(&mut doc);
     doc
 }
@@ -1444,6 +1526,8 @@ mod tests {
                 "hysteresis",
                 "change_device",
                 "add_field_drive",
+                "add_mask_field_drive",
+                "update_mask_field_drive",
                 "remove_field_drive",
                 "table_autosave",
                 "autosave",
@@ -1455,6 +1539,77 @@ mod tests {
                 "export"
             ])
         );
+    }
+
+    #[test]
+    fn openapi_exposes_interactive_study_commands_and_exact_result_reads() {
+        let document = openapi_json();
+        let schemas = &document["components"]["schemas"];
+        let preconditions = &schemas["RuntimeCommandPrecondition"];
+        for field in ["scene_revision", "mesh_revision", "domain_generation_id", "current_run"] {
+            assert!(
+                preconditions["properties"].get(field).is_some(),
+                "RuntimeCommandPrecondition.{field} must be exported"
+            );
+            assert!(
+                !preconditions["required"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .any(|required| required == field),
+                "Legacy clients must be able to omit {field}"
+            );
+        }
+        assert!(schemas["RuntimeCommandIntent"]["properties"].get("initial_state").is_some());
+        assert!(schemas["RuntimeAuthoredInitialStateSource"].to_string().contains("publication_id"));
+        assert!(schemas["CommandResponse"]["properties"].get("execution_binding").is_some());
+
+        let live = "/v2/sessions/current/simulation/stages/results";
+        let project = "/v2/persistence/projects/{project_id}/runs/{run_id}/study-results";
+        let state = format!("{project}/{{artifact_id}}");
+        for (path, schema, live_scope) in [
+            (live.to_string(), "StudyStageResultsResource", true),
+            (format!("{live}/scalars"), "HistoricalScalarWindow", true),
+            (project.to_string(), "StudyStageResultsResource", false),
+            (state.clone(), "StudyResultStateResource", false),
+            (format!("{state}/scalars"), "HistoricalScalarWindow", false),
+        ] {
+            let operation = &document["paths"][&path]["get"];
+            assert_eq!(
+                operation["responses"]["200"]["content"]["application/json"]["schema"]["$ref"],
+                format!("#/components/schemas/{schema}"),
+                "{path} must expose its typed response"
+            );
+            let has_scope_header = operation["parameters"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .any(|item| item["$ref"] == "#/components/parameters/FullmagSessionScope");
+            assert_eq!(has_scope_header, live_scope, "{path} has incorrect session scope");
+        }
+        for kind in ["magnetization", "topology", "support"] {
+            let path = format!("{state}/{kind}");
+            let operation = &document["paths"][&path]["get"];
+            let response = &operation["responses"]["200"];
+            assert!(response["content"].get("application/octet-stream").is_some(), "{path}");
+            for header in [
+                "ETag",
+                "x-fullmag-source-id",
+                "x-fullmag-field-generation-id",
+                "x-fullmag-domain-generation-id",
+                "x-fullmag-mesh-topology-hash",
+            ] {
+                assert!(response["headers"].get(header).is_some(), "{path} omitted {header}");
+            }
+            assert!(
+                operation["parameters"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .any(|item| item["in"] == "header" && item["name"] == "If-None-Match"),
+                "{path} omitted its conditional request parameter"
+            );
+        }
     }
 
     #[test]
@@ -1487,6 +1642,19 @@ mod tests {
         assert!(schemas["StageAutosaveLayoutResource"]
             .to_string()
             .contains("continuous"));
+    }
+
+    #[test]
+    fn openapi_exposes_lossless_study_thermal_noise() {
+        let document = openapi_json();
+        let schemas = &document["components"]["schemas"];
+        let study = &schemas["SceneResource"]["properties"]["study"];
+        assert_eq!(study["additionalProperties"], true);
+        assert_eq!(study["properties"]["thermal_noise"]["anyOf"][0]["$ref"],
+                   "#/components/schemas/ThermalNoiseResource");
+        let seed = &schemas["ThermalNoiseResource"]["properties"]["seed"];
+        assert!(seed.to_string().contains("string"));
+        assert!(!seed.to_string().contains("integer"));
     }
 
     #[test]

@@ -732,10 +732,10 @@ async function selectAnalysisSurfaceFromExplorer(page, surfaceId) {
   }
   await page.locator(".fm-analysis-plots__surface-title").waitFor({ state: "visible", timeout: timeoutMs });
   if ((await analysisSurfaceTitle(page)) === surfaceId) return "already-active";
-  const resultsTab = page.locator(".fm-explorer .fm-tabs-trigger").filter({ hasText: /^Results$/ }).first();
+  const resultsTab = page.locator('.fm-side-rail[data-side="left"] [data-rail-item="results"]').first();
   let route = "stored-preference-reload";
   if (await resultsTab.count()) {
-    if ((await resultsTab.getAttribute("aria-selected")) !== "true") await resultsTab.click({ timeout: timeoutMs });
+    if ((await resultsTab.getAttribute("data-active")) !== "true") await resultsTab.click({ timeout: timeoutMs });
     const resultsRoot = page.locator('.fm-explorer [role="treeitem"][data-node-id^="results:run:"]').first();
     if (await resultsRoot.count()) {
       const rootId = await resultsRoot.getAttribute("data-node-id");
@@ -943,7 +943,15 @@ async function pauseAnalysisUpdates(page) {
     exact: true,
     name: "Resume live chart updates",
   });
-  if ((await pauseButton.count()) > 0 || (await resumeButton.count()) > 0) {
+  const toggleButton = page.getByRole("button", {
+    exact: true,
+    name: "Pause live chart updates",
+  });
+  if (
+    (await pauseButton.count()) > 0 ||
+    (await resumeButton.count()) > 0 ||
+    (await toggleButton.count()) > 0
+  ) {
     throw new Error(
       "Analysis still exposes live pause/resume controls after dataset separation.",
     );

@@ -167,19 +167,39 @@ def load_startup(control, parent, document, *, source_root, resume_attempt, curr
 
 
 def validate_bridge(control, parent, terminal, compose, recreate, retained, *, iteration, recreate_attempt):
-    """A completed drain can precede a failed build and a completed recreate."""
-    base._require(terminal.get('schema') == recreate.get('schema') == 'fullmag.docker-build-operation.v1'
-                  and terminal.get('phase') == 'iteration' and terminal.get('state') == 'failed-confirmed'
-                  and terminal.get('attempt') == iteration
-                  and terminal.get('error', '').startswith('Backend exited during build;')
-                  and terminal.get('inputs', {}).get('config_sha256') == base._sha(canonical(compose))
-                  and terminal.get('config_sha256', base._sha(canonical(compose))) == base._sha(canonical(compose))
-                  and compose.get('name') == control.project
-                  and terminal.get('inputs', {}).get('source_root') == parent['inputs']['source_root']
-                  and compose['services']['backend'].get('image') == terminal['inputs'].get('image_id')
-                  and recreate.get('phase') == 'recreate-services' and recreate.get('state') == 'succeeded'
-                  and recreate.get('attempt') == recreate_attempt and recreate.get('fresh_state') is False,
-                  'history is not a failed rebuild after drain and a completed retained recreate')
+    """Authenticate either a stop-only idle drain or a failed rebuild before recreate."""
+    if terminal.get('state') == 'succeeded':
+        config_sha = base._sha(canonical(compose))
+        base._require(terminal.get('schema') == recreate.get('schema') == 'fullmag.docker-build-operation.v1'
+                      and terminal.get('phase') == 'iteration'
+                      and terminal.get('attempt') == iteration
+                      and terminal.get('idle_backend_stopped') is True
+                      and terminal.get('error') in (None, '')
+                      and terminal.get('inputs', {}).get('config_sha256') == config_sha
+                      and terminal.get('config_sha256') == config_sha
+                      and compose.get('name') == control.project
+                      and terminal.get('inputs', {}).get('source_root') == parent['inputs']['source_root']
+                      and compose['services']['backend'].get('image') == terminal['inputs'].get('image_id')
+                      and recreate.get('phase') == 'recreate-services' and recreate.get('state') == 'succeeded'
+                      and recreate.get('attempt') == recreate_attempt and recreate.get('fresh_state') is False,
+                      'successful idle drain terminal differs')
+        successful_idle_drain = True
+    else:
+        # Preserve the previous failed-build bridge predicate as-is. A
+        # successful idle stop cannot qualify through the failure branch.
+        base._require(terminal.get('schema') == recreate.get('schema') == 'fullmag.docker-build-operation.v1'
+                      and terminal.get('phase') == 'iteration' and terminal.get('state') == 'failed-confirmed'
+                      and terminal.get('attempt') == iteration
+                      and terminal.get('error', '').startswith('Backend exited during build;')
+                      and terminal.get('inputs', {}).get('config_sha256') == base._sha(canonical(compose))
+                      and terminal.get('config_sha256', base._sha(canonical(compose))) == base._sha(canonical(compose))
+                      and compose.get('name') == control.project
+                      and terminal.get('inputs', {}).get('source_root') == parent['inputs']['source_root']
+                      and compose['services']['backend'].get('image') == terminal['inputs'].get('image_id')
+                      and recreate.get('phase') == 'recreate-services' and recreate.get('state') == 'succeeded'
+                      and recreate.get('attempt') == recreate_attempt and recreate.get('fresh_state') is False,
+                      'history is not a failed rebuild after drain and a completed retained recreate')
+        successful_idle_drain = False
     for record in (terminal, recreate):
         base._require(record.get('compose_project') == control.project
                       and record.get('control_volume') == control.volume
@@ -202,20 +222,65 @@ def validate_bridge(control, parent, terminal, compose, recreate, retained, *, i
                       and identifier != parent.get(name + '_container'), 'historical service ID differs')
         ids.append(identifier)
     backend = retained['backend']
-    base._require(backend.get('Image') == terminal['inputs']['image_id']
-                  and backend.get('State', {}).get('StartedAt') == terminal.get('backend_started_at')
-                  and backend['State'].get('Running') is False and backend['State'].get('Status') == 'exited'
-                  and backend['State'].get('Pid') == 0 and backend['State'].get('OOMKilled') is False
-                  and backend['State'].get('ExitCode') == 2
-                  and set(recreate.get('removed_containers', [])) == set(ids)
-                  and len(recreate['removed_containers']) == 2,
-                  'completed recreate did not remove the exact failed-build pair')
+    if successful_idle_drain:
+        base._require(backend.get('Image') == terminal['inputs']['image_id']
+                      and backend.get('State', {}).get('StartedAt') == terminal.get('backend_started_at')
+                      and backend['State'].get('Running') is False and backend['State'].get('Status') == 'exited'
+                      and backend['State'].get('Pid') == 0 and backend['State'].get('OOMKilled') is False
+                      and backend['State'].get('ExitCode') == 0
+                      and set(recreate.get('removed_containers', [])) == set(ids)
+                      and len(recreate['removed_containers']) == 2,
+                      'successful idle-stop service is not confirmed stopped: backend')
+    else:
+        base._require(backend.get('Image') == terminal['inputs']['image_id']
+                      and backend.get('State', {}).get('StartedAt') == terminal.get('backend_started_at')
+                      and backend['State'].get('Running') is False and backend['State'].get('Status') == 'exited'
+                      and backend['State'].get('Pid') == 0 and backend['State'].get('OOMKilled') is False
+                      and backend['State'].get('ExitCode') == 2
+                      and set(recreate.get('removed_containers', [])) == set(ids)
+                      and len(recreate['removed_containers']) == 2,
+                      'completed recreate did not remove the exact failed-build pair')
     return ids
 
 
+def validate_idle_stop_snapshot(terminal, retained, snapshot):
+    base._require(isinstance(snapshot, dict) and set(snapshot) == {'backend', 'frontend'},
+                  'successful idle-stop service snapshot is incomplete')
+    for name in ('backend', 'frontend'):
+        stopped = snapshot[name]
+        retained_service = retained[name]
+        base._require(isinstance(stopped, dict) and isinstance(retained_service, dict),
+                      'successful idle-stop snapshot service differs: ' + name)
+        state = stopped.get('State', {})
+        retained_state = retained_service.get('State', {})
+        base._require(isinstance(state, dict) and isinstance(retained_state, dict),
+                      'successful idle-stop snapshot service differs: ' + name)
+        started_at = terminal.get(name + '_started_at')
+        base._require(stopped.get('Id') == retained_service.get('Id') == terminal.get(name + '_container')
+                      and isinstance(stopped.get('Image'), str) and bool(stopped.get('Image'))
+                      and stopped.get('Image') == retained_service.get('Image')
+                      and isinstance(started_at, str) and bool(started_at)
+                      and state.get('StartedAt') == retained_state.get('StartedAt') == started_at
+                      and all(row.get('Running') is False and row.get('Status') == 'exited'
+                              and type(row.get('Pid')) is int and row.get('Pid') == 0
+                              and type(row.get('ExitCode')) is int and row.get('ExitCode') == 0
+                              and row.get('OOMKilled') is False for row in (state, retained_state)),
+                      'successful idle-stop snapshot service differs: ' + name)
+
+
 def load_bridge(control, parent, terminal, compose, *, iteration, recreate_attempt, record):
+    base._require(isinstance(iteration, str) and base.ATTEMPT.fullmatch(iteration),
+                  'invalid historical idle-stop attempt')
     base._require(isinstance(recreate_attempt, str) and base.ATTEMPT.fullmatch(recreate_attempt),
                   'invalid historical recreate attempt')
+    idle_snapshot = None
+    if terminal.get('state') == 'succeeded':
+        idle_path = 'iteration/attempts/' + iteration + '/idle-stop-containers.json'
+        idle_raw, idle_snapshot = record(idle_path)
+        snapshot_sha = terminal.get('idle_stop_containers_sha256')
+        base._require(isinstance(snapshot_sha, str) and base.SHA.fullmatch(snapshot_sha)
+                      and base._sha(idle_raw) == snapshot_sha,
+                      'successful idle-stop snapshot digest differs')
     root = 'recreate-services/attempts/' + recreate_attempt
     raw, recreate = record(root + '/terminal.json')
     receipt_raw, _ = record(root + '/receipt.json')
@@ -223,6 +288,8 @@ def load_bridge(control, parent, terminal, compose, *, iteration, recreate_attem
     base._require(raw == receipt_raw, 'historical recreate is not terminal')
     ids = validate_bridge(control, parent, terminal, compose, recreate, retained,
                           iteration=iteration, recreate_attempt=recreate_attempt)
+    if terminal.get('state') == 'succeeded':
+        validate_idle_stop_snapshot(terminal, retained, idle_snapshot)
     # Enumeration must succeed: an inspect error is not proof of absence.
     result = docker_capture('ps', '-a', '--no-trunc', '--format', '{{.ID}}', timeout=15)
     base._require(result.returncode == 0 and not set(ids).intersection(result.stdout.decode().split()),

@@ -127,13 +127,18 @@ indeksu Git, capture akceptuje go jako już obecny w `files` i nie dubluje go w
 Programowe przekazanie `[]` jawnie czyści listę; hostowa zmienna środowiskowa
 `FULLMAG_DEV_INCLUDE_UNTRACKED` nie ustala jej wartości.
 
-Build DEV kompiluje CUDA tylko dla GPU widocznych w kontenerze backendu (FEM
-i FDM, np. `89-real` dla RTX 40xx). Gdy sonda sterownika nie jest dostępna,
-build wraca do przenośnej macierzy obrazu. Wybrana lista jest zapisana
-w `build.cuda_architectures` receiptu. `backend_dev.py` rozumie też
-`FULLMAG_DEV_CUDA_ARCHITECTURES` (`auto`, `all` albo lista CMake), ale launcher
-nie przekazuje jeszcze tej zmiennej do usługi, więc DEV zawsze używa `auto`.
-Pakiet DEV nie jest artefaktem przenośnym ani wydaniem.
+Launcher Docker DEV odczytuje compute capability hosta przez `nvidia-smi`
+i wybiera jeden cel rzeczywisty, np. `86-real` dla RTX 3070. Używa go do
+budowania zależności CUDA, Hypre, PETSc i libCEED oraz kompilacji FEM i FDM w usłudze
+tej samej grupy. Cel jest zapisany w argumentach buildu obrazu zależności
+i w `build.cuda_architectures` receiptu backendu.
+
+Jeśli sonda hosta jest niedostępna, potwierdź compute capability i ustaw
+`FULLMAG_DEV_CUDA_ARCHITECTURES=86-real` z właściwą wartością w procesie
+lub głównym `.env`. Build odmawia kompilacji bez potwierdzonego celu,
+przy rozbieżności z wynikiem sondy lub przy różnych compute capabilities
+widocznych GPU. Dotyczy to również kontenera uruchamianego bez dostępu do
+GPU. Przenośna macierz CUDA pozostaje dostępna w receptach kwalifikacji i wydania.
 
 Restart backendu po zmianie wyłącznie `docs/`, frontendu lub plików testowych
 wykorzystuje istniejący pakiet: cache-hit porównuje `runtime_source_digest`
@@ -158,6 +163,10 @@ podkatalog źródeł). Backend dostaje osobny alias tylko tego katalogu.
 Może technicznie zmieniać również inne jego pliki. Główny checkout nie może
 zostać wybrany jako writable alias. Zmiana grantu wymaga odtworzenia usług;
 `docker-dev` wybiera kontrolowaną ścieżkę odtworzenia i zachowuje wolumeny.
+
+Na Linux/WSL launcher nadaje UID 65532 dostęp POSIX ACL wyłącznie do katalogów wewnątrz jawnie wybranego podkatalogu. Zachowuje dotychczasowe efektywne uprawnienia innych użytkowników i grup oraz właścicieli; pliki źródeł i wyników nie są przepisywane. Domyślne ACL zapewniają operatorowi dostęp do nowych wyników kontenera. Dowiązania, obca własność bez gotowego grantu, zagnieżdżone dane Git i przekroczenie limitu drzewa powodują odmowę przed startem usług. Nie jest to grant na cały checkout.
+
+Przed przyjęciem skryptu backend sprawdza zapis i usunięcie własnego pliku kontrolnego w faktycznych katalogach wyjścia i scratch objętych aliasem. Błąd zwraca `docker_startup_output_mapping_invalid` przed publikacją placeholdera aktywacji i RunIntent; launcher rozpoznaje go jako odrzucenie, bez powtórnego POST. Ten punktowy test nie gwarantuje późniejszego zapisu po zmianie praw lub zapełnieniu dysku.
 
 Skrypt `examples/model.py` używa domyślnie sąsiedniego `model.zarr`.
 HDF5 zachowuje obecny kontener `model.results` z plikami `.h5`.
@@ -307,22 +316,53 @@ just docker-dev-reconcile-network-failure <source> <attempt> <receipt-sha256> <c
 Po sprawdzeniu dowodów końcowy argument `true` wykonuje failure-only CAS.
 Wymagane są: dokładny błąd puli, brak usług (także zatrzymanych) i sieci tej
 próby oraz zgodny oryginalny helper z potwierdzonym `LOGGED`, nadal trzymający
-`operation.lock`. Pełny spis kontenerów wyklucza obcych konsumentów wolumenu
-kontrolnego i checkoutu tej grupy. Dla początkowej próby WSL ext4 punktem
-odniesienia jest marker hosta w przypiętym bindzie `/state` z Compose. Alias
-WSL wymaga zgodności korzenia montowania i inode. Montowanie Windows wymaga
-dowodu natywnego Windows i mapowania DrvFs. Brakującą ścieżkę można
-zakwalifikować wyłącznie dla kontenera w stanie `exited` z PID 0. Junction
-wychodzący poza montowany katalog wymaga zgodnego odsyłacza w DrvFs i pełnego
-dowodu dla jego celu. Zagnieżdżone zewnętrzne junctiony kończą się odmową.
-Dowody i stan kontenerów są ponownie sprawdzane przed publikacją.
-Ta początkowa procedura failure-only jest lokalna dla grupy (ADR 0067); nie
-wymaga zatrzymania procesów innych grup. Starsze procedury odzyskiwania
-BuildKit zachowują własne, globalne kontrole.
+`operation.lock`. Pełny spis kontenerów wyklucza konsumentów zasobów
+tej grupy we wszystkich stanach. Obejmuje jej tożsamość projektu i źródła,
+prywatną sieć oraz nazwany wolumen kontrolny. Uwierzytelniony `Mountpoint`
+wolumenu z daemona pozwala także odrzucić bezpośredni bind jego katalogu,
+rodzica albo podkatalogu. Stan zasobów jest ponownie sprawdzany przed publikacją.
+
+Zakres tej procedury failure-only stanowią metadane wskazanej grupy zgodnie
+z ADR 0067. Jej transakcja zapisuje receipty i marker w wolumenie kontrolnym.
+Obce bindy samego checkoutu pozostają poza tym zakresem. Admisja buildu,
+przenoszenie źródeł i kwalifikacja retencji mają własne wymagania dotyczące
+checkoutu, danych i konsumentów.
 Adapter zachowuje oryginalny receipt i dowód, nie publikuje sukcesu ani
-`verified`, nie uruchamia usług i nie usuwa danych. Wyłącznie oryginalny helper
-zwalnia swój marker `active` po odebraniu terminalnego wyniku. Nieznany wynik
-publikacji wymaga odczytu zachowanych dowodów; nie ponawiaj mutacji w ciemno.
+`verified`, nie uruchamia usług i nie usuwa danych. Domyślnie oryginalny helper
+zwalnia swój marker `active` po odebraniu terminalnego wyniku.
+
+Jeżeli oryginalny helper został utracony, istnieje osobny, jawnie wybierany tryb
+`recover_absent_helper`. Najpierw wykonaj preview z argumentami `false true`:
+
+```text
+just docker-dev-reconcile-network-failure <source> <attempt> <receipt-sha256> <compose-sha256> <engine-id> false true
+```
+
+Po autoryzacji i sprawdzeniu preview argumenty `true true` wykonują recovery.
+Tryb wymaga potwierdzonej przez daemon nieobecności helpera, również jako
+zatrzymanego kontenera, zgodnego wolumenu kontrolnego oraz wolnej, istniejącej
+blokady `operation.lock`. Zachowuje wszystkie pozostałe kontrole początkowej
+próby, konsumentów, sieci i braku wcześniejszych publikacji. Nowy helper
+kontrolny uzyskuje tę blokadę bez tworzenia ani obcinania pliku, sprawdza jej
+tożsamość oraz przypięte receipty i marker. Pod jedną blokadą archiwizuje
+oryginał, publikuje dowód i trzy zgodne zapisy `failed-confirmed`, a dopiero
+wtedy usuwa dokładnie marker tej próby. Nie odtwarza starego helpera ani
+nie przypisuje sobie jego tożsamości.
+
+Nieznany wynik publikacji lub częściowy zapis wymaga odczytu zachowanych
+dowodów; nie ponawiaj mutacji w ciemno. Potwierdzone zamknięcie błędu pozwala
+ponowić zwykły launcher `docker-dev`; samo nie dowodzi dostępności puli
+adresowej ani poprawnego buildu aplikacji.
+
+Jeżeli domyślne pule Dockera są nadal wyczerpane, launcher przyjmuje jawną
+opcję `--network-subnet <CIDR>` (ostatni argument recepty `docker-dev`).
+Dotyczy ona wyłącznie prywatnego bridge tej grupy i jest zapisywana w jej
+przypiętym dokumencie Compose. Dopuszczalna jest kanoniczna podsieć IPv4 RFC1918
+z prefiksem od /16 do /29. Przed wyborem sprawdź bieżące trasy hosta; launcher
+sprawdza dodatkowo kolizje z sieciami Dockera. Nie zmienia konfiguracji daemona,
+nie usuwa innych sieci i nie dobiera zastępczego zakresu. Dla istniejącej grupy
+jawnie podany zakres musi zgadzać się z jej utrwalonym Compose.
+
 Dopiero potwierdzony terminal i zwolnienie helpera pozwalają na nowy start
 standardową receptą. Ta procedura nie służy do odzyskiwania zatrzymanego
 mastera z istniejącą sesją.
@@ -403,6 +443,31 @@ przeglądarki. Nieznany wynik operacji zachowuje lease do jawnej rekonsyliacji.
 próby/konfiguracji. Zachowuje wolumeny; opcja `fresh_state=true` tworzy nowy root
 sesji, pozostawiając poprzedni. Nie powtarza automatycznie aktywacji Solve.
 Przed pierwszym admission awaria samego buildu może zachować ten sam root sesji. Wymaga to dokładnego bootstrap certyfikatu, jednej potwierdzonej awarii przypiętej do bieżącego `Docker StartedAt` oraz braku handoff, publikacji pakietu i storage probe. Dowód wskazuje bezpośredni terminal tej próby development albo związany terminal resume; bieżąca inkarnacja kontenera musi być zgodna. Launcher ponawia cały dowód pod blokadą przed odtworzeniem usług. Nie ustawia `restart_verified`, nie zmienia ownera i nie powtarza Solve; nowe API nadal wymaga zwykłego admission. Brak lub zmiana dowodu blokuje tę ścieżkę.
+
+Przerwanie początkowego startu przed handoff pakietu można zamknąć przez
+`scripts/docker_volume_development_interrupted.py`. Checkpoint
+`starting-services` wymaga zgodnych ID oraz `StartedAt` obu zatrzymanych usług;
+zachowany wariant `starting` zachowuje wcześniejszy kontrakt. Builder
+`--build-interrupted-request --attempt <development-attempt>` zbiera piny z
+wybranej grupy i zapisuje immutable request w jej control volume dopiero po
+pełnej obserwacji. Wymagany jest brak starego helpera oraz dowodów handoff/API.
+Wywołanie z `--request <control-relative-path> --request-sha256 <sha256>`
+domyślnie wykonuje preview; jawne `--apply` zatwierdza wyłącznie
+`failed-confirmed` pod blokadą i CAS. Receipty zachowują nieznany status wyjścia
+producenta, a dalszy start lub odtworzenie usług przechodzi własne bramki.
+
+Jeżeli późniejsze resume zatrzyma się przed PID1 na błędzie OCI `not a directory`
+przy montowaniu `/run/fullmag/linux-native-host.json`, builder
+`scripts/docker_volume_resume_mount_refusal.py --source-root <checkout>
+--attempt <resume-attempt> --port <port>` obsługuje wyłącznie ten przypadek po
+potwierdzonym przerwaniu początkowego startu przed handoff. Wymaga niezmienionych
+zatrzymanych usług, działającego oryginalnego helpera i jego blokady, poprawnego
+certyfikatu na hoście oraz pustego stanu poza certyfikatem, ownerem i sentinelem.
+Zapisany request i SHA przekazuje się do `docker_volume_reconcile.py` najpierw z
+`--preview`, następnie bez tej flagi. Publikacja zachowuje rzeczywisty błąd OCI
+i ostatnie `verified`; tylko oryginalny helper zwalnia `active`. Nie naprawia
+mountu ani nie uruchamia usług. Następny krok to osobno walidowane
+`recreate-volume --fresh-state`, zachowujące poprzedni root stanu.
 
 Bezpośredni CLI `recreate-volume` obsługuje również powtarzane
 `--include-untracked`. Jawne opcje przypinają kompletną listę plików nowej
@@ -572,12 +637,17 @@ DSL) helper SceneDocument zgłasza kopertą `fullmag.script-load-rejection.v1`
 `validation_error`, zanim powstanie stan live, RunIntent lub wpis katalogu. Jest to
 więc terminalne odrzucenie: grupa pozostaje wolna dla kolejnego skryptu, a wynik
 `run-script` zawiera pole `rejection` z kodem i komunikatem API (wraz z numerem
-linii skryptu). Inne niepowodzenie helpera pozostaje HTTP 500 i nieznanym wynikiem.
+linii skryptu). API zwraca również HTTP 422 `validation_error`, gdy helper kończy
+się poprawnie, ale odpowiedź `SceneDocument` nie przechodzi deserializacji lub
+walidacji autorowania. Ten błąd występuje przed placeholderem live, stanem sesji
+i `RunIntent`; wynik `run-script` zawiera terminalne `rejection`. Błędy transportu,
+procesu helpera, odczytu metadanych runtime i późniejszej publikacji nie należą do
+tej klasy i zachowują dotychczasową obsługę HTTP 500 lub nieznanego wyniku.
 
-Grupa zablokowana tym błędem przed poprawką (receipt aktywacji
+Grupa zablokowana starszym błędem procesu helpera (receipt aktywacji
 `outcome-unknown-resources-retained` z `HTTP 500 ... python SceneDocument helper
 failed`) nie jest przeklasyfikowywana automatycznie i nie ma trasy zwalniającej
-tę kwarantannę: pozostaje zablokowana do wycofania grupy przez jej właściciela
+tej awarii helpera: pozostaje zablokowana do wycofania grupy przez jej właściciela
 w cyklu sprzątania worktree (**NOT VERIFIED** jako trasa odzyskania). Nie usuwaj
 ręcznie `active`, markera ani lease.
 
@@ -615,6 +685,21 @@ dokładnego zapisanego HTTP 500 dla limitu 1048576 bajtów, pustej aktywnej sesj
 terminalnych katalogów zadań, zwolnionych lease i dowodu braku `RunIntent`
 tego żądania we wszystkich zachowanych runach. Ta trasa nie zmienia warunków
 starszego `docker-dev-release-unknown-activation`.
+
+Historyczna aktywacja, która przed tą zmianą zapisała HTTP 500 `internal_error`
+z `failed to deserialize SceneDocument response` i nieznanym polem
+`compute_resources` w `SceneStudyState` (`line 1 column 12321`), nie jest
+przeklasyfikowywana automatycznie. Ta trasa dopuszcza wyłącznie dokładną starą
+odpowiedź: identyczne pola `error` i `message`, pełną listę oczekiwanych pól
+historycznego `SceneStudyState` z rewizji `1c5c6c0a09faf499040b720bb2f6f5b962ee8ea0`
+oraz dokładną pozycję błędu. Inne błędy parsera i inne nieznane pola pozostają
+w kwarantannie. W bieżącym API deterministycznie niepoprawna odpowiedź
+`SceneDocument` jest HTTP 422; kod
+`docker_startup::activate_current_live_startup` ładuje i deserializuje dokument
+przed utworzeniem placeholdera live, publikacją stanu sesji i akceptacją
+`RunIntent`. Historyczny wariant używa tych samych pinów, preview/CAS, sprawdzenia
+wszystkich zachowanych runów, drainu i zwolnienia wyłącznie przez pierwotnego
+helpera. Nie ponawia żądania ani nie czyści historii lub `active`.
 
 Operator zapisuje trwały intent przed SIGTERM. Nie wysyła SIGKILL; po przerwanej
 obserwacji wznowienie wymaga tego samego planu i tej samej inkarnacji backendu.
@@ -717,6 +802,23 @@ uruchamia Solve ani Compute Fields. Receipt zapisuje identyfikator oraz SHA-256
 źródłowego harnessu, a wynik potwierdza odczyt payloadów ramek, widoczny canvas,
 żywy kontekst WebGL i stabilność Inspectora oraz kamery. Tryb SwiftShader jest
 dowodem przeglądarki, nie dowodem sprzętowego GPU ani fizyki FEM.
+
+Osobny scenariusz `--inspector-ack` sprawdza stabilność Inspectora podczas
+rzeczywistego PATCH i ACK. Wymaga przygotowanego, oczekującego modelu
+`examples/airbox_inspector_mixed.py`. Uruchom go dla zdrowej grupy:
+
+```powershell
+python -B scripts/docker_dev_browser_qa.py --repo-root "$source" --source-root "$source" --port 3197 --inspector-ack
+```
+
+Próba przypina sesję i obiekt `mixed_p1_box_prism`, zmienia jego nazwę na
+unikalną wartość testową i potwierdza przywrócenie nazwy przez API. Wynik
+obejmuje zachowanie węzła, fokusu i scrolla, dostępność pól, budżet żądań,
+rewizje obu ACK oraz hashe harnessu i bibliotek. Przywracanie używa aktualnej
+rewizji i własnej nazwy testowej. Konflikt sesji, obca zmiana nazwy albo
+niepotwierdzony wynik zapisuje nieudaną próbę wymagającą odczytu obiektu przed
+kolejnym uruchomieniem. Scenariusz ma własny trwały wynik i wyklucza pozostałe
+tryby Browser QA w tej samej operacji.
 
 ## Budżet backendu podczas trwającego startu
 
@@ -935,6 +1037,34 @@ nie traktuj historycznych opisów incremental output jako aktualnego kontraktu.
 | Warstwy zależności/helperów | Docker image store / BuildKit |
 | Sesje, wyniki, ustawienia, historia, ledger | skonfigurowany storage hosta Windows albo Linux/WSL |
 
+### Archiwizacja metadanych zakończonej aktywacji
+
+`scripts/docker_activation_history.py` kwalifikuje jeden zamknięty rekord przez
+preview i zastosowanie dokładnego `--plan-sha256`. Przenosi metadane do historii;
+zachowuje sesję, Zarr, sąsiedni skrypt i eksport provenance. Nie zwiększa limitu
+aktywnych rekordów, nie odtwarza Solve i nie omija pinów recovery ani blokad
+współdzielonych z natywnymi writerami.
+
+Ścieżka `storage(output_dir=...)` może być literalnym stringiem albo nazwą
+jednej modułowej stałej z takim literałem. Parser nie wykonuje skryptu.
+Odrzuca wyrażenia, aliasy, wielokrotne lub warunkowe przypisania, ponowne
+wiązanie nazwy i wildcard imports. Nadal wymaga jednego wywołania `storage`
+i kanonicznej ścieżki Zarr pod `/user-data`. Źródło musi odpowiadać oryginalnemu
+hashowi aktywacji, a zachowany wynik przechodzi osobną walidację runu.
+
+Historyczny rodzic `failed-confirmed` z zachowanym dokładnym config pinem
+wymaga dodatkowo obu argumentów `--historical-runtime-witness` oraz
+`--historical-runtime-witness-sha256`. Pierwszy wskazuje dokładny rekord
+`resume/attempts/<id>/terminal.json` albo `iteration/attempts/<id>/terminal.json`,
+drugi jego surowy SHA-256. Terminal i sąsiedni `receipt.json` muszą być zgodne,
+dotyczyć tego samego rodzica, backendu, obrazu, źródeł, grupy, namespace,
+wolumenu i `state_root`. Poprawne wznowienie musi następować po nieudanym
+starcie, a kończyć się przed aktywacją; stop-only nie jest takim dowodem.
+Oba rekordy są przypięte w planie i ponownie sprawdzane przed apply.
+To kwalifikacja historycznych mountów, a nie dowód biblioteki użytej w dawnym
+runie. Brak świadka, niezgodne piny lub niekompletny wynik nadal blokują
+archiwizację. Dla rodzica `succeeded` świadek nie jest używany.
+
 Źródła są readonly. Krótkie helpery utrzymania należą do tej samej grupy;
 nie budują ani nie uruchamiają aplikacji i nie mają Docker socketu.
 Kontrakt jednego prywatnego volume wymaga, by helper utrzymania widział tylko
@@ -981,8 +1111,28 @@ Nie ma automatycznego globalnego GC BuildKit, starych obrazów ani nieaktywnych
 grup. Ich usunięcie wymaga osobnego planu właścicieli/referencji i autoryzacji.
 Samo usunięcie kontenera nie odzyskuje wolumenów ani fizycznego VHDX.
 
-`just docker-dev-control-checks <source>` uruchamia interpretowane regresje
-launcherów w istniejącym backendzie; nie kompiluje natywnych testów jednostkowych.
+`just docker-dev-control-checks <source>` w domyślnym zakresie uruchamia
+interpretowane regresje launcherów w istniejącym backendzie. Zakres
+`live-observation-contracts` kompiluje i wykonuje w tym samym backendzie testy
+kanału publikacji live z binarium `fullmag-api-accepted-worker`, pod istniejącą
+blokadą buildu i w prywatnym targetcie weryfikacji. Polecenie oraz hashe źródeł
+są zapisane w receipcie; test używa wyłączonych danych debug i incremental.
+Wynik potwierdza wykonanie testów źródeł kanału live. Publikacja nowego pakietu i sprawdzenie
+aktualizacji pól/statusu w przeglądarce wymagają osobnych dowodów runtime.
+Zakres `fem-live-control-contracts` sprawdza przekazanie żądania Stop przez
+obserwatora do wykonawcy FEM na granicy zaakceptowanego kroku. Obejmuje sygnał
+ustawiony przed callbackiem lub przez sam callback, publikację kroku przed Stop
+oraz zachowanie Continue/Pause/Stop bez sygnału. Są to testy źródłowe przekazania
+sterowania; nie potwierdzają zatrzymania działającego procesu, zbieżności ani
+publikacji accepted checkpointu po anulowaniu.
+
+Zakres `fem-preparation-contracts` sprawdza przekazanie importowanego STL
+z osobnego katalogu źródeł do przygotowanej siatki; po kompilacji ogranicza
+czas wykonania wskazanego testu do 60 sekund. `stl-classification-contracts`
+sprawdza powłoki, ownerów komponentów oraz eksport granic, a
+`stl-meshing-contracts` obejmuje dodatkowo pełny zestaw testów meshera.
+Receipty tych zakresów wiążą także hashe wykonywanych źródeł i testów Pythona.
+
 Sukces buildu nie stanowi kwalifikacji FDM/FEM/BORIS. Release, CI i kwalifikacja
 naukowa zachowują własne jawne zarządzane recepty zgodnie z AGENTS.md.
 
@@ -1054,6 +1204,38 @@ niezmieniony. Nie jest to ogólne odzyskiwanie lease ani trasa dla aktywnego run
 Po sukcesie użyj zwykłego przypiętego resume-volume --restart-backend.
 Inne zmiany tożsamości, aktywny/nieznany konsument albo różne piny blokują zapis.
 
+
+## Osierocony restart z zachowanymi wynikami
+
+`reconcile-offline-volume` obsługuje zatrzymaną grupę, której osierocona iteracja
+pozostała w stanie `starting` albo `restarting-idle-backend`. Dla drugiego stanu
+porównuje również identyfikator i czas startu backendu z oryginalnym receiptem.
+Sama nazwa stanu nie upoważnia do odzyskania: wymagane są nieobecny helper,
+zatrzymana para usług, terminalny owner i procesy, zwolnione rezerwacje oraz
+niezmienione dane sesji i dokładne piny konfiguracji.
+
+Odczyt ledgeru zachowuje topologię grupy: osobny starszy wolumen albo
+`private/ledger` w kanonicznym wolumenie kontrolnym. Ten sam podkatalog jest
+montowany tylko do odczytu podczas kwalifikacji oraz ponownej kontroli pod
+`operation.lock`. Nie wolno zastępować go rootem wolumenu ani podkatalogiem
+innej roli lub przestrzeni nazw.
+
+Współdzielone wolumeny pakietów, Cargo i pnpm nie są traktowane jako prywatne
+wolumeny grupy po uwierzytelnieniu ich dokładnych nazw i etykiet. Kontrola
+pakietów nadal odrzuca obcy dostęp do katalogu `groups/<unit_key>` tej grupy,
+niezarejestrowane mounty rootu i aliasy przez bind mount. Uwzględnia działające
+oraz zatrzymane kontenery. Hash profilu cache i dowód wolumenów wchodzą do planu;
+kwalifikacja jest ponawiana pod blokadą przed zatwierdzeniem naprawy.
+
+Najpierw wykonaj podgląd `reconcile-offline-volume` z przypiętymi
+`--attempt`, `--config-sha256`, `--source-root`, `--port` i nowym
+`--operation-attempt`. Wykonanie wymaga `--apply --expected-plan-sha256`
+z dokładnym hashem otrzymanego planu. Operacja zapisuje oddzielny dowód
+odzyskania i usuwa wyłącznie zgodny, osierocony wskaźnik `active` pod blokadą.
+Zachowuje oryginalny receipt, brak jego terminala, ostatni zweryfikowany pakiet,
+sesje i wyniki. Wynik starej iteracji pozostaje `interrupted-retained`; nie jest
+to potwierdzenie kompilacji, testu CUDA ani symulacji. Dalsze odtworzenie grupy
+konsumuje ten dowód przez `--offline-reconciliation` i nie powtarza starego Solve.
 
 ## Authored input after accepted recovery
 
@@ -1141,3 +1323,67 @@ uwierzytelnionego native drainu, zgodnych inkarnacji i zamkniętych procesów.
 `--stop-frontend` zamyka następnie wyłącznie frontend tej samej grupy.
 Nie zmienia stanów tasków, nie usuwa wyników ani nie ponawia Solve.
 Niepotwierdzony efekt zachowuje lease i dowody do recovery.
+
+
+### Nieudany prelaunch i archiwizacja przed nową sesją
+
+Jeżeli pierwszy worker Study zakończył się błędem przed solverem, a pozostałe
+etapy nadal czekają na jego wynik, zwykły idle stop ani dowód wszystkich
+Succeeded nie pasują do tego stanu. Dedykowany tryb wymaga zwolnionych lease
+i rezerwacji hosta, dokładnego receiptu wyjścia workera oraz nieprzydzielonych,
+zablokowanych zależnościami następców:
+
+```sh
+just docker-dev-stop-prelaunch-failure <dev-attempt> <config-sha256> <source-root> <port>
+```
+
+Operacja zapisuje intent przed pojedynczym SIGTERM do przypiętej inkarnacji
+API, potwierdza jego wyjście oraz graceful drain runtime, następnie sprawdza
+zachowane rekordy pod blokadami. Przypina także kod launchera, kontrolera
+i helpera. Niepotwierdzony efekt wymaga odczytania tej samej operacji;
+nie ponawiaj sygnału ani aktywacji skryptu.
+
+Po potwierdzonym sukcesie zachowaj identyfikator operacji stop i SHA-256
+surowego terminalnego receiptu. Tylko ta para pozwala na odtworzenie ze świeżym
+stanem i zachowaniem starego store w archiwum:
+
+```sh
+just docker-dev-recreate-prelaunch-failure <dev-attempt> <config-sha256> <source-root> <stop-attempt> <raw-stop-terminal-sha256> <port>
+```
+
+Dowody są sprawdzane przed lease odtworzenia oraz ponownie pod nim.
+Plików kontrolera nie zmieniaj pomiędzy stopem i odtworzeniem. Tryb nie
+przywraca starego runu, nie powtarza skryptu ani Compute i nie zmienia
+nieudanych lub oczekujących etapów na Succeeded. Nową pracę można przyjąć
+dopiero po potwierdzeniu gotowości nowego runtime.
+
+
+### Wyczerpana pula adresów po poprawnym odtworzeniu
+
+Jeśli archiwizacja zakończyła się sukcesem, a następny start nie utworzył
+sieci ani usług przez `all predefined address pools have been fully subnetted`,
+recovery wymaga dodatkowych pinów: `--recreation-attempt` i
+`--recreation-sha256` dla surowego terminalnego receiptu zakończonego odtworzenia.
+Skrypt `scripts/docker_volume_network_failure_reconcile.py` domyślnie wykonuje
+wyłącznie podgląd; `--apply` publikuje wynik błędu dopiero po stabilnych
+obserwacjach oraz transakcyjnej kontroli zachowanych rekordów.
+
+Tryb wymaga dokładnego powiązania starego development, stopu i native drainu,
+archiwum runtime oraz nowej nieudanej próby. Zachowuje poprzednie
+`development/current.json` i `development/verified.json`; zapisuje wynik tylko
+w receipcie i terminalu nieudanego startu. Nie nadaje prawa odtworzenia
+starego runu ani nie uruchamia solvera. Nie łączy się z recovery nieobecnego
+helpera ani wznowieniem częściowej publikacji.
+
+Przed następnym startem sprawdź kolizje podsieci i trasy hosta oraz podaj
+jawne `--network-subnet`. Nie usuwaj cudzych sieci. Hash receiptu pakietu w
+pozostawionej proweniencji jest referencją; recovery sprawdza zgodność commit,
+snapshot i tożsamości native ze zarchiwizowanym drainem, a nie deklaruje
+ponownego odczytania usuniętego kontenera lub kwalifikacji jego binariów.
+
+
+### Zachowanie zakończonego natywnie Study przy zablokowanym Running w API
+
+Dla dokładnie przypiętej grupy `just docker-dev-stop-native-terminal <attempt> <config_sha256> <source_root> <port>` zapisuje publiczny stan, wiązanie zaakceptowanej komendy oraz niezmienne rekordy runu. Obsługuje zwolniony startup Study albo pojedynczy HTTP Compute nadal oznaczony jako Accepted, jeśli jego trwała recepta i bieżący dziennik wskazują ten sam run. Pozostała kolejka i aktywne komendy muszą być puste. Odczytowy preflight poprzedza zamknięcie dokładnego procesu API; właściwy natywny odczyt pod blokadą i potwierdzony drain pozostają obowiązkowe. Dla automatycznego HTTP Compute brak `start_release.json` jest przypiętą częścią dowodu. Probe korzysta z tej samej konfiguracji ABI CPU co entrypoint obrazu.
+
+Po sprawdzeniu terminalnego receiptu stopu i jego SHA `just docker-dev-recreate-native-terminal <attempt> <config_sha256> <source_root> <stop_attempt> <stop_sha256> <port>` archiwizuje całą poprzednią przestrzeń runtime i ledgeru przed utworzeniem świeżego środowiska. Dowód zachowania natywnego wyniku służy tej archiwizacji; odtworzenie aktywnego widoku wymaga własnego kontraktu. Przebudowa zachowuje jawny pojedynczy subnet z przypiętego Compose i ponownie sprawdza jego dostępność. Wszystkie kroki pozostają lokalne dla wybranej grupy WSL.

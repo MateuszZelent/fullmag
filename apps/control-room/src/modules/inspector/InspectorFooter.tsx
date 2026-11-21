@@ -1,10 +1,11 @@
 "use client";
 
-import { Check, Focus, RotateCcw } from "lucide-react";
+import { AlertCircle, Check, Focus, RotateCcw } from "lucide-react";
 import { useId, useRef, useState } from "react";
 
 import { Button } from "@/shared/ui/Button";
 import { inspectorActionState, useInspectorEditSession } from "./InspectorEditSession";
+import { focusFirstInvalid } from "./primitives/fieldErrorAnnouncer";
 
 /** Only expose actions with a real owner. Live preferences never need Apply. */
 export function InspectorFooter({
@@ -28,7 +29,12 @@ export function InspectorFooter({
       : live ? "Display changes apply immediately"
       : session?.mode === "immediate" ? "Use the actions in this panel"
       : "No staged edits in this view");
+  // Apply stays disabled for an invalid draft; this keeps the reason actionable
+  // by routing focus to the first invalid control and announcing a summary.
+  const showInvalid = staged && !!session?.dirty && !session.valid && !session.lockReason && !busy;
   const modeLabel = staged ? "Draft" : live ? "Live" : session?.mode === "immediate" ? "Immediate" : null;
+  // Tone of the floating change bar: a pending draft is tinted, an invalid one warns.
+  const tone = error || showInvalid ? "error" : staged && session?.dirty ? "draft" : live ? "live" : "idle";
 
   async function run(action: "apply" | "reset") {
     if (!session || inFlight.current || busy || (action === "apply" ? !actions.canApply : !actions.canReset)) return;
@@ -51,7 +57,13 @@ export function InspectorFooter({
   }
 
   return (
-    <footer className="fm-inspector__action-bar" data-edit-mode={session?.mode ?? "none"}>
+    <footer className="fm-inspector__action-bar" data-edit-mode={session?.mode ?? "none"} data-tone={tone}>
+      <p className="fm-inspector__action-reason" id={reasonId}>
+        <span aria-hidden="true" className="fm-inspector__action-dot" />
+        <span className="fm-inspector__action-message">
+          {modeLabel ? <><strong>{modeLabel}</strong> · </> : null}{message}
+        </span>
+      </p>
       <div className="fm-inspector__action-controls">
         {!focusDisabled ? (
           <Button className="fm-inspector__action-btn" size="sm" type="button" variant="secondary" onClick={onFocus}>
@@ -72,6 +84,18 @@ export function InspectorFooter({
             {operation === "reset" ? "Reverting…" : staged ? "Revert" : "Reset display"}
           </Button>
         ) : null}
+        {showInvalid ? (
+          <Button
+            aria-describedby={reasonId}
+            className="fm-inspector__action-btn"
+            size="sm"
+            type="button"
+            variant="secondary"
+            onClick={(event) => focusFirstInvalid(event.currentTarget.closest(".fm-inspector"))}
+          >
+            <AlertCircle size={14} aria-hidden="true" /> Show first error
+          </Button>
+        ) : null}
         {staged ? (
           <Button
             aria-describedby={reasonId}
@@ -86,9 +110,6 @@ export function InspectorFooter({
           </Button>
         ) : null}
       </div>
-      <p className="fm-inspector__action-reason" id={reasonId}>
-        {modeLabel ? <><strong>{modeLabel}</strong> · </> : null}{message}
-      </p>
       {error ? <p className="fm-inspector__action-error" role="alert">{error}</p> : null}
     </footer>
   );

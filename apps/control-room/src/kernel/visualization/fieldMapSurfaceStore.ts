@@ -4,7 +4,7 @@ import { useSyncExternalStore } from "react";
 
 import type { VisualizationStateResource } from "@/kernel/api/apiTypes";
 
-import type { PlanarSectionGeometry } from "./planarSectionModel";
+import type { ObjectSectionLayer, PlanarSectionGeometry } from "./planarSectionModel";
 
 /** Frame evidence of the mounted 2D surface (meta + scalar + raster identity). */
 export type FieldMapSurfaceEvidenceStatus = "error" | "loading" | "ready";
@@ -25,12 +25,17 @@ export interface FieldMapState {
    * queued optimistic patches), so repeated keyboard steps build on each other.
    */
   planar: NonNullable<VisualizationStateResource["planar"]> | null;
+  /** Realized objects along the current section normal (named slab layers). */
+  objectLayers: readonly ObjectSectionLayer[];
 }
 
 type Listener = () => void;
 
+const NO_OBJECT_LAYERS: readonly ObjectSectionLayer[] = [];
+
 const INITIAL_STATE: FieldMapState = {
   evidenceStatus: null,
+  objectLayers: NO_OBJECT_LAYERS,
   planar: null,
   sectionGeometry: null,
 };
@@ -44,6 +49,9 @@ function sameGeometry(
 ): boolean {
   if (left === right) return true;
   if (!left || !right) return false;
+  const leftStops = left.stops ?? [];
+  const rightStops = right.stops ?? [];
+  if (leftStops.length !== rightStops.length) return false;
   return left.plane === right.plane &&
     left.normalMin === right.normalMin &&
     left.normalMax === right.normalMax &&
@@ -52,8 +60,24 @@ function sameGeometry(
     (left.navigationStepM ?? null) === (right.navigationStepM ?? null) &&
     left.nativeResolution?.[0] === right.nativeResolution?.[0] &&
     left.nativeResolution?.[1] === right.nativeResolution?.[1] &&
-    (left.stops?.length ?? 0) === (right.stops?.length ?? 0) &&
-    (left.stops ?? []).every((stop, index) => stop === right.stops?.[index]);
+    leftStops.every((stop, index) => stop === rightStops[index]);
+}
+
+function sameObjectLayers(
+  left: readonly ObjectSectionLayer[],
+  right: readonly ObjectSectionLayer[],
+): boolean {
+  return left === right || (
+    left.length === right.length &&
+    left.every((layer, index) => {
+      const other = right[index];
+      return other !== undefined &&
+        layer.objectId === other.objectId &&
+        layer.name === other.name &&
+        layer.min === other.min &&
+        layer.max === other.max;
+    })
+  );
 }
 
 export const fieldMapSurfaceStore = {
@@ -64,11 +88,14 @@ export const fieldMapSurfaceStore = {
     if (
       sameGeometry(next.sectionGeometry, state.sectionGeometry) &&
       next.evidenceStatus === state.evidenceStatus &&
-      next.planar === state.planar
+      next.planar === state.planar &&
+      sameObjectLayers(next.objectLayers, state.objectLayers)
     ) {
       return;
     }
-    state = next;
+    state = sameObjectLayers(next.objectLayers, state.objectLayers)
+      ? { ...next, objectLayers: state.objectLayers }
+      : next;
     for (const listener of listeners) listener();
   },
   subscribe: (listener: Listener) => {
@@ -76,16 +103,6 @@ export const fieldMapSurfaceStore = {
     return () => listeners.delete(listener);
   },
 };
-
-const serverSnapshot = () => INITIAL_STATE;
-
-export function useFieldMapSurfaceState(): FieldMapState {
-  return useSyncExternalStore(
-    fieldMapSurfaceStore.subscribe,
-    fieldMapSurfaceStore.get,
-    serverSnapshot,
-  );
-}
 
 const serverEvidenceStatus = () => null;
 

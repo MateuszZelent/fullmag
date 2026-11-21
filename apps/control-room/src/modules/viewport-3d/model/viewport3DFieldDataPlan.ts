@@ -769,6 +769,7 @@ function airboxQuantityIsAvailable({
 
 export function resolveViewport3DScopedPartVectorFieldDemandPlan({
   getPartSettings,
+  liveMagnetizationAvailable = true,
   maxVectorGlyphs,
   magneticParts,
   selectedSnapshotQuery,
@@ -778,6 +779,7 @@ export function resolveViewport3DScopedPartVectorFieldDemandPlan({
     part: Viewport3DPlanMeshPart,
   ) => Viewport3DScopedPartFieldSettingsForPlanning;
   maxVectorGlyphs: number;
+  liveMagnetizationAvailable?: boolean;
   magneticParts: readonly Viewport3DPlanPartModel[];
   selectedSnapshotQuery?: FieldVectorQuery | null;
   vectorDomain: string;
@@ -795,6 +797,7 @@ export function resolveViewport3DScopedPartVectorFieldDemandPlan({
     const settings = getPartSettings(partModel.part);
     if (!settings.visible) continue;
     const quantityId = resolveCanonicalQuantityId(settings.activeQuantityId);
+    if (quantityId === "m" && !liveMagnetizationAvailable) continue;
     visiblePartsByQuantity.set(
       quantityId,
       (visiblePartsByQuantity.get(quantityId) ?? 0) + 1,
@@ -816,6 +819,7 @@ export function resolveViewport3DScopedPartVectorFieldDemandPlan({
     const settings = getPartSettings(partModel.part);
     if (!settings.visible) continue;
     const quantityId = resolveCanonicalQuantityId(settings.activeQuantityId);
+    if (quantityId === "m" && !liveMagnetizationAvailable) continue;
     const surfaceColorMode = settings.shaderVisible
       ? surfaceColorSourceToColorMode(settings.surfaceColorSource)
       : null;
@@ -874,7 +878,8 @@ export function resolveViewport3DTargetQuantityFieldDemandPlan({
   const demands: Viewport3DPassDemand[] = [];
 
   for (const partModel of magneticParts) {
-    if (magneticPartScopedFieldIds.has(partModel.part.id)) continue;
+    const partId = partModel.part.id;
+    if (magneticPartScopedFieldIds.has(partId)) continue;
     const settings = getPartSettings(partModel.part);
     const quantityId = resolveCanonicalQuantityId(settings.activeQuantityId);
     if (
@@ -888,10 +893,10 @@ export function resolveViewport3DTargetQuantityFieldDemandPlan({
     demands.push(
       ...buildViewport3DPassDemands(
         buildViewport3DTargetRenderPlan({
-          label: partModel.part.label ?? partModel.part.id,
+          label: partModel.part.label ?? partId,
           quantityId,
           settings,
-          targetId: partModel.part.id,
+          targetId: partId,
           targetKind: "part",
         }),
         {
@@ -900,7 +905,7 @@ export function resolveViewport3DTargetQuantityFieldDemandPlan({
             maxVectorGlyphs,
           ),
           replayQuery: selectedSnapshotQuery,
-          scopeId: partModel.part.id,
+          scopeId: partId,
           scopeKind: "part",
         },
       ),
@@ -1037,23 +1042,19 @@ export function resolveViewport3DTargetQuantityFieldDemandPlan({
   }
 
   const requests = planViewport3DFieldResourceRequests(demands);
+  const requestsById = new Map<string, Viewport3DFieldResourceRequest>();
+  for (const request of requests) {
+    if (
+      request.query.scope_kind === "full" &&
+      sameViewport3DQuantityIdForPlanning(request.quantityId, primaryFieldQuantityId)
+    ) {
+      continue;
+    }
+    requestsById.set(request.requestId, request);
+  }
   return {
     demands,
-    requests: new Map(
-      requests
-        .filter((request) =>
-          request.query.scope_kind !== "full" ||
-          !sameViewport3DQuantityIdForPlanning(
-            request.quantityId,
-            primaryFieldQuantityId,
-          ),
-        )
-        .map((request): [string, Viewport3DFieldResourceRequest] => [
-          request.requestId,
-          request,
-        ])
-        .toSorted(([left], [right]) => left.localeCompare(right)),
-    ),
+    requests: new Map([...requestsById].toSorted(([left], [right]) => left.localeCompare(right))),
   };
 }
 
@@ -1134,16 +1135,14 @@ export function validateViewport3DFieldResourceRequestEquivalence(
     consumers: Array.from(entry.consumers).sort(),
     requestId,
     targets: Array.from(entry.targets).sort(),
-  }))
-    .filter((entry) => entry.targets.length > 1)
-    .map((entry) =>
-      [
+  })).flatMap((entry) => entry.targets.length > 1
+    ? [[
         "duplicate-equivalent-request",
         `request=${entry.requestId}`,
         `targets=${entry.targets.join(",")}`,
         `consumers=${entry.consumers.join(",")}`,
-      ].join(" "),
-    );
+      ].join(" ")]
+    : []);
 }
 
 export function resolveViewport3DTargetFieldQuery({

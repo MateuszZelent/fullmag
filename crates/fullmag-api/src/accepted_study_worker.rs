@@ -1,7 +1,7 @@
 use anyhow::{bail, Context, Result};
 use fullmag_application::DecodedStudyArtifact;
 use fullmag_authoring::{
-    StudyAcceptancePolicy, StudyInputPort, StudyInputSource, StudyOutputPort, StudyPortDataKind,
+    StudyAcceptancePolicy, StudyOutputPort, StudyPortDataKind,
 };
 use fullmag_ir::ExecutionPlanIR;
 use fullmag_runner::{
@@ -12,7 +12,9 @@ use fullmag_runner::{
     FDM_MULTILAYER_OBSERVATION_SNAPSHOT_FILE,
 };
 use fullmag_runtime_control::{AcceptedWorkerStep, ObservationSourcePayload, StudyOutputPayload};
-use fullmag_session::SessionStore;
+use fullmag_session::{
+    communication_policy::LIVE_REALTIME_FIELD_SAMPLE_COALESCE_WINDOW_MS, SessionStore,
+};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, OpenOptions};
@@ -30,13 +32,30 @@ pub(crate) mod accepted_antenna_progress;
 #[path = "completed_inspection_recovery.rs"]
 pub(crate) mod completed_inspection_recovery;
 
-#[path = "accepted_worker_execution_receipt.rs"]
-mod accepted_worker_execution_receipt;
-use accepted_worker_execution_receipt::{
+#[path = "accepted_frequency_response_lifecycle.rs"]
+pub(crate) mod frequency_response_lifecycle;
+
+#[path = "accepted_scalar_history.rs"]
+pub(crate) mod scalar_history;
+
+use crate::accepted_worker_execution_receipt;
+use crate::accepted_worker_execution_receipt::{
+    validate_reported_native_failure_started,
     worker_execution_identity_from_plan, WorkerExecutionReceiptIdentity,
     WorkerExecutionStartedReceipt, WORKER_EXECUTION_RECEIPT_SCHEMA,
     WORKER_EXECUTION_STARTED_RECEIPT,
 };
+
+#[path = "accepted_live_layout_mask.rs"]
+mod accepted_live_layout_mask;
+
+#[cfg(test)]
+#[path = "accepted_live_layout_tests.rs"]
+mod accepted_live_layout_tests;
+
+#[cfg(test)]
+#[path = "accepted_frequency_response_receipt_tests.rs"]
+mod frequency_response_receipt_tests;
 
 const RUNNER_INITIAL_STATE_FILE: &str = "m_initial.json";
 pub(crate) const RUNNER_FINAL_STATE_FILE: &str = "m_final.json";
@@ -51,18 +70,19 @@ const WORKER_EXECUTION_COMPLETED_RECEIPT: &str = "worker_execution_completed.v1.
 // ordinary current-live resource revisions. The sidecar is not a durable
 // output: it is not CAS-pinned and never replaces the final accepted state.
 // When the solver returns, the field payload is removed and only a scalar
-// header of the last step remains. Transfer cost is bounded twice: the runner
-// copies magnetization from the device only every
-// `ACCEPTED_LIVE_FIELD_EVERY_N` steps, and the worker writes at most one
-// scalar header per `ACCEPTED_LIVE_SCALAR_MIN_INTERVAL` and one magnetization
-// payload per `ACCEPTED_LIVE_FIELD_MIN_INTERVAL`.
+// header of the last step remains. The runner owns the field cadence: it
+// copies magnetization (device-to-host on GPU) and evaluates the observation
+// catalog only for steps admitted by `ACCEPTED_LIVE_FIELD_EVERY_N` and at most
+// once per `LIVE_REALTIME_FIELD_SAMPLE_COALESCE_WINDOW_MS` of wall time, and republishes
+// the last accepted step when its loop ends. The worker writes every payload
+// it receives and at most one scalar-only header per
+// `ACCEPTED_LIVE_SCALAR_MIN_INTERVAL`.
 pub(crate) const ACCEPTED_LIVE_OBSERVATION_FILE: &str = "live_observation.v1.json";
 pub(crate) const ACCEPTED_LIVE_OBSERVATION_SCHEMA: &str = "fullmag.accepted_live_observation.v1";
 const ACCEPTED_LIVE_MAGNETIZATION_PREFIX: &str = "live_observation_m.";
 const ACCEPTED_LIVE_MAGNETIZATION_SUFFIX: &str = ".f64le";
 pub(crate) const ACCEPTED_LIVE_FIELD_EVERY_N: u64 = 1;
 const ACCEPTED_LIVE_SCALAR_MIN_INTERVAL: Duration = Duration::from_millis(500);
-const ACCEPTED_LIVE_FIELD_MIN_INTERVAL: Duration = Duration::ZERO;
 pub(crate) const ACCEPTED_OBSERVABLE_CAPTURE_FILE: &str = "accepted_observables_capture.v1.json";
 const ACCEPTED_LIVE_MAX_FIELD_BYTES: u64 = 128 * 1024 * 1024;
 /// Upper bound for one live magnetization payload (2^21 samples = 48 MiB).
@@ -71,6 +91,9 @@ const ACCEPTED_LIVE_HEADER_MAX_BYTES: u64 = 256 * 1024;
 const ACCEPTED_LIVE_RECENT_CLOCK_SAMPLES: usize = 256;
 
 /// Bounded live observation header written by an accepted worker attempt.
+/// The accepted worker dispatcher admits one case per ordinary Live task.
+pub(crate) const DEFAULT_ACCEPTED_CASE_ID: &str = "default";
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct AcceptedLiveObservationHeader {
@@ -107,6 +130,10 @@ pub(crate) struct AcceptedLiveMagnetizationRef {
     /// Exact study layout of the pinned execution plan.
     pub(crate) layout: serde_json::Value,
     pub(crate) space_fingerprint: String,
+    /// Large FEM P1 support is stored in an immutable sidecar; readers hydrate
+    /// it before returning the canonical layout to projection consumers.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) active_support_mask: Option<accepted_live_layout_mask::FemSupportMaskRef>,
     /// Present only for native FEM local-node AoS payloads.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) fem_local_node_map: Option<fullmag_runner::LiveFemLocalNodeMapIdentity>,
@@ -144,6 +171,70 @@ struct AcceptedLiveMagnetizationDomain {
     full_generation_bytes: u64,
 }
 
+fn accepted_live_field_cadence(
+    sample_count: usize,
+    full_generation_bytes: u64,
+    max_magnetization_bytes: u64,
+) -> fullmag_runner::LiveFieldCadence {
+    let min_interval = Duration::from_millis(u64::from(
+        LIVE_REALTIME_FIELD_SAMPLE_COALESCE_WINDOW_MS,
+    ));
+    let magnetization_bytes = u64::try_from(sample_count.saturating_mul(3).saturating_mul(8))
+        .unwrap_or(u64::MAX);
+    let publishable = sample_count > 0
+        && sample_count <= ACCEPTED_LIVE_MAX_MAGNETIZATION_SAMPLES
+        && magnetization_bytes <= max_magnetization_bytes;
+    let every_n = if !publishable {
+        u64::MAX
+    } else if full_generation_bytes <= max_magnetization_bytes {
+        ACCEPTED_LIVE_FIELD_EVERY_N
+    } else {
+        // Retain the coarser stride for large observation generations.
+        // The writer still bounds the requested quantities by byte budget.
+        100
+    };
+    fullmag_runner::LiveFieldCadence::new(every_n, min_interval)
+}
+
+#[cfg(test)]
+mod accepted_live_field_cadence_tests {
+    use super::{accepted_live_field_cadence, ACCEPTED_LIVE_MAX_MAGNETIZATION_SAMPLES};
+    use fullmag_session::communication_policy::LIVE_REALTIME_FIELD_SAMPLE_COALESCE_WINDOW_MS;
+    use std::time::Duration;
+
+    const LIVE_FIELD_INTERVAL: Duration =
+        Duration::from_millis(LIVE_REALTIME_FIELD_SAMPLE_COALESCE_WINDOW_MS as u64);
+
+    #[test]
+    fn publishable_field_cadence_uses_the_shared_wall_interval() {
+        let cadence = accepted_live_field_cadence(4, 128, 128);
+
+        assert_eq!(cadence.every_n(), 1);
+        assert_eq!(cadence.min_interval(), LIVE_FIELD_INTERVAL);
+    }
+
+    #[test]
+    fn oversized_catalog_keeps_its_bounded_step_fallback() {
+        let cadence = accepted_live_field_cadence(4, 129, 128);
+
+        assert_eq!(cadence.every_n(), 100);
+        assert_eq!(cadence.min_interval(), LIVE_FIELD_INTERVAL);
+    }
+
+    #[test]
+    fn unpublishable_magnetization_disables_heavy_captures() {
+        let oversized_sample_count = accepted_live_field_cadence(
+            ACCEPTED_LIVE_MAX_MAGNETIZATION_SAMPLES + 1,
+            u64::MAX,
+            u64::MAX,
+        );
+        let over_byte_budget = accepted_live_field_cadence(4, 128, 95);
+
+        assert_eq!(oversized_sample_count.every_n(), u64::MAX);
+        assert_eq!(over_byte_budget.every_n(), u64::MAX);
+    }
+}
+
 /// Worker-side writer of the bounded live observation sidecar. Every failure
 /// is logged and swallowed: live observation never changes solver control,
 /// the durable Start/Stop protocol, or the final accepted outputs.
@@ -160,7 +251,6 @@ pub(crate) struct AcceptedLiveObservationWriter {
     sequence: u64,
     magnetization_sequence: u64,
     last_scalar_write: Option<Instant>,
-    last_field_write: Option<Instant>,
     current_magnetization: Option<AcceptedLiveMagnetizationRef>,
     recent_clock: std::collections::VecDeque<(u64, f64, f64)>,
     reported_failure: bool,
@@ -213,7 +303,6 @@ impl AcceptedLiveObservationWriter {
             sequence: 0,
             magnetization_sequence: 0,
             last_scalar_write: None,
-            last_field_write: None,
             current_magnetization: None,
             recent_clock: std::collections::VecDeque::new(),
             reported_failure: false,
@@ -228,28 +317,23 @@ impl AcceptedLiveObservationWriter {
         }
     }
 
-    /// Avoid requesting costly device-to-host snapshots when the bounded
-    /// observation writer cannot publish this plan's magnetization domain.
+    /// Runner cadence for live field payloads. Avoids costly device-to-host
+    /// snapshots when the bounded observation writer cannot publish this
+    /// plan's magnetization domain, and caps captures by the shared field
+    /// publication interval otherwise.
     /// Scalar headers remain enabled independently of this cadence.
-    pub(crate) fn field_sampling_interval(&self) -> u64 {
-        let publishable = self.magnetization_domain.as_ref().is_some_and(|domain| {
-            domain.sample_count > 0
-                && domain.sample_count <= ACCEPTED_LIVE_MAX_MAGNETIZATION_SAMPLES
-                && u64::try_from(domain.sample_count.saturating_mul(3).saturating_mul(8))
-                    .is_ok_and(|bytes| bytes <= self.max_magnetization_bytes)
-        });
-        if publishable {
-            if self.magnetization_domain.as_ref().is_some_and(|domain| {
-                domain.full_generation_bytes <= self.max_magnetization_bytes
-            }) {
-                ACCEPTED_LIVE_FIELD_EVERY_N
-            } else {
-                // Keep the pre-existing bounded m/preview path for domains
-                // whose complete generation exceeds the admitted live budget.
-                100
-            }
-        } else {
-            u64::MAX
+    pub(crate) fn field_cadence(&self) -> fullmag_runner::LiveFieldCadence {
+        match self.magnetization_domain.as_ref() {
+            Some(domain) => accepted_live_field_cadence(
+                domain.sample_count,
+                domain.full_generation_bytes,
+                self.max_magnetization_bytes,
+            ),
+            None => accepted_live_field_cadence(
+                0,
+                u64::MAX,
+                self.max_magnetization_bytes,
+            ),
         }
     }
 
@@ -282,10 +366,9 @@ impl AcceptedLiveObservationWriter {
             self.recent_clock.pop_front();
         }
         let now = Instant::now();
-        let field_due = update.magnetization.is_some()
-            && self
-                .last_field_write
-                .is_none_or(|last| now.duration_since(last) >= ACCEPTED_LIVE_FIELD_MIN_INTERVAL);
+        // The runner already applied the field cadence; a payload that
+        // reaches the worker is the newest admitted accepted state.
+        let field_due = update.magnetization.is_some();
         let scalar_due = self
             .last_scalar_write
             .is_none_or(|last| now.duration_since(last) >= ACCEPTED_LIVE_SCALAR_MIN_INTERVAL);
@@ -293,11 +376,14 @@ impl AcceptedLiveObservationWriter {
             return;
         }
         let mut staged_magnetization = None;
+        let mut field_publication_error = None;
         if field_due {
             match self.write_magnetization(update) {
                 Ok(Some(reference)) => staged_magnetization = Some(reference),
                 Ok(None) => {}
-                Err(error) => self.report_failure(&error),
+                Err(error) => {
+                    field_publication_error = Some(error);
+                }
             }
         }
         let previous_magnetization = staged_magnetization
@@ -311,18 +397,61 @@ impl AcceptedLiveObservationWriter {
         } else {
             self.last_stats.clone().unwrap_or_else(|| stats.clone())
         };
+        if let Some(error) = field_publication_error {
+            let previous = self.current_magnetization.take();
+            match self.write_header(&header_stats) {
+                Ok(()) => {
+                    if let Some(previous) = previous {
+                        let _ = fs::remove_file(
+                            self.attempt_output_dir.join(previous.file_name),
+                        );
+                    }
+                    self.last_scalar_write = Some(now);
+                    self.report_failure(&error);
+                }
+                Err(scalar_error) => {
+                    self.current_magnetization = previous;
+                    self.report_failure(&anyhow::anyhow!(
+                        "{error:#}; scalar-only live header also failed: {scalar_error:#}"
+                    ));
+                }
+            }
+            return;
+        }
         if let Err(error) = self.write_header(&header_stats) {
+            let rollback_magnetization = if staged_magnetization.is_some() {
+                self.current_magnetization.take();
+                previous_magnetization
+            } else {
+                self.current_magnetization.take()
+            };
             if let Some(staged) = staged_magnetization.as_ref() {
-                self.current_magnetization = previous_magnetization;
                 let _ = fs::remove_file(self.attempt_output_dir.join(&staged.file_name));
             }
-            self.report_failure(&error);
+            // A field/support failure must not pin the scalar cursor at an old
+            // step. Publish this update without m, retaining the old payload
+            // only if the scalar-only header also cannot be written.
+            self.current_magnetization = None;
+            match self.write_header(&header_stats) {
+                Ok(()) => {
+                    if let Some(previous) = rollback_magnetization {
+                        let _ = fs::remove_file(
+                            self.attempt_output_dir.join(previous.file_name),
+                        );
+                    }
+                    self.last_scalar_write = Some(now);
+                    self.report_failure(&error);
+                }
+                Err(scalar_error) => {
+                    self.current_magnetization = rollback_magnetization;
+                    self.report_failure(&anyhow::anyhow!(
+                        "{error:#}; scalar-only live header also failed: {scalar_error:#}"
+                    ));
+                }
+            }
             return;
         }
         self.last_scalar_write = Some(now);
-        if staged_magnetization.is_some() {
-            self.last_field_write = Some(now);
-        }
         if let Some(previous) = previous_magnetization {
             // Best effort: the header no longer references this payload.
             let _ = fs::remove_file(self.attempt_output_dir.join(previous.file_name));
@@ -476,6 +605,7 @@ impl AcceptedLiveObservationWriter {
             content_sha256: fullmag_application::study_artifact_content_sha256(&bytes),
             layout: domain.layout.clone(),
             space_fingerprint: domain.space_fingerprint.clone(),
+            active_support_mask: None,
             fem_local_node_map,
             fields,
         }))
@@ -483,6 +613,14 @@ impl AcceptedLiveObservationWriter {
 
     fn write_header(&mut self, stats: &fullmag_runner::StepStats) -> Result<()> {
         let sequence = self.sequence.saturating_add(1);
+        let (magnetization, pending_support_mask) = match self.current_magnetization.as_ref() {
+            Some(reference) => {
+                let (reference, pending) =
+                    accepted_live_layout_mask::compact_reference_for_header(reference)?;
+                (Some(reference), pending)
+            }
+            None => (None, None),
+        };
         let header = AcceptedLiveObservationHeader {
             schema_version: ACCEPTED_LIVE_OBSERVATION_SCHEMA.to_owned(),
             run_id: self.run_id.clone(),
@@ -498,11 +636,18 @@ impl AcceptedLiveObservationWriter {
                 .unwrap_or(0),
             stats: Some(stats.clone()),
             operation_progress: None,
-            magnetization: self.current_magnetization.clone(),
+            magnetization,
         };
         let bytes = serde_json::to_vec(&header).context("serialize live observation header")?;
         if u64::try_from(bytes.len()).unwrap_or(u64::MAX) > ACCEPTED_LIVE_HEADER_MAX_BYTES {
             bail!("live observation header exceeds its bounded size");
+        }
+        if let Some(pending) = pending_support_mask {
+            accepted_live_layout_mask::publish_immutable_mask(
+                &self.attempt_output_dir,
+                &pending.reference,
+                &pending.bytes,
+            )?;
         }
         write_live_file_atomically(&self.attempt_output_dir, ACCEPTED_LIVE_OBSERVATION_FILE, &bytes)?;
         self.sequence = sequence;
@@ -567,17 +712,22 @@ fn validate_accepted_worker_parameters(
     parameters: &serde_json::Value,
     accepted_step_id: &str,
     allow_operation_profile: bool,
+    allow_cuda_trace: bool,
 ) -> Result<()> {
     if parameters.get(crate::accepted_solver_profile::PARAMETER).is_some() && !allow_operation_profile {
         bail!("solver_profile is supported only for accepted closed-loop inspection");
     }
     crate::accepted_solver_profile::config(parameters)?;
+    if crate::accepted_solver_profile::cuda_trace::config(parameters)?.is_some() && !allow_cuda_trace {
+        bail!("cuda_trace is supported only for accepted FEM GPU execution");
+    }
     let parameters = parameters
         .as_object()
         .context("accepted worker RunSpec parameters must be an object")?;
     for key in parameters.keys() {
         if key != "live_workspace" && key != fullmag_session::ACCEPTED_RUN_START_POLICY_KEY
-            && key != crate::accepted_solver_profile::PARAMETER {
+            && key != crate::accepted_solver_profile::PARAMETER
+            && key != crate::accepted_solver_profile::cuda_trace::PARAMETER {
             bail!("accepted worker has no binding for RunSpec parameter `{key}`");
         }
     }
@@ -599,16 +749,31 @@ fn validate_accepted_worker_parameters(
             "execution_input",
             "command_id",
             "request_idempotency_key",
+            "request_receipt",
             "step_id",
             "command",
             "startup_source_sha256",
             "initial_state_source",
+            "study_history_parent",
         ];
         if let Some(key) = live_workspace
             .keys()
             .find(|key| !ALLOWED_LIVE_WORKSPACE_KEYS.contains(&key.as_str()))
         {
             bail!("accepted worker has no binding for live_workspace field `{key}`");
+        }
+        if let Some(value) = live_workspace.get("study_history_parent") {
+            crate::study_execution_contract::parse_study_history_parent(value)?;
+        }
+        if let Some(value) = live_workspace.get("request_receipt") {
+            let receipt: fullmag_session::LiveComputeRequestReceipt = serde_json::from_value(value.clone())
+                .context("accepted worker received an invalid live Compute receipt")?;
+            receipt.validate()?;
+            if live_workspace.get("command_id").and_then(serde_json::Value::as_str)
+                != Some(receipt.command_id.as_str())
+            {
+                bail!("accepted worker live Compute receipt has a different command ID");
+            }
         }
         for key in ["api_instance_id", "session_id"] {
             if live_workspace
@@ -739,7 +904,7 @@ pub(crate) fn read_accepted_live_observation(
         // The worker may have removed the sidecar after the solver returned.
         Err(_) => return Ok(None),
     };
-    let header: AcceptedLiveObservationHeader = serde_json::from_slice(&header_bytes)
+    let mut header: AcceptedLiveObservationHeader = serde_json::from_slice(&header_bytes)
         .context("decode accepted live observation header")?;
     if header.schema_version != ACCEPTED_LIVE_OBSERVATION_SCHEMA
         || header.run_id != run_id
@@ -751,6 +916,9 @@ pub(crate) fn read_accepted_live_observation(
         bail!("accepted live observation identity differs from its task attempt");
     }
     accepted_antenna_progress::validate_header_payload(&header)?;
+    if let Some(reference) = header.magnetization.as_mut() {
+        accepted_live_layout_mask::hydrate_reference_layout(&attempt_dir, reference)?;
+    }
     let mut magnetization_values = None;
     let mut fields = Vec::new();
     if let Some(reference) = header.magnetization.as_ref() {
@@ -863,6 +1031,8 @@ const ACCEPTED_WORKER_CLAIM_RETRY_LIMIT: Duration = fullmag_runtime_control::WOR
 const ACCEPTED_WORKER_CLAIM_RETRY_DELAY: Duration = Duration::from_millis(10);
 const ACCEPTED_WORKER_GPU_INVENTORY_RETRY_LIMIT: Duration = Duration::from_secs(30);
 const ACCEPTED_WORKER_GPU_INVENTORY_RETRY_DELAY: Duration = Duration::from_secs(1);
+const ACCEPTED_WORKER_GPU_WRITER_RETRY_MIN_DELAY: Duration = Duration::from_millis(5);
+const ACCEPTED_WORKER_GPU_WRITER_RETRY_MAX_DELAY: Duration = Duration::from_millis(40);
 
 pub(crate) struct AcceptedRunnerExecution {
     pub(crate) terminal_publication: Option<fullmag_runtime_control::PreparedTerminalPublicationV4>,
@@ -1275,14 +1445,42 @@ fn retry_worker_gpu_launch_validation<T>(
     store: &SessionStore,
     run_id: &str,
     task_id: &str,
-    mut operation: impl FnMut() -> Result<T>,
+    operation: impl FnMut() -> Result<T>,
 ) -> Result<T> {
-    let deadline = Instant::now() + ACCEPTED_WORKER_GPU_INVENTORY_RETRY_LIMIT;
+    retry_worker_gpu_launch_validation_with_sleep(
+        store,
+        run_id,
+        task_id,
+        operation,
+        ACCEPTED_WORKER_GPU_INVENTORY_RETRY_LIMIT,
+        |delay| std::thread::sleep(delay),
+    )
+}
+
+fn retry_worker_gpu_launch_validation_with_sleep<T>(
+    store: &SessionStore,
+    run_id: &str,
+    task_id: &str,
+    mut operation: impl FnMut() -> Result<T>,
+    retry_limit: Duration,
+    mut sleep: impl FnMut(Duration),
+) -> Result<T> {
+    let deadline = Instant::now() + retry_limit;
+    let mut writer_busy_observations = 0_u32;
+    let mut transient_inventory_observations = 0_u32;
     let mut reported_wait = false;
     loop {
         let cancellation_intent = match store.read_task_cancellation_intent(run_id, task_id) {
             Ok(intent) => intent,
-            Err(error) if is_store_writer_busy(&error) && Instant::now() < deadline => {
+            Err(error) if is_store_writer_busy(&error) => {
+                writer_busy_observations = writer_busy_observations.saturating_add(1);
+                if Instant::now() >= deadline {
+                    return Err(gpu_launch_validation_timeout(
+                        error,
+                        writer_busy_observations,
+                        transient_inventory_observations,
+                    ));
+                }
                 if !reported_wait {
                     eprintln!(
                         "accepted worker waiting for GPU launch validation (session-store writer is busy)"
@@ -1290,13 +1488,9 @@ fn retry_worker_gpu_launch_validation<T>(
                     reported_wait = true;
                 }
                 let remaining = deadline.saturating_duration_since(Instant::now());
-                std::thread::sleep(ACCEPTED_WORKER_GPU_INVENTORY_RETRY_DELAY.min(remaining));
+                sleep(accepted_gpu_launch_writer_retry_delay(writer_busy_observations - 1)
+                    .min(remaining));
                 continue;
-            }
-            Err(error) if is_store_writer_busy(&error) => {
-                return Err(error).context(
-                    "timed out waiting for current GPU inventory during accepted worker launch",
-                );
             }
             Err(error) => {
                 return Err(error).context(
@@ -1309,12 +1503,28 @@ fn retry_worker_gpu_launch_validation<T>(
         }
         match operation() {
             Ok(value) => return Ok(value),
-            Err(error)
-                if (is_store_writer_busy(&error)
-                    || transient_gpu_inventory_reason(&error).is_some())
-                    && Instant::now() < deadline =>
-            {
-                if let Some(reason) = transient_gpu_inventory_reason(&error) {
+            Err(error) => {
+                let writer_busy = is_store_writer_busy(&error);
+                let inventory_reason = transient_gpu_inventory_reason(&error);
+                if !writer_busy && inventory_reason.is_none() {
+                    return Err(error);
+                }
+                let retry_delay = if writer_busy {
+                    writer_busy_observations = writer_busy_observations.saturating_add(1);
+                    accepted_gpu_launch_writer_retry_delay(writer_busy_observations - 1)
+                } else {
+                    transient_inventory_observations =
+                        transient_inventory_observations.saturating_add(1);
+                    ACCEPTED_WORKER_GPU_INVENTORY_RETRY_DELAY
+                };
+                if Instant::now() >= deadline {
+                    return Err(gpu_launch_validation_timeout(
+                        error,
+                        writer_busy_observations,
+                        transient_inventory_observations,
+                    ));
+                }
+                if let Some(reason) = inventory_reason {
                     if !reported_wait {
                         eprintln!(
                             "accepted worker waiting for a fresh GPU inventory sample (probe reason: {reason:?})"
@@ -1328,21 +1538,38 @@ fn retry_worker_gpu_launch_validation<T>(
                     reported_wait = true;
                 }
                 let remaining = deadline.saturating_duration_since(Instant::now());
-                if remaining.is_zero() {
-                    return Err(error);
-                }
-                std::thread::sleep(ACCEPTED_WORKER_GPU_INVENTORY_RETRY_DELAY.min(remaining));
+                sleep(retry_delay.min(remaining));
             }
-            Err(error) if is_store_writer_busy(&error)
-                || transient_gpu_inventory_reason(&error).is_some() =>
-            {
-                return Err(error).context(
-                    "timed out waiting for current GPU inventory during accepted worker launch",
-                );
-            }
-            Err(error) => return Err(error),
         }
     }
+}
+
+fn accepted_gpu_launch_writer_retry_delay(retry_index: u32) -> Duration {
+    use std::hash::{Hash, Hasher};
+
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    std::thread::current().id().hash(&mut hasher);
+    std::process::id().hash(&mut hasher);
+    retry_index.hash(&mut hasher);
+    let min_ms = ACCEPTED_WORKER_GPU_WRITER_RETRY_MIN_DELAY.as_millis() as u64;
+    let span_ms = ACCEPTED_WORKER_GPU_WRITER_RETRY_MAX_DELAY
+        .saturating_sub(ACCEPTED_WORKER_GPU_WRITER_RETRY_MIN_DELAY)
+        .as_millis() as u64
+        + 1;
+    Duration::from_millis(min_ms + hasher.finish() % span_ms)
+}
+
+fn gpu_launch_validation_timeout(
+    error: anyhow::Error,
+    writer_busy_observations: u32,
+    transient_inventory_observations: u32,
+) -> anyhow::Error {
+    // StoreWriterBusy must not escape as an error source: callers wrap output
+    // directory reservation in a generic store retry and would replay the
+    // whole launch validation after its own deadline.
+    anyhow::anyhow!(
+        "timed out waiting for current GPU inventory during accepted worker launch (store_writer_busy_observations={writer_busy_observations}, transient_gpu_inventory_observations={transient_inventory_observations}): {error:#}"
+    )
 }
 
 fn transient_gpu_inventory_reason(error: &anyhow::Error) -> Option<
@@ -1459,21 +1686,161 @@ pub(crate) fn existing_private_attempt_output_dir(
     store: &SessionStore,
     claim: &fullmag_application::TaskClaim,
 ) -> Result<PathBuf> {
-    for (value, label) in [
-        (claim.run_id.as_str(), "run_id"),
-        (claim.task_id.as_str(), "task_id"),
-        (claim.attempt_id.as_str(), "attempt_id"),
-    ] {
+    existing_private_attempt_output_dir_for_identity(
+        store,
+        claim.run_id.as_str(),
+        claim.task_id.as_str(),
+        claim.attempt_id.as_str(),
+        claim.ownership_epoch.value(),
+    )
+}
+
+fn existing_private_attempt_output_dir_for_identity(
+    store: &SessionStore,
+    run_id: &str,
+    task_id: &str,
+    attempt_id: &str,
+    ownership_epoch: u64,
+) -> Result<PathBuf> {
+    for (value, label) in [(run_id, "run_id"), (task_id, "task_id"), (attempt_id, "attempt_id")] {
         fullmag_session::repository_path::validate_store_id(value)
             .with_context(|| format!("worker attempt {label} is invalid"))?;
     }
+    if ownership_epoch == 0 {
+        bail!("worker attempt ownership epoch must be positive");
+    }
     let root = store.root();
     let runs_root = require_real_directory(&root.join("runs"))?;
-    let run_root = require_real_directory(&runs_root.join(claim.run_id.as_str()))?;
+    let run_root = require_real_directory(&runs_root.join(run_id))?;
     let worker_root = require_real_directory(&run_root.join("worker-attempts"))?;
-    let task_root = require_real_directory(&worker_root.join(claim.task_id.as_str()))?;
-    let attempt_root = require_real_directory(&task_root.join(claim.attempt_id.as_str()))?;
-    require_real_directory(&attempt_root.join(format!("epoch-{}", claim.ownership_epoch.value())))
+    let task_root = require_real_directory(&worker_root.join(task_id))?;
+    let attempt_root = require_real_directory(&task_root.join(attempt_id))?;
+    require_real_directory(&attempt_root.join(format!("epoch-{ownership_epoch}")))
+}
+
+/// Establish the narrow prelaunch-failure proof from the attempt receipts and
+/// the durable worker inbox. The caller verifies the catalog against the
+/// accepted Study before relying on this evidence.
+pub(crate) fn prelaunch_failure_proves_applied_start(
+    store: &SessionStore,
+    catalog: &fullmag_session::FmsRunCatalog,
+    task: &fullmag_session::FmsTaskCatalogEntry,
+) -> Result<bool> {
+    let (Some(attempt_id), Some(ownership_epoch)) =
+        (task.attempt_id.as_deref(), task.ownership_epoch)
+    else {
+        return Ok(false);
+    };
+    let read_transaction = store.read_transaction()?;
+    let current_catalog = store
+        .read_run_catalog(&catalog.run_id)?
+        .context("prelaunch failure run catalog disappeared")?;
+    if &current_catalog != catalog {
+        bail!("prelaunch failure run catalog changed since its projection snapshot");
+    }
+    let attempt = match existing_private_attempt_output_dir_for_identity(
+        store,
+        catalog.run_id.as_str(),
+        &task.task_id,
+        attempt_id,
+        ownership_epoch,
+    ) {
+        Ok(path) => path,
+        Err(error) if is_not_found_error(&error) => return Ok(false),
+        Err(error) => return Err(error),
+    };
+    let Some(started) = read_attempt_receipt::<WorkerExecutionStartedReceipt>(
+        &attempt,
+        WORKER_EXECUTION_STARTED_RECEIPT,
+    )? else {
+        return Ok(false);
+    };
+    let Some(failure) = read_attempt_receipt::<WorkerPrelaunchFailedReceipt>(
+        &attempt,
+        WORKER_PRELAUNCH_FAILED_RECEIPT,
+    )? else {
+        return Ok(false);
+    };
+    let claim = &started.identity.claim;
+    if failure.error.trim().is_empty()
+        || !started.identity.matches_same_attempt(&failure.identity)
+        || claim.run_id.as_str() != catalog.run_id.as_str()
+        || claim.task_id.as_str() != task.task_id.as_str()
+        || claim.attempt_id.as_str() != attempt_id
+        || claim.ownership_epoch.value() != ownership_epoch
+        || task.resource_id.as_deref() != Some(claim.lease.resource_id.as_str())
+    {
+        bail!("prelaunch failure receipts differ from the current run task attempt");
+    }
+
+    // The actual prelaunch storage failure is published before any solver
+    // output exists. Unknown files and directories fail closed, including
+    // live magnetization sidecars with their own file names.
+    let mut receipt_count = 0;
+    for entry in fs::read_dir(&attempt).context("list prelaunch failure attempt evidence")? {
+        let entry = entry.context("read prelaunch failure attempt entry")?;
+        receipt_count += 1;
+        if receipt_count > 2 {
+            bail!("prelaunch failure attempt contains extra execution evidence");
+        }
+        let name = entry.file_name().into_string()
+            .map_err(|_| anyhow::anyhow!("prelaunch failure attempt has a non-UTF8 entry"))?;
+        if !matches!(name.as_str(), WORKER_EXECUTION_STARTED_RECEIPT | WORKER_PRELAUNCH_FAILED_RECEIPT) {
+            bail!("prelaunch failure attempt contains unexpected execution evidence");
+        }
+        let metadata = fs::symlink_metadata(entry.path())
+            .context("inspect prelaunch failure attempt evidence")?;
+        if !metadata.is_file() || metadata.file_type().is_symlink() {
+            bail!("prelaunch failure attempt receipts must be regular files");
+        }
+    }
+    if receipt_count != 2 {
+        bail!("prelaunch failure attempt must contain exactly two receipts");
+    }
+
+    let empty_checkpoint = fullmag_application::WorkerCommandInbox::new(claim).checkpoint();
+    let inbox_path = fullmag_session::FmsWorkerInboxRecord::new(
+        serde_json::to_value(empty_checkpoint)?,
+    )?
+    .relative_path()?;
+    let inbox_bytes = fullmag_session::repository_path::read_bounded_regular_file(
+        store.root(),
+        &inbox_path,
+        usize::try_from(fullmag_session::MAX_TERMINAL_CATALOG_METADATA_BYTES)
+            .context("worker inbox metadata budget does not fit in memory")?,
+    )
+    .context("read bounded durable worker inbox for prelaunch failure proof")?;
+    let record: fullmag_session::FmsWorkerInboxRecord = serde_json::from_slice(&inbox_bytes)
+        .context("decode durable worker inbox for prelaunch failure proof")?;
+    record.validate().context("validate durable worker inbox record")?;
+    if record.relative_path()? != inbox_path {
+        bail!("prelaunch failure worker inbox path differs from its claim");
+    }
+    let checkpoint = serde_json::from_value(record.payload)
+        .context("decode typed worker inbox checkpoint for prelaunch failure proof")?;
+    let inbox = fullmag_application::WorkerCommandInbox::restore(claim, checkpoint)
+        .context("restore typed worker inbox for prelaunch failure proof")?;
+    let checkpoint = inbox.checkpoint();
+    if checkpoint.pending.is_some() || checkpoint.claim != claim.identity() {
+        bail!("prelaunch failure worker inbox has an uncertain or foreign command");
+    }
+    let starts = checkpoint.applied.iter()
+        .filter(|command| matches!(&command.command, fullmag_application::WorkerCommand::Start))
+        .collect::<Vec<_>>();
+    if starts.len() != 1 {
+        bail!("prelaunch failure worker inbox must contain exactly one applied Start");
+    }
+    let start = starts[0];
+    if start.message_id != started.identity.start_message_id
+        || start.sequence != started.identity.start_sequence
+        || !start.claim.matches_claim(claim)
+    {
+        bail!("prelaunch failure Started receipt differs from its applied Start");
+    }
+    drop(read_transaction);
+    validate_reported_native_failure_started(store, &attempt, claim, start)
+        .context("validate prelaunch failure Started receipt against the accepted plan")?;
+    Ok(true)
 }
 
 pub(crate) fn write_immutable_attempt_receipt<T: Serialize>(
@@ -1908,6 +2275,16 @@ fn expected_output_binding(
     port: &StudyOutputPort,
 ) -> Result<(&'static str, &'static str, &'static str)> {
     match port.data_kind {
+        StudyPortDataKind::Artifact if port.port_id == "response" => Ok((
+            "artifact", fullmag_application::FREQUENCY_RESPONSE_INDEX_CODEC_ID,
+            fullmag_application::FREQUENCY_RESPONSE_CODEC_VERSION,
+        )),
+        StudyPortDataKind::Artifact if port.port_id.strip_prefix("response-frequency-")
+            .and_then(|suffix| suffix.parse::<u64>().ok())
+            .is_some_and(|index| port.port_id == format!("response-frequency-{index:06}")) => Ok((
+            "artifact", fullmag_application::FREQUENCY_RESPONSE_POINT_CODEC_ID,
+            fullmag_application::FREQUENCY_RESPONSE_CODEC_VERSION,
+        )),
         StudyPortDataKind::Artifact if port.port_id == "inspection" => Ok((
             "artifact", fullmag_application::ANTENNA_INSPECTION_BUNDLE_CODEC_ID,
             fullmag_application::ANTENNA_INSPECTION_BUNDLE_CODEC_VERSION,
@@ -2497,44 +2874,6 @@ pub(crate) fn accepted_runner_horizon(accepted_step: &AcceptedWorkerStep) -> Res
     Ok(until_seconds)
 }
 
-/// Execute the explicitly supported accepted-study lane after a durable Start
-/// has entered the worker inbox. This is a narrow adapter: unsupported request
-/// semantics, acceptance rules, or device overrides fail closed until they
-/// have dedicated bindings and qualification.
-pub(crate) fn execute_accepted_worker_start(
-    store: &SessionStore,
-    project_id: &fullmag_application::ProjectId,
-    start: &fullmag_application::WorkerCommandEnvelope,
-    accepted_step: &AcceptedWorkerStep,
-    case_id: &str,
-    interrupt_requested: Option<&AtomicBool>,
-) -> Result<AcceptedRunnerExecution> {
-    validate_accepted_worker_start_preconditions(store, start, accepted_step, case_id)?;
-
-    let snapshot_started_at = Instant::now();
-    let accepted = retry_store_writer_busy(|| {
-        fullmag_runtime_control::load_accepted_study_snapshot(
-            store,
-            &accepted_step.claim.run_id,
-            project_id,
-        )
-    })
-    .context("load immutable accepted study for worker execution")?;
-    eprintln!(
-        "accepted worker immutable study snapshot loaded (elapsed_ms={})",
-        snapshot_started_at.elapsed().as_millis()
-    );
-
-    execute_accepted_worker_start_with_snapshot(
-        store,
-        &accepted,
-        start,
-        accepted_step,
-        case_id,
-        interrupt_requested,
-    )
-}
-
 /// Execute a Start using the immutable accepted snapshot already validated by
 /// `run_pending_accepted_start`. Recheck the durable worker boundary before
 /// dispatch, but do not reload the immutable study/catalog payload.
@@ -2616,6 +2955,81 @@ fn validate_accepted_worker_start_preconditions(
     Ok(())
 }
 
+fn has_inactive_time_dependent_slonczewski(
+    problem: &fullmag_ir::ProblemIR,
+    plan: &fullmag_ir::ExecutionPlanIR,
+) -> bool {
+    // Use the immutable authored inventory and the planner's normalized
+    // activation. An omitted or unsupported module is not an inactive stage.
+    let [fullmag_ir::SpinTorqueModuleIR::Slonczewski {
+        id: Some(id),
+        time_expression: Some(_),
+        ..
+    }] = problem.spin_torque_modules.as_slice() else {
+        return false;
+    };
+    plan.provenance.physics_graph.as_ref().is_some_and(|graph| {
+        graph.modules.iter().any(|module| {
+            module.kind == "spin_torque" && module.module_id.as_str() == id.as_str() && module.status == "inactive"
+        })
+    })
+}
+
+/// Validate numeric execution before reserving an attempt. Field/state f64
+/// codecs do not require the CUDA integrator to use internal double storage.
+fn accepted_fdm_execution_precision(
+    request: &fullmag_application::RequestedExecution,
+    problem_precision: fullmag_ir::ExecutionPrecision,
+    single_grid: Option<&fullmag_ir::FdmPlanIR>,
+    has_frozen_terminal_context: bool,
+    has_inactive_time_expression: bool,
+) -> Result<fullmag_ir::ExecutionPrecision> {
+    use fullmag_ir::ExecutionPrecision;
+    let precision = match (request.device.as_str(), request.precision.as_str()) {
+        ("cpu" | "gpu", "double") => ExecutionPrecision::Double,
+        ("gpu", "single") if single_grid.is_some() && !has_frozen_terminal_context => ExecutionPrecision::Single,
+        _ => bail!("accepted FDM execution requires CPU/GPU double or single-grid GPU single; frozen terminal single is unsupported"),
+    };
+    let has_time_expression = single_grid
+        .is_some_and(|plan| plan.slonczewski_time_expression.is_some());
+    let extended_time_expression = request.mode == "extended"
+        && matches!(request.device.as_str(), "cpu" | "gpu")
+        && precision == ExecutionPrecision::Double
+        && !has_frozen_terminal_context
+        && single_grid.is_some_and(|plan| {
+            plan.spin_transport_plans.is_empty()
+                && plan.fdm_gpu_charge_transports.is_empty()
+                && if has_time_expression {
+                    plan.integrator == Some(fullmag_ir::IntegratorChoice::Rk45)
+                        && plan.relaxation.is_none()
+                } else {
+                    has_inactive_time_expression
+                        && plan.current_density.is_none()
+                        && plan.stt_spin_polarization.is_none()
+                        && plan.sot_current_density.is_none()
+                        && plan.sot_drive.is_none()
+                }
+        });
+    if request.backend != "fdm"
+        || (request.mode == "strict" && has_time_expression)
+        || (request.mode != "strict" && !extended_time_expression)
+    {
+        bail!("accepted FDM execution requires strict mode or the explicit extended FP64 FDM Slonczewski time-expression lane");
+    }
+    if problem_precision != precision {
+        bail!("accepted FDM request precision differs from immutable ProblemIR precision");
+    }
+    if let Some(plan) = single_grid {
+        if plan.precision != precision {
+            bail!("accepted FDM request precision differs from resolved single-grid precision");
+        }
+        plan.precision_policy
+            .validate_for(precision)
+            .map_err(anyhow::Error::msg)?;
+    }
+    Ok(precision)
+}
+
 fn execute_accepted_worker_start_with_snapshot(
     store: &SessionStore,
     accepted: &fullmag_runtime_control::AcceptedStudySnapshot,
@@ -2647,7 +3061,18 @@ fn execute_accepted_worker_start_with_snapshot(
     }
 
     let specification = &accepted.run.specification;
-    crate::accepted_solver_profile::validate_resolved_study_profile(&specification.parameters, &accepted.study, &accepted.catalog, &accepted.lowered)?;
+    crate::study_execution_contract::validate_worker_initial_state_binding(
+        specification,
+        &accepted.study,
+        accepted_step,
+    )
+    .context("validate accepted live initial state before dispatch")?;
+    crate::accepted_solver_profile::validate_resolved_study_profile(
+        &specification.parameters,
+        &accepted.study,
+        &accepted.catalog,
+        &accepted.lowered,
+    )?;
     let immutable_problem = accepted
         .catalog
         .entries()
@@ -2678,12 +3103,18 @@ fn execute_accepted_worker_start_with_snapshot(
             interrupt_requested,
         );
     }
+    if matches!(&accepted_step.execution_plan.backend_plan,
+        fullmag_ir::BackendPlanIR::FemFrequencyResponse(_)) {
+        return frequency_response_lifecycle::execute(
+            store, accepted, start, accepted_step, study_step, case_id, interrupt_requested);
+    }
     if study_step.outputs.iter().any(|port| port.data_kind == StudyPortDataKind::Artifact) {
         bail!("legacy solver steps cannot publish an inspection artifact");
     }
     // Validate the same bounded RunSpec metadata before backend dispatch;
     // FEM must not bypass the live-workspace/start-policy binding guard.
-    validate_accepted_worker_parameters(&specification.parameters, &accepted_step.step_id, request.backend == "fem")?;
+    validate_accepted_worker_parameters(&specification.parameters, &accepted_step.step_id,
+        request.backend == "fem", request.backend == "fem")?;
     if request.backend == "fem" {
         crate::accepted_fem_study_worker::validate_declared_outputs(&study_step.outputs)
             .context("validate accepted FEM output contract before recovery or reservation")?;
@@ -2697,13 +3128,21 @@ fn execute_accepted_worker_start_with_snapshot(
             interrupt_requested,
         );
     }
-    if request.backend != "fdm"
-        || !matches!(request.device.as_str(), "cpu" | "gpu")
-        || request.precision != "double"
-        || request.mode != "strict"
-    {
-        bail!("accepted worker currently supports only FDM CPU/GPU double strict");
-    }
+    let single_grid = match &accepted_step.execution_plan.backend_plan {
+        fullmag_ir::BackendPlanIR::Fdm(plan) => Some(plan),
+        _ => None,
+    };
+    accepted_fdm_execution_precision(request,
+        accepted_step.problem.backend_policy.execution_precision,
+        single_grid,
+        accepted_step.resolved_input.frozen_stage_context.is_some(),
+        request.mode == "extended"
+            && !single_grid.is_some_and(|plan| plan.slonczewski_time_expression.is_some())
+            && has_inactive_time_dependent_slonczewski(
+                &accepted_step.problem,
+                &accepted_step.execution_plan,
+            ),
+    )?;
     if !specification.seeds.is_empty()
         || !accepted_step.problem.problem_meta.seeds.is_empty()
     {
@@ -2725,21 +3164,24 @@ fn execute_accepted_worker_start_with_snapshot(
             request.device.to_uppercase()
         );
     }
+    // The precision/lane check above admitted only these two concrete modes.
+    let execution_mode = if request.mode == "extended" {
+        fullmag_ir::ExecutionMode::Extended
+    } else {
+        fullmag_ir::ExecutionMode::Strict
+    };
     if accepted_step.problem.backend_policy.requested_backend != fullmag_ir::BackendTarget::Fdm
-        || accepted_step.problem.backend_policy.execution_precision
-            != fullmag_ir::ExecutionPrecision::Double
-        || accepted_step.problem.validation_profile.execution_mode
-            != fullmag_ir::ExecutionMode::Strict
+        || accepted_step.problem.validation_profile.execution_mode != execution_mode
         || accepted_step.execution_plan.common.requested_backend != fullmag_ir::BackendTarget::Fdm
         || accepted_step.execution_plan.common.resolved_backend != fullmag_ir::BackendTarget::Fdm
-        || accepted_step.execution_plan.common.execution_mode != fullmag_ir::ExecutionMode::Strict
+        || accepted_step.execution_plan.common.execution_mode != execution_mode
         || !matches!(
             &accepted_step.execution_plan.backend_plan,
             fullmag_ir::BackendPlanIR::Fdm(_) | fullmag_ir::BackendPlanIR::FdmMultilayer(_)
         )
     {
         bail!(
-            "accepted worker execution plan is outside the supported FDM/FDM multilayer CPU/GPU double strict lanes"
+            "accepted worker execution plan differs from the admitted FDM mode or backend"
         );
     }
     if let fullmag_ir::BackendPlanIR::FdmMultilayer(plan) =
@@ -2854,15 +3296,15 @@ fn execute_accepted_worker_start_with_snapshot(
         );
     }
     let storage_attempt_dir = attempt_output_dir.clone();
+    let mut live_observation = AcceptedLiveObservationWriter::new(
+        &attempt_output_dir,
+        accepted_step,
+        &execution_plan,
+        format!("fdm_{}", request.device),
+    );
     let execution: Result<AcceptedRunnerExecution> = (|| {
         let display_selection = fullmag_runner::DisplaySelectionState::default;
-        let mut live_observation = AcceptedLiveObservationWriter::new(
-            &attempt_output_dir,
-            accepted_step,
-            &execution_plan,
-            format!("fdm_{}", request.device),
-        );
-        let field_sampling_interval = live_observation.field_sampling_interval();
+        let field_cadence = live_observation.field_cadence();
         let frozen = match accepted_step.resolved_input.frozen_stage_context.as_ref() {
             Some(binding) => {
                 let fullmag_ir::BackendPlanIR::Fdm(plan) = &execution_plan.backend_plan else {
@@ -2879,7 +3321,7 @@ fn execute_accepted_worker_start_with_snapshot(
                 &problem, &execution_plan, until_seconds, &attempt_output_dir,
                 storage.as_ref().map(|value| value.data_root()).unwrap_or(&attempt_output_dir),
                 interrupt_requested, &context.frozen, context.source_frozen_plan.as_ref(),
-                field_sampling_interval, |update| {
+                field_cadence, |update| {
                     live_observation.observe(&update);
                     StepAction::Continue
                 })
@@ -2891,7 +3333,7 @@ fn execute_accepted_worker_start_with_snapshot(
             until_seconds,
             &attempt_output_dir,
             storage.as_ref().map(|value| value.data_root()).unwrap_or(&attempt_output_dir),
-            field_sampling_interval,
+            field_cadence,
             &display_selection,
             interrupt_requested,
             false,
@@ -2901,8 +3343,6 @@ fn execute_accepted_worker_start_with_snapshot(
             },
         )
         };
-        // Drain the live sidecar for both frozen and ordinary execution, including errors.
-        live_observation.finish();
         let result = runner_result
         .map_err(|error| anyhow::anyhow!(error.to_string()))
         .with_context(|| format!("execute accepted FDM {} runner plan", request.device))?;
@@ -2960,6 +3400,14 @@ fn execute_accepted_worker_start_with_snapshot(
         if let Some(storage) = &mut storage {
             storage.finish(true, &attempt_output_dir)?;
         }
+        if accepted.run.specification.parameters.get("live_workspace").is_some() {
+            if let Err(error) = scalar_history::prepare_scalar_history(
+                store, &attempt_output_dir, accepted_step, &receipt_identity, &outputs,
+            ) {
+                tracing::warn!(task = %accepted_step.claim.task_id.as_str(), error = %error,
+                    "solver scalar history could not be archived");
+            }
+        }
         persist_completed_worker_execution_with_terminal(
             store,
             &attempt_output_dir,
@@ -2989,7 +3437,7 @@ fn execute_accepted_worker_start_with_snapshot(
             completion: result.completion,
         })
     })();
-    if let Some(storage) = &mut storage {
+    let storage_result = if let Some(storage) = &mut storage {
         let success = execution
             .as_ref()
             .is_ok_and(|result| result.status == RunStatus::Completed);
@@ -3000,8 +3448,14 @@ fn execute_accepted_worker_start_with_snapshot(
             Err(error) => storage.note_outcome("failed", Some(format!("{error:#}"))),
             _ => {}
         }
-        storage.finish(success, &storage_attempt_dir)?;
-    }
+        storage.finish(success, &storage_attempt_dir)
+    } else {
+        Ok(())
+    };
+    // Keep the last live field and its original clock visible while the
+    // artifact writer publishes the stage. Always drain it, even on error.
+    live_observation.finish();
+    storage_result?;
     execution
 }
 
@@ -3020,7 +3474,7 @@ fn validate_inspection_run_parameters(
     step_id: &str,
     allow_operation_profile: bool,
 ) -> Result<()> {
-    validate_accepted_worker_parameters(&specification.parameters, step_id, allow_operation_profile)?;
+    validate_accepted_worker_parameters(&specification.parameters, step_id, allow_operation_profile, false)?;
     let parameters = specification.parameters.as_object()
         .context("inspection RunSpec parameters must be an object")?;
     if parameters.keys().any(|key| {
@@ -3035,7 +3489,9 @@ fn validate_inspection_run_parameters(
         "api_instance_id", "session_id", "session_epoch", "scene_revision", "command_id",
         "request_idempotency_key", "step_id", "command", "startup_source_sha256",
     ].into_iter().collect();
-    if live.keys().map(String::as_str).filter(|key| *key != "execution_input")
+    // The shared worker validator above has already decoded and validated the
+    // HTTP receipt, including its command ID. It is orchestration evidence.
+    if live.keys().map(String::as_str).filter(|key| !matches!(*key, "execution_input" | "study_history_parent" | "request_receipt"))
         .collect::<BTreeSet<_>>() != expected_keys {
         bail!("inspection live workspace binding has unsupported fields");
     }
@@ -3304,6 +3760,9 @@ fn execute_accepted_fem_worker_start(
                 .unwrap_or(&attempt_output_dir),
             interrupt_requested,
             &mut profile,
+            || crate::accepted_solver_profile::cuda_capture::Capture::start(
+                prepared.cuda_trace.as_ref(), &attempt_output_dir, &receipt_identity,
+                prepared.gpu_uuid.as_deref()),
         );
         let profile_outcome = match &outcome {
             Ok(crate::accepted_fem_study_worker::AcceptedFemExecutionOutcome::Completed(_)) =>
@@ -3339,6 +3798,14 @@ fn execute_accepted_fem_worker_start(
                 }).cloned();
                 if let Some(storage) = &mut storage {
                     storage.finish(true, &execution.attempt_output_dir)?;
+                }
+                if accepted.run.specification.parameters.get("live_workspace").is_some() {
+                    if let Err(error) = scalar_history::prepare_scalar_history(
+                        store, &execution.attempt_output_dir, accepted_step, &receipt_identity, &execution.outputs,
+                    ) {
+                        tracing::warn!(task = %accepted_step.claim.task_id.as_str(), error = %error,
+                            "solver scalar history could not be archived");
+                    }
                 }
                 persist_completed_worker_execution(
                     store,
@@ -3900,7 +4367,7 @@ fn apply_accepted_start_effect(
         accepted,
         start,
         &accepted_step,
-        "default",
+        DEFAULT_ACCEPTED_CASE_ID,
         Some(&control.interrupt_requested),
     );
     let execution = match execution {
@@ -3926,7 +4393,7 @@ fn apply_accepted_start_effect(
         accepted,
         start,
         &accepted_step,
-        "default",
+        DEFAULT_ACCEPTED_CASE_ID,
         None,
     )
     .context("recover completed worker receipt before publication")?;
@@ -3942,7 +4409,15 @@ fn apply_accepted_start_effect(
     }
     // Evaluate immutable terminal observables while this process still owns
     // the solver's resource lease. HTTP handlers only adopt the CAS bundle.
-    if !control.interrupt_requested.load(Ordering::Acquire) {
+    if !control.interrupt_requested.load(Ordering::Acquire)
+        && !matches!(accepted_step.execution_plan.backend_plan, fullmag_ir::BackendPlanIR::FemFrequencyResponse(_))
+    {
+        if accepted.run.specification.parameters.get("live_workspace").is_some() {
+            let receipt = worker_execution_receipt_identity(start, &accepted_step, DEFAULT_ACCEPTED_CASE_ID)?;
+            scalar_history::publish_scalar_history(
+                store, &durable_execution.attempt_output_dir, &accepted_step, &receipt, &durable_execution.outputs,
+            ).context("publish accepted scalar history")?;
+        }
         crate::accepted_field_materialization_worker::prepare_and_publish(
             store, accepted, &accepted_step, &durable_execution,
         )
@@ -4742,11 +5217,214 @@ pub(crate) fn read_explicit_runner_artifact(
 }
 
 #[cfg(test)]
+mod accepted_fdm_precision_tests {
+    use super::accepted_fdm_execution_precision;
+    use fullmag_application::RequestedExecution;
+    use fullmag_ir::{ExecutionPrecision as Precision, FdmPlanIR, FdmPrecisionPolicyIR};
+
+    fn request(device: &str, precision: &str) -> RequestedExecution {
+        RequestedExecution {
+            backend: "fdm".into(),
+            device: device.into(),
+            precision: precision.into(),
+            mode: "strict".into(),
+            minimum_resources: None,
+        }
+    }
+
+    fn plan(precision: Precision) -> FdmPlanIR {
+        FdmPlanIR {
+            precision,
+            precision_policy: FdmPrecisionPolicyIR::resolve(precision),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn retains_cpu_gpu_double_and_admits_matching_single_grid_cuda_single() {
+        let double = plan(Precision::Double);
+        for device in ["cpu", "gpu"] {
+            assert_eq!(
+                accepted_fdm_execution_precision(
+                    &request(device, "double"),
+                    Precision::Double,
+                    Some(&double),
+                    false,
+                    false,
+                )
+                .unwrap(),
+                Precision::Double
+            );
+            assert_eq!(
+                accepted_fdm_execution_precision(
+                    &request(device, "double"),
+                    Precision::Double,
+                    None,
+                    false,
+                    false,
+                )
+                .unwrap(),
+                Precision::Double
+            );
+        }
+        let single = plan(Precision::Single);
+        assert_eq!(
+            accepted_fdm_execution_precision(
+                &request("gpu", "single"),
+                Precision::Single,
+                Some(&single),
+                false,
+                false,
+            )
+            .unwrap(),
+            Precision::Single
+        );
+    }
+
+    #[test]
+    fn refuses_cpu_multilayer_and_frozen_terminal_single_without_fallback() {
+        let single = plan(Precision::Single);
+        for (device, grid, frozen) in [
+            ("cpu", Some(&single), false),
+            ("gpu", None, false),
+            ("gpu", Some(&single), true),
+            ("auto", Some(&single), false),
+        ] {
+            assert!(accepted_fdm_execution_precision(
+                &request(device, "single"),
+                Precision::Single,
+                grid,
+                frozen,
+                false,
+            )
+            .is_err());
+        }
+        let mut extended = request("gpu", "single");
+        extended.mode = "extended".into();
+        assert!(accepted_fdm_execution_precision(
+            &extended,
+            Precision::Single,
+            Some(&single),
+            false,
+            false,
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn admits_extended_only_for_the_fp64_rk45_current_expression_lanes() {
+        let mut single = plan(Precision::Double);
+        single.integrator = Some(fullmag_ir::IntegratorChoice::Rk45);
+        single.slonczewski_time_expression = Some(fullmag_ir::TimeExpressionIR {
+            source: "sin(t)".into(), constants: Default::default(), event_times_s: Vec::new(),
+        });
+
+        for device in ["cpu", "gpu"] {
+            let mut request = request(device, "double");
+            request.mode = "extended".into();
+            assert_eq!(
+                accepted_fdm_execution_precision(&request, Precision::Double, Some(&single), false, false).unwrap(),
+                Precision::Double,
+                "device={device}",
+            );
+        }
+
+        let mut strict_gpu = request("gpu", "double");
+        strict_gpu.mode = "strict".into();
+        assert!(accepted_fdm_execution_precision(&strict_gpu, Precision::Double, Some(&single), false, false).is_err());
+        single.integrator = Some(fullmag_ir::IntegratorChoice::Heun);
+        let mut extended_cpu = request("cpu", "double");
+        extended_cpu.mode = "extended".into();
+        assert!(accepted_fdm_execution_precision(&extended_cpu, Precision::Double, Some(&single), false, false).is_err());
+    }
+
+    #[test]
+    fn admits_inactive_time_expression_stages_without_enabling_constant_current() {
+        let mut request = request("gpu", "double");
+        request.mode = "extended".into();
+        let mut stage = plan(Precision::Double);
+        stage.integrator = Some(fullmag_ir::IntegratorChoice::Rk23);
+        assert_eq!(
+            accepted_fdm_execution_precision(&request, Precision::Double, Some(&stage), false, true)
+                .unwrap(),
+            Precision::Double,
+        );
+        assert!(
+            accepted_fdm_execution_precision(&request, Precision::Double, Some(&stage), false, false)
+                .is_err()
+        );
+        assert!(
+            accepted_fdm_execution_precision(&request, Precision::Double, Some(&stage), true, true)
+                .is_err()
+        );
+        stage.current_density = Some([1.0, 0.0, 0.0]);
+        assert!(
+            accepted_fdm_execution_precision(&request, Precision::Double, Some(&stage), false, true)
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn rejects_request_ir_plan_and_numeric_policy_mismatches() {
+        let single = plan(Precision::Single);
+        assert!(accepted_fdm_execution_precision(
+            &request("gpu", "single"),
+            Precision::Double,
+            Some(&single),
+            false,
+            false,
+        )
+        .is_err());
+        assert!(accepted_fdm_execution_precision(
+            &request("gpu", "single"),
+            Precision::Single,
+            Some(&plan(Precision::Double)),
+            false,
+            false,
+        )
+        .is_err());
+        let mut bad_policy = single.clone();
+        bad_policy.precision_policy.reduction = Precision::Single;
+        assert!(accepted_fdm_execution_precision(
+            &request("gpu", "single"),
+            Precision::Single,
+            Some(&bad_policy),
+            false,
+            false,
+        )
+        .is_err());
+        assert!(accepted_fdm_execution_precision(
+            &request("gpu", "double"),
+            Precision::Double,
+            Some(&single),
+            false,
+            false,
+        )
+        .is_err());
+    }
+}
+
+#[cfg(test)]
 mod closed_loop_run_parameter_tests {
     use super::validate_accepted_inspection_run_parameters;
     use fullmag_application::{ProjectId, ProjectSnapshot, RequestedExecution, RequestedResourceBudget,
         RunId, RunSpecification, StudyId, StudyReference};
     use serde_json::json;
+
+    #[test]
+    fn cuda_trace_passes_fem_worker_binding_but_never_inspection_binding() {
+        let mut specification = startup();
+        specification.parameters[crate::accepted_solver_profile::cuda_trace::PARAMETER] = json!({
+            "schema_version": "accepted_cuda_trace.v1", "max_bytes": 67108864, "max_duration_ms": 60000
+        });
+        super::validate_accepted_worker_parameters(&specification.parameters, "step", true, true).unwrap();
+        assert!(super::validate_accepted_worker_parameters(&specification.parameters, "step", false, false).is_err());
+        for allow_profile in [false, true] {
+            assert!(super::validate_inspection_run_parameters(&specification, "step", allow_profile).is_err());
+        }
+        specification.parameters[crate::accepted_solver_profile::cuda_trace::PARAMETER]["max_bytes"] = json!(0);
+        assert!(super::validate_accepted_worker_parameters(&specification.parameters, "step", true, true).is_err());
+    }
 
     fn startup() -> RunSpecification {
         let source = "a".repeat(64);
@@ -4819,6 +5497,49 @@ mod closed_loop_run_parameter_tests {
                 });
                 validate_accepted_inspection_run_parameters(&specification, "inspect").unwrap();
             }
+        }
+    }
+
+    #[test]
+    fn solve_inspection_accepts_validated_http_receipt_and_rejects_unbound_metadata() {
+        let mut solve = startup();
+        solve.parameters["live_workspace"]["command"] = json!({
+            "kind": "solve", "command_id": "request",
+        });
+        solve.parameters["live_workspace"]["startup_source_sha256"] = json!(null);
+        let receipt = fullmag_session::LiveComputeRequestReceipt {
+            key_sha256: "a".repeat(64),
+            request_sha256: "b".repeat(64),
+            command_id: "request".into(),
+            request_id: Some("http-request".into()),
+            command_kind: Some("solve".into()),
+            client_intent_id: Some("client-intent".into()),
+            requested_target: Some(json!({"kind": "study"})),
+        };
+        solve.parameters["live_workspace"]["request_receipt"] = serde_json::to_value(receipt).unwrap();
+        validate_accepted_inspection_run_parameters(&solve, "inspect").unwrap();
+        for allow_profile in [false, true] {
+            super::validate_inspection_run_parameters(&solve, "inspect", allow_profile).unwrap();
+        }
+        for (key, value) in [
+            ("key_sha256", json!("invalid")),
+            ("request_sha256", json!("invalid")),
+            ("command_id", json!("another-command")),
+            ("command_kind", json!("unknown")),
+            ("requested_target", json!({})),
+            ("unexpected", json!(true)),
+        ] {
+            let mut invalid = solve.clone();
+            invalid.parameters["live_workspace"]["request_receipt"][key] = value;
+            assert!(validate_accepted_inspection_run_parameters(&invalid, "inspect").is_err(), "{key}");
+        }
+        let mut invalid = solve.clone();
+        invalid.parameters["live_workspace"]["request_receipt"] = json!(null);
+        assert!(validate_accepted_inspection_run_parameters(&invalid, "inspect").is_err());
+        for key in ["unexpected", "initial_state_source"] {
+            let mut invalid = solve.clone();
+            invalid.parameters["live_workspace"][key] = json!({});
+            assert!(validate_accepted_inspection_run_parameters(&invalid, "inspect").is_err(), "{key}");
         }
     }
 
@@ -5185,6 +5906,140 @@ mod accepted_worker_claim_retry_tests {
 
         assert_eq!(attempts, 1, "durable cancellation must stop before retry");
         assert!(format!("{error:#}").contains("cancelled by durable task cancellation"));
+    }
+
+    fn gpu_validation_store() -> (tempfile::TempDir, SessionStore) {
+        let directory = tempfile::tempdir().unwrap();
+        let store = SessionStore::open(directory.path().join("store")).unwrap();
+        store
+            .commit_run_catalog(&fullmag_session::FmsRunCatalog {
+                schema_version: fullmag_session::FMS_RUN_CATALOG_SCHEMA.into(),
+                run_id: "run-worker-gpu-launch-retry".into(),
+                revision: 1,
+                updated_at: chrono::Utc::now(),
+                tasks: vec![unclaimed_task("task-worker-gpu-launch-retry")],
+            })
+            .unwrap();
+        (directory, store)
+    }
+
+    #[test]
+    fn gpu_launch_validation_retries_a_real_writer_conflict_with_bounded_jitter() {
+        let (_directory, store) = gpu_validation_store();
+        let holder_store = SessionStore::open(store.root().to_path_buf()).unwrap();
+        let (acquired_sender, acquired_receiver) = sync_channel(1);
+        let (release_sender, release_receiver) = sync_channel(1);
+        let (released_sender, released_receiver) = sync_channel(1);
+        let holder = thread::spawn(move || {
+            let transaction = holder_store.write_transaction().unwrap();
+            acquired_sender.send(()).unwrap();
+            release_receiver
+                .recv_timeout(Duration::from_secs(2))
+                .unwrap();
+            drop(transaction);
+            released_sender.send(()).unwrap();
+        });
+        acquired_receiver
+            .recv_timeout(Duration::from_secs(1))
+            .unwrap();
+
+        let mut release_sender = Some(release_sender);
+        let mut observed_delays = Vec::new();
+        let result = retry_worker_gpu_launch_validation_with_sleep(
+            &store,
+            "run-worker-gpu-launch-retry",
+            "task-worker-gpu-launch-retry",
+            || {
+                let transaction = store.write_transaction()?;
+                drop(transaction);
+                Ok(())
+            },
+            ACCEPTED_WORKER_GPU_INVENTORY_RETRY_LIMIT,
+            |delay| {
+                observed_delays.push(delay);
+                if let Some(sender) = release_sender.take() {
+                    sender.send(()).unwrap();
+                    released_receiver
+                        .recv_timeout(Duration::from_secs(1))
+                        .unwrap();
+                }
+            },
+        );
+        if let Some(sender) = release_sender.take() {
+            sender.send(()).unwrap();
+            released_receiver
+                .recv_timeout(Duration::from_secs(1))
+                .unwrap();
+        }
+        holder.join().unwrap();
+
+        assert!(result.is_ok(), "writer conflict must retry: {result:#?}");
+        assert!(
+            !observed_delays.is_empty(),
+            "fixture must observe and retry a typed native writer conflict"
+        );
+        assert!(observed_delays.iter().all(|delay| {
+            *delay >= ACCEPTED_WORKER_GPU_WRITER_RETRY_MIN_DELAY
+                && *delay <= ACCEPTED_WORKER_GPU_WRITER_RETRY_MAX_DELAY
+        }));
+    }
+
+    #[test]
+    fn gpu_launch_writer_retry_delay_is_bounded_and_phase_varied() {
+        let first = accepted_gpu_launch_writer_retry_delay(0);
+        assert_eq!(
+            first,
+            accepted_gpu_launch_writer_retry_delay(0),
+            "the process/thread/attempt tuple gives a reproducible delay"
+        );
+        let delays = (0..128)
+            .map(accepted_gpu_launch_writer_retry_delay)
+            .collect::<std::collections::BTreeSet<_>>();
+        assert!(
+            delays.len() > 20,
+            "retry cadence should not stay phase-locked: {delays:?}"
+        );
+        assert!(delays.iter().all(|delay| {
+            *delay >= ACCEPTED_WORKER_GPU_WRITER_RETRY_MIN_DELAY
+                && *delay <= ACCEPTED_WORKER_GPU_WRITER_RETRY_MAX_DELAY
+        }));
+    }
+
+    #[test]
+    fn gpu_launch_writer_timeout_is_terminal_for_outer_store_retries() {
+        let (_directory, store) = gpu_validation_store();
+        let outer_attempts = std::cell::Cell::new(0_u32);
+        let validation_attempts = std::cell::Cell::new(0_u32);
+        let result: anyhow::Result<()> = fullmag_runtime_control::retry_worker_store_transient(|| {
+            outer_attempts.set(outer_attempts.get().saturating_add(1));
+            retry_worker_gpu_launch_validation_with_sleep(
+                &store,
+                "run-worker-gpu-launch-retry",
+                "task-worker-gpu-launch-retry",
+                || {
+                    validation_attempts.set(validation_attempts.get().saturating_add(1));
+                    Err(anyhow::Error::new(fullmag_session::StoreWriterBusy))
+                },
+                Duration::ZERO,
+                |_| {},
+            )
+        });
+
+        assert!(result.is_err());
+        let error = result.unwrap_err();
+        assert!(
+            !is_store_writer_busy(&error),
+            "the timeout must not preserve StoreWriterBusy as an error source"
+        );
+        let message = format!("{error:#}");
+        assert!(message.contains("store_writer_busy_observations=1"));
+        assert!(message.contains("transient_gpu_inventory_observations=0"));
+        assert_eq!(validation_attempts.get(), 1);
+        assert_eq!(
+            outer_attempts.get(),
+            1,
+            "outer writer retry must not replay output reservation"
+        );
     }
 }
 

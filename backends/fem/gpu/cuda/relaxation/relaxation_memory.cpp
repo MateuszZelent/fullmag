@@ -24,6 +24,7 @@ bool gpu_relaxation_state_allocate(
     relaxation.next_nonlinear_cg_failure = GpuRelaxNcgFailurePoint::None;
     relaxation.nonlinear_cg_failures_injected = 0;
     relaxation.accepted_evaluation = {};
+    relaxation.pgbb_accepted_field = {};
     gpu_relax_reset_step_diagnostics(relaxation);
     relaxation.direct_energy_refinements = 0;
     if (!gpu_device_allocate_component(
@@ -49,6 +50,7 @@ bool gpu_relaxation_state_allocate(
 
 void gpu_relaxation_state_free(FemGpuRelaxationDeviceState &relaxation)
 {
+    relaxation.bb_exchange_mass.reset();
     gpu_device_free_component(relaxation.projected_gradient_accepted_h_eff);
     gpu_device_free_component(relaxation.nonlinear_cg_direction);
     gpu_device_free_component(relaxation.nonlinear_cg_direction_backup);
@@ -58,6 +60,7 @@ void gpu_relaxation_state_free(FemGpuRelaxationDeviceState &relaxation)
     relaxation.next_nonlinear_cg_failure = GpuRelaxNcgFailurePoint::None;
     relaxation.nonlinear_cg_failures_injected = 0;
     relaxation.accepted_evaluation = {};
+    relaxation.pgbb_accepted_field = {};
     gpu_relax_reset_step_diagnostics(relaxation);
     relaxation.direct_energy_refinements = 0;
 }

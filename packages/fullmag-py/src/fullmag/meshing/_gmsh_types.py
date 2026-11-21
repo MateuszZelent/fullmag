@@ -21,6 +21,24 @@ from fullmag._validation import parse_bool, parse_finite_float, parse_integer
 from fullmag.model.discretization import _MESH_SIZE_PRESET_ALIASES
 
 
+def _canonical_marker_array(values: object, name: str) -> NDArray[np.uint32]:
+    """Validate before conversion; legacy nonnegative int32 buffers remain valid."""
+    if isinstance(values, (list, tuple)) and any(isinstance(value, (bool, np.bool_)) for value in values):
+        raise ValueError(f"{name} must contain integers in canonical u32 range")
+    raw = np.asarray(values)
+    if raw.ndim != 1:
+        raise ValueError(f"{name} must be a one-dimensional canonical u32 marker array")
+    if raw.size:
+        if raw.dtype.kind not in "iu":
+            raise ValueError(f"{name} must contain integers in canonical u32 range")
+        # Canonical arrays need no extra scan or temporary N-sized boolean mask.
+        if raw.dtype.kind == "u" and raw.dtype.itemsize <= 4:
+            return raw.astype(np.uint32, copy=False)
+        if raw.min() < 0 or raw.max() > np.iinfo(np.uint32).max:
+            raise ValueError(f"{name} must contain integers in canonical u32 range")
+    return raw.astype(np.uint32, copy=False)
+
+
 FEM_TOPOLOGY_VOLUME_EPS = 1.0e-30 / 6.0
 FEM_TOPOLOGY_RELATIVE_DETERMINANT_EPS = 64.0 * np.finfo(np.float64).eps
 FEM_EXACT_LAYER_PLANE_ABS_TOLERANCE_M = 1.0e-15
@@ -2137,12 +2155,12 @@ class MeshData:
     cell_types: NDArray[np.str_]
     cell_offsets: NDArray[np.int64]
     cell_nodes: NDArray[np.int32]
-    element_markers: NDArray[np.int32]
+    element_markers: NDArray[np.uint32]
     facet_types: NDArray[np.str_]
     facet_roles: NDArray[np.str_]
     facet_offsets: NDArray[np.int64]
     facet_nodes: NDArray[np.int32]
-    boundary_markers: NDArray[np.int32]
+    boundary_markers: NDArray[np.uint32]
     cell_global_ordinals: NDArray[np.int64]
     facet_global_ordinals: NDArray[np.int64]
     cell_mesh_parts: NDArray[np.str_] = field(
@@ -2189,12 +2207,12 @@ class MeshData:
         object.__setattr__(self, "cell_types", np.asarray(self.cell_types, dtype=np.str_))
         object.__setattr__(self, "cell_offsets", np.asarray(self.cell_offsets, dtype=np.int64))
         object.__setattr__(self, "cell_nodes", np.asarray(self.cell_nodes, dtype=np.int32))
-        object.__setattr__(self, "element_markers", np.asarray(self.element_markers, dtype=np.int32))
+        object.__setattr__(self, "element_markers", _canonical_marker_array(self.element_markers, "element_markers"))
         object.__setattr__(self, "facet_types", np.asarray(self.facet_types, dtype=np.str_))
         object.__setattr__(self, "facet_roles", np.asarray(self.facet_roles, dtype=np.str_))
         object.__setattr__(self, "facet_offsets", np.asarray(self.facet_offsets, dtype=np.int64))
         object.__setattr__(self, "facet_nodes", np.asarray(self.facet_nodes, dtype=np.int32))
-        object.__setattr__(self, "boundary_markers", np.asarray(self.boundary_markers, dtype=np.int32))
+        object.__setattr__(self, "boundary_markers", _canonical_marker_array(self.boundary_markers, "boundary_markers"))
         object.__setattr__(self, "cell_global_ordinals", np.asarray(self.cell_global_ordinals, dtype=np.int64))
         object.__setattr__(self, "facet_global_ordinals", np.asarray(self.facet_global_ordinals, dtype=np.int64))
         object.__setattr__(self, "cell_mesh_parts", np.asarray(self.cell_mesh_parts, dtype=np.str_))
@@ -3035,9 +3053,9 @@ class MeshData:
         *,
         nodes: NDArray[np.float64] | list[list[float]],
         elements: NDArray[np.int32] | list[list[int]],
-        element_markers: NDArray[np.int32] | list[int],
+        element_markers: NDArray[np.uint32] | list[int],
         boundary_faces: NDArray[np.int32] | list[list[int]],
-        boundary_markers: NDArray[np.int32] | list[int],
+        boundary_markers: NDArray[np.uint32] | list[int],
         periodic_boundary_pairs: list[dict[str, object]] | None = None,
         periodic_node_pairs: list[dict[str, object]] | None = None,
         periodic_mesh_certificate: dict[str, object] | None = None,
@@ -5956,42 +5974,92 @@ def _mesh_cell_geometry(
 
 _TET_FACE_NODE_INDICES = ((0, 1, 2), (0, 1, 3), (0, 2, 3), (1, 2, 3))
 
-
-def _face_key(face: NDArray[np.integer] | list[int] | tuple[int, int, int]) -> tuple[int, int, int]:
-    return tuple(sorted(int(node) for node in face))  # type: ignore[return-value]
-
-
-def _tetra_face_marker_sets(mesh: MeshData) -> dict[tuple[int, int, int], set[int]]:
-    face_markers: dict[tuple[int, int, int], set[int]] = {}
-    for element_index, element in enumerate(mesh.elements):
-        marker = int(mesh.element_markers[element_index])
-        for face_indices in _TET_FACE_NODE_INDICES:
-            key = _face_key([int(element[index]) for index in face_indices])
-            face_markers.setdefault(key, set()).add(marker)
-    return face_markers
+_TRI_FACE_KEY_DTYPE = np.dtype([("n0", np.int64), ("n1", np.int64), ("n2", np.int64)])
+_TRI_FACE_PACKED_NODE_BITS = 21
 
 
-def _boundary_face_counts_by_marker(mesh: MeshData) -> dict[int, int]:
-    face_markers = _tetra_face_marker_sets(mesh)
-    counts: dict[int, int] = {}
-    for face in mesh.boundary_faces:
-        for marker in face_markers.get(_face_key(face), set()):
-            counts[marker] = counts.get(marker, 0) + 1
-    return counts
+def _tri_face_keys(*face_arrays: NDArray[np.integer]) -> list[NDArray[Any]]:
+    """Orientation-free, mutually comparable keys of triangle faces.
 
-
-def _interface_face_count_by_marker_pair(
-    face_markers: dict[tuple[int, int, int], set[int]],
-) -> dict[tuple[int, int], int]:
-    counts: dict[tuple[int, int], int] = {}
-    for markers in face_markers.values():
-        if len(markers) < 2:
+    Node triples are packed into one int64 when every id fits 21 bits; larger
+    or negative ids fall back to structured keys with the same ordering.
+    """
+    ordered = [
+        np.sort(np.asarray(faces, dtype=np.int64).reshape((-1, 3)), axis=1)
+        for faces in face_arrays
+    ]
+    populated = [faces for faces in ordered if faces.size]
+    packable = all(
+        int(faces.min()) >= 0 and int(faces.max()) < (1 << _TRI_FACE_PACKED_NODE_BITS)
+        for faces in populated
+    )
+    keys: list[NDArray[Any]] = []
+    for faces in ordered:
+        if packable:
+            bits = _TRI_FACE_PACKED_NODE_BITS
+            keys.append((faces[:, 0] << (2 * bits)) | (faces[:, 1] << bits) | faces[:, 2])
             continue
-        ordered = sorted(int(marker) for marker in markers)
-        for left, right in zip(ordered[:-1], ordered[1:], strict=False):
-            key = (left, right)
-            counts[key] = counts.get(key, 0) + 1
-    return counts
+        structured = np.empty(len(faces), dtype=_TRI_FACE_KEY_DTYPE)
+        structured["n0"] = faces[:, 0]
+        structured["n1"] = faces[:, 1]
+        structured["n2"] = faces[:, 2]
+        keys.append(structured)
+    return keys
+
+
+def _tetra_marker_face_statistics(mesh: MeshData) -> tuple[dict[int, int], int]:
+    """Boundary-face counts per marker and the marker-interface face count.
+
+    Every distinct (face, marker) incidence of the tet4 cells is formed once with
+    sorted arrays.  A boundary face counts once for each distinct marker that
+    owns it, and a face owned by ``k`` distinct markers contributes ``k - 1``
+    interfaces (the adjacent pairs of its sorted marker set).
+    """
+    elements = np.asarray(mesh.elements, dtype=np.int64)
+    if elements.size == 0:
+        return {}, 0
+    faces = elements[:, np.asarray(_TET_FACE_NODE_INDICES, dtype=np.intp)]
+    face_keys, boundary_keys = _tri_face_keys(faces, mesh.boundary_faces)
+    markers = np.repeat(np.asarray(mesh.element_markers, dtype=np.int64), 4)
+
+    order = np.argsort(face_keys, kind="stable")
+    sorted_keys = face_keys[order]
+    first_of_face = np.empty(len(sorted_keys), dtype=np.bool_)
+    first_of_face[0] = True
+    first_of_face[1:] = sorted_keys[1:] != sorted_keys[:-1]
+    face_ids = np.cumsum(first_of_face) - 1
+    unique_faces = sorted_keys[first_of_face]
+
+    pair_order = np.lexsort((markers[order], face_ids))
+    pair_faces = face_ids[pair_order]
+    pair_markers = markers[order][pair_order]
+    first_of_pair = np.empty(len(pair_faces), dtype=np.bool_)
+    first_of_pair[0] = True
+    first_of_pair[1:] = (pair_faces[1:] != pair_faces[:-1]) | (
+        pair_markers[1:] != pair_markers[:-1]
+    )
+    pair_faces = pair_faces[first_of_pair]
+    pair_markers = pair_markers[first_of_pair]
+    interface_count = int(len(pair_faces) - len(unique_faces))
+
+    if boundary_keys.size == 0:
+        return {}, interface_count
+    positions = np.searchsorted(unique_faces, boundary_keys)
+    found = positions < len(unique_faces)
+    found[found] = unique_faces[positions[found]] == boundary_keys[found]
+    boundary_face_ids = positions[found]
+    first = np.searchsorted(pair_faces, boundary_face_ids, side="left")
+    owner_counts = np.searchsorted(pair_faces, boundary_face_ids, side="right") - first
+    total = int(owner_counts.sum())
+    if total == 0:
+        return {}, interface_count
+    run_starts = np.repeat(first - (np.cumsum(owner_counts) - owner_counts), owner_counts)
+    owner_markers = pair_markers[run_starts + np.arange(total, dtype=np.int64)]
+    marker_ids, counts = np.unique(owner_markers, return_counts=True)
+    return (
+        {int(marker): int(count) for marker, count in zip(marker_ids, counts, strict=True)},
+        interface_count,
+    )
 
 
 _MESH_FACE_KEY_DTYPE = np.dtype(
@@ -6638,10 +6706,7 @@ def _build_mesh_statistics_report(mesh: MeshData, mesh_name: str) -> MeshStatist
         absolute_volumes = np.abs(signed_volumes)
         inverted_mask = signed_volumes <= 0.0
         degenerate_mask = absolute_volumes <= 0.0
-        boundary_face_counts = _boundary_face_counts_by_marker(mesh)
-        face_markers = _tetra_face_marker_sets(mesh)
-        interface_counts = _interface_face_count_by_marker_pair(face_markers)
-        interface_count = int(sum(interface_counts.values()))
+        boundary_face_counts, interface_count = _tetra_marker_face_statistics(mesh)
         exterior_face_count = mesh.n_boundary_faces
     all_mask = np.ones(mesh.n_elements, dtype=np.bool_)
     global_scope = _mesh_scope_statistics(

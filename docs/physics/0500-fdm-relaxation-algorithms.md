@@ -499,8 +499,21 @@ When the torque criterion is enabled, already satisfied, and no energy criterion
 is configured, the runner refreshes the field and runs the torque confirmation;
 otherwise, or if confirmation fails, the stop is `numerical_stagnation` with
 `converged=false`. A non-finite or negative gradient norm, or an invalid active
-magnetization, is a numerical error. Exhausting the Armijo backtracks is
-`numerical_stagnation`.
+magnetization, is a numerical error.
+
+Na CPU wyczerpanie Armijo może wystąpić już poniżej jawnego progu torque,
+gdy energia nie ma reprezentowalnej ściśle mniejszej wartości. Wtedy PG-BB
+i NCG, AoS oraz SoA, ponownie wyliczają pole ostatniego zaakceptowanego
+stanu i stosują to samo potwierdzenie co przy zerowym gradiencie. Wymagane
+są skończone m/E/H, spełniony próg torque i brak kryterium energii. Do dwóch
+świeżych odczytów pola uzupełnia trzy próbki potwierdzenia; nie są trzema
+różnymi zaakceptowanymi stanami. Magnetyzacja, energia, liczba kroków,
+ostatni zaakceptowany krok i okno plateau pozostają niezmienione. Liczniki
+pola odzwierciedlają wykonane ewaluacje. Niespełniony próg, błąd świeżego
+potwierdzenia albo obecne kryterium energii zachowują `numerical_stagnation`
+i `converged=false`. Nie akceptujemy odrzuconego kandydata Armijo ani
+nie promujemy błędu numerycznego do zbieżności. Jest to wyjątek CPU;
+legalność i polityka pozostałych realizacji pozostają jawnie odrębne.
 
 ### 5.8 Observable and artifact refresh on CPU
 

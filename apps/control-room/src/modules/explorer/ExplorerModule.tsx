@@ -10,11 +10,13 @@ import {
   Search,
 } from "lucide-react";
 
-import type {
-  LiveStatusResource,
-  SolverProfileResource,
-} from "@/kernel/api/apiTypes";
+import type { LiveStatusResource, SolverProfileResource } from "@/kernel/api/apiTypes";
 import { createCommandContext } from "@/kernel/commands/commandContext";
+import {
+  MESHING_BUILDS_CURRENT_PATH,
+  MESHING_SHARED_DOMAIN_MANIFEST_PATH,
+  SIMULATION_STAGES_EXECUTION_PATH,
+} from "@/kernel/api/apiPaths";
 import type { KernelEventMap } from "@/kernel/events/eventTypes";
 import type { EventBus } from "@/kernel/events/EventBus";
 import {
@@ -60,16 +62,11 @@ import {
   useSolverProfileResource,
   useSolverStatusResource,
 } from "@/kernel/resources/studyRuntimeResources";
-import {
-  projectFlatActiveLaneDiscretization,
-  resolveSessionAuthoringDiscretization,
-  resolveSessionDiscretization,
-  resolveSessionTopologyDiscretization,
-  type SessionDiscretizationCapabilitiesProjection,
-} from "@/kernel/resources/sessionDiscretization";
+import { projectFlatActiveLaneDiscretization, resolveSessionAuthoringDiscretization, resolveSessionDiscretization, resolveSessionTopologyDiscretization } from "@/kernel/resources/sessionDiscretization";
 import { WorkspaceRenderProfiler } from "@/kernel/performance/reactRenderProfiler";
 import { usePhysicsGraphResource } from "@/kernel/resources/physicsGraphResources";
-import { useObservationFrameListResource } from "@/kernel/resources/observationFrameResources";
+import { useObservationFrameListPages } from "@/kernel/resources/useObservationFrameListPages";
+import { Button } from "@/shared/ui/Button";
 import { useCurrentTransportsResource } from "@/kernel/resources/spinAuthoringResources";
 import { useSessionStatusSelector } from "@/kernel/resources/useSessionStatus";
 import { matchesAirboxTopologyIdentity } from "@/kernel/resources/meshTopologyIdentity";
@@ -132,6 +129,7 @@ import {
   modelTreeSnapshotWithStageExecution,
 } from "./builders/sceneModelTreeAdapter";
 import { ExplorerTabBar } from "./ExplorerTabBar";
+import { publishExplorerNodePath } from "./explorerNodePath";
 import { resolveCurrentFemAirboxEvidence } from "./femAirboxEvidence";
 import {
   explorerCrossSectionsEqual,
@@ -153,7 +151,9 @@ import {
 import type { ModelTreeMeshSnapshot } from "./explorerTypes";
 import { ExplorerTreeView } from "./ExplorerTreeView";
 import { ResultContextSelector } from "./ResultContextSelector";
+import { StudyResultHistory } from "./StudyResultHistory";
 import { useAnalysisFieldOverlayResultContext } from "./useAnalysisFieldOverlayResultContext";
+import { type ExplorerModelRuntimeStatus, explorerModelRuntimeStatusEquals } from "./ExplorerModule.model";
 
 type TextureLoadNodeRequestedEvent =
   KernelEventMap["explorer:texture-load-node-requested"];
@@ -192,23 +192,6 @@ function qualityStatus(value: unknown): string | null {
   return Array.isArray(checks) && checks.length > 0 ? "pass" : null;
 }
 
-type ExplorerModelRuntimeStatus = {
-  capabilities: Pick<LiveStatusResource["capabilities"], "explicit_topology"> &
-    SessionDiscretizationCapabilitiesProjection;
-  domain: Pick<LiveStatusResource["domain"], "discretization"> &
-    Partial<Pick<LiveStatusResource["domain"], "cell_count" | "generation_id">>;
-  resources: Pick<
-    LiveStatusResource["resources"],
-    "mesh_build_revision" | "mesh_revision" | "stages_revision"
-  > &
-    Partial<
-      Pick<
-        LiveStatusResource["resources"],
-        "domain_generation_id" | "topology_revision"
-      >
-    >;
-};
-
 function selectExplorerModelRuntimeStatus(status: {
   data: LiveStatusResource | null;
 }): ExplorerModelRuntimeStatus | null {
@@ -240,63 +223,6 @@ function selectExplorerModelRuntimeStatus(status: {
       topology_revision: status.data.resources.topology_revision,
     },
   };
-}
-
-export function explorerModelRuntimeStatusEquals(
-  previous: ExplorerModelRuntimeStatus | null,
-  next: ExplorerModelRuntimeStatus | null,
-): boolean {
-  if (previous === next) return true;
-  if (!previous || !next) return previous === next;
-  return (
-    previous.capabilities.explicit_topology ===
-      next.capabilities.explicit_topology &&
-    Object.prototype.hasOwnProperty.call(
-      previous.capabilities,
-      "active_lane",
-    ) === Object.prototype.hasOwnProperty.call(next.capabilities, "active_lane") &&
-    Object.prototype.hasOwnProperty.call(previous.capabilities.active_lane ?? {}, "authored") ===
-      Object.prototype.hasOwnProperty.call(next.capabilities.active_lane ?? {}, "authored") &&
-    previous.capabilities.active_lane?.authored?.backend === next.capabilities.active_lane?.authored?.backend &&
-    previous.capabilities.active_lane?.authored?.discretization === next.capabilities.active_lane?.authored?.discretization &&
-    previous.capabilities.active_lane?.resolved?.discretization ===
-      next.capabilities.active_lane?.resolved?.discretization &&
-    Object.prototype.hasOwnProperty.call(
-      previous.capabilities,
-      "active_lane_discretization",
-    ) ===
-      Object.prototype.hasOwnProperty.call(
-        next.capabilities,
-        "active_lane_discretization",
-      ) &&
-    previous.capabilities.active_lane_discretization ===
-      next.capabilities.active_lane_discretization &&
-    previous.domain.discretization === next.domain.discretization &&
-    previous.domain.cell_count === next.domain.cell_count &&
-    previous.domain.generation_id === next.domain.generation_id &&
-    previous.resources.domain_generation_id ===
-      next.resources.domain_generation_id &&
-    previous.resources.mesh_build_revision ===
-      next.resources.mesh_build_revision &&
-    previous.resources.mesh_revision === next.resources.mesh_revision &&
-    previous.resources.stages_revision === next.resources.stages_revision &&
-    previous.resources.topology_revision === next.resources.topology_revision
-  );
-}
-
-export function resolveExplorerModelDiscretization({
-  activeLaneDiscretization,
-  domainDiscretization,
-}: {
-  activeLaneDiscretization: string | null | undefined;
-  domainDiscretization: string | null | undefined;
-}): "fdm" | "fem" | null {
-  return resolveSessionAuthoringDiscretization({
-    ...(activeLaneDiscretization !== undefined
-      ? { capabilities: { active_lane_discretization: activeLaneDiscretization } }
-      : {}),
-    domain: { discretization: domainDiscretization },
-  });
 }
 
 function planarMonitorTargetCapabilitiesFromResources({
@@ -387,6 +313,7 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
   );
   const previousSelectedNodeId = useRef<string | null>(null);
   const lastRevealedSelectionPath = useRef<string | null>(null);
+  const parentWithoutAbsorbingBoundary = useRef<string | null>(null);
   const previousCurrentRunId = useRef<string | null>(null);
   const crossSections = useCrossSectionWorkspaceSelector(
     selectExplorerCrossSections,
@@ -413,6 +340,7 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
   const frozenSpins = useFrozenSpinsCollectionResource({ enabled: modelTabActive });
   const analysisFieldOverlayContext = useAnalysisFieldOverlayContext(
     kernel.analysisFieldOverlay,
+    { ignorePhase: true },
   );
   const activeAnalysisFieldOverlay = analysisFieldOverlayContext.overlay;
   const modeVisualizationResourceActive =
@@ -496,6 +424,18 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
       modelTabActive ? sessionStatusData : runtimeSessionStatus.data,
     ),
   });
+  const sharedCommandResources = useMemo(() => ({
+    [MESHING_BUILDS_CURRENT_PATH]: activeBuild.status === "ready" ? activeBuild.data : null,
+    [MESHING_SHARED_DOMAIN_MANIFEST_PATH]: manifest.status === "ready" ? manifest.data : null,
+    [SIMULATION_STAGES_EXECUTION_PATH]: stageExecution.status === "ready" ? stageExecution.data : null,
+  }), [
+    activeBuild.data,
+    activeBuild.status,
+    manifest.data,
+    manifest.status,
+    stageExecution.data,
+    stageExecution.status,
+  ]);
   const activeHysteresisStageId = useMemo(
     () => activeHysteresisStageIdFromExecution(stageExecution.data),
     [stageExecution.data],
@@ -545,9 +485,12 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
   });
   const resolvedResultContextRunId = reconciledResultContextRunId;
   const resultContextIsCurrent = resolvedResultContextRunId === currentRunId;
-  const observationFrames = useObservationFrameListResource({
+  const observationFrames = useObservationFrameListPages({
     enabled: resultsResourceActive && resultContextIsCurrent,
     runId: resultContextIsCurrent ? resolvedResultContextRunId : null,
+    selectedFrameId: selectedRef?.type === "observation-frame" && selectedRef.runId === resolvedResultContextRunId
+      ? selectedRef.frameId
+      : null,
   });
   const resultContextRun = useResultContextRunResource(
     resultContextIsCurrent ? null : resolvedResultContextRunId,
@@ -559,7 +502,7 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
       ? []
       : resultContextRun.status === "ready" && resultContextRun.data
         ? [
-            "Selected run is not the current session run; run-scoped result resources are not published.",
+            "Live observation frames are available for the current run. Open a saved Study state to inspect this run's published final results.",
           ]
         : resultContextRun.status === "error"
           ? ["Selected result run could not be loaded."]
@@ -733,7 +676,9 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
     const currentManifestParts = Array.isArray(manifest.data?.mesh_parts)
       ? manifest.data.mesh_parts
       : null;
-    const manifestSceneRevision = revisionValue(manifest.data?.source_scene_revision);
+    const manifestSceneRevision = revisionValue(
+      manifest.data?.validated_for_scene_revision ?? manifest.data?.source_scene_revision,
+    );
     const sceneRevisionMatches = currentSceneRevision !== null &&
       manifestSceneRevision !== null &&
       String(currentSceneRevision) === String(manifestSceneRevision);
@@ -778,6 +723,7 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
         activeBuild.data?.last_build_error ??
         latestSuccessfulBuild.data?.last_build_error,
       manifestSourceSceneRevision: manifest.data?.source_scene_revision,
+      manifestValidatedSceneRevision: manifest.data?.validated_for_scene_revision,
       meshName: manifest.data?.mesh_name,
       meshRevision: meshSummary.data?.revision ?? manifest.data?.revision,
       objectSegmentCount: manifest.data?.object_segments?.length ?? null,
@@ -933,6 +879,10 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
     () => filterExplorerNodes(baseNodes, filterText, selectedNodeId),
     [baseNodes, filterText, selectedNodeId],
   );
+  // The Inspector shows the selected node's full tree path.
+  useEffect(() => {
+    publishExplorerNodePath(baseNodes, selectedNodeId);
+  }, [baseNodes, selectedNodeId]);
 
   useEffect(() => {
     previousCurrentRunId.current = currentRunId;
@@ -952,9 +902,7 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
   useEffect(() => {
     if (activeTab !== "model") return;
     ensureExplorerModelObjectDefaults(
-      nodes
-        .filter((node) => node.kind === "object.root")
-        .map((node) => node.id),
+      nodes.flatMap((node) => node.kind === "object.root" ? [node.id] : []),
     );
   }, [activeTab, nodes]);
 
@@ -1002,26 +950,45 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
   }, [activeTab, baseNodes, kernel, nodes, selectedNodeId, selectedRef]);
 
   useEffect(() => {
-    if (
-      !modelTabActive ||
-      selectedRef?.type !== "airbox" ||
-      !selectedNodeId
-    ) {
+    if (!modelTabActive || selectedRef?.type !== "scene-object" ||
+      selectedRef.kind !== "object.magnetic-parameters") {
+      parentWithoutAbsorbingBoundary.current = null;
       return;
     }
+    if (modelResource.status !== "ready") return;
+    const parent = resolveCurrentExplorerSelectionNode(baseNodes, selectedRef.nodeId, selectedRef);
+    const key = JSON.stringify([modelResource.sessionScopeKey, selectedRef.nodeId]);
+    const wasAbsent = parentWithoutAbsorbingBoundary.current === key;
+    parentWithoutAbsorbingBoundary.current = null;
+    if (!parent) return;
+    if (!parent.children?.some((node) => node.kind === "object.absorbing-boundary")) {
+      parentWithoutAbsorbingBoundary.current = key;
+    } else if (wasAbsent) {
+      expandExplorerNodes("model", [parent.id]);
+    }
+  }, [baseNodes, modelResource.sessionScopeKey, modelResource.status, modelTabActive, selectedRef]);
+
+  useEffect(() => {
+    if (!modelTabActive || !selectedNodeId) return;
+    const boundarySelected = selectedRef?.type === "scene-object" &&
+      selectedRef.kind === "object.absorbing-boundary";
+    if (boundarySelected && modelResource.status !== "ready") return;
+    if (!boundarySelected && selectedRef?.type !== "airbox") return;
     const currentNode = resolveCurrentExplorerSelectionNode(
       baseNodes,
       selectedNodeId,
       selectedRef,
       baseNodes,
     );
-    if (!currentNode || !currentNode.kind.startsWith("airbox.")) return;
+    if (!currentNode) {
+      if (boundarySelected) kernel.selection.clear("explorer");
+      return;
+    }
+    if (!boundarySelected && !currentNode.kind.startsWith("airbox.")) return;
     const currentRef = selectionRefFromNode(currentNode);
     if (selectionRefEquals(selectedRef, currentRef)) return;
-    // Refresh only the selected node's resource facets. Selection identity and
-    // inspector routing remain stable as mesh resources invalidate.
     selectExplorerNode(kernel, currentNode, "explorer");
-  }, [baseNodes, kernel, modelTabActive, selectedNodeId, selectedRef]);
+  }, [baseNodes, kernel, modelResource.status, modelTabActive, selectedNodeId, selectedRef]);
 
   useEffect(() => {
     const unsubscribe = subscribeExplorerTextureLoadNodeRequested(
@@ -1063,17 +1030,18 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
   return (
     <WorkspaceRenderProfiler id="ExplorerModule">
       <section className="fm-explorer" aria-label="Explorer">
-        <ExplorerTabBar
-          activeTab={activeTab}
-          onTabChange={setExplorerActiveTab}
-        />
+        <ExplorerTabBar activeTab={activeTab} />
         {activeTab === "results" ? (
-          <ResultContextSelector
-            currentRunId={currentRunId}
-            knownRunIds={knownResultContextRunIds}
-            onChange={setExplorerResultContextRunId}
-            selectedRunId={resolvedResultContextRunId}
-          />
+          <>
+            <ResultContextSelector
+              currentRunId={currentRunId}
+              knownRunIds={knownResultContextRunIds}
+              onChange={setExplorerResultContextRunId}
+              selectedRunId={resolvedResultContextRunId}
+            />
+            <StudyResultHistory runId={resultContextIsCurrent ? undefined : resolvedResultContextRunId ?? undefined}
+              onPreviewRun={setExplorerResultContextRunId} />
+          </>
         ) : null}
         <AnalysisFieldOverlayContextNotice
           context={analysisFieldOverlayContext}
@@ -1099,7 +1067,7 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
               aria-label="Filter explorer"
               value={filterText}
               onChange={(event) => setExplorerFilterText(event.target.value)}
-              placeholder="Filter nodes..."
+              placeholder="Filter nodes…"
               type="search"
             />
           </label>
@@ -1150,8 +1118,30 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
           sceneResourceData={
             modelResource.status === "ready" ? modelResource.data : null
           }
+          sharedCommandResources={sharedCommandResources}
           tabId={activeTab}
         />
+        {activeTab === "results" && observationFrames.status !== "idle" ? (
+          <div className="flex flex-wrap items-center gap-2 px-2 py-1" role="group" aria-label="State snapshots" aria-busy={observationFrames.loading}>
+            {observationFrames.error || observationFrames.refreshError ? (
+              <p className="m-0 w-full break-words text-fm-help" role="alert">
+                {(observationFrames.error ?? observationFrames.refreshError)?.message}
+              </p>
+            ) : observationFrames.loading ? (
+              <p className="m-0 w-full text-fm-help" role="status">Loading state snapshots…</p>
+            ) : null}
+            <Button disabled={observationFrames.loading} onClick={observationFrames.refetch} size="sm" type="button">
+              Refresh snapshots
+            </Button>
+            {observationFrames.error || observationFrames.refreshError ? (
+              <Button onClick={observationFrames.retry} size="sm" type="button">Retry snapshots</Button>
+            ) : observationFrames.hasMore ? (
+              <Button disabled={observationFrames.loading} onClick={observationFrames.loadMore} size="sm" type="button">
+                Load more snapshots
+              </Button>
+            ) : null}
+          </div>
+        ) : null}
       </section>
     </WorkspaceRenderProfiler>
   );

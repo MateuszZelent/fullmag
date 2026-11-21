@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from fullmag.model.field_function import FieldFunctionError, function
 from fullmag.model.structure import MaterialParameterField
 
 
@@ -56,4 +57,12 @@ def sampled(
     )
 
 
-__all__ = ["MaterialParameterField", "constant", "linear", "radial", "sampled"]
+__all__ = [
+    "FieldFunctionError",
+    "MaterialParameterField",
+    "constant",
+    "function",
+    "linear",
+    "radial",
+    "sampled",
+]

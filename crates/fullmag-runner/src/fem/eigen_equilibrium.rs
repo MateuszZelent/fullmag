@@ -603,7 +603,12 @@ pub(super) fn materialize_equilibrium(
         // boundary-value problems. Keep the independent comparison for lanes
         // where both sides implement the same demag problem; the periodic lane
         // remains bound to the native producer's digest/decomposition contract.
-        if plan.mesh.periodic_node_pairs.is_empty() {
+        // The open-airbox K0 lane is bound the same way: its native shared-domain
+        // operator is assembled from the certified fields, and the Rust reference
+        // uses a different Robin airbox realization.
+        if plan.mesh.periodic_node_pairs.is_empty()
+            && !super::eigen_policy::open_airbox_k0_modal_requested(plan)
+        {
             require_recomputed_match(
                 "h_demag0",
                 &handoff.certified_fields.h_demag_a_per_m,

@@ -3,8 +3,10 @@
 import {
   Activity,
   Box,
+  Copy,
   Focus,
   BarChart2,
+  ChevronRight,
   Database,
   Gauge,
   Layers3,
@@ -13,6 +15,7 @@ import {
 } from "lucide-react";
 import { useLayoutEffect, useRef, type ReactNode } from "react";
 
+import { useSelectionPath } from "@/kernel/selection/selectionPath";
 import { PanelChrome, usePanelChromeControls } from "@/shared/ui/PanelFrame";
 import { Badge } from "@/shared/ui/Badge";
 import { Button } from "@/shared/ui/Button";
@@ -24,9 +27,11 @@ import type { InspectorDescriptor } from "./inspectorDescriptor";
 import { resetInspectorScroll } from "./inspectorScroll";
 import {
   configureInspectorTabs,
+  publishInspectorTabs,
   setInspectorActiveTab,
   useInspectorActiveTab,
 } from "./InspectorTabState";
+import { inspectorDisplayId, inspectorDomain } from "./InspectorShell.model";
 
 interface InspectorShellProps {
   focusDisabled?: boolean;
@@ -47,14 +52,14 @@ function statusVariant(
 }
 
 function InspectorIdentityIcon({ icon }: Pick<InspectorDescriptor, "icon">) {
-  if (icon === "airbox") return <Layers3 size={22} strokeWidth={1.5} />;
-  if (icon === "analysis") return <BarChart2 size={22} strokeWidth={1.5} />;
-  if (icon === "diagnostics") return <Gauge size={22} strokeWidth={1.5} />;
-  if (icon === "mesh") return <Database size={22} strokeWidth={1.5} />;
-  if (icon === "mode") return <Activity size={22} strokeWidth={1.5} />;
-  if (icon === "study") return <Play size={22} strokeWidth={1.5} />;
-  if (icon === "visualization") return <Focus size={22} strokeWidth={1.5} />;
-  return <Box size={22} strokeWidth={1.5} />;
+  if (icon === "airbox") return <Layers3 size={20} strokeWidth={1.75} />;
+  if (icon === "analysis") return <BarChart2 size={20} strokeWidth={1.75} />;
+  if (icon === "diagnostics") return <Gauge size={20} strokeWidth={1.75} />;
+  if (icon === "mesh") return <Database size={20} strokeWidth={1.75} />;
+  if (icon === "mode") return <Activity size={20} strokeWidth={1.75} />;
+  if (icon === "study") return <Play size={20} strokeWidth={1.75} />;
+  if (icon === "visualization") return <Focus size={20} strokeWidth={1.75} />;
+  return <Box size={20} strokeWidth={1.75} />;
 }
 
 export function InspectorShell({
@@ -69,10 +74,19 @@ export function InspectorShell({
   const chrome = usePanelChromeControls();
   const contentRef = useRef<HTMLDivElement>(null);
   const nodeId = descriptor.metadata.find((item) => item.label === "Node")?.value;
+  const displayId = inspectorDisplayId(descriptor.metadata);
+  const treePath = useSelectionPath(nodeId);
+  // Prefer the full Explorer path (Universe › Airbox › Visualization); the
+  // descriptor's short path remains for selections outside the tree.
+  const breadcrumbs: InspectorDescriptor["breadcrumbs"] = treePath
+    ? [...treePath.crumbs]
+    : descriptor.breadcrumbs;
   const descriptorKey = `${nodeId ?? descriptor.title}:${descriptor.tabs.map((tab) => tab.id).join(",")}`;
   useLayoutEffect(() => {
     configureInspectorTabs(descriptorKey, descriptor.tabs.map((tab) => tab.id));
+    publishInspectorTabs(descriptor.tabs);
   }, [descriptor.tabs, descriptorKey]);
+  useLayoutEffect(() => () => publishInspectorTabs([]), []);
   useLayoutEffect(() => {
     resetInspectorScroll(contentRef.current);
   }, [descriptorKey]);
@@ -81,6 +95,7 @@ export function InspectorShell({
     <section
       aria-label="Inspector"
       className="fm-inspector"
+      data-domain={inspectorDomain(descriptor.icon)}
       data-inspector-owner={descriptor.ownerId}
     >
       <PanelChrome
@@ -95,29 +110,12 @@ export function InspectorShell({
           </DropdownMenuItem>
         }
       >
-        <span className="fm-panel-chrome__title">Inspector</span>
-        <Button
-          aria-label="Hide Inspector"
-          className="fm-inspector__panel-toggle"
-          data-panel-toggle="inspector"
-          size="icon"
-          title="Hide Inspector"
-          type="button"
-          variant="ghost"
-          onClick={() => (chrome ? chrome.hideWith(onToggleVisibility) : onToggleVisibility())}
-        >
-          <PanelRightClose size={16} aria-hidden="true" />
-        </Button>
-      </PanelChrome>
-      <header className="fm-inspector__header">
-        {descriptor.breadcrumbs.length > 0 ? (
+        {breadcrumbs.length > 0 ? (
           <nav className="fm-inspector__breadcrumbs" aria-label="Selection path">
-            {descriptor.breadcrumbs.map((crumb, index) => (
+            {breadcrumbs.map((crumb, index) => (
               <span className="fm-inspector__breadcrumb-item" key={crumb.id}>
                 {index > 0 ? (
-                  <span className="fm-inspector__breadcrumb-separator" aria-hidden="true">
-                    /
-                  </span>
+                  <ChevronRight aria-hidden="true" className="fm-inspector__breadcrumb-separator" size={12} />
                 ) : null}
                 {crumb.selection ? (
                   <button
@@ -133,33 +131,64 @@ export function InspectorShell({
               </span>
             ))}
           </nav>
-        ) : null}
+        ) : (
+          <span className="fm-panel-chrome__title">Inspector</span>
+        )}
+        <Button
+          aria-label="Hide Inspector"
+          className="fm-inspector__panel-toggle"
+          data-panel-toggle="inspector"
+          size="icon"
+          title="Hide Inspector"
+          type="button"
+          variant="ghost"
+          onClick={() => (chrome ? chrome.hideWith(onToggleVisibility) : onToggleVisibility())}
+        >
+          <PanelRightClose size={16} aria-hidden="true" />
+        </Button>
+      </PanelChrome>
+      <header className="fm-inspector__header">
         <div className="fm-inspector__identity">
           <span className="fm-inspector__identity-icon" aria-hidden="true">
             <InspectorIdentityIcon icon={descriptor.icon} />
           </span>
           <div className="fm-inspector__identity-copy">
             <h2 className="fm-inspector__title">{descriptor.title}</h2>
-            <div className="fm-inspector__badges">
-              <Badge variant="secondary">{descriptor.typeLabel}</Badge>
-              {descriptor.status ? (
-                <Badge variant={statusVariant(descriptor.status.tone)}>
-                  {descriptor.status.label}
-                </Badge>
+            <div className="fm-inspector__subtitle">
+              <span className="fm-inspector__kind">{descriptor.typeLabel}</span>
+              {displayId ? (
+                <button
+                  aria-label={`Copy ID ${displayId}`}
+                  className="fm-inspector__id-chip"
+                  title="Copy ID"
+                  type="button"
+                  onClick={() => void navigator.clipboard?.writeText(displayId)}
+                >
+                  <span className="fm-inspector__id-chip-text">{displayId}</span>
+                  <Copy aria-hidden="true" size={11} />
+                </button>
               ) : null}
             </div>
           </div>
+          {descriptor.status ? (
+            <Badge
+              className="fm-inspector__state"
+              variant={statusVariant(descriptor.status.tone)}
+            >
+              {descriptor.status.label}
+            </Badge>
+          ) : null}
         </div>
-        {descriptor.metadata.length > 0 ? (
-          <dl className="fm-inspector__metadata-grid">
-            {descriptor.metadata.map((item) => (
-              <div className="fm-inspector__metadata-item" key={item.label}>
-                <dt>{item.label}</dt>
-                <dd title={item.value}>{item.value}</dd>
-              </div>
-            ))}
-          </dl>
-        ) : null}
+        {/* Full descriptor metadata stays in the DOM for browser audits; the
+            visible header shows only the ID and the facts strip. */}
+        <dl className="fm-inspector__metadata" data-slot="inspector-metadata" hidden>
+          {descriptor.metadata.map((item) => (
+            <div className="fm-inspector__metadata-item" key={`${item.label}=${item.value}`}>
+              <dt>{item.label}</dt>
+              <dd title={item.value}>{item.value}</dd>
+            </div>
+          ))}
+        </dl>
       </header>
 
       {descriptor.tabs.length > 0 ? (

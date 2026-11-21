@@ -1,0 +1,197 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1360 720" width="100%" role="img" aria-labelledby="title desc">
+  <title id="title">Overview of micromagnetic boundary conditions across magnetic, periodic, airbox, and mechanical domains</title>
+  <desc id="desc">Four-panel overview of Fullmag boundary conditions: (a) free-surface Neumann A d_n m = 0 via FEM weak natural integral vs FDM ghost clamping; (b) chiral DMI boundary condition 2A d_nu m + D[(n_hat x nu) x m] = 0 with numerically computed edge canting profile; (c) periodic boundary conditions in FDM (wrapped neighbor indices) vs FEM (reduced P^T A P); (d) FEM airbox closures (Dirichlet u = 0 vs asymptotic Robin d_n u + beta u = 0) and mechanical BCs.</desc>
+  <defs>
+    <style>
+      .fig-title { font: 700 20px 'Segoe UI', Arial, sans-serif; fill: #172030; }
+      .fig-subtitle { font: 400 13px 'Segoe UI', Arial, sans-serif; fill: #4b5568; }
+      .panel-title { font: 700 14.5px 'Segoe UI', Arial, sans-serif; fill: #172030; }
+      .badge { font: 700 12.5px 'Segoe UI', Arial, sans-serif; fill: #ffffff; }
+      .sec-hdr { font: 700 13px 'Segoe UI', Arial, sans-serif; fill: #1d3557; }
+      .label-bold { font: 600 12.5px 'Segoe UI', Arial, sans-serif; fill: #1e2433; }
+      .body { font: 400 12px 'Segoe UI', Arial, sans-serif; fill: #2b3344; }
+      .small { font: 400 11px 'Segoe UI', Arial, sans-serif; fill: #4f586b; }
+      .tiny { font: 400 10px 'Segoe UI', Arial, sans-serif; fill: #5c657a; }
+      .code { font: 600 11px 'Consolas', 'Courier New', monospace; fill: #283147; }
+      .code-sm { font: 500 10.2px 'Consolas', 'Courier New', monospace; fill: #354059; }
+      .math { font: italic 13px 'Cambria Math', 'Times New Roman', serif; fill: #1e2433; }
+      .math-bold { font: italic 700 13.5px 'Cambria Math', 'Times New Roman', serif; fill: #1e2433; }
+      .math-sm { font: italic 11.5px 'Cambria Math', 'Times New Roman', serif; fill: #2b3344; }
+      .pill-text { font: 600 11px 'Segoe UI', Arial, sans-serif; }
+    </style>
+    <marker id="arr-ink" viewBox="0 0 10 10" refX="8.6" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 1.2 L 9.5 5 L 0 8.8 z" fill="#1e2433"/></marker>
+    <marker id="arr-ink-sm" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="5.5" markerHeight="5.5" orient="auto-start-reverse"><path d="M 0 1.2 L 9.5 5 L 0 8.8 z" fill="#1e2433"/></marker>
+    <marker id="arr-muted" viewBox="0 0 10 10" refX="8.6" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 1.2 L 9.5 5 L 0 8.8 z" fill="#5c657a"/></marker>
+    <marker id="arr-muted-sm" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="5.5" markerHeight="5.5" orient="auto-start-reverse"><path d="M 0 1.2 L 9.5 5 L 0 8.8 z" fill="#5c657a"/></marker>
+    <marker id="arr-m" viewBox="0 0 10 10" refX="8.6" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 1.2 L 9.5 5 L 0 8.8 z" fill="#b8392b"/></marker>
+    <marker id="arr-m-sm" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="5.5" markerHeight="5.5" orient="auto-start-reverse"><path d="M 0 1.2 L 9.5 5 L 0 8.8 z" fill="#b8392b"/></marker>
+    <marker id="arr-H" viewBox="0 0 10 10" refX="8.6" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 1.2 L 9.5 5 L 0 8.8 z" fill="#1d5fa7"/></marker>
+    <marker id="arr-H-sm" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="5.5" markerHeight="5.5" orient="auto-start-reverse"><path d="M 0 1.2 L 9.5 5 L 0 8.8 z" fill="#1d5fa7"/></marker>
+    <marker id="arr-T_DL" viewBox="0 0 10 10" refX="8.6" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 1.2 L 9.5 5 L 0 8.8 z" fill="#b86b11"/></marker>
+    <marker id="arr-T_DL-sm" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="5.5" markerHeight="5.5" orient="auto-start-reverse"><path d="M 0 1.2 L 9.5 5 L 0 8.8 z" fill="#b86b11"/></marker>
+    <marker id="arr-T_FL" viewBox="0 0 10 10" refX="8.6" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 1.2 L 9.5 5 L 0 8.8 z" fill="#147d75"/></marker>
+    <marker id="arr-T_FL-sm" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="5.5" markerHeight="5.5" orient="auto-start-reverse"><path d="M 0 1.2 L 9.5 5 L 0 8.8 z" fill="#147d75"/></marker>
+    <marker id="arr-DMI" viewBox="0 0 10 10" refX="8.6" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 1.2 L 9.5 5 L 0 8.8 z" fill="#6f3cc4"/></marker>
+    <marker id="arr-DMI-sm" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="5.5" markerHeight="5.5" orient="auto-start-reverse"><path d="M 0 1.2 L 9.5 5 L 0 8.8 z" fill="#6f3cc4"/></marker>
+    <marker id="arr-J_c" viewBox="0 0 10 10" refX="8.6" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 1.2 L 9.5 5 L 0 8.8 z" fill="#246b8e"/></marker>
+    <marker id="arr-J_c-sm" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="5.5" markerHeight="5.5" orient="auto-start-reverse"><path d="M 0 1.2 L 9.5 5 L 0 8.8 z" fill="#246b8e"/></marker>
+    <marker id="arr-air" viewBox="0 0 10 10" refX="8.6" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 1.2 L 9.5 5 L 0 8.8 z" fill="#6e7b91"/></marker>
+    <marker id="arr-air-sm" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="5.5" markerHeight="5.5" orient="auto-start-reverse"><path d="M 0 1.2 L 9.5 5 L 0 8.8 z" fill="#6e7b91"/></marker>
+    <marker id="arr-err" viewBox="0 0 10 10" refX="8.6" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 1.2 L 9.5 5 L 0 8.8 z" fill="#ba092f"/></marker>
+    <marker id="arr-err-sm" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="5.5" markerHeight="5.5" orient="auto-start-reverse"><path d="M 0 1.2 L 9.5 5 L 0 8.8 z" fill="#ba092f"/></marker>
+    <marker id="arr-ok" viewBox="0 0 10 10" refX="8.6" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 1.2 L 9.5 5 L 0 8.8 z" fill="#256b15"/></marker>
+    <marker id="arr-ok-sm" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="5.5" markerHeight="5.5" orient="auto-start-reverse"><path d="M 0 1.2 L 9.5 5 L 0 8.8 z" fill="#256b15"/></marker>
+    <pattern id="hatch-amber" width="8" height="8" patternTransform="rotate(45 0 0)" patternUnits="userSpaceOnUse"><line x1="0" y1="0" x2="0" y2="8" stroke="#b86b11" stroke-width="1.4" stroke-opacity="0.32"/></pattern>
+    <pattern id="hatch-slate" width="8" height="8" patternTransform="rotate(-45 0 0)" patternUnits="userSpaceOnUse"><line x1="0" y1="0" x2="0" y2="8" stroke="#6e7b91" stroke-width="1.2" stroke-opacity="0.28"/></pattern>
+    <filter id="soft-shadow" x="-3%" y="-3%" width="106%" height="108%"><feDropShadow dx="0" dy="1.5" stdDeviation="2.5" flood-color="#1e2433" flood-opacity="0.06"/></filter>
+  </defs>
+  <rect x="2.00" y="2.00" width="1356.00" height="716.00" fill="#fbfcfe" rx="10.0" stroke="#ccd0da" stroke-width="1.50"/>
+  <text x="28.00" y="36.00" class="fig-title">Boundary Conditions Across Magnetic, Periodic, Airbox, and Mechanical Domains</text>
+  <text x="28.00" y="57.00" class="fig-subtitle">Physical boundary laws, weak natural vs. strong essential enforcement, and FDM vs. FEM discrete realizations</text>
+  <line x1="24.00" y1="68.00" x2="1336.00" y2="68.00" stroke="#e1e5ee" stroke-width="1.20" stroke-linecap="round"/>
+  <rect x="24.00" y="82.00" width="648.00" height="296.00" fill="#ffffff" rx="8.0" stroke="#d6dbe6" stroke-width="1.30" filter="url(#soft-shadow)"/>
+  <rect x="38.00" y="95.00" width="30.00" height="22.00" fill="#1d5fa7" rx="5.0"/>
+  <text x="53.00" y="110.50" class="badge" text-anchor="middle">(a)</text>
+  <text x="78.00" y="110.50" class="panel-title">Free-Surface Neumann  (A ∂<tspan baseline-shift="sub" font-size="72%">n</tspan>m = 0  on  ∂Ω<tspan baseline-shift="sub" font-size="72%">m</tspan>)</text>
+  <text x="38.00" y="130.00" class="small">Zero exchange flux at free surfaces: natural FEM weak form vs. FDM ghost clamping</text>
+  <rect x="44.00" y="150.00" width="240.00" height="152.00" fill="#f6e8df" rx="4.0" stroke="#b97a56" stroke-width="2.00"/>
+  <line x1="284.00" y1="148.00" x2="284.00" y2="304.00" stroke="#1d5fa7" stroke-width="3.00" stroke-linecap="round"/>
+  <text x="292.00" y="166.00" class="math-bold" style="fill:#1d5fa7">∂Ω<tspan baseline-shift="sub" font-size="72%">m</tspan></text>
+  <line x1="284.00" y1="226.00" x2="328.00" y2="226.00" stroke="#1e2433" stroke-width="2.00" stroke-linecap="round" marker-end="url(#arr-ink)"/>
+  <text x="332.00" y="230.00" class="math-bold">n̂</text>
+  <text x="64.00" y="174.00" class="math-sm" style="fill:#6d3a1c">Ω<tspan baseline-shift="sub" font-size="72%">m</tspan> (A &gt; 0)</text>
+  <line x1="75.14" y1="204.60" x2="87.68" y2="189.66" stroke="#b8392b" stroke-width="2.20" stroke-linecap="round" marker-end="url(#arr-m-sm)"/>
+  <line x1="120.29" y1="204.72" x2="132.34" y2="189.39" stroke="#b8392b" stroke-width="2.20" stroke-linecap="round" marker-end="url(#arr-m-sm)"/>
+  <line x1="165.72" y1="205.03" x2="176.37" y2="188.69" stroke="#b8392b" stroke-width="2.20" stroke-linecap="round" marker-end="url(#arr-m-sm)"/>
+  <line x1="210.31" y1="204.73" x2="222.31" y2="189.36" stroke="#b8392b" stroke-width="2.20" stroke-linecap="round" marker-end="url(#arr-m-sm)"/>
+  <line x1="255.31" y1="204.73" x2="267.31" y2="189.36" stroke="#b8392b" stroke-width="2.20" stroke-linecap="round" marker-end="url(#arr-m-sm)"/>
+  <line x1="75.14" y1="240.60" x2="87.68" y2="225.66" stroke="#b8392b" stroke-width="2.20" stroke-linecap="round" marker-end="url(#arr-m-sm)"/>
+  <line x1="120.29" y1="240.72" x2="132.34" y2="225.39" stroke="#b8392b" stroke-width="2.20" stroke-linecap="round" marker-end="url(#arr-m-sm)"/>
+  <line x1="165.72" y1="241.03" x2="176.37" y2="224.69" stroke="#b8392b" stroke-width="2.20" stroke-linecap="round" marker-end="url(#arr-m-sm)"/>
+  <line x1="210.31" y1="240.73" x2="222.31" y2="225.36" stroke="#b8392b" stroke-width="2.20" stroke-linecap="round" marker-end="url(#arr-m-sm)"/>
+  <line x1="255.31" y1="240.73" x2="267.31" y2="225.36" stroke="#b8392b" stroke-width="2.20" stroke-linecap="round" marker-end="url(#arr-m-sm)"/>
+  <line x1="75.14" y1="276.60" x2="87.68" y2="261.66" stroke="#b8392b" stroke-width="2.20" stroke-linecap="round" marker-end="url(#arr-m-sm)"/>
+  <line x1="120.29" y1="276.72" x2="132.34" y2="261.39" stroke="#b8392b" stroke-width="2.20" stroke-linecap="round" marker-end="url(#arr-m-sm)"/>
+  <line x1="165.72" y1="277.03" x2="176.37" y2="260.69" stroke="#b8392b" stroke-width="2.20" stroke-linecap="round" marker-end="url(#arr-m-sm)"/>
+  <line x1="210.31" y1="276.73" x2="222.31" y2="261.36" stroke="#b8392b" stroke-width="2.20" stroke-linecap="round" marker-end="url(#arr-m-sm)"/>
+  <line x1="255.31" y1="276.73" x2="267.31" y2="261.36" stroke="#b8392b" stroke-width="2.20" stroke-linecap="round" marker-end="url(#arr-m-sm)"/>
+  <text x="164.00" y="327.00" class="math-sm" text-anchor="middle" style="fill:#1d5fa7">A (∇m) n̂ = 0  →  zero normal slope at edge</text>
+  <text x="164.00" y="348.00" class="small" text-anchor="middle" style="fill:#3e4659">m<tspan baseline-shift="sub" font-size="72%">ghost</tspan> = m<tspan baseline-shift="sub" font-size="72%">edge</tspan>  (FDM)  |  natural boundary (FEM)</text>
+  <rect x="356.00" y="150.00" width="296.00" height="98.00" fill="#f5f7fb" rx="6.0" stroke="#b6cde8" stroke-width="1.10"/>
+  <text x="368.00" y="171.00" class="label-bold" style="fill:#1d5fa7">FEM: Natural Variational Law</text>
+  <text x="368.00" y="194.00" class="math-sm">δE<tspan baseline-shift="sub" font-size="72%">ex</tspan> = 2∫<tspan baseline-shift="sub" font-size="72%">Ω<tspan baseline-shift="sub" font-size="72%">m</tspan></tspan> A ∇m:∇η dV  (no penalty)</text>
+  <text x="368.00" y="216.00" class="math-sm">Boundary term ∫<tspan baseline-shift="sub" font-size="72%">∂Ω<tspan baseline-shift="sub" font-size="72%">m</tspan></tspan> A ∂<tspan baseline-shift="sub" font-size="72%">n</tspan>m·η dS = 0</text>
+  <text x="368.00" y="236.00" class="tiny" style="fill:#5c657a">automatically satisfied in H<tspan baseline-shift="super" font-size="72%">1</tspan>(Ω<tspan baseline-shift="sub" font-size="72%">m</tspan>).</text>
+  <rect x="356.00" y="260.00" width="296.00" height="98.00" fill="#f5f7fb" rx="6.0" stroke="#b6cde8" stroke-width="1.10"/>
+  <text x="368.00" y="281.00" class="label-bold" style="fill:#246b8e">FDM: Clamped Neighbor Ghost</text>
+  <text x="368.00" y="303.00" class="math-sm">Inactive/open neighbor j ∉ A uses m<tspan baseline-shift="sub" font-size="72%">j</tspan> ← m<tspan baseline-shift="sub" font-size="72%">i</tspan></text>
+  <text x="368.00" y="324.00" class="math-sm">(m<tspan baseline-shift="sub" font-size="72%">j</tspan> − m<tspan baseline-shift="sub" font-size="72%">i</tspan>)/Δx = 0  → zero normal flux</text>
+  <text x="368.00" y="344.00" class="tiny" style="fill:#5c657a">Enforced inside 6-neighbor Laplacian stencil.</text>
+  <rect x="688.00" y="82.00" width="648.00" height="296.00" fill="#ffffff" rx="8.0" stroke="#d6dbe6" stroke-width="1.30" filter="url(#soft-shadow)"/>
+  <rect x="702.00" y="95.00" width="30.00" height="22.00" fill="#6f3cc4" rx="5.0"/>
+  <text x="717.00" y="110.50" class="badge" text-anchor="middle">(b)</text>
+  <text x="742.00" y="110.50" class="panel-title">Chiral DMI Boundary  (2A ∂<tspan baseline-shift="sub" font-size="72%">ν</tspan>m + D[(n̂×ν)×m] = 0)</text>
+  <text x="702.00" y="130.00" class="small">Inverse edge slope ℓ<tspan baseline-shift="sub" font-size="72%">DMI</tspan> = 2A/|D|; tail decay Δ = √(A/K<tspan baseline-shift="sub" font-size="72%">eff</tspan>); natural FEM weak residual</text>
+  <rect x="716.00" y="148.00" width="330.00" height="88.00" fill="#f6e8df" rx="4.0" stroke="#6f3cc4" stroke-width="1.80"/>
+  <rect x="716.00" y="236.00" width="330.00" height="20.00" fill="#e4eff5" rx="2.0" stroke="#4d8098" stroke-width="1.20"/>
+  <text x="881.00" y="250.00" class="tiny" text-anchor="middle" style="fill:#4d8098">Heavy metal (interface normal  n̂ = +ẑ)</text>
+  <line x1="1046.00" y1="192.00" x2="1080.00" y2="192.00" stroke="#1e2433" stroke-width="1.80" stroke-linecap="round" marker-end="url(#arr-ink-sm)"/>
+  <text x="1084.00" y="196.00" class="math-bold">ν</text>
+  <line x1="734.00" y1="224.00" x2="734.00" y2="190.00" stroke="#6f3cc4" stroke-width="1.60" stroke-linecap="round" marker-end="url(#arr-DMI-sm)"/>
+  <text x="741.00" y="198.00" class="math-sm" style="fill:#6f3cc4">n̂</text>
+  <line x1="732.44" y1="198.93" x2="723.09" y2="178.91" stroke="#b8392b" stroke-width="2.30" stroke-linecap="round" marker-end="url(#arr-m-sm)"/>
+  <line x1="768.32" y1="199.56" x2="764.94" y2="177.72" stroke="#b8392b" stroke-width="2.30" stroke-linecap="round" marker-end="url(#arr-m-sm)"/>
+  <line x1="805.51" y1="199.64" x2="804.33" y2="177.57" stroke="#b8392b" stroke-width="2.30" stroke-linecap="round" marker-end="url(#arr-m-sm)"/>
+  <line x1="843.18" y1="199.65" x2="842.81" y2="177.55" stroke="#b8392b" stroke-width="2.30" stroke-linecap="round" marker-end="url(#arr-m-sm)"/>
+  <line x1="881.00" y1="199.65" x2="881.00" y2="177.55" stroke="#b8392b" stroke-width="2.30" stroke-linecap="round" marker-end="url(#arr-m-sm)"/>
+  <line x1="918.82" y1="199.65" x2="919.19" y2="177.55" stroke="#b8392b" stroke-width="2.30" stroke-linecap="round" marker-end="url(#arr-m-sm)"/>
+  <line x1="956.49" y1="199.64" x2="957.67" y2="177.57" stroke="#b8392b" stroke-width="2.30" stroke-linecap="round" marker-end="url(#arr-m-sm)"/>
+  <line x1="993.68" y1="199.56" x2="997.06" y2="177.72" stroke="#b8392b" stroke-width="2.30" stroke-linecap="round" marker-end="url(#arr-m-sm)"/>
+  <line x1="1029.56" y1="198.93" x2="1038.91" y2="178.91" stroke="#b8392b" stroke-width="2.30" stroke-linecap="round" marker-end="url(#arr-m-sm)"/>
+  <line x1="742.00" y1="310.00" x2="1032.00" y2="310.00" stroke="#cbd2df" stroke-width="1.00" stroke-linecap="round" stroke-dasharray="3,3"/>
+  <line x1="742.00" y1="348.00" x2="1032.00" y2="348.00" stroke="#1e2433" stroke-width="1.10" stroke-linecap="round"/>
+  <line x1="742.00" y1="272.00" x2="742.00" y2="348.00" stroke="#1e2433" stroke-width="1.10" stroke-linecap="round"/>
+  <path d="M 742.0 282.3 L 744.4 281.4 L 746.9 280.7 L 749.3 280.0 L 751.7 279.4 L 754.2 278.9 L 756.6 278.5 L 759.1 278.1 L 761.5 277.8 L 763.9 277.5 L 766.4 277.3 L 768.8 277.0 L 771.2 276.9 L 773.7 276.7 L 776.1 276.6 L 778.6 276.5 L 781.0 276.4 L 783.4 276.3 L 785.9 276.2 L 788.3 276.2 L 790.7 276.1 L 793.2 276.1 L 795.6 276.0 L 798.1 276.0 L 800.5 276.0 L 802.9 275.9 L 805.4 275.9 L 807.8 275.9 L 810.2 275.9 L 812.7 275.9 L 815.1 275.9 L 817.5 275.9 L 820.0 275.8 L 822.4 275.8 L 824.9 275.8 L 827.3 275.8 L 829.7 275.8 L 832.2 275.8 L 834.6 275.8 L 837.0 275.8 L 839.5 275.8 L 841.9 275.8 L 844.4 275.8 L 846.8 275.8 L 849.2 275.8 L 851.7 275.8 L 854.1 275.8 L 856.5 275.8 L 859.0 275.8 L 861.4 275.8 L 863.8 275.8 L 866.3 275.8 L 868.7 275.8 L 871.2 275.8 L 873.6 275.8 L 876.0 275.8 L 878.5 275.8 L 880.9 275.8 L 883.3 275.8 L 885.8 275.8 L 888.2 275.8 L 890.7 275.8 L 893.1 275.8 L 895.5 275.8 L 898.0 275.8 L 900.4 275.8 L 902.8 275.8 L 905.3 275.8 L 907.7 275.8 L 910.2 275.8 L 912.6 275.8 L 915.0 275.8 L 917.5 275.8 L 919.9 275.8 L 922.3 275.8 L 924.8 275.8 L 927.2 275.8 L 929.6 275.8 L 932.1 275.8 L 934.5 275.8 L 937.0 275.8 L 939.4 275.8 L 941.8 275.8 L 944.3 275.8 L 946.7 275.8 L 949.1 275.8 L 951.6 275.8 L 954.0 275.8 L 956.5 275.9 L 958.9 275.9 L 961.3 275.9 L 963.8 275.9 L 966.2 275.9 L 968.6 275.9 L 971.1 275.9 L 973.5 276.0 L 975.9 276.0 L 978.4 276.0 L 980.8 276.1 L 983.3 276.1 L 985.7 276.2 L 988.1 276.2 L 990.6 276.3 L 993.0 276.4 L 995.4 276.5 L 997.9 276.6 L 1000.3 276.7 L 1002.8 276.9 L 1005.2 277.0 L 1007.6 277.3 L 1010.1 277.5 L 1012.5 277.8 L 1014.9 278.1 L 1017.4 278.5 L 1019.8 278.9 L 1022.3 279.4 L 1024.7 280.0 L 1027.1 280.7 L 1029.6 281.4 L 1032.0 282.3" fill="none" stroke="#1d5fa7" stroke-width="2.00" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M 742.0 330.1 L 744.4 328.8 L 746.9 327.6 L 749.3 326.4 L 751.7 325.3 L 754.2 324.2 L 756.6 323.2 L 759.1 322.3 L 761.5 321.4 L 763.9 320.6 L 766.4 319.9 L 768.8 319.2 L 771.2 318.5 L 773.7 317.9 L 776.1 317.3 L 778.6 316.8 L 781.0 316.3 L 783.4 315.8 L 785.9 315.4 L 788.3 315.0 L 790.7 314.6 L 793.2 314.3 L 795.6 314.0 L 798.1 313.7 L 800.5 313.4 L 802.9 313.2 L 805.4 312.9 L 807.8 312.7 L 810.2 312.5 L 812.7 312.3 L 815.1 312.1 L 817.5 312.0 L 820.0 311.8 L 822.4 311.7 L 824.9 311.6 L 827.3 311.4 L 829.7 311.3 L 832.2 311.2 L 834.6 311.1 L 837.0 311.0 L 839.5 311.0 L 841.9 310.9 L 844.4 310.8 L 846.8 310.7 L 849.2 310.7 L 851.7 310.6 L 854.1 310.6 L 856.5 310.5 L 859.0 310.5 L 861.4 310.4 L 863.8 310.4 L 866.3 310.3 L 868.7 310.3 L 871.2 310.2 L 873.6 310.2 L 876.0 310.2 L 878.5 310.1 L 880.9 310.1 L 883.3 310.1 L 885.8 310.0 L 888.2 310.0 L 890.7 309.9 L 893.1 309.9 L 895.5 309.9 L 898.0 309.8 L 900.4 309.8 L 902.8 309.8 L 905.3 309.7 L 907.7 309.7 L 910.2 309.6 L 912.6 309.6 L 915.0 309.5 L 917.5 309.5 L 919.9 309.4 L 922.3 309.4 L 924.8 309.3 L 927.2 309.3 L 929.6 309.2 L 932.1 309.1 L 934.5 309.0 L 937.0 309.0 L 939.4 308.9 L 941.8 308.8 L 944.3 308.7 L 946.7 308.6 L 949.1 308.4 L 951.6 308.3 L 954.0 308.2 L 956.5 308.0 L 958.9 307.9 L 961.3 307.7 L 963.8 307.5 L 966.2 307.3 L 968.6 307.1 L 971.1 306.8 L 973.5 306.6 L 975.9 306.3 L 978.4 306.0 L 980.8 305.7 L 983.3 305.4 L 985.7 305.0 L 988.1 304.6 L 990.6 304.2 L 993.0 303.7 L 995.4 303.2 L 997.9 302.7 L 1000.3 302.1 L 1002.8 301.5 L 1005.2 300.8 L 1007.6 300.1 L 1010.1 299.4 L 1012.5 298.6 L 1014.9 297.7 L 1017.4 296.8 L 1019.8 295.8 L 1022.3 294.7 L 1024.7 293.6 L 1027.1 292.4 L 1029.6 291.2 L 1032.0 289.9" fill="none" stroke="#6f3cc4" stroke-width="2.00" stroke-linecap="round" stroke-linejoin="round"/>
+  <text x="756.00" y="294.00" class="tiny" style="fill:#1d5fa7">m<tspan baseline-shift="sub" font-size="72%">z</tspan>(x)</text>
+  <text x="1026.00" y="324.00" class="tiny" text-anchor="end" style="fill:#6f3cc4">m<tspan baseline-shift="sub" font-size="72%">x</tspan>(x) cant</text>
+  <text x="887.00" y="363.00" class="tiny" text-anchor="middle">Width coordinate x ∈ [−L/2, +L/2]</text>
+  <rect x="1096.00" y="148.00" width="222.00" height="210.00" fill="#f3ecfc" rx="6.0" stroke="#cbb4ef" stroke-width="1.10"/>
+  <text x="1108.00" y="170.00" class="label-bold" style="fill:#6f3cc4">DMI Boundary Variants</text>
+  <text x="1108.00" y="194.00" class="small" style="font-weight:600">Interfacial DMI (general n̂):</text>
+  <text x="1108.00" y="214.00" class="math-sm" style="fill:#6f3cc4">2A ∂<tspan baseline-shift="sub" font-size="72%">ν</tspan>m + D[(n̂×ν)×m] = 0</text>
+  <text x="1108.00" y="240.00" class="small" style="font-weight:600">Bulk DMI (isotropic):</text>
+  <text x="1108.00" y="260.00" class="math-sm" style="fill:#6f3cc4">2A ∂<tspan baseline-shift="sub" font-size="72%">ν</tspan>m + D (m × ν) = 0</text>
+  <line x1="1108.00" y1="275.00" x2="1306.00" y2="275.00" stroke="#d9c6f7" stroke-width="1.00" stroke-linecap="round"/>
+  <text x="1108.00" y="295.00" class="tiny">• FEM: weak residual carries BC</text>
+  <text x="1108.00" y="313.00" class="tiny">  automatically (no extra penalty)</text>
+  <text x="1108.00" y="331.00" class="tiny">• FDM: stencil edge modification;</text>
+  <text x="1108.00" y="348.00" class="tiny">  Bulk DMI requires periodic BCs</text>
+  <rect x="24.00" y="396.00" width="648.00" height="296.00" fill="#ffffff" rx="8.0" stroke="#d6dbe6" stroke-width="1.30" filter="url(#soft-shadow)"/>
+  <rect x="38.00" y="409.00" width="30.00" height="22.00" fill="#147d75" rx="5.0"/>
+  <text x="53.00" y="424.50" class="badge" text-anchor="middle">(c)</text>
+  <text x="78.00" y="424.50" class="panel-title">Periodic BCs: FDM Wrapped vs. FEM Reduced  P<tspan baseline-shift="super" font-size="72%">T</tspan> A P</text>
+  <text x="38.00" y="444.00" class="small">Translational seam m(r + L<tspan baseline-shift="sub" font-size="72%">d</tspan> ê<tspan baseline-shift="sub" font-size="72%">d</tspan>) = m(r) declared via study.pbc(...)</text>
+  <rect x="44.00" y="464.00" width="292.00" height="208.00" fill="#f5f7fb" rx="6.0" stroke="#b6cde8" stroke-width="1.10"/>
+  <text x="56.00" y="485.00" class="label-bold" style="fill:#246b8e">FDM: Wrapped Neighbor Index</text>
+  <rect x="70.00" y="508.00" width="38.00" height="38.00" fill="#d9ebf5" stroke="#246b8e" stroke-width="1.10"/>
+  <text x="89.00" y="531.00" class="code-sm" text-anchor="middle">0</text>
+  <rect x="108.00" y="508.00" width="38.00" height="38.00" fill="#ffffff" stroke="#246b8e" stroke-width="1.10"/>
+  <text x="127.00" y="531.00" class="code-sm" text-anchor="middle">1</text>
+  <rect x="146.00" y="508.00" width="38.00" height="38.00" fill="#ffffff" stroke="#246b8e" stroke-width="1.10"/>
+  <text x="165.00" y="531.00" class="code-sm" text-anchor="middle">2</text>
+  <rect x="184.00" y="508.00" width="38.00" height="38.00" fill="#ffffff" stroke="#246b8e" stroke-width="1.10"/>
+  <text x="203.00" y="531.00" class="code-sm" text-anchor="middle">…</text>
+  <rect x="222.00" y="508.00" width="38.00" height="38.00" fill="#ffffff" stroke="#246b8e" stroke-width="1.10"/>
+  <text x="241.00" y="531.00" class="code-sm" text-anchor="middle">N−2</text>
+  <rect x="260.00" y="508.00" width="38.00" height="38.00" fill="#d9ebf5" stroke="#246b8e" stroke-width="1.10"/>
+  <text x="279.00" y="531.00" class="code-sm" text-anchor="middle">N−1</text>
+  <path d="M 279.0 550 C 279.0 594, 89.0 594, 89.0 550" fill="none" stroke="#147d75" stroke-width="2.00" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arr-T_FL-sm)"/>
+  <text x="184.00" y="596.00" class="tiny" text-anchor="middle" style="fill:#147d75">neighbor_index wraps N−1 ↔ 0 along L<tspan baseline-shift="sub" font-size="72%">d</tspan></text>
+  <text x="56.00" y="624.00" class="small">• Exchange/DMI wrap directly across seam</text>
+  <text x="56.00" y="643.00" class="small">• Demag uses periodic replicated images</text>
+  <text x="56.00" y="662.00" class="tiny" style="fill:#5c657a">  (or open/k=0 multilayer policy)</text>
+  <rect x="356.00" y="464.00" width="296.00" height="208.00" fill="#f5f7fb" rx="6.0" stroke="#a8dcd6" stroke-width="1.10"/>
+  <text x="368.00" y="485.00" class="label-bold" style="fill:#147d75">FEM: Reduced DOF Space  P<tspan baseline-shift="super" font-size="72%">T</tspan> A P</text>
+  <rect x="396.00" y="510.00" width="110.00" height="74.00" fill="#f6e8df" stroke="#b97a56" stroke-width="1.30"/>
+  <line x1="396.00" y1="510.00" x2="506.00" y2="584.00" stroke="#c68b69" stroke-width="0.90" stroke-linecap="round"/>
+  <line x1="506.00" y1="510.00" x2="396.00" y2="584.00" stroke="#c68b69" stroke-width="0.90" stroke-linecap="round"/>
+  <circle cx="396.00" cy="510.00" r="4.20" fill="#147d75" stroke="#ffffff" stroke-width="1.00"/>
+  <circle cx="506.00" cy="510.00" r="4.20" fill="#147d75" stroke="#ffffff" stroke-width="1.00"/>
+  <circle cx="396.00" cy="547.00" r="4.20" fill="#147d75" stroke="#ffffff" stroke-width="1.00"/>
+  <circle cx="506.00" cy="547.00" r="4.20" fill="#147d75" stroke="#ffffff" stroke-width="1.00"/>
+  <circle cx="396.00" cy="584.00" r="4.20" fill="#147d75" stroke="#ffffff" stroke-width="1.00"/>
+  <circle cx="506.00" cy="584.00" r="4.20" fill="#147d75" stroke="#ffffff" stroke-width="1.00"/>
+  <path d="M 510 514 Q 451.0 494 392 514" fill="none" stroke="#147d75" stroke-width="1.50" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="3,2" marker-end="url(#arr-T_FL-sm)"/>
+  <text x="524.00" y="522.00" class="math-bold" style="fill:#147d75">u = P ũ</text>
+  <text x="524.00" y="544.00" class="math-sm" style="fill:#1e2433">(P<tspan baseline-shift="super" font-size="72%">T</tspan> A P) ũ = P<tspan baseline-shift="super" font-size="72%">T</tspan> b</text>
+  <text x="524.00" y="566.00" class="tiny" style="fill:#5c657a">Lift u back after solve</text>
+  <text x="368.00" y="612.00" class="small">• Identifies paired master/slave nodes</text>
+  <text x="368.00" y="632.00" class="code-sm" style="font-size:9.5px">• apply_periodic_consistent_mass_component</text>
+  <text x="368.00" y="652.00" class="small">• Preserves ordering across CPU &amp; GPU</text>
+  <rect x="688.00" y="396.00" width="648.00" height="296.00" fill="#ffffff" rx="8.0" stroke="#d6dbe6" stroke-width="1.30" filter="url(#soft-shadow)"/>
+  <rect x="702.00" y="409.00" width="30.00" height="22.00" fill="#b86b11" rx="5.0"/>
+  <text x="717.00" y="424.50" class="badge" text-anchor="middle">(d)</text>
+  <text x="742.00" y="424.50" class="panel-title">Airbox Demag Closures  &amp; Mechanical BCs</text>
+  <text x="702.00" y="444.00" class="small">Outer marker Γ<tspan baseline-shift="sub" font-size="72%">a</tspan> (Dirichlet u=0 vs. Robin ∂<tspan baseline-shift="sub" font-size="72%">n</tspan>u + βu = 0) and ElasticBody constraints</text>
+  <rect x="710.00" y="462.00" width="290.00" height="146.00" fill="#eef2f8" rx="6.0" stroke="#6e7b91" stroke-width="2.20"/>
+  <rect x="788.00" y="496.00" width="134.00" height="54.00" fill="#f6e8df" rx="3.0" stroke="#b97a56" stroke-width="1.60"/>
+  <text x="855.00" y="527.00" class="math-bold" text-anchor="middle" style="fill:#6d3a1c">Ω<tspan baseline-shift="sub" font-size="72%">m</tspan></text>
+  <text x="724.00" y="482.00" class="small" style="fill:#6e7b91;font-weight:600">Ω<tspan baseline-shift="sub" font-size="72%">a</tspan> (airbox)</text>
+  <text x="990.00" y="482.00" class="small" text-anchor="end" style="fill:#1d5fa7;font-weight:600">Γ<tspan baseline-shift="sub" font-size="72%">a</tspan> marker</text>
+  <line x1="855.00" y1="559.00" x2="855.00" y2="573.00" stroke="#5c657a" stroke-width="1.10" stroke-linecap="round"/>
+  <line x1="855.00" y1="567.00" x2="996.00" y2="567.00" stroke="#5c657a" stroke-width="1.20" stroke-linecap="round" stroke-dasharray="3,2" marker-end="url(#arr-muted-sm)"/>
+  <text x="927.00" y="562.00" class="math-sm" text-anchor="middle" style="fill:#5c657a">R<tspan baseline-shift="sub" font-size="72%">★</tspan></text>
+  <text x="855.00" y="594.00" class="tiny" text-anchor="middle" style="fill:#6e7b91">poisson_boundary_marker selects Γ<tspan baseline-shift="sub" font-size="72%">a</tspan> only</text>
+  <rect x="1016.00" y="462.00" width="300.00" height="68.00" fill="#f5f7fb" rx="6.0" stroke="#b6cde8" stroke-width="1.10"/>
+  <text x="1028.00" y="482.00" class="label-bold" style="fill:#1d5fa7">1. Dirichlet Closure:  u = 0  on  Γ<tspan baseline-shift="sub" font-size="72%">a</tspan></text>
+  <text x="1028.00" y="502.00" class="small">Essential DOF elimination; requires large Ω<tspan baseline-shift="sub" font-size="72%">a</tspan></text>
+  <text x="1028.00" y="519.00" class="tiny" style="fill:#5c657a">for 1/r<tspan baseline-shift="super" font-size="72%">2</tspan> dipole tail convergence.</text>
+  <rect x="1016.00" y="538.00" width="300.00" height="70.00" fill="#fdf3e6" rx="6.0" stroke="#e6c08a" stroke-width="1.10"/>
+  <text x="1028.00" y="558.00" class="label-bold" style="fill:#b86b11">2. Robin Closure:  ∂<tspan baseline-shift="sub" font-size="72%">n</tspan>u + β u = 0  on  Γ<tspan baseline-shift="sub" font-size="72%">a</tspan></text>
+  <text x="1028.00" y="578.00" class="math-sm">β = c / R<tspan baseline-shift="sub" font-size="72%">★</tspan>; adds boundary mass β B<tspan baseline-shift="sub" font-size="72%">Γ<tspan baseline-shift="sub" font-size="72%">a</tspan></tspan></text>
+  <text x="1028.00" y="597.00" class="tiny" style="fill:#b86b11">Higher accuracy at compact airbox scales.</text>
+  <rect x="710.00" y="618.00" width="606.00" height="56.00" fill="#f3f5fa" rx="6.0" stroke="#ccd2df" stroke-width="1.10"/>
+  <text x="722.00" y="638.00" class="label-bold" style="font-size:11.5px">Mechanical Displacement BCs (ElasticBody):</text>
+  <text x="722.00" y="659.00" class="math-sm">• Traction-free:  σ · n = 0      • Clamped (fixed):  u = 0      • Prescribed load:  σ · n = t</text>
+</svg>

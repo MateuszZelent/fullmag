@@ -143,9 +143,16 @@ bounded: background strength 0–1, lighting intensity 0–2, azimuth −180–1
 elevation −90–90°, grid opacity 0.25–2, AO intensity 0–3, and AO radius 0–1 of
 the domain size.
 
-Geometry-lighting preferences affect uniform solid geometry only. Quantitative
-field colors remain unlit and un-tonemapped; a legacy `fieldShading` key is
-ignored as an unknown appearance field.
+Scientific field colors remain unlit and un-tonemapped. Presentation uses the
+same field values and palettes as the base color of lit surfaces. A legacy
+`fieldShading` key is ignored as an unknown appearance field.
+
+Selecting Figure while Presentation is active, or entering Presentation with
+Figure selected, applies Studio lighting, soft shadows, and AO in one store
+publication. Later manual effect edits remain user preferences; changing an
+unrelated appearance value, restoring saved preferences, and PNG capture do
+not reapply the preset. Other quality profiles preserve effect switches.
+The existing profile IDs and preference schema remain compatible.
 
 `appearanceDiagnostics` separates requested and effective AO, Bloom, and
 antialias flags. A requested effect suppressed by protected quantitative field

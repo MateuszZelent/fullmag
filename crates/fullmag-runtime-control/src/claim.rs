@@ -41,26 +41,6 @@ pub fn commit_claimed_task_admission(
     .context("local task admission unexpectedly returned no disposition")
 }
 
-pub(crate) fn commit_claimed_task_admission_from_snapshot(
-    store: &SessionStore,
-    task: &TaskRecord,
-    claim: &TaskClaim,
-    accepted: &crate::study::AcceptedStudySnapshot,
-) -> Result<fullmag_session::TaskAdmissionCommitDisposition> {
-    commit_claimed_task_admission_with(
-        store,
-        task,
-        claim,
-        Some(accepted),
-        |lease, dependencies| {
-            let _writer = store.write_transaction()?;
-            dependencies.require_locked(store)?;
-            store.commit_task_admission(lease).map(Some)
-        },
-    )?
-    .context("local task admission unexpectedly returned no disposition")
-}
-
 /// Admit through the shared physical-host ledger when the caller has resolved
 /// an explicit host policy/allocation. The ledger owns the host-before-store
 /// transaction and retains reservations after an unknown publication outcome.
@@ -77,20 +57,6 @@ pub fn commit_claimed_task_admission_with_host(
         store, task, claim, ledger, request, inputs, None,
     )?
     .context("host task admission unexpectedly returned no disposition")
-}
-
-pub(crate) fn try_commit_claimed_task_admission_with_host_from_snapshot(
-    store: &SessionStore,
-    task: &TaskRecord,
-    claim: &TaskClaim,
-    ledger: &fullmag_session::host_resource_ledger::HostResourceLedger,
-    request: &fullmag_session::host_resource_ledger::HostReservationRequest,
-    inputs: &std::collections::BTreeMap<String, fullmag_application::ResolvedInput>,
-    accepted: &crate::study::AcceptedStudySnapshot,
-) -> Result<Option<fullmag_session::TaskAdmissionCommitDisposition>> {
-    try_commit_claimed_task_admission_with_host_inner(
-        store, task, claim, ledger, request, inputs, Some(accepted),
-    )
 }
 
 fn commit_claimed_task_admission_with_host_inner(
@@ -344,30 +310,6 @@ fn commit_claimed_task_admission_with<'a>(
 pub(crate) enum ClaimedTaskResourceCompatibility {
     Compatible,
     Incompatible(String),
-}
-
-pub(crate) fn claimed_task_resource_compatibility(
-    store: &SessionStore,
-    claim: &TaskClaim,
-) -> Result<ClaimedTaskResourceCompatibility> {
-    let intent = store
-        .read_run_intent(claim.run_id.as_str())?
-        .context("accepted task admission requires its immutable run intent")?;
-    let specification: fullmag_application::RunSpecification =
-        serde_json::from_value(intent.specification.clone())
-            .context("accepted task run intent specification is not typed")?;
-    if specification.run_id != claim.run_id {
-        bail!("accepted task claim run differs from the immutable RunSpec");
-    }
-    let accepted = crate::load_accepted_study_snapshot(
-        store,
-        &claim.run_id,
-        &specification.snapshot.project_id,
-    )?;
-    if accepted.run.intent != intent {
-        bail!("accepted task run intent changed while loading its study snapshot");
-    }
-    claimed_task_resource_compatibility_for_snapshot(claim, &specification, &accepted)
 }
 
 pub(crate) fn claimed_task_resource_compatibility_from_snapshot(
@@ -780,6 +722,16 @@ pub fn load_current_task_claim(
     run_id: &RunId,
     task_id: &str,
 ) -> Result<TaskClaim> {
+    store.retry_windows_folder_observation("load current task claim", || {
+        load_current_task_claim_once(store, run_id, task_id)
+    })
+}
+
+fn load_current_task_claim_once(
+    store: &SessionStore,
+    run_id: &RunId,
+    task_id: &str,
+) -> Result<TaskClaim> {
     let catalog = store
         .read_run_catalog(run_id.as_str())?
         .context("task claim recovery requires a durable run catalog")?;
@@ -819,17 +771,44 @@ pub fn load_current_task_claim(
         bail!("durable resource lease differs from the task claim in the run catalog");
     }
 
+    let claim = task_claim_from_lease(run_id, &durable_lease)?;
+    store.require_active_resource_lease(
+        run_id.as_str(),
+        task_id,
+        claim.attempt_id.as_str(),
+        claim.ownership_epoch.value(),
+        claim.lease.resource_id.as_str(),
+        claim.lease.lease_token.as_str(),
+        claim.lease.heartbeat_sequence,
+    )?;
+    Ok(claim)
+}
+
+/// Observe a claim without acquiring a writer or renewing the resource lease.
+pub fn load_current_task_claim_readonly(
+    store: &SessionStore,
+    run_id: &RunId,
+    task_id: &str,
+    transaction: &fullmag_session::ReadTransaction,
+) -> Result<TaskClaim> {
+    let lease = store
+        .read_active_resource_lease_for_task_readonly(run_id.as_str(), task_id, transaction)?
+        .context("claimed task has no active durable resource lease")?;
+    task_claim_from_lease(run_id, &lease)
+}
+
+fn task_claim_from_lease(run_id: &RunId, durable_lease: &FmsResourceLease) -> Result<TaskClaim> {
     let kind = match durable_lease.kind {
         FmsResourceKind::Cpu => ResourceKind::Cpu,
         FmsResourceKind::Gpu => ResourceKind::Gpu,
         FmsResourceKind::Storage => ResourceKind::Storage,
         FmsResourceKind::Meshing => ResourceKind::Meshing,
     };
-    let claim = TaskClaim {
+    Ok(TaskClaim {
         run_id: run_id.clone(),
-        task_id: TaskId::parse(task_id).context("invalid durable task id")?,
-        attempt_id: AttemptId::parse(attempt_id).context("invalid durable attempt id")?,
-        ownership_epoch: OwnershipEpoch::new(ownership_epoch)
+        task_id: TaskId::parse(&durable_lease.task_id).context("invalid durable task id")?,
+        attempt_id: AttemptId::parse(&durable_lease.attempt_id).context("invalid durable attempt id")?,
+        ownership_epoch: OwnershipEpoch::new(durable_lease.ownership_epoch)
             .context("invalid durable ownership epoch")?,
         lease: ResourceLease {
             resource_id: durable_lease.resource_id.clone(),
@@ -844,15 +823,14 @@ pub fn load_current_task_claim(
                 .context("invalid durable lease token")?,
             heartbeat_sequence: durable_lease.heartbeat_sequence,
         },
-    };
-    store.require_active_resource_lease(
-        run_id.as_str(),
-        task_id,
-        claim.attempt_id.as_str(),
-        claim.ownership_epoch.value(),
-        claim.lease.resource_id.as_str(),
-        claim.lease.lease_token.as_str(),
-        claim.lease.heartbeat_sequence,
-    )?;
-    Ok(claim)
+    })
+}
+
+#[cfg(test)]
+mod scoped_store_io_classification_tests {
+    #[test]
+    fn raw_enodata_is_not_a_global_transient_store_error() {
+        let error: anyhow::Error = std::io::Error::from_raw_os_error(61).into();
+        assert!(!crate::is_transient_store_io(&error));
+    }
 }

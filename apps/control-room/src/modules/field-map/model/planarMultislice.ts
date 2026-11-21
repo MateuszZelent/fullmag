@@ -1,4 +1,4 @@
-import type { PlanarDisplayRange } from "./fieldMapRenderModel";
+import { resolvePlanarDisplayUnit, type PlanarDisplayRange } from "./fieldMapRenderModel";
 
 /** Extrema of one panel over renderable samples. */
 export interface MultisliceExtent {
@@ -41,4 +41,28 @@ export function resolveMultisliceRange(
 export function evenMultisliceFractions(count: number): number[] {
   const panels = Math.min(MULTISLICE_MAX_PANELS, Math.max(MULTISLICE_MIN_PANELS, Math.round(count)));
   return Array.from({ length: panels }, (_, index) => (index + 1) / (panels + 1));
+}
+
+/** Unit and value scale of the multislice colour legend. */
+export interface MultisliceLegendUnit {
+  legendUnit: string;
+  probeScale: number;
+}
+
+/**
+ * Legend unit of the multislice panels. In the layers model the panels draw a
+ * field layer whose quantity may differ from the base sample, so the legend
+ * uses the layer's canonical unit as the panels' metadata reports it (layers
+ * are drawn in their canonical unit, as in the composite). Without that
+ * metadata yet, the unit is unknown rather than borrowed from the base field.
+ */
+export function multisliceLegendUnit(
+  layerModel: boolean,
+  panelCanonicalUnit: string | null,
+  base: MultisliceLegendUnit,
+): MultisliceLegendUnit {
+  if (!layerModel) return base;
+  if (!panelCanonicalUnit) return { legendUnit: "", probeScale: 1 };
+  const resolved = resolvePlanarDisplayUnit(panelCanonicalUnit, panelCanonicalUnit);
+  return { legendUnit: resolved.unit, probeScale: resolved.scale };
 }

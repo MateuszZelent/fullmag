@@ -1,7 +1,9 @@
 #include "cpu/frequency_domain/poisson_airbox_schur_matshell.hpp"
 #include "core/petsc_slepc_runtime.hpp"
 #include "cpu/frequency_domain/mode_deduplication.hpp"
+#include "cpu/frequency_domain/modal_augmented_shift_solver.hpp"
 #include "cpu/frequency_domain/modal_krylov_tuning.hpp"
+#include "cpu/frequency_domain/modal_poisson_lu.hpp"
 #include "cpu/frequency_domain/operators/poisson_airbox_shared_domain.hpp"
 #include "frequency_domain/mode_kinematics.hpp"
 #include "frequency_domain/real_frequency_rotated_pencil.hpp"
@@ -282,14 +284,21 @@ BoundedKrylovDimensions bounded_krylov_dimensions(
     const std::uint64_t nev = std::min(dimension - 1u, requested_nev);
     // Window coverage requests retain extra Ritz pairs even in empty local
     // intervals. Reserve a larger basis for that solve, without changing nev,
-    // tolerances or the completeness certificate. Standalone shifts keep 2x.
-    // Bound before multiplication to avoid overflow near the u64 limit.
+    // tolerances or the completeness certificate. Bound before
+    // multiplication to avoid overflow near the u64 limit.
     const std::uint64_t basis_multiplier = frequency_window ? 4u : 2u;
     const std::uint64_t oversampled_nev =
         nev > dimension / basis_multiplier ? dimension : basis_multiplier * nev;
+    // Standalone shifts use the SLEPc default basis max(2 nev, nev + 15)
+    // (note 0830, "Wymiar bazy Krylova dla pojedynczego przesunięcia"): with
+    // ncv = 2 nev each Krylov-Schur restart keeps almost the whole basis, so
+    // the exact shift-invert needed ~30 restarts and ~50% more shifted solves.
+    const std::uint64_t slepc_default_floor = frequency_window
+        ? 0u
+        : nev + std::min<std::uint64_t>(15u, dimension - nev);
     const std::uint64_t ncv = std::min(
         dimension,
-        std::max(nev + 1u, oversampled_nev));
+        std::max({nev + 1u, oversampled_nev, slepc_default_floor}));
     return {nev, ncv, ncv > nev && ncv <= dimension};
 }
 
@@ -725,7 +734,7 @@ PoissonAirboxSchurMatShellCertificateKey make_certificate_key(
     key.m0_signature = fnv_mix_string(kFnvOffset, "uniform_m0_pa_e3");
     key.h_eff0_signature = hash_csr(problem.A_qq, fnv_mix_string(kFnvOffset, "A_qq"));
     key.static_demag_signature = fnv_mix_string(kFnvOffset, problem.demag_kind);
-    key.boundary_signature = fnv_mix_string(kFnvOffset, "periodic_airbox_k0");
+    key.boundary_signature = fnv_mix_string(kFnvOffset, problem.demag_kind);
     key.k_signature = fnv_mix_string(kFnvOffset, "k=0");
     key.gauge_signature = fnv_mix_string(kFnvOffset, problem.gauge_policy);
     key.operator_signature = hash_csr(problem.A_qphi, fnv_mix_string(kFnvOffset, "A_qphi"));
@@ -1345,6 +1354,7 @@ struct ProductionKspConvergenceContext {
     PoissonAirboxModalLinearSolverRole linear_solver_role =
         PoissonAirboxModalLinearSolverRole::unknown;
     void *default_context = nullptr;
+    PoissonAirboxModalProgressThrottle progress_throttle{};
 };
 
 PetscErrorCode destroy_production_modal_ksp_convergence_context_value(
@@ -1448,7 +1458,9 @@ PetscErrorCode production_modal_ksp_convergence_test(
     }
     PetscCall(KSPConvergedDefault(
         ksp, iteration, residual_norm, reason, context->default_context));
-    emit_linear_progress("solving_shift_invert", nullptr);
+    if (context->progress_throttle.should_emit()) {
+        emit_linear_progress("solving_shift_invert", nullptr);
+    }
     PetscFunctionReturn(PETSC_SUCCESS);
 }
 
@@ -1836,8 +1848,7 @@ bool configure_production_context(
         KSPSetOperators(context->poisson_ksp, context->poisson, context->poisson) != 0 ||
         KSPSetType(context->poisson_ksp, KSPPREONLY) != 0 ||
         KSPGetPC(context->poisson_ksp, &pc) != 0 ||
-        PCSetType(pc, PCLU) != 0 ||
-        PCFactorSetShiftType(pc, MAT_SHIFT_NONZERO) != 0 ||
+        configure_modal_poisson_lu(pc, MAT_SHIFT_NONZERO) != 0 ||
         KSPSetTolerances(
             context->poisson_ksp,
             1.0e-12,
@@ -3453,6 +3464,7 @@ void write_production_schur_diagnostics(
         "\"schur_reduced\":true,"
         "\"static_demag_substitution\":false,"
         "\"poisson_factorization_reused\":true,"
+        "\"poisson_factorization_package\":\"%s\","
         "\"matrix_format\":\"real_split_matshell_seq_aij\","
         "\"spectral_pencil_kind\":\"real_frequency_rotated\","
         "\"target_representation\":\"tau=omega_target\","
@@ -3583,6 +3595,7 @@ void write_production_schur_diagnostics(
             ? result.modal_krylov_tuning_json : "null",
         problem.phasor_convention != nullptr ? problem.phasor_convention : "",
         problem.eigenvalue_convention != nullptr ? problem.eigenvalue_convention : "",
+        kModalPoissonLuPackage,
         problem.target_kind != nullptr ? problem.target_kind : "",
         production_string_equals(problem.target_kind, "nearest_frequency")
             ? "selected_only"
@@ -5944,6 +5957,13 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_cpu_schur(
     // materialized and usable for this shift.
     out_result->exact_preconditioner_dimension_available = false;
     out_result->exact_preconditioner_dimension = 0u;
+    // Beyond the bounded window dimension the sparse augmented factorization
+    // (see below) is exact and far cheaper than the dense materialization,
+    // which needs 2*split Poisson solves and a dense split x split LU.
+    const bool prefer_augmented_shift =
+        !borrowed_window_operator &&
+        augmented_shift_solver_enabled() &&
+        split_count > kProductionWindowExactPreconditionerMaxDimension;
     if (borrowed_window_operator) {
         copy_message(
             out_result->exact_preconditioner_status,
@@ -5955,9 +5975,11 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_cpu_schur(
         copy_message(
             out_result->exact_preconditioner_status,
             sizeof(out_result->exact_preconditioner_status),
-            split_count <= kProductionExactPreconditionerMaxDimension
-                ? "pending_single_shift"
-                : "disabled_dimension_limit");
+            prefer_augmented_shift
+                ? "superseded_by_augmented_shift"
+                : (split_count <= kProductionExactPreconditionerMaxDimension
+                       ? "pending_single_shift"
+                       : "disabled_dimension_limit"));
     }
     // A standalone positive target needs the two-vector J-equivalence class.
     // Window subcalls use the same target enum but retain four-vector coverage.
@@ -6000,7 +6022,8 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_cpu_schur(
     const bool exact_preconditioner_eligible =
         borrowed_window_operator
             ? bounded_window_preconditioner
-            : split_count <= kProductionExactPreconditionerMaxDimension;
+            : !prefer_augmented_shift &&
+                split_count <= kProductionExactPreconditionerMaxDimension;
     const std::uint64_t preconditioner_poisson_solve_count_before =
         context.poisson_solve_count;
     double window_shift_setup_seconds = 0.0;
@@ -6018,7 +6041,7 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_cpu_schur(
             window_shift_setup_timing_available;
         out_result->shifted_preconditioner_setup_seconds =
             window_shift_setup_seconds;
-    } else if (!borrowed_window_operator) {
+    } else if (!borrowed_window_operator && !prefer_augmented_shift) {
         const auto exact_construction_started_at = std::chrono::steady_clock::now();
         exact_shifted_preconditioner = create_production_exact_shift_preconditioner(
             schur_shell,
@@ -6121,13 +6144,45 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_cpu_schur(
             sizeof(out_result->exact_preconditioner_status),
             "single_shift_materialization_failed_fallback");
     }
+    // Exact shift-invert through the sparse augmented (q, phi) system (note
+    // 0830, eq-poisson-airbox-augmented-shift).  The magnetic-only matrix
+    // above stays the ST preconditioning matrix and the fallback when MUMPS
+    // is unavailable, disabled, or the factorization fails.  The solver must
+    // outlive the EPS: it is released (leaked) together with an EPS that is
+    // quarantined after a failed EPSSolve.
+    std::unique_ptr<AugmentedShiftSolver, AugmentedShiftSolverDeleter> augmented_shift;
+    if (!exact_shifted_preconditioner && augmented_shift_solver_enabled()) {
+        const auto augmented_setup_started_at = std::chrono::steady_clock::now();
+        augmented_shift.reset(new (std::nothrow) AugmentedShiftSolver{});
+        if (augmented_shift != nullptr &&
+            !create_augmented_shift_solver(
+                problem,
+                context.gauge_augmented,
+                operator_scale,
+                target_eigenvalue * mass_scale,
+                augmented_shift.get())) {
+            augmented_shift.reset();
+            std::fprintf(
+                stderr,
+                "production K0 Schur: augmented exact shift factorization unavailable; "
+                "using the magnetic-only preconditioner\n");
+        }
+        out_result->shifted_preconditioner_setup_timing_available = true;
+        out_result->shifted_preconditioner_setup_seconds +=
+            std::chrono::duration<double>(
+                std::chrono::steady_clock::now() - augmented_setup_started_at)
+                .count();
+    }
+    const bool augmented_shifted_preconditioner = augmented_shift != nullptr;
     std::snprintf(
         out_result->shifted_preconditioner_kind,
         sizeof(out_result->shifted_preconditioner_kind),
         "%s",
         exact_shifted_preconditioner
             ? "exact_shifted_schur_action"
-            : "magnetic_shift_preconditioner");
+            : (augmented_shifted_preconditioner
+                   ? "augmented_exact_shift_mumps"
+                   : "magnetic_shift_preconditioner"));
     if (shifted_preconditioner == nullptr) {
         destroy_slepc_objects(&eps, &xr, &xi, nullptr, nullptr);
         return fail_production_schur(
@@ -6175,6 +6230,15 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_cpu_schur(
         STSetShift(st, static_cast<PetscScalar>(target_eigenvalue)) == 0 &&
         set_st_preconditioner_mat_compat(st, shifted_preconditioner) == 0 &&
         STGetKSP(st, &st_ksp) == 0;
+    if (augmented_shifted_preconditioner) {
+        // Standard right-preconditioned GMRES forms x = x0 + K^{-1}(V y) with
+        // one extra K^{-1} application whose rounding error never enters its
+        // residual estimate; with the augmented factorization EPS then sees an
+        // inexact shift-invert operator and stagnates (measured: 2412 restarts
+        // without convergence at split 4824).  FGMRES forms x = x0 + Z y from
+        // the already-preconditioned basis, so its residual is the true one.
+        resolved_tuning.shifted_ksp_type = "fgmres";
+    }
     if (configured) {
         // Defaults preserve the existing GMRES path. An explicit common
         // runtime override also applies to Gamma within a Floquet sweep.
@@ -6185,17 +6249,26 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_cpu_schur(
                 KSPSetNormType(st_ksp, KSP_NORM_UNPRECONDITIONED) == 0;
         }
     }
+    configured = configured && KSPGetPC(st_ksp, &st_pc) == 0;
+    if (configured && augmented_shifted_preconditioner) {
+        // FGMRES (selected above) with right preconditioning and the
+        // unpreconditioned norm certifies ||b - (A - tau B) x|| itself.
+        configured = configure_augmented_shift_pc(st_pc, augmented_shift.get()) == 0 &&
+            KSPSetPCSide(st_ksp, PC_RIGHT) == 0 &&
+            KSPSetNormType(st_ksp, KSP_NORM_UNPRECONDITIONED) == 0;
+    } else if (configured) {
+        configured =
+            PCSetType(st_pc, PCLU) == 0 &&
+            // MATSOLVERUMFPACK/MATSOLVERKLU are public string constants even
+            // when PETSc was built without those packages.  Do not use their
+            // preprocessor presence as an availability probe; PETSc's default
+            // sequential factorization is always valid for this bounded path.
+            PCFactorReorderForNonzeroDiagonal(st_pc, 1.0e-12) == 0 &&
+            // The transformed pencil is dimensionless, so the factorization uses
+            // PETSc's default zero-pivot policy without the former SI workaround.
+            PCFactorSetShiftType(st_pc, MAT_SHIFT_NONE) == 0;
+    }
     configured = configured &&
-        KSPGetPC(st_ksp, &st_pc) == 0 &&
-        PCSetType(st_pc, PCLU) == 0 &&
-        // MATSOLVERUMFPACK/MATSOLVERKLU are public string constants even
-        // when PETSc was built without those packages.  Do not use their
-        // preprocessor presence as an availability probe; PETSc's default
-        // sequential factorization is always valid for this bounded path.
-        PCFactorReorderForNonzeroDiagonal(st_pc, 1.0e-12) == 0 &&
-        // The transformed pencil is dimensionless, so the factorization uses
-        // PETSc's default zero-pivot policy without the former SI workaround.
-        PCFactorSetShiftType(st_pc, MAT_SHIFT_NONE) == 0 &&
         KSPSetTolerances(
             st_ksp,
             shifted_ksp_tolerance,
@@ -6296,6 +6369,8 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_cpu_schur(
         operator_context->solve_control.cancellation_observed ||
         poisson_airbox_modal_cancel_requested(problem);
     if (eps_solve_status != PETSC_SUCCESS) {
+        // The quarantined EPS keeps a reference to the shell preconditioner.
+        static_cast<void>(augmented_shift.release());
         operator_context->eps_lifetime_unsafe = true;
         operator_context->invalidated = true;
         operator_context->solve_control.disarm();

@@ -337,6 +337,7 @@ oddzielny zakres. Kształt odpowiedzi OpenAPI pozostaje bez zmian.
 - `visualization/display` owns the legacy display-selection projection.
 - `visualization/state` owns canonical session-wide renderer state. Its schema version 4 exposes `quantity`, independent `layers`, `domains`, `sampling`, FDM/FEM view policy, trim/clip state, global camera state, vector glyph style, object/part `overrides`, a complete effective target registry for current scene objects/mesh parts, and diagnostics while retaining flat display fields as a compatibility projection.
 - `visualization/client-acks` owns bounded, diagnostic frontend feedback for renderer state revisions. Clients `POST` `applied`, `rendered`, or `failed` acknowledgements after consuming `visualization/state`; operators and scripts can `GET` the resource to confirm whether a visible browser applied a requested mode such as `surface` versus `wireframe`.
+- FEM target overrides may independently set `display.wireframe_geometry_scope` to `surface` or `full`; the target registry exposes the optional resolved `settings.wireframe_geometry_scope`. Missing legacy values mean surface wireframe. Object/part defaults explicitly publish `surface`; explicit wireframe `full` overrides round-trip normally. This optional additive field does not change `display.geometry_scope`, vector or point sampling, vector budgets, or the Airbox/FDM extent contract.
 - `workspace/*` owns shell state only and must not mutate physics semantics.
 - `status.capabilities` is the UI gating source of truth; discretization details may drive adapters but must not synthesize capabilities.
 
@@ -508,8 +509,8 @@ or short dashboard summaries, but must not copy full read-model payloads from an
 | `simulation/stages/execution` | full stage tree and stage state, including tolerance-qualified completion duration and optional stage-owned mesh generation, topology fingerprint, and mesh revision identity; missing legacy identity remains unknown and is never synthesized from mesh names or element counts |
 | `simulation/solver/status` | live solver state: runtime state, algorithm, step, algorithm-appropriate `dt`, exact torque, separate RHS norm, convergence, stop reason/metric/unit, warnings |
 | `diagnostics/solver-profile` | opt-in bounded phase profile plus explicit solver, end-to-end, and successful-publication rate objects |
-| `simulation/solver/energies/*` | current and historical energy samples |
-| `data/tables/default/rows` | table-shaped scalar history for ECharts windows, including `cursor`, `from_row`/`to_row`, `from_t`/`to_t`, `limit`, `target_points`, `decimation`, and `include_tail` query identity; JSON rows are the control-plane/debug view, while `rows.bin` is the production data-plane payload for chart values |
+| `simulation/solver/energies/*` | current and historical energy samples; `current` returns 204 without a body when a valid workspace has no qualified current sample, 200 for an available sample (including exact zero), and 404 when no workspace exists |
+| `data/tables/default/rows` | table-shaped scalar history for ECharts windows, including `cursor`, `from_row`/`to_row`, `from_t`/`to_t`, `limit`, `target_points`, `decimation`, and `include_tail` query identity; JSON rows are the control-plane/debug view, while `rows.bin` is the production data-plane payload for chart values. Both views may identify the exact accepted scalar series when available; `rows.bin` binds that identity to its own payload through the exposed `x-fullmag-table-series` response header (`none` or `v1.` plus base64url JSON) so a client cannot combine cursor deltas from different stages or attempts. Older servers may omit this optional identity. |
 | `data/scalars` | compatibility projection of the default scalar table, not a second scalar-history owner |
 | `data/artifacts` | artifact index entries; entries may expose optional region-owned authoring provenance summaries (`scene_revision`, authored region count, material field count, coupling count, blocked/deferred diagnostic counts) but must not inline heavy artifact payloads |
 | `data/material-fields` and `data/material-fields/{field_id}` | material-parameter field data catalog and per-assignment realized sample payloads for authored material fields; detail resources may include typed realized material-field asset metadata (`asset_id`, `artifact_path`, mesh identity, location, component count, source kind, algorithm, timing), while `model/material-fields` remains the summary/status resource |
@@ -523,6 +524,8 @@ or short dashboard summaries, but must not copy full read-model payloads from an
 | `meshing/meshes/shared-domain/manifest` | mesh identity, mesh provenance, object segments, mesh parts, and tree/selection metadata |
 | `meshing/meshes/*/quality`, `meshing/meshes/*/quality/per-element`, `meshing/meshes/*/report`, and `meshing/meshes/*/size-field` | detailed shared-domain, object-scoped, and airbox-scoped quality summaries, binary per-element quality data, reports, and realized size-field diagnostics |
 | `visualization/client-acks` | latest client-side acknowledgement per browser viewport for observed visualization-state revisions |
+
+`LiveStatus.solver_energy_current_available` is a thin availability hint computed by the same qualified-source selector as the current-energy resource. It may change between the status read and the resource request. Clients must accept an empty 204 response as no current sample, retain request-scope and API-instance checks, and hide data from an earlier run or stage. The hint does not authorize a historical fallback during active Docker execution or synthesize a zero-energy sample.
 
 Analytic mesh-region projection is fail-closed. Singular or non-finite affine
 transforms, imported solids without a qualified analytic occupancy evaluator,
@@ -607,9 +610,8 @@ UI wymaga pustego workspace, tworzy sesję z `replace_current: false`, potwierdz
 jej tożsamość i wykonuje istniejącą transakcję `replace_scene` z aktualnym
 `base_revision` i nagłówkiem `x-fullmag-session-scope`. Zachowuje jawnie wybrane
 `study.output_storage` przy pełnym zastąpieniu sceny oraz archive/fidelity importu.
-Pusta sesja jest wyłącznie bootstrapem authoring: istniejący `sessions.create`
-przyjmuje tylko FDM/FEM CPU double (FEM dla jawnego `fem`, FDM dla pozostałych).
-Nie jest to wybór wykonania ani fallback. Pełny `replace_scene` zachowuje authored
+Podczas importu UI tworzy pustą sesję authoring w trybie CPU double
+(FEM dla jawnego `fem`, FDM dla pozostałych). Pełny `replace_scene` zachowuje authored
 backend (`auto|fdm|fem|hybrid`), device (`auto|cpu|gpu`) i precision (`single|double`);
 niepoprawne wartości są odrzucane przed create. Przygotowanie obliczeń odczytuje
 intencję z `scene.study` i podlega istniejącym bramkom możliwości, bez gwarancji
@@ -1292,7 +1294,22 @@ GET    /v2/sessions/current/model/field-drives
 POST   /v2/sessions/current/model/field-drives
 PATCH  /v2/sessions/current/model/field-drives/{drive_id}
 DELETE /v2/sessions/current/model/field-drives/{drive_id}
+GET    /v2/sessions/current/model/mask-field-drives
+POST   /v2/sessions/current/model/mask-field-drives
+PUT    /v2/sessions/current/model/mask-field-drives/{drive_id}
+DELETE /v2/sessions/current/model/mask-field-drives/{drive_id}
+GET    /v2/sessions/current/model/ready-antennas
+POST   /v2/sessions/current/model/ready-antennas/terms
 ```
+
+A mask antenna (`mask_field_drive.v1`, ADR 0081) is one resource: target,
+support shape, position, frame and the list of terms with their equations. A
+replacement sends the whole antenna; the server compiles every equation and
+answers 400 with the code and path of each error
+(`docs/specs/mask-function-v1.md`). `ready-antennas` lists the functions of
+`fullmag.antennas`; `ready-antennas/terms` calls one with numeric arguments and
+returns its terms with their origin, which the client then stores in an antenna.
+The scene resource carries the antennas in `field_drives.mask_drives`.
 
 Every model mutation uses `base_revision` and returns the new
 `scene_revision`. New control-room code does not rewrite the loose
@@ -2286,3 +2303,21 @@ scenę, hash albo przypisanie projektu/runu. Obie odpowiedzi wyraźnie
 sygnalizują projekcję tylko do odczytu; nie deklarują zgodności z dawnym
 stanem authoring ani kwalifikacji naukowej. Dane wynikowe pozostają związane
 z niezmiennymi wejściami przyjętego obliczenia.
+
+### Rewizja optymistyczna poleceń po zakończeniu Solve
+
+`precondition.command_revision` porównuje tę samą rewizję, którą publikują
+`status.resources.commands_revision` i zasób `simulation/commands`. Dla trwałego
+journalu jest to jego monotoniczna rewizja, także po zmianach lifecycle; liczba
+wpisów ograniczonej historii nie zastępuje tej rewizji. Legacy bez trwałego
+journalu zachowuje dotychczasowy licznik. Niezgodność odmawia przed przyjęciem
+polecenia i nie uruchamia Solve ani materializacji.
+
+### Urządzenie i precyzja pustej sesji
+
+`POST /v2/sessions` przyjmuje FDM CPU double, FEM CPU double i FDM GPU
+w precyzji single albo double. Pozostałe kombinacje otrzymują HTTP 400 przed
+utworzeniem sesji. Capabilities pustej sesji opisują żądaną konfigurację.
+Pierwsze przygotowanie sprawdza możliwości topologii, solvera i urządzenia.
+Jawne żądanie GPU zachowuje tryb strict i nie przełącza wykonania na CPU.
+Dołączany runtime CLI odczytuje precyzję z kanonicznego skryptu sesji.

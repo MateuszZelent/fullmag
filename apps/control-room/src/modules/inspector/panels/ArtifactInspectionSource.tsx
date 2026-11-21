@@ -14,6 +14,7 @@ import { FieldRow } from "../primitives/FieldRow";
 import { FeedbackBanner } from "../primitives/FeedbackBanner";
 import { InspectorGroup } from "../primitives/InspectorGroup";
 import { InspectorPropertyRow } from "../primitives/InspectorPropertyRow";
+import { artifactInspectionSourceGuidance } from "./ArtifactInspectionSource.model";
 
 export function useArtifactInspectionSource(scene: ReturnType<typeof useSceneResource>, sourceObjectId: string | null = null) {
   const visualization = useObjectVisualizationController();
@@ -29,24 +30,6 @@ export function useArtifactInspectionSource(scene: ReturnType<typeof useSceneRes
   const sourceNames = new Map((scene.data?.objects ?? []).map(object => [object.id, object.name || object.id]));
   const inspection = artifactInspectionAvailability(selected, execution.data);
   return { visualization, execution, pin, candidates, selected, error, sourceNames, inspection, retainedOwner: inspection.owner };
-}
-
-export function artifactInspectionSourceGuidance({ loading, error, candidateCount, selectedStatus, inspectionState }: {
-  loading: boolean;
-  error: string | null;
-  candidateCount: number;
-  selectedStatus: string | null;
-  inspectionState?: "retained" | "absent" | "unknown";
-}): string {
-  if (error) return "Execution information is unavailable. Check the diagnostic below or open Results for a saved run.";
-  if (loading) return "Loading executions. Existing display settings remain unchanged.";
-  if (candidateCount === 0) return "No execution is retained in this session. Open Results and choose Saved to inspect an existing field. A solve definition or visible mesh alone does not contain field values.";
-  if (!selectedStatus) return "Select the antenna execution whose field you want to inspect. This does not start a simulation.";
-  if (inspectionState === "absent") return "This execution has no retained field in the current session. Open Results → Saved to choose a stored result. No new computation is needed to inspect a saved field.";
-  if (inspectionState === "unknown") return "Retained field availability is not confirmed. Field requests are paused; refresh the execution information or open Results → Saved.";
-  if (selectedStatus === "failed" || selectedStatus === "cancelled") return "This execution did not complete successfully. Check its diagnostic or choose another result; completion and field availability are checked separately.";
-  if (selectedStatus === "completed" || selectedStatus === "succeeded") return "Execution completed. Choose an available Quantity source below, then enable Vectors to inspect a vector field. Only verified field data on a compatible sampling mesh can be displayed.";
-  return "The selected execution has not completed. Field values appear only after they are published; mesh visibility does not indicate a computed field.";
 }
 
 export function ArtifactInspectionSource({ source, universe = false }: {
@@ -83,7 +66,7 @@ export function ArtifactInspectionSource({ source, universe = false }: {
     <p id={guidanceId} className="fm-inspection-source-guidance" role="status">{guidance}</p>
     {selected ? <InspectorGroup title="Result identity" collapsible defaultOpen={false}><FieldRow label="Source ID" value={selected.sourceObjectId} mono /><FieldRow label="Run ID" value={selected.runId} mono /><FieldRow label="Authored solve" value={selected.authoredStageId} mono /><FieldRow label="Runtime stage" value={selected.runtimeStageId} mono /><FieldRow label="Carrier scope" value={pin?.carrierScopeKind ? `${pin.carrierScopeKind}: ${pin.carrierScopeId ?? "full"}` : "Awaiting immutable carrier metadata"} mono /></InspectorGroup> : null}
     <Button size="sm" variant="secondary" onClick={() => layout.openSavedResults()}>Browse saved results</Button>
-    {universe ? <p role="status">Oersted H (A/m) uses the selected result’s saved sampling domain. Opening Universe does not establish full-volume coverage. Current density J belongs to the conductors. The saved mesh may differ from the current editable Universe.</p> : null}
+    {universe ? <p>Oersted H (A/m) uses the selected result’s saved sampling domain. Opening Universe does not establish full-volume coverage. Current density J belongs to the conductors. The saved mesh may differ from the current editable Universe.</p> : null}
     {failureReason ? <FeedbackBanner kind="error" message={failureReason} /> : null}
     {error ? <FeedbackBanner kind="warning" message={error} /> : null}
   </InspectorGroup>;

@@ -1,15 +1,7 @@
-mod scheduler_owner_control;
-mod worker_startup_gate;
-
-#[path = "accepted_study_supervisor.rs"]
-mod accepted_study_supervisor;
-#[path = "run_intent_persistence.rs"]
-mod run_intent_persistence;
-#[path = "schemas/output_storage.rs"]
-mod output_storage_schema;
-mod schemas {
-    pub(crate) use crate::output_storage_schema as output_storage;
-}
+use crate::{
+    accepted_study_supervisor, run_intent_persistence, scheduler_idle_backoff,
+    scheduler_owner_control, worker_startup_gate,
+};
 
 use anyhow::{bail, Context, Result};
 use fullmag_application::{ResourceBudget, ResourceKind, ResourceLease, RunId, RunSpecification};
@@ -75,6 +67,9 @@ struct SchedulerArgs {
     max_tasks: Option<usize>,
     max_idle_polls: usize,
     idle_poll_interval: Duration,
+    /// Cap of the adaptive idle interval; equals `idle_poll_interval` when
+    /// the scheduler is not resident.
+    idle_poll_maximum: Duration,
     worker_timeout: Duration,
     heartbeat_interval: Duration,
     max_automatic_retries: usize,
@@ -247,7 +242,7 @@ impl From<&SchedulerResourceOffer> for FmsSchedulerResourceOffer {
     }
 }
 
-fn main() {
+pub(super) fn main() {
     if let Err(error) = run() {
         eprintln!("accepted task scheduler failed: {error:#}");
         std::process::exit(1);
@@ -474,6 +469,10 @@ fn run_scheduler(
     let mut next_admission_pass_at = Instant::now();
     let mut drain_reconciliation_pending = false;
     let mut drain_observed = false;
+    let mut idle_backoff = scheduler_idle_backoff::IdleBackoff::new(
+        args.idle_poll_interval,
+        args.idle_poll_maximum,
+    );
     while args
         .max_tasks
         .map_or(true, |max_tasks| executed.len() < max_tasks)
@@ -918,6 +917,7 @@ fn run_scheduler(
         }
         if active_workers.is_empty() {
             if reconciliation_deferred || scheduling_deferred {
+                idle_backoff.reset();
                 if shutdown_requested.load(Ordering::Acquire)
                     && pending_task_outcomes.is_empty()
                 {
@@ -927,9 +927,11 @@ fn run_scheduler(
                 continue;
             }
             if scheduled_any {
+                idle_backoff.reset();
                 continue;
             }
             if !pending_task_outcomes.is_empty() {
+                idle_backoff.reset();
                 std::thread::sleep(args.idle_poll_interval);
                 continue;
             }
@@ -941,9 +943,10 @@ fn run_scheduler(
             }
             idle_poll_count += 1;
             consecutive_idle_polls += 1;
-            std::thread::sleep(args.idle_poll_interval);
+            idle_backoff.sleep_idle(&shutdown_requested);
             continue;
         }
+        idle_backoff.reset();
         let Some(resource_id) = finished_resource_id else {
             std::thread::sleep(ACTIVE_WORKER_EXIT_POLL_INTERVAL);
             continue;
@@ -969,6 +972,17 @@ fn run_scheduler(
                     resource_id = %resource_id,
                     error = ?error,
                     "compute scheduler deferred worker launch; runtime remains available"
+                );
+                eprintln!(
+                    "{}",
+                    serde_json::json!({
+                        "schema_version": "scheduler_worker_launch_deferred.v1",
+                        "component": "accepted_compute_scheduler",
+                        "run_id": worker_run_id.as_str(),
+                        "task_id": &worker_task_id,
+                        "resource_id": &resource_id,
+                        "detail": format!("{error:#}"),
+                    })
                 );
                 if active_workers.is_empty() {
                     std::thread::sleep(args.idle_poll_interval);
@@ -1108,6 +1122,17 @@ fn run_scheduler(
 }
 
 fn build_run_queue_snapshot(
+    store: &SessionStore,
+    run_ids: &[RunId],
+    next_run_id: Option<&RunId>,
+    max_queued_runs: usize,
+) -> Result<RunQueueSnapshot> {
+    store.retry_windows_folder_observation("build accepted scheduler run queue snapshot", || {
+        build_run_queue_snapshot_once(store, run_ids, next_run_id, max_queued_runs)
+    })
+}
+
+fn build_run_queue_snapshot_once(
     store: &SessionStore,
     run_ids: &[RunId],
     next_run_id: Option<&RunId>,
@@ -1765,6 +1790,15 @@ fn parse_args() -> Result<SchedulerArgs> {
         .map(|value| parse_u64("--idle-poll-milliseconds", value))
         .transpose()?
         .unwrap_or(100);
+    let idle_poll_max_milliseconds = values
+        .remove("--idle-poll-max-milliseconds")
+        .map(|value| parse_u64("--idle-poll-max-milliseconds", value))
+        .transpose()?;
+    let idle_poll_maximum = scheduler_idle_backoff::idle_poll_maximum(
+        idle_poll_max_milliseconds,
+        resident,
+        Duration::from_millis(idle_poll_milliseconds),
+    )?;
     let max_automatic_retries = values
         .remove("--max-automatic-retries")
         .map(|value| parse_usize("--max-automatic-retries", value))
@@ -1810,6 +1844,7 @@ fn parse_args() -> Result<SchedulerArgs> {
         max_tasks,
         max_idle_polls,
         idle_poll_interval: Duration::from_millis(idle_poll_milliseconds),
+        idle_poll_maximum,
         worker_timeout: Duration::from_secs(worker_timeout_seconds),
         heartbeat_interval: Duration::from_millis(heartbeat_interval_milliseconds),
         max_automatic_retries,

@@ -541,7 +541,7 @@ pub(crate) fn resolved_regional_field_drives(
         .iter()
         .map(|resolved| RegionalFieldDriveTerm {
             basis_field: resolved.field_xyz.clone(),
-            waveform: resolved.drive.waveform.clone(),
+            time: fullmag_engine::DriveTimeFunction::Waveform(resolved.drive.waveform.clone()),
             time_offset_s: match resolved.drive.time_origin {
                 fullmag_ir::FieldTimeOriginIR::StageLocal => plan
                     .time_stage
@@ -553,7 +553,53 @@ pub(crate) fn resolved_regional_field_drives(
         })
         .collect();
     drives.extend(resolved_solved_antenna_drives(plan, stage_start_time_s));
+    // Hand-written mask terms (ADR 0081): the same basis × multiplier path,
+    // with the multiplier from the term's time program.
+    drives.extend(plan.mask_field_term_bases.iter().map(|basis| RegionalFieldDriveTerm {
+        basis_field: basis.field_xyz.clone(),
+        time: fullmag_engine::DriveTimeFunction::Expression(basis.time_program.clone()),
+        time_offset_s: match basis.time_origin {
+            fullmag_ir::FieldTimeOriginIR::StageLocal => plan
+                .time_stage
+                .waveform_origin_time_s
+                .unwrap_or(stage_start_time_s),
+            fullmag_ir::FieldTimeOriginIR::Absolute => 0.0,
+        },
+        enabled: true,
+    }));
     drives
+}
+
+/// `H_drive` of a lane that keeps the drive bases on the device: the plan's
+/// regional, solved-antenna and mask drive terms at `time_seconds`, with the
+/// terms and clock of `ExchangeLlgProblem::regional_drive_field_at_time`.
+#[cfg_attr(not(feature = "cuda"), allow(dead_code))]
+pub(crate) fn resolved_drive_field_for_count(
+    plan: &FdmPlanIR,
+    sample_count: usize,
+    time_seconds: f64,
+) -> Result<Vec<Vector3>, RunError> {
+    let mut field = vec![[0.0, 0.0, 0.0]; sample_count];
+    for term in resolved_regional_field_drives(plan, plan.time_stage.start_time_s)
+        .into_iter()
+        .filter(|term| term.enabled)
+    {
+        if term.basis_field.len() != sample_count {
+            return Err(RunError {
+                message: format!(
+                    "resolved drive basis has {} samples; expected {sample_count}",
+                    term.basis_field.len()
+                ),
+            });
+        }
+        let multiplier = term.multiplier_at(time_seconds);
+        for (total, basis) in field.iter_mut().zip(&term.basis_field) {
+            total[0] += multiplier * basis[0];
+            total[1] += multiplier * basis[1];
+            total[2] += multiplier * basis[2];
+        }
+    }
+    Ok(field)
 }
 
 fn resolved_solved_antenna_drives(
@@ -582,7 +628,7 @@ fn resolved_solved_antenna_drives(
                     ]
                 })
                 .collect(),
-            waveform: basis.drive.waveform.clone(),
+            time: fullmag_engine::DriveTimeFunction::Waveform(basis.drive.waveform.clone()),
             time_offset_s: match basis.drive.time_origin {
                 FieldTimeOriginIR::StageLocal => plan
                     .time_stage
@@ -686,6 +732,7 @@ pub(crate) fn snapshot_vector_fields_from_state(
         oersted_field,
         antenna_field,
         None,
+        None,
     )
 }
 
@@ -699,6 +746,7 @@ fn snapshot_vector_fields_from_state_with_additional_effective_field(
     oersted_field: Option<&[Vector3]>,
     antenna_field: Option<&[Vector3]>,
     additional_effective_field: Option<&[Vector3]>,
+    observation_workspace: Option<&mut FftWorkspace>,
 ) -> Result<Vec<crate::LivePreviewField>, RunError> {
     let mut direct_fields = DirectFieldSnapshotCache::new_with_source_fields(
         problem,
@@ -707,6 +755,7 @@ fn snapshot_vector_fields_from_state_with_additional_effective_field(
         antenna_field,
         additional_effective_field,
     );
+    direct_fields.observation_workspace = observation_workspace;
     let mut observables = None;
     let mut cached = Vec::new();
     let mut seen = std::collections::HashSet::new();
@@ -772,6 +821,7 @@ fn capture_full_active_cpu_fields(
     accepted_thermal_context: Option<(u64, f64)>,
     spin_transport: Option<&FdmSpinTransportWorkflow>,
     config_revision: u64,
+    observation_workspace: Option<&mut FftWorkspace>,
 ) -> Result<Vec<crate::LivePreviewField>, RunError> {
     let quantities = field_materialization_quantity_ids();
     let quantities = crate::live_demand::retain_demanded_live_quantities(
@@ -788,6 +838,7 @@ fn capture_full_active_cpu_fields(
         spin_transport,
         config_revision,
         &quantities,
+        observation_workspace,
     )
 }
 
@@ -846,6 +897,7 @@ fn capture_one_active_cpu_field(
         spin_transport,
         config_revision,
         &[quantity],
+        None,
     )?;
     if fields.len() != 1 {
         return Err(RunError {
@@ -869,6 +921,7 @@ fn capture_cpu_fields_for_quantities(
     spin_transport: Option<&FdmSpinTransportWorkflow>,
     config_revision: u64,
     requested_quantities: &[&str],
+    observation_workspace: Option<&mut FftWorkspace>,
 ) -> Result<Vec<crate::LivePreviewField>, RunError> {
     let quantities = active_fdm_preview_quantities(
         crate::dispatch::FdmEngine::CpuReference,
@@ -966,6 +1019,7 @@ fn capture_cpu_fields_for_quantities(
             Some(&oersted_field),
             Some(&antenna_field),
             transport_oersted_field,
+            observation_workspace,
         )
     })();
     problem.terms.per_node_field = previous_per_node_field;
@@ -1256,7 +1310,7 @@ fn build_reference_problem(plan: &FdmPlanIR) -> Result<ExchangeLlgProblem, RunEr
         });
     }
 
-    let problem = ExchangeLlgProblem::with_terms_and_mask(
+    let mut problem = ExchangeLlgProblem::with_terms_and_mask(
         grid,
         cell_size,
         material,
@@ -1307,6 +1361,13 @@ fn build_reference_problem(plan: &FdmPlanIR) -> Result<ExchangeLlgProblem, RunEr
     .map_err(|e| RunError {
         message: format!("Problem construction: {}", e),
     })?;
+    if let Some(expression) = plan.slonczewski_time_expression.as_ref() {
+        problem
+            .set_slonczewski_time_expression(expression)
+            .map_err(|error| RunError {
+                message: format!("Slonczewski time expression: {error}"),
+            })?;
+    }
     let problem = problem
         .with_static_external_field(plan.static_external_field_xyz.clone())
         .map_err(|e| RunError {
@@ -1582,6 +1643,11 @@ pub(crate) fn execute_reference_fdm_with_terminal_context(
                 .to_string(),
         });
     }
+    crate::mask_time::check_mask_time_programs(
+        &plan.mask_field_term_bases,
+        &plan.time_stage,
+        until_seconds,
+    )?;
     if plan.precision != ExecutionPrecision::Double {
         return Err(RunError {
             message: format!(
@@ -1993,6 +2059,12 @@ pub(crate) fn execute_reference_fdm_with_terminal_context(
             crate::schedules::OUTPUT_TIME_TOLERANCE
         },
     );
+    crate::time_events::extend_absolute_time_expression_events(
+        &mut time_events,
+        plan.slonczewski_time_expression.as_ref(),
+        plan.time_stage.start_time_s,
+        stage_end_time_s,
+    );
     if spin_transport.is_some() {
         let envelopes = plan.spin_transport_plans.iter().filter_map(|resolved| {
             resolved
@@ -2075,6 +2147,9 @@ pub(crate) fn execute_reference_fdm_with_terminal_context(
 
     // --- Create FFT workspace once for the entire simulation ---
     let mut fft_workspace = problem.create_workspace();
+    // Observation FFTs must not rebuild Newell spectra every accepted step or
+    // contribute their counters to the integrator's workspace telemetry.
+    let mut observation_fft_workspace: Option<FftWorkspace> = None;
     let mut integrator_bufs = problem.create_integrator_buffers();
     let mut state_soa = if use_soa_state {
         Some(state.to_soa())
@@ -2425,7 +2500,11 @@ pub(crate) fn execute_reference_fdm_with_terminal_context(
                         state.time_seconds,
                         dt.min(remaining),
                         &time_events.times_s,
-                        crate::schedules::OUTPUT_TIME_TOLERANCE,
+                        if plan.slonczewski_time_expression.is_some() {
+                            0.0
+                        } else {
+                            crate::schedules::OUTPUT_TIME_TOLERANCE
+                        },
                     )
                 },
                 |target| target - state.time_seconds,
@@ -2441,6 +2520,7 @@ pub(crate) fn execute_reference_fdm_with_terminal_context(
                 plan.adaptive_timestep.as_ref(),
                 plan.relaxation.is_none() && spin_transport.is_none(),
                 transport_step_end.is_some(),
+                plan.slonczewski_time_expression.is_some(),
                 remaining,
                 dt_step,
             );
@@ -2610,11 +2690,12 @@ pub(crate) fn execute_reference_fdm_with_terminal_context(
                 }
             } else {
                 let result = if use_hard_endpoint_rk45_step {
+                    let hard_endpoint_s = state.time_seconds + dt_step;
                     step_reference_fdm_problem_to_hard_endpoint(
                         &problem,
                         &mut state,
                         &mut state_soa,
-                        stage_end_time_s,
+                        hard_endpoint_s,
                         &mut fft_workspace,
                         &mut integrator_bufs,
                         step_evaluation,
@@ -2830,7 +2911,6 @@ pub(crate) fn execute_reference_fdm_with_terminal_context(
 
             if let Some(live) = live.as_mut() {
                 let live_materialization_started = Instant::now();
-                let heavy_payload_every = live.field_every_n.max(1);
                 let display_selection = live.display_selection.map(|get| get());
                 let preview_due = display_selection
                     .as_ref()
@@ -2841,7 +2921,7 @@ pub(crate) fn execute_reference_fdm_with_terminal_context(
                 let preview_targets_global_scalar = display_selection
                     .as_ref()
                     .is_some_and(display_is_global_scalar);
-                let heavy_payload_due = step_count % heavy_payload_every == 0;
+                let heavy_payload_due = live.field_cadence.heavy_payload_due(step_count);
                 let mut preview_field = None;
                 let direct_preview_satisfied = if preview_due && !preview_targets_global_scalar {
                     let selection = display_selection.as_ref().expect("checked preview_due");
@@ -2880,9 +2960,16 @@ pub(crate) fn execute_reference_fdm_with_terminal_context(
                     .as_ref()
                     .map(|selection| selection.revision)
                     .unwrap_or(0);
-                let full_fields_due = heavy_payload_due && live.field_every_n == 1;
+                let full_fields_due =
+                    heavy_payload_due && live.field_cadence.publishes_full_catalog();
                 let mut full_fields_capture_error = None;
                 let cached_preview_fields = if full_fields_due {
+                    let observation_workspace = if problem.terms.demag {
+                        Some(observation_fft_workspace
+                            .get_or_insert_with(|| problem.create_workspace()))
+                    } else {
+                        None
+                    };
                     match accepted_cpu_thermal_capture_context(
                         &problem,
                         report.dt_used,
@@ -2900,6 +2987,7 @@ pub(crate) fn execute_reference_fdm_with_terminal_context(
                             thermal_context,
                             spin_transport.as_ref(),
                             config_revision,
+                            observation_workspace,
                         )
                     }) {
                         Ok(fields) => Some(fields),
@@ -2925,7 +3013,7 @@ pub(crate) fn execute_reference_fdm_with_terminal_context(
                     ));
                 }
                 let due_scalar_row = step_count <= 1
-                    || step_count % heavy_payload_every == 0
+                    || live.field_cadence.step_due(step_count)
                     || scalar_row_due(&scalar_schedules, state.time_seconds)
                     || (preview_due && preview_targets_global_scalar);
                 let mut update_stats = make_step_stats_from_report(
@@ -3024,6 +3112,22 @@ pub(crate) fn execute_reference_fdm_with_terminal_context(
             artifacts.record_solver_step(&latest_stats);
 
             if cancelled || paused {
+                // The terminal snapshot below runs only on completion. Keep the
+                // displayed m on the last accepted step after a paused/stopped
+                // loop whose final payload the wall-clock gate skipped.
+                if let Some(live) = live.as_mut() {
+                    if live.field_cadence.take_deferred_step().is_some() {
+                        let _ = (live.on_step)(
+                            crate::live_field_cadence::deferred_magnetization_update(
+                                &latest_stats,
+                                live.grid,
+                                None,
+                                flatten_vectors(state.magnetization()),
+                                None,
+                            ),
+                        );
+                    }
+                }
                 break;
             }
 
@@ -3824,15 +3928,21 @@ fn should_use_rk45_hard_endpoint_step(
     adaptive: Option<&AdaptiveTimeStepIR>,
     is_physical_time_evolution: bool,
     has_transport_step_end: bool,
+    has_time_expression: bool,
     remaining_s: f64,
     dt_step_s: f64,
 ) -> bool {
+    let Some(policy) = adaptive else {
+        return false;
+    };
+    let is_subminimum_stage_endpoint = remaining_s < policy.dt_min && dt_step_s == remaining_s;
+    let is_subminimum_expression_interval = has_time_expression && dt_step_s < policy.dt_min;
     is_physical_time_evolution
         && !has_transport_step_end
         && integrator.unwrap_or(IntegratorChoice::Heun) == IntegratorChoice::Rk45
         && remaining_s.is_finite()
         && remaining_s > 0.0
-        && adaptive.is_some_and(|policy| remaining_s < policy.dt_min && dt_step_s == remaining_s)
+        && (is_subminimum_stage_endpoint || is_subminimum_expression_interval)
 }
 
 fn step_reference_fdm_problem_to_hard_endpoint(
@@ -4931,6 +5041,7 @@ fn direct_field_values_available(name: &str) -> bool {
             | "H_oe"
             | "H_OE"
             | "H_ant"
+            | "H_drive"
             | "H_eff"
             | "torque"
     ) && component.map_or(true, |component| matches!(component, "x" | "y" | "z"))
@@ -4956,6 +5067,7 @@ fn direct_scalar_values_available(name: &str) -> bool {
 struct DirectFieldSnapshotCache<'a> {
     problem: &'a ExchangeLlgProblem,
     state: &'a ExchangeLlgState,
+    observation_workspace: Option<&'a mut FftWorkspace>,
     magnetization: Option<Vec<Vector3>>,
     exchange_field: Option<Vec<Vector3>>,
     demag_field: Option<Vec<Vector3>>,
@@ -4965,6 +5077,7 @@ struct DirectFieldSnapshotCache<'a> {
     rotated_dmi_field: Option<Vec<Vector3>>,
     oersted_field: Option<Vec<Vector3>>,
     antenna_field_cache: Option<Vec<Vector3>>,
+    drive_field: Option<Vec<Vector3>>,
     effective_field: Option<Vec<Vector3>>,
     torque_field: Option<Vec<Vector3>>,
     oersted_field_override: Option<&'a [Vector3]>,
@@ -4987,6 +5100,7 @@ impl<'a> DirectFieldSnapshotCache<'a> {
         Self {
             problem,
             state,
+            observation_workspace: None,
             magnetization: None,
             exchange_field: None,
             demag_field: None,
@@ -4996,6 +5110,7 @@ impl<'a> DirectFieldSnapshotCache<'a> {
             rotated_dmi_field: None,
             oersted_field: None,
             antenna_field_cache: None,
+            drive_field: None,
             effective_field: None,
             torque_field: None,
             oersted_field_override,
@@ -5123,9 +5238,13 @@ impl<'a> DirectFieldSnapshotCache<'a> {
             }
             "H_demag" => {
                 if self.demag_field.is_none() {
+                    let field = match self.observation_workspace.as_deref_mut() {
+                        Some(workspace) => self.problem
+                            .observable_demag_field_with_workspace(self.state, workspace),
+                        None => self.problem.observable_demag_field(self.state),
+                    };
                     self.demag_field = Some(
-                        self.problem
-                            .observable_demag_field(self.state)
+                        field
                             .map_err(|error| RunError {
                                 message: format!(
                                     "CPU FDM snapshot '{}': demag field: {}",
@@ -5207,6 +5326,16 @@ impl<'a> DirectFieldSnapshotCache<'a> {
                     .as_deref()
                     .expect("cached antenna field"))
             }
+            // Regional drives, solved-antenna drives and mask terms (ADR 0081).
+            "H_drive" => {
+                if self.drive_field.is_none() {
+                    self.drive_field = Some(
+                        self.problem
+                            .regional_drive_field_at_time(self.state.time_seconds),
+                    );
+                }
+                Ok(self.drive_field.as_deref().expect("cached drive field"))
+            }
             "H_eff" => self.observable_effective_field(name),
             "torque" => self.torque_field(name),
             _ => Err(RunError {
@@ -5219,9 +5348,12 @@ impl<'a> DirectFieldSnapshotCache<'a> {
         if self.effective_field.is_none() {
             #[cfg(test)]
             increment_direct_h_eff_assembly_calls();
-            let mut effective_field = self
-                .problem
-                .observable_effective_field(self.state)
+            let field = match self.observation_workspace.as_deref_mut() {
+                Some(workspace) => self.problem
+                    .observable_effective_field_with_workspace(self.state, workspace),
+                None => self.problem.observable_effective_field(self.state),
+            };
+            let mut effective_field = field
                 .map_err(|error| RunError {
                     message: format!("CPU FDM snapshot '{}': effective field: {}", name, error),
                 })?;
@@ -5359,6 +5491,7 @@ mod tests {
             Some(&adaptive),
             true,
             false,
+            false,
             endpoint_interval,
             endpoint_interval,
         ));
@@ -5367,6 +5500,7 @@ mod tests {
             Some(&adaptive),
             true,
             false,
+            false,
             adaptive.dt_min,
             adaptive.dt_min,
         ));
@@ -5374,6 +5508,7 @@ mod tests {
             Some(IntegratorChoice::Rk45),
             Some(&adaptive),
             true,
+            false,
             false,
             endpoint_interval,
             endpoint_interval * 0.5,
@@ -5383,12 +5518,14 @@ mod tests {
             Some(&adaptive),
             true,
             false,
+            false,
             endpoint_interval,
             endpoint_interval,
         ));
         assert!(!should_use_rk45_hard_endpoint_step(
             Some(IntegratorChoice::Rk45),
             Some(&adaptive),
+            false,
             false,
             false,
             endpoint_interval,
@@ -5399,6 +5536,7 @@ mod tests {
             Some(&adaptive),
             true,
             true,
+            false,
             endpoint_interval,
             endpoint_interval,
         ));
@@ -5407,7 +5545,26 @@ mod tests {
             None,
             true,
             false,
+            false,
             endpoint_interval,
+            endpoint_interval,
+        ));
+        assert!(should_use_rk45_hard_endpoint_step(
+            Some(IntegratorChoice::Rk45),
+            Some(&adaptive),
+            true,
+            false,
+            true,
+            10.0 * adaptive.dt_min,
+            endpoint_interval,
+        ));
+        assert!(!should_use_rk45_hard_endpoint_step(
+            Some(IntegratorChoice::Rk45),
+            Some(&adaptive),
+            true,
+            false,
+            false,
+            10.0 * adaptive.dt_min,
             endpoint_interval,
         ));
     }
@@ -5464,6 +5621,59 @@ mod tests {
             interfacial_dmi: None,
             bulk_dmi: None,
             ..Default::default()
+        }
+    }
+
+    /// Two objects touch along x but have distinct owners, so the exchange
+    /// operator decouples their interface. Non-zero DMI cannot cross it because
+    /// the current stencil does not add a material-interface free-surface term.
+    fn touching_objects_plan(interfacial_dmi: Option<f64>) -> FdmPlanIR {
+        let mut plan = make_test_plan();
+        plan.region_mask = (0..16)
+            .map(|index| if index % 4 < 2 { 1 } else { 2 })
+            .collect();
+        plan.region_owner = vec![0, 0, 1];
+        plan.interfacial_dmi = interfacial_dmi;
+        plan
+    }
+
+    #[test]
+    fn dmi_decoupled_exchange_connection_is_rejected_before_stepping() {
+        let error = crate::fdm::exchange_operator::build_plan_exchange_operator(
+            &touching_objects_plan(Some(1.5e-3)),
+        )
+        .expect_err("DMI across a decoupled connection must be rejected");
+        assert!(
+            error.message.contains("fdm_dmi_decoupled_exchange_connection"),
+            "{}",
+            error.message
+        );
+    }
+
+    #[test]
+    fn dmi_decoupled_exchange_connection_is_rejected_without_exchange_field() {
+        let mut plan = touching_objects_plan(Some(1.5e-3));
+        plan.enable_exchange = false;
+        let error = crate::fdm::exchange_operator::build_plan_exchange_operator(&plan)
+            .expect_err("touching objects stay decoupled for DMI without exchange");
+        assert!(
+            error.message.contains("fdm_dmi_decoupled_exchange_connection"),
+            "{}",
+            error.message
+        );
+    }
+
+    #[test]
+    fn dmi_decoupled_exchange_gate_ignores_absent_or_zero_dmi() {
+        for dmi in [None, Some(0.0)] {
+            let operator = crate::fdm::exchange_operator::build_plan_exchange_operator(
+                &touching_objects_plan(dmi),
+            )
+            .expect("without DMI the decoupled operator is valid");
+            assert!(matches!(
+                operator,
+                fullmag_engine::ExchangeOperator::Faces(_)
+            ));
         }
     }
 
@@ -6632,6 +6842,118 @@ mod tests {
     }
 
     #[test]
+    fn cpu_snapshot_reuses_observation_fft_workspace_across_states() {
+        let mut plan = make_test_plan();
+        plan.enable_demag = true;
+        plan.active_mask = Some((0..16).map(|i| i != 5 && i != 6).collect());
+        plan.material.ms_field = Some((0..16).map(|i| if i < 8 { 4e5 } else { 8e5 }).collect());
+        plan.initial_magnetization = (0..16).map(|i| [1.0, (i as f64) * 0.07, 0.2]).collect();
+        let (problem, first) =
+            build_snapshot_problem_and_state(&plan).expect("demag snapshot problem");
+        let mut next_plan = plan.clone();
+        next_plan.initial_magnetization = (0..16).map(|i| [0.2, 1.0, -(i as f64) * 0.04]).collect();
+        let (_, mut second) = build_snapshot_problem_and_state(&next_plan).expect("second state");
+        second.time_seconds = 2e-14;
+        let mut workspace = problem.create_workspace();
+        let original_workspace = workspace.telemetry();
+        let solver_workspace = problem.create_workspace();
+        let solver_original = solver_workspace.telemetry();
+        let request = LivePreviewRequest {
+            quantity: "m".into(),
+            component: "3D".into(),
+            all_layers: true,
+            max_points: 0,
+            ..Default::default()
+        };
+        let quantities = [
+            "m",
+            "H_ex",
+            "H_demag",
+            "H_eff",
+            "torque",
+            "eden_ex",
+            "eden_demag",
+            "eden_total",
+        ];
+        let mut previous_forward_count = 0;
+        let mut previous_demag = None;
+        for state in [&first, &second] {
+            let fresh = snapshot_vector_fields_from_state_with_additional_effective_field(
+                &problem,
+                state,
+                &quantities,
+                &request,
+                plan.grid.cells,
+                plan.active_mask.as_deref(),
+                None,
+                None,
+                None,
+                None,
+            )
+            .expect("fresh snapshot");
+            let reused = snapshot_vector_fields_from_state_with_additional_effective_field(
+                &problem,
+                state,
+                &quantities,
+                &request,
+                plan.grid.cells,
+                plan.active_mask.as_deref(),
+                None,
+                None,
+                None,
+                Some(&mut workspace),
+            )
+            .expect("reused snapshot");
+            assert_eq!(fresh.len(), quantities.len());
+            for (expected, actual) in fresh.iter().zip(&reused) {
+                assert_eq!(expected.quantity, actual.quantity);
+                assert_eq!(
+                    expected.vector_field_values, actual.vector_field_values,
+                    "workspace reuse changed {}",
+                    expected.quantity
+                );
+            }
+            let demag = reused
+                .iter()
+                .find(|field| field.quantity == "H_demag")
+                .unwrap();
+            assert!(
+                demag.vector_field_values[15..21]
+                    .iter()
+                    .any(|value| value.abs() > 0.0),
+                "inactive cells must retain their observable stray field"
+            );
+            if let Some(previous) = previous_demag {
+                assert_ne!(
+                    previous, demag.vector_field_values,
+                    "a new state must not reuse old fields"
+                );
+            }
+            previous_demag = Some(demag.vector_field_values.clone());
+            let telemetry = workspace.telemetry();
+            assert_eq!(
+                telemetry.lifecycle_revision,
+                original_workspace.lifecycle_revision
+            );
+            assert_eq!(
+                telemetry.lifecycle_key_sha256,
+                original_workspace.lifecycle_key_sha256
+            );
+            assert_eq!(
+                telemetry.plan_creation_time_ns,
+                original_workspace.plan_creation_time_ns
+            );
+            assert!(telemetry.forward_fft_count > previous_forward_count);
+            previous_forward_count = telemetry.forward_fft_count;
+        }
+        assert_eq!(
+            solver_workspace.telemetry(),
+            solver_original,
+            "observation FFT work must not enter solver workspace telemetry"
+        );
+    }
+
+    #[test]
     fn snapshot_preview_m_uses_direct_state_without_reobserving_state() {
         reset_observe_state_calls();
 
@@ -7343,7 +7665,7 @@ mod tests {
             &[],
             Some(LiveStepConsumer {
                 grid: plan.grid.cells,
-                field_every_n: u64::MAX,
+                field_cadence: crate::LiveFieldCadence::every_n_steps(u64::MAX),
                 initial_snapshot: false,
                 display_selection: None,
                 interrupt_requested: None,
@@ -7379,7 +7701,7 @@ mod tests {
             &[],
             Some(LiveStepConsumer {
                 grid: plan.grid.cells,
-                field_every_n: u64::MAX,
+                field_cadence: crate::LiveFieldCadence::every_n_steps(u64::MAX),
                 initial_snapshot: false,
                 display_selection: None,
                 interrupt_requested: Some(&interrupt_requested),
@@ -7436,7 +7758,7 @@ mod tests {
             &[],
             Some(LiveStepConsumer {
                 grid: plan.grid.cells,
-                field_every_n: u64::MAX,
+                field_cadence: crate::LiveFieldCadence::every_n_steps(u64::MAX),
                 initial_snapshot: false,
                 display_selection: Some(&display_selection),
                 interrupt_requested: None,
@@ -7514,7 +7836,7 @@ mod tests {
             &[],
             Some(LiveStepConsumer {
                 grid: plan.grid.cells,
-                field_every_n: 1,
+                field_cadence: crate::LiveFieldCadence::every_n_steps(1),
                 initial_snapshot: false,
                 display_selection: None,
                 interrupt_requested: None,
@@ -7603,7 +7925,7 @@ mod tests {
             &[],
             Some(LiveStepConsumer {
                 grid: plan.grid.cells,
-                field_every_n: 1,
+                field_cadence: crate::LiveFieldCadence::every_n_steps(1),
                 initial_snapshot: false,
                 display_selection: Some(&display_selection),
                 interrupt_requested: None,
@@ -8212,7 +8534,7 @@ mod tests {
             &[],
             Some(LiveStepConsumer {
                 grid: plan.grid.cells,
-                field_every_n: 1,
+                field_cadence: crate::LiveFieldCadence::every_n_steps(1),
                 initial_snapshot: false,
                 display_selection: Some(&display_selection),
                 interrupt_requested: None,
@@ -8316,7 +8638,7 @@ mod tests {
             &[],
             Some(LiveStepConsumer {
                 grid: plan.grid.cells,
-                field_every_n: u64::MAX,
+                field_cadence: crate::LiveFieldCadence::every_n_steps(u64::MAX),
                 initial_snapshot: true,
                 display_selection: Some(&display_selection),
                 interrupt_requested: None,
@@ -8370,7 +8692,7 @@ mod tests {
             &[],
             Some(LiveStepConsumer {
                 grid: plan.grid.cells,
-                field_every_n: 1,
+                field_cadence: crate::LiveFieldCadence::every_n_steps(1),
                 initial_snapshot: false,
                 display_selection: None,
                 interrupt_requested: None,

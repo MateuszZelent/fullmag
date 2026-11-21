@@ -40,6 +40,7 @@ from ._gmsh_extraction import _derive_facet_roles
 from ._gmsh_infra import _import_meshio
 from ._gmsh_types import (
     MeshData,
+    _canonical_marker_array,
     MeshQualityReport,
     MeshRealizationReport,
     MixedLayerTopologyCertificate,
@@ -1432,7 +1433,7 @@ def _blocks(
             dtype=np.int32,
         )
         cells.append((_MESHIO_CELL_NAMES[str(kind)], block))
-        marker_blocks.append(markers[indices].astype(np.int32))
+        marker_blocks.append(markers[indices].astype(np.uint32))
     return cells, marker_blocks
 
 
@@ -1490,19 +1491,17 @@ _GMSH_ELEMENT_IDS = {
 
 
 def _positive_export_tags(markers: Sequence[int]) -> dict[int, int]:
-    used = {marker for marker in markers if marker > 0}
-    next_tag = max(used, default=0) + 1
-    result: dict[int, int] = {}
-    for marker in markers:
-        if marker > 0:
-            result[marker] = marker
-        else:
-            while next_tag in used:
-                next_tag += 1
-            result[marker] = next_tag
-            used.add(next_tag)
-            next_tag += 1
-    return result
+    # External tags are aliases, not canonical IDs. Both interchange formats
+    # carry the inverse map in their existing hash-bound Fullmag sidecar.
+    canonical = sorted(set(int(marker) for marker in markers))
+    if any(marker < 0 or marker > np.iinfo(np.uint32).max for marker in canonical):
+        raise MeshSemanticMappingError("export markers must fit canonical u32")
+    if len(canonical) > np.iinfo(np.int32).max:
+        raise MeshSemanticMappingError("export marker count exceeds positive int32 tag range")
+    ordered = [marker for marker in canonical if marker != 0]
+    if 0 in canonical:
+        ordered.append(0)
+    return {marker: index for index, marker in enumerate(ordered, start=1)}
 
 
 def _write_gmsh41_ascii(
@@ -1617,7 +1616,8 @@ def import_gmsh_mesh(
     resolved_unit = coordinate_unit or sidecar.get("coordinate_unit")
     if resolved_unit not in _COORDINATE_SCALES:
         raise ValueError("coordinate_unit must be explicitly provided as m, mm, um, or nm")
-    mesh = _read_mesh_file(source)
+    # A hash-bound sidecar owns canonical identity; display names cannot override it.
+    mesh = _read_mesh_file(source, preserve_physical_tags=True) if sidecar else _read_mesh_file(source)
     scale = _COORDINATE_SCALES[str(resolved_unit)]
     if scale != 1.0:
         mesh = MeshData(
@@ -1707,14 +1707,8 @@ def _remap_mesh_markers(
     volume_translation: Mapping[int, int],
     surface_translation: Mapping[int, int],
 ) -> MeshData:
-    element_markers = np.asarray(
-        [volume_translation.get(int(marker), int(marker)) for marker in mesh.element_markers],
-        dtype=np.int32,
-    )
-    boundary_markers = np.asarray(
-        [surface_translation.get(int(marker), int(marker)) for marker in mesh.boundary_markers],
-        dtype=np.int32,
-    )
+    element_markers = _canonical_marker_array([volume_translation.get(int(marker), int(marker)) for marker in mesh.element_markers], "element_markers")
+    boundary_markers = _canonical_marker_array([surface_translation.get(int(marker), int(marker)) for marker in mesh.boundary_markers], "boundary_markers")
     cell_mesh_parts = np.asarray(
         ["far_air" if marker == 0 else "magnetic" for marker in element_markers]
     )
@@ -2036,14 +2030,8 @@ def import_comsol_mesh(
             int(external): int(fullmag)
             for external, fullmag in boundary_entity_map.items()
         }
-    element_markers_array = np.asarray(
-        [volume_translation.get(marker, marker) for marker in element_markers],
-        dtype=np.int32,
-    )
-    boundary_markers_array = np.asarray(
-        [surface_translation.get(marker, marker) for marker in boundary_markers],
-        dtype=np.int32,
-    )
+    element_markers_array = _canonical_marker_array([volume_translation.get(marker, marker) for marker in element_markers], "element_markers_array")
+    boundary_markers_array = _canonical_marker_array([surface_translation.get(marker, marker) for marker in boundary_markers], "boundary_markers_array")
     cell_types_array = np.asarray(cell_types)
     cell_offsets_array = np.asarray(cell_offsets, dtype=np.int64)
     cell_nodes_array = np.asarray(cell_nodes, dtype=np.int32)

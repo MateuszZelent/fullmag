@@ -31,6 +31,8 @@ from docker_build_control import (
     canonical,
     compose_capture,
     docker_capture,
+    DEV_CUDA_TARGET_ENV,
+    receipt_dev_cuda_target,
     toolchain_configuration,
 )
 
@@ -816,7 +818,7 @@ def _image_input_manifest(
 
 def _toolchain_identity(group: RetainedGroup) -> Mapping[str, object]:
     try:
-        configured = toolchain_configuration(group.source_root, group.identity)
+        configured = toolchain_configuration(group.source_root, group.identity, direct_dev=True)
         service = configured["services"]["fem-gpu-toolchain"]
         build = service["build"]
         build_args = build["args"]
@@ -825,7 +827,7 @@ def _toolchain_identity(group: RetainedGroup) -> Mapping[str, object]:
             raise TypeError("toolchain build configuration is incomplete")
     except (BuildControlError, KeyError, TypeError, ValueError) as error:
         raise BuildInputUnknown(
-            "Selected toolchain configuration cannot be authenticated without a build"
+            f"Selected toolchain configuration cannot be authenticated without a build: {error}"
         ) from error
     return {
         "source_inputs": _dependency_input_manifest(group.source_root),
@@ -910,6 +912,10 @@ def _build_inputs_match(group: RetainedGroup) -> bool:
         # retained dev/backend receipts may still form a valid older chain.
         # That is an authenticated rebuild requirement, not an unknown receipt.
         changed.append("toolchain")
+    if retained_toolchain_image == toolchain_image:
+        target = receipt_dev_cuda_target(toolchain)
+        if target is not None and environment.get(DEV_CUDA_TARGET_ENV) != target:
+            raise BuildInputUnknown("Retained backend CUDA target differs from the toolchain receipt")
     current_toolchain = _toolchain_identity(group)
     if build_input_digest(current_toolchain) != toolchain["source_digest"]:
         if "toolchain" not in changed:
@@ -1089,6 +1095,13 @@ def _script_output_mapping_matches(group: RetainedGroup) -> bool:
 
 def _lifecycle_args(group: RetainedGroup, args: argparse.Namespace, **updates) -> argparse.Namespace:
     values = vars(args).copy()
+    if values.get("network_subnet") is None:
+        configurations = group.document.get("networks", {}).get("fullmag", {}).get("ipam", {}).get("config", [])
+        if configurations:
+            from docker_dev_network import parse_requested_subnet, validate_retained_subnet
+            subnet = parse_requested_subnet(configurations[0].get("subnet"))
+            validate_retained_subnet(group.document, subnet)
+            values["network_subnet"] = subnet
     values.update(
         repo_root=group.repo_root,
         source_root=group.source_root,
@@ -1110,15 +1123,21 @@ def _stable_activation_request_id(group: RetainedGroup, args: argparse.Namespace
     if script is None:
         return None
     import fullmag_storage as storage
-    from docker_startup_script import prepare
+    from docker_startup_script import cuda_trace_sha256, prepare
+
+    cuda_trace = getattr(args, "cuda_trace", False)
+    if type(cuda_trace) is not bool:
+        raise DockerDevUpError("Script activation cuda trace opt-in must be a boolean")
 
     try:
         source_commit = storage.git(group.source_root, "rev-parse", "HEAD")
+        prepare_options = {"cuda_trace": True} if cuda_trace else {}
         authorization = prepare(
             group.source_root,
             script,
             request_id="fullmag-activation-probe",
             source_commit=source_commit,
+            **prepare_options,
         )
     except (OSError, TypeError, ValueError, storage.StorageError) as error:
         raise DockerDevUpError(
@@ -1134,6 +1153,9 @@ def _stable_activation_request_id(group: RetainedGroup, args: argparse.Namespace
             authorization.source_commit or "",
         )
     )
+    if cuda_trace:
+        trace_sha256 = cuda_trace_sha256(authorization.cuda_trace)
+        material += b"\0cuda_trace\0" + trace_sha256.encode("ascii")
     return "docker-volume-up-" + hashlib.sha256(material).hexdigest()
 
 
@@ -1186,6 +1208,8 @@ def _recreate_after_drift(group: RetainedGroup, args: argparse.Namespace, *, dra
 
 
 def _reconcile_group(group: RetainedGroup, args: argparse.Namespace) -> None:
+    from docker_dev_network import validate_retained_subnet
+    validate_retained_subnet(group.document, getattr(args, "network_subnet", None))
     from docker_volume_dev import (
         INCLUDE_UNTRACKED_ENV,
         normalize_include_untracked_paths,

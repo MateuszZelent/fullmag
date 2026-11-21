@@ -57,6 +57,8 @@ fn sample_scene_document() -> fullmag_authoring::SceneDocument {
         shared_domain_mesh_source: None,
         interactive_session_requested: None,
         wait_for_solve: None,
+        material_assets: None,
+        compute_resources: None,
         execution_profile: None,
         execution_layers: vec![],
         revision: 3,
@@ -69,6 +71,7 @@ fn sample_scene_document() -> fullmag_authoring::SceneDocument {
         parallel_execution: None,
         pbc: None,
         fem_demag_solver_policy: None,
+        fem_bb_preconditioner: None,
         fem_demag_accuracy_contract: None,
         fem_domain_mesh: None,
         exchange_enabled: true,
@@ -76,6 +79,7 @@ fn sample_scene_document() -> fullmag_authoring::SceneDocument {
         demag_realization: None,
         fdm: None,
         external_field: None,
+        thermal_noise: None,
         rotated_interfacial_dmi: None,
             rotated_interfacial_dmi_object_ids: None,
         solver: fullmag_authoring::ScriptBuilderSolverState {
@@ -127,6 +131,10 @@ fn sample_scene_document() -> fullmag_authoring::SceneDocument {
             adaptive_max_passes: 5,
             adaptive_error_tolerance: String::new(),
             order: None,
+            domain_mesh_mode: None,
+            domain_mesh_source: None,
+            domain_region_markers: None,
+            domain_object_region_markers: None,
         },
         universe: None,
         domain_frame: None,
@@ -137,6 +145,7 @@ fn sample_scene_document() -> fullmag_authoring::SceneDocument {
         initial_state: None,
         geometries: vec![fullmag_authoring::ScriptBuilderGeometryEntry {
             geometry_name: None,
+            source_asset: None,
             name: "body".to_string(),
             object_id: None,
             region_name: None,
@@ -176,6 +185,7 @@ fn sample_scene_document() -> fullmag_authoring::SceneDocument {
         }],
         mesh_interfaces: Vec::new(),
         field_drives: Vec::new(),
+        mask_field_drives: Vec::new(),
         planar_monitors: Vec::new(),
         current_modules: Vec::new(),
         current_transports: Vec::new(),
@@ -796,6 +806,8 @@ pub(crate) async fn test_app_state_with_live_session() -> Arc<AppState> {
         fem_mesh: None,
         latest_fields: LatestFields::default(),
         field_publication_bundles: BTreeMap::new(),
+        authored_initial_state: None,
+        magnetization_applies: Default::default(),
         preview_cache: Default::default(),
         artifacts: Vec::new(),
         display_selection: CurrentDisplaySelection::default(),
@@ -811,6 +823,7 @@ pub(crate) async fn test_app_state_with_live_session() -> Arc<AppState> {
         field_quantity_revisions: BTreeMap::new(),
         accepted_terminal_field_generation: None,
         terminal_field_generations: BTreeMap::new(),
+        accepted_mesh_reinitializations: Default::default(),
         stage_execution_revision: 0,
         simulation_preparation_revision: 0,
         region_realization_revisions: fullmag_authoring::RegionRealizationRevisions::default(),
@@ -1083,6 +1096,7 @@ async fn set_running_stage_execution(state: &Arc<AppState>, state_version: u64) 
             stages: vec![
                 StageExecutionRecord {
                     stage_id: None,
+                    authored_stage_id: None,
                     antenna_solve_stage_id: None,
                     antenna_progress: None,
                     kind: None,
@@ -1125,6 +1139,7 @@ async fn set_running_stage_execution(state: &Arc<AppState>, state_version: u64) 
                 },
                 StageExecutionRecord {
                     stage_id: None,
+                    authored_stage_id: None,
                     antenna_solve_stage_id: None,
                     antenna_progress: None,
                     kind: None,
@@ -1743,6 +1758,61 @@ async fn scratch_session_status_and_domain_meta_follow_resolved_lane_before_mesh
 }
 
 #[tokio::test]
+async fn create_scratch_session_preserves_fdm_gpu_precision_without_runtime_claims() {
+    for precision in ["single", "double"] {
+        let state = test_app_state();
+        let app = build_v2_router().with_state(state.clone());
+        let response = app.oneshot(Request::builder()
+            .method("POST")
+            .uri("/v2/sessions")
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from(serde_json::json!({
+                "name": "Scratch GPU", "backend": "fdm", "device": "gpu",
+                "precision": precision,
+            }).to_string())).unwrap()).await.unwrap();
+        assert_eq!(response.status(), StatusCode::CREATED);
+        let body = body_json(response).await;
+        assert_eq!(body["status"]["requested_execution"]["device"], "gpu");
+        assert_eq!(body["status"]["requested_execution"]["precision"], precision);
+        assert!(body["status"]["fallback"].is_null());
+        let guard = state.current_live_state.read().await;
+        let snapshot = guard.as_ref().unwrap();
+        assert_eq!(snapshot.session.requested_precision, precision);
+        assert_eq!(snapshot.session.authored_requested_device, "gpu");
+        assert!(snapshot.session.resolved_runtime_family.is_none());
+        assert!(snapshot.session.resolved_engine_id.is_none());
+        assert!(snapshot.session.resolved_fallback.is_none());
+        assert_eq!(snapshot.capabilities.as_ref().unwrap().engine_id.as_str(), "fdm_cuda");
+        let study = &snapshot.scene_document.as_ref().unwrap().study;
+        assert_eq!(study.requested_device, "gpu");
+        assert_eq!(study.requested_precision, precision);
+        assert_eq!(study.requested_mode, "strict");
+    }
+}
+
+#[tokio::test]
+async fn create_scratch_session_rejects_unsupported_precision_lanes_without_state() {
+    for (backend, device, precision) in [
+        ("fdm", "cpu", "single"), ("fem", "cpu", "single"),
+        ("fem", "gpu", "single"), ("fem", "gpu", "double"),
+        ("fdm", "gpu", "mixed"), ("fdm", "auto", "single"),
+    ] {
+        let state = test_app_state();
+        let app = build_v2_router().with_state(state.clone());
+        let response = app.oneshot(Request::builder()
+            .method("POST")
+            .uri("/v2/sessions")
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from(serde_json::json!({
+                "name": "Unsupported", "backend": backend,
+                "device": device, "precision": precision,
+            }).to_string())).unwrap()).await.unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        assert!(state.current_live_state.read().await.is_none());
+    }
+}
+
+#[tokio::test]
 async fn create_scratch_session_rejects_unknown_execution_and_implicit_replacement() {
     let app = test_router();
 
@@ -1983,6 +2053,7 @@ async fn create_scratch_session_replacement_resets_resources_and_invalidates() {
             accepted: true,
             command_id: command.command_id.clone(),
             request_id: Some("stale-request".to_string()),
+            execution_binding: None,
             error: None,
         },
     ));
@@ -2777,6 +2848,7 @@ async fn test_router_with_runtime_read_models() -> axum::Router {
             stages: vec![
                 StageExecutionRecord {
                     stage_id: None,
+                    authored_stage_id: None,
                     antenna_solve_stage_id: None,
                     antenna_progress: None,
                     kind: None,
@@ -2819,6 +2891,7 @@ async fn test_router_with_runtime_read_models() -> axum::Router {
                 },
                 StageExecutionRecord {
                     stage_id: None,
+                    authored_stage_id: None,
                     antenna_solve_stage_id: None,
                     antenna_progress: None,
                     kind: None,
@@ -2914,10 +2987,12 @@ async fn test_router_with_runtime_read_models() -> axum::Router {
                 kind: "run".into(),
                 created_at_unix_ms: 1_700_000_000_500,
                 target: None,
+                execution_binding: None,
                 reason: None,
                 precondition: None,
                 client_intent_id: None,
                 requested_at_unix_ms: None,
+                initial_state: None,
                 until_seconds: Some(1.0e-9),
                 max_steps: Some(1000),
                 torque_tolerance: None,
@@ -2956,10 +3031,12 @@ async fn test_router_with_runtime_read_models() -> axum::Router {
                 kind: "pause".into(),
                 created_at_unix_ms: 1_700_000_000_700,
                 target: None,
+                execution_binding: None,
                 reason: None,
                 precondition: None,
                 client_intent_id: None,
                 requested_at_unix_ms: None,
+                initial_state: None,
                 until_seconds: None,
                 max_steps: None,
                 torque_tolerance: None,
@@ -2998,10 +3075,12 @@ async fn test_router_with_runtime_read_models() -> axum::Router {
                 kind: "stop".into(),
                 created_at_unix_ms: 1_700_000_000_900,
                 target: None,
+                execution_binding: None,
                 reason: None,
                 precondition: None,
                 client_intent_id: None,
                 requested_at_unix_ms: None,
+                initial_state: None,
                 until_seconds: None,
                 max_steps: None,
                 torque_tolerance: None,
@@ -3114,6 +3193,8 @@ async fn test_router_with_session_state_and_artifact_dir() -> (axum::Router, Arc
         fem_mesh: None,
         latest_fields: LatestFields::default(),
         field_publication_bundles: BTreeMap::new(),
+        authored_initial_state: None,
+        magnetization_applies: Default::default(),
         preview_cache: Default::default(),
         artifacts: Vec::new(),
         display_selection: CurrentDisplaySelection::default(),
@@ -3129,6 +3210,7 @@ async fn test_router_with_session_state_and_artifact_dir() -> (axum::Router, Arc
         field_quantity_revisions: BTreeMap::new(),
         accepted_terminal_field_generation: None,
         terminal_field_generations: BTreeMap::new(),
+        accepted_mesh_reinitializations: Default::default(),
         stage_execution_revision: 0,
         simulation_preparation_revision: 0,
         region_realization_revisions: fullmag_authoring::RegionRealizationRevisions::default(),
@@ -3327,6 +3409,8 @@ async fn test_router_with_session_store_state() -> (axum::Router, Arc<AppState>,
         fem_mesh: None,
         latest_fields: LatestFields::default(),
         field_publication_bundles: BTreeMap::new(),
+        authored_initial_state: None,
+        magnetization_applies: Default::default(),
         preview_cache: Default::default(),
         artifacts: Vec::new(),
         display_selection: CurrentDisplaySelection::default(),
@@ -3342,6 +3426,7 @@ async fn test_router_with_session_store_state() -> (axum::Router, Arc<AppState>,
         field_quantity_revisions: BTreeMap::new(),
         accepted_terminal_field_generation: None,
         terminal_field_generations: BTreeMap::new(),
+        accepted_mesh_reinitializations: Default::default(),
         stage_execution_revision: 0,
         simulation_preparation_revision: 0,
         region_realization_revisions: fullmag_authoring::RegionRealizationRevisions::default(),
@@ -3714,6 +3799,7 @@ async fn contract_version_header_is_exposed_to_browser_clients() {
     );
     for header_name in [
         "x-fullmag-field-revision",
+        "x-fullmag-observation-frame-id",
         "x-fullmag-domain-generation-id",
         "x-fullmag-quantity-id",
         "x-fullmag-component",
@@ -6799,6 +6885,241 @@ async fn field_vector_returns_304_when_etag_matches() {
 }
 
 #[tokio::test]
+async fn authored_step_zero_replaces_old_magnetization_and_fences_binary_reads() {
+    use crate::live_authored_initial_state::AuthoredInitialStatePublication;
+    use crate::schemas::common::AuthoredInitialStateOrigin;
+    use sha2::{Digest, Sha256};
+
+    const META: &str = "/v2/sessions/current/data/fields/m/meta";
+    const VECTOR: &str = "/v2/sessions/current/data/fields/m/samples/vector";
+    const OBSERVATION: &str = "x-fullmag-observation-frame-id";
+    const EXPECTED: &str = "x-fullmag-expected-observation-frame-id";
+
+    let (app, state, artifact_dir) = test_router_with_session_state_and_artifact_dir().await;
+    write_test_fdm_membership_artifact(&artifact_dir, [1, 1, 1]);
+    let publish = |snapshot: &mut SessionStateResponse, preparation_id: &str, values: [f64; 3]| {
+        let mut digest = Sha256::new();
+        for value in values {
+            digest.update(value.to_le_bytes());
+        }
+        let publication = AuthoredInitialStatePublication::new(
+            snapshot,
+            AuthoredInitialStateOrigin {
+                preparation_id: preparation_id.to_owned(),
+                plan_fingerprint: "a".repeat(64),
+                scene_revision: 1,
+                initial_state_revision: 1,
+                values_sha256: format!("{:x}", digest.finalize()),
+            },
+            0.0,
+        );
+        let fields = serde_json::from_value(serde_json::json!({
+            "m": {
+                "values": [values],
+                "layout": {"backend": "fdm", "grid_cells": [1, 1, 1]},
+                "source_step": 0,
+                "source_time_seconds": 0.0,
+                "source_revision": 1,
+                "observation_frame": publication.frame,
+            }
+        }))
+        .unwrap();
+        let frame = publication.frame.clone();
+        crate::session::apply_current_live_authored_initial_state(snapshot, publication, fields)
+            .expect("publish prepared m0 with no scalar observations");
+        frame
+    };
+
+    let first_frame = {
+        let mut current = state.current_live_state.write().await;
+        let snapshot = current.as_mut().unwrap();
+        snapshot.metadata = Some(
+            serde_json::json!({
+                "execution_plan": {"backend_plan": {
+                    "kind": "fdm",
+                    "grid_certificate": {
+                        "grid_fingerprint": "00".repeat(32),
+                        "counts": [1, 1, 1],
+                        "origin_m": [0.0, 0.0, 0.0],
+                        "cell_m": [1.0, 1.0, 1.0]
+                    }
+                }}
+            })
+            .into(),
+        );
+        apply_test_runtime_frame(
+            snapshot,
+            physical_test_live_state(9, 9.0e-12, [1, 1, 1], Some(vec![0.0, 0.0, 1.0])),
+        )
+        .unwrap();
+        let session_id = snapshot.session.session_id.clone();
+        crate::session::apply_current_live_scalar_frame(
+            snapshot,
+            CurrentLiveScalarFrameRequest {
+                session_id,
+                latest_scalar_row: Some(sample_scalar_row(9, 9.0e-12, 2.0)),
+            },
+        ).unwrap();
+        assert!(!snapshot.scalar_rows.is_empty());
+        let frame = publish(snapshot, "preparation-a", [1.0, 0.0, 0.0]);
+        assert!(snapshot.scalar_rows.is_empty());
+        assert_eq!(snapshot.live_state.as_ref().unwrap().latest_step.step, 9);
+        assert_eq!(
+            snapshot.field_publication_bundles["m"].observation_frame,
+            frame
+        );
+        frame
+    };
+
+    let catalog = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/fields")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(catalog.status(), StatusCode::OK);
+    let catalog = body_json(catalog).await;
+    assert!(catalog["quantities"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|field| {
+            field["quantity_id"] == "m" && field["available"] == true && field["source_step"] == 0
+        }));
+
+    let meta = app
+        .clone()
+        .oneshot(Request::builder().uri(META).body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(meta.status(), StatusCode::OK);
+    let meta = body_json(meta).await;
+    assert_eq!(
+        meta["observation_frame"]["observation_frame_id"],
+        first_frame.observation_frame_id
+    );
+    assert_eq!(
+        meta["publication_bundle"]["observation_frame"]["observation_frame_id"],
+        first_frame.observation_frame_id
+    );
+
+    let first = app
+        .clone()
+        .oneshot(Request::builder().uri(VECTOR).body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(first.status(), StatusCode::OK);
+    let first_etag = first.headers()[header::ETAG].clone();
+    assert_eq!(
+        first.headers()[OBSERVATION].to_str().unwrap(),
+        first_frame.observation_frame_id
+    );
+    assert_eq!(
+        decode_fmvp_payload_f64(&body_bytes(first).await),
+        [1.0, 0.0, 0.0]
+    );
+
+    let second_frame = {
+        let mut current = state.current_live_state.write().await;
+        let snapshot = current.as_mut().unwrap();
+        let second = publish(snapshot, "preparation-b", [0.0, 1.0, 0.0]);
+        assert!(snapshot.scalar_rows.is_empty());
+        assert_eq!(
+            snapshot.field_publication_bundles["m"].observation_frame,
+            second
+        );
+        second
+    };
+    assert_eq!(first_frame.source_step, second_frame.source_step);
+    assert_eq!(
+        first_frame.source_time_seconds,
+        second_frame.source_time_seconds
+    );
+    assert_eq!(
+        first_frame.domain_generation_id,
+        second_frame.domain_generation_id
+    );
+    assert_ne!(
+        first_frame.observation_frame_id,
+        second_frame.observation_frame_id
+    );
+
+    let stale = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(VECTOR)
+                .header(EXPECTED, first_frame.observation_frame_id.as_str())
+                .header(header::IF_NONE_MATCH, first_etag.clone())
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(stale.status(), StatusCode::CONFLICT);
+    assert_eq!(
+        body_json(stale).await["code"],
+        "field_observation_frame_changed"
+    );
+
+    let second = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(VECTOR)
+                .header(EXPECTED, second_frame.observation_frame_id.as_str())
+                .header(header::IF_NONE_MATCH, first_etag)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(second.status(), StatusCode::OK);
+    let second_etag = second.headers()[header::ETAG].clone();
+    assert_eq!(
+        second.headers()[OBSERVATION].to_str().unwrap(),
+        second_frame.observation_frame_id
+    );
+    assert_eq!(
+        decode_fmvp_payload_f64(&body_bytes(second).await),
+        [0.0, 1.0, 0.0]
+    );
+
+    let cached = app
+        .oneshot(
+            Request::builder()
+                .uri(VECTOR)
+                .header(EXPECTED, second_frame.observation_frame_id.as_str())
+                .header(header::IF_NONE_MATCH, second_etag)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(cached.status(), StatusCode::NOT_MODIFIED);
+    assert_eq!(
+        cached.headers()[OBSERVATION].to_str().unwrap(),
+        second_frame.observation_frame_id
+    );
+
+    let mut current = state.current_live_state.write().await;
+    let snapshot = current.as_mut().unwrap();
+    let before = snapshot.field_samples_revision;
+    let repeated = publish(snapshot, "preparation-c", [0.0, 1.0, 0.0]);
+    assert_ne!(
+        repeated.observation_frame_id,
+        second_frame.observation_frame_id
+    );
+    assert!(snapshot.field_samples_revision > before);
+    drop(current);
+    fs::remove_dir_all(&artifact_dir).unwrap();
+}
+
+#[tokio::test]
 async fn field_vector_component_projection_does_not_fallback_to_full_vector() {
     let state = test_app_state_with_live_session().await;
     if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
@@ -7162,6 +7483,7 @@ async fn visualization_state_exposes_effective_scene_object_targets() {
     assert_eq!(target["settings"]["visible"], true);
     assert_eq!(target["settings"]["surface_visible"], true);
     assert_eq!(target["settings"]["wireframe_visible"], false);
+    assert_eq!(target["settings"]["wireframe_geometry_scope"], "surface");
     assert_eq!(target["settings"]["render_mode"], "surface");
 }
 
@@ -7213,6 +7535,9 @@ async fn visualization_state_exposes_one_canonical_airbox_and_only_orphan_part_f
     let json = body_json(response).await;
     assert_eq!(json["targets"]["airbox"]["scope"], "airbox");
     assert_eq!(json["targets"]["airbox"]["scope_id"], "airbox");
+    assert!(json["targets"]["airbox"]["settings"]
+        .get("wireframe_geometry_scope")
+        .is_none());
     assert_eq!(
         json["targets"]["objects"]
             .as_array()
@@ -7302,7 +7627,8 @@ async fn visualization_state_patch_accepts_nested_v2_controls() {
                                     "points": { "visible": false, "opacity": 0.75 },
                                     "vectors": { "visible": false },
                                     "opacity": 0.55,
-                                    "geometry_scope": "surface"
+                                    "geometry_scope": "surface",
+                                    "wireframe_geometry_scope": "full"
                                 },
                                 "style": {
                                     "scalar_color_palette": "inferno",
@@ -7360,6 +7686,10 @@ async fn visualization_state_patch_accepts_nested_v2_controls() {
     assert_eq!(json["overrides"][0]["display"]["vectors"]["visible"], false);
     assert_eq!(json["overrides"][0]["display"]["geometry_scope"], "surface");
     assert_eq!(
+        json["overrides"][0]["display"]["wireframe_geometry_scope"],
+        "full"
+    );
+    assert_eq!(
         json["overrides"][0]["style"]["scalar_color_palette"],
         "inferno"
     );
@@ -7390,6 +7720,14 @@ async fn visualization_state_patch_accepts_nested_v2_controls() {
     assert_eq!(
         json["targets"]["objects"][0]["settings"]["active_quantity_id"],
         "h_demag"
+    );
+    assert_eq!(
+        json["targets"]["objects"][0]["settings"]["geometry_scope"],
+        "surface"
+    );
+    assert_eq!(
+        json["targets"]["objects"][0]["settings"]["wireframe_geometry_scope"],
+        "full"
     );
     assert_eq!(
         json["targets"]["objects"][0]["settings"]["surface_opacity"],
@@ -13044,6 +13382,70 @@ async fn mesh_build_command_enqueues_remesh_via_mesh_family() {
 }
 
 #[tokio::test]
+async fn mesh_build_command_preserves_absorbing_layer_and_region_damping() {
+    let state = test_app_state_with_live_session().await;
+    let mut scene = sample_scene_document();
+    let object = &mut scene.objects[0];
+    let absorber: fullmag_ir::AbsorbingBoundaryIR =
+        serde_json::from_value(serde_json::json!({"layers": [{
+            "layer_id": "end", "name": "Clipped end", "enabled": true,
+            "region_id": "upper-half", "frame": "universe",
+            "geometry": {"kind": "faces", "faces": ["x+"]},
+            "total_width_m": 15e-9, "ramp_width_m": 12e-9,
+            "max_damping": 0.45, "profile": "custom", "expression": "u**3"
+        }]}))
+        .unwrap();
+    object.absorbing_boundary = Some(absorber.clone());
+    object.allocated_region_ids.push("upper-half".into());
+    object.regions.push(
+        serde_json::from_value(serde_json::json!({
+            "region_id": "upper-half", "name": "Upper half", "owner_object": object.id,
+            "shape": {"kind": "box", "size": [1.0, 0.5, 1.0], "center": [0.0, 0.25, 0.0]},
+            "frame": "object", "realization_policy": "project",
+            "material_overrides": [{"parameter": "alpha",
+                "value": {"kind": "constant", "value": 0.04, "unit": "1"},
+                "priority": 1, "conflict_policy": "error"}]
+        }))
+        .unwrap(),
+    );
+    let mesh_input = fullmag_session::canonical_json_sha256(&crate::scene_mesh_signature(&scene));
+    {
+        let mut current = state.current_live_state.write().await;
+        let snapshot = current.as_mut().unwrap();
+        snapshot.session.status = "awaiting_command".into();
+        snapshot.scene_document = Some(scene);
+    }
+
+    let response = build_v2_router()
+        .with_state(state.clone())
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v2/sessions/current/simulation/commands")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    r#"{"kind":"mesh_build","mesh_target":{"kind":"study_domain"}}"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let queue = state.current_control_queue.lock().await;
+    let mesh_options = queue.front().unwrap().mesh_options.as_ref().unwrap();
+    assert_eq!(mesh_options["authored_mesh_input_sha256"], mesh_input);
+    let patch = &mesh_options["scene_problem_patch"];
+    let magnet: fullmag_ir::MagnetIR = serde_json::from_value(patch["magnets"][0].clone()).unwrap();
+    assert_eq!(magnet.absorbing_boundary, Some(absorber));
+    let region = &patch["object_regions"][0];
+    assert_eq!(region["region_id"], "upper-half");
+    assert_eq!(region["frame"], "object");
+    assert_eq!(region["material_overrides"][0]["parameter"], "alpha");
+    assert_eq!(region["material_overrides"][0]["value"]["value"], 0.04);
+}
+
+#[tokio::test]
 async fn mesh_build_command_lowers_difference_geometry_from_scene() {
     let state = test_app_state_with_live_session().await;
     if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
@@ -13053,6 +13455,7 @@ async fn mesh_build_command_lowers_difference_geometry_from_scene() {
         scene.objects[0].name = "permalloy_box".to_string();
         scene.objects[0].geometry = fullmag_authoring::SceneGeometry {
             geometry_name: None,
+            source_asset: None,
             geometry_kind: "Difference".to_string(),
             geometry_params: serde_json::json!({
                 "base": {
@@ -17467,6 +17870,35 @@ async fn authoring_scene_get_returns_current_scene() {
 }
 
 #[tokio::test]
+async fn authoring_scene_get_does_not_wait_for_stl_compute_transition() {
+    let state = test_app_state_with_live_session().await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.scene_document = Some(sample_scene_document());
+    }
+    let app = build_v2_router().with_state(state.clone());
+    // Compute keeps this fence while preparing its immutable inputs. A fresh
+    // browser must still receive the already committed scene for its viewport.
+    let _transition = state.current_live_session_transition.lock().await;
+    let response = tokio::time::timeout(
+        std::time::Duration::from_secs(1),
+        app.oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/v2/sessions/current/model/scene")
+                .body(Body::empty())
+                .unwrap(),
+        ),
+    )
+    .await
+    .expect("committed scene reads must not wait behind Compute")
+    .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let json = body_json(response).await;
+    assert_eq!(json["scene"]["name"], "Scene");
+    assert_eq!(json["revision"], 3);
+}
+
+#[tokio::test]
 async fn authoring_scene_put_commits_scene_document() {
     let state = test_app_state_with_live_session().await;
     if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
@@ -17689,7 +18121,7 @@ study.run(1e-12)
     assert!(rewritten.contains("body_ui_core_region = body.add_region(\"ui_core\""));
     assert!(rewritten.contains("region_id=\"body:ui-core\""));
     assert!(rewritten.contains(
-        "body_ui_core_region.set_material(\"ms\", fm.fields.constant(700000, unit=\"A/m\"), priority=5"
+        "body_ui_core_region.set_material(\"ms\", fm.fields.constant(700000.0, unit=\"A/m\"), priority=5"
     ));
     assert!(rewritten.contains(
         "body.set_material_field(\"alpha\", fm.fields.constant(0.05, unit=\"dimensionless\"), assignment_id=\"field:ui-core-alpha\", region=body_ui_core_region"
@@ -22116,7 +22548,9 @@ async fn authoring_region_patch_commits_name_without_mesh_dirty() {
 }
 
 #[tokio::test]
-async fn authoring_region_rename_does_not_change_mesh_identity() {
+async fn authoring_primary_region_rebinding_invalidates_mesh_and_realization() {
+    // Legacy region_name is the primary region key used by geometry and overrides.
+    // A label-only rename uses object.name or an authored subregion name instead.
     let state = test_app_state_with_live_session().await;
     let mut scene = sample_scene_document();
     scene.revision = 22;
@@ -22159,9 +22593,9 @@ async fn authoring_region_rename_does_not_change_mesh_identity() {
         .unwrap();
     assert_eq!(regions_response.status(), StatusCode::OK);
     let regions = body_json(regions_response).await;
-    assert_eq!(regions["region_membership_revision"], 41);
-    assert_eq!(regions["region_coefficients_revision"], 42);
-    assert_eq!(regions["region_initial_state_revision"], 43);
+    assert_eq!(regions["region_membership_revision"], 42);
+    assert_eq!(regions["region_coefficients_revision"], 43);
+    assert_eq!(regions["region_initial_state_revision"], 44);
 
     let status_response = app
         .clone()
@@ -22175,7 +22609,7 @@ async fn authoring_region_rename_does_not_change_mesh_identity() {
         .await
         .unwrap();
     let status = body_json(status_response).await;
-    assert_eq!(status["resources"]["mesh_revision"], 31);
+    assert_eq!(status["resources"]["mesh_revision"], 32);
 }
 
 #[tokio::test]
@@ -22370,6 +22804,674 @@ async fn authoring_magnetization_transaction_commits_asset_and_assignment_atomic
         .await
         .unwrap();
     assert_eq!(stale.status(), StatusCode::CONFLICT);
+}
+
+#[tokio::test]
+async fn scoped_equal_magnetization_apply_replays_the_receipt_and_retires_live_fields() {
+    let state = test_app_state_with_live_session().await;
+    let mut scene = sample_scene_document();
+    scene.revision = 30;
+    let (scope, previous_revisions, previous_mesh) = {
+        let mut current = state.current_live_state.write().await;
+        let snapshot = current.as_mut().unwrap();
+        snapshot.scene_document = Some(scene.clone());
+        snapshot.session.script_path.clear();
+        snapshot.latest_fields.insert("m".into(), serde_json::json!({
+            "values": [[0.0, 1.0, 0.0]], "source_step": 15,
+        }));
+        (
+            crate::current_live_publisher_scope_header(&state, snapshot),
+            snapshot.region_realization_revisions,
+            snapshot.mesh_revision,
+        )
+    };
+    let app = build_v2_router().with_state(state.clone());
+    let operation_id = "ea529052ef024ca2aec9ae3e9529f124";
+    let request = serde_json::json!({
+        "kind": "replace_scene",
+        "base_revision": 30,
+        "scene": scene,
+        "magnetization_apply": {
+            "operation_id": operation_id,
+            "scopes": [{"object_id": "body"}],
+        },
+    });
+    let post = |body: &serde_json::Value, key: &str| {
+        Request::builder()
+            .method("POST")
+            .uri("/v2/sessions/current/model/transactions")
+            .header("content-type", "application/json")
+            .header("x-fullmag-session-scope", scope.as_str())
+            .header("idempotency-key", key)
+            .body(Body::from(body.to_string()))
+            .unwrap()
+    };
+
+    let no_key = app.clone().oneshot(post(&request, "different")).await.unwrap();
+    assert_eq!(no_key.status(), StatusCode::BAD_REQUEST);
+    let first = app.clone().oneshot(post(&request, operation_id)).await.unwrap();
+    assert_eq!(first.status(), StatusCode::OK);
+    let receipt = body_json(first).await;
+    assert_eq!(receipt["transaction_kind"], "apply_magnetization");
+    assert_eq!(receipt["scene_revision"], 31);
+    assert_eq!(receipt["magnetization_apply"]["operation_id"], operation_id);
+    assert_eq!(receipt["magnetization_apply"]["status"], "initial_state_pending");
+    assert_eq!(receipt["magnetization_apply"]["reason"], "domain_not_prepared");
+
+    let replay = app.clone().oneshot(post(&request, operation_id)).await.unwrap();
+    assert_eq!(replay.status(), StatusCode::OK);
+    assert_eq!(body_json(replay).await, receipt);
+
+    let mut changed = request.clone();
+    changed["magnetization_apply"]["scopes"][0]["region_id"] = serde_json::json!("different");
+    let conflict = app.clone().oneshot(post(&changed, operation_id)).await.unwrap();
+    assert_eq!(conflict.status(), StatusCode::CONFLICT);
+    assert_eq!(body_json(conflict).await["code"], "magnetization_apply_intent_conflict");
+
+    let readiness = app.oneshot(
+        Request::builder()
+            .uri("/v2/sessions/current/model/readiness")
+            .header("x-fullmag-session-scope", scope.as_str())
+            .body(Body::empty())
+            .unwrap(),
+    ).await.unwrap();
+    assert_eq!(readiness.status(), StatusCode::OK);
+    assert_eq!(body_json(readiness).await["initial_state_pending"], receipt["magnetization_apply"]);
+    let current = state.current_live_state.read().await;
+    let snapshot = current.as_ref().unwrap();
+    assert_eq!(snapshot.scene_document.as_ref().unwrap().revision, 31);
+    assert_eq!(snapshot.mesh_revision, previous_mesh);
+    assert_eq!(snapshot.region_realization_revisions.initial_state, previous_revisions.initial_state + 1);
+    assert!(snapshot.latest_fields.get("m").is_none());
+}
+
+#[tokio::test]
+async fn typed_gpu_bb_policy_cross_python_scene_rust_builder_and_problem_ir() {
+    let repo_root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..").canonicalize().unwrap();
+    let workspace = tempfile::tempdir().unwrap();
+    for policy in ["auto", "none", "exchange_mass"] {
+        for constructor in [false, true] {
+            let source = workspace.path().join(format!("bb-{policy}-{constructor}.py"));
+            let script = if constructor {
+                format!(r#"import fullmag as fm
+problem = fm.Problem(
+    name="gpu-bb-constructor",
+    magnets=[fm.Ferromagnet(name="body", geometry=fm.Box(20e-9, 20e-9, 20e-9),
+        material=fm.Material(name="Py", Ms=800e3, A=13e-12, alpha=0.1),
+        m0=fm.init.UniformMagnetization((1.0, 0.0, 0.0)))],
+    energy=[fm.Exchange()],
+    study=fm.Relaxation(outputs=[], algorithm="projected_gradient_bb", max_steps=2),
+    discretization=fm.DiscretizationHints(fem=fm.FEM(order=1, hmax=20e-9, gpu_bb_preconditioner="{policy}")),
+    runtime=fm.RuntimeSelection(backend_target="fem", device_target="gpu", gpu_count=1))
+"#)
+            } else {
+                format!(r#"import fullmag as fm
+study = fm.study("gpu-bb-builder")
+study.engine("fem")
+study.device("gpu", precision="double")
+study.fem_bb_preconditioner("{policy}")
+body = study.geometry(fm.Box(20e-9, 20e-9, 20e-9), name="body")
+body.Ms = 800e3
+body.Aex = 13e-12
+body.m = fm.init.UniformMagnetization((1.0, 0.0, 0.0))
+body.mesh(maximum_element_size=20e-9, order=1)
+study.relax(algorithm="projected_gradient_bb", max_steps=2, tolA=1e-6)
+"#)
+            };
+            fs::write(&source, script).unwrap();
+            let scene = crate::script::load_scene_document_state(&repo_root, workspace.path(), &source).unwrap();
+            assert_eq!(scene.study.fem_bb_preconditioner.unwrap().as_str(), policy);
+            let builder = fullmag_authoring::scene_document_to_script_builder(&scene).unwrap();
+            let restored = fullmag_authoring::scene_document_from_script_builder(&builder);
+            assert_eq!(restored.study.fem_bb_preconditioner, scene.study.fem_bb_preconditioner);
+            let rendered = workspace.path().join(format!("rendered-{policy}-{constructor}.py"));
+            crate::script::render_scene_document_via_python_helper(&repo_root, workspace.path(), &rendered, &restored).unwrap();
+            assert!(fs::read_to_string(&rendered).unwrap().contains("fem_bb_preconditioner("));
+            let reloaded = crate::script::load_scene_document_state(&repo_root, workspace.path(), &rendered).unwrap();
+            assert_eq!(reloaded.study.fem_bb_preconditioner, scene.study.fem_bb_preconditioner);
+            let requested = fullmag_application::RequestedExecution {
+                backend: "fem".into(), device: "gpu".into(), precision: "double".into(), mode: "strict".into(), minimum_resources: None,
+            };
+            let problem = crate::script::scene_document_to_authored_problem_ir(&repo_root, workspace.path(), &reloaded, &requested).unwrap();
+            problem.validate().expect("GPU BB policy must survive canonical authored-IR validation");
+            assert_eq!(problem.backend_policy.discretization_hints.as_ref().unwrap().fem.as_ref().unwrap()
+                .gpu_bb_preconditioner.unwrap().as_str(), policy);
+            let stages = crate::script::scene_document_to_authored_stages(&repo_root, workspace.path(), &reloaded, &requested).unwrap();
+            assert!(!stages.is_empty());
+            for stage in &stages {
+                stage.ir.validate().unwrap();
+                assert!(matches!(&stage.ir.study, fullmag_ir::StudyIR::Relaxation {
+                    algorithm: fullmag_ir::RelaxationAlgorithmIR::ProjectedGradientBb, ..
+                }));
+                assert_eq!(stage.ir.backend_policy.discretization_hints.as_ref().unwrap().fem.as_ref().unwrap()
+                    .gpu_bb_preconditioner.unwrap().as_str(), policy);
+            }
+            let prepared = crate::script::scene_document_to_preparation_problem_ir_with_asset_root(
+                &repo_root, workspace.path(), None, &reloaded, &requested).unwrap();
+            let mut expected = problem.clone();
+            expected.study = prepared.study.clone();
+            assert_eq!(serde_json::to_value(prepared).unwrap(), serde_json::to_value(expected).unwrap());
+        }
+    }
+}
+
+#[tokio::test]
+async fn typed_compute_resources_cross_python_scene_rust_builder_and_problem_ir() {
+    let repo_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../..")
+        .canonicalize()
+        .unwrap();
+    let workspace = tempfile::tempdir().unwrap();
+    for typed in [false, true] {
+        let source = workspace
+            .path()
+            .join(if typed { "typed.py" } else { "legacy.py" });
+        let resources = if typed {
+            "study.resources(fm.ComputeResources(target=fm.ComputeTarget(kind='node', id='authored-node'), cpu=fm.CpuResources(threads=30, native_threads=30, blas_threads=1), ram=fm.MemoryReservation(reservation_bytes=4294967296)))"
+        } else {
+            ""
+        };
+        fs::write(
+            &source,
+            format!(
+                r#"import fullmag as fm
+study = fm.study('typed-resource-bridge')
+study.engine('fdm')
+study.device('cpu')
+study.cell(5e-9, 5e-9, 5e-9)
+{resources}
+body = study.geometry(fm.Box(size=(20e-9, 10e-9, 5e-9)), name='film')
+body.Ms = 800e3
+body.Aex = 13e-12
+body.m = fm.texture.uniform(1, 0, 0)
+study.run(1e-12)
+"#
+            ),
+        )
+        .unwrap();
+        // This first hop reproduces the live startup deserialization boundary.
+        let scene = crate::script::load_scene_document_state(&repo_root, workspace.path(), &source)
+            .unwrap();
+        let builder = fullmag_authoring::scene_document_to_script_builder(&scene).unwrap();
+        let round_trip = fullmag_authoring::scene_document_from_script_builder(&builder);
+        assert_eq!(
+            round_trip.study.compute_resources,
+            scene.study.compute_resources
+        );
+        let expected = serde_json::to_value(scene.study.compute_resources.as_ref()).unwrap();
+        let rendered = workspace.path().join(if typed {
+            "typed-rendered.py"
+        } else {
+            "legacy-rendered.py"
+        });
+        crate::script::render_scene_document_via_python_helper(
+            &repo_root,
+            workspace.path(),
+            &rendered,
+            &round_trip,
+        )
+        .unwrap();
+        let text = fs::read_to_string(&rendered).unwrap();
+        assert_eq!(text.contains("study.resources("), typed);
+        let reloaded =
+            crate::script::load_scene_document_state(&repo_root, workspace.path(), &rendered)
+                .unwrap();
+        assert_eq!(
+            reloaded.study.compute_resources,
+            scene.study.compute_resources
+        );
+        let requested = fullmag_application::RequestedExecution {
+            backend: "fdm".into(),
+            device: "cpu".into(),
+            precision: "double".into(),
+            mode: "strict".into(),
+            minimum_resources: None,
+        };
+        let problem = crate::script::scene_document_to_problem_ir(
+            &repo_root,
+            workspace.path(),
+            &reloaded,
+            &requested,
+        )
+        .unwrap();
+        if typed {
+            assert_eq!(
+                problem.problem_meta.runtime_metadata["compute_resources"],
+                expected
+            );
+            let resources = fullmag_ir::ComputeResourcesIR::from_problem(&problem)
+                .unwrap()
+                .unwrap();
+            assert_eq!(resources.cpu.threads.count(), Some(30));
+            assert_eq!(resources.cpu.native_threads.count(), Some(30));
+            assert_eq!(resources.cpu.blas_threads.count(), Some(1));
+            assert_eq!(resources.ram.reservation_bytes, Some(4294967296));
+        } else {
+            assert!(
+                !problem
+                    .problem_meta
+                    .runtime_metadata
+                    .contains_key("compute_resources")
+            );
+        }
+    }
+}
+
+pub(crate) async fn assert_fem_absorber_field_endpoints(snapshot: &SessionStateResponse, expected: &[f64]) {
+    use crate::router_v2::handlers::data::resolved_spatial_field::{
+        resolve_current_spatial_field_metadata, SpatialFieldCarrier,
+    };
+    let resolved = resolve_current_spatial_field_metadata(snapshot, "mat_alpha", 1).unwrap().unwrap();
+    assert!(matches!(resolved.carrier, SpatialFieldCarrier::FemNodes { .. }));
+    let state = test_app_state_with_live_session().await;
+    *state.current_live_state.write().await = Some(snapshot.clone());
+    let app = build_v2_router().with_state(state);
+    let get = |uri| Request::builder().uri(uri).body(Body::empty()).unwrap();
+    let catalog = app.clone().oneshot(get("/v2/sessions/current/data/fields")).await.unwrap();
+    assert_eq!(catalog.status(), StatusCode::OK);
+    let catalog = body_json(catalog).await;
+    let descriptor = catalog["quantities"].as_array().unwrap().iter().find(|q| q["quantity_id"] == "mat_alpha").unwrap();
+    assert_eq!(descriptor["location"], "node", "{descriptor:#}");
+    assert_eq!(descriptor["available"], true, "prepared FEM damping descriptor: {descriptor:#}");
+    assert_eq!(descriptor["resolved_capability"]["reason_code"], "prepared_damping_read_only", "{descriptor:#}");
+    assert_eq!(descriptor["resolved_capability"]["carriers"][0]["indexing"], "node", "{descriptor:#}");
+    let quantities = app.clone().oneshot(get("/v2/sessions/current/data/quantities")).await.unwrap();
+    assert_eq!(quantities.status(), StatusCode::OK);
+    let quantities = body_json(quantities).await;
+    let damping = quantities["quantities"].as_array().unwrap().iter().find(|q| q["id"] == "mat_alpha").unwrap();
+    assert_eq!(damping["requestable"], true, "{damping:#}");
+    assert_eq!(damping["materializable"], false, "{damping:#}");
+    assert_eq!(damping["solver_capability"], "unsupported", "{damping:#}");
+    let effective = quantities["quantities"].as_array().unwrap().iter().find(|q| q["id"] == "H_eff").unwrap();
+    assert_eq!(effective["capability_state"], "unknown", "{effective:#}");
+    let meta = app.clone().oneshot(get("/v2/sessions/current/data/fields/mat_alpha/meta")).await.unwrap();
+    assert_eq!(meta.status(), StatusCode::OK);
+    assert_eq!(body_json(meta).await["location"], "node");
+    let samples = app.oneshot(get("/v2/sessions/current/data/fields/mat_alpha/samples/vector?component=magnitude&format=bin"))
+        .await.unwrap();
+    assert_eq!(samples.status(), StatusCode::OK);
+    let bytes = body_bytes(samples).await;
+    assert_eq!(&bytes[..4], b"FMVP");
+    assert_eq!(u32::from_le_bytes(bytes[12..16].try_into().unwrap()) as usize, expected.len());
+    assert_eq!(decode_fmvp_payload_f64(&bytes), expected);
+
+    // A stale same-sized array must not acquire the validated read provider.
+    let mut stale = snapshot.clone();
+    stale.capabilities = Some(resolved_compute_fields_capabilities(&[]));
+    let capability = |current: &SessionStateResponse| {
+        crate::router_v2::handlers::data::quantities::resolved_quantity_capability_for_snapshot(
+            current, fullmag_quantities::quantity_spec("mat_alpha").unwrap(),
+            fullmag_runner::QuantityMaterializationCapability::Unmaterialized, vec![], "full")
+    };
+    assert_eq!(capability(&stale).reason_code.as_deref(), Some("prepared_damping_read_only"));
+    let mut altered = stale.latest_fields.get("mat_alpha").unwrap().clone();
+    altered["values"][0] = serde_json::json!(expected[0] + 1.0);
+    stale.latest_fields.insert("mat_alpha".into(), altered);
+    assert_eq!(capability(&stale).provider, fullmag_runner::QuantityProviderCapability::Unavailable);
+}
+
+async fn prepared_absorber_fixture(region: &str) -> (Arc<AppState>, tempfile::TempDir, PathBuf, String, String, u64) {
+    let state = test_app_state_with_live_session().await;
+    let workspace = tempfile::tempdir().unwrap();
+    let source = workspace.path().join("absorber.py");
+    fs::write(&source, r#"import fullmag as fm
+study = fm.study("absorber")
+study.engine("fdm")
+study.device("cpu", precision="double")
+study.universe(mode="manual", size=(40e-9, 5e-9, 5e-9), center=(0, 0, 0), padding=(0, 0, 0))
+study.cell(5e-9, 5e-9, 5e-9)
+film = study.geometry(fm.Box(40e-9, 5e-9, 5e-9), name="film")
+film.Ms = 800e3
+film.Aex = 13e-12
+film.alpha = 0.05
+film.m = fm.texture.uniform(1, 0, 0)
+# test region
+study.stages.add_run(stage_id="run", until=1e-12)
+"#.replace("# test region", region)).unwrap();
+    let mut scene = crate::script::load_scene_document_state(&state.repo_root, workspace.path(), &source).unwrap();
+    scene.revision = 5;
+    let object_id = scene.objects[0].id.clone();
+    let execution = fullmag_application::RequestedExecution {
+        backend: "fdm".into(), device: "cpu".into(), precision: "double".into(),
+        mode: "strict".into(), minimum_resources: None,
+    };
+    let config = crate::script::scene_document_to_prepared_script_config(
+        &state.repo_root, workspace.path(), &scene, &execution,
+    ).unwrap();
+    let mut problem = config.ir;
+    problem.geometry_assets = problem.geometry_assets.or(config.shared_geometry_assets);
+    let problem = fullmag_application::bind_declared_execution(&problem, vec![]).unwrap();
+    let plan = fullmag_plan::plan(&problem).unwrap();
+    // Desktop Build Grid publishes the voxelized universe and its compact summary.
+    let fullmag_ir::BackendPlanIR::Fdm(fdm) = &plan.backend_plan else { panic!("expected FDM fixture") };
+    assert_eq!(fdm.active_mask.as_deref(), Some([true; 8].as_slice()));
+    let layout = fullmag_runner::live_fdm_grid_layout(fdm);
+    let (scope, mesh_revision) = {
+        let mut current = state.current_live_state.write().await;
+        let snapshot = current.as_mut().unwrap();
+        snapshot.scene_document = Some(scene);
+        snapshot.session.script_path.clear();
+        snapshot.session.status = "awaiting_command".into();
+        crate::session::apply_current_live_metadata(snapshot, serde_json::json!({
+            "execution_plan": plan, "artifact_layout": layout,
+        }));
+        (crate::current_live_publisher_scope_header(&state, snapshot), snapshot.mesh_revision)
+    };
+    (state, workspace, source, object_id, scope, mesh_revision)
+}
+
+#[tokio::test]
+async fn absorbing_boundary_patch_moves_and_clears_live_alpha_without_rebuilding_grid() {
+    let (state, _workspace, _source, object_id, scope, mesh_revision) = prepared_absorber_fixture("").await;
+    let app = build_v2_router().with_state(state.clone());
+    let mut previous_etag: Option<axum::http::HeaderValue> = None;
+    for (index, face) in [Some("x+"), Some("x-"), None].into_iter().enumerate() {
+        let layer = face.map(|face| serde_json::json!({
+            "profile": "custom", "expression": "u**3", "frame": "object",
+            "faces": [face], "max_damping": 0.5, "total_width_m": 15e-9, "ramp_width_m": 10e-9,
+        }));
+        let response = app.clone().oneshot(Request::builder().method("PATCH")
+            .uri(format!("/v2/sessions/current/model/objects/{object_id}"))
+            .header("content-type", "application/json").header("x-fullmag-session-scope", scope.as_str())
+            .body(Body::from(serde_json::json!({"base_revision":5 + index, "absorbing_boundary": layer}).to_string())).unwrap()).await.unwrap();
+        let status = response.status();
+        let body = body_json(response).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(body["revision"], 6 + index);
+        let mut request = Request::builder()
+            .uri("/v2/sessions/current/data/fields/mat_alpha/samples/vector?component=magnitude&format=bin")
+            .header("x-fullmag-session-scope", scope.as_str());
+        if let Some(etag) = previous_etag.take() { request = request.header("if-none-match", etag); }
+        let samples = app.clone().oneshot(request.body(Body::empty()).unwrap()).await.unwrap();
+        assert_eq!(samples.status(), StatusCode::OK, "changed samples must have a new ETag");
+        previous_etag = Some(samples.headers().get("etag").expect("alpha field ETag").clone());
+        let bytes = body_bytes(samples).await;
+        let values = bytes[48..].chunks_exact(8)
+            .map(|chunk| f64::from_le_bytes(chunk.try_into().unwrap())).collect::<Vec<_>>();
+        assert_eq!(values.len(), 8);
+        let (left, right) = match face {
+            Some("x+") => (0.05, 0.55), Some("x-") => (0.55, 0.05), _ => (0.05, 0.05),
+        };
+        assert!((values[0] - left).abs() < 1e-12 && (values[7] - right).abs() < 1e-12, "{values:?}");
+        if face.is_none() { assert!(values.iter().all(|alpha| (*alpha - 0.05).abs() < 1e-12)); }
+        let current = state.current_live_state.read().await;
+        let snapshot = current.as_ref().unwrap();
+        assert_eq!(snapshot.mesh_revision, mesh_revision);
+        let fingerprint = snapshot.metadata.as_ref().unwrap()
+            .pointer("/execution_plan/backend_plan/grid_certificate/grid_fingerprint").unwrap().as_str().unwrap();
+        let field = snapshot.latest_fields.get("mat_alpha").unwrap();
+        assert_eq!(field["layout"]["grid_fingerprint"].as_str(), Some(fingerprint));
+        assert_eq!(snapshot.scene_document.as_ref().unwrap().objects[0].absorbing_boundary.is_some(), face.is_some());
+    }
+}
+
+#[tokio::test]
+async fn absorbing_boundary_rejects_a_different_published_grid_with_the_same_cell_count() {
+    let (state, _workspace, _source, _, _, _) = prepared_absorber_fixture("").await;
+    let mut scene = {
+        let mut current = state.current_live_state.write().await;
+        let snapshot = current.as_mut().unwrap();
+        snapshot.metadata.as_mut().unwrap()["artifact_layout"]["origin_m"] =
+            serde_json::json!([1.0, 0.0, 0.0]);
+        snapshot.scene_document.clone().unwrap()
+    };
+    scene.objects[0].absorbing_boundary = Some(serde_json::from_value(serde_json::json!({
+        "profile": "linear", "frame": "object", "faces": ["x+"], "max_damping": 0.5,
+        "total_width_m": 15e-9, "ramp_width_m": 10e-9
+    })).unwrap());
+    crate::commit_current_live_scene_document(&state, scene).await.unwrap();
+    let current = state.current_live_state.read().await;
+    let snapshot = current.as_ref().unwrap();
+    assert_eq!(snapshot.metadata.as_ref().unwrap()["authored_damping"]["pending_reason"],
+        "domain_layout_not_qualified");
+    assert!(crate::session::resolved_current_field_source(snapshot, "mat_alpha", 1).is_none());
+}
+
+#[tokio::test]
+async fn absorbing_boundary_move_before_first_layer_remains_pending_until_domain_preparation() {
+    let (state, _workspace, _source, object_id, scope, _) = prepared_absorber_fixture("").await;
+    let app = build_v2_router().with_state(state.clone());
+    let mut transform = state.current_live_state.read().await.as_ref().unwrap()
+        .scene_document.as_ref().unwrap().objects[0].transform.clone();
+    transform.translation[0] += 10e-9;
+    let mut layer = serde_json::json!({"profile": "linear", "frame": "object", "faces": ["x+"],
+        "max_damping": 0.5, "total_width_m": 15e-9, "ramp_width_m": 10e-9});
+    let first_layer = layer.clone();
+    layer["max_damping"] = serde_json::json!(0.6);
+    let mutations = [
+        serde_json::json!({"base_revision": 5, "transform": transform}),
+        serde_json::json!({"base_revision": 6, "absorbing_boundary": first_layer}),
+        serde_json::json!({"base_revision": 7, "absorbing_boundary": layer}),
+    ];
+    for patch in mutations {
+        let response = app.clone().oneshot(Request::builder().method("PATCH")
+            .uri(format!("/v2/sessions/current/model/objects/{object_id}"))
+            .header("content-type", "application/json").header("x-fullmag-session-scope", scope.as_str())
+            .body(Body::from(patch.to_string())).unwrap()).await.unwrap();
+        let status = response.status();
+        assert_eq!(status, StatusCode::OK, "{}", body_json(response).await);
+        let current = state.current_live_state.read().await;
+        let snapshot = current.as_ref().unwrap();
+        assert_eq!(snapshot.metadata.as_ref().unwrap()["authored_damping"]["requires_domain_rebuild"], true);
+        assert!(crate::session::resolved_current_field_source(snapshot, "mat_alpha", 1).is_none());
+    }
+}
+
+#[tokio::test]
+async fn absorbing_boundary_membership_edit_before_first_layer_invalidates_the_published_domain() {
+    let (state, _workspace, _source, _object, _scope, _) = prepared_absorber_fixture(
+        r#"core = film.add_region("core", fm.Box(10e-9, 5e-9, 5e-9), region_id="core")"#,
+    ).await;
+    let before = state.current_live_state.read().await.as_ref().unwrap().scene_document.clone().unwrap();
+    let mut edited = before.clone();
+    edited.objects[0].regions[0].enabled = false;
+    let impact = fullmag_authoring::classify_region_realization_impact(&before, &edited);
+    assert!(impact.membership && !impact.topology);
+    let mut edited = crate::commit_current_live_scene_document(&state, edited).await.unwrap();
+    edited.objects[0].absorbing_boundary = Some(serde_json::from_value(serde_json::json!({
+        "profile": "linear", "frame": "object", "faces": ["x+"], "max_damping": 0.5,
+        "total_width_m": 15e-9, "ramp_width_m": 10e-9
+    })).unwrap());
+    crate::commit_current_live_scene_document(&state, edited).await.unwrap();
+    let current = state.current_live_state.read().await;
+    let snapshot = current.as_ref().unwrap();
+    assert_eq!(snapshot.metadata.as_ref().unwrap()["authored_damping"]["requires_domain_rebuild"], true);
+    assert!(crate::session::resolved_current_field_source(snapshot, "mat_alpha", 1).is_none());
+}
+
+#[tokio::test]
+async fn absorbing_boundary_replace_scene_keeps_the_applied_magnetization_plan() {
+    let (state, workspace, source, object_id, scope, _) = prepared_absorber_fixture("").await;
+    let script = fs::read_to_string(&source).unwrap().replace("uniform(1, 0, 0)", "uniform(0, 1, 0)");
+    fs::write(&source, script).unwrap();
+    let mut scene = crate::script::load_scene_document_state(&state.repo_root, workspace.path(), &source).unwrap();
+    scene.revision = 5;
+    scene.objects[0].absorbing_boundary = Some(serde_json::from_value(serde_json::json!({
+        "profile": "linear", "frame": "object", "faces": ["x+"], "max_damping": 0.5,
+        "total_width_m": 15e-9, "ramp_width_m": 10e-9
+    })).unwrap());
+    let key = "dbef0372bc5247478858ed654dcd540b";
+    let payload = serde_json::json!({"kind": "replace_scene", "base_revision": 5, "scene": scene,
+        "magnetization_apply": {"operation_id": key, "scopes": [{"object_id": object_id}]}});
+    let response = build_v2_router().with_state(state.clone()).oneshot(Request::builder().method("POST")
+        .uri("/v2/sessions/current/model/transactions")
+        .header("content-type", "application/json").header("x-fullmag-session-scope", scope.as_str())
+        .header("idempotency-key", key).body(Body::from(payload.to_string())).unwrap()).await.unwrap();
+    let status = response.status();
+    let receipt = body_json(response).await;
+    assert_eq!(status, StatusCode::OK, "{receipt}");
+    assert_eq!(receipt["magnetization_apply"]["status"], "initial_state_ready");
+    let current = state.current_live_state.read().await;
+    let snapshot = current.as_ref().unwrap();
+    let plan = &snapshot.metadata.as_ref().unwrap()["execution_plan"]["backend_plan"];
+    assert_eq!(plan["initial_magnetization"][0], serde_json::json!([0.0, 1.0, 0.0]));
+    let alpha = &snapshot.latest_fields.get("mat_alpha").unwrap()["values"];
+    assert!(alpha[7].as_f64().unwrap() > alpha[0].as_f64().unwrap());
+}
+
+#[tokio::test]
+async fn scoped_magnetization_apply_publishes_only_the_selected_fdm_region() {
+    let state = test_app_state_with_live_session().await;
+    let workspace = tempfile::tempdir().unwrap();
+    let source = workspace.path().join("preview.py");
+    let authored = |direction: &str| {
+        std::fs::write(&source, format!(r#"import fullmag as fm
+fm.engine("fdm")
+fm.device("cpu")
+fm.cell(5e-9, 5e-9, 10e-9)
+fm.solver(fix_dt=1e-13)
+body = fm.geometry(fm.Box(40e-9, 20e-9, 10e-9), name="body")
+body.Ms = 800e3
+body.Aex = 13e-12
+body.alpha = 0.05
+body.m = fm.texture.uniform(0, 0, 1)
+core = body.add_region("core", fm.Box(10e-9, 20e-9, 10e-9), region_id="core")
+core.texture = fm.texture.uniform({direction})
+fm.run(1e-10)
+"#)).unwrap();
+        let mut scene = crate::script::load_scene_document_state(
+            &state.repo_root, workspace.path(), &source,
+        ).unwrap();
+        scene.revision = 30;
+        scene
+    };
+    let before = authored("0, 0, 1");
+    let after = authored("0, 1, 0");
+    assert_eq!(
+        serde_json::to_value(after.objects[0].regions[0].texture_override.as_ref().unwrap())
+            .unwrap()["initial_magnetization"]["preset_params"]["direction"],
+        serde_json::json!([0.0, 1.0, 0.0]),
+        "the generated after fixture must contain the requested Y texture",
+    );
+    assert_eq!(crate::scene_mesh_signature(&before), crate::scene_mesh_signature(&after));
+    let requested = fullmag_application::RequestedExecution {
+        backend: "fdm".into(), device: "cpu".into(), precision: "double".into(),
+        mode: "strict".into(), minimum_resources: None,
+    };
+    let problem = crate::script::scene_document_to_problem_ir(
+        &state.repo_root, workspace.path(), &before, &requested,
+    ).unwrap();
+    let plan = fullmag_plan::plan(&problem).unwrap();
+    let layout = fullmag_runner::study_magnetization_layout_for_plan(&plan).unwrap();
+    let mask = fullmag_plan::study_magnetization_overlay_mask(
+        &problem, &plan,
+        &[fullmag_ir::RegionRefIR { object_id: "body".into(), region_id: Some("core".into()) }],
+    ).unwrap();
+    assert!(mask.contains(&true) && mask.contains(&false));
+
+    let (scope, mesh_revision, previous_frame, previous_request) = {
+        let mut current = state.current_live_state.write().await;
+        let snapshot = current.as_mut().unwrap();
+        snapshot.scene_document = Some(before);
+        snapshot.session.script_path.clear();
+        snapshot.session.status = "awaiting_command".into();
+        snapshot.metadata = Some(serde_json::json!({
+            "execution_plan": plan, "artifact_layout": layout,
+        }).into());
+        crate::live_scene_preparation::prepare_initial_magnetization(&plan)
+            .unwrap().unwrap().publish(
+                snapshot, "base-preview", "base-plan", 30,
+                serde_json::json!({"source_kind": "prepared_initial_state"}),
+                false,
+            ).unwrap();
+        let descriptor = crate::live_stage_initial_state::describe_prepared_initial_state(snapshot)
+            .expect("the initial preview should qualify");
+        let request = crate::schemas::commands::RuntimeAuthoredInitialStateSource::Prepared {
+            scene_revision: descriptor.scene_revision,
+            initial_state_revision: descriptor.initial_state_revision,
+            publication_id: descriptor.publication_id,
+        };
+        (
+            crate::current_live_publisher_scope_header(&state, snapshot),
+            snapshot.mesh_revision,
+            snapshot.field_publication_bundles["m"].observation_frame.observation_frame_id.clone(),
+            request,
+        )
+    };
+    let operation_id = "b8df0372bc5247478858ed654dcd540b";
+    let app = build_v2_router().with_state(state.clone());
+    let payload = serde_json::json!({
+        "kind": "apply_magnetization", "base_revision": 30, "operation_id": operation_id,
+        "target": {
+            "kind": "region", "object_id": "body", "region_id": "core",
+            "texture_override": after.objects[0].regions[0].texture_override,
+        },
+    }).to_string();
+    let request = || Request::builder()
+        .method("POST")
+        .uri("/v2/sessions/current/model/transactions")
+        .header("content-type", "application/json")
+        .header("x-fullmag-session-scope", scope.as_str())
+        .header("idempotency-key", operation_id)
+        .body(Body::from(payload.clone())).unwrap();
+    let response = app.clone().oneshot(request()).await.unwrap();
+    let status = response.status();
+    let receipt = body_json(response).await;
+    assert_eq!(status, StatusCode::OK, "{receipt:#}");
+    assert_eq!(receipt["scene_revision"], 31);
+    assert_eq!(receipt["magnetization_apply"]["status"], "initial_state_ready");
+    assert_eq!(receipt["committed_scene"]["objects"][0]["regions"][0]["texture_override"],
+        serde_json::to_value(&after.objects[0].regions[0].texture_override).unwrap());
+    let replay = app.clone().oneshot(request()).await.unwrap();
+    assert_eq!(replay.status(), StatusCode::OK);
+    assert_eq!(body_json(replay).await, receipt);
+
+    let current = state.current_live_state.read().await;
+    let snapshot = current.as_ref().unwrap();
+    let field = snapshot.latest_fields.get("m").unwrap();
+    let values = field["values"].as_array().unwrap();
+    assert_eq!(values.len(), mask.len());
+    let expected: Vec<_> = mask.into_iter().map(|reset| {
+        if reset { [0.0, 1.0, 0.0] } else { [0.0, 0.0, 1.0] }
+    }).collect();
+    for (index, (sample, expected)) in values.iter().zip(&expected).enumerate() {
+        assert_eq!(sample, &serde_json::json!(expected), "published native sample {index}");
+    }
+    let frame = &snapshot.field_publication_bundles["m"].observation_frame;
+    assert_ne!(frame.observation_frame_id, previous_frame);
+    assert_eq!(frame.source_step, 0);
+    assert!(snapshot.scalar_rows.is_empty());
+    assert_eq!(snapshot.mesh_revision, mesh_revision);
+    assert!(snapshot.magnetization_applies.pending.is_none());
+    let frame_id = frame.observation_frame_id.clone();
+    let prepared = crate::live_stage_initial_state::describe_prepared_initial_state(snapshot)
+        .expect("the scoped preview should qualify for a selected stage");
+    assert_eq!(prepared.scene_revision, 31);
+    assert_eq!(prepared.observation_frame_id, frame_id);
+    assert_eq!(
+        receipt["magnetization_apply"]["prepared_initial_state"],
+        serde_json::to_value(&prepared).unwrap(),
+    );
+    let request = crate::schemas::commands::RuntimeAuthoredInitialStateSource::Prepared {
+        scene_revision: prepared.scene_revision,
+        initial_state_revision: prepared.initial_state_revision,
+        publication_id: prepared.publication_id.clone(),
+    };
+    assert!(crate::live_stage_initial_state::PreparedStateCapture::capture(snapshot, &previous_request).is_err());
+    let capture = crate::live_stage_initial_state::PreparedStateCapture::capture(snapshot, &request).unwrap();
+    capture.validate(snapshot).unwrap();
+    drop(current);
+
+    let readiness = app.clone().oneshot(Request::builder()
+        .uri("/v2/sessions/current/model/readiness")
+        .header("x-fullmag-session-scope", scope.as_str())
+        .body(Body::empty()).unwrap()
+    ).await.unwrap();
+    assert_eq!(readiness.status(), StatusCode::OK);
+    assert_eq!(body_json(readiness).await["prepared_initial_state"], serde_json::to_value(prepared).unwrap());
+
+    let binary = app.oneshot(Request::builder()
+        .uri("/v2/sessions/current/data/fields/m/samples/vector")
+        .header("x-fullmag-session-scope", scope.as_str())
+        .header("x-fullmag-expected-observation-frame-id", frame_id.as_str())
+        .body(Body::empty()).unwrap()
+    ).await.unwrap();
+    assert_eq!(binary.status(), StatusCode::OK);
+    assert_eq!(binary.headers()["x-fullmag-observation-frame-id"].to_str().unwrap(), frame_id);
+    assert_eq!(
+        decode_fmvp_payload_f64(&body_bytes(binary).await),
+        expected.into_iter().flatten().collect::<Vec<_>>(),
+    );
 }
 
 #[tokio::test]
@@ -22608,6 +23710,35 @@ async fn authoring_magnetization_asset_patch_upserts_new_asset() {
     assert_eq!(status, StatusCode::OK, "{json:#}");
     assert_eq!(json["scene_revision"], 27);
     assert_eq!(json["asset"]["id"], "mag:ribbon");
+}
+
+#[tokio::test]
+async fn absorbing_boundary_patch_distinguishes_omission_and_removal() {
+    let app = test_router_with_scene_document().await;
+    let boundary = serde_json::json!({
+        "total_width_m": 4e-7, "ramp_width_m": 2e-7, "max_damping": 0.5,
+        "faces": ["x+"], "frame": "object", "profile": "custom", "expression": "u**3"
+    });
+    for (patch, expected) in [
+        (serde_json::json!({ "absorbing_boundary": boundary }), Some(&boundary)),
+        (serde_json::json!({ "notes": "keep the boundary" }), Some(&boundary)),
+        (serde_json::json!({ "absorbing_boundary": null }), None),
+    ] {
+        let response = app.clone().oneshot(
+            Request::builder()
+                .method("PATCH")
+                .uri("/v2/sessions/current/model/objects/body")
+                .header("content-type", "application/json")
+                .body(Body::from(patch.to_string()))
+                .unwrap(),
+        ).await.unwrap();
+        let status = response.status();
+        let scene = body_json(response).await;
+        assert_eq!(status, StatusCode::OK, "{scene:#}");
+        let object = scene["objects"].as_array().unwrap().iter()
+            .find(|object| object["id"] == "body").unwrap();
+        assert_eq!(object.get("absorbing_boundary").filter(|v| !v.is_null()), expected);
+    }
 }
 
 #[tokio::test]
@@ -24598,6 +25729,7 @@ async fn commands_endpoint_invalidates_hysteresis_stage_resources() {
             completed_stage_indexes: Vec::new(),
             stages: vec![StageExecutionRecord {
                 stage_id: Some("hysteresis-1".into()),
+                authored_stage_id: None,
                 antenna_solve_stage_id: None,
                 antenna_progress: None,
                 kind: Some("flat_hysteresis".into()),
@@ -24807,6 +25939,7 @@ async fn commands_endpoint_validates_runtime_precondition_against_effective_stat
             completed_stage_indexes: Vec::new(),
             stages: vec![StageExecutionRecord {
                 stage_id: Some("stage-000".into()),
+                authored_stage_id: None,
                 antenna_solve_stage_id: None,
                 antenna_progress: None,
                 kind: Some("relax".into()),
@@ -24913,10 +26046,12 @@ async fn commands_endpoint_rejects_resource_revision_precondition_mismatches() {
                 kind: "compute_fields".into(),
                 created_at_unix_ms: 1_700_000_000_000,
                 target: None,
+                execution_binding: None,
                 reason: None,
                 precondition: None,
                 client_intent_id: None,
                 requested_at_unix_ms: None,
+                initial_state: None,
                 until_seconds: None,
                 max_steps: None,
                 torque_tolerance: None,
@@ -25315,6 +26450,80 @@ async fn command_detail_endpoint_exposes_completion_fields_for_terminal_commands
 }
 
 #[tokio::test]
+async fn command_detail_keeps_its_accepted_run_after_the_workspace_advances() {
+    let state = test_app_state_with_live_session().await;
+    let record = serde_json::from_value(serde_json::json!({
+        "command": {
+            "seq": 1, "command_id": "relax-previous", "kind": "relax",
+            "created_at_unix_ms": 1_700_000_000_000_u64,
+            "target": {"kind": "run", "run_id": "accepted-previous"},
+            "execution_binding": {
+                "requested_target": {"kind": "stage_index", "stage_index": 2},
+                "run_id": "accepted-previous",
+                "step_id": "relax-original-c"
+            }
+        },
+        "status": "completed", "completion_status": "completed"
+    })).unwrap();
+    state.current_command_ledger.lock().await.push_back(record);
+    let detail = get_command_detail(&build_v2_router().with_state(state), "relax-previous").await;
+    assert_eq!(detail["run_id"], "accepted-previous");
+    assert_eq!(detail["stage_id"], "relax-original-c");
+    assert_eq!(detail["stage_index"], 2);
+    assert_eq!(detail["execution_binding"]["requested_target"],
+        serde_json::json!({"kind": "stage_index", "stage_index": 2}));
+    assert_eq!(detail["execution_binding"]["step_id"], "relax-original-c");
+    assert_eq!(detail["status"], "completed");
+    assert!(detail.get("requested_execution").is_none());
+    assert!(detail.get("resolved_execution").is_none());
+    assert_eq!(detail["resource_invalidations"].as_array().unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn legacy_command_detail_reads_only_its_own_session_run_intent() {
+    let directory = tempfile::tempdir().unwrap();
+    let mut state = test_app_state_with_live_session().await;
+    Arc::get_mut(&mut state).unwrap().submit_store_root = Some(directory.path().to_path_buf());
+    let context = crate::capture_current_live_read_context(&state).await.unwrap();
+    let store = fullmag_session::SessionStore::open(directory.path()).unwrap();
+    for (seq, run_id, command_id, epoch) in [
+        (1, "accepted-legacy", "command-legacy", context.session_epoch),
+        (2, "accepted-foreign", "command-foreign", context.session_epoch + 1),
+    ] {
+        let original = serde_json::json!({
+            "seq": 0, "command_id": command_id, "kind": "relax", "created_at_unix_ms": 1,
+            "target": {"kind": "stage_index", "stage_index": 3}
+        });
+        store.commit_run_intent(&fullmag_session::FmsRunIntent::new(
+            run_id, format!("legacy-{run_id}"), serde_json::json!({
+                "run_id": run_id, "parameters": {"live_workspace": {
+                    "session_id": context.session_id, "session_epoch": epoch,
+                    "command_id": command_id, "step_id": "original-relax",
+                    "command": original,
+                }}
+            }),
+        )).unwrap();
+        let record = serde_json::from_value(serde_json::json!({
+            "command": {
+                "seq": seq, "command_id": command_id, "kind": "relax", "created_at_unix_ms": 1,
+                "target": {"kind": "run", "run_id": run_id}
+            },
+            "status": "completed"
+        })).unwrap();
+        state.current_command_ledger.lock().await.push_back(record);
+    }
+    let app = build_v2_router().with_state(state);
+    let own = get_command_detail(&app, "command-legacy").await;
+    assert_eq!(own["run_id"], "accepted-legacy");
+    assert_eq!(own["stage_id"], "original-relax");
+    assert_eq!(own["execution_binding"]["requested_target"],
+        serde_json::json!({"kind": "stage_index", "stage_index": 3}));
+    let foreign = get_command_detail(&app, "command-foreign").await;
+    assert!(foreign.get("execution_binding").is_none());
+    assert!(foreign.get("stage_id").is_none());
+}
+
+#[tokio::test]
 async fn command_detail_endpoint_exposes_stage_state_linkage() {
     let state = test_app_state_with_live_session().await;
     if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
@@ -25324,6 +26533,7 @@ async fn command_detail_endpoint_exposes_stage_state_linkage() {
             completed_stage_indexes: vec![0],
             stages: vec![StageExecutionRecord {
                 stage_id: None,
+                authored_stage_id: None,
                 antenna_solve_stage_id: None,
                 antenna_progress: None,
                 kind: None,
@@ -25379,10 +26589,12 @@ async fn command_detail_endpoint_exposes_stage_state_linkage() {
                 kind: "relax".into(),
                 created_at_unix_ms: 1_700_000_000_000,
                 target: None,
+                execution_binding: None,
                 reason: None,
                 precondition: None,
                 client_intent_id: None,
                 requested_at_unix_ms: None,
+                initial_state: None,
                 until_seconds: None,
                 max_steps: None,
                 torque_tolerance: Some(7.5),
@@ -26226,6 +27438,7 @@ async fn stage_execution_endpoint_projects_frequency_response_live_progress() {
             completed_stage_indexes: Vec::new(),
             stages: vec![StageExecutionRecord {
                 stage_id: Some("stage-003".into()),
+                authored_stage_id: None,
                 antenna_solve_stage_id: None,
                 antenna_progress: None,
                 kind: Some("flat_frequency_response".into()),
@@ -26686,6 +27899,7 @@ async fn hysteresis_progress_endpoint_returns_current_stage_progress() {
             completed_stage_indexes: Vec::new(),
             stages: vec![StageExecutionRecord {
                 stage_id: Some("stage-hyst".into()),
+                authored_stage_id: None,
                 antenna_solve_stage_id: None,
                 antenna_progress: None,
                 kind: Some("flat_hysteresis".into()),
@@ -26791,6 +28005,7 @@ async fn hysteresis_progress_endpoint_reports_active_first_point_before_completi
             completed_stage_indexes: Vec::new(),
             stages: vec![StageExecutionRecord {
                 stage_id: Some("stage-000".into()),
+                authored_stage_id: None,
                 antenna_solve_stage_id: None,
                 antenna_progress: None,
                 kind: Some("flat_hysteresis".into()),
@@ -26886,6 +28101,7 @@ async fn hysteresis_progress_endpoint_projects_live_magnetization_for_sample_ang
             completed_stage_indexes: Vec::new(),
             stages: vec![StageExecutionRecord {
                 stage_id: Some("stage-angle".into()),
+                authored_stage_id: None,
                 antenna_solve_stage_id: None,
                 antenna_progress: None,
                 kind: Some("flat_hysteresis".into()),
@@ -26974,6 +28190,7 @@ async fn hysteresis_progress_endpoint_uses_measurement_axis_for_live_projection(
             completed_stage_indexes: Vec::new(),
             stages: vec![StageExecutionRecord {
                 stage_id: Some("stage-measurement-axis".into()),
+                authored_stage_id: None,
                 antenna_solve_stage_id: None,
                 antenna_progress: None,
                 kind: Some("flat_hysteresis".into()),
@@ -27069,6 +28286,7 @@ async fn hysteresis_progress_endpoint_averages_only_magnetic_fem_nodes() {
             completed_stage_indexes: Vec::new(),
             stages: vec![StageExecutionRecord {
                 stage_id: Some("stage-fem-magnetic-average".into()),
+                authored_stage_id: None,
                 antenna_solve_stage_id: None,
                 antenna_progress: None,
                 kind: Some("flat_hysteresis".into()),
@@ -27165,6 +28383,7 @@ async fn hysteresis_progress_endpoint_uses_fem_element_volume_weights_for_live_a
             completed_stage_indexes: Vec::new(),
             stages: vec![StageExecutionRecord {
                 stage_id: Some("stage-fem-volume-average".into()),
+                authored_stage_id: None,
                 antenna_solve_stage_id: None,
                 antenna_progress: None,
                 kind: Some("flat_hysteresis".into()),
@@ -27261,6 +28480,7 @@ async fn hysteresis_progress_endpoint_uses_snapshot_fem_mesh_for_live_average() 
             completed_stage_indexes: Vec::new(),
             stages: vec![StageExecutionRecord {
                 stage_id: Some("stage-snapshot-fem-average".into()),
+                authored_stage_id: None,
                 antenna_solve_stage_id: None,
                 antenna_progress: None,
                 kind: Some("flat_hysteresis".into()),
@@ -27397,6 +28617,7 @@ async fn hysteresis_execution_tree_returns_windowed_active_points() {
             completed_stage_indexes: Vec::new(),
             stages: vec![StageExecutionRecord {
                 stage_id: Some("hysteresis-1".into()),
+                authored_stage_id: None,
                 antenna_solve_stage_id: None,
                 antenna_progress: None,
                 kind: Some("hysteresis".into()),
@@ -27559,6 +28780,7 @@ async fn hysteresis_bookmarks_round_trip_through_resource_and_execution_tree() {
             completed_stage_indexes: vec![0],
             stages: vec![StageExecutionRecord {
                 stage_id: Some("hysteresis-1".into()),
+                authored_stage_id: None,
                 antenna_solve_stage_id: None,
                 antenna_progress: None,
                 kind: Some("hysteresis".into()),
@@ -27713,6 +28935,7 @@ async fn hysteresis_execution_tree_marks_missing_snapshot_payloads() {
             completed_stage_indexes: vec![0],
             stages: vec![StageExecutionRecord {
                 stage_id: Some("hysteresis-1".into()),
+                authored_stage_id: None,
                 antenna_solve_stage_id: None,
                 antenna_progress: None,
                 kind: Some("hysteresis".into()),
@@ -27902,6 +29125,7 @@ async fn hysteresis_execution_tree_uses_settle_trace_status_for_completed_points
             completed_stage_indexes: vec![0],
             stages: vec![StageExecutionRecord {
                 stage_id: Some("hysteresis-1".into()),
+                authored_stage_id: None,
                 antenna_solve_stage_id: None,
                 antenna_progress: None,
                 kind: Some("hysteresis".into()),
@@ -28088,6 +29312,7 @@ async fn hysteresis_execution_tree_exposes_runtime_branch_nodes() {
             completed_stage_indexes: Vec::new(),
             stages: vec![StageExecutionRecord {
                 stage_id: Some("hysteresis-branches".into()),
+                authored_stage_id: None,
                 antenna_solve_stage_id: None,
                 antenna_progress: None,
                 kind: Some("hysteresis".into()),
@@ -28214,6 +29439,7 @@ async fn stage_execution_endpoint_exposes_completed_relaxation_stop_metric() {
             completed_stage_indexes: vec![0],
             stages: vec![StageExecutionRecord {
                 stage_id: Some("stage-relax".into()),
+                authored_stage_id: None,
                 antenna_solve_stage_id: None,
                 antenna_progress: None,
                 kind: Some("relax".into()),
@@ -28452,6 +29678,7 @@ async fn solver_status_does_not_infer_convergence_from_finished_sample() {
             completed_stage_indexes: vec![0],
             stages: vec![StageExecutionRecord {
                 stage_id: Some("stage-relax".into()),
+                authored_stage_id: None,
                 antenna_solve_stage_id: None,
                 antenna_progress: None,
                 kind: Some("relax".into()),
@@ -28600,6 +29827,122 @@ async fn solver_energies_current_endpoint_returns_latest_energy_sample() {
     let json = body_json(response).await;
     assert_eq!(json["step"], 42);
     assert_eq!(json["total"], 15.0);
+}
+
+#[tokio::test]
+async fn solver_energies_current_endpoint_returns_empty_204_when_workspace_has_no_sample() {
+    let app = build_v2_router().with_state(test_app_state_with_live_session().await);
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/v2/sessions/current/simulation/solver/energies/current")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::NO_CONTENT);
+    assert!(body_bytes(response).await.is_empty());
+}
+
+#[tokio::test]
+async fn solver_energies_current_endpoint_returns_zero_as_a_real_sample() {
+    let state = test_app_state_with_live_session().await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.scalar_rows = vec![serde_json::from_value(serde_json::json!({
+            "kind": "physical_observation",
+            "step": 0,
+            "time": 0.0,
+            "solver_dt": 1.0e-15,
+            "mx": 1.0,
+            "my": 0.0,
+            "mz": 0.0,
+            "e_ex": 0.0,
+            "e_demag": 0.0,
+            "e_ext": 0.0,
+            "e_ani": 0.0,
+            "e_dmi": 0.0,
+            "e_total": 0.0,
+            "max_dm_dt": 0.0,
+            "max_h_eff": 0.0,
+            "max_h_demag": 0.0
+        }))
+        .expect("zero physical scalar sample")];
+    }
+    let app = build_v2_router().with_state(state);
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/v2/sessions/current/simulation/solver/energies/current")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let json = body_json(response).await;
+    assert_eq!(json["step"], 0);
+    assert_eq!(json["total"], 0.0);
+}
+
+#[tokio::test]
+async fn solver_energies_current_endpoint_keeps_404_without_live_workspace() {
+    let app = build_v2_router().with_state(test_app_state());
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/v2/sessions/current/simulation/solver/energies/current")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn session_status_reports_current_energy_readiness_when_endpoint_has_a_sample() {
+    let app = test_router_with_runtime_read_models().await;
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/v2/sessions/current/status")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let json = body_json(response).await;
+    assert_eq!(json["solver_energy_current_available"], true);
+}
+
+#[tokio::test]
+async fn session_status_reports_current_energy_unavailable_before_any_sample() {
+    let state = test_app_state_with_live_session().await;
+    let app = build_v2_router().with_state(state);
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/v2/sessions/current/status")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let json = body_json(response).await;
+    assert_eq!(json["solver_energy_current_available"], false);
 }
 
 #[tokio::test]
@@ -38020,6 +39363,7 @@ async fn hysteresis_analysis_resolves_stage_directory_artifact_refs() {
             stage_statuses: vec![StageLifecycleState::Completed],
             stages: vec![StageExecutionRecord {
                 stage_id: Some("stage-000".into()),
+                authored_stage_id: None,
                 antenna_solve_stage_id: None,
                 antenna_progress: None,
                 kind: Some("flat_hysteresis".into()),
@@ -38184,6 +39528,7 @@ async fn hysteresis_analysis_uses_active_hysteresis_kind_only_when_record_kind_i
             stage_statuses: vec![StageLifecycleState::Running],
             stages: vec![StageExecutionRecord {
                 stage_id: Some("stage-000".into()),
+                authored_stage_id: None,
                 antenna_solve_stage_id: None,
                 antenna_progress: None,
                 kind: None,
@@ -38350,6 +39695,7 @@ async fn hysteresis_analysis_reads_flat_live_artifact_with_active_stage_executio
             stage_statuses: vec![StageLifecycleState::Running],
             stages: vec![StageExecutionRecord {
                 stage_id: Some("stage-000".into()),
+                authored_stage_id: None,
                 antenna_solve_stage_id: None,
                 antenna_progress: None,
                 kind: Some("flat_hysteresis".into()),
@@ -38454,6 +39800,7 @@ async fn hysteresis_analysis_points_conflicts_when_progress_reports_completed_po
             stage_statuses: vec![StageLifecycleState::Running],
             stages: vec![StageExecutionRecord {
                 stage_id: Some("stage-000".into()),
+                authored_stage_id: None,
                 antenna_solve_stage_id: None,
                 antenna_progress: None,
                 kind: Some("flat_hysteresis".into()),
@@ -38537,6 +39884,7 @@ async fn hysteresis_analysis_points_returns_empty_for_running_stage_before_first
             stage_statuses: vec![StageLifecycleState::Running],
             stages: vec![StageExecutionRecord {
                 stage_id: Some("stage-000".into()),
+                authored_stage_id: None,
                 antenna_solve_stage_id: None,
                 antenna_progress: None,
                 kind: Some("flat_hysteresis".into()),
@@ -39096,6 +40444,7 @@ async fn field_vector_snapshot_id_validates_optional_hysteresis_stage_scope() {
             stage_statuses: vec![StageLifecycleState::Running],
             stages: vec![StageExecutionRecord {
                 stage_id: Some("stage-000".into()),
+                authored_stage_id: None,
                 antenna_solve_stage_id: None,
                 antenna_progress: None,
                 kind: Some("flat_hysteresis".into()),
@@ -41525,6 +42874,152 @@ async fn v2_m_cached_source_is_invalidated_by_same_cardinality_topology_change()
 }
 
 #[tokio::test]
+async fn current_field_resources_retire_sources_when_same_size_domain_is_replaced() {
+    const CATALOG: &str = "/v2/sessions/current/data/fields";
+    const META: &str = "/v2/sessions/current/data/fields/m/meta";
+    const VECTOR: &str = "/v2/sessions/current/data/fields/m/samples/vector";
+
+    for backend in ["fem", "fdm"] {
+        let state = test_app_state_with_live_session().await;
+        let app = build_v2_router().with_state(state.clone());
+        let publish_domain = |snapshot: &mut SessionStateResponse, displacement: f64| {
+            let mut request: CurrentLiveSnapshotRequest =
+                serde_json::from_value(serde_json::json!({
+                    "session_id": snapshot.session.session_id,
+                }))
+                .unwrap();
+            if backend == "fem" {
+                let mut mesh = sample_fem_mesh_payload();
+                for node in &mut mesh.nodes {
+                    node[0] += displacement;
+                }
+                mesh.generation_id = Some(format!("fem-generation-{displacement}"));
+                request.fem_mesh = Some(mesh);
+            } else {
+                let origin = [displacement, 0.0, 0.0];
+                let grid = [4, 1, 1];
+                let cell = [1.0, 1.0, 1.0];
+                let certificate = fullmag_ir::FdmGridCertificateIR::new(origin, grid, cell, 4, 1)
+                    .expect("canonical grid certificate");
+                request.metadata = Some(serde_json::json!({
+                    "execution_plan": {"backend_plan": {
+                        "kind": "fdm", "grid": {"cells": grid}, "grid_certificate": certificate,
+                    }},
+                    "artifact_layout": {
+                        "backend": "fdm", "grid_cells": grid, "origin_m": origin, "cell_size": cell,
+                    }
+                }));
+            }
+            crate::session::apply_current_live_snapshot(snapshot, request).unwrap();
+        };
+        let publish_m = |snapshot: &mut SessionStateResponse, step: u64, vector: [f64; 3]| {
+            let time = step as f64 * 1.0e-12;
+            let fields = serde_json::from_value(serde_json::json!({
+                "m": {"values": [vector, vector, vector, vector], "layout": {"grid_cells": [4, 1, 1]}}
+            })).unwrap();
+            publish_test_fields_from_physical_step(
+                snapshot,
+                physical_test_live_state(step, time, [4, 1, 1], Some(vector.repeat(4))),
+                fields,
+            )
+            .unwrap();
+            let session_id = snapshot.session.session_id.clone();
+            crate::session::apply_current_live_scalar_frame(
+                snapshot,
+                CurrentLiveScalarFrameRequest {
+                    session_id,
+                    latest_scalar_row: Some(sample_scalar_row(step, time, 2.0)),
+                },
+            )
+            .unwrap();
+        };
+
+        {
+            let mut current = state.current_live_state.write().await;
+            let snapshot = current.as_mut().unwrap();
+            publish_domain(snapshot, 0.0);
+            publish_m(snapshot, 7, [1.0, 0.0, 0.0]);
+        }
+        let request = |path: &str| Request::builder().uri(path).body(Body::empty()).unwrap();
+        let first = app.clone().oneshot(request(VECTOR)).await.unwrap();
+        assert_eq!(first.status(), StatusCode::OK, "{backend}");
+        let old_generation = first.headers()["x-fullmag-domain-generation-id"]
+            .to_str()
+            .unwrap()
+            .to_owned();
+        let old_etag = first.headers()[header::ETAG].clone();
+        assert_eq!(
+            decode_fmvp_payload_f64(&body_bytes(first).await),
+            [1.0, 0.0, 0.0].repeat(4)
+        );
+
+        {
+            let mut current = state.current_live_state.write().await;
+            let snapshot = current.as_mut().unwrap();
+            let old_revision = snapshot.field_samples_revision;
+            let old_scalar_revision = snapshot.scalar_revision;
+            publish_domain(snapshot, 0.25);
+            assert!(snapshot.live_state.is_none(), "{backend}");
+            assert!(snapshot.scalar_rows.is_empty(), "{backend}");
+            assert!(snapshot.latest_fields.get("m").is_none(), "{backend}");
+            assert!(snapshot.field_samples_revision > old_revision, "{backend}");
+            assert!(snapshot.scalar_revision > old_scalar_revision, "{backend}");
+            assert!(crate::preview::current_vector_field(snapshot, "m").is_none());
+        }
+
+        let stale = app
+            .clone()
+            .oneshot(request(&format!(
+                "{VECTOR}?expected_generation_id={old_generation}"
+            )))
+            .await
+            .unwrap();
+        assert_eq!(stale.status(), StatusCode::CONFLICT, "{backend}");
+        let missing = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(VECTOR)
+                    .header(header::IF_NONE_MATCH, old_etag)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(missing.status(), StatusCode::NO_CONTENT, "{backend}");
+        let catalog = app.clone().oneshot(request(CATALOG)).await.unwrap();
+        assert_eq!(catalog.status(), StatusCode::OK, "{backend}");
+        assert!(!body_json(catalog).await["quantities"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|field| field["quantity_id"] == "m" && field["available"] == true));
+        let meta = app.clone().oneshot(request(META)).await.unwrap();
+        assert_eq!(meta.status(), StatusCode::OK, "{backend}");
+        let meta = body_json(meta).await;
+        assert_eq!(meta["state"], "unmaterialized", "{backend}");
+        assert_ne!(meta["domain_generation_id"], old_generation, "{backend}");
+
+        {
+            let mut current = state.current_live_state.write().await;
+            publish_m(current.as_mut().unwrap(), 0, [0.0, 1.0, 0.0]);
+        }
+        let fresh = app.oneshot(request(VECTOR)).await.unwrap();
+        assert_eq!(fresh.status(), StatusCode::OK, "{backend}");
+        assert_ne!(
+            fresh.headers()["x-fullmag-domain-generation-id"]
+                .to_str()
+                .unwrap(),
+            old_generation
+        );
+        assert_eq!(
+            decode_fmvp_payload_f64(&body_bytes(fresh).await),
+            [0.0, 1.0, 0.0].repeat(4)
+        );
+    }
+}
+
+#[tokio::test]
 async fn v2_material_scalar_quantity_is_available_as_field_vector() {
     let app = test_router_with_material_scalar_field().await;
 
@@ -43352,6 +44847,11 @@ async fn topological_charge_computes_uniform_fem_object_from_native_layer_faces(
             }
         }))
         .expect("mock FEM m field should deserialize");
+        admit_test_latest_fields_from_physical_step(
+            snapshot,
+            physical_test_live_state(1, 1.0e-12, [8, 1, 1], None),
+        )
+        .expect("FEM magnetization should bind to its physical observation");
     }
 
     let app = build_v2_router().with_state(state);
@@ -43416,6 +44916,11 @@ async fn topological_charge_computes_analytic_neel_skyrmion_from_fem_layer_profi
             }
         }))
         .expect("analytic FEM skyrmion m field should deserialize");
+        admit_test_latest_fields_from_physical_step(
+            snapshot,
+            physical_test_live_state(1, 1.0e-12, [1250, 1, 1], None),
+        )
+        .expect("FEM magnetization should bind to its physical observation");
     }
 
     let app = build_v2_router().with_state(state);
@@ -43483,6 +44988,11 @@ async fn topological_charge_reports_degenerate_support_when_no_volume_sampler_is
             }
         }))
         .expect("mock FEM m field should deserialize");
+        admit_test_latest_fields_from_physical_step(
+            snapshot,
+            physical_test_live_state(1, 1.0e-12, [8, 1, 1], None),
+        )
+        .expect("FEM magnetization should bind to its physical observation");
     }
 
     let app = build_v2_router().with_state(state);
@@ -47276,11 +48786,11 @@ fn openapi_session_creation_declares_typed_request_and_outcomes() {
     );
     assert_eq!(
         schemas["ScratchSessionDevice"]["enum"],
-        serde_json::json!(["cpu"])
+        serde_json::json!(["cpu", "gpu"])
     );
     assert_eq!(
         schemas["ScratchSessionPrecision"]["enum"],
-        serde_json::json!(["double"])
+        serde_json::json!(["double", "single"])
     );
 
     let scene_document = &schemas["ScratchSceneDocumentResource"];
@@ -48256,10 +49766,15 @@ fn openapi_status_schema_remains_thin_and_owned() {
         "capabilities".to_string(),
         "energies".to_string(),
         "metrics".to_string(),
+        "solver_energy_current_available".to_string(),
     ]);
     assert_eq!(
         status_props, expected,
         "LiveStatus may contain only summaries, capabilities, and revision pointers"
+    );
+    assert_eq!(
+        schemas["LiveStatus"]["properties"]["solver_energy_current_available"]["type"],
+        "boolean"
     );
 }
 
@@ -48303,7 +49818,6 @@ fn openapi_visualization_state_schema_exposes_v2_layers() {
             "VisualizationStateResource missing v2 field `{required}`"
         );
     }
-
     for compatibility_field in [
         "active_quantity_id",
         "view_mode",
@@ -48338,6 +49852,7 @@ fn openapi_visualization_state_schema_exposes_v2_layers() {
         "surface_opacity",
         "wireframe_visible",
         "wireframe_opacity",
+        "wireframe_geometry_scope",
         "point_color",
         "point_opacity",
         "points_visible",
@@ -48356,7 +49871,6 @@ fn openapi_visualization_state_schema_exposes_v2_layers() {
             "VisualizationResolvedTargetSettings missing field `{required}`"
         );
     }
-
     for required in [
         "scope", "scope_id", "visible", "display", "style", "quantity",
     ] {
@@ -48374,6 +49888,7 @@ fn openapi_visualization_state_schema_exposes_v2_layers() {
         "vectors",
         "opacity",
         "geometry_scope",
+        "wireframe_geometry_scope",
     ] {
         assert!(
             override_display_props.contains(required),
@@ -55699,3 +57214,38 @@ async fn manual_domain_outside_blocks_readiness_and_mesh_command_before_queueing
 
 #[path = "tests_planar_composition.rs"]
 mod planar_composition_tests;
+
+
+#[test]
+fn malformed_stl_upload_is_rejected_before_any_files_are_published() {
+    use base64::Engine as _;
+    let directory = tempfile::tempdir().unwrap();
+    let imports = directory.path().join("imports");
+    let result = crate::import_asset_into_dir(&test_app_state(), "session-stl", imports.clone(),
+        crate::types::ImportSessionAssetRequest {
+            file_name: "broken.stl".into(),
+            content_base64: base64::engine::general_purpose::STANDARD.encode(b"not STL"),
+            target_realization: "fem".into(),
+        });
+    assert!(result.is_err());
+    assert!(!imports.exists(), "invalid STL must not create a directory, file or manifest");
+}
+
+#[test]
+fn stl_upload_receipt_pins_the_exact_original_bytes() {
+    use base64::Engine as _;
+    use sha2::{Digest, Sha256};
+    let source = b"solid face\nfacet normal 0 0 1\nouter loop\nvertex 0 0 0\nvertex 2 0 0\nvertex 0 3 0\nendloop\nendfacet\nendsolid face\n";
+    let directory = tempfile::tempdir().unwrap();
+    let imports = directory.path().join("imports");
+    let response = crate::import_asset_into_dir(&test_app_state(), "session-stl", imports,
+        crate::types::ImportSessionAssetRequest {
+            file_name: "face.stl".into(),
+            content_base64: base64::engine::general_purpose::STANDARD.encode(source),
+            target_realization: "fem".into(),
+        }).unwrap();
+    assert_eq!(response.content_sha256, Some(format!("{:x}", Sha256::digest(source))));
+    assert_eq!(std::fs::read(response.stored_path).unwrap(), source);
+    assert_eq!(response.summary.triangle_count, Some(1));
+    assert!(response.summary.element_count.is_none());
+}

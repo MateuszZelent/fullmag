@@ -18,9 +18,10 @@ const mocks = vi.hoisted(() => ({
   currentSessionScopeKey: "session=A&epoch=1&request_scope_epoch=1" as string | null,
   historyGeneration: 0,
   invalidate: vi.fn(),
+  publishScene: vi.fn(),
   recordHistory: vi.fn(),
   readScene: vi.fn(),
-  commitTransaction: vi.fn(),
+  applyMagnetization: vi.fn(),
   syncAuthoringScript: vi.fn(),
   sessionIdentity: null as unknown,
   sceneData: { objects: [], materials: [] },
@@ -30,7 +31,7 @@ vi.mock("@/kernel/KernelContext", () => ({
   useKernel: () => ({
     api: {
       model: {
-        commitTransaction: mocks.commitTransaction,
+        applyMagnetization: mocks.applyMagnetization,
         scene: mocks.readScene,
         syncAuthoringScript: mocks.syncAuthoringScript,
       },
@@ -57,6 +58,7 @@ vi.mock("@/kernel/resources/geometryLifecycleResources", async (importOriginal) 
   >();
   return {
     ...actual,
+    publishCommittedSceneResource: mocks.publishScene,
     useSceneResource: () => ({ data: mocks.sceneData, status: "ready" }),
     useModelRegionsResource: () => ({ data: { items: [] }, status: "ready" }),
   };
@@ -74,10 +76,9 @@ vi.mock("@/kernel/resources/useActiveLaneCapabilities", () => ({
 }));
 
 vi.mock("../ObjectMagneticTexturePanelModel", () => ({
-  buildMagnetizationTransactionRequest: (_model: unknown, _asset: unknown, magnetizationRef: string | null) => ({
-    base_revision: 8,
-    kind: "patch_magnetization",
-    textureRef: magnetizationRef,
+  buildMagnetizationApplyTarget: (_model: unknown, draft: { magnetizationRef: string } | null) => ({
+    kind: "region", object_id: "object-a", region_id: "region-a",
+    texture_override: draft ? draft.magnetizationRef || "texture-a" : null,
   }),
   buildObjectMagneticTextureAssetDraft: (_model: unknown, draft: { magnetizationRef: string }) => ({
     id: draft.magnetizationRef || "texture-a",
@@ -92,6 +93,8 @@ vi.mock("../ObjectMagneticTexturePanelModel", () => ({
   objectMagneticTextureDraftKey: () => "draft-a",
   resolveObjectMagneticTexturePanelModel: () => ({
     mode: "committed",
+    authoredRegion: true,
+    baseRevision: 10,
     objectId: "object-a",
     regionId: "region-a",
   }),
@@ -140,6 +143,7 @@ vi.mock("../ObjectMagneticTexturePanel", () => ({
 }));
 
 import { ObjectRegionTexturePanel } from "./ObjectRegionTexturePanel";
+import { createInspectorChildDraftRegistry } from "../../inspectorChildDraftRegistry";
 import type { RegionAuxiliaryDraftSession, RegionSubPanelProps } from "./shared";
 
 describe("ObjectRegionTexturePanel session fence", () => {
@@ -154,7 +158,8 @@ describe("ObjectRegionTexturePanel session fence", () => {
       revision: 10,
       scene_revision: 10,
     });
-    mocks.commitTransaction.mockResolvedValue({
+    mocks.applyMagnetization.mockResolvedValue({
+      magnetization_apply: { status: "initial_state_ready" },
       committed_scene: { objects: [], revision: 11, scene_revision: 11 },
       scene_revision: 11,
     });
@@ -171,17 +176,26 @@ describe("ObjectRegionTexturePanel session fence", () => {
       await act(async () => findButton(container, "Save texture").click());
 
       expect(mocks.readScene).toHaveBeenCalledWith({ sessionScopeKey: sessionAScopeKey });
-      expect(mocks.commitTransaction).toHaveBeenCalledWith(
-        { base_revision: 10, kind: "patch_magnetization", textureRef: "texture-a" },
+      expect(mocks.applyMagnetization).toHaveBeenCalledWith(
+        { kind: "region", object_id: "object-a", region_id: "region-a", texture_override: "texture-a" },
         { baseRevision: 10, sessionScopeKey: sessionAScopeKey },
       );
       expect(mocks.recordHistory).toHaveBeenCalledOnce();
+      expect(mocks.publishScene).toHaveBeenCalledExactlyOnceWith(
+        expect.anything(),
+        { objects: [], revision: 11, scene_revision: 11 },
+        11,
+        undefined,
+        false,
+        sessionAScopeKey,
+        undefined,
+      );
       expect(mocks.invalidate).toHaveBeenCalledOnce();
       expect(mocks.syncAuthoringScript).toHaveBeenCalledWith(
         {},
         { sessionScopeKey: sessionAScopeKey },
       );
-      expect(container.textContent).toContain("Magnetic texture saved.");
+      expect(container.textContent).toContain("Magnetic texture applied.");
     } finally {
       await act(async () => root.unmount());
       dom.restore();
@@ -189,14 +203,8 @@ describe("ObjectRegionTexturePanel session fence", () => {
   });
 
   it("applies the reported click-time texture draft and keeps edits made while the parent waits", async () => {
-    const reportedSession: { current: RegionAuxiliaryDraftSession | null } = {
-      current: null,
-    };
-    const reportAuxiliaryDraftSession: NonNullable<
-      RegionSubPanelProps["reportAuxiliaryDraftSession"]
-    > = (_ownerKey, session) => {
-      if (session) reportedSession.current = session;
-    };
+    const ownerKey = "object.region.texture:identity-a";
+    const auxiliaryDraftRegistry = createInspectorChildDraftRegistry<RegionAuxiliaryDraftSession>();
     const dom = installSimulationPreparationTestDom();
     const container = dom.document.createElement("div");
     const { createRoot } = await import("react-dom/client");
@@ -205,33 +213,32 @@ describe("ObjectRegionTexturePanel session fence", () => {
       await act(async () => root.render(
         <ObjectRegionTexturePanel
           {...panelProps({
-            auxiliaryDraftOwnerKey: "object.region.texture:identity-a",
-            reportAuxiliaryDraftSession,
+            auxiliaryDraftOwnerKey: ownerKey,
+            auxiliaryDraftRegistry,
           })}
         />,
       ));
       await act(async () => findButton(container, "Set click-time texture").click());
-      const clickTimeSession = reportedSession.current;
+      const clickTimeSession = auxiliaryDraftRegistry.getSession(ownerKey);
       expect(clickTimeSession?.dirty).toBe(true);
 
       await act(async () =>
         findButton(container, "Edit texture after Apply starts").click(),
       );
-      expect(reportedSession.current).not.toBe(clickTimeSession);
+      expect(auxiliaryDraftRegistry.getSession(ownerKey)).not.toBe(clickTimeSession);
 
       await act(async () => {
         expect(await clickTimeSession?.apply()).toBe(true);
       });
 
-      expect(mocks.commitTransaction).toHaveBeenCalledWith(
+      expect(mocks.applyMagnetization).toHaveBeenCalledWith(
         {
-          base_revision: 10,
-          kind: "patch_magnetization",
-          textureRef: "texture-at-apply-click",
+          kind: "region", object_id: "object-a", region_id: "region-a",
+          texture_override: "texture-at-apply-click",
         },
         { baseRevision: 10, sessionScopeKey: sessionAScopeKey },
       );
-      expect(reportedSession.current?.dirty).toBe(true);
+      expect(auxiliaryDraftRegistry.getSession(ownerKey)?.dirty).toBe(true);
     } finally {
       await act(async () => root.unmount());
       dom.restore();
@@ -243,7 +250,7 @@ describe("ObjectRegionTexturePanel session fence", () => {
     const commitResult = new Promise((resolve) => {
       finishCommit = resolve;
     });
-    mocks.commitTransaction.mockReturnValue(commitResult);
+    mocks.applyMagnetization.mockReturnValue(commitResult);
     const dom = installSimulationPreparationTestDom();
     const container = dom.document.createElement("div");
     const { createRoot } = await import("react-dom/client");
@@ -256,9 +263,9 @@ describe("ObjectRegionTexturePanel session fence", () => {
         await Promise.resolve();
       });
 
-      expect(mocks.commitTransaction).toHaveBeenCalledWith(
-        expect.objectContaining({ base_revision: 10 }),
-        expect.objectContaining({ sessionScopeKey: sessionAScopeKey }),
+      expect(mocks.applyMagnetization).toHaveBeenCalledWith(
+        expect.objectContaining({ kind: "region", region_id: "region-a" }),
+        { baseRevision: 10, sessionScopeKey: sessionAScopeKey },
       );
       mocks.currentSessionScopeKey = "session=B&epoch=2&request_scope_epoch=2";
       mocks.historyGeneration += 1;
@@ -271,9 +278,10 @@ describe("ObjectRegionTexturePanel session fence", () => {
       });
 
       expect(mocks.recordHistory).not.toHaveBeenCalled();
+      expect(mocks.publishScene).not.toHaveBeenCalled();
       expect(mocks.invalidate).not.toHaveBeenCalled();
       expect(mocks.syncAuthoringScript).not.toHaveBeenCalled();
-      expect(container.textContent).not.toContain("Magnetic texture saved.");
+      expect(container.textContent).not.toContain("Magnetic texture applied.");
     } finally {
       await act(async () => root.unmount());
       dom.restore();
@@ -292,7 +300,7 @@ describe("ObjectRegionTexturePanel session fence", () => {
       await act(async () => findButton(container, "Save texture").click());
 
       expect(mocks.readScene).not.toHaveBeenCalled();
-      expect(mocks.commitTransaction).not.toHaveBeenCalled();
+      expect(mocks.applyMagnetization).not.toHaveBeenCalled();
       expect(container.textContent).toContain("Session identity is not ready");
     } finally {
       await act(async () => root.unmount());

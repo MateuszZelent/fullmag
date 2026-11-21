@@ -5,65 +5,68 @@ version.workspace = true
 edition.workspace = true
 publish.workspace = true
 
+[lib]
+test = false
+
 [[bin]]
 name = "fullmag-api"
-path = "src/main.rs"
+path = "src/entry_bins/fullmag-api.rs"
 
 [[bin]]
 name = "fullmag-api-accepted-worker"
-path = "src/accepted_worker_main.rs"
+path = "src/entry_bins/run_accepted_worker.rs"
 
 [[bin]]
 name = "fullmag-api-accepted-fem-preparer"
-path = "src/accepted_fem_preparer_main.rs"
+path = "src/entry_bins/run_accepted_fem_preparer.rs"
 test = false
 bench = false
 
 [[bin]]
 name = "fullmag-api-accepted-fem-preparation-supervisor"
-path = "src/accepted_fem_preparation_supervisor_main.rs"
+path = "src/entry_bins/run_accepted_fem_preparation_supervisor.rs"
 test = false
 bench = false
 
 [[bin]]
 name = "fullmag-api-accepted-fem-preparation-scheduler"
-path = "src/accepted_fem_preparation_scheduler_main.rs"
+path = "src/entry_bins/run_accepted_fem_preparation_scheduler.rs"
 test = false
 bench = false
 
 [[bin]]
 name = "fullmag-api-accepted-supervisor"
-path = "src/accepted_supervisor_main.rs"
+path = "src/entry_bins/run_accepted_supervisor.rs"
 
 [[bin]]
 name = "fullmag-api-accepted-scheduler"
-path = "src/accepted_scheduler_main.rs"
+path = "src/entry_bins/run_accepted_scheduler.rs"
 
 [[bin]]
 name = "fullmag-runtime-service"
-path = "src/runtime_service_main.rs"
+path = "src/entry_bins/run_runtime_service.rs"
 test = false
 bench = false
 
 [[bin]]
 name = "fullmag-api-resource-pool"
-path = "src/resource_pool_main.rs"
+path = "src/entry_bins/run_resource_pool.rs"
 
 [[bin]]
 name = "fullmag-api-preparation-resource-pool"
-path = "src/preparation_resource_pool_main.rs"
+path = "src/entry_bins/run_preparation_resource_pool.rs"
 test = false
 bench = false
 
 [[bin]]
 name = "fullmag-api-preparation-retry"
-path = "src/preparation_retry_main.rs"
+path = "src/entry_bins/run_preparation_retry.rs"
 test = false
 bench = false
 
 [[bin]]
 name = "fullmag-api-openapi"
-path = "src/main.rs"
+path = "src/openapi_main.rs"
 required-features = ["openapi-codegen"]
 test = false
 bench = false
@@ -78,8 +81,8 @@ stage-autosave-hdf5 = ["fullmag-runner/stage-autosave-hdf5"]
 swagger-ui = ["dep:utoipa-swagger-ui"]
 
 [dependencies]
+rusqlite = "0.37"
 anyhow.workspace = true
-async-stream = "0.3"
 axum.workspace = true
 base64 = "0.22"
 chrono = { version = "0.4", features = ["serde"] }
@@ -96,7 +99,7 @@ tower-http = { version = "0.6", features = ["cors", "fs"] }
 fullmag-authoring = { path = "../fullmag-authoring" }
 fullmag-application = { path = "../fullmag-application" }
 fullmag-antenna-artifacts = { path = "../fullmag-antenna-artifacts" }
-fullmag-ir = { path = "../fullmag-ir" }
+fullmag-ir = { path = "../fullmag-ir", features = ["openapi"] }
 fullmag-plan = { path = "../fullmag-plan" }
 fullmag-quantities = { path = "../fullmag-quantities" }
 fullmag-runner = { path = "../fullmag-runner" }
@@ -120,5 +123,4 @@ libc = "0.2"
 
 [dev-dependencies]
 tower = { version = "0.5", features = ["util"] }
-rusqlite = "0.37"
 zip = { version = "2", default-features = false, features = ["deflate"] }

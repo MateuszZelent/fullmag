@@ -2114,3 +2114,678 @@ znaczenia NEV/NCV/MPD: [dokumentacja SLEPc EPSGetDimensions](https://slepc.upv.e
 
 
 Native CPU/MFEM assembly korekty nodalnego Ms: GHA38298716226 PASS, clean090c13b,1/1CTest i marker hetero moments/Gamma observed. SLEPc OFF; dowód nie obejmuje pełnego eigensolve, GPU ani naukowej kwalifikacji dyspersji. Receipt d6b173bb /native log1ea7cf63, pełne SHA w ci-evidence-20261010.json.
+
+## Realizacja LU dokładnego rozwiązania Poissona (MUMPS/METIS)
+
+Status: zmiana realizacji FEM CPU w toolchainie Docker DEV; build i runtime
+nowego toolchainu **NOT VERIFIED** do czasu świeżego managed buildu i
+porównania residuali na identycznym modelu. Operator, równania, tolerancje,
+budżety iteracji, preconditioner shift-invert i bramki certyfikacji nie
+zmieniają się.
+
+Każde zastosowanie operatora Schura z {eq}`eq-poisson-airbox-modal-block`
+wymaga dokładnego rozwiązania skalarnego bloku Poissona:
+
+```{math}
+:label: eq-poisson-airbox-exact-poisson-lu
+\phi=-P^{-1}A_{\phi q}q,
+\qquad
+\Pi_{r}\,P\,\Pi_{c}=L\,U .
+```
+
+Faktoryzacja jest wykonywana raz na kontekst operatora i używana przez
+`KSPPREONLY`; rozwiązanie pozostaje dokładną odwrotnością w precyzji
+podwójnej. Zmienia się wyłącznie pakiet rzadkiej faktoryzacji. Gdy PETSc
+udostępnia MUMPS (`PETSC_HAVE_MUMPS`), blok Poissona K0 i blok $P(k)$ Floqueta
+używają MUMPS z porządkowaniem METIS (`ICNTL(7)=5`, przy `PETSC_HAVE_METIS`).
+MUMPS stosuje progowe częściowe pivotowanie, więc strukturalnie zerowa
+diagonala wiersza gauge w rozszerzonym bloku Poissona nie wymaga przesunięcia
+faktoryzacji. Natywne LU PETSc stosowało tu `MAT_SHIFT_NONZERO`, które przy
+zerowym pivocie zaburza odwrotność. Bez MUMPS zachowana jest natywna ścieżka
+z dotychczasową polityką przesunięcia (`MAT_SHIFT_NONZERO` dla K0,
+`MAT_SHIFT_NONE` dla $P(k)$). Nieodwracalny $P(k)$ nadal kończy się
+fail-closed, bez regularyzacji.
+
+| Symbol | Znaczenie | Jednostka SI |
+| --- | --- | --- |
+| $P$ | skalarny blok sztywności Poissona | $\mathrm{m}$ |
+| $\phi$ | wektor współczynników dynamicznego potencjału | $\mathrm{A}$ |
+| $A_{\phi q}$ | blok sprzężenia magnetyzacja→potencjał | $\mathrm{A\,m}$ |
+| $q$ | współczynniki modalne w płaszczyźnie stycznej | $1$ |
+| $L$, $U$ | trójkątne czynniki faktoryzacji LU bloku $P$ | $1$, $\mathrm{m}$ |
+| $\Pi_{r}$, $\Pi_{c}$ | permutacje wierszy (pivotowanie) i kolumn (METIS) | $1$ |
+
+| Solver | Urządzenie | Stan | Uzasadnienie |
+| --- | --- | --- | --- |
+| FEM | CPU | zmieniona realizacja, NOT VERIFIED | Poisson K0 i $P(k)$ przez MUMPS/METIS, gdy PETSc go udostępnia; pakiet w provenance `poisson_factorization_package` |
+| FEM | GPU | bez zmian | lane GPU rozwiązuje Poissona przez CG+BoomerAMG na urządzeniu |
+| FDM | CPU | nie dotyczy | FDM nie używa tego bloku Poissona |
+| FDM | GPU | nie dotyczy | FDM nie używa tego bloku Poissona |
+
+Provenance: diagnostyka K0 zapisuje `poisson_factorization_package`, a wynik
+Floqueta pole o tej samej nazwie, z wartością `mumps_lu_metis`, `mumps_lu` albo
+`petsc_default_lu`. Toolchain zapisuje rozwiązaną konfigurację PETSc w
+`share/fullmag/petsc-build-metadata.json` każdego prefiksu i przerywa build,
+gdy brakuje MUMPS, METIS, ScaLAPACK lub OpenBLAS. Preconditionery shifted
+KSP (LU bloku magnetycznego z jawnym przesunięciem) pozostają przy natywnym
+LU, ponieważ ich konfiguracja przesunięcia jest częścią opisanej diagnostyki.
+Obraz CI `docker/fem-cpu` zachowuje natywne LU do czasu osobnej zmiany jego
+kontraktu.
+
+| Source ID | Path + symbol | Odpowiedzialność i dowód |
+| --- | --- | --- |
+| source-modal-poisson-lu | backends/fem/cpu/frequency_domain/modal_poisson_lu.hpp + configure_modal_poisson_lu | Wybór MUMPS/METIS albo natywnego LU; NOT VERIFIED runtime |
+| source-cpu-schur-poisson-lu | backends/fem/cpu/frequency_domain/poisson_airbox_schur_matshell.cpp + configure_production_context | Poisson K0 przez wspólny helper |
+| source-floquet-poisson-lu | backends/fem/cpu/frequency_domain/modal/floquet_modal_solver.cpp + solve_floquet_shared_domain_sparse_modal_spectrum_reusing_context | $P(k)$ Floqueta przez wspólny helper i provenance pakietu |
+| source-petsc-build-metadata | docker/fem-gpu/write_petsc_build_metadata.py + main | Metadane PETSc i wymagane pakiety w toolchainie |
+
+## Dokładny shift-invert K0 przez rzadki układ rozszerzony (q, φ)
+
+Status: zmiana realizacji kroku shift-invert FEM CPU K0 (audyt
+`2026-11-18-eigensolve-performance-and-gpu-readiness-audit.md`, pozycja A1).
+Build Docker DEV i runtime headless CPU zmierzone A/B na jednym modelu
+(tabela niżej); qualification, GPU, Floquet $k\neq0$ i run zaakceptowany
+**NOT VERIFIED**. Pencil własny, cel, wymiary Krylova, tolerancje, residual oryginalnego
+deskryptora i bramki certyfikacji nie zmieniają się. Zmienia się wyłącznie
+preconditioner KSP wewnątrz `STSINVERT`.
+
+Krok shift-invert rozwiązuje układ z przeskalowanym, rozszczepionym na część
+rzeczywistą i urojoną operatorem Schura przesuniętym o $\hat\tau$. Ten operator jest
+dopełnieniem Schura bloku $q$ rzadkiej macierzy rozszerzonej, więc jego
+odwrotność jest blokiem $q$ jednego rozwiązania rzadkiego układu:
+
+```{math}
+:label: eq-poisson-airbox-augmented-shift
+K_{\hat\tau}=
+\begin{bmatrix}
+s\,\mathcal R(A_{qq})+\hat\tau m_{s}\,J(B_{qq}) & s\,\mathcal R(A_{q\phi})\\
+\mathcal R(A_{\phi q}) & \mathcal R(P_{g})
+\end{bmatrix},
+\qquad
+\Bigl(s\,\mathcal R\bigl(A_{qq}-A_{q\phi}P_{g}^{-1}A_{\phi q}\bigr)-\hat\tau m_{s}\,\mathcal B\Bigr)^{-1} b
+=\Pi_{q}\,K_{\hat\tau}^{-1}
+\begin{bmatrix} b\\ 0\end{bmatrix}.
+```
+
+Tożsamość wynika z eliminacji wierszy Poissona,
+$\phi=-P_{g}^{-1}A_{\phi q}q$ (blok $\phi$), identycznej z akcją operatora Schura z
+{eq}`eq-poisson-airbox-modal-block` i
+{eq}`eq-poisson-airbox-exact-poisson-lu`. $J(B_{qq})$ jest obróconym blokiem masy
+real-split, tym samym, którego używa macierz masy pencilu ($\mathcal B$). Skale
+$s=m_s/a$ i $m_s$ są tymi samymi skalami deskryptora, których używa operator
+EPS, więc $K_{\hat\tau}$ odtwarza dokładnie operator przesunięty widziany przez ST.
+
+Realizacja: jedna faktoryzacja LU macierzy $K_{\hat\tau}$ (MUMPS, porządkowanie
+METIS `ICNTL(7)=5`, progowe częściowe pivotowanie) na każde przesunięcie,
+podana jako prawy preconditioner `PCSHELL` metody FGMRES
+(`PC_RIGHT`, `KSP_NORM_UNPRECONDITIONED`). Test zbieżności KSP sprawdza więc
+residuum operatora przesuniętego z {eq}`eq-poisson-airbox-augmented-shift`
+dla prawej strony $b$. FGMRES składa rozwiązanie z bazy już
+przekształconej przez $K_{\hat\tau}^{-1}$, więc jego residuum jest
+residuum prawdziwym. Standardowy GMRES (lewy albo prawy) wykonuje
+dodatkowe zastosowanie $K_{\hat\tau}^{-1}$, którego błąd zaokrągleń nie
+wchodzi do szacowanego residuum. Na modelu z wymiarem real-split 4824 EPS
+z GMRES nie zbiegł w 2412 restartach przy obu stronach preconditionera,
+a z FGMRES zbiegł w 20. Ścieżka $K_{\hat\tau}$ zawsze wybiera FGMRES
+(`shifted_ksp_type` w diagnostyce). Przy dokładnej odwrotności FGMRES
+zbiega w 1–2 iteracjach, a tolerancja `shifted_ksp_rtol` i limit iteracji
+pozostają bez zmian. Macierz
+magnetyczna bez sprzężenia demag pozostaje macierzą preconditionera ST
+i ścieżką zapasową, gdy PETSc nie ma MUMPS, gdy
+`FULLMAG_K0_AUGMENTED_SHIFT=0` albo gdy faktoryzacja się nie powiedzie.
+Dokładna gęsta materializacja operatora przesuniętego pozostaje dla
+wymiaru real-split do 512 (status `exact_preconditioner.status` bez zmian).
+Powyżej tego progu, gdy MUMPS jest dostępny, zastępuje ją faktoryzacja
+$K_{\hat\tau}$ (status `superseded_by_augmented_shift`), ponieważ gęsta
+materializacja wymaga dwóch rozwiązań Poissona na kolumnę i gęstego LU.
+Nieudana faktoryzacja $K_{\hat\tau}$ przechodzi wtedy na preconditioner
+magnetyczny.
+
+| Symbol | Znaczenie | Jednostka SI |
+| --- | --- | --- |
+| $K_{\hat\tau}$ | rzadka macierz rozszerzona (q, φ) przesunięta o $\hat\tau$ | $1$, $\mathrm{A^{-1}}$, $\mathrm{A\,m}$, $\mathrm{m}$ |
+| $\hat\tau$ | przeskalowane przesunięcie widmowe $\omega_{\mathrm{target}}/a$ | $1$ |
+| $s$, $m_s$, $a$ | skale deskryptora: operatora, masy i częstości | $\mathrm{s\,m^{-3}}$, $\mathrm{m^{-3}}$, $\mathrm{s^{-1}}$ |
+| $J(B_{qq})$, $\mathcal B$ | obrócony blok masy real-split | $\mathrm{m^3}$ |
+| $P_{g}$ | blok Poissona z wierszem i kolumną cechowania | $\mathrm{m}$, $\mathrm{m^3}$ |
+| $\Pi_{q}$ | restrykcja do bloku $q$ | $1$ |
+| $b$ | prawa strona kroku shift-invert | $1$ |
+
+| Solver | Urządzenie | Stan | Uzasadnienie |
+| --- | --- | --- | --- |
+| FEM | CPU | zmieniona realizacja; K0 i Floquet zmierzone w Docker DEV (headless) | K0 Schur: preconditioner `augmented_exact_shift_mumps`, gdy MUMPS jest dostępny (`shifted_preconditioner_kind`); Floquet: `factorization_shift_policy` |
+| FEM | GPU | bez zmian | lane GPU zachowuje AMG na bloku magnetycznym |
+| FDM | CPU | nie dotyczy | FDM nie używa tego pencilu |
+| FDM | GPU | nie dotyczy | FDM nie używa tego pencilu |
+
+Provenance: `shifted_preconditioner_kind` przyjmuje
+`augmented_exact_shift_mumps`, `exact_shifted_schur_action` albo
+`magnetic_shift_preconditioner`; `shifted_preconditioner_setup_seconds`
+obejmuje faktoryzację $K_{\hat\tau}$, a `shift_linear_iteration_count` pokazuje
+liczbę iteracji FGMRES/GMRES.
+
+### Wariant Floquet
+
+Status: zmiana realizacji preconditionera wewnętrznego shifted KSP Floqueta
+(k ≠ 0 oraz Γ w przebiegu Floqueta). Build Docker DEV i runtime headless CPU
+zmierzone A/B na jednym modelu (tabela niżej). Qualification, GPU, ścieżka k
+z wieloma próbkami i run zaakceptowany: **NOT VERIFIED**. Operator macierzowo-wolny Floqueta stosuje obrót fazowy
+$\mathcal R_{\sigma}$ do wyniku działania Schura, a jego macierzą masy jest
+rozszczepienie real-split $\mathcal R(B_{qq})$ bez obrotu. Ta sama eliminacja
+wierszy Poissona daje układ rozszerzony dla danego wektora falowego:
+
+```{math}
+:label: eq-poisson-airbox-augmented-shift-floquet
+K_{\hat\tau}=
+\begin{bmatrix}
+\mathcal R_{\sigma}A_{qq}-\hat\tau\,\mathcal R(B_{qq}) & \mathcal R_{\sigma}A_{q\phi}\\
+A_{\phi q} & P
+\end{bmatrix},
+\qquad
+\bigl(\mathcal R_{\sigma}(A_{qq}-A_{q\phi}P^{-1}A_{\phi q})-\hat\tau\,\mathcal R(B_{qq})\bigr)^{-1}b
+=\Pi_{q}\,K_{\hat\tau}^{-1}
+\begin{bmatrix} b\\ 0\end{bmatrix}.
+```
+
+Bloki $A_{qq}$, $A_{q\phi}$ i masa niosą tę samą normalizację co MatShell
+(`normalize_native_floquet_pencil`). $P$ i $A_{\phi q}$ pozostają w
+jednostkach fizycznych, tak jak w działaniu Schura. Wszystkie bloki są
+rozszczepione real-split. $\mathcal R_{\sigma}A_{q\phi}$ powstaje jako
+iloczyn rzadkiej macierzy obrotu i bloku $A_{q\phi}$. Faktoryzacja MUMPS z
+METIS zastępuje magnetyczne LU tylko poza gęstą materializacją dokładną
+(wymiar real-split ≤ 512). Kolejne próby EPS przy tym samym celu
+wykorzystują ją ponownie. Wewnętrzny shifted KSP pozostaje prawostronnym
+GMRES z certyfikowanym testem prawdziwego residuum, więc niedokładne
+zastosowanie preconditionera nie może zostać uznane za zbieżne.
+`factorization_shift_policy` w wyniku przyjmuje wtedy wartość
+`augmented_exact_shift_mumps`, a `factorization_shift_amount` wartość 0.
+`FULLMAG_FLOQUET_AUGMENTED_SHIFT=0` lub nieudana faktoryzacja zachowują
+dotychczasowe magnetyczne LU z przesunięciem pivotów.
+
+Pomiar A/B (2026-11-19): model `examples/fem_eigen_k0_poisson_airbox_production.py`
+(z gałęzi PR #452: relaksacja, potem jeden mod najbliższy 2 GHz) z
+`k_vector=(5·10⁶ rad/m, 0, 0)`, `FloquetBC` na ścianach x i y oraz
+`magnetostatic_bc="floquet_airbox"`. Uruchomienie headless bez live API, w
+kontenerze backend grupy Docker DEV.
+
+| $q$ | Wariant | Wynik | Rozwiązania przesunięte | Iteracje KSP | Częstotliwość | Czas całkowity [s] |
+| --- | --- | --- | --- | --- | --- | --- |
+| 44 | gęsta dokładna (bez zmian) | zbieżny | 32 | 288 | 6,05560 GHz | 20,4 |
+| 644 | magnetyczne LU (przed) | błąd: EPSSolve 91, wewnętrzny KSP bez zbieżności | — | — | — | 11,9 |
+| 644 | $K_{\hat\tau}$ | zbieżny | 32 | 288 | 6,05683 GHz | 15,9 |
+| 2412 | magnetyczne LU (przed) | błąd: EPSSolve 91, wewnętrzny KSP bez zbieżności | — | — | — | 44,3 |
+| 2412 | $K_{\hat\tau}$ | zbieżny | 32 | 288 | 6,05686 GHz | 65,9 |
+
+Dla $q \ge 644$ dotychczasowy preconditioner nie daje wyniku na tym modelu.
+Z $K_{\hat\tau}$ przebieg zbiega, a częstotliwość zbiega wraz z zagęszczaniem
+siatki.
+
+| Source ID | Path + symbol | Odpowiedzialność i dowód |
+| --- | --- | --- |
+| source-floquet-augmented-shift | backends/fem/cpu/frequency_domain/modal/floquet_modal_solver.cpp + create_native_floquet_augmented_shift_solver | Bloki $K_{\hat\tau}$ Floqueta z obrotem fazowym i faktoryzacja; runtime zmierzony w Docker DEV (headless) |
+
+Pomiar A/B (2026-11-18): `examples/fem_eigen_k0_poisson_airbox_production.py`
+z gałęzi PR #452 (relaksacja, potem jeden mod najbliższy 2 GHz). Uruchomiono
+`fullmag-bin <skrypt> --backend fem --headless` bez live API, w kontenerze
+backend grupy Docker DEV z limitem 16 CPU. „Bez $K_{\hat\tau}$” oznacza
+`FULLMAG_K0_AUGMENTED_SHIFT=0` na tym samym buildzie albo build sprzed
+zmiany. Częstotliwość we wszystkich przypadkach wynosi 6,0100362431 GHz,
+a residuum deskryptora jest certyfikowane.
+
+| Wymiar real-split ($\phi$) | Wariant | Rozwiązania Poissona | EPS [s] | Restarty EPS | Czas całkowity [s] |
+| --- | --- | --- | --- | --- | --- |
+| 344 (386) | gęsta dokładna (bez zmian) | 790 | 0,02 | 13 | 7,1 |
+| 1288 (1510) | bez $K_{\hat\tau}$: gęsta dokładna | 2748 | 0,68 | 16 | 11,8 |
+| 1288 (1510) | $K_{\hat\tau}$ + FGMRES | 186 | 0,28 | 16 | 9,8 |
+| 4824 (5244) | bez $K_{\hat\tau}$: gęsta dokładna (budowa 58,6 s) | 9886 | 28,7 | 21 | 132 |
+| 4824 (5244) | $K_{\hat\tau}$ + GMRES | 28 928 operatorów | 471 | 2412, bez zbieżności | — |
+| 4824 (5244) | $K_{\hat\tau}$ + FGMRES | 228 | 2,7 | 20 | 21,7 |
+| 10816 (11352) | bez $K_{\hat\tau}$: preconditioner magnetyczny | — | > 3300 | brak zbieżności w czasie pomiaru | > 3300 |
+| 10816 (11352) | $K_{\hat\tau}$ + FGMRES | 328 | 14,2 | 30 | 54,7 |
+
+| Source ID | Path + symbol | Odpowiedzialność i dowód |
+| --- | --- | --- |
+| source-augmented-shift-solver | backends/fem/cpu/frequency_domain/modal_augmented_shift_solver.hpp + create_augmented_shift_solver | Składanie i faktoryzacja $K_{\hat\tau}$, akcja bloku $q$; runtime zmierzony w Docker DEV (headless) |
+| source-cpu-schur-augmented-shift | backends/fem/cpu/frequency_domain/poisson_airbox_schur_matshell.cpp + solve_poisson_airbox_modal_eigen_cpu_schur | Wybór preconditionera shift-invert i ścieżka zapasowa |
+
+## Wymiar bazy Krylova dla pojedynczego przesunięcia
+
+Status: zmiana parametru solvera EPS ścieżki FEM CPU K0 Schur dla pojedynczego
+celu (bez okien częstotliwości). Build Docker DEV i runtime headless CPU
+zmierzone A/B na jednym modelu (tabela niżej). Qualification, GPU, Floquet i
+run zaakceptowany: **NOT VERIFIED**. Pencil, cel, `nev`, tolerancje EPS i
+shifted KSP, residuum oryginalnego deskryptora i bramki certyfikacji nie
+zmieniają się. Zmienia się wyłącznie wymiar podprzestrzeni Krylova `ncv`
+przekazywany do `EPSSetDimensions`.
+
+Dotychczas pojedyncze przesunięcie używało `ncv = 2 nev`, czyli 4 wektorów
+dla pary $\pm\omega$. Krylov-Schur przy każdym restarcie zachowuje do `nev`
+wektorów Ritza i dokłada tylko `ncv - nev` nowych kierunków, więc przy `ncv = 4`
+każdy restart dodaje dwa rozwiązania przesunięte. Na dużym modelu daje to
+30 restartów. Teraz pojedyncze przesunięcie przyjmuje domyślną regułę SLEPc
+$\mathrm{ncv}=\min\bigl(n,\max(2\,\mathrm{nev},\,\mathrm{nev}+15)\bigr)$,
+gdzie $n$ to wymiar real-split. Okna częstotliwości zachowują
+`ncv = 4 nev`. Baza zajmuje `ncv` wektorów długości $n$, więc dodatkowa pamięć
+przy $n = 10816$ wynosi około 1,3 MiB.
+
+Pomiar A/B (2026-11-19): ten sam model co w tabeli $K_{\hat\tau}$ (wymiar
+real-split 10816, $\phi$ 11352), jeden build z tymczasowym przełącznikiem
+dolnej granicy `ncv` (usuniętym przed scaleniem), uruchomienie headless w
+kontenerze backend grupy Docker DEV. Częstotliwość we wszystkich przypadkach
+wynosi 6,0100362431 GHz, a residuum deskryptora jest certyfikowane.
+
+| `ncv` | Restarty EPS | Zbieżne pary | Iteracje FGMRES | Rozwiązania Poissona | EPS [s] |
+| --- | --- | --- | --- | --- | --- |
+| 4 (poprzednio) | 30 | 2 | 124 | 328 | 14,9 |
+| 10 | 7 | 5 | 80 | 216 | 9,2 |
+| 17 (reguła SLEPc) | 4 | 4 | 82 | 212 | 10,0 |
+| 24 | 2 | 4 | 72 | 188 | 8,2 |
+| 32 | 2 | 2 | 96 | 216 | 11,4 |
+
+Różnice między `ncv` od 10 do 24 mieszczą się w zmienności zbieżności
+pojedynczego pomiaru. Każda z tych wartości skraca EPS o 30–45% względem
+`ncv = 4`. Reguła SLEPc jest domyślną wartością biblioteki i nie wymaga
+strojenia pod model. Na małym modelu z gęstą dokładną odwrotnością
+(wymiar 344) czas EPS pozostaje poniżej 0,01 s dla każdego `ncv`.
+
+| Symbol | Znaczenie | Jednostka SI |
+| --- | --- | --- |
+| `nev` | liczba żądanych par Ritza (para $\pm\omega$ na mod) | $1$ |
+| `ncv` | wymiar podprzestrzeni Krylova EPS | $1$ |
+| $n$ | wymiar real-split operatora Schura | $1$ |
+
+| Solver | Urządzenie | Stan | Uzasadnienie |
+| --- | --- | --- | --- |
+| FEM | CPU | zmieniony `ncv` dla pojedynczego przesunięcia K0; zmierzone w Docker DEV (headless) | `modal_krylov_tuning.eps_dimensions` publikuje odczytane `nev/ncv/mpd` |
+| FEM | GPU | bez zmian | lane GPU ma własną konfigurację EPS |
+| FDM | CPU | nie dotyczy | FDM nie używa tego pencilu |
+| FDM | GPU | nie dotyczy | FDM nie używa tego pencilu |
+
+| Source ID | Path + symbol | Odpowiedzialność i dowód |
+| --- | --- | --- |
+| source-cpu-schur-krylov-basis | backends/fem/cpu/frequency_domain/poisson_airbox_schur_matshell.cpp + bounded_krylov_dimensions | Reguła `ncv` dla pojedynczego przesunięcia i okien; runtime zmierzony w Docker DEV (headless) |
+
+## Otwarte pudełko powietrza bez periodyczności (`open_airbox_k0`)
+
+Status: rozszerzenie zakresu ścieżki FEM CPU K0 Schur/SLEPc na izolowany
+obiekt magnetyczny w pudełku powietrza z brzegiem Robin na wszystkich
+ścianach zewnętrznych. Źródło i runtime headless w Docker DEV: patrz tabela
+dowodów niżej. Qualification, GPU i run zaakceptowany przez API DEV:
+**NOT VERIFIED**. Równania {eq}`eq-poisson-airbox-strong-form`,
+{eq}`eq-poisson-airbox-weak-form` i {eq}`eq-poisson-airbox-modal-block` nie
+zmieniają się. Zmienia się tylko dziedzina brzegowa: zbiór szwów
+periodycznych jest pusty, a $\Gamma_{\mathrm{open}}=\partial D$.
+
+### Problem fizyczny
+
+Izolowane ciało $\Omega_m$ (np. powłoka zaimportowana z STL, z wnęką
+powietrzną) leży w prostopadłościennym pudełku powietrza
+$\Omega_{\mathrm{air}}$. Pole rozproszone zanika w nieskończoności, więc
+otwarty brzeg obcina się na $\partial D$ warunkiem Robina dla dipolowego
+zaniku potencjału $\delta\phi\propto r^{-2}$:
+
+```{math}
+:label: eq-open-airbox-k0-robin
+\frac{\partial\,\delta\phi}{\partial n}+\beta\,\delta\phi=0
+\quad\text{na }\partial D,
+\qquad
+\beta=\frac{c_\beta}{R_\ast},
+\qquad
+R_\ast=\tfrac12\max_{a\in\{x,y,z\}}\bigl(x_a^{\max}-x_a^{\min}\bigr).
+```
+
+Przy braku osi periodycznych $R_\ast$ jest połową największego wymiaru
+pudełka, a domyślne $c_\beta=2$ odpowiada zanikowi dipolowemu. Blok $P$ jest
+wtedy symetryczny i dodatnio określony (człon Robina usuwa stałe jądro), więc
+nie ma cechowania: `gauge_policy=none`, `gauge_reason=coercive_outer_boundary`
+i brak wiersza $\eta$ w {eq}`eq-poisson-airbox-modal-block`.
+
+### Klasy równoważności węzłów
+
+W trybie periodycznym klasy skalarne i magnetyczne są ilorazem przez pary
+węzłów certyfikowane w `periodic_mesh_certificate.v6`. W trybie otwartym
+zbiór par jest pusty, więc odwzorowanie jest tożsamością:
+
+```{math}
+:label: eq-open-airbox-k0-identity-classes
+\kappa_\phi(i)=i,\quad i=0,\dots,N_D-1,
+\qquad
+\kappa_m(i)=i,\quad i=0,\dots,N_m-1,
+```
+
+gdzie węzły magnetyczne tworzą prefiks numeracji siatki. Certyfikat
+symetrii periodycznej nie istnieje, więc ładunek natywny zamiast niego niesie
+schemat `open_airbox_identity.v1`. Importer natywny sprawdza wtedy: brak par
+periodycznych w siatce, brak ścian `PERIODIC_SEAM`, istnienie ściany
+`EXTERIOR` z markerem $\Gamma_{\mathrm{open}}$, tożsamościowe klasy
+{eq}`eq-open-airbox-k0-identity-classes` i zerowe liczniki par. Każde inne
+odstępstwo kończy się błędem walidacji bez fallbacku.
+
+### Wyrocznia analityczna: kula Kittla
+
+Dla jednorodnie namagnesowanej kuli w polu $H_b$ współczynniki
+odmagnesowania są równe, $N_x=N_y=N_z=\tfrac13$, więc dynamiczny i statyczny
+demag znoszą się w modzie jednorodnym:
+
+```{math}
+:label: eq-open-airbox-k0-sphere-kittel
+f_{\mathrm{sph}}=\frac{\gamma_0H_b}{2\pi}
+=\frac{|\gamma|\,\mu_0H_b}{2\pi}.
+```
+
+Operator bez dynamicznego sprzężenia $\delta\phi$ (statyczny demag w
+$\mathbf H_{\mathrm{eff},0}$) dałby
+$f=\gamma_0(H_b-M_s/3)/(2\pi)$, więc test odróżnia pełne sprzężenie od
+przybliżenia statycznego o $\gamma_0M_s/(6\pi)$. Błąd fasetowania kuli i
+obcięcia Robina maleje z gęstością siatki i rozmiarem pudełka; tolerancja
+testu jest więc względna i jawna w skrypcie, a nie dowodem zbieżności.
+
+| Symbol | Znaczenie | Jednostka SI |
+| --- | --- | --- |
+| $\partial D$ | cały brzeg zewnętrzny pudełka powietrza | $\mathrm{m^2}$ |
+| $n$ | normalna zewnętrzna do $\partial D$ | $1$ |
+| $c_\beta$ | bezwymiarowy współczynnik Robina (`robin_beta_factor`, domyślnie 2) | $1$ |
+| $R_\ast$ | promień odniesienia Robina | $\mathrm{m}$ |
+| $x_a^{\min}$, $x_a^{\max}$ | skrajne współrzędne węzłów siatki wzdłuż osi $a$ | $\mathrm{m}$ |
+| $\kappa_\phi$, $\kappa_m$ | odwzorowania węzłów na klasy skalarne i magnetyczne | $1$ |
+| $N_D$, $N_m$ | liczba węzłów dziedziny i węzłów magnetycznych | $1$ |
+| $N_x$, $N_y$, $N_z$ | współczynniki odmagnesowania | $1$ |
+| $f_{\mathrm{sph}}$ | częstotliwość modu jednorodnego kuli | $\mathrm{Hz}$ |
+| $\gamma$ | współczynnik żyromagnetyczny | $\mathrm{rad\,s^{-1}\,T^{-1}}$ |
+
+### Python API, `ProblemIR` i planowanie
+
+Żądanie jest jawne: `study.stages.add_eigenmodes(..., bc="free",
+magnetostatic_bc="open_airbox_k0", operator="full_2x2",
+damping_policy="ignore", k_vector=(0, 0, 0))` z
+`study.demag(realization="poisson_robin")`, `study.mode("strict")` i
+precyzją `double`. Domyślne `magnetostatic_bc="open"` nie zmienia znaczenia
+ani trasy. Walidacja Pythona i IR odrzuca `open_airbox_k0` z
+`spin_wave_bc` innym niż `free`, z niezerowym `k`, z tłumieniem innym niż
+`ignore` oraz z mieszanką periodycznych par w `bc`.
+
+`MagnetostaticBoundaryConditionIR::OpenAirboxK0` serializuje się jako
+`open_airbox_k0`. Planner przepisuje ten token do
+`FemEigenPlanIR.magnetostatic_bc` (pominięty w serializacji dla `open`, więc
+istniejące plany są bajtowo niezmienione) i rozwiązuje wykonanie przez
+`resolve_k0_periodic_airbox_execution` z powodem wyboru
+`fem_eigen.open_airbox_k0.*`. Jawne `gpu` kończy się błędem planowania
+`fem_eigen.open_airbox_k0_gpu_unavailable` (bez fallbacku), a `auto`
+rozwiązuje się do CPU z widocznym powodem w provenance.
+
+Runner traktuje plan `open_airbox_k0` jak żądanie shared-domain K0
+(`shared_domain_k0_modal_requested`), buduje ładunek z tożsamościowymi
+klasami, zerowymi licznikami par i schematem `open_airbox_identity.v1`, a
+`demag_kind` natywnego problemu i wyniku ma wartość `open_airbox_k0`.
+
+| Solver | Urządzenie | Stan | Uzasadnienie |
+| --- | --- | --- | --- |
+| FEM | CPU | `source_visible`; runtime headless Docker DEV — patrz dowody | Schur/SLEPc z tożsamościowymi klasami i Robinem na całym $\partial D$ |
+| FEM | GPU | nieobsługiwane, błąd planowania bez fallbacku | `gpu_modal_device_krylov` wymaga certyfikatu periodycznego; odroczone |
+| FDM | CPU | nie dotyczy | FDM ma osobnego właściciela demagnetyzacji |
+| FDM | GPU | nie dotyczy | FDM ma osobnego właściciela demagnetyzacji |
+
+### Walidacja i ograniczenia
+
+- Test kuli {eq}`eq-open-airbox-k0-sphere-kittel` w
+  `examples/fem_eigen_k0_open_airbox_sphere.py` (headless CPU).
+- Przypadek buckyballa `examples/buckyball/eigen_k0_open_airbox.py`
+  (relaksacja, potem eigen CPU) jest uruchomieniem użytkowym, nie
+  kwalifikacją: siatka 64 nm jest grubsza niż długość wymiany.
+- Odroczone: lane GPU, uruchomienie przez API DEV (brak workera modalnego
+  w zaakceptowanej ścieżce), zbieżność względem rozmiaru pudełka i
+  $c_\beta$, okna częstotliwości dla wielu modów na dużej siatce.
+
+| Source ID | Path + symbol | Odpowiedzialność i dowód |
+| --- | --- | --- |
+| source-open-airbox-k0-ir | crates/fullmag-ir/src/execution.rs + MagnetostaticBoundaryConditionIR | Token `open_airbox_k0` w `ProblemIR` |
+| source-open-airbox-k0-plan | crates/fullmag-plan/src/fem.rs + open_airbox_k0_execution_requested | Rozwiązanie wykonania CPU i błąd GPU bez fallbacku |
+| source-open-airbox-k0-runner | crates/fullmag-runner/src/fem/eigen_policy.rs + shared_domain_k0_modal_requested | Trasa shared-domain K0 dla planu otwartego |
+| source-open-airbox-k0-native | backends/fem/cpu/frequency_domain/operators/poisson_airbox_shared_domain.cpp + assemble_poisson_airbox_shared_domain_payload | Walidacja tożsamościowych klas i brzegu Robin bez par |
+
+## Brzeg zewnętrzny filmu periodycznego k=0 (korekta 2026-11-19)
+
+Status: korekta ścieżki shared-domain K0 dla siatek periodycznych w dwóch
+osiach. Źródło: patrz tabela niżej. Runtime headless CPU w Docker DEV
+(2026-11-19, `examples/fem_eigen_k0_poisson_airbox_production.py` z
+`grading="geometric"`): sonda $N_{zz}=1.0000000000000058$, $N_{yy}\approx0$,
+$f=6.4324\,\mathrm{GHz}$ wobec Kittla filmu
+$\gamma_0\sqrt{H_b(H_b+M_s)}/2\pi=6.438\,\mathrm{GHz}$ (przed korektą
+6.010 GHz). Qualification i run przez API DEV: **NOT VERIFIED**.
+
+Dla filmu periodycznego w $x$ i $y$ składowa $\mathbf G=0$ potencjału zależy
+tylko od $z$. Na zewnątrz filmu $\partial_z^2\phi_0=0$, a fizyczne
+rozwiązanie bez pola przyłożonego ma $H_z=-\partial_z\phi_0=0$. Dokładnym
+warunkiem k=0 na ścianach $z=z_{\min},z_{\max}$ jest więc Neumann:
+
+```{math}
+:label: eq-k0-film-neumann
+\frac{\partial\,\delta\phi}{\partial n}=0\quad\text{na }\Gamma_{\mathrm{open}},
+\qquad
+\int_D w\,\delta\phi\,\mathrm dV=0 ,
+```
+
+z cechowaniem `mean_zero_augmented` (`gauge_reason=pure_neumann_nullspace`),
+bo $P$ ma wtedy stałe jądro. Składowe $\mathbf G\neq0$ zanikają jak
+$e^{-|\mathbf G|d}$, więc błąd Neumanna dla nich jest wykładniczo mały w
+grubości warstwy powietrza $d$.
+
+Dipolowy warunek {eq}`eq-open-airbox-k0-robin` jest na tych ścianach błędny
+rzędu jedności. Rozwiązanie 1D dla jednorodnego $M_z$, filmu grubości $t$ i
+warstw powietrza $d$ z Robinem daje
+
+```{math}
+:label: eq-k0-film-robin-defect
+N_{zz}^{\mathrm{Robin}}
+=\Bigl(1+\frac{\beta t/2}{1+\beta d}\Bigr)^{-1},
+```
+
+czyli $N_{zz}=13/15$ dla $t=10\,\mathrm{nm}$, $d=20\,\mathrm{nm}$ i
+$\beta=8\cdot10^{7}\,\mathrm{m^{-1}}$ zamiast $N_{zz}=1$. Sonda
+`poisson_airbox_k0_demag_operator_probe` zmierzyła dokładnie
+$0.86666666666667$.
+
+Reguła runnera (`shared_domain_modal_outer_boundary`): jeśli plan wybiera
+Robina, a siatka ma translacje periodyczne w dokładnie dwóch osiach, operator
+modalny K0 używa `pure_neumann` z $\beta=0$. Jawne `dirichlet` lub
+`pure_neumann` z planu pozostają bez zmian. Ciała izolowane
+(`open_airbox_k0`) i struktury periodyczne w jednej osi zachowują
+{eq}`eq-open-airbox-k0-robin`.
+
+| Symbol | Znaczenie | Jednostka SI |
+| --- | --- | --- |
+| $\mathbf G$ | wektor sieci odwrotnej w płaszczyźnie filmu | $\mathrm{m^{-1}}$ |
+| $\phi_0$ | składowa $\mathbf G=0$ potencjału | $\mathrm A$ |
+| $t$ | grubość filmu | $\mathrm m$ |
+| $d$ | grubość warstwy powietrza po każdej stronie | $\mathrm m$ |
+| $w$ | wagi cechowania średniej zerowej | $1$ |
+| $N_{zz}^{\mathrm{Robin}}$ | współczynnik odmagnesowania z brzegiem Robina | $1$ |
+
+## Brzeg Neumanna w statycznym demag filmu periodycznego (korekta 2026-11-20)
+
+Status: kod źródłowy natywnego CPU i współdzielonej ścieżki GPU. Runtime w
+Docker DEV i qualification: **NOT VERIFIED**.
+
+Producent stanu równowagi dla K0 (relaksacja z demag Poissona w
+`docs/physics/0800-fem-static-pbc-demag.md`) stosował dotąd Robina także dla
+siatki periodycznej w dwóch osiach. Wtedy statyczne $\mathbf H_{\mathrm d,0}$
+filmu ma błąd {eq}`eq-k0-film-robin-defect`, a operator modalny już używa
+Neumanna. Ta sama reguła obowiązuje teraz w solwerze statycznym
+(`initialize_demag_poisson_boundary_operator`). Gdy plan wybiera
+`poisson_robin`, a pary periodyczne siatki dają translacje w dokładnie dwóch
+osiach, przyjmujemy $\beta=0$. Dirichlet z planu pozostaje bez zmian, a jedna
+oś periodyczna lub brak periodyczności zachowuje Robina.
+
+```{math}
+:label: eq-static-film-neumann-gauge
+N_{zz}^{\mathrm{Robin}}=\frac{1+\beta d}{1+\beta L},
+\qquad
+\sum_i b_i=\int_{\Omega_m}M_s\,\mathbf m\cdot\nabla\Bigl(\sum_i N_i\Bigr)\,\mathrm dV=0,
+\qquad
+\phi_{i_\star}=0 .
+```
+
+Pierwsza równość to {eq}`eq-k0-film-robin-defect` zapisane przez połowę
+wysokości komórki $L=t/2+d$. Ponieważ $R_\ast=L$, mamy $\beta L=c_\beta$ i
+$N_{zz}=1-c_\beta t/\bigl(2(1+c_\beta)L\bigr)$: błąd maleje algebraicznie, a
+nie wykładniczo z grubością powietrza. Dla $\beta=0$ dostajemy $N_{zz}=1$ i
+zerowe pole w powietrzu.
+
+Bez Robina zredukowany operator $P^{\mathsf T}KP$ ma stałe jądro. Prawa strona
+jest zgodna, bo funkcje P1 tworzą rozkład jedności (druga równość). Cechowanie
+ustala eliminacja jednego stopnia swobody potencjału $i_\star$ na otwartym
+brzegu, którego klasa periodyczna jest jednoelementowa
+(`film_neumann_gauge_pin_tdof`). Taki węzeł leży poza szwami, więc eliminacja
+usuwa dokładnie stałą. Zredukowany solve CPU zeruje prawą stronę klas
+wyeliminowanych, tak jak robi to już ścieżka urządzenia. Dla zgodnego
+$\mathbf b$ rozwiązanie z przypięciem równa się rozwiązaniu Neumanna minus
+jego wartość w $i_\star$.
+
+Pole $-\nabla\phi$ i energia $\tfrac{\mu_0}{2}\phi^{\mathsf T}\mathbf b$ nie
+zależą od cechowania. Człon brzegowy Robina znika przy $\beta=0$. Decyzję
+zapisuje linia logu
+`[fullmag-fem] static demag 2D-periodic film: pure Neumann outer boundary (Robin beta=0), gauge pin potential DOF <n>`.
+Brak jednoelementowego stopnia swobody na otwartym brzegu kończy przebieg
+błędem; solwer nie dostaje wtedy układu osobliwego.
+
+Ograniczenia:
+
+- Referencyjny silnik CPU w Rust (`crates/fullmag-engine/src/fem.rs`) nadal
+  stosuje Robina dla dwóch osi periodycznych.
+- Provenance zapisuje żądane `poisson_robin`; rozstrzygnięte $\beta=0$ widać
+  tylko w logu natywnym.
+
+| Symbol | Znaczenie | Jednostka SI |
+| --- | --- | --- |
+| $L$ | połowa wysokości komórki filmu, $t/2+d$ | $\mathrm m$ |
+| $b_i$ | składowa statycznej prawej strony Poissona $\int M_s\mathbf m\cdot\nabla N_i\,\mathrm dV$ | $\mathrm{A\,m}$ |
+| $i_\star$ | indeks stopnia swobody potencjału przypiętego do cechowania | $1$ |
+
+| Source ID | Path + symbol | Odpowiedzialność i dowód |
+| --- | --- | --- |
+| source-static-film-neumann-boundary | backends/fem/cpu/mfem/interactions/demag_poisson_boundary.cpp + initialize_demag_poisson_boundary_operator | $\beta=0$ i eliminacja $i_\star$ dla filmu periodycznego w dwóch osiach |
+| source-static-film-gauge-pin | backends/fem/cpu/mfem/interactions/demag_poisson_boundary.cpp + film_neumann_gauge_pin_tdof | Wybór jednoelementowej klasy na otwartym brzegu |
+| source-static-film-periodic-rhs | backends/fem/cpu/mfem/interactions/demag_poisson_periodic.cpp + solve_demag_periodic_poisson_reduced | Zerowanie prawej strony klas wyeliminowanych w zredukowanym solve CPU |
+
+## Spójne pole statyczne w linearyzacji K0 (korekta 2026-11-19)
+
+Status: runtime headless CPU w Docker DEV (2026-11-19,
+`examples/fem_eigen_k0_open_airbox_sphere.py`, siatka 4/25 nm): średnie
+przesunięcie $h_\parallel$ $+11.27\,\mathrm{kA/m}$ na 625 węzłach,
+$f=2.80352\,\mathrm{GHz}$ wobec {eq}`eq-open-airbox-k0-sphere-kittel`
+$2.80250\,\mathrm{GHz}$ (błąd $0.04\,\%$; przed korektą 2.402 GHz),
+certyfikowane residuum. Dla filmu periodycznego przesunięcie jest na poziomie
+zaokrągleń ($\le10^{-10}\,\mathrm{A/m}$). Qualification i run przez API DEV:
+**NOT VERIFIED**.
+
+Część dynamiczna operatora K0 jest P1:
+$\mathbf h_d(\mathbf q)=-A_{q\phi}P^{-1}A_{\phi q}\mathbf q$. Człon
+przywracający $h_\parallel=\mathbf m_0\cdot\mathbf H_{\mathrm{eff},0}$ w
+$A_{qq}$ pochodzi natomiast z producenta równowagi. Statyczny solver relaksacji
+używa potencjału P2 dla siatek nieperiodycznych bez piramid
+(`potential_order=2`). Hesjan łączy wtedy dwa różne dyskretne funkcjonały
+energii. Dla kuli o siatce 4/25 nm zmierzono $N^{\mathrm{P1}}=0.3189$
+(sonda dynamiczna) i $N^{\mathrm{P2}}=0.333$ (pole relaksacji). Mod
+jednorodny przesuwa się wtedy o
+
+```{math}
+:label: eq-k0-static-dynamic-mismatch
+f=\frac{\gamma_0}{2\pi}\bigl(H_b+(N_\perp^{\mathrm{P1}}-N_\parallel^{\mathrm{P2}})M_s\bigr)
+\approx2.405\,\mathrm{GHz}
+```
+
+zamiast 2.8025 GHz. Zmierzono 2.402 GHz.
+
+Korekta: natywny ładunek shared-domain rozwiązuje statyczny problem P1 z tym
+samym $P$, tymi samymi klasami skalarnymi i tym samym brzegiem co blok
+dynamiczny:
+
+```{math}
+:label: eq-k0-consistent-static-demag
+P\,\phi_0^{\mathrm{P1}}=\mathbf b,\qquad
+b_i=\int_{\Omega_m}M_s\,\mathbf m_{0,h}\cdot\nabla v_i\,\mathrm dV,
+\qquad
+\mathbf H^{\mathrm{P1}}_{d,0,i}=
+-\frac{\int_{\Omega_m}N_i\nabla\phi_0^{\mathrm{P1}}\,\mathrm dV}
+{\int_{\Omega_m}N_i\,\mathrm dV}.
+```
+
+Następnie podmienia tylko składową równoległą pola efektywnego:
+
+```{math}
+:label: eq-k0-consistent-h-parallel
+\mathbf H_{\mathrm{eff},0,i}'=\mathbf H_{\mathrm{eff},0,i}
++\mathbf m_{0,i}\,\bigl[\mathbf m_{0,i}\cdot
+(\mathbf H^{\mathrm{P1}}_{d,0,i}-\mathbf H^{\mathrm{prod}}_{d,0,i})\bigr].
+```
+
+Składowa poprzeczna (kryterium momentu równowagi) i wszystkie digesty
+wejściowe pozostają bez zmian. Dla Neumanna $\mathbf b$ jest rzutowane na
+średnią zerową przed rozwiązaniem. Dirichlet zeruje $\mathbf b$ na węzłach
+istotnych. Dla kuli zastąpienie przywraca symetrię
+$N_\perp=N_\parallel$, a więc {eq}`eq-open-airbox-k0-sphere-kittel` z
+dokładnością do błędu rozwiązania liniowego. Bezwzględna dokładność $N$
+pozostaje dokładnością P1 i maleje z zagęszczeniem siatki powietrza przy
+ciele. Moment poprzeczny pola P1 (różnica P1/P2) nie wchodzi do Hesjanu; to
+przybliżenie pierwszego rzędu w różnicy dyskretyzacji.
+
+| Symbol | Znaczenie | Jednostka SI |
+| --- | --- | --- |
+| $\phi_0^{\mathrm{P1}}$ | statyczny potencjał P1 dla $\mathbf m_0$ | $\mathrm A$ |
+| $\mathbf b$ | wektor źródła ładunków magnetycznych | $\mathrm{A\,m}$ |
+| $v_i$, $N_i$ | funkcje bazowe P1 | $1$ |
+| $\mathbf H^{\mathrm{P1}}_{d,0,i}$ | węzłowe statyczne pole demag P1 | $\mathrm{A\,m^{-1}}$ |
+| $\mathbf H^{\mathrm{prod}}_{d,0,i}$ | pole demag producenta równowagi | $\mathrm{A\,m^{-1}}$ |
+| $N_\perp$, $N_\parallel$ | dynamiczny i statyczny współczynnik odmagnesowania | $1$ |
+
+| Source ID | Path + symbol | Odpowiedzialność i dowód |
+| --- | --- | --- |
+| source-k0-film-neumann-runner | crates/fullmag-runner/src/fem/eigen_shared_domain_geometry.rs + shared_domain_modal_outer_boundary | Wybór Neumanna dla filmu periodycznego w dwóch osiach |
+| source-k0-consistent-static-demag | backends/fem/cpu/frequency_domain/operators/poisson_airbox_shared_domain.cpp + recompute_shared_domain_static_demag_p1 | Statyczne pole P1 i podmiana $h_\parallel$ przed złożeniem $A_{qq}$ |
+
+## Wymuszona akceptacja niezrelaksowanego stanu (`equilibrium_acceptance="force"`)
+
+Status: źródło; runtime **NOT VERIFIED**. Opcja diagnostyczna, wyłączona
+domyślnie. Wynik nie jest certyfikowanym spektrum równowagi.
+
+Linearyzacja {eq}`eq-poisson-airbox-modal-block` zakłada równowagę
+$\mathbf m_0\times\mathbf H_{\mathrm{eff},0}=0$. Gdy relaksacja kończy się
+limitem kroków, w węzłach zostaje moment resztkowy
+
+```{math}
+:label: eq-k0-forced-residual-torque
+\tau_{\max}=\max_{i\in\Omega_m}
+\bigl|\mathbf m_{0,i}\times\mathbf H_{\mathrm{eff},0,i}\bigr| .
+```
+
+Operator K0 bierze z $\mathbf H_{\mathrm{eff},0}$ tylko skalar
+$h_\parallel=\mathbf m_0\cdot\mathbf H_{\mathrm{eff},0}$
+({eq}`eq-k0-consistent-h-parallel`). Składowa poprzeczna, czyli człon
+napędzający dryf stanu, zostaje pominięta. Mody są wtedy drganiami wokół
+chwilowego $\mathbf m_0$ w polu $h_\parallel$. Błąd częstotliwości jest
+rzędu $\gamma_0\tau_{\max}/2\pi$ w obszarach z dużym momentem. Mogą też
+pojawić się mody o ujemnej lub zespolonej częstotliwości, gdy stan jest
+bliski punktu siodłowego.
+
+Kontrakt: `study.stages.add_eigenmodes(..., equilibrium_source="relax",
+equilibrium_acceptance="force")`. Orkiestrator buduje handoff z niezbieżnej
+relaksacji tylko wtedy, gdy bezpośrednio następny etap eigen o to prosi.
+Certyfikat akceptacji ma `criterion="torque"`, `metric_value`$=\tau_{\max}$
+z {eq}`eq-k0-forced-residual-torque`, `threshold`$=\tau_{\max}(1+10^{-6})$,
+prawdziwe `converged=false` i `stop_reason` relaksacji oraz `forced=true`.
+Flaga `forced` jest serializowana tylko gdy prawdziwa, więc certyfikaty
+zbieżnych relaksacji i ich digesty są bajtowo niezmienione. Walidacja
+wiązania handoffu przelicza $\tau_{\max}$ z certyfikowanych pól i porównuje
+cały certyfikat. Wymuszony stan nie publikuje „accepted equilibrium” dla
+anten. Ścieżka `equilibrium_source="artifact"` nadal przyjmuje tylko
+certyfikaty zbieżne.
+
+| Symbol | Znaczenie | Jednostka SI |
+| --- | --- | --- |
+| $\tau_{\max}$ | maksymalny moment resztkowy w węzłach magnetycznych | $\mathrm{A\,m^{-1}}$ |
+| $\Omega_m$ | węzły magnetyczne | $1$ |
+
+| Source ID | Path + symbol | Odpowiedzialność i dowód |
+| --- | --- | --- |
+| source-k0-forced-acceptance | crates/fullmag-runner/src/fem/eigen_equilibrium_contract.rs + forced_equilibrium_criterion | Wymuszony certyfikat momentu z prawdziwym stanem zbieżności |
+| source-k0-forced-acceptance-cli | crates/fullmag-cli/src/orchestrator.rs + forced_relax_acceptance_requests | Handoff niezbieżnej relaksacji tylko dla żądającego etapu eigen |

@@ -19,7 +19,7 @@ use crate::fdm::gpu::cuda::artifacts::{
 #[cfg(feature = "cuda")]
 use crate::fdm::gpu::cuda::native::residency::FdmGpuReceiptLifecycle;
 #[cfg(feature = "cuda")]
-use crate::fdm::gpu::cuda::native::{NativeFdmBackend, NativeFdmPreviewSnapshot};
+use crate::fdm::gpu::cuda::native::NativeFdmBackend;
 use crate::fem_baseline;
 #[cfg(feature = "fem-gpu")]
 use crate::native_fem::{DeviceInfo as FemDeviceInfo, NativeFemBackend};
@@ -105,19 +105,40 @@ fn interactive_time_event_schedule(
     stage_start_s: f64,
     waveform_origin_time_s: f64,
     duration_s: f64,
+    time_expression: Option<&fullmag_ir::TimeExpressionIR>,
+    time_expression_clock_origin_s: Option<f64>,
     output_periods_s: impl IntoIterator<Item = f64>,
 ) -> Vec<f64> {
     let stage_end_s = stage_start_s + duration_s;
-    let mut times = crate::time_events::build_resolved_stage_event_schedule_with_origin(
+    let tolerance_s = if time_expression.is_some() {
+        0.0
+    } else {
+        crate::schedules::OUTPUT_TIME_TOLERANCE
+    };
+    let mut schedule = crate::time_events::build_resolved_stage_event_schedule_with_origin(
         drives,
         solved_bases,
         stage_start_s,
         waveform_origin_time_s,
         stage_end_s,
         &[],
-        crate::schedules::OUTPUT_TIME_TOLERANCE,
-    )
-    .times_s;
+        tolerance_s,
+    );
+    if let Some(expression) = time_expression {
+        let clock_origin_s = time_expression_clock_origin_s.unwrap_or(0.0);
+        schedule.times_s.extend(expression.event_times_s.iter().filter_map(
+            |event_time_s| {
+                let schedule_time_s = *event_time_s - clock_origin_s;
+                (schedule_time_s.is_finite()
+                    && schedule_time_s >= stage_start_s
+                    && schedule_time_s <= stage_end_s)
+                    .then_some(schedule_time_s)
+            },
+        ));
+        schedule.times_s.sort_by(f64::total_cmp);
+        schedule.times_s.dedup_by(|right, left| *right == *left);
+    }
+    let mut times = schedule.times_s;
     for period_s in output_periods_s {
         if period_s.is_finite() && period_s > 0.0 {
             let count = (duration_s / period_s).floor() as u64;
@@ -125,7 +146,13 @@ fn interactive_time_event_schedule(
         }
     }
     times.sort_by(f64::total_cmp);
-    times.dedup_by(|right, left| (*right - *left).abs() <= crate::schedules::OUTPUT_TIME_TOLERANCE);
+    if time_expression.is_some() {
+        times.dedup_by(|right, left| *right == *left);
+    } else {
+        times.dedup_by(|right, left| {
+            (*right - *left).abs() <= crate::schedules::OUTPUT_TIME_TOLERANCE
+        });
+    }
     times
 }
 
@@ -260,7 +287,8 @@ mod tests {
         attach_fem_crossover_decision_to_provenance, attach_resolved_fallback_to_provenance,
         build_grid_preview_field, cached_display_refresh_due, cpu_execution_provenance,
         display_refresh_due, full_resolution_preview_request, normalize_runtime_context_signature,
-        observation_preview_quantities_for, should_materialize_terminal_fields,
+        interactive_time_event_schedule, observation_preview_quantities_for,
+        should_materialize_terminal_fields,
         InteractiveFdmPreviewRuntime, InteractiveFdmPreviewRuntimeInner,
     };
     use crate::dispatch::FdmEngine;
@@ -284,6 +312,33 @@ mod tests {
         SELECTION_CERTIFICATE_SCHEMA_VERSION,
     };
     use sha2::{Digest, Sha256};
+
+    #[test]
+    fn interactive_cuda_maps_absolute_expression_events_to_stage_local_clock() {
+        let expression = fullmag_ir::TimeExpressionIR {
+            source: "heaviside(t - on) - heaviside(t - off)".into(),
+            constants: Default::default(),
+            event_times_s: vec![71.0e-9, 72.0e-9],
+        };
+        let events = interactive_time_event_schedule(
+            &[],
+            &[],
+            0.0,
+            0.0,
+            10.0e-9,
+            Some(&expression),
+            Some(70.0e-9),
+            std::iter::empty(),
+        );
+
+        assert_eq!(events.len(), 4);
+        assert_eq!(events[0], 0.0);
+        assert!((events[1] - 1.0e-9).abs() < 1.0e-23);
+        assert!((events[2] - 2.0e-9).abs() < 1.0e-23);
+        assert_eq!(events[3], 10.0e-9);
+        let step_dt = crate::time_events::cap_timestep_to_next_event(0.0, 2.0e-9, &events, 0.0);
+        assert!((step_dt - 1.0e-9).abs() < 1.0e-23);
+    }
 
     #[test]
     fn interactive_fem_runtime_reuses_runtime_owned_stage_context() {
@@ -986,6 +1041,7 @@ mod tests {
                 projection_policy: None,
             }),
             fem: Some(FemHintsIR {
+                gpu_bb_preconditioner: None,
                 order: 1,
                 hmax: 2e-9,
                 mesh: Some("meshes/unit_tet.msh".to_string()),
@@ -1924,7 +1980,6 @@ struct GpuInteractiveFemPreviewRuntime {
     provenance: ExecutionProvenance,
     total_steps: u64,
     total_time: f64,
-    antenna_field: Vec<[f64; 3]>,
 }
 
 impl InteractiveFdmPreviewRuntime {
@@ -2392,7 +2447,6 @@ impl InteractiveFemPreviewRuntime {
                 .transpose()?;
             let backend = NativeFemBackend::create(&effective_plan)?;
             let device_info = backend.device_info()?;
-            let antenna_field = crate::antenna_fields::compute_antenna_field(&effective_plan)?;
             let mut provenance = fem_gpu_execution_provenance(&effective_plan, &device_info)?;
             if execution_mode == fullmag_ir::ExecutionMode::Strict
                 && provenance.execution_engine == "fem_native_gpu"
@@ -2411,7 +2465,6 @@ impl InteractiveFemPreviewRuntime {
                 provenance,
                 total_steps: 0,
                 total_time: effective_plan.time_stage.start_time_s,
-                antenna_field,
             });
             Ok(Self {
                 inner,
@@ -2917,6 +2970,8 @@ impl CpuInteractiveFdmPreviewRuntime {
             base_time,
             plan.time_stage.waveform_origin_time_s.unwrap_or(base_time),
             until_seconds,
+            plan.slonczewski_time_expression.as_ref(),
+            None,
             std::iter::empty(),
         );
         let mut dt = crate::resolve_timestep_policy(
@@ -3014,7 +3069,11 @@ impl CpuInteractiveFdmPreviewRuntime {
                 self.state.time_seconds,
                 proposed_dt,
                 &time_events,
-                crate::schedules::OUTPUT_TIME_TOLERANCE,
+                if plan.slonczewski_time_expression.is_some() {
+                    0.0
+                } else {
+                    crate::schedules::OUTPUT_TIME_TOLERANCE
+                },
             );
             let wall_start = std::time::Instant::now();
             let report = self.step(dt_step)?;
@@ -3272,6 +3331,8 @@ impl CpuInteractiveFdmPreviewRuntime {
             base_time,
             plan.time_stage.waveform_origin_time_s.unwrap_or(base_time),
             until_seconds,
+            plan.slonczewski_time_expression.as_ref(),
+            None,
             output_periods,
         );
         let mut dt = crate::resolve_timestep_policy(
@@ -3353,7 +3414,11 @@ impl CpuInteractiveFdmPreviewRuntime {
                 self.state.time_seconds,
                 proposed_dt,
                 &time_events,
-                crate::schedules::OUTPUT_TIME_TOLERANCE,
+                if plan.slonczewski_time_expression.is_some() {
+                    0.0
+                } else {
+                    crate::schedules::OUTPUT_TIME_TOLERANCE
+                },
             );
             let wall_start = std::time::Instant::now();
             let report = self.step(dt_step)?;
@@ -3600,60 +3665,6 @@ impl CudaInteractiveFdmPreviewRuntime {
         self.backend.snapshot_step_stats(self.original_grid)
     }
 
-    fn begin_cached_preview_prefetch(
-        &self,
-        display_state: &DisplaySelectionState,
-    ) -> Result<Option<Vec<NativeFdmPreviewSnapshot>>, RunError> {
-        let quantities = active_fdm_preview_quantities(
-            FdmEngine::CudaFdm,
-            &self.plan_signature,
-            &cached_preview_quantities_for(display_state),
-        );
-        if quantities.is_empty() {
-            return Ok(None);
-        }
-        if quantities.iter().any(|quantity| {
-            normalized_quantity_name(quantity)
-                .ok()
-                .is_some_and(|name| name == "H_ant")
-        }) {
-            // H_ant is retained as a runner-side per-cell basis rather than a
-            // native CUDA observable.  Keep this pass synchronous so the
-            // host-materialized field follows the same time as the live step.
-            return Ok(None);
-        }
-        let base_request = display_state.preview_request();
-        let mut snapshots = Vec::with_capacity(quantities.len());
-        let mut seen = HashSet::new();
-        for quantity in quantities
-            .into_iter()
-            .filter_map(|quantity| normalized_quantity_name(quantity).ok())
-        {
-            if !seen.insert(quantity) {
-                continue;
-            }
-            let mut request = base_request.clone();
-            request.quantity = quantity.to_string();
-            snapshots.push(
-                self.backend
-                    .begin_live_preview_snapshot(&request, self.original_grid)?,
-            );
-        }
-        Ok(Some(snapshots))
-    }
-
-    fn resolve_cached_preview_prefetch(
-        &self,
-        snapshots: Vec<NativeFdmPreviewSnapshot>,
-    ) -> Result<Vec<LivePreviewField>, RunError> {
-        snapshots
-            .into_iter()
-            .map(|snapshot| {
-                snapshot.into_live_preview_field(self.plan_signature.active_mask.as_deref())
-            })
-            .collect()
-    }
-
     fn execute_with_live_preview_inner(
         &mut self,
         plan: &FdmPlanIR,
@@ -3686,6 +3697,8 @@ impl CudaInteractiveFdmPreviewRuntime {
             base_time,
             plan.time_stage.waveform_origin_time_s.unwrap_or(base_time),
             until_seconds,
+            plan.slonczewski_time_expression.as_ref(),
+            Some(plan.time_stage.start_time_s),
             std::iter::empty(),
         );
         reject_non_llg_interactive_relaxation(
@@ -3785,7 +3798,11 @@ impl CudaInteractiveFdmPreviewRuntime {
                 self.total_time,
                 proposed_dt,
                 &time_events,
-                crate::schedules::OUTPUT_TIME_TOLERANCE,
+                if plan.slonczewski_time_expression.is_some() {
+                    0.0
+                } else {
+                    crate::schedules::OUTPUT_TIME_TOLERANCE
+                },
             );
             let Some(total_stats) = self
                 .backend
@@ -4059,6 +4076,8 @@ impl CudaInteractiveFdmPreviewRuntime {
             base_time,
             plan.time_stage.waveform_origin_time_s.unwrap_or(base_time),
             until_seconds,
+            plan.slonczewski_time_expression.as_ref(),
+            Some(plan.time_stage.start_time_s),
             output_periods,
         );
         reject_non_llg_interactive_relaxation(
@@ -4155,7 +4174,11 @@ impl CudaInteractiveFdmPreviewRuntime {
                 self.total_time,
                 proposed_dt,
                 &time_events,
-                crate::schedules::OUTPUT_TIME_TOLERANCE,
+                if plan.slonczewski_time_expression.is_some() {
+                    0.0
+                } else {
+                    crate::schedules::OUTPUT_TIME_TOLERANCE
+                },
             );
             let Some(total_stats) = self
                 .backend
@@ -4478,6 +4501,8 @@ impl CpuInteractiveFemPreviewRuntime {
             base_time,
             plan.time_stage.waveform_origin_time_s.unwrap_or(base_time),
             until_seconds,
+            None,
+            None,
             std::iter::empty(),
         );
         reject_non_llg_interactive_relaxation(
@@ -4827,6 +4852,8 @@ impl CpuInteractiveFemPreviewRuntime {
             base_time,
             plan.time_stage.waveform_origin_time_s.unwrap_or(base_time),
             until_seconds,
+            None,
+            None,
             output_periods,
         );
         reject_non_llg_interactive_relaxation(
@@ -5254,6 +5281,8 @@ impl GpuInteractiveFemPreviewRuntime {
             base_time,
             plan.time_stage.waveform_origin_time_s.unwrap_or(base_time),
             until_seconds,
+            None,
+            None,
             std::iter::empty(),
         );
         reject_non_llg_interactive_relaxation(
@@ -5550,6 +5579,8 @@ impl GpuInteractiveFemPreviewRuntime {
             base_time,
             plan.time_stage.waveform_origin_time_s.unwrap_or(base_time),
             until_seconds,
+            None,
+            None,
             output_periods,
         );
         reject_non_llg_interactive_relaxation(
@@ -6803,6 +6834,7 @@ fn fem_gpu_execution_provenance(
         &mut provenance,
         plan.relaxation.as_ref(),
         matches!(native_fem_backend_id(plan), FemBackendId::GpuNative),
+        plan.gpu_bb_preconditioner,
     );
     Ok(provenance)
 }

@@ -94,7 +94,7 @@ export const OrientationHudLayer = memo(function OrientationHudLayer({
       : undefined,
   );
   const pendingOrbitCameraRef = useRef<{ camera: Viewport3DCameraState; epoch: number } | null>(null);
-  const controlsTargetRef = useRef(new Vector3());
+  const controlsTargetRef = useMemo(() => new Vector3(), []);
   const commitCameraChange = useCallback(
     (nextCamera: Viewport3DCameraState, epoch: number) => {
       void commitOrientationCameraGesture(
@@ -109,7 +109,7 @@ export const OrientationHudLayer = memo(function OrientationHudLayer({
   const getCurrentCamera = useCallback(
     () => {
       const controlsTarget = controls?.getTarget
-        ? controls.getTarget(controlsTargetRef.current, false).toArray()
+        ? controls.getTarget(controlsTargetRef, false).toArray()
         : controls?.target?.toArray();
       return resolveViewCubeCurrentCameraState({
         cameraPosition: camera.position.toArray() as [number, number, number],
@@ -120,7 +120,7 @@ export const OrientationHudLayer = memo(function OrientationHudLayer({
           | undefined,
       });
     },
-    [camera, controls],
+    [camera, controls, controlsTargetRef],
   );
   const applyLiveCamera = useCallback(
     (nextCamera: Viewport3DCameraState) => {
@@ -168,6 +168,22 @@ export const OrientationHudLayer = memo(function OrientationHudLayer({
       invalidate();
     },
     [applyLiveCamera, cameraGestureRef, commitCameraChange, getCurrentCamera, invalidate, onCameraInteractionStart, rotationMode, tracker],
+  );
+
+  // Commands (ribbon / palette) request a view direction through the store so
+  // keyboard users reach the same snap path as a ViewCube face click.
+  const handledViewDirectionRevisionRef = useRef(
+    viewport3dStore.getSnapshot().viewDirectionRequest?.revision ?? 0,
+  );
+  useEffect(
+    () =>
+      viewport3dStore.subscribe(() => {
+        const request = viewport3dStore.getSnapshot().viewDirectionRequest;
+        if (!request || request.revision === handledViewDirectionRevisionRef.current) return;
+        handledViewDirectionRevisionRef.current = request.revision;
+        snapToDirection(request.direction);
+      }),
+    [snapToDirection],
   );
 
   const onOrbit = useCallback(

@@ -625,6 +625,9 @@ describe("RealtimeInvalidationBridge", () => {
     expect(resources.getRevision(MODEL_READINESS_PATH)).toBe(
       dependentRevision(MODEL_SCENE_PATH, 12),
     );
+    expect(resources.getRevision(MESHING_SHARED_DOMAIN_MANIFEST_PATH)).toBe(
+      dependentRevision(MODEL_SCENE_PATH, 12),
+    );
     expect(resources.getRevision("session:status")).toBe(
       dependentRevision(MODEL_SCENE_PATH, 12),
     );
@@ -1534,7 +1537,7 @@ describe("RealtimeInvalidationBridge", () => {
     });
   });
 
-  it("keeps topological-charge dependents current for exact magnetization events", () => {
+  it("keeps prepared-preview metadata and topological charge current for exact magnetization events", () => {
     const bus = new EventBus<KernelEventMap>();
     const resources = new ResourceInvalidationController(bus);
     const bridge = new RealtimeInvalidationBridge(resources);
@@ -1542,7 +1545,12 @@ describe("RealtimeInvalidationBridge", () => {
       "{object_id}",
       "film",
     );
+    const metaKey = DATA_FIELD_META_PATH.replace("{quantity_id}", "m");
+    const currentMeta = `session=A&epoch=1|${metaKey}`;
+    const historicalMeta = `session=A&epoch=1|${metaKey}?snapshot_id=saved`;
     resources.subscribe(topologicalChargeKey, () => {});
+    resources.subscribe(currentMeta, () => {});
+    resources.subscribe(historicalMeta, () => {});
 
     bridge.handleEvent({
       payload: {
@@ -1564,6 +1572,8 @@ describe("RealtimeInvalidationBridge", () => {
     });
 
     expect(resources.getRevision(topologicalChargeKey)).toBe(15);
+    expect(resources.getRevision(currentMeta)).toBe(15);
+    expect(resources.getRevision(historicalMeta)).toBeNull();
   });
 
   it("refreshes component field metadata when matching quantity samples change", () => {

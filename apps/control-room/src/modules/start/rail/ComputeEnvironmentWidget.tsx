@@ -11,8 +11,7 @@ import { formatTelemetrySampleTime } from "../model/computeTelemetry";
 import { ComputeNodeOverviewSummary } from "../ComputeNodeOverviewSummary";
 import { ComputeNodeInventoryStatus } from "../ComputeNodeInventoryStatus";
 import type { ComputeEnvironment, ComputeNodeInventorySummary, ComputeProbeState, GpuInfo } from "../model/types";
-
-type EnvironmentTone = "busy" | "degraded" | "idle" | "observed";
+import { resolveEnvironmentTone } from "./ComputeEnvironmentWidget.model";
 
 const environmentVariants = cva("fm-start-env", {
   variants: {
@@ -76,16 +75,6 @@ function memoryReading(totalBytes: number | undefined, usedBytes: number | undef
 
 function formatGigabytes(bytes: number): string {
   return `${gigabytes.format(bytes / GIGABYTE)} GB`;
-}
-
-export function resolveEnvironmentTone(
-  compute: ComputeProbeState,
-  error: string | null = null,
-): EnvironmentTone {
-  if (compute === undefined && error === null) return "idle";
-  if (!compute || error || compute.gpuProbeStatus === "unavailable") return "degraded";
-  if (compute.gpus.some((gpu) => gpu.busyWithRun)) return "busy";
-  return compute.gpus.length > 0 ? "observed" : "degraded";
 }
 
 export interface ComputeEnvironmentWidgetProps {
@@ -222,7 +211,7 @@ function RuntimeLaneSummary({ compute }: { readonly compute: ComputeProbeState }
               <span className="fm-start-env__lane-name">
                 {backend} · {device}
               </span>
-              <span
+              <span role="group"
                 aria-label={diagnostic?.reason ? `${label}: ${diagnostic.reason}` : undefined}
                 className="fm-start-env__lane-state"
                 title={diagnostic?.reason}
@@ -388,14 +377,8 @@ function ProbedEnvironment({ compute }: { readonly compute: ComputeEnvironment }
               {formatGigabytes(ram.usedBytes)} / {formatGigabytes(ram.totalBytes)} used
             </span>
           </div>
-          <div
-            aria-label="Host RAM used"
-            aria-valuemax={100}
-            aria-valuemin={0}
-            aria-valuenow={ramUsedPercent}
-            className="fm-start-env__meter"
-            role="meter"
-          >
+          <meter aria-label="Host RAM used" className="sr-only" max={100} value={ramUsedPercent} />
+          <div aria-hidden="true" className="fm-start-env__meter">
             <div className="fm-start-env__meter-fill" style={{ width: `${ramUsedPercent}%` }} />
           </div>
           <span className="fm-start-env__meta">
@@ -432,15 +415,14 @@ function GpuSummary({
       </div>
       {memory ? (
         <>
-          <div
+          <meter
             aria-label={`GPU ${gpu.index ?? position} VRAM used`}
-            aria-valuemax={100}
-            aria-valuemin={0}
-            aria-valuenow={memory.usedPercent}
             aria-valuetext={`${formatGigabytes(memory.usedBytes)} used of ${formatGigabytes(memory.totalBytes)}; ${formatGigabytes(memory.freeBytes)} free`}
-            className="fm-start-env__meter"
-            role="meter"
-          >
+            className="sr-only"
+            max={100}
+            value={memory.usedPercent}
+          />
+          <div aria-hidden="true" className="fm-start-env__meter">
             <div className="fm-start-env__meter-fill" style={{ width: `${memory.usedPercent}%` }} />
           </div>
           <div className="fm-start-env__metric-line">

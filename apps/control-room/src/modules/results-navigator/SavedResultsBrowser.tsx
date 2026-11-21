@@ -16,21 +16,16 @@ import {
   isSolutionScalarArtifact,
   useSolutionScalarResource,
 } from "@/kernel/resources/solutionSetResources";
-import type {
-  SolutionSetArtifactResource,
-  SolutionSetDiscoveryPageResource,
-  SolutionSetMemberResource,
-  SolutionSetResource,
-  SolutionScalarResource,
-} from "@/kernel/api/apiTypes";
+import type { SolutionSetArtifactResource, SolutionSetDiscoveryPageResource, SolutionSetMemberResource, SolutionSetResource, SolutionScalarResource } from "@/kernel/api/apiTypes";
 import { Badge } from "@/shared/ui/Badge";
 import { Button } from "@/shared/ui/Button";
 
 import { SavedMaterializedArtifactRow } from "./SavedMaterializedArtifactRow";
+import { isMaterializedDatasetArtifact } from "./SavedResultsBrowser.model";
+
 export { materializedDatasetMatchesArtifact } from "./savedMaterializedDatasetBinding";
 
 const MATERIALIZED_FIELDS_PER_PAGE = 4;
-const MATERIALIZED_DATASET_SCHEMA = "fullmag.materialized_dataset.v1";
 
 type SavedResultsBrowserProps = Pick<ModuleProps, "kernel" | "moduleId">;
 
@@ -129,7 +124,7 @@ function SavedProjectResults({
             <li className="grid min-w-0" key={run.run_id}>
             <Button
               aria-current={selectedRunId === run.run_id ? "true" : undefined}
-              className="h-auto min-w-0 justify-start px-2 py-2 text-left"
+              className="h-auto min-w-0 justify-start p-2 text-left"
               size="sm"
               title={run.run_id}
               variant={selectedRunId === run.run_id ? "primary" : "ghost"}
@@ -323,7 +318,7 @@ function SolutionSetDiscoveryList({
           <li className="grid min-w-0" key={`${item.solution_set_id}:${item.revision}`}>
           <Button
             aria-current={isSelected ? "true" : undefined}
-            className="h-auto min-w-0 justify-start px-2 py-2 text-left"
+            className="h-auto min-w-0 justify-start p-2 text-left"
             size="sm"
             title={item.manifest_digest}
             variant={isSelected ? "primary" : "ghost"}
@@ -466,7 +461,7 @@ function MemberList({
         <li className="grid min-w-0" key={member.member_id}>
         <Button
           aria-current={selectedMemberId === member.member_id ? "true" : undefined}
-          className="h-auto min-w-0 justify-start px-2 py-2 text-left"
+          className="h-auto min-w-0 justify-start p-2 text-left"
           size="sm"
           title={member.task_id}
           variant={selectedMemberId === member.member_id ? "primary" : "ghost"}
@@ -687,7 +682,7 @@ function ArtifactButton({
   return (
     <Button
       aria-current={selected ? "true" : undefined}
-      className="h-auto min-w-0 justify-start px-2 py-2 text-left"
+      className="h-auto min-w-0 justify-start p-2 text-left"
       size="sm"
       title={artifact.object_ref}
       variant={selected ? "primary" : "ghost"}
@@ -697,12 +692,6 @@ function ArtifactButton({
       <span className="ml-auto shrink-0 text-fm-xs opacity-80">{artifact.kind}</span>
     </Button>
   );
-}
-
-export function isMaterializedDatasetArtifact(
-  artifact: SolutionSetArtifactResource,
-): boolean {
-  return artifact.schema_id === MATERIALIZED_DATASET_SCHEMA && artifact.kind === "other";
 }
 
 function SolutionScalarDetails({ data }: { data: SolutionScalarResource }) {

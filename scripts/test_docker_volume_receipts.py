@@ -404,20 +404,26 @@ class VolumeReceiptTests(IsolatedReceiptTests):
 
 
 class SavedAuthoringRestartTests(IsolatedReceiptTests):
-    def fixture(self):
+    def fixture(self, assets=(), scene=None):
         import copy, hashlib, io, json, zipfile
         import docker_volume_dev as dev
         from docker_build_control import canonical
-        scene = {'version': 'scene.v2', 'revision': 1, 'scene': {'scene_id': 'scene-one'}, 'objects': []}
+        if scene is None:
+            scene = {'version': 'scene.v2', 'revision': 1, 'scene': {'scene_id': 'scene-one'}, 'objects': []}
+        else:
+            scene = copy.deepcopy(scene)
         source = b'from fullmag import *\n'
         digest = hashlib.sha256(source).hexdigest()
         definition = {'schema': 'fullmag.project.v1', 'project_id': 'project-one', 'revision': 2, 'scene': scene}
         files = {'project/definition.json': canonical(definition), 'project/scene_document.json': canonical(scene),
                  'project/source/script.py': source, 'project/source/script.json': canonical({'sha256': digest}),
                  'project/provenance.json': canonical({'runs': []})}
+        for asset_path, asset_bytes in assets:
+            files[asset_path] = asset_bytes
         manifest = {'format': 'fullmag.project.archive.v1', 'project_schema': 'fullmag.project.v1',
             'scene_schema': 'scene.v2', 'definition': 'project/definition.json', 'scene': 'project/scene_document.json',
-            'source': None, 'assets': [], 'opaque_documents': ['project/source/script.py',
+            'source': None, 'assets': [{'path': asset_path, 'media_type': None} for asset_path, _ in assets],
+            'opaque_documents': ['project/source/script.py',
                 'project/source/script.json', 'project/provenance.json']}
         files['manifest/project.json'] = canonical(manifest)
         def pack(entries):
@@ -514,6 +520,245 @@ class SavedAuthoringRestartTests(IsolatedReceiptTests):
         actual['frontend']['State']['Running'] = False
         dev._saved_authoring_validate_services(pin, actual, quiesced=True)
         dev._saved_authoring_validate_probe(proof, pin, scene)
+
+    def test_accepts_content_addressed_stl_asset_and_legacy_asset_path(self):
+        import hashlib
+        import docker_volume_dev as dev
+
+        stl = (
+            b"solid tetra\n"
+            b"facet normal 0 0 -1\nouter loop\nvertex 0 0 0\nvertex 1 0 0\nvertex 0 1 0\nendloop\nendfacet\n"
+            b"facet normal 0 -1 0\nouter loop\nvertex 0 0 0\nvertex 1 0 0\nvertex 0 0 1\nendloop\nendfacet\n"
+            b"facet normal -1 0 0\nouter loop\nvertex 0 0 0\nvertex 0 0 1\nvertex 0 1 0\nendloop\nendfacet\n"
+            b"facet normal 1 1 1\nouter loop\nvertex 1 0 0\nvertex 0 1 0\nvertex 0 0 1\nendloop\nendfacet\n"
+            b"endsolid tetra\n"
+        )
+        digest = hashlib.sha256(stl).hexdigest()
+        imported_path = f'project/assets/imported-geometry/{digest}.stl'
+        legacy_path = 'assets/legacy-material.bin'
+        dev, pin, scene, raw, _, _, _, _ = self.fixture(
+            assets=[(imported_path, stl), (legacy_path, b'legacy asset')],
+        )
+
+        dev._saved_authoring_validate_request(
+            pin, project='fullmag-test', attempt='b' * 32,
+            config_sha256='c' * 64, selected='/selected',
+        )
+        self.assertEqual(dev._saved_authoring_validate_archive(raw, pin['archive']), scene)
+
+    def test_rejects_imported_stl_asset_digest_mismatch(self):
+        import hashlib
+        import docker_volume_dev as dev
+
+        expected = b'solid tetra\nendsolid tetra\n'
+        digest = hashlib.sha256(expected).hexdigest()
+        path = f'project/assets/imported-geometry/{digest}.stl'
+        dev, pin, _, raw, _, _, _, _ = self.fixture(assets=[(path, expected + b'changed')])
+        with self.assertRaisesRegex(BuildControlError, 'imported STL asset digest differs'):
+            dev._saved_authoring_validate_archive(raw, pin['archive'])
+
+    def test_rejects_unexpected_or_traversing_imported_asset_paths(self):
+        import hashlib
+        import docker_volume_dev as dev
+
+        stl = b'solid tetra\nendsolid tetra\n'
+        digest = hashlib.sha256(stl).hexdigest()
+        for path, reason in (
+            (f'project/assets/imported-geometry/{digest}.obj', 'unexpected asset path'),
+            (f'project/assets/other/{digest}.stl', 'unexpected asset path'),
+            ('project/assets/imported-geometry/../escape.stl', 'unsafe archive entry'),
+        ):
+            with self.subTest(path=path):
+                dev, pin, _, raw, _, _, _, _ = self.fixture(assets=[(path, stl)])
+                with self.assertRaisesRegex(BuildControlError, reason):
+                    dev._saved_authoring_validate_archive(raw, pin['archive'])
+
+    def imported_stl_probe_fixture(self):
+        import copy, hashlib
+        import docker_volume_dev as dev
+
+        stl = b'solid tetra\nendsolid tetra\n'
+        digest = hashlib.sha256(stl).hexdigest()
+        archive_path = f'project/assets/imported-geometry/{digest}.stl'
+        source_asset = {
+            'archive_path': archive_path,
+            'asset_id': f'stl-sha256-{digest}',
+            'content_sha256': digest,
+        }
+        scene = {
+            'version': 'scene.v2', 'revision': 1,
+            'scene': {'scene_id': 'scene-one'},
+            'objects': [{
+                'id': 'buckyball',
+                'geometry': {
+                    'geometry_kind': 'ImportedGeometry',
+                    'geometry_params': {'name': 'buckyball_geom', 'scale': 2.5, 'source': archive_path, 'volume': 'full'},
+                    'source_asset': source_asset,
+                },
+            }],
+        }
+        dev, pin, scene, raw, files, pack, actual, proof = self.fixture(
+            assets=[(archive_path, stl)], scene=scene,
+        )
+        snapshot_path = f'/opt/fullmag/runtime-control/local-live/current/imported-stl-snapshots/{digest}.stl'
+        live_scene = copy.deepcopy(scene)
+        live_scene['objects'][0]['geometry']['geometry_params']['source'] = snapshot_path
+        observation = {
+            'object_id': 'buckyball',
+            'source_path': snapshot_path,
+            'content_sha256': digest,
+            'bytes': len(stl),
+        }
+        for suffix in ('before', 'after'):
+            proof['resources']['scene_' + suffix]['body'] = copy.deepcopy(live_scene)
+        proof['imported_stl_snapshots'] = {
+            'before': [copy.deepcopy(observation)],
+            'after': [copy.deepcopy(observation)],
+        }
+        return dev, pin, scene, raw, proof, snapshot_path, digest
+
+    def test_accepts_imported_stl_private_live_snapshot_with_exact_binding(self):
+        dev, pin, scene, raw, proof, snapshot_path, digest = self.imported_stl_probe_fixture()
+        self.assertEqual(dev._saved_authoring_validate_archive(raw, pin['archive']), scene)
+        self.assertEqual(
+            dev._saved_authoring_imported_stl_bindings(scene),
+            [{'object_id': 'buckyball',
+              'archive_path': f'project/assets/imported-geometry/{digest}.stl',
+              'asset_id': f'stl-sha256-{digest}', 'content_sha256': digest}],
+        )
+        dev._saved_authoring_validate_probe(proof, pin, scene)
+
+    def test_rejects_unverified_imported_stl_snapshot_identity_or_scene_changes(self):
+        import copy
+        from docker_build_control import BuildControlError
+
+        dev, pin, scene, _, proof, snapshot_path, digest = self.imported_stl_probe_fixture()
+        mutations = (
+            ('unexpected live path', lambda candidate: candidate['resources']['scene_before']['body']['objects'][0]
+             ['geometry']['geometry_params'].update(source='/tmp/not-an-imported-stl-snapshot.stl')),
+            ('unexpected observed path', lambda candidate: candidate['imported_stl_snapshots']['before'][0]
+             .update(source_path='/tmp/not-an-imported-stl-snapshot.stl')),
+            ('wrong observed digest', lambda candidate: candidate['imported_stl_snapshots']['before'][0]
+             .update(content_sha256='0' * 64)),
+            ('missing snapshot binding', lambda candidate: candidate['imported_stl_snapshots']['after'].clear()),
+            ('changed geometry scale', lambda candidate: candidate['resources']['scene_after']['body']['objects'][0]
+             ['geometry']['geometry_params'].update(scale=2.6)),
+            ('changed source asset', lambda candidate: candidate['resources']['scene_after']['body']['objects'][0]
+             ['geometry']['source_asset'].update(content_sha256='0' * 64)),
+        )
+        self.assertEqual(snapshot_path.rsplit('/', 1)[1], digest + '.stl')
+        for label, mutate in mutations:
+            with self.subTest(label=label):
+                candidate = copy.deepcopy(proof)
+                mutate(candidate)
+                with self.assertRaises(BuildControlError):
+                    dev._saved_authoring_validate_probe(candidate, pin, scene)
+
+    def test_embedded_probe_hashes_only_bounded_single_link_stl_snapshots(self):
+        import hashlib, os, pathlib, tempfile
+        import docker_volume_dev as dev
+
+        namespace = {}
+        exec(dev._SAVED_AUTHORING_PROBE_IMPORTED_STL_HELPERS, namespace)
+        self.assertEqual(namespace['IMPORTED_STL_SNAPSHOT_ROOT'],
+            '/opt/fullmag/runtime-control/local-live/current/imported-stl-snapshots')
+        stl = b'solid tetra\nendsolid tetra\n'
+        digest = hashlib.sha256(stl).hexdigest()
+        archive_path = f'project/assets/imported-geometry/{digest}.stl'
+        binding = {'object_id': 'buckyball', 'archive_path': archive_path,
+            'asset_id': f'stl-sha256-{digest}', 'content_sha256': digest}
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary) / 'imported-stl-snapshots'
+            root.mkdir()
+            source = root / f'{digest}.stl'
+            source.write_bytes(stl)
+            namespace['IMPORTED_STL_SNAPSHOT_ROOT'] = str(root)
+            observation = namespace['read_imported_stl_snapshot'](binding)
+            self.assertEqual(observation, {'object_id': 'buckyball', 'source_path': str(source),
+                'content_sha256': digest, 'bytes': len(stl)})
+
+            scene = {'objects': [{'id': 'buckyball', 'geometry': {
+                'geometry_kind': 'ImportedGeometry',
+                'geometry_params': {'source': str(source)},
+                'source_asset': {'archive_path': archive_path,
+                    'asset_id': f'stl-sha256-{digest}', 'content_sha256': digest},
+            }}]}
+            self.assertEqual(namespace['observe_imported_stl_snapshots'](scene, [binding]), [observation])
+            scene['objects'][0]['geometry']['geometry_params']['source'] = str(root / 'other.stl')
+            with self.assertRaisesRegex(RuntimeError, 'source binding differs'):
+                namespace['observe_imported_stl_snapshots'](scene, [binding])
+
+            alias = pathlib.Path(temporary) / 'snapshot-root-alias'
+            alias.symlink_to(root, target_is_directory=True)
+            namespace['IMPORTED_STL_SNAPSHOT_ROOT'] = str(alias)
+            with self.assertRaises(OSError):
+                namespace['read_imported_stl_snapshot'](binding)
+            namespace['IMPORTED_STL_SNAPSHOT_ROOT'] = str(root)
+
+            os.link(source, root / 'hardlink.stl')
+            with self.assertRaisesRegex(RuntimeError, 'invalid bounded imported STL snapshot'):
+                namespace['read_imported_stl_snapshot'](binding)
+            (root / 'hardlink.stl').unlink()
+
+            namespace['IMPORTED_STL_MAX_BYTES'] = len(stl) - 1
+            with self.assertRaisesRegex(RuntimeError, 'invalid bounded imported STL snapshot'):
+                namespace['read_imported_stl_snapshot'](binding)
+            namespace['IMPORTED_STL_MAX_BYTES'] = dev._SAVED_AUTHORING_MAX_IMPORTED_STL_BYTES
+
+            source.write_bytes(bytes(byte ^ 1 for byte in stl))
+            with self.assertRaisesRegex(RuntimeError, 'digest differs'):
+                namespace['read_imported_stl_snapshot'](binding)
+
+    def test_probe_bounds_project_open_echo_separately_from_other_api_responses(self):
+        import docker_volume_dev as dev
+
+        namespace = {}
+        exec(dev._SAVED_AUTHORING_PROBE_API_RESPONSE_HELPERS, namespace)
+        self.assertIn(dev._SAVED_AUTHORING_PROBE_API_RESPONSE_HELPERS, dev._SAVED_AUTHORING_PROBE_SCRIPT)
+        api_limit = namespace['API_RESPONSE_MAX']
+        project_open_limit = namespace['PROJECT_OPEN_RESPONSE_MAX']
+        self.assertEqual(api_limit, 8 * 1024 * 1024)
+        self.assertEqual(
+            project_open_limit,
+            ((dev._SAVED_AUTHORING_MAX_ARCHIVE_BYTES + 2) // 3) * 4 + api_limit,
+        )
+
+        class SizedBody:
+            def __init__(self, size):
+                self.size = size
+
+            def __len__(self):
+                return self.size
+
+        class Response:
+            def __init__(self, size):
+                self.size = size
+                self.read_limit = None
+
+            def read(self, limit):
+                self.read_limit = limit
+                return SizedBody(min(self.size, limit))
+
+        # The current 8,370,981-byte .fms archive expands past the ordinary
+        # 8 MiB response cap when the project-open endpoint echoes its base64.
+        archive_base64_bytes = ((8_370_981 + 2) // 3) * 4
+        echoed_response_bytes = archive_base64_bytes + 4096
+        self.assertGreater(echoed_response_bytes, api_limit)
+        response = Response(echoed_response_bytes)
+        body = namespace['read_api_response'](response, '/v2/persistence/projects/open')
+        self.assertEqual(len(body), echoed_response_bytes)
+        self.assertEqual(response.read_limit, project_open_limit + 1)
+
+        oversized = Response(project_open_limit + 1)
+        with self.assertRaisesRegex(RuntimeError, 'API response exceeded budget'):
+            namespace['read_api_response'](oversized, '/v2/persistence/projects/open')
+        self.assertEqual(oversized.read_limit, project_open_limit + 1)
+
+        ordinary = Response(api_limit + 1)
+        with self.assertRaisesRegex(RuntimeError, 'API response exceeded budget'):
+            namespace['read_api_response'](ordinary, '/v2/platform/health')
+        self.assertEqual(ordinary.read_limit, api_limit + 1)
 
     def test_accepts_empty_ui_authoring_archive_and_existing_strict_probe(self):
         dev, pin, scene, raw, _, _, _, proof = self.empty_authoring_fixture()

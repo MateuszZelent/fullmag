@@ -206,28 +206,43 @@ class AutoUntrackedTests(unittest.TestCase):
 
 
 class DevCudaArchitectureTests(unittest.TestCase):
-    def test_explicit_all_and_invalid_values(self):
-        with mock.patch.dict(os.environ, {backend.DEV_CUDA_ARCHITECTURES_ENV: "80-real;89-real"}):
-            self.assertEqual(backend._dev_cuda_architectures(), "80-real;89-real")
-        with mock.patch.dict(os.environ, {backend.DEV_CUDA_ARCHITECTURES_ENV: "all"}):
-            self.assertIsNone(backend._dev_cuda_architectures())
-        with mock.patch.dict(os.environ, {backend.DEV_CUDA_ARCHITECTURES_ENV: "89;rm -rf"}):
-            with self.assertRaises(backend.BackendBuildError):
-                backend._dev_cuda_architectures()
-
-    def test_auto_uses_visible_devices_and_falls_back_to_the_image_matrix(self):
-        found = subprocess.CompletedProcess([], 0, stdout=b"[86, 89]\n", stderr=b"")
-        missing = subprocess.CompletedProcess([], 3, stdout=b"", stderr=b"")
-        with mock.patch.dict(os.environ, {}, clear=False):
-            os.environ.pop(backend.DEV_CUDA_ARCHITECTURES_ENV, None)
-            with mock.patch.object(backend.subprocess, "run", return_value=found):
-                self.assertEqual(backend._dev_cuda_architectures(), "86-real;89-real")
-            with mock.patch.object(backend.subprocess, "run", return_value=missing):
-                self.assertIsNone(backend._dev_cuda_architectures())
-            with mock.patch.object(
-                backend.subprocess, "run", side_effect=subprocess.TimeoutExpired("probe", 30)
+    def test_explicit_target_is_single_real_architecture(self):
+        for invalid in ("all", "auto", "86-virtual", "80-real;89-real", "89;rm -rf"):
+            with self.subTest(invalid=invalid), mock.patch.dict(
+                os.environ, {backend.DEV_CUDA_ARCHITECTURES_ENV: invalid},
             ):
-                self.assertIsNone(backend._dev_cuda_architectures())
+                with self.assertRaises(backend.BackendBuildError):
+                    backend._dev_cuda_architectures()
+
+    def test_fem_and_fdm_receive_the_same_pinned_target_on_cpu_runtime(self):
+        with tempfile.TemporaryDirectory() as directory, mock.patch.dict(os.environ, {
+            backend.DEV_CUDA_ARCHITECTURES_ENV: "86-real",
+            "FULLMAG_DOCKER_DEVICE_ACCESS": "cpu",
+        }), mock.patch.object(backend.subprocess, "run", side_effect=AssertionError("guest probed GPU")):
+            root = Path(directory)
+            native = {
+                "head_commit_full": "a" * 40, "source_snapshot_dirty": False,
+                "source_snapshot_sha256": "b" * 64,
+            }
+            environment = backend._build_environment(root, root, native, 1)
+            self.assertEqual(environment["FULLMAG_CUDA_ARCHITECTURES"], "86-real")
+            self.assertEqual(environment["FULLMAG_FDM_CUDA_ARCHITECTURES"], "86-real")
+
+    def test_missing_target_refuses_dev_compilation_but_preserves_release(self):
+        with tempfile.TemporaryDirectory() as directory, mock.patch.dict(os.environ, {
+            backend.DEV_CUDA_ARCHITECTURES_ENV: "",
+            "FULLMAG_CUDA_ARCHITECTURES": "80-real;89-real",
+        }), mock.patch.object(backend.subprocess, "run", side_effect=AssertionError("guest probed GPU")):
+            root = Path(directory)
+            native = {
+                "head_commit_full": "a" * 40, "source_snapshot_dirty": False,
+                "source_snapshot_sha256": "b" * 64,
+            }
+            self.assertIsNone(backend._dev_cuda_architectures())
+            with self.assertRaisesRegex(backend.BackendBuildError, "FULLMAG_DEV_CUDA_ARCHITECTURES"):
+                backend._build_environment(root, root, native, 1)
+            release = backend._build_environment(root, root, native, 1, "release")
+            self.assertEqual(release["FULLMAG_CUDA_ARCHITECTURES"], "80-real;89-real")
 
 
 @unittest.skipIf(os.name == "nt", "Linux container package-volume contract")

@@ -8,6 +8,7 @@
 #include "fem_common.hpp"
 #include "core/fem_mesh.hpp"
 #include "cpu/mfem/runtime/mfem_mesh_builder.hpp"
+#include "core/fem_marker_map.hpp"
 #include "frequency_domain/canonical_digest.hpp"
 #include "frequency_domain/linearization_state.hpp"
 #include "frequency_domain/mesh_symmetry_certificate.hpp"
@@ -16,6 +17,7 @@
 #include <array>
 #include <cmath>
 #include <cstddef>
+#include <cstdio>
 #include <cstring>
 #include <limits>
 #include <map>
@@ -1511,6 +1513,201 @@ bool validate_canonical_reduction_map(
     return true;
 }
 
+// Note 0830, eq-k0-consistent-static-demag: static P1 demag of m0 realized with
+// the same scalar space, scalar classes and outer boundary as the dynamic
+// shared-domain block, recovered by magnetic-only lumped projection.
+bool recompute_shared_domain_static_demag_p1(
+    mfem::FiniteElementSpace &scalar_space,
+    const std::vector<std::uint8_t> &magnetic_element_mask,
+    const double *m0_xyz,
+    const std::vector<double> &saturation_magnetization,
+    double uniform_saturation_magnetization,
+    const std::uint32_t *scalar_reduced_node,
+    std::uint64_t scalar_reduced_node_count,
+    PoissonAirboxBoundaryKind boundary_kind,
+    double robin_beta,
+    mfem::Array<int> &boundary_marker,
+    std::vector<double> &h_demag_xyz,
+    std::string &error)
+{
+    mfem::Mesh *mesh = scalar_space.GetMesh();
+    const int node_count = scalar_space.GetVSize();
+    if (mesh == nullptr || m0_xyz == nullptr || scalar_reduced_node == nullptr ||
+        scalar_reduced_node_count == 0u ||
+        scalar_reduced_node_count > static_cast<std::uint64_t>(node_count) ||
+        magnetic_element_mask.size() != static_cast<std::size_t>(mesh->GetNE()) ||
+        (!saturation_magnetization.empty() &&
+         saturation_magnetization.size() != static_cast<std::size_t>(node_count))) {
+        error = "consistent static demag requires one mesh, m0 and scalar classes";
+        return false;
+    }
+    const int reduced_count = static_cast<int>(scalar_reduced_node_count);
+    const auto node_of = [](int dof) { return dof >= 0 ? dof : -1 - dof; };
+    const auto ms_at = [&](int node) {
+        return saturation_magnetization.empty()
+            ? uniform_saturation_magnetization
+            : saturation_magnetization[static_cast<std::size_t>(node)];
+    };
+
+    mfem::BilinearForm form(&scalar_space);
+    form.AddDomainIntegrator(new mfem::DiffusionIntegrator());
+    std::unique_ptr<mfem::ConstantCoefficient> robin_coefficient;
+    if (boundary_kind == PoissonAirboxBoundaryKind::robin) {
+        if (boundary_marker.Size() == 0 || !finite_positive(robin_beta)) {
+            error = "consistent static demag Robin boundary is incomplete";
+            return false;
+        }
+        robin_coefficient = std::make_unique<mfem::ConstantCoefficient>(robin_beta);
+        form.AddBoundaryIntegrator(
+            new mfem::BoundaryMassIntegrator(*robin_coefficient), boundary_marker);
+    }
+    form.Assemble();
+    form.Finalize();
+    const mfem::SparseMatrix &p_full = form.SpMat();
+    mfem::SparseMatrix p_reduced(reduced_count, reduced_count);
+    {
+        const int *row_offsets = p_full.GetI();
+        const int *columns = p_full.GetJ();
+        const double *values = p_full.GetData();
+        for (int row = 0; row < p_full.Height(); ++row) {
+            const int reduced_row = static_cast<int>(scalar_reduced_node[row]);
+            for (int cursor = row_offsets[row]; cursor < row_offsets[row + 1]; ++cursor) {
+                p_reduced.Add(
+                    reduced_row,
+                    static_cast<int>(scalar_reduced_node[columns[cursor]]),
+                    values[cursor]);
+            }
+        }
+    }
+    p_reduced.Finalize();
+
+    mfem::Vector rhs(reduced_count);
+    rhs = 0.0;
+    mfem::Array<int> dofs;
+    mfem::Vector shape;
+    mfem::DenseMatrix dshape;
+    for (int element = 0; element < mesh->GetNE(); ++element) {
+        if (magnetic_element_mask[static_cast<std::size_t>(element)] == 0u) {
+            continue;
+        }
+        scalar_space.GetElementDofs(element, dofs);
+        const mfem::FiniteElement *finite_element = scalar_space.GetFE(element);
+        mfem::ElementTransformation *transformation = mesh->GetElementTransformation(element);
+        const mfem::IntegrationRule &rule = frequency_domain_p1_quadrature(*finite_element);
+        shape.SetSize(dofs.Size());
+        dshape.SetSize(dofs.Size(), 3);
+        for (int point_index = 0; point_index < rule.GetNPoints(); ++point_index) {
+            const mfem::IntegrationPoint &point = rule.IntPoint(point_index);
+            transformation->SetIntPoint(&point);
+            finite_element->CalcShape(point, shape);
+            finite_element->CalcPhysDShape(*transformation, dshape);
+            const double weight = transformation->Weight() * point.weight;
+            double magnetization[3] = {0.0, 0.0, 0.0};
+            for (int local = 0; local < dofs.Size(); ++local) {
+                const int node = node_of(dofs[local]);
+                const double ms = ms_at(node);
+                for (int axis = 0; axis < 3; ++axis) {
+                    magnetization[axis] +=
+                        shape[local] * ms * m0_xyz[3 * static_cast<std::size_t>(node) + axis];
+                }
+            }
+            for (int local = 0; local < dofs.Size(); ++local) {
+                const int node = node_of(dofs[local]);
+                rhs[static_cast<int>(scalar_reduced_node[node])] += weight *
+                    (magnetization[0] * dshape(local, 0) +
+                     magnetization[1] * dshape(local, 1) +
+                     magnetization[2] * dshape(local, 2));
+            }
+        }
+    }
+
+    if (boundary_kind == PoissonAirboxBoundaryKind::dirichlet) {
+        mfem::Array<int> essential;
+        scalar_space.GetEssentialTrueDofs(boundary_marker, essential);
+        std::set<int> reduced_essential;
+        for (int index = 0; index < essential.Size(); ++index) {
+            reduced_essential.insert(
+                static_cast<int>(scalar_reduced_node[essential[index]]));
+        }
+        for (const int reduced : reduced_essential) {
+            p_reduced.EliminateRowCol(reduced);
+            rhs[reduced] = 0.0;
+        }
+    } else if (boundary_kind == PoissonAirboxBoundaryKind::pure_neumann) {
+        // The constant kernel of P is orthogonal to a consistent charge source;
+        // remove the roundoff mean so CG stays in the range of P.
+        rhs -= rhs.Sum() / static_cast<double>(reduced_count);
+    }
+
+    mfem::Vector potential(reduced_count);
+    potential = 0.0;
+    mfem::GSSmoother preconditioner(p_reduced);
+    mfem::CGSolver solver;
+    solver.SetOperator(p_reduced);
+    solver.SetPreconditioner(preconditioner);
+    solver.SetRelTol(1.0e-12);
+    solver.SetAbsTol(0.0);
+    solver.SetMaxIter(50000);
+    solver.SetPrintLevel(0);
+    solver.Mult(rhs, potential);
+    if (!solver.GetConverged() && rhs.Norml2() > 0.0) {
+        error = "consistent static demag P1 solve did not converge";
+        return false;
+    }
+
+    std::vector<double> field_accumulator(3u * static_cast<std::size_t>(node_count), 0.0);
+    std::vector<double> mass_accumulator(static_cast<std::size_t>(node_count), 0.0);
+    for (int element = 0; element < mesh->GetNE(); ++element) {
+        if (magnetic_element_mask[static_cast<std::size_t>(element)] == 0u) {
+            continue;
+        }
+        scalar_space.GetElementDofs(element, dofs);
+        const mfem::FiniteElement *finite_element = scalar_space.GetFE(element);
+        mfem::ElementTransformation *transformation = mesh->GetElementTransformation(element);
+        const mfem::IntegrationRule &rule = frequency_domain_p1_quadrature(*finite_element);
+        shape.SetSize(dofs.Size());
+        dshape.SetSize(dofs.Size(), 3);
+        for (int point_index = 0; point_index < rule.GetNPoints(); ++point_index) {
+            const mfem::IntegrationPoint &point = rule.IntPoint(point_index);
+            transformation->SetIntPoint(&point);
+            finite_element->CalcShape(point, shape);
+            finite_element->CalcPhysDShape(*transformation, dshape);
+            const double weight = transformation->Weight() * point.weight;
+            double gradient[3] = {0.0, 0.0, 0.0};
+            for (int local = 0; local < dofs.Size(); ++local) {
+                const double value =
+                    potential[static_cast<int>(scalar_reduced_node[node_of(dofs[local])])];
+                for (int axis = 0; axis < 3; ++axis) {
+                    gradient[axis] += value * dshape(local, axis);
+                }
+            }
+            for (int local = 0; local < dofs.Size(); ++local) {
+                const std::size_t node = static_cast<std::size_t>(node_of(dofs[local]));
+                for (int axis = 0; axis < 3; ++axis) {
+                    field_accumulator[3u * node + static_cast<std::size_t>(axis)] -=
+                        shape[local] * gradient[axis] * weight;
+                }
+                mass_accumulator[node] += shape[local] * weight;
+            }
+        }
+    }
+    h_demag_xyz.assign(3u * static_cast<std::size_t>(node_count), 0.0);
+    for (std::size_t node = 0; node < mass_accumulator.size(); ++node) {
+        if (!(mass_accumulator[node] > 0.0)) {
+            continue;
+        }
+        for (std::size_t axis = 0; axis < 3u; ++axis) {
+            h_demag_xyz[3u * node + axis] =
+                field_accumulator[3u * node + axis] / mass_accumulator[node];
+            if (!std::isfinite(h_demag_xyz[3u * node + axis])) {
+                error = "consistent static demag P1 field is non-finite";
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
 } // namespace
 
 bool import_modal_shared_domain_mesh(
@@ -1822,11 +2019,19 @@ FrequencyDomainStatus validate_modal_shared_domain_payload_contract(
             copy_error(error_message, marker_error.c_str());
             return FrequencyDomainStatus::validation_error;
         }
-        if (payload.mesh->periodic_node_pairs == nullptr ||
-            payload.mesh->periodic_node_pairs_len < 2u ||
-            payload.mesh->periodic_node_pairs_len % 2u != 0u ||
-            payload.mesh->periodic_boundary_pair_markers == nullptr ||
-            payload.mesh->periodic_boundary_pair_markers_len == 0u ||
+        // open_airbox_k0 (note 0830): an isolated airbox mesh with no periodic
+        // metadata and zero pair counts. Its v6 views are identity views, so
+        // only the exterior Robin boundary map is required below.
+        const bool open_airbox_identity =
+            payload.magnetic_pair_count == 0u && payload.airbox_pair_count == 0u &&
+            payload.mesh->periodic_node_pairs_len == 0u &&
+            payload.mesh->periodic_boundary_pair_markers_len == 0u;
+        if ((!open_airbox_identity &&
+             (payload.mesh->periodic_node_pairs == nullptr ||
+              payload.mesh->periodic_node_pairs_len < 2u ||
+              payload.mesh->periodic_node_pairs_len % 2u != 0u ||
+              payload.mesh->periodic_boundary_pair_markers == nullptr ||
+              payload.mesh->periodic_boundary_pair_markers_len == 0u)) ||
             payload.mesh->facet_roles == nullptr || payload.mesh->facet_markers == nullptr ||
             payload.mesh->facet_roles_len != payload.mesh->facet_markers_len) {
             copy_error(error_message,
@@ -1873,9 +2078,12 @@ FrequencyDomainStatus validate_modal_shared_domain_payload_contract(
                 has_open_z_face = true;
             }
         }
-        if (!has_periodic_face || !has_open_z_face) {
+        if ((open_airbox_identity ? has_periodic_face : !has_periodic_face) ||
+            !has_open_z_face) {
             copy_error(error_message,
-                       "shared-domain payload periodic seams or open-z boundary are not mapped");
+                       open_airbox_identity
+                           ? "open_airbox_k0 payload has periodic seams or no exterior Robin boundary"
+                           : "shared-domain payload periodic seams or open-z boundary are not mapped");
             return FrequencyDomainStatus::validation_error;
         }
         MeshSymmetryCertificateV6BindingRequest v6_request{};
@@ -3404,7 +3612,11 @@ FrequencyDomainStatus assemble_poisson_airbox_shared_domain_payload(
             payload.magnetic_reduced_node == nullptr ||
             payload.scalar_reduced_node_count == 0u ||
             payload.magnetic_reduced_node_count == 0u ||
-            payload.magnetic_pair_count == 0u || payload.airbox_pair_count == 0u ||
+            ((payload.magnetic_pair_count == 0u) != (payload.airbox_pair_count == 0u)) ||
+            (payload.magnetic_pair_count == 0u &&
+             (payload.mesh == nullptr || payload.mesh->periodic_node_pairs_len != 0u ||
+              payload.boundary_kind == nullptr ||
+              std::strcmp(payload.boundary_kind, "robin") != 0)) ||
             payload.boundary_kind == nullptr || payload.boundary_kind[0] == '\0' ||
             payload.equilibrium_digest == nullptr || payload.equilibrium_digest[0] == '\0' ||
             payload.mesh_certificate_digest == nullptr || payload.mesh_certificate_digest[0] == '\0' ||
@@ -3507,7 +3719,8 @@ FrequencyDomainStatus assemble_poisson_airbox_shared_domain_payload(
             return out_result->status;
         }
         std::unique_ptr<mfem::Mesh> mesh;
-        if (!fullmag::fem::build_mfem_mesh(source, mesh, error)) {
+        fullmag::fem::FemMarkerMaps marker_maps;
+        if (!fullmag::fem::build_mfem_mesh(source, mesh, error, &marker_maps)) {
             copy_error(out_result->error_message, error.c_str());
             return out_result->status;
         }
@@ -3589,15 +3802,14 @@ FrequencyDomainStatus assemble_poisson_airbox_shared_domain_payload(
         std::vector<double> linearization_h_demag0_z(
             static_cast<std::size_t>(magnetic_node_count));
         mfem::Array<int> magnetic_attribute_marker(mesh->attributes.Max());
-        if (magnetic_attribute_marker.Size() < 1) {
+        const int magnetic_attribute = marker_maps.domain.attribute(1u);
+        if (magnetic_attribute_marker.Size() < 1 || magnetic_attribute == 0) {
             copy_error(out_result->error_message,
                        "shared-domain magnetic FE attribute is missing");
             return out_result->status;
         }
         magnetic_attribute_marker = 0;
-        // The imported shared-domain contract maps the magnetic cell marker 1
-        // to MFEM volume attribute 1; air cells receive a distinct attribute.
-        magnetic_attribute_marker[0] = 1;
+        magnetic_attribute_marker[magnetic_attribute - 1] = 1;
         mfem::ConstantCoefficient unit_density(1.0);
         mfem::LinearForm magnetic_lumped_mass_form(&scalar_space);
         magnetic_lumped_mass_form.AddDomainIntegrator(
@@ -3697,24 +3909,25 @@ FrequencyDomainStatus assemble_poisson_airbox_shared_domain_payload(
         }
         mfem::Array<int> boundary_marker;
         if (std::strcmp(payload.boundary_kind, "pure_neumann") != 0) {
-            if (payload.boundary_marker == 0u ||
-                payload.boundary_marker > static_cast<std::uint32_t>(std::numeric_limits<int>::max())) {
+            if (payload.boundary_marker == 0u) {
                 copy_error(out_result->error_message,
                            "shared-domain Robin/Dirichlet payload requires a positive boundary marker");
                 return out_result->status;
             }
             const int maximum_marker = std::max(1, mesh->bdr_attributes.Max());
-            if (payload.boundary_marker > static_cast<std::uint32_t>(maximum_marker)) {
+            const int selected_attribute = marker_maps.boundary.attribute(payload.boundary_marker);
+            if (selected_attribute == 0) {
                 copy_error(out_result->error_message,
                            "shared-domain payload boundary marker is absent from the MFEM mesh");
                 return out_result->status;
             }
             boundary_marker.SetSize(maximum_marker);
             boundary_marker = 0;
-            boundary_marker[static_cast<int>(payload.boundary_marker) - 1] = 1;
+            boundary_marker[selected_attribute - 1] = 1;
             for (const std::uint32_t periodic_marker : source.periodic_boundary_marker_set) {
-                if (periodic_marker >= 1u && periodic_marker <= static_cast<std::uint32_t>(maximum_marker)) {
-                    boundary_marker[static_cast<int>(periodic_marker) - 1] = 0;
+                const int attribute = marker_maps.boundary.attribute(periodic_marker);
+                if (attribute > 0) {
+                    boundary_marker[attribute - 1] = 0;
                 }
             }
         }
@@ -3810,6 +4023,73 @@ FrequencyDomainStatus assemble_poisson_airbox_shared_domain_payload(
                 return out_result->status;
             }
         }
+        // Note 0830, eq-k0-consistent-h-parallel: the restoring scalar
+        // m0 . H_eff0 must use the static demag of the same P1 operator as the
+        // dynamic block. Only the component parallel to m0 is replaced, so the
+        // accepted equilibrium torque and all bound input digests are unchanged.
+        FullmagFemModalLinearizationDescriptor consistent_descriptor =
+            *payload.linearization_descriptor;
+        std::vector<double> consistent_h_eff0_xyz;
+        if ((consistent_descriptor.term_presence_mask &
+             FULLMAG_FEM_MODAL_LINEARIZATION_TERM_FIELD) != 0u &&
+            payload.linearization_h_demag0_xyz != nullptr) {
+            std::vector<double> static_demag_p1;
+            if (!recompute_shared_domain_static_demag_p1(
+                    scalar_space,
+                    magnetic_element_mask,
+                    consistent_descriptor.equilibrium_m0_xyz,
+                    saturation_magnetization,
+                    payload.uniform_saturation_magnetisation_a_per_m,
+                    payload.scalar_reduced_node,
+                    payload.scalar_reduced_node_count,
+                    boundary_kind,
+                    payload.robin_beta,
+                    boundary_marker,
+                    static_demag_p1,
+                    error)) {
+                copy_error(out_result->error_message, error.c_str());
+                return out_result->status;
+            }
+            consistent_h_eff0_xyz.assign(
+                consistent_descriptor.effective_field_h_eff0_xyz,
+                consistent_descriptor.effective_field_h_eff0_xyz + 3u * node_count);
+            double max_parallel_shift = 0.0;
+            long double parallel_shift_sum = 0.0L;
+            std::uint64_t shifted_nodes = 0u;
+            for (std::uint64_t node = 0u; node < node_count; ++node) {
+                if (magnetic_node_mask[static_cast<std::size_t>(node)] == 0u) {
+                    continue;
+                }
+                const double *m0 = &consistent_descriptor.equilibrium_m0_xyz[3u * node];
+                const double m_norm = std::sqrt(m0[0] * m0[0] + m0[1] * m0[1] + m0[2] * m0[2]);
+                if (!finite_positive(m_norm)) {
+                    continue;
+                }
+                double shift = 0.0;
+                for (std::size_t axis = 0; axis < 3u; ++axis) {
+                    shift += (m0[axis] / m_norm) *
+                        (static_demag_p1[3u * node + axis] -
+                         payload.linearization_h_demag0_xyz[3u * node + axis]);
+                }
+                for (std::size_t axis = 0; axis < 3u; ++axis) {
+                    consistent_h_eff0_xyz[3u * node + axis] += shift * m0[axis] / m_norm;
+                }
+                max_parallel_shift = std::max(max_parallel_shift, std::abs(shift));
+                parallel_shift_sum += shift;
+                ++shifted_nodes;
+            }
+            consistent_descriptor.effective_field_h_eff0_xyz = consistent_h_eff0_xyz.data();
+            std::fprintf(
+                stderr,
+                "[fullmag-fem] k0 consistent static demag: boundary=%s nodes=%llu "
+                "mean_parallel_shift_a_per_m=%.6e max_abs_parallel_shift_a_per_m=%.6e\n",
+                payload.boundary_kind,
+                static_cast<unsigned long long>(shifted_nodes),
+                shifted_nodes > 0u
+                    ? static_cast<double>(parallel_shift_sum / shifted_nodes)
+                    : 0.0,
+                max_parallel_shift);
+        }
         PoissonAirboxSharedDomainCsrMatrix native_magnetic_a_qq{};
         CsrMatrixView magnetic_a_qq{};
         {
@@ -3822,7 +4102,7 @@ FrequencyDomainStatus assemble_poisson_airbox_shared_domain_payload(
                 : -1.0;
             const FrequencyDomainStatus native_status =
                 assemble_native_magnetic_a_qq(
-                    *payload.linearization_descriptor,
+                    consistent_descriptor,
                     &scalar_space,
                     magnetic_element_mask.data(),
                     magnetic_element_mask.size(),

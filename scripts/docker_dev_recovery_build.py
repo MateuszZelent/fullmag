@@ -48,7 +48,7 @@ def validate_diagnostic_build(process, owner):
     require(process.get('error') == 'runtime service owner observation failed during supervision: runtime service owner is not ready',
             'Diagnostic build requires the supported runtime supervision failure')
     require(owner.get('schema_version') == 'runtime_service_owner.v1'
-            and owner.get('state') == 'unknown', 'Build-only recovery requires the unchanged Unknown owner')
+            and owner.get('state') in {'unknown','failed'}, 'Build-only recovery requires an unchanged Unknown or terminal Failed owner')
     pin = process.get('service_owner')
     require(isinstance(pin, dict) and pin.get('state') == 'ready', 'The original Ready owner pin is required')
     children = owner.get('children')
@@ -61,7 +61,9 @@ def validate_diagnostic_build(process, owner):
     require({(child['role'], child['pid']) for child in children}
             == {(child['role'], child['pid']) for child in pin.get('children', [])},
             'Unknown owner children differ from the Ready pin')
-    expected = dict(pin, state='unknown', heartbeat_at=owner.get('heartbeat_at'), children=children)
+    if owner['state']=='failed':
+        require(all(c['status'] in {'exited_success','exited_failure'} for c in children), 'Failed build owner children must be terminal')
+    expected = dict(pin, state=owner['state'], heartbeat_at=owner.get('heartbeat_at'), children=children)
     require(owner == expected, 'Unknown owner differs from its original Ready identity')
 
 
@@ -195,6 +197,46 @@ def validate_claimed_build_snapshot(pin, ledger, observed):
     return values
 
 
+def validate_pending_build_snapshot(pin, ledger, observed):
+    """Build-only authority for one immutable admission with an unused permit."""
+    require(set(pin) == {'schema_version','identity','expected_task','reservation_sha256','files'}
+            and pin['schema_version'] == 'fullmag.pending-admission-build-pin.v1', 'Pending admission pin schema differs')
+    identity=pin['identity']
+    require(set(identity)=={'store_id','run_id','task_id','attempt_id','ownership_epoch','resource_id','lease_token'}, 'Pending admission identity differs')
+    for key in ('run_id','task_id','attempt_id','resource_id','lease_token'):
+        require(isinstance(identity[key],str) and re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9._-]{0,199}',identity[key]), 'Unsafe pending identity')
+    require(type(identity['ownership_epoch']) is int and identity['ownership_epoch']>0
+            and re.fullmatch(r'sha256:[0-9a-f]{64}',identity['store_id']), 'Invalid pending epoch/store')
+    digest=lambda value: hashlib.sha256(json.dumps(value,sort_keys=True,separators=(',',':'),ensure_ascii=False,allow_nan=False).encode()).hexdigest()
+    rows=ledger.get('reservations');require(isinstance(rows,list) and all(isinstance(r,dict) for r in rows), 'Invalid pending ledger')
+    active=[r for r in rows if r.get('state')!='released'];require(len(active)==1,'Pending build requires one occupied reservation')
+    row=active[0];rid={k:identity[k] for k in ('store_id','run_id','task_id','resource_id','lease_token')};rid['owner']={'kind':'solver','attempt_id':identity['attempt_id'],'ownership_epoch':identity['ownership_epoch']}
+    require(row.get('identity')==rid and row.get('state')=='committed' and row.get('worker_launch_gate')=={'state':'pending'}
+            and digest(row)==pin['reservation_sha256'], 'Pending reservation/gate changed')
+    require(set(observed)==set(pin['files'])=={'catalog','lease','admission','launch'}, 'Pending build file roles differ')
+    values={}
+    for role,raw in observed.items():
+        require(isinstance(raw,bytes) and 0<len(raw)<=8*1024*1024
+                and hashlib.sha256(raw).hexdigest()==pin['files'][role]['sha256'], 'Pending evidence changed: '+role)
+        values[role]=json.loads(raw)
+    lease=values['lease'];admission=values['admission'];catalog=values['catalog']
+    require(lease.get('schema_version')=='resource_lease.v1' and lease.get('state')=='active'
+            and all(lease.get(k)==identity[k] for k in ('run_id','task_id','attempt_id','ownership_epoch','resource_id','lease_token'))
+            and lease.get('heartbeat_sequence')==0, 'Pending lease identity changed')
+    tasks=[t for t in catalog.get('tasks',[]) if t.get('task_id')==identity['task_id']]
+    require(catalog.get('run_id')==identity['run_id'] and len(tasks)==1 and tasks[0]==pin['expected_task'], 'Pending catalog changed')
+    task=tasks[0]
+    require(task.get('lifecycle')=='preparing' and task.get('attempt_id')==identity['attempt_id']
+            and task.get('ownership_epoch')==identity['ownership_epoch'] and task.get('resource_id')==identity['resource_id']
+            and not task.get('artifact_ids') and task.get('coordinator_genesis') is None
+            and task.get('coordinator_watermark') is None and task.get('resolved_input_fingerprint') is None, 'Pending task progressed')
+    require(admission.get('schema_version')=='task_admission.v1' and admission.get('task')==task
+            and admission.get('lease')==lease and isinstance(admission.get('resolved_inputs_snapshot'),dict), 'Immutable pending admission differs')
+    require(values['launch'].get('schema_version')=='runtime_service_launch.v1'
+            and values['launch'].get('state')=='ready', 'Pending launch identity differs')
+    return values
+
+
 RUNTIME = r'''
 import argparse, contextlib, ctypes, fcntl, os, re, stat, subprocess, sys, tempfile, time
 sys.path.insert(0, '/opt/fullmag')
@@ -254,6 +296,8 @@ def claimed_build_locks(request, paths):
 
 
 def claimed_build_evidence(pin, paths, ledger, owner):
+    if pin.get('schema_version')=='fullmag.pending-admission-build-pin.v1':
+        return pending_build_evidence(pin, paths, ledger, owner)
     require(isinstance(pin, dict) and isinstance(pin.get('identity'), dict),
             'Claimed build pin is missing its identity')
     identity = pin['identity']
@@ -314,10 +358,43 @@ def claimed_build_evidence(pin, paths, ledger, owner):
     return hashes
 
 
+def pending_build_evidence(pin, paths, ledger, owner):
+    require(owner.get('state')=='failed', 'Pending build requires a terminal Failed owner')
+    identity=pin['identity']
+    for key in ('run_id','task_id','attempt_id','resource_id','lease_token'):
+        require(isinstance(identity.get(key),str) and re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9._-]{0,199}',identity[key]), 'Unsafe pending identity')
+    require(type(identity.get('ownership_epoch')) is int and identity['ownership_epoch']>0,'Invalid pending epoch')
+    run=paths.store/'runs'/identity['run_id']
+    fixed={'catalog':run/'run_catalog.json', 'lease':run/'resource_leases'/identity['resource_id']/(identity['lease_token']+'.json'),
+           'admission':run/'task_admissions'/identity['task_id']/(identity['attempt_id']+'.json'),
+           'launch':runtime.runtime_services_root(paths)/'LAUNCH.json'}
+    observed={}
+    for role,path in fixed.items():
+        require(pin['files'].get(role,{}).get('path')==str(path), 'Pending evidence path differs')
+        observed[role]=read(path)
+    values=validate_pending_build_snapshot(pin,ledger,observed)
+    require(values['launch'].get('pid')==owner['pid'], 'Pending launch belongs to another owner')
+    epoch=run/'worker-attempts'/identity['task_id']/identity['attempt_id']/('epoch-'+str(identity['ownership_epoch']))
+    require(not os.path.lexists(epoch), 'Pending build found a worker attempt directory')
+    require(not list((paths.store/'supervisor-slots').glob('*/owner.v2.json')), 'Pending build found a supervisor')
+    hashes={str(fixed[k]):hashlib.sha256(raw).hexdigest() for k,raw in observed.items()}
+    for family in ('resource_leases','preparation_resource_leases'):
+        for path in (paths.store/'runs').glob('*/'+family+'/*/*.json'):
+            raw=read(path);value=json.loads(raw)
+            require(value.get('state')!='active' or (family=='resource_leases' and path==fixed['lease']), 'Another local lease is active')
+            hashes[str(path)]=hashlib.sha256(raw).hexdigest()
+    for family in ('coordinator_journal','worker_inbox','worker_process_exit_receipts'):
+        for path in sorted((run/family).rglob('*.json')):
+            raw=read(path);value=json.loads(raw);payload=value.get('payload',{});claim=payload.get('claim',payload.get('checkpoint',{}).get('claim',{}))
+            require(value.get('task_id')!=identity['task_id'] and claim.get('task_id')!=identity['task_id'], 'Pending admission has execution evidence')
+            hashes[str(path)]=hashlib.sha256(raw).hexdigest()
+    return hashes
+
+
 def diagnostic_api_evidence(process, owner, paths, claimed_pin=None):
     import urllib.request
     runtime._validate_terminal_owner(process['service_owner'], state='ready', name='diagnostic build Ready pin')
-    runtime._validate_terminal_owner(owner, state='unknown', name='diagnostic build Unknown owner',
+    runtime._validate_terminal_owner(owner, state=owner['state'], name='diagnostic build retained owner',
         allowed_child_statuses=('running', 'unknown', 'exited_success', 'exited_failure'))
     require(all(not Path('/proc', str(pid)).exists()
                 for pid in [owner['pid'], *(child['pid'] for child in owner['children'])]),
@@ -424,6 +501,8 @@ def diagnostic_api_evidence(process, owner, paths, claimed_pin=None):
     ledger_raw = read(ledger)
     reservations = json.loads(ledger_raw).get('reservations')
     extra = {}
+    if owner['state']=='failed':
+        require(isinstance(claimed_pin,dict) and claimed_pin.get('schema_version')=='fullmag.pending-admission-build-pin.v1', 'Failed diagnostic build requires an exact unused admission pin')
     if claimed_pin is None:
         require(isinstance(reservations, list)
                 and all(isinstance(row, dict) and row.get('state') == 'released' for row in reservations),
@@ -823,7 +902,7 @@ def backend_control_path(path):
 def inside_code(promote=False):
     return ('import hashlib, json\nfrom pathlib import Path\n' + inspect.getsource(require)
             + '\n' + inspect.getsource(validate_terminal) + '\n' + inspect.getsource(validate_diagnostic_build)
-            + '\n' + inspect.getsource(validate_claimed_build_snapshot) + '\n' + RUNTIME
+            + '\n' + inspect.getsource(validate_claimed_build_snapshot) + '\n' + inspect.getsource(validate_pending_build_snapshot) + '\n' + RUNTIME
             + ('\ninside_promote(json.loads(sys.argv[1]))\n' if promote else '\ninside(json.loads(sys.argv[1]))\n'))
 
 

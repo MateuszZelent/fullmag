@@ -759,6 +759,18 @@ void rotated_dmi_setter_rolls_back_failed_refresh() {
                     for (double value : rotated) {
                         check(value == 0.0, "disabling DMI left a stale rotated field");
                     }
+                    // Repeated total-DMI observations enter the dormant-field
+                    // fast path after the first successful zero refresh.
+                    for (int repeat = 0; repeat < 2; ++repeat) {
+                        double total_dmi[9]{};
+                        check(fullmag_fdm_backend_copy_layer_field_f64(
+                                  handle, layer, FULLMAG_FDM_OBSERVABLE_H_DMI,
+                                  total_dmi, 9) == FULLMAG_FDM_OK,
+                              "disabled total DMI repeated copy failed");
+                        for (double value : total_dmi) {
+                            check(value == 0.0, "dormant DMI reuse exposed a stale field");
+                        }
+                    }
                 }
             }
             fullmag_fdm_backend_destroy(handle);

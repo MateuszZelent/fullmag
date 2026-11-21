@@ -169,85 +169,18 @@ pub(crate) fn summarize_stl_asset(
     file_name: &str,
     bytes: &[u8],
 ) -> Result<ImportedAssetSummary, ApiError> {
-    let summary = if let Some(binary) = summarize_binary_stl_asset(file_name, bytes)? {
-        binary
-    } else {
-        summarize_ascii_stl_asset(file_name, bytes)?
-    };
-    Ok(summary)
-}
-
-pub(crate) fn summarize_binary_stl_asset(
-    file_name: &str,
-    bytes: &[u8],
-) -> Result<Option<ImportedAssetSummary>, ApiError> {
-    if bytes.len() < 84 {
-        return Ok(None);
-    }
-    let triangle_count = u32::from_le_bytes([bytes[80], bytes[81], bytes[82], bytes[83]]) as usize;
-    if 84 + triangle_count * 50 != bytes.len() {
-        return Ok(None);
-    }
-
-    let mut points = Vec::with_capacity(triangle_count * 3);
-    let mut offset = 84;
-    for _ in 0..triangle_count {
-        offset += 12;
-        for _ in 0..3 {
-            let x = f32::from_le_bytes(bytes[offset..offset + 4].try_into().unwrap()) as f64;
-            let y = f32::from_le_bytes(bytes[offset + 4..offset + 8].try_into().unwrap()) as f64;
-            let z = f32::from_le_bytes(bytes[offset + 8..offset + 12].try_into().unwrap()) as f64;
-            points.push([x, y, z]);
-            offset += 12;
-        }
-        offset += 2;
-    }
-
-    Ok(Some(ImportedAssetSummary {
-        file_name: file_name.to_string(),
-        file_bytes: bytes.len(),
-        kind: "stl_surface".to_string(),
-        bounds: bounds_from_points(&points),
-        triangle_count: Some(triangle_count),
-        node_count: None,
-        element_count: None,
-        boundary_face_count: None,
-        note: None,
-    }))
-}
-
-pub(crate) fn summarize_ascii_stl_asset(
-    file_name: &str,
-    bytes: &[u8],
-) -> Result<ImportedAssetSummary, ApiError> {
-    let text = std::str::from_utf8(bytes)
-        .map_err(|error| ApiError::bad_request(format!("invalid ASCII STL payload: {}", error)))?;
-    let mut points = Vec::new();
-    for line in text.lines() {
-        let trimmed = line.trim();
-        if !trimmed.starts_with("vertex ") {
-            continue;
-        }
-        let values = trimmed
-            .split_whitespace()
-            .skip(1)
-            .filter_map(|value| value.parse::<f64>().ok())
-            .collect::<Vec<_>>();
-        if values.len() == 3 {
-            points.push([values[0], values[1], values[2]]);
-        }
-    }
-
+    let surface = fullmag_authoring::parse_stl_surface(bytes)
+        .map_err(ApiError::bad_request)?;
     Ok(ImportedAssetSummary {
         file_name: file_name.to_string(),
         file_bytes: bytes.len(),
         kind: "stl_surface".to_string(),
-        bounds: bounds_from_points(&points),
-        triangle_count: Some(points.len() / 3),
-        node_count: None,
+        bounds: bounds_from_points(&surface.positions),
+        triangle_count: Some(surface.triangle_indices.len()),
+        node_count: Some(surface.positions.len()),
         element_count: None,
         boundary_face_count: None,
-        note: None,
+        note: Some("Source triangle surface; volume meshing validates closed shells separately.".to_string()),
     })
 }
 
@@ -288,4 +221,27 @@ pub(crate) fn bounds_from_points(points: &[[f64; 3]]) -> Option<BoundsSummary> {
         max,
         size: [max[0] - min[0], max[1] - min[1], max[2] - min[2]],
     })
+}
+
+#[cfg(test)]
+mod stl_import_tests {
+    use super::*;
+
+    #[test]
+    fn stl_summary_uses_the_same_validated_surface_as_preview() {
+        let source = b"solid face\nfacet normal 0 0 1\nouter loop\nvertex 0 0 0\nvertex 2 0 0\nvertex 0 3 0\nendloop\nendfacet\nendsolid face\n";
+        let summary = summarize_uploaded_asset("face.STL", source).unwrap();
+        assert_eq!(summary.kind, "stl_surface");
+        assert_eq!(summary.triangle_count, Some(1));
+        assert_eq!(summary.node_count, Some(3));
+        assert!(summary.element_count.is_none());
+        assert_eq!(summary.bounds.unwrap().max, [2.0, 3.0, 0.0]);
+    }
+
+    #[test]
+    fn malformed_stl_never_becomes_a_successful_empty_summary() {
+        for source in [b"arbitrary text".as_slice(), b"solid empty\nendsolid empty\n".as_slice()] {
+            assert!(summarize_uploaded_asset("bad.stl", source).is_err());
+        }
+    }
 }

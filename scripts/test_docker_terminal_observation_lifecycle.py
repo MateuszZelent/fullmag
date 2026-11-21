@@ -29,24 +29,18 @@ class Transport(unittest.TestCase):
         import test_docker_terminal_observation_producer as original
         original.ProducerTests.setUpClass()
         self.proof = copy.deepcopy(original.ProducerTests.expected)
-        raw = producer.canonical(self.proof) + b"\n"
-        digest = producer.sha(raw)
-        self.parent = self.directory / "terminal-observation" / digest
-        self.parent.mkdir(parents=True)
-        (self.parent / "proof.json").write_bytes(raw)
-        request = {"schema": "fullmag.terminal-observation-request.v1",
-                   "proof_path": f"terminal-observation/{digest}/proof.json", "proof_sha256": digest}
-        request_raw = producer.canonical(request) + b"\n"
-        (self.parent / "request.json").write_bytes(request_raw)
-        self.env = {service.TERMINAL_OBSERVATION_REQUEST_ENV: f"terminal-observation/{digest}/request.json",
-                    service.TERMINAL_OBSERVATION_DIGEST_ENV: producer.sha(request_raw),
-                    "FULLMAG_STARTUP_ENABLED": "0",
-                    "FULLMAG_RUNTIME_PROVENANCE": str(service.ACCEPTED_REATTACH_PROVENANCE),
-                    "FULLMAG_RUNTIME_IMAGE_ID": "sha256:" + "d" * 64}
+        control = self.directory / "control"
+        source_preflight = control / original.BASE / "terminal-session-preflight.json"
+        source_preflight.parent.mkdir(parents=True)
+        source_preflight.write_bytes(original.ProducerTests.controls[original.BASE + "terminal-session-preflight.json"])
+        self.replace("BUILD_CONTROL_ROOT", control)
+        self.write_proof(self.proof)
+        self.env.update(FULLMAG_STARTUP_ENABLED="0",
+                        FULLMAG_RUNTIME_PROVENANCE=str(service.ACCEPTED_REATTACH_PROVENANCE),
+                        FULLMAG_RUNTIME_IMAGE_ID="sha256:" + "d" * 64)
         config = self.directory / "native.json"
         config.write_bytes(b'{"fixture":"target-native-config"}\n')
         self.paths = types.SimpleNamespace(state_root=self.directory, config=config)
-        self.patches = []
         self.replace("process_environment", mock.Mock(side_effect=lambda *a, **k: dict(self.env)))
         self.replace("_read_json", mock.Mock(return_value={
             "schema": "fullmag.docker-all-image.v1", "state": "succeeded", "commit": "c" * 40,
@@ -57,6 +51,21 @@ class Transport(unittest.TestCase):
             "mutations_applied": False, "solve_replayed": False}))
         self.replace("_http_json", mock.Mock(side_effect=AssertionError("HTTP forbidden in fixture unless explicitly stubbed")))
 
+    def write_proof(self, proof):
+        raw = producer.canonical(proof) + b"\n"
+        digest = producer.sha(raw)
+        self.parent = self.directory / "terminal-observation" / digest
+        self.parent.mkdir(parents=True)
+        (self.parent / "proof.json").write_bytes(raw)
+        request = {"schema": "fullmag.terminal-observation-request.v1",
+                   "proof_path": f"terminal-observation/{digest}/proof.json", "proof_sha256": digest}
+        request_raw = producer.canonical(request) + b"\n"
+        (self.parent / "request.json").write_bytes(request_raw)
+        if not hasattr(self, "env"):
+            self.env = {}
+        self.env.update({service.TERMINAL_OBSERVATION_REQUEST_ENV: f"terminal-observation/{digest}/request.json",
+                         service.TERMINAL_OBSERVATION_DIGEST_ENV: producer.sha(request_raw)})
+
     def replace(self, name, value):
         patch = mock.patch.object(service, name, value)
         result = patch.start()
@@ -65,6 +74,21 @@ class Transport(unittest.TestCase):
 
     def preflight(self):
         return service.terminal_observation_preflight(self.paths)
+
+    def test_compute_proof_uses_the_same_native_launch_fence(self):
+        import test_docker_terminal_observation_producer as original
+        compute = original.ProducerTests()
+        compute.setUp()
+        compute.use_compute_intent()
+        proof = compute.build()
+        self.write_proof(proof)
+
+        preflight = self.preflight()
+        self.assertEqual(preflight["proof"], proof)
+        with service.terminal_observation_api_input(self.paths, terminal_preflight=preflight) as (_, stream, launch):
+            self.assertEqual(json.load(stream)["proof_sha256"], preflight["proof_sha256"])
+            self.assertEqual(launch["binding"]["terminal_evidence_sha256"], proof["terminal_evidence_sha256"])
+        self.native.assert_called_once()
 
     def test_target_launch_preserves_historical_proof_and_uses_fresh_config(self):
         before = (self.parent / "proof.json").read_bytes()
@@ -285,11 +309,76 @@ class HostWrapper(unittest.TestCase):
         self.assertNotIn("native_restart_metadata", context)
 
 
+    def test_captured_stop_produces_exact_private_recreate_input(self):
+        import test_docker_terminal_observation_producer as original
+        import docker_volume_accepted_reattach as existing
+        original.ProducerTests.setUpClass()
+        case = original.ProducerTests()
+        case.setUp()
+        case.use_compute_intent()
+        scope, base = case.scope, original.BASE
+        preflight = producer.decode(case.control[base + "terminal-session-preflight.json"])
+        drain = producer.decode(case.control[base + "backend-drain.json"])
+        capture = producer.capture_binding(case.store.__getitem__, preflight, {
+            "schema_version": "runtime_service_terminal_run_evidence.v1",
+            "run_id": original.RUN, "terminal_evidence_sha256": "b" * 64,
+            "mutations_applied": False, "solve_replayed": False,
+        }, "a" * 64, drain["process_receipt"]["service_owner"])
+        native = producer.canonical(capture) + b"\n"
+        actual = copy.deepcopy(self.actual)
+        actual["backend"]["Id"] = drain["backend_container_id"]
+        stopped = producer.canonical(actual) + b"\n"
+        for name in ("terminal.json", "receipt.json"):
+            def update(value):
+                value.update(idle_backend_stopped=True, idle_stop_containers_sha256=producer.sha(stopped),
+                             terminal_native_observation_sha256=producer.sha(native))
+                value["inputs"]["attempt"] = self.old
+            case.mutate(base + name, update)
+        case.control[base + "idle-stop-containers.json"] = stopped
+        case.control[base + "idle-preflight.json"] = producer.canonical({
+            "status": "ok", "active_session": True,
+        }) + b"\n"
+        case.control[base + "terminal-native-observation.json"] = native
+        control = types.SimpleNamespace(project=scope["compose_project"], volume=scope["control_volume"])
+
+        def read(_, relative, optional=False, **kwargs):
+            return case.control.get(relative) if optional else case.control[relative]
+
+        with mock.patch.object(existing, "_control_bytes", side_effect=read), \
+             mock.patch.object(existing, "_read_store_regular", side_effect=lambda root, relative, *a, **k: case.store[relative]), \
+             mock.patch.object(producer, "_publish_private_records") as publish:
+            context = producer.prepare_captured_context(
+                control, stop_attempt=original.ITERATION, store_root=Path("/fixture"),
+                source_root=scope["source_root"], attempt=self.old, config_sha256="a" * 64, actual=actual,
+            )
+
+        self.assertEqual(context["metadata"]["stop_attempt"], original.ITERATION)
+        publish.assert_called_once()
+        proof_raw = publish.call_args.args[1][0][1]
+        self.assertEqual(producer.decode(proof_raw)["schema"], producer.COMPUTE_PROOF_SCHEMA)
+        self.assertEqual(context["metadata"]["proof_sha256"], producer.sha(proof_raw))
+
+
 class LeasedRevalidation(unittest.TestCase):
     setUp = EmptyStop.setUp
 
-    def context(self):
-        proof_raw = producer.canonical({"fixture": "immutable source proof"}) + b"\n"
+    def context(self, schema=producer.PROOF_SCHEMA):
+        run_id = "run-fixture"
+        self.store_records = {
+            f"runs/{run_id}/run_intent.json": b"immutable intent",
+            f"runs/{run_id}/run_catalog.json": b"terminal catalog",
+        }
+        proof = {
+            "schema": schema,
+            "run_id": run_id,
+            "intent_sha256": producer.sha(self.store_records[f"runs/{run_id}/run_intent.json"]),
+            "catalog_sha256": producer.sha(self.store_records[f"runs/{run_id}/run_catalog.json"]),
+        }
+        if schema == producer.PROOF_SCHEMA:
+            release = b"manual release grant"
+            self.store_records[f"runs/{run_id}/start_release.json"] = release
+            proof["start_release_sha256"] = producer.sha(release)
+        proof_raw = producer.canonical(proof) + b"\n"
         proof_sha = producer.sha(proof_raw)
         relative = "terminal-observation/" + proof_sha
         request_raw = producer.canonical({"schema": "fullmag.terminal-observation-request.v1",
@@ -311,10 +400,13 @@ class LeasedRevalidation(unittest.TestCase):
         before = copy.deepcopy(self.records)
         control = types.SimpleNamespace(project="fixture", volume="fixture-volume")
         with mock.patch.object(existing, "_control_bytes", side_effect=read), \
+             mock.patch.object(existing, "_read_store_regular",
+                               side_effect=lambda root, relative, *a, **k: self.store_records[relative]), \
              mock.patch.object(producer, "_publish_private_records") as publish:
             try:
-                producer.revalidate_context(control, context, source_root="/fixture/source",
-                    attempt=self.old, config_sha256="d" * 64, actual=self.actual)
+                producer.revalidate_context(control, context, store_root=Path("/fixture"),
+                    source_root="/fixture/source", attempt=self.old,
+                    config_sha256="d" * 64, actual=self.actual)
             finally:
                 self.assertEqual(self.records, before)
                 publish.assert_not_called()
@@ -324,6 +416,17 @@ class LeasedRevalidation(unittest.TestCase):
         context = self.context()
         self.records["iteration/current.json"] = b'{"fixture":"new operation pointer"}\n'
         self.execute(context)
+
+    def test_changed_run_records_are_rejected_before_mutation(self):
+        for schema in (producer.PROOF_SCHEMA, producer.COMPUTE_PROOF_SCHEMA):
+            context = self.context(schema)
+            self.execute(context)
+            for relative, original in list(self.store_records.items()):
+                with self.subTest(schema=schema, relative=relative):
+                    self.store_records[relative] = b"changed after preparing the proof"
+                    with self.assertRaisesRegex(ValueError, "changed under recreate lease"):
+                        self.execute(context)
+                    self.store_records[relative] = original
 
     def test_restart_then_stop_with_same_ids_is_rejected_before_mutation(self):
         context = self.context()
@@ -355,6 +458,247 @@ class LeasedRevalidation(unittest.TestCase):
                 self.records[relative] = b'{"fixture":"changed"}\n'
                 with self.assertRaises(ValueError): self.execute(context)
                 self.records = before
+
+
+class ColdStoredBudgetObservation(unittest.TestCase):
+    def cold_fixture(self, *, pretty_proof=False):
+        """Mint an authenticated cold-stop journal using the existing memory-only fixture."""
+        import test_docker_volume_cold_budget_restore as cold_tests
+        import docker_volume_cold_budget_restore as cold
+
+        case = cold_tests.ProducerJournalTests()
+        case.setUp()
+        stop_attempt = "d" * 32
+        source_attempt = "c" * 32
+        historical_config = "8" * 64
+        run_id = "terminal-observation-run"
+        intent_raw = producer.canonical({"schema_version": "run_intent.v1", "run_id": run_id}) + b"\n"
+        catalog_raw = producer.canonical({"schema_version": "run_catalog.v1", "run_id": run_id,
+                                          "tasks": [{"lifecycle": "succeeded"}]}) + b"\n"
+        preflight = {"schema": "fullmag.docker-terminal-session-drain-preflight.v1",
+                     "session_id": "terminal-session",
+                     "run": {"run_id": run_id, "session_id": "terminal-session",
+                             "status": "completed"}}
+        preflight_raw = producer.canonical(preflight) + b"\n"
+        proof = {
+            "schema": producer.COMPUTE_PROOF_SCHEMA,
+            "preflight_raw_sha256": producer.sha(preflight_raw),
+            "run_id": run_id,
+            "intent_sha256": producer.sha(intent_raw),
+            "catalog_sha256": producer.sha(catalog_raw),
+            "original_iteration": stop_attempt,
+            "operation_sha256": "0" * 64,
+            "compose_project": case.control.project,
+            "control_volume": case.control.volume,
+            "source_root": "/tmp",
+            "image_id": case.actual["backend"]["Image"],
+            "config_sha256": historical_config,
+            "native_config_sha256": case.observation["history"]["native_config_sha256"],
+        }
+        original_stop = {
+            "schema": "fullmag.docker-build-operation.v1", "phase": "iteration",
+            "state": "succeeded", "attempt": stop_attempt, "idle_backend_stopped": True,
+            "compose_project": case.control.project, "control_volume": case.control.volume,
+            "config_sha256": historical_config,
+            "terminal_session_preflight_sha256": producer.sha(producer.canonical(preflight)),
+            "inputs": {"attempt": source_attempt, "source_root": "/tmp",
+                       "config_sha256": historical_config},
+        }
+        original_raw = producer.canonical(original_stop) + b"\n"
+        proof["operation_sha256"] = producer.sha(original_raw)
+        proof_raw = (json.dumps(proof, indent=2, sort_keys=True).encode("utf-8") + b"\n"
+                     if pretty_proof else producer.canonical(proof) + b"\n")
+        proof_sha = producer.sha(proof_raw)
+        case.control.records[f"runtime-control/terminal-observation/{proof_sha}/proof.json"] = proof_raw
+        original_root = f"iteration/attempts/{stop_attempt}/"
+        case.control.records[original_root + "terminal.json"] = original_raw
+        case.control.records[original_root + "receipt.json"] = original_raw
+        case.control.records[original_root + "terminal-session-preflight.json"] = preflight_raw
+        case.observation["history"].setdefault("control_hashes", {})[
+            f"iteration/attempts/{stop_attempt}/terminal.json"] = producer.sha(original_raw)
+        case.observation["run_pins"] = {
+            f"{run_id}/run_intent.json": producer.sha(intent_raw),
+            f"{run_id}/run_catalog.json": producer.sha(catalog_raw),
+        }
+        case.previous["inputs"]["source_root"] = "/tmp"
+        request = {"schema": "fullmag.terminal-observation-request.v1",
+                   "proof_path": f"terminal-observation/{proof_sha}/proof.json",
+                   "proof_sha256": proof_sha}
+        request_raw = producer.canonical(request) + b"\n"
+        case.control.records[f"runtime-control/terminal-observation/{proof_sha}/request.json"] = request_raw
+        metadata = {"schema": producer.CONTEXT_SCHEMA, "proof_sha256": proof_sha,
+                    "request_sha256": producer.sha(request_raw), "stop_attempt": stop_attempt,
+                    "stop_sha256": proof["operation_sha256"]}
+        case.previous["terminal_observation"] = metadata
+        parent_root = "development/attempts/" + case.previous["attempt"]
+        case.control.write(parent_root + "/terminal.json", case.previous)
+        case.observation["parent_terminal_sha256"] = producer.sha(
+            case.control.records[parent_root + "/terminal.json"])
+        case.control.records[f"runs/{run_id}/run_intent.json"] = intent_raw
+        case.control.records[f"runs/{run_id}/run_catalog.json"] = catalog_raw
+        with case.patched():
+            preview = cold.stop(case.args)
+            case.args.apply = True
+            case.args.expected_plan_sha256 = preview["plan_sha256"]
+            cold.stop(case.args)
+        return case, cold, proof, proof_sha, (stop_attempt, proof["operation_sha256"])
+
+    def observe_cold_stop(self, case, proof, proof_sha, stop_pin, *, forbid_empty_fallback=False,
+                          source_root="/tmp", config_sha256=None, proof_sha_override=None):
+        import docker_volume_accepted_reattach as accepted
+
+        patches = [mock.patch.object(
+            accepted, "_control_bytes",
+            side_effect=lambda control, relative, **kwargs: control.read_bytes(
+                relative, optional=kwargs.get("optional", False)))]
+        if forbid_empty_fallback:
+            patches.append(mock.patch.object(
+                producer, "validate_empty_stop",
+                side_effect=AssertionError("cold authority must not fall through to empty-stop validation")))
+        with case.patched(), contextlib.ExitStack() as stack:
+            for patcher in patches:
+                stack.enter_context(patcher)
+            return producer._observation_stop(
+                case.control, case.control.read_bytes, source_root=source_root,
+                attempt=case.previous["attempt"],
+                config_sha256=config_sha256 or case.previous["config_sha256"],
+                actual=case.actual, proof=proof,
+                proof_sha256=proof_sha_override or proof_sha, stop_pin=stop_pin)
+
+    def test_authenticated_cold_stop_reuses_original_terminal_observation_authority(self):
+        case, cold, proof, proof_sha, stop_pin = self.cold_fixture(pretty_proof=True)
+        self.assertNotEqual(proof["config_sha256"], case.previous["config_sha256"])
+        retained = cold.retained_context
+        authenticate = cold.authenticate_journal
+        with mock.patch.object(cold, "retained_context", wraps=retained) as retain_spy, \
+                mock.patch.object(cold, "authenticate_journal", wraps=authenticate) as authenticate_spy:
+            self.assertEqual(self.observe_cold_stop(case, proof, proof_sha, stop_pin), (*stop_pin, None))
+        retain_spy.assert_called_once()
+        self.assertEqual(authenticate_spy.call_count, 2)  # retained_context and observation-link verification
+        self.assertEqual(self.observe_cold_stop(case, proof, proof_sha, None), (*stop_pin, None))
+
+    def test_revalidation_rejects_changed_or_missing_original_preflight(self):
+        import docker_volume_accepted_reattach as accepted
+        import docker_volume_cold_budget_restore as cold
+
+        for mutation in ("changed", "missing"):
+            with self.subTest(preflight=mutation):
+                case, _, proof, proof_sha, stop_pin = self.cold_fixture()
+                metadata = case.previous["terminal_observation"]
+                context = producer.validate_context({
+                    "metadata": metadata,
+                    "environment": {
+                        producer.REQUEST_ENV: f"terminal-observation/{proof_sha}/request.json",
+                        producer.REQUEST_SHA_ENV: metadata["request_sha256"],
+                    },
+                })
+
+                def read_control(control, relative, **kwargs):
+                    try:
+                        return control.read_bytes(relative, optional=kwargs.get("optional", False))
+                    except KeyError as error:
+                        raise cold.base.BuildControlError("fixture control record is absent") from error
+
+                def revalidate():
+                    with case.patched(), mock.patch.object(
+                            accepted, "_control_bytes", side_effect=read_control), mock.patch.object(
+                            producer, "_store_reader", return_value=case.control.read_bytes):
+                        return producer.revalidate_context(
+                            case.control, context, store_root=Path("/unused-fixture-store"),
+                            source_root="/tmp", attempt=case.previous["attempt"],
+                            config_sha256=case.previous["config_sha256"], actual=case.actual)
+
+                self.assertIsNone(revalidate())
+                path = f"iteration/attempts/{stop_pin[0]}/terminal-session-preflight.json"
+                if mutation == "changed":
+                    changed = producer.decode(case.control.records[path])
+                    changed["run"]["status"] = "running"
+                    case.control.write(path, changed)
+                else:
+                    del case.control.records[path]
+                with self.assertRaises((ValueError, cold.base.BuildControlError)):
+                    revalidate()
+
+    def test_cold_stop_refuses_changed_proof_or_scope_and_parent_bindings(self):
+        import docker_volume_cold_budget_restore as cold
+
+        cases = (
+            ("proof operation", lambda case, proof: proof.update(operation_sha256="f" * 64), {}),
+            ("proof sha", lambda case, proof: None, {"proof_sha": "f" * 64}),
+            ("stop pin", lambda case, proof: None, {"stop_pin": ("d" * 32, "f" * 64)}),
+            ("parent metadata", self._change_parent_proof_pin, {}),
+            ("config", lambda case, proof: None, {"config_sha256": "f" * 64}),
+            ("current source", lambda case, proof: None, {"source_root": "/foreign/source"}),
+            ("current group", lambda case, proof: setattr(case.control, "volume", "foreign-group"), {}),
+            ("group", lambda case, proof: proof.update(control_volume="foreign-group"), {}),
+            ("source", lambda case, proof: proof.update(source_root="/foreign/source"), {}),
+            ("source proof config", lambda case, proof: proof.update(config_sha256="f" * 64), {}),
+            ("image", lambda case, proof: proof.update(image_id="sha256:" + "f" * 64), {}),
+            ("run intent pin", lambda case, proof: proof.update(intent_sha256="f" * 64), {}),
+            ("run catalog pin", lambda case, proof: proof.update(catalog_sha256="f" * 64), {}),
+            ("native config", lambda case, proof: proof.update(native_config_sha256="f" * 64), {}),
+            ("private proof bytes", self._change_private_proof, {}),
+        )
+        for name, mutate, overrides in cases:
+            with self.subTest(binding=name):
+                case, _, proof, proof_sha, stop_pin = self.cold_fixture()
+                mutate(case, proof)
+                with self.assertRaises((ValueError, cold.base.BuildControlError)):
+                    self.observe_cold_stop(case, proof, proof_sha,
+                                           overrides.get("stop_pin", stop_pin),
+                                           proof_sha_override=overrides.get("proof_sha", proof_sha),
+                                           source_root=overrides.get("source_root", "/tmp"),
+                                           config_sha256=overrides.get("config_sha256"))
+
+    @staticmethod
+    def _change_parent_proof_pin(case, proof):
+        parent_root = "development/attempts/" + case.previous["attempt"]
+        previous = copy.deepcopy(case.previous)
+        previous["terminal_observation"]["proof_sha256"] = "f" * 64
+        case.control.write(parent_root + "/terminal.json", previous)
+
+    @staticmethod
+    def _change_private_proof(case, proof):
+        proof_sha = case.previous["terminal_observation"]["proof_sha256"]
+        path = f"runtime-control/terminal-observation/{proof_sha}/proof.json"
+        case.control.records[path] = b"{}\n"
+
+    def test_unresolved_or_ambiguous_cold_stop_and_failed_validator_fail_closed(self):
+        import docker_volume_cold_budget_restore as cold
+
+        case, _, proof, proof_sha, stop_pin = self.cold_fixture()
+        journal_path, intent_path = cold._paths(case.actual["backend"]["Id"])
+        del case.control.records[journal_path]
+        with self.assertRaises(cold.base.BuildControlError):
+            self.observe_cold_stop(case, proof, proof_sha, stop_pin, forbid_empty_fallback=True)
+
+        case, _, proof, proof_sha, stop_pin = self.cold_fixture()
+        case.control.records["verification/preowner-drained-stop-" + case.actual["backend"]["Id"] + ".json"] = b"{}\n"
+        import docker_volume_preowner_drained as preowner
+        with mock.patch.object(preowner, "retained_context", return_value={}) as preowner_retain, \
+                self.assertRaises((ValueError, cold.base.BuildControlError)):
+            self.observe_cold_stop(case, proof, proof_sha, stop_pin, forbid_empty_fallback=True)
+        preowner_retain.assert_not_called()
+
+        case, _, proof, proof_sha, stop_pin = self.cold_fixture()
+        accepted = self.accepted_module()
+        with case.patched(), mock.patch.object(
+                cold, "retained_context", side_effect=cold.base.BuildControlError("cold validator refused")), \
+                mock.patch.object(accepted, "_control_bytes",
+                    side_effect=lambda control, relative, **kwargs: control.read_bytes(
+                        relative, optional=kwargs.get("optional", False))), \
+                mock.patch.object(producer, "validate_empty_stop",
+                    side_effect=AssertionError("failed cold validator fell through")):
+            with self.assertRaisesRegex(cold.base.BuildControlError, "cold validator refused"):
+                producer._observation_stop(
+                    case.control, case.control.read_bytes, source_root="/tmp",
+                    attempt=case.previous["attempt"], config_sha256=case.previous["config_sha256"],
+                    actual=case.actual, proof=proof, proof_sha256=proof_sha, stop_pin=stop_pin)
+
+    @staticmethod
+    def accepted_module():
+        import docker_volume_accepted_reattach as accepted
+        return accepted
 
 
 if __name__ == "__main__":

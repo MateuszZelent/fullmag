@@ -4,6 +4,7 @@ import {
   createContext,
   use,
   useEffect,
+  useMemo,
   useSyncExternalStore,
   type ReactNode,
 } from "react";
@@ -18,6 +19,7 @@ import {
   type ThemeMode,
 } from "./themePreference";
 import { THEME_TOGGLE_EVENT } from "./themeEvents";
+import { applyWithoutTransitions } from "./themeTransition";
 
 interface ThemeSnapshot {
   theme: ThemeMode;
@@ -113,12 +115,18 @@ function updateThemeSnapshot(
     preference,
     theme: resolveThemeMode(preference, systemPrefersDark),
   };
+  const paletteChanged = currentSnapshot.theme !== nextSnapshot.theme;
   const changed =
-    currentSnapshot.preference !== nextSnapshot.preference ||
-    currentSnapshot.theme !== nextSnapshot.theme;
+    currentSnapshot.preference !== nextSnapshot.preference || paletteChanged;
 
   currentSnapshot = nextSnapshot;
-  applyTheme(nextSnapshot);
+  if (paletteChanged) {
+    applyWithoutTransitions(document.documentElement, window, () =>
+      applyTheme(nextSnapshot),
+    );
+  } else {
+    applyTheme(nextSnapshot);
+  }
   if (shouldPersist) {
     persistTheme(preference);
   }
@@ -170,16 +178,13 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
     };
   }, []);
 
-  const setTheme = (preference: ThemePreference) => setThemePreference(preference);
+  const contextValue = useMemo(() => ({
+    ...snapshot,
+    setTheme: setThemePreference,
+  }), [snapshot]);
 
   return (
-    <ThemeContext.Provider
-      value={{
-        theme: snapshot.theme,
-        preference: snapshot.preference,
-        setTheme,
-      }}
-    >
+    <ThemeContext.Provider value={contextValue}>
       {children}
     </ThemeContext.Provider>
   );

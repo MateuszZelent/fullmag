@@ -1,6 +1,7 @@
 import { Copy, Download } from "lucide-react";
 
 import { Button } from "@/shared/ui/Button";
+import { keyedOccurrences } from "@/shared/utils/keyedOccurrences";
 
 import { importSaveState, type ScriptSaver } from "../model/scriptOpen";
 import type { Mx3Translation } from "../model/mx3Import";
@@ -65,8 +66,10 @@ export function Mx3ImportReport({
               </tr>
             </thead>
             <tbody>
-              {unsupported.map((item, index) => (
-                <tr key={`${item.line}-${index}`}>
+              {keyedOccurrences(unsupported, ({ line, text, reason }) =>
+                JSON.stringify([line, text, reason]),
+              ).map(({ item, key }) => (
+                <tr key={key}>
                   <th scope="row">{item.line > 0 ? item.line : "n/a"}</th>
                   <td className="fm-start-formats__ext">{item.text}</td>
                   <td>{item.reason}</td>
@@ -128,8 +131,8 @@ export function Mx3ImportReport({
       <p className="fm-start-inspector__note">
         Save translated script asks where to save the .py file, lists it under Recent scripts and
         selects it. Nothing runs until you choose Run in new window. Create project, after you
-        confirm, evaluates the translated script twice — once to read its model into a project that
-        keeps the script and once more to check the round trip — without starting a solver. Any
+        confirm, evaluates the translated script twice. The first evaluation reads its model into a
+        project that keeps the script. The second checks the round trip. The solver stays idle. Any
         side effects or random choices in the script happen on each evaluation.
       </p>
     </section>

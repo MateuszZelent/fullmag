@@ -1,12 +1,15 @@
 "use client";
 
+import { useRef } from "react";
 import { Button } from "@/shared/ui/Button";
+import { useToolbarRovingFocus } from "@/shared/ui/useToolbarRovingFocus";
 import {
   Select,
   SelectContent,
   SelectItem,
   SelectTrigger,
 } from "@/shared/ui/Select";
+import { chartRangeOptions } from "./ChartControlBar.model";
 
 export type ChartLiveMode = "following" | "paused";
 export type ChartRangeModeState =
@@ -35,31 +38,6 @@ interface ChartControlBarProps {
   timeRangeSupported?: boolean;
 }
 
-interface ChartRangeOption {
-  label: string;
-  value: string;
-}
-
-export function chartRangeOptions(
-  timeRangeSupported = true,
-  fixedRangeAvailable = false,
-): readonly ChartRangeOption[] {
-  return [
-    { label: "Follow", value: "follow" },
-    { label: "Last 100 points", value: "tailRows:100" },
-    { label: "Last 160 points", value: "tailRows:160" },
-    { label: "Last 400 points", value: "tailRows:400" },
-    ...(timeRangeSupported
-      ? [
-          { label: "Last 1 ns", value: "tailTime:1e-9" },
-          { label: "Last 10 ns", value: "tailTime:10e-9" },
-        ]
-      : []),
-    ...(fixedRangeAvailable ? [{ label: "Fixed range", value: "fixed" }] : []),
-    { label: "Full (decimated)", value: "fullDecimated" },
-  ];
-}
-
 /**
  * ChartControlBar — primary toolbar for live/paused state, range mode,
  * and fit-to-view.
@@ -85,17 +63,22 @@ export function ChartControlBar({
   timeRangeSupported = true,
 }: ChartControlBarProps) {
   const isPaused = liveMode === "paused";
+  const toolbarRef = useRef<HTMLDivElement>(null);
+  const toolbarKeyDown = useToolbarRovingFocus(toolbarRef, { deps: [rangeMode, liveMode] });
 
   return (
-    <div className="fm-chart-control-bar" role="toolbar" aria-label="Chart controls">
+    <div
+      ref={toolbarRef}
+      className="fm-chart-control-bar"
+      role="toolbar"
+      aria-label="Chart controls"
+      onKeyDown={toolbarKeyDown}
+    >
       {/* Live / Paused toggle */}
       <Button
-        aria-label={
-          isPaused
-            ? "Resume live chart updates"
-            : "Pause chart — freeze current revision"
-        }
+        aria-label="Pause live chart updates"
         aria-pressed={isPaused}
+        title={isPaused ? "Resume live chart updates" : "Pause chart — freeze current revision"}
         className={`fm-chart-control-bar__live-btn${isPaused ? " fm-chart-control-bar__live-btn--paused" : ""}`}
         onClick={onLiveModeToggle}
         size="sm"
@@ -117,7 +100,7 @@ export function ChartControlBar({
 
       {/* Point budget summary */}
       {visiblePoints != null ? (
-        <span
+        <span role="group"
           aria-label={`${visiblePoints} visible points${totalRows != null ? ` of ${totalRows} total` : ""}`}
           className="fm-chart-control-bar__points"
         >

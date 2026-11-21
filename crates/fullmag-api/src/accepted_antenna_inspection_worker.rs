@@ -333,7 +333,7 @@ mod tests {
         );
         for root in [
             include_str!("main.rs"),
-            include_str!("accepted_worker_main.rs"),
+            include_str!("test_roots/accepted_worker.rs"),
         ] {
             assert!(root.contains("mod accepted_antenna_inspection_worker;"));
         }

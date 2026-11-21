@@ -420,6 +420,102 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v2/persistence/projects/{project_id}/runs/{run_id}/study-results": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["persistence_get_persistence_projects_project_id_runs_run_id_study_results"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v2/persistence/projects/{project_id}/runs/{run_id}/study-results/{artifact_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["persistence_get_persistence_projects_project_id_runs_run_id_study_results_artifact_id"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v2/persistence/projects/{project_id}/runs/{run_id}/study-results/{artifact_id}/magnetization": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["persistence_get_persistence_projects_project_id_runs_run_id_study_results_artifact_id_magnetization"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v2/persistence/projects/{project_id}/runs/{run_id}/study-results/{artifact_id}/scalars": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["persistence_get_persistence_projects_project_id_runs_run_id_study_results_artifact_id_scalars"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v2/persistence/projects/{project_id}/runs/{run_id}/study-results/{artifact_id}/support": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["persistence_get_persistence_projects_project_id_runs_run_id_study_results_artifact_id_support"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v2/persistence/projects/{project_id}/runs/{run_id}/study-results/{artifact_id}/topology": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["persistence_get_persistence_projects_project_id_runs_run_id_study_results_artifact_id_topology"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v2/persistence/projects/{project_id}/runs/{run_id}/tasks/{task_id}/cancellation": {
         parameters: {
             query?: never;
@@ -3684,6 +3780,38 @@ export interface paths {
         patch: operations["model_patch_sessions_current_model_magnetization_assets_asset_id"];
         trace?: never;
     };
+    "/v2/sessions/current/model/mask-field-drives": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["model_get_sessions_current_model_mask_field_drives"];
+        put?: never;
+        post: operations["model_post_sessions_current_model_mask_field_drives"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v2/sessions/current/model/mask-field-drives/{drive_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put: operations["model_put_sessions_current_model_mask_field_drives_drive_id"];
+        post?: never;
+        delete: operations["model_delete_sessions_current_model_mask_field_drives_drive_id"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v2/sessions/current/model/material-fields": {
         parameters: {
             query?: never;
@@ -3844,6 +3972,38 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v2/sessions/current/model/objects/{object_id}/source-surface": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["model_get_sessions_current_model_objects_object_id_source_surface"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v2/sessions/current/model/objects/{object_id}/source-surface/topology": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["model_get_sessions_current_model_objects_object_id_source_surface_topology"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v2/sessions/current/model/oersted-fields": {
         parameters: {
             query?: never;
@@ -3957,6 +4117,38 @@ export interface paths {
         get: operations["model_get_sessions_current_model_readiness"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v2/sessions/current/model/ready-antennas": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["model_get_sessions_current_model_ready_antennas"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v2/sessions/current/model/ready-antennas/terms": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["model_post_sessions_current_model_ready_antennas_terms"];
         delete?: never;
         options?: never;
         head?: never;
@@ -4587,6 +4779,38 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v2/sessions/current/simulation/stages/results": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["simulation_get_sessions_current_simulation_stages_results"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v2/sessions/current/simulation/stages/results/scalars": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["data_get_sessions_current_simulation_stages_results_scalars"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v2/sessions/current/simulation/stages/{stage_id}/hysteresis/execution-tree": {
         parameters: {
             query?: never;
@@ -5019,6 +5243,70 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v2/workspace/material-library": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["workspace_get_workspace_material_library"];
+        put?: never;
+        post: operations["workspace_post_workspace_material_library"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v2/workspace/material-library/versions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["workspace_post_workspace_material_library_versions"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v2/workspace/material-library/versions/{family}/{version}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch: operations["workspace_patch_workspace_material_library_versions_family_version"];
+        trace?: never;
+    };
+    "/v2/workspace/material-library/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put: operations["workspace_put_workspace_material_library_id"];
+        post?: never;
+        delete: operations["workspace_delete_workspace_material_library_id"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v2/workspace/roots": {
         parameters: {
             query?: never;
@@ -5071,6 +5359,30 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        /** @enum {string} */
+        AbsorbingBoundaryDirectionIR: "outward" | "inward";
+        /** @enum {string} */
+        AbsorbingBoundaryFaceIR: "x+" | "x-" | "y+" | "y-" | "z+" | "z-";
+        /** @enum {string} */
+        AbsorbingBoundaryFrameIR: "object" | "universe";
+        AbsorbingBoundaryIR: components["schemas"]["AbsorbingBoundaryLayerIR"] | components["schemas"]["AbsorbingBoundaryLayersIR"];
+        AbsorbingBoundaryLayerIR: {
+            expression?: string | null;
+            faces: components["schemas"]["AbsorbingBoundaryFaceIR"][];
+            frame: components["schemas"]["AbsorbingBoundaryFrameIR"];
+            /** Format: double */
+            max_damping: number;
+            profile: components["schemas"]["AbsorbingBoundaryProfileIR"];
+            /** Format: double */
+            ramp_width_m: number;
+            /** Format: double */
+            total_width_m: number;
+        };
+        AbsorbingBoundaryLayersIR: {
+            layers: components["schemas"]["SpatialAbsorbingLayerIR"][];
+        };
+        /** @enum {string} */
+        AbsorbingBoundaryProfileIR: "linear" | "quadratic" | "smootherstep" | "logarithmic" | "tanh" | "custom";
         AcceptedAntennaInspectionCatalogResource: {
             entries: components["schemas"]["AcceptedAntennaInspectionIdentity"][];
             project_id: string;
@@ -5128,6 +5440,7 @@ export interface components {
             task_id: string;
         };
         AcceptedObservationFrameRef: {
+            authored_initial_state?: null | components["schemas"]["AuthoredInitialStateOrigin"];
             domain_generation_id: string;
             observation_frame_id: string;
             session_epoch: string;
@@ -6271,6 +6584,19 @@ export interface components {
             orcid?: string | null;
             role: string;
         };
+        /**
+         * @description Input identity of an authored initial-state publication. It has its own
+         *     generation even when its domain and solver clock have not changed.
+         */
+        AuthoredInitialStateOrigin: {
+            /** Format: int64 */
+            initial_state_revision: number;
+            plan_fingerprint: string;
+            preparation_id: string;
+            /** Format: int64 */
+            scene_revision: number;
+            values_sha256: string;
+        };
         AuthoringTransactionRequest: {
             /** Format: int64 */
             base_revision: number;
@@ -6283,7 +6609,15 @@ export interface components {
             base_revision?: number | null;
             /** @enum {string} */
             kind: "replace_scene";
+            magnetization_apply?: null | components["schemas"]["MagnetizationApplyRequest"];
             scene: Record<string, unknown>;
+        } | {
+            /** Format: int64 */
+            base_revision: number;
+            /** @enum {string} */
+            kind: "apply_magnetization";
+            operation_id: string;
+            target: components["schemas"]["MagnetizationApplyTarget"];
         } | {
             /** Format: int64 */
             base_revision?: number | null;
@@ -6324,6 +6658,7 @@ export interface components {
             transform?: Record<string, unknown> | null;
             universe?: Record<string, unknown> | null;
         } | {
+            assign_to_object_id?: string | null;
             /** Format: int64 */
             base_revision?: number | null;
             /** @enum {string} */
@@ -6332,6 +6667,7 @@ export interface components {
             name: string;
             properties: components["schemas"]["MaterialPropertiesResource"];
             references?: components["schemas"]["MaterialReferenceResource"][];
+            source?: null | components["schemas"]["SceneMaterialSource"];
         } | {
             /** Format: int64 */
             base_revision?: number | null;
@@ -6430,6 +6766,7 @@ export interface components {
         };
         AuthoringTransactionResponse: {
             committed_scene: components["schemas"]["SceneResource"];
+            magnetization_apply?: null | components["schemas"]["MagnetizationApplyReceiptResource"];
             /** Format: int64 */
             scene_revision: number;
             transaction_kind: string;
@@ -6609,6 +6946,7 @@ export interface components {
             /** Format: double */
             energy_tolerance_j?: number | null;
             error?: string | null;
+            execution_binding?: null | components["schemas"]["CommandExecutionBinding"];
             field_materialization_requirements?: components["schemas"]["FieldMaterializationRequirement"][];
             /** Format: double */
             fixed_timestep?: number | null;
@@ -6662,6 +7000,13 @@ export interface components {
             revision: number;
             severity: string;
         };
+        /** @description Immutable binding of an accepted command to its own execution. */
+        CommandExecutionBinding: {
+            requested_target?: null | components["schemas"]["RuntimeCommandTarget"];
+            run_id: string;
+            /** @description The selected authored step for a single-stage execution. */
+            step_id?: string | null;
+        };
         CommandExecutionReadbackResource: {
             backend?: string | null;
             device?: string | null;
@@ -6706,6 +7051,7 @@ export interface components {
             accepted: boolean;
             command_id: string;
             error?: string | null;
+            execution_binding?: null | components["schemas"]["CommandExecutionBinding"];
             request_id?: string | null;
         };
         CommandStatusResource: {
@@ -7900,6 +8246,8 @@ export interface components {
         };
         FieldDriveListStateResource: {
             drives?: components["schemas"]["RegionalFieldDriveResource"][];
+            /** @description Hand-written mask antennas (`mask_field_drive.v1`, ADR 0081). */
+            mask_drives?: components["schemas"]["MaskFieldDriveResource"][];
         };
         FieldDriveMigrationResource: {
             migrated_from: string;
@@ -9382,6 +9730,21 @@ export interface components {
             /** Format: int64 */
             uptime_seconds: number;
         };
+        /** @enum {string} */
+        HistoricalScalarCoverage: "solver_series" | "terminal_sample";
+        /** @description Archived physical samples read from one claim-qualified artifact. */
+        HistoricalScalarWindow: {
+            artifact_id: string;
+            columns: string[];
+            content_sha256: string;
+            coverage: components["schemas"]["HistoricalScalarCoverage"];
+            /** Format: int64 */
+            next_start?: number | null;
+            rows: number[][];
+            series: components["schemas"]["ScalarSeriesIdentity"];
+            /** Format: int64 */
+            total_rows: number;
+        };
         HistoryEntry: {
             at: string;
             by?: string | null;
@@ -9933,6 +10296,29 @@ export interface components {
             note?: string | null;
             triangle_count?: number | null;
         };
+        ImportedSourceSurfaceQuery: {
+            /** Format: int64 */
+            scene_revision: number;
+            source_sha256: string;
+        };
+        ImportedSourceSurfaceResource: {
+            bounds_max: number[];
+            bounds_min: number[];
+            coordinate_frame: string;
+            coordinate_unit: string;
+            node_count: number;
+            object_id: string;
+            purpose: string;
+            scale_to_metres: number[];
+            /** Format: int64 */
+            scene_revision: number;
+            /** @description This surface is source geometry, not a generated or validated volume mesh. */
+            solver_eligible: boolean;
+            source_sha256: string;
+            surface_id: string;
+            topology_format: string;
+            triangle_count: number;
+        };
         /** @enum {string} */
         InactiveSelectionPolicySchema: "warn_and_intersect" | "error";
         InstanceDiscoveryResource: {
@@ -10042,6 +10428,7 @@ export interface components {
             spin_polarization: number[];
             stack_normal?: number[] | null;
             target?: null | components["schemas"]["SceneRegionRef"];
+            time_expression?: Record<string, unknown> | null;
         } | {
             /** Format: double */
             beta: number;
@@ -10190,6 +10577,39 @@ export interface components {
             session: components["schemas"]["SessionSummary"];
             /** @description Thin solver summary for polling cadence and top-bar state. Detailed solver state is owned by `simulation/solver/status`. */
             solver: components["schemas"]["SolverSummary"];
+            /** @description Whether `simulation/solver/energies/current` can return a source-qualified current sample now. */
+            solver_energy_current_available?: boolean;
+        };
+        MagnetizationApplyReceiptResource: {
+            operation_id: string;
+            prepared_initial_state?: null | components["schemas"]["PreparedInitialStateResource"];
+            reason?: string | null;
+            /** Format: int64 */
+            scene_revision: number;
+            scopes: components["schemas"]["MagnetizationApplyScope"][];
+            status: components["schemas"]["MagnetizationApplyStatus"];
+        };
+        MagnetizationApplyRequest: {
+            operation_id: string;
+            scopes: components["schemas"]["MagnetizationApplyScope"][];
+        };
+        MagnetizationApplyScope: {
+            object_id: string;
+            region_id?: string | null;
+        };
+        /** @enum {string} */
+        MagnetizationApplyStatus: "initial_state_pending" | "initial_state_ready";
+        MagnetizationApplyTarget: {
+            asset: Record<string, unknown> | null;
+            /** @enum {string} */
+            kind: "object";
+            object_id: string;
+        } | {
+            /** @enum {string} */
+            kind: "region";
+            object_id: string;
+            region_id: string;
+            texture_override: null | components["schemas"]["SceneTextureOverride"];
         };
         MagnetizationAssetPatchRequest: {
             asset: {
@@ -10210,6 +10630,171 @@ export interface components {
         MagnetizationConstraintSchema: components["schemas"]["FrozenSpinsSchema"] & {
             /** @enum {string} */
             kind: "frozen_spins";
+        };
+        MaskFieldDriveCreateRequest: {
+            /** Format: int64 */
+            base_revision?: number | null;
+            drive: components["schemas"]["MaskFieldDriveResource"];
+        };
+        MaskFieldDriveListResource: {
+            drives: components["schemas"]["MaskFieldDriveResource"][];
+            /** Format: int64 */
+            scene_revision: number;
+        };
+        MaskFieldDriveReplaceRequest: {
+            /** Format: int64 */
+            base_revision?: number | null;
+            drive: components["schemas"]["MaskFieldDriveResource"];
+        };
+        /** @description A hand-written mask antenna (`mask_field_drive.v1`, ADR 0081). */
+        MaskFieldDriveResource: {
+            activation: components["schemas"]["DriveActivationResource"];
+            enabled?: boolean;
+            frame: components["schemas"]["MaskFrameResource"];
+            id: string;
+            name: string;
+            position_m: number[];
+            schema_version: string;
+            shape: components["schemas"]["MaskShapeResource"];
+            target: components["schemas"]["FieldTargetResource"];
+            terms: components["schemas"]["MaskTermResource"][];
+            time_origin: components["schemas"]["FieldTimeOriginResource"];
+        };
+        /**
+         * @description Frame of a mask antenna's position and of its mask coordinates.
+         * @enum {string}
+         */
+        MaskFrameResource: "world" | "local";
+        MaskFunctionLocalResource: {
+            /** @description `field_expr.v1` text. */
+            expression: string;
+            name: string;
+        };
+        MaskFunctionParameterResource: {
+            name: string;
+            /** @description Authored text of the value, for display only. */
+            source?: string | null;
+            /** Format: double */
+            value: number;
+        };
+        /**
+         * @description A mask function of `x, y, z` (three outputs, tesla) or a time function of
+         *     `t` (one output), as `field_expr.v1` equations.
+         */
+        MaskFunctionResource: {
+            expression_version: string;
+            locals?: components["schemas"]["MaskFunctionLocalResource"][];
+            name?: string | null;
+            outputs: string[];
+            parameters?: components["schemas"]["MaskFunctionParameterResource"][];
+        };
+        /** @description The ready-antenna call (`fullmag.antennas`) that produced a term. */
+        MaskLibraryCallResource: {
+            arguments: {
+                [key: string]: number;
+            };
+            /** Format: int32 */
+            call_index: number;
+            function: string;
+            /** Format: int32 */
+            output_index: number;
+        };
+        /** @description Support shape of a mask antenna (`mask_field_drive.v1` has no CSG shapes). */
+        MaskShapeResource: {
+            center: number[];
+            /** @enum {string} */
+            kind: "box";
+            size: number[];
+        } | {
+            axis: number[];
+            center: number[];
+            /** Format: double */
+            height: number;
+            /** @enum {string} */
+            kind: "cylinder";
+            /** Format: double */
+            radius: number;
+        } | {
+            center: number[];
+            /** @enum {string} */
+            kind: "sphere";
+            /** Format: double */
+            radius: number;
+        };
+        MaskSourceResource: {
+            function: components["schemas"]["MaskFunctionResource"];
+            /** @enum {string} */
+            kind: "function";
+        } | {
+            cell_m: number[];
+            data: string;
+            encoding: string;
+            /** @enum {string} */
+            kind: "sampled";
+            origin_m: number[];
+            sha256: string;
+            size: number[];
+        };
+        MaskTermResource: {
+            mask: components["schemas"]["MaskSourceResource"];
+            name?: string | null;
+            origin?: null | components["schemas"]["MaskLibraryCallResource"];
+            time?: null | components["schemas"]["MaskFunctionResource"];
+        };
+        MaterialLibraryDeleteRequest: {
+            /**
+             * Format: int64
+             * @description Revision of the entry being deleted.
+             */
+            base_revision: number;
+        };
+        MaterialLibraryDeleteResource: {
+            /**
+             * Format: int64
+             * @description Catalog revision after deletion.
+             */
+            revision: number;
+        };
+        MaterialLibraryEntryResource: {
+            id: string;
+            kind: components["schemas"]["SceneMaterialSourceKind"];
+            name: string;
+            properties: components["schemas"]["MaterialPropertiesResource"];
+            references: components["schemas"]["MaterialReferenceResource"][];
+            /** Format: int64 */
+            revision: number;
+            source?: null | components["schemas"]["SceneMaterialSource"];
+            /** @description Name of the project from which the draft was copied. */
+            source_project?: string | null;
+            summary?: string | null;
+        };
+        /** @description The entry clock protects edits; the catalog clock invalidates shared readers. */
+        MaterialLibraryMutationResource: components["schemas"]["MaterialLibraryEntryResource"] & {
+            /** Format: int64 */
+            catalog_revision: number;
+        };
+        MaterialLibraryResource: {
+            entries: components["schemas"]["MaterialLibraryEntryResource"][];
+            /** Format: int64 */
+            revision: number;
+            versions: components["schemas"]["PublishedMaterialVersion"][];
+        };
+        MaterialLibraryUpdateRequest: components["schemas"]["MaterialLibraryWriteRequest"] & {
+            /**
+             * Format: int64
+             * @description Revision of the entry being replaced, not the catalog revision.
+             */
+            base_revision: number;
+        };
+        MaterialLibraryWriteRequest: {
+            id?: string | null;
+            name: string;
+            properties: components["schemas"]["MaterialPropertiesResource"];
+            references?: components["schemas"]["MaterialReferenceResource"][];
+            source?: null | components["schemas"]["SceneMaterialSource"];
+            /** @description Name of the project from which the draft was copied. */
+            source_project?: string | null;
+            summary?: string | null;
         };
         MaterialParameterFieldDataListResource: {
             fields: components["schemas"]["MaterialParameterFieldDataSummaryResource"][];
@@ -10337,6 +10922,33 @@ export interface components {
             region_coefficients_revision?: number | null;
             /** Format: int64 */
             scene_revision: number;
+            source?: null | components["schemas"]["SceneMaterialSource"];
+        };
+        MaterialVersionMutationResource: {
+            /** Format: int64 */
+            catalog_revision: number;
+            published: components["schemas"]["PublishedMaterialVersion"];
+        };
+        MaterialVersionPublishRequest: {
+            /**
+             * Format: int64
+             * @description Revision of the source entry.
+             */
+            base_revision: number;
+            display_name: string;
+            family: string;
+            material_id: string;
+            source_project?: string | null;
+            version: string;
+        };
+        MaterialVersionUpdateRequest: {
+            archived: boolean;
+            /**
+             * Format: int64
+             * @description Revision of the published version's metadata.
+             */
+            base_revision: number;
+            display_name: string;
         };
         MaterializedDatasetActiveSupportResource: {
             selection?: null | components["schemas"]["MaterializedDatasetSelectionResource"];
@@ -11316,6 +11928,11 @@ export interface components {
             topology_fingerprint: string;
             /** Format: int32 */
             topology_schema_version?: number | null;
+            /**
+             * Format: int64
+             * @description Current scene whose mesher inputs still match this immutable publication.
+             */
+            validated_for_scene_revision?: number | null;
         };
         MeshSharedDomainQualityResource: {
             quality?: unknown;
@@ -11552,6 +12169,8 @@ export interface components {
             blockers: string[];
             capabilities: components["schemas"]["ModelAuthoringCapabilities"];
             checks: components["schemas"]["ModelReadinessCheck"][];
+            initial_state_pending?: null | components["schemas"]["MagnetizationApplyReceiptResource"];
+            prepared_initial_state?: null | components["schemas"]["PreparedInitialStateResource"];
             ready_to_export: boolean;
             ready_to_run: boolean;
             /** Format: int64 */
@@ -11647,7 +12266,7 @@ export interface components {
             time_seconds: number;
         };
         ObjectPatchRequest: {
-            absorbing_boundary?: Record<string, unknown> | null;
+            absorbing_boundary?: null | components["schemas"]["AbsorbingBoundaryIR"];
             /** Format: int64 */
             base_revision?: number | null;
             geometry?: Record<string, unknown> | null;
@@ -11927,6 +12546,17 @@ export interface components {
             min?: number | null;
             mode: components["schemas"]["PlanarColorRangeMode"];
         };
+        /** @description Session crop of the planar view: the sampled u/v window in meters. */
+        PlanarCropState: {
+            /** Format: double */
+            u_max_m: number;
+            /** Format: double */
+            u_min_m: number;
+            /** Format: double */
+            v_max_m: number;
+            /** Format: double */
+            v_min_m: number;
+        };
         /** @enum {string} */
         PlanarEmptyPolicySchema: "exclude_empty" | "include_air_as_zero";
         PlanarExtentSchema: {
@@ -11959,7 +12589,10 @@ export interface components {
         /** @enum {string} */
         PlanarFieldComponent: "c0" | "c1" | "c2" | "c3" | "c4" | "c5" | "c6" | "c7" | "c8" | "frobenius" | "spin_flow_x" | "spin_flow_y" | "spin_flow_z" | "x" | "y" | "z" | "u" | "v" | "normal" | "magnitude" | "in_plane_magnitude" | "orientation";
         PlanarFieldFrameResource: {
+            /** @description Sampled u/v window; equals `full_bounds_uv_m` without a window. */
             bounds_uv_m: number[];
+            /** @description Full u/v bounds of the resolved frame. */
+            full_bounds_uv_m: number[];
             normal: number[];
             origin_m: number[];
             u_axis: number[];
@@ -12035,27 +12668,39 @@ export interface components {
             partial: number;
         };
         /**
-         * @description Presentation of an additional field on the base source's physical plane.
+         * @description One field layer on the base source's physical plane.
          *     Source, operator, resolution and interaction are shared with the base view.
          */
         PlanarFieldOverlayState: {
             colormap: string;
             component: components["schemas"]["PlanarFieldComponent"];
+            contours_visible?: boolean;
             id: string;
+            mesh_visible?: boolean;
+            points_visible?: boolean;
             quantity_id: string;
             range: components["schemas"]["PlanarColorRangeState"];
             /** Format: double */
             raster_opacity: number;
             raster_visible: boolean;
+            streamlines_visible?: boolean;
             vector_style: components["schemas"]["PlanarVectorStyleState"];
             vectors_visible: boolean;
             view_scope: components["schemas"]["PlanarViewScopeState"];
+            /** @description Layer visibility; absent in layers persisted before the flag. */
+            visible?: boolean;
         };
         PlanarFieldProbeResource: {
             /** Format: int32 */
             cell_id?: number | null;
             /** Format: int32 */
             element_id?: number | null;
+            nearest_node?: null | components["schemas"]["PlanarProbeNodeResource"];
+            /**
+             * @description `not_requested`, `ok`, `empty`, `unsupported_operator` or
+             *     `unsupported_quantity`.
+             */
+            nearest_node_status: string;
             occupancy: string;
             quantity_id: string;
             sampling_method: string;
@@ -12108,6 +12753,15 @@ export interface components {
             /** Format: double */
             zoom: number;
         };
+        /**
+         * @description How the planar view composes its fields.
+         *
+         *     `Legacy`: the base fields (`quantity_id`, `component`, `colormap`, ...) are
+         *     drawn under `field_overlays`. `Layers`: `field_overlays` is the single
+         *     field-layer list and the base sample only provides frame and section meta.
+         * @enum {string}
+         */
+        PlanarLayerModel: "legacy" | "layers";
         PlanarLayerState: {
             boundaries: boolean;
             bounds: boolean;
@@ -12218,6 +12872,38 @@ export interface components {
             opacity: number;
             /** Format: double */
             size: number;
+        };
+        /**
+         * @description Nearest discretization node of a probe point (`eq-planar-nearest-node`):
+         *     the closest vertex of the containing FEM element, or the containing FDM
+         *     cell centre, with its value without interpolation.
+         */
+        PlanarProbeNodeResource: {
+            /** Format: double */
+            in_plane_distance_m: number;
+            /** @description `fem_node` or `fdm_cell_center`. */
+            kind: string;
+            /**
+             * Format: int32
+             * @description Mesh node index or cell index.
+             */
+            node_id: number;
+            /**
+             * Format: double
+             * @description Signed distance of the node from the plane along the frame normal.
+             */
+            normal_offset_m: number;
+            /** Format: double */
+            scalar?: number | null;
+            /**
+             * Format: double
+             * @description Projection of the node onto the frame.
+             */
+            u_m: number;
+            /** Format: double */
+            v_m: number;
+            vector?: number[] | null;
+            world_m: number[];
         };
         PlanarProfilePointResource: {
             /**
@@ -12394,11 +13080,13 @@ export interface components {
         PlanarVisualizationPatch: {
             colormap?: string | null;
             component?: null | components["schemas"]["PlanarFieldComponent"];
+            crop?: null | components["schemas"]["PlanarCropState"];
             default_slice?: null | components["schemas"]["DefaultPlanarSliceState"];
             display_unit?: string | null;
             /** @description Omitted preserves the list; a supplied list replaces it atomically. */
             field_overlays?: components["schemas"]["PlanarFieldOverlayState"][] | null;
             interaction?: null | components["schemas"]["PlanarInteractionState"];
+            layer_model?: null | components["schemas"]["PlanarLayerModel"];
             layers?: null | components["schemas"]["PlanarLayerState"];
             multislice?: null | components["schemas"]["PlanarMultisliceState"];
             point_style?: null | components["schemas"]["PlanarPointStyleState"];
@@ -12419,11 +13107,21 @@ export interface components {
         PlanarVisualizationState: {
             colormap: string;
             component: components["schemas"]["PlanarFieldComponent"];
+            crop?: null | components["schemas"]["PlanarCropState"];
             default_slice: components["schemas"]["DefaultPlanarSliceState"];
             display_unit?: string | null;
-            /** @description Additional quantities in the same physical planar view. */
+            /**
+             * @description Field layers of the planar view (the wire name is kept for persisted
+             *     sessions). Under `layer_model = layers` this is the only list of drawn
+             *     fields; under `legacy` it holds the additional fields over the base.
+             */
             field_overlays?: components["schemas"]["PlanarFieldOverlayState"][];
             interaction: components["schemas"]["PlanarInteractionState"];
+            /**
+             * @description `legacy` for state persisted before field layers; restore migrates it
+             *     to `layers` with [`migrate_planar_layer_model`].
+             */
+            layer_model?: components["schemas"]["PlanarLayerModel"];
             layers: components["schemas"]["PlanarLayerState"];
             multislice?: components["schemas"]["PlanarMultisliceState"];
             point_style: components["schemas"]["PlanarPointStyleState"];
@@ -12573,6 +13271,16 @@ export interface components {
         PreparationStageStatus: "pending" | "active" | "completed" | "failed" | "skipped";
         /** @enum {string} */
         PreparationStatus: "connecting" | "running" | "ready" | "failed";
+        PreparedInitialStateResource: {
+            domain_generation_id: string;
+            /** Format: int64 */
+            initial_state_revision: number;
+            observation_frame_id: string;
+            publication_id: string;
+            /** Format: int64 */
+            scene_revision: number;
+            values_sha256: string;
+        };
         /** @enum {string} */
         PrescribedSotFormulaVersion: "prescribed_sot.fullmag.v1" | "prescribed_sot.legacy_fullmag.v0";
         /** @enum {string} */
@@ -13175,6 +13883,14 @@ export interface components {
             /** Format: int64 */
             revision: number;
         };
+        PublishedMaterialVersion: {
+            archived: boolean;
+            display_name: string;
+            original?: null | components["schemas"]["SceneMaterialSource"];
+            /** Format: int64 */
+            revision: number;
+            source: components["schemas"]["SceneMaterialSource"];
+        };
         QuantityCatalogEntry: {
             /** @description Capability of the resolved backend/plan, independent of field cache. */
             capability_state: string;
@@ -13273,6 +13989,37 @@ export interface components {
             window_step_count: number;
             /** Format: int64 */
             window_wall_time_ns: number;
+        };
+        ReadyAntennaArgumentResource: {
+            /**
+             * Format: double
+             * @description Absent: the argument is required, or its default follows another argument.
+             */
+            default?: number | null;
+            doc: string;
+            name: string;
+            /** @description SI unit of the value. */
+            unit: string;
+        };
+        ReadyAntennaListResource: {
+            antennas: components["schemas"]["ReadyAntennaResource"][];
+        };
+        /** @description A ready antenna of `fullmag.antennas`: a function that returns mask terms. */
+        ReadyAntennaResource: {
+            arguments: components["schemas"]["ReadyAntennaArgumentResource"][];
+            /** @description Qualified name, the `function` of a term's origin. */
+            function: string;
+            summary: string;
+        };
+        ReadyAntennaTermsRequest: {
+            arguments: {
+                [key: string]: number;
+            };
+            function: string;
+        };
+        /** @description The terms one ready-antenna call returns, each with its origin. */
+        ReadyAntennaTermsResource: {
+            terms: components["schemas"]["MaskTermResource"][];
         };
         RealizedGeometryBody: {
             body_id: string;
@@ -13707,12 +14454,33 @@ export interface components {
             stage_label: string;
             started_at: string;
         };
+        RuntimeAuthoredInitialStateSource: {
+            /** @enum {string} */
+            kind: "study";
+            /** Format: int64 */
+            scene_revision: number;
+        } | {
+            /** @enum {string} */
+            kind: "stage";
+            /** Format: int64 */
+            scene_revision: number;
+            stage_id: string;
+        } | {
+            /** Format: int64 */
+            initial_state_revision: number;
+            /** @enum {string} */
+            kind: "prepared";
+            publication_id: string;
+            /** Format: int64 */
+            scene_revision: number;
+        };
         RuntimeCapabilityMatrix: {
             engines: components["schemas"]["HostEngineEntry"][];
             profile_version: string;
         };
         RuntimeCommandIntent: {
             client_intent_id?: string | null;
+            initial_state?: null | components["schemas"]["RuntimeInitialStateRequest"];
             precondition?: null | components["schemas"]["RuntimeCommandPrecondition"];
             reason?: string | null;
             /** Format: int64 */
@@ -13722,6 +14490,8 @@ export interface components {
         RuntimeCommandPrecondition: {
             /** Format: int64 */
             command_revision?: number | null;
+            current_run?: null | components["schemas"]["RuntimeCommandRunPrecondition"];
+            domain_generation_id?: string | null;
             /** Format: int64 */
             mesh_revision?: number | null;
             /** Format: int64 */
@@ -13742,6 +14512,15 @@ export interface components {
             enabled: boolean;
             kind: string;
             reason?: string | null;
+        };
+        /** @description Pin the current run seen when Compute was requested, including its absence. */
+        RuntimeCommandRunPrecondition: {
+            /** @enum {string} */
+            kind: "none";
+        } | {
+            /** @enum {string} */
+            kind: "run";
+            run_id: string;
         };
         RuntimeCommandTarget: {
             /** @enum {string} */
@@ -13767,6 +14546,26 @@ export interface components {
             command_id: string;
             /** @enum {string} */
             kind: "command_id";
+        };
+        RuntimeInitialStateRequest: {
+            /** @enum {string} */
+            kind: "default_for_target";
+        } | {
+            /** @enum {string} */
+            kind: "authored_initial_state";
+            source: components["schemas"]["RuntimeAuthoredInitialStateSource"];
+        } | {
+            allow_stale_model?: boolean;
+            artifact_id: string;
+            case_id: string;
+            content_sha256: string;
+            /** @enum {string} */
+            kind: "stage_result";
+            run_id: string;
+            step_id: string;
+        } | {
+            /** @enum {string} */
+            kind: "latest_compatible_state";
         };
         RuntimeServiceStatusReason: {
             code: string;
@@ -13953,6 +14752,16 @@ export interface components {
             /** Format: int64 */
             source_step: number;
         };
+        /** @description Run, authored execution step, case and worker attempt of one scalar series. */
+        ScalarSeriesIdentity: {
+            attempt_id: string;
+            case_id: string;
+            /** Format: int64 */
+            ownership_epoch: number;
+            run_id: string;
+            step_id: string;
+            task_id: string;
+        };
         ScalarWindow: {
             columns: string[];
             current_observation?: null | components["schemas"]["ScalarObservationSource"];
@@ -13962,6 +14771,7 @@ export interface components {
             /** Format: int64 */
             revision: number;
             rows: number[][];
+            series?: null | components["schemas"]["ScalarSeriesIdentity"];
             /** Format: int64 */
             total_rows: number;
         };
@@ -14168,10 +14978,21 @@ export interface components {
             kind: "sampled";
             location: components["schemas"]["SceneMaterialFieldLocation"];
             unit: string;
+        } | {
+            frame?: components["schemas"]["SceneRegionFrame"];
+            function: Record<string, unknown>;
+            /** @enum {string} */
+            kind: "function";
+            unit?: string | null;
         };
         /** @enum {string} */
         SceneMaterialParameterName: "ms" | "aex" | "alpha" | "ku1" | "ku2" | "anisotropy_axis" | "kc1" | "kc2" | "kc3" | "dind" | "dbulk";
         SceneMaterialParameterValue: number | number[];
+        SceneMaterialReference: {
+            citation?: string | null;
+            label?: string | null;
+            url?: string | null;
+        };
         SceneMaterialResource: {
             id: string;
             name: string;
@@ -14179,6 +15000,31 @@ export interface components {
                 [key: string]: unknown;
             };
             references?: components["schemas"]["MaterialReferenceResource"][];
+            source?: null | components["schemas"]["SceneMaterialSource"];
+        };
+        SceneMaterialSource: {
+            catalog_id: string;
+            /** Format: int64 */
+            catalog_revision: number;
+            kind: components["schemas"]["SceneMaterialSourceKind"];
+            name: string;
+            properties: components["schemas"]["SceneMaterialSourceProperties"];
+            references?: components["schemas"]["SceneMaterialReference"][];
+            version?: null | components["schemas"]["SceneMaterialVersionSource"];
+        };
+        /** @enum {string} */
+        SceneMaterialSourceKind: "builtin" | "custom" | "modified";
+        SceneMaterialSourceProperties: {
+            /** Format: double */
+            Aex?: number | null;
+            /** Format: double */
+            Dbulk?: number | null;
+            /** Format: double */
+            Dind?: number | null;
+            /** Format: double */
+            Ms?: number | null;
+            /** Format: double */
+            alpha: number;
         };
         SceneMaterialTransition: {
             /** Format: int32 */
@@ -14198,6 +15044,13 @@ export interface components {
         };
         /** @enum {string} */
         SceneMaterialTransitionScope: "boundary" | "inside" | "outside";
+        /** @description A stable published material key and the provenance recorded at publication. */
+        SceneMaterialVersionSource: {
+            copied_from_family?: string | null;
+            family: string;
+            source_project?: string | null;
+            version: string;
+        };
         SceneMetadataResource: {
             authoring_schema: string;
             id: string;
@@ -14236,7 +15089,7 @@ export interface components {
             texture_override?: null | components["schemas"]["SceneTextureOverride"];
         };
         SceneObjectResource: {
-            absorbing_boundary?: Record<string, unknown> | null;
+            absorbing_boundary?: null | components["schemas"]["AbsorbingBoundaryIR"];
             allocated_region_ids?: string[];
             geometry?: {
                 [key: string]: unknown;
@@ -14438,9 +15291,11 @@ export interface components {
             solved_antenna_drives?: components["schemas"]["SolvedAntennaDriveResource"][];
             spin_torques?: components["schemas"]["SceneSpinTorque"][];
             spin_transports?: components["schemas"]["SceneSpinTransport"][];
-            study?: {
+            study?: ({
+                thermal_noise?: components["schemas"]["ThermalNoiseResource"] | null;
+            } & {
                 [key: string]: unknown;
-            } | null;
+            }) | null;
             universe?: {
                 [key: string]: unknown;
             } | null;
@@ -14683,9 +15538,9 @@ export interface components {
         /** @enum {string} */
         ScratchSessionBackend: "fdm" | "fem";
         /** @enum {string} */
-        ScratchSessionDevice: "cpu";
+        ScratchSessionDevice: "cpu" | "gpu";
         /** @enum {string} */
-        ScratchSessionPrecision: "double";
+        ScratchSessionPrecision: "double" | "single";
         ScratchSessionRevisionsResource: {
             /** Format: int64 */
             scene_revision: number;
@@ -15032,6 +15887,7 @@ export interface components {
         SessionAssetImportResponse: {
             artifact_ref: string;
             asset_id: string;
+            content_sha256?: string | null;
             session_id: string;
             stored_path: string;
             summary: components["schemas"]["ImportedAssetSummary"];
@@ -15980,6 +16836,55 @@ export interface components {
             duration_ns: number;
             kind: components["schemas"]["SolverTraceSegmentKindResource"];
         };
+        SpatialAbsorbingGeometryIR: {
+            faces: components["schemas"]["AbsorbingBoundaryFaceIR"][];
+            /** @enum {string} */
+            kind: "faces";
+        } | {
+            /** @enum {string} */
+            kind: "plane";
+            normal: number[];
+            origin: number[];
+        } | {
+            axis: number[];
+            center: number[];
+            direction: components["schemas"]["AbsorbingBoundaryDirectionIR"];
+            /** @enum {string} */
+            kind: "cylinder";
+            /** Format: double */
+            radius_m: number;
+        } | {
+            center: number[];
+            direction: components["schemas"]["AbsorbingBoundaryDirectionIR"];
+            /** @enum {string} */
+            kind: "sphere";
+            /** Format: double */
+            radius_m: number;
+        } | {
+            /** @enum {string} */
+            kind: "region_boundary";
+            region_id: string;
+        } | {
+            expression: string;
+            /** @enum {string} */
+            kind: "expression";
+        };
+        SpatialAbsorbingLayerIR: {
+            enabled: boolean;
+            expression?: string | null;
+            frame: components["schemas"]["AbsorbingBoundaryFrameIR"];
+            geometry: components["schemas"]["SpatialAbsorbingGeometryIR"];
+            layer_id: string;
+            /** Format: double */
+            max_damping: number;
+            name: string;
+            profile: components["schemas"]["AbsorbingBoundaryProfileIR"];
+            /** Format: double */
+            ramp_width_m: number;
+            region_id?: string | null;
+            /** Format: double */
+            total_width_m: number;
+        };
         SpinAuthoringDeleteRequest: {
             /** Format: int64 */
             base_revision: number;
@@ -16117,6 +17022,8 @@ export interface components {
             /** @description Exact authored antenna definition ID, not the study node or runtime ID. */
             antenna_solve_stage_id?: string | null;
             artifact_refs?: string[];
+            /** @description Authored pipeline node owning this compiled execution. */
+            authored_stage_id?: string | null;
             checkpoint_ref?: string | null;
             command_id?: string | null;
             /** Format: int64 */
@@ -16222,8 +17129,11 @@ export interface components {
             /** Format: int64 */
             max_steps?: number | null;
             solver_policy?: null | components["schemas"]["SolverPolicyRequest"];
-            /** Format: double */
-            until_seconds: number;
+            /**
+             * Format: double
+             * @description Omit for an exact authored StageId in the accepted Study lane.
+             */
+            until_seconds?: number | null;
         } & {
             /** @enum {string} */
             kind: "run";
@@ -16309,6 +17219,103 @@ export interface components {
             shape: number[];
             spacing: number[];
         };
+        /** @enum {string} */
+        StudyResultAuthoredRelation: "matching_authored_input" | "authored_input_changed" | "stage_absent" | "authoring_unavailable";
+        /** @description Terminal solver evidence qualified against the same final state and attempt. */
+        StudyResultCompletion: {
+            /** @description Absent when this completion carries no relaxation evidence. */
+            converged?: boolean | null;
+            metric_kind?: null | components["schemas"]["StageMetricKind"];
+            metric_name?: string | null;
+            metric_unit?: null | components["schemas"]["StageMetricUnit"];
+            /** Format: double */
+            metric_value?: number | null;
+            reason?: null | components["schemas"]["StageStopReason"];
+            /** Format: double */
+            threshold?: number | null;
+        };
+        /** @enum {string} */
+        StudyResultDomainRelation: "matching_published_layout" | "different_published_layout" | "unavailable";
+        StudyResultGeometry: {
+            cell_size_m: number[];
+            grid_cells: number[];
+            /** @enum {string} */
+            kind: "fdm";
+            origin_m: number[];
+        } | {
+            /** @enum {string} */
+            kind: "fdm_multilayer";
+            layers: components["schemas"]["StudyResultLayerGeometry"][];
+        } | {
+            /** Format: int64 */
+            element_count: number;
+            /** @enum {string} */
+            kind: "fem";
+            /** Format: int64 */
+            node_count: number;
+        };
+        StudyResultInitialState: {
+            /** @description Authored samples that replaced the base state at the named scopes. */
+            reset_scopes: components["schemas"]["StudyResultResetScope"][];
+            source: components["schemas"]["StudyResultInitialStateSource"];
+        };
+        StudyResultInitialStateSource: {
+            /** @enum {string} */
+            kind: "authored";
+            reference: string;
+        } | {
+            artifact_id: string;
+            case_id: string;
+            content_sha256: string;
+            /** @enum {string} */
+            kind: "stage_result";
+            run_id: string;
+            selection: components["schemas"]["StudyResultInputSelection"];
+            step_id: string;
+        } | {
+            artifact_id: string;
+            content_sha256: string;
+            /** @enum {string} */
+            kind: "prepared";
+            publication_id: string;
+        };
+        /** @enum {string} */
+        StudyResultInputSelection: "predecessor" | "selected_result" | "latest_compatible" | "pinned_result";
+        StudyResultLayerGeometry: {
+            cell_size_m: number[];
+            grid_cells: number[];
+            layer_id: string;
+            object_id: string;
+            origin_m: number[];
+            /** Format: int64 */
+            value_count: number;
+            /** Format: int64 */
+            value_offset: number;
+        };
+        /** @enum {string} */
+        StudyResultPredecessorRelation: "newer_different_output" | "earlier_predecessor_changed" | "newer_same_output" | "no_later_matching_input" | "not_applicable" | "unavailable";
+        StudyResultResetScope: {
+            object_id: string;
+            region_id?: string | null;
+        };
+        StudyResultStateResource: {
+            artifact_id: string;
+            artifact_sha256: string;
+            /** @description Exact layout fingerprint, including the magnetically active support. */
+            domain_generation_id: string;
+            geometry: components["schemas"]["StudyResultGeometry"];
+            project_id: string;
+            /** Format: int64 */
+            sample_count: number;
+            source: components["schemas"]["ScalarSeriesIdentity"];
+            /** Format: int64 */
+            step: number;
+            /** @description If true, the support subresource returns FMSP in sample order. */
+            support_available: boolean;
+            /** Format: double */
+            time_s: number;
+            topology_fingerprint: string;
+        };
         StudyRuntimePatchRequest: {
             parallel_execution?: null | components["schemas"]["ParallelExecutionResource"];
             requested_backend?: string | null;
@@ -16326,6 +17333,39 @@ export interface components {
             requested_device: string;
             requested_mode: string;
             requested_precision: string;
+        };
+        StudyStageResult: {
+            accepted_at: string;
+            artifact_id: string;
+            artifact_sha256: string;
+            authored_relation: components["schemas"]["StudyResultAuthoredRelation"];
+            /** @description Authored stage identity when it can be mapped to the durable execution. */
+            authored_stage_id?: string | null;
+            codec_id: string;
+            codec_version: string;
+            completion?: null | components["schemas"]["StudyResultCompletion"];
+            /** @description Comparison with the published live magnetization layout. */
+            domain_relation?: components["schemas"]["StudyResultDomainRelation"];
+            initial_state?: null | components["schemas"]["StudyResultInitialState"];
+            /** @description Later successful results along the inherited chain of admitted inputs. */
+            predecessor_relation?: components["schemas"]["StudyResultPredecessorRelation"];
+            project_id: string;
+            /** @description The owner of both the final state and the archived scalar series. */
+            source: components["schemas"]["ScalarSeriesIdentity"];
+            study_id: string;
+            /** @description Same-space and input-port admission are verified when a command is submitted. */
+            supports_magnetization_input: boolean;
+        };
+        StudyStageResultsResource: {
+            authored_input_sha256?: string | null;
+            authored_stage_ids: string[];
+            next_cursor?: string | null;
+            /** @description Current project. Each result retains the original project for playback. */
+            project_id: string;
+            results: components["schemas"]["StudyStageResult"][];
+            revision: string;
+            /** Format: int64 */
+            scene_revision?: number | null;
         };
         /** @enum {string} */
         SurfaceColorSource: "solid" | "orientation" | "component_x" | "component_y" | "component_z" | "magnitude" | "colormap";
@@ -16397,6 +17437,7 @@ export interface components {
             rows: number[][];
             /** Format: int64 */
             schema_revision: number;
+            series?: null | components["schemas"]["ScalarSeriesIdentity"];
             table_id: string;
             /** Format: int64 */
             total_rows: number;
@@ -16409,6 +17450,16 @@ export interface components {
         TargetFieldAvailabilityState: "supported" | "materializing" | "ready" | "stale" | "unavailable";
         /** @enum {string} */
         TempCleanupSchema: "on_success" | "always" | "never";
+        /** @description Existing Brown-noise intent; seed is a lossless decimal u64 string on JSON transport. */
+        ThermalNoiseResource: {
+            /** @description Positive u64 decimal without signs, whitespace or leading zeroes; absent uses entropy. */
+            seed?: string | null;
+            /**
+             * Format: double
+             * @description Positive finite temperature in kelvin.
+             */
+            temperature: number;
+        };
         /** @enum {string} */
         ThreadAutoSchema: "auto";
         TimeDependenceResource: {
@@ -16942,6 +17993,7 @@ export interface components {
             viewport_colorbar_visible: boolean;
             visible: boolean;
             wireframe_color: string;
+            wireframe_geometry_scope?: null | components["schemas"]["VisualizationTargetGeometryScope"];
             /** Format: double */
             wireframe_opacity: number;
             wireframe_visible: boolean;
@@ -17081,6 +18133,7 @@ export interface components {
             vectors?: null | components["schemas"]["VectorLayerPatch"];
             visible?: boolean | null;
             wireframe?: null | components["schemas"]["BasicLayerPatch"];
+            wireframe_geometry_scope?: null | components["schemas"]["VisualizationTargetGeometryScope"];
         };
         /** @enum {string} */
         VisualizationTargetGeometryScope: "surface" | "full";
@@ -18800,6 +19853,294 @@ export interface operations {
             };
             /** @description Corrupt, oversized or invalid scalar */
             500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    persistence_get_persistence_projects_project_id_runs_run_id_study_results: {
+        parameters: {
+            query?: {
+                /** @description Authored stage ID or exact durable execution ID. Omit to include all final states. */
+                stage_id?: string;
+                /** @description Exact durable run in the owning workspace. */
+                run_id?: string;
+                /** @description Opaque continuation from a previous response with the same filters. */
+                cursor?: string;
+                /** @description Page size, from 1 to 100. The default is 25. */
+                limit?: number;
+            };
+            header?: never;
+            path: {
+                project_id: string;
+                run_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Published final states for the selected durable run */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StudyStageResultsResource"];
+                };
+            };
+            /** @description Invalid filter or page */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Unknown run */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Run or result ownership differs */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    persistence_get_persistence_projects_project_id_runs_run_id_study_results_artifact_id: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+                run_id: string;
+                artifact_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Immutable Study state with its exact spatial carrier */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StudyResultStateResource"];
+                };
+            };
+            /** @description Unknown result */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Inconsistent project, run or carrier binding */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    persistence_get_persistence_projects_project_id_runs_run_id_study_results_artifact_id_magnetization: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Strong ETag from a previous response for this saved result */
+                "If-None-Match"?: string | null;
+            };
+            path: {
+                project_id: string;
+                run_id: string;
+                artifact_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description FMVP v3 magnetization bound to the saved result and its exact domain */
+            200: {
+                headers: {
+                    /** @description Strong ETag for this saved result payload */
+                    ETag?: string;
+                    /** @description Exact saved sample layout fingerprint */
+                    "x-fullmag-domain-generation-id"?: string;
+                    /** @description FMVP;version=3 */
+                    "x-fullmag-encoding"?: string;
+                    /** @description Saved result artifact SHA-256 */
+                    "x-fullmag-field-generation-id"?: string;
+                    /** @description Exact saved topology fingerprint */
+                    "x-fullmag-mesh-topology-hash"?: string;
+                    /** @description Saved Study result artifact ID */
+                    "x-fullmag-source-id"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/octet-stream": unknown;
+                };
+            };
+            /** @description Unchanged immutable magnetization */
+            304: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Unknown result */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    persistence_get_persistence_projects_project_id_runs_run_id_study_results_artifact_id_scalars: {
+        parameters: {
+            query?: {
+                columns?: string;
+                start?: number;
+                limit?: number;
+            };
+            header?: never;
+            path: {
+                project_id: string;
+                run_id: string;
+                artifact_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Immutable scalar series owned by this saved Study state */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HistoricalScalarWindow"];
+                };
+            };
+            /** @description Invalid row limit */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Qualified archived scalars unavailable */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    persistence_get_persistence_projects_project_id_runs_run_id_study_results_artifact_id_support: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Strong ETag from a previous response for this saved result */
+                "If-None-Match"?: string | null;
+            };
+            path: {
+                project_id: string;
+                run_id: string;
+                artifact_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description FMSP support mask in exact saved sample order */
+            200: {
+                headers: {
+                    /** @description Strong ETag for this saved result payload */
+                    ETag?: string;
+                    /** @description Exact saved sample layout fingerprint */
+                    "x-fullmag-domain-generation-id"?: string;
+                    /** @description Saved result artifact SHA-256 */
+                    "x-fullmag-field-generation-id"?: string;
+                    /** @description Exact saved topology fingerprint */
+                    "x-fullmag-mesh-topology-hash"?: string;
+                    /** @description Saved Study result artifact ID */
+                    "x-fullmag-source-id"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/octet-stream": unknown;
+                };
+            };
+            /** @description No explicit support mask */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Unchanged immutable mask */
+            304: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    persistence_get_persistence_projects_project_id_runs_run_id_study_results_artifact_id_topology: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Strong ETag from a previous response for this saved result */
+                "If-None-Match"?: string | null;
+            };
+            path: {
+                project_id: string;
+                run_id: string;
+                artifact_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description FMMT v2 topology of the saved FEM state */
+            200: {
+                headers: {
+                    /** @description Strong ETag for this saved result payload */
+                    ETag?: string;
+                    /** @description Exact saved sample layout fingerprint */
+                    "x-fullmag-domain-generation-id"?: string;
+                    /** @description Saved result artifact SHA-256 */
+                    "x-fullmag-field-generation-id"?: string;
+                    /** @description Exact saved topology fingerprint */
+                    "x-fullmag-mesh-topology-hash"?: string;
+                    /** @description Saved Study result artifact ID */
+                    "x-fullmag-source-id"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/octet-stream": unknown;
+                };
+            };
+            /** @description Unchanged immutable topology */
+            304: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description FEM topology is unavailable */
+            404: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -23132,6 +24473,14 @@ export interface operations {
                  *     identity, follows the overridden slice.
                  */
                 position_fraction?: number;
+                /**
+                 * @description Sampling window (crop) in the frame's u/v axes, meters. All four or
+                 *     none; clipped to the full frame bounds (`eq-planar-sampling-window`).
+                 */
+                window_u_min_m?: number;
+                window_u_max_m?: number;
+                window_v_min_m?: number;
+                window_v_max_m?: number;
                 expected_scene_revision?: string;
                 expected_monitor_revision?: string;
                 expected_source_revision?: string;
@@ -23230,6 +24579,14 @@ export interface operations {
                  *     identity, follows the overridden slice.
                  */
                 position_fraction?: number;
+                /**
+                 * @description Sampling window (crop) in the frame's u/v axes, meters. All four or
+                 *     none; clipped to the full frame bounds (`eq-planar-sampling-window`).
+                 */
+                window_u_min_m?: number;
+                window_u_max_m?: number;
+                window_v_min_m?: number;
+                window_v_max_m?: number;
                 expected_scene_revision?: string;
                 expected_monitor_revision?: string;
                 expected_source_revision?: string;
@@ -23335,6 +24692,14 @@ export interface operations {
                  *     identity, follows the overridden slice.
                  */
                 position_fraction?: number;
+                /**
+                 * @description Sampling window (crop) in the frame's u/v axes, meters. All four or
+                 *     none; clipped to the full frame bounds (`eq-planar-sampling-window`).
+                 */
+                window_u_min_m?: number;
+                window_u_max_m?: number;
+                window_v_min_m?: number;
+                window_v_max_m?: number;
                 expected_scene_revision?: string;
                 expected_monitor_revision?: string;
                 expected_source_revision?: string;
@@ -23418,6 +24783,11 @@ export interface operations {
                 position_m?: number;
                 u_m: number;
                 v_m: number;
+                /**
+                 * @description `node` additionally returns the nearest FEM node or FDM cell centre
+                 *     (`eq-planar-nearest-node`); any other value is rejected.
+                 */
+                nearest?: string;
                 sample_token?: string;
                 component?: string;
                 resolution_x?: number;
@@ -23429,6 +24799,14 @@ export interface operations {
                 scope_region_id?: string;
                 stage_id?: string;
                 snapshot_id?: string;
+                /**
+                 * @description Sampling window (crop) in the frame's u/v axes, meters. All four or
+                 *     none; clipped to the full frame bounds (`eq-planar-sampling-window`).
+                 */
+                window_u_min_m?: number;
+                window_u_max_m?: number;
+                window_v_min_m?: number;
+                window_v_max_m?: number;
                 expected_scene_revision?: string;
                 expected_monitor_revision?: string;
                 expected_source_revision?: string;
@@ -23523,6 +24901,14 @@ export interface operations {
                 scope_region_id?: string;
                 stage_id?: string;
                 snapshot_id?: string;
+                /**
+                 * @description Sampling window (crop) in the frame's u/v axes, meters. All four or
+                 *     none; clipped to the full frame bounds (`eq-planar-sampling-window`).
+                 */
+                window_u_min_m?: number;
+                window_u_max_m?: number;
+                window_v_min_m?: number;
+                window_v_max_m?: number;
                 expected_scene_revision?: string;
                 expected_monitor_revision?: string;
                 expected_source_revision?: string;
@@ -23615,6 +25001,14 @@ export interface operations {
                  *     identity, follows the overridden slice.
                  */
                 position_fraction?: number;
+                /**
+                 * @description Sampling window (crop) in the frame's u/v axes, meters. All four or
+                 *     none; clipped to the full frame bounds (`eq-planar-sampling-window`).
+                 */
+                window_u_min_m?: number;
+                window_u_max_m?: number;
+                window_v_min_m?: number;
+                window_v_max_m?: number;
                 expected_scene_revision?: string;
                 expected_monitor_revision?: string;
                 expected_source_revision?: string;
@@ -23706,6 +25100,14 @@ export interface operations {
                  *     identity, follows the overridden slice.
                  */
                 position_fraction?: number;
+                /**
+                 * @description Sampling window (crop) in the frame's u/v axes, meters. All four or
+                 *     none; clipped to the full frame bounds (`eq-planar-sampling-window`).
+                 */
+                window_u_min_m?: number;
+                window_u_max_m?: number;
+                window_v_min_m?: number;
+                window_v_max_m?: number;
                 expected_scene_revision?: string;
                 expected_monitor_revision?: string;
                 expected_source_revision?: string;
@@ -23804,6 +25206,14 @@ export interface operations {
                  *     identity, follows the overridden slice.
                  */
                 position_fraction?: number;
+                /**
+                 * @description Sampling window (crop) in the frame's u/v axes, meters. All four or
+                 *     none; clipped to the full frame bounds (`eq-planar-sampling-window`).
+                 */
+                window_u_min_m?: number;
+                window_u_max_m?: number;
+                window_v_min_m?: number;
+                window_v_max_m?: number;
                 expected_scene_revision?: string;
                 expected_monitor_revision?: string;
                 expected_source_revision?: string;
@@ -23902,6 +25312,14 @@ export interface operations {
                  *     identity, follows the overridden slice.
                  */
                 position_fraction?: number;
+                /**
+                 * @description Sampling window (crop) in the frame's u/v axes, meters. All four or
+                 *     none; clipped to the full frame bounds (`eq-planar-sampling-window`).
+                 */
+                window_u_min_m?: number;
+                window_u_max_m?: number;
+                window_v_min_m?: number;
+                window_v_max_m?: number;
                 expected_scene_revision?: string;
                 expected_monitor_revision?: string;
                 expected_source_revision?: string;
@@ -24001,6 +25419,14 @@ export interface operations {
                  *     identity, follows the overridden slice.
                  */
                 position_fraction?: number;
+                /**
+                 * @description Sampling window (crop) in the frame's u/v axes, meters. All four or
+                 *     none; clipped to the full frame bounds (`eq-planar-sampling-window`).
+                 */
+                window_u_min_m?: number;
+                window_u_max_m?: number;
+                window_v_min_m?: number;
+                window_v_max_m?: number;
                 expected_scene_revision?: string;
                 expected_monitor_revision?: string;
                 expected_source_revision?: string;
@@ -24100,6 +25526,14 @@ export interface operations {
                  *     identity, follows the overridden slice.
                  */
                 position_fraction?: number;
+                /**
+                 * @description Sampling window (crop) in the frame's u/v axes, meters. All four or
+                 *     none; clipped to the full frame bounds (`eq-planar-sampling-window`).
+                 */
+                window_u_min_m?: number;
+                window_u_max_m?: number;
+                window_v_min_m?: number;
+                window_v_max_m?: number;
                 expected_scene_revision?: string;
                 expected_monitor_revision?: string;
                 expected_source_revision?: string;
@@ -24184,6 +25618,11 @@ export interface operations {
                 position_m?: number;
                 u_m: number;
                 v_m: number;
+                /**
+                 * @description `node` additionally returns the nearest FEM node or FDM cell centre
+                 *     (`eq-planar-nearest-node`); any other value is rejected.
+                 */
+                nearest?: string;
                 sample_token?: string;
                 component?: string;
                 resolution_x?: number;
@@ -24195,6 +25634,14 @@ export interface operations {
                 scope_region_id?: string;
                 stage_id?: string;
                 snapshot_id?: string;
+                /**
+                 * @description Sampling window (crop) in the frame's u/v axes, meters. All four or
+                 *     none; clipped to the full frame bounds (`eq-planar-sampling-window`).
+                 */
+                window_u_min_m?: number;
+                window_u_max_m?: number;
+                window_v_min_m?: number;
+                window_v_max_m?: number;
                 expected_scene_revision?: string;
                 expected_monitor_revision?: string;
                 expected_source_revision?: string;
@@ -24290,6 +25737,14 @@ export interface operations {
                 scope_region_id?: string;
                 stage_id?: string;
                 snapshot_id?: string;
+                /**
+                 * @description Sampling window (crop) in the frame's u/v axes, meters. All four or
+                 *     none; clipped to the full frame bounds (`eq-planar-sampling-window`).
+                 */
+                window_u_min_m?: number;
+                window_u_max_m?: number;
+                window_v_min_m?: number;
+                window_v_max_m?: number;
                 expected_scene_revision?: string;
                 expected_monitor_revision?: string;
                 expected_source_revision?: string;
@@ -24383,6 +25838,14 @@ export interface operations {
                  *     identity, follows the overridden slice.
                  */
                 position_fraction?: number;
+                /**
+                 * @description Sampling window (crop) in the frame's u/v axes, meters. All four or
+                 *     none; clipped to the full frame bounds (`eq-planar-sampling-window`).
+                 */
+                window_u_min_m?: number;
+                window_u_max_m?: number;
+                window_v_min_m?: number;
+                window_v_max_m?: number;
                 expected_scene_revision?: string;
                 expected_monitor_revision?: string;
                 expected_source_revision?: string;
@@ -24475,6 +25938,14 @@ export interface operations {
                  *     identity, follows the overridden slice.
                  */
                 position_fraction?: number;
+                /**
+                 * @description Sampling window (crop) in the frame's u/v axes, meters. All four or
+                 *     none; clipped to the full frame bounds (`eq-planar-sampling-window`).
+                 */
+                window_u_min_m?: number;
+                window_u_max_m?: number;
+                window_v_min_m?: number;
+                window_v_max_m?: number;
                 expected_scene_revision?: string;
                 expected_monitor_revision?: string;
                 expected_source_revision?: string;
@@ -24574,6 +26045,14 @@ export interface operations {
                  *     identity, follows the overridden slice.
                  */
                 position_fraction?: number;
+                /**
+                 * @description Sampling window (crop) in the frame's u/v axes, meters. All four or
+                 *     none; clipped to the full frame bounds (`eq-planar-sampling-window`).
+                 */
+                window_u_min_m?: number;
+                window_u_max_m?: number;
+                window_v_min_m?: number;
+                window_v_max_m?: number;
                 expected_scene_revision?: string;
                 expected_monitor_revision?: string;
                 expected_source_revision?: string;
@@ -25545,6 +27024,8 @@ export interface operations {
             header?: {
                 /** @description Strong ETag from a previous field-vector response */
                 "If-None-Match"?: string | null;
+                /** @description Expected authored magnetization frame from the current field metadata */
+                "x-fullmag-expected-observation-frame-id"?: string | null;
                 /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
                 "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
             };
@@ -25583,6 +27064,8 @@ export interface operations {
                     "x-fullmag-n-comp"?: number;
                     /** @description Optional FMVP v3/v5 node-index count */
                     "x-fullmag-node-index-count"?: number;
+                    /** @description Identity of the authored magnetization frame, when served */
+                    "x-fullmag-observation-frame-id"?: string;
                     /** @description current for metadata-complete FMVP v3 through v5; legacy_unverified for FMVP v2 */
                     "x-fullmag-payload-state"?: string;
                     /** @description Decoded point count */
@@ -26283,6 +27766,8 @@ export interface operations {
             /** @description Binary table row window */
             200: {
                 headers: {
+                    /** @description none, or v1 followed by base64url JSON for the exact accepted scalar series owning this payload */
+                    "x-fullmag-table-series"?: string;
                     [name: string]: unknown;
                 };
                 content: {
@@ -29225,6 +30710,172 @@ export interface operations {
             };
         };
     };
+    model_get_sessions_current_model_mask_field_drives: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Hand-written mask antennas */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MaskFieldDriveListResource"];
+                };
+            };
+            /** @description No active workspace or scene document */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    model_post_sessions_current_model_mask_field_drives: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MaskFieldDriveCreateRequest"];
+            };
+        };
+        responses: {
+            /** @description Created a mask antenna */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AuthoringTransactionResponse"];
+                };
+            };
+            /** @description Invalid mask antenna */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Revision conflict or duplicate field drive */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    model_put_sessions_current_model_mask_field_drives_drive_id: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
+            path: {
+                /** @description Stable mask antenna id */
+                drive_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MaskFieldDriveReplaceRequest"];
+            };
+        };
+        responses: {
+            /** @description Replaced a mask antenna */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AuthoringTransactionResponse"];
+                };
+            };
+            /** @description Invalid mask antenna */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Mask antenna not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Revision conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    model_delete_sessions_current_model_mask_field_drives_drive_id: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
+            path: {
+                /** @description Stable mask antenna id */
+                drive_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["FieldDriveDeleteRequest"];
+            };
+        };
+        responses: {
+            /** @description Deleted a mask antenna */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AuthoringTransactionResponse"];
+                };
+            };
+            /** @description Mask antenna not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Revision conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
     model_get_sessions_current_model_material_fields: {
         parameters: {
             query?: never;
@@ -29783,6 +31434,93 @@ export interface operations {
             };
         };
     };
+    model_get_sessions_current_model_objects_object_id_source_surface: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
+            path: {
+                object_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ImportedSourceSurfaceResource"];
+                };
+            };
+            /** @description Source or object unavailable */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Source or scene changed */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    model_get_sessions_current_model_objects_object_id_source_surface_topology: {
+        parameters: {
+            query: {
+                scene_revision: number;
+                source_sha256: string;
+            };
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
+            path: {
+                object_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Source-only FMMT v2: zero cells, triangular facets */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/octet-stream": unknown;
+                };
+            };
+            /** @description Binary range */
+            206: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Not modified */
+            304: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Stale scene or source */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
     model_get_sessions_current_model_oersted_fields: {
         parameters: {
             query?: never;
@@ -30214,6 +31952,63 @@ export interface operations {
             };
             /** @description No active workspace or scene document */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    model_get_sessions_current_model_ready_antennas: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Ready antennas of fullmag.antennas */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReadyAntennaListResource"];
+                };
+            };
+        };
+    };
+    model_post_sessions_current_model_ready_antennas_terms: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ReadyAntennaTermsRequest"];
+            };
+        };
+        responses: {
+            /** @description Mask terms returned by one ready-antenna call */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReadyAntennaTermsResource"];
+                };
+            };
+            /** @description Unknown antenna or invalid arguments */
+            400: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -30946,6 +32741,8 @@ export interface operations {
         parameters: {
             query?: never;
             header?: {
+                /** @description Required for a scoped magnetization apply */
+                "idempotency-key"?: string | null;
                 /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
                 "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
             };
@@ -31933,7 +33730,14 @@ export interface operations {
                     "application/json": components["schemas"]["SolverEnergyCurrentResource"];
                 };
             };
-            /** @description No solver energy data */
+            /** @description No current solver energy sample is available */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description No active workspace */
             404: {
                 headers: {
                     [name: string]: unknown;
@@ -32034,6 +33838,106 @@ export interface operations {
                 content?: never;
             };
             /** @description No active workspace */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    simulation_get_sessions_current_simulation_stages_results: {
+        parameters: {
+            query?: {
+                /** @description Authored stage ID or exact durable execution ID. Omit to include all final states. */
+                stage_id?: string;
+                /** @description Exact durable run in the owning workspace. */
+                run_id?: string;
+                /** @description Opaque continuation from a previous response with the same filters. */
+                cursor?: string;
+                /** @description Page size, from 1 to 100. The default is 25. */
+                limit?: number;
+            };
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Bounded durable Study results and their current authored relation */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StudyStageResultsResource"];
+                };
+            };
+            /** @description Invalid filter, page size or cursor */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Workspace or requested run is unavailable */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Workspace changed or the result binding is inconsistent */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    data_get_sessions_current_simulation_stages_results_scalars: {
+        parameters: {
+            query: {
+                /** @description Exact accepted run */
+                run_id: string;
+                /** @description Exact accepted Study step */
+                step_id: string;
+                /** @description Exact output case */
+                case_id: string;
+                /** @description Succeeded worker attempt */
+                attempt_id: string;
+                /** @description Succeeded worker ownership epoch */
+                ownership_epoch: number;
+                /** @description Comma-separated scalar columns */
+                columns?: string;
+                /** @description First archived row ordinal */
+                start?: number;
+                /** @description Number of rows, 1 to 2048 */
+                limit?: number;
+            };
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Archived scalar samples and their exact source */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HistoricalScalarWindow"];
+                };
+            };
+            /** @description Qualified scalar history unavailable */
             404: {
                 headers: {
                     [name: string]: unknown;
@@ -33399,6 +35303,337 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+        };
+    };
+    workspace_get_workspace_material_library: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Built-in entries, user drafts and published versions with catalog revision */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MaterialLibraryResource"];
+                };
+            };
+            /** @description Material catalog storage is unavailable */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
+            };
+        };
+    };
+    workspace_post_workspace_material_library: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MaterialLibraryWriteRequest"];
+            };
+        };
+        responses: {
+            /** @description User material created */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MaterialLibraryMutationResource"];
+                };
+            };
+            /** @description Invalid material document */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
+            };
+            /** @description Material identity already exists or is read-only */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
+            };
+            /** @description Material catalog storage is unavailable */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
+            };
+        };
+    };
+    workspace_post_workspace_material_library_versions: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MaterialVersionPublishRequest"];
+            };
+        };
+        responses: {
+            /** @description Immutable material version published */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MaterialVersionMutationResource"];
+                };
+            };
+            /** @description Invalid version key or incomplete material */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
+            };
+            /** @description Source material does not exist */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
+            };
+            /** @description Stale source revision or version already exists */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
+            };
+            /** @description Material catalog storage is unavailable */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
+            };
+        };
+    };
+    workspace_patch_workspace_material_library_versions_family_version: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Stable material family key */
+                family: string;
+                /** @description Stable published version key */
+                version: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MaterialVersionUpdateRequest"];
+            };
+        };
+        responses: {
+            /** @description Published version metadata updated */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MaterialVersionMutationResource"];
+                };
+            };
+            /** @description Invalid version key or metadata */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
+            };
+            /** @description Published version does not exist */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
+            };
+            /** @description Stale version metadata revision */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
+            };
+            /** @description Material catalog storage is unavailable */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
+            };
+        };
+    };
+    workspace_put_workspace_material_library_id: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Stable custom material identity */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MaterialLibraryUpdateRequest"];
+            };
+        };
+        responses: {
+            /** @description User material replaced */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MaterialLibraryMutationResource"];
+                };
+            };
+            /** @description Invalid material or revision */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
+            };
+            /** @description Material does not exist */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
+            };
+            /** @description Stale revision or read-only built-in material */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
+            };
+            /** @description Material catalog storage is unavailable */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
+            };
+        };
+    };
+    workspace_delete_workspace_material_library_id: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Stable custom material identity */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MaterialLibraryDeleteRequest"];
+            };
+        };
+        responses: {
+            /** @description Material deleted and catalog revision advanced */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MaterialLibraryDeleteResource"];
+                };
+            };
+            /** @description Invalid material identity or revision */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
+            };
+            /** @description Material does not exist */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
+            };
+            /** @description Stale revision or read-only built-in material */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
+            };
+            /** @description Material catalog storage is unavailable */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
             };
         };
     };

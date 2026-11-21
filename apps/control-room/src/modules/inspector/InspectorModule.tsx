@@ -1,6 +1,9 @@
 "use client";
 
-import { useCallback, useEffect, useMemo } from "react";
+import { useCallback, useLayoutEffect } from "react";
+import { PanelRightClose } from "lucide-react";
+import { Button } from "@/shared/ui/Button";
+import { PanelChrome, usePanelChromeControls } from "@/shared/ui/PanelFrame";
 
 import { useKernel } from "@/kernel/KernelContext";
 import { createCommandContext } from "@/kernel/commands/commandContext";
@@ -13,69 +16,91 @@ import {
   useSelectionSelector,
 } from "@/kernel/selection/useSelection";
 
+import {
+  Viewport3DExportPanelOutlet,
+  Viewport3DInspectorOutlet,
+  setViewport3DInspectorContext,
+  useViewport3DExportVisited,
+  useViewport3DInspectorContext,
+  useViewport3DInspectorVisited,
+} from "@/modules/viewport-3d/public";
+import { InspectorContexts } from "./InspectorContexts";
 import { InspectorDirtySelectionGuard } from "./InspectorDirtySelectionGuard";
 import {
   InspectorEditSessionProvider,
-  useInspectorEditSession,
+  useInspectorEditSessionStore,
 } from "./InspectorEditSession";
 import { resolveInspectorDescriptor } from "./inspectorDescriptor";
+import { inspectorFitCommandId } from "./inspectorFitCommand";
 import { resolveInspectorPanel } from "./inspectorRegistry";
 import { resolveUnknownInspectorRoute } from "./inspectorRouteCatalog";
 import { InspectorShell } from "./InspectorShell";
 import { SavedResultsPlaybackInspector } from "./panels/SavedResultsPlaybackInspector";
 
 function PendingFormBridge() {
-  const kernel = useKernel();
-  const session = useInspectorEditSession();
-  const owner = useMemo(() => Symbol("inspector-pending-form"), []);
-  const applying = session?.applying ?? false;
-  const dirty = session?.dirty ?? false;
-  const applyBlockReason = session?.applyBlockReason;
-  const lockReason = session?.lockReason;
-  const mode = session?.mode ?? "immediate";
-  const valid = session?.valid ?? true;
-  const form = useMemo(
-    () =>
-      session
-        ? {
-            apply: session.apply,
-            applying,
-            dirty,
-            lockReason,
-            mode,
-            applyBlockReason,
-            reset: session.reset,
-            valid,
-          }
-        : null,
-    [
-      session,
-      applying,
-      dirty,
-      applyBlockReason,
-      lockReason,
-      mode,
-      valid,
-    ],
-  );
+  const { pendingForms } = useKernel();
+  const store = useInspectorEditSessionStore();
 
-  useEffect(() => {
-    const registry = kernel.pendingForms;
-    if (!registry) return;
-    if (!form) {
-      registry.unregister(owner);
-      return;
-    }
-    registry.register(owner, form);
-    return () => registry.unregister(owner);
-  }, [form, kernel.pendingForms, owner]);
+  useLayoutEffect(() => {
+    if (!pendingForms || !store) return;
+    const owner = Symbol("inspector-pending-form");
+    const sync = () => {
+      const form = store.getCurrentSession();
+      if (!form) {
+        pendingForms.unregister(owner);
+      } else if (!pendingForms.update(owner, form)) {
+        pendingForms.register(owner, form);
+      }
+    };
+    const unsubscribe = store.subscribe(sync);
+    sync();
+    return () => {
+      unsubscribe();
+      pendingForms.unregister(owner);
+    };
+  }, [pendingForms, store]);
 
   return null;
 }
 
 export default function InspectorModule() {
+  const kernel = useKernel();
+  const context = useViewport3DInspectorContext();
+  const viewVisited = useViewport3DInspectorVisited();
+  const exportVisited = useViewport3DExportVisited();
   const savedPlayback = useSavedResultsPlaybackSelection();
-  return savedPlayback ? <SavedResultsPlaybackInspector /> : <LiveInspectorModule />;
+  const selectionPanel = savedPlayback && !savedPlayback.studyResult
+    ? <SavedResultsPlaybackInspector />
+    : <LiveInspectorModule />;
+  if (!kernel.modules.get("viewport-3d")) return selectionPanel;
+  return (
+    <InspectorContexts
+      context={context}
+      exportPanel={exportVisited ? <ExportInspectorPanel /> : null}
+      onContextChange={setViewport3DInspectorContext}
+      view={viewVisited ? <ViewInspectorPanel /> : null}
+      viewActions={<ViewInspectorActions />}
+    >
+      {selectionPanel}
+    </InspectorContexts>
+  );
+}
+
+function ViewInspectorPanel() {
+  return <section className="fm-inspector-view" aria-label="3D View Inspector"><Viewport3DInspectorOutlet /></section>;
+}
+
+function ExportInspectorPanel() {
+  return <section className="fm-inspector-view" aria-label="3D Export Inspector"><Viewport3DExportPanelOutlet /></section>;
+}
+
+function ViewInspectorActions() {
+  const kernel = useKernel();
+  const chrome = usePanelChromeControls();
+  const hide = () => kernel.layout.setPanelVisible("right", false);
+  return <PanelChrome className="fm-inspector-contexts__actions">
+    <Button aria-label="Hide Inspector" size="icon" variant="ghost" onClick={() => chrome ? chrome.hideWith(hide) : hide()}><PanelRightClose size={16} aria-hidden="true" /></Button>
+  </PanelChrome>;
 }
 
 function LiveInspectorModule() {
@@ -87,7 +112,13 @@ function LiveInspectorModule() {
 
   const handleFocus = useCallback(() => {
     if (projectOnly) return;
-    void kernel.commands.execute("viewport-3d.fit", {
+    const commandId = inspectorFitCommandId(kernel.layout.get().activeViewportMainModuleId);
+    if (commandId === "field-map.fit") {
+      // The 2D fit writes the planar interaction through visualization sync.
+      void kernel.commands.execute(commandId, createCommandContext("inspector", kernel));
+      return;
+    }
+    void kernel.commands.execute(commandId, {
       source: "inspector",
       layout: kernel.layout,
       selection: kernel.selection,

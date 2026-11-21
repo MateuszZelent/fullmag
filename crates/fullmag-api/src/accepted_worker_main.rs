@@ -1,21 +1,4 @@
-#[path = "accepted_fem_state.rs"]
-mod accepted_fem_state;
-#[path = "accepted_fem_gpu_state.rs"]
-mod accepted_fem_gpu_state;
-#[path = "accepted_fem_study_worker.rs"]
-mod accepted_fem_study_worker;
-mod accepted_antenna_inspection_worker;
-mod accepted_field_binary;
-mod accepted_field_materialization_worker;
-mod accepted_live_demand;
-mod accepted_observation_spool;
-mod error;
-#[path = "accepted_study_worker.rs"]
-mod accepted_study_worker;
-use accepted_study_worker::accepted_solver_profile;
-mod accepted_project_storage;
-
-mod worker_startup_gate;
+use crate::{accepted_study_worker, worker_startup_gate};
 
 use anyhow::{bail, Context, Result};
 use std::path::PathBuf;
@@ -27,7 +10,7 @@ struct WorkerArgs {
     startup_gate: bool,
 }
 
-fn main() {
+pub(super) fn main() {
     if let Err(error) = run() {
         eprintln!("accepted worker failed: {error:#}");
         std::process::exit(1);

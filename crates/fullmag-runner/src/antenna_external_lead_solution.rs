@@ -1,5 +1,6 @@
 //! Inspection of one retained modeled-domain V/RT0/H result, never a drive basis.
 
+#[cfg(any(feature = "fem-native", feature = "fem-gpu", test))]
 use crate::native_fem::accepted_external_lead::decode_owned_bundle;
 #[cfg(any(feature = "fem-native", feature = "fem-gpu"))]
 use crate::native_fem::accepted_external_lead::AcceptedExternalLeadBundle;
@@ -44,13 +45,21 @@ pub use fullmag_antenna_artifacts::solution::{
 };
 #[cfg(test)]
 const MAX_BINARY_BYTES: usize = 128 << 20;
+#[cfg(any(feature = "fem-native", feature = "fem-gpu", test))]
 const BUNDLE_PATH: &str = "bundle.v1.bin";
+#[cfg(any(feature = "fem-native", feature = "fem-gpu", test))]
 const POSITIONS_PATH: &str = "sample_positions.f64le.bin";
+#[cfg(any(feature = "fem-native", feature = "fem-gpu", test))]
 const FIELD_PATH: &str = "H.f64le.bin";
+#[cfg(any(feature = "fem-native", feature = "fem-gpu", test))]
 const DEVICE_IDS_PATH: &str = "device_vertex_ids.u64le.bin";
+#[cfg(any(feature = "fem-native", feature = "fem-gpu", test))]
 const DEVICE_V_PATH: &str = "device_V.f64le.bin";
+#[cfg(any(feature = "fem-native", feature = "fem-gpu", test))]
 const CURRENT_DISPLAY_PATH: &str = "current_display.v1.bin";
+#[cfg(any(feature = "fem-native", feature = "fem-gpu", test))]
 const CURRENT_DISPLAY_SCHEMA: &str = "accepted_external_lead_current_display.ordered.v1";
+#[cfg(any(feature = "fem-native", feature = "fem-gpu", test))]
 const ADAPTER_VERSION: &str = "antenna_external_lead_request_adapter.v1";
 
 /// Basename-only runner payloads adapted at the retained artifact boundary.
@@ -118,6 +127,7 @@ fn validate_reference(reference: &AntennaExternalLeadSolutionRef) -> Result<(), 
     retained::validate_reference(reference).map_err(Into::into)
 }
 
+#[cfg(any(feature = "fem-native", feature = "fem-gpu", test))]
 fn content_digest(manifest: &AntennaExternalLeadSolutionManifest) -> Result<String, RunError> {
     retained::content_digest(manifest).map_err(Into::into)
 }

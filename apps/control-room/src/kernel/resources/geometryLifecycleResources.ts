@@ -95,18 +95,19 @@ import {
   isOptionalObjectInteractionKind,
 } from "../api/apiTypes";
 import {
-  decodeFdmRegionMembership,
   decodeFdmMultilayerActiveMask,
   FMBM_HEADER_LEN,
   validateFdmMultilayerActiveMaskContract,
   type DecodedFdmMultilayerActiveMask,
+} from "../api/codecs/fdmMultilayerActiveMaskCodec";
+import {
+  decodeFdmRegionMembership,
   FMRM_HEADER_LEN,
   validateFdmRegionMembershipContract,
   type DecodedFdmRegionMembership,
   type FdmRegionMembershipContractResult,
-  type DecodedMeshQualityData,
-  type DecodedTopology,
-} from "../api/codecs";
+} from "../api/codecs/fdmRegionMembershipCodec";
+import type { DecodedMeshQualityData, DecodedTopology } from "../api/codecs/types";
 import { ControlRoomApiError } from "../api/ControlRoomApi";
 import {
   resolveArtifactAssessment,
@@ -127,6 +128,7 @@ export {
   useVisualizationStateResource,
 } from "../visualization/useVisualizationStateResource";
 
+import { resourceHasDisplayableData } from "./resourceState";
 import { useResource } from "./useResource";
 import { sessionRequestScopeKey, sessionScopedResourceKey } from "./sessionResourceIdentity";
 import { useSessionScopedResourceKey } from "./useSessionScopedResourceKey";
@@ -445,6 +447,7 @@ export function resolveMeshSharedDomainManifestRevision(
     revision,
     manifest?.source_scene_revision ?? "unknown",
     manifest?.geometry_realization_revision ?? "unknown",
+    manifest?.validated_for_scene_revision ?? "unknown",
   ].join(":");
 }
 
@@ -1451,14 +1454,10 @@ export function resolveFdmRegionMembershipDescriptorResult(
       data: null,
     };
   }
-  if (resource.status !== "ready") {
-    return {
-      ...resource,
-      availability: { reason: "loading", status: "pending" },
-      data: null,
-    };
-  }
-  if (!resource.data) {
+  // A background refresh keeps the last settled descriptor (status
+  // `stale`); dropping it here made FDM region colouring vanish on every
+  // membership invalidation.
+  if (!resourceHasDisplayableData(resource) || !resource.data) {
     return {
       ...resource,
       availability: { reason: "loading", status: "pending" },
@@ -1685,7 +1684,7 @@ export function useFdmRegionMembershipBinaryResource(
   const prerequisite: FdmRegionMembershipAvailability =
     descriptor.availability.status !== "ready"
       ? descriptor.availability
-      : domain.status !== "ready" || !domain.data
+      : !resourceHasDisplayableData(domain) || !domain.data
         ? { reason: "loading", status: "pending" }
         : descriptor.data?.domain_generation_id !== domain.data.generation_id
           ? { reason: "generation-mismatch", status: "incompatible" }

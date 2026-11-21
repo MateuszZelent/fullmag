@@ -2,7 +2,6 @@
 
 import { useCallback, useMemo, useState, useSyncExternalStore } from "react";
 
-import type { LiveStatusResource } from "@/kernel/api/apiTypes";
 import type { CommandFeedbackNotice } from "@/kernel/commands/CommandFeedbackController";
 import {
   MESHING_BUILDS_LATEST_SUCCESSFUL_PATH,
@@ -50,9 +49,9 @@ import {
   useSessionStatusSelector,
 } from "@/kernel/resources/useSessionStatus";
 import { useSelectionSelector } from "@/kernel/selection/useSelection";
-import { EMPTY_SELECTION, type Selection } from "@/kernel/selection/selectionTypes";
+import { EMPTY_SELECTION } from "@/kernel/selection/selectionTypes";
 import { useAnalysisFieldOverlay } from "@/kernel/visualization/AnalysisFieldOverlayController";
-import { analysisModuleIdForNodeKind } from "@/kernel/analysis-modules/analysisSurfaceRouting";
+
 import { ANALYSIS_FEATURE_MANIFESTS } from "@/kernel/analysis-modules/analysisModuleManifests";
 import {
   EMPTY_OBJECT_VISUALIZATION_SNAPSHOT,
@@ -101,89 +100,11 @@ import {
   type RibbonStripTabDef,
   type RibbonStripTabId,
 } from "./ribbonTypes";
-
-type RibbonRuntimeStatus = {
-  capabilities: Pick<
-    LiveStatusResource["capabilities"],
-    "active_lane" | "binary_fields" | "explicit_topology"
-  >;
-  domain: Pick<LiveStatusResource["domain"], "discretization">;
-  resources: Pick<
-    LiveStatusResource["resources"],
-    | "field_revision"
-    | "fields_revision"
-    | "command_completion_revision"
-    | "commands_revision"
-    | "mesh_build_revision"
-    | "mesh_revision"
-    | "scene_revision"
-      | "stages_revision"
-  >;
-  run: Pick<NonNullable<LiveStatusResource["run"]>, "run_id"> | null;
-  session: Pick<LiveStatusResource["session"], "session_id">;
-};
+import { selectRibbonRuntimeStatus, ribbonRuntimeStatusEquals, contextualAnalysisModuleIdForSelection, type ContextualTabDismissalState, contextualTabDismissalForModuleChange, contextualRibbonTabIsActive } from "./RibbonModule.model";
 
 const EMPTY_COMMAND_FEEDBACK_NOTICES: readonly CommandFeedbackNotice[] =
   Object.freeze([]);
 const noopSubscribe = () => () => {};
-
-function selectRibbonRuntimeStatus(status: {
-  data: LiveStatusResource | null;
-}): RibbonRuntimeStatus | null {
-  if (!status.data) return null;
-  return {
-    capabilities: {
-      active_lane: status.data.capabilities.active_lane,
-      binary_fields: status.data.capabilities.binary_fields,
-      explicit_topology: status.data.capabilities.explicit_topology,
-    },
-    domain: {
-      discretization: status.data.domain.discretization,
-    },
-    resources: {
-      field_revision: status.data.resources.field_revision,
-      fields_revision: status.data.resources.fields_revision,
-      command_completion_revision:
-        status.data.resources.command_completion_revision,
-      commands_revision: status.data.resources.commands_revision,
-      mesh_build_revision: status.data.resources.mesh_build_revision,
-      mesh_revision: status.data.resources.mesh_revision,
-      scene_revision: status.data.resources.scene_revision,
-      stages_revision: status.data.resources.stages_revision,
-    },
-    run: status.data.run ? { run_id: status.data.run.run_id } : null,
-    session: {
-      session_id: status.data.session.session_id,
-    },
-  };
-}
-
-function ribbonRuntimeStatusEquals(
-  previous: RibbonRuntimeStatus | null,
-  next: RibbonRuntimeStatus | null,
-): boolean {
-  if (previous === next) return true;
-  if (!previous || !next) return previous === next;
-  return (
-    previous.capabilities.binary_fields === next.capabilities.binary_fields &&
-    previous.capabilities.active_lane === next.capabilities.active_lane &&
-    previous.capabilities.explicit_topology ===
-      next.capabilities.explicit_topology &&
-    previous.domain.discretization === next.domain.discretization &&
-    previous.resources.field_revision === next.resources.field_revision &&
-    previous.resources.fields_revision === next.resources.fields_revision &&
-    previous.resources.command_completion_revision ===
-      next.resources.command_completion_revision &&
-    previous.resources.commands_revision === next.resources.commands_revision &&
-    previous.resources.mesh_build_revision ===
-      next.resources.mesh_build_revision &&
-    previous.resources.mesh_revision === next.resources.mesh_revision &&
-    previous.resources.scene_revision === next.resources.scene_revision &&
-    previous.resources.stages_revision === next.resources.stages_revision &&
-    previous.run?.run_id === next.run?.run_id &&
-    previous.session.session_id === next.session.session_id
-  );
-}
 
 export default function RibbonModule({ kernel }: ModuleProps) {
   const ribbonDensity = useSyncExternalStore(
@@ -225,7 +146,7 @@ export default function RibbonModule({ kernel }: ModuleProps) {
   );
   const { setActiveTab } = useLayoutActions();
   const selection = useSelectionSelector((currentSelection) =>
-    activeTab === "view" || activeTab === "geometry" || activeTab === "mesh"
+    activeTab === "view" || activeTab === "geometry" || activeTab === "mesh" || activeTab === "physics"
       ? currentSelection
       : EMPTY_SELECTION,
   );
@@ -387,7 +308,9 @@ export default function RibbonModule({ kernel }: ModuleProps) {
           [MESHING_CAPABILITIES_PATH]: meshCapabilities.data,
           [MESHING_SUMMARY_PATH]: meshSummary.data,
           [MODEL_GEOMETRY_CAPABILITIES_PATH]: geometryCapabilities.data,
-          [MODEL_SCENE_PATH]: scene.status === "ready" ? scene.data : null,
+          [MODEL_SCENE_PATH]: scene.status === "ready" &&
+            (activeTab !== "physics" || scene.sessionScopeKey === kernel.commands.getSessionScopeKey?.())
+            ? scene.data : null,
           [PERSISTENCE_CHECKPOINTS_PATH]: needsRuntimeResources
             ? checkpointCatalog.data
             : null,
@@ -411,6 +334,7 @@ export default function RibbonModule({ kernel }: ModuleProps) {
       meshSummary.data,
       scene.data,
       scene.status,
+      scene.sessionScopeKey,
       modelReadiness.data,
       modelReadiness.status,
       needsSessionStatusResources,
@@ -422,7 +346,9 @@ export default function RibbonModule({ kernel }: ModuleProps) {
     ],
   );
 
-  const activeOverlay = useAnalysisFieldOverlay(kernel.analysisFieldOverlay);
+  const activeOverlay = useAnalysisFieldOverlay(kernel.analysisFieldOverlay, {
+    ignorePhase: true,
+  });
   const activeAnalysisFieldId = activeOverlay?.fieldId ?? null;
   const activeAnalysisFieldLabel = activeOverlay?.label ?? null;
   const activeAnalysisField = useMemo(
@@ -632,47 +558,6 @@ export default function RibbonModule({ kernel }: ModuleProps) {
       </div>
     </WorkspaceRenderProfiler>
   );
-}
-
-export const __ribbonModuleTestUtils = {
-  ribbonRuntimeStatusEquals,
-  selectRibbonRuntimeStatus,
-  contextualAnalysisModuleIdForSelection,
-  contextualRibbonTabIsActive,
-  contextualTabDismissalForModuleChange,
-};
-
-interface ContextualTabDismissalState {
-  contextModuleId: string | null;
-  dismissed: boolean;
-}
-
-function contextualAnalysisModuleIdForSelection(
-  selection: Pick<Selection, "kind" | "ref">,
-): string | null {
-  const ref = selection.ref;
-  if (ref?.type === "analysis-pinned-group") {
-    return ANALYSIS_FEATURE_MANIFESTS.find((manifest) => manifest.id === ref.moduleId)?.id ?? null;
-  }
-  return analysisModuleIdForNodeKind(selection.kind ?? "");
-}
-
-function contextualTabDismissalForModuleChange(
-  state: ContextualTabDismissalState,
-  contextModuleId: string | null,
-): ContextualTabDismissalState {
-  return state.contextModuleId === contextModuleId
-    ? state
-    : { contextModuleId, dismissed: false };
-}
-
-function contextualRibbonTabIsActive(
-  state: ContextualTabDismissalState,
-  contextModuleId: string | null,
-  hasContextModuleTitle: boolean,
-): boolean {
-  return hasContextModuleTitle &&
-    (state.contextModuleId !== contextModuleId || !state.dismissed);
 }
 
 function isGlobalQuantityConfirmationInput(

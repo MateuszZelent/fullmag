@@ -1,8 +1,7 @@
-mod scheduler_owner_control;
-mod worker_startup_gate;
-
-#[path = "accepted_fem_preparation_supervisor.rs"]
-mod accepted_fem_preparation_supervisor;
+use crate::{
+    accepted_fem_preparation_supervisor, scheduler_idle_backoff, scheduler_owner_control,
+    worker_startup_gate,
+};
 
 use anyhow::{bail, Context, Result};
 use fullmag_application::RunSpecification;
@@ -34,6 +33,9 @@ struct SchedulerArgs {
     max_tasks: Option<usize>,
     max_idle_polls: usize,
     idle_poll_interval: Duration,
+    /// Cap of the adaptive idle interval; equals `idle_poll_interval` when
+    /// the scheduler is not resident.
+    idle_poll_maximum: Duration,
     process_timeout: Duration,
     heartbeat_interval: Duration,
 }
@@ -97,7 +99,7 @@ impl Drop for ActivePreparations {
     }
 }
 
-fn main() {
+pub(super) fn main() {
     if let Err(error) = run() {
         eprintln!("accepted FEM preparation scheduler failed: {error:#}");
         std::process::exit(1);
@@ -260,6 +262,10 @@ fn run_scheduler(args: SchedulerArgs, shutdown_requested: Arc<AtomicBool>) -> Re
     let mut recovery_writer_deferred = false;
     let mut checkpoint_writer_deferred = false;
     let mut candidate_writer_deferred = false;
+    let mut idle_backoff = scheduler_idle_backoff::IdleBackoff::new(
+        args.idle_poll_interval,
+        args.idle_poll_maximum,
+    );
 
     loop {
         reap_finished(
@@ -286,6 +292,7 @@ fn run_scheduler(args: SchedulerArgs, shutdown_requested: Arc<AtomicBool>) -> Re
                 );
                 checkpoint_writer_deferred = true;
             }
+            idle_backoff.reset();
             std::thread::sleep(args.idle_poll_interval);
             continue;
         }
@@ -343,6 +350,7 @@ fn run_scheduler(args: SchedulerArgs, shutdown_requested: Arc<AtomicBool>) -> Re
             if shutdown_requested.load(Ordering::Acquire) && active.is_empty() {
                 break;
             }
+            idle_backoff.reset();
             std::thread::sleep(args.idle_poll_interval);
             continue;
         }
@@ -377,6 +385,7 @@ fn run_scheduler(args: SchedulerArgs, shutdown_requested: Arc<AtomicBool>) -> Re
                         }));
                         recovery_writer_deferred = true;
                     }
+                    idle_backoff.reset();
                     std::thread::sleep(args.idle_poll_interval);
                     continue;
                 }
@@ -486,6 +495,7 @@ fn run_scheduler(args: SchedulerArgs, shutdown_requested: Arc<AtomicBool>) -> Re
                             }));
                             candidate_writer_deferred = true;
                         }
+                        idle_backoff.reset();
                         std::thread::sleep(args.idle_poll_interval);
                         continue;
                     }
@@ -546,10 +556,12 @@ fn run_scheduler(args: SchedulerArgs, shutdown_requested: Arc<AtomicBool>) -> Re
         }
 
         if started_any {
+            idle_backoff.reset();
             consecutive_idle_polls = 0;
             continue;
         }
         if !active.is_empty() {
+            idle_backoff.reset();
             std::thread::sleep(Duration::from_millis(10));
             continue;
         }
@@ -560,7 +572,7 @@ fn run_scheduler(args: SchedulerArgs, shutdown_requested: Arc<AtomicBool>) -> Re
         }
         idle_poll_count = idle_poll_count.saturating_add(1);
         consecutive_idle_polls = consecutive_idle_polls.saturating_add(1);
-        std::thread::sleep(args.idle_poll_interval);
+        idle_backoff.sleep_idle(&shutdown_requested);
     }
 
     let shutdown = shutdown_requested.load(Ordering::Acquire);
@@ -1084,6 +1096,7 @@ fn retry_store_writer_busy<T>(mut operation: impl FnMut() -> Result<T>) -> Resul
 
 /// Classify only the final result of acquiring the recovery fence. The
 /// transaction body has not run, so deferral cannot replay a durable effect.
+#[cfg(test)]
 fn classify_recovery_transaction<T>(result: Result<T>) -> Result<Option<T>> {
     match result.context("preparation scheduler: acquire recovery transaction") {
         Ok(transaction) => Ok(Some(transaction)),
@@ -1100,6 +1113,7 @@ fn classify_recovery_transaction<T>(result: Result<T>) -> Result<Option<T>> {
 
 /// A failed discovery returns no partial candidate list. Only typed writer
 /// contention is deferred; validation and identity failures remain fatal.
+#[cfg(test)]
 fn classify_candidate_discovery(
     result: Result<Vec<PreparationCandidate>>,
 ) -> Result<Option<Vec<PreparationCandidate>>> {
@@ -1293,6 +1307,15 @@ fn parse_args() -> Result<SchedulerArgs> {
         .map(|value| parse_u64("--idle-poll-milliseconds", value))
         .transpose()?
         .unwrap_or(100);
+    let idle_poll_max_milliseconds = values
+        .remove("--idle-poll-max-milliseconds")
+        .map(|value| parse_u64("--idle-poll-max-milliseconds", value))
+        .transpose()?;
+    let idle_poll_maximum = scheduler_idle_backoff::idle_poll_maximum(
+        idle_poll_max_milliseconds,
+        resident,
+        Duration::from_millis(idle_poll_milliseconds),
+    )?;
     let process_timeout_seconds = take_required_u64(&mut values, "--process-timeout-seconds")?;
     let heartbeat_interval_milliseconds =
         take_required_u64(&mut values, "--heartbeat-interval-milliseconds")?;
@@ -1323,6 +1346,7 @@ fn parse_args() -> Result<SchedulerArgs> {
         max_tasks,
         max_idle_polls,
         idle_poll_interval: Duration::from_millis(idle_poll_milliseconds),
+        idle_poll_maximum,
         process_timeout: Duration::from_secs(process_timeout_seconds),
         heartbeat_interval: Duration::from_millis(heartbeat_interval_milliseconds),
     })
@@ -1441,8 +1465,13 @@ mod tests {
         })).unwrap();
         store.commit_run_catalog(&catalog).unwrap();
         let before = std::fs::read(root.join("runs").join(run_id).join("run_catalog.json")).unwrap();
+        // libtest lists the full module path without the crate name.
+        let (_, test_module) = module_path!().split_once("::").unwrap();
+        let test_name = format!(
+            "{test_module}::candidate_discovery_survives_cross_process_writer_and_preserves_pending_task"
+        );
         let mut holder = Command::new(std::env::current_exe().unwrap())
-            .args(["--exact", "tests::candidate_discovery_survives_cross_process_writer_and_preserves_pending_task", "--nocapture"])
+            .args(["--exact", &test_name, "--nocapture"])
             .env(HOLDER_ROOT, &root).stdin(Stdio::piped()).stdout(Stdio::piped()).spawn().unwrap();
         let mut output = std::io::BufReader::new(holder.stdout.take().unwrap());
         loop {

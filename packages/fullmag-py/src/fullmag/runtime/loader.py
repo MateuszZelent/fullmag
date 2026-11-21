@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import importlib.util
 import math
+from collections.abc import Iterable, Mapping
+from contextlib import ExitStack
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from types import ModuleType
@@ -9,6 +11,7 @@ from uuid import uuid4
 
 from fullmag.model import Problem, Relaxation, StageAutosave, TableAutosave, TimeEvolution
 from fullmag.model.antenna_inventory import AntennaAuthoringInventory
+from fullmag.model.structure import MagnetizationAssignment
 from fullmag.runtime.output_storage_lowering import configure_problem_ir_autosave
 
 
@@ -22,6 +25,7 @@ class LoadedStage:
     output_every_seconds: float | None = None
     table_autosave: TableAutosave | None = None
     autosave: StageAutosave | None = None
+    magnetization_assignments: tuple[MagnetizationAssignment, ...] = ()
 
     def to_ir(
         self,
@@ -69,7 +73,9 @@ class LoadedStage:
             runtime_metadata["output_storage_source_dir"] = str(Path(source_root).resolve())
             if source_stem:
                 runtime_metadata["output_storage_source_stem"] = source_stem
-        if isinstance(runtime_metadata, dict):
+        # Actions inherit the surrounding study snapshot but do not execute its
+        # integrator or produce a time-domain output stream of their own.
+        if isinstance(runtime_metadata, dict) and self.action is None:
             configure_problem_ir_autosave(
                 ir,
                 runtime_metadata.get("output_storage"),
@@ -186,7 +192,12 @@ class LoadedProblem:
             for problem in problems
         )
 
-    def pipeline_base_problem(self, problem: Problem | None = None) -> Problem:
+    def pipeline_base_problem(
+        self,
+        problem: Problem | None = None,
+        *,
+        replay_initial_magnetization: bool = True,
+    ) -> Problem:
         """Return persistent problem state before ordered action stages run."""
         candidate = self.antenna_inventory.execution_base(problem or self.problem)
         introduced_ids: set[str] = set()
@@ -198,7 +209,7 @@ class LoadedProblem:
             if not isinstance(action, dict):
                 continue
             kind = action.get("kind")
-            if kind == "add_field_drive":
+            if kind in {"add_field_drive", "add_mask_field_drive"}:
                 drive = action.get("drive")
                 drive_id = getattr(drive, "id", None)
                 if drive_id is None and isinstance(drive, dict):
@@ -236,11 +247,45 @@ class LoadedProblem:
                 )
             else:
                 runtime_metadata.pop("spin_wave_response", None)
+        if replay_initial_magnetization and any(
+            stage.magnetization_assignments for stage in self.stages
+        ):
+            # The workspace reflects the last edit. Replaying the pipeline starts
+            # with the first physical stage's texture, before later assignments.
+            first_physical_problem = next(
+                stage.problem for stage in self.stages
+                if stage.entrypoint_kind in {"flat_run", "flat_relax"} and stage.action is None
+            )
+            initial_magnets = {
+                magnet.object_id or magnet.name: magnet
+                for magnet in first_physical_problem.magnets
+            }
+            magnets = []
+            for magnet in candidate.magnets:
+                initial = initial_magnets.get(magnet.object_id or magnet.name)
+                if initial is None:
+                    magnets.append(magnet)
+                    continue
+                initial_textures = {
+                    region.region_id: region.texture_override for region in initial.object_regions
+                }
+                magnets.append(
+                    replace(
+                        magnet,
+                        m0=initial.m0,
+                        object_regions=tuple(
+                            replace(region, texture_override=initial_textures.get(region.region_id))
+                            for region in magnet.object_regions
+                        ),
+                    )
+                )
+            candidate = replace(candidate, magnets=magnets)
         return replace(
             candidate,
             field_drives=tuple(
                 drive for drive in candidate.field_drives if drive.id not in introduced_ids
             ),
+            mask_field_drives=self._base_mask_field_drives(candidate, introduced_ids),
             antenna_target_projections=tuple(
                 projection for projection in candidate.antenna_target_projections
                 if projection.id not in introduced_projection_ids
@@ -256,6 +301,28 @@ class LoadedProblem:
             runtime_metadata=runtime_metadata,
             study=study,
         )
+
+    def _base_mask_field_drives(
+        self, candidate: Problem, introduced_ids: set[str]
+    ) -> tuple[object, ...]:
+        """Whole-study mask antennas as they are before the first stage.
+
+        Stage actions update or remove a whole-study antenna in the final problem;
+        the base keeps the definition captured before any stage ran. Antennas added
+        with ``study.field_drives.add`` after the first stage are kept as well.
+        """
+        if not self.stages:
+            return tuple(
+                drive for drive in candidate.mask_field_drives if drive.id not in introduced_ids
+            )
+        initial = tuple(self.stages[0].problem.mask_field_drives)
+        initial_ids = {drive.id for drive in initial}
+        late = tuple(
+            drive
+            for drive in candidate.mask_field_drives
+            if drive.id not in initial_ids and drive.id not in introduced_ids
+        )
+        return initial + late
 
     def study_pipeline_document(self) -> dict[str, object] | None:
         from fullmag.runtime.script_builder import export_study_pipeline_document
@@ -320,6 +387,7 @@ class LoadedProblem:
             asset_cache=asset_cache,
             include_geometry_assets=False,
             study_pipeline=study_pipeline,
+            runtime_device_override=runtime_device_override,
         )
         runtime_metadata = ir["problem_meta"]["runtime_metadata"]
         workspace_runtime_metadata = workspace_ir["problem_meta"]["runtime_metadata"]
@@ -336,8 +404,11 @@ def load_problem_from_script(
     *,
     lightweight_assets: bool = False,
     source_bytes: bytes | None = None,
+    material_catalog: Iterable[Mapping[str, object]] | None = None,
+    material_catalog_unavailable: bool = False,
 ) -> LoadedProblem:
     import fullmag.world as world
+    from fullmag._material_versions import _bind_catalog, _bind_unavailable_catalog
 
     source_path = Path(path).resolve()
     if source_bytes is None:
@@ -347,6 +418,7 @@ def load_problem_from_script(
         if spec is None or spec.loader is None:
             raise RuntimeError(f"Could not load script from {source_path}")
         module = importlib.util.module_from_spec(spec)
+        dont_inherit = True
     else:
         try:
             source_text = source_bytes.decode("utf-8")
@@ -355,16 +427,35 @@ def load_problem_from_script(
         module = ModuleType(f"fullmag_user_script_{uuid4().hex}")
         module.__file__ = str(source_path)
         module.__package__ = ""
+        # Mask and time functions are transpiled from their source; let
+        # inspect read the captured text instead of the file on disk.
+        from fullmag.model.mask_function import register_script_source
 
-    world.begin_script_capture(source_path.parent)
-    world.set_script_capture_lightweight_assets(lightweight_assets)
-    try:
+        register_script_source(str(source_path), source_text)
+        script_source = source_text
+        dont_inherit = False
+
+    with ExitStack() as stack:
+        if material_catalog_unavailable:
+            stack.enter_context(_bind_unavailable_catalog())
+        elif material_catalog is not None:
+            stack.enter_context(_bind_catalog(material_catalog))
+        world.begin_script_capture(source_path.parent)
+        stack.callback(world.finish_script_capture)
+        world.set_script_capture_lightweight_assets(lightweight_assets)
         if source_bytes is None:
-            spec.loader.exec_module(module)
-            script_source = source_path.read_text(encoding="utf-8")
-        else:
-            exec(compile(source_text, str(source_path), "exec"), module.__dict__)
-            script_source = source_text
+            # SourceFileLoader.exec_module may accept timestamp-and-size-valid
+            # bytecode after this file is rewritten within one second. Capture
+            # and execute the source once, then retain that same content.
+            source_content = source_path.read_bytes()
+            source_text = importlib.util.decode_source(source_content)
+            script_source = (
+                source_content.decode("utf-8")
+                .replace("\r\n", "\n")
+                .replace("\r", "\n")
+            )
+        code = compile(source_text, str(source_path), "exec", dont_inherit=dont_inherit)
+        exec(code, module.__dict__)
         workspace_problem = world.capture_workspace_problem()
         extracted_entrypoint_kind = None
         if workspace_problem is None and not world.capture_executed_stages():
@@ -388,6 +479,7 @@ def load_problem_from_script(
                     output_every_seconds=stage.output_every_seconds,
                     table_autosave=stage.table_autosave,
                     autosave=stage.autosave,
+                    magnetization_assignments=stage.magnetization_assignments,
                 )
                 for stage in captured_stages
             )
@@ -415,6 +507,7 @@ def load_problem_from_script(
                     output_every_seconds=stage.output_every_seconds,
                     table_autosave=stage.table_autosave,
                     autosave=stage.autosave,
+                    magnetization_assignments=stage.magnetization_assignments,
                 )
                 for stage in declared_stages
             )
@@ -441,9 +534,6 @@ def load_problem_from_script(
                 workspace_problem=workspace_problem,
                 antenna_inventory=antenna_inventory,
             )
-
-    finally:
-        world.finish_script_capture()
 
 
 def _extract_problem(module: ModuleType) -> tuple[Problem, str]:

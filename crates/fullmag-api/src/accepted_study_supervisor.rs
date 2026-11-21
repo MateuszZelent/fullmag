@@ -14,16 +14,10 @@ use std::process::{Command, ExitStatus, Output, Stdio};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
-#[path = "accepted_worker_execution_receipt.rs"]
-mod accepted_worker_execution_receipt;
+use crate::accepted_profile_admission as profile_admission;
+use crate::accepted_worker_execution_receipt;
 
-#[path = "accepted_profile_admission.rs"]
-mod profile_admission;
-
-#[path = "owned_worker_process.rs"]
-mod owned_worker_process;
-#[path = "compute_operator_env.rs"]
-mod compute_operator_env;
+use crate::{compute_operator_env, owned_worker_process};
 use owned_worker_process::OwnedWorkerProcess;
 
 /// How long the read-only Stop poll, or a heartbeat failing on transient store
@@ -832,14 +826,8 @@ pub(crate) fn run_supervised_accepted_worker_with_host(
     }
     let run_id_typed = fullmag_application::RunId::parse(run_id.to_owned())
         .map_err(|error| anyhow::anyhow!(error.to_string()))?;
-    let claim = retry_store_writer_busy(|| {
-        fullmag_runtime_control::load_current_task_claim(store, &run_id_typed, task_id)
-    })
-    .context("supervisor requires an exact active task claim")?;
-    let lease =
-        retry_store_writer_busy(|| store.read_active_resource_lease_for_task(run_id, task_id))
-            .context("read active resource lease before accepted-worker spawn")?
-            .context("supervisor requires an active resource lease")?;
+    let (slot, claim, lease) =
+        capture_worker_launch_claim(slot, store, &run_id_typed, task_id)?;
     if lease.run_id != claim.run_id.as_str()
         || lease.task_id != claim.task_id.as_str()
         || lease.attempt_id != claim.attempt_id.as_str()
@@ -958,23 +946,26 @@ pub(crate) fn run_supervised_accepted_worker_with_host(
         if starts.len() != 1 {
             bail!("host-bound worker requires exactly one durable Start for its claim");
         }
-        let run_intent = retry_store_writer_busy(|| store.read_run_intent(run_id))
-            .context("read accepted RunIntent for worker CPU environment")?
-            .context("host-bound worker requires its accepted RunIntent")?;
-        let specification: fullmag_application::RunSpecification =
-            serde_json::from_value(run_intent.specification)
-                .context("accepted worker RunSpec is invalid")?;
-        if specification.run_id != claim.run_id {
-            bail!("accepted worker RunSpec belongs to another run");
-        }
-        let accepted_step = retry_store_writer_busy(|| {
+        let accepted_step = (|| {
+            let run_intent = retry_store_writer_busy(|| store.read_run_intent(run_id))
+                .context("read accepted RunIntent for worker CPU environment")?
+                .context("host-bound worker requires its accepted RunIntent")?;
+            let specification: fullmag_application::RunSpecification =
+                serde_json::from_value(run_intent.specification)
+                    .context("accepted worker RunSpec is invalid")?;
+            if specification.run_id != claim.run_id {
+                bail!("accepted worker RunSpec belongs to another run");
+            }
             fullmag_runtime_control::load_accepted_worker_step_for_start(
                 store,
                 &specification.snapshot.project_id,
                 starts[0],
             )
-        })
-        .context("load exact accepted worker step for CPU environment")?;
+        })();
+        let accepted_step = match accepted_step.context("load exact accepted worker step for CPU environment") {
+            Ok(step) => step,
+            Err(error) => return Err(defer_pre_spawn_worker_validation_error(slot, error)),
+        };
         worker_thread_environment(
             &accepted_step.problem,
             &accepted_step.execution_plan,
@@ -1088,6 +1079,25 @@ pub(crate) fn run_supervised_accepted_worker_with_host(
             "accepted worker process failed"
         );
     }
+    if let Some(diagnostics) = successful_cuda_activity_trace_diagnostics(
+        process_exit_receipt.status_success,
+        &outcome.output.stderr,
+    ) {
+        // The standalone scheduler has no tracing subscriber; runtime_service_main::logged_command
+        // persists its stderr in the API's compute log.
+        eprintln!(
+            "{}",
+            serde_json::json!({
+                "component": "accepted_compute_scheduler",
+                "level": "INFO",
+                "message": "accepted worker emitted CUDA activity trace diagnostics",
+                "run_id": &process_exit_receipt.run_id,
+                "task_id": &process_exit_receipt.task_id,
+                "receipt_id": &process_exit_receipt.receipt_id,
+                "diagnostics": diagnostics,
+            })
+        );
+    }
     accepted_supervisor_test_fail_after_process_exit_receipt()?;
     match final_heartbeat_result {
         Ok(FinalHeartbeatReconciliation::Reconciled) => {}
@@ -1181,23 +1191,23 @@ fn authorize_host_worker_launch(
     store: &SessionStore,
     lease: &FmsResourceLease,
 ) -> Result<String> {
-    authorize_host_worker_launch_with_timeout(
+    authorize_host_worker_launch_with_budget(
         host,
         store,
         lease,
-        Duration::from_secs(30),
+        remaining_retry_time(Duration::from_secs(30)),
         || {},
     )
 }
 
-fn authorize_host_worker_launch_with_timeout(
+fn authorize_host_worker_launch_with_budget(
     host: &fullmag_runtime_control::host_runtime::HostRuntimeAdmission,
     store: &SessionStore,
     lease: &FmsResourceLease,
-    retry_timeout: Duration,
+    remaining: impl Fn() -> Duration,
     on_retry: impl FnMut(),
 ) -> Result<String> {
-    retry_host_worker_launch_with_timeout(
+    retry_host_worker_launch_with_budget(
         || {
             // Preserve the sampler's unavailable reason if the sample ages
             // between the second preflight read and the locked launch CAS.
@@ -1205,34 +1215,47 @@ fn authorize_host_worker_launch_with_timeout(
             host.ledger().authorize_worker_launch(store, lease)
         },
         on_retry,
-        retry_timeout,
+        remaining,
     )
     .context("authorize host worker launch")
 }
 
+#[cfg(test)]
 fn retry_host_worker_launch<T>(
-    mut operation: impl FnMut() -> Result<T>,
+    operation: impl FnMut() -> Result<T>,
     on_retry: impl FnMut(),
 ) -> Result<T> {
     retry_host_worker_launch_with_timeout(operation, on_retry, Duration::from_secs(30))
 }
 
+fn remaining_retry_time(timeout: Duration) -> impl Fn() -> Duration {
+    let deadline = Instant::now() + timeout;
+    move || deadline.saturating_duration_since(Instant::now())
+}
+
 fn retry_host_worker_launch_with_timeout<T>(
+    operation: impl FnMut() -> Result<T>,
+    on_retry: impl FnMut(),
+    timeout: Duration,
+) -> Result<T> {
+    retry_host_worker_launch_with_budget(operation, on_retry, remaining_retry_time(timeout))
+}
+
+fn retry_host_worker_launch_with_budget<T>(
     mut operation: impl FnMut() -> Result<T>,
     mut on_retry: impl FnMut(),
-    retry_timeout: Duration,
+    remaining: impl Fn() -> Duration,
 ) -> Result<T> {
     use std::hash::{Hash, Hasher};
 
     // Both retryable errors precede one-shot permit consumption: writer
     // contention prevents admission locks, while an unavailable compute-node
     // sample and transient GPU inventory are read-only validation failures.
-    let deadline = Instant::now() + retry_timeout;
     let mut attempt = 0_u64;
     loop {
         match operation() {
             Ok(value) => return Ok(value),
-            Err(error) if is_retryable_pre_spawn_host_error(&error) && Instant::now() < deadline =>
+            Err(error) if is_retryable_pre_spawn_host_error(&error) && !remaining().is_zero() =>
             {
                 on_retry();
                 let mut hasher = std::collections::hash_map::DefaultHasher::new();
@@ -1249,7 +1272,7 @@ fn retry_host_worker_launch_with_timeout<T>(
                     Duration::from_millis(5 + hasher.finish() % 36)
                 };
                 attempt = attempt.saturating_add(1);
-                std::thread::sleep(delay.min(deadline.saturating_duration_since(Instant::now())));
+                std::thread::sleep(delay.min(remaining()));
             }
             Err(error) => return Err(error),
         }
@@ -1259,22 +1282,22 @@ fn retry_host_worker_launch_with_timeout<T>(
 fn current_compute_snapshot_before_worker_launch(
     host: &fullmag_runtime_control::host_runtime::HostRuntimeAdmission,
 ) -> Result<fullmag_session::compute_node_snapshot::ComputeNodeSnapshot> {
-    current_compute_snapshot_before_worker_launch_with_timeout(
+    current_compute_snapshot_before_worker_launch_with_budget(
         host,
-        Duration::from_secs(30),
+        remaining_retry_time(Duration::from_secs(30)),
         || {},
     )
 }
 
-fn current_compute_snapshot_before_worker_launch_with_timeout(
+fn current_compute_snapshot_before_worker_launch_with_budget(
     host: &fullmag_runtime_control::host_runtime::HostRuntimeAdmission,
-    retry_timeout: Duration,
+    remaining: impl Fn() -> Duration,
     on_retry: impl FnMut(),
 ) -> Result<fullmag_session::compute_node_snapshot::ComputeNodeSnapshot> {
-    retry_host_worker_launch_with_timeout(
+    retry_host_worker_launch_with_budget(
         || host.required_current_compute_node_snapshot(),
         on_retry,
-        retry_timeout,
+        remaining,
     )
 }
 
@@ -1290,16 +1313,58 @@ fn is_retryable_pre_spawn_host_error(error: &anyhow::Error) -> bool {
     })
 }
 
+fn capture_worker_launch_claim(
+    slot: SupervisorSlot,
+    store: &SessionStore,
+    run_id: &fullmag_application::RunId,
+    task_id: &str,
+) -> Result<(SupervisorSlot, fullmag_application::TaskClaim, FmsResourceLease)> {
+    let capture = || {
+        let claim = retry_store_writer_busy(|| {
+            fullmag_runtime_control::load_current_task_claim(store, run_id, task_id)
+        })
+        .context("supervisor requires an exact active task claim")?;
+        let lease = retry_store_writer_busy(|| {
+            store.read_active_resource_lease_for_task(run_id.as_str(), task_id)
+        })
+        .context("read active resource lease before accepted-worker spawn")?
+        .context("supervisor requires an active resource lease")?;
+        Ok((claim, lease))
+    };
+    match capture() {
+        Ok((claim, lease)) => Ok((slot, claim, lease)),
+        Err(error) => Err(defer_pre_spawn_worker_launch_error(slot, error)),
+    }
+}
+
 fn defer_pre_spawn_worker_launch_error(
     slot: SupervisorSlot,
     error: anyhow::Error,
 ) -> anyhow::Error {
     // These call sites are all before launch authorization and child creation.
-    // Only typed host contention/inventory failures may free the slot for the
-    // scheduler to resume this same claim, Start, and lease.
-    if !is_retryable_pre_spawn_host_error(&error) {
+    // An unused permit fenced by an exact Stop goes to scheduler cancellation
+    // reconciliation. It is never retried by the launch authorization loop.
+    if !is_retryable_pre_spawn_host_error(&error)
+        && error.downcast_ref::<fullmag_session::host_resource_ledger::WorkerLaunchFencedByStop>().is_none()
+    {
         return error;
     }
+    release_slot_for_deferred_launch(slot, error)
+}
+
+fn defer_pre_spawn_worker_validation_error(
+    slot: SupervisorSlot,
+    error: anyhow::Error,
+) -> anyhow::Error {
+    // This call site only loads the accepted input before launch authorization.
+    // Keep generic I/O errors out of the one-shot authorization retry path.
+    if fullmag_runtime_control::is_transient_store_io(&error) {
+        return release_slot_for_deferred_launch(slot, error);
+    }
+    defer_pre_spawn_worker_launch_error(slot, error)
+}
+
+fn release_slot_for_deferred_launch(slot: SupervisorSlot, error: anyhow::Error) -> anyhow::Error {
     match slot.release() {
         Ok(()) => error.context(WorkerLaunchDeferred),
         Err(release_error) => release_error.context(format!(
@@ -3063,6 +3128,69 @@ const WORKER_FAILURE_REPORT_BYTES: usize = 2816;
 const WORKER_FAILURE_EDGE_BYTES: usize = 1408;
 const WORKER_FAILURE_STDOUT_BYTES: usize = 640;
 const WORKER_STDERR_LOG_EDGE_BYTES: usize = 32 * 1024;
+const CUDA_ACTIVITY_TRACE_PRESSURE_PREFIX: &[u8] = b"cuda_activity_trace: buffer_pressure ";
+const CUDA_ACTIVITY_TRACE_PROCESSING_PREFIX: &[u8] = b"cuda_activity_trace: buffer_processing ";
+const CUDA_ACTIVITY_TRACE_DIAGNOSTIC_MAX_LINES: usize = 65;
+const CUDA_ACTIVITY_TRACE_DIAGNOSTIC_LINE_BYTES: usize = 1024;
+const CUDA_ACTIVITY_TRACE_DIAGNOSTIC_TOTAL_BYTES: usize = 32 * 1024;
+
+fn successful_cuda_activity_trace_diagnostics(
+    worker_status_success: bool,
+    stderr: &[u8],
+) -> Option<String> {
+    if !worker_status_success {
+        return None;
+    }
+
+    let mut diagnostics = String::new();
+    let mut line_count = 0;
+    for raw_line in stderr.split(|byte| *byte == b'\n') {
+        if line_count == CUDA_ACTIVITY_TRACE_DIAGNOSTIC_MAX_LINES {
+            break;
+        }
+        let line = raw_line.strip_suffix(b"\r").unwrap_or(raw_line);
+        let prefix_bytes = if line.starts_with(CUDA_ACTIVITY_TRACE_PRESSURE_PREFIX) {
+            CUDA_ACTIVITY_TRACE_PRESSURE_PREFIX.len()
+        } else if line.starts_with(CUDA_ACTIVITY_TRACE_PROCESSING_PREFIX) {
+            CUDA_ACTIVITY_TRACE_PROCESSING_PREFIX.len()
+        } else {
+            continue;
+        };
+
+        let separator_bytes = if diagnostics.is_empty() { 0 } else { 1 };
+        let remaining_bytes = CUDA_ACTIVITY_TRACE_DIAGNOSTIC_TOTAL_BYTES
+            .saturating_sub(diagnostics.len() + separator_bytes);
+        if remaining_bytes < prefix_bytes {
+            break;
+        }
+        let line_byte_limit = CUDA_ACTIVITY_TRACE_DIAGNOSTIC_LINE_BYTES.min(remaining_bytes);
+        let safe_end = utf8_safe_prefix_len(line, line_byte_limit);
+        let bounded_line = String::from_utf8_lossy(&line[..safe_end]);
+        let bounded_line = bounded_head(&bounded_line, line_byte_limit);
+        if bounded_line.len() < prefix_bytes {
+            break;
+        }
+
+        if !diagnostics.is_empty() {
+            diagnostics.push('\n');
+        }
+        diagnostics.push_str(bounded_line);
+        line_count += 1;
+    }
+
+    (!diagnostics.is_empty()).then_some(diagnostics)
+}
+
+fn utf8_safe_prefix_len(bytes: &[u8], limit: usize) -> usize {
+    let mut end = bytes.len().min(limit);
+    if end == bytes.len() {
+        return end;
+    }
+    while end > 0 && bytes[end] & 0b1100_0000 == 0b1000_0000 {
+        end -= 1;
+    }
+    end
+}
 
 fn bounded_head(text: &str, limit: usize) -> &str {
     let mut end = text.len().min(limit);
@@ -3244,6 +3372,58 @@ fn is_coordinator_watermark_conflict(error: &anyhow::Error) -> bool {
 #[cfg(test)]
 mod tests {
 
+    #[test]
+    fn transient_pre_spawn_read_releases_slot_without_retrying_launch_authorization() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = SessionStore::open(directory.path().join("store")).unwrap();
+        let slot = SupervisorSlot::acquire(&store, "run-read", "task-read", "gpu-read", 1, false)
+            .unwrap();
+        let slot_path = slot.path.clone();
+        let error = anyhow::Error::new(std::io::Error::from_raw_os_error(12));
+        assert!(!is_retryable_pre_spawn_host_error(&error));
+        let deferred = defer_pre_spawn_worker_validation_error(slot, error);
+        assert!(deferred.downcast_ref::<WorkerLaunchDeferred>().is_some());
+        assert!(!slot_path.exists());
+    }
+
+    #[test]
+    fn transient_pre_spawn_claim_read_preserves_the_admitted_task() {
+        let fixture = host_launch_test_fixture();
+        commit_host_launch_fixture_start(&fixture);
+        let run_id = &fixture.claim.run_id;
+        let task_id = fixture.claim.task_id.as_str();
+        let slot = SupervisorSlot::acquire(
+            &fixture.store, run_id.as_str(), task_id, &fixture.lease.resource_id, 1, false,
+        ).unwrap();
+        let slot_path = slot.path.clone();
+        let holder_store = SessionStore::open(fixture.store.root()).unwrap();
+        let (acquired, wait_for_writer) = std::sync::mpsc::sync_channel(1);
+        let (release, wait_for_release) = std::sync::mpsc::sync_channel(1);
+        let holder = std::thread::spawn(move || {
+            let _writer = holder_store.write_transaction().unwrap();
+            acquired.send(()).unwrap();
+            wait_for_release.recv_timeout(Duration::from_secs(30)).unwrap();
+        });
+        wait_for_writer.recv_timeout(Duration::from_secs(5)).unwrap();
+
+        let result = capture_worker_launch_claim(slot, &fixture.store, run_id, task_id);
+        release.send(()).unwrap();
+        holder.join().unwrap();
+
+        let error = result.err().expect("the claim read must defer under contention");
+        assert!(error.downcast_ref::<WorkerLaunchDeferred>().is_some());
+        assert!(format!("{error:#}").contains("supervisor requires an exact active task claim"));
+        assert!(!slot_path.exists());
+        assert_eq!(
+            fullmag_runtime_control::load_current_task_claim(&fixture.store, run_id, task_id).unwrap(),
+            fixture.claim,
+        );
+        let saved = fullmag_runtime_control::recover_coordinator(&fixture.store, &fixture.claim).unwrap();
+        assert_eq!(
+            saved.commands.iter().filter(|envelope| matches!(&envelope.command, WorkerCommand::Start)).count(),
+            1,
+        );
+    }
 
     /// Exercise the real journal, inbox, artifact catalog and release replay.
     /// No child, solver, host admission or test-only production bypass is used.
@@ -3633,6 +3813,169 @@ mod tests {
         assert_eq!(bounded_head_and_tail("ąbcdeź", 2), "ą ... ź");
     }
 
+    #[test]
+    fn cuda_trace_diagnostics_ignore_unrelated_success_stderr() {
+        let stderr = b"worker initialized\nsolver completed\nordinary shutdown\n";
+        assert_eq!(successful_cuda_activity_trace_diagnostics(true, stderr), None);
+    }
+
+    #[test]
+    fn cuda_trace_diagnostics_require_exact_line_prefixes() {
+        let stderr = concat!(
+            "noise cuda_activity_trace: buffer_pressure occurrence=1\n",
+            "cuda_activity_trace: buffer_pressure_suffix occurrence=2\n",
+            "cuda_activity_trace: buffer_processingx completed=3\n",
+            " cuda_activity_trace: buffer_pressure occurrence=4\n",
+            "cuda_activity_trace: buffer_pressure occurrence=5\n",
+            "cuda_activity_trace: buffer_processing completed=6\n",
+        )
+        .as_bytes();
+
+        assert_eq!(
+            successful_cuda_activity_trace_diagnostics(true, stderr).as_deref(),
+            Some(
+                "cuda_activity_trace: buffer_pressure occurrence=5\n\
+cuda_activity_trace: buffer_processing completed=6"
+            )
+        );
+    }
+
+    #[test]
+    fn cuda_trace_diagnostics_select_native_lines_amid_unrelated_stderr() {
+        let pressure = "cuda_activity_trace: buffer_pressure occurrence=1 sampled_free=4";
+        let processing = "cuda_activity_trace: buffer_processing pool_exhaustions=2 processed=3";
+        let stderr = format!(
+            "startup noise\n{pressure}\nsolver note\n{processing}\nshutdown noise\n"
+        );
+        let expected = format!("{pressure}\n{processing}");
+
+        assert_eq!(
+            successful_cuda_activity_trace_diagnostics(true, stderr.as_bytes()).as_deref(),
+            Some(expected.as_str())
+        );
+    }
+
+    #[test]
+    fn cuda_trace_diagnostics_preserve_all_current_native_lines_within_caps() {
+        let sample = "cuda_activity_trace: buffer_pressure occurrence=18446744073709551615 sampled_free=18446744073709551615 sampled_filling=18446744073709551615 sampled_ready=18446744073709551615 sampled_processing=18446744073709551615 completed=18446744073709551615 processed=18446744073709551615 records_written=18446744073709551615 bytes_written=18446744073709551615";
+        let summary = "cuda_activity_trace: buffer_processing pool_exhaustions=18446744073709551615 closed_requests=18446744073709551615 completed=18446744073709551615 processed=18446744073709551615 raw_bytes=18446744073709551615 processing_ns=18446744073709551615";
+        let expected = std::iter::repeat(sample)
+            .take(64)
+            .chain(std::iter::once(summary))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let diagnostics = successful_cuda_activity_trace_diagnostics(true, expected.as_bytes())
+            .expect("all 64 samples and their summary fit the diagnostic bounds");
+
+        assert_eq!(diagnostics, expected);
+        assert!(diagnostics.len() <= CUDA_ACTIVITY_TRACE_DIAGNOSTIC_TOTAL_BYTES);
+    }
+
+    #[test]
+    fn cuda_trace_diagnostics_enforce_line_and_total_byte_caps() {
+        let long_line = format!(
+            "cuda_activity_trace: buffer_pressure {}",
+            "x".repeat(CUDA_ACTIVITY_TRACE_DIAGNOSTIC_LINE_BYTES * 2)
+        );
+        let bounded_line = successful_cuda_activity_trace_diagnostics(true, long_line.as_bytes())
+            .expect("recognized line is retained");
+        assert!(bounded_line.len() <= CUDA_ACTIVITY_TRACE_DIAGNOSTIC_LINE_BYTES);
+
+        let mut invalid_line = CUDA_ACTIVITY_TRACE_PRESSURE_PREFIX.to_vec();
+        invalid_line.extend(std::iter::repeat(0xff).take(
+            CUDA_ACTIVITY_TRACE_DIAGNOSTIC_LINE_BYTES * 2,
+        ));
+        let bounded_invalid_line =
+            successful_cuda_activity_trace_diagnostics(true, &invalid_line)
+                .expect("recognized line with invalid UTF-8 is retained lossily");
+        assert!(bounded_invalid_line.len() <= CUDA_ACTIVITY_TRACE_DIAGNOSTIC_LINE_BYTES);
+        assert!(bounded_invalid_line.starts_with(
+            std::str::from_utf8(CUDA_ACTIVITY_TRACE_PRESSURE_PREFIX).unwrap()
+        ));
+        assert!(std::str::from_utf8(bounded_invalid_line.as_bytes()).is_ok());
+
+        let lines = (0..CUDA_ACTIVITY_TRACE_DIAGNOSTIC_MAX_LINES + 5)
+            .map(|index| format!("cuda_activity_trace: buffer_pressure occurrence={index}"))
+            .collect::<Vec<_>>();
+        let diagnostics =
+            successful_cuda_activity_trace_diagnostics(true, lines.join("\n").as_bytes())
+                .expect("recognized lines are retained");
+        assert_eq!(
+            diagnostics.lines().count(),
+            CUDA_ACTIVITY_TRACE_DIAGNOSTIC_MAX_LINES
+        );
+        assert!(!diagnostics.contains("occurrence=69"));
+
+        let wide_line = format!(
+            "cuda_activity_trace: buffer_pressure {}",
+            "x".repeat(CUDA_ACTIVITY_TRACE_DIAGNOSTIC_LINE_BYTES - 41)
+        );
+        let wide_lines = std::iter::repeat(wide_line)
+            .take(CUDA_ACTIVITY_TRACE_DIAGNOSTIC_MAX_LINES)
+            .collect::<Vec<_>>();
+        let bounded_total = successful_cuda_activity_trace_diagnostics(
+            true,
+            wide_lines.join("\n").as_bytes(),
+        )
+        .expect("recognized lines are retained within the total cap");
+        assert!(bounded_total.len() <= CUDA_ACTIVITY_TRACE_DIAGNOSTIC_TOTAL_BYTES);
+        assert!(std::str::from_utf8(bounded_total.as_bytes()).is_ok());
+
+        let mut invalid_stderr = Vec::new();
+        for _ in 0..CUDA_ACTIVITY_TRACE_DIAGNOSTIC_MAX_LINES {
+            invalid_stderr.extend_from_slice(CUDA_ACTIVITY_TRACE_PRESSURE_PREFIX);
+            invalid_stderr.extend(std::iter::repeat(0xff).take(
+                CUDA_ACTIVITY_TRACE_DIAGNOSTIC_LINE_BYTES * 2,
+            ));
+            invalid_stderr.push(b'\n');
+        }
+        let bounded_invalid_total =
+            successful_cuda_activity_trace_diagnostics(true, &invalid_stderr)
+                .expect("recognized invalid UTF-8 lines are retained lossily");
+        assert!(bounded_invalid_total.len() <= CUDA_ACTIVITY_TRACE_DIAGNOSTIC_TOTAL_BYTES);
+        assert!(std::str::from_utf8(bounded_invalid_total.as_bytes()).is_ok());
+    }
+
+    #[test]
+    fn cuda_trace_diagnostics_truncate_on_utf8_boundaries() {
+        let line = format!(
+            "cuda_activity_trace: buffer_pressure {}",
+            "ą".repeat(CUDA_ACTIVITY_TRACE_DIAGNOSTIC_LINE_BYTES)
+        );
+        let diagnostics = successful_cuda_activity_trace_diagnostics(true, line.as_bytes())
+            .expect("recognized line is retained");
+
+        assert!(diagnostics.len() <= CUDA_ACTIVITY_TRACE_DIAGNOSTIC_LINE_BYTES);
+        assert!(diagnostics.is_char_boundary(diagnostics.len()));
+        assert!(!diagnostics.ends_with('�'));
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn cuda_trace_diagnostics_leave_failed_worker_logging_unselected() {
+        use std::os::unix::process::ExitStatusExt;
+
+        let stderr = b"cuda_activity_trace: buffer_pressure occurrence=1 sampled_free=1\n\
+accepted worker failed: execute accepted worker Start: controlled failure\n";
+        assert_eq!(successful_cuda_activity_trace_diagnostics(false, stderr), None);
+
+        let failure_reason = worker_failure_reason(&ObservedWorkerProcess {
+            output: Output {
+                status: ExitStatus::from_raw(256),
+                stdout: Vec::new(),
+                stderr: stderr.to_vec(),
+            },
+            timed_out: false,
+            stop_requested: false,
+            process_id: 7,
+            process_start_token: None,
+            control_failure_reason: None,
+        });
+        assert!(failure_reason.contains(
+            "accepted worker failed: execute accepted worker Start: controlled failure"
+        ));
+    }
+
     fn temporary_store(name: &str) -> (PathBuf, SessionStore) {
         let root = std::env::temp_dir().join(format!(
             "fullmag-accepted-supervisor-{name}-{}",
@@ -3966,9 +4309,7 @@ mod tests {
             Some(fullmag_session::host_resource_ledger::HostWorkerLaunchGate::Pending));
     }
 
-    #[test]
-    fn exhausted_stale_sample_retry_defers_second_read_and_authorization_without_consuming_claim_start_lease() {
-        let fixture = host_launch_test_fixture();
+    fn commit_host_launch_fixture_start(fixture: &HostLaunchTestFixture) {
         let task = fullmag_application::TaskRecord {
             run_id: fixture.claim.run_id.clone(),
             task_id: fixture.claim.task_id.clone(),
@@ -3998,6 +4339,12 @@ mod tests {
                     })
             })
             .unwrap();
+    }
+
+    #[test]
+    fn exhausted_stale_sample_retry_defers_second_read_and_authorization_without_consuming_claim_start_lease() {
+        let fixture = host_launch_test_fixture();
+        commit_host_launch_fixture_start(&fixture);
         let started = fullmag_runtime_control::recover_coordinator(&fixture.store, &fixture.claim)
             .unwrap();
         let start_before = started
@@ -4030,36 +4377,44 @@ mod tests {
             .publish_compute_node_snapshot_with_owner(&fixture._inventory_owner, &stale)
             .unwrap();
 
-        let mut sample_read_retries = 0;
-        let sample_read_started = Instant::now();
-        let second_read_error = current_compute_snapshot_before_worker_launch_with_timeout(
+        // Keep the real store and ledger reads, but advance the retry budget on
+        // the first retry so a slow runner cannot exhaust it on the first read.
+        fn budget_for_one_retry(retries: usize) -> Duration {
+            if retries == 0 {
+                Duration::from_secs(1)
+            } else {
+                Duration::ZERO
+            }
+        }
+
+        let sample_read_retries = std::cell::Cell::new(0);
+        let second_read_error = current_compute_snapshot_before_worker_launch_with_budget(
             &fixture.host,
-            Duration::from_millis(250),
-            || sample_read_retries += 1,
+            || budget_for_one_retry(sample_read_retries.get()),
+            || sample_read_retries.set(sample_read_retries.get() + 1),
         )
         .unwrap_err();
-        assert!(
-            sample_read_retries > 0 || sample_read_started.elapsed() >= Duration::from_millis(250),
-            "the sample read must retry while its deadline is open: {second_read_error:#}"
+        assert_eq!(
+            sample_read_retries.get(), 1,
+            "the sample read should be retried before deferral"
         );
         assert!(second_read_error.chain().any(|cause| {
             cause.is::<fullmag_session::host_resource_ledger::ComputeNodeSampleNotCurrent>()
         }));
         assert!(format!("{second_read_error:#}").contains("freshness is Stale"));
 
-        let mut authorization_retries = 0;
-        let authorization_started = Instant::now();
-        let error = authorize_host_worker_launch_with_timeout(
+        let authorization_retries = std::cell::Cell::new(0);
+        let error = authorize_host_worker_launch_with_budget(
             &fixture.host,
             &fixture.store,
             &fixture.lease,
-            Duration::from_millis(100),
-            || authorization_retries += 1,
+            || budget_for_one_retry(authorization_retries.get()),
+            || authorization_retries.set(authorization_retries.get() + 1),
         )
         .unwrap_err();
-        assert!(
-            authorization_retries > 0 || authorization_started.elapsed() >= Duration::from_millis(100),
-            "stale authorization must retry while its deadline is open: {error:#}"
+        assert_eq!(
+            authorization_retries.get(), 1,
+            "stale authorization should be retried before deferral"
         );
         assert!(error.chain().any(|cause| {
             cause.is::<fullmag_session::host_resource_ledger::ComputeNodeSampleNotCurrent>()

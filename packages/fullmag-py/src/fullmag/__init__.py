@@ -1,6 +1,9 @@
 """Public embedded Python DSL for Fullmag."""
 
-from . import couplings, fields, init, select, shapes
+from . import couplings, export3d, fields, init, select, shapes, units
+from .units import GHz, MHz, T, mT, mm, nm, ns, ps, um
+from .model.mask_function import mask, time
+from .model.space_time import space_time
 from .init import (
     FIELD_STATE_FORMATS,
     MAGNETIZATION_STATE_FORMATS,
@@ -19,6 +22,8 @@ from .init import (
 )
 from .model import (
     AbsorbingBoundaryLayer,
+    AbsorbingGeometry,
+    SpatialAbsorbingLayer,
     AdaptiveTimestep,
     AntennaLayout,
     AntennaRigidTransform,
@@ -176,6 +181,11 @@ from .model import (
     FieldAutosave,
     QuasistaticElasticity,
     RegionalFieldDrive,
+    MaskAntenna,
+    VectorMask,
+    MaskFunction,
+    MaskFunctionError,
+    TimeFunction,
     SolvedAntennaDrive,
     RfDrive,
     Region,
@@ -218,6 +228,7 @@ from .model import (
     ConstantEnvelope,
     SpinOrbitTorque,
     SlonczewskiSTT,
+    TimeExpression,
     Snapshot,
     SurfaceBoundary,
     SurfaceProjection,
@@ -288,6 +299,7 @@ from .model.compute_resources import (
 )
 from .shapes import affine, disk, rotate, scale
 from .runtime import BackendTarget, Result, Simulation, load_problem_from_script
+from ._material_versions import materials
 from .meshing import (
     MeshData,
     MeshOptions,
@@ -353,6 +365,7 @@ from .world import (
     threads,
     parallel_execution,
     fem_demag_solver,
+    fem_bb_preconditioner,
     cell,
     fdm,
     pbc,
@@ -435,7 +448,7 @@ _LIVE_SYNCED_FUNCTIONS = (
     "current_transport", "oersted", "spin_transport", "spin_torque", "build_domain_mesh",
     "build_mesh", "boundary_correction", "domain_mesh", "frozen_magnetic_submesh", "name",
     "parameter", "engine", "exchange", "disable_exchange", "thermal_noise", "demag",
-    "disable_demag", "device", "mode", "threads", "parallel_execution", "fem_demag_solver",
+    "disable_demag", "device", "mode", "threads", "parallel_execution", "fem_demag_solver", "fem_bb_preconditioner",
     "cell", "fdm", "pbc", "object_mesh_defaults", "_legacy_mesh", "hmax", "fem_order",
     "interactive", "adaptive_mesh", "wait_for_solve", "runtime_metadata",
     "dispersion_validation", "k0_kittel_validation", "visualization", "geometry", "solver",
@@ -479,6 +492,24 @@ class _MeshNamespace:
 mesh = _MeshNamespace()
 
 __all__ = [
+    "GHz",
+    "MHz",
+    "MaskAntenna",
+    "VectorMask",
+    "MaskFunction",
+    "MaskFunctionError",
+    "T",
+    "TimeFunction",
+    "mT",
+    "mask",
+    "space_time",
+    "mm",
+    "nm",
+    "ns",
+    "ps",
+    "time",
+    "um",
+    "units",
     "LiveModeError",
     "LiveSession",
     "connect",
@@ -497,6 +528,8 @@ __all__ = [
     "table",
     "transaction",
     "AbsorbingBoundaryLayer",
+    "AbsorbingGeometry",
+    "SpatialAbsorbingLayer",
     "ExecutionContext",
     "ParameterDefinition",
     "ParameterExpression",
@@ -711,6 +744,7 @@ __all__ = [
     "SignedScalarDrive",
     "ConstantEnvelope",
     "SlonczewskiSTT",
+    "TimeExpression",
     "InterfaceCppSTT",
     "DriftDiffusionSpinTorque",
     "SpinOrbitTorque",
@@ -762,6 +796,7 @@ __all__ = [
     "Hysteresis",
     "couplings",
     "disk",
+    "export3d",
     "export_stl",
     "fields",
     "generate_mesh",
@@ -773,6 +808,7 @@ __all__ = [
     "load_field_state",
     "load_magnetization",
     "load_problem_from_script",
+    "materials",
     "save_field_state",
     "save_magnetization",
     "texture",
@@ -815,6 +851,7 @@ __all__ = [
     "mode",
     "threads",
     "fem_demag_solver",
+    "fem_bb_preconditioner",
     "cell",
     "pbc",
     "object_mesh_defaults",

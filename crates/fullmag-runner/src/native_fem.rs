@@ -95,7 +95,7 @@ pub(crate) use steady_transport::test_resolved_plan as test_resolved_steady_tran
 #[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
 pub(crate) use steady_transport::{
     execute_native_fem_steady_transport_plans, solve_native_fem_steady_transport,
-    solve_native_fem_steady_transport_rt0, solve_native_fem_prepared_closed_loop, solve_native_fem_prepared_closed_loop_classified,
+    solve_native_fem_steady_transport_rt0, solve_native_fem_prepared_closed_loop_classified,
     NativeFemPreparedClosedLoopChargeRequest, PreparedClosedLoopRuntimeBinding, NativeFemSurfaceRt0Profile,
     NativeFemSteadyTransportBundle,
     NativeFemSteadyTransportExecution, NativeFemSteadyTransportGauge,
@@ -104,9 +104,10 @@ pub(crate) use steady_transport::{
 };
 
 #[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
+use crate::preview::mesh_quantity_active_mask;
+#[cfg(any(test, feature = "fem-gpu", feature = "fem-native"))]
 use crate::preview::{
     build_mesh_preview_field_with_active_mask, build_mesh_scalar_preview_field_with_active_mask,
-    mesh_quantity_active_mask,
 };
 #[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
 use crate::quantities::normalize_quantity_id;
@@ -115,10 +116,12 @@ use crate::quantities::QuantityId;
 use crate::scalar_metrics::{single_object_scalars, weighted_object_scalars};
 #[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
 use crate::types::{
-    FemMaterialFieldLocation, FemRepresentationReceipt, FemStateRepresentation, LivePreviewField,
-    LivePreviewRequest, RunError, SolverAttemptRecord, StepStats,
+    FemMaterialFieldLocation, FemRepresentationReceipt, FemStateRepresentation,
+    SolverAttemptRecord, StepStats,
 };
-#[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
+#[cfg(any(test, feature = "fem-gpu", feature = "fem-native"))]
+use crate::types::{LivePreviewField, LivePreviewRequest, RunError};
+#[cfg(any(test, feature = "fem-gpu", feature = "fem-native"))]
 use fullmag_engine::{dot, MU0};
 #[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
 use fullmag_ir::StageCompletionIR;
@@ -142,7 +145,7 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 #[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
 use std::ptr;
-#[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
+#[cfg(any(test, feature = "fem-gpu", feature = "fem-native"))]
 use std::sync::Arc;
 
 #[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
@@ -1209,7 +1212,7 @@ pub(crate) struct NativeFemBackend {
     local_node_map_identity: std::sync::Mutex<Option<(u64, u64, String)>>,
 }
 
-#[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
+#[cfg(any(test, feature = "fem-gpu", feature = "fem-native"))]
 #[derive(Debug)]
 struct Dg0EnergyProjection {
     nodes: Arc<[[f64; 3]]>,
@@ -1578,6 +1581,8 @@ fn append_native_preprojected_drive_descriptor(
             parameters,
             points: optional_slice_ptr(points),
             point_count: points.len() as u64,
+            time_program: std::ptr::null(),
+            time_program_len: 0,
         },
         time_origin: match time_origin {
             fullmag_ir::FieldTimeOriginIR::StageLocal => {
@@ -1601,6 +1606,7 @@ fn pack_native_regional_field_drives(
         Vec<Vec<ffi::fullmag_fem_time_point>>,
         Vec<Vec<ffi::fullmag_fem_geometry_mask_node>>,
         Vec<Option<ffi::fullmag_fem_geometry_mask_desc>>,
+        Vec<Vec<f64>>,
         Vec<Vec<f64>>,
     ),
     RunError,
@@ -1881,6 +1887,8 @@ fn pack_native_regional_field_drives(
                 parameters,
                 points: optional_slice_ptr(points),
                 point_count: points.len() as u64,
+                time_program: std::ptr::null(),
+                time_program_len: 0,
             },
             time_origin: match drive.time_origin {
                 FieldTimeOriginIR::StageLocal => 0,
@@ -1991,6 +1999,8 @@ fn pack_native_regional_field_drives(
                 parameters,
                 points: optional_slice_ptr(points),
                 point_count: points.len() as u64,
+                time_program: std::ptr::null(),
+                time_program_len: 0,
             },
             time_origin: match basis.drive.time_origin {
                 FieldTimeOriginIR::StageLocal => 0,
@@ -2061,6 +2071,38 @@ fn pack_native_regional_field_drives(
             plan.mesh.nodes.len() * 3,
         )?;
     }
+    // Hand-written mask terms (ADR 0081): the planner's nodal basis as a
+    // pre-projected drive whose time factor the library evaluates on the host
+    // from the term's time program.
+    let mut time_program_storage: Vec<Vec<f64>> =
+        Vec::with_capacity(plan.mask_field_term_bases.len());
+    for basis in &plan.mask_field_term_bases {
+        let values = basis
+            .field_xyz
+            .iter()
+            .flat_map(|value| value.iter().copied())
+            .collect();
+        append_native_preprojected_drive_descriptor(
+            &mut descriptors,
+            &mut point_storage,
+            &mut basis_storage,
+            &format!("mask_field_term:{}:{}", basis.drive_id, basis.term_index),
+            &fullmag_ir::TimeDependenceIR::Constant,
+            basis.time_origin,
+            values,
+            plan.mesh.nodes.len() * 3,
+        )?;
+        time_program_storage.push(basis.time_program.clone());
+        let program = time_program_storage.last().expect("pushed time program");
+        let waveform = &mut descriptors
+            .last_mut()
+            .expect("pushed mask term descriptor")
+            .waveform;
+        waveform.kind =
+            ffi::fullmag_fem_time_dependence_kind::FULLMAG_FEM_TIME_HOST_EXPRESSION as u32;
+        waveform.time_program = program.as_ptr();
+        waveform.time_program_len = program.len() as u64;
+    }
     Ok((
         descriptors,
         marker_storage,
@@ -2068,7 +2110,141 @@ fn pack_native_regional_field_drives(
         geometry_node_storage,
         geometry_desc_storage,
         basis_storage,
+        time_program_storage,
     ))
+}
+
+/// The library's interpreter of mask-term time programs must agree with the
+/// Rust interpreter that planned and checked them (4 ulp, as on FDM CUDA).
+#[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
+fn check_native_fem_time_programs(plan: &fullmag_ir::FemPlanIR) -> Result<(), RunError> {
+    const SAMPLE_TIMES_S: [f64; 5] = [0.0, 1.0e-12, 3.7e-11, 1.0e-9, 2.5e-8];
+    for basis in &plan.mask_field_term_bases {
+        let program = &basis.time_program;
+        for time_s in SAMPLE_TIMES_S {
+            let native = unsafe {
+                ffi::fullmag_fem_time_expression_eval_v1(
+                    program.as_ptr(),
+                    program.len() as u64,
+                    time_s,
+                )
+            };
+            let rust = fullmag_expr::eval_time_program(program, time_s);
+            let scale = native.abs().max(rust.abs());
+            let agree = native == rust
+                || (native.is_nan() && rust.is_nan())
+                || (native - rust).abs() <= 4.0 * f64::EPSILON * scale;
+            if !agree {
+                return Err(RunError {
+                    message: format!(
+                        "native FEM and Rust time interpreters disagree for mask drive '{}' term {} at t = {time_s:e} s: {native:e} vs {rust:e}",
+                        basis.drive_id, basis.term_index
+                    ),
+                });
+            }
+        }
+    }
+    Ok(())
+}
+
+#[cfg(any(test, feature = "fem-gpu", feature = "fem-native"))]
+#[derive(Debug, PartialEq)]
+enum NativeFemPreviewVector {
+    Cached(Arc<[[f64; 3]]>),
+    Owned(Vec<[f64; 3]>),
+}
+
+#[cfg(any(test, feature = "fem-gpu", feature = "fem-native"))]
+impl NativeFemPreviewVector {
+    fn as_slice(&self) -> &[[f64; 3]] {
+        match self {
+            Self::Cached(values) => values.as_ref(),
+            Self::Owned(values) => values.as_slice(),
+        }
+    }
+
+    fn into_vec(self) -> Vec<[f64; 3]> {
+        match self {
+            Self::Cached(values) => values.to_vec(),
+            Self::Owned(values) => values,
+        }
+    }
+}
+
+#[cfg(any(test, feature = "fem-gpu", feature = "fem-native"))]
+trait NativeFemPreviewFieldSource {
+    fn vector_field(&mut self, name: &str) -> Result<NativeFemPreviewVector, RunError>;
+}
+
+#[cfg(any(test, feature = "fem-gpu", feature = "fem-native"))]
+struct NativeFemCaptureFieldCache<F> {
+    read_field: F,
+    exchange: Option<Arc<[[f64; 3]]>>,
+    external: Option<Arc<[[f64; 3]]>>,
+}
+
+#[cfg(any(test, feature = "fem-gpu", feature = "fem-native"))]
+impl<F> NativeFemCaptureFieldCache<F>
+where
+    F: FnMut(&str) -> Result<Vec<[f64; 3]>, RunError>,
+{
+    fn new(read_field: F) -> Self {
+        Self {
+            read_field,
+            exchange: None,
+            external: None,
+        }
+    }
+}
+
+#[cfg(any(test, feature = "fem-gpu", feature = "fem-native"))]
+impl<F> NativeFemPreviewFieldSource for NativeFemCaptureFieldCache<F>
+where
+    F: FnMut(&str) -> Result<Vec<[f64; 3]>, RunError>,
+{
+    fn vector_field(&mut self, name: &str) -> Result<NativeFemPreviewVector, RunError> {
+        let cached = match name {
+            "H_ex" => Some(&mut self.exchange),
+            "H_ext" => Some(&mut self.external),
+            _ => None,
+        };
+        if let Some(slot) = cached {
+            if let Some(values) = slot.as_ref() {
+                return Ok(NativeFemPreviewVector::Cached(Arc::clone(values)));
+            }
+            let values: Arc<[[f64; 3]]> = (self.read_field)(name)?.into();
+            *slot = Some(Arc::clone(&values));
+            return Ok(NativeFemPreviewVector::Cached(values));
+        }
+        Ok(NativeFemPreviewVector::Owned((self.read_field)(name)?))
+    }
+}
+
+#[cfg(any(test, feature = "fem-gpu", feature = "fem-native"))]
+fn capture_requests_with_source<Request, Output, Source, Capture>(
+    requests: &[Request],
+    source: &mut Source,
+    mut capture: Capture,
+) -> Result<Vec<Output>, RunError>
+where
+    Source: NativeFemPreviewFieldSource,
+    Capture: FnMut(&Request, &mut Source) -> Result<Output, RunError>,
+{
+    let mut outputs = Vec::with_capacity(requests.len());
+    for request in requests {
+        outputs.push(capture(request, source)?);
+    }
+    Ok(outputs)
+}
+
+#[cfg(any(test, feature = "fem-gpu", feature = "fem-native"))]
+#[derive(Debug, PartialEq)]
+enum NativeFemCaptureQuantityValue {
+    Vector(NativeFemPreviewVector),
+    Energy {
+        values: Vec<f64>,
+        conservative_dg0: bool,
+    },
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -2149,10 +2325,103 @@ impl NativeFemEnergyDensityTerms {
         Some(terms)
     }
 
-    #[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
+    #[cfg(any(test, feature = "fem-gpu", feature = "fem-native"))]
     fn includes_cubic(&self, quantity: &str) -> bool {
         self.cubic_anisotropy && matches!(quantity, "eden_ani" | "eden_total")
     }
+}
+
+#[cfg(any(test, feature = "fem-gpu", feature = "fem-native"))]
+fn copy_energy_density_values_from_source<Source: NativeFemPreviewFieldSource>(
+    quantity: &str,
+    node_count: usize,
+    terms: NativeFemEnergyDensityTerms,
+    source: &mut Source,
+    saturation_magnetisation_by_node: &[f64],
+    magnetic_node_mask: &[bool],
+    dg0_energy_projection: Option<&Dg0EnergyProjection>,
+    cubic_energy_density: Option<&NativeFemCubicEnergyDensity>,
+) -> Result<Option<Vec<f64>>, RunError> {
+    let quantity = crate::quantities::normalized_quantity_name(quantity)?;
+    let Some(energy_terms) = terms.observables_for(quantity) else {
+        return Ok(None);
+    };
+    let magnetization = source.vector_field("m")?;
+    let mut values = vec![0.0; node_count];
+    for (field_name, prefactor) in energy_terms {
+        let field = source.vector_field(field_name)?;
+        if let Some(projection) = dg0_energy_projection {
+            accumulate_dg0_field_dot_energy_density(
+                &mut values,
+                magnetization.as_slice(),
+                field.as_slice(),
+                projection,
+                prefactor,
+            )?;
+            continue;
+        }
+        accumulate_energy_density_term(
+            &mut values,
+            magnetization.as_slice(),
+            field.as_slice(),
+            saturation_magnetisation_by_node,
+            magnetic_node_mask,
+            prefactor,
+        )?;
+    }
+    if terms.includes_cubic(quantity) {
+        let cubic = cubic_energy_density.ok_or_else(|| RunError {
+            message: "native FEM cubic energy-density configuration is missing".to_string(),
+        })?;
+        accumulate_cubic_energy_density(
+            &mut values,
+            magnetization.as_slice(),
+            cubic,
+            magnetic_node_mask,
+        )?;
+    }
+    Ok(Some(values))
+}
+
+#[cfg(any(test, feature = "fem-gpu", feature = "fem-native"))]
+fn copy_capture_quantity_value<Source: NativeFemPreviewFieldSource>(
+    quantity: &str,
+    node_count: usize,
+    terms: NativeFemEnergyDensityTerms,
+    source: &mut Source,
+    saturation_magnetisation_by_node: &[f64],
+    magnetic_node_mask: &[bool],
+    dg0_energy_projection: Option<&Dg0EnergyProjection>,
+    cubic_energy_density: Option<&NativeFemCubicEnergyDensity>,
+) -> Result<Option<NativeFemCaptureQuantityValue>, RunError> {
+    if let Some(values) = copy_energy_density_values_from_source(
+        quantity,
+        node_count,
+        terms,
+        source,
+        saturation_magnetisation_by_node,
+        magnetic_node_mask,
+        dg0_energy_projection,
+        cubic_energy_density,
+    )? {
+        let quantity = crate::quantities::normalized_quantity_name(quantity)?;
+        let conservative_dg0 = dg0_energy_projection.is_some()
+            && matches!(
+                quantity,
+                "eden_ex" | "eden_demag" | "eden_ext" | "eden_total"
+            );
+        return Ok(Some(NativeFemCaptureQuantityValue::Energy {
+            values,
+            conservative_dg0,
+        }));
+    }
+    let quantity = crate::quantities::normalized_quantity_name(quantity)?;
+    if matches!(quantity, "H_ex" | "H_ext") {
+        return Ok(Some(NativeFemCaptureQuantityValue::Vector(
+            source.vector_field(quantity)?,
+        )));
+    }
+    Ok(None)
 }
 
 pub(crate) fn can_materialize_preview_quantity(
@@ -2174,6 +2443,7 @@ fn make_test_plan() -> fullmag_ir::FemPlanIR {
     };
 
     FemPlanIR {
+        gpu_bb_preconditioner: None,
         frozen_spins: None,
         mesh_name: "unit_tet".to_string(),
         mesh_source: Some("meshes/unit_tet.msh".to_string()),
@@ -2238,6 +2508,7 @@ fn make_test_plan() -> fullmag_ir::FemPlanIR {
         solved_antenna_drive_bases: Vec::new(),
         field_drives: Vec::new(),
         field_drive_geometry_masks: Vec::new(),
+        mask_field_term_bases: Vec::new(),
         time_stage: Default::default(),
         current_modules: vec![],
         spin_transport_plans: vec![],
@@ -2319,7 +2590,281 @@ mod energy_density_terms_tests {
     }
 }
 
-#[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
+#[cfg(test)]
+mod live_observation_copy_cache_tests {
+    use super::*;
+    use crate::types::{LivePreviewField, LivePreviewRequest};
+    use std::{cell::RefCell, collections::HashMap, rc::Rc};
+
+    #[derive(Default)]
+    struct Store {
+        values: HashMap<String, Vec<[f64; 3]>>,
+        reads: HashMap<String, usize>,
+        fail_on: Option<String>,
+    }
+
+    #[derive(Clone, Default)]
+    struct Reader(Rc<RefCell<Store>>);
+
+    impl Reader {
+        fn vector_values(base: f64) -> Vec<[f64; 3]> {
+            (0..5)
+                .map(|node| {
+                    let x = base + node as f64;
+                    [x, 0.25 * x - 0.5, 0.75 - 0.125 * x]
+                })
+                .collect()
+        }
+
+        fn fixture() -> Self {
+            Self(Rc::new(RefCell::new(Store {
+                values: HashMap::from([
+                    ("m".into(), Self::vector_values(0.5)),
+                    ("H_ex".into(), Self::vector_values(2.0)),
+                    ("H_ext".into(), Self::vector_values(-1.5)),
+                    ("H_demag".into(), Self::vector_values(4.0)),
+                ]),
+                ..Store::default()
+            })))
+        }
+
+        fn read(&self, name: &str) -> Result<Vec<[f64; 3]>, RunError> {
+            let mut store = self.0.borrow_mut();
+            *store.reads.entry(name.to_string()).or_default() += 1;
+            if store.fail_on.as_deref() == Some(name) {
+                return Err(RunError {
+                    message: format!("test source failed for {name}"),
+                });
+            }
+            store.values.get(name).cloned().ok_or_else(|| RunError {
+                message: format!("test source is missing {name}"),
+            })
+        }
+
+        fn count(&self, name: &str) -> usize {
+            self.0.borrow().reads.get(name).copied().unwrap_or(0)
+        }
+
+        fn clear_counts(&self) {
+            self.0.borrow_mut().reads.clear();
+        }
+
+        fn replace(&self, name: &str, values: Vec<[f64; 3]>) {
+            self.0.borrow_mut().values.insert(name.to_string(), values);
+        }
+
+        fn fail_on(&self, name: &str) {
+            self.0.borrow_mut().fail_on = Some(name.to_string());
+        }
+    }
+
+    fn terms() -> NativeFemEnergyDensityTerms {
+        NativeFemEnergyDensityTerms {
+            exchange: true,
+            demag: true,
+            external: true,
+            uniaxial_anisotropy: false,
+            cubic_anisotropy: false,
+            interfacial_dmi: false,
+            bulk_dmi: false,
+        }
+    }
+
+    type TestSource =
+        NativeFemCaptureFieldCache<Box<dyn FnMut(&str) -> Result<Vec<[f64; 3]>, RunError>>>;
+
+    fn make_source(reader: Reader) -> TestSource {
+        NativeFemCaptureFieldCache::new(Box::new(move |name| reader.read(name)))
+    }
+
+    fn capture(
+        quantities: &[&str],
+        source: &mut impl NativeFemPreviewFieldSource,
+        projection: Option<&Dg0EnergyProjection>,
+        mask: &[bool],
+    ) -> Result<Vec<NativeFemCaptureQuantityValue>, RunError> {
+        capture_requests_with_source(quantities, source, |quantity, source| {
+            copy_capture_quantity_value(
+                quantity,
+                mask.len(),
+                terms(),
+                source,
+                &[2.0, 3.0, 4.0, 5.0, 6.0],
+                mask,
+                projection,
+                None,
+            )?
+            .ok_or_else(|| RunError {
+                message: format!("unsupported capture quantity {quantity}"),
+            })
+        })
+    }
+
+    fn as_preview_fields(
+        quantities: &[&str],
+        values: &[NativeFemCaptureQuantityValue],
+        mask: &[bool],
+    ) -> Vec<LivePreviewField> {
+        quantities
+            .iter()
+            .zip(values)
+            .map(|(quantity, value)| {
+                let request = LivePreviewRequest {
+                    quantity: (*quantity).into(),
+                    all_layers: true,
+                    every_n: 1,
+                    auto_scale_enabled: false,
+                    max_points: u32::MAX,
+                    ..LivePreviewRequest::default()
+                };
+                match value {
+                    NativeFemCaptureQuantityValue::Vector(field) => {
+                        build_mesh_preview_field_with_active_mask(
+                            &request,
+                            field.as_slice(),
+                            Some(mask.to_vec()),
+                        )
+                    }
+                    NativeFemCaptureQuantityValue::Energy {
+                        values,
+                        conservative_dg0,
+                    } => build_native_fem_energy_density_preview_field(
+                        &request,
+                        values,
+                        mask.to_vec(),
+                        *conservative_dg0,
+                    ),
+                }
+            })
+            .collect()
+    }
+
+    fn assert_bitwise_equal_fields(left: &[LivePreviewField], right: &[LivePreviewField]) {
+        assert_eq!(left, right);
+        for (left, right) in left.iter().zip(right) {
+            assert_eq!(left.active_mask, right.active_mask);
+            assert_eq!(
+                left.vector_field_values.iter().map(|value| value.to_bits()).collect::<Vec<_>>(),
+                right.vector_field_values.iter().map(|value| value.to_bits()).collect::<Vec<_>>(),
+            );
+        }
+    }
+
+    fn individual_capture(
+        quantities: &[&str],
+        reader: &Reader,
+        projection: Option<&Dg0EnergyProjection>,
+        mask: &[bool],
+    ) -> Vec<NativeFemCaptureQuantityValue> {
+        quantities
+            .iter()
+            .map(|quantity| {
+                let mut source = make_source(reader.clone());
+                capture(&[*quantity], &mut source, projection, mask)
+                    .expect("individual source read")
+                    .remove(0)
+            })
+            .collect()
+    }
+
+    #[test]
+    fn batch_matches_individual_nodal_and_dg0_outputs_and_reads_exchange_external_once() {
+        let quantities = ["H_ex", "H_ext", "eden_ex", "eden_ext", "eden_total"];
+        let nodal_mask = [true, false, true, true, false];
+        let reader = Reader::fixture();
+        let baseline = individual_capture(&quantities, &reader, None, &nodal_mask);
+        reader.clear_counts();
+        let mut source = make_source(reader.clone());
+        let batch = capture(&quantities, &mut source, None, &nodal_mask).expect("batch capture");
+        assert_eq!(reader.count("H_ex"), 1);
+        assert_eq!(reader.count("H_ext"), 1);
+        assert_eq!(reader.count("m"), 3);
+        assert_eq!(reader.count("H_demag"), 1);
+        let batch_fields = as_preview_fields(&quantities, &batch, &nodal_mask);
+        let baseline_fields = as_preview_fields(&quantities, &baseline, &nodal_mask);
+        assert_bitwise_equal_fields(&batch_fields, &baseline_fields);
+        for quantity in ["eden_ex", "eden_ext", "eden_total"] {
+            let field = batch_fields
+                .iter()
+                .find(|field| field.quantity == quantity)
+                .unwrap();
+            assert_eq!(field.vector_field_values[1], 0.0);
+            assert_eq!(field.active_mask, Some(nodal_mask.to_vec()));
+        }
+
+        let projection = Dg0EnergyProjection {
+            nodes: vec![
+                [0.0, 0.0, 0.0],
+                [1.0, 0.0, 0.0],
+                [0.0, 1.0, 0.0],
+                [0.0, 0.0, 1.0],
+                [0.0, 0.0, -1.0],
+            ]
+            .into(),
+            elements: vec![[0, 1, 2, 3], [0, 1, 2, 4]].into(),
+            magnetic_elements: vec![true, false].into(),
+            saturation_magnetisation_by_element: vec![2.0, 0.0].into(),
+        };
+        let dg0_mask = [true, true, true, true, false];
+        let dg0_baseline = individual_capture(&quantities, &reader, Some(&projection), &dg0_mask);
+        reader.clear_counts();
+        let mut source = make_source(reader.clone());
+        let dg0_batch = capture(&quantities, &mut source, Some(&projection), &dg0_mask)
+            .expect("DG0 batch capture");
+        assert_eq!(reader.count("H_ex"), 1);
+        assert_eq!(reader.count("H_ext"), 1);
+        let dg0_batch_fields = as_preview_fields(&quantities, &dg0_batch, &dg0_mask);
+        let dg0_baseline_fields = as_preview_fields(&quantities, &dg0_baseline, &dg0_mask);
+        assert_bitwise_equal_fields(&dg0_batch_fields, &dg0_baseline_fields);
+        for quantity in ["eden_ex", "eden_ext", "eden_total"] {
+            let field = dg0_batch_fields
+                .iter()
+                .find(|field| field.quantity == quantity)
+                .unwrap();
+            assert_eq!(
+                field.spatial_kind,
+                "fem_nodal_conservative_tetra_projection"
+            );
+            assert_eq!(field.vector_field_values[4], 0.0);
+            assert_eq!(field.active_mask, Some(dg0_mask.to_vec()));
+        }
+    }
+
+    #[test]
+    fn each_capture_re_reads_at_the_same_step_and_provider_failure_aborts_the_batch() {
+        let quantities = ["H_ex", "H_ext", "eden_total"];
+        let mask = [true, false, true, true, false];
+        let reader = Reader::fixture();
+        // No accepted step advances between these capture-local provider instances.
+        let mut first_source = make_source(reader.clone());
+        let first = capture(&quantities, &mut first_source, None, &mask).expect("first capture");
+        let old_value = match &first[0] {
+            NativeFemCaptureQuantityValue::Vector(field) => field.as_slice()[0][0],
+            _ => unreachable!(),
+        };
+        reader.replace("H_ex", vec![[91.0, 2.0, 3.0]; mask.len()]);
+        reader.clear_counts();
+        let mut next_source = make_source(reader.clone());
+        let next =
+            capture(&quantities, &mut next_source, None, &mask).expect("next same-step capture");
+        let new_value = match &next[0] {
+            NativeFemCaptureQuantityValue::Vector(field) => field.as_slice()[0][0],
+            _ => unreachable!(),
+        };
+        assert_ne!(old_value, new_value);
+        assert_eq!(reader.count("H_ex"), 1);
+        assert_eq!(reader.count("H_ext"), 1);
+
+        reader.clear_counts();
+        reader.fail_on("H_ext");
+        let mut failing_source = make_source(reader.clone());
+        assert!(capture(&quantities, &mut failing_source, None, &mask).is_err());
+        assert_eq!(reader.count("H_ex"), 1);
+        assert_eq!(reader.count("H_ext"), 1);
+    }
+}
+
+#[cfg(any(test, feature = "fem-gpu", feature = "fem-native"))]
 #[derive(Debug)]
 struct NativeFemCubicEnergyDensity {
     kc1_by_node: Arc<[f64]>,
@@ -2548,7 +3093,7 @@ fn resolved_saturation_magnetisation_by_node(
     Ok(values)
 }
 
-#[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
+#[cfg(any(test, feature = "fem-gpu", feature = "fem-native"))]
 fn build_native_fem_energy_density_preview_field(
     request: &LivePreviewRequest,
     values: &[f64],
@@ -3006,16 +3551,24 @@ impl NativeFemBackend {
 
         let mut cpu_plan = plan.clone();
         cpu_plan.mfem_device_string = Some("cpu".to_string());
-        Self::create_backend_with_initial_effective_field(
-            &cpu_plan,
-            eager_initial_effective_field,
-        )
+        Self::create_backend_with_initial_effective_field(&cpu_plan, eager_initial_effective_field)
     }
 
     fn create_backend_with_initial_effective_field(
         plan: &fullmag_ir::FemPlanIR,
         eager_initial_effective_field: bool,
     ) -> Result<Self, RunError> {
+        if plan.gpu_bb_preconditioner.is_some()
+            && (!native_fem_plan_requests_gpu_mfem_device(plan)
+                || !plan.relaxation.as_ref().is_some_and(|control| {
+                    control.algorithm == fullmag_ir::RelaxationAlgorithmIR::ProjectedGradientBb
+                }))
+        {
+            return Err(RunError {
+                message: "gpu_bb_preconditioner requires GPU projected_gradient_bb execution"
+                    .to_string(),
+            });
+        }
         let backend_create_started = std::time::Instant::now();
         // Resolve ownership before runtime marker normalization can merge
         // authored domain markers into magnetic/nonmagnetic attributes.
@@ -3097,6 +3650,7 @@ impl NativeFemBackend {
             .iter()
             .flat_map(|v| v.iter().copied())
             .collect();
+        check_native_fem_time_programs(plan)?;
         let (
             regional_field_drive_descs,
             _regional_marker_storage,
@@ -3104,6 +3658,7 @@ impl NativeFemBackend {
             _regional_geometry_node_storage,
             _regional_geometry_desc_storage,
             _regional_preprojected_basis_storage,
+            _regional_time_program_storage,
         ) = pack_native_regional_field_drives(plan)?;
         let (sot_envelope, _sot_envelope_points) = pack_native_sot_envelope(plan)?;
 
@@ -3315,9 +3870,9 @@ impl NativeFemBackend {
             poisson_boundary_marker: plan
                 .air_box_config
                 .as_ref()
-                .map_or(FALLBACK_POISSON_BOUNDARY_MARKER, |c| {
-                    c.boundary_marker as i32
-                }),
+                // Compatibility prefix only: create_v5 uses the full u32 selector below.
+                .and_then(|c| i32::try_from(c.boundary_marker).ok())
+                .unwrap_or(FALLBACK_POISSON_BOUNDARY_MARKER),
             robin_beta_mode: plan.air_box_config.as_ref().map_or(0, |c| {
                 match c.bc_kind.as_deref() {
                     Some("robin") => match c.robin_beta_mode.as_deref() {
@@ -3766,10 +4321,18 @@ impl NativeFemBackend {
                 .as_ref()
                 .map_or(std::ptr::null(), |descriptor| descriptor as *const _),
         };
+        let plan_desc_v4 = ffi::fullmag_fem_plan_desc_v4 {
+            abi_version: ffi::FULLMAG_FEM_PLAN_DESC_V4_ABI_VERSION,
+            struct_size: std::mem::size_of::<ffi::fullmag_fem_plan_desc_v4>() as u32,
+            base: plan_desc_v3,
+            poisson_boundary_marker: plan.air_box_config.as_ref()
+                .map_or(FALLBACK_POISSON_BOUNDARY_MARKER as u32, |c| c.boundary_marker),
+            reserved: 0,
+        };
         let adaptive_ptr = adaptive_cfg
             .as_ref()
             .map_or(std::ptr::null(), |cfg| cfg as *const _);
-        let handle = unsafe { ffi::fullmag_fem_backend_create_v4(&plan_desc_v3, adaptive_ptr) };
+        let handle = unsafe { ffi::fullmag_fem_backend_create_v5(&plan_desc_v4, adaptive_ptr) };
         if handle.is_null() {
             let availability = native_availability();
             return Err(RunError {
@@ -3791,7 +4354,7 @@ impl NativeFemBackend {
             .enable_demag
             .then(|| resolved_native_fem_demag_solver_policy(plan));
 
-        let backend = Self {
+        let mut backend = Self {
             handle,
             stage_oersted_provider: None,
             stage_transport_provider: None,
@@ -3833,12 +4396,7 @@ impl NativeFemBackend {
                 .as_ref()
                 .filter(|adaptive| adaptive.rtol == 0.0)
                 .map(|adaptive| adaptive.atol),
-            backend_create_wall_time_ns: Some(
-                backend_create_started
-                    .elapsed()
-                    .as_nanos()
-                    .min(u128::from(u64::MAX)) as u64,
-            ),
+            backend_create_wall_time_ns: None,
             rotated_dmi_only: plan.rotated_interfacial_dmi.is_some()
                 && plan.interfacial_dmi.is_none()
                 && plan.bulk_dmi.is_none()
@@ -3846,6 +4404,26 @@ impl NativeFemBackend {
                 && plan.dbulk_field.is_none(),
             local_node_map_identity: std::sync::Mutex::new(None),
         };
+        if let Some(policy) = plan.gpu_bb_preconditioner {
+            let rc = unsafe {
+                ffi::fullmag_fem_backend_set_gpu_bb_preconditioner(backend.handle, policy.native_id())
+            };
+            if rc != ffi::FULLMAG_FEM_OK {
+                return Err(backend.last_error_or("setting GPU BB preconditioner policy failed"));
+            }
+        }
+        if native_fem_plan_requests_gpu_mfem_device(plan) {
+            // Prepare object ownership before the first accepted step. This
+            // reads the resident initial magnetization without changing it;
+            // subsequent observations reuse the uploaded ownership records.
+            backend.attach_native_object_average_m(&mut StepStats::default())?;
+        }
+        backend.backend_create_wall_time_ns = Some(
+            backend_create_started
+                .elapsed()
+                .as_nanos()
+                .min(u128::from(u64::MAX)) as u64,
+        );
         Ok(backend)
     }
 
@@ -3915,6 +4493,26 @@ impl NativeFemBackend {
             return Err(self.last_error_or("FEM GPU transfer audit read failed"));
         }
         Ok(audit)
+    }
+
+    fn gpu_demag_amg_coarse_relax_type(&self) -> Result<Option<i32>, RunError> {
+        let mut coarse_relax_type = -1;
+        let rc = unsafe {
+            ffi::fullmag_fem_backend_get_gpu_demag_amg_coarse_relax_type_v1(
+                self.handle,
+                &mut coarse_relax_type,
+            )
+        };
+        if rc != ffi::FULLMAG_FEM_OK {
+            return Err(self.last_error_or("FEM GPU AMG coarse-cycle policy query failed"));
+        }
+        match coarse_relax_type {
+            -1 => Ok(None),
+            value if value >= 0 => Ok(Some(value)),
+            value => Err(RunError {
+                message: format!("FEM GPU AMG coarse-cycle policy returned invalid type {value}"),
+            }),
+        }
     }
 
     pub(crate) fn gpu_state_info(&self) -> Result<NativeFemGpuStateInfo, RunError> {
@@ -4029,23 +4627,6 @@ impl NativeFemBackend {
             return Err(self.last_error_or("FEM Fredkin-Koehler provenance read failed"));
         }
         runtime_info::NativeFemDemagFemBemProvenance::from_ffi(provenance)
-    }
-
-    pub(crate) fn gpu_performance_snapshot(
-        &self,
-    ) -> Result<runtime_info::NativeFemGpuPerformanceSnapshot, RunError> {
-        let mut snapshot = ffi::fullmag_fem_gpu_performance_snapshot_v1 {
-            abi_version: ffi::FULLMAG_FEM_GPU_PERFORMANCE_SNAPSHOT_V1_ABI_VERSION,
-            struct_size: std::mem::size_of::<ffi::fullmag_fem_gpu_performance_snapshot_v1>() as u32,
-            ..Default::default()
-        };
-        let rc = unsafe {
-            ffi::fullmag_fem_backend_gpu_performance_snapshot_v1(self.handle, &mut snapshot)
-        };
-        if rc != ffi::FULLMAG_FEM_OK {
-            return Err(self.last_error_or("FEM GPU performance snapshot read failed"));
-        }
-        runtime_info::NativeFemGpuPerformanceSnapshot::from_ffi(snapshot)
     }
 
     fn attach_transfer_audit(&self, stats: &mut StepStats) -> Result<(), RunError> {
@@ -4402,6 +4983,7 @@ impl NativeFemBackend {
             demag_hypre_timed_solve_count: stats.demag_hypre_timed_solve_count,
             demag_solver_setup_reused: stats.demag_solver_setup_reused != 0,
             demag_amg_relax_type: stats.demag_amg_relax_type,
+            demag_amg_coarse_relax_type: self.gpu_demag_amg_coarse_relax_type()?,
             demag_amg_coarsening: stats.demag_amg_coarsening,
             demag_amg_interpolation: stats.demag_amg_interpolation,
             demag_amg_aggressive_coarsening: stats.demag_amg_aggressive_coarsening,
@@ -4459,7 +5041,6 @@ impl NativeFemBackend {
         step_stats.cpu_fixed_coupling = self.cpu_fixed_coupling_telemetry()?;
         self.apply_demag_solver_policy_to_step_stats(&mut step_stats);
         self.attach_backend_create_timing(&mut step_stats);
-        self.attach_transfer_audit(&mut step_stats)?;
         self.attach_representation_receipt(&mut step_stats)?;
         step_stats.per_object_scalars =
             if self.object_weights.len() == 1 && self.object_weights[0].0 == "free" {
@@ -4468,6 +5049,7 @@ impl NativeFemBackend {
                 weighted_object_scalars(&step_stats, &self.object_weights)
             };
         self.attach_native_object_average_m(&mut step_stats)?;
+        self.attach_transfer_audit(&mut step_stats)?;
         Ok(Some(step_stats))
     }
 
@@ -4867,6 +5449,7 @@ impl NativeFemBackend {
             demag_hypre_timed_solve_count: stats.demag_hypre_timed_solve_count,
             demag_solver_setup_reused: stats.demag_solver_setup_reused != 0,
             demag_amg_relax_type: stats.demag_amg_relax_type,
+            demag_amg_coarse_relax_type: self.gpu_demag_amg_coarse_relax_type()?,
             demag_amg_coarsening: stats.demag_amg_coarsening,
             demag_amg_interpolation: stats.demag_amg_interpolation,
             demag_amg_aggressive_coarsening: stats.demag_amg_aggressive_coarsening,
@@ -4918,7 +5501,6 @@ impl NativeFemBackend {
         step_stats.cpu_fixed_coupling = self.cpu_fixed_coupling_telemetry()?;
         self.apply_demag_solver_policy_to_step_stats(&mut step_stats);
         self.attach_backend_create_timing(&mut step_stats);
-        self.attach_transfer_audit(&mut step_stats)?;
         self.attach_representation_receipt(&mut step_stats)?;
         step_stats.per_object_scalars =
             if self.object_weights.len() == 1 && self.object_weights[0].0 == "free" {
@@ -4927,6 +5509,7 @@ impl NativeFemBackend {
                 weighted_object_scalars(&step_stats, &self.object_weights)
             };
         self.attach_native_object_average_m(&mut step_stats)?;
+        self.attach_transfer_audit(&mut step_stats)?;
         Ok(Some(step_stats))
     }
 
@@ -5236,6 +5819,7 @@ impl NativeFemBackend {
             demag_hypre_timed_solve_count: stats.demag_hypre_timed_solve_count,
             demag_solver_setup_reused: stats.demag_solver_setup_reused != 0,
             demag_amg_relax_type: stats.demag_amg_relax_type,
+            demag_amg_coarse_relax_type: self.gpu_demag_amg_coarse_relax_type()?,
             demag_amg_coarsening: stats.demag_amg_coarsening,
             demag_amg_interpolation: stats.demag_amg_interpolation,
             demag_amg_aggressive_coarsening: stats.demag_amg_aggressive_coarsening,
@@ -5270,7 +5854,6 @@ impl NativeFemBackend {
         copy_demag_diagnostics(&mut step_stats, &stats);
         step_stats.cpu_fixed_coupling = self.cpu_fixed_coupling_telemetry()?;
         self.apply_demag_solver_policy_to_step_stats(&mut step_stats);
-        self.attach_transfer_audit(&mut step_stats)?;
         self.attach_representation_receipt(&mut step_stats)?;
         step_stats.per_object_scalars =
             if self.object_weights.len() == 1 && self.object_weights[0].0 == "free" {
@@ -5279,6 +5862,7 @@ impl NativeFemBackend {
                 weighted_object_scalars(&step_stats, &self.object_weights)
             };
         self.attach_native_object_average_m(&mut step_stats)?;
+        self.attach_transfer_audit(&mut step_stats)?;
         Ok(step_stats)
     }
 
@@ -5471,6 +6055,48 @@ impl NativeFemBackend {
         request: &LivePreviewRequest,
         node_count: usize,
     ) -> Result<LivePreviewField, RunError> {
+        let mut source = NativeFemCaptureFieldCache::new(|name| {
+            self.copy_named_preview_vector_field(name, node_count)
+        });
+        self.copy_live_preview_field_with_source(request, node_count, &mut source)
+    }
+
+    // The H_ex/H_ext cache is owned by this synchronous batch and expires on return.
+    pub(crate) fn copy_live_preview_fields_for_capture(
+        &self,
+        requests: &[LivePreviewRequest],
+        node_count: usize,
+    ) -> Result<Vec<(LivePreviewField, u64)>, RunError> {
+        let mut source = NativeFemCaptureFieldCache::new(|name| {
+            self.copy_named_preview_vector_field(name, node_count)
+        });
+        capture_requests_with_source(requests, &mut source, |request, source| {
+            let started = std::time::Instant::now();
+            let field = self.copy_live_preview_field_with_source(request, node_count, source)?;
+            let wall_time_ns = started.elapsed().as_nanos().min(u64::MAX as u128) as u64;
+            Ok((field, wall_time_ns))
+        })
+    }
+
+    fn copy_named_preview_vector_field(
+        &self,
+        name: &str,
+        node_count: usize,
+    ) -> Result<Vec<[f64; 3]>, RunError> {
+        let observable = if name == "m" {
+            ffi::fullmag_fem_observable::FULLMAG_FEM_OBSERVABLE_M
+        } else {
+            fem_preview_observable(name)?
+        };
+        self.copy_field(observable, node_count)
+    }
+
+    fn copy_live_preview_field_with_source<Source: NativeFemPreviewFieldSource>(
+        &self,
+        request: &LivePreviewRequest,
+        node_count: usize,
+        source: &mut Source,
+    ) -> Result<LivePreviewField, RunError> {
         if crate::quantities::normalize_quantity_id(&request.quantity)? == QuantityId::FrozenSpins {
             if node_count != self.magnetic_node_mask.len() {
                 return Err(RunError {
@@ -5489,18 +6115,38 @@ impl NativeFemBackend {
                 &self.magnetic_node_mask,
             );
         }
-        let conservative_dg0_energy = self.dg0_energy_projection.is_some()
-            && matches!(
-                crate::quantities::normalized_quantity_name(&request.quantity)?,
-                "eden_ex" | "eden_demag" | "eden_ext" | "eden_total"
-            );
-        if let Some(values) = self.copy_energy_density_values(&request.quantity, node_count)? {
-            return Ok(build_native_fem_energy_density_preview_field(
-                request,
-                &values,
-                self.magnetic_node_mask.as_ref().to_vec(),
-                conservative_dg0_energy,
-            ));
+        if let Some(value) = copy_capture_quantity_value(
+            &request.quantity,
+            node_count,
+            self.energy_density_terms,
+            source,
+            &self.saturation_magnetisation_by_node,
+            &self.magnetic_node_mask,
+            self.dg0_energy_projection.as_deref(),
+            self.cubic_energy_density.as_deref(),
+        )? {
+            return Ok(match value {
+                NativeFemCaptureQuantityValue::Vector(values) => {
+                    let active_mask =
+                        (crate::quantities::quantity_spatial_domain(&request.quantity)
+                            == "magnetic_only")
+                            .then(|| self.magnetic_node_mask.as_ref().to_vec());
+                    build_mesh_preview_field_with_active_mask(
+                        request,
+                        values.as_slice(),
+                        active_mask,
+                    )
+                }
+                NativeFemCaptureQuantityValue::Energy {
+                    values,
+                    conservative_dg0,
+                } => build_native_fem_energy_density_preview_field(
+                    request,
+                    &values,
+                    self.magnetic_node_mask.as_ref().to_vec(),
+                    conservative_dg0,
+                ),
+            });
         }
         let quantity = crate::quantities::normalized_quantity_name(&request.quantity)?;
         let values = if matches!(quantity, "H_demag" | "H_eff") {
@@ -5521,7 +6167,7 @@ impl NativeFemBackend {
             }
             values
         } else {
-            self.copy_field(fem_preview_observable(quantity)?, node_count)?
+            source.vector_field(quantity)?.into_vec()
         };
         let active_mask = (crate::quantities::quantity_spatial_domain(&request.quantity)
             == "magnetic_only")
@@ -5531,58 +6177,6 @@ impl NativeFemBackend {
             &values,
             active_mask,
         ))
-    }
-
-    fn copy_energy_density_values(
-        &self,
-        quantity: &str,
-        node_count: usize,
-    ) -> Result<Option<Vec<f64>>, RunError> {
-        let quantity = crate::quantities::normalized_quantity_name(quantity)?;
-        let Some(terms) = self.energy_density_terms.observables_for(quantity) else {
-            return Ok(None);
-        };
-        let magnetization = self.copy_field(
-            ffi::fullmag_fem_observable::FULLMAG_FEM_OBSERVABLE_M,
-            node_count,
-        )?;
-        let mut values = vec![0.0; node_count];
-        for (field_name, prefactor) in terms {
-            let field = self.copy_field(fem_preview_observable(field_name)?, node_count)?;
-            if let Some(projection) = self.dg0_energy_projection.as_deref() {
-                accumulate_dg0_field_dot_energy_density(
-                    &mut values,
-                    &magnetization,
-                    &field,
-                    projection,
-                    prefactor,
-                )?;
-                continue;
-            }
-            accumulate_energy_density_term(
-                &mut values,
-                &magnetization,
-                &field,
-                &self.saturation_magnetisation_by_node,
-                &self.magnetic_node_mask,
-                prefactor,
-            )?;
-        }
-        if self.energy_density_terms.includes_cubic(quantity) {
-            let cubic = self
-                .cubic_energy_density
-                .as_deref()
-                .ok_or_else(|| RunError {
-                    message: "native FEM cubic energy-density configuration is missing".to_string(),
-                })?;
-            accumulate_cubic_energy_density(
-                &mut values,
-                &magnetization,
-                cubic,
-                &self.magnetic_node_mask,
-            )?;
-        }
-        Ok(Some(values))
     }
 
     pub fn device_info(&self) -> Result<DeviceInfo, RunError> {
@@ -5714,7 +6308,7 @@ impl NativeFemPreviewSnapshot {
     }
 }
 
-#[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
+#[cfg(any(test, feature = "fem-gpu", feature = "fem-native"))]
 fn accumulate_energy_density_term(
     values: &mut [f64],
     magnetization: &[[f64; 3]],
@@ -5745,7 +6339,7 @@ fn accumulate_energy_density_term(
     Ok(())
 }
 
-#[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
+#[cfg(any(test, feature = "fem-gpu", feature = "fem-native"))]
 fn tetrahedron_volume(nodes: &[[f64; 3]], element: [u32; 4]) -> Result<f64, RunError> {
     let [a, b, c, d] = element.map(|index| {
         nodes.get(index as usize).copied().ok_or_else(|| RunError {
@@ -5827,7 +6421,7 @@ fn tetra_dg0_p1_dot_integral(
     Ok(integral)
 }
 
-#[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
+#[cfg(any(test, feature = "fem-gpu", feature = "fem-native"))]
 fn conservative_dg0_p1_dot_projection(
     nodes: &[[f64; 3]],
     elements: &[[u32; 4]],
@@ -5891,7 +6485,7 @@ fn conservative_dg0_p1_dot_projection(
         .collect())
 }
 
-#[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
+#[cfg(any(test, feature = "fem-gpu", feature = "fem-native"))]
 fn accumulate_dg0_field_dot_energy_density(
     values: &mut [f64],
     magnetization: &[[f64; 3]],
@@ -5945,7 +6539,7 @@ fn tetra_p1_scalar_integral(
     Ok(integral)
 }
 
-#[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
+#[cfg(any(test, feature = "fem-gpu", feature = "fem-native"))]
 fn accumulate_cubic_energy_density(
     values: &mut [f64],
     magnetization: &[[f64; 3]],
@@ -7005,7 +7599,7 @@ mod tests {
             projection_signature: "verified".into(),
         }];
 
-        let (descriptors, _, points, _, _, bases) =
+        let (descriptors, _, points, _, _, bases, _) =
             pack_native_regional_field_drives(&plan).expect("packed solved antenna drive");
         assert_eq!(descriptors.len(), 1);
         assert_eq!(points.len(), 1);
@@ -8294,6 +8888,7 @@ mod tests {
 
     fn make_exchange_only_plan() -> FemPlanIR {
         FemPlanIR {
+            gpu_bb_preconditioner: None,
             frozen_spins: None,
             mesh_name: "two_tets".to_string(),
             mesh_source: Some("meshes/two_tets.msh".to_string()),
@@ -8372,6 +8967,7 @@ mod tests {
             solved_antenna_drive_bases: Vec::new(),
             field_drives: Vec::new(),
             field_drive_geometry_masks: Vec::new(),
+            mask_field_term_bases: Vec::new(),
             time_stage: Default::default(),
             current_modules: vec![],
             charge_transport_plans: vec![],

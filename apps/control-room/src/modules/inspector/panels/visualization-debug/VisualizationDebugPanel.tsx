@@ -7,11 +7,13 @@ import type { Selection } from "@/kernel/selection/selectionTypes";
 import { resolveSessionDiscretization } from "@/kernel/resources/sessionDiscretization";
 import { useSessionStatusSelector } from "@/kernel/resources/useSessionStatus";
 import { Button } from "@/shared/ui/Button";
+import { keyedOccurrences } from "@/shared/utils/keyedOccurrences";
 
 import { FeedbackBanner } from "../../primitives/FeedbackBanner";
 import { FieldRow } from "../../primitives/FieldRow";
 import { InspectorGroup } from "../../primitives/InspectorGroup";
-import { VisualizationDebugSampleTable, formatScientific } from "./VisualizationDebugSampleTable";
+import { VisualizationDebugSampleTable } from "./VisualizationDebugSampleTable";
+import { formatScientific } from "./VisualizationDebugSampleTable.model";
 import type {
   VisualizationDebugCarrierObservation,
   VisualizationDebugPanelModel,
@@ -119,6 +121,18 @@ export function VisualizationDebugPanelView({
 
   const emptyMessage = visualizationDebugEmptyStateMessage(model.state);
   const observations = allObservations(model);
+  const keyedObservationEntries = keyedOccurrences(observations, ({ carrier, query, snapshot }) => JSON.stringify([
+    snapshot.viewport.viewportId,
+    snapshot.viewport.frameCommitId,
+    carrier.carrierId,
+    query?.key ?? carrier.request.resourceKey ?? carrier.request.plannerRequestId,
+  ]));
+  const issueEntries = keyedOccurrences(allIssues(model), (issue) => JSON.stringify([
+    issue.code,
+    issue.source,
+    issue.message,
+    issue.evidence,
+  ]));
   const snapshots = uniqueSnapshots(model);
   const disposition = model.disposition;
   const latestCapturedAtMs = latestSnapshotCaptureTime(model);
@@ -202,8 +216,8 @@ export function VisualizationDebugPanelView({
       </InspectorGroup>
 
       <InspectorGroup title="Request & transport" badge={`${model.transport.length}`}>
-        {observations.map(({ carrier, query }, index) => (
-          <div className="fm-visualization-debug-subsection" key={`request:${carrier.carrierId}:${index}`}>
+        {keyedObservationEntries.map(({ item: { carrier, query }, key }) => (
+          <div className="fm-visualization-debug-subsection" key={key}>
             <h4>{carrier.carrierId}</h4>
             <FieldRow label="Planner request ID" value={carrier.request.plannerRequestId ?? "—"} />
             <FieldRow label="Canonical resource key" value={carrier.request.resourceKey ?? "—"} />
@@ -213,7 +227,7 @@ export function VisualizationDebugPanelView({
             <FieldRow label="Complex view / phase" value={query?.view ? `${query.view} / ${query.phaseRad ?? "default"}` : "none"} />
           </div>
         ))}
-        <div className="fm-visualization-debug-table-wrap">
+        <div aria-label="Matched field transport requests (scrollable)" className="fm-visualization-debug-table-wrap" role="region" tabIndex={0}>
           <table className="fm-visualization-debug-table" aria-label="Matched field transport requests">
             <thead><tr><th scope="col">Request</th><th scope="col">Path</th><th scope="col">Status</th><th scope="col">Duration</th><th scope="col">Wire bytes</th><th scope="col">ETag</th><th scope="col">Timestamp</th></tr></thead>
             <tbody>{model.transport.slice(0, 8).map((entry) => (
@@ -224,8 +238,8 @@ export function VisualizationDebugPanelView({
       </InspectorGroup>
 
       <InspectorGroup title="Backend metadata">
-        {observations.map((observation, index) => (
-          <div className="fm-visualization-debug-subsection" key={`meta:${observation.carrier.carrierId}:${index}`}>
+        {keyedObservationEntries.map(({ item: observation, key }) => (
+          <div className="fm-visualization-debug-subsection" key={key}>
             <h4>{observation.carrier.carrierId}</h4>
             {observation.backendMeta ? <>
               <FieldRow label="Quantity" value={`${observation.backendMeta.quantity_id} — ${observation.backendMeta.label}`} />
@@ -240,8 +254,8 @@ export function VisualizationDebugPanelView({
       </InspectorGroup>
 
       <InspectorGroup title="Decoded payload">
-        {observations.map(({ carrier }, index) => (
-          <div className="fm-visualization-debug-subsection" key={`payload:${carrier.carrierId}:${index}`}>
+        {keyedObservationEntries.map(({ item: { carrier }, key }) => (
+          <div className="fm-visualization-debug-subsection" key={key}>
             <h4>{carrier.carrierId}</h4>
             {carrier.payload ? <>
               <FieldRow label="Dtype / FMVP" value={`${carrier.payload.dtype} / v${carrier.payload.formatVersion ?? "—"}`} />
@@ -257,7 +271,7 @@ export function VisualizationDebugPanelView({
       </InspectorGroup>
 
       <InspectorGroup title="Statistics">
-        <div className="fm-visualization-debug-table-wrap">
+        <div aria-label="Statistics by evidence source (scrollable)" className="fm-visualization-debug-table-wrap" role="region" tabIndex={0}>
           <table className="fm-visualization-debug-table" aria-label="Statistics by evidence source">
             <thead><tr><th scope="col">Carrier</th><th scope="col">Source</th><th scope="col">Min</th><th scope="col">Max</th><th scope="col">Mean</th><th scope="col">p01 / p99</th><th scope="col">Unit</th><th scope="col">Finite / non-finite / zero</th></tr></thead>
             <tbody>{statisticsRows(observations).map((row) => <tr key={row.key}><th scope="row">{row.carrierId}</th><td>{row.source}</td><td>{formatScientific(row.min)}</td><td>{formatScientific(row.max)}</td><td>{formatScientific(row.mean)}</td><td>{`${formatScientific(row.p01)} / ${formatScientific(row.p99)}`}</td><td>{row.unit}</td><td>{row.counts}</td></tr>)}</tbody>
@@ -281,8 +295,8 @@ export function VisualizationDebugPanelView({
       </InspectorGroup>
 
       <InspectorGroup title="Render passes">
-        {observations.map(({ carrier }, index) => (
-          <div className="fm-visualization-debug-subsection" key={`render:${carrier.carrierId}:${index}`}>
+        {keyedObservationEntries.map(({ item: { carrier }, key }) => (
+          <div className="fm-visualization-debug-subsection" key={key}>
             <h4>{carrier.carrierId}</h4>
             <FieldRow label="Requested source" value={carrier.request.resourceKey ?? "—"} />
             <FieldRow label="Surface source" value={carrier.render.adoption.surface.adoptedResourceKey ?? "—"} />
@@ -296,8 +310,8 @@ export function VisualizationDebugPanelView({
       </InspectorGroup>
 
       <InspectorGroup title="Revisions & provenance">
-        {observations.map(({ carrier, snapshot }, index) => (
-          <div className="fm-visualization-debug-subsection" key={`revision:${carrier.carrierId}:${index}`}>
+        {keyedObservationEntries.map(({ item: { carrier, snapshot }, key }) => (
+          <div className="fm-visualization-debug-subsection" key={key}>
             <h4>{carrier.carrierId}</h4>
             <FieldRow label="Visualization / field" value={`${carrier.revisions.visualizationRevision ?? "—"} / ${carrier.revisions.fieldRevision ?? "—"}`} />
             <FieldRow label="Topology / domain" value={`${carrier.revisions.topologyRevision ?? "—"} / ${carrier.revisions.domainGenerationId ?? "—"}`} />
@@ -308,9 +322,9 @@ export function VisualizationDebugPanelView({
         ))}
       </InspectorGroup>
 
-      <InspectorGroup title="Detected inconsistencies" badge={`${allIssues(model).length}`}>
-        {allIssues(model).length > 0 ? <ul className="fm-visualization-debug-issues">{allIssues(model).map((issue, index) => (
-          <li data-severity={issue.severity} key={`${issue.code}:${index}`}><strong>{issue.severity}: {issue.code}</strong><span>{issue.source} — {issue.message}</span><code>{issue.evidence.join(" · ") || "No additional evidence"}</code></li>
+      <InspectorGroup title="Detected inconsistencies" badge={`${issueEntries.length}`}>
+        {issueEntries.length > 0 ? <ul className="fm-visualization-debug-issues">{issueEntries.map(({ item: issue, key }) => (
+          <li data-severity={issue.severity} key={key}><strong>{issue.severity}: {issue.code}</strong><span>{issue.source} — {issue.message}</span><code>{issue.evidence.join(" · ") || "No additional evidence"}</code></li>
         ))}</ul> : <p className="fm-visualization-debug-empty">No inconsistencies were detected.</p>}
       </InspectorGroup>
 

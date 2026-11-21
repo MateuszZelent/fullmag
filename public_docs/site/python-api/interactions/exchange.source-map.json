@@ -29,25 +29,8 @@
       "reason": "authoring and IR documented; runtime qualification separate"
     }
   ],
-  "equations": [
-    {
-      "id": "eq-exchange",
-      "symbols": [
-        "q"
-      ],
-      "sources": [
-        "source_exchange"
-      ]
-    }
-  ],
-  "symbols": [
-    {
-      "id": "q",
-      "latex": "q",
-      "meaning": "canonical typed authoring quantity",
-      "si_unit": "\\mathrm{1}"
-    }
-  ],
+  "equations": [],
+  "symbols": [],
   "sources": [
     {
       "id": "source_exchange",
@@ -63,7 +46,7 @@
         "python": "fm.Exchange",
         "type": "constructor",
         "default": "no arguments",
-        "si_unit": "1",
+        "si_unit": "$1$",
         "validation": "no parameters",
         "meaning": "nearest-neighbour exchange term",
         "backend_support": "FEM/FDM CPU/GPU: IR; runtime resolver-specific",

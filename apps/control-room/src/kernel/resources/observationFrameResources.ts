@@ -184,32 +184,3 @@ export function useObservationFrameResource(
     resourceKey,
   });
 }
-
-export function useObservationFrameMagnetizationResource(
-  frameId: string | null | undefined,
-  { enabled = true }: ObservationFrameResourceOptions = {},
-) {
-  const { api } = useKernel();
-  const unscopedResourceKey = observationFrameMagnetizationResourceKey(frameId);
-  const { resourceKey, sessionIdentity } = useSessionScopedResourceKey(
-    unscopedResourceKey,
-  );
-  const load = useCallback(
-    ({ sessionScopeKey, signal }: { sessionScopeKey?: string; signal: AbortSignal }) => {
-      if (!frameId) return Promise.reject(new Error("An observation frame must be selected."));
-      return api.data.observationFrames.magnetization(frameId, {
-        sessionScopeKey,
-        signal,
-      });
-    },
-    [api, frameId],
-  );
-
-  return useResource<ObservationFrameMagnetizationResource>({
-    abortStaleInflight: true,
-    enabled: enabled && Boolean(frameId) && sessionIdentity !== null,
-    load,
-    resolveRevision: observationFrameMagnetizationRevision,
-    resourceKey,
-  });
-}

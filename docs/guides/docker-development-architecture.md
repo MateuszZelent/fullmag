@@ -816,3 +816,150 @@ cyklu start/restart, zanim wcześniejsze dowody zostaną do niego przypisane.
 ### Wznowienie samego frontendu po udanym starcie
 
 `just docker-dev-resume <start-attempt> <config-sha256> <source-root> <port>` może wznowić zatrzymany frontend także wtedy, gdy historyczny start zakończył się `succeeded`. Launcher sprawdza dokładne incarnation ID, project, image, source i mounty obu usług oraz wymaga działającego backendu i zatrzymanego frontendu. Startuje wyłącznie frontend; nie zmienia historycznego receipt, nie restartuje backendu i nie powtarza aktywacji ani Solve. Ścieżkę odtworzono po błędzie V8 heap frontendu; wynik zapisywany jest jako nowa operacja `resume`.
+
+### Zatrzymanie diagnostyki po bezpośredniej awarii bootstrapu
+
+`scripts/docker_dev.py stop-bootstrap-volume` obsługuje dwa rozłączne źródła
+dowodów: istniejący `--resume-attempt` albo parę
+`--development-terminal-sha256` i `--process-receipt-sha256` dla bezpośredniego
+startu `development`. Pozostałe wymagane argumenty to `--repo-root`, `--source-root`,
+`--attempt`, `--config-sha256` i `--port`. `--repo-root` jest argumentem globalnym,
+umieszczanym przed nazwą polecenia. Parametry muszą pochodzić z konkretnej
+zachowanej próby, nie z bieżących ustawień innej grupy.
+
+Bezpośredni wariant wymaga stanu `failed-confirmed`, oryginalnych plików
+`process-failure.json` i `readiness-failure.json`, zgodności pierwszego z żywym
+receiptem procesu oraz koperty błędu rzeczywistego producenta. Zachowuje pełne
+kontrole startup fence, PID, cgroup, image, source, inkarnacji API, braku sesji
+i procesów historycznego ownera oraz konsumentów grupy/wolumenu pod blokadą.
+Opcjonalne `--stop-frontend` jest dostępne tylko dla tego wariantu i po
+potwierdzonym stopie backendu zatrzymuje dokładnie przypięty frontend tej grupy.
+Nie usuwa kontenerów ani danych. Brak potwierdzenia zatrzymania pozostawia
+wynik nieznany; operator nie powinien ponawiać sygnału na podstawie timeoutu.
+
+Wariant bezpośredni zapisuje receipt `fullmag.docker-bootstrap-api-stop.v2`
+z jawnym `failure_origin`; wariant resume zachowuje v1. Historyczny owner Ready,
+sesje i lease pozostają zachowane, a native execution pozostaje `unknown`.
+Zatrzymanie diagnostycznego API nie stanowi dowodu native drain i nie uprawnia
+do archiwizacji namespace wymagającej rzeczywistego stanu Drained.
+
+Wąski wariant recovery z historycznym ownerem dopuszcza osobny dowód
+`fullmag.docker-bootstrap-historical-namespace-absence.v1`. Dotyczy sytuacji,
+gdy zachowany `OWNER.host` wskazuje wcześniejszy, usunięty kontener tej samej
+grupy, a obecny backend zatrzymano przez przypięty diagnostic bootstrap stop.
+Dowód wiąże obecne bajty OWNER/process z archiwalnym inspect, buildem i jawnym
+łańcuchem udanych rekreacji; ponownie sprawdza nieobecność dokładnych starych
+kontenerów oraz brak ponownego użycia historycznego hostname w całym silniku.
+Nie odtwarza brakującej historycznej obserwacji procesu i nie deklaruje drain.
+Zwykły recovery nadal wymaga zgodności hosta właściciela.
+
+Dowód powstaje przez `prepare_historical_namespace_absence` i jest publikowany
+niezmiennie w operacji BuildControl. `stop-bootstrap-frontend-volume` wymaga
+wtedy jawnej pary `--historical-namespace-proof <control-relative-path>` oraz
+`--historical-namespace-proof-sha256 <raw-sha256>`; preview i apply wiążą ten
+sam dowód i ponawiają kontrole nieobecności. Archiwizacja nadal wymaga pełnego
+terminalnego accepted store, przypiętego proof i operator authorization.
+Sesje, Zarr, historyczne metadane i lease pozostają zachowane. Ten wyjątek nie
+uprawnia do kasowania rekordów ownera ani do uznania Unknown za terminalny run.
+
+Inwentarz historii aktywacji traktuje `bootstrap-namespace-proof` i
+`bootstrap-container-proof` jako znane, konserwatywne źródła pinów. Ich
+odwołania do aktywacji nadal blokują archiwizację; nie należą do wykluczonych
+danych technicznych. Nieznany root control nadal powoduje odmowę kwalifikacji.
+
+### Przygotowana, nieopublikowana awaria tworzenia sieci
+
+`scripts/docker_volume_network_failure_reconcile.py` może wznowić kompletny
+zestaw `reconciliation/{prepared,result,network-failure-proof}.json`, jeśli
+poprzednia próba zatrzymała się przed CAS. Wymaga pary
+`--resume-prepared-sha256 <sha256>` i `--recovery-id <32 lowercase hex>` obok
+dotychczasowych pinów `--source-root`, `--attempt`, `--receipt-sha256`,
+`--compose-sha256` oraz `--engine-id`. Bez `--apply` wykonuje tylko kwalifikację.
+
+Oryginalny receipt i jego archiwum muszą pozostać identyczne. Obecność blokady
+CAS, terminalu lub wskaźników current/verified powoduje odmowę. Nowa operacja
+sprawdza pełne powiązanie wcześniejszego przygotowania, proof, result i helpera,
+a następnie wykonuje dwie obserwacje i trzecią bezpośrednio przed CAS, zachowując
+zakres group-local: logicznych konsumentów własnego projektu i wolumenu oraz
+bezpośrednich bindów, bez fizycznej analizy cudzych checkoutów Windows/WSL.
+Świeże dowody trafiają
+do `reconciliation/recoveries/<recovery-id>/`; stare pliki pozostają zachowane.
+CAS ponownie sprawdza ich hashe. Wynik wiąże nowy identyfikator z poprzednim
+SHA przygotowania. Wyłącznie oryginalny helper zwalnia active po terminalu.
+Dawne równoległe obserwacje fizycznych cudzych checkoutów nie są częścią
+tego kontraktu group-local; nie są wymagane do tej failure-only publikacji.
+Ścieżka nie obsługuje częściowo opublikowanej transakcji i nie publikuje
+historycznego proof jako świeżego dowodu. Wariant nie łączy się z
+`--recover-absent-helper`: przygotowana generacja nadal wymaga oryginalnego
+żywego helpera. Nowe pliki i terminal są publikowane pod wspólnymi blokadami
+transakcji, z ponownym sprawdzeniem hashy starej generacji przed zapisem.
+Testy źródłowe nie zastępują
+potwierdzenia konkretnej operacji na silniku Docker.
+
+### Pusty bootstrap po SIGABRT API, bez native ownera
+
+`stop-empty-api-abort-volume` obsługuje jawnie wybraną próbę development, która
+zbudowała i opublikowała pakiet, ale API zakończyło start przez SIGABRT (-6)
+przed powstaniem ownera i jakiegokolwiek runu. Wymaga `--attempt`,
+`--config-sha256`, `--source-root` i `--port`; `--preview` zapisuje plan bez
+zatrzymania, a `--apply --expected-plan-sha256 <sha256>` ponownie sprawdza
+ten sam plan pod blokadą operacji i zatrzymuje dokładnie przypiętą parę.
+
+Dowód obejmuje oba puste namespace runtime-services, pusty runs, brak API PID
+i otwartego portu, wyłącznie init i supervisor w backendzie, brak aktywacji,
+zwolnione rezerwacje i lease, zgodność publication/config oraz pełne tożsamości
+i czasy startu usług. Obecność dodatkowego konsumenta projektu lub control
+volume blokuje operację. Odczyty nie analizują fizycznie cudzych checkoutów.
+
+Po stopie backend ma exit 1, frontend exit 0, a process-tree zachowuje
+`shutdown_unknown`, przyczynę API -6 i brak ownera. Receipt potwierdza ten
+rzeczywisty stan; nie deklaruje drain. Oddzielna para
+`recreate-volume --fresh-state --empty-api-abort-stop <stop-attempt>
+--empty-api-abort-stop-sha256 <raw-terminal-sha256>` dopuszcza wyłącznie
+archiwizację tego pustego bootstrapu. Konsument przed operacją i pod jej
+blokadą porównuje raw receipty, plan, kontenery oraz ponowny odczyt pustego
+namespace. Nie przywraca go jako retained runtime i zachowuje stare dane.
+
+### Zachowane wyniki przed archiwizacją aktywacji
+
+Kwalifikacja pojedynczego ukończonego runu rozpoznaje dwa istniejące układy:
+`reversal-attempt-1` z targetem `main` oraz `relax-attempt-1` z targetem
+`relax`. Nazwa katalogu musi zgadzać się z oboma receiptami storage i wpisem
+etapu w `fullmag-run.json`; target musi zgadzać się z deklaracjami wyjść,
+manifestem autosave i metadanymi Zarr. Dodatkowy katalog próby, brakujący
+chunk lub niezgodna tożsamość nadal blokują operację. Walidator nie zmienia
+nazw wyników ani ich zawartości. To rozszerzenie nie uchyla kontroli lease,
+referencji control, aktualnej aktywacji i jej chronionego poprzednika.
+
+### Archiwizacja odrzuconej aktywacji bez Run
+
+`docker-dev-archive-activation` obsługuje jawny wariant `rejected-no-run-v1`:
+
+```text
+just docker-dev-archive-activation "<source-root>" "<activation-id>" false "" true
+just docker-dev-archive-activation "<source-root>" "<activation-id>" true "<preview-plan-sha256>" true
+```
+
+Profil wymaga potwierdzonego API400/422, identycznych receipt/terminal,
+niezmienionego źródła i pełnego eksportu oryginalnych rekordów obok pliku `.py`
+na ext4 WSL (`fullmag.activation-rejection-provenance-export.v1`, kontrakt
+`scripts/docker_activation_history.py::preserved_rejection`). Nie wolno
+odtwarzać eksportu z oszacowanych danych. Brak Run/session/reconciliation,
+brak wycofania poprzednika i kompletny skan SessionStore są wymagane.
+Znaleziony request, jego hash, źródło, RunIntent, admission lub lease blokują
+kwalifikację. Nie pomija się poddrzew wyników ani historii.
+
+Dla tak zakwalifikowanego odrzucenia samo `activation/current.json` może być
+historycznym wskaźnikiem: jego surowe bajty muszą być identyczne z terminalem
+tego samego kandydata. Plan wiąże rodzaj kwalifikacji, identyfikator próby
+oraz oba hashe; pointer pozostaje przypięty w guardach/CAS. Apply ponownie
+kwalifikuje kandydata pod blokadą. `verified`, inne referencje recovery,
+nieznany wynik i zmiana choćby formatu bajtów nadal blokują operację.
+Pozostawiony pointer korzysta z istniejącego odczytu archiwalnego pod dawną
+ścieżką; nie jest usuwany ani przestawiany na inny wynik.
+
+Preview i apply zachowują istniejące blokady, source/consumer pins oraz
+niezmienny digest planu. Apply przenosi dokładnie jeden rekord do `history-v1`
+z zachowaniem wszystkich bajtów i odczytu pod dawnymi ścieżkami. Nie usuwa
+rekordów, nie zwiększa limitu 64 i nie ponawia aktywacji ani Solve. Dla innych
+stanów nadal obowiązują ich osobne kwalifikowane recepty.

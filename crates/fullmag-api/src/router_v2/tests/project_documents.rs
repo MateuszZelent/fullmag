@@ -784,6 +784,24 @@ async fn explicit_project_run_submit_is_durable_and_replays_without_live_session
         material_transition: None,
         realization_policy: fullmag_ir::RegionRealizationPolicyIR::Inherit,
     });
+    let authored_reference =
+        fullmag_plan::authored_initial_state_reference(&study.steps[0].step_id, &problem).unwrap();
+    study.steps[0].inputs.push(fullmag_authoring::StudyInputPort {
+        port_id: "initial_state".into(),
+        data_kind: StudyPortDataKind::State,
+        required: true,
+        source: fullmag_authoring::StudyInputSource::AuthoredInitialState {
+            reference: authored_reference,
+        },
+    });
+    let mut foreign_study = study.clone();
+    foreign_study.steps[0].inputs[0].source = fullmag_authoring::StudyInputSource::AuthoredInitialState {
+        reference: fullmag_plan::authored_initial_state_reference("another-step", &problem).unwrap(),
+    };
+    assert!(StudyProblemCatalog::from_entries(
+        &foreign_study,
+        vec![StudyProblemCatalogEntry::from_step(&foreign_study.steps[0], problem.clone())],
+    ).is_err());
     let catalog = StudyProblemCatalog::from_entries(
         &study,
         vec![StudyProblemCatalogEntry::from_step(
@@ -2226,6 +2244,7 @@ async fn explicit_project_run_submit_is_durable_and_replays_without_live_session
     .unwrap();
     assert_eq!(queued.task, queued_replay.task);
     assert_eq!(queued.resolved_inputs, queued_replay.resolved_inputs);
+    assert!(queued.resolved_inputs.is_empty(), "authored state has no CAS input");
     assert_eq!(queued.step_id, step.step_id);
     let queued_inputs = queued.resolved_inputs;
     let mut task = queued.task;
@@ -2508,6 +2527,16 @@ async fn explicit_project_run_submit_is_durable_and_replays_without_live_session
             case_id: "default".into(),
         },
     }];
+    assert_eq!(
+        crate::accepted_study_worker::materialize_resolved_study_inputs(&store, &worker_step).unwrap(),
+        accepted_execution_plan,
+    );
+    let mut authored_with_unexpected_artifact = worker_step.clone();
+    authored_with_unexpected_artifact.resolved_input.inputs = resolved_inputs.clone();
+    assert!(crate::accepted_study_worker::materialize_resolved_study_inputs(
+        &store, &authored_with_unexpected_artifact,
+    ).is_err());
+
     let mut worker_step_with_input = worker_step.clone();
     worker_step_with_input.study_inputs = declared_inputs.to_vec();
     worker_step_with_input.resolved_input.inputs = resolved_inputs;

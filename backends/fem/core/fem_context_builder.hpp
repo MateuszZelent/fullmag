@@ -20,6 +20,7 @@ struct Context;
 bool build_context_from_plan(
     Context &ctx,
     const fullmag_fem_plan_desc &plan,
-    std::string &error);
+    std::string &error,
+    const uint32_t *canonical_boundary_marker = nullptr);
 
 } // namespace fullmag::fem

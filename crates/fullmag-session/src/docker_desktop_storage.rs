@@ -391,6 +391,7 @@ fn is_reparse(metadata: &fs::Metadata) -> bool {
     }
 }
 
+#[cfg(not(target_os = "linux"))]
 fn reject_link_ancestors(path: &Path) -> Result<()> {
     // Walk complete paths instead of rebuilding them from `Components`.
     // Rebuilding a Windows `Prefix` and `RootDir` separately can turn `C:\\...`
@@ -551,7 +552,7 @@ fn open_regular_nofollow(path: &Path) -> Result<File> {
 }
 
 fn read_bounded_regular_file(path: &Path, maximum: u64) -> Result<Vec<u8>> {
-    let mut file = open_regular_nofollow(path)?;
+    let file = open_regular_nofollow(path)?;
     if file.metadata()?.len() > maximum {
         bail!(
             "evidence file exceeds the bounded read limit: {}",

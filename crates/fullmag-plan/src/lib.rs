@@ -28,6 +28,7 @@ mod fdm;
 mod fem;
 mod geometry;
 mod magnetization_textures;
+mod mask_field;
 mod magnetization_textures_v2;
 mod material;
 mod material_transition;
@@ -38,6 +39,7 @@ pub mod preparation;
 pub mod quantities;
 mod region_conflict;
 mod region_textures;
+pub use region_textures::study_magnetization_overlay_mask;
 mod regional_field_drive;
 mod sampling;
 mod selection;
@@ -64,6 +66,8 @@ pub use antenna_validity::{
     antenna_waveform_bandwidth_notes, classify_antenna_waveform_bandwidth,
 };
 pub use error::PlanError;
+pub use fem::damping_on_geometry_mesh;
+pub use material::validate_absorbing_region_boundary;
 pub use fdm::{
     checked_multilayer_aggregate_memory_bytes, checked_multilayer_pair_kernel_footprint,
     fdm_multilayer_cuda_aligned_embedding_eligible, fdm_multilayer_cuda_aligned_embedding_error,
@@ -118,6 +122,7 @@ pub use selection::{
     ResolvedFrozenSpinsReference, SelectionDofMembership,
 };
 pub use study_catalog::{
+    authored_initial_state_reference, validate_authored_initial_state,
     capture_study_input_references, lower_study_plan_with_catalog, CapturedStudyInputIdentity,
     CapturedStudyInputReferences, StudyCatalogError, StudyProblemCatalog, StudyProblemCatalogEntry,
     CAPTURED_STUDY_INPUT_IDENTITY_SCHEMA_V1, STUDY_PROBLEM_CATALOG_SCHEMA,
@@ -369,7 +374,7 @@ fn has_active_finite_k_source(problem: &ProblemIR) -> bool {
         drive.peak_current_a.is_finite()
             && drive.peak_current_a != 0.0
             && util::drive_activation_is_active(&drive.activation, problem)
-    })
+    }) || !mask_field::active_mask_field_drives(problem).is_empty()
 }
 
 #[cfg(test)]

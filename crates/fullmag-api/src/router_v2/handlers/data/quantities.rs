@@ -95,14 +95,16 @@ fn annotate_runtime_quantity_state(
         && quantity_spec("m").is_some_and(|spec| {
             prepared_initial_state_m_carriers(snapshot, spec, spec.domain.as_str()).is_some()
         });
-    if snapshot.capabilities.is_none() && !standalone_inspection
-        && !prepared_m_without_runtime_capabilities && !field_only
-    {
+    let prepared_only = snapshot.capabilities.is_none() && !standalone_inspection && !field_only;
+    let prepared_damping = prepared_only && quantity_spec("mat_alpha").is_some_and(|spec|
+        prepared_damping_carriers(snapshot, spec, spec.domain.as_str()).is_some());
+    if prepared_only && !prepared_m_without_runtime_capabilities && !prepared_damping {
         return;
     }
 
     for entry in &mut response.quantities {
-        if prepared_m_without_runtime_capabilities && entry.id != "m" {
+        if prepared_only && !(entry.id == "m" && prepared_m_without_runtime_capabilities
+            || entry.id == "mat_alpha" && prepared_damping) {
             continue;
         }
         let Some(spec) = quantity_spec(&entry.id) else {
@@ -115,8 +117,8 @@ fn annotate_runtime_quantity_state(
             Vec::new(),
             spec.domain.as_str(),
         );
-        let supported =
-            preliminary.provider == fullmag_runner::QuantityProviderCapability::Available;
+        let supported = preliminary.provider == fullmag_runner::QuantityProviderCapability::Available
+            && preliminary.reason_code.as_deref() != Some(PREPARED_DAMPING_READ_ONLY);
 
         let status = relevant_field_materialization_status(snapshot, &entry.id);
         let resolved_field = resolve_current_spatial_field_metadata(
@@ -214,10 +216,10 @@ fn annotate_runtime_quantity_state(
             resolved.request,
             fullmag_runner::QuantityRequestCapability::FieldVector
         ) && resolved.reason_code.as_deref() != Some("prepared_initial_state");
-        // The Docker runtime only adopts fields a finished accepted run
-        // published; it has no evaluator for a prepared state. Report such a
-        // field as supported but not yet computable instead of letting a
-        // Compute request fail.
+        // The Docker runtime has no evaluator for a prepared state (ADR 0071):
+        // before a run starts such a field is supported but not computable.
+        // A running or finished run captures demanded fields live and
+        // publishes the full catalog at the end, so it stays requestable.
         if entry.materializable
             && materialization_state == "unmaterialized"
             && accepted_fields_require_terminal_run(snapshot)
@@ -225,16 +227,32 @@ fn annotate_runtime_quantity_state(
             entry.materializable = false;
             entry.materialization_reason_code = Some("accepted_state_required".to_string());
         }
+        if super::field_resolution::current_fem_damping_uses_nodes(snapshot, &entry.id) {
+            entry.location = "node".to_owned();
+        }
         entry.renderable = resolved.render == fullmag_runner::QuantityRenderCapability::Renderable;
         entry.resolved_capability = Some(resolved.into());
     }
 }
 
-/// Whether field materialization must wait for a finished accepted run.
+/// Whether field materialization must wait for an accepted run to start.
+///
+/// Only a prepared state (no run, or a run awaiting its first Compute) lacks
+/// an evaluator in the Docker runtime. While the run computes, the UI demand
+/// reaches the worker and the next heavy payload captures the field; after
+/// it ends, the terminal bundle carries the full active catalog.
 fn accepted_fields_require_terminal_run(snapshot: &SessionStateResponse) -> bool {
-    crate::live_accepted_execution::docker_api_only_runtime()
-        && !snapshot.run.as_ref().is_some_and(|run| {
-            matches!(run.status.as_str(), "completed" | "failed" | "cancelled")
+    accepted_fields_await_run(
+        crate::live_accepted_execution::docker_api_only_runtime(),
+        snapshot.run.as_ref().map(|run| run.status.as_str()),
+    )
+}
+
+/// Pure decision behind `accepted_fields_require_terminal_run`.
+fn accepted_fields_await_run(docker_runtime: bool, run_status: Option<&str>) -> bool {
+    docker_runtime
+        && !run_status.is_some_and(|status| {
+            matches!(status, "running" | "stopping" | "completed" | "failed" | "cancelled")
         })
 }
 
@@ -271,6 +289,41 @@ pub(crate) fn current_field_carriers(
     }]
 }
 
+const PREPARED_DAMPING_READ_ONLY: &str = "prepared_damping_read_only";
+
+/// A scene coefficient can be inspected before a solver has selected a provider.
+/// Require the exact current authored or plan-owned data and its physical carrier.
+fn prepared_damping_carriers(
+    snapshot: &SessionStateResponse,
+    spec: &QuantitySpec,
+    scope: &str,
+) -> Option<Vec<FieldCarrierDescriptor>> {
+    if spec.id.as_str() != "mat_alpha" || matches!(scope.trim(), "" | "airbox") {
+        return None;
+    }
+    let raw = snapshot.latest_fields.get("mat_alpha")?;
+    let verified = if crate::live_authored_damping::publication_revision(snapshot).is_some() {
+        crate::live_authored_damping::matches_publication(snapshot, raw)
+    } else {
+        crate::session::authored_material_field_matches_memoized(snapshot, "mat_alpha", raw)
+    };
+    if !verified {
+        return None;
+    }
+    let field = resolve_current_spatial_field_metadata(snapshot, "mat_alpha", 1).ok()??;
+    if field.source_kind != SpatialFieldSourceKind::Materialized {
+        return None;
+    }
+    let identity = full_field_publication_carrier_identity(&field)
+        .or_else(|| super::resolved_spatial_field::authored_multilayer_publication_carrier_identity(&field))?;
+    let mut carriers = current_field_carriers(spec, &identity.scope_kind, identity.scope_id.as_deref(),
+        &identity.carrier_id, Some(&identity.carrier_fingerprint), None);
+    if matches!(field.carrier, SpatialFieldCarrier::FemNodes { .. }) {
+        for carrier in &mut carriers { carrier.indexing = "node".to_owned(); }
+    }
+    (!carriers.is_empty()).then_some(carriers)
+}
+
 pub(crate) fn resolved_quantity_capability_for_snapshot(
     snapshot: &SessionStateResponse,
     spec: &QuantitySpec,
@@ -289,7 +342,13 @@ pub(crate) fn resolved_quantity_capability_for_snapshot(
     let capabilities = snapshot.capabilities.as_ref().filter(|_| {
         !(field_only && spec.domain == fullmag_quantities::QuantityDomain::MagneticOnly)
     });
-    match capabilities {
+    let mut carriers = carriers;
+    if super::field_resolution::current_fem_damping_uses_nodes(snapshot, spec.id.as_str()) {
+        for carrier in &mut carriers { carrier.indexing = "node".to_owned(); }
+    }
+    let requested_damping_carriers = (spec.id.as_str() == "mat_alpha" && !carriers.is_empty())
+        .then(|| carriers.clone());
+    let mut resolved = match capabilities {
         Some(capabilities) => resolve_quantity_capability(
             capabilities,
             spec,
@@ -367,21 +426,30 @@ pub(crate) fn resolved_quantity_capability_for_snapshot(
             }
             unavailable
         }
+    };
+    if !field_only && resolved.provider == fullmag_runner::QuantityProviderCapability::Unavailable {
+        if let Some(verified) = prepared_damping_carriers(snapshot, spec, scope) {
+            resolved.provider = fullmag_runner::QuantityProviderCapability::Available;
+            resolved.request = fullmag_runner::QuantityRequestCapability::FieldVector;
+            resolved.materialization = QuantityMaterializationCapability::Materialized;
+            resolved.render = fullmag_runner::QuantityRenderCapability::Renderable;
+            resolved.reason_code = Some(PREPARED_DAMPING_READ_ONLY.to_owned());
+            resolved.lane = PREPARED_DAMPING_READ_ONLY.to_owned();
+            resolved.carriers = requested_damping_carriers.unwrap_or(verified);
+            resolved.projections = fullmag_runner::resolve_quantity_projection_capabilities(spec,
+                resolved.provider, resolved.request, resolved.materialization, &resolved.carriers);
+        }
     }
+    resolved
 }
 
 /// Keep a prepared initial magnetization readable before a solver provider is
 /// selected, while requiring the field to remain the exact current publication
 /// bound to the prepared mesh workspace and current observation domain.
-fn prepared_initial_state_m_carriers(
+fn legacy_prepared_m_binding(
     snapshot: &SessionStateResponse,
-    spec: &QuantitySpec,
-    scope: &str,
-) -> Option<Vec<FieldCarrierDescriptor>> {
-    if spec.id.as_str() != "m" || scope.trim().is_empty() || scope.trim() == "airbox" {
-        return None;
-    }
-
+    raw: &serde_json::Value,
+) -> Option<()> {
     let workspace = snapshot.mesh_workspace.as_ref()?;
     if workspace.get("status").and_then(serde_json::Value::as_str) != Some("completed") {
         return None;
@@ -401,7 +469,6 @@ fn prepared_initial_state_m_carriers(
         return None;
     }
 
-    let raw = snapshot.latest_fields.get("m")?;
     let provenance = raw.get("provenance")?;
     if provenance.get("source_kind").and_then(serde_json::Value::as_str)
         != Some("prepared_initial_state")
@@ -422,28 +489,37 @@ fn prepared_initial_state_m_carriers(
         return None;
     }
 
-    let source_time_seconds = raw
-        .get("source_time_seconds")
-        .and_then(serde_json::Value::as_f64)
+    Some(())
+}
+
+fn prepared_initial_state_m_carriers(
+    snapshot: &SessionStateResponse,
+    spec: &QuantitySpec,
+    scope: &str,
+) -> Option<Vec<FieldCarrierDescriptor>> {
+    if spec.id.as_str() != "m" || scope.trim().is_empty() || scope.trim() == "airbox" {
+        return None;
+    }
+
+    let raw = snapshot.latest_fields.get("m")?;
+    let source_time_seconds = raw.get("source_time_seconds").and_then(serde_json::Value::as_f64)
         .filter(|time| time.is_finite() && *time >= 0.0)?;
-    let observation_frame = raw
-        .get("observation_frame")
-        .and_then(|value| {
-            serde_json::from_value::<crate::schemas::common::AcceptedObservationFrameRef>(
-                value.clone(),
-            )
-            .ok()
-        })?;
-    if observation_frame.source_step != 0
-        || observation_frame.source_time_seconds != Some(source_time_seconds)
-        || observation_frame
-            != crate::session::accepted_observation_frame_ref(
-                snapshot,
-                0,
-                Some(source_time_seconds),
-            )
+    let frame: crate::schemas::common::AcceptedObservationFrameRef =
+        serde_json::from_value(raw.get("observation_frame")?.clone()).ok()?;
+    if frame.source_step != 0 || frame.source_time_seconds != Some(source_time_seconds)
+        || raw.get("source_step").and_then(serde_json::Value::as_u64) != Some(0)
     {
         return None;
+    }
+    if frame.authored_initial_state.is_some() {
+        if !crate::live_authored_initial_state::qualifies_frame(snapshot, &frame) {
+            return None;
+        }
+    } else {
+        legacy_prepared_m_binding(snapshot, raw)?;
+        if frame != crate::session::accepted_observation_frame_ref(snapshot, 0, Some(source_time_seconds)) {
+            return None;
+        }
     }
 
     // A same-identity preview or legacy live field must not stand in for the
@@ -740,6 +816,19 @@ mod tests {
         );
         assert_eq!(resolved.lane, "unresolved");
         assert_eq!(resolved.reason_code.as_deref(), Some("prepared_initial_state"));
+    }
+
+    #[test]
+    fn running_and_finished_accepted_runs_keep_fields_requestable() {
+        // Regression: H_demag/H_eff stayed "(after Run)" during a running
+        // Docker run, so the UI never demanded them and only m was captured.
+        for status in ["running", "stopping", "completed", "failed", "cancelled"] {
+            assert!(!super::accepted_fields_await_run(true, Some(status)), "{status}");
+        }
+        for status in [None, Some("awaiting_command"), Some("waiting_for_compute")] {
+            assert!(super::accepted_fields_await_run(true, status), "{status:?}");
+        }
+        assert!(!super::accepted_fields_await_run(false, None));
     }
 
     #[test]

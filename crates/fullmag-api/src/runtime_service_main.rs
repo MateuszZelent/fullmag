@@ -1,8 +1,5 @@
 //! Native accepted-run service. UI is an attaching client, never its owner.
-#[path = "accepted_study_supervisor.rs"]
-mod accepted_study_supervisor;
-#[path = "compute_operator_env.rs"]
-mod compute_operator_env;
+use crate::accepted_study_supervisor;
 mod failed_worker_recovery;
 mod failed_preclaim_cancellation;
 mod runtime_service_unclaimed_cancellation;
@@ -10,18 +7,11 @@ mod claimed_worker_interruption;
 use anyhow::{bail, Context, Result};
 use fullmag_session::{
     compute_node_snapshot::Reported,
-    host_resource_ledger::worker_orphan_teardown::{
-        DockerContainerAfterObservation, DockerContainerBeforeObservation,
-        DockerContainerTeardownObservation, DockerDeviceReleaseObservation,
-        DockerNamespaceTeardownResult,
-    },
     host_resource_ledger::{
         DockerNamespaceTeardownAttestation, HostInventoryOwner, HostInventoryOwnerDescriptor,
         HostReservationIdentity, HostReservationOwner, HostResourceLedger,
         HostResourceLedgerPolicy, HostResourceReservation, HostResourceReservationState,
-        HostRuntimeReadiness, HostWorkerLaunchGate, WorkerOrphanContainerBinding,
-        WorkerOrphanContainerScope, WorkerOrphanExpectedEvidence, WorkerOrphanLaunchGate,
-        WorkerOrphanReservationState, WorkerOrphanTeardownRequest,
+        HostRuntimeReadiness, HostWorkerLaunchGate, WorkerOrphanTeardownRequest,
         HOST_RESOURCE_LEDGER_POLICY_SCHEMA_V2, HOST_RESOURCE_LEDGER_POLICY_SCHEMA_V3,
         HOST_RUNTIME_READINESS_SCHEMA_V1, HOST_RUNTIME_READINESS_SCHEMA_V2,
     },
@@ -39,7 +29,20 @@ use fullmag_session::{
     runtime_service_startup::RuntimeServiceStartupGuard,
     FmsPreparationResourceOffer, FmsPreparationResourcePool, FmsResourceBudget, FmsResourceKind,
     FmsResourceLease, FmsResourceLeaseState, FmsSchedulerResourceOffer, FmsSchedulerResourcePool,
-    SessionStore, FMS_PREPARATION_RESOURCE_POOL_SCHEMA, FMS_SCHEDULER_RESOURCE_POOL_SCHEMA,
+    SessionStore,
+};
+#[cfg(test)]
+use fullmag_session::{
+    host_resource_ledger::{
+        worker_orphan_teardown::{
+            DockerContainerAfterObservation, DockerContainerBeforeObservation,
+            DockerContainerTeardownObservation, DockerDeviceReleaseObservation,
+            DockerNamespaceTeardownResult,
+        },
+        WorkerOrphanContainerBinding, WorkerOrphanContainerScope, WorkerOrphanExpectedEvidence,
+        WorkerOrphanLaunchGate, WorkerOrphanReservationState,
+    },
+    FMS_PREPARATION_RESOURCE_POOL_SCHEMA, FMS_SCHEDULER_RESOURCE_POOL_SCHEMA,
 };
 use serde::{Deserialize, Serialize};
 use std::{
@@ -1780,8 +1783,10 @@ fn parse_failed_no_spawn_cancellation_args(
     ))
 }
 
+#[cfg(test)]
 const ORPHAN_TEARDOWN_REQUEST_SCHEMA: &str =
     fullmag_session::host_resource_ledger::HOST_WORKER_ORPHAN_TEARDOWN_REQUEST_SCHEMA;
+#[cfg(test)]
 const ORPHAN_TEARDOWN_ATTESTATION_SCHEMA: &str =
     fullmag_session::host_resource_ledger::DOCKER_NAMESPACE_TEARDOWN_ATTESTATION_SCHEMA;
 const ORPHAN_TEARDOWN_MAX_REQUEST_BYTES: usize = 512 * 1024;
@@ -2284,6 +2289,8 @@ fn cancel_failed_no_spawn(args: impl Iterator<Item = OsString>) -> Result<()> {
     {
         bail!("failed no-spawn cancellation found a worker process exit receipt");
     }
+    fullmag_runtime_control::ensure_admitted_task_coordinator_genesis(&store, &claim)
+        .context("recover exact pre-Prepare admission genesis for no-spawn cancellation")?;
     let recovered = fullmag_runtime_control::recover_coordinator(&store, &claim)?;
     if recovered
         .events
@@ -2529,7 +2536,7 @@ fn run_orphan_teardown(
     Ok(())
 }
 
-fn main() {
+pub(super) fn main() {
     if let Err(error) = run() {
         eprintln!("native runtime service failed: {error:#}");
         std::process::exit(1);

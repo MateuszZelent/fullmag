@@ -34,6 +34,12 @@ pub struct PlanarFieldQuery {
     /// (multislice panels, note 0970). The source hash, and with it the sample
     /// identity, follows the overridden slice.
     pub position_fraction: Option<f64>,
+    /// Sampling window (crop) in the frame's u/v axes, meters. All four or
+    /// none; clipped to the full frame bounds (`eq-planar-sampling-window`).
+    pub window_u_min_m: Option<f64>,
+    pub window_u_max_m: Option<f64>,
+    pub window_v_min_m: Option<f64>,
+    pub window_v_max_m: Option<f64>,
     #[serde(default, with = "crate::schemas::decimal_u64::optional")]
     #[param(value_type = String)]
     pub expected_scene_revision: Option<u64>,
@@ -64,6 +70,9 @@ pub struct PlanarFieldProbeQuery {
     pub position_m: Option<f64>,
     pub u_m: f64,
     pub v_m: f64,
+    /// `node` additionally returns the nearest FEM node or FDM cell centre
+    /// (`eq-planar-nearest-node`); any other value is rejected.
+    pub nearest: Option<String>,
     pub sample_token: Option<String>,
     pub component: Option<String>,
     pub resolution_x: Option<u32>,
@@ -75,6 +84,12 @@ pub struct PlanarFieldProbeQuery {
     pub scope_region_id: Option<String>,
     pub stage_id: Option<String>,
     pub snapshot_id: Option<String>,
+    /// Sampling window (crop) in the frame's u/v axes, meters. All four or
+    /// none; clipped to the full frame bounds (`eq-planar-sampling-window`).
+    pub window_u_min_m: Option<f64>,
+    pub window_u_max_m: Option<f64>,
+    pub window_v_min_m: Option<f64>,
+    pub window_v_max_m: Option<f64>,
     #[serde(default, with = "crate::schemas::decimal_u64::optional")]
     #[param(value_type = String)]
     pub expected_scene_revision: Option<u64>,
@@ -101,7 +116,10 @@ pub struct PlanarFieldFrameResource {
     pub u_axis: [f64; 3],
     pub v_axis: [f64; 3],
     pub normal: [f64; 3],
+    /// Sampled u/v window; equals `full_bounds_uv_m` without a window.
     pub bounds_uv_m: [f64; 4],
+    /// Full u/v bounds of the resolved frame.
+    pub full_bounds_uv_m: [f64; 4],
 }
 
 #[derive(Debug, Clone, Serialize, ToSchema)]
@@ -270,6 +288,12 @@ pub struct PlanarFieldProfileQuery {
     pub scope_region_id: Option<String>,
     pub stage_id: Option<String>,
     pub snapshot_id: Option<String>,
+    /// Sampling window (crop) in the frame's u/v axes, meters. All four or
+    /// none; clipped to the full frame bounds (`eq-planar-sampling-window`).
+    pub window_u_min_m: Option<f64>,
+    pub window_u_max_m: Option<f64>,
+    pub window_v_min_m: Option<f64>,
+    pub window_v_max_m: Option<f64>,
     #[serde(default, with = "crate::schemas::decimal_u64::optional")]
     #[param(value_type = String)]
     pub expected_scene_revision: Option<u64>,
@@ -336,6 +360,32 @@ pub struct PlanarFieldProbeResource {
     pub element_id: Option<u32>,
     pub occupancy: String,
     pub sampling_method: String,
+    /// Nearest FEM node or FDM cell centre when `nearest=node` was requested
+    /// and `nearest_node_status` is `ok`.
+    pub nearest_node: Option<PlanarProbeNodeResource>,
+    /// `not_requested`, `ok`, `empty`, `unsupported_operator` or
+    /// `unsupported_quantity`.
+    pub nearest_node_status: String,
+}
+
+/// Nearest discretization node of a probe point (`eq-planar-nearest-node`):
+/// the closest vertex of the containing FEM element, or the containing FDM
+/// cell centre, with its value without interpolation.
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct PlanarProbeNodeResource {
+    /// `fem_node` or `fdm_cell_center`.
+    pub kind: String,
+    /// Mesh node index or cell index.
+    pub node_id: u32,
+    pub world_m: [f64; 3],
+    /// Projection of the node onto the frame.
+    pub u_m: f64,
+    pub v_m: f64,
+    pub in_plane_distance_m: f64,
+    /// Signed distance of the node from the plane along the frame normal.
+    pub normal_offset_m: f64,
+    pub scalar: Option<f64>,
+    pub vector: Option<[f64; 3]>,
 }
 
 impl From<&PlanarOperatorIR> for PlanarOperatorSchema {

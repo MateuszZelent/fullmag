@@ -27,6 +27,8 @@ def _without_source_identity(problem_ir: dict[str, object]) -> dict[str, object]
     problem_meta.pop("source_hash", None)
     runtime_metadata = dict(problem_meta.get("runtime_metadata") or {})
     runtime_metadata.pop("output_storage_source_stem", None)
+    # The scene has an editor asset inventory that a hand-written script may omit.
+    runtime_metadata.pop("material_assets", None)
     problem_meta["runtime_metadata"] = runtime_metadata
     comparable["problem_meta"] = problem_meta
     return comparable

@@ -17,9 +17,9 @@ use fullmag_ir::{
 use fullmag_ir::{ChargePotentialGaugeIR, TransportCouplingIR};
 use sha2::{Digest, Sha256};
 
+use crate::PlanError;
 use crate::physics_graph::physics_module_execution_enabled;
 use crate::surface_selectors::resolve_fem_surface_selector;
-use crate::PlanError;
 
 const FEM_STAGE_OERSTED_CALLBACK_POLICY: &str = "fem_stage_oersted_callback.v1";
 const FEM_STAGE_TRANSPORT_CALLBACK_POLICY: &str = "fem_stage_transport_callback.v1";
@@ -74,19 +74,23 @@ pub(crate) struct FdmSpinTransportResolutionContext<'a> {
 }
 
 #[derive(Debug, Default)]
-pub(crate) struct ActiveFdmTransportGraph {
+/// Physics-graph activation of spin transport and transport-torque modules.
+///
+/// Activation is a property of the authored physics graph, not of the
+/// discretization, so FDM and FEM planning share this single owner.
+pub(crate) struct ActiveTransportGraph {
     pub spin_module_ids: BTreeSet<String>,
     pub torque_module_ids: BTreeSet<String>,
     pub coupled_current_source_ids: BTreeSet<String>,
     pub has_active_torque_modules: bool,
 }
 
-pub(crate) fn resolve_active_fdm_transport_graph(
+pub(crate) fn resolve_active_transport_graph(
     problem: &ProblemIR,
-) -> Result<ActiveFdmTransportGraph, PlanError> {
-    let mut graph = ActiveFdmTransportGraph {
+) -> Result<ActiveTransportGraph, PlanError> {
+    let mut graph = ActiveTransportGraph {
         has_active_torque_modules: crate::spin_torque::has_active_spin_torque_modules(problem)?,
-        ..ActiveFdmTransportGraph::default()
+        ..ActiveTransportGraph::default()
     };
     let mut errors = Vec::new();
 
@@ -172,7 +176,7 @@ pub(crate) fn resolve_spin_transport(
     resolved_backend: BackendTarget,
     context: &FdmSpinTransportResolutionContext<'_>,
 ) -> Result<Vec<ResolvedSpinTransportPlanIR>, PlanError> {
-    let active_graph = resolve_active_fdm_transport_graph(problem)?;
+    let active_graph = resolve_active_transport_graph(problem)?;
     resolve_spin_transport_with_active_graph(problem, resolved_backend, context, &active_graph)
 }
 
@@ -180,7 +184,7 @@ pub(crate) fn resolve_spin_transport_with_active_graph(
     problem: &ProblemIR,
     resolved_backend: BackendTarget,
     context: &FdmSpinTransportResolutionContext<'_>,
-    active_graph: &ActiveFdmTransportGraph,
+    active_graph: &ActiveTransportGraph,
 ) -> Result<Vec<ResolvedSpinTransportPlanIR>, PlanError> {
     let mut plans = Vec::with_capacity(problem.spin_transport_modules.len());
     let mut errors = Vec::new();
@@ -441,6 +445,14 @@ pub(crate) fn resolve_spin_transport_with_active_graph(
             time_envelope,
             active_graph,
         );
+        // Every external face defaulted means the planner, not the author,
+        // supplied the spin boundary condition; provenance must say so.
+        let inserted_all_spin_defaults = descriptor.as_ref().is_ok_and(|descriptor| {
+            descriptor
+                .spin_boundaries
+                .iter()
+                .all(|face| face.source_id == DEFAULT_SPIN_INSULATING_SOURCE_ID)
+        });
         let (fdm_cpu_double, fdm_gpu_double, fdm_cpu_double_reciprocal, fdm_cpu_double_transient) =
             match descriptor {
                 Ok(descriptor) if public_gpu_m1_candidate => (None, Some(descriptor), None, None),
@@ -520,9 +532,7 @@ pub(crate) fn resolve_spin_transport_with_active_graph(
                     "transport.coupling.one_way".to_string(),
                 ]
             },
-            inserted_default_boundaries: if module.boundaries.is_empty()
-                && module.solver.default_external_boundary == "spin_insulating"
-            {
+            inserted_default_boundaries: if inserted_all_spin_defaults {
                 vec!["all_unassigned_external_surfaces".to_string()]
             } else {
                 Vec::new()
@@ -1096,9 +1106,13 @@ pub(crate) fn resolve_m1_fem_spin_transport(
     saturation_magnetization_apm: f64,
     gamma0_m_per_a_s: f64,
 ) -> Result<Vec<ResolvedSpinTransportPlanIR>, PlanError> {
+    let active_graph = resolve_active_transport_graph(problem)?;
     let mut plans = Vec::with_capacity(problem.spin_transport_modules.len());
     let mut errors = Vec::new();
     for module in &problem.spin_transport_modules {
+        if !active_graph.spin_module_ids.contains(&module.id) {
+            continue;
+        }
         let prefix = format!("FEM spin transport '{}'", module.id);
         if module.boundaries.iter().any(|boundary| {
             matches!(boundary, SpinBoundaryIR::HomogeneousSpinPotentialGradient { .. })
@@ -1269,6 +1283,7 @@ pub(crate) fn resolve_m1_fem_spin_transport(
             gamma0_m_per_a_s,
             reciprocal,
             time_envelope,
+            &active_graph,
         );
         match descriptor {
             Ok(descriptor) => plans.push(ResolvedSpinTransportPlanIR {
@@ -1327,6 +1342,7 @@ fn materialize_fem_descriptor(
     gamma0_m_per_a_s: f64,
     reciprocal: bool,
     time_envelope: Option<&fullmag_ir::TimeEnvelopeIR>,
+    active_graph: &ActiveTransportGraph,
 ) -> Result<ResolvedFemSpinTransportIR, Vec<String>> {
     let prefix = format!("FEM spin transport '{}'", module.id);
     let charge_components = materialize_fem_charge_components(
@@ -1475,20 +1491,30 @@ fn materialize_fem_descriptor(
             SpinInterfaceIR::MixingConductance { .. } => None,
         })
         .collect();
-    let torque_target = problem
+    let matching_torques: Vec<_> = problem
         .spin_torque_modules
         .iter()
-        .find_map(|torque| match torque {
+        .filter_map(|torque| match torque {
             SpinTorqueModuleIR::DriftDiffusionSpinTorque {
                 id,
                 solve_id,
                 target,
                 formula_version,
                 ..
-            } if solve_id == &module.id => Some((id, target, formula_version)),
+            } if solve_id == &module.id && active_graph.torque_module_ids.contains(id) => {
+                Some((id, target, formula_version))
+            }
             _ => None,
-        });
-    let torque_target = torque_target
+        })
+        .collect();
+    if matching_torques.len() > 1 {
+        return Err(vec![format!(
+            "{prefix} has more than one active DriftDiffusionSpinTorque consumer"
+        )]);
+    }
+    let torque_target = matching_torques
+        .into_iter()
+        .next()
         .map(|(id, target, formula_version)| -> Result<_, Vec<String>> {
             Ok(fullmag_ir::ResolvedFemTorqueTargetIR {
                 torque_module_id: id.clone(),
@@ -2646,7 +2672,7 @@ fn materialize_fdm_descriptor(
     charge: &fullmag_ir::ChargeTransportDefinitionIR,
     context: &FdmSpinTransportResolutionContext<'_>,
     time_envelope: Option<&fullmag_ir::TimeEnvelopeIR>,
-    active_graph: &ActiveFdmTransportGraph,
+    active_graph: &ActiveTransportGraph,
 ) -> Result<ResolvedFdmSpinTransportIR, Vec<String>> {
     if charge.external_lead_preparation.is_some() {
         return Err(vec![format!("spin transport '{}' external_lead_preparation requires execution-only materialization; no FDM fallback", module.id)]);
@@ -2759,7 +2785,12 @@ fn materialize_fdm_descriptor(
     )?;
     let structured_current_closure =
         materialize_structured_current_closure(problem, charge, &charge_active_cells, context)?;
-    let spin_boundaries = resolve_spin_boundaries(&module.boundaries, &spin_active_cells, context)?;
+    let spin_boundaries = resolve_spin_boundaries(
+        &module.boundaries,
+        &module.solver.default_external_boundary,
+        &spin_active_cells,
+        context,
+    )?;
     let interfaces = resolve_interfaces(module, context)?;
 
     let mut matching_torques = Vec::new();
@@ -3908,8 +3939,13 @@ fn spin_condition_is_neutral(condition: &ResolvedSpinBoundaryConditionIR) -> boo
     }
 }
 
+/// Source id of a SpinInsulating face inserted by the planner rather than
+/// authored. Provenance derives `inserted_default_boundaries` from it.
+const DEFAULT_SPIN_INSULATING_SOURCE_ID: &str = "default:spin_insulating";
+
 fn resolve_spin_boundaries(
     boundaries: &[SpinBoundaryIR],
+    default_external_boundary: &str,
     spin_active_cells: &[bool],
     context: &FdmSpinTransportResolutionContext<'_>,
 ) -> Result<Vec<ResolvedSpinBoundaryFaceIR>, Vec<String>> {
@@ -4004,10 +4040,15 @@ fn resolve_spin_boundaries(
     }
 
     if claims.is_empty() {
+        if default_external_boundary != "spin_insulating" {
+            return Err(vec![format!(
+                "no authored spin boundary claims an active external FDM face and default_external_boundary='{default_external_boundary}' forbids inserting SpinInsulating; fallback=none"
+            )]);
+        }
         return Ok(all_boundary_faces()
             .into_iter()
             .map(|face| ResolvedSpinBoundaryFaceIR {
-                source_id: "default:spin_insulating".to_string(),
+                source_id: DEFAULT_SPIN_INSULATING_SOURCE_ID.to_string(),
                 face,
                 condition: ResolvedSpinBoundaryConditionIR::SpinInsulating,
             })
@@ -4023,7 +4064,7 @@ fn resolve_spin_boundaries(
             .collect::<Vec<_>>();
         if active.is_empty() {
             resolved.push(ResolvedSpinBoundaryFaceIR {
-                source_id: "default:spin_insulating".to_string(),
+                source_id: DEFAULT_SPIN_INSULATING_SOURCE_ID.to_string(),
                 face,
                 condition: ResolvedSpinBoundaryConditionIR::SpinInsulating,
             });
@@ -4222,6 +4263,8 @@ fn internal_faces(grid: [u32; 3], axis: u8) -> Vec<StructuredInternalFaceIR> {
 
 #[cfg(test)]
 mod tests {
+    use std::process::Command;
+
     use super::*;
     use fullmag_ir::*;
 
@@ -4356,6 +4399,73 @@ mod tests {
             formula_version: "transport_torque_angular_momentum.fullmag.v1".into(),
         }];
         problem
+    }
+
+    #[test]
+    fn slonczewski_time_expression_rejects_coupled_spin_transport() {
+        let mut problem = problem(ExecutionDevice::Cpu);
+        problem.validation_profile.execution_mode = ExecutionMode::Extended;
+        let StudyIR::TimeEvolution {
+            dynamics: DynamicsIR::Llg { integrator, .. },
+            ..
+        } = &mut problem.study
+        else {
+            panic!("fixture uses time evolution");
+        };
+        *integrator = "rk45".into();
+        let CurrentModuleIR::CurrentTransport {
+            solve_region,
+            conductivity_s_per_m,
+            ..
+        } = &mut problem.current_modules[0]
+        else {
+            unreachable!("fixture uses a complete charge transport");
+        };
+        *solve_region = None;
+        *conductivity_s_per_m = None;
+        problem.spin_transport_modules[0].requested_execution.execution_mode =
+            ExecutionMode::Extended;
+        // This test is about the explicit J(t) + transport incompatibility;
+        // remove magnetic spin sinks so the Slonczewski module does not also
+        // need a DriftDiffusionSpinTorque consumer to satisfy an unrelated
+        // transport invariant.
+        problem.spin_transport_modules[0].materials[0].material.lambda_j_m =
+            ReactionLengthIR::Disabled(DisabledReactionIR::Disabled);
+        crate::plan(&problem)
+            .expect("the complete coupled transport fixture is valid without a J(t) torque");
+
+        problem.spin_torque_modules = vec![SpinTorqueModuleIR::Slonczewski {
+            schema_version: Some("slonczewski_torque.v1".into()),
+            id: Some("cpp-time-drive".into()),
+            target: Some(RegionRefIR {
+                object_id: "strip".into(),
+                region_id: None,
+            }),
+            formula_version: "slonczewski.fullmag.v2".into(),
+            current_density: Some([0.0, 0.0, 1.0e10]),
+            current_source: None,
+            degree: 0.3,
+            spin_polarization: [0.0, 1.0, 0.0],
+            stack_normal: Some([0.0, 0.0, 1.0]),
+            lambda_asymmetry: 1.0,
+            epsilon_prime: 0.0,
+            free_layer_thickness_m: Some(1.0e-9),
+            fixed_layer_position: None,
+            realization: Some(SlonczewskiRealizationIR::ThinLayerHomogenized {
+                realization_version: "slonczewski_thin_layer_homogenized.v1".into(),
+            }),
+            time_expression: Some(TimeExpressionIR {
+                source: "1".into(),
+                constants: Default::default(),
+                event_times_s: Vec::new(),
+            }),
+        }];
+
+        let error = crate::plan(&problem)
+            .expect_err("time-dependent Slonczewski torque cannot share the coupled transport lane");
+        assert!(error.reasons.iter().any(|reason| {
+            reason.contains("time_expression") && reason.contains("coupled spin/charge transport")
+        }), "unexpected planner diagnostics: {:?}", error.reasons);
     }
 
     #[test]
@@ -4697,6 +4807,32 @@ mod tests {
         )
         .expect_err("open conductor must have no return path");
         assert!(errors.iter().any(|error| error.contains("return path")));
+    }
+
+    #[test]
+    fn reject_unassigned_spin_boundary_policy_fails_closed_without_claims() {
+        let owners = ["strip"];
+        let region_mask = [0];
+        let magnetization = [[0.0, 0.0, 1.0]];
+        let ms = [8.0e5];
+        let region_ids = BTreeMap::new();
+        let context = context(&owners, &region_mask, &magnetization, &ms, &region_ids);
+        let mut problem = problem(ExecutionDevice::Cpu);
+        assert!(problem.spin_transport_modules[0].boundaries.is_empty());
+        problem.spin_transport_modules[0]
+            .solver
+            .default_external_boundary = "reject_unassigned".into();
+
+        let error = resolve_spin_transport(&problem, BackendTarget::Fdm, &context)
+            .expect_err("reject_unassigned must not be silently replaced by SpinInsulating");
+        assert!(
+            error
+                .reasons
+                .iter()
+                .any(|reason| reason.contains("reject_unassigned") && reason.contains("fallback=none")),
+            "{:?}",
+            error.reasons
+        );
     }
 
     #[test]
@@ -5173,6 +5309,165 @@ mod tests {
             parent_id: None,
         };
         (mesh, vec![segment], vec![part])
+    }
+
+    #[test]
+    fn public_fem_m2_python_example_resolves_through_full_planner() {
+        let repo_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../..")
+            .canonicalize()
+            .expect("repository root");
+        let mut python_paths = vec![repo_root.join("packages/fullmag-py/src")];
+        if let Some(existing) = std::env::var_os("PYTHONPATH") {
+            python_paths.extend(std::env::split_paths(&existing));
+        }
+        let python_path = std::env::join_paths(python_paths).expect("PYTHONPATH");
+        let output = Command::new("python3")
+            .args([
+                "-B",
+                "-m",
+                "fullmag.runtime.helper",
+                "export-run-config",
+                "--script",
+                "examples/fem_reciprocal_m2_public.py",
+                "--backend",
+                "fem",
+                "--mode",
+                "strict",
+                "--precision",
+                "double",
+            ])
+            .current_dir(&repo_root)
+            .env("PYTHONPATH", python_path)
+            .output()
+            .expect("Python runtime is installed for spin-transport planner contracts");
+        assert!(
+            output.status.success(),
+            "public FEM M2 example export failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+
+        let exported: serde_json::Value =
+            serde_json::from_slice(&output.stdout).expect("run-config JSON");
+        let runtime_metadata = &exported["stages"][0]["ir"]["problem_meta"]["runtime_metadata"];
+        assert!(
+            runtime_metadata["study_universe"].is_null(),
+            "the transport-only fixture must not add an air or shared-domain region"
+        );
+        assert_eq!(runtime_metadata["mesh_workflow"]["build_target"], "mesh");
+        assert_eq!(
+            runtime_metadata["mesh_workflow"]["per_geometry"][0]["source"],
+            "fem_reciprocal_m2_public_mesh.npz"
+        );
+        let charge_boundaries =
+            &exported["stages"][0]["ir"]["current_modules"][0]["boundaries"];
+        assert_eq!(charge_boundaries[0]["surfaces"][0]["surface_id"], "left");
+        assert_eq!(charge_boundaries[1]["surfaces"][0]["surface_id"], "right");
+        let stage_ir = exported["stages"][0]["ir"].clone();
+        let mut problem: ProblemIR =
+            serde_json::from_value(stage_ir).expect("public example ProblemIR");
+        // Run-config export stores one common mesh at the root and compacts
+        // equal per-stage geometry_assets to null. The canonical script-stage
+        // materializer restores this shared asset before planning.
+        if problem.geometry_assets.is_none() {
+            let shared_geometry_assets = &exported["shared_geometry_assets"];
+            assert!(
+                !shared_geometry_assets.is_null(),
+                "public example run config must provide shared FEM geometry assets"
+            );
+            problem.geometry_assets = Some(
+                serde_json::from_value(shared_geometry_assets.clone())
+                    .expect("canonical shared geometry assets"),
+            );
+        }
+        // The portable per-object P1 asset must reach the planner as a real
+        // mesh. The transport-only example deliberately has no shared air mesh.
+        let body_mesh = problem
+            .geometry_assets
+            .as_ref()
+            .and_then(|assets| {
+                assets
+                    .fem_mesh_assets
+                    .iter()
+                    .find(|asset| asset.geometry_name == "m2_body_geom")
+            })
+            .expect("public example's explicit body MeshData asset");
+        let mesh = body_mesh
+            .mesh
+            .as_ref()
+            .expect("public example's per-object MeshData");
+        assert!(
+            !mesh.nodes.is_empty() && mesh.cell_count() == 12 && mesh.facet_count() == 12,
+            "public example must materialize the complete tagged Tet4 body mesh"
+        );
+        let bounds_min = std::array::from_fn::<_, 3, _>(|axis| {
+            mesh.nodes
+                .iter()
+                .map(|node| node[axis])
+                .fold(f64::INFINITY, f64::min)
+        });
+        let bounds_max = std::array::from_fn::<_, 3, _>(|axis| {
+            mesh.nodes
+                .iter()
+                .map(|node| node[axis])
+                .fold(f64::NEG_INFINITY, f64::max)
+        });
+        let markers_on_face = |axis: usize, coordinate: f64| {
+            (0..mesh.facet_count())
+                .filter_map(|index| {
+                    let nodes = mesh.facets.item_nodes(index)?;
+                    nodes
+                        .iter()
+                        .all(|node| {
+                            (mesh.nodes[*node as usize][axis] - coordinate).abs() <= 1.0e-20
+                        })
+                        .then_some(mesh.boundary_markers[index])
+                })
+                .collect::<BTreeSet<_>>()
+        };
+        let left_markers = markers_on_face(0, bounds_min[0]);
+        let right_markers = markers_on_face(0, bounds_max[0]);
+        assert_eq!(left_markers, BTreeSet::from([101]));
+        assert_eq!(right_markers, BTreeSet::from([102]));
+        assert!(left_markers.is_disjoint(&right_markers));
+        for (axis, coordinate, marker) in [
+            (1, bounds_min[1], 103),
+            (1, bounds_max[1], 104),
+            (2, bounds_min[2], 105),
+            (2, bounds_max[2], 106),
+        ] {
+            assert_eq!(markers_on_face(axis, coordinate), BTreeSet::from([marker]));
+        }
+
+        let plan = crate::plan(&problem).unwrap_or_else(|error| {
+            panic!(
+                "public FEM M2 example did not plan: {}",
+                error.reasons.join("; ")
+            )
+        });
+        let BackendPlanIR::Fem(fem) = plan.backend_plan else {
+            panic!("public FEM M2 example did not resolve to a FEM plan");
+        };
+        let spin = fem
+            .spin_transport_plans
+            .iter()
+            .find(|candidate| candidate.module_id == "m2_spin")
+            .expect("public example spin transport plan");
+        assert_eq!(spin.resolved_coupling, TransportCouplingIR::Bidirectional);
+        assert_eq!(spin.resolved_discretization, BackendTarget::Fem);
+        assert_eq!(spin.resolved_device, ExecutionDevice::Cpu);
+        let descriptor = spin
+            .fem_cpu_double
+            .as_ref()
+            .expect("public example FEM M2 descriptor");
+        assert_eq!(descriptor.charge_domain.element_mask, [true; 12]);
+        assert_eq!(descriptor.charge_dirichlet, [(101, 0.0), (102, 1.0e-3)]);
+        let sidewalls = descriptor
+            .charge_insulating_boundaries
+            .iter()
+            .find(|boundary| boundary.id == "sidewalls")
+            .expect("public example sidewall insulation");
+        assert_eq!(sidewalls.boundary_attributes, [103, 104, 105, 106]);
     }
 
     fn cube_closed_current_view(mesh: &MeshIR) -> ResolvedFemConservativeCurrentViewIR {
@@ -5922,6 +6217,54 @@ mod tests {
         assert_eq!(
             descriptor.validation_scope,
             "fem_cpu_double_conforming_h1_p1_reciprocal_m2"
+        );
+    }
+
+    #[test]
+    fn fem_planning_omits_spin_transport_inactive_in_physics_graph() {
+        let (mesh, segments, parts) = fem_mesh_fixture();
+        let mut problem = fem_problem();
+        problem.backend_policy.requested_backend = BackendTarget::Fem;
+        problem.spin_transport_modules[0]
+            .requested_execution
+            .discretization = BackendTarget::Fem;
+        problem.physics_graph = Some(serde_json::json!({
+            "schema_version": "physics_graph.v1",
+            "scene_revision": 1,
+            "modules": [
+                {
+                    "id": "charge",
+                    "kind": "current_transport",
+                    "applies_to": [{"kind": "global"}],
+                    "solve_domain": [],
+                    "depends_on": [],
+                    "activation": "active"
+                },
+                {
+                    "id": "spin",
+                    "kind": "spin_transport",
+                    "applies_to": [{"kind": "global"}],
+                    "solve_domain": [],
+                    "depends_on": [],
+                    "activation": "inactive"
+                }
+            ],
+            "edges": []
+        }));
+
+        let plans = resolve_m1_fem_spin_transport(
+            &problem,
+            &mesh,
+            &segments,
+            &parts,
+            &[[0.0, 0.0, 1.0]; 8],
+            8.0e5,
+            2.211e5,
+        )
+        .expect("an inactive FEM spin transport is omitted, not rejected");
+        assert!(
+            plans.is_empty(),
+            "physics_graph activation must gate FEM spin transport exactly as on FDM"
         );
     }
 

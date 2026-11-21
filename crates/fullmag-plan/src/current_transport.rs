@@ -149,7 +149,7 @@ pub(crate) fn resolve_fdm_gpu_charge_transports(
     resolved_backend: BackendTarget,
     context: &crate::spin_transport::FdmSpinTransportResolutionContext<'_>,
 ) -> Result<Vec<ResolvedFdmGpuChargeTransportIR>, PlanError> {
-    let active_graph = crate::spin_transport::resolve_active_fdm_transport_graph(problem)?;
+    let active_graph = crate::spin_transport::resolve_active_transport_graph(problem)?;
     resolve_fdm_gpu_charge_transports_with_active_graph(
         problem,
         resolved_backend,
@@ -162,7 +162,7 @@ pub(crate) fn resolve_fdm_gpu_charge_transports_with_active_graph(
     problem: &ProblemIR,
     resolved_backend: BackendTarget,
     context: &crate::spin_transport::FdmSpinTransportResolutionContext<'_>,
-    active_graph: &crate::spin_transport::ActiveFdmTransportGraph,
+    active_graph: &crate::spin_transport::ActiveTransportGraph,
 ) -> Result<Vec<ResolvedFdmGpuChargeTransportIR>, PlanError> {
     let mut graph_reasons = Vec::new();
     let mut active_modules = Vec::new();

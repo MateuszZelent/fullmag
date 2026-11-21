@@ -86,7 +86,7 @@ function BranchDetail({ branch }: { branch: HysteresisBranchSchema }) {
       )}
       {branch.points.length > 0 ? (
         <div className="fm-hysteresis-inspector-table-wrap">
-          <table className="fm-hysteresis-inspector-table">
+          <table className="fm-hysteresis-inspector-table tabular-nums">
             <thead>
               <tr>
                 <th>Point</th>
@@ -120,7 +120,7 @@ function MinorLoopCard({ loop }: { loop: HysteresisMinorLoopSchema }) {
   return (
     <div className="fm-hysteresis-inspector-step">
       <div className="fm-hysteresis-inspector-step__header">
-        <span className="fm-hysteresis-inspector-step__title">{loop.loop_id}</span>
+        <span className="fm-hysteresis-inspector-step__title" title={loop.loop_id}>{loop.loop_id}</span>
         <span className="fm-hysteresis-inspector-step__method">
           {loop.closure_status ?? "closure unknown"}
         </span>

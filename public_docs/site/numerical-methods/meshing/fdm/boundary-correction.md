@@ -36,10 +36,10 @@ E_h = \sum_i \phi_i V_\mathrm{cell} w_i .
 
 | Symbol | Meaning | SI unit |
 | --- | --- | --- |
-| $E_h$ | discrete energy | J |
-| $\phi_i$ | magnetic cell occupancy | 1 |
-| $V_\mathrm{cell}$ | Cartesian cell volume | m^3 |
-| $w_i$ | discrete energy density | J m^-3 |
+| $E_h$ | discrete energy | $\mathrm{J}$ |
+| $\phi_i$ | magnetic cell occupancy | $1$ |
+| $V_\mathrm{cell}$ | Cartesian cell volume | $\mathrm{m^3}$ |
+| $w_i$ | discrete energy density | $\mathrm{J\,m^{-3}}$ |
 
 (fdm-boundary-correction-assumptions-and-validity)=
 ## Assumptions and validity
@@ -71,9 +71,9 @@ study.stages.add_relax(stage_id="equilibrium", dt=5.0e-13, max_steps=1)
 
 | Python | Type | Default | SI unit | Validation | Meaning | Backend support | ProblemIR |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| `boundary_correction` | `str \| None` | `None` | 1 | `none`, `volume`, or `full` | requested correction tier | FDM CPU source-backed; GPU capability-gated; FEM not applicable | `backend_policy.discretization_hints.fdm.boundary_correction` |
-| `boundary_phi_floor` | `float \| None` | `None` | 1 | strictly in `(0, 1)` | requested occupancy floor | FDM CPU source-backed; GPU capability-gated; FEM not applicable | `backend_policy.discretization_hints.fdm.boundary_phi_floor` |
-| `boundary_delta_min` | `float \| None` | `None` | m | rejects values `< 0.0`; zero, positive values, and `NaN` pass | requested length regularizer | FDM CPU source-backed; GPU capability-gated; FEM not applicable | `backend_policy.discretization_hints.fdm.boundary_delta_min` |
+| `boundary_correction` | `str \| None` | `None` | $1$ | `none`, `volume`, or `full` | requested correction tier | FDM CPU source-backed; GPU capability-gated; FEM not applicable | `backend_policy.discretization_hints.fdm.boundary_correction` |
+| `boundary_phi_floor` | `float \| None` | `None` | $1$ | strictly in `(0, 1)` | requested occupancy floor | FDM CPU source-backed; GPU capability-gated; FEM not applicable | `backend_policy.discretization_hints.fdm.boundary_phi_floor` |
+| `boundary_delta_min` | `float \| None` | `None` | $\mathrm{m}$ | rejects values `< 0.0`; zero, positive values, and `NaN` pass | requested length regularizer | FDM CPU source-backed; GPU capability-gated; FEM not applicable | `backend_policy.discretization_hints.fdm.boundary_delta_min` |
 
 (fdm-boundary-correction-problem-ir)=
 ## ProblemIR

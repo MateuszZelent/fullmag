@@ -10,7 +10,6 @@ owner: fullmag-public-docs
 # FDM multilayer convolution: Python, ProblemIR, and UI
 
 (python-api-fdm-multilayer-convolution-problem-statement)=
-<!-- (problem-statement)= -->
 ## What this guide configures
 
 This page is the authoring guide for Fullmag's FDM multilayer demagnetization path. It shows how
@@ -34,7 +33,6 @@ use `cell_size=(dx, dy, dz)`. The common domain is FFT scratch, not an extra mag
 Layer separation still comes only from geometry transforms and the resulting native-grid origins.
 
 (python-api-fdm-multilayer-convolution-governing-equations)=
-<!-- (governing-equations)= -->
 ## Authoring-to-grid relations
 
 For layer $\ell$, Fullmag realizes the cell-center coordinates from the native origin and authored
@@ -78,7 +76,6 @@ These relations define the numerical layout only. They do not replace the demagn
 energy equations on the physics page.
 
 (python-api-fdm-multilayer-convolution-symbols-and-si-units)=
-<!-- (symbols-and-si-units)= -->
 ## Symbols and SI units
 
 | Symbol | Meaning | SI unit |
@@ -101,7 +98,6 @@ energy equations on the physics page.
 | $K_{\mathrm{unique}}$ | number of distinct reuse keys, not merely distinct physical separations | $1$ |
 
 (python-api-fdm-multilayer-convolution-assumptions-and-validity)=
-<!-- (assumptions-and-validity)= -->
 ## Assumptions and validity
 
 The planner forms a computational common-scratch envelope from the union of every native XY
@@ -121,7 +117,6 @@ only. CUDA FP32/FP64 has separate runtime and qualification requirements; repres
 Python or `ProblemIR` is not proof that a requested GPU lane executed.
 
 (python-api-fdm-multilayer-convolution-python-api)=
-<!-- (python-api)= -->
 ## Python API
 
 ### Complete parameter reference
@@ -274,7 +269,6 @@ unavailable-reason identifier shown above. The current materializer ignores this
 non-CPU-reference execution engine and rejects non-FP64 provenance.
 
 (python-api-fdm-multilayer-convolution-problem-ir)=
-<!-- (problem-ir)= -->
 ## Canonical ProblemIR
 
 The public mesh-authoring calls produce `backend_policy.discretization_hints.fdm`. The following JSON is the
@@ -362,7 +356,6 @@ scopes. The target-only Airbox uses `airbox` scope and publishes `H_demag` only;
 projects a field from the common transform layout.
 
 (python-api-fdm-multilayer-convolution-round-trip-and-failure-semantics)=
-<!-- (round-trip-and-failure-semantics)= -->
 ## Round-trip, requested intent, and failure semantics
 
 **Requested intent** is the Python/UI strategy, mode, native cell sizes, optional common-grid counts,
@@ -384,7 +377,6 @@ round-trip through authoring state and generated Python even though it does not 
 `ProblemIR`.
 
 (python-api-fdm-multilayer-convolution-discrete-realization)=
-<!-- (discrete-realization)= -->
 ## Backend support and qualification
 
 | Solver | Device | Authoring/IR | Runtime state | Qualification boundary |
@@ -395,7 +387,6 @@ round-trip through authoring state and generated Python even though it does not 
 | FEM | GPU | not applicable | FEM demagnetization uses MFEM/hypre/libCEED realizations, not FDM multilayer convolution | Select a documented FEM GPU demag realization instead. |
 
 (python-api-fdm-multilayer-convolution-implementation-mapping)=
-<!-- (implementation-mapping)= -->
 ## Control Room workflow
 
 ### Enable and configure the method
@@ -482,7 +473,6 @@ invalid target metadata, a mismatched fingerprint, an unsupported quantity, or n
 provenance must not produce a substitute carrier.
 
 (python-api-fdm-multilayer-convolution-validation)=
-<!-- (validation)= -->
 ## Validation checklist
 
 Before treating a configuration as executable, verify:
@@ -499,7 +489,6 @@ Before treating a configuration as executable, verify:
   receipt as described above.
 
 (python-api-fdm-multilayer-convolution-limitations)=
-<!-- (limitations)= -->
 ## Limitations
 
 The public constructors describe more combinations than are production-qualified. The common grid
@@ -510,7 +499,6 @@ capability-gated physics listed under assumptions remain unavailable. Fresh brow
 for every Airbox display mode and fresh managed CUDA parity are separate release gates.
 
 (python-api-fdm-multilayer-convolution-scientific-bibliography)=
-<!-- (scientific-bibliography)= -->
 ## Scientific bibliography
 
 The physical derivation and primary literature are collected on
@@ -519,7 +507,6 @@ repository implementation and tests as the source of truth for public API, `Prob
 runtime-resource, and UI behavior.
 
 (python-api-fdm-multilayer-convolution-source-code-index)=
-<!-- (source-code-index)= -->
 
 ## Source-code index
 

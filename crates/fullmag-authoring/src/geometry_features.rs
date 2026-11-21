@@ -296,6 +296,7 @@ fn parse_geometry(value: &Value) -> Option<SceneGeometry> {
         .unwrap_or_else(|| Value::Object(object.clone()));
     Some(SceneGeometry {
         geometry_name: object.get("geometry_name").and_then(Value::as_str).map(str::to_string),
+        source_asset: None,
         geometry_kind: kind,
         geometry_params: parameters,
         bounds_min: None,
@@ -396,6 +397,7 @@ mod tests {
     fn feature_ids_and_paths_are_stable_for_nested_csg() {
         let scene = scene_with_geometry(SceneGeometry {
             geometry_name: None,
+            source_asset: None,
             geometry_kind: "Difference".to_string(),
             geometry_params: json!({
                 "base": {"geometry_kind": "Box", "geometry_params": {"size": [4.0, 4.0, 1.0]}},
@@ -431,6 +433,7 @@ mod tests {
 
         let malformed = scene_with_geometry(SceneGeometry {
             geometry_name: None,
+            source_asset: None,
             geometry_kind: String::new(),
             geometry_params: Value::Object(Map::new()),
             bounds_min: None,
@@ -445,6 +448,7 @@ mod tests {
     fn transform_is_explicit_and_preserves_rotation_and_scale() {
         let mut scene = scene_with_geometry(SceneGeometry {
             geometry_name: None,
+            source_asset: None,
             geometry_kind: "Box".to_string(),
             geometry_params: json!({"size": [1.0, 2.0, 3.0]}),
             bounds_min: None,

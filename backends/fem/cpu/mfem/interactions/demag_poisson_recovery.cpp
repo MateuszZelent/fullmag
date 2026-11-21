@@ -12,6 +12,7 @@
 #include "cpu/mfem/interactions/demag_poisson_energy.hpp"
 #include "fem_common.hpp"
 #include "cpu/mfem/interactions/demag_poisson_transfer.hpp"
+#include "cpu/mfem/runtime/element_parallel_policy.hpp"
 
 #include <algorithm>
 #include <atomic>
@@ -70,6 +71,39 @@ struct DemagRecoveryWorkspace {
         }
     }
 
+    void prepare_element_evaluation(mfem::FiniteElementSpace &state_fes) {
+        const int elements = fes->GetMesh()->GetNE();
+        potential_fes_by_element.resize(elements);
+        state_fes_by_element.resize(elements);
+        rules_by_element.resize(elements);
+        int maximum_potential_dofs = 0;
+        int maximum_state_dofs = 0;
+        // This serial pass warms lazy FE and quadrature caches. Refreshing all
+        // entries also covers geometry/order/space changes without weak keys.
+        for (int element = 0; element < elements; ++element) {
+            const auto *potential_fe = fes->GetFE(element);
+            const auto *state_fe = state_fes.GetFE(element);
+            potential_fes_by_element[element] = potential_fe;
+            state_fes_by_element[element] = state_fe;
+            rules_by_element[element] = &mfem::IntRules.Get(
+                potential_fe->GetGeomType(), 2 * potential_fe->GetOrder());
+            maximum_potential_dofs = std::max(maximum_potential_dofs, potential_fe->GetDof());
+            maximum_state_dofs = std::max(maximum_state_dofs, state_fe->GetDof());
+        }
+        auto prepare_scratch = [&](Scratch &scratch) {
+            scratch.potential_dofs.SetSize(maximum_potential_dofs);
+            scratch.state_dofs.SetSize(maximum_state_dofs);
+            scratch.u_elem.SetSize(maximum_potential_dofs);
+            scratch.dshape.SetSize(maximum_potential_dofs, 3);
+            scratch.state_shape.SetSize(maximum_state_dofs);
+        };
+        prepare_scratch(serial_scratch);
+        for (auto &scratch : thread_scratch) { prepare_scratch(*scratch); }
+    }
+
+    std::vector<const mfem::FiniteElement *> potential_fes_by_element;
+    std::vector<const mfem::FiniteElement *> state_fes_by_element;
+    std::vector<const mfem::IntegrationRule *> rules_by_element;
     mfem::FiniteElementSpace *fes = nullptr;
     mfem::GridFunction potential;
     std::vector<double> node_weight;
@@ -304,8 +338,8 @@ static bool recover_demag_poisson_field_impl(
                                   mfem::DenseMatrix &dshape,
                                   mfem::Vector &state_shape,
                                   bool atomic_updates) {
-        const mfem::FiniteElement *potential_fe = fes->GetFE(elem);
-        const mfem::FiniteElement *state_fe = state_fes->GetFE(elem);
+        const mfem::FiniteElement *potential_fe = demag_recovery_workspace->potential_fes_by_element[elem];
+        const mfem::FiniteElement *state_fe = demag_recovery_workspace->state_fes_by_element[elem];
         mesh->GetElementTransformation(elem, &transformation);
         mfem::ElementTransformation *T = &transformation;
         const bool magnetic_element = ctx.mesh.magnetic_element_mask.empty() ||
@@ -385,9 +419,7 @@ static bool recover_demag_poisson_field_impl(
 
         // General path for higher-order elements: quadrature-based recovery.
         const mfem::IntegrationRule &ir =
-            mfem::IntRules.Get(
-                potential_fe->GetGeomType(),
-                2 * potential_fe->GetOrder());
+            *demag_recovery_workspace->rules_by_element[elem];
 
         state_shape.SetSize(state_ndof);
         dshape.SetSize(potential_ndof, 3);
@@ -462,7 +494,8 @@ static bool recover_demag_poisson_field_impl(
         recover_threads /= 2;
     }
 #endif
-    const bool parallel_recover = recover_threads > 1 && mesh->GetNE() >= 2000;
+    const bool parallel_recover = mfem_shared_element_evaluation_parallel_safe() &&
+        mesh->GetNodes() == nullptr && recover_threads > 1 && mesh->GetNE() >= 2000;
 
     demag_recovery_workspace->prepare(
         node_count,
@@ -490,6 +523,9 @@ static bool recover_demag_poisson_field_impl(
         }
         transfer_diagnostics.setup_wall_time_ns = elapsed_ns(started);
         cpu_transfer_note("recovery", transfer_diagnostics);
+    }
+    if (!(use_fixed_transfer && transfer_diagnostics.state == "ready")) {
+        demag_recovery_workspace->prepare_element_evaluation(*state_fes);
     }
     if (use_fixed_transfer && transfer_diagnostics.state == "ready") {
         node_weight = demag_recovery_workspace->fixed_node_weight;

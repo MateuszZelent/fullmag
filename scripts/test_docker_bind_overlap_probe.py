@@ -10,6 +10,7 @@ import stat
 from types import SimpleNamespace
 import tempfile
 import unittest
+from contextlib import ExitStack
 from unittest.mock import patch
 
 import docker_bind_overlap_probe as overlap
@@ -576,6 +577,366 @@ class BindOverlapProbeTests(unittest.TestCase):
                         reference_root=linked, reference_marker_sha256=marker_sha,
                     )
                 capture.assert_not_called()
+
+
+class WorktreeForeignAliasProbeTests(unittest.TestCase):
+    def _worktree_inputs(self, parent, *, foreign_project="fullmag-master"):
+        import docker_compose_identity
+        import docker_backend_volume_cache
+        import docker_group_ledger
+        import linux_native_host
+        from bootstrap_docker_toolchain import control_volume_name
+
+        project = "fullmag-worktree-sp4-comparison-20261102"
+        worktree_id = "sp4-comparison-20261102"
+        source_root = parent / "source"
+        source_root.mkdir()
+        reference_root = parent / "state"
+        reference_root.mkdir()
+        state_alias = WSL_ALIAS + "Ubuntu/fullmag/state"
+        candidate_alias = WSL_ALIAS + "Ubuntu2/mysql/conf.d"
+        namespace = "namespaces/" + "a" * 32
+        volume_name = control_volume_name(project)
+        identity = {
+            "project_name": project,
+            "network_name": "fullmag-worktree-network",
+            "project_id": "project-sp4",
+            "worktree_id": worktree_id,
+            "checkout_kind": "worktree",
+            "source_root": str(source_root),
+            "registered_name": worktree_id,
+        }
+
+        class Control(SimpleNamespace):
+            @property
+            def shared_labels(self):
+                return self.labels
+
+            def subpath(self, relative=""):
+                return "/".join(value for value in (self.namespace, relative) if value)
+
+        control = Control(project=project, identity=identity, volume=volume_name,
+                          namespace=namespace, labels={
+                              "com.docker.compose.project": project,
+                              "org.fullmag.compose.project": project,
+                              "org.fullmag.source.worktree-id": worktree_id,
+                          }, _active_operation=None)
+        image_id = "sha256:" + "d" * 64
+        control_alias = docker_backend_volume_cache.COMPOSE_CONTROL_VOLUME
+        ledger_subpath = namespace + "/private/ledger"
+        ledger_profile = docker_group_ledger.profile(
+            "e" * 64, project, volume_name, image_id,
+            ledger_subpath=ledger_subpath,
+        )
+        source_labels = docker_compose_identity.source_labels(identity)
+        control_mountpoint = "/var/lib/docker/volumes/" + volume_name + "/_data"
+        control_source = control_mountpoint + "/" + namespace
+        ledger_source = control_source + "/private/ledger"
+        service_volumes = [
+            {"type": "bind", "source": str(reference_root), "target": "/state",
+             "read_only": False},
+            {"type": "bind", "source": str(source_root), "target": "/opt/fullmag/source",
+             "read_only": True},
+            {"type": "volume", "source": control_alias, "target": "/opt/fullmag/control",
+             "volume": {"nocopy": True, "subpath": namespace}},
+            *ledger_profile["backend"]["volumes"],
+        ]
+        environment = {
+            "FULLMAG_SESSION_STORAGE_PROFILE": linux_native_host.PROFILE,
+            **ledger_profile["environment"],
+        }
+        compose = {
+            "name": project,
+            "x-fullmag-control-namespace": namespace,
+            "services": {"backend": {
+                "image": image_id,
+                "entrypoint": ["/bin/sh"],
+                "command": ["run"],
+                "environment": environment,
+                "labels": {**source_labels,
+                           "com.docker.compose.project": project,
+                           "com.docker.compose.service": "backend"},
+                "volumes": service_volumes,
+                "x-fullmag-daemon-binds": {"/state": state_alias},
+            }},
+            "volumes": {
+                control_alias: {"name": volume_name, "external": True},
+                docker_group_ledger.COMPOSE_VOLUME: ledger_profile["compose_volume"],
+            },
+        }
+        backend = {
+            "Id": "b" * 64,
+            "Image": image_id,
+            "Config": {
+                "Image": image_id,
+                "Labels": {**source_labels,
+                           "com.docker.compose.project": project,
+                           "com.docker.compose.service": "backend"},
+                "Env": [key + "=" + value for key, value in environment.items()],
+                "Entrypoint": ["/bin/sh"],
+                "Cmd": ["run"],
+            },
+            "HostConfig": {
+                "ReadonlyRootfs": True,
+                "Privileged": False,
+                "GroupAdd": [],
+                "Tmpfs": {},
+                "PidMode": "private",
+                "IpcMode": "private",
+                "NetworkMode": identity["network_name"],
+                "Mounts": [{
+                    "Type": "volume", "Source": volume_name, "Target": "/opt/fullmag/control",
+                    "VolumeOptions": {"Subpath": namespace},
+                }, {
+                    "Type": "volume", "Source": volume_name, "Target": "/host-ledger",
+                    "VolumeOptions": {"Subpath": ledger_subpath},
+                }],
+            },
+            "State": {
+                "Status": "exited", "Running": False, "Pid": 0, "ExitCode": 0,
+                "Restarting": False, "Paused": False,
+                "StartedAt": "2026-11-06T10:00:00Z",
+                "FinishedAt": "2026-11-06T10:01:00Z",
+            },
+            "RestartCount": 0,
+            "NetworkSettings": {"Networks": {identity["network_name"]: {}}},
+            "Mounts": [
+                {"Type": "bind", "Source": state_alias, "Destination": "/state", "RW": True},
+                {"Type": "bind", "Source": str(source_root),
+                 "Destination": "/opt/fullmag/source", "RW": False},
+                {"Type": "volume", "Source": control_mountpoint, "Name": volume_name,
+                 "Destination": "/opt/fullmag/control", "RW": True, "Driver": "local"},
+                {"Type": "volume", "Source": ledger_source, "Name": volume_name,
+                 "Destination": "/host-ledger", "RW": True, "Driver": "local"},
+            ],
+        }
+        root_info = os.stat(reference_root)
+        certificate = {
+            "schema": linux_native_host.HOST_SCHEMA,
+            "storage_profile": linux_native_host.PROFILE,
+            "role": "session",
+            "owner_scope": "docker-linux",
+            "host_root": str(reference_root),
+            "host_filesystem": "ext4",
+            "host_platform": "linux",
+            "host_device": root_info.st_dev,
+            "host_root_no_reparse": True,
+            "host_inode": root_info.st_ino,
+            "engine_id": "test-docker-engine",
+        }
+        certificate_raw = json.dumps(certificate, sort_keys=True).encode()
+        (reference_root / linux_native_host.CERTIFICATE_NAME).write_bytes(certificate_raw)
+        marker_raw = certificate_raw
+        (reference_root / linux_native_host.OWNER_NAME).write_bytes(marker_raw)
+
+        foreign = {
+            "Id": "e" * 64,
+            "Image": "sha256:" + "f" * 64,
+            "Config": {"Labels": {
+                "com.docker.compose.project": foreign_project,
+                "com.docker.compose.service": "backend",
+                "org.fullmag.compose.project": foreign_project}},
+            "Mounts": [{"Type": "bind", "Source": candidate_alias,
+                        "Destination": "/etc/mysql/conf.d", "RW": False}],
+            "HostConfig": {"Mounts": None,
+                           "Binds": [candidate_alias + ":/etc/mysql/conf.d:ro"]},
+            "State": {"StartedAt": "2026-11-06T10:00:00Z", "Status": "running",
+                      "Running": True, "Pid": 234},
+        }
+        marker_sha = hashlib.sha256(marker_raw).hexdigest()
+        kernel_result = _proof_document(
+            root_device=root_info.st_dev,
+            candidate_roots=("/srv/other-project/mysql",),
+            marker_sha=marker_sha,
+            marker_size=len(marker_raw),
+        )
+        kernel_result["reference_stat"] = {
+            "device": root_info.st_dev, "inode": root_info.st_ino,
+        }
+        volume = {"Name": volume_name, "Driver": "local", "Options": {},
+                  "Labels": control.shared_labels, "Mountpoint": control_mountpoint}
+        image = {"Id": image_id, "Config": {"Entrypoint": ["/bin/sh"], "Cmd": ["run"]}}
+        return {
+            "control": control, "backend": backend, "compose": compose,
+            "foreign": foreign, "source_root": source_root, "reference_root": reference_root,
+            "state_alias": state_alias, "candidate_alias": candidate_alias,
+            "kernel_result": kernel_result, "volume": volume, "image": image,
+            "identity": identity, "control_mountpoint": control_mountpoint,
+            "certificate": certificate,
+        }
+
+    def _patched_probe(self, values, *, foreign_observations=None,
+                       backend_observations=None, probe_callback=None):
+        import docker_volume_dev
+        import fullmag_storage
+        import docker_compose_identity
+        import docker_development_inputs
+        import docker_linux_native_readmission
+        import linux_native_host
+
+        foreign_observations = list(foreign_observations or [values["foreign"], values["foreign"]])
+        backend_observations = list(backend_observations or [values["backend"]])
+        capture_calls = {"foreign": 0, "backend": 0}
+
+        def capture(*args, **_kwargs):
+            if args[:2] == ("image", "inspect"):
+                return subprocess.CompletedProcess(args, 0, json.dumps([values["image"]]).encode(), b"")
+            if args[:2] == ("volume", "inspect"):
+                return subprocess.CompletedProcess(args, 0, json.dumps([values["volume"]]).encode(), b"")
+            if args[0] == "inspect" and args[1] == values["backend"]["Id"]:
+                index = capture_calls["backend"]
+                capture_calls["backend"] += 1
+                record = backend_observations[min(index, len(backend_observations) - 1)]
+                return subprocess.CompletedProcess(args, 0, json.dumps([record]).encode(), b"")
+            if args[0] == "inspect" and args[1] == values["foreign"]["Id"]:
+                index = capture_calls["foreign"]
+                capture_calls["foreign"] += 1
+                record = foreign_observations[min(index, len(foreign_observations) - 1)]
+                return subprocess.CompletedProcess(args, 0, json.dumps([record]).encode(), b"")
+            raise AssertionError("unexpected Docker observation: " + repr(args))
+
+        def live_bind_path(path):
+            if path == values["state_alias"]:
+                return values["reference_root"]
+            return Path(path)
+
+        def bounded(command, *, data, timeout, maximum):
+            if probe_callback is not None:
+                probe_callback()
+            return subprocess.CompletedProcess(command, 0,
+                                               json.dumps(values["kernel_result"]).encode(), b"")
+
+        stack = [
+            patch.object(overlap, "docker_capture", side_effect=capture),
+            patch.object(overlap, "bounded_capture", side_effect=bounded),
+            patch.object(docker_development_inputs, "select_checkout",
+                         return_value=values["source_root"]),
+            patch.object(fullmag_storage, "resolve_layout", return_value={"selected": True}),
+            patch.object(docker_compose_identity, "compose_project_identity",
+                         return_value=values["identity"]),
+            patch.object(docker_linux_native_readmission, "live_bind_path", side_effect=live_bind_path),
+            patch.object(docker_volume_dev, "docker_text", return_value="test-docker-engine"),
+            patch.object(docker_volume_dev, "local_volume", return_value={
+                "host_root": str(values["reference_root"]), "host_filesystem": "ext4",
+                "host_platform": "linux", "host_device": os.stat(values["reference_root"]).st_dev,
+                "host_root_no_reparse": True,
+            }),
+        ]
+        return stack
+
+    def test_registered_worktree_context_proves_disjoint_master_consumer(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            values = self._worktree_inputs(Path(temporary))
+            with ExitStack() as stack:
+                for patcher in self._patched_probe(values):
+                    stack.enter_context(patcher)
+                proof = overlap.prove_worktree_foreign_alias_disjoint(
+                    values["control"], values["backend"], values["foreign"],
+                    values["candidate_alias"], values["reference_root"],
+                    compose=values["compose"],
+                )
+            self.assertEqual(proof["schema"], overlap.WORKTREE_FOREIGN_PROOF_SCHEMA)
+            self.assertEqual(proof["decision"], "disjoint")
+            self.assertEqual(proof["container_id"], values["foreign"]["Id"])
+            self.assertEqual(proof["worktree_context"]["compose_project"],
+                             values["control"].project)
+            self.assertEqual(proof["worktree_context"]["control_namespace"],
+                             values["control"].namespace)
+            self.assertEqual(proof["worktree_context"]["ledger_subpath"],
+                             values["control"].namespace + "/private/ledger")
+            self.assertEqual(
+                next(mount["source"] for mount in values["compose"]["services"]["backend"]["volumes"]
+                     if mount.get("target") == "/opt/fullmag/control"),
+                "backend-cache-control",
+            )
+            overlap.validate_foreign_alias_disjoint_proof(
+                proof, alias=values["candidate_alias"], container_id=values["foreign"]["Id"])
+
+    def test_worktree_probe_rejects_selected_project_container_before_launch(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            selected_project = "fullmag-worktree-sp4-comparison-20261102"
+            values = self._worktree_inputs(Path(temporary), foreign_project=selected_project)
+            with ExitStack() as stack:
+                for patcher in self._patched_probe(values):
+                    stack.enter_context(patcher)
+                with self.assertRaisesRegex(BuildControlError, "selected worktree project"):
+                    overlap.prove_worktree_foreign_alias_disjoint(
+                        values["control"], values["backend"], values["foreign"],
+                        values["candidate_alias"], values["reference_root"],
+                        compose=values["compose"],
+                    )
+
+    def test_worktree_probe_rejects_selected_org_project_label(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            values = self._worktree_inputs(Path(temporary))
+            values["foreign"]["Config"]["Labels"]["org.fullmag.compose.project"] = (
+                values["control"].project)
+            with ExitStack() as stack:
+                for patcher in self._patched_probe(values):
+                    stack.enter_context(patcher)
+                with self.assertRaisesRegex(BuildControlError, "selected worktree project"):
+                    overlap.prove_worktree_foreign_alias_disjoint(
+                        values["control"], values["backend"], values["foreign"],
+                        values["candidate_alias"], values["reference_root"],
+                        compose=values["compose"],
+                    )
+
+    def test_worktree_probe_rejects_foreign_mount_change_after_kernel_proof(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            values = self._worktree_inputs(Path(temporary))
+            changed = json.loads(json.dumps(values["foreign"]))
+            changed["Mounts"][0]["RW"] = True
+            with ExitStack() as stack:
+                for patcher in self._patched_probe(values,
+                                                   foreign_observations=[values["foreign"], changed]):
+                    stack.enter_context(patcher)
+                with self.assertRaisesRegex(BuildControlError, "identity changed"):
+                    overlap.prove_worktree_foreign_alias_disjoint(
+                        values["control"], values["backend"], values["foreign"],
+                        values["candidate_alias"], values["reference_root"],
+                        compose=values["compose"],
+                    )
+
+    def test_worktree_probe_rejects_owner_marker_raw_byte_drift(self):
+        import linux_native_host
+
+        with tempfile.TemporaryDirectory() as temporary:
+            values = self._worktree_inputs(Path(temporary))
+            marker = values["reference_root"] / linux_native_host.OWNER_NAME
+
+            def change_marker():
+                marker.write_bytes(b"a changed owner marker")
+
+            with ExitStack() as stack:
+                for patcher in self._patched_probe(values, probe_callback=change_marker):
+                    stack.enter_context(patcher)
+                with self.assertRaisesRegex(BuildControlError, "marker|reference changed"):
+                    overlap.prove_worktree_foreign_alias_disjoint(
+                        values["control"], values["backend"], values["foreign"],
+                        values["candidate_alias"], values["reference_root"],
+                        compose=values["compose"],
+                    )
+
+    def test_worktree_probe_rejects_same_id_stopped_backend_restart(self):
+        for changed_field in ("StartedAt", "RestartCount"):
+            with self.subTest(changed_field=changed_field), tempfile.TemporaryDirectory() as temporary:
+                values = self._worktree_inputs(Path(temporary))
+                changed = json.loads(json.dumps(values["backend"]))
+                if changed_field == "StartedAt":
+                    changed["State"]["StartedAt"] = "2026-11-06T10:00:01Z"
+                else:
+                    changed["RestartCount"] = 1
+                with ExitStack() as stack:
+                    for patcher in self._patched_probe(values,
+                                                       backend_observations=[values["backend"], changed]):
+                        stack.enter_context(patcher)
+                    with self.assertRaisesRegex(BuildControlError,
+                                                "incarnation changed|lifecycle changed"):
+                        overlap.prove_worktree_foreign_alias_disjoint(
+                            values["control"], values["backend"], values["foreign"],
+                            values["candidate_alias"], values["reference_root"],
+                            compose=values["compose"],
+                        )
 
 
 if __name__ == "__main__":

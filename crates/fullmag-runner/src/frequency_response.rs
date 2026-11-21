@@ -1,3 +1,13 @@
+mod accepted_input;
+pub use accepted_input::{FrequencyResponseInputDescriptor, frequency_response_input_descriptor};
+mod accepted_artifacts;
+pub use accepted_artifacts::{
+    collect_publish_accepted_frequency_response_artifacts,
+    preflight_frequency_response_artifact_resources, AcceptedFrequencyResponseArtifactLimits,
+    AcceptedFrequencyResponseArtifacts, AcceptedFrequencyResponsePoint,
+    AcceptedFrequencyResponseResourceEstimate, AcceptedFrequencyResponseArtifactRole, ArtifactFileBytes,
+};
+
 use crate::eigen::{
     FrequencyDomainArtifactIdentity,
     solve_and_write_field_driven_response_sweep_bundle_with_interrupt,
@@ -2625,6 +2635,7 @@ fn frequency_response_demag_backend_plan(
 ) -> fullmag_ir::FemPlanIR {
     let mfem_device_string = frequency_response_demag_provider_mfem_device(plan).to_string();
     fullmag_ir::FemPlanIR {
+        gpu_bb_preconditioner: None,
         mesh_name: plan.mesh_name.clone(),
         mesh_source: plan.mesh_source.clone(),
         mesh: plan.mesh.clone(),
@@ -2649,6 +2660,7 @@ fn frequency_response_demag_backend_plan(
         solved_antenna_drive_bases: Vec::new(),
         field_drives: Vec::new(),
         field_drive_geometry_masks: Vec::new(),
+        mask_field_term_bases: Vec::new(),
         time_stage: Default::default(),
         current_modules: Vec::new(),
         charge_transport_plans: Vec::new(),
@@ -4070,7 +4082,6 @@ fn frequency_response_effective_spin_wave_bc_kind(
     }
 }
 
-#[cfg(any(feature = "fem-gpu", test))]
 fn frequency_response_magnetic_node_indices(
     plan: &fullmag_ir::FemFrequencyResponsePlanIR,
 ) -> Option<Vec<usize>> {
@@ -4096,7 +4107,6 @@ fn frequency_response_magnetic_node_indices(
     Some(indices)
 }
 
-#[cfg(any(feature = "fem-gpu", test))]
 fn compact_node_index_map(
     full_node_count: usize,
     magnetic_node_indices: &[usize],
@@ -4703,7 +4713,6 @@ fn tangent_basis(m: [f64; 3]) -> Option<([f64; 3], [f64; 3])> {
     Some((e1, e2))
 }
 
-#[cfg(any(feature = "fem-gpu", test))]
 fn dot3(a: [f64; 3], b: [f64; 3]) -> f64 {
     a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
 }
@@ -6195,7 +6204,7 @@ mod tests {
         assert!(!output_dir.exists());
     }
 
-    fn minimal_frequency_response_plan() -> fullmag_ir::FemFrequencyResponsePlanIR {
+    pub(super) fn minimal_frequency_response_plan() -> fullmag_ir::FemFrequencyResponsePlanIR {
         fullmag_ir::FemFrequencyResponsePlanIR {
             mesh_build_report: None,
             mesh_name: "unit".to_string(),

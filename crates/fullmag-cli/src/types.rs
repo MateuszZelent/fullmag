@@ -277,12 +277,13 @@ impl LiveStepView {
 }
 
 #[cfg(test)]
-pub(crate) use fullmag_application::script_stage_contract::ScriptExecutionStage;
+pub(crate) use fullmag_application::script_stage_contract::{
+    ScriptExecutionStage, ScriptExecutionStageAction, StudyPipelineDocument, StudyPipelineNode,
+};
 pub(crate) use fullmag_application::script_stage_contract::{
     ResolvedScriptStage, ResolvedScriptStageAction, ScriptExecutionConfig,
-    ScriptExecutionStageAction, StageTransitionKind, StageTransitionMetadata,
-    StageTransitionReason, StageTransitionUiPresentation, StateTransferOperatorKind,
-    StudyPipelineDocument, StudyPipelineNode,
+    StageTransitionKind, StageTransitionMetadata, StageTransitionReason,
+    StageTransitionUiPresentation, StateTransferOperatorKind,
 };
 #[derive(Debug, Serialize)]
 pub(crate) struct RuntimeResolutionSummary {
@@ -661,6 +662,15 @@ pub(crate) struct CurrentLiveSnapshotPayload {
     /// an independent event, not hidden inside `live_state.latest_step`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub fem_mesh: Option<fullmag_runner::FemMeshPayload>,
+}
+
+impl CurrentLiveSnapshotPayload {
+    pub(crate) fn mesh_reinitialization(&self) -> Option<fullmag_session::mesh_operation::MeshCommandOutcome> {
+        if !self.clear_preview_cache || self.replace_latest_fields {
+            return None;
+        }
+        fullmag_session::mesh_operation::completed_mesh_reinitialization(self.mesh_workspace.as_ref()?)
+    }
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]

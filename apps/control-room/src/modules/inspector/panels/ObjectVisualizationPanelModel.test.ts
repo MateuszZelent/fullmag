@@ -1460,6 +1460,35 @@ describe("ObjectVisualizationPanelModel", () => {
     ]);
   });
 
+  it("resets only the target's explicit Full wireframe scope", () => {
+    const target = { id: "object:film", kind: "object" as const };
+    const state = {
+      overrides: [
+        {
+          scope: "object",
+          scope_id: "film",
+          display: {
+            geometry_scope: "full",
+            wireframe_geometry_scope: "full",
+          },
+        },
+        {
+          scope: "object",
+          scope_id: "other",
+          display: { wireframe_geometry_scope: "full" },
+        },
+      ],
+    } as VisualizationStateResource;
+
+    expect(visualizationOverridesForTargetReset(state, target)).toEqual([
+      {
+        scope: "object",
+        scope_id: "other",
+        display: { wireframe_geometry_scope: "full" },
+      },
+    ]);
+  });
+
   it("restores one target baseline without dropping an optimistic sibling target", () => {
     const target = { id: "object:film", kind: "object" as const };
     const visualization = {
@@ -3246,10 +3275,12 @@ describe("ObjectVisualizationPanelModel", () => {
 
   it("builds pass-specific sections for a visible object target", () => {
     const sections = buildVisualizationPanelSections({
+      lane: "fem",
       effectiveSettings: resolveEffectiveVisualizationSettings(
         DEFAULT_OBJECT_VISUALIZATION,
       ),
       settings: DEFAULT_OBJECT_VISUALIZATION,
+      target: { id: "film", kind: "object" },
     });
 
     expect(sections.map((section) => section.id)).toEqual([
@@ -3258,6 +3289,7 @@ describe("ObjectVisualizationPanelModel", () => {
       "surface-coloring",
       "points",
       "wireframe",
+      "wireframe-mesh",
       "vectors",
       "geometry-scope",
       "overrides",
@@ -3313,6 +3345,32 @@ describe("ObjectVisualizationPanelModel", () => {
         expect.objectContaining({ id: "boundsVisible" }),
       ]),
     );
+  });
+
+  it("offers wireframe mesh scope only for the FEM lane", () => {
+    const base = {
+      effectiveSettings: resolveEffectiveVisualizationSettings(
+        DEFAULT_OBJECT_VISUALIZATION,
+      ),
+      settings: DEFAULT_OBJECT_VISUALIZATION,
+      target: { id: "film", kind: "object" as const },
+    };
+
+    expect(
+      buildVisualizationPanelSections({ ...base, lane: "fem" }).map(
+        (section) => section.id,
+      ),
+    ).toContain("wireframe-mesh");
+    expect(
+      buildVisualizationPanelSections({ ...base, lane: "fdm" }).map(
+        (section) => section.id,
+      ),
+    ).not.toContain("wireframe-mesh");
+    expect(
+      buildVisualizationPanelSections({ ...base, lane: "unresolved" }).map(
+        (section) => section.id,
+      ),
+    ).not.toContain("wireframe-mesh");
   });
 
   it("does not expose unsupported surface-offset controls for the FDM Airbox target", () => {

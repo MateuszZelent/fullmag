@@ -1,14 +1,16 @@
 """Read-only inventories used by the managed activation history transaction."""
 from __future__ import annotations
 
+from datetime import datetime
 import os
 from pathlib import Path
 import re
 import stat
 import subprocess
+import uuid
 
 from docker_activation_history_policy import (
-    HistoryError, canonical, digest, document, referenced_attempts,
+    HistoryError, canonical, digest, document, file_manifest, referenced_attempts,
 )
 from docker_activation_history_reader import activation_history_read_script
 from docker_activation_history_storage import _directory, _raw, _entries
@@ -23,12 +25,72 @@ KNOWN_ROOTS = frozenset({
     "activation", "iteration", "backend", "frontend", "cancelled-activation-recovery",
     "cold-stored-budget-stop-preview", "cold-stored-budget-stop", "recreate-services",
     "offline-reconciliation", "pre-admission-output-reconciliation", "namespaces",
+    "host-device-reattest", "container-recovery-preparation", "runtime-services",
+    "stop-bootstrap", "stop-bootstrap-frontend",
+    "startup-recovery-stop", "startup-recovery-stop-preview",
+    "browser-qa", "claimed-interruption-collect", "cancel-failed-no-spawn",
+    "no-spawn-cancellation", "stop-failed-runtime", "recovery-promotion", "recovery-build",
+    "bootstrap-namespace-proof", "bootstrap-container-proof",
 }) | EXCLUDED_ROOTS
 MAX_INVENTORY_ENTRIES = 70000
 MAX_PIN_BYTES = 32 * 1024 * 1024
+HOST_LEDGER_ROOT_WRITER_OWNER = "runtime-control/host-ledger-roots/WRITER.owner.json"
+WRITER_TIMESTAMP = re.compile(
+    r"([0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2})"
+    r"(?:\.([0-9]{1,9}))?(Z|[+-][0-9]{2}:[0-9]{2})\Z"
+)
+
+
+def _writer_uuid(value, label):
+    if not isinstance(value, str):
+        raise HistoryError("Host ledger writer " + label + " is malformed")
+    try:
+        parsed = uuid.UUID(value)
+    except (ValueError, AttributeError) as error:
+        raise HistoryError("Host ledger writer " + label + " is malformed") from error
+    if str(parsed) != value or parsed.version != 4 or parsed.variant != uuid.RFC_4122:
+        raise HistoryError("Host ledger writer " + label + " is malformed")
+
+
+def _writer_timestamp(value, label):
+    match = WRITER_TIMESTAMP.fullmatch(value) if isinstance(value, str) else None
+    if match is None:
+        raise HistoryError("Host ledger writer " + label + " timestamp is malformed")
+    try:
+        datetime.strptime(match.group(1), "%Y-%m-%dT%H:%M:%S")
+    except ValueError as error:
+        raise HistoryError("Host ledger writer " + label + " timestamp is malformed") from error
+    zone = match.group(3)
+    if zone != "Z":
+        hours, minutes = map(int, zone[1:].split(":"))
+        if hours > 23 or minutes > 59:
+            raise HistoryError("Host ledger writer " + label + " timestamp is malformed")
+
+
+def _host_ledger_writer_digest(raw):
+    value = document(raw, "host ledger roots writer owner")
+    if value.get("schema") != "fullmag.writer.v1" or value.get("released") is not True:
+        raise HistoryError("Host ledger roots writer owner is not a released fullmag.writer.v1 record")
+    _writer_uuid(value.get("token"), "token")
+    _writer_uuid(value.get("process_start_token"), "process_start_token")
+    if not isinstance(value.get("host"), str) or not value["host"]:
+        raise HistoryError("Host ledger writer host identity is malformed")
+    if type(value.get("pid")) is not int or not 0 < value["pid"] <= 0xFFFFFFFF:
+        raise HistoryError("Host ledger writer pid is malformed")
+    _writer_timestamp(value.get("acquired_at"), "acquired_at")
+    _writer_timestamp(value.get("heartbeat_at"), "heartbeat_at")
+
+    # Rust rewrites these three values for every write transaction. Keep every
+    # stable and future field in the digest so identity changes remain pinned.
+    stable = dict(value)
+    for key in ("token", "acquired_at", "heartbeat_at"):
+        del stable[key]
+    return digest(canonical(stable))
 
 
 def _reference_digest(root, relative, raw):
+    if relative == HOST_LEDGER_ROOT_WRITER_OWNER:
+        return _host_ledger_writer_digest(raw)
     if relative != "runtime-control/runtime-services/OWNER.json":
         return digest(raw)
     value = document(raw, "runtime owner")
@@ -90,7 +152,7 @@ def source_inventory(root):
     return {path.name: digest(_raw(path)) for path in paths}
 
 
-def control_references(root, candidate, *, owner_marker_pin=None):
+def control_references(root, candidate, *, owner_marker_pin=None, qualified_rejection=None):
     """Conservatively preserve references from nonhistorical control documents.
 
     A succeeded terminal attempt is historical. Failed, incomplete and unknown
@@ -98,9 +160,44 @@ def control_references(root, candidate, *, owner_marker_pin=None):
     script activation markers are historical only when confirmed activated.
     """
     root = _directory(root)
+    rejected_terminal_raw = None
+    rejection_files = None
+    if qualified_rejection is not None:
+        from docker_activation_history_storage import source_files
+        rejection_candidate = qualified_rejection.get("candidate")
+        rejection_files = qualified_rejection.get("files")
+        if (not isinstance(rejection_candidate, dict)
+                or rejection_candidate.get("qualification_kind") != "rejected-no-run-v1"
+                or rejection_candidate.get("attempt") != candidate
+                or rejection_candidate.get("run_id") is not None
+                or rejection_candidate.get("session_id") is not None
+                or not isinstance(rejection_files, dict)
+                or rejection_candidate.get("files") != file_manifest(rejection_files)):
+            raise HistoryError("Qualified rejection lacks its current no-run qualification")
+        directory = root / "activation/attempts" / candidate
+        if not directory.exists():
+            directory = root / "activation/history-v1" / candidate
+        if source_files(directory) != rejection_files:
+            raise HistoryError("Qualified rejection bytes changed before reference inventory")
+        rejected_receipt = document(rejection_files["receipt.json"], "qualified rejection")
+        rejected_terminal_raw = rejection_files.get("terminal.json")
+        if (rejected_receipt.get("attempt") != candidate
+                or rejected_receipt.get("state") != "failed-confirmed"
+                or rejected_receipt.get("activation_state") != "rejected"
+                or rejected_receipt.get("run_id") is not None
+                or not isinstance(rejected_terminal_raw, bytes)):
+            raise HistoryError("Invalid qualified rejection reference identity")
+        expected_rejected_marker = {
+            "schema": "fullmag.docker-startup-activation-receipt.v1", "state": "rejected",
+            "request_id": rejected_receipt["request_id"],
+            "source_sha256": rejected_receipt["source_sha256"],
+            "provenance_sha256": rejected_receipt["provenance_sha256"],
+            "authorization": document(rejection_files["authorization.json"], "authorization"),
+            "result": document(rejection_files["result.json"], "result")}
     references, pins = {}, {}
     known_runs = {}
     closed_activations = {}
+    qualified_current_terminal = None
     live = _entries(root / "activation/attempts")
     def closed_terminal(path):
         terminal, receipt = path / "terminal.json", path / "receipt.json"
@@ -108,7 +205,12 @@ def control_references(root, candidate, *, owner_marker_pin=None):
             terminal_raw = _raw(terminal)
             value = document(terminal_raw, str(path) + "/terminal")
             if (value.get("schema") == "fullmag.docker-build-operation.v1"
-                    and value.get("state") == "succeeded" and value.get("attempt") == path.name
+                    and (value.get("state") == "succeeded" or (
+                        qualified_rejection is not None and path.name == candidate
+                        and terminal_raw == rejection_files["terminal.json"]
+                        and value.get("state") == "failed-confirmed"
+                        and value.get("activation_state") == "rejected"))
+                    and value.get("attempt") == path.name
                     and _raw(receipt) == terminal_raw):
                 return value
         return None
@@ -156,7 +258,10 @@ def control_references(root, candidate, *, owner_marker_pin=None):
                         value = document(marker_raw, relative)
                         matches = [row for row in closed_activations.values()
                                    if row.get("activation_receipt_key") == entry.name.removeprefix("script-activation-")]
-                        if (value.get("state") == "activated" and len(matches) == 1
+                        if (len(matches) == 1 and (
+                                (value.get("state") == "activated" and matches[0].get("state") == "succeeded") or (
+                                qualified_rejection is not None and matches[0]["attempt"] == candidate
+                                and value == expected_rejected_marker))
                                 and all(value.get(key) == matches[0].get(key) for key in ("request_id", "source_sha256", "provenance_sha256"))):
                             historical_marker_digests[
                                 marker.relative_to(root).as_posix()
@@ -202,7 +307,21 @@ def control_references(root, candidate, *, owner_marker_pin=None):
                     # Every retained live JSON document must be readable. Do
                     # not silently omit a new pin vocabulary or malformed JSON.
                     document(raw, relative)
-                    references[relative] = raw
+                    if (relative == "activation/current.json"
+                            and rejected_terminal_raw is not None
+                            and raw == rejected_terminal_raw):
+                        # This one no-run terminal pointer is historical only
+                        # under exact qualification. Keep its raw pin/CAS and
+                        # leave every other root in the live reference graph.
+                        qualified_current_terminal = {
+                            "path": relative,
+                            "qualification_kind": "rejected-no-run-v1",
+                            "attempt": candidate,
+                            "terminal_sha256": digest(rejected_terminal_raw),
+                            "current_sha256": digest(raw),
+                        }
+                    else:
+                        references[relative] = raw
                     pins[relative] = _reference_digest(root, relative, raw)
             else:
                 raise HistoryError("Linked or special control reference entry")
@@ -228,6 +347,7 @@ def control_references(root, candidate, *, owner_marker_pin=None):
         raise HistoryError("Activation is referenced by live control/recovery roots: "
                            + ", ".join(direct[:12] or ["transitive attempt pin"]))
     return {"protected": sorted(protected), "pins": pins,
+            "qualified_current_terminal": qualified_current_terminal,
             "live_attempts": live, "sha256": digest(canonical(pins))}
 
 

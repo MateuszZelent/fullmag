@@ -370,6 +370,25 @@ def _require_solver_profile_support(startup_helper):
     return digest
 
 
+def _require_cuda_trace_support(startup_helper):
+    """Require a pinned helper that can bind CUPTI trace before admission."""
+    prepare = getattr(startup_helper, "prepare", None)
+    digest = getattr(startup_helper, "cuda_trace_sha256", None)
+    if not callable(prepare) or not callable(digest):
+        raise BuildControlError("Selected startup helper cannot accept cuda trace")
+    try:
+        parameters = inspect.signature(prepare).parameters.values()
+    except (TypeError, ValueError) as error:
+        raise BuildControlError("Selected startup helper cannot accept cuda trace") from error
+    if not any(
+        parameter.name == "cuda_trace"
+        or parameter.kind is inspect.Parameter.VAR_KEYWORD
+        for parameter in parameters
+    ):
+        raise BuildControlError("Selected startup helper cannot accept cuda trace")
+    return digest
+
+
 def _prepare_startup_authorization(
     startup_helper,
     source_root: Path,
@@ -378,11 +397,15 @@ def _prepare_startup_authorization(
     request_id: str,
     source_commit: str | None,
     solver_profile: bool,
+    cuda_trace: bool = False,
 ):
     kwargs = {"request_id": request_id, "source_commit": source_commit}
     if solver_profile:
         _require_solver_profile_support(startup_helper)
         kwargs["solver_profile"] = True
+    if cuda_trace:
+        _require_cuda_trace_support(startup_helper)
+        kwargs["cuda_trace"] = True
     return startup_helper.prepare(source_root, script, **kwargs)
 
 
@@ -890,12 +913,17 @@ def _activation_operation_inputs(
     activation_receipt_key: str,
     activation_receipt_path: str,
     solver_profile_sha256: str | None = None,
+    cuda_trace_sha256: str | None = None,
 ) -> dict[str, str]:
     """Build activation inputs without colliding with operation.attempt."""
     if (solver_profile_sha256 is not None
             and (not isinstance(solver_profile_sha256, str)
                  or SHA256_RE.fullmatch(solver_profile_sha256) is None)):
         raise BuildControlError("Activation solver profile digest is invalid")
+    if (cuda_trace_sha256 is not None
+            and (not isinstance(cuda_trace_sha256, str)
+                 or SHA256_RE.fullmatch(cuda_trace_sha256) is None)):
+        raise BuildControlError("Activation cuda trace digest is invalid")
     inputs = {
         "development_attempt": development_attempt,
         "config_sha256": config_sha256,
@@ -911,6 +939,8 @@ def _activation_operation_inputs(
     }
     if solver_profile_sha256 is not None:
         inputs["solver_profile_sha256"] = solver_profile_sha256
+    if cuda_trace_sha256 is not None:
+        inputs["cuda_trace_sha256"] = cuda_trace_sha256
     return inputs
 
 
@@ -929,6 +959,18 @@ def _record_activation_result(operation: dict[str, object], result: Mapping[str,
         if (not isinstance(response, Mapping)
                 or response.get("solver_profile_sha256") != expected_profile_sha256):
             raise BuildControlError("Backend activation response solver profile digest differs")
+    if result["state"] == "activated":
+        expected_cuda_trace_sha256 = (
+            inputs.get("cuda_trace_sha256") if isinstance(inputs, Mapping) else None
+        )
+        observed_cuda_trace_sha256 = (
+            response.get("cuda_trace_sha256") if isinstance(response, Mapping) else None
+        )
+        if expected_cuda_trace_sha256 is not None:
+            if observed_cuda_trace_sha256 != expected_cuda_trace_sha256:
+                raise BuildControlError("Backend activation response cuda trace digest differs")
+        elif isinstance(response, Mapping) and "cuda_trace_sha256" in response:
+            raise BuildControlError("Backend activation returned an unsolicited cuda trace digest")
     operation["daemon_pending"] = False
     receipt.update(
         state="succeeded" if result["state"] == "activated" else "failed-confirmed",
@@ -1014,6 +1056,11 @@ def _validate_activation_input_bindings(
             and (not isinstance(solver_profile_sha256, str)
                  or SHA256_RE.fullmatch(solver_profile_sha256) is None)):
         raise BuildControlError("Retained activation solver profile digest is invalid")
+    cuda_trace_sha256 = inputs.get("cuda_trace_sha256")
+    if ("cuda_trace_sha256" in inputs
+            and (not isinstance(cuda_trace_sha256, str)
+                 or SHA256_RE.fullmatch(cuda_trace_sha256) is None)):
+        raise BuildControlError("Retained activation cuda trace digest is invalid")
     receipt_key = inputs.get("activation_receipt_key")
     if not isinstance(receipt_key, str) or SHA256_RE.fullmatch(receipt_key) is None:
         raise BuildControlError("Retained activation receipt key is invalid")
@@ -1039,6 +1086,8 @@ def _validate_activation_input_bindings(
     }
     if solver_profile_sha256 is not None:
         bindings["solver_profile_sha256"] = solver_profile_sha256
+    if cuda_trace_sha256 is not None:
+        bindings["cuda_trace_sha256"] = cuda_trace_sha256
     return bindings
 
 
@@ -1790,6 +1839,9 @@ def activate(args: argparse.Namespace) -> dict[str, object]:
     solver_profile = getattr(args, "solver_profile", False)
     if type(solver_profile) is not bool:
         raise BuildControlError("Script activation solver profile opt-in must be a boolean")
+    cuda_trace = getattr(args, "cuda_trace", False)
+    if type(cuda_trace) is not bool:
+        raise BuildControlError("Script activation cuda trace opt-in must be a boolean")
     require_host()
     if not ATTEMPT_RE.fullmatch(args.attempt):
         raise BuildControlError("Script activation requires an exact attempt UUID")
@@ -1865,6 +1917,7 @@ def activate(args: argparse.Namespace) -> dict[str, object]:
 
     startup_helper, helper_hashes = _startup_helper(control, selected, image)
     profile_digest = _require_solver_profile_support(startup_helper) if solver_profile else None
+    trace_digest = _require_cuda_trace_support(startup_helper) if cuda_trace else None
     activation_timeout_seconds, _original_activation_receipt_path = _activation_contract(startup_helper)
     retained_retirement = _retained_retirement_context(
         control,
@@ -1899,6 +1952,7 @@ def activate(args: argparse.Namespace) -> dict[str, object]:
         request_id=probe_request_id,
         source_commit=source_commit,
         solver_profile=solver_profile,
+        cuda_trace=cuda_trace,
     )
     request_id = _request_id(startup_helper, args.attempt, authorization.source_sha256, args.request_id)
     from docker_volume_cancelled_activation_guard import assert_start_allowed
@@ -1911,6 +1965,7 @@ def activate(args: argparse.Namespace) -> dict[str, object]:
             request_id=request_id,
             source_commit=source_commit,
             solver_profile=solver_profile,
+            cuda_trace=cuda_trace,
         )
     activation_receipt_key, activation_receipt_path = _managed_activation_receipt_contract(
         startup_helper, authorization.request_id
@@ -1920,6 +1975,10 @@ def activate(args: argparse.Namespace) -> dict[str, object]:
     if solver_profile:
         assert callable(profile_digest)
         solver_profile_digest = profile_digest(authorization_document.get("solver_profile"))
+    cuda_trace_digest = None
+    if cuda_trace:
+        assert callable(trace_digest)
+        cuda_trace_digest = trace_digest(authorization_document.get("cuda_trace"))
     provenance = _authorization_bytes(startup_helper, authorization_document)
     provenance_sha256 = hashlib.sha256(provenance).hexdigest()
 
@@ -1936,6 +1995,7 @@ def activate(args: argparse.Namespace) -> dict[str, object]:
         activation_receipt_key=activation_receipt_key,
         activation_receipt_path=activation_receipt_path,
         solver_profile_sha256=solver_profile_digest,
+        cuda_trace_sha256=cuda_trace_digest,
     )
     with control.operation("activation", inputs) as operation:
         operation["receipt"].update(inputs, state="preparing")

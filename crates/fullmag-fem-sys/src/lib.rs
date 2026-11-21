@@ -6,6 +6,7 @@
 #![allow(non_camel_case_types)]
 
 pub mod node_map;
+pub mod cuda_trace;
 
 use std::ffi::c_void;
 use std::os::raw::c_char;
@@ -15,7 +16,9 @@ pub const FULLMAG_FEM_ERR_INVALID: i32 = -1;
 pub const FULLMAG_FEM_ERR_UNAVAILABLE: i32 = -2;
 pub const FULLMAG_FEM_ERR_INTERNAL: i32 = -3;
 pub const FULLMAG_FEM_ERR_INTERRUPTED: i32 = -4;
-pub const FULLMAG_FEM_REGIONAL_FIELD_DRIVE_ABI_VERSION: u32 = 3;
+pub const FULLMAG_FEM_REGIONAL_FIELD_DRIVE_ABI_VERSION: u32 = 4;
+/// At most this many HOST_EXPRESSION drives per backend on the GPU lane.
+pub const FULLMAG_FEM_MAX_HOST_EXPRESSION_DRIVES: u32 = 8;
 pub const FULLMAG_FEM_STAGE_OERSTED_CALLBACK_ABI_VERSION: u32 = 1;
 pub const FULLMAG_FEM_STAGE_TRANSPORT_CALLBACK_ABI_VERSION: u32 = 1;
 pub const FULLMAG_FEM_STAGE_TRANSPORT_CALLBACK_ERROR_CAPACITY: usize = 256;
@@ -136,6 +139,9 @@ pub enum fullmag_fem_time_dependence_kind {
     FULLMAG_FEM_TIME_PULSE = 2,
     FULLMAG_FEM_TIME_PIECEWISE_LINEAR = 3,
     FULLMAG_FEM_TIME_SINC_PULSE = 4,
+    /// The multiplier is the value of the descriptor's `time_program`
+    /// (`fullmag_time_expr.v1`), evaluated on the host once per field build.
+    FULLMAG_FEM_TIME_HOST_EXPRESSION = 5,
 }
 
 #[repr(C)]
@@ -190,6 +196,9 @@ pub struct fullmag_fem_time_dependence_desc {
     pub parameters: fullmag_fem_time_dependence_parameters,
     pub points: *const fullmag_fem_time_point,
     pub point_count: u64,
+    /// HOST_EXPRESSION only: `fullmag_time_expr.v1` words; null and 0 otherwise.
+    pub time_program: *const f64,
+    pub time_program_len: u64,
 }
 
 #[repr(C)]
@@ -902,6 +911,7 @@ pub struct fullmag_fem_mixed_body_certificate_v2 {
 }
 
 pub const FULLMAG_FEM_PLAN_DESC_V3_ABI_VERSION: u32 = 3;
+pub const FULLMAG_FEM_PLAN_DESC_V4_ABI_VERSION: u32 = 4;
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
@@ -910,6 +920,16 @@ pub struct fullmag_fem_plan_desc_v3 {
     pub struct_size: u32,
     pub base: fullmag_fem_plan_desc_v2,
     pub mixed_body_certificate_v2: *const fullmag_fem_mixed_body_certificate_v2,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct fullmag_fem_plan_desc_v4 {
+    pub abi_version: u32,
+    pub struct_size: u32,
+    pub base: fullmag_fem_plan_desc_v3,
+    pub poisson_boundary_marker: u32,
+    pub reserved: u32,
 }
 
 #[repr(C)]
@@ -3338,6 +3358,9 @@ extern "C" {
     pub fn fullmag_fem_get_regional_field_drive_abi_layout(
         out_layout: *mut fullmag_fem_regional_field_drive_abi_layout,
     ) -> i32;
+    /// Value of a `fullmag_time_expr.v1` program at `t_s`, by the interpreter
+    /// the library uses for HOST_EXPRESSION drives.
+    pub fn fullmag_fem_time_expression_eval_v1(code: *const f64, len: u64, t_s: f64) -> f64;
     pub fn fullmag_fem_get_mesh_abi_layout(out_layout: *mut fullmag_fem_mesh_abi_layout) -> i32;
     pub fn fullmag_fem_prepare_mesh_space_v1(
         request: *const fullmag_fem_mesh_space_preparation_request_v1,
@@ -3537,6 +3560,10 @@ extern "C" {
         plan: *const fullmag_fem_plan_desc_v3,
         adaptive_config: *const fullmag_fem_adaptive_config_v2,
     ) -> *mut fullmag_fem_backend;
+    pub fn fullmag_fem_backend_create_v5(
+        plan: *const fullmag_fem_plan_desc_v4,
+        adaptive_config: *const fullmag_fem_adaptive_config_v2,
+    ) -> *mut fullmag_fem_backend;
     pub fn fullmag_fem_backend_begin_stage(
         handle: *mut fullmag_fem_backend,
         stage_start_time_s: f64,
@@ -3545,6 +3572,10 @@ extern "C" {
         handle: *mut fullmag_fem_backend,
         segment_start_time_s: f64,
         waveform_origin_time_s: f64,
+    ) -> i32;
+    pub fn fullmag_fem_backend_set_gpu_bb_preconditioner(
+        handle: *mut fullmag_fem_backend,
+        policy: u32,
     ) -> i32;
     pub fn fullmag_fem_backend_set_gpu_execution_request_v1(
         handle: *mut fullmag_fem_backend,
@@ -3738,6 +3769,11 @@ extern "C" {
     pub fn fullmag_fem_backend_get_transfer_audit(
         handle: *mut fullmag_fem_backend,
         out_audit: *mut fullmag_fem_transfer_audit,
+    ) -> i32;
+
+    pub fn fullmag_fem_backend_get_gpu_demag_amg_coarse_relax_type_v1(
+        handle: *mut fullmag_fem_backend,
+        out_relax_type: *mut i32,
     ) -> i32;
 
     pub fn fullmag_fem_backend_get_gpu_state_info(
@@ -4277,6 +4313,13 @@ mod tests {
         );
         assert_eq!(FULLMAG_FEM_MIXED_BODY_CERTIFICATE_V2_ABI_VERSION, 2);
         assert_eq!(FULLMAG_FEM_PLAN_DESC_V3_ABI_VERSION, 3);
+        assert_eq!(FULLMAG_FEM_PLAN_DESC_V4_ABI_VERSION, 4);
+        assert_eq!(std::mem::size_of::<fullmag_fem_plan_desc_v2>(), 1640);
+        assert_eq!(std::mem::size_of::<fullmag_fem_plan_desc_v3>(), 1656);
+        assert_eq!(std::mem::size_of::<fullmag_fem_plan_desc_v4>(), 1672);
+        assert_eq!(std::mem::offset_of!(fullmag_fem_plan_desc_v4, base), 8);
+        assert_eq!(std::mem::offset_of!(fullmag_fem_plan_desc_v4, poisson_boundary_marker),
+                   8 + std::mem::size_of::<fullmag_fem_plan_desc_v3>());
         assert_eq!(std::mem::offset_of!(fullmag_fem_plan_desc_v3, base), 8);
         assert_eq!(
             std::mem::offset_of!(fullmag_fem_plan_desc_v3, mixed_body_certificate_v2),

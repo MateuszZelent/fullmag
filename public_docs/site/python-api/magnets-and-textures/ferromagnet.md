@@ -50,7 +50,7 @@ validation owns mesh, region, material-field, and constraint realization.
 | `Ferromagnet.object_regions` | `tuple[ObjectRegion, ...]` | `()` | $1$ | unique object-owned identities | authored subregions | planner-dependent | `object_regions` |
 | `Ferromagnet.allocated_region_ids` | `tuple[str, ...]` | `()` | $1$ | unique reserved IDs | builder/round-trip region ownership | authoring metadata | region identity registry |
 | `Ferromagnet.material_parameter_fields` | `tuple[MaterialParameterAssignment, ...]` | `()` | parameter-dependent | typed, finite, cardinality checked later | spatial material fields | planner-dependent | `material_parameter_fields` |
-| `Ferromagnet.absorbing_boundary` | `AbsorbingBoundaryLayer \| None` | `None` | mixed | typed profile and valid faces | object-scoped damping layer | capability-gated | `magnets[].absorbing_boundary` |
+| `Ferromagnet.absorbing_boundary` | `AbsorbingBoundaryLayer \| AbsorbingBoundaryLayers \| None` | `None` | mixed | valid geometry, widths, taper and region references | object-scoped damping layers | capability-gated | `magnets[].absorbing_boundary` |
 | `Ferromagnet._magnetization_constraints` | `list[object]` | empty list factory | $1$ | populated by typed helpers such as `freeze_spins`; direct mutation is not public workflow | object-scoped constraint accumulator | collected by problem/study lowering | canonical magnetization constraints |
 
 ### Complete stage-first scenario
@@ -105,8 +105,7 @@ default state, object identity, constraint accumulation, and magnet-record lower
 (python-api-magnets-and-textures-ferromagnet-validation)=
 ## Validation
 
-Tests compare this complete parameter inventory with `inspect.signature(Ferromagnet)` and validate
-the adjacent source map.
+Tests compare this complete parameter inventory with `inspect.signature(Ferromagnet)`.
 
 (python-api-magnets-and-textures-ferromagnet-limitations)=
 ## Limitations
@@ -119,24 +118,29 @@ user API. Use typed constraint helpers and stage/problem authoring rather than m
 
 No new physical model is introduced; references belong to the interactions consuming the magnet.
 
-(python-api-magnets-and-textures-ferromagnet-source-code-index)=
+## Control Room support
 
-## Control Room crosswalk
-
-Status: The exposed texture families are partial; unlisted presets remain Python-only.
+Status: Scalar object material fields (`ObjectMaterialPanel`), region overrides (`ObjectRegionsPanel` / `ObjectRegionMagneticParametersPanel`), and the `16` built-in `MAGNETIZATION_TEXTURE_PRESETS` in `ObjectMagneticTexturePanel` are `partial`; unlisted presets and spatial callbacks remain Python-only.
 
 | Python/API surface | Control Room path | Status | Transaction |
 |---|---|---|---|
-| Parameters documented on this page | `Model Explorer -> Objects -> <object> -> Magnetization` | `partial` | Apply magnetization draft; authored object state is revised |
-| Parameters without a named UI field | `Model Explorer -> Objects -> <object> -> Magnetization` | `not implemented` | Python-only until implemented |
+| Initial magnetization presets | `Model Explorer -> Objects -> <object> -> Magnetization` | `partial` | Apply magnetization draft (`commitMagneticTextureApply`); authored object state is revised |
+| Parameters without a named UI field | `Model Explorer -> Objects -> <object> -> Magnetization` | `Python-only` | Authored in Python |
 
-frontend support is not implemented for texture presets and arguments not exposed by ObjectMagneticTexturePanel.
-See [Control Room capability register](/frontend/capability-register) for the support matrix and not implemented policy.
-Frontend source owner: `apps/control-room/src/modules/inspector/panels/ObjectMagneticTexturePanel.tsx (ObjectMagneticTexturePanel)`.
+Open **Physics → Add ABL** on a magnetic object to configure independently placed damping layers. Their geometry, target region, widths and profiles round-trip through `film.alpha.absorbing_boundary(...)`. See {doc}`/frontend/inspectors/absorbing-boundaries` for complete examples and the effective damping field.
+See {doc}`/frontend/inspectors/objects-and-materials` and [Control Room capability register](/frontend/capability-register) for the UI support matrix.
+Frontend source owner: `apps/control-room/src/modules/inspector/panels/ObjectMagneticTexturePanel.tsx` (`ObjectMagneticTexturePanel`).
 
+```{image} /_static/images/ui/inspector-magnetic-texture.png
+:alt: Semantic Inspector Magnetic Texture panel configuring a ferromagnet initial magnetization
+:width: 92%
+```
+
+(python-api-magnets-and-textures-ferromagnet-source-code-index)=
 ## Source-code index
 
 | Claim | Path | Stable symbol | Responsibility | Evidence |
 |---|---|---|---|---|
-| constructor and lowering | [`packages/fullmag-py/src/fullmag/model/structure.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/structure.py#L745) | [`class Ferromagnet`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/structure.py#L745) | canonical object API | signature/source-map tests |
+| constructor and lowering | [`packages/fullmag-py/src/fullmag/model/structure.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/structure.py#L745) | [`class Ferromagnet`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/structure.py#L745) | canonical object API | signature and API contract tests |
+| independent absorbing layers | [`absorbing_boundary.py`](https://github.com/MateuszZelent/fullmag/blob/71974540caabd305716d6e86ccc668b97cd8281b/packages/fullmag-py/src/fullmag/model/absorbing_boundary.py#L236) | `SpatialAbsorbingLayer` | geometry, region target and taper | Python validation and scene export/import tests |
 | stage-first facade | `packages/fullmag-py/src/fullmag/world.py` | `study.geometry` / magnetic handle | fluent object authoring | builder tests |

@@ -37,13 +37,13 @@ export function SpinWaveGammaView({
       title="Γ spin-wave response"
       subtitle={subtitle}
     >
-      <div className="fm-analysis-plots__status" role="list" aria-label="Response FFT sampling parameters">
-        <span role="listitem">N {sampling.sampleCount}</span>
-        <span role="listitem">t_sampling {formatScientific(sampling.samplePeriodS, "s")}</span>
-        <span role="listitem">duration {formatScientific(sampling.durationS, "s")}</span>
-        <span role="listitem">df {formatScientific(sampling.frequencyResolutionHz, "Hz")}</span>
-        <span role="listitem">Nyquist {formatScientific(sampling.nyquistHz, "Hz")}</span>
-      </div>
+      <ul className="fm-analysis-plots__status fm-analysis-plots__status-list" aria-label="Response FFT sampling parameters">
+        <li>N {sampling.sampleCount}</li>
+        <li>t_sampling {formatScientific(sampling.samplePeriodS, "s")}</li>
+        <li>duration {formatScientific(sampling.durationS, "s")}</li>
+        <li>df {formatScientific(sampling.frequencyResolutionHz, "Hz")}</li>
+        <li>Nyquist {formatScientific(sampling.nyquistHz, "Hz")}</li>
+      </ul>
       {sampling.message ? <p className="fm-analysis-plots__sampling-warning" role="status">{sampling.message}</p> : null}
       <div className="fm-analysis-plots__subchart">
         <header className="fm-analysis-plots__subchart-header"><h4>Response trace Δm(t)</h4><span>time [{resource?.time_unit ?? "s"}]</span></header>
@@ -58,8 +58,12 @@ export function SpinWaveGammaView({
         <EChartsSurface dataStatus={status} series={spinWaveGammaSeries(resource)} xAxisLabel={`frequency [${resource?.frequency_unit ?? "Hz"}]`} />
       </div>
       {resource && resource.peaks.length > 0 ? (
-        <div className="fm-analysis-plots__columns" role="table" aria-label="Gamma spectrum peaks">
-          <div className="fm-analysis-plots__column-header" role="row"><span>#</span><span>bin</span><span>frequency [Hz]</span><span>power</span></div>
+        <div className="fm-analysis-plots__columns">
+          <table className="fm-analysis-plots__native-table" aria-label="Gamma spectrum peaks">
+          <thead>
+            <tr className="fm-analysis-plots__column-header"><th scope="col">#</th><th scope="col">bin</th><th scope="col">frequency [Hz]</th><th scope="col">power</th></tr>
+          </thead>
+          <tbody>
           {resource.peaks.map((peak, rank) => {
             const selection = spinWaveGammaFeatureSelection(peak);
             const selectable = Boolean(selection && onFeatureSelect);
@@ -67,7 +71,7 @@ export function SpinWaveGammaView({
               if (!selection || !onFeatureSelect) return;
               onFeatureSelect(selection);
             };
-            return <div
+            return <tr
               aria-disabled={!selectable || undefined}
               aria-label={selectable ? `Select spectral feature ${peak.index}` : `Unavailable spectral feature ${peak.index}`}
               className="fm-analysis-plots__column-row"
@@ -80,12 +84,13 @@ export function SpinWaveGammaView({
                   activate();
                 }
               } : undefined}
-              role="row"
               tabIndex={selectable ? 0 : -1}
             >
-              <span role="cell">{rank + 1}</span><span role="cell">{peak.index}</span><span role="cell">{peak.frequency_hz.toExponential(5)}</span><span role="cell">{peak.power.toExponential(3)}</span>
-            </div>;
+              <td>{rank + 1}</td><td>{peak.index}</td><td>{peak.frequency_hz.toExponential(5)}</td><td>{peak.power.toExponential(3)}</td>
+            </tr>;
           })}
+          </tbody>
+          </table>
         </div>
       ) : null}
       <div className="fm-analysis-plots__status">

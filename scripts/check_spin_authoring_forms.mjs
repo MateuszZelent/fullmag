@@ -24,7 +24,8 @@ check(rows.transportRows(incomplete)[0].material.lambda_sf_m==="1e-","Incomplete
 const cleared=rows.transportRows(rows.updateTransportRow(JSON.stringify(assignments),0,["material","spin_capacitance_As_per_V_m3"],"","number"));
 check(!("spin_capacitance_As_per_V_m3" in cleared[0].material),"Clearing optional parameter is explicit");
 check(rows.spinMaterialFields.length===9 && rows.chargeMaterialFields.length===4,"All current public charge/spin material parameters covered");
-check(rows.chargeBoundaryKinds.length===4 && rows.spinBoundaryKinds.length===5,"All current BC variants covered");
+const sameKinds=(actual,expected)=>actual.length===expected.length&&expected.every(kind=>actual.includes(kind));
+check(sameKinds(rows.chargeBoundaryKinds,["equipotential_current_terminal","voltage_electrode","normal_current_electrode","insulating"]) && sameKinds(rows.spinBoundaryKinds,["spin_insulating","homogeneous_spin_potential_gradient","spin_sink","specified_spin_potential","specified_spin_flux","periodic_spin"]),"All public charge/spin BC variants covered by name");
 const bc=[{id:"v",kind:"voltage_electrode",potential_V:0.2,surfaces:[{object_id:"stack",surface_id:"top",orientation:[0,0,1]}],extension:"preserve"}];
 const changed=rows.transportRows(rows.changeTransportBoundaryKind(JSON.stringify(bc),0,"normal_current_electrode"))[0];
 check(!("potential_V" in changed)&&changed.surfaces[0].surface_id==="top"&&changed.extension==="preserve","Explicit BC variant switch removes incompatible value, retains bindings/extensions");

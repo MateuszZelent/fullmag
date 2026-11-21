@@ -2,6 +2,9 @@
 
 use crate::error::ApiError;
 use crate::types::*;
+use fullmag_application::script_source_capture::{
+    material_catalog_input, runtime_helper_loads_authored_script, MATERIAL_CATALOG_UNAVAILABLE,
+};
 use fullmag_authoring::{
     scene_document_problem_projection, scene_document_to_script_builder, SceneDocument, StudyPlan,
     ScriptBuilderState,
@@ -475,6 +478,7 @@ fn rewrite_script_via_python_helper_with_policy(
     })
 }
 
+#[cfg(test)]
 pub(crate) fn render_scene_document_via_python_helper(
     repo_root: &Path,
     workspace_root: &Path,
@@ -681,6 +685,79 @@ fn render_scene_document_via_python_helper_with_policy(
     })
 }
 
+/// The ready antennas of `fullmag.antennas` (function, summary, arguments),
+/// read from the Python registry.
+pub(crate) fn ready_antennas_via_python_helper(repo_root: &Path) -> Result<Value, ApiError> {
+    let helper_args = vec![
+        "-m".to_string(),
+        "fullmag.runtime.helper".to_string(),
+        "ready-antennas".to_string(),
+    ];
+    let output = run_python_helper(repo_root, &helper_args)?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(ApiError::internal(format!(
+            "python ready-antenna registry helper failed: {}",
+            stderr.trim()
+        )));
+    }
+    serde_json::from_slice::<Value>(&output.stdout).map_err(|error| {
+        ApiError::internal(format!(
+            "failed to deserialize the ready-antenna registry: {error}"
+        ))
+    })
+}
+
+/// The mask terms of one ready-antenna call (`fullmag.antennas.rebuild`): the
+/// function is called again in Python with the given arguments. A rejected
+/// call (unknown antenna or argument, bad value) is a 400.
+pub(crate) fn rebuild_ready_antenna_terms_via_python_helper(
+    repo_root: &Path,
+    function: &str,
+    arguments: &std::collections::BTreeMap<String, f64>,
+) -> Result<Vec<fullmag_ir::MaskTermIR>, ApiError> {
+    let arguments_json = serde_json::to_string(arguments).map_err(|error| {
+        ApiError::bad_request(format!("invalid ready-antenna arguments: {error}"))
+    })?;
+    let helper_args = vec![
+        "-m".to_string(),
+        "fullmag.runtime.helper".to_string(),
+        "rebuild-ready-antenna".to_string(),
+        "--function".to_string(),
+        function.to_string(),
+        "--arguments-json".to_string(),
+        arguments_json,
+    ];
+    let output = run_python_helper(repo_root, &helper_args)?;
+    if output.status.code() == Some(3) {
+        let message = serde_json::from_slice::<Value>(&output.stdout)
+            .ok()
+            .and_then(|value| value.get("message").and_then(Value::as_str).map(str::to_string))
+            .unwrap_or_else(|| "the ready antenna rejected the call".to_string());
+        return Err(ApiError::bad_request(format!(
+            "ready_antenna_rejected: {message}"
+        )));
+    }
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(ApiError::internal(format!(
+            "python ready-antenna helper failed: {}",
+            stderr.trim()
+        )));
+    }
+    #[derive(serde::Deserialize)]
+    struct Terms {
+        terms: Vec<fullmag_ir::MaskTermIR>,
+    }
+    serde_json::from_slice::<Terms>(&output.stdout)
+        .map(|value| value.terms)
+        .map_err(|error| {
+            ApiError::internal(format!(
+                "failed to deserialize the ready-antenna terms: {error}"
+            ))
+        })
+}
+
 pub(crate) fn load_scene_document_state(
     repo_root: &Path,
     _workspace_root: &Path,
@@ -755,13 +832,64 @@ pub(crate) fn scene_document_to_authored_problem_ir(
     scene_document: &SceneDocument,
     requested_execution: &fullmag_application::RequestedExecution,
 ) -> Result<fullmag_ir::ProblemIR, ApiError> {
-    capture_authored_scene(
-        repo_root,
-        workspace_root,
-        scene_document,
-        requested_execution,
-        SceneCaptureKind::ProblemIr,
+    scene_document_to_authored_problem_ir_with_asset_root(
+        repo_root, workspace_root, None, scene_document, requested_execution,
     )
+}
+
+pub(crate) fn scene_document_to_authored_problem_ir_with_asset_root(
+    repo_root: &Path,
+    workspace_root: &Path,
+    asset_root: Option<&Path>,
+    scene_document: &SceneDocument,
+    requested_execution: &fullmag_application::RequestedExecution,
+) -> Result<fullmag_ir::ProblemIR, ApiError> {
+    capture_authored_scene_with_asset_root(
+        repo_root, workspace_root, asset_root, scene_document, requested_execution,
+        SceneCaptureKind::ProblemIr, None,
+    )
+}
+
+/// Prepare a concrete solver study without replaying a stage's physical
+/// mutations into the workspace used by Build Mesh or magnetization Apply.
+pub(crate) fn scene_document_to_preparation_problem_ir_with_asset_root(
+    repo_root: &Path,
+    workspace_root: &Path,
+    asset_root: Option<&Path>,
+    scene_document: &SceneDocument,
+    requested_execution: &fullmag_application::RequestedExecution,
+) -> Result<fullmag_ir::ProblemIR, ApiError> {
+    let problem = scene_document_to_authored_problem_ir_with_asset_root(
+        repo_root, workspace_root, asset_root, scene_document, requested_execution,
+    )?;
+    if !fullmag_ir::bb_pipeline::is_gpu_bb_pipeline_carrier(&problem) {
+        return Ok(problem);
+    }
+    let config = scene_document_to_authored_script_config_with_asset_root(
+        repo_root, workspace_root, asset_root, scene_document, requested_execution,
+    )?;
+    let stages = materialize_scene_document_stages(config)?;
+    gpu_bb_preparation_study(problem, &stages)
+}
+
+fn gpu_bb_preparation_study(
+    mut problem: fullmag_ir::ProblemIR,
+    stages: &[fullmag_application::script_stage_contract::ResolvedScriptStage],
+) -> Result<fullmag_ir::ProblemIR, ApiError> {
+    if !fullmag_ir::bb_pipeline::is_gpu_bb_pipeline_carrier(&problem) || stages.is_empty()
+        || stages.iter().any(|stage| stage.action.is_some() || !matches!(
+            &stage.ir.study, fullmag_ir::StudyIR::Relaxation {
+                algorithm: fullmag_ir::RelaxationAlgorithmIR::ProjectedGradientBb, ..
+            }
+        ))
+    {
+        return Err(ApiError::unprocessable("GPU BB preparation requires a validated BB-only pipeline"));
+    }
+    // Only study controls are borrowed. In particular, magnetization assignment
+    // payloads captured on the first stage must not change this base model.
+    problem.study = stages[0].ir.study.clone();
+    problem.validate().map_err(|errors| ApiError::unprocessable(errors.join("; ")))?;
+    Ok(problem)
 }
 
 /// Capture the immutable ProblemIR inputs for a canonical StudyPlan.
@@ -773,6 +901,7 @@ pub(crate) fn scene_document_to_authored_problem_ir(
 /// application Study materializer. Geometry/lead assets are materialized only
 /// for this accepted-execution boundary; no profile or host capability is
 /// inferred here.
+#[cfg(test)]
 pub(crate) fn scene_document_to_study_execution_inputs(
     repo_root: &Path,
     workspace_root: &Path,
@@ -794,6 +923,7 @@ pub(crate) fn scene_document_to_study_execution_inputs(
 /// assets from the immutable script's parent while keeping generated files in
 /// the writable workspace root. `None` preserves the existing workspace-root
 /// fallback for callers that do not have a script source root.
+#[cfg(test)]
 pub(crate) fn scene_document_to_study_execution_inputs_with_asset_root(
     repo_root: &Path,
     workspace_root: &Path,
@@ -833,42 +963,70 @@ pub(crate) fn scene_document_to_study_execution_inputs_with_asset_root_and_progr
         requested_execution,
         progress_sender,
     )?;
+    study_execution_inputs_from_stages(&stages, scene_document, study)
+}
+
+/// Keep the authored tree available for sequential materialization. Its
+/// configuration nodes have already taken effect in each resulting ProblemIR
+/// by the time a worker sees that physical input.
+pub(crate) fn select_scene_pipeline_tasks(study: &mut StudyPlan) {
+    use fullmag_authoring::StudyStepKind;
+    if study.source_pipeline_version.is_none() {
+        return;
+    }
+    for step in &mut study.steps {
+        if matches!(&step.kind, StudyStepKind::Group { .. })
+            || matches!(&step.kind, StudyStepKind::Primitive { stage_kind }
+                if stage_kind.is_pipeline_input_configuration())
+        {
+            step.enabled = false;
+        }
+    }
+}
+
+fn study_execution_inputs_from_stages(
+    stages: &[fullmag_application::script_stage_contract::ResolvedScriptStage],
+    scene_document: &SceneDocument,
+    study: &StudyPlan,
+) -> Result<Vec<fullmag_application::StudyStepExecutionInput>, ApiError> {
     let enabled_steps = study.steps.iter().filter(|step| step.enabled);
+    let flat_input = if study.source_pipeline_version.is_none() && enabled_steps.clone().count() == 1 {
+        match stages {
+            [stage] if stage.action.is_none() => Some(stage),
+            _ => None,
+        }
+    } else {
+        None
+    };
     enabled_steps
         .map(|step| {
             let matches = stages
                 .iter()
                 .filter(|stage| stage.action.is_none())
                 .filter(|stage| {
-                    stage
-                        .provenance
-                        .as_ref()
-                        .is_some_and(|provenance| provenance.authored_step_id == step.step_id)
+                    if let Some(provenance) = &stage.provenance {
+                        provenance.authored_step_id == step.step_id
+                    } else {
+                        study.source_pipeline_version.is_none()
+                            && stage.ir.problem_meta.runtime_metadata.get("active_stage_id")
+                                .and_then(Value::as_str) == Some(step.step_id.as_str())
+                    }
                 })
                 .collect::<Vec<_>>();
             let stage = if matches.len() == 1 {
                 matches[0]
-            } else if stages.len() == 1 && matches.is_empty() {
-                // A flat scene has no authored stage provenance.  Its one
-                // solver input is still the canonical source for the one-step
-                // StudyPlan projection.
-                stages.first().ok_or_else(|| {
-                    ApiError::unprocessable(
-                        "accepted study execution has no authored solver stage",
-                    )
-                })?
             } else if matches.is_empty() {
-                return Err(ApiError::unprocessable(format!(
+                flat_input.ok_or_else(|| ApiError::unprocessable(format!(
                     "accepted study step `{}` has no authored solver stage",
                     step.step_id
-                )));
+                )))?
             } else {
                 return Err(ApiError::unprocessable(format!(
                     "accepted study step `{}` expands to multiple solver stages",
                     step.step_id
                 )));
             };
-            stage.ir.validate().map_err(|errors| {
+            stage.ir.validate_before_execution_profile_binding().map_err(|errors| {
                 ApiError::unprocessable(format!(
                     "accepted study step `{}` produced invalid ProblemIR: {}",
                     step.step_id,
@@ -884,8 +1042,35 @@ pub(crate) fn scene_document_to_study_execution_inputs_with_asset_root_and_progr
         .collect()
 }
 
+pub(crate) fn try_reuse_live_geometry_for_study(
+    repo_root: &Path,
+    workspace_root: &Path,
+    asset_root: Option<&Path>,
+    scene: &SceneDocument,
+    requested_execution: &fullmag_application::RequestedExecution,
+    study: &StudyPlan,
+    asset: &fullmag_ir::FemDomainMeshAssetIR,
+    provenance: &Value,
+) -> Result<Option<Vec<fullmag_application::StudyStepExecutionInput>>, ApiError> {
+    if !crate::live_geometry_mesh_build::can_qualify_live_geometry_reuse(scene, asset) {
+        return Ok(None);
+    }
+    let config = scene_document_to_authored_script_config_with_asset_root(
+        repo_root, workspace_root, asset_root, scene, requested_execution,
+    )?;
+    let stages = materialize_scene_document_stages(config)?;
+    let mut inputs = study_execution_inputs_from_stages(&stages, scene, study)?;
+    if !crate::live_geometry_mesh_build::bind_reused_geometry_to_inputs(
+        repo_root, scene, asset, provenance, &mut inputs,
+    )? {
+        return Ok(None);
+    }
+    Ok(Some(inputs))
+}
+
 /// Capture actual authored stage IR/actions through the same Python helper as
 /// script execution. This does not bind profiles or create execution readiness.
+#[cfg(test)]
 pub(crate) fn scene_document_to_authored_script_config(
     repo_root: &Path,
     workspace_root: &Path,
@@ -904,6 +1089,7 @@ pub(crate) fn scene_document_to_authored_script_config(
 /// Project actual authored stages through the shared canonical producer.
 /// Pure output-policy configuration is sufficient here: writer availability,
 /// profile binding, state-port compilation and admission remain separate gates.
+#[cfg(test)]
 pub(crate) fn scene_document_to_authored_stages(
     repo_root: &Path,
     workspace_root: &Path,
@@ -956,6 +1142,7 @@ fn materialize_scene_document_stages(
 /// Explicit execution capture with canonical geometry and lead-input producers.
 /// This returns the complete authored graph; selecting a source step, binding
 /// profiles and proving mesh/solver readiness remain caller responsibilities.
+#[cfg(test)]
 pub(crate) fn scene_document_to_prepared_script_config(
     repo_root: &Path,
     workspace_root: &Path,
@@ -1067,6 +1254,7 @@ impl SceneCaptureKind {
     }
 }
 
+#[cfg(test)]
 fn capture_authored_scene<T: serde::de::DeserializeOwned>(
     repo_root: &Path,
     workspace_root: &Path,
@@ -1123,6 +1311,11 @@ fn capture_authored_scene_with_asset_root_and_progress<T: serde::de::Deserialize
         .map_err(|error| ApiError::bad_request(error.message))?;
     std::fs::create_dir_all(workspace_root)
         .map_err(|error| ApiError::internal(format!("failed to prepare workspace: {error}")))?;
+
+    let pinned_scene = crate::imported_geometry_sources::snapshot_pinned_stl_sources(
+        repo_root, workspace_root, asset_root, scene_document,
+    )?;
+    let scene_document = &pinned_scene;
 
     let scene_path = workspace_root.join(format!("preparation-scene-{}.json", uuid_v4_hex()));
     let _scene_guard = TemporaryFileGuard(scene_path.clone());
@@ -1341,7 +1534,14 @@ fn run_python_helper_with_policy(
     let inherited_pythonpath = std::env::var("PYTHONPATH").ok();
     {
         let mut command = python_command(repo_root)?;
-        command.args(args);
+        command.args(args).stdin(Stdio::null());
+        if runtime_helper_loads_authored_script(args) {
+            if let Some(snapshot) = material_catalog_snapshot() {
+                let input = material_catalog_input(&snapshot)
+                    .map_err(|error| ApiError::internal(error.to_string()))?;
+                command.arg("--material-catalog-stdin").stdin(Stdio::from(input));
+            }
+        }
         // Large mesh exports use stdout as a JSON data channel. Keep it
         // buffered; progress events already flush stderr explicitly.
         command.env_remove("PYTHONUNBUFFERED");
@@ -1401,10 +1601,7 @@ fn run_progress_python_helper(
     mut command: ProcessCommand,
     sender: &tokio::sync::mpsc::Sender<PythonHelperProgress>,
 ) -> io::Result<Output> {
-    command
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
+    command.stdout(Stdio::piped()).stderr(Stdio::piped());
     let mut child = command.spawn()?;
     let Some(mut stdout) = child.stdout.take() else {
         let _ = child.kill();
@@ -1627,10 +1824,7 @@ fn run_bounded_python_helper_with_budget(
     };
     let stdout_path = logs.stdout_path.clone();
     let stderr_path = logs.stderr_path.clone();
-    command
-        .stdin(Stdio::null())
-        .stdout(Stdio::from(stdout))
-        .stderr(Stdio::from(stderr));
+    command.stdout(Stdio::from(stdout)).stderr(Stdio::from(stderr));
     let mut child = match command.spawn() {
         Ok(child) => child,
         Err(error) => return Err(BoundedHelperError::Spawn(error)),
@@ -1766,7 +1960,7 @@ fn bounded_helper_log_metadata(path: &Path, stream: &str) -> Result<u64, ApiErro
 
 fn read_bounded_helper_log_with_limit(path: &Path, maximum: u64) -> Result<Vec<u8>, ApiError> {
     bounded_helper_log_metadata(path, "captured")?;
-    let mut file = File::open(path).map_err(|error| {
+    let file = File::open(path).map_err(|error| {
         ApiError::internal(format!("failed to read bounded Python helper log: {error}"))
     })?;
     let mut bytes = Vec::new();
@@ -1826,6 +2020,38 @@ mod tests {
     use super::*;
     use crate::artifacts::{parse_eigen_dispersion_csv, sanitize_artifact_relative_path};
     use axum::http::StatusCode;
+
+    #[test]
+    fn gpu_bb_preparation_borrows_only_study_and_preserves_physical_payload() {
+        use fullmag_ir::*;
+        let mut base = ProblemIR::bootstrap_example();
+        base.backend_policy.requested_backend = BackendTarget::Fem;
+        base.backend_policy.discretization_hints.as_mut().unwrap().fem.as_mut().unwrap()
+            .gpu_bb_preconditioner = Some(FemGpuBbPreconditionerIR::ExchangeMass);
+        base.problem_meta.entrypoint_kind = "flat_workspace".into();
+        base.problem_meta.runtime_metadata.insert("runtime_selection".into(), serde_json::json!({"device":"gpu"}));
+        let cases: serde_json::Value = serde_json::from_str(include_str!("../../fullmag-ir/tests/fixtures/gpu_bb_pipeline_cases.json")).unwrap();
+        base.problem_meta.runtime_metadata.insert("study_pipeline".into(), cases[0]["pipeline"].clone());
+        let mut stage = base.clone();
+        stage.study = StudyIR::Relaxation {
+            algorithm: RelaxationAlgorithmIR::ProjectedGradientBb, dynamics: None,
+            stop: RelaxStopIR { torque_tolerance_apm: Some(1e-6), energy_tolerance_j: None, max_steps: Some(2), max_relaxation_time_s: None },
+            sampling: base.study.sampling().clone(),
+        };
+        // Model changes on an execution stage cannot leak into preparation.
+        stage.materials[0].saturation_magnetisation *= 2.0;
+        stage.magnets[0].initial_magnetization = Some(InitialMagnetizationIR::RandomSeeded { seed: 99 });
+        if let Some(GeometryEntryIR::Box { size, .. }) = stage.geometry.entries.first_mut() {
+            size[0] *= 2.0;
+        }
+        let stages = vec![fullmag_application::script_stage_contract::ResolvedScriptStage::solver(stage.clone(), 0.0, "flat_relax")];
+        let prepared = gpu_bb_preparation_study(base.clone(), &stages).unwrap();
+        let mut expected = base.clone();
+        expected.study = stage.study;
+        assert_eq!(serde_json::to_value(&prepared).unwrap(), serde_json::to_value(expected).unwrap());
+        assert!(matches!(prepared.study, StudyIR::Relaxation { algorithm: RelaxationAlgorithmIR::ProjectedGradientBb, .. }));
+        assert!(gpu_bb_preparation_study(base, &[]).is_err());
+    }
 
     #[test]
     fn generated_accepted_source_guard_removes_only_its_private_entry() {
@@ -1987,7 +2213,7 @@ mod tests {
 
         // Exercise the complete accepted compiler and catalog, not only stage expansion.
         let generated = render_accepted_scene_source_bounded(&root, workspace.path(), &scene).unwrap();
-        let capture = capture_startup_script_scene(&root, workspace.path(), &generated.path).unwrap();
+        let capture = capture_startup_script_scene(&root, workspace.path(), &generated.path, false).unwrap();
         let accepted = fullmag_application::compile_accepted_closed_loop_pipeline(
             prepared, "study:closed-loop-full-acceptance".into(), scene.revision,
             reference.clone(), layers.clone(), capture.manifest.clone(),
@@ -2078,6 +2304,185 @@ mod tests {
             selected, &stage_id, &port_id, "wrong-output",
         ).is_err());
         capture.verify_unchanged().unwrap();
+    }
+
+    #[test]
+    fn accepted_scene_keeps_configuration_and_reset_on_the_correct_physical_input() {
+        let root = repo_root();
+        let workspace = tempfile::tempdir().unwrap();
+        let source = workspace.path().join("configured_study.py");
+        std::fs::write(&source, r#"import fullmag as fm
+study = fm.study("ordered-configuration")
+study.engine("fdm")
+body = study.geometry(fm.Box(10e-9, 10e-9, 5e-9), name="film")
+body.Ms = 800e3
+body.Aex = 13e-12
+body.alpha = 0.01
+body.m = fm.texture.uniform(1, 0, 0)
+study.stages.add_run(stage_id="before", until=1e-12)
+study.stages.tableautosave(5e-14, quantities=["mx", "my"], stage_id="table")
+body.m = fm.texture.uniform(0, 1, 0)
+study.stages.add_run(stage_id="after", until=1e-12)
+"#).unwrap();
+        let scene = load_scene_document_state(&root, workspace.path(), &source).unwrap();
+        let defaults = fullmag_authoring::StudyPlanMigrationDefaults {
+            model: fullmag_authoring::StudyModelReference {
+                model_id: "model:configuration".into(), version: "1".into(),
+            },
+            solver_config: fullmag_authoring::StudySolverConfigReference {
+                preset_id: "solver:configuration".into(), version: "1".into(),
+            },
+            discretization: fullmag_authoring::StudyDiscretizationReference {
+                recipe_id: "mesh:configuration".into(), version: "1".into(),
+            },
+            execution_profile: fullmag_authoring::StudyExecutionProfileReference {
+                profile_id: "exec:configuration".into(), version: "1".into(),
+            },
+        };
+        let mut study = fullmag_authoring::scene_document_to_study_plan(
+            &scene, "study:configuration", scene.revision, &defaults,
+        ).unwrap();
+        select_scene_pipeline_tasks(&mut study);
+        assert!(!study.steps.iter().find(|step| step.step_id == "table").unwrap().enabled);
+        let requested = fullmag_application::RequestedExecution {
+            backend: "fdm".into(), device: "cpu".into(), precision: "double".into(),
+            mode: "strict".into(), minimum_resources: None,
+        };
+        let stages = scene_document_to_authored_stages(
+            &root, workspace.path(), &scene, &requested,
+        ).unwrap();
+        let inputs = study_execution_inputs_from_stages(&stages, &scene, &study).unwrap();
+        let [before, after] = inputs.as_slice() else { panic!("expected two solver inputs") };
+        assert_eq!(before.step_id, "before");
+        assert_eq!(after.step_id, "after");
+        assert!(before.problem.study.sampling().table_autosave.is_none());
+        assert_eq!(
+            after.problem.study.sampling().table_autosave.as_ref().unwrap().sample_period_s,
+            Some(5e-14),
+        );
+        for (input, direction) in [(before, [1, 0, 0]), (after, [0, 1, 0])] {
+            let magnet = serde_json::to_value(&input.problem.magnets[0]).unwrap();
+            assert_eq!(
+                magnet["initial_magnetization"]["preset_params"]["direction"],
+                serde_json::json!(direction),
+            );
+        }
+        fullmag_application::bind_scene_study_physical_state_flow(
+            &mut study, scene.study.study_pipeline.as_ref(), &inputs,
+        ).unwrap();
+        let before = study.steps.iter().find(|step| step.step_id == "before").unwrap();
+        let after = study.steps.iter().find(|step| step.step_id == "after").unwrap();
+        assert_eq!(after.completion_dependencies, vec![before.step_id.clone()]);
+        assert!(after.inputs.is_empty(), "the full reset does not inherit the previous state");
+
+        // A canonical authored target must not borrow another input, even
+        // when that input is the only solver stage the producer returned.
+        let only_before = stages.iter().find(|stage| {
+            stage.provenance.as_ref().is_some_and(|source| source.authored_step_id == "before")
+        }).unwrap();
+        assert!(study_execution_inputs_from_stages(
+            std::slice::from_ref(only_before), &scene, &study,
+        ).is_err());
+    }
+
+    #[test]
+    fn accepted_run_and_relax_bind_auto_single_to_pinned_gpu() {
+        let root = repo_root();
+        let workspace = tempfile::tempdir().unwrap();
+        let path = workspace.path().join("auto_single.py");
+        std::fs::write(
+            &path,
+            r#"import fullmag as fm
+study = fm.study("accepted_gpu_profile")
+study.engine("fdm")
+study.device("auto", precision="single")
+study.mode("strict")
+study.universe(mode="manual", size=(20e-9, 20e-9, 5e-9))
+study.cell(5e-9, 5e-9, 5e-9)
+body = study.geometry(fm.Box(20e-9, 20e-9, 5e-9), name="body")
+body.Ms = 800e3
+body.Aex = 13e-12
+body.alpha = 0.5
+body.m = fm.texture.uniform(1.0, 0.0, 0.0)
+study.solver(fix_dt=1e-13)
+study.stages.add_relax(algorithm="llg_overdamped", dt=1e-13, tolA=1e-5, max_steps=4, stage_id="relax")
+study.stages.add_run(1e-12, stage_id="run")
+"#,
+        )
+        .unwrap();
+        let scene = load_scene_document_state(&root, workspace.path(), &path).unwrap();
+        let profile: fullmag_ir::ExecutionProfileIR = serde_json::from_value(serde_json::json!({
+            "schema_version": "execution_profile.v1",
+            "profile_id": "exec:accepted-gpu-profile",
+            "version": "1",
+            "defaults": { "backend": "fdm", "device": "gpu", "precision": "single", "mode": "strict" },
+        }))
+        .unwrap();
+        let defaults = fullmag_authoring::StudyPlanMigrationDefaults {
+            model: fullmag_authoring::StudyModelReference {
+                model_id: "model:accepted-gpu-profile".into(),
+                version: "1".into(),
+            },
+            solver_config: fullmag_authoring::StudySolverConfigReference {
+                preset_id: "solver:accepted-gpu-profile".into(),
+                version: "1".into(),
+            },
+            discretization: fullmag_authoring::StudyDiscretizationReference {
+                recipe_id: "mesh:accepted-gpu-profile".into(),
+                version: "1".into(),
+            },
+            execution_profile: fullmag_authoring::StudyExecutionProfileReference {
+                profile_id: profile.profile_id.clone(),
+                version: profile.version.clone(),
+            },
+        };
+        let study = fullmag_authoring::scene_document_to_study_plan(
+            &scene,
+            "study:accepted-gpu-profile",
+            scene.revision,
+            &defaults,
+        )
+        .unwrap();
+        let requested_execution = fullmag_application::RequestedExecution {
+            backend: "fdm".into(),
+            device: "auto".into(),
+            precision: "single".into(),
+            mode: "strict".into(),
+            minimum_resources: None,
+        };
+        let inputs = scene_document_to_study_execution_inputs(
+            &root,
+            workspace.path(),
+            &scene,
+            &requested_execution,
+            &study,
+        )
+        .unwrap();
+        assert_eq!(inputs.len(), 2);
+        assert_eq!(inputs[0].step_id, "relax");
+        assert!(matches!(&inputs[0].problem.study, fullmag_ir::StudyIR::Relaxation { .. }));
+        assert_eq!(inputs[1].step_id, "run");
+        assert!(matches!(&inputs[1].problem.study, fullmag_ir::StudyIR::TimeEvolution { .. }));
+        for input in &inputs {
+            assert_eq!(input.problem.problem_meta.runtime_metadata["runtime_selection"]["device"], "auto");
+            assert!(input.problem.validate().unwrap_err().iter().any(|error| {
+                error.contains("device='auto' with execution_precision='single'")
+            }));
+        }
+        let catalog = fullmag_application::materialize_study_execution(&study, inputs, |id, version| {
+            assert_eq!(id, profile.profile_id);
+            assert_eq!(version, profile.version);
+            Ok(profile.clone())
+        })
+        .unwrap();
+        assert_eq!(catalog.entries().len(), 2);
+        for entry in catalog.entries() {
+            entry.problem().validate().unwrap();
+            let bound = entry.execution_materialization().unwrap();
+            assert_eq!(bound.requested.device, fullmag_ir::ExecutionDevice::Gpu);
+            assert_eq!(bound.requested.precision, fullmag_ir::ExecutionPrecision::Single);
+            assert_eq!(bound.profile_sha256, Some(profile.canonical_sha256().unwrap()));
+        }
     }
 
     #[test]
@@ -2740,24 +3145,46 @@ study.stages.add_eigenmodes(count=4)
     }
 }
 
+fn material_catalog_snapshot() -> Option<Vec<u8>> {
+    let snapshot = fullmag_workspace::material_catalog::read_published_material_versions()
+        .map_err(anyhow::Error::from)
+        .and_then(|versions| {
+            if versions.is_empty() {
+                return Ok(None);
+            }
+            serde_json::to_vec(&versions).map(Some).map_err(anyhow::Error::from)
+        });
+    snapshot.unwrap_or_else(|error| {
+        tracing::warn!(%error, "Shared material catalog is unavailable");
+        Some(MATERIAL_CATALOG_UNAVAILABLE.to_vec())
+    })
+}
+
 /// Bounded, environment-isolated executor for the shared immutable capture producer.
 /// Capture has no geometry/cache environment; meshing remains a separate one-shot preparation.
 pub(crate) fn capture_startup_script_scene(
     repo_root: &Path, workspace_root: &Path, script_path: &Path,
+    include_run_config: bool,
 ) -> Result<fullmag_application::script_source_capture::CapturedScriptSource, ApiError> {
     let real_root = python_workspace_root(repo_root);
     let authored = real_root.join("packages/fullmag-py/src/fullmag");
     let fullmag = if authored.is_dir() { authored } else { real_root.join("python/site-packages/fullmag") };
     let fullmag = fs::canonicalize(fullmag).map_err(|error| ApiError::internal(format!("capture runtime root: {error}")))?;
+    let catalog = material_catalog_snapshot();
     fullmag_application::script_source_capture::capture_authored_script(script_path, &fullmag,
-        &fullmag_application::script_source_capture::CaptureOptions { scene_only: true, ..Default::default() },
-        |args, maximum| {
+        &fullmag_application::script_source_capture::CaptureOptions {
+            scene_only: true,
+            include_run_config,
+            material_catalog: catalog.as_deref(),
+            ..Default::default()
+        },
+        |args, maximum, input| {
             let interpreter = resolve_python(repo_root).map_err(|error| anyhow::anyhow!(error.to_string()))?;
             let mut command = interpreter.command(&real_root).map_err(|error| anyhow::anyhow!(error.to_string()))?;
             command.env_clear();
             if let Some(parent) = interpreter.path.parent() { command.env("PATH", parent); }
             command.env("PYTHONHASHSEED", "0").env("PYTHONDONTWRITEBYTECODE", "1");
-            command.args(args);
+            command.args(args).stdin(input.map(Stdio::from).unwrap_or_else(Stdio::null));
             run_bounded_python_helper_with_budget(
                 command, workspace_root, u64::try_from(maximum)?, BOUNDED_SOURCE_CAPTURE_TIMEOUT,
             )

@@ -1,5 +1,9 @@
 "use client";
 
+import type { LivePhaseUniform } from "@/kernel/visualization/livePhaseUniform";
+import { Viewport3DWireframeGestureContext } from "./Viewport3DInteractionWireframe.model";
+import { Viewport3DComplexPhaseInvalidator } from "./Viewport3DComplexPhaseInvalidator";
+
 import type { RequestDiagnosticsController } from "@/kernel/api/RequestDiagnosticsController";
 import type { VisualizationStateResource } from "@/kernel/api/apiTypes";
 import type { PlanarMonitorFramePreview } from "@/kernel/workspace/planarMonitorFramePreview";
@@ -25,7 +29,7 @@ import {
   viewport3DVectorLayersEnabledFromBrowserConfig,
 } from "@/kernel/browserFullmagConfig";
 import { OrthographicCamera, PerspectiveCamera } from "@react-three/drei";
-import { useThree } from "@react-three/fiber";
+import { useFrame, useThree } from "@react-three/fiber";
 import {
   useCallback,
   useEffect,
@@ -100,21 +104,15 @@ import {
   resolveViewport3DCameraFovDegrees,
 } from "../viewport3dCameraFov";
 import type { Viewport3DColors } from "../viewport3dTypes";
-import type { VectorFieldLayerVectorStyle } from "./VectorFieldLayer";
+import type { VectorFieldLayerVectorStyle } from "./VectorFieldLayer.model";
 import { DimensionFrameLayer } from "./DimensionFrameLayer";
 import { hasMeaningfulDimensionFrameBounds } from "./dimensionFrameModel";
 import { Viewport3DBackground } from "./Viewport3DBackground";
 import { Viewport3DCaptureSource } from "./Viewport3DCaptureSource";
 import { useViewportHudRegions } from "../orientation/useViewportHudRegions";
 import { OrientationHudLayer } from "../orientation/OrientationHudLayer";
-import {
-  CameraController,
-  OrbitCameraControls,
-  VIEWPORT_3D_WORLD_UP,
-  resolveViewport3DCameraFit,
-  type Viewport3DCameraChange,
-  type Viewport3DOrbitDebugAngles,
-} from "./CameraControls";
+import { CameraController, OrbitCameraControls, VIEWPORT_3D_WORLD_UP } from "./CameraControls";
+import { resolveViewport3DCameraFit, type Viewport3DCameraChange, type Viewport3DOrbitDebugAngles } from "./CameraControls.model";
 import { CanvasLifecycleProbe } from "./CanvasLifecycleProbe";
 import { resolveViewport3DCameraDepthRange } from "./viewport3DCameraClip";
 import {
@@ -125,7 +123,9 @@ import {
   SelectionHighlightLayer,
 } from "./BoundsLayers";
 import { FallbackTopologyMeshLayer } from "./FallbackTopologyMeshLayer";
-import type { Viewport3DVisibleColorScaleReport } from "../model/viewport3DVisibleColorScale";
+import type { Viewport3DVisibleColorScaleStore } from "../model/viewport3DVisibleColorScaleStore";
+import type { Viewport3DOrbitDebugStore } from "../model/viewport3DOrbitDebugStore";
+import { useViewport3DFrameCommitQueue } from "./Viewport3DFrameCommitQueueContext";
 import { TopologyMeshLayer } from "./TopologyMeshLayer";
 import { MeshSizeHighlightLayer } from "./MeshSizeHighlightLayer";
 import {
@@ -142,11 +142,8 @@ import { PostProcessingLayer } from "./PostProcessingLayer";
 import { resolveViewport3DTargetRenderPlan } from "./viewport3DTargetRenderPlan";
 import { shaderUsesVertexColors } from "./viewport3DLayerSettings";
 import { PrimitiveObjectLayer } from "./PrimitiveObjectLayer";
-import {
-  FdmCuboidLayer,
-  createFdmInspectClearArbitrator,
-  type FdmCuboidInstanceModel,
-} from "./FdmCuboidLayer";
+import { FdmCuboidLayer, type FdmCuboidInstanceModel } from "./FdmCuboidLayer";
+import { createFdmInspectClearArbitrator } from "./FdmCuboidLayer.model";
 import { resolveFdmCuboidPassPlan } from "./fdmCuboidPasses";
 import { VectorGlyphDerivedBufferCacheProvider } from "./vectorGlyphDerivedBufferRuntime";
 import { ArtifactFieldLayer } from "./ArtifactFieldLayer";
@@ -193,10 +190,8 @@ import type { FdmUniverseOutsideSupportOverlayModel } from "../model/fdmUniverse
 import type { Viewport3DFdmTargetRenderView } from "../model/viewport3DFdmTargetViews";
 import type { FdmAirboxPassPlan } from "./fdmAirboxPassPlan";
 import type { Viewport3DVectorBuildReference } from "../viewport3dRenderModel";
-import {
-  FrozenSpinsOverlay,
-  type FrozenSpinsOverlayModel,
-} from "./FrozenSpinsOverlay";
+import { FrozenSpinsOverlay } from "./FrozenSpinsOverlay";
+import { type FrozenSpinsOverlayModel } from "./FrozenSpinsOverlay.model";
 import { Viewport3DMoveToolLayer, type Translation3 } from "../MoveObjectGizmo";
 
 const EMPTY_REGION_OVERLAYS: readonly RegionOverlayInput[] = [];
@@ -266,7 +261,9 @@ interface Viewport3DSceneProps {
   meshQualityOverlayVisible: boolean;
   modeCompositionFieldLayers: ModeCompositionFieldLayerSnapshotMap;
   modeCompositionId: string | null;
-  modeCompositionPhaseByLayerId: ReadonlyMap<string, number>;
+  modeCompositionPhaseUniformByLayerId: ReadonlyMap<string, LivePhaseUniform>;
+  /** Notifies after every complex display phase change (overlay or mode layers). */
+  subscribeComplexPhaseFrames?: ((listener: () => void) => () => void) | null;
   meshRegionOverlayParts: readonly RegionMeshOverlayOwnerPart[];
   meshRegionOverlays: readonly RegionOverlayInput[];
   periodicOverlayModel: PeriodicOverlayModel | null;
@@ -277,12 +274,7 @@ interface Viewport3DSceneProps {
   ) => Promise<void> | void;
   onCameraInteractionEnd?: (epoch?: number) => void;
   onCameraInteractionStart?: (epoch?: number) => void;
-  onOrbitDebugAnglesChange?: (angles: Viewport3DOrbitDebugAngles) => void;
   onCaptureFrameReady?: () => void;
-  onVisualizationFrameCommitted: (
-    revision: number,
-    airboxFrameState: Viewport3DAirboxFrameState,
-  ) => void;
   onSelectObject: (object: Viewport3DPrimitiveObject) => void;
   onSelectPlanarMonitor: (monitorId: string, isDraft: boolean) => void;
   onSelectRegion: (selection: RegionOverlaySelection) => void;
@@ -303,10 +295,11 @@ interface Viewport3DSceneProps {
   orbitDebugAngles: Viewport3DOrbitDebugAngles;
   orbitDebugCommitRevision: number;
   orbitDebugRevision: number;
+  orbitDebugStore?: Viewport3DOrbitDebugStore;
   fallbackSettings: VisualizationTargetSettings;
   savedViewportActive: boolean;
   savedFieldIdentity?: string | null;
-  onVisibleColorScale?: (report: Viewport3DVisibleColorScaleReport) => void;
+  visibleColorScaleStore?: Viewport3DVisibleColorScaleStore;
   primitiveModel: Viewport3DPrimitiveRenderModel | null;
   resetCameraRevision: number;
   requestDiagnostics: RequestDiagnosticsController;
@@ -338,6 +331,7 @@ interface Viewport3DSceneProps {
   scaleUnitMode: Viewport3DScaleUnitMode;
   viewCubeVisible: boolean;
   visualProfileId: Viewport3DVisualProfileId;
+  qualityProfileId?: Viewport3DVisualProfileId;
 }
 
 interface Viewport3DViewportSize {
@@ -1239,7 +1233,7 @@ function Viewport3DModelLayerStack({
   meshQualityOverlayVisible,
   modeCompositionFieldLayers,
   modeCompositionId,
-  modeCompositionPhaseByLayerId,
+  modeCompositionPhaseUniformByLayerId,
   meshRegionOverlayParts,
   meshRegionOverlays,
   periodicOverlayModel,
@@ -1304,7 +1298,7 @@ function Viewport3DModelLayerStack({
   | "meshQualityOverlayVisible"
   | "modeCompositionFieldLayers"
   | "modeCompositionId"
-  | "modeCompositionPhaseByLayerId"
+  | "modeCompositionPhaseUniformByLayerId"
   | "meshRegionOverlayParts"
   | "meshRegionOverlays"
   | "periodicOverlayModel"
@@ -1517,7 +1511,7 @@ function Viewport3DModelLayerStack({
               onInspectSample={onInspectSample}
               onSelectDomain={onSelectDomain}
               onSelectTarget={() => onSelectFdmTarget(view.target)}
-              onSelectFdmCell={onSelectFdmCell}
+              onSelectFdmCell={view.target.kind === "object" && !inspectEnabled ? undefined : onSelectFdmCell}
               onSelectRegion={onSelectRegion}
               regionOverlays={
                 authoredRegionOverlaysVisible
@@ -1622,7 +1616,7 @@ function Viewport3DModelLayerStack({
             meshQualityOverlayVisible={stagedMeshQualityOverlayVisible}
             modeCompositionFieldLayers={modeCompositionFieldLayers}
             modeCompositionId={modeCompositionId}
-            modeCompositionPhaseByLayerId={modeCompositionPhaseByLayerId}
+            modeCompositionPhaseUniformByLayerId={modeCompositionPhaseUniformByLayerId}
             onSelectPart={onSelectPart}
             onRenderableGeometryChange={onRenderableMeshPartChange}
             renderableGeometryStageVisible={stageVisibility.baseGeometry}
@@ -1733,6 +1727,7 @@ function RegionOverlayNativePickingLayer({
 
 function Viewport3DInteractionAndHudStack({
   quantitativeDataVisible,
+  onCaptureFrameReady,
   bounds,
   cameraGestureRef,
   cameraOrthographicScale,
@@ -1743,7 +1738,7 @@ function Viewport3DInteractionAndHudStack({
   onCameraChange,
   onCameraInteractionEnd,
   onCameraInteractionStart,
-  onOrbitDebugAnglesChange,
+  orbitDebugStore,
   orbitDebugAngles,
   orbitDebugCommitRevision,
   orbitDebugRevision,
@@ -1762,7 +1757,8 @@ function Viewport3DInteractionAndHudStack({
   | "onCameraChange"
   | "onCameraInteractionEnd"
   | "onCameraInteractionStart"
-  | "onOrbitDebugAnglesChange"
+  | "onCaptureFrameReady"
+  | "orbitDebugStore"
   | "orbitDebugAngles"
   | "orbitDebugCommitRevision"
   | "orbitDebugRevision"
@@ -1788,9 +1784,10 @@ function Viewport3DInteractionAndHudStack({
         onCameraChange={onCameraChange}
         onCameraInteractionEnd={onCameraInteractionEnd}
         onCameraInteractionStart={onCameraInteractionStart}
-        onOrbitDebugAnglesChange={onOrbitDebugAnglesChange}
+        orbitDebugStore={orbitDebugStore}
         tracker={tracker}
         interactionBlocked={moveGestureActive}
+        rotationMode={rotationMode}
       />
       {viewport3DOrientationHudEnabledFromBrowserConfig() ? (
         <OrientationHudLayer
@@ -1805,7 +1802,7 @@ function Viewport3DInteractionAndHudStack({
           viewCubeVisible={viewCubeVisible}
         />
       ) : null}
-      <PostProcessingLayer quantitativeDataVisible={quantitativeDataVisible} sceneSpan={Math.max(...(bounds?.size ?? [1, 1, 1]))} />
+      <PostProcessingLayer onFrameReady={onCaptureFrameReady} quantitativeDataVisible={quantitativeDataVisible} sceneSpan={Math.max(...(bounds?.size ?? [1, 1, 1]))} />
     </>
   );
 }
@@ -1813,55 +1810,65 @@ function Viewport3DInteractionAndHudStack({
 function useViewport3DRenderAdoptionFrame({
   adoptionRegistry,
   airboxFrameState,
-  invalidate,
-  onVisualizationFrameCommitted,
   resourceFrameKey,
   tracker,
   visualizationRevision,
 }: {
   adoptionRegistry?: Viewport3DRenderAdoptionRegistry;
   airboxFrameState: Viewport3DAirboxFrameState;
-  invalidate: () => void;
-  onVisualizationFrameCommitted: (
-    revision: number,
-    airboxFrameState: Viewport3DAirboxFrameState,
-  ) => void;
   resourceFrameKey: string;
   tracker: Viewport3DResourceTracker;
   visualizationRevision: number | null;
 }) {
+  const frameCommitQueue =
+    useViewport3DFrameCommitQueue<Viewport3DAirboxFrameState>();
+  const invalidate = useBatchedInvalidate("frame-commit");
   const frameIdRef = useRef<number | null>(null);
-  const commitLatestFrame = useEffectEvent(() => {
-    frameIdRef.current = null;
-    if (visualizationRevision === null) return;
-    onVisualizationFrameCommitted(
-      visualizationRevision,
-      airboxFrameState,
-    );
-  });
-  const scheduleFrame = useEffectEvent((reason: "render-adoption" | "resources-updated") => {
-    tracker.recordDirtyFrame(reason);
-    invalidate();
+  const frameCommitGenerationRef = useRef(0);
+  const pendingFrameCommitRef = useRef(false);
+  const markFrameDirty = useEffectEvent(
+    (reason: "render-adoption" | "resources-updated") => {
+      tracker.recordDirtyFrame(reason);
+      frameCommitGenerationRef.current += 1;
+      pendingFrameCommitRef.current = true;
+      invalidate();
+    },
+  );
+  useEffect(() => {
+    markFrameDirty("resources-updated");
+  }, [resourceFrameKey, visualizationRevision]);
+  useEffect(() => {
+    if (!adoptionRegistry) return;
+    return adoptionRegistry.subscribeActive(() => markFrameDirty("render-adoption"));
+  }, [adoptionRegistry]);
+  useFrame(() => {
     if (
+      !pendingFrameCommitRef.current ||
       frameIdRef.current !== null ||
-      visualizationRevision === null ||
       typeof window === "undefined"
     ) {
       return;
     }
-    // Keep the pending frame across React resource re-renders.  Cancelling and
-    // replacing it on every effect cleanup can starve a cached-field ACK until
-    // the coordinator's timeout even though the WebGL buffer is already live.
-    frameIdRef.current = window.requestAnimationFrame(commitLatestFrame);
+    const frameCommitGeneration = frameCommitGenerationRef.current;
+    const frameState = airboxFrameState;
+    const revision = visualizationRevision;
+    pendingFrameCommitRef.current = false;
+    // This nested RAF runs after the current R3F render, so the ACK describes
+    // frame state that has already reached the canvas.
+    frameIdRef.current = window.requestAnimationFrame(() => {
+      frameIdRef.current = null;
+      if (frameCommitGeneration !== frameCommitGenerationRef.current) {
+        pendingFrameCommitRef.current = true;
+        invalidate();
+        return;
+      }
+      if (revision === null) return;
+      frameCommitQueue?.enqueue({ frameState, revision });
+    });
   });
-  useEffect(() => {
-    if (!adoptionRegistry) return;
-    return adoptionRegistry.subscribeActive(() => scheduleFrame("render-adoption"));
-  }, [adoptionRegistry]);
-  useEffect(() => {
-    scheduleFrame("resources-updated");
-  }, [resourceFrameKey, visualizationRevision]);
   useEffect(() => () => {
+    pendingFrameCommitRef.current = false;
+    frameCommitGenerationRef.current += 1;
     if (frameIdRef.current !== null && typeof window !== "undefined") {
       window.cancelAnimationFrame(frameIdRef.current);
       frameIdRef.current = null;
@@ -1919,7 +1926,8 @@ export function Viewport3DScene({
   meshQualityOverlayVisible,
   modeCompositionFieldLayers,
   modeCompositionId,
-  modeCompositionPhaseByLayerId,
+  modeCompositionPhaseUniformByLayerId,
+  subscribeComplexPhaseFrames,
   meshRegionOverlayParts,
   meshRegionOverlays,
   periodicOverlayModel,
@@ -1927,9 +1935,8 @@ export function Viewport3DScene({
   onCameraChange,
   onCameraInteractionEnd,
   onCameraInteractionStart,
-  onOrbitDebugAnglesChange,
+  orbitDebugStore,
   onCaptureFrameReady,
-  onVisualizationFrameCommitted,
   onSelectObject,
   onSelectDomain,
   onSelectFdmTarget,
@@ -1943,7 +1950,7 @@ export function Viewport3DScene({
   orbitDebugRevision,
   savedViewportActive,
   savedFieldIdentity,
-  onVisibleColorScale,
+  visibleColorScaleStore,
   primitiveModel,
   regionOverlayMode,
   regionOverlays,
@@ -1977,6 +1984,7 @@ export function Viewport3DScene({
   scaleUnitMode,
   viewCubeVisible,
   visualProfileId,
+  qualityProfileId,
 }: Viewport3DSceneProps) {
   const appearance = useViewport3DAppearance();
   const invalidate = useBatchedInvalidate("camera");
@@ -2049,7 +2057,7 @@ export function Viewport3DScene({
         if (!surfaceActive && !wireframeActive) continue;
         if (topologyIndexStatus === "ready") {
           const wireframeIndices =
-            partSettings.geometryScope === "full"
+            partSettings.wireframeGeometryScope === "full"
               ? partModel.volumeEdgeIndices
               : partModel.edgeIndices;
           const matchingIndexReady =
@@ -2153,8 +2161,8 @@ export function Viewport3DScene({
     [bounds, cameraOrthographicScale, effectiveCameraState, viewportSize],
   );
   const visualProfile = useMemo(
-    () => getViewport3DVisualProfile(visualProfileId),
-    [visualProfileId],
+    () => getViewport3DVisualProfile(qualityProfileId ?? visualProfileId),
+    [qualityProfileId, visualProfileId],
   );
   const materialProfile = useMemo(
     () => resolveViewport3DMaterialProfile(visualProfile, appearance),
@@ -2215,8 +2223,6 @@ export function Viewport3DScene({
   useViewport3DRenderAdoptionFrame({
     adoptionRegistry,
     airboxFrameState,
-    invalidate,
-    onVisualizationFrameCommitted,
     resourceFrameKey,
     tracker,
     visualizationRevision,
@@ -2334,13 +2340,15 @@ export function Viewport3DScene({
   );
 
   return (
+    <Viewport3DWireframeGestureContext.Provider value={cameraGestureRef}>
     <VectorGlyphDerivedBufferCacheProvider tracker={tracker}>
       <ArtifactFieldLayer adoptionRegistry={adoptionRegistry} model={artifactFieldOverlay ?? null} colors={colors} tracker={tracker} sessionIdentity={sessionIdentity ?? null} />
       <AntennaFieldLayer model={antennaFieldOverlay ?? null} colors={colors} tracker={tracker} sessionIdentity={sessionIdentity ?? null} />
       <SavedAntennaSourceLayer model={savedAntennaSourceModel ?? null} colors={colors} tracker={tracker} />
       <Viewport3DBackground colors={colors} mode={appearance.backgroundMode} strength={appearance.backgroundStrength} tracker={tracker} />
-      <Viewport3DCaptureSource onFrameReady={onCaptureFrameReady} />
-      <Viewport3DLightingRig profileId={visualProfileId} appearance={appearance} />
+      <Viewport3DCaptureSource />
+      <Viewport3DComplexPhaseInvalidator subscribe={subscribeComplexPhaseFrames} />
+      <Viewport3DLightingRig profileId={qualityProfileId ?? visualProfileId} appearance={appearance} bounds={bounds} tracker={tracker} />
       {viewport3DCanvasLifecycleProbeEnabledFromBrowserConfig() ? (
         <CanvasLifecycleProbe diagnostics={requestDiagnostics} tracker={tracker} />
       ) : null}
@@ -2420,7 +2428,7 @@ export function Viewport3DScene({
         meshQualityOverlayVisible={meshQualityOverlayVisible}
         modeCompositionFieldLayers={modeCompositionFieldLayers}
         modeCompositionId={modeCompositionId}
-        modeCompositionPhaseByLayerId={modeCompositionPhaseByLayerId}
+        modeCompositionPhaseUniformByLayerId={modeCompositionPhaseUniformByLayerId}
         meshRegionOverlayParts={meshRegionOverlayParts}
         meshRegionOverlays={meshRegionOverlays}
         periodicOverlayModel={periodicOverlayModel}
@@ -2467,7 +2475,7 @@ export function Viewport3DScene({
           <FallbackTopologyMeshLayer
             colors={colors}
             colorScopeKey={savedFieldIdentity}
-            onVisibleColorScale={onVisibleColorScale}
+            visibleColorScaleStore={visibleColorScaleStore}
             femDomain={femDomain}
             fallbackSettings={fallbackSettings}
             fieldModel={fieldModel}
@@ -2496,6 +2504,7 @@ export function Viewport3DScene({
       ) : null}
       <Viewport3DInteractionAndHudStack
         quantitativeDataVisible={quantitativeDataVisible}
+        onCaptureFrameReady={onCaptureFrameReady}
         bounds={bounds}
         cameraGestureRef={cameraGestureRef}
         cameraOrthographicScale={cameraOrthographicScale}
@@ -2509,12 +2518,13 @@ export function Viewport3DScene({
         onCameraChange={onCameraChange}
         onCameraInteractionEnd={onCameraInteractionEnd}
         onCameraInteractionStart={onCameraInteractionStart}
-        onOrbitDebugAnglesChange={onOrbitDebugAnglesChange}
+        orbitDebugStore={orbitDebugStore}
         rotationMode={rotationMode}
         tracker={tracker}
         viewCubeVisible={viewCubeVisible}
         moveGestureActive={moveGestureActive}
       />
     </VectorGlyphDerivedBufferCacheProvider>
+    </Viewport3DWireframeGestureContext.Provider>
   );
 }

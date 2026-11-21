@@ -567,12 +567,16 @@ FrequencyDomainStatus validate_problem(
                 "poisson_airbox_eigen_requires_mean_zero_gauge");
         }
     }
-    if (!string_equals(problem.demag_kind, "periodic_airbox_k0")) {
+    // open_airbox_k0: isolated body, Robin on the whole outer boundary, no
+    // periodic seams; only the production shared-domain assembly may claim it.
+    const bool open_airbox = string_equals(problem.demag_kind, "open_airbox_k0");
+    if (!string_equals(problem.demag_kind, "periodic_airbox_k0") &&
+        !(open_airbox && shared_domain && robin)) {
         return fail(
             problem,
             result,
             FrequencyDomainStatus::validation_error,
-            "PA-E2 Poisson-airbox modal eigensolver requires demag_kind=periodic_airbox_k0",
+            "PA-E2 Poisson-airbox modal eigensolver requires demag_kind=periodic_airbox_k0 or a Robin shared-domain open_airbox_k0",
             "poisson_airbox_eigen_requires_periodic_airbox_k0");
     }
     if (!string_equals(problem.phasor_convention, "exp_plus_i_omega_t") ||
@@ -610,10 +614,12 @@ FrequencyDomainStatus validate_problem(
         string_equals(problem.periodic_mesh_certificate_schema, "periodic_mesh_certificate.v5");
     const bool certificate_v6 =
         string_equals(problem.periodic_mesh_certificate_schema, "periodic_mesh_certificate.v6");
+    const bool pair_counts_valid = open_airbox
+        ? (problem.magnetic_pair_count == 0 && problem.airbox_pair_count == 0)
+        : (problem.magnetic_pair_count != 0 && problem.airbox_pair_count != 0);
     if ((!synthetic_oracle && !certificate_v6) ||
         (synthetic_oracle && !certificate_v5) ||
-        problem.magnetic_pair_count == 0 ||
-        problem.airbox_pair_count == 0) {
+        !pair_counts_valid) {
         return fail(
             problem,
             result,

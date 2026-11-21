@@ -24,7 +24,7 @@ export interface FrequencyDomainPublishedState {
   retainedLastValid: boolean;
   solve: "succeeded" | "failed" | "unknown";
   spectrum: string;
-  window: "complete" | "incomplete" | "not_applicable" | "unknown";
+  "window": "complete" | "incomplete" | "not_applicable" | "unknown";
   source: {
     artifactPath: string | null;
     backend: string | null;

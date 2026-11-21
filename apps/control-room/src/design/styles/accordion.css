@@ -40,8 +40,6 @@
   height: var(--fm-space-4);
   width: var(--fm-space-4);
   flex-shrink: 0;
-  transition-property: transform;
-  transition-duration: var(--fm-duration-slow);
   color: var(--fm-text-muted);
 }
 
@@ -50,22 +48,19 @@
   font-size: var(--fm-font-size-sm);
 }
 
-.fm-accordion-content[data-state=closed] {
-  animation: accordion-up 0.2s ease-out;
-}
+/* Height and rotation motion is opt-in; reduced motion snaps to the final state. */
+@media (prefers-reduced-motion: no-preference) {
+  .fm-accordion-content[data-state=closed] {
+    animation: accordion-up 0.2s ease-out;
+  }
 
-.fm-accordion-content[data-state=open] {
-  animation: accordion-down 0.2s ease-out;
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .fm-accordion-content[data-state=closed],
   .fm-accordion-content[data-state=open] {
-    animation: none;
+    animation: accordion-down 0.2s ease-out;
   }
 
   .fm-accordion-trigger > svg {
-    transition: none;
+    transition-property: transform;
+    transition-duration: var(--fm-duration-slow);
   }
 }
 

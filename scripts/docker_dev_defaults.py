@@ -37,11 +37,13 @@ GROUP_BUDGET_ENVS = (
     "FULLMAG_DEV_FRONTEND_CPUS",
     "FULLMAG_DEV_FRONTEND_MEMORY_GIB",
 )
-# Dependency build inputs declared by compose.toolchain.yaml.
+# Dependency build inputs and the host-side DEV CUDA selector.
 TOOLCHAIN_ENVS = (
     "FULLMAG_CUDA_BASE_IMAGE",
     "FULLMAG_CUDA_BASE_IMAGE_DIGEST",
     "FULLMAG_CUDA_ARCHITECTURES",
+    "FULLMAG_DEV_CUDA_ARCHITECTURES",
+    "FULLMAG_CPU_DEPENDENCY_BUILD_JOBS",
     "FULLMAG_HYPRE_GPU_ARCHITECTURES",
     "FULLMAG_HYPRE_MEMORY_VARIANT",
     "FULLMAG_MFEM_BUILD_JOBS",
@@ -582,6 +584,9 @@ def _discover_pins(
 
 def activate_discovered(args) -> None:
     """Resolve pins, then invoke the unchanged explicit activation operation."""
+    cuda_trace = getattr(args, "cuda_trace", False)
+    if type(cuda_trace) is not bool:
+        raise DiscoveryError("Script activation cuda trace opt-in must be a boolean")
     require_host()
     repo = Path(args.repo_root).resolve(strict=True)
     defaults = resolve_defaults(repo, source_root=getattr(args, "source_root", None),
@@ -601,4 +606,5 @@ def activate_discovered(args) -> None:
         script=args.script,
         request_id=getattr(args, "request_id", None),
         headless=bool(getattr(args, "headless", False)),
+        cuda_trace=cuda_trace,
     ))

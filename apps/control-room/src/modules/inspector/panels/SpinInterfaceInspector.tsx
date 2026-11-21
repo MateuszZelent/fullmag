@@ -25,6 +25,7 @@ import {
   useSessionStatusSelector,
 } from "@/kernel/resources/useSessionStatus";
 import { Button } from "@/shared/ui/Button";
+import { keyedOccurrences } from "@/shared/utils/keyedOccurrences";
 import { getTransportAuthoringCapability } from "@/shared/domain/physics/transportAuthoringCapabilities";
 
 import { useRegisterInspectorEditSession } from "../InspectorEditSession";
@@ -35,7 +36,7 @@ import { InspectorGroup } from "../primitives/InspectorGroup";
 import { PhysicsInspectorOverview } from "./PhysicsInspectorOverview";
 import { buildPhysicsInspectorOverviewModel } from "./PhysicsInspectorOverviewModel";
 import { INTERFACE_TRACE_DIRECTIONS, bindInterfaceTraces, canBindInterfaceTraces, interfaceTraceSelection, buildInterface, interfaceDraft, record, region, reconcileInterfaceDraft, type InterfaceDraft } from "./SpinInterfaceInspectorModel";
-import { transportScopeOptions } from "./TransportCollectionFieldsModel";
+import { parseTransportScopeOption, transportScopeOptions } from "./TransportCollectionFieldsModel";
 import { verifySpinInterfaceMeshOrientation } from "./SpinInterfaceMeshEvidenceModel";
 import { publishCommittedSceneResource } from "@/kernel/resources/geometryLifecycleResources";
 
@@ -256,6 +257,9 @@ export function SpinInterfaceInspectorPanel({ selection }: InspectorPanelProps) 
       const acknowledgedOwner = record(commit.resource);
       const acknowledgedInterfaces = acknowledgedOwner?.interfaces;
       const acknowledgedInterface = Array.isArray(acknowledgedInterfaces) ? acknowledgedInterfaces.find((entry) => record(entry)?.id === submittedDraft.id) : null;
+      const acknowledgedDraft = action === "save" && acknowledgedInterface
+        ? interfaceDraft(acknowledgedInterface)
+        : null;
       if (!Number.isSafeInteger(commit.scene_revision) || commit.scene_revision <= (submittedRevision ?? -1) ||
           commit.committed_scene?.revision !== commit.scene_revision || acknowledgedOwner?.id !== ownerId ||
           !Array.isArray(acknowledgedInterfaces) || (action === "save"
@@ -266,14 +270,10 @@ export function SpinInterfaceInspectorPanel({ selection }: InspectorPanelProps) 
       }
       publishCommittedSceneResource(resources, commit.committed_scene, commit.scene_revision, undefined, false, sessionScopeKey, api.resourceCacheScope);
       const acknowledgedKey = action === "save" && !selected ? JSON.stringify([sessionScopeKey, ownerId, submittedDraft.id]) : draftKey;
-      if (action === "save") setDraftState((current) => {
+      if (action === "save" && acknowledgedDraft) setDraftState((current) => {
         if (current.key !== draftKey) return current;
-        const committedOwner = record(commit.resource);
-        const committedInterface = (committedOwner?.interfaces as unknown[] | undefined)?.find((entry) => record(entry)?.id === submittedDraft.id);
-        if (!committedInterface) return current;
-        const acknowledged = interfaceDraft(committedInterface);
-        const next = reconcileInterfaceDraft(acknowledged, current.value, submittedDraft).draft;
-        return { key: acknowledgedKey, value: next, baseline: acknowledged, ackRevision: commit.scene_revision };
+        const next = reconcileInterfaceDraft(acknowledgedDraft, current.value, submittedDraft).draft;
+        return { key: acknowledgedKey, value: next, baseline: acknowledgedDraft, ackRevision: commit.scene_revision };
       });
       if (action === "save" && !selected) setLocalInterfaceId(submittedDraft.id);
       invalidateSpinAuthoringResources(resources, commit, [
@@ -330,8 +330,19 @@ export function SpinInterfaceInspectorPanel({ selection }: InspectorPanelProps) 
     },
     status: readOnly ? "unsupported" : "active",
   });
+  const ownerOptions = keyedOccurrences(
+    transports.data?.items ?? [],
+    (item) => {
+      const id = record(item)?.id;
+      return typeof id === "string" ? id : JSON.stringify(item);
+    },
+  );
+  const availableInterfaces = keyedOccurrences(
+    (projected.data?.items ?? []).filter((item) => item.owner_spin_transport_id === ownerId),
+    (item) => item.interface_id ?? JSON.stringify(item),
+  );
   return <PhysicsInspectorOverview model={overviewModel} primary={<div className="fm-inspector-panel"><InspectorGroup title="HM/FM interface">
-    {!ref ? <><FormField label="Owning spin transport" type="select" value={ownerId} onChange={(event) => { setLocalOwnerId(event.target.value); setLocalInterfaceId(""); }}><option value="">Select owner</option>{(transports.data?.items ?? []).map((item, index) => { const id = record(item)?.id; return typeof id === "string" ? <option key={`${id}:${index}`} value={id}>{id}</option> : null; })}</FormField><FormField label="Interface" type="select" value={localInterfaceId} onChange={(event) => setLocalInterfaceId(event.target.value)}><option value="">New interface</option>{(projected.data?.items ?? []).filter((item) => item.owner_spin_transport_id === ownerId).map((item, index) => <option key={`${item.interface_id}:${index}`} value={item.interface_id ?? ""}>{item.interface_id ?? `Unknown ${index + 1}`}</option>)}</FormField></> : null}
+    {!ref ? <><FormField label="Owning spin transport" type="select" value={ownerId} onChange={(event) => { setLocalOwnerId(event.target.value); setLocalInterfaceId(""); }}><option value="">Select owner</option>{ownerOptions.map(({ item, key }) => { const id = record(item)?.id; return typeof id === "string" ? <option key={key} value={id}>{id}</option> : null; })}</FormField><FormField label="Interface" type="select" value={localInterfaceId} onChange={(event) => setLocalInterfaceId(event.target.value)}><option value="">New interface</option>{availableInterfaces.map(({ item, key }, index) => <option key={key} value={item.interface_id ?? ""}>{item.interface_id ?? `Unknown ${index + 1}`}</option>)}</FormField></> : null}
     {readOnly && selected ? <><FeedbackBanner kind="warning" message="Unknown interface payload is preserved losslessly and read-only." /><FormField label="Opaque payload" type="textarea" rows={20} readOnly value={JSON.stringify(selected.interface, null, 2)} /></> : <InterfaceFields scene={geometry.data} identityReadOnly={Boolean(addressedId) || pending} draft={draft} patch={patch} />}
     {!readOnly ? <div className="fm-help-text"><div>Owner: {ownerId || "not selected"}</div><div>Qualification: {validation?.execution.qualification ?? capability?.status ?? "checking"}</div><div>{validation?.execution.reason ?? capability?.reason ?? "Capability unavailable."}</div></div> : null}
     {targetUnavailable ? <FeedbackBanner kind="error" message="Selected interface no longer exists. Its last draft is retained; refresh or select a different interface." /> : null}
@@ -347,7 +358,7 @@ export function SpinInterfaceInspectorPanel({ selection }: InspectorPanelProps) 
 
 function InterfaceFields({ draft, scene, identityReadOnly, patch }: { scene: SceneResource | null; identityReadOnly: boolean; draft: InterfaceDraft; patch: (value: Partial<InterfaceDraft>) => void }) {
   const field = (key: keyof InterfaceDraft) => (event: ChangeEvent<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>) => patch({ [key]: event.target.value });
-  const scope = (label: string, objectKey: keyof InterfaceDraft, regionKey: keyof InterfaceDraft) => <FormField label={label} type="select" value={JSON.stringify([draft[objectKey], draft[regionKey]])} onChange={(event) => { const [objectId, regionId] = JSON.parse(event.currentTarget.value); patch({ [objectKey]: objectId, [regionKey]: regionId }); }}>
+  const scope = (label: string, objectKey: keyof InterfaceDraft, regionKey: keyof InterfaceDraft) => <FormField label={label} type="select" value={JSON.stringify([draft[objectKey], draft[regionKey]])} onChange={(event) => { const parsedScope = parseTransportScopeOption(event.currentTarget.value); if (!parsedScope) return; const [objectId, regionId] = parsedScope; patch({ [objectKey]: objectId, [regionKey]: regionId }); }}>
     <option value={'["",""]'}>Select object or authored region</option>
     {transportScopeOptions(scene).map((option) => <option key={`${option.objectId}:${option.regionId}`} value={JSON.stringify([option.objectId, option.regionId])}>{option.label}</option>)}
   </FormField>;
@@ -373,7 +384,7 @@ function InterfaceFields({ draft, scene, identityReadOnly, patch }: { scene: Sce
         {interfaceTraceSelection(draft) === "stored" ? <option value="stored" disabled>Stored binding (review before rebind)</option> : null}
         {INTERFACE_TRACE_DIRECTIONS.map((direction) => <option key={direction.surfaceId} value={direction.surfaceId}>{direction.surfaceId + " normal-metal trace → " + direction.oppositeId + " ferromagnet trace"}</option>)}
       </FormField>
-      <div className="fm-help-text" role="status">
+      <div className="fm-help-text">
         <div>Normal-metal scope: {draft.normalObject || "not selected"} / {draft.normalRegion || "whole object"}</div>
         <div>Ferromagnet scope: {draft.ferromagnetObject || "not selected"} / {draft.ferromagnetRegion || "whole object"}</div>
         <div>Each region is selected by its authored scope. Review scope changes before Apply; stored object references require an explicit rebind.</div>

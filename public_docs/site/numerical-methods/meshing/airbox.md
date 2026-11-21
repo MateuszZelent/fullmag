@@ -80,31 +80,7 @@ requested and realized shapes are not conflated.
 
 ### Complete public signature and IR matrix
 
-The following rows are the exhaustive public-signature contract for this page; each row mirrors one public_api.parameters entry in the source map.
-
-| Python | Type | Default | SI unit | Validation | Meaning | Backend support | ProblemIR |
-| --- | --- | --- | --- | --- | --- | --- | --- |
-| study.universe(mode=...) | str \| None | None | 1 | forwarded to StudyUniverseConfig | domain mode | FEM CPU/GPU capability-gated | runtime_metadata.study_universe.mode |
-| study.universe(size=...) | Sequence[float] \| None | None | m | as_vector3; explicit dimensions must be positive when realized | outer dimensions | FEM CPU/GPU capability-gated | runtime_metadata.study_universe.size |
-| study.universe(center=...) | Sequence[float] \| None | None | m | as_vector3 | outer center | FEM CPU/GPU capability-gated | runtime_metadata.study_universe.center |
-| study.universe(padding=...) | Sequence[float] \| None | None | m | as_vector3; domain validation governs signs | directional padding | FEM CPU/GPU capability-gated | runtime_metadata.study_universe.padding |
-| study.universe.mesh(maximum_element_size=...) | float \| None | None | m | positive | airbox coarse target | FEM CPU/GPU capability-gated | runtime_metadata.study_universe.airbox_hmax |
-| study.universe.mesh(minimum_element_size=...) | float \| None | None | m | positive and no greater than numeric maximum | airbox lower clamp | FEM CPU/GPU capability-gated | runtime_metadata.study_universe.airbox_hmin |
-| study.universe.mesh(maximum_element_growth_rate=...) | float \| None | None | 1 | finite positive at most 2.5 | airbox growth target | FEM CPU/GPU capability-gated | runtime_metadata.study_universe.airbox_growth_rate |
-| study.universe.mesh(grading=...) | str \| None | None | 1 | forwarded without vocabulary validation by this handle | airbox grading request | FEM CPU/GPU capability-gated | runtime_metadata.study_universe.airbox_grading |
-| study.universe(mode=...) | str or None | None | $1$ | normalized by `_configure_study_universe` | requested universe mode | FEM authoring/lowering; runtime not qualified here | runtime_metadata.study_universe.mode |
-| study.universe(size=...) | Sequence[float] or None | None | $\mathrm{m}$ | explicit realized dimensions must be positive | requested outer-domain dimensions | FEM authoring/lowering; runtime not qualified here | runtime_metadata.study_universe.size |
-| study.universe(center=...) | Sequence[float] or None | None | $\mathrm{m}$ | supplied center is a finite three-vector at realization | requested outer-domain center | FEM authoring/lowering; runtime not qualified here | runtime_metadata.study_universe.center |
-| study.universe(padding=...) | Sequence[float] or None | None | $\mathrm{m}$ | universe configuration validation | requested directional clearance | FEM authoring/lowering; runtime not qualified here | runtime_metadata.study_universe.padding |
-| study.universe.mesh(maximum_element_size=...) | float or None | None | $\mathrm{m}$ | positive when supplied | far-field airbox target | FEM authoring/lowering; runtime not qualified here | runtime_metadata.study_universe.airbox_hmax |
-| study.universe.mesh(minimum_element_size=...) | float or None | None | $\mathrm{m}$ | positive and no greater than maximum size | near-interface airbox target | FEM authoring/lowering; runtime not qualified here | runtime_metadata.study_universe.airbox_hmin |
-| study.universe.mesh(maximum_element_growth_rate=...) | float or None | None | $1$ | positive when supplied | requested neighbor growth limit | FEM authoring/lowering; runtime not qualified here | runtime_metadata.study_universe.airbox_growth_rate |
-| study.universe.mesh(grading=...) | str or None | None | $1$ | stored as requested grading mode | requested exterior grading mode | FEM authoring/lowering; runtime not qualified here | runtime_metadata.study_universe.airbox_grading |
-| study.build_domain_mesh() | StudyBuilder | n/a | $1$ | requires a realizable shared-domain configuration | public realization boundary | FEM build path; no device-runtime claim | current builder state to shared-domain mesh artifact |
-| AirboxOptions.padding_factor | float | 3.0 | $1$ | finite and greater than `1` for automatic mixed shared-domain sizing | automatic magnetic-bounding-box scale | FEM realization only | runtime_metadata.study_universe to AirboxOptions.padding_factor |
-| AirboxOptions.shape | str | bbox | $1$ | OCC: exact `sphere` only for that value; mixed swept route requires `bbox` | requested outer geometry | FEM realization only | runtime_metadata.study_universe to route-specific AirboxOptions.shape |
-
-
+The following rows document the public signature and `ProblemIR` contract for this page.
 
 The public authoring boundary is `study.universe(...)`, followed by the separately scoped
 `study.universe.mesh(...)`; `StudyBuilder.build_domain_mesh()` realizes the configured shared
@@ -212,7 +188,7 @@ native FEM, GPU, or scientific-convergence qualification.
 ## Limitations
 
 A geometrically valid mesh does not establish a correct boundary closure or a converged solution.
-No runtime claim follows from the page, source map, or builder/lowering probe. Sphere support is
+No runtime claim follows from this page or a builder/lowering probe alone. Sphere support is
 route-specific, and mixed swept meshing deliberately rejects non-bbox requests.
 
 (airbox-scientific-bibliography)=

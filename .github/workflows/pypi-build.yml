@@ -1,0 +1,117 @@
+name: Build Python package
+
+on:
+  workflow_call:
+    inputs:
+      version:
+        description: Optional release version; empty builds use a development version.
+        required: false
+        type: string
+        default: ""
+      release:
+        description: Require a supplied release version and license metadata.
+        required: false
+        type: boolean
+        default: false
+    outputs:
+      version:
+        description: Version used to build the distributions.
+        value: ${{ jobs.build.outputs.version }}
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: build sdist and wheel
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+
+      - name: Resolve release version
+        id: version
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+          IS_RELEASE: ${{ inputs.release }}
+          RUN_NUMBER: ${{ github.run_number }}
+        run: |
+          set -euo pipefail
+          base="$(python -c "import tomllib;print(tomllib.load(open('Cargo.toml','rb'))['workspace']['package']['version'])")"
+          if [ "$IS_RELEASE" = "true" ]; then
+            if [ -z "$INPUT_VERSION" ]; then
+              echo "::error::release builds require a version"
+              exit 1
+            fi
+            version="$INPUT_VERSION"
+          else
+            # Check builds only; this version is never uploaded.
+            version="${base}.dev${RUN_NUMBER}"
+          fi
+          echo "base=${base} version=${version}"
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+
+      - name: Build
+        env:
+          FULLMAG_RELEASE_VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade build twine
+          python -m build --outdir dist packages/fullmag-py
+          ls -l dist
+
+      - name: Check distributions
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          python -m twine check --strict dist/*
+          test -f "dist/fullmag-${VERSION}-py3-none-any.whl"
+          test -f "dist/fullmag-${VERSION}.tar.gz"
+          python - <<'EOF'
+          import pathlib, zipfile
+          (wheel,) = pathlib.Path("dist").glob("*.whl")
+          names = zipfile.ZipFile(wheel).namelist()
+          stray = [n for n in names if not n.startswith(("fullmag/", "fullmag-"))]
+          if stray:
+              raise SystemExit(f"unexpected wheel entries: {stray}")
+          print(f"{wheel.name}: {len(names)} entries")
+          EOF
+
+      - name: Smoke-install wheel in a clean venv
+        run: |
+          set -euo pipefail
+          python -m venv /tmp/smoke
+          /tmp/smoke/bin/python -m pip install dist/*.whl
+          cd /tmp
+          /tmp/smoke/bin/python -I -c "import fullmag as fm, importlib.metadata as m; print('fullmag', m.version('fullmag')); fm.geometry(fm.Box(1e-8, 1e-8, 1e-8), name='smoke')"
+          /tmp/smoke/bin/fullmag-python --help > /dev/null
+
+      - name: Require a declared license before publishing
+        if: inputs.release
+        run: |
+          set -euo pipefail
+          python - <<'EOF'
+          import pathlib, zipfile
+          (wheel,) = pathlib.Path("dist").glob("*.whl")
+          z = zipfile.ZipFile(wheel)
+          (meta,) = [n for n in z.namelist() if n.endswith(".dist-info/METADATA")]
+          headers = z.read(meta).decode().split("\n\n", 1)[0]
+          if "License-Expression:" not in headers:
+              raise SystemExit("packages/fullmag-py/pyproject.toml declares no license; refusing to publish")
+          EOF
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: python-package-distributions
+          path: dist/
+          if-no-files-found: error

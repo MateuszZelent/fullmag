@@ -198,6 +198,7 @@ void destroy_scalar(DeviceCsrScalar &op)
 uint64_t csr_pattern_digest(const DeviceCsrScalar &op)
 {
     uint64_t hash = 14695981039346656037ull;
+    fnv1a_u64(hash, kFemCompactMarkerMapRevision);
     fnv1a_string(hash, "fullmag.fem.gpu.demag.recovery.csr-pattern.v1");
     fnv1a_u64(hash, op.rows);
     fnv1a_u64(hash, op.nnz);
@@ -439,22 +440,6 @@ bool validate_ctx_mfem_operator_mesh(
         error = "strict FEM GPU demag ctx/MFEM typed connectivity extent divergence";
         return false;
     }
-    uint32_t maximum_canonical_marker = 0u;
-    bool has_canonical_air = ctx.mesh.cell_markers.empty();
-    for (const uint32_t marker : ctx.mesh.cell_markers) {
-        maximum_canonical_marker = std::max(maximum_canonical_marker, marker);
-        has_canonical_air = has_canonical_air || marker == 0u;
-    }
-    if (has_canonical_air &&
-        maximum_canonical_marker >=
-            static_cast<uint32_t>(std::numeric_limits<int>::max())) {
-        error = "strict FEM GPU demag ctx/MFEM cannot map canonical air marker";
-        return false;
-    }
-    const uint32_t mfem_air_attribute = has_canonical_air
-        ? maximum_canonical_marker + 1u
-        : 1u;
-
     for (int element = 0; element < mesh.GetNE(); ++element) {
         if (ctx.mesh.cell_types[static_cast<size_t>(element)] !=
             p1_cell_type_for_geometry(mesh.GetElementGeometry(element))) {
@@ -485,11 +470,8 @@ bool validate_ctx_mfem_operator_mesh(
         const uint32_t canonical_marker = ctx.mesh.cell_markers.empty()
             ? 1u
             : ctx.mesh.cell_markers[static_cast<size_t>(element)];
-        const uint32_t expected_mfem_attribute = canonical_marker == 0u
-            ? mfem_air_attribute
-            : canonical_marker;
-        if (expected_mfem_attribute !=
-            static_cast<uint32_t>(mesh.GetAttribute(element))) {
+        const int expected_mfem_attribute = ctx.mfem_context.marker_maps.domain.attribute(canonical_marker);
+        if (expected_mfem_attribute == 0 || expected_mfem_attribute != mesh.GetAttribute(element)) {
             error = "strict FEM GPU demag ctx/MFEM cell-marker divergence";
             return false;
         }

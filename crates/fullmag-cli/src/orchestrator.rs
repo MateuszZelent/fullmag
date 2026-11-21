@@ -2968,6 +2968,7 @@ fn accepted_relax_handoff_for_eigen_stage(
     })
 }
 
+#[cfg(test)]
 fn accepted_relax_handoff_from_completed_stage(
     backend_plan: &BackendPlanIR,
     source_stage: &ContinuationStageSource,
@@ -3011,6 +3012,7 @@ fn accepted_relax_handoff_from_completed_stage_with_exact_artifacts(
     accepted_fields: &fullmag_runner::CertifiedFemEquilibriumFields,
     certified_fields: &fullmag_runner::CertifiedFemEquilibriumFields,
     recomputed_certificate: &fullmag_runner::RecomputedFemLinearizationCertificateV1,
+    forced_acceptance: bool,
 ) -> Result<Option<fullmag_runner::AcceptedFemRelaxStageHandoff>> {
     let BackendPlanIR::Fem(source_plan) = backend_plan else {
         return Ok(None);
@@ -3049,7 +3051,17 @@ fn accepted_relax_handoff_from_completed_stage_with_exact_artifacts(
                 producer_provenance_path.display()
             )
         })?;
-    fullmag_runner::AcceptedFemRelaxStageHandoff::from_completed_relax_verified_with_exact_artifacts_and_provenance(
+    let exact_artifacts = fullmag_runner::AcceptedFemRelaxExactArtifacts {
+        accepted_fields_json: read_exact(&accepted_path, "accepted fields")?,
+        certified_fields_json: read_exact(&certified_path, "certified fields")?,
+        recomputed_certificate_json: read_exact(&recomputed_path, "recomputed certificate")?,
+    };
+    let constructor = if forced_acceptance {
+        fullmag_runner::AcceptedFemRelaxStageHandoff::from_completed_relax_verified_with_exact_artifacts_and_provenance_forced
+    } else {
+        fullmag_runner::AcceptedFemRelaxStageHandoff::from_completed_relax_verified_with_exact_artifacts_and_provenance
+    };
+    constructor(
         &source_stage.run_id,
         &source_stage.stage_id,
         &source_stage.stage_kind,
@@ -3061,16 +3073,36 @@ fn accepted_relax_handoff_from_completed_stage_with_exact_artifacts(
         accepted_fields.clone(),
         certified_fields.clone(),
         recomputed_certificate.clone(),
-        fullmag_runner::AcceptedFemRelaxExactArtifacts {
-            accepted_fields_json: read_exact(&accepted_path, "accepted fields")?,
-            certified_fields_json: read_exact(&certified_path, "certified fields")?,
-            recomputed_certificate_json: read_exact(&recomputed_path, "recomputed certificate")?,
-        },
+        exact_artifacts,
         producer_provenance,
         producer_provenance_json,
     )
     .map(Some)
     .map_err(|error| anyhow!(error.to_string()))
+}
+
+/// Note 0830, eq-k0-forced-residual-torque: entry `i` is true when the next
+/// physical stage after `i` (synthetic action stages such as change_device are
+/// skipped) is an eigenmodes stage that explicitly requested
+/// `equilibrium_acceptance="force"`, so a non-converged relax stage `i` may
+/// still hand its state over.
+fn forced_relax_acceptance_requests(stages: &[(&fullmag_ir::ProblemIR, bool)]) -> Vec<bool> {
+    (0..stages.len())
+        .map(|index| {
+            stages[index + 1..]
+                .iter()
+                .find(|(_, is_action)| !*is_action)
+                .is_some_and(|(next, _)| {
+                    matches!(next.study, fullmag_ir::StudyIR::Eigenmodes { .. })
+                        && next
+                            .problem_meta
+                            .runtime_metadata
+                            .get("modal_equilibrium_acceptance")
+                            .and_then(serde_json::Value::as_str)
+                            == Some("force")
+                })
+        })
+        .collect()
 }
 
 // This value follows the physical continuation, independently of preview state.
@@ -3797,7 +3829,60 @@ fn scene_problem_patch_from_mesh_options(
     Ok(Some(patch))
 }
 
+fn rebind_body_mesh_assets(
+    assets: &mut [fullmag_ir::FemMeshAssetIR],
+    previous_magnets: &[MagnetIR],
+    previous_regions: &[RegionIR],
+    patch: &SceneProblemPatch,
+) -> Result<()> {
+    fn geometry_by_owner<'a>(
+        magnets: &'a [MagnetIR],
+        regions: &'a [RegionIR],
+    ) -> std::collections::BTreeMap<&'a str, &'a str> {
+        magnets
+            .iter()
+            .filter_map(|magnet| {
+                let owner = magnet.object_id.as_deref().unwrap_or(&magnet.name);
+                let region = regions.iter().find(|region| region.name == magnet.region)?;
+                Some((owner, region.geometry.as_str()))
+            })
+            .collect()
+    }
+
+    // The materializer names body assets by geometry. The authoring patch can
+    // name the same geometry by the object's immutable ID instead.
+    let previous = geometry_by_owner(previous_magnets, previous_regions);
+    let next = geometry_by_owner(&patch.magnets, &patch.regions);
+    let mut names = std::collections::BTreeMap::new();
+    for (owner, old_geometry) in previous {
+        if let Some(&new_geometry) = next.get(owner) {
+            if names
+                .insert(old_geometry, new_geometry)
+                .is_some_and(|seen| seen != new_geometry)
+            {
+                bail!("body mesh asset '{old_geometry}' has conflicting destination geometries");
+            }
+        }
+    }
+    for asset in assets {
+        if let Some(name) = names.get(asset.geometry_name.as_str()) {
+            asset.geometry_name = (*name).to_owned();
+        }
+    }
+    Ok(())
+}
+
 fn apply_scene_problem_patch(problem: &mut ProblemIR, patch: &SceneProblemPatch) -> Result<()> {
+    if let Some(assets) = &mut problem.geometry_assets {
+        if assets.fem_domain_mesh_asset.is_none() && !assets.fem_mesh_assets.is_empty() {
+            rebind_body_mesh_assets(
+                &mut assets.fem_mesh_assets,
+                &problem.magnets,
+                &problem.regions,
+                patch,
+            )?;
+        }
+    }
     problem.geometry.entries = patch.geometry_entries.clone();
     problem.regions = patch.regions.clone();
     problem.materials = patch.materials.clone();
@@ -6558,6 +6643,7 @@ fn apply_current_fem_overrides(
             Some(fem) => fem.hmax = hmax,
             None => {
                 hints.fem = Some(FemHintsIR {
+                    gpu_bb_preconditioner: None,
                     order: 1,
                     hmax,
                     mesh: None,
@@ -8394,6 +8480,7 @@ fn record_cancelled_antenna_stage(
     Ok(())
 }
 
+#[cfg(test)]
 fn execute_synthetic_stage(
     action: &ResolvedScriptStageAction,
     artifact_dir: &Path,
@@ -8932,6 +9019,46 @@ fn execute_synthetic_stage_with_interrupt(
             Ok(SyntheticStageOutcome {
                 magnetization: vectors,
                 message: format!("Added regional field drive {}", drive.id),
+            })
+        }
+        ResolvedScriptStageAction::AddMaskFieldDrive { drive } => {
+            let vectors =
+                current_stage_magnetization_vectors(continuation_magnetization, backend_plan);
+            write_synthetic_stage_record(
+                current_stage_artifact_dir,
+                serde_json::json!({
+                    "kind": "add_mask_field_drive",
+                    "drive": drive,
+                    "vector_count": vectors.len(),
+                }),
+            )?;
+            Ok(SyntheticStageOutcome {
+                magnetization: vectors,
+                message: format!("Added mask antenna {}", drive.id),
+            })
+        }
+        ResolvedScriptStageAction::UpdateMaskFieldDrive {
+            drive_id,
+            term,
+            mask_parameters,
+            time_parameters,
+        } => {
+            let vectors =
+                current_stage_magnetization_vectors(continuation_magnetization, backend_plan);
+            write_synthetic_stage_record(
+                current_stage_artifact_dir,
+                serde_json::json!({
+                    "kind": "update_mask_field_drive",
+                    "drive_id": drive_id,
+                    "term": term,
+                    "mask_parameters": mask_parameters,
+                    "time_parameters": time_parameters,
+                    "vector_count": vectors.len(),
+                }),
+            )?;
+            Ok(SyntheticStageOutcome {
+                magnetization: vectors,
+                message: format!("Updated mask antenna {}", drive_id),
             })
         }
         ResolvedScriptStageAction::RemoveFieldDrive { drive_id } => {
@@ -11200,7 +11327,7 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                         continuation_certified_fields = None;
                     }
                     if grid_refresh_command_id.is_some() {
-                        let payload = live_workspace.grid_refresh_snapshot()?;
+                        let payload = live_workspace.grid_refresh_snapshot(remesh_succeeded)?;
                         let publisher_scope = crate::control_room::live_publisher_scope::LivePublisherScope::new(&session_id);
                         anyhow::ensure!(publisher_scope.is_bound()?, "grid refresh requires its attached publisher scope");
                         sync_current_live_snapshot(&session_id, &payload, &publisher_scope)?;
@@ -11242,6 +11369,12 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
     }
 
     crate::script_launch::note_stage(crate::script_launch::Stage::Running);
+    let forced_relax_acceptance = forced_relax_acceptance_requests(
+        &stages
+            .iter()
+            .map(|stage| (&stage.ir, stage.action.is_some()))
+            .collect::<Vec<_>>(),
+    );
     for (stage_index, (mut stage, materialized_execution_plan)) in stages
         .into_iter()
         .zip(stage_execution_plans.into_iter())
@@ -12411,11 +12544,29 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
             ),
             _ => None,
         };
+        // Note 0830, eq-k0-forced-residual-torque: a relax state that stopped
+        // without converging is handed over only to an immediately following
+        // eigen stage that requested equilibrium_acceptance="force".
+        let forced_relax_handoff = forced_relax_acceptance
+            .get(stage_index)
+            .copied()
+            .unwrap_or(false)
+            && stage_result
+                .completion
+                .as_ref()
+                .is_some_and(|completion| completion.status == "completed" && !completion.converged);
+        if forced_relax_handoff {
+            live_workspace.push_log(
+                "warn",
+                "Relaxation did not converge; the next eigen stage requested equilibrium_acceptance=\"force\" and will linearize around the non-equilibrium state (note 0830)".to_string(),
+            );
+        }
         let next_continuation_accepted_fields =
             if matches!(&stage.ir.study, fullmag_ir::StudyIR::Relaxation { .. })
                 && matches!(&execution_plan.backend_plan, BackendPlanIR::Fem(_))
                 && stage_result.completion.as_ref().is_some_and(|completion| {
-                    completion.status == "completed" && completion.converged
+                    completion.status == "completed"
+                        && (completion.converged || forced_relax_handoff)
                 })
             {
                 let path = current_stage_artifact_dir.join(
@@ -12439,7 +12590,8 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
             if matches!(&stage.ir.study, fullmag_ir::StudyIR::Relaxation { .. })
                 && matches!(&execution_plan.backend_plan, BackendPlanIR::Fem(_))
                 && stage_result.completion.as_ref().is_some_and(|completion| {
-                    completion.status == "completed" && completion.converged
+                    completion.status == "completed"
+                        && (completion.converged || forced_relax_handoff)
                 })
             {
                 let path = current_stage_artifact_dir.join(
@@ -12462,7 +12614,8 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
             if matches!(&stage.ir.study, fullmag_ir::StudyIR::Relaxation { .. })
                 && matches!(&execution_plan.backend_plan, BackendPlanIR::Fem(_))
                 && stage_result.completion.as_ref().is_some_and(|completion| {
-                    completion.status == "completed" && completion.converged
+                    completion.status == "completed"
+                        && (completion.converged || forced_relax_handoff)
                 })
             {
                 let path = current_stage_artifact_dir.join(
@@ -12512,6 +12665,7 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                 accepted_fields,
                 certified_fields,
                 recomputed_certificate,
+                forced_relax_handoff,
             )?,
             _ => None,
         };
@@ -12521,6 +12675,7 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
             let engine = fullmag_runner::resolve_planned_runtime_engine(&stage.ir, &execution_plan)
                 .map_err(|error| anyhow!("accepted equilibrium execution owner: {}", error.message))?;
             if stage_result.status == fullmag_runner::RunStatus::Completed && !stage_failed
+                && !forced_relax_handoff
                 && engine.engine_id == "fem_cpu_native" && plan.precision == fullmag_ir::ExecutionPrecision::Double && plan.fe_order == 1 {
                 let authored_stage_id = stage.ir.problem_meta.runtime_metadata.get("active_stage_id")
                     .and_then(serde_json::Value::as_str).filter(|id| !id.trim().is_empty()).unwrap_or(&current_stage_id);
@@ -19025,6 +19180,7 @@ mod tests {
 
     fn tiny_fem_plan() -> BackendPlanIR {
         BackendPlanIR::Fem(FemPlanIR {
+            gpu_bb_preconditioner: None,
             mesh_name: "tiny".to_string(),
             mesh_source: None,
             mesh: MeshIR {
@@ -19089,6 +19245,7 @@ mod tests {
             solved_antenna_drive_bases: Vec::new(),
             field_drives: Vec::new(),
             field_drive_geometry_masks: Vec::new(),
+            mask_field_term_bases: Vec::new(),
             time_stage: Default::default(),
             current_modules: vec![],
             charge_transport_plans: vec![],
@@ -19144,6 +19301,7 @@ mod tests {
 
     fn tiny_shared_domain_fem_plan() -> BackendPlanIR {
         BackendPlanIR::Fem(FemPlanIR {
+            gpu_bb_preconditioner: None,
             mesh_name: "shared".to_string(),
             mesh_source: None,
             mesh: MeshIR {
@@ -19233,6 +19391,7 @@ mod tests {
             solved_antenna_drive_bases: Vec::new(),
             field_drives: Vec::new(),
             field_drive_geometry_masks: Vec::new(),
+            mask_field_term_bases: Vec::new(),
             time_stage: Default::default(),
             current_modules: vec![],
             charge_transport_plans: vec![],
@@ -19372,6 +19531,7 @@ mod tests {
             },
             planar_monitors: Vec::new(),
             field_drives: Vec::new(),
+            mask_field_drives: Vec::new(),
             current_modules: Vec::new(),
             antenna_port_modes: Vec::new(),
             antenna_field_solve_stages: Vec::new(),
@@ -20426,6 +20586,7 @@ mod tests {
             dispersion_validation: None,
             k0_kittel_validation: None,
             solver_policy: None,
+            magnetostatic_bc: Default::default(),
         };
         let backend = BackendPlanIR::FemEigen(target);
         let completion = stage_completion(fullmag_ir::StageStopReason::Torque);
@@ -21043,6 +21204,59 @@ mod tests {
             dind_field: None,
             dbulk_field: None,
         }
+    }
+
+    #[test]
+    fn scene_patch_rebinds_fem_mesh_assets_by_object_identity() {
+        let mut problem = ProblemIR::bootstrap_example();
+        let region = |name: &str, geometry: &str| RegionIR {
+            name: name.into(),
+            geometry: geometry.into(),
+        };
+        let magnet = |owner: &str, name: &str, region: &str| MagnetIR {
+            object_id: Some(owner.into()),
+            name: name.into(),
+            region: region.into(),
+            material: "Py".into(),
+            initial_magnetization: None,
+            absorbing_boundary: None,
+        };
+        let asset = |geometry: &str, source: &str| fullmag_ir::FemMeshAssetIR {
+            geometry_name: geometry.into(),
+            mesh_source: Some(source.into()),
+            mesh: None,
+        };
+        problem.regions = vec![
+            region("r-left", "left_geom"),
+            region("r-right", "right_geom"),
+        ];
+        problem.magnets = vec![
+            magnet("a", "left", "r-left"),
+            magnet("b", "right", "r-right"),
+        ];
+        problem.geometry_assets = Some(GeometryAssetsIR {
+            fem_mesh_assets: vec![
+                asset("right_geom", "right.mesh"),
+                asset("left_geom", "left.mesh"),
+            ],
+            fdm_grid_assets: vec![],
+            fem_domain_mesh_asset: None,
+        });
+        let patch = SceneProblemPatch {
+            geometry_entries: vec![],
+            materials: problem.materials.clone(),
+            regions: vec![region("b", "b"), region("a", "a")],
+            magnets: vec![magnet("b", "b", "b"), magnet("a", "a", "a")],
+            object_regions: vec![],
+            universe: None,
+            fdm: None,
+            runtime_selection: None,
+        };
+        super::apply_scene_problem_patch(&mut problem, &patch).unwrap();
+        assert_eq!(
+            problem.geometry_assets.unwrap().fem_mesh_assets,
+            vec![asset("b", "right.mesh"), asset("a", "left.mesh")]
+        );
     }
 
     #[test]

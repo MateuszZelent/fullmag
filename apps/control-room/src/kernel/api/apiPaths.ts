@@ -902,6 +902,22 @@ export const MODEL_FIELD_DRIVE_PATH = openApiV2Path(
   "/v2/sessions/current/model/field-drives/{drive_id}",
 );
 
+export const MODEL_MASK_FIELD_DRIVES_PATH = openApiV2Path(
+  "/v2/sessions/current/model/mask-field-drives",
+);
+
+export const MODEL_MASK_FIELD_DRIVE_PATH = openApiV2Path(
+  "/v2/sessions/current/model/mask-field-drives/{drive_id}",
+);
+
+export const MODEL_READY_ANTENNAS_PATH = openApiV2Path(
+  "/v2/sessions/current/model/ready-antennas",
+);
+
+export const MODEL_READY_ANTENNA_TERMS_PATH = openApiV2Path(
+  "/v2/sessions/current/model/ready-antennas/terms",
+);
+
 export const MODEL_REGION_PATH = openApiV2Path(
   "/v2/sessions/current/model/regions/{region_id}",
 );
@@ -996,6 +1012,14 @@ export const SIMULATION_RUN_PATH = openApiV2Path(
 
 export const SIMULATION_STAGES_EXECUTION_PATH = openApiV2Path(
   "/v2/sessions/current/simulation/stages/execution",
+);
+
+export const SIMULATION_STAGES_RESULTS_PATH = openApiV2Path(
+  "/v2/sessions/current/simulation/stages/results",
+);
+
+export const SIMULATION_STAGES_RESULTS_SCALARS_PATH = openApiV2Path(
+  "/v2/sessions/current/simulation/stages/results/scalars",
 );
 
 export const SIMULATION_STAGE_HYSTERESIS_PLAN_PATH = openApiV2Path(
@@ -1132,6 +1156,14 @@ export const PROJECT_RUN_PATH = openApiV2Path(
   "/v2/persistence/projects/{project_id}/runs/{run_id}",
 );
 
+// The Study result routes are registered in the API and await managed OpenAPI export.
+export const PROJECT_STUDY_RESULTS_PATH = "/v2/persistence/projects/{project_id}/runs/{run_id}/study-results";
+export const PROJECT_STUDY_RESULT_STATE_PATH = `${PROJECT_STUDY_RESULTS_PATH}/{artifact_id}` as const;
+export const PROJECT_STUDY_RESULT_MAGNETIZATION_PATH = `${PROJECT_STUDY_RESULT_STATE_PATH}/magnetization` as const;
+export const PROJECT_STUDY_RESULT_TOPOLOGY_PATH = `${PROJECT_STUDY_RESULT_STATE_PATH}/topology` as const;
+export const PROJECT_STUDY_RESULT_SUPPORT_PATH = `${PROJECT_STUDY_RESULT_STATE_PATH}/support` as const;
+export const PROJECT_STUDY_RESULT_SCALARS_PATH = `${PROJECT_STUDY_RESULT_STATE_PATH}/scalars` as const;
+
 export const PROJECT_SOLUTION_SET_DISCOVERY_PATH = openApiV2Path(
   "/v2/persistence/projects/{project_id}/runs/{run_id}/solution-sets",
 );
@@ -1225,3 +1257,15 @@ export const PLATFORM_COMPUTE_PREVIEW_PATH = openApiV2Path("/v2/platform/compute
 export const PLATFORM_COMPUTE_NODES_PATH = openApiV2Path("/v2/platform/compute/nodes");
 export const PLATFORM_COMPUTE_NODE_PATH = openApiV2Path("/v2/platform/compute/nodes/{node_id}");
 export const PLATFORM_COMPUTE_NODE_POLICY_PATH = openApiV2Path("/v2/platform/compute/nodes/{node_id}/policy");
+
+export const MODEL_OBJECT_SOURCE_SURFACE_PATH = openApiV2Path(
+  "/v2/sessions/current/model/objects/{object_id}/source-surface",
+);
+export const MODEL_OBJECT_SOURCE_SURFACE_TOPOLOGY_PATH = openApiV2Path(
+  "/v2/sessions/current/model/objects/{object_id}/source-surface/topology",
+);
+
+export const WORKSPACE_MATERIAL_LIBRARY_PATH = openApiV2Path("/v2/workspace/material-library");
+export const WORKSPACE_MATERIAL_LIBRARY_ENTRY_PATH = openApiV2Path("/v2/workspace/material-library/{id}");
+export const WORKSPACE_MATERIAL_LIBRARY_VERSIONS_PATH = openApiV2Path("/v2/workspace/material-library/versions");
+export const WORKSPACE_MATERIAL_LIBRARY_VERSION_PATH = openApiV2Path("/v2/workspace/material-library/versions/{family}/{version}");

@@ -1548,7 +1548,7 @@ class ScriptBuilderRegionalDriveRoundTripTests(unittest.TestCase):
 
         before = loaded.problem.to_ir(include_geometry_assets=False)
         after = rewritten.problem.to_ir(include_geometry_assets=False)
-        self.assertIn("fm.thermal_noise(temperature=300, seed=123)", rendered)
+        self.assertIn("fm.thermal_noise(temperature=300.0, seed=123)", rendered)
         self.assertEqual(after["temperature"], before["temperature"])
         self.assertEqual(after["energy_terms"], before["energy_terms"])
 
@@ -1663,6 +1663,42 @@ def _stage_study_ir(loaded: object) -> list[dict[str, object]]:
 
 class SceneRoundTripFidelityTests(unittest.TestCase):
     """The scene renderer must reproduce the physics the original script means."""
+
+    def test_region_shape_center_and_cylinder_axis_survive_both_export_routes(self) -> None:
+        shapes = [
+            'fm.Box(size=(10e-9, 12e-9, 4e-9))',
+            'fm.Cylinder(radius=3e-9, height=8e-9, axis=(1, 0, 0))',
+            'fm.Sphere(radius=3e-9)',
+        ]
+        for shape in shapes:
+            with self.subTest(shape=shape), TemporaryDirectory() as tmp_dir:
+                root = Path(tmp_dir)
+                script = 'import fullmag as fm\nstudy=fm.study("region-shape")\nstudy.engine("fdm")\n'
+                script += textwrap.dedent(_SCENE_BODY)
+                script += f'part = f.add_region("offset", {shape}.translate((8e-9, -2e-9, 1e-9)))\n'
+                script += 'part.material.Ms = 400e3\n'
+                loaded = _load_text(script, root)
+                expected = loaded.problem.to_ir(include_geometry_assets=False)['object_regions'][0]['shape']
+                scene = build_scene_document_from_builder(export_builder_draft(loaded))
+                for route, source in [('python', render_loaded_problem_as_script(loaded)),
+                                      ('scene', render_scene_document_as_script(scene))]:
+                    actual = _load_text(source, root, route+'.py')
+                    self.assertEqual(actual.problem.to_ir(include_geometry_assets=False)['object_regions'][0]['shape'], expected)
+
+    def test_csg_region_shape_is_preserved_instead_of_becoming_a_box(self) -> None:
+        script = 'import fullmag as fm\nstudy=fm.study("csg-region")\nstudy.engine("fdm")\n'
+        script += textwrap.dedent(_SCENE_BODY)
+        script += 'shape = {"kind": "csg", "expression": (fm.Box(size=(10e-9, 10e-9, 4e-9)) - fm.Sphere(2e-9)).to_ir()}\n'
+        script += 'f.add_region("cut", shape).material.Ms = 400e3\n'
+        with TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            loaded = _load_text(script, root)
+            expected = loaded.problem.to_ir(include_geometry_assets=False)['object_regions'][0]['shape']
+            scene = build_scene_document_from_builder(export_builder_draft(loaded))
+            for route, source in [('python', render_loaded_problem_as_script(loaded)),
+                                  ('scene', render_scene_document_as_script(scene))]:
+                actual = _load_text(source, root, route+'.py')
+                self.assertEqual(actual.problem.to_ir(include_geometry_assets=False)['object_regions'][0]['shape'], expected)
 
     def test_bb_stage_does_not_inherit_global_llg_timestep_controls(self) -> None:
         for solver in (
@@ -2045,6 +2081,119 @@ study.stages.add_run(stage_id='third', until=1e-11)
             node['payload']['sampling']['unsupported'] = 1
             with self.assertRaisesRegex(ValueError, 'run_sampling_unrendered_fields: unsupported'):
                 render_scene_document_as_script(scene)
+
+    def test_captured_runs_keep_distinct_adaptive_policies_after_duration_edit(self) -> None:
+        script = "import fullmag as fm\nstudy=fm.study('adaptive-runs')\nstudy.engine('fdm')\n"
+        script += textwrap.dedent(_SCENE_BODY)
+        script += """
+study.solver(integrator='rk45', max_err=1e-5, dt_initial=1e-14, dt_max=1e-12)
+study.stages.add_run(stage_id='first', until=1e-11)
+study.solver(integrator='rk45', max_err=1e-7, dt_initial=2e-15, dt_max=2e-13)
+study.stages.add_run(stage_id='second', until=2e-11)
+"""
+        with TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            loaded = _load_text(script, root)
+            expected = [stage.problem.study.dynamics.to_ir()['adaptive_timestep'] for stage in loaded.stages]
+            scene = build_scene_document_from_builder(export_builder_draft(loaded))
+            nodes = scene['study']['study_pipeline']['nodes']
+            self.assertNotEqual(expected[0], expected[1])
+            self.assertEqual([node['payload']['adaptive_timestep'] for node in nodes], expected)
+            nodes[1]['payload']['until_seconds'] = '3e-11'
+            rewritten = _load_text(render_scene_document_as_script(scene), root, 'rewritten.py')
+            self.assertEqual([stage.problem.study.dynamics.to_ir()['adaptive_timestep'] for stage in rewritten.stages], expected)
+            self.assertEqual(rewritten.stages[1].default_until_seconds, 3e-11)
+            for invalid in ['invalid', True, [], {'atol': -1}]:
+                broken = json.loads(json.dumps(scene))
+                broken['study']['study_pipeline']['nodes'][0]['payload']['adaptive_timestep'] = invalid
+                with self.subTest(invalid=invalid), self.assertRaises(ValueError):
+                    render_scene_document_as_script(broken)
+            for key, invalid in [('dt_initial', True), ('dt_max', 'invalid'), ('atol', float('nan')), ('unknown_control', 1)]:
+                broken = json.loads(json.dumps(scene))
+                broken['study']['study_pipeline']['nodes'][0]['payload']['adaptive_timestep'][key] = invalid
+                with self.subTest(key=key), self.assertRaises(ValueError):
+                    render_scene_document_as_script(broken)
+            cleared = json.loads(json.dumps(scene))
+            payload = cleared['study']['study_pipeline']['nodes'][1]['payload']
+            payload.update(integrator='rk4', fixed_timestep='', adaptive_timestep=None)
+            # The public solver preserves omitted controls; clearing to an
+            # unspecified RK4 step cannot be represented after an adaptive Run.
+            with self.assertRaises(ValueError):
+                render_scene_document_as_script(cleared)
+            payload['fixed_timestep'] = '2e-15'
+            actual = _load_text(render_scene_document_as_script(cleared), root, 'cleared.py')
+            self.assertIsNone(actual.stages[1].problem.study.dynamics.adaptive_timestep)
+            self.assertEqual(actual.stages[1].problem.study.dynamics.fixed_timestep, 2e-15)
+
+    def test_captured_run_preserves_all_advanced_adaptive_controls(self) -> None:
+        script = "import fullmag as fm\nstudy=fm.study('advanced-runs')\nstudy.engine('fdm')\n"
+        script += textwrap.dedent(_SCENE_BODY)
+        script += """
+study.solver(integrator='rk45', adaptive_timestep=fm.AdaptiveTimestep(
+    atol=1e-7, rtol=1e-3, dt_initial=1e-15, dt_min=1e-18, dt_max=1e-12,
+    safety=.8, growth_limit=1.5, shrink_limit=.25, max_spin_rotation=.2, norm_tolerance=1e-4))
+study.stages.add_run(stage_id='advanced', until=1e-11)
+study.solver(integrator='rk45', max_err=1e-5, dt_initial=2e-15, dt_max=2e-13)
+study.stages.add_run(stage_id='maximum-error', until=2e-11)
+"""
+        with TemporaryDirectory() as tmp_dir:
+            loaded, rewritten, _ = _scene_round_trip(script, Path(tmp_dir))
+            self.assertEqual(_stage_study_ir(loaded), _stage_study_ir(rewritten))
+
+    def test_captured_run_tables_roundtrip_with_cadence_expressions_and_ids(self) -> None:
+        script = "import fullmag as fm\nstudy=fm.study('run-tables')\nstudy.engine('fdm')\nstudy.cell(5e-9,5e-9,5e-9)\n"
+        script += textwrap.dedent(_SCENE_BODY)
+        script += """
+study.tableautosave(2e-12, quantities=['t', 'mx'], table_id='first-table')
+study.tableadd('mx+my')
+study.stages.add_run(stage_id='first', until=1e-11)
+study.tableautosave(3e-12, quantities=['t', 'mz'], table_id='second-table')
+study.stages.add_run(stage_id='second', until=2e-11)
+"""
+        with TemporaryDirectory() as tmp_dir:
+            loaded, rendered, _ = _scene_round_trip(script, Path(tmp_dir))
+            self.assertEqual([s.stage_id for s in rendered.stages], ['first', 'second'])
+            self.assertEqual(_stage_study_ir(loaded), _stage_study_ir(rendered))
+            scene = build_scene_document_from_builder(export_builder_draft(loaded))
+            table = scene['study']['study_pipeline']['nodes'][0]['payload']['sampling']['table_autosave']
+            for key, invalid in [('quantities', 'mx'), ('expressions', 'mx+my'), ('table_id', False), ('every_steps', True), ('every_steps', '2')]:
+                with self.subTest(key=key):
+                    broken = json.loads(json.dumps(scene))
+                    broken['study']['study_pipeline']['nodes'][0]['payload']['sampling']['table_autosave'][key] = invalid
+                    with self.assertRaises(ValueError):
+                        render_scene_document_as_script(broken)
+            table['unsupported'] = True
+            with self.assertRaisesRegex(ValueError, 'run_table_autosave_unrendered_fields: unsupported'):
+                render_scene_document_as_script(scene)
+
+    def test_run_table_can_be_cleared_without_an_extra_authored_stage(self) -> None:
+        script = "import fullmag as fm\nstudy=fm.study('clear-run-table')\nstudy.engine('fdm')\nstudy.cell(5e-9,5e-9,5e-9)\n"
+        script += textwrap.dedent(_SCENE_BODY)
+        script += """
+study.tableautosave(2e-12, quantities=['t', 'mx'])
+study.stages.add_run(stage_id='first', until=1e-11)
+study.tableautosave(enabled=False)
+study.stages.add_run(stage_id='second', until=2e-11)
+"""
+        with TemporaryDirectory() as tmp_dir:
+            loaded, rendered, _ = _scene_round_trip(script, Path(tmp_dir))
+            self.assertEqual([s.stage_id for s in rendered.stages], ['first', 'second'])
+            self.assertEqual(_stage_study_ir(loaded), _stage_study_ir(rendered))
+            self.assertNotIn('table_autosave', _stage_study_ir(rendered)[1]['sampling'])
+            scene = build_scene_document_from_builder(export_builder_draft(loaded))
+            second = scene['study']['study_pipeline']['nodes'][1]['payload']['sampling']
+            second['table_autosave'] = None
+            explicit_null = _load_text(render_scene_document_as_script(scene), Path(tmp_dir), 'null.py')
+            self.assertEqual(_stage_study_ir(loaded), _stage_study_ir(explicit_null))
+
+    def test_disabled_flat_and_study_tables_reject_conflicting_configuration(self) -> None:
+        study = fm.study('table-disabled-validation')
+        for configure in (fm.tableautosave, study.tableautosave):
+            with self.assertRaises(TypeError):
+                configure(enabled='false')
+            for fields in [dict(every=1e-12), dict(every_steps=2), dict(quantities=['mx']), dict(table_id='other')]:
+                with self.subTest(fields=fields), self.assertRaises(ValueError):
+                    configure(enabled=False, **fields)
 
     def test_canonical_run_resolved_sampling_preserves_requested_auto(self) -> None:
         script = "import fullmag as fm\nstudy=fm.study('sampling')\nstudy.engine('fdm')\nstudy.cell(5e-9,5e-9,5e-9)\n"

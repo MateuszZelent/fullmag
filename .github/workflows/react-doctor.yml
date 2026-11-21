@@ -1,48 +1,33 @@
-# React Doctor — finds security, performance, correctness, accessibility,
-# bundle-size, and architecture issues in React codebases.
-#
-# Docs: https://www.react.doctor/ci
-# Source: https://github.com/millionco/react-doctor
+# React Doctor performs a manual, advisory scan of the selected ref.
+# Workflow-dispatch runs scan the full checkout and report in the job summary.
+# Docs: https://www.react.doctor/docs/reference/github-action-reference
 
-name: React Doctor
+name: React Doctor manual scan
+run-name: "React Doctor manual scan (${{ github.ref_name }})"
 
 on:
   workflow_dispatch:
 
 permissions:
   contents: read
-  pull-requests: write
-  issues: write
-  statuses: write
 
-# Cancels any in-flight scan for the same PR (or branch, on push) the moment a new commit arrives, so reviewers only ever see the latest run.
 concurrency:
-  group: react-doctor-${{ github.event.pull_request.number || github.ref }}
+  group: react-doctor-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
   react-doctor:
+    name: Scan the selected ref
     runs-on: ubuntu-latest
     steps:
-      # fetch-depth: 0 gives React Doctor the full git history it needs to find the merge base with the target branch. Without it a shallow checkout has no merge base, so PR runs can't compare against the base and fall back to reporting every issue in the changed files (pre-existing ones included) instead of only the ones the PR introduced.
-      - uses: actions/checkout@v7
-        with:
-          fetch-depth: 0
+      - name: Checkout selected ref
+        uses: actions/checkout@v7
 
-      - uses: millionco/react-doctor@v2
-        # Advisory by default: React Doctor reports findings on every PR — a
-        # sticky summary comment, inline review comments, and a commit status
-        # with the health score — but never fails the check, so it won't red-X
-        # a teammate's PR on day one. When your team trusts the signal, graduate
-        # the gate: uncomment the block below and set blocking to "error" (fail
-        # on new error-severity findings) or "warning" (fail on any finding).
-        # Full reference: https://www.react.doctor/ci
-        # with:
-        #   blocking: error          # Gate level: "none" (advisory, the default) | "warning" | "error"
-        #   scope: full              # On PRs, scan the whole project instead of just changed files
-        #   comment: false           # Disable the sticky PR summary comment
-        #   review-comments: false   # Disable inline review comments on changed lines
-        #   commit-status: false     # Disable the commit status (score + counts, links to the run)
-        #   version: "0.4.0"         # Pin to a specific react-doctor version instead of "latest"
-        #   directory: apps/web      # Scan a sub-directory (default: ".")
-        #   project: "web,admin"     # In a monorepo, scan specific workspace project(s)
+      - name: Scan with React Doctor
+        uses: millionco/react-doctor@695e46eee203a5d1855020191aa7e9c010a1250e # v2
+        with:
+          blocking: none
+          scope: full
+          comment: false
+          review-comments: false
+          commit-status: false

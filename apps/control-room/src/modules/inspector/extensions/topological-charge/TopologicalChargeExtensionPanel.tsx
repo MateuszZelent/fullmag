@@ -1,4 +1,4 @@
-import { useCallback, useState } from "react";
+import { createElement, useCallback, useId, useState } from "react";
 import { Calculator } from "lucide-react";
 
 import { useObjectTopologicalChargeResource } from "@/kernel/resources/studyRuntimeResources";
@@ -14,46 +14,67 @@ import {
   type TopologicalChargeMethodInfo,
 } from "./topologicalChargeModel";
 
-const CONTINUUM_MATHML = `<math display="block" aria-label="Q Sigma equals one over four pi times the integral over Sigma of m hat dot partial u m hat cross partial v m hat">
-  <mrow>
-    <msub><mi>Q</mi><mi>&Sigma;</mi></msub><mo>=</mo>
-    <mfrac><mn>1</mn><mrow><mn>4</mn><mi>&pi;</mi></mrow></mfrac>
-    <msub><mo>&Integral;</mo><mi>&Sigma;</mi></msub>
-    <mover accent="true"><mi>m</mi><mo>^</mo></mover>
-    <mo>&middot;</mo>
-    <mrow>
-      <mo>(</mo>
-      <msub><mo>&part;</mo><mi>u</mi></msub>
-      <mover accent="true"><mi>m</mi><mo>^</mo></mover>
-      <mo>&times;</mo>
-      <msub><mo>&part;</mo><mi>v</mi></msub>
-      <mover accent="true"><mi>m</mi><mo>^</mo></mover>
-      <mo>)</mo>
-    </mrow>
-    <mspace width="0.2em"></mspace><mi>d</mi><mi>u</mi>
-    <mspace width="0.1em"></mspace><mi>d</mi><mi>v</mi>
-  </mrow>
-</math>`;
+// React renders these elements in the MathML namespace. The pinned React
+// types do not declare MathML JSX tags, so use createElement for those nodes.
+const magnetizationHat = createElement("mover", { accent: "true" },
+  createElement("mi", null, "m"), createElement("mo", null, "^"));
+const oneOverFourPi = createElement("mfrac", null,
+  createElement("mn", null, "1"),
+  createElement("mrow", null, createElement("mn", null, "4"), createElement("mi", null, "π")));
 
-const DISCRETE_MATHML = `<math display="block" aria-label="Q h of s i equals one over four pi times sum of oriented triangle solid angles">
-  <mrow>
-    <msub><mi>Q</mi><mi>h</mi></msub>
-    <mo>(</mo><msub><mi>s</mi><mi>i</mi></msub><mo>)</mo><mo>=</mo>
-    <mfrac><mn>1</mn><mrow><mn>4</mn><mi>&pi;</mi></mrow></mfrac>
-    <munder><mo>&sum;</mo><mi>&triangle;</mi></munder>
-    <mn>2</mn><mi>atan2</mi><mo>(</mo>
-    <mrow>
-      <mi>a</mi><mo>&middot;</mo><mo>(</mo><mi>b</mi><mo>&times;</mo><mi>c</mi><mo>)</mo>
-    </mrow>
-    <mo>,</mo>
-    <mrow>
-      <mn>1</mn><mo>+</mo><mi>a</mi><mo>&middot;</mo><mi>b</mi>
-      <mo>+</mo><mi>b</mi><mo>&middot;</mo><mi>c</mi>
-      <mo>+</mo><mi>c</mi><mo>&middot;</mo><mi>a</mi>
-    </mrow>
-    <mo>)</mo>
-  </mrow>
-</math>`;
+const continuumEquation = createElement("math", {
+  display: "block",
+  "aria-label": "Q Sigma equals one over four pi times the integral over Sigma of m hat dot partial u m hat cross partial v m hat",
+}, createElement("mrow", null,
+  createElement("msub", null, createElement("mi", null, "Q"), createElement("mi", null, "Σ")),
+  createElement("mo", null, "="),
+  oneOverFourPi,
+  createElement("msub", null, createElement("mo", null, "∫"), createElement("mi", null, "Σ")),
+  magnetizationHat,
+  createElement("mo", null, "·"),
+  createElement("mrow", null,
+    createElement("mo", null, "("),
+    createElement("msub", null, createElement("mo", null, "∂"), createElement("mi", null, "u")),
+    magnetizationHat,
+    createElement("mo", null, "×"),
+    createElement("msub", null, createElement("mo", null, "∂"), createElement("mi", null, "v")),
+    magnetizationHat,
+    createElement("mo", null, ")")),
+  createElement("mspace", { width: "0.2em" }),
+  createElement("mi", null, "d"),
+  createElement("mi", null, "u"),
+  createElement("mspace", { width: "0.1em" }),
+  createElement("mi", null, "d"),
+  createElement("mi", null, "v")));
+
+const discreteEquation = createElement("math", {
+  display: "block",
+  "aria-label": "Q h of s i equals one over four pi times sum of oriented triangle solid angles",
+}, createElement("mrow", null,
+  createElement("msub", null, createElement("mi", null, "Q"), createElement("mi", null, "h")),
+  createElement("mo", null, "("),
+  createElement("msub", null, createElement("mi", null, "s"), createElement("mi", null, "i")),
+  createElement("mo", null, ")"),
+  createElement("mo", null, "="),
+  oneOverFourPi,
+  createElement("munder", null, createElement("mo", null, "∑"), createElement("mi", null, "▵")),
+  createElement("mn", null, "2"),
+  createElement("mi", null, "atan2"),
+  createElement("mo", null, "("),
+  createElement("mrow", null,
+    createElement("mi", null, "a"), createElement("mo", null, "·"), createElement("mo", null, "("),
+    createElement("mi", null, "b"), createElement("mo", null, "×"), createElement("mi", null, "c"),
+    createElement("mo", null, ")")),
+  createElement("mo", null, ","),
+  createElement("mrow", null,
+    createElement("mn", null, "1"),
+    createElement("mo", null, "+"), createElement("mi", null, "a"), createElement("mo", null, "·"),
+    createElement("mi", null, "b"),
+    createElement("mo", null, "+"), createElement("mi", null, "b"), createElement("mo", null, "·"),
+    createElement("mi", null, "c"),
+    createElement("mo", null, "+"), createElement("mi", null, "c"), createElement("mo", null, "·"),
+    createElement("mi", null, "a")),
+  createElement("mo", null, ")")));
 
 type TopologicalChargeCalculationMode = "on_demand" | "continuous";
 type TopologicalChargePlane = "auto" | "xy" | "xz" | "yz";
@@ -127,12 +148,19 @@ function TopologicalChargeProfileTable({
 }: {
   profile: NonNullable<ReturnType<typeof useObjectTopologicalChargeResource>["data"]>["profile"];
 }) {
+  const headingId = useId();
   if (!profile || profile.length === 0) return null;
 
   return (
-    <div className="fm-topological-charge-profile" aria-label="Topological charge profile">
-      <h4>Support profile</h4>
-      <table>
+    <div role="group" className="fm-topological-charge-profile" aria-label="Topological charge profile">
+      <h4 id={headingId}>Support profile</h4>
+      <div
+        aria-labelledby={headingId}
+        className="fm-topological-charge-profile__scroll"
+        role="region"
+        tabIndex={0}
+      >
+      <table aria-labelledby={headingId}>
         <thead>
           <tr>
             <th scope="col">i</th>
@@ -146,16 +174,17 @@ function TopologicalChargeProfileTable({
         <tbody>
           {profile.map((sample) => (
             <tr key={sample.index}>
-              <td>{sample.index}</td>
-              <td>{sample.coordinate_m.toExponential(3)}</td>
-              <td>{sample.integration_weight_m.toExponential(3)}</td>
-              <td>{typeof sample.charge === "number" ? sample.charge.toFixed(6) : "unavailable"}</td>
+              <th scope="row">{sample.index}</th>
+              <td className="tabular-nums">{sample.coordinate_m.toExponential(3)}</td>
+              <td className="tabular-nums">{sample.integration_weight_m.toExponential(3)}</td>
+              <td className="tabular-nums">{typeof sample.charge === "number" ? sample.charge.toFixed(6) : "unavailable"}</td>
               <td>{sample.status}</td>
               <td>{sample.trust}</td>
             </tr>
           ))}
         </tbody>
       </table>
+      </div>
     </div>
   );
 }
@@ -244,17 +273,17 @@ function TopologicalChargeMethodSummary({
         </div>
         <span>{method.sampleQuality}</span>
       </div>
-      <div
+      <div role="group"
         className="fm-topological-charge-method__equations"
         aria-label="Topological charge equations"
       >
         <div className="fm-topological-charge-method__equation">
           <span>Continuum</span>
-          <RenderedMath mathml={CONTINUUM_MATHML} />
+          <div className="fm-topological-charge-method__math">{continuumEquation}</div>
         </div>
         <div className="fm-topological-charge-method__equation">
           <span>Discrete triangles</span>
-          <RenderedMath mathml={DISCRETE_MATHML} />
+          <div className="fm-topological-charge-method__math">{discreteEquation}</div>
         </div>
       </div>
       <dl className="fm-topological-charge-method__terms">
@@ -271,14 +300,5 @@ function TopologicalChargeMethodSummary({
         ))}
       </ul>
     </div>
-  );
-}
-
-function RenderedMath({ mathml }: { mathml: string }) {
-  return (
-    <div
-      className="fm-topological-charge-method__math"
-      dangerouslySetInnerHTML={{ __html: mathml }}
-    />
   );
 }

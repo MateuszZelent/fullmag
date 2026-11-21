@@ -4,7 +4,7 @@ status: implemented
 doc_kind: reference
 audience: user
 owner: fullmag-public-docs
-source_of_truth: docs/physics/0600-fem-eigenmodes-linearized-llg.md
+source_of_truth: linearized-llg, modal-validation
 ---
 
 (public-docs-numerical-methods-eigensolvers-root)=

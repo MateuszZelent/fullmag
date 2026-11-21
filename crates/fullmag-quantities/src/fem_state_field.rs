@@ -9,8 +9,10 @@ use crate::{
     ActiveSupportDescriptor, ComplexEncoding, DatasetContractError, DatasetFieldDescriptor,
     FieldAxisDescriptor, FieldFrameDescriptor, FieldFrameKind, FieldNormalization, FieldResolution,
     FieldSampleLocation, FieldValueRepresentation, FunctionSpaceDescriptor, FunctionSpaceOrdering,
-    HarmonicConvention, QuantityId,
+    QuantityId,
 };
+#[cfg(test)]
+use crate::HarmonicConvention;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{error::Error, fmt};

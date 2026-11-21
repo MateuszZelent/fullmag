@@ -3,7 +3,6 @@
 import { FolderOpen, Plus, RefreshCw, Save, Trash2 } from "lucide-react";
 import { useId, useState } from "react";
 
-import { tauriInvoke } from "@/kernel/persistence/ProjectDocumentController";
 import { Button } from "@/shared/ui/Button";
 import { Checkbox } from "@/shared/ui/Checkbox";
 import { Input } from "@/shared/ui/Input";
@@ -18,6 +17,7 @@ import {
   toggleKind,
   updateRoot,
 } from "../model/rootsDraft";
+import { useDesktopInvoke } from "../model/useDesktopInvoke";
 import type { WorkspaceItemsController } from "../model/useWorkspaceItems";
 import { useWorkspaceRoots } from "../model/useWorkspaceRoots";
 import type { ApiScanReport, ApiWorkspaceRoot } from "../model/workspaceApiTypes";
@@ -41,7 +41,7 @@ export function IndexedLocations({ workspace }: IndexedLocationsProps) {
   const [report, setReport] = useState<ApiScanReport | null>(null);
   const [scanFailure, setScanFailure] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
-  const picker = tauriInvoke();
+  const picker = useDesktopInvoke();
 
   const served = roots.state.kind === "ready" ? roots.state.roots : null;
   const current = draft ?? served ?? [];
@@ -74,12 +74,17 @@ export function IndexedLocations({ workspace }: IndexedLocationsProps) {
   const save = async () => {
     if (!draft) return;
     setSaving(true);
-    const failure = await roots.save(draft);
-    setSaving(false);
-    setProblem(failure);
-    if (!failure) {
-      setDraft(null);
-      setSaved(true);
+    try {
+      const failure = await roots.save(draft);
+      setProblem(failure);
+      if (!failure) {
+        setDraft(null);
+        setSaved(true);
+      }
+    } catch (error) {
+      setProblem(error instanceof Error ? error.message : String(error));
+    } finally {
+      setSaving(false);
     }
   };
 

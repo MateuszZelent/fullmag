@@ -22,7 +22,7 @@ vi.mock("../renderer/PlanarOverlaySurface", () => ({ PlanarOverlaySurface: (prop
   renderer.callbacks.set(`overlay:${props.model.sampleIdentity}`, props.onRenderEvidence);
   return <canvas data-test-overlay={props.model.sampleIdentity} />;
 } }));
-vi.mock("./PlanarColorLegend", () => ({ PlanarColorLegend: () => null }));
+vi.mock("./PlanarColorLegend", () => ({ PlanarColorLegend: () => null, PlanarLayerLegendList: () => null }));
 
 function frame(sample: string): PlanarCompositionFrame {
   const model = buildFieldMapRenderModel({ bounds: [0, 1, 0, 1], canonicalUnit: "1", component: "magnitude",
@@ -67,6 +67,26 @@ describe("planar canvas buffer lifecycle", () => {
       expect(findElement(slotA, (node) => node.tagName === "CANVAS", "buffer canvas")).toBe(firstCanvas);
       expect(findElement(slotB, (node) => node.tagName === "CANVAS", "buffer canvas")).toBe(secondCanvas);
       expect(slotA.style.visibility).toBe("hidden"); expect(slotB.style.visibility).toBe("visible");
+    } finally { await act(async () => root.unmount()); dom.restore(); renderer.callbacks.clear(); }
+  });
+
+  it("keeps the overlay evidence callback stable when the parent re-renders", async () => {
+    // PlanarOverlaySurface replays its completed evidence whenever this
+    // callback identity changes; a new identity per parent render looped
+    // (React "Maximum update depth exceeded") once every view had a layer.
+    const dom = installSimulationPreparationTestDom(); const container = dom.document.createElement("div");
+    const root = createRoot(container as unknown as Element);
+    const only = frame("stable");
+    const render = async () => {
+      await act(async () => root.render(<PlanarCompositionBuffers frame={only} scopeKey="session"
+        payloadPending={false} surfaceProps={{ onRenderEvidence: vi.fn() }} />));
+    };
+    try {
+      await render();
+      const first = renderer.callbacks.get("overlay:stable");
+      await render();
+      await render();
+      expect(renderer.callbacks.get("overlay:stable")).toBe(first);
     } finally { await act(async () => root.unmount()); dom.restore(); renderer.callbacks.clear(); }
   });
 });

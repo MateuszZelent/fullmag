@@ -236,6 +236,18 @@
       "responsibility": "preserves complete same-clock fields from the original solver without reconstructing dynamic primary inputs"
     },
     {
+      "id": "cpu-single-layer-transform",
+      "path": "crates/fullmag-engine/src/fdm/cpu/fft.rs",
+      "symbol": "new_open_single_layer",
+      "responsibility": "Select unchanged zero-z-displacement Newell planes for the internal open single-layer CPU transform. Managed numerical qualification pending."
+    },
+    {
+      "id": "cpu-single-layer-oracle",
+      "path": "crates/fullmag-engine/src/fdm/shared/problem.rs",
+      "symbol": "open_single_layer_workspace_matches_legacy_aos_and_soa_oracle",
+      "responsibility": "Compare AoS and SoA fields and energy against the explicit legacy padded transform. Execution pending."
+    },
+    {
       "id": "accepted_terminal_capture_binding",
       "path": "crates/fullmag-runner/src/accepted_materialization.rs",
       "symbol": "materialize_captured_observables",

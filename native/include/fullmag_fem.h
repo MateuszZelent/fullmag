@@ -25,7 +25,11 @@ extern "C" {
 #define FULLMAG_FEM_ERR_INTERNAL -3
 #define FULLMAG_FEM_ERR_INTERRUPTED -4
 
-#define FULLMAG_FEM_REGIONAL_FIELD_DRIVE_ABI_VERSION 3u
+/* v4: fullmag_fem_time_dependence_desc carries the time program of a
+ * FULLMAG_FEM_TIME_HOST_EXPRESSION waveform (mask terms, ADR 0081). */
+#define FULLMAG_FEM_REGIONAL_FIELD_DRIVE_ABI_VERSION 4u
+/* At most this many HOST_EXPRESSION drives per backend on the GPU lane. */
+#define FULLMAG_FEM_MAX_HOST_EXPRESSION_DRIVES 8u
 
 typedef enum {
     FULLMAG_FEM_PRECISION_SINGLE = 1,
@@ -122,6 +126,10 @@ typedef enum {
     FULLMAG_FEM_TIME_PULSE = 2,
     FULLMAG_FEM_TIME_PIECEWISE_LINEAR = 3,
     FULLMAG_FEM_TIME_SINC_PULSE = 4,
+    /* The multiplier is the value of the descriptor's time program
+     * (fullmag_time_expr.v1, native/include/fullmag_time_expression.h),
+     * evaluated on the host once per field build at the drive's clock. */
+    FULLMAG_FEM_TIME_HOST_EXPRESSION = 5,
 } fullmag_fem_time_dependence_kind;
 
 typedef enum {
@@ -191,6 +199,9 @@ typedef struct {
     fullmag_fem_time_dependence_parameters parameters;
     const fullmag_fem_time_point *points;
     uint64_t point_count;
+    /* HOST_EXPRESSION only: fullmag_time_expr.v1 words; null and 0 otherwise. */
+    const double *time_program;
+    uint64_t time_program_len;
 } fullmag_fem_time_dependence_desc;
 
 /*
@@ -376,9 +387,10 @@ typedef struct {
 } fullmag_fem_stage_oersted_callback_v1;
 
 /* Append-only native CPU RK hook for a reciprocal charge--spin solve.  The
- * callback receives the exact stage magnetization and returns a direct LLG
- * torque in 1/s.  The torque is added to the native RHS after the standard
- * LLG, STT and SOT terms; GPU execution rejects this hook until a
+ * callback receives the exact stage magnetization and returns the raw
+ * Gilbert-form transport source T_G in 1/s.  The native RHS adds
+ * (T_G + alpha m x T_G) / (1 + alpha^2) with the local damping after the
+ * standard LLG, STT and SOT terms; GPU execution rejects this hook until a
  * device-resident implementation is qualified. */
 #define FULLMAG_FEM_STAGE_TRANSPORT_CALLBACK_ABI_VERSION 1u
 #define FULLMAG_FEM_STAGE_TRANSPORT_CALLBACK_ERROR_CAPACITY 256u
@@ -812,6 +824,17 @@ typedef struct {
     fullmag_fem_plan_desc_v2 base;
     const fullmag_fem_mixed_body_certificate_v2 *mixed_body_certificate_v2;
 } fullmag_fem_plan_desc_v3;
+
+/* Full-width canonical Poisson selector. Legacy signed fields/layouts retain
+   their meaning; this explicit extension always takes precedence over base. */
+#define FULLMAG_FEM_PLAN_DESC_V4_ABI_VERSION 4u
+typedef struct {
+    uint32_t abi_version;
+    uint32_t struct_size;
+    fullmag_fem_plan_desc_v3 base;
+    uint32_t poisson_boundary_marker;
+    uint32_t reserved; /* Must be zero. */
+} fullmag_fem_plan_desc_v4;
 
 /*
  * Standalone M1 steady charge/spin transport ABI.
@@ -3919,8 +3942,21 @@ FULLMAG_FEM_API fullmag_fem_backend *fullmag_fem_backend_create_v4(
     const fullmag_fem_adaptive_config_v2 *adaptive_config
 );
 
+FULLMAG_FEM_API fullmag_fem_backend *fullmag_fem_backend_create_v5(
+    const fullmag_fem_plan_desc_v4 *plan,
+    const fullmag_fem_adaptive_config_v2 *adaptive_config
+);
+
 FULLMAG_FEM_API int fullmag_fem_get_regional_field_drive_abi_layout(
     fullmag_fem_regional_field_drive_abi_layout *out_layout
+);
+
+/* Value of a fullmag_time_expr.v1 program at t_s, by the interpreter the
+ * library uses for HOST_EXPRESSION drives (NaN for a malformed program). */
+FULLMAG_FEM_API double fullmag_fem_time_expression_eval_v1(
+    const double *code,
+    uint64_t len,
+    double t_s
 );
 
 FULLMAG_FEM_API int fullmag_fem_backend_begin_stage(
@@ -3977,6 +4013,12 @@ FULLMAG_FEM_API int fullmag_fem_backend_set_interrupt_poll(
     fullmag_fem_interrupt_poll_fn poll_fn,
     void *user_data
 );
+
+/* Per-context FEM GPU projected-gradient BB direction. Set before stepping.
+ * 0=auto (raw tangent gradient), 1=raw tangent gradient, 2=exchange mass.
+ * This does not alter Poisson policy, physical gradients or convergence. */
+FULLMAG_FEM_API int fullmag_fem_backend_set_gpu_bb_preconditioner(
+    fullmag_fem_backend *handle, uint32_t policy);
 
 FULLMAG_FEM_API int fullmag_fem_backend_set_step_profile(
     fullmag_fem_backend *handle,
@@ -4255,6 +4297,15 @@ FULLMAG_FEM_API int fullmag_fem_backend_get_transfer_audit(
 FULLMAG_FEM_API int fullmag_fem_backend_get_gpu_state_info(
     fullmag_fem_backend *handle,
     fullmag_fem_gpu_state_info *out_info
+);
+
+/*
+ * Returns the initialized GPU Poisson AMG coarse-cycle relax type, or -1
+ * when not applicable.
+ */
+FULLMAG_FEM_API int fullmag_fem_backend_get_gpu_demag_amg_coarse_relax_type_v1(
+    fullmag_fem_backend *handle,
+    int32_t *out_relax_type
 );
 
 FULLMAG_FEM_API int fullmag_fem_backend_get_gpu_rk_plan_info(

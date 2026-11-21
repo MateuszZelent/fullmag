@@ -14,10 +14,37 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 
 namespace fullmag::fem {
+struct GpuBbExchangeMassWorkspace;
 
 static constexpr std::size_t kFemGpuAcceptedEnergyTermSlots = 18;
+
+// Exact, allocation-free provenance for a single PGBB field reuse. Values
+// are stored separately (not hashed), so different policies cannot collide.
+struct FemGpuPgbbFieldKey {
+    std::array<uint64_t, 64> values{};
+    bool operator==(const FemGpuPgbbFieldKey &other) const noexcept
+    {
+        return values == other.values;
+    }
+};
+
+struct FemGpuPgbbFieldToken {
+    bool valid = false;
+    FemGpuPgbbFieldKey key{};
+};
+
+inline bool gpu_relax_consume_pgbb_field(
+    FemGpuPgbbFieldToken &token,
+    const FemGpuPgbbFieldKey &key,
+    bool eligible) noexcept
+{
+    const bool reuse = eligible && token.valid && token.key == key;
+    token.valid = false; // No rollback or second caller may replay the token.
+    return reuse;
+}
 
 struct FemGpuAcceptedEvaluationToken {
     bool valid = false;
@@ -40,6 +67,11 @@ enum class GpuRelaxNcgFailurePoint : uint32_t {
 };
 
 struct FemGpuRelaxationDeviceState {
+    uint32_t bb_preconditioner_policy = 0; // auto, none, exchange_mass
+    std::shared_ptr<GpuBbExchangeMassWorkspace> bb_exchange_mass;
+    uint64_t bb_preconditioner_wall_time_ns = 0;
+    uint32_t bb_preconditioner_cache_hits = 0;
+    uint32_t bb_preconditioner_cache_misses = 0;
     FemGpuComponentField projected_gradient_accepted_h_eff;
     FemGpuComponentField nonlinear_cg_direction;
     FemGpuComponentField nonlinear_cg_direction_backup;
@@ -47,6 +79,7 @@ struct FemGpuRelaxationDeviceState {
     uint64_t state_generation = 0;
     bool nonlinear_cg_direction_valid = false;
     FemGpuAcceptedEvaluationToken accepted_evaluation;
+    FemGpuPgbbFieldToken pgbb_accepted_field;
     uint32_t accepted_evaluation_cache_hits_current_step = 0;
     uint32_t accepted_evaluation_cache_misses_current_step = 0;
     uint32_t accepted_evaluation_invalidations_current_step = 0;
@@ -65,6 +98,7 @@ inline void gpu_relax_invalidate_accepted_evaluation(
         state.accepted_evaluation_invalidations_current_step += 1;
     }
     state.accepted_evaluation.valid = false;
+    state.pgbb_accepted_field.valid = false;
 }
 
 inline void gpu_relax_reset_step_diagnostics(

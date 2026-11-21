@@ -160,6 +160,48 @@ class PreservedRunOutputTests(unittest.TestCase):
         self.assertFalse((self.stage / "fields").exists())
         self.assertEqual(proof["declared_outputs"], 3)
 
+    def _use_relaxation_layout(self):
+        """Preserve the same authenticated payload under the authored relax target."""
+        self.output.rename(self.run / "relax-attempt-1")
+        self.output = self.run / "relax-attempt-1"
+        (self.output / "main.zarr").rename(self.output / "relax.zarr")
+        (self.output / "main.autosave.json").rename(self.output / "relax.autosave.json")
+
+        def renamed(value):
+            if isinstance(value, str):
+                return value.replace("reversal-attempt-1", "relax-attempt-1").replace("main", "relax")
+            if isinstance(value, list):
+                return [renamed(item) for item in value]
+            if isinstance(value, dict):
+                return {key: renamed(item) for key, item in value.items()}
+            return value
+
+        for path in self.output.rglob("*"):
+            if path.is_file() and (path.suffix == ".json" or path.name == ".zattrs"):
+                write_json(path, renamed(json.loads(path.read_text(encoding="utf-8"))))
+
+    def test_qualifies_bound_relaxation_target_without_renaming_results(self):
+        self._use_relaxation_layout()
+        payload = next(self.output.rglob("table/0.0"))
+        before = payload.read_bytes()
+        proof = validate_preserved_run(self.zarr, self.run_id)
+        self.assertEqual(proof["autosave"]["table_sample_count"], 1)
+        self.assertEqual(payload.read_bytes(), before)
+
+    def test_relaxation_layout_requires_matching_target_and_attempt_receipt(self):
+        self._use_relaxation_layout()
+        manifest_path = self.output / "relax.autosave.json"
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        manifest["target"] = "main"
+        write_json(manifest_path, manifest)
+        with self.assertRaises(HistoryError):
+            validate_preserved_run(self.zarr, self.run_id)
+
+    def test_extra_attempt_directory_is_not_silently_ignored(self):
+        (self.run / "relax-attempt-1").mkdir()
+        with self.assertRaises(HistoryError):
+            validate_preserved_run(self.zarr, self.run_id)
+
     def test_rejects_empty_run_and_missing_metadata_manifest_or_payload(self):
         for relative in (".zgroup", ".zattrs", "reversal-attempt-1/fullmag-run.json",
                          "reversal-attempt-1/output-storage.json",

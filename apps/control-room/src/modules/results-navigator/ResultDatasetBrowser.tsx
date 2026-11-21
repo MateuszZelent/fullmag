@@ -1,34 +1,17 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import type { KeyboardEvent, ReactNode } from "react";
 
-import type {
-  AnalysisResultAxisResource,
-  AnalysisResultAxisValueResource,
-  AnalysisResultAxisValuesResource,
-  AnalysisResultBranchPageResource,
-  AnalysisResultDatasetManifestResource,
-  AnalysisResultItemPageResource,
-  AnalysisResultSamplePageResource,
-} from "@/kernel/api/apiTypes";
+import type { AnalysisResultAxisResource, AnalysisResultAxisValueResource, AnalysisResultAxisValuesResource, AnalysisResultBranchPageResource, AnalysisResultDatasetManifestResource, AnalysisResultItemPageResource, AnalysisResultSamplePageResource } from "@/kernel/api/apiTypes";
 import { useAnalysisResultAxisValuesResource } from "@/kernel/resources/analysisResultResources";
-import {
-  analysisResultSelectionRef,
-  type AnalysisResultSelectionRef,
-} from "@/shared/domain/analysis/results";
+import { analysisResultSelectionRef, type AnalysisResultSelectionRef } from "@/shared/domain/analysis/results";
 import { createAnalysisResultFieldOverlayIntent } from "@/kernel/visualization/AnalysisResultFieldOverlayIntent";
 import { Button } from "@/shared/ui/Button";
 import type { ResourceStatus } from "@/kernel/resources/resourceTypes";
 
-import {
-  formatResultFrequency,
-  formatResultResidual,
-  resultPageForDataset,
-  type ResultDatasetBrowserModel,
-  type ResultDatasetItemStatusFilter,
-} from "./resultDatasetBrowserModel";
+import { formatResultFrequency, formatResultResidual, resultPageForDataset, type ResultDatasetBrowserModel, type ResultDatasetItemStatusFilter } from "./resultDatasetBrowserModel";
 import {
   analysisResultAxisPresentation,
   formatAnalysisResultAxisValue,
@@ -41,6 +24,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/shared/ui/Select";
+import { resultDatasetItemSelection } from "./ResultDatasetBrowser.model";
 
 export interface ResultDatasetBrowserProps {
   manifest: AnalysisResultDatasetManifestResource | null;
@@ -145,29 +129,6 @@ function focusAdjacentResultRow(event: KeyboardEvent<HTMLButtonElement>): void {
   if (!nextRow || nextRow === event.currentTarget) return;
   event.preventDefault();
   nextRow.focus();
-}
-
-export function resultDatasetItemSelection(
-  manifest: AnalysisResultDatasetManifestResource,
-  item: ResultDatasetBrowserModel["items"][number],
-): AnalysisResultSelectionRef {
-  return analysisResultSelectionRef({
-    branchId: item.branchId ?? undefined,
-    datasetId: manifest.dataset_id,
-    datasetRevision: manifest.dataset_revision,
-    displayIndex: item.displayIndex ?? undefined,
-    fieldId: item.fieldId ?? undefined,
-    fieldRef: item.fieldRef ?? undefined,
-    focus: "item",
-    itemId: item.itemId,
-    itemKind: item.itemKindCode,
-    ...(item.coordinateRefs ? { coordinates: item.coordinateRefs } : {}),
-    runId: manifest.run_id,
-    sampleId: item.sampleId,
-    sampleIndex: item.sampleIndex ?? undefined,
-    stageId: manifest.stage_id,
-    fieldRevision: item.fieldRef?.field_revision ?? undefined,
-  });
 }
 
 export function ResultDatasetBrowser({
@@ -330,7 +291,7 @@ export function ResultDatasetBrowser({
                   <span data-status={model.manifestStatus}>
                     {manifest.status.completeness}
                   </span>
-                  <div
+                  <div role="group"
                     aria-label="Result actions"
                     className="fm-results-dataset-browser__actions"
                   >
@@ -369,7 +330,7 @@ export function ResultDatasetBrowser({
                 </div>
               </header>
 
-              <div className="fm-results-dataset-browser__axes" aria-label="Dataset axes">
+              <div role="group" className="fm-results-dataset-browser__axes" aria-label="Dataset axes">
                 {model.axes.map((axis) => (
                   <ResultDatasetAxisControl
                     axis={axis}
@@ -400,7 +361,7 @@ export function ResultDatasetBrowser({
                 </p>
               ) : null}
 
-              <div className="fm-results-dataset-browser__filters" aria-label="Result filters">
+              <div role="group" className="fm-results-dataset-browser__filters" aria-label="Result filters">
                 {!serverFiltering || !serverSorting ? (
                   <p className="fm-results-dataset-browser__status" role="status">
                     {serverFiltering && !serverSorting
@@ -1072,7 +1033,7 @@ function VirtualizedResultRows<T>({
   items: readonly T[];
 }) {
   const parentRef = useRef<HTMLDivElement>(null);
-  const [pendingFocusIndex, setPendingFocusIndex] = useState<number | null>(null);
+  const pendingFocusIndex = useRef<number | null>(null);
   // TanStack Virtual exposes an imperative measurement API by design.
   // eslint-disable-next-line react-hooks/incompatible-library
   const rowVirtualizer = useVirtualizer({
@@ -1083,15 +1044,17 @@ function VirtualizedResultRows<T>({
   });
   const virtualItems = rowVirtualizer.getVirtualItems();
 
-  useEffect(() => {
-    if (pendingFocusIndex == null) return;
+  const focusMountedRow = useCallback(() => {
+    const index = pendingFocusIndex.current;
+    if (index === null) return;
     const button = parentRef.current?.querySelector<HTMLButtonElement>(
-      `[data-result-row-index="${pendingFocusIndex}"]`,
+      `[data-result-row-index="${index}"] button[data-result-row="true"]`,
     );
     if (!button) return;
     button.focus();
-    setPendingFocusIndex(null);
-  }, [pendingFocusIndex, virtualItems]);
+    pendingFocusIndex.current = null;
+  }, []);
+  useEffect(focusMountedRow, [focusMountedRow, virtualItems]);
 
   const onKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
     const target = event.target;
@@ -1120,19 +1083,19 @@ function VirtualizedResultRows<T>({
       return;
     }
     event.preventDefault();
-    setPendingFocusIndex(nextIndex);
+    pendingFocusIndex.current = nextIndex;
     rowVirtualizer.scrollToIndex(nextIndex, { align: "auto" });
+    focusMountedRow();
   };
 
   return (
     <div
-      aria-label={ariaLabel}
       className="fm-results-dataset-browser__virtual-list"
       onKeyDown={onKeyDown}
       ref={parentRef}
-      role="list"
     >
-      <div
+      <ul
+        aria-label={ariaLabel}
         className="fm-results-dataset-browser__virtual-list-inner"
         style={{ height: `${rowVirtualizer.getTotalSize()}px` }}
       >
@@ -1140,22 +1103,21 @@ function VirtualizedResultRows<T>({
           const item = items[virtualRow.index];
           if (!item) return null;
           return (
-            <div
+            <li
               className="fm-results-dataset-browser__virtual-row"
               data-index={virtualRow.index}
               data-result-row-index={virtualRow.index}
               key={itemKey(item)}
               ref={rowVirtualizer.measureElement}
-              role="listitem"
               style={{
                 transform: `translateY(${virtualRow.start}px)`,
               }}
             >
               {children(item)}
-            </div>
+            </li>
           );
         })}
-      </div>
+      </ul>
     </div>
   );
 }
@@ -1171,7 +1133,7 @@ function ResultPageControls({
 }) {
   if (!page?.cursor && !page?.next_cursor) return null;
   return (
-    <div
+    <div role="group"
       aria-label={ariaLabel}
       className="fm-results-dataset-browser__page-controls"
     >

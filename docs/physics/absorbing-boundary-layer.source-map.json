@@ -1,15 +1,18 @@
 {
   "document": {"path": "docs/physics/absorbing-boundary-layer.md"},
   "backend_matrix": [
-    {"solver": "FDM", "device": "CPU", "status": "reference executable"},
-    {"solver": "FDM", "device": "GPU", "status": "unsupported", "reason": "Native CUDA rejects cellwise damping fields before launch."},
-    {"solver": "FEM", "device": "CPU", "status": "implemented"},
-    {"solver": "FEM", "device": "GPU", "status": "implemented", "reason": "The native material-field lane carries alpha_field; managed qualification is separate."}
+    {"solver": "FDM", "device": "CPU", "status": "source implementation", "reason": "Spatial-layer materialization shares the planner. Managed runtime and reflection qualification are pending."},
+    {"solver": "FDM", "device": "GPU", "status": "source implementation", "reason": "Spatial-layer materialization shares the planner. Managed runtime and reflection qualification are pending."},
+    {"solver": "FEM", "device": "CPU", "status": "source implementation", "reason": "Spatial-layer materialization shares the planner. Managed runtime and reflection qualification are pending."},
+    {"solver": "FEM", "device": "GPU", "status": "source implementation", "reason": "Spatial-layer materialization shares the planner. Managed runtime and reflection qualification are pending."}
   ],
   "equations": [
     {"id": "eq-alpha-additive", "symbols": ["alpha", "alpha0", "alpha_max", "w"], "sources": ["planner-profile"]},
     {"id": "eq-profile-coordinate", "symbols": ["t", "W", "d", "R"], "sources": ["planner-profile"]},
-    {"id": "eq-smootherstep", "symbols": ["p"], "sources": ["planner-profile"]}
+    {"id": "eq-smootherstep", "symbols": ["p"], "sources": ["ramp-evaluator"]},
+    {"id": "eq-abl-normalized-profiles", "symbols": ["p", "t"], "sources": ["ramp-evaluator"]},
+    {"id": "eq-spatial-abl", "symbols": ["alpha", "r", "material", "i", "mask", "amplitude", "pi", "ui", "width", "ramp", "distance"], "sources": ["planner-profile", "region-mask", "region-metric"]},
+    {"id": "eq-spatial-abl-coordinates", "symbols": ["r", "dplane", "origin", "normal", "rho", "center", "axis"], "sources": ["planner-profile", "spatial-tilt"]}
   ],
   "symbols": [
     {"id": "alpha", "latex": "\\alpha(\\mathbf r)", "meaning": "local Gilbert damping supplied to LLG", "si_unit": "1"},
@@ -20,23 +23,81 @@
     {"id": "W", "latex": "W", "meaning": "full inward extent of the layer", "si_unit": "\\mathrm{m}"},
     {"id": "d", "latex": "d_f", "meaning": "inward distance from face $f$", "si_unit": "\\mathrm{m}"},
     {"id": "R", "latex": "R", "meaning": "taper extent", "si_unit": "\\mathrm{m}"},
-    {"id": "p", "latex": "p(t)", "meaning": "scalar taper profile", "si_unit": "1"}
+    {"id": "p", "latex": "p(t)", "meaning": "scalar taper profile", "si_unit": "1"},
+    {"id": "i", "latex": "i", "meaning": "index of an enabled layer", "si_unit": "1"},
+    {"id": "r", "latex": "\\mathbf r", "meaning": "sample position in the specified coordinate frame", "si_unit": "\\mathrm{m}"},
+    {"id": "material", "latex": "\\alpha_{\\rm material}(\\mathbf r)", "meaning": "local damping after regional material assignments", "si_unit": "1"},
+    {"id": "mask", "latex": "M_i(\\mathbf r)", "meaning": "membership in the active body, region and band", "si_unit": "1"},
+    {"id": "amplitude", "latex": "A_i", "meaning": "maximum added damping for layer $i$", "si_unit": "1"},
+    {"id": "ui", "latex": "u_i", "meaning": "normalized ramp coordinate of layer $i$", "si_unit": "1"},
+    {"id": "pi", "latex": "p_i(u_i)", "meaning": "normalized ramp weight of layer $i$", "si_unit": "1"},
+    {"id": "width", "latex": "W_i", "meaning": "full extent of layer $i$", "si_unit": "\\mathrm{m}"},
+    {"id": "ramp", "latex": "L_i", "meaning": "ramp extent of layer $i$", "si_unit": "\\mathrm{m}"},
+    {"id": "distance", "latex": "d_i(\\mathbf r)", "meaning": "coordinate measured inward from the plateau edge", "si_unit": "\\mathrm{m}"},
+    {"id": "origin", "latex": "\\mathbf o", "meaning": "point on the plane at the plateau edge", "si_unit": "\\mathrm{m}"},
+    {"id": "normal", "latex": "\\hat{\\mathbf n}", "meaning": "unit normal indicating the direction of increasing damping", "si_unit": "1"},
+    {"id": "center", "latex": "\\mathbf c", "meaning": "sphere center or point on the cylinder axis", "si_unit": "\\mathrm{m}"},
+    {"id": "axis", "latex": "\\hat{\\mathbf a}", "meaning": "normalized cylinder axis", "si_unit": "1"},
+    {"id": "rho", "latex": "\\rho", "meaning": "perpendicular distance from the cylinder axis", "si_unit": "\\mathrm{m}"},
+    {"id": "radius", "latex": "a", "meaning": "radius of the cylindrical or spherical plateau edge", "si_unit": "\\mathrm{m}"},
+    {"id": "dplane", "latex": "d_{\\rm plane}", "meaning": "signed inward plane distance", "si_unit": "\\mathrm{m}"}
   ],
   "sources": [
     {"id": "python-module", "path": "packages/fullmag-py/src/fullmag/model/absorbing_boundary.py", "symbol": "class AbsorbingBoundaryLayer", "responsibility": "Validate parameters, serialize the object module, and expose the analytic profile utility."},
     {"id": "python-object-api", "path": "packages/fullmag-py/src/fullmag/world.py", "symbol": "absorbing_boundary", "responsibility": "Attach one absorbing-boundary configuration to a per-object alpha control."},
     {"id": "python-lowering", "path": "packages/fullmag-py/src/fullmag/model/problem.py", "symbol": "class Problem", "responsibility": "Lower the object-owned configuration into MagnetIR payloads."},
-    {"id": "ir-validation", "path": "crates/fullmag-ir/src/lib.rs", "symbol": "validate_absorbing_boundary", "responsibility": "Store and validate the optional typed absorbing-boundary module and its face/profile/frame enums."},
-    {"id": "planner-profile", "path": "crates/fullmag-plan/src/material.rs", "symbol": "apply_absorbing_boundary_layer", "responsibility": "Evaluate the profile at FDM cells or FEM nodes and add it to resolved alpha."},
+    {"id": "ir-validation", "path": "crates/fullmag-ir/src/absorbing_boundary.rs", "symbol": "validate_absorbing_boundary", "responsibility": "Store and validate the optional typed absorbing-boundary module and its face/profile/frame enums."},
+    {"id": "planner-profile", "path": "crates/fullmag-plan/src/spatial_absorber.rs", "symbol": "apply_absorbing_boundary_layer", "responsibility": "Evaluate the profile at FDM cells or FEM nodes and add it to resolved alpha."},
     {"id": "fem-materialization", "path": "crates/fullmag-plan/src/fem.rs", "symbol": "build_region_material_fields", "responsibility": "Carry the resolved FEM alpha field into the material plan."},
-    {"id": "cuda-gate", "path": "crates/fullmag-plan/src/validate.rs", "symbol": "validate_region_owned_planning", "responsibility": "Fail closed for FDM CUDA cellwise damping before native launch."},
+    {"id": "fdm-mask", "path": "crates/fullmag-plan/src/tests.rs", "symbol": "fdm_absorbing_boundary_uses_magnetic_support", "responsibility": "Check padded grids, inactive cells and explicit universe faces against the active magnetic support."},
+    {"id": "cuda-planner", "path": "crates/fullmag-plan/src/tests.rs", "symbol": "fdm_cuda_absorbing_boundary_plans_cellwise_damping", "responsibility": "Verify single-grid FDM CUDA planner materializes cellwise alpha."},
+    {"id": "ramp-evaluator", "path": "crates/fullmag-ir/src/absorbing_boundary.rs", "symbol": "ResolvedAbsorbingBoundaryProfile", "responsibility": "Evaluate normalized presets and validated authored expressions."},
+    {"id": "python-expression", "path": "packages/fullmag-py/src/fullmag/model/absorbing_boundary.py", "symbol": "compile_profile_expression", "responsibility": "Validate the profile formula and support Python analytic sampling."},
+    {"id": "python-formula", "path": "packages/fullmag-py/src/fullmag/model/mask_function.py", "symbol": "compile_formula", "responsibility": "Check a formula with the antenna syntax-tree rules and evaluate the checked tree."},
+    {"id": "formula-engine", "path": "crates/fullmag-expr/src/function.rs", "symbol": "compile_function", "responsibility": "Parse and evaluate the shared formula language, including profile and distance formulas."},
+    {"id": "script-expression", "path": "packages/fullmag-py/src/fullmag/runtime/script_builder.py", "symbol": "_render_absorbing_boundary", "responsibility": "Preserve authored expression and scalar precision in editable script export."},
     {"id": "ui-panel", "path": "apps/control-room/src/modules/inspector/panels/ObjectAbsorbingBoundaryPanel.tsx", "symbol": "ObjectAbsorbingBoundaryPanel", "responsibility": "Expose per-object boundary parameters and persist them through the v2 model resource."},
-    {"id": "fem-owner-bounds-regression", "path": "crates/fullmag-plan/src/tests/material_audit_fem.rs", "symbol": "fem_absorber_uses_the_union_of_conformal_owner_segments", "responsibility": "Mapa alpha nie zależy od podziału ownera na markery ani ich kolejności.", "evidence_status": "implemented"}
+    {"id": "reflection-input", "path": "tests/standard_problems/absorbing_boundary/prepare.py", "symbol": "prepare_case", "responsibility": "Generate matched normal-incidence wave-packet controls and ABL models."},
+    {"id": "reflection-measurement", "path": "tests/standard_problems/absorbing_boundary/verify.py", "symbol": "inspect_case", "responsibility": "Verify managed execution, realized damping and quantitative reflection traces."},
+    {"id": "fem-owner-bounds-regression", "path": "crates/fullmag-plan/src/tests/material_audit_fem.rs", "symbol": "fem_absorber_uses_the_union_of_conformal_owner_segments", "responsibility": "Mapa alpha nie zależy od podziału ownera na markery ani ich kolejności.", "evidence_status": "implemented"},
+    {"id": "spatial-model", "path": "packages/fullmag-py/src/fullmag/model/absorbing_boundary.py", "symbol": "class SpatialAbsorbingLayer", "responsibility": "Validate immutable layer identity, geometry and profile."},
+    {"id": "spatial-geometry", "path": "packages/fullmag-py/src/fullmag/model/absorbing_boundary.py", "symbol": "class AbsorbingGeometry", "responsibility": "Validate named distance geometries and their SI parameters."},
+    {"id": "spatial-ir", "path": "crates/fullmag-ir/src/model.rs", "symbol": "SpatialAbsorbingLayerIR", "responsibility": "Represent a named layer and its optional region scope."},
+    {"id": "spatial-validator", "path": "crates/fullmag-ir/src/absorbing_boundary.rs", "symbol": "validate_absorbing_boundary_config", "responsibility": "Validate unique layer IDs, numeric domains and geometry expressions."},
+    {"id": "spatial-expression", "path": "crates/fullmag-ir/src/absorbing_boundary.rs", "symbol": "AbsorbingBoundaryCoordinate", "responsibility": "Compile the distance formula with fullmag-expr and evaluate finite samples."},
+    {"id": "python-coordinate", "path": "packages/fullmag-py/src/fullmag/model/absorbing_boundary.py", "symbol": "compile_distance_expression", "responsibility": "Validate distance formulas independently from normalized profiles."},
+    {"id": "region-metric", "path": "crates/fullmag-plan/src/spatial_absorber.rs", "symbol": "MetricShape", "responsibility": "Compile the exact sided distance for supported region boundaries."},
+    {"id": "region-mask", "path": "crates/fullmag-plan/src/spatial_absorber.rs", "symbol": "RegionMask", "responsibility": "Restrict contributions to the referenced region in its own frame."},
+    {"id": "spatial-regression", "path": "packages/fullmag-py/tests/test_absorbing_boundary.py", "symbol": "test_spatial_layers_round_trip_scene_script_and_ir", "responsibility": "Round-trip six geometries and independent profiles through scene export and canonical IR."},
+    {"id": "spatial-cutout", "path": "crates/fullmag-plan/src/spatial_absorber.rs", "symbol": "spatial_region_cutout_masks_material_and_tracks_its_real_boundary", "responsibility": "Check a signed boundary distance and material scope around a cutout."},
+    {"id": "spatial-tilt", "path": "crates/fullmag-plan/src/spatial_absorber.rs", "symbol": "spatial_tilted_translated_cylinder_is_axially_invariant", "responsibility": "Check oriented cylindrical coordinates and translation invariance."}
   ],
   "public_api": {
     "parameters": [
-      {"python": "film.alpha", "type": "float", "default": "required", "si_unit": "1", "validation": "finite and >= 0", "meaning": "Base Gilbert damping", "backend_support": "FDM CPU/FEM CPU/FEM GPU; FDM CUDA only when no cellwise field is produced", "problem_ir": "magnets[].material.damping"},
-      {"python": "film.alpha.absorbing_boundary(total_width=...)", "type": "module", "default": "disabled", "si_unit": "m and 1 by parameter", "validation": "positive widths; ramp <= total; non-negative max_damping; valid unique faces/profile/frame", "meaning": "Per-object additive damping layer", "backend_support": "FDM CPU/FEM CPU/FEM GPU; FDM CUDA rejects cellwise alpha", "problem_ir": "magnets[].absorbing_boundary"}
+      {"python": "film.alpha", "type": "float", "default": "required", "si_unit": "1", "validation": "finite and >= 0", "meaning": "Base Gilbert damping", "backend_support": "FDM CPU, single-grid FDM CUDA, FEM CPU/GPU", "problem_ir": "materials[].damping"},
+      {"python": "film.alpha.absorbing_boundary(total_width=...)", "type": "module", "default": "disabled", "si_unit": "m and 1 by parameter", "validation": "positive widths; ramp <= total; non-negative max_damping; valid unique faces/profile/frame", "meaning": "Per-object additive damping layer", "backend_support": "FDM CPU, single-grid FDM CUDA, FEM CPU/GPU", "problem_ir": "magnets[].absorbing_boundary"},
+      {"python": "film.alpha.absorbing_boundary(expression=...)", "type": "str or None", "default": "None", "si_unit": "1", "validation": "Required for custom; finite normalized scalar ramp with endpoints 0 and 1", "meaning": "Formula in dimensionless ramp position u", "backend_support": "Common material-field planner", "problem_ir": "magnets[].absorbing_boundary.expression"},
+      {"python": "layers", "type": "sequence of SpatialAbsorbingLayer", "default": "None", "si_unit": "1", "validation": "Unique layer IDs within the owner, exclusive of legacy settings", "meaning": "Ordered editable collection", "backend_support": "Shared planner", "problem_ir": "magnets[].absorbing_boundary.layers"},
+      {"python": "layer_id", "type": "str", "default": "required", "si_unit": "1", "validation": "Nonempty and unique per object", "meaning": "Stable layer identity", "backend_support": "Shared planner", "problem_ir": "magnets[].absorbing_boundary.layers[].layer_id"},
+      {"python": "name", "type": "str", "default": "required", "si_unit": "1", "validation": "Nonempty", "meaning": "Editable layer name", "backend_support": "Shared planner", "problem_ir": "magnets[].absorbing_boundary.layers[].name"},
+      {"python": "enabled", "type": "bool", "default": "True", "si_unit": "1", "validation": "Boolean", "meaning": "Include the layer in materialization", "backend_support": "Shared planner", "problem_ir": "magnets[].absorbing_boundary.layers[].enabled"},
+      {"python": "region_id", "type": "str or None", "default": "None", "si_unit": "1", "validation": "Live ID in the owner; disabled region contributes zero", "meaning": "Optional material scope", "backend_support": "Shared planner", "problem_ir": "magnets[].absorbing_boundary.layers[].region_id"},
+      {"python": "frame", "type": "str", "default": "object", "si_unit": "1", "validation": "object or universe", "meaning": "Origin for position-dependent coordinates", "backend_support": "Shared planner", "problem_ir": "magnets[].absorbing_boundary.layers[].frame"},
+      {"python": "geometry", "type": "AbsorbingGeometry", "default": "required", "si_unit": "1", "validation": "One of the six factories listed below", "meaning": "Distance construction", "backend_support": "Shared planner", "problem_ir": "magnets[].absorbing_boundary.layers[].geometry.kind"},
+      {"python": "total_width_m", "type": "float", "default": "required", "si_unit": "\\mathrm{m}", "validation": "Finite and positive, at most the radius for an outward radial band", "meaning": "Full width", "backend_support": "Shared planner", "problem_ir": "magnets[].absorbing_boundary.layers[].total_width_m"},
+      {"python": "ramp_width_m", "type": "float", "default": "required", "si_unit": "\\mathrm{m}", "validation": "Finite, positive and at most total_width_m", "meaning": "Width of the rising part", "backend_support": "Shared planner", "problem_ir": "magnets[].absorbing_boundary.layers[].ramp_width_m"},
+      {"python": "max_damping", "type": "float", "default": "required", "si_unit": "1", "validation": "Finite and nonnegative", "meaning": "Peak additive damping", "backend_support": "Shared planner", "problem_ir": "magnets[].absorbing_boundary.layers[].max_damping"},
+      {"python": "profile", "type": "str", "default": "smootherstep", "si_unit": "1", "validation": "linear, quadratic, smootherstep, logarithmic, tanh or custom", "meaning": "Ramp function", "backend_support": "Shared planner", "problem_ir": "magnets[].absorbing_boundary.layers[].profile"},
+      {"python": "expression", "type": "str or None", "default": "None", "si_unit": "1", "validation": "Required for custom only, normalized at both endpoints", "meaning": "Formula for the ramp", "backend_support": "Shared planner", "problem_ir": "magnets[].absorbing_boundary.layers[].expression"},
+      {"python": "faces(faces)", "type": "sequence of str", "default": "required", "si_unit": "1", "validation": "Unique, nonempty subset of the six signed faces", "meaning": "Faces sharing one ramp", "backend_support": "Shared planner", "problem_ir": "magnets[].absorbing_boundary.layers[].geometry.faces"},
+      {"python": "plane(origin)", "type": "three floats", "default": "required", "si_unit": "\\mathrm{m}", "validation": "Finite components", "meaning": "Point on the plane", "backend_support": "Shared planner", "problem_ir": "magnets[].absorbing_boundary.layers[].geometry.origin"},
+      {"python": "plane(normal)", "type": "three floats", "default": "required", "si_unit": "1", "validation": "Finite nonzero vector, normalized during planning", "meaning": "Normal toward the plateau", "backend_support": "Shared planner", "problem_ir": "magnets[].absorbing_boundary.layers[].geometry.normal"},
+      {"python": "center", "type": "three floats", "default": "required", "si_unit": "\\mathrm{m}", "validation": "Finite components", "meaning": "Point on cylinder axis or sphere center", "backend_support": "Shared planner", "problem_ir": "magnets[].absorbing_boundary.layers[].geometry.center"},
+      {"python": "cylinder(axis)", "type": "three floats", "default": "required", "si_unit": "1", "validation": "Finite nonzero vector, normalized during planning", "meaning": "Axis along the cylinder", "backend_support": "Shared planner", "problem_ir": "magnets[].absorbing_boundary.layers[].geometry.axis"},
+      {"python": "radius_m", "type": "float", "default": "required", "si_unit": "\\mathrm{m}", "validation": "Finite and positive", "meaning": "Reference radius of cylinder or sphere", "backend_support": "Shared planner", "problem_ir": "magnets[].absorbing_boundary.layers[].geometry.radius_m"},
+      {"python": "direction", "type": "str", "default": "outward", "si_unit": "1", "validation": "outward or inward", "meaning": "Direction of increasing radial damping", "backend_support": "Shared planner", "problem_ir": "magnets[].absorbing_boundary.layers[].geometry.direction"},
+      {"python": "region_boundary(region_id)", "type": "str", "default": "required", "si_unit": "1", "validation": "Live owner region with supported metric boundary", "meaning": "Region whose boundary locates the band", "backend_support": "Shared planner", "problem_ir": "magnets[].absorbing_boundary.layers[].geometry.region_id"},
+      {"python": "AbsorbingGeometry.expression(expression)", "type": "str", "default": "required", "si_unit": "\\mathrm{m}", "validation": "Restricted finite scalar coordinate in x, y, z", "meaning": "Distance coordinate supplied by the author", "backend_support": "Shared planner", "problem_ir": "magnets[].absorbing_boundary.layers[].geometry.expression"}
     ]
   }
 }

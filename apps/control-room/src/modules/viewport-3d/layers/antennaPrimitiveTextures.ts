@@ -37,7 +37,8 @@ export function createAntennaPrimitiveTextures() {
     texture.generateMipmaps = true;
     texture.needsUpdate = true;
   }
-  brush.wrapS = brush.wrapT = RepeatWrapping;
+  brush.wrapS = RepeatWrapping;
+  brush.wrapT = RepeatWrapping;
   brush.repeat.set(4, 4);
   return { matcap, brush };
 }

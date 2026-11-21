@@ -6,34 +6,9 @@ import { describe, expect, it } from "vitest";
 import type { DecodedFieldVector } from "@/kernel/api/codecs";
 import { memoryBudgetRegistry } from "@/kernel/performance/MemoryBudgetRegistry";
 import type { FdmGridRenderDomain } from "../viewport3dDomainAdapter";
-import {
-  FDM_CUBOID_UPLOAD_BATCH_SIZE,
-  buildFdmPointPositions,
-  buildFdmCuboidInstanceModel as buildFdmCuboidInstanceModelWithMembership,
-  buildFdmCuboidUploadBatches,
-  buildFdmCuboidColorUploadBatchesForView,
-  fdmCuboidUsesInstanceColors,
-  fdmCuboidVectorPassCanRenderWithoutCellModel,
-  buildFdmVectorSegments,
-  evictFdmVectorSegmentCacheEntriesForTests,
-  fdmCuboidSurfaceMeshKey,
-  hasAnyEffectiveFdmPass,
-  handleFdmCuboidContextLost,
-  resolveFdmCuboidPassPlan,
-  resolveFdmVectorGlyphScale,
-  recordFdmCuboidSurfaceAdoption,
-  resolveFdmCuboidGeometryScopeInstanceOrdinals,
-  resolveFdmCuboidSourceInstanceOrdinal,
-  resolveFdmCuboidPreparedSourceOrdinal,
-  prepareFdmCuboidInstanceMatrices,
-  estimateFdmCuboidCarrierPeakBytes,
-  uploadFdmCuboidAttribute,
-  disposeFdmCuboidInstanceColorBeforeReplace,
-  visibleFdmCuboidInspectTargets,
-  resolveFdmCuboidColorUploadRevision,
-  shouldAttachFdmCuboidInspectListener,
-  createFdmInspectClearArbitrator,
-} from "./FdmCuboidLayer";
+import { buildFdmPointPositions, buildFdmCuboidInstanceModel as buildFdmCuboidInstanceModelWithMembership, resolveFdmCuboidPassPlan, resolveFdmVectorGlyphScale } from "./FdmCuboidLayer";
+import { FDM_CUBOID_UPLOAD_BATCH_SIZE, buildFdmCuboidUploadBatches, buildFdmCuboidColorUploadBatchesForView, fdmCuboidUsesInstanceColors, fdmCuboidVectorPassCanRenderWithoutCellModel, buildFdmVectorSegments, evictFdmVectorSegmentCacheEntriesForTests, fdmCuboidSurfaceMeshKey, hasAnyEffectiveFdmPass, handleFdmCuboidContextLost, recordFdmCuboidSurfaceAdoption, resolveFdmCuboidGeometryScopeInstanceOrdinals, resolveFdmCuboidSourceInstanceOrdinal, resolveFdmCuboidPreparedSourceOrdinal, prepareFdmCuboidInstanceMatrices, estimateFdmCuboidCarrierPeakBytes, uploadFdmCuboidAttribute, disposeFdmCuboidInstanceColorBeforeReplace, visibleFdmCuboidInspectTargets, resolveFdmCuboidColorUploadRevision, shouldAttachFdmCuboidInspectListener, createFdmInspectClearArbitrator } from "./FdmCuboidLayer.model";
+import { resolveFdmCuboidSurfaceMaterialPlan } from "./viewport3DSurfaceMaterialPlans";
 import {
   BoxGeometry,
   InstancedBufferAttribute,
@@ -96,6 +71,10 @@ function vectorField(values: number[]): DecodedFieldVector {
 const fdmCuboidLayerPath = join(
   process.cwd(),
   "src/modules/viewport-3d/layers/FdmCuboidLayer.tsx",
+);
+const fdmCuboidLayerModelPath = join(
+  process.cwd(),
+  "src/modules/viewport-3d/layers/FdmCuboidLayer.model.ts",
 );
 const fdmCuboidBuildModelPath = join(
   process.cwd(),
@@ -337,6 +316,7 @@ describe("FdmCuboidLayer model", () => {
 
   it("keeps both cuboid carriers mounted and detaches hidden pointer handlers", () => {
     const source = readFileSync(fdmCuboidLayerPath, "utf8");
+    const modelSource = readFileSync(fdmCuboidLayerModelPath, "utf8");
 
     expect(source).toContain("visible={renderPlan.surface.visible}");
     expect(source).toContain("visible={renderPlan.wireframe.visible}");
@@ -352,10 +332,10 @@ describe("FdmCuboidLayer model", () => {
     expect(source).toContain('canvas.addEventListener("webglcontextrestored"');
     expect(source).toContain('canvas.removeEventListener("webglcontextlost"');
     expect(source).toContain('canvas.removeEventListener("webglcontextrestored"');
-    expect(source).toContain("event.preventDefault();");
-    expect(source).toContain("visibleFdmCuboidInspectTargets([");
-    expect(source).toContain("resolveFdmCuboidPreparedSourceOrdinal(");
-    expect(source).toContain("resolveViewport3DScalarColorBufferKey(surfaceColors)");
+    expect(modelSource).toContain("event.preventDefault();");
+    expect(modelSource).toContain("visibleFdmCuboidInspectTargets(");
+    expect(modelSource).toContain("resolveFdmCuboidPreparedSourceOrdinal(");
+    expect(modelSource).toContain("resolveViewport3DScalarColorBufferKey(surfaceColors)");
   });
   it("maps rendered target instances back to the shared sampled model", () => {
     const instanceOrdinals = Uint32Array.from([3, 1]);
@@ -953,10 +933,10 @@ describe("FdmCuboidLayer model", () => {
     const budget = memoryBudgetRegistry
       .snapshot()
       .find((entry) => entry.id === "viewport3d.render.fdmVectorSegmentCache");
-    const layerSource = readFileSync(fdmCuboidLayerPath, "utf8").replace(/\r\n/g, "\n");
+    const layerModelSource = readFileSync(fdmCuboidLayerModelPath, "utf8").replace(/\r\n/g, "\n");
 
     expect(budget?.maxBytes).toBe(32 * 1024 * 1024);
-    expect(layerSource).toContain("fieldCacheBytes > maxBytes");
+    expect(layerModelSource).toContain("fieldCacheBytes > maxBytes");
   });
 
   it("reuses the scene-level FDM instance model for surface color mapping and layer rendering", () => {
@@ -996,11 +976,99 @@ describe("FdmCuboidLayer model", () => {
     expect(layerSource).toContain("() => EMPTY_FDM_CUBOID_BUILD_SNAPSHOT");
   });
 
-  it("uses unlit materials for FDM cell surfaces", () => {
+  it("uses PBR for Presentation instance colors and keeps Scientific colors unlit", () => {
+    const profile = {
+      magneticSurface: {
+        presentation: { roughness: 0.31, metalness: 0.58, shadows: true },
+        toneMapped: true,
+      },
+      uniformGeometry: {
+        lit: true,
+        pbr: true,
+        roughness: 0.31,
+        metalness: 0.58,
+        shadows: true,
+        toneMapped: true,
+      },
+    } as const;
+
+    expect(resolveFdmCuboidSurfaceMaterialPlan(profile, false)).toEqual({
+      castShadow: true,
+      kind: "standard",
+      metalness: 0.58,
+      receiveShadow: true,
+      roughness: 0.31,
+      toneMapped: true,
+      vertexColors: false,
+    });
+
+    expect(resolveFdmCuboidSurfaceMaterialPlan(profile, true)).toEqual({
+      castShadow: true,
+      kind: "standard",
+      metalness: 0.58,
+      receiveShadow: true,
+      roughness: 0.31,
+      toneMapped: true,
+      vertexColors: true,
+    });
+
+    const scientificProfile = {
+      ...profile,
+      magneticSurface: { presentation: null, toneMapped: false },
+    };
+    expect(resolveFdmCuboidSurfaceMaterialPlan(scientificProfile, true)).toEqual({
+      castShadow: false,
+      kind: "basic",
+      receiveShadow: false,
+      toneMapped: false,
+      vertexColors: true,
+    });
+
+    expect(resolveFdmCuboidSurfaceMaterialPlan({
+      ...profile,
+      uniformGeometry: { ...profile.uniformGeometry, pbr: false },
+    }, false)).toMatchObject({
+      kind: "lambert",
+      castShadow: false,
+      receiveShadow: false,
+    });
+
+    expect(resolveFdmCuboidSurfaceMaterialPlan({
+      ...profile,
+      uniformGeometry: { ...profile.uniformGeometry, shadows: false },
+    }, false)).toMatchObject({
+      kind: "standard",
+      castShadow: false,
+      receiveShadow: false,
+    });
+
+    expect(resolveFdmCuboidSurfaceMaterialPlan({
+      ...profile,
+      magneticSurface: { presentation: null, toneMapped: false },
+      uniformGeometry: {
+        ...profile.uniformGeometry,
+        lit: false,
+        pbr: false,
+      },
+    }, false)).toMatchObject({
+      kind: "basic",
+      castShadow: false,
+      receiveShadow: false,
+      toneMapped: false,
+    });
+
     const layerSource = readFileSync(fdmCuboidLayerPath, "utf8").replace(/\r\n/g, "\n");
 
+    expect(layerSource).toContain("resolveFdmCuboidSurfaceMaterialPlan(");
+    expect(layerSource).toContain("new MeshStandardMaterial(materialParameters)");
+    // Colour, opacity and PBR scalars are applied in place; only
+    // program-affecting parameters recreate the material.
+    expect(layerSource).toContain("material.opacity = surfaceOpacity;");
+    expect(layerSource).toContain("material.opacity = wireframeOpacity;");
+    expect(layerSource).not.toMatch(/surfaceMaterialColor,\n\s+surfaceOpacity,\n\s+tracker,\n\s+\],/);
+    expect(layerSource).toContain("vertexColors: surfaceMaterialPlan.vertexColors");
+    expect(layerSource).toContain("castShadow={surfaceMaterialPlan.castShadow}");
     expect(layerSource).toContain("MeshBasicMaterial");
-    expect(layerSource).not.toContain("MeshStandardMaterial");
     expect(layerSource).toContain("color.fill(1);");
     expect(layerSource).toContain("new BufferAttribute(color, 3)");
   });
@@ -1123,13 +1191,14 @@ describe("FdmCuboidLayer model", () => {
     const layerSource = readFileSync(fdmCuboidLayerPath, "utf8").replace(/\r\n/g, "\n");
 
     expect(layerSource).toContain(
-      "const surfaceMaterialRef = useRef<\n    MeshBasicMaterial | MeshLambertMaterial\n  >(null);",
+      "const surfaceMaterialRef = useRef<\n    MeshBasicMaterial | MeshLambertMaterial | MeshStandardMaterial\n  >(null);",
     );
     expect(layerSource).toContain("ref={surfaceMaterialRef}");
     expect(layerSource).toContain("const mountedSurfaceMaterial = surface.material;");
     expect(layerSource).toContain("mountedSurfaceMaterial === surfaceMaterial");
     expect(layerSource).toContain("mountedSurfaceMaterial instanceof MeshBasicMaterial");
     expect(layerSource).toContain("mountedSurfaceMaterial instanceof MeshLambertMaterial");
+    expect(layerSource).toContain("mountedSurfaceMaterial instanceof MeshStandardMaterial");
     expect(layerSource).toContain("mountedSurfaceMaterial.needsUpdate = true;");
     expect(layerSource).not.toContain("surfaceMaterial.needsUpdate = true;");
   });

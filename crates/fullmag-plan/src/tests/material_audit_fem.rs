@@ -160,6 +160,7 @@ fn absorber_layer(
         faces: vec![fullmag_ir::AbsorbingBoundaryFaceIR::XPlus],
         profile: fullmag_ir::AbsorbingBoundaryProfileIR::Linear,
         frame,
+        expression: None,
     }
 }
 
@@ -178,7 +179,7 @@ fn conformal_absorber_problem(
 ) -> ProblemIR {
     let mut ir = fem_minimal_test_ir();
     ir.energy_terms = vec![fullmag_ir::EnergyTermIR::Exchange];
-    ir.magnets[0].absorbing_boundary = Some(absorber_layer(frame));
+    ir.magnets[0].absorbing_boundary = Some(absorber_layer(frame).into());
     set_stable_fem_test_timestep(&mut ir);
     ir.problem_meta.runtime_metadata.remove("study_universe");
 
@@ -220,7 +221,7 @@ fn distinct_owner_absorber_problem(
 ) -> ProblemIR {
     let mut ir = fem_minimal_test_ir();
     ir.energy_terms = vec![fullmag_ir::EnergyTermIR::Exchange];
-    ir.magnets[0].absorbing_boundary = Some(absorber_layer(frame));
+    ir.magnets[0].absorbing_boundary = Some(absorber_layer(frame).into());
     set_stable_fem_test_timestep(&mut ir);
     ir.problem_meta.runtime_metadata.remove("study_universe");
     ir.geometry.entries.push(fullmag_ir::GeometryEntryIR::Box {
@@ -240,7 +241,7 @@ fn distinct_owner_absorber_problem(
         initial_magnetization: Some(fullmag_ir::InitialMagnetizationIR::Uniform {
             value: [0.0, 1.0, 0.0],
         }),
-        absorbing_boundary: Some(absorber_layer(frame)),
+        absorbing_boundary: Some(absorber_layer(frame).into()),
     });
     let domain_asset = ir
         .geometry_assets
@@ -259,6 +260,30 @@ fn distinct_owner_absorber_problem(
         },
     ];
     ir
+}
+
+#[test]
+fn spatial_absorber_analytic_map_matches_fdm_centers_and_fem_nodes() {
+    let config = serde_json::json!({"layers":[{
+        "layer_id":"positive-x","name":"Positive x","enabled":true,"frame":"universe",
+        "profile":"linear","total_width_m":2e-9,"ramp_width_m":2e-9,"max_damping":0.25,
+        "geometry":{"kind":"plane","origin":[2e-9,0.,0.],"normal":[1.,0.,0.]}
+    }]});
+    let expected = |x: f64| if (0.0..=2e-9).contains(&x) { 0.25*x/2e-9 } else { 0. };
+    let mut fem = conformal_absorber_problem(false, false, fullmag_ir::AbsorbingBoundaryFrameIR::Universe);
+    fem.magnets[0].absorbing_boundary = Some(serde_json::from_value(config.clone()).unwrap());
+    let (base, samples) = planned_fem_alpha_by_point(&fem);
+    for (point, alpha) in samples {
+        assert!((f64::from_bits(alpha) - base - expected(f64::from_bits(point[0]))).abs() < 1e-12);
+    }
+    let mut fdm = ProblemIR::bootstrap_example();
+    fdm.magnets[0].absorbing_boundary = Some(serde_json::from_value(config).unwrap());
+    let base = fdm.materials[0].damping;
+    let BackendPlanIR::Fdm(grid) = plan(&fdm).unwrap().backend_plan else { panic!("expected FDM") };
+    let points = crate::fdm::resolved_fdm_cell_centers(grid.grid.cells, grid.cell_size, grid.origin_m);
+    for (point, alpha) in points.iter().zip(grid.material.alpha_field.as_ref().unwrap()) {
+        assert!((*alpha - base - expected(point[0])).abs() < 1e-12);
+    }
 }
 
 fn planned_fem_alpha_by_point(
@@ -941,4 +966,53 @@ fn fem_aex_field_uniformity_uses_relative_si_tolerance() {
         fem.material.a_field.is_none(),
         "a homogeneous Aex field should keep using the scalar coefficient"
     );
+}
+
+/// A function alpha (`fm.fields.function`) is evaluated at every FEM node,
+/// the same way as on FDM cell centres.
+#[test]
+fn fem_function_alpha_is_sampled_at_every_node() {
+    const A0: f64 = 0.02;
+    const A1: f64 = 0.3;
+    const L: f64 = 2e-9;
+    let by_hand = |point: &[f64; 3]| {
+        let step = if point[1] - 0.5e-9 > 0.0 { 1.0 } else { 0.0 };
+        A0 + A1 * (point[0] / L).powf(2.0) + 0.01 * step
+    };
+    let mut ir = conformal_absorber_problem(
+        false,
+        false,
+        fullmag_ir::AbsorbingBoundaryFrameIR::Object,
+    );
+    ir.magnets[0].absorbing_boundary = None;
+    ir.material_parameter_fields = vec![serde_json::from_value(serde_json::json!({
+        "assignment_id": "strip:object:alpha", "owner_object": "strip", "parameter": "alpha",
+        "value": {"kind": "function", "frame": "object", "function": {
+            "expression_version": "field_expr.v1",
+            "name": "alpha",
+            "parameters": [{"name": "a0", "value": A0}, {"name": "a1", "value": A1},
+                           {"name": "L", "value": L}],
+            "locals": [{"name": "s", "expression": "x / L"}],
+            "outputs": ["a0 + a1 * s**2 + 0.01 * heaviside(y - 0.5e-9)"]}}
+    }))
+    .unwrap()];
+
+    let planned = plan(&ir).expect("a function alpha should plan on FEM");
+    let BackendPlanIR::Fem(fem) = planned.backend_plan else {
+        panic!("expected FEM plan");
+    };
+    let alpha = fem
+        .material
+        .alpha_field
+        .as_ref()
+        .expect("a function alpha must be sampled per node");
+    assert_eq!(alpha.len(), fem.mesh.nodes.len());
+    for (index, (point, value)) in fem.mesh.nodes.iter().zip(alpha).enumerate() {
+        let expected = by_hand(point);
+        assert!(
+            (value - expected).abs() <= 1e-15,
+            "node {index} at {point:?}: alpha={value} expected={expected}"
+        );
+    }
+    assert!(alpha.iter().any(|value| (value - A0).abs() > 1e-3));
 }

@@ -482,6 +482,12 @@ fn energy_terms(scene: &SceneDocument) -> Vec<Value> {
     if scene.study.demag_enabled {
         terms.push(json!({ "kind": "demag", "scope": "study" }));
     }
+    if let Some(Some(thermal)) = &scene.study.thermal_noise {
+        terms.push(json!({
+            "kind": "thermal_noise", "scope": "study",
+            "temperature": thermal.temperature, "seed": thermal.seed,
+        }));
+    }
     if let Some(value) = scene.study.rotated_interfacial_dmi {
         if value != 0.0 || scene.study.rotated_interfacial_dmi_object_ids.is_some() {
             let mut term = json!({
@@ -536,6 +542,15 @@ fn discretization_payload(scene: &SceneDocument) -> Value {
     }
     if let Some(reference) = scene.study.fem_domain_mesh.as_ref() {
         object.insert("fem_domain_mesh".to_string(), json!(reference));
+    }
+    if let Some(policy) = scene.study.fem_bb_preconditioner {
+        object.insert("fem_bb_preconditioner".to_string(), json!(policy));
+    }
+    if let Some(resources) = scene.study.compute_resources.as_ref() {
+        object.insert(
+            "compute_resources".to_string(),
+            serde_json::to_value(resources).expect("compute resources are serializable"),
+        );
     }
     if let Some(profile) = scene.study.execution_profile.as_ref() {
         object.insert(

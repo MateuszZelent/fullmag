@@ -1,11 +1,34 @@
 # Frontend v2 - Inspector and Property Editing
 
-**Status:** Proposed architecture
+**Status:** Proposed architecture, presentation revised 2026-11-20
 **Date:** 2026-05-11
 
 ## 1. Purpose
 
 The inspector edits or inspects the selected resource. It is not a second model store. It reads resource snapshots, creates local drafts, validates them, and commits semantic transactions.
+
+## 1a. One Inspector template (2026-11-20, binding)
+
+Reference: `docs/design/inspector-redesign/src/inspector/` (`types.ts`,
+`InspectorTemplate.tsx`, `controls.tsx`). Every semantic Explorer node keeps its
+own Inspector view, but every view is rendered by one `InspectorTemplate` from a
+panel specification. Panels do not render their own identity header, status
+tiles or group chrome; `InspectorShell`, `ScientificInspectorTemplate` and
+`DedicatedInspectorRouteFrame` converge on this template.
+
+Slots, in fixed order:
+
+1. **Path and node actions** — breadcrumb, find property, fit view, actions menu.
+2. **Identity** — domain-hue glyph, name (inline rename when the node allows it), kind, copyable ID, one state pill.
+3. **Facts** — at most four key values chosen per node kind. Unknown values are omitted; "unknown" is never displayed. Values wrap instead of truncating. Facts collapse while the body scrolls.
+4. **Tabs** — only when the node has modes.
+5. **Notices** — tone, title, text and a quick fix or a jump to the field. Validation errors are also attached to the field.
+6. **Sections** — one collapsible section component for every panel, with a value summary when collapsed and a dirty/error marker.
+7. **Property row** — label, physics symbol with a definition card (name, definition, SI unit, typical range), control with in-field unit menu, per-field revert, message. Numeric values can be scrubbed by dragging the symbol. Context menu: copy value, copy as Python, revert field.
+8. **Commit bar** — floating; modes `staged`, `liveViewport`, `immediate` and none as defined in the presentation contract below. Revert/Apply appear only when there is something to commit; Ctrl+Enter applies; costly operations (grid rebuild, re-voxelize, stop run) ask for confirmation.
+
+Charts, tables and previews enter as a `custom` row inside a regular section.
+Raw JSON belongs in an explicitly labelled advanced section or a preview dialog.
 
 ## 2. Inspector Registry
 
@@ -311,8 +334,12 @@ visible text, associated with the controls. Async actions must avoid duplicate
 submits and report rejection without discarding the draft. Only one active
 form owns the shared session; an overview must not override its nested editor.
 
-Persistent and conditional Inspector controls remain opaque during disclosure,
-resource invalidation and ACK. No opacity transitions. Same-target refreshes
-preserve root identity, focus, scroll and drafts. Browser regression uses the
+Persistent Inspector controls keep their opacity during resource invalidation,
+pending and ACK of the same target; these events never replay entry motion.
+Motion is allowed where the user caused a change: disclosure to natural height,
+entry of content for a newly selected target or tab, View Transitions between
+targets, sliding indicators and overlay animations, all within the motion rules
+of `09-css-design-system.md` §6. Same-target refreshes preserve root identity,
+focus, scroll and drafts. Browser regression uses the
 production shell and controls, verifies Object/Airbox where applicable, and
 separates controlled fixtures from backend/runtime qualification.

@@ -20,6 +20,12 @@ import {
 } from "@/kernel/authoring/authoringHistoryMutation";
 import type { MaterialResource, SceneResource } from "@/kernel/api/apiTypes";
 import { useKernel } from "@/kernel/KernelContext";
+import { MaterialLibraryDialog } from "@/kernel/layout/MaterialLibraryDialog";
+import {
+  formatMaterialSourceChange,
+  materialSourceChanges,
+  materialSourceStatus,
+} from "@/shared/domain/material/materialLibrary";
 import {
   publishCommittedSceneResource,
   resolveMaterialResourceKey,
@@ -65,10 +71,14 @@ import { resolveGeometryObjectDraft } from "./geometryObjectPanelModel";
 import {
   acknowledgedAssignmentBaseDecision,
   buildCreateMaterialDraft,
+  buildMaterialAssetAssignment,
   buildMaterialAssignmentPatch,
   buildMaterialParametersPatch,
   buildUniaxialAnisotropyPatch,
   createMaterialThenAssign,
+  createMaterialAssetThenAssign,
+  independentMaterialAsset,
+  materialAssetFromLibraryEntry,
   magneticParametersDraftFromResource,
   magneticParametersDraftDirty,
   magneticParameterMaterialResourceFromSceneResource,
@@ -80,6 +90,7 @@ import {
   type AcknowledgedAssignmentBaseOverride,
   type CreateMaterialDraft,
   type MagneticParametersDraft,
+  type MaterialAssetAssignment,
 } from "./ObjectMaterialPanelModel";
 
 interface AnisotropyDraft {
@@ -251,9 +262,13 @@ function useObjectMaterialPanelState(
     useState<AcknowledgedAssignmentBaseOverride | null>(null);
   const materialId = normalizeMaterialRef(object.material);
   const material = useMaterialResource(materialId);
+  const anisotropyResourceEnabled = materialInspectorSections(selection.kind).includes(
+    "uniaxial-anisotropy",
+  );
   const anisotropyInteraction = useObjectInteractionResource(
     object.objectId || null,
     "uniaxial_anisotropy",
+    { enabled: anisotropyResourceEnabled },
   );
   const baseAnisotropyDraft = useMemo(
     () =>
@@ -331,14 +346,16 @@ function useObjectMaterialPanelState(
   const assignmentBaseOverride = assignmentBaseDecision === "use"
     ? assignmentBaseOverrideState
     : null;
+  // The scene already carries its assigned coefficients during the detail GET.
+  const useSceneBase = assignmentBaseDecision === "rebase" || !material.data;
   const baseDraft = assignmentBaseDecision === "use" && assignmentBaseOverride
     ? assignmentBaseOverride.baseDraft
-    : assignmentBaseDecision === "rebase" && currentSceneBaseDraft
+    : useSceneBase && currentSceneBaseKey && currentSceneBaseDraft
       ? currentSceneBaseDraft
       : resourceBaseDraft;
   const draftKey = assignmentBaseDecision === "use" && assignmentBaseOverride
     ? assignmentBaseOverride.baseKey
-    : assignmentBaseDecision === "rebase" && currentSceneBaseKey
+    : useSceneBase && currentSceneBaseKey
       ? currentSceneBaseKey
       : resourceDraftKey;
   const [draftState, setDraftState] = useState<
@@ -530,10 +547,10 @@ function useObjectMaterialPanelState(
     }
     setAnisotropyDraftState((current) => {
       const sameKey = current.scopeToken === scope.token && current.key === anisotropyDraftKey;
-      const dirtyFields = sameKey
-        ? new Set(current.dirtyFields)
-        : new Set<AnisotropyField>();
-      for (const field of fields) dirtyFields.add(field);
+      const dirtyFields = new Set<AnisotropyField>([
+        ...(sameKey ? current.dirtyFields : []),
+        ...fields,
+      ]);
       return {
         draft: {
           ...(sameKey ? current.draft : baseAnisotropyDraft),
@@ -933,26 +950,31 @@ function useObjectMaterialPanelState(
     };
     setAnisotropyDraftState((current) => {
       const sameKey = current.scopeToken === scope.token && current.key === anisotropyDraftKey;
+      const dirtyFields = sameKey ? new Set(current.dirtyFields) : new Set<AnisotropyField>();
+      const acceptedEntries = (Object.entries(staged) as [AnisotropyField, AnisotropyDraft[AnisotropyField]][])
+        .filter(([field]) => !dirtyFields.has(field));
       const merged: AnisotropyDraft = {
         ...(sameKey ? current.draft : baseAnisotropyDraft),
+        ...Object.fromEntries(acceptedEntries),
       };
-      const dirtyFields = sameKey ? new Set(current.dirtyFields) : new Set<AnisotropyField>();
-      for (const [field, value] of Object.entries(staged) as [AnisotropyField, AnisotropyDraft[AnisotropyField]][]) {
-        if (!dirtyFields.has(field)) {
-          Object.assign(merged, { [field]: value });
-          dirtyFields.add(field);
-        }
-      }
-      return { draft: merged, dirtyFields, key: anisotropyDraftKey, scopeKey, scopeToken: scope.token };
+      const nextDirtyFields = new Set<AnisotropyField>([
+        ...dirtyFields,
+        ...acceptedEntries.map(([field]) => field),
+      ]);
+      return { draft: merged, dirtyFields: nextDirtyFields, key: anisotropyDraftKey, scopeKey, scopeToken: scope.token };
     });
   }
 
-  async function createAndAssignMaterial(hasBoundaryDraft = false): Promise<void> {
+  async function createAndAssignMaterial(
+    hasBoundaryDraft = false,
+    importedAsset?: MaterialAssetAssignment,
+    expectedSourceRevision?: number | null,
+  ): Promise<boolean> {
     const operationScope = scope;
     const operationSessionScopeKey = sessionScopeKey;
     if (!object.objectId || object.mode !== "committed") {
       setFeedback({ kind: "error", message: "No committed scene object with a known revision." });
-      return;
+      return false;
     }
     if (
       magneticParametersDraftDirty(draft, baseDraft) ||
@@ -963,23 +985,25 @@ function useObjectMaterialPanelState(
         kind: "error",
         message: "Apply or revert the other object drafts first. Then use Create and assign, or Revert all drafts.",
       });
-      return;
+      return false;
     }
     if (assignmentFailure) {
       setFeedback({
         kind: "error",
         message: "This material already exists after a failed assignment. Use Refresh scene, Rebase assignment, then Retry assignment, or Revert.",
       });
-      return;
+      return false;
     }
     const submittedCreateDraft = createDraftRef.current;
-    const validation = buildCreateMaterialDraft(submittedCreateDraft);
+    const validation = importedAsset
+      ? buildMaterialAssetAssignment(importedAsset)
+      : buildCreateMaterialDraft(submittedCreateDraft);
     if ("error" in validation) {
       setFeedback({ kind: "error", message: validation.error });
-      return;
+      return false;
     }
     const mutationLease = acquireObjectMutation("Create and assign material");
-    if (!mutationLease) return;
+    if (!mutationLease) return false;
     const previousBaseDraft = baseDraft;
     const draftAtStart = draft;
     const identityKeyAtStart = draftIdentityKey;
@@ -996,13 +1020,24 @@ function useObjectMaterialPanelState(
     let preparation: Awaited<ReturnType<typeof prepareAuthoringMutation>> | null = null;
     try {
       preparation = await prepareAuthoringMutation(historyContext);
-      if (!isCurrentScope()) return;
+      if (!isCurrentScope()) return false;
       const baseRevision = preparation.baseRevision ?? object.baseRevision;
+      if (expectedSourceRevision !== undefined && baseRevision !== expectedSourceRevision) {
+        scene.refetch();
+        material.refetch();
+        setFeedback({ kind: "error", message: "The source material may have changed. Review the refreshed model before making a copy." });
+        return false;
+      }
       if (baseRevision === null) {
         setFeedback({ kind: "error", message: "No committed scene object with a known revision." });
-        return;
+        return false;
       }
-      const result = await createMaterialThenAssign(
+      const result = importedAsset
+        ? await createMaterialAssetThenAssign(
+            api, object.objectId, importedAsset, baseRevision,
+            isCurrentScope, operationSessionScopeKey,
+          )
+        : await createMaterialThenAssign(
         api,
         object.objectId,
         submittedCreateDraft,
@@ -1028,7 +1063,7 @@ function useObjectMaterialPanelState(
         isCurrentScope,
         operationSessionScopeKey,
       );
-      if (!isCurrentScope()) return;
+      if (!isCurrentScope()) return false;
       const assignmentRevision = acknowledgedAuthoringSceneRevision(result.assigned);
       publishCommittedSceneResource(
         resources,
@@ -1051,7 +1086,7 @@ function useObjectMaterialPanelState(
       } catch (error) {
         historyError = errorMessage(error);
       }
-      if (!isCurrentScope()) return;
+      if (!isCurrentScope()) return false;
       const draftRebased = rebaseAssignedMaterialDraft(
         result.materialId,
         [result.assigned, result.created.committed_scene],
@@ -1072,8 +1107,9 @@ function useObjectMaterialPanelState(
             : "Material created and assigned."
           : "Material was created and assigned, but its committed parameter values could not be confirmed in the returned scene.",
       });
+      return draftRebased;
     } catch (error) {
-      if (!isCurrentScope()) return;
+      if (!isCurrentScope()) return false;
       if (error instanceof MaterialAssignmentAfterCreateError) {
         let historyError: string | null = null;
         if (preparation) {
@@ -1088,7 +1124,7 @@ function useObjectMaterialPanelState(
             historyError = errorMessage(recordError);
           }
         }
-        if (!isCurrentScope()) return;
+        if (!isCurrentScope()) return false;
         stageDeferredAnisotropy(error.deferredAnisotropy, operationScope);
         setAssignmentFailureState({
           error,
@@ -1108,6 +1144,7 @@ function useObjectMaterialPanelState(
       } else {
         setFeedback({ kind: "error", message: errorMessage(error) });
       }
+      return false;
     } finally {
       finishPending("create-assign", operationScope);
       mutationCoordinator.finish(mutationLease);
@@ -1336,6 +1373,25 @@ function ObjectMaterialPanelView({
   );
   const absorbingBoundarySession = absorbingBoundaryEditSessionStore.getCurrentSession();
   const absorbingBoundaryDraftDirty = absorbingBoundarySession?.dirty ?? false;
+  const [databaseIntent, setDatabaseIntent] = useState<{
+    mode: "choose" | "save";
+    scopeToken: symbol;
+  } | null>(null);
+  const currentDatabaseIntent = databaseIntent?.scopeToken === scopeToken ? databaseIntent : null;
+  const materialUsages = materialData
+    ? (scene.data?.objects?.filter((candidate) => candidate.material_ref === materialData.id) ?? [])
+    : [];
+  const sourceStatus = materialData
+    ? materialSourceStatus(materialData.properties, materialData.references, materialData.source)
+    : "unknown";
+  const sourceChanges = materialData
+    ? materialSourceChanges(materialData.properties, materialData.references, materialData.source)
+    : [];
+  const materialChangeBlocked = mutationBusy || pendingOperations.has("create-assign") ||
+    assignmentFailure !== null || object.mode !== "committed" ||
+    magneticParametersDraftDirty(draft, baseDraft) ||
+    JSON.stringify(anisotropyDraft) !== JSON.stringify(baseAnisotropyDraft) ||
+    absorbingBoundaryDraftDirty;
   const draftDirty = magneticParametersDraftDirty(draft, baseDraft);
   const parametersDirty = magneticParametersDraftDirty(
     { ...draft, materialRef: baseDraft.materialRef },
@@ -1526,6 +1582,19 @@ function ObjectMaterialPanelView({
   };
   return (
     <div className="fm-inspector-panel">
+      <MaterialLibraryDialog
+        open={currentDatabaseIntent !== null}
+        onOpenChange={(open) => {
+          if (!open) setDatabaseIntent((current) => current?.scopeToken === scopeToken ? null : current);
+        }}
+        modelMaterial={currentDatabaseIntent?.mode === "save" ? materialData ?? undefined : undefined}
+        onUseMaterial={currentDatabaseIntent?.mode === "choose" ? async (entry) => {
+          const assigned = await createAndAssignMaterial(
+            absorbingBoundaryDraftDirty, materialAssetFromLibraryEntry(entry),
+          );
+          if (!assigned) throw new Error("Material assignment did not complete. Review the Inspector message before retrying.");
+        } : undefined}
+      />
       <ObjectMaterialPanelEditSessionBridge
         absorbingBoundaryEditSessionStore={absorbingBoundaryEditSessionStore}
         materialSession={materialSessionWithHistory}
@@ -1538,7 +1607,7 @@ function ObjectMaterialPanelView({
               { label: "Material", value: materialData?.name ?? materialId ?? "unassigned" },
               { label: "Ms", value: draft.ms ? `${draft.ms} A/m` : "unset" },
               { label: "Aex", value: draft.aex ? `${draft.aex} J/m` : "unset" },
-              { label: "alpha", value: draft.alpha || "0.01" },
+              { label: "alpha", value: draft.alpha || "unset" },
             ]}
           />
           {showSection("parameters") ? (
@@ -1556,9 +1625,65 @@ function ObjectMaterialPanelView({
               />
               <FieldRow label="Scene fetch" value={scene.status} />
               <FieldRow label="Material fetch" value={material.status} />
+              {showSection("absorbing-boundary") && object.mode === "committed" ? (
+                <InspectorEditSessionProvider store={absorbingBoundaryEditSessionStore}>
+                  <ObjectAbsorbingBoundaryPanel
+                    objectId={object.objectId}
+                    key={mutationScopeKey}
+                    scene={scene.data}
+                    view="activation"
+                    mutationCoordinator={mutationCoordinator}
+                    sessionScopeKey={scene.sessionScopeKey}
+                  />
+                </InspectorEditSessionProvider>
+              ) : null}
             </InspectorGroup>
           ) : null}
 
+          {showSection("assignment") || showSection("material-parameters") ? (
+            <InspectorGroup title="Material Source">
+              <FieldRow
+                label="Origin"
+                value={sourceStatus === "unknown" ? "Model material — source unknown"
+                  : sourceStatus === "modified" ? "Modified in model" : "Unmodified copy"}
+              />
+              {materialData?.source ? (
+                <>
+                  <FieldRow label="Catalog source" value={`${materialData.source.name} · revision ${materialData.source.catalog_revision}`} />
+                  <FieldRow label="Catalog entry" value={materialData.source.kind === "builtin" ? "Built-in"
+                    : materialData.source.kind === "modified" ? "Modified variant" : "Custom"} />
+                  {materialData.source.version ? (
+                    <FieldRow label="Published version" value={`${materialData.source.version.family}.${materialData.source.version.version}`} />
+                  ) : null}
+                  {materialData.source.version?.source_project ? (
+                    <FieldRow label="Source project" value={materialData.source.version.source_project} />
+                  ) : null}
+                  {materialData.source.version?.copied_from_family ? (
+                    <FieldRow label="Source family" value={materialData.source.version.copied_from_family} />
+                  ) : null}
+                </>
+              ) : null}
+              <FieldRow label="Used by" value={`${materialUsages.length} object${materialUsages.length === 1 ? "" : "s"}${materialUsages.length ? `: ${materialUsages.slice(0, 5).map((usage) => usage.name || usage.id).join(", ")}${materialUsages.length > 5 ? ", …" : ""}` : ""}`} />
+              {materialUsages.length > 1 ? (
+                <FieldRow label="Shared material" value="Parameter changes affect every listed object. Create an independent copy to edit only this object." />
+              ) : null}
+              <div className="fm-inspector-toolbar">
+                {materialData && materialUsages.length > 1 ? (
+                  <Button disabled={materialChangeBlocked} size="sm" type="button" variant="secondary"
+                    onClick={() => void createAndAssignMaterial(
+                      absorbingBoundaryDraftDirty, independentMaterialAsset(materialData),
+                      materialData.scene_revision ?? object.baseRevision,
+                    )}>
+                    Make independent copy
+                  </Button>
+                ) : null}
+                <Button disabled={!materialData || draftDirty || mutationBusy} size="sm" type="button" variant="ghost"
+                  onClick={() => setDatabaseIntent({ mode: "save", scopeToken })}>
+                  Save copy to database
+                </Button>
+              </div>
+            </InspectorGroup>
+          ) : null}
           {showSection("assignment") ? (
             <InspectorGroup title="Assignment">
               <FormField
@@ -1581,6 +1706,12 @@ function ObjectMaterialPanelView({
                     ?.name ?? draft.materialRef ?? "unassigned"
                 }
               />
+              <div className="fm-inspector-toolbar">
+                <Button disabled={materialChangeBlocked} size="sm" type="button" variant="secondary"
+                  onClick={() => setDatabaseIntent({ mode: "choose", scopeToken })}>
+                  Choose from database
+                </Button>
+              </div>
             </InspectorGroup>
           ) : null}
           {showSection("assignment") ? (
@@ -1751,17 +1882,6 @@ function ObjectMaterialPanelView({
             </InspectorGroup>
           ) : null}
 
-          {showSection("absorbing-boundary") && object.mode === "committed" ? (
-            <InspectorEditSessionProvider store={absorbingBoundaryEditSessionStore}>
-              <ObjectAbsorbingBoundaryPanel
-                objectId={object.objectId}
-                baseRevision={object.baseRevision}
-                mutationCoordinator={mutationCoordinator}
-                mutationScopeKey={mutationScopeKey}
-              />
-            </InspectorEditSessionProvider>
-          ) : null}
-
           {showSection("uniaxial-anisotropy") ? (
             <InspectorGroup title="Uniaxial Anisotropy">
               <FormField
@@ -1895,6 +2015,15 @@ function ObjectMaterialPanelView({
                 ) : null}
               </div>
               {feedback && <FeedbackBanner kind={feedback.kind} message={feedback.message} />}
+            </InspectorGroup>
+          ) : null}
+          {/* Keep ACK-driven rows below the editable controls so their growth
+              cannot shift the active inputs or the viewport's scroll anchor. */}
+          {(showSection("assignment") || showSection("material-parameters")) && sourceChanges.length > 0 ? (
+            <InspectorGroup title="Changes from Source">
+              {sourceChanges.map((change) => (
+                <FieldRow key={change.key} label="Changed" value={formatMaterialSourceChange(change)} />
+              ))}
             </InspectorGroup>
           ) : null}
       </div>

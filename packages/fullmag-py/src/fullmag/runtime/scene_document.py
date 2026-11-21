@@ -6,6 +6,14 @@ from collections.abc import Mapping, Sequence
 from typing import Any
 
 from fullmag.runtime.execution_intent import validate_execution_intent_fields
+from fullmag.runtime.material_assets import (
+    canonical_material_assets,
+    material_assets_from_scene,
+    reconcile_material_assets,
+    restore_inactive_material_dmi,
+)
+from fullmag.runtime.thermal_noise_authoring import canonical_thermal_noise
+from fullmag.runtime.imported_geometry_assets import imported_geometry_source_asset_fields
 from fullmag.model.geometry import RigidTransform
 from fullmag.model.study import _MAX_FEM_EIGEN_SOLVER_ITERATIONS
 from fullmag.model.compute_resources import ComputeResources
@@ -68,6 +76,7 @@ from fullmag.model.spin_torque import (
     SincEnvelope,
     SinusoidalEnvelope,
     SlonczewskiSTT,
+    TimeExpression,
     TabulatedEnvelope,
     TimeEnvelopePoint,
     VectorCurrentDrive,
@@ -1291,6 +1300,8 @@ def _decode_spin_torque(value: object) -> object:
             "lambda_asymmetry": _finite_number(entry.get("lambda_asymmetry"), "slonczewski.lambda_asymmetry"),
             "epsilon_prime": _finite_number(entry.get("epsilon_prime"), "slonczewski.epsilon_prime"),
         }
+        if "time_expression" in entry:
+            common["time_expression"] = TimeExpression.from_ir(entry["time_expression"])
         thickness = entry.get("free_layer_thickness_m")
         if thickness is not None:
             common["free_layer_thickness_m"] = _finite_number(thickness, "slonczewski.free_layer_thickness_m")
@@ -1708,6 +1719,15 @@ def _validate_stage_execution_intent(stages: object, pipeline: object) -> None:
         visit(pipeline.get("nodes"))
 
 
+def _scene_field_drives(builder: Mapping[str, object]) -> dict[str, object]:
+    """Regional drives and mask antennas of the builder (mask list omitted when empty)."""
+    state: dict[str, object] = {"drives": copy.deepcopy(builder.get("field_drives") or [])}
+    mask_drives = builder.get("mask_field_drives") or []
+    if mask_drives:
+        state["mask_drives"] = copy.deepcopy(mask_drives)
+    return state
+
+
 def build_scene_document_from_builder(builder: dict[str, Any]) -> dict[str, Any]:
     execution_intent = validate_execution_intent_fields(builder, context="builder")
     _validate_stage_execution_intent(builder.get("stages"), builder.get("study_pipeline"))
@@ -1718,12 +1738,21 @@ def build_scene_document_from_builder(builder: dict[str, Any]) -> dict[str, Any]
         geometries,
     )
     objects: list[dict[str, Any]] = []
-    materials: list[dict[str, Any]] = []
+    material_metadata = None
+    if builder.get("material_assets") is not None:
+        metadata = canonical_material_assets(builder["material_assets"])
+        if metadata.get("inactive_dmi"):
+            geometries = copy.deepcopy(geometries)
+            restore_inactive_material_dmi(metadata, geometries)
+        material_metadata = reconcile_material_assets(metadata, geometries)
+    materials: list[dict[str, Any]] = material_metadata["materials"] if material_metadata is not None else []
+    material_assignments = material_metadata["assignments"] if material_metadata is not None else {}
+    object_ids = material_metadata["object_ids"] if material_metadata is not None else {}
     magnetization_assets: list[dict[str, Any]] = []
 
     for geometry in geometries:
         name = str(geometry.get("name", "object"))
-        object_id = str(geometry.get("object_id") or name)
+        object_id = str(geometry.get("object_id") or object_ids.get(name) or name)
         geometry_params = dict(geometry.get("geometry_params") or {})
         translation = geometry_params.pop("translation", geometry_params.pop("translate", [0, 0, 0]))
         role = str(geometry.get("role") or "magnet")
@@ -1756,6 +1785,7 @@ def build_scene_document_from_builder(builder: dict[str, Any]) -> dict[str, Any]
                 "role": role,
                 "geometry": {
                     **({"geometry_name": geometry["geometry_name"]} if "geometry_name" in geometry else {}),
+                    **imported_geometry_source_asset_fields(geometry),
                     "geometry_kind": str(geometry.get("geometry_kind", "")),
                     "geometry_params": geometry_params,
                     "bounds_min": geometry.get("bounds_min"),
@@ -1767,7 +1797,7 @@ def build_scene_document_from_builder(builder: dict[str, Any]) -> dict[str, Any]
                     "scale": _one_vec3(),
                     "pivot": _zero_vec3(),
                 },
-                "material_ref": "" if is_auxiliary else _material_id(name),
+                "material_ref": "" if is_auxiliary else material_assignments.get(object_id, _material_id(name)),
                 "region_name": geometry.get("region_name"),
                 "magnetization_ref": None if is_auxiliary else _magnetization_id(name),
                 "physics_stack": [] if is_auxiliary else physics_stack,
@@ -1785,13 +1815,14 @@ def build_scene_document_from_builder(builder: dict[str, Any]) -> dict[str, Any]
         )
         if is_auxiliary:
             continue
-        materials.append(
-            {
-                "id": _material_id(name),
-                "name": f"{name} material",
-                "properties": material_properties,
-            }
-        )
+        if material_metadata is None:
+            materials.append(
+                {
+                    "id": _material_id(name),
+                    "name": f"{name} material",
+                    "properties": material_properties,
+                }
+            )
         magnetization_assets.append(
             {
                 "id": _magnetization_id(name),
@@ -1877,7 +1908,7 @@ def build_scene_document_from_builder(builder: dict[str, Any]) -> dict[str, Any]
         },
         "current_transports": _canonical_current_transports(current_transport_entries),
         "couplings": builder.get("couplings") or [],
-        "field_drives": {"drives": copy.deepcopy(builder.get("field_drives") or [])},
+        "field_drives": _scene_field_drives(builder),
         "monitors": {"planar": copy.deepcopy(builder.get("planar_monitors") or [])},
         "study": {
             "backend": builder.get("backend"),
@@ -1888,6 +1919,7 @@ def build_scene_document_from_builder(builder: dict[str, Any]) -> dict[str, Any]
             "requested_cpu_threads": builder.get("cpu_threads"),
             "parallel_execution": copy.deepcopy(parallel_execution),
             "fem_demag_solver_policy": builder.get("fem_demag_solver_policy"),
+            "fem_bb_preconditioner": builder.get("fem_bb_preconditioner"),
             "fem_demag_accuracy_contract": validate_fem_demag_accuracy_contract(
                 builder.get("fem_demag_accuracy_contract"),
                 context="builder.fem_demag_accuracy_contract",
@@ -1947,6 +1979,8 @@ def build_scene_document_from_builder(builder: dict[str, Any]) -> dict[str, Any]
         if requested_backend.strip().lower() == "fdm":
             raise ValueError("fem_domain_mesh requires the FEM backend")
         document["study"]["fem_domain_mesh"] = fem_domain_mesh
+    if "thermal_noise" in builder:
+        document["study"]["thermal_noise"] = canonical_thermal_noise(builder["thermal_noise"])
     if "pbc" in builder:
         document["study"]["pbc"] = _scene_pbc_to_ir(builder["pbc"])
     for collection in (
@@ -2131,6 +2165,7 @@ def build_builder_from_scene_document(scene: dict[str, Any]) -> dict[str, Any]:
             "role": role,
             "region_name": obj.get("region_name"),
             **({"geometry_name": geometry["geometry_name"]} if "geometry_name" in geometry else {}),
+            **imported_geometry_source_asset_fields(geometry),
             "geometry_kind": str(geometry.get("geometry_kind", "")),
             "geometry_params": geometry_params,
             "bounds_min": geometry.get("bounds_min"),
@@ -2143,7 +2178,8 @@ def build_builder_from_scene_document(scene: dict[str, Any]) -> dict[str, Any]:
             "visualization_hint": obj.get("visualization_hint") or {},
         }
         if not is_auxiliary:
-            entry["material"] = material_properties
+            # Per-object DSL edits may fork a shared scene material.
+            entry["material"] = dict(material_properties)
             entry["magnetization"] = magnetization
             entry["physics_stack"] = physics_stack
         geometries.append(entry)
@@ -2286,6 +2322,7 @@ def build_builder_from_scene_document(scene: dict[str, Any]) -> dict[str, Any]:
         **_execution_profile_fields(study, "SceneDocument.study"),
         **_compute_resources_fields(study, "SceneDocument.study"),
         "fem_demag_solver_policy": study.get("fem_demag_solver_policy"),
+        "fem_bb_preconditioner": study.get("fem_bb_preconditioner"),
         "fem_demag_accuracy_contract": validate_fem_demag_accuracy_contract(
             study.get("fem_demag_accuracy_contract"),
             context="SceneDocument.study.fem_demag_accuracy_contract",
@@ -2305,6 +2342,7 @@ def build_builder_from_scene_document(scene: dict[str, Any]) -> dict[str, Any]:
         "output_storage": study.get("output_storage"),
         "initial_state": study.get("initial_state"),
         "geometries": geometries,
+        "material_assets": material_assets_from_scene(scene),
         "couplings": scene.get("couplings") or [],
         "current_modules": [*antenna_modules, *transports],
         "excitation_analysis": excitation_analysis,
@@ -2327,6 +2365,8 @@ def build_builder_from_scene_document(scene: dict[str, Any]) -> dict[str, Any]:
             if value is not None
         ):
             raise ValueError("fem_domain_mesh requires the FEM backend")
+    if "thermal_noise" in study:
+        builder["thermal_noise"] = canonical_thermal_noise(study["thermal_noise"])
     if "pbc" in study:
         builder["pbc"] = _scene_pbc_to_ir(study["pbc"])
     if "fdm" in study:
@@ -2335,7 +2375,7 @@ def build_builder_from_scene_document(scene: dict[str, Any]) -> dict[str, Any]:
         field_drives = scene["field_drives"]
         if not isinstance(field_drives, Mapping):
             raise ValueError("SceneDocument.field_drives must be an object")
-        unknown_field_drive_fields = set(field_drives) - {"drives"}
+        unknown_field_drive_fields = set(field_drives) - {"drives", "mask_drives"}
         if unknown_field_drive_fields:
             names = ", ".join(
                 sorted(str(name) for name in unknown_field_drive_fields)
@@ -2353,6 +2393,12 @@ def build_builder_from_scene_document(scene: dict[str, Any]) -> dict[str, Any]:
                     f"{index}] must be an object"
                 )
         builder["field_drives"] = copy.deepcopy(drives)
+        mask_drives = field_drives.get("mask_drives", [])
+        if not isinstance(mask_drives, list) or any(
+            not isinstance(drive, Mapping) for drive in mask_drives
+        ):
+            raise ValueError("SceneDocument.field_drives.mask_drives must be a list of objects")
+        builder["mask_field_drives"] = copy.deepcopy(mask_drives)
     if "monitors" in scene:
         monitors = scene["monitors"]
         if not isinstance(monitors, Mapping):
@@ -2539,6 +2585,7 @@ def builder_overrides_from_scene_document(scene: dict[str, Any]) -> dict[str, An
             "precision": builder.get("requested_precision", "double"),
             "parallel_execution": parallel_execution,
         },
+        "fem_bb_preconditioner": builder.get("fem_bb_preconditioner"),
         "fem_demag_solver_policy": (
             dict(builder.get("fem_demag_solver_policy"))
             if isinstance(builder.get("fem_demag_solver_policy"), dict)
@@ -2612,8 +2659,8 @@ def builder_overrides_from_scene_document(scene: dict[str, Any]) -> dict[str, An
                 **validate_execution_intent_fields(stage, context="SceneDocument.study.stages"),
                 "kind": stage.get("kind"),
                 "entrypoint_kind": stage.get("entrypoint_kind"),
-                "integrator": stage.get("integrator") or None,
-                "fixed_timestep": _number_or_none(stage.get("fixed_timestep")),
+                "integrator": stage.get("integrator") or stage.get("solver") or None,
+                "fixed_timestep": _number_or_none(stage.get("fixed_timestep", stage.get("dt"))),
                 **(
                     {
                         "adaptive_timestep": _stage_adaptive_timestep_override(
@@ -2626,8 +2673,11 @@ def builder_overrides_from_scene_document(scene: dict[str, Any]) -> dict[str, An
                 "until_seconds": _number_or_none(stage.get("until_seconds")),
                 "autosave": copy.deepcopy(stage.get("autosave")),
                 "relax_algorithm": _stage_relax_algorithm(stage) or None,
-                "torque_tolerance": _number_or_none(stage.get("torque_tolerance")),
-                "energy_tolerance": _number_or_none(stage.get("energy_tolerance")),
+                "torque_tolerance": _number_or_none(
+                    stage.get("torque_tolerance_apm", stage.get("torque_tolerance", stage.get("tol")))
+                ),
+                "energy_tolerance": _number_or_none(stage.get("energy_tolerance_j", stage.get("energy_tolerance"))),
+                "relax_alpha": _number_or_none(stage.get("relax_alpha")),
                 "max_steps": _int_or_none(stage.get("max_steps")),
                 "eigen_count": _eigen_count_override(stage),
                 "eigen_target": stage.get("eigen_target") or None,
@@ -2677,17 +2727,30 @@ def builder_overrides_from_scene_document(scene: dict[str, Any]) -> dict[str, An
         "output_storage": builder.get("output_storage"),
         "initial_state": builder.get("initial_state"),
         "geometries": builder.get("geometries") or [],
+        "material_assets": builder.get("material_assets"),
         "couplings": builder.get("couplings") or [],
         "field_drives": builder.get("field_drives") or [],
+        "mask_field_drives": builder.get("mask_field_drives") or [],
         "planar_monitors": builder.get("planar_monitors") or [],
         "current_modules": builder.get("current_modules") or [],
         "excitation_analysis": builder.get("excitation_analysis"),
     }
     if "shared_domain_mesh_source" in builder:
         overrides["shared_domain_mesh_source"] = copy.deepcopy(builder["shared_domain_mesh_source"])
+    mesh_override = overrides["mesh"]
+    for key in (
+        "domain_mesh_mode",
+        "domain_mesh_source",
+        "domain_region_markers",
+        "domain_object_region_markers",
+    ):
+        if key in mesh and mesh[key] is not None:
+            mesh_override[key] = copy.deepcopy(mesh[key])
     if builder.get("fem_domain_mesh") is not None:
         overrides["fem_domain_mesh"] = copy.deepcopy(builder["fem_domain_mesh"])
     raw_study = scene.get("study")
+    if isinstance(raw_study, Mapping) and "thermal_noise" in raw_study:
+        overrides["thermal_noise"] = canonical_thermal_noise(raw_study["thermal_noise"])
     if isinstance(raw_study, Mapping) and "visualization_hint" in raw_study:
         visualization_hint = raw_study.get("visualization_hint")
         if visualization_hint is not None:
@@ -2715,6 +2778,7 @@ def builder_overrides_from_scene_document(scene: dict[str, Any]) -> dict[str, An
     _copy_present_collection(builder, overrides, "spin_transports")
     _copy_present_collection(builder, overrides, "oersted_terms")
     _copy_present_collection(builder, overrides, "field_drives")
+    _copy_present_collection(builder, overrides, "mask_field_drives")
     _copy_present_collection(builder, overrides, "antenna_port_modes")
     _copy_present_collection(builder, overrides, "antenna_field_solve_stages")
     _copy_present_collection(builder, overrides, "antenna_target_projections")

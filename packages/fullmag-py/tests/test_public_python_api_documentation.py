@@ -57,6 +57,7 @@ API_PARAMETER_OWNERS: dict[str, Path] = {
     "MaterialParameterField.sampled": Path(
         "python-api/materials/spatial-parameter-fields.md"
     ),
+    "fm.fields.function": Path("python-api/materials/spatial-parameter-fields.md"),
 }
 
 API_CONSTRUCTORS = {
@@ -92,6 +93,7 @@ API_CONSTRUCTORS = {
     "MaterialParameterField.linear": fm.MaterialParameterField.linear,
     "MaterialParameterField.radial": fm.MaterialParameterField.radial,
     "MaterialParameterField.sampled": fm.MaterialParameterField.sampled,
+    "fm.fields.function": fm.fields.function,
 }
 
 
@@ -192,10 +194,13 @@ class PublicPythonApiDocumentationTests(unittest.TestCase):
         self.assertEqual(failures, {})
 
     def test_documentation_workflow_guards_python_api_contracts(self) -> None:
-        workflow = WORKFLOW.read_text(encoding="utf-8")
-        self.assertGreaterEqual(workflow.count('"packages/fullmag-py/**"'), 2)
-        self.assertIn("test_public_python_api_documentation.py", workflow)
-        self.assertIn("public_docs/site/python-api", workflow)
+        publisher = WORKFLOW.read_text(encoding="utf-8")
+        builder = WORKFLOW.with_name("documentation-build.yml").read_text(encoding="utf-8")
+        rules = json.loads((REPOSITORY_ROOT / ".github/ci-required-paths.json").read_text())
+        self.assertIn('"packages/fullmag-py/**"', publisher)
+        self.assertIn("packages/fullmag-py/**", rules["documentation"])
+        self.assertIn("test_public_python_api_documentation.py", builder)
+        self.assertIn("public_docs/site/python-api", publisher)
 
 
 if __name__ == "__main__":

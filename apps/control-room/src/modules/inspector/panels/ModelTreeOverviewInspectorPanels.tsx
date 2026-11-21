@@ -144,7 +144,7 @@ function UniverseMethodActions({
     [kernel],
   );
   return (
-    <div className="fm-inspector-toolbar" aria-label="Universe navigation">
+    <div role="group" className="fm-inspector-toolbar" aria-label="Universe navigation">
       {showStudySettings ? (
         <Button size="sm" type="button" variant="secondary" onClick={() => navigateToStudyRoot(kernel.selection)}>
           {studyLabel}

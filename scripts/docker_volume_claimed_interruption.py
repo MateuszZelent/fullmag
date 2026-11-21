@@ -51,6 +51,23 @@ def make_build_pin(ledger, files, observed, run_id, task_id):
     return pin
 
 
+def make_pending_build_pin(ledger, files, observed, run_id, task_id):
+    require=repair.require
+    digest=lambda value:hashlib.sha256(json.dumps(value,sort_keys=True,separators=(',',':'),ensure_ascii=False,allow_nan=False).encode()).hexdigest()
+    rows=[r for r in ledger.get('reservations',[]) if r.get('state')!='released']
+    require(len(rows)==1,'Pending collector requires one occupied reservation')
+    row=rows[0];rid=row.get('identity',{});owner=rid.get('owner',{})
+    require(rid.get('run_id')==run_id and rid.get('task_id')==task_id and owner.get('kind')=='solver','Pending collector identity differs')
+    identity={k:rid[k] for k in ('store_id','run_id','task_id','resource_id','lease_token')}
+    identity.update(attempt_id=owner['attempt_id'],ownership_epoch=owner['ownership_epoch'])
+    tasks=[t for t in json.loads(observed['catalog']).get('tasks',[]) if t.get('task_id')==task_id]
+    require(len(tasks)==1,'Pending collector task missing or duplicated')
+    pin={'schema_version':'fullmag.pending-admission-build-pin.v1','identity':identity,'expected_task':tasks[0],
+         'reservation_sha256':digest(row),'files':{k:{'path':str(files[k]),'sha256':hashlib.sha256(raw).hexdigest()} for k,raw in observed.items()}}
+    repair.validate_pending_build_snapshot(pin,ledger,observed)
+    return pin
+
+
 # Executed only in the selected existing backend; imported runtime helpers supply
 # the canonical paths, no-follow reads and the same guards used by repair builds.
 COLLECT = r'''
@@ -72,29 +89,37 @@ def collect(request):
         require(rid.get('run_id') == request['run_id'] and rid.get('task_id') == request['task_id'], 'Collector task differs')
         for value in (rid.get('resource_id'), rid.get('lease_token'), rid.get('owner', {}).get('attempt_id')):
             require(isinstance(value, str) and re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9._-]{0,199}', value), 'Unsafe claim component')
-        epoch = rid['owner']['ownership_epoch']
-        require(type(epoch) is int and epoch > 0, 'Invalid claim epoch')
-        run = paths.store/'runs'/request['run_id']
-        attempt = run/'worker-attempts'/request['task_id']/rid['owner']['attempt_id']/('epoch-'+str(epoch))
-        files = dict(catalog=run/'run_catalog.json',
-                     lease=run/'resource_leases'/rid['resource_id']/(rid['lease_token']+'.json'),
-                     started=attempt/'worker_execution_started.v1.json',
-                     supervisor_slot=paths.store/'supervisor-slots'/('resource-'+hashlib.sha256(rid['resource_id'].encode()).hexdigest())/'owner.v2.json',
-                     launch=runtime.runtime_services_root(paths)/'LAUNCH.json')
-        candidates = list((run/'worker_inbox').glob('*.json'))
-        require(len(candidates) <= 4096, 'Collector inbox inventory exceeds bound')
-        matches = []
-        for path in candidates:
-            require(re.fullmatch(r'[0-9a-f]{64}\.json', path.name), 'Collector inbox name invalid')
-            payload = json.loads(read(path)).get('payload', {})
-            claim = payload.get('claim', {})
-            if all(claim.get(key) == value for key, value in dict(run_id=request['run_id'], task_id=request['task_id'],
-                    attempt_id=rid['owner']['attempt_id'], ownership_epoch=epoch, lease_token=rid['lease_token']).items()):
-                matches.append(path)
-        require(len(matches) == 1, 'Collector requires one exact durable inbox')
-        files['inbox'] = matches[0]
-        observed = {role: read(path) for role, path in files.items()}
-        pin = make_build_pin(ledger, files, observed, request['run_id'], request['task_id'])
+        if occupied[0].get('worker_launch_gate') == {'state':'pending'}:
+            run=paths.store/'runs'/request['run_id']
+            files={'catalog':run/'run_catalog.json','lease':run/'resource_leases'/rid['resource_id']/(rid['lease_token']+'.json'),
+                   'admission':run/'task_admissions'/request['task_id']/(rid['owner']['attempt_id']+'.json'),
+                   'launch':runtime.runtime_services_root(paths)/'LAUNCH.json'}
+            observed={role:read(path) for role,path in files.items()}
+            pin=make_pending_build_pin(ledger,files,observed,request['run_id'],request['task_id'])
+        else:
+            epoch = rid['owner']['ownership_epoch']
+            require(type(epoch) is int and epoch > 0, 'Invalid claim epoch')
+            run = paths.store/'runs'/request['run_id']
+            attempt = run/'worker-attempts'/request['task_id']/rid['owner']['attempt_id']/('epoch-'+str(epoch))
+            files = dict(catalog=run/'run_catalog.json',
+                         lease=run/'resource_leases'/rid['resource_id']/(rid['lease_token']+'.json'),
+                         started=attempt/'worker_execution_started.v1.json',
+                         supervisor_slot=paths.store/'supervisor-slots'/('resource-'+hashlib.sha256(rid['resource_id'].encode()).hexdigest())/'owner.v2.json',
+                         launch=runtime.runtime_services_root(paths)/'LAUNCH.json')
+            candidates = list((run/'worker_inbox').glob('*.json'))
+            require(len(candidates) <= 4096, 'Collector inbox inventory exceeds bound')
+            matches = []
+            for path in candidates:
+                require(re.fullmatch(r'[0-9a-f]{64}\.json', path.name), 'Collector inbox name invalid')
+                payload = json.loads(read(path)).get('payload', {})
+                claim = payload.get('claim', {})
+                if all(claim.get(key) == value for key, value in dict(run_id=request['run_id'], task_id=request['task_id'],
+                        attempt_id=rid['owner']['attempt_id'], ownership_epoch=epoch, lease_token=rid['lease_token']).items()):
+                    matches.append(path)
+            require(len(matches) == 1, 'Collector requires one exact durable inbox')
+            files['inbox'] = matches[0]
+            observed = {role: read(path) for role, path in files.items()}
+            pin = make_build_pin(ledger, files, observed, request['run_id'], request['task_id'])
         with claimed_build_locks({'claimed_interruption_build': pin, 'diagnostic_api_only': True}, paths):
             before = pinned_evidence({**request, 'diagnostic_api_only': True, 'claimed_interruption_build': pin}, paths)
             require(pinned_evidence({**request, 'diagnostic_api_only': True, 'claimed_interruption_build': pin}, paths) == before,
@@ -109,9 +134,10 @@ def collector_code():
     # build/promotion entrypoint. No generated source or log is saved on host.
     source = inspect.getsource(make_build_pin).replace('    require = repair.require\n', '')
     source = source.replace('repair.validate_claimed_build_snapshot(', 'validate_claimed_build_snapshot(')
+    pending = inspect.getsource(make_pending_build_pin).replace('    require=repair.require\n','').replace('repair.validate_pending_build_snapshot(', 'validate_pending_build_snapshot(')
     return ('import hashlib, json\nfrom pathlib import Path\n' + inspect.getsource(repair.require)
             + inspect.getsource(repair.validate_terminal) + inspect.getsource(repair.validate_diagnostic_build)
-            + inspect.getsource(repair.validate_claimed_build_snapshot) + repair.RUNTIME + '\n' + source
+            + inspect.getsource(repair.validate_claimed_build_snapshot) + inspect.getsource(repair.validate_pending_build_snapshot) + repair.RUNTIME + '\n' + source + '\n' + pending
             + COLLECT + '\ncollect(json.loads(sys.argv[1]))\n')
 
 

@@ -1,9 +1,10 @@
-import { act } from "react";
+import { act, useState } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   installSimulationPreparationTestDom,
   TestElement,
+  TestEvent,
   TestNode,
 } from "@/kernel/layout/simulationPreparationTestDom.test-support";
 
@@ -81,7 +82,7 @@ describe("ObjectRegionMagneticParametersPanel session fence", () => {
     mocks.sessionIdentity = sessionA;
     mocks.sceneData = { objects: [], materials: [] };
     mocks.readScene.mockResolvedValue({
-      objects: [],
+      objects: [{ id: "object-a", material_parameter_fields: [] }],
       revision: 10,
       scene_revision: 10,
     });
@@ -254,6 +255,58 @@ describe("ObjectRegionMagneticParametersPanel session fence", () => {
     }
   });
 
+  it("retains a read-only function field added to the object since the panel opened", async () => {
+    const functionField = {
+      owner_object: "object-a", parameter: "alpha", assignment_id: "alpha-ramp",
+      value: { kind: "function", frame: "object", function: {
+        expression_version: "field_expr.v1", outputs: ["0.01 + x*x"],
+      } },
+    };
+    mocks.readScene.mockResolvedValue({
+      objects: [{ id: "object-a", material_parameter_fields: [functionField] }],
+      revision: 10, scene_revision: 10,
+    });
+    const dom = installSimulationPreparationTestDom();
+    const container = dom.document.createElement("div");
+    const { createRoot } = await import("react-dom/client");
+    const root = createRoot(container as unknown as Element);
+    try {
+      await act(async () => root.render(<ObjectRegionMagneticParametersPanel {...panelProps()} />));
+      await act(async () => findButton(container, "Add Field").click());
+      await act(async () => findButton(container, "Apply Fields").click());
+      expect(mocks.patchMaterialFields).toHaveBeenCalledWith("object-a", [
+        functionField, expect.objectContaining({ parameter: "ms", region_id: "region-a" }),
+      ], { baseRevision: 10, sessionScopeKey: sessionAScopeKey });
+    } finally {
+      await act(async () => root.unmount());
+      dom.restore();
+    }
+  });
+
+  it("keeps a concurrent edit to the same region and sends no replacement", async () => {
+    mocks.readScene.mockResolvedValue({
+      objects: [{ id: "object-a", material_parameter_fields: [{
+        owner_object: "object-a", region_id: "region-a", parameter: "ms", assignment_id: "other-edit",
+        value: { kind: "linear", base: 700e3, gradient: [0, 0, 0], frame: "object" },
+      }] }],
+      revision: 10, scene_revision: 10,
+    });
+    const dom = installSimulationPreparationTestDom();
+    const container = dom.document.createElement("div");
+    const { createRoot } = await import("react-dom/client");
+    const root = createRoot(container as unknown as Element);
+    try {
+      await act(async () => root.render(<ObjectRegionMagneticParametersPanel {...panelProps()} />));
+      await act(async () => findButton(container, "Add Field").click());
+      await act(async () => findButton(container, "Apply Fields").click());
+      expect(mocks.patchMaterialFields).not.toHaveBeenCalled();
+      expect(container.textContent).toContain("region material fields changed");
+    } finally {
+      await act(async () => root.unmount());
+      dom.restore();
+    }
+  });
+
   it("does not publish history or scene effects when the session changes before ACK", async () => {
     let finishPatch: ((value: unknown) => void) | null = null;
     const patchResult = new Promise((resolve) => {
@@ -324,6 +377,37 @@ describe("ObjectRegionMagneticParametersPanel session fence", () => {
       dom.restore();
     }
   });
+  it("keeps focus on the selected override while changing its parameter", async () => {
+    const props = panelProps();
+    function Fixture() {
+      const [materialOverrides, setOverrides] = useState<RegionSubPanelProps["draft"]["materialOverrides"]>([{
+        parameter: "ms", value: 800e3, unit: "A/m", priority: 0, conflictPolicy: "error",
+      }]);
+      return <ObjectRegionMagneticParametersPanel {...props} draft={{ ...props.draft, materialOverrides }}
+        updateMaterialOverride={(index, patch) => setOverrides(rows => rows.map((row, i) => i === index ? { ...row, ...patch } : row))} />;
+    }
+    const dom = installSimulationPreparationTestDom();
+    const container = dom.document.createElement("div");
+    const { createRoot } = await import("react-dom/client");
+    const root = createRoot(container as unknown as Element);
+    try {
+      await act(async () => root.render(<Fixture />));
+      const select = () => container.querySelectorAll("select").find(node => node.getAttribute("aria-label") === "Override 1");
+      const control = select()!;
+      control.focus();
+      await act(async () => {
+        control.value = "alpha";
+        control.dispatchEvent(new TestEvent("change", { bubbles: true }));
+      });
+      expect(select() === control).toBe(true);
+      expect(control.value).toBe("alpha");
+      expect(dom.document.activeElement === control).toBe(true);
+    } finally {
+      await act(async () => root.unmount());
+      dom.restore();
+    }
+  });
+
   it("shows a retained spatial override without editable scalar controls", async () => {
     const dom = installSimulationPreparationTestDom();
     const container = dom.document.createElement("div");

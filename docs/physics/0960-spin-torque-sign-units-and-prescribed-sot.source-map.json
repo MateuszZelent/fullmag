@@ -19,13 +19,13 @@
       "solver": "FDM",
       "device": "CPU",
       "status": "reference_executable",
-      "reason": "Canonical signed-current reference lane, independent eight-step fixed-step trajectory oracle, bounded isolated 0.5x/1x/2x current-increment scaling contract, and a one-cell constant-envelope common-limit against FEM exist; nonlinear current-sweep and continuum cross-backend qualification remain open."
+      "reason": "Canonical signed-current reference lane, independent eight-step fixed-step trajectory oracle, bounded isolated 0.5x/1x/2x current-increment scaling contract, and a one-cell constant-envelope common-limit against FEM exist. J(t) is source-implemented for single-grid extended FP64 RK45 with exact declared event alignment, but managed runtime, CPU/GPU parity, and scientific qualification remain open; nonlinear current-sweep and continuum cross-backend qualification also remain open."
     },
     {
       "solver": "FDM",
       "device": "GPU",
       "status": "production_executable",
-      "reason": "Managed CUDA FP64 parity passes for the Slonczewski one-step/eight-step trajectories plus bounded isolated 0.5x/1x/2x current scaling, and canonical prescribed-SOT has a separate bounded eight-step/scaling contract; FEM GPU adds constant and sinusoidal stage-time one-step SI-oracle contracts. FP32 envelopes, event alignment, tabulated artifacts, nonlinear current sweeps, cross-backend parity, and full qualification remain open."
+      "reason": "Managed CUDA FP64 parity passes for the constant-current Slonczewski one-step/eight-step trajectories plus bounded isolated 0.5x/1x/2x current scaling, and canonical prescribed-SOT has a separate bounded eight-step/scaling contract; FEM GPU adds constant and sinusoidal stage-time one-step SI-oracle contracts. J(t) is source-implemented for single-grid extended FP64 RK45 with declared event alignment, but expression-specific runtime, CPU/GPU parity, and scientific qualification remain open. FP32 envelopes, event-aware rollback, tabulated artifacts, nonlinear current sweeps, cross-backend parity, and full qualification remain open."
     }
   ],
   "equations": [
@@ -43,6 +43,11 @@
       "id": "slonczewski-signed-current",
       "symbols": ["Jc", "n_stack", "gamma_e", "hbar", "e", "Ms", "tF", "Omega_J"],
       "sources": ["fem-cpu-slonczewski", "fem-gpu-slonczewski-kernel", "stt-plan-import"]
+    },
+    {
+      "id": "slonczewski-expressed-current",
+      "symbols": ["Jc", "n_stack", "stt_time", "stt_time_factor", "gamma_e", "hbar", "e", "Ms", "tF", "Omega_J"],
+      "sources": ["python-slonczewski-time-expression", "compile-slonczewski-time-expression", "fdm-cpu-slonczewski-time-factor", "fdm-cpu-slonczewski-rk45", "fdm-cpu-time-expression-events", "fdm-gpu-slonczewski-time-factor"]
     },
     {
       "id": "prescribed-sot-gilbert",
@@ -67,6 +72,8 @@
     {"id": "Omega_DL", "latex": "Omega_DL", "meaning": "signed torque-frequency scales", "si_unit": "s^-1"},
     {"id": "Omega_FL", "latex": "Omega_FL", "meaning": "signed torque-frequency scales", "si_unit": "s^-1"},
     {"id": "Jc", "latex": "J_c", "meaning": "vector, stack-normal, and drive-projected conventional current density", "si_unit": "A/m^2; signed"},
+    {"id": "stt_time", "latex": "t", "meaning": "Cumulative physical time of the integrator substep", "si_unit": "s"},
+    {"id": "stt_time_factor", "latex": "g(t)", "meaning": "Signed scalar value of the authored mathematical expression", "si_unit": "1"},
     {"id": "J_signed", "latex": "J_signed", "meaning": "vector, stack-normal, and drive-projected conventional current density", "si_unit": "A/m^2; signed"},
     {"id": "tF", "latex": "t_F", "meaning": "resolved/homogenized free-layer thickness", "si_unit": "m, `>0`"},
     {"id": "T_SL", "latex": "T_SL,G", "meaning": "magnetization rates", "si_unit": "s^-1"}
@@ -89,6 +96,14 @@
     {"id": "fdm-sot-trajectory", "path": "crates/fullmag-runner/src/fdm/gpu/cuda/native.rs", "symbol": "native_fdm_prescribed_sot_matches_cpu_reference_for_fixed_trajectory_when_cuda_is_available", "responsibility": "Compare eight fixed FP64 CUDA SOT steps with independent CPU-reference prefixes."},
     {"id": "fdm-sot-scaling", "path": "crates/fullmag-runner/src/fdm/gpu/cuda/native.rs", "symbol": "native_fdm_prescribed_sot_has_bounded_current_scaling_when_cuda_is_available", "responsibility": "Check bounded 0.5x/1x/2x signed-current response and target-mask isolation."},
     {"id": "python-slonczewski", "path": "packages/fullmag-py/src/fullmag/model/spin_torque.py", "symbol": "class SlonczewskiSTT", "responsibility": "Expose physics-first current, polarization, target, normal, and thickness inputs."},
+    {"id": "python-slonczewski-time-expression", "path": "packages/fullmag-py/src/fullmag/model/spin_torque.py", "symbol": "class TimeExpression", "responsibility": "Preserve source, constants and physical event times in public authoring."},
+    {"id": "compile-slonczewski-time-expression", "path": "crates/fullmag-ir/src/time_expression.rs", "symbol": "compile", "responsibility": "Validate declared events and compile the existing field-expression dialect for time."},
+    {"id": "fdm-cpu-slonczewski-time-factor", "path": "crates/fullmag-engine/src/fdm/shared/terms.rs", "symbol": "evaluate", "responsibility": "Evaluate the compiled scalar at global physical time, apply one-sided values at declared RK event endpoints, and reject non-finite multipliers."},
+    {"id": "fdm-cpu-slonczewski-rk45", "path": "crates/fullmag-engine/src/fdm/cpu/integrators.rs", "symbol": "rk45_step_buf_with_endpoint_policy", "responsibility": "Sample the Slonczewski multiplier at every Dormand–Prince stage and invalidate FSAL reuse for expression-driven current."},
+    {"id": "fdm-cpu-slonczewski-rk45-soa", "path": "crates/fullmag-engine/src/fdm/cpu/integrators.rs", "symbol": "rk45_step_soa_buf_with_endpoint_policy", "responsibility": "Use the same global stage times and one-sided event values in the buffer-SoA CPU lane."},
+    {"id": "fdm-cpu-time-expression-events", "path": "crates/fullmag-runner/src/time_events.rs", "symbol": "extend_absolute_time_expression_events", "responsibility": "Preserve exact absolute J(t) discontinuity times and split FDM CPU steps at each declared event."},
+    {"id": "fdm-cpu-time-expression-test", "path": "crates/fullmag-engine/src/fdm/shared/terms.rs", "symbol": "j_of_t_is_zero_outside_pulse_and_uses_consistent_one_sided_rk_values", "responsibility": "Check zero pulse values outside the interval and matching CPU left/right RK endpoint limits."},
+    {"id": "fdm-gpu-slonczewski-time-factor", "path": "backends/fdm/gpu/cuda/integrators/llg_dp45_fp64.cu", "symbol": "slonczewski_time_factor", "responsibility": "Sample the signed multiplier at the current physical RK substep with one-sided limits at events."},
     {"id": "python-zhang-li", "path": "packages/fullmag-py/src/fullmag/model/spin_torque.py", "symbol": "class ZhangLiSTT", "responsibility": "Expose canonical Zhang-Li identity, target, formula, operator and Lande factor."},
     {"id": "scene-zhang-li-validation", "path": "crates/fullmag-authoring/src/validation.rs", "symbol": "validate_spin_torque", "responsibility": "Validate canonical and legacy Zhang-Li SceneDocument contracts without silent field loss."},
     {"id": "ui-zhang-li-authoring", "path": "apps/control-room/src/modules/inspector/panels/SpinAuthoringInspector.tsx", "symbol": "buildTorque", "responsibility": "Build typed UI mutations containing the complete canonical Zhang-Li identity."},

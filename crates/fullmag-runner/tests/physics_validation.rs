@@ -956,6 +956,7 @@ fn fem_eigen_smoke_completes_without_errors() {
         dispersion_validation: None,
         k0_kittel_validation: None,
         solver_policy: None,
+        magnetostatic_bc: Default::default(),
     };
 
     let outputs = vec![
@@ -1152,6 +1153,7 @@ fn macrospin_kittel_frequency_order_of_magnitude() {
         dispersion_validation: None,
         k0_kittel_validation: None,
         solver_policy: None,
+        magnetostatic_bc: Default::default(),
     };
 
     let outputs = vec![OutputIR::EigenSpectrum {
@@ -1229,6 +1231,7 @@ fn fem_eigen_modes_are_non_trivial() {
         dispersion_validation: None,
         k0_kittel_validation: None,
         solver_policy: None,
+        magnetostatic_bc: Default::default(),
     };
 
     let outputs = vec![
@@ -1341,6 +1344,7 @@ fn dense_eigen_exports_relative_residuals() {
         dispersion_validation: None,
         k0_kittel_validation: None,
         solver_policy: None,
+        magnetostatic_bc: Default::default(),
     };
 
     let result = fullmag_runner::run_reference_fem_eigen(
@@ -1450,6 +1454,7 @@ fn dense_eigen_exports_tangent_leakage() {
         dispersion_validation: None,
         k0_kittel_validation: None,
         solver_policy: None,
+        magnetostatic_bc: Default::default(),
     };
 
     let result = fullmag_runner::run_reference_fem_eigen(
@@ -1532,6 +1537,7 @@ fn dense_eigen_frequency_units_are_hz_and_rad_s() {
         dispersion_validation: None,
         k0_kittel_validation: None,
         solver_policy: None,
+        magnetostatic_bc: Default::default(),
     };
 
     let result = fullmag_runner::run_reference_fem_eigen(
@@ -1648,6 +1654,7 @@ fn fem_eigen_frequency_is_stable_across_resolutions() {
             dispersion_validation: None,
             k0_kittel_validation: None,
             solver_policy: None,
+            magnetostatic_bc: Default::default(),
         };
         let outputs = vec![OutputIR::EigenSpectrum {
             quantity: "eigenfrequency".to_string(),
@@ -1737,6 +1744,7 @@ fn fem_eigen_periodic_k_zero_runs_with_periodic_node_pairs() {
         dispersion_validation: None,
         k0_kittel_validation: None,
         solver_policy: None,
+        magnetostatic_bc: Default::default(),
     };
 
     let result = fullmag_runner::run_reference_fem_eigen(
@@ -1815,6 +1823,7 @@ fn fem_eigen_floquet_runs_with_phase_aware_metadata() {
         dispersion_validation: None,
         k0_kittel_validation: None,
         solver_policy: None,
+        magnetostatic_bc: Default::default(),
     };
 
     let result = fullmag_runner::run_reference_fem_eigen(
@@ -1899,6 +1908,7 @@ fn fem_eigen_full_2x2_floquet_executes_nonidentity_tangent_frame_transport() {
         dispersion_validation: None,
         k0_kittel_validation: None,
         solver_policy: None,
+        magnetostatic_bc: Default::default(),
     };
 
     let result = fullmag_runner::run_reference_fem_eigen(
@@ -2032,6 +2042,7 @@ fn fem_eigen_scalar_floquet_still_rejects_nonidentity_tangent_frame_transport() 
         dispersion_validation: None,
         k0_kittel_validation: None,
         solver_policy: None,
+        magnetostatic_bc: Default::default(),
     };
 
     let error = fullmag_runner::run_reference_fem_eigen(
@@ -2098,6 +2109,7 @@ fn fem_eigen_damping_include_emits_nonzero_imaginary_frequency() {
         dispersion_validation: None,
         k0_kittel_validation: None,
         solver_policy: None,
+        magnetostatic_bc: Default::default(),
     };
     let result = fullmag_runner::run_reference_fem_eigen(
         &plan,
@@ -2168,6 +2180,7 @@ fn fem_eigen_surface_anisotropy_runs_and_reports_term() {
         dispersion_validation: None,
         k0_kittel_validation: None,
         solver_policy: None,
+        magnetostatic_bc: Default::default(),
     };
     let result = fullmag_runner::run_reference_fem_eigen(
         &plan,
@@ -2247,6 +2260,7 @@ fn fem_eigen_floquet_exchange_only_is_reciprocal_for_plus_minus_k() {
             dispersion_validation: None,
             k0_kittel_validation: None,
             solver_policy: None,
+            magnetostatic_bc: Default::default(),
         }
     };
 
@@ -2335,6 +2349,7 @@ fn fem_eigen_full_2x2_floquet_exchange_dispersion_matches_analytic() {
             dispersion_validation: None,
             k0_kittel_validation: None,
             solver_policy: None,
+            magnetostatic_bc: Default::default(),
         }
     };
 
@@ -2436,6 +2451,7 @@ fn fem_eigen_floquet_bulk_dmi_is_nonreciprocal_for_plus_minus_k() {
             dispersion_validation: None,
             k0_kittel_validation: None,
             solver_policy: None,
+            magnetostatic_bc: Default::default(),
         }
     };
 
@@ -2529,6 +2545,7 @@ fn fem_eigen_demag_lowers_frequency() {
             dispersion_validation: None,
             k0_kittel_validation: None,
             solver_policy: None,
+            magnetostatic_bc: Default::default(),
         }
     };
 
@@ -2638,6 +2655,7 @@ fn fem_eigen_poisson_robin_demag_runs_on_shared_domain_mesh() {
         dispersion_validation: None,
         k0_kittel_validation: None,
         solver_policy: None,
+        magnetostatic_bc: Default::default(),
     };
 
     let outputs = [OutputIR::EigenSpectrum {
@@ -2720,6 +2738,7 @@ fn eigen_bc_free_baseline() {
         dispersion_validation: None,
         k0_kittel_validation: None,
         solver_policy: None,
+        magnetostatic_bc: Default::default(),
     };
 
     let result = fullmag_runner::run_reference_fem_eigen(
@@ -2831,6 +2850,7 @@ fn eigen_bc_pinned_higher_frequency() {
             dispersion_validation: None,
             k0_kittel_validation: None,
             solver_policy: None,
+            magnetostatic_bc: Default::default(),
         }
     };
 
@@ -2949,6 +2969,7 @@ fn eigen_bc_periodic_requires_pairs_error() {
         dispersion_validation: None,
         k0_kittel_validation: None,
         solver_policy: None,
+        magnetostatic_bc: Default::default(),
     };
 
     let result = fullmag_runner::run_reference_fem_eigen(
@@ -3042,6 +3063,7 @@ fn eigen_bc_periodic_k_zero_matches_free() {
             dispersion_validation: None,
             k0_kittel_validation: None,
             solver_policy: None,
+            magnetostatic_bc: Default::default(),
         }
     };
 
@@ -3140,6 +3162,7 @@ fn floquet_k0_equals_periodic() {
             dispersion_validation: None,
             k0_kittel_validation: None,
             solver_policy: None,
+            magnetostatic_bc: Default::default(),
         }
     };
 
@@ -3264,6 +3287,7 @@ fn fem_eigen_path_writes_v2_dispersion_artifacts() {
         }),
         k0_kittel_validation: None,
         solver_policy: None,
+        magnetostatic_bc: Default::default(),
     };
 
     let result = fullmag_runner::run_reference_fem_eigen(
@@ -3752,6 +3776,7 @@ fn fem_eigen_path_executes_full_2x2_nonzero_k_floquet_phase_reduction() {
         dispersion_validation: None,
         k0_kittel_validation: None,
         solver_policy: None,
+        magnetostatic_bc: Default::default(),
     };
 
     let result = fullmag_runner::run_reference_fem_eigen(
@@ -3904,6 +3929,7 @@ fn fem_eigen_path_rejects_floquet_dynamic_demag_before_sample_solves() {
         dispersion_validation: None,
         k0_kittel_validation: None,
         solver_policy: None,
+        magnetostatic_bc: Default::default(),
     };
 
     let error = fullmag_runner::run_reference_fem_eigen(
@@ -3993,6 +4019,7 @@ fn fem_eigen_path_frequency_window_writes_window_diagnostics() {
         dispersion_validation: None,
         k0_kittel_validation: None,
         solver_policy: None,
+        magnetostatic_bc: Default::default(),
     };
 
     let result = fullmag_runner::run_reference_fem_eigen(
@@ -4097,6 +4124,7 @@ fn fem_eigen_single_k_dispersion_request_writes_v2_dispersion_artifact() {
         dispersion_validation: None,
         k0_kittel_validation: None,
         solver_policy: None,
+        magnetostatic_bc: Default::default(),
     };
 
     let result = fullmag_runner::run_reference_fem_eigen(

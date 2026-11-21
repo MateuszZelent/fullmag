@@ -2,7 +2,9 @@
 .fm-region-list {
   display: grid;
   gap: var(--fm-space-1);
+  margin: 0;
   padding: var(--fm-space-1) var(--fm-space-2) var(--fm-space-2);
+  list-style: none;
 }
 
 .fm-region-list__empty {
@@ -194,3 +196,7 @@
   padding: var(--fm-space-1) var(--fm-space-3);
 }
 
+
+.fm-region-list__item {
+  display: contents;
+}

@@ -88,6 +88,16 @@ fn fem_mesh_payload_clone_count() -> u64 {
 }
 
 impl LocalLiveWorkspaceState {
+    pub(crate) fn clear_fields_for_remesh(&mut self) {
+        clear_cached_preview_fields(self);
+        self.clear_preview_cache = true;
+        self.latest_scalar_row = None;
+        self.latest_fields = Default::default();
+        // Only solver termination has an authoritative terminal field generation.
+        self.replace_latest_fields = false;
+        self.field_generation = None;
+    }
+
     pub fn build_publish_payload(
         &self,
         include_mesh: bool,
@@ -165,6 +175,9 @@ impl LocalLiveWorkspaceState {
         let include_mesh = next_mesh_generation_id.is_some()
             && next_mesh_generation_id != self.published_fem_mesh_generation_id;
         let mut payload = self.build_publish_payload(include_mesh, None, clear_preview_cache);
+        if let Some(workspace) = self.mesh_workspace.as_mut().and_then(|value| value.as_object_mut()) {
+            workspace.remove(fullmag_session::mesh_operation::MESH_REINITIALIZATION_EVENT);
+        }
         payload.replace_latest_fields = std::mem::take(&mut self.replace_latest_fields);
         payload.field_generation = std::mem::take(&mut self.field_generation);
         if let Some(generation_id) = next_mesh_generation_id.filter(|_| include_mesh) {
@@ -394,12 +407,29 @@ impl LocalLiveWorkspace {
         }
     }
 
-    pub(crate) fn grid_refresh_snapshot(&self) -> Result<CurrentLiveSnapshotPayload> {
+    pub(crate) fn grid_refresh_snapshot(&self, completed: bool) -> Result<CurrentLiveSnapshotPayload> {
         let state = self.state.lock().map_err(|_| anyhow!("grid workspace state lock poisoned"))?;
-        // Do not clone the field/mesh carriers merely to discard them. Grid
-        // authoring publishes no run, bootstrap state or scientific fields.
+        // The API derives static material fields from this exact plan and layout.
+        // A grid preparation has no solver observation or runtime capabilities.
+        let metadata = if completed {
+            let domain = state.metadata.as_ref().context("missing prepared FDM domain")?;
+            let revision = state.mesh_workspace.as_ref()
+                .and_then(|workspace| workspace.pointer("/last_build_summary/source_scene_revision"))
+                .and_then(serde_json::Value::as_u64)
+                .context("missing prepared grid scene revision")?;
+            Some(serde_json::json!({
+                "prepared_grid_scene_revision": revision,
+                "execution_plan": domain.get("execution_plan").context("missing prepared grid plan")?,
+                "artifact_layout": domain.get("artifact_layout").context("missing prepared grid layout")?,
+                "meshing_capabilities": domain.get("meshing_capabilities"),
+            }))
+        } else {
+            None
+        };
         Ok(CurrentLiveSnapshotPayload {
+            metadata,
             mesh_workspace: state.mesh_workspace.clone(),
+            clear_preview_cache: completed,
             engine_log: Some(state.engine_log.clone()),
             ..Default::default()
         })
@@ -521,6 +551,10 @@ impl LocalLiveWorkspace {
             })
     }
 
+    // The explicit shutdown owner is dormant while runs finish through the
+    // separate terminal ACK path. Keep the bounded receipt/join path available
+    // until a caller can invoke it without changing that terminal contract.
+    #[expect(dead_code, reason = "reserved for an explicit close owner that follows terminal ACK")]
     pub fn finish_publish(&self) -> Result<()> {
         self.publisher.finish_publish(std::time::Duration::from_secs(600))
     }
@@ -550,6 +584,9 @@ impl LocalLiveWorkspace {
         // Replaying its generation can make the API skip terminal metadata.
         snapshot.replace_latest_fields = false;
         snapshot.field_generation = None;
+        if let Some(workspace) = snapshot.mesh_workspace.as_mut().and_then(|value| value.as_object_mut()) {
+            workspace.remove(fullmag_session::mesh_operation::MESH_REINITIALIZATION_EVENT);
+        }
         snapshot.latest_fields = Some(state.latest_fields.clone());
         drop(state);
         self.publisher.terminal.publish_and_wait(snapshot, timeout, &self.publisher.wake_tx)
@@ -1288,6 +1325,12 @@ fn merge_pending_publish_payload(
     mut incoming: CurrentLiveSnapshotPayload,
     should_merge_pending: bool,
 ) {
+    let supersedes_pending = incoming.mesh_reinitialization().is_some_and(|reset| {
+        slot.mesh_workspace.as_ref().and_then(|w| {
+            fullmag_session::mesh_operation::mesh_command_outcome(w, &reset.command_id)
+        }).is_none()
+    });
+    let should_merge_pending = should_merge_pending && !supersedes_pending;
     let incoming_preview_fields = incoming.preview_fields.clone();
     let allow_previous_preview = should_merge_pending && !incoming.clear_preview_cache;
     let merged_preview_fields = if incoming.clear_preview_cache {
@@ -1364,6 +1407,14 @@ fn acknowledge_terminal_field_publish(
     slot: &mut CurrentLiveSnapshotPayload,
     published: &CurrentLiveSnapshotPayload,
 ) {
+    if let Some(event) = published.mesh_reinitialization() {
+        if slot.mesh_reinitialization().is_some_and(|pending| pending.command_id == event.command_id) {
+            if let Some(workspace) = slot.mesh_workspace.as_mut().and_then(|value| value.as_object_mut()) {
+                workspace.remove(fullmag_session::mesh_operation::MESH_REINITIALIZATION_EVENT);
+            }
+            slot.clear_preview_cache = false;
+        }
+    }
     if published.replace_latest_fields
         && published.field_generation.is_some()
         && slot.replace_latest_fields
@@ -1530,12 +1581,15 @@ pub(crate) struct CurrentLivePublisher {
     state_source: Arc<Mutex<Option<Arc<Mutex<LocalLiveWorkspaceState>>>>>,
     wake_tx: mpsc::SyncSender<()>,
     stopping: Arc<AtomicBool>,
+    #[expect(dead_code, reason = "owned by the dormant bounded publisher close path")]
     completion: Arc<Mutex<Option<LivePublisherCompletion>>>,
     terminal: Arc<TerminalPublication>,
 }
 
 struct LivePublisherCompletion {
+    #[expect(dead_code, reason = "read by the dormant bounded publisher close path")]
     receipt: mpsc::Receiver<Result<()>>,
+    #[expect(dead_code, reason = "joined by the dormant bounded publisher close path")]
     worker: std::thread::JoinHandle<()>,
 }
 
@@ -1733,6 +1787,7 @@ impl CurrentLivePublisher {
         }
     }
 
+    #[cfg(test)]
     fn spawn_with_sinks(
         session_id: &str,
         coalesce_delay: std::time::Duration,
@@ -1839,6 +1894,9 @@ impl CurrentLivePublisher {
         }
     }
 
+    // Normal completion waits on TerminalPublication; this separate bounded
+    // close path remains for an explicit shutdown owner that follows its ACK.
+    #[expect(dead_code, reason = "reserved for an explicit close owner that follows terminal ACK")]
     fn finish_publish(&self, timeout: std::time::Duration) -> Result<()> {
         let mut completion = self.completion.lock()
             .map_err(|_| anyhow!("live publisher completion lock poisoned"))?;
@@ -2876,6 +2934,28 @@ mod tests {
             },
             no_op_publisher(),
         )
+    }
+
+    #[test]
+    fn grid_receipt_publishes_prepared_plan_only_after_a_successful_build() {
+        let workspace = workspace_with_domain_mesh();
+        let plan = serde_json::json!({"backend_plan": {"kind": "fdm",
+            "grid": {"cells": [2, 1, 1]}, "material": {"damping": 0.01}}});
+        let layout = serde_json::json!({"backend": "fdm", "grid_cells": [2, 1, 1]});
+        workspace.update(|state| {
+            state.metadata = Some(serde_json::json!({"execution_plan": plan, "artifact_layout": layout,
+                "capabilities": {"preview_quantities": ["m"]}}));
+            state.mesh_workspace = Some(serde_json::json!({"last_build_summary": {
+                "source_scene_revision": 7, "status": "completed"}}));
+        });
+        let receipt = workspace.grid_refresh_snapshot(true).unwrap();
+        let metadata = receipt.metadata.unwrap();
+        assert_eq!(metadata["execution_plan"], plan);
+        assert_eq!(metadata["artifact_layout"], layout);
+        assert_eq!(metadata["prepared_grid_scene_revision"], 7);
+        assert!(metadata.get("capabilities").is_none());
+        assert!(receipt.run.is_none() && receipt.live_state.is_none() && receipt.latest_fields.is_none());
+        assert!(workspace.grid_refresh_snapshot(false).unwrap().metadata.is_none());
     }
 
     #[test]
@@ -3926,6 +4006,34 @@ mod tests {
             "ordinary update must not replay generation"
         );
         assert_eq!(observed[1].2, Some(8));
+    }
+
+    #[test]
+    fn completed_remesh_supersedes_pending_terminal_fields() {
+        let mut state = workspace_with_domain_mesh().snapshot();
+        state.latest_fields.insert("H_demag".into(), serde_json::json!({"values": [99.0]}));
+        state.replace_latest_fields = true;
+        state.field_generation = Some(crate::types::CurrentLiveFieldGeneration {
+            run_id: "previous-run".into(),
+            sequence: 7,
+        });
+        let mut pending = state.build_publish_payload(false, None, true);
+        state.clear_fields_for_remesh();
+        state.mesh_workspace = Some(serde_json::json!({
+            "mesh_reinitialization_command_id": "build-1",
+            "last_build_summary": {"status": "completed", "command_id": "build-1",
+                "state_policy": "reinitialize_from_model", "mesh_generation_id": "mesh-gen-1"},
+            "command_outcomes": [{"status": "completed", "command_id": "build-1",
+                "build_id": "mesh:build-1", "state_policy": "reinitialize_from_model",
+                "mesh_generation_id": "mesh-gen-1", "completed_at_unix_ms": 1}]
+        }));
+        let (remesh, ..) = state.take_publish_delta_parts();
+        assert!(state.build_publish_payload(false, None, true).mesh_reinitialization().is_none());
+        merge_pending_publish_payload(&mut pending, remesh, true);
+        assert!(pending.mesh_reinitialization().is_some());
+        assert!(!pending.replace_latest_fields);
+        assert!(pending.field_generation.is_none());
+        assert!(pending.latest_fields.is_none());
     }
 
     #[test]
@@ -5608,6 +5716,9 @@ fn current_live_publisher_loop(
                 has_published = true;
                 if let Ok(mut slot) = payload.lock() {
                     acknowledge_terminal_field_publish(&mut slot, &snapshot);
+                    if snapshot.mesh_reinitialization().is_some() {
+                        pending.store(true, Ordering::Release);
+                    }
                 }
             }
             if let Some(error) = scalar_publish_error.as_ref() {
@@ -5925,6 +6036,10 @@ fn build_pending_payload_from_workspace(
     scalar_gate: &Arc<Mutex<LiveTelemetryPublishGate>>,
     diagnostics: &Arc<Mutex<fullmag_runner::LivePublisherDiagnostics>>,
 ) {
+    // Retry the original mesh event intact. Later workspace changes are read after its acknowledgement.
+    if payload.lock().is_ok_and(|slot| slot.mesh_reinitialization().is_some()) {
+        return;
+    }
     let source = state_source.lock().ok().and_then(|source| source.clone());
     let Some(source) = source else {
         return;

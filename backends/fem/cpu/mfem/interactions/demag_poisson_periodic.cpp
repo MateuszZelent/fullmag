@@ -219,6 +219,16 @@ bool solve_demag_periodic_poisson_reduced(
 
     const auto solve_wall_start = FemSteadyClock::now();
     reduce_vector_by_periodic_classes(ctx, rhs, *rhs_p);
+    // Eliminated (essential) rows of P^T A P carry the prescribed value 0;
+    // the device path zeroes the same reduced classes.
+    for (const int tdof : ctx.poisson_demag.ess_tdof_list) {
+        if (tdof < 0 || tdof >= static_cast<int>(ctx.mesh.n_nodes)) {
+            error = "Periodic Poisson essential potential DOF is out of range";
+            return false;
+        }
+        (*rhs_p)[static_cast<int>(
+            ctx.mesh.periodic_reduced_node[static_cast<size_t>(tdof)])] = 0.0;
+    }
 
     const double rel_tol = ctx.demag.solver.relative_tolerance > 0.0
                                ? ctx.demag.solver.relative_tolerance

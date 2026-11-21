@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useId, useReducer, useState } from "react";
 
 import type {
   FrozenSpinsSelectionExpression,
@@ -45,6 +45,136 @@ const SIMPLE_KINDS: readonly SimpleSelectionKind[] = [
   "not",
 ];
 
+type BooleanSelectionExpression = Extract<
+  FrozenSpinsSelectionExpression,
+  { kind: "and" | "or" | "xor" }
+>;
+type SelectionClauseExpression = BooleanSelectionExpression["expressions"][number];
+
+interface SelectionClauseKeyEntry {
+  key: string;
+  expression: SelectionClauseExpression;
+}
+
+interface SelectionClauseKeyState {
+  idPrefix: string;
+  nextId: number;
+  entries: SelectionClauseKeyEntry[];
+}
+
+type SelectionClauseKeyAction =
+  | {
+      type: "append";
+      expressions: readonly SelectionClauseExpression[];
+      expression: SelectionClauseExpression;
+    }
+  | {
+      type: "remove";
+      expressions: readonly SelectionClauseExpression[];
+      index: number;
+    }
+  | {
+      type: "replace";
+      expressions: readonly SelectionClauseExpression[];
+      index: number;
+      expression: SelectionClauseExpression;
+    };
+
+function initializeSelectionClauseKeys({
+  idPrefix,
+  expressions,
+}: {
+  idPrefix: string;
+  expressions: readonly SelectionClauseExpression[];
+}): SelectionClauseKeyState {
+  return {
+    idPrefix,
+    nextId: expressions.length,
+    entries: expressions.map((expression, index) => ({
+      key: `${idPrefix}:clause:${index}`,
+      expression,
+    })),
+  };
+}
+
+function resolveSelectionClauseKeys(
+  state: SelectionClauseKeyState,
+  expressions: readonly SelectionClauseExpression[],
+): SelectionClauseKeyState {
+  const used = new Set<number>();
+  const entries: (SelectionClauseKeyEntry | null)[] = expressions.map((expression) => {
+    const match = state.entries.findIndex(
+      (entry, index) => !used.has(index) && entry.expression === expression,
+    );
+    if (match < 0) return null;
+    used.add(match);
+    return state.entries[match] ?? null;
+  });
+  let nextId = state.nextId;
+
+  for (let index = 0; index < entries.length; index += 1) {
+    if (entries[index] !== null) continue;
+    if (index < state.entries.length && !used.has(index)) {
+      used.add(index);
+      entries[index] = state.entries[index] ?? null;
+    }
+    if (entries[index] === null) {
+      const expression = expressions[index];
+      if (expression) {
+        entries[index] = {
+          key: `${state.idPrefix}:clause:${nextId++}`,
+          expression,
+        };
+      }
+    } else {
+      entries[index] = {
+        ...(entries[index] as SelectionClauseKeyEntry),
+        expression: expressions[index] as SelectionClauseExpression,
+      };
+    }
+  }
+
+  return {
+    idPrefix: state.idPrefix,
+    nextId,
+    entries: entries.filter((entry): entry is SelectionClauseKeyEntry => entry !== null),
+  };
+}
+
+function reduceSelectionClauseKeys(
+  state: SelectionClauseKeyState,
+  action: SelectionClauseKeyAction,
+): SelectionClauseKeyState {
+  const resolved = resolveSelectionClauseKeys(state, action.expressions);
+  if (action.type === "append") {
+    return {
+      ...resolved,
+      nextId: resolved.nextId + 1,
+      entries: [
+        ...resolved.entries,
+        {
+          key: `${resolved.idPrefix}:clause:${resolved.nextId}`,
+          expression: action.expression,
+        },
+      ],
+    };
+  }
+  if (action.type === "remove") {
+    return {
+      ...resolved,
+      entries: resolved.entries.filter((_, index) => index !== action.index),
+    };
+  }
+  return {
+    ...resolved,
+    entries: resolved.entries.map((entry, index) =>
+      index === action.index
+        ? { ...entry, expression: action.expression }
+        : entry,
+    ),
+  };
+}
+
 export function SelectionExpressionBuilder({
   expression,
   objectId,
@@ -52,6 +182,16 @@ export function SelectionExpressionBuilder({
   onChange,
 }: SelectionExpressionBuilderProps) {
   const editable = SIMPLE_KINDS.includes(expression.kind as SimpleSelectionKind);
+  const editorId = useId();
+  const expressionChildren = expression.kind === "and" || expression.kind === "or" || expression.kind === "xor"
+    ? expression.expressions
+    : [];
+  const [childKeyState, dispatchChildKey] = useReducer(
+    reduceSelectionClauseKeys,
+    { idPrefix: editorId, expressions: expressionChildren },
+    initializeSelectionClauseKeys,
+  );
+  const childKeyEntries = resolveSelectionClauseKeys(childKeyState, expressionChildren).entries;
   return (
     <fieldset className="fm-inspector-field" data-selection-expression-kind={expression.kind}>
       <legend>Selection expression</legend>
@@ -117,33 +257,44 @@ export function SelectionExpressionBuilder({
               At least one sub-expression clause is required.
             </p>
           ) : null}
-          {expression.expressions.map((child, index) => (
-            <div className="fm-inspector-panel" key={index}>
+          {childKeyEntries.map(({ expression: child, key }, index) => (
+            <div className="fm-inspector-panel" key={key}>
               <SelectionExpressionBuilder
                 expression={child}
                 objectId={objectId}
                 regionId={regionId}
-                onChange={(next) =>
+                onChange={(next) => {
+                  dispatchChildKey({
+                    type: "replace",
+                    expressions: expression.expressions,
+                    index,
+                    expression: next,
+                  });
                   onChange({
                     ...expression,
                     expressions: expression.expressions.map((entry, childIndex) =>
                       childIndex === index ? next : entry,
                     ),
-                  })
-                }
+                  });
+                }}
               />
               <Button
                 size="sm"
                 type="button"
                 variant="ghost"
-                onClick={() =>
+                onClick={() => {
+                  dispatchChildKey({
+                    type: "remove",
+                    expressions: expression.expressions,
+                    index,
+                  });
                   onChange({
                     ...expression,
                     expressions: expression.expressions.filter(
                       (_, childIndex) => childIndex !== index,
                     ),
-                  })
-                }
+                  });
+                }}
               >
                 Remove clause
               </Button>
@@ -153,15 +304,21 @@ export function SelectionExpressionBuilder({
             size="sm"
             type="button"
             variant="secondary"
-            onClick={() =>
+            onClick={() => {
+              const child = defaultTargetExpression(objectId, regionId);
+              dispatchChildKey({
+                type: "append",
+                expressions: expression.expressions,
+                expression: child,
+              });
               onChange({
                 ...expression,
                 expressions: [
                   ...expression.expressions,
-                  defaultTargetExpression(objectId, regionId),
+                  child,
                 ],
-              })
-            }
+              });
+            }}
           >
             Add clause
           </Button>
@@ -254,18 +411,21 @@ function TextField({
   onChange: (value: string) => void;
   value: string;
 }) {
+  const errorId = useId();
   return (
     <div className="fm-inspector-field-wrapper">
       <label className="fm-inspector-field">
         <span>{label}</span>
         <input
+          aria-describedby={error ? errorId : undefined}
+          aria-invalid={error ? true : undefined}
           className={`fm-inspector-input ${error ? "fm-inspector-input--invalid" : ""}`}
           value={value}
           onChange={(event) => onChange(event.target.value)}
         />
       </label>
       {error ? (
-        <p className="fm-inspector-feedback" data-kind="error">
+        <p className="fm-inspector-feedback" data-kind="error" id={errorId}>
           {error}
         </p>
       ) : null}
@@ -337,12 +497,15 @@ function NumberField({
   }
 
   const effectiveError = externalError ?? draft.internalError;
+  const errorId = useId();
 
   return (
     <div className="fm-inspector-field-wrapper">
       <label className="fm-inspector-field">
         <span>{label}</span>
         <input
+          aria-describedby={effectiveError ? errorId : undefined}
+          aria-invalid={effectiveError ? true : undefined}
           className={`fm-inspector-input ${effectiveError ? "fm-inspector-input--invalid" : ""}`}
           type="number"
           value={draft.text}
@@ -350,7 +513,7 @@ function NumberField({
         />
       </label>
       {effectiveError ? (
-        <p className="fm-inspector-feedback" data-kind="error">
+        <p className="fm-inspector-feedback" data-kind="error" id={errorId}>
           {effectiveError}
         </p>
       ) : null}

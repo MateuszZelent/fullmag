@@ -8,6 +8,7 @@ use crate::{
     RegionalFieldDriveTerm, ResolvedFdmPeriodicWorkspace, Result, StepReport, TimeIntegrator,
     Vector3,
 };
+use crate::fdm::shared::terms::{SlonczewskiTimeExpression, TimeEvaluationSide};
 use sha2::Digest;
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -58,6 +59,9 @@ pub struct ExchangeLlgProblem {
     pub exchange_faces: Option<std::sync::Arc<crate::ExchangeFaces>>,
     /// Canonical regional field drives, separate from legacy per-node fields.
     pub regional_field_drives: Vec<RegionalFieldDriveTerm>,
+    /// Optional scalar multiplier for the canonical Slonczewski current,
+    /// evaluated at every physical RK stage time.
+    slonczewski_time_expression: Option<SlonczewskiTimeExpression>,
     /// Resolved static external H_ext profile [A/m], kept separate from the
     /// legacy Oersted/antenna per-node buffer for observable provenance.
     pub static_external_field: Option<Vec<Vector3>>,
@@ -164,8 +168,41 @@ impl ExchangeLlgProblem {
             alpha_field: None,
             exchange_faces: None,
             regional_field_drives: Vec::new(),
+            slonczewski_time_expression: None,
             static_external_field: None,
         })
+    }
+
+    /// Attach a compiled dimensionless multiplier to the canonical CPP STT.
+    /// The runner calls this only after the planner has admitted the matching
+    /// FP64 single-grid FDM RK45 lane.
+    pub fn set_slonczewski_time_expression(
+        &mut self,
+        expression: &fullmag_ir::TimeExpressionIR,
+    ) -> Result<()> {
+        if self.terms.slonczewski_stt.is_none() {
+            return Err(crate::EngineError::with_code(
+                crate::EngineErrorCode::InvalidInput,
+                "Slonczewski time expression requires an active Slonczewski STT term",
+            ));
+        }
+        self.slonczewski_time_expression = Some(SlonczewskiTimeExpression::compile(expression)?);
+        Ok(())
+    }
+
+    pub(crate) fn slonczewski_current_multiplier_at_time(
+        &self,
+        time_seconds: f64,
+        side: TimeEvaluationSide,
+    ) -> Result<f64> {
+        match &self.slonczewski_time_expression {
+            Some(expression) => expression.evaluate(time_seconds, side),
+            None => Ok(1.0),
+        }
+    }
+
+    pub(crate) fn has_slonczewski_time_expression(&self) -> bool {
+        self.slonczewski_time_expression.is_some()
     }
 
     pub fn regional_drive_field_at_time(&self, evaluation_time_s: f64) -> Vec<Vector3> {
@@ -309,6 +346,19 @@ impl ExchangeLlgProblem {
 
     /// Build a reusable FFT workspace matching this problem's grid.
     pub fn create_workspace(&self) -> FftWorkspace {
+        if self.grid.nz == 1
+            && !self.boundary_policy.has_any_periodic()
+            && self.demag_boundary == FdmDemagBoundary::Open
+        {
+            return FftWorkspace::new_open_single_layer(
+                self.grid.nx,
+                self.grid.ny,
+                self.cell_size.dx,
+                self.cell_size.dy,
+                self.cell_size.dz,
+            );
+        }
+
         if self.boundary_policy.has_any_periodic()
             && matches!(
                 self.demag_boundary,
@@ -395,6 +445,22 @@ impl ExchangeLlgProblem {
         })
     }
 
+    /// Full-domain stray field using a workspace created for this problem.
+    /// Observation callers may retain it across accepted states; it must not
+    /// be shared concurrently with an integrator evaluation.
+    pub fn observable_demag_field_with_workspace(
+        &self,
+        state: &ExchangeLlgState,
+        ws: &mut FftWorkspace,
+    ) -> Result<Vec<Vector3>> {
+        self.ensure_state_matches_grid(state)?;
+        Ok(if self.terms.demag {
+            self.observable_demag_field_from_vectors_ws(state.magnetization(), ws)
+        } else {
+            zero_vectors(self.grid.cell_count())
+        })
+    }
+
     pub fn external_field(&self, state: &ExchangeLlgState) -> Result<Vec<Vector3>> {
         self.ensure_state_matches_grid(state)?;
         Ok(self.external_field_vectors())
@@ -413,9 +479,20 @@ impl ExchangeLlgProblem {
     pub fn observable_effective_field(&self, state: &ExchangeLlgState) -> Result<Vec<Vector3>> {
         self.ensure_state_matches_grid(state)?;
         let mut ws = self.create_workspace();
+        self.observable_effective_field_with_workspace(state, &mut ws)
+    }
+
+    /// Evaluate the current observable field without rebuilding FFT plans or
+    /// Newell spectra. The workspace must have this problem's geometry/policy.
+    pub fn observable_effective_field_with_workspace(
+        &self,
+        state: &ExchangeLlgState,
+        ws: &mut FftWorkspace,
+    ) -> Result<Vec<Vector3>> {
+        self.ensure_state_matches_grid(state)?;
         Ok(self.observable_effective_field_from_vectors_ws_at_time(
             state.magnetization(),
-            &mut ws,
+            ws,
             state.time_seconds,
         ))
     }
@@ -1051,6 +1128,7 @@ impl Clone for ExchangeLlgProblem {
             alpha_field: self.alpha_field.clone(),
             exchange_faces: self.exchange_faces.clone(),
             regional_field_drives: self.regional_field_drives.clone(),
+            slonczewski_time_expression: self.slonczewski_time_expression.clone(),
             static_external_field: self.static_external_field.clone(),
         }
     }
@@ -1076,5 +1154,200 @@ impl PartialEq for ExchangeLlgProblem {
             && self.exchange_faces == other.exchange_faces
             && self.regional_field_drives == other.regional_field_drives
             && self.static_external_field == other.static_external_field
+    }
+}
+
+#[cfg(test)]
+mod single_layer_workspace_tests {
+    use super::*;
+    use crate::{TimeIntegrator, VectorFieldSoA};
+
+    fn make_problem(shape: [usize; 3], active_mask: Option<Vec<bool>>) -> ExchangeLlgProblem {
+        let grid = GridShape::new(shape[0], shape[1], shape[2]).expect("valid grid");
+        let cell_count = grid.cell_count();
+        let terms = EffectiveFieldTerms {
+            exchange: false,
+            demag: true,
+            ..Default::default()
+        };
+        let problem = ExchangeLlgProblem::with_terms_and_mask(
+            grid,
+            CellSize::new(1.3e-9, 2.1e-9, 5.7e-9).expect("valid cell size"),
+            MaterialParameters::new(8.0e5, 1.3e-11, 0.2).expect("valid material"),
+            LlgConfig::new(2.211e5, TimeIntegrator::Heun).expect("valid LLG config"),
+            terms,
+            active_mask,
+        )
+        .expect("valid problem");
+        let ms_field = (0..cell_count)
+            .map(|index| {
+                if !problem.is_active(index) {
+                    0.0
+                } else {
+                    6.8e5 + (index % 5) as f64 * 4.1e4
+                }
+            })
+            .collect();
+        problem
+            .with_spatial_fields(Some(ms_field), None, None)
+            .expect("valid heterogeneous Ms field")
+    }
+
+    fn magnetization(cell_count: usize) -> Vec<Vector3> {
+        (0..cell_count)
+            .map(|index| {
+                let i = index as f64;
+                [0.31 + 0.07 * i, -0.42 + 0.03 * i, 0.84 - 0.02 * i]
+            })
+            .collect()
+    }
+
+    fn assert_close(actual: f64, expected: f64, absolute_floor: f64, label: &str) {
+        let tolerance = 1.0e-12 * actual.abs().max(expected.abs()) + absolute_floor;
+        assert!(
+            (actual - expected).abs() <= tolerance,
+            "{label} differs: actual={actual:e}, expected={expected:e}, tolerance={tolerance:e}"
+        );
+    }
+
+    fn assert_fields_close(actual: &[Vector3], expected: &[Vector3]) {
+        assert_eq!(actual.len(), expected.len());
+        for (index, (actual, expected)) in actual.iter().zip(expected).enumerate() {
+            for component in 0..3 {
+                assert_close(
+                    actual[component],
+                    expected[component],
+                    1.0e-8,
+                    &format!("field[{index}][{component}]"),
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn open_single_layer_workspace_matches_legacy_aos_and_soa_oracle() {
+        for (shape, mask) in [
+            ([1, 1, 1], Some(vec![true])),
+            ([3, 2, 1], Some(vec![true, true, false, true, true, true])),
+        ] {
+            let problem = make_problem(shape, mask);
+            let state = magnetization(problem.grid.cell_count());
+            let state_soa = VectorFieldSoA::from_aos(&state);
+
+            let mut optimized_aos_ws = problem.create_workspace();
+            let mut legacy_aos_ws = FftWorkspace::new(
+                shape[0],
+                shape[1],
+                shape[2],
+                problem.cell_size.dx,
+                problem.cell_size.dy,
+                problem.cell_size.dz,
+            );
+            assert_eq!(optimized_aos_ws.pz, 1);
+            assert_eq!(legacy_aos_ws.pz, 2);
+
+            let optimized_aos_energy =
+                problem.total_energy_from_vectors_ws(&state, &mut optimized_aos_ws);
+            let legacy_aos_energy =
+                problem.total_energy_from_vectors_ws(&state, &mut legacy_aos_ws);
+            assert_close(
+                optimized_aos_energy,
+                legacy_aos_energy,
+                1.0e-30,
+                "AoS demag energy",
+            );
+            let optimized_aos_field =
+                problem.effective_field_from_vectors_ws(&state, &mut optimized_aos_ws);
+            let legacy_aos_field =
+                problem.effective_field_from_vectors_ws(&state, &mut legacy_aos_ws);
+            assert_fields_close(&optimized_aos_field, &legacy_aos_field);
+
+            let mut optimized_soa_ws = problem.create_workspace();
+            let mut legacy_soa_ws = FftWorkspace::new(
+                shape[0],
+                shape[1],
+                shape[2],
+                problem.cell_size.dx,
+                problem.cell_size.dy,
+                problem.cell_size.dz,
+            );
+            let mut optimized_scratch = VectorFieldSoA::zeros(state.len());
+            let mut legacy_scratch = VectorFieldSoA::zeros(state.len());
+            let optimized_soa_energy = problem.total_energy_from_soa_ws(
+                &state_soa,
+                &mut optimized_soa_ws,
+                &mut optimized_scratch,
+            );
+            let legacy_soa_energy = problem.total_energy_from_soa_ws(
+                &state_soa,
+                &mut legacy_soa_ws,
+                &mut legacy_scratch,
+            );
+            assert_close(
+                optimized_soa_energy,
+                legacy_soa_energy,
+                1.0e-30,
+                "SoA demag energy",
+            );
+            let mut optimized_soa_field = VectorFieldSoA::zeros(state.len());
+            let mut legacy_soa_field = VectorFieldSoA::zeros(state.len());
+            problem.effective_field_into_soa_ws(
+                &state_soa,
+                &mut optimized_soa_ws,
+                &mut optimized_soa_field,
+            );
+            problem.effective_field_into_soa_ws(
+                &state_soa,
+                &mut legacy_soa_ws,
+                &mut legacy_soa_field,
+            );
+            assert_fields_close(
+                &optimized_soa_field.gather_to_aos(),
+                &legacy_soa_field.gather_to_aos(),
+            );
+        }
+    }
+
+    #[test]
+    fn single_layer_specialization_excludes_3d_pbc_and_non_open_demag() {
+        let three_dimensional = make_problem([3, 2, 2], None);
+        assert_eq!(three_dimensional.create_workspace().pz, 4);
+
+        let mut periodic_x = make_problem([3, 2, 1], None);
+        periodic_x.boundary_policy.x = crate::AxisBoundary::Periodic;
+        periodic_x.demag_boundary = FdmDemagBoundary::PeriodicTruncatedImages {
+            image_counts: [1, 0, 0],
+        };
+        let periodic_workspace = periodic_x.create_workspace();
+        assert_eq!(
+            [
+                periodic_workspace.px,
+                periodic_workspace.py,
+                periodic_workspace.pz
+            ],
+            [3, 4, 2]
+        );
+
+        let mut periodic_stencil_open_demag = make_problem([3, 2, 1], None);
+        periodic_stencil_open_demag.boundary_policy.x = crate::AxisBoundary::Periodic;
+        assert_eq!(periodic_stencil_open_demag.create_workspace().pz, 2);
+
+        let mut non_open_demag = make_problem([3, 2, 1], None);
+        non_open_demag.demag_boundary = FdmDemagBoundary::PeriodicTruncatedImages {
+            image_counts: [1, 1, 1],
+        };
+        assert_eq!(non_open_demag.create_workspace().pz, 2);
+
+        let default_workspace = FftWorkspace::new(3, 2, 1, 1.3e-9, 2.1e-9, 5.7e-9);
+        assert_eq!(default_workspace.pz, 2);
+        let default_spectra = crate::compute_newell_kernel_spectra(3, 2, 1, 1.3e-9, 2.1e-9, 5.7e-9);
+        assert_eq!(default_spectra.pz, 2);
+        let thin_film_spectra =
+            crate::compute_newell_kernel_spectra_thin_film_2d(3, 2, 1.3e-9, 2.1e-9, 5.7e-9);
+        assert_eq!(thin_film_spectra.pz, 1);
+        assert_eq!(
+            thin_film_spectra.n_xx.len(),
+            2 * thin_film_spectra.px * thin_film_spectra.py
+        );
     }
 }

@@ -88,19 +88,19 @@
       "id": "mh",
       "latex": "\\mathbf{m}_h",
       "meaning": "discrete magnetization field",
-      "si_unit": "1"
+      "si_unit": "$1$"
     },
     {
       "id": "mi",
       "latex": "\\mathbf{m}_i",
       "meaning": "nodal magnetization coefficient",
-      "si_unit": "1"
+      "si_unit": "$1$"
     },
     {
       "id": "phii",
       "latex": "\\phi_i",
       "meaning": "finite-element basis function",
-      "si_unit": "1"
+      "si_unit": "$1$"
     }
   ],
   "equations": [
@@ -127,7 +127,7 @@
         "python": "FEM.order",
         "type": "int",
         "default": "required",
-        "si_unit": "1",
+        "si_unit": "$1$",
         "validation": "integer >= 1",
         "meaning": "FEM solution-space order",
         "backend_support": "FEM CPU source-backed; FEM GPU capability-gated",
@@ -137,7 +137,7 @@
         "python": "FEM.maximum_element_size",
         "type": "float",
         "default": "required",
-        "si_unit": "m",
+        "si_unit": "$\\mathrm{m}$",
         "validation": "finite and > 0",
         "meaning": "required FEM size hint even with a mesh source",
         "backend_support": "FEM CPU source-backed; FEM GPU capability-gated",
@@ -147,7 +147,7 @@
         "python": "FEM.hmax",
         "type": "float | None",
         "default": "None",
-        "si_unit": "m",
+        "si_unit": "$\\mathrm{m}$",
         "validation": "alias; must equal maximum_element_size if both are supplied",
         "meaning": "maximum size alias",
         "backend_support": "FEM CPU source-backed; FEM GPU capability-gated",
@@ -157,7 +157,7 @@
         "python": "FEM.mesh",
         "type": "str | None",
         "default": "None",
-        "si_unit": "1",
+        "si_unit": "$1$",
         "validation": "nonempty path when supplied",
         "meaning": "study-level pre-built mesh source",
         "backend_support": "FEM CPU source-backed; FEM GPU capability-gated",

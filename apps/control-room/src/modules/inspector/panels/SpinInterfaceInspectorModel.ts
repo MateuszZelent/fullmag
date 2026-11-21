@@ -66,7 +66,11 @@ export function interfaceTraceSelection(draft: InterfaceDraft): string {
   if (!normal && !ferromagnet) return "";
   if (!normal || !ferromagnet || normal.objectId !== draft.normalObject || ferromagnet.objectId !== draft.ferromagnetObject) return "stored";
   try {
-    const same = (value: string, expected: readonly number[]) => vector(value, "Trace orientation").every((component, index) => component === expected[index]);
+    const same = (value: string, expected: readonly number[]) => {
+      const actual = vector(value, "Trace orientation");
+      return actual.length === expected.length &&
+        actual.every((component, index) => component === expected[index]);
+    };
     return INTERFACE_TRACE_DIRECTIONS.find((direction) =>
       normal.surfaceId === direction.surfaceId && ferromagnet.surfaceId === direction.oppositeId &&
       same(normal.orientation, direction.normal) && same(ferromagnet.orientation, direction.opposite) &&

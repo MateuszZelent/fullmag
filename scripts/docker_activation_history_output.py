@@ -14,7 +14,9 @@ from docker_activation_history_storage import _directory, _raw
 from docker_activation_history_inventory import MAX_INVENTORY_ENTRIES, tree_inventory
 
 
-OUTPUT_ATTEMPT_DIRECTORY = "reversal-attempt-1"
+# Two existing single-attempt output contracts. Do not discover arbitrary
+# directories or rename a preserved result to make it fit a fixture layout.
+OUTPUT_LAYOUTS = {"reversal-attempt-1": "main", "relax-attempt-1": "relax"}
 MAX_METADATA_BYTES = 32 * 1024 * 1024
 MAX_STAGES = 4096
 MAX_OUTPUTS = 200
@@ -110,7 +112,7 @@ def _output_file(path):
     return _regular_file(path)
 
 
-def _check_output_declarations(output_root, outputs):
+def _check_output_declarations(output_root, outputs, target):
     _require(isinstance(outputs, list) and 0 < len(outputs) <= MAX_OUTPUTS,
              "Terminal run has no bounded declared outputs")
     declarations = {}
@@ -130,7 +132,7 @@ def _check_output_declarations(output_root, outputs):
         else:
             _output_file(path)
         declarations[raw_path] = kind
-    required = {"main.autosave.json": "autosave_manifest", "main.zarr": "zarr_store",
+    required = {f"{target}.autosave.json": "autosave_manifest", f"{target}.zarr": "zarr_store",
                 "output-storage.json": "storage_receipt"}
     _require(all(declarations.get(path) == kind for path, kind in required.items()),
              "Terminal run does not declare its autosave, Zarr and storage receipt")
@@ -184,16 +186,16 @@ def _safe_stage(stage):
     return f"stage_{stage_index:04d}_{stage_id}"
 
 
-def _stage_metadata(main_zarr, autosave):
+def _stage_metadata(main_zarr, autosave, target):
     if (autosave.get("schema_version") != "fullmag.stage_autosave.artifact.v1"
-            or autosave.get("target") != "main" or autosave.get("format") != "zarr"
+            or autosave.get("target") != target or autosave.get("format") != "zarr"
             or autosave.get("layout") not in {"continuous", "separate"}):
         raise HistoryError("Autosave artifact metadata is not a supported Zarr target")
     stages = autosave.get("stages")
     if not isinstance(stages, list) or not stages or len(stages) > MAX_STAGES:
         raise HistoryError("Autosave artifact has no bounded completed stages")
     layout = autosave["layout"]
-    _zarr_group(main_zarr, schema_version="fullmag.stage_autosave.v1", target="main")
+    _zarr_group(main_zarr, schema_version="fullmag.stage_autosave.v1", target=target)
     stages_root = main_zarr / "stages"
     _zarr_group(stages_root, require_attrs=False)
     expected_dirs = set()
@@ -204,7 +206,7 @@ def _stage_metadata(main_zarr, autosave):
     field_counts = {}
     for stage in stages:
         stage_name = _safe_stage(stage)
-        if stage.get("schema_version") != "stage_autosave.v1" or stage.get("target") != "main":
+        if stage.get("schema_version") != "stage_autosave.v1" or stage.get("target") != target:
             raise HistoryError("Autosave stage schema or target differs")
         if stage.get("format") != "zarr" or stage.get("layout") != layout or stage.get("complete") is not True:
             raise HistoryError("Autosave stage is incomplete or its layout differs")
@@ -380,9 +382,14 @@ def _validate_preserved_run(zarr: Path, run_id: str) -> dict:
     run_root = _directory(zarr / run_id)
     _zarr_group(run_root)
     direct_entries = {entry.name for entry in run_root.iterdir()}
-    _require(direct_entries == {".zgroup", ".zattrs", OUTPUT_ATTEMPT_DIRECTORY},
+    attempts = direct_entries - {".zgroup", ".zattrs"}
+    _require({".zgroup", ".zattrs"}.issubset(direct_entries) and len(attempts) == 1,
              "Preserved run has an unsupported output-attempt layout")
-    output_root = _directory(run_root / OUTPUT_ATTEMPT_DIRECTORY)
+    output_attempt = next(iter(attempts))
+    _require(output_attempt in OUTPUT_LAYOUTS,
+             "Preserved run has an unsupported output-attempt layout")
+    target = OUTPUT_LAYOUTS[output_attempt]
+    output_root = _directory(run_root / output_attempt)
     output_attrs = _zarr_group(output_root, schema_version="fullmag.project_results.v1")
 
     before_entries, before_metadata_bytes = _bounded_inventory(run_root)
@@ -408,7 +415,7 @@ def _validate_preserved_run(zarr: Path, run_id: str) -> dict:
     if (not output_posix.is_absolute() or str(output_posix) != output_dir
             or not str(output_posix).startswith("/user-data/") or ".." in output_posix.parts
             or "\\" in output_dir or "\x00" in output_dir
-            or output_posix.parts[-3:] != (zarr.name, run_id, OUTPUT_ATTEMPT_DIRECTORY)):
+            or output_posix.parts[-3:] != (zarr.name, run_id, output_attempt)):
         raise HistoryError("Accepted project output path does not bind this preserved Zarr run")
     terminal_run_id = resolved.get("run_id")
     if not isinstance(terminal_run_id, str) or not terminal_run_id or "/" in terminal_run_id or "\\" in terminal_run_id:
@@ -446,10 +453,10 @@ def _validate_preserved_run(zarr: Path, run_id: str) -> dict:
     if session_id is not None and (not isinstance(session_id, str) or not session_id):
         raise HistoryError("Accepted project session identity is malformed")
 
-    declarations = _check_output_declarations(output_root, fullmag_run.get("outputs"))
-    autosave = _read_document(output_root / "main.autosave.json", "Autosave artifact manifest")
-    main_zarr = output_root / "main.zarr"
-    stage_info = _stage_metadata(main_zarr, autosave)
+    declarations = _check_output_declarations(output_root, fullmag_run.get("outputs"), target)
+    autosave = _read_document(output_root / f"{target}.autosave.json", "Autosave artifact manifest")
+    main_zarr = output_root / f"{target}.zarr"
+    stage_info = _stage_metadata(main_zarr, autosave, target)
     if stage_info["sample_count"] == 0:
         raise HistoryError("Preserved run has no terminal autosave samples")
     index_proof = _continuous_index(main_zarr, stage_info)
@@ -459,7 +466,7 @@ def _validate_preserved_run(zarr: Path, run_id: str) -> dict:
     for row in run_stages:
         if not isinstance(row, dict) or not isinstance(row.get("id"), str):
             raise HistoryError("Terminal Fullmag stage summary is malformed")
-    _require(any(row["id"] == OUTPUT_ATTEMPT_DIRECTORY for row in run_stages),
+    _require(any(row["id"] == output_attempt for row in run_stages),
              "Terminal Fullmag manifest does not bind the preserved output attempt")
 
     after_entries, after_metadata_bytes = _bounded_inventory(run_root)

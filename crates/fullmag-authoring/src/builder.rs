@@ -6,6 +6,32 @@ use crate::scene::{
     MagnetizationMapping, SceneMaterialParameterAssignment, SceneObjectRegion, TextureTransform3D,
 };
 
+/// Brown-noise authoring transport; decimal seeds retain u64 precision in JSON/JS.
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct ScriptBuilderThermalNoiseState {
+    pub temperature: f64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub seed: Option<String>,
+}
+
+impl ScriptBuilderThermalNoiseState {
+    pub fn validate(&self) -> Result<(), &'static str> {
+        if !self.temperature.is_finite() || self.temperature <= 0.0 {
+            return Err("thermal_noise.temperature must be finite and positive kelvin");
+        }
+        if let Some(seed) = &self.seed {
+            if seed.is_empty() || seed.starts_with('0') || seed.len() > 20
+                || !seed.bytes().all(|b| b.is_ascii_digit())
+                || !matches!(seed.parse::<u64>(), Ok(value) if value > 0)
+            {
+                return Err("thermal_noise.seed must be a canonical positive u64 decimal string");
+            }
+        }
+        Ok(())
+    }
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 pub struct ScriptBuilderAdaptiveTimestepState {
     #[serde(default = "default_adaptive_tolerance_mode")]
@@ -178,6 +204,14 @@ pub struct ScriptBuilderMeshState {
     /// the loaded script value during canonical rewrites.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub order: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub domain_mesh_mode: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub domain_mesh_source: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub domain_region_markers: Option<Vec<fullmag_ir::FemDomainRegionMarkerIR>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub domain_object_region_markers: Option<Vec<fullmag_ir::FemDomainRegionMarkerIR>>,
 }
 
 impl Default for ScriptBuilderMeshState {
@@ -222,6 +256,10 @@ impl Default for ScriptBuilderMeshState {
             adaptive_max_passes: default_adaptive_mesh_max_passes(),
             adaptive_error_tolerance: String::new(),
             order: None,
+            domain_mesh_mode: None,
+            domain_mesh_source: None,
+            domain_region_markers: None,
+            domain_object_region_markers: None,
         }
     }
 }
@@ -356,12 +394,15 @@ pub enum StudyPrimitiveStageKind {
     AntennaFieldSolve,
     ChangeDevice,
     AddFieldDrive,
+    AddMaskFieldDrive,
+    UpdateMaskFieldDrive,
     RemoveFieldDrive,
     TableAutosave,
     Autosave,
     FftResponse,
     SetField,
     SetCurrent,
+    SetSpinTorqueEnabled,
     SaveState,
     LoadState,
     Export,
@@ -377,16 +418,31 @@ impl StudyPrimitiveStageKind {
         Self::AntennaFieldSolve,
         Self::ChangeDevice,
         Self::AddFieldDrive,
+        Self::AddMaskFieldDrive,
+        Self::UpdateMaskFieldDrive,
         Self::RemoveFieldDrive,
         Self::TableAutosave,
         Self::Autosave,
         Self::FftResponse,
         Self::SetField,
         Self::SetCurrent,
+        Self::SetSpinTorqueEnabled,
         Self::SaveState,
         Self::LoadState,
         Self::Export,
     ];
+
+    /// These canonical pipeline nodes configure later physical inputs in the
+    /// sequential materializer. They require no independent worker task.
+    pub fn is_pipeline_input_configuration(self) -> bool {
+        matches!(
+            self,
+            Self::SetField | Self::SetCurrent | Self::SetSpinTorqueEnabled
+                | Self::AddFieldDrive | Self::AddMaskFieldDrive
+                | Self::UpdateMaskFieldDrive | Self::RemoveFieldDrive
+                | Self::TableAutosave | Self::Autosave
+        )
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq)]
@@ -750,6 +806,8 @@ pub struct ScriptBuilderMeshInterfaceState {
 pub struct ScriptBuilderGeometryEntry {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub geometry_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_asset: Option<crate::scene::SceneImportedGeometryAssetRef>,
     pub name: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub object_id: Option<String>,
@@ -775,7 +833,7 @@ pub struct ScriptBuilderGeometryEntry {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub material_parameter_fields: Vec<SceneMaterialParameterAssignment>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub absorbing_boundary: Option<fullmag_ir::AbsorbingBoundaryLayerIR>,
+    pub absorbing_boundary: Option<fullmag_ir::AbsorbingBoundaryIR>,
     /// Authored presentation only; this map never selects or activates physics.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub visualization_hint: BTreeMap<String, Value>,
@@ -910,11 +968,15 @@ pub struct ScriptBuilderState {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cpu_threads: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub compute_resources: Option<fullmag_ir::ComputeResourcesIR>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub parallel_execution: Option<fullmag_ir::ParallelExecutionPolicyIR>,
     #[serde(default)]
     pub pbc: Option<fullmag_ir::FdmPeriodicityIR>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fem_demag_solver_policy: Option<fullmag_ir::FemLinearSolverPolicy>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fem_bb_preconditioner: Option<fullmag_ir::FemGpuBbPreconditionerIR>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fem_demag_accuracy_contract: Option<fullmag_ir::FemDemagAccuracyContractIR>,
     #[serde(default = "default_true")]
@@ -927,6 +989,8 @@ pub struct ScriptBuilderState {
     pub fdm: Option<ScriptBuilderFdmState>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub external_field: Option<[f64; 3]>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thermal_noise: Option<ScriptBuilderThermalNoiseState>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rotated_interfacial_dmi: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -955,10 +1019,14 @@ pub struct ScriptBuilderState {
     pub initial_state: Option<ScriptBuilderInitialState>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub geometries: Vec<ScriptBuilderGeometryEntry>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub material_assets: Option<crate::SceneMaterialAssetsMetadata>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub mesh_interfaces: Vec<ScriptBuilderMeshInterfaceState>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub field_drives: Vec<fullmag_ir::RegionalFieldDriveIR>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub mask_field_drives: Vec<fullmag_ir::MaskFieldDriveIR>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub planar_monitors: Vec<fullmag_ir::PlanarMonitorIR>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -1051,9 +1119,48 @@ fn default_solver_max_steps() -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        ScriptBuilderPerGeometryMeshState, ScriptBuilderSolverState, StudyPipelineDocument,
-        StudyPipelineNode, StudyPrimitiveStageKind,
+        ScriptBuilderMeshState, ScriptBuilderPerGeometryMeshState, ScriptBuilderSolverState,
+        StudyPipelineDocument, StudyPipelineNode, StudyPrimitiveStageKind,
     };
+
+    #[test]
+    fn explicit_shared_domain_mesh_fields_survive_builder_serde_round_trip() {
+        let authored = serde_json::json!({
+            "domain_mesh_mode": "explicit_shared_domain_mesh",
+            "domain_mesh_source": "/user-data/fullmag-domain-roundtrip/relax.mesh.json",
+            "domain_region_markers": [
+                {"geometry_name": "left", "marker": 1},
+                {"geometry_name": "right", "marker": 2}
+            ],
+            "domain_object_region_markers": [
+                {"geometry_name": "left:core", "marker": 3}
+            ]
+        });
+        let mesh: ScriptBuilderMeshState = serde_json::from_value(authored.clone())
+            .expect("explicit shared-domain mesh state should deserialize");
+        let serialized = serde_json::to_value(&mesh).unwrap();
+
+        for key in [
+            "domain_mesh_mode",
+            "domain_mesh_source",
+            "domain_region_markers",
+            "domain_object_region_markers",
+        ] {
+            assert_eq!(serialized.get(key), authored.get(key), "field {key} was lost");
+        }
+
+        let legacy: ScriptBuilderMeshState = serde_json::from_value(serde_json::json!({}))
+            .expect("legacy mesh state without shared-domain declaration should deserialize");
+        let legacy_serialized = serde_json::to_value(legacy).unwrap();
+        for key in [
+            "domain_mesh_mode",
+            "domain_mesh_source",
+            "domain_region_markers",
+            "domain_object_region_markers",
+        ] {
+            assert!(legacy_serialized.get(key).is_none(), "unexpected default for {key}");
+        }
+    }
 
     #[test]
     fn legacy_swept_ir_defaults_do_not_claim_exact_mixed_topology() {
@@ -1240,6 +1347,28 @@ mod tests {
                 .and_then(|value| value.as_str()),
             Some("k0-sinc")
         );
+    }
+
+    #[test]
+    fn script_imported_spin_torque_toggle_is_an_input_configuration() {
+        let document: StudyPipelineDocument = serde_json::from_value(serde_json::json!({
+            "version": "study_pipeline.v1",
+            "nodes": [{
+                "id": "pulse-on",
+                "label": "Pulse on",
+                "source": "script_imported",
+                "node_kind": "primitive",
+                "stage_kind": "set_spin_torque_enabled",
+                "payload": {"module_id": "pulse-torque", "enabled": true}
+            }]
+        }))
+        .expect("script-imported STT toggle must deserialize");
+
+        let StudyPipelineNode::Primitive(node) = &document.nodes[0] else {
+            panic!("expected primitive spin torque toggle");
+        };
+        assert_eq!(node.stage_kind, StudyPrimitiveStageKind::SetSpinTorqueEnabled);
+        assert!(node.stage_kind.is_pipeline_input_configuration());
     }
 
     #[test]

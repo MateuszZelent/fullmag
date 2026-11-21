@@ -13,6 +13,9 @@ const page = await browser.newPage({ viewport: { width: 1440, height: 1000 } });
 page.on("pageerror", error => report.errors.push(error.message));
 const panel = page.getByRole("region", { name: "Simulation preparation window", exact: true });
 const button = name => page.getByRole("button", { name, exact: true });
+// Fixture controls can sit under the floating window, which is the point of a
+// non-modal window; drive them by keyboard so the check never depends on layout.
+const fixture = name => button(name).press("Enter");
 const box = async () => {
   const value = await panel.boundingBox();
   assert.ok(value, "Preparation window must be visible");
@@ -20,6 +23,8 @@ const box = async () => {
 };
 try {
   await page.goto(new URL("/dev/simulation-preparation", baseUrl).href, { waitUntil: "domcontentloaded" });
+  // The server-rendered window is visible before hydration attaches its handlers.
+  await page.locator("main[data-hydrated]").waitFor();
   await panel.waitFor();
   assert.equal(await panel.evaluate(el => getComputedStyle(el).pointerEvents), "auto");
   assert.equal(await page.locator('[aria-modal="true"]').count(), 0);
@@ -90,7 +95,7 @@ try {
   await page.mouse.wheel(0, -10000);
   await button("Return to live log tail").waitFor();
   const scrollBefore = await viewport.evaluate(el => el.scrollTop);
-  await button("Append log entry").click();
+  await fixture("Append log entry");
   await page.getByText(/Showing 61 of 61 entries/).waitFor();
   assert.equal(await viewport.evaluate(el => el.scrollTop), scrollBefore);
   await button("Return to live log tail").click();
@@ -104,20 +109,20 @@ try {
   await button("Show simulation preparation").waitFor();
   await page.waitForFunction(() => document.activeElement?.matches("[data-preparation-restore]"));
   assert.equal(await panel.count(), 0);
-  await button("failed").click();
+  await fixture("failed");
   assert.equal(await panel.count(), 0);
   await button("Show simulation preparation").click();
   await page.waitForFunction(() => document.activeElement?.matches("[data-window-move]"));
   assert.equal(await panel.getByText("Simulation preparation failed", { exact: true }).isVisible(), true);
   await button("Close simulation preparation").click();
   await page.waitForFunction(() => document.activeElement?.matches("[data-preparation-restore]"));
-  await button("stale").click();
+  await fixture("stale");
   assert.equal(await panel.count(), 0);
   await button("Show simulation preparation").click();
   await button("Move window with arrow keys").press("Escape");
   await page.waitForFunction(() => document.activeElement?.matches("[data-preparation-restore]"));
   assert.equal(await panel.count(), 0);
-  await button("New preparation").click();
+  await fixture("New preparation");
   await panel.waitFor();
   assert.equal(await draft.inputValue(), "Keep this unsaved draft");
   report.steps.push("minimize, close, Escape, focus restoration, failure while hidden and new attempt");
@@ -141,7 +146,7 @@ try {
   await page.setViewportSize({ width: 1440, height: 1000 });
   await page.screenshot({ path: resolve(output, "preparation-window.png") });
   report.steps.push("narrow viewport containment and readable log height; short viewport containment");
-  await button("ready").click();
+  await fixture("ready");
   assert.equal(await panel.count(), 0);
   assert.equal(await button("Show simulation preparation").count(), 0);
   const statusEntry = button("Show simulation preparation: Simulation ready");

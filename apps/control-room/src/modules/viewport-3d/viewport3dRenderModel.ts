@@ -1,3 +1,9 @@
+import type { LivePhaseUniform } from "@/kernel/visualization/livePhaseUniform";
+import {
+  buildComplexVectorGlyphsFromSegments,
+  complexVectorGlyphColorRange,
+  type Viewport3DComplexVectorGlyphs,
+} from "./layers/complexVectorGlyphs";
 import type {
   DomainMetaResource,
   UniverseResource,
@@ -264,7 +270,21 @@ export interface Viewport3DTargetRenderPassModel {
     nodeIndices?: Uint32Array | null;
     glyphColors?: Float32Array | null;
     colorScale?: Viewport3DVisibleColorScale | null;
+    /**
+     * GPU-phased glyphs for a complex analysis field. When present, layers
+     * draw these instead of `segments`, which then only carry anchors.
+     */
+    complexGlyphs?: Viewport3DComplexGlyphPass | null;
   };
+}
+
+export interface Viewport3DComplexGlyphPass {
+  colorMode: string;
+  /** Phase-independent color range in field units (explicit or envelope). */
+  colorRange: ScalarRange | null;
+  glyphs: Viewport3DComplexVectorGlyphs;
+  palette: string | null;
+  phase: Viewport3DComplexPhaseBinding;
 }
 
 export interface Viewport3DVectorBuildReference {
@@ -324,7 +344,14 @@ export interface Viewport3DFieldRenderOptions {
   targetVisualizationRevision?: string | number | null;
   topologyRevision?: string | number | null;
   vectorColorMode?: string;
+  /**
+   * Static display phase. Ignored for data: complex arrays, ranges and glyph
+   * anchors never depend on it, and shaders read `complexPhaseUniform` when
+   * one is supplied.
+   */
   visualizationPhaseRad?: number | null;
+  /** Shared live phase cell bound into every complex surface and glyph. */
+  complexPhaseUniform?: LivePhaseUniform | null;
   wavevectorKf?: [number, number, number];
   cellOrigin?: [number, number, number];
   floquetSpatialConvention?: string;
@@ -421,7 +448,7 @@ const scalarColorCache = new WeakMap<
   Viewport3DFieldVector,
   Map<string, ScalarColorBuffer | null>
 >();
-const complexPhaseProjectionCache = new WeakMap<
+const complexEnvelopeCarrierCache = new WeakMap<
   DecodedComplexFieldVector,
   Map<string, DecodedFieldVector>
 >();
@@ -778,17 +805,35 @@ export function buildViewport3DFieldRenderModel(
   options: Viewport3DFieldRenderOptions = {},
 ): Viewport3DFieldRenderModel | null {
   if (!topology) return null;
-  const visualizationPhaseRad = finitePhaseRad(options.visualizationPhaseRad);
+  const complexPhaseUniform = options.complexFieldVector
+    ? options.complexPhaseUniform ?? null
+    : null;
+  // Diagnostic only: the phase at build time. No array below depends on it.
+  const visualizationPhaseRad = finitePhaseRad(
+    options.visualizationPhaseRad ?? complexPhaseUniform?.value,
+  );
   const modeOverlay = resolveViewport3DModeFieldOverlayRenderState(
     options.modeOverlay,
     visualizationPhaseRad,
   );
-  const phaseProjectedComplexFieldVector = buildCachedComplexPhaseProjection(
-    options.complexFieldVector,
-    visualizationPhaseRad,
-  );
+  const complexPhaseBinding: Viewport3DComplexPhaseBinding | null =
+    options.complexFieldVector && visualizationPhaseRad !== null
+      ? {
+          cellOrigin: options.cellOrigin,
+          floquetSpatialConvention: options.floquetSpatialConvention,
+          phaseRad: visualizationPhaseRad,
+          phasorConvention: options.phasorConvention,
+          uniform: complexPhaseUniform,
+          wavevectorKf: options.wavevectorKf,
+        }
+      : null;
+  const complexCarrierFieldVector =
+    complexPhaseBinding && options.complexFieldVector
+      ? buildCachedComplexEnvelopeCarrier(options.complexFieldVector)
+      : null;
+  const scalarRangesByMode = options.scalarRangesByMode;
   const renderFieldVector =
-    phaseProjectedComplexFieldVector ??
+    complexCarrierFieldVector ??
     (options.analysisFieldIntentActive ? null : fieldVector);
   const fullFieldVector = isFullTopologyFieldVector(
     renderFieldVector,
@@ -826,7 +871,7 @@ export function buildViewport3DFieldRenderModel(
                   topology.nodeCount,
                   colorMode,
                   options.scalarColorPalette,
-                  options.scalarRangesByMode?.get(colorMode),
+                  scalarRangesByMode?.get(colorMode),
                 )
               : buildCachedMappedVertexScalarColors(
                   topology,
@@ -834,7 +879,7 @@ export function buildViewport3DFieldRenderModel(
                   magneticFieldNodeIndices,
                   colorMode,
                   options.scalarColorPalette,
-                  options.scalarRangesByMode?.get(colorMode),
+                  scalarRangesByMode?.get(colorMode),
                 ),
           ]),
         );
@@ -843,11 +888,8 @@ export function buildViewport3DFieldRenderModel(
     options.complexFieldVector,
     fullFieldVector ? null : magneticFieldNodeIndices,
     topology.nodeCount,
-    visualizationPhaseRad,
-    options.wavevectorKf,
-    options.cellOrigin,
-    options.floquetSpatialConvention,
-    options.phasorConvention,
+    complexPhaseBinding,
+    scalarRangesByMode,
   );
   const scalarColors =
     scalarColorsByMode.get(options.vectorColorMode ?? "magnitude") ?? null;
@@ -868,8 +910,9 @@ export function buildViewport3DFieldRenderModel(
   for (const partModel of [...topology.magneticParts, ...topology.airboxParts]) {
     const partId = partModel.part.id;
     const targetRenderPlan = options.targetRenderPlans?.get(partId) ?? null;
+    const targetProjectionMode = targetRenderPlan?.shader.projectionMode ?? "raw_nodal";
     const thicknessProjectionNodeMembership =
-      targetRenderPlan?.shader.projectionMode === "thickness_average_z"
+      targetProjectionMode === "thickness_average_z"
         ? buildViewport3DProjectionNodeMembership(
             partModel.fullNodeSelection,
             topology.nodeCount,
@@ -1017,9 +1060,9 @@ export function buildViewport3DFieldRenderModel(
       partScalarColorModes.size > 0
     ) {
       const partScalarRangesByMode = options.analysisFieldIntentActive
-        ? options.scalarRangesByMode
+        ? scalarRangesByMode
         : options.partScalarRangesByMode?.get(partId) ??
-          (partFieldVector === renderFieldVector ? options.scalarRangesByMode : null);
+          (partFieldVector === renderFieldVector ? scalarRangesByMode : null);
       partScalarColorsByMode = new Map<string, ScalarColorBuffer | null>();
       for (const colorMode of partScalarColorModes) {
         if (!colorMode) continue;
@@ -1031,10 +1074,10 @@ export function buildViewport3DFieldRenderModel(
                 explicitPartFieldBuffer,
                 colorMode,
                 partQuantityId,
-                targetRenderPlan?.shader.projectionMode ?? "raw_nodal",
+              targetProjectionMode ?? "raw_nodal",
               )
             ? null
-            : targetRenderPlan?.shader.projectionMode === "surface_faces"
+            : targetProjectionMode === "surface_faces"
             ? buildCachedSurfaceFaceScalarColors(
                 partModel,
                 topology,
@@ -1044,7 +1087,7 @@ export function buildViewport3DFieldRenderModel(
                 partScalarRangesByMode?.get(colorMode),
                 partProjectionFieldNodeIndices,
               )
-            : targetRenderPlan?.shader.projectionMode === "thickness_average_z"
+            : targetProjectionMode === "thickness_average_z"
             ? buildCachedThicknessAverageZScalarColors(
                 partModel,
                 topology,
@@ -1077,7 +1120,7 @@ export function buildViewport3DFieldRenderModel(
         if (
           options.analysisFieldIntentActive &&
           options.complexFieldVector &&
-          visualizationPhaseRad !== null &&
+          complexPhaseBinding &&
           scalarColorsWithIdentity
         ) {
           const complexNodeIndices = fullFieldVector
@@ -1086,10 +1129,13 @@ export function buildViewport3DFieldRenderModel(
               ? resolveFieldVectorNodeIndices(renderFieldVector, topology)
               : null;
           const projectionMode = scalarColorsWithIdentity.projectionMode;
+          const explicitRange = partScalarRangesByMode?.get(colorMode) ?? null;
           if (
             projectionMode === "surface_faces" ||
             projectionMode === "thickness_average_z"
           ) {
+            // Depends on the target membership, so it is rebuilt with the
+            // render model; it never depends on the display phase.
             const projectedComplexValues =
               buildProjectedComplexSurfaceShaderValues({
                 complexFieldVector: options.complexFieldVector,
@@ -1114,13 +1160,12 @@ export function buildViewport3DFieldRenderModel(
                 projectedComplexValues.complexRealValues;
               scalarColorsWithIdentity.complexImagValues =
                 projectedComplexValues.complexImagValues;
-              scalarColorsWithIdentity.complexPhaseRad = visualizationPhaseRad;
-              scalarColorsWithIdentity.wavevectorKf = options.wavevectorKf;
-              scalarColorsWithIdentity.cellOrigin = options.cellOrigin;
-              scalarColorsWithIdentity.floquetSpatialConvention =
-                options.floquetSpatialConvention;
-              scalarColorsWithIdentity.phasorConvention =
-                options.phasorConvention;
+              applyComplexPhaseBinding(
+                scalarColorsWithIdentity,
+                complexPhaseBinding,
+                colorMode,
+                explicitRange,
+              );
             }
           } else {
             attachComplexShaderValues(
@@ -1128,11 +1173,9 @@ export function buildViewport3DFieldRenderModel(
               options.complexFieldVector,
               complexNodeIndices,
               topology.nodeCount,
-              visualizationPhaseRad,
-              options.wavevectorKf,
-              options.cellOrigin,
-              options.floquetSpatialConvention,
-              options.phasorConvention,
+              complexPhaseBinding,
+              colorMode,
+              explicitRange,
             );
           }
         }
@@ -1217,6 +1260,39 @@ export function buildViewport3DFieldRenderModel(
       vectorSurfaceOffsetScale: surfaceOffsetScale,
     });
     partVectorBuilds.set(partId, partVectorBuildReference);
+    const partComplexGlyphData =
+      complexPhaseBinding &&
+      options.complexFieldVector &&
+      partSegmentBuild &&
+      partFieldVector === renderFieldVector
+        ? buildComplexVectorGlyphsFromSegments({
+            anchorMode,
+            buildKey:
+              partVectorBuildReference?.buildKey ?? `${partId}:complex-glyphs`,
+            complexField: options.complexFieldVector,
+            nodeIndices: partSegmentBuild.nodeIndices,
+            positions: topology.positions,
+            sampleIndices:
+              partSegmentBuild.valueIndices ?? partSegmentBuild.nodeIndices,
+            segments: partSegmentBuild.segments,
+          })
+        : null;
+    const partComplexGlyphs: Viewport3DComplexGlyphPass | null =
+      partComplexGlyphData && complexPhaseBinding
+        ? {
+            colorMode: glyphColorMode,
+            colorRange:
+              (options.analysisFieldIntentActive
+                ? scalarRangesByMode
+                : options.partScalarRangesByMode?.get(partId) ?? scalarRangesByMode
+              )?.get(glyphColorMode) ??
+              partScalarColorsByMode?.get(glyphColorMode)?.range ??
+              complexVectorGlyphColorRange(partComplexGlyphData, glyphColorMode),
+            glyphs: partComplexGlyphData,
+            palette: partScalarColorPalette ?? null,
+            phase: complexPhaseBinding,
+          }
+        : null;
     const activePartScalarColors =
       partSurfaceScalarColorMode == null
         ? null
@@ -1235,12 +1311,11 @@ export function buildViewport3DFieldRenderModel(
           colorMode: partSurfaceScalarColorMode ?? null,
           explicitPartFieldBuffer,
           quantityId: partQuantityId,
-          projectionMode: targetRenderPlan?.shader.projectionMode ?? "raw_nodal",
+          projectionMode: targetProjectionMode,
           scalarColors: activePartScalarColors,
         }),
         passId: `${partId}:surface`,
-        projectionMode:
-          targetRenderPlan?.shader.projectionMode ?? "raw_nodal",
+        projectionMode: targetProjectionMode,
         scalarColorMode: partSurfaceScalarColorMode ?? null,
         scalarColors: activePartScalarColors,
       },
@@ -1256,7 +1331,9 @@ export function buildViewport3DFieldRenderModel(
         segments: partSegments,
         nodeIndices: partSegmentBuild?.nodeIndices ?? null,
         glyphColors: physicalGlyphColors?.colors ?? null,
-        colorScale: physicalGlyphColors?.scale ?? null,
+        colorScale: visibleComplexGlyphScale(partComplexGlyphs, partFieldVector?.quantityId) ??
+          physicalGlyphColors?.scale ?? null,
+        complexGlyphs: partComplexGlyphs,
       },
     });
   }
@@ -1315,7 +1392,7 @@ export function buildViewport3DFieldRenderModel(
               topology.nodeCount,
               fullScalarColorMode,
               fullScalarColorPalette,
-              options.scalarRangesByMode?.get(fullScalarColorMode),
+              scalarRangesByMode?.get(fullScalarColorMode),
             )
           : buildCachedMappedVertexScalarColors(
               topology,
@@ -1323,9 +1400,41 @@ export function buildViewport3DFieldRenderModel(
               magneticFieldNodeIndices,
               fullScalarColorMode,
               fullScalarColorPalette,
-              options.scalarRangesByMode?.get(fullScalarColorMode),
+              scalarRangesByMode?.get(fullScalarColorMode),
             );
+  const resolveFullComplexGlyphPass = (): Viewport3DComplexGlyphPass | null => {
+    if (
+      !fullTargetVectorsRequested ||
+      !complexPhaseBinding ||
+      !options.complexFieldVector ||
+      !fullSegmentBuild
+    ) {
+      return null;
+    }
+    const glyphs = buildComplexVectorGlyphsFromSegments({
+      anchorMode: fullVectorAnchorMode,
+      buildKey: fullVectorBuild?.buildKey ?? "full:complex-glyphs",
+      complexField: options.complexFieldVector,
+      nodeIndices: fullSegmentBuild.nodeIndices,
+      positions: topology.positions,
+      sampleIndices: fullSegmentBuild.valueIndices ?? fullSegmentBuild.nodeIndices,
+      segments: fullSegmentBuild.segments,
+    });
+    const colorMode = options.vectorColorMode ?? "orientation";
+    return glyphs
+      ? {
+          colorMode,
+          colorRange: scalarRangesByMode?.get(colorMode) ??
+            (fullScalarColors?.colorMode === colorMode ? fullScalarColors.range : null) ??
+            complexVectorGlyphColorRange(glyphs, colorMode),
+          glyphs,
+          palette: fullScalarColorPalette ?? null,
+          phase: complexPhaseBinding,
+        }
+      : null;
+  };
   if (fullScalarColorMode || fullTargetVectorsRequested) {
+    const fullComplexGlyphs = resolveFullComplexGlyphPass();
     targetPasses.set(FULL_VIEWPORT_3D_TARGET_ID, {
       fieldBuffer: null,
       fieldBufferState: fullFieldVector ? "derived-global" : "missing",
@@ -1351,13 +1460,14 @@ export function buildViewport3DFieldRenderModel(
         passId: `${FULL_VIEWPORT_3D_TARGET_ID}:vector-glyph`,
         segments: fullTargetVectorsRequested ? fullVectorSegments : null,
         nodeIndices: fullTargetVectorsRequested ? fullSegmentBuild?.nodeIndices ?? null : null,
+        complexGlyphs: fullComplexGlyphs,
+        colorScale: visibleComplexGlyphScale(fullComplexGlyphs, renderFieldVector?.quantityId),
       },
     });
   }
   const derivedWorkItems = planViewport3DDerivedWorkItems({
-    complexFieldVector: options.complexFieldVector,
+    complexFieldVector: complexPhaseBinding ? options.complexFieldVector : null,
     targetPasses,
-    visualizationPhaseRad,
   });
   const targetDiagnostics = summarizeViewport3DTargetDiagnostics({
     derivedWorkItems,
@@ -1385,6 +1495,21 @@ export function buildViewport3DFieldRenderModel(
     targetDiagnostics,
     targetPasses,
     visualizationPhaseRad,
+  };
+}
+
+function visibleComplexGlyphScale(
+  pass: Viewport3DComplexGlyphPass | null,
+  quantityId: string | undefined,
+): Viewport3DVisibleColorScale | null {
+  if (!pass?.colorRange || !quantityId || !["magnitude", "x", "y", "z"].includes(pass.colorMode)) {
+    return null;
+  }
+  return {
+    colorMode: pass.colorMode,
+    colorPalette: pass.palette ?? "viridis",
+    quantityId,
+    range: pass.colorRange,
   };
 }
 
@@ -1680,49 +1805,47 @@ function finitePhaseRad(value: number | null | undefined): number | null {
   return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
 
-function buildCachedComplexPhaseProjection(
-  complexFieldVector: DecodedComplexFieldVector | null | undefined,
-  phaseRad: number | null | undefined,
-): DecodedFieldVector | null {
-  const phase = finitePhaseRad(phaseRad);
-  if (!complexFieldVector || phase === null) return null;
-  const cacheKey = `${complexFieldVector.componentCount}:${phase}`;
+export interface Viewport3DComplexPhaseBinding {
+  cellOrigin?: [number, number, number];
+  floquetSpatialConvention?: string;
+  /** Phase at build time, kept for diagnostics and static consumers. */
+  phaseRad: number;
+  phasorConvention?: string;
+  /** Shared live cell; when set, shaders read the phase from it. */
+  uniform: LivePhaseUniform | null;
+  wavevectorKf?: [number, number, number];
+}
+
+/**
+ * Phase-independent real carrier for a complex field: per component the
+ * cycle envelope sqrt(Re^2 + Im^2). It drives sampling, node mapping and the
+ * CPU fallback colors; the visible complex values are projected on the GPU.
+ * A node is zero here only when its complex amplitude is zero, so glyph
+ * selection does not change with the display phase.
+ */
+function buildCachedComplexEnvelopeCarrier(
+  complexFieldVector: DecodedComplexFieldVector,
+): DecodedFieldVector {
   return getCachedValue(
-    complexPhaseProjectionCache,
+    complexEnvelopeCarrierCache,
     complexFieldVector,
-    cacheKey,
-    () => buildComplexPhaseProjection(complexFieldVector, phase),
-    "viewport3d.render.complexPhaseProjectionCache",
+    `envelope:${complexFieldVector.componentCount}`,
+    () => buildComplexEnvelopeCarrier(complexFieldVector),
+    "viewport3d.render.complexEnvelopeCarrierCache",
   );
 }
 
-function buildComplexPhaseProjection(
+function buildComplexEnvelopeCarrier(
   complexFieldVector: DecodedComplexFieldVector,
-  phaseRad: number,
 ): DecodedFieldVector {
   const componentCount = complexFieldVector.componentCount;
-  const projectedValues = new Float64Array(
+  const envelopeValues = new Float64Array(
     complexFieldVector.pointCount * componentCount,
   );
-  const cosPhase = Math.cos(phaseRad);
-  const sinPhase = Math.sin(phaseRad);
-
-  for (
-    let pointIndex = 0;
-    pointIndex < complexFieldVector.pointCount;
-    pointIndex += 1
-  ) {
-    for (
-      let componentIndex = 0;
-      componentIndex < componentCount;
-      componentIndex += 1
-    ) {
-      const source = (pointIndex * componentCount + componentIndex) * 2;
-      const target = pointIndex * componentCount + componentIndex;
-      const real = complexFieldVector.values[source] ?? 0;
-      const imag = complexFieldVector.values[source + 1] ?? 0;
-      projectedValues[target] = real * cosPhase - imag * sinPhase;
-    }
+  for (let target = 0; target < envelopeValues.length; target += 1) {
+    const real = complexFieldVector.values[target * 2] ?? 0;
+    const imag = complexFieldVector.values[target * 2 + 1] ?? 0;
+    envelopeValues[target] = Math.hypot(real, imag);
   }
 
   return {
@@ -1739,9 +1862,94 @@ function buildComplexPhaseProjection(
     quantityId: complexFieldVector.quantityId,
     scopeId: complexFieldVector.scopeId,
     scopeKind: complexFieldVector.scopeKind,
-    valueCount: projectedValues.length,
-    values: projectedValues,
+    valueCount: envelopeValues.length,
+    values: envelopeValues,
   };
+}
+
+const complexEnvelopeRangeCache = new WeakMap<
+  Float32Array,
+  Map<string, ScalarRange>
+>();
+
+/**
+ * Color range that holds for the whole oscillation cycle of the per-vertex
+ * complex values: magnitude [0, max sqrt(|Re|^2 + |Im|^2)] and, per
+ * component c, +/- max hypot(Re_c, Im_c). Cached per attribute array.
+ */
+export function complexEnvelopeScalarRange(
+  complexRealValues: Float32Array,
+  complexImagValues: Float32Array,
+  colorMode: string,
+): ScalarRange | null {
+  const componentIndex =
+    colorMode === "x" ? 0 : colorMode === "y" ? 1 : colorMode === "z" ? 2 : null;
+  if (componentIndex === null && colorMode !== "magnitude") return null;
+  let byMode = complexEnvelopeRangeCache.get(complexRealValues);
+  if (!byMode) {
+    byMode = new Map();
+    complexEnvelopeRangeCache.set(complexRealValues, byMode);
+  }
+  const cached = byMode.get(colorMode);
+  if (cached) return cached;
+  let maximum = 0;
+  const vertexCount = Math.floor(
+    Math.min(complexRealValues.length, complexImagValues.length) / 3,
+  );
+  for (let vertex = 0; vertex < vertexCount; vertex += 1) {
+    const offset = vertex * 3;
+    let value = 0;
+    if (componentIndex === null) {
+      for (let component = 0; component < 3; component += 1) {
+        const real = complexRealValues[offset + component]!;
+        const imag = complexImagValues[offset + component]!;
+        value += real * real + imag * imag;
+      }
+      value = Math.sqrt(value);
+    } else {
+      value = Math.hypot(
+        complexRealValues[offset + componentIndex]!,
+        complexImagValues[offset + componentIndex]!,
+      );
+    }
+    if (Number.isFinite(value) && value > maximum) maximum = value;
+  }
+  const extent = Math.max(maximum, 1e-30);
+  const range =
+    componentIndex === null ? { max: extent, min: 0 } : { max: extent, min: -extent };
+  byMode.set(colorMode, range);
+  return range;
+}
+
+/**
+ * Binds the shared phase cell and, unless the user fixed the range, replaces
+ * the CPU carrier range with the phase-independent cycle envelope, so colors
+ * keep one scale over the whole animation.
+ */
+function applyComplexPhaseBinding(
+  buffer: ScalarColorBuffer,
+  binding: Viewport3DComplexPhaseBinding,
+  colorMode: string,
+  explicitRange: ScalarRange | null,
+): void {
+  if (!explicitRange && buffer.complexRealValues && buffer.complexImagValues) {
+    const envelopeRange = complexEnvelopeScalarRange(
+      buffer.complexRealValues,
+      buffer.complexImagValues,
+      colorMode,
+    );
+    if (envelopeRange) buffer.range = envelopeRange;
+  }
+  buffer.complexPhaseRad = binding.phaseRad;
+  if (binding.uniform) {
+    buffer.complexPhaseUniform = binding.uniform;
+  } else {
+    delete buffer.complexPhaseUniform;
+  }
+  buffer.wavevectorKf = binding.wavevectorKf;
+  buffer.cellOrigin = binding.cellOrigin;
+  buffer.floquetSpatialConvention = binding.floquetSpatialConvention;
+  buffer.phasorConvention = binding.phasorConvention;
 }
 
 function attachComplexShaderValuesByMode(
@@ -1749,38 +1957,41 @@ function attachComplexShaderValuesByMode(
   complexFieldVector: DecodedComplexFieldVector | null | undefined,
   targetNodeIndices: Uint32Array | null,
   vertexCount: number,
-  phaseRad: number | null,
-  wavevectorKf?: [number, number, number],
-  cellOrigin?: [number, number, number],
-  floquetSpatialConvention?: string,
-  phasorConvention?: string,
+  binding: Viewport3DComplexPhaseBinding | null,
+  explicitRanges: ReadonlyMap<string, ScalarRange> | undefined,
 ): void {
-  if (!complexFieldVector || phaseRad === null) return;
-  for (const buffer of scalarColorsByMode.values()) {
+  if (!complexFieldVector || !binding) return;
+  for (const [colorMode, buffer] of scalarColorsByMode) {
     attachComplexShaderValues(
       buffer,
       complexFieldVector,
       targetNodeIndices,
       vertexCount,
-      phaseRad,
-      wavevectorKf,
-      cellOrigin,
-      floquetSpatialConvention,
-      phasorConvention,
+      binding,
+      colorMode,
+      explicitRanges?.get(colorMode) ?? null,
     );
   }
 }
 
+const complexShaderValueCache = new WeakMap<
+  DecodedComplexFieldVector,
+  Map<string, { complexImagValues: Float32Array; complexRealValues: Float32Array } | null>
+>();
+
+/**
+ * Attaches the per-vertex real and imaginary parts once per complex field and
+ * mapping. The arrays are cached, so rebuilding the render model for an
+ * unrelated reason reuses them and the GPU upload is skipped.
+ */
 function attachComplexShaderValues(
   buffer: ScalarColorBuffer | null,
   complexFieldVector: DecodedComplexFieldVector,
   targetNodeIndices: Uint32Array | null,
   vertexCount: number,
-  phaseRad: number,
-  wavevectorKf?: [number, number, number],
-  cellOrigin?: [number, number, number],
-  floquetSpatialConvention?: string,
-  phasorConvention?: string,
+  binding: Viewport3DComplexPhaseBinding,
+  colorMode: string,
+  explicitRange: ScalarRange | null,
 ): void {
   if (!buffer || complexFieldVector.pointCount <= 0) return;
   const fullTopologyField = complexFieldVector.pointCount === vertexCount;
@@ -1788,7 +1999,31 @@ function attachComplexShaderValues(
   if (targetNodeIndices && targetNodeIndices.length < complexFieldVector.pointCount) {
     return;
   }
+  // Scoped indices are derived from the complex field's own node indices and
+  // the vertex count, so (field, vertexCount, mapping kind) identifies them.
+  const values = getCachedValue(
+    complexShaderValueCache,
+    complexFieldVector,
+    `${vertexCount}:${fullTopologyField ? "full" : "scoped"}`,
+    () =>
+      buildComplexShaderValues(
+        complexFieldVector,
+        fullTopologyField ? null : targetNodeIndices,
+        vertexCount,
+      ),
+    "viewport3d.render.complexShaderValueCache",
+  );
+  if (!values) return;
+  buffer.complexRealValues = values.complexRealValues;
+  buffer.complexImagValues = values.complexImagValues;
+  applyComplexPhaseBinding(buffer, binding, colorMode, explicitRange);
+}
 
+function buildComplexShaderValues(
+  complexFieldVector: DecodedComplexFieldVector,
+  targetNodeIndices: Uint32Array | null,
+  vertexCount: number,
+): { complexImagValues: Float32Array; complexRealValues: Float32Array } {
   const complexRealValues = new Float32Array(vertexCount * 3);
   const complexImagValues = new Float32Array(vertexCount * 3);
   const componentCount = complexFieldVector.componentCount;
@@ -1798,9 +2033,9 @@ function attachComplexShaderValues(
     pointIndex < complexFieldVector.pointCount;
     pointIndex += 1
   ) {
-    const nodeIndex = fullTopologyField
-      ? pointIndex
-      : targetNodeIndices?.[pointIndex] ?? -1;
+    const nodeIndex = targetNodeIndices
+      ? targetNodeIndices[pointIndex] ?? -1
+      : pointIndex;
     if (nodeIndex < 0 || nodeIndex >= vertexCount) continue;
 
     const target = nodeIndex * 3;
@@ -1820,14 +2055,7 @@ function attachComplexShaderValues(
         complexFieldVector.values[source + 5] ?? 0;
     }
   }
-
-  buffer.complexRealValues = complexRealValues;
-  buffer.complexImagValues = complexImagValues;
-  buffer.complexPhaseRad = phaseRad;
-  buffer.wavevectorKf = wavevectorKf;
-  buffer.cellOrigin = cellOrigin;
-  buffer.floquetSpatialConvention = floquetSpatialConvention;
-  buffer.phasorConvention = phasorConvention;
+  return { complexImagValues, complexRealValues };
 }
 
 function isFullTopologyFieldVector(

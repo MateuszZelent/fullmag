@@ -36,6 +36,7 @@ from ._gmsh_types import (
     MeshData,
     MeshOptions,
     validate_periodic_mesh_options,
+    resolve_mesh_size_controls,
     SharedDomainMeshResult,
     SizeFieldData,
 )
@@ -47,6 +48,7 @@ from ._gmsh_infra import (
     _normalize_scale_xyz,
     _source_hmax_from_scale,
     _scale_mesh_nodes,
+    _quality_volumes_in_si,
 )
 from ._gmsh_extraction import (
     _extract_mesh_data,
@@ -66,6 +68,13 @@ from ._gmsh_waveguides import (
 )
 from ._gmsh_occ import _configure_axis_periodic_surfaces, _scale_periodic_boundary_pairs
 
+from ._gmsh_stl_shells import (
+    StlTopologyError,
+    merge_owned_stl,
+    classify_owned_stl_shells,
+    material_shell_volumes,
+)
+
 _NO_OP_FIELD_SIZE = 1.0e22
 
 
@@ -77,19 +86,24 @@ def _algorithm_3d_name(algorithm: int) -> str:
     }.get(int(algorithm), str(int(algorithm)))
 
 
-def _stl_meshing_retry_algorithm(
-    algorithm_3d: int,
-    attempted_algorithms: set[int],
-    exc: Exception,
-) -> int | None:
+def _is_stl_boundary_recovery_failure(exc: Exception) -> bool:
     message = str(exc)
-    is_boundary_recovery_failure = (
+    return (
         "PLC Error" in message
         or "segment and a facet intersect" in message
         or "Recovering boundary" in message
         or "Invalid boundary mesh" in message
         or "overlapping facets" in message
     )
+
+
+def _stl_meshing_retry_algorithm(
+    algorithm_3d: int,
+    attempted_algorithms: set[int],
+    exc: Exception,
+) -> int | None:
+    message = str(exc)
+    is_boundary_recovery_failure = _is_stl_boundary_recovery_failure(exc)
     is_algorithm_failure = "3D mesh failed" in message
     if not is_boundary_recovery_failure and not is_algorithm_failure:
         return None
@@ -1004,105 +1018,45 @@ def _mesh_cad_file(
 
 
 def _build_stl_volume_model(
-    gmsh: object,
+    gmsh: Any,
     path: Path,
-) -> tuple[list[int], list[int]]:
-    """Classify an STL surface into watertight volume model(s) via the GEO kernel.
+    *,
+    return_topology: bool = False,
+    force_reparametrize: bool = False,
+    reparametrize_log: list[bool] | None = None,
+):
+    """Recover strict material domains, retaining nested shells as cavities.
 
-    Shared by both initial meshing (``_mesh_stl_surface``) and adaptive
-    remeshing (``_remesh_imported``).  After return, the Gmsh model contains
-    one or more volume entities ready for ``generate(3)``.
-
-    When the STL contains multiple disconnected closed surfaces (e.g. two
-    nanoflower bodies concatenated into a single file), each connected
-    component is turned into a separate GEO volume.
-
-    Returns:
-        A tuple ``(volume_tags, surface_tags)`` of the created GEO entities.
-        *volume_tags* may contain more than one tag for multi-body STLs.
-        These are needed by :func:`_add_airbox_geo` to build the airbox
-        shell around the body.
+    The default pair remains compatible with adaptive remeshing. Initial mesh
+    generation explicitly requests the topology for airbox construction, so the
+    expensive geometric classification is shared rather than repeated.
     """
-    from collections import defaultdict
-
-    angle = 40.0 * math.pi / 180.0
-    for reparametrize in (False, True):
+    for reparametrize in ((True,) if force_reparametrize else (False, True)):
         if reparametrize:
-            emit_progress(
-                "Gmsh: STL geometry recovery failed without reparametrization; retrying with reparametrized surfaces"
-            )
+            emit_progress('Gmsh: retrying STL geometry recovery with reparametrized surfaces')
             gmsh.clear()
             gmsh.model.add(path.stem)
-        emit_progress("Gmsh: importing STL surface")
-        gmsh.merge(str(path))
-        emit_progress("Gmsh: classifying STL surfaces")
-        # Gmsh reparametrization fragments thin lofted STL surfaces into
-        # artificial patches; keep physical facet classification first and only
-        # reparametrize when Gmsh cannot recover geometry otherwise.
-        gmsh.model.mesh.classifySurfaces(
-            angle,
-            boundary=True,
-            forReparametrization=reparametrize,
-            curveAngle=math.pi,
-        )
-        emit_progress("Gmsh: creating geometry from classified surfaces")
+        owners: dict[int,str] = {}
+        emit_progress('Gmsh: importing STL surface')
+        merge_owned_stl(gmsh,path,path.stem,owners)
+        emit_progress('Gmsh: classifying STL surfaces')
+        # Validate actual source triangles before parametrization can fail
+        # or before higher-level fallback can reinterpret the domain.
+        topology = classify_owned_stl_shells(gmsh,owners,reparametrize=reparametrize)
+        emit_progress('Gmsh: creating geometry from classified surfaces')
         try:
             gmsh.model.mesh.createGeometry()
             break
         except Exception as exc:
-            if (
-                not reparametrize
-                and "Wrong topology of boundary mesh for parametrization" in str(exc)
-            ):
+            if not reparametrize and 'Wrong topology of boundary mesh for parametrization' in str(exc):
                 continue
             raise
-    surfaces = gmsh.model.getEntities(2)
-    if not surfaces:
-        raise ValueError(f"failed to recover closed surfaces from STL: {path}")
-    surface_tags = [tag for _, tag in surfaces]
-
-    # --- detect connected components via shared edges (union-find) ---
-    edge_to_surfs: dict[int, set[int]] = defaultdict(set)
-    for _, stag in surfaces:
-        edges = gmsh.model.getBoundary([(2, stag)], oriented=False)
-        for _, etag in edges:
-            edge_to_surfs[abs(etag)].add(stag)
-
-    parent: dict[int, int] = {t: t for t in surface_tags}
-
-    def _find(x: int) -> int:
-        while parent[x] != x:
-            parent[x] = parent[parent[x]]
-            x = parent[x]
-        return x
-
-    def _union(a: int, b: int) -> None:
-        ra, rb = _find(a), _find(b)
-        if ra != rb:
-            parent[ra] = rb
-
-    for _edge_tag, stags in edge_to_surfs.items():
-        tags_list = list(stags)
-        for i in range(1, len(tags_list)):
-            _union(tags_list[0], tags_list[i])
-
-    components: dict[int, list[int]] = defaultdict(list)
-    for t in surface_tags:
-        components[_find(t)].append(t)
-
-    # --- create one volume per connected component ---
-    volume_tags: list[int] = []
-    if len(components) == 1:
-        # Single body — simple path (preserves original behaviour)
-        sl = gmsh.model.geo.addSurfaceLoop(surface_tags)
-        volume_tags.append(gmsh.model.geo.addVolume([sl]))
-    else:
-        for _root, comp_surfs in components.items():
-            sl = gmsh.model.geo.addSurfaceLoop(comp_surfs)
-            volume_tags.append(gmsh.model.geo.addVolume([sl]))
-
-    gmsh.model.geo.synchronize()
-    return volume_tags, surface_tags
+    if reparametrize_log is not None:
+        reparametrize_log.append(reparametrize)
+    volume_groups,surface_groups = material_shell_volumes(gmsh,topology)
+    volumes = [tag for tags in volume_groups.values() for tag in tags]
+    surfaces = [tag for tags in surface_groups.values() for tag in tags]
+    return (volumes,surfaces,topology) if return_topology else (volumes,surfaces)
 
 
 def _mesh_stl_surface(
@@ -1118,8 +1072,10 @@ def _mesh_stl_surface(
     opts = options or MeshOptions()
     stl_opts = _sanitize_volume_mesh_options(opts, context="STL mesh")
     attempted_algorithms: set[int] = set()
+    force_reparametrize = False
     while True:
         attempted_algorithms.add(int(stl_opts.algorithm_3d))
+        reparametrize_log: list[bool] = []
         try:
             return _mesh_stl_surface_once(
                 path,
@@ -1130,8 +1086,23 @@ def _mesh_stl_surface(
                 options=stl_opts,
                 provisional_interface_markers=provisional_interface_markers,
                 geometry_name=geometry_name,
+                force_reparametrize=force_reparametrize,
+                reparametrize_log=reparametrize_log,
             )
         except Exception as exc:
+            # Ordinary classified patches can be too large to remesh without
+            # folding (overlapping facets between patches). Reparametrized
+            # patches are the geometric remedy; try them before another
+            # tetrahedralizer, which cannot repair a folded boundary mesh.
+            if (_is_stl_boundary_recovery_failure(exc)
+                    and reparametrize_log == [False]):
+                emit_progress(
+                    f"Gmsh: STL boundary mesh is invalid after ordinary surface "
+                    f"classification ({exc}); retrying with reparametrized surfaces"
+                )
+                force_reparametrize = True
+                attempted_algorithms.discard(int(stl_opts.algorithm_3d))
+                continue
             retry_algorithm = _stl_meshing_retry_algorithm(
                 int(stl_opts.algorithm_3d),
                 attempted_algorithms,
@@ -1157,6 +1128,8 @@ def _mesh_stl_surface_once(
     options: MeshOptions,
     provisional_interface_markers: set[int] | None = None,
     geometry_name: str | None = None,
+    force_reparametrize: bool = False,
+    reparametrize_log: list[bool] | None = None,
 ) -> MeshData:
     stl_opts = options
     gmsh = _import_gmsh()
@@ -1165,12 +1138,23 @@ def _mesh_stl_surface_once(
     try:
         _configure_gmsh_threads(gmsh)
         gmsh.model.add(path.stem)
-        body_vols, body_surfs = _build_stl_volume_model(gmsh, path)
+        body_vols, body_surfs, shell_topology = _build_stl_volume_model(
+            gmsh,
+            path,
+            return_topology=True,
+            force_reparametrize=force_reparametrize,
+            reparametrize_log=reparametrize_log,
+        )
         has_airbox = airbox is not None
         airbox_field_ids: list[int] = []
         if has_airbox:
             emit_progress("Gmsh: adding airbox domain")
-            airbox_field = _add_airbox_geo(gmsh, body_vols, body_surfs, airbox, hmax)
+            airbox_field = _add_airbox_geo(
+                gmsh,body_vols,body_surfs,airbox,hmax,
+                component_volume_groups={geometry_name or path.stem:body_vols},
+                component_surface_groups={geometry_name or path.stem:body_surfs},
+                shell_topology=shell_topology,
+            )
             if airbox_field is not None:
                 airbox_field_ids.append(airbox_field)
         component_volume_tags = _named_single_component_volume_tags(
@@ -1219,192 +1203,111 @@ def _mesh_stl_surface_once(
 def _build_stl_volume_model_for_component(
     gmsh: Any,
     path: Path,
-) -> tuple[list[int], list[int]]:
-    """Import a single-component STL and create GEO volume(s).
-
-    Similar to ``_build_stl_volume_model`` but designed for use in a
-    multi-component workflow where each component is imported separately.
-    """
-    from collections import defaultdict
-
-    existing_surfs = {tag for _, tag in gmsh.model.getEntities(2)}
-
-    gmsh.merge(str(path))
-    angle = 40.0 * math.pi / 180.0
-    # Gmsh reparametrization fragments thin lofted STL surfaces into artificial
-    # patches; keep physical facet classification for edge-distance fields.
-    gmsh.model.mesh.classifySurfaces(
-        angle,
-        boundary=True,
-        forReparametrization=False,
-        curveAngle=math.pi,
-    )
+) -> tuple[list[int],list[int]]:
+    """Legacy single-component importer using the same strict shell rules."""
+    owners: dict[int,str] = {}
+    merge_owned_stl(gmsh,path,path.stem,owners)
+    topology = classify_owned_stl_shells(gmsh,owners)
     gmsh.model.mesh.createGeometry()
-    surfaces = gmsh.model.getEntities(2)
-    if not surfaces:
-        raise ValueError(f"failed to recover closed surfaces from STL: {path}")
-    surface_tags = [tag for _, tag in surfaces if tag not in existing_surfs]
-
-    edge_to_surfs: dict[int, set[int]] = defaultdict(set)
-    for stag in surface_tags:
-        edges = gmsh.model.getBoundary([(2, stag)], oriented=False)
-        for _, etag in edges:
-            edge_to_surfs[abs(etag)].add(stag)
-
-    parent: dict[int, int] = {t: t for t in surface_tags}
-
-    def _find(x: int) -> int:
-        while parent[x] != x:
-            parent[x] = parent[parent[x]]
-            x = parent[x]
-        return x
-
-    def _union(a: int, b: int) -> None:
-        ra, rb = _find(a), _find(b)
-        if ra != rb:
-            parent[ra] = rb
-
-    for _edge_tag, stags in edge_to_surfs.items():
-        tags_list = list(stags)
-        for i in range(1, len(tags_list)):
-            _union(tags_list[0], tags_list[i])
-
-    components: dict[int, list[int]] = defaultdict(list)
-    for t in surface_tags:
-        components[_find(t)].append(t)
-
-    volume_tags: list[int] = []
-    if len(components) == 1:
-        sl = gmsh.model.geo.addSurfaceLoop(surface_tags)
-        volume_tags.append(gmsh.model.geo.addVolume([sl]))
-    else:
-        for _root, comp_surfs in components.items():
-            sl = gmsh.model.geo.addSurfaceLoop(comp_surfs)
-            volume_tags.append(gmsh.model.geo.addVolume([sl]))
-
-    gmsh.model.geo.synchronize()
-    return volume_tags, surface_tags
+    volume_groups,surface_groups = material_shell_volumes(gmsh,topology)
+    return volume_groups[path.stem],surface_groups[path.stem]
 
 
-def _surface_group_bounds(
-    gmsh: Any,
-    surface_tags: list[int],
-) -> tuple[tuple[float, float, float], tuple[float, float, float]]:
-    bounds = [gmsh.model.getBoundingBox(2, tag) for tag in surface_tags]
-    return (
-        (
-            min(bound[0] for bound in bounds),
-            min(bound[1] for bound in bounds),
-            min(bound[2] for bound in bounds),
-        ),
-        (
-            max(bound[3] for bound in bounds),
-            max(bound[4] for bound in bounds),
-            max(bound[5] for bound in bounds),
+def _stl_work_coordinate_scale(options: MeshOptions) -> float:
+    """Condition typed numeric sizing without reinterpreting raw Gmsh fields."""
+    supported = {
+        "ComponentVolumeConstant", "ComponentRestrictedBox",
+        "ComponentRestrictedRectangularPerimeter", "ComponentRestrictedCylinder",
+        "ComponentRestrictedSphere", "ComponentRestrictedGradedBox",
+        "ComponentRestrictedGradedCylinder", "ComponentRestrictedGradedSphere",
+        "AxisAlignedBoxDistanceThreshold", "EdgeDistanceThreshold",
+        "CornerDistanceThreshold", "BoundsSurfaceThreshold",
+    }
+    # Optional selectors and feature controls currently evaluate in their own
+    # SI frame. Keep that contract until their adapters support work units.
+    controls = resolve_mesh_size_controls(options)
+    if (
+        options.boundary_layer_target_surface_selectors
+        or options.boundary_layer_target_curve_selectors
+        or int(controls["resolved_size_from_curvature"]) > 0
+        or int(controls["resolved_narrow_regions"]) > 0
+    ):
+        return 1.0
+    # The existing lower-only field stack and arbitrary expressions have their
+    # own coordinate contracts. Retain their SI behavior rather than guessing.
+    if options.lower_bound_fields or any(
+        config.get("kind") not in supported for config in options.size_fields
+    ):
+        return 1.0
+    return 1e6
+
+
+def _scale_stl_source_nodes(gmsh: Any, coordinate_scale: float) -> None:
+    if coordinate_scale != 1.0:
+        gmsh.model.mesh.affineTransform([
+            coordinate_scale,0.,0.,0., 0.,coordinate_scale,0.,0.,
+            0.,0.,coordinate_scale,0.,
+        ])
+
+
+def _stl_mesh_in_si(mesh: MeshData, coordinate_scale: float) -> MeshData:
+    if coordinate_scale == 1.0:
+        return mesh
+    return _dc_replace(
+        mesh,
+        nodes=mesh.nodes / coordinate_scale,
+        quality=_quality_volumes_in_si(mesh.quality, coordinate_scale),
+        per_domain_quality=(
+            {marker: _quality_volumes_in_si(report, coordinate_scale)
+             for marker, report in mesh.per_domain_quality.items()}
+            if mesh.per_domain_quality is not None else None
         ),
     )
-
-
-def _bbox_overlap_volume(
-    a_min: tuple[float, float, float],
-    a_max: tuple[float, float, float],
-    b_min: tuple[float, float, float],
-    b_max: tuple[float, float, float],
-) -> float:
-    overlap = [
-        max(0.0, min(float(a_max[axis]), float(b_max[axis])) - max(float(a_min[axis]), float(b_min[axis])))
-        for axis in range(3)
-    ]
-    return float(overlap[0] * overlap[1] * overlap[2])
 
 
 def _build_stl_volume_models_for_components(
     gmsh: Any,
     components: list[ComponentDescriptor],
-) -> tuple[dict[str, list[int]], dict[str, list[int]]]:
-    """Import all component STLs and classify the combined GEO model once."""
-    from collections import defaultdict
-
-    existing_surfs = {tag for _, tag in gmsh.model.getEntities(2)}
-    for component in components:
-        gmsh.merge(str(component.stl_path))
-
-    angle = 40.0 * math.pi / 180.0
-    gmsh.model.mesh.classifySurfaces(
-        angle,
-        boundary=True,
-        forReparametrization=False,
-        curveAngle=math.pi,
-    )
-    gmsh.model.mesh.createGeometry()
-    surface_tags = [tag for _, tag in gmsh.model.getEntities(2) if tag not in existing_surfs]
-    if not surface_tags:
-        raise ValueError("failed to recover closed surfaces from component STLs")
-
-    edge_to_surfs: dict[int, set[int]] = defaultdict(set)
-    for stag in surface_tags:
-        edges = gmsh.model.getBoundary([(2, stag)], oriented=False)
-        for _, etag in edges:
-            edge_to_surfs[abs(etag)].add(stag)
-
-    parent: dict[int, int] = {tag: tag for tag in surface_tags}
-
-    def _find(tag: int) -> int:
-        while parent[tag] != tag:
-            parent[tag] = parent[parent[tag]]
-            tag = parent[tag]
-        return tag
-
-    def _union(a: int, b: int) -> None:
-        ra, rb = _find(a), _find(b)
-        if ra != rb:
-            parent[ra] = rb
-
-    for stags in edge_to_surfs.values():
-        tags = list(stags)
-        for index in range(1, len(tags)):
-            _union(tags[0], tags[index])
-
-    groups: dict[int, list[int]] = defaultdict(list)
-    for tag in surface_tags:
-        groups[_find(tag)].append(tag)
-
-    assigned = set()
-    component_volume_tags: dict[str, list[int]] = {component.geometry_name: [] for component in components}
-    component_surface_tags: dict[str, list[int]] = {component.geometry_name: [] for component in components}
-    pending: list[tuple[list[int], tuple[tuple[float, float, float], tuple[float, float, float]]]] = []
-    for group_surfs in groups.values():
-        pending.append((group_surfs, _surface_group_bounds(gmsh, group_surfs)))
-
-    for group_surfs, (group_min, group_max) in pending:
-        best_index: int | None = None
-        best_overlap = -1.0
-        for index, component in enumerate(components):
-            overlap = _bbox_overlap_volume(
-                group_min,
-                group_max,
-                component.bounds_min,
-                component.bounds_max,
-            )
-            if overlap > best_overlap:
-                best_overlap = overlap
-                best_index = index
-        if best_index is None or best_overlap <= 0.0:
-            raise ValueError("could not map imported STL surface group to a component")
-        component = components[best_index]
-        assigned.add(best_index)
-        sl = gmsh.model.geo.addSurfaceLoop(group_surfs)
-        volume = gmsh.model.geo.addVolume([sl])
-        component_surface_tags[component.geometry_name].extend(group_surfs)
-        component_volume_tags[component.geometry_name].append(volume)
-
-    missing_indexes = set(range(len(components))) - assigned
-    if missing_indexes:
-        missing = ", ".join(components[index].geometry_name for index in sorted(missing_indexes))
-        raise ValueError(f"could not recover STL surface groups for component(s): {missing}")
-
-    gmsh.model.geo.synchronize()
-    return component_volume_tags, component_surface_tags
+    *,
+    return_topology: bool = False,
+    coordinate_scale: float = 1.0,
+    force_reparametrize: bool = False,
+    reparametrize_log: list[bool] | None = None,
+):
+    """Recover owned STL shells with a bounded geometry-parametrization retry."""
+    names = [component.geometry_name for component in components]
+    if len(names) != len(set(names)):
+        raise StlTopologyError('STL source-component identities must be unique')
+    # Sparse closed surfaces can stall Gmsh's forced single-map partitioning.
+    # Use ordinary classified patches first, matching the single-STL importer.
+    for reparametrize in ((True,) if force_reparametrize else (False, True)):
+        if reparametrize:
+            emit_progress('Gmsh: retrying component STL geometry with reparametrized surfaces')
+            gmsh.clear()
+            gmsh.model.add('shared_domain_components')
+        owners: dict[int,str] = {}
+        for component in components:
+            merge_owned_stl(gmsh,component.stl_path,component.geometry_name,owners)
+        # Every retry imports fresh source nodes, so SI conditioning is applied once.
+        _scale_stl_source_nodes(gmsh, coordinate_scale)
+        topology = classify_owned_stl_shells(gmsh,owners,reparametrize=reparametrize)
+        try:
+            gmsh.model.mesh.createGeometry()
+            break
+        except Exception as exc:
+            if (not reparametrize
+                    and 'Wrong topology of boundary mesh for parametrization' in str(exc)):
+                continue
+            raise
+    if reparametrize_log is not None:
+        reparametrize_log.append(reparametrize)
+    volumes,surfaces = material_shell_volumes(gmsh,topology)
+    if set(volumes) != set(names):
+        raise StlTopologyError('Could not recover all imported STL source-component identities')
+    # Physical marker ordering follows the authored component order.
+    volumes = {name:volumes[name] for name in names}
+    surfaces = {name:surfaces[name] for name in names}
+    return (volumes,surfaces,topology) if return_topology else (volumes,surfaces)
 
 
 def generate_shared_domain_mesh_from_components(
@@ -1422,6 +1325,48 @@ def generate_shared_domain_mesh_from_components(
     volume → geometry_name mapping is established *before* mesh generation,
     giving downstream code a stable identity without bbox/centroid heuristics.
     """
+    reparametrize_log: list[bool] = []
+    try:
+        return _generate_shared_domain_mesh_from_components_once(
+            components,
+            hmax=hmax,
+            order=order,
+            airbox=airbox,
+            options=options,
+            force_reparametrize=False,
+            reparametrize_log=reparametrize_log,
+        )
+    except Exception as exc:
+        # Ordinary classified patches can be too large to remesh without
+        # folding; Gmsh then rejects overlapping boundary facets. Rebuild
+        # the shells from reparametrized patches before any fallback.
+        if not (_is_stl_boundary_recovery_failure(exc) and reparametrize_log == [False]):
+            raise
+        emit_progress(
+            f"Gmsh: component STL boundary mesh is invalid after ordinary surface "
+            f"classification ({exc}); retrying with reparametrized surfaces"
+        )
+    return _generate_shared_domain_mesh_from_components_once(
+        components,
+        hmax=hmax,
+        order=order,
+        airbox=airbox,
+        options=options,
+        force_reparametrize=True,
+        reparametrize_log=None,
+    )
+
+
+def _generate_shared_domain_mesh_from_components_once(
+    components: list[ComponentDescriptor],
+    *,
+    hmax: float,
+    order: int,
+    airbox: AirboxOptions | None,
+    options: MeshOptions | None,
+    force_reparametrize: bool,
+    reparametrize_log: list[bool] | None,
+) -> SharedDomainMeshResult:
     if not components:
         raise ValueError("at least one component is required")
 
@@ -1430,6 +1375,10 @@ def generate_shared_domain_mesh_from_components(
         opts,
         context="shared-domain STL mesh",
     )
+    coordinate_scale = _stl_work_coordinate_scale(shared_stl_opts)
+    hmax = hmax * coordinate_scale
+    airbox = _scale_airbox_options(airbox, coordinate_scale)
+    emit_progress(f"Gmsh: STL working coordinate scale from SI = {coordinate_scale:g}")
     gmsh = _import_gmsh()
     gmsh.initialize()
     gmsh.option.setNumber("General.Terminal", 0)
@@ -1443,9 +1392,13 @@ def generate_shared_domain_mesh_from_components(
         component_volume_tags: dict[str, list[int]] = {}
         component_surface_tags: dict[str, list[int]] = {}
 
-        component_volume_tags, component_surface_tags = _build_stl_volume_models_for_components(
+        component_volume_tags, component_surface_tags, shell_topology = _build_stl_volume_models_for_components(
             gmsh,
             components,
+            return_topology=True,
+            coordinate_scale=coordinate_scale,
+            force_reparametrize=force_reparametrize,
+            reparametrize_log=reparametrize_log,
         )
         for component_index, comp in enumerate(components, start=1):
             new_vols = component_volume_tags[comp.geometry_name]
@@ -1476,6 +1429,7 @@ def generate_shared_domain_mesh_from_components(
                 component_volume_groups=component_volume_tags,
                 component_surface_groups=component_surface_tags,
                 mesh_options=shared_stl_opts,
+                shell_topology=shell_topology,
             )
             if airbox_field is not None:
                 airbox_field_ids.append(airbox_field)
@@ -1493,6 +1447,12 @@ def generate_shared_domain_mesh_from_components(
                     entities = gmsh.model.getEntitiesForPhysicalGroup(2, phys_tag)
                     outer_boundary_surface_tags = list(entities)
                     break
+        else:
+            for comp in components:
+                marker = component_marker_tags[comp.geometry_name]
+                gmsh.model.addPhysicalGroup(
+                    3,component_volume_tags[comp.geometry_name],tag=marker)
+                gmsh.model.setPhysicalName(3,marker,comp.geometry_name)
 
         emit_progress("Gmsh: generating 3D tetrahedral mesh (component-aware)")
         application_report = _apply_mesh_options(
@@ -1500,6 +1460,7 @@ def generate_shared_domain_mesh_from_components(
             hmax,
             order,
             shared_stl_opts,
+            hscale=coordinate_scale,
             preexisting_field_ids=airbox_field_ids,
             preexisting_lower_bound_field_ids=airbox_lower_bound_field_ids,
             component_volume_tags=component_volume_tags,
@@ -1518,9 +1479,10 @@ def generate_shared_domain_mesh_from_components(
         mesh = _extract_mesh_data(
             gmsh,
             quality=quality,
-            has_physical_groups=has_airbox,
+            has_physical_groups=True,
             per_domain_quality=per_domain_quality,
         )
+        mesh = _stl_mesh_in_si(mesh, coordinate_scale)
         emit_progress(
             f"Gmsh: component-aware mesh ready — "
             f"{mesh.n_nodes} nodes, {mesh.n_elements} elements, "

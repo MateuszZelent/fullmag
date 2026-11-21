@@ -868,6 +868,24 @@
       "lane": "FDM CPU/GPU",
       "tests": "Python API tests",
       "evidence_status": "example lowering executed"
+    },
+    {
+      "id": "confirm_stationary_torque_aos",
+      "path": "crates/fullmag-runner/src/relaxation/direct_minimizer_reference.rs",
+      "symbol": "confirm_stationary_torque_aos",
+      "responsibility": "Fresh finite-field torque confirmation of accepted CPU state at the energy precision floor; no artificial accepted steps",
+      "lane": "FDM CPU",
+      "tests": "direct_minimizers_confirm_torque_at_energy_roundoff_without_fake_steps; stationary_torque_confirmation_rejects_fresh_threshold_failure_and_nonfinite_field",
+      "evidence_status": "source-test"
+    },
+    {
+      "id": "confirm_stationary_torque_soa",
+      "path": "crates/fullmag-runner/src/relaxation/direct_minimizer_reference.rs",
+      "symbol": "confirm_stationary_torque_soa",
+      "responsibility": "Fresh finite-field torque confirmation of accepted CPU state at the energy precision floor; no artificial accepted steps",
+      "lane": "FDM CPU",
+      "tests": "direct_minimizers_confirm_torque_at_energy_roundoff_without_fake_steps; stationary_torque_confirmation_rejects_fresh_threshold_failure_and_nonfinite_field",
+      "evidence_status": "source-test"
     }
   ],
   "public_api": {

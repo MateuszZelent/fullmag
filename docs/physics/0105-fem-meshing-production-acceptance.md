@@ -1291,3 +1291,46 @@ Eksport rewrite_overrides Rust przekazuje również typowane current_transports
 w liście current_modules czytanej przez kanoniczny renderer Python, tak jak
 adapter Python sceny. Zachowuje to istniejący transport i pełny fizyczny IR;
 nie jest nowym modułem, równaniem ani ścieżką wykonania.
+
+## Import STL: reparametryzacja płatów i krótkie krawędzie źródła
+
+Status: ponowna próba z reparametryzacją jest w źródle od 2026-11-19
+(sonda Gmsh 4.15.2 na BuckyBall). Sklejanie krótkich krawędzi: zbadane i
+**odrzucone**, opis niżej. Qualification: **NOT VERIFIED**.
+
+Gdy zwykła klasyfikacja daje nieliczne, duże płaty, ich przesiatkowanie może
+się zawinąć, a Gmsh odrzuca brzeg jako „overlapping facets”. Generator
+powtarza wtedy budowę jeden raz z płatami reparametryzowanymi
+(`forReparametrization=True`), zanim zmieni algorytm 3D albo przejdzie na
+ścieżkę concatenated STL. Dla BuckyBall daje to 258–260 płatów zamiast 5 i
+siatkę 3D w ok. 140 s. Przy zwykłej klasyfikacji siatki nie dało się zbudować
+dla żadnego algorytmu 2D (1, 5, 6) i żadnego rozmiaru (32, 64 nm).
+
+Znane ograniczenie: plik BuckyBall ma 56 trójkątów z krawędzią poniżej 1 nm
+(mediana 29 nm, $h_{\max}=64\,\mathrm{nm}$). Ich wierzchołki stają się
+narożnikami płatów, więc siatka zawiera tetraedry o krawędzi
+$\ell_{\min}=0.57\,\mathrm{nm}$ i jakości $\gamma_{\min}=4.9\cdot10^{-4}$
+(44 elementy z $\gamma<0.01$). Pole wymiany skaluje się jak $h^{-2}$, więc
+spowalniają one relaksację.
+
+Sprawdzone i odrzucone: ściąganie krawędzi krótszych niż
+$\epsilon_{\mathrm{weld}}h_{\max}$ do środka ciężkości przed importem.
+Wynik jest poprawny topologicznie: zamknięta, zorientowana rozmaitość, bez
+przewężonych wierzchołków i bez odwróconych trójkątów. Mimo to przy
+$\epsilon_{\mathrm{weld}}=0.05$ i $0.01$ `createGeometry` z reparametryzacją
+kończy się błędem „Wrong topology of boundary mesh for parametrization”. Na
+niezmienionym pliku ta sama ścieżka działa. Zwykła klasyfikacja nadal daje
+„overlapping facets”. Sklejanie usunęłoby więc jedyną działającą ścieżkę
+siatkowania i nie zostało wprowadzone. Usunięcie tych elementów wymaga
+naprawy geometrii źródłowej albo innej metody klasyfikacji płatów.
+
+| Symbol | Znaczenie | Jednostka SI |
+| --- | --- | --- |
+| $h_{\max}$ | maksymalny rozmiar elementu bryły | $\mathrm m$ |
+| $\ell_{\min}$ | najkrótsza krawędź tetraedru w siatce | $\mathrm m$ |
+| $\gamma_{\min}$ | najmniejszy współczynnik jakości tetraedru Gmsh (gamma) | $1$ |
+| $\epsilon_{\mathrm{weld}}$ | badany względny próg ściągania krawędzi STL | $1$ |
+
+| Source ID | Path + symbol | Odpowiedzialność i dowód |
+| --- | --- | --- |
+| stl-reparametrize-retry | packages/fullmag-py/src/fullmag/meshing/_gmsh_generators.py + _is_stl_boundary_recovery_failure | Ponowna budowa z reparametryzowanymi płatami po „overlapping facets” |

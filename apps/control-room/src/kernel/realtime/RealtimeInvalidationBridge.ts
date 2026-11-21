@@ -28,6 +28,7 @@ import {
   DATA_FDM_REGION_MEMBERSHIP_SCOPED_PATH,
   DATA_FDM_REGION_MEMBERSHIPS_PATH,
   DATA_FIELDS_PATH,
+  DATA_FIELD_META_PATH,
   DATA_QUANTITIES_PATH,
   DATA_PLANAR_FIELD_META_PATH,
   DATA_SCALARS_PATH,
@@ -608,6 +609,12 @@ export class RealtimeInvalidationBridge {
             );
             if (exactFieldResource.quantityId === "m") {
               this.queueMagnetizationFieldDependents(fieldSampleRevision);
+              if (!exactFieldResource.snapshotId && !exactFieldResource.carrierId && !exactFieldResource.view) {
+                this.queueExactResourceInvalidation(
+                  DATA_FIELD_META_PATH.replace("{quantity_id}", "m"),
+                  fieldSampleRevision,
+                );
+              }
             }
           } else if (change.broad || !change.quantity_ids?.length) {
             this.recordFieldInvalidation("broad");
@@ -1025,6 +1032,7 @@ export class RealtimeInvalidationBridge {
     this.resources.invalidate(MODEL_REGION_DIAGNOSTICS_PATH, dependentRevision);
     this.resources.invalidate(MODEL_MATERIAL_FIELDS_PATH, dependentRevision);
     this.resources.invalidate(MODEL_READINESS_PATH, dependentRevision);
+    this.resources.invalidate(MESHING_SHARED_DOMAIN_MANIFEST_PATH, dependentRevision);
     // Mesh policies are projections of the scene document; their revision is
     // the mesh revision that the policy PUT routes check as expected_revision.
     this.resources.invalidate(MESHING_SEMANTICS_PATH, dependentRevision);

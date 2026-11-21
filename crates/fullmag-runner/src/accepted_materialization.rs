@@ -402,7 +402,7 @@ pub(crate) fn evaluate_lane_observables(
                 plan,
                 &requested,
             );
-            let selected = select_active_quantities(&requested, &active, implicit_default)?;
+            let _selected = select_active_quantities(&requested, &active, implicit_default)?;
             #[cfg(feature = "cuda")]
             {
                 let mut exact_plan = plan.clone();
@@ -412,10 +412,13 @@ pub(crate) fn evaluate_lane_observables(
                 backend
                     .upload_magnetization(input.values)
                     .map_err(|error| error.to_string())?;
-                let stats = backend
+                let mut stats = backend
                     .snapshot_step_stats(exact_plan.grid.cells)
                     .map_err(|error| error.to_string())?;
-                let snapshots = selected
+                crate::fdm::gpu::cuda::execute::apply_regional_drive_energy(
+                    &exact_plan, &mut stats, input.values,
+                );
+                let snapshots = _selected
                     .iter()
                     .map(|quantity| {
                         backend
@@ -429,7 +432,7 @@ pub(crate) fn evaluate_lane_observables(
                     .collect::<Result<Vec<_>, _>>()?;
                 fields.extend(fields_from_preview(
                     snapshots,
-                    &selected,
+                    &_selected,
                     input.layout.clone(),
                     "fdm:magnetic",
                     "magnetic",
@@ -515,7 +518,7 @@ pub(crate) fn evaluate_lane_observables(
                 plan,
                 &requested,
             );
-            let selected = select_active_quantities(&requested, &active, implicit_default)?;
+            let _selected = select_active_quantities(&requested, &active, implicit_default)?;
             #[cfg(feature = "fem-native")]
             {
                 if gpu && !cfg!(feature = "fem-gpu") {
@@ -568,7 +571,7 @@ pub(crate) fn evaluate_lane_observables(
                     .map_err(|error| error.to_string())?;
                 let node_count = exact_plan.mesh.nodes.len();
                 let stats = backend.snapshot_step_stats(node_count).map_err(|error| error.to_string())?;
-                let snapshots = selected.iter().map(|quantity| {
+                let snapshots = _selected.iter().map(|quantity| {
                     backend.copy_live_preview_field(&request_for_quantity(quantity), node_count)
                         .map_err(|error| error.to_string())
                 }).collect::<Result<Vec<_>, _>>()?;
@@ -588,7 +591,7 @@ pub(crate) fn evaluate_lane_observables(
                 }
                 fields.extend(fields_from_preview(
                     snapshots,
-                    &selected,
+                    &_selected,
                     input.layout.clone(),
                     "fem:local_nodes",
                     "magnetic",
@@ -841,7 +844,13 @@ fn reject_missing_fdm_primary_inputs(plan: &fullmag_ir::FdmPlanIR, gpu: bool) ->
     if plan.frozen_spins.is_some() {
         return Err("accepted FDM materialization cannot reconstruct the original Frozen Spins activation reference".into());
     }
-    if gpu && !plan.field_drives.is_empty() {
+    if gpu
+        && (!plan.field_drives.is_empty()
+            || plan
+                .mask_field_term_bases
+                .iter()
+                .any(|basis| basis.time_dependent))
+    {
         return Err("accepted FDM GPU materialization cannot evaluate time-dependent field drives at the accepted clock".into());
     }
     Ok(())
@@ -849,6 +858,7 @@ fn reject_missing_fdm_primary_inputs(plan: &fullmag_ir::FdmPlanIR, gpu: bool) ->
 
 fn reject_missing_fem_primary_inputs(plan: &fullmag_ir::FemPlanIR) -> Result<(), String> {
     if !plan.field_drives.is_empty() || !plan.antenna_zeeman_masks.is_empty()
+        || !plan.mask_field_term_bases.is_empty()
         || !plan.solved_antenna_drive_bases.is_empty() || !plan.current_modules.is_empty()
         || !plan.spin_transport_plans.is_empty() || !plan.charge_transport_plans.is_empty()
     {
@@ -884,6 +894,7 @@ fn full_resolution_request() -> crate::types::LivePreviewRequest {
     }
 }
 
+#[cfg(any(feature = "cuda", feature = "fem-native", feature = "fem-gpu", test))]
 fn request_for_quantity(quantity: &str) -> crate::types::LivePreviewRequest {
     crate::types::LivePreviewRequest { quantity: quantity.into(), ..full_resolution_request() }
 }

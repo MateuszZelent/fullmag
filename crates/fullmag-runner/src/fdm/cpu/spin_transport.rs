@@ -273,6 +273,108 @@ pub(crate) fn fdm_gpu_transport_execution_provenance(
     fdm_transport_execution_provenance_for_lane(plan, true)
 }
 
+/// Lane-specific facts of one resolved FDM transport plan that enter its
+/// execution provenance.
+///
+/// Steady one-way (M1), reciprocal (M2) and transient (M3) plans carry
+/// different descriptors, but every executable descriptor must publish its
+/// requested and resolved execution (0970 §4.1.1). Engine identifiers follow
+/// the registry in `spin-transport-runtime-contract-v1.md` §8.1.
+struct FdmTransportProvenanceFacts<'a> {
+    interfaces: &'a [fullmag_ir::ResolvedSpinInterfaceFaceIR],
+    charge_active_cells: &'a [bool],
+    spin_active_cells: &'a [bool],
+    torque_target_cells: &'a [bool],
+    torque_formula_version: Option<String>,
+    charge_solver_engine: String,
+    spin_solver_engine: String,
+    charge_operator_version: String,
+    spin_operator_version: String,
+    native: bool,
+    runtime_id: &'static str,
+    stage_coupling: String,
+    validation_scope: &'static str,
+}
+
+/// Registry engine (§8.1) of the coupled FDM CPU charge-spin M2 block solve.
+const FDM_CPU_RECIPROCAL_ENGINE_ID: &str = "fdm_charge_spin_block_gmres_v1";
+/// Stage coupling label of the FDM CPU M2 solve repeated at every RK stage.
+const FDM_CPU_RECIPROCAL_STAGE_COUPLING: &str = "bidirectional_stage_refresh";
+
+fn fdm_steady_provenance_facts(
+    descriptor: &fullmag_ir::ResolvedFdmSpinTransportIR,
+    gpu: bool,
+) -> FdmTransportProvenanceFacts<'_> {
+    let native = descriptor.realization == fullmag_ir::FdmCpuTransportRealizationIR::NativeM1V1;
+    FdmTransportProvenanceFacts {
+        interfaces: &descriptor.interfaces,
+        charge_active_cells: &descriptor.charge_active_cells,
+        spin_active_cells: &descriptor.spin_active_cells,
+        torque_target_cells: &descriptor.torque_target_cells,
+        torque_formula_version: descriptor.torque_formula_version.clone(),
+        charge_solver_engine: descriptor.charge_solver.engine.clone(),
+        spin_solver_engine: descriptor.spin_solver.engine.clone(),
+        charge_operator_version: descriptor.charge_solver.operator_version.clone(),
+        spin_operator_version: descriptor.spin_solver.operator_version.clone(),
+        native,
+        runtime_id: if gpu {
+            "fdm_cuda_transport_m1_v1"
+        } else if native {
+            "fdm_cpu_native_transport_m1_v1"
+        } else {
+            "fdm_cpu_rust_transport_reference_v1"
+        },
+        stage_coupling: "one_way_stage_refresh".into(),
+        validation_scope: if gpu {
+            "fdm_gpu_double_native_m1_v1_runtime_contract_only"
+        } else if native {
+            "opt_in_fdm_cpu_double_native_m1_v1_contract_only"
+        } else {
+            "fdm_cpu_double_reference_transport"
+        },
+    }
+}
+
+fn fdm_transport_provenance_facts(
+    resolved: &fullmag_ir::ResolvedSpinTransportPlanIR,
+    gpu: bool,
+) -> Option<FdmTransportProvenanceFacts<'_>> {
+    if gpu {
+        return resolved
+            .fdm_gpu_double
+            .as_ref()
+            .map(|descriptor| fdm_steady_provenance_facts(descriptor, true));
+    }
+    if let Some(descriptor) = &resolved.fdm_cpu_double {
+        return Some(fdm_steady_provenance_facts(descriptor, false));
+    }
+    if let Some(transient) = &resolved.fdm_cpu_double_transient {
+        let mut facts = fdm_steady_provenance_facts(&transient.steady_operator, false);
+        facts.runtime_id = "fdm_cpu_rust_transient_transport_reference_v1";
+        facts.stage_coupling = transient.integrator_version.clone();
+        facts.validation_scope = "fdm_cpu_double_transient_reference_transport";
+        return Some(facts);
+    }
+    resolved
+        .fdm_cpu_double_reciprocal
+        .as_ref()
+        .map(|coupled| FdmTransportProvenanceFacts {
+            interfaces: &coupled.interfaces,
+            charge_active_cells: &coupled.active_cells,
+            spin_active_cells: &coupled.active_cells,
+            torque_target_cells: &coupled.torque_target_cells,
+            torque_formula_version: coupled.torque_formula_version.clone(),
+            charge_solver_engine: FDM_CPU_RECIPROCAL_ENGINE_ID.into(),
+            spin_solver_engine: FDM_CPU_RECIPROCAL_ENGINE_ID.into(),
+            charge_operator_version: coupled.operator_version.clone(),
+            spin_operator_version: coupled.operator_version.clone(),
+            native: false,
+            runtime_id: "fdm_cpu_rust_coupled_transport_reference_v1",
+            stage_coupling: FDM_CPU_RECIPROCAL_STAGE_COUPLING.into(),
+            validation_scope: "fdm_cpu_double_reciprocal_reference_transport",
+        })
+}
+
 fn fdm_transport_execution_provenance_for_lane(
     plan: &FdmPlanIR,
     gpu: bool,
@@ -280,20 +382,15 @@ fn fdm_transport_execution_provenance_for_lane(
     plan.spin_transport_plans
         .iter()
         .filter_map(|resolved| {
-            let descriptor = if gpu {
-                resolved.fdm_gpu_double.as_ref()?
-            } else {
-                resolved.fdm_cpu_double.as_ref()?
-            };
-            let native =
-                descriptor.realization == fullmag_ir::FdmCpuTransportRealizationIR::NativeM1V1;
-            let transparent = descriptor.interfaces.iter().any(|interface| {
+            let facts = fdm_transport_provenance_facts(resolved, gpu)?;
+            let native = facts.native;
+            let transparent = facts.interfaces.iter().any(|interface| {
                 matches!(
                     interface.law,
                     fullmag_ir::ResolvedSpinInterfaceLawIR::Transparent
                 )
             });
-            let mixing = descriptor.interfaces.iter().any(|interface| {
+            let mixing = facts.interfaces.iter().any(|interface| {
                 matches!(
                     interface.law,
                     fullmag_ir::ResolvedSpinInterfaceLawIR::MixingConductance { .. }
@@ -319,7 +416,8 @@ fn fdm_transport_execution_provenance_for_lane(
                 resolved_discretization: "fdm".into(),
                 resolved_device: if gpu { "gpu".into() } else { "cpu".into() },
                 resolved_precision: "double".into(),
-                resolved_execution_mode: "strict".into(),
+                resolved_execution_mode: format!("{:?}", resolved.resolved_execution_mode)
+                    .to_ascii_lowercase(),
                 runtime_family: if gpu {
                     "fullmag_fdm_cuda_transport".into()
                 } else if native {
@@ -327,26 +425,20 @@ fn fdm_transport_execution_provenance_for_lane(
                 } else {
                     "fullmag_fdm_cpu_rust_transport".into()
                 },
-                runtime_id: if gpu {
-                    "fdm_cuda_transport_m1_v1".into()
-                } else if native {
-                    "fdm_cpu_native_transport_m1_v1".into()
-                } else {
-                    "fdm_cpu_rust_transport_reference_v1".into()
-                },
+                runtime_id: facts.runtime_id.into(),
                 engine_id: if native {
                     "native_m1_v1".into()
                 } else {
                     "rust_reference_v1".into()
                 },
-                charge_solver_engine: descriptor.charge_solver.engine.clone(),
-                spin_solver_engine: descriptor.spin_solver.engine.clone(),
+                charge_solver_engine: facts.charge_solver_engine,
+                spin_solver_engine: facts.spin_solver_engine,
                 constitutive_version: resolved.constitutive_version.clone(),
                 operator_version: resolved.operator_version.clone(),
                 physical_residual_version: resolved.physical_residual_version.clone(),
-                charge_operator_version: Some(descriptor.charge_solver.operator_version.clone()),
-                spin_operator_version: Some(descriptor.spin_solver.operator_version.clone()),
-                interface_formula_versions: descriptor
+                charge_operator_version: Some(facts.charge_operator_version),
+                spin_operator_version: Some(facts.spin_operator_version),
+                interface_formula_versions: facts
                     .interfaces
                     .iter()
                     .map(|interface| match &interface.law {
@@ -357,14 +449,14 @@ fn fdm_transport_execution_provenance_for_lane(
                         } => Some(formula_version.clone()),
                     })
                     .collect(),
-                torque_formula_version: descriptor.torque_formula_version.clone(),
+                torque_formula_version: facts.torque_formula_version,
                 interface_realization: match (transparent, mixing) {
                     (false, false) => "none".into(),
                     (true, false) => "transparent".into(),
                     (false, true) => "magnetoelectronic.fullmag.v2".into(),
                     (true, true) => "transparent+magnetoelectronic.fullmag.v2".into(),
                 },
-                stage_coupling: "one_way_stage_refresh".into(),
+                stage_coupling: facts.stage_coupling,
                 capability_status: if gpu || native {
                     "semantic_only".into()
                 } else {
@@ -376,28 +468,22 @@ fn fdm_transport_execution_provenance_for_lane(
                 } else {
                     "algebra_validated".into()
                 },
-                validation_scope: if gpu {
-                    "fdm_gpu_double_native_m1_v1_runtime_contract_only".into()
-                } else if native {
-                    "opt_in_fdm_cpu_double_native_m1_v1_contract_only".into()
-                } else {
-                    "fdm_cpu_double_reference_transport".into()
-                },
+                validation_scope: facts.validation_scope.into(),
                 inserted_default_boundaries: resolved.inserted_default_boundaries.clone(),
                 charge_domain: fullmag_ir::ResolvedFemTransportDomainIR {
                     regions: Vec::new(),
-                    element_mask: descriptor.charge_active_cells.clone(),
+                    element_mask: facts.charge_active_cells.to_vec(),
                 },
                 spin_domain: fullmag_ir::ResolvedFemTransportDomainIR {
                     regions: Vec::new(),
-                    element_mask: descriptor.spin_active_cells.clone(),
+                    element_mask: facts.spin_active_cells.to_vec(),
                 },
                 charge_insulating_boundaries: Vec::new(),
                 spin_insulating_boundaries: Vec::new(),
                 interfaces: Vec::new(),
                 torque_target: None,
-                fdm_interfaces: descriptor.interfaces.clone(),
-                fdm_torque_target_cells: descriptor.torque_target_cells.clone(),
+                fdm_interfaces: facts.interfaces.to_vec(),
+                fdm_torque_target_cells: facts.torque_target_cells.to_vec(),
                 fallback: None,
                 degradation: None,
                 oersted_source_kind: None,
@@ -1234,35 +1320,6 @@ impl FdmSpinTransportWorkflow {
             next_dt_s,
             last_normalized_error: normalized_error,
         };
-    }
-
-    pub(crate) fn canonicalize_fixed_step_time(
-        &mut self,
-        time_s: f64,
-        previous_dt_s: f64,
-    ) -> Result<(), RunError> {
-        if !time_s.is_finite()
-            || time_s < 0.0
-            || !previous_dt_s.is_finite()
-            || previous_dt_s <= 0.0
-            || self.attempt_checkpoint.is_some()
-            || self.transient_attempt_origin.is_some()
-            || !self.transient_candidates.is_empty()
-        {
-            return Err(run_error(
-                "cannot canonicalize an invalid or uncommitted coupled fixed-step state",
-            ));
-        }
-        let accepted = self
-            .accepted
-            .as_mut()
-            .ok_or_else(|| run_error("cannot canonicalize missing accepted transport state"))?;
-        accepted.evaluated_time_s = time_s;
-        for state in self.transient_states.values_mut() {
-            state.time_s = time_s;
-            state.previous_dt_s = Some(previous_dt_s);
-        }
-        Ok(())
     }
 
     pub(crate) fn coupled_checkpoint(
@@ -2121,8 +2178,10 @@ fn solve_coupled_module(
         telemetry: FdmSpinTransportTelemetry {
             charge_iterations: 0,
             charge_residual_l2: solution.telemetry.scaled_charge_residual,
-            charge_net_boundary_current_a: 0.0,
-            charge_max_abs_divergence_a_per_m3: 0.0,
+            charge_net_boundary_current_a: solution.telemetry.charge_net_boundary_current_a,
+            charge_max_abs_divergence_a_per_m3: solution
+                .telemetry
+                .charge_max_abs_divergence_a_per_m3,
             spin_iterations: solution.telemetry.linear_iterations,
             spin_initial_residual_l2: solution
                 .telemetry
@@ -3486,6 +3545,38 @@ mod tests {
         }
     }
 
+    #[test]
+    fn reciprocal_and_transient_plans_publish_transport_execution_provenance() {
+        let reciprocal = fdm_transport_execution_provenance(&reciprocal_plan());
+        assert_eq!(reciprocal.len(), 1, "M2 must publish requested/resolved execution");
+        assert_eq!(reciprocal[0].runtime_id, "fdm_cpu_rust_coupled_transport_reference_v1");
+        assert_eq!(reciprocal[0].spin_solver_engine, FDM_CPU_RECIPROCAL_ENGINE_ID);
+        assert_eq!(reciprocal[0].stage_coupling, FDM_CPU_RECIPROCAL_STAGE_COUPLING);
+        assert_eq!(reciprocal[0].resolved_device, "cpu");
+
+        let transient_plan = fixed_transient_plan(1.0e-13);
+        let transient = fdm_transport_execution_provenance(&transient_plan);
+        assert_eq!(transient.len(), 1, "M3 must publish requested/resolved execution");
+        assert_eq!(
+            transient[0].runtime_id,
+            "fdm_cpu_rust_transient_transport_reference_v1"
+        );
+        let integrator_version = &transient_plan.spin_transport_plans[0]
+            .fdm_cpu_double_transient
+            .as_ref()
+            .expect("transient descriptor")
+            .integrator_version;
+        assert_eq!(&transient[0].stage_coupling, integrator_version);
+        assert_eq!(
+            transient[0].resolved_execution_mode,
+            format!(
+                "{:?}",
+                transient_plan.spin_transport_plans[0].resolved_execution_mode
+            )
+            .to_ascii_lowercase()
+        );
+    }
+
     fn reciprocal_plan() -> FdmPlanIR {
         let mut plan = plan();
         let resolved = &mut plan.spin_transport_plans[0];
@@ -4037,7 +4128,7 @@ mod tests {
                 &[],
                 Some(crate::types::LiveStepConsumer {
                     grid: plan.grid.cells,
-                    field_every_n: 1,
+                    field_cadence: crate::LiveFieldCadence::every_n_steps(1),
                     initial_snapshot: true,
                     display_selection: None,
                     interrupt_requested: None,
@@ -4262,7 +4353,7 @@ mod tests {
                 &[],
                 Some(crate::types::LiveStepConsumer {
                     grid: candidate_plan.grid.cells,
-                    field_every_n: 1,
+                    field_cadence: crate::LiveFieldCadence::every_n_steps(1),
                     initial_snapshot: true,
                     display_selection: None,
                     interrupt_requested: None,
@@ -4388,7 +4479,7 @@ mod tests {
             &[],
             Some(crate::types::LiveStepConsumer {
                 grid: plan.grid.cells,
-                field_every_n: 1,
+                field_cadence: crate::LiveFieldCadence::every_n_steps(1),
                 initial_snapshot: false,
                 display_selection: Some(&display),
                 interrupt_requested: None,

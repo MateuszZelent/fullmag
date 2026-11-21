@@ -244,7 +244,8 @@
   transition: border-color var(--fm-transition-fast), box-shadow var(--fm-transition-fast);
 }
 
-.fm-dropdown-color__swatch:hover {
+.fm-dropdown-color__swatch:hover,
+.fm-dropdown-color__swatch:focus-within {
   border-color: var(--fm-accent);
   box-shadow:
     var(--fm-shadow-swatch-inset),
@@ -298,4 +299,11 @@
   outline: none;
   border-color: var(--fm-accent);
   box-shadow: 0 0 0 1px var(--fm-accent);
+}
+
+/* Reduced motion: transform transitions snap; colour/shadow transitions remain. */
+@media (prefers-reduced-motion: reduce) {
+  .fm-dropdown-slider__track::-webkit-slider-thumb {
+    transition-property: background;
+  }
 }

@@ -5,14 +5,14 @@
 //! bounded, so the solver gets back-pressure instead of unbounded RAM growth if
 //! disk I/O falls behind.
 
-#[cfg(any(feature = "cuda", feature = "fem-native"))]
+#[cfg(any(test, feature = "cuda", feature = "fem-native"))]
 use crate::artifacts::field_unit;
 use crate::artifacts::{
     write_field_snapshot_artifact, write_scalar_row, write_scalars_csv_header, FieldArtifactContext,
 };
 use crate::autosave_storage::{
     AutosaveTargetState, AutosaveTargetWriter, ContinuousIndexEntry, StageManifest,
-    StageSampleCoordinate,
+    StageManifestIdentity, StageSampleCoordinate,
 };
 #[cfg(feature = "cuda")]
 use crate::fdm::gpu::cuda::native::{
@@ -27,7 +27,7 @@ use fullmag_engine::{
     MAX_ADAPTIVE_ATTEMPT_RECORDS,
 };
 
-#[cfg(any(feature = "cuda", feature = "fem-native"))]
+#[cfg(any(test, feature = "cuda", feature = "fem-native"))]
 use std::collections::HashMap;
 use std::fs::{self, File};
 use std::io::{BufWriter, Write};
@@ -78,11 +78,47 @@ pub(crate) struct ArtifactPipelineSummary {
     pub scalar_row_writer_wall_time_ns: u64,
     pub field_snapshot_writer_wall_time_ns: u64,
     pub native_field_snapshot_writer_wall_time_ns: u64,
-    /// Root of stage-autosave artifacts when it is distinct from the regular
-    /// artifact output.  Final execution resolution is known only after the
-    /// solver returns, so the caller must finalize this tree after the writer
-    /// thread has flushed it.
+    /// Root of stage-autosave artifacts, including the default same-root case.
+    /// Finalization after writer drain uses the exact stage identity below.
     pub autosave_root: Option<PathBuf>,
+    /// Exact stage manifests opened by the Zarr stage writer.
+    pub stage_autosave_completion_target: Option<StageAutosaveCompletionTarget>,
+    /// Exact regular-field `.zattrs` paths opened by this writer. These runs
+    /// have a stage ID but no stage index contract.
+    pub regular_zarr_completion_targets: Vec<RegularZarrCompletionTarget>,
+    /// Binds finalization to the run output and its problem identity.
+    pub output_dir: Option<PathBuf>,
+    pub producer_identity: Option<ArtifactProducerIdentity>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ArtifactProducerIdentity {
+    pub problem_name: String,
+    pub ir_version: String,
+    pub source_hash: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct StageAutosaveCompletionTarget {
+    pub identity: StageManifestIdentity,
+    pub stage_manifest_path: PathBuf,
+    pub artifact_manifest_path: PathBuf,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct RegularZarrCompletionTarget {
+    pub stage_id: String,
+    pub attrs_path: PathBuf,
+}
+
+pub(crate) fn completion_stage_id_for_problem(problem: &fullmag_ir::ProblemIR) -> String {
+    problem
+        .problem_meta
+        .runtime_metadata
+        .get("active_stage_id")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or(&problem.problem_meta.entrypoint_kind)
+        .to_string()
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -259,6 +295,10 @@ fn adaptive_attempt_reason_name(reason: AdaptiveAttemptReason) -> &'static str {
 enum ArtifactJob {
     TerminalHistory(serde_json::Value),
     ScalarRow(StepStats),
+    #[cfg_attr(
+        not(any(feature = "fem-native", test)),
+        expect(dead_code, reason = "native FEM stage autosave records are produced by the fem-native lane")
+    )]
     StageAutosaveScalarRow(StepStats),
     FieldSnapshot {
         snapshot: FieldSnapshot,
@@ -331,6 +371,10 @@ pub(crate) struct ArtifactPipelineSender {
     queue_depth: Arc<AtomicUsize>,
     diagnostics: Arc<ArtifactPipelineDiagnosticsState>,
     physics_execution_context: Option<crate::physics_graph_execution::PhysicsGraphExecutionContext>,
+    #[cfg_attr(
+        not(any(feature = "fem-native", test)),
+        expect(dead_code, reason = "native FEM reads the stage autosave table schedule")
+    )]
     has_physical_time_stage_autosave_table: bool,
     #[cfg(any(feature = "cuda", feature = "fem-native"))]
     accepted_step_fields: Arc<Vec<(String, u64)>>,
@@ -339,6 +383,10 @@ pub(crate) struct ArtifactPipelineSender {
 }
 
 impl ArtifactPipelineSender {
+    #[cfg_attr(
+        not(any(feature = "cuda", feature = "fem-native", test)),
+        expect(dead_code, reason = "CUDA and native FEM consumers inspect accepted-step autosave schedules")
+    )]
     pub(crate) fn has_accepted_step_autosave_schedules(&self) -> bool {
         let has_field_schedule = {
             #[cfg(any(feature = "cuda", feature = "fem-native"))]
@@ -360,6 +408,10 @@ impl ArtifactPipelineSender {
         }
     }
 
+    #[cfg_attr(
+        not(any(feature = "fem-native", test)),
+        expect(dead_code, reason = "native FEM checks for a physical-time stage autosave table")
+    )]
     pub(crate) fn has_physical_time_stage_autosave_table(&self) -> bool {
         self.has_physical_time_stage_autosave_table
     }
@@ -375,7 +427,7 @@ impl ArtifactPipelineSender {
         self.tx.send(job).map_err(|_| {
             let queue_depth_after_rollback = self
                 .queue_depth
-                .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |depth| {
+                .try_update(Ordering::Relaxed, Ordering::Relaxed, |depth| {
                     Some(depth.saturating_sub(1))
                 })
                 .map(|previous| previous.saturating_sub(1))
@@ -645,7 +697,7 @@ impl ArtifactPipelineSender {
     fn rollback_queue_depth(&self) {
         let queue_depth_after_rollback = self
             .queue_depth
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |depth| {
+            .try_update(Ordering::Relaxed, Ordering::Relaxed, |depth| {
                 Some(depth.saturating_sub(1))
             })
             .map(|previous| previous.saturating_sub(1))
@@ -715,32 +767,28 @@ impl ArtifactPipeline {
         field_context: FieldArtifactContext,
         capacity: usize,
     ) -> Result<Self, RunError> {
+        let stage_id = completion_stage_id_for_problem(problem);
         let stage_autosave = problem
             .study
             .sampling()
             .stage_autosave
             .clone()
             .map(|policy| StageAutosavePipelineConfig {
-                stage_id: problem
-                    .problem_meta
-                    .runtime_metadata
-                    .get("active_stage_id")
-                    .and_then(serde_json::Value::as_str)
-                    .unwrap_or(&problem.problem_meta.entrypoint_kind)
-                    .to_string(),
+                stage_id: stage_id.clone(),
                 policy,
             });
         let physics_execution_context =
             crate::physics_graph_execution::PhysicsGraphExecutionContext::from_problem_and_plan(
                 problem, plan,
             )?;
-        Self::start_with_stage_autosave_roots(
+        Self::start_with_stage_autosave_roots_and_identity(
             output_dir,
             autosave_root,
             field_context,
             capacity,
             stage_autosave,
             Some(physics_execution_context),
+            Some(stage_id),
         )
     }
 
@@ -761,6 +809,7 @@ impl ArtifactPipeline {
         )
     }
 
+    #[cfg(test)]
     fn start_with_stage_autosave_roots(
         output_dir: PathBuf,
         autosave_root: PathBuf,
@@ -770,6 +819,31 @@ impl ArtifactPipeline {
         physics_execution_context: Option<
             crate::physics_graph_execution::PhysicsGraphExecutionContext,
         >,
+    ) -> Result<Self, RunError> {
+        let stage_id = stage_autosave
+            .as_ref()
+            .map(|config| config.stage_id.clone());
+        Self::start_with_stage_autosave_roots_and_identity(
+            output_dir,
+            autosave_root,
+            field_context,
+            capacity,
+            stage_autosave,
+            physics_execution_context,
+            stage_id,
+        )
+    }
+
+    fn start_with_stage_autosave_roots_and_identity(
+        output_dir: PathBuf,
+        autosave_root: PathBuf,
+        field_context: FieldArtifactContext,
+        capacity: usize,
+        stage_autosave: Option<StageAutosavePipelineConfig>,
+        physics_execution_context: Option<
+            crate::physics_graph_execution::PhysicsGraphExecutionContext,
+        >,
+        stage_id: Option<String>,
     ) -> Result<Self, RunError> {
         let field_storage = configured_field_artifact_storage()?;
         fs::create_dir_all(&output_dir).map_err(|error| RunError {
@@ -823,6 +897,7 @@ impl ArtifactPipeline {
                     writer_diagnostics,
                     stage_autosave,
                     field_storage,
+                    stage_id,
                 )
             })
             .map_err(|error| RunError {
@@ -952,6 +1027,7 @@ struct StageAutosaveRuntime {
     fields: std::collections::BTreeMap<String, FieldCadenceState>,
     relaxation_clock: bool,
     last_stats: Option<StepStats>,
+    completion_target: Option<StageAutosaveCompletionTarget>,
 }
 
 struct FieldCadenceState {
@@ -1029,19 +1105,24 @@ impl StageAutosaveRuntime {
             fields,
             relaxation_clock,
             last_stats: None,
+            completion_target: None,
         };
-        runtime.state.begin_stage(
-            &mut runtime.writer,
-            config.stage_id,
-            policy.layout,
-            policy.format,
-            table_quantities,
-            policy
-                .fields
-                .iter()
-                .map(|field| field.quantity.clone())
-                .collect(),
-        )?;
+        let completion_target = {
+            let manifest = runtime.state.begin_stage(
+                &mut runtime.writer,
+                config.stage_id,
+                policy.layout,
+                policy.format,
+                table_quantities,
+                policy
+                    .fields
+                    .iter()
+                    .map(|field| field.quantity.clone())
+                    .collect(),
+            )?;
+            runtime.writer.completion_target(output_dir, manifest)
+        };
+        runtime.completion_target = completion_target;
         Ok(runtime)
     }
 
@@ -1266,6 +1347,10 @@ impl ArtifactRecorder {
         }
     }
 
+    #[cfg_attr(
+        not(any(feature = "cuda", feature = "fem-gpu", test)),
+        expect(dead_code, reason = "CUDA and FEM GPU accepted-step autosave paths use table cadence")
+    )]
     pub(crate) fn accepted_step_table_due(&self, accepted_step: u64) -> bool {
         #[cfg(feature = "fem-gpu")]
         {
@@ -1333,6 +1418,10 @@ impl ArtifactRecorder {
     }
 
     /// Enqueue a scalar sample for the StageAutosave table without writing legacy traces.
+    #[cfg_attr(
+        not(any(feature = "fem-native", test)),
+        expect(dead_code, reason = "native FEM stage autosave publishes this scalar row")
+    )]
     pub(crate) fn record_stage_autosave_scalar(
         &mut self,
         stats: &StepStats,
@@ -1514,7 +1603,7 @@ impl ArtifactRecorder {
     }
 }
 
-#[cfg(any(feature = "cuda", feature = "fem-native"))]
+#[cfg(any(test, feature = "cuda", feature = "fem-native"))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum NativeSnapshotScalarType {
     #[allow(dead_code)]
@@ -1522,7 +1611,7 @@ enum NativeSnapshotScalarType {
     F64,
 }
 
-#[cfg(any(feature = "cuda", feature = "fem-native"))]
+#[cfg(any(test, feature = "cuda", feature = "fem-native"))]
 #[derive(Debug, Clone, Copy)]
 struct NativeVectorSnapshotInfo {
     cell_count: usize,
@@ -1558,7 +1647,7 @@ impl From<NativeFemFieldSnapshotInfo> for NativeVectorSnapshotInfo {
     }
 }
 
-#[cfg(any(feature = "cuda", feature = "fem-native"))]
+#[cfg(any(test, feature = "cuda", feature = "fem-native"))]
 struct ZarrFieldSeriesWriter {
     root_dir: PathBuf,
     zarray_path: PathBuf,
@@ -1570,9 +1659,10 @@ struct ZarrFieldSeriesWriter {
     samples_writer: BufWriter<File>,
 }
 
-#[cfg(any(feature = "cuda", feature = "fem-native"))]
+#[cfg(any(test, feature = "cuda", feature = "fem-native"))]
 impl ZarrFieldSeriesWriter {
-    fn open(
+    fn get_or_open<'a>(
+        writers: &'a mut HashMap<String, Self>,
         fields_dir: &Path,
         context: &FieldArtifactContext,
         provenance: &ExecutionProvenance,
@@ -1581,7 +1671,14 @@ impl ZarrFieldSeriesWriter {
         component_order: impl Into<String>,
         location: impl Into<String>,
         scope: impl Into<String>,
-    ) -> Result<Self, String> {
+    ) -> Result<&'a mut Self, String> {
+        use std::collections::hash_map::Entry;
+        // Opening initializes the on-disk index, so it is only safe for a new series.
+        let entry = match writers.entry(observable.to_owned()) {
+            Entry::Occupied(entry) => return Ok(entry.into_mut()),
+            Entry::Vacant(entry) => entry,
+        };
+
         let component_order = component_order.into();
         let location = location.into();
         let scope = scope.into();
@@ -1658,7 +1755,7 @@ impl ZarrFieldSeriesWriter {
             samples_writer,
         };
         writer.write_zarray_metadata()?;
-        Ok(writer)
+        Ok(entry.insert(writer))
     }
 
     fn update_provenance(
@@ -1885,7 +1982,7 @@ impl ZarrFieldSeriesWriter {
     }
 }
 
-#[cfg(any(feature = "cuda", feature = "fem-native"))]
+#[cfg(any(test, feature = "cuda", feature = "fem-native"))]
 fn zarr_dtype(scalar_type: NativeSnapshotScalarType) -> &'static str {
     match scalar_type {
         NativeSnapshotScalarType::F32 => "<f4",
@@ -1907,6 +2004,7 @@ fn writer_loop(
     diagnostics: Arc<ArtifactPipelineDiagnosticsState>,
     stage_autosave_config: Option<StageAutosavePipelineConfig>,
     field_storage: FieldArtifactStorage,
+    regular_zarr_stage_id: Option<String>,
 ) -> Result<ArtifactPipelineSummary, String> {
     fs::create_dir_all(output_dir)
         .map_err(|error| format!("failed to prepare output directory: {}", error))?;
@@ -1930,6 +2028,12 @@ fn writer_loop(
         autosave_root: stage_autosave_config
             .as_ref()
             .map(|_| autosave_root.to_path_buf()),
+        output_dir: Some(output_dir.to_path_buf()),
+        producer_identity: Some(ArtifactProducerIdentity {
+            problem_name: field_context.problem_name.clone(),
+            ir_version: field_context.ir_version.clone(),
+            source_hash: field_context.source_hash.clone(),
+        }),
         ..ArtifactPipelineSummary::default()
     };
     let mut scalar_writer: Option<BufWriter<File>> = None;
@@ -1942,7 +2046,10 @@ fn writer_loop(
     let mut stage_autosave = stage_autosave_config
         .map(|config| StageAutosaveRuntime::new(autosave_root, config))
         .transpose()?;
-    #[cfg(any(feature = "cuda", feature = "fem-native"))]
+    summary.stage_autosave_completion_target = stage_autosave
+        .as_ref()
+        .and_then(|runtime| runtime.completion_target.clone());
+    #[cfg(any(test, feature = "cuda", feature = "fem-native"))]
     let mut zarr_writers: HashMap<String, ZarrFieldSeriesWriter> = HashMap::new();
 
     let mut terminal_history: Option<BufWriter<File>> = None;
@@ -1954,7 +2061,7 @@ fn writer_loop(
     };
     for job in rx {
         queue_depth
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |depth| {
+            .try_update(Ordering::Relaxed, Ordering::Relaxed, |depth| {
                 Some(depth.saturating_sub(1))
             })
             .ok();
@@ -2104,7 +2211,7 @@ fn writer_loop(
                         )?;
                     }
                     FieldArtifactStorage::Zarr => {
-                        #[cfg(any(feature = "cuda", feature = "fem-native"))]
+                        #[cfg(any(test, feature = "cuda", feature = "fem-native"))]
                         {
                             let info = NativeVectorSnapshotInfo {
                                 cell_count: snapshot.sample_count(),
@@ -2112,18 +2219,17 @@ fn writer_loop(
                                 scalar_bytes: std::mem::size_of::<f64>(),
                                 scalar_type: NativeSnapshotScalarType::F64,
                             };
-                            let writer = zarr_writers.entry(snapshot.name.clone()).or_insert(
-                                ZarrFieldSeriesWriter::open(
-                                    &fields_dir,
-                                    &field_context,
-                                    &provenance,
-                                    &snapshot.name,
-                                    info,
-                                    snapshot.component_order.clone(),
-                                    snapshot.location.clone(),
-                                    snapshot.scope.clone(),
-                                )?,
-                            );
+                            let writer = ZarrFieldSeriesWriter::get_or_open(
+                                &mut zarr_writers,
+                                &fields_dir,
+                                &field_context,
+                                &provenance,
+                                &snapshot.name,
+                                info,
+                                snapshot.component_order.as_str(),
+                                snapshot.location.as_str(),
+                                snapshot.scope.as_str(),
+                            )?;
                             writer.append_field_snapshot(&snapshot)?;
                             frames_index.record(
                                 &snapshot.name,
@@ -2137,7 +2243,7 @@ fn writer_loop(
                                 None,
                             )?;
                         }
-                        #[cfg(not(any(feature = "cuda", feature = "fem-native")))]
+                        #[cfg(not(any(test, feature = "cuda", feature = "fem-native")))]
                         {
                             return Err(
                                 "Zarr field artifacts require a native CUDA or FEM build"
@@ -2150,7 +2256,7 @@ fn writer_loop(
                     match field_storage {
                         FieldArtifactStorage::Json => runtime.append_field(&snapshot)?,
                         FieldArtifactStorage::Zarr => {
-                            #[cfg(any(feature = "cuda", feature = "fem-native"))]
+                            #[cfg(any(test, feature = "cuda", feature = "fem-native"))]
                             if let Some(writer) = zarr_writers.get(&snapshot.name) {
                                 let values = writer.last_chunk_values_f64()?;
                                 runtime.append_field_values(
@@ -2181,18 +2287,17 @@ fn writer_loop(
                 let info = snapshot.info().map_err(|error| {
                     format!("failed to query CUDA snapshot info: {}", error.message)
                 })?;
-                let writer = zarr_writers.entry(snapshot.name.clone()).or_insert(
-                    ZarrFieldSeriesWriter::open(
-                        &fields_dir,
-                        &field_context,
-                        &provenance,
-                        &snapshot.name,
-                        info.into(),
-                        "xyz",
-                        "sample",
-                        "full",
-                    )?,
-                );
+                let writer = ZarrFieldSeriesWriter::get_or_open(
+                    &mut zarr_writers,
+                    &fields_dir,
+                    &field_context,
+                    &provenance,
+                    &snapshot.name,
+                    info.into(),
+                    "xyz",
+                    "sample",
+                    "full",
+                )?;
                 writer.append_fdm_snapshot(&mut snapshot)?;
                 frames_index.record(
                     &snapshot.name,
@@ -2237,18 +2342,17 @@ fn writer_loop(
                         error.message
                     )
                 })?;
-                let writer = zarr_writers.entry(snapshot.name.clone()).or_insert(
-                    ZarrFieldSeriesWriter::open(
-                        &fields_dir,
-                        &field_context,
-                        &provenance,
-                        &snapshot.name,
-                        info.into(),
-                        "xyz",
-                        "node",
-                        "full",
-                    )?,
-                );
+                let writer = ZarrFieldSeriesWriter::get_or_open(
+                    &mut zarr_writers,
+                    &fields_dir,
+                    &field_context,
+                    &provenance,
+                    &snapshot.name,
+                    info.into(),
+                    "xyz",
+                    "node",
+                    "full",
+                )?;
                 writer.append_fem_snapshot(&mut snapshot)?;
                 frames_index.record(
                     &snapshot.name,
@@ -2299,7 +2403,7 @@ fn writer_loop(
                 let artifact_provenance =
                     crate::artifacts::artifact_provenance_json(&field_context, &provenance);
                 let result = (|| -> Result<(), String> {
-                    #[cfg(any(feature = "cuda", feature = "fem-native"))]
+                    #[cfg(any(test, feature = "cuda", feature = "fem-native"))]
                     for writer in zarr_writers.values() {
                         writer.update_provenance(&field_context, &provenance)?;
                     }
@@ -2332,7 +2436,7 @@ fn writer_loop(
         })?;
     }
 
-    #[cfg(any(feature = "cuda", feature = "fem-native"))]
+    #[cfg(any(test, feature = "cuda", feature = "fem-native"))]
     for (observable, writer) in &mut zarr_writers {
         writer.samples_writer.flush().map_err(|error| {
             format!(
@@ -2341,6 +2445,20 @@ fn writer_loop(
             )
         })?;
     }
+
+    #[cfg(any(test, feature = "cuda", feature = "fem-native"))]
+    if let Some(stage_id) = regular_zarr_stage_id.as_ref() {
+        summary.regular_zarr_completion_targets = zarr_writers
+            .values()
+            .map(|writer| RegularZarrCompletionTarget {
+                stage_id: stage_id.clone(),
+                attrs_path: writer.root_dir.join(".zattrs"),
+            })
+            .collect();
+    }
+
+    #[cfg(not(any(test, feature = "cuda", feature = "fem-native")))]
+    let _ = regular_zarr_stage_id;
 
     frames_index.finish()?;
     if let Some(runtime) = stage_autosave {
@@ -2351,6 +2469,32 @@ fn writer_loop(
 }
 
 impl StageAutosaveWriter {
+    fn completion_target(
+        &self,
+        output_dir: &Path,
+        manifest: &StageManifest,
+    ) -> Option<StageAutosaveCompletionTarget> {
+        let Self::Zarr(writer) = self else {
+            return None;
+        };
+        let stage_path = writer
+            .store_path(&manifest.target)
+            .join("stages")
+            .join(format!(
+                "stage_{:04}_{}",
+                manifest.stage_index, manifest.stage_id
+            ));
+        Some(StageAutosaveCompletionTarget {
+            identity: StageManifestIdentity {
+                target: manifest.target.clone(),
+                stage_id: manifest.stage_id.clone(),
+                stage_index: manifest.stage_index,
+            },
+            stage_manifest_path: stage_path.join("manifest.json"),
+            artifact_manifest_path: output_dir.join(format!("{}.autosave.json", manifest.target)),
+        })
+    }
+
     fn update_provenance(&mut self, provenance: &serde_json::Value) -> Result<(), String> {
         match self {
             Self::Zarr(writer) => writer.update_provenance(provenance),
@@ -3025,6 +3169,93 @@ mod tests {
         fs::remove_dir_all(output_dir).expect("remove transport artifact fixture");
     }
 
+    #[test]
+    fn zarr_field_sample_indexes_survive_interleaved_buffer_flushes() {
+        let output = tempfile::tempdir().expect("temporary run output");
+        let context = FieldArtifactContext {
+            problem_name: "zarr-sample-index".into(),
+            ir_version: "v0".into(),
+            source_hash: None,
+            execution_mode: fullmag_ir::ExecutionMode::Strict,
+            layout: serde_json::json!({"kind": "fdm", "grid": [1, 1, 1]}),
+            magnetization_field_semantics: Ok(None),
+            execution_resolution: None,
+        };
+        // Each index must cross the BufWriter capacity: for shorter runs a final
+        // flush can mask truncation caused by re-opening an active series.
+        const STEPS: u64 = 513;
+        let series = [("m", 1), ("H_eff", 2)];
+        let (tx, rx) = mpsc::channel();
+        for step in 0..STEPS {
+            for (name, stride) in series {
+                if step % stride == 0 {
+                    let snapshot = FieldSnapshot::new(
+                        name,
+                        step,
+                        step as f64,
+                        1.0,
+                        3,
+                        "xyz",
+                        "sample",
+                        "full",
+                        step + 1,
+                        vec![step as f64, 0.0, 0.0],
+                    )
+                    .expect("valid snapshot");
+                    tx.send(ArtifactJob::FieldSnapshot {
+                        snapshot,
+                        provenance: ExecutionProvenance::default(),
+                    })
+                    .expect("queue field snapshot");
+                }
+            }
+        }
+        drop(tx);
+        writer_loop(
+            output.path(),
+            output.path(),
+            context,
+            rx,
+            Arc::default(),
+            Arc::default(),
+            None,
+            FieldArtifactStorage::Zarr,
+            None,
+        )
+        .expect("drain field snapshots");
+
+        for (name, stride) in series {
+            let dir = output.path().join("fields").join(format!("{name}.zarr"));
+            let csv = fs::read_to_string(dir.join("samples.csv")).unwrap();
+            let mut rows = csv.lines();
+            assert_eq!(
+                rows.next(),
+                Some("sample,step,time,solver_dt,chunk_key,dtype,scalar_bytes,cell_count")
+            );
+            let shape: serde_json::Value =
+                serde_json::from_slice(&fs::read(dir.join(".zarray")).unwrap()).unwrap();
+            let count = STEPS.div_ceil(stride);
+            assert_eq!(shape["shape"], serde_json::json!([count, 3, 1]));
+            for sample in 0..count {
+                let step = sample * stride;
+                let chunk = format!("{sample}.0.0");
+                let expected = format!(
+                    "{sample},{step},{:.15e},{:.15e},{chunk},<f8,8,1",
+                    step as f64, 1.0
+                );
+                assert_eq!(
+                    rows.next(),
+                    Some(expected.as_str()),
+                    "{name} sample {sample}"
+                );
+                let bytes = fs::read(dir.join(chunk)).unwrap();
+                assert_eq!(bytes.len(), 24);
+                assert_eq!(&bytes[..8], &(step as f64).to_le_bytes());
+            }
+            assert_eq!(rows.next(), None);
+        }
+    }
+
     #[cfg(feature = "cuda")]
     #[test]
     fn zarr_writer_preserves_regular_transport_snapshot_shape_and_soa_order() {
@@ -3051,7 +3282,9 @@ mod tests {
             scalar_bytes: 8,
             scalar_type: NativeSnapshotScalarType::F64,
         };
-        let mut writer = ZarrFieldSeriesWriter::open(
+        let mut writers = HashMap::new();
+        let writer = ZarrFieldSeriesWriter::get_or_open(
+            &mut writers,
             &fields_dir,
             &context,
             &ExecutionProvenance::default(),
@@ -3095,6 +3328,7 @@ mod tests {
             zattrs["component_order"],
             serde_json::json!(["x", "y", "z"])
         );
+        drop(writers);
         fs::remove_dir_all(fields_dir).expect("remove Zarr fixture");
     }
 
@@ -3379,6 +3613,187 @@ mod tests {
         );
         fs::remove_dir_all(output_dir).expect("remove autosave output fixture");
         fs::remove_dir_all(autosave_root).expect("remove autosave provenance fixture");
+    }
+
+    #[test]
+    fn fdm_multilayer_terminal_provenance_is_preserved_across_zarr_metadata_updates() {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time")
+            .as_nanos();
+        let output_dir = std::env::temp_dir().join(format!(
+            "fullmag-fdm-multilayer-provenance-output-{}-{unique}",
+            std::process::id()
+        ));
+        let autosave_root = std::env::temp_dir().join(format!(
+            "fullmag-fdm-multilayer-provenance-autosave-{}-{unique}",
+            std::process::id()
+        ));
+        let field_context = FieldArtifactContext {
+            problem_name: "fdm-multilayer-provenance".into(),
+            ir_version: "v0".into(),
+            source_hash: Some("source-hash".into()),
+            execution_mode: fullmag_ir::ExecutionMode::Strict,
+            layout: serde_json::json!({"kind": "fdm_multilayer", "grid": [1, 1, 1]}),
+            magnetization_field_semantics: Ok(None),
+            execution_resolution: None,
+        };
+        let stage_autosave = StageAutosavePipelineConfig {
+            stage_id: "relax".into(),
+            policy: fullmag_ir::StageAutosaveIR {
+                kind: "stage_autosave".into(),
+                target: "state".into(),
+                layout: fullmag_ir::AutosaveLayoutIR::Separate,
+                format: fullmag_ir::AutosaveFormatIR::Zarr,
+                table: None,
+                fields: vec![fullmag_ir::FieldAutosaveIR {
+                    kind: "field_autosave".into(),
+                    quantity: "m".into(),
+                    every_seconds: None,
+                    sample_period_policy: None,
+                    every_steps: Some(1),
+                }],
+            },
+        };
+        let mut pipeline = ArtifactPipeline::start_with_stage_autosave_roots(
+            output_dir.clone(),
+            autosave_root.clone(),
+            field_context.clone(),
+            2,
+            Some(stage_autosave),
+            None,
+        )
+        .expect("start streaming FDM multilayer pipeline");
+        let mut recorder = ArtifactRecorder::streaming(
+            ExecutionProvenance {
+                execution_engine: "cuda_native_multilayer_convolution".into(),
+                precision: "double".into(),
+                ..ExecutionProvenance::default()
+            },
+            pipeline.sender(),
+        );
+        recorder
+            .record_field_snapshot(
+                FieldSnapshot::new(
+                    "m",
+                    1,
+                    1.0e-13,
+                    1.0e-13,
+                    3,
+                    "xyz",
+                    "cell",
+                    "full",
+                    1,
+                    vec![1.0, 0.0, 0.0],
+                )
+                .expect("valid FDM multilayer snapshot"),
+            )
+            .expect("enqueue FDM multilayer snapshot");
+        let initial_provenance = recorder.provenance_snapshot();
+        recorder
+            .replace_provenance_synchronously(initial_provenance)
+            .expect("drain accepted snapshot before terminal provenance");
+
+        let field_chunk = autosave_root.join("state.zarr/stages/stage_0000_relax/fields/m/0.0");
+        let field_payload_before_terminal_update =
+            fs::read(&field_chunk).expect("read accepted field payload");
+        let terminal_provenance = ExecutionProvenance {
+            execution_engine: "cuda_native_multilayer_convolution".into(),
+            precision: "double".into(),
+            demag_operator_kind: Some("native_multilayer_tensor_fft_newell".into()),
+            fft_backend: Some("cuFFT".into()),
+            requested_energy_minimizer: Some("projected_gradient_bb".into()),
+            resolved_energy_minimizer: Some("projected_gradient_bb".into()),
+            energy_minimizer_realization: Some("cuda_native_projected_gradient_bb".into()),
+            requested_demag_realization: Some("native_multilayer_tensor_fft_newell".into()),
+            resolved_demag_realization: Some("native_multilayer_tensor_fft_newell".into()),
+            ..ExecutionProvenance::default()
+        };
+        recorder
+            .replace_provenance_synchronously(terminal_provenance.clone())
+            .expect("publish terminal FDM multilayer provenance to open stores");
+        let request = || crate::types::ExecutionRequestProvenance {
+            backend: "fdm".into(),
+            device: "gpu".into(),
+            precision: "double".into(),
+            mode: "strict".into(),
+        };
+        let resolution = crate::types::FinalExecutionResolutionProvenance {
+            authored_request: request(),
+            effective_request: request(),
+            resolved_execution: request(),
+            resolution_mode: "exact".into(),
+            fallback_occurred: false,
+            fallback_reason: None,
+        };
+        let mut expected_provenance =
+            crate::artifacts::artifact_provenance_json(&field_context, &terminal_provenance);
+        expected_provenance["execution_resolution"] =
+            serde_json::to_value(&resolution).expect("serialize execution resolution");
+        drop(recorder);
+        pipeline.finish().expect("finish streaming pipeline");
+        crate::artifacts::finalize_stage_autosave_provenance(&autosave_root, &resolution)
+            .expect("finalize stage autosave execution resolution");
+
+        let root_zattrs: serde_json::Value = serde_json::from_slice(
+            &fs::read(autosave_root.join("state.zarr/.zattrs")).expect("read root zattrs"),
+        )
+        .expect("decode root zattrs");
+        let stage_manifest: serde_json::Value = serde_json::from_slice(
+            &fs::read(autosave_root.join("state.zarr/stages/stage_0000_relax/manifest.json"))
+                .expect("read stage manifest"),
+        )
+        .expect("decode stage manifest");
+        let field_zattrs: serde_json::Value = serde_json::from_slice(
+            &fs::read(autosave_root.join("state.zarr/stages/stage_0000_relax/fields/m/.zattrs"))
+                .expect("read field zattrs"),
+        )
+        .expect("decode field zattrs");
+        for provenance in [
+            &root_zattrs["provenance"],
+            &stage_manifest["provenance"],
+            &field_zattrs["provenance"],
+        ] {
+            assert_eq!(provenance, &expected_provenance);
+            assert_eq!(
+                provenance["execution_engine"],
+                "cuda_native_multilayer_convolution"
+            );
+            assert_eq!(
+                provenance["demag_operator_kind"],
+                "native_multilayer_tensor_fft_newell"
+            );
+            assert_eq!(
+                provenance["requested_energy_minimizer"],
+                "projected_gradient_bb"
+            );
+            assert_eq!(
+                provenance["resolved_demag_realization"],
+                "native_multilayer_tensor_fft_newell"
+            );
+            assert_eq!(
+                provenance["execution_resolution"],
+                serde_json::to_value(&resolution).unwrap()
+            );
+            for key in [
+                "built_at_utc",
+                "git_commit",
+                "worktree_state",
+                "source_snapshot_sha256",
+            ] {
+                assert!(
+                    provenance["build_identity"].get(key).is_some(),
+                    "missing build_identity.{key}"
+                );
+            }
+        }
+        assert_eq!(
+            fs::read(&field_chunk).expect("read field payload after provenance update"),
+            field_payload_before_terminal_update,
+            "provenance updates must not rewrite field payloads"
+        );
+        fs::remove_dir_all(output_dir).expect("remove FDM multilayer artifact output");
+        fs::remove_dir_all(autosave_root).expect("remove FDM multilayer autosave output");
     }
 
     #[cfg(feature = "fem-gpu")]

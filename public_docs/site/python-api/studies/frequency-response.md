@@ -8,9 +8,9 @@ last_updated: 2026-10-14
 reviewed_revision: 5e99782acbb7fb3f65d0cad872e102bf67733103
 ---
 
+(public-docs-python-api-studies-frequency-response)=
 # Frequency Response
 
-(public-docs-python-api-studies-frequency-response)=
 (python-api-studies-frequency-response-problem-statement)=
 ## 1. Physical problem and solver family
 
@@ -203,23 +203,40 @@ FEM GPU supports the `gpu_operator_host_krylov` lane when device capability and 
 - C. Kittel, *On the theory of ferromagnetic resonance absorption*, Phys. Rev. **73**, 155–161 (1948), DOI: [10.1103/PhysRev.73.155](https://doi.org/10.1103/PhysRev.73.155).
 - Y. Saad and M. H. Schultz, *GMRES: A generalized minimal residual algorithm for solving nonsymmetric linear systems*, SIAM J. Sci. Stat. Comput. **7**, 856–869 (1986), DOI: [10.1137/0907058](https://doi.org/10.1137/0907058).
 
-(python-api-studies-frequency-response-source-code-index)=
-## 13. Source-code index
+## Control Room support
 
-### Control Room crosswalk
+Status: Frequency-response stage authoring, FMR susceptibility sweeps, peak extraction, and 3D driven response playback are `partial`; specialized `FrequencyResponseSolverPolicy` linear-system tuning fields without UI controls remain Python-only.
 
 | Python/API surface | Control Room path | Status | Transaction |
 |---|---|---|---|
-| Parameters documented on this page | `Model Explorer -> Stages -> Add stage -> <stage kind>` | `partial` | Submit stage draft; stage and downstream result resources are invalidated |
-| Parameters without a named UI field | `Model Explorer -> Stages -> Add stage -> <stage kind>` | `not implemented` | Python-only until implemented |
+| Driven frequency bounds, step schedule, & excitation binding | `Model Explorer -> Stages -> Add stage -> Frequency Response` (`FrequencyResponseStageInspector`, `StudyStageDraftEditor`) | `partial` | Submit stage draft via `executeStageAfterApply`; stage and downstream result resources are invalidated |
+| Swept FMR curve, resonance peaks, & complex susceptibility detail | `Analysis Plots` (`FmrResponseSweepInspectorPanel`, `FmrPeakInspector`, `FrequencyDomainResponseChart`) | `inspection-only` | Readback from `/v2/sessions/current/analysis/frequency-response/*` and `SolutionSet` artifacts |
+| Driven spatial response field & harmonic phase playback in 3D | `3D Viewport` (`ModeVisualizationInspectorPanel`) | `inspection-only` | `analysis.frequency-response.plot-response-field-3d` and `analysis.frequency-domain.set-3d-phase` |
+| Solver policy parameters without a named UI field | `Model Explorer -> Stages -> Add stage -> Frequency Response` | `Python-only` | Authored in Python |
 
-### Source-map coverage
+```{image} /_static/images/ui/charts-dispersion-and-fmr-spectrum.png
+:alt: Control Room FMR frequency-response curve, extracted peaks, and frequency-domain inspection view
+:align: center
+:width: 100%
+```
+
+```{image} /_static/images/ui/inspector-study-stages-and-rerun.png
+:alt: Study and Stage Inspectors displaying frequency-response stage sequencing and re-run controls
+:align: center
+:width: 100%
+```
+
+See {doc}`/frontend/capability-register`, {doc}`/frontend/inspectors/analysis-and-frequency-domain`, and {doc}`/frontend/inspectors/studies-and-stages`.
+Frontend source owners: `FrequencyResponseStageInspector`, `FmrResponseSweepInspectorPanel`, `FmrPeakInspector`, `ModeVisualizationInspectorPanel`, and `StudyStageDraftEditor`.
+
+(python-api-studies-frequency-response-source-code-index)=
+## 13. Source-code index
 
 | Claim | Path | Stable symbol | Responsibility | Evidence |
 |---|---|---|---|---|
-| Frequency-response study parameters and IR lowering | [`packages/fullmag-py/src/fullmag/model/study.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/study.py#L1250) | `class FrequencyResponse` | Frequency-response study parameters and IR lowering | Source-map validator and focused API tests |
-| Frequency-response solver policy validation and lowering | [`packages/fullmag-py/src/fullmag/model/study.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/study.py#L114) | `class FrequencyResponseSolverPolicy` | Frequency-response solver policy validation and lowering | Source-map validator and focused API tests |
-| Stage specification and builder | [`packages/fullmag-py/src/fullmag/world.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/world.py#L2816) | `class FrequencyResponseStageSpec` | Stage-first frequency-response specification | Source-map validator and focused API tests |
-| Stage authoring entrypoint | [`packages/fullmag-py/src/fullmag/world.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/world.py#L4683) | `add_frequency_response` | Stage-first authoring entrypoint on `StudyStagesBuilder` | Source-map validator and focused API tests |
+| Frequency-response study parameters and IR lowering | [`packages/fullmag-py/src/fullmag/model/study.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/study.py#L1250) | `class FrequencyResponse` | Frequency-response study parameters and IR lowering | API contract and lowering tests |
+| Frequency-response solver policy validation and lowering | [`packages/fullmag-py/src/fullmag/model/study.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/study.py#L114) | `class FrequencyResponseSolverPolicy` | Frequency-response solver policy validation and lowering | API contract and lowering tests |
+| Stage specification and builder | [`packages/fullmag-py/src/fullmag/world.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/world.py#L2816) | `class FrequencyResponseStageSpec` | Stage-first frequency-response specification | API contract and lowering tests |
+| Stage authoring entrypoint | [`packages/fullmag-py/src/fullmag/world.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/world.py#L4683) | `add_frequency_response` | Stage-first authoring entrypoint on `StudyStagesBuilder` | API contract and lowering tests |
 | Planner frequency-response lowering | [`crates/fullmag-plan/src/fem.rs`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/crates/fullmag-plan/src/fem.rs#L6069) | `plan_fem_frequency_response` | Lowers `FrequencyResponse` IR into `FemFrequencyResponsePlanIR` | Planner contract tests |
 | Native FEM driven response solver | [`backends/fem/src/frequency_domain/driven_response_solver.cpp`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/backends/fem/src/frequency_domain/driven_response_solver.cpp#L16901) | `solve_driven_frequency_response` | Executes FEM harmonic response sweep and residual verification | Native frequency-domain tests |

@@ -36,6 +36,7 @@ struct FreshDemagSolveSideEffects {
     uint64_t step_energy_wall_time_ns = 0;
     bool last_solver_setup_reused = false;
     uint32_t solves_current_step = 0;
+    uint32_t linear_iterations_current_step = 0;
 
     explicit FreshDemagSolveSideEffects(const Context &ctx)
         : h_visual_xyz(ctx.demag.h_visual_xyz)
@@ -51,6 +52,7 @@ struct FreshDemagSolveSideEffects {
         , step_energy_wall_time_ns(ctx.poisson_demag.step_energy_wall_time_ns)
         , last_solver_setup_reused(ctx.poisson_demag.last_solver_setup_reused)
         , solves_current_step(ctx.poisson_demag.solves_current_step)
+        , linear_iterations_current_step(ctx.poisson_demag.linear_iterations_current_step)
     {
     }
 
@@ -69,6 +71,7 @@ struct FreshDemagSolveSideEffects {
         ctx.poisson_demag.step_energy_wall_time_ns = step_energy_wall_time_ns;
         ctx.poisson_demag.last_solver_setup_reused = last_solver_setup_reused;
         ctx.poisson_demag.solves_current_step = solves_current_step;
+        ctx.poisson_demag.linear_iterations_current_step = linear_iterations_current_step;
     }
 };
 

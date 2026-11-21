@@ -29,25 +29,8 @@
       "reason": "authoring and IR documented; runtime qualification separate"
     }
   ],
-  "equations": [
-    {
-      "id": "eq-current_transport-2",
-      "symbols": [
-        "q"
-      ],
-      "sources": [
-        "source_current_transport"
-      ]
-    }
-  ],
-  "symbols": [
-    {
-      "id": "q",
-      "latex": "q",
-      "meaning": "canonical typed authoring quantity",
-      "si_unit": "\\mathrm{1}"
-    }
-  ],
+  "equations": [],
+  "symbols": [],
   "sources": [
     {
       "id": "source_current_transport",
@@ -63,7 +46,7 @@
         "python": "name",
         "type": "str",
         "default": "required",
-        "si_unit": "1",
+        "si_unit": "$1$",
         "validation": "non-empty",
         "meaning": "transport module ID",
         "backend_support": "FEM/FDM CPU/GPU: IR; resolver-specific",
@@ -73,7 +56,7 @@
         "python": "model",
         "type": "str",
         "default": "prescribed_density",
-        "si_unit": "1",
+        "si_unit": "$1$",
         "validation": "supported model name",
         "meaning": "current closure",
         "backend_support": "FEM/FDM CPU/GPU: IR; resolved module",
@@ -83,8 +66,8 @@
         "python": "current_density",
         "type": "tuple[float,float,float]",
         "default": "None",
-        "si_unit": "A/m^2",
-        "validation": "required for prescribed_density; finite",
+        "si_unit": "$\\mathrm{A\\,m^{-2}}$",
+        "validation": "required for `prescribed_density`; finite",
         "meaning": "prescribed current density",
         "backend_support": "FEM/FDM CPU/GPU: IR; resolved module",
         "problem_ir": "current_density"
@@ -93,8 +76,8 @@
         "python": "coupling",
         "type": "str",
         "default": "one_way",
-        "si_unit": "1",
-        "validation": "one_way or bidirectional",
+        "si_unit": "$1$",
+        "validation": "`one_way` or `bidirectional`",
         "meaning": "coupling direction",
         "backend_support": "FEM/FDM CPU/GPU: IR; resolved module",
         "problem_ir": "coupling"

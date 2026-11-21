@@ -103,12 +103,13 @@ export function useComputeProbe(): ComputeProbeController {
     [nodeInventoryData, nodeInventoryElapsedMs, nodeInventoryRefreshError, nodeInventoryStatus],
   );
   const [desktop, setDesktop] = useState<ComputeProbeState>(undefined);
-  const [desktopRefreshing, setDesktopRefreshing] = useState(false);
+  const [pendingDesktopRefresh, setPendingDesktopRefresh] = useState<number | null>(null);
   const [desktopFailed, setDesktopFailed] = useState(false);
   const [desktopRefreshId, setDesktopRefreshId] = useState(0);
   const operatorCapability = useRef<string | null>(null);
   const [hasLocalComputeOperator, setHasLocalComputeOperator] = useState(false);
   const needsDesktop = cpu.status === "error" && gpu.status === "error" && !cpu.data && !gpu.data;
+  const desktopRefreshing = needsDesktop && pendingDesktopRefresh === desktopRefreshId;
 
   useEffect(() => {
     const invoke = tauriInvoke();
@@ -134,29 +135,29 @@ export function useComputeProbe(): ComputeProbeController {
 
   useEffect(() => {
     let cancelled = false;
-    let timer: ReturnType<typeof setTimeout> | undefined;
+    let timer: number | undefined;
     const tick = async () => {
       if (cancelled) return;
       if (document.hidden) {
-        timer = setTimeout(() => void tick(), COMPUTE_POLL_MS);
+        timer = window.setTimeout(() => void tick(), COMPUTE_POLL_MS);
         return;
       }
-      setDesktopRefreshing(true);
+      setPendingDesktopRefresh(desktopRefreshId);
       try {
         const next = await probeCompute();
         if (cancelled) return;
         setDesktop((previous) => next ? { ...next, sampledAt: Date.now() } : previous ?? null);
         setDesktopFailed(!next);
-        if (next) timer = setTimeout(() => void tick(), COMPUTE_POLL_MS);
+        if (next) timer = window.setTimeout(() => void tick(), COMPUTE_POLL_MS);
       } finally {
-        if (!cancelled) setDesktopRefreshing(false);
+        if (!cancelled) setPendingDesktopRefresh(null);
       }
     };
     if (needsDesktop) void tick();
 
     return () => {
       cancelled = true;
-      if (timer) clearTimeout(timer);
+      window.clearTimeout(timer);
     };
   }, [needsDesktop, desktopRefreshId]);
 

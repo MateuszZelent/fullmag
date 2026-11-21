@@ -3,7 +3,8 @@ import { useMemo } from "react";
 import type { KernelApi } from "@/kernel/types";
 import type { AnalysisChartCursorPoint } from "@/shared/domain/analysis/chartCursorPoint";
 import { descriptorForFrequencyTable } from "@/shared/domain/analysis/analysisSurfaceDescriptor";
-import { ChartLegend, chartColorNameForIndex } from "@/shared/analysis-charts/ChartLegend";
+import { ChartLegend } from "@/shared/analysis-charts/ChartLegend";
+import { chartColorNameForIndex } from "@/shared/analysis-charts/ChartLegend.model";
 import { sanitizeSelectedSeriesIds } from "@/shared/analysis-charts/chartSeriesSelection";
 import { ChartSection } from "@/shared/analysis-charts/ChartSection";
 import { ChartDisplayUnitControls } from "@/shared/analysis-charts/ChartDisplayUnitControls";
@@ -177,10 +178,10 @@ export function AnalysisFrequencySurface({
 
   const yUnits = [...new Set(series.map((entry) => entry.unit))];
   const preferredYUnits = yUnits.map((unit) => {
-    const requested = series
-      .filter((entry) => entry.unit === unit)
-      .map((entry) => displayUnits?.[entry.quantity])
-      .filter((value): value is string => Boolean(value));
+    const requested = series.flatMap((entry) => {
+      const displayUnit = entry.unit === unit ? displayUnits?.[entry.quantity] : undefined;
+      return displayUnit ? [displayUnit] : [];
+    });
     return requested.length > 0 && requested.every((value) => value === requested[0])
       ? requested[0]
       : null;
@@ -230,7 +231,7 @@ export function AnalysisFrequencySurface({
 
   // Cursor footer keeps the selected scientific point visible outside the canvas.
   const footerContent = selectedPointSummary ? (
-    <div
+    <div role="group"
       aria-label="Selected frequency-domain point"
       className="fm-chart-section__footer-row fm-analysis-plots__status--frequency-domain-selection"
     >
@@ -247,7 +248,7 @@ export function AnalysisFrequencySurface({
 
   // Workflow summary uses qualified physical evidence for any FMR wording.
   const workflowToolbar = workflow ? (
-    <div
+    <div role="group"
       aria-label="Frequency-domain workflow"
       className="fm-analysis-plots__status fm-analysis-plots__status--frequency-domain-workflow"
     >
@@ -283,7 +284,7 @@ export function AnalysisFrequencySurface({
     >
       {physicalMetadata}
       {/* Workbench summary row (mirrors old Frequency-domain workbench pill row) */}
-      <div
+      <div role="group"
         data-analysis-handoff={descriptor.handoff}
         data-analysis-inspector-route={descriptor.inspectorRouteId}
         aria-label="Frequency-domain workbench"
@@ -359,7 +360,7 @@ function frequencyPhysicalMetadata(
     ? Object.entries(displayUnits).map(([quantity, unit]) => `${quantity} [${unit}]`).join(", ")
     : "automatic SI scaling";
   return (
-    <div aria-label="Frequency-domain physical context" className="fm-analysis-plots__physical-context">
+    <div role="group" aria-label="Frequency-domain physical context" className="fm-analysis-plots__physical-context">
       <span>Run: {context.runId ?? "unavailable"}</span>
       <span>Stage: {context.stageId ?? "unavailable"}</span>
       <span>Equilibrium: {context.equilibriumId ?? "unavailable"}</span>

@@ -46,6 +46,7 @@ pub(crate) struct ScriptOutputPaths {
     pub(crate) is_sibling_zarr_bundle: bool,
 }
 
+#[cfg(test)]
 pub(crate) fn resolve_script_output_paths(
     script_path: &Path,
     explicit_output_dir: Option<&Path>,
@@ -84,6 +85,7 @@ pub(crate) fn initialize_zarr_group(path: &Path, attributes: serde_json::Value) 
     Ok(())
 }
 
+#[cfg(test)]
 pub(crate) fn initialize_script_result_bundle(
     paths: &ScriptOutputPaths,
     script_path: &Path,
@@ -110,6 +112,7 @@ pub(crate) fn initialize_script_result_bundle(
     Ok(())
 }
 
+#[cfg(test)]
 pub(crate) fn replace_and_initialize_script_result_bundle(
     paths: &ScriptOutputPaths,
     script_path: &Path,
@@ -651,7 +654,8 @@ fn initial_frequency_response_progress_scalars(
         fullmag_ir::MagnetostaticBoundaryConditionIR::FloquetAirbox => {
             progress.insert("demag_floquet_airbox".to_string(), 1.0);
         }
-        fullmag_ir::MagnetostaticBoundaryConditionIR::Open => {}
+        fullmag_ir::MagnetostaticBoundaryConditionIR::Open
+        | fullmag_ir::MagnetostaticBoundaryConditionIR::OpenAirboxK0 => {}
     }
 
     std::collections::HashMap::from([("fem_frequency_response_progress".to_string(), progress)])
@@ -6352,6 +6356,7 @@ mod tests {
         problem.backend_policy.discretization_hints = Some(fullmag_ir::DiscretizationHintsIR {
             fdm: None,
             fem: Some(fullmag_ir::FemHintsIR {
+                gpu_bb_preconditioner: None,
                 order: 1,
                 hmax: 25e-9,
                 mesh: None,

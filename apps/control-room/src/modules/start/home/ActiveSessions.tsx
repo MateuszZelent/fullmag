@@ -4,9 +4,9 @@ import { ArrowRight } from "lucide-react";
 
 import { Button } from "@/shared/ui/Button";
 
-import type { ProjectStatus } from "../model/types";
 import { SectionHeader } from "../ui/SectionHeader";
 import { StatusPill } from "../ui/StatusPill";
+import { sessionPillStatus } from "./ActiveSessions.model";
 
 export interface ActiveSession {
   readonly sessionId: string;
@@ -21,28 +21,6 @@ export interface ActiveSessionsProps {
   readonly sessions: readonly ActiveSession[];
   /** Leaves Home for the workspace of the current session. */
   readonly onOpen: () => void;
-}
-
-/** The pill colour for a session lifecycle word; the word itself stays visible. */
-export function sessionPillStatus(status: string): ProjectStatus {
-  switch (status) {
-    case "running":
-      return "running";
-    case "failed":
-      return "failed";
-    case "awaiting_command":
-    case "waiting_for_compute":
-    case "completed":
-      return "ready";
-    case "closed":
-    case "stopped":
-    case "cancelled":
-      return "readonly";
-    case "activating":
-    case "materializing_script":
-    default:
-      return "draft";
-  }
 }
 
 /**

@@ -748,6 +748,7 @@ fn sample_identity_distinguishes_target_operator_resolution_quality_and_quantity
                     [0.0, 0.0, 1.0],
                     [0.0, 1.0, 0.0, 1.0],
                 ),
+                window_uv_m: None,
                 operator: PlanarOperatorIR::SlabAverage { thickness_m },
                 resolution,
                 quality: quality.to_string(),
@@ -997,4 +998,66 @@ fn fem_object_scope_selects_only_the_canonical_object() {
     assert_eq!(target.selected_entity_ids(), &[1]);
     assert!(resolve_spatial_target(&field, &MonitorTargetIR::Domain,
         ResolvedSpatialScope::Object { object_id: "absent".into() }, &PlanarOperatorIR::PlaneSample).is_err());
+}
+
+/// Node `i` carries `[i, 10 i, 100 i]`, so nodal and interpolated values differ.
+fn distinct_nodal_fem_target() -> super::ResolvedSpatialTarget {
+    let values = (0..8)
+        .flat_map(|node| {
+            let node = f64::from(node);
+            [node, 10.0 * node, 100.0 * node]
+        })
+        .collect::<Vec<_>>();
+    let field = fem_field(EntityMapping::Identity { entity_count: 8 }, values);
+    resolve_spatial_target(
+        &field,
+        &MonitorTargetIR::Domain,
+        ResolvedSpatialScope::MonitorTarget,
+        &PlanarOperatorIR::PlaneSample,
+    )
+    .unwrap()
+}
+
+#[test]
+fn fem_nearest_node_picks_closest_vertex_of_containing_element() {
+    let target = distinct_nodal_fem_target();
+    // Inside element 0 (nodes 0..=3), closest to node 2 at (0, 1, 0).
+    let point = [0.1, 0.6, 0.1];
+    let (element, interpolated) = target.evaluate_point(point).expect("point is inside");
+    assert_eq!(element, 0);
+    let node = target.nearest_node(point, element).expect("nearest node");
+    assert_eq!(node.kind, "fem_node");
+    assert_eq!(node.node_id, 2);
+    assert_eq!(node.world_m, [0.0, 1.0, 0.0]);
+    assert_eq!(node.values, vec![2.0, 20.0, 200.0]);
+    assert_ne!(node.values, interpolated, "nodal value is not interpolated");
+}
+
+#[test]
+fn fem_nearest_node_tie_prefers_lower_index() {
+    let target = distinct_nodal_fem_target();
+    // Midpoint of the edge between nodes 0 and 1: equidistant from both.
+    let node = target.nearest_node([0.5, 0.0, 0.0], 0).expect("nearest node");
+    assert_eq!(node.node_id, 0);
+    assert_eq!(node.values, vec![0.0, 0.0, 0.0]);
+}
+
+#[test]
+fn fdm_nearest_node_is_cell_centre() {
+    let field = scalar_fdm_field(multi_object_membership(vec![1, 2]), vec![4.0, 9.0]);
+    let target = resolve_spatial_target(
+        &field,
+        &MonitorTargetIR::Domain,
+        ResolvedSpatialScope::MonitorTarget,
+        &PlanarOperatorIR::PlaneSample,
+    )
+    .unwrap();
+    let point = [1.3, 0.2, 0.7];
+    let (cell, _) = target.evaluate_point(point).expect("point is inside");
+    assert_eq!(cell, 1);
+    let node = target.nearest_node(point, cell).expect("cell centre");
+    assert_eq!(node.kind, "fdm_cell_center");
+    assert_eq!(node.node_id, 1);
+    assert_eq!(node.world_m, [1.5, 0.5, 0.5]);
+    assert_eq!(node.values, vec![9.0]);
 }

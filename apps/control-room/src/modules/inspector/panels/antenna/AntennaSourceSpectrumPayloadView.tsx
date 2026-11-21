@@ -23,6 +23,7 @@ const MAX_AXIS_CELLS = 64;
 const MAX_CUT_POINTS = 512;
 const MAX_HEATMAP_ZOOM = 8;
 const MAX_DISPLAY_PAYLOAD_BYTES = 64 * 1024 * 1024;
+const SPECTRUM_CUT_PLOT = { left: 52, right: 350, top: 12, bottom: 112 } as const;
 
 type SpectrumPowerScale = "linear" | "log";
 
@@ -235,14 +236,14 @@ export function AntennaSourceSpectrumPayloadView({
         <AntennaSpectrumExport spectrum={spectrum} amplitudes={payloads.value.amplitudes}
           kU={payloads.value.kU} kV={payloads.value.kV} power={payloads.value.power} />
       </SpectrumPowerGrid>
-      <div className="fm-antenna-spectrum__axes" aria-label="Source spectrum axes">
+      <div role="group" className="fm-antenna-spectrum__axes" aria-label="Source spectrum axes">
         <span>u: {Math.min(MAX_AXIS_CELLS, payloads.value.kU.length)} / {payloads.value.kU.length} · {spectrum.wave_vector_unit}</span>
         <span>v: {Math.min(MAX_AXIS_CELLS, payloads.value.kV.length)} / {payloads.value.kV.length} · {spectrum.wave_vector_unit}</span>
         <span>k_u range: {formatScientific(rangeU?.minimum)} … {formatScientific(rangeU?.maximum)} {spectrum.wave_vector_unit}</span>
         <span>k_v range: {formatScientific(rangeV?.minimum)} … {formatScientific(rangeV?.maximum)} {spectrum.wave_vector_unit}</span>
         <span>cells: {renderedCellCount}{isBinned ? " (max-pooled)" : ""}</span>
       </div>
-      <div className="fm-antenna-spectrum__summary" aria-label="Source spectrum peak">
+      <div role="group" className="fm-antenna-spectrum__summary" aria-label="Source spectrum peak">
         <span>
           Peak {peak ? formatScientific(peak.value) : "unavailable"} {powerUnit}
         </span>
@@ -446,7 +447,7 @@ function SpectrumPowerGrid({
       <span>k_v {formatScientific(selected ? kV[selected.kVIndex] : undefined)} {waveVectorUnit}</span>
       <span>|H̃|² {formatScientific(selected?.power)} {powerUnit}</span>
     </div>
-    {cuts ? <div className="fm-antenna-spectrum__cuts" aria-label="Selected source spectrum cross-sections">
+    {cuts ? <div role="group" className="fm-antenna-spectrum__cuts" aria-label="Selected source spectrum cross-sections">
       {cuts.map((cut) => <SpectrumCutFigure key={cut.direction} cut={cut}
         waveVectorUnit={waveVectorUnit} powerUnit={powerUnit} scale={powerScale}
         powerMinimum={powerMinimum} powerMaximum={powerMaximum} minimumPositivePower={minimumPositivePower} />)}
@@ -580,7 +581,7 @@ function SpectrumCutFigure({
   minimumPositivePower: number | null;
 }) {
   const captionId = useId();
-  const plot = { left: 52, right: 350, top: 12, bottom: 112 };
+  const plot = SPECTRUM_CUT_PLOT;
   const minimumX = cut.axisRange.minimum;
   const maximumX = cut.axisRange.maximum;
   const xRange = maximumX - minimumX;

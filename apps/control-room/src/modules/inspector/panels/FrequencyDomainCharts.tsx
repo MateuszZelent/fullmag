@@ -22,6 +22,7 @@ import type {
 import { eigenModeFieldAvailable } from "@/shared/domain/analysis/frequencyDomainChartModels";
 import { formatFrequencyHz } from "@/shared/domain/analysis/frequencyUnits";
 import { Button } from "@/shared/ui/Button";
+import { keyedOccurrences } from "@/shared/utils/keyedOccurrences";
 
 function formatNumber(value: number): string {
   if (!Number.isFinite(value)) return "n/a";
@@ -300,13 +301,17 @@ export function FrequencyDomainResponseChart({
           </select>
         </label>
       </div>
-      {chartPoints.map((point, index) => {
+      {keyedOccurrences(chartPoints, (point) => JSON.stringify([
+        point.observableId,
+        point.frequencyIndex ?? point.frequencyHz,
+        point.fieldId,
+      ])).map(({ item: point, key }, index) => {
         const pointIndex = point.frequencyIndex ?? index;
         const frequencyLabel = formatFrequencyHz(point.frequencyHz);
         return (
           <div
             className="fm-frequency-domain-chart__point-actions"
-            key={`${point.observableId}:${pointIndex}:${point.frequencyHz}`}
+            key={key}
           >
             <Button
               aria-label={`Select response point ${pointIndex} at ${frequencyLabel}`}
@@ -504,7 +509,7 @@ function FrequencyDomainEChartsFrame({
 }) {
   const exportRef = useRef<ChartRendererOwner | null>(null);
   return (
-    <div aria-label={title} className="fm-frequency-domain-chart" data-renderer="echarts">
+    <div role="group" aria-label={title} className="fm-frequency-domain-chart" data-renderer="echarts">
       <div className="fm-frequency-domain-chart__header">
         <span>{title}</span>
         <small>

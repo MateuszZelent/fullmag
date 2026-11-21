@@ -5,7 +5,7 @@ doc_kind: reference
 audience: user
 owner: fullmag-public-docs
 reviewed_revision: a1de38b4d7dad275dccbdbfd937b757d6ca7ee99
-source_of_truth: docs/physics/0500-fdm-relaxation-algorithms.md, docs/physics/0510-fem-relaxation-algorithms-mfem-gpu.md, docs/physics/0580-canonical-relaxation-equilibrium-contract.md
+source_of_truth: /physics/foundations/llg-equation, /physics/foundations/micromagnetic-energy
 ---
 
 (public-docs-numerical-methods-relaxation-llg-relaxation)=
@@ -236,7 +236,7 @@ For each attempt the backend follows this ownership sequence:
 
 The adaptive error test controls local integration error. It cannot certify an equilibrium: the
 accepted state must still pass the independent torque and optional energy criteria in
-`stopping-criteria.md`.
+{doc}`stopping-criteria`.
 
 (numerical-methods-relaxation-llg-python-api)=
 ## Python API
@@ -445,11 +445,7 @@ and their line-search contracts are described separately.
 
 - W. F. Brown, Jr., *Micromagnetics*, Wiley, 1963.
 - T. L. Gilbert, “A phenomenological theory of damping in ferromagnetic materials,” IEEE Transactions on Magnetics 40 (2004), DOI: [10.1109/TMAG.2004.836740](https://doi.org/10.1109/TMAG.2004.836740).
-- Fullmag canonical contracts: [`0500-fdm-relaxation-algorithms.md`](https://github.com/MateuszZelent/fullmag/blob/master/docs/physics/0500-fdm-relaxation-algorithms.md), [`0510-fem-relaxation-algorithms-mfem-gpu.md`](https://github.com/MateuszZelent/fullmag/blob/master/docs/physics/0510-fem-relaxation-algorithms-mfem-gpu.md), [`0580-canonical-relaxation-equilibrium-contract.md`](https://github.com/MateuszZelent/fullmag/blob/master/docs/physics/0580-canonical-relaxation-equilibrium-contract.md).
-
-## Control Room crosswalk
-
-Use `Model Explorer -> Stages -> Add stage -> <stage kind>` for stage-level controls when the terminal page identifies a matching field. The current editor is partial: only fields surfaced by the stage draft are authorable. Numerical parameters without a matching control are not implemented in the frontend. Do not infer frontend support from Python or backend availability. See {doc}`/frontend/capability-register` for the current register and exact source owner.
+- Fullmag public physics contracts: {doc}`/physics/foundations/llg-equation` and {doc}`/physics/foundations/micromagnetic-energy`.
 
 (numerical-methods-relaxation-llg-source-code-index)=
 ## Source-code index

@@ -334,6 +334,15 @@ bool launch_multilayer_dmi_field_impl(Context &ctx, const char *operation)
         ctx.last_error = std::string(operation) + " requires a staged v2 multilayer plan";
         return false;
     }
+    const bool active_dmi = ctx.has_interfacial_dmi ||
+        ctx.has_rotated_interfacial_dmi || ctx.has_bulk_dmi;
+    if (!active_dmi && ctx.multilayer_dmi_zero_fields_valid) {
+        ctx.last_error.clear();
+        return true;
+    }
+    // Clear the marker before any launch, including failed refreshes. On an
+    // enabled -> disabled transition, run once to erase the previous field.
+    ctx.multilayer_dmi_zero_fields_valid = false;
     if (!context_begin_compute_stream_work(ctx, operation)) {
         return false;
     }
@@ -383,7 +392,8 @@ bool launch_multilayer_dmi_field_impl(Context &ctx, const char *operation)
         return false;
     }
     if (!context_end_compute_stream_work(ctx, operation)) return false;
-    if (ctx.has_interfacial_dmi || ctx.has_rotated_interfacial_dmi || ctx.has_bulk_dmi) {
+    ctx.multilayer_dmi_zero_fields_valid = !active_dmi;
+    if (active_dmi) {
         fullmag_fdm_note_operator_device_execution(ctx, FULLMAG_FDM_OPERATOR_DMI);
     }
     return true;

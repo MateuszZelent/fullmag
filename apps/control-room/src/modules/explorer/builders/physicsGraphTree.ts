@@ -4,7 +4,14 @@ import type {
 } from "@/kernel/api/apiTypes";
 import { isKnownCurrentTransport } from "@/shared/domain/physics/transportRecognition";
 
-import type { ExplorerNode, ExplorerNodeStatus } from "../explorerTypes";
+import type {
+  ExplorerNode,
+  ExplorerNodeStatus,
+  ModelTreeFieldDriveSnapshot,
+} from "../explorerTypes";
+
+/** Module kind of a hand-written mask antenna in the Explorer's physics branches. */
+export const MASK_FIELD_DRIVE_MODULE_KIND = "mask_field_drive";
 
 /**
  * The API graph is deliberately consumed as a small structural contract here.
@@ -129,6 +136,39 @@ export function buildPhysicsGraphTree({
     .map(({ placement, modules: scopedModules }) =>
       buildScopeNode(placement, scopedModules, objects, currentTransportById),
     );
+}
+
+/**
+ * The physics graph with one module per hand-written mask antenna of the scene.
+ * The canonical graph does not list mask antennas; they are added here so they
+ * appear under the scope of their target, next to the regional field drives.
+ */
+export function withMaskAntennaModules(
+  graph: unknown | null | undefined,
+  fieldDrives: readonly ModelTreeFieldDriveSnapshot[],
+): unknown | null | undefined {
+  const antennas = fieldDrives.filter((drive) => drive.driveKind === "mask");
+  if (antennas.length === 0 || !isRecord(graph) || !Array.isArray(graph.modules)) {
+    return graph;
+  }
+  const modules = antennas.map((antenna) => ({
+    activation: antenna.enabled ? "active" : "inactive",
+    applies_to: [
+      antenna.targetKind === "global" || !antenna.targetObjectId
+        ? { kind: "global" }
+        : {
+            kind: antenna.targetRegionId ? "region" : "object",
+            object_id: antenna.targetObjectId,
+            ...(antenna.targetRegionId ? { region_id: antenna.targetRegionId } : {}),
+          },
+    ],
+    capability: "reference_executable",
+    depends_on: [],
+    id: antenna.id,
+    kind: MASK_FIELD_DRIVE_MODULE_KIND,
+    name: antenna.label,
+  }));
+  return { ...graph, modules: [...graph.modules, ...modules] };
 }
 
 /** Return only the object-local branch; buildModelTree embeds this below the object. */
@@ -502,6 +542,7 @@ function labelForKind(kind: string): string {
     current_transport: "Charge transport",
     oersted_field: "Oersted Field",
     regional_field_drive: "Field Drive",
+    [MASK_FIELD_DRIVE_MODULE_KIND]: "Mask Antenna",
     spin_interface: "HM/FM interface",
     spin_torque: "Transport torque",
     spin_transport: "Spin transport",
@@ -511,7 +552,11 @@ function labelForKind(kind: string): string {
 
 function iconForKind(kind: string): ExplorerNode["icon"] {
   if (kind === "current_transport" || kind === "spin_transport") return "activity";
-  if (kind === "oersted_field" || kind === "regional_field_drive") return "wave";
+  if (
+    kind === "oersted_field" ||
+    kind === "regional_field_drive" ||
+    kind === MASK_FIELD_DRIVE_MODULE_KIND
+  ) return "wave";
   if (kind === "spin_torque") return "magnet";
   return "layers";
 }

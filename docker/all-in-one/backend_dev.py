@@ -55,31 +55,9 @@ RECEIPT_SCHEMA = "fullmag.direct-compose.backend-build-receipt.v1"
 LIVE_SYNC_ATTEMPTS = 3
 # Conventional SIGTERM status recorded for a Make stopped with its container.
 INTERRUPTED_MAKE_EXIT_CODE = 143
-# DEV packages run on the GPU of the host that builds them.  "auto" compiles
-# CUDA for the visible devices only; "all" keeps the image's portable matrix.
+# The launcher pins one host target in the selected group's toolchain receipt.
 DEV_CUDA_ARCHITECTURES_ENV = "FULLMAG_DEV_CUDA_ARCHITECTURES"
-CUDA_ARCHITECTURE_LIST_RE = re.compile(
-    r"[1-9][0-9]{1,2}(?:-real|-virtual)?(?:;[1-9][0-9]{1,2}(?:-real|-virtual)?)*"
-)
-CUDA_CAPABILITY_PROBE = r"""import ctypes, json
-driver = ctypes.CDLL("libcuda.so.1")
-if driver.cuInit(0) != 0:
-    raise SystemExit(3)
-count = ctypes.c_int()
-if driver.cuDeviceGetCount(ctypes.byref(count)) != 0 or count.value < 1:
-    raise SystemExit(4)
-found = set()
-for ordinal in range(count.value):
-    device = ctypes.c_int()
-    major = ctypes.c_int()
-    minor = ctypes.c_int()
-    if (driver.cuDeviceGet(ctypes.byref(device), ordinal) != 0
-            or driver.cuDeviceGetAttribute(ctypes.byref(major), 75, device) != 0
-            or driver.cuDeviceGetAttribute(ctypes.byref(minor), 76, device) != 0):
-        raise SystemExit(5)
-    found.add(major.value * 10 + minor.value)
-print(json.dumps(sorted(found)))
-"""
+DEV_CUDA_TARGET_RE = re.compile(r"[1-9][0-9]{1,2}-real")
 LIVE_MANIFEST_SCHEMA = "fullmag.docker-backend-live-source.v1"
 LIVE_SOURCE_MODE = "live-shadow-v1"
 BACKEND_CARGO_PROFILE = "backend-dev"
@@ -1110,7 +1088,7 @@ def _copy_live_regular_file(source: Path, target: Path, relative: str, entry: Ma
         os.chmod(temporary, 0o555 if entry["mode"] == "100755" else 0o444)
         os.replace(temporary, target)
     except OSError as error:
-        _fail(f"cannot synchronize live source {entry['path']}: {error}")
+        _fail(f"cannot synchronize live source {relative}: {error}")
     finally:
         os.close(source_descriptor)
         temporary.unlink(missing_ok=True)
@@ -1999,6 +1977,12 @@ def _toolchain_identity() -> tuple[str, dict[str, Any]]:
     for key in ("declared", "actual", "latest"):
         if not isinstance(dependency.get(key), dict):
             _fail(f"FEM dependency manifest field {key} is invalid")
+    if os.environ.get("FULLMAG_BACKEND_CARGO_PROFILE", BACKEND_CARGO_PROFILE) == BACKEND_CARGO_PROFILE:
+        target = _dev_cuda_architectures()
+        if target is not None:
+            declared_cuda = dependency["declared"].get("cuda", {})
+            if not isinstance(declared_cuda, dict) or declared_cuda.get("architectures") != target:
+                _fail("FEM dependency manifest CUDA target differs from the DEV launcher pin")
     commits = dependency["actual"].get("source_commits")
     if not isinstance(commits, dict) or any(not isinstance(commits.get(key), str) or not commits[key] for key in ("mfem", "libceed", "hypre", "petsc", "slepc")):
         _fail("FEM dependency manifest lacks pinned source commits")
@@ -2018,34 +2002,14 @@ def _validate_cargo_profile(value: str) -> str:
 
 
 def _dev_cuda_architectures() -> str | None:
-    """Resolve the CUDA targets of a DEV build, or None for the image matrix."""
+    """Read the launcher pin, permitting inspection of old unpinned packages."""
 
-    requested = os.environ.get(DEV_CUDA_ARCHITECTURES_ENV, "auto").strip()
-    if requested == "all":
+    requested = os.environ.get(DEV_CUDA_ARCHITECTURES_ENV, "").strip()
+    if not requested:
         return None
-    if requested != "auto":
-        if not CUDA_ARCHITECTURE_LIST_RE.fullmatch(requested):
-            _fail(f"{DEV_CUDA_ARCHITECTURES_ENV} must be auto, all, or a CMake list such as 89-real")
-        return requested
-    try:
-        result = subprocess.run(
-            [sys.executable, "-B", "-c", CUDA_CAPABILITY_PROBE],
-            stdin=subprocess.DEVNULL,
-            capture_output=True,
-            timeout=30,
-            check=False,
-        )
-        capabilities = json.loads(result.stdout) if result.returncode == 0 else None
-    except (OSError, subprocess.SubprocessError, ValueError):
-        capabilities = None
-    if (
-        not isinstance(capabilities, list)
-        or not capabilities
-        or not all(type(value) is int and 30 <= value <= 199 for value in capabilities)
-    ):
-        _log_phase("cuda", "architectures", reason="probe-unavailable", target="image-default")
-        return None
-    return ";".join(f"{value}-real" for value in capabilities)
+    if DEV_CUDA_TARGET_RE.fullmatch(requested) is None:
+        _fail(f"{DEV_CUDA_ARCHITECTURES_ENV} must be one real target, such as 86-real")
+    return requested
 
 
 def _cargo_home(build_root: Path) -> str:
@@ -2130,15 +2094,12 @@ def _build_environment(
         }
     )
     if cargo_profile == BACKEND_CARGO_PROFILE:
-        environment.pop("FULLMAG_CUDA_ARCHITECTURES", None)
-        environment.pop("FULLMAG_FDM_CUDA_ARCHITECTURES", None)
         architectures = _dev_cuda_architectures()
-        if architectures is not None:
-            # FEM reads FULLMAG_CUDA_ARCHITECTURES; FDM has its own variable so
-            # release builds keep their fixed FDM target list.
-            environment["FULLMAG_CUDA_ARCHITECTURES"] = architectures
-            environment["FULLMAG_FDM_CUDA_ARCHITECTURES"] = architectures
-            _log_phase("cuda", "architectures", target=architectures.replace(";", ","))
+        if architectures is None:
+            _fail(f"DEV compilation requires {DEV_CUDA_ARCHITECTURES_ENV} from the managed launcher")
+        environment["FULLMAG_CUDA_ARCHITECTURES"] = architectures
+        environment["FULLMAG_FDM_CUDA_ARCHITECTURES"] = architectures
+        _log_phase("cuda", "architectures", target=architectures)
     for path in (build_root / "cargo", build_root / "home", build_root / "tmp"):
         _ensure_directory(path, f"build directory {path}")
     return environment
@@ -2421,7 +2382,7 @@ def _native_contract_receipt_matches(receipt: Mapping[str, Any], requested: tupl
     )
 
 
-def _package_matches_fresh_live_manifest(
+def _package_source_matches_fresh_live_manifest(
     receipt: Mapping[str, Any],
     manifest_path: Path,
     toolchain: Mapping[str, Any],
@@ -2429,12 +2390,13 @@ def _package_matches_fresh_live_manifest(
     *,
     required_native_contracts: tuple[str, ...] = (),
 ) -> bool:
-    """Check whether a verified package exactly matches a fresh source capture.
+    """Match a receipt to the captured source, toolchain, native, and build inputs.
 
     Capture ids, timestamps, the manifest digest, and the live-manifest digest
     are intentionally excluded: each start creates a new closed manifest even
     when its source identity is unchanged.  The source/native identities,
-    toolchain, and fixed build inputs remain exact bindings.
+    toolchain, native-contract proof, and fixed build inputs remain exact
+    bindings. This matcher deliberately says nothing about shared publication.
     """
 
     if not _native_contract_receipt_matches(receipt, required_native_contracts):
@@ -2476,6 +2438,30 @@ def _package_matches_fresh_live_manifest(
     if not all(build.get(field) == expected_build[field] for field in BACKEND_BUILD_IDENTITY_FIELDS):
         return False
     if os.environ.get("FULLMAG_SHARED_BACKEND_STORE"):
+        if build.get("cuda_architectures") != _dev_cuda_architectures():
+            return False
+    return True
+
+
+def _package_matches_fresh_live_manifest(
+    receipt: Mapping[str, Any],
+    manifest_path: Path,
+    toolchain: Mapping[str, Any],
+    cargo_profile: str,
+    *,
+    required_native_contracts: tuple[str, ...] = (),
+) -> bool:
+    """Require source identity and, when configured, publication eligibility."""
+
+    if not _package_source_matches_fresh_live_manifest(
+        receipt,
+        manifest_path,
+        toolchain,
+        cargo_profile,
+        required_native_contracts=required_native_contracts,
+    ):
+        return False
+    if os.environ.get("FULLMAG_SHARED_BACKEND_STORE"):
         import backend_shared_store as shared
         architectures = _dev_cuda_architectures()
         expected_key = shared.key_for(_shared_package_identity(
@@ -2483,8 +2469,7 @@ def _package_matches_fresh_live_manifest(
             **({"required_native_contracts": required_native_contracts} if required_native_contracts else {})))
         binding = receipt.get("shared_package", {})
         return (isinstance(binding, dict) and binding.get("schema") == shared.SCHEMA
-                and binding.get("key") == expected_key
-                and build.get("cuda_architectures") == architectures)
+                and binding.get("key") == expected_key)
     return True
 
 
@@ -6016,28 +6001,34 @@ def _prepare_with_shared_package(
                 _write_candidate_marker(output, PACKAGE_ROOT, build_root, state="ready", records=records)
                 _log_phase("shared-package", "hit", key=entry.key)
                 return 0
-            # Freeze the probed architecture for the actual compiler invocation.
-            previous = os.environ.get(DEV_CUDA_ARCHITECTURES_ENV)
-            os.environ[DEV_CUDA_ARCHITECTURES_ENV] = architectures or "all"
-            try:
-                if on_actual_build is None:
-                    result = _prepare_locked(args, build_root, output, jobs, toolchain, direct_install_root)
-                else:
-                    result = _prepare_locked(
-                        args, build_root, output, jobs, toolchain, direct_install_root,
-                        on_actual_build=on_actual_build,
-                    )
-            finally:
-                if previous is None:
-                    os.environ.pop(DEV_CUDA_ARCHITECTURES_ENV, None)
-                else:
-                    os.environ[DEV_CUDA_ARCHITECTURES_ENV] = previous
+            if on_actual_build is None:
+                result = _prepare_locked(args, build_root, output, jobs, toolchain, direct_install_root)
+            else:
+                result = _prepare_locked(
+                    args, build_root, output, jobs, toolchain, direct_install_root,
+                    on_actual_build=on_actual_build,
+                )
             if result == 0:
                 receipt, _, _ = _validated_package(output, "shared package publisher", exclude_candidate_marker=True)
                 if receipt["build"].get("cuda_architectures") != architectures:
                     _fail("published CUDA target differs from shared build key")
+                # Materialization may recapture a checkout edited after the
+                # claim was acquired. Never publish that build under the old
+                # immutable key or silently switch keys without their lock.
+                final_identity = _shared_package_identity(
+                    Path(args.manifest), toolchain, architectures,
+                    **({"required_native_contracts": required_contracts} if required_contracts else {}))
+                if final_identity != identity:
+                    _fail(
+                        "shared package source identity changed during preparation; "
+                        "candidate retained without shared publication; retry with stable sources"
+                    )
                 receipt["shared_package"] = {"schema": shared.SCHEMA, "key": entry.key,
                     "inputs": identity, "reuse": "publisher"}
+                if not _package_matches_fresh_live_manifest(
+                    receipt, Path(args.manifest), toolchain, BACKEND_CARGO_PROFILE,
+                    **({"required_native_contracts": required_contracts} if required_contracts else {})):
+                    _fail("shared package producer receipt identity does not match its claimed source")
                 _write_json(output / "backend-build-receipt.json", receipt, "shared package producer receipt")
                 entry.publish(alias, receipt)
                 _log_phase("shared-package", "published", key=entry.key)
@@ -6087,8 +6078,7 @@ def _prepare_locked(
     )
     if required_contracts and cargo_profile != BACKEND_CARGO_PROFILE:
         _fail("native contract qualification requires the backend-dev profile")
-    if required_contracts and required_contracts != ("fem-demag-poisson",):
-        _fail("native contract qualification has no matching Make prebuild selector")
+    # _requested_native_contracts already validates one allowlisted selector.
     environment = _build_environment(workspace, build_root, native, jobs, cargo_profile)
     # These selectors and paths are internal Make inputs. Never trust inherited
     # values from the host or Compose environment.
@@ -6096,7 +6086,7 @@ def _prepare_locked(
     environment.pop("FULLMAG_INTERNAL_NATIVE_CONTRACT_HELPER", None)
     environment.pop("FULLMAG_INTERNAL_NATIVE_CONTRACT_PREPARATION_ROOT", None)
     if required_contracts:
-        environment["FULLMAG_INTERNAL_NATIVE_CONTRACTS"] = "fem-demag-poisson"
+        environment["FULLMAG_INTERNAL_NATIVE_CONTRACTS"] = required_contracts[0]
         environment["FULLMAG_INTERNAL_NATIVE_CONTRACT_HELPER"] = str(
             Path(__file__).resolve().with_name("backend_native_contracts.py")
         )
@@ -7164,6 +7154,7 @@ def _maintain_packages(args) -> int:
 
 
 def _parser() -> argparse.ArgumentParser:
+    import backend_native_contracts
     parser = argparse.ArgumentParser(description=__doc__)
     subparsers = parser.add_subparsers(dest="operation", required=True)
     for name in ("prepare", "build"):
@@ -7198,7 +7189,7 @@ def _parser() -> argparse.ArgumentParser:
     start.add_argument("--build-root", default=BUILD_ROOT, type=Path)
     start.add_argument("--jobs", default=int(os.environ.get("CARGO_BUILD_JOBS", "2")), type=int)
     start.add_argument("--native-contract", action="append", default=None,
-                       choices=("fem-demag-poisson",),
+                       choices=tuple(sorted(backend_native_contracts.ALLOWED_CONTRACTS)),
                        help="require an allowlisted native contract before package publication and API start")
     maintenance = subparsers.add_parser("maintain-packages", help="retain current/direct rollback and bound shared package cache")
     maintenance.add_argument("--max-shared-entries", type=int, default=8)

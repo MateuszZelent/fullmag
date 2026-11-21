@@ -76,6 +76,13 @@ class StoreProofTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'active lease'):
             subject.observe_store(self.store, self.ledger, self.store_id, terminal_only=True)
 
+    def test_explicit_terminal_mode_is_carried_into_both_guest_probes(self):
+        for stopped in (False,True):
+            script=subject._script('sha256:'+'a'*64,stopped,terminal_only=True)
+            compile(script,'<actual terminal-only observer>','exec')
+            self.assertIn('terminal_only=True',script.splitlines()[-1])
+        self.assertIn('terminal_only=False',subject._script('sha256:'+'a'*64,False).splitlines()[-1])
+
     def test_claimed_task_and_active_lease_are_rejected(self):
         path = self.run / 'run_catalog.json'
         catalog = json.loads(path.read_bytes())

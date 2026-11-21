@@ -29,6 +29,19 @@ pub mod script_source_capture;
 pub mod script_stage_contract;
 pub mod script_stage_materialization;
 mod study_artifact;
+mod study_frequency_response_artifact;
+
+pub use study_frequency_response_artifact::{
+    decode_frequency_response_index_bundle, decode_frequency_response_point_bundle,
+    encode_frequency_response_index_bundle, encode_frequency_response_point_bundle,
+    validate_frequency_response_sweep_bundles, FrequencyResponseBundle,
+    FrequencyResponseBundleIdentity, FrequencyResponseBundleManifest,
+    FrequencyResponsePayloadReference, FrequencyResponsePointMetadata,
+    FrequencyResponsePointReference, FREQUENCY_RESPONSE_BUNDLE_MAX_BYTES,
+    FREQUENCY_RESPONSE_CODEC_VERSION, FREQUENCY_RESPONSE_INDEX_CODEC_ID,
+    FREQUENCY_RESPONSE_MANIFEST_MAX_BYTES, FREQUENCY_RESPONSE_POINT_CODEC_ID,
+};
+
 mod study_execution_materialization;
 mod task_execution;
 
@@ -80,7 +93,7 @@ pub use legacy_live_execution::{
 };
 pub use file_repository::{FileProjectRepository, FileRepositoryError};
 pub use closed_loop_preparation::{AcceptedPreparationProof, AcceptedPreparationReceipt, ClosedLoopPreparationPlan, ClosedLoopPreparationReceipt, CLOSED_LOOP_PREPARATION_SCHEMA, CLOSED_LOOP_PREPARATION_BINDING_SCHEMA};
-pub use script_pipeline_acceptance::{compile_accepted_closed_loop_pipeline, validate_accepted_script_pipeline_source, validate_script_source_assets, AcceptedScriptPipeline, SCRIPT_PIPELINE_SOURCE_ASSET_ID, SCRIPT_PIPELINE_SOURCE_SCHEMA};
+pub use script_pipeline_acceptance::{bind_scene_study_authored_initial_state_ports, bind_scene_study_authored_initial_states, bind_scene_study_physical_state_flow, compile_accepted_closed_loop_pipeline, validate_accepted_script_pipeline_source, validate_script_source_assets, AcceptedScriptPipeline, SCRIPT_PIPELINE_SOURCE_ASSET_ID, SCRIPT_PIPELINE_SOURCE_SCHEMA};
 pub use preparation::{
     materialize_antenna_external_lead_inspection_preparation_from_problem,
     materialize_fdm_preparation_from_problem, materialize_fem_preparation_from_problem,
@@ -109,7 +122,7 @@ pub use run_intent_materialization::{
 };
 pub use script_antenna_inspection_planning::plan_script_antenna_inspection;
 pub use script_pipeline_compilation::{
-    materialize_script_pipeline_with_output_policy_bounded, CompiledScriptExecution,
+    materialize_script_pipeline_with_output_policy_bounded, script_execution_id, CompiledScriptExecution,
     ScriptPipelineCompilation, ScriptPipelineNodeBinding, ScriptPipelineNodeKind,
 };
 pub use study_artifact::{
@@ -125,6 +138,7 @@ pub use study_artifact::{
     STUDY_SCALAR_CODEC_VERSION,
 };
 pub use study_execution_materialization::{
-    materialize_captured_study_input, materialize_study_execution, CapturedStudyExecutionInput,
+    bind_study_execution_entries, materialize_captured_study_input, materialize_study_execution,
+    CapturedStudyExecutionInput,
     StudyStepExecutionInput,
 };

@@ -10,16 +10,7 @@ import { Button } from "@/shared/ui/Button";
 import { Input } from "@/shared/ui/Input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/shared/ui/Select";
 import { Slider } from "@/shared/ui/Slider";
-
-export function clampPlaybackFrameIndex(frameIndex: number, frameCount: number): number {
-  const lastFrame = Math.max(0, Math.floor(frameCount) - 1);
-  return Math.min(lastFrame, Math.max(0, Math.floor(frameIndex)));
-}
-
-export function formatSavedPlaybackTimeNs(seconds: number | undefined): string {
-  if (seconds === undefined || !Number.isFinite(seconds)) return "Unavailable";
-  return `${new Intl.NumberFormat("en-US", { maximumSignificantDigits: 6 }).format(seconds * 1e9)} ns`;
-}
+import { clampPlaybackFrameIndex, formatSavedPlaybackTimeNs } from "./SavedResultsPlaybackInspector.model";
 
 function frameTime(manifest: SavedPlaybackResource | null, stageId: string | null, frameIndex: number): number | undefined {
   const stage = manifest?.stages.find((candidate) => candidate.stage_id === stageId);
@@ -71,7 +62,7 @@ function ColorLimitControl({
         onBlur={commit}
         onChange={(event) => setDraft({ baseValue: value, text: event.currentTarget.value })}
         onKeyDown={(event) => {
-          if (event.key === "Enter") {
+          if (event.key === "Enter" && !event.nativeEvent.isComposing && event.keyCode !== 229) {
             event.preventDefault();
             event.currentTarget.blur();
           }
@@ -112,7 +103,7 @@ export function SavedResultsPlaybackInspector() {
     }
   }, [frameIndex, kernel.savedResultsPlayback, selectedStage, selection]);
 
-  if (!selection) return null;
+  if (!selection || selection.studyResult) return null;
 
   const selectFrame = (next: number) => {
     kernel.savedResultsPlayback?.selectFrame(clampPlaybackFrameIndex(next, frameCount));
@@ -201,12 +192,13 @@ export function SavedResultsPlaybackInspector() {
                 if (next !== undefined) selectFrame(next);
               }}
               step={1}
+              valueText={(v) => `Frame ${v + 1} of ${frameCount}`}
               value={[frameIndex]}
             />
-            <p className="fm-saved-results-playback-inspector__time" aria-live="polite">
+            <p className="fm-saved-results-playback-inspector__time">
               Time: {formatSavedPlaybackTimeNs(frameTime(manifest, stageId, frameIndex))}
             </p>
-            <div aria-label="Frame navigation" className="fm-saved-results-playback-inspector__navigation">
+            <div role="group" aria-label="Frame navigation" className="fm-saved-results-playback-inspector__navigation">
               <Button aria-label="First frame" className="fm-saved-results-playback-inspector__nav-button" disabled={!hasFrames || frameIndex === 0} onClick={() => selectFrame(0)} size="sm" type="button" variant="secondary">First</Button>
               <Button aria-label="Previous frame" className="fm-saved-results-playback-inspector__nav-button" disabled={!hasFrames || frameIndex === 0} onClick={() => selectFrame(frameIndex - 1)} size="sm" type="button" variant="secondary">Previous</Button>
               <Button aria-label="Next frame" className="fm-saved-results-playback-inspector__nav-button" disabled={!hasFrames || frameIndex >= lastFrame} onClick={() => selectFrame(frameIndex + 1)} size="sm" type="button" variant="secondary">Next</Button>

@@ -388,6 +388,169 @@
         "source-de-air-input-growth",
         "source-de-air-request-admission"
       ]
+    },
+    {
+      "id": "eq-poisson-airbox-exact-poisson-lu",
+      "symbols": [
+        "potential",
+        "P",
+        "magnetic_to_potential",
+        "q",
+        "lu_factors",
+        "lu_permutations"
+      ],
+      "sources": [
+        "source-modal-poisson-lu",
+        "source-cpu-schur-poisson-lu",
+        "source-floquet-poisson-lu"
+      ]
+    },
+    {
+      "id": "eq-poisson-airbox-augmented-shift",
+      "symbols": [
+        "augmented_shift_matrix",
+        "scaled_shift",
+        "descriptor_scales",
+        "real_split",
+        "Aqq",
+        "rotated_split_mass",
+        "mass_blocks",
+        "potential_to_magnetic",
+        "magnetic_to_potential",
+        "gauge_poisson_block",
+        "q_restriction",
+        "shift_rhs"
+      ],
+      "sources": [
+        "source-augmented-shift-solver",
+        "source-cpu-schur-augmented-shift"
+      ]
+    },
+    {
+      "id": "eq-poisson-airbox-augmented-shift-floquet",
+      "symbols": [
+        "augmented_shift_matrix",
+        "floquet_phase_rotation",
+        "Aqq",
+        "scaled_shift",
+        "real_split",
+        "mass_blocks",
+        "potential_to_magnetic",
+        "magnetic_to_potential",
+        "P",
+        "q_restriction",
+        "shift_rhs"
+      ],
+      "sources": [
+        "source-floquet-augmented-shift",
+        "source-augmented-shift-solver"
+      ]
+    },
+    {
+      "id": "eq-open-airbox-k0-robin",
+      "symbols": [
+        "robin_beta",
+        "robin_factor",
+        "robin_radius"
+      ],
+      "sources": [
+        "source-open-airbox-k0-native"
+      ]
+    },
+    {
+      "id": "eq-open-airbox-k0-identity-classes",
+      "symbols": [
+        "identity_classes"
+      ],
+      "sources": [
+        "source-open-airbox-k0-runner",
+        "source-open-airbox-k0-native"
+      ]
+    },
+    {
+      "id": "eq-open-airbox-k0-sphere-kittel",
+      "symbols": [
+        "sphere_frequency"
+      ],
+      "sources": [
+        "source-open-airbox-k0-ir",
+        "source-open-airbox-k0-plan"
+      ]
+    },
+    {
+      "id": "eq-k0-film-neumann",
+      "symbols": [
+        "P"
+      ],
+      "sources": [
+        "source-k0-film-neumann-runner"
+      ]
+    },
+    {
+      "id": "eq-k0-film-robin-defect",
+      "symbols": [
+        "film_thickness",
+        "air_layer",
+        "robin_beta",
+        "robin_film_demag"
+      ],
+      "sources": [
+        "source-k0-film-neumann-runner"
+      ]
+    },
+    {
+      "id": "eq-k0-static-dynamic-mismatch",
+      "symbols": [
+        "sphere_frequency"
+      ],
+      "sources": [
+        "source-k0-consistent-static-demag"
+      ]
+    },
+    {
+      "id": "eq-k0-consistent-static-demag",
+      "symbols": [
+        "P",
+        "static_potential_p1",
+        "static_source",
+        "static_demag_p1"
+      ],
+      "sources": [
+        "source-k0-consistent-static-demag"
+      ]
+    },
+    {
+      "id": "eq-k0-consistent-h-parallel",
+      "symbols": [
+        "static_demag_p1",
+        "static_demag_producer"
+      ],
+      "sources": [
+        "source-k0-consistent-static-demag"
+      ]
+    },
+    {
+      "id": "eq-static-film-neumann-gauge",
+      "symbols": [
+        "robin_film_demag",
+        "robin_beta",
+        "air_layer",
+        "film_half_height",
+        "static_source_entry",
+        "Ms",
+        "magnetization",
+        "p1_basis_and_tet_volume",
+        "domains",
+        "gradient",
+        "measures",
+        "potential",
+        "gauge_pin_dof"
+      ],
+      "sources": [
+        "source-static-film-neumann-boundary",
+        "source-static-film-gauge-pin",
+        "source-static-film-periodic-rhs"
+      ]
     }
   ],
   "symbols": [
@@ -917,6 +1080,150 @@
       "id": "air_refinement_index",
       "latex": "$n$",
       "meaning": "indeks poziomu diagnostycznego, nie stopień wielomianu FEM",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "lu_factors",
+      "latex": "$L$, $U$",
+      "meaning": "trójkątne czynniki faktoryzacji LU bloku $P$",
+      "si_unit": "$1$, $\\mathrm{m}$"
+    },
+    {
+      "id": "lu_permutations",
+      "latex": "$\\Pi_{r}$, $\\Pi_{c}$",
+      "meaning": "permutacje wierszy (pivotowanie) i kolumn (METIS)",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "augmented_shift_matrix",
+      "latex": "$K_{\\hat\\tau}$",
+      "meaning": "rzadka macierz rozszerzona (q, φ) przesunięta o $\\hat\\tau$",
+      "si_unit": "$1$, $\\mathrm{A^{-1}}$, $\\mathrm{A\\,m}$, $\\mathrm{m}$"
+    },
+    {
+      "id": "scaled_shift",
+      "latex": "$\\hat\\tau$",
+      "meaning": "przeskalowane przesunięcie widmowe $\\omega_{\\mathrm{target}}/a$",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "descriptor_scales",
+      "latex": "$s$, $m_s$, $a$",
+      "meaning": "skale deskryptora: operatora, masy i częstości",
+      "si_unit": "$\\mathrm{s\\,m^{-3}}$, $\\mathrm{m^{-3}}$, $\\mathrm{s^{-1}}$"
+    },
+    {
+      "id": "rotated_split_mass",
+      "latex": "$J(B_{qq})$, $\\mathcal B$",
+      "meaning": "obrócony blok masy real-split",
+      "si_unit": "$\\mathrm{m^3}$"
+    },
+    {
+      "id": "gauge_poisson_block",
+      "latex": "$P_{g}$",
+      "meaning": "blok Poissona z wierszem i kolumną cechowania",
+      "si_unit": "$\\mathrm{m}$, $\\mathrm{m^3}$"
+    },
+    {
+      "id": "q_restriction",
+      "latex": "$\\Pi_{q}$",
+      "meaning": "restrykcja do bloku $q$",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "shift_rhs",
+      "latex": "$b$",
+      "meaning": "prawa strona kroku shift-invert",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "robin_beta",
+      "latex": "$\\beta$",
+      "meaning": "Robin coefficient",
+      "si_unit": "$\\mathrm{m^{-1}}$"
+    },
+    {
+      "id": "robin_factor",
+      "latex": "$c_\\beta$",
+      "meaning": "bezwymiarowy współczynnik Robina",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "robin_radius",
+      "latex": "$R_\\ast$",
+      "meaning": "promień odniesienia Robina",
+      "si_unit": "$\\mathrm{m}$"
+    },
+    {
+      "id": "identity_classes",
+      "latex": "$\\kappa_\\phi$, $\\kappa_m$",
+      "meaning": "odwzorowania węzłów na klasy skalarne i magnetyczne",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "sphere_frequency",
+      "latex": "$f_{\\mathrm{sph}}$",
+      "meaning": "częstotliwość modu jednorodnego kuli",
+      "si_unit": "$\\mathrm{Hz}$"
+    },
+    {
+      "id": "film_thickness",
+      "latex": "$t$",
+      "meaning": "grubość filmu",
+      "si_unit": "$\\mathrm m$"
+    },
+    {
+      "id": "air_layer",
+      "latex": "$d$",
+      "meaning": "grubość warstwy powietrza",
+      "si_unit": "$\\mathrm m$"
+    },
+    {
+      "id": "robin_film_demag",
+      "latex": "$N_{zz}^{\\mathrm{Robin}}$",
+      "meaning": "współczynnik odmagnesowania z brzegiem Robina",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "static_potential_p1",
+      "latex": "$\\phi_0^{\\mathrm{P1}}$",
+      "meaning": "statyczny potencjał P1 dla $\\mathbf m_0$",
+      "si_unit": "$\\mathrm A$"
+    },
+    {
+      "id": "static_source",
+      "latex": "$\\mathbf b$",
+      "meaning": "wektor źródła ładunków magnetycznych",
+      "si_unit": "$\\mathrm{A\\,m}$"
+    },
+    {
+      "id": "static_demag_p1",
+      "latex": "$\\mathbf H^{\\mathrm{P1}}_{d,0,i}$",
+      "meaning": "węzłowe statyczne pole demag P1",
+      "si_unit": "$\\mathrm{A\\,m^{-1}}$"
+    },
+    {
+      "id": "static_demag_producer",
+      "latex": "$\\mathbf H^{\\mathrm{prod}}_{d,0,i}$",
+      "meaning": "pole demag producenta równowagi",
+      "si_unit": "$\\mathrm{A\\,m^{-1}}$"
+    },
+    {
+      "id": "film_half_height",
+      "latex": "$L$",
+      "meaning": "połowa wysokości komórki filmu, $t/2+d$",
+      "si_unit": "$\\mathrm m$"
+    },
+    {
+      "id": "static_source_entry",
+      "latex": "$b_i$",
+      "meaning": "składowa statycznej prawej strony Poissona $\\int M_s\\mathbf m\\cdot\\nabla N_i\\,\\mathrm dV$",
+      "si_unit": "$\\mathrm{A\\,m}$"
+    },
+    {
+      "id": "gauge_pin_dof",
+      "latex": "$i_\\star$",
+      "meaning": "indeks stopnia swobody potencjału przypiętego do cechowania",
       "si_unit": "$1$"
     }
   ],
@@ -1517,6 +1824,125 @@
       "symbol": "floquet_bloch_scalar_heterogeneous_source_k0_consistency",
       "responsibility": "Compare heterogeneous Gamma source and reciprocal feedback to K0 shared-domain assembly.",
       "evidence_status": "GHA38298716226 native_CPU_MFEM_assembly_PASS; full_eigen_GPU_science_NOT_VERIFIED"
+    },
+    {
+      "id": "source-modal-poisson-lu",
+      "path": "backends/fem/cpu/frequency_domain/modal_poisson_lu.hpp",
+      "symbol": "configure_modal_poisson_lu",
+      "responsibility": "Select MUMPS with METIS ordering when PETSc provides it, otherwise native PETSc LU with the caller's shift policy; expose the resolved package.",
+      "evidence_status": "source_visible; managed_build_and_runtime_NOT_VERIFIED"
+    },
+    {
+      "id": "source-cpu-schur-poisson-lu",
+      "path": "backends/fem/cpu/frequency_domain/poisson_airbox_schur_matshell.cpp",
+      "symbol": "configure_production_context",
+      "responsibility": "K0 Schur scalar Poisson PREONLY LU through the shared helper.",
+      "evidence_status": "source_visible; managed_build_and_runtime_NOT_VERIFIED"
+    },
+    {
+      "id": "source-floquet-poisson-lu",
+      "path": "backends/fem/cpu/frequency_domain/modal/floquet_modal_solver.cpp",
+      "symbol": "solve_floquet_shared_domain_sparse_modal_spectrum_reusing_context",
+      "responsibility": "Floquet P(k) PREONLY LU through the shared helper and poisson_factorization_package provenance.",
+      "evidence_status": "source_visible; managed_build_and_runtime_NOT_VERIFIED"
+    },
+    {
+      "id": "source-petsc-build-metadata",
+      "path": "docker/fem-gpu/write_petsc_build_metadata.py",
+      "symbol": "main",
+      "responsibility": "Record PETSc configure options and external-package macros; fail the toolchain build when MUMPS, METIS, ScaLAPACK or OpenBLAS is missing.",
+      "evidence_status": "source_visible; toolchain_build_NOT_VERIFIED"
+    },
+    {
+      "id": "source-augmented-shift-solver",
+      "path": "backends/fem/cpu/frequency_domain/modal_augmented_shift_solver.hpp",
+      "symbol": "create_augmented_shift_solver",
+      "responsibility": "Assemble and factor the real-split augmented (q, phi) shift matrix with MUMPS/METIS and apply its q-block inverse as the exact shift-invert action.",
+      "evidence_status": "source_visible; docker_dev_headless_runtime_measured; qualification_NOT_VERIFIED"
+    },
+    {
+      "id": "source-cpu-schur-augmented-shift",
+      "path": "backends/fem/cpu/frequency_domain/poisson_airbox_schur_matshell.cpp",
+      "symbol": "solve_poisson_airbox_modal_eigen_cpu_schur",
+      "responsibility": "Select the augmented exact shift preconditioner for K0 STSINVERT and fall back to the magnetic-only preconditioner.",
+      "evidence_status": "source_visible; docker_dev_headless_runtime_measured; qualification_NOT_VERIFIED"
+    },
+    {
+      "id": "source-cpu-schur-krylov-basis",
+      "path": "backends/fem/cpu/frequency_domain/poisson_airbox_schur_matshell.cpp",
+      "symbol": "bounded_krylov_dimensions",
+      "responsibility": "Resolve the EPS Krylov basis: SLEPc default max(2 nev, nev + 15) for a standalone K0 shift, 4 nev for frequency windows.",
+      "evidence_status": "source_visible; docker_dev_headless_runtime_measured; qualification_NOT_VERIFIED"
+    },
+    {
+      "id": "source-floquet-augmented-shift",
+      "path": "backends/fem/cpu/frequency_domain/modal/floquet_modal_solver.cpp",
+      "symbol": "create_native_floquet_augmented_shift_solver",
+      "responsibility": "Assemble the phase-rotated Floquet augmented (q, phi) shift matrix from the normalized shell blocks, factor it with MUMPS and install it as the inner shifted-KSP preconditioner.",
+      "evidence_status": "source_visible; docker_dev_headless_runtime_measured; qualification_NOT_VERIFIED"
+    },
+    {
+      "id": "source-open-airbox-k0-ir",
+      "path": "crates/fullmag-ir/src/execution.rs",
+      "symbol": "MagnetostaticBoundaryConditionIR",
+      "responsibility": "Serialize the open_airbox_k0 magnetostatic boundary token in ProblemIR.",
+      "evidence_status": "source_visible; docker_dev_headless_runtime_measured; qualification_NOT_VERIFIED"
+    },
+    {
+      "id": "source-open-airbox-k0-plan",
+      "path": "crates/fullmag-plan/src/fem.rs",
+      "symbol": "open_airbox_k0_execution_requested",
+      "responsibility": "Resolve the CPU execution of open_airbox_k0 and reject GPU without fallback.",
+      "evidence_status": "source_visible; docker_dev_headless_runtime_measured; qualification_NOT_VERIFIED"
+    },
+    {
+      "id": "source-open-airbox-k0-runner",
+      "path": "crates/fullmag-runner/src/fem/eigen_policy.rs",
+      "symbol": "shared_domain_k0_modal_requested",
+      "responsibility": "Route an open_airbox_k0 plan through the shared-domain K0 modal lane.",
+      "evidence_status": "source_visible; docker_dev_headless_runtime_measured; qualification_NOT_VERIFIED"
+    },
+    {
+      "id": "source-open-airbox-k0-native",
+      "path": "backends/fem/cpu/frequency_domain/operators/poisson_airbox_shared_domain.cpp",
+      "symbol": "assemble_poisson_airbox_shared_domain_payload",
+      "responsibility": "Validate identity classes and the Robin outer boundary without periodic pairs.",
+      "evidence_status": "source_visible; docker_dev_headless_runtime_measured; qualification_NOT_VERIFIED"
+    },
+    {
+      "id": "source-k0-film-neumann-runner",
+      "path": "crates/fullmag-runner/src/fem/eigen_shared_domain_geometry.rs",
+      "symbol": "shared_domain_modal_outer_boundary",
+      "responsibility": "Select pure Neumann with the mean-zero gauge for K0 films periodic along two axes.",
+      "evidence_status": "source_visible; docker_dev_headless_runtime_measured; qualification_NOT_VERIFIED"
+    },
+    {
+      "id": "source-k0-consistent-static-demag",
+      "path": "backends/fem/cpu/frequency_domain/operators/poisson_airbox_shared_domain.cpp",
+      "symbol": "recompute_shared_domain_static_demag_p1",
+      "responsibility": "Solve the static P1 demag of m0 with the dynamic block's operator and replace the restoring parallel field before A_qq assembly.",
+      "evidence_status": "source_visible; docker_dev_headless_runtime_measured; qualification_NOT_VERIFIED"
+    },
+    {
+      "id": "source-static-film-neumann-boundary",
+      "path": "backends/fem/cpu/mfem/interactions/demag_poisson_boundary.cpp",
+      "symbol": "initialize_demag_poisson_boundary_operator",
+      "responsibility": "Resolve a planned Robin airbox on a mesh periodic along exactly two axes to beta = 0 and eliminate the gauge pin.",
+      "evidence_status": "source_visible; runtime_NOT_VERIFIED"
+    },
+    {
+      "id": "source-static-film-gauge-pin",
+      "path": "backends/fem/cpu/mfem/interactions/demag_poisson_boundary.cpp",
+      "symbol": "film_neumann_gauge_pin_tdof",
+      "responsibility": "Pick one open-boundary P1 potential DOF whose periodic class is a singleton.",
+      "evidence_status": "source_visible; runtime_NOT_VERIFIED"
+    },
+    {
+      "id": "source-static-film-periodic-rhs",
+      "path": "backends/fem/cpu/mfem/interactions/demag_poisson_periodic.cpp",
+      "symbol": "solve_demag_periodic_poisson_reduced",
+      "responsibility": "Zero the reduced right-hand side of eliminated classes before the CPU reduced CG solve.",
+      "evidence_status": "source_visible; runtime_NOT_VERIFIED"
     }
   ],
   "public_api": {

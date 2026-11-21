@@ -76,7 +76,15 @@ impl CurrentLiveDisplaySelectionHandle {
         session_id: Option<String>,
         grid_refresh_command_id: Option<String>,
     ) -> Self {
-        let initial_display_selection = current_live_display_selection().unwrap_or_default();
+        // A headless run with the live API disabled (port 0) has no command
+        // source.  Skip the poller: every request would fail immediately and
+        // the loop would spin on connection errors for the whole run.
+        let live_api_enabled = api_port() != 0;
+        let initial_display_selection = if live_api_enabled {
+            current_live_display_selection().unwrap_or_default()
+        } else {
+            CurrentDisplaySelection::default()
+        };
         let handle = Self {
             shared: Arc::new((
                 Mutex::new(CurrentLiveControlState {
@@ -95,6 +103,9 @@ impl CurrentLiveDisplaySelectionHandle {
             grid_refresh_command_refused: Arc::new(AtomicBool::new(false)),
             worker_owner: true,
         };
+        if !live_api_enabled {
+            return handle;
+        }
         let worker = handle.clone();
         let worker_owner_lost = Arc::clone(&handle.owner_lost);
         std::thread::spawn(move || {
@@ -1915,7 +1926,12 @@ fn wait_for_current_live_control(
         .query(&query);
     let response = match request.send() {
         Ok(response) => response,
-        Err(_) => return Ok(None),
+        Err(_) => {
+            // A refused or reset connection returns at once; back off so an
+            // unavailable API does not turn the long poll into a busy loop.
+            std::thread::sleep(Duration::from_millis(250));
+            return Ok(None);
+        }
     };
 
     match response.status() {

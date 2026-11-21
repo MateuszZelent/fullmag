@@ -1,0 +1,104 @@
+.fm-viewport-3d-toolbar {
+  container-type: inline-size;
+  display: flex;
+  max-width: 100%;
+  min-width: 0;
+  height: var(--fm-control-height-regular);
+  align-items: center;
+  gap: var(--fm-space-1);
+  overflow: visible;
+  padding-inline: var(--fm-space-2);
+}
+
+.fm-viewport-3d-toolbar__group {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 2px;
+}
+
+.fm-viewport-3d-toolbar__button {
+  border-radius: var(--fm-radius-pill);
+  width: auto;
+  min-width: var(--fm-control-height-compact);
+  gap: var(--fm-space-1);
+  padding-inline: var(--fm-space-2);
+  white-space: nowrap;
+}
+
+.fm-viewport-3d-toolbar__label,
+.fm-viewport-3d-toolbar__current {
+  font-size: var(--fm-font-size-xs);
+}
+
+.fm-viewport-3d-toolbar__current {
+  color: var(--fm-text-muted);
+}
+
+.fm-viewport-3d-toolbar__separator {
+  flex: 0 0 1px;
+  align-self: stretch;
+  margin: var(--fm-space-2) 1px;
+}
+
+.fm-viewport-3d-toolbar__layers-content {
+  display: grid;
+  width: max-content;
+  min-width: 240px;
+  max-width: min(360px, calc(100vw - 16px));
+  max-height: min(70dvh, var(--radix-popover-content-available-height, 70dvh));
+  overflow-y: auto;
+  gap: var(--fm-space-2);
+}
+
+@container (max-width: 760px) {
+  .fm-viewport-3d-toolbar__label,
+  .fm-viewport-3d-toolbar__current {
+    display: none;
+  }
+
+  .fm-viewport-3d-toolbar__button {
+    width: var(--fm-control-height-compact);
+    min-width: var(--fm-control-height-compact);
+    padding-inline: 0;
+  }
+
+  .fm-viewport-3d-toolbar__separator {
+    margin-inline: 0;
+  }
+}
+
+/* Visualization mode: two segments in the toolbar pill; the active one is raised. */
+.fm-viewport-3d-toolbar__mode {
+  gap: 0;
+  padding: 2px;
+  border-radius: var(--fm-radius-pill);
+  background: var(--fm-field-bg);
+}
+
+.fm-viewport-3d-toolbar__mode-item[aria-checked="true"] {
+  background: var(--fm-raised-bg);
+  box-shadow: var(--fm-elevation-sm);
+  color: var(--fm-text-primary);
+}
+
+.fm-viewport-3d-toolbar__mode-item[data-render-mode="presentation"][aria-checked="true"] {
+  color: var(--fm-accent);
+}
+
+/* Quality menu: the profile name over what it changes. */
+.fm-viewport-3d-toolbar__quality-item {
+  display: grid;
+  gap: 1px;
+  align-items: start;
+}
+
+.fm-viewport-3d-toolbar__quality-name {
+  color: var(--fm-text-primary);
+  font-weight: var(--fm-font-weight-medium);
+}
+
+.fm-viewport-3d-toolbar__quality-summary {
+  color: var(--fm-text-muted);
+  font-size: var(--fm-font-size-2xs);
+}

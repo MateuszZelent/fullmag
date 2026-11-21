@@ -3,21 +3,12 @@
 import { HelpCircle } from "lucide-react";
 import { useCallback, useMemo, useReducer, useState } from "react";
 
-import type { ObjectInteractionKind } from "@/kernel/api/apiTypes";
-import {
-  acknowledgedAuthoringSceneRevision,
-  invalidateAuthoringMutationDependents,
-} from "@/kernel/authoring/authoringMutationInvalidation";
+import { acknowledgedAuthoringSceneRevision, invalidateAuthoringMutationDependents } from "@/kernel/authoring/authoringMutationInvalidation";
 import { runAuthoringMutationWithHistory } from "@/kernel/authoring/authoringHistoryMutation";
 import { useKernel } from "@/kernel/KernelContext";
 import { homeView } from "@/kernel/layout/homeView";
 import { sessionRequestScopeKey } from "@/kernel/resources/sessionResourceIdentity";
-import {
-  resolveObjectInteractionResourceKey,
-  resolveSceneResourceRevision,
-  useObjectInteractionResource,
-  useSceneResource,
-} from "@/kernel/resources/geometryLifecycleResources";
+import { resolveSceneResourceRevision, useObjectInteractionResource, useSceneResource } from "@/kernel/resources/geometryLifecycleResources";
 import {
   resolveActiveLaneOperation,
   useActiveLaneCapabilities,
@@ -39,6 +30,7 @@ import {
   type InteractionSpec,
 } from "@/shared/domain/physics/interactions";
 import { Button } from "@/shared/ui/Button";
+import { DisabledReason } from "@/shared/ui/DisabledReason";
 import {
   Dialog,
   DialogContent,
@@ -76,6 +68,7 @@ import {
   SpinTorqueInspectorPanel,
 } from "./SpinAuthoringInspector";
 import { CurrentTransportInspectorPanel } from "./TransportAuthoringInspector";
+import { commitObjectInteractionMutation } from "./PhysicsInteractionPanel.model";
 
 interface DraftState {
   draft: PhysicsInteractionDraft;
@@ -154,27 +147,6 @@ function isRevisionConflict(error: unknown): boolean {
 }
 
 type PhysicsInteractionSpec = InteractionSpec;
-
-export async function commitObjectInteractionMutation({
-  interactionKind,
-  objectId,
-  patch,
-  resources,
-}: {
-  interactionKind: ObjectInteractionKind;
-  objectId: string;
-  patch: () => Promise<{ revision?: unknown; scene_revision?: unknown }>;
-  resources: { invalidate(resourceKey: string, revision: number): void };
-}): Promise<number> {
-  const response = await patch();
-  const revision = acknowledgedAuthoringSceneRevision(response);
-  resources.invalidate(
-    resolveObjectInteractionResourceKey(objectId, interactionKind),
-    revision,
-  );
-  invalidateAuthoringMutationDependents(resources, "interaction", revision);
-  return revision;
-}
 
 export function PhysicsInteractionPanel({ selection }: InspectorPanelProps) {
   const objectId = selection.objectId;
@@ -840,19 +812,21 @@ function PhysicsInteractionChecklistRow({
     ? draft.present && draft.enabled
     : objectActive || Boolean(studyDraft?.present && studyDraft.enabled);
   const disabled = isDeferredInteraction(option.id) || !operation.enabled;
+  const checkbox = (
+    <input
+      className="fm-inspector-checkbox"
+      checked={checked}
+      disabled={disabled}
+      type="checkbox"
+      onChange={(event) => onToggle(option.id, event.target.checked)}
+    />
+  );
 
   return (
-    <label
-      className="fm-inspector-checkbox-row"
-      title={operation.enabled ? undefined : operation.reason}
-    >
-      <input
-        className="fm-inspector-checkbox"
-        checked={checked}
-        disabled={disabled}
-        type="checkbox"
-        onChange={(event) => onToggle(option.id, event.target.checked)}
-      />
+    <label className="fm-inspector-checkbox-row">
+      {operation.enabled || !operation.reason ? checkbox : (
+        <DisabledReason reason={operation.reason}>{checkbox}</DisabledReason>
+      )}
       <span>{option.label}</span>
       <span className="fm-inspector-checkbox-row__meta">
         {operation.enabled ? statusLabel(option.availability) : operation.state}

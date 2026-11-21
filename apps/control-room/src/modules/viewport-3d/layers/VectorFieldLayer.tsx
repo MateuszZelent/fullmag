@@ -10,19 +10,7 @@ import {
   useSyncExternalStore,
   type RefObject,
 } from "react";
-import {
-  BufferAttribute,
-  BufferGeometry,
-  ConeGeometry,
-  CylinderGeometry,
-  DynamicDrawUsage,
-  InstancedBufferAttribute,
-  InstancedMesh,
-  Matrix4,
-  MeshBasicMaterial,
-  Quaternion,
-  Vector3,
-} from "three";
+import { ConeGeometry, CylinderGeometry, DynamicDrawUsage, InstancedBufferAttribute, InstancedMesh, Matrix4, MeshBasicMaterial, Quaternion, Vector3 } from "three";
 
 import type { Viewport3DResourceTracker } from "../viewport3dDiagnostics";
 import type { SessionResourceIdentity } from "@/kernel/resources/sessionResourceIdentity";
@@ -32,25 +20,17 @@ import { createViewport3DGpuUploadManager } from "../build-engine/gpu/viewport3d
 import type { Viewport3DGpuUploadChunk } from "../build-engine/gpu/viewport3dGpuUploadTypes";
 import type { Viewport3DVectorBuildReference } from "../viewport3dRenderModel";
 import type { Viewport3DColors } from "../viewport3dTypes";
-import type { Viewport3DVisibleColorScale, Viewport3DVisibleColorScaleReport } from "../model/viewport3DVisibleColorScale";
+import type { Viewport3DVisibleColorScale } from "../model/viewport3DVisibleColorScale";
+import type { Viewport3DVisibleColorScaleStore } from "../model/viewport3DVisibleColorScaleStore";
 import type { VectorGlyphTransforms } from "./vectorGlyphGeometry";
-import {
-  buildViewport3DVectorGlyphsOffMainThread,
-  type VectorGlyphBuildRequest,
-  type VectorGlyphBuildResult,
-} from "./vectorGlyphBuildScheduler";
+import { buildViewport3DVectorGlyphsOffMainThread, type VectorGlyphBuildRequest, type VectorGlyphBuildResult } from "./vectorGlyphBuildScheduler";
 import type { Viewport3DMaterialProfile } from "./viewport3DMaterialProfile";
 import { RENDER_POLICIES } from "./viewport3DRenderPolicy";
 import { useVectorGlyphDerivedBufferCache } from "./vectorGlyphDerivedBufferRuntime";
-import type {
-  Viewport3DRenderAdoptionIdentity,
-  Viewport3DRenderAdoptionRegistry,
-} from "../model/viewport3DRenderAdoptionRegistry";
+import type { Viewport3DRenderAdoptionRegistry } from "../model/viewport3DRenderAdoptionRegistry";
+import { resolveVectorGlyphDepthPolicy, ensureWhiteVertexColorAttribute, syncVectorGlyphMaterialStyle, identifyVectorGlyphBuildResult, createVectorGlyphMatrixUploadRollback, createVectorGlyphColorUploadRollback, createVectorGlyphUploadKeys, syncVectorGlyphColorState, type VectorFieldLayerVectorStyle, resolveVectorFieldLayerStyle, resolveVectorFieldAdoptionBuildKey, recordVectorFieldAdoption, vectorFieldAdoptionIdentity } from "./VectorFieldLayer.model";
 
 const UNIT_Y = new Vector3(0, 1, 0);
-// V1-matched proportions for better visual quality.
-const DEFAULT_HEAD_RADIUS_RATIO = 0.1;
-const DEFAULT_SHAFT_RADIUS_RATIO = 0.035;
 
 const VECTOR_GLYPH_UPLOAD_BATCH_SIZE = 256;
 const VECTOR_GLYPH_UPLOAD_FRAME_BUDGET_MS = 3;
@@ -78,20 +58,6 @@ interface VectorGlyphBuildSnapshot {
   buildKey: string | null;
   request: VectorGlyphBuildRequest | null;
   result: VectorGlyphBuildResult | null;
-}
-
-export interface VectorGlyphUploadKeys {
-  colorKey: string;
-  matrixKey: string;
-  targetRevision: string | null;
-}
-
-export interface VectorGlyphUploadKeyInput {
-  buildKey: string;
-  colorByteLength: number;
-  glyphCount: number;
-  targetRevision: string | null;
-  transformByteLength: number;
 }
 
 interface VectorGlyphBuildStore {
@@ -126,112 +92,6 @@ function markVectorGlyphAttributeRange(
   if (safeCount <= 0) return;
   attribute.addUpdateRange(safeStart * itemSize, safeCount * itemSize);
   attribute.needsUpdate = true;
-}
-
-export function createVectorGlyphColorUploadRollback({
-  attribute,
-  count,
-  head,
-  material,
-  shaft,
-  start,
-}: {
-  attribute: InstancedBufferAttribute;
-  count: number;
-  head: InstancedMesh;
-  material: MeshBasicMaterial;
-  shaft: InstancedMesh;
-  start: number;
-}): () => void {
-  const colorStart = start * 3;
-  const priorColors = (attribute.array as Float32Array).slice(
-    colorStart,
-    colorStart + count * 3,
-  );
-  const priorRanges = attribute.updateRanges.map(({ count: rangeCount, start: rangeStart }) => ({
-    count: rangeCount,
-    start: rangeStart,
-  }));
-  const priorHeadCount = head.count;
-  const priorHeadInstanceColor = head.instanceColor;
-  const priorMaterialColor = material.color.clone();
-  const priorMaterialVertexColors = material.vertexColors;
-  const priorShaftCount = shaft.count;
-  const priorShaftInstanceColor = shaft.instanceColor;
-
-  return () => {
-    (attribute.array as Float32Array).set(priorColors, colorStart);
-    restoreVectorGlyphUpdateRanges(attribute, priorRanges);
-    shaft.count = priorShaftCount;
-    head.count = priorHeadCount;
-    shaft.instanceColor = priorShaftInstanceColor;
-    head.instanceColor = priorHeadInstanceColor;
-    material.color.copy(priorMaterialColor);
-    material.vertexColors = priorMaterialVertexColors;
-    material.needsUpdate = true;
-  };
-}
-
-export function createVectorGlyphMatrixUploadRollback({
-  count,
-  head,
-  shaft,
-  start,
-}: {
-  count: number;
-  head: InstancedMesh;
-  shaft: InstancedMesh;
-  start: number;
-}): () => void {
-  const matrixStart = start * 16;
-  const matrixLength = count * 16;
-  const priorHeadMatrices = (head.instanceMatrix.array as Float32Array).slice(
-    matrixStart,
-    matrixStart + matrixLength,
-  );
-  const priorHeadRanges = head.instanceMatrix.updateRanges.map(
-    ({ count: rangeCount, start: rangeStart }) => ({
-      count: rangeCount,
-      start: rangeStart,
-    }),
-  );
-  const priorHeadCount = head.count;
-  const priorShaftMatrices = (shaft.instanceMatrix.array as Float32Array).slice(
-    matrixStart,
-    matrixStart + matrixLength,
-  );
-  const priorShaftRanges = shaft.instanceMatrix.updateRanges.map(
-    ({ count: rangeCount, start: rangeStart }) => ({
-      count: rangeCount,
-      start: rangeStart,
-    }),
-  );
-  const priorShaftCount = shaft.count;
-
-  return () => {
-    (shaft.instanceMatrix.array as Float32Array).set(
-      priorShaftMatrices,
-      matrixStart,
-    );
-    (head.instanceMatrix.array as Float32Array).set(
-      priorHeadMatrices,
-      matrixStart,
-    );
-    restoreVectorGlyphUpdateRanges(shaft.instanceMatrix, priorShaftRanges);
-    restoreVectorGlyphUpdateRanges(head.instanceMatrix, priorHeadRanges);
-    shaft.count = priorShaftCount;
-    head.count = priorHeadCount;
-  };
-}
-
-function restoreVectorGlyphUpdateRanges(
-  attribute: InstancedBufferAttribute,
-  ranges: readonly { readonly count: number; readonly start: number }[],
-): void {
-  attribute.clearUpdateRanges();
-  for (const range of ranges) {
-    attribute.addUpdateRange(range.start, range.count);
-  }
 }
 
 function markVectorGlyphWork(name: string): string | null {
@@ -318,22 +178,6 @@ function estimateVectorGlyphTransformBytes(
   );
 }
 
-export function createVectorGlyphUploadKeys({
-  buildKey,
-  colorByteLength,
-  glyphCount,
-  targetRevision,
-  transformByteLength,
-}: VectorGlyphUploadKeyInput): VectorGlyphUploadKeys {
-  const targetKey = targetRevision ?? "unknown";
-  const baseKey = `${buildKey}:target=${targetKey}:count=${glyphCount}`;
-  return {
-    colorKey: `vector-glyph-colors:${baseKey}:bytes=${colorByteLength}`,
-    matrixKey: `vector-glyph-matrices:${baseKey}:bytes=${transformByteLength}`,
-    targetRevision,
-  };
-}
-
 // Local immutable buffer identity; physics provenance remains in buildReference.
 const glyphColorBufferKeys = new WeakMap<Float32Array, number>();
 let nextGlyphColorBufferKey = 0;
@@ -372,111 +216,6 @@ function createVectorGlyphSemanticBuildKey({
     `head=${headRadiusRatio}`,
     `shaft=${shaftRadiusRatio}`,
   ].join(":");
-}
-
-export interface VectorFieldLayerVectorStyle {
-  alpha?: number | null;
-  monoColor?: string | null;
-  thickness?: number | null;
-}
-
-export function resolveVectorFieldLayerStyle({
-  colorMode,
-  fallbackColor,
-  opacity,
-  style,
-}: {
-  colorMode: string;
-  fallbackColor: string;
-  opacity: number;
-  style?: VectorFieldLayerVectorStyle;
-}) {
-  const thickness = clampStyleScale(style?.thickness ?? 1);
-  return {
-    headRadiusRatio: DEFAULT_HEAD_RADIUS_RATIO * thickness,
-    materialColor:
-      colorMode === "monochrome" && style?.monoColor
-        ? style.monoColor
-        : fallbackColor,
-    materialOpacity: clampOpacity(opacity * (style?.alpha ?? 1)),
-    shaftRadiusRatio: DEFAULT_SHAFT_RADIUS_RATIO * thickness,
-  };
-}
-
-export function resolveVectorGlyphDepthPolicy(renderOnTop = false): {
-  depthTest: boolean;
-  depthWrite: boolean;
-} {
-  const policy = RENDER_POLICIES.glyphs;
-  return {
-    depthTest: renderOnTop ? false : policy.depthTest,
-    depthWrite: renderOnTop ? false : policy.depthWrite,
-  };
-}
-
-export function syncVectorGlyphColorState({
-  hasInstanceColors,
-  head,
-  instanceColorAttr,
-  material,
-  materialColor,
-  shaft,
-}: {
-  hasInstanceColors: boolean;
-  head: InstancedMesh;
-  instanceColorAttr: InstancedBufferAttribute;
-  material: MeshBasicMaterial;
-  materialColor: string;
-  shaft: InstancedMesh;
-}) {
-  const nextInstanceColor = hasInstanceColors ? instanceColorAttr : null;
-  shaft.instanceColor = nextInstanceColor;
-  head.instanceColor = nextInstanceColor;
-  material.vertexColors = hasInstanceColors;
-  material.color.set(hasInstanceColors ? "white" : materialColor);
-  if (hasInstanceColors) {
-    instanceColorAttr.needsUpdate = true;
-  }
-  material.needsUpdate = true;
-}
-
-export function syncVectorGlyphMaterialStyle({
-  glyphTransparent,
-  material,
-  materialColor,
-  materialOpacity,
-  toneMapped,
-  useInstanceColors,
-}: {
-  glyphTransparent: boolean;
-  material: MeshBasicMaterial;
-  materialColor: string;
-  materialOpacity: number;
-  toneMapped: boolean;
-  useInstanceColors: boolean;
-}) {
-  material.opacity = materialOpacity;
-  material.transparent = glyphTransparent || materialOpacity < 0.99;
-  material.toneMapped = toneMapped;
-  material.vertexColors = useInstanceColors;
-  material.color.set(useInstanceColors ? "white" : materialColor);
-  material.needsUpdate = true;
-}
-
-export function ensureWhiteVertexColorAttribute(
-  geometry: BufferGeometry,
-): BufferGeometry {
-  const position = geometry.getAttribute("position");
-  const vertexCount = position?.count ?? 0;
-  const existing = geometry.getAttribute("color");
-  if (existing?.itemSize === 3 && existing.count === vertexCount) {
-    return geometry;
-  }
-
-  const colors = new Float32Array(vertexCount * 3);
-  colors.fill(1);
-  geometry.setAttribute("color", new BufferAttribute(colors, 3));
-  return geometry;
 }
 
 function createVectorGlyphTransformScratch(): VectorGlyphTransformScratch {
@@ -827,24 +566,6 @@ function useVectorGlyphBuild({
     : null;
 }
 
-export function identifyVectorGlyphBuildResult(
-  result: VectorGlyphBuildResult,
-  buildReference: Viewport3DVectorBuildReference | null,
-): VectorGlyphBuildResult {
-  return {
-    ...result,
-    sourceFieldBufferId: buildReference?.fieldBufferId ?? null,
-    sourceResourceKey: buildReference?.resourceKey ?? null,
-    sourceVectorBuildKey: buildReference?.buildKey ?? null,
-  };
-}
-
-export function resolveVectorFieldAdoptionBuildKey(
-  result: VectorGlyphBuildResult | null,
-): string | null {
-  return result?.sourceVectorBuildKey ?? null;
-}
-
 function isAbortError(error: unknown): boolean {
   return (
     error instanceof Error &&
@@ -1081,7 +802,7 @@ export function VectorFieldLayer({
   colorMode = "orientation",
   colorScale,
   colorScopeKey,
-  onVisibleColorScale,
+  visibleColorScaleStore,
   glyphColorsOverride,
   opacity = 1,
   segments,
@@ -1099,7 +820,7 @@ export function VectorFieldLayer({
   colorMode?: string;
   colorScale?: Viewport3DVisibleColorScale | null;
   colorScopeKey?: string | null;
-  onVisibleColorScale?: (report: Viewport3DVisibleColorScaleReport) => void;
+  visibleColorScaleStore?: Viewport3DVisibleColorScaleStore;
   /** Optional field-derived RGB values, one triplet per glyph. */
   glyphColorsOverride?: Float32Array | null;
   materialProfile?: Viewport3DMaterialProfile["glyphs"];
@@ -1179,7 +900,7 @@ export function VectorFieldLayer({
   const adoptionOwnerId = `vector-field:${useId()}`;
   const recordAdoption = useCallback(
     (byteLength: number) => {
-      if (colorScopeKey) onVisibleColorScale?.({ scopeKey: colorScopeKey,
+      if (colorScopeKey) visibleColorScaleStore?.report({ scopeKey: colorScopeKey,
         ownerId: adoptionOwnerId, pass: "vectors", scale: glyphBuild?.colorScale ?? null });
       const sourceVectorBuildKey = resolveVectorFieldAdoptionBuildKey(glyphBuild);
       if (!adoptionRegistry || !carrierId || !sourceVectorBuildKey) return;
@@ -1206,17 +927,17 @@ export function VectorFieldLayer({
         sessionIdentity,
       });
     },
-    [adoptionOwnerId, adoptionRegistry, carrierId, colorScopeKey, fieldBufferId, glyphBuild, glyphCount, onVisibleColorScale, sessionIdentity],
+    [adoptionOwnerId, adoptionRegistry, carrierId, colorScopeKey, fieldBufferId, glyphBuild, glyphCount, sessionIdentity, visibleColorScaleStore],
   );
   useEffect(() => () => {
-    if (colorScopeKey) onVisibleColorScale?.({ scopeKey: colorScopeKey,
+    if (colorScopeKey) visibleColorScaleStore?.report({ scopeKey: colorScopeKey,
       ownerId: adoptionOwnerId, pass: "vectors", scale: null, removed: true });
-  }, [adoptionOwnerId, colorScopeKey, onVisibleColorScale]);
+  }, [adoptionOwnerId, colorScopeKey, visibleColorScaleStore]);
   useEffect(() => {
     if (glyphBuild && glyphCount > 0 || !colorScopeKey) return;
-    onVisibleColorScale?.({ scopeKey: colorScopeKey, ownerId: adoptionOwnerId,
+    visibleColorScaleStore?.report({ scopeKey: colorScopeKey, ownerId: adoptionOwnerId,
       pass: "vectors", scale: null, removed: true });
-  }, [adoptionOwnerId, colorScopeKey, glyphBuild, glyphCount, onVisibleColorScale]);
+  }, [adoptionOwnerId, colorScopeKey, glyphBuild, glyphCount, visibleColorScaleStore]);
   useEffect(() => {
     if (!adoptionRegistry || !carrierId) return;
     const unregister = adoptionRegistry.registerCarrierAdoptionReplay(carrierId, () => {
@@ -1280,8 +1001,13 @@ export function VectorFieldLayer({
 
   return (
     <>
+      {/* A capacity change mounts a new InstancedMesh whose constructor sets
+          count = capacity with identity matrices. Start at count 0 so no
+          frame draws `capacity` glyphs collapsed at the origin; the upload's
+          onVisible sets the real count once the matrices are written. */}
       <instancedMesh
         args={[shaftGeometry, material, capacity]}
+        count={0}
         material-depthTest={depthPolicy.depthTest}
         material-depthWrite={depthPolicy.depthWrite}
         frustumCulled={false}
@@ -1291,6 +1017,7 @@ export function VectorFieldLayer({
       />
       <instancedMesh
         args={[headGeometry, material, capacity]}
+        count={0}
         material-depthTest={depthPolicy.depthTest}
         material-depthWrite={depthPolicy.depthWrite}
         frustumCulled={false}
@@ -1300,73 +1027,4 @@ export function VectorFieldLayer({
       />
     </>
   );
-}
-
-export function recordVectorFieldAdoption({
-  buildKey,
-  byteLength,
-  carrierId,
-  fieldBufferId,
-  glyphCount,
-  ownerId,
-  resourceKey = null,
-  registry,
-  sessionIdentity,
-}: {
-  buildKey: string;
-  byteLength: number;
-  carrierId: string;
-  fieldBufferId: string | null;
-  glyphCount: number;
-  ownerId?: string;
-  resourceKey?: string | null;
-  registry: Viewport3DRenderAdoptionRegistry;
-  sessionIdentity?: SessionResourceIdentity | null;
-}): Viewport3DRenderAdoptionIdentity {
-  const adoption = vectorFieldAdoptionIdentity({
-    buildKey,
-    carrierId,
-    fieldBufferId,
-    resourceKey,
-  });
-  registry.recordVectorAdoption({
-    byteLength,
-    carrierId: adoption.carrierId,
-    fieldBufferId: adoption.fieldBufferId,
-    itemCount: glyphCount,
-    ownerId,
-    resourceKey: adoption.resourceKey,
-    sessionIdentity,
-    vectorBuildKey: adoption.vectorBuildKey ?? buildKey,
-  });
-  return adoption;
-}
-
-function vectorFieldAdoptionIdentity({
-  buildKey,
-  carrierId,
-  fieldBufferId,
-  resourceKey,
-}: {
-  buildKey: string;
-  carrierId: string;
-  fieldBufferId: string | null;
-  resourceKey: string | null;
-}): Viewport3DRenderAdoptionIdentity {
-  return {
-    carrierId,
-    fieldBufferId,
-    kind: "vector",
-    resourceKey,
-    scalarBufferKey: null,
-    vectorBuildKey: buildKey,
-  };
-}
-
-function clampOpacity(value: number): number {
-  return Math.max(0, Math.min(1, value));
-}
-
-function clampStyleScale(value: number): number {
-  return Math.max(0.1, Math.min(8, value));
 }

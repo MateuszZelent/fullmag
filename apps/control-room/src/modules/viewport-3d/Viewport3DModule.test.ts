@@ -2,30 +2,8 @@ import { readFileSync } from "node:fs";
 
 import { describe, expect, it, vi } from "vitest";
 
-import {
-  buildViewport3DCameraRegistryPatch,
-  buildViewport3DColorbarTargetPlans,
-  formatHysteresisReplayGlyphVector,
-  formatHysteresisReplayLabel,
-  notifyMeshTopologyRendered,
-  resolveViewport3DColorbarLegendsFromPlans,
-  resolveViewport3DColorbarPlansForRender,
-  resolveViewport3DColorbarRangeStates,
-  resolveViewport3DRequestedColorbarGroupKeys,
-  resolveRetainedViewport3DColorbarPlansForStore,
-  resolveRetainedViewport3DScalarColorbarLegends,
-  resolveViewport3DColorbarLegend,
-  resolveViewport3DVisualizationFrameAck,
-  resolveViewport3DVisualizationAckRegistration,
-  resolveViewport3DMeshQualityLegend,
-  resolveViewport3DVectorSegmentLengthRange,
-  createViewport3DPointerHoldLifecycle,
-  resolveViewport3DVisualizationAckDataIdentity,
-  resolveViewport3DScalarColorbarLegend,
-  resolveViewport3DScalarColorbarLegends,
-  shouldClearRetainedViewport3DScalarColorbarLegends,
-  shouldRetainViewport3DScalarColorbarLegends,
-} from "./Viewport3DModule";
+import { resolveViewport3DColorbarRangeStates } from "./Viewport3DModule";
+import { buildViewport3DCameraRegistryPatch, buildViewport3DColorbarTargetPlans, formatHysteresisReplayGlyphVector, formatHysteresisReplayLabel, notifyMeshTopologyRendered, resolveViewport3DColorbarLegendsFromPlans, resolveViewport3DColorbarPlansForRender, resolveViewport3DRequestedColorbarGroupKeys, resolveRetainedViewport3DColorbarPlansForStore, resolveRetainedViewport3DScalarColorbarLegends, resolveViewport3DColorbarLegend, resolveViewport3DVisualizationFrameAck, resolveViewport3DVisualizationAckRegistration, resolveViewport3DMeshQualityLegend, resolveViewport3DVectorSegmentLengthRange, createViewport3DPointerHoldLifecycle, resolveViewport3DVisualizationAckDataIdentity, resolveViewport3DScalarColorbarLegend, resolveViewport3DScalarColorbarLegends, shouldClearRetainedViewport3DScalarColorbarLegends, shouldRetainViewport3DScalarColorbarLegends } from "./Viewport3DModule.model";
 import { createViewport3DRenderAdoptionRegistry } from "./model/viewport3DRenderAdoptionRegistry";
 import { planViewport3DColorbars } from "./model/viewport3DColorbarPlan";
 import type { VisualizationTargetSettings } from "@/kernel/visualization/ObjectVisualizationController";
@@ -50,6 +28,21 @@ function scalarColorBuffer(
     range,
   };
 }
+
+describe("viewport export phase snapshot", () => {
+  it("copies displayed phases before the lazy export extractor is loaded", () => {
+    const source = readFileSync(new URL("./Viewport3DModule.tsx", import.meta.url), "utf8");
+    const callbackStart = source.indexOf("getExportSource={async () => {");
+    const extractorLoad = source.indexOf('await import("./export/extractViewport3DExportSource")', callbackStart);
+    const synchronousCapture = source.slice(callbackStart, extractorLoad);
+    expect(synchronousCapture).toContain("getDisplayedPhaseRadForOverlay(overlay)");
+    expect(synchronousCapture).toContain("([layerId, { value }])");
+    expect(synchronousCapture).toContain("[layerId, value]");
+    const extraction = source.slice(extractorLoad, source.indexOf("clientReady={clientReady}", extractorLoad));
+    expect(extraction).toContain("analysisOverlay,");
+    expect(extraction).toContain("modeCompositionPhaseByLayerId,");
+  });
+});
 
 describe("viewport vector segment diagnostics", () => {
   it("reports the physical length range of packed vector segments", () => {
@@ -161,11 +154,14 @@ describe("FEM visualization ACK data identity", () => {
       "utf8",
     );
     const callbackStart = source.indexOf(
-      "const onVisualizationFrameCommitted = useCallback",
+      "const handleVisualizationFrameCommit = useEffectEvent",
     );
     const callback = source.slice(
       callbackStart,
-      source.indexOf("useEffect(() => {", callbackStart),
+      source.indexOf(
+        "useEffect(() => {\n    const consumeFrameCommits",
+        callbackStart,
+      ),
     );
 
     expect(callback).toContain(
@@ -180,11 +176,14 @@ describe("FEM visualization ACK data identity", () => {
       "utf8",
     );
     const callbackStart = source.indexOf(
-      "const onVisualizationFrameCommitted = useCallback",
+      "const handleVisualizationFrameCommit = useEffectEvent",
     );
     const callback = source.slice(
       callbackStart,
-      source.indexOf("useEffect(() => {", callbackStart),
+      source.indexOf(
+        "useEffect(() => {\n    const consumeFrameCommits",
+        callbackStart,
+      ),
     );
 
     expect(callback).toContain(
@@ -263,7 +262,7 @@ function visualizationSettings(
 
 describe("resolveViewport3DMeshQualityLegend", () => {
   it("keeps the render revision in the commit id and uses the supplied wall clock", async () => {
-    const moduleExports = (await import("./Viewport3DModule")) as unknown as {
+    const moduleExports = (await import("./Viewport3DModule.model")) as unknown as {
       buildViewport3DVisualizationDebugFrameCommit?: (input: {
         airboxVectorsVisible?: boolean;
         airboxWireframeVisible?: boolean;
@@ -297,7 +296,7 @@ describe("resolveViewport3DMeshQualityLegend", () => {
   });
 
   it("binds Airbox display flags to the committed WebGL frame", async () => {
-    const moduleExports = (await import("./Viewport3DModule")) as unknown as {
+    const moduleExports = (await import("./Viewport3DModule.model")) as unknown as {
       buildViewport3DVisualizationDebugFrameCommit?: (input: {
         airboxVectorsVisible?: boolean;
         airboxWireframeVisible?: boolean;
@@ -335,15 +334,16 @@ describe("resolveViewport3DMeshQualityLegend", () => {
       "utf8",
     );
     const callbackStart = source.indexOf(
-      "const onVisualizationFrameCommitted = useCallback",
+      "const handleVisualizationFrameCommit = useEffectEvent",
     );
     const callback = source.slice(
       callbackStart,
       source.indexOf("const handleCanvasCreated", callbackStart),
     );
 
-    expect(callback).toContain("revision: number,");
-    expect(callback).toContain("airboxFrameState: Viewport3DAirboxFrameState");
+    expect(callback).toContain("frameState: Viewport3DAirboxFrameState;");
+    expect(callback).toContain("revision: number;");
+    expect(callback).toContain("frameState: airboxFrameState,");
     expect(callback).toContain("...airboxFrameState");
     expect(callback).not.toContain("dataset");
     expect(callback).not.toContain("closest<HTMLElement>");
@@ -1234,6 +1234,75 @@ describe("resolveViewport3DColorbarLegend", () => {
     ]);
   });
 
+  it("shows the displayed modal glyph range instead of the magnetic target's live quantity", () => {
+    const modalQuantityId = "analysis:eigen:mode";
+    const modalRange = { min: -5, max: 5 };
+    const parts = [
+      {
+        id: "film",
+        label: "Film",
+        settings: visualizationSettings({
+          activeQuantityId: "m",
+          shaderVisible: false,
+          surfaceColorSource: "solid",
+          vectorBudget: 48,
+          vectorColorMode: "z",
+          vectorsVisible: true,
+        }),
+        targetKind: "part" as const,
+      },
+      {
+        id: "air",
+        label: "Airbox",
+        settings: visualizationSettings({ activeQuantityId: "H_demag" }),
+        targetKind: "airbox" as const,
+      },
+    ];
+    const availableQuantityIds = new Set(["m", "H_demag"]);
+    const targets = buildViewport3DColorbarTargetPlans({
+      analysisOverlayQuantityId: modalQuantityId,
+      availableQuantityIds,
+      parts,
+    });
+    const rangeStates = resolveViewport3DColorbarRangeStates({
+      fieldModel: {
+        scalarColorsByMode: new Map(),
+        scalarColorsByPartAndMode: new Map(),
+        targetPasses: new Map([
+          [
+            "film",
+            {
+              surface: { scalarColorMode: null, scalarColors: null },
+              vectors: {
+                colorScale: {
+                  colorMode: "z",
+                  colorPalette: "viridis",
+                  quantityId: modalQuantityId,
+                  range: modalRange,
+                },
+              },
+            },
+          ],
+        ]),
+      },
+      plans: planViewport3DColorbars({ targets }),
+    });
+    const plans = planViewport3DColorbars({
+      rangeStatesByGroupKey: rangeStates,
+      targets,
+    });
+    const legends = resolveViewport3DColorbarLegendsFromPlans({
+      labelByTargetId: new Map([["film", "Film"], ["air", "Airbox"]]),
+      plans,
+    });
+
+    expect(legends.find(({ legend }) => legend.quantityId === modalQuantityId)?.legend)
+      .toMatchObject({ colorMode: "z", range: modalRange, rangeState: "current" });
+    expect(targets.find(({ targetId }) => targetId === "air")?.quantityId).toBe("H_demag");
+    expect(buildViewport3DColorbarTargetPlans({ availableQuantityIds, parts })[0]?.quantityId)
+      .toBe("m");
+  });
+
   it("merges parent and inherited region legends when their effective scale is identical", () => {
     const targets = buildViewport3DColorbarTargetPlans({
       parts: [
@@ -2030,25 +2099,14 @@ describe("Viewport3DModule scene wiring", () => {
       "const canvasGlOptions = resolveStableViewport3DCanvasGlOptions(\n    getViewport3DVisualProfile(canvasContextProfileId),\n    effectAntialias,\n  );",
     );
     expect(source).toContain("const handleCanvasCreated = useCallback");
-    expect(source).toContain("const handleCanvasContextMenu = useCallback");
     expect(source).toContain("const handleCanvasPointerMissed = useCallback");
     expect(canvasBlock).toContain("camera={canvasCamera}");
     expect(canvasBlock).toContain("gl={canvasGlOptions}");
     expect(canvasBlock).toContain("onCreated={handleCanvasCreated}");
-    expect(canvasBlock).toContain("onContextMenu={handleCanvasContextMenu}");
+    expect(source).toContain("<Viewport3DExportMenu onCommand={onViewCommand}>");
     expect(canvasBlock).toContain("onPointerMissed={handleCanvasPointerMissed}");
     expect(canvasBlock).not.toContain("camera={{");
     expect(canvasBlock).not.toContain("onCreated={({ gl }) =>");
-  });
-
-  it("suppresses the native context menu because right button pans the camera", () => {
-    const source = readFileSync(
-      new URL("./Viewport3DModule.tsx", import.meta.url),
-      "utf8",
-    );
-
-    expect(source).toContain("const handleCanvasContextMenu = useCallback");
-    expect(source).toContain("event.preventDefault();");
   });
 
   it("holds transport only for a real camera interaction", () => {
@@ -2141,7 +2199,7 @@ describe("Viewport3DModule scene wiring", () => {
     expect(source).toContain("const orbitDebugEnabled =");
     expect(source).toContain("orbitDebugEnabled && clientReady && colors");
     expect(source).toContain(
-      "onOrbitDebugAnglesChange={\n              orbitDebugEnabled ? syncOrbitDebugAngles : undefined\n            }",
+      "orbitDebugStore={orbitDebugEnabled ? orbitDebugStore : undefined}",
     );
     expect(source).toContain("Viewport3DOrbitDebugPanel");
     expect(source).toContain('aria-label="Temporary orbit controls"');
@@ -2149,7 +2207,8 @@ describe("Viewport3DModule scene wiring", () => {
     expect(source).toContain('label="Polar"');
     expect(source).toContain("orbitDebugRevision");
     expect(source).toContain("orbitDebugCommitRevision");
-    expect(source).toContain("onAnglesCommit={commitOrbitDebugAngles}");
+    expect(source).toContain("onAnglesChange={orbitDebugStore.applyAngles}");
+    expect(source).toContain("onAnglesCommit={orbitDebugStore.commitAngles}");
   });
 
   it("keeps diagnostic region visibility off by default and source selection separate", () => {

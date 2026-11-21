@@ -7,7 +7,9 @@
  * unavailable-path errors. It does not own Context construction internals, MFEM runtime lifecycle, interaction physics, integrator stages, or transfer-audit policy.
  */
 
+#include "gpu/cuda/reductions/object_average.hpp"
 #include "fullmag_fem.h"
+#include "fullmag_time_expression.h"
 
 #include "backend_handle.hpp"
 #include "context.hpp"
@@ -40,6 +42,7 @@
 #include "frequency_domain/tangent_frame.hpp"
 #include "cpu/frequency_domain/operators/poisson_airbox_shared_domain.hpp"
 #include "gpu/cuda/demag_poisson/operators.hpp"
+#include "gpu/cuda/demag_poisson/hypre_device_solver.hpp"
 #include "gpu/cuda/demag_poisson/stage_compute.hpp"
 #include "gpu/cuda/fields/vector_field_kernels.hpp"
 #include "gpu/cuda/integrators/rk/rk.hpp"
@@ -3449,7 +3452,15 @@ static FullmagFemFrequencyDomainResult fullmag_fem_modal_eigen_solve_impl(
                 "native FEM shared-domain payload is missing certificate-bound reduction maps",
                 "missing_certificate_map_binding_data");
         }
-        if (payload->magnetic_pair_count == 0u || payload->airbox_pair_count == 0u ||
+        // open_airbox_k0 (note 0830): both pair counts are zero, the mesh has
+        // no periodic pairs and the whole outer boundary is Robin.
+        const bool open_airbox_identity =
+            payload->magnetic_pair_count == 0u && payload->airbox_pair_count == 0u &&
+            payload->mesh != nullptr && payload->mesh->periodic_node_pairs_len == 0u &&
+            payload->boundary_kind != nullptr &&
+            std::strcmp(payload->boundary_kind, "robin") == 0;
+        if ((!open_airbox_identity &&
+             (payload->magnetic_pair_count == 0u || payload->airbox_pair_count == 0u)) ||
             (request->poisson_airbox_magnetic_pair_count != 0u &&
              request->poisson_airbox_magnetic_pair_count != payload->magnetic_pair_count) ||
             (request->poisson_airbox_airbox_pair_count != 0u &&
@@ -4935,9 +4946,10 @@ fullmag_fem_backend *fullmag_fem_backend_create_v3(
     return handle;
 }
 
-fullmag_fem_backend *fullmag_fem_backend_create_v4(
+static fullmag_fem_backend *create_versioned_plan_backend(
     const fullmag_fem_plan_desc_v3 *plan,
-    const fullmag_fem_adaptive_config_v2 *adaptive_config)
+    const fullmag_fem_adaptive_config_v2 *adaptive_config,
+    const uint32_t *canonical_boundary_marker)
 {
     if (plan == nullptr) {
         fullmag_fem_set_global_error("fullmag_fem_backend_create_v4 received null plan");
@@ -5017,7 +5029,8 @@ fullmag_fem_backend *fullmag_fem_backend_create_v4(
             handle->context,
             native_plan,
             error,
-            plan->mixed_body_certificate_v2)) {
+            plan->mixed_body_certificate_v2,
+            canonical_boundary_marker)) {
         fullmag_fem_set_global_error(error);
         fullmag_fem_set_handle_error(handle, error);
         delete handle;
@@ -5027,6 +5040,29 @@ fullmag_fem_backend *fullmag_fem_backend_create_v4(
     handle->last_error.clear();
     fullmag_fem_clear_global_error();
     return handle;
+}
+
+fullmag_fem_backend *fullmag_fem_backend_create_v4(
+    const fullmag_fem_plan_desc_v3 *plan,
+    const fullmag_fem_adaptive_config_v2 *adaptive_config)
+{
+    return create_versioned_plan_backend(plan, adaptive_config, nullptr);
+}
+
+fullmag_fem_backend *fullmag_fem_backend_create_v5(
+    const fullmag_fem_plan_desc_v4 *plan,
+    const fullmag_fem_adaptive_config_v2 *adaptive_config)
+{
+    if (plan == nullptr) {
+        fullmag_fem_set_global_error("fullmag_fem_backend_create_v5 received null plan");
+        return nullptr;
+    }
+    if (plan->abi_version != FULLMAG_FEM_PLAN_DESC_V4_ABI_VERSION ||
+        plan->struct_size != sizeof(fullmag_fem_plan_desc_v4) || plan->reserved != 0u) {
+        fullmag_fem_set_global_error("fullmag_fem_backend_create_v5 plan ABI version/size/reserved mismatch");
+        return nullptr;
+    }
+    return create_versioned_plan_backend(&plan->base, adaptive_config, &plan->poisson_boundary_marker);
 }
 
 int fullmag_fem_get_regional_field_drive_abi_layout(
@@ -5051,6 +5087,11 @@ int fullmag_fem_get_regional_field_drive_abi_layout(
     out_layout->step_stats_demag_hypre_timed_solve_count_offset =
         offsetof(fullmag_fem_step_stats, demag_hypre_timed_solve_count);
     return FULLMAG_FEM_OK;
+}
+
+double fullmag_fem_time_expression_eval_v1(const double *code, uint64_t len, double t_s)
+{
+    return fullmag_time_expression_eval(code, len, t_s);
 }
 
 int fullmag_fem_backend_begin_stage_v2(
@@ -5179,6 +5220,8 @@ int fullmag_fem_backend_invalidate_fsal(fullmag_fem_backend *handle)
     auto &ctx = handle->context;
     ctx.stepper.workspace.fsal_valid = false;
 #if FULLMAG_HAS_CUDA_RUNTIME
+    fullmag::fem::gpu_relax_note_external_state_change(
+        ctx.gpu_state.device.relaxation);
     ctx.gpu_state.device.rk.fsal_valid = false;
 #endif
     ctx.gpu_state.device.rk.endpoint_valid = false;
@@ -5243,6 +5286,10 @@ int fullmag_fem_backend_step(
     }
 
     handle->last_error.clear();
+    // A non-finite time factor met outside a step (observables) does not poison
+    // the step; one met inside the step is reported even when the step also
+    // failed for another reason (an adaptive controller hitting dt_min on NaN).
+    handle->context.zeeman.host_expression_error.clear();
     handle->context.relaxation.accepted_energy_proof = {};
     const int status =
         fullmag::fem::run_backend_step(
@@ -5250,6 +5297,12 @@ int fullmag_fem_backend_step(
             dt_seconds,
             *out_stats,
             handle->last_error);
+    if (!handle->context.zeeman.host_expression_error.empty()) {
+        // A host-expression drive (mask term) produced a non-finite time factor.
+        fullmag_fem_set_handle_error(handle, handle->context.zeeman.host_expression_error);
+        handle->context.zeeman.host_expression_error.clear();
+        return FULLMAG_FEM_ERR_INVALID;
+    }
     if (status == FULLMAG_FEM_OK) {
         apply_demag_solver_policy_to_step_stats(handle->context, *out_stats);
     }
@@ -5298,6 +5351,30 @@ int fullmag_fem_backend_set_interrupt_poll(
         return FULLMAG_FEM_ERR_INVALID;
     }
     fullmag::fem::set_interrupt_poll(handle->context, poll_fn, user_data);
+    return FULLMAG_FEM_OK;
+}
+
+int fullmag_fem_backend_set_gpu_bb_preconditioner(
+    fullmag_fem_backend *handle, uint32_t policy)
+{
+    if (handle == nullptr) {
+        fullmag_fem_set_global_error("GPU BB preconditioner setter received null handle");
+        return FULLMAG_FEM_ERR_INVALID;
+    }
+    if (policy > 2u || handle->context.state.step_count != 0u ||
+        handle->context.relaxation.accepted_steps != 0u) {
+        fullmag_fem_set_handle_error(handle,
+            "GPU BB preconditioner requires a valid policy before the first step");
+        return FULLMAG_FEM_ERR_INVALID;
+    }
+    if (!handle->context.gpu_state.device.lifecycle.allocated) {
+        fullmag_fem_set_handle_error(handle,
+            "GPU BB preconditioner requires an allocated GPU backend; no CPU fallback");
+        return FULLMAG_FEM_ERR_UNAVAILABLE;
+    }
+    auto &state = handle->context.gpu_state.device.relaxation;
+    state.bb_preconditioner_policy = policy;
+    fullmag::fem::gpu_relax_invalidate_accepted_evaluation(state);
     return FULLMAG_FEM_OK;
 }
 
@@ -5386,6 +5463,13 @@ int fullmag_fem_backend_average_m_for_nodes_f64(
     }
 
     handle->last_error.clear();
+    if (handle->context.gpu_state.device.lifecycle.allocated ||
+        fullmag::fem::mfem_device_requests_gpu(handle->context)) {
+        const int status = fullmag::fem::gpu_object_average(
+            handle->context, node_indices, node_count, false, out_xyz, handle->last_error);
+        if (status != FULLMAG_FEM_OK) { fullmag_fem_set_handle_error(handle, handle->last_error); }
+        return status;
+    }
     if (!fullmag::fem::context_sync_gpu_magnetization_to_host(
             handle->context,
             handle->last_error)) {
@@ -5530,6 +5614,14 @@ int fullmag_fem_backend_average_m_for_elements_f64(
                 handle,
                 "fullmag_fem_backend_average_m_for_elements_f64 requires element-DG0 Ms");
             return FULLMAG_FEM_ERR_UNAVAILABLE;
+        }
+
+        if (handle->context.gpu_state.device.lifecycle.allocated ||
+            fullmag::fem::mfem_device_requests_gpu(handle->context)) {
+            const int status = fullmag::fem::gpu_object_average(
+                handle->context, element_indices, element_count, true, out_xyz, handle->last_error);
+            if (status != FULLMAG_FEM_OK) { fullmag_fem_set_handle_error(handle, handle->last_error); }
+            return status;
         }
 
         const std::size_t available_elements =
@@ -6554,6 +6646,34 @@ int fullmag_fem_backend_get_gpu_state_info(
         return FULLMAG_FEM_ERR_INVALID;
     }
     *out_info = fullmag::fem::gpu_state_info(handle->context);
+    return FULLMAG_FEM_OK;
+}
+
+int fullmag_fem_backend_get_gpu_demag_amg_coarse_relax_type_v1(
+    fullmag_fem_backend *handle,
+    int32_t *out_relax_type
+) {
+    if (out_relax_type == nullptr) {
+        fullmag_fem_set_handle_error(
+            handle,
+            "fullmag_fem_backend_get_gpu_demag_amg_coarse_relax_type_v1 "
+            "received null out_relax_type");
+        return FULLMAG_FEM_ERR_INVALID;
+    }
+    if (handle == nullptr) {
+        fullmag_fem_set_global_error(
+            "fullmag_fem_backend_get_gpu_demag_amg_coarse_relax_type_v1 "
+            "received null handle");
+        return FULLMAG_FEM_ERR_INVALID;
+    }
+    std::int32_t relax_type = -1;
+    std::string error;
+    if (!fullmag::fem::read_device_demag_amg_coarse_relax_type(
+            handle->context, relax_type, error)) {
+        fullmag_fem_set_handle_error(handle, error);
+        return FULLMAG_FEM_ERR_INTERNAL;
+    }
+    *out_relax_type = relax_type;
     return FULLMAG_FEM_OK;
 }
 

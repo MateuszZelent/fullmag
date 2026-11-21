@@ -101,7 +101,11 @@ impl ProjectStorageLease {
         ensure_no_reparse_ancestors(&output_dir)?;
         let output_dir = fs::canonicalize(&output_dir).map_err(message)?;
         let token = uuid::Uuid::new_v4().to_string();
-        let temp_dir = temp_parent.join(format!("fullmag-{run_id}-{token}"));
+        // The complete identity remains in the owner marker. A bounded
+        // private name leaves room for native writers with fixed path buffers.
+        use sha2::{Digest, Sha256};
+        let run_digest = format!("{:x}", Sha256::digest(run_id.as_bytes()));
+        let temp_dir = temp_parent.join(format!("fullmag-{}-{token}", &run_digest[..16]));
         create_private_temp_directory(&temp_dir)?;
         // From here every fallible operation is guarded by Drop. In particular,
         // a failed scratch marker/receipt cannot leave a live result reservation.
@@ -679,4 +683,27 @@ pub(crate) fn open_verified_artifact(root: &Path, relative: &Path) -> Result<Fil
 #[cfg(not(any(unix, windows)))]
 pub(crate) fn open_verified_artifact(_root: &Path, _relative: &Path) -> Result<File, String> {
     Err("verified artifact copy is unsupported on this platform".into())
+}
+
+#[cfg(test)]
+mod private_scratch_tests {
+    use super::*;
+
+    #[test]
+    fn long_run_identity_does_not_expand_native_scratch_path() {
+        let root = tempfile::tempdir().unwrap();
+        let output = root.path().join("results.zarr");
+        let run_id = format!("run-live-{}", "a".repeat(128));
+        let settings = OutputStorageIR {
+            temp_dir: Some(root.path().join("scratch").to_string_lossy().into_owned()),
+            ..Default::default()
+        };
+        let lease = ProjectStorageLease::prepare(&settings, &output, root.path(), &run_id).unwrap();
+        let leaf = lease.resolved().temp_dir.file_name().unwrap().to_string_lossy();
+        assert!(leaf.len() <= 64, "private scratch basename must leave room for native paths: {leaf}");
+        let owner: serde_json::Value = serde_json::from_slice(
+            &fs::read(lease.resolved().temp_dir.join(OWNER_FILE)).unwrap()).unwrap();
+        assert_eq!(owner["run_id"], run_id);
+        assert_eq!(lease.resolved().run_id, run_id);
+    }
 }

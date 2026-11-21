@@ -102,6 +102,15 @@ Zero padding separates the source and destination copies and prevents circular w
 being mistaken for an open-boundary solution. Periodic truncated images intentionally change this
 embedding and are not the same policy.
 
+```{figure} /_static/diagrams/demag-fdm-newell-and-multilayer.svg
+:alt: Two-panel diagram of FDM demagnetization convolution: (a) Newell double-volume cell-averaged 27-point stencil (+8, -4, +2, -1) with 2N zero-padded FFT buffer layout avoiding wraparound; (b) Lepadatu (2019) multilayer cross-layer convolution skipping vacuum gaps with volume-adjoint transfers P and P* versus 2D periodic image-count convergence of uniform-mode demagnetization factors and k=0 mode rules.
+:width: 100%
+:name: fig-demag-fdm-newell-and-multilayer
+:figclass: fm-physics-figure
+
+Newell 27-point cell-averaged tensor construction and $2N$ zero-padded open-boundary FFT convolution in panel (a), contrasted with Lepadatu (2019) vacuum-skipping multilayer stacking and finite periodic image-count convergence in panel (b) (Newell *et al.* 1993; Lepadatu 2019; Vansteenkiste *et al.* 2014).
+```
+
 (demag-fdm-symbols-and-si-units)=
 ## 3. Symbols and SI units
 
@@ -357,6 +366,10 @@ layout cannot be represented.
 | CPU terminal outcome | `execute_reference_fdm` | FDM CPU source-level current path; not proof of an atomic terminal generation/batch |
 | Session field promotion | `ingest_preview_fields_from_update` | CLI promotes fields individually; not proof of an atomic terminal generation/batch |
 
+### Control Room support
+
+When `PhysicsInteractionPanel` (`apps/control-room/src/modules/inspector/panels/PhysicsInteractionPanel.tsx`) exposes FDM demagnetization controls under `Model Explorer -> Objects -> <object> -> Physics`, browser support is partial: parameters without a UI control must be configured via the Python API or `ProblemIR`. See {doc}`/frontend/capability-register` for current Control Room coverage.
+
 (demag-fdm-validation)=
 ## 10. Validation and qualification
 
@@ -382,10 +395,25 @@ not expose those parameters as if they controlled FFT accuracy.
 (demag-fdm-scientific-bibliography)=
 ## 12. Scientific bibliography
 
-1. A. J. Newell, W. Williams and D. J. Dunlop, “A calculation of the demagnetizing factors for
-   cylinders,” *Journal of Geophysical Research*, 98, 9551–9555 (1993).
-2. W. F. Brown, *Micromagnetics*, Wiley, 1963.
-3. FullMag internal reference: `docs/physics/0420-fdm-dipolar-demag-foundations.md`.
+1. A. J. Newell, W. Williams, and D. J. Dunlop, “A generalization of the demagnetizing tensor for
+   nonuniform magnetization,” *Journal of Geophysical Research: Solid Earth* **98**(B6), 9551–9555
+   (1993), [doi:10.1029/93JB00694](https://doi.org/10.1029/93JB00694).
+2. D. Chernyshenko and H. Fangohr, “Computing the demagnetizing tensor for finite difference
+   micromagnetic simulations via numerical integration,” *Journal of Magnetism and Magnetic
+   Materials* **381**, 440–445 (2015),
+   [doi:10.1016/j.jmmm.2015.01.013](https://doi.org/10.1016/j.jmmm.2015.01.013), Open Access
+   preprint: [arXiv:1403.1978](https://arxiv.org/abs/1403.1978).
+3. A. Vansteenkiste, J. Leliaert, M. Dvornik, F. Garcia-Sanchez, and B. Van Waeyenberge, “The
+   design and verification of MuMax3,” *AIP Advances* **4**(10), 107133 (2014),
+   [doi:10.1063/1.4899186](https://doi.org/10.1063/1.4899186) (Gold Open Access CC-BY;
+   [arXiv:1406.7635](https://arxiv.org/abs/1406.7635)).
+4. J. Leliaert, M. Dvornik, J. Mulkers, J. De Clercq, M. V. Milošević, and B. Van Waeyenberge,
+   “Fast micromagnetic simulations on GPU—recent advances made with MuMax3,” *Journal of Physics
+   D: Applied Physics* **51**(12), 123002 (2018),
+   [doi:10.1088/1361-6463/aaab1c](https://doi.org/10.1088/1361-6463/aaab1c) (Hybrid Open Access
+   CC-BY).
+5. W. F. Brown Jr., *Micromagnetics*, Interscience Publishers (Wiley), New York, 1963.
+   [WorldCat record](https://search.worldcat.org/title/536451).
 
 (demag-fdm-source-code-index)=
 ## 13. Source-code index
@@ -408,18 +436,4 @@ not expose those parameters as if they controlled FFT accuracy.
 | `crates/fullmag-runner/src/fdm/cpu/reference.rs` | `execute_reference_fdm` | Returns the CPU terminal run outcome and scheduled outputs; it is not proof of an atomic terminal generation/batch. | FDM CPU, source-level only |
 | `crates/fullmag-cli/src/live_workspace.rs` | `ingest_preview_fields_from_update` | Promotes incoming fields individually into session state; it is not proof of an atomic terminal generation/batch. | CLI control plane |
 | `crates/fullmag-cli/src/live_workspace.rs` | `feature_flags` | Reads preview-disable benchmark/display configuration. | CLI control plane |
-## Control Room crosswalk
-
-Use `Model Explorer -> Objects -> <object> -> Physics` when `PhysicsInteractionPanel` exposes the interaction. Status: `partial`. frontend support is not implemented applies to physical parameters without a matching control. See {doc}`/frontend/capability-register`; do not infer UI support from backend or Python availability.
-
-## Python/API crosswalk
-
-The linked Python API page is authoritative for exact functions, arguments, units, and failure semantics. If this page is a foundation or category overview, runnable Python is not applicable here and must be taken from the terminal API page.
-
-## Bibliography and source scope
-
-Use the scientific bibliography and source-code index on the linked terminal page. This block adds no new equation or unverified implementation claim.
-## Source-code index
-
-- Public Python and lowering sources are linked by the applicable terminal API page. Runtime realization is in the relevant `backends/fdm` or `backends/fem` lane; frontend ownership is `apps/control-room/src/modules/inspector/panels/PhysicsInteractionPanel.tsx` where a live control exists.
 

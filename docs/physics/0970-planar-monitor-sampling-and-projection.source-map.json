@@ -153,6 +153,16 @@
       "id": "PM-N29",
       "status": "unqualified",
       "requirement": "An FDM multilayer composite reproduces the covering native cell values bitwise, leaves uncovered gap cells empty under the domain target, keeps distinct regions when two layers both number a region 1, spans the composite lattice in the Default section, and rejects unequal spacing, half-cell shifts and overlapping native grids with planar_scope_unsupported."
+    },
+    {
+      "id": "PM-N30",
+      "status": "planned",
+      "requirement": "Sampling window: an absent window equals the full bounds; the window is clamped to the frame; partial, inverted and non-intersecting windows reject with invalid_planar_window; metadata publishes the window and the full bounds with pixel size from the window extent; windowed and unwindowed sample tokens differ; a probe inside the frame but outside the window is still evaluated. The Rust tests of plan Task 3 are written but NOT RUN while unit-test compilation is banned."
+    },
+    {
+      "id": "PM-N31",
+      "status": "planned",
+      "requirement": "Nearest node: FEM returns the closest vertex of the containing element with its nodal, non-interpolated value and the lower-index tie rule; FDM returns the containing cell centre; the signed normal offset is reported; not_requested, empty and unsupported_operator statuses and the invalid_planar_probe rejection hold. The Rust tests of plan Task 4 are written but NOT RUN while unit-test compilation is banned."
     }
   ],
   "equations": [
@@ -342,6 +352,47 @@
         "fdm-multilayer-composite",
         "api-build"
       ]
+    },
+    {
+      "id": "eq-planar-sampling-window",
+      "symbols": [
+        "B_full",
+        "W_req",
+        "window_req_bounds",
+        "W_res",
+        "window_res_bounds",
+        "bounds",
+        "duv",
+        "NuNv"
+      ],
+      "sources": [
+        "planar-sampling-window-contract"
+      ]
+    },
+    {
+      "id": "eq-planar-nearest-node",
+      "symbols": [
+        "e_star",
+        "N_e_star",
+        "nu_mu",
+        "nu_star",
+        "x_nu",
+        "x_star",
+        "q_nu_star",
+        "q_node",
+        "uv_nu",
+        "delta_par",
+        "delta_n",
+        "o",
+        "eu",
+        "ev",
+        "n",
+        "uvs"
+      ],
+      "sources": [
+        "planar-nearest-node-contract",
+        "point-probe"
+      ]
     }
   ],
   "symbols": [
@@ -512,7 +563,24 @@
       "latex": "\\mathcal C",
       "meaning": "Composite cells covered by a native multilayer cell",
       "si_unit": "1"
-    }
+    },
+    {"id": "B_full", "latex": "B", "meaning": "Full resolved frame bounds rectangle", "si_unit": "\\mathrm{m^2}"},
+    {"id": "W_req", "latex": "W^{\\mathrm{req}}", "meaning": "Requested sampling window rectangle", "si_unit": "\\mathrm{m^2}"},
+    {"id": "window_req_bounds", "latex": "\\tilde u_0,\\tilde u_1,\\tilde v_0,\\tilde v_1", "meaning": "Requested sampling-window bounds", "si_unit": "\\mathrm{m}"},
+    {"id": "W_res", "latex": "W", "meaning": "Resolved sampling window, intersection of the request with the frame bounds", "si_unit": "\\mathrm{m^2}"},
+    {"id": "window_res_bounds", "latex": "\\hat u_0,\\hat u_1,\\hat v_0,\\hat v_1", "meaning": "Resolved sampling-window bounds", "si_unit": "\\mathrm{m}"},
+    {"id": "e_star", "latex": "e_\\star", "meaning": "FEM element assigned to the probe point by the locator", "si_unit": "1"},
+    {"id": "N_e_star", "latex": "\\mathcal N(e_\\star)", "meaning": "Global mesh node indices of the vertices of the probe element", "si_unit": "1"},
+    {"id": "nu_mu", "latex": "\\nu,\\mu", "meaning": "Global mesh node indices", "si_unit": "1"},
+    {"id": "nu_star", "latex": "\\nu_\\star", "meaning": "Selected nearest global node index", "si_unit": "1"},
+    {"id": "x_nu", "latex": "\\mathbf x_\\nu", "meaning": "World position of mesh node $\\nu$", "si_unit": "\\mathrm{m}"},
+    {"id": "q_nu_star", "latex": "q_{\\nu_\\star}", "meaning": "Nodal degree-of-freedom value at the selected node", "si_unit": "[q]"},
+    {"id": "q_node", "latex": "q_{\\mathrm{node}}", "meaning": "Nearest-node reading reported by the probe", "si_unit": "[q]"},
+    {"id": "uv_nu", "latex": "u_\\nu,v_\\nu", "meaning": "Projection of the selected node or cell centre on the frame", "si_unit": "\\mathrm{m}"},
+    {"id": "delta_par", "latex": "\\delta_\\parallel", "meaning": "In-plane distance between the probe point and the projected node", "si_unit": "\\mathrm{m}"},
+    {"id": "delta_n", "latex": "\\delta_n", "meaning": "Signed offset of the node or cell centre along the frame normal", "si_unit": "\\mathrm{m}"},
+    {"id": "c_star", "latex": "c_\\star", "meaning": "FDM cell containing the probe point", "si_unit": "1"},
+    {"id": "x_c", "latex": "\\mathbf x_c", "meaning": "World position of the centre of FDM cell $c$", "si_unit": "\\mathrm{m}"}
   ],
   "sources": [
     {
@@ -855,6 +923,20 @@
       "symbol": "resolve_fdm_multilayer_composite",
       "responsibility": "Embeds equal-spacing, lattice-aligned FDM multilayer native grids into one composite carrier with coverage and membership (per-layer region ids renumbered into disjoint composite ranges) for monitor_target/region planar scopes and the Default section bounds; fails closed on unequal spacing, misalignment, overlap or a region claimed by two layers.",
       "evidence_status": "implemented-unit-tests-not-run"
+    },
+    {
+      "id": "planar-sampling-window-contract",
+      "path": "docs/physics/0970-planar-monitor-sampling-and-projection.md",
+      "symbol": "DOC-ANCHOR:planar-monitor-sampling-window",
+      "responsibility": "Define the sampling window (crop) as the intersection of the requested rectangle with the frame bounds, pixel size from the window extent, the window in the sample identity, and rejection of partial or empty windows before implementation (ADR 0080).",
+      "evidence_status": "planned_contract"
+    },
+    {
+      "id": "planar-nearest-node-contract",
+      "path": "docs/physics/0970-planar-monitor-sampling-and-projection.md",
+      "symbol": "DOC-ANCHOR:planar-monitor-nearest-node",
+      "responsibility": "Define the nearest-node probe reading (FEM nearest vertex of the containing element with the lower-index tie rule and nodal value, FDM containing cell centre and value), its statuses, and the plane_sample-only restriction before implementation (ADR 0080).",
+      "evidence_status": "planned_contract"
     }
   ],
   "public_api": {

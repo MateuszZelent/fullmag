@@ -2,6 +2,7 @@ import type {
   FdmDomainSelectionScope,
   FdmDomainSelectionKind,
   RegionVisualizationTargetId,
+  Selection,
   SelectionRef,
 } from "@/kernel/selection/selectionTypes";
 import {
@@ -18,6 +19,7 @@ import { analysisResultSelectionRef } from "@/shared/domain/analysis/results";
 
 import type { ExplorerNode } from "./explorerTypes";
 import { legacyStatusFacets } from "./builders/explorerNodeState";
+import { MASK_FIELD_DRIVE_MODULE_KIND } from "./builders/physicsGraphTree";
 
 type StudyStageSelectionKind = Extract<
   SelectionRef,
@@ -477,6 +479,7 @@ export function selectionRefFromNode(node: ExplorerNode): SelectionRef | null {
       node.kind === "object.region.diagnostics" ||
       node.kind === "object.region-magnetic-texture" ||
       node.kind === "object.magnetic-parameters" ||
+      node.kind === "object.absorbing-boundary" ||
       node.kind === "object.magnetic-texture" ||
       node.kind === "object.magnetic-texture.asset" ||
       node.kind === "object.magnetic-texture.load" ||
@@ -746,6 +749,15 @@ export function selectionRefFromNode(node: ExplorerNode): SelectionRef | null {
         type: "physics-field-drive",
       };
     }
+    if (node.physicsModuleKind === MASK_FIELD_DRIVE_MODULE_KIND) {
+      return {
+        fieldDriveId: node.physicsModuleId,
+        fieldDriveKind: "mask",
+        kind: "physics.field-drive",
+        nodeId: node.id,
+        type: "physics-field-drive",
+      };
+    }
     return {
       kind: "physics.module",
       nodeId: node.id,
@@ -797,6 +809,9 @@ export function resolveCurrentExplorerSelectionNode(
 ): ExplorerNode | null {
   const selected = findExplorerNode(nodes, selectedNodeId);
   if (selected) return selected;
+  if (ref?.type === "scene-object" && ref.kind === "object.absorbing-boundary") {
+    return findExplorerNode(currentTree, `model:object:${ref.objectId}:magnetic-parameters`);
+  }
   if (ref?.type !== "postprocessing") return null;
   // A definition selection is tied to an immutable owner identity. If that
   // owner is no longer in the current snapshot, never silently retarget the
@@ -877,6 +892,33 @@ function isFrequencyDomainSelectionNode(node: ExplorerNode): boolean {
   return FREQUENCY_DOMAIN_RESULT_KINDS.has(node.kind);
 }
 
+/** The selection an Explorer node stands for (also used by the Inspector path). */
+export function selectionFromExplorerNode(node: ExplorerNode): Omit<Selection, "moduleSource"> {
+  const ref = selectionRefFromNode(node);
+  return {
+    kind:
+      ref?.type === "cross-section-draft" ||
+      ref?.type === "cross-section-plot" ||
+      ref?.type === "planar-monitor-draft" ||
+      (ref?.type === "mesh-part" &&
+        node.kind !== "mesh.unassigned" &&
+        node.kind !== "mesh.unassigned.part") ||
+      ref?.type === "current-transport" ||
+      ref?.type === "spin-transport" ||
+      ref?.type === "spin-interface" ||
+      ref?.type === "spin-torque" ||
+      ref?.type === "oersted-field" ||
+      ref?.type === "physics-field-drive" ||
+      ref?.type === "physics-module"
+        ? ref.kind
+        : node.kind,
+    label: node.label,
+    nodeId: node.id,
+    objectId: node.objectId ?? null,
+    ref,
+  };
+}
+
 export function selectExplorerNode(
   kernel: KernelApi,
   node: ExplorerNode,
@@ -886,32 +928,7 @@ export function selectExplorerNode(
   if (node.crossSectionPlotId) {
     selectCrossSectionPlot(node.crossSectionPlotId);
   }
-  const ref = selectionRefFromNode(node);
-  kernel.selection.set(
-    {
-      kind:
-        ref?.type === "cross-section-draft" ||
-        ref?.type === "cross-section-plot" ||
-        ref?.type === "planar-monitor-draft" ||
-        (ref?.type === "mesh-part" &&
-          node.kind !== "mesh.unassigned" &&
-          node.kind !== "mesh.unassigned.part") ||
-        ref?.type === "current-transport" ||
-        ref?.type === "spin-transport" ||
-        ref?.type === "spin-interface" ||
-        ref?.type === "spin-torque" ||
-        ref?.type === "oersted-field" ||
-        ref?.type === "physics-field-drive" ||
-        ref?.type === "physics-module"
-          ? ref.kind
-          : node.kind,
-      label: node.label,
-      nodeId: node.id,
-      objectId: node.objectId ?? null,
-      ref,
-    },
-    source,
-  );
+  kernel.selection.set(selectionFromExplorerNode(node), source);
 }
 
 // Airbox nodes publish one mesh-derived status; the inspector reads the three

@@ -2588,6 +2588,10 @@ def _parser() -> argparse.ArgumentParser:
         "--solver-profile", action="store_true",
         help="enable the bounded accepted FEM solver profile for this activation",
     )
+    activate_parser.add_argument(
+        "--cuda-trace", action="store_true",
+        help="enable the bounded accepted FEM CUDA activity trace for this activation",
+    )
     script_parser = subparsers.add_parser(
         "script",
         help=(
@@ -2628,6 +2632,10 @@ def _parser() -> argparse.ArgumentParser:
         "--solver-profile", action="store_true",
         help="enable the bounded accepted FEM solver profile for this run",
     )
+    run_script_parser.add_argument(
+        "--cuda-trace", action="store_true",
+        help="enable the bounded accepted FEM CUDA activity trace for this run",
+    )
     run_script_parser.add_argument("--attempt")
     run_script_parser.add_argument("--config-sha256")
     run_script_parser.add_argument(
@@ -2652,6 +2660,16 @@ def _parser() -> argparse.ArgumentParser:
     idle_restart.add_argument("--saved-authoring-checkpoint")
     idle_restart.add_argument("--saved-authoring-checkpoint-sha256")
     idle_restart.add_argument("--stop-only", action="store_true", help="Drain and stop the pinned backend without restarting it")
+    idle_restart.add_argument(
+        "--capture-terminal-observation", action="store_true",
+        help="capture native evidence for a completed or failed run during a managed stop-only drain",
+    )
+    idle_restart.add_argument("--quiesce-api", action="store_true",
+                              help="with native capture stop-only: close only the exact pinned API before native inspection")
+    idle_restart.add_argument("--capture-native-terminal", action="store_true",
+                              help="stop-only: preserve stale public Running after exact native all-Succeeded inspection")
+    idle_restart.add_argument("--capture-prelaunch-failure", action="store_true",
+                              help="stop-only with --quiesce-api: preserve one exact released prelaunch-failed Study run for offline archival")
     idle_restart.add_argument(
         "--allow-prepared-session", action="store_true",
         help="allow graceful drain with never-started manual Studies, including held queue entries after a terminal task; retain accepted inputs and never release Solve",
@@ -2701,6 +2719,17 @@ def _parser() -> argparse.ArgumentParser:
     stop_unadmitted.add_argument("--source-sha256", required=True)
     stop_unadmitted.add_argument("--request-id", required=True)
     stop_unadmitted.add_argument("--session-id", required=True)
+    empty_abort = subparsers.add_parser(
+        "stop-empty-api-abort-volume", help="preview or stop one empty ownerless API abort; never claim a native drain",
+    )
+    empty_abort.add_argument("--attempt", required=True)
+    empty_abort.add_argument("--config-sha256", required=True)
+    empty_abort.add_argument("--source-root", type=Path, required=True)
+    empty_abort.add_argument("--port", type=int, required=True)
+    empty_abort_mode = empty_abort.add_mutually_exclusive_group(required=True)
+    empty_abort_mode.add_argument("--preview", action="store_true")
+    empty_abort_mode.add_argument("--apply", action="store_true")
+    empty_abort.add_argument("--expected-plan-sha256")
     stop_diagnostic = subparsers.add_parser(
         "stop-diagnostic-volume",
         help="stop one pinned backend that retains only its failed-owner diagnostic API",
@@ -2710,6 +2739,12 @@ def _parser() -> argparse.ArgumentParser:
     stop_diagnostic.add_argument("--source-root", type=Path, required=True)
     stop_diagnostic.add_argument("--port", type=int, required=True)
     stop_diagnostic.add_argument("--preview", action="store_true")
+    stop_diagnostic.add_argument("--reconcile-startup-stop-attempt",
+                                 help="observe and complete one retained startup-recovery stop without sending a signal")
+    stop_diagnostic.add_argument("--startup-recovery", action="store_true",
+                                 help="stop only the fenced API of an initial failed container-recovery startup")
+    stop_diagnostic.add_argument("--expected-plan-sha256",
+                                 help="apply the exact successful --startup-recovery --preview plan")
     stop_diagnostic.add_argument(
         "--resume-attempt",
         help="exact successful retained resume attempt that pins the current backend start time",
@@ -2771,6 +2806,15 @@ def _parser() -> argparse.ArgumentParser:
         "--previous-recovery-sha256",
         help="explicitly rotate the exact archived prior recovery (SHA-256 of its raw current bytes)",
     )
+    preowner_probe = subparsers.add_parser(
+        'stop-preowner-probe-volume',
+        help='preview or gracefully stop an empty API after a pre-owner GPU probe failure',
+    )
+    for option in ('attempt', 'resume-attempt', 'config-sha256', 'source-root', 'image-id'):
+        preowner_probe.add_argument('--' + option, required=True)
+    preowner_probe.add_argument('--port', type=int, required=True)
+    preowner_probe.add_argument('--apply', action='store_true')
+    preowner_probe.add_argument('--expected-plan-sha256')
     preowner_policy = subparsers.add_parser(
         "stop-preowner-policy-volume",
         help="preview or gracefully stop the exact startup-only diagnostic group after a refused budget",
@@ -2793,9 +2837,28 @@ def _parser() -> argparse.ArgumentParser:
     )
     stop_bootstrap.add_argument("--attempt", required=True)
     stop_bootstrap.add_argument("--config-sha256", required=True)
-    stop_bootstrap.add_argument("--resume-attempt", required=True)
+    stop_bootstrap.add_argument("--resume-attempt")
+    stop_bootstrap.add_argument("--development-terminal-sha256")
+    stop_bootstrap.add_argument("--process-receipt-sha256")
+    stop_bootstrap.add_argument("--stop-frontend", action="store_true")
     stop_bootstrap.add_argument("--source-root", type=Path, required=True)
     stop_bootstrap.add_argument("--port", type=int, required=True)
+    stop_bootstrap_frontend = subparsers.add_parser(
+        "stop-bootstrap-frontend-volume",
+        help="Qualify and stop the exact frontend after a preserved diagnostic bootstrap stop",
+    )
+    stop_bootstrap_frontend.add_argument("--attempt", required=True)
+    stop_bootstrap_frontend.add_argument("--config-sha256", required=True)
+    stop_bootstrap_frontend.add_argument("--source-root", type=Path, required=True)
+    stop_bootstrap_frontend.add_argument("--port", type=int, required=True)
+    stop_bootstrap_frontend.add_argument("--bootstrap-stop-attempt", required=True)
+    stop_bootstrap_frontend.add_argument("--bootstrap-stop-sha256", required=True)
+    stop_bootstrap_frontend.add_argument("--historical-namespace-proof",
+                                        help="immutable control-relative historical namespace absence proof")
+    stop_bootstrap_frontend.add_argument("--historical-namespace-proof-sha256",
+                                        help="exact raw SHA-256 of the historical namespace proof")
+    stop_bootstrap_frontend.add_argument("--apply", action="store_true")
+    stop_bootstrap_frontend.add_argument("--expected-plan-sha256")
     recreate_volume = subparsers.add_parser("recreate-volume", help="Replace exact stopped-backend DEV services while retaining Docker caches")
     recreate_volume.add_argument("--retire-only", action="store_true", help="archive an exact stopped and genuinely drained group without starting replacements")
     recreate_volume.add_argument("--attempt", required=True)
@@ -2805,7 +2868,10 @@ def _parser() -> argparse.ArgumentParser:
     recreate_volume.add_argument('--prepared-quarantine-sha256',
                                  help='exact prepared quarantine digest; permits fresh archival only after native cancellation')
     recreate_volume.add_argument("--native-contract", action="append", default=None,
-                                 choices=("fem-demag-poisson",),
+                                 choices=("fem-demag-poisson", "fem-cuda-activity-trace",
+                                          "fem-cuda-pgbb-reuse", "fem-cuda-rk-guard",
+                                          "fem-cpu-pgbb-reuse", "fem-cuda-object-average", "fem-cpu-threads",
+                                          "fem-cuda-bb-exchange-mass"),
                                  help="require an allowlisted native contract before publishing the replacement backend package")
     recreate_volume.add_argument(
         "--helper-source-root", type=Path,
@@ -2846,6 +2912,13 @@ def _parser() -> argparse.ArgumentParser:
     recreate_volume.add_argument("--drained-successor-proof-sha256", help="SHA-256 of the exact drained-successor proof")
     recreate_volume.add_argument("--terminal-observation-proof", help="Exact private control-volume proof of one terminal observation")
     recreate_volume.add_argument("--terminal-observation-proof-sha256", help="SHA-256 of the exact terminal observation proof")
+    recreate_volume.add_argument("--empty-api-abort-stop", help="Fresh-state only: exact successful ownerless API-abort stop attempt")
+    recreate_volume.add_argument("--empty-api-abort-stop-sha256", help="SHA-256 of that exact raw stop terminal receipt")
+    recreate_volume.add_argument("--native-terminal-stop", help="Fresh-state only: exact native-terminal stop attempt")
+    recreate_volume.add_argument("--native-terminal-stop-sha256", help="SHA-256 of the exact native-terminal stop terminal receipt")
+    recreate_volume.add_argument("--prelaunch-failure-stop", help="Fresh-state only: exact prelaunch-failure stop attempt")
+    recreate_volume.add_argument("--prelaunch-failure-stop-sha256", help="SHA-256 of the exact prelaunch-failure stop terminal receipt")
+    recreate_volume.add_argument("--terminal-observation-stop", help="Exact stop-only attempt containing the terminal observation capture")
     recreate_volume.add_argument(
         "--offline-reconciliation", metavar="OPERATION_TOKEN",
         help="consume the exact completed offline control repair without replaying its old operation",
@@ -2964,7 +3037,10 @@ def _parser() -> argparse.ArgumentParser:
         command.add_argument("--source-root", type=Path,
                              help="registered checkout/worktree mounted live by both services")
         command.add_argument("--native-contract", action="append", default=None,
-                             choices=("fem-demag-poisson",),
+                             choices=("fem-demag-poisson", "fem-cuda-activity-trace",
+                                          "fem-cuda-pgbb-reuse", "fem-cuda-rk-guard",
+                                          "fem-cpu-pgbb-reuse", "fem-cuda-object-average", "fem-cpu-threads",
+                                          "fem-cuda-bb-exchange-mass"),
                              help="qualify the package with this native contract before API startup")
         command.add_argument(
             "--profile", choices=sorted(BUILD_PROFILE_TO_CARGO_PROFILE),
@@ -2991,12 +3067,18 @@ def _parser() -> argparse.ArgumentParser:
         )
         command.add_argument("--port", type=int, default=None,
                              help="loopback frontend port (up only)")
+        command.add_argument("--network-subnet",
+                             help="explicit unused RFC1918 IPv4 subnet for this DEV bridge; verify host routes first")
         command.add_argument("--script", "--startup-script", dest="script", type=Path,
                              help="optional simulation script, relative to the selected checkout or absolute inside it (up only)")
         if name == "up":
             command.add_argument(
                 "--headless", action="store_true",
                 help="start the backend without starting the retained frontend service",
+            )
+            command.add_argument(
+                "--cuda-trace", action="store_true",
+                help="enable the bounded accepted FEM CUDA activity trace for the startup script",
             )
         command.add_argument(
             "--migrate-host-capacity", action="store_true",
@@ -3112,10 +3194,17 @@ def main(argv: Sequence[str] | None = None) -> int:
         elif args.action == "stop-unadmitted":
             from docker_volume_stop_unadmitted import stop
             stop(args)
+        elif args.action == "stop-empty-api-abort-volume":
+            from docker_volume_empty_api_abort import stop
+            result = stop(args)
+            print(json.dumps(result, ensure_ascii=False, sort_keys=True))
         elif args.action == "stop-diagnostic-volume":
             from docker_volume_stop_diagnostic import stop_diagnostic
             result = stop_diagnostic(args)
             print(json.dumps(result, ensure_ascii=False, sort_keys=True))
+        elif args.action == 'stop-preowner-probe-volume':
+            from docker_volume_preowner_probe_stop import stop
+            stop(args)
         elif args.action == "stop-preowner-policy-volume":
             if bool(args.proof_path) != bool(args.proof_sha256):
                 raise _fail("Terminal observation successor requires paired proof path and digest")
@@ -3171,6 +3260,10 @@ def main(argv: Sequence[str] | None = None) -> int:
             from docker_volume_stop_bootstrap import stop_bootstrap
             result = stop_bootstrap(args)
             print(json.dumps(result, ensure_ascii=False, sort_keys=True))
+        elif args.action == "stop-bootstrap-frontend-volume":
+            from docker_volume_bootstrap_frontend_stop import run as stop_bootstrap_frontend
+            result = stop_bootstrap_frontend(args)
+            print(json.dumps(result, ensure_ascii=False, sort_keys=True))
         elif args.action == "recreate-volume":
             if args.lost_state_stop and (not args.fresh_state or any((
                     args.retire_only, args.resume_recreation, args.recovery_authorization,
@@ -3181,7 +3274,9 @@ def main(argv: Sequence[str] | None = None) -> int:
                 raise _fail("Lost state requires plain fresh recreation with one diagnostic stop pin")
             if bool(args.terminal_observation_proof) != bool(args.terminal_observation_proof_sha256):
                 raise _fail("Terminal observation requires paired proof and SHA-256")
-            if args.terminal_observation_proof and any((args.fresh_state, args.recovery_authorization, args.resume_recreation, args.completed_recreation_attempt, args.drained_successor_proof)):
+            if args.terminal_observation_stop and args.terminal_observation_proof:
+                raise _fail("Choose one terminal observation source")
+            if (args.terminal_observation_proof or args.terminal_observation_stop) and any((args.fresh_state, args.recovery_authorization, args.resume_recreation, args.completed_recreation_attempt, args.drained_successor_proof)):
                 raise _fail("Terminal observation requires plain retained recreation without another restore or recovery request")
             if bool(args.completed_recreation_attempt) != bool(args.completed_recreation_sha256):
                 raise _fail("completed recreation requires both attempt and terminal SHA-256")
@@ -3242,6 +3337,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 config_sha256=getattr(args, "config_sha256", None),
                 headless=bool(getattr(args, "headless", False)),
                 solver_profile=getattr(args, "solver_profile", False),
+                cuda_trace=getattr(args, "cuda_trace", False),
             )
             print(json.dumps(result, ensure_ascii=False, sort_keys=True))
             return int(result["exit_code"])

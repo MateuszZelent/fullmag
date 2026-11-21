@@ -278,6 +278,67 @@ pub(crate) fn full_field_publication_carrier_identity(
     Some(identity)
 }
 
+/// An authored multilayer field is a concatenation of native layer carriers.
+/// Its aggregate identity binds that partition and ordering without claiming
+/// that the flattened payload lives on the common convolution grid.
+pub(crate) fn authored_multilayer_publication_carrier_identity(
+    field: &ResolvedSpatialField<'_>,
+) -> Option<FieldPublicationCarrierIdentity> {
+    let SpatialFieldCarrier::FdmCells {
+        cells,
+        multilayer_scope: Some(scope),
+        ..
+    } = &field.carrier
+    else {
+        return None;
+    };
+    let (fingerprint, point_count) = multilayer_native_carrier_fingerprint(scope.artifact_layout)?;
+    let cell_count = cells.iter().try_fold(1u64, |count, axis| {
+        count.checked_mul(u64::from(*axis))
+    })?;
+    if point_count != cell_count {
+        return None;
+    }
+    Some(FieldPublicationCarrierIdentity {
+        scope_kind: "full".to_owned(),
+        scope_id: None,
+        carrier_id: format!("fdm-multilayer:{fingerprint}:full"),
+        carrier_fingerprint: fingerprint.clone(),
+        topology_hash: fingerprint,
+    })
+}
+
+pub(crate) fn multilayer_native_carrier_fingerprint(
+    layout: &serde_json::Value,
+) -> Option<(String, u64)> {
+    if layout.get("backend")?.as_str()? != "fdm_multilayer" {
+        return None;
+    }
+    let layers = layout.get("layers")?.as_array()?;
+    let mut expected_offset = 0u64;
+    let mut native_carriers = Vec::with_capacity(layers.len());
+    for layer in layers {
+        let layer_id = layer.get("layer_id")?.as_str()?;
+        let grid_fingerprint = layer.get("native_grid_fingerprint")?.as_str()?;
+        let offset = layer.get("value_offset")?.as_u64()?;
+        let count = layer.get("value_count")?.as_u64()?;
+        if layer_id.is_empty()
+            || !canonical_sha256(grid_fingerprint)
+            || offset != expected_offset
+            || count == 0
+        {
+            return None;
+        }
+        expected_offset = offset.checked_add(count)?;
+        native_carriers.push((layer_id, grid_fingerprint, count));
+    }
+    if native_carriers.is_empty() {
+        return None;
+    }
+    let binding = serde_json::to_vec(&("fdm-multilayer-native-carriers.v1", native_carriers)).ok()?;
+    Some((format!("sha256:{:x}", Sha256::digest(binding)), expected_offset))
+}
+
 impl ResolvedSpatialField<'static> {
     pub(crate) fn from_artifact_samples(
         quantity_id: &str, values: Vec<f64>,
@@ -634,6 +695,9 @@ pub(crate) fn resolve_fdm_multilayer_native_layer_field(
             component_count,
         )
         .map(Some);
+    }
+    if quantity_id == "mat_alpha" && crate::live_authored_damping::publication_revision(snapshot).is_some() {
+        return Err(ApiError::not_found("edited damping awaits a qualified native layer layout"));
     }
     let Some(layout) = metadata.get("artifact_layout").filter(|layout| {
         layout.get("backend").and_then(serde_json::Value::as_str) == Some("fdm_multilayer")
@@ -1697,25 +1761,22 @@ fn resolve_planned_native_layer_field(
             )));
         }
     };
-    let material = layer.get("material").ok_or_else(|| {
-        ApiError::conflict(format!(
-            "layer '{}' has no material contract",
-            membership.layer_id
-        ))
-    })?;
-    if material.get(material_key).is_none() {
-        return Err(ApiError::not_found(format!(
-            "quantity_not_materialized: field '{quantity_id}' has no native array for layer '{}'",
-            membership.layer_id
-        )));
-    }
-    let values = strict_finite_values(
-        material,
-        material_key,
-        membership.membership.cell_membership.len(),
-        quantity_id,
-    )?;
-    cross_check_planned_material(snapshot, &membership, quantity_id, spec.unit, &values)?;
+    let count = membership.membership.cell_membership.len();
+    let values = if quantity_id == "mat_alpha" && crate::live_authored_damping::publication_revision(snapshot).is_some() {
+        crate::live_authored_damping::native_layer_values(snapshot, &membership.layer_id, count)?
+    } else {
+        let material = layer.get("material").ok_or_else(|| ApiError::conflict(format!(
+            "layer '{}' has no material contract", membership.layer_id)))?;
+        if material.get(material_key).is_none() {
+            return Err(ApiError::not_found(format!(
+                "quantity_not_materialized: field '{quantity_id}' has no native array for layer '{}'",
+                membership.layer_id)));
+        }
+        let values = strict_finite_values(material, material_key, count, quantity_id)?;
+        cross_check_planned_material(snapshot, &membership, quantity_id, spec.unit, &values)?;
+        values
+    };
+
     let value_hash = hash_f64_values(&values);
     let field_generation = format!(
         "sha256:{:x}",
@@ -2448,7 +2509,11 @@ fn resolve_spatial_field_metadata<'a>(
             ApiError::conflict(format!("field '{quantity_id}' has no FEM topology carrier"))
         })?;
         let topology_fingerprint = mesh.topology_fingerprint().to_owned();
-        match spec.location {
+        let location = if matches!(source_kind, SpatialFieldSourceKind::Materialized)
+            && super::field_resolution::current_fem_damping_uses_nodes(snapshot, quantity_id) {
+            QuantityLocation::Node
+        } else { spec.location };
+        match location {
             QuantityLocation::Cell
                 if matches!(source_kind, SpatialFieldSourceKind::Materialized | SpatialFieldSourceKind::Preview)
                     && point_count == mesh.nodes.len()

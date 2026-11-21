@@ -16,6 +16,7 @@ import {
 } from "@/kernel/selection/selectionTypes";
 import { apmFromTesla } from "@/shared/domain/physics/torqueUnits";
 import { readStudyStageSource } from "@/shared/domain/study/studyStageSource";
+import { runtimeStagesByOwner } from "@/shared/domain/study/stageExecutionIdentity";
 import { resolveRegionMeshLifecycle } from "@/shared/domain/mesh/regionMeshLifecycle";
 import { manifestCarrierOwnershipAliases } from "@/kernel/visualization/visualizationDisplayResolution";
 import type { DomainPresentation } from "@/shared/domain/mesh/domainPresentation";
@@ -157,7 +158,8 @@ export function modelTreeSnapshotFromScene(
 function fieldDriveSnapshots(value: unknown): ModelTreeFieldDriveSnapshot[] {
   const state = recordValue(value);
   const drives = Array.isArray(state?.drives) ? state.drives : [];
-  return drives.flatMap((candidate) => {
+  const maskDrives = Array.isArray(state?.mask_drives) ? state.mask_drives : [];
+  const regional = drives.flatMap((candidate) => {
     const drive = recordValue(candidate);
     const id = stringValue(drive?.id);
     if (!drive || !id) return [];
@@ -169,6 +171,25 @@ function fieldDriveSnapshots(value: unknown): ModelTreeFieldDriveSnapshot[] {
       waveformKind: stringValue(recordValue(drive.waveform)?.kind) ?? "unresolved",
     }];
   });
+  const mask = maskDrives.flatMap((candidate) => {
+    const drive = recordValue(candidate);
+    const id = stringValue(drive?.id);
+    if (!drive || !id) return [];
+    const target = recordValue(drive.target);
+    const targetObjectId = stringValue(target?.object_id);
+    const targetRegionId = stringValue(target?.region_id);
+    return [{
+      driveKind: "mask" as const,
+      enabled: drive.enabled !== false,
+      id,
+      label: stringValue(drive.name) ?? id,
+      targetKind: stringValue(target?.kind) ?? "unresolved",
+      waveformKind: "mask",
+      ...(targetObjectId ? { targetObjectId } : {}),
+      ...(targetRegionId ? { targetRegionId } : {}),
+    }];
+  });
+  return [...regional, ...mask];
 }
 
 function isSyntheticAirboxSceneObject(value: unknown): boolean {
@@ -186,15 +207,7 @@ export function modelTreeSnapshotWithStageExecution(
 ): ModelTreeSnapshot {
   if (!snapshot.study || !stageExecution?.stages.length) return snapshot;
 
-  const runtimeByStageId = new Map<
-    string,
-    (typeof stageExecution.stages)[number]
-  >();
-  for (const stage of stageExecution.stages) {
-    if (typeof stage.stage_id === "string") {
-      runtimeByStageId.set(stage.stage_id, stage);
-    }
-  }
+  const runtimeByOwnerId = runtimeStagesByOwner(stageExecution);
 
   return {
     ...snapshot,
@@ -202,7 +215,7 @@ export function modelTreeSnapshotWithStageExecution(
       ...snapshot.study,
       stages: snapshot.study.stages.map((stage, index) => {
         const runtimeStage =
-          (stage.stageId ? runtimeByStageId.get(stage.stageId) : undefined) ??
+          (stage.stageId ? runtimeByOwnerId.get(stage.stageId) : undefined) ??
           (!stage.pipelineNodeId ? stageExecution.stages.find((candidate) => candidate.index === index) : undefined) ??
           (!stage.pipelineNodeId ? stageExecution.stages[index] : undefined) ??
           null;
@@ -210,7 +223,7 @@ export function modelTreeSnapshotWithStageExecution(
           runtimeStage?.status ?? (!stage.pipelineNodeId ? stageExecution.stage_statuses[index] : null) ?? null;
         return {
           ...stage,
-          stageId: runtimeStage?.stage_id ?? stage.stageId,
+          stageId: stage.pipelineNodeId ?? runtimeStage?.stage_id ?? stage.stageId,
           status: explorerStatusFromRuntimeStage(runtimeStatus) ?? stage.status,
           stateTransition:
             runtimeStage?.state_transition ?? stage.stateTransition ?? null,
@@ -432,6 +445,7 @@ function sceneObjectSnapshot(
 
   return {
     geometryKind: geometryKind(object.geometry),
+    hasAbsorbingBoundary: recordValue(object.absorbing_boundary) !== null,
     id,
     label: stringValue(object.name) ?? id,
     magnetization: magnetizationRef,
@@ -855,6 +869,7 @@ function sceneStudySnapshot(value: unknown): ModelTreeSnapshot["study"] {
       ...sceneStudyStageSnapshot(entry.payload, index),
       ...(entry.queueId ? {
         stageId: entry.queueId,
+        authoredStageId: entry.queueId,
         pipelineNodeId: entry.queueId,
         pipelineEnabled: entry.enabled,
         pipelineLabel: entry.label,
@@ -905,7 +920,9 @@ function sceneStudyStageSnapshot(
       kPathSamplingKind(stage.k_path) ??
       kPathSamplingKind(stage.eigen_k_path),
     maxSteps: scalarText(stage.max_steps),
+    authoredStageId: stringValue(stage.stage_id),
     stageId: stringValue(stage.stage_id) ?? stringValue(stage.id),
+    pipelineEnabled: stage.enabled === false ? false : undefined,
     torqueTolerance: stageTorqueToleranceApm(stage),
     untilSeconds: scalarText(stage.until_seconds),
   };

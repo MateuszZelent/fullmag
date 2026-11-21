@@ -14,6 +14,8 @@ export interface SegmentedControlProps<T extends string> {
   className?: string;
   columns?: 2 | 3 | 4;
   disabled?: boolean;
+  /** Keep focus while rejecting changes until the current save completes. */
+  pending?: boolean;
   options: readonly SegmentedControlOption<T>[];
   value: T;
   onValueChange: (value: T) => void;
@@ -24,6 +26,7 @@ export function SegmentedControl<T extends string>({
   className,
   columns,
   disabled = false,
+  pending = false,
   options,
   value,
   onValueChange,
@@ -43,6 +46,10 @@ export function SegmentedControl<T extends string>({
       option.disabled ? [] : [index],
     );
     if (disabled || enabledIndexes.length === 0) return;
+    if (pending) {
+      if (["Home", "End", "ArrowLeft", "ArrowUp", "ArrowRight", "ArrowDown"].includes(event.key)) event.preventDefault();
+      return;
+    }
 
     let nextIndex: number | undefined;
     if (event.key === "Home") {
@@ -74,8 +81,9 @@ export function SegmentedControl<T extends string>({
   return (
     <div
       aria-label={ariaLabel}
+      aria-busy={pending || undefined}
       className={cn(
-        "grid min-w-0 gap-0.5 rounded-fm-segment border border-fm-subtle bg-fm-disabled p-0.5 shadow-fm-control-inset",
+        "grid min-w-0 gap-0.5 rounded-fm-pill border border-fm-subtle bg-fm-field p-0.5",
         columns === 2 && "grid-cols-2",
         columns === 3 && "grid-cols-3",
         columns === 4 && "grid-cols-4",
@@ -94,16 +102,17 @@ export function SegmentedControl<T extends string>({
           <button
             aria-label={option.accessibleLabel}
             aria-checked={checked}
-            aria-disabled={itemDisabled || undefined}
+            aria-disabled={itemDisabled || pending || undefined}
             className={cn(
-              "h-fm-control-sm min-w-0 rounded-fm-segment px-2",
+              "h-fm-control-sm min-w-0 rounded-fm-pill px-2",
               "font-fm-ui text-fm-control leading-tight outline-none",
-              "transition-[transform,background-color,color,box-shadow] duration-150",
+              "transition-[transform,background-color,color,box-shadow] duration-150 ease-fm-out-soft",
               "active:scale-[0.98] motion-reduce:active:scale-100",
-              "hover:bg-fm-raised focus-visible:ring-2 focus-visible:ring-fm-accent",
+              "focus-visible:ring-2 focus-visible:ring-fm-accent",
+              // Recessed track, raised selection (specs/frontend-v2/09 §1a).
               checked
-                ? "bg-fm-accent font-medium text-fm-on-accent shadow-fm-control"
-                : "bg-transparent text-fm-secondary",
+                ? "bg-fm-raised-selection font-medium text-fm-primary shadow-fm-elevation-sm"
+                : "bg-transparent text-fm-secondary hover:text-fm-primary",
               itemDisabled &&
                 "cursor-not-allowed bg-transparent text-fm-disabled-text opacity-100 active:scale-100",
             )}
@@ -117,7 +126,7 @@ export function SegmentedControl<T extends string>({
             title={option.accessibleLabel}
             type="button"
             onClick={() => {
-              if (!itemDisabled) onValueChange(option.value);
+              if (!itemDisabled && !pending) onValueChange(option.value);
             }}
             onKeyDown={(event) => selectByKeyboard(event, index)}
           >

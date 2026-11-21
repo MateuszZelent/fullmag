@@ -277,7 +277,27 @@ const PLANAR_FIELD_QUERY_ORDER = [
   "snapshot_id",
   "stage_id",
   "vector_budget",
+  // The sampling window comes last so a query without one keeps the exact
+  // canonical key it had before windows existed.
+  "window_u_min_m",
+  "window_u_max_m",
+  "window_v_min_m",
+  "window_v_max_m",
 ] as const satisfies readonly (keyof PlanarFieldQuery)[];
+
+const PLANAR_WINDOW_QUERY_KEYS = [
+  "window_u_min_m",
+  "window_u_max_m",
+  "window_v_min_m",
+  "window_v_max_m",
+] as const satisfies readonly (keyof PlanarFieldQuery)[];
+
+function hasCompletePlanarWindow(query: PlanarFieldQuery): boolean {
+  return PLANAR_WINDOW_QUERY_KEYS.every((key) => {
+    const value = query[key];
+    return value !== undefined && value !== null && value !== "";
+  });
+}
 
 const U64_MAX_DECIMAL = "18446744073709551615";
 
@@ -301,7 +321,13 @@ export function normalizePlanarFieldQuery(
     scope_kind: query.scope_kind ?? "monitor_target",
     vector_budget: query.vector_budget ?? 0,
   };
+  // The backend accepts all four window parameters or none; a partial
+  // window is not part of the sample identity.
+  const keepWindow = hasCompletePlanarWindow(query);
   for (const key of PLANAR_FIELD_QUERY_ORDER) {
+    if (!keepWindow && (PLANAR_WINDOW_QUERY_KEYS as readonly string[]).includes(key)) {
+      continue;
+    }
     const value = query[key];
     if (value !== undefined && value !== null && value !== "") {
       Object.assign(normalized, { [key]: value });

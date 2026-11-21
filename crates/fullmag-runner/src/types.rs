@@ -5,9 +5,9 @@ use fullmag_ir::{
     StageCompletionIR,
 };
 use crate::observation::ObservationClock;
-pub use fullmag_quantities::{
-    FemMaterialFieldLocation, FemRepresentationReceipt, FemStateRepresentation,
-};
+pub use fullmag_quantities::FemRepresentationReceipt;
+#[cfg(any(feature = "fem-native", feature = "fem-gpu"))]
+pub use fullmag_quantities::{FemMaterialFieldLocation, FemStateRepresentation};
 use serde::{de::Error as DeError, Deserialize, Deserializer, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
@@ -826,6 +826,10 @@ pub struct StepStats {
     /// Effective native BoomerAMG policy copied from the native step-stats ABI.
     #[serde(default)]
     pub demag_amg_relax_type: i32,
+    /// Effective GPU coarse-cycle type, queried from HYPRE after configuration.
+    /// Historical results and unconfigured/non-GPU paths have no observation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub demag_amg_coarse_relax_type: Option<i32>,
     #[serde(default)]
     pub demag_amg_coarsening: i32,
     #[serde(default)]
@@ -1169,6 +1173,7 @@ impl Default for StepStats {
             demag_solver: None,
             demag_preconditioner: None,
             demag_amg_relax_type: 0,
+            demag_amg_coarse_relax_type: None,
             demag_amg_coarsening: 0,
             demag_amg_interpolation: 0,
             demag_amg_aggressive_coarsening: 0,
@@ -1280,8 +1285,9 @@ mod all_in_gpu_fem_transfer_audit_tests {
     use super::{
         CpuFixedCouplingTelemetry, CpuFixedTransferDiagnostics,
         ExecutionProvenance, FdmMultilayerStageTelemetry, FdmMultilayerTransferTelemetry,
-        FemMaterialFieldLocation, FemRepresentationReceipt, FemStateRepresentation, StepStats,
+        FemRepresentationReceipt, StepStats,
     };
+    use fullmag_quantities::{FemMaterialFieldLocation, FemStateRepresentation};
 
     #[test]
     fn step_stats_carry_hot_loop_transfer_audit() {
@@ -2730,6 +2736,19 @@ fn digest_hex(bytes: &[u8]) -> String {
     out
 }
 
+/// Identity of a Build Mesh domain in the normalized Live viewport format.
+pub fn geometry_only_mesh_topology_fingerprint(mesh: &fullmag_ir::MeshIR) -> Result<String, String> {
+    fullmag_ir::fem_mesh_topology_fingerprint_v3(
+        &mesh.nodes,
+        &mesh.cells,
+        &normalized_payload_element_markers(&mesh.element_markers, None),
+        &mesh.facets,
+        &mesh.boundary_markers,
+        &mesh.periodic_boundary_pairs,
+        &mesh.periodic_node_pairs,
+    )
+}
+
 fn normalized_payload_element_markers(
     element_markers: &[u32],
     magnetic_markers: Option<&BTreeSet<u32>>,
@@ -3383,6 +3402,8 @@ pub struct RelaxationControllerPolicyProvenance {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct FemDirectMinimizerPolicyProvenance {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub direction_policy_source: Option<String>,
     pub requested_direction_policy: String,
     pub resolved_direction_policy: String,
     pub requested_linear_solver: String,
@@ -3430,6 +3451,7 @@ pub enum LlgTimestepQualificationId {
     ExplicitFixedFemGpuDouble,
     ExplicitAdaptiveFdmCpuDouble,
     ExplicitAdaptiveFdmCudaDouble,
+    ExplicitAdaptiveFdmCudaSingle,
     ExplicitAdaptiveFemCpuDouble,
     ExplicitAdaptiveFemGpuDouble,
 }
@@ -5144,8 +5166,9 @@ pub struct AuxiliaryArtifact {
 
 pub(crate) struct LiveStepConsumer<'a> {
     pub grid: [u32; 3],
-    /// Cadence for heavier live payloads such as full magnetization snapshots.
-    pub field_every_n: u64,
+    /// Step and wall-clock cadence for heavy live payloads: the magnetization
+    /// copy and, at a stride of one step, the full observation catalog.
+    pub field_cadence: crate::LiveFieldCadence,
     /// Whether this consumer needs a full step-0 physics snapshot before
     /// the first accepted step.
     pub initial_snapshot: bool,
@@ -5351,6 +5374,7 @@ mod tests {
 
     fn tiny_fem_plan() -> FemPlanIR {
         FemPlanIR {
+            gpu_bb_preconditioner: None,
             mesh_name: "unit_tet".to_string(),
             mesh_source: Some("test".to_string()),
             mesh: MeshIR {
@@ -5415,6 +5439,7 @@ mod tests {
             solved_antenna_drive_bases: Vec::new(),
             field_drives: Vec::new(),
             field_drive_geometry_masks: Vec::new(),
+            mask_field_term_bases: Vec::new(),
             time_stage: Default::default(),
             current_modules: Vec::new(),
             charge_transport_plans: Vec::new(),
@@ -5509,6 +5534,7 @@ mod tests {
             dispersion_validation: None,
             k0_kittel_validation: None,
             solver_policy: None,
+            magnetostatic_bc: Default::default(),
         }
     }
 

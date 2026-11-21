@@ -22,6 +22,7 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPT_DIR))
 
 from docker_build_control import BuildControl
+from docker_script_output_mounts import OUTPUT_ROOT
 import docker_volume_post_build_generation as continuation
 import test_docker_volume_post_build_generation as generation_fixtures
 
@@ -172,7 +173,13 @@ class PostBuildStartIntegrationTests(unittest.TestCase):
         rendered = _compose_document(control.project)
         toolchain = {
             "image_id": TOOLCHAIN_IMAGE,
-            "inputs": {"build_args": {"FULLMAG_CUDA_BASE_IMAGE": TOOLCHAIN_IMAGE}},
+            "inputs": {"build_args": {
+                "FULLMAG_CUDA_BASE_IMAGE": TOOLCHAIN_IMAGE,
+                "FULLMAG_CUDA_ARCHITECTURES": "86-real",
+                "FULLMAG_HYPRE_GPU_ARCHITECTURES": "86",
+                "FULLMAG_PETSC_CUDA_ARCHITECTURES": "86",
+                "FULLMAG_LIBCEED_CUDA_ARCHITECTURE": "86",
+            }},
         }
         state = source / "state"
         state.mkdir()
@@ -198,6 +205,13 @@ class PostBuildStartIntegrationTests(unittest.TestCase):
             "receipt": {"image_id": fixture.image},
             "operator_probe_environment_record": {},
         }
+
+        def render_compose(*_argv, env, **_kwargs):
+            self.assertEqual(env[dev.DEV_CUDA_TARGET_ENV], "86-real")
+            rendered["services"]["backend"]["environment"][dev.DEV_CUDA_TARGET_ENV] = "86-real"
+            return subprocess.CompletedProcess(
+                ("docker", "compose"), 0, json.dumps(rendered).encode(), b"",
+            )
 
         def compose_capture(_document: object, *argv: str, **_kwargs: object) -> bytes:
             service = argv[-1]
@@ -250,6 +264,7 @@ class PostBuildStartIntegrationTests(unittest.TestCase):
             return original_prepare(*prepare_args, **prepare_kwargs)
 
         fake_script_mounts = types.ModuleType("docker_script_output_mounts")
+        fake_script_mounts.OUTPUT_ROOT = OUTPUT_ROOT
         fake_script_mounts.configure = lambda *_args, **_kwargs: None
         fake_script_mounts.validate = lambda *_args, **_kwargs: None
         fake_cgroup = types.ModuleType("docker_worker_cgroup")
@@ -320,9 +335,7 @@ class PostBuildStartIntegrationTests(unittest.TestCase):
                 mock.patch.object(docker_dev, "_source_git_common_directory", return_value=source),
                 mock.patch.object(docker_dev, "_workspace_state_root", return_value=source / "user-data"),
                 mock.patch.object(dev, "docker_argv", return_value=("docker", "compose")),
-                mock.patch.object(dev, "bounded_capture", return_value=subprocess.CompletedProcess(
-                    ("docker", "compose"), 0, json.dumps(rendered).encode(), b"",
-                )),
+                mock.patch.object(dev, "bounded_capture", side_effect=render_compose),
                 mock.patch.object(dev, "_prefix_runtime_control_mounts"),
                 mock.patch.object(dev, "_control_namespace_from_document", return_value=None),
                 mock.patch.object(dev, "_resolved_control_subpath", side_effect=lambda _control, service: service),

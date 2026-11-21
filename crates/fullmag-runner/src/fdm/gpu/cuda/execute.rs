@@ -252,7 +252,7 @@ fn capture_cuda_fields_for_quantities(
     for field in &mut fields {
         field.config_revision = config_revision;
         field.source_step = source_step;
-        field.source_time_seconds = Some(source_time_seconds);
+        field.source_time_seconds = Some(super::canonical_fdm_publication_time(plan, source_time_seconds));
         field.source_revision = config_revision;
         field.materialized_at_unix_ms = materialized_at_unix_ms;
         field.materialization_wall_time_ns = materialization_wall_time_ns;
@@ -347,7 +347,7 @@ fn frozen_spins_checkpoint(
         frozen_state,
         magnetization,
         step,
-        time_s,
+        super::canonical_fdm_publication_time(plan, time_s),
         dt,
         "fdm_cuda",
         "cuda",
@@ -390,19 +390,12 @@ fn ensure_single_object_scalars(stats: &mut StepStats, object_id: &str) {
 }
 
 #[cfg(feature = "cuda")]
-fn apply_regional_drive_energy(
+pub(crate) fn apply_regional_drive_energy(
     plan: &FdmPlanIR,
     stats: &mut StepStats,
     magnetization: &[[f64; 3]],
 ) {
     let cell_volume = plan.cell_size[0] * plan.cell_size[1] * plan.cell_size[2];
-    // A cellwise Ms field weights each cell like the device energy reductions do.
-    let saturation_magnetisation = |index: usize| {
-        plan.material
-            .ms_field
-            .as_ref()
-            .map_or(plan.material.saturation_magnetisation, |ms| ms[index])
-    };
     let mut magnetization_dot_field = 0.0;
     for resolved in &plan.regional_field_drive_bases {
         if !resolved.drive.enabled {
@@ -414,14 +407,8 @@ fn apply_regional_drive_energy(
             stats.time,
         );
         let multiplier = evaluate_time_dependence(&resolved.drive.waveform, waveform_time_s);
-        for (index, (m, field)) in magnetization.iter().zip(&resolved.field_xyz).enumerate() {
-            if plan.active_mask.as_ref().is_some_and(|mask| !mask[index]) {
-                continue;
-            }
-            magnetization_dot_field += multiplier
-                * saturation_magnetisation(index)
-                * (m[0] * field[0] + m[1] * field[1] + m[2] * field[2]);
-        }
+        magnetization_dot_field +=
+            multiplier * weighted_magnetization_dot_field(plan, magnetization, &resolved.field_xyz);
     }
     for resolved in &plan.solved_antenna_drive_bases {
         if !resolved.drive.activation.is_active_for(
@@ -436,21 +423,146 @@ fn apply_regional_drive_energy(
             stats.time,
         );
         let multiplier = evaluate_time_dependence(&resolved.drive.waveform, waveform_time_s);
-        for (index, (m, field)) in magnetization
-            .iter()
-            .zip(&resolved.field_xyz_apm_per_a)
-            .enumerate()
-        {
-            if plan.active_mask.as_ref().is_some_and(|mask| !mask[index]) {
-                continue;
-            }
-            magnetization_dot_field += multiplier
-                * resolved.drive.peak_current_a
-                * saturation_magnetisation(index)
-                * (m[0] * field[0] + m[1] * field[1] + m[2] * field[2]);
+        magnetization_dot_field += multiplier
+            * resolved.drive.peak_current_a
+            * weighted_magnetization_dot_field(plan, magnetization, &resolved.field_xyz_apm_per_a);
+    }
+    for basis in &plan.mask_field_term_bases {
+        let local_time_s =
+            crate::mask_time::mask_term_local_time(&plan.time_stage, basis.time_origin, stats.time);
+        let multiplier = fullmag_expr::eval_time_program(&basis.time_program, local_time_s);
+        magnetization_dot_field +=
+            multiplier * weighted_magnetization_dot_field(plan, magnetization, &basis.field_xyz);
+    }
+    split_native_regional_drive_energy(stats, -crate::MU0 * cell_volume * magnetization_dot_field);
+}
+
+/// `sum_i Ms_i phi_i (m_i . field_i)` over the active cells, weighted like the
+/// native external-energy reduction (`external_energy_blocks_kernel`): a
+/// cellwise Ms, and the volume fraction phi_i when a boundary correction
+/// (`volume` or `full`) uploads it; phi_i = 1 otherwise.
+#[cfg(any(feature = "cuda", test))]
+fn weighted_magnetization_dot_field(
+    plan: &FdmPlanIR,
+    magnetization: &[[f64; 3]],
+    field_xyz: &[[f64; 3]],
+) -> f64 {
+    let volume_fraction = match plan.boundary_correction.as_deref() {
+        Some("volume" | "full") => plan
+            .boundary_geometry
+            .as_ref()
+            .map(|geometry| geometry.volume_fraction.as_slice()),
+        _ => None,
+    };
+    let mut sum = 0.0;
+    for (index, (m, field)) in magnetization.iter().zip(field_xyz).enumerate() {
+        if plan.active_mask.as_ref().is_some_and(|mask| !mask[index]) {
+            continue;
+        }
+        let ms = plan
+            .material
+            .ms_field
+            .as_ref()
+            .map_or(plan.material.saturation_magnetisation, |ms| ms[index]);
+        let phi = volume_fraction.map_or(1.0, |phi| phi[index]);
+        sum += ms * phi * (m[0] * field[0] + m[1] * field[1] + m[2] * field[2]);
+    }
+    sum
+}
+
+/// Native Zeeman is combined. Preserve it across repeated projections, while
+/// exposing the external and prescribed-drive contributions separately.
+#[cfg(any(feature = "cuda", test))]
+fn split_native_regional_drive_energy(stats: &mut crate::types::StepStats, drive_energy: f64) {
+    stats.e_ext += stats.e_drive - drive_energy;
+    stats.e_drive = drive_energy;
+    if stats.per_object_scalars.len() == 1 && stats.per_object_scalars.contains_key("free") {
+        let snapshot = crate::scalar_metrics::scalar_snapshot_from_step(stats);
+        if let Some(free) = stats.per_object_scalars.get_mut("free") {
+            free.extend(snapshot);
         }
     }
-    stats.e_drive = -crate::MU0 * cell_volume * magnetization_dot_field;
+}
+
+#[cfg(test)]
+mod regional_drive_energy_tests {
+    #[test]
+    fn cuda_regional_drive_energy_split_preserves_total_and_single_object_scalars() {
+        let mut stats = crate::types::StepStats {
+            e_ex: 1.0, e_ext: -5.0, e_total: -4.0, mx: 0.4, ..Default::default()
+        };
+        stats.per_object_scalars = crate::scalar_metrics::single_object_scalars("free", &stats);
+        stats.per_object_scalars.get_mut("free").unwrap().insert("custom".into(), 7.0);
+        super::split_native_regional_drive_energy(&mut stats, -2.0);
+        assert_eq!((stats.e_ext, stats.e_drive, stats.e_total), (-3.0, -2.0, -4.0));
+        assert_eq!(stats.e_total, stats.e_ex + stats.e_ext + stats.e_drive);
+        assert_eq!(stats.per_object_scalars["free"]["e_ext"], stats.e_ext);
+        assert_eq!(stats.per_object_scalars["free"]["e_drive"], stats.e_drive);
+        assert_eq!(stats.per_object_scalars["free"]["mx"], stats.mx);
+        assert_eq!(stats.per_object_scalars["free"]["custom"], 7.0);
+        let before = stats.per_object_scalars.clone();
+        super::split_native_regional_drive_energy(&mut stats, -2.0);
+        assert_eq!((stats.e_ext, stats.e_drive, stats.e_total), (-3.0, -2.0, -4.0));
+        assert_eq!(stats.per_object_scalars, before);
+        stats.per_object_scalars = crate::scalar_metrics::single_object_scalars("another-scope", &stats);
+        let unrelated = stats.per_object_scalars.clone();
+        super::split_native_regional_drive_energy(&mut stats, -1.0);
+        assert_eq!(stats.e_total, stats.e_ex + stats.e_ext + stats.e_drive);
+        assert_eq!(stats.per_object_scalars, unrelated);
+    }
+
+    fn boundary_geometry(volume_fraction: Vec<f64>) -> fullmag_ir::BoundaryGeometryIR {
+        let empty = vec![0.0; volume_fraction.len()];
+        fullmag_ir::BoundaryGeometryIR {
+            volume_fraction,
+            face_link_xp: empty.clone(),
+            face_link_xm: empty.clone(),
+            face_link_yp: empty.clone(),
+            face_link_ym: empty.clone(),
+            face_link_zp: empty.clone(),
+            face_link_zm: empty.clone(),
+            delta_xp: empty.clone(),
+            delta_xm: empty.clone(),
+            delta_yp: empty.clone(),
+            delta_ym: empty.clone(),
+            delta_zp: empty.clone(),
+            delta_zm: empty,
+            demag_corr_target_idx: Vec::new(),
+            demag_corr_source_idx: Vec::new(),
+            demag_corr_tensor: Vec::new(),
+            demag_corr_stencil_size: 0,
+        }
+    }
+
+    /// A boundary cell half filled with magnet contributes half of a full cell
+    /// to the drive energy, as in the native external-energy reduction.
+    #[test]
+    fn cuda_drive_energy_weights_boundary_cells_by_volume_fraction() {
+        let mut plan = fullmag_ir::FdmPlanIR::default();
+        plan.material.saturation_magnetisation = 2.0;
+        plan.boundary_geometry = Some(boundary_geometry(vec![1.0, 0.5, 0.25]));
+        let magnetization = [[0.0, 0.0, 1.0]; 3];
+        let field = [[0.0, 0.0, 3.0]; 3];
+
+        plan.boundary_correction = Some("volume".to_string());
+        let full = super::weighted_magnetization_dot_field(&plan, &magnetization, &field);
+        assert_eq!(full, 2.0 * 3.0 * (1.0 + 0.5 + 0.25));
+        plan.boundary_correction = Some("full".to_string());
+        assert_eq!(super::weighted_magnetization_dot_field(&plan, &magnetization, &field), full);
+
+        // Without an active boundary tier the device uses phi = 1.
+        plan.boundary_correction = Some("none".to_string());
+        assert_eq!(super::weighted_magnetization_dot_field(&plan, &magnetization, &field), 18.0);
+
+        // Cellwise Ms and inactive cells.
+        plan.boundary_correction = Some("volume".to_string());
+        plan.material.ms_field = Some(vec![1.0, 4.0, 8.0]);
+        plan.active_mask = Some(vec![true, true, false]);
+        assert_eq!(
+            super::weighted_magnetization_dot_field(&plan, &magnetization, &field),
+            3.0 * (1.0 * 1.0 + 4.0 * 0.5)
+        );
+    }
 }
 
 #[cfg(feature = "cuda")]
@@ -484,6 +596,10 @@ fn adaptive_batch_execution_eligible(
     plan.adaptive_timestep.is_some()
         && plan.relaxation.is_none()
         && plan.spin_transport_plans.is_empty()
+        // The native batch path captures the RHS in a CUDA graph and freezes
+        // scalar parameters at capture time. J(t) requires host-selected RK
+        // stages and event clipping, so it must use the regular step loop.
+        && plan.slonczewski_time_expression.is_none()
         && !plan_uploads_time_dependent_drive(plan)
         && !live
         // The native batch ABI exposes only terminal accepted-state outputs.
@@ -504,6 +620,10 @@ fn plan_uploads_time_dependent_drive(plan: &FdmPlanIR) -> bool {
             .solved_antenna_drive_bases
             .iter()
             .any(|basis| dynamic(&basis.drive.waveform))
+        || plan
+            .mask_field_term_bases
+            .iter()
+            .any(|basis| basis.time_dependent)
 }
 
 #[cfg(feature = "cuda")]
@@ -539,7 +659,11 @@ fn append_solved_antenna_drive_events(
 fn cuda_drive_event_schedule(plan: &FdmPlanIR, until_seconds: f64) -> Vec<f64> {
     let stage_start_s = plan.time_stage.start_time_s;
     let stage_end_s = stage_start_s + until_seconds;
-    let tolerance_s = crate::schedules::OUTPUT_TIME_TOLERANCE;
+    let tolerance_s = if plan.slonczewski_time_expression.is_some() {
+        0.0
+    } else {
+        crate::schedules::OUTPUT_TIME_TOLERANCE
+    };
     let mut events = vec![stage_start_s, stage_end_s];
     events.extend(crate::time_events::resolved_stage_drive_discontinuities_with_origin(
         &plan.field_drives,
@@ -564,6 +688,11 @@ fn cuda_drive_event_schedule(plan: &FdmPlanIR, until_seconds: f64) -> Vec<f64> {
             );
         }
     }
+    if let Some(expression) = &plan.slonczewski_time_expression {
+        events.extend(expression.event_times_s.iter().copied().filter(|&time_s| {
+            time_s > stage_start_s + tolerance_s && time_s < stage_end_s - tolerance_s
+        }));
+    }
     events.retain(|time_s| time_s.is_finite());
     events.sort_by(f64::total_cmp);
     events.dedup_by(|right, left| (*right - *left).abs() <= tolerance_s);
@@ -583,12 +712,37 @@ fn cap_cuda_target_to_drive_event(
         .iter()
         .copied()
         .find(|event_s| {
-            *event_s > current_absolute_s + crate::schedules::OUTPUT_TIME_TOLERANCE
-                && *event_s < proposed_absolute_s - crate::schedules::OUTPUT_TIME_TOLERANCE
+            let tolerance_s = if plan.slonczewski_time_expression.is_some() {
+                0.0
+            } else {
+                crate::schedules::OUTPUT_TIME_TOLERANCE
+            };
+            *event_s > current_absolute_s + tolerance_s
+                && *event_s < proposed_absolute_s - tolerance_s
         })
         .map_or(proposed_target_solver_time_s, |event_s| {
             event_s - plan.time_stage.start_time_s
         })
+}
+
+#[cfg(feature = "cuda")]
+fn cap_cuda_step_to_drive_event(
+    plan: &FdmPlanIR,
+    current_solver_time_s: f64,
+    proposed_dt_s: f64,
+    drive_events_s: &[f64],
+) -> f64 {
+    let tolerance_s = if plan.slonczewski_time_expression.is_some() {
+        0.0
+    } else {
+        crate::schedules::OUTPUT_TIME_TOLERANCE
+    };
+    crate::time_events::cap_timestep_to_next_event(
+        super::canonical_fdm_time(plan, current_solver_time_s),
+        proposed_dt_s,
+        drive_events_s,
+        tolerance_s,
+    )
 }
 
 #[cfg(feature = "cuda")]
@@ -747,6 +901,9 @@ pub(crate) fn execute_cuda_fdm(
     artifact_writer: Option<ArtifactPipelineSender>,
     mut terminal: Option<crate::constraints::FdmTerminalContext<'_>>,
 ) -> Result<ExecutedRun, RunError> {
+    if plan.slonczewski_time_expression.is_some() && execution_mode != fullmag_ir::ExecutionMode::Extended {
+        return Err(RunError { message: "Slonczewski CUDA time_expression requires extended mode for scalar substep evaluation".into() });
+    }
     let accepted_frozen_state = terminal
         .as_ref()
         .map(|context| {
@@ -774,7 +931,11 @@ pub(crate) fn execute_cuda_fdm(
         })
         || plan.solved_antenna_drive_bases.iter().any(|basis| {
             !matches!(basis.drive.waveform, fullmag_ir::TimeDependenceIR::Constant)
-        });
+        })
+        || plan
+            .mask_field_term_bases
+            .iter()
+            .any(|basis| basis.time_dependent);
     if has_dynamic_drive
         && plan.time_stage.waveform_origin_time_s() != plan.time_stage.start_time_s
     {
@@ -794,6 +955,11 @@ pub(crate) fn execute_cuda_fdm(
             message: "until_seconds must be positive".to_string(),
         });
     }
+    crate::mask_time::check_mask_time_programs(
+        &plan.mask_field_term_bases,
+        &plan.time_stage,
+        until_seconds,
+    )?;
 
     let mut scalar_schedules = collect_scalar_schedules(outputs)?;
     let mut field_schedules = collect_field_schedules(outputs)?;
@@ -977,6 +1143,7 @@ pub(crate) fn execute_cuda_fdm(
     );
     apply_regional_drive_energy(plan, &mut initial_scalar_stats, &initial_magnetization);
     record_cuda_initial_scalar(
+        plan,
         &initial_scalar_stats,
         default_scalar_trace,
         &mut scalar_schedules,
@@ -1115,7 +1282,7 @@ pub(crate) fn execute_cuda_fdm(
                         };
                     let action = (live.on_step)(StepUpdate {
                         coupled_checkpoint: final_frozen_checkpoint.clone(),
-                        stats: current_stats.clone(),
+                        stats: super::canonical_fdm_publication_stats(plan, current_stats.clone()),
                         grid: live.grid,
                         fem_mesh_generation_id: None,
                         magnetization: None,
@@ -1145,11 +1312,11 @@ pub(crate) fn execute_cuda_fdm(
                 }
             }
 
-            let dt_step = crate::time_events::cap_timestep_to_next_event(
-                super::canonical_fdm_time(plan, current_time),
+            let dt_step = cap_cuda_step_to_drive_event(
+                plan,
+                current_time,
                 dt.min(until_seconds - current_time),
                 &drive_event_schedule,
-                crate::schedules::OUTPUT_TIME_TOLERANCE,
             );
             let interrupt_requested = live
                 .as_ref()
@@ -1248,8 +1415,7 @@ pub(crate) fn execute_cuda_fdm(
                 );
             }
             if let Some(live) = live.as_mut() {
-                let heavy_payload_every = live.field_every_n.max(1);
-                let heavy_payload_due = stats.step % heavy_payload_every == 0;
+                let heavy_payload_due = live.field_cadence.heavy_payload_due(stats.step);
                 if heavy_payload_due && !due_scalar_row {
                     if magnetization_cache.is_none() {
                         magnetization_cache = Some(backend.copy_m(cell_count)?);
@@ -1343,7 +1509,8 @@ pub(crate) fn execute_cuda_fdm(
                     } else {
                         (None, None)
                     };
-                let full_fields_due = heavy_payload_due && live.field_every_n == 1;
+                let full_fields_due =
+                    heavy_payload_due && live.field_cadence.publishes_full_catalog();
                 let cached_preview_fields = if full_fields_due {
                     let capture_started = Instant::now();
                     match capture_full_active_cuda_fields(
@@ -1396,7 +1563,7 @@ pub(crate) fn execute_cuda_fdm(
                 };
                 let action = (live.on_step)(StepUpdate {
                     coupled_checkpoint: final_frozen_checkpoint.clone(),
-                    stats: sampled_stats.clone(),
+                    stats: super::canonical_fdm_publication_stats(plan, sampled_stats.clone()),
                     grid: live.grid,
                     fem_mesh_generation_id: None,
                     magnetization,
@@ -1529,11 +1696,7 @@ pub(crate) fn execute_cuda_fdm(
         })?;
         Some(
             FdmGpuAcceptedStateSnapshotV1::from_final_magnetization(
-                ObservationClock {
-                    accepted_step: stats.step,
-                    time_seconds: stats.time,
-                    dt_seconds: (stats.dt > 0.0).then_some(stats.dt),
-                },
+                super::canonical_fdm_publication_clock(plan, stats),
                 &final_magnetization,
             )
             .map_err(|error| RunError {
@@ -1675,7 +1838,7 @@ pub(crate) fn execute_cuda_fdm(
 
             let action = (live.on_step)(StepUpdate {
                 coupled_checkpoint: final_frozen_checkpoint.clone(),
-                stats: terminal_stats.clone(),
+                stats: super::canonical_fdm_publication_stats(plan, terminal_stats.clone()),
                 grid: live.grid,
                 fem_mesh_generation_id: None,
                 magnetization: Some(terminal_magnetization.clone()),
@@ -1845,8 +2008,9 @@ pub(crate) fn execute_cuda_fdm(
 #[cfg(all(test, feature = "cuda"))]
 mod adaptive_batch_tests {
     use super::{
-        adaptive_batch_execution_eligible, adaptive_batch_target, cap_cuda_target_to_drive_event,
-        cuda_drive_event_schedule, execute_cuda_fdm, record_cuda_initial_scalar,
+        adaptive_batch_execution_eligible, adaptive_batch_target, cap_cuda_step_to_drive_event,
+        cap_cuda_target_to_drive_event, cuda_drive_event_schedule, execute_cuda_fdm,
+        record_cuda_initial_scalar,
         resolve_observation_policy, should_refresh_cuda_terminal_stats, OutputSchedule,
     };
     use crate::artifact_pipeline::ArtifactRecorder;
@@ -2087,6 +2251,43 @@ mod adaptive_batch_tests {
             !adaptive_batch_execution_eligible(&plan, false, true),
             "accepted-step table or field autosaves require an exact accepted state"
         );
+
+        let mut time_dependent_plan = plan;
+        time_dependent_plan.slonczewski_time_expression =
+            Some(fullmag_ir::TimeExpressionIR {
+                source: "sin(t)".into(),
+                constants: Default::default(),
+                event_times_s: vec![1.0e-15],
+            });
+        assert!(
+            !adaptive_batch_execution_eligible(&time_dependent_plan, false, false),
+            "time-dependent current must stay out of the captured CUDA batch path"
+        );
+    }
+
+    #[test]
+    fn cuda_single_step_keeps_sub_atol_current_edges_as_endpoints() {
+        let plan = FdmPlanIR {
+            slonczewski_time_expression: Some(fullmag_ir::TimeExpressionIR {
+                source: "heaviside(t - a) - heaviside(t - b)".into(),
+                constants: Default::default(),
+                event_times_s: vec![5.0e-19, 1.0e-18],
+            }),
+            ..FdmPlanIR::default()
+        };
+        let events = [5.0e-19, 1.0e-18];
+
+        let first_dt = cap_cuda_step_to_drive_event(&plan, 0.0, 2.0e-18, &events);
+        assert_eq!(
+            first_dt,
+            5.0e-19,
+            "the actual CUDA single-step cap must stop at the first J(t) edge"
+        );
+        assert_eq!(
+            cap_cuda_step_to_drive_event(&plan, first_dt, 2.0e-18, &events),
+            5.0e-19,
+            "the next single-step cap must stop at the second J(t) edge"
+        );
     }
 
     // A stale due event still forces a bounded observation step. The stage-origin
@@ -2116,6 +2317,7 @@ mod adaptive_batch_tests {
         let mut artifacts = ArtifactRecorder::in_memory(ExecutionProvenance::default());
 
         record_cuda_initial_scalar(
+            &FdmPlanIR::default(),
             &initial,
             false,
             &mut scalar,
@@ -2150,6 +2352,7 @@ mod adaptive_batch_tests {
         let mut artifacts = ArtifactRecorder::in_memory(ExecutionProvenance::default());
 
         record_cuda_initial_scalar(
+            &FdmPlanIR::default(),
             &initial,
             true,
             &mut scalar,

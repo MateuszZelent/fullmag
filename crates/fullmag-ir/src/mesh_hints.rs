@@ -1070,8 +1070,36 @@ impl FdmMultilayerPlanIR {
     }
 }
 
+/// Per-run GPU projected-gradient BB direction policy. `Auto` retains intent.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum FemGpuBbPreconditionerIR {
+    Auto,
+    None,
+    ExchangeMass,
+}
+
+impl FemGpuBbPreconditionerIR {
+    pub fn native_id(self) -> u32 {
+        match self {
+            Self::Auto => 0,
+            Self::None => 1,
+            Self::ExchangeMass => 2,
+        }
+    }
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Auto => "auto",
+            Self::None => "none",
+            Self::ExchangeMass => "exchange_mass",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct FemHintsIR {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gpu_bb_preconditioner: Option<FemGpuBbPreconditionerIR>,
     pub order: u32,
     pub hmax: f64,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1084,6 +1112,32 @@ pub struct FemHintsIR {
 mod multilayer_contract_tests {
     use super::*;
     use crate::plan::FdmGridCertificateIR;
+
+    #[test]
+    fn gpu_bb_policy_round_trip_and_native_ids_are_explicit() {
+        for (name, native_id) in [("auto", 0), ("none", 1), ("exchange_mass", 2)] {
+            let hints: FemHintsIR = serde_json::from_value(serde_json::json!({
+                "order": 1, "hmax": 1e-9, "gpu_bb_preconditioner": name
+            }))
+            .unwrap();
+            assert_eq!(hints.gpu_bb_preconditioner.unwrap().native_id(), native_id);
+            assert_eq!(
+                serde_json::to_value(hints).unwrap()["gpu_bb_preconditioner"],
+                name
+            );
+        }
+        let legacy: FemHintsIR =
+            serde_json::from_value(serde_json::json!({"order": 1, "hmax": 1e-9})).unwrap();
+        assert_eq!(legacy.gpu_bb_preconditioner, None);
+        assert!(serde_json::to_value(legacy)
+            .unwrap()
+            .get("gpu_bb_preconditioner")
+            .is_none());
+        assert!(serde_json::from_value::<FemHintsIR>(serde_json::json!({
+            "order": 1, "hmax": 1e-9, "gpu_bb_preconditioner": "vendor_magic"
+        }))
+        .is_err());
+    }
 
     #[test]
     fn fdm_fft_legacy_demag_policy_defaults_backend_to_auto() {
@@ -2792,7 +2846,7 @@ pub enum BoundaryRole {
 /// Topology-backed proof that a marker has one boundary role.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct BoundaryRoleIR {
-    pub marker: i32,
+    pub marker: u32,
     pub role: BoundaryRole,
     pub face_count: u64,
 }
@@ -2995,6 +3049,52 @@ impl MeshIR {
     /// face bijection, opposite outward normals, material-domain agreement, or
     /// closed multi-axis equivalence classes is not a certificate.
     pub fn periodic_mesh_certificate_v6(&self) -> Result<PeriodicMeshCertificateV6IR, Vec<String>> {
+        self.mesh_certificate_v6_impl(false)
+    }
+
+    /// Identity v6 certificate for an isolated (non-periodic) airbox mesh used
+    /// by the `open_airbox_k0` modal lane. It runs the same tet4/tri3,
+    /// magnetic-prefix and marker checks as the periodic certificate but
+    /// requires the absence of periodic metadata, so every equivalence class is
+    /// a single node and all pair counts are zero.
+    pub fn open_mesh_identity_certificate_v6(
+        &self,
+    ) -> Result<PeriodicMeshCertificateV6IR, Vec<String>> {
+        if !self.periodic_boundary_pairs.is_empty() || !self.periodic_node_pairs.is_empty() {
+            return Err(vec![
+                "open-mesh identity certificate requires a mesh without periodic pair metadata"
+                    .to_string(),
+            ]);
+        }
+        self.mesh_certificate_v6_impl(true)
+    }
+
+    /// Identity counterpart of
+    /// [`Self::periodic_mesh_certificate_v6_with_material_and_nodal_fields`]:
+    /// without seams there is no coefficient residual to check, but the
+    /// material realization fingerprint is bound in the same way.
+    pub fn open_mesh_identity_certificate_v6_with_material_and_nodal_fields(
+        &self,
+        ms_element_field: Option<&[f64]>,
+        a_element_field: Option<&[f64]>,
+        ms_nodal_field: Option<&[f64]>,
+        a_nodal_field: Option<&[f64]>,
+    ) -> Result<PeriodicMeshCertificateV6IR, Vec<String>> {
+        let mut certificate = self.open_mesh_identity_certificate_v6()?;
+        certificate.material_realization_fingerprint = material_realization_fingerprint_with_nodal(
+            ms_element_field,
+            a_element_field,
+            ms_nodal_field,
+            a_nodal_field,
+        );
+        certificate.max_material_residual = 0.0;
+        Ok(certificate)
+    }
+
+    fn mesh_certificate_v6_impl(
+        &self,
+        allow_identity: bool,
+    ) -> Result<PeriodicMeshCertificateV6IR, Vec<String>> {
         let mut errors = Vec::new();
         let boundary_faces = match self.require_tri3_boundary_faces() {
             Ok(faces) => faces,
@@ -3006,10 +3106,10 @@ impl MeshIR {
         if let Err(error) = self.require_tet4_elements() {
             errors.push(format!("periodic v6 certification is tet4-only: {error}"));
         }
-        if self.periodic_boundary_pairs.is_empty() {
+        if !allow_identity && self.periodic_boundary_pairs.is_empty() {
             errors.push("periodic v6 certificate requires boundary pair metadata".to_string());
         }
-        if self.periodic_node_pairs.is_empty() {
+        if !allow_identity && self.periodic_node_pairs.is_empty() {
             errors.push("periodic v6 certificate requires node pair metadata".to_string());
         }
 
@@ -3567,12 +3667,6 @@ impl MeshIR {
                     face, role
                 ));
             }
-            if first_marker > i32::MAX as u32 {
-                errors.push(format!(
-                    "boundary face {:?} marker {} does not fit certified i32 marker range",
-                    face, first_marker
-                ));
-            }
             *marker_roles.entry((first_marker, role)).or_default() += 1;
         }
 
@@ -3617,7 +3711,7 @@ impl MeshIR {
             Ok(marker_roles
                 .into_iter()
                 .map(|((marker, role), face_count)| BoundaryRoleIR {
-                    marker: marker as i32,
+                    marker,
                     role,
                     face_count,
                 })
@@ -4558,6 +4652,23 @@ mod mesh_validation_tests {
         assert!(roles.iter().any(|entry| {
             entry.role == BoundaryRole::GammaOut && entry.marker == 7 && entry.face_count == 3
         }));
+    }
+
+    #[test]
+    fn airbox_roles_preserve_full_u32_outer_marker() {
+        let mut mesh = certified_airbox_mesh();
+        for marker in &mut mesh.boundary_markers {
+            if *marker == 7 { *marker = u32::MAX; }
+        }
+        let roles = mesh.certify_airbox_boundary_roles().unwrap();
+        assert!(roles.iter().any(|entry|
+            entry.role == BoundaryRole::GammaOut && entry.marker == u32::MAX && entry.face_count == 3));
+        let value = serde_json::to_value(&roles).unwrap();
+        let roundtrip: Vec<BoundaryRoleIR> = serde_json::from_value(value).unwrap();
+        assert_eq!(roundtrip, roles);
+        assert!(serde_json::from_value::<BoundaryRoleIR>(serde_json::json!({
+            "marker": -1, "role": "gamma_out", "face_count": 3
+        })).is_err());
     }
 
     #[test]

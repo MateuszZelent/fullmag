@@ -317,9 +317,6 @@ export function resolveVisualizationVectorCapacityDescriptor({
 }
 
 /** Alias kept explicit for callers that describe this as a target adapter. */
-export const resolveVisualizationVectorCapacity =
-  resolveVisualizationVectorCapacityDescriptor;
-
 export function visualizationVectorBudgetRangeFromCapacity(
   descriptorValue: VisualizationVectorCapacityDescriptor | null | undefined,
   geometryScope: "full" | "surface" = "full",

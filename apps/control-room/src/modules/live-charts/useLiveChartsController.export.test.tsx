@@ -17,6 +17,8 @@ const mocks = vi.hoisted(() => {
   };
   return {
     descriptor,
+    energyXAxisId: "t" as "step" | "t",
+    energyResourceData: null as { rows: readonly Record<string, unknown>[] } | null,
     selectedDescriptorId: "magnetization" as "magnetization" | "energy",
     preferences: {
       descriptor,
@@ -28,6 +30,7 @@ const mocks = vi.hoisted(() => {
       setDescriptorTargetPoints: vi.fn(),
       setDescriptorXAxisId: vi.fn(),
     },
+    preferenceStore: { updateDescriptor: vi.fn<(id: string, update: () => unknown) => void>() },
     workspace: {
       clearRange: vi.fn(),
       setRange: vi.fn(),
@@ -49,7 +52,7 @@ vi.mock("@/kernel/workspace/useLiveChartPreferencesHydration", () => ({
 }));
 
 vi.mock("@/kernel/workspace/liveChartPreferences", () => ({
-  liveChartPreferencesStore: { updateDescriptor: vi.fn() },
+  liveChartPreferencesStore: mocks.preferenceStore,
 }));
 
 vi.mock("./hooks/useLiveTableData", () => ({
@@ -63,10 +66,15 @@ vi.mock("./hooks/useLiveTableData", () => ({
   }),
 }));
 
+vi.mock("./hooks/useLiveChartArchivedTable", () => ({
+  useLiveChartArchivedTable: () => null,
+}));
+
 vi.mock("./hooks/useLiveEnergyData", () => ({
   useLiveEnergyData: () => ({
-    resource: { data: null, error: null, revision: 1, status: "ready" },
+    resource: { data: mocks.energyResourceData, error: null, revision: 1, status: "ready" },
     series: [],
+    xAxisId: mocks.energyXAxisId,
   }),
 }));
 
@@ -87,9 +95,13 @@ function ControllerHarness() {
 afterEach(() => {
   latestController = null;
   mocks.selectedDescriptorId = "magnetization";
+  mocks.energyXAxisId = "t";
+  mocks.energyResourceData = null;
+  Object.assign(mocks.descriptor, { range: { mode: "follow" }, xAxisId: "step" });
   mocks.workspace.clearRange.mockClear();
   mocks.workspace.setRange.mockClear();
   mocks.workspace.setSelectedDescriptorId.mockClear();
+  mocks.preferenceStore.updateDescriptor.mockClear();
   mocks.preferences.setDescriptorLiveMode.mockClear();
   mocks.preferences.setDescriptorRange.mockClear();
   mocks.preferences.setDescriptorSelectedSeriesIds.mockClear();
@@ -98,6 +110,72 @@ afterEach(() => {
 });
 
 describe("useLiveChartsController export ownership", () => {
+  it("uses the energy-history axis and clears a fixed range when its coordinate changes", async () => {
+    const dom = installSimulationPreparationTestDom();
+    const root = createRoot(dom.document.createElement("div") as unknown as HTMLElement);
+    mocks.selectedDescriptorId = "energy";
+    mocks.energyXAxisId = "step";
+    mocks.energyResourceData = { rows: [{ step: 4, time_seconds: 0 }, { step: 9, time_seconds: 0 }] };
+    Object.assign(mocks.descriptor, {
+      range: { mode: "fixed", fromSI: 2e-9, toSI: 3e-9 },
+      xAxisId: "t",
+    });
+
+    try {
+      await act(async () => root.render(<ControllerHarness />));
+
+      expect(latestController).toMatchObject({
+        initialRange: null,
+        range: { mode: "follow" },
+        xAxisId: "step",
+        xAxisLabel: "Step",
+        xAxisOptions: [{ id: "step", label: "Step" }],
+      });
+      const axisSync = mocks.preferenceStore.updateDescriptor.mock.calls.at(-1);
+      expect(axisSync?.[0]).toBe("energy");
+      expect(axisSync?.[1]()).toEqual({ range: { mode: "follow" }, xAxisId: "step" });
+
+      await act(async () => latestController?.onRangeSelected(4, 9));
+      const selectedRange = mocks.preferenceStore.updateDescriptor.mock.calls.at(-1);
+      expect(selectedRange?.[1]()).toEqual({
+        range: { mode: "fixed", fromSI: 4, toSI: 9 },
+        xAxisId: "step",
+      });
+    } finally {
+      await act(async () => root.unmount());
+      dom.restore();
+    }
+  });
+
+  it("keeps Time metadata for advancing energy history and clears a step-range zoom", async () => {
+    const dom = installSimulationPreparationTestDom();
+    const root = createRoot(dom.document.createElement("div") as unknown as HTMLElement);
+    mocks.selectedDescriptorId = "energy";
+    mocks.energyXAxisId = "t";
+    mocks.energyResourceData = {
+      rows: [{ step: 4, time_seconds: 2e-9 }, { step: 5, time_seconds: 3e-9 }],
+    };
+    Object.assign(mocks.descriptor, {
+      range: { mode: "fixed", fromSI: 4, toSI: 9 },
+      xAxisId: "step",
+    });
+
+    try {
+      await act(async () => root.render(<ControllerHarness />));
+
+      expect(latestController).toMatchObject({
+        initialRange: null,
+        range: { mode: "follow" },
+        xAxisId: "t",
+        xAxisLabel: "Time",
+        xAxisOptions: [{ id: "t", label: "Time (s)" }],
+      });
+    } finally {
+      await act(async () => root.unmount());
+      dom.restore();
+    }
+  });
+
   it("keeps a local export pending when an overlapping command export completes", async () => {
     const dom = installSimulationPreparationTestDom();
     const root = createRoot(dom.document.createElement("div") as unknown as HTMLElement);

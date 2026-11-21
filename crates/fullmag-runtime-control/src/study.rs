@@ -2,7 +2,7 @@
 use anyhow::{bail, Context, Result};
 use fullmag_application::{
     COORDINATOR_TRANSITION_SCHEMA, CoordinatorError, CoordinatorMessage, CoordinatorTransition,
-    DurableWorkerCoordinator, AcceptedPreparationReceipt, ClosedLoopPreparationReceipt, PreparationBinding, PreparationReceipt, ProjectId, ResolvedInput,
+    DurableWorkerCoordinator, AcceptedPreparationReceipt, ClosedLoopPreparationReceipt, PreparationReceipt, ProjectId, ResolvedInput,
     ResolvedStudyArtifact, ResolvedTaskInput, RunId, RunSpecification, TaskClaim, TaskRecord,
     WorkerCommand, WorkerCommandEnvelope,
 };
@@ -19,17 +19,21 @@ use fullmag_plan::{
 use fullmag_session::{FmsTaskPreparationReceipt, SessionStore};
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
+use std::collections::BTreeMap;
 
 pub struct AcceptedStudySnapshot {
     pub run: crate::AcceptedRunSnapshot,
     pub study: StudyPlan,
     pub catalog: StudyProblemCatalog,
     pub lowered: StudyExecutionPlan,
+    /// Captured execution ID to authored pipeline node ID for compiled scripts.
+    pub authored_stage_ids: BTreeMap<String, String>,
 }
 
 #[derive(Clone, Copy)]
 enum NativeFemPreparationKind {
     TimeDomain,
+    FrequencyResponse,
     AntennaExternalLeadInspection,
 }
 
@@ -124,6 +128,23 @@ impl AcceptedStudySnapshot {
         )
     }
 
+    /// Materialize a native FEM preparation receipt for the exact provided
+    /// equilibrium mesh of an accepted frequency-response step. This remains
+    /// a distinct preparation route from time-domain FEM.
+    pub fn materialize_fem_frequency_response_preparation_receipt(
+        &self,
+        preparation_id: impl Into<String>,
+        step_id: &str,
+        native: &fullmag_plan::NativeFemMeshSpaceEvidence,
+    ) -> Result<PreparationReceipt> {
+        self.materialize_native_fem_preparation_receipt(
+            preparation_id,
+            step_id,
+            native,
+            NativeFemPreparationKind::FrequencyResponse,
+        )
+    }
+
     /// Prepare the combined conductor/lead H1 P1 mesh of a pinned inspection
     /// step. This does not certify current, Oersted fields, or LLG coupling.
     pub fn materialize_antenna_external_lead_inspection_preparation_receipt(
@@ -196,6 +217,16 @@ impl AcceptedStudySnapshot {
         let materialization = match kind {
             NativeFemPreparationKind::TimeDomain =>
                 PreparationMaterialization::from_fem_execution_plan_for_accepted_run(
+                    problem_fingerprint,
+                    source,
+                    problem.backend_policy.requested_backend,
+                    execution_plan,
+                    geometry_fingerprint,
+                    display_fingerprint,
+                    native,
+                )?,
+            NativeFemPreparationKind::FrequencyResponse =>
+                PreparationMaterialization::from_fem_frequency_response_execution_plan_for_accepted_run(
                     problem_fingerprint,
                     source,
                     problem.backend_policy.requested_backend,
@@ -434,7 +465,7 @@ impl AcceptedStudySnapshot {
         let resolved_inputs = resolve_accepted_study_inputs(
             store,
             run_id,
-            &self.study.steps,
+            self,
             study_step,
             inputs,
             &catalog,
@@ -711,7 +742,7 @@ fn queue_accepted_study_task_locked(
     let resolved_inputs = resolve_accepted_study_inputs(
         store,
         run_id.as_str(),
-        &accepted.study.steps,
+        accepted,
         study_step,
         inputs,
         &catalog,
@@ -778,10 +809,31 @@ pub struct AcceptedWorkerStep {
     pub claim: TaskClaim,
     pub step_id: String,
     pub study_inputs: Vec<StudyInputPort>,
+    pub initial_state_overlay: Option<fullmag_authoring::StudyInitialStateOverlay>,
     pub problem: ProblemIR,
     pub execution_plan: ExecutionPlanIR,
     pub until_seconds: Option<f64>,
     pub resolved_input: ResolvedTaskInput,
+}
+
+/// Compact identity of the accepted state input used by the worker plan.
+/// Values remain in the execution plan; this record carries only the source
+/// port, verified artifact identity, source clock, and state digests.
+#[derive(Clone, Debug, PartialEq)]
+pub struct AcceptedWorkerStateInputProvenance {
+    pub input_port: StudyInputPort,
+    pub artifact: ResolvedStudyArtifact,
+    pub producer_step: u64,
+    pub producer_time_s: f64,
+    pub producer_solver_dt_s: f64,
+    pub layout_sha256: String,
+    pub values_sha256: String,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct MaterializedAcceptedWorkerExecutionPlan {
+    pub execution_plan: ExecutionPlanIR,
+    pub state_input: Option<AcceptedWorkerStateInputProvenance>,
 }
 
 struct PrevalidatedAcceptedWorkerStep {
@@ -789,10 +841,26 @@ struct PrevalidatedAcceptedWorkerStep {
     preparation_envelope: FmsTaskPreparationReceipt,
     step_id: String,
     study_inputs: Vec<StudyInputPort>,
+    initial_state_overlay: Option<fullmag_authoring::StudyInitialStateOverlay>,
     problem: ProblemIR,
     execution_plan: ExecutionPlanIR,
     until_seconds: Option<f64>,
     resolved_input: ResolvedTaskInput,
+}
+
+impl PrevalidatedAcceptedWorkerStep {
+    fn bind_claim(self, claim: TaskClaim) -> AcceptedWorkerStep {
+        AcceptedWorkerStep {
+            claim,
+            step_id: self.step_id,
+            study_inputs: self.study_inputs,
+            initial_state_overlay: self.initial_state_overlay,
+            problem: self.problem,
+            execution_plan: self.execution_plan,
+            until_seconds: self.until_seconds,
+            resolved_input: self.resolved_input,
+        }
+    }
 }
 
 /// Rehydrate one accepted study step only from its exact persisted Prepare
@@ -826,7 +894,8 @@ pub(crate) fn load_accepted_worker_step_from_snapshot(
         envelope.claim.task_id.as_str(),
     )
     .context("worker Prepare has no current durable task claim")?;
-    load_accepted_worker_step_locked(store, accepted, envelope, prepared, current_claim)
+    validate_accepted_worker_step_fenced(store, accepted, envelope, &prepared, &current_claim, None)?;
+    Ok(prepared.bind_claim(current_claim))
 }
 
 /// Rehydrate the accepted step when a worker receives its durable Start command.
@@ -838,23 +907,83 @@ pub fn load_accepted_worker_step_for_start_from_snapshot(
     accepted: &AcceptedStudySnapshot,
     start_envelope: &WorkerCommandEnvelope,
 ) -> Result<AcceptedWorkerStep> {
+    rehydrate_worker_start(store, accepted, start_envelope, crate::WORKER_STORE_WRITER_WAIT)
+}
+
+fn rehydrate_worker_start(
+    store: &SessionStore,
+    accepted: &AcceptedStudySnapshot,
+    start_envelope: &WorkerCommandEnvelope,
+    writer_wait: std::time::Duration,
+) -> Result<AcceptedWorkerStep> {
     validate_start_envelope(accepted, start_envelope)?;
-    let prepare = {
+    let prepare = crate::retry_store_writer_busy_within(writer_wait, || {
         let _writer = store.write_transaction()?;
         require_current_accepted_study_intent(store, accepted)?;
         let current_claim = current_claim_for_start(store, start_envelope)?;
-        preceding_prepare_for_start_locked(store, &current_claim, start_envelope)?
+        preceding_prepare_for_start_locked(store, &current_claim, start_envelope)
+    })?;
+
+    let prepared = crate::retry_store_writer_busy_within(writer_wait, || {
+        prevalidate_accepted_worker_step(store, accepted, &prepare)
+    })?;
+    // A transient error inside the mutable read releases the fence before
+    // retrying. Keep the independently verified immutable preparation.
+    let current_claim = crate::retry_store_writer_busy_within(writer_wait, || {
+        let _writer = store.write_transaction()?;
+        require_current_accepted_study_intent(store, accepted)?;
+        let current_claim = current_claim_for_start(store, start_envelope)?;
+        let current_prepare = preceding_prepare_for_start_locked(store, &current_claim, start_envelope)?;
+        if current_prepare != prepare {
+            bail!("worker Start preceding Prepare changed during immutable validation");
+        }
+        validate_accepted_worker_step_fenced(store, accepted, &prepare, &prepared, &current_claim, None)?;
+        Ok(current_claim)
+    })?;
+    Ok(prepared.bind_claim(current_claim))
+}
+
+/// Rehydrate accepted Start for a passive reader under shared store fences.
+/// The immutable validation stays outside the fences, as on the worker path.
+pub fn load_accepted_worker_step_for_observation(
+    store: &SessionStore,
+    accepted: &AcceptedStudySnapshot,
+    start_envelope: &WorkerCommandEnvelope,
+    read_wait: std::time::Duration,
+) -> Result<AcceptedWorkerStep> {
+    validate_start_envelope(accepted, start_envelope)?;
+    let load_prepare = |transaction: &fullmag_session::ReadTransaction| {
+        require_current_accepted_study_intent(store, accepted)?;
+        let claim = crate::load_current_task_claim_readonly(
+            store,
+            &start_envelope.claim.run_id,
+            start_envelope.claim.task_id.as_str(),
+            transaction,
+        )?;
+        if !start_envelope.claim.matches_claim(&claim) {
+            bail!("worker Start command belongs to a stale task claim");
+        }
+        let recovered = crate::recover_coordinator_readonly(store, &claim, transaction)
+            .context("worker Start coordinator journal could not be recovered")?;
+        let prepare = preceding_prepare_for_start(&recovered.commands, &claim, start_envelope)?;
+        Ok((claim, prepare))
     };
 
+    let prepare = {
+        let transaction = crate::acquire_store_read_transaction(store, read_wait)?;
+        load_prepare(&transaction)?.1
+    };
     let prepared = prevalidate_accepted_worker_step(store, accepted, &prepare)?;
-    let _writer = store.write_transaction()?;
-    require_current_accepted_study_intent(store, accepted)?;
-    let current_claim = current_claim_for_start(store, start_envelope)?;
-    let current_prepare = preceding_prepare_for_start_locked(store, &current_claim, start_envelope)?;
-    if current_prepare != prepare {
-        bail!("worker Start preceding Prepare changed during immutable validation");
-    }
-    load_accepted_worker_step_locked(store, accepted, &prepare, prepared, current_claim)
+    let claim = {
+        let transaction = crate::acquire_store_read_transaction(store, read_wait)?;
+        let (claim, current_prepare) = load_prepare(&transaction)?;
+        if current_prepare != prepare {
+            bail!("worker Start preceding Prepare changed during immutable validation");
+        }
+        validate_accepted_worker_step_fenced(store, accepted, &prepare, &prepared, &claim, Some(&transaction))?;
+        claim
+    };
+    Ok(prepared.bind_claim(claim))
 }
 
 /// Compatibility facade for callers that do not already own a validated
@@ -865,12 +994,10 @@ pub fn load_accepted_worker_step_for_start(
     project_id: &ProjectId,
     start_envelope: &WorkerCommandEnvelope,
 ) -> Result<AcceptedWorkerStep> {
-    let accepted = load_accepted_study_snapshot(
-        store,
-        &start_envelope.claim.run_id,
-        project_id,
-    )?;
-    load_accepted_worker_step_for_start_from_snapshot(store, &accepted, start_envelope)
+    let accepted = crate::retry_store_writer_busy(|| {
+        load_accepted_study_snapshot(store, &start_envelope.claim.run_id, project_id)
+    })?;
+    rehydrate_worker_start(store, &accepted, start_envelope, crate::STORE_WRITER_WAIT)
 }
 
 fn prevalidate_accepted_worker_step(
@@ -985,6 +1112,7 @@ fn prevalidate_accepted_worker_step(
         preparation_envelope,
         step_id: step_id.to_owned(),
         study_inputs: study_step.inputs.clone(),
+        initial_state_overlay: study_step.initial_state_overlay.clone(),
         problem,
         execution_plan: execution_plan.clone(),
         until_seconds: execution_step.until_seconds,
@@ -992,17 +1120,18 @@ fn prevalidate_accepted_worker_step(
     })
 }
 
-fn load_accepted_worker_step_locked(
+fn validate_accepted_worker_step_fenced(
     store: &SessionStore,
     accepted: &AcceptedStudySnapshot,
     envelope: &WorkerCommandEnvelope,
-    prepared: PrevalidatedAcceptedWorkerStep,
-    current_claim: TaskClaim,
-) -> Result<AcceptedWorkerStep> {
+    prepared: &PrevalidatedAcceptedWorkerStep,
+    current_claim: &TaskClaim,
+    read_transaction: Option<&fullmag_session::ReadTransaction>,
+) -> Result<()> {
     if prepared.prepare != *envelope {
         bail!("prevalidated worker step belongs to a different Prepare envelope");
     }
-    if !envelope.claim.matches_claim(&current_claim) {
+    if !envelope.claim.matches_claim(current_claim) {
         bail!("worker Prepare command belongs to a stale task claim");
     }
     let run_id = accepted.run.specification.run_id.as_str();
@@ -1026,7 +1155,7 @@ fn load_accepted_worker_step_locked(
     ) {
         bail!("worker Prepare requires a ready task under an active claim");
     }
-    if !crate::study_completion::dependencies_ready_locked(
+    if !crate::study_completion::dependencies_ready_fenced(
         store,
         accepted,
         accepted
@@ -1035,6 +1164,7 @@ fn load_accepted_worker_step_locked(
             .iter()
             .find(|step| step.step_id == prepared.step_id)
             .context("prevalidated worker step is missing from the accepted study")?,
+        read_transaction,
     )? {
         bail!("worker Prepare is blocked by completion dependencies");
     }
@@ -1066,7 +1196,7 @@ fn load_accepted_worker_step_locked(
     let resolved_inputs = resolve_accepted_study_inputs(
         store,
         run_id,
-        &accepted.study.steps,
+        accepted,
         study_step,
         resolved_input.inputs.clone(),
         &run_catalog,
@@ -1103,7 +1233,7 @@ fn load_accepted_worker_step_locked(
         || !transition
             .checkpoint
             .claim
-            .is_same_or_renewed_by(&current_claim)
+            .is_same_or_renewed_by(current_claim)
         || transition.checkpoint.command_sequence != envelope.sequence
         || transition.checkpoint.task.input_fingerprint != durable_task.input_fingerprint
     {
@@ -1121,18 +1251,10 @@ fn load_accepted_worker_step_locked(
             bail!("frozen history cannot dispatch through another backend");
         };
         crate::frozen_stage_lifecycle::load_execution_context(store,
-            &accepted.run.specification.run_id, &prepared.step_id, plan, &current_claim, binding)?;
+            &accepted.run.specification.run_id, &prepared.step_id, plan, current_claim, binding)?;
     }
 
-    Ok(AcceptedWorkerStep {
-        claim: current_claim,
-        step_id: prepared.step_id,
-        study_inputs: prepared.study_inputs,
-        problem: prepared.problem,
-        execution_plan: prepared.execution_plan,
-        until_seconds: prepared.until_seconds,
-        resolved_input: prepared.resolved_input,
-    })
+    Ok(())
 }
 
 /// Shared physical input owner for execution and bounded historical validation.
@@ -1141,7 +1263,28 @@ pub fn materialize_accepted_worker_execution_plan(
     store: &SessionStore,
     accepted_step: &AcceptedWorkerStep,
 ) -> Result<ExecutionPlanIR> {
+    Ok(materialize_accepted_worker_execution_plan_impl(store, accepted_step, false)?.execution_plan)
+}
+
+/// The same fully validated worker materialization, with compact provenance
+/// returned for readers that need to publish the consumed state clock without
+/// rereading the potentially large CAS object.
+pub fn materialize_accepted_worker_execution_plan_with_source(
+    store: &SessionStore,
+    accepted_step: &AcceptedWorkerStep,
+) -> Result<MaterializedAcceptedWorkerExecutionPlan> {
+    materialize_accepted_worker_execution_plan_impl(store, accepted_step, true)
+}
+
+fn materialize_accepted_worker_execution_plan_impl(
+    store: &SessionStore,
+    accepted_step: &AcceptedWorkerStep,
+    capture_state_input: bool,
+) -> Result<MaterializedAcceptedWorkerExecutionPlan> {
     let resolved_input = &accepted_step.resolved_input;
+    if accepted_step.initial_state_overlay.is_some() && resolved_input.frozen_stage_context.is_some() {
+        bail!("magnetization overlay cannot alter a frozen full-history continuation");
+    }
     resolved_input
         .validate()
         .map_err(|error| anyhow::anyhow!(error.to_string()))?;
@@ -1160,6 +1303,9 @@ pub fn materialize_accepted_worker_execution_plan(
         bail!("accepted worker inputs differ from the pinned execution plan");
     }
 
+    fullmag_plan::validate_authored_initial_state(
+        &accepted_step.step_id, &accepted_step.study_inputs, &accepted_step.problem,
+    )?;
     let mut declared = std::collections::BTreeMap::<&str, &StudyInputPort>::new();
     for port in &accepted_step.study_inputs {
         fullmag_session::repository_path::validate_store_id(&port.port_id)
@@ -1184,10 +1330,14 @@ pub fn materialize_accepted_worker_execution_plan(
 
     let mut execution_plan = accepted_step.execution_plan.clone();
     let mut materialized_state = false;
+    let mut state_input_provenance = None;
     for (port_id, input) in &resolved_input.inputs {
         let port = declared.get(port_id.as_str()).with_context(|| {
             format!("resolved input `{port_id}` is not declared by the accepted study")
         })?;
+        if matches!(&port.source, StudyInputSource::AuthoredInitialState { .. }) {
+            bail!("authored initial state port `{port_id}` cannot bind a resolved artifact");
+        }
         input
             .validate()
             .map_err(|error| anyhow::anyhow!(error.to_string()))?;
@@ -1225,6 +1375,17 @@ pub fn materialize_accepted_worker_execution_plan(
                 crate::frozen_stage_lifecycle::MAX_FROZEN_STATE_ENVELOPE_BYTES
                     .min(accepted_step.claim.lease.budget.storage_bytes),
             )?
+        } else if capture_state_input {
+            // The live preparation reader needs one digest-verified copy of
+            // the accepted state to build M0 provenance. Use the same bounded
+            // file-handle path as frozen input so metadata ENOMEM cannot be
+            // collapsed by Path::exists into a false missing-object result.
+            store
+                .cas()
+                .get_bounded(
+                    &artifact.object_ref,
+                    accepted_step.claim.lease.budget.storage_bytes,
+                )?
         } else {
             store.cas().get(&artifact.object_ref)?
         }
@@ -1247,10 +1408,26 @@ pub fn materialize_accepted_worker_execution_plan(
             }
             _ => bail!("accepted state input `{port_id}` decoded to a non-state artifact"),
         };
-        execution_plan = fullmag_runner::materialize_study_magnetization_input(
+        if capture_state_input {
+            if state_input_provenance.is_some() {
+                bail!("accepted worker cannot report multiple magnetization inputs to one initial state");
+            }
+            state_input_provenance = Some(AcceptedWorkerStateInputProvenance {
+                input_port: (**port).clone(),
+                artifact: artifact.clone(),
+                producer_step: state.step,
+                producer_time_s: state.time_s,
+                producer_solver_dt_s: state.solver_dt_s,
+                layout_sha256: state.space_fingerprint.clone(),
+                values_sha256: accepted_worker_magnetization_values_sha256(&state.values),
+            });
+        }
+        execution_plan = fullmag_runner::materialize_study_magnetization_input_with_overlay(
             &execution_plan,
             &state.layout,
             &state.values,
+            accepted_step.initial_state_overlay.as_ref()
+                .map(|overlay| (&accepted_step.problem, overlay.scopes())),
         )
         .with_context(|| {
             format!("materialize accepted state input `{port_id}` into runner plan")
@@ -1258,7 +1435,21 @@ pub fn materialize_accepted_worker_execution_plan(
         materialized_state = true;
     }
 
-    Ok(execution_plan)
+    if accepted_step.initial_state_overlay.is_some() && !materialized_state {
+        bail!("accepted magnetization overlay requires a resolved predecessor state");
+    }
+    Ok(MaterializedAcceptedWorkerExecutionPlan {
+        execution_plan,
+        state_input: state_input_provenance,
+    })
+}
+
+fn accepted_worker_magnetization_values_sha256(values: &[[f64; 3]]) -> String {
+    let mut digest = Sha256::new();
+    for component in values.iter().flatten() {
+        digest.update(component.to_le_bytes());
+    }
+    format!("{:x}", digest.finalize())
 }
 
 fn validate_start_envelope(
@@ -1301,8 +1492,15 @@ fn preceding_prepare_for_start_locked(
 ) -> Result<WorkerCommandEnvelope> {
     let recovered = crate::recover_coordinator_locked(store, current_claim)
         .context("worker Start coordinator journal could not be recovered")?;
-    let starts = recovered
-        .commands
+    preceding_prepare_for_start(&recovered.commands, current_claim, start_envelope)
+}
+
+fn preceding_prepare_for_start(
+    commands: &[WorkerCommandEnvelope],
+    current_claim: &TaskClaim,
+    start_envelope: &WorkerCommandEnvelope,
+) -> Result<WorkerCommandEnvelope> {
+    let starts = commands
         .iter()
         .enumerate()
         .filter(|(_, command)| {
@@ -1314,7 +1512,7 @@ fn preceding_prepare_for_start_locked(
         bail!("worker Start is not the exact unique Start in the current coordinator journal");
     }
     let start_index = starts[0].0;
-    let prepares = recovered.commands[..start_index]
+    let prepares = commands[..start_index]
         .iter()
         .filter(|command| {
             command.claim.matches_claim(current_claim)
@@ -2687,6 +2885,16 @@ fn bind_step_output_manifests(
                     input.port_id
                 )
             })?;
+        if resolved
+            .study_artifact
+            .as_ref()
+            .is_some_and(|supplied| supplied != &study_artifact)
+        {
+            bail!(
+                "resolved StepOutput `{}` typed artifact differs from its validated manifest binding",
+                input.port_id
+            );
+        }
         resolved.study_artifact = Some(study_artifact);
     }
     Ok(())
@@ -2791,10 +2999,16 @@ fn resolve_step_output_inputs(
         let from_catalog = ResolvedInput {
             source: artifact.artifact_id.clone(),
             content_sha256: artifact.content_sha256.clone(),
-            study_artifact: None,
+            // Admission replay may already carry typed metadata. Keep it for
+            // canonical manifest/CAS validation below; do not trust or drop it.
+            study_artifact: supplied_inputs
+                .get(&port.port_id)
+                .and_then(|supplied| supplied.study_artifact.clone()),
         };
         if let Some(supplied) = supplied_inputs.get(&port.port_id) {
-            if supplied != &from_catalog {
+            if supplied.source != from_catalog.source
+                || supplied.content_sha256 != from_catalog.content_sha256
+            {
                 bail!(
                     "study input `{}` does not match its pinned artifact identity and digest",
                     port.port_id
@@ -2822,6 +3036,14 @@ fn validate_study_input_dependencies(
         }
     }
     for port in ports {
+        if matches!(&port.source, StudyInputSource::AuthoredInitialState { .. }) {
+            if resolved_inputs.contains_key(&port.port_id) {
+                bail!("authored initial state port `{}` cannot bind a resolved artifact", port.port_id);
+            }
+            // Catalog qualification precedes dependency resolution. The
+            // authored initializer is already embedded in the pinned plan.
+            continue;
+        }
         if port.required && !resolved_inputs.contains_key(&port.port_id) {
             bail!(
                 "required study input `{}` has not been resolved",
@@ -2974,14 +3196,28 @@ fn resolve_pinned_state_inputs(
 
 /// Resolve the exact accepted step's declared inputs from durable artifact and
 /// run catalogs. This read-only projection does not create or claim a task.
+pub(crate) fn validate_accepted_authored_initial_state(
+    accepted: &AcceptedStudySnapshot,
+    step: &StudyStep,
+) -> Result<bool> {
+    if !step.inputs.iter().any(|port| matches!(&port.source, StudyInputSource::AuthoredInitialState { .. })) {
+        return Ok(false);
+    }
+    let entry = accepted.catalog.entries().iter()
+        .find(|entry| entry.step_id() == step.step_id)
+        .context("accepted authored initial state has no immutable ProblemIR")?;
+    Ok(entry.validate_authored_initial_state(&step.inputs)?)
+}
+
 pub fn resolve_accepted_study_inputs(
     store: &SessionStore,
     run_id: &str,
-    accepted_steps: &[StudyStep],
+    accepted: &AcceptedStudySnapshot,
     study_step: &StudyStep,
     supplied_inputs: std::collections::BTreeMap<String, ResolvedInput>,
     catalog: &fullmag_session::FmsRunCatalog,
 ) -> Result<std::collections::BTreeMap<String, ResolvedInput>> {
+    validate_accepted_authored_initial_state(accepted, study_step)?;
     let artifact_catalog = store.read_artifact_catalog(run_id)?;
     let mut resolved_inputs = resolve_step_output_inputs(
         run_id,
@@ -2993,7 +3229,7 @@ pub fn resolve_accepted_study_inputs(
     bind_step_output_manifests(
         store,
         run_id,
-        accepted_steps,
+        &accepted.study.steps,
         &study_step.inputs,
         &mut resolved_inputs,
         catalog,
@@ -3254,6 +3490,15 @@ mod dependency_tests {
         .unwrap();
         assert_eq!(derived, resolved_inputs());
 
+        let mut captured=derived.clone();
+        captured.get_mut("initial_state").unwrap().study_artifact=Some(fullmag_application::ResolvedStudyArtifact {
+            artifact_id:"artifact-source".into(),object_ref:"c".repeat(64),data_kind:"state".into(),
+            codec_id:"fullmag.magnetization-state".into(),codec_version:"1".into(),
+        });
+        let replayed=resolve_step_output_inputs("run-study-dependency",&ports,&captured,&run_catalog,Some(&artifact_catalog)).unwrap();
+        assert_eq!(replayed,captured,"revalidation preserves the typed binding for canonical manifest checks");
+
+
         let mut forged = resolved_inputs();
         forged
             .get_mut("initial_state")
@@ -3342,7 +3587,40 @@ pub(crate) fn cold_accepted_worker_step(store: &SessionStore,
     let plan = lowered.execution_plan.clone().context("cold source has no resolved execution plan")?;
     resolved.validate_execution_for_problem(&accepted.run.specification, &problem)?;
     Ok(AcceptedWorkerStep { claim: checkpoint.claim, step_id: stage.into(), study_inputs: authored.inputs.clone(),
+        initial_state_overlay: authored.initial_state_overlay.clone(),
         problem, execution_plan: plan, until_seconds: lowered.until_seconds, resolved_input: resolved })
+}
+
+pub(super) fn ensure_accepted_prepare_genesis(
+    store: &SessionStore,
+    checkpoint: &fullmag_application::CoordinatorCheckpoint,
+) -> Result<()> {
+    let _writer = store.write_transaction()?;
+    let run_id = checkpoint.claim.run_id.as_str();
+    let task_id = checkpoint.claim.task_id.as_str();
+    let catalog = store
+        .read_run_catalog(run_id)?
+        .context("coordinator genesis requires a durable run catalog")?;
+    let task = catalog
+        .tasks
+        .iter()
+        .find(|task| task.task_id == task_id)
+        .context("coordinator genesis task is missing from the run catalog")?;
+    let Some(genesis) = &task.coordinator_genesis else {
+        crate::commit_coordinator_genesis(store, checkpoint)?;
+        return Ok(());
+    };
+    let original: fullmag_application::CoordinatorCheckpoint =
+        serde_json::from_value(genesis.checkpoint.clone())
+            .context("decoding the persisted coordinator genesis checkpoint")?;
+    let restored = fullmag_application::WorkerCoordinator::restore(original.clone(), &[], &[])?;
+    if &original != checkpoint && &restored.checkpoint() != checkpoint {
+        bail!("Prepare coordinator checkpoint differs from its immutable genesis");
+    }
+    // Restore marks the in-memory observation as reconciling. Replay the
+    // original genesis so the store still fences the current lease and epoch.
+    store.commit_coordinator_genesis(run_id, task_id, genesis)?;
+    Ok(())
 }
 
 /// Publish a worker Prepare command only after resolving its task input from
@@ -3372,7 +3650,7 @@ pub fn publish_accepted_task_prepare(
         }
     }
 
-    retry_store_writer_busy(|| crate::commit_coordinator_genesis(store, &checkpoint))
+    retry_store_writer_busy(|| ensure_accepted_prepare_genesis(store, &checkpoint))
         .context("publishing accepted task coordinator genesis")?;
 
     let mut publication_error = None;
@@ -3560,12 +3838,13 @@ pub fn load_accepted_study_snapshot(
     let validated = crate::study_snapshot_cache::get_or_try_insert(key, || {
         validate_accepted_study_inputs(store.cas(), &run, study_ref, catalog_ref)
     })?;
-    let (study, catalog, lowered) = (*validated).clone();
+    let (study, catalog, lowered, authored_stage_ids) = (*validated).clone();
     Ok(AcceptedStudySnapshot {
         run,
         study,
         catalog,
         lowered,
+        authored_stage_ids,
     })
 }
 
@@ -3584,13 +3863,14 @@ pub fn load_accepted_study_snapshot_from_run(
         .study_catalog_object_ref
         .as_deref()
         .context("accepted run has no immutable study catalog object")?;
-    let (study, catalog, lowered) =
+    let (study, catalog, lowered, authored_stage_ids) =
         validate_accepted_study_inputs(cas, &run, study_ref, catalog_ref)?;
     Ok(AcceptedStudySnapshot {
         run,
         study,
         catalog,
         lowered,
+        authored_stage_ids,
     })
 }
 
@@ -3646,17 +3926,30 @@ fn validate_accepted_study_inputs(
             format!("accepted run asset `{}` object is missing", asset.asset_id)
         })?;
     }
+    let mut authored_stage_ids = BTreeMap::new();
     if study.schema_version==fullmag_authoring::STUDY_PLAN_SCHEMA_VERSION_V4 {
         let asset=specification.immutable_assets.iter().find(|asset|asset.asset_id==fullmag_application::SCRIPT_PIPELINE_SOURCE_ASSET_ID)
             .context("accepted v4 requires captured compiled source asset")?;
         let bytes=cas.get_bounded(&asset.content_sha256,16*1024*1024)?.context("accepted v4 source asset missing")?;
         let source=fullmag_application::validate_accepted_script_pipeline_source(&study,&catalog,&bytes)?;
         fullmag_application::validate_script_source_assets(specification,&source,|hash,maximum|cas.get_bounded(hash,maximum)?.context("accepted source file missing"))?;
+        let executions = source["executions"]
+            .as_array()
+            .context("validated source executions are missing")?;
+        for execution in executions {
+            let step_id = execution["execution_id"]
+                .as_str()
+                .context("validated execution ID is missing")?;
+            let authored_id = execution["authored_step_id"]
+                .as_str()
+                .context("validated authored ID is missing")?;
+            authored_stage_ids.insert(step_id.to_owned(), authored_id.to_owned());
+        }
     }
     let lowered = lower_study_plan_with_catalog(&study, &catalog)
         .context("lower immutable study through canonical planner")?;
     validate_requested_execution(specification, &catalog, &lowered)?;
-    Ok((study, catalog, lowered))
+    Ok((study, catalog, lowered, authored_stage_ids))
 }
 
 pub fn validate_requested_execution(
@@ -4020,6 +4313,7 @@ mod accepted_start_preparation_tests {
             study,
             catalog,
             lowered,
+            authored_stage_ids: BTreeMap::new(),
         }
     }
 

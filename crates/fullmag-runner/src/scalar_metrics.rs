@@ -142,6 +142,7 @@ pub(crate) fn scalar_snapshot_from_step(stats: &StepStats) -> HashMap<String, f6
     scalars.insert("e_ex".to_string(), stats.e_ex);
     scalars.insert("e_demag".to_string(), stats.e_demag);
     scalars.insert("e_ext".to_string(), stats.e_ext);
+    scalars.insert("e_drive".to_string(), stats.e_drive);
     scalars.insert("e_ani".to_string(), stats.e_ani);
     scalars.insert("e_rotated_dmi".to_string(), stats.e_rotated_dmi);
     scalars.insert("e_dmi".to_string(), stats.e_dmi);
@@ -212,28 +213,6 @@ pub(crate) fn weighted_average_m_from_object_scalars(
         sum[1] / weight_sum,
         sum[2] / weight_sum,
     ])
-}
-
-#[cfg_attr(not(feature = "fem-gpu"), allow(dead_code))]
-pub(crate) fn set_object_average_m(
-    per_object: &mut HashMap<String, HashMap<String, f64>>,
-    object_id: &str,
-    magnetization: &[[f64; 3]],
-    start: usize,
-    count: usize,
-) {
-    if count == 0 || start >= magnetization.len() {
-        return;
-    }
-    let end = start.saturating_add(count).min(magnetization.len());
-    if end <= start {
-        return;
-    }
-    let [mx, my, mz] = average_magnetization_components(&magnetization[start..end]);
-    let entry = per_object.entry(object_id.to_string()).or_default();
-    entry.insert("mx".to_string(), mx);
-    entry.insert("my".to_string(), my);
-    entry.insert("mz".to_string(), mz);
 }
 
 #[cfg_attr(not(feature = "fem-gpu"), allow(dead_code))]

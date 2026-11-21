@@ -6,6 +6,9 @@ use serde::{Deserialize, Serialize};
 pub(crate) const PARAMETER: &str = "solver_profile";
 pub(crate) const SCHEMA: &str = "accepted_solver_profile.v1";
 
+#[path = "accepted_cuda_trace_admission.rs"]
+pub(crate) mod cuda_trace;
+
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Request {
@@ -67,7 +70,8 @@ pub(crate) fn validate_study_profile(
     study: &fullmag_authoring::StudyPlan,
     catalog: &fullmag_plan::StudyProblemCatalog,
 ) -> Result<Option<fullmag_runner::SolverProfileConfig>> {
-    if parameters.get(PARAMETER).is_none() {
+    let trace = cuda_trace::config(parameters)?;
+    if parameters.get(PARAMETER).is_none() && trace.is_none() {
         return Ok(None);
     }
     let configuration = config(parameters)?;
@@ -86,11 +90,12 @@ pub(crate) fn validate_study_profile(
         }
         operation_only = Some(operation);
         match &step.kind {
-            StudyStepKind::ClosedLoopInspection { .. } => {}
+            StudyStepKind::ClosedLoopInspection { .. } if trace.is_none() => {}
             StudyStepKind::Primitive { stage_kind: StudyPrimitiveStageKind::Run | StudyPrimitiveStageKind::Relax } => {
                 let problem = catalog.entries().iter().find(|entry| entry.step_id() == step.step_id)
                     .context("profiled FEM step has no exact catalog entry")?.problem();
                 validate_fem_profile_problem(problem)?;
+                if trace.is_some() { cuda_trace::validate_problem(problem)?; }
             }
             _ => bail!("solver_profile supports only closed-loop inspection and strict native FEM Run/Relax"),
         }
@@ -151,7 +156,8 @@ pub(crate) fn validate_resolved_study_profile(
     catalog: &fullmag_plan::StudyProblemCatalog,
     lowered: &fullmag_plan::StudyExecutionPlan,
 ) -> Result<Option<fullmag_runner::SolverProfileConfig>> {
-    if parameters.get(PARAMETER).is_none() {
+    let trace = cuda_trace::config(parameters)?;
+    if parameters.get(PARAMETER).is_none() && trace.is_none() {
         return Ok(None);
     }
     let config = config(parameters)?;
@@ -210,7 +216,7 @@ pub(crate) fn validate_resolved_study_profile(
                 stage_id,
                 port_mode_id,
                 ..
-            } => {
+            } if trace.is_none() => {
                 if !matches!(&plan.backend_plan, fullmag_ir::BackendPlanIR::AntennaFieldOnly(carrier)
                     if &carrier.stage_id == stage_id && &carrier.port_mode_id == port_mode_id)
                 {
@@ -219,7 +225,10 @@ pub(crate) fn validate_resolved_study_profile(
             }
             fullmag_authoring::StudyStepKind::Primitive {
                 stage_kind: fullmag_authoring::StudyPrimitiveStageKind::Run | fullmag_authoring::StudyPrimitiveStageKind::Relax,
-            } => validate_fem_profile_plan(problem, plan)?,
+            } => {
+                validate_fem_profile_plan(problem, plan)?;
+                if trace.is_some() { cuda_trace::validate_plan(problem, plan)?; }
+            }
             _ => bail!("solver_profile supports only closed-loop inspection and strict native FEM Run/Relax"),
         }
     }
