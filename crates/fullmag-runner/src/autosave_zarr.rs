@@ -1583,10 +1583,16 @@ mod tests {
                 &[0.5],
             )
             .unwrap();
-        assert_eq!(fs::metadata(&pending).unwrap().len(), 16);
+        // The first flush starts a new interval. The second row stays buffered
+        // until finalization drains it, even when there are no more samples.
+        assert_eq!(fs::read(&pending).unwrap(), 0.25_f64.to_le_bytes());
 
         state.finish_stage(&mut writer).unwrap();
         let table = root.join("main.zarr/stages/stage_0000_run/table");
+        assert_eq!(
+            fs::read(table.join("0.0")).unwrap(),
+            [0.25_f64.to_le_bytes(), 0.5_f64.to_le_bytes()].concat()
+        );
         let array: serde_json::Value =
             serde_json::from_slice(&fs::read(table.join(".zarray")).unwrap()).unwrap();
         assert_eq!(array["shape"], json!([2, 1]));

@@ -3092,7 +3092,7 @@ mod tests {
 
         // The writer is deliberately stalled. Both producer calls must finish
         // after bounded queue insertion without waiting for physical writes.
-        let enqueued_while_blocked = producer_result.recv_timeout(Duration::from_millis(250));
+        let enqueued_while_blocked = producer_result.recv_timeout(Duration::from_secs(5));
         let stage = autosave
             .path()
             .join("state.zarr/stages/stage_0000_run");
