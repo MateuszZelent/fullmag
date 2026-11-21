@@ -152,7 +152,7 @@ export function FooterTelemetry({
     stageExecution.data === null &&
     (stageExecution.status === "ready" || stageExecution.status === "idle");
   const stageProgress = resolveFooterStageProgress(
-    stageExecution.data, status, performance.data,
+    stageExecution.data, status, performance.data, scalarWindow.data?.series,
   );
   const telemetry = buildFooterTelemetryModel(
     status,
@@ -502,6 +502,7 @@ function resolveFooterStageProgress(
   stageExecution: StageExecutionResource | null | undefined,
   status: FooterTelemetryStatus | null,
   performance?: RunPerformanceResource | null,
+  scalarSeries?: ScalarWindowResource["series"] | null,
 ): FooterStageProgress | null {
   const currentExecution = stageExecution && status?.run?.run_id &&
     stageExecution.session_id === status.sessionId &&
@@ -523,7 +524,7 @@ function resolveFooterStageProgress(
     : resolveFooterPerformanceProgressFraction(run.run_id, performance, {
         stageIndex,
         stageId,
-      });
+      }, scalarSeries);
   const recordPercent = recordMatchesIndex && typeof record?.progress_percent === "number" &&
       Number.isFinite(record.progress_percent)
     ? Math.min(100, Math.max(0, record.progress_percent))

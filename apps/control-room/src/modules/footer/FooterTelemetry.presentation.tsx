@@ -2,7 +2,7 @@ import { type FooterTelemetryStatus, type FooterScalarAttemptReference, resolveF
 import type { FrequencyDomainSweepProgressResource, ObjectMetricsResource, RunPerformanceResource, ScalarWindowResource, SolverStatusResource, StageExecutionResource } from "@/kernel/api/apiTypes";
 import type { ResourceResult } from "@/kernel/resources/resourceTypes";
 import { formatRuntimeStateLabel, formatRuntimeUserSolvePhaseLabel, isRuntimeStateActive, isRuntimeStateWaitingForCompute, resolveEffectiveRuntimeState, type RuntimeUserSolvePhase } from "@/kernel/runtime/runtimeStateDisplay";
-import { footerPerformanceStageMatches, resolveFooterPerformanceClock, resolveFooterPerformanceRate, resolveFooterPerformanceStep, type FooterPerformanceStageReference } from "./footerPerformanceProgress";
+import { footerPerformanceMatchesScalarSeries, footerPerformanceStageMatches, resolveFooterPerformanceClock, resolveFooterPerformanceRate, resolveFooterPerformanceStep, type FooterPerformanceStageReference } from "./footerPerformanceProgress";
 import { Clock3, Gauge, Hash, Magnet, Radio, Zap } from "lucide-react";
 import { formatTorqueT } from "@/shared/domain/physics/torqueUnits";
 import type { ReactNode } from "react";
@@ -101,13 +101,15 @@ export function buildFooterTelemetryModel(
   const runSolverStatus = resolveFooterSolverStatus(status, solverStatus);
   const stageReference = runtimePhase?.stageReference ?? undefined;
   const performanceClock = resolveFooterPerformanceClock(
-    status.run?.run_id, runtimePhase?.performance, stageReference,
+    status.run?.run_id, runtimePhase?.performance, stageReference, resourceSample?.series,
   );
   const observedSolverStep = resolveFooterPerformanceStep(
-    status.run?.run_id, runtimePhase?.performance, stageReference,
+    status.run?.run_id, runtimePhase?.performance, stageReference, resourceSample?.series,
   );
   const performanceMatchesStage = footerPerformanceStageMatches(
     runtimePhase?.performance, stageReference,
+  ) && footerPerformanceMatchesScalarSeries(
+    runtimePhase?.performance, resourceSample?.series,
   );
   const performanceAttempt = observedSolverStep === null
     ? null
@@ -191,7 +193,11 @@ export function buildFooterTelemetryModel(
   const activeClockSeconds = usesPseudoTime
     ? pseudoTimeSeconds
     : performanceClock?.timeSeconds ?? scalarSampleNumber(liveRow, "time") ?? simTimeSeconds;
-  const zeroDtIsUnpublished = reportedDt === 0 &&
+  const matchedSolverDtIsAuthoritative = !usesPseudoTime &&
+    performanceClock !== null &&
+    reportedDt === performanceClock.dtSeconds;
+  const zeroDtIsUnpublished = !matchedSolverDtIsAuthoritative &&
+    reportedDt === 0 &&
     typeof activeClockSeconds === "number" && activeClockSeconds > 0;
   const dt = typeof reportedDt === "number" && Number.isFinite(reportedDt) &&
       (reportedDt > 0 || (reportedDt === 0 && !zeroDtIsUnpublished))

@@ -9,6 +9,7 @@ import {
   resolveFooterPerformanceClock,
   resolveFooterPerformanceProgressFraction,
   resolveFooterPerformanceRate,
+  resolveFooterPerformanceStep,
   type FooterPerformanceStageReference,
 } from "./footerPerformanceProgress";
 
@@ -168,7 +169,7 @@ describe("FooterTelemetry performance progress", () => {
     expect(resolveFooterPerformanceClock("current-run", sample, {
       stageIndex: 1,
       stageId: "relax",
-    })).toMatchObject({
+    }, scalarWindow([[9_423, 7.488e-9, 0]]).series)).toMatchObject({
       attemptId: "attempt-1",
       stepIndex: 9_423,
       timeSeconds: 7.488e-9,
@@ -177,7 +178,7 @@ describe("FooterTelemetry performance progress", () => {
     expect(resolveFooterPerformanceProgressFraction("current-run", sample, {
       stageIndex: 1,
       stageId: "relax",
-    })).toBe(0.3744);
+    }, scalarWindow([[9_423, 7.488e-9, 0]]).series)).toBe(0.3744);
     expect(resolveFooterPerformanceClock("current-run", sample, {
       stageIndex: 2,
       stageId: "another-stage",
@@ -186,6 +187,25 @@ describe("FooterTelemetry performance progress", () => {
       stageIndex: 2,
       stageId: "another-stage",
     })).toBeNull();
+  });
+
+  it("preserves an explicit zero dt from the matched solver callback row", () => {
+    const sample = {
+      ...performance,
+      stage_index: 1,
+      solver_clock: { step_index: 9_423, time_s: 7.488e-9, dt_s: 0 },
+    } as RunPerformanceResource;
+    const result = metrics(sample, {}, scalarWindow([
+      [7_194, 7.488e-9, 0],
+      [8_074, 8.368e-9, 0],
+    ]), { stageIndex: 1, stageId: "relax" });
+
+    expect(result.find((metric) => metric.id === "dt")).toMatchObject({
+      label: "dt",
+      value: "0.000000e+0",
+    });
+    expect(result.find((metric) => metric.id === "dt")?.subdetail)
+      .toContain("Solver step 9,423 · Attempt attempt-1");
   });
 
   it("rejects a clock whose step is not the performance identity's exact row", () => {
@@ -203,6 +223,28 @@ describe("FooterTelemetry performance progress", () => {
       stageIndex: 1,
       stageId: "relax",
     })).toBeNull();
+  });
+
+  it("rejects same-run, same-stage telemetry from a superseded attempt when scalar identity is current", () => {
+    const stale = {
+      ...performance,
+      stage_index: 1,
+      solver_clock: { step_index: 9_423, time_s: 7.488e-9, dt_s: 0 },
+      progress_fraction: 0.3744,
+    } as RunPerformanceResource;
+    const activeSeries = {
+      run_id: "current-run",
+      task_id: "task-1",
+      step_id: "relax",
+      case_id: "case-1",
+      attempt_id: "attempt-2",
+      ownership_epoch: 1,
+    };
+    const stage = { stageIndex: 1, stageId: "relax" };
+
+    expect(resolveFooterPerformanceStep("current-run", stale, stage, activeSeries)).toBeNull();
+    expect(resolveFooterPerformanceClock("current-run", stale, stage, activeSeries)).toBeNull();
+    expect(resolveFooterPerformanceProgressFraction("current-run", stale, stage, activeSeries)).toBeNull();
   });
 
   it("shows current-run solver progress separately from the older scalar sample", () => {
@@ -292,16 +334,23 @@ describe("FooterTelemetry performance progress", () => {
     expect(result.find((metric) => metric.id === "dt")?.value).toBe("1.000000e-12");
   });
 
-  it("uses an accepted same-attempt mean when the latest physical dt is an unpublished zero", () => {
+  it("uses an accepted same-attempt mean when the legacy scalar dt is an unpublished zero", () => {
     const sample = {
       ...performance,
       stage_index: 1,
-      solver_clock: { step_index: 9_423, time_s: 7.488e-9, dt_s: 0 },
     } as RunPerformanceResource;
     const result = metrics(sample, {}, scalarWindow([
       [7_194, 7.488e-9, 0],
       [8_074, 8.368e-9, 0],
-    ]), { stageIndex: 1, stageId: "relax" });
+    ]), { stageIndex: 1, stageId: "relax" }, {
+      revision: 2,
+      row: { step: 9_423, time: 7.488e-9, dt: 0 },
+      requestScopeEpoch: "api:1",
+      runId: "current-run",
+      sessionId: "current-session",
+      step: 9_423,
+      time: 7.488e-9,
+    });
     expect(result.find((metric) => metric.id === "time")?.value).toBe("7.488000e-9");
     expect(result.find((metric) => metric.id === "dt")).toMatchObject({
       label: "Mean dt",

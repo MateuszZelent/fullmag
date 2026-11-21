@@ -42,14 +42,26 @@ export function footerPerformanceStageMatches(
   );
 }
 
+export function footerPerformanceMatchesScalarSeries(
+  performance: RunPerformanceResource | null | undefined,
+  scalarSeries: ScalarWindowResource["series"] | null | undefined,
+): boolean {
+  return !scalarSeries || Boolean(
+    performance && hasFooterPerformanceIdentity(performance.run_id, performance) &&
+    sameFooterPerformanceSeries(performance, scalarSeries),
+  );
+}
+
 /** This reports runner progress, independently of field/scalar sample clocks. */
 export function resolveFooterPerformanceStep(
   currentRunId: string | null | undefined,
   performance: RunPerformanceResource | null | undefined,
   expectedStage?: FooterPerformanceStageReference,
+  scalarSeries?: ScalarWindowResource["series"] | null,
 ): number | null {
   if (!hasFooterPerformanceIdentity(currentRunId, performance) ||
-      !matchesFooterPerformanceStage(performance, expectedStage)) return null;
+      !matchesFooterPerformanceStage(performance, expectedStage) ||
+      (scalarSeries && !sameFooterPerformanceSeries(performance, scalarSeries))) return null;
   const step = performance.step_index;
   return typeof step === "number" && Number.isSafeInteger(step) && step >= 0
     ? step : null;
@@ -60,9 +72,11 @@ export function resolveFooterPerformanceClock(
   currentRunId: string | null | undefined,
   performance: RunPerformanceResource | null | undefined,
   expectedStage?: FooterPerformanceStageReference,
+  scalarSeries?: ScalarWindowResource["series"] | null,
 ): FooterPerformanceClock | null {
   if (!hasFooterPerformanceIdentity(currentRunId, performance) ||
-      !matchesFooterPerformanceStage(performance, expectedStage)) return null;
+      !matchesFooterPerformanceStage(performance, expectedStage) ||
+      (scalarSeries && !sameFooterPerformanceSeries(performance, scalarSeries))) return null;
 
   const sample = performance.solver_clock;
   const stepIndex = safeInteger(performance.step_index);
@@ -83,10 +97,12 @@ export function resolveFooterPerformanceProgressFraction(
   currentRunId: string | null | undefined,
   performance: RunPerformanceResource | null | undefined,
   expectedStage?: FooterPerformanceStageReference,
+  scalarSeries?: ScalarWindowResource["series"] | null,
 ): number | null {
   if (!hasFooterPerformanceIdentity(currentRunId, performance) ||
       safeInteger(performance.stage_index) === null ||
-      !matchesFooterPerformanceStage(performance, expectedStage)) return null;
+      !matchesFooterPerformanceStage(performance, expectedStage) ||
+      (scalarSeries && !sameFooterPerformanceSeries(performance, scalarSeries))) return null;
   const fraction = performance.progress_fraction;
   return typeof fraction === "number" && Number.isFinite(fraction) &&
       fraction >= 0 && fraction <= 1
