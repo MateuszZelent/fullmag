@@ -215,4 +215,27 @@ describe("Inspector visual contract", () => {
 
     expect(classes.filter((className) => !source.includes(className) && !dynamicClasses.has(className))).toEqual([]);
   });
+
+  it("enforces the canonical 8-slot InspectorTemplate @container inspector queries and 7 domain hues", () => {
+    const inspectorCss = readFileSync(join(stylesRoot, "inspector.css"), "utf8");
+
+    expect(inspectorCss).toContain("container: inspector / inline-size;");
+    expect(inspectorCss).toContain("@container inspector (min-width: 22rem)");
+    expect(inspectorCss).toContain("@container inspector (min-width: 26rem)");
+    expect(inspectorCss).toContain("@container inspector (min-width: 30rem)");
+    for (const domain of [
+      "geometry",
+      "material",
+      "physics",
+      "study",
+      "visualization",
+      "mesh",
+      "definition",
+    ]) {
+      expect(inspectorCss).toContain(`.fm-inspector[data-domain="${domain}"]`);
+    }
+    expect(inspectorCss).not.toContain("!important");
+    expect(inspectorCss).not.toContain("text-transform: uppercase");
+    expect(inspectorCss).not.toMatch(/@media\s*\(\s*max-width:/i);
+  });
 });
