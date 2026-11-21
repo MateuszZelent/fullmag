@@ -154,15 +154,16 @@
 
 .fm-inspector__breadcrumb-item {
   display: inline-flex;
-  flex: 0 1 auto;
+  flex: 0 2 auto;
   align-items: center;
-  min-width: 0;
+  min-width: 1.5rem;
   font-size: var(--fm-text-xs);
   color: var(--fm-text-secondary);
 }
 
 .fm-inspector__breadcrumb-item:last-child {
   flex: 0 1 auto;
+  min-width: min(5.5rem, 100%);
 }
 
 .fm-inspector__breadcrumb-separator {
