@@ -41,7 +41,9 @@ use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 pub(crate) const DEFAULT_ARTIFACT_PIPELINE_CAPACITY: usize = 4;
+#[cfg(any(test, feature = "cuda", feature = "fem-native"))]
 const ZARR_FIELD_METADATA_BATCH_SAMPLES: usize = 8;
+#[cfg(any(test, feature = "cuda", feature = "fem-native"))]
 const ZARR_FIELD_METADATA_FLUSH_INTERVAL: Duration = Duration::from_secs(30);
 const ARTIFACT_METADATA_POLL_INTERVAL: Duration = Duration::from_secs(1);
 
@@ -1809,7 +1811,7 @@ impl ZarrFieldSeriesWriter {
             )
         })?;
 
-        let mut writer = Self {
+        let writer = Self {
             zarray_path: root_dir.join(".zarray"),
             root_dir,
             info,
@@ -3588,7 +3590,7 @@ mod tests {
             scalar_type: NativeSnapshotScalarType::F64,
         };
         let mut writers = HashMap::new();
-        let writer = ZarrFieldSeriesWriter::get_or_open(
+        ZarrFieldSeriesWriter::get_or_open(
             &mut writers,
             &output.path().join("fields"),
             &context,

@@ -226,7 +226,6 @@ impl AutosaveTargetWriter for ZarrAutosaveWriter {
         entry: &ContinuousIndexEntry,
         values: &[f64],
     ) -> Result<(), String> {
-        let root = self.root.clone();
         let current = self.current_mut()?;
         ensure_append_healthy(current)?;
         if values.len() != current.manifest.table_quantities.len() {
@@ -246,7 +245,7 @@ impl AutosaveTargetWriter for ZarrAutosaveWriter {
         ) {
             return Err(record_append_failure(current, error));
         }
-        if let Err(error) = append_continuous_index(&root, current, entry) {
+        if let Err(error) = append_continuous_index(current, entry) {
             return Err(record_append_failure(current, error));
         }
         current.table_samples = next_sample_count;
@@ -262,7 +261,6 @@ impl AutosaveTargetWriter for ZarrAutosaveWriter {
         quantity: &str,
         values: &[f64],
     ) -> Result<(), String> {
-        let root = self.root.clone();
         let current = self.current_mut()?;
         ensure_append_healthy(current)?;
         if !current
@@ -330,7 +328,7 @@ impl AutosaveTargetWriter for ZarrAutosaveWriter {
             }
         };
         current.field_metadata_pending_samples = next_pending_samples;
-        if let Err(error) = append_continuous_index(&root, current, entry) {
+        if let Err(error) = append_continuous_index(current, entry) {
             return Err(record_append_failure(current, error));
         }
         let now = Instant::now();
@@ -861,14 +859,12 @@ fn sync_directory(_: &Path) -> Result<(), String> {
 }
 
 fn append_continuous_index(
-    root: &Path,
     current: &mut ZarrStage,
     entry: &ContinuousIndexEntry,
 ) -> Result<(), String> {
     if current.manifest.layout != AutosaveLayoutIR::Continuous {
         return Ok(());
     }
-    let path = root.join(format!("{}.zarr", current.manifest.target));
     if current.continuous_index_writer.is_none() {
         fs::create_dir_all(
             current
