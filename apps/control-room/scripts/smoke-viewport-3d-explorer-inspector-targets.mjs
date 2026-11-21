@@ -7,6 +7,10 @@ import { fileURLToPath } from "node:url";
 import { createHash, randomUUID } from "node:crypto";
 
 import { createSmokeMutationGuard } from "./lib/smoke-session-isolation.mjs";
+import {
+  ensureViewportExportMode,
+  runViewportExportBrowserQa,
+} from "./lib/viewport-export-browser-qa.mjs";
 import { resolvePnpmInvocation } from "./resolve-pnpm-invocation.mjs";
 import {
   assertScenarioHashesUnchanged,
@@ -569,6 +573,52 @@ async function verifyAirboxIndependentVisualization(browser, url) {
     assertIndependentTargetState(fixture, { airboxQuantity: "H_eff", airboxPalette: "rdbu" });
     await selectAirboxVisualization(page);
 
+    const pngExport = await runViewportExportBrowserQa(page, {
+      assertCanvas: (label) => assertHealthyCanvas(page, label),
+      expectedCaptureDpr: 1,
+      pngDecoder: {
+        sync: {
+          read(buffer) {
+            const { height, rgba, width } = parsePng(buffer);
+            return { data: rgba, height, width };
+          },
+        },
+      },
+      timeout: timeoutMs,
+    });
+
+    const exportRegion = await ensureViewportExportMode(page, "PNG", timeoutMs);
+    const exportButton = exportRegion.getByRole("button", {
+      name: "Export PNG",
+      exact: true,
+    });
+    const exportPath = join(browserAuditArtifactDir, "viewport-png-downloads", "live-export.png");
+    await mkdir(dirname(exportPath), { recursive: true });
+    await exportRegion.waitFor({ state: "visible", timeout: timeoutMs });
+    await exportButton.waitFor({ state: "visible", timeout: timeoutMs });
+    const downloadTimeout = Math.min(timeoutMs, 20_000);
+    const downloadPromise = page.waitForEvent("download", { timeout: downloadTimeout });
+    const [download] = await Promise.all([downloadPromise, exportButton.click({ timeout: timeoutMs })]);
+    const downloadFailure = await awaitWithTimeout(download.failure(), downloadTimeout, "viewport PNG download");
+    if (downloadFailure) throw new Error(`Chromium PNG download failed: ${downloadFailure}`);
+    if (download.suggestedFilename() !== "fullmag-viewport-3d.png") {
+      throw new Error(`Unexpected Chromium PNG filename: ${download.suggestedFilename()}`);
+    }
+    await awaitWithTimeout(download.saveAs(exportPath), downloadTimeout, "viewport PNG artifact save");
+    const exportedPng = await readFile(exportPath);
+    const decodedExport = parsePng(exportedPng);
+    if (exportedPng.length < 64 || decodedExport.width <= 0 || decodedExport.height <= 0) {
+      throw new Error("Chromium did not save a valid non-empty viewport PNG.");
+    }
+    const savedExport = {
+      browser_download_event: true,
+      filename: download.suggestedFilename(),
+      artifact: "viewport-png-downloads/live-export.png",
+      byte_length: exportedPng.length,
+      sha256: createHash("sha256").update(exportedPng).digest("hex"),
+      dimensions: { width: decodedExport.width, height: decodedExport.height },
+    };
+
     assertNoBrowserErrors(errors);
     await captureBrowserAuditScreenshot(page, "target-smoke-fem-airbox-independent-visualization.png");
     const evidence = {
@@ -577,6 +627,7 @@ async function verifyAirboxIndependentVisualization(browser, url) {
       inspectorStable: true,
       magneticTargets: ["fem-owned", "fem-second"],
       paletteTransitions,
+      pngExport: { ...pngExport, chromiumSavedDownload: savedExport },
       webglHealthy: true,
     };
     await mkdir(browserAuditArtifactDir, { recursive: true });
@@ -1371,6 +1422,20 @@ async function assertHealthyCanvas(page, label) {
   const screenshot = await canvas.screenshot();
   if (screenshot.length < 64 || screenshot.subarray(0, 8).toString("hex") !== "89504e470d0a1a0a") {
     throw new Error(`${label}: viewport did not produce a PNG screenshot.`);
+  }
+}
+
+async function awaitWithTimeout(promise, timeout, label) {
+  let timer;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise((_, reject) => {
+        timer = setTimeout(() => reject(new Error(`${label} timed out after ${timeout} ms`)), timeout);
+      }),
+    ]);
+  } finally {
+    clearTimeout(timer);
   }
 }
 

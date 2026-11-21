@@ -1,3 +1,5 @@
+import { visitSequentially } from "./visitSequentially.mjs";
+
 const MAX_ACTION_TIMEOUT_MS = 30_000;
 const MAX_EXPORT_DOWNLOAD_TIMEOUT_MS = 20_000;
 const MAX_RESTORE_ACTION_TIMEOUT_MS = 3_000;
@@ -5,14 +7,17 @@ const MAX_BUFFER_RESTORE_TIMEOUT_MS = 8_000;
 const CAPTURE_DIMENSION_TOLERANCE_PX = 1;
 const INTERACTIVE_DPR = 1.25;
 export const VIEWPORT_SETTINGS_REGION_NAME = "3D View Settings";
+export const VIEWPORT_EXPORT_REGION_NAME = "3D Export";
 export const VIEWPORT_CAMERA_REGION_NAME = "3D camera parameters";
 
-const INSPECTOR_CONTEXT_TABLIST_NAME = "Inspector context";
-const INSPECTOR_CONTEXT_LABELS = Object.freeze({
-  selection: "Selection",
-  view: "3D View",
+const RIGHT_RAIL_SELECTOR = '.fm-side-rail[data-side="right"]';
+const INSPECTOR_CONTEXT_ITEMS = Object.freeze({
+  selection: "selection",
+  view: "view",
+  export: "export",
 });
-const SETTINGS_SECTIONS = new Set(["View", "Appearance", "Quality", "Export"]);
+const SETTINGS_SECTIONS = new Set(["View", "Appearance", "Quality"]);
+const EXPORT_MODES = new Set(["PNG", "3D model"]);
 
 const BACKGROUND_OPTIONS = Object.freeze({
   matchViewport: "Match viewport",
@@ -30,42 +35,45 @@ const SETTING_SECTIONS_BY_LABEL = Object.freeze({
   "PNG resolution": "Export",
 });
 
-export async function readViewportInspectorState(page) {
-  const contextTabs = page.getByRole("tablist", {
-    name: INSPECTOR_CONTEXT_TABLIST_NAME,
-    exact: true,
-  });
-  // Radix selects temporarily hide the surrounding workspace from the accessibility tree.
-  // Wait for their close commit before observing the named Inspector tabs.
-  try {
-    await contextTabs.waitFor({ state: "attached", timeout: MAX_ACTION_TIMEOUT_MS });
-  } catch (error) {
-    const diagnostic = await page.evaluate(() => ({
-      lists: [...document.querySelectorAll('[aria-label="Inspector context"]')].map(list => {
-        const hiddenAncestors = [];
-        for (let node = list; node; node = node.parentElement) {
-          if (node.hidden || node.inert || node.getAttribute("aria-hidden") === "true" || getComputedStyle(node).display === "none") {
-            hiddenAncestors.push({ tag: node.tagName, class: node.className, hidden: node.hidden, inert: node.inert, ariaHidden: node.getAttribute("aria-hidden") });
-          }
-        }
-        return { role: list.getAttribute("role"), hiddenAncestors };
-      }),
-      overlays: [...document.querySelectorAll('[role="dialog"], [role="listbox"]')].map(node => ({role: node.getAttribute("role"), label: node.getAttribute("aria-label"), text: node.textContent?.slice(0,150), visible: node.checkVisibility()})),
-    }));
-    throw new Error(`Inspector tabs unavailable: ${JSON.stringify(diagnostic)}; ${error.message}`);
-  }
-  const selectedContextTabs = contextTabs.locator('[role="tab"][aria-selected="true"]');
-  if (await selectedContextTabs.count() !== 1) {
-    throw new Error("Viewport Inspector must expose exactly one selected context tab");
-  }
-  const contextLabel = normalizeText(await selectedContextTabs.first().innerText());
-  const context = Object.entries(INSPECTOR_CONTEXT_LABELS)
-    .find(([, label]) => label === contextLabel)?.[0];
-  if (!context) throw new Error(`Unexpected Inspector context tab: ${contextLabel}`);
-  if (context === "selection") return { context, section: null };
+export async function readViewportInspectorState(page, timeout = MAX_ACTION_TIMEOUT_MS) {
+  const rightRail = page.locator(RIGHT_RAIL_SELECTOR);
+  await rightRail.waitFor({ state: "attached", timeout });
+  const activeContext = await page.evaluate((railSelector) => {
+    const rail = document.querySelector(railSelector);
+    if (!rail) return null;
+    for (const id of ["selection", "view", "export"]) {
+      const button = rail.querySelector(`[data-rail-item="${id}"]`);
+      if (button?.getAttribute("data-active") === "true") {
+        return {
+          context: id,
+          open: button.getAttribute("aria-pressed") === "true",
+        };
+      }
+    }
+    return null;
+  }, RIGHT_RAIL_SELECTOR);
 
-  const settings = getViewportSettingsRegion(page);
-  await settings.waitFor({ state: "visible" });
+  if (!activeContext) {
+    throw new Error("Viewport Inspector right rail must expose an active context item");
+  }
+  const { context, open } = activeContext;
+  if (context === "selection") return { context, open, section: null };
+  if (context === "export") {
+    const exportRegion = page.locator(`[aria-label="${VIEWPORT_EXPORT_REGION_NAME}"]`);
+    await exportRegion.waitFor({ state: "attached", timeout });
+    const selectedModeTabs = exportRegion.locator('[role="tab"][aria-selected="true"]');
+    if (await selectedModeTabs.count() !== 1) {
+      throw new Error("3D Export must expose exactly one selected mode tab");
+    }
+    const mode = normalizeText(await selectedModeTabs.first().innerText());
+    if (!EXPORT_MODES.has(mode)) {
+      throw new Error(`Unexpected 3D Export mode: ${mode}`);
+    }
+    return { context, open, section: mode };
+  }
+
+  const settings = page.locator(`[aria-label="${VIEWPORT_SETTINGS_REGION_NAME}"]`);
+  await settings.waitFor({ state: "attached", timeout });
   const selectedSectionTabs = settings.locator('[role="tab"][aria-selected="true"]');
   if (await selectedSectionTabs.count() !== 1) {
     throw new Error("3D View Settings must expose exactly one selected section tab");
@@ -74,11 +82,19 @@ export async function readViewportInspectorState(page) {
   if (!SETTINGS_SECTIONS.has(section)) {
     throw new Error(`Unexpected 3D View Settings section: ${section}`);
   }
-  return { context, section };
+  return { context, open, section };
 }
+
 export function getViewportSettingsRegion(page) {
   return page.getByRole("region", {
     name: VIEWPORT_SETTINGS_REGION_NAME,
+    exact: true,
+  });
+}
+
+export function getViewportExportRegion(page) {
+  return page.getByRole("region", {
+    name: VIEWPORT_EXPORT_REGION_NAME,
     exact: true,
   });
 }
@@ -91,45 +107,64 @@ export function getViewportCameraRegion(page) {
 }
 
 export async function selectViewportInspectorContext(page, context, timeout) {
-  const label = INSPECTOR_CONTEXT_LABELS[context];
-  if (!label) throw new Error(`Unknown Inspector context ${context}`);
-  const contextTabs = page.getByRole("tablist", {
-    name: INSPECTOR_CONTEXT_TABLIST_NAME,
-    exact: true,
-  });
-  const tab = contextTabs.getByRole("tab", { name: label, exact: true });
-  if (await tab.getAttribute("aria-selected") !== "true") await tab.click({ timeout });
-  await page.waitForFunction(({ expected }) => {
-    const list = document.querySelector('[role="tablist"][aria-label="Inspector context"]');
-    const selected = list?.querySelector('[role="tab"][aria-selected="true"]');
-    return (selected?.textContent ?? "").replace(/\s+/g, " ").trim() === expected;
-  }, { expected: label }, { timeout });
+  const railItem = INSPECTOR_CONTEXT_ITEMS[context];
+  if (!railItem) throw new Error(`Unknown Inspector context ${context}`);
+  const item = page.locator(`${RIGHT_RAIL_SELECTOR} [data-rail-item="${railItem}"]`);
+  await item.waitFor({ state: "visible", timeout });
+  if (await item.getAttribute("aria-pressed") !== "true") {
+    await item.click({ timeout });
+  }
+  await page.waitForFunction(({ railSelector, expected }) => {
+    const button = document.querySelector(`${railSelector} [data-rail-item="${expected}"]`);
+    return button?.getAttribute("aria-pressed") === "true";
+  }, { railSelector: RIGHT_RAIL_SELECTOR, expected: railItem }, { timeout });
 
-  const settings = getViewportSettingsRegion(page);
-  await settings.waitFor({ state: context === "view" ? "visible" : "hidden", timeout });
+  if (context === "view") {
+    await getViewportSettingsRegion(page).waitFor({ state: "visible", timeout });
+  } else if (context === "export") {
+    await getViewportExportRegion(page).waitFor({ state: "visible", timeout });
+  }
+}
+
+export async function ensureViewportExportMode(page, mode = "PNG", timeout = MAX_ACTION_TIMEOUT_MS) {
+  if (!EXPORT_MODES.has(mode)) {
+    throw new Error(`Unknown 3D Export mode ${mode}`);
+  }
+  await selectViewportInspectorContext(page, "export", timeout);
+  const exportRegion = getViewportExportRegion(page);
+  const modeTab = exportRegion.getByRole("tab", { name: mode, exact: true });
+  await modeTab.waitFor({ state: "visible", timeout });
+  if (await modeTab.getAttribute("aria-selected") !== "true") {
+    await modeTab.click({ timeout });
+  }
+  await page.waitForFunction(({ expected }) => {
+    const region = document.querySelector('[aria-label="3D Export"]');
+    const selected = region?.querySelector('[role="tab"][aria-selected="true"]');
+    return (selected?.textContent ?? "").replace(/\s+/g, " ").trim() === expected;
+  }, { expected: mode }, { timeout });
+  return exportRegion;
 }
 
 export async function ensureViewportSettingsSection(page, section, timeout, {
   commandTitle = "Open 3D Viewport Settings",
   forceCommand = false,
 } = {}) {
+  if (section === "Export") {
+    return ensureViewportExportMode(page, "PNG", timeout);
+  }
   if (!SETTINGS_SECTIONS.has(section)) {
     throw new Error(`Unknown 3D View Settings section ${section}`);
   }
-  let inspectorState = await readViewportInspectorState(page);
-  if (forceCommand && inspectorState.context === "view") {
+  let inspectorState = await readViewportInspectorState(page, timeout);
+  if (forceCommand && inspectorState.context === "view" && inspectorState.open) {
     await selectViewportInspectorContext(page, "selection", timeout);
-    inspectorState = await readViewportInspectorState(page);
+    inspectorState = await readViewportInspectorState(page, timeout);
   }
-  if (inspectorState.context !== "view") {
-    await executeSettingsCommand(page, commandTitle, timeout);
-    const contextTab = page.getByRole("tablist", {
-      name: INSPECTOR_CONTEXT_TABLIST_NAME,
-      exact: true,
-    }).getByRole("tab", { name: INSPECTOR_CONTEXT_LABELS.view, exact: true });
-    await contextTab.waitFor({ state: "visible", timeout });
-    if (await contextTab.getAttribute("aria-selected") !== "true") {
-      throw new Error(`${commandTitle} did not select the 3D View Inspector context`);
+  if (inspectorState.context !== "view" || !inspectorState.open) {
+    if (forceCommand) {
+      await executeSettingsCommand(page, commandTitle, timeout);
+    } else {
+      await selectViewportInspectorContext(page, "view", timeout);
     }
     await getViewportSettingsRegion(page).waitFor({ state: "visible", timeout });
   }
@@ -151,12 +186,19 @@ export async function ensureViewportSettingsSection(page, section, timeout, {
 export async function restoreViewportInspectorState(page, state, timeout) {
   if (state?.context === "selection") {
     await selectViewportInspectorContext(page, "selection", timeout);
-    return;
-  }
-  if (state?.context !== "view") {
+  } else if (state?.context === "export") {
+    await ensureViewportExportMode(page, state.section ?? "PNG", timeout);
+  } else if (state?.context === "view") {
+    await ensureViewportSettingsSection(page, state.section ?? "View", timeout);
+  } else {
     throw new Error(`Cannot restore unknown Inspector context: ${state?.context ?? "missing"}`);
   }
-  await ensureViewportSettingsSection(page, state.section ?? "View", timeout);
+  if (state.open === false) {
+    const activeItem = page.locator(`${RIGHT_RAIL_SELECTOR} [data-rail-item="${state.context}"]`);
+    if (await activeItem.getAttribute("aria-pressed") === "true") {
+      await activeItem.click({ timeout });
+    }
+  }
 }
 
 async function executeSettingsCommand(page, title, timeout) {
@@ -467,18 +509,18 @@ async function readSettings(page, timeout) {
     const sectionSettings = await ensureSettingsOpen(page, section, timeout);
     if (section === "Export") {
       const [background, annotations, scale] = await Promise.all([
-        readChoiceFromSettings(sectionSettings, "PNG background", timeout),
+        readChoiceInRegion(sectionSettings, "PNG background", timeout),
         sectionSettings.getByRole("switch", {
           name: "Include annotations",
           exact: true,
         }).isChecked({ timeout }),
-        readChoiceFromSettings(sectionSettings, "PNG resolution", timeout),
+        readChoiceInRegion(sectionSettings, "PNG resolution", timeout),
       ]);
       Object.assign(values, { background, annotations, scale });
     } else if (section === "Quality") {
-      values.quality = await readChoiceFromSettings(sectionSettings, "Quality profile", timeout);
+      values.quality = await readChoiceInRegion(sectionSettings, "Quality profile", timeout);
     } else {
-      values.frame = await readChoiceFromSettings(sectionSettings, "Grid and axes", timeout);
+      values.frame = await readChoiceInRegion(sectionSettings, "Grid and axes", timeout);
     }
   });
   const { background, annotations, scale, quality, frame } = values;
@@ -495,13 +537,13 @@ async function readChoice(page, label, timeout = MAX_ACTION_TIMEOUT_MS) {
   const section = SETTING_SECTIONS_BY_LABEL[label];
   if (!section) throw new Error(`No 3D View Settings section is registered for ${label}`);
   const settings = await ensureViewportSettingsSection(page, section, timeout);
-  return readChoiceFromSettings(settings, label, timeout);
+  return readChoiceInRegion(settings, label, timeout);
 }
 
-function readChoiceFromSettings(settings, label, timeout = MAX_ACTION_TIMEOUT_MS) {
-  return settings.getByRole("combobox", { name: label, exact: true })
-    .innerText({ timeout })
-    .then(normalizeText);
+async function readChoiceInRegion(region, label, timeout = MAX_ACTION_TIMEOUT_MS) {
+  return normalizeText(
+    await region.getByRole("combobox", { name: label, exact: true }).innerText({ timeout }),
+  );
 }
 
 async function choose(page, label, option, controlId, timeout) {
@@ -522,9 +564,9 @@ async function choose(page, label, option, controlId, timeout) {
   }, { id: controlId, expected: option }, { timeout });
 }
 
-async function setAnnotations(page, settings, enabled, timeout) {
-  await ensureSettingsOpen(page, "Export", timeout);
-  const control = settings.getByRole("switch", {
+async function setAnnotations(page, _settings, enabled, timeout) {
+  const exportRegion = await ensureSettingsOpen(page, "Export", timeout);
+  const control = exportRegion.getByRole("switch", {
     name: "Include annotations",
     exact: true,
   });
@@ -534,7 +576,7 @@ async function setAnnotations(page, settings, enabled, timeout) {
   enabled, { timeout });
 }
 
-async function exportPng(page, settings, {
+async function exportPng(page, _settings, {
   assertCanvas,
   canvasHandle,
   expectedQuality,
@@ -543,8 +585,8 @@ async function exportPng(page, settings, {
   pngDecoder,
   timeout,
 }) {
-  await ensureSettingsOpen(page, "Export", timeout);
-  const button = settings.getByRole("button", { name: "Export PNG", exact: true });
+  const exportRegion = await ensureSettingsOpen(page, "Export", timeout);
+  const button = exportRegion.getByRole("button", { name: "Export PNG", exact: true });
   await button.scrollIntoViewIfNeeded({ timeout });
   const canvasBaseline = expectedCaptureDpr === undefined
     ? null
@@ -882,4 +924,3 @@ function sameSettings(left, right) {
 function normalizeText(value) {
   return value.replace(/\s+/g, " ").trim();
 }
-import { visitSequentially } from "./visitSequentially.mjs";

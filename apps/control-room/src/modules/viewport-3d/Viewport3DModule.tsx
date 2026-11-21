@@ -99,9 +99,14 @@ import {
 import { Viewport3DCameraDialog } from "./components/Viewport3DCameraDialog";
 import { Viewport3DSettingsContent } from "./components/Viewport3DSettingsContent";
 import { Viewport3DToolbar } from "./components/Viewport3DToolbar";
+import { Viewport3DExportPanel } from "./export/Viewport3DExportPanel";
 import { Viewport3DExportMenu, Viewport3DExportOutlet } from "./export/Viewport3DExportSurface";
 import type { ViewportModelSource } from "./export/Viewport3DExportDialog";
-import { useViewport3DInspectorDestination, setViewport3DInspectorSection } from "./viewport3dInspectorState";
+import {
+  setViewport3DExportMode,
+  setViewport3DInspectorSection,
+  useViewport3DInspectorDestination,
+} from "./viewport3dInspectorState";
 import { Viewport3DAppearanceHud } from "./components/Viewport3DAppearanceHud";
 import { Viewport3DCanvas } from "./Viewport3DCanvas";
 import { Viewport3DErrorBoundary } from "./Viewport3DErrorBoundary";
@@ -2196,6 +2201,32 @@ const Viewport3DFrame = memo(function Viewport3DFrame({
           />}
         />,
         inspectorDestination.host,
+      ) : null}
+      {inspectorDestination.exportHost ? createPortal(
+        <Viewport3DExportPanel
+          key={cameraOwnerKey}
+          activeMode={inspectorDestination.exportMode}
+          getSource={async () => {
+            if (artifactField.historical || antennaFieldOverlay) {
+              throw new Error("3D export is unavailable for this field inspection view.");
+            }
+            return getExportSource();
+          }}
+          onCommand={onViewCommand}
+          onModeChange={setViewport3DExportMode}
+          sourceRevisionKey={[
+            cameraOwnerKey,
+            quantityId ?? "",
+            analysisOverlayQuantityId ?? "",
+            String(liveQuantityDataAvailable),
+            String(Boolean(artifactField.historical)),
+            String(Boolean(antennaFieldOverlay)),
+            String(sceneProps.primitiveModel?.objects.length ?? 0),
+            String(Boolean(sceneProps.topology)),
+          ].join("|")}
+          visible={inspectorDestination.context === "export"}
+        />,
+        inspectorDestination.exportHost,
       ) : null}
       <Viewport3DExportOutlet key={cameraOwnerKey} getSource={async () => {
         if (artifactField.historical || antennaFieldOverlay) {

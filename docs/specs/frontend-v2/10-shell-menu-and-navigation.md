@@ -22,8 +22,8 @@ bars, rails, panels and dock are glass layers above it.
 | e | (Model,       |                              | panel     | i |
 | f | Results,      |        live viewport         | (Inspector| g |
 | t | Charts,       |                              | 3D View,  | h |
-|   | Library, …)   |                              | History,  | t |
-| r +---------------+------------------------------+ Python, …)| r |
+|   | Library, …)   |                              | Export, …)| t |
+| r +---------------+------------------------------+-----------+ r |
 | a | Bottom dock (full width between rails):      |           | a |
 | i | Telemetry · Problems · Logs · Operations · … |           | i |
 | l |                                              |           | l |
@@ -41,7 +41,8 @@ area.
 - The left rail switches the model-builder panels (Explorer tabs: Model,
   Results, Live charts, Library and further tabs from `11-explorer-view.md`).
   The right rail switches the Inspector cards (Selection Inspector, 3D View
-  settings, History, Python script and further cards).
+  settings, Export for PNG images and 3D models, History, Python script and
+  further cards).
 - Each rail item is an icon button with an accessible name, a tooltip, an
   active indicator and an optional count badge. Clicking the active item
   collapses its panel and the viewport takes the space. The right panel width is
