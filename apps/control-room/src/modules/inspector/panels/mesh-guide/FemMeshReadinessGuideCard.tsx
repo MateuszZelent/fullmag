@@ -117,6 +117,24 @@ function FemMeshReadinessGuideCardInner({
       ) {
         kernel.layout?.setPanelVisible?.("right", true);
         kernel.selection?.set?.(action.selection, "inspector");
+        const targetTab = action.kind === "select-node" ? action.tab : undefined;
+        const targetRow =
+          action.focusRow ??
+          (action.kind === "focus-inspector-section" ? action.sectionId : undefined);
+        const inspectorControl = (
+          kernel as unknown as {
+            inspector?: {
+              setActiveTab?: (tab: string) => void;
+              focusRow?: (rowKey: string) => void;
+            };
+          }
+        ).inspector;
+        if (targetTab) {
+          inspectorControl?.setActiveTab?.(targetTab);
+        }
+        if (targetRow) {
+          inspectorControl?.focusRow?.(targetRow);
+        }
         onNavigate?.();
         return;
       }

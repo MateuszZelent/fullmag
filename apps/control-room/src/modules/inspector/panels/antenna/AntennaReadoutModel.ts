@@ -12,7 +12,7 @@ export interface AntennaReadoutRow {
 
 /** Display conversion only; authoring and runtime resources retain SI values. */
 export function formatAntennaParameter(value: unknown, unit = ""): string {
-  if (typeof value !== "number" || !Number.isFinite(value)) return `unavailable${unit ? ` ${unit}` : ""}`;
+  if (typeof value !== "number" || !Number.isFinite(value)) return "Not configured";
   if (unit === "Hz") return formatFrequencyHz(value);
   const magnitude = Math.abs(value);
   if (unit === "A" && magnitude >= 1e-3 && magnitude < 1) return formatValueWithUnit(value * 1e3, "mA");

@@ -77,8 +77,8 @@ export function MeshQualityGatesSection({
           {mixedCertificate.familyGates.map((gate) => (
             <div
               key={`${gate.family}:${gate.metric}`}
-              className="fm-mesh-detail-table__row"
-              data-status={gate.passed && gate.positiveJacobian ? "pass" : "fail"}
+              className="fm-mesh-detail-table__row fm-mesh-gate-row"
+              data-status={gate.status}
               role="row"
             >
               <span role="cell">{gate.family} · {gate.metric}</span>
