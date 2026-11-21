@@ -2,8 +2,8 @@ import { describe, expect, it } from "vitest";
 
 import type { PlanarFieldLayer, PlanarLayerState } from "@/modules/inspector/public";
 
-import { planarCompositionLayers, planarLayerPasses } from "./PlanarCompositionSurface";
-import { multisliceLayerProps, type PlanarMultisliceGridProps } from "./PlanarMultisliceGrid";
+import { planarCompositionLayers, planarLayerPasses } from "./PlanarCompositionSurface.model";
+import { multisliceLayerProps, type PlanarMultisliceGridProps } from "./PlanarMultisliceGrid.model";
 
 const masks: PlanarLayerState = {
   boundaries: false, bounds: false, contours: false, mesh: false, points: false,

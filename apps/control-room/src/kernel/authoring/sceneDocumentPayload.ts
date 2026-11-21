@@ -16,7 +16,8 @@ export function sceneDocumentPayload(scene: SceneResource): JsonObject {
   const source = scene as unknown as Record<string, unknown>;
   const payload: Record<string, unknown> = {};
   for (const field of SCENE_DOCUMENT_FIELDS) {
-    if (source[field] !== undefined) payload[field] = JSON.parse(JSON.stringify(source[field]));
+    const serializedField = JSON.stringify(source[field]);
+    if (serializedField !== undefined) payload[field] = JSON.parse(serializedField);
   }
   return payload as JsonObject;
 }

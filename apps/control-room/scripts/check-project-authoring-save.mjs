@@ -6,7 +6,31 @@ import vm from "node:vm";
 // Interpret production owners; no unit bundles or backend are compiled.
 const context = vm.createContext({ atob, btoa, Uint8Array, TextDecoder, TextEncoder, structuredClone,
   window: { __TAURI__: { core: { invoke: null } } } });
-const intoRealm = vm.runInContext("(value) => JSON.parse(JSON.stringify(value))", context);
+const intoRealm = vm.runInContext(`(value) => {
+  const seen = new WeakMap();
+  const copy = (source) => {
+    if (source === null || typeof source !== "object") return source;
+    if (seen.has(source)) return seen.get(source);
+    if (Array.isArray(source)) {
+      const target = [];
+      seen.set(source, target);
+      for (const item of source) target.push(copy(item));
+      return target;
+    }
+    const target = {};
+    seen.set(source, target);
+    for (const [key, item] of Object.entries(source)) {
+      Object.defineProperty(target, key, {
+        configurable: true,
+        enumerable: true,
+        value: copy(item),
+        writable: true,
+      });
+    }
+    return target;
+  };
+  return copy(value);
+}`, context);
 const load = (path, mode = "strip") => new vm.SourceTextModule(
   stripTypeScriptTypes(readFileSync(path, "utf8"), { mode }), { context });
 const validation = load("src/kernel/persistence/ProjectDocumentValidation.ts");
@@ -31,7 +55,7 @@ await bindingSource.link((specifier) => {
 await bindingSource.evaluate();
 const { ProjectDocumentController } = controllerSource.namespace;
 const { createProjectAuthoringSessionBinding } = bindingSource.namespace;
-const json = (value) => JSON.parse(JSON.stringify(value));
+const json = (value) => structuredClone(value);
 const resource = () => ({ archive_base64: "UEsDBA==", dirty: false, durability: "memory_only",
   migration: { can_write: true, migrated: false, preserved_paths: [], source_schema: "fullmag.project.v1",
     target_schema: "fullmag.project.v1", warnings: [] }, mode: { kind: "read_write" }, name: "Bound project",

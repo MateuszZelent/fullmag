@@ -24,7 +24,6 @@ use crate::types::{AppState, CurrentLiveRequestContext, SessionCommand, SessionS
 #[derive(Debug, Clone)]
 pub(crate) struct AcceptedLiveExecution {
     pub run_id: String,
-    pub step_id: String,
     pub selected_step_id: Option<String>,
 }
 
@@ -128,7 +127,6 @@ pub(crate) struct PreparedLiveAcceptedStudy {
 #[derive(Debug, Clone)]
 pub(crate) struct AcceptedLiveControlExecution {
     pub run_id: String,
-    pub affected_task_ids: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -148,33 +146,6 @@ enum LiveAcceptedSubmission {
         auto_run: bool,
         source_path: Option<PathBuf>,
     },
-}
-
-/// Route a v2 live compute command into the durable accepted-run pipeline.
-///
-/// `Ok(None)` preserves the native legacy CPU-v1 queue when this API is not
-/// paired with the Docker runtime service. Docker API-only always enters the
-/// accepted path; a missing profile is migrated through the pure application
-/// helper and published below before any RunIntent is committed.
-pub(crate) async fn submit_live_command(
-    state: &Arc<AppState>,
-    command: &SessionCommand,
-    context: &CurrentLiveRequestContext,
-    request_idempotency_key: Option<String>,
-) -> Result<Option<AcceptedLiveExecution>, ApiError> {
-    let scene_missing = state
-        .current_live_state
-        .read()
-        .await
-        .as_ref()
-        .is_some_and(|snapshot| snapshot.scene_document.is_none());
-    if scene_missing {
-        crate::get_or_load_current_live_scene_document_for_context(state, context).await?;
-    }
-    let _transition = state.current_live_session_transition.lock().await;
-    submit_live_command_with_transition(state, command, context, request_idempotency_key, None)
-        .await
-        .map(|accepted| accepted.map(|(execution, _)| execution))
 }
 
 /// Submit while the caller already owns the live transition fence. The
@@ -430,8 +401,9 @@ pub(crate) async fn submit_live_command_with_transition(
         ).await?;
         validate_live_scene_for_context(state, context, &prepared.scene).await?;
     }
-    let step_id = prepared.step_ids.first().cloned()
-        .ok_or_else(|| ApiError::internal("accepted live command has no materialized step"))?;
+    if prepared.step_ids.is_empty() {
+        return Err(ApiError::internal("accepted live command has no materialized step"));
+    }
     let mut current = state.current_live_state.write().await;
     let snapshot = current.as_mut()
         .ok_or_else(|| ApiError::not_found("no active local live workspace"))?;
@@ -470,7 +442,6 @@ pub(crate) async fn submit_live_command_with_transition(
     *snapshot = next;
     Ok(Some((AcceptedLiveExecution {
         run_id: accepted.run_id,
-        step_id,
         selected_step_id: prepared.selected_step_id,
     }, admission)))
 }
@@ -819,7 +790,7 @@ async fn release_accepted_live_study_with_request(
     // repository component, so pass a deterministic private binding scoped to
     // this exact run and public request instead of changing the public contract.
     let release_request_id = accepted_start_release_request_id(&run_id, request_id);
-    let released_steps = tokio::task::spawn_blocking(move || {
+    let _ = tokio::task::spawn_blocking(move || {
         let store = open_submit_store(&store_root)?;
         let intent = store
             .read_run_intent(typed_run_id.as_str())
@@ -913,10 +884,6 @@ async fn release_accepted_live_study_with_request(
     Ok(Some(AcceptedLiveExecution {
         run_id,
         selected_step_id: None,
-        step_id: released_steps
-            .first()
-            .cloned()
-            .ok_or_else(|| ApiError::internal("accepted startup release lost its first step"))?,
     }))
 }
 
@@ -1019,39 +986,6 @@ pub(crate) async fn submit_live_study_with_transition_with_asset_root(
     .await;
     crate::publish_current_live_realtime_batch_changed(state, &realtime_state, false, 0).await?;
     Ok(accepted)
-}
-
-/// Prepare a startup or live Study without publishing a durable RunIntent.
-///
-/// The caller may run this without the live transition fence.  It must invoke
-/// `validate_live_scene_for_context` and then commit the returned value while
-/// holding that fence.  This is the boundary that keeps Python/Gmsh and other
-/// preparation work out of the status/read-model critical section.
-pub(crate) async fn prepare_live_study_with_asset_root(
-    state: &Arc<AppState>,
-    context: &CurrentLiveRequestContext,
-    scene: fullmag_authoring::SceneDocument,
-    request_id: String,
-    source_sha256: String,
-    auto_run: bool,
-    asset_root: Option<PathBuf>,
-    source_script_path: Option<PathBuf>,
-) -> Result<PreparedLiveAcceptedStudy, ApiError> {
-    prepare_live_study_with_source_paths(
-        state,
-        context,
-        scene,
-        request_id,
-        source_sha256,
-        auto_run,
-        asset_root,
-        source_script_path.clone(),
-        source_script_path,
-        None,
-        None,
-        None,
-    )
-    .await
 }
 
 pub(crate) async fn prepare_live_study_with_asset_root_and_progress(
@@ -1428,7 +1362,7 @@ pub(crate) async fn submit_live_stop_with_transition(
     if reason.is_empty() {
         return Err(ApiError::bad_request("accepted Stop reason must not be empty"));
     }
-    let affected_task_ids = tokio::task::spawn_blocking(move || {
+    let _affected_task_ids = tokio::task::spawn_blocking(move || {
         let store = open_submit_store(&store_root)?;
         if targeted {
             ensure_live_run_belongs_to_session(&store, &run_id_for_worker, &session_id, session_epoch)?;
@@ -1458,10 +1392,7 @@ pub(crate) async fn submit_live_stop_with_transition(
     .await
     .map_err(|error| ApiError::internal(format!("accepted live Stop task failed: {error}")))??;
     crate::validate_current_live_request_context(state, context).await?;
-    Ok(AcceptedLiveControlExecution {
-        run_id,
-        affected_task_ids,
-    })
+    Ok(AcceptedLiveControlExecution { run_id })
 }
 
 fn ensure_live_run_belongs_to_session(

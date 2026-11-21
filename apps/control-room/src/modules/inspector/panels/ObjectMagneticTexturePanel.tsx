@@ -763,8 +763,10 @@ function MagneticTexturePreviewAction({
     } catch (failure) {
       if (!abort.signal.aborted) setError(errorMessage(failure));
     } finally {
-      if (operation.current === abort) operation.current = null;
-      if (!abort.signal.aborted) setLoading(false);
+      if (operation.current === abort) {
+        operation.current = null;
+      }
+      setLoading(operation.current !== null);
     }
   }
 

@@ -36,34 +36,6 @@ export function initializeSelectedSeriesIdsForUnconfiguredScope(
       );
 }
 
-export function isTableChartSeriesId(seriesId: string): boolean {
-  return seriesId.startsWith("data.table:");
-}
-
-export function isEnergyChartSeriesId(seriesId: string): boolean {
-  return seriesId.startsWith("simulation.solver.energies:");
-}
-
-export function isFrequencyChartSeriesId(seriesId: string): boolean {
-  return seriesId.startsWith("analysis.frequency-domain:");
-}
-
-export type ChartSeriesSelectionScope = "table" | "energy" | "frequency";
-
-export function chartSeriesIdBelongsToScope(
-  scope: ChartSeriesSelectionScope,
-  seriesId: string,
-): boolean {
-  switch (scope) {
-    case "table":
-      return isTableChartSeriesId(seriesId);
-    case "energy":
-      return isEnergyChartSeriesId(seriesId);
-    case "frequency":
-      return isFrequencyChartSeriesId(seriesId);
-  }
-}
-
 export function toggleSelectedSeriesId(
   selectedSeriesIds: readonly string[],
   seriesId: string,

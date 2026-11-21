@@ -388,6 +388,7 @@ pub(crate) enum LocalFilesystemKind {
     LinuxTmpfs,
     LinuxOverlay,
     DockerDesktopWindowsFolder,
+    #[cfg(windows)]
     WindowsLocal,
 }
 

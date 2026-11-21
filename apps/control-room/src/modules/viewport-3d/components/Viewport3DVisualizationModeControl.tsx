@@ -2,24 +2,12 @@
 
 import { SegmentedControl } from "@/shared/ui/SegmentedControl";
 
-import { viewport3dStore, useViewport3DCommandState } from "../viewport3dStore";
+import { selectViewport3DRenderMode, useViewport3DCommandState } from "../viewport3dStore";
 
 const VISUALIZATION_MODE_OPTIONS = [
   { label: "Scientific", value: "scientific" },
   { label: "Presentation", value: "presentation" },
 ] as const;
-
-/** One route for every mode switch (settings, Inspector and the viewport toolbar). */
-export function selectViewport3DRenderMode(
-  current: "scientific" | "presentation",
-  renderMode: "scientific" | "presentation",
-): void {
-  if (renderMode === current) return;
-  viewport3dStore.setAppearance({ renderMode });
-  if (renderMode === "presentation") {
-    viewport3dStore.setEffectAmbientOcclusion(true);
-  }
-}
 
 export function Viewport3DVisualizationModeControl() {
   const { appearance } = useViewport3DCommandState();

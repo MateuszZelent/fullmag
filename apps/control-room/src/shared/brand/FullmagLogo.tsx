@@ -57,7 +57,7 @@ function FullmagLogo({
       {/* ── Zoom Modal Render ── */}
       {zoomed && mounted && createPortal(
         <div
-          className="fixed inset-0 z-[99999] p-4 sm:p-8 flex items-center justify-center bg-background/90 backdrop-blur-xl cursor-zoom-out animate-in fade-in duration-200"
+          className="fixed inset-0 z-[99999] p-4 sm:p-8 flex items-center justify-center bg-background/90 backdrop-blur-xl cursor-zoom-out transition-opacity animate-in fade-in duration-200"
           aria-label="Close Fullmag logo preview"
           role="button"
           tabIndex={0}
@@ -72,7 +72,7 @@ function FullmagLogo({
           }}
         >
           <div
-            className="relative flex items-center justify-center w-full h-full max-w-[90vw] max-h-[90vh] sm:max-w-[70vw] sm:max-h-[70vh] p-8 sm:p-16 rounded-3xl bg-black/20 shadow-2xl animate-in zoom-in-95 duration-300 cursor-default"
+            className="relative flex items-center justify-center w-full h-full max-w-[90vw] max-h-[90vh] sm:max-w-[70vw] sm:max-h-[70vh] p-8 sm:p-16 rounded-3xl bg-black/20 shadow-2xl transition-transform animate-in zoom-in-95 duration-300 cursor-default"
           >
             <div className="absolute inset-0 bg-primary/10 rounded-3xl blur-3xl pointer-events-none" />
             <FullmagLogoVector

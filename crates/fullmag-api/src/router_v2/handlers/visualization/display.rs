@@ -2536,6 +2536,7 @@ fn set_observation_quantities(
     true
 }
 
+#[cfg(test)]
 fn apply_observation_quantities(
     selection: &mut CurrentDisplaySelection,
     observation_quantities: Vec<String>,

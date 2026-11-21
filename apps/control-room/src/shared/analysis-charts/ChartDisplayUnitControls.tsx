@@ -19,9 +19,10 @@ export function ChartDisplayUnitControls({
     items.push(item);
     groupsByUnit.set(item.unit, items);
   }
-  const groups = [...groupsByUnit.entries()]
-    .map(([unit, items]) => ({ items, options: chartDisplayUnitOptions(unit), unit }))
-    .filter((group) => group.options.length > 1);
+  const groups = Array.from(groupsByUnit).flatMap(([unit, items]) => {
+    const options = chartDisplayUnitOptions(unit);
+    return options.length > 1 ? [{ items, options, unit }] : [];
+  });
   if (groups.length === 0) return null;
   return <div role="group" className="fm-chart-display-units" aria-label="Display units">
     {groups.map((group) => {

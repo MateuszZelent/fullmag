@@ -5,7 +5,7 @@ import type { MaterializedDatasetResource } from "@/kernel/api/apiTypes";
 import { quantityDisplayName } from "@/kernel/api/quantityIds";
 import { resolveSavedFieldViewportMetadataEligibility } from "@/kernel/resources/savedFieldViewportResources";
 import { useMaterializedDatasetResource } from "@/kernel/resources/solutionSetResources";
-import { selectionRefEquals, type PinnedMaterializedDatasetSelectionRef } from "@/kernel/selection/selectionTypes";
+
 import { useObjectVisualizationController, useSavedFieldPresentation } from "@/kernel/visualization/useObjectVisualization";
 import type { SavedFieldPresentation, VisualizationColorMode, VisualizationTargetPatch } from "@/kernel/visualization/ObjectVisualizationController";
 import { Button } from "@/shared/ui/Button";
@@ -160,8 +160,4 @@ export function SavedFieldVisualizationPanel({ presentation, dataset, error = nu
         ? Number(settings.shaderVisible) + Number(settings.wireframeVisible) + Number(vector && settings.vectorsVisible) : 0}
     />
   </div>;
-}
-
-export function savedFieldPresentationForDataset(presentation: SavedFieldPresentation | null, ref: PinnedMaterializedDatasetSelectionRef): SavedFieldPresentation | null {
-  return presentation && selectionRefEquals(presentation.selection, ref) ? presentation : null;
 }

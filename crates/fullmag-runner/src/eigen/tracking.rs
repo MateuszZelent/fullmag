@@ -213,6 +213,7 @@ pub(crate) fn mass_weighted_overlap_outcome(
     }
 }
 
+#[cfg(test)]
 fn complex_overlap(a: &[Complex64], b: &[Complex64]) -> f64 {
     normalized_complex_overlap(a, b).unwrap_or(0.0)
 }
@@ -301,6 +302,7 @@ fn modal_overlap_views(prev: TrackingModeView<'_>, current: TrackingModeView<'_>
     }
 }
 
+#[cfg(test)]
 fn modal_overlap(prev: &SingleKModeResult, current: &SingleKModeResult) -> Option<f64> {
     modal_overlap_views(mode_view(prev), mode_view(current))
 }
@@ -418,6 +420,7 @@ fn tracking_edge_metrics_views(
     score.is_finite().then(|| (score.clamp(0.0, 1.0), overlap))
 }
 
+#[cfg(test)]
 fn tracking_edge_metrics(
     prev: &SingleKModeResult,
     current: &SingleKModeResult,
@@ -426,6 +429,7 @@ fn tracking_edge_metrics(
     tracking_edge_metrics_views(mode_view(prev), mode_view(current), cfg)
 }
 
+#[cfg(test)]
 fn tracking_edge_score(
     prev: &SingleKModeResult,
     current: &SingleKModeResult,
@@ -434,6 +438,7 @@ fn tracking_edge_score(
     tracking_edge_metrics(prev, current, cfg).map(|(score, _)| score)
 }
 
+#[cfg(test)]
 fn edge_score(prev: &SingleKModeResult, current: &SingleKModeResult, cfg: &ModeTrackingIR) -> f64 {
     tracking_edge_score(prev, current, cfg).unwrap_or(0.0)
 }

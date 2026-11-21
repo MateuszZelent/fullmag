@@ -7,14 +7,9 @@ import { RUN_NEEDS_DESKTOP } from "../model/scriptRun";
 import type { WorkspaceItemDetailState } from "../model/useWorkspaceItems";
 import { NEEDS_DESKTOP } from "../model/workspaceSource";
 
-import {
-  READ_ONLY_REASON,
-  ScriptInspector,
-  scriptChecks,
-  scriptFacts,
-  scriptMenus,
-  type ScriptInspectorProps,
-} from "./ScriptInspector";
+import { ScriptInspector, type ScriptInspectorProps } from "./ScriptInspector";
+import { READ_ONLY_REASON, scriptChecks, scriptMenus } from "./ScriptInspector.presentation";
+import { scriptFacts } from "./ScriptInspector.model";
 import { parseApiItemDetail, type ScriptDetail } from "../model/workspaceApiTypes";
 
 const item = script({

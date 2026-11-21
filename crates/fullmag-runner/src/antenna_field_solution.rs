@@ -11,7 +11,9 @@ pub(crate) mod surface_rt0_evidence_v1;
 pub(crate) mod closed_loop_identity_v2;
 pub(crate) mod closed_loop_balance_v2;
 pub use direct_quadrature::AntennaQuadratureEvidenceRef;
-use direct_quadrature::{DirectOerstedSnapshot, DirectQuadratureEvidence, EVIDENCE_SCHEMA};
+use direct_quadrature::{DirectQuadratureEvidence, EVIDENCE_SCHEMA};
+#[cfg(any(feature = "fem-native", test))]
+use direct_quadrature::DirectOerstedSnapshot;
 use crate::types::{AuxiliaryArtifact, RunError};
 use fullmag_ir::{
     AntennaFieldSolveStageIR, AntennaSpectrumRequestIR, AntennaTargetProjectionRefIR, FdmPlanIR,
@@ -43,6 +45,7 @@ pub struct AntennaDependencySignatures {
     pub sampling: String,
 }
 
+#[cfg(any(feature = "fem-native", test))]
 #[derive(Debug, Clone)]
 pub(crate) struct AntennaFieldBasisInput {
     pub port_mode_id: String,
@@ -56,6 +59,7 @@ pub(crate) struct AntennaFieldBasisInput {
     pub direct_quadrature_snapshot: Option<DirectOerstedSnapshot>,
 }
 
+#[cfg(any(feature = "fem-native", test))]
 #[derive(Debug, Clone)]
 pub(crate) struct AntennaFieldSolutionInput {
     pub asset_id: String,
@@ -116,6 +120,7 @@ fn validate_sample_carrier(carrier: Option<&AntennaSampleCarrier>) -> Result<(),
     Ok(())
 }
 
+#[cfg(any(feature = "fem-native", test))]
 #[derive(Debug, Serialize)]
 struct BinaryFieldRef<'a> {
     path: &'a str,
@@ -126,6 +131,7 @@ struct BinaryFieldRef<'a> {
     value_count: usize,
 }
 
+#[cfg(any(feature = "fem-native", test))]
 #[derive(Debug, Serialize)]
 struct BasisManifest<'a> {
     port_mode_id: &'a str,
@@ -142,6 +148,7 @@ struct BasisManifest<'a> {
     quadrature_evidence: Option<&'a AntennaQuadratureEvidenceRef>,
 }
 
+#[cfg(any(feature = "fem-native", test))]
 #[derive(Debug, Serialize)]
 struct SolutionManifest<'a> {
     schema_version: &'static str,
@@ -779,6 +786,7 @@ pub(crate) fn verify_antenna_field_solution_signatures_with_revisions(
     Ok(())
 }
 
+#[cfg(any(feature = "fem-native", test))]
 fn encode_f64(values: impl IntoIterator<Item = f64>) -> Vec<u8> {
     let iterator = values.into_iter();
     let (lower, _) = iterator.size_hint();
@@ -789,6 +797,7 @@ fn encode_f64(values: impl IntoIterator<Item = f64>) -> Vec<u8> {
     bytes
 }
 
+#[cfg(any(feature = "fem-native", test))]
 fn encode_scaled_basis_f64(
     values: impl IntoIterator<Item = f64>,
     scale: f64,
@@ -812,6 +821,7 @@ fn encode_scaled_basis_f64(
     Ok(bytes)
 }
 
+#[cfg(any(feature = "fem-native", test))]
 fn encode_u32(values: impl IntoIterator<Item = u32>) -> Vec<u8> {
     let iterator = values.into_iter();
     let (lower, _) = iterator.size_hint();
@@ -1818,6 +1828,7 @@ fn fdm_antenna_projection_mask(
     Ok(Some(mask))
 }
 
+#[cfg(any(feature = "fem-native", test))]
 pub(crate) fn build_antenna_field_solution_artifacts(
     input: &AntennaFieldSolutionInput,
 ) -> Result<Vec<AuxiliaryArtifact>, RunError> {

@@ -55,11 +55,15 @@ export function savedStudyGeometry(
     { length: state.sample_count }, (_, node) => Number(savedSupportNodeIsActive(support, node)),
   ) : null;
   const layers = geometry.kind === "fdm_multilayer" ? geometry.layers : [{ ...geometry, value_offset: 0 }];
-  const grids = layers.map((layer) => savedGridGeometry({
-    grid_cells_xyz: layer.grid_cells,
-    cell_size_m: layer.cell_size_m,
-    origin_m: layer.origin_m,
-  }, layer.value_offset, activeNodes)).filter((grid) => grid.count > 0);
+  const grids: Array<ReturnType<typeof savedGridGeometry>> = [];
+  for (const layer of layers) {
+    const grid = savedGridGeometry({
+      grid_cells_xyz: layer.grid_cells,
+      cell_size_m: layer.cell_size_m,
+      origin_m: layer.origin_m,
+    }, layer.value_offset, activeNodes);
+    if (grid.count > 0) grids.push(grid);
+  }
   if (grids.length === 0) throw new Error("The saved Study grid has no active magnetic cells.");
   const low: [number, number, number] = [Infinity, Infinity, Infinity];
   const high: [number, number, number] = [-Infinity, -Infinity, -Infinity];

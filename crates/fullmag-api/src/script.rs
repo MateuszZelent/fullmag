@@ -478,6 +478,7 @@ fn rewrite_script_via_python_helper_with_policy(
     })
 }
 
+#[cfg(test)]
 pub(crate) fn render_scene_document_via_python_helper(
     repo_root: &Path,
     workspace_root: &Path,
@@ -900,6 +901,7 @@ fn gpu_bb_preparation_study(
 /// application Study materializer. Geometry/lead assets are materialized only
 /// for this accepted-execution boundary; no profile or host capability is
 /// inferred here.
+#[cfg(test)]
 pub(crate) fn scene_document_to_study_execution_inputs(
     repo_root: &Path,
     workspace_root: &Path,
@@ -921,6 +923,7 @@ pub(crate) fn scene_document_to_study_execution_inputs(
 /// assets from the immutable script's parent while keeping generated files in
 /// the writable workspace root. `None` preserves the existing workspace-root
 /// fallback for callers that do not have a script source root.
+#[cfg(test)]
 pub(crate) fn scene_document_to_study_execution_inputs_with_asset_root(
     repo_root: &Path,
     workspace_root: &Path,
@@ -1067,6 +1070,7 @@ pub(crate) fn try_reuse_live_geometry_for_study(
 
 /// Capture actual authored stage IR/actions through the same Python helper as
 /// script execution. This does not bind profiles or create execution readiness.
+#[cfg(test)]
 pub(crate) fn scene_document_to_authored_script_config(
     repo_root: &Path,
     workspace_root: &Path,
@@ -1085,6 +1089,7 @@ pub(crate) fn scene_document_to_authored_script_config(
 /// Project actual authored stages through the shared canonical producer.
 /// Pure output-policy configuration is sufficient here: writer availability,
 /// profile binding, state-port compilation and admission remain separate gates.
+#[cfg(test)]
 pub(crate) fn scene_document_to_authored_stages(
     repo_root: &Path,
     workspace_root: &Path,
@@ -1137,6 +1142,7 @@ fn materialize_scene_document_stages(
 /// Explicit execution capture with canonical geometry and lead-input producers.
 /// This returns the complete authored graph; selecting a source step, binding
 /// profiles and proving mesh/solver readiness remain caller responsibilities.
+#[cfg(test)]
 pub(crate) fn scene_document_to_prepared_script_config(
     repo_root: &Path,
     workspace_root: &Path,
@@ -1248,6 +1254,7 @@ impl SceneCaptureKind {
     }
 }
 
+#[cfg(test)]
 fn capture_authored_scene<T: serde::de::DeserializeOwned>(
     repo_root: &Path,
     workspace_root: &Path,
@@ -1953,7 +1960,7 @@ fn bounded_helper_log_metadata(path: &Path, stream: &str) -> Result<u64, ApiErro
 
 fn read_bounded_helper_log_with_limit(path: &Path, maximum: u64) -> Result<Vec<u8>, ApiError> {
     bounded_helper_log_metadata(path, "captured")?;
-    let mut file = File::open(path).map_err(|error| {
+    let file = File::open(path).map_err(|error| {
         ApiError::internal(format!("failed to read bounded Python helper log: {error}"))
     })?;
     let mut bytes = Vec::new();

@@ -1,6 +1,7 @@
 use fullmag_fem_sys as ffi;
 use fullmag_ir::{StageCompletionIR, StageMetricKind, StageStopReason};
 
+#[cfg(test)]
 use crate::fem::execution_receipt::{
     validate_fem_gpu_performance_snapshot, FemGpuPerformanceSnapshotSummary,
     FemGpuPerformanceSnapshotValidationError, FEM_GPU_PERFORMANCE_SNAPSHOT_ABI_V1,
@@ -44,10 +45,6 @@ pub(crate) fn runtime_build_info() -> Result<RuntimeBuildInfo, RunError> {
         });
     }
     RuntimeBuildInfo::from_ffi(info)
-}
-
-pub(crate) fn strict_gpu_mfem_version() -> Result<String, RunError> {
-    runtime_build_info().map(|info| info.mfem_version)
 }
 
 pub(crate) fn strict_gpu_runtime_build_info() -> Result<RuntimeBuildInfo, RunError> {
@@ -600,12 +597,14 @@ impl NativeFemGpuExecutionReceipt {
 /// Validated native performance evidence.  The raw append-only ABI is kept
 /// alongside the compact summary so diagnostics can expose every counter
 /// without inventing a second counter vocabulary in Rust.
+#[cfg(test)]
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct NativeFemGpuPerformanceSnapshot {
     pub(crate) summary: FemGpuPerformanceSnapshotSummary,
     pub(crate) raw: ffi::fullmag_fem_gpu_performance_snapshot_v1,
 }
 
+#[cfg(test)]
 impl NativeFemGpuPerformanceSnapshot {
     pub(crate) fn from_ffi(
         snapshot: ffi::fullmag_fem_gpu_performance_snapshot_v1,

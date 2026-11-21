@@ -1,10 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import {
-  REACT_RENDER_PROFILE_MEASURE_PREFIX,
-  recordReactRenderMeasure,
-  shouldEnableReactRenderProfiler,
-} from "./reactRenderProfiler";
+import { REACT_RENDER_PROFILE_MEASURE_PREFIX, recordReactRenderMeasure, shouldEnableReactRenderProfiler } from "./reactRenderProfiler.model";
 
 describe("react render profiler", () => {
   it("enables profiling from the smoke global, URL flag, or local storage", () => {

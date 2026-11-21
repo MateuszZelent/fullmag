@@ -5,12 +5,7 @@ import { type Ref, useEffect, useMemo, useRef, useState } from "react";
 import { Button } from "@/shared/ui/Button";
 
 import type { MeshJobsLogRow } from "./meshJobsModel";
-
-export interface MeshBuildLogConsoleFilters {
-  level: "all" | "debug" | "error" | "info" | "warn";
-  query: string;
-  source: "all" | "gmsh" | "mesh";
-}
+import { type MeshBuildLogConsoleFilters, filterMeshBuildLogRows, serializeMeshBuildLogRows, isLogScrolledToBottom } from "./MeshBuildLogConsole.model";
 
 type MeshBuildLogCopyStatus = "copied" | "failed" | "idle";
 
@@ -30,53 +25,6 @@ const DEFAULT_FILTERS: MeshBuildLogConsoleFilters = {
   query: "",
   source: "all",
 };
-
-function rowSourceMatches(row: MeshJobsLogRow, source: MeshBuildLogConsoleFilters["source"]): boolean {
-  if (source === "all") return true;
-  if (row.source?.toLowerCase() === source) return true;
-  const message = row.message.toLowerCase();
-  if (source === "gmsh") return message.includes("gmsh");
-  return (
-    message.includes("mesh") ||
-    message.includes("meshing") ||
-    message.includes("remesh")
-  );
-}
-
-export function filterMeshBuildLogRows(
-  rows: readonly MeshJobsLogRow[],
-  filters: MeshBuildLogConsoleFilters,
-): MeshJobsLogRow[] {
-  const query = filters.query.trim().toLowerCase();
-  return rows.filter((row) => {
-    if (filters.level !== "all" && row.level.toLowerCase() !== filters.level) {
-      return false;
-    }
-    if (!rowSourceMatches(row, filters.source)) return false;
-    return query.length === 0 || row.message.toLowerCase().includes(query);
-  });
-}
-
-export function serializeMeshBuildLogRows(rows: readonly MeshJobsLogRow[]): string {
-  return rows
-    .map((row) => {
-      const metadata = [row.source, row.phaseId, row.commandId]
-        .filter((value) => value && value.trim().length > 0)
-        .join("/");
-      const suffix = metadata.length > 0 ? ` (${metadata})` : "";
-      return `[${row.time}] ${row.level.toUpperCase()}${suffix} ${row.message}`;
-    })
-    .join("\n");
-}
-
-export function isLogScrolledToBottom(
-  element: Pick<HTMLElement, "clientHeight" | "scrollHeight" | "scrollTop">,
-  tolerancePx = 4,
-): boolean {
-  return (
-    element.scrollHeight - element.scrollTop - element.clientHeight <= tolerancePx
-  );
-}
 
 export function MeshBuildLogConsole({ rows }: { rows: MeshJobsLogRow[] }) {
   const [filters, setFilters] =
@@ -201,26 +149,28 @@ export function MeshBuildLogConsoleView({
         <div
           ref={logRef}
           className="fm-footer-diagnostics__log"
-          role="table"
           onScroll={(event) => onLogScroll?.(event.currentTarget)}
         >
-          {rows.map((entry) => (
-            <div
-              className="fm-footer-diagnostics__log-row"
-              role="row"
-              key={meshBuildLogRowKey(entry)}
-            >
-              <time role="cell">{entry.time}</time>
-              <span role="cell" data-level={entry.level}>
-                {entry.level}
-              </span>
-              <span role="cell">
-                {[entry.source, entry.phaseId].filter(Boolean).join(" / ") ||
-                  "-"}
-              </span>
-              <span role="cell">{entry.message}</span>
-            </div>
-          ))}
+          <table aria-label="Mesh build log entries" className="fm-footer-diagnostics__log-table">
+            <tbody>
+              {rows.map((entry) => (
+                <tr
+                  className="fm-footer-diagnostics__log-row"
+                  key={meshBuildLogRowKey(entry)}
+                >
+                  <td><time>{entry.time}</time></td>
+                  <td data-level={entry.level}>
+                    {entry.level}
+                  </td>
+                  <td>
+                    {[entry.source, entry.phaseId].filter(Boolean).join(" / ") ||
+                      "-"}
+                  </td>
+                  <td>{entry.message}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
         </div>
       ) : (
         <div className="fm-footer__empty" role="status">

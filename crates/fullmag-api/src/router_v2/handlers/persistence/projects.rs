@@ -2707,7 +2707,7 @@ fn read_generated_source(path: &FsPath) -> Result<Vec<u8>, ApiError> {
             "canonical source output is not a bounded regular file",
         ));
     }
-    let mut file = File::open(path).map_err(|error| {
+    let file = File::open(path).map_err(|error| {
         ApiError::internal(format!("failed to read canonical source output: {error}"))
     })?;
     let mut bytes = Vec::with_capacity(metadata.len() as usize);
