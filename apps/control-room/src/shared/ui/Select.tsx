@@ -33,7 +33,7 @@ export const SelectTrigger = React.forwardRef<
   >
     {children}
     <SelectPrimitive.Icon asChild>
-      <ChevronDown size={14} className="opacity-50" aria-hidden="true" />
+      <ChevronDown size={14} className="shrink-0 text-fm-muted" aria-hidden="true" />
     </SelectPrimitive.Icon>
   </SelectPrimitive.Trigger>
 ));

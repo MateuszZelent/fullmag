@@ -9,7 +9,7 @@ export function Checkbox({
   return (
     <input
       className={cn(
-        "fm-checkbox size-4 shrink-0 rounded-fm-control border border-fm-border bg-fm-canvas accent-fm-accent outline-none",
+        "fm-checkbox size-4 shrink-0 rounded-fm-control border border-fm-control-border bg-fm-field accent-fm-accent outline-none",
         "focus-visible:ring-2 focus-visible:ring-fm-accent disabled:cursor-not-allowed disabled:opacity-100",
         className,
       )}

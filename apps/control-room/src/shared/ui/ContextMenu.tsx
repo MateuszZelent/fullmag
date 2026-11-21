@@ -54,6 +54,7 @@ function ContextMenuSubContent({
     <ContextMenuPrimitive.SubContent
       ref={ref}
       collisionPadding={collisionPadding}
+      data-slot="context-menu-sub-content"
       className={cn("fm-context-menu-content", className)}
       {...props}
     />
@@ -72,6 +73,7 @@ function ContextMenuContent({
       <ContextMenuPrimitive.Content
         ref={ref}
         collisionPadding={collisionPadding}
+        data-slot="context-menu-content"
         className={cn("fm-context-menu-content", className)}
         {...props}
       />

@@ -20,6 +20,7 @@ function SheetOverlay({
     <DialogPrimitive.Overlay
       ref={ref}
       className={cn("fm-sheet__overlay", className)}
+      data-slot="sheet-overlay"
       {...props}
     />
   );
@@ -46,6 +47,7 @@ function SheetContent({
       <DialogPrimitive.Content
         ref={ref}
         className={cn("fm-sheet__content", `fm-sheet__content--${side}`, className)}
+        data-slot="sheet-content"
         {...props}
       >
         {children}

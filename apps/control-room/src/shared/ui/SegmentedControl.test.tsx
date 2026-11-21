@@ -33,7 +33,7 @@ describe("SegmentedControl", () => {
     expect(html).toContain('data-slot="segmented-control"');
     expect(html).toContain('data-slot="segmented-control-item"');
     expect(html).toContain("rounded-fm-pill");
-    expect(html).toContain("border-fm-subtle");
+    expect(html).toContain("border-fm-control-border");
     // Recessed track, raised selection; the selection is no longer an accent fill.
     expect(html).toContain("bg-fm-field");
     expect(html).toContain("bg-fm-raised-selection");
@@ -137,7 +137,7 @@ describe("SegmentedControl", () => {
     );
 
     expect(html).toContain('aria-label="Shaded plus wireframe"');
-    expect(html).toContain('title="Shaded plus wireframe"');
+    expect(html).not.toContain('title=');
     expect(html).toContain(">Shaded+</button>");
   });
 });
