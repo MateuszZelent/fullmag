@@ -5350,8 +5350,22 @@ mod tests {
         let exported: serde_json::Value =
             serde_json::from_slice(&output.stdout).expect("run-config JSON");
         let stage_ir = exported["stages"][0]["ir"].clone();
-        let problem: ProblemIR =
+        let mut problem: ProblemIR =
             serde_json::from_value(stage_ir).expect("public example ProblemIR");
+        // Run-config export stores one common mesh at the root and compacts
+        // equal per-stage geometry_assets to null. The canonical script-stage
+        // materializer restores this shared asset before planning.
+        if problem.geometry_assets.is_none() {
+            let shared_geometry_assets = &exported["shared_geometry_assets"];
+            assert!(
+                !shared_geometry_assets.is_null(),
+                "public example run config must provide shared FEM geometry assets"
+            );
+            problem.geometry_assets = Some(
+                serde_json::from_value(shared_geometry_assets.clone())
+                    .expect("canonical shared geometry assets"),
+            );
+        }
         // Keep geometry generation enabled: bootstrap-rust installs Gmsh, and
         // the example's actual shared-domain mesh must reach the planner.
         let domain_mesh = problem
