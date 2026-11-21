@@ -860,6 +860,39 @@ describe("ResourceRuntimeStore", () => {
     }
   });
 
+  it("keeps a cold field in loading state while retrying a transient domain update", async () => {
+    vi.useFakeTimers();
+    try {
+      const store = new ResourceRuntimeStore<string>();
+      const load = vi.fn()
+        .mockRejectedValueOnce(Object.assign(new Error("field domain changed"), {
+          code: "field_domain_changed",
+          status: 409,
+        }))
+        .mockResolvedValue("ready");
+      const resourceKey = "data/fields/H_ext/samples/vector?scope_kind=airbox";
+
+      await store.ensureLoad({
+        externalRevision: "domain-1",
+        load,
+        resourceKey,
+        retryPolicy: {
+          deadlineMs: 1000,
+          maxAttempts: 2,
+          retryAfterMs: 50,
+          keepLoadingWhileRetrying: true,
+          retryableConflictReasonCodes: ["field_domain_changed"],
+        },
+      });
+
+      expect(store.getSnapshot(resourceKey)).toMatchObject({ status: "loading", error: null });
+      await vi.advanceTimersByTimeAsync(50);
+      expect(store.getSnapshot(resourceKey)).toMatchObject({ status: "ready", data: "ready" });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("does not retry a persistent conflict and keeps the last-good data", async () => {
     vi.useFakeTimers();
     try {

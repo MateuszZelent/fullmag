@@ -26,6 +26,7 @@ import { sampleFdmSpatialCellIndices } from "@/shared/domain/mesh/fdmDisplaySamp
 import {
   buildAnimatedArrowMeshesAndTracks,
   buildMergedStaticArrowGeometry,
+  buildRenderedStaticArrowGeometry,
   computeAutoArrowBaseLengthM,
   samplePointIndicesSpatially,
 } from "./export3dArrowGeometry";
@@ -1581,8 +1582,46 @@ export async function buildExport3DGltf(
         }
       }
 
-      // 3. 3D Vector Arrows
-      if (includeVectors && field) {
+      function appendStaticArrows(
+        built: ReturnType<typeof buildMergedStaticArrowGeometry>,
+        arrowOpacity: number,
+      ) {
+        if (!built) return;
+        const arrowMaterial = createSurfaceMaterial({
+          materialStyle,
+          opacity: arrowOpacity,
+          vertexColors: true,
+        });
+        disposables.add(built.geometry);
+        disposables.add(arrowMaterial);
+        usedMaterialSet.add(arrowMaterial);
+
+        const arrowMesh = new Mesh(built.geometry, arrowMaterial);
+        arrowMesh.name = sanitizeGlTfNodeName(
+          `${target.id}_vectors`,
+          usedNodeNames,
+          "vectors",
+        );
+        arrowMesh.userData = {
+          fullmag: sanitizeJsonExtrasValue({
+            role: "vectors_static",
+            object_id: target.id,
+            arrow_count: built.arrowCount,
+            quantity_id: field?.quantityId ?? null,
+          }),
+        };
+        targetGroup.add(arrowMesh);
+        totalMeshCount += 1;
+        totalArrowCount += built.arrowCount;
+      }
+
+      // The static viewport export already has sampled and colored arrows.
+      if (includeVectors && animationMode === "static" && target.renderedVectors) {
+        appendStaticArrows(
+          buildRenderedStaticArrowGeometry(target.renderedVectors, coordinateTransform),
+          target.renderedVectors.opacity,
+        );
+      } else if (includeVectors && field) {
         if (field.componentCount !== 3) {
           warnings.push(
             `Target "${target.id}" field "${field.quantityId}" is scalar (1-component); vector arrows omitted.`,
@@ -1646,34 +1685,7 @@ export async function buildExport3DGltf(
                 colorRange: vecColorRange,
                 monochromeColor,
               });
-              if (built) {
-                const arrowMaterial = createSurfaceMaterial({
-                  materialStyle,
-                  opacity: targetOpacity,
-                  vertexColors: true,
-                });
-                disposables.add(built.geometry);
-                disposables.add(arrowMaterial);
-                usedMaterialSet.add(arrowMaterial);
-
-                const arrowMesh = new Mesh(built.geometry, arrowMaterial);
-                arrowMesh.name = sanitizeGlTfNodeName(
-                  `${target.id}_vectors`,
-                  usedNodeNames,
-                  "vectors",
-                );
-                arrowMesh.userData = {
-                  fullmag: sanitizeJsonExtrasValue({
-                    role: "vectors_static",
-                    object_id: target.id,
-                    arrow_count: built.arrowCount,
-                    quantity_id: field.quantityId,
-                  }),
-                };
-                targetGroup.add(arrowMesh);
-                totalMeshCount += 1;
-                totalArrowCount += built.arrowCount;
-              }
+              appendStaticArrows(built, targetOpacity);
             }
           } else {
             // Smooth 60fps animated 3D arrows sharing ONE unit arrow BufferGeometry

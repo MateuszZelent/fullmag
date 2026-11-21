@@ -100,6 +100,7 @@ export function summarizeExport3DCapabilities(
       }
     }
 
+    if (target.renderedVectors?.segmentsM.length) hasVectorField = true;
     const field = target.field;
     if (field) {
       if (field.componentCount === 3) hasVectorField = true;
