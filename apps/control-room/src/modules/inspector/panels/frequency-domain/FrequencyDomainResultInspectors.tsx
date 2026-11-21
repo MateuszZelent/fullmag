@@ -7,6 +7,7 @@
  * generic fallback.
  */
 
+import { modalResultModeNodeId } from "@/shared/domain/analysis/modalResultNodeIdentity";
 import { EmptyState } from "@/shared/ui/EmptyState";
 import { keyedOccurrences } from "@/shared/utils/keyedOccurrences";
 import type { InspectorPanelProps } from "../../inspectorTypes";
@@ -17,6 +18,7 @@ import { StudyProgressBar } from "../StudyProgressBar";
 import { Activity, Eye } from "lucide-react";
 import { createCommandContext } from "@/kernel/commands/commandContext";
 import { useKernel } from "@/kernel/KernelContext";
+import { useRenderableAnalysisFieldOverlay } from "@/kernel/visualization/AnalysisFieldOverlayController";
 import {
   ANALYSIS_FREQUENCY_DOMAIN_EIGEN_DISPERSION_PATH,
   ANALYSIS_FREQUENCY_DOMAIN_EIGEN_SPECTRUM_V2_PATH,
@@ -29,6 +31,7 @@ import { useFrequencyDomainManifestResource } from "@/kernel/resources/studyRunt
 import {
   buildEigenBranchSelectionRef,
   buildEigenDispersionPointSelectionRef,
+  buildEigenModeSelectionRef,
   buildFrequencyResponsePointSelectionRef,
   eigenModeFieldAvailable,
   frequencyDomainManifestPayload,
@@ -49,10 +52,9 @@ import {
   FrequencyDomainSpectrumChart,
 } from "../FrequencyDomainCharts";
 import {
+  EigenModeBrowser,
   FrequencyDomainBranchTable,
   FrequencyDomainFmrPeakTable,
-  FrequencyDomainModeTable,
-  type FrequencyDomainModeTableAction,
 } from "../FrequencyDomainTables";
 import { type FrequencyDomainCalculationModeRow } from "../frequencyDomainInspectorModel";
 import { EigenModeInspectorPanel } from "./EigenModeInspectorPanel";
@@ -1395,163 +1397,93 @@ export function FrequencyDomainResponseMapInspectorPanel(
   );
 }
 
-export function EigenSpectrumInspectorPanel(props: InspectorPanelProps) {
-  void props;
+export function EigenSpectrumInspectorPanel({ selection }: InspectorPanelProps) {
   const summary = useEigenSpectrumSummary();
-  const kernel = useKernel();
-  const plotMode = (
-    point: EigenSpectrumPoint,
-    action: FrequencyDomainModeTableAction = "phase_rotated_real",
-  ): void => {
-    if (!eigenModeFieldAvailable(point) || !point.modeFieldId || action === "inspect") return;
-    void kernel.commands.execute(
-      "analysis.eigen.plot-mode-3d",
-      createCommandContext("inspector", kernel, {
-        sourceDetail: "results.eigen.spectrum",
-      }),
-      {
-        fieldId: point.modeFieldId,
-        label: `sample ${point.sampleIndex}, mode ${point.rawModeIndex}`,
-        phaseRad: 0,
-        source: "eigen-mode",
-        view: action,
-      },
-    );
-  };
+  const browser = useEigenModeBrowser(selection);
 
   return (
     <div data-inspector-surface="eigen-spectrum">
-      <InspectorGroup title="Eigen Spectrum Workbench" badge={summary.badge}>
-        <FieldRow
-          label="Canonical object"
-          value="StudyIR::Eigenmodes spectrum"
-        />
-        <FieldRow label="Spectrum resource" value={summary.spectrumResource} />
-        <FieldRow
-          label="Mode rows"
-          value={`${summary.modeCount} mode(s), ${summary.fieldOverlayCount} field payload(s)`}
-        />
-        <FieldRow label="Frequency range" value={summary.frequencyRange} />
-        <FieldRow label="Primary mode" value={summary.primaryMode} />
-        <FieldRow label="Damping coverage" value={summary.dampingCoverage} />
-        <FieldRow label="Residual coverage" value={summary.residualCoverage} />
+      <InspectorGroup title="Eigenfrequency Spectrum" summary={summary.frequencyRange}>
+        <FrequencyDomainSpectrumChart model={summary.spectrumModel} onPlotMode={browser.onView} />
+      </InspectorGroup>
+      <InspectorGroup title="Modes" summary={`${summary.fieldOverlayCount} profiles · ${summary.modeCount} frequencies`}>
+        <EigenModeBrowser {...browser} points={summary.spectrumModel.points} />
+      </InspectorGroup>
+      <InspectorGroup collapsible defaultOpen={false} title="Spectrum details">
         <FieldRow label="Solve status" value={summary.solveStatus} />
-        <FieldRow label="Field availability" value={summary.fieldAvailability} />
         <FieldRow label="Spectrum completeness" value={summary.spectrumCompleteness} />
         <FieldRow label="Window certificate" value={summary.windowCertificate} />
+        <FieldRow label="Damping coverage" value={summary.dampingCoverage} />
+        <FieldRow label="Residual coverage" value={summary.residualCoverage} />
         <FieldRow label="Candidate identity" value={summary.candidateIdentity} />
-        <FieldRow
-          label="3D workflow"
-          value="select mode -> plot phase-rotated real field"
-        />
-        <FieldRow
-          label="Capability summary"
-          value={summary.capabilitySummary}
-        />
-      </InspectorGroup>
-      <InspectorGroup title="Spectrum Chart" badge={summary.badge}>
-        <FrequencyDomainSpectrumChart
-          model={summary.spectrumModel}
-          onPlotMode={(point) => plotMode(point)}
-        />
-      </InspectorGroup>
-      <InspectorGroup title="Mode Table" badge={summary.badge}>
-        <FrequencyDomainModeTable
-          onPlotMode={plotMode}
-          points={summary.spectrumModel.points}
-        />
+        <FieldRow label="Spectrum resource" value={summary.spectrumResource} />
       </InspectorGroup>
     </div>
   );
 }
 
-export function EigenModesInspectorPanel(props: InspectorPanelProps) {
-  void props;
-  const summary = useEigenModesSummary();
-  const kernel = useKernel();
-  const selectMode = (point: EigenSpectrumPoint): void => {
-    const nodeId = `results:eigen:sample:${point.sampleIndex}:mode:${point.rawModeIndex}`;
-    kernel.selection.set(
-      {
-        kind: "results.eigen.mode",
-        label: `Mode ${point.rawModeIndex}`,
-        nodeId,
-        objectId: null,
-        ref: {
-          fieldId: eigenModeFieldAvailable(point)
-            ? point.modeFieldId ?? undefined
-            : undefined,
-          kind: "results.eigen.mode",
-          modeId: point.modeId ?? undefined,
-          modeIndex: point.rawModeIndex,
-          nodeId,
-          resourceRef: eigenModeFieldAvailable(point)
-            ? point.modeFieldResourceKey ?? summary.modeTableResource
-            : summary.modeTableResource,
-          sampleIndex: point.sampleIndex,
-          sampleId: point.sampleId ?? undefined,
-          type: "frequency-domain",
-        },
-      },
-      "inspector",
-    );
-  };
-  const plotMode = (
-    point: EigenSpectrumPoint,
-    action: FrequencyDomainModeTableAction,
-  ): void => {
-    if (action === "inspect") {
-      selectMode(point);
-      return;
-    }
-    if (!eigenModeFieldAvailable(point) || !point.modeFieldId) return;
-    void kernel.commands.execute(
-      "analysis.eigen.plot-mode-3d",
-      createCommandContext("inspector", kernel, {
-        sourceDetail: "results.eigen.modes",
-      }),
-      {
-        fieldId: point.modeFieldId,
-        label: `sample ${point.sampleIndex}, mode ${point.rawModeIndex}`,
-        phaseRad: 0,
-        source: "eigen-mode",
-        view: action,
-      },
-    );
-  };
+export function EigenModesInspectorPanel({ selection }: InspectorPanelProps) {
+  const summary = useEigenSpectrumSummary();
+  const browser = useEigenModeBrowser(selection);
 
   return (
     <div data-inspector-surface="eigen-modes-browser">
-      <InspectorGroup title="Eigen Modes Browser" badge={summary.badge}>
-        <FieldRow
-          label="Canonical collection"
-          value="mode rows from StudyIR::Eigenmodes spectrum"
-        />
-        <FieldRow label="Mode table resource" value={summary.modeTableResource} />
-        <FieldRow label="Mode table" value={summary.modeTable} />
-        <FieldRow label="Frequency range" value={summary.frequencyRange} />
-        <FieldRow
-          label="Default 3D action"
-          value="plot phase-rotated real view"
-        />
-        <FieldRow label="First selectable mode" value={summary.firstSelectableMode} />
-        <FieldRow
-          label="Selection payload"
-          value="modeIndex + sampleIndex + fieldId"
-        />
-        <FieldRow
-          label="Capability summary"
-          value={summary.capabilitySummary}
-        />
-      </InspectorGroup>
-      <InspectorGroup title="Eigen Mode Browser" badge={summary.badge}>
-        <FrequencyDomainModeTable
-          onPlotMode={plotMode}
-          points={summary.spectrumModel.points}
-        />
+      <InspectorGroup title="Mode Shapes" summary={`${summary.fieldOverlayCount} profiles · ${summary.modeCount} frequencies`}>
+        <EigenModeBrowser {...browser} points={summary.spectrumModel.points} />
       </InspectorGroup>
     </div>
   );
+}
+
+function useEigenModeBrowser(selection: InspectorPanelProps["selection"]) {
+  const kernel = useKernel();
+  const overlay = useRenderableAnalysisFieldOverlay(kernel.analysisFieldOverlay, { ignorePhase: true });
+  const owner = selection.ref?.type === "frequency-domain" ? selection.ref : null;
+  const onInspect = (point: EigenSpectrumPoint): void => {
+    const nodeId = owner?.kind.startsWith("results.resonance.modal.") &&
+      owner.analysisRunId && owner.analysisStageId &&
+      point.modeFieldId && eigenModeFieldAvailable(point)
+      ? modalResultModeNodeId(owner.analysisRunId, owner.analysisStageId, point.modeFieldId)
+      : null;
+    const ref = buildEigenModeSelectionRef(point, {
+      ...owner,
+      calculationMode: owner?.calculationMode === "fmr_modal" ? "fmr_modal" : "free_modes",
+      nodeId,
+      representation: "complex-vector-xyz",
+      resourceRef: point.modeFieldResourceKey ?? undefined,
+    });
+    if (ref.type !== "frequency-domain") return;
+    const kind = nodeId ? "results.resonance.modal.mode" : "results.eigen.mode";
+    kernel.selection.set({
+      kind,
+      label: `Mode ${point.rawModeIndex}`,
+      nodeId: ref.nodeId,
+      objectId: null,
+      ref: { ...ref, kind },
+    }, "inspector");
+  };
+  const onView = (point: EigenSpectrumPoint): void => {
+    if (!eigenModeFieldAvailable(point) || !point.modeFieldId) return;
+    void kernel.commands.execute(
+      "analysis.eigen.plot-mode-3d",
+      createCommandContext("inspector", kernel, { sourceDetail: "results.eigen.modes" }),
+      {
+        fieldId: point.modeFieldId,
+        frequencyHz: point.frequencyHz,
+        label: `Mode ${point.rawModeIndex} · ${formatFrequency(point.frequencyHz)}`,
+        modeId: point.modeId,
+        modeIndex: point.rawModeIndex,
+        phaseRad: 0,
+        representation: "complex-vector-xyz",
+        resourceRef: point.modeFieldResourceKey,
+        sampleId: point.sampleId,
+        sampleIndex: point.sampleIndex,
+        source: "eigen-mode",
+        view: "abs",
+      },
+    );
+  };
+  return { activeFieldId: overlay?.source === "eigen-mode" ? overlay.fieldId : null, onInspect, onView };
 }
 
 export function EigenModesVisualizationInspectorPanel(

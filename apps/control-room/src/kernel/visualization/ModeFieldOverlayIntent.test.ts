@@ -147,6 +147,20 @@ describe("ModeFieldOverlayIntent", () => {
     ).toBeNull();
   });
 
+  it("joins a binary SHA-256 digest to the same prefixed topology fingerprint", () => {
+    const intent = createModeFieldOverlayIntent(selection)!;
+    const resolved = resolveModeFieldOverlayMetadata(intent, metadata, "field-v1")!;
+    const digest = "a".repeat(64);
+    const binary = { ...validBinary(5), meshTopologyHash: digest };
+
+    expect(validateModeFieldOverlayBinary(resolved, binary, {
+      ...topology, meshTopologyHash: `sha256:${digest}`,
+    })).not.toBeNull();
+    expect(validateModeFieldOverlayBinary(resolved, binary, {
+      ...topology, meshTopologyHash: `sha256:${"b".repeat(64)}`,
+    })).toBeNull();
+  });
+
   it("fails closed for stale topology, invalid shape, or non-finite binary values", () => {
     const intent = createModeFieldOverlayIntent(selection)!;
     const resolved = resolveModeFieldOverlayMetadata(

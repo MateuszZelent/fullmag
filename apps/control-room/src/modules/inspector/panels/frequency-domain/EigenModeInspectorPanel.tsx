@@ -109,37 +109,11 @@ export function EigenModeInspectorPanel({
       data-inspector-owner="frequency-domain.eigen-mode"
       data-inspector-surface="eigen-mode"
     >
-      <InspectorGroup title="Eigen Mode Control" badge={summary.badge}>
-        <FieldRow label="Canonical object" value="Eigenmodes mode" />
-        <FieldRow label="Mode identity" value={summary.modeIdentity} />
-        <FieldRow label="Frequency" value={summary.frequencyDisplay} />
-        <FieldRow label="Imaginary frequency" value={summary.imaginaryFrequency} />
-        <EigenModeDampingFields damping={summary.damping} />
-        <FieldRow label="Angular frequency" value={summary.angularFrequency} />
+      <InspectorGroup title={summary.modeIdentity} summary={summary.frequencyDisplay}>
         <FieldRow label="Mode field" value={summary.fieldStatus} />
-        <FieldRow label="Mode field resource" value={summary.fieldResource} />
-        <FieldRow label="Available field views" value={summary.availableViews} />
-        <EigenModeResidualFields residual={summary.residual} />
-        <FieldRow label="Tangent leakage max" value={summary.tangentLeakageMax} />
-        <FieldRow label="Dominant polarization" value={summary.dominantPolarization} />
-        <FieldRow label="3D workflow" value={summary.workflow} />
+        <EigenMode3DActions settings={modeDisplaySettings} summary={summary} />
       </InspectorGroup>
-      <InspectorGroup
-        title="Eigen Mode 3D Visualization"
-        badge={summary.actionBadge}
-      >
-        <FieldRow label="Field ID" value={summary.fieldIdLabel} />
-        <FieldRow label="Field resource" value={summary.fieldResource} />
-        <FieldRow label="Default view" value={summary.defaultViewLabel} />
-        <FieldRow label="Phase convention" value={summary.phaseConvention} />
-        <FieldRow
-          label="Shared style preset"
-          value="one shared eigen/response mode visualization preset; switching modes keeps color, shader, vector, phase, and colormap controls"
-        />
-        <FieldRow
-          label="Volume inspection roadmap"
-          value="clip planes and shader opacity remain planned for internal-mode inspection"
-        />
+      <InspectorGroup collapsible title="Display">
         <FrequencyDomainModeDisplayControls
           componentOptions={summary.componentOptions}
           disabled={!summary.field3DReady}
@@ -148,7 +122,17 @@ export function EigenModeInspectorPanel({
           viewDefaultValue={summary.defaultView}
           viewOptions={summary.availableViewValues}
         />
-        <EigenMode3DActions settings={modeDisplaySettings} summary={summary} />
+      </InspectorGroup>
+      <InspectorGroup collapsible defaultOpen={false} title="Mode details">
+        <FieldRow label="Imaginary frequency" value={summary.imaginaryFrequency} />
+        <EigenModeDampingFields damping={summary.damping} />
+        <FieldRow label="Angular frequency" value={summary.angularFrequency} />
+        <EigenModeResidualFields residual={summary.residual} />
+        <FieldRow label="Tangent leakage max" value={summary.tangentLeakageMax} />
+        <FieldRow label="Dominant polarization" value={summary.dominantPolarization} />
+        <FieldRow label="Phase convention" value={summary.phaseConvention} />
+        <FieldRow label="Field ID" value={summary.fieldIdLabel} />
+        <FieldRow label="Field resource" value={summary.fieldResource} />
       </InspectorGroup>
     </div>
   );

@@ -1,3 +1,5 @@
+import { modalResultModeNodeId } from "@/shared/domain/analysis/modalResultNodeIdentity";
+
 import type { AnalysisModuleId } from "@/kernel/analysis-modules/analysisModuleContract";
 import {
   PIN_MODE_VISUALIZATION_COMMAND,
@@ -685,7 +687,9 @@ function analysisFieldTargetNodes(
   const classification = classifyFrequencyDomainResult(entry);
   return (entry.analysisFieldTargets ?? []).map((target) =>
     node(
-      `${parentId}:${target.source}:${key(target.fieldId)}`,
+      kind === "results.resonance.modal.mode"
+        ? modalResultModeNodeId(entry.runId, entry.stageId, target.fieldId)
+        : `${parentId}:${target.source}:${key(target.fieldId)}`,
       kind,
       target.label,
       parentId,

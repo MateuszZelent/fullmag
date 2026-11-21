@@ -1,3 +1,5 @@
+import { canonicalMeshTopologyHash } from "@/shared/domain/mesh/topologyFingerprint";
+
 import { asDecodedComplexFieldVector } from "../api/codecs/fieldVectorCodec";
 import type { DecodedComplexFieldVector, DecodedFieldVector } from "../api/codecs/types";
 import type {
@@ -82,12 +84,17 @@ export interface ValidatedModeFieldOverlayBinary {
 export function createModeFieldOverlayIntent(
   selection: FrequencyDomainSelectionRef | null | undefined,
 ): ModeFieldOverlayIntent | null {
-  if (!selection || !selection.kind.startsWith("results.eigen")) return null;
+  if (!selection || (
+    !selection.kind.startsWith("results.eigen") &&
+    selection.kind !== "results.resonance.modal.mode"
+  )) return null;
   const analysisRunId = requiredString(selection.analysisRunId);
   const analysisStageId = requiredString(selection.analysisStageId);
   const artifactRevision = requiredString(selection.artifactRevision);
   const fieldId = requiredString(selection.fieldId);
-  const modeId = requiredString(selection.modeId);
+  // Native single-sample spectra publish a unique spatial field per mode
+  // without a branch-tracked mode ID. Scope that field to its run and stage.
+  const modeId = requiredString(selection.modeId) ?? fieldId;
   const sampleId = requiredString(selection.sampleId);
   if (
     !analysisRunId ||
@@ -254,8 +261,10 @@ export function validateModeFieldOverlayBinary(
     field.quantityId !== metadata.fieldId ||
     !requiredString(field.domainGenerationId) ||
     field.domainGenerationId !== topology.domainGenerationId ||
-    !requiredString(field.meshTopologyHash) ||
-    field.meshTopologyHash !== topology.meshTopologyHash ||
+    !field.meshTopologyHash ||
+    !topology.meshTopologyHash ||
+    canonicalMeshTopologyHash(field.meshTopologyHash) !==
+      canonicalMeshTopologyHash(topology.meshTopologyHash) ||
     !requiredString(field.meshTopologyRevision) ||
     field.meshTopologyRevision !== topology.meshTopologyRevision ||
     field.indexing !== "full_domain" ||
