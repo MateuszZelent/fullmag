@@ -153,7 +153,10 @@ export function buildFooterTelemetryModel(
     scalarSampleNumber(liveRow, "active_runtime_s") ??
     objectNumber(runSolverStatus, "active_runtime_seconds") ??
     null;
-  const usesPseudoTime = pseudoTimeSeconds !== null;
+  const usesPseudoTime =
+    runtimeRelaxationAlgorithm !== null &&
+    runtimeRelaxationAlgorithm !== "llg_overdamped" &&
+    pseudoTimeSeconds !== null;
   const directMinimizerWithoutPseudoTime =
     runtimeRelaxationAlgorithm !== null &&
     runtimeRelaxationAlgorithm !== "llg_overdamped" &&
@@ -297,6 +300,16 @@ export function buildFooterTelemetryModel(
       ? "Source: solver status pseudotime"
       : "Source unavailable";
   const timeSource = usesPseudoTime ? pseudoTimeSource : physicalTimeSource;
+  const primaryTimeDisplay = formatFooterSimulationTime(primaryTimeSeconds);
+  const simTimeDisplay = formatFooterSimulationTime(simTimeSeconds);
+  const displayedStepTimeSeconds = completedRun
+    ? simTimeSeconds
+    : liveRow
+      ? scalarSampleNumber(liveRow, usesPseudoTime ? "pseudo_time_s" : "time")
+      : usesPseudoTime
+        ? pseudoTimeSeconds
+        : performanceClock?.timeSeconds ?? objectMetrics?.time_seconds ?? simTimeSeconds;
+  const displayedStepTime = formatFooterSimulationTime(displayedStepTimeSeconds);
   const solverMetric: FooterTelemetryMetric = {
     detail: activeSolverExecution
       ? runtimeSolverDescription?.detail ?? "Runtime solver provenance unavailable"
@@ -344,8 +357,8 @@ export function buildFooterTelemetryModel(
         subdetail: directMinimizerWithoutPseudoTime
           ? "Not applicable: the runtime did not publish pseudotime"
           : timeSource,
-        unit: directMinimizerWithoutPseudoTime ? undefined : "s",
-        value: formatScientific(primaryTimeSeconds, "—"),
+        unit: directMinimizerWithoutPseudoTime ? undefined : primaryTimeDisplay.unit,
+        value: directMinimizerWithoutPseudoTime ? "—" : primaryTimeDisplay.value,
         numeric: finiteOrNull(primaryTimeSeconds),
       },
       ...(usesPseudoTime
@@ -356,8 +369,8 @@ export function buildFooterTelemetryModel(
               id: "sim-time",
               label: "Sim time",
               subdetail: physicalTimeSource,
-              unit: "s",
-              value: formatScientific(simTimeSeconds, "—"),
+              unit: simTimeDisplay.unit,
+              value: simTimeDisplay.value,
               numeric: finiteOrNull(simTimeSeconds),
             },
           ]
@@ -428,16 +441,7 @@ export function buildFooterTelemetryModel(
           : "Step",
         subdetail: directMinimizerWithoutPseudoTime
           ? "Physical time not applicable"
-          : `${usesPseudoTime ? "τ" : "t"}=${formatScientific(
-              completedRun
-                ? simTimeSeconds
-                : liveRow
-                  ? scalarSampleNumber(liveRow, usesPseudoTime ? "pseudo_time_s" : "time")
-                  : usesPseudoTime
-                    ? pseudoTimeSeconds
-                    : performanceClock?.timeSeconds ?? objectMetrics?.time_seconds ?? simTimeSeconds,
-              "—",
-            )} s${scalarAttempt?.attempt_id ? ` · Attempt ${scalarAttempt.attempt_id}` : ""}`,
+          : `${usesPseudoTime ? "τ" : "t"}=${displayedStepTime.value}${displayedStepTime.unit ? ` ${displayedStepTime.unit}` : ""}${scalarAttempt?.attempt_id ? ` · Attempt ${scalarAttempt.attempt_id}` : ""}`,
         value: formatInteger(
           completedRun ? totalSteps : liveRow
             ? scalarSampleNumber(liveRow, "step") ?? totalSteps
@@ -1231,6 +1235,44 @@ function formatInteger(value: number | null | undefined): string {
 
 function formatFrequencyGHz(valueHz: number): string {
   return `${(valueHz / 1.0e9).toFixed(3)} GHz`;
+}
+
+const SIMULATION_TIME_PREFIX_BY_EXPONENT: Readonly<Record<number, string>> = {
+  [-15]: "f",
+  [-12]: "p",
+  [-9]: "n",
+  [-6]: "µ",
+  [-3]: "m",
+  0: "",
+  3: "k",
+  6: "M",
+  9: "G",
+  12: "T",
+};
+const SIMULATION_TIME_NUMBER_FORMAT = new Intl.NumberFormat("en-US", {
+  maximumSignificantDigits: 6,
+  notation: "standard",
+  useGrouping: false,
+});
+
+function formatFooterSimulationTime(seconds: number | null | undefined): {
+  value: string;
+  unit?: string;
+} {
+  if (typeof seconds !== "number" || !Number.isFinite(seconds)) return { value: "—" };
+  if (seconds === 0) return { value: "0", unit: "s" };
+
+  const rawExponent = Math.floor(Math.log10(Math.abs(seconds)) / 3) * 3;
+  let exponent = Math.max(-15, Math.min(12, rawExponent));
+  let rounded = Number((seconds / 10 ** exponent).toPrecision(6));
+  if (Math.abs(rounded) >= 1_000 && exponent < 12) {
+    exponent += 3;
+    rounded = Number((seconds / 10 ** exponent).toPrecision(6));
+  }
+  return {
+    value: SIMULATION_TIME_NUMBER_FORMAT.format(rounded),
+    unit: `${SIMULATION_TIME_PREFIX_BY_EXPONENT[exponent] ?? ""}s`,
+  };
 }
 
 function formatScientific(

@@ -321,7 +321,8 @@ describe("FooterTelemetry performance progress", () => {
       stageId: "relax",
     }, event);
     expect(result.find((metric) => metric.id === "time")).toMatchObject({
-      value: "7.488000e-9",
+      value: "7.488",
+      unit: "ns",
       subdetail: "Solver update · step 9,423 · Attempt attempt-1",
     });
     expect(result.find((metric) => metric.id === "solver-progress")?.value).toBe("9,423");
@@ -330,7 +331,7 @@ describe("FooterTelemetry performance progress", () => {
       value: "13,308",
     });
     expect(result.find((metric) => metric.id === "step")?.subdetail)
-      .toContain("t=8.001000e-9 s");
+      .toContain("t=8.001 ns");
     expect(result.find((metric) => metric.id === "dt")?.value).toBe("1.000000e-12");
   });
 
@@ -351,7 +352,7 @@ describe("FooterTelemetry performance progress", () => {
       step: 9_423,
       time: 7.488e-9,
     });
-    expect(result.find((metric) => metric.id === "time")?.value).toBe("7.488000e-9");
+    expect(result.find((metric) => metric.id === "time")?.value).toBe("7.488");
     expect(result.find((metric) => metric.id === "dt")).toMatchObject({
       label: "Mean dt",
       value: "1.000000e-12",
