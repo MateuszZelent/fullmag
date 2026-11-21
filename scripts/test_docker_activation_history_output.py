@@ -146,6 +146,51 @@ class PreservedRunOutputTests(unittest.TestCase):
             "payload_ref": "stages/stage_0000_reversal/table/0",
         }, separators=(",", ":")) + "\n", encoding="utf-8")
 
+    def _set_table_rows(self, rows, *, single_chunk):
+        self.manifest["table_sample_count"] = len(rows)
+        write_json(self.output / "main.autosave.json", {
+            "schema_version": "fullmag.stage_autosave.artifact.v1",
+            "target": "main", "format": "zarr", "layout": "continuous",
+            "stages": [self.manifest],
+        })
+        write_json(self.stage / "manifest.json", self.manifest)
+        run_manifest_path = self.output / "fullmag-run.json"
+        run_manifest = json.loads(run_manifest_path.read_text(encoding="utf-8"))
+        run_manifest["stages"][0]["steps"] = len(rows)
+        write_json(run_manifest_path, run_manifest)
+
+        table = self.stage / "table"
+        chunk_rows = len(rows) if single_chunk and rows else 1
+        write_json(table / ".zarray", {
+            "zarr_format": 2, "shape": [len(rows), 2], "chunks": [chunk_rows, 2],
+            "dtype": "<f8", "compressor": None, "fill_value": None, "order": "C",
+            "filters": None, "dimension_separator": ".",
+        })
+        for path in table.iterdir():
+            if path.name not in {".zarray", ".zattrs"}:
+                path.unlink()
+        if single_chunk and rows:
+            (table / "0.0").write_bytes(struct.pack(f"<{2 * len(rows)}d", *(value for row in rows for value in row)))
+        elif rows:
+            for index, row in enumerate(rows):
+                (table / f"{index}.0").write_bytes(struct.pack("<2d", *row))
+
+        entries = []
+        for index in range(len(rows)):
+            entries.append({
+                "target_sample_index": index,
+                "stage_id": "reversal",
+                "stage_index": 0,
+                "stage_sample_index": index,
+                "sample_kind": "table",
+                "coordinate": {"kind": "accepted_step", "accepted_step": index},
+                "payload_ref": f"stages/stage_0000_reversal/table/{index}",
+            })
+        (self.main_zarr / "continuous/index.jsonl").write_text(
+            "".join(json.dumps(entry, separators=(",", ":")) + "\n" for entry in entries),
+            encoding="utf-8",
+        )
+
     def rebuild(self):
         shutil.rmtree(self.zarr, ignore_errors=True)
         self.manifest = self._stage_manifest()
@@ -159,6 +204,92 @@ class PreservedRunOutputTests(unittest.TestCase):
         self.assertEqual(proof["autosave"]["field_sample_count"], 0)
         self.assertFalse((self.stage / "fields").exists())
         self.assertEqual(proof["declared_outputs"], 3)
+
+    def test_accepts_sealed_single_chunk_table_and_keeps_logical_row_index(self):
+        rows = [(0.0, 1.0), (1.0, 0.75), (2.0, 0.5)]
+        self._set_table_rows(rows, single_chunk=True)
+
+        proof = validate_preserved_run(self.zarr, self.run_id)
+        self.assertEqual(proof["autosave"]["table_sample_count"], len(rows))
+        table = self.stage / "table"
+        array = json.loads((table / ".zarray").read_text(encoding="utf-8"))
+        self.assertEqual(array["shape"], [len(rows), 2])
+        self.assertEqual(array["chunks"], [len(rows), 2])
+        self.assertEqual(
+            {path.name for path in table.iterdir()},
+            {".zarray", ".zattrs", "0.0"},
+        )
+        self.assertEqual((table / "0.0").read_bytes(), struct.pack("<6d", *(value for row in rows for value in row)))
+
+    def test_keeps_compatibility_with_legacy_per_row_table_chunks(self):
+        rows = [(0.0, 1.0), (1.0, 0.75), (2.0, 0.5)]
+        self._set_table_rows(rows, single_chunk=False)
+
+        proof = validate_preserved_run(self.zarr, self.run_id)
+        self.assertEqual(proof["autosave"]["table_sample_count"], len(rows))
+        table = self.stage / "table"
+        array = json.loads((table / ".zarray").read_text(encoding="utf-8"))
+        self.assertEqual(array["shape"], [len(rows), 2])
+        self.assertEqual(array["chunks"], [1, 2])
+        for index, row in enumerate(rows):
+            self.assertEqual((table / f"{index}.0").read_bytes(), struct.pack("<2d", *row))
+
+    def test_resolves_interleaved_fields_by_quantity_local_row(self):
+        field_values = {"m": [10.0, 11.0, 12.0], "H_eff": [20.0, 21.0]}
+        self.manifest["field_quantities"] = ["H_eff", "m"]
+        self.manifest["field_sample_count"] = sum(map(len, field_values.values()))
+        write_json(self.stage / "manifest.json", self.manifest)
+        write_json(self.output / "main.autosave.json", {
+            "schema_version": "fullmag.stage_autosave.artifact.v1",
+            "target": "main", "format": "zarr", "layout": "continuous",
+            "stages": [self.manifest],
+        })
+
+        fields = self.stage / "fields"
+        write_json(fields / ".zgroup", {"zarr_format": 2})
+        for quantity, values in field_values.items():
+            array = fields / quantity
+            write_json(array / ".zarray", {
+                "zarr_format": 2, "shape": [len(values), 1], "chunks": [1, 1],
+                "dtype": "<f8", "compressor": None, "fill_value": None,
+                "order": "C", "filters": None, "dimension_separator": ".",
+            })
+            write_json(array / ".zattrs", {
+                "quantity": quantity, "dimension_order": ["sample", "value"],
+            })
+            for sample, value in enumerate(values):
+                (array / f"{sample}.0").write_bytes(struct.pack("<d", value))
+
+        entries = [{
+            "target_sample_index": 0,
+            "stage_id": "reversal",
+            "stage_index": 0,
+            "stage_sample_index": 0,
+            "sample_kind": "table",
+            "coordinate": {"kind": "accepted_step", "accepted_step": 0},
+            "payload_ref": "stages/stage_0000_reversal/table/0",
+        }]
+        for stage_sample, (quantity, local_sample) in enumerate(
+                [("m", 0), ("H_eff", 0), ("m", 1), ("m", 2), ("H_eff", 1)]):
+            entries.append({
+                "target_sample_index": stage_sample + 1,
+                "stage_id": "reversal",
+                "stage_index": 0,
+                "stage_sample_index": stage_sample,
+                "sample_kind": "field",
+                "coordinate": {"kind": "accepted_step", "accepted_step": stage_sample},
+                "payload_ref": (
+                    f"stages/stage_0000_reversal/fields/{quantity}/{local_sample}"
+                ),
+            })
+        (self.main_zarr / "continuous/index.jsonl").write_text(
+            "".join(json.dumps(entry, separators=(",", ":")) + "\n" for entry in entries),
+            encoding="utf-8",
+        )
+
+        proof = validate_preserved_run(self.zarr, self.run_id)
+        self.assertEqual(proof["autosave"]["field_sample_count"], 5)
+        self.assertEqual(proof["autosave"]["sample_count"], 6)
 
     def _use_relaxation_layout(self):
         """Preserve the same authenticated payload under the authored relax target."""

@@ -139,7 +139,8 @@ def _check_output_declarations(output_root, outputs, target):
     return declarations
 
 
-def _array(path, *, samples, width=None, quantities=None, dimension_order=None):
+def _array(path, *, samples, width=None, quantities=None, dimension_order=None,
+           allow_single_chunk=False):
     path = _directory(path)
     metadata = _read_document(path / ".zarray", "Zarr array metadata")
     shape = metadata.get("shape")
@@ -150,12 +151,16 @@ def _array(path, *, samples, width=None, quantities=None, dimension_order=None):
             or samples > MAX_ARRAY_SAMPLES
             or (width is not None and shape[1] != width)
             or not isinstance(chunks, list) or len(chunks) != 2
-            or chunks != [1, max(shape[1], 1)]
+            or any(type(value) is not int for value in chunks)
             or metadata.get("zarr_format") != 2 or metadata.get("dtype") != "<f8"
             or metadata.get("compressor") is not None or metadata.get("fill_value") is not None
             or metadata.get("order") != "C" or metadata.get("filters") is not None
             or metadata.get("dimension_separator") != "."):
         raise HistoryError("Preserved Zarr array metadata differs from the autosave contract")
+    row_chunks = chunks == [1, shape[1]]
+    single_chunk = allow_single_chunk and samples > 0 and chunks == [samples, shape[1]]
+    if not row_chunks and not single_chunk:
+        raise HistoryError("Preserved Zarr chunk layout differs from the autosave contract")
     attrs = _read_document(path / ".zattrs", "Zarr array attributes")
     if quantities is not None:
         _require(attrs.get("quantities") == quantities and attrs.get("dimension_order") == dimension_order,
@@ -163,14 +168,15 @@ def _array(path, *, samples, width=None, quantities=None, dimension_order=None):
     elif dimension_order is not None:
         _require(attrs.get("dimension_order") == dimension_order,
                  "Preserved field array dimension order differs")
-    expected_chunks = {str(index) + ".0" for index in range(samples)}
+    expected_chunks = {"0.0"} if single_chunk else {str(index) + ".0" for index in range(samples)}
     names = {entry.name for entry in path.iterdir()}
     _require(names == expected_chunks | {".zarray", ".zattrs"},
              "Preserved Zarr array has missing or unexpected chunks")
     for name in expected_chunks:
         chunk = path / name
         info = _regular_file(chunk)
-        if info.st_size != shape[1] * 8:
+        expected_size = shape[0] * shape[1] * 8 if single_chunk else shape[1] * 8
+        if info.st_size != expected_size:
             raise HistoryError("Preserved Zarr chunk size differs from its array shape")
     return {"samples": shape[0], "width": shape[1]}
 
@@ -240,7 +246,8 @@ def _stage_metadata(main_zarr, autosave, target):
         field_counts[stage_name] = {quantity: 0 for quantity in field_quantities}
         if table_quantities:
             _array(stage_dir / "table", samples=table_count, width=len(table_quantities),
-                   quantities=table_quantities, dimension_order=["sample", "quantity"])
+                   quantities=table_quantities, dimension_order=["sample", "quantity"],
+                   allow_single_chunk=True)
         elif (stage_dir / "table").exists() or (stage_dir / "table").is_symlink():
             raise HistoryError("Undeclared table array is present")
         fields_root = stage_dir / "fields"
@@ -293,6 +300,7 @@ def _continuous_index(main_zarr, stage_info):
     field_stage_counts = {index: 0 for index in stage_info["stages"]}
     field_quantity_counts = {name: {quantity: 0 for quantity in counts}
                              for name, counts in stage_info["field_counts"].items()}
+    array_layouts = {}
     for line in lines:
         if not line:
             continue
@@ -331,6 +339,7 @@ def _continuous_index(main_zarr, stage_info):
             if stage_sample != expected_sample or expected_sample >= stage["table_sample_count"]:
                 raise HistoryError("Continuous table sample count differs from its stage")
             expected_ref = ("stages", stage_name, "table", str(expected_sample))
+            payload_row = expected_sample
             table_counts[stage_index] += 1
         elif sample_kind == "field":
             expected_field_stage_sample = field_stage_counts[stage_index]
@@ -343,6 +352,7 @@ def _continuous_index(main_zarr, stage_info):
                 raise HistoryError("Continuous field references an undeclared quantity")
             local_sample = field_quantity_counts[stage_name][quantity]
             expected_ref = ("stages", stage_name, "fields", quantity, str(local_sample))
+            payload_row = local_sample
             field_quantity_counts[stage_name][quantity] += 1
             field_stage_counts[stage_index] += 1
         else:
@@ -350,13 +360,48 @@ def _continuous_index(main_zarr, stage_info):
         if parts != expected_ref:
             raise HistoryError("Continuous Zarr payload reference differs from its sample identity")
         array_path = main_zarr.joinpath(*parts[:-1])
-        array_metadata = _read_document(array_path / ".zarray", "Referenced Zarr array metadata")
-        width = array_metadata.get("shape", [None, None])[1]
-        if type(width) is not int or width <= 0:
-            raise HistoryError("Referenced Zarr array width is malformed")
-        chunk = main_zarr.joinpath(*parts).with_name(parts[-1] + ".0")
-        if _regular_file(chunk).st_size != width * 8:
-            raise HistoryError("Continuous Zarr payload chunk size differs from its array")
+        cache_key = tuple(parts[:-1])
+        layout = array_layouts.get(cache_key)
+        if layout is None:
+            array_metadata = _read_document(array_path / ".zarray", "Referenced Zarr array metadata")
+            shape = array_metadata.get("shape")
+            chunks = array_metadata.get("chunks")
+            if (not isinstance(shape, list) or len(shape) != 2
+                    or type(shape[0]) is not int or type(shape[1]) is not int or shape[1] <= 0
+                    or not isinstance(chunks, list) or len(chunks) != 2
+                    or any(type(value) is not int for value in chunks)):
+                raise HistoryError("Referenced Zarr array width is malformed")
+            if chunks == [1, shape[1]]:
+                layout = {"samples": shape[0], "width": shape[1], "kind": "row_chunks"}
+            elif sample_kind == "table" and shape[0] > 0 and chunks == [shape[0], shape[1]]:
+                chunk = array_path / "0.0"
+                expected_size = shape[0] * shape[1] * 8
+                if _regular_file(chunk).st_size != expected_size:
+                    raise HistoryError("Continuous Zarr payload chunk size differs from its array")
+                layout = {
+                    "samples": shape[0], "width": shape[1], "kind": "single_chunk",
+                    "chunk_size": expected_size,
+                }
+            else:
+                raise HistoryError("Referenced Zarr array uses an unsupported chunk layout")
+            array_layouts[cache_key] = layout
+
+        if payload_row >= layout["samples"]:
+            raise HistoryError("Continuous Zarr sample reference is outside its array shape")
+        if layout["kind"] == "single_chunk":
+            if sample_kind != "table":
+                raise HistoryError("Only a table reference may use one stage-wide chunk")
+            row_start = payload_row * layout["width"] * 8
+            row_end = row_start + layout["width"] * 8
+            if row_end > layout["chunk_size"]:
+                raise HistoryError("Continuous Zarr row reference exceeds its single chunk")
+        elif layout["kind"] == "row_chunks":
+            chunk = array_path.joinpath(parts[-1] + ".0")
+            expected_size = layout["width"] * 8
+            if _regular_file(chunk).st_size != expected_size:
+                raise HistoryError("Continuous Zarr payload chunk size differs from its array")
+        else:
+            raise HistoryError("Referenced Zarr array uses an unsupported chunk layout")
     if target_index != stage_info["sample_count"]:
         raise HistoryError("Continuous Zarr index does not cover all declared samples")
     for index, stage in stage_info["stages"].items():

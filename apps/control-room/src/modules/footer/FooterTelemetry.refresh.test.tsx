@@ -2,7 +2,13 @@ import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { describe, expect, it, vi } from "vitest";
 
-import type { RunPerformanceResource, ScalarWindowResource, SceneResource, SolverStatusResource } from "@/kernel/api/apiTypes";
+import type {
+  RunPerformanceResource,
+  ScalarWindowResource,
+  SceneResource,
+  SolverStatusResource,
+  StageExecutionResource,
+} from "@/kernel/api/apiTypes";
 import { EventBus } from "@/kernel/events/EventBus";
 import type { KernelEventMap } from "@/kernel/events/eventTypes";
 import {
@@ -102,6 +108,114 @@ function cardLabels(container: TestElement): string[] {
 }
 
 describe("FooterTelemetry scene refresh stability", () => {
+  it("keeps the exact run active and its physical clock through a stage handoff", async () => {
+    const dom = installSimulationPreparationTestDom();
+    const container = dom.document.createElement("div");
+    dom.document.body.appendChild(container);
+    const root = createRoot(container as unknown as Element);
+    const bus = new EventBus<KernelEventMap>();
+    const baseStatus = telemetryStatus();
+    const status: FooterTelemetryStatus = {
+      ...baseStatus,
+      metrics: { ...baseStatus.metrics, total_steps: 48_508 },
+      run: {
+        ...baseStatus.run!,
+        solver_steps: 48_508,
+        solver_time: 20e-9,
+        stage_count: 6,
+        stage_index: 2,
+        stage_label: "Stage 3",
+      },
+      solver: { ...baseStatus.solver, state: "completed" },
+    };
+    const execution = {
+      session_id: "session-1",
+      session_epoch: "session-1@1",
+      request_scope_epoch: "scope-1",
+      run_id: "run-1",
+      runtime_state: "running",
+      active_stage_index: null,
+      completed_stage_indexes: [0, 1, 2],
+      total_stages: 6,
+      stage_statuses: ["completed", "completed", "completed", "pending", "pending", "pending"],
+      stages: [
+        { index: 0, stage_id: "stage-1", status: "completed", completed_step: 12_960 },
+        { index: 1, stage_id: "stage-2", status: "completed", completed_step: 35_545 },
+        { index: 2, stage_id: "stage-3", status: "completed", completed_step: 3 },
+        { index: 3, stage_id: "stage-4", status: "pending" },
+      ],
+      revision: 6,
+    } as StageExecutionResource;
+    hooks.scene = { data: null, status: "idle" };
+    hooks.performance = {
+      state: "completed",
+      run_id: "run-1",
+      task_id: "task-3",
+      step_id: "stage-3",
+      attempt_id: "attempt-stage-3",
+      ownership_epoch: 1,
+      stage_index: 2,
+      step_index: 3,
+      first_step_index: 0,
+      elapsed_monotonic_ns: 1_000_000_000,
+      solver_clock: { step_index: 3, time_s: 1.17559e-12, dt_s: 1e-13 },
+      sample_sequence: 4,
+      unique_step_callback_records: 4,
+      gpu_scope: "whole_device",
+      points: [],
+      rows_dropped: 0,
+      revision: "performance-previous-stage",
+    } as RunPerformanceResource;
+    hooks.solverStatus = {
+      run_id: "run-1",
+      runtime_state: "completed",
+      step_index: 3,
+      sim_time_seconds: 1.17559e-12,
+      pseudo_time_seconds: 1.17559e-12,
+    } as SolverStatusResource;
+
+    const metricValue = (label: string) => container
+      .querySelectorAll(".fm-footer-telemetry__metric")
+      .find((metric) => metric.querySelector(".fm-footer-telemetry__metric-label")?.textContent === label)
+      ?.querySelector(".fm-footer-telemetry__metric-number")?.textContent;
+
+    try {
+      await act(async () =>
+        root.render(
+          <FooterTelemetry
+            bus={bus}
+            status={status}
+            stageExecution={{ data: execution, status: "ready" }}
+            view="overview"
+          />,
+        ),
+      );
+
+      expect(container.querySelector(".fm-footer-telemetry__stage-badge")?.textContent)
+        .toBe("Stage 3 → 4");
+      expect(container.querySelector(".fm-footer-telemetry__stage-label")?.textContent)
+        .toBe("Between stages 3 and 4");
+      expect(container.querySelector(".fm-footer-telemetry__stage-badge")?.textContent)
+        .not.toContain("No active run");
+      expect(container.querySelector(".fm-footer-telemetry__hero-value")?.textContent)
+        .toBe("20");
+      expect(container.querySelector(".fm-footer-telemetry__hero-unit")?.textContent)
+        .toContain("ns");
+      expect(container.querySelector(".fm-footer-telemetry__hero")?.textContent)
+        .not.toContain("1.17559");
+      expect(metricValue("Stage steps")).toBe("—");
+      expect(metricValue("Run steps")).toBe("48,508");
+      expect(cardLabels(container)).not.toContain("Solver step");
+      expect(cardLabels(container)).not.toContain("Sample step");
+      expect(cardLabels(container)).not.toContain("Stage rate");
+    } finally {
+      await act(async () => root.unmount());
+      hooks.performance = null;
+      hooks.solverStatus = null;
+      dom.restore();
+    }
+  });
+
   it("uses the current run stage summary when the runtime does not publish stage execution", async () => {
     const dom = installSimulationPreparationTestDom();
     const container = dom.document.createElement("div");
