@@ -108,7 +108,7 @@ describe("Viewport3DSettingsContent", () => {
   beforeEach(() => viewport3dStore.resetForTest());
   afterEach(() => viewport3dStore.resetForTest());
 
-  it("renders four short sections inline and keeps the injected camera editor in View", () => {
+  it("renders three view-settings sections inline and keeps the injected camera editor in View", () => {
     const html = renderToStaticMarkup(
       <Viewport3DSettingsContent
         activeSection="view"
@@ -119,10 +119,10 @@ describe("Viewport3DSettingsContent", () => {
     );
     const tabs = Array.from(html.matchAll(/role="tab"[^>]*>(.*?)<\/button>/g), (match) => match[1]);
 
-    expect(tabs).toEqual(["View", "Appearance", "Quality", "Export"]);
+    expect(tabs).toEqual(["View", "Appearance", "Quality"]);
     expect(html).toContain('aria-label="3D View Settings"');
-    expect((html.match(/role="tabpanel"/g) ?? [])).toHaveLength(4);
-    expect((html.match(/role="tabpanel"[^>]*hidden=""/g) ?? [])).toHaveLength(3);
+    expect((html.match(/role="tabpanel"/g) ?? [])).toHaveLength(3);
+    expect((html.match(/role="tabpanel"[^>]*hidden=""/g) ?? [])).toHaveLength(2);
     const viewPanelStart = html.indexOf('role="tabpanel"');
     const nextPanelStart = html.indexOf('role="tabpanel"', viewPanelStart + 1);
     expect(html.slice(viewPanelStart, nextPanelStart)).toContain("Camera editor content");
@@ -203,7 +203,7 @@ describe("Viewport3DSettingsContent", () => {
         ).map((radio) => radio.textContent),
       ).toEqual(["Presentation"]);
 
-      for (const section of ["view", "appearance", "quality", "export"] as const) {
+      for (const section of ["view", "appearance", "quality"] as const) {
         await settings.renderSection(section);
         expect(
           findElements(settings.container, (element) =>
@@ -472,24 +472,6 @@ describe("Viewport3DSettingsContent", () => {
       expect(viewport3dStore.getSnapshot().visualProfileId).toBe("interactive");
     } finally {
       await quality.cleanup();
-    }
-  });
-
-  it("exports through the existing capture command and exposes PNG options", async () => {
-    const exported = await mountContent("export");
-    try {
-      expect(elementById(exported.container, "fm-view-export-background")).toBeDefined();
-      expect(elementById(exported.container, "fm-view-export-scale")).toBeDefined();
-      expect(elementById(exported.container, "fm-view-export-annotations")).toBeDefined();
-      const exportButton = findElement(
-        exported.container,
-        (element) => element.tagName === "BUTTON" && element.textContent === "Export PNG",
-        "Export PNG",
-      );
-      await act(async () => exportButton.click());
-      expect(exported.onCommand).toHaveBeenCalledWith("viewport-3d.capture-frame");
-    } finally {
-      await exported.cleanup();
     }
   });
 });

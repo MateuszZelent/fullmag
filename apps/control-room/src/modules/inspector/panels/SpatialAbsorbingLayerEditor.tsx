@@ -108,7 +108,7 @@ export function SpatialAbsorbingLayerEditor({
       {kind === "expression" && <FormField label="Distance d(x,y,z)" type="text" mono unit="m"
         value={draft.distanceExpression} error={fieldError("distanceExpression")} maxLength={256}
         placeholder="5e-7 - sqrt(x**2 + y**2)"
-        help="Use x, y, z in the selected frame, arithmetic, powers (**), abs, sqrt, exp, log, log1p, tanh, sin, cos, min(a,b), and max(a,b). For a lateral boundary in a thin film, use an in-plane distance."
+        help="Use x, y, z in the selected frame, decimal numbers, pi, +, -, *, /, ** and parentheses, the functions sin, cos, tan, asin, acos, atan, sinh, cosh, tanh, exp, log, log1p, sqrt, abs, and atan2(a,b), min(a,b), max(a,b). For a lateral boundary in a thin film, use an in-plane distance."
         hint="Coordinates and distance are in metres. The layer occupies 0 ≤ d ≤ total width, with maximum damping at d = 0."
         onChange={event => update({ distanceExpression: event.target.value })} />}
       <FormField
@@ -158,7 +158,7 @@ export function SpatialAbsorbingLayerEditor({
           maxLength={256}
           placeholder="u**3"
           hint="u runs from 0 at the start of the ramp to 1 at the plateau."
-          help="Use u, decimal numbers, +, -, *, /, **, parentheses, and abs, sqrt, exp, log, log1p, tanh, sin, or cos. The result must stay in [0, 1] and equal 0 and 1 at the respective endpoints."
+          help="Use u, decimal numbers, pi, +, -, *, /, ** and parentheses, the functions sin, cos, tan, asin, acos, atan, sinh, cosh, tanh, exp, log, log1p, sqrt, abs, and atan2(a,b), min(a,b), max(a,b). The result must stay in [0, 1] and equal 0 and 1 at the respective endpoints."
           onChange={(event) => update({ expression: event.target.value })}
         />
       ) : null}

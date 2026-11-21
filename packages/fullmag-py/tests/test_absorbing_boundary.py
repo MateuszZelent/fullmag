@@ -1,15 +1,99 @@
 from __future__ import annotations
 
 from dataclasses import FrozenInstanceError, replace
+import json
 import math
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
 import fullmag as fm
+from fullmag.model.absorbing_boundary import (
+    AbsorbingBoundaryExpressionError,
+    compile_distance_expression,
+    compile_profile_expression,
+)
 from fullmag.runtime.scene_document import build_builder_from_scene_document, build_scene_document_from_builder
 from fullmag.runtime.scene_document_ir import scene_document_to_problem_ir
 from fullmag.runtime.script_builder import export_builder_draft, rewrite_loaded_problem_script
+
+
+# Shared with crates/fullmag-ir/src/absorbing_boundary.rs (tests).
+_FIXTURES = Path(__file__).resolve().parents[3] / "crates/fullmag-ir/tests/fixtures"
+
+
+def _fixture(name: str) -> dict:
+    return json.loads((_FIXTURES / name).read_text(encoding="utf-8"))
+
+
+def _close(a: float, b: float) -> bool:
+    return a == b or abs(a - b) <= 1e-14 * max(abs(a), abs(b))
+
+
+def _within_ulps(a: float, b: float, ulps: int = 4) -> bool:
+    return a == b or abs(a - b) <= ulps * math.ulp(max(abs(a), abs(b)))
+
+
+class AbsorbingBoundaryFormulaTableTests(unittest.TestCase):
+    """The case table of absorbing-boundary formulas, read by Rust and Python."""
+
+    cases = _fixture("absorbing_boundary_formula_cases.json")
+    # Values of the evaluator that preceded the shared formula language.
+    baseline = _fixture("absorbing_boundary_formula_baseline.json")
+
+    def check_rejection(self, compile_text, case: dict) -> None:
+        with self.assertRaises(AbsorbingBoundaryExpressionError) as raised:
+            compile_text(case["text"])
+        self.assertEqual(raised.exception.category, case["error"], str(raised.exception))
+        self.assertIn("expression", str(raised.exception))
+
+    def test_profile_cases_and_old_values(self) -> None:
+        compared = 0
+        for case in self.cases["profile"]:
+            with self.subTest(case["name"]):
+                if not case["accept"]:
+                    self.check_rejection(compile_profile_expression, case)
+                    continue
+                profile = compile_profile_expression(case["text"])
+                for u, expected in case["samples"]:
+                    self.assertTrue(_close(profile(u), expected), (u, profile(u), expected))
+                old = self.baseline["profile"].get(case["name"])
+                if old is not None:
+                    # The old values were recorded with one libm; another libm may
+                    # differ in the last bits of log1p, exp and friends.
+                    for k, value in enumerate(old):
+                        self.assertTrue(_within_ulps(profile(k / 256), value), (k, profile(k / 256), value))
+                    compared += 1
+        self.assertEqual(compared, len(self.baseline["profile"]))
+
+    def test_distance_cases_and_old_values(self) -> None:
+        points = self.cases["distance_points"]
+        compared = 0
+        for case in self.cases["distance"]:
+            with self.subTest(case["name"]):
+                if not case["accept"]:
+                    self.check_rejection(compile_distance_expression, case)
+                    continue
+                distance = compile_distance_expression(case["text"])
+                values = [distance(*point) for point in points]
+                for value, expected in zip(values, case["samples"], strict=True):
+                    self.assertTrue(_close(value, expected), (value, expected))
+                old = self.baseline["distance"].get(case["name"])
+                if old is not None:
+                    for value, recorded in zip(values, old, strict=True):
+                        self.assertTrue(_within_ulps(value, recorded), (value, recorded))
+                    compared += 1
+        self.assertEqual(compared, len(self.baseline["distance"]))
+
+    def test_layer_rules_and_messages(self) -> None:
+        with self.assertRaisesRegex(ValueError, r"^expression error at character 4: "):
+            fm.AbsorbingBoundaryLayer(4., 2., 0.8, profile="custom", expression="u + 01*u")
+        with self.assertRaisesRegex(ValueError, r"^distance expression error at character 4: "):
+            fm.AbsorbingGeometry.expression("x + t")
+        with self.assertRaisesRegex(ValueError, "distance expression is undefined"):
+            compile_distance_expression("1/(y-3)")(0.0, 3.0, 0.0)
+        # IEEE arithmetic: an intermediate infinity is allowed, only the value is checked.
+        self.assertEqual(compile_profile_expression("u + 1/exp(999)")(0.5), 0.5)
 
 
 class AbsorbingBoundaryPythonTests(unittest.TestCase):
@@ -124,8 +208,6 @@ class AbsorbingBoundaryPythonTests(unittest.TestCase):
             fm.world._build_problem()
 
     def test_custom_distance_both_edges_of_annulus_and_y_branch(self) -> None:
-        from fullmag.model._absorbing_boundary_expression import compile_distance_expression
-
         annulus = compile_distance_expression("min(5e-7-sqrt(x*x+y*y), sqrt(x*x+y*y)-2e-7)")
         self.assertLess(annulus(0., 0., 0.), 0.)  # The central hole.
         self.assertAlmostEqual(annulus(2.5e-7, 0., 0.), 5e-8, delta=1e-21)

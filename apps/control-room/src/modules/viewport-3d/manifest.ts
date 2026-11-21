@@ -5,7 +5,12 @@ import { resolveSessionDiscretization } from "@/kernel/resources/sessionDiscreti
 import { DEFAULT_CAMERA_REGISTRY_STATE } from "@/kernel/visualization/CameraRegistryController";
 import { VIEWPORT_3D_QUALITY_PROFILE_LABELS } from "@/shared/viewport3dQualityLabels";
 
-import { openViewport3DInspector, getViewport3DInspectorSnapshot, setViewport3DInspectorContext } from "./viewport3dInspectorState";
+import {
+  getViewport3DInspectorSnapshot,
+  openViewport3DExportInspector,
+  openViewport3DInspector,
+  setViewport3DInspectorContext,
+} from "./viewport3dInspectorState";
 import { getViewport3DProjection, hasViewport3DProjectionOwner, toggleRegisteredViewport3DProjection } from "./viewport3dCameraCommands";
 import { viewport3dStore } from "./viewport3dStore";
 import { VIEW_DIRECTION_COMMANDS } from "./viewport3dViewDirections";
@@ -387,6 +392,36 @@ export const viewport3dManifest: ModuleManifest = {
             setViewport3DInspectorContext("selection");
           } else {
             openViewport3DInspector();
+            context.layout?.setPanelVisible("right", true);
+          }
+          return { status: "completed" };
+        },
+      },
+      {
+        id: "viewport-3d.open-export",
+        title: "Open 3D Export Panel",
+        group: "viewport-3d",
+        category: "Viewport",
+        scope: "viewport",
+        isActive: () => getViewport3DInspectorSnapshot().context === "export",
+        run: (context) => {
+          openViewport3DExportInspector();
+          context.layout?.setPanelVisible("right", true);
+          return { status: "completed" };
+        },
+      },
+      {
+        id: "viewport-3d.toggle-export",
+        title: "Toggle 3D Export Panel",
+        group: "viewport-3d",
+        category: "Viewport",
+        scope: "viewport",
+        isActive: () => getViewport3DInspectorSnapshot().context === "export",
+        run: (context) => {
+          if (getViewport3DInspectorSnapshot().context === "export" && context.layout?.get().panelVisible.right !== false) {
+            setViewport3DInspectorContext("selection");
+          } else {
+            openViewport3DExportInspector();
             context.layout?.setPanelVisible("right", true);
           }
           return { status: "completed" };

@@ -8,9 +8,11 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::BTreeMap;
 
+use fullmag_expr::{validate_name, CompiledFunction, FunctionKind, FIELD_EXPR_VERSION};
+
 use crate::{
     AntennaConductorPartIR, AntennaRigidTransformIR, AntennaTerminalFaceSelectorsIR,
-    CpwWidthStationIR, ImportedGeometryScaleIR, MicrostripWidthStationIR,
+    CpwWidthStationIR, FunctionIR, ImportedGeometryScaleIR, MicrostripWidthStationIR,
 };
 
 // ── Problem metadata ──────────────────────────────────────────────────────────
@@ -342,15 +344,28 @@ pub enum MaterialParameterFieldIR {
         location: MaterialFieldLocationIR,
         unit: String,
     },
+    /// A scalar equation of `x, y, z` (metres, in `frame`), `FunctionKind::Field`
+    /// of `field_expr.v1`, evaluated by the planner once per FDM cell or FEM
+    /// node (`docs/specs/mask-function-v1.md`, section 9). `function.name` is
+    /// present when the author wrote a `def` and absent for an equation string;
+    /// the script exporter writes the field back in that form.
+    Function {
+        function: FunctionIR,
+        #[serde(default)]
+        frame: RegionFrameIR,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        unit: Option<String>,
+    },
 }
 
 impl MaterialParameterFieldIR {
     /// Validate once the field is associated with a physical parameter.
     pub fn validate_unit(&self, parameter: MaterialParameterNameIR) -> Result<(), String> {
         let unit = match self {
-            Self::Constant { unit, .. } | Self::Linear { unit, .. } | Self::Radial { unit, .. } => {
-                unit.as_deref()
-            }
+            Self::Constant { unit, .. }
+            | Self::Linear { unit, .. }
+            | Self::Radial { unit, .. }
+            | Self::Function { unit, .. } => unit.as_deref(),
             Self::Sampled { unit, .. } => Some(unit.as_str()),
         };
         let Some(unit) = unit else {
@@ -365,6 +380,75 @@ impl MaterialParameterFieldIR {
             ))
         }
     }
+}
+
+impl MaterialParameterFieldIR {
+    /// Checks and compiles the equation of a `function` field; `None` for the
+    /// other kinds. The checks: a scalar parameter (a function field has one
+    /// output), the expression version, finite parameter values, a function
+    /// name that an exported script can write as a Python name, and the
+    /// equations of `FunctionKind::Field`. The values of the field are checked
+    /// against the parameter's own range by the planner, which samples them.
+    pub fn compile_function(
+        &self,
+        parameter: MaterialParameterNameIR,
+    ) -> Option<Result<CompiledFunction, String>> {
+        let Self::Function { function, .. } = self else {
+            return None;
+        };
+        Some(compile_field_function(parameter, function))
+    }
+}
+
+fn compile_field_function(
+    parameter: MaterialParameterNameIR,
+    function: &FunctionIR,
+) -> Result<CompiledFunction, String> {
+    if parameter == MaterialParameterNameIR::AnisotropyAxis {
+        return Err(format!(
+            "material_field_function_invalid: {parameter:?} is a vector parameter; a function field is scalar"
+        ));
+    }
+    if function.expression_version != FIELD_EXPR_VERSION {
+        return Err(format!(
+            "material_field_function_invalid: function.expression_version must be '{FIELD_EXPR_VERSION}'"
+        ));
+    }
+    // Python forbids binding __debug__ in a def, an assignment, or a call keyword.
+    if function.name.as_deref() == Some("__debug__")
+        || function.parameters.iter().any(|p| p.name == "__debug__")
+        || function.locals.iter().any(|local| local.name == "__debug__")
+    {
+        return Err("material_field_function_invalid: function cannot bind '__debug__' in an exported Python script".into());
+    }
+    if let Some(name) = &function.name {
+        validate_name(name).map_err(|error| {
+            format!(
+                "material_field_function_invalid: function.name: {}",
+                error.message
+            )
+        })?;
+    }
+    for (index, value) in function.parameters.iter().enumerate() {
+        if matches!(value.name.as_str(), "frame" | "unit") {
+            return Err(format!(
+                "material_field_function_invalid: function.parameters[{index}] '{}' is an option of fm.fields.function",
+                value.name
+            ));
+        }
+        if !value.value.is_finite() {
+            return Err(format!(
+                "material_field_function_invalid: function.parameters[{index}] '{}' must be finite",
+                value.name
+            ));
+        }
+    }
+    function.compile(FunctionKind::Field).map_err(|error| {
+        format!(
+            "{}: function.{} @{}: {}",
+            error.code, error.path, error.position, error.message
+        )
+    })
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]

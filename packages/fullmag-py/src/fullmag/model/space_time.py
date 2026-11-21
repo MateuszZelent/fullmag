@@ -36,12 +36,12 @@ _Term = tuple["ast.expr | None", "ast.expr | None"]
 
 
 def _parse(text: str) -> ast.expr:
-    """``field_expr.v1`` is Python syntax except for ``^`` (power)."""
-    return ast.parse(text.replace("^", "**"), mode="eval").body
+    """Equations written by the transpiler are Python expressions."""
+    return ast.parse(text, mode="eval").body
 
 
 def _text(node: ast.expr) -> str:
-    return ast.unparse(node).replace("**", "^")
+    return ast.unparse(node)
 
 
 def _names(node: ast.expr) -> set[str]:

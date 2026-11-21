@@ -6289,6 +6289,12 @@ fn validate_material_parameter_field(
                 )));
             }
         }
+        MaterialParameterFieldIR::Function { .. } => {
+            // The planner checks the sampled values against the parameter's range.
+            if let Some(Err(error)) = field.compile_function(parameter) {
+                return Err(SceneDocumentValidationError::new(format!("{path}: {error}")));
+            }
+        }
     }
     Ok(())
 }

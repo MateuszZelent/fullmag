@@ -55,7 +55,7 @@ def evaluate(function, variables: dict[str, float]) -> list[float]:
     names = {name: getattr(math, name) for name in ("sin", "cos", "exp", "sqrt", "log", "pi")}
     names.update(variables)
     names.update({parameter.name: parameter.value for parameter in function.parameters})
-    return [eval(output.replace("^", "**"), {"__builtins__": {}}, names) for output in function.outputs]
+    return [eval(output, {"__builtins__": {}}, names) for output in function.outputs]
 
 
 def summed(pairs, x: float, y: float, z: float, t: float) -> list[float]:

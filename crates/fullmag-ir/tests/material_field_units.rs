@@ -27,6 +27,10 @@ fn fields() -> Vec<Value> {
                "inside": 1.0, "outside": 2.0}),
         json!({"kind": "sampled", "asset_id": "material:samples",
                "component_count": 1, "location": "node"}),
+        json!({"kind": "function", "frame": "object", "function": {
+               "expression_version": "field_expr.v1",
+               "parameters": [{"name": "p0", "value": 1.0}],
+               "outputs": ["p0 + 0 * x"]}}),
     ]
 }
 

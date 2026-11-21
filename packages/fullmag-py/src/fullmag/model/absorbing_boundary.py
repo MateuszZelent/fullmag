@@ -1,17 +1,98 @@
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
+from functools import lru_cache
 import math
 from numbers import Real
 
 from fullmag._validation import require_non_negative, require_positive
-from fullmag.model._absorbing_boundary_expression import compile_distance_expression, compile_expression
+from fullmag.model.mask_function import FormulaError, compile_formula
 
 
 _FACES = ("x+", "x-", "y+", "y-", "z+", "z-")
 _PROFILES = ("linear", "quadratic", "smootherstep", "logarithmic", "tanh", "custom")
 _FRAMES = ("object", "universe")
+# Rules of the layer around the shared formula language
+# (docs/specs/mask-function-v1.md, section 8; crates/fullmag-ir/src/absorbing_boundary.rs).
+_MAX_FORMULA_CHARACTERS = 256
+_TOLERANCE = 1e-12
+_VALIDATION_STEPS = 256
+
+
+class AbsorbingBoundaryExpressionError(ValueError):
+    """A custom profile or distance formula is rejected.
+
+    ``category`` is ``"text"`` (blank, longer than 256 characters, or not
+    printable ASCII), ``"syntax"`` (not a formula of the shared language),
+    ``"range"`` (a profile value is not finite or lies outside [0, 1]) or
+    ``"endpoint"`` (p(0) != 0 or p(1) != 1).
+    """
+
+    def __init__(self, message: str, category: str) -> None:
+        super().__init__(message)
+        self.category = category
+
+
+def _formula(text: str, kind: str, label: str) -> Callable[..., float]:
+    if not isinstance(text, str) or not text.strip():
+        raise AbsorbingBoundaryExpressionError(f"{label} must not be blank", "text")
+    if len(text) > _MAX_FORMULA_CHARACTERS:
+        raise AbsorbingBoundaryExpressionError(
+            f"{label} must have at most {_MAX_FORMULA_CHARACTERS} characters", "text"
+        )
+    if any(not (character == "\t" or " " <= character <= "~") for character in text):
+        raise AbsorbingBoundaryExpressionError(
+            f"{label} must contain printable ASCII characters only", "text"
+        )
+    try:
+        return compile_formula(text, kind)
+    except FormulaError as error:
+        raise AbsorbingBoundaryExpressionError(f"{label} error at {error}", "syntax") from None
+
+
+@lru_cache(maxsize=128)
+def compile_profile_expression(expression: str) -> Callable[[float], float]:
+    """Check a custom ramp profile p(u) and return the checked evaluator.
+
+    The profile must give finite values in [0, 1] at u = k/256 and p(0) = 0,
+    p(1) = 1 within 1e-12; the evaluator applies the same check at every call.
+    """
+    formula = _formula(expression, "profile", "expression")
+
+    def checked(u: float) -> float:
+        value = formula(u)
+        if not math.isfinite(value):
+            raise AbsorbingBoundaryExpressionError(f"expression is undefined at u={u:g}", "range")
+        if not -_TOLERANCE <= value <= 1 + _TOLERANCE:
+            raise AbsorbingBoundaryExpressionError(
+                f"expression must return a value in [0, 1] at u={u:g}", "range"
+            )
+        if u in (0.0, 1.0):
+            if abs(value - u) > _TOLERANCE:
+                raise AbsorbingBoundaryExpressionError(
+                    "expression must equal 0 at u=0 and 1 at u=1", "endpoint"
+                )
+            return u
+        return max(0.0, min(1.0, value))
+
+    for step in range(_VALIDATION_STEPS + 1):
+        checked(step / _VALIDATION_STEPS)
+    return checked
+
+
+@lru_cache(maxsize=128)
+def compile_distance_expression(expression: str) -> Callable[[float, float, float], float]:
+    """Check a custom distance formula d(x, y, z) in metres and return its evaluator."""
+    formula = _formula(expression, "distance", "distance expression")
+
+    def distance(x: float, y: float, z: float) -> float:
+        value = formula(x, y, z)
+        if not math.isfinite(value):
+            raise ValueError(f"distance expression is undefined at {(x, y, z)}")
+        return value
+
+    return distance
 
 
 def _faces(raw: Sequence[str]) -> tuple[str, ...]:
@@ -51,7 +132,7 @@ class _DampingRamp:
         if profile == "custom":
             if not isinstance(expression, str) or not expression.strip():
                 raise ValueError("expression is required for a custom absorbing boundary profile")
-            compile_expression(expression)
+            compile_profile_expression(expression)
         elif expression is not None:
             raise ValueError("expression requires a custom absorbing boundary profile")
         frame = str(self.frame).strip().lower()
@@ -106,7 +187,7 @@ class AbsorbingBoundaryLayer(_DampingRamp):
         if self.profile == "tanh":
             return (1 + math.tanh(4 * t - 2) / math.tanh(2)) / 2
         if self.expression is not None:
-            return compile_expression(self.expression)(t)
+            return compile_profile_expression(self.expression)(t)
         return t * t * t * (t * (t * 6.0 - 15.0) + 10.0)
 
     def contribution(self, point: Sequence[float], bounds: Sequence[float]) -> float:

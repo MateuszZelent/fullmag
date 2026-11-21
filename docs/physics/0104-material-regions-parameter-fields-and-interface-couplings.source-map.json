@@ -236,6 +236,66 @@
         "fdm-cuda-late-transport-gate",
         "fdm-dmi-decoupled-connection-gate"
       ]
+    },
+    {
+      "id": "material-function-field",
+      "symbols": [
+        "function_value",
+        "function_F",
+        "frame_position",
+        "x",
+        "function_parameters",
+        "object_translation"
+      ],
+      "sources": [
+        "function-field-api",
+        "function-field-ir-check",
+        "function-field-sampling"
+      ]
+    },
+    {
+      "id": "material-function-sampling",
+      "symbols": [
+        "sample_value",
+        "function_F",
+        "frame_position",
+        "sample_point",
+        "function_parameters"
+      ],
+      "sources": [
+        "function-field-sampling",
+        "function-field-resolution",
+        "function-field-engine"
+      ]
+    },
+    {
+      "id": "material-function-alpha-ramp",
+      "symbols": [
+        "alpha",
+        "alpha_0",
+        "alpha_max",
+        "frame_position_x",
+        "x_edge",
+        "ramp_length",
+        "x",
+        "max_operator"
+      ],
+      "sources": [
+        "function-field-api",
+        "function-field-engine"
+      ]
+    },
+    {
+      "id": "material-function-alpha-total",
+      "symbols": [
+        "alpha_total_i",
+        "alpha_i",
+        "alpha_abl_i"
+      ],
+      "sources": [
+        "function-field-resolution",
+        "absorbing-layer-addition"
+      ]
     }
   ],
   "symbols": [
@@ -609,6 +669,102 @@
       "id": "F_plus",
       "latex": "F_+",
       "meaning": "set of grid connections, each counted once",
+      "si_unit": "1"
+    },
+    {
+      "id": "function_F",
+      "latex": "F",
+      "meaning": "authored scalar field equation of position",
+      "si_unit": "\\{\\mathrm{A/m},\\mathrm{J/m},1,\\mathrm{J/m^3},\\mathrm{J/m^2}\\}"
+    },
+    {
+      "id": "function_value",
+      "latex": "p_F",
+      "meaning": "value of a function field",
+      "si_unit": "\\{\\mathrm{A/m},\\mathrm{J/m},1,\\mathrm{J/m^3},\\mathrm{J/m^2}\\}"
+    },
+    {
+      "id": "function_parameters",
+      "latex": "\\boldsymbol\\theta",
+      "meaning": "named parameter values of a function field",
+      "si_unit": "\\text{SI unit of each parameter}"
+    },
+    {
+      "id": "frame_position",
+      "latex": "\\mathbf x_f",
+      "meaning": "position in the frame of the field",
+      "si_unit": "\\mathrm m"
+    },
+    {
+      "id": "frame_position_x",
+      "latex": "x_f",
+      "meaning": "first component of the frame position",
+      "si_unit": "\\mathrm m"
+    },
+    {
+      "id": "object_translation",
+      "latex": "\\mathbf t_\\mathrm{obj}",
+      "meaning": "translation of the owning object",
+      "si_unit": "\\mathrm m"
+    },
+    {
+      "id": "sample_point",
+      "latex": "\\mathbf x_i",
+      "meaning": "sample point: FDM cell centre or FEM node",
+      "si_unit": "\\mathrm m"
+    },
+    {
+      "id": "sample_value",
+      "latex": "p_i",
+      "meaning": "parameter value sampled at point i",
+      "si_unit": "\\{\\mathrm{A/m},\\mathrm{J/m},1,\\mathrm{J/m^3},\\mathrm{J/m^2}\\}"
+    },
+    {
+      "id": "alpha",
+      "latex": "\\alpha",
+      "meaning": "Gilbert damping",
+      "si_unit": "1"
+    },
+    {
+      "id": "alpha_0",
+      "latex": "\\alpha_0",
+      "meaning": "damping before the ramp",
+      "si_unit": "1"
+    },
+    {
+      "id": "alpha_max",
+      "latex": "\\alpha_\\mathrm{max}",
+      "meaning": "damping added at the end of the ramp",
+      "si_unit": "1"
+    },
+    {
+      "id": "x_edge",
+      "latex": "x_\\mathrm{edge}",
+      "meaning": "start of the damping ramp",
+      "si_unit": "\\mathrm m"
+    },
+    {
+      "id": "ramp_length",
+      "latex": "L",
+      "meaning": "length of the damping ramp",
+      "si_unit": "\\mathrm m"
+    },
+    {
+      "id": "alpha_i",
+      "latex": "\\alpha_i",
+      "meaning": "resolved damping at point i",
+      "si_unit": "1"
+    },
+    {
+      "id": "alpha_abl_i",
+      "latex": "\\Delta\\alpha_{\\mathrm{ABL},i}",
+      "meaning": "absorbing-layer damping added at point i",
+      "si_unit": "1"
+    },
+    {
+      "id": "alpha_total_i",
+      "latex": "\\alpha^\\mathrm{total}_i",
+      "meaning": "damping consumed by the solver at point i",
       "si_unit": "1"
     }
   ],
@@ -1279,6 +1435,60 @@
       "path": "backends/fem/tests/cuda_object_average_contract.cpp",
       "symbol": "void large_active_selectors_reuse_records",
       "responsibility": "Qualify prepared nodal and DG0 selectors with more than 16384 active records; exact observable oracle, no repeated H2D or allocations, and diagnostic reduction timing."
+    },
+    {
+      "id": "function-field-api",
+      "path": "packages/fullmag-py/src/fullmag/model/field_function.py",
+      "symbol": "function",
+      "responsibility": "Builds fm.fields.function from an equation string or a def with named parameter values."
+    },
+    {
+      "id": "function-field-python-evaluator",
+      "path": "packages/fullmag-py/src/fullmag/model/field_function.py",
+      "symbol": "compile_field_function",
+      "responsibility": "Evaluates a stored field function with checked IEEE-754 arithmetic."
+    },
+    {
+      "id": "function-field-alpha-assignment",
+      "path": "packages/fullmag-py/src/fullmag/world.py",
+      "symbol": "class MagnetHandle",
+      "responsibility": "Assigns film.alpha = <field> as one object-wide alpha assignment."
+    },
+    {
+      "id": "function-field-export",
+      "path": "packages/fullmag-py/src/fullmag/runtime/script_builder.py",
+      "symbol": "class _FieldFunctionRenderer",
+      "responsibility": "Writes a function field back as an equation string or a def."
+    },
+    {
+      "id": "function-field-engine",
+      "path": "crates/fullmag-expr/src/function.rs",
+      "symbol": "eval_field",
+      "responsibility": "Evaluates a field-kind equation at one point."
+    },
+    {
+      "id": "function-field-ir-check",
+      "path": "crates/fullmag-ir/src/model.rs",
+      "symbol": "compile_field_function",
+      "responsibility": "Checks and compiles the equation of MaterialParameterFieldIR::Function."
+    },
+    {
+      "id": "function-field-sampling",
+      "path": "crates/fullmag-plan/src/material.rs",
+      "symbol": "evaluate_parameter_field",
+      "responsibility": "Evaluates an authored field at one sample point in its frame."
+    },
+    {
+      "id": "function-field-resolution",
+      "path": "crates/fullmag-plan/src/material.rs",
+      "symbol": "resolve_spatial_parameter_excluding_regions",
+      "responsibility": "Compiles function fields once and checks every sampled value against the parameter range."
+    },
+    {
+      "id": "absorbing-layer-addition",
+      "path": "crates/fullmag-plan/src/spatial_absorber.rs",
+      "symbol": "apply_absorbing_boundary_layer",
+      "responsibility": "Adds absorbing-layer damping on top of the resolved alpha."
     }
   ],
   "public_api": {
@@ -1854,6 +2064,61 @@
         "backend_support": "authored IR on FDM/FEM CPU/GPU; runtime capability-gated",
         "problem_ir": "CouplingIR.capability_policy",
         "source": "packages/fullmag-py/src/fullmag/world.py::StudyCouplingsHandle.interlayer_exchange"
+      },
+      {
+        "python": "fm.fields.function.source",
+        "type": "str | Callable",
+        "default": "required",
+        "si_unit": "\\{\\mathrm{A/m},\\mathrm{J/m},1,\\mathrm{J/m^3},\\mathrm{J/m^2}\\}",
+        "validation": "a string is checked by the syntax-tree checker of the formula language and never evaluated by Python",
+        "meaning": "equation of the field value",
+        "backend_support": "sampled by the planner for FDM/FEM CPU/GPU",
+        "problem_ir": "MaterialParameterFieldIR::Function.function.outputs",
+        "source": "packages/fullmag-py/src/fullmag/model/field_function.py::function"
+      },
+      {
+        "python": "fm.fields.function.frame",
+        "type": "Literal[\"object\", \"world\"]",
+        "default": "\"object\"",
+        "si_unit": "1",
+        "validation": "case-normalized to object/world; any other token gives ValueError",
+        "meaning": "coordinate frame of x, y, z",
+        "backend_support": "sampled by the planner for FDM/FEM CPU/GPU",
+        "problem_ir": "MaterialParameterFieldIR::Function.frame",
+        "source": "packages/fullmag-py/src/fullmag/model/field_function.py::function"
+      },
+      {
+        "python": "fm.fields.function.unit",
+        "type": "str | None",
+        "default": "None",
+        "si_unit": "1",
+        "validation": "optional SI unit of the parameter; checked when the field is assigned",
+        "meaning": "declared field-value unit metadata",
+        "backend_support": "sampled by the planner for FDM/FEM CPU/GPU",
+        "problem_ir": "MaterialParameterFieldIR::Function.unit",
+        "source": "packages/fullmag-py/src/fullmag/model/field_function.py::function"
+      },
+      {
+        "python": "fm.fields.function.**values",
+        "type": "numbers.Real",
+        "default": "required for every parameter without a def default",
+        "si_unit": "\\text{SI unit of each parameter}",
+        "validation": "finite real, not bool; a name must be a non-reserved identifier other than frame and unit",
+        "meaning": "named parameter values",
+        "backend_support": "sampled by the planner for FDM/FEM CPU/GPU",
+        "problem_ir": "MaterialParameterFieldIR::Function.function.parameters",
+        "source": "packages/fullmag-py/src/fullmag/model/field_function.py::function"
+      },
+      {
+        "python": "MagnetHandle.alpha",
+        "type": "float | MaterialParameterField",
+        "default": "0.01",
+        "si_unit": "1",
+        "validation": "a number must be finite and >= 0; a field replaces the object-wide alpha field set this way",
+        "meaning": "object damping or object-wide damping field",
+        "backend_support": "sampled by the planner for FDM/FEM CPU/GPU",
+        "problem_ir": "material_parameter_fields[assignment_id=<object>:object:alpha]",
+        "source": "packages/fullmag-py/src/fullmag/world.py::MagnetHandle"
       }
     ]
   }

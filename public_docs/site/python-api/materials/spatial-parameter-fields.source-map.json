@@ -22,8 +22,7 @@
     {
       "solver": "FDM",
       "device": "GPU",
-      "status": "unsupported",
-      "reason": "The planner rejects region-owned Ms, Aex, and Alpha fields for forced CUDA before native upload."
+      "status": "documented"
     }
   ],
   "equations": [
@@ -72,6 +71,19 @@
       ],
       "sources": [
         "field-factories"
+      ]
+    },
+    {
+      "id": "eq-material-spatial-function",
+      "symbols": [
+        "F",
+        "theta",
+        "xf"
+      ],
+      "sources": [
+        "function-field-factory",
+        "function-field-ir-check",
+        "function-field-sampling"
       ]
     }
   ],
@@ -147,6 +159,18 @@
       "latex": "$w_{a_*}$",
       "meaning": "transition weight for the winning assignment",
       "si_unit": "$1$"
+    },
+    {
+      "id": "F",
+      "latex": "$F$",
+      "meaning": "authored equation of a function field",
+      "si_unit": "parameter-dependent"
+    },
+    {
+      "id": "theta",
+      "latex": "$\\boldsymbol\\theta$",
+      "meaning": "named parameter values of a function field",
+      "si_unit": "SI unit of each parameter"
     }
   ],
   "sources": [
@@ -185,6 +209,30 @@
       "path": "crates/fullmag-plan/src/material_transition.rs",
       "symbol": "resolved_region_transition",
       "responsibility": "Resolves explicit and default material transition policies."
+    },
+    {
+      "id": "function-field-factory",
+      "path": "packages/fullmag-py/src/fullmag/model/field_function.py",
+      "symbol": "function",
+      "responsibility": "Builds function-field payloads from an equation string or a def."
+    },
+    {
+      "id": "function-field-ir-check",
+      "path": "crates/fullmag-ir/src/model.rs",
+      "symbol": "compile_field_function",
+      "responsibility": "Checks and compiles a function field in ProblemIR."
+    },
+    {
+      "id": "function-field-sampling",
+      "path": "crates/fullmag-plan/src/material.rs",
+      "symbol": "evaluate_parameter_field",
+      "responsibility": "Samples an authored field at one point in its frame."
+    },
+    {
+      "id": "cuda-material-field-gate",
+      "path": "crates/fullmag-plan/src/validate.rs",
+      "symbol": "validate_region_owned_planning",
+      "responsibility": "Accepts cellwise material fields on single-grid CUDA and rejects them on multilayer CUDA."
     }
   ],
   "public_api": {
@@ -347,6 +395,36 @@
         "validation": "non-empty metadata; no dimensional check",
         "meaning": "sampled-value unit metadata",
         "backend_support": "authoring-only; planner rejects materialization on all lanes",
+        "problem_ir": "`material_parameter_fields[].value.unit`"
+      },
+      {
+        "python": "fm.fields.function.source",
+        "type": "str | Callable",
+        "default": "required",
+        "si_unit": "parameter-dependent",
+        "validation": "string checked by the formula syntax-tree checker, never evaluated by Python",
+        "meaning": "equation of the field value",
+        "backend_support": "sampled by the planner on FDM/FEM CPU/GPU",
+        "problem_ir": "`material_parameter_fields[].value.function.outputs`"
+      },
+      {
+        "python": "fm.fields.function.frame",
+        "type": "str",
+        "default": "\"object\"",
+        "si_unit": "$1$",
+        "validation": "exactly `object` or `world`",
+        "meaning": "coordinate frame of x, y, z",
+        "backend_support": "sampled by the planner on FDM/FEM CPU/GPU",
+        "problem_ir": "`material_parameter_fields[].value.frame`"
+      },
+      {
+        "python": "fm.fields.function.unit",
+        "type": "str | None",
+        "default": "None",
+        "si_unit": "$1$",
+        "validation": "optional SI unit of the parameter, checked at assignment",
+        "meaning": "function-field value unit metadata",
+        "backend_support": "all lanes preserve metadata; runtime does not convert",
         "problem_ir": "`material_parameter_fields[].value.unit`"
       }
     ]

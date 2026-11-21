@@ -55,10 +55,8 @@ def evaluate(ir: dict, **variables: float) -> tuple[float, ...]:
     scope.update({item["name"]: item["value"] for item in ir.get("parameters", [])})
     scope.update(variables)
     for local in ir.get("locals", []):
-        scope[local["name"]] = eval(local["expression"].replace("^", "**"), {"__builtins__": {}}, scope)
-    return tuple(
-        eval(output.replace("^", "**"), {"__builtins__": {}}, scope) for output in ir["outputs"]
-    )
+        scope[local["name"]] = eval(local["expression"], {"__builtins__": {}}, scope)
+    return tuple(eval(output, {"__builtins__": {}}, scope) for output in ir["outputs"])
 
 
 def compile_source(source: str, name: str = "f", **namespace: object):
@@ -71,6 +69,12 @@ def compile_source(source: str, name: str = "f", **namespace: object):
 
 
 class MaskFunctionTests(unittest.TestCase):
+    def test_legacy_antenna_identifiers_remain_available(self) -> None:
+        mask = fm.mask(compile_source("def f(x, y, z):\n    log1p = x\n    return (log1p, 0, 0)\n"))
+        self.assertEqual(mask.to_ir()["locals"][0]["name"], "log1p")
+        time = fm.time(compile_source("def f(t, log1p):\n    return t * log1p\n"), log1p=2)
+        self.assertEqual(time.to_ir()["parameters"][0]["name"], "log1p")
+
     def test_antenna_mask_transpiles(self) -> None:
         field = fm.mask(
             antenna_mask, B01=0.2 * mT, wavelength=279 * nm, fwhm_y=240 * nm, xs=6000 * nm / 2.3
@@ -90,7 +94,7 @@ class MaskFunctionTests(unittest.TestCase):
         self.assertEqual([item["name"] for item in ir["locals"]], ["k", "sigma_y", "g"])
         self.assertEqual(
             ir["locals"][2]["expression"],
-            "exp(-(x + xs)^2 / (2 * wavelength^2)) * exp(-y^2 / (2 * sigma_y^2))",
+            "exp(-(x + xs)**2 / (2 * wavelength**2)) * exp(-y**2 / (2 * sigma_y**2))",
         )
         self.assertEqual(
             ir["outputs"],
@@ -160,8 +164,8 @@ class MaskFunctionTests(unittest.TestCase):
             """
         )
         ir = fm.mask(f, a=2.0).to_ir()
-        self.assertEqual(ir["locals"][0]["expression"], "a * x + a ^ 2")
-        self.assertEqual(ir["outputs"], ["g", "-y ^ 2", "+z"])
+        self.assertEqual(ir["locals"][0]["expression"], "a * x + a ** 2")
+        self.assertEqual(ir["outputs"], ["g", "-y ** 2", "+z"])
 
     def test_rejections_name_the_line(self) -> None:
         cases = {
@@ -182,6 +186,11 @@ class MaskFunctionTests(unittest.TestCase):
             "wrong_leading": ("def f(a, y, z):\n    return (a, 0, 0)\n", 1),
             "string": ("def f(x, y, z):\n    return ('x', 0, 0)\n", 2),
             "modulo": ("def f(x, y, z):\n    return (x % 2, 0, 0)\n", 2),
+            # field_expr.v1 cannot read a parenthesized function name.
+            "parenthesized_callee": ("def f(x, y, z):\n    return ((sin)(x), 0, 0)\n", 2),
+            "parenthesized_math": ("def f(x, y, z):\n    return ((math.sin)(x), 0, 0)\n", 2),
+            # log1p belongs to the absorbing-boundary formulas only.
+            "log1p": ("def f(x, y, z):\n    return (log1p(x), 0, 0)\n", 2),
         }
         for name, (source, line) in cases.items():
             with self.subTest(name):

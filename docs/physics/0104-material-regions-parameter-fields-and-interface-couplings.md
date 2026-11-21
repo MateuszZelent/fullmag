@@ -2,7 +2,7 @@
 
 - Status: accepted implementation contract
 - Owners: Fullmag core
-- Last updated: 2026-11-01
+- Last updated: 2026-11-20
 - Related ADRs: `docs/adr/0011-resource-first-api.md`, `docs/adr/0013-frontend-v2-module-kernel.md`, `docs/adr/0027-canonical-fem-mesh-policy-and-quality-evidence.md`
 - Related specs: `docs/specs/resource-first-control-room-api-v2.md`
 - Related plans:
@@ -144,6 +144,59 @@ Regionowe `maximum_element_size` jest upper target, a
 `minimum_element_size` jest lower bound; żadna nazwa regionu nie aktywuje
 fizyki ani nie może ominąć dolnego ograniczenia.
 
+A function field (`fm.fields.function`, {ref}`material-regions-function-field`)
+gives the parameter as an authored scalar equation $F$ of position with named
+parameter values $\boldsymbol\theta$, evaluated in the object or world frame:
+
+```{math}
+:label: material-function-field
+
+p_F(\mathbf x)=F\bigl(\mathbf x_f(\mathbf x);\boldsymbol\theta\bigr),
+\qquad
+\mathbf x_f(\mathbf x)=
+\begin{cases}
+\mathbf x-\mathbf t_\mathrm{obj}, & \text{object frame},\\
+\mathbf x, & \text{world frame}.
+\end{cases}
+```
+
+The field enters {eq}`material-transition-blend` as $p_\mathrm{region}$ like a
+linear or radial field. The planner samples it once per FDM cell centre or FEM
+node $\mathbf x_i$; there is no averaging over the cell or quadrature:
+
+```{math}
+:label: material-function-sampling
+
+p_i=F\bigl(\mathbf x_f(\mathbf x_i);\boldsymbol\theta\bigr).
+```
+
+At unit transition weight the resolved coefficient equals the sampled field
+value directly. Evaluating this endpoint as a subtraction and addition of the
+base coefficient can round a small positive damping to zero.
+
+Worked example, the damping ramp in front of an absorbing edge
+(mumax3-style position-dependent $\alpha$):
+
+```{math}
+:label: material-function-alpha-ramp
+
+\alpha(\mathbf x)=\alpha_0+\alpha_\mathrm{max}
+\max\!\left(0,\frac{x_f-x_\mathrm{edge}}{L}\right)^{3}.
+```
+
+With $\alpha_0=0.01$, $\alpha_\mathrm{max}=0.5$, $x_\mathrm{edge}=2\,\mu\mathrm m$
+and $L=600\,\mathrm{nm}$, a cell centre at $x_f=2.3\,\mu\mathrm m$ has
+$\alpha=0.01+0.5\cdot0.5^3=0.0725$ and one at $x_f=2.6\,\mu\mathrm m$ has
+$\alpha=0.51$. An absorbing boundary layer
+([absorbing boundary note](absorbing-boundary-layer.md)) adds its damping on top
+of the resolved value, unchanged by this note:
+
+```{math}
+:label: material-function-alpha-total
+
+\alpha^\mathrm{total}_i=\alpha_i+\Delta\alpha_{\mathrm{ABL},i}.
+```
+
 (material-regions-symbols-and-si-units)=
 ### 2.2 Symbols and SI units
 
@@ -211,6 +264,22 @@ fizyki ani nie może ominąć dolnego ograniczenia.
 | $\nabla\!\cdot$ | divergence differential operator | $\mathrm{m^{-1}}$ |
 | $\int_\Omega(\cdot)\,\mathrm dV$ | volume-integration operator | $\mathrm{m^3}$ |
 | $\int_\Gamma(\cdot)\,\mathrm dS$ | surface-integration operator | $\mathrm{m^2}$ |
+| $F$ | authored scalar field equation of position | $\{\mathrm{A/m},\mathrm{J/m},1,\mathrm{J/m^3},\mathrm{J/m^2}\}$ |
+| $p_F$ | value of a function field | $\{\mathrm{A/m},\mathrm{J/m},1,\mathrm{J/m^3},\mathrm{J/m^2}\}$ |
+| $\boldsymbol\theta$ | named parameter values of a function field | $\text{SI unit of each parameter}$ |
+| $\mathbf x_f$ | position in the frame of the field | $\mathrm m$ |
+| $x_f$ | first component of the frame position | $\mathrm m$ |
+| $\mathbf t_\mathrm{obj}$ | translation of the owning object | $\mathrm m$ |
+| $\mathbf x_i$ | sample point: FDM cell centre or FEM node | $\mathrm m$ |
+| $p_i$ | parameter value sampled at point i | $\{\mathrm{A/m},\mathrm{J/m},1,\mathrm{J/m^3},\mathrm{J/m^2}\}$ |
+| $\alpha$ | Gilbert damping | $1$ |
+| $\alpha_0$ | damping before the ramp | $1$ |
+| $\alpha_\mathrm{max}$ | damping added at the end of the ramp | $1$ |
+| $x_\mathrm{edge}$ | start of the damping ramp | $\mathrm m$ |
+| $L$ | length of the damping ramp | $\mathrm m$ |
+| $\alpha_i$ | resolved damping at point i | $1$ |
+| $\Delta\alpha_{\mathrm{ABL},i}$ | absorbing-layer damping added at point i | $1$ |
+| $\alpha^\mathrm{total}_i$ | damping consumed by the solver at point i | $1$ |
 
 (material-regions-assumptions-and-validity)=
 ### 2.3 Assumptions and approximations
@@ -237,6 +306,13 @@ fizyki ani nie może ominąć dolnego ograniczenia.
    realized by the selected backend, the run is blocked.
 10. Exact through-thickness layers and structured in-plane meshing are odrębnymi
     własnościami; regionowa polityka rozmiaru nie gwarantuje żadnej z nich.
+11. A function field is a pointwise coefficient. FDM and FEM sample it at
+    cell centres and nodes {eq}`material-function-sampling`; a feature shorter
+    than the cell or element size is aliased, not averaged, so the grid or mesh
+    must resolve the shortest scale of $F$. The parameter's range rules
+    ($M_s>0$, $A\ge0$, $\alpha\ge0$, finite values) are checked at the sample
+    points only.
+12. A function field is scalar. The vector parameter `AnisotropyAxis` rejects it.
 
 ### 2.4 Region-local material transition semantics
 
@@ -1141,14 +1217,86 @@ lowering are current and can be inspected independently:
 Direct property assignment such as `lower.Ms = ms_profile` remains outside the
 current builder contract; adding that ergonomic builder path is planned. Until
 then, `MaterialParameterField.to_ir()` proves descriptor semantics only and is
-not evidence that a selected runtime consumes the spatial field.
+not evidence that a selected runtime consumes the spatial field. The one
+exception is damping: `film.alpha = <MaterialParameterField>` assigns the field
+to the whole object ({ref}`material-regions-function-field`).
 
 `ObjectRegion.mesh` uses the same maximum/minimum ordering rule as object mesh
-controls. `fm.fields.constant`, `linear`, `radial`, and `sampled` are the
-implemented field constructors. Inter-object exchange, RKKY, and interlayer
+controls. `fm.fields.constant`, `linear`, `radial`, `function`, and `sampled`
+are the implemented field constructors. Inter-object exchange, RKKY, and interlayer
 exchange are authored only through `study.couplings`; precomputed conformal
 markers remain declarations about an already-populated mesh, not generated
 region topology.
+(material-regions-function-field)=
+#### 4.1.1 Function fields (`fm.fields.function`)
+
+`fm.fields.function` writes a scalar material parameter as an equation of
+position {eq}`material-function-field`. The main form is an equation string in
+Python syntax; a `def` is the mumax3-style alternative. Both lower to the same
+`FunctionIR` of the field kind (`docs/specs/mask-function-v1.md`, section 9).
+
+| Python | Type | Default | SI unit | Validation / error | Meaning | Backend support | ProblemIR destination | Source |
+|---|---|---|---|---|---|---|---|---|
+| `fm.fields.function.source` | `str \| Callable` | `required` | $\{\mathrm{A/m},\mathrm{J/m},1,\mathrm{J/m^3},\mathrm{J/m^2}\}$ | a string is checked by the syntax-tree checker of the formula language and never evaluated by Python; free names must be x, y, z, pi, a function or a given parameter; a def must start with x, y, z, use only assignments and one return of one number; otherwise FieldFunctionError | equation of the field value | sampled by the planner for FDM/FEM CPU/GPU | `MaterialParameterFieldIR::Function.function.outputs` | `packages/fullmag-py/src/fullmag/model/field_function.py::function` |
+| `fm.fields.function.frame` | `Literal["object", "world"]` | `"object"` | $1$ | case-normalized to object/world; any other token gives ValueError | coordinate frame of x, y, z | sampled by the planner for FDM/FEM CPU/GPU | `MaterialParameterFieldIR::Function.frame` | `packages/fullmag-py/src/fullmag/model/field_function.py::function` |
+| `fm.fields.function.unit` | `str \| None` | `None` | $1$ | optional SI unit of the parameter; checked when the field is assigned | declared field-value unit metadata | sampled by the planner for FDM/FEM CPU/GPU | `MaterialParameterFieldIR::Function.unit` | `packages/fullmag-py/src/fullmag/model/field_function.py::function` |
+| `fm.fields.function.**values` | `numbers.Real` | `required for every parameter without a def default` | $\text{SI unit of each parameter}$ | finite real, not bool; a name must be a non-reserved identifier other than frame and unit; a string must use every given name; otherwise FieldFunctionError | named parameter values | sampled by the planner for FDM/FEM CPU/GPU | `MaterialParameterFieldIR::Function.function.parameters` | `packages/fullmag-py/src/fullmag/model/field_function.py::function` |
+| `MagnetHandle.alpha` | `float \| MaterialParameterField` | `0.01` | $1$ | a number must be finite and >= 0; a field replaces the object-wide alpha field set this way; a later number changes only the base value | object damping or object-wide damping field | sampled by the planner for FDM/FEM CPU/GPU | `material_parameter_fields[assignment_id=<object>:object:alpha]` | `packages/fullmag-py/src/fullmag/world.py::MagnetHandle` |
+
+`FunctionIR.name` records the authored form: present for a `def`, absent for
+an equation string. It is the smaller contract change (no new field) and keeps
+its documented meaning, the name of the authored Python function used by the
+exporter; a string has no function. The exporter writes a string field back as
+`fm.fields.function("<text>", **values)` and a `def` field as the `def` plus the
+call. A field function stores numbers only: the text of a `def` default is not
+kept. Vector parameters, `fm.init.from_function` and a Control Room editor are
+outside this kind; the Control Room shows the equation and its parameter
+values read-only.
+
+Worked example (executed with `fm.load_problem_from_script` on 2026-11-20;
+lowering only, no solver run). The equation string comes first; the `def` cell
+is the alternative for mumax3 users and gives the same `ProblemIR` except
+`FunctionIR.name`:
+
+```python
+# %% FDM strip with a damping ramp written as an equation string
+import fullmag as fm
+
+study = fm.study("alpha_ramp")
+study.engine("fdm")
+study.device("cpu", precision="double")
+study.mode("strict")
+study.cell(10e-9, 10e-9, 5e-9)
+
+film = study.geometry(fm.Box(size=(4e-6, 200e-9, 5e-9)), name="film")
+film.Ms = 800e3
+film.Aex = 13e-12
+film.alpha = 0.01
+film.m = fm.texture.uniform(1.0, 0.0, 0.0)
+
+film.alpha = fm.fields.function(
+    "a0 + a_max*max(0.0, (x - x_edge)/L)**3",
+    a0=0.01, a_max=0.5, x_edge=1.4e-6, L=600e-9,
+)
+
+# %% mumax3-style alternative: the same field as a def (replaces the one above)
+def alpha(x, y, z, a0, a_max, x_edge, L):
+    return a0 + a_max * max(0.0, (x - x_edge) / L) ** 3
+
+
+film.alpha = fm.fields.function(alpha, a0=0.01, a_max=0.5, x_edge=1.4e-6, L=600e-9)
+
+# %% Interactions and one run stage
+study.exchange()
+study.demag()
+study.stages.add_run(stage_id="ringdown", until=1e-12)
+```
+
+The strip spans $x_f\in[-2,2]\,\mu\mathrm m$ in its object frame, so the ramp
+covers the last $600\,\mathrm{nm}$: $\alpha=0.01$ up to $x_f=1.4\,\mu\mathrm m$
+and $\alpha=0.51$ at $x_f=2\,\mu\mathrm m$. The second assignment replaces the
+first (one object-wide alpha field).
+
 (material-regions-problem-ir)=
 ### 4.2 ProblemIR representation
 
@@ -1156,7 +1304,11 @@ region topology.
 
 - legacy `RegionIR` remains a body/geometry binding compatibility type,
 - new `ObjectRegionIR` represents owner-scoped authored regions,
-- `MaterialParameterFieldIR` represents authored scalar/vector field intent,
+- `MaterialParameterFieldIR` represents authored scalar/vector field intent;
+  its `Function { function: FunctionIR, frame, unit }` variant carries a scalar
+  equation of `x, y, z` (`FunctionKind::Field`), validated by
+  `MaterialParameterFieldIR::compile_function` (expression version, finite
+  parameter values, a valid function name, the equations, scalar parameter),
 - `MaterialIR.*_field` remains realized/runtime payload, not authored intent,
 - `CouplingIR` represents explicit exchange/RKKY/interface coupling,
 - realized mesh/material region markers remain runtime/meshing assets.
@@ -1254,6 +1406,16 @@ Surface selector v1:
 | FDM GPU | regular-grid realization; `u32` region indices without a count limit | same connection coefficients, cellwise $M_s$/$\alpha$; combinations listed in {ref}`material-regions-fdm-lane-realization` blocked; no silent CPU fallback |
 | FEM CPU | conformal or explicit projection | shared-domain coefficients and markers |
 | FEM GPU | ta sama canonical mesh intent | osobna realizacja runtime, wspólna semantyka |
+
+A function field has no lane-specific code. The planner compiles the equation
+once per resolution (`resolve_spatial_parameter_excluding_regions`) and samples
+it with `evaluate_parameter_field` at FDM cell centres and FEM nodes
+{eq}`material-function-sampling`, in binary64, before any device upload. FDM
+CPU and FDM CUDA receive the same cellwise array; FEM CPU and FEM GPU receive the
+same nodal array. The limits of the table above (for example the multilayer
+CUDA refusal and the CUDA combinations of {ref}`material-regions-fdm-lane-realization`)
+apply unchanged. Device execution with a function field has no qualification
+evidence yet.
 
 (material-regions-discrete-realization)=
 ### 4.5 Discrete realization
@@ -1357,7 +1519,11 @@ Fizyka pozostaje opisana w [iDMI](0404-interfacial-dmi.md) oraz
 ### 4.6 Round-trip and failure semantics
 
 Python/UI round-trip zachowuje requested intent: właściciela, nazwę, shape,
-`mesh_policy`, material fields i couplings. Resolved execution zachowuje
+`mesh_policy`, material fields i couplings. A function field keeps its authored
+form through Problem and SceneDocument exports: an equation string comes back
+as a string, a `def` as the same `def`; the `ProblemIR` is equal after the round
+trip. A value outside the parameter's range at a sample point is a planner
+error that names the assignment and the world point; it is never clipped. Resolved execution zachowuje
 markery, projection/conformal mode oraz capability result. Validation errors
 blokują niepoprawne zakresy i `Ms<=0`; unsupported combinations blokują planner.
 Nie wolno porzucać regionu lub coupling po cichu.
@@ -1529,6 +1695,18 @@ must include:
 - `fem_planner_elementwise_material_legality_distinguishes_a_from_ms` (prescribed-SOT case),
 - `fem_spin_transport_ms_realization_admits_only_the_scalar_torque_coefficient`,
 - `transport_plan_rejects_spatial_ms_before_native_call`.
+- `field_kind_tests` (`fullmag-expr`): the field kind, the alpha ramp against
+  its closed form, rejected `t`, `log1p`, `^` and extra outputs,
+- `material_field_function` (`fullmag-ir`): serde round trip and validation
+  errors of `MaterialParameterFieldIR::Function`,
+- `function_field_is_sampled_in_its_frame_at_cells_and_nodes`,
+  `absorbing_boundary_adds_on_top_of_a_function_field`,
+  `function_field_values_are_checked_against_the_parameter_range`,
+  `function_alpha_is_sampled_at_every_cell_in_the_declared_frame`,
+  `fem_function_alpha_is_sampled_at_every_node` (`fullmag-plan`),
+- `packages/fullmag-py/tests/test_material_field_function.py`: both authored
+  forms, validation errors, evaluation against the Python reference and the
+  Problem/SceneDocument round trip.
 
 ## 6. Completeness checklist
 
@@ -1571,6 +1749,8 @@ must include:
 - The production choice between per-face coefficient arrays and a compact
   material-index representation is decided by the measurements recorded in
   `docs/audits/2026-11-01-fdm-unbounded-regions-benchmark.md`.
+- Function fields are scalar. Vector-valued function fields,
+  `fm.init.from_function` and a Control Room editor for equations are deferred.
 - Runtime texture authoring is deferred; region texture override in v1 is an
   initial-condition feature.
 
@@ -1598,6 +1778,14 @@ must include:
 | Python couplings | `packages/fullmag-py/src/fullmag/model/couplings.py` | `class CouplingRegistry` | explicit exchange/RKKY authoring |
 | ProblemIR fields | `crates/fullmag-ir/src/model.rs` | `MaterialParameterFieldIR` | typed field intent |
 | ProblemIR vocabulary | `crates/fullmag-ir/src/model.rs` | `MaterialParameterNameIR` | typed parameter names |
+| Python function fields | `packages/fullmag-py/src/fullmag/model/field_function.py` | `function` | `fm.fields.function`: string and def forms, parameter values |
+| Python function evaluator | `packages/fullmag-py/src/fullmag/model/field_function.py` | `compile_field_function` | checked IEEE-754 evaluation of a stored field function |
+| Python alpha assignment | `packages/fullmag-py/src/fullmag/world.py` | `class MagnetHandle` | `film.alpha = <field>` as one object-wide assignment |
+| Python export | `packages/fullmag-py/src/fullmag/runtime/script_builder.py` | `class _FieldFunctionRenderer` | string or def form written back |
+| Formula engine | `crates/fullmag-expr/src/function.rs` | `eval_field` | value of a field-kind equation at a point |
+| ProblemIR function check | `crates/fullmag-ir/src/model.rs` | `compile_field_function` | checks and compilation of a function field |
+| Planner sampling | `crates/fullmag-plan/src/material.rs` | `evaluate_parameter_field` | per-point value in the frame of the field |
+| Planner resolution | `crates/fullmag-plan/src/material.rs` | `resolve_spatial_parameter_excluding_regions` | one compilation per resolution, range check per sample |
 | ProblemIR couplings | `crates/fullmag-ir/src/model.rs` | `CouplingIR` | typed explicit couplings |
 | FEM material core | `backends/fem/core/fem_element_quadrature_material.hpp` | `class ElementQuadratureMaterial` | element/quadrature material access |
 | Rejestry V04 | `crates/fullmag-ir/src/validation.rs` | `validate_physics_object_problem` | indeksowane błędy pustych/duplikowanych materiałów i regionów oraz właścicieli; źródła, bez kwalifikacji runtime |
