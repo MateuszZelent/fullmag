@@ -1,3 +1,4 @@
+#[cfg(test)]
 pub(crate) fn backend_build_date() -> &'static str {
     fullmag_build_info::identity()
         .built_at_utc

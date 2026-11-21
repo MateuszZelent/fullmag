@@ -198,8 +198,7 @@ impl AcceptedProjectStorage {
             .context("reserve accepted project output and scratch")?;
         let data_root = lease.resolved().temp_dir.join("data");
         fs::create_dir(&data_root).context("create owned staging directory for numerical data")?;
-        let mut storage = Self {
-            lease,
+        let storage = Self {            lease,
             data_root,
             finalized: false,
             manifest,

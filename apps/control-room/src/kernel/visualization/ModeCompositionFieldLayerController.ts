@@ -1,8 +1,5 @@
-import {
-  asDecodedComplexFieldVector,
-  type DecodedComplexFieldVector,
-  type DecodedFieldVector,
-} from "../api/codecs";
+import { asDecodedComplexFieldVector } from "../api/codecs/fieldVectorCodec";
+import type { DecodedComplexFieldVector, DecodedFieldVector } from "../api/codecs/types";
 import type { FrequencyDomainFieldResource } from "../api/apiTypes";
 import { modeFieldComplexBinaryResourceKey, type ModeFieldComplexBinaryIdentity } from "../resources/frequencyDomainResourceKeys";
 import { ResourceCache } from "../resources/ResourceCache";

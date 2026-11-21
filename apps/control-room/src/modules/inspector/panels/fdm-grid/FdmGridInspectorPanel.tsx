@@ -52,6 +52,23 @@ function formatShape(values: readonly number[] | null): string {
   return values ? values.join(" × ") : "not available";
 }
 
+function cellRows(cell: FdmGridSelectionCell) {
+  return (
+    <>
+      <FieldRow label="Cell ordinal" value={cell.cellOrdinal} mono />
+      <FieldRow label="Cell IJK" value={formatTuple(cell.ijk)} />
+      <FieldRow label="Mask state" value={cell.maskState} />
+      <FieldRow
+        label="Numeric region"
+        value={cell.numericRegionId == null ? "none" : String(cell.numericRegionId)}
+      />
+      <FieldRow label="Semantic region" value={cell.regionId ?? "none"} mono />
+      <FieldRow label="Grid fingerprint" value={cell.gridFingerprint} mono />
+      <FieldRow label="Membership revision" value={cell.membershipRevision} mono />
+    </>
+  );
+}
+
 function statusBannerKind(
   status: FdmGridInspectorModel["status"],
 ): "error" | "warning" | null {
@@ -153,21 +170,6 @@ export function FdmGridInspectorPanelView({
     detail.scope === "descriptor" ||
     detail.scope === "mask" ||
     detail.scope === "provenance";
-
-  const cellRows = (cell: FdmGridSelectionCell) => (
-    <>
-      <FieldRow label="Cell ordinal" value={cell.cellOrdinal} mono />
-      <FieldRow label="Cell IJK" value={formatTuple(cell.ijk)} />
-      <FieldRow label="Mask state" value={cell.maskState} />
-      <FieldRow
-        label="Numeric region"
-        value={cell.numericRegionId == null ? "none" : String(cell.numericRegionId)}
-      />
-      <FieldRow label="Semantic region" value={cell.regionId ?? "none"} mono />
-      <FieldRow label="Grid fingerprint" value={cell.gridFingerprint} mono />
-      <FieldRow label="Membership revision" value={cell.membershipRevision} mono />
-    </>
-  );
 
   return (
     <div

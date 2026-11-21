@@ -80,17 +80,27 @@ export function antennaNavigationLinks(scene: SceneResource, origin: Selection):
   }
   if (kind === "port" && id) {
     add("conductor", "Conductor", objectId, "object.antenna.conductor");
-    stages.filter(item => item.source_object_id === objectId && item.port_mode_ids.includes(id)).forEach(item => addResource("solution", item.id, "Field solve"));
+    for (const item of stages) {
+      if (item.source_object_id === objectId && item.port_mode_ids.includes(id)) {
+        addResource("solution", item.id, "Field solve");
+      }
+    }
   }
   if (kind === "solution" && id) {
     stage(id)?.port_mode_ids.forEach(portId => addResource("port", portId, "Port"));
-    projections.filter(item => item.solution.stage_id === id).forEach(item => addResource("projection", item.id, "Projection"));
-    spectra.filter(item => item.solution_ref.stage_id === id).forEach(item => addResource("spectrum", item.id, "Source spectrum"));
+    for (const item of projections) {
+      if (item.solution.stage_id === id) addResource("projection", item.id, "Projection");
+    }
+    for (const item of spectra) {
+      if (item.solution_ref.stage_id === id) addResource("spectrum", item.id, "Source spectrum");
+    }
   }
   if (kind === "projection" && id) {
     const item = projection(id);
     if (item) { addResource("solution", item.solution.stage_id, "Field solve"); addTarget(item.target); }
-    drives.filter(item => item.projection_ref === id).forEach(item => addResource("drive", item.id, "Current drive"));
+    for (const item of drives) {
+      if (item.projection_ref === id) addResource("drive", item.id, "Current drive");
+    }
   }
   if (kind === "drive" && id) {
     const item = unique(drives, item => item.id === id), bound = item ? projection(item.projection_ref) : null;

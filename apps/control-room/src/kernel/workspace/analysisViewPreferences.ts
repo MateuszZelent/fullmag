@@ -165,11 +165,11 @@ function parseDescriptor(raw: unknown): AnalysisDescriptorPreference | null {
   // analysis-view-preferences:v2 writer uses selectedSeriesIds and migration tests
   // prove no stored descriptor still depends on the old field.
   const legacyComparisonKeys = Array.isArray(raw.comparisonSelectedSeriesKeys)
-    ? raw.comparisonSelectedSeriesKeys.filter(validSeriesId).filter((value, index, all) => all.indexOf(value) === index).slice(0, MAX_SERIES)
+    ? [...new Set(raw.comparisonSelectedSeriesKeys.filter(validSeriesId))].slice(0, MAX_SERIES)
     : undefined;
   const selectedSeriesIds = Array.isArray(raw.selectedSeriesIds)
     ? raw.selectedSeriesIds.every(validSeriesId)
-      ? raw.selectedSeriesIds.filter((value, index, all) => all.indexOf(value) === index).slice(0, MAX_SERIES)
+      ? [...new Set(raw.selectedSeriesIds)].slice(0, MAX_SERIES)
       : undefined
     : legacyComparisonKeys;
   if (!selectedSeriesIds) return null;

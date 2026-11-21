@@ -27,7 +27,9 @@ fn digest_bytes(value: &str) -> Result<[u8; 32], RunError> {
     Ok(out)
 }
 // Physics binary64 values are encoded with add_u64(value.to_bits()), preserving signed zero.
+#[cfg(any(feature = "fem-native", feature = "fem-gpu", test))]
 pub(crate) struct NamedFieldsBuilder { pub(crate) payload: Vec<u8> }
+#[cfg(any(feature = "fem-native", feature = "fem-gpu", test))]
 impl NamedFieldsBuilder {
     pub(crate) fn new(schema: &str) -> Self {
         let mut out=Self { payload:Vec::new() }; out.add_string("schema",schema); out

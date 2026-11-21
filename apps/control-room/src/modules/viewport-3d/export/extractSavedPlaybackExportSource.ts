@@ -556,14 +556,13 @@ export async function loadSavedPlaybackFramesForExport(
   const expectedNodeCount = savedPlaybackNodeCount(manifest);
   const frames: Export3DFieldFrame[] = [];
 
-  for (let i = 0; i < total; i += 1) {
+  const appendFrame = async (i: number, frameIdx: number): Promise<void> => {
     if (signal?.aborted) {
       throw signal.reason instanceof Error
         ? signal.reason
         : new DOMException("The playback frame export was aborted.", "AbortError");
     }
 
-    const frameIdx = selectedIndices[i] ?? 0;
     const response = await api.workspace.playbackFrame(
       itemId,
       stage.stage_id,
@@ -601,7 +600,11 @@ export async function loadSavedPlaybackFramesForExport(
     });
 
     onProgress?.(i + 1, total);
-  }
+  };
+  await selectedIndices.reduce<Promise<void>>(
+    (pending, frameIdx, index) => pending.then(() => appendFrame(index, frameIdx)),
+    Promise.resolve(),
+  );
 
   return {
     kind: "frames",

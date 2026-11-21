@@ -6,34 +6,8 @@ import { describe, expect, it } from "vitest";
 import type { DecodedFieldVector } from "@/kernel/api/codecs";
 import { memoryBudgetRegistry } from "@/kernel/performance/MemoryBudgetRegistry";
 import type { FdmGridRenderDomain } from "../viewport3dDomainAdapter";
-import {
-  FDM_CUBOID_UPLOAD_BATCH_SIZE,
-  buildFdmPointPositions,
-  buildFdmCuboidInstanceModel as buildFdmCuboidInstanceModelWithMembership,
-  buildFdmCuboidUploadBatches,
-  buildFdmCuboidColorUploadBatchesForView,
-  fdmCuboidUsesInstanceColors,
-  fdmCuboidVectorPassCanRenderWithoutCellModel,
-  buildFdmVectorSegments,
-  evictFdmVectorSegmentCacheEntriesForTests,
-  fdmCuboidSurfaceMeshKey,
-  hasAnyEffectiveFdmPass,
-  handleFdmCuboidContextLost,
-  resolveFdmCuboidPassPlan,
-  resolveFdmVectorGlyphScale,
-  recordFdmCuboidSurfaceAdoption,
-  resolveFdmCuboidGeometryScopeInstanceOrdinals,
-  resolveFdmCuboidSourceInstanceOrdinal,
-  resolveFdmCuboidPreparedSourceOrdinal,
-  prepareFdmCuboidInstanceMatrices,
-  estimateFdmCuboidCarrierPeakBytes,
-  uploadFdmCuboidAttribute,
-  disposeFdmCuboidInstanceColorBeforeReplace,
-  visibleFdmCuboidInspectTargets,
-  resolveFdmCuboidColorUploadRevision,
-  shouldAttachFdmCuboidInspectListener,
-  createFdmInspectClearArbitrator,
-} from "./FdmCuboidLayer";
+import { buildFdmPointPositions, buildFdmCuboidInstanceModel as buildFdmCuboidInstanceModelWithMembership, resolveFdmCuboidPassPlan, resolveFdmVectorGlyphScale } from "./FdmCuboidLayer";
+import { FDM_CUBOID_UPLOAD_BATCH_SIZE, buildFdmCuboidUploadBatches, buildFdmCuboidColorUploadBatchesForView, fdmCuboidUsesInstanceColors, fdmCuboidVectorPassCanRenderWithoutCellModel, buildFdmVectorSegments, evictFdmVectorSegmentCacheEntriesForTests, fdmCuboidSurfaceMeshKey, hasAnyEffectiveFdmPass, handleFdmCuboidContextLost, recordFdmCuboidSurfaceAdoption, resolveFdmCuboidGeometryScopeInstanceOrdinals, resolveFdmCuboidSourceInstanceOrdinal, resolveFdmCuboidPreparedSourceOrdinal, prepareFdmCuboidInstanceMatrices, estimateFdmCuboidCarrierPeakBytes, uploadFdmCuboidAttribute, disposeFdmCuboidInstanceColorBeforeReplace, visibleFdmCuboidInspectTargets, resolveFdmCuboidColorUploadRevision, shouldAttachFdmCuboidInspectListener, createFdmInspectClearArbitrator } from "./FdmCuboidLayer.model";
 import { resolveFdmCuboidSurfaceMaterialPlan } from "./viewport3DSurfaceMaterialPlans";
 import {
   BoxGeometry,
@@ -97,6 +71,10 @@ function vectorField(values: number[]): DecodedFieldVector {
 const fdmCuboidLayerPath = join(
   process.cwd(),
   "src/modules/viewport-3d/layers/FdmCuboidLayer.tsx",
+);
+const fdmCuboidLayerModelPath = join(
+  process.cwd(),
+  "src/modules/viewport-3d/layers/FdmCuboidLayer.model.ts",
 );
 const fdmCuboidBuildModelPath = join(
   process.cwd(),
@@ -338,6 +316,7 @@ describe("FdmCuboidLayer model", () => {
 
   it("keeps both cuboid carriers mounted and detaches hidden pointer handlers", () => {
     const source = readFileSync(fdmCuboidLayerPath, "utf8");
+    const modelSource = readFileSync(fdmCuboidLayerModelPath, "utf8");
 
     expect(source).toContain("visible={renderPlan.surface.visible}");
     expect(source).toContain("visible={renderPlan.wireframe.visible}");
@@ -353,10 +332,10 @@ describe("FdmCuboidLayer model", () => {
     expect(source).toContain('canvas.addEventListener("webglcontextrestored"');
     expect(source).toContain('canvas.removeEventListener("webglcontextlost"');
     expect(source).toContain('canvas.removeEventListener("webglcontextrestored"');
-    expect(source).toContain("event.preventDefault();");
-    expect(source).toContain("visibleFdmCuboidInspectTargets([");
-    expect(source).toContain("resolveFdmCuboidPreparedSourceOrdinal(");
-    expect(source).toContain("resolveViewport3DScalarColorBufferKey(surfaceColors)");
+    expect(modelSource).toContain("event.preventDefault();");
+    expect(modelSource).toContain("visibleFdmCuboidInspectTargets(");
+    expect(modelSource).toContain("resolveFdmCuboidPreparedSourceOrdinal(");
+    expect(modelSource).toContain("resolveViewport3DScalarColorBufferKey(surfaceColors)");
   });
   it("maps rendered target instances back to the shared sampled model", () => {
     const instanceOrdinals = Uint32Array.from([3, 1]);
@@ -954,10 +933,10 @@ describe("FdmCuboidLayer model", () => {
     const budget = memoryBudgetRegistry
       .snapshot()
       .find((entry) => entry.id === "viewport3d.render.fdmVectorSegmentCache");
-    const layerSource = readFileSync(fdmCuboidLayerPath, "utf8").replace(/\r\n/g, "\n");
+    const layerModelSource = readFileSync(fdmCuboidLayerModelPath, "utf8").replace(/\r\n/g, "\n");
 
     expect(budget?.maxBytes).toBe(32 * 1024 * 1024);
-    expect(layerSource).toContain("fieldCacheBytes > maxBytes");
+    expect(layerModelSource).toContain("fieldCacheBytes > maxBytes");
   });
 
   it("reuses the scene-level FDM instance model for surface color mapping and layer rendering", () => {

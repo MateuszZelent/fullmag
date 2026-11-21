@@ -32,9 +32,11 @@ import { VISUALIZATION_TARGET_COMMANDS } from "@/kernel/visualization/visualizat
 import { InspectorEditSessionProvider } from "@/modules/inspector/InspectorEditSession";
 import { ObjectGeneralPanel } from "@/modules/inspector/panels/ObjectGeneralPanel";
 import { ObjectVisualizationPanel } from "@/modules/inspector/panels/ObjectVisualizationPanel";
+import { FooterTelemetry } from "@/modules/footer/FooterTelemetry";
 import {
-  FooterTelemetry, footerTelemetryStatusEquals, selectFooterTelemetryStatus,
-} from "@/modules/footer/FooterTelemetry";
+  footerTelemetryStatusEquals,
+  selectFooterTelemetryStatus,
+} from "@/modules/footer/FooterTelemetry.model";
 import { Button } from "@/shared/ui/Button";
 
 const API_INSTANCE = "55555555-5555-4555-8555-555555555555";

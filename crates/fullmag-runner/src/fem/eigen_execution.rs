@@ -356,7 +356,7 @@ fn execute_bias_field_sweep(
     plan: &FemEigenPlanIR,
     outputs: &[OutputIR],
     try_gpu: bool,
-    mut progress: Option<&mut FemEigenProgressCallback<'_>>,
+    progress: Option<&mut FemEigenProgressCallback<'_>>,
 ) -> Result<ExecutedRun, RunError> {
     execute_bias_field_sweep_with_producer_identity(
         plan,
@@ -413,7 +413,7 @@ fn execute_planned_bias_field_sweep(
     execution: PlannedFemEigenExecution<'_>,
     plan: &FemEigenPlanIR,
     outputs: &[OutputIR],
-    mut progress: Option<&mut FemEigenProgressCallback<'_>>,
+    progress: Option<&mut FemEigenProgressCallback<'_>>,
 ) -> Result<ExecutedRun, RunError> {
     execute_planned_bias_field_sweep_with_producer_identity(
         execution,

@@ -29,7 +29,8 @@ import {
   InspectorTabs,
   type MenuAction,
 } from "./InspectorParts";
-import { AuthorsPanel, HistoryPanel, RunsPanel, resultsDownload } from "./ProvenancePanels";
+import { AuthorsPanel, HistoryPanel, RunsPanel } from "./ProvenancePanels";
+import { resultsDownload } from "./ProvenancePanels.model";
 
 const TABS: readonly { readonly id: InspectorTab; readonly label: string }[] = [
   { id: "overview", label: "Overview" },

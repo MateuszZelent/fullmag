@@ -10,7 +10,8 @@ import {
 } from "@/kernel/layout/simulationPreparationTestDom.test-support";
 
 import { buildScalarChartSeries } from "../chartTableModel";
-import { EChartsSurface, tableSeriesRenderModel } from "./EChartsSurface";
+import { EChartsSurface } from "./EChartsSurface";
+import { tableSeriesRenderModel } from "./EChartsSurface.model";
 
 const echarts = vi.hoisted(() => ({
   init: vi.fn(() => ({

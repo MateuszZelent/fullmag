@@ -92,13 +92,17 @@ export async function loadImportedSurfaceSources(
   signal: AbortSignal,
 ): Promise<ImportedSurfaceCollection> {
   const collection: ImportedSurfaceCollection = { sources: new Map(), diagnostics: [] };
-  for (const objectId of objectIds) {
-    if (signal.aborted) throw new DOMException("Source load aborted", "AbortError");
-    try { collection.sources.set(objectId, await load(objectId)); }
-    catch (error) {
-      if (signal.aborted || (error instanceof Error && error.name === "AbortError")) throw error;
-      collection.diagnostics.push({ objectId, message: error instanceof Error ? error.message : "STL source unavailable." });
-    }
-  }
+  await objectIds.reduce<Promise<void>>(
+    (pending, objectId) => pending.then(async () => {
+      if (signal.aborted) throw new DOMException("Source load aborted", "AbortError");
+      try {
+        collection.sources.set(objectId, await load(objectId));
+      } catch (error) {
+        if (signal.aborted || (error instanceof Error && error.name === "AbortError")) throw error;
+        collection.diagnostics.push({ objectId, message: error instanceof Error ? error.message : "STL source unavailable." });
+      }
+    }),
+    Promise.resolve(),
+  );
   return collection;
 }

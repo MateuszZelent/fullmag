@@ -4,6 +4,7 @@ import {
   createContext,
   use,
   useEffect,
+  useMemo,
   useSyncExternalStore,
   type ReactNode,
 } from "react";
@@ -177,16 +178,13 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
     };
   }, []);
 
-  const setTheme = (preference: ThemePreference) => setThemePreference(preference);
+  const contextValue = useMemo(() => ({
+    ...snapshot,
+    setTheme: setThemePreference,
+  }), [snapshot]);
 
   return (
-    <ThemeContext.Provider
-      value={{
-        theme: snapshot.theme,
-        preference: snapshot.preference,
-        setTheme,
-      }}
-    >
+    <ThemeContext.Provider value={contextValue}>
       {children}
     </ThemeContext.Provider>
   );

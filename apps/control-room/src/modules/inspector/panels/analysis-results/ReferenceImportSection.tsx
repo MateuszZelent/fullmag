@@ -1,7 +1,7 @@
 "use client";
 
 import { Upload } from "lucide-react";
-import { useMemo, useRef, useState } from "react";
+import { useMemo, useReducer, useRef } from "react";
 
 import { IMPORT_DISPERSION_REFERENCE_COMMAND } from "@/kernel/analysis-modules/postprocessingCommandContributions";
 import { createCommandContext } from "@/kernel/commands/commandContext";
@@ -22,6 +22,58 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { FeedbackBanner } from "../../primitives/FeedbackBanner";
 import { InspectorGroup } from "../../primitives/InspectorGroup";
 import { InspectorPropertyRow } from "../../primitives/InspectorPropertyRow";
+
+type ReferenceImportMessage = { kind: "error" | "success"; text: string };
+
+interface ReferenceImportForm {
+  fileName: string | null;
+  table: ReferenceTable | null;
+  pathColumn: string;
+  frequencyColumn: string;
+  pathUnit: ReferenceAxisUnit;
+  frequencyUnit: ReferenceFrequencyUnit;
+  label: string;
+  message: ReferenceImportMessage | null;
+}
+
+type ReferenceImportAction =
+  | { type: "selectFile"; name: string | null }
+  | { type: "readFile"; table: ReferenceTable; defaultLabel: string }
+  | { type: "pathColumn"; value: string }
+  | { type: "frequencyColumn"; value: string }
+  | { type: "pathUnit"; value: ReferenceAxisUnit }
+  | { type: "frequencyUnit"; value: ReferenceFrequencyUnit }
+  | { type: "label"; value: string }
+  | { type: "message"; value: ReferenceImportMessage };
+
+const INITIAL_REFERENCE_FORM: ReferenceImportForm = {
+  fileName: null,
+  table: null,
+  pathColumn: "0",
+  frequencyColumn: "1",
+  pathUnit: "rad/um",
+  frequencyUnit: "GHz",
+  label: "",
+  message: null,
+};
+
+function updateReferenceForm(form: ReferenceImportForm, action: ReferenceImportAction): ReferenceImportForm {
+  switch (action.type) {
+    case "selectFile":
+      return { ...INITIAL_REFERENCE_FORM, fileName: action.name, pathUnit: form.pathUnit, frequencyUnit: form.frequencyUnit };
+    case "readFile":
+      return {
+        ...form,
+        table: action.table,
+        label: form.label || action.defaultLabel,
+        message: action.table.columns.length < 2
+          ? { kind: "error", text: "The file needs at least two numeric columns." }
+          : form.message,
+      };
+    default:
+      return { ...form, [action.type]: action.value };
+  }
+}
 
 type ReferenceFileReadResult =
   | { kind: "ready"; table: ReferenceTable }
@@ -62,14 +114,8 @@ async function readReferenceFileWithinLimits(
  */
 export function ReferenceImportSection() {
   const kernel = useKernel();
-  const [fileName, setFileName] = useState<string | null>(null);
-  const [table, setTable] = useState<ReferenceTable | null>(null);
-  const [pathColumn, setPathColumn] = useState("0");
-  const [frequencyColumn, setFrequencyColumn] = useState("1");
-  const [pathUnit, setPathUnit] = useState<ReferenceAxisUnit>("rad/um");
-  const [frequencyUnit, setFrequencyUnit] = useState<ReferenceFrequencyUnit>("GHz");
-  const [label, setLabel] = useState("");
-  const [message, setMessage] = useState<{ kind: "error" | "success"; text: string } | null>(null);
+  const [form, dispatch] = useReducer(updateReferenceForm, INITIAL_REFERENCE_FORM);
+  const { fileName, table, pathColumn, frequencyColumn, pathUnit, frequencyUnit, label, message } = form;
   const readGeneration = useRef(0);
 
   const points = useMemo(
@@ -87,25 +133,16 @@ export function ReferenceImportSection() {
 
   async function readFile(file: File | undefined) {
     const generation = ++readGeneration.current;
-    setMessage(null);
-    setFileName(file?.name ?? null);
-    setTable(null);
-    setPathColumn("0");
-    setFrequencyColumn("1");
-    setLabel("");
+    dispatch({ type: "selectFile", name: file?.name ?? null });
     if (!file) return;
 
     const result = await readReferenceFileWithinLimits(file, () => generation === readGeneration.current);
     if (generation !== readGeneration.current || result.kind === "stale") return;
     if (result.kind === "error") {
-      setMessage({ kind: "error", text: result.reason });
+      dispatch({ type: "message", value: { kind: "error", text: result.reason } });
       return;
     }
-    setTable(result.table);
-    setLabel((current) => current || file.name.replace(/\.[^.]+$/, ""));
-    if (result.table.columns.length < 2) {
-      setMessage({ kind: "error", text: "The file needs at least two numeric columns." });
-    }
+    dispatch({ type: "readFile", table: result.table, defaultLabel: file.name.replace(/\.[^.]+$/, "") });
   }
 
   async function importReference() {
@@ -121,17 +158,21 @@ export function ReferenceImportSection() {
           sourceUnits: { frequency: frequencyUnit, path: pathUnit },
         },
       );
-      setMessage(
-        result?.status === "completed"
+      dispatch({
+        type: "message",
+        value: result?.status === "completed"
           ? { kind: "success", text: result.message ?? "Reference imported." }
           : { kind: "error", text: result?.message ?? "Reference import failed." },
-      );
+      });
     } catch (error) {
-      setMessage({
-        kind: "error",
-        text: error instanceof Error && error.message.length > 0
-          ? `Reference import failed: ${error.message}`
-          : "Reference import failed.",
+      dispatch({
+        type: "message",
+        value: {
+          kind: "error",
+          text: error instanceof Error && error.message.length > 0
+            ? `Reference import failed: ${error.message}`
+            : "Reference import failed.",
+        },
       });
     }
   }
@@ -157,7 +198,7 @@ export function ReferenceImportSection() {
       {table && columnOptions.length >= 2 ? (
         <>
           <InspectorPropertyRow label="Path coordinate">
-            <Select value={pathColumn} onValueChange={setPathColumn}>
+            <Select value={pathColumn} onValueChange={(value) => dispatch({ type: "pathColumn", value })}>
               <SelectTrigger aria-label="Path coordinate column"><SelectValue /></SelectTrigger>
               <SelectContent className="fm-inspector-select-content">
                 {columnOptions.map((option) => (
@@ -174,11 +215,11 @@ export function ReferenceImportSection() {
                 { label: "rad/m", value: "rad/m" },
               ]}
               value={pathUnit}
-              onValueChange={setPathUnit}
+              onValueChange={(value) => dispatch({ type: "pathUnit", value })}
             />
           </InspectorPropertyRow>
           <InspectorPropertyRow label="Frequency">
-            <Select value={frequencyColumn} onValueChange={setFrequencyColumn}>
+            <Select value={frequencyColumn} onValueChange={(value) => dispatch({ type: "frequencyColumn", value })}>
               <SelectTrigger aria-label="Frequency column"><SelectValue /></SelectTrigger>
               <SelectContent className="fm-inspector-select-content">
                 {columnOptions.map((option) => (
@@ -196,11 +237,11 @@ export function ReferenceImportSection() {
                 { label: "Hz", value: "Hz" },
               ]}
               value={frequencyUnit}
-              onValueChange={setFrequencyUnit}
+              onValueChange={(value) => dispatch({ type: "frequencyUnit", value })}
             />
           </InspectorPropertyRow>
           <InspectorPropertyRow label="Label">
-            <Input aria-label="Reference label" value={label} onChange={(event) => setLabel(event.currentTarget.value)} />
+            <Input aria-label="Reference label" value={label} onChange={(event) => dispatch({ type: "label", value: event.currentTarget.value })} />
           </InspectorPropertyRow>
           <p className="text-fm-xs text-fm-muted">
             {points?.ok

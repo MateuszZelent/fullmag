@@ -9,6 +9,7 @@ import type {
   ReadyAntennaResource,
 } from "@/kernel/api/apiTypes";
 import { MODEL_SCENE_PATH } from "@/kernel/api/apiPaths";
+import { keyedOccurrences } from "@/shared/utils/keyedOccurrences";
 import {
   captureAuthoringMutationFence,
   runAuthoringMutationWithHistory,
@@ -351,14 +352,23 @@ function FunctionFields({
           onChange={(event) => onLocalChange(index, event.currentTarget.value)}
         />
       ))}
-      {target.outputs.map((output, index) => (
+      {keyedOccurrences(
+        target.outputs.map((output, index) => ({
+          output,
+          index,
+          identity: role === "mask"
+            ? MASK_OUTPUT_LABELS[index] ?? `B${index}`
+            : "f(t)",
+        })),
+        (entry) => entry.identity,
+      ).map(({ item, key }) => (
         <FormField
-          key={index}
-          label={role === "mask" ? `${MASK_OUTPUT_LABELS[index] ?? `B${index}`} =` : "f(t) ="}
+          key={key}
+          label={role === "mask" ? `${item.identity} =` : "f(t) ="}
           unit={role === "mask" ? "T" : undefined}
           disabled={disabled}
-          value={output}
-          onChange={(event) => onOutputChange(index, event.currentTarget.value)}
+          value={item.output}
+          onChange={(event) => onOutputChange(item.index, event.currentTarget.value)}
         />
       ))}
     </>

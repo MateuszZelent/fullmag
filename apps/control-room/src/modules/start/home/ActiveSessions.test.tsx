@@ -1,7 +1,8 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 
-import { ActiveSessions, sessionPillStatus, type ActiveSession } from "./ActiveSessions";
+import { ActiveSessions, type ActiveSession } from "./ActiveSessions";
+import { sessionPillStatus } from "./ActiveSessions.model";
 
 const session = (over: Partial<ActiveSession> = {}): ActiveSession => ({
   sessionId: "session-1",

@@ -65,7 +65,7 @@ import type { KernelApi } from "@/kernel/types";
 import { installSimulationPreparationTestDom } from "@/kernel/layout/simulationPreparationTestDom.test-support";
 import { VisualizationDebugController } from "@/kernel/visualization/VisualizationDebugController";
 
-import { stageResultInitialState } from "./StageInitialStateSelector";
+import { stageResultInitialState } from "./StageInitialStateSelector.model";
 
 const TEST_SESSION_IDENTITY: SessionResourceIdentity = {
   requestScopeEpoch: "api-instance:stage-inspectors-test",
@@ -189,11 +189,11 @@ import { AddFieldDriveStageInspector } from "./AddFieldDriveStageInspector";
 import { EigenmodesStageInspector } from "./EigenmodesStageInspector";
 import { FrequencyResponseStageInspector } from "./FrequencyResponseStageInspector";
 import { FftResponseStageInspector } from "./FftResponseStageInspector";
+import { HysteresisStageInspector } from "./HysteresisStageInspector";
 import {
-  HysteresisStageInspector,
   hysteresisInitialStateActionPresentation,
-} from "./HysteresisStageInspector";
-import { resolveHysteresisInspectorView } from "./hysteresis/HysteresisInspectorUtils";
+  resolveHysteresisInspectorView,
+} from "./hysteresis/HysteresisInspectorUtils";
 import { RelaxStageInspector } from "./RelaxStageInspector";
 import { RunStageInspector } from "./RunStageInspector";
 import { SaveStateStageInspector } from "./SaveStateStageInspector";

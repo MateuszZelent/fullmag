@@ -58,26 +58,26 @@ function MeshBuildHistoryComparisonTable({
   rows: MeshBuildHistoryComparisonRow[];
 }) {
   return (
-    <div className="fm-mesh-build-comparison" role="table">
-      <div className="fm-mesh-build-comparison__row" role="row">
-        <span>Metric</span>
-        <span>Before</span>
-        <span>After</span>
-        <span>Delta</span>
-      </div>
-      {rows.map((row) => (
-        <div
-          className="fm-mesh-build-comparison__row"
-          key={row.id}
-          role="row"
-        >
-          <span>{row.label}</span>
-          <span>{formatComparisonValue(row.before)}</span>
-          <span>{formatComparisonValue(row.after)}</span>
-          <span>{formatDelta(row.delta)}</span>
-        </div>
-      ))}
-    </div>
+    <table className="fm-mesh-build-comparison">
+      <thead>
+        <tr className="fm-mesh-build-comparison__row">
+          <th scope="col">Metric</th>
+          <th scope="col">Before</th>
+          <th scope="col">After</th>
+          <th scope="col">Delta</th>
+        </tr>
+      </thead>
+      <tbody>
+        {rows.map((row) => (
+          <tr className="fm-mesh-build-comparison__row" key={row.id}>
+            <th scope="row">{row.label}</th>
+            <td>{formatComparisonValue(row.before)}</td>
+            <td>{formatComparisonValue(row.after)}</td>
+            <td>{formatDelta(row.delta)}</td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
   );
 }
 

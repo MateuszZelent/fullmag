@@ -46,6 +46,7 @@ export function LiveChartInspectorPanel({
     seriesOptions,
     preset.defaultSeriesIds,
   );
+  const selectedSeriesIdSet = new Set(selectedSeriesIds);
 
   const execute = (commandId: string, input: Record<string, unknown>) => {
     if (!kernel) return;
@@ -147,7 +148,7 @@ export function LiveChartInspectorPanel({
           <fieldset className="fm-live-chart-inspector__series">
             <legend className="fm-live-chart-inspector__legend">Signals</legend>
             {seriesOptions.map((series) => {
-              const checked = selectedSeriesIds.includes(series.id);
+              const checked = selectedSeriesIdSet.has(series.id);
               return (
                 <label className="fm-live-chart-inspector__series-row" key={series.id}>
                   <input

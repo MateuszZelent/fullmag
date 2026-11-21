@@ -1,9 +1,9 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore, type CSSProperties } from "react";
 
 import { decodeFieldVector } from "@/kernel/api/codecs";
-import type { PlanarFieldQuery, PlanarFieldSource } from "@/kernel/api/apiTypes";
+
 import {
   planarFieldQueryFromMeta,
   usePlanarFieldMetaResource,
@@ -12,73 +12,17 @@ import {
   usePlanarVectorResource,
 } from "@/kernel/resources/planarFieldResources";
 
-import { type PlanarFieldLayer } from "@/modules/inspector/public";
-import { isDirectionColormap } from "@/shared/visualization/directionColor";
-
-import { planarScopeQuery } from "../model/fieldMapDataPlan";
 import {
   derivePlanarComponentScalar,
   isClientDerivablePlanarComponent,
 } from "../model/planarComponentDerivation";
-import { normalizePlanarColorRange, resolvePlanarDisplayRange, type PlanarDisplayRange } from "../model/fieldMapRenderModel";
+import { resolvePlanarDisplayRange } from "../model/fieldMapRenderModel";
 import { createPlanarColorizer } from "../renderer/planarColorizer";
 import { createPlanarRenderer, type PlanarRenderer } from "../renderer/planarRenderer";
-import {
-  resolveMultisliceRange,
-  type MultisliceExtent,
-} from "../model/planarMultislice";
+import { resolveMultisliceRange } from "../model/planarMultislice";
 import { useRetainedPlanarFrame } from "../hooks/useRetainedPlanarFrame";
 import { describePlanarError, isSupersededPlanarError } from "../model/planarErrorCopy";
-
-export interface PlanarMultisliceGridProps {
-  quantityId: string;
-  source: PlanarFieldSource;
-  /** Data-plan query of the single view; each panel adds its `position_fraction`. */
-  baseQuery: PlanarFieldQuery;
-  positionFractions: readonly number[];
-  colormap: string;
-  colorByDirection: boolean;
-  /** Client-derived component (x, y, z, |v|) from the vector payload, or null. */
-  clientComponent: string | null;
-  requestVectors: boolean;
-  range: PlanarDisplayRange | null;
-  rasterOpacity: number;
-  /**
-   * Shared colour legend, rendered with the union range and the canonical
-   * unit the panels' metadata reports (`null` until the first panel loads).
-   */
-  renderLegend: (range: { max: number; min: number } | null, panelCanonicalUnit: string | null) => ReactNode;
-  /**
-   * Layers model (ADR 0080 W7): the panels draw this layer — the first visible
-   * one — instead of the base field. `null` means no layer is visible.
-   * Omitted in the legacy model.
-   */
-  fieldLayer?: PlanarFieldLayer | null;
-}
-
-/** Panel inputs of one field layer: its quantity, component, scope and colouring. */
-export function multisliceLayerProps(
-  props: PlanarMultisliceGridProps,
-  layer: PlanarFieldLayer,
-): PlanarMultisliceGridProps {
-  const direction = isDirectionColormap(layer.colormap);
-  return {
-    ...props,
-    baseQuery: {
-      ...props.baseQuery,
-      component: layer.component,
-      ...planarScopeQuery(layer.view_scope),
-      vector_budget: direction ? Math.max(1, props.baseQuery.vector_budget ?? 1) : 0,
-    },
-    clientComponent: null,
-    colorByDirection: direction,
-    colormap: layer.colormap,
-    quantityId: layer.quantity_id,
-    range: normalizePlanarColorRange(layer.range),
-    rasterOpacity: layer.raster_opacity,
-    requestVectors: direction,
-  };
-}
+import { createMultisliceExtents, type PlanarMultisliceGridProps, multisliceLayerProps } from "./PlanarMultisliceGrid.model";
 
 /**
  * Multislice panels of the Default source (F6 B2, note 0970 § Multislice
@@ -97,7 +41,8 @@ export function PlanarMultisliceGrid(props: PlanarMultisliceGridProps) {
 }
 
 function PlanarMultislicePanels(props: PlanarMultisliceGridProps) {
-  const [extents, setExtents] = useState<readonly (MultisliceExtent | null)[]>([]);
+  const [extentStore] = useState(createMultisliceExtents);
+  const extents = useSyncExternalStore(extentStore.subscribe, extentStore.getSnapshot, extentStore.getServerSnapshot);
   // One panel per distinct position: a repeated fraction is the same sample.
   const fractions = useMemo(() => [...new Set(props.positionFractions)], [props.positionFractions]);
   const count = fractions.length;
@@ -109,18 +54,9 @@ function PlanarMultislicePanels(props: PlanarMultisliceGridProps) {
   );
   const firstMeta = usePlanarFieldMetaResource(props.quantityId, props.source, firstQuery, { enabled: count > 0 });
   const panelUnit = firstMeta.data?.canonical_unit ?? null;
-  const onExtent = useCallback((index: number, extent: MultisliceExtent | null) => {
-    setExtents((current) => {
-      const previous = current[index] ?? null;
-      if (previous?.min === extent?.min && previous?.max === extent?.max) return current;
-      const next = Array.from({ length: Math.max(current.length, index + 1) }, (_, i) => current[i] ?? null);
-      next[index] = extent;
-      return next;
-    });
-  }, []);
   const sharedRange = useMemo(
-    () => resolveMultisliceRange(props.range, extents.slice(0, count)),
-    [count, extents, props.range],
+    () => resolveMultisliceRange(props.range, fractions.map((fraction) => extents.get(fraction) ?? null)),
+    [extents, fractions, props.range],
   );
   return (
     <div className="fm-field-map__multislice" data-multislice-panels={count}>
@@ -128,12 +64,11 @@ function PlanarMultislicePanels(props: PlanarMultisliceGridProps) {
         className="fm-field-map__multislice-grid"
         style={{ gridTemplateColumns: `repeat(${count <= 2 ? count : 2}, minmax(0, 1fr))` }}
       >
-        {fractions.map((fraction, index) => (
+        {fractions.map((fraction) => (
           <PlanarMultislicePanel
             key={fraction}
             fraction={fraction}
-            index={index}
-            onExtent={onExtent}
+            extentStore={extentStore}
             sharedRange={sharedRange}
             {...props}
           />
@@ -150,8 +85,7 @@ function PlanarMultislicePanel({
   colorByDirection,
   colormap,
   fraction,
-  index,
-  onExtent,
+  extentStore,
   quantityId,
   rasterOpacity,
   requestVectors,
@@ -159,15 +93,14 @@ function PlanarMultislicePanel({
   source,
 }: PlanarMultisliceGridProps & {
   fraction: number;
-  index: number;
-  onExtent: (index: number, extent: MultisliceExtent | null) => void;
+  extentStore: ReturnType<typeof createMultisliceExtents>;
   sharedRange: { max: number; min: number } | null;
 }) {
   const query = useMemo(() => ({ ...baseQuery, position_fraction: fraction }), [baseQuery, fraction]);
-  const meta = usePlanarFieldMetaResource(quantityId, source, query, { enabled: true });
+  const metadata = usePlanarFieldMetaResource(quantityId, source, query, { enabled: true });
   const canonical = useMemo(
-    () => (meta.status === "ready" && meta.data ? planarFieldQueryFromMeta(quantityId, source, meta.data) : null),
-    [meta.data, meta.status, quantityId, source],
+    () => (metadata.status === "ready" && metadata.data ? planarFieldQueryFromMeta(quantityId, source, metadata.data) : null),
+    [metadata.data, metadata.status, quantityId, source],
   );
   const dataQuery = canonical?.ok ? canonical.query : null;
   const ready = dataQuery !== null;
@@ -192,20 +125,20 @@ function PlanarMultislicePanel({
   const layersSettled =
     ["ready", "stale", "error"].includes(mask.status) &&
     (!requestVectors || ["ready", "stale", "error"].includes(vectors.status));
-  const resolution = meta.data?.resolution;
+  const resolution = metadata.data?.resolution;
   const width = resolution?.[0] ?? 0;
   const height = resolution?.[1] ?? 0;
   // Keep the panel's bounds while its metadata reloads so the aspect does not jump.
-  const bounds = useRetainedPlanarFrame(String(fraction), meta.data?.frame.bounds_uv_m ?? null);
+  const bounds = useRetainedPlanarFrame(String(fraction), metadata.data?.frame.bounds_uv_m ?? null);
   const [uMin, uMax, vMin, vMax] = (bounds ?? []) as (number | undefined)[];
 
   // While a live refresh resamples the panel, keep its last extent so the
   // shared range and legend do not fall back to "pending" on every revision.
   useEffect(() => {
     if (!values) return;
-    onExtent(index, resolvePlanarDisplayRange(values, maskValues ?? undefined, { mode: "auto" }));
-  }, [index, maskValues, onExtent, values]);
-  useEffect(() => () => onExtent(index, null), [index, onExtent]);
+    extentStore.update(fraction, resolvePlanarDisplayRange(values, maskValues ?? undefined, { mode: "auto" }));
+  }, [extentStore, fraction, maskValues, values]);
+  useEffect(() => () => extentStore.update(fraction, null), [extentStore, fraction]);
 
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const rendererRef = useRef<PlanarRenderer | null>(null);
@@ -256,10 +189,10 @@ function PlanarMultislicePanel({
 
   const coordinate = useRetainedPlanarFrame(
     String(fraction),
-    meta.data?.section?.resolved_coordinate_m ?? null,
+    metadata.data?.section?.resolved_coordinate_m ?? null,
   ) ?? undefined;
-  const failure = meta.status === "error"
-    ? meta.error
+  const failure = metadata.status === "error"
+    ? metadata.error
     : canonical && !canonical.ok
       ? canonical.error
       : scalar.status === "error" ? scalar.error : null;
@@ -269,7 +202,7 @@ function PlanarMultislicePanel({
     <figure
       className="fm-field-map__multislice-panel"
       data-multislice-fraction={fraction}
-      data-multislice-sample-token={meta.data?.sample_token ?? ""}
+      data-multislice-sample-token={metadata.data?.sample_token ?? ""}
       data-multislice-state={state}
     >
       <div className="fm-field-map__multislice-plot">
@@ -289,7 +222,7 @@ function PlanarMultislicePanel({
         </div>
       </div>
       <figcaption className="fm-field-map__multislice-caption">
-        {meta.data?.section?.normal_axis ?? "n"} ={" "}
+        {metadata.data?.section?.normal_axis ?? "n"} ={" "}
         {coordinate === undefined ? "…" : `${(coordinate * 1e9).toFixed(2)} nm`}
         {error ? (
           <span className="fm-field-map__multislice-error" title={error.technical}> — {error.message}</span>

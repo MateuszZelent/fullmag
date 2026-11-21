@@ -1,9 +1,8 @@
 //! Execution-plan binding for retained packages; the byte codec is backend-neutral.
 
-use super::{
-    load_antenna_external_lead_solution_manifest, require, AntennaExternalLeadSolutionArtifact,
-    AntennaExternalLeadSolutionRef,
-};
+use super::{require, AntennaExternalLeadSolutionArtifact, AntennaExternalLeadSolutionRef};
+#[cfg(any(feature = "fem-native", feature = "fem-gpu"))]
+use super::load_antenna_external_lead_solution_manifest;
 use crate::{AuxiliaryArtifact, RunError};
 
 pub use fullmag_antenna_artifacts::package::ANTENNA_INSPECTION_PACKAGE_MAX_BYTES;

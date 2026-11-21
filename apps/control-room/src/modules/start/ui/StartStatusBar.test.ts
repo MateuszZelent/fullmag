@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { describeCompute, describeIndexCount } from "./StartStatusBar";
+import { describeCompute, describeIndexCount } from "./StartStatusBar.model";
 
 describe("describeCompute", () => {
   it("says nothing for an unprobed host", () => {

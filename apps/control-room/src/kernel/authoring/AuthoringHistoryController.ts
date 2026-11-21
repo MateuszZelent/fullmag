@@ -73,16 +73,12 @@ interface HistoryEntry {
   label: string;
 }
 
-function cloneJson<T>(value: T): T {
-  return JSON.parse(JSON.stringify(value)) as T;
-}
-
 function cloneWorkspaceState(
   state: AuthoringHistoryWorkspaceState | null | undefined,
 ): AuthoringHistoryWorkspaceState | null {
   if (!state) return null;
   return {
-    selection: state.selection ? cloneJson(state.selection) : null,
+    selection: state.selection ? structuredClone(state.selection) : null,
   };
 }
 

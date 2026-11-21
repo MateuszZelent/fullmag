@@ -2,7 +2,9 @@
 //! Existing accepted inputs and legacy catalogs remain self-contained.
 
 use fullmag_plan::StudyProblemCatalog;
-use fullmag_session::{execution_profiles::ExecutionProfileCatalog, SessionStore};
+use fullmag_session::SessionStore;
+#[cfg(test)]
+use fullmag_session::execution_profiles::ExecutionProfileCatalog;
 
 use crate::error::ApiError;
 

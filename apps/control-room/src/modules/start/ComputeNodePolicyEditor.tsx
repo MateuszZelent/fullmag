@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useMemo, useReducer } from "react";
 
 import { ControlRoomApiError } from "@/kernel/api/ControlRoomApi";
 import { Button } from "@/shared/ui/Button";
@@ -18,6 +18,35 @@ import type {
 
 type UpdatePolicy = ComputeProbeController["updateNodePolicy"];
 
+interface PolicyEditorState {
+  baseline: ComputeNodePolicyFormDraft | null;
+  baseRevision: number | null;
+  conflict: boolean;
+  draft: ComputeNodePolicyFormDraft | null;
+  editing: boolean;
+  error: string | null;
+  notice: string | null;
+  saving: boolean;
+}
+
+function policyDraftSnapshot(policy: ComputeNodePolicySummary | null) {
+  const draft = policy ? createComputeNodePolicyDraft(policy) : null;
+  return { baseline: draft, baseRevision: policy?.revision ?? null, draft };
+}
+
+function initialPolicyEditor(policy: ComputeNodePolicySummary | null): PolicyEditorState {
+  return {
+    ...policyDraftSnapshot(policy), conflict: false, editing: false,
+    error: null, notice: null, saving: false,
+  };
+}
+
+type PolicyEditorUpdate = Partial<PolicyEditorState> | ((state: PolicyEditorState) => Partial<PolicyEditorState>);
+
+function updatePolicyEditor(state: PolicyEditorState, update: PolicyEditorUpdate): PolicyEditorState {
+  return { ...state, ...(typeof update === "function" ? update(state) : update) };
+}
+
 export function ComputeNodePolicyEditor({
   nodeId,
   policy,
@@ -31,18 +60,9 @@ export function ComputeNodePolicyEditor({
   readonly canEdit: boolean;
   readonly onUpdate?: UpdatePolicy;
 }) {
-  const [editing, setEditing] = useState(false);
-  const [draft, setDraft] = useState<ComputeNodePolicyFormDraft | null>(
-    () => policy ? createComputeNodePolicyDraft(policy) : null,
-  );
-  const [baseline, setBaseline] = useState<ComputeNodePolicyFormDraft | null>(
-    () => policy ? createComputeNodePolicyDraft(policy) : null,
-  );
-  const [baseRevision, setBaseRevision] = useState<number | null>(policy?.revision ?? null);
-  const [saving, setSaving] = useState(false);
-  const [conflict, setConflict] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [notice, setNotice] = useState<string | null>(null);
+  const [{ baseline, baseRevision, conflict, draft, editing, error, notice, saving }, updateEditor] =
+    useReducer(updatePolicyEditor, policy, initialPolicyEditor);
+  const allowedGpuUuids = new Set(draft?.allowedGpuUuids);
 
   const deviceOptions = useMemo(() => {
     const names = new Map<string, string>();
@@ -59,71 +79,53 @@ export function ComputeNodePolicyEditor({
   const updateDraft = <K extends keyof ComputeNodePolicyFormDraft>(
     key: K,
     value: ComputeNodePolicyFormDraft[K],
-  ) => setDraft((current) => current ? { ...current, [key]: value } : current);
+  ) => updateEditor((current) => current.draft ? { draft: { ...current.draft, [key]: value } } : {});
 
   const startEditing = () => {
     if (!policy) return;
-    const next = createComputeNodePolicyDraft(policy);
-    setDraft(next);
-    setBaseline(next);
-    setBaseRevision(policy.revision);
-    setConflict(false);
-    setError(null);
-    setNotice(null);
-    setEditing(true);
+    updateEditor({ ...initialPolicyEditor(policy), editing: true });
   };
 
   const cancelEditing = () => {
-    const current = policy ? createComputeNodePolicyDraft(policy) : null;
-    setDraft(current);
-    setBaseline(current);
-    setBaseRevision(policy?.revision ?? null);
-    setConflict(false);
-    setError(null);
-    setNotice(null);
-    setEditing(false);
+    updateEditor(initialPolicyEditor(policy));
   };
 
   const rebaseDraft = () => {
     if (!policy) return;
     // Preserve the operator's form values. The next Apply will use this
     // explicitly selected server revision as its If-Match precondition.
-    setBaseline(createComputeNodePolicyDraft(policy));
-    setBaseRevision(policy.revision);
-    setConflict(false);
-    setError(null);
-    setNotice(`Draft retained against policy revision ${policy.revision}. Review the saved values above, then apply when ready.`);
+    updateEditor({
+      baseline: createComputeNodePolicyDraft(policy), baseRevision: policy.revision,
+      conflict: false, error: null,
+      notice: `Draft retained against policy revision ${policy.revision}. Review the saved values above, then apply when ready.`,
+    });
   };
 
   const save = async () => {
     if (!draft || !policy || !onUpdate || baseRevision === null || needsRebase) return;
     const result = buildComputeNodePolicyUpdate(draft);
     if (!result.ok) {
-      setError(result.error);
-      setNotice(null);
+      updateEditor({ error: result.error, notice: null });
       return;
     }
-    setSaving(true);
-    setError(null);
-    setNotice(null);
+    updateEditor({ saving: true, error: null, notice: null });
     try {
       const saved = await onUpdate(nodeId, baseRevision, { policy: result.policy });
-      const next = createComputeNodePolicyDraft(saved);
-      setDraft(next);
-      setBaseline(next);
-      setBaseRevision(saved.revision);
-      setConflict(false);
-      setEditing(false);
-      setNotice(`Policy saved as revision ${saved.revision}. Existing reservations were not changed.`);
+      updateEditor({
+        ...policyDraftSnapshot(saved), conflict: false, editing: false,
+        notice: `Policy saved as revision ${saved.revision}. Existing reservations were not changed.`,
+      });
     } catch (cause) {
       if (cause instanceof ControlRoomApiError && (cause.status === 409 || cause.status === 412)) {
-        setConflict(true);
-        setError("The saved policy changed while you were editing. Your draft is preserved; refresh and compare the saved values before rebasing it.");
+        updateEditor({
+          conflict: true,
+          error: "The saved policy changed while you were editing. Your draft is preserved; refresh and compare the saved values before rebasing it.",
+        });
       } else {
-        setError(cause instanceof Error ? cause.message : "The host policy could not be saved.");
+        updateEditor({ error: cause instanceof Error ? cause.message : "The host policy could not be saved." });
       }
     } finally {
-      setSaving(false);
+      updateEditor({ saving: false });
     }
   };
 
@@ -191,7 +193,7 @@ export function ComputeNodePolicyEditor({
             {deviceOptions.length ? deviceOptions.map(([uuid, name]) => (
               <label className="fm-start-compute-settings__policy-check" key={uuid}>
                 <input
-                  checked={draft.allowedGpuUuids.includes(uuid)}
+                  checked={allowedGpuUuids.has(uuid)}
                   disabled={saving}
                   onChange={(event) => {
                     const selected = new Set(draft.allowedGpuUuids);

@@ -11,10 +11,7 @@ import {
 import { resolveSessionDiscretization } from "@/kernel/resources/sessionDiscretization";
 import { useSessionStatusSelector } from "@/kernel/resources/useSessionStatus";
 
-import {
-  resolvePlanarMonitorDefinitionAvailability,
-  type PlanarMonitorDefinitionAvailability,
-} from "./PlanarMonitorDefinitionEditor";
+import { resolvePlanarMonitorDefinitionAvailability, type PlanarMonitorDefinitionAvailability } from "./PlanarMonitorDefinitionEditor.model";
 
 export function usePlanarMonitorDefinitionAvailability(): PlanarMonitorDefinitionAvailability {
   const discretization = useSessionStatusSelector(
