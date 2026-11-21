@@ -1,7 +1,4 @@
-import {
-  ObjectMagneticTextureInspectorPanel,
-  ObjectRegionTextureInspectorPanel,
-} from "../panels/DedicatedExplorerInspectorPanels";
+import { MagneticTextureInspectorPanel } from "../panels/magnetic-texture/MagneticTextureInspectorPanel";
 
 import { defineInspectorRoute, type InspectorRoute } from "./routeTypes";
 
@@ -10,13 +7,13 @@ import { defineInspectorRoute, type InspectorRoute } from "./routeTypes";
  */
 export const MAGNETIC_TEXTURE_ROUTES: readonly InspectorRoute[] = [
   defineInspectorRoute({
-    component: ObjectMagneticTextureInspectorPanel,
+    component: MagneticTextureInspectorPanel,
     id: "object-magnetic-texture",
     selectionKinds: ["object.magnetic-texture"],
     title: "Magnetic Texture",
   }),
   defineInspectorRoute({
-    component: ObjectRegionTextureInspectorPanel,
+    component: MagneticTextureInspectorPanel,
     id: "object-region-texture",
     selectionKinds: ["object.region.texture"],
     title: "Region Texture",

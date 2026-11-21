@@ -4943,14 +4943,12 @@ describe("ribbon structure", () => {
     expect(matchedIds).toEqual(unsupportedIds);
   });
 
-  it("keeps unsupported Materials edit and transform workflows disabled", () => {
+  it("keeps unsupported Materials edit workflows disabled while enabling Magnetic Texture presets and transform tools", () => {
     const unsupportedIds = new Set([
       "mat-params",
       "mat-dmi",
       "mat-ku",
       "mat-texture-inspector",
-      "mat-transform-scope",
-      "mat-transform-tool",
     ]);
     const matchedIds = new Set<string>();
 
@@ -4963,6 +4961,29 @@ describe("ribbon structure", () => {
       }
     }
     expect(matchedIds).toEqual(unsupportedIds);
+
+    const magGroup = ALL_TAB_CONTENT.materials.groups.find(
+      (group) => group.id === "materials-magnetization",
+    );
+    const transformGroup = ALL_TAB_CONTENT.materials.groups.find(
+      (group) => group.id === "materials-transform",
+    );
+    expect(magGroup?.actions.map((a) => a.id)).toContain(
+      "magnetization-texture.assign-bloch-skyrmion",
+    );
+    expect(magGroup?.actions.map((a) => a.id)).toContain(
+      "magnetization-texture.assign-neel-skyrmion",
+    );
+    expect(magGroup?.actions.map((a) => a.id)).toContain("mat-texture-more");
+    for (const action of [...(magGroup?.actions ?? []), ...(transformGroup?.actions ?? [])]) {
+      expect(action.iconColor, action.id).toBe("var(--fm-hue-material)");
+    }
+    expect(transformGroup?.actions.map((a) => a.id)).toEqual([
+      "mat-transform-scope",
+      "mat-transform-tool",
+      "magnetization-texture.fit-characteristic-size",
+      "magnetization-texture.reset-transform",
+    ]);
   });
 
   it("exposes study compute commands through the Study control group", () => {

@@ -193,6 +193,7 @@ import type { Viewport3DVectorBuildReference } from "../viewport3dRenderModel";
 import { FrozenSpinsOverlay } from "./FrozenSpinsOverlay";
 import { type FrozenSpinsOverlayModel } from "./FrozenSpinsOverlay.model";
 import { Viewport3DMoveToolLayer, type Translation3 } from "../MoveObjectGizmo";
+import { Viewport3DTextureTransformLayer } from "../TextureTransformGizmo";
 
 const EMPTY_REGION_OVERLAYS: readonly RegionOverlayInput[] = [];
 
@@ -1598,6 +1599,12 @@ function Viewport3DModelLayerStack({
         onGestureActiveChange={onMoveGestureActiveChange}
         primitiveModel={primitiveModel}
         selectedObjectId={selectedObjectId}
+      />
+      <Viewport3DTextureTransformLayer
+        onGestureActiveChange={onMoveGestureActiveChange}
+        primitiveModel={primitiveModel}
+        selectedObjectId={selectedObjectId}
+        tracker={tracker}
       />
       {topologyLayerEnabled ? (
         <group visible={stageVisibility.baseGeometry}>

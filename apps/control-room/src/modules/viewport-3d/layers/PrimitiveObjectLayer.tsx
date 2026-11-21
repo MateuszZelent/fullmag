@@ -3,7 +3,7 @@
 
 import type { ThreeEvent } from "@react-three/fiber";
 import { useEffect, useLayoutEffect, useMemo } from "react";
-import { BufferAttribute, BufferGeometry, SphereGeometry } from "three";
+import { BufferAttribute, BufferGeometry } from "three";
 import {
   RENDER_POLICIES,
   materialPolicyProps,
@@ -423,60 +423,26 @@ function PrimitiveObjectGizmo({
     );
     return next;
   }, [object, tracker]);
-  const pivotGeometry = useMemo(
-    () =>
-      object.magnetizationTexturePreview?.pivot
-        ? tracker.track("geometry", new SphereGeometry(object.bounds.radius * 0.045, 12, 6))
-        : null,
-    [object, tracker],
-  );
 
   useEffect(
     () => () => tracker.release("geometry", axisGeometry),
     [axisGeometry, tracker],
   );
-  useEffect(
-    () => () => tracker.release("geometry", pivotGeometry),
-    [pivotGeometry, tracker],
-  );
 
   return (
-    <>
-      <lineSegments
-        geometry={axisGeometry}
-        renderOrder={RENDER_POLICIES.selectionShell.renderOrder}
-        userData={{ gizmo: "transform", objectId: object.objectId }}
-      >
-        <lineBasicMaterial
-          color={colors.accent}
-          depthTest={materialProfile.axes.depthTest}
-          depthWrite={materialProfile.axes.depthWrite}
-          opacity={materialProfile.axes.opacity}
-          toneMapped={materialProfile.axes.toneMapped}
-          transparent={materialProfile.axes.opacity < 1}
-        />
-      </lineSegments>
-      {pivotGeometry && object.magnetizationTexturePreview?.pivot ? (
-        <mesh
-          geometry={pivotGeometry}
-          position={object.magnetizationTexturePreview.pivot}
-          renderOrder={RENDER_POLICIES.selectionShell.renderOrder}
-          userData={{
-            gizmo: "texture-pivot",
-            objectId: object.objectId,
-            textureAssetId: object.magnetizationTexturePreview.assetId,
-          }}
-        >
-          <meshBasicMaterial
-            color={object.magnetizationTexturePreview.color}
-            depthTest={false}
-            depthWrite={false}
-            opacity={materialProfile.selectionShell.opacity}
-            toneMapped={false}
-            transparent
-          />
-        </mesh>
-      ) : null}
-    </>
+    <lineSegments
+      geometry={axisGeometry}
+      renderOrder={RENDER_POLICIES.selectionShell.renderOrder}
+      userData={{ gizmo: "transform", objectId: object.objectId }}
+    >
+      <lineBasicMaterial
+        color={colors.accent}
+        depthTest={materialProfile.axes.depthTest}
+        depthWrite={materialProfile.axes.depthWrite}
+        opacity={materialProfile.axes.opacity}
+        toneMapped={materialProfile.axes.toneMapped}
+        transparent={materialProfile.axes.opacity < 1}
+      />
+    </lineSegments>
   );
 }

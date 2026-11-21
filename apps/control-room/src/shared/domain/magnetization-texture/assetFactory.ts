@@ -1,6 +1,6 @@
 import type { JsonObject } from "@/kernel/api/apiTypes";
 
-import type { MagnetizationTexturePresetId } from "./texturePresets";
+import { humanPresetLabel, type MagnetizationTexturePresetId } from "./texturePresets";
 import type { MagnetizationTextureTarget } from "./types";
 
 export interface PresetMagnetizationAssetInput {
@@ -33,6 +33,7 @@ function defaultTextureMapping(): JsonObject {
 function defaultTextureTransform(): JsonObject {
   return {
     pivot: [0, 0, 0],
+    rotate_vectors: true,
     rotation_quat: [0, 0, 0, 1],
     scale: [1, 1, 1],
     translation: [0, 0, 0],
@@ -48,19 +49,19 @@ export function presetMagnetizationAsset({
   presetParams,
   textureTransform,
 }: PresetMagnetizationAssetInput): JsonObject {
-  const resolvedLabel =
-    label?.trim() ||
-    (presetKind === "uniform" ? "Uniform texture" : `${presetKind} texture`);
+  const customLabel = label?.trim() || null;
+  const technicalName =
+    customLabel ?? humanPresetLabel(presetKind, "preset_texture");
 
   return {
     id,
     kind: "preset_texture",
     mapping: mapping ?? defaultTextureMapping(),
-    name: resolvedLabel,
+    name: technicalName,
     preset_kind: presetKind,
     preset_params: presetParams,
     preset_version: presetVersion ?? 2,
     texture_transform: textureTransform ?? defaultTextureTransform(),
-    ui_label: resolvedLabel,
+    ui_label: customLabel,
   };
 }
