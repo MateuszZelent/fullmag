@@ -6,6 +6,7 @@ import fullmag as fm
 
 SIZE = (1600e-9, 800e-9, 1.7e-9)
 CELL = (3.125e-9, 3.125e-9, 1.7e-9)
+TABLE_SAMPLE_PERIOD_S = 10e-12
 FIELD_AZIMUTH = radians(88.0)
 JZ = -2.6e10
 TURN_ON, TURN_OFF = 70e-9, 270e-9
@@ -78,16 +79,16 @@ study.clear_outputs()
 # Keep the same torque inventory and magnetization topology across the study.
 study.stages.set_spin_torque_enabled(module_id="slonczewski_pulse", enabled=False)
 study.stages.add_relax(stage_id="initial_relaxation", **relaxation)
-study.stages.tableautosave(1e-12, quantities=("t", "mx", "my", "mz", "e_total"))
+study.stages.tableautosave(TABLE_SAMPLE_PERIOD_S, quantities=("t", "mx", "my", "mz", "e_total"))
 study.stages.add_run(20e-9, stage_id="preparation")
 # Physical-time table cadence applies only to dynamics.
 study.stages.tableautosave(enabled=False)
 study.stages.add_relax(stage_id="second_relaxation", **relaxation)
-study.stages.tableautosave(1e-12, quantities=("t", "mx", "my", "mz", "e_total"))
+study.stages.tableautosave(TABLE_SAMPLE_PERIOD_S, quantities=("t", "mx", "my", "mz", "e_total"))
 
 film.alpha = 0.045
 
-# Keep the 1 ps table and the original 5 ns full-vector snapshot cadence.
+# Keep the 10 ps table and the original 5 ns full-vector snapshot cadence.
 # Uncompressed f64 vectors at 24 GHz for both runs exceed the available disk.
 study.stages.autosave("m", every=5e-9)
 study.stages.set_spin_torque_enabled(module_id="slonczewski_pulse", enabled=True)

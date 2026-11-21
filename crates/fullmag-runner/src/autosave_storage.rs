@@ -429,7 +429,9 @@ pub struct ContinuousIndexEntry {
     pub stage_id: String,
     pub stage_index: u64,
     /// Stage-wide ordinal within sample_kind. Field quantities share this
-    /// sequence; payload_ref carries the independent per-quantity array row.
+    /// sequence; payload_ref retains the logical quantity-local array row.
+    /// Zarr readers resolve that row using the array's chunk layout, including
+    /// the stage-wide table chunk used by newly sealed stage tables.
     pub stage_sample_index: u64,
     pub sample_kind: AutosaveSampleKind,
     pub coordinate: StageSampleCoordinate,

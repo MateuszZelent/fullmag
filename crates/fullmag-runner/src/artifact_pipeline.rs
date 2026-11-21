@@ -38,9 +38,14 @@ use std::sync::{
     Arc,
 };
 use std::thread::{self, JoinHandle};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 pub(crate) const DEFAULT_ARTIFACT_PIPELINE_CAPACITY: usize = 4;
+#[cfg(any(test, feature = "cuda", feature = "fem-native"))]
+const ZARR_FIELD_METADATA_BATCH_SAMPLES: usize = 8;
+#[cfg(any(test, feature = "cuda", feature = "fem-native"))]
+const ZARR_FIELD_METADATA_FLUSH_INTERVAL: Duration = Duration::from_secs(30);
+const ARTIFACT_METADATA_POLL_INTERVAL: Duration = Duration::from_secs(1);
 
 /// Storage for regular (host-materialized) field snapshots.
 ///
@@ -332,6 +337,11 @@ enum ArtifactJob {
         batch: CpuAdaptiveAttemptBatch,
         acknowledgement: mpsc::Sender<Result<(), String>>,
     },
+    #[cfg(test)]
+    TestWriterBarrier {
+        entered: mpsc::Sender<()>,
+        release: mpsc::Receiver<()>,
+    },
     Shutdown,
 }
 
@@ -360,6 +370,8 @@ impl ArtifactJob {
                 .saturating_mul(std::mem::size_of::<AdaptiveAttemptRecord>())
                 as u64,
             ArtifactJob::UpdateProvenance { .. } => 0,
+            #[cfg(test)]
+            ArtifactJob::TestWriterBarrier { .. } => 0,
             ArtifactJob::Shutdown => 0,
         }
     }
@@ -846,6 +858,30 @@ impl ArtifactPipeline {
         stage_id: Option<String>,
     ) -> Result<Self, RunError> {
         let field_storage = configured_field_artifact_storage()?;
+        Self::start_with_stage_autosave_roots_and_identity_and_field_storage(
+            output_dir,
+            autosave_root,
+            field_context,
+            capacity,
+            stage_autosave,
+            physics_execution_context,
+            stage_id,
+            field_storage,
+        )
+    }
+
+    fn start_with_stage_autosave_roots_and_identity_and_field_storage(
+        output_dir: PathBuf,
+        autosave_root: PathBuf,
+        field_context: FieldArtifactContext,
+        capacity: usize,
+        stage_autosave: Option<StageAutosavePipelineConfig>,
+        physics_execution_context: Option<
+            crate::physics_graph_execution::PhysicsGraphExecutionContext,
+        >,
+        stage_id: Option<String>,
+        field_storage: FieldArtifactStorage,
+    ) -> Result<Self, RunError> {
         fs::create_dir_all(&output_dir).map_err(|error| RunError {
             message: format!(
                 "failed to create artifact output directory '{}': {}",
@@ -1020,6 +1056,29 @@ impl AutosaveTargetWriter for StageAutosaveWriter {
     }
 }
 
+impl StageAutosaveWriter {
+    fn flush_due(&mut self, now: Instant) -> Result<(), String> {
+        match self {
+            Self::Zarr(writer) => {
+                writer.flush_due(now)?;
+                writer.flush_field_metadata_due(now)
+            }
+            Self::Txt(_) => Ok(()),
+            #[cfg(feature = "stage-autosave-hdf5")]
+            Self::Hdf5(_) => Ok(()),
+        }
+    }
+
+    fn flush_field_metadata_pending(&mut self) -> Result<(), String> {
+        match self {
+            Self::Zarr(writer) => writer.flush_field_metadata_pending(),
+            Self::Txt(_) => Ok(()),
+            #[cfg(feature = "stage-autosave-hdf5")]
+            Self::Hdf5(_) => Ok(()),
+        }
+    }
+}
+
 struct StageAutosaveRuntime {
     state: AutosaveTargetState,
     writer: StageAutosaveWriter,
@@ -1146,14 +1205,21 @@ impl StageAutosaveRuntime {
     }
 
     fn append_field(&mut self, snapshot: &FieldSnapshot) -> Result<(), String> {
-        let values = snapshot.values.clone();
         self.append_field_values(
             &snapshot.name,
             snapshot.step,
             snapshot.time,
             snapshot.solver_dt,
-            &values,
+            &snapshot.values,
         )
+    }
+
+    fn flush_due(&mut self, now: Instant) -> Result<(), String> {
+        self.writer.flush_due(now)
+    }
+
+    fn flush_field_metadata_pending(&mut self) -> Result<(), String> {
+        self.writer.flush_field_metadata_pending()
     }
 
     fn append_field_values(
@@ -1656,6 +1722,7 @@ struct ZarrFieldSeriesWriter {
     location: String,
     scope: String,
     sample_count: usize,
+    published_sample_count: usize,
     samples_writer: BufWriter<File>,
 }
 
@@ -1744,7 +1811,7 @@ impl ZarrFieldSeriesWriter {
             )
         })?;
 
-        let mut writer = Self {
+        let writer = Self {
             zarray_path: root_dir.join(".zarray"),
             root_dir,
             info,
@@ -1752,9 +1819,10 @@ impl ZarrFieldSeriesWriter {
             location,
             scope,
             sample_count: 0,
+            published_sample_count: 0,
             samples_writer,
         };
-        writer.write_zarray_metadata()?;
+        writer.write_zarray_metadata(0)?;
         Ok(entry.insert(writer))
     }
 
@@ -1922,17 +1990,22 @@ impl ZarrFieldSeriesWriter {
         })?;
 
         self.sample_count += 1;
-        self.write_zarray_metadata()?;
         Ok(())
     }
 
-    fn last_chunk_values_f64(&self) -> Result<Vec<f64>, String> {
+    fn last_chunk_path(&self) -> Result<PathBuf, String> {
         let sample_index = self
             .sample_count
             .checked_sub(1)
             .ok_or_else(|| "native Zarr writer has no completed sample".to_string())?;
-        let bytes = fs::read(self.root_dir.join(format!("{sample_index}.0.0")))
-            .map_err(|error| error.to_string())?;
+        Ok(self.root_dir.join(format!("{sample_index}.0.0")))
+    }
+
+    fn last_chunk_values_f64(&self) -> Result<Vec<f64>, String> {
+        let path = self.last_chunk_path()?;
+        let bytes = fs::read(&path).map_err(|error| {
+            format!("failed to read field chunk '{}': {error}", path.display())
+        })?;
         if self.info.scalar_bytes == 0 || bytes.len() % self.info.scalar_bytes != 0 {
             return Err("native field snapshot chunk has invalid byte length".into());
         }
@@ -1956,12 +2029,31 @@ impl ZarrFieldSeriesWriter {
         }
     }
 
-    fn write_zarray_metadata(&mut self) -> Result<(), String> {
-        fs::write(
+    fn has_pending_metadata(&self) -> bool {
+        self.sample_count != self.published_sample_count
+    }
+
+    fn flush_metadata(&mut self) -> Result<bool, String> {
+        if !self.has_pending_metadata() {
+            return Ok(false);
+        }
+        self.samples_writer.flush().map_err(|error| {
+            format!(
+                "failed to flush Zarr sample index for '{}': {error}",
+                self.root_dir.display()
+            )
+        })?;
+        self.write_zarray_metadata(self.sample_count)?;
+        self.published_sample_count = self.sample_count;
+        Ok(true)
+    }
+
+    fn write_zarray_metadata(&self, sample_count: usize) -> Result<(), String> {
+        crate::autosave_zarr::write_json_atomic(
             &self.zarray_path,
-            serde_json::to_vec_pretty(&serde_json::json!({
+            &serde_json::json!({
                 "zarr_format": 2,
-                "shape": [self.sample_count, self.info.component_count, self.info.cell_count],
+                "shape": [sample_count, self.info.component_count, self.info.cell_count],
                 "chunks": [1, self.info.component_count, self.info.cell_count],
                 "dtype": zarr_dtype(self.info.scalar_type),
                 "compressor": serde_json::Value::Null,
@@ -1969,16 +2061,61 @@ impl ZarrFieldSeriesWriter {
                 "order": "C",
                 "filters": serde_json::Value::Null,
                 "dimension_separator": ".",
-            }))
-            .map_err(|error| format!("failed to serialize Zarr metadata: {}", error))?,
+            }),
         )
         .map_err(|error| {
             format!(
-                "failed to write Zarr metadata '{}': {}",
+                "failed to atomically replace Zarr metadata '{}': {}",
                 self.zarray_path.display(),
                 error
             )
         })
+    }
+}
+
+#[cfg(any(test, feature = "cuda", feature = "fem-native"))]
+#[derive(Default)]
+struct ZarrFieldMetadataBatch {
+    pending_samples: usize,
+    last_flush: Option<Instant>,
+}
+
+#[cfg(any(test, feature = "cuda", feature = "fem-native"))]
+impl ZarrFieldMetadataBatch {
+    fn record_sample(&mut self) {
+        self.pending_samples = self.pending_samples.saturating_add(1);
+    }
+
+    fn flush_if_due(
+        &mut self,
+        writers: &mut HashMap<String, ZarrFieldSeriesWriter>,
+        frames_index: &mut crate::frames_index::FramesIndexWriter,
+        now: Instant,
+        force: bool,
+    ) -> Result<bool, String> {
+        if self.pending_samples == 0 {
+            return Ok(false);
+        }
+        let age_due = self
+            .last_flush
+            .is_some_and(|last_flush| now.duration_since(last_flush) >= ZARR_FIELD_METADATA_FLUSH_INTERVAL);
+        if !force
+            && self.last_flush.is_some()
+            && self.pending_samples < ZARR_FIELD_METADATA_BATCH_SAMPLES
+            && !age_due
+        {
+            return Ok(false);
+        }
+
+        for writer in writers.values_mut() {
+            writer.flush_metadata()?;
+        }
+        // The frame index is published only after every referenced Zarr shape
+        // and samples.csv row is visible.
+        frames_index.flush()?;
+        self.pending_samples = 0;
+        self.last_flush = Some(now);
+        Ok(true)
     }
 }
 
@@ -2051,6 +2188,8 @@ fn writer_loop(
         .and_then(|runtime| runtime.completion_target.clone());
     #[cfg(any(test, feature = "cuda", feature = "fem-native"))]
     let mut zarr_writers: HashMap<String, ZarrFieldSeriesWriter> = HashMap::new();
+    #[cfg(any(test, feature = "cuda", feature = "fem-native"))]
+    let mut zarr_field_metadata = ZarrFieldMetadataBatch::default();
 
     let mut terminal_history: Option<BufWriter<File>> = None;
     let mut history_ordinals = std::collections::BTreeMap::<String, u64>::new();
@@ -2059,7 +2198,27 @@ fn writer_loop(
         write_scalars_csv_header(&mut header).map_err(|error| error.to_string())?;
         header.len() as u64
     };
-    for job in rx {
+    loop {
+        let job = match rx.recv_timeout(ARTIFACT_METADATA_POLL_INTERVAL) {
+            Ok(job) => job,
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                let now = Instant::now();
+                if let Some(runtime) = stage_autosave.as_mut() {
+                    runtime.flush_due(now)?;
+                }
+                #[cfg(any(test, feature = "cuda", feature = "fem-native"))]
+                if field_storage == FieldArtifactStorage::Zarr {
+                    zarr_field_metadata.flush_if_due(
+                        &mut zarr_writers,
+                        &mut frames_index,
+                        now,
+                        false,
+                    )?;
+                }
+                continue;
+            }
+            Err(mpsc::RecvTimeoutError::Disconnected) => break,
+        };
         queue_depth
             .try_update(Ordering::Relaxed, Ordering::Relaxed, |depth| {
                 Some(depth.saturating_sub(1))
@@ -2231,7 +2390,7 @@ fn writer_loop(
                                 snapshot.scope.as_str(),
                             )?;
                             writer.append_field_snapshot(&snapshot)?;
-                            frames_index.record(
+                            frames_index.record_buffered(
                                 &snapshot.name,
                                 snapshot.step,
                                 snapshot.time,
@@ -2242,6 +2401,7 @@ fn writer_loop(
                                 ),
                                 None,
                             )?;
+                            zarr_field_metadata.record_sample();
                         }
                         #[cfg(not(any(test, feature = "cuda", feature = "fem-native")))]
                         {
@@ -2299,13 +2459,14 @@ fn writer_loop(
                     "full",
                 )?;
                 writer.append_fdm_snapshot(&mut snapshot)?;
-                frames_index.record(
+                frames_index.record_buffered(
                     &snapshot.name,
                     snapshot.step,
                     snapshot.time,
                     crate::frames_index::snapshot_relative_path(&snapshot.name, snapshot.step, false),
                     None,
                 )?;
+                zarr_field_metadata.record_sample();
                 if let Some(runtime) = stage_autosave.as_mut() {
                     let values = writer.last_chunk_values_f64()?;
                     runtime.append_field_values(
@@ -2328,7 +2489,29 @@ fn writer_loop(
             ArtifactJob::NativeFieldSnapshotBarrier { acknowledgement } => {
                 // The writer is FIFO: all earlier CUDA snapshot jobs have
                 // completed and dropped their native handles before this ack.
-                let _ = acknowledgement.send(Ok(()));
+                // Preserve that visibility contract while Zarr metadata is
+                // buffered: publish payload indexes before acknowledging.
+                let result = (|| -> Result<(), String> {
+                    zarr_field_metadata.flush_if_due(
+                        &mut zarr_writers,
+                        &mut frames_index,
+                        Instant::now(),
+                        true,
+                    )?;
+                    if let Some(runtime) = stage_autosave.as_mut() {
+                        runtime.flush_field_metadata_pending()?;
+                    }
+                    Ok(())
+                })();
+                match result {
+                    Ok(()) => {
+                        let _ = acknowledgement.send(Ok(()));
+                    }
+                    Err(error) => {
+                        let _ = acknowledgement.send(Err(error.clone()));
+                        return Err(error);
+                    }
+                }
             }
             #[cfg(feature = "fem-native")]
             ArtifactJob::NativeFemFieldSnapshot {
@@ -2354,13 +2537,14 @@ fn writer_loop(
                     "full",
                 )?;
                 writer.append_fem_snapshot(&mut snapshot)?;
-                frames_index.record(
+                frames_index.record_buffered(
                     &snapshot.name,
                     snapshot.step,
                     snapshot.time,
                     crate::frames_index::snapshot_relative_path(&snapshot.name, snapshot.step, false),
                     None,
                 )?;
+                zarr_field_metadata.record_sample();
                 if let Some(runtime) = stage_autosave.as_mut() {
                     let values = writer.last_chunk_values_f64()?;
                     runtime.append_field_values(
@@ -2385,8 +2569,21 @@ fn writer_loop(
                 primary_error,
                 acknowledgement,
             } => {
-                let result =
-                    write_failed_run_provenance_atomic(output_dir, &provenance, &primary_error);
+                let result = (|| -> Result<(), String> {
+                    #[cfg(any(test, feature = "cuda", feature = "fem-native"))]
+                    if field_storage == FieldArtifactStorage::Zarr {
+                        zarr_field_metadata.flush_if_due(
+                            &mut zarr_writers,
+                            &mut frames_index,
+                            Instant::now(),
+                            true,
+                        )?;
+                    }
+                    if let Some(runtime) = stage_autosave.as_mut() {
+                        runtime.flush_field_metadata_pending()?;
+                    }
+                    write_failed_run_provenance_atomic(output_dir, &provenance, &primary_error)
+                })();
                 let _ = acknowledgement.send(result);
             }
             ArtifactJob::TerminalCpuAdaptiveAttempts {
@@ -2404,17 +2601,50 @@ fn writer_loop(
                     crate::artifacts::artifact_provenance_json(&field_context, &provenance);
                 let result = (|| -> Result<(), String> {
                     #[cfg(any(test, feature = "cuda", feature = "fem-native"))]
+                    if field_storage == FieldArtifactStorage::Zarr {
+                        zarr_field_metadata.flush_if_due(
+                            &mut zarr_writers,
+                            &mut frames_index,
+                            Instant::now(),
+                            true,
+                        )?;
+                    }
+                    #[cfg(any(test, feature = "cuda", feature = "fem-native"))]
                     for writer in zarr_writers.values() {
                         writer.update_provenance(&field_context, &provenance)?;
                     }
                     if let Some(runtime) = stage_autosave.as_mut() {
+                        runtime.flush_field_metadata_pending()?;
                         runtime.update_provenance(&artifact_provenance)?;
                     }
                     Ok(())
                 })();
                 let _ = acknowledgement.send(result);
             }
+            #[cfg(test)]
+            ArtifactJob::TestWriterBarrier { entered, release } => {
+                entered
+                    .send(())
+                    .map_err(|_| "test writer barrier observer was dropped".to_string())?;
+                release
+                    .recv()
+                    .map_err(|_| "test writer barrier was released by channel closure".to_string())?;
+            }
             ArtifactJob::Shutdown => break,
+        }
+
+        let now = Instant::now();
+        if let Some(runtime) = stage_autosave.as_mut() {
+            runtime.flush_due(now)?;
+        }
+        #[cfg(any(test, feature = "cuda", feature = "fem-native"))]
+        if field_storage == FieldArtifactStorage::Zarr {
+            zarr_field_metadata.flush_if_due(
+                &mut zarr_writers,
+                &mut frames_index,
+                now,
+                false,
+            )?;
         }
     }
 
@@ -2436,14 +2666,18 @@ fn writer_loop(
         })?;
     }
 
+    if let Some(runtime) = stage_autosave.as_mut() {
+        runtime.flush_field_metadata_pending()?;
+    }
+
     #[cfg(any(test, feature = "cuda", feature = "fem-native"))]
-    for (observable, writer) in &mut zarr_writers {
-        writer.samples_writer.flush().map_err(|error| {
-            format!(
-                "failed to flush Zarr sample index for '{}': {}",
-                observable, error
-            )
-        })?;
+    if field_storage == FieldArtifactStorage::Zarr {
+        zarr_field_metadata.flush_if_due(
+            &mut zarr_writers,
+            &mut frames_index,
+            Instant::now(),
+            true,
+        )?;
     }
 
     #[cfg(any(test, feature = "cuda", feature = "fem-native"))]
@@ -2757,6 +2991,174 @@ mod tests {
             job.estimated_bytes(),
             18 * std::mem::size_of::<f64>() as u64
         );
+    }
+
+    #[test]
+    fn blocked_artifact_writer_does_not_ack_each_table_or_field_sample_and_finish_drains() {
+        const FIELD_BYTES: usize = 3 * 1024 * 1024;
+        const FIELD_VALUES: usize = FIELD_BYTES / std::mem::size_of::<f64>();
+
+        let output = tempfile::tempdir().expect("temporary artifact output");
+        let autosave = tempfile::tempdir().expect("temporary autosave output");
+        let context = FieldArtifactContext {
+            problem_name: "blocked-artifact-writer".into(),
+            ir_version: "v0".into(),
+            source_hash: None,
+            execution_mode: fullmag_ir::ExecutionMode::Strict,
+            layout: serde_json::json!({"kind": "fdm", "cell_count": FIELD_VALUES}),
+            magnetization_field_semantics: Ok(None),
+            execution_resolution: None,
+        };
+        let stage_autosave = StageAutosavePipelineConfig {
+            stage_id: "run".into(),
+            policy: fullmag_ir::StageAutosaveIR {
+                kind: "stage_autosave".into(),
+                target: "state".into(),
+                layout: fullmag_ir::AutosaveLayoutIR::Continuous,
+                format: fullmag_ir::AutosaveFormatIR::Zarr,
+                table: Some(fullmag_ir::TableAutosaveIR {
+                    kind: "table_autosave".into(),
+                    table_id: "default".into(),
+                    sample_period_s: None,
+                    sample_period_policy: None,
+                    resolved_sample_period_s: None,
+                    every_steps: Some(1),
+                    quantities: vec!["step".into()],
+                    expressions: Vec::new(),
+                }),
+                fields: vec![fullmag_ir::FieldAutosaveIR {
+                    kind: "field_autosave".into(),
+                    quantity: "m".into(),
+                    every_seconds: None,
+                    sample_period_policy: None,
+                    every_steps: Some(1),
+                }],
+            },
+        };
+        let mut pipeline = ArtifactPipeline::start_with_stage_autosave_roots_and_identity_and_field_storage(
+            output.path().to_path_buf(),
+            autosave.path().to_path_buf(),
+            context,
+            2,
+            Some(stage_autosave),
+            None,
+            Some("run".into()),
+            FieldArtifactStorage::Zarr,
+        )
+        .expect("start background artifact writer");
+        let sender = pipeline.sender();
+        let (writer_entered, entered) = mpsc::channel();
+        let (release, release_writer) = mpsc::channel();
+        sender
+            .push(ArtifactJob::TestWriterBarrier {
+                entered: writer_entered,
+                release: release_writer,
+            })
+            .expect("enqueue slow-writer barrier");
+        entered
+            .recv_timeout(Duration::from_secs(5))
+            .expect("writer is blocked before processing sample jobs");
+
+        let (producer_done, producer_result) = mpsc::channel();
+        let producer_sender = sender.clone();
+        let producer = thread::spawn(move || {
+            let mut recorder = ArtifactRecorder::streaming(
+                ExecutionProvenance::default(),
+                producer_sender,
+            );
+            let result = (|| -> Result<(), RunError> {
+                recorder.record_stage_autosave_scalar(&StepStats {
+                    step: 1,
+                    time: 0.0,
+                    ..StepStats::default()
+                })?;
+                recorder.record_field_snapshot(
+                    FieldSnapshot::new(
+                        "m",
+                        1,
+                        0.0,
+                        0.0,
+                        1,
+                        "scalar",
+                        "cell",
+                        "full",
+                        1,
+                        vec![0.25; FIELD_VALUES],
+                    )
+                    .expect("valid 3 MiB field snapshot"),
+                )?;
+                Ok(())
+            })();
+            let _ = producer_done.send(result.map_err(|error| error.message));
+        });
+
+        // The writer is deliberately stalled. Both producer calls must finish
+        // after bounded queue insertion without waiting for physical writes.
+        let enqueued_while_blocked = producer_result.recv_timeout(Duration::from_secs(5));
+        let stage = autosave
+            .path()
+            .join("state.zarr/stages/stage_0000_run");
+        let field_chunk = stage.join("fields/m/0.0");
+        assert!(!field_chunk.exists(), "writer barrier must hold field disk I/O");
+        assert!(
+            !output.path().join("fields/m.zarr").exists(),
+            "regular Zarr store is created by the background writer"
+        );
+
+        release.send(()).expect("release slow writer");
+        let producer_result = match enqueued_while_blocked {
+            Ok(result) => result,
+            Err(_) => producer_result
+                .recv_timeout(Duration::from_secs(5))
+                .expect("producer resumes after writer release"),
+        };
+        producer.join().expect("producer thread exits");
+        assert!(
+            producer_result.is_ok(),
+            "producer should enqueue without a per-sample writer acknowledgement: {producer_result:?}"
+        );
+
+        drop(sender);
+        let summary = pipeline.finish().expect("finish drains queued artifact jobs");
+        assert_eq!(summary.field_snapshots_written, 1);
+
+        let regular_field = output.path().join("fields/m.zarr");
+        let regular_shape: serde_json::Value = serde_json::from_slice(
+            &fs::read(regular_field.join(".zarray")).expect("regular field metadata"),
+        )
+        .expect("valid regular Zarr metadata");
+        assert_eq!(regular_shape["shape"], serde_json::json!([1, 1, FIELD_VALUES]));
+        assert_eq!(
+            fs::metadata(regular_field.join("0.0.0"))
+                .expect("regular field chunk")
+                .len(),
+            FIELD_BYTES as u64
+        );
+
+        let stage_shape: serde_json::Value = serde_json::from_slice(
+            &fs::read(stage.join("fields/m/.zarray")).expect("stage field metadata"),
+        )
+        .expect("valid stage Zarr metadata");
+        assert_eq!(stage_shape["shape"], serde_json::json!([1, FIELD_VALUES]));
+        assert_eq!(
+            fs::metadata(&field_chunk).expect("stage field chunk").len(),
+            FIELD_BYTES as u64
+        );
+        assert!(stage.join("table/0.0").exists());
+
+        let index = crate::autosave_zarr::read_logical_index(&autosave.path().join("state.zarr"))
+            .expect("published stage index");
+        assert_eq!(index.len(), 2);
+        assert_eq!(index[0].sample_kind, crate::autosave_storage::AutosaveSampleKind::Table);
+        assert_eq!(index[1].sample_kind, crate::autosave_storage::AutosaveSampleKind::Field);
+        assert_eq!(index[1].payload_ref, "stages/stage_0000_run/fields/m/0");
+
+        let frames: crate::frames_index::FramesIndexDocument = serde_json::from_slice(
+            &fs::read(output.path().join("frames.json")).expect("published regular frame index"),
+        )
+        .expect("valid frame index");
+        assert_eq!(frames.frames.len(), 1);
+        assert_eq!(frames.frames[0].quantity_ids, ["m"]);
     }
 
     #[cfg(any(feature = "cuda", feature = "fem-native"))]
@@ -3167,6 +3569,109 @@ mod tests {
             assert_eq!(payload["unit"], unit);
         }
         fs::remove_dir_all(output_dir).expect("remove transport artifact fixture");
+    }
+
+    #[test]
+    fn regular_zarr_metadata_batches_samples_and_publishes_frame_index_after_shapes() {
+        let output = tempfile::tempdir().expect("temporary run output");
+        let context = FieldArtifactContext {
+            problem_name: "zarr-metadata-batch".into(),
+            ir_version: "v0".into(),
+            source_hash: None,
+            execution_mode: fullmag_ir::ExecutionMode::Strict,
+            layout: serde_json::json!({"kind": "fdm", "cell_count": 1}),
+            magnetization_field_semantics: Ok(None),
+            execution_resolution: None,
+        };
+        let info = NativeVectorSnapshotInfo {
+            cell_count: 1,
+            component_count: 1,
+            scalar_bytes: std::mem::size_of::<f64>(),
+            scalar_type: NativeSnapshotScalarType::F64,
+        };
+        let mut writers = HashMap::new();
+        ZarrFieldSeriesWriter::get_or_open(
+            &mut writers,
+            &output.path().join("fields"),
+            &context,
+            &ExecutionProvenance::default(),
+            "m",
+            info,
+            "scalar",
+            "cell",
+            "full",
+        )
+        .expect("open regular field store");
+        let mut frames_index = crate::frames_index::FramesIndexWriter::new(output.path(), None);
+        let mut metadata_batch = ZarrFieldMetadataBatch::default();
+        let start = Instant::now();
+
+        for (step, value) in [(0, 1.0), (1, 2.0)] {
+            let snapshot = FieldSnapshot::new(
+                "m",
+                step,
+                step as f64,
+                1.0,
+                1,
+                "scalar",
+                "cell",
+                "full",
+                step + 1,
+                vec![value],
+            )
+            .expect("valid scalar field snapshot");
+            writers
+                .get_mut("m")
+                .expect("open field writer")
+                .append_field_snapshot(&snapshot)
+                .expect("append sample payload");
+            frames_index
+                .record_buffered(
+                    "m",
+                    step,
+                    snapshot.time,
+                    crate::frames_index::snapshot_relative_path("m", step, false),
+                    None,
+                )
+                .expect("buffer frame entry");
+            metadata_batch.record_sample();
+            let now = start + Duration::from_secs(u64::from(step));
+            metadata_batch
+                .flush_if_due(&mut writers, &mut frames_index, now, false)
+                .expect("flush due metadata");
+        }
+
+        let field = output.path().join("fields/m.zarr");
+        let held_shape: serde_json::Value =
+            serde_json::from_slice(&fs::read(field.join(".zarray")).unwrap()).unwrap();
+        assert_eq!(held_shape["shape"], serde_json::json!([1, 1, 1]));
+        assert!(field.join("1.0.0").exists(), "second payload is already written");
+        let held_frames: crate::frames_index::FramesIndexDocument = serde_json::from_slice(
+            &fs::read(output.path().join("frames.json")).expect("first frame publication"),
+        )
+        .unwrap();
+        assert_eq!(held_frames.frames.len(), 1);
+
+        metadata_batch
+            .flush_if_due(
+                &mut writers,
+                &mut frames_index,
+                start + ZARR_FIELD_METADATA_FLUSH_INTERVAL,
+                false,
+            )
+            .expect("age deadline publishes pending samples");
+        let published_shape: serde_json::Value =
+            serde_json::from_slice(&fs::read(field.join(".zarray")).unwrap()).unwrap();
+        assert_eq!(published_shape["shape"], serde_json::json!([2, 1, 1]));
+        let samples = fs::read_to_string(field.join("samples.csv")).unwrap();
+        assert_eq!(samples.lines().count(), 3, "header plus two ordered samples");
+        let frames: crate::frames_index::FramesIndexDocument = serde_json::from_slice(
+            &fs::read(output.path().join("frames.json")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(frames.frames.len(), 2);
+        assert_eq!(frames.frames[0].step, 0);
+        assert_eq!(frames.frames[1].step, 1);
     }
 
     #[test]
