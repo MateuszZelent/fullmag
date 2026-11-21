@@ -117,6 +117,7 @@
       ],
       "sources": [
         "source-shared-assembly",
+        "source-k0-nonuniform-reciprocity-regression",
         "source-nodal-ms-floquet-contract",
         "source-nodal-ms-floquet-assembly"
       ]
@@ -1310,7 +1311,13 @@
       "id": "source-shared-assembly",
       "path": "backends/fem/cpu/frequency_domain/operators/poisson_airbox_shared_domain.hpp",
       "symbol": "assemble_poisson_airbox_shared_domain",
-      "responsibility": "Assemble the native MFEM scalar, mixed, mass, gauge and magnetic blocks."
+      "responsibility": "Składa bloki mieszane z jednego interpolowanego pola stycznego, a także bloki Poissona, masy i warunku cechowania."
+    },
+    {
+      "id": "source-k0-nonuniform-reciprocity-regression",
+      "path": "backends/fem/tests/frequency_domain/poisson_airbox_shared_domain_test.cpp",
+      "symbol": "main",
+      "responsibility": "Sprawdza wzajemność bloków mieszanych dla niejednorodnej równowagi P1 z warunkiem Robina."
     },
     {
       "id": "source-cpu-schur",

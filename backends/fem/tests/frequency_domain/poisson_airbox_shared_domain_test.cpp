@@ -3063,6 +3063,35 @@ int main()
     }
     check(reciprocal_sign_error <= 1.0e-12 * std::max(1.0, reciprocal_scale),
           "demag feedback must be -mu0 times the transpose Poisson source so the Schur Hessian is positive");
+    // Vary m0 across the elements so a nodal frame is generally not
+    // orthogonal to the interpolated equilibrium at a quadrature point.
+    std::vector<fd::TangentFrameNode> textured_frames = de_frames;
+    for (std::size_t node = 0; node < textured_frames.size(); ++node) {
+        const double angle = 0.2 * static_cast<double>(node % 5u);
+        auto &frame = textured_frames[node];
+        frame.m[0] = std::cos(angle);
+        frame.m[1] = std::sin(angle);
+        frame.e1[0] = -frame.m[1];
+        frame.e1[1] = frame.m[0];
+    }
+    auto textured_request = de_request;
+    textured_request.tangent_frames = textured_frames.data();
+    fd::PoissonAirboxSharedDomainAssemblyResult textured_result{};
+    check(fd::assemble_poisson_airbox_shared_domain(textured_request, &textured_result) ==
+              fd::FrequencyDomainStatus::ok,
+          textured_result.error_message);
+    double textured_error = 0.0;
+    double textured_scale = 0.0;
+    for (std::uint64_t q = 0; q < textured_result.a_qphi.row_count; ++q) {
+        for (std::uint64_t phi = 0; phi < textured_result.a_qphi.column_count; ++phi) {
+            const double feedback = matrix_value(textured_result.a_qphi, q, phi);
+            const double source = request.mu0_T_m_A * matrix_value(textured_result.a_phiq, phi, q);
+            textured_error = std::max(textured_error, std::abs(feedback + source));
+            textured_scale = std::max(textured_scale, std::max(std::abs(feedback), std::abs(source)));
+        }
+    }
+    check(textured_scale > 0.0 && textured_error <= 1.0e-12 * textured_scale,
+          "demag mixed blocks are reciprocal for nonuniform nodal magnetization");
     check(result.b_qq.values.size() > 0, "shared-domain gyrotropic mass is nonzero");
     check(std::abs(matrix_value(result.b_qq, 0, 1) +
                    matrix_value(result.b_qq, 1, 0)) < 1.0e-12,
