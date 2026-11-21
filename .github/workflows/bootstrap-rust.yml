@@ -78,6 +78,11 @@ jobs:
           python3 -B scripts/ci/run_exact_cargo_test.py --locked -p fullmag-plan --lib spin_transport::tests::resolves_only_fdm_cpu_double_and_preserves_requested_intent -- --exact
           python3 -B scripts/ci/run_exact_cargo_test.py --locked -p fullmag-runner --lib fdm::cpu::spin_transport::tests::reciprocal_and_transient_plans_publish_transport_execution_provenance -- --exact
 
+      - name: Run all spin transport planner and runner unit tests
+        run: |
+          cargo test --locked -p fullmag-plan --lib spin_transport::tests
+          cargo test --locked -p fullmag-runner --lib fdm::cpu::spin_transport::tests
+
       - name: Verify interleaved Zarr sample indexes after writer drain
         shell: bash
         run: |

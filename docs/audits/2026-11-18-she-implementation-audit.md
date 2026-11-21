@@ -96,7 +96,7 @@ Ograniczenia:
   - dokumentów `docs/superpowers/*`, `docs/plans/active/SHE.md` i not 0800/0820 (użyte tylko jako kontekst);
   - treści testów kontraktowych C++/CUDA (oceniono tylko to, co sprawdzają).
 - Semantyki MFEM (`BilinearForm::Mult` po `FormLinearSystem`, `ProjectCoefficient` w węzłach wspólnych, `mfem_error`) nie dało się sprawdzić, bo źródeł MFEM nie ma w repozytorium.
-- Testów Rust, C++ i CUDA nie wykonywano. Status „przechodzi” pochodzi wyłącznie z dokumentów.
+- Audyt nie uruchamiał testów Rust, C++ ani CUDA. Późniejszy CI PR #505 na headzie `b7b61f6` zaliczył testy `spin_transport::tests` w `fullmag-plan` oraz `fdm::cpu::spin_transport::tests` w `fullmag-runner` ([run 44723948749](https://github.com/MateuszZelent/fullmag/actions/runs/44723948749)); to nie kwalifikuje C++, CUDA ani runtime.
 
 ---
 
@@ -485,7 +485,7 @@ Stan na 2026-11-20 (branch `codex/she-audit-stage-a-20261120`): A1–A4 i częś
 
 | # | Zadanie | Lane | Najpierw nota | Bramka | Status |
 |---|---|---|---|---|---|
-| B1 | Konwersja Gilberta w `add_transport_stage_rhs` z lokalnym α (jak w `sot.cpp`) oraz maska węzłowa targetu momentu (SHE-P0-1, SHE-P1-12) | FEM CPU | ujednolicić 0980 §4.6.5 z 0970 §2.6.2 | test jednego kroku: nieosiowe `m`, α≠0, porównanie z wyrocznią SI i z FDM CPU dla jednorodnego macrospinu; test maski | do zrobienia |
+| B1 | Konwersja Gilberta w `add_transport_stage_rhs` z lokalnym α (jak w `sot.cpp`) oraz maska węzłowa targetu momentu (SHE-P0-1, SHE-P1-12) | FEM CPU | ujednolicić 0980 §4.6.5 z 0970 §2.6.2 | test jednego kroku: nieosiowe `m`, α≠0, porównanie z wyrocznią SI i z FDM CPU dla jednorodnego macrospinu; test maski | **zaimplementowane** (PR #502, `ab88addfe`): kompilacja natywna w DEV potwierdzona receiptem; wykonanie `fem_rk_explicit_contract` NOT VERIFIED (brak trasy wolumenowej i joba CI); maska targetu pozostaje (SHE-P1-12) |
 | B2 | Niezależne bilanse FEM: reakcja na wierszach Dirichleta z `FullMult` na oryginalnym RHS, osobno konstytutywny strumień brzegowy, raport różnicy; poprawka jednostki `_apm2`; osobne skalowane reszty ładunku i spinu w M2; usunięcie floor `max(‖b‖,1)` (SHE-P0-6, SHE-P1-13) | FEM CPU | 0970 §7.1 | test celowo zaburzonego rozwiązania: bilans musi zawieść | do zrobienia |
 | B3 | Niezależne residuum FV, bilans globalny, interfejsowy i torque closure dla każdego N na GPU, z deterministyczną redukcją i bramkami odrzucającymi przed commitem (SHE-P0-5) | FDM GPU | 0970 §3.1.1 (bez zmian) | kontrakt actual-device z negatywnym przypadkiem | do zrobienia |
 | B4 | Eliminacja trace'ów `μ_Γ` (i `V_Γ` w M2) na ścianach mixing: lokalny układ 3×3 (M1) lub 4×4 (M2) na ścianę, liniowy w μ; transparent cross-region z ważeniem członu P oporami (SHE-P1-1, SHE-P1-2) | FDM CPU Rust, C++, CUDA | 0970 §2.5/§3.1: nowa wersja operatora, np. `fv_spin_mixing_series_trace.v1` | analityczny benchmark N\|F 1D z mixingiem: zbieżność O(h²) w 3+ rozdzielczościach, parytet CPU↔C++↔CUDA, porównanie z BORIS | do zrobienia |
@@ -516,19 +516,19 @@ Każda pozycja wymaga bramki „wynik bez zmian”: porównania artefaktów prze
 
 | # | Zadanie | Bramka |
 |---|---|---|
-| D1 | SceneDocument wyraża FEM M2 (operator FEM, bez `reciprocal_nonlinear`); przykład `fem_reciprocal_m2_public.py` z `engine="gmres"` i test, który go planuje (SHE-PY-3, SHE-PY-4) | test planowania przykładu |
+| D1 | SceneDocument wyraża FEM M2 (operator FEM, bez `reciprocal_nonlinear`); publiczny przykład przechodzi przez planner (SHE-PY-3, SHE-PY-4) | **Stan:** przykład używa jawnego otagowanego meshu P1 wyłącznie dla przewodzącej bryły, z rozłącznymi elektrodami `left`/`right`; test Python sprawdza odtwarzalność assetu i eksportu skryptu, a test Rust eksportuje przykład z pełnymi assetami, wywołuje planner i sprawdza markery oraz napięcia elektrod. Weryfikacja CI tej bramki pozostaje w toku. Scenariusz authoringu SceneDocument dla FEM M2 i wykonanie/kwalifikacja fizyczna pozostają poza zakresem tej bramki. |
 | D2 | Jedno źródło reguł walidacji (tabela reguł w IR, eksportowana do Pythona i UI); Python liczy co najmniej Schura i C_s/N₀ z tej samej definicji | test parytetu reguł |
 | D3 | Synchronizacja `capability-matrix-v0.json/.md` z plannerem: stany, FEM M2 stage coupling, GPU M1, identyfikatory capability w planie (SHE-PY-7, SHE-PY-8) | skrypt spójności matryca↔planner |
 | D4 | Aktualizacja specyfikacji parity (jednostka C_s, statusy, osobne pozycje G↑/G↓/G_r/G_i/SML, `drift_diffusion_spin_torque`) | test parity |
 | D5 | Dokumentacja publiczna: domyślne lane i operator, M1 one-way vs M2, pełna tabela jednostek, odsyłacz SOT ↔ solved SHE, usunięcie nieistniejących testów; usunięcie kolizji placeholdera `DriftDiffusionSpinTorque` | build Sphinx/MyST |
-| D6 | Odświeżenie golden `racetrack_m1_v1/python_problem_ir.v1.json` po potwierdzeniu, że różnice dotyczą tylko nowych pustych kolekcji | `pytest` zielony |
+| D6 | Odświeżenie golden `racetrack_m1_v1/python_problem_ir.v1.json` po potwierdzeniu, że różnice dotyczą tylko nowych pustych kolekcji | `pytest` zielony; **wstrzymane:** różnice nie są wyłącznie formatowe, zob. SHE-D6-1–3 w §10.1. |
 | D7 | Rozstrzygnięcie sprzeczności z §9 w notach 0970 i 0980 | review naukowy |
 
 ### Etap E: Control Room (z `modern-web-guidance` i dowodem z przeglądarki)
 
 | # | Zadanie | Bramka |
 |---|---|---|
-| E1 | Naprawa `check_spin_authoring_forms.mjs` (liczniki wyprowadzone z listy IR) i podpięcie pod `just lint-control-room-source` / CI (SHE-UI-2) | zielony skrypt w CI |
+| E1 | Naprawa `check_spin_authoring_forms.mjs` (liczniki wyprowadzone z listy IR) i podpięcie pod `just lint-control-room-source` / CI (SHE-UI-2) | zielony skrypt w CI; **stan:** zrobione po stronie CI (`99191b6e3`): porównanie nazw wariantów, 40/40 kontroli lokalnie, krok w `control-room-contracts`; `just lint-control-room-source` nie uruchamia tego skryptu. |
 | E2 | Rozpoznawanie: dopuścić powierzchnie interfejsu, `external_lead_preparation`, `conservative_current_source`; walidację wersji operatora zostawić backendowi (SHE-UI-3…5) | testy modelu z przypadkami regresyjnymi |
 | E3 | Legenda viewportu: jednostka z `QuantityCatalogEntry.unit`, token projekcji w planie colorbaru (SHE-UI-1) | test modelu oraz browser smoke (widoczny canvas, kontekst WebGL, niezerowy drawing buffer) |
 | E4 | Autoring `drift_diffusion_spin_torque` (select istniejącego spin transportu, target, wersja), opis „prescribed vs solved”, ostrzeżenie o podwójnym liczeniu, usunięcie martwych opcji legacy (SHE-UI-6) | test round-trip UI → skrypt → IR |
@@ -551,9 +551,26 @@ Kolejność zalecana: **A → B1, B2, B3 → B4 → C1–C4 → D1, E1, E2 → r
 
 ---
 
+### 10.1. Ustalenia z implementacji (2026-11-20)
+
+**Blokada cyklu integracji (infrastruktura).** `just worktree-finish ... completed` kończy się błędem `Private group cache helper did not prove its daemon-side outcome ... cannot create temp file for here-document: Read-only file system`.
+
+- Przyczyna: `scripts/docker_build_control.py::BuildControl.helper_args` uruchamia helper z `--read-only` bez zapisywalnego `/tmp`. Bash wykonuje duży here-doc ze skryptu retencji (`scripts/docker_cache_retirement.py`, `python3 - <<'PY'`) przez plik tymczasowy, którego nie może utworzyć.
+- Okno regresji: ostatnie `completed` w rejestrze to 2026-11-18; jedyny commit w tych plikach od tego czasu to `b85184ca5` (#240, 2026-11-20).
+- Precedens poprawki: `--tmpfs /tmp:rw,nosuid,nodev,size=64m` w innych utwardzonych helperach (`scripts/export_runner_openapi.py`, `scripts/docker_claimed_interruption_namespace.py`).
+- Skutek: worktree `she-audit-stage-a-20261120` i `she-fem-gilbert-torque-20261120` mają stan `blocked`. Kontenery usunięto (`docker-dev-retire-stopped`), PR są scalone, prywatne wolumeny i lease BuildControl są zachowane. Następny krok: poprawka helpera przez właściciela infrastruktury, ponowne `worktree-finish ... completed`, potem `git worktree remove`.
+
+**SHE-D6-1 (P1, fizyka fixture).** `fm.texture.neel_skyrmion` ma od `d28c2b20a` (2026-08-24) domyślne `preset_version=2`, które odwraca znaczenie `core_polarity`. Przy tych samych parametrach co w scenariuszu (`core_polarity=1`, `chirality=1`) v1 daje rdzeń $m_z=-1$ i tło $+1$, zgodnie z zamrożonym `tests/standard_problems/transport/racetrack_m1_v1/fixture.v1.json` (`core_axis_sign: -1`, `background_axis_sign: 1`), a v2 daje rdzeń $+1$ i tło $-1$ (sprawdzone `fullmag.init.preset_eval.evaluate_preset_texture`, punkty lokalne 0/20/30/40/80 nm). `tests/standard_problems/transport/racetrack_m1_v1/scenario.py:47-52` i `examples/fdm_gpu_solved_current_skyrmion_racetrack.py:75-80` lowerują dziś skyrmion odwrotny do udokumentowanego, czyli z przeciwnym ładunkiem topologicznym i znakiem kąta Halla skyrmionu przy napędzie SHE. Wymaga decyzji: `core_polarity=-1` z v2 (zgodnie z fixture) albo zmiana fixture. Golden nie został odświeżony.
+
+**SHE-D6-2 (P2, test zależny od hosta).** Lowering `runtime_selection` zawiera `legacy_cuda_binding` z UUID lokalnego GPU (`fullmag/model/problem.py::legacy_cuda_binding`), więc dokładne porównania lowering w `scripts/test_fdm_gpu_m1_contract_docs.py` zależą od hosta. Golden nie może zawierać tego pola bez normalizacji.
+
+**SHE-D6-3 (P2, zmiana kontraktu IR).** Test `scripts/test_fdm_gpu_m1_contract_docs.py::RacetrackM1PhysicsContractDocsTests.test_racetrack_expected_lowering_matches_public_python_dsl` wykrywa ponadto brak domyślnego `runtime_selection.parallel_execution` w oczekiwanym lowering fixture. To nie jest różnica formatowania ani pusta kolekcja; `packages/fullmag-py/src/fullmag/model/problem.py::ParallelExecutionPolicy` dodaje jawne limity trybu serial. Nie odświeżono goldenów, bo test nadal ujawnia też nierozstrzygnięte różnice SHE-D6-1 i SHE-D6-2.
+
+**Decyzje oczekujące na użytkownika:** B6 (definicja δT), B8 (upwind vs central), reguła M3 dla ferromagnetyka wobec zakwalifikowanego workloadu (P=0,4), skan zapisanych danych przed `deny_unknown_fields`, SHE-D6-1 (polaryzacja zarodka racetrack), autoryzacja lub właściciel poprawki helpera BuildControl.
+
 ## 11. Czego nie zweryfikowano
 
-- Wykonania jakiegokolwiek testu Rust, C++ i CUDA ani przebiegu runtime (zakaz kompilacji).
+- Pełnej kwalifikacji Rust, C++, CUDA ani przebiegu runtime. CI PR #505 (run 44723948749) wykonał wyłącznie wskazane wyżej testy modułu spin transportu w `fullmag-plan` i `fullmag-runner`; pozostałe zakresy pozostają niezweryfikowane.
 - Semantyki MFEM w dołączonej wersji (SHE-P0-6, SHE-P1-15, SHE-P1-16).
 - Ilościowego wpływu SHE-P0-1 na trajektorie. Istnienia bramki E2E FEM M2+LLG vs FDM.
 - Osiągalności:
@@ -564,7 +581,7 @@ Kolejność zalecana: **A → B1, B2, B3 → B4 → C1–C4 → D1, E1, E2 → r
 - Wartości liczbowych wydajności. Są to szacunki z kodu i wartości z raportu zamknięcia GPU (CONTRACT).
 - Zachowania Control Room w przeglądarce. Czy żywy katalog publikuje `spin_potential`, `spin_current_tensor` i `torque_*` z projekcjami.
 - Czy backend blokuje jednoczesny prescribed SOT i solved SHE torque na tym samym targecie.
-- Asercji `check_spin_authoring_forms.mjs` po linii 27 (przerwane na pierwszej porażce).
+
 
 ---
 
