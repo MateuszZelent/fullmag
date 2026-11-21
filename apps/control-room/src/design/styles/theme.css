@@ -147,13 +147,13 @@
   --fm-hud-cube-shade: #11111b;
 
   /* Visual language 2026-11: glass layers, recessed fields, raised selection, domain hues */
-  --fm-glass-bg: rgb(24 24 37 / 0.72);
-  --fm-glass-strong: rgb(30 30 46 / 0.84);
-  --fm-glass-line: rgb(205 214 244 / 0.12);
-  --fm-glass-highlight: rgb(255 255 255 / 0.08);
-  --fm-field-bg: rgb(17 17 27 / 0.55);
+  --fm-glass-bg: rgb(30 30 46 / 0.78);
+  --fm-glass-strong: rgb(36 36 56 / 0.92);
+  --fm-glass-line: rgb(205 214 244 / 0.13);
+  --fm-glass-highlight: rgb(255 255 255 / 0.07);
+  --fm-field-bg: #11111b;
   --fm-raised-bg: #24243a;
-  --fm-section-bg: rgb(205 214 244 / 0.03);
+  --fm-section-bg: rgb(205 214 244 / 0.035);
   --fm-viewport-glow-a: rgb(203 166 247 / 0.14);
   --fm-viewport-glow-b: rgb(137 180 250 / 0.12);
   /* Page backdrop behind the floating panels: the base with a soft glow. */
@@ -325,14 +325,14 @@
   --fm-hud-cube-edge: #8c8fa1;
   --fm-hud-cube-shade: #4c4f69;
 
-  /* Visual language 2026-11: fields are recessed, never bright white */
-  --fm-glass-bg: rgb(255 255 255 / 0.72);
-  --fm-glass-strong: rgb(255 255 255 / 0.86);
-  --fm-glass-line: rgb(76 79 105 / 0.14);
+  /* Visual language 2026-11: fields are recessed cool slate, never bright white */
+  --fm-glass-bg: rgb(246 247 251 / 0.86);
+  --fm-glass-strong: rgb(250 251 254 / 0.95);
+  --fm-glass-line: rgb(76 79 105 / 0.16);
   --fm-glass-highlight: rgb(255 255 255 / 0.92);
-  --fm-field-bg: rgb(76 79 105 / 0.065);
+  --fm-field-bg: rgb(223 227 236 / 0.85);
   --fm-raised-bg: #ffffff;
-  --fm-section-bg: rgb(76 79 105 / 0.03);
+  --fm-section-bg: rgb(76 79 105 / 0.035);
   --fm-viewport-glow-a: rgb(136 57 239 / 0.16);
   --fm-viewport-glow-b: rgb(4 165 229 / 0.18);
   --fm-page-bg:

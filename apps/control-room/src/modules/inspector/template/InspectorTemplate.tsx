@@ -13,6 +13,7 @@ import {
   FileCode2,
   Info,
   ListTree,
+  PanelRightClose,
   Pin,
   Search,
   Trash2,
@@ -30,6 +31,7 @@ import {
 } from "react";
 
 import type { CommandId } from "@/kernel/commands/commandTypes";
+import { useSelectionPath } from "@/kernel/selection/selectionPath";
 import type { Selection } from "@/kernel/selection/selectionTypes";
 import {
   AlertDialog,
@@ -60,6 +62,7 @@ import {
   InputGroupInput,
   InputGroupText,
 } from "@/shared/ui/InputGroup";
+import { usePanelChromeControls } from "@/shared/ui/PanelFrame";
 import { Tabs, TabsList, TabsTrigger } from "@/shared/ui/Tabs";
 import {
   Tooltip,
@@ -70,6 +73,10 @@ import {
 import { cn } from "@/shared/utils/className";
 
 import { CommitBar } from "./CommitBar";
+import {
+  useInspectorHostContext,
+  type InspectorHostBreadcrumbSelection,
+} from "./InspectorHostContext";
 import {
   InspectorDetailsSection,
   InspectorSection,
@@ -630,12 +637,182 @@ export function InspectorTemplate<TDraft>({
   const primaryAction = spec.header.primaryHeaderAction;
   const PrimaryActionIcon = primaryAction?.icon;
 
+  const chrome = usePanelChromeControls();
+  const host = useInspectorHostContext();
+  const hostNodeId =
+    host?.descriptor.metadata.find((item) => item.label === "Node")?.value ??
+    selection.nodeId ??
+    undefined;
+  const treePath = useSelectionPath(host ? hostNodeId : null);
+
+  const resolvedBreadcrumbs = useMemo(() => {
+    if (host && treePath && treePath.crumbs.length > 0) {
+      return treePath.crumbs;
+    }
+    if (spec.header.breadcrumbs.length > 0) {
+      return spec.header.breadcrumbs;
+    }
+    if (host && host.descriptor.breadcrumbs.length > 0) {
+      return host.descriptor.breadcrumbs;
+    }
+    return [];
+  }, [host, spec.header.breadcrumbs, treePath]);
+
+  const handleBreadcrumbSelect = useCallback(
+    (crumbSelection: InspectorHostBreadcrumbSelection) => {
+      if (host) {
+        host.onSelectBreadcrumb(crumbSelection);
+        return;
+      }
+      actionContext.selectNode(crumbSelection as Omit<Selection, "moduleSource">);
+    },
+    [actionContext, host],
+  );
+
+  const copyableNodeId = spec.identity.entityId ?? hostNodeId;
+  const showFitView = host ? !host.focusDisabled : Boolean(spec.header.canFitView);
+  const handleFitViewClick = useCallback(() => {
+    if (spec.header.fitCommandId && onFitView) {
+      onFitView(spec.header.fitCommandId);
+      return;
+    }
+    if (host && !host.focusDisabled) {
+      host.onFocus();
+      return;
+    }
+    onFitView?.(spec.header.fitCommandId);
+  }, [host, onFitView, spec.header.fitCommandId]);
+
+  const nodeMenuItems = (
+    <>
+      <DropdownMenuLabel>{spec.identity.kindLabel}</DropdownMenuLabel>
+      <DropdownMenuGroup>
+        <DropdownMenuItem
+          disabled={!copyableNodeId}
+          onSelect={() => {
+            if (!copyableNodeId) return;
+            navigator.clipboard?.writeText(copyableNodeId).catch(() => undefined);
+            actionContext.notify("Copied node ID", copyableNodeId);
+          }}
+        >
+          <Copy aria-hidden="true" size={14} />
+          <span>Copy node ID</span>
+        </DropdownMenuItem>
+        <DropdownMenuItem
+          onSelect={() => {
+            const code =
+              spec.toPythonModuleSnippet?.(draft) ??
+              buildFallbackPythonSnippet(spec, draft);
+            actionContext.openCodePreview(
+              `${spec.identity.title(draft)} as Python`,
+              "python",
+              code,
+            );
+          }}
+        >
+          <FileCode2 aria-hidden="true" size={14} />
+          <span>Show as Python</span>
+        </DropdownMenuItem>
+        {onRevealInTree ? (
+          <DropdownMenuItem onSelect={() => onRevealInTree()}>
+            <ListTree aria-hidden="true" size={14} />
+            <span>Reveal in Explorer tree</span>
+          </DropdownMenuItem>
+        ) : null}
+        {onTogglePin ? (
+          <DropdownMenuItem onSelect={() => onTogglePin(!pinned)}>
+            <Pin aria-hidden="true" size={14} />
+            <span>{pinned ? "Unpin inspector" : "Pin inspector"}</span>
+          </DropdownMenuItem>
+        ) : null}
+      </DropdownMenuGroup>
+
+      {spec.header.extraMenuActions && spec.header.extraMenuActions.length > 0 ? (
+        <>
+          <DropdownMenuSeparator />
+          <DropdownMenuGroup>
+            {spec.header.extraMenuActions.map((action) => {
+              const ActionIcon = action.icon;
+              return (
+                <DropdownMenuItem
+                  key={action.id}
+                  disabled={Boolean(action.disabledReason)}
+                  onSelect={() => {
+                    if (action.confirm) {
+                      setPendingConfirm({
+                        title: action.confirm.title,
+                        description: action.confirm.description,
+                        confirmLabel: action.confirm.confirmLabel,
+                        destructive: action.destructive,
+                        onConfirm: () => action.onSelect(actionContext),
+                      });
+                    } else {
+                      void action.onSelect(actionContext);
+                    }
+                  }}
+                >
+                  <ActionIcon aria-hidden="true" size={14} />
+                  <span>{action.label}</span>
+                  {action.shortcut ? (
+                    <span className="fm-inspector-menu-shortcut">
+                      {action.shortcut}
+                    </span>
+                  ) : null}
+                </DropdownMenuItem>
+              );
+            })}
+          </DropdownMenuGroup>
+        </>
+      ) : null}
+
+      <DropdownMenuSeparator />
+      <DropdownMenuGroup>
+        <DropdownMenuItem onSelect={() => setAllSectionsOpen(true)}>
+          <ChevronsUpDown aria-hidden="true" size={14} />
+          <span>Expand all sections</span>
+        </DropdownMenuItem>
+        <DropdownMenuItem onSelect={() => setAllSectionsOpen(false)}>
+          <ChevronsDownUp aria-hidden="true" size={14} />
+          <span>Collapse all sections</span>
+        </DropdownMenuItem>
+        {!chrome && onHideInspector ? (
+          <DropdownMenuItem onSelect={() => onHideInspector()}>
+            <EyeOff aria-hidden="true" size={14} />
+            <span>Hide Inspector panel</span>
+          </DropdownMenuItem>
+        ) : null}
+      </DropdownMenuGroup>
+
+      {spec.header.deleteAction ? (
+        <>
+          <DropdownMenuSeparator />
+          <DropdownMenuItem
+            onSelect={() => {
+              const del = spec.header.deleteAction!;
+              setPendingConfirm({
+                title: del.confirmTitle(draft),
+                description: del.confirmDescription,
+                confirmLabel: del.label ?? "Delete",
+                destructive: true,
+                onConfirm: () => del.onDelete(actionContext),
+              });
+            }}
+          >
+            <Trash2 aria-hidden="true" size={14} />
+            <span>{spec.header.deleteAction.label ?? "Delete…"}</span>
+          </DropdownMenuItem>
+        </>
+      ) : null}
+    </>
+  );
+
   return (
     <TooltipProvider delayDuration={250}>
       <aside
         aria-label="Inspector"
         className={cn("fm-inspector", className)}
         data-domain={spec.identity.domain}
+        data-inspector-owner={host?.descriptor.ownerId ?? spec.id}
         data-slot="inspector-root"
         onKeyDown={handleAsideKeyDown}
       >
@@ -645,12 +822,14 @@ export function InspectorTemplate<TDraft>({
           data-scrolled={scrolled ? "true" : "false"}
           data-slot="inspector-header"
         >
-          {/* Slot 1: Path & Node Actions */}
+          {/* Slot 1: Unified Panel Chrome, Path & Node Actions */}
           <div className="fm-inspector__path-bar" data-slot="inspector-path-bar">
+            {chrome?.move}
+
             <nav aria-label="Inspector breadcrumb" className="fm-inspector__breadcrumbs">
               <ol className="fm-inspector__breadcrumb-list">
-                {spec.header.breadcrumbs.map((crumb, index) => {
-                  const isLast = index === spec.header.breadcrumbs.length - 1;
+                {resolvedBreadcrumbs.map((crumb, index) => {
+                  const isLast = index === resolvedBreadcrumbs.length - 1;
                   return (
                     <li key={crumb.id} className="fm-inspector__breadcrumb-item">
                       {index > 0 ? (
@@ -668,7 +847,7 @@ export function InspectorTemplate<TDraft>({
                         <button
                           className="fm-inspector__breadcrumb"
                           type="button"
-                          onClick={() => actionContext.selectNode(crumb.selection!)}
+                          onClick={() => handleBreadcrumbSelect(crumb.selection!)}
                         >
                           {crumb.label}
                         </button>
@@ -681,7 +860,7 @@ export function InspectorTemplate<TDraft>({
               </ol>
             </nav>
 
-            <div className="fm-inspector__header-actions">
+            <div className="fm-inspector__path-actions">
               {isSearchable ? (
                 <Tooltip>
                   <TooltipTrigger asChild>
@@ -701,7 +880,7 @@ export function InspectorTemplate<TDraft>({
                 </Tooltip>
               ) : null}
 
-              {spec.header.canFitView ? (
+              {showFitView ? (
                 <Tooltip>
                   <TooltipTrigger asChild>
                     <Button
@@ -710,7 +889,7 @@ export function InspectorTemplate<TDraft>({
                       size="icon"
                       type="button"
                       variant="ghost"
-                      onClick={() => onFitView?.(spec.header.fitCommandId)}
+                      onClick={handleFitViewClick}
                     >
                       <Crosshair aria-hidden="true" size={14} />
                     </Button>
@@ -719,148 +898,69 @@ export function InspectorTemplate<TDraft>({
                 </Tooltip>
               ) : null}
 
-              <DropdownMenu>
+              {chrome ? (
+                chrome.actions(nodeMenuItems)
+              ) : (
+                <DropdownMenu>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <DropdownMenuTrigger asChild>
+                        <Button
+                          aria-label="More actions"
+                          className="fm-inspector-header-btn"
+                          size="icon"
+                          type="button"
+                          variant="ghost"
+                        >
+                          <Ellipsis aria-hidden="true" size={14} />
+                        </Button>
+                      </DropdownMenuTrigger>
+                    </TooltipTrigger>
+                    <TooltipContent>More actions</TooltipContent>
+                  </Tooltip>
+
+                  <DropdownMenuContent align="end">{nodeMenuItems}</DropdownMenuContent>
+                </DropdownMenu>
+              )}
+
+              {host ? (
                 <Tooltip>
                   <TooltipTrigger asChild>
-                    <DropdownMenuTrigger asChild>
-                      <Button
-                        aria-label="More actions"
-                        className="fm-inspector-header-btn"
-                        size="icon"
-                        type="button"
-                        variant="ghost"
-                      >
-                        <Ellipsis aria-hidden="true" size={14} />
-                      </Button>
-                    </DropdownMenuTrigger>
-                  </TooltipTrigger>
-                  <TooltipContent>More actions</TooltipContent>
-                </Tooltip>
-
-                <DropdownMenuContent align="end">
-                  <DropdownMenuLabel>{spec.identity.kindLabel}</DropdownMenuLabel>
-                  <DropdownMenuGroup>
-                    {spec.identity.entityId ? (
-                      <DropdownMenuItem
-                        onSelect={() => {
-                          const idText = spec.identity.entityId!;
-                          navigator.clipboard?.writeText(idText).catch(() => undefined);
-                          actionContext.notify("Copied node ID", idText);
-                        }}
-                      >
-                        <Copy aria-hidden="true" size={14} />
-                        <span>Copy node ID</span>
-                      </DropdownMenuItem>
-                    ) : null}
-                    <DropdownMenuItem
-                      onSelect={() => {
-                        const code =
-                          spec.toPythonModuleSnippet?.(draft) ??
-                          buildFallbackPythonSnippet(spec, draft);
-                        actionContext.openCodePreview(
-                          `${spec.identity.title(draft)} as Python`,
-                          "python",
-                          code,
-                        );
-                      }}
+                    <Button
+                      aria-label="Hide Inspector"
+                      className="fm-inspector-header-btn fm-inspector__panel-toggle"
+                      data-panel-toggle="inspector"
+                      size="icon"
+                      type="button"
+                      variant="ghost"
+                      onClick={() =>
+                        chrome
+                          ? chrome.hideWith(host.onToggleVisibility)
+                          : host.onToggleVisibility()
+                      }
                     >
-                      <FileCode2 aria-hidden="true" size={14} />
-                      <span>Show as Python</span>
-                    </DropdownMenuItem>
-                    {onRevealInTree ? (
-                      <DropdownMenuItem onSelect={() => onRevealInTree()}>
-                        <ListTree aria-hidden="true" size={14} />
-                        <span>Reveal in Explorer tree</span>
-                      </DropdownMenuItem>
-                    ) : null}
-                    {onTogglePin ? (
-                      <DropdownMenuItem onSelect={() => onTogglePin(!pinned)}>
-                        <Pin aria-hidden="true" size={14} />
-                        <span>{pinned ? "Unpin inspector" : "Pin inspector"}</span>
-                      </DropdownMenuItem>
-                    ) : null}
-                  </DropdownMenuGroup>
-
-                  {spec.header.extraMenuActions && spec.header.extraMenuActions.length > 0 ? (
-                    <>
-                      <DropdownMenuSeparator />
-                      <DropdownMenuGroup>
-                        {spec.header.extraMenuActions.map((action) => {
-                          const ActionIcon = action.icon;
-                          return (
-                            <DropdownMenuItem
-                              key={action.id}
-                              disabled={Boolean(action.disabledReason)}
-                              onSelect={() => {
-                                if (action.confirm) {
-                                  setPendingConfirm({
-                                    title: action.confirm.title,
-                                    description: action.confirm.description,
-                                    confirmLabel: action.confirm.confirmLabel,
-                                    destructive: action.destructive,
-                                    onConfirm: () => action.onSelect(actionContext),
-                                  });
-                                } else {
-                                  void action.onSelect(actionContext);
-                                }
-                              }}
-                            >
-                              <ActionIcon aria-hidden="true" size={14} />
-                              <span>{action.label}</span>
-                              {action.shortcut ? (
-                                <span className="fm-inspector-menu-shortcut">
-                                  {action.shortcut}
-                                </span>
-                              ) : null}
-                            </DropdownMenuItem>
-                          );
-                        })}
-                      </DropdownMenuGroup>
-                    </>
-                  ) : null}
-
-                  <DropdownMenuSeparator />
-                  <DropdownMenuGroup>
-                    <DropdownMenuItem onSelect={() => setAllSectionsOpen(true)}>
-                      <ChevronsUpDown aria-hidden="true" size={14} />
-                      <span>Expand all sections</span>
-                    </DropdownMenuItem>
-                    <DropdownMenuItem onSelect={() => setAllSectionsOpen(false)}>
-                      <ChevronsDownUp aria-hidden="true" size={14} />
-                      <span>Collapse all sections</span>
-                    </DropdownMenuItem>
-                    {onHideInspector ? (
-                      <DropdownMenuItem onSelect={() => onHideInspector()}>
-                        <EyeOff aria-hidden="true" size={14} />
-                        <span>Hide Inspector panel</span>
-                      </DropdownMenuItem>
-                    ) : null}
-                  </DropdownMenuGroup>
-
-                  {spec.header.deleteAction ? (
-                    <>
-                      <DropdownMenuSeparator />
-                      <DropdownMenuItem
-                        onSelect={() => {
-                          const del = spec.header.deleteAction!;
-                          setPendingConfirm({
-                            title: del.confirmTitle(draft),
-                            description: del.confirmDescription,
-                            confirmLabel: del.label ?? "Delete",
-                            destructive: true,
-                            onConfirm: () => del.onDelete(actionContext),
-                          });
-                        }}
-                      >
-                        <Trash2 aria-hidden="true" size={14} />
-                        <span>{spec.header.deleteAction.label ?? "Delete…"}</span>
-                      </DropdownMenuItem>
-                    </>
-                  ) : null}
-                </DropdownMenuContent>
-              </DropdownMenu>
+                      <PanelRightClose aria-hidden="true" size={15} />
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent>Hide Inspector</TooltipContent>
+                </Tooltip>
+              ) : null}
             </div>
           </div>
+
+          {host && host.descriptor.metadata.length > 0 ? (
+            <dl className="fm-inspector__metadata" data-slot="inspector-metadata" hidden>
+              {host.descriptor.metadata.map((item) => (
+                <div
+                  className="fm-inspector__metadata-item"
+                  key={`${item.label}=${item.value}`}
+                >
+                  <dt>{item.label}</dt>
+                  <dd data-metadata-value={item.value}>{item.value}</dd>
+                </div>
+              ))}
+            </dl>
+          ) : null}
 
           {/* Slot 2: Identity */}
           <div className="fm-inspector__identity" data-slot="inspector-identity">

@@ -99,9 +99,10 @@ export function CommitBar<TDraft>({
             data-visible="true"
           >
             <Button
+              className="fm-inspector__commit-btn"
               size="sm"
               type="button"
-              variant="ghost"
+              variant="secondary"
               onClick={onResetDisplay}
             >
               <RotateCcw aria-hidden="true" data-icon="inline-start" size={14} />
@@ -142,6 +143,7 @@ export function CommitBar<TDraft>({
               return (
                 <Button
                   key={action.id}
+                  className="fm-inspector__commit-btn"
                   disabled={isDisabled}
                   disabledReason={disabledReason}
                   size="sm"
@@ -263,17 +265,19 @@ export function CommitBar<TDraft>({
         data-visible={showActions ? "true" : "false"}
       >
         <Button
+          className="fm-inspector__commit-btn"
           disabled={!showActions || applying}
           size="sm"
           tabIndex={showActions ? 0 : -1}
           type="button"
-          variant="ghost"
+          variant="secondary"
           onClick={onRevert}
         >
           <RotateCcw aria-hidden="true" data-icon="inline-start" size={14} />
           Revert
         </Button>
         <Button
+          className="fm-inspector__commit-btn"
           disabled={!showActions || applying || hasErrors || Boolean(lockReason)}
           disabledReason={
             showActions ? (lockReason ?? (hasErrors ? errorLabel : undefined)) : undefined

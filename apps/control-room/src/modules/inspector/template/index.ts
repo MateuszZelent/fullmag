@@ -1,5 +1,11 @@
 export { CommitBar, type CommitBarProps } from "./CommitBar";
 export {
+  InspectorHostProvider,
+  useInspectorHostContext,
+  type InspectorHostBreadcrumbSelection,
+  type InspectorHostContextValue,
+} from "./InspectorHostContext";
+export {
   announceFieldError,
   resetFieldErrorAnnouncer,
 } from "./fieldErrorAnnouncer";

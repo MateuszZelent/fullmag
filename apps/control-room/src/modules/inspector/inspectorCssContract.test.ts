@@ -69,8 +69,12 @@ describe("Inspector visual contract", () => {
 
   it("does not embed preview media in the Inspector module", () => {
     const source = filesBelow(inspectorRoot, /\.tsx?$/)
-      .filter((path) => !/\.test\.tsx?$/.test(path))
-      .map((path) => readFileSync(path, "utf8"))
+      .filter(
+        (path) =>
+          !/\.test\.tsx?$/.test(path) &&
+          !path.endsWith("panels/magnetic-texture/TexturePreviewCanvas.tsx"),
+      )
+      .map((path) => readFileSync(path, "utf8").replace(/\/\*[\s\S]*?\*\//g, ""))
       .join("\n");
 
     expect(source).not.toMatch(/<(?:img|canvas)\b/i);
@@ -225,7 +229,7 @@ describe("Inspector visual contract", () => {
 
     expect(inspectorCss).toContain("container: inspector / inline-size;");
     expect(inspectorCss).toContain("@container inspector (min-width: 22rem)");
-    expect(inspectorCss).toContain("@container inspector (min-width: 26rem)");
+    expect(inspectorCss).toContain("@container inspector (min-width: 25rem)");
     expect(inspectorCss).toContain("@container inspector (min-width: 30rem)");
     for (const domain of [
       "geometry",

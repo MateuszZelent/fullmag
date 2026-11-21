@@ -10,7 +10,9 @@ import {
   type TestElement,
   TestEvent,
 } from "@/kernel/layout/simulationPreparationTestDom.test-support";
+import { publishSelectionPath } from "@/kernel/selection/selectionPath";
 import type { Selection } from "@/kernel/selection/selectionTypes";
+import { PanelFrame } from "@/shared/ui/PanelFrame";
 
 vi.mock("@radix-ui/react-tooltip", () => ({
   Provider: ({ children }: { children?: ReactNode }) => <>{children}</>,
@@ -176,6 +178,7 @@ vi.mock("@radix-ui/react-tabs", async () => {
   };
 });
 
+import { InspectorHostProvider } from "./InspectorHostContext";
 import {
   InspectorTemplate,
   sanitizeInspectorFacts,
@@ -409,6 +412,11 @@ describe("InspectorTemplate", () => {
 
     const env = installSimulationPreparationTestDom();
     (
+      env.document as unknown as {
+        querySelector?: () => null;
+      }
+    ).querySelector = () => null;
+    (
       env.document.defaultView as unknown as {
         getSelection?: () => {
           anchorNode: null;
@@ -501,6 +509,11 @@ describe("InspectorTemplate", () => {
   it("collapses_facts_with_scroll_hysteresis_40px_4px", () => {
     const env = installSimulationPreparationTestDom();
     (
+      env.document as unknown as {
+        querySelector?: () => null;
+      }
+    ).querySelector = () => null;
+    (
       env.document.defaultView as unknown as {
         getSelection?: () => {
           anchorNode: null;
@@ -588,6 +601,11 @@ describe("InspectorTemplate", () => {
 
   it("hides_section_summary_when_open_and_searches_across_mode_tabs", () => {
     const env = installSimulationPreparationTestDom();
+    (
+      env.document as unknown as {
+        querySelector?: () => null;
+      }
+    ).querySelector = () => null;
     (
       env.document.defaultView as unknown as {
         getSelection?: () => {
@@ -724,6 +742,11 @@ describe("InspectorTemplate", () => {
 
   it("renders_commit_bar_modes_exclusively_and_confirms_costly_apply", async () => {
     const env = installSimulationPreparationTestDom();
+    (
+      env.document as unknown as {
+        querySelector?: () => null;
+      }
+    ).querySelector = () => null;
     (
       env.document.defaultView as unknown as {
         getSelection?: () => {
@@ -954,6 +977,283 @@ describe("InspectorTemplate", () => {
     );
     expect(commitBarReadOnly.textContent).toContain("Read-only · Run #14 completed");
     expect(findElements(commitBarReadOnly, (el) => el.tagName === "BUTTON")).toHaveLength(0);
+
+    act(() => {
+      root.unmount();
+    });
+  });
+
+  it("unifies_slot_1_panel_chrome_with_single_breadcrumbs_single_overflow_menu_and_hidden_metadata", () => {
+    const env = installSimulationPreparationTestDom();
+    (
+      env.document as unknown as {
+        querySelector?: () => null;
+      }
+    ).querySelector = () => null;
+    (
+      env.document.defaultView as unknown as {
+        getSelection?: () => {
+          anchorNode: null;
+          anchorOffset: number;
+          focusNode: null;
+          focusOffset: number;
+          rangeCount: number;
+        };
+      }
+    ).getSelection = () => ({
+      anchorNode: null,
+      anchorOffset: 0,
+      focusNode: null,
+      focusOffset: 0,
+      rangeCount: 0,
+    });
+    restoreDom = () => {
+      publishSelectionPath(null);
+      env.restore();
+    };
+    const container = env.document.createElement("div");
+    env.document.body.appendChild(container);
+    const root = createRoot(container as unknown as Element);
+
+    const onFocus = vi.fn();
+    const onSelectBreadcrumb = vi.fn();
+    const onToggleVisibility = vi.fn();
+
+    publishSelectionPath({
+      nodeId: "model:airbox:visualization",
+      crumbs: [
+        {
+          id: "session",
+          label: "Session Model",
+          selection: {
+            kind: "session.root",
+            label: "Session Model",
+            nodeId: "model:session",
+            objectId: null,
+            ref: null,
+          },
+        },
+        {
+          id: "airbox",
+          label: "Airbox",
+          selection: {
+            kind: "airbox.root",
+            label: "Airbox",
+            nodeId: "model:airbox",
+            objectId: null,
+            ref: null,
+          },
+        },
+        {
+          id: "viz",
+          label: "Visualization",
+        },
+      ],
+    });
+
+    act(() => {
+      root.render(
+        <PanelFrame
+          dockHandle={<button aria-label="Move Inspector panel" type="button" />}
+          id="panel-right"
+          mode="docked"
+          title="Inspector"
+          visible
+          onHide={onToggleVisibility}
+          onModeChange={() => undefined}
+        >
+          <InspectorHostProvider
+            value={{
+              descriptor: {
+                breadcrumbs: [],
+                domain: "visualization",
+                icon: "airbox",
+                metadata: [
+                  { label: "Kind", value: "airbox.visualization" },
+                  { label: "Node", value: "model:airbox:visualization" },
+                ],
+                ownerId: "airbox-visualization",
+                status: null,
+                tabs: [],
+                title: "Airbox Visualization",
+                typeLabel: "Airbox display",
+              },
+              focusDisabled: false,
+              onFocus,
+              onSelectBreadcrumb,
+              onToggleVisibility,
+            }}
+          >
+            <InspectorTemplate
+              baseline={BASE_DRAFT}
+              dirtyFields={new Set()}
+              draft={BASE_DRAFT}
+              invalidFields={new Map()}
+              selection={{
+                kind: "airbox.visualization",
+                label: "Visualization",
+                moduleSource: "explorer",
+                nodeId: "model:airbox:visualization",
+                objectId: null,
+                ref: null,
+              }}
+              spec={createSampleSpec({
+                header: {
+                  breadcrumbs: [{ id: "short", label: "Short path" }],
+                  canFitView: false,
+                  searchable: true,
+                },
+              })}
+              touchedFields={new Set()}
+              onFieldChange={() => undefined}
+              onFieldTouch={() => undefined}
+              onRevertField={() => undefined}
+            />
+          </InspectorHostProvider>
+        </PanelFrame>,
+      );
+    });
+
+    // Exactly ONE inspector root, ONE breadcrumb nav, ONE overflow menu trigger, ONE Hide Inspector button.
+    expect(
+      findElements(container, (el) => el.getAttribute("data-slot") === "inspector-root"),
+    ).toHaveLength(1);
+    const inspectorAside = findElement(
+      container,
+      (el) => el.getAttribute("data-slot") === "inspector-root",
+      "inspector root",
+    );
+    expect(inspectorAside.getAttribute("data-inspector-owner")).toBe("airbox-visualization");
+
+    expect(
+      findElements(container, (el) => el.tagName === "NAV"),
+    ).toHaveLength(1);
+    const airboxCrumbBtn = findElement(
+      container,
+      (el) => el.tagName === "BUTTON" && el.textContent.trim() === "Airbox",
+      "Airbox breadcrumb button",
+    );
+    act(() => {
+      airboxCrumbBtn.click();
+    });
+    expect(onSelectBreadcrumb).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: "airbox.root", nodeId: "model:airbox" }),
+    );
+
+    // Fit view in Slot 1 calls host.onFocus when focusDisabled is false.
+    const fitBtn = findElement(
+      container,
+      (el) => el.getAttribute("aria-label") === "Fit view to selection",
+      "Fit view button",
+    );
+    act(() => {
+      fitBtn.click();
+    });
+    expect(onFocus).toHaveBeenCalledTimes(1);
+
+    // Exactly ONE overflow menu trigger ("Inspector panel menu", zero duplicate "More actions").
+    expect(
+      findElements(
+        container,
+        (el) => el.getAttribute("aria-label") === "Inspector panel menu",
+      ),
+    ).toHaveLength(1);
+    expect(
+      findElements(
+        container,
+        (el) => el.getAttribute("aria-label") === "More actions",
+      ),
+    ).toHaveLength(0);
+
+    // Merged menu includes both Inspector node actions and PanelFrame actions.
+    const menuItems = findElements(
+      container,
+      (el) => el.getAttribute("role") === "menuitem",
+    ).map((item) => item.textContent.trim());
+    expect(menuItems).toContain("Copy node ID");
+    expect(menuItems).toContain("Show as Python");
+    expect(menuItems).toContain("Expand all sections");
+    expect(menuItems).toContain("Hide panel");
+
+    // Hide Inspector button routes through chrome.hideWith(host.onToggleVisibility).
+    const hideBtn = findElement(
+      container,
+      (el) => el.getAttribute("data-panel-toggle") === "inspector",
+      "Hide Inspector button",
+    );
+    act(() => {
+      hideBtn.click();
+    });
+    expect(onToggleVisibility).toHaveBeenCalledTimes(1);
+
+    // Hidden metadata list stays attached for browser smoke audits.
+    const metadataDl = findElement(
+      container,
+      (el) => el.getAttribute("data-slot") === "inspector-metadata",
+      "hidden inspector metadata",
+    );
+    expect(metadataDl.hasAttribute("hidden")).toBe(true);
+    expect(metadataDl.textContent).toContain("model:airbox:visualization");
+
+    // Re-render with a 4-option segmented row and a switch row to verify wide stacking & switch modifier.
+    act(() => {
+      root.render(
+        <InspectorTemplate
+          baseline={BASE_DRAFT}
+          dirtyFields={new Set()}
+          draft={BASE_DRAFT}
+          invalidFields={new Map()}
+          selection={BASE_SELECTION}
+          spec={createSampleSpec({
+            modeTabs: undefined,
+            sections: [
+              {
+                id: "viz-sec",
+                title: "Display",
+                icon: Layers,
+                defaultOpen: true,
+                rows: [
+                  {
+                    type: "segmented",
+                    key: "name",
+                    label: "Surface mode",
+                    options: [
+                      { value: "shaded", label: "Shaded" },
+                      { value: "edges", label: "Edges" },
+                      { value: "wireframe", label: "Wireframe" },
+                      { value: "points", label: "Points" },
+                    ],
+                  },
+                  {
+                    type: "switch",
+                    key: "showVectors",
+                    label: "Show magnetization vectors",
+                  },
+                ],
+              },
+            ],
+          })}
+          touchedFields={new Set()}
+          onFieldChange={() => undefined}
+          onFieldTouch={() => undefined}
+          onRevertField={() => undefined}
+        />,
+      );
+    });
+
+    const segmentedRow = findElement(
+      container,
+      (el) => el.getAttribute("data-row") === "name",
+      "4-option segmented row",
+    );
+    expect(segmentedRow.className).toContain("fm-inspector-row--wide");
+
+    const switchRow = findElement(
+      container,
+      (el) => el.getAttribute("data-row") === "showVectors",
+      "switch row",
+    );
+    expect(switchRow.className).toContain("fm-inspector-row--switch");
 
     act(() => {
       root.unmount();

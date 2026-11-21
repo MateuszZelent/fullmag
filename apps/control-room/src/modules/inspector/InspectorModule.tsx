@@ -1,9 +1,10 @@
 "use client";
 
-import { useCallback, useLayoutEffect } from "react";
+import { useCallback, useLayoutEffect, useMemo } from "react";
 import { PanelRightClose } from "lucide-react";
 
 import { Button } from "@/shared/ui/Button";
+import { DropdownMenuItem } from "@/shared/ui/DropdownMenu";
 import { PanelChrome, usePanelChromeControls } from "@/shared/ui/PanelFrame";
 import { useKernel } from "@/kernel/KernelContext";
 import { createCommandContext } from "@/kernel/commands/commandContext";
@@ -35,9 +36,13 @@ import { resolveInspectorDescriptor } from "./inspectorDescriptor";
 import { inspectorFitCommandId } from "./inspectorFitCommand";
 import { resolveInspectorPanel } from "./inspectorRegistry";
 import { resolveUnknownInspectorRoute } from "./inspectorRouteCatalog";
-import { InspectorShell } from "./InspectorShell";
-import { publishInspectorStagedDirtyCount } from "./InspectorTabState";
+import { publishInspectorStagedDirtyCount, publishInspectorTabs } from "./InspectorTabState";
 import { SavedResultsPlaybackInspector } from "./panels/SavedResultsPlaybackInspector";
+import {
+  InspectorHostProvider,
+  type InspectorHostBreadcrumbSelection,
+  type InspectorHostContextValue,
+} from "./template/InspectorHostContext";
 
 function PendingFormBridge() {
   const { pendingForms } = useKernel();
@@ -190,6 +195,12 @@ function SelectionInspectorOutlet({
   projectOnly: boolean;
 }) {
   const kernel = useKernel();
+  const chrome = usePanelChromeControls();
+
+  useLayoutEffect(() => {
+    publishInspectorTabs([]);
+    return () => publishInspectorTabs([]);
+  }, []);
 
   const handleFocus = useCallback(() => {
     if (projectOnly) return;
@@ -211,14 +222,23 @@ function SelectionInspectorOutlet({
     });
   }, [kernel, projectOnly]);
 
-  const handleToggleVisibility = () => {
+  const handleToggleVisibility = useCallback(() => {
     void kernel.commands.execute(
       "panels:inspector:toggle",
       createCommandContext("inspector", kernel, {
         sourceDetail: "inspector-header",
       }),
     );
-  };
+  }, [kernel]);
+
+  const handleSelectBreadcrumb = useCallback(
+    (next: InspectorHostBreadcrumbSelection) => {
+      if (!projectOnly || next.ref?.type === "materialized-dataset") {
+        kernel.selection.set(next, "inspector");
+      }
+    },
+    [kernel.selection, projectOnly],
+  );
 
   const canInspect =
     !projectOnly || guardedSelection.ref?.type === "materialized-dataset";
@@ -227,34 +247,71 @@ function SelectionInspectorOutlet({
     canInspect && guardedSelection.kind
       ? resolveUnknownInspectorRoute().contribution
       : null;
-  const baseDescriptor = resolveInspectorDescriptor(guardedSelection);
-  const descriptor = {
-    ...baseDescriptor,
-    title: panel?.title ?? fallbackPanel?.title ?? baseDescriptor.title,
-  };
-  const Panel = panel?.component ?? fallbackPanel?.component;
+  const descriptor = useMemo(() => {
+    const baseDescriptor = resolveInspectorDescriptor(guardedSelection);
+    return {
+      ...baseDescriptor,
+      title: panel?.title ?? fallbackPanel?.title ?? baseDescriptor.title,
+    };
+  }, [fallbackPanel?.title, guardedSelection, panel?.title]);
+
+  const hostValue = useMemo<InspectorHostContextValue>(
+    () => ({
+      descriptor,
+      focusDisabled: projectOnly,
+      onFocus: handleFocus,
+      onSelectBreadcrumb: handleSelectBreadcrumb,
+      onToggleVisibility: handleToggleVisibility,
+    }),
+    [
+      descriptor,
+      handleFocus,
+      handleSelectBreadcrumb,
+      handleToggleVisibility,
+      projectOnly,
+    ],
+  );
+
+  const Panel = panel?.component ?? fallbackPanel?.component ?? null;
+
+  if (Panel) {
+    return (
+      <InspectorHostProvider value={hostValue}>
+        <Panel selection={guardedSelection} />
+      </InspectorHostProvider>
+    );
+  }
 
   return (
-    <InspectorShell
-      descriptor={descriptor}
-      focusDisabled={projectOnly}
-      onFocus={handleFocus}
-      onSelectBreadcrumb={(next) => {
-        if (!projectOnly || next.ref?.type === "materialized-dataset") {
-          kernel.selection.set(next, "inspector");
-        }
-      }}
-      onToggleVisibility={handleToggleVisibility}
+    <section
+      aria-label="Inspector"
+      className="fm-inspector fm-inspector--empty"
+      data-domain={descriptor.domain}
+      data-inspector-owner={descriptor.ownerId}
     >
-      {Panel ? (
-        <Panel selection={guardedSelection} />
-      ) : (
-        <div className="fm-inspector__empty">
-          {projectOnly
-            ? "Select a saved project result. Simulation editing requires an active session."
-            : "Select an explorer node."}
-        </div>
-      )}
-    </InspectorShell>
+      <PanelChrome
+        menuItems={<DropdownMenuItem disabled>Copy node ID</DropdownMenuItem>}
+      >
+        <span className="fm-panel-chrome__title">Inspector</span>
+        <Button
+          aria-label="Hide Inspector"
+          className="fm-inspector__panel-toggle"
+          data-panel-toggle="inspector"
+          size="icon"
+          type="button"
+          variant="ghost"
+          onClick={() =>
+            chrome ? chrome.hideWith(handleToggleVisibility) : handleToggleVisibility()
+          }
+        >
+          <PanelRightClose aria-hidden="true" size={16} />
+        </Button>
+      </PanelChrome>
+      <div className="fm-inspector__empty">
+        {projectOnly
+          ? "Select a saved project result. Simulation editing requires an active session."
+          : "Select an explorer node."}
+      </div>
+    </section>
   );
 }

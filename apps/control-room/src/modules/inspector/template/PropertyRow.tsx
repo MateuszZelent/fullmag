@@ -1788,8 +1788,20 @@ export function PropertyRow<TDraft>({
         )
       : null;
 
-  const isWide = Boolean(row.wide || !row.label || row.type === "table" || row.type === "custom");
+  const isWideSegmented =
+    row.type === "segmented" &&
+    (row.presentation === "tiles" ||
+      row.options.length >= 3 ||
+      row.options.reduce((sum, opt) => sum + opt.label.length, 0) > 18);
+  const isWide = Boolean(
+    row.wide ||
+      !row.label ||
+      row.type === "table" ||
+      row.type === "custom" ||
+      isWideSegmented,
+  );
   const isVector = row.type === "vector3";
+  const isSwitch = row.type === "switch";
   const usesNativeLabel = NATIVELY_LABELED_ROW_TYPES.has(row.type);
 
   const baselineDisplayText = formatRowValueText(row, baselineValue, activeUnit);
@@ -1845,6 +1857,7 @@ export function PropertyRow<TDraft>({
         "fm-inspector-row",
         isWide && "fm-inspector-row--wide",
         isVector && !isWide && "fm-inspector-row--vector3",
+        isSwitch && !isWide && "fm-inspector-row--switch",
         flash === "applied" && "fm-row-flash-applied",
         flash === "live" && "fm-row-flash-live",
         flash === "focus" && "fm-row-flash-focus",

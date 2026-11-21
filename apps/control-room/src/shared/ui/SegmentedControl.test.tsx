@@ -138,6 +138,9 @@ describe("SegmentedControl", () => {
 
     expect(html).toContain('aria-label="Shaded plus wireframe"');
     expect(html).not.toContain('title=');
+    expect(html).toContain("overflow-hidden");
+    expect(html).toContain("truncate");
+    expect(html).toContain("whitespace-nowrap");
     expect(html).toContain(">Shaded+</button>");
   });
 });

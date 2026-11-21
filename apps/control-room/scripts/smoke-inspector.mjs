@@ -2490,8 +2490,13 @@ async function qualifyPhysicsScopeExclusivity(page, inspector, fixture) {
       const inspector = document.querySelector(".fm-inspector");
       return inspector?.getAttribute("data-inspector-owner") === "physics-interaction" &&
         Array.from(
-          inspector.querySelectorAll(".fm-inspector__metadata-item dd[title]"),
-        ).some((node) => node.getAttribute("title") === expectedNodeId);
+          inspector.querySelectorAll(".fm-inspector__metadata-item dd"),
+        ).some(
+          (node) =>
+            (node.getAttribute("data-metadata-value") ??
+              node.getAttribute("title") ??
+              node.textContent?.trim()) === expectedNodeId,
+        );
     },
     globalRotatedNodeId,
     { timeout: 60_000 },
@@ -2500,7 +2505,7 @@ async function qualifyPhysicsScopeExclusivity(page, inspector, fixture) {
     .locator(".fm-inspector__metadata-item")
     .filter({ hasText: "Node" });
   await globalNodeMetadata
-    .locator(`dd[title="${globalRotatedNodeId}"]`)
+    .locator("dd", { hasText: globalRotatedNodeId })
     .waitFor({ state: "attached", timeout: 60_000 });
 
   await expandPhysicsInteractionChecklist(inspector);

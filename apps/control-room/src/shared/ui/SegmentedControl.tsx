@@ -104,7 +104,7 @@ export function SegmentedControl<T extends string>({
             aria-checked={checked}
             aria-disabled={itemDisabled || pending || undefined}
             className={cn(
-              "h-fm-control-sm min-w-0 rounded-fm-pill px-2",
+              "h-fm-control-sm min-w-0 w-full overflow-hidden truncate whitespace-nowrap rounded-fm-pill px-2 text-center",
               "font-fm-ui text-fm-control leading-tight outline-none",
               "transition-[transform,background-color,color,box-shadow] duration-150 ease-fm-out-soft",
               "active:scale-[0.98] motion-reduce:active:scale-100",
