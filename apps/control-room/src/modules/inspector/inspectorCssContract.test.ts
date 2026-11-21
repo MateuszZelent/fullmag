@@ -199,9 +199,13 @@ describe("Inspector visual contract", () => {
       .filter((name) => /^inspector.*\.css$/.test(name))
       .map((name) => readFileSync(join(stylesRoot, name), "utf8"))
       .join("\n");
-    const source = filesBelow(join(appRoot, "src"), /\.tsx?$/)
-      .map((path) => readFileSync(path, "utf8"))
-      .join("\n");
+    const referencedClasses = new Set<string>();
+    for (const path of filesBelow(join(appRoot, "src"), /\.tsx?$/)) {
+      const content = readFileSync(path, "utf8");
+      for (const match of content.matchAll(/\bfm-[\w-]+/g)) {
+        referencedClasses.add(match[0]);
+      }
+    }
     const classes = [...new Set(
       (css.match(/\.fm-[\w-]+/g) ?? []).map((value) => value.slice(1)),
     )];
@@ -213,7 +217,7 @@ describe("Inspector visual contract", () => {
       "fm-sinc-preview__message--unavailable",
     ]);
 
-    expect(classes.filter((className) => !source.includes(className) && !dynamicClasses.has(className))).toEqual([]);
+    expect(classes.filter((className) => !referencedClasses.has(className) && !dynamicClasses.has(className))).toEqual([]);
   });
 
   it("enforces the canonical 8-slot InspectorTemplate @container inspector queries and 7 domain hues", () => {

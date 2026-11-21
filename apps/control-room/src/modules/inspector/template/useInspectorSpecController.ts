@@ -4,6 +4,11 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import type { Selection } from "@/kernel/selection/selectionTypes";
 
+import {
+  formatInspectorSessionKey,
+  useRegisterInspectorEditSessionV2,
+  type InspectorEditSessionV2,
+} from "../InspectorEditSession";
 import { evaluateInspectorRowError } from "./PropertyRow";
 import type { CommitBarSpec, InspectorSpec } from "./types";
 import { inspectorValuesEqual } from "./unitConversion";
@@ -590,8 +595,66 @@ export function useInspectorSpecController<TDraft extends object>(
     spec.commitBar,
   ]);
 
-  const sessionKey = `${selectionTargetKey}::${spec.id}::${activeModeTabId ?? "default"}`;
+  const sessionKey = formatInspectorSessionKey(
+    selectionTargetKey,
+    spec.id,
+    activeModeTabId,
+  );
   const animationKey = `${selectionTargetKey}:${activeModeTabId ?? "default"}`;
+
+  const isStagedSpec = spec.commitBar.mode === "staged";
+  const stagedTabId = useMemo(() => {
+    if (effectiveCommitMode === "staged") return activeModeTabId ?? "default";
+    const firstStaged = (spec.modeTabs ?? []).find(
+      (tab) => (tab.commitModeOverride ?? spec.commitBar.mode) === "staged",
+    );
+    return firstStaged?.id ?? "default";
+  }, [activeModeTabId, effectiveCommitMode, spec.commitBar.mode, spec.modeTabs]);
+
+  const registeredSessionKey = isStagedSpec
+    ? formatInspectorSessionKey(selectionTargetKey, spec.id, stagedTabId)
+    : sessionKey;
+  const nodeTitle = spec.identity.title(draft);
+  const registeredSession = useMemo<InspectorEditSessionV2>(
+    () => ({
+      sessionKey: registeredSessionKey,
+      nodeTitle,
+      mode: isStagedSpec ? "staged" : effectiveCommitMode,
+      applying,
+      dirty: isStagedSpec ? dirtyFields.size > 0 : phase === "liveOverridden",
+      dirtyFields,
+      dirtyFieldLabels,
+      invalidFields,
+      valid: invalidFields.size === 0,
+      lockReason,
+      applyBlockReason: null,
+      apply: isStagedSpec ? () => requestApply() : async () => false,
+      revertAll:
+        effectiveCommitMode === "liveViewport" && !isStagedSpec
+          ? resetDisplay
+          : revertAll,
+      revertField,
+      focusField: (fieldKey) => focusField(fieldKey as keyof TDraft & string),
+    }),
+    [
+      applying,
+      dirtyFieldLabels,
+      dirtyFields,
+      effectiveCommitMode,
+      focusField,
+      invalidFields,
+      isStagedSpec,
+      lockReason,
+      nodeTitle,
+      phase,
+      registeredSessionKey,
+      requestApply,
+      resetDisplay,
+      revertAll,
+      revertField,
+    ],
+  );
+  useRegisterInspectorEditSessionV2(registeredSession);
 
   return {
     sessionKey,

@@ -67,3 +67,23 @@ export function readInspectorTabs(): readonly InspectorTabInfo[] {
 export function useInspectorTabs(): readonly InspectorTabInfo[] {
   return useSyncExternalStore(subscribeTabs, () => publishedTabs, () => NO_TABS);
 }
+
+let stagedDirtyCount = 0;
+const dirtyCountListeners = new Set<Listener>();
+
+function subscribeDirtyCount(listener: Listener): () => void {
+  dirtyCountListeners.add(listener);
+  return () => dirtyCountListeners.delete(listener);
+}
+
+/** Publishes the active Inspector's staged dirty field count for the right side rail. */
+export function publishInspectorStagedDirtyCount(count: number): void {
+  const normalized = Number.isFinite(count) && count > 0 ? Math.floor(count) : 0;
+  if (normalized === stagedDirtyCount) return;
+  stagedDirtyCount = normalized;
+  dirtyCountListeners.forEach((listener) => listener());
+}
+
+export function useInspectorStagedDirtyCount(): number {
+  return useSyncExternalStore(subscribeDirtyCount, () => stagedDirtyCount, () => 0);
+}

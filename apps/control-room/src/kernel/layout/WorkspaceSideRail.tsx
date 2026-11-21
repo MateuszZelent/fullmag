@@ -24,6 +24,7 @@ import {
 import {
   setInspectorActiveTab,
   useInspectorActiveTab,
+  useInspectorStagedDirtyCount,
   useInspectorTabs,
 } from "@/modules/inspector/public";
 import {
@@ -49,6 +50,7 @@ const INSPECTOR_TAB_ICONS: Record<string, LucideIcon> = {
 
 interface RailItem {
   active: boolean;
+  dirtyCount?: number;
   icon: LucideIcon;
   id: string;
   label: string;
@@ -66,6 +68,7 @@ export function WorkspaceSideRail({ side }: { side: "left" | "right" }) {
   const explorerTab = useExplorerStoreSelector((explorer) => explorer.activeTab);
   const inspectorTab = useInspectorActiveTab();
   const inspectorTabs = useInspectorTabs();
+  const stagedDirtyCount = useInspectorStagedDirtyCount();
   const inspectorContext = useViewport3DInspectorContext();
   const open = side === "left" ? panelVisible.left : panelVisible.right;
   const setOpen = (visible: boolean) =>
@@ -87,6 +90,7 @@ export function WorkspaceSideRail({ side }: { side: "left" | "right" }) {
     : [
         {
           active: inspectorContext === "selection",
+          dirtyCount: stagedDirtyCount > 0 ? stagedDirtyCount : undefined,
           icon: Box,
           id: "selection",
           label: "Selection",
@@ -126,24 +130,33 @@ export function WorkspaceSideRail({ side }: { side: "left" | "right" }) {
       data-open={open}
       data-side={side}
     >
-      {items.map(({ active, icon: Icon, id, label, onSelect }, index) => (
-        <button
-          // The first item is where focus lands when its panel is hidden.
-          data-restore-panel={index === 0 ? (side === "left" ? "panel-left" : "panel-right") : undefined}
-          aria-label={label}
-          aria-pressed={open && active}
-          className="fm-side-rail__item"
-          data-active={active}
-          data-rail-item={id}
-          key={id}
-          title={label}
-          type="button"
-          onClick={onSelect}
-        >
-          <Icon aria-hidden="true" size={18} strokeWidth={1.75} />
-          <span className="sr-only">{label}</span>
-        </button>
-      ))}
+      {items.map(({ active, dirtyCount, icon: Icon, id, label, onSelect }, index) => {
+        const accessibleLabel = dirtyCount
+          ? `${label} (${dirtyCount} unapplied ${dirtyCount === 1 ? "change" : "changes"})`
+          : label;
+        return (
+          <button
+            // The first item is where focus lands when its panel is hidden.
+            data-restore-panel={index === 0 ? (side === "left" ? "panel-left" : "panel-right") : undefined}
+            aria-label={accessibleLabel}
+            aria-pressed={open && active}
+            className="fm-side-rail__item"
+            data-active={active}
+            data-dirty-fields-count={dirtyCount}
+            data-rail-item={id}
+            key={id}
+            title={accessibleLabel}
+            type="button"
+            onClick={onSelect}
+          >
+            <Icon aria-hidden="true" size={18} strokeWidth={1.75} />
+            {dirtyCount ? (
+              <span aria-hidden="true" className="fm-side-rail__dirty-dot" />
+            ) : null}
+            <span className="sr-only">{accessibleLabel}</span>
+          </button>
+        );
+      })}
     </nav>
   );
 }
