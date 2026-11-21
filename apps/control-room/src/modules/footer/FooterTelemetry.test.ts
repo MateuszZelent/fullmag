@@ -303,7 +303,7 @@ describe("FooterTelemetry", () => {
     expect(byId["max-torque"]?.value).toBe("6.000000e-3 T");
     expect(byId.step?.value).toBe("99");
     expect(byId.rate?.label).toBe("End-to-end rate");
-    expect(byId.rate?.detail).toBe("Closed profiler span");
+    expect(byId.rate?.detail).toBe("Closed end-to-end runner span");
 
   });
 
@@ -352,7 +352,11 @@ describe("FooterTelemetry", () => {
 
   it.each([null, Number.NaN, Number.POSITIVE_INFINITY, 0])("distinguishes absent torque and timestep from genuine zero: %s", (value) => {
     const telemetryStatus = selectFooterTelemetryStatus({
-      data: { ...status, solver: { ...status.solver, max_torque_T: value, dt: value } },
+      data: {
+        ...status,
+        run: { ...status.run!, solver_time: 0 },
+        solver: { ...status.solver, max_torque_T: value, dt: value },
+      },
       error: null, refetch: () => {}, revision: 1, status: "ready",
     });
     const model = buildFooterTelemetryModel(telemetryStatus, null);
@@ -1039,7 +1043,7 @@ describe("FooterTelemetry", () => {
     expect(byId.dt?.label).toBe("Pseudo dt");
     expect(byId.dt?.detail).toBe("Minimizer pseudotime step");
     expect(byId["active-solver"]?.value).toBe("BB");
-    expect(byId.step?.subdetail).toBe("t=0.000000e+0 s");
+    expect(byId.step?.subdetail).toBe("τ=9.000000e-6 s");
   });
 
   it("shows frequency-response sweep progress instead of time-step progress", () => {
@@ -1746,5 +1750,32 @@ describe("FooterTelemetry", () => {
     expect(resolvePrimaryTelemetryObjectId(scene)).toBe("arch_waveguide");
     expect(resolvePrimaryTelemetryObjectId(scene, "missing")).toBe("arch_waveguide");
     expect(resolvePrimaryTelemetryObjectId({ objects: [], revision: 3 })).toBeNull();
+  });
+
+  it("observes current-run stage summary changes in the telemetry selector", () => {
+    const selected = selectFooterTelemetryStatus({
+      data: status,
+      error: null,
+      refetch: () => {},
+      revision: 1,
+      status: "ready",
+    });
+    const next = selectFooterTelemetryStatus({
+      data: {
+        ...status,
+        run: {
+          ...status.run!,
+          stage_index: 1,
+          stage_label: "pulse",
+        },
+      },
+      error: null,
+      refetch: () => {},
+      revision: 2,
+      status: "ready",
+    });
+
+    expect(selected?.run).toMatchObject({ stage_count: 1, stage_index: 0, stage_label: "relax" });
+    expect(footerTelemetryStatusEquals(selected, next)).toBe(false);
   });
 });
