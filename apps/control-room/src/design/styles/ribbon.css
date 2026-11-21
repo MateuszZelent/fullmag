@@ -553,3 +553,58 @@
   }
 
 }
+
+/* ── Collapse ──
+   A collapsed ribbon keeps only its tab strip; the workspace takes the height. */
+.fm-ribbon[data-expanded="false"] {
+  min-height: 0;
+}
+
+.fm-ribbon[data-expanded="false"] > .fm-ribbon__tabbar {
+  border-bottom: 0;
+}
+
+.fm-ribbon[data-expanded="false"] .fm-ribbon__groups {
+  display: none;
+}
+
+.fm-ribbon__toggle {
+  display: inline-grid;
+  flex: none;
+  align-self: center;
+  place-items: center;
+  width: var(--fm-control-height-compact);
+  height: var(--fm-control-height-compact);
+  margin-inline: var(--fm-space-1) var(--fm-space-2);
+  border: 0;
+  border-radius: var(--fm-radius-pill);
+  background: transparent;
+  color: var(--fm-text-muted);
+  cursor: pointer;
+  transition:
+    background-color var(--fm-duration-micro) var(--fm-ease-out-soft),
+    color var(--fm-duration-micro) var(--fm-ease-out-soft);
+}
+
+.fm-ribbon__toggle:hover {
+  background: color-mix(in srgb, var(--fm-text-primary) 6%, transparent);
+  color: var(--fm-text-primary);
+}
+
+.fm-ribbon__toggle:focus-visible {
+  outline: none;
+  box-shadow: var(--fm-focus-ring);
+}
+
+.fm-ribbon__toggle svg {
+  transition: rotate var(--fm-duration-panel) var(--fm-ease-out-soft);
+}
+
+.fm-ribbon[data-expanded="false"] .fm-ribbon__toggle svg {
+  rotate: 180deg;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .fm-ribbon__toggle svg { transition: none; }
+}
+

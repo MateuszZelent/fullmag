@@ -58,7 +58,7 @@ try {
     });
   });
   await page.goto(url, { waitUntil: "domcontentloaded", timeout: 120_000 });
-  await page.getByRole("button", { name: "Color theme: System (currently dark)" }).waitFor({ timeout: 90_000 });
+  await page.getByRole("radiogroup", { name: "Color theme: System (currently dark)" }).waitFor({ timeout: 90_000 });
   await page.emulateMedia({ colorScheme: "light" });
   await page.waitForFunction(() => document.documentElement.dataset.theme === "light");
   await page.emulateMedia({ colorScheme: "dark" });
@@ -75,8 +75,7 @@ try {
       fonts.some((font) => font.family.replaceAll('"', "") === name && font.status === "loaded"),
       `${name} asset loads`,
     );
-  await page.getByRole("button", { name: "Color theme: System (currently dark)" }).click();
-  await page.getByRole("menuitemradio", { name: "Light", exact: true }).click();
+  await page.getByRole("radio", { name: "Light", exact: true }).click();
   await page.waitForFunction(() => document.documentElement.dataset.themePreference === "light");
   await page.emulateMedia({ colorScheme: "dark" });
   assert.equal(await page.locator("html").getAttribute("data-theme"), "light");

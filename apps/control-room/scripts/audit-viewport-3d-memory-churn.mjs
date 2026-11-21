@@ -12,6 +12,7 @@ import {
   captureViewportPerformanceSnapshot,
   installViewportPerformanceProbe,
 } from "./lib/viewport-performance-proof.mjs";
+import { openAppMenu } from "./lib/app-menu-browser.mjs";
 
 const configuredUrl = process.env.CONTROL_ROOM_URL ?? null;
 const requestedAuditPort = Number(process.env.CONTROL_ROOM_AUDIT_PORT ?? 0);
@@ -656,7 +657,7 @@ async function assertModelExportDownloads(page, viewport, canvas) {
     throw new Error("The canvas menu did not download VTK geometry with the current field.");
   }
 
-  await page.getByRole("button", { name: "File", exact: true }).click();
+  await openAppMenu(page, "File");
   await page.getByRole("menuitem", { name: "Export", exact: true }).hover();
   await page.getByRole("menuitem", { name: "3D model…", exact: true }).click();
   await dialog.getByRole("button", { name: "Close", exact: true }).click();

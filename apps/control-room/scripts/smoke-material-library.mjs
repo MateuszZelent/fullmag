@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { createRequire } from "node:module";
 import { setTimeout as delay } from "node:timers/promises";
+import { waitForAppMenu } from "./lib/app-menu-browser.mjs";
 
 // Exercise the real database and authoring API using task-owned scratch models.
 const origin = process.env.CONTROL_ROOM_MATERIAL_SMOKE_ORIGIN;
@@ -69,7 +70,7 @@ async function startScratch(page, suffix) {
   assert.equal((await ownsCurrentModel()).session.name, name);
   await page.goto(origin + "/workspace", { waitUntil: "commit" });
   await page.waitForURL((url) => url.origin === origin && url.pathname.startsWith("/session/"));
-  await page.getByRole("button", { name: "Tools", exact: true }).waitFor();
+  await waitForAppMenu(page, "Tools");
   return sessionId;
 }
 

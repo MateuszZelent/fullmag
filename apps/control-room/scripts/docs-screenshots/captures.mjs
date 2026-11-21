@@ -5,6 +5,7 @@ import {
   captureAndVerifyPng,
 } from "./assertions.mjs";
 import { createDocsFixtureContext } from "./fixtures.mjs";
+import { openAppMenu } from "../lib/app-menu-browser.mjs";
 
 const BASE_URL = "http://127.0.0.1:3274";
 const VIEWPORT = { width: 1600, height: 1000 };
@@ -229,8 +230,7 @@ export function buildAllCaptureJobs(outputDir) {
           await waitForCanvasRendered(s.page, "control-room-light-latte-overview");
           const appliedTheme = await s.page.evaluate(() => document.documentElement.dataset.theme);
           if (appliedTheme !== "light") {
-            await clickFirstMatching(s.page, [(p) => p.locator('[aria-label^="Color theme:"]').first()]);
-            await clickFirstMatching(s.page, [(p) => p.getByRole("menuitemradio", { name: "Light" }).first()]);
+            await clickFirstMatching(s.page, [(p) => p.locator('[aria-label^="Color theme:"]').getByRole("radio", { name: "Light", exact: true }).first()]);
             await waitForUiSettled(s.page, 350);
           }
           await assertNoUiErrors(s.page, "control-room-light-latte-overview");
@@ -512,7 +512,7 @@ export function buildAllCaptureJobs(outputDir) {
         const s = await openFreshPage(browser, { scenario: "fdm-skyrmion", theme: "dark" }, "/session/yig-waveguide");
         try {
           await waitForUiSettled(s.page, 800);
-          await clickFirstMatching(s.page, [(p) => p.getByRole("button", { name: "File", exact: true }).first()]);
+          await openAppMenu(s.page, "File");
           await waitForUiSettled(s.page, 350);
           await assertNoUiErrors(s.page, "ribbon-tabs-automation-python");
           return await captureAndVerifyPng(s.page, out("ribbon-tabs-automation-python.png"), "ribbon-tabs-automation-python", {
