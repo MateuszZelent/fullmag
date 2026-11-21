@@ -826,14 +826,8 @@ pub(crate) fn run_supervised_accepted_worker_with_host(
     }
     let run_id_typed = fullmag_application::RunId::parse(run_id.to_owned())
         .map_err(|error| anyhow::anyhow!(error.to_string()))?;
-    let claim = retry_store_writer_busy(|| {
-        fullmag_runtime_control::load_current_task_claim(store, &run_id_typed, task_id)
-    })
-    .context("supervisor requires an exact active task claim")?;
-    let lease =
-        retry_store_writer_busy(|| store.read_active_resource_lease_for_task(run_id, task_id))
-            .context("read active resource lease before accepted-worker spawn")?
-            .context("supervisor requires an active resource lease")?;
+    let (slot, claim, lease) =
+        capture_worker_launch_claim(slot, store, &run_id_typed, task_id)?;
     if lease.run_id != claim.run_id.as_str()
         || lease.task_id != claim.task_id.as_str()
         || lease.attempt_id != claim.attempt_id.as_str()
@@ -1197,23 +1191,23 @@ fn authorize_host_worker_launch(
     store: &SessionStore,
     lease: &FmsResourceLease,
 ) -> Result<String> {
-    authorize_host_worker_launch_with_timeout(
+    authorize_host_worker_launch_with_budget(
         host,
         store,
         lease,
-        Duration::from_secs(30),
+        remaining_retry_time(Duration::from_secs(30)),
         || {},
     )
 }
 
-fn authorize_host_worker_launch_with_timeout(
+fn authorize_host_worker_launch_with_budget(
     host: &fullmag_runtime_control::host_runtime::HostRuntimeAdmission,
     store: &SessionStore,
     lease: &FmsResourceLease,
-    retry_timeout: Duration,
+    remaining: impl Fn() -> Duration,
     on_retry: impl FnMut(),
 ) -> Result<String> {
-    retry_host_worker_launch_with_timeout(
+    retry_host_worker_launch_with_budget(
         || {
             // Preserve the sampler's unavailable reason if the sample ages
             // between the second preflight read and the locked launch CAS.
@@ -1221,7 +1215,7 @@ fn authorize_host_worker_launch_with_timeout(
             host.ledger().authorize_worker_launch(store, lease)
         },
         on_retry,
-        retry_timeout,
+        remaining,
     )
     .context("authorize host worker launch")
 }
@@ -1234,22 +1228,34 @@ fn retry_host_worker_launch<T>(
     retry_host_worker_launch_with_timeout(operation, on_retry, Duration::from_secs(30))
 }
 
+fn remaining_retry_time(timeout: Duration) -> impl Fn() -> Duration {
+    let deadline = Instant::now() + timeout;
+    move || deadline.saturating_duration_since(Instant::now())
+}
+
 fn retry_host_worker_launch_with_timeout<T>(
+    operation: impl FnMut() -> Result<T>,
+    on_retry: impl FnMut(),
+    timeout: Duration,
+) -> Result<T> {
+    retry_host_worker_launch_with_budget(operation, on_retry, remaining_retry_time(timeout))
+}
+
+fn retry_host_worker_launch_with_budget<T>(
     mut operation: impl FnMut() -> Result<T>,
     mut on_retry: impl FnMut(),
-    retry_timeout: Duration,
+    remaining: impl Fn() -> Duration,
 ) -> Result<T> {
     use std::hash::{Hash, Hasher};
 
     // Both retryable errors precede one-shot permit consumption: writer
     // contention prevents admission locks, while an unavailable compute-node
     // sample and transient GPU inventory are read-only validation failures.
-    let deadline = Instant::now() + retry_timeout;
     let mut attempt = 0_u64;
     loop {
         match operation() {
             Ok(value) => return Ok(value),
-            Err(error) if is_retryable_pre_spawn_host_error(&error) && Instant::now() < deadline =>
+            Err(error) if is_retryable_pre_spawn_host_error(&error) && !remaining().is_zero() =>
             {
                 on_retry();
                 let mut hasher = std::collections::hash_map::DefaultHasher::new();
@@ -1266,7 +1272,7 @@ fn retry_host_worker_launch_with_timeout<T>(
                     Duration::from_millis(5 + hasher.finish() % 36)
                 };
                 attempt = attempt.saturating_add(1);
-                std::thread::sleep(delay.min(deadline.saturating_duration_since(Instant::now())));
+                std::thread::sleep(delay.min(remaining()));
             }
             Err(error) => return Err(error),
         }
@@ -1276,22 +1282,22 @@ fn retry_host_worker_launch_with_timeout<T>(
 fn current_compute_snapshot_before_worker_launch(
     host: &fullmag_runtime_control::host_runtime::HostRuntimeAdmission,
 ) -> Result<fullmag_session::compute_node_snapshot::ComputeNodeSnapshot> {
-    current_compute_snapshot_before_worker_launch_with_timeout(
+    current_compute_snapshot_before_worker_launch_with_budget(
         host,
-        Duration::from_secs(30),
+        remaining_retry_time(Duration::from_secs(30)),
         || {},
     )
 }
 
-fn current_compute_snapshot_before_worker_launch_with_timeout(
+fn current_compute_snapshot_before_worker_launch_with_budget(
     host: &fullmag_runtime_control::host_runtime::HostRuntimeAdmission,
-    retry_timeout: Duration,
+    remaining: impl Fn() -> Duration,
     on_retry: impl FnMut(),
 ) -> Result<fullmag_session::compute_node_snapshot::ComputeNodeSnapshot> {
-    retry_host_worker_launch_with_timeout(
+    retry_host_worker_launch_with_budget(
         || host.required_current_compute_node_snapshot(),
         on_retry,
-        retry_timeout,
+        remaining,
     )
 }
 
@@ -1305,6 +1311,30 @@ fn is_retryable_pre_spawn_host_error(error: &anyhow::Error) -> bool {
                 fullmag_session::host_resource_ledger::ComputeNodeSampleNotCurrent,
             >()
     })
+}
+
+fn capture_worker_launch_claim(
+    slot: SupervisorSlot,
+    store: &SessionStore,
+    run_id: &fullmag_application::RunId,
+    task_id: &str,
+) -> Result<(SupervisorSlot, fullmag_application::TaskClaim, FmsResourceLease)> {
+    let capture = || {
+        let claim = retry_store_writer_busy(|| {
+            fullmag_runtime_control::load_current_task_claim(store, run_id, task_id)
+        })
+        .context("supervisor requires an exact active task claim")?;
+        let lease = retry_store_writer_busy(|| {
+            store.read_active_resource_lease_for_task(run_id.as_str(), task_id)
+        })
+        .context("read active resource lease before accepted-worker spawn")?
+        .context("supervisor requires an active resource lease")?;
+        Ok((claim, lease))
+    };
+    match capture() {
+        Ok((claim, lease)) => Ok((slot, claim, lease)),
+        Err(error) => Err(defer_pre_spawn_worker_launch_error(slot, error)),
+    }
 }
 
 fn defer_pre_spawn_worker_launch_error(
@@ -3356,6 +3386,45 @@ mod tests {
         assert!(!slot_path.exists());
     }
 
+    #[test]
+    fn transient_pre_spawn_claim_read_preserves_the_admitted_task() {
+        let fixture = host_launch_test_fixture();
+        commit_host_launch_fixture_start(&fixture);
+        let run_id = &fixture.claim.run_id;
+        let task_id = fixture.claim.task_id.as_str();
+        let slot = SupervisorSlot::acquire(
+            &fixture.store, run_id.as_str(), task_id, &fixture.lease.resource_id, 1, false,
+        ).unwrap();
+        let slot_path = slot.path.clone();
+        let holder_store = SessionStore::open(fixture.store.root()).unwrap();
+        let (acquired, wait_for_writer) = std::sync::mpsc::sync_channel(1);
+        let (release, wait_for_release) = std::sync::mpsc::sync_channel(1);
+        let holder = std::thread::spawn(move || {
+            let _writer = holder_store.write_transaction().unwrap();
+            acquired.send(()).unwrap();
+            wait_for_release.recv_timeout(Duration::from_secs(30)).unwrap();
+        });
+        wait_for_writer.recv_timeout(Duration::from_secs(5)).unwrap();
+
+        let result = capture_worker_launch_claim(slot, &fixture.store, run_id, task_id);
+        release.send(()).unwrap();
+        holder.join().unwrap();
+
+        let error = result.err().expect("the claim read must defer under contention");
+        assert!(error.downcast_ref::<WorkerLaunchDeferred>().is_some());
+        assert!(format!("{error:#}").contains("supervisor requires an exact active task claim"));
+        assert!(!slot_path.exists());
+        assert_eq!(
+            fullmag_runtime_control::load_current_task_claim(&fixture.store, run_id, task_id).unwrap(),
+            fixture.claim,
+        );
+        let saved = fullmag_runtime_control::recover_coordinator(&fixture.store, &fixture.claim).unwrap();
+        assert_eq!(
+            saved.commands.iter().filter(|envelope| matches!(&envelope.command, WorkerCommand::Start)).count(),
+            1,
+        );
+    }
+
     /// Exercise the real journal, inbox, artifact catalog and release replay.
     /// No child, solver, host admission or test-only production bypass is used.
     #[test]
@@ -4146,9 +4215,7 @@ accepted worker failed: execute accepted worker Start: controlled failure\n";
             Some(fullmag_session::host_resource_ledger::HostWorkerLaunchGate::Pending));
     }
 
-    #[test]
-    fn exhausted_stale_sample_retry_defers_second_read_and_authorization_without_consuming_claim_start_lease() {
-        let fixture = host_launch_test_fixture();
+    fn commit_host_launch_fixture_start(fixture: &HostLaunchTestFixture) {
         let task = fullmag_application::TaskRecord {
             run_id: fixture.claim.run_id.clone(),
             task_id: fixture.claim.task_id.clone(),
@@ -4178,6 +4245,12 @@ accepted worker failed: execute accepted worker Start: controlled failure\n";
                     })
             })
             .unwrap();
+    }
+
+    #[test]
+    fn exhausted_stale_sample_retry_defers_second_read_and_authorization_without_consuming_claim_start_lease() {
+        let fixture = host_launch_test_fixture();
+        commit_host_launch_fixture_start(&fixture);
         let started = fullmag_runtime_control::recover_coordinator(&fixture.store, &fixture.claim)
             .unwrap();
         let start_before = started
@@ -4210,15 +4283,25 @@ accepted worker failed: execute accepted worker Start: controlled failure\n";
             .publish_compute_node_snapshot_with_owner(&fixture._inventory_owner, &stale)
             .unwrap();
 
-        let mut sample_read_retries = 0;
-        let second_read_error = current_compute_snapshot_before_worker_launch_with_timeout(
+        // Keep the real store and ledger reads, but advance the retry budget on
+        // the first retry so a slow runner cannot exhaust it on the first read.
+        fn budget_for_one_retry(retries: usize) -> Duration {
+            if retries == 0 {
+                Duration::from_secs(1)
+            } else {
+                Duration::ZERO
+            }
+        }
+
+        let sample_read_retries = std::cell::Cell::new(0);
+        let second_read_error = current_compute_snapshot_before_worker_launch_with_budget(
             &fixture.host,
-            Duration::from_millis(250),
-            || sample_read_retries += 1,
+            || budget_for_one_retry(sample_read_retries.get()),
+            || sample_read_retries.set(sample_read_retries.get() + 1),
         )
         .unwrap_err();
-        assert!(
-            sample_read_retries > 0,
+        assert_eq!(
+            sample_read_retries.get(), 1,
             "the sample read should be retried before deferral"
         );
         assert!(second_read_error.chain().any(|cause| {
@@ -4226,17 +4309,17 @@ accepted worker failed: execute accepted worker Start: controlled failure\n";
         }));
         assert!(format!("{second_read_error:#}").contains("freshness is Stale"));
 
-        let mut authorization_retries = 0;
-        let error = authorize_host_worker_launch_with_timeout(
+        let authorization_retries = std::cell::Cell::new(0);
+        let error = authorize_host_worker_launch_with_budget(
             &fixture.host,
             &fixture.store,
             &fixture.lease,
-            Duration::from_millis(100),
-            || authorization_retries += 1,
+            || budget_for_one_retry(authorization_retries.get()),
+            || authorization_retries.set(authorization_retries.get() + 1),
         )
         .unwrap_err();
-        assert!(
-            authorization_retries > 0,
+        assert_eq!(
+            authorization_retries.get(), 1,
             "stale authorization should be retried before deferral"
         );
         assert!(error.chain().any(|cause| {
