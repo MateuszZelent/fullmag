@@ -494,11 +494,12 @@ export function physicsFirstResultsSnapshotFromResources(
     spectrum.generation_id && spectrum.generation_id === resultManifest.generation_id
       ? nonEmptyString(spectrum.stage_id)
       : null;
-  const payloadStageId = nonEmptyString(payload.stage_id) ??
-    nonEmptyString(resultManifest?.stage_id) ?? spectrumStageId;
+  const manifestStageId = nonEmptyString(payload.stage_id) ??
+    nonEmptyString(resultManifest?.stage_id);
+  const publishedStageId = manifestStageId ?? spectrumStageId;
   // The CLI artifact can omit stage_id. Resolve it only from an unambiguous
   // published catalog entry for the run that owns this artifact.
-  const stageCandidates = !payloadStageId && resultManifest?.run_id === runId
+  const stageCandidates = !publishedStageId && resultManifest?.run_id === runId
     ? input.datasets?.filter((dataset) =>
         dataset.run_id === runId &&
         dataset.product_kind === studyProduct &&
@@ -506,7 +507,7 @@ export function physicsFirstResultsSnapshotFromResources(
         dataset.status.execution === "published",
       ) ?? []
     : [];
-  const stageId = payloadStageId ??
+  const stageId = publishedStageId ??
     (stageCandidates.length === 1 ? nonEmptyString(stageCandidates[0]?.stage_id) : null);
   const equilibriumId = nonEmptyString(payload.equilibrium_identity);
   const requested = record(payload.requested_execution);
@@ -548,7 +549,8 @@ export function physicsFirstResultsSnapshotFromResources(
     addContractGap(gap);
   }
   const artifactRevision =
-    nonEmptyString(payload.revision) ?? resultManifest?.revision ??
+    nonEmptyString(payload.revision) ??
+    (!manifestStageId ? resultManifest?.revision : null) ??
     input.currentRun?.revision ?? "unknown";
   const products: PhysicsFirstResultProducts =
     studyProduct === "modal_eigen"

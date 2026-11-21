@@ -687,6 +687,7 @@ describe("physicsFirstResultsSnapshotFromResources", () => {
             requested_execution: { backend: "fem", device: "cpu" },
             study_product: "modal_eigen",
           },
+          revision: "sha256:native-manifest",
           run_id: runId,
           status: "ready",
         },
@@ -705,6 +706,7 @@ describe("physicsFirstResultsSnapshotFromResources", () => {
       },
     };
     const adapted = physicsFirstResultsSnapshotFromResources(resources);
+    expect(adapted.snapshot.entries[0]?.artifactRevision).toBe("sha256:native-manifest");
     const tree = withCatalogAnalysisFamilies(buildPhysicsFirstResultsTree(adapted.snapshot), [dataset]);
     const nodes = flattenExplorerNodes(tree);
 
@@ -1061,7 +1063,7 @@ describe("physicsFirstResultsSnapshotFromResources", () => {
   });
 
   it("adapts explicit manifest provenance without trusting the manifest run placeholder", () => {
-    const adapted = physicsFirstResultsSnapshotFromResources({
+    const resources = {
       currentRun: { revision: 17, run_id: "runtime-run-17" },
       dispersion: {
         path_metadata: {
@@ -1090,11 +1092,13 @@ describe("physicsFirstResultsSnapshotFromResources", () => {
             stage_id: "eigen-stage",
             study_product: "modal_eigen",
           },
+          revision: "sha256:manifest-content",
           status: "ready",
         },
       },
       spectrum: { status: "ready" },
-    });
+    };
+    const adapted = physicsFirstResultsSnapshotFromResources(resources);
 
     expect(adapted.contractGaps).toEqual([]);
     expect(adapted.snapshot).toMatchObject({
@@ -1110,6 +1114,14 @@ describe("physicsFirstResultsSnapshotFromResources", () => {
         },
       ],
     });
+
+    const envelope = resources.manifest.result_manifest;
+    expect(physicsFirstResultsSnapshotFromResources({
+      ...resources,
+      manifest: {
+        result_manifest: { ...envelope, payload: { ...envelope.payload, revision: undefined } },
+      },
+    }).snapshot.entries[0]?.artifactRevision).toBe(17);
   });
 
   it("preserves explicit result context gaps", () => {
