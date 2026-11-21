@@ -4,17 +4,6 @@ const OBSERVED_PERFORMANCE_STATES = new Set([
   "running", "completed", "cancelled", "error", "finalizing",
 ]);
 
-/** Fields introduced by the coherent per-attempt performance projection. */
-type FooterRunPerformanceResource = RunPerformanceResource & {
-  stage_index?: number | null;
-  solver_clock?: {
-    step_index: number;
-    time_s: number;
-    dt_s: number;
-  } | null;
-  progress_fraction?: number | null;
-};
-
 export type FooterPerformanceStageReference = {
   stageIndex?: number | null;
   stageId?: string | null;
@@ -32,13 +21,12 @@ export function footerPerformanceStageMatches(
   expectedStage?: FooterPerformanceStageReference | null,
 ): boolean {
   if (!performance || !expectedStage) return false;
-  const sample = performance as FooterRunPerformanceResource;
   const expectedId = expectedStage.stageId?.trim() || null;
   const expectedIndex = expectedStage.stageIndex;
   return Boolean(
-    (expectedId && sample.step_id === expectedId) ||
+    (expectedId && performance.step_id === expectedId) ||
     (typeof expectedIndex === "number" && Number.isSafeInteger(expectedIndex) &&
-      sample.stage_index === expectedIndex)
+      performance.stage_index === expectedIndex)
   );
 }
 
@@ -157,7 +145,7 @@ export function resolveFooterPerformanceRate(
 function hasFooterPerformanceIdentity(
   currentRunId: string | null | undefined,
   performance: RunPerformanceResource | null | undefined,
-): performance is FooterRunPerformanceResource {
+): performance is RunPerformanceResource {
   return Boolean(
     currentRunId && performance && performance.run_id === currentRunId &&
     OBSERVED_PERFORMANCE_STATES.has(performance.state) &&
@@ -169,7 +157,7 @@ function hasFooterPerformanceIdentity(
 }
 
 function matchesFooterPerformanceStage(
-  performance: FooterRunPerformanceResource,
+  performance: RunPerformanceResource,
   expectedStage?: FooterPerformanceStageReference,
 ): boolean {
   if (!expectedStage) return true;
