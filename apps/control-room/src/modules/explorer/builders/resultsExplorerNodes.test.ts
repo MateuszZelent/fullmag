@@ -722,6 +722,21 @@ describe("physicsFirstResultsSnapshotFromResources", () => {
       ...resources,
       datasets: [dataset, conflicting],
     }).snapshot.entries).toEqual([]);
+    const bound = physicsFirstResultsSnapshotFromResources({
+      ...resources,
+      datasets: [dataset, conflicting],
+      manifest: {
+        result_manifest: { ...resources.manifest.result_manifest, generation_id: "g-modal" },
+      },
+      spectrum: {
+        ...resources.spectrum,
+        generation_id: "g-modal",
+        generation_status: "member_verified_owner_bound",
+        run_id: runId,
+        stage_id: dataset.stage_id,
+      },
+    });
+    expect(bound.snapshot.entries[0]?.stageId).toBe(dataset.stage_id);
     expect(physicsFirstResultsSnapshotFromResources({
       ...resources,
       currentRun: { ...resources.currentRun, run_id: "another-run" },

@@ -35,6 +35,7 @@ interface AnalysisFieldOverlayCommandInput {
   colormap?: string | null;
   componentBasis?: string | null;
   componentCount?: number | null;
+  artifactGenerationId?: string | null;
   artifactRevision?: number | string | null;
   equilibriumId?: string | null;
   fieldId?: string | null;
@@ -451,7 +452,10 @@ function overlayStateFromContext(
       }
     : null;
   const modeIntent = resolvedSource === "eigen-mode"
-    ? createModeFieldOverlayIntent(modalRow ?? selectedRef)
+    ? createModeFieldOverlayIntent(
+        modalRow ?? selectedRef,
+        modalRow ? stringValue(input.artifactGenerationId) : null,
+      )
     : null;
   const analysisResultFieldIntent = createAnalysisResultFieldOverlayIntent(
     selectedResultRef,

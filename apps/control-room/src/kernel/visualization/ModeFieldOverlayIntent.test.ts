@@ -90,6 +90,21 @@ describe("ModeFieldOverlayIntent", () => {
     expect(Object.isFrozen(intent)).toBe(true);
   });
 
+  it("keeps a mode preview bound to the spectrum's artifact generation", () => {
+    const intent = createModeFieldOverlayIntent(selection, "generation-snapshot");
+    const ready = {
+      ...metadata,
+      generation_status: "member_verified_owner_bound" as const,
+    };
+
+    expect(resolveModeFieldOverlayMetadata(intent!, {
+      ...ready, generation_id: "generation-snapshot",
+    }, "field-v1")).not.toBeNull();
+    expect(resolveModeFieldOverlayMetadata(intent!, {
+      ...ready, generation_id: "generation-replacement",
+    }, "field-v2")).toBeNull();
+  });
+
   it("accepts only canonical ready global XYZ complex field metadata", () => {
     const intent = createModeFieldOverlayIntent(selection)!;
 

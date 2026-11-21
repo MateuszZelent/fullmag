@@ -27,6 +27,7 @@ import {
   resolveModalPhasorConvention,
   type ModalDampingObservables,
 } from "@/shared/domain/analysis/modalDampingObservables";
+import { modalSpectrumMatchesSelection } from "@/shared/domain/analysis/modalResultNodeIdentity";
 import { Button } from "@/shared/ui/Button";
 
 import type { InspectorPanelProps } from "../../inspectorTypes";
@@ -322,12 +323,24 @@ function useEigenModeSummary(selection: InspectorPanelProps["selection"]) {
     sampleIndex,
     modeIndex,
   );
-  const spectrumModel = buildEigenSpectrumChartModel(spectrum.data);
+  const modePublication = eigenMode.status === "ready" && eigenMode.data?.status === "ready"
+    ? eigenMode.data
+    : null;
+  const spectrumPublication = spectrum.status === "ready" && spectrum.data?.status === "ready"
+    ? spectrum.data
+    : null;
+  const publication = modePublication ?? spectrumPublication;
+  const publicationMatches = modalSpectrumMatchesSelection(publication, ref);
+  const spectrumModel = buildEigenSpectrumChartModel(
+    modalSpectrumMatchesSelection(spectrumPublication, ref) ? spectrumPublication : null,
+  );
   const spectrumPoint = spectrumModel.points.find(
     (point) =>
       point.sampleIndex === sampleIndex && point.rawModeIndex === modeIndex,
   );
-  const modePayload = readEigenModeResourcePayload(eigenMode.data, sampleIndex, modeIndex);
+  const modePayload = modalSpectrumMatchesSelection(modePublication, ref)
+    ? readEigenModeResourcePayload(modePublication, sampleIndex, modeIndex)
+    : null;
   const componentSummary = record(modePayload?.component_summary);
   const frequencyHz =
     finiteNumber(modePayload?.frequency_real_hz) ??
@@ -385,8 +398,10 @@ function useEigenModeSummary(selection: InspectorPanelProps["selection"]) {
     imaginaryFrequencyHz,
     rawPhasorConvention,
   );
-  const field3DReady =
-    fieldMeta.status === "ready" && canPlotSelectedFieldIn3D(fieldMeta.data);
+  const generationId = publication?.generation_id ?? null;
+  const field3DReady = publicationMatches && fieldMeta.status === "ready" &&
+    (!generationId || fieldMeta.data?.generation_id === generationId) &&
+    canPlotSelectedFieldIn3D(fieldMeta.data);
   const field3DStatus =
     fieldMeta.status === "ready"
       ? selectedField3DPlotStatus(fieldMeta.data)
@@ -431,7 +446,9 @@ function useEigenModeSummary(selection: InspectorPanelProps["selection"]) {
     fieldResource: fieldResource ?? "not available",
     field3DReady,
     field3DStatus,
-    fieldStatus: fieldId
+    fieldStatus: !publicationMatches
+      ? "Mode field unavailable for this run and stage"
+      : fieldId
       ? `${fieldId}; ${
           fieldMeta.status === "ready"
             ? selectedField3DPlotStatus(fieldMeta.data)

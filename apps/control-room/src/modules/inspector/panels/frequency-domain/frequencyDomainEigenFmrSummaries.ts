@@ -965,6 +965,9 @@ export function useEigenSpectrumSummary() {
     spectrumCompleteness:
       stringValue(payload?.spectrum_completeness) ?? "unknown",
     spectrumModel,
+    spectrumPublication: spectrum.status === "ready" && spectrum.data?.status === "ready"
+      ? spectrum.data
+      : null,
     spectrumResource: ANALYSIS_FREQUENCY_DOMAIN_EIGEN_SPECTRUM_V2_PATH,
     windowCertificate:
       windowComplete == null

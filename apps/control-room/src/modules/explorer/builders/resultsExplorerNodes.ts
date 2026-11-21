@@ -113,6 +113,8 @@ interface ResultResourceLike {
 }
 
 interface ResultManifestLike extends ResultResourceLike {
+  generation_id?: string | null;
+  generation_status?: string | null;
   mesh_generation_id?: string | null;
   payload?: unknown;
   revision?: string | number | null;
@@ -131,7 +133,7 @@ export interface PhysicsFirstResultResourceInput {
   observationFrames?: PostprocessingCatalogSnapshot<ObservationFrameListResource>;
   pinnedObservationFrameId?: string | null;
   responseSweep?: (ResultResourceLike & { payload?: unknown }) | null;
-  spectrum?: (ResultResourceLike & { payload?: unknown }) | null;
+  spectrum?: ResultManifestLike | null;
   tableCatalog?: PostprocessingCatalogSnapshot<TableListResource>;
 }
 
@@ -484,7 +486,16 @@ export function physicsFirstResultsSnapshotFromResources(
   }
 
   const studyProduct = nonEmptyString(payload.study_product);
-  const payloadStageId = nonEmptyString(payload.stage_id) ?? nonEmptyString(resultManifest?.stage_id);
+  const spectrum = input.spectrum;
+  const spectrumStageId =
+    studyProduct === "modal_eigen" && ready(spectrum) &&
+    resultManifest?.run_id === runId && spectrum?.run_id === runId &&
+    spectrum.generation_status === "member_verified_owner_bound" &&
+    spectrum.generation_id && spectrum.generation_id === resultManifest.generation_id
+      ? nonEmptyString(spectrum.stage_id)
+      : null;
+  const payloadStageId = nonEmptyString(payload.stage_id) ??
+    nonEmptyString(resultManifest?.stage_id) ?? spectrumStageId;
   // The CLI artifact can omit stage_id. Resolve it only from an unambiguous
   // published catalog entry for the run that owns this artifact.
   const stageCandidates = !payloadStageId && resultManifest?.run_id === runId
@@ -575,7 +586,11 @@ export function physicsFirstResultsSnapshotFromResources(
     products,
     runId,
     stageId,
-    stageLabel: nonEmptyString(payload.stage_label) ?? stageCandidates[0]?.title ?? stageId,
+    stageLabel: nonEmptyString(payload.stage_label) ??
+      input.datasets?.find((dataset) =>
+        dataset.run_id === runId && dataset.stage_id === stageId &&
+        dataset.product_kind === studyProduct,
+      )?.title ?? stageId,
     studyProduct,
   };
 

@@ -7,7 +7,7 @@
  * generic fallback.
  */
 
-import { modalResultModeNodeId } from "@/shared/domain/analysis/modalResultNodeIdentity";
+import { modalResultModeNodeId, modalSpectrumMatchesSelection } from "@/shared/domain/analysis/modalResultNodeIdentity";
 import { EmptyState } from "@/shared/ui/EmptyState";
 import { keyedOccurrences } from "@/shared/utils/keyedOccurrences";
 import type { InspectorPanelProps } from "../../inspectorTypes";
@@ -1399,7 +1399,8 @@ export function FrequencyDomainResponseMapInspectorPanel(
 
 export function EigenSpectrumInspectorPanel({ selection }: InspectorPanelProps) {
   const summary = useEigenSpectrumSummary();
-  const browser = useEigenModeBrowser(selection);
+  const browser = useEigenModeBrowser(selection, summary.spectrumPublication);
+  if (!browser.hasSpectrum) return <ModalSpectrumStatus loading={summary.badge === "loading"} />;
 
   return (
     <div data-inspector-surface="eigen-spectrum">
@@ -1424,7 +1425,8 @@ export function EigenSpectrumInspectorPanel({ selection }: InspectorPanelProps) 
 
 export function EigenModesInspectorPanel({ selection }: InspectorPanelProps) {
   const summary = useEigenSpectrumSummary();
-  const browser = useEigenModeBrowser(selection);
+  const browser = useEigenModeBrowser(selection, summary.spectrumPublication);
+  if (!browser.hasSpectrum) return <ModalSpectrumStatus loading={summary.badge === "loading"} />;
 
   return (
     <div data-inspector-surface="eigen-modes-browser">
@@ -1435,11 +1437,26 @@ export function EigenModesInspectorPanel({ selection }: InspectorPanelProps) {
   );
 }
 
-function useEigenModeBrowser(selection: InspectorPanelProps["selection"]) {
+function ModalSpectrumStatus({ loading }: { loading: boolean }) {
+  return (
+    <EmptyState
+      heading={loading ? "Loading eigenmodes…" : "Spectrum unavailable for this run and stage"}
+      role="status"
+      size="compact"
+    />
+  );
+}
+
+function useEigenModeBrowser(
+  selection: InspectorPanelProps["selection"],
+  publication: ReturnType<typeof useEigenSpectrumSummary>["spectrumPublication"],
+) {
   const kernel = useKernel();
   const overlay = useRenderableAnalysisFieldOverlay(kernel.analysisFieldOverlay, { ignorePhase: true });
   const owner = selection.ref?.type === "frequency-domain" ? selection.ref : null;
+  const hasSpectrum = modalSpectrumMatchesSelection(publication, owner);
   const onInspect = (point: EigenSpectrumPoint): void => {
+    if (!hasSpectrum) return;
     const nodeId = owner?.kind.startsWith("results.resonance.modal.") &&
       owner.analysisRunId && owner.analysisStageId &&
       point.modeFieldId && eigenModeFieldAvailable(point)
@@ -1463,11 +1480,12 @@ function useEigenModeBrowser(selection: InspectorPanelProps["selection"]) {
     }, "inspector");
   };
   const onView = (point: EigenSpectrumPoint): void => {
-    if (!eigenModeFieldAvailable(point) || !point.modeFieldId) return;
+    if (!hasSpectrum || !eigenModeFieldAvailable(point) || !point.modeFieldId) return;
     void kernel.commands.execute(
       "analysis.eigen.plot-mode-3d",
       createCommandContext("inspector", kernel, { sourceDetail: "results.eigen.modes" }),
       {
+        artifactGenerationId: publication?.generation_id,
         fieldId: point.modeFieldId,
         frequencyHz: point.frequencyHz,
         label: `Mode ${point.rawModeIndex} · ${formatFrequency(point.frequencyHz)}`,
@@ -1483,7 +1501,12 @@ function useEigenModeBrowser(selection: InspectorPanelProps["selection"]) {
       },
     );
   };
-  return { activeFieldId: overlay?.source === "eigen-mode" ? overlay.fieldId : null, onInspect, onView };
+  const activeFieldId = overlay?.source === "eigen-mode" &&
+    overlay.provenance?.runId === publication?.run_id &&
+    overlay.provenance?.stageId === publication?.stage_id
+    ? overlay.fieldId
+    : null;
+  return { activeFieldId, hasSpectrum, onInspect, onView };
 }
 
 export function EigenModesVisualizationInspectorPanel(

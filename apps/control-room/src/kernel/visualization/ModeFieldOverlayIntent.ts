@@ -29,6 +29,7 @@ export interface ModeFieldOverlayIntent {
   readonly analysisRunId: string;
   readonly analysisStageId: string;
   readonly artifactRevision: string;
+  readonly expectedArtifactGenerationId?: string;
   readonly fieldId: string;
   readonly metadataResourceKey: string;
   readonly modeId: string;
@@ -83,6 +84,7 @@ export interface ValidatedModeFieldOverlayBinary {
  */
 export function createModeFieldOverlayIntent(
   selection: FrequencyDomainSelectionRef | null | undefined,
+  expectedArtifactGenerationId?: string | null,
 ): ModeFieldOverlayIntent | null {
   if (!selection || (
     !selection.kind.startsWith("results.eigen") &&
@@ -113,6 +115,7 @@ export function createModeFieldOverlayIntent(
     analysisRunId,
     analysisStageId,
     artifactRevision,
+    ...(expectedArtifactGenerationId ? { expectedArtifactGenerationId } : {}),
     fieldId,
     metadataResourceKey:
       `analysis/frequency-domain/eigen/samples/${encodeURIComponent(sampleId)}` +
@@ -188,6 +191,8 @@ export function resolveModeFieldOverlayMetadata(
     defaultPhaseRad === null ||
     malformedArtifactGenerationId ||
     !admissibleArtifactGeneration ||
+    (intent.expectedArtifactGenerationId !== undefined &&
+      intent.expectedArtifactGenerationId !== artifactGenerationId) ||
     !containsRequiredViews(legacyMetadata.available_views) ||
     !legacyMetadata.available_views.includes(legacyMetadata.default_view)
   ) {
