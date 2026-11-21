@@ -18,6 +18,36 @@ from fullmag.runtime.script_builder import (
 )
 
 
+def test_analytic_ellipsoid_axes_survive_scene_roundtrip(tmp_path: Path) -> None:
+    for shape, radii in (
+        ("fm.Sphere(100e-9)", (100e-9, 100e-9, 100e-9)),
+        ("fm.Ellipsoid(100e-9, 80e-9, 60e-9)", (100e-9, 80e-9, 60e-9)),
+    ):
+        source = tmp_path / "analytic.py"
+        source.write_text(
+            f"""import fullmag as fm
+study = fm.study('analytic')
+study.engine('fem')
+body = study.geometry({shape}, name='permalloy')
+body.Ms = 800e3
+body.Aex = 13e-12
+body.m = fm.texture.uniform(1, 0, 0)
+""",
+            encoding="utf-8",
+        )
+        loaded = fm.load_problem_from_script(source, lightweight_assets=True)
+        scene = build_scene_document_from_builder(export_builder_draft(loaded))
+        geometry = scene["objects"][0]["geometry"]
+        assert geometry["geometry_kind"] == "Ellipsoid"
+        assert geometry["geometry_params"] == dict(zip(("rx", "ry", "rz"), radii))
+
+        canonical = tmp_path / "canonical.py"
+        canonical.write_text(render_scene_document_as_script(scene), encoding="utf-8")
+        reloaded = fm.load_problem_from_script(canonical, lightweight_assets=True)
+        reloaded_geometry = reloaded.problem.to_ir(include_geometry_assets=False)["geometry"]
+        assert tuple(reloaded_geometry["entries"][0]["radii"]) == radii
+
+
 def test_scene_document_round_trips_eigenmode_periodic_airbox_k0() -> None:
     builder = {
         "stages": [
