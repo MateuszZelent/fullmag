@@ -295,9 +295,12 @@ study.stages.add_run(1.0e-15, stage_id="m2_run")
 ```
 
 This is a bounded reference pattern. The executable fixture
-`examples/fem_reciprocal_m2_public.py` adds a conforming shared-domain mesh,
-surrounding air, and complete electrodes. Its demagnetization energy remains
-disabled.
+`examples/fem_reciprocal_m2_public.py` uses a reproducible, tagged P1 mesh of
+the conducting body and resolves its complete electrode and insulating
+boundary partition through the FEM planner. It contains no air region and
+keeps demagnetization disabled; its small 12-tetrahedron mesh is a planner
+fixture, not a convergence-quality simulation mesh. Regenerate the checked-in
+asset with `python -B examples/generate_fem_reciprocal_m2_public_mesh.py`.
 
 ### C. Prescribed SOT comparison
 

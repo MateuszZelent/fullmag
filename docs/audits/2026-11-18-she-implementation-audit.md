@@ -516,7 +516,7 @@ Każda pozycja wymaga bramki „wynik bez zmian”: porównania artefaktów prze
 
 | # | Zadanie | Bramka |
 |---|---|---|
-| D1 | SceneDocument wyraża FEM M2 (operator FEM, bez `reciprocal_nonlinear`); przykład `fem_reciprocal_m2_public.py` z `engine="gmres"` i test, który go planuje (SHE-PY-3, SHE-PY-4) | test planowania przykładu; **stan:** przykład i strona publiczna poprawione na `gmres` (`d41baadce`), a test Python sprawdza wyeksportowany ProblemIR, nie wywołuje planera. Test planowania oraz SceneDocument dla FEM M2 pozostają otwarte. |
+| D1 | SceneDocument wyraża FEM M2 (operator FEM, bez `reciprocal_nonlinear`); publiczny przykład przechodzi przez planner (SHE-PY-3, SHE-PY-4) | **Stan:** przykład używa jawnego otagowanego meshu P1 wyłącznie dla przewodzącej bryły, z rozłącznymi elektrodami `left`/`right`; test Python sprawdza odtwarzalność assetu i eksportu skryptu, a test Rust eksportuje przykład z pełnymi assetami, wywołuje planner i sprawdza markery oraz napięcia elektrod. Weryfikacja CI tej bramki pozostaje w toku. Scenariusz authoringu SceneDocument dla FEM M2 i wykonanie/kwalifikacja fizyczna pozostają poza zakresem tej bramki. |
 | D2 | Jedno źródło reguł walidacji (tabela reguł w IR, eksportowana do Pythona i UI); Python liczy co najmniej Schura i C_s/N₀ z tej samej definicji | test parytetu reguł |
 | D3 | Synchronizacja `capability-matrix-v0.json/.md` z plannerem: stany, FEM M2 stage coupling, GPU M1, identyfikatory capability w planie (SHE-PY-7, SHE-PY-8) | skrypt spójności matryca↔planner |
 | D4 | Aktualizacja specyfikacji parity (jednostka C_s, statusy, osobne pozycje G↑/G↓/G_r/G_i/SML, `drift_diffusion_spin_torque`) | test parity |

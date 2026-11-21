@@ -1,10 +1,14 @@
 """Minimalny publiczny fixture FEM M2 z torque transportowym.
 
-Fixture jest celowo mały: jednorodny prostopadłościan, jawne elektrody na
-ścianach ``x_min``/``x_max`` i jeden krótki stage LLG.  Nie jest to jeszcze
-benchmark produkcyjny ani dowód zbieżności; jego rolą jest przejście pełnej
+Fixture jest celowo mały: jednorodny prostopadłościan z przenośnym,
+otagowanym meshem P1, elektrodami ``left``/``right`` i jednym krótkim stage
+LLG. Meshuje wyłącznie przewodzącą bryłę; demagnetyzacja pozostaje wyłączona.
+Nie jest to benchmark ani dowód zbieżności. Jego rolą jest przejście pełnej
 ścieżki Python -> ProblemIR -> planner -> native FEM M2 bez ukrytego
 fallbacku do FDM.
+
+Mesh można odtworzyć poleceniem
+``python -B examples/generate_fem_reciprocal_m2_public_mesh.py``.
 """
 
 from __future__ import annotations
@@ -14,8 +18,6 @@ import fullmag as fm
 
 NM = 1.0e-9
 BODY_SIZE = (30.0 * NM, 20.0 * NM, 4.0 * NM)
-AIRBOX_PADDING = 10.0 * NM
-AIRBOX_SIZE = tuple(size + 2.0 * AIRBOX_PADDING for size in BODY_SIZE)
 M2_OPERATOR = "fem_charge_spin_conforming_h1_p1.reciprocal_m2.v1"
 
 
@@ -23,19 +25,8 @@ study = fm.study("fem_reciprocal_m2_public")
 study.engine("fem")
 study.device("cpu", precision="double")
 study.mode("strict")
-study.universe(
-    mode="manual",
-    # The explicit universe size is the outer shared-domain box. Keep air
-    # around the transport body even though this fixture disables demag.
-    size=AIRBOX_SIZE,
-    center=(0.0, 0.0, 0.0),
-    padding=(0.0, 0.0, 0.0),
-)
-study.universe.mesh(maximum_element_size=10.0 * NM)
-
-# Transport fixture isolates the reciprocal charge--spin/torque path.  The
-# shared-domain FEM mesh still contains an airbox region, but demagnetization
-# stays disabled; the production SP5/airbox gate owns that physics separately.
+# This transport-only fixture contains no air region. The production
+# demagnetization and airbox path is qualified separately.
 study.demag(enabled=False)
 
 body = study.geometry(fm.Box(size=BODY_SIZE, name="m2_body"), name="m2_body")
@@ -43,17 +34,17 @@ body.Ms = 8.0e5
 body.Aex = 13.0e-12
 body.alpha = 0.02
 body.m = fm.init.UniformMagnetization((1.0, 0.0, 0.0))
-body.mesh(maximum_element_size=10.0 * NM, order=1)
-study.build_domain_mesh()
+body.mesh(source="examples/fem_reciprocal_m2_public_mesh.npz", order=1)
+study.build_mesh()
 
 region = fm.RegionRef("m2_body")
-x_min = fm.SurfaceRef("m2_body", "x_min", (-1.0, 0.0, 0.0))
-x_max = fm.SurfaceRef("m2_body", "x_max", (1.0, 0.0, 0.0))
+x_min = fm.SurfaceRef("m2_body", "left", (-1.0, 0.0, 0.0))
+x_max = fm.SurfaceRef("m2_body", "right", (1.0, 0.0, 0.0))
 side_surfaces = [
-    fm.SurfaceRef("m2_body", "y_min", (0.0, -1.0, 0.0)),
-    fm.SurfaceRef("m2_body", "y_max", (0.0, 1.0, 0.0)),
-    fm.SurfaceRef("m2_body", "z_min", (0.0, 0.0, -1.0)),
-    fm.SurfaceRef("m2_body", "z_max", (0.0, 0.0, 1.0)),
+    fm.SurfaceRef("m2_body", "back", (0.0, -1.0, 0.0)),
+    fm.SurfaceRef("m2_body", "front", (0.0, 1.0, 0.0)),
+    fm.SurfaceRef("m2_body", "bottom", (0.0, 0.0, -1.0)),
+    fm.SurfaceRef("m2_body", "top", (0.0, 0.0, 1.0)),
 ]
 
 charge = study.current_transport(

@@ -5349,6 +5349,20 @@ mod tests {
 
         let exported: serde_json::Value =
             serde_json::from_slice(&output.stdout).expect("run-config JSON");
+        let runtime_metadata = &exported["stages"][0]["ir"]["problem_meta"]["runtime_metadata"];
+        assert!(
+            runtime_metadata["study_universe"].is_null(),
+            "the transport-only fixture must not add an air or shared-domain region"
+        );
+        assert_eq!(runtime_metadata["mesh_workflow"]["build_target"], "mesh");
+        assert_eq!(
+            runtime_metadata["mesh_workflow"]["per_geometry"][0]["source"],
+            "examples/fem_reciprocal_m2_public_mesh.npz"
+        );
+        let charge_boundaries =
+            &exported["stages"][0]["ir"]["current_modules"][0]["boundaries"];
+        assert_eq!(charge_boundaries[0]["surfaces"][0]["surface_id"], "left");
+        assert_eq!(charge_boundaries[1]["surfaces"][0]["surface_id"], "right");
         let stage_ir = exported["stages"][0]["ir"].clone();
         let mut problem: ProblemIR =
             serde_json::from_value(stage_ir).expect("public example ProblemIR");
@@ -5366,27 +5380,64 @@ mod tests {
                     .expect("canonical shared geometry assets"),
             );
         }
-        // Keep geometry generation enabled: bootstrap-rust installs Gmsh, and
-        // the example's actual shared-domain mesh must reach the planner.
-        let domain_mesh = problem
+        // The portable per-object P1 asset must reach the planner as a real
+        // mesh. The transport-only example deliberately has no shared air mesh.
+        let body_mesh = problem
             .geometry_assets
             .as_ref()
-            .and_then(|assets| assets.fem_domain_mesh_asset.as_ref())
-            .expect("public example's generated shared-domain mesh");
+            .and_then(|assets| {
+                assets
+                    .fem_mesh_assets
+                    .iter()
+                    .find(|asset| asset.geometry_name == "m2_body_geom")
+            })
+            .expect("public example's explicit body MeshData asset");
+        let mesh = body_mesh
+            .mesh
+            .as_ref()
+            .expect("public example's per-object MeshData");
         assert!(
-            domain_mesh
-                .mesh
-                .as_ref()
-                .is_some_and(|mesh| !mesh.nodes.is_empty()),
-            "public example must materialize its FEM mesh in the CI meshing environment"
+            !mesh.nodes.is_empty() && mesh.cell_count() == 12 && mesh.facet_count() == 12,
+            "public example must materialize the complete tagged Tet4 body mesh"
         );
-        assert!(
-            domain_mesh
-                .region_markers
+        let bounds_min = std::array::from_fn::<_, 3, _>(|axis| {
+            mesh.nodes
                 .iter()
-                .any(|marker| marker.geometry_name == "m2_body_geom"),
-            "public example's shared mesh must retain the transport body region"
-        );
+                .map(|node| node[axis])
+                .fold(f64::INFINITY, f64::min)
+        });
+        let bounds_max = std::array::from_fn::<_, 3, _>(|axis| {
+            mesh.nodes
+                .iter()
+                .map(|node| node[axis])
+                .fold(f64::NEG_INFINITY, f64::max)
+        });
+        let markers_on_face = |axis: usize, coordinate: f64| {
+            (0..mesh.facet_count())
+                .filter_map(|index| {
+                    let nodes = mesh.facets.item_nodes(index)?;
+                    nodes
+                        .iter()
+                        .all(|node| {
+                            (mesh.nodes[*node as usize][axis] - coordinate).abs() <= 1.0e-20
+                        })
+                        .then_some(mesh.boundary_markers[index])
+                })
+                .collect::<BTreeSet<_>>()
+        };
+        let left_markers = markers_on_face(0, bounds_min[0]);
+        let right_markers = markers_on_face(0, bounds_max[0]);
+        assert_eq!(left_markers, BTreeSet::from([101]));
+        assert_eq!(right_markers, BTreeSet::from([102]));
+        assert!(left_markers.is_disjoint(&right_markers));
+        for (axis, coordinate, marker) in [
+            (1, bounds_min[1], 103),
+            (1, bounds_max[1], 104),
+            (2, bounds_min[2], 105),
+            (2, bounds_max[2], 106),
+        ] {
+            assert_eq!(markers_on_face(axis, coordinate), BTreeSet::from([marker]));
+        }
 
         let plan = crate::plan(&problem).unwrap_or_else(|error| {
             panic!(
@@ -5405,7 +5456,18 @@ mod tests {
         assert_eq!(spin.resolved_coupling, TransportCouplingIR::Bidirectional);
         assert_eq!(spin.resolved_discretization, BackendTarget::Fem);
         assert_eq!(spin.resolved_device, ExecutionDevice::Cpu);
-        assert!(spin.fem_cpu_double.is_some());
+        let descriptor = spin
+            .fem_cpu_double
+            .as_ref()
+            .expect("public example FEM M2 descriptor");
+        assert_eq!(descriptor.charge_domain.element_mask, [true; 12]);
+        assert_eq!(descriptor.charge_dirichlet, [(101, 0.0), (102, 1.0e-3)]);
+        let sidewalls = descriptor
+            .charge_insulating_boundaries
+            .iter()
+            .find(|boundary| boundary.id == "sidewalls")
+            .expect("public example sidewall insulation");
+        assert_eq!(sidewalls.boundary_attributes, [103, 104, 105, 106]);
     }
 
     fn cube_closed_current_view(mesh: &MeshIR) -> ResolvedFemConservativeCurrentViewIR {
