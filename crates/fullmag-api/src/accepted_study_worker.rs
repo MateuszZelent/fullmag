@@ -12,7 +12,9 @@ use fullmag_runner::{
     FDM_MULTILAYER_OBSERVATION_SNAPSHOT_FILE,
 };
 use fullmag_runtime_control::{AcceptedWorkerStep, ObservationSourcePayload, StudyOutputPayload};
-use fullmag_session::SessionStore;
+use fullmag_session::{
+    communication_policy::LIVE_REALTIME_FIELD_SAMPLE_COALESCE_WINDOW_MS, SessionStore,
+};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, OpenOptions};
@@ -72,7 +74,7 @@ const WORKER_EXECUTION_COMPLETED_RECEIPT: &str = "worker_execution_completed.v1.
 // header of the last step remains. The runner owns the field cadence: it
 // copies magnetization (device-to-host on GPU) and evaluates the observation
 // catalog only for steps admitted by `ACCEPTED_LIVE_FIELD_EVERY_N` and at most
-// once per `ACCEPTED_LIVE_FIELD_MIN_INTERVAL` of wall time, and republishes
+// once per `LIVE_REALTIME_FIELD_SAMPLE_COALESCE_WINDOW_MS` of wall time, and republishes
 // the last accepted step when its loop ends. The worker writes every payload
 // it receives and at most one scalar-only header per
 // `ACCEPTED_LIVE_SCALAR_MIN_INTERVAL`.
@@ -82,9 +84,6 @@ const ACCEPTED_LIVE_MAGNETIZATION_PREFIX: &str = "live_observation_m.";
 const ACCEPTED_LIVE_MAGNETIZATION_SUFFIX: &str = ".f64le";
 pub(crate) const ACCEPTED_LIVE_FIELD_EVERY_N: u64 = 1;
 const ACCEPTED_LIVE_SCALAR_MIN_INTERVAL: Duration = Duration::from_millis(500);
-/// Half the projector's 500 ms poll period, so each poll sees a payload at
-/// most one interval old while the solver stops paying for unread captures.
-const ACCEPTED_LIVE_FIELD_MIN_INTERVAL: Duration = Duration::from_millis(250);
 pub(crate) const ACCEPTED_OBSERVABLE_CAPTURE_FILE: &str = "accepted_observables_capture.v1.json";
 const ACCEPTED_LIVE_MAX_FIELD_BYTES: u64 = 128 * 1024 * 1024;
 /// Upper bound for one live magnetization payload (2^21 samples = 48 MiB).
@@ -173,6 +172,70 @@ struct AcceptedLiveMagnetizationDomain {
     full_generation_bytes: u64,
 }
 
+fn accepted_live_field_cadence(
+    sample_count: usize,
+    full_generation_bytes: u64,
+    max_magnetization_bytes: u64,
+) -> fullmag_runner::LiveFieldCadence {
+    let min_interval = Duration::from_millis(u64::from(
+        LIVE_REALTIME_FIELD_SAMPLE_COALESCE_WINDOW_MS,
+    ));
+    let magnetization_bytes = u64::try_from(sample_count.saturating_mul(3).saturating_mul(8))
+        .unwrap_or(u64::MAX);
+    let publishable = sample_count > 0
+        && sample_count <= ACCEPTED_LIVE_MAX_MAGNETIZATION_SAMPLES
+        && magnetization_bytes <= max_magnetization_bytes;
+    let every_n = if !publishable {
+        u64::MAX
+    } else if full_generation_bytes <= max_magnetization_bytes {
+        ACCEPTED_LIVE_FIELD_EVERY_N
+    } else {
+        // Retain the coarser stride for large observation generations.
+        // The writer still bounds the requested quantities by byte budget.
+        100
+    };
+    fullmag_runner::LiveFieldCadence::new(every_n, min_interval)
+}
+
+#[cfg(test)]
+mod accepted_live_field_cadence_tests {
+    use super::{accepted_live_field_cadence, ACCEPTED_LIVE_MAX_MAGNETIZATION_SAMPLES};
+    use fullmag_session::communication_policy::LIVE_REALTIME_FIELD_SAMPLE_COALESCE_WINDOW_MS;
+    use std::time::Duration;
+
+    const LIVE_FIELD_INTERVAL: Duration =
+        Duration::from_millis(LIVE_REALTIME_FIELD_SAMPLE_COALESCE_WINDOW_MS as u64);
+
+    #[test]
+    fn publishable_field_cadence_uses_the_shared_wall_interval() {
+        let cadence = accepted_live_field_cadence(4, 128, 128);
+
+        assert_eq!(cadence.every_n(), 1);
+        assert_eq!(cadence.min_interval(), LIVE_FIELD_INTERVAL);
+    }
+
+    #[test]
+    fn oversized_catalog_keeps_its_bounded_step_fallback() {
+        let cadence = accepted_live_field_cadence(4, 129, 128);
+
+        assert_eq!(cadence.every_n(), 100);
+        assert_eq!(cadence.min_interval(), LIVE_FIELD_INTERVAL);
+    }
+
+    #[test]
+    fn unpublishable_magnetization_disables_heavy_captures() {
+        let oversized_sample_count = accepted_live_field_cadence(
+            ACCEPTED_LIVE_MAX_MAGNETIZATION_SAMPLES + 1,
+            u64::MAX,
+            u64::MAX,
+        );
+        let over_byte_budget = accepted_live_field_cadence(4, 128, 95);
+
+        assert_eq!(oversized_sample_count.every_n(), u64::MAX);
+        assert_eq!(over_byte_budget.every_n(), u64::MAX);
+    }
+}
+
 /// Worker-side writer of the bounded live observation sidecar. Every failure
 /// is logged and swallowed: live observation never changes solver control,
 /// the durable Start/Stop protocol, or the final accepted outputs.
@@ -257,34 +320,21 @@ impl AcceptedLiveObservationWriter {
 
     /// Runner cadence for live field payloads. Avoids costly device-to-host
     /// snapshots when the bounded observation writer cannot publish this
-    /// plan's magnetization domain, and caps captures by wall time otherwise.
+    /// plan's magnetization domain, and caps captures by the shared field
+    /// publication interval otherwise.
     /// Scalar headers remain enabled independently of this cadence.
     pub(crate) fn field_cadence(&self) -> fullmag_runner::LiveFieldCadence {
-        fullmag_runner::LiveFieldCadence::new(
-            self.field_sampling_interval(),
-            ACCEPTED_LIVE_FIELD_MIN_INTERVAL,
-        )
-    }
-
-    fn field_sampling_interval(&self) -> u64 {
-        let publishable = self.magnetization_domain.as_ref().is_some_and(|domain| {
-            domain.sample_count > 0
-                && domain.sample_count <= ACCEPTED_LIVE_MAX_MAGNETIZATION_SAMPLES
-                && u64::try_from(domain.sample_count.saturating_mul(3).saturating_mul(8))
-                    .is_ok_and(|bytes| bytes <= self.max_magnetization_bytes)
-        });
-        if publishable {
-            if self.magnetization_domain.as_ref().is_some_and(|domain| {
-                domain.full_generation_bytes <= self.max_magnetization_bytes
-            }) {
-                ACCEPTED_LIVE_FIELD_EVERY_N
-            } else {
-                // Keep the pre-existing bounded m/preview path for domains
-                // whose complete generation exceeds the admitted live budget.
-                100
-            }
-        } else {
-            u64::MAX
+        match self.magnetization_domain.as_ref() {
+            Some(domain) => accepted_live_field_cadence(
+                domain.sample_count,
+                domain.full_generation_bytes,
+                self.max_magnetization_bytes,
+            ),
+            None => accepted_live_field_cadence(
+                0,
+                u64::MAX,
+                self.max_magnetization_bytes,
+            ),
         }
     }
 

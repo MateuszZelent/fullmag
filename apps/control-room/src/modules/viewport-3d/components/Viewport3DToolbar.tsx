@@ -7,10 +7,14 @@ import {
   Compass,
   Download,
   Eye,
+  FlaskConical,
   Gauge,
   Layers,
   Maximize,
+  Orbit,
+  Plane,
   Settings,
+  Sparkles,
 } from "lucide-react";
 
 import { Button } from "@/shared/ui/Button";
@@ -28,14 +32,53 @@ import { Separator } from "@/shared/ui/Separator";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/shared/ui/Tooltip";
 import { useToolbarRovingFocus } from "@/shared/ui/useToolbarRovingFocus";
 import {
+  VIEWPORT_3D_QUALITY_PROFILE_DESCRIPTIONS,
   VIEWPORT_3D_QUALITY_PROFILE_LABELS,
   VIEWPORT_3D_QUALITY_PROFILE_OPTIONS,
+  VIEWPORT_3D_QUALITY_PROFILE_SUMMARIES,
 } from "@/shared/viewport3dQualityLabels";
+
+import { useViewport3DCommandState, viewport3dStore } from "../viewport3dStore";
+import { selectViewport3DRenderMode } from "./Viewport3DVisualizationModeControl";
 
 import { VIEW_DIRECTION_COMMANDS } from "../viewport3dViewDirections";
 import type { Viewport3DVisualProfileId } from "../viewport3dVisualProfile";
 
 const ICON_SIZE = 16;
+
+/* Orbit turns the scene around its target; a free camera flies with the
+   wheel (through objects too) and looks around from where it stands. */
+const CAMERA_MODES = [
+  {
+    description: "Orbit: drag turns the view around the model; the wheel zooms towards it.",
+    icon: Orbit,
+    label: "Orbit",
+    value: "object",
+  },
+  {
+    description: "Free camera: the wheel flies forward and back at a steady speed, also into and through objects; drag looks around from the camera.",
+    icon: Plane,
+    label: "Free camera",
+    value: "camera",
+  },
+] as const;
+
+/* Scientific keeps exact field colors; Presentation adds studio light,
+   soft shadows, ambient occlusion and tone mapping. */
+const RENDER_MODES = [
+  {
+    description: "Scientific: exact field colors for quantitative reading. Lighting effects stay off while field data is shown.",
+    icon: FlaskConical,
+    label: "Scientific",
+    value: "scientific",
+  },
+  {
+    description: "Presentation: studio lighting, soft shadows, ambient occlusion and tone mapping. Shading changes field colors; use Scientific to read values.",
+    icon: Sparkles,
+    label: "Presentation",
+    value: "presentation",
+  },
+] as const;
 
 export interface Viewport3DToolbarProps {
   onCommand: (id: string) => void;
@@ -57,6 +100,7 @@ export function Viewport3DToolbar({
   layersContent,
   fitDisabledReason,
 }: Viewport3DToolbarProps) {
+  const { appearance, widgets } = useViewport3DCommandState();
   const toolbarRef = useRef<HTMLDivElement>(null);
   const toolbarKeyDown = useToolbarRovingFocus(toolbarRef);
   const fitReason = fitDisabledReason?.trim() || null;
@@ -197,6 +241,52 @@ export function Viewport3DToolbar({
 
         <Separator className="fm-viewport-3d-toolbar__separator" orientation="vertical" />
 
+        <div aria-label="Camera mode" className="fm-viewport-3d-toolbar__group fm-viewport-3d-toolbar__mode" role="radiogroup">
+          {CAMERA_MODES.map(({ description, icon: Icon, label, value }) => (
+            <ToolbarTooltip content={description} key={value}>
+              <Button
+                aria-checked={widgets.rotationMode === value}
+                aria-label={label}
+                className="fm-viewport-3d-toolbar__button fm-viewport-3d-toolbar__mode-item"
+                data-camera-mode={value}
+                role="radio"
+                size="icon"
+                type="button"
+                variant="ghost"
+                onClick={() => viewport3dStore.setRotationMode(value)}
+              >
+                <Icon aria-hidden="true" size={ICON_SIZE} />
+                <span className="fm-viewport-3d-toolbar__label">{label}</span>
+              </Button>
+            </ToolbarTooltip>
+          ))}
+        </div>
+
+        <Separator className="fm-viewport-3d-toolbar__separator" orientation="vertical" />
+
+        <div aria-label="Visualization mode" className="fm-viewport-3d-toolbar__group fm-viewport-3d-toolbar__mode" role="radiogroup">
+          {RENDER_MODES.map(({ description, icon: Icon, label, value }) => (
+            <ToolbarTooltip content={description} key={value}>
+              <Button
+                aria-checked={appearance.renderMode === value}
+                aria-label={label}
+                className="fm-viewport-3d-toolbar__button fm-viewport-3d-toolbar__mode-item"
+                data-render-mode={value}
+                role="radio"
+                size="icon"
+                type="button"
+                variant="ghost"
+                onClick={() => selectViewport3DRenderMode(appearance.renderMode, value)}
+              >
+                <Icon aria-hidden="true" size={ICON_SIZE} />
+                <span className="fm-viewport-3d-toolbar__label">{label}</span>
+              </Button>
+            </ToolbarTooltip>
+          ))}
+        </div>
+
+        <Separator className="fm-viewport-3d-toolbar__separator" orientation="vertical" />
+
         <div aria-label="Quality" className="fm-viewport-3d-toolbar__group" role="group">
           <DropdownMenu modal={false}>
             <ToolbarTooltip content={`Quality profile: ${qualityLabel}`}>
@@ -227,8 +317,16 @@ export function Viewport3DToolbar({
                 value={qualityProfileId === "capture" ? "" : qualityProfileId}
               >
                 {VIEWPORT_3D_QUALITY_PROFILE_OPTIONS.map(([id, label]) => (
-                  <DropdownMenuRadioItem key={id} value={id}>
-                    {label}
+                  <DropdownMenuRadioItem
+                    className="fm-viewport-3d-toolbar__quality-item"
+                    key={id}
+                    title={VIEWPORT_3D_QUALITY_PROFILE_DESCRIPTIONS[id]}
+                    value={id}
+                  >
+                    <span className="fm-viewport-3d-toolbar__quality-name">{label}</span>
+                    <span className="fm-viewport-3d-toolbar__quality-summary">
+                      {VIEWPORT_3D_QUALITY_PROFILE_SUMMARIES[id]}
+                    </span>
                   </DropdownMenuRadioItem>
                 ))}
               </DropdownMenuRadioGroup>
