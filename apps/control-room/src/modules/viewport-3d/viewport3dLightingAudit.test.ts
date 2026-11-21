@@ -156,7 +156,7 @@ describe("readViewport3DLightingAudit", () => {
   });
 
   it("rejects a primitive with a zero-opacity Lambert material", () => {
-    expectNonRenderableMaterial(new MeshLambertMaterial({ opacity: 0 }));
+    expectNonRenderableMaterial(new MeshLambertMaterial({ opacity: 0, transparent: true }));
   });
 
   it("requires every material in a primitive mesh to be lit and visible", () => {

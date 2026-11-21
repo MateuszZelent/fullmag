@@ -3,10 +3,8 @@ import { describe, expect, it } from "vitest";
 import type { MaterializedDatasetResource } from "@/kernel/api/apiTypes";
 import { pinnedMaterializedDatasetSelectionRef } from "@/kernel/selection/selectionTypes";
 
-import {
-  materializedDatasetSelectionMatches,
-  materializedDatasetSelectionMatchesProject,
-} from "./MaterializedDatasetInspectorPanel";
+import { materializedDatasetSelectionMatches } from "./MaterializedDatasetInspectorPanel";
+import { materializedDatasetSelectionMatchesProject } from "./MaterializedDatasetInspectorPanel.model";
 
 const ref = pinnedMaterializedDatasetSelectionRef({
   artifactId: "materialized-dataset-artifact",

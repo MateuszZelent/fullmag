@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 
 import { describe, expect, it } from "vitest";
 
-import { inspectorDisplayId, inspectorDomain } from "./InspectorShell";
+import { inspectorDisplayId, inspectorDomain } from "./InspectorShell.model";
 
 const source = readFileSync(
   new URL("./InspectorShell.tsx", import.meta.url),

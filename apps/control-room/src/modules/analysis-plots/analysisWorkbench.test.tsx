@@ -126,10 +126,8 @@ vi.mock("./SpinWaveGammaView", () => ({
   </div>,
 }));
 
-import {
-  AnalysisPlotsView,
-  resultProjectionSelectionFromLegacyPoint,
-} from "./AnalysisPlotsView";
+import { AnalysisPlotsView } from "./AnalysisPlotsView";
+import { resultProjectionSelectionFromLegacyPoint } from "./AnalysisPlotsView.model";
 import { useAnalysisPlotsController } from "./useAnalysisPlotsController";
 
 const props = {

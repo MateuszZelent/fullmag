@@ -3,11 +3,10 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 
 import {
-  followPreparationLogTail,
-  isPreparationLogAtBottom,
   SimulationPreparationLogView,
 } from "./SimulationPreparationLog";
 import type { SimulationPreparationLogEntryView } from "./simulationPreparationModel";
+import { followPreparationLogTail, isPreparationLogAtBottom } from "./simulationPreparationLogScroll";
 
 const entries: SimulationPreparationLogEntryView[] = [
   {

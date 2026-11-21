@@ -2,11 +2,8 @@ import { readFileSync } from "node:fs";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
-import {
-  TableColumnList,
-  nextYAxisIdsForToggle,
-  sanitizeYAxisIdsForUnitLimit,
-} from "./TableColumnList";
+import { TableColumnList } from "./TableColumnList";
+import { nextYAxisIdsForToggle, sanitizeYAxisIdsForUnitLimit } from "./TableColumnList.model";
 
 const columns = [
   { column_id: "step", label: "step", unit: "1" },

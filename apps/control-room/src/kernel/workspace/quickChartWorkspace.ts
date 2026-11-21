@@ -83,24 +83,23 @@ export function parsePinnedQuickChart(value: unknown): PinnedQuickChart | null {
             : null,
         )
       : [];
-  const selectedSeriesIds: string[] = [];
+  const selectedSeriesIds = new Set<string>();
   for (const candidate of selectedSource) {
     if (
       typeof candidate === "string" &&
       candidate.length <= MAX_ID_LENGTH &&
       candidate.startsWith(prefix) &&
-      candidate.length > prefix.length &&
-      !selectedSeriesIds.includes(candidate)
+      candidate.length > prefix.length
     ) {
-      selectedSeriesIds.push(candidate);
-      if (selectedSeriesIds.length >= MAX_SERIES) break;
+      selectedSeriesIds.add(candidate);
+      if (selectedSeriesIds.size >= MAX_SERIES) break;
     }
   }
   return {
     chartId,
     displayUnits: parseDisplayUnits(value.displayUnits),
     range: parseRange(value.range),
-    selectedSeriesIds,
+    selectedSeriesIds: [...selectedSeriesIds],
     tableId,
     xAxisId,
   };

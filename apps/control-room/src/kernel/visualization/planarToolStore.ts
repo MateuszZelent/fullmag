@@ -5,15 +5,6 @@ import { useSyncExternalStore } from "react";
 /** Canvas tool of the 2D view; exactly one is active (spec 15, plan §2.2). */
 export type PlanarToolId = "navigate" | "zoom-box" | "crop" | "inspect" | "profile" | "measure";
 
-export const PLANAR_TOOL_IDS: readonly PlanarToolId[] = [
-  "navigate",
-  "zoom-box",
-  "crop",
-  "inspect",
-  "profile",
-  "measure",
-];
-
 /** Axis-aligned rectangle in frame coordinates (metres). */
 export interface PlanarUvRect {
   u_min_m: number;
@@ -110,14 +101,6 @@ export const planarToolStore = {
     publish(INITIAL_STATE);
   },
 };
-
-export function usePlanarToolState(): PlanarToolState {
-  return useSyncExternalStore(
-    planarToolStore.subscribe,
-    planarToolStore.getSnapshot,
-    planarToolStore.getServerSnapshot,
-  );
-}
 
 const activeToolSnapshot = () => planarToolStore.getSnapshot().activeTool;
 const serverActiveTool = () => INITIAL_STATE.activeTool;

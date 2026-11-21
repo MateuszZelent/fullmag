@@ -8,6 +8,7 @@ import { Eye } from "lucide-react";
 import React, {
   useCallback,
   useEffect,
+  useEffectEvent,
   useMemo,
   useReducer,
   useRef,
@@ -383,9 +384,9 @@ function useObjectVisualizationPanelState(
     if (resolvedTarget?.kind !== "airbox") return null;
     const airboxPartIds =
       lane === "fem"
-        ? manifestRenderableCarriers(manifest.data)
-            .filter(isVisualizationAirboxIdentity)
-            .map((part) => part.id)
+        ? manifestRenderableCarriers(manifest.data).flatMap((part) =>
+            isVisualizationAirboxIdentity(part) ? [part.id] : [],
+          )
         : [];
     return resolveAirboxFieldCarrierIdentity({ airboxPartIds, lane });
   }, [lane, manifest.data, resolvedTarget?.kind]);
@@ -1325,22 +1326,21 @@ export function VisualizationTargetInspectorPanel({
     targetId,
     topologyHash: vectorTopologyHash,
   });
+  const canRetainPanel = visualizationBaselineReady && resolvedPanel !== null;
+  const panelRevision = panel.visualizationResourceRevision;
+  const readResolvedPanel = useEffectEvent(() => resolvedPanel);
   useEffect(() => {
-    if (visualizationBaselineReady && resolvedPanel && targetId && panelIdentityKey) {
+    if (!canRetainPanel || !targetId || !panelIdentityKey) return;
+    const snapshot = readResolvedPanel();
+    if (snapshot) {
       retainLastGoodPanel({
-        panel: resolvedPanel,
+        panel: snapshot,
         identityKey: panelIdentityKey,
-        revision: panel.visualizationResourceRevision,
+        revision: panelRevision,
         targetKey: targetId,
       });
     }
-  }, [
-    panel.visualizationResourceRevision,
-    panelIdentityKey,
-    resolvedPanel,
-    targetId,
-    visualizationBaselineReady,
-  ]);
+  }, [canRetainPanel, panelIdentityKey, panelRevision, targetId]);
   const stablePanel = visualizationBaselineReady
     ? resolvedPanel
     : lastGoodPanel?.identityKey === panelIdentityKey

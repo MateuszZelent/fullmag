@@ -69,8 +69,8 @@ use crate::types::FemPoissonDemagProvenance;
 #[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
 use crate::types::FieldSnapshot;
 use crate::types::{
-    AuxiliaryArtifact, ExecutedRun, FemStageExecutionContext, LivePreviewRequest, LiveStepConsumer,
-    ResolvedFallback, RunError,
+    ExecutedRun, FemStageExecutionContext, LivePreviewRequest, LiveStepConsumer, ResolvedFallback,
+    RunError,
 };
 
 #[cfg(test)]
@@ -882,7 +882,7 @@ fn apply_fem_gpu_plan_constraints(
     plan: &FemPlanIR,
     mut resolution: EngineResolution<FemEngine>,
     forced_gpu: bool,
-    mut fem_crossover_decision: Option<crate::types::FemCrossoverDecision>,
+    fem_crossover_decision: Option<crate::types::FemCrossoverDecision>,
 ) -> Result<FemPlanEngineResolution, RunError> {
     if resolution.engine == FemEngine::NativeGpu {
         if let Some(algorithm) = fem_gpu_cpu_only_relaxation_algorithm(plan) {
@@ -1484,22 +1484,6 @@ fn planned_fem_eigen_dispatch_resolution(
         resolved_precision: precision.to_string(),
         fem_crossover_decision: None,
     })
-}
-
-pub(crate) fn resolve_with_registry(
-    problem: &ProblemIR,
-    registry: Option<&RuntimeRegistry>,
-    explicit_selection: bool,
-    preview_enabled: bool,
-) -> Result<DispatchEngineResolution, RunError> {
-    let plan = fullmag_plan::plan(problem)?;
-    resolve_with_registry_for_plan(
-        problem,
-        &plan,
-        registry,
-        explicit_selection,
-        preview_enabled,
-    )
 }
 
 /// Resolve the runtime against an already materialized execution plan.
@@ -2226,6 +2210,7 @@ pub(crate) fn requested_registry_device_for_fdm(problem: &ProblemIR) -> String {
     crate::solver_runtime::selection::requested_registry_device_for_fdm(problem)
 }
 
+#[cfg(test)]
 pub(crate) fn requested_registry_device_for_fem(problem: &ProblemIR) -> String {
     if strict_fem_gpu_requested(problem) {
         return "gpu".to_string();
@@ -2402,6 +2387,7 @@ fn apply_runtime_gpu_index(problem: &ProblemIR, backend: &str) {
         std::env::set_var("FULLMAG_CUDA_DEVICE_INDEX", index.to_string());
     }
 }
+#[cfg(test)]
 pub(crate) fn execute_fem<'a>(
     engine: FemEngine,
     plan: &FemPlanIR,
@@ -2444,28 +2430,6 @@ pub(crate) fn execute_fem_in_mode<'a>(
     )
 }
 
-pub(crate) fn execute_fem_with_context<'a>(
-    engine: FemEngine,
-    plan: &FemPlanIR,
-    stage_context: &FemStageExecutionContext,
-    until_seconds: f64,
-    outputs: &[OutputIR],
-    live: Option<LiveStepConsumer<'a>>,
-    artifact_writer: Option<ArtifactPipelineSender>,
-) -> Result<ExecutedRun, RunError> {
-    execute_fem_with_context_in_mode(
-        engine,
-        plan,
-        stage_context,
-        until_seconds,
-        outputs,
-        live,
-        artifact_writer,
-        None,
-        ExecutionMode::Strict,
-    )
-}
-
 pub(crate) fn execute_fem_with_context_in_mode<'a>(
     engine: FemEngine,
     plan: &FemPlanIR,
@@ -2481,7 +2445,9 @@ pub(crate) fn execute_fem_with_context_in_mode<'a>(
 ) -> Result<ExecutedRun, RunError> {
     #[cfg(not(any(feature = "fem-gpu", feature = "fem-native")))]
     let _ = physics_execution_context;
-    let mut normalized_plan = normalized_fem_plan_for_runtime(plan)?;
+    let normalized_plan = normalized_fem_plan_for_runtime(plan)?;
+    #[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
+    let mut normalized_plan = normalized_plan;
     reject_frozen_spins_fem_plan_execution(&normalized_plan)?;
     reject_unsupported_steady_transport_component_outputs(&normalized_plan, outputs)?;
     #[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
@@ -2884,6 +2850,7 @@ pub(crate) fn execute_fem_eigen_with_producer_identity_and_parallel_policy(
     Ok(executed)
 }
 
+#[cfg(test)]
 pub(crate) fn execute_fem_eigen_with_progress(
     execution: PlannedFemEigenExecution<'_>,
     plan: &FemEigenPlanIR,
@@ -2899,6 +2866,7 @@ pub(crate) fn execute_fem_eigen_with_progress(
     )
 }
 
+#[cfg(test)]
 pub(crate) fn execute_fem_eigen_with_progress_and_producer_identity(
     execution: PlannedFemEigenExecution<'_>,
     plan: &FemEigenPlanIR,
@@ -2978,43 +2946,6 @@ pub(crate) fn execute_fem_eigen_with_progress_and_producer_identity_and_parallel
     };
     execution.bind_execution_provenance(&mut executed.provenance);
     Ok(executed)
-}
-
-pub(crate) fn execute_fem_eigen_with_progress_and_stage_handoff(
-    execution: PlannedFemEigenExecution<'_>,
-    plan: &FemEigenPlanIR,
-    outputs: &[OutputIR],
-    progress: &mut fem_eigen::FemEigenProgressCallback<'_>,
-    handoff: &fem_eigen::AcceptedFemRelaxStageHandoff,
-) -> Result<ExecutedRun, RunError> {
-    execute_fem_eigen_with_progress_and_stage_handoff_and_producer_identity(
-        execution,
-        plan,
-        outputs,
-        progress,
-        handoff,
-        None,
-    )
-}
-
-pub(crate) fn execute_fem_eigen_with_progress_and_stage_handoff_and_producer_identity(
-    execution: PlannedFemEigenExecution<'_>,
-    plan: &FemEigenPlanIR,
-    outputs: &[OutputIR],
-    progress: &mut fem_eigen::FemEigenProgressCallback<'_>,
-    handoff: &fem_eigen::AcceptedFemRelaxStageHandoff,
-    producer_identity: Option<&fem_eigen::FemRelaxationProducerStageIdentity>,
-) -> Result<ExecutedRun, RunError> {
-    execute_fem_eigen_with_progress_and_stage_handoff_and_producer_identity_and_parallel_policy(
-        execution,
-        plan,
-        outputs,
-        progress,
-        handoff,
-        producer_identity,
-        &fullmag_ir::ParallelExecutionPolicyIR::default(),
-        None,
-    )
 }
 
 pub(crate) fn execute_fem_eigen_with_progress_and_stage_handoff_and_producer_identity_and_parallel_policy(

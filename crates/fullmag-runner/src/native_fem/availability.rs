@@ -251,6 +251,7 @@ impl FrequencyDomainSweepProgress {
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn completed(
         total_frequency_points: u64,
         completed_frequency_points: u64,

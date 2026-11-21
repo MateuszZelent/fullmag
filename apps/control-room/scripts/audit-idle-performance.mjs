@@ -52,6 +52,7 @@ if (!viewportModule.includes("frameloop={VIEWPORT_3D_FRAMELOOP}") && !pausesHidd
 }
 
 for (const filePath of listSourceFiles(viewportRoot)) {
+  if (isNonProductionSource(filePath)) continue;
   const content = readFileSync(filePath, "utf8");
   const relativePath = path.relative(viewportRoot, filePath);
   if (
@@ -191,6 +192,19 @@ function allowsViewport3DDemandFrameOneShots(relativePath, content) {
 
   const requestCount = countOccurrences(content, "requestAnimationFrame(");
   const cancelCount = countOccurrences(content, "cancelAnimationFrame(");
+  const adoptionStart = content.indexOf("function useViewport3DRenderAdoptionFrame(");
+  const adoptionEnd = content.indexOf("\nexport function Viewport3DScene(", adoptionStart);
+  if (adoptionStart < 0 || adoptionEnd < 0) return false;
+  const adoptionFrame = content.slice(adoptionStart, adoptionEnd);
+  const resourceScheduling =
+    'useEffect(() => {\n    markFrameDirty("resources-updated");\n  }, [resourceFrameKey, visualizationRevision]);';
+  const adoptionSubscription =
+    'adoptionRegistry.subscribeActive(() => markFrameDirty("render-adoption"))';
+  const coalescedFrameGuard =
+    'if (\n      !pendingFrameCommitRef.current ||\n      frameIdRef.current !== null ||\n      typeof window === "undefined"\n    )';
+  const staleFrameRejection =
+    'if (frameCommitGeneration !== frameCommitGenerationRef.current) {\n        pendingFrameCommitRef.current = true;\n        invalidate();\n        return;\n      }';
+
   return (
     // Camera projection, staged layers, coalesced adoption/resource ACKs,
     // and pointer inspection each own one bounded, cancellable frame.
@@ -198,14 +212,21 @@ function allowsViewport3DDemandFrameOneShots(relativePath, content) {
     cancelCount === 4 &&
     content.includes("idle-audit-allow-one-shot-raf") &&
     content.includes('tracker.recordDirtyFrame("camera-projection-followup")') &&
-    content.includes('scheduleFrame("resources-updated")') &&
-    content.includes('scheduleFrame("render-adoption")') &&
-    content.includes("tracker.recordDirtyFrame(reason)") &&
-    content.includes("frameIdRef.current !== null ||") &&
-    content.includes("window.requestAnimationFrame(commitLatestFrame)") &&
-    content.includes("window.cancelAnimationFrame(frameIdRef.current)") &&
+    adoptionFrame.includes(resourceScheduling) &&
+    adoptionFrame.includes(adoptionSubscription) &&
+    adoptionFrame.includes("tracker.recordDirtyFrame(reason)") &&
+    adoptionFrame.includes("frameCommitGenerationRef.current += 1") &&
+    adoptionFrame.includes("pendingFrameCommitRef.current = true") &&
+    adoptionFrame.includes(coalescedFrameGuard) &&
+    adoptionFrame.includes("const frameCommitGeneration = frameCommitGenerationRef.current") &&
+    adoptionFrame.includes("const frameState = airboxFrameState") &&
+    adoptionFrame.includes("const revision = visualizationRevision") &&
+    adoptionFrame.includes("pendingFrameCommitRef.current = false") &&
+    adoptionFrame.includes("window.requestAnimationFrame(() => {") &&
+    adoptionFrame.includes(staleFrameRejection) &&
+    adoptionFrame.includes("frameCommitQueue?.enqueue({ frameState, revision })") &&
+    adoptionFrame.includes("window.cancelAnimationFrame(frameIdRef.current)") &&
     content.includes('tracker.recordDirtyFrame("model-layer-stage")') &&
-    content.includes("invalidate();") &&
     content.includes("createFdmInspectClearArbitrator") &&
     content.includes("inspectClearArbitrator.dispose()")
   );

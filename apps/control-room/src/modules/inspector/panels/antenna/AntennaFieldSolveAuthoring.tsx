@@ -29,7 +29,7 @@ export function AntennaFieldSolveAuthoring(props: Props) {
   useRegisterInspectorEditSession("staged", applying, dirty.length > 0,
     Boolean(single?.valid && !single.lockReason && !reason), single?.lockReason,
     () => single && !applying ? single.apply() : false,
-    async () => { if (!applying) for (const session of sessions) await session.reset(); },
+    async () => { if (!applying) await Promise.all(sessions.map((session) => session.reset())); },
     { historyMode: "mutation-owned", applyBlockReason: reason });
   return <>
     <InspectorEditSessionProvider store={targets}><AntennaSolveTargetsEditor {...props} /></InspectorEditSessionProvider>

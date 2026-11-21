@@ -19,7 +19,7 @@ use crate::fdm::gpu::cuda::artifacts::{
 #[cfg(feature = "cuda")]
 use crate::fdm::gpu::cuda::native::residency::FdmGpuReceiptLifecycle;
 #[cfg(feature = "cuda")]
-use crate::fdm::gpu::cuda::native::{NativeFdmBackend, NativeFdmPreviewSnapshot};
+use crate::fdm::gpu::cuda::native::NativeFdmBackend;
 use crate::fem_baseline;
 #[cfg(feature = "fem-gpu")]
 use crate::native_fem::{DeviceInfo as FemDeviceInfo, NativeFemBackend};
@@ -1980,7 +1980,6 @@ struct GpuInteractiveFemPreviewRuntime {
     provenance: ExecutionProvenance,
     total_steps: u64,
     total_time: f64,
-    antenna_field: Vec<[f64; 3]>,
 }
 
 impl InteractiveFdmPreviewRuntime {
@@ -2448,7 +2447,6 @@ impl InteractiveFemPreviewRuntime {
                 .transpose()?;
             let backend = NativeFemBackend::create(&effective_plan)?;
             let device_info = backend.device_info()?;
-            let antenna_field = crate::antenna_fields::compute_antenna_field(&effective_plan)?;
             let mut provenance = fem_gpu_execution_provenance(&effective_plan, &device_info)?;
             if execution_mode == fullmag_ir::ExecutionMode::Strict
                 && provenance.execution_engine == "fem_native_gpu"
@@ -2467,7 +2465,6 @@ impl InteractiveFemPreviewRuntime {
                 provenance,
                 total_steps: 0,
                 total_time: effective_plan.time_stage.start_time_s,
-                antenna_field,
             });
             Ok(Self {
                 inner,
@@ -3666,60 +3663,6 @@ impl CudaInteractiveFdmPreviewRuntime {
 
     fn snapshot_step_stats(&mut self) -> Result<StepStats, RunError> {
         self.backend.snapshot_step_stats(self.original_grid)
-    }
-
-    fn begin_cached_preview_prefetch(
-        &self,
-        display_state: &DisplaySelectionState,
-    ) -> Result<Option<Vec<NativeFdmPreviewSnapshot>>, RunError> {
-        let quantities = active_fdm_preview_quantities(
-            FdmEngine::CudaFdm,
-            &self.plan_signature,
-            &cached_preview_quantities_for(display_state),
-        );
-        if quantities.is_empty() {
-            return Ok(None);
-        }
-        if quantities.iter().any(|quantity| {
-            normalized_quantity_name(quantity)
-                .ok()
-                .is_some_and(|name| name == "H_ant")
-        }) {
-            // H_ant is retained as a runner-side per-cell basis rather than a
-            // native CUDA observable.  Keep this pass synchronous so the
-            // host-materialized field follows the same time as the live step.
-            return Ok(None);
-        }
-        let base_request = display_state.preview_request();
-        let mut snapshots = Vec::with_capacity(quantities.len());
-        let mut seen = HashSet::new();
-        for quantity in quantities
-            .into_iter()
-            .filter_map(|quantity| normalized_quantity_name(quantity).ok())
-        {
-            if !seen.insert(quantity) {
-                continue;
-            }
-            let mut request = base_request.clone();
-            request.quantity = quantity.to_string();
-            snapshots.push(
-                self.backend
-                    .begin_live_preview_snapshot(&request, self.original_grid)?,
-            );
-        }
-        Ok(Some(snapshots))
-    }
-
-    fn resolve_cached_preview_prefetch(
-        &self,
-        snapshots: Vec<NativeFdmPreviewSnapshot>,
-    ) -> Result<Vec<LivePreviewField>, RunError> {
-        snapshots
-            .into_iter()
-            .map(|snapshot| {
-                snapshot.into_live_preview_field(self.plan_signature.active_mask.as_deref())
-            })
-            .collect()
     }
 
     fn execute_with_live_preview_inner(

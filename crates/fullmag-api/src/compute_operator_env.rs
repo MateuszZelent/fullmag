@@ -1,5 +1,5 @@
 pub use fullmag_runtime_control::process_environment::{
-    LOCAL_COMPUTE_OPERATOR_TOKEN_ENV, remove_local_compute_operator_token,
+    remove_local_compute_operator_token, LOCAL_COMPUTE_OPERATOR_TOKEN_ENV,
 };
 
 #[cfg(test)]

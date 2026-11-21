@@ -5,10 +5,8 @@ import type {
   SolutionSetArtifactResource,
 } from "@/kernel/api/apiTypes";
 
-import {
-  isMaterializedDatasetArtifact,
-  materializedDatasetMatchesArtifact,
-} from "./SavedResultsBrowser";
+import { materializedDatasetMatchesArtifact } from "./SavedResultsBrowser";
+import { isMaterializedDatasetArtifact } from "./SavedResultsBrowser.model";
 
 const artifact = {
   artifact_id: "materialized-dataset-a",

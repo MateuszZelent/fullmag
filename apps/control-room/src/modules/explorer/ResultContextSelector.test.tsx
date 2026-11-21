@@ -1,10 +1,8 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
-import {
-  ResultContextSelector,
-  resultContextOptions,
-} from "./ResultContextSelector";
+import { ResultContextSelector } from "./ResultContextSelector";
+import { resultContextOptions } from "./ResultContextSelector.model";
 
 describe("ResultContextSelector", () => {
   it("exposes only resource-backed or explicitly known run identities", () => {

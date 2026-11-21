@@ -1,19 +1,19 @@
-import {
-  decodeCrossSection,
-  decodeCrossSectionQuality,
-  decodeFieldVector,
-  decodeMeshQualityData,
-  decodePeriodicPairs,
-  decodeTableRows,
-  decodeTopology,
-  type DecodedCrossSection,
-  type DecodedCrossSectionQuality,
-  type DecodedFieldVector,
-  type DecodedMeshQualityData,
-  type DecodedPeriodicPairs,
-  type DecodedTableRows,
-  type DecodedTopology,
-} from "./codecs";
+import { decodeCrossSection } from "./codecs/crossSectionCodec";
+import { decodeCrossSectionQuality } from "./codecs/crossSectionQualityCodec";
+import { decodeFieldVector } from "./codecs/fieldVectorCodec";
+import { decodeMeshQualityData } from "./codecs/meshQualityDataCodec";
+import { decodePeriodicPairs } from "./codecs/periodicPairsCodec";
+import { decodeTableRows } from "./codecs/tableRowsCodec";
+import { decodeTopology } from "./codecs/topologyCodec";
+import type {
+  DecodedCrossSection,
+  DecodedCrossSectionQuality,
+  DecodedFieldVector,
+  DecodedMeshQualityData,
+  DecodedPeriodicPairs,
+  DecodedTableRows,
+  DecodedTopology,
+} from "./codecs/types";
 
 export type BinaryDecoderKind =
   | "cross-section"

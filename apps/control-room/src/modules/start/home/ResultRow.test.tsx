@@ -3,7 +3,8 @@ import { describe, expect, it, vi } from "vitest";
 
 import { apiItem } from "../model/__fixtures__/workspaceApi";
 
-import { ResultRow, resultRowDomId, type ResultRowProps } from "./ResultRow";
+import { ResultRow, type ResultRowProps } from "./ResultRow";
+import { resultRowDomId } from "./ResultRow.model";
 
 const item = apiItem({
   id: "r1",

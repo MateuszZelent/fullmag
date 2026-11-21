@@ -39,7 +39,8 @@ import {
   useViewport3DScalarShaderColorUpload,
 } from "../hooks/useViewport3DScalarColorUpload";
 import { resolveViewport3DScalarColorBufferKey, type ScalarColorBuffer } from "../viewport3dFieldMapping";
-import { selectVisibleSurfaceChoice, visibleColorScaleFromBuffer, type Viewport3DVisibleSurfaceChoice, type Viewport3DVisibleColorScale, type Viewport3DVisibleColorScaleReport } from "../model/viewport3DVisibleColorScale";
+import { selectVisibleSurfaceChoice, visibleColorScaleFromBuffer, type Viewport3DVisibleSurfaceChoice, type Viewport3DVisibleColorScale } from "../model/viewport3DVisibleColorScale";
+import type { Viewport3DVisibleColorScaleStore } from "../model/viewport3DVisibleColorScaleStore";
 import type {
   Viewport3DComplexGlyphPass,
   Viewport3DFieldRenderModel,
@@ -55,7 +56,7 @@ import type { Viewport3DColors } from "../viewport3dTypes";
 import { prepareViewport3DFieldPresentationNormals } from "../viewport3dFieldPresentationMaterial";
 import { ComplexGlyphPassLayer } from "./ComplexVectorGlyphLayer";
 import { VectorFieldLayer } from "./VectorFieldLayer";
-import type { VectorFieldLayerVectorStyle } from "./VectorFieldLayer";
+import type { VectorFieldLayerVectorStyle } from "./VectorFieldLayer.model";
 import { eventIntersectsRegionOverlay } from "./regionOverlayPicking";
 import {
   resolveViewport3DTargetSurfaceLayerInput,
@@ -81,7 +82,7 @@ const FALLBACK_TOPOLOGY_GEOMETRY_UPLOAD_FRAME_BUDGET_MS = 3;
 export function FallbackTopologyMeshLayer({
   colors,
   colorScopeKey,
-  onVisibleColorScale,
+  visibleColorScaleStore,
   sessionIdentity,
   vectorColorMode,
   fallbackSettings,
@@ -97,7 +98,7 @@ export function FallbackTopologyMeshLayer({
 }: {
   colors: Viewport3DColors;
   colorScopeKey?: string | null;
-  onVisibleColorScale?: (report: Viewport3DVisibleColorScaleReport) => void;
+  visibleColorScaleStore?: Viewport3DVisibleColorScaleStore;
   sessionIdentity?: SessionResourceIdentity | null;
   vectorColorMode: string;
   fallbackSettings: VisualizationTargetSettings;
@@ -353,13 +354,13 @@ export function FallbackTopologyMeshLayer({
     : null;
   const surfaceScale = useMemo(() => visibleColorScaleFromBuffer(visibleSurfaceBuffer), [visibleSurfaceBuffer]);
   useEffect(() => {
-    if (colorScopeKey) onVisibleColorScale?.({ scopeKey: colorScopeKey, ownerId: surfaceOwnerId,
+    if (colorScopeKey) visibleColorScaleStore?.report({ scopeKey: colorScopeKey, ownerId: surfaceOwnerId,
       pass: "surface", scale: surfaceScale });
-  }, [colorScopeKey, onVisibleColorScale, surfaceOwnerId, surfaceScale]);
+  }, [colorScopeKey, surfaceOwnerId, surfaceScale, visibleColorScaleStore]);
   useEffect(() => () => {
-    if (colorScopeKey) onVisibleColorScale?.({ scopeKey: colorScopeKey, ownerId: surfaceOwnerId,
+    if (colorScopeKey) visibleColorScaleStore?.report({ scopeKey: colorScopeKey, ownerId: surfaceOwnerId,
       pass: "surface", scale: null, removed: true });
-  }, [colorScopeKey, onVisibleColorScale, surfaceOwnerId]);
+  }, [colorScopeKey, surfaceOwnerId, visibleColorScaleStore]);
   const vectorColorBuffer = fieldModel?.scalarColorsByMode.get(vectorColorModeFromSettings(renderSettings, vectorColorMode));
   const vectorColorScale = useMemo(() => visibleColorScaleFromBuffer(vectorColorBuffer), [vectorColorBuffer]);
 
@@ -395,7 +396,7 @@ export function FallbackTopologyMeshLayer({
     <FallbackTopologyMeshPrimitives
       colors={colors}
       colorScopeKey={colorScopeKey}
-      onVisibleColorScale={onVisibleColorScale}
+      visibleColorScaleStore={visibleColorScaleStore}
       vectorColorScale={vectorColorScale}
       edgeGeometry={edgeGeometry}
       surfaceEdgeIndices={topologyModel?.fallbackSurfaceEdgeIndices}
@@ -424,7 +425,7 @@ export function FallbackTopologyMeshLayer({
 function FallbackTopologyMeshPrimitives({
   colors,
   colorScopeKey,
-  onVisibleColorScale,
+  visibleColorScaleStore,
   vectorColorScale,
   edgeGeometry,
   surfaceEdgeIndices,
@@ -449,7 +450,7 @@ function FallbackTopologyMeshPrimitives({
 }: {
   colors: Viewport3DColors;
   colorScopeKey?: string | null;
-  onVisibleColorScale?: (report: Viewport3DVisibleColorScaleReport) => void;
+  visibleColorScaleStore?: Viewport3DVisibleColorScaleStore;
   vectorColorScale: Viewport3DVisibleColorScale | null;
   edgeGeometry: BufferGeometry | null;
   surfaceEdgeIndices?: Uint32Array | null;
@@ -559,7 +560,7 @@ function FallbackTopologyMeshPrimitives({
           glyphColorsOverride={vectorGlyphColors}
           colorScale={vectorColorScale}
           colorScopeKey={colorScopeKey}
-          onVisibleColorScale={onVisibleColorScale}
+          visibleColorScaleStore={visibleColorScaleStore}
           colors={colors}
           colorMode={vectorColorModeFromSettings(
             renderSettings,

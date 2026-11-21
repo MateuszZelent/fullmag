@@ -3,6 +3,7 @@
 import { useSyncExternalStore } from "react";
 
 import { Button } from "@/shared/ui/Button";
+import { keyedOccurrences } from "@/shared/utils/keyedOccurrences";
 
 import { useKernel } from "../KernelContext";
 import type { ScriptImportNotice } from "../persistence/ProjectDocumentController";
@@ -41,8 +42,8 @@ export function ScriptImportBanner() {
         <details className="w-full">
           <summary>Details ({view.fidelity.notes.length})</summary>
           <ul>
-            {view.fidelity.notes.map((note, index) => (
-              <li key={index}>{note}</li>
+            {keyedOccurrences(view.fidelity.notes, (note) => note).map(({ item: note, key }) => (
+              <li key={key}>{note}</li>
             ))}
           </ul>
         </details>

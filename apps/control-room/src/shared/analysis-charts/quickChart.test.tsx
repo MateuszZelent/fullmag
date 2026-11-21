@@ -8,12 +8,8 @@ import {
   quickChartColumnIdsForQuery,
 } from "./quickChart";
 import { chartRenderModelToEChartsOption } from "./chartRenderer";
-import {
-  QuickChartView,
-  quickChartKeyboardPoints,
-  quickChartSelectionFromEvent,
-  quickChartSelectionFromKeyboard,
-} from "./QuickChartView";
+import { QuickChartView } from "./QuickChartView";
+import { quickChartKeyboardPoints, quickChartSelectionFromEvent, quickChartSelectionFromKeyboard } from "./QuickChartView.model";
 
 const seriesId = "data.table:default:step:mx";
 const descriptor = {

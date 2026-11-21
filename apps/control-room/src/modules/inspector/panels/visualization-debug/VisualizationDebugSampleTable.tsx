@@ -1,6 +1,7 @@
 import { tensorProjectionComponentLabels } from "@/kernel/api/tensorFieldProjection";
 import { useQuantityCatalogResource } from "@/kernel/resources/studyRuntimeResources";
 import type { VisualizationDebugPanelModel } from "./VisualizationDebugPanelModel";
+import { formatScientific } from "./VisualizationDebugSampleTable.model";
 
 const MAX_SAMPLE_ROWS = 12;
 const MAX_SAMPLE_COMPONENTS = 9;
@@ -114,14 +115,6 @@ export function VisualizationDebugSampleTable({
       </p>
     </div>
   );
-}
-
-export function formatScientific(value: number | null | undefined): string {
-  if (value == null || !Number.isFinite(value)) return "—";
-  if (value === 0) return "0";
-  const magnitude = Math.abs(value);
-  if (magnitude >= 1e4 || magnitude < 1e-3) return value.toExponential(4);
-  return value.toLocaleString("en-US", { maximumSignificantDigits: 6 });
 }
 
 function formatInteger(value: number): string {

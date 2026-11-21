@@ -1790,7 +1790,6 @@ impl EigenKProcessPool {
                 }
                 if responses.len() == 1 && telemetry_valid {
                     if let Err(error) = admission.completed_probe() {
-                        telemetry_open = false;
                         report.telemetry_reason.get_or_insert(error.clone());
                         journal.finish(&report, "failed");
                         return Err(error);

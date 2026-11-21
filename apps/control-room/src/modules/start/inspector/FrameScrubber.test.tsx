@@ -3,7 +3,8 @@ import { describe, expect, it, vi } from "vitest";
 
 import type { FramesSummary } from "../model/framesModel";
 
-import { FRAME_INDEX_NOTE, FrameScrubber, pageProblem, stepPosition } from "./FrameScrubber";
+import { FRAME_INDEX_NOTE, FrameScrubber } from "./FrameScrubber";
+import { pageProblem, stepPosition } from "./FrameScrubber.model";
 
 const summary = (over: Partial<FramesSummary> = {}): FramesSummary => ({
   count: 10,

@@ -83,6 +83,7 @@ export function SolvedAntennaDriveEditor({ driveId, scene, sceneScopeKey, status
   const revision = scene?.revision;
   const runOptions = antennaRunStageOptions(scene);
   const runStageIds = runOptions.map(option => option.id);
+  const runStageIdSet = new Set(runStageIds);
   const bindingOptions = antennaDriveBindingOptions(scene, drive);
   const conflict = conflictState?.id === driveId ? conflictState : null;
   const validRevision = typeof revision === "number" && Number.isSafeInteger(revision) && revision >= 0;
@@ -109,7 +110,7 @@ export function SolvedAntennaDriveEditor({ driveId, scene, sceneScopeKey, status
     if (drive && draft) {
       validatedDrive = buildSolvedDrive(drive, draft);
       validateAntennaDriveBinding(scene, drive, validatedDrive);
-      if (validatedDrive.activation.kind === "stage_ids" && validatedDrive.activation.stage_ids.some(id => !runStageIds.includes(id))) {
+      if (validatedDrive.activation.kind === "stage_ids" && validatedDrive.activation.stage_ids.some(id => !runStageIdSet.has(id))) {
         throw new Error("Selected activation stage is not a Run stage in the current study.");
       }
     }
@@ -193,9 +194,8 @@ export function SolvedAntennaDriveEditor({ driveId, scene, sceneScopeKey, status
     try {
       const updated = buildSolvedDrive(drive, draft);
       validateAntennaDriveBinding(scene, drive, updated);
-      const availableRunIds = new Set(runStageIds);
       if (updated.activation.kind === "stage_ids" &&
-        updated.activation.stage_ids.some((id) => !availableRunIds.has(id))) {
+        updated.activation.stage_ids.some((id) => !runStageIdSet.has(id))) {
         throw new Error("Selected activation stage is not a Run stage in the current study.");
       }
       const drives = scene!.solved_antenna_drives!.map((item) => item.id === driveId ? updated : item);
@@ -231,7 +231,7 @@ export function SolvedAntennaDriveEditor({ driveId, scene, sceneScopeKey, status
       return false;
     } finally {
       if (inflight.current === operation) inflight.current = null;
-      if (owner.current === ownerToken && commands.getSessionScopeKey() === scope) setPending(false);
+      setPending(inflight.current !== null);
     }
   }
 
@@ -284,7 +284,7 @@ export function SolvedAntennaDriveEditor({ driveId, scene, sceneScopeKey, status
           const selected = [...selectedStageIds];
           update({ stageIds: (event.currentTarget.checked ? [...new Set([...selected, id])] : selected.filter(value => value !== id)).join(", ") });
         }} />)}
-        {[...selectedStageIds].filter(id => !runStageIds.includes(id)).map(id => <FormField key={id} label="Unavailable Run" hint={`Stored stage ID: ${id}. Remove explicitly or restore this Run in the study.`} type="checkbox" checked onChange={() => update({ stageIds: [...selectedStageIds].filter(value => value !== id).join(", ") })} />)}
+        {[...selectedStageIds].map(id => runStageIdSet.has(id) ? null : <FormField key={id} label="Unavailable Run" hint={`Stored stage ID: ${id}. Remove explicitly or restore this Run in the study.`} type="checkbox" checked onChange={() => update({ stageIds: [...selectedStageIds].filter(value => value !== id).join(", ") })} />)}
         {!runOptions.length ? <p className="fm-inspector-hint">No enabled Run stages are available in this study.</p> : null}
       </> : null}
       {validationError ? <FeedbackBanner kind="warning" message={validationError} /> : null}

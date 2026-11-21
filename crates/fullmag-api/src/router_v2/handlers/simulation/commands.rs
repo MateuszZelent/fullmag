@@ -2447,26 +2447,6 @@ pub(crate) async fn enqueue_session_command_impl_with_context(
     Ok(response)
 }
 
-/// Publish an accepted v2 command into the live command journal without
-/// placing it on the legacy in-memory scratch queue.  The accepted run is
-/// already durable and scheduler-owned; the journal record is only the
-/// sessionless workspace read model for command status and realtime updates.
-async fn publish_accepted_session_command_impl_with_context(
-    state: Arc<AppState>,
-    headers: &HeaderMap,
-    command: SessionCommand,
-    context: &crate::types::CurrentLiveRequestContext,
-) -> Result<CommandResponse, ApiError> {
-    let _transition = state.current_live_session_transition.lock().await;
-    publish_accepted_session_command_impl_with_context_under_transition(
-        Arc::clone(&state),
-        headers,
-        command,
-        context,
-    )
-    .await
-}
-
 async fn publish_accepted_session_command_impl_with_context_under_transition(
     state: Arc<AppState>,
     headers: &HeaderMap,
@@ -2518,7 +2498,7 @@ async fn publish_accepted_session_command_impl_with_context_under_transition_val
             .load(std::sync::atomic::Ordering::Acquire),
     )?;
 
-    let mut responses = state.current_command_responses.lock().await;
+    let responses = state.current_command_responses.lock().await;
     let idempotency_key = command_request_key(headers);
     if let Some(key) = idempotency_key.as_ref() {
         if let Some((_, response)) = responses.iter().find(|(cached, _)| cached == key) {

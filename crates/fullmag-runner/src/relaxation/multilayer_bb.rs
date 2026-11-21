@@ -34,7 +34,6 @@ pub(crate) struct MultilayerBbOutcome {
     pub(crate) final_observables: StateObservables,
     pub(crate) final_stats: StepStats,
     pub(crate) accepted_steps: u64,
-    pub(crate) converged: bool,
     pub(crate) torque_confirmed: bool,
     pub(crate) final_energy_plateau_range_j: Option<EnergyPlateauRangeJ>,
     pub(crate) cancelled: bool,
@@ -212,7 +211,6 @@ pub(crate) fn execute_multilayer_bb(
             stats.max_torque_Apm,
             accepted_steps,
         ) {
-            converged = true;
             break;
         }
         if accepted_steps >= control.stop.max_steps.unwrap_or(u64::MAX) {
@@ -433,7 +431,6 @@ pub(crate) fn execute_multilayer_bb(
         final_observables: current,
         final_stats: stats,
         accepted_steps,
-        converged,
         torque_confirmed: confirmation.confirmed(),
         final_energy_plateau_range_j: plateau.range(),
         cancelled,

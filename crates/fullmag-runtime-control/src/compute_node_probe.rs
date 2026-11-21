@@ -21,7 +21,7 @@ use fullmag_session::{
     compute_node_snapshot::{
         ComputeNodeSample, ComputeNodeSnapshot, ComputeNodeSnapshotData, CpuLogicalProcessor,
         CpuOsConstraints, CpuQuota, CpuSnapshot, CpuTopology, EnforcementSnapshot,
-        EnforcementStatus, GpuDeviceSnapshot, GpuPartition, GpuTopology, MemorySnapshot,
+        EnforcementStatus, GpuDeviceSnapshot, GpuPartition, MemorySnapshot,
         Observation, Reported,
         SampleSource, UnavailableReason,
     },
@@ -2728,7 +2728,7 @@ mod tests {
                             value: GpuPartition::FullDevice,
                         },
                         topology: Reported::Available {
-                            value: GpuTopology {
+                            value: fullmag_session::compute_node_snapshot::GpuTopology {
                                 numa_node_id: Some(0),
                                 pci_root_id: Some("0000:00:00.0".into()),
                             },
