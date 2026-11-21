@@ -83,6 +83,29 @@ jobs:
           cargo test --locked -p fullmag-plan --lib spin_transport::tests
           cargo test --locked -p fullmag-runner --lib fdm::cpu::spin_transport::tests
 
+      - name: Verify buffered stage tables and asynchronous field output
+        shell: bash
+        run: |
+          FULLMAG_KEEP_ZARR_TEST_OUTPUT=1 cargo test --locked -p fullmag-runner --lib autosave_zarr::tests -- --nocapture | tee "$RUNNER_TEMP/buffered-zarr-tests.log"
+          python - "$RUNNER_TEMP/buffered-zarr-tests.log" <<'PYTHON'
+          from pathlib import Path
+          import sys
+          import numpy as np
+          import zarr
+
+          marker = "ZARR_TEST_TABLE_PATH="
+          log = Path(sys.argv[1]).read_text()
+          (path,) = [Path(line.removeprefix(marker)) for line in log.splitlines() if line.startswith(marker)]
+          table = zarr.open_array(str(path), mode="r")
+          t = np.arange(20_000, dtype=np.float64)
+          assert table.shape == table.chunks == (20_000, 5)
+          np.testing.assert_array_equal(table[:], np.column_stack((t, t + 0.125, -t, t % 97, t * 1e-3)))
+          assert sorted(p.name for p in path.iterdir()) == [".zarray", ".zattrs", "0.0"]
+          print(f"Verified {table.size} f64 values in one {(path / '0.0').stat().st_size}-byte Zarr chunk")
+          PYTHON
+          cargo test --locked -p fullmag-runner --lib artifact_pipeline::tests
+          cargo test --locked -p fullmag-runner --lib frames_index::tests
+
       - name: Verify interleaved Zarr sample indexes after writer drain
         shell: bash
         run: |
