@@ -520,11 +520,12 @@ function captureRenderedVectors(
   const colorMode = settings.vectorColorMode ?? input.vectorColorMode ?? "orientation";
   const style = resolveVectorFieldLayerStyle({
     colorMode,
-    fallbackColor: input.vectorFallbackColor ?? "#ffffff",
+    fallbackColor: input.vectorFallbackColor ?? "",
     opacity: (settings.vectorAlphaPercent ?? 100) / 100 * (input.vectorOpacityScale ?? 1),
     style: { monoColor: settings.vectorMonoColor, thickness: settings.vectorThickness },
   });
-  const mono = new Color(style.materialColor).convertLinearToSRGB();
+  const mono = new Color();
+  if (style.materialColor) mono.setStyle(style.materialColor).convertLinearToSRGB();
   return {
     segmentsM,
     colors: colors ?? buildVectorGlyphColors(segments, colorMode),
