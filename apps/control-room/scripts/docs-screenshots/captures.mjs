@@ -229,8 +229,7 @@ export function buildAllCaptureJobs(outputDir) {
           await waitForCanvasRendered(s.page, "control-room-light-latte-overview");
           const appliedTheme = await s.page.evaluate(() => document.documentElement.dataset.theme);
           if (appliedTheme !== "light") {
-            await clickFirstMatching(s.page, [(p) => p.locator('[aria-label^="Color theme:"]').first()]);
-            await clickFirstMatching(s.page, [(p) => p.getByRole("menuitemradio", { name: "Light" }).first()]);
+            await clickFirstMatching(s.page, [(p) => p.locator('[aria-label^="Color theme:"]').getByRole("radio", { name: "Light", exact: true }).first()]);
             await waitForUiSettled(s.page, 350);
           }
           await assertNoUiErrors(s.page, "control-room-light-latte-overview");

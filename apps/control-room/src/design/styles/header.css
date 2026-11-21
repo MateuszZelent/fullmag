@@ -860,3 +860,36 @@
   height: 7px;
 }
 
+
+/* Theme: Light / System / Dark segmented control (mockup header). */
+.fm-theme-switcher {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 2px;
+  border: 1px solid var(--fm-border-subtle);
+  border-radius: var(--fm-radius-pill);
+  background: var(--fm-field-bg);
+  -webkit-app-region: no-drag;
+}
+
+.fm-theme-switcher__option {
+  width: 26px;
+  min-width: 26px;
+  height: 24px;
+  border: 0;
+  border-radius: var(--fm-radius-pill);
+  background: transparent;
+  color: var(--fm-text-muted);
+  box-shadow: none;
+}
+
+.fm-theme-switcher__option:hover {
+  color: var(--fm-text-primary);
+}
+
+.fm-theme-switcher__option[aria-checked="true"] {
+  background: var(--fm-raised-bg);
+  box-shadow: var(--fm-elevation-sm);
+  color: var(--fm-text-primary);
+}

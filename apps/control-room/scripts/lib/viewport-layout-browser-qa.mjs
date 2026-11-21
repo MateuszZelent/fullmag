@@ -806,12 +806,11 @@ async function readAndAssertHudDomLayout(page) {
 async function switchThemeThroughUi(page, targetTheme, timeout) {
   const currentPreference = await page.locator("html").getAttribute("data-theme-preference");
   if (currentPreference === targetTheme) return;
-  const toggle = page.getByRole("button", { name: /^Color theme:/ });
-  await toggle.waitFor({ state: "visible", timeout });
-  if (await toggle.count() !== 1) throw new Error("Expected one visible color theme menu");
-  await toggle.click({ timeout });
+  const group = page.getByRole("radiogroup", { name: /^Color theme:/ });
+  await group.waitFor({ state: "visible", timeout });
+  if (await group.count() !== 1) throw new Error("Expected one visible color theme control");
   const label = { dark: "Dark", light: "Light", system: "System" }[targetTheme];
-  await page.getByRole("menuitemradio", { name: label, exact: true }).click({ timeout });
+  await group.getByRole("radio", { name: label, exact: true }).click({ timeout });
   await page.waitForFunction(
     (theme) => document.documentElement.dataset.themePreference === theme &&
       document.documentElement.dataset.theme === (theme === "system"
