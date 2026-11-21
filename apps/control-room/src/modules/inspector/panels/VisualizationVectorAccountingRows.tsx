@@ -3,6 +3,7 @@
 import type { VisualizationTargetKind } from "@/kernel/visualization/ObjectVisualizationController";
 import { useVisualizationDebugSnapshots } from "@/kernel/visualization/useVisualizationDebug";
 import type { VisualizationVectorCapacityDescriptor } from "@/kernel/visualization/visualizationVectorCapacity";
+import { useViewport3DRenderedVectorAdoption } from "@/modules/viewport-3d/public";
 
 import { FieldRow } from "../primitives/FieldRow";
 import { formatCount } from "./MeshResourceView";
@@ -42,6 +43,9 @@ export function VisualizationVectorAccountingRows(
 ) {
   // Reading already-published snapshots is passive. The explicit Debug panel
   // owns demand leases and value-statistics scans.
+  const renderedAdoption = useViewport3DRenderedVectorAdoption(
+    props.ownedCounts ? null : props.targetId ?? null,
+  );
   const snapshots = useVisualizationDebugSnapshots(
     props.targetId ?? props.targetKind,
   );
@@ -74,7 +78,9 @@ export function VisualizationVectorAccountingRows(
   });
   const accounting: VisualizationVectorAccounting = props.ownedCounts ? { ...reported,
     decodedSampleCount: props.ownedCounts.decodedSampleCount, adoptedGlyphCount: props.ownedCounts.adoptedGlyphCount,
-    status: props.ownedCounts.adoptedGlyphCount === null ? "pending" : "ready" } : reported;
+    status: props.ownedCounts.adoptedGlyphCount === null ? "pending" : "ready" } : renderedAdoption && renderedAdoption.targetId === props.targetId
+      ? { ...reported, adoptedGlyphCount: renderedAdoption.itemCount }
+      : reported;
   return (
     <VectorAccountingRows
       ownedCounts={props.ownedCounts}
@@ -137,7 +143,10 @@ function VectorAccountingRows({
         label="Adopted arrows"
         value={formatAccountingValue(accounting.adoptedGlyphCount, status)}
       />
-      {targetKind !== "airbox" && status === "unavailable" ? (
+      {targetKind !== "airbox" &&
+      status === "unavailable" &&
+      accounting.decodedSampleCount === null &&
+      accounting.adoptedGlyphCount === null ? (
         <span className="sr-only">Vector accounting is not reported for this target.</span>
       ) : null}
     </>

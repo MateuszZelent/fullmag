@@ -29,6 +29,7 @@ import {
 } from "./viewport3dVisualProfile";
 import { sameTuple3 } from "./viewport3dMath";
 import type { Viewport3DFieldScopeKind } from "./model/viewport3DFieldDataPlan";
+import type { Viewport3DTargetVectorAdoptionPresentation } from "./model/viewport3DVectorAdoptionPresentation";
 
 export interface Viewport3DCameraState {
   position: [number, number, number];
@@ -245,6 +246,11 @@ let ensureViewport3DPreferencesHydrated = (): void => {};
 class Viewport3DStore {
   private snapshot: Viewport3DCommandState = DEFAULT_VIEWPORT_3D_STATE;
   private readonly listeners = new Set<Viewport3DListener>();
+  private renderedVectorAdoptionOwner: string | null = null;
+  private renderedVectorAdoptions: ReadonlyMap<
+    string,
+    Viewport3DTargetVectorAdoptionPresentation
+  > = new Map();
   private persistedPreferenceRevision = 0;
   private postProcessingDataProtected = false;
   private postProcessingAvailable = true;
@@ -333,6 +339,8 @@ class Viewport3DStore {
 
   resetForTest(): void {
     this.snapshot = DEFAULT_VIEWPORT_3D_STATE;
+    this.renderedVectorAdoptionOwner = null;
+    this.renderedVectorAdoptions = new Map();
     this.persistedPreferenceRevision = 0;
     this.postProcessingDataProtected = false;
     this.postProcessingAvailable = true;
@@ -530,6 +538,48 @@ class Viewport3DStore {
   getArtifactInspectionPresentation(key: string | null): Viewport3DArtifactInspectionPresentation | null {
     const value = this.snapshot.artifactInspectionPresentation;
     return key && value?.key === key ? value : null;
+  }
+
+  getRenderedVectorAdoption(
+    targetId: string | null,
+  ): Viewport3DTargetVectorAdoptionPresentation | null {
+    return targetId ? this.renderedVectorAdoptions.get(targetId) ?? null : null;
+  }
+
+  setRenderedVectorAdoptions(
+    ownerId: string,
+    adoptions: ReadonlyMap<
+      string,
+      Viewport3DTargetVectorAdoptionPresentation
+    >,
+  ): void {
+    const next = new Map(
+      [...adoptions].filter(([targetId, adoption]) =>
+        targetId === adoption.targetId &&
+        Number.isSafeInteger(adoption.itemCount) &&
+        adoption.itemCount >= 0,
+      ),
+    );
+    if (
+      this.renderedVectorAdoptionOwner === ownerId &&
+      sameRenderedVectorAdoptions(this.renderedVectorAdoptions, next)
+    ) {
+      return;
+    }
+    this.renderedVectorAdoptionOwner = ownerId;
+    this.renderedVectorAdoptions = next;
+    this.notify();
+  }
+
+  clearRenderedVectorAdoptions(ownerId: string): void {
+    if (this.renderedVectorAdoptionOwner !== ownerId) return;
+    if (this.renderedVectorAdoptions.size === 0) {
+      this.renderedVectorAdoptionOwner = null;
+      return;
+    }
+    this.renderedVectorAdoptionOwner = null;
+    this.renderedVectorAdoptions = new Map();
+    this.notify();
   }
 
   setArtifactInspectionPresentation(value: Viewport3DArtifactInspectionPresentation): void {
@@ -1003,6 +1053,30 @@ class Viewport3DStore {
   }
 }
 
+function sameRenderedVectorAdoptions(
+  left: ReadonlyMap<string, Viewport3DTargetVectorAdoptionPresentation>,
+  right: ReadonlyMap<string, Viewport3DTargetVectorAdoptionPresentation>,
+): boolean {
+  if (left.size !== right.size) return false;
+  for (const [targetId, previous] of left) {
+    const next = right.get(targetId);
+    if (
+      !next ||
+      previous.carrierId !== next.carrierId ||
+      previous.fieldBufferId !== next.fieldBufferId ||
+      previous.itemCount !== next.itemCount ||
+      previous.requestScopeEpoch !== next.requestScopeEpoch ||
+      previous.resourceKey !== next.resourceKey ||
+      previous.sessionEpoch !== next.sessionEpoch ||
+      previous.sessionId !== next.sessionId ||
+      previous.vectorBuildKey !== next.vectorBuildKey
+    ) {
+      return false;
+    }
+  }
+  return true;
+}
+
 export const viewport3dStore = new Viewport3DStore();
 
 /** One route for every mode switch (settings, Inspector and the viewport toolbar). */
@@ -1326,4 +1400,18 @@ function normalizeFdmTopographyAmplitudeCells(value: number): number {
 export function useViewport3DArtifactInspectionPresentation(key: string | null): Viewport3DArtifactInspectionPresentation | null {
   const getSnapshot = useCallback(() => viewport3dStore.getArtifactInspectionPresentation(key), [key]);
   return useSyncExternalStore(listener => viewport3dStore.subscribe(listener), getSnapshot, () => null);
+}
+
+export function useViewport3DRenderedVectorAdoption(
+  targetId: string | null,
+): Viewport3DTargetVectorAdoptionPresentation | null {
+  const getSnapshot = useCallback(
+    () => viewport3dStore.getRenderedVectorAdoption(targetId),
+    [targetId],
+  );
+  return useSyncExternalStore(
+    (listener) => viewport3dStore.subscribe(listener),
+    getSnapshot,
+    () => null,
+  );
 }

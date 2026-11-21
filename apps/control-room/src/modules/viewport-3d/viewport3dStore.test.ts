@@ -105,6 +105,36 @@ describe("viewport3dStore", () => {
     ]);
   });
 
+  it("publishes only the current viewport owner's target vector adoption counts", () => {
+    viewport3dStore.resetForTest();
+    const adoption = {
+      carrierId: "object:film",
+      fieldBufferId: "field-buffer:current",
+      itemCount: 2_130,
+      requestScopeEpoch: "scope-4",
+      resourceKey: "field-resource:current",
+      sessionEpoch: "session-2",
+      sessionId: "session-1",
+      targetId: "object:film",
+      vectorBuildKey: "fdm-vector:current-generation",
+    };
+
+    viewport3dStore.setRenderedVectorAdoptions(
+      "viewport-primary",
+      new Map([[adoption.targetId, adoption]]),
+    );
+
+    expect(viewport3dStore.getRenderedVectorAdoption("object:film")).toEqual(
+      adoption,
+    );
+    viewport3dStore.clearRenderedVectorAdoptions("old-viewport-owner");
+    expect(viewport3dStore.getRenderedVectorAdoption("object:film")).toEqual(
+      adoption,
+    );
+    viewport3dStore.clearRenderedVectorAdoptions("viewport-primary");
+    expect(viewport3dStore.getRenderedVectorAdoption("object:film")).toBeNull();
+  });
+
   it("commits one notification only when colorbar legends actually change", () => {
     viewport3dStore.resetForTest();
     const listener = vi.fn();
