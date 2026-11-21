@@ -6157,6 +6157,13 @@
           "explicit_topology": {
             "type": "boolean"
           },
+          "field_state_import_formats": {
+            "description": "Supported file formats for field-state imports (`POST /v2/sessions/current/persistence/field-states/imports`).",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
           "gpu_telemetry": {
             "type": "boolean"
           },
@@ -13060,6 +13067,18 @@
           "artifact_ref": {
             "type": "string"
           },
+          "format": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "interpolation": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "mode": {
             "type": [
               "string",
@@ -13173,6 +13192,17 @@
           },
           "quantity_id": {
             "type": "string"
+          },
+          "source_grid_shape": {
+            "items": {
+              "format": "int64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
           },
           "target": {
             "$ref": "#/components/schemas/FieldStateTargetRef"
@@ -28388,6 +28418,15 @@
       "OutputsSummary": {
         "description": "Outputs of the latest recorded run.",
         "properties": {
+          "fields": {
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
           "frames": {
             "format": "int64",
             "minimum": 0,
@@ -32718,6 +32757,15 @@
           "error": {
             "type": [
               "string",
+              "null"
+            ]
+          },
+          "fields": {
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
               "null"
             ]
           },
@@ -39963,6 +40011,16 @@
       },
       "SceneTextureMapping": {
         "properties": {
+          "background_vector": {
+            "items": {
+              "format": "double",
+              "type": "number"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
           "clamp_mode": {
             "type": "string"
           },
@@ -39971,6 +40029,16 @@
           },
           "space": {
             "type": "string"
+          },
+          "tile_period": {
+            "items": {
+              "format": "double",
+              "type": "number"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
           }
         },
         "type": "object"
@@ -39994,6 +40062,9 @@
               "type": "number"
             },
             "type": "array"
+          },
+          "rotate_vectors": {
+            "type": "boolean"
           },
           "rotation_quat": {
             "items": {
@@ -71515,7 +71586,7 @@
             }
           },
           {
-            "description": "Object interaction kind: exchange | demag | interfacial_dmi | bulk_dmi | uniaxial_anisotropy",
+            "description": "Object interaction kind: exchange | demag | interfacial_dmi | bulk_dmi | uniaxial_anisotropy | cubic_anisotropy",
             "in": "path",
             "name": "interaction_kind",
             "required": true,
@@ -71559,7 +71630,7 @@
             }
           },
           {
-            "description": "Object interaction kind: exchange | demag | interfacial_dmi | bulk_dmi | uniaxial_anisotropy",
+            "description": "Object interaction kind: exchange | demag | interfacial_dmi | bulk_dmi | uniaxial_anisotropy | cubic_anisotropy",
             "in": "path",
             "name": "interaction_kind",
             "required": true,
