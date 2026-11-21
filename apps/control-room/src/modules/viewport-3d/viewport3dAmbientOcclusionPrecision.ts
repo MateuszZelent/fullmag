@@ -1,5 +1,5 @@
 import type { Pass } from "postprocessing";
-import type { ShaderMaterial } from "three";
+import { RenderTarget, type ShaderMaterial } from "three";
 
 const preparedMaterials = new WeakSet<ShaderMaterial>();
 const normalExpression = "normalize(cross(dpdx, dpdy))";
@@ -48,6 +48,15 @@ export function prepareViewport3DAmbientOcclusion(passes: readonly Pass[]): void
     prepareMaterial(pass.effectCompositerQuad);
     if ("halfRes" in configuration && configuration.halfRes === true) {
       if (!("depthDownsampleQuad" in pass)) unsupportedShader();
+      const target = "depthDownsampleTarget" in pass ? pass.depthDownsampleTarget : null;
+      if (target && typeof target === "object" && "texture" in target && Array.isArray(target.texture)) {
+        // N8AO 2.0.1 overrides .texture with the attachment array. Three's
+        // framebuffer setup reads mipmaps from the first attachment via .texture.
+        // Restore that accessor on this target while preserving .textures for N8AO.
+        const accessor = Object.getOwnPropertyDescriptor(RenderTarget.prototype, "texture");
+        if (!accessor) unsupportedShader();
+        Object.defineProperty(target, "texture", accessor);
+      }
       prepareMaterial(pass.depthDownsampleQuad);
     }
   }
