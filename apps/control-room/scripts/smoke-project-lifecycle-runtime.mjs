@@ -1,6 +1,7 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { isForbiddenRuntimeMutation, isHostTelemetryRead } from "./project-lifecycle-request-policy.mjs";
+import { openAppMenu } from "./lib/app-menu-browser.mjs";
 
 const workspaceUrl = process.env.CONTROL_ROOM_URL ?? "http://localhost:3104/workspace";
 const sessionMode = process.env.CONTROL_ROOM_PROJECT_SESSION_MODE ?? "active";
@@ -45,7 +46,7 @@ async function waitForStatus(page, status, expected) {
 }
 
 async function clickFileCommand(page, label) {
-  await page.getByRole("button", { name: "File", exact: true }).click();
+  await openAppMenu(page, "File");
   // Radix includes the keyboard shortcut in the accessible name (for example
   // `New ProjectCtrl+Shift+N`), so match the command label as a prefix.
   const command = page.getByRole("menuitem", { name: label }).last();
