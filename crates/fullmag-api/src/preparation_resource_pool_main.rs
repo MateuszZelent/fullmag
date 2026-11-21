@@ -1,4 +1,4 @@
-mod worker_startup_gate;
+use crate::worker_startup_gate;
 
 use anyhow::{bail, Context, Result};
 use fullmag_session::{
@@ -15,7 +15,7 @@ struct PreparationResourcePoolArgs {
     dry_run: bool,
 }
 
-fn main() {
+pub(super) fn main() {
     if let Err(error) = run() {
         eprintln!("preparation resource pool publication failed: {error:#}");
         std::process::exit(1);

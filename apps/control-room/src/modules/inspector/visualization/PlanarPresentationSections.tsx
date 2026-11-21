@@ -2,170 +2,21 @@ import type {
   PlanarFieldSource,
   VisualizationStateResource,
 } from "@/kernel/api/apiTypes";
-import type { FieldMapCapability, PlanarInspectorCapabilities } from "@/kernel/visualization/planarCapabilities";
+import type { FieldMapCapability } from "@/kernel/visualization/planarCapabilities";
 import type { PlanarResolutionPreset } from "@/kernel/visualization/planarSectionModel";
 import { Button } from "@/shared/ui/Button";
-import { ArrowRightLeft, Crosshair, Eye, ScanLine, SquareDashed, Waves } from "lucide-react";
-
 import { FieldRow } from "../primitives/FieldRow";
 import { FormField } from "../primitives/FormField";
 import { InspectorGroup } from "../primitives/InspectorGroup";
 import { ColorField } from "../panels/ObjectVisualizationTargetSection";
-import { VisualizationDisplayPassesControl } from "./VisualizationInspectorControls";
 import {
   PLANAR_QUALITY_ITEMS,
-  PLANAR_VECTOR_COLOR_MODE_ITEMS,
-  PLANAR_VECTOR_GLYPH_ITEMS,
-  PLANAR_VECTOR_LENGTH_MODE_ITEMS,
   planarInteractionPatch,
-  planarLayerPatch,
   planarResolutionPatch,
-  planarVectorStylePatch,
 } from "./presentationSemantics";
 
 type Planar = NonNullable<VisualizationStateResource["planar"]>;
 type PlanarPatch = NonNullable<Parameters<(patch: { planar: Partial<Planar> }) => void>[0]["planar"]>;
-
-function reason(capability: FieldMapCapability): string | undefined {
-  if (capability.enabled) return undefined;
-  switch (capability.reasonCode) {
-    case "mesh_overlay_unavailable": return "Mesh overlay is unavailable for this sample.";
-    case "mesh_overlay_codec_unsupported": return "Mesh overlay requires the fmcs.v4 or fmfg.v1 descriptor codec.";
-    case "target_boundaries_unavailable": return "FDM structured-grid overlays do not publish exact target boundaries.";
-    case "occupancy_mask_unavailable": return "Sample points require the canonical occupancy mask.";
-    case "planar_meta_unavailable": return "Planar sample metadata is not materialized.";
-    case "boundaries_not_exact": return "Exact boundaries are unavailable for this overlay descriptor.";
-    case "fdm_scope_not_supported": return "Structured FDM sampling does not support mesh-part scope.";
-    case "fem_layer_scope_not_supported": return "Native layer scope requires an FDM multilayer carrier.";
-    case "quantity_not_vector": return "The selected scalar quantity has no vector components.";
-    case "quantity_not_spatial": return "The selected quantity is not spatially sampleable.";
-    case "airbox_carrier_unresolved": return "Waiting for the backend to resolve the Airbox carrier.";
-    default: return capability.reasonCode ? `Unavailable: ${capability.reasonCode}` : "Unavailable";
-  }
-}
-
-export function PlanarDisplayPassesSection({
-  capabilities,
-  visible,
-  layers,
-  patch,
-}: {
-  capabilities: PlanarInspectorCapabilities;
-  visible: boolean;
-  layers: Planar["layers"];
-  patch: (next: PlanarPatch) => void;
-}) {
-  const toggle = (layer: keyof Planar["layers"]) =>
-    patch(planarLayerPatch(layers, layer));
-  return (
-    <div className="grid min-w-0 gap-0">
-      <VisualizationDisplayPassesControl
-        items={[
-          {
-            icon: <Eye aria-hidden="true" size={13} strokeWidth={1.75} />,
-            id: "visible",
-            label: "Visible",
-            pressed: visible,
-            onToggle: () => patch({ visible: !visible }),
-          },
-          {
-            disabled: !capabilities.bounds.enabled,
-            icon: <SquareDashed aria-hidden="true" size={13} strokeWidth={1.75} />,
-            id: "bounds",
-            label: "Bounds",
-            pressed: visible && layers.bounds,
-            onToggle: () => toggle("bounds"),
-          },
-          {
-            disabled: !capabilities.contours.enabled,
-            icon: <ScanLine aria-hidden="true" size={13} strokeWidth={1.75} />,
-            id: "contours",
-            label: "Contours",
-            pressed: visible && layers.contours,
-            onToggle: () => toggle("contours"),
-          },
-          {
-            disabled: !capabilities.vectors.enabled,
-            icon: <ArrowRightLeft aria-hidden="true" size={13} strokeWidth={1.75} />,
-            id: "vectors",
-            label: "Vectors",
-            pressed: visible && layers.vectors,
-            onToggle: () => toggle("vectors"),
-          },
-          {
-            // Streamlines trace the same frame-vector raster as the quiver.
-            disabled: !capabilities.vectors.enabled,
-            icon: <Waves aria-hidden="true" size={13} strokeWidth={1.75} />,
-            id: "streamlines",
-            label: "Streamlines",
-            pressed: visible && Boolean(layers.streamlines),
-            onToggle: () => toggle("streamlines"),
-          },
-          {
-            ariaLabel: "Toggle Points",
-            disabled: !capabilities.points.enabled,
-            icon: <Crosshair aria-hidden="true" size={13} strokeWidth={1.75} />,
-            id: "points",
-            label: "Points",
-            pressed: visible && layers.points,
-            onToggle: () => toggle("points"),
-          },
-          {
-            disabled: !capabilities.raster.enabled,
-            icon: <Crosshair aria-hidden="true" size={13} strokeWidth={1.75} />,
-            id: "probes",
-            label: "Probes",
-            pressed: visible && layers.probes,
-            onToggle: () => toggle("probes"),
-          },
-        ]}
-      />
-      {!capabilities.mesh.enabled ? (
-        <FieldRow label="Mesh overlay" value={reason(capabilities.mesh) ?? "Unavailable"} />
-      ) : null}
-      {!capabilities.boundaries.enabled && capabilities.boundaries.reasonCode !== capabilities.mesh.reasonCode ? (
-        <FieldRow label="Boundaries" value={reason(capabilities.boundaries) ?? "Unavailable"} />
-      ) : null}
-      {!capabilities.points.enabled ? (
-        <FieldRow label="Points" value={reason(capabilities.points) ?? "Unavailable"} />
-      ) : null}
-      {!capabilities.raster.enabled ? (
-        <FieldRow label="Raster" value={reason(capabilities.raster) ?? "Unavailable"} />
-      ) : null}
-    </div>
-  );
-}
-
-export function PlanarVectorStyleSection({
-  capability,
-  resolution,
-  vectorStyle,
-  patch,
-}: {
-  capability: FieldMapCapability;
-  resolution: Planar["resolution"];
-  vectorStyle: Planar["vector_style"];
-  patch: (next: PlanarPatch) => void;
-}) {
-  const hint = capability.enabled ? undefined : capability.reasonCode === "quantity_not_vector" ? "The selected scalar quantity has no vector components." : capability.reasonCode === "quantity_not_spatial" ? "The selected quantity is not spatially sampleable." : capability.reasonCode?.replaceAll("_", " ");
-  return <InspectorGroup
-    collapsible
-    defaultOpen={false}
-    icon={<ArrowRightLeft aria-hidden="true" size={16} strokeWidth={1.75} />}
-    summary={`Quiver • ${resolution.vector_budget}`}
-    title="Vectors"
-    variant="nav"
-  >
-    <FormField disabled label="Glyph" type="select" value="quiver">{PLANAR_VECTOR_GLYPH_ITEMS.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}</FormField>
-    <FormField disabled={!capability.enabled} hint={hint} label="Vector density" max="10000" min="0" step="1" type="number" value={resolution.vector_budget} onChange={(event) => { const value = Number(event.currentTarget.value); if (Number.isInteger(value) && value >= 0 && value <= 10000) patch(planarResolutionPatch(resolution, { vector_budget: value })); }} />
-    <FormField disabled={!capability.enabled} hint={hint} label="Vector scale" min="0" step="0.1" type="number" value={vectorStyle.scale} onChange={(event) => { const value = Number(event.currentTarget.value); if (Number.isFinite(value) && value > 0) patch(planarVectorStylePatch(vectorStyle, { scale: value })); }} />
-    <FormField disabled={!capability.enabled} hint={hint} label="Vector opacity" max="1" min="0" step="0.05" type="number" value={vectorStyle.opacity} onChange={(event) => { const value = Number(event.currentTarget.value); if (Number.isFinite(value) && value >= 0 && value <= 1) patch(planarVectorStylePatch(vectorStyle, { opacity: value })); }} />
-    <FormField disabled={!capability.enabled} hint={hint} label="Vector thickness" max="16" min="0.1" step="0.1" type="number" value={vectorStyle.thickness} onChange={(event) => { const value = Number(event.currentTarget.value); if (Number.isFinite(value) && value > 0 && value <= 16) patch(planarVectorStylePatch(vectorStyle, { thickness: value })); }} />
-    <FormField disabled={!capability.enabled} hint={hint} label="Vector length mode" type="select" value={vectorStyle.length_mode} onChange={(event) => patch(planarVectorStylePatch(vectorStyle, { length_mode: event.currentTarget.value }))}>{PLANAR_VECTOR_LENGTH_MODE_ITEMS.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}</FormField>
-    <FormField disabled={!capability.enabled} hint={hint} label="Vector color mode" type="select" value={vectorStyle.color_mode} onChange={(event) => patch(planarVectorStylePatch(vectorStyle, { color_mode: event.currentTarget.value }))}>{PLANAR_VECTOR_COLOR_MODE_ITEMS.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}</FormField>
-    {vectorStyle.color_mode === "monochrome" ? <ColorField disabled={!capability.enabled} label="Vector color" value={vectorStyle.monochrome_color} onChange={(value) => patch(planarVectorStylePatch(vectorStyle, { monochrome_color: value }))} /> : null}
-  </InspectorGroup>;
-}
 
 export function PlanarWireframeSection({
   disabled = false,

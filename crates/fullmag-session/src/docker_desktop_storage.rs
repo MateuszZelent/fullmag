@@ -391,6 +391,7 @@ fn is_reparse(metadata: &fs::Metadata) -> bool {
     }
 }
 
+#[cfg(not(target_os = "linux"))]
 fn reject_link_ancestors(path: &Path) -> Result<()> {
     // Walk complete paths instead of rebuilding them from `Components`.
     // Rebuilding a Windows `Prefix` and `RootDir` separately can turn `C:\\...`

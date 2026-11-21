@@ -56,10 +56,6 @@ impl SharedFemMesh {
         }
     }
 
-    /// The owned mesh, cloned only when another snapshot still shares it.
-    pub(crate) fn into_inner(self) -> FemMeshPayload {
-        Arc::try_unwrap(self.mesh).unwrap_or_else(|shared| (*shared).clone())
-    }
 }
 
 impl From<FemMeshPayload> for SharedFemMesh {

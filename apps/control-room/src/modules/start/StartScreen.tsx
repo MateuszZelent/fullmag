@@ -22,7 +22,7 @@ import {
 } from "@/shared/ui/Sheet";
 
 import { HomeSection } from "./home/HomeSection";
-import { LAUNCH_TILES } from "./home/LaunchTiles";
+import { LAUNCH_TILES } from "./home/LaunchTiles.model";
 import { ProjectInspector } from "./inspector/ProjectInspector";
 import type { ApiWorkspaceItem } from "./model/workspaceApiTypes";
 import { readProjectArchiveAtPath } from "./model/recentIndexHost";
@@ -82,6 +82,12 @@ function getStartInspectorLayout(): boolean {
  * The launcher shown in place of a workspace. It occupies the body row only,
  * so the menu bar stays mounted and nothing flashes when a project opens.
  */
+function selectApiItem(item: ApiWorkspaceItem): void {
+  if (item.kind === "project") startScreenStore.setSelectedProject(item.projectId ?? item.id);
+  else if (item.kind === "script") startScreenStore.setSelectedScript(item.id);
+  else startScreenStore.setSelectedResult(item.id);
+}
+
 export function StartScreen({ kernel }: ModuleProps) {
   const sessions = useSessionCollection();
   const sessionIdentity = useSessionResourceIdentity();
@@ -146,16 +152,15 @@ export function StartScreen({ kernel }: ModuleProps) {
   const discovery = useInstanceDiscovery({ enabled: !embeddedInTab });
   const otherInstances = useMemo(
     () =>
-      (discovery.data?.instances ?? [])
-        .filter((instance) => !instance.is_self)
-        .map((instance) => {
-          const session =
-            instance.sessions.find((entry) => entry.current) ?? instance.sessions[0] ?? null;
-          return {
-            port: instance.port,
-            session: session ? { name: session.name, status: session.status } : null,
-          };
-        }),
+      (discovery.data?.instances ?? []).flatMap((instance) => {
+        if (instance.is_self) return [];
+        const session =
+          instance.sessions.find((entry) => entry.current) ?? instance.sessions[0] ?? null;
+        return [{
+          port: instance.port,
+          session: session ? { name: session.name, status: session.status } : null,
+        }];
+      }),
     [discovery.data],
   );
   // An empty collection is a confirmed no-session. A non-empty collection
@@ -428,12 +433,6 @@ export function StartScreen({ kernel }: ModuleProps) {
         selectedResult?.id ??
         null);
   const itemDetail = useWorkspaceItemDetail(selectedApiId);
-
-  const selectApiItem = (item: ApiWorkspaceItem) => {
-    if (item.kind === "project") startScreenStore.setSelectedProject(item.projectId ?? item.id);
-    else if (item.kind === "script") startScreenStore.setSelectedScript(item.id);
-    else startScreenStore.setSelectedResult(item.id);
-  };
 
   const addByPath =
     source.origin === "api"

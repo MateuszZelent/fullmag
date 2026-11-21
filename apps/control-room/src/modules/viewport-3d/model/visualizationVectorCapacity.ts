@@ -3,7 +3,6 @@ export {
   fdmNativeLayerVisualizationVectorCapacitySource,
   fdmVisualizationVectorCapacitySource,
   femVisualizationVectorCapacitySource,
-  resolveVisualizationVectorCapacity,
   resolveVisualizationVectorCapacityDescriptor,
   visualizationVectorBudgetRangeFromCapacity,
 } from "@/kernel/visualization/visualizationVectorCapacity";

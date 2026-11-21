@@ -27,11 +27,8 @@ import {
   isVisualizationTargetKind,
   visualizationTargetCommandInput,
 } from "./ribbonCommands";
-import {
-  resolveRibbonActionTriggerState,
-  resolveRibbonIconColor,
-  RibbonGroupsRow,
-} from "./RibbonGroupsRow";
+import { RibbonGroupsRow } from "./RibbonGroupsRow";
+import { resolveRibbonActionTriggerState, resolveRibbonIconColor } from "./RibbonGroupsRow.model";
 import { RIBBON_TABS, type RibbonMenuNode, type RibbonTabContent } from "./ribbonTypes";
 import { RibbonTabStrip } from "./RibbonTabStrip";
 import {

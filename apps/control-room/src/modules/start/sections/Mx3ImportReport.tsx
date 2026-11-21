@@ -1,6 +1,7 @@
 import { Copy, Download } from "lucide-react";
 
 import { Button } from "@/shared/ui/Button";
+import { keyedOccurrences } from "@/shared/utils/keyedOccurrences";
 
 import { importSaveState, type ScriptSaver } from "../model/scriptOpen";
 import type { Mx3Translation } from "../model/mx3Import";
@@ -65,8 +66,10 @@ export function Mx3ImportReport({
               </tr>
             </thead>
             <tbody>
-              {unsupported.map((item, index) => (
-                <tr key={`${item.line}-${index}`}>
+              {keyedOccurrences(unsupported, ({ line, text, reason }) =>
+                JSON.stringify([line, text, reason]),
+              ).map(({ item, key }) => (
+                <tr key={key}>
                   <th scope="row">{item.line > 0 ? item.line : "n/a"}</th>
                   <td className="fm-start-formats__ext">{item.text}</td>
                   <td>{item.reason}</td>

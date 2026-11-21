@@ -65,13 +65,16 @@
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: var(--fm-space-1);
+  margin: 0;
   overflow: hidden;
   border: 1px solid var(--fm-border-subtle);
   border-radius: var(--fm-radius-md);
   background: var(--fm-border-subtle);
+  list-style: none;
+  padding: 0;
 }
 
-.fm-sinc-preview__metrics > span {
+.fm-sinc-preview__metrics > li {
   display: grid;
   gap: var(--fm-space-1);
   padding: var(--fm-space-2);
@@ -195,13 +198,16 @@
   display: grid;
   grid-template-columns: minmax(0, 1fr);
   gap: var(--fm-space-1);
+  margin: 0;
   overflow: hidden;
   border: 1px solid var(--fm-border-subtle);
   border-radius: var(--fm-radius-md);
   background: var(--fm-border-subtle);
+  list-style: none;
+  padding: 0;
 }
 
-.fm-sampling-plan__metrics > span {
+.fm-sampling-plan__metrics > li {
   display: grid;
   gap: var(--fm-space-1);
   min-width: 0;

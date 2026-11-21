@@ -12,6 +12,7 @@ import type {
   MeshWorstElement,
 } from "@/shared/domain/mesh/qualityStatistics";
 import type { MeshQualityRefinementState } from "@/shared/domain/mesh/meshQualityRefinement";
+import { keyedOccurrences } from "@/shared/utils/keyedOccurrences";
 
 import {
   formatCount,
@@ -142,8 +143,8 @@ function SizeDistributionCard({
             aria-label={`${distribution.label} histogram bins`}
             className="fm-mesh-size-distribution__bins"
           >
-            {distribution.histogram.map((bin, index) => (
-              <li key={`bin-${index}`}>
+            {keyedOccurrences(distribution.histogram, (bin) => bin.label).map(({ item: bin, key }) => (
+              <li key={key}>
                 <span>{bin.label}</span>
                 <strong>{formatCount(bin.count)}</strong>
               </li>

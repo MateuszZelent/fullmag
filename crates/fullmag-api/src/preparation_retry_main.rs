@@ -16,7 +16,7 @@ struct PreparationRetryArgs {
     reason: String,
 }
 
-fn main() {
+pub(super) fn main() {
     if let Err(error) = run() {
         eprintln!("preparation retry decision failed: {error:#}");
         std::process::exit(1);

@@ -10,17 +10,9 @@ import { Button } from "@/shared/ui/Button";
 import { Input } from "@/shared/ui/Input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/shared/ui/Select";
 
-import {
-  duplicateProfileDraft,
-  newProfileDraft,
-  profileFromDraft,
-  sameProfile,
-  type ExecutionProfileDraft,
-} from "../model/executionProfileDraft";
-import {
-  executionAvailabilityFor,
-  type ExecutionAvailability,
-} from "../model/executionAvailability";
+import { duplicateProfileDraft, profileFromDraft, sameProfile, type ExecutionProfileDraft } from "../model/executionProfileDraft";
+import { executionAvailabilityFor, type ExecutionAvailability } from "../model/executionAvailability";
+import { newExecutionProfileDraft } from "./ExecutionProfilesSettings.model";
 
 type Profiles = ReturnType<typeof useExecutionProfilesResource>;
 type Defaults = ExecutionProfile["defaults"];
@@ -44,26 +36,6 @@ export function ExecutionProfilesSettings({
     canPublish={canPublishExecutionProfiles && onPublishExecutionProfile !== undefined}
     onPublish={onPublishExecutionProfile}
   />;
-}
-
-export function newExecutionProfileDraft(
-  source: ExecutionProfile | undefined,
-  executionAvailability?: ExecutionAvailability,
-): ExecutionProfileDraft {
-  const nextDraft = newProfileDraft(source);
-  if (!source) {
-    const availability = executionAvailabilityFor(
-      executionAvailability,
-      nextDraft.profile.defaults.backend,
-    );
-    if (!availability.gpu.enabled && availability.cpu.enabled) {
-      nextDraft.profile = {
-        ...nextDraft.profile,
-        defaults: { ...nextDraft.profile.defaults, device: "cpu" },
-      };
-    }
-  }
-  return nextDraft;
 }
 
 function ProfileEditor({ executionAvailability, resource, canPublish, onPublish }: {

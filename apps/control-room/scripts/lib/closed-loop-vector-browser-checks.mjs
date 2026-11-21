@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { visitSequentially } from "./visitSequentially.mjs";
 
 /** Additional checks against the existing production UI fixture, not a solver oracle. */
 export async function verifyClosedLoopVectorDisplay({ page, root, open, shot }) {
@@ -154,11 +155,11 @@ export async function verifyClosedLoopVectorDisplay({ page, root, open, shot }) 
       assert.ok(Number.isFinite(state.minimum) && Number.isFinite(state.maximum));
       assert.deepEqual(identities(state), expected);
     }
-    for (const palette of ["coolwarm", "viridis"]) {
+    await visitSequentially(["coolwarm", "viridis"], async (palette) => {
       await root.getByRole("combobox", { name: "Point / vector palette", exact: true }).selectOption(palette);
       await page.waitForTimeout(150);
       assert.deepEqual(identities(await read()), expected);
-    }
+    });
     assert.equal(await root.evaluate((element, previous) => element === previous, inspector), true);
     const before = await page.evaluate(() => window.__antennaVisualizationFixture.read().calls.length);
     await page.waitForTimeout(500);

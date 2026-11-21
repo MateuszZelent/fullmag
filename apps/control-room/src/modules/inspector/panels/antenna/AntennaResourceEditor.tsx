@@ -9,6 +9,7 @@ import { publishCommittedSceneResource } from "@/kernel/resources/geometryLifecy
 import { sessionRequestScopeKey } from "@/kernel/resources/sessionResourceIdentity";
 import { useSessionResourceIdentity } from "@/kernel/resources/useSessionStatus";
 import { Button } from "@/shared/ui/Button";
+import { keyedOccurrences } from "@/shared/utils/keyedOccurrences";
 import { useInspectorEditSession, useRegisterInspectorEditSession } from "../../InspectorEditSession";
 import { FeedbackBanner } from "../../primitives/FeedbackBanner";
 import { FieldRow } from "../../primitives/FieldRow";
@@ -24,6 +25,17 @@ import {
 } from "./AntennaResourceEditorModel";
 
 interface Props { removeOnly?: boolean; kind: AntennaEditableKind; resourceId: string; scene: SceneResource | null; sceneScopeKey: string | null; status: string; refetch: () => void }
+
+let nextAntennaBranchRenderKey = 0;
+
+function newAntennaBranchRenderKey(): string {
+  nextAntennaBranchRenderKey += 1;
+  return `antenna-branch-${nextAntennaBranchRenderKey}`;
+}
+
+function antennaBranchSemanticIdentity(branch: AntennaResourceDraft["branches"][number]): string {
+  return branch.id || JSON.stringify([branch.inlet, branch.outlet, branch.weight]);
+}
 
 function AntennaResourceEditSession({ pending, dirty, valid, reason, apply, reset }: {
   pending: boolean; dirty: boolean; valid: boolean; reason: string | null;
@@ -44,6 +56,8 @@ export function AntennaResourceEditor({ kind, resourceId, scene, sceneScopeKey, 
   const context = contextState.key === key ? contextState : { key, token: {} };
   if (contextState.key !== key) setContext(context);
   const [local, setLocal] = useState<AntennaResourceDraft | null>(null);
+  const [branchKeysState, setBranchKeysState] = useState<{ identity: string; keys: string[] } | null>(null);
+  const branchKeys = branchKeysState?.identity === key ? branchKeysState.keys : null;
   const [acknowledgedBase, setAcknowledgedBase] = useState<AntennaResourceDraft | null>(null);
   if (acknowledgedBase && acknowledgedBase.key !== key) setAcknowledgedBase(null);
   if (local && local.key !== key) setLocal(null);
@@ -74,7 +88,16 @@ export function AntennaResourceEditor({ kind, resourceId, scene, sceneScopeKey, 
     if (draft && scoped) { setLocal({ ...draft, values: { ...draft.values, ...values } }); setFeedback(null); }
   }
   function updateBranch(index: number, patch: Partial<AntennaResourceDraft["branches"][number]>) {
-    if (draft && scoped) { setLocal({ ...draft, branches: draft.branches.map((branch, i) => i === index ? { ...branch, ...patch } : branch) }); setFeedback(null); }
+    if (draft && scoped) {
+      const keys = branchKeys ?? keyedOccurrences(draft.branches, antennaBranchSemanticIdentity).map(({ key }) => key);
+      setBranchKeysState({ identity: key, keys });
+      setLocal({ ...draft, branches: draft.branches.map((branch, i) => i === index ? { ...branch, ...patch } : branch) });
+      setFeedback(null);
+    }
+  }
+  function resetLocalDraft() {
+    setLocal(null);
+    setBranchKeysState(null);
   }
   async function commit(remove = false): Promise<boolean> {
     if (remove && removalBlockedByDraft) return false;
@@ -125,19 +148,34 @@ export function AntennaResourceEditor({ kind, resourceId, scene, sceneScopeKey, 
   // Keep the last draft visible through invalidation and ACK; only the transaction buttons are pending.
   if (!draft) return null;
   const values = draft.values;
+  const semanticBranchRows = keyedOccurrences(draft.branches, antennaBranchSemanticIdentity);
+  const branchRows = branchKeys
+    ? semanticBranchRows.map(({ item, key: semanticKey }, index) => ({
+        item,
+        key: branchKeys[index] ?? semanticKey,
+      }))
+    : semanticBranchRows;
   const field = (name: string, label: string, unit?: string) => <FormField key={name} label={label} unit={unit} value={values[name] ?? ""} onChange={(event) => update({ [name]: event.currentTarget.value })} />;
   const choice = (name: string, label: string, options: Array<[string, string]>) => <FormField key={name} type="select" label={label} value={values[name] ?? ""} onChange={(event) => update({ [name]: event.currentTarget.value })}>{options.map(([value, text]) => <option key={value} value={value}>{text}</option>)}</FormField>;
   return <InspectorGroup title={removeOnly ? `Remove antenna ${kind}` : `Edit antenna ${kind}`} collapsible defaultOpen>
-    {!removeOnly ? <AntennaResourceEditSession pending={pending} dirty={dirty} valid={Boolean(transaction && !conflict)} reason={reason} apply={() => commit()} reset={() => setLocal(null)} /> : null}
+    {!removeOnly ? <AntennaResourceEditSession pending={pending} dirty={dirty} valid={Boolean(transaction && !conflict)} reason={reason} apply={() => commit()} reset={resetLocalDraft} /> : null}
     <FieldRow label="Immutable resource ID" value={resourceId} mono />
     {!removeOnly ? <>
     {kind === "port" ? <>
       <p className="fm-inspector-hint">Signed weights define a normalized port mode. They do not set terminal currents or activate a solve.</p>
-      {draft.branches.map((branch, index) => <InspectorGroup key={index} title={`Branch ${index + 1}`}>
+      {branchRows.map(({ item: branch, key: branchKey }, index) => <InspectorGroup key={branchKey} title={`Branch ${index + 1}`}>
         {([ ["id", "Branch ID"], ["inlet", "Inlet terminal"], ["outlet", "Outlet terminal"], ["weight", "Signed weight"] ] as const).map(([name, label]) => <FormField key={name} label={label} value={branch[name]} onChange={(event) => updateBranch(index, { [name]: event.currentTarget.value })} />)}
-        <Button type="button" onClick={() => setLocal({ ...draft, branches: draft.branches.filter((_, i) => i !== index) })}>Remove branch from draft</Button>
+        <Button type="button" onClick={() => {
+          const keys = branchKeys ?? keyedOccurrences(draft.branches, antennaBranchSemanticIdentity).map(({ key }) => key);
+          setBranchKeysState({ identity: key, keys: keys.filter((_, currentIndex) => currentIndex !== index) });
+          setLocal({ ...draft, branches: draft.branches.filter((_, i) => i !== index) });
+        }}>Remove branch from draft</Button>
       </InspectorGroup>)}
-      <Button type="button" onClick={() => setLocal({ ...draft, branches: [...draft.branches, { id: "", inlet: "", outlet: "", weight: "" }] })}>Add explicit branch</Button>
+      <Button type="button" onClick={() => {
+        const keys = branchKeys ?? keyedOccurrences(draft.branches, antennaBranchSemanticIdentity).map(({ key }) => key);
+        setBranchKeysState({ identity: key, keys: [...keys, newAntennaBranchRenderKey()] });
+        setLocal({ ...draft, branches: [...draft.branches, { id: "", inlet: "", outlet: "", weight: "" }] });
+      }}>Add explicit branch</Button>
     </> : <>
       {choice("target", "Target", antennaSolveTargetOptions(scene).map((option): [string, string] => [option.key, option.label]))}
       {choice("rebind", "Source binding", [["", "Keep exact current reference and asset pins"], ...(scene?.antenna_field_solve_stages ?? []).map((stage): [string, string] => [stage.id, `Rebind explicitly to stage output: ${stage.id}`])])}

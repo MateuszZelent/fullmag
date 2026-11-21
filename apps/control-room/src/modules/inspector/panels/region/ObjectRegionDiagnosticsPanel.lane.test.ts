@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { resolveObjectRegionDiagnosticsLaneView } from "./ObjectRegionDiagnosticsPanel";
+import { resolveObjectRegionDiagnosticsLaneView } from "./ObjectRegionDiagnosticsPanel.model";
 
 const model = {
   mode: "committed",

@@ -11,6 +11,7 @@ import type {
   TransportValidationResponse,
 } from "@/kernel/api/apiTypes";
 import { ControlRoomApiError } from "@/kernel/api/ControlRoomApi";
+import { keyedOccurrences } from "@/shared/utils/keyedOccurrences";
 import {
   authoringWriteOptions,
   captureAuthoringMutationFence,
@@ -817,7 +818,7 @@ function SpinFields({ capabilities, draft, scene, identityReadOnly, patch, onOpe
     <TransportCollectionFields family={"id" in draft ? "spin_transport" : "current_transport"} collection="domain" value={draft.domain} scene={scene} onChange={(domain) => patch({ domain })} />
     <TransportCollectionFields family="spin_transport" collection="materials" value={draft.materials} scene={scene} onChange={(materials) => patch({ materials })} />
     <InspectorGroup title="Spin interfaces">
-      {(() => { try { return (JSON.parse(draft.interfaces) as Array<{ id?: string; kind?: string }>).map((item, index) => <Button key={`${item.id ?? "unknown"}:${index}`} type="button" disabled={!item.id} onClick={() => onOpenInterface(item.id ?? null)}>Edit {item.id ?? `unknown interface ${index + 1}`} - {item.kind ?? "unknown"}</Button>); } catch { return <FeedbackBanner kind="error" message="Interface collection is malformed; existing payload remains unchanged." />; } })()}
+      {(() => { try { return keyedOccurrences(JSON.parse(draft.interfaces) as Array<{ id?: string; kind?: string }>, (item) => item.id ?? JSON.stringify(item)).map(({ item, key }, index) => <Button key={key} type="button" disabled={!item.id} onClick={() => onOpenInterface(item.id ?? null)}>Edit {item.id ?? `unknown interface ${index + 1}`} - {item.kind ?? "unknown"}</Button>); } catch { return <FeedbackBanner kind="error" message="Interface collection is malformed; existing payload remains unchanged." />; } })()}
       <Button type="button" onClick={() => onOpenInterface(null)}>Create interface through owning transport</Button>
       <p className="fm-inspector-hint">Interface parameters and geometry bindings use the dedicated interface Inspector. Current unedited interface payloads remain unchanged.</p>
     </InspectorGroup>

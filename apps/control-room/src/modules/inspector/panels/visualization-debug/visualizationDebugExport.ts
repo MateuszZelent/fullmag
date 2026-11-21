@@ -58,11 +58,12 @@ export interface VisualizationDebugTimerSeam {
 
 export interface VisualizationDebugEvidenceActionDependencies {
   clipboard: Pick<Clipboard, "writeText">;
-  createObjectURL(blob: Blob): string;
-  download(url: string, filename: string): void;
+  createObjectURL?(blob: Blob): string;
+  download?(url: string, filename: string): void;
+  downloadBlob?(blob: Blob, filename: string): void;
   feedback(value: VisualizationDebugActionFeedback): void;
   now(): number;
-  revokeObjectURL(url: string): void;
+  revokeObjectURL?(url: string): void;
   timers: VisualizationDebugTimerSeam;
 }
 
@@ -555,23 +556,29 @@ export function createVisualizationDebugEvidenceActions(
       dependencies.feedback(null);
     },
     exportJson() {
-      let objectUrl: string | null = null;
       try {
         const result = build();
         const blob = new Blob([result.json], { type: result.mime });
-        objectUrl = dependencies.createObjectURL(blob);
-        dependencies.download(
-          objectUrl,
-          `fullmag-visualization-debug-${safeFilenamePart(model.target?.id ?? "unknown")}-${Math.trunc(dependencies.now())}.json`,
-        );
+        const filename = `fullmag-visualization-debug-${safeFilenamePart(model.target?.id ?? "unknown")}-${Math.trunc(dependencies.now())}.json`;
+        if (dependencies.downloadBlob) {
+          dependencies.downloadBlob(blob, filename);
+        } else {
+          const objectUrl = dependencies.createObjectURL?.(blob);
+          if (objectUrl === undefined || !dependencies.download) {
+            throw new Error("A complete Blob download environment is required.");
+          }
+          try {
+            dependencies.download(objectUrl, filename);
+          } finally {
+            dependencies.revokeObjectURL?.(objectUrl);
+          }
+        }
         publishFeedback({ kind: "success", message: "JSON evidence exported." });
       } catch {
         publishFeedback({
           kind: "error",
           message: "JSON evidence could not be exported.",
         });
-      } finally {
-        if (objectUrl !== null) dependencies.revokeObjectURL(objectUrl);
       }
     },
     rawJson() {
@@ -587,15 +594,18 @@ export function createBrowserVisualizationDebugEvidenceEnvironment(
     clipboard: {
       writeText: (text) => copyTextToClipboard(text),
     },
-    createObjectURL: (blob) => URL.createObjectURL(blob),
-    download: (url, filename) => {
-      const anchor = document.createElement("a");
-      anchor.href = url;
-      anchor.download = filename;
-      anchor.click();
+    downloadBlob: (blob, filename) => {
+      const objectUrl = URL.createObjectURL(blob);
+      try {
+        const anchor = document.createElement("a");
+        anchor.href = objectUrl;
+        anchor.download = filename;
+        anchor.click();
+      } finally {
+        URL.revokeObjectURL(objectUrl);
+      }
     },
     now,
-    revokeObjectURL: (url) => URL.revokeObjectURL(url),
     timers: {
       clear: (handle) => globalThis.clearTimeout(handle as ReturnType<typeof setTimeout>),
       set: (callback, delayMs) => globalThis.setTimeout(callback, delayMs),
@@ -627,7 +637,7 @@ function firstExactResourceKey(model: VisualizationDebugPanelModel): string | nu
 }
 
 function jsonClone(value: unknown): unknown {
-  return JSON.parse(JSON.stringify(value)) as unknown;
+  return structuredClone(value);
 }
 
 function safeFilenamePart(value: string): string {

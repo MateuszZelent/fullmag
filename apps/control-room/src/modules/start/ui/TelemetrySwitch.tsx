@@ -6,27 +6,14 @@ import { useId, useState } from "react";
 import { Popover, PopoverContent, PopoverTrigger } from "@/shared/ui/Popover";
 import { Switch } from "@/shared/ui/Switch";
 
-import {
-  TELEMETRY_EXPLANATION,
-  TELEMETRY_UNAVAILABLE_TEXT,
-  telemetryStatusText,
-  updateNoticeText,
-  type PreferencesState,
-  type UpdateNotice,
-} from "../model/startPreferences";
+import { TELEMETRY_EXPLANATION, updateNoticeText, type PreferencesState, type UpdateNotice } from "../model/startPreferences";
+import { telemetryLabel } from "./TelemetrySwitch.model";
 
 export interface TelemetrySwitchProps {
   readonly state: PreferencesState;
   readonly saving: boolean;
   /** Saves the choice; resolves to a failure message, or null. */
   readonly onChange: (enabled: boolean) => Promise<string | null>;
-}
-
-/** The text beside the switch, from the stored choice only. */
-export function telemetryLabel(state: PreferencesState): string {
-  if (state.kind === "ready") return telemetryStatusText(state.telemetryEnabled);
-  if (state.kind === "unavailable") return `${TELEMETRY_UNAVAILABLE_TEXT} — ${state.reason}`;
-  return "Reading the telemetry setting…";
 }
 
 /** Shown only when an updater stored `update.available`; absent otherwise. */

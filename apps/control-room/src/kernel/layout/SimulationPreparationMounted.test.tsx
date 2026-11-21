@@ -39,11 +39,8 @@ import type { KernelApi } from "../types";
 import { LayoutController } from "./LayoutController";
 import { SimulationPreparationLog } from "./SimulationPreparationLog";
 import { simulationPreparationWindow } from "./simulationPreparationWindow";
-import {
-  SimulationStartupOverlay,
-  SimulationStartupOverlayView,
-  type SimulationStartupOverlayState,
-} from "./SimulationStartupOverlay";
+import { SimulationStartupOverlay, SimulationStartupOverlayView } from "./SimulationStartupOverlay";
+import { type SimulationStartupOverlayState } from "./SimulationStartupOverlay.model";
 import {
   resolveSimulationPreparationViewModel,
   type SimulationPreparationLogEntryView,

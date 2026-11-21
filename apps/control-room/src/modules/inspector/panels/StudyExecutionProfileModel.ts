@@ -482,7 +482,8 @@ function isOneOf<T extends string>(value: unknown, choices: readonly T[]): value
 }
 
 function hasOnlyKeys(record: Record<string, unknown>, allowed: readonly string[]): boolean {
-  return Object.keys(record).every((key) => allowed.includes(key));
+  const allowedKeys = new Set(allowed);
+  return Object.keys(record).every((key) => allowedKeys.has(key));
 }
 
 function hasChangeDevicePipelineNode(value: unknown): boolean {

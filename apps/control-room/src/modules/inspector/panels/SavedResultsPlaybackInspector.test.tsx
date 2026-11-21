@@ -4,11 +4,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { KernelContext } from "@/kernel/KernelContext";
 import type { KernelApi } from "@/kernel/types";
 
-import {
-  clampPlaybackFrameIndex,
-  formatSavedPlaybackTimeNs,
-  SavedResultsPlaybackInspector,
-} from "./SavedResultsPlaybackInspector";
+import { SavedResultsPlaybackInspector } from "./SavedResultsPlaybackInspector";
+import { clampPlaybackFrameIndex, formatSavedPlaybackTimeNs } from "./SavedResultsPlaybackInspector.model";
 
 const playbackMocks = vi.hoisted(() => ({
   selection: null as null | {

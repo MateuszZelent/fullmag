@@ -13,12 +13,12 @@ use crate::waveguide_mesh_contours::{
     validate_waveguide_mesh_contours, WaveguideMeshContoursError,
 };
 use crate::{
-    MagnetizationModuleIR, MaterialIR, ObjectMaterialAssignmentIR, ObjectRegionIR, PhysicsObjectIR,
-    ProblemIRV04, RegionRefIR,
+    PhysicsObjectIR, ProblemIRV04, RegionRefIR,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum WaveguideRegistryBindingsError {
+    #[cfg(test)]
     InvalidProblem(Vec<String>),
     InvalidMeshContours(WaveguideMeshContoursError),
     RegionTargetKeys {
@@ -131,27 +131,20 @@ impl Error for WaveguideRegistryBindingsError {}
 /// ProblemIR/mesh/target-map borrow. It is not a mesh or provider certificate.
 #[derive(Debug)]
 pub(crate) struct ValidatedWaveguideRegistryBindings<'a> {
-    problem: &'a ProblemIRV04,
     mesh: &'a WaveguideCrossSectionMeshIR,
+    #[cfg(test)]
     region_targets: &'a BTreeMap<String, RegionRefIR>,
     region_bindings: Vec<ResolvedWaveguideRegionBinding<'a>>,
 }
 
 impl<'a> ValidatedWaveguideRegistryBindings<'a> {
-    pub(crate) fn problem(&self) -> &'a ProblemIRV04 {
-        self.problem
-    }
-
     pub(crate) fn mesh(&self) -> &'a WaveguideCrossSectionMeshIR {
         self.mesh
     }
 
+    #[cfg(test)]
     pub(crate) fn region_targets(&self) -> &'a BTreeMap<String, RegionRefIR> {
         self.region_targets
-    }
-
-    pub(crate) fn region_bindings(&self) -> &[ResolvedWaveguideRegionBinding<'a>] {
-        &self.region_bindings
     }
 
     pub(crate) fn region_binding(
@@ -169,12 +162,16 @@ impl<'a> ValidatedWaveguideRegistryBindings<'a> {
 #[derive(Debug)]
 pub(crate) struct ResolvedWaveguideRegionBinding<'a> {
     mesh_region: &'a WaveguideCrossSectionRegionIR,
-    target: &'a RegionRefIR,
+    #[cfg(test)]
     object: &'a PhysicsObjectIR,
-    object_region: Option<&'a ObjectRegionIR>,
-    material: Option<&'a MaterialIR>,
-    material_assignment: Option<&'a ObjectMaterialAssignmentIR>,
-    magnetization_module: Option<&'a MagnetizationModuleIR>,
+    #[cfg(test)]
+    object_region: Option<&'a crate::ObjectRegionIR>,
+    #[cfg(test)]
+    material: Option<&'a crate::MaterialIR>,
+    #[cfg(test)]
+    material_assignment: Option<&'a crate::ObjectMaterialAssignmentIR>,
+    #[cfg(test)]
+    magnetization_module: Option<&'a crate::MagnetizationModuleIR>,
 }
 
 impl<'a> ResolvedWaveguideRegionBinding<'a> {
@@ -182,27 +179,28 @@ impl<'a> ResolvedWaveguideRegionBinding<'a> {
         self.mesh_region
     }
 
-    pub(crate) fn target(&self) -> &'a RegionRefIR {
-        self.target
-    }
-
+    #[cfg(test)]
     pub(crate) fn object(&self) -> &'a PhysicsObjectIR {
         self.object
     }
 
-    pub(crate) fn object_region(&self) -> Option<&'a ObjectRegionIR> {
+    #[cfg(test)]
+    pub(crate) fn object_region(&self) -> Option<&'a crate::ObjectRegionIR> {
         self.object_region
     }
 
-    pub(crate) fn material(&self) -> Option<&'a MaterialIR> {
+    #[cfg(test)]
+    pub(crate) fn material(&self) -> Option<&'a crate::MaterialIR> {
         self.material
     }
 
-    pub(crate) fn material_assignment(&self) -> Option<&'a ObjectMaterialAssignmentIR> {
+    #[cfg(test)]
+    pub(crate) fn material_assignment(&self) -> Option<&'a crate::ObjectMaterialAssignmentIR> {
         self.material_assignment
     }
 
-    pub(crate) fn magnetization_module(&self) -> Option<&'a MagnetizationModuleIR> {
+    #[cfg(test)]
+    pub(crate) fn magnetization_module(&self) -> Option<&'a crate::MagnetizationModuleIR> {
         self.magnetization_module
     }
 }
@@ -211,7 +209,8 @@ struct PendingRegionBinding<'a> {
     mesh_region: &'a WaveguideCrossSectionRegionIR,
     target: &'a RegionRefIR,
     object: &'a PhysicsObjectIR,
-    object_region: Option<&'a ObjectRegionIR>,
+    #[cfg(test)]
+    object_region: Option<&'a crate::ObjectRegionIR>,
 }
 
 /// Resolve explicit mesh region names to ProblemIR object and physics registries.
@@ -220,6 +219,7 @@ struct PendingRegionBinding<'a> {
 /// reverse is false. Distinct mesh regions for one object and competing
 /// whole/regional providers are rejected because this fragment has no proof of
 /// geometric precedence or non-overlap.
+#[cfg(test)]
 pub(crate) fn validate_waveguide_registry_bindings<'a>(
     problem: &'a ProblemIRV04,
     mesh: &'a WaveguideCrossSectionMeshIR,
@@ -294,7 +294,7 @@ pub(crate) fn validate_waveguide_registry_bindings_for_validated_problem<'a>(
             .or_default()
             .push(mesh_region_id.to_string());
 
-        let object_region = match target.region_id.as_deref() {
+        let _object_region = match target.region_id.as_deref() {
             None => None,
             Some(object_region_id) => {
                 let Some(object_region) = problem
@@ -331,7 +331,8 @@ pub(crate) fn validate_waveguide_registry_bindings_for_validated_problem<'a>(
             mesh_region,
             target,
             object,
-            object_region,
+            #[cfg(test)]
+            object_region: _object_region,
         });
     }
 
@@ -389,16 +390,20 @@ pub(crate) fn validate_waveguide_registry_bindings_for_validated_problem<'a>(
                 }
                 region_bindings.push(ResolvedWaveguideRegionBinding {
                     mesh_region: pending_region.mesh_region,
-                    target: pending_region.target,
+                    #[cfg(test)]
                     object: pending_region.object,
+                    #[cfg(test)]
                     object_region: pending_region.object_region,
+                    #[cfg(test)]
                     material: None,
+                    #[cfg(test)]
                     material_assignment: None,
+                    #[cfg(test)]
                     magnetization_module: None,
                 });
             }
             WaveguideCrossSectionRegionIR::Magnetic { material_id, .. } => {
-                let Some(material) = problem
+                let Some(_material) = problem
                     .materials
                     .iter()
                     .find(|material| material.name == *material_id)
@@ -516,11 +521,15 @@ pub(crate) fn validate_waveguide_registry_bindings_for_validated_problem<'a>(
                 matched_module_ids.insert(module.module_id.as_str());
                 region_bindings.push(ResolvedWaveguideRegionBinding {
                     mesh_region: pending_region.mesh_region,
-                    target: pending_region.target,
+                    #[cfg(test)]
                     object: pending_region.object,
+                    #[cfg(test)]
                     object_region: pending_region.object_region,
-                    material: Some(material),
+                    #[cfg(test)]
+                    material: Some(_material),
+                    #[cfg(test)]
                     material_assignment: Some(assignment),
+                    #[cfg(test)]
                     magnetization_module: Some(module),
                 });
             }
@@ -540,8 +549,8 @@ pub(crate) fn validate_waveguide_registry_bindings_for_validated_problem<'a>(
     }
 
     Ok(ValidatedWaveguideRegistryBindings {
-        problem,
         mesh,
+        #[cfg(test)]
         region_targets,
         region_bindings,
     })

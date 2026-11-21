@@ -3,11 +3,12 @@ use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 use super::accepted_worker_execution_receipt::WorkerExecutionReceiptIdentity;
+use crate::accepted_profile_admission as admission;
 
-#[path = "accepted_profile_admission.rs"]
-mod admission;
-pub(crate) use admission::{config, parameter, request_digest, validate_study_profile,
-    validate_resolved_study_profile, validate_fem_profile_plan, cuda_trace, PARAMETER};
+pub(crate) use admission::{
+    config, cuda_trace, parameter, request_digest, validate_fem_profile_plan,
+    validate_resolved_study_profile, validate_study_profile, PARAMETER,
+};
 #[cfg(test)]
 use admission::{configure_child, SCHEMA};
 

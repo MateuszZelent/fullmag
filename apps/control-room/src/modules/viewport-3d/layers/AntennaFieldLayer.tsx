@@ -78,11 +78,16 @@ export function AntennaFieldLayer({ model, colors, tracker, sessionIdentity }: {
   }, [geometries, surfaceVectors, tracker, invalidate]);
   useEffect(() => {
     if (!materials) return;
-    for (const material of [materials.material, materials.surfaceMaterial, materials.wireMaterial]) if (material) tracker.track("material", material, { owner: "antenna-field" });
-    if (materials.currentSurface) tracker.track("texture", materials.currentSurface.palette, { byteLength: 1024, owner: "antenna-field-surface" });
+    const { currentSurface, material, surfaceMaterial, wireMaterial } = materials;
+    for (const trackedMaterial of [material, surfaceMaterial, wireMaterial]) {
+      if (trackedMaterial) tracker.track("material", trackedMaterial, { owner: "antenna-field" });
+    }
+    if (currentSurface) tracker.track("texture", currentSurface.palette, { byteLength: 1024, owner: "antenna-field-surface" });
     return () => {
-      for (const material of [materials.material, materials.surfaceMaterial, materials.wireMaterial]) if (material) tracker.release("material", material);
-      if (materials.currentSurface) tracker.release("texture", materials.currentSurface.palette);
+      for (const trackedMaterial of [material, surfaceMaterial, wireMaterial]) {
+        if (trackedMaterial) tracker.release("material", trackedMaterial);
+      }
+      if (currentSurface) tracker.release("texture", currentSurface.palette);
     };
   }, [materials, tracker]);
   useEffect(() => {

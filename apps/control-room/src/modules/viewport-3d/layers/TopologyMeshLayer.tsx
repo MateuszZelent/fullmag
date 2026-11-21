@@ -29,7 +29,7 @@ import type { Viewport3DColors } from "../viewport3dTypes";
 import { MeshPartLayer } from "./MeshPartLayer";
 import { resolveMeshPartPresentationColor } from "./viewport3DLayerSettings";
 import type { Viewport3DMaterialProfile } from "./viewport3DMaterialProfile";
-import type { VectorFieldLayerVectorStyle } from "./VectorFieldLayer";
+import type { VectorFieldLayerVectorStyle } from "./VectorFieldLayer.model";
 import type { Viewport3DRenderAdoptionRegistry } from "../model/viewport3DRenderAdoptionRegistry";
 import { modeCompositionTargetIdForMeshPart } from "../model/modeCompositionViewportProjection";
 

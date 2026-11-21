@@ -27,7 +27,8 @@ import { VisualizationDebugController } from "../visualization/VisualizationDebu
 import { VisualizationRegistrySyncController } from "../visualization/VisualizationRegistrySyncController";
 import { viewport3dManifest } from "@/modules/viewport-3d/manifest";
 
-import { resolveSlotModuleManifest, SlotHost } from "./SlotHost";
+import { SlotHost } from "./SlotHost";
+import { resolveSlotModuleManifest } from "./SlotHost.model";
 
 function TestModule() {
   return <div>Auto-discovered module</div>;

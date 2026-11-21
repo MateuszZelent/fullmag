@@ -8,7 +8,8 @@ describe("thermal scene transport", () => {
     const scene = { study: { thermal_noise: thermal } } as SceneResource;
     const payload = sceneDocumentPayload(scene);
     expect(payload.study).toEqual({ thermal_noise: thermal });
-    expect(JSON.parse(JSON.stringify(payload)).study.thermal_noise.seed).toBe(thermal.seed);
+    const serialized = JSON.stringify(payload);
+    expect(JSON.parse(serialized).study.thermal_noise.seed).toBe(thermal.seed);
     expect(payload.study).not.toBe(scene.study);
   });
   it("retains an explicit clear without inventing a missing override", () => {

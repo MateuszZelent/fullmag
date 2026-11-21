@@ -75,8 +75,13 @@ export function StudyResultHistory({ runId, onPreviewRun }: { runId?: string; on
 function StudyResultScalarHistory({ result }: { result: StudyStageResult }) {
   const [expanded, setExpanded] = useState(false);
   const [starts, setStarts] = useState<number[]>([0]);
-  const resource = useStudyResultScalarsResource(expanded ? result : null, starts.at(-1) ?? 0);
+  const start = starts.at(-1) ?? 0;
+  const resource = useStudyResultScalarsResource(expanded ? result : null, start);
   const window = resource.data;
+  const rows = window?.rows.map((values, offset) => ({
+    key: `${window.artifact_id}:${start + offset}`,
+    values,
+  }));
   return (
     <details onToggle={(event) => setExpanded(event.currentTarget.open)}>
       <summary className="cursor-pointer">Archived scalar samples · {result.authored_stage_id ?? result.source.step_id}</summary>
@@ -92,8 +97,10 @@ function StudyResultScalarHistory({ result }: { result: StudyStageResult }) {
             <div aria-label="Archived scalar values" className="max-h-48 overflow-auto" role="region" tabIndex={0}>
               <table aria-label="Archived scalar values">
                 <thead><tr>{window.columns.map((column) => <th scope="col" key={column}>{column}</th>)}</tr></thead>
-                <tbody>{window.rows.map((row, index) => (
-                  <tr key={index}>{row.map((value, column) => <td className="tabular-nums" key={column}>{value.toPrecision(7)}</td>)}</tr>
+                <tbody>{rows?.map(({ key, values }) => (
+                  <tr key={key}>{window.columns.map((column, offset) => (
+                    <td className="tabular-nums" key={column}>{values[offset]?.toPrecision(7)}</td>
+                  ))}</tr>
                 ))}</tbody>
               </table>
             </div>

@@ -41,26 +41,6 @@ pub fn commit_claimed_task_admission(
     .context("local task admission unexpectedly returned no disposition")
 }
 
-pub(crate) fn commit_claimed_task_admission_from_snapshot(
-    store: &SessionStore,
-    task: &TaskRecord,
-    claim: &TaskClaim,
-    accepted: &crate::study::AcceptedStudySnapshot,
-) -> Result<fullmag_session::TaskAdmissionCommitDisposition> {
-    commit_claimed_task_admission_with(
-        store,
-        task,
-        claim,
-        Some(accepted),
-        |lease, dependencies| {
-            let _writer = store.write_transaction()?;
-            dependencies.require_locked(store)?;
-            store.commit_task_admission(lease).map(Some)
-        },
-    )?
-    .context("local task admission unexpectedly returned no disposition")
-}
-
 /// Admit through the shared physical-host ledger when the caller has resolved
 /// an explicit host policy/allocation. The ledger owns the host-before-store
 /// transaction and retains reservations after an unknown publication outcome.
@@ -77,20 +57,6 @@ pub fn commit_claimed_task_admission_with_host(
         store, task, claim, ledger, request, inputs, None,
     )?
     .context("host task admission unexpectedly returned no disposition")
-}
-
-pub(crate) fn try_commit_claimed_task_admission_with_host_from_snapshot(
-    store: &SessionStore,
-    task: &TaskRecord,
-    claim: &TaskClaim,
-    ledger: &fullmag_session::host_resource_ledger::HostResourceLedger,
-    request: &fullmag_session::host_resource_ledger::HostReservationRequest,
-    inputs: &std::collections::BTreeMap<String, fullmag_application::ResolvedInput>,
-    accepted: &crate::study::AcceptedStudySnapshot,
-) -> Result<Option<fullmag_session::TaskAdmissionCommitDisposition>> {
-    try_commit_claimed_task_admission_with_host_inner(
-        store, task, claim, ledger, request, inputs, Some(accepted),
-    )
 }
 
 fn commit_claimed_task_admission_with_host_inner(
@@ -344,30 +310,6 @@ fn commit_claimed_task_admission_with<'a>(
 pub(crate) enum ClaimedTaskResourceCompatibility {
     Compatible,
     Incompatible(String),
-}
-
-pub(crate) fn claimed_task_resource_compatibility(
-    store: &SessionStore,
-    claim: &TaskClaim,
-) -> Result<ClaimedTaskResourceCompatibility> {
-    let intent = store
-        .read_run_intent(claim.run_id.as_str())?
-        .context("accepted task admission requires its immutable run intent")?;
-    let specification: fullmag_application::RunSpecification =
-        serde_json::from_value(intent.specification.clone())
-            .context("accepted task run intent specification is not typed")?;
-    if specification.run_id != claim.run_id {
-        bail!("accepted task claim run differs from the immutable RunSpec");
-    }
-    let accepted = crate::load_accepted_study_snapshot(
-        store,
-        &claim.run_id,
-        &specification.snapshot.project_id,
-    )?;
-    if accepted.run.intent != intent {
-        bail!("accepted task run intent changed while loading its study snapshot");
-    }
-    claimed_task_resource_compatibility_for_snapshot(claim, &specification, &accepted)
 }
 
 pub(crate) fn claimed_task_resource_compatibility_from_snapshot(
