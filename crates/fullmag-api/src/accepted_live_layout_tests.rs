@@ -315,6 +315,53 @@ fn fem_mixed_non_byte_aligned_support_round_trips_exact_lsb0_bits() {
 }
 
 #[test]
+fn large_fdm_active_cells_round_trip_without_losing_live_fields() {
+    let cells = 512 * 256;
+    let active: Vec<bool> = (0..cells).map(|index| index % 5 != 0).collect();
+    let count = active.iter().filter(|value| **value).count();
+    let layout = json!({
+        "backend": "fdm", "grid_cells": [512, 256, 1], "active_mask": active,
+        "active_mask_present": true, "total_cell_count": cells,
+        "active_cell_count": count, "inactive_cell_count": cells - count
+    });
+    let fingerprint = fullmag_application::study_state_layout_sha256(&layout).unwrap();
+    let mut fixture = LiveFixture::with_layout(layout.clone(), fingerprint, cells, "fdm_gpu", None);
+    assert!(serde_json::to_vec(&layout).unwrap().len() as u64 > ACCEPTED_LIVE_HEADER_MAX_BYTES);
+    let reference = fixture.writer.current_magnetization.as_mut().unwrap();
+    let mut payload = encode_magnetization(&fixture.magnetization);
+    for (id, value) in [("H_demag", 1.25_f64), ("H_eff", -2.5)] {
+        reference.fields.push(super::AcceptedLiveFieldRef {
+            quantity_id: id.into(),
+            n_comp: 3,
+            value_offset: (payload.len() / 8) as u64,
+            value_count: (cells * 3) as u64,
+            spatial_kind: None,
+        });
+        for _ in 0..cells * 3 {
+            payload.extend_from_slice(&value.to_le_bytes());
+        }
+    }
+    reference.content_sha256 = fullmag_application::study_artifact_content_sha256(&payload);
+    write_live_file_atomically(&fixture.attempt_dir, &reference.file_name, &payload).unwrap();
+    fixture.writer.write_header(&fixture.stats).unwrap();
+    let mut header = fixture.raw_header();
+    assert!(header["magnetization"]["layout"].get("active_mask").is_none());
+    assert_eq!(header["magnetization"]["active_support_mask"]["byte_count"], cells / 8);
+    let observed = fixture.read(None).unwrap();
+    assert_eq!(observed.header.magnetization.unwrap().layout, layout);
+    assert_eq!(observed.fields.len(), 2);
+    for (field, (id, value)) in observed.fields.iter().zip([("H_demag", 1.25), ("H_eff", -2.5)]) {
+        assert_eq!(field.quantity_id, id);
+        assert_eq!(field.layout, layout);
+        assert_eq!(field.values.len(), cells * 3);
+        assert!(field.values.iter().all(|sample| *sample == value));
+    }
+    header["magnetization"]["active_support_mask"]["encoding"] = json!(SUPPORT_MASK_ENCODING);
+    fixture.write_raw_header(&header);
+    assert!(fixture.read(None).is_err());
+}
+
+#[test]
 fn small_fem_and_legacy_fdm_inline_layouts_remain_unchanged() {
     let mut small_fem = LiveFixture::fem(vec![true, false, true, true]);
     small_fem.writer.write_header(&small_fem.stats).unwrap();

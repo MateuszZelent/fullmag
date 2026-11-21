@@ -137,6 +137,16 @@ void telemetry_has_runtime_owner() {
         "api/c_api.cpp must not wire energy reductions directly");
 }
 
+void telemetry_publishes_endpoint_dt() {
+    const std::filesystem::path root = fdm_source_root();
+    const std::string telemetry = read_file(root / "gpu/cuda/runtime/telemetry.cu");
+    check(
+        telemetry.find(
+            "out_stats->dt_seconds = ctx.accepted_step_pending ? ctx.pending_dt : ctx.current_dt;") !=
+            std::string::npos,
+        "stats must publish pending dt for an accepted candidate and current dt otherwise");
+}
+
 void streams_have_runtime_owner() {
     const std::filesystem::path root = fdm_source_root();
     const std::string streams = read_file(root / "gpu/cuda/runtime/streams.cu");
@@ -277,6 +287,7 @@ int main() {
     backend_root_is_top_level_backends_tree();
     expected_owner_paths_exist();
     telemetry_has_runtime_owner();
+    telemetry_publishes_endpoint_dt();
     streams_have_runtime_owner();
     rotated_dmi_workspace_failure_is_transactional();
     cmake_uses_gpu_runtime_owner_paths();

@@ -15,13 +15,13 @@ export function studyComputeDraftBlockedReason(context: CommandContext): string 
   }
 
   const forms = context.pendingForms?.getTransitionSnapshot();
-  if (forms?.applyingOwnerCount) {
+  if (forms?.computeApplyingOwnerCount) {
     return "Wait for the Inspector save to finish before starting Compute.";
   }
   if (forms?.guarded || forms?.preparing) {
     return "Wait for the workspace change to finish before starting Compute.";
   }
-  if (forms?.dirtyOwnerCount) {
+  if (forms?.computeDirtyOwnerCount) {
     return "Apply or discard pending Inspector changes before starting Compute.";
   }
   return null;
