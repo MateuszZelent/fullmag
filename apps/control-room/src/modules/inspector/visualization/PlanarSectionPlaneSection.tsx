@@ -4,26 +4,14 @@ import { useState } from "react";
 import { ChevronLeft, ChevronRight, ScanLine } from "lucide-react";
 
 import type { VisualizationStatePatch, VisualizationStateResource } from "@/kernel/api/apiTypes";
-import {
-  formatSectionLength,
-  fullThicknessSlabOperator,
-  matchObjectLayer,
-  objectLayerSlice,
-  resolvedSectionCoordinate,
-  sectionReduction,
-  stepSectionFraction,
-  type ObjectSectionLayer,
-  type PlanarSectionGeometry,
-  planarSectionPlanePatch,
-  type PlanarSectionPlane,
-  type PlanarSectionReduction,
-} from "@/kernel/visualization/planarSectionModel";
+import { formatSectionLength, fullThicknessSlabOperator, matchObjectLayer, objectLayerSlice, resolvedSectionCoordinate, sectionReduction, stepSectionFraction, type ObjectSectionLayer, type PlanarSectionGeometry, planarSectionPlanePatch, type PlanarSectionPlane, type PlanarSectionReduction } from "@/kernel/visualization/planarSectionModel";
 import { Button } from "@/shared/ui/Button";
 import { SegmentedControl } from "@/shared/ui/SegmentedControl";
 
 import { FieldRow } from "../primitives/FieldRow";
 import { FormField } from "../primitives/FormField";
 import { InspectorGroup } from "../primitives/InspectorGroup";
+import { sectionFractionFromNanometres } from "./PlanarSectionPlaneSection.model";
 
 type PlanarState = NonNullable<VisualizationStateResource["planar"]>;
 type DefaultSlice = PlanarState["default_slice"];
@@ -43,18 +31,6 @@ const REDUCTIONS = [
 const FREE_SECTION = "__free_section__";
 const NO_OBJECT_LAYERS: readonly ObjectSectionLayer[] = [];
 export const MONITOR_DEFINED_REASON = "Defined by the monitor";
-
-/** Fraction of the requested normal position in nm, clamped to the section. */
-export function sectionFractionFromNanometres(
-  raw: string,
-  geometry: PlanarSectionGeometry,
-): number | null {
-  if (raw.trim() === "") return null;
-  const value = Number(raw);
-  if (!Number.isFinite(value) || geometry.normalExtent <= 0) return null;
-  const fraction = (value * 1e-9 - geometry.normalMin) / geometry.normalExtent;
-  return Math.min(1, Math.max(0, fraction));
-}
 
 function nanometres(meters: number): string {
   return String(Number((meters * 1e9).toFixed(3)));

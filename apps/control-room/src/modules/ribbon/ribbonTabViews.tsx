@@ -96,37 +96,25 @@ export function quantityItemsForVisualizationTarget(
       },
     ];
   }
-  const capabilityItems = quantityCatalog
-    ? quantityCatalog.quantities
-        .filter(
-          targetKind === "airbox"
-            ? quantityCatalogEntrySupportsAirbox
-            : quantityCatalogEntrySupportsSpatialVisualization,
-        )
-        .map((quantity) =>
-          quantityCatalogPickerItem(
-            quantity,
-            quantity.unit
-              ? `${quantity.label} / ${quantity.unit}`
-              : quantity.label || quantity.id,
-          ),
-        )
-    : [];
-  const fieldItems = fieldCatalog
-    ? fieldCatalog.quantities
-        .filter(fieldCatalogQuantitySupportsSpatialVisualization)
-        .filter(
-          (quantity) =>
-            targetKind !== "airbox" ||
-            fieldCatalogQuantitySupportsAirbox(fieldCatalog, quantity.quantity_id),
-        )
-        .map((quantity) => ({
-          value: quantity.quantity_id,
-          label: quantity.unit
-            ? `${quantity.label || quantity.quantity_id} / ${quantity.unit}`
-            : quantity.label || quantity.quantity_id,
-        }))
-    : [];
+  const isSupported = targetKind === "airbox"
+    ? quantityCatalogEntrySupportsAirbox
+    : quantityCatalogEntrySupportsSpatialVisualization;
+  const capabilityItems = quantityCatalog?.quantities.flatMap((quantity) =>
+    isSupported(quantity) ? [quantityCatalogPickerItem(
+      quantity,
+      quantity.unit ? `${quantity.label} / ${quantity.unit}` : quantity.label || quantity.id,
+    )] : [],
+  ) ?? [];
+  const fieldItems = fieldCatalog ? fieldCatalog.quantities.flatMap((quantity) => {
+    if (!fieldCatalogQuantitySupportsSpatialVisualization(quantity) || (
+      targetKind === "airbox" && !fieldCatalogQuantitySupportsAirbox(fieldCatalog, quantity.quantity_id)
+    )) return [];
+    const label = quantity.label || quantity.quantity_id;
+    return [{
+      value: quantity.quantity_id,
+      label: quantity.unit ? `${label} / ${quantity.unit}` : label,
+    }];
+  }) : [];
   const baseItems = quantityCatalog
     ? mergeQuantityItems(capabilityItems, fieldItems)
     : fieldItems;

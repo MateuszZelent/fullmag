@@ -2968,6 +2968,7 @@ fn accepted_relax_handoff_for_eigen_stage(
     })
 }
 
+#[cfg(test)]
 fn accepted_relax_handoff_from_completed_stage(
     backend_plan: &BackendPlanIR,
     source_stage: &ContinuationStageSource,
@@ -8479,6 +8480,7 @@ fn record_cancelled_antenna_stage(
     Ok(())
 }
 
+#[cfg(test)]
 fn execute_synthetic_stage(
     action: &ResolvedScriptStageAction,
     artifact_dir: &Path,

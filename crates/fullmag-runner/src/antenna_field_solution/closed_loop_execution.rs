@@ -66,6 +66,7 @@ impl std::error::Error for ClosedLoopExecutionError {}
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum KnownNativeCallFailure { Invalid, Unavailable, Internal }
 
+#[cfg(any(feature = "fem-native", feature = "fem-gpu", test))]
 pub(crate) fn known_native_call_failure(status: i32) -> Option<KnownNativeCallFailure> {
     match status {
         -1 => Some(KnownNativeCallFailure::Invalid),

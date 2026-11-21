@@ -17,11 +17,8 @@ import {
   analysisResultFieldOverlayAdapter,
   createAnalysisResultFieldOverlayIntent,
 } from "@/kernel/visualization/AnalysisResultFieldOverlayIntent";
-import {
-  ANALYSIS_FIELD_VIEW_OPTIONS,
-  FrequencyDomainModeDisplayControls,
-  useFrequencyDomainModeDisplaySettings,
-} from "../FrequencyDomainModeDisplayControls";
+import { FrequencyDomainModeDisplayControls, useFrequencyDomainModeDisplaySettings } from "../FrequencyDomainModeDisplayControls";
+import { ANALYSIS_FIELD_VIEW_OPTIONS } from "../FrequencyDomainModeDisplayControls.model";
 import { ModeVisualizationPhaseControl } from "../ModeVisualizationInspectorPanel";
 import { ScientificInspectorTemplate } from "../../components/ScientificInspectorTemplate";
 import { FieldRow } from "../../primitives/FieldRow";

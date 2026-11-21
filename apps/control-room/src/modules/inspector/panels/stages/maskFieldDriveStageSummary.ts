@@ -54,11 +54,10 @@ function formatNumber(value: unknown): string {
 function parameterList(parameters: unknown): string {
   if (!Array.isArray(parameters)) return "";
   return parameters
-    .map((entry) => {
+    .flatMap((entry) => {
       const parameter = asRecord(entry);
-      return parameter ? `${String(parameter.name)} = ${formatNumber(parameter.value)}` : "";
+      return parameter ? [`${String(parameter.name)} = ${formatNumber(parameter.value)}`] : [];
     })
-    .filter(Boolean)
     .join(", ");
 }
 

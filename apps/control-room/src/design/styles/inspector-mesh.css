@@ -210,13 +210,12 @@ button.fm-mesh-detail-list__item:focus-visible {
 }
 
 .fm-mesh-build-comparison {
-  display: grid;
-  gap: var(--fm-space-1);
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0 var(--fm-space-1);
 }
 
 .fm-mesh-build-comparison__row {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) repeat(3, minmax(64px, max-content));
   min-height: var(--fm-control-height-regular);
   align-items: center;
   gap: var(--fm-space-2);
@@ -226,14 +225,35 @@ button.fm-mesh-detail-list__item:focus-visible {
   padding: 2px var(--fm-space-2);
 }
 
-.fm-mesh-build-comparison__row:first-child {
+.fm-mesh-build-comparison thead .fm-mesh-build-comparison__row {
   color: var(--fm-text-muted);
   font-weight: 600;
 }
 
-.fm-mesh-build-comparison__row span {
+.fm-mesh-build-comparison tbody th {
+  font-weight: 400;
+}
+
+.fm-mesh-build-comparison__row th,
+.fm-mesh-build-comparison__row td {
   min-width: 0;
   overflow-wrap: anywhere;
+  padding: 2px var(--fm-space-2);
+  text-align: left;
+}
+
+.fm-mesh-build-comparison__row td {
+  font-weight: 400;
+}
+
+.fm-mesh-build-comparison__row th:first-child,
+.fm-mesh-build-comparison__row td:first-child {
+  width: 52%;
+}
+
+.fm-mesh-build-comparison__row th:not(:first-child),
+.fm-mesh-build-comparison__row td:not(:first-child) {
+  width: 16%;
 }
 
 .fm-mesh-quality-view {

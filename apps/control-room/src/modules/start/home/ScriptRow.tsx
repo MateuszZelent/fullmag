@@ -9,6 +9,7 @@ import { formatOpened, shortenPath } from "../model/recentIndex";
 import { displayPath, folderOf, formatLines, runChip } from "../model/scriptRowModel";
 import type { WorkspaceItem, WorkspaceItemId } from "../model/workspaceItems";
 import { StatusPill } from "../ui/StatusPill";
+import { scriptRowDomId } from "./ScriptRow.model";
 
 export interface ScriptRowProps {
   readonly item: WorkspaceItem;
@@ -19,8 +20,6 @@ export interface ScriptRowProps {
   readonly onActivate: (id: WorkspaceItemId) => void;
   readonly onTogglePin: (id: WorkspaceItemId, pinned: boolean) => void;
 }
-
-export const scriptRowDomId = (id: WorkspaceItemId) => `fm-start-script-${id}`;
 
 /**
  * A script in the recent list. It reuses the project row's grid: the glyph

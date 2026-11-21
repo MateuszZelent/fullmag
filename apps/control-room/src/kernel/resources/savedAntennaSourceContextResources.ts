@@ -106,6 +106,8 @@ export async function loadSavedAntennaSourceContext(
       if (seen.has(artifact.artifact_id)) throw new Error("Saved source artifact discovery repeated an artifact.");
       seen.add(artifact.artifact_id);
       if (artifact.schema_id !== "fullmag.materialized_dataset.v1") continue;
+      // Keep one in-flight metadata read per inspection and verify it against the pinned manifest.
+      // react-doctor-disable-next-line react-doctor/async-await-in-loop
       const dataset = validateMaterializedDatasetEnvelope(await client.materializedDataset(
         identity.projectId, identity.runId, identity.solutionSetId, identity.revision,
         identity.memberId, artifact.artifact_id, { signal },

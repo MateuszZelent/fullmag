@@ -3,11 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   UNKNOWN_MESH_COMMAND_LANE_REASON,
 } from "@/kernel/authoring/geometryLifecycleCommandContributions";
-import {
-  meshBuildDialogUnavailableMessage,
-  resolveMeshBuildDialogLane,
-  shouldLoadMeshBuildDialogFemResources,
-} from "./MeshBuildDialog";
+import { meshBuildDialogUnavailableMessage, resolveMeshBuildDialogLane, shouldLoadMeshBuildDialogFemResources } from "./MeshBuildDialog.model";
 import {
   meshBuildDialogRuntimeStatusEquals,
   selectMeshBuildDialogRuntimeStatus,

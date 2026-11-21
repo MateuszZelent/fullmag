@@ -25,11 +25,12 @@ export function magneticObjectCount(scene: unknown): number {
 export function magneticObjectIds(scene: unknown): string[] {
   const objects = asRecord(scene)?.objects;
   if (!Array.isArray(objects)) return [];
-  return objects
-    .map((object) => asRecord(object))
-    .filter((object) => object?.role === "magnet")
-    .map((object) => (typeof object?.id === "string" ? object.id.trim() : ""))
-    .filter(Boolean);
+  return objects.flatMap((object) => {
+    const record = asRecord(object);
+    if (record?.role !== "magnet" || typeof record.id !== "string") return [];
+    const id = record.id.trim();
+    return id ? [id] : [];
+  });
 }
 
 export function numericSceneRevision(value: number | string | null): number | null {

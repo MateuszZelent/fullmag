@@ -1,5 +1,6 @@
 import { ensureViewportSettingsSection, getViewportSettingsRegion, readViewportInspectorState, restoreViewportInspectorState, selectViewportInspectorContext } from "./viewport-export-browser-qa.mjs";
 import { createHash } from "node:crypto";
+import { visitSequentially } from "./visitSequentially.mjs";
 
 const VIEWPORT_SELECTOR = ".fm-viewport-3d";
 const CANVAS_SELECTOR = `${VIEWPORT_SELECTOR} canvas`;
@@ -27,18 +28,24 @@ export async function checkFooterReadability(page, { assertCanvas, timeout }) {
   const tabs = footer.getByRole("tablist", { name: "Bottom diagnostics", exact: true });
   const frame = page.locator('[data-panel-frame="panel-bottom"]');
   await tabs.waitFor({ state: "visible", timeout });
-  const originalTab = await tabs.locator('[aria-selected="true"]').innerText();
-  const originalMode = await frame.getAttribute("data-panel-mode");
+  const [originalTab, originalMode] = await Promise.all([
+    tabs.locator('[aria-selected="true"]').innerText(),
+    frame.getAttribute("data-panel-mode"),
+  ]);
   const samples = [];
   const compactLayouts = [];
   const captures = [];
   let notificationErrors = [];
   await page.evaluate(() => {
     const errors = [];
+    const seen = new Set();
     const collect = () => {
       for (const node of document.querySelectorAll('.fm-notifications__toast[data-kind="error"]')) {
         const text = node.textContent?.trim();
-        if (text && !errors.includes(text) && errors.length < 10) errors.push(text);
+        if (text && !seen.has(text) && errors.length < 10) {
+          seen.add(text);
+          errors.push(text);
+        }
       }
     };
     const observer = new MutationObserver(collect);
@@ -79,7 +86,7 @@ export async function checkFooterReadability(page, { assertCanvas, timeout }) {
     if (await tabs.getByRole("tab").count() !== labels.length) throw new Error("Footer omitted a diagnostic tab");
     for (const theme of THEME_PALETTES) {
       await switchThemeThroughUi(page, theme.mode, timeout);
-      for (const label of labels) {
+      await visitSequentially(labels, async (label) => {
         await tabs.getByRole("tab", { name: label, exact: true }).click();
         await waitForLayoutFrame(page);
         const sample = await footer.evaluate((root) => {
@@ -149,7 +156,7 @@ export async function checkFooterReadability(page, { assertCanvas, timeout }) {
         }
         await assertNoResourceFailures();
         samples.push({ theme: theme.mode, tab: label, ...sample });
-      }
+      });
       await tabs.getByRole("tab", { name: "Telemetry", exact: true }).click();
       await waitForLayoutFrame(page);
       const overviewFooter = await footer.boundingBox();
@@ -189,8 +196,8 @@ export async function checkFooterReadability(page, { assertCanvas, timeout }) {
     const resize = frame.getByRole("button", { name: "Resize Diagnostics with arrow keys", exact: true });
     await resize.focus();
     // 40px keyboard steps, bounded by PanelFrame's own minimum dimensions.
-    for (let index = 0; index < 10; index++) await resize.press("Shift+ArrowUp");
-    for (let index = 0; index < 3; index++) await resize.press("Shift+ArrowLeft");
+    await visitSequentially(Array.from({ length: 10 }), () => resize.press("Shift+ArrowUp"));
+    await visitSequentially(Array.from({ length: 3 }), () => resize.press("Shift+ArrowLeft"));
     const first = tabs.getByRole("tab", { name: "Logs", exact: true });
     await first.click();
     await first.press("End");
@@ -244,14 +251,18 @@ export async function checkFooterReadability(page, { assertCanvas, timeout }) {
       if (floatingBounds) {
         const current = await frame.boundingBox();
         const resize = frame.getByRole("button", { name: "Resize Diagnostics with arrow keys", exact: true });
-        for (const [axis, positive, negative] of [["height", "ArrowDown", "ArrowUp"], ["width", "ArrowRight", "ArrowLeft"]]) {
-          const delta = Math.round(floatingBounds[axis] - current[axis]);
-          const key = delta > 0 ? positive : negative;
-          const steps = Math.round(Math.abs(delta) / 10);
-          if (steps > 100) throw new Error("Footer size restoration exceeded bounded keyboard budget");
-          for (let index = 0; index < Math.floor(steps / 4); index++) await resize.press(`Shift+${key}`);
-          for (let index = 0; index < steps % 4; index++) await resize.press(key);
-        }
+    const resizeOperations = [];
+    for (const [axis, positive, negative] of [["height", "ArrowDown", "ArrowUp"], ["width", "ArrowRight", "ArrowLeft"]]) {
+      const delta = Math.round(floatingBounds[axis] - current[axis]);
+      const key = delta > 0 ? positive : negative;
+      const steps = Math.round(Math.abs(delta) / 10);
+      if (steps > 100) throw new Error("Footer size restoration exceeded bounded keyboard budget");
+      resizeOperations.push(
+        ...Array.from({ length: Math.floor(steps / 4) }, () => `Shift+${key}`),
+        ...Array.from({ length: steps % 4 }, () => key),
+      );
+    }
+    await visitSequentially(resizeOperations, (key) => resize.press(key));
       }
       await menuAction("Dock panel");
     }

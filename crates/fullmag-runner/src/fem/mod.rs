@@ -41,11 +41,13 @@ pub(crate) mod eigen_operator;
 pub(crate) mod eigen_output;
 mod eigen_path;
 pub(crate) mod eigen_physical_potential;
+#[cfg(test)]
 pub(crate) use eigen_path::{
     execute_fem_eigen_path, execute_fem_eigen_path_with_producer_identity,
+};
+pub(crate) use eigen_path::{
     execute_fem_eigen_path_with_producer_identity_and_parallel_policy,
-    eigen_diagnostics_transport_metadata,
-    validate_worker_spectrum_artifact,
+    eigen_diagnostics_transport_metadata, validate_worker_spectrum_artifact,
 };
 #[cfg(test)]
 pub(crate) use eigen_path::test_support;

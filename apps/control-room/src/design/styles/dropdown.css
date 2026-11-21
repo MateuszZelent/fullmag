@@ -244,7 +244,8 @@
   transition: border-color var(--fm-transition-fast), box-shadow var(--fm-transition-fast);
 }
 
-.fm-dropdown-color__swatch:hover {
+.fm-dropdown-color__swatch:hover,
+.fm-dropdown-color__swatch:focus-within {
   border-color: var(--fm-accent);
   box-shadow:
     var(--fm-shadow-swatch-inset),

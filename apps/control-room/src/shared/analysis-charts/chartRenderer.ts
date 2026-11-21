@@ -325,10 +325,12 @@ function computeYScales(
   axes: readonly { label: string; unit: string }[],
 ): ChartDisplayTransform[] {
   const preferredUnits = axes.map((_, axisIndex) => {
-    const requested = model.series
-      .filter((series) => series.yAxis === axisIndex)
-      .map((series) => model.provenance?.displayUnits?.[`y:${series.id}`])
-      .filter((unit): unit is string => Boolean(unit));
+    const requested: string[] = [];
+    for (const series of model.series) {
+      if (series.yAxis !== axisIndex) continue;
+      const unit = model.provenance?.displayUnits?.[`y:${series.id}`];
+      if (unit) requested.push(unit);
+    }
     return requested.length > 0 && requested.every((unit) => unit === requested[0])
       ? requested[0]
       : null;

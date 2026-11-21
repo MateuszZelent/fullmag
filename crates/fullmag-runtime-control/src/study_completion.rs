@@ -8,6 +8,7 @@ use fullmag_application::{
 use fullmag_authoring::StudyStep;
 use fullmag_session::{FmsRunIntent, FmsTaskLifecycle, SessionStore};
 
+#[cfg(test)]
 pub(crate) fn dependencies_ready(
     store: &SessionStore,
     accepted: &AcceptedStudySnapshot,
@@ -309,41 +310,6 @@ fn accepted_step_id_for_task(
         }
     }
     matched_step_id.context("completion consumer is not an accepted step")
-}
-
-/// Admission and command replay use the exact accepted plan. Historical
-/// non-study streams preserve their previous completion contract.
-pub(crate) fn require_task_dependencies_locked(
-    store: &SessionStore,
-    run_id: &RunId,
-    task_id: &str,
-) -> Result<()> {
-    let Some(intent) = store.read_run_intent(run_id.as_str())? else {
-        return Ok(());
-    };
-    if intent.study_object_ref.is_none() {
-        return Ok(());
-    }
-    let specification: RunSpecification = serde_json::from_value(intent.specification)?;
-    let accepted = crate::study::load_accepted_study_snapshot(
-        store,
-        run_id,
-        &specification.snapshot.project_id,
-    )?;
-    let mut matched = None;
-    for step in &accepted.study.steps {
-        if fullmag_session::task_id_for_study_step(run_id.as_str(), &step.step_id)? == task_id {
-            if matched.is_some() {
-                bail!("completion consumer identity is ambiguous");
-            }
-            matched = Some(step);
-        }
-    }
-    let step = matched.context("completion consumer is not an accepted step")?;
-    if !dependencies_ready_locked(store, &accepted, step)? {
-        bail!("accepted task is blocked until its completion dependencies succeed");
-    }
-    Ok(())
 }
 
 #[cfg(test)]

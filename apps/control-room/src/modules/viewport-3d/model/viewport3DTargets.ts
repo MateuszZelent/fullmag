@@ -1,9 +1,7 @@
-import type { FieldVectorQuery } from "@/kernel/api/apiTypes";
 import type { Selection } from "@/kernel/selection/selectionTypes";
 import { resolveVisualizationTargetForMeshPart } from "@/kernel/selection/visualizationTargetResolver";
 import {
   type VisualizationTargetRef,
-  FDM_NATIVE_LAYER_TARGET_PREFIX,
 } from "@/kernel/visualization/ObjectVisualizationController";
 
 export { targetForFdmNativeLayer } from "@/kernel/visualization/ObjectVisualizationController";
@@ -19,11 +17,6 @@ import {
   FDM_UNIVERSE_OUTSIDE_SUPPORT_TARGET,
   type FdmUniverseOutsideSupportOverlayModel,
 } from "./fdmUniverseOverlay";
-
-export const FULL_FIELD_QUERY: FieldVectorQuery = {
-  component: "full",
-  scope_kind: "full",
-};
 
 export interface HysteresisStepViewportTarget {
   targetId: string;
@@ -74,19 +67,6 @@ export function targetForFdmDomain(
     kind: "fdm-domain",
     label: domainId,
   };
-}
-
-export function fdmNativeLayerIdFromTargetId(
-  targetId: string,
-): string | null {
-  if (!targetId.startsWith(FDM_NATIVE_LAYER_TARGET_PREFIX)) return null;
-  const encoded = targetId.slice(FDM_NATIVE_LAYER_TARGET_PREFIX.length);
-  try {
-    const layerId = decodeURIComponent(encoded);
-    return layerId.length > 0 ? layerId : null;
-  } catch {
-    return null;
-  }
 }
 
 export function targetForFdmUniverseOutsideSupport(): VisualizationTargetRef {

@@ -10,6 +10,7 @@ import type { RecentEntry } from "../model/types";
 import { ProjectThumb } from "../ui/ProjectThumb";
 import { SolverBadge } from "../ui/SolverBadge";
 import { StatusPill } from "../ui/StatusPill";
+import { rowDomId } from "./ProjectRow.model";
 
 export interface ProjectRowProps {
   readonly entry: RecentEntry;
@@ -79,7 +80,5 @@ function ProjectRowImpl({
     </div>
   );
 }
-
-export const rowDomId = (projectId: string) => `fm-start-project-${projectId}`;
 
 export const ProjectRow = memo(ProjectRowImpl);

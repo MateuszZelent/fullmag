@@ -18,6 +18,10 @@ const ribbonModuleSource = readFileSync(
   join(process.cwd(), "src/modules/ribbon/RibbonModule.tsx"),
   "utf8",
 );
+const ribbonRuntimeModelSource = readFileSync(
+  join(process.cwd(), "src/modules/ribbon/RibbonModule.model.ts"),
+  "utf8",
+);
 const footerModuleSource = readFileSync(
   join(process.cwd(), "src/modules/footer/FooterModule.tsx"),
   "utf8",
@@ -64,8 +68,8 @@ describe("session status subscription performance contracts", () => {
 
     expect(ribbonModuleSource).toContain("selectRibbonRuntimeStatus");
     expect(ribbonModuleSource).toContain("ribbonRuntimeStatusEquals");
-    expect(ribbonModuleSource).toContain("field_revision");
-    expect(ribbonModuleSource).toContain("fields_revision");
+    expect(ribbonRuntimeModelSource).toContain("field_revision");
+    expect(ribbonRuntimeModelSource).toContain("fields_revision");
     expect(ribbonModuleSource).not.toContain("const sessionStatus = useSessionStatus()");
     expect(ribbonModuleSource).not.toContain("sessionStatus.data");
     expect(footerModuleSource).toContain("useSessionStatusSelector(selectFooterTelemetryStatus");

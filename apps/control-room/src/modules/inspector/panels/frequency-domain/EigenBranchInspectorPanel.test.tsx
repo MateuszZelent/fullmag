@@ -47,12 +47,8 @@ vi.mock("@/kernel/resources/studyRuntimeResources", async (importOriginal) => ({
   }),
 }));
 
-import {
-  EigenBranchInspectorPanel,
-  buildEigenBranchResultManifestOwner,
-  buildEigenBranchModePlotHandoff,
-  buildEigenBranchPointViewModel,
-} from "./EigenBranchInspectorPanel";
+import { EigenBranchInspectorPanel } from "./EigenBranchInspectorPanel";
+import { buildEigenBranchResultManifestOwner, buildEigenBranchModePlotHandoff, buildEigenBranchPointViewModel } from "./EigenBranchInspectorPanel.model";
 
 const point: EigenBranchPoint = {
   frequencyImagHz: -14e6,

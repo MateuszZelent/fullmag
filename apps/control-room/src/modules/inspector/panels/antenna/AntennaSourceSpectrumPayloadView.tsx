@@ -23,6 +23,7 @@ const MAX_AXIS_CELLS = 64;
 const MAX_CUT_POINTS = 512;
 const MAX_HEATMAP_ZOOM = 8;
 const MAX_DISPLAY_PAYLOAD_BYTES = 64 * 1024 * 1024;
+const SPECTRUM_CUT_PLOT = { left: 52, right: 350, top: 12, bottom: 112 } as const;
 
 type SpectrumPowerScale = "linear" | "log";
 
@@ -580,7 +581,7 @@ function SpectrumCutFigure({
   minimumPositivePower: number | null;
 }) {
   const captionId = useId();
-  const plot = { left: 52, right: 350, top: 12, bottom: 112 };
+  const plot = SPECTRUM_CUT_PLOT;
   const minimumX = cut.axisRange.minimum;
   const maximumX = cut.axisRange.maximum;
   const xRange = maximumX - minimumX;

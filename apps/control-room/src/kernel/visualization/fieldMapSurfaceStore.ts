@@ -49,6 +49,9 @@ function sameGeometry(
 ): boolean {
   if (left === right) return true;
   if (!left || !right) return false;
+  const leftStops = left.stops ?? [];
+  const rightStops = right.stops ?? [];
+  if (leftStops.length !== rightStops.length) return false;
   return left.plane === right.plane &&
     left.normalMin === right.normalMin &&
     left.normalMax === right.normalMax &&
@@ -57,8 +60,7 @@ function sameGeometry(
     (left.navigationStepM ?? null) === (right.navigationStepM ?? null) &&
     left.nativeResolution?.[0] === right.nativeResolution?.[0] &&
     left.nativeResolution?.[1] === right.nativeResolution?.[1] &&
-    (left.stops?.length ?? 0) === (right.stops?.length ?? 0) &&
-    (left.stops ?? []).every((stop, index) => stop === right.stops?.[index]);
+    leftStops.every((stop, index) => stop === rightStops[index]);
 }
 
 function sameObjectLayers(
@@ -101,16 +103,6 @@ export const fieldMapSurfaceStore = {
     return () => listeners.delete(listener);
   },
 };
-
-const serverSnapshot = () => INITIAL_STATE;
-
-export function useFieldMapSurfaceState(): FieldMapState {
-  return useSyncExternalStore(
-    fieldMapSurfaceStore.subscribe,
-    fieldMapSurfaceStore.get,
-    serverSnapshot,
-  );
-}
 
 const serverEvidenceStatus = () => null;
 

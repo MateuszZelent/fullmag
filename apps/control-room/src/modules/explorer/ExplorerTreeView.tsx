@@ -734,11 +734,6 @@ export function ExplorerTreeView({
     });
     if (nextScrollTop === null) return;
     tree.scrollTop = nextScrollTop;
-    setViewport((current) =>
-      current.scrollTop === nextScrollTop
-        ? current
-        : { ...current, scrollTop: nextScrollTop },
-    );
   }, [activeNodeId, rows, viewport.height]);
 
   return (

@@ -48,6 +48,7 @@ pub struct ComputePreviewInput {
 /// OpenAPI shape for an incoming ExecutionRequestLayerIR. Its request patch is
 /// optional because the canonical IR defaults an omitted patch to empty.
 #[derive(ToSchema)]
+#[expect(dead_code, reason = "OpenAPI describes the JSON shape of the canonical domain type")]
 pub struct ExecutionLayerSchema {
     pub origin: ExecutionOriginSchema,
     #[schema(required = false)]
@@ -55,6 +56,7 @@ pub struct ExecutionLayerSchema {
 }
 
 #[derive(ToSchema)]
+#[expect(dead_code, reason = "OpenAPI describes the JSON shape of the canonical domain type")]
 pub struct ExecutionOriginSchema {
     pub kind: ExecutionOriginKindSchema,
     pub location: String,
@@ -105,6 +107,7 @@ pub struct ComputePreviewStep {
 /// its digest in a full Study preview, although the general IR type permits
 /// those fields to be absent in other contexts.
 #[derive(ToSchema)]
+#[expect(dead_code, reason = "OpenAPI describes the JSON shape of the canonical domain type")]
 pub struct ExecutionMaterializationSchema {
     pub schema_version: String,
     pub profile: ExecutionProfileSchema,
@@ -117,12 +120,14 @@ pub struct ExecutionMaterializationSchema {
 /// The materialized output always serializes its request member, including an
 /// empty patch, unlike the optional input form in ExecutionLayerSchema.
 #[derive(ToSchema)]
+#[expect(dead_code, reason = "OpenAPI describes the JSON shape of the canonical domain type")]
 pub struct MaterializedExecutionLayerSchema {
     pub origin: ExecutionOriginSchema,
     pub request: ExecutionRequestPatchSchema,
 }
 
 #[derive(ToSchema)]
+#[expect(dead_code, reason = "OpenAPI describes the JSON shape of the canonical domain type")]
 pub struct RequestedExecutionPreviewSchema {
     pub backend: ExecutionBackendSchema,
     pub device: ExecutionDeviceSchema,
@@ -134,6 +139,7 @@ pub struct RequestedExecutionPreviewSchema {
 /// Fully materialized resource intent. This is deliberately separate from
 /// ComputeResourcePatchSchema, whose optional members represent a sparse patch.
 #[derive(ToSchema)]
+#[expect(dead_code, reason = "OpenAPI describes the JSON shape of the canonical domain type")]
 pub struct ComputeResourcesPreviewSchema {
     pub schema_version: String,
     pub target: ComputeTargetSchema,
@@ -147,6 +153,7 @@ pub struct ComputeResourcesPreviewSchema {
 }
 
 #[derive(ToSchema)]
+#[expect(dead_code, reason = "OpenAPI describes the JSON shape of the canonical domain type")]
 pub struct CpuResourcesPreviewSchema {
     pub threads: RequestedThreadsSchema,
     #[schema(required = false, nullable = false)]
@@ -159,6 +166,7 @@ pub struct CpuResourcesPreviewSchema {
 }
 
 #[derive(ToSchema)]
+#[expect(dead_code, reason = "OpenAPI describes the JSON shape of the canonical domain type")]
 pub struct GpuResourcesPreviewSchema {
     pub selector: GpuSelectorSchema,
     pub device_uuids: Vec<String>,
@@ -169,6 +177,7 @@ pub struct GpuResourcesPreviewSchema {
 }
 
 #[derive(ToSchema)]
+#[expect(dead_code, reason = "OpenAPI describes the JSON shape of the canonical domain type")]
 pub struct MemoryReservationPreviewSchema {
     #[schema(required = false, nullable = false, minimum = 1)]
     pub reservation_bytes: Option<u64>,

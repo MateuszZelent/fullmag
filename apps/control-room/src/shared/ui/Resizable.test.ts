@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { normalizeStoredPanelLayout } from "./Resizable";
+import { normalizeStoredPanelLayout } from "./Resizable.model";
 
 describe("ResizablePanelGroup storage", () => {
   it("rejects a stored one-panel layout map for a two-panel group", () => {

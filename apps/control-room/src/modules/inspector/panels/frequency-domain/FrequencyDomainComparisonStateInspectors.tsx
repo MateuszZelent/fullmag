@@ -24,18 +24,3 @@ export function FrequencyDomainPublishedIdentityRows({
     </>
   );
 }
-
-export function FrequencyDomainComparisonContractRows() {
-  return (
-    <>
-      <FieldRow
-        label="Modal input"
-        value="modal frequencies are markers, never FMR peak rows"
-      />
-      <FieldRow
-        label="Compatibility"
-        value="unsupported until a typed compatibility certificate is published"
-      />
-    </>
-  );
-}

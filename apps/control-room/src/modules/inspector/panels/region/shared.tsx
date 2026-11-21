@@ -1,5 +1,6 @@
 import { Button } from "@/shared/ui/Button";
 import { DisabledReason } from "@/shared/ui/DisabledReason";
+import type { InspectorChildDraftRegistry } from "../../inspectorChildDraftRegistry";
 import { FieldRow } from "../../primitives/FieldRow";
 import { FeedbackBanner } from "../../primitives/FeedbackBanner";
 import { InspectorGroup } from "../../primitives/InspectorGroup";
@@ -44,10 +45,7 @@ export interface RegionSubPanelProps {
   materialFields: MaterialParameterFieldListResource | null;
   couplingDependencies: RegionCouplingDependency[];
   auxiliaryDraftOwnerKey?: string;
-  reportAuxiliaryDraftSession?: (
-    ownerKey: string,
-    session: RegionAuxiliaryDraftSession | null,
-  ) => void;
+  auxiliaryDraftRegistry?: InspectorChildDraftRegistry<RegionAuxiliaryDraftSession>;
   applyRegion: () => Promise<boolean>;
   duplicateRegion: () => Promise<void>;
   deleteRegion: () => Promise<void>;

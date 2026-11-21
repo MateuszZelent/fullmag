@@ -101,7 +101,8 @@ export function antennaTerminalPreparationErrors(scene: SceneResource, objectId:
     const geometry = record(object.geometry);
     const params = record(geometry?.geometry_params);
     if (!params || !["MicrostripAntennaLayout", "CPWAntennaLayout"].includes(String(geometry?.geometry_kind))) throw new Error("Only authored microstrip or CPW end caps are supported.");
-    const conductors = Array.isArray(params.conductors) ? params.conductors.map(record).map((part) => part?.id) : [];
+    const conductors = Array.isArray(params.conductors) ? params.conductors.map((part) => record(part)?.id) : [];
+    const conductorIds = new Set(conductors);
     const port = scene.antenna_port_modes?.find((item) => item.id === draft.portId && item.source_object_id === objectId);
     const transport = scene.current_transports?.find((item) => item.name === port?.current_transport_id);
     if (!port || !transport || transport.model !== "ohmic_poisson" || transport.coupling !== "one_way" || transport.conservative_current_source || transport.structured_current_closure) throw new Error("An existing static one-way Ohmic port transport without expert source or closure is required.");
@@ -113,15 +114,17 @@ export function antennaTerminalPreparationErrors(scene: SceneResource, objectId:
     text(draft.driveId, "Drive ID");
     const solver = record(transport.solver);
     if (solver?.engine !== "cg" || solver.operator_version !== "fem_charge_conforming_h1_p1.transparent.v1") throw new Error("Preparation requires the existing FEM H1 CG solver policy.");
-    if (port.branches.length !== conductors.length || port.branches.some((branch) => !conductors.includes(branch.id))) throw new Error("Port branch IDs must identify the actual authored conductor parts.");
+    if (port.branches.length !== conductors.length || port.branches.some((branch) => !conductorIds.has(branch.id))) throw new Error("Port branch IDs must identify the actual authored conductor parts.");
     const expected = port.branches.flatMap((branch) => [branch.inlet_terminal_ref, branch.outlet_terminal_ref]);
-    if (draft.rows.length !== expected.length || draft.rows.some((row) => !expected.includes(row.observationId)) || new Set(draft.rows.map((row) => row.observationId)).size !== expected.length) throw new Error("Each port observation must have exactly one explicit end cap.");
+    const expectedObservations = new Set(expected);
+    if (draft.rows.length !== expected.length || draft.rows.some((row) => !expectedObservations.has(row.observationId)) || new Set(draft.rows.map((row) => row.observationId)).size !== expected.length) throw new Error("Each port observation must have exactly one explicit end cap.");
     const actorIds = new Set<string>();
+    const branchesById = new Map(port.branches.map((branch) => [branch.id, branch]));
     for (const row of draft.rows) {
       text(row.actuatorId, "External actuator ID");
       if (actorIds.has(row.actuatorId)) throw new Error("External actuator IDs must be distinct.");
       actorIds.add(row.actuatorId);
-      const branch = port.branches.find((item) => item.id === row.conductorId);
+      const branch = branchesById.get(row.conductorId);
       if (!branch || row.observationId !== (row.selector === "local_u_min" ? branch.inlet_terminal_ref : branch.outlet_terminal_ref)) throw new Error("End cap and port observation do not match.");
       if (number(row.lengthM, "lead length in m") <= 0 || number(row.conductivitySpm, "lead conductivity in S/m") <= 0) throw new Error("Lead length and conductivity must be positive.");
       const layers = number(row.layers, "lead layers");
@@ -164,14 +167,4 @@ export function acknowledgeAntennaTerminalPreparationDraft(current: AntennaTermi
   if (!Number.isSafeInteger(revision) || revision <= submitted.baseRevision) throw new Error("Invalid terminal preparation ACK revision.");
   if (current?.key !== submitted.key || current.baseRevision !== submitted.baseRevision) return current;
   return { ...current, baseRevision: revision, dirty: current !== submitted };
-}
-
-/** Order-independent ACK identity for JSON maps and typed preparation records. */
-export function antennaPreparationIdentity(value: unknown): string {
-  function canonical(item: unknown): unknown {
-    if (Array.isArray(item)) return item.map(canonical);
-    const object = record(item);
-    return object ? Object.fromEntries(Object.keys(object).sort().map((key) => [key, canonical(object[key])])) : item;
-  }
-  return JSON.stringify(canonical(value));
 }

@@ -18,12 +18,7 @@ import {
   updateComplexVectorGlyphMaterial,
   type Viewport3DComplexVectorGlyphs,
 } from "./complexVectorGlyphs";
-import {
-  recordVectorFieldAdoption,
-  resolveVectorFieldLayerStyle,
-  resolveVectorGlyphDepthPolicy,
-  type VectorFieldLayerVectorStyle,
-} from "./VectorFieldLayer";
+import { recordVectorFieldAdoption, resolveVectorFieldLayerStyle, resolveVectorGlyphDepthPolicy, type VectorFieldLayerVectorStyle } from "./VectorFieldLayer.model";
 import { RENDER_POLICIES } from "./viewport3DRenderPolicy";
 
 /**

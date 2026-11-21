@@ -121,15 +121,15 @@ function parseTargetPoints(value: unknown): LiveChartTargetPoints {
 function parseSelectedSeriesIds(value: unknown): string[] {
   if (!Array.isArray(value)) return defaultDescriptorPreferences().selectedSeriesIds;
   if (value.length > MAX_RAW_SELECTED_SERIES_IDS) return defaultDescriptorPreferences().selectedSeriesIds;
-  const selected: string[] = [];
-  for (let index = 0; index < value.length && selected.length < MAX_SELECTED_SERIES_IDS; index += 1) {
+  const selected = new Set<string>();
+  for (let index = 0; index < value.length && selected.size < MAX_SELECTED_SERIES_IDS; index += 1) {
     const seriesId = value[index];
     if (
       typeof seriesId === "string" && seriesId.length > 0 &&
-      seriesId.length <= MAX_DESCRIPTOR_ID_LENGTH && !selected.includes(seriesId)
-    ) selected.push(seriesId);
+      seriesId.length <= MAX_DESCRIPTOR_ID_LENGTH
+    ) selected.add(seriesId);
   }
-  return selected;
+  return [...selected];
 }
 
 function parseDisplayUnits(value: unknown): Record<string, string> {

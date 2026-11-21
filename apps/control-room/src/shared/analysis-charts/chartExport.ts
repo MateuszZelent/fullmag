@@ -279,20 +279,18 @@ export function downloadChartBlob({
   filename: string;
   mimeType: string;
 }): boolean {
-  let url: string | null = null;
   try {
-    url = URL.createObjectURL(new Blob([content], { type: mimeType }));
-    const anchor = document.createElement("a");
-    anchor.download = filename;
-    anchor.href = url;
-    anchor.click();
-    // Revoke after current event loop to ensure download started.
-    queueMicrotask(() => {
-      if (url) URL.revokeObjectURL(url);
-    });
-    return true;
+    const url = URL.createObjectURL(new Blob([content], { type: mimeType }));
+    try {
+      const anchor = document.createElement("a");
+      anchor.download = filename;
+      anchor.href = url;
+      anchor.click();
+      return true;
+    } finally {
+      queueMicrotask(() => URL.revokeObjectURL(url));
+    }
   } catch {
-    if (url) URL.revokeObjectURL(url);
     return false;
   }
 }

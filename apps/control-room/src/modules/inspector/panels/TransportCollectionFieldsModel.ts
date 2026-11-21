@@ -1,5 +1,22 @@
 import type { SceneResource } from "@/kernel/api/apiTypes";
 export type CollectionRow = Record<string, unknown>;
+export function parseTransportScopeOption(value: string): [string, string] | null {
+  try {
+    const parsed: unknown = JSON.parse(value);
+    if (
+      Array.isArray(parsed) &&
+      parsed.length === 2 &&
+      typeof parsed[0] === "string" &&
+      typeof parsed[1] === "string"
+    ) {
+      return [parsed[0], parsed[1]];
+    }
+  } catch {
+    // An invalid option value cannot change an authored scope.
+  }
+  return null;
+}
+
 export function transportRows(value: string): CollectionRow[] {
   const parsed: unknown = JSON.parse(value);
   if (!Array.isArray(parsed) || parsed.some((row) => !row || typeof row !== "object" || Array.isArray(row))) throw new Error("Collection requires authored object rows.");

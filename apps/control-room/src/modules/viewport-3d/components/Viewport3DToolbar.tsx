@@ -38,8 +38,7 @@ import {
   VIEWPORT_3D_QUALITY_PROFILE_SUMMARIES,
 } from "@/shared/viewport3dQualityLabels";
 
-import { useViewport3DCommandState, viewport3dStore } from "../viewport3dStore";
-import { selectViewport3DRenderMode } from "./Viewport3DVisualizationModeControl";
+import { selectViewport3DRenderMode, useViewport3DCommandState, viewport3dStore } from "../viewport3dStore";
 
 import { VIEW_DIRECTION_COMMANDS } from "../viewport3dViewDirections";
 import type { Viewport3DVisualProfileId } from "../viewport3dVisualProfile";

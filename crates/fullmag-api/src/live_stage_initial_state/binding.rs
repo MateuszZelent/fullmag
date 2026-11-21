@@ -5,7 +5,6 @@ use serde_json::Value;
 
 use crate::error::ApiError;
 use crate::live_accepted_continuation::InitialStateDecision;
-use crate::schemas::authoring::PreparedInitialStateResource;
 use crate::schemas::commands::{RuntimeAuthoredInitialStateSource, RuntimeInitialStateRequest};
 use crate::schemas::stage_results::{
     StudyResultInitialState, StudyResultInitialStateSource, StudyResultInputSelection,

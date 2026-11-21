@@ -19,16 +19,15 @@ import {
   TooltipTrigger,
 } from "@/shared/ui/Tooltip";
 
-import type { LiveStatusResource } from "../api/apiTypes";
 import { useKernel } from "../KernelContext";
 import { statusRefreshIntervalMs } from "../realtime/communicationPolicy";
 import { useRealtimeConnection } from "../realtime/useRealtimeConnection";
 import { SimulationPreparationFailureDialog } from "./SimulationPreparationFailureDialog";
-import type { ResourceResult } from "../resources/resourceTypes";
+
 import { usePlatformComputeNodesResource } from "../resources/runtimeExplorerResources";
 import { useSessionStatusSelector } from "../resources/useSessionStatus";
 import { useSimulationPreparation } from "../resources/useSimulationPreparation";
-import type { KernelApi } from "../types";
+
 import { SimulationPreparationLog } from "./SimulationPreparationLog";
 import {
   simulationPreparationWindow,
@@ -40,60 +39,11 @@ import {
   preparationAdmissionBlocker,
   preparationAwaitsAdmission,
 } from "./simulationPreparationAdmission";
-import {
-  resolveSimulationPreparationViewModel,
-  serializeSimulationPreparationDiagnostics,
-  type SimulationPreparationStageView,
-  type SimulationPreparationViewModel,
-} from "./simulationPreparationModel";
-
-export type SimulationStartupOverlayState = SimulationPreparationViewModel & {
-  /** Why a queued preparation cannot be admitted, when the host reports it. */
-  readonly admissionBlocker?: string | null;
-};
-
-interface SimulationStartupOverlayOptions {
-  readonly allowMissingSessionSmoke?: boolean;
-}
+import { resolveSimulationPreparationViewModel, serializeSimulationPreparationDiagnostics, type SimulationPreparationStageView } from "./simulationPreparationModel";
+import { type SimulationStartupOverlayOptions, type SimulationStartupOverlayState, openSimulationPreparationDiagnostics, selectSimulationStartupOverlayResourceState, simulationStartupOverlayResourceStateEquals, hideStartupOverlay, shouldRefreshSimulationStartupStatus } from "./SimulationStartupOverlay.model";
 
 interface BrowserFullmagConfig {
   readonly allowMissingSessionSmoke?: unknown;
-}
-
-interface SimulationStartupOverlayResourceState {
-  readonly refetch: () => void;
-  readonly state: SimulationStartupOverlayState;
-  readonly status: ResourceResult<LiveStatusResource>;
-}
-
-const EMPTY_PREPARATION_RESOURCE = {
-  data: null,
-  error: null,
-  refetch: () => undefined,
-  revision: null,
-  status: "idle",
-} satisfies ResourceResult<never>;
-
-export function resolveSimulationStartupOverlayState(
-  status: ResourceResult<LiveStatusResource>,
-  options: SimulationStartupOverlayOptions = {},
-): SimulationStartupOverlayState {
-  const state = resolveSimulationPreparationViewModel(
-    EMPTY_PREPARATION_RESOURCE,
-    status,
-    null,
-  );
-  return options.allowMissingSessionSmoke ? hideStartupOverlay(state) : state;
-}
-
-function hideStartupOverlay(
-  state: SimulationStartupOverlayState,
-): SimulationStartupOverlayState {
-  return {
-    ...state,
-    isVisible: false,
-    kind: "hidden",
-  };
 }
 
 function simulationStartupOverlayOptionsFromBrowser(): SimulationStartupOverlayOptions {
@@ -534,26 +484,6 @@ function resolveProgressValueText(
   return state.progressLabel ?? "Connecting to the simulation backend";
 }
 
-type SimulationPreparationDiagnosticsNavigation = {
-  readonly bus: {
-    emit: (
-      event: "footer:tab-requested",
-      payload: { reason?: string; tab: "diagnostics" },
-    ) => void;
-  };
-  readonly layout: Pick<KernelApi["layout"], "openBottomPanel">;
-};
-
-export function openSimulationPreparationDiagnostics(
-  kernel: SimulationPreparationDiagnosticsNavigation,
-): void {
-  kernel.layout.openBottomPanel("diagnostics");
-  kernel.bus.emit("footer:tab-requested", {
-    reason: "simulation-preparation",
-    tab: "diagnostics",
-  });
-}
-
 function SimulationPreparationFailureActions({
   state,
 }: {
@@ -646,64 +576,6 @@ function SimulationPreparationFailureAttempt({
         state={state}
       />
     </>
-  );
-}
-
-export function shouldRefreshSimulationStartupStatus(
-  state: SimulationStartupOverlayState,
-): boolean {
-  return state.isVisible && (state.kind === "stale" || !state.isTerminal);
-}
-
-export function selectSimulationStartupOverlayVisibility(
-  status: ResourceResult<LiveStatusResource>,
-): boolean {
-  return resolveSimulationStartupOverlayState(status).isVisible;
-}
-
-export function selectSimulationStartupOverlayResourceState(
-  status: ResourceResult<LiveStatusResource>,
-): SimulationStartupOverlayResourceState {
-  return {
-    refetch: status.refetch,
-    state: resolveSimulationStartupOverlayState(status),
-    status,
-  };
-}
-
-export function simulationStartupOverlayResourceStateEquals(
-  previous: SimulationStartupOverlayResourceState,
-  next: SimulationStartupOverlayResourceState,
-): boolean {
-  return (
-    Object.is(previous.refetch, next.refetch) &&
-    previous.status.status === next.status.status &&
-    previous.status.error === next.status.error &&
-    previous.status.revision === next.status.revision &&
-    previous.status.data?.session.session_id ===
-      next.status.data?.session.session_id &&
-    previous.status.data?.session.session_epoch ===
-      next.status.data?.session.session_epoch &&
-    previous.status.data?.session.request_scope_epoch ===
-      next.status.data?.session.request_scope_epoch &&
-    previous.status.data?.lifecycle.session_resource ===
-      next.status.data?.lifecycle.session_resource &&
-    previous.status.data?.lifecycle.solver ===
-      next.status.data?.lifecycle.solver &&
-    previous.status.data?.solver.state === next.status.data?.solver.state &&
-    previous.status.data?.run?.run_id === next.status.data?.run?.run_id &&
-    previous.status.data?.domain.discretization ===
-      next.status.data?.domain.discretization &&
-    previous.status.data?.domain.generation_id ===
-      next.status.data?.domain.generation_id &&
-    previous.status.data?.domain.cell_count ===
-      next.status.data?.domain.cell_count &&
-    previous.status.data?.resources.domain_generation_id ===
-      next.status.data?.resources.domain_generation_id &&
-    previous.status.data?.resources.mesh_revision ===
-      next.status.data?.resources.mesh_revision &&
-    previous.status.data?.resources.simulation_preparation_revision ===
-      next.status.data?.resources.simulation_preparation_revision
   );
 }
 

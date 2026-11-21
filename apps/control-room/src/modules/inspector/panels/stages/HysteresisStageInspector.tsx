@@ -58,10 +58,7 @@ import {
   activeHysteresisSnapshotSelection,
   activeHysteresisSnapshotSelectionEquals,
   type HysteresisInspectorView,
-  hysteresisInitialStateActionPresentation,
 } from "./hysteresis/HysteresisInspectorUtils";
-
-export { hysteresisInitialStateActionPresentation };
 
 export interface HysteresisStageInspectorProps extends StageInspectorFrameProps {
   view?: HysteresisInspectorView;

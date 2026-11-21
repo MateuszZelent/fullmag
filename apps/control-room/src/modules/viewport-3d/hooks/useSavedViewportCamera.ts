@@ -10,11 +10,8 @@ import {
 import type { VisualizationStatePatch } from "@/kernel/api/apiTypes";
 import type { CameraRegistryCameraState } from "@/kernel/visualization/CameraRegistryController";
 
-import {
-  resolveViewport3DCameraFit,
-  VIEWPORT_3D_WORLD_UP,
-  type Viewport3DCameraChange,
-} from "../layers/CameraControls";
+import { VIEWPORT_3D_WORLD_UP } from "../layers/CameraControls";
+import { resolveViewport3DCameraFit, type Viewport3DCameraChange } from "../layers/CameraControls.model";
 import {
   DEFAULT_VIEWPORT_3D_CAMERA_FOV_DEGREES,
   resolveViewport3DCameraFovDegrees,
@@ -190,8 +187,11 @@ function cameraStatesEqual(
     left.fov_degrees === right.fov_degrees &&
     left.orthographic_scale === right.orthographic_scale &&
     left.projection === right.projection &&
+    left.position.length === right.position.length &&
     left.position.every((value, index) => value === right.position[index]) &&
+    left.target.length === right.target.length &&
     left.target.every((value, index) => value === right.target[index]) &&
+    left.up.length === right.up.length &&
     left.up.every((value, index) => value === right.up[index])
   );
 }

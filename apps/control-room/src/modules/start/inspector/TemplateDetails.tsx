@@ -41,8 +41,13 @@ export function TemplateDetails({
   const createScript = async () => {
     setBusy(true);
     setMessage(null);
-    setMessage(await createScriptFromTemplate(template, scriptSaver));
-    setBusy(false);
+    try {
+      setMessage(await createScriptFromTemplate(template, scriptSaver));
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : String(error));
+    } finally {
+      setBusy(false);
+    }
   };
   const save = () => {
     if (script === null) return;
