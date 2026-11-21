@@ -1465,8 +1465,13 @@ mod tests {
         })).unwrap();
         store.commit_run_catalog(&catalog).unwrap();
         let before = std::fs::read(root.join("runs").join(run_id).join("run_catalog.json")).unwrap();
+        // libtest lists the full module path without the crate name.
+        let (_, test_module) = module_path!().split_once("::").unwrap();
+        let test_name = format!(
+            "{test_module}::candidate_discovery_survives_cross_process_writer_and_preserves_pending_task"
+        );
         let mut holder = Command::new(std::env::current_exe().unwrap())
-            .args(["--exact", "tests::candidate_discovery_survives_cross_process_writer_and_preserves_pending_task", "--nocapture"])
+            .args(["--exact", &test_name, "--nocapture"])
             .env(HOLDER_ROOT, &root).stdin(Stdio::piped()).stdout(Stdio::piped()).spawn().unwrap();
         let mut output = std::io::BufReader::new(holder.stdout.take().unwrap());
         loop {
