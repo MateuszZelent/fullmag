@@ -890,6 +890,7 @@ def build_geometry_assets_for_request(
     requested_backend: "BackendTarget",
     geometries: Sequence[object],
     discretization: DiscretizationHints | None,
+    source_root: str | Path | None = None,
     study_universe: dict[str, object] | None = None,
     mesh_workflow: dict[str, object] | None = None,
     per_object_recipes: Mapping[str, PerObjectMeshRecipe] | None = None,
@@ -1083,7 +1084,10 @@ def build_geometry_assets_for_request(
                 if explicit_source is not None:
                     if discretization.fem.order != 1:
                         raise ValueError("explicit owner-bound MeshData source requires FEM P1")
-                    mesh = MeshData.load(Path(explicit_source).expanduser())
+                    mesh_path = Path(explicit_source).expanduser()
+                    if not mesh_path.is_absolute() and source_root is not None:
+                        mesh_path = (Path(source_root).expanduser() / mesh_path).resolve()
+                    mesh = MeshData.load(mesh_path)
                     mesh.validate_strict(require_positive_orientation=True)
                     if any(cell_type != "tet4" for cell_type in mesh.cell_types):
                         raise ValueError("explicit owner-bound MeshData source requires Tet4 cells")
@@ -3319,6 +3323,7 @@ class Problem:
                 requested_backend=runtime.backend_target,
                 geometries=geometries,
                 discretization=discretization,
+                source_root=source_root,
                 study_universe=study_universe,
                 mesh_workflow=mesh_workflow,
                 per_object_recipes=per_object_recipes,

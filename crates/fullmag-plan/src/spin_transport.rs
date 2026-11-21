@@ -17,9 +17,9 @@ use fullmag_ir::{
 use fullmag_ir::{ChargePotentialGaugeIR, TransportCouplingIR};
 use sha2::{Digest, Sha256};
 
+use crate::PlanError;
 use crate::physics_graph::physics_module_execution_enabled;
 use crate::surface_selectors::resolve_fem_surface_selector;
-use crate::PlanError;
 
 const FEM_STAGE_OERSTED_CALLBACK_POLICY: &str = "fem_stage_oersted_callback.v1";
 const FEM_STAGE_TRANSPORT_CALLBACK_POLICY: &str = "fem_stage_transport_callback.v1";
@@ -4263,6 +4263,8 @@ fn internal_faces(grid: [u32; 3], axis: u8) -> Vec<StructuredInternalFaceIR> {
 
 #[cfg(test)]
 mod tests {
+    use std::process::Command;
+
     use super::*;
     use fullmag_ir::*;
 
@@ -5307,6 +5309,165 @@ mod tests {
             parent_id: None,
         };
         (mesh, vec![segment], vec![part])
+    }
+
+    #[test]
+    fn public_fem_m2_python_example_resolves_through_full_planner() {
+        let repo_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../..")
+            .canonicalize()
+            .expect("repository root");
+        let mut python_paths = vec![repo_root.join("packages/fullmag-py/src")];
+        if let Some(existing) = std::env::var_os("PYTHONPATH") {
+            python_paths.extend(std::env::split_paths(&existing));
+        }
+        let python_path = std::env::join_paths(python_paths).expect("PYTHONPATH");
+        let output = Command::new("python3")
+            .args([
+                "-B",
+                "-m",
+                "fullmag.runtime.helper",
+                "export-run-config",
+                "--script",
+                "examples/fem_reciprocal_m2_public.py",
+                "--backend",
+                "fem",
+                "--mode",
+                "strict",
+                "--precision",
+                "double",
+            ])
+            .current_dir(&repo_root)
+            .env("PYTHONPATH", python_path)
+            .output()
+            .expect("Python runtime is installed for spin-transport planner contracts");
+        assert!(
+            output.status.success(),
+            "public FEM M2 example export failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+
+        let exported: serde_json::Value =
+            serde_json::from_slice(&output.stdout).expect("run-config JSON");
+        let runtime_metadata = &exported["stages"][0]["ir"]["problem_meta"]["runtime_metadata"];
+        assert!(
+            runtime_metadata["study_universe"].is_null(),
+            "the transport-only fixture must not add an air or shared-domain region"
+        );
+        assert_eq!(runtime_metadata["mesh_workflow"]["build_target"], "mesh");
+        assert_eq!(
+            runtime_metadata["mesh_workflow"]["per_geometry"][0]["source"],
+            "fem_reciprocal_m2_public_mesh.npz"
+        );
+        let charge_boundaries =
+            &exported["stages"][0]["ir"]["current_modules"][0]["boundaries"];
+        assert_eq!(charge_boundaries[0]["surfaces"][0]["surface_id"], "left");
+        assert_eq!(charge_boundaries[1]["surfaces"][0]["surface_id"], "right");
+        let stage_ir = exported["stages"][0]["ir"].clone();
+        let mut problem: ProblemIR =
+            serde_json::from_value(stage_ir).expect("public example ProblemIR");
+        // Run-config export stores one common mesh at the root and compacts
+        // equal per-stage geometry_assets to null. The canonical script-stage
+        // materializer restores this shared asset before planning.
+        if problem.geometry_assets.is_none() {
+            let shared_geometry_assets = &exported["shared_geometry_assets"];
+            assert!(
+                !shared_geometry_assets.is_null(),
+                "public example run config must provide shared FEM geometry assets"
+            );
+            problem.geometry_assets = Some(
+                serde_json::from_value(shared_geometry_assets.clone())
+                    .expect("canonical shared geometry assets"),
+            );
+        }
+        // The portable per-object P1 asset must reach the planner as a real
+        // mesh. The transport-only example deliberately has no shared air mesh.
+        let body_mesh = problem
+            .geometry_assets
+            .as_ref()
+            .and_then(|assets| {
+                assets
+                    .fem_mesh_assets
+                    .iter()
+                    .find(|asset| asset.geometry_name == "m2_body_geom")
+            })
+            .expect("public example's explicit body MeshData asset");
+        let mesh = body_mesh
+            .mesh
+            .as_ref()
+            .expect("public example's per-object MeshData");
+        assert!(
+            !mesh.nodes.is_empty() && mesh.cell_count() == 12 && mesh.facet_count() == 12,
+            "public example must materialize the complete tagged Tet4 body mesh"
+        );
+        let bounds_min = std::array::from_fn::<_, 3, _>(|axis| {
+            mesh.nodes
+                .iter()
+                .map(|node| node[axis])
+                .fold(f64::INFINITY, f64::min)
+        });
+        let bounds_max = std::array::from_fn::<_, 3, _>(|axis| {
+            mesh.nodes
+                .iter()
+                .map(|node| node[axis])
+                .fold(f64::NEG_INFINITY, f64::max)
+        });
+        let markers_on_face = |axis: usize, coordinate: f64| {
+            (0..mesh.facet_count())
+                .filter_map(|index| {
+                    let nodes = mesh.facets.item_nodes(index)?;
+                    nodes
+                        .iter()
+                        .all(|node| {
+                            (mesh.nodes[*node as usize][axis] - coordinate).abs() <= 1.0e-20
+                        })
+                        .then_some(mesh.boundary_markers[index])
+                })
+                .collect::<BTreeSet<_>>()
+        };
+        let left_markers = markers_on_face(0, bounds_min[0]);
+        let right_markers = markers_on_face(0, bounds_max[0]);
+        assert_eq!(left_markers, BTreeSet::from([101]));
+        assert_eq!(right_markers, BTreeSet::from([102]));
+        assert!(left_markers.is_disjoint(&right_markers));
+        for (axis, coordinate, marker) in [
+            (1, bounds_min[1], 103),
+            (1, bounds_max[1], 104),
+            (2, bounds_min[2], 105),
+            (2, bounds_max[2], 106),
+        ] {
+            assert_eq!(markers_on_face(axis, coordinate), BTreeSet::from([marker]));
+        }
+
+        let plan = crate::plan(&problem).unwrap_or_else(|error| {
+            panic!(
+                "public FEM M2 example did not plan: {}",
+                error.reasons.join("; ")
+            )
+        });
+        let BackendPlanIR::Fem(fem) = plan.backend_plan else {
+            panic!("public FEM M2 example did not resolve to a FEM plan");
+        };
+        let spin = fem
+            .spin_transport_plans
+            .iter()
+            .find(|candidate| candidate.module_id == "m2_spin")
+            .expect("public example spin transport plan");
+        assert_eq!(spin.resolved_coupling, TransportCouplingIR::Bidirectional);
+        assert_eq!(spin.resolved_discretization, BackendTarget::Fem);
+        assert_eq!(spin.resolved_device, ExecutionDevice::Cpu);
+        let descriptor = spin
+            .fem_cpu_double
+            .as_ref()
+            .expect("public example FEM M2 descriptor");
+        assert_eq!(descriptor.charge_domain.element_mask, [true; 12]);
+        assert_eq!(descriptor.charge_dirichlet, [(101, 0.0), (102, 1.0e-3)]);
+        let sidewalls = descriptor
+            .charge_insulating_boundaries
+            .iter()
+            .find(|boundary| boundary.id == "sidewalls")
+            .expect("public example sidewall insulation");
+        assert_eq!(sidewalls.boundary_attributes, [103, 104, 105, 106]);
     }
 
     fn cube_closed_current_view(mesh: &MeshIR) -> ResolvedFemConservativeCurrentViewIR {
