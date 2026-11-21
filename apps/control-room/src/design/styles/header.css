@@ -410,7 +410,9 @@
 /* Save/Apply/Undo/Redo duplicate the ribbon and shortcuts, so they yield
    first while the full main menu is still shown (at 1600px they overflow
    the header once the project status keeps its minimum width). */
-@media (width < 1700px) {
+/* Save, Undo and Redo stay reachable as icons at every width (mockup header);
+   their labels appear only on very wide screens. */
+@media (width < 1180px) {
   .fm-header__quick-actions {
     display: none;
   }
@@ -436,7 +438,9 @@
   flex: none;
 }
 
-@media (width < 1440px) {
+/* Below 1800 px the menu folds into the main-menu button (mockup header), so
+   the quick actions, search and status keep their room. */
+@media (width < 1800px) {
   .fm-header__nav {
     display: none;
   }
@@ -804,5 +808,55 @@
 .fm-header__project-status {
   border-radius: var(--fm-radius-pill);
   padding-inline: var(--fm-space-2);
+}
+
+.fm-header__quick-actions {
+  gap: 2px;
+  margin-left: 0;
+  padding-left: var(--fm-space-2);
+  border-left: 1px solid var(--fm-border-muted);
+}
+
+.fm-header__quick-action {
+  min-width: var(--fm-control-height-compact);
+  border-color: transparent;
+  border-radius: var(--fm-radius-pill);
+  background: transparent;
+  box-shadow: none;
+  padding-inline: var(--fm-space-2);
+}
+
+.fm-header__quick-action:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--fm-text-primary) 6%, transparent);
+}
+
+.fm-header__search {
+  width: min(440px, 30vw);
+  height: calc(var(--fm-control-height-compact) + 2px);
+  font-size: var(--fm-font-size-sm);
+}
+
+/* The status pill takes the tone of the connection. */
+.fm-header__session-indicator:has(.fm-header__session-dot[data-status="connected"]) {
+  border-color: color-mix(in srgb, var(--fm-success) 34%, transparent);
+  background: color-mix(in srgb, var(--fm-success) 12%, transparent);
+}
+
+.fm-header__session-indicator:has(.fm-header__session-dot[data-status="connected"]) .fm-header__session-label {
+  color: var(--fm-success-text);
+}
+
+.fm-header__session-indicator:has(.fm-header__session-dot[data-status="error"]) {
+  border-color: color-mix(in srgb, var(--fm-danger) 40%, transparent);
+  background: color-mix(in srgb, var(--fm-danger) 10%, transparent);
+}
+
+.fm-header__session-indicator:has(.fm-header__session-dot[data-status="error"]) .fm-header__session-label {
+  color: var(--fm-danger-text);
+}
+
+.fm-header__session-dot {
+  width: 7px;
+  height: 7px;
 }
 
