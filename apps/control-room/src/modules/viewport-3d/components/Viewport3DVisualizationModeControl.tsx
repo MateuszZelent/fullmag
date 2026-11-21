@@ -9,6 +9,18 @@ const VISUALIZATION_MODE_OPTIONS = [
   { label: "Presentation", value: "presentation" },
 ] as const;
 
+/** One route for every mode switch (settings, Inspector and the viewport toolbar). */
+export function selectViewport3DRenderMode(
+  current: "scientific" | "presentation",
+  renderMode: "scientific" | "presentation",
+): void {
+  if (renderMode === current) return;
+  viewport3dStore.setAppearance({ renderMode });
+  if (renderMode === "presentation") {
+    viewport3dStore.setEffectAmbientOcclusion(true);
+  }
+}
+
 export function Viewport3DVisualizationModeControl() {
   const { appearance } = useViewport3DCommandState();
 
@@ -21,14 +33,7 @@ export function Viewport3DVisualizationModeControl() {
           columns={2}
           options={VISUALIZATION_MODE_OPTIONS}
           value={appearance.renderMode}
-          onValueChange={(renderMode) => {
-            if (renderMode === appearance.renderMode) return;
-
-            viewport3dStore.setAppearance({ renderMode });
-            if (renderMode === "presentation") {
-              viewport3dStore.setEffectAmbientOcclusion(true);
-            }
-          }}
+          onValueChange={(renderMode) => selectViewport3DRenderMode(appearance.renderMode, renderMode)}
         />
         <p className="fm-viewport-3d-settings__help">
           Scientific preserves exact field colors. Presentation shades field colors to reveal shape; use Scientific for quantitative color reading.
