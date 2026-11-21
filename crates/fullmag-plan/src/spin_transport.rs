@@ -5370,7 +5370,7 @@ mod tests {
             domain_mesh
                 .region_markers
                 .iter()
-                .any(|marker| marker.geometry_name == "m2_body"),
+                .any(|marker| marker.geometry_name == "m2_body_geom"),
             "public example's shared mesh must retain the transport body region"
         );
 
