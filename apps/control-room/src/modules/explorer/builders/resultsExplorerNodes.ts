@@ -111,7 +111,11 @@ interface ResultResourceLike {
 }
 
 interface ResultManifestLike extends ResultResourceLike {
+  mesh_generation_id?: string | null;
   payload?: unknown;
+  revision?: string | number | null;
+  run_id?: string | null;
+  stage_id?: string | null;
 }
 
 export interface PhysicsFirstResultResourceInput {
@@ -119,6 +123,7 @@ export interface PhysicsFirstResultResourceInput {
   artifacts?: PostprocessingCatalogSnapshot<readonly ArtifactResource[]>;
   branches?: ResultResourceLike | null;
   currentRun?: { revision: number | string; run_id: string } | null;
+  datasets?: readonly AnalysisResultDatasetSummaryResource[] | null;
   dispersion?: (ResultResourceLike & { path_metadata?: unknown; text?: string | null }) | null;
   manifest?: { result_manifest?: ResultManifestLike | null } | null;
   observationFrames?: PostprocessingCatalogSnapshot<ObservationFrameListResource>;
@@ -471,12 +476,29 @@ export function physicsFirstResultsSnapshotFromResources(
     resultContextRunId: runId,
   };
   if (!runId || !payload) return { contractGaps, snapshot: emptySnapshot };
+  if (resultManifest?.run_id && resultManifest.run_id !== runId) {
+    addContractGap("Frequency-domain artifact belongs to a different run");
+    return { contractGaps, snapshot: emptySnapshot };
+  }
 
   const studyProduct = nonEmptyString(payload.study_product);
-  const stageId = nonEmptyString(payload.stage_id);
+  const payloadStageId = nonEmptyString(payload.stage_id) ?? nonEmptyString(resultManifest?.stage_id);
+  // The CLI artifact can omit stage_id. Resolve it only from an unambiguous
+  // published catalog entry for the run that owns this artifact.
+  const stageCandidates = !payloadStageId && resultManifest?.run_id === runId
+    ? input.datasets?.filter((dataset) =>
+        dataset.run_id === runId &&
+        dataset.product_kind === studyProduct &&
+        dataset.status.resource === "ready" &&
+        dataset.status.execution === "published",
+      ) ?? []
+    : [];
+  const stageId = payloadStageId ??
+    (stageCandidates.length === 1 ? nonEmptyString(stageCandidates[0]?.stage_id) : null);
   const equilibriumId = nonEmptyString(payload.equilibrium_identity);
   const requested = record(payload.requested_execution);
-  const boundaryContext = nonEmptyString(requested?.boundary_context);
+  const boundaryContext = nonEmptyString(requested?.boundary_context) ??
+    nonEmptyString(payload.boundary_context);
   if (!equilibriumId) {
     addContractGap("Frequency-domain artifact does not publish equilibrium_identity");
   }
@@ -494,6 +516,7 @@ export function physicsFirstResultsSnapshotFromResources(
 
   const kSampling =
     kSamplingFromMetadata(input.dispersion?.path_metadata) ??
+    samplingFromRecord(record(payload.k_sampling)) ??
     kSamplingFromRequestedExecution(requested);
   if (boundaryContext === "floquet_periodic" && !kSampling) {
     addContractGap("Periodic/Floquet artifact does not publish a supported k sampling resource");
@@ -506,12 +529,14 @@ export function physicsFirstResultsSnapshotFromResources(
     ...payload,
     ...(kSampling ? { k_sampling: kSamplingForFrequencyContext(kSampling) } : {}),
     run_id: runId,
-  });
+    stage_id: stageId,
+  }, { meshGenerationId: resultManifest?.mesh_generation_id });
   for (const gap of frequencyContext.contractGaps) {
     addContractGap(gap);
   }
   const artifactRevision =
-    nonEmptyString(payload.revision) ?? input.currentRun?.revision ?? "unknown";
+    nonEmptyString(payload.revision) ?? resultManifest?.revision ??
+    input.currentRun?.revision ?? "unknown";
   const products: PhysicsFirstResultProducts =
     studyProduct === "modal_eigen"
       ? {
@@ -548,7 +573,7 @@ export function physicsFirstResultsSnapshotFromResources(
     products,
     runId,
     stageId,
-    stageLabel: nonEmptyString(payload.stage_label) ?? stageId,
+    stageLabel: nonEmptyString(payload.stage_label) ?? stageCandidates[0]?.title ?? stageId,
     studyProduct,
   };
 

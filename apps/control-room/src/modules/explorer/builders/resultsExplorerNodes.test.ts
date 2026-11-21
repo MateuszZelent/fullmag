@@ -660,6 +660,74 @@ describe("physicsFirstResultsSnapshotFromResources", () => {
     expect(nodes.find((node) => node.label === "energy")).not.toHaveProperty("columns");
   });
 
+  it("opens native FEM eigenmodes using the current published catalog owner", () => {
+    const runId = "fem-cpu-preview";
+    const dataset: AnalysisResultDatasetSummaryResource = {
+      dataset_id: "modal-preview",
+      dataset_revision: "modal-r1",
+      item_count: 2,
+      manifest_resource_key: "catalog-manifest",
+      product_kind: "modal_eigen",
+      run_id: runId,
+      sample_count: 1,
+      stage_id: "stage-001",
+      status: { completeness: "ready", execution: "published", qualification: "unvalidated", resource: "ready" },
+      title: "Modal eigen spectrum",
+    };
+    const resources = {
+      currentRun: { revision: 1, run_id: runId },
+      datasets: [dataset],
+      manifest: {
+        result_manifest: {
+          payload: {
+            boundary_context: "finite_open",
+            equilibrium_identity: "certified-equilibrium",
+            k_sampling: { kind: "single", vector_rad_per_m: [0, 0, 0] },
+            mesh_identity: "certified-mesh",
+            requested_execution: { backend: "fem", device: "cpu" },
+            study_product: "modal_eigen",
+          },
+          run_id: runId,
+          status: "ready",
+        },
+      },
+      spectrum: {
+        payload: {
+          samples: [{
+            sample_index: 0,
+            modes: [
+              { frequency_hz: 1.56e9, mode_field_id: "field-0", mode_field_resource_key: "mode-field-0", raw_mode_index: 0 },
+              { frequency_hz: 6.47e9, mode_field_available: false, raw_mode_index: 1 },
+            ],
+          }],
+        },
+        status: "ready",
+      },
+    };
+    const adapted = physicsFirstResultsSnapshotFromResources(resources);
+    const tree = withCatalogAnalysisFamilies(buildPhysicsFirstResultsTree(adapted.snapshot), [dataset]);
+    const nodes = flattenExplorerNodes(tree);
+
+    expect(nodes.find((node) => node.label === "Eigenfrequency Spectrum")).toMatchObject({
+      analysisRunId: runId,
+      analysisStageId: "stage-001",
+      datasetId: dataset.dataset_id,
+    });
+    expect(nodes.filter((node) => node.kind === "results.resonance.modal.mode")).toEqual([
+      expect.objectContaining({ fieldId: "field-0", frequencyHz: 1.56e9 }),
+    ]);
+
+    const conflicting = { ...dataset, dataset_id: "modal-second", stage_id: "stage-002" };
+    expect(physicsFirstResultsSnapshotFromResources({
+      ...resources,
+      datasets: [dataset, conflicting],
+    }).snapshot.entries).toEqual([]);
+    expect(physicsFirstResultsSnapshotFromResources({
+      ...resources,
+      currentRun: { ...resources.currentRun, run_id: "another-run" },
+    }).snapshot.entries).toEqual([]);
+  });
+
   it("publishes a concrete canonical modal field target with complete provenance", () => {
     const adapted = physicsFirstResultsSnapshotFromResources({
       currentRun: { revision: 17, run_id: "runtime-run-17" },
