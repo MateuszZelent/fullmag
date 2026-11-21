@@ -1,0 +1,13 @@
+[
+  {"name": "unary_minus_binds_looser", "parameters": [], "locals": [], "output": "-t**2", "canonical": "(-(t**2.0))", "samples": [[3.0, -9.0], [-1.5, -2.25]]},
+  {"name": "right_associative", "parameters": [], "locals": [], "output": "t**3**2", "canonical": "(t**(3.0**2.0))", "samples": [[2.0, 512.0], [1.1, 2.357947691000002]]},
+  {"name": "unary_minus_in_exponent", "parameters": [], "locals": [], "output": "2**-t**2", "canonical": "(2.0**(-(t**2.0)))", "samples": [[1.0, 0.5], [2.0, 0.0625], [0.5, 0.8408964152537145]]},
+  {"name": "unary_plus_in_exponent", "parameters": [], "locals": [], "output": "t ** +2", "canonical": "(t**2.0)", "samples": [[3.0, 9.0]]},
+  {"name": "double_unary_minus", "parameters": [], "locals": [], "output": "--t**2", "canonical": "(-(-(t**2.0)))", "samples": [[3.0, 9.0]]},
+  {"name": "tighter_than_mul_and_div", "parameters": [], "locals": [], "output": "2 + 3 * t**2 / 4", "canonical": "(2.0 + ((3.0 * (t**2.0)) / 4.0))", "samples": [[2.0, 5.0], [0.3, 2.0675]]},
+  {"name": "parenthesized_negative_base", "parameters": [], "locals": [], "output": "(-t)**2", "canonical": "((-t)**2.0)", "samples": [[3.0, 9.0], [-0.25, 0.0625]]},
+  {"name": "call_as_base", "parameters": [], "locals": [], "output": "sin(t)**2 + cos(t)**2", "canonical": "((sin(t)**2.0) + (cos(t)**2.0))", "samples": [[0.7, 1.0], [2.0, 1.0]]},
+  {"name": "negative_parameter_base", "parameters": [["a", -2.0]], "locals": [], "output": "a**2 * t", "canonical": "(((-2.0)**2.0) * t)", "samples": [[1.5, 6.0]]},
+  {"name": "power_in_local", "parameters": [], "locals": [["u", "t**2"]], "output": "-u**0.5", "canonical": "(-((t**2.0)**0.5))", "samples": [[4.0, -4.0], [-3.0, -3.0]]},
+  {"name": "gaussian_pulse", "parameters": [["t0", 1e-09], ["s", 2e-10]], "locals": [], "output": "exp(-(t - t0)**2 / s**2)", "canonical": "exp(((-((t - 1e-9)**2.0)) / (2e-10**2.0)))", "samples": [[0.0, 1.3887943864964021e-11], [1e-09, 1.0], [1.1e-09, 0.7788007830714054]]}
+]

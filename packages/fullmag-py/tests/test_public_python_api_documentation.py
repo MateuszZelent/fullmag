@@ -57,6 +57,7 @@ API_PARAMETER_OWNERS: dict[str, Path] = {
     "MaterialParameterField.sampled": Path(
         "python-api/materials/spatial-parameter-fields.md"
     ),
+    "fm.fields.function": Path("python-api/materials/spatial-parameter-fields.md"),
 }
 
 API_CONSTRUCTORS = {
@@ -92,6 +93,7 @@ API_CONSTRUCTORS = {
     "MaterialParameterField.linear": fm.MaterialParameterField.linear,
     "MaterialParameterField.radial": fm.MaterialParameterField.radial,
     "MaterialParameterField.sampled": fm.MaterialParameterField.sampled,
+    "fm.fields.function": fm.fields.function,
 }
 
 

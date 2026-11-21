@@ -56,7 +56,7 @@ fn antenna_mask() -> Owned {
             ("sigma_y", "fwhm_y / (2 * sqrt(2 * log(2)))"),
             (
                 "g",
-                "exp(-(x + xs)^2 / (2 * wavelength^2)) * exp(-y^2 / (2 * sigma_y^2))",
+                "exp(-(x + xs)**2 / (2 * wavelength**2)) * exp(-y**2 / (2 * sigma_y**2))",
             ),
         ],
         &[
@@ -215,7 +215,7 @@ fn constant_time_function_does_not_depend_on_time() {
 
 #[test]
 fn canonical_outputs_substitute_locals() {
-    let mask = owned(&[("a", 2.0)], &[("u", "a * x")], &["u + 1", "-u", "u ^ 2"])
+    let mask = owned(&[("a", 2.0)], &[("u", "a * x")], &["u + 1", "-u", "u ** 2"])
         .compile(FunctionKind::Mask)
         .unwrap();
     assert_eq!(
@@ -223,9 +223,30 @@ fn canonical_outputs_substitute_locals() {
         vec![
             "((2.0 * x) + 1.0)".to_string(),
             "(-(2.0 * x))".to_string(),
-            "((2.0 * x)^2.0)".to_string(),
+            "((2.0 * x)**2.0)".to_string(),
         ]
     );
+    // The legacy spelling `^` prints canonically as `**`.
+    let legacy = owned(&[("a", 2.0)], &[("u", "a * x")], &["u + 1", "-u", "u ^ 2"])
+        .compile(FunctionKind::Mask)
+        .unwrap();
+    assert_eq!(legacy.canonical_outputs(), mask.canonical_outputs());
+}
+
+#[test]
+fn canonical_outputs_parenthesize_negative_parameters() {
+    let mask = owned(&[("a", -2.0)], &[], &["a ** 2", "x - a", "0"])
+        .compile(FunctionKind::Mask)
+        .unwrap();
+    assert_eq!(
+        mask.canonical_outputs(),
+        vec![
+            "((-2.0)**2.0)".to_string(),
+            "(x - (-2.0))".to_string(),
+            "0.0".to_string(),
+        ]
+    );
+    assert_eq!(mask.eval_mask([1.0, 0.0, 0.0]), [4.0, 3.0, 0.0]);
 }
 
 #[test]

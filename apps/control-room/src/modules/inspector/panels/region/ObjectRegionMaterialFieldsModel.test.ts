@@ -5,6 +5,7 @@ import {
   isEditableMaterialField,
   materialFieldDraftFromAssignment,
   materialFieldFromDraft,
+  materialFunctionFieldSummary,
   sceneObjectMaterialFields,
   unitForMaterialParameter,
   type MaterialFieldDraft,
@@ -211,6 +212,76 @@ describe("ObjectRegionMaterialFieldsModel", () => {
 
     expect(fields).toHaveLength(1);
     expect(fields[0]?.assignment_id).toBe("field:constant");
+  });
+
+  it("summarizes a function field read-only and keeps it out of the editors", () => {
+    // The fixture omits fields the summary does not read.
+    const assignment = {
+      assignment_id: "film:object:alpha",
+      owner_object: "film",
+      parameter: "alpha",
+      region_id: null,
+      value: {
+        frame: "object",
+        function: {
+          expression_version: "field_expr.v1",
+          outputs: ["a0 + a_max*max(0.0, (x - x_edge)/L)**3"],
+          parameters: [
+            { name: "a0", value: 0.01 },
+            { name: "a_max", value: 0.5 },
+            { name: "x_edge", value: 2e-6 },
+            { name: "L", value: 6e-7 },
+          ],
+        },
+        kind: "function",
+      },
+    } as unknown as SceneMaterialParameterAssignment;
+
+    expect(isEditableMaterialField(assignment)).toBe(false);
+    expect(materialFieldDraftFromAssignment(assignment)).toBeNull();
+    expect(materialFunctionFieldSummary(assignment)).toEqual({
+      assignmentId: "film:object:alpha",
+      definition: null,
+      equation: "a0 + a_max*max(0.0, (x - x_edge)/L)**3",
+      frame: "object",
+      locals: [],
+      parameter: "alpha",
+      parameters: [
+        { name: "a0", value: 0.01 },
+        { name: "a_max", value: 0.5 },
+        { name: "x_edge", value: 2e-6 },
+        { name: "L", value: 6e-7 },
+      ],
+      unit: "",
+    });
+
+    const definition = {
+      ...assignment,
+      value: {
+        frame: "world",
+        function: {
+          expression_version: "field_expr.v1",
+          locals: [{ expression: "max(0.0, x)", name: "s" }],
+          name: "alpha",
+          outputs: ["0.01 + s"],
+        },
+        kind: "function",
+        unit: "1",
+      },
+    } as unknown as SceneMaterialParameterAssignment;
+    expect(materialFunctionFieldSummary(definition)).toMatchObject({
+      definition: "alpha",
+      frame: "world",
+      locals: [{ expression: "max(0.0, x)", name: "s" }],
+      parameters: [],
+      unit: "1",
+    });
+    expect(
+      materialFunctionFieldSummary({
+        ...assignment,
+        value: { kind: "constant", unit: null, value: 0.02 },
+      }),
+    ).toBeNull();
   });
 
   it("uses expected SI units for common magnetic parameters", () => {

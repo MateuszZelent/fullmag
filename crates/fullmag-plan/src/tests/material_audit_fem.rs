@@ -967,3 +967,52 @@ fn fem_aex_field_uniformity_uses_relative_si_tolerance() {
         "a homogeneous Aex field should keep using the scalar coefficient"
     );
 }
+
+/// A function alpha (`fm.fields.function`) is evaluated at every FEM node,
+/// the same way as on FDM cell centres.
+#[test]
+fn fem_function_alpha_is_sampled_at_every_node() {
+    const A0: f64 = 0.02;
+    const A1: f64 = 0.3;
+    const L: f64 = 2e-9;
+    let by_hand = |point: &[f64; 3]| {
+        let step = if point[1] - 0.5e-9 > 0.0 { 1.0 } else { 0.0 };
+        A0 + A1 * (point[0] / L).powf(2.0) + 0.01 * step
+    };
+    let mut ir = conformal_absorber_problem(
+        false,
+        false,
+        fullmag_ir::AbsorbingBoundaryFrameIR::Object,
+    );
+    ir.magnets[0].absorbing_boundary = None;
+    ir.material_parameter_fields = vec![serde_json::from_value(serde_json::json!({
+        "assignment_id": "strip:object:alpha", "owner_object": "strip", "parameter": "alpha",
+        "value": {"kind": "function", "frame": "object", "function": {
+            "expression_version": "field_expr.v1",
+            "name": "alpha",
+            "parameters": [{"name": "a0", "value": A0}, {"name": "a1", "value": A1},
+                           {"name": "L", "value": L}],
+            "locals": [{"name": "s", "expression": "x / L"}],
+            "outputs": ["a0 + a1 * s**2 + 0.01 * heaviside(y - 0.5e-9)"]}}
+    }))
+    .unwrap()];
+
+    let planned = plan(&ir).expect("a function alpha should plan on FEM");
+    let BackendPlanIR::Fem(fem) = planned.backend_plan else {
+        panic!("expected FEM plan");
+    };
+    let alpha = fem
+        .material
+        .alpha_field
+        .as_ref()
+        .expect("a function alpha must be sampled per node");
+    assert_eq!(alpha.len(), fem.mesh.nodes.len());
+    for (index, (point, value)) in fem.mesh.nodes.iter().zip(alpha).enumerate() {
+        let expected = by_hand(point);
+        assert!(
+            (value - expected).abs() <= 1e-15,
+            "node {index} at {point:?}: alpha={value} expected={expected}"
+        );
+    }
+    assert!(alpha.iter().any(|value| (value - A0).abs() > 1e-3));
+}

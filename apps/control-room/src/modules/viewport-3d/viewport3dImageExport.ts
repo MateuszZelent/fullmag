@@ -417,32 +417,58 @@ function compositeAnnotations(
   }
 
   const stack = root.querySelector<HTMLElement>(".fm-viewport-3d__colorbar-stack");
-  if (!stack || !isVisible(stack, view)) return;
-  context.save();
-  context.beginPath();
-  const stackRect = canvasRectForElement(stack, canvasRect, scaleX, scaleY);
-  context.rect(stackRect.x, stackRect.y, stackRect.width, stackRect.height);
-  context.clip();
-  for (const card of stack.querySelectorAll<HTMLElement>(":scope > .fm-viewport-3d__colorbar")) {
-    if (!isVisible(card, view)) continue;
-    const cardRect = canvasRectForElement(card, canvasRect, scaleX, scaleY);
-    drawSurface(context, card, cardRect, view.getComputedStyle(card));
-    for (const child of card.querySelectorAll<HTMLElement>(
-      ".fm-viewport-3d__colorbar-context, .fm-viewport-3d__colorbar-quantity, .fm-viewport-3d__colorbar-component, .fm-viewport-3d__colorbar-unit, .fm-viewport-3d__colorbar-range-label, .fm-viewport-3d__colorbar-limit",
-    )) {
-      if (isVisible(child, view)) {
-        const childStyle = view.getComputedStyle(child);
-        const childRect = canvasRectForElement(child, canvasRect, scaleX, scaleY);
-        if (child.classList.contains("fm-viewport-3d__colorbar-unit")) {
-          drawSurface(context, child, childRect, childStyle);
+  if (stack && isVisible(stack, view)) {
+    context.save();
+    context.beginPath();
+    const stackRect = canvasRectForElement(stack, canvasRect, scaleX, scaleY);
+    context.rect(stackRect.x, stackRect.y, stackRect.width, stackRect.height);
+    context.clip();
+    for (const card of stack.querySelectorAll<HTMLElement>(":scope > .fm-viewport-3d__colorbar")) {
+      if (!isVisible(card, view)) continue;
+      const cardRect = canvasRectForElement(card, canvasRect, scaleX, scaleY);
+      drawSurface(context, card, cardRect, view.getComputedStyle(card));
+      for (const child of card.querySelectorAll<HTMLElement>(
+        ".fm-viewport-3d__colorbar-context, .fm-viewport-3d__colorbar-quantity, .fm-viewport-3d__colorbar-component, .fm-viewport-3d__colorbar-unit, .fm-viewport-3d__colorbar-range-label, .fm-viewport-3d__colorbar-limit",
+      )) {
+        if (isVisible(child, view)) {
+          const childStyle = view.getComputedStyle(child);
+          const childRect = canvasRectForElement(child, canvasRect, scaleX, scaleY);
+          if (child.classList.contains("fm-viewport-3d__colorbar-unit")) {
+            drawSurface(context, child, childRect, childStyle);
+          }
+          drawText(context, child, canvasRect, scaleX, scaleY);
         }
+      }
+      const ramp = card.querySelector<HTMLElement>(".fm-viewport-3d__colorbar-ramp");
+      if (ramp && isVisible(ramp, view)) drawRamp(context, ramp, canvasRect, scaleX, scaleY);
+    }
+    context.restore();
+  }
+
+  const savedPlayback = canvas.closest<HTMLElement>(".fm-saved-playback-viewport");
+  const savedLegend = savedPlayback?.querySelector<HTMLElement>(".fm-saved-playback-legend");
+  if (savedLegend && isVisible(savedLegend, view)) {
+    const legendRect = canvasRectForElement(savedLegend, canvasRect, scaleX, scaleY);
+    const targetTop = Math.max(0, height - legendRect.height - 12 * scaleY);
+    // The saved-results legend sits below the canvas in the UI; place it inside this PNG frame.
+    context.save();
+    context.beginPath();
+    context.rect(0, 0, width, height);
+    context.clip();
+    context.translate(0, targetTop - legendRect.y);
+    drawSurface(context, savedLegend, legendRect, view.getComputedStyle(savedLegend));
+    for (const child of savedLegend.querySelectorAll<HTMLElement>(
+      ":scope > [data-export-annotation-text], :scope > .fm-saved-playback-gradient",
+    )) {
+      if (!isVisible(child, view)) continue;
+      if (child.classList.contains("fm-saved-playback-gradient")) {
+        drawRamp(context, child, canvasRect, scaleX, scaleY);
+      } else {
         drawText(context, child, canvasRect, scaleX, scaleY);
       }
     }
-    const ramp = card.querySelector<HTMLElement>(".fm-viewport-3d__colorbar-ramp");
-    if (ramp && isVisible(ramp, view)) drawRamp(context, ramp, canvasRect, scaleX, scaleY);
+    context.restore();
   }
-  context.restore();
 }
 
 function createOutputCanvas(

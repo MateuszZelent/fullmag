@@ -101,6 +101,14 @@ jobs:
           tests/standard_problems/bimeron/goebel_2019/test_contract.py
           scripts/test_render_goebel_2019_bimeron_figure.py
 
+      - name: Check field formula authoring and script export
+        run: >-
+          python -m pytest -q
+          packages/fullmag-py/tests/test_field_expr_power_cases.py
+          packages/fullmag-py/tests/test_mask_function.py
+          packages/fullmag-py/tests/test_space_time.py
+          packages/fullmag-py/tests/test_material_field_function.py
+
       - name: Run eigensolve scene and execution profile merge contracts
         run: >-
           python -m pytest -q

@@ -17,7 +17,7 @@ fn antenna_mask() -> Value {
             "locals": [
                 {"name": "k", "expression": "2 * pi / wavelength"},
                 {"name": "sigma_y", "expression": "fwhm_y / (2 * sqrt(2 * log(2)))"},
-                {"name": "g", "expression": "exp(-(x + xs)^2 / (2 * wavelength^2)) * exp(-y^2 / (2 * sigma_y^2))"}
+                {"name": "g", "expression": "exp(-(x + xs)**2 / (2 * wavelength**2)) * exp(-y**2 / (2 * sigma_y**2))"}
             ],
             "outputs": ["B01 * g * sin(k * x - pi / 2)", "0.0", "B01 * g * sin(k * x)"]
         }

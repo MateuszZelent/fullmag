@@ -4,6 +4,7 @@ import {
   Activity,
   Box,
   Database,
+  Download,
   FileCheck,
   GitBranch,
   Gauge,
@@ -98,7 +99,14 @@ export function WorkspaceSideRail({ side }: { side: "left" | "right" }) {
           label: "3D View",
           onSelect: choose(inspectorContext === "view", () => setViewport3DInspectorContext("view")),
         },
-        // The selected object's Inspector tabs follow the two contexts.
+        {
+          active: inspectorContext === "export",
+          icon: Download,
+          id: "export",
+          label: "Export",
+          onSelect: choose(inspectorContext === "export", () => setViewport3DInspectorContext("export")),
+        },
+        // The selected object's Inspector tabs follow the top-level contexts.
         ...(inspectorContext === "selection" ? inspectorTabs : []).map(({ id, label }) => {
           const active = inspectorTab === id;
           return {

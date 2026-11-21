@@ -595,7 +595,12 @@ def render_loaded_problem_as_script(
     lines.append("")
     lines.append("import fullmag as fm")
     lines.extend(_mask_library_imports([*mask_payloads, *staged_mask_payloads]))
-    math_names = _mask_math_names([*mask_payloads, *staged_mask_payloads])
+    math_names = sorted(
+        set(_mask_math_names([*mask_payloads, *staged_mask_payloads]))
+        | _field_function_math_names(
+            _material_field_function_payloads(base_problem, overrides.get("geometries"))
+        )
+    )
     if math_names:
         lines.append(f"from math import {', '.join(math_names)}")
     lines.append("")
@@ -628,11 +633,13 @@ def render_loaded_problem_as_script(
     if rotated_dmi_lines:
         lines.append("")
         lines.extend(rotated_dmi_lines)
+    field_function_names: set[str] = set()
     region_owned_lines, region_vars = _render_region_owned_authoring(
         base_problem,
         magnet_vars,
         source_root=source_root,
         overrides=overrides,
+        function_names=field_function_names,
     )
     if region_owned_lines:
         lines.append("")
@@ -683,7 +690,9 @@ def render_loaded_problem_as_script(
         lines.extend(field_drive_lines)
 
     mask_renderer = _MaskAntennaRenderer(
-        reserved_names={"study", "fm", *magnet_vars.values(), *region_vars.values()},
+        reserved_names={
+            "study", "fm", *magnet_vars.values(), *region_vars.values(), *field_function_names
+        },
         source_root=source_root,
     )
     mask_lines = _render_mask_field_drives(mask_payloads, mask_renderer)
@@ -1313,7 +1322,12 @@ def _render_scene_document_bootstrap(
         for payload in (builder.get("mask_field_drives") or [])
         if include_authored_stages and isinstance(payload, Mapping)
     ]
-    math_names = _mask_math_names([*whole_study_mask_payloads, *staged_mask_payloads])
+    math_names = sorted(
+        set(_mask_math_names([*whole_study_mask_payloads, *staged_mask_payloads]))
+        | _field_function_math_names(
+            _material_field_function_payloads(None, builder.get("geometries"))
+        )
+    )
     lines = [
         "import fullmag as fm",
         *_mask_library_imports([*whole_study_mask_payloads, *staged_mask_payloads]),
@@ -1565,8 +1579,12 @@ def _render_scene_document_bootstrap(
         lines.append(_render_antenna_port_mode_payload_line(mode))
 
     # Region references are also used by object-scoped damping, even before a stage is added.
+    field_function_names: set[str] = set()
     region_lines, region_vars = _render_region_owned_authoring_from_override(
-        objects, magnet_vars=snapshot_handles, source_root=Path.cwd()
+        objects,
+        magnet_vars=snapshot_handles,
+        source_root=Path.cwd(),
+        function_names=field_function_names,
     )
     lines.extend(region_lines)
     if include_authored_stages:
@@ -1574,7 +1592,13 @@ def _render_scene_document_bootstrap(
             for torque in builder.get("spin_torques") or []:
                 lines.append(f"study.spin_torque({_render_spin_torque_override(torque)})")
         mask_renderer = _MaskAntennaRenderer(
-            reserved_names={"study", "fm", *snapshot_handles.values(), *region_vars.values()},
+            reserved_names={
+                "study",
+                "fm",
+                *snapshot_handles.values(),
+                *region_vars.values(),
+                *field_function_names,
+            },
             source_root=Path.cwd(),
         )
         lines.extend(_render_mask_field_drives(whole_study_mask_payloads, mask_renderer))
@@ -4623,17 +4647,22 @@ def _render_region_owned_authoring(
     *,
     source_root: Path,
     overrides: dict[str, object],
+    function_names: set[str] | None = None,
 ) -> tuple[list[str], dict[tuple[str, str], str]]:
+    """Regions and material fields. The names of the ``def`` lines written for
+    field functions are added to ``function_names``."""
     geometries_override = overrides.get("geometries")
     if isinstance(geometries_override, list):
         return _render_region_owned_authoring_from_override(
             geometries_override,
             magnet_vars=magnet_vars,
             source_root=source_root,
+            function_names=function_names,
         )
 
     lines: list[str] = []
     region_vars: dict[tuple[str, str], str] = {}
+    functions = _FieldFunctionRenderer(set(magnet_vars.values()))
     for magnet in problem.magnets:
         magnet_var = magnet_vars[magnet.name]
         live_region_ids = {
@@ -4673,7 +4702,7 @@ def _render_region_owned_authoring(
                         f"{region_var}.material_transition({', '.join(transition_kwargs)})"
                     )
             for override in region.material_overrides or []:
-                field_expr = _render_material_parameter_field_expr(override.value)
+                field_expr = _render_material_parameter_field_expr(override.value, functions)
                 lines.append(
                     f"{region_var}.set_material({_py_repr(override.parameter)}, {field_expr}, "
                     f"priority={int(override.priority)}, "
@@ -4692,7 +4721,12 @@ def _render_region_owned_authoring(
     for magnet in problem.magnets:
         magnet_var = magnet_vars[magnet.name]
         for assignment in magnet.material_parameter_fields:
-            field_expr = _render_material_parameter_field_expr(assignment.value)
+            field_expr = _render_material_parameter_field_expr(assignment.value, functions)
+            if _is_object_alpha_function(
+                assignment.to_ir(), magnet_name=magnet.name
+            ):
+                lines.append(f"{magnet_var}.alpha = {field_expr}")
+                continue
             kwargs = [
                 _py_repr(assignment.parameter),
                 field_expr,
@@ -4709,9 +4743,33 @@ def _render_region_owned_authoring(
             if assignment.conflict_policy != "error":
                 kwargs.append(f"conflict_policy={_py_repr(assignment.conflict_policy)}")
             lines.append(f"{magnet_var}.set_material_field({', '.join(kwargs)})")
+    return _region_owned_section(lines, functions, function_names), region_vars
+
+
+def _region_owned_section(
+    lines: list[str], functions: _FieldFunctionRenderer, function_names: set[str] | None
+) -> list[str]:
+    if function_names is not None:
+        function_names.update(functions.names())
     if lines:
-        return ["# Object-owned regions and material fields", *lines], region_vars
-    return [], region_vars
+        return ["# Object-owned regions and material fields", *functions.def_lines, *lines]
+    return []
+
+
+def _is_object_alpha_function(assignment: Mapping[str, object], *, magnet_name: str) -> bool:
+    """A function alpha set as ``film.alpha = fm.fields.function(...)``: the
+    whole object, the assignment id of that setter, default priority and policy."""
+    value = assignment.get("value")
+    payload = value.to_ir() if hasattr(value, "to_ir") else value
+    return (
+        isinstance(payload, Mapping)
+        and payload.get("kind") == "function"
+        and str(assignment.get("parameter")).lower() == "alpha"
+        and assignment.get("assignment_id") == f"{magnet_name}:object:alpha"
+        and assignment.get("region_id") is None
+        and not assignment.get("priority")
+        and assignment.get("conflict_policy", "error") == "error"
+    )
 
 
 def _render_region_owned_authoring_from_override(
@@ -4719,9 +4777,11 @@ def _render_region_owned_authoring_from_override(
     *,
     magnet_vars: dict[str, str],
     source_root: Path,
+    function_names: set[str] | None = None,
 ) -> tuple[list[str], dict[tuple[str, str], str]]:
     lines: list[str] = []
     region_vars: dict[tuple[str, str], str] = {}
+    functions = _FieldFunctionRenderer(set(magnet_vars.values()))
     for geo_obj in geometries:
         g = _normalize_mapping(geo_obj)
         magnet_name = str(g.get("name", ""))
@@ -4785,7 +4845,9 @@ def _render_region_owned_authoring_from_override(
             if isinstance(material_overrides, list):
                 for raw_override in material_overrides:
                     override = _normalize_mapping(raw_override)
-                    field_expr = _render_material_parameter_field_expr(override.get("value"))
+                    field_expr = _render_material_parameter_field_expr(
+                        override.get("value"), functions
+                    )
                     lines.append(
                         f"{region_var}.set_material({_py_repr(str(override.get('parameter')))}, {field_expr}, "
                         f"priority={int(override.get('priority', 0))}, "
@@ -4814,7 +4876,10 @@ def _render_region_owned_authoring_from_override(
         assignments = raw_assignments if isinstance(raw_assignments, list) else []
         for raw_assignment in assignments:
             assignment = _normalize_mapping(raw_assignment)
-            field_expr = _render_material_parameter_field_expr(assignment.get("value"))
+            field_expr = _render_material_parameter_field_expr(assignment.get("value"), functions)
+            if _is_object_alpha_function(assignment, magnet_name=magnet_name):
+                lines.append(f"{magnet_var}.alpha = {field_expr}")
+                continue
             kwargs = [
                 _py_repr(str(assignment.get("parameter"))),
                 field_expr,
@@ -4834,9 +4899,7 @@ def _render_region_owned_authoring_from_override(
             if isinstance(conflict_policy, str) and conflict_policy != "error":
                 kwargs.append(f"conflict_policy={_py_repr(conflict_policy)}")
             lines.append(f"{magnet_var}.set_material_field({', '.join(kwargs)})")
-    if lines:
-        return ["# Object-owned regions and material fields", *lines], region_vars
-    return [], region_vars
+    return _region_owned_section(lines, functions, function_names), region_vars
 
 
 def _render_region_shape_expr_from_payload(
@@ -4941,11 +5004,17 @@ def _render_material_transition_kwargs(transition: dict[str, object]) -> list[st
     return kwargs
 
 
-def _render_material_parameter_field_expr(value: object) -> str:
+def _render_material_parameter_field_expr(
+    value: object, functions: "_FieldFunctionRenderer | None" = None
+) -> str:
     payload = value.to_ir() if hasattr(value, "to_ir") else value
     if not isinstance(payload, dict):
         raise ValueError("material parameter field must render from a dict payload")
     kind = payload.get("kind")
+    if kind == "function":
+        if functions is None:
+            raise ValueError("a function material field needs the field-function renderer")
+        return functions.call(payload)
     if kind == "constant":
         args = [_py_parameter_literal(payload.get("value"))]
         unit = payload.get("unit")
@@ -4988,6 +5057,112 @@ def _render_material_parameter_field_expr(value: object) -> str:
             ")"
         )
     raise ValueError(f"unsupported material parameter field kind {kind!r}")
+
+
+class _FieldFunctionRenderer:
+    """Renders ``fm.fields.function`` calls of one script section.
+
+    A field written as an equation string (``FunctionIR.name`` absent, no
+    locals) is written back as a string; a field written as a ``def`` gets one
+    ``def`` per distinct function, collected in ``def_lines`` for the start of
+    the section, and a call by name.
+    """
+
+    def __init__(self, taken: set[str]) -> None:
+        self._taken = (
+            set(taken)
+            | set(_MASK_MATH_NAMES)
+            | {"abs", "min", "max", "heaviside", "x", "y", "z", "t", "study", "fm"}
+        )
+        self._defs: dict[str, str] = {}
+        self.def_lines: list[str] = []
+
+    def names(self) -> set[str]:
+        return set(self._defs.values())
+
+    def call(self, payload: Mapping[str, object]) -> str:
+        function = _normalize_mapping(payload.get("function"))
+        if _field_function_is_text(function):
+            arguments = [_py_repr(str(function["outputs"][0]))]
+        else:
+            arguments = [self._def_name(function)]
+        # Exact literals: a parameter must survive the round trip bit for bit.
+        arguments.extend(
+            f"{item['name']}={_py_float_roundtrip(float(item['value']))}"
+            for item in function.get("parameters") or []
+        )
+        frame = payload.get("frame")
+        if frame not in (None, "object"):
+            arguments.append(f"frame={_py_repr(str(frame))}")
+        unit = payload.get("unit")
+        if unit is not None:
+            arguments.append(f"unit={_py_repr(str(unit))}")
+        return f"fm.fields.function({', '.join(arguments)})"
+
+    def _def_name(self, function: Mapping[str, object]) -> str:
+        body_key = json.dumps(
+            {key: function.get(key) for key in ("name", "locals", "outputs")}
+            | {"parameters": [item["name"] for item in function.get("parameters") or []]},
+            sort_keys=True,
+        )
+        name = self._defs.get(body_key)
+        if name is None:
+            name = _unique_identifier(str(function.get("name") or "material_field"), self._taken)
+            self._defs[body_key] = name
+            self.def_lines.extend(_render_mask_function_def("field", name, function))
+            self.def_lines.extend(["", ""])
+        return name
+
+
+def _field_function_is_text(function: Mapping[str, object]) -> bool:
+    """An equation string: no function name, no locals, one output."""
+    return (
+        function.get("name") is None
+        and not function.get("locals")
+        and len(function.get("outputs") or ()) == 1
+    )
+
+
+def _material_field_function_payloads(
+    problem: Problem | None, geometries: object
+) -> list[dict[str, object]]:
+    """``function`` material fields of a script: the builder's geometries replace
+    the problem's magnets, as in ``_render_region_owned_authoring``."""
+    values: list[object] = []
+    if isinstance(geometries, list):
+        for raw_geometry in geometries:
+            geometry = _normalize_mapping(raw_geometry)
+            for raw_region in geometry.get("object_regions") or []:
+                for raw_override in _normalize_mapping(raw_region).get("material_overrides") or []:
+                    values.append(_normalize_mapping(raw_override).get("value"))
+            for raw_assignment in geometry.get("material_parameter_fields") or []:
+                values.append(_normalize_mapping(raw_assignment).get("value"))
+    elif problem is not None:
+        for magnet in problem.magnets:
+            for region in magnet.object_regions:
+                values.extend(override.value for override in region.material_overrides or [])
+            values.extend(assignment.value for assignment in magnet.material_parameter_fields)
+    payloads = [value.to_ir() if hasattr(value, "to_ir") else value for value in values]
+    return [
+        payload
+        for payload in payloads
+        if isinstance(payload, dict) and payload.get("kind") == "function"
+    ]
+
+
+def _field_function_math_names(payloads: Sequence[Mapping[str, object]]) -> set[str]:
+    """``math`` names read by the ``def`` bodies of field functions; equation
+    strings are not executed and need no import."""
+    used: set[str] = set()
+    for payload in payloads:
+        function = _normalize_mapping(payload.get("function"))
+        if _field_function_is_text(function):
+            continue
+        texts = [str(local["expression"]) for local in function.get("locals") or []]
+        texts.extend(str(output) for output in function.get("outputs") or [])
+        for text in texts:
+            used.update(_IDENTIFIER_TOKEN.findall(text))
+    return {name for name in _MASK_MATH_NAMES if name in used}
 
 
 def _render_couplings(
@@ -6700,7 +6875,10 @@ def _mask_field_drive_payloads(
 
 
 def _canonical_function_ir(value: object) -> tuple[object, ...] | None:
-    """Equations and values of a ``FunctionIR``, independent of how its JSON was written."""
+    """Equations and values of a ``FunctionIR``, independent of how its JSON was written.
+
+    Legacy ``^`` is read as ``**``, so a stored ready-antenna term still matches its rebuild.
+    """
     function = _normalize_mapping(value)
     if not function:
         return None
@@ -6708,8 +6886,11 @@ def _canonical_function_ir(value: object) -> tuple[object, ...] | None:
         str(function.get("expression_version") or ""),
         str(function.get("name") or ""),
         tuple((str(item["name"]), float(item["value"])) for item in function.get("parameters") or []),
-        tuple((str(item["name"]), str(item["expression"])) for item in function.get("locals") or []),
-        tuple(str(output) for output in function.get("outputs") or []),
+        tuple(
+            (str(item["name"]), _field_expr_as_python(str(item["expression"])))
+            for item in function.get("locals") or []
+        ),
+        tuple(_field_expr_as_python(str(output)) for output in function.get("outputs") or []),
     )
 
 
@@ -6802,7 +6983,11 @@ def _mask_functions(payload: Mapping[str, object]) -> list[tuple[str, Mapping[st
 
 
 def _field_expr_as_python(text: str) -> str:
-    """``field_expr.v1`` is Python syntax except for ``^`` (power)."""
+    """``field_expr.v1`` text is a Python expression; ``^`` is the legacy spelling of ``**``.
+
+    Equations stored before ``**`` became canonical use ``^``; both are the same
+    operator with the same precedence, so the replacement is exact.
+    """
     return text.replace("^", "**")
 
 
@@ -6831,7 +7016,9 @@ def _unique_identifier(base: str, taken: set[str]) -> str:
 
 
 def _render_mask_function_def(kind: str, name: str, function: Mapping[str, object]) -> list[str]:
-    variables = ["x", "y", "z"] if kind == "mask" else ["t"]
+    """``def`` of a mask (``x, y, z`` -> tuple), time (``t``) or field
+    (``x, y, z`` -> number) function."""
+    variables = ["x", "y", "z"] if kind in ("mask", "field") else ["t"]
     parameters = [str(item["name"]) for item in function.get("parameters") or []]
     lines = [f"def {name}({', '.join([*variables, *parameters])}):"]
     for local in function.get("locals") or []:

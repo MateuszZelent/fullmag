@@ -680,7 +680,22 @@ class MagnetHandle:
         return self._alpha_control
 
     @alpha.setter
-    def alpha(self, value: float) -> None:
+    def alpha(self, value: float | MaterialParameterField) -> None:
+        if isinstance(value, MaterialParameterField):
+            # A field of the whole object, mumax3 style: ``film.alpha = fm.fields.function(...)``.
+            # It replaces the field set this way before; a later number sets only
+            # the base value, which the field overrides wherever it is defined.
+            self._assert_active_context()
+            assignment_id = f"{self._name}:object:alpha"
+            replacement = MaterialParameterAssignment(
+                assignment_id=assignment_id, owner_object=self._name, parameter="alpha", value=value
+            )
+            self._material_parameter_assignments = [
+                assignment
+                for assignment in self._material_parameter_assignments
+                if assignment.assignment_id != assignment_id
+            ] + [replacement]
+            return
         numeric = float(value)
         if not math.isfinite(numeric) or numeric < 0.0:
             raise ValueError("alpha must be finite and non-negative")

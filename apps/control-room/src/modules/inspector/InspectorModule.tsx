@@ -16,7 +16,14 @@ import {
   useSelectionSelector,
 } from "@/kernel/selection/useSelection";
 
-import { Viewport3DInspectorOutlet, useViewport3DInspectorContext, useViewport3DInspectorVisited, setViewport3DInspectorContext } from "@/modules/viewport-3d/public";
+import {
+  Viewport3DExportPanelOutlet,
+  Viewport3DInspectorOutlet,
+  setViewport3DInspectorContext,
+  useViewport3DExportVisited,
+  useViewport3DInspectorContext,
+  useViewport3DInspectorVisited,
+} from "@/modules/viewport-3d/public";
 import { InspectorContexts } from "./InspectorContexts";
 import { InspectorDirtySelectionGuard } from "./InspectorDirtySelectionGuard";
 import {
@@ -60,18 +67,31 @@ export default function InspectorModule() {
   const kernel = useKernel();
   const context = useViewport3DInspectorContext();
   const viewVisited = useViewport3DInspectorVisited();
+  const exportVisited = useViewport3DExportVisited();
   const savedPlayback = useSavedResultsPlaybackSelection();
   const selectionPanel = savedPlayback && !savedPlayback.studyResult
     ? <SavedResultsPlaybackInspector />
     : <LiveInspectorModule />;
   if (!kernel.modules.get("viewport-3d")) return selectionPanel;
-  return <InspectorContexts context={context} onContextChange={setViewport3DInspectorContext} view={viewVisited ? <ViewInspectorPanel /> : null} viewActions={<ViewInspectorActions />}>
-    {selectionPanel}
-  </InspectorContexts>;
+  return (
+    <InspectorContexts
+      context={context}
+      exportPanel={exportVisited ? <ExportInspectorPanel /> : null}
+      onContextChange={setViewport3DInspectorContext}
+      view={viewVisited ? <ViewInspectorPanel /> : null}
+      viewActions={<ViewInspectorActions />}
+    >
+      {selectionPanel}
+    </InspectorContexts>
+  );
 }
 
 function ViewInspectorPanel() {
   return <section className="fm-inspector-view" aria-label="3D View Inspector"><Viewport3DInspectorOutlet /></section>;
+}
+
+function ExportInspectorPanel() {
+  return <section className="fm-inspector-view" aria-label="3D Export Inspector"><Viewport3DExportPanelOutlet /></section>;
 }
 
 function ViewInspectorActions() {

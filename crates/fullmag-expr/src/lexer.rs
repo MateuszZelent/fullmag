@@ -1,6 +1,6 @@
 //! Tokens of `field_expr.v1`.
 
-use crate::ExprError;
+use crate::{ExprError, FunctionKind};
 
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) enum TokenKind {
@@ -10,6 +10,9 @@ pub(crate) enum TokenKind {
     Minus,
     Star,
     Slash,
+    /// `**`.
+    Power,
+    /// `^`, the legacy spelling of `**` in mask and time equations.
     Caret,
     LeftParen,
     RightParen,
@@ -24,7 +27,7 @@ pub(crate) struct Token {
     pub position: usize,
 }
 
-pub(crate) fn tokenize(source: &str) -> Result<Vec<Token>, ExprError> {
+pub(crate) fn tokenize(source: &str, kind: FunctionKind) -> Result<Vec<Token>, ExprError> {
     let bytes = source.as_bytes();
     let mut tokens = Vec::new();
     let mut index = 0;
@@ -38,6 +41,15 @@ pub(crate) fn tokenize(source: &str) -> Result<Vec<Token>, ExprError> {
         let kind = match byte {
             b'+' => TokenKind::Plus,
             b'-' => TokenKind::Minus,
+            b'*' if bytes.get(index + 1) == Some(&b'*') => {
+                // `**` only when the two stars touch, as in Python (`* *` is two tokens).
+                index += 2;
+                tokens.push(Token {
+                    kind: TokenKind::Power,
+                    position,
+                });
+                continue;
+            }
             b'*' => TokenKind::Star,
             b'/' => TokenKind::Slash,
             b'^' => TokenKind::Caret,
@@ -48,6 +60,16 @@ pub(crate) fn tokenize(source: &str) -> Result<Vec<Token>, ExprError> {
                 let end = number_end(bytes, index)
                     .ok_or_else(|| ExprError::new("expr_syntax", position, "malformed number"))?;
                 let text = &source[index..end];
+                if !matches!(kind, FunctionKind::Mask | FunctionKind::Time) && has_leading_zero(text) {
+                    return Err(ExprError::new(
+                        "expr_syntax",
+                        position,
+                        format!(
+                            "integer literal '{text}' has a leading zero; \
+                             write it without the zero, as in Python"
+                        ),
+                    ));
+                }
                 let value: f64 = text.parse().map_err(|_| {
                     ExprError::new(
                         "expr_syntax",
@@ -101,6 +123,16 @@ pub(crate) fn tokenize(source: &str) -> Result<Vec<Token>, ExprError> {
         position: bytes.len(),
     });
     Ok(tokens)
+}
+
+/// `true` for a decimal integer literal (digits only) that starts with `0` and
+/// has a nonzero digit, such as `01`: Python rejects it. `0`, `00`, `01.5` and
+/// `01e3` are numbers.
+fn has_leading_zero(text: &str) -> bool {
+    text.len() > 1
+        && text.starts_with('0')
+        && text.bytes().all(|byte| byte.is_ascii_digit())
+        && text.bytes().any(|byte| byte != b'0')
 }
 
 /// End offset of the number that starts at `start`:

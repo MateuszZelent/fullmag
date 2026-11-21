@@ -266,11 +266,12 @@ byte-identically.
 
 ## 5. Equation engine: crate `fullmag-expr` (std only)
 
-`field_expr.v1` (`^` for power; variables `x y z` or `t`):
+`field_expr.v1` (a Python expression subset: `**` for power, with Python's
+precedence; `^` is accepted as a legacy spelling of `**`; variables `x y z` or `t`):
 
 ```
 expr  := term (("+"|"-") term)* ;  term := unary (("*"|"/") unary)*
-unary := "-" unary | power ;       power := atom ("^" unary)?
+unary := "-" unary | power ;       power := atom (("**"|"^") unary)?
 atom  := number | name | name "(" expr ("," expr)* ")" | "(" expr ")"
 ```
 

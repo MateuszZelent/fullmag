@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  refreshViewport3DLiveFemDomainResources,
   resolveTrustedViewport3DResponseDomainGenerationId,
   resolveViewport3DFieldDomainCompatibility,
+  retryViewport3DFieldDomainMismatch,
   resolveViewport3DFieldVectorForDomain,
   safeViewport3DDomainGenerationId,
 } from "./viewport3DFieldDomainCompatibility";
@@ -453,5 +455,50 @@ describe("resolveTrustedViewport3DResponseDomainGenerationId", () => {
         null,
       ),
     ).toBe("fdm-8");
+  });
+});
+
+
+describe("retryViewport3DFieldDomainMismatch", () => {
+  it("retries both the live mesh and the field on a generation mismatch", () => {
+    const requests: string[] = [];
+    retryViewport3DFieldDomainMismatch(
+      "domain-generation-mismatch",
+      () => requests.push("field"),
+      () => requests.push("mesh"),
+    );
+    expect(requests).toEqual(["mesh", "field"]);
+  });
+
+  it("keeps retry local to the field for unrelated compatibility errors", () => {
+    const requests: string[] = [];
+    retryViewport3DFieldDomainMismatch(
+      "missing-node-indices",
+      () => requests.push("field"),
+      () => requests.push("mesh"),
+    );
+    expect(requests).toEqual(["field"]);
+  });
+});
+
+describe("refreshViewport3DLiveFemDomainResources", () => {
+  it("refreshes every live FEM resource that contributes a field buffer", () => {
+    const refreshed: string[] = [];
+    refreshViewport3DLiveFemDomainResources({
+      airboxFieldVectors: () => refreshed.push("airbox field vectors"),
+      domainManifest: () => refreshed.push("domain manifest"),
+      domainMeta: () => refreshed.push("domain meta"),
+      magneticPartFields: () => refreshed.push("magnetic part fields"),
+      targetQuantityFields: () => refreshed.push("target quantity fields"),
+      topology: () => refreshed.push("topology"),
+    });
+    expect(refreshed).toEqual([
+      "domain meta",
+      "domain manifest",
+      "topology",
+      "magnetic part fields",
+      "target quantity fields",
+      "airbox field vectors",
+    ]);
   });
 });

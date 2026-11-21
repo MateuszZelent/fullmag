@@ -2351,6 +2351,15 @@ impl From<crate::SceneMaterialParameterField> for fullmag_ir::MaterialParameterF
                 location: location.into(),
                 unit,
             },
+            crate::SceneMaterialParameterField::Function {
+                function,
+                frame,
+                unit,
+            } => fullmag_ir::MaterialParameterFieldIR::Function {
+                function,
+                frame: frame.into(),
+                unit,
+            },
         }
     }
 }

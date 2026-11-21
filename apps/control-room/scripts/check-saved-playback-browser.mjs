@@ -5,6 +5,7 @@ import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright";
 import { startBrowserQaLoopbackProxy } from "./lib/browser-qa-loopback-proxy.mjs";
+import { ensureViewportExportMode, getViewportExportRegion } from "./lib/viewport-export-browser-qa.mjs";
 
 const [probeUrl,itemId]=process.argv.slice(2);
 const publicUrl=process.env.CONTROL_ROOM_PUBLIC_URL;
@@ -13,6 +14,8 @@ assert.equal(probeUrl,"http://frontend:8080");
 assert(/^[0-9]{1,20}$/.test(itemId));
 const require=createRequire(import.meta.url);
 const version=require("playwright/package.json").version;
+const playwrightRequire=createRequire(require.resolve("playwright/package.json"));
+const {PNG}=playwrightRequire("playwright-core/lib/utilsBundle");
 assert.equal(version,process.env.CONTROL_ROOM_EXPECTED_PLAYWRIGHT_VERSION);
 const sha=value=>createHash("sha256").update(value).digest("hex");
 const scriptSha=sha(await readFile(fileURLToPath(import.meta.url)));
@@ -148,6 +151,30 @@ try {
     assert.equal(payloads.get(index)?.hash,expected[indices.indexOf(index)],"UI adopted a different field payload.");
     result={drawing_buffer:glState.size};
   }
+  await ensureViewportExportMode(page,"PNG",timeout);
+  const exportRegion=getViewportExportRegion(page);
+  const resolution=exportRegion.getByRole("combobox",{name:"PNG resolution",exact:true});
+  if((await resolution.innerText()).replace(/\s+/g," ").trim()!=="1× viewport") {
+    await resolution.click();
+    await page.getByRole("option",{name:"1× viewport",exact:true}).click();
+  }
+  const exportButton=exportRegion.getByRole("button",{name:"Export PNG",exact:true});
+  await exportButton.waitFor({state:"visible"});
+  const downloadTimeout=Math.min(timeout,20000);
+  const downloadPromise=page.waitForEvent("download",{timeout:downloadTimeout});
+  const [pngDownload]=await Promise.all([downloadPromise,exportButton.click()]);
+  assert.equal(await awaitWithTimeout(pngDownload.failure(),downloadTimeout,"saved playback PNG download"),null,
+    "Saved playback PNG download failed.");
+  const pngPath=await awaitWithTimeout(pngDownload.path(),downloadTimeout,"saved playback PNG file");
+  assert(pngPath,"Chromium did not persist the saved playback PNG download.");
+  const pngBytes=await readFile(pngPath);
+  const decodedPng=PNG.sync.read(pngBytes);
+  assert(decodedPng.width>0&&decodedPng.height>0,"Saved playback download was not a non-empty PNG.");
+  const pngFilename=pngDownload.suggestedFilename();
+  assert(pngFilename.endsWith(`-saved-frame-${stage.frame_count}.png`),
+    `Unexpected saved playback PNG filename: ${pngFilename}`);
+  const pngExport={button_clicked:true,browser_file_saved:true,filename:pngFilename,
+    byte_length:pngBytes.length,sha256:sha(pngBytes),dimensions:{width:decodedPng.width,height:decodedPng.height}};
   const screenshot=await page.screenshot({type:"png"});
   evidenceScreenshot=screenshot;
   assert(new Set(canvasHashes).size>1,"Different fields did not change the rendered canvas.");
@@ -166,6 +193,7 @@ try {
     browser_gpu_mode:process.env.CONTROL_ROOM_BROWSER_GPU_MODE,script_sha256:scriptSha,
     geometry_kind:manifest.fem_mesh ? "fem" : "fdm",frame_count:stage.frame_count,
     frame_indices:indices,frame_sha256:expected,canvas_visible:true,context_lost:false,
+    png_export:pngExport,
     ...result,field_payloads_verified:true,changed_canvas:true,inspector_stable:true,
     camera_stable:true,hook_errors:hookErrors,errors,screenshot_base64:screenshot.toString("base64")};
 } catch(error) {
@@ -177,3 +205,17 @@ try {
   await context?.close();await browser?.close();await proxy?.close();
 }
 process.stdout.write(JSON.stringify(result)+"\n");
+
+async function awaitWithTimeout(promise, timeoutMs, label) {
+  let timer;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise((_, reject) => {
+        timer=setTimeout(()=>reject(new Error(`${label} timed out after ${timeoutMs} ms`)),timeoutMs);
+      }),
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
+}

@@ -52,6 +52,7 @@ import {
   materialFieldDraftKey as materialFieldAssignmentsKey,
   materialFieldRealizationRows,
   materialFieldFromDraft,
+  materialFunctionFieldSummary,
   MATERIAL_FIELD_PARAMETERS,
   sceneObjectMaterialFields,
   unitForMaterialParameter,
@@ -259,6 +260,15 @@ function useObjectRegionMagneticParametersPanelView({
       ).length,
     [model.regionId, objectMaterialFields],
   );
+  const functionFieldSummaries = useMemo(
+    () =>
+      objectMaterialFields.flatMap((field) => {
+        if (field.region_id !== model.regionId) return [];
+        const summary = materialFunctionFieldSummary(field);
+        return summary === null ? [] : [summary];
+      }),
+    [model.regionId, objectMaterialFields],
+  );
   const fieldDraftKey = materialFieldAssignmentsKey(editableRegionAssignments);
   const baseFieldDrafts = useMemo(
     () =>
@@ -402,26 +412,28 @@ function useObjectRegionMagneticParametersPanelView({
       sessionScopeKey: operationSessionScopeKey,
     });
     try {
-      const retainedFields = objectMaterialFields.filter(
-        (field) =>
-          field.region_id !== model.regionId || !isEditableMaterialField(field),
-      );
-      const fields = [
-        ...retainedFields,
-        ...submittedFieldDrafts.map((field) =>
-          materialFieldFromDraft(field, model, { meshPolicyLane: meshLane }),
-        ),
-      ];
       const response = await runAuthoringMutationWithHistory(
         historyContext,
         `Update material fields ${model.regionId}`,
-        async ({ baseRevision }) => {
-          const commitRevision = baseRevision ?? model.revision;
-          if (typeof commitRevision !== "number" || !Number.isFinite(commitRevision)) {
-            throw new Error(
-              "The canonical scene revision is unavailable. Refetch the scene before applying.",
-            );
+        async ({ before, baseRevision }) => {
+          const source = before ?? sceneData;
+          const commitRevision = baseRevision ?? source?.scene_revision ?? source?.revision;
+          const owner = source?.objects?.find((object) => object.id === model.objectId);
+          if (!owner || typeof commitRevision !== "number" || !Number.isFinite(commitRevision)) {
+            throw new Error("The canonical object is unavailable. Refetch the scene before applying.");
           }
+          const currentFields = owner.material_parameter_fields ?? [];
+          const editedHere = (field: (typeof currentFields)[number]) =>
+            field.region_id === model.regionId && isEditableMaterialField(field);
+          if (materialFieldAssignmentsKey(currentFields.filter(editedHere)) !== fieldDraftKey) {
+            throw new Error("The region material fields changed. Refetch the scene before applying.");
+          }
+          const fields = [
+            ...currentFields.filter((field) => !editedHere(field)),
+            ...submittedFieldDrafts.map((field) =>
+              materialFieldFromDraft(field, model, { meshPolicyLane: meshLane }),
+            ),
+          ];
           const options = authoringWriteOptions(
             commitRevision,
             operationSessionScopeKey,
@@ -764,6 +776,36 @@ function useObjectRegionMagneticParametersPanelView({
       <InspectorGroup title="Material Fields">
         <FieldRow label="Editable fields" value={fieldDrafts.length} />
         <FieldRow label="Unsupported fields" value={unsupportedRegionFieldCount} />
+        {functionFieldSummaries.map((summary) => (
+          <div
+            className="fm-region-override fm-section-separator"
+            key={`function:${summary.assignmentId}`}
+          >
+            <FieldRow
+              label="Function field"
+              value={`${summary.parameter} (${summary.frame} frame, read-only)`}
+            />
+            {summary.definition !== null ? (
+              <FieldRow label="Definition" value={`def ${summary.definition}(x, y, z, …)`} />
+            ) : null}
+            {summary.locals.map((local) => (
+              <FieldRow
+                key={`local:${local.name}`}
+                label={local.name}
+                mono
+                value={local.expression}
+              />
+            ))}
+            <FieldRow label="Equation" mono unit={summary.unit} value={summary.equation} />
+            {summary.parameters.map((parameter) => (
+              <FieldRow
+                key={`parameter:${parameter.name}`}
+                label={parameter.name}
+                value={String(parameter.value)}
+              />
+            ))}
+          </div>
+        ))}
         {fieldDrafts.length === 0 ? (
           <FieldRow label="Region fields" value="no local parameter fields" />
         ) : null}

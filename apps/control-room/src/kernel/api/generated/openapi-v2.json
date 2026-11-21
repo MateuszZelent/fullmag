@@ -37959,6 +37959,34 @@
               "kind"
             ],
             "type": "object"
+          },
+          {
+            "description": "A scalar equation of `x, y, z` (`fm.fields.function`); the same\n`FunctionIR` as `MaterialParameterFieldIR::Function`.",
+            "properties": {
+              "frame": {
+                "$ref": "#/components/schemas/SceneRegionFrame"
+              },
+              "function": {
+                "type": "object"
+              },
+              "kind": {
+                "enum": [
+                  "function"
+                ],
+                "type": "string"
+              },
+              "unit": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "function",
+              "kind"
+            ],
+            "type": "object"
           }
         ]
       },
