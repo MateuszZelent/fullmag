@@ -151,6 +151,7 @@ jobs:
           cargo check --locked -p fullmag-api --bins
           cargo test --locked -p fullmag-api --bin fullmag-api accepted_study_worker::accepted_fdm_precision_tests:: --no-fail-fast
           cargo test --locked -p fullmag-api --bin fullmag-api-accepted-worker accepted_study_worker::accepted_fdm_precision_tests:: --no-fail-fast
+          cargo test --locked -p fullmag-api --bin fullmag-api-accepted-worker accepted_study_worker::accepted_live_field_cadence_tests:: --no-fail-fast
           cargo test -p fullmag-plan --lib preparation::tests::fdm_
           cargo test -p fullmag-api --bin fullmag-api docker_startup::tests
           cargo test --locked -p fullmag-api --bin fullmag-api accepted_solver_profile:: --no-fail-fast

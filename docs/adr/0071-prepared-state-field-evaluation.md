@@ -176,3 +176,24 @@ starego pakietu.
   `E_*` przed Compute nie są jeszcze widoczne w katalogu (pakiet je zawiera); bieg FEM CPU w tej
   grupie kończył się `MPI_ABORT` przy starcie solvera niezależnie od ewaluacji (także gdy
   ewaluator nie doszedł do MFEM) — do osobnej diagnozy.
+
+## Uzupełnienie 2026-11-20: pola w trakcie i po zaakceptowanym biegu
+
+Kod `accepted_state_required` („after Run”) dotyczy wyłącznie stanu przygotowanego: braku biegu
+albo biegu w stanie `awaiting_command` / `waiting_for_compute`. Wcześniejsza implementacja
+blokowała go aż do końca biegu. W efekcie UI nie mogło wybrać `H_demag`, `H_eff` itd., więc
+`live_demand.v1.json` zawierał tylko `m` i worker przez cały bieg przechwytywał samo `m`.
+
+- Bieg `running` / `stopping` oraz zakończony: niezmaterializowane pole jest `materializable`.
+  Wybór w UI trafia do zapotrzebowania, a najbliższy krok z ciężką publikacją przechwytuje je
+  razem z `m` z tego samego kroku.
+- `LiveFieldCadence::publishes_full_catalog` obejmuje każdy dopuszczony ciężki krok, a nie tylko
+  kadencję co 1 krok. Przy dużych siatkach (kadencja co N kroków) pola pochodne wcześniej nie
+  były publikowane wcale. Budżet bajtów workera nadal odrzuca pojedyncze za duże pole.
+- W FEM pola pełnej domeny (Universe, powietrze) leżą na tym samym nośniku węzłowym co `m`,
+  więc obejmuje je ta sama ścieżka. Po zakończeniu biegu pakiet końcowy niesie pełny aktywny
+  katalog.
+
+Dowód wymagany przed scaleniem: bieg FEM w Docker DEV pokazuje `H_demag` i `H_eff` na obiekcie
+oraz `H_demag` w Universe między krokami i po zakończeniu biegu.
+

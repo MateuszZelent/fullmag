@@ -677,14 +677,15 @@
   gap: var(--fm-space-2);
 }
 
+/* Live camera readouts read as the Inspector facts strip. */
 .fm-viewport-camera-dialog__live-item {
   display: grid;
   min-width: 0;
-  gap: var(--fm-space-1);
+  gap: 2px;
   border: 1px solid var(--fm-border-subtle);
-  border-radius: var(--fm-radius-md);
-  background: var(--fm-bg-panel);
-  padding: var(--fm-space-2);
+  border-radius: var(--fm-radius-field);
+  background: var(--fm-section-bg);
+  padding: var(--fm-space-2) var(--fm-space-3);
 }
 
 .fm-viewport-camera-dialog__live-item span {
@@ -696,8 +697,8 @@
   min-width: 0;
   overflow: hidden;
   color: var(--fm-text-primary);
-  font-family: var(--fm-font-mono);
-  font-size: var(--fm-font-size-xs);
+  font-size: var(--fm-font-size-sm);
+  font-variant-numeric: tabular-nums;
   font-weight: 600;
   text-overflow: ellipsis;
   white-space: nowrap;
