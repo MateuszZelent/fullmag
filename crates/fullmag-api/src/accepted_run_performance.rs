@@ -95,7 +95,7 @@ pub(crate) fn unavailable(run_id: Option<String>, reason: &str) -> RunPerformanc
     }
 }
 
-fn is_observation_busy(error: &anyhow::Error) -> bool {
+pub(crate) fn is_observation_busy(error: &anyhow::Error) -> bool {
     error.chain().any(|cause| cause.is::<fullmag_session::StoreWriterBusy>()
         || matches!(cause.downcast_ref::<std::fs::TryLockError>(),
             Some(std::fs::TryLockError::WouldBlock))
@@ -103,12 +103,148 @@ fn is_observation_busy(error: &anyhow::Error) -> bool {
             .is_some_and(|error| error.kind() == std::io::ErrorKind::WouldBlock))
 }
 
-pub(crate) fn load(root: &Path, run_id: &str, stages: &[(u32, String)]) -> Result<RunPerformanceResource> {
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct SelectedAttempt {
+    run_id: String,
+    task_id: String,
+    step_id: String,
+    stage_index: u32,
+    attempt_id: String,
+    ownership_epoch: u64,
+}
+
+pub(crate) fn is_terminal_run_status(status: &str) -> bool {
+    matches!(status, "completed" | "succeeded" | "failed" | "cancelled" | "interrupted" | "stopped" | "closed")
+}
+
+fn is_terminal_task_lifecycle(lifecycle: FmsTaskLifecycle) -> bool {
+    matches!(lifecycle, FmsTaskLifecycle::Succeeded | FmsTaskLifecycle::Failed
+        | FmsTaskLifecycle::Cancelled | FmsTaskLifecycle::Interrupted)
+}
+
+fn selected_attempt(
+    run_id: &str,
+    stage_index: u32,
+    step_id: &str,
+    task: &fullmag_session::FmsTaskCatalogEntry,
+) -> Result<SelectedAttempt> {
+    Ok(SelectedAttempt {
+        run_id: run_id.into(),
+        task_id: task.task_id.clone(),
+        step_id: step_id.into(),
+        stage_index,
+        attempt_id: task.attempt_id.clone().context("performance attempt missing")?,
+        ownership_epoch: task.ownership_epoch.context("performance epoch missing")?,
+    })
+}
+
+fn select_attempt(
+    run_id: &str,
+    stages: &[(u32, String)],
+    catalog: &fullmag_session::FmsRunCatalog,
+    allow_terminal_fallback: bool,
+) -> Result<Option<SelectedAttempt>> {
+    let mut stage_tasks = Vec::new();
+    for (stage_index, step_id) in stages {
+        let task_id = fullmag_session::task_id_for_study_step(run_id, step_id)?;
+        if let Some(task) = catalog.tasks.iter().find(|task| task.task_id == task_id) {
+            stage_tasks.push((*stage_index, step_id.as_str(), task));
+        }
+    }
+
+    let running = stage_tasks.iter().filter(|(_, _, task)| matches!(task.lifecycle,
+        FmsTaskLifecycle::Running | FmsTaskLifecycle::Stopping)).copied().collect::<Vec<_>>();
+    if running.len() > 1 {
+        bail!("parallel performance attempt selection is ambiguous");
+    }
+    if let Some((stage_index, step_id, task)) = running.first() {
+        return selected_attempt(run_id, *stage_index, *step_id, *task).map(Some);
+    }
+
+    // A running run can be between attempts while the next accepted task is
+    // queued or preparing. The previous completed task is historical during
+    // that handoff and must not be projected as the current solver clock.
+    if !allow_terminal_fallback
+        || stage_tasks.iter().any(|(_, _, task)| !is_terminal_task_lifecycle(task.lifecycle))
+    {
+        return Ok(None);
+    }
+
+    // For a terminal run only, retain the latest accepted task's terminal
+    // telemetry. Do not skip a newer terminal task whose identity is missing
+    // and accidentally fall back to an older stage.
+    stage_tasks.into_iter()
+        .max_by_key(|(stage_index, _, _)| *stage_index)
+        .map(|(stage_index, step_id, task)| selected_attempt(run_id, stage_index, step_id, task))
+        .transpose()
+}
+
+fn resource_attempt(resource: &RunPerformanceResource) -> Option<SelectedAttempt> {
+    Some(SelectedAttempt {
+        run_id: resource.run_id.clone()?,
+        task_id: resource.task_id.clone()?,
+        step_id: resource.step_id.clone()?,
+        stage_index: resource.stage_index?,
+        attempt_id: resource.attempt_id.clone()?,
+        ownership_epoch: resource.ownership_epoch?,
+    })
+}
+
+fn has_observation(resource: &RunPerformanceResource) -> bool {
+    resource.state != "unavailable"
+        || resource.sample_sequence != 0
+        || resource.elapsed_monotonic_ns != 0
+        || resource.first_step_index.is_some()
+        || resource.step_index.is_some()
+        || resource.solver_clock.is_some()
+        || resource.progress_fraction.is_some()
+        || resource.unique_step_callback_records != 0
+        || resource.rows_dropped != 0
+        || resource.collection_overhead_ns.is_some()
+        || resource.latest_step_wall_ns.is_some()
+        || resource.latest_rejected_attempts.is_some()
+        || resource.latest_evaluate_host_wall_ns.is_some()
+        || !resource.points.is_empty()
+}
+
+pub(crate) enum AttemptRevalidation {
+    Current(fullmag_session::ReadTransaction),
+    Changed,
+}
+
+/// Re-read the current catalog under a shared store fence and compare every
+/// identity component before the route returns a previously loaded sample.
+pub(crate) fn revalidate_attempt(
+    root: &Path,
+    run_id: &str,
+    stages: &[(u32, String)],
+    allow_terminal_fallback: bool,
+    resource: &RunPerformanceResource,
+) -> Result<AttemptRevalidation> {
+    let store = SessionStore::open_existing(root)?;
+    let transaction = store.read_transaction().context("revalidate accepted performance fence")?;
+    let catalog = store.read_run_catalog(run_id)?.context("performance run catalog missing")?;
+    let current = select_attempt(run_id, stages, &catalog, allow_terminal_fallback)?;
+    let expected = resource_attempt(resource);
+    if (has_observation(resource) && expected.is_none())
+        || expected.as_ref().is_some_and(|expected| current.as_ref() != Some(expected))
+    {
+        return Ok(AttemptRevalidation::Changed);
+    }
+    Ok(AttemptRevalidation::Current(transaction))
+}
+
+pub(crate) fn load(
+    root: &Path,
+    run_id: &str,
+    stages: &[(u32, String)],
+    allow_terminal_fallback: bool,
+) -> Result<RunPerformanceResource> {
     let _elapsed = crate::live_accepted_projection::ProjectionPhaseTimer::new("performance_load");
     let deadline = std::time::Instant::now() + OBSERVATION_BUSY_RETRY_BUDGET;
     let mut busy_retries = 0_u32;
     loop {
-        match load_verified(root, run_id, stages) {
+        match load_verified(root, run_id, stages, allow_terminal_fallback) {
             Ok(resource) => return Ok(resource),
             // Heartbeat acknowledgements and other short publications briefly
             // hold the exclusive store lease. Retry the complete fenced read
@@ -135,7 +271,12 @@ pub(crate) fn load(root: &Path, run_id: &str, stages: &[(u32, String)]) -> Resul
     }
 }
 
-fn load_verified(root: &Path, run_id: &str, stages: &[(u32, String)]) -> Result<RunPerformanceResource> {
+fn load_verified(
+    root: &Path,
+    run_id: &str,
+    stages: &[(u32, String)],
+    allow_terminal_fallback: bool,
+) -> Result<RunPerformanceResource> {
     fullmag_session::repository_path::validate_store_id(run_id)?;
     let store = SessionStore::open_existing(root)?;
     // Fence task selection and receipt/lease checks against an epoch transition.
@@ -144,26 +285,18 @@ fn load_verified(root: &Path, run_id: &str, stages: &[(u32, String)]) -> Result<
         store.read_transaction().context("read accepted performance fence")?
     };
     let catalog = store.read_run_catalog(run_id)?.context("performance run catalog missing")?;
-    let mut candidates = Vec::new();
-    for (stage_index, step_id) in stages {
-        let task_id = fullmag_session::task_id_for_study_step(run_id, step_id)?;
-        if let Some(task) = catalog.tasks.iter().find(|task| task.task_id == task_id) {
-            if task.attempt_id.is_some() && task.ownership_epoch.is_some() {
-                candidates.push((*stage_index, step_id, task));
-            }
-        }
-    }
-    let running = candidates.iter().filter(|(_, _, task)| matches!(task.lifecycle,
-        FmsTaskLifecycle::Running | FmsTaskLifecycle::Stopping)).copied().collect::<Vec<_>>();
-    let (stage_index, step_id, task) = if running.len() == 1 { *running.first().unwrap() }
-        else if running.is_empty() { candidates.into_iter().max_by_key(|(index, _, _)| *index)
-            .context("no verified performance task")? }
-        else { bail!("parallel performance attempt selection is ambiguous"); };
+    let selected = select_attempt(run_id, stages, &catalog, allow_terminal_fallback)?
+        .context("no verified performance task")?;
+    let stage_index = selected.stage_index;
     let expected = AcceptedIdentity {
-        run_id: run_id.into(), task_id: task.task_id.clone(), step_id: step_id.clone(),
-        attempt_id: task.attempt_id.clone().context("performance attempt missing")?,
-        ownership_epoch: task.ownership_epoch.context("performance epoch missing")?,
+        run_id: selected.run_id,
+        task_id: selected.task_id,
+        step_id: selected.step_id,
+        attempt_id: selected.attempt_id,
+        ownership_epoch: selected.ownership_epoch,
     };
+    let task = catalog.tasks.iter().find(|task| task.task_id == expected.task_id)
+        .context("selected performance task disappeared from the fenced catalog")?;
     for id in [&expected.task_id, &expected.attempt_id] {
         fullmag_session::repository_path::validate_store_id(id)?;
     }
@@ -344,6 +477,133 @@ fn validate_active_lease(
 mod tests {
     use super::*;
 
+    fn task_entry(
+        run_id: &str,
+        step_id: &str,
+        lifecycle: FmsTaskLifecycle,
+        attempt_id: Option<&str>,
+        ownership_epoch: Option<u64>,
+    ) -> fullmag_session::FmsTaskCatalogEntry {
+        fullmag_session::FmsTaskCatalogEntry {
+            task_id: fullmag_session::task_id_for_study_step(run_id, step_id).unwrap(),
+            input_fingerprint: "a".repeat(64),
+            lifecycle,
+            readiness: fullmag_session::FmsTaskReadiness::Ready,
+            observation: None,
+            attempt_id: attempt_id.map(str::to_owned),
+            ownership_epoch,
+            resolved_input_fingerprint: None,
+            artifact_ids: vec![],
+            resource_id: None,
+            coordinator_watermark: None,
+            coordinator_genesis: None,
+        }
+    }
+
+    fn run_catalog(tasks: Vec<fullmag_session::FmsTaskCatalogEntry>) -> fullmag_session::FmsRunCatalog {
+        fullmag_session::FmsRunCatalog {
+            schema_version: fullmag_session::FMS_RUN_CATALOG_SCHEMA.into(),
+            run_id: "run".into(),
+            revision: 1,
+            updated_at: chrono::Utc::now(),
+            tasks,
+        }
+    }
+
+    fn observed_resource(identity: SelectedAttempt) -> RunPerformanceResource {
+        let mut resource = unavailable(Some(identity.run_id.clone()), "test fixture");
+        resource.state = "running".into();
+        resource.task_id = Some(identity.task_id);
+        resource.step_id = Some(identity.step_id);
+        resource.stage_index = Some(identity.stage_index);
+        resource.attempt_id = Some(identity.attempt_id);
+        resource.ownership_epoch = Some(identity.ownership_epoch);
+        resource.sample_sequence = 1;
+        resource
+    }
+
+    #[test]
+    fn active_stage_handoff_does_not_select_the_prior_completed_attempt() {
+        let catalog = run_catalog(vec![
+            task_entry("run", "stage-0", FmsTaskLifecycle::Succeeded, Some("attempt-0"), Some(1)),
+            task_entry("run", "stage-1", FmsTaskLifecycle::Queued, None, None),
+        ]);
+        let selected = select_attempt(
+            "run",
+            &[(0, "stage-0".into()), (1, "stage-1".into())],
+            &catalog,
+            false,
+        )
+        .unwrap();
+
+        assert_eq!(selected, None);
+    }
+
+    #[test]
+    fn terminal_run_selects_the_latest_completed_attempt() {
+        let catalog = run_catalog(vec![
+            task_entry("run", "stage-0", FmsTaskLifecycle::Succeeded, Some("attempt-0"), Some(1)),
+            task_entry("run", "stage-1", FmsTaskLifecycle::Succeeded, Some("attempt-1"), Some(2)),
+        ]);
+        let selected = select_attempt(
+            "run",
+            &[(0, "stage-0".into()), (1, "stage-1".into())],
+            &catalog,
+            true,
+        )
+        .unwrap()
+        .unwrap();
+
+        assert_eq!(selected.stage_index, 1);
+        assert_eq!(selected.step_id, "stage-1");
+        assert_eq!(selected.attempt_id, "attempt-1");
+        assert_eq!(selected.ownership_epoch, 2);
+    }
+
+    #[test]
+    fn same_stage_retry_is_rejected_by_the_final_catalog_fence() {
+        use fullmag_session::{FmsRunCatalog, FMS_RUN_CATALOG_SCHEMA};
+
+        let directory = tempfile::tempdir().unwrap();
+        let store = SessionStore::open(directory.path().join("store")).unwrap();
+        let task = task_entry("run", "stage", FmsTaskLifecycle::Running, Some("attempt-new"), Some(2));
+        store.commit_run_catalog(&FmsRunCatalog {
+            schema_version: FMS_RUN_CATALOG_SCHEMA.into(),
+            run_id: "run".into(),
+            revision: 1,
+            updated_at: chrono::Utc::now(),
+            tasks: vec![task],
+        }).unwrap();
+
+        let current = SelectedAttempt {
+            run_id: "run".into(),
+            task_id: fullmag_session::task_id_for_study_step("run", "stage").unwrap(),
+            step_id: "stage".into(),
+            stage_index: 0,
+            attempt_id: "attempt-new".into(),
+            ownership_epoch: 2,
+        };
+        let current_resource = observed_resource(current.clone());
+        let verified = revalidate_attempt(
+            store.root(), "run", &[(0, "stage".into())], false, &current_resource,
+        ).unwrap();
+        let AttemptRevalidation::Current(fence) = verified else {
+            panic!("the exact current attempt should remain publishable");
+        };
+        assert!(store.write_transaction().is_err(), "the final shared fence must exclude writers");
+        drop(fence);
+
+        let mut old_attempt = current;
+        old_attempt.attempt_id = "attempt-old".into();
+        old_attempt.ownership_epoch = 1;
+        let stale_resource = observed_resource(old_attempt);
+        assert!(matches!(revalidate_attempt(
+            store.root(), "run", &[(0, "stage".into())], false, &stale_resource,
+        ).unwrap(), AttemptRevalidation::Changed));
+        let writer = store.write_transaction().expect("a rejected stale sample releases its fence");
+        drop(writer);
+    }
+
     fn fixture() -> (LiveRecord, AcceptedIdentity) {
         let identity = AcceptedIdentity {
             run_id: "run".into(), task_id: "task".into(), step_id: "stage".into(),
@@ -505,10 +765,10 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let store = SessionStore::open(directory.path().join("store")).unwrap();
         let writer = store.write_transaction().unwrap();
-        let error = load(store.root(), "run", &[]).unwrap_err();
+        let error = load(store.root(), "run", &[], false).unwrap_err();
         assert!(is_observation_busy(&error));
         drop(writer);
-        assert_eq!(load(store.root(), "run", &[]).unwrap().state, "unavailable");
+        assert_eq!(load(store.root(), "run", &[], false).unwrap().state, "unavailable");
     }
 
     #[test]
@@ -527,7 +787,7 @@ mod tests {
         });
         held_rx.recv_timeout(std::time::Duration::from_secs(1)).unwrap();
 
-        let resource = load(&root, "run", &[]).unwrap();
+        let resource = load(&root, "run", &[], false).unwrap();
         assert_eq!(resource.state, "unavailable");
         writer.join().unwrap();
     }
@@ -586,7 +846,7 @@ mod tests {
         })).unwrap()).unwrap();
         let reader = store.read_transaction().unwrap();
         assert!(store.write_transaction().is_err(), "the shared fence must still exclude writers");
-        let resource = load_verified(store.root(), "run", &[(0, "stage".into())]).unwrap();
+        let resource = load_verified(store.root(), "run", &[(0, "stage".into())], false).unwrap();
         assert_eq!(resource.state, "running");
         assert_eq!(resource.attempt_id.as_deref(), Some("attempt"));
         assert_eq!(resource.stage_index, Some(0));
@@ -634,7 +894,7 @@ pub(crate) async fn publish_if_changed(
 ) -> std::result::Result<(), crate::error::ApiError> {
     let Some(root) = state.submit_store_root.clone() else { return Ok(()); };
     let context = crate::capture_current_live_read_context(state).await?;
-    let (run_id, stage_ids) = {
+    let (run_id, stage_ids, allow_terminal_fallback) = {
         let guard = state.current_live_state.read().await;
         let Some(snapshot) = guard.as_ref() else { return Ok(()); };
         crate::ensure_current_live_request_context(snapshot, &context,
@@ -643,11 +903,14 @@ pub(crate) async fn publish_if_changed(
         let stages = snapshot.stage_execution.as_ref().map(|execution| execution.stages.iter()
             .enumerate().filter_map(|(index, stage)| Some((u32::try_from(index).ok()?, stage.stage_id.clone()?)))
             .collect::<Vec<_>>()).unwrap_or_default();
-        (run_id, stages)
+        let allow_terminal_fallback = snapshot.run.as_ref()
+            .is_some_and(|run| is_terminal_run_status(&run.status));
+        (run_id, stages, allow_terminal_fallback)
     };
     let load_run = run_id.clone();
     let loaded = crate::live_accepted_projection::observe_projection_phase(
-        "performance", tokio::task::spawn_blocking(move || load(&root, &load_run, &stage_ids)),
+        "performance", tokio::task::spawn_blocking(move ||
+            load(&root, &load_run, &stage_ids, allow_terminal_fallback)),
     ).await;
     // Contention observes nothing; an actual missing/changed proof publishes
     // unavailable once so a previous attempt cannot remain current.
