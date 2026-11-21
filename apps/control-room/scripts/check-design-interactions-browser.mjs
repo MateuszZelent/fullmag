@@ -130,8 +130,7 @@ try {
   assert(after.dpr >= before.dpr * 1.99);
   checks.push("Native Chromium zoom 200% verified by chrome.tabs.getZoom, CSS viewport and DPR");
   for (const theme of ["light", "dark"]) {
-    await page.getByRole("button", { name: /^Color theme:/ }).click();
-    await page.getByRole("menuitemradio", { name: theme === "light" ? "Light" : "Dark", exact: true }).click();
+    await page.getByRole("radio", { name: theme === "light" ? "Light" : "Dark", exact: true }).click();
     await page.getByRole("button", { name: "Main menu", exact: true }).click();
     await page.getByRole("menuitem", { name: "Home", exact: true }).waitFor();
     await page.keyboard.press("Escape");

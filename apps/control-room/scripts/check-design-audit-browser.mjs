@@ -3,6 +3,7 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { chromium } from "playwright";
 import { designCheckUrl } from "./lib/design-browser-env.mjs";
+import { openAppMenu } from "./lib/app-menu-browser.mjs";
 
 // Exercises the compiled application against an explicitly empty-session fixture.
 // This verifies UI behavior, not backend readiness, physics or WebGL execution.
@@ -74,7 +75,7 @@ try {
         };
       });
       const compact = page.getByRole("button", { name: "Main menu", exact: true });
-      if (width < 1180) {
+      if (await compact.isVisible()) {
         await compact.click();
         await page.getByRole("menuitem", { name: "Home", exact: true }).waitFor();
         await page.getByRole("menuitem", { name: "File", exact: true }).waitFor();
@@ -84,7 +85,7 @@ try {
         });
         assert(await compact.evaluate((el) => el === document.activeElement), "Menu restores trigger focus");
       } else {
-        await page.getByRole("button", { name: "File", exact: true }).click();
+        await openAppMenu(page, "File");
         await page.getByRole("menuitem", { name: /^New Project/ }).waitFor();
         await page.keyboard.press("Escape");
       }

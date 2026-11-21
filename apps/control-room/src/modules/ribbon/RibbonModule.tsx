@@ -1,6 +1,7 @@
 "use client";
 
-import { useCallback, useMemo, useState, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from "react";
+import { ChevronUp } from "lucide-react";
 
 import type { CommandFeedbackNotice } from "@/kernel/commands/CommandFeedbackController";
 import {
@@ -92,6 +93,11 @@ import {
   getRibbonDensity,
   getServerRibbonDensity,
   setRibbonDensity,
+  getRibbonExpanded,
+  getServerRibbonExpanded,
+  setRibbonExpanded,
+  subscribeRibbonExpanded,
+  toggleRibbonExpanded,
   subscribeRibbonDensity,
 } from "./ribbonPreference";
 import {
@@ -112,6 +118,22 @@ export default function RibbonModule({ kernel }: ModuleProps) {
     getRibbonDensity,
     getServerRibbonDensity,
   );
+  const ribbonExpanded = useSyncExternalStore(
+    subscribeRibbonExpanded,
+    getRibbonExpanded,
+    getServerRibbonExpanded,
+  );
+  // Ctrl+F1 collapses and expands the ribbon, as in desktop office suites.
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "F1" && (event.ctrlKey || event.metaKey) && !event.altKey && !event.shiftKey) {
+        event.preventDefault();
+        toggleRibbonExpanded();
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, []);
   const subscribeCommandFeedback = useCallback(
     (listener: () => void) =>
       kernel.commandFeedback?.subscribe(listener) ?? noopSubscribe(),
@@ -502,14 +524,35 @@ export default function RibbonModule({ kernel }: ModuleProps) {
 
   return (
     <WorkspaceRenderProfiler id="RibbonModule">
-      <div className="fm-ribbon" data-density={ribbonDensity}>
+      <div className="fm-ribbon" data-density={ribbonDensity} data-expanded={ribbonExpanded}>
       <div className="fm-ribbon__tabbar">
         <RibbonTabStrip
           activeTabId={stripActiveTab}
           tabs={stripTabs}
           onTabClick={handleTabClick}
+          onTabPress={(tabId) => {
+            // A collapsed ribbon opens on the tab the user picks.
+            if (!ribbonExpanded) setRibbonExpanded(true);
+            handleTabClick(tabId);
+          }}
+          onTabDoubleClick={(tabId) => {
+            if (tabId === stripActiveTab) toggleRibbonExpanded();
+          }}
         />
-        <RibbonDensityControl density={ribbonDensity} onChange={setRibbonDensity} />
+        {ribbonExpanded ? (
+          <RibbonDensityControl density={ribbonDensity} onChange={setRibbonDensity} />
+        ) : null}
+        <button
+          aria-controls="fm-ribbon-tabpanel"
+          aria-expanded={ribbonExpanded}
+          aria-label={ribbonExpanded ? "Collapse ribbon" : "Expand ribbon"}
+          className="fm-ribbon__toggle"
+          title={ribbonExpanded ? "Collapse ribbon (Ctrl+F1)" : "Expand ribbon (Ctrl+F1)"}
+          type="button"
+          onClick={() => toggleRibbonExpanded()}
+        >
+          <ChevronUp aria-hidden="true" size={15} />
+        </button>
       </div>
       <RibbonGroupsRow
         groups={groups}

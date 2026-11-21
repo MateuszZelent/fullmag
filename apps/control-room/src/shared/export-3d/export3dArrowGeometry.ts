@@ -30,6 +30,7 @@ import {
   type Export3DMaterialStyle,
   type Export3DNumericArray,
   type Export3DRgbTuple,
+  type Export3DRenderedVectors,
   type Export3DScalarPalette,
   type Export3DScalarRange,
   type Export3DVectorLengthMode,
@@ -352,8 +353,8 @@ export function computeAutoArrowBaseLengthM(params: {
 }
 
 export interface StaticArrowGeometryInput {
-  anchorsM: Float32Array;
-  vectors: Float32Array;
+  anchorsM: Export3DNumericArray;
+  vectors: Export3DNumericArray;
   maxMagnitude: number;
   baseArrowLengthM: number;
   anchorMode: Export3DArrowAnchorMode;
@@ -363,7 +364,10 @@ export interface StaticArrowGeometryInput {
   colorPalette: Export3DScalarPalette;
   colorRange: Export3DScalarRange;
   monochromeColor?: Export3DRgbTuple;
+  vertexColors?: Float32Array | null;
   radialSegments?: number;
+  headRadiusRatio?: number;
+  shaftRadiusRatio?: number;
 }
 
 /**
@@ -379,7 +383,11 @@ export function buildMergedStaticArrowGeometry(
   );
   if (count <= 0) return null;
 
-  const unit = createUnitArrowGeometry({ radialSegments: input.radialSegments });
+  const unit = createUnitArrowGeometry({
+    radialSegments: input.radialSegments,
+    headRadiusRatio: input.headRadiusRatio,
+    shaftRadiusRatio: input.shaftRadiusRatio,
+  });
   const unitPos = unit.getAttribute("position") as BufferAttribute;
   const unitNorm = unit.getAttribute("normal") as BufferAttribute;
   const unitIdx = unit.getIndex();
@@ -443,16 +451,18 @@ export function buildMergedStaticArrowGeometry(
     const originY = ayScene - dir.y * tailOffset;
     const originZ = azScene - dir.z * tailOffset;
 
-    const rgb = evaluateVectorColorLinear(
-      input.colorMode,
-      input.colorPalette,
-      input.colorRange,
-      3,
-      vx,
-      vy,
-      vz,
-      input.monochromeColor,
-    );
+    const rgb = input.vertexColors
+      ? input.vertexColors.subarray(aBase, aBase + 3)
+      : evaluateVectorColorLinear(
+          input.colorMode,
+          input.colorPalette,
+          input.colorRange,
+          3,
+          vx,
+          vy,
+          vz,
+          input.monochromeColor,
+        );
 
     const vertBase = outIdx * unitVertCount;
     for (let v = 0; v < unitVertCount; v += 1) {
@@ -472,9 +482,9 @@ export function buildMergedStaticArrowGeometry(
       normals[dst] = localNorm.x;
       normals[dst + 1] = localNorm.y;
       normals[dst + 2] = localNorm.z;
-      colors[dst] = rgb[0];
-      colors[dst + 1] = rgb[1];
-      colors[dst + 2] = rgb[2];
+      colors[dst] = rgb[0] ?? 0;
+      colors[dst + 1] = rgb[1] ?? 0;
+      colors[dst + 2] = rgb[2] ?? 0;
     }
 
     const idxBase = outIdx * unitIdxCount;
@@ -492,6 +502,47 @@ export function buildMergedStaticArrowGeometry(
   merged.setAttribute("color", new BufferAttribute(colors, 3));
   merged.setIndex(new BufferAttribute(indices, 1));
   return { geometry: merged, arrowCount };
+}
+
+export function buildRenderedStaticArrowGeometry(
+  rendered: Export3DRenderedVectors,
+  coordinateTransform: Export3DCoordinateTransform,
+): ReturnType<typeof buildMergedStaticArrowGeometry> {
+  const count = rendered.segmentsM.length / 7;
+  if (!Number.isInteger(count) || (rendered.colors && rendered.colors.length !== count * 3)) {
+    throw new RangeError("Viewport arrow geometry and colors differ in size.");
+  }
+  const anchorsM = new Float64Array(count * 3);
+  const vectors = new Float64Array(count * 3);
+  let maxLengthM = 0;
+  for (let index = 0; index < count; index += 1) {
+    const segmentOffset = index * 7;
+    const vectorOffset = index * 3;
+    for (let axis = 0; axis < 3; axis += 1) {
+      const tail = rendered.segmentsM[segmentOffset + axis]!;
+      anchorsM[vectorOffset + axis] = tail;
+      vectors[vectorOffset + axis] = rendered.segmentsM[segmentOffset + axis + 3]! - tail;
+    }
+    maxLengthM = Math.max(maxLengthM, Math.hypot(
+      vectors[vectorOffset]!, vectors[vectorOffset + 1]!, vectors[vectorOffset + 2]!,
+    ));
+  }
+  return buildMergedStaticArrowGeometry({
+    anchorsM,
+    vectors,
+    maxMagnitude: maxLengthM,
+    baseArrowLengthM: maxLengthM,
+    anchorMode: "tail",
+    vectorLengthMode: "proportional",
+    coordinateTransform,
+    colorMode: "monochrome",
+    colorPalette: "viridis",
+    colorRange: { min: 0, max: 1 },
+    monochromeColor: rendered.monochromeColor,
+    vertexColors: rendered.colors,
+    headRadiusRatio: rendered.headRadiusRatio,
+    shaftRadiusRatio: rendered.shaftRadiusRatio,
+  });
 }
 
 export interface AnimatedArrowBuildInput {

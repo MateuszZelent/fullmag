@@ -29,6 +29,8 @@ function sessionScopeKeyFromResourceKey(resourceKey: ResourceKey): string | unde
  */
 export interface ResourceRetryPolicy {
   deadlineMs?: number;
+  /** Defer the visible error while this load still has a scheduled retry. */
+  keepLoadingWhileRetrying?: boolean;
   maxAttempts?: number;
   /** Retry cap for explicitly allowlisted transient conflicts only. */
   maxConflictAttempts?: number;
@@ -745,17 +747,8 @@ export class ResourceRuntimeStore<TData = unknown> {
           partialData === undefined
             ? entry.snapshot
             : { ...entry.snapshot, data: partialData as TLoadData };
-        const errorSnapshot = markResourceError(
-          stateWithPartialData,
-          normalizedError,
-        );
-        entry.snapshot = {
-          ...errorSnapshot,
-          settledExternalRevision: externalRevision,
-          settledResourceKey: resourceKey,
-        };
         entry.retryAttempt += 1;
-        this.scheduleRetry(entry, {
+        const retryScheduled = this.scheduleRetry(entry, {
           abortStaleInflight,
           externalRevision,
           force: true,
@@ -765,7 +758,15 @@ export class ResourceRuntimeStore<TData = unknown> {
           retrying: true,
           resolveRevision,
           resourceKey,
-        }, error);
+        }, normalizedError);
+        const keepLoading = retryScheduled && retryPolicy?.keepLoadingWhileRetrying;
+        entry.snapshot = {
+          ...(keepLoading
+            ? markResourceLoading(stateWithPartialData, externalRevision)
+            : markResourceError(stateWithPartialData, normalizedError)),
+          settledExternalRevision: keepLoading ? null : externalRevision,
+          settledResourceKey: keepLoading ? null : resourceKey,
+        };
         return entry.snapshot;
       })
       .finally(() => {
@@ -904,8 +905,8 @@ export class ResourceRuntimeStore<TData = unknown> {
   private scheduleRetry<TEntryData>(
     entry: ResourceRuntimeEntry<TEntryData>,
     request: ResourceRuntimeLoadRequest<TEntryData>,
-    error: unknown,
-  ): void {
+    error: Error,
+  ): boolean {
     const decision = resolveResourceRetryDecision(
       error,
       request.retryPolicy,
@@ -915,7 +916,7 @@ export class ResourceRuntimeStore<TData = unknown> {
     );
     if (!decision.retry || entry.retryTimer) {
       entry.retryRequest = null;
-      return;
+      return false;
     }
 
     entry.retryExternalRevision = request.externalRevision;
@@ -929,6 +930,14 @@ export class ResourceRuntimeStore<TData = unknown> {
         entry.retryDeadlineAtMs > 0 &&
         Date.now() >= entry.retryDeadlineAtMs
       ) {
+        if (request.retryPolicy?.keepLoadingWhileRetrying) {
+          entry.snapshot = {
+            ...markResourceError(entry.snapshot, error),
+            settledExternalRevision: request.externalRevision,
+            settledResourceKey: request.resourceKey,
+          };
+          this.notify(entry);
+        }
         return;
       }
       if (retryRequest && !this.loadPaused(retryRequest.resourceKey)) {
@@ -936,7 +945,7 @@ export class ResourceRuntimeStore<TData = unknown> {
       }
     }, decision.delayMs);
     entry.retryTimer = timer;
-    this.notify(entry);
+    return true;
   }
 
   private schedulePendingLoad<TEntryData>(

@@ -138,12 +138,25 @@ export interface Export3DTargetAppearance {
   vectorColorMode?: Export3DColorMode;
 }
 
+/** The sampled arrows and linear RGB already used by the current 3D view. */
+export interface Export3DRenderedVectors {
+  /** Seven floats per arrow: tail XYZ, tip XYZ, relative magnitude. */
+  segmentsM: Float32Array;
+  colors: Float32Array | null;
+  monochromeColor?: Export3DRgbTuple;
+  opacity: number;
+  headRadiusRatio?: number;
+  shaftRadiusRatio?: number;
+}
+
 interface Export3DTargetBase {
   id: string;
   role?: "airbox";
   name?: string;
   field?: Export3DFieldInput | null;
   appearance?: Export3DTargetAppearance;
+  /** null denotes a captured viewport target with no displayed arrows. */
+  renderedVectors?: Export3DRenderedVectors | null;
 }
 
 export interface Export3DFdmGridTargetInput extends Export3DTargetBase {

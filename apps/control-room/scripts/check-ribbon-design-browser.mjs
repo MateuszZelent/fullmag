@@ -32,8 +32,7 @@ try {
   const canvas = await page.locator(".fm-viewport-3d canvas").elementHandle();
   assert(canvas);
   for (const theme of ["light", "dark"]) {
-    await page.getByRole("button", { name: /^Color theme:/ }).click();
-    await page.getByRole("menuitemradio", { name: theme === "light" ? "Light" : "Dark", exact: true }).click();
+    await page.getByRole("radio", { name: theme === "light" ? "Light" : "Dark", exact: true }).click();
     for (const width of [1920, 1440, 1180, 900]) {
       await page.setViewportSize({ width, height: 1100 });
       for (const density of ["Full", "Compact", "Collapsed"]) {
