@@ -1,8 +1,25 @@
 "use client";
 
-import { useEffect, useLayoutEffect, useReducer, useRef, useState } from "react";
+import { Eye, Lock, Shield, Sliders } from "lucide-react";
+import {
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useReducer,
+  useRef,
+  useState,
+} from "react";
 
-import type { FrozenSpinsActivation, FrozenSpinsDefinition, FrozenSpinsMembershipPolicy, FrozenSpinsPreviewActivationResponse, FrozenSpinsPreviewResponse, FrozenSpinsReferencePolicy, FrozenSpinsRuntimeApplication, FrozenSpinsSolverRuntimeStatus } from "@/kernel/api/apiTypes";
+import type {
+  FrozenSpinsActivation,
+  FrozenSpinsDefinition,
+  FrozenSpinsMembershipPolicy,
+  FrozenSpinsPreviewActivationResponse,
+  FrozenSpinsPreviewResponse,
+  FrozenSpinsReferencePolicy,
+  FrozenSpinsRuntimeApplication,
+  FrozenSpinsSolverRuntimeStatus,
+} from "@/kernel/api/apiTypes";
 import { runAuthoringMutationWithHistory } from "@/kernel/authoring/authoringHistoryMutation";
 import { useKernel } from "@/kernel/KernelContext";
 import {
@@ -17,15 +34,38 @@ import {
   useSolverStatusResource,
 } from "@/kernel/resources/studyRuntimeResources";
 import { useSessionScopedResourceKey } from "@/kernel/resources/useSessionScopedResourceKey";
+import type { Selection } from "@/kernel/selection/selectionTypes";
 import { Button } from "@/shared/ui/Button";
+import { Input } from "@/shared/ui/Input";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/shared/ui/Select";
+import { Switch } from "@/shared/ui/Switch";
 
 import { useRegisterInspectorEditSession } from "../../InspectorEditSession";
 import type { InspectorPanelProps } from "../../inspectorTypes";
 import { FeedbackBanner } from "../../primitives/FeedbackBanner";
 import { FieldRow } from "../../primitives/FieldRow";
-import { InspectorGroup } from "../../primitives/InspectorGroup";
+import {
+  InspectorTemplate,
+  type InspectorFact,
+  type InspectorNotice,
+  type InspectorSpec,
+} from "../../template";
+import {
+  buildObjectSelection,
+  buildRootSelection,
+} from "../model-roots/SpecInspectorHost";
 import { SelectionExpressionBuilder } from "../selection/SelectionExpressionBuilder";
-import { frozenSpinsPreviewTopologyFingerprint, resolveFrozenSpinsSolverBinding, type FrozenSpinsSolverBindingModel } from "./FrozenSpinsInspectorPanel.model";
+import {
+  frozenSpinsPreviewTopologyFingerprint,
+  resolveFrozenSpinsSolverBinding,
+  type FrozenSpinsSolverBindingModel,
+} from "./FrozenSpinsInspectorPanel.model";
 
 type PendingField = "activate" | "apply" | "delete" | "preview" | "quantity" | null;
 
@@ -125,15 +165,23 @@ function createFrozenSpinsWorkflowState(): FrozenSpinsWorkflowState {
   };
 }
 
+const EMPTY_TOUCHED = new Set<string>();
+const EMPTY_INVALID = new Map<string, string>();
+const EMPTY_UNITS: Readonly<Record<string, string>> = {};
+
 export function FrozenSpinsInspectorPanel({ selection }: InspectorPanelProps) {
   const ref = selection.ref?.type === "frozen-spins" ? selection.ref : null;
-  const constraintId = ref?.constraintId ?? "";
+  const fallbackConstraintId =
+    !ref && selection.nodeId?.includes(":frozen-spins:")
+      ? decodeURIComponent(selection.nodeId.split(":frozen-spins:").at(-1) ?? "")
+      : "";
+  const constraintId = ref?.constraintId ?? fallbackConstraintId;
   const { resourceKey, sessionIdentity } = useSessionScopedResourceKey(
     frozenSpinsDefinitionResourceKey(constraintId),
   );
   const sessionScopeKey = sessionRequestScopeKey(sessionIdentity);
   const resource = useFrozenSpinsDefinitionResource(constraintId, {
-    enabled: ref !== null,
+    enabled: Boolean(constraintId),
   });
   const [lastGood, setLastGood] = useState<{
     constraintId: string;
@@ -154,7 +202,7 @@ export function FrozenSpinsInspectorPanel({ selection }: InspectorPanelProps) {
       ? lastGood.resource
       : null);
 
-  if (!ref) {
+  if (!constraintId) {
     return (
       <FeedbackBanner
         kind="warning"
@@ -173,14 +221,15 @@ export function FrozenSpinsInspectorPanel({ selection }: InspectorPanelProps) {
     );
   }
 
-  const objectId = ref.objectId ?? selection.objectId;
+  const objectId = ref?.objectId ?? selection.objectId;
   return (
     <FrozenSpinsEditor
       key={resourceKey}
       definition={retainedResource.definition}
       objectId={objectId}
-      regionId={ref.regionId ?? null}
+      regionId={ref?.regionId ?? null}
       revision={retainedResource.revision}
+      selection={selection}
       sessionScopeKey={sessionScopeKey}
     />
   );
@@ -191,17 +240,21 @@ export function FrozenSpinsEditor({
   objectId,
   regionId,
   revision: initialRevision,
+  selection: providedSelection,
   sessionScopeKey,
 }: {
   definition: FrozenSpinsDefinition;
   objectId: string | null;
   regionId: string | null;
   revision: number;
+  selection?: Selection;
   sessionScopeKey?: string | null;
 }) {
   const kernel = useKernel();
   const [draft, setDraft] = useState(() => normalizeDefinition(initialDefinition));
   const [baseline, setBaseline] = useState(() => normalizeDefinition(initialDefinition));
+  const [activeModeTabId, setActiveModeTabId] = useState("authoring");
+
   const baselineRef = useRef({
     definition: normalizeDefinition(initialDefinition),
     revision: initialRevision,
@@ -225,15 +278,18 @@ export function FrozenSpinsEditor({
     previewSelectorJson,
     runtimeApplication,
   } = workflow;
+
   const solverStatus = useSolverStatusResource();
   const fieldMeta = useFieldMetaResource({
     enabled: objectId !== null,
     owner_object_id: objectId,
     quantityId: "m",
   });
+
   useEffect(() => {
     draftRef.current = draft;
   }, [draft]);
+
   useEffect(() => {
     const incomingDefinition = normalizeDefinition(initialDefinition);
     if (initialRevision < acknowledgedRevisionRef.current) return;
@@ -256,6 +312,7 @@ export function FrozenSpinsEditor({
       dispatchWorkflow({ type: "preview-invalidated" });
     }
   }, [initialDefinition, initialRevision]);
+
   useEffect(() => {
     mountedRef.current = true;
     return () => {
@@ -263,13 +320,21 @@ export function FrozenSpinsEditor({
     };
   }, []);
 
+  const dirty = JSON.stringify(draft) !== JSON.stringify(baseline);
+
   async function applyDraft(): Promise<boolean> {
     if (applyInFlight.current || !dirty) return false;
     const acknowledgeDraft = acknowledgeAppliedDraftRef.current;
     const submittedDraft = draft;
     const operationSessionScopeKey = sessionScopeKey ?? null;
     if (!operationSessionScopeKey) {
-      dispatchWorkflow({ type: "feedback", feedback: { kind: "error", message: "Session identity is not ready. Try again after it loads." } });
+      dispatchWorkflow({
+        type: "feedback",
+        feedback: {
+          kind: "error",
+          message: "Session identity is not ready. Try again after it loads.",
+        },
+      });
       return false;
     }
     const historyGeneration = kernel.authoringHistory?.getGeneration?.();
@@ -303,7 +368,7 @@ export function FrozenSpinsEditor({
             : kernel.api.model.frozenSpins.patch(draft.id, {
                 definition: draft,
                 expected_revision: baseRevision ?? revision,
-          }),
+              }),
       );
       if (!mountedRef.current) return false;
       if (!isCurrentSession()) return false;
@@ -333,7 +398,10 @@ export function FrozenSpinsEditor({
     } catch (error) {
       if (!mountedRef.current) return false;
       if (!isCurrentSession()) return false;
-      dispatchWorkflow({ type: "feedback", feedback: { kind: "error", message: errorMessage(error) } });
+      dispatchWorkflow({
+        type: "feedback",
+        feedback: { kind: "error", message: errorMessage(error) },
+      });
       return false;
     } finally {
       applyInFlight.current = false;
@@ -435,7 +503,13 @@ export function FrozenSpinsEditor({
     const submittedDraft = draft;
     const operationSessionScopeKey = sessionScopeKey ?? null;
     if (!operationSessionScopeKey) {
-      dispatchWorkflow({ type: "feedback", feedback: { kind: "error", message: "Session identity is not ready. Try again after it loads." } });
+      dispatchWorkflow({
+        type: "feedback",
+        feedback: {
+          kind: "error",
+          message: "Session identity is not ready. Try again after it loads.",
+        },
+      });
       return;
     }
     const historyGeneration = kernel.authoringHistory?.getGeneration?.();
@@ -467,14 +541,11 @@ export function FrozenSpinsEditor({
                 },
                 requestOptions,
               )
-            : kernel.api.model.frozenSpins.activatePreview(
-                preview.preview_id,
-                {
-                  activation_candidate_token: preview.activation_candidate_token,
-                  definition: submittedDraft,
-                  expected_revision: baseRevision ?? revision,
-                },
-              ),
+            : kernel.api.model.frozenSpins.activatePreview(preview.preview_id, {
+                activation_candidate_token: preview.activation_candidate_token,
+                definition: submittedDraft,
+                expected_revision: baseRevision ?? revision,
+              }),
       );
       if (!mountedRef.current) return;
       if (!isCurrentSession()) return;
@@ -503,7 +574,10 @@ export function FrozenSpinsEditor({
     } catch (error) {
       if (!mountedRef.current) return;
       if (!isCurrentSession()) return;
-      dispatchWorkflow({ type: "feedback", feedback: { kind: "error", message: errorMessage(error) } });
+      dispatchWorkflow({
+        type: "feedback",
+        feedback: { kind: "error", message: errorMessage(error) },
+      });
     } finally {
       applyInFlight.current = false;
       if (mountedRef.current) dispatchWorkflow({ type: "pending", field: null });
@@ -548,7 +622,10 @@ export function FrozenSpinsEditor({
       kernel.selection.clear("inspector");
     } catch (error) {
       if (!mountedRef.current) return;
-      dispatchWorkflow({ type: "feedback", feedback: { kind: "error", message: errorMessage(error) } });
+      dispatchWorkflow({
+        type: "feedback",
+        feedback: { kind: "error", message: errorMessage(error) },
+      });
       dispatchWorkflow({ type: "pending", field: null });
     } finally {
       applyInFlight.current = false;
@@ -578,35 +655,41 @@ export function FrozenSpinsEditor({
         },
       });
     } catch (error) {
-      dispatchWorkflow({ type: "feedback", feedback: { kind: "error", message: errorMessage(error) } });
+      dispatchWorkflow({
+        type: "feedback",
+        feedback: { kind: "error", message: errorMessage(error) },
+      });
     } finally {
       dispatchWorkflow({ type: "pending", field: null });
     }
   }
 
-  const dirty = JSON.stringify(draft) !== JSON.stringify(baseline);
   const resetDraft = () => {
     if (applyInFlight.current) return;
     draftRef.current = baseline;
     setDraft(baseline);
     dispatchWorkflow({ type: "preview-reset" });
   };
+
   const activation = draft.activation ?? { kind: "all_stages" };
   const reference = draft.reference ?? { kind: "capture_current_at_activation" };
   const membership = draft.membership ?? { kind: "static" };
   const toolbarPending = pendingField !== null;
+
   const activationCandidateReady = Boolean(
     preview?.current &&
-    draft.enabled &&
-    reference.kind === "capture_current_at_activation" &&
-    previewSelectorJson === JSON.stringify(draft.selector) &&
-    activationIncludesStage(activation, preview.requested.stage_id),
+      draft.enabled &&
+      reference.kind === "capture_current_at_activation" &&
+      previewSelectorJson === JSON.stringify(draft.selector) &&
+      activationIncludesStage(activation, preview.requested.stage_id),
   );
+
   const solverBinding = resolveFrozenSpinsSolverBinding(
     activationReceipt,
     solverStatus.data?.frozen_spins ?? null,
     draft.id,
   );
+
   const acknowledgeAppliedDraft = useRegisterInspectorEditSession(
     "staged",
     pendingField === "apply" || pendingField === "activate",
@@ -624,229 +707,431 @@ export function FrozenSpinsEditor({
     acknowledgeAppliedDraftRef.current = acknowledgeAppliedDraft;
   }, [acknowledgeAppliedDraft]);
 
+  const effectiveSelection = useMemo<Selection>(
+    () =>
+      providedSelection ?? {
+        kind: "object.frozen-spins",
+        label: draft.name || "Frozen Spins",
+        moduleSource: "inspector",
+        nodeId: objectId
+          ? `model:object:${objectId}:frozen-spins:${draft.id}`
+          : `model:definitions:frozen-spins:${draft.id}`,
+        objectId,
+        ref: {
+          constraintId: draft.id,
+          kind: "object.frozen-spins",
+          nodeId: objectId
+            ? `model:object:${objectId}:frozen-spins:${draft.id}`
+            : `model:definitions:frozen-spins:${draft.id}`,
+          ...(objectId ? { objectId } : {}),
+          type: "frozen-spins",
+        },
+      },
+    [draft.id, draft.name, objectId, providedSelection],
+  );
+
+  const dirtyFields = useMemo(() => {
+    const next = new Set<string>();
+    if (dirty) next.add("name");
+    return next;
+  }, [dirty]);
+
+  const spec: InspectorSpec<FrozenSpinsDefinition> = {
+    id: "object.frozen-spins",
+    header: {
+      breadcrumbs: objectId
+        ? [
+            {
+              id: "object",
+              label: objectId,
+              selection: buildObjectSelection(objectId, "object.root", objectId),
+            },
+            { id: "frozen", label: "Frozen Spins" },
+          ]
+        : [
+            {
+              id: "definitions",
+              label: "Definitions",
+              selection: buildRootSelection("definitions.root", "model:definitions", "Definitions"),
+            },
+            { id: "frozen", label: "Frozen Spins" },
+          ],
+      searchable: false,
+    },
+    identity: {
+      domain: "physics",
+      icon: Lock,
+      title: (d) => d.name || d.id,
+      kindLabel: "Frozen Spins constraint",
+      entityId: draft.id,
+      statePill: (d) =>
+        solverBinding.state === "confirmed"
+          ? { tone: "ok", label: "Solver bound" }
+          : d.enabled !== false
+            ? { tone: "info", label: "Authored" }
+            : { tone: "degraded", label: "Disabled" },
+    },
+    facts: (d): readonly InspectorFact[] => [
+      { id: "id", label: "Constraint ID", value: d.id },
+      { id: "schema", label: "Schema", value: d.schema_version },
+      {
+        id: "frozen",
+        label: "Frozen DOFs",
+        value: preview ? `${preview.frozen_dof_count} (${(preview.fraction * 100).toFixed(1)}%)` : null,
+        tone: "info",
+      },
+    ],
+    notices: (): readonly InspectorNotice<FrozenSpinsDefinition>[] =>
+      feedback
+        ? [
+            {
+              id: "frozen-spins-feedback",
+              tone:
+                feedback.kind === "error"
+                  ? "err"
+                  : feedback.kind === "warning"
+                    ? "warn"
+                    : "info",
+              text: feedback.message,
+            },
+          ]
+        : [],
+    sections: [
+      {
+        id: "frozen-spins-identity",
+        title: "Frozen Spins",
+        icon: Shield,
+        defaultOpen: true,
+        rows: [
+          {
+            type: "custom",
+            wide: true,
+            render: () => (
+              <div className="flex flex-col gap-2">
+                <div className="fm-inspector-field">
+                  <span className="text-xs text-[var(--fm-text)]">Name</span>
+                  <Input
+                    aria-label="Name"
+                    type="text"
+                    value={draft.name}
+                    onChange={(event) =>
+                      setDraft((current) => ({ ...current, name: event.target.value }))
+                    }
+                  />
+                </div>
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-xs text-[var(--fm-text)]">Enabled</span>
+                  <Switch
+                    aria-label="Enabled"
+                    checked={draft.enabled ?? true}
+                    onCheckedChange={(checked) =>
+                      setDraft((current) => ({ ...current, enabled: checked }))
+                    }
+                  />
+                </div>
+              </div>
+            ),
+          },
+        ],
+      },
+      {
+        id: "frozen-spins-selection",
+        title: "Selection",
+        icon: Sliders,
+        defaultOpen: true,
+        rows: [
+          {
+            type: "custom",
+            wide: true,
+            render: () => (
+              <div className="flex flex-col gap-2.5">
+                {objectId ? (
+                  <SelectionExpressionBuilder
+                    expression={draft.selector}
+                    objectId={objectId}
+                    regionId={regionId}
+                    onChange={(selector) =>
+                      setDraft((current) => ({ ...current, selector }))
+                    }
+                  />
+                ) : (
+                  <p className="fm-inspector-feedback" data-kind="warning">
+                    Select a target object to edit the selection expression.
+                  </p>
+                )}
+                <RadixSelectRow
+                  label="Membership"
+                  options={[
+                    ["static", "Static"],
+                    ["snapshot_at_activation", "Snapshot at activation"],
+                  ]}
+                  value={membership.kind}
+                  onChange={(kind) =>
+                    setDraft((current) => ({
+                      ...current,
+                      membership: { kind } as FrozenSpinsMembershipPolicy,
+                    }))
+                  }
+                />
+                <RadixSelectRow
+                  label="Empty selection"
+                  options={[
+                    ["error", "Error"],
+                    ["allow_noop", "Allow no-op"],
+                  ]}
+                  value={draft.empty_selection ?? "error"}
+                  onChange={(empty_selection) =>
+                    setDraft((current) => ({
+                      ...current,
+                      empty_selection:
+                        empty_selection as FrozenSpinsDefinition["empty_selection"],
+                    }))
+                  }
+                />
+                <RadixSelectRow
+                  label="Inactive selection"
+                  options={[
+                    ["warn_and_intersect", "Warn and intersect"],
+                    ["error", "Error"],
+                  ]}
+                  value={draft.inactive_selection ?? "warn_and_intersect"}
+                  onChange={(inactive_selection) =>
+                    setDraft((current) => ({
+                      ...current,
+                      inactive_selection:
+                        inactive_selection as FrozenSpinsDefinition["inactive_selection"],
+                    }))
+                  }
+                />
+              </div>
+            ),
+          },
+        ],
+      },
+      {
+        id: "frozen-spins-activation",
+        title: "Activation and reference",
+        icon: Lock,
+        defaultOpen: true,
+        rows: [
+          {
+            type: "custom",
+            wide: true,
+            render: () => (
+              <div className="flex flex-col gap-2.5">
+                <RadixSelectRow
+                  label="Activation"
+                  options={[
+                    ["all_stages", "All stages"],
+                    ["stage_ids", "Selected stage IDs"],
+                  ]}
+                  value={activation.kind}
+                  onChange={(kind) =>
+                    setDraft((current) => ({
+                      ...current,
+                      activation:
+                        kind === "stage_ids"
+                          ? { kind, stage_ids: [] }
+                          : ({ kind } as FrozenSpinsActivation),
+                    }))
+                  }
+                />
+                {activation.kind === "stage_ids" ? (
+                  <div className="fm-inspector-field">
+                    <span className="text-xs text-[var(--fm-text)]">Stage IDs</span>
+                    <Input
+                      aria-label="Stage IDs"
+                      type="text"
+                      value={activation.stage_ids.join(", ")}
+                      onChange={(event) =>
+                        setDraft((current) => ({
+                          ...current,
+                          activation: {
+                            kind: "stage_ids",
+                            stage_ids: splitIds(event.target.value),
+                          },
+                        }))
+                      }
+                    />
+                  </div>
+                ) : null}
+                <RadixSelectRow
+                  label="Reference"
+                  options={[
+                    ["capture_current_at_activation", "Capture current at activation"],
+                    ["initial_state", "Initial state"],
+                    ["explicit_field_asset", "Explicit field asset"],
+                  ]}
+                  value={reference.kind}
+                  onChange={(kind) =>
+                    setDraft((current) => ({
+                      ...current,
+                      reference:
+                        kind === "explicit_field_asset"
+                          ? { kind, asset_id: "" }
+                          : ({ kind } as FrozenSpinsReferencePolicy),
+                    }))
+                  }
+                />
+                {reference.kind === "explicit_field_asset" ? (
+                  <div className="fm-inspector-field">
+                    <span className="text-xs text-[var(--fm-text)]">Field asset ID</span>
+                    <Input
+                      aria-label="Field asset ID"
+                      type="text"
+                      value={reference.asset_id}
+                      onChange={(event) =>
+                        setDraft((current) => ({
+                          ...current,
+                          reference: {
+                            kind: "explicit_field_asset",
+                            asset_id: event.target.value,
+                          },
+                        }))
+                      }
+                    />
+                  </div>
+                ) : null}
+              </div>
+            ),
+          },
+        ],
+      },
+      {
+        id: "frozen-spins-preview",
+        title: "Preview and solver certificate",
+        icon: Eye,
+        defaultOpen: true,
+        rows: [
+          {
+            type: "custom",
+            wide: true,
+            render: () => (
+              <div className="flex flex-col gap-2.5">
+                <div className="flex flex-wrap gap-1.5">
+                  <Button
+                    disabled={toolbarPending}
+                    size="sm"
+                    type="button"
+                    variant="secondary"
+                    onClick={() => void createPreview()}
+                  >
+                    {pendingField === "preview" ? "Computing preview…" : "Preview mask"}
+                  </Button>
+                  {preview ? (
+                    <Button
+                      disabled={!activationCandidateReady || toolbarPending}
+                      disabledReason={
+                        !activationCandidateReady
+                          ? "Create a preview that matches the current selector, reference, and stage"
+                          : undefined
+                      }
+                      size="sm"
+                      type="button"
+                      variant="primary"
+                      onClick={() => void activatePreview()}
+                    >
+                      {pendingField === "activate" ? "Committing…" : "Commit preview"}
+                    </Button>
+                  ) : null}
+                  <Button
+                    disabled={toolbarPending}
+                    size="sm"
+                    type="button"
+                    variant="danger"
+                    onClick={() => void deleteDefinition()}
+                  >
+                    {pendingField === "delete" ? "Deleting…" : "Delete"}
+                  </Button>
+                </div>
+                {preview ? (
+                  <FrozenSpinsPreviewDetails
+                    activationCandidateReady={activationCandidateReady}
+                    preview={preview}
+                  />
+                ) : null}
+                {activationReceipt ? (
+                  <FrozenSpinsSolverBindingDetails
+                    binding={solverBinding}
+                    receipt={activationReceipt}
+                    runtime={solverStatus.data?.frozen_spins ?? null}
+                  />
+                ) : null}
+                {runtimeApplication ? (
+                  <FrozenSpinsRuntimeApplicationDetails application={runtimeApplication} />
+                ) : null}
+                {solverBinding.state === "confirmed" || solverBinding.state === "mismatch" ? (
+                  <Button
+                    disabled={toolbarPending}
+                    size="sm"
+                    type="button"
+                    variant="primary"
+                    onClick={() => void showSolverQuantity()}
+                  >
+                    {pendingField === "quantity"
+                      ? "Opening solver quantity…"
+                      : "Show solver frozen_spins in 3D"}
+                  </Button>
+                ) : null}
+              </div>
+            ),
+          },
+        ],
+      },
+    ],
+    commitBar: {
+      mode: "staged",
+      cleanMessage: () => "Frozen Spins definition matches committed revision",
+      onApply: async () => applyDraft(),
+      onRevert: () => resetDraft(),
+    },
+  };
+
   return (
-    <div
-      className="fm-inspector-panel grid min-w-0 gap-fm-inspector-group"
-      data-frozen-spins-inspector-id={draft.id}
-    >
-      {feedback ? <FeedbackBanner kind={feedback.kind} message={feedback.message} /> : null}
-      <InspectorGroup title="Frozen Spins" collapsible defaultOpen>
-        <FieldRow label="Constraint ID" value={draft.id} />
-        <FieldRow label="Schema" value={draft.schema_version} />
-        <TextInput
-          label="Name"
-          value={draft.name}
-          onChange={(name) => setDraft((current) => ({ ...current, name }))}
-        />
-        <label className="fm-inspector-field">
-          <input
-            checked={draft.enabled ?? true}
-            type="checkbox"
-            onChange={(event) =>
-              setDraft((current) => ({ ...current, enabled: event.target.checked }))
-            }
-          />
-          <span>Enabled</span>
-        </label>
-      </InspectorGroup>
-
-      <InspectorGroup title="Selection" collapsible defaultOpen>
-        {objectId ? (
-          <SelectionExpressionBuilder
-            expression={draft.selector}
-            objectId={objectId}
-            regionId={regionId}
-            onChange={(selector) => setDraft((current) => ({ ...current, selector }))}
-          />
-        ) : (
-          <p className="fm-inspector-feedback" data-kind="warning">
-            Select a target object to edit the selection expression.
-          </p>
-        )}
-        <SelectInput
-          label="Membership"
-          value={membership.kind}
-          options={[
-            ["static", "Static"],
-            ["snapshot_at_activation", "Snapshot at activation"],
-          ]}
-          onChange={(kind) =>
-            setDraft((current) => ({
-              ...current,
-              membership: { kind } as FrozenSpinsMembershipPolicy,
-            }))
-          }
-        />
-        <SelectInput
-          label="Empty selection"
-          value={draft.empty_selection ?? "error"}
-          options={[
-            ["error", "Error"],
-            ["allow_noop", "Allow no-op"],
-          ]}
-          onChange={(empty_selection) =>
-            setDraft((current) => ({
-              ...current,
-              empty_selection: empty_selection as FrozenSpinsDefinition["empty_selection"],
-            }))
-          }
-        />
-        <SelectInput
-          label="Inactive selection"
-          value={draft.inactive_selection ?? "warn_and_intersect"}
-          options={[
-            ["warn_and_intersect", "Warn and intersect"],
-            ["error", "Error"],
-          ]}
-          onChange={(inactive_selection) =>
-            setDraft((current) => ({
-              ...current,
-              inactive_selection:
-                inactive_selection as FrozenSpinsDefinition["inactive_selection"],
-            }))
-          }
-        />
-      </InspectorGroup>
-
-      <InspectorGroup title="Activation and reference" collapsible defaultOpen>
-        <SelectInput
-          label="Activation"
-          value={activation.kind}
-          options={[
-            ["all_stages", "All stages"],
-            ["stage_ids", "Selected stage IDs"],
-          ]}
-          onChange={(kind) =>
-            setDraft((current) => ({
-              ...current,
-              activation:
-                kind === "stage_ids"
-                  ? { kind, stage_ids: [] }
-                  : ({ kind } as FrozenSpinsActivation),
-            }))
-          }
-        />
-        {activation.kind === "stage_ids" ? (
-          <TextInput
-            label="Stage IDs"
-            value={activation.stage_ids.join(", ")}
-            onChange={(value) =>
-              setDraft((current) => ({
-                ...current,
-                activation: {
-                  kind: "stage_ids",
-                  stage_ids: splitIds(value),
-                },
-              }))
-            }
-          />
-        ) : null}
-        <SelectInput
-          label="Reference"
-          value={reference.kind}
-          options={[
-            ["capture_current_at_activation", "Capture current at activation"],
-            ["initial_state", "Initial state"],
-            ["explicit_field_asset", "Explicit field asset"],
-          ]}
-          onChange={(kind) =>
-            setDraft((current) => ({
-              ...current,
-              reference:
-                kind === "explicit_field_asset"
-                  ? { kind, asset_id: "" }
-                  : ({ kind } as FrozenSpinsReferencePolicy),
-            }))
-          }
-        />
-        {reference.kind === "explicit_field_asset" ? (
-          <TextInput
-            label="Field asset ID"
-            value={reference.asset_id}
-            onChange={(asset_id) =>
-              setDraft((current) => ({
-                ...current,
-                reference: { kind: "explicit_field_asset", asset_id },
-              }))
-            }
-          />
-        ) : null}
-      </InspectorGroup>
-
-      <InspectorGroup title="Preview" collapsible defaultOpen>
-        <div className="fm-inspector-toolbar">
-          <Button
-            disabled={toolbarPending}
-            size="sm"
-            type="button"
-            onClick={() => void createPreview()}
-          >
-            {pendingField === "preview" ? "Computing preview…" : "Preview mask"}
-          </Button>
-          <Button
-            disabled={toolbarPending || !dirty}
-            size="sm"
-            type="button"
-            onClick={() => void applyDraft()}
-          >
-            {pendingField === "apply" ? "Applying…" : "Apply"}
-          </Button>
-          {preview ? (
-            <Button
-              disabled={!activationCandidateReady || toolbarPending}
-              size="sm"
-              title={
-                activationCandidateReady
-                  ? "Atomically commit this exact preview candidate"
-                  : "Create a preview that matches the current selector, reference, and stage"
-              }
-              type="button"
-              variant="primary"
-              onClick={() => void activatePreview()}
-            >
-              {pendingField === "activate" ? "Committing…" : "Commit preview"}
-            </Button>
-          ) : null}
-          <Button
-            disabled={toolbarPending}
-            size="sm"
-            type="button"
-            variant="danger"
-            onClick={() => void deleteDefinition()}
-          >
-            {pendingField === "delete" ? "Deleting…" : "Delete"}
-          </Button>
-        </div>
-        {preview ? (
-          <FrozenSpinsPreviewDetails
-            activationCandidateReady={activationCandidateReady}
-            preview={preview}
-          />
-        ) : null}
-        {activationReceipt ? (
-          <FrozenSpinsSolverBindingDetails
-            binding={solverBinding}
-            receipt={activationReceipt}
-            runtime={solverStatus.data?.frozen_spins ?? null}
-          />
-        ) : null}
-        {runtimeApplication ? (
-          <FrozenSpinsRuntimeApplicationDetails application={runtimeApplication} />
-        ) : null}
-        {solverBinding.state === "confirmed" || solverBinding.state === "mismatch" ? (
-          <Button
-            disabled={toolbarPending}
-            size="sm"
-            type="button"
-            variant="primary"
-            onClick={() => void showSolverQuantity()}
-          >
-            {pendingField === "quantity"
-              ? "Opening solver quantity…"
-              : "Show solver frozen_spins in 3D"}
-          </Button>
-        ) : null}
-      </InspectorGroup>
+    <div className="min-w-0" data-frozen-spins-inspector-id={draft.id}>
+      <InspectorTemplate
+        activeModeTabId={activeModeTabId}
+        animationKey={draft.id}
+        appliedFlash={false}
+        applyError={null}
+        applying={toolbarPending}
+        baseline={baseline}
+        dirtyFields={dirtyFields}
+        displayUnits={EMPTY_UNITS}
+        draft={draft}
+        forceShowErrors={false}
+        invalidFields={EMPTY_INVALID}
+        selection={effectiveSelection}
+        spec={spec}
+        touchedFields={EMPTY_TOUCHED}
+        onActiveModeTabChange={setActiveModeTabId}
+        onApply={() => void applyDraft()}
+        onDisplayUnitChange={() => undefined}
+        onFieldChange={(key, value) =>
+          setDraft((current) => ({ ...current, [key]: value }))
+        }
+        onFieldTouch={() => undefined}
+        onFitView={() => undefined}
+        onFocusField={() => undefined}
+        onHideInspector={() => {
+          kernel.layout.setPanelVisible?.("right", false);
+        }}
+        onNotify={() => undefined}
+        onOpenCodePreview={() => undefined}
+        onParseErrorChange={() => undefined}
+        onPatchDraft={(partial) => setDraft((current) => ({ ...current, ...partial }))}
+        onResetDisplay={() => undefined}
+        onRevertAll={resetDraft}
+        onRevertField={(key) =>
+          setDraft((current) => ({
+            ...current,
+            [key]: baseline[key as keyof FrozenSpinsDefinition],
+          }))
+        }
+        onSelectNode={(next) => {
+          kernel.selection.set?.(next, "inspector");
+        }}
+      />
     </div>
   );
 }
@@ -870,20 +1155,20 @@ export function FrozenSpinsPreviewDetails({
       <FieldRow label="Solver binding" value={preview.solver_binding} />
       <FieldRow label="Frozen DOFs" value={String(preview.frozen_dof_count)} />
       <FieldRow label="Free DOFs" value={String(preview.free_dof_count)} />
-      <FieldRow label="Frozen fraction" value={`${(preview.fraction * 100).toFixed(2)}%`} />
+      <FieldRow
+        label="Frozen fraction"
+        value={`${(preview.fraction * 100).toFixed(2)}%`}
+      />
       <FieldRow label="Bounds (m)" value={formatBounds(preview.bounds_m)} />
       <FieldRow label="Mask hash" value={preview.mask_sha256} />
       <FieldRow label="Freshness" value={preview.current ? "current" : "stale"} />
-      <FieldRow
-        label="Activation candidate"
-        value={activationCandidateState}
-      />
+      <FieldRow label="Activation candidate" value={activationCandidateState} />
       <FieldRow label="Qualification" value={preview.resolved.qualification} />
       {preview.warnings.map((warning) => (
         <FeedbackBanner
           key={`${warning.code}:${warning.message}`}
-          kind="warning"
           detail={`Code: ${warning.code}`}
+          kind="warning"
           message={warning.message}
         />
       ))}
@@ -947,9 +1232,7 @@ function FrozenSpinsRuntimeApplicationDetails({
       ) : null}
       <FieldRow
         label="Current solver"
-        value={
-          application.current_runtime_unchanged ? "unchanged" : "updated"
-        }
+        value={application.current_runtime_unchanged ? "unchanged" : "updated"}
       />
     </div>
   );
@@ -996,7 +1279,10 @@ function scopedFrozenSpinsRequestOptions(
 }
 
 function splitIds(value: string): string[] {
-  return value.split(",").map((entry) => entry.trim()).filter(Boolean);
+  return value
+    .split(",")
+    .map((entry) => entry.trim())
+    .filter(Boolean);
 }
 
 function activationIncludesStage(
@@ -1008,38 +1294,17 @@ function activationIncludesStage(
 }
 
 function formatBounds(bounds: number[][] | null | undefined): string {
-  if (!bounds?.length) return "not available";
-  return bounds.map((axis) => `[${axis.map((value) => value.toExponential(3)).join(", ")}]`).join(" × ");
+  if (!bounds?.length) return "\u2014";
+  return bounds
+    .map((axis) => `[${axis.map((value) => value.toExponential(3)).join(", ")}]`)
+    .join(" × ");
 }
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-function TextInput({
-  label,
-  onChange,
-  value,
-}: {
-  label: string;
-  onChange: (value: string) => void;
-  value: string;
-}) {
-  return (
-    <label className="fm-inspector-field">
-      <span>{label}</span>
-      <input
-        aria-label={label}
-        className="fm-inspector-input"
-        type="text"
-        value={value}
-        onChange={(event) => onChange(event.target.value)}
-      />
-    </label>
-  );
-}
-
-function SelectInput({
+function RadixSelectRow({
   label,
   onChange,
   options,
@@ -1050,19 +1315,22 @@ function SelectInput({
   options: readonly (readonly [string, string])[];
   value: string;
 }) {
+  const activeTitle = options.find(([opt]) => opt === value)?.[1] ?? value;
   return (
-    <label className="fm-inspector-field">
-      <span>{label}</span>
-      <select
-        aria-label={label}
-        className="fm-inspector-input"
-        value={value}
-        onChange={(event) => onChange(event.target.value)}
-      >
-        {options.map(([option, title]) => (
-          <option key={option} value={option}>{title}</option>
-        ))}
-      </select>
-    </label>
+    <div className="fm-inspector-field">
+      <span className="text-xs text-[var(--fm-text)]">{label}</span>
+      <Select value={value} onValueChange={onChange}>
+        <SelectTrigger aria-label={label} density="compact">
+          <SelectValue placeholder={activeTitle}>{activeTitle}</SelectValue>
+        </SelectTrigger>
+        <SelectContent>
+          {options.map(([option, title]) => (
+            <SelectItem key={option} value={option}>
+              {title}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+    </div>
   );
 }

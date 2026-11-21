@@ -192,7 +192,7 @@ export function buildObjectExplorerNode(
       "explorer.collapse-all",
     ],
     contextCommandInputs: { "planar-monitor.create": createObjectMonitorInput },
-    children: [
+    children: compactExplorerNodes([
       {
         id: `${parentId}:geometry`,
         kind: "object.geometry",
@@ -206,7 +206,18 @@ export function buildObjectExplorerNode(
       },
       regionsNode(parentId, object, resources),
       ...frozenSpinsNodes(parentId, object.id, null, resources),
-      magneticParametersNode(parentId, object),
+      objectMaterialNode(parentId, object),
+      object.hasAbsorbingBoundary
+        ? {
+            id: `${parentId}:absorbing-boundary`,
+            kind: "object.absorbing-boundary",
+            label: "Absorbing Boundary",
+            parentId,
+            icon: "wave",
+            objectId,
+            status: "ready",
+          }
+        : null,
       {
         id: `${parentId}:magnetic-texture`,
         kind: "object.magnetic-texture",
@@ -222,6 +233,7 @@ export function buildObjectExplorerNode(
         status: object.magnetization ? "ready" : "degraded",
         contextCommands: ["magnetization-texture.activate-load-file"],
       },
+      unifiedObjectPhysicsNode(parentId, object, physicsGraph, resources.currentTransports),
       {
         id: `${parentId}:mesh`,
         kind: "object.mesh",
@@ -253,8 +265,7 @@ export function buildObjectExplorerNode(
         ]),
       },
       ...objectExtensionNodes(parentId, object),
-      ...physicsGraphObjectChildren(object, physicsGraph, resources.currentTransports),
-    ],
+    ]),
   };
 }
 
@@ -560,20 +571,9 @@ function authoredRegionNode(
     children: [
       ...frozenSpinsNodes(nodeId, object.id, region.id, resources),
       {
-        id: `${nodeId}:geometry`,
-        kind: "object.region.geometry",
-        label: "Geometry",
-        parentId: nodeId,
-        badge: region.shapeKind ?? "selector",
-        icon: "braces",
-        objectId: object.id,
-        regionId: region.id,
-        status,
-      },
-      {
         id: `${nodeId}:magnetic-parameters`,
         kind: "object.region.magnetic-parameters",
-        label: "Magnetic Parameters",
+        label: "Material",
         parentId: nodeId,
         badge: regionMaterialBadge(region),
         icon: "magnet",
@@ -583,7 +583,6 @@ function authoredRegionNode(
           region.materialOverrideCount > 0 || region.materialFieldCount > 0
             ? "ready"
             : "degraded",
-        children: regionMaterialFieldNodes(nodeId, object, region),
       },
       {
         id: `${nodeId}:mesh`,
@@ -627,28 +626,6 @@ function authoredRegionNode(
             regionId: region.id,
           }),
         ],
-      },
-      {
-        id: `${nodeId}:regions`,
-        kind: "object.region.regions",
-        label: "Regions",
-        parentId: nodeId,
-        badge: "inherits none",
-        icon: "layers",
-        objectId: object.id,
-        regionId: region.id,
-        status: "degraded",
-      },
-      {
-        id: `${nodeId}:diagnostics`,
-        kind: "object.region.diagnostics",
-        label: "Diagnostics",
-        parentId: nodeId,
-        badge: region.realizationPolicy ?? region.realizationStatus ?? "authored",
-        icon: "gauge",
-        objectId: object.id,
-        regionId: region.id,
-        status: region.realizationStatus ? "warning" : "ready",
       },
     ],
   };
@@ -759,84 +736,79 @@ function regionMaterialBadge(
   return parts.length > 0 ? parts.join(" / ") : "inherits object";
 }
 
-function regionMaterialFieldNodes(
-  parentId: string,
-  object: ModelTreeObjectSnapshot,
-  region: NonNullable<ModelTreeObjectSnapshot["regions"]>[number],
-): ExplorerNode[] {
-  return (object.materialFields ?? []).flatMap((field) =>
-    field.regionId === region.id
-      ? [{
-      id: `${parentId}:magnetic-parameters:${field.id}`,
-      kind: "object.region.magnetic-parameters" as const,
-      label: field.label,
-      parentId: `${parentId}:magnetic-parameters`,
-      badge: field.realizationStatus ?? "field",
-      icon: "settings" as const,
-      objectId: object.id,
-      regionId: region.id,
-      status: "ready" as const,
-      }]
-      : [],
-  );
-}
-
-function magneticParametersNode(
+function objectMaterialNode(
   parentId: string,
   object: ModelTreeObjectSnapshot,
 ): ExplorerNode {
   const materialLabel = object.materialLabel ?? object.material ?? "unassigned";
-  const interactions = object.physicsInteractions ?? [];
-  const optionalInteractionCount = interactions.filter(
-    (interaction) => interaction.id !== "exchange" && interaction.id !== "demag",
-  ).length;
-
   return {
-    id: `${parentId}:magnetic-parameters`,
-    kind: "object.magnetic-parameters",
-    label: "Magnetic Parameters",
+    id: `${parentId}:material`,
+    kind: "object.material",
+    label: "Material",
     parentId,
-    badge: optionalInteractionCount > 0 ? `+${optionalInteractionCount}` : "core",
+    badge: materialLabel,
     icon: "magnet",
     objectId: object.id,
     status: object.material ? "ready" : "degraded",
-    children: compactExplorerNodes([
-      {
-        id: `${parentId}:magnetic-parameters:material`,
-        kind: "object.material",
-        label: `Material: ${materialLabel}`,
-        parentId: `${parentId}:magnetic-parameters`,
-        badge: materialParametersBadge(object.materialPropertyKeys ?? []),
-        icon: "magnet",
-        objectId: object.id,
-        status: object.material ? "ready" : "degraded",
-      },
-      ...interactions.map((interaction) => ({
-        id: `${parentId}:magnetic-parameters:${interaction.id}`,
-        kind: "object.physics" as const,
-        label: interaction.label,
-        parentId: `${parentId}:magnetic-parameters`,
-        badge: physicsInteractionBadge(interaction),
-        icon: "activity" as const,
-        objectId: object.id,
-        status: interaction.enabledCount > 0 ? "ready" as const : "degraded" as const,
-      })),
-      object.hasAbsorbingBoundary ? {
-        id: `${parentId}:magnetic-parameters:absorbing-boundary`,
-        kind: "object.absorbing-boundary",
-        label: "Absorbing Boundary",
-        parentId: `${parentId}:magnetic-parameters`,
-        icon: "wave",
-        objectId: object.id,
-        status: "ready",
-      } : null,
-    ]),
   };
 }
 
-function materialParametersBadge(keys: readonly string[]): string {
-  if (keys.length === 0) return "parameters";
-  return keys.slice(0, 3).join(", ");
+function unifiedObjectPhysicsNode(
+  parentId: string,
+  object: ModelTreeObjectSnapshot,
+  physicsGraph: unknown | null | undefined,
+  currentTransports: CurrentTransportListResource | null | undefined,
+): ExplorerNode | null {
+  const interactions = object.physicsInteractions ?? [];
+  const graphScopeNode = buildPhysicsGraphObjectNode(
+    physicsGraph,
+    { id: object.id, label: object.label },
+    currentTransports,
+  );
+  const graphChildren = graphScopeNode?.children ?? [];
+  if (interactions.length === 0 && graphChildren.length === 0) {
+    return null;
+  }
+
+  const physicsNodeId = `${parentId}:physics`;
+  const graphModuleKinds = new Set(
+    graphChildren.map((child) => child.physicsModuleKind ?? child.physicsModuleId ?? ""),
+  );
+  const interactionNodes: ExplorerNode[] = interactions
+    .filter((interaction) => !graphModuleKinds.has(interaction.id))
+    .map((interaction) => ({
+      id: `${physicsNodeId}:${interaction.id}`,
+      kind: "physics.module" as const,
+      label: interaction.label,
+      parentId: physicsNodeId,
+      badge: physicsInteractionBadge(interaction),
+      icon: "activity" as const,
+      objectId: object.id,
+      physicsActivation: interaction.enabledCount > 0 ? "active" : "inactive",
+      physicsModuleId: interaction.id,
+      physicsModuleKind: interaction.id,
+      physicsScopeKind: "object" as const,
+      status: interaction.enabledCount > 0 ? ("ready" as const) : ("degraded" as const),
+    }));
+
+  const children = [
+    ...interactionNodes,
+    ...graphChildren.map((child) => ({ ...child, parentId: physicsNodeId })),
+  ];
+  const activeCount = children.filter((c) => c.status === "ready").length;
+
+  return {
+    id: physicsNodeId,
+    kind: "object.physics",
+    label: "Physics",
+    parentId,
+    badge: activeCount > 0 ? `${activeCount} active` : `${children.length}`,
+    icon: "activity",
+    objectId: object.id,
+    selectable: true,
+    status: "ready",
+    children,
+  };
 }
 
 function physicsInteractionBadge(

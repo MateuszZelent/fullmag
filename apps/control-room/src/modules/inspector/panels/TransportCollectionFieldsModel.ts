@@ -22,21 +22,35 @@ export function transportRows(value: string): CollectionRow[] {
   if (!Array.isArray(parsed) || parsed.some((row) => !row || typeof row !== "object" || Array.isArray(row))) throw new Error("Collection requires authored object rows.");
   return parsed as CollectionRow[];
 }
-export function updateTransportRow(value: string, index: number, path: readonly string[], text: string, _kind: "text" | "number" | "vector" | "reaction" = "text"): string {
+export function updateTransportRow(
+  value: string,
+  index: number,
+  path: readonly string[],
+  text: string,
+  kind: "text" | "number" | "vector" | "reaction" = "text",
+): string {
   const rows = transportRows(value);
   if (!rows[index] || !path.length) throw new Error("Selected row is unavailable.");
   const row = structuredClone(rows[index]);
   let target = row;
   for (const key of path.slice(0, -1)) {
     const nested = target[key];
-    if (nested !== undefined && (nested === null || typeof nested !== "object" || Array.isArray(nested))) throw new Error("Unrecognized nested payload is read-only.");
+    if (nested !== undefined && (nested === null || typeof nested !== "object" || Array.isArray(nested))) {
+      throw new Error("Unrecognized nested payload is read-only.");
+    }
     target[key] = nested === undefined ? {} : { ...(nested as CollectionRow) };
     target = target[key] as CollectionRow;
   }
-  const key = path[path.length - 1];
-  if (!text.trim()) delete target[key];
-  else target[key] = text;
-  return JSON.stringify(rows.map((item, i) => i === index ? row : item));
+  const key = path[path.length - 1]!;
+  const trimmed = text.trim();
+  if (!trimmed) {
+    delete target[key];
+  } else if (kind === "reaction" && trimmed === "disabled") {
+    target[key] = "disabled";
+  } else {
+    target[key] = text;
+  }
+  return JSON.stringify(rows.map((item, i) => (i === index ? row : item)));
 }
 export function transportScopeOptions(scene: SceneResource | null): Array<{ objectId: string; regionId: string; label: string }> {
   return (scene?.objects ?? []).flatMap((object) => [
@@ -50,7 +64,7 @@ export function transportScopeOptions(scene: SceneResource | null): Array<{ obje
   ]);
 }
 export const chargeMaterialFields = [["sigma_Spm", "Conductivity", "S/m"], ["sigma_parallel_Spm", "Parallel conductivity", "S/m"], ["sigma_perpendicular_Spm", "Perpendicular conductivity", "S/m"], ["sigma_AHE_Spm", "Anomalous Hall conductivity", "S/m"]] as const;
-export const spinMaterialFields = [["sigma_s_Spm", "Spin conductivity", "S/m"], ["lambda_sf_m", "Spin-flip length", "m"], ["lambda_j_m", "Exchange length (or disabled)", "m"], ["lambda_phi_m", "Dephasing length (or disabled)", "m"], ["polarization_p", "Polarization", "1"], ["theta_sh", "Spin Hall angle", "1"], ["spin_capacitance_As_per_V_m3", "Spin capacitance", "A s/(V m³)"], ["density_of_states_per_spin_Jinv_m3", "DOS per spin", "1/(J m³)"], ["capacitance_formula_version", "Capacitance formula version", ""]] as const;
+export const spinMaterialFields = [["sigma_s_Spm", "Spin conductivity", "S/m"], ["lambda_sf_m", "Spin-flip length", "m"], ["lambda_j_m", "Exchange length (or disabled)", "m"], ["lambda_phi_m", "Dephasing length (or disabled)", "m"], ["polarization_p", "Polarization", ""], ["theta_sh", "Spin Hall angle", ""], ["spin_capacitance_As_per_V_m3", "Spin capacitance", "A s/(V m³)"], ["density_of_states_per_spin_Jinv_m3", "DOS per spin", "1/(J m³)"], ["capacitance_formula_version", "Capacitance formula version", ""]] as const;
 export const chargeBoundaryKinds = ["equipotential_current_terminal", "voltage_electrode", "normal_current_electrode", "insulating"] as const;
 export const spinBoundaryKinds = ["spin_insulating", "homogeneous_spin_potential_gradient", "spin_sink", "specified_spin_potential", "specified_spin_flux", "periodic_spin"] as const;
 export function changeTransportBoundaryKind(value: string, index: number, kind: string): string {

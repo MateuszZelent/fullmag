@@ -6,6 +6,7 @@ import type {
   ExplorerNode,
   ExplorerNodeStatus,
   ModelTreeCouplingSnapshot,
+  ModelTreeFieldDriveSnapshot,
   ModelTreeObjectSnapshot,
   ModelTreeSnapshot,
 } from "../explorerTypes";
@@ -211,6 +212,37 @@ export function buildCouplingsNode(couplings: readonly ModelTreeCouplingSnapshot
         "couplings.disable",
         "couplings.delete",
       ],
+    })),
+  };
+}
+
+export function buildFieldDrivesNode(
+  fieldDrives: readonly ModelTreeFieldDriveSnapshot[],
+): ExplorerNode | null {
+  if (fieldDrives.length === 0) return null;
+  return {
+    id: "model:physics:field-drives",
+    kind: "physics.field-drives",
+    label: "Field Drives",
+    parentId: "model:session",
+    badge: `${fieldDrives.length}`,
+    icon: "wave",
+    selectable: true,
+    status: "ready",
+    contextCommands: ["workspace.focus-selection"],
+    children: fieldDrives.map((drive) => ({
+      id: `model:physics:field-drives:${drive.id}`,
+      kind: "physics.module" as const,
+      label: drive.label,
+      parentId: "model:physics:field-drives",
+      badge: drive.waveformKind ?? drive.driveKind,
+      icon: "wave" as const,
+      physicsModuleId: drive.id,
+      physicsModuleKind:
+        drive.driveKind === "mask" ? "mask_field_drive" : "regional_field_drive",
+      physicsScopeKind: "global" as const,
+      status: drive.enabled === false ? ("degraded" as const) : ("ready" as const),
+      contextCommands: ["workspace.focus-selection"],
     })),
   };
 }

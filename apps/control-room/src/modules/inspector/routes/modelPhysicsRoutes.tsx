@@ -1,44 +1,44 @@
 import { TopologicalChargeExtensionPanel } from "../extensions/topological-charge/TopologicalChargeExtensionPanel";
-import { CouplingInspectorPanel } from "../panels/CouplingInspectorPanel";
+import { FrozenSpinsInspectorPanel } from "../panels/constraint/FrozenSpinsInspectorPanel";
+import { ObjectAbsorbingBoundaryInspectorPanel } from "../panels/constraint/ObjectExtensionsSpecs";
 import {
   BuilderPrimitiveInspectorPanel,
-  FieldDriveInspectorPanel,
-  FieldDrivesInspectorPanel,
   GeometryObjectInspectorPanel,
-  ObjectMaterialInspectorPanel,
-  ObjectRegionMagneticParametersInspectorPanel,
-} from "../panels/DedicatedExplorerInspectorPanels";
+} from "../panels/geometry/ObjectGeometrySpec";
+import { ObjectMaterialInspectorPanel } from "../panels/material/ObjectMaterialSpec";
 import {
   CrossObjectPhysicsScopeInspectorPanel,
   DefinitionsRootInspectorPanel,
+  FieldDrivesInspectorPanel,
   GlobalPhysicsScopeInspectorPanel,
   ObjectsRootInspectorPanel,
   PhysicsCouplingsInspectorPanel,
   SessionRootInspectorPanel,
   UniverseRootInspectorPanel,
   UnresolvedPhysicsScopeInspectorPanel,
-} from "../panels/ModelTreeOverviewInspectorPanels";
-import { ObjectAbsorbingBoundaryInspectorPanel } from "../panels/ObjectAbsorbingBoundaryPanel";
-import { ObjectGeneralPanel } from "../panels/ObjectGeneralPanel";
+} from "../panels/model-roots/ModelScopeSpecs";
+import { ObjectOverviewInspectorPanel } from "../panels/object/ObjectOverviewSpec";
+import { FieldDriveInspectorPanel } from "../panels/physics/FieldDriveSpec";
 import {
-  ObjectRegionMeshPanel,
-  ObjectRegionOverviewPanel,
-} from "../panels/ObjectRegionsPanel";
-import { PhysicsGraphModuleInspectorPanel } from "../panels/PhysicsGraphModuleInspectorPanel";
-import { PhysicsInteractionPanel } from "../panels/PhysicsInteractionPanel";
-import { RegionsListPanel } from "../panels/RegionsListPanel";
+  CouplingInspectorPanel,
+  ObjectPhysicsInspectorPanel,
+  PhysicsModuleInspectorPanel,
+} from "../panels/physics/PhysicsModuleSpecs";
 import {
-  OerstedFieldInspectorPanel,
-  SpinTorqueInspectorPanel,
-} from "../panels/SpinAuthoringInspector";
-import { SpinInterfaceInspectorPanel } from "../panels/SpinInterfaceInspector";
+  ObjectRegionMagneticParametersInspectorPanel,
+  ObjectRegionMeshInspectorPanel,
+  ObjectRegionOverviewInspectorPanel,
+  RegionsCollectionInspectorPanel,
+} from "../panels/region/RegionInspectorSpecs";
 import {
   CurrentTransportInspectorPanel,
+  OerstedFieldInspectorPanel,
+  SpinInterfaceInspectorPanel,
+  SpinTorqueInspectorPanel,
   SpinTransportInspectorPanel,
   StructuredCurrentClosureInspectorPanel,
   StructuredCurrentSourceCutInspectorPanel,
-} from "../panels/TransportAuthoringInspector";
-import { FrozenSpinsInspectorPanel } from "../panels/constraint/FrozenSpinsInspectorPanel";
+} from "../panels/transport/TransportAndSpinSpecs";
 
 import { defineInspectorRoute, type InspectorRoute } from "./routeTypes";
 
@@ -96,7 +96,7 @@ export const MODEL_PHYSICS_ROUTES: readonly InspectorRoute[] = [
     title: "Unresolved Physics",
   }),
   defineInspectorRoute({
-    component: ObjectGeneralPanel,
+    component: ObjectOverviewInspectorPanel,
     id: "object-general",
     selectionKinds: ["object.root"],
     title: "Object General",
@@ -120,13 +120,13 @@ export const MODEL_PHYSICS_ROUTES: readonly InspectorRoute[] = [
     title: "Builder Primitive",
   }),
   defineInspectorRoute({
-    component: PhysicsInteractionPanel,
+    component: ObjectPhysicsInspectorPanel,
     id: "physics-interaction",
     selectionKinds: ["object.physics"],
     title: "Physics Interaction",
   }),
   defineInspectorRoute({
-    component: PhysicsGraphModuleInspectorPanel,
+    component: PhysicsModuleInspectorPanel,
     id: "physics-graph-module",
     selectionKinds: ["physics.module"],
     title: "Physics Module",
@@ -204,13 +204,13 @@ export const MODEL_PHYSICS_ROUTES: readonly InspectorRoute[] = [
     title: "Material Assignment",
   }),
   defineInspectorRoute({
-    component: RegionsListPanel,
+    component: RegionsCollectionInspectorPanel,
     id: "object-regions",
     selectionKinds: ["object.regions"],
     title: "Object Regions",
   }),
   defineInspectorRoute({
-    component: ObjectRegionOverviewPanel,
+    component: ObjectRegionOverviewInspectorPanel,
     id: "object-region",
     selectionKinds: ["object.region"],
     title: "Object Region",
@@ -222,7 +222,7 @@ export const MODEL_PHYSICS_ROUTES: readonly InspectorRoute[] = [
     title: "Region Magnetic Parameters",
   }),
   defineInspectorRoute({
-    component: ObjectRegionMeshPanel,
+    component: ObjectRegionMeshInspectorPanel,
     id: "object-region-mesh",
     selectionKinds: ["object.region.mesh"],
     title: "Region Mesh",

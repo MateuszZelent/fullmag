@@ -1,6 +1,121 @@
-import { act, type ComponentProps } from "react";
+import { act, type ComponentProps, type ReactNode } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+
+vi.mock("@radix-ui/react-tooltip", () => ({
+  Provider: ({ children }: { children: ReactNode }) => <>{children}</>,
+  Root: ({ children }: { children: ReactNode }) => <>{children}</>,
+  Trigger: ({ children }: { children: ReactNode }) => <>{children}</>,
+  Portal: ({ children }: { children: ReactNode }) => <>{children}</>,
+  Content: ({ children }: { children: ReactNode }) => <div>{children}</div>,
+}));
+
+vi.mock("@radix-ui/react-hover-card", () => ({
+  Root: ({ children }: { children: ReactNode }) => <>{children}</>,
+  Trigger: ({ children }: { children: ReactNode }) => <>{children}</>,
+  Portal: ({ children }: { children: ReactNode }) => <>{children}</>,
+  Content: ({ children }: { children: ReactNode }) => <div>{children}</div>,
+}));
+
+vi.mock("@radix-ui/react-dropdown-menu", () => ({
+  Root: ({ children }: { children: ReactNode }) => <>{children}</>,
+  Trigger: ({ children }: { children: ReactNode }) => <>{children}</>,
+  Portal: ({ children }: { children: ReactNode }) => <>{children}</>,
+  Content: ({ children }: { children: ReactNode }) => <div>{children}</div>,
+  Group: ({ children }: { children: ReactNode }) => <div>{children}</div>,
+  Sub: ({ children }: { children: ReactNode }) => <div>{children}</div>,
+  SubTrigger: ({ children }: { children: ReactNode }) => <div>{children}</div>,
+  SubContent: ({ children }: { children: ReactNode }) => <div>{children}</div>,
+  Item: ({ children, onSelect }: { children: ReactNode; onSelect?: () => void }) => (
+    <div role="menuitem" onClick={onSelect}>
+      {children}
+    </div>
+  ),
+  CheckboxItem: ({ children }: { children: ReactNode }) => <div>{children}</div>,
+  RadioGroup: ({ children }: { children: ReactNode }) => <div>{children}</div>,
+  RadioItem: ({ children }: { children: ReactNode }) => <div>{children}</div>,
+  ItemIndicator: ({ children }: { children: ReactNode }) => <span>{children}</span>,
+  Separator: () => <hr />,
+  Label: ({ children }: { children: ReactNode }) => <div>{children}</div>,
+}));
+
+vi.mock("@radix-ui/react-context-menu", () => ({
+  Root: ({ children }: { children: ReactNode }) => <>{children}</>,
+  Trigger: ({ children }: { children: ReactNode }) => <>{children}</>,
+  Portal: ({ children }: { children: ReactNode }) => <>{children}</>,
+  Content: ({ children }: { children: ReactNode }) => <div>{children}</div>,
+  Group: ({ children }: { children: ReactNode }) => <div>{children}</div>,
+  Sub: ({ children }: { children: ReactNode }) => <div>{children}</div>,
+  SubTrigger: ({ children }: { children: ReactNode }) => <div>{children}</div>,
+  SubContent: ({ children }: { children: ReactNode }) => <div>{children}</div>,
+  Item: ({ children, onSelect }: { children: ReactNode; onSelect?: () => void }) => (
+    <div role="menuitem" onClick={onSelect}>
+      {children}
+    </div>
+  ),
+  CheckboxItem: ({ children }: { children: ReactNode }) => <div>{children}</div>,
+  RadioGroup: ({ children }: { children: ReactNode }) => <div>{children}</div>,
+  RadioItem: ({ children }: { children: ReactNode }) => <div>{children}</div>,
+  ItemIndicator: ({ children }: { children: ReactNode }) => <span>{children}</span>,
+  Separator: () => <hr />,
+  Label: ({ children }: { children: ReactNode }) => <div>{children}</div>,
+}));
+
+vi.mock("@radix-ui/react-dialog", () => ({
+  Root: ({ children, open }: { children: ReactNode; open?: boolean }) =>
+    open ? <div data-slot="mock-dialog-root">{children}</div> : null,
+  Trigger: ({ children }: { children: ReactNode }) => <>{children}</>,
+  Portal: ({ children }: { children: ReactNode }) => <>{children}</>,
+  Overlay: () => null,
+  Content: ({ children }: { children: ReactNode }) => <div>{children}</div>,
+  Title: ({ children }: { children: ReactNode }) => <h2>{children}</h2>,
+  Description: ({ children }: { children: ReactNode }) => <p>{children}</p>,
+  Close: ({ children }: { children: ReactNode }) => <>{children}</>,
+}));
+
+vi.mock("@radix-ui/react-popover", () => ({
+  Root: ({ children }: { children: ReactNode }) => <>{children}</>,
+  Trigger: ({ children }: { children: ReactNode }) => <>{children}</>,
+  Anchor: ({ children }: { children: ReactNode }) => <>{children}</>,
+  Portal: ({ children }: { children: ReactNode }) => <>{children}</>,
+  Content: ({ children }: { children: ReactNode }) => <div>{children}</div>,
+  Close: ({ children }: { children: ReactNode }) => <>{children}</>,
+}));
+
+vi.mock("@radix-ui/react-select", () => ({
+  Root: ({
+    children,
+    value,
+    onValueChange,
+  }: {
+    children: ReactNode;
+    value?: string;
+    onValueChange?: (val: string) => void;
+  }) => (
+    <select
+      value={value}
+      onChange={(event) => onValueChange?.(event.currentTarget.value)}
+    >
+      {children}
+    </select>
+  ),
+  Group: ({ children }: { children: ReactNode }) => <>{children}</>,
+  Value: ({ children }: { children?: ReactNode }) => <>{children}</>,
+  Trigger: () => null,
+  Icon: () => null,
+  Portal: ({ children }: { children: ReactNode }) => <>{children}</>,
+  Content: ({ children }: { children: ReactNode }) => <>{children}</>,
+  Viewport: ({ children }: { children: ReactNode }) => <>{children}</>,
+  ScrollUpButton: () => null,
+  ScrollDownButton: () => null,
+  Label: ({ children }: { children: ReactNode }) => <>{children}</>,
+  Item: ({ children, value }: { children: ReactNode; value: string }) => (
+    <option value={value}>{children}</option>
+  ),
+  ItemText: ({ children }: { children: ReactNode }) => <>{children}</>,
+  ItemIndicator: () => null,
+  Separator: () => null,
+}));
 
 import { DATA_FROZEN_SPINS_RESOLVED_MASK_PATH } from "@/kernel/api/apiPaths";
 import type { FieldMetaResource } from "@/kernel/api/apiTypes";
