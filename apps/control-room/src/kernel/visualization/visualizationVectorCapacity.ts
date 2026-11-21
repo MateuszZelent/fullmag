@@ -125,7 +125,7 @@ export function fdmVisualizationVectorCapacitySource({
   });
   const support = membership?.magnetic_support;
   const supportCounts = support === null || support === undefined
-    ? alignedMembership
+    ? alignedMembership && membership
       ? countCanonicalFdmSupportCells(alignedMembership.regionIds, membership)
       : null
     : {
