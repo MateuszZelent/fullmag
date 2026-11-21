@@ -44,6 +44,31 @@ type Viewport3DFieldDomainMismatchReason = Extract<
   { status: "mismatch" }
 >["reason"];
 
+export interface Viewport3DLiveFemDomainRefreshers {
+  airboxFieldVectors: () => void;
+  domainManifest: () => void;
+  domainMeta: () => void;
+  magneticPartFields: () => void;
+  targetQuantityFields: () => void;
+  topology: () => void;
+}
+
+export function refreshViewport3DLiveFemDomainResources({
+  airboxFieldVectors,
+  domainManifest,
+  domainMeta,
+  magneticPartFields,
+  targetQuantityFields,
+  topology,
+}: Viewport3DLiveFemDomainRefreshers): void {
+  domainMeta();
+  domainManifest();
+  topology();
+  magneticPartFields();
+  targetQuantityFields();
+  airboxFieldVectors();
+}
+
 const FIELD_DOMAIN_MISMATCH_TEXT: Record<Viewport3DFieldDomainMismatchReason, string> = {
   "damping-location-mismatch": "live FEM damping requires a field published at mesh nodes",
   "domain-generation-mismatch":
@@ -63,6 +88,17 @@ const FIELD_DOMAIN_MISMATCH_TEXT: Record<Viewport3DFieldDomainMismatchReason, st
   "point-count-mismatch":
     "the field sample count does not match the displayed domain",
 };
+
+export function retryViewport3DFieldDomainMismatch(
+  reason: Viewport3DFieldDomainMismatchReason,
+  retryField: () => void,
+  refreshLiveFemDomain?: () => void,
+): void {
+  if (reason === "domain-generation-mismatch") {
+    refreshLiveFemDomain?.();
+  }
+  retryField();
+}
 
 /**
  * User-facing explanation for a blocked field buffer. The internal reason
