@@ -30,8 +30,7 @@ try {
     await page.setViewportSize({ width: 1920, height: 1000 });
     if (await page.locator(".fm-start").isVisible())
       await page.getByRole("button", { name: "Back to simulation", exact: true }).click();
-    await page.getByRole("button", { name: /^Color theme:/ }).click();
-    await page.getByRole("menuitemradio", { name: theme === "light" ? "Light" : "Dark", exact: true }).click();
+    await page.getByRole("radio", { name: theme === "light" ? "Light" : "Dark", exact: true }).click();
     for (const surface of ["workspace", "home"]) {
       await page.setViewportSize({ width: 1920, height: 1000 });
       if (surface === "home") await page.getByRole("button", { name: "Home", exact: true }).click();

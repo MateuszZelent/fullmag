@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { mkdir, writeFile } from "node:fs/promises";
 import { isAbsolute, relative, resolve, sep } from "node:path";
+import { openAppMenu, waitForAppMenu } from "./lib/app-menu-browser.mjs";
 
 const workspaceUrl = process.env.CONTROL_ROOM_URL ?? "http://localhost:3100/workspace";
 const apiBase = (
@@ -297,7 +298,7 @@ async function main() {
       timeout: timeoutMs,
       waitUntil: "domcontentloaded",
     });
-    await page.getByRole("button", { name: "File", exact: true }).waitFor({ state: "visible", timeout: timeoutMs });
+    await waitForAppMenu(page, "File", { timeout: timeoutMs });
     await page.locator('[data-state="no-session"]').waitFor({ state: "visible", timeout: timeoutMs });
 
     await createProject(page, state);
@@ -351,7 +352,7 @@ async function main() {
     });
 
     state.expectProjectClose = true;
-    await page.getByRole("button", { name: "File", exact: true }).click();
+    await openAppMenu(page, "File");
     await page.getByRole("menuitem", { name: /^Close Project/i }).click();
     await page.locator('[data-state="no-session"]').waitFor({ state: "visible", timeout: timeoutMs });
     assert.equal(await page.locator(".fm-results-navigator-shell").count(), 0, "Closed project retained saved results.");
@@ -688,8 +689,7 @@ function createFixtureState() {
 }
 
 async function createProject(page, state) {
-  await page.getByRole("button", { name: "File", exact: true }).waitFor({ state: "visible", timeout: timeoutMs });
-  await page.getByRole("button", { name: "File", exact: true }).click();
+  await openAppMenu(page, "File", { timeout: timeoutMs });
   const button = page.getByRole("menuitem", { name: /^New Project/i });
   await button.waitFor({ state: "visible", timeout: timeoutMs });
   await button.click();
