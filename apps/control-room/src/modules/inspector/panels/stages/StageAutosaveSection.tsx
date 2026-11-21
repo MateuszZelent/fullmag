@@ -4,6 +4,7 @@ import { Plus, Trash2 } from "lucide-react";
 
 import { Button } from "@/shared/ui/Button";
 import { FormField } from "../../primitives/FormField";
+import { useEditableRowKeys } from "@/shared/utils/useEditableRowKeys";
 import type {
   StageAutosaveDraft,
   StageAutosaveOwnerKind,
@@ -18,6 +19,7 @@ export function StageAutosaveSection({
   onChange: (draft: StageAutosaveDraft) => void;
   owner: StageAutosaveOwnerKind;
 }) {
+  const rowKeys = useEditableRowKeys(draft.fields.map((field) => field.quantity));
   const cadenceUnit = owner === "relax" ? "accepted steps" : "s";
   return (
     <section className="fm-stage-autosave" aria-label="Stage autosave">
@@ -91,10 +93,10 @@ export function StageAutosaveSection({
                 size="sm"
                 type="button"
                 variant="secondary"
-                onClick={() => onChange({
-                  ...draft,
-                  fields: [...draft.fields, { cadence: owner === "relax" ? "10" : "1e-12", quantity: "m" }],
-                })}
+                onClick={() => {
+                  rowKeys.append("m");
+                  onChange({ ...draft, fields: [...draft.fields, { cadence: owner === "relax" ? "10" : "1e-12", quantity: "m" }] });
+                }}
               >
                 <Plus aria-hidden="true" size={14} />
                 Add field
@@ -104,14 +106,15 @@ export function StageAutosaveSection({
               <p className="fm-stage-autosave__notice">TXT stores scalar tables only. Choose Zarr or HDF5 for fields.</p>
             ) : null}
             {draft.fields.map((field, index) => (
-              <div className="fm-stage-autosave__field" key={`${index}:${field.quantity}`}>
+              <div className="fm-stage-autosave__field" key={rowKeys.keys[index]}>
                 <FormField
                   label="Quantity"
                   value={field.quantity}
-                  onChange={(event) => onChange({
-                    ...draft,
-                    fields: draft.fields.map((item, itemIndex) => itemIndex === index ? { ...item, quantity: event.target.value } : item),
-                  })}
+                  onChange={(event) => {
+                    const quantity = event.target.value;
+                    rowKeys.rename(index, quantity);
+                    onChange({ ...draft, fields: draft.fields.map((item, i) => i === index ? { ...item, quantity } : item) });
+                  }}
                 />
                 <FormField
                   label="Cadence"
@@ -127,7 +130,10 @@ export function StageAutosaveSection({
                   size="icon"
                   type="button"
                   variant="ghost"
-                  onClick={() => onChange({ ...draft, fields: draft.fields.filter((_, itemIndex) => itemIndex !== index) })}
+                  onClick={() => {
+                    rowKeys.remove(index);
+                    onChange({ ...draft, fields: draft.fields.filter((_, i) => i !== index) });
+                  }}
                 >
                   <Trash2 aria-hidden="true" size={14} />
                 </Button>

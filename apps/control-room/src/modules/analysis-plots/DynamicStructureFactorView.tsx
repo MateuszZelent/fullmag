@@ -36,9 +36,11 @@ export function DynamicStructureFactorView({
   const heatmapRef = useRef<HTMLDivElement | null>(null);
   const [activeCellKey, setActiveCellKey] = useState<string | null>(null);
   const selectableCellKeys = useMemo(
-    () => cells
-      .filter((cell) => Boolean(onPointSelect && dynamicStructureFactorPointSelection(resource, cell.frequencyIndex, cell.wavevectorIndex, spectrum)))
-      .map((cell) => `${cell.frequencyIndex}:${cell.wavevectorIndex}`),
+    () => onPointSelect ? cells.flatMap(({ frequencyIndex, wavevectorIndex }) =>
+      dynamicStructureFactorPointSelection(resource, frequencyIndex, wavevectorIndex, spectrum)
+        ? [`${frequencyIndex}:${wavevectorIndex}`]
+        : [],
+    ) : [],
     [cells, onPointSelect, resource, spectrum],
   );
   const focusCellKey = activeCellKey && selectableCellKeys.includes(activeCellKey)

@@ -8,7 +8,7 @@ use std::{
     collections::BTreeSet,
     fs,
     io::{Read, Write},
-    path::{Path, PathBuf},
+    path::PathBuf,
     process::{Command, Stdio},
     time::{Duration, Instant},
 };

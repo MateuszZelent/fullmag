@@ -551,6 +551,10 @@ impl LocalLiveWorkspace {
             })
     }
 
+    // The explicit shutdown owner is dormant while runs finish through the
+    // separate terminal ACK path. Keep the bounded receipt/join path available
+    // until a caller can invoke it without changing that terminal contract.
+    #[expect(dead_code, reason = "reserved for an explicit close owner that follows terminal ACK")]
     pub fn finish_publish(&self) -> Result<()> {
         self.publisher.finish_publish(std::time::Duration::from_secs(600))
     }
@@ -1577,12 +1581,15 @@ pub(crate) struct CurrentLivePublisher {
     state_source: Arc<Mutex<Option<Arc<Mutex<LocalLiveWorkspaceState>>>>>,
     wake_tx: mpsc::SyncSender<()>,
     stopping: Arc<AtomicBool>,
+    #[expect(dead_code, reason = "owned by the dormant bounded publisher close path")]
     completion: Arc<Mutex<Option<LivePublisherCompletion>>>,
     terminal: Arc<TerminalPublication>,
 }
 
 struct LivePublisherCompletion {
+    #[expect(dead_code, reason = "read by the dormant bounded publisher close path")]
     receipt: mpsc::Receiver<Result<()>>,
+    #[expect(dead_code, reason = "joined by the dormant bounded publisher close path")]
     worker: std::thread::JoinHandle<()>,
 }
 
@@ -1780,6 +1787,7 @@ impl CurrentLivePublisher {
         }
     }
 
+    #[cfg(test)]
     fn spawn_with_sinks(
         session_id: &str,
         coalesce_delay: std::time::Duration,
@@ -1886,6 +1894,9 @@ impl CurrentLivePublisher {
         }
     }
 
+    // Normal completion waits on TerminalPublication; this separate bounded
+    // close path remains for an explicit shutdown owner that follows its ACK.
+    #[expect(dead_code, reason = "reserved for an explicit close owner that follows terminal ACK")]
     fn finish_publish(&self, timeout: std::time::Duration) -> Result<()> {
         let mut completion = self.completion.lock()
             .map_err(|_| anyhow!("live publisher completion lock poisoned"))?;

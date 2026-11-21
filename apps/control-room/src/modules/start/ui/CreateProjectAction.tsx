@@ -69,13 +69,18 @@ export function CreateProjectAction({
     if (!source || !creator) return;
     setBusy(true);
     setFailure(null);
-    const outcome = await creator(source);
-    setBusy(false);
-    if (outcome.kind === "failed") {
-      setFailure(outcome.message);
-      return;
+    try {
+      const outcome = await creator(source);
+      if (outcome.kind === "failed") {
+        setFailure(outcome.message);
+        return;
+      }
+      setOpen(false);
+    } catch (error) {
+      setFailure(error instanceof Error ? error.message : String(error));
+    } finally {
+      setBusy(false);
     }
-    setOpen(false);
   };
 
   const copy = source ? consentCopy(source, hash) : null;

@@ -3,6 +3,7 @@ use crate::types::RunError;
 pub(crate) use fullmag_antenna_artifacts::current_display::AcceptedExternalLeadCurrentDisplay;
 #[cfg(all(test, any(feature = "fem-native", feature = "fem-gpu")))]
 use fullmag_antenna_artifacts::current_display::HEADER;
+#[cfg(any(feature = "fem-native", feature = "fem-gpu"))]
 pub(super) use fullmag_antenna_artifacts::current_display::{OPERATOR, SCHEMA};
 #[cfg(all(test, any(feature = "fem-native", feature = "fem-gpu")))]
 use sha2::{Digest, Sha256};

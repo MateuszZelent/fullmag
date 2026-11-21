@@ -380,7 +380,8 @@ function sameTuple(
   right: readonly [number, number, number],
 ): boolean {
   const tuple = tuple3(left);
-  return tuple != null && tuple.every((value, index) => value === right[index]);
+  return tuple != null && tuple.length === right.length &&
+    tuple.every((value, index) => value === right[index]);
 }
 
 function membershipCompatible(

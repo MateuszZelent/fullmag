@@ -597,13 +597,10 @@ export function interactionSpecsForDiscretization(
   discretization: InteractionDiscretization,
 ): readonly InteractionSpec[] {
   if (discretization === "unknown") return [];
-  return INTERACTION_SPECS.filter(
-    (spec) =>
-      interactionAvailabilityForDiscretization(spec.id, discretization).status !==
-      "unsupported",
-  ).map((spec) => {
-    if (spec.id !== "demag") return spec;
-    return {
+  return INTERACTION_SPECS.flatMap((spec) => {
+    if (interactionAvailabilityForDiscretization(spec.id, discretization).status === "unsupported") return [];
+    if (spec.id !== "demag") return [spec];
+    return [{
       ...spec,
       fields: spec.fields.map((field) =>
         field.id === "method"
@@ -616,7 +613,7 @@ export function interactionSpecsForDiscretization(
             }
           : field,
       ),
-    };
+    }];
   });
 }
 

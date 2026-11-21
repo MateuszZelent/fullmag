@@ -9,7 +9,7 @@ import {
 import { SESSION_STATUS_RESOURCE_KEY } from "@/kernel/resources/useSessionStatus";
 import { allInteractionSpecs } from "@/shared/domain/physics/interactions";
 
-import { commitObjectInteractionMutation } from "./PhysicsInteractionPanel";
+import { commitObjectInteractionMutation } from "./PhysicsInteractionPanel.model";
 import { interactionIdFromSelection } from "./PhysicsInteractionPanelModel";
 
 describe("PhysicsInteractionPanel lane contract", () => {

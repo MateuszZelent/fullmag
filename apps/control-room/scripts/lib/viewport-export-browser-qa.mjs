@@ -41,10 +41,15 @@ export async function readViewportInspectorState(page) {
     await contextTabs.waitFor({ state: "attached", timeout: MAX_ACTION_TIMEOUT_MS });
   } catch (error) {
     const diagnostic = await page.evaluate(() => ({
-      lists: [...document.querySelectorAll('[aria-label="Inspector context"]')].map(list => ({
-        role: list.getAttribute("role"),
-        hiddenAncestors: Array.from((function* () { for (let node = list; node; node = node.parentElement) yield node; })()).filter(node => node.hidden || node.inert || node.getAttribute("aria-hidden") === "true" || getComputedStyle(node).display === "none").map(node => ({ tag: node.tagName, class: node.className, hidden: node.hidden, inert: node.inert, ariaHidden: node.getAttribute("aria-hidden") })),
-      })),
+      lists: [...document.querySelectorAll('[aria-label="Inspector context"]')].map(list => {
+        const hiddenAncestors = [];
+        for (let node = list; node; node = node.parentElement) {
+          if (node.hidden || node.inert || node.getAttribute("aria-hidden") === "true" || getComputedStyle(node).display === "none") {
+            hiddenAncestors.push({ tag: node.tagName, class: node.className, hidden: node.hidden, inert: node.inert, ariaHidden: node.getAttribute("aria-hidden") });
+          }
+        }
+        return { role: list.getAttribute("role"), hiddenAncestors };
+      }),
       overlays: [...document.querySelectorAll('[role="dialog"], [role="listbox"]')].map(node => ({role: node.getAttribute("role"), label: node.getAttribute("aria-label"), text: node.textContent?.slice(0,150), visible: node.checkVisibility()})),
     }));
     throw new Error(`Inspector tabs unavailable: ${JSON.stringify(diagnostic)}; ${error.message}`);
@@ -71,7 +76,6 @@ export async function readViewportInspectorState(page) {
   }
   return { context, section };
 }
-
 export function getViewportSettingsRegion(page) {
   return page.getByRole("region", {
     name: VIEWPORT_SETTINGS_REGION_NAME,
@@ -210,7 +214,7 @@ export async function runViewportExportBrowserQa(page, {
     await withTimeout(assertCanvas("before viewport PNG export QA"), timeoutMs, "initial canvas assertion");
     originalInspectorState = await readViewportInspectorState(page);
     await ensureSettingsOpen(page, "Export", timeoutMs);
-    originalSettings = await readSettings(page, settings, timeoutMs);
+    originalSettings = await readSettings(page, timeoutMs);
     if (expectedCaptureDpr === 2 && originalSettings.quality !== "Standard") {
       throw new Error(
         "A 2x capture-resolution check requires the Standard quality profile as its 1.25x baseline; found " +
@@ -403,7 +407,7 @@ export async function runViewportExportBrowserQa(page, {
         }
       });
       await restoreSetting(restorationErrors, "settings verification", async () => {
-        const restored = await readSettings(page, settings, restoreTimeoutMs);
+        const restored = await readSettings(page, restoreTimeoutMs);
         if (!sameSettings(originalSettings, restored)) {
           throw new Error(
             "expected " +
@@ -454,19 +458,30 @@ export async function runViewportExportBrowserQa(page, {
 }
 
 async function ensureSettingsOpen(page, section, timeout) {
-  await ensureViewportSettingsSection(page, section, timeout);
+  return ensureViewportSettingsSection(page, section, timeout);
 }
 
-async function readSettings(page, settings, timeout) {
-  await ensureSettingsOpen(page, "Export", timeout);
-  const background = await readChoice(page, "PNG background", timeout);
-  const annotations = await settings.getByRole("switch", {
-    name: "Include annotations",
-    exact: true,
-  }).isChecked({ timeout });
-  const scale = await readChoice(page, "PNG resolution", timeout);
-  const quality = await readChoice(page, "Quality profile", timeout);
-  const frame = await readChoice(page, "Grid and axes", timeout);
+async function readSettings(page, timeout) {
+  const values = {};
+  await visitSequentially(["Export", "Quality", "View"], async (section) => {
+    const sectionSettings = await ensureSettingsOpen(page, section, timeout);
+    if (section === "Export") {
+      const [background, annotations, scale] = await Promise.all([
+        readChoiceFromSettings(sectionSettings, "PNG background", timeout),
+        sectionSettings.getByRole("switch", {
+          name: "Include annotations",
+          exact: true,
+        }).isChecked({ timeout }),
+        readChoiceFromSettings(sectionSettings, "PNG resolution", timeout),
+      ]);
+      Object.assign(values, { background, annotations, scale });
+    } else if (section === "Quality") {
+      values.quality = await readChoiceFromSettings(sectionSettings, "Quality profile", timeout);
+    } else {
+      values.frame = await readChoiceFromSettings(sectionSettings, "Grid and axes", timeout);
+    }
+  });
+  const { background, annotations, scale, quality, frame } = values;
   if (!Object.values(BACKGROUND_OPTIONS).includes(background)) {
     throw new Error("PNG background control exposed an unknown option: " + background);
   }
@@ -480,9 +495,13 @@ async function readChoice(page, label, timeout = MAX_ACTION_TIMEOUT_MS) {
   const section = SETTING_SECTIONS_BY_LABEL[label];
   if (!section) throw new Error(`No 3D View Settings section is registered for ${label}`);
   const settings = await ensureViewportSettingsSection(page, section, timeout);
-  return normalizeText(
-    await settings.getByRole("combobox", { name: label, exact: true }).innerText({ timeout }),
-  );
+  return readChoiceFromSettings(settings, label, timeout);
+}
+
+function readChoiceFromSettings(settings, label, timeout = MAX_ACTION_TIMEOUT_MS) {
+  return settings.getByRole("combobox", { name: label, exact: true })
+    .innerText({ timeout })
+    .then(normalizeText);
 }
 
 async function choose(page, label, option, controlId, timeout) {
@@ -807,7 +826,7 @@ async function collectFailureDiagnostics({ assertCanvas, settings, page, routeBe
   }
   try {
     settingsVisible = await settings.isVisible();
-    if (settingsVisible) settingsSnapshot = await readSettings(page, settings, Math.min(timeout, 5_000));
+    if (settingsVisible) settingsSnapshot = await readSettings(page, Math.min(timeout, 5_000));
   } catch (error) {
     settingsError = error?.message ?? String(error);
   }
@@ -863,3 +882,4 @@ function sameSettings(left, right) {
 function normalizeText(value) {
   return value.replace(/\s+/g, " ").trim();
 }
+import { visitSequentially } from "./visitSequentially.mjs";

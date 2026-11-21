@@ -8,6 +8,7 @@ import {
   useState,
   useSyncExternalStore,
 } from "react";
+// react-doctor-disable-next-line react-doctor/no-flush-sync -- Apply and Run continues imperatively; commit the accepted stage baseline and clear authoring-busy before Solve proceeds.
 import { flushSync } from "react-dom";
 import { createCommandContext } from "@/kernel/commands/commandContext";
 import type { CommandResult } from "@/kernel/commands/commandTypes";
@@ -30,16 +31,7 @@ import {
   SIMULATION_STAGES_RESULTS_PATH,
 } from "@/kernel/api/apiPaths";
 import { ControlRoomApiError } from "@/kernel/api/ControlRoomApi";
-import type {
-  AuthoringTransactionResponse,
-  CheckpointEntry,
-  FrequencyDomainManifestResource,
-  MeshPeriodicPairsResource,
-  MeshSharedDomainManifestResource,
-  SceneResource,
-  SolverStatusResource,
-  StageExecutionResource,
-} from "@/kernel/api/apiTypes";
+import type { AuthoringTransactionResponse, SceneResource } from "@/kernel/api/apiTypes";
 import {
   shouldLoadRuntimeCurrentRun,
   shouldLoadRuntimeCommandQueue,
@@ -105,6 +97,7 @@ import {
   stageExecutionForCurrentScope,
   studySnapshotFromScene,
 } from "./StudyInspectorPanelModel";
+import { createInspectorChildDraftRegistry } from "../inspectorChildDraftRegistry";
 import { StudyPipelineSection } from "./StudyPipelineSection";
 import { StudyExecutionProfileSection, type StudyExecutionProfileEditSession } from "./StudyExecutionProfileSection";
 import {
@@ -113,17 +106,14 @@ import {
   hasStudyExecutionProfile,
   type StudyExecutionProfileAssignment,
 } from "./StudyExecutionProfileModel";
-import type { K0ModalExecutionReadiness } from "./StudyStageAuthoringModel";
+
 import { validateStudyWorkflow } from "./stages/studyWorkflowState";
 import type { StageInitialStateChoice } from "@/kernel/runtime/studyStageInitialState";
 import { captureStudyComputeInput } from "@/kernel/runtime/studyComputeInput";
 import { executeStageAfterApply, type StageApplyRunPin } from "./studyStageApplyAndRun";
 export { CommandDetailDialog } from "@/shared/runtime/CommandDetailDialog";
-import {
-  RestoreCheckpointDialog,
-  ImportStateDialog,
-  readFileAsBase64,
-} from "./StudyInspectorDialogs";
+import { RestoreCheckpointDialog, ImportStateDialog } from "./StudyInspectorDialogs";
+import { readFileAsBase64 } from "./StudyInspectorDialogs.model";
 import {
   StudyRuntimeSection,
   StudySelectedStageSection,
@@ -146,6 +136,8 @@ import {
   numericSceneRevision,
   asRecord,
 } from "./studyInspectorShared";
+import { deriveK0ModalExecutionReadiness, applyStudyDraftsWithPartialFailure } from "./StudyInspectorPanel.model";
+
 export {
   studyInspectorPanelReducer,
 } from "./studyInspectorPanelState";
@@ -186,132 +178,6 @@ function sceneHasAuthoringPayload(scene: unknown): boolean {
         "version" in record ||
         "current_modules" in record),
   );
-}
-
-const PRODUCTION_CAPABILITY_STATUSES = new Set([
-  "production",
-  "production_qualified",
-  "qualified",
-]);
-
-/**
- * Keeps K0 authoring gates tied to revisioned HTTP resources instead of an
- * optimistic local form flag. Unknown resources stay unavailable.
- */
-export function deriveK0ModalExecutionReadiness({
-  checkpoints,
-  equilibriumArtifact,
-  equilibriumSource,
-  frequencyManifest,
-  meshManifest,
-  periodicPairs,
-  solverStatus,
-  stageExecution,
-}: {
-  checkpoints: readonly CheckpointEntry[];
-  equilibriumArtifact: string;
-  equilibriumSource: string;
-  frequencyManifest: FrequencyDomainManifestResource | null;
-  meshManifest: MeshSharedDomainManifestResource | null;
-  periodicPairs: MeshPeriodicPairsResource | null;
-  solverStatus: SolverStatusResource | null;
-  stageExecution: StageExecutionResource | null;
-}): K0ModalExecutionReadiness {
-  const sharedDomainMeshReady = Boolean(
-    meshManifest?.mesh_id && meshManifest.revision >= 0,
-  );
-  const periodicCertificateReady = Boolean(
-    periodicPairs &&
-      periodicPairs.pairs.length > 0 &&
-      periodicPairs.pairs.every(
-        (pair) =>
-          pair.paired_node_count > 0 &&
-          pair.unpaired_destination_node_count === 0 &&
-          pair.unpaired_source_node_count === 0 &&
-          ["certified", "matched", "valid"].includes(pair.status),
-      ),
-  );
-  const acceptedRelaxationReady = Boolean(
-    stageExecution?.stages.some((stage) =>
-      stage.kind === "relax" &&
-      stage.converged &&
-      ["accepted", "completed"].includes(stage.status),
-    ),
-  );
-  const acceptedArtifactReady = Boolean(
-    equilibriumArtifact.trim() &&
-      checkpoints.some(
-        (checkpoint) =>
-          checkpoint.artifact_ref === equilibriumArtifact.trim() &&
-          checkpoint.mesh_revision === meshManifest?.revision,
-      ),
-  );
-  const acceptedProvidedStateReady = Boolean(
-    solverStatus &&
-      solverStatus.converged &&
-      !solverStatus.is_busy &&
-      solverStatus.revision >= 0,
-  );
-  const acceptedEquilibriumReady =
-    equilibriumSource === "relax"
-      ? acceptedRelaxationReady
-      : equilibriumSource === "provided"
-        ? acceptedProvidedStateReady
-        : equilibriumSource === "artifact"
-          ? acceptedArtifactReady
-          : false;
-  const strictGpuReady = PRODUCTION_CAPABILITY_STATUSES.has(
-    frequencyManifest?.capabilities.modal.production_gpu.status ?? "",
-  );
-
-  return {
-    acceptedEquilibriumReady,
-    periodicCertificateReady,
-    sharedDomainMeshReady,
-    strictGpuReady,
-  };
-}
-
-const PARTIAL_STUDY_APPLY_MESSAGE =
-  "Global Study settings were committed. The Pipeline stage save could not be confirmed. Review the current scene and Pipeline feedback before retrying Apply.";
-
-function partialStudyApplyError(cause?: unknown): Error {
-  const detail = cause instanceof Error ? " Stage save error: " + cause.message : "";
-  return new Error(PARTIAL_STUDY_APPLY_MESSAGE + detail);
-}
-
-export async function applyStudyDraftsWithPartialFailure({
-  globalDirty,
-  stagesDirty,
-  commitGlobal,
-  commitStages,
-}: {
-  globalDirty: boolean;
-  stagesDirty: boolean;
-  commitGlobal: () => Promise<boolean>;
-  commitStages: () => Promise<boolean>;
-}): Promise<boolean> {
-  let globalCommitted = false;
-  if (globalDirty) {
-    globalCommitted = await commitGlobal();
-    if (!globalCommitted) return false;
-  }
-
-  if (stagesDirty) {
-    let stagesCommitted: boolean;
-    try {
-      stagesCommitted = await commitStages();
-    } catch (error) {
-      if (globalCommitted) throw partialStudyApplyError(error);
-      throw error;
-    }
-    if (!stagesCommitted) {
-      if (globalCommitted) throw partialStudyApplyError();
-      return false;
-    }
-  }
-
-  return true;
 }
 
 export function useStudyInspectorPanelController(
@@ -727,12 +593,14 @@ export function useStudyInspectorPanelController(
         message: `Stage ${index + 1}: ${issue.message}`,
       }));
     });
-    const workflowIssues = validateStudyWorkflow(submittedDrafts)
-      .filter((issue) => !pipelineDraft || submittedDrafts[issue.index] === pipelineDraft)
-      .map((issue) => ({
-        ...issue,
-        message: `Stage ${issue.index + 1}: ${issue.message}`,
-      }));
+    const workflowIssues = validateStudyWorkflow(submittedDrafts).flatMap((issue) =>
+      !pipelineDraft || submittedDrafts[issue.index] === pipelineDraft
+        ? [{
+            ...issue,
+            message: `Stage ${issue.index + 1}: ${issue.message}`,
+          }]
+        : [],
+    );
     const textureTargetsValid = textureEdits.every((draft) =>
       (readStageTextureAssignments(draft.stageMagnetizationAssignments) ?? []).every((assignment) => {
         const object = currentScene.scene.objects?.find((candidate) =>
@@ -1319,32 +1187,17 @@ export function StudyInspectorPanel({
     stageExecution,
     state,
   } = useStudyInspectorPanelController(selection);
-  const profileEditSessionRef = useRef<StudyExecutionProfileEditSession | null>(null);
-  const [profileEditState, setProfileEditState] = useState({
-    dirty: false,
-    profileBound: false,
-    valid: true,
-  });
-  const onProfileEditSessionChange = useCallback(
-    (session: StudyExecutionProfileEditSession | null) => {
-      profileEditSessionRef.current = session;
-      const next = session
-        ? {
-            dirty: session.dirty,
-            profileBound: session.profileBound,
-            valid: session.valid,
-          }
-        : { dirty: false, profileBound: false, valid: true };
-      setProfileEditState((current) =>
-        current.dirty === next.dirty &&
-        current.profileBound === next.profileBound &&
-        current.valid === next.valid
-          ? current
-          : next,
-      );
-    },
-    [],
+  const [profileDraftRegistry] = useState(
+    createInspectorChildDraftRegistry<StudyExecutionProfileEditSession>,
   );
+  const profileEditState = useSyncExternalStore(
+    profileDraftRegistry.subscribe,
+    profileDraftRegistry.getSnapshot,
+    profileDraftRegistry.getServerSnapshot,
+  );
+  const profileDirty = profileEditState?.dirty ?? false;
+  const profileBound = profileEditState?.profileBound ?? false;
+  const profileValid = profileEditState?.valid ?? true;
   const sceneMagneticObjectIds = magneticObjectIds(scene.data);
   const globalValidation = validateStudyGlobalDraft(state.globalDraft, {
     studyStages: rawStudyStages(scene.data),
@@ -1352,7 +1205,7 @@ export function StudyInspectorPanel({
     activeLane: runtimeStatus?.capabilities.active_lane ?? null,
     algorithmsAvailable: runtimeStatus?.capabilities.algorithms_available,
     executionProfileBound:
-      hasStudyExecutionProfile(scene.data) || profileEditState.profileBound,
+      hasStudyExecutionProfile(scene.data) || profileBound,
     magneticObjectCount: sceneMagneticObjectCount,
     magneticObjectIds: sceneMagneticObjectIds,
     sessionDiscretization: resolveSessionDiscretization(runtimeStatus),
@@ -1377,9 +1230,9 @@ export function StudyInspectorPanel({
   const stagesDirty =
     JSON.stringify(state.stageDrafts) !== JSON.stringify(state.baselineStageDrafts);
   const applyInspectorDraft = useCallback(async () => {
-    if (profileEditState.dirty) {
+    if (profileDirty) {
       if (globalDirty || stagesDirty) return false;
-      return (await profileEditSessionRef.current?.apply()) === true;
+      return (await profileDraftRegistry.getSession("execution-profile")?.apply()) === true;
     }
     return applyStudyDraftsWithPartialFailure({
       globalDirty,
@@ -1387,24 +1240,24 @@ export function StudyInspectorPanel({
       commitGlobal: commitGlobalDraft,
       commitStages: commitStageDrafts,
     });
-  }, [commitGlobalDraft, commitStageDrafts, globalDirty, profileEditState.dirty, stagesDirty]);
+  }, [commitGlobalDraft, commitStageDrafts, globalDirty, profileDirty, profileDraftRegistry, stagesDirty]);
   const resetInspectorDraft = useCallback(() => {
     dispatch({ type: "revertGlobalDraft" });
     dispatch({ type: "revertStageDrafts" });
-    profileEditSessionRef.current?.reset();
-  }, [dispatch]);
+    profileDraftRegistry.getSession("execution-profile")?.reset();
+  }, [dispatch, profileDraftRegistry]);
   useRegisterInspectorEditSession(
     "staged",
     state.authoringBusy,
-    globalDirty || stagesDirty || profileEditState.dirty,
+    globalDirty || stagesDirty || profileDirty,
     ![...globalValidation, ...stageValidation].some(
       (issue) => issue.severity === "error",
-    ) && profileEditState.valid,
+    ) && profileValid,
     state.authoringBusy ? "Study changes are being saved." : undefined,
     applyInspectorDraft,
     resetInspectorDraft,
     {
-      applyBlockReason: profileEditState.dirty && (globalDirty || stagesDirty)
+      applyBlockReason: profileDirty && (globalDirty || stagesDirty)
         ? "Apply or cancel the execution profile first, then save the other Study edits."
         : undefined,
       historyMode: "mutation-owned",
@@ -1515,9 +1368,9 @@ export function StudyInspectorPanel({
               }
               draft={state.globalDraft}
               executionProfileBound={
-                hasStudyExecutionProfile(scene.data) || profileEditState.profileBound
+                hasStudyExecutionProfile(scene.data) || profileBound
               }
-              executionProfileDraftDirty={profileEditState.dirty}
+              executionProfileDraftDirty={profileDirty}
               model={model}
               magneticObjectCount={sceneMagneticObjectCount}
               magneticObjectIds={sceneMagneticObjectIds}
@@ -1541,7 +1394,7 @@ export function StudyInspectorPanel({
               sessionScopeKey={sessionScopeKey}
               stages={[...rawStudyStages(scene.data), ...state.stageDrafts]}
               onApply={commitExecutionProfile}
-              onEditSessionChange={onProfileEditSessionChange}
+              draftRegistry={profileDraftRegistry}
             />
           </>
         ) : null}
@@ -1562,9 +1415,9 @@ export function StudyInspectorPanel({
             commandDisabledReason={commandDisabledReason}
             demagEnabled={state.globalDraft.demagEnabled}
             executionProfileBound={
-              hasStudyExecutionProfile(scene.data) || profileEditState.profileBound
+              hasStudyExecutionProfile(scene.data) || profileBound
             }
-            executionProfileDraftDirty={profileEditState.dirty}
+            executionProfileDraftDirty={profileDirty}
             k0ModalReadinessFor={k0ModalReadinessFor}
             draft={state.stageDrafts[state.selectedDraftIndex] ?? null}
             draftIndex={state.selectedDraftIndex}

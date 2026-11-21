@@ -547,10 +547,10 @@ function useObjectMaterialPanelState(
     }
     setAnisotropyDraftState((current) => {
       const sameKey = current.scopeToken === scope.token && current.key === anisotropyDraftKey;
-      const dirtyFields = sameKey
-        ? new Set(current.dirtyFields)
-        : new Set<AnisotropyField>();
-      for (const field of fields) dirtyFields.add(field);
+      const dirtyFields = new Set<AnisotropyField>([
+        ...(sameKey ? current.dirtyFields : []),
+        ...fields,
+      ]);
       return {
         draft: {
           ...(sameKey ? current.draft : baseAnisotropyDraft),
@@ -950,17 +950,18 @@ function useObjectMaterialPanelState(
     };
     setAnisotropyDraftState((current) => {
       const sameKey = current.scopeToken === scope.token && current.key === anisotropyDraftKey;
+      const dirtyFields = sameKey ? new Set(current.dirtyFields) : new Set<AnisotropyField>();
+      const acceptedEntries = (Object.entries(staged) as [AnisotropyField, AnisotropyDraft[AnisotropyField]][])
+        .filter(([field]) => !dirtyFields.has(field));
       const merged: AnisotropyDraft = {
         ...(sameKey ? current.draft : baseAnisotropyDraft),
+        ...Object.fromEntries(acceptedEntries),
       };
-      const dirtyFields = sameKey ? new Set(current.dirtyFields) : new Set<AnisotropyField>();
-      for (const [field, value] of Object.entries(staged) as [AnisotropyField, AnisotropyDraft[AnisotropyField]][]) {
-        if (!dirtyFields.has(field)) {
-          Object.assign(merged, { [field]: value });
-          dirtyFields.add(field);
-        }
-      }
-      return { draft: merged, dirtyFields, key: anisotropyDraftKey, scopeKey, scopeToken: scope.token };
+      const nextDirtyFields = new Set<AnisotropyField>([
+        ...dirtyFields,
+        ...acceptedEntries.map(([field]) => field),
+      ]);
+      return { draft: merged, dirtyFields: nextDirtyFields, key: anisotropyDraftKey, scopeKey, scopeToken: scope.token };
     });
   }
 

@@ -54,9 +54,10 @@ export async function runViewportLifecycleBrowserQa(page, options = {}) {
     throw new Error("Viewport-main did not expose its active module id");
   }
 
-  const originalInspectorState = await readViewportInspectorState(page);
-  const [originalDialogOpen, originalStorage, sessionBefore] = await Promise.all([
-    settingsDialog.isVisible().catch(() => false), readAppearanceStorage(page),
+  const [originalInspectorState, originalDialogOpen, originalStorage, sessionBefore] = await Promise.all([
+    readViewportInspectorState(page),
+    settingsDialog.isVisible().catch(() => false),
+    readAppearanceStorage(page),
     typeof getSessionIdentity === "function" ? getSessionIdentity() : null,
   ]);
   if (typeof getSessionIdentity === "function" && !sessionBefore) {
@@ -514,7 +515,10 @@ async function readPublicSignals(page) {
       viewport_root_count: document.querySelectorAll(viewportSelector).length,
       debug_available: Boolean(counters),
       resource_counts: completeResourceCounts
-        ? Object.fromEntries(resourceKeys.map((key) => [key, resourceCounts[key]]))
+        ? resourceKeys.reduce((counts, key) => {
+          counts[key] = resourceCounts[key];
+          return counts;
+        }, {})
         : null,
       resource_counts_available: completeResourceCounts,
       viewport_frame_reasons: completeFrameReasons ? { ...frameReasons } : null,
@@ -554,9 +558,11 @@ function assessResourceCounts(baseline, postChurn, inactiveSamples) {
       inactive_samples_available: inactiveSamples.filter((sample) => sample.resource_counts_available).length,
     };
   }
-  const growth = Object.fromEntries(RESOURCE_COUNT_KEYS
-    .map((key) => [key, postChurn.resource_counts[key] - baseline.resource_counts[key]])
-    .filter(([, delta]) => delta > 0));
+  const growth = {};
+  for (const key of RESOURCE_COUNT_KEYS) {
+    const delta = postChurn.resource_counts[key] - baseline.resource_counts[key];
+    if (delta > 0) growth[key] = delta;
+  }
   return {
     state: Object.keys(growth).length === 0 ? "no-growth-observed" : "growth-observed",
     source: "window.__FULLMAG_VISUALIZATION_DEBUG_PERFORMANCE__.resourceCounts",

@@ -11,16 +11,10 @@ import { useFrequencyDomainManifestResource } from "@/kernel/resources/studyRunt
 import { frequencyDomainManifestPayload } from "@/shared/domain/analysis/frequencyDomainChartModels";
 import type { FrequencyResponsePoint } from "@/shared/domain/analysis/frequencyDomainChartModels";
 import { Button } from "@/shared/ui/Button";
-import {
-  FrequencyDomainModeDisplayControls,
-  isActiveAnalysisFieldView,
-  useFrequencyDomainModeDisplaySettings,
-} from "../FrequencyDomainModeDisplayControls";
+import { FrequencyDomainModeDisplayControls, useFrequencyDomainModeDisplaySettings } from "../FrequencyDomainModeDisplayControls";
+import { isActiveAnalysisFieldView } from "../FrequencyDomainModeDisplayControls.model";
 import { FrequencyDomainResponseChart } from "../FrequencyDomainCharts";
-import {
-  FrequencyDomainResponsePointTable,
-  type FrequencyDomainResponsePointAction,
-} from "../FrequencyDomainTables";
+import { FrequencyDomainResponsePointTable, type FrequencyDomainResponsePointAction } from "../FrequencyDomainTables";
 import {
   FrequencyResponsePointResidualFields,
   useFrequencyResponsePointSummary,
@@ -36,29 +30,52 @@ import {
   isDrivenExcitationMissing,
   formatFrequency,
 } from "./frequencyDomainResultFormatting";
+import { buildFrequencyResponsePlotCommandInput } from "./FrequencyResponseInspectorPanels.model";
 
-export function buildFrequencyResponsePlotCommandInput({
-  fieldId,
-  frequencyIndex,
-  label,
-  phaseRad,
-  view,
-}: {
-  fieldId: string;
-  frequencyIndex?: number | null;
-  label: string;
-  phaseRad: number;
-  view: FrequencyDomainResponsePointAction;
-}) {
-  return {
-    fieldId,
-    ...(frequencyIndex == null ? {} : { frequencyIndex }),
-    label,
-    phaseRad,
-    source: "frequency-response" as const,
-    view,
-  };
-}
+const FREQUENCY_RESPONSE_3D_ACTIONS = [
+  {
+    icon: RotateCw,
+    label: "Rotated",
+    title: "Plot response field with phase-rotated real display",
+    variant: "secondary" as const,
+    view: "phase_rotated_real" as const,
+  },
+  {
+    icon: Activity,
+    label: "Real",
+    title: "Plot response field real component",
+    variant: "secondary" as const,
+    view: "real" as const,
+  },
+  {
+    icon: Activity,
+    label: "Imag",
+    title: "Plot response field imaginary component",
+    variant: "secondary" as const,
+    view: "imag" as const,
+  },
+  {
+    icon: Activity,
+    label: "Abs",
+    title: "Plot response field complex magnitude",
+    variant: "secondary" as const,
+    view: "abs" as const,
+  },
+  {
+    icon: RotateCw,
+    label: "Phase",
+    title: "Plot response field phase",
+    variant: "secondary" as const,
+    view: "phase" as const,
+  },
+  {
+    icon: Play,
+    label: "Animate",
+    title: "Animate response field phase in 3D",
+    variant: "secondary" as const,
+    view: "animate" as const,
+  },
+];
 
 // ---------------------------------------------------------------------------
 // Primary result inspector panels — these are referenced by name in the
@@ -184,57 +201,13 @@ function FrequencyResponsePoint3DActions({
     );
   };
   const disabled = !summary.field3DReady;
-  const actions = [
-    {
-      icon: RotateCw,
-      label: "Rotated",
-      title: "Plot response field with phase-rotated real display",
-      variant: "secondary" as const,
-      view: "phase_rotated_real" as const,
-    },
-    {
-      icon: Activity,
-      label: "Real",
-      title: "Plot response field real component",
-      variant: "secondary" as const,
-      view: "real" as const,
-    },
-    {
-      icon: Activity,
-      label: "Imag",
-      title: "Plot response field imaginary component",
-      variant: "secondary" as const,
-      view: "imag" as const,
-    },
-    {
-      icon: Activity,
-      label: "Abs",
-      title: "Plot response field complex magnitude",
-      variant: "secondary" as const,
-      view: "abs" as const,
-    },
-    {
-      icon: RotateCw,
-      label: "Phase",
-      title: "Plot response field phase",
-      variant: "secondary" as const,
-      view: "phase" as const,
-    },
-    {
-      icon: Play,
-      label: "Animate",
-      title: "Animate response field phase in 3D",
-      variant: "secondary" as const,
-      view: "animate" as const,
-    },
-  ];
 
   return (
     <div role="group"
       aria-label="Response point 3D visualization controls"
       className="fm-frequency-domain-visualization-actions"
     >
-      {actions.map((entry) => {
+      {FREQUENCY_RESPONSE_3D_ACTIONS.map((entry) => {
         const Icon = entry.icon;
         const isActive =
           entry.view !== "animate" &&

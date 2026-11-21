@@ -277,12 +277,13 @@ impl LiveStepView {
 }
 
 #[cfg(test)]
-pub(crate) use fullmag_application::script_stage_contract::ScriptExecutionStage;
+pub(crate) use fullmag_application::script_stage_contract::{
+    ScriptExecutionStage, ScriptExecutionStageAction, StudyPipelineDocument, StudyPipelineNode,
+};
 pub(crate) use fullmag_application::script_stage_contract::{
     ResolvedScriptStage, ResolvedScriptStageAction, ScriptExecutionConfig,
-    ScriptExecutionStageAction, StageTransitionKind, StageTransitionMetadata,
-    StageTransitionReason, StageTransitionUiPresentation, StateTransferOperatorKind,
-    StudyPipelineDocument, StudyPipelineNode,
+    StageTransitionKind, StageTransitionMetadata, StageTransitionReason,
+    StageTransitionUiPresentation, StateTransferOperatorKind,
 };
 #[derive(Debug, Serialize)]
 pub(crate) struct RuntimeResolutionSummary {

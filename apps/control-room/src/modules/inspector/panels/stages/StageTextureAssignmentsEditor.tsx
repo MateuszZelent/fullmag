@@ -10,6 +10,7 @@ import {
   type MagnetizationTexturePresetId,
 } from "@/shared/domain/magnetization-texture/texturePresets";
 import { Button } from "@/shared/ui/Button";
+import { keyedOccurrences } from "@/shared/utils/keyedOccurrences";
 
 import { FeedbackBanner } from "../../primitives/FeedbackBanner";
 import { FormField } from "../../primitives/FormField";
@@ -74,7 +75,11 @@ export function StageTextureAssignmentsEditor({
         </>
       ) : assignments.length > 0 ? (
         <ol>
-          {assignments.map((assignment, index) => {
+          {keyedOccurrences(assignments, (assignment) => JSON.stringify([
+            assignment.object_id,
+            assignment.region_id,
+            assignment.initializer,
+          ])).map(({ item: assignment, key }, index) => {
             const target = magnets.find((item) => item.id === assignment.object_id);
             const targetRegion = target?.regions?.find((item) => item.region_id === assignment.region_id);
             const scope = [target?.name || assignment.object_id, targetRegion?.name || assignment.region_id]
@@ -83,7 +88,7 @@ export function StageTextureAssignmentsEditor({
               ? String(assignment.initializer.preset_kind ?? assignment.initializer.kind)
               : assignment.region_id ? "Use object texture" : "Uniform +X";
             return (
-              <li key={index} className="fm-inspector-toolbar">
+              <li key={key} className="fm-inspector-toolbar">
                 <span>{scope} · {texture}</span>
                 <Button
                   aria-label={`Remove texture change ${index + 1} for ${scope}`}
@@ -119,8 +124,11 @@ export function StageTextureAssignmentsEditor({
               onChange={(event) => setRegionId(event.target.value)}>
               <option value="">Object (region overrides apply)</option>
               {regionId && !region ? <option value={regionId} disabled>Region is unavailable</option> : null}
-              {object?.regions?.filter((item) => item.enabled !== false && item.region_id)
-                .map((item) => <option key={item.region_id} value={item.region_id}>{item.name}</option>)}
+              {object?.regions?.flatMap((item) =>
+                item.enabled !== false && item.region_id
+                  ? [<option key={item.region_id} value={item.region_id}>{item.name}</option>]
+                  : [],
+              )}
             </FormField>
             {model ? <StageTexturePresetForm
               key={JSON.stringify([model.objectId, model.regionId])}

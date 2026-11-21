@@ -29,24 +29,9 @@ import {
   planarRangeForMode,
 } from "./presentationSemantics";
 import { VisualizationDisplayPassesControl } from "./VisualizationInspectorControls";
-import {
-  effectivePass,
-  layerPassFlag,
-  layerPassPatch,
-  layerVisible,
-  patchFieldLayer,
-  PLANAR_FIELD_LAYERS_MAX,
-  removeFieldLayer,
-  type PlanarFieldLayer,
-  type PlanarFieldQuantityOption,
-  type PlanarLayerPass,
-  type PlanarLayerState,
-} from "./planarFieldLayers";
-import {
-  PLANAR_FIELD_LAYERS_FULL_REASON,
-  planarLayerComponentLabel,
-  type PlanarFieldLayerCandidate,
-} from "./PlanarFieldLayerList";
+import { effectivePass, layerPassFlag, layerPassPatch, layerVisible, patchFieldLayer, PLANAR_FIELD_LAYERS_MAX, removeFieldLayer, type PlanarFieldLayer, type PlanarFieldQuantityOption, type PlanarLayerPass, type PlanarLayerState } from "./planarFieldLayers";
+import { PLANAR_FIELD_LAYERS_FULL_REASON, type PlanarFieldLayerCandidate } from "./PlanarFieldLayerList";
+import { planarFieldShownText, quantityName } from "./PlanarTargetFieldSection.model";
 
 type PlanarRange = PlanarFieldLayer["range"];
 type PlanarVectorStyle = PlanarFieldLayer["vector_style"];
@@ -96,26 +81,6 @@ function quantityComponentSupportsVectors(
 function numberValue(raw: string): number | null {
   const value = Number(raw);
   return Number.isFinite(value) ? value : null;
-}
-
-function quantityName(quantities: readonly PlanarFieldQuantityOption[], quantityId: string): string {
-  return quantities.find((quantity) => quantity.id === quantityId)?.label ?? quantityId;
-}
-
-/** One-line answer to "what does this target show in the 2D view?". */
-export function planarFieldShownText(
-  layer: PlanarFieldLayer | null,
-  inherited: PlanarFieldLayer | null,
-  quantities: readonly PlanarFieldQuantityOption[],
-): string {
-  if (layer) {
-    const state = layerVisible(layer) ? "Own setting" : "Own setting, hidden";
-    return `${state} · ${quantityName(quantities, layer.quantity_id)} · ${planarLayerComponentLabel(layer)}`;
-  }
-  if (inherited) {
-    return `Inherited from All objects · ${quantityName(quantities, inherited.quantity_id)} · ${planarLayerComponentLabel(inherited)}`;
-  }
-  return "Not drawn in the 2D view";
 }
 
 /**
@@ -298,8 +263,9 @@ export function PlanarTargetFieldSection({
   });
   const morePassReasons = Object.entries(passReasons ?? {})
     .filter(([pass]) => MORE_PASS_ITEMS.some((item) => item.pass === pass));
-  const morePassesOn = MORE_PASS_ITEMS.filter(({ pass }) => effectivePass(layer, viewMasks, pass) !== "off")
-    .map(({ label }) => label);
+  const morePassesOn = MORE_PASS_ITEMS.flatMap(({ pass, label }) =>
+    effectivePass(layer, viewMasks, pass) !== "off" ? [label] : [],
+  );
 
   return (
     <InspectorGroup

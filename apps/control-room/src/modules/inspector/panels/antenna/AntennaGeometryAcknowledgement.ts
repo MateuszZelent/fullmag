@@ -15,7 +15,10 @@ function includesAuthored(actual: unknown, expected: unknown): boolean {
 }
 
 function unique(values: unknown, key: string, value: unknown): Record<string, unknown> | null {
-  const matches = Array.isArray(values) ? values.map(record).filter(entry => entry?.[key] === value) : [];
+  const matches = Array.isArray(values) ? values.flatMap(entry => {
+    const fields = record(entry);
+    return fields?.[key] === value ? [fields] : [];
+  }) : [];
   return matches.length === 1 ? matches[0] : null;
 }
 
@@ -33,8 +36,11 @@ export function antennaGeometryAcknowledgementError(
     return "Geometry ACK omitted or changed submitted conductor dimensions, stations, placement or bridge parameters. Refetch before saving again.";
   }
   if (!circuitPatch) return null;
-  const currents = Array.isArray(circuitPatch.current_transports) ? circuitPatch.current_transports.map(record).filter(current =>
-    Array.isArray(current?.domain) && current.domain.some(ref => record(ref)?.object_id === objectId)) : [];
+  const currents = Array.isArray(circuitPatch.current_transports) ? circuitPatch.current_transports.flatMap(entry => {
+    const current = record(entry);
+    return Array.isArray(current?.domain) && current.domain.some(ref => record(ref)?.object_id === objectId)
+      ? [current] : [];
+  }) : [];
   if (currents.length !== 1) return "Circuit ACK cannot be verified without one submitted charge transport.";
   const expectedCurrent = currents[0]!;
   const current = unique(scene?.current_transports, "name", expectedCurrent.name);
@@ -45,11 +51,19 @@ export function antennaGeometryAcknowledgementError(
     || ["external_lead_preparation", "conservative_current_source", "conservative_current_view", "closure_receipts"].some(key => current[key] != null)) {
     return "Circuit ACK omitted or changed submitted materials, source cut or charge model, or retained stale preparation. Refetch before saving again.";
   }
-  const ports = Array.isArray(circuitPatch.antenna_port_modes) ? circuitPatch.antenna_port_modes.map(record).filter(port => port?.source_object_id === objectId && port.current_transport_id === expectedCurrent.name) : [];
+  const ports = Array.isArray(circuitPatch.antenna_port_modes) ? circuitPatch.antenna_port_modes.flatMap(entry => {
+    const port = record(entry);
+    return port?.source_object_id === objectId && port.current_transport_id === expectedCurrent.name
+      ? [port] : [];
+  }) : [];
   if (ports.length !== 1 || !includesAuthored(unique(scene?.antenna_port_modes, "id", ports[0]?.id), ports[0])) {
     return "Circuit ACK omitted or changed the submitted source-cut port normalization or observations. Refetch before saving again.";
   }
-  const stages = Array.isArray(circuitPatch.antenna_field_solve_stages) ? circuitPatch.antenna_field_solve_stages.map(record).filter(stage => stage?.source_object_id === objectId && stage.current_transport_id === expectedCurrent.name) : [];
+  const stages = Array.isArray(circuitPatch.antenna_field_solve_stages) ? circuitPatch.antenna_field_solve_stages.flatMap(entry => {
+    const stage = record(entry);
+    return stage?.source_object_id === objectId && stage.current_transport_id === expectedCurrent.name
+      ? [stage] : [];
+  }) : [];
   for (const expected of stages) {
     const committed = unique(scene?.antenna_field_solve_stages, "id", expected?.id);
     if (!committed || !includesAuthored(committed, expected) || committed.conservative_current_view_ref != null) {

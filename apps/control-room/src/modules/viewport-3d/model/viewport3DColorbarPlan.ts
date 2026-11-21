@@ -160,17 +160,20 @@ export function planViewport3DColorbars({
       continue;
     }
     const scope = resolveViewport3DColorbarScope(target);
+    const projectionMode = target.shader.projectionMode;
+    const scalarRangePolicy = target.shader.scalarRangePolicy;
+    const palette = target.shader.palette;
     const rangeSource = viewport3DProjectionDefaultRangeSource({
-      projectionMode: target.shader.projectionMode,
-      scalarRangePolicy: target.shader.scalarRangePolicy,
+      projectionMode,
+      scalarRangePolicy,
     });
     const groupKey = buildViewport3DColorbarGroupKey({
       colorMode,
-      palette: target.shader.palette,
-      projectionMode: target.shader.projectionMode,
+      palette,
+      projectionMode,
       quantityId: target.quantityId,
       rangeSource,
-      scalarRangePolicy: target.shader.scalarRangePolicy,
+      scalarRangePolicy,
       scopeId: scope.scopeId,
       scopeKind: scope.scopeKind,
     });
@@ -180,16 +183,16 @@ export function planViewport3DColorbars({
     } else {
       groups.set(groupKey, {
         colorMode,
-        palette: target.shader.palette,
-        projectionMode: target.shader.projectionMode,
+        palette,
+        projectionMode,
         quantityId: resolveCanonicalQuantityId(target.quantityId),
         rangeSource,
         renderKey: buildViewport3DColorbarRenderKey({
-          palette: target.shader.palette,
-          projectionMode: target.shader.projectionMode,
+          palette,
+          projectionMode,
           quantityId: target.quantityId,
           rangeSource,
-          scalarRangePolicy: target.shader.scalarRangePolicy,
+          scalarRangePolicy,
           scopeId: scope.scopeId,
           scopeKind: scope.scopeKind,
         }),

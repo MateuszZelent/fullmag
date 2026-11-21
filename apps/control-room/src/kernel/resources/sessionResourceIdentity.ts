@@ -22,7 +22,9 @@ export function sessionIdentityRecoveryRevision(
   collection: SessionListResource | null,
 ): string | null {
   if (!identity || !collection || confirmedSessionResourceIdentity(identity, collection)) return null;
-  const currentIds = collection.sessions.filter((session) => session.current).map((session) => session.session_id).sort();
+  const currentIds = collection.sessions
+    .flatMap((session) => session.current ? [session.session_id] : [])
+    .sort();
   return `session-identity:${JSON.stringify([sessionRequestScopeKey(identity), currentIds])}`;
 }
 

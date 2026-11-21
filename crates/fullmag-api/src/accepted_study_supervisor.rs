@@ -14,16 +14,10 @@ use std::process::{Command, ExitStatus, Output, Stdio};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
-#[path = "accepted_worker_execution_receipt.rs"]
-mod accepted_worker_execution_receipt;
+use crate::accepted_profile_admission as profile_admission;
+use crate::accepted_worker_execution_receipt;
 
-#[path = "accepted_profile_admission.rs"]
-mod profile_admission;
-
-#[path = "owned_worker_process.rs"]
-mod owned_worker_process;
-#[path = "compute_operator_env.rs"]
-mod compute_operator_env;
+use crate::{compute_operator_env, owned_worker_process};
 use owned_worker_process::OwnedWorkerProcess;
 
 /// How long the read-only Stop poll, or a heartbeat failing on transient store
@@ -1226,8 +1220,9 @@ fn authorize_host_worker_launch_with_budget(
     .context("authorize host worker launch")
 }
 
+#[cfg(test)]
 fn retry_host_worker_launch<T>(
-    mut operation: impl FnMut() -> Result<T>,
+    operation: impl FnMut() -> Result<T>,
     on_retry: impl FnMut(),
 ) -> Result<T> {
     retry_host_worker_launch_with_timeout(operation, on_retry, Duration::from_secs(30))

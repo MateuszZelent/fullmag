@@ -604,16 +604,6 @@ fn session_lifecycle_solver_code(snapshot: &SessionStateResponse) -> String {
     }
 }
 
-pub(crate) fn snapshot_session_epoch(snapshot: &SessionStateResponse) -> String {
-    let solver = session_lifecycle_solver_code(snapshot);
-    session_epoch(
-        &snapshot.session.session_id,
-        snapshot.session.started_at_unix_ms,
-        snapshot.session.finished_at_unix_ms,
-        terminal_solver_lifecycle(&solver),
-    )
-}
-
 pub(crate) fn session_epoch(
     session_id: &str,
     started_at_unix_ms: u128,

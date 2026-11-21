@@ -1,5 +1,4 @@
-#[path = "accepted_study_supervisor.rs"]
-mod accepted_study_supervisor;
+use crate::accepted_study_supervisor;
 
 use anyhow::{bail, Context, Result};
 use std::path::PathBuf;
@@ -16,7 +15,7 @@ struct SupervisorArgs {
     max_automatic_retries: usize,
 }
 
-fn main() {
+pub(super) fn main() {
     if let Err(error) = run() {
         eprintln!("accepted worker supervisor failed: {error:#}");
         std::process::exit(1);

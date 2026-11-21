@@ -56,10 +56,8 @@ export function AntennaSpectrumExport(props: SpectrumExportData) {
     } catch {
       if (!controller.signal.aborted) setFailed(true);
     } finally {
-      if (job.current === controller) {
-        job.current = null;
-        setPending(false);
-      }
+      if (job.current === controller) job.current = null;
+      setPending(job.current !== null);
     }
   };
 

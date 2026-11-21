@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
+import { visitSequentially } from "./visitSequentially.mjs";
 
 // Uses the production UI and the inspector smoke's typed resource fixture.
 // PUT responses remain pending until the test explicitly acknowledges them.
@@ -191,11 +192,11 @@ async function qualifyRetainedMeshArtifact(page, fixture) {
 async function selectNode(page, nodeId, parents) {
   const tab = page.locator(".fm-explorer .fm-tabs-trigger").filter({ hasText: /^Model$/ });
   if (await tab.count() && await tab.getAttribute("aria-selected") !== "true") await tab.click();
-  for (const id of parents) {
+  await visitSequentially(parents, async (id) => {
     const parent = page.locator(`[data-node-id="${id}"]`);
     await parent.waitFor({ state: "visible" });
     if (await parent.getAttribute("aria-expanded") === "false") await parent.locator(".fm-explorer-tree-row__branch").click();
-  }
+  });
   await page.locator(`[data-node-id="${nodeId}"]`).click();
 }
 

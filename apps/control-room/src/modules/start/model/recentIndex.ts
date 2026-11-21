@@ -82,12 +82,12 @@ export function parseRecentIndex(raw: unknown): RecentIndexState {
     entries,
     continue: toContinue(raw.continue),
     scannedLocations: Array.isArray(locations)
-      ? locations.filter(isRecord).map((l) => ({
+      ? locations.flatMap((l) => isRecord(l) ? [{
           path: String(l.path ?? ""),
           recursive: typeof l.recursive === "boolean" ? l.recursive : undefined,
           lastScannedAt: optString(l.last_scanned_at),
           reachable: typeof l.reachable === "boolean" ? l.reachable : undefined,
-        }))
+        }] : [])
       : undefined,
   };
   return { kind: "ready", index };
@@ -121,7 +121,7 @@ function toEntry(value: unknown): RecentEntry | null {
     lastError: optString(value.last_error),
     summary: isRecord(value.summary) ? toSummary(value.summary) : undefined,
     authors: Array.isArray(value.authors)
-      ? value.authors.filter(isRecord).map(toAuthor)
+      ? value.authors.flatMap((author) => isRecord(author) ? [toAuthor(author)] : [])
       : undefined,
   };
 }
@@ -291,9 +291,9 @@ export function groupByRecency<T extends Recency = RecentEntry>(
     else buckets.older.push(entry);
   }
 
-  return (Object.keys(buckets) as RecentGroupId[])
-    .filter((id) => buckets[id].length > 0)
-    .map((id) => ({ id, label: GROUP_LABELS[id], entries: buckets[id] }));
+  return (Object.keys(buckets) as RecentGroupId[]).flatMap((id) =>
+    buckets[id].length ? [{ id, label: GROUP_LABELS[id], entries: buckets[id] }] : [],
+  );
 }
 
 /* ── Formatting ─────────────────────────────────────────────────────────── */

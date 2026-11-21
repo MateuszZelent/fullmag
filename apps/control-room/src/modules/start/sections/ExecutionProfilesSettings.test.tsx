@@ -61,10 +61,8 @@ vi.mock("@/kernel/resources/useExecutionProfilesResource", () => ({
   useExecutionProfilesResource: () => resource,
 }));
 
-import {
-  ExecutionProfilesSettings,
-  newExecutionProfileDraft,
-} from "./ExecutionProfilesSettings";
+import { ExecutionProfilesSettings } from "./ExecutionProfilesSettings";
+import { newExecutionProfileDraft } from "./ExecutionProfilesSettings.model";
 import {
   EXECUTION_BACKENDS,
   unavailableExecutionAvailability,

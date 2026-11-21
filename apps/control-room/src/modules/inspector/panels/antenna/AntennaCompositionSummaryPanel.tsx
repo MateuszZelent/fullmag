@@ -72,10 +72,10 @@ export function AntennaCompositionSummaryPanel({ selection }: InspectorPanelProp
         </InspectorGroup>;
       })}
       <InspectorGroup title="Geometry and source definition" description="Edit the physical layout and source cut separately from field results.">
-        {links.filter(link => link.key === "geometry" || link.key === "terminals").map(resourceLink)}
+        {links.map(link => link.key === "geometry" || link.key === "terminals" ? resourceLink(link) : null)}
       </InspectorGroup>
       <InspectorGroup title="Regional field drive" description="A separate prescribed magnetic-field source; it does not solve conductor current.">
-        {links.filter(link => link.key === "regional").map(resourceLink)}
+        {links.map(link => link.key === "regional" ? resourceLink(link) : null)}
       </InspectorGroup>
     </> : null}
   </div>;

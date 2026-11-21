@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 
 import { describe, expect, it } from "vitest";
 
-import { resolveViewport3DPostProcessingPolicy } from "./PostProcessingLayer";
+import { resolveViewport3DPostProcessingPolicy } from "./PostProcessingLayer.model";
 
 describe("viewport3D post-processing policy", () => {
   it("protects quantitative colors in Scientific and allows Presentation shading in both switch directions", () => {

@@ -226,13 +226,13 @@ describe("evaluateLiveRefreshGates", () => {
       { warmupTicks: 1 },
     );
     assert.equal(
-      evaluateLiveRefreshGates(summary).find((gate) => gate.id === "G2").status,
+      evaluateLiveRefreshGates(summary).find((gate) => gate.id === "G2")?.status,
       "fail",
     );
     assert.equal(
       evaluateLiveRefreshGates(summary, { maxMaterialsCreated: 2 }).find(
         (gate) => gate.id === "G2",
-      ).status,
+      )?.status,
       "pass",
     );
     assert.equal(DEFAULT_LIVE_REFRESH_GATES.maxMaterialsCreated, 0);

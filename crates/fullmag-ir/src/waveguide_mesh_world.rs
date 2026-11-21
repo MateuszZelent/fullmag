@@ -159,52 +159,61 @@ impl Error for WaveguideWorldMappingError {}
 /// local prerequisite does not certify geometric equivalence or FEM admission.
 #[derive(Debug)]
 pub(crate) struct ValidatedWaveguideWorldMapping<'d, 'b, 'i, 'f> {
-    dirichlet: &'d ValidatedFiniteAirDirichletBindings<'b, 'i>,
-    frame: &'f ValidatedWaveguideFrameIR,
-    world_nodes_m: Vec<[f64; 3]>,
-    minimum_triangle_quality: f64,
-    minimum_triangle_area_m2: f64,
-    minimum_positive_mass_entry_m2: f64,
-    maximum_gradient_norm_per_m: f64,
-    maximum_projection_error_m: f64,
-    maximum_plane_deviation_m: f64,
+    _dirichlet: &'d ValidatedFiniteAirDirichletBindings<'b, 'i>,
+    _frame: &'f ValidatedWaveguideFrameIR,
+    _world_nodes_m: Vec<[f64; 3]>,
+    _minimum_triangle_quality: f64,
+    _minimum_triangle_area_m2: f64,
+    _minimum_positive_mass_entry_m2: f64,
+    _maximum_gradient_norm_per_m: f64,
+    _maximum_projection_error_m: f64,
+    _maximum_plane_deviation_m: f64,
 }
 
 impl<'d, 'b, 'i, 'f> ValidatedWaveguideWorldMapping<'d, 'b, 'i, 'f> {
+    #[cfg(test)]
     pub(crate) fn dirichlet(&self) -> &'d ValidatedFiniteAirDirichletBindings<'b, 'i> {
-        self.dirichlet
+        self._dirichlet
     }
 
+    #[cfg(test)]
     pub(crate) fn frame(&self) -> &'f ValidatedWaveguideFrameIR {
-        self.frame
+        self._frame
     }
 
+    #[cfg(test)]
     pub(crate) fn world_nodes_m(&self) -> &[[f64; 3]] {
-        &self.world_nodes_m
+        &self._world_nodes_m
     }
 
+    #[cfg(test)]
     pub(crate) fn minimum_triangle_quality(&self) -> f64 {
-        self.minimum_triangle_quality
+        self._minimum_triangle_quality
     }
 
+    #[cfg(test)]
     pub(crate) fn minimum_triangle_area_m2(&self) -> f64 {
-        self.minimum_triangle_area_m2
+        self._minimum_triangle_area_m2
     }
 
+    #[cfg(test)]
     pub(crate) fn minimum_positive_mass_entry_m2(&self) -> f64 {
-        self.minimum_positive_mass_entry_m2
+        self._minimum_positive_mass_entry_m2
     }
 
+    #[cfg(test)]
     pub(crate) fn maximum_gradient_norm_per_m(&self) -> f64 {
-        self.maximum_gradient_norm_per_m
+        self._maximum_gradient_norm_per_m
     }
 
+    #[cfg(test)]
     pub(crate) fn maximum_projection_error_m(&self) -> f64 {
-        self.maximum_projection_error_m
+        self._maximum_projection_error_m
     }
 
+    #[cfg(test)]
     pub(crate) fn maximum_plane_deviation_m(&self) -> f64 {
-        self.maximum_plane_deviation_m
+        self._maximum_plane_deviation_m
     }
 }
 
@@ -237,15 +246,15 @@ pub(crate) fn validate_waveguide_world_mapping<'d, 'b, 'i, 'f>(
     )?;
 
     Ok(ValidatedWaveguideWorldMapping {
-        dirichlet,
-        frame,
-        world_nodes_m: geometry.world_nodes_m,
-        minimum_triangle_quality: geometry.minimum_triangle_quality,
-        minimum_triangle_area_m2: geometry.minimum_triangle_area_m2,
-        minimum_positive_mass_entry_m2: geometry.minimum_positive_mass_entry_m2,
-        maximum_gradient_norm_per_m: geometry.maximum_gradient_norm_per_m,
-        maximum_projection_error_m: geometry.maximum_projection_error_m,
-        maximum_plane_deviation_m: geometry.maximum_plane_deviation_m,
+        _dirichlet: dirichlet,
+        _frame: frame,
+        _world_nodes_m: geometry.world_nodes_m,
+        _minimum_triangle_quality: geometry.minimum_triangle_quality,
+        _minimum_triangle_area_m2: geometry.minimum_triangle_area_m2,
+        _minimum_positive_mass_entry_m2: geometry.minimum_positive_mass_entry_m2,
+        _maximum_gradient_norm_per_m: geometry.maximum_gradient_norm_per_m,
+        _maximum_projection_error_m: geometry.maximum_projection_error_m,
+        _maximum_plane_deviation_m: geometry.maximum_plane_deviation_m,
     })
 }
 

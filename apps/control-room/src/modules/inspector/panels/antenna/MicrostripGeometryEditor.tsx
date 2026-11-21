@@ -208,9 +208,9 @@ export function MicrostripGeometryEditor({ objectId, scene, status, refetch }: P
           <legend>{end === "inlet" ? "Inlet connection" : "Outlet connection"}</legend>
           <p className="fm-inspector-hint">{end === "inlet" ? "Connects signal to the broad return and contains the voltage-source cut."
             : "Closes the opposite end between signal and the broad return."}</p>
-          {MICROSTRIP_LOOP_FIELDS.filter(field => field.key.startsWith(`${end}_`)).map(field => <FormField inline={false} key={field.key} label={field.label} unit={field.unit}
+          {MICROSTRIP_LOOP_FIELDS.map(field => field.key.startsWith(`${end}_`) ? <FormField inline={false} key={field.key} label={field.label} unit={field.unit}
             value={circuit.parameters[field.key] ?? ""}
-            onChange={(event) => update(stations, { ...circuit, parameters: { ...circuit.parameters, [field.key]: event.currentTarget.value } })} />)}
+            onChange={(event) => update(stations, { ...circuit, parameters: { ...circuit.parameters, [field.key]: event.currentTarget.value } })} /> : null)}
         </fieldset>)}
       </> : null}
     </> : null}

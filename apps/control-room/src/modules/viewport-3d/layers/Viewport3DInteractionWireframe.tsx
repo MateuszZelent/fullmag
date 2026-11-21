@@ -1,7 +1,7 @@
 "use client";
 
 import { useFrame } from "@react-three/fiber";
-import { createContext, useCallback, useContext, useEffect, useMemo, useRef, type ReactNode } from "react";
+import { useCallback, useContext, useEffect, useMemo, useRef, type ReactNode } from "react";
 import type { BufferGeometry, LineSegments } from "three";
 
 import { createViewport3DGpuUploadManager } from "../build-engine/gpu/viewport3dGpuUploadManager";
@@ -10,9 +10,8 @@ import { useBatchedInvalidate } from "../viewport3dBatchedInvalidate";
 import type { Viewport3DResourceTracker } from "../viewport3dDiagnostics";
 import { sampleViewport3DWireframeEdges, updateViewport3DInteractionWireframe } from "../viewport3dInteractionWireframe";
 import { buildLineIndexGeometry } from "../viewport3dSurfaceEdges";
-import type { Viewport3DCameraGestureRef } from "./viewport3DCameraGesture";
 
-export const Viewport3DWireframeGestureContext = createContext<Viewport3DCameraGestureRef | null>(null);
+import { Viewport3DWireframeGestureContext } from "./Viewport3DInteractionWireframe.model";
 
 export function Viewport3DInteractionWireframe({
   children,
