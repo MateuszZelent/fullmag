@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 import contextlib
+from dataclasses import replace
 import importlib.util
 import io
 import json
+import os
 from pathlib import Path
+import shutil
 import tempfile
 import unittest
 
@@ -14,9 +17,10 @@ from fullmag.runtime import helper as runtime_helper
 from fullmag.meshing.gmsh_bridge import MeshData
 
 
-FIXTURE = Path("examples/fem_reciprocal_m2_public.py")
-MESH_GENERATOR = Path("examples/generate_fem_reciprocal_m2_public_mesh.py")
-MESH_ASSET = Path("examples/fem_reciprocal_m2_public_mesh.npz")
+REPO_ROOT = Path(__file__).resolve().parents[3]
+FIXTURE = REPO_ROOT / "examples/fem_reciprocal_m2_public.py"
+MESH_GENERATOR = REPO_ROOT / "examples/generate_fem_reciprocal_m2_public_mesh.py"
+MESH_ASSET = REPO_ROOT / "examples/fem_reciprocal_m2_public_mesh.npz"
 MESH_MARKERS = {
     "left": 101,
     "right": 102,
@@ -28,34 +32,39 @@ MESH_MARKERS = {
 
 
 class PublicFemReciprocalM2FixtureTests(unittest.TestCase):
-    def export_run_config(self) -> dict[str, object]:
+    def export_run_config(
+        self,
+        script_path: Path = FIXTURE,
+        *,
+        skip_geometry_assets: bool = True,
+    ) -> dict[str, object]:
         stdout = io.StringIO()
+        args = [
+            "export-run-config",
+            "--script",
+            str(script_path),
+            "--backend",
+            "fem",
+            "--mode",
+            "strict",
+            "--precision",
+            "double",
+        ]
+        if skip_geometry_assets:
+            args.append("--skip-geometry-assets")
         with contextlib.redirect_stdout(stdout):
-            exit_code = runtime_helper.main(
-                [
-                    "export-run-config",
-                    "--script",
-                    str(FIXTURE),
-                    "--backend",
-                    "fem",
-                    "--mode",
-                    "strict",
-                    "--precision",
-                    "double",
-                    "--skip-geometry-assets",
-                ]
-            )
+            exit_code = runtime_helper.main(args)
         self.assertEqual(exit_code, 0)
         return json.loads(stdout.getvalue())
 
-    def render_canonical_script(self, output_path: Path) -> str:
+    def render_canonical_script(self, output_path: Path, script_path: Path = FIXTURE) -> str:
         stdout = io.StringIO()
         with contextlib.redirect_stdout(stdout):
             exit_code = runtime_helper.main(
                 [
                     "rewrite-script",
                     "--script",
-                    str(FIXTURE),
+                    str(script_path),
                     "--output",
                     str(output_path),
                 ]
@@ -89,7 +98,7 @@ class PublicFemReciprocalM2FixtureTests(unittest.TestCase):
             entry for entry in mesh_workflow["per_geometry"]
             if entry["geometry"] == "m2_body"
         )
-        self.assertEqual(body_mesh["source"], str(MESH_ASSET).replace("\\", "/"))
+        self.assertEqual(body_mesh["source"], MESH_ASSET.name)
         self.assertEqual(body_mesh["order"], 1)
         charge_boundaries = stage_ir["current_modules"][0]["boundaries"]
         selectors_by_boundary = {
@@ -229,10 +238,53 @@ class PublicFemReciprocalM2FixtureTests(unittest.TestCase):
             second = self.render_canonical_script(root / "second.py")
 
         self.assertEqual(first, second)
-        self.assertIn('source="examples/fem_reciprocal_m2_public_mesh.npz"', first)
+        self.assertIn('source="fem_reciprocal_m2_public_mesh.npz"', first)
         self.assertIn('SurfaceRef("m2_body", "left"', first)
         self.assertIn('SurfaceRef("m2_body", "right"', first)
         self.assertIn("study.build_mesh()", first)
+
+    def test_public_mesh_asset_resolves_from_moved_script_outside_working_directory(self) -> None:
+        with tempfile.TemporaryDirectory() as moved_example_directory, tempfile.TemporaryDirectory() as elsewhere:
+            example_root = Path(moved_example_directory)
+            moved_fixture = example_root / FIXTURE.name
+            shutil.copy2(FIXTURE, moved_fixture)
+            shutil.copy2(MESH_ASSET, example_root / MESH_ASSET.name)
+            shipped_mesh = MeshData.load(MESH_ASSET)
+            conflicting_mesh = replace(
+                shipped_mesh,
+                nodes=shipped_mesh.nodes + (100.0e-9, 0.0, 0.0),
+            )
+            conflicting_mesh.save(Path(elsewhere) / MESH_ASSET.name)
+
+            original_cwd = Path.cwd()
+            try:
+                os.chdir(elsewhere)
+                config = self.export_run_config(moved_fixture, skip_geometry_assets=False)
+                stage_ir = config["stages"][0]["ir"]
+                body_mesh_asset = config["shared_geometry_assets"]["fem_mesh_assets"][0]
+                self.assertEqual(body_mesh_asset["geometry_name"], "m2_body_geom")
+                self.assertEqual(len(body_mesh_asset["mesh"]["cells"]["types"]), 12)
+                np.testing.assert_array_equal(
+                    body_mesh_asset["mesh"]["nodes"], shipped_mesh.nodes
+                )
+                self.assertEqual(
+                    next(
+                        entry for entry in stage_ir["problem_meta"]["runtime_metadata"]
+                        ["mesh_workflow"]["per_geometry"]
+                        if entry["geometry"] == "m2_body"
+                    )["source"],
+                    MESH_ASSET.name,
+                )
+
+                canonical_path = example_root / "canonical.py"
+                canonical = self.render_canonical_script(canonical_path, moved_fixture)
+                self.assertIn('source="fem_reciprocal_m2_public_mesh.npz"', canonical)
+                self.assertNotIn(str(example_root), canonical)
+                round_trip = self.export_run_config(canonical_path, skip_geometry_assets=False)
+                round_trip_mesh = round_trip["shared_geometry_assets"]["fem_mesh_assets"][0]
+                self.assertEqual(round_trip_mesh["mesh"], body_mesh_asset["mesh"])
+            finally:
+                os.chdir(original_cwd)
 
 
 if __name__ == "__main__":

@@ -5357,7 +5357,7 @@ mod tests {
         assert_eq!(runtime_metadata["mesh_workflow"]["build_target"], "mesh");
         assert_eq!(
             runtime_metadata["mesh_workflow"]["per_geometry"][0]["source"],
-            "examples/fem_reciprocal_m2_public_mesh.npz"
+            "fem_reciprocal_m2_public_mesh.npz"
         );
         let charge_boundaries =
             &exported["stages"][0]["ir"]["current_modules"][0]["boundaries"];

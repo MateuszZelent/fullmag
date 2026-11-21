@@ -34,7 +34,7 @@ body.Ms = 8.0e5
 body.Aex = 13.0e-12
 body.alpha = 0.02
 body.m = fm.init.UniformMagnetization((1.0, 0.0, 0.0))
-body.mesh(source="examples/fem_reciprocal_m2_public_mesh.npz", order=1)
+body.mesh(source="fem_reciprocal_m2_public_mesh.npz", order=1)
 study.build_mesh()
 
 region = fm.RegionRef("m2_body")
