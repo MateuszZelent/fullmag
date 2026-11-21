@@ -1,6 +1,7 @@
 "use client";
 
 import { FieldRow } from "../../primitives/FieldRow";
+import { keyedOccurrences } from "@/shared/utils/keyedOccurrences";
 import { InspectorGroup } from "../../primitives/InspectorGroup";
 import {
   StageInspectorFrame,
@@ -54,8 +55,8 @@ export function MaskFieldDriveStageInspector({
                 />
               ))}
               <FieldRow label="Time" value={term.time.call} mono />
-              {term.time.outputs.map((output, index) => (
-                <FieldRow key={`time-${index}`} label="f(t)" value={output} mono />
+              {keyedOccurrences(term.time.outputs, (output) => output).map(({ item: output, key }) => (
+                <FieldRow key={key} label="f(t)" value={output} mono />
               ))}
             </InspectorGroup>
           ))}

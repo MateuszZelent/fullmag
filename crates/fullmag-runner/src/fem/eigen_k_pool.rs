@@ -409,7 +409,6 @@ pub(super) fn prepare_process_pool_samples(
         );
         let (bootstrap_result, mut bootstrap_mode_artifacts) =
             super::eigen_path::parse_worker_single_k_result(
-                plan,
                 &bootstrap_point_plan,
                 tracking_outputs,
                 bootstrap_sample,
@@ -693,7 +692,6 @@ pub(super) fn prepare_process_pool_samples(
             point_plan.k_sampling.as_ref(),
         )?;
         let (result, mode_artifacts) = super::eigen_path::parse_worker_single_k_result(
-            plan,
             &point_plan,
             tracking_outputs,
             sample,

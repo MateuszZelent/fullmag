@@ -253,7 +253,7 @@ function readV2MetricChannel(
     }
     const expected = familyExpectedOrdinals(familyRow, elementCount);
     if (
-      arity !== 1 || count !== expected.length ||
+      arity !== 1 || ordinals.length !== expected.length ||
       !expected.every((ordinal, index) => ordinals[index] === ordinal)
     ) {
       throw new Error(`FMMQ v2 ${metricId} is not a complete family vector`);

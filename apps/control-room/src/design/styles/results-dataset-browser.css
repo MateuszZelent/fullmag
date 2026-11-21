@@ -147,6 +147,9 @@
 .fm-results-dataset-browser__virtual-list-inner {
   position: relative;
   width: 100%;
+  margin: 0;
+  padding: 0;
+  list-style: none;
 }
 
 .fm-results-dataset-browser__virtual-row {

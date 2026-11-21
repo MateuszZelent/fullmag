@@ -142,6 +142,7 @@ impl SteadySourceCache {
         Ok(CacheObservation::Hit)
     }
 
+    #[cfg(test)]
     pub(crate) fn current_identity(&self) -> Option<(&SteadySourceCacheKey, &str)> {
         self.key.as_ref().zip(self.view_identity_digest.as_deref())
     }
@@ -255,6 +256,7 @@ impl SteadySourceStageCoordinator {
         Ok(())
     }
 
+    #[cfg(test)]
     pub(crate) fn reject_attempt(&mut self) -> Result<(), RunError> {
         if !self.attempt_open {
             return Err(RunError {

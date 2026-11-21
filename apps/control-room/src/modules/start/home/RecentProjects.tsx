@@ -5,6 +5,7 @@ import { FileCode2, FilePlus2, FolderOpen, LayoutGrid, List, RefreshCw, Search }
 import {
   useCallback,
   useEffect,
+  useEffectEvent,
   useMemo,
   useRef,
   useState,
@@ -43,10 +44,13 @@ import {
 import { SectionHeader } from "../ui/SectionHeader";
 
 import { ProjectCard } from "./ProjectCard";
-import { ProjectRow, rowDomId } from "./ProjectRow";
+import { ProjectRow } from "./ProjectRow";
+import { rowDomId } from "./ProjectRow.model";
 import { VIRTUALISE_ABOVE, buildListItems, type RecentListItem } from "./recentListModel";
-import { ResultRow, resultRowDomId } from "./ResultRow";
-import { ScriptRow, scriptRowDomId } from "./ScriptRow";
+import { ResultRow } from "./ResultRow";
+import { resultRowDomId } from "./ResultRow.model";
+import { ScriptRow } from "./ScriptRow";
+import { scriptRowDomId } from "./ScriptRow.model";
 
 const HEADER_HEIGHT = 26;
 const ROW_HEIGHT = 52;
@@ -340,14 +344,19 @@ export function RecentProjects({
     if (!onAddPath) return;
     setAddBusy(true);
     setAddError(null);
-    const failure = await addPathOutcome(addPath, onAddPath);
-    setAddBusy(false);
-    if (failure) {
-      setAddError(failure);
-      return;
+    try {
+      const failure = await addPathOutcome(addPath, onAddPath);
+      if (failure) {
+        setAddError(failure);
+        return;
+      }
+      setAddPath("");
+      setAddOpen(false);
+    } catch (error) {
+      setAddError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setAddBusy(false);
     }
-    setAddPath("");
-    setAddOpen(false);
   }, [addPath, onAddPath]);
 
   const pinResult = useCallback(
@@ -456,12 +465,13 @@ export function RecentProjects({
   // Each palette request carries a new sequence number; handle it once. The
   // ref starts at the current number so a remount does not replay an old one.
   const handledAction = useRef(selectionAction?.seq ?? 0);
+  const executeSelectionAction = useEffectEvent(runSelectionAction);
   useEffect(() => {
     if (!selectionAction || selectionAction.seq === handledAction.current) return;
     handledAction.current = selectionAction.seq;
-    runSelectionAction(selectionAction.kind);
-    // runSelectionAction closes over the latest selection on every render.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // This consumes a command from an external store, after the selected row has committed.
+    // react-doctor-disable-next-line react-doctor/no-pass-data-to-parent
+    executeSelectionAction(selectionAction.kind);
   }, [selectionAction]);
 
   const onListKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {

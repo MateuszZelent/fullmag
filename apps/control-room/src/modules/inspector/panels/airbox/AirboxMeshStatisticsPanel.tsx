@@ -12,7 +12,8 @@ import {
 import { normalizeMeshQualityStatistics } from "@/shared/domain/mesh/qualityStatistics";
 
 import type { InspectorPanelProps } from "../../inspectorTypes";
-import { AirboxFieldRow as FieldRow, boundedItems } from "./airboxDisplay";
+import { AirboxFieldRow as FieldRow } from "./airboxDisplay";
+import { boundedItems } from "./airboxDisplay.model";
 import { InspectorGroup } from "../../primitives/InspectorGroup";
 import { formatCount } from "../MeshResourceView";
 import {
@@ -28,10 +29,12 @@ import {
   useAirboxInspectorRuntimeStatus,
 } from "./airboxInspectorRuntimeStatus";
 
+const meshQualityFormatter = new Intl.NumberFormat("en-US", { maximumSignificantDigits: 4 });
+
 function qualityNumber(value: number | null): string {
   return value === null
     ? "unknown"
-    : new Intl.NumberFormat("en-US", { maximumSignificantDigits: 4 }).format(value);
+    : meshQualityFormatter.format(value);
 }
 
 function familyMetric(metric: {

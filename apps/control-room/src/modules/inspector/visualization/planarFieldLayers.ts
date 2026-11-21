@@ -19,10 +19,6 @@ export type PlanarLayerState = Planar["layers"];
 export type PlanarLayerPass = "raster" | "vectors" | "points" | "mesh" | "contours" | "streamlines";
 export type PlanarFieldLayerTarget = VisualizationTargetRef | "all";
 
-export const PLANAR_LAYER_PASSES: readonly PlanarLayerPass[] = [
-  "raster", "vectors", "points", "mesh", "contours", "streamlines",
-];
-
 /** Quantity offered to a layer editor, with its planar component projections. */
 export type PlanarFieldQuantityOption = {
   id: string;

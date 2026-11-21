@@ -16,21 +16,16 @@ import {
   isSolutionScalarArtifact,
   useSolutionScalarResource,
 } from "@/kernel/resources/solutionSetResources";
-import type {
-  SolutionSetArtifactResource,
-  SolutionSetDiscoveryPageResource,
-  SolutionSetMemberResource,
-  SolutionSetResource,
-  SolutionScalarResource,
-} from "@/kernel/api/apiTypes";
+import type { SolutionSetArtifactResource, SolutionSetDiscoveryPageResource, SolutionSetMemberResource, SolutionSetResource, SolutionScalarResource } from "@/kernel/api/apiTypes";
 import { Badge } from "@/shared/ui/Badge";
 import { Button } from "@/shared/ui/Button";
 
 import { SavedMaterializedArtifactRow } from "./SavedMaterializedArtifactRow";
+import { isMaterializedDatasetArtifact } from "./SavedResultsBrowser.model";
+
 export { materializedDatasetMatchesArtifact } from "./savedMaterializedDatasetBinding";
 
 const MATERIALIZED_FIELDS_PER_PAGE = 4;
-const MATERIALIZED_DATASET_SCHEMA = "fullmag.materialized_dataset.v1";
 
 type SavedResultsBrowserProps = Pick<ModuleProps, "kernel" | "moduleId">;
 
@@ -697,12 +692,6 @@ function ArtifactButton({
       <span className="ml-auto shrink-0 text-fm-xs opacity-80">{artifact.kind}</span>
     </Button>
   );
-}
-
-export function isMaterializedDatasetArtifact(
-  artifact: SolutionSetArtifactResource,
-): boolean {
-  return artifact.schema_id === MATERIALIZED_DATASET_SCHEMA && artifact.kind === "other";
 }
 
 function SolutionScalarDetails({ data }: { data: SolutionScalarResource }) {

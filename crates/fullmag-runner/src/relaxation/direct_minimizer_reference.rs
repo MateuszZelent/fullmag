@@ -44,6 +44,10 @@ pub struct RelaxationResult {
     pub numerical_error: bool,
 }
 
+#[cfg_attr(
+    not(any(feature = "cuda", feature = "fem-gpu", test)),
+    expect(dead_code, reason = "GPU execution lanes consume accepted-step observer samples for artifact autosave")
+)]
 pub(crate) struct DirectMinimizerAcceptedSample<'a> {
     pub step: u64,
     pub magnetization: &'a [Vector3],
@@ -516,6 +520,7 @@ pub(crate) fn execute_projected_gradient_bb(
     }
 }
 
+#[cfg(any(feature = "cuda", feature = "fem-gpu", test))]
 pub(crate) fn execute_projected_gradient_bb_with_observer(
     problem: &ExchangeLlgProblem,
     initial_magnetization: &[Vector3],
@@ -1151,6 +1156,7 @@ pub(crate) fn execute_nonlinear_cg(
     }
 }
 
+#[cfg(any(feature = "cuda", feature = "fem-gpu", test))]
 pub(crate) fn execute_nonlinear_cg_with_observer(
     problem: &ExchangeLlgProblem,
     initial_magnetization: &[Vector3],

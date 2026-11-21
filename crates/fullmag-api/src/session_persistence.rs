@@ -3059,6 +3059,7 @@ mod artifact_capture_tests {
 // ── Handlers ───────────────────────────────────────────────────────────
 
 /// `POST /v2/sessions/current/persistence/exports`
+#[cfg(test)]
 pub(crate) async fn export_session(
     State(state): State<Arc<AppState>>,
     Json(req): Json<SessionExportRequest>,
@@ -3700,6 +3701,7 @@ fn publish_imported_session(
 }
 
 /// `POST /v2/sessions/current/persistence/imports`
+#[cfg(test)]
 pub(crate) async fn import_session_commit(
     State(state): State<Arc<AppState>>,
     Json(req): Json<SessionImportCommitRequest>,
@@ -3964,13 +3966,6 @@ pub(crate) async fn get_checkpoint_with_context(
 }
 
 /// `POST /v2/sessions/current/persistence/checkpoints`
-pub(crate) async fn create_checkpoint(
-    State(state): State<Arc<AppState>>,
-    Json(req): Json<CheckpointCreateRequest>,
-) -> Result<Json<CheckpointCreateResponse>, ApiError> {
-    create_checkpoint_with_context(State(state), Json(req), None).await
-}
-
 pub(crate) async fn create_checkpoint_with_context(
     State(state): State<Arc<AppState>>,
     Json(req): Json<CheckpointCreateRequest>,
@@ -4183,14 +4178,6 @@ pub(crate) async fn delete_checkpoint_with_context(
 }
 
 /// `POST /v2/sessions/current/persistence/checkpoints/{checkpoint_id}/restore`
-pub(crate) async fn restore_checkpoint(
-    State(state): State<Arc<AppState>>,
-    checkpoint_id: String,
-    Json(req): Json<CheckpointRestoreRequest>,
-) -> Result<Json<CheckpointRestoreResponse>, ApiError> {
-    restore_checkpoint_with_context(State(state), checkpoint_id, Json(req), None).await
-}
-
 pub(crate) async fn restore_checkpoint_with_context(
     State(state): State<Arc<AppState>>,
     checkpoint_id: String,
@@ -4369,13 +4356,6 @@ pub(crate) async fn restore_checkpoint_with_context(
 }
 
 /// `POST /v2/sessions/current/persistence/field-states/exports`
-pub(crate) async fn export_field_state(
-    State(state): State<Arc<AppState>>,
-    Json(req): Json<FieldStateExportRequest>,
-) -> Result<Json<FieldStateExportResponse>, ApiError> {
-    export_field_state_with_context(State(state), Json(req), None).await
-}
-
 pub(crate) async fn export_field_state_with_context(
     State(state): State<Arc<AppState>>,
     Json(req): Json<FieldStateExportRequest>,
@@ -4502,13 +4482,6 @@ pub(crate) async fn export_field_state_with_context(
 }
 
 /// `POST /v2/sessions/current/persistence/field-states/imports/inspections`
-pub(crate) async fn inspect_field_state(
-    State(state): State<Arc<AppState>>,
-    Json(req): Json<FieldStateInspectRequest>,
-) -> Result<Json<FieldStateInspectResponse>, ApiError> {
-    inspect_field_state_with_context(State(state), Json(req), None).await
-}
-
 pub(crate) async fn inspect_field_state_with_context(
     State(state): State<Arc<AppState>>,
     Json(req): Json<FieldStateInspectRequest>,
@@ -4581,13 +4554,6 @@ pub(crate) async fn inspect_field_state_with_context(
 }
 
 /// `POST /v2/sessions/current/persistence/field-states/imports`
-pub(crate) async fn import_field_state(
-    State(state): State<Arc<AppState>>,
-    Json(req): Json<FieldStateImportRequest>,
-) -> Result<Json<FieldStateImportResponse>, ApiError> {
-    import_field_state_with_context(State(state), Json(req), None).await
-}
-
 pub(crate) async fn import_field_state_with_context(
     State(state): State<Arc<AppState>>,
     Json(req): Json<FieldStateImportRequest>,
@@ -4728,12 +4694,6 @@ pub(crate) async fn import_field_state_with_context(
 }
 
 /// `GET /v2/sessions/current/persistence/recovery`
-pub(crate) async fn list_recovery(
-    State(state): State<Arc<AppState>>,
-) -> Result<Json<RecoveryListResponse>, ApiError> {
-    list_recovery_with_context(State(state), None).await
-}
-
 pub(crate) async fn list_recovery_with_context(
     State(state): State<Arc<AppState>>,
     request_context: Option<&crate::types::CurrentLiveRequestContext>,
@@ -4771,12 +4731,6 @@ pub(crate) async fn list_recovery_with_context(
 }
 
 /// `DELETE /v2/sessions/current/persistence/recovery`
-pub(crate) async fn clear_recovery(
-    State(state): State<Arc<AppState>>,
-) -> Result<Json<RecoveryClearResponse>, ApiError> {
-    clear_recovery_with_context(State(state), None).await
-}
-
 pub(crate) async fn clear_recovery_with_context(
     State(state): State<Arc<AppState>>,
     request_context: Option<&crate::types::CurrentLiveRequestContext>,

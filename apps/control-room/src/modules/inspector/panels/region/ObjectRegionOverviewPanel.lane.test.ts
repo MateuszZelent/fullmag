@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { resolveObjectRegionOverviewLaneView } from "./ObjectRegionOverviewPanel";
+import { resolveObjectRegionOverviewLaneView } from "./ObjectRegionOverviewPanel.model";
 
 describe("ObjectRegionOverviewPanel lane presentation", () => {
   it("keeps FDM region identity read-only and without FEM diagnostics", () => {

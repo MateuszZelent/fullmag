@@ -3,21 +3,12 @@
 import { HelpCircle } from "lucide-react";
 import { useCallback, useMemo, useReducer, useState } from "react";
 
-import type { ObjectInteractionKind } from "@/kernel/api/apiTypes";
-import {
-  acknowledgedAuthoringSceneRevision,
-  invalidateAuthoringMutationDependents,
-} from "@/kernel/authoring/authoringMutationInvalidation";
+import { acknowledgedAuthoringSceneRevision, invalidateAuthoringMutationDependents } from "@/kernel/authoring/authoringMutationInvalidation";
 import { runAuthoringMutationWithHistory } from "@/kernel/authoring/authoringHistoryMutation";
 import { useKernel } from "@/kernel/KernelContext";
 import { homeView } from "@/kernel/layout/homeView";
 import { sessionRequestScopeKey } from "@/kernel/resources/sessionResourceIdentity";
-import {
-  resolveObjectInteractionResourceKey,
-  resolveSceneResourceRevision,
-  useObjectInteractionResource,
-  useSceneResource,
-} from "@/kernel/resources/geometryLifecycleResources";
+import { resolveSceneResourceRevision, useObjectInteractionResource, useSceneResource } from "@/kernel/resources/geometryLifecycleResources";
 import {
   resolveActiveLaneOperation,
   useActiveLaneCapabilities,
@@ -77,6 +68,7 @@ import {
   SpinTorqueInspectorPanel,
 } from "./SpinAuthoringInspector";
 import { CurrentTransportInspectorPanel } from "./TransportAuthoringInspector";
+import { commitObjectInteractionMutation } from "./PhysicsInteractionPanel.model";
 
 interface DraftState {
   draft: PhysicsInteractionDraft;
@@ -155,27 +147,6 @@ function isRevisionConflict(error: unknown): boolean {
 }
 
 type PhysicsInteractionSpec = InteractionSpec;
-
-export async function commitObjectInteractionMutation({
-  interactionKind,
-  objectId,
-  patch,
-  resources,
-}: {
-  interactionKind: ObjectInteractionKind;
-  objectId: string;
-  patch: () => Promise<{ revision?: unknown; scene_revision?: unknown }>;
-  resources: { invalidate(resourceKey: string, revision: number): void };
-}): Promise<number> {
-  const response = await patch();
-  const revision = acknowledgedAuthoringSceneRevision(response);
-  resources.invalidate(
-    resolveObjectInteractionResourceKey(objectId, interactionKind),
-    revision,
-  );
-  invalidateAuthoringMutationDependents(resources, "interaction", revision);
-  return revision;
-}
 
 export function PhysicsInteractionPanel({ selection }: InspectorPanelProps) {
   const objectId = selection.objectId;

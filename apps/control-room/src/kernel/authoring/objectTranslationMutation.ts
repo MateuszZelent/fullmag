@@ -1,4 +1,4 @@
-import { ControlRoomApiError, type ControlRoomApi } from "@/kernel/api/ControlRoomApi";
+import type { ControlRoomApi } from "@/kernel/api/ControlRoomApi";
 import type { ResourceInvalidationController } from "@/kernel/resources/ResourceInvalidationController";
 import type { RequestOptions, SceneResource } from "@/kernel/api/apiTypes";
 
@@ -12,12 +12,6 @@ import { publishCommittedSceneResource } from "@/kernel/resources/geometryLifecy
 export type ObjectTranslation = [number, number, number];
 export const PROBLEM_IR_03_RIGID_TRANSFORM_REASON =
   "Rotate and Scale require a canonical geometry contract newer than ProblemIR 0.3.";
-
-export function isObjectTranslationRevisionConflict(error: unknown): boolean {
-  return error instanceof ControlRoomApiError &&
-    error.status === 409 &&
-    (error.code === "revision_conflict" || error.code === "scene_revision_conflict");
-}
 
 /** One revision-safe translation transaction shared by Inspector and viewport. */
 export async function commitObjectTranslation({

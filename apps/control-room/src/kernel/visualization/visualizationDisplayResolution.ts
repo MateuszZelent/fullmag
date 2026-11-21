@@ -255,14 +255,17 @@ export function resolveManifestRenderableCarrierKind({
 }): ManifestRenderableCarrierKind {
   if (meshParts || objectSegments) {
     meshPartCount = meshParts?.length ?? 0;
-    objectSegmentCount = (objectSegments ?? []).filter((segment) => {
+    const meshAliases = new Set(
+      (meshParts ?? []).flatMap((part) => manifestCarrierOwnershipAliases(part)),
+    );
+    let unclaimedSegments = 0;
+    for (const segment of objectSegments ?? []) {
       const segmentAliases = manifestCarrierOwnershipAliases(segment);
-      return !meshParts?.some((part) =>
-        manifestCarrierOwnershipAliases(part).some((alias) =>
-          segmentAliases.includes(alias),
-        ),
-      );
-    }).length;
+      if (!segmentAliases.some((alias) => meshAliases.has(alias))) {
+        unclaimedSegments += 1;
+      }
+    }
+    objectSegmentCount = unclaimedSegments;
   }
   if (meshPartCount > 0 && objectSegmentCount > 0) return "mixed";
   if (meshPartCount > 0) return "mesh-parts";

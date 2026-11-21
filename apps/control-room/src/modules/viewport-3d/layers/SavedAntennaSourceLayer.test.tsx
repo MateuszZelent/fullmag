@@ -8,7 +8,8 @@ import type { DecodedTopology } from "@/kernel/api/codecs";
 import { buildSavedAntennaSourceModel } from "../model/savedAntennaSourceModel";
 import type { Viewport3DResourceTracker } from "../viewport3dDiagnostics";
 import type { Viewport3DColors } from "../viewport3dTypes";
-import { createSavedAntennaSourceGeometry, SavedAntennaSourceLayer } from "./SavedAntennaSourceLayer";
+import { SavedAntennaSourceLayer } from "./SavedAntennaSourceLayer";
+import { createSavedAntennaSourceGeometry } from "./SavedAntennaSourceLayer.model";
 
 const { invalidate } = vi.hoisted(() => ({ invalidate: vi.fn() }));
 vi.mock("../viewport3dBatchedInvalidate", () => ({ useBatchedInvalidate: () => invalidate }));

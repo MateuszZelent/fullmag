@@ -39,6 +39,7 @@
     "smoke:scratch-authoring-fem": "node scripts/smoke-scratch-authoring-fem.mjs",
     "smoke:scratch-authoring-ui": "node scripts/smoke-scratch-authoring-ui.mjs",
     "smoke:antenna-authoring-ui": "node scripts/smoke-antenna-authoring-ui.mjs",
+    "test:compute-preview-request": "node scripts/check-compute-preview-request.mjs",
     "test:antenna-authoring-browser": "node --test scripts/lib/antenna-authoring-browser.test.mjs",
     "docs:bundle": "node scripts/bundle-docs.mjs",
     "docs:build": "node scripts/bundle-docs.mjs --build",

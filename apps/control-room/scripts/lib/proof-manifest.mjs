@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { readFile, realpath, stat, writeFile } from "node:fs/promises";
 import { dirname, isAbsolute, relative, resolve, sep } from "node:path";
+import { visitSequentially } from "./visitSequentially.mjs";
 
 const SHA256_PATTERN = /^[0-9a-f]{64}$/;
 const GIT_COMMIT_PATTERN = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
@@ -256,7 +257,7 @@ export async function validateProofManifest(manifestValue, artifactRoot) {
 
   const canonicalRoot = await realpath(resolve(artifactRoot));
   const artifactPaths = new Set();
-  for (const [index, artifact] of manifest.artifacts.entries()) {
+  await visitSequentially(manifest.artifacts, async (artifact, index) => {
     requireObject(artifact, `artifacts[${index}]`);
     const artifactPath = requireString(artifact.path, `artifacts[${index}].path`);
     requireString(artifact.mediaType, `artifacts[${index}].mediaType`);
@@ -270,7 +271,7 @@ export async function validateProofManifest(manifestValue, artifactRoot) {
     if (actualSha !== expectedSha) {
       fail("artifact_hash_mismatch", `artifact hash mismatch: ${artifactPath}`);
     }
-  }
+  });
   for (const [index, step] of manifest.steps.entries()) {
     requireObject(step, `steps[${index}]`);
     requireString(step.id, `steps[${index}].id`);

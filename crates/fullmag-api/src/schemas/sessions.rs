@@ -5,6 +5,7 @@ use utoipa::ToSchema;
 
 #[derive(Debug, Clone, Copy, Serialize, ToSchema)]
 #[serde(rename_all = "lowercase")]
+#[expect(dead_code, reason = "OpenAPI describes the legal values of the existing wire string")]
 pub enum ScratchSessionBackend {
     Fdm,
     Fem,
@@ -12,6 +13,7 @@ pub enum ScratchSessionBackend {
 
 #[derive(Debug, Clone, Copy, Serialize, ToSchema)]
 #[serde(rename_all = "lowercase")]
+#[expect(dead_code, reason = "OpenAPI describes the legal values of the existing wire string")]
 pub enum ScratchSessionDevice {
     Cpu,
     Gpu,
@@ -19,12 +21,14 @@ pub enum ScratchSessionDevice {
 
 #[derive(Debug, Clone, Copy, Serialize, ToSchema)]
 #[serde(rename_all = "lowercase")]
+#[expect(dead_code, reason = "OpenAPI describes the legal values of the existing wire string")]
 pub enum ScratchSessionPrecision {
     Double,
     Single,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, ToSchema)]
+#[expect(dead_code, reason = "OpenAPI describes the legal values of the existing wire string")]
 pub enum ScratchSceneSchemaVersion {
     #[serde(rename = "0.3")]
     V0_3,

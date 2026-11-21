@@ -115,14 +115,9 @@ import {
   DEFAULT_VIEWPORT_3D_CAMERA_STATE,
   type Viewport3DCommandState,
 } from "../viewport3dStore";
-import {
-  identifyVectorGlyphBuildResult,
-  recordVectorFieldAdoption,
-} from "../layers/VectorFieldLayer";
-import {
-  recordFdmCuboidSurfaceAdoption,
-  resolveFdmVectorGlyphScaleForCellSize,
-} from "../layers/FdmCuboidLayer";
+import { identifyVectorGlyphBuildResult, recordVectorFieldAdoption } from "../layers/VectorFieldLayer.model";
+import { resolveFdmVectorGlyphScaleForCellSize } from "../layers/FdmCuboidLayer";
+import { recordFdmCuboidSurfaceAdoption } from "../layers/FdmCuboidLayer.model";
 import { createViewport3DRenderAdoptionRegistry } from "../model/viewport3DRenderAdoptionRegistry";
 import { resolveViewport3DFieldVectorForDomain } from "../model/viewport3DFieldDomainCompatibility";
 import { buildFdmSampledScalarColors } from "../viewport3dFieldMapping";

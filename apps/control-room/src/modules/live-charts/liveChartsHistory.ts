@@ -19,7 +19,7 @@ export interface LiveChartArchivePage {
 }
 
 export interface LoadedLiveChartArchivePage extends LiveChartArchivePage {
-  window: StudyResultScalarWindow;
+  "window": StudyResultScalarWindow;
 }
 
 function sameSeries(left: StudyResultSeriesIdentity, right: StudyResultSeriesIdentity): boolean {

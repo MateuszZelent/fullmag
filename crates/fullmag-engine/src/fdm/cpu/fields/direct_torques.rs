@@ -236,6 +236,7 @@ impl ExchangeLlgProblem {
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn direct_torques_add_into_soa(
         &self,
         magnetization: &VectorFieldSoA,
@@ -810,6 +811,7 @@ impl ExchangeLlgProblem {
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn slonczewski_stt_torque_add_into(
         &self,
         magnetization: &[Vector3],
@@ -866,6 +868,7 @@ impl ExchangeLlgProblem {
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn slonczewski_stt_torque_add_into_soa(
         &self,
         magnetization: &VectorFieldSoA,

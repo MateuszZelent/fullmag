@@ -56,7 +56,7 @@ describe("durable SolutionSet resource identity", () => {
     expect(() => validateMaterializedDatasetEnvelope({ ...data, dataset: { ...data.dataset, source: { ...data.source, run_id: "other" } } }, expected)).toThrow();
     expect(() => validateMaterializedDatasetEnvelope({ ...data, field: { ...data.field, tensor_artifact: { ...data.field.tensor_artifact, object_ref: "d".repeat(64) } } }, expected)).toThrow();
     expect(() => validateMaterializedDatasetEnvelope({ ...data, manifest_object_ref: "bad" }, expected)).toThrow();
-    expect(() => validateMaterializedDatasetEnvelope(JSON.parse(JSON.stringify({ ...data, integrity: "not_verified" })), expected)).toThrow();
+    expect(() => validateMaterializedDatasetEnvelope({ ...data, integrity: "not_verified" }, expected)).toThrow();
     expect(() => validateMaterializedDatasetEnvelope({ ...data, definition: { ...data.definition, revision: "01" } }, expected)).toThrow();
   });
   it("separates every pinned dataset owner and preserves u64 revisions", () => {

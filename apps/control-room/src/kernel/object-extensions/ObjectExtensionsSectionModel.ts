@@ -91,15 +91,12 @@ export function resolveActiveObjectExtensionExplorerItems(
       visualizationTargetId: `object:${objectId}`,
     },
   })
-    .filter((extension) =>
-      Boolean(activation.enabled[objectExtensionActivationKey(objectId, extension.id)]),
-    )
-    .map((extension) => ({
+    .flatMap((extension) => activation.enabled[objectExtensionActivationKey(objectId, extension.id)] ? [{
       id: extension.id,
       label: extension.label,
       // Activation makes an on-demand resource available; it does not create
       // a scientific result. The Explorer must not advertise `ready` before
       // the resource has actually been computed.
       status: "stale",
-    }));
+    }] : []);
 }

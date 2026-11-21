@@ -22,7 +22,7 @@ interface BrowserSnapshotTarget {
   devicePixelRatio?: number;
   innerHeight?: number;
   innerWidth?: number;
-  navigator?: {
+  "navigator"?: {
     hardwareConcurrency?: number;
     platform?: string;
     userAgent?: string;

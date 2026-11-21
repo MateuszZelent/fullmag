@@ -76,17 +76,17 @@ export function resolveViewport3DGlobalVectorAllocation(
   cap: number,
 ): ReadonlyMap<string, Viewport3DVectorBudgetAllocation> {
   const normalized = targets
-    .map((target) => ({
-      available: Math.max(0, Math.floor(Number.isFinite(target.available) ? target.available : 0)),
-      priority: Number.isFinite(target.priority) ? target.priority ?? 0 : 0,
-      rawRequested: Math.max(0, Math.floor(Number.isFinite(target.requested) ? target.requested : 0)),
-      requested: Math.max(0, Math.floor(Number.isFinite(target.requested) ? target.requested : 0)),
-      targetId: target.targetId,
-    }))
-    .map((target) => ({
-      ...target,
-      requested: Math.min(target.requested, target.available),
-    }))
+    .map((target) => {
+      const available = Math.max(0, Math.floor(Number.isFinite(target.available) ? target.available : 0));
+      const rawRequested = Math.max(0, Math.floor(Number.isFinite(target.requested) ? target.requested : 0));
+      return {
+        available,
+        priority: Number.isFinite(target.priority) ? target.priority ?? 0 : 0,
+        rawRequested,
+        requested: Math.min(rawRequested, available),
+        targetId: target.targetId,
+      };
+    })
     .toSorted((left, right) => right.priority - left.priority || left.targetId.localeCompare(right.targetId));
   let remaining = Math.max(0, Math.floor(Number.isFinite(cap) ? cap : 0));
   const effective = new Map<string, number>(normalized.map((target) => [target.targetId, 0]));

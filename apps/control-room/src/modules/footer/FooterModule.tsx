@@ -47,12 +47,8 @@ import {
 } from "./footerUiStore";
 import { CommandAuditTable } from "./CommandAuditTable";
 import { FooterDiagnostics } from "./FooterDiagnostics";
-import {
-  FooterTelemetry,
-  footerTelemetryStatusEquals,
-  resolveFooterAntennaStage,
-  selectFooterTelemetryStatus,
-} from "./FooterTelemetry";
+import { FooterTelemetry } from "./FooterTelemetry";
+import { footerTelemetryStatusEquals, resolveFooterAntennaStage, selectFooterTelemetryStatus } from "./FooterTelemetry.model";
 import { DiagnosticRecorderFooterPanel } from "./DiagnosticRecorderFooterPanel";
 import { ProblemsPanel } from "./OperationsProblemsPanel";
 import { RunProgressPanel } from "./RunProgressPanel";
@@ -111,7 +107,6 @@ function FooterModuleContent({ kernel }: ModuleProps) {
     kernel.layout.openBottomPanel("telemetry");
   }, [kernel.layout, runningAntennaIdentity, sessionKey]);
 
-
   useEffect(() => {
     return kernel.bus.subscribe("footer:tab-requested", ({ tab }) => {
       kernel.layout.setBottomPanelTab(tab);
@@ -122,7 +117,6 @@ function FooterModuleContent({ kernel }: ModuleProps) {
     const selected = tabList.current?.querySelector<HTMLElement>('[aria-selected="true"]');
     if (selected && tabList.current) revealFooterTab(tabList.current, selected);
   }, [activeTab]);
-
 
   return (
     <Tabs

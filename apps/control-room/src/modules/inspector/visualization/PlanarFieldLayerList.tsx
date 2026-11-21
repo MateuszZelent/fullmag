@@ -3,23 +3,10 @@
 import { useRef, useState, type DragEvent, type KeyboardEvent } from "react";
 import { Eye, EyeOff, GripVertical, MoveUpRight, Plus, Square, Trash2 } from "lucide-react";
 
-import { isDirectionColormap } from "@/shared/visualization/directionColor";
 import { Button } from "@/shared/ui/Button";
 
-import {
-  effectivePass,
-  moveFieldLayer,
-  patchFieldLayer,
-  PLANAR_FIELD_LAYERS_MAX,
-  removeFieldLayer,
-  layerPassFlag,
-  layerPassPatch,
-  layerVisible,
-  type PlanarFieldLayer,
-  type PlanarFieldLayerTarget,
-  type PlanarLayerPass,
-  type PlanarLayerState,
-} from "./planarFieldLayers";
+import { effectivePass, moveFieldLayer, patchFieldLayer, PLANAR_FIELD_LAYERS_MAX, removeFieldLayer, layerPassFlag, layerPassPatch, layerVisible, type PlanarFieldLayer, type PlanarFieldLayerTarget, type PlanarLayerPass, type PlanarLayerState } from "./planarFieldLayers";
+import { planarLayerRowLabel } from "./PlanarFieldLayerList.model";
 
 export interface PlanarFieldLayerCandidate {
   /** Layer id the target would own (`all`, `airbox`, `object:<id>`). */
@@ -30,15 +17,6 @@ export interface PlanarFieldLayerCandidate {
 
 export const PLANAR_FIELD_LAYERS_FULL_REASON =
   `The 2D view holds at most ${PLANAR_FIELD_LAYERS_MAX} field layers. Remove a layer to add another.`;
-
-/** Short component name of a layer row; direction colouring names the direction. */
-export function planarLayerComponentLabel(layer: PlanarFieldLayer): string {
-  return isDirectionColormap(layer.colormap) ? "direction" : String(layer.component).replaceAll("_", " ");
-}
-
-export function planarLayerRowLabel(layer: PlanarFieldLayer, targetLabel: string): string {
-  return `${targetLabel} · ${layer.quantity_id} · ${planarLayerComponentLabel(layer)}`;
-}
 
 /**
  * Ordered field layers of the 2D view (spec 23 §5). The first row is drawn on

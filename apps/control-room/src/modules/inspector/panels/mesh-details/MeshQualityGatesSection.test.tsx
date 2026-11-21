@@ -1,10 +1,8 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
-import {
-  MeshQualityGatesSection,
-  resolveMixedCertificateQualityPresentation,
-} from "./MeshQualityGatesSection";
+import { MeshQualityGatesSection } from "./MeshQualityGatesSection";
+import { resolveMixedCertificateQualityPresentation } from "./MeshQualityGatesSection.model";
 
 describe("MeshQualityGatesSection mixed certificate evidence", () => {
   it("renders complete revision-bound family quality and positive-Jacobian gates", () => {

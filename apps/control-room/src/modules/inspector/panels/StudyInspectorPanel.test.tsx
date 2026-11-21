@@ -18,19 +18,8 @@ vi.mock("@radix-ui/react-dialog", async (importOriginal) => {
   };
 });
 
-import {
-  CommandDetailDialog,
-  deriveK0ModalExecutionReadiness,
-  ImportStateDialog,
-  RestoreCheckpointDialog,
-  StudyBoundarySection,
-  StudyCommandButton,
-  StudyRuntimeSection,
-  StudySelectedStageSection,
-  applyStudyDraftsWithPartialFailure,
-  studyInspectorPanelReducer,
-  studyInspectorRuntimeStatusEquals,
-} from "./StudyInspectorPanel";
+import { CommandDetailDialog, ImportStateDialog, RestoreCheckpointDialog, StudyBoundarySection, StudyCommandButton, StudyRuntimeSection, StudySelectedStageSection, studyInspectorPanelReducer, studyInspectorRuntimeStatusEquals } from "./StudyInspectorPanel";
+import { deriveK0ModalExecutionReadiness, applyStudyDraftsWithPartialFailure } from "./StudyInspectorPanel.model";
 import {
   StudyPipelineSection,
   StudySolverPolicyFields,

@@ -1,0 +1,342 @@
+import { formatCount } from "../MeshResourceView";
+
+interface MixedTopologyPresentationInput {
+  buildReport: unknown;
+  manifest: unknown;
+  rejectionEvidence?: unknown;
+}
+
+interface MixedTopologyOrphanEntity {
+  dimension: number;
+  tag: number;
+}
+
+export interface MixedTopologyPresentation {
+  certificateFingerprint: string;
+  certificateReason: string;
+  certificateStatus: string;
+  elementCounts: readonly { family: string; count: unknown }[];
+  facetCounts: readonly { familyAndRole: string; count: unknown }[];
+  fallback: string;
+  gmshVersion: string;
+  hasSingleLayer: boolean;
+  layers: number | null;
+  nodePlanes: number | null;
+  orphanEntities: readonly MixedTopologyOrphanEntity[];
+  requestedExactLayers: boolean | null;
+  requestedLayers: number | null;
+  requestedTopology: string;
+  rejection: {
+    alternative: string;
+    category: string;
+    fallback: string;
+    missingCapabilities: readonly string[];
+    reason: string;
+    requestedExecution: string;
+    resolvedExecution: string;
+  } | null;
+  resolvedExactLayers: boolean | null;
+  resolvedLayers: number | null;
+  regionFields: readonly { label: string; value: string }[];
+  resolvedTopology: string;
+  topologySchemaVersion: string;
+  transitionPolicy: string;
+  topologyIntegrity: "accepted" | "rejected";
+  visible: boolean;
+}
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
+function firstRecord(...values: unknown[]): Record<string, unknown> | null {
+  for (const value of values) {
+    const record = asRecord(value);
+    if (record) return record;
+  }
+  return null;
+}
+
+function firstString(...values: unknown[]): string {
+  for (const value of values) {
+    if (typeof value === "string" && value.trim()) return value;
+  }
+  return "not published";
+}
+
+function firstPositiveInteger(...values: unknown[]): number | null {
+  for (const value of values) {
+    if (typeof value === "number" && Number.isInteger(value) && value > 0) {
+      return value;
+    }
+  }
+  return null;
+}
+
+function firstBoolean(...values: unknown[]): boolean | null {
+  for (const value of values) {
+    if (typeof value === "boolean") return value;
+  }
+  return null;
+}
+
+function executionSummary(value: unknown, missing: string): string {
+  const record = asRecord(value);
+  if (!record) return missing;
+  const fields = ["backend", "device", "precision", "mode", "study"]
+    .map((key) => record[key])
+    .filter((entry): entry is string => typeof entry === "string" && entry.trim().length > 0);
+  return fields.length > 0 ? fields.join(" / ") : missing;
+}
+
+function flattenedCounts(
+  record: Record<string, unknown> | null,
+): readonly { key: string; count: unknown }[] {
+  const rows: { key: string; count: unknown }[] = [];
+  for (const [key, value] of Object.entries(record ?? {})) {
+    if (typeof value === "number") {
+      rows.push({ count: value, key });
+      continue;
+    }
+    for (const [nestedKey, count] of Object.entries(asRecord(value) ?? {})) {
+      if (typeof count === "number") {
+        rows.push({ count, key: `${key}:${nestedKey}` });
+      }
+    }
+  }
+  return rows;
+}
+
+function typedOrphanEntities(value: unknown): {
+  entities: MixedTopologyOrphanEntity[];
+  malformed: boolean;
+} {
+  if (value === undefined) return { entities: [], malformed: false };
+  if (!Array.isArray(value)) return { entities: [], malformed: true };
+  const entities: MixedTopologyOrphanEntity[] = [];
+  for (const candidate of value) {
+    const record = asRecord(candidate);
+    const dimension = record?.dimension;
+    const tag = record?.tag;
+    if (
+      typeof dimension !== "number" ||
+      !Number.isInteger(dimension) ||
+      dimension < 0 ||
+      dimension > 3 ||
+      typeof tag !== "number" ||
+      !Number.isInteger(tag) ||
+      tag <= 0
+    ) {
+      return { entities, malformed: true };
+    }
+    entities.push({ dimension, tag });
+  }
+  return { entities, malformed: false };
+}
+
+export function resolveMixedTopologyPresentation({
+  buildReport,
+  manifest,
+  rejectionEvidence,
+}: MixedTopologyPresentationInput): MixedTopologyPresentation {
+  const report = asRecord(buildReport);
+  const manifestRecord = asRecord(manifest);
+  const provenance = firstRecord(
+    report?.mixed_topology_provenance,
+    report?.topology_provenance,
+    manifestRecord?.mixed_topology_provenance,
+    manifestRecord?.topology_provenance,
+  );
+  const requestedPolicy = firstRecord(
+    report?.requested_layered_policy,
+    report?.requested_policy,
+    manifestRecord?.requested_layered_policy,
+    manifestRecord?.requested_policy,
+  );
+  const resolvedPolicy = firstRecord(
+    report?.resolved_layered_policy,
+    report?.resolved_policy,
+    manifestRecord?.resolved_layered_policy,
+    manifestRecord?.resolved_policy,
+  );
+  const certificate = firstRecord(
+    rejectionEvidence,
+    report?.mixed_layer_topology_rejection,
+    report?.mixed_layer_topology_certificate_v2,
+    report?.mixed_layer_topology_certificate,
+    report?.mixed_layer_topology_certificate_summary,
+    manifestRecord?.mixed_layer_topology_certificate_v2,
+    manifestRecord?.mixed_layer_topology_certificate,
+    manifestRecord?.mixed_layer_topology_certificate_summary,
+  );
+  const regionFields = Array.isArray(certificate?.magnetic_regions)
+    ? certificate.magnetic_regions.flatMap((value) => {
+        const region = asRecord(value);
+        if (!region) return [];
+        const objectId = firstString(region.object_id);
+        const sweep = asRecord(region.exact_sweep);
+        const families = flattenedCounts(asRecord(region.cell_family_counts))
+          .map(({ key, count }) => `${key}: ${formatCount(count)}`).join(", ");
+        return [
+          { label: `Body ${objectId}`, value: `body ${firstPositiveInteger(region.body_marker) ?? "not published"}, material ${firstPositiveInteger(region.material_marker) ?? "not published"}` },
+          { label: `${objectId} cells`, value: families || "not published" },
+          { label: `${objectId} exact layers`, value: sweep
+            ? `${firstPositiveInteger(sweep.requested_layer_count) ?? "not published"} requested / ${firstPositiveInteger(sweep.realized_layer_count) ?? "not published"} realized; ${firstPositiveInteger(sweep.actual_node_plane_count) ?? "not published"} node planes`
+            : "not swept" },
+        ];
+      })
+    : [];
+  const rejectionRecord = asRecord(rejectionEvidence);
+  const missingCapabilities = Array.isArray(rejectionRecord?.missing_capabilities)
+    ? rejectionRecord.missing_capabilities.filter(
+        (value): value is string => typeof value === "string" && value.trim().length > 0,
+      )
+    : [];
+  const counts = firstRecord(
+    report?.element_counts_by_type,
+    manifestRecord?.element_counts_by_type,
+  );
+  const facetCounts = firstRecord(
+    report?.facet_counts_by_type_and_role,
+    manifestRecord?.facet_counts_by_type_and_role,
+  );
+  const publishedFallbacks = Array.isArray(report?.fallbacks_triggered)
+    ? report.fallbacks_triggered
+    : Array.isArray(manifestRecord?.fallbacks_triggered)
+      ? manifestRecord.fallbacks_triggered
+      : null;
+  const fallbacks = publishedFallbacks
+    ? publishedFallbacks.filter(
+        (value): value is string => typeof value === "string" && value.trim().length > 0,
+      )
+    : [];
+  const requestedLayers = firstPositiveInteger(
+    requestedPolicy?.layers,
+    requestedPolicy?.layer_count,
+    requestedPolicy?.num_layers,
+    requestedPolicy?.through_thickness_elements,
+    certificate?.requested_layer_count,
+  );
+  const resolvedLayers = firstPositiveInteger(
+    resolvedPolicy?.layers,
+    resolvedPolicy?.layer_count,
+    resolvedPolicy?.num_layers,
+    resolvedPolicy?.through_thickness_elements,
+    certificate?.realized_layer_count,
+  );
+  const publishedNodePlanes = firstPositiveInteger(
+    certificate?.actual_node_plane_count,
+    certificate?.node_plane_count,
+    Array.isArray(certificate?.magnetic_plane_coordinates_m)
+      ? certificate.magnetic_plane_coordinates_m.length
+      : undefined,
+  );
+  const effectiveLayers = resolvedLayers ?? requestedLayers;
+  const nodePlanes =
+    publishedNodePlanes ??
+    (effectiveLayers === null ? null : effectiveLayers + 1);
+  const publishedCertificateStatus = firstString(
+    certificate?.certificate_status,
+    certificate?.status,
+    certificate?.accepted === true ? "accepted" : undefined,
+    certificate?.accepted === false ? "rejected" : undefined,
+  );
+  const certificateStatus = publishedCertificateStatus === "accepted" || publishedCertificateStatus === "rejected"
+    ? publishedCertificateStatus
+    : "unavailable";
+  const requestedTopology = firstString(
+    provenance?.requested_topology,
+    requestedPolicy?.topology,
+  );
+  const resolvedTopology = firstString(
+    provenance?.resolved_topology,
+    resolvedPolicy?.topology,
+  );
+  const orphanEvidence = typedOrphanEntities(
+    report?.orphan_entities ?? manifestRecord?.orphan_entities,
+  );
+  const topologyIntegrity =
+    orphanEvidence.malformed || orphanEvidence.entities.length > 0
+      ? "rejected"
+      : "accepted";
+
+  return {
+    certificateFingerprint: firstString(
+      certificate?.topology_fingerprint,
+      provenance?.accepted_certificate_fingerprint,
+    ),
+    certificateReason: firstString(
+      certificate?.rejection_reason,
+      certificate?.reason,
+    ),
+    certificateStatus,
+    elementCounts: flattenedCounts(counts).map(({ key, count }) => ({
+      count,
+      family: key,
+    })),
+    facetCounts: flattenedCounts(facetCounts).map(({ key, count }) => ({
+      count,
+      familyAndRole: key,
+    })),
+    fallback: publishedFallbacks === null
+      ? "not published"
+      : fallbacks.length > 0
+        ? fallbacks.join(", ")
+        : "none (strict)",
+    gmshVersion: firstString(report?.gmsh_version, manifestRecord?.gmsh_version),
+    hasSingleLayer: requestedLayers === 1 || (
+      Array.isArray(certificate?.magnetic_regions) && certificate.magnetic_regions.some(
+        (value) => firstPositiveInteger(asRecord(asRecord(value)?.exact_sweep)?.requested_layer_count) === 1,
+      )
+    ),
+    layers: requestedLayers,
+    nodePlanes,
+    orphanEntities: orphanEvidence.entities,
+    requestedExactLayers: firstBoolean(requestedPolicy?.exact_layer_count),
+    requestedLayers,
+    requestedTopology,
+    rejection: rejectionRecord
+      ? {
+          alternative: firstString(rejectionRecord.free_tetrahedral_alternative),
+          category: firstString(rejectionRecord.rejection_category),
+          fallback: firstString(rejectionRecord.fallback),
+          missingCapabilities,
+          reason: firstString(rejectionRecord.rejection_reason),
+          requestedExecution: executionSummary(
+            rejectionRecord.requested_execution,
+            "not published",
+          ),
+          resolvedExecution: executionSummary(
+            rejectionRecord.resolved_execution,
+            "not resolved",
+          ),
+        }
+      : null,
+    resolvedExactLayers: firstBoolean(resolvedPolicy?.exact_layer_count),
+    resolvedLayers,
+    regionFields,
+    resolvedTopology,
+    topologySchemaVersion: String(
+      report?.topology_schema_version ??
+        manifestRecord?.topology_schema_version ??
+        "not published",
+    ),
+    transitionPolicy: firstString(
+      requestedPolicy?.transition_policy,
+      resolvedPolicy?.transition_policy,
+    ),
+    topologyIntegrity,
+    visible: Boolean(
+      provenance ||
+        certificate ||
+        counts ||
+        facetCounts ||
+        requestedPolicy ||
+        resolvedPolicy ||
+        orphanEvidence.malformed ||
+        orphanEvidence.entities.length > 0,
+    ),
+  };
+}

@@ -295,6 +295,10 @@ fn adaptive_attempt_reason_name(reason: AdaptiveAttemptReason) -> &'static str {
 enum ArtifactJob {
     TerminalHistory(serde_json::Value),
     ScalarRow(StepStats),
+    #[cfg_attr(
+        not(any(feature = "fem-native", test)),
+        expect(dead_code, reason = "native FEM stage autosave records are produced by the fem-native lane")
+    )]
     StageAutosaveScalarRow(StepStats),
     FieldSnapshot {
         snapshot: FieldSnapshot,
@@ -367,6 +371,10 @@ pub(crate) struct ArtifactPipelineSender {
     queue_depth: Arc<AtomicUsize>,
     diagnostics: Arc<ArtifactPipelineDiagnosticsState>,
     physics_execution_context: Option<crate::physics_graph_execution::PhysicsGraphExecutionContext>,
+    #[cfg_attr(
+        not(any(feature = "fem-native", test)),
+        expect(dead_code, reason = "native FEM reads the stage autosave table schedule")
+    )]
     has_physical_time_stage_autosave_table: bool,
     #[cfg(any(feature = "cuda", feature = "fem-native"))]
     accepted_step_fields: Arc<Vec<(String, u64)>>,
@@ -375,6 +383,10 @@ pub(crate) struct ArtifactPipelineSender {
 }
 
 impl ArtifactPipelineSender {
+    #[cfg_attr(
+        not(any(feature = "cuda", feature = "fem-native", test)),
+        expect(dead_code, reason = "CUDA and native FEM consumers inspect accepted-step autosave schedules")
+    )]
     pub(crate) fn has_accepted_step_autosave_schedules(&self) -> bool {
         let has_field_schedule = {
             #[cfg(any(feature = "cuda", feature = "fem-native"))]
@@ -396,6 +408,10 @@ impl ArtifactPipelineSender {
         }
     }
 
+    #[cfg_attr(
+        not(any(feature = "fem-native", test)),
+        expect(dead_code, reason = "native FEM checks for a physical-time stage autosave table")
+    )]
     pub(crate) fn has_physical_time_stage_autosave_table(&self) -> bool {
         self.has_physical_time_stage_autosave_table
     }
@@ -793,6 +809,7 @@ impl ArtifactPipeline {
         )
     }
 
+    #[cfg(test)]
     fn start_with_stage_autosave_roots(
         output_dir: PathBuf,
         autosave_root: PathBuf,
@@ -1330,6 +1347,10 @@ impl ArtifactRecorder {
         }
     }
 
+    #[cfg_attr(
+        not(any(feature = "cuda", feature = "fem-gpu", test)),
+        expect(dead_code, reason = "CUDA and FEM GPU accepted-step autosave paths use table cadence")
+    )]
     pub(crate) fn accepted_step_table_due(&self, accepted_step: u64) -> bool {
         #[cfg(feature = "fem-gpu")]
         {
@@ -1397,6 +1418,10 @@ impl ArtifactRecorder {
     }
 
     /// Enqueue a scalar sample for the StageAutosave table without writing legacy traces.
+    #[cfg_attr(
+        not(any(feature = "fem-native", test)),
+        expect(dead_code, reason = "native FEM stage autosave publishes this scalar row")
+    )]
     pub(crate) fn record_stage_autosave_scalar(
         &mut self,
         stats: &StepStats,

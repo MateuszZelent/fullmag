@@ -5,13 +5,7 @@ import type {
   SolverProfileResource,
 } from "@/kernel/api/apiTypes";
 
-import {
-  buildCpuTelemetryPanelModel,
-  buildSolverProfilePanelModel,
-  buildSolverTracePanelModel,
-  buildTimestepQualificationPanelModel,
-  serializeSolverProfileRows,
-} from "./FooterDiagnostics";
+import { buildCpuTelemetryPanelModel, buildSolverProfilePanelModel, buildSolverTracePanelModel, buildTimestepQualificationPanelModel, serializeSolverProfileRows } from "./FooterDiagnostics.model";
 
 const PROFILE_SAMPLE_TIME_MS = new Date(2026, 0, 2, 3, 4, 5, 123).getTime();
 type SolverTraceResource = NonNullable<

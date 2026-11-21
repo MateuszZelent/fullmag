@@ -171,6 +171,21 @@ describe("chart export", () => {
     vi.unstubAllGlobals();
   });
 
+  it("revokes the allocated object URL when initiating a download fails", async () => {
+    vi.stubGlobal("document", {
+      createElement: () => ({ click: () => { throw new Error("download blocked"); } }),
+    });
+    const revoke = vi.fn();
+    vi.stubGlobal("URL", { createObjectURL: () => "blob:blocked-chart", revokeObjectURL: revoke });
+    try {
+      expect(downloadChartBlob({ content: "x", filename: "x.csv", mimeType: "text/csv" })).toBe(false);
+      await new Promise<void>((resolve) => queueMicrotask(resolve));
+      expect(revoke).toHaveBeenCalledExactlyOnceWith("blob:blocked-chart");
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it("reports a failed download when the browser cannot create a blob URL", () => {
     vi.stubGlobal("URL", {
       createObjectURL: vi.fn(() => {

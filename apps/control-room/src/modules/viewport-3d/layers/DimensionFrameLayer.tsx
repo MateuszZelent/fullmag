@@ -2,15 +2,8 @@
 
 import { Line } from "@react-three/drei";
 import { useFrame } from "@react-three/fiber";
-import { useCallback, useEffect, useMemo, useRef, useState, memo } from "react";
-import {
-  BufferAttribute,
-  BufferGeometry,
-  LessEqualDepth,
-  Vector3,
-  type Camera,
-  type Sprite,
-} from "three";
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, memo } from "react";
+import { LessEqualDepth, Vector3, type BufferGeometry, type Camera, type LineBasicMaterial, type Sprite } from "three";
 
 import type { Viewport3DResourceTracker } from "../viewport3dDiagnostics";
 import { useBatchedInvalidate } from "../viewport3dBatchedInvalidate";
@@ -21,12 +14,8 @@ import type {
 } from "../viewport3dStore";
 import type { Viewport3DColors } from "../viewport3dTypes";
 import { VIEWPORT_3D_HUD_LAYER } from "../viewport3dHudLayer";
-import { hudAxisColor, resolveHudColors } from "../orientation/hudColors";
-import {
-  useHudTextTexture,
-  type HudTextRun,
-  type HudTextStyle,
-} from "../orientation/hudText";
+
+import { useHudTextTexture } from "../orientation/hudText";
 import {
   dimensionFrameBoundsFromProjectedCorners,
   resolveDimensionFrameLabelVisibility,
@@ -34,21 +23,21 @@ import {
   type DimensionFramePixelRect,
   type DimensionFrameProjectedPoint,
 } from "./dimensionFrameLabelLayout";
-import {
-  buildDimensionFrameModel,
-  type DimensionFrameAnnotation,
-  type DimensionFrameAxis,
-  type DimensionFrameCameraOrientation,
-  type DimensionFrameDensity,
-  type DimensionFrameLabel,
-  type DimensionFrameMode,
-  type DimensionFrameModel,
-  type DimensionFrameOriginMode,
-  type DimensionFrameUnitMode,
-  resolveDimensionFrameOrientation,
-  resolveDimensionFrameOrientationWithHysteresis,
-} from "./dimensionFrameModel";
+import { buildDimensionFrameModel, type DimensionFrameAnnotation, type DimensionFrameAxis, type DimensionFrameCameraOrientation, type DimensionFrameDensity, type DimensionFrameLabel, type DimensionFrameMode, type DimensionFrameModel, type DimensionFrameOriginMode, type DimensionFrameUnitMode, resolveDimensionFrameOrientation, resolveDimensionFrameOrientationWithHysteresis } from "./dimensionFrameModel";
 import type { Viewport3DMaterialProfile } from "./viewport3DMaterialProfile";
+import {
+  createDimensionFrameLineGeometry,
+  createDimensionFrameOrientationStore,
+  DIMENSION_FRAME_TICK_DIRECTION_ATTRIBUTE,
+  DIMENSION_FRAME_TICK_ENDPOINT_ATTRIBUTE,
+  DIMENSION_FRAME_TICK_START_ATTRIBUTE,
+  dimensionFrameLabelRuns,
+  releaseDimensionFrameGeometry,
+  resolveDimensionFrameLayerColors,
+  tickThinningForSpacing,
+  trackDimensionFrameGeometry,
+  type DimensionFrameLayerColors,
+} from "./DimensionFrameLayer.model";
 
 interface DimensionFrameLayerProps {
   annotation?: DimensionFrameAnnotation;
@@ -69,16 +58,6 @@ interface DimensionFrameLayerProps {
   unitMode: DimensionFrameUnitMode;
 }
 
-export interface DimensionFrameLayerColors {
-  axis: Record<DimensionFrameAxis, string>;
-  axisLine: string;
-  extent: string;
-  grid: string;
-  halo: string;
-  label: string;
-  tick: string;
-}
-
 type TickSpacingProbes = Partial<
   Record<DimensionFrameAxis, [DimensionFrameLabel, DimensionFrameLabel]>
 >;
@@ -91,10 +70,6 @@ interface DimensionFrameCameraFrameState {
 }
 
 const DIMENSION_FRAME_RENDER_ORDER = 4;
-const TICK_LABEL_FONT_PX = 11;
-const TITLE_LABEL_FONT_PX = 12;
-/** Minimum on-screen spacing between neighbouring tick numbers. */
-const TICK_LABEL_MIN_SPACING_PX = 34;
 /** Below this projected length the outward direction is seen end-on. */
 const DEGENERATE_OUTWARD = 0.2;
 const ANCHOR_THRESHOLD = 0.35;
@@ -135,10 +110,16 @@ export const DimensionFrameLayer = memo(function DimensionFrameLayer({
     () => resolveDimensionFrameLayerColors(colors),
     [colors],
   );
-  const [cameraOrientation, setCameraOrientation] = useState(() =>
-    resolveDimensionFrameOrientation(bounds, cameraState),
+  const [orientationStore] = useState(() =>
+    createDimensionFrameOrientationStore(
+      resolveDimensionFrameOrientation(bounds, cameraState),
+    ),
   );
-  const cameraOrientationRef = useRef<DimensionFrameCameraOrientation | null>(null);
+  const cameraOrientation = useSyncExternalStore(
+    orientationStore.subscribe,
+    orientationStore.getSnapshot,
+    orientationStore.getSnapshot,
+  );
   const cameraFrameStateRef = useRef<DimensionFrameCameraFrameState | null>(null);
 
   useFrame(({ camera }) => {
@@ -160,16 +141,14 @@ export const DimensionFrameLayer = memo(function DimensionFrameLayer({
     frameState.cameraState.up[1] = frameState.up.y;
     frameState.cameraState.up[2] = frameState.up.z;
 
-    const previous = cameraOrientationRef.current ?? cameraOrientation;
+    const previous = orientationStore.getSnapshot();
     const next = resolveDimensionFrameOrientationWithHysteresis(
       bounds,
       frameState.cameraState,
       previous,
     );
-    if (!cameraOrientationRef.current) cameraOrientationRef.current = previous;
     if (!sameDimensionFrameOrientation(previous, next)) {
-      cameraOrientationRef.current = next;
-      setCameraOrientation(next);
+      orientationStore.setSnapshot(next);
       invalidate();
     }
   });
@@ -214,8 +193,8 @@ export const DimensionFrameLayer = memo(function DimensionFrameLayer({
     tracker,
     majorLinesVisible ? model.majorLines : null,
   );
-  const majorTickGeometry = useTrackedLineGeometry(tracker, model.majorTickLines);
-  const minorTickGeometry = useTrackedLineGeometry(tracker, model.minorTickLines);
+  const majorTickGeometry = useTrackedLineGeometry(tracker, model.majorTickLines, true);
+  const minorTickGeometry = useTrackedLineGeometry(tracker, model.minorTickLines, true);
   const extentGeometry = useTrackedLineGeometry(tracker, model.extentLines);
   const resolvedGridOpacity = clampGridContrast(gridOpacity);
 
@@ -295,6 +274,14 @@ export const DimensionFrameLayer = memo(function DimensionFrameLayer({
   );
 });
 
+type DimensionFrameTickShader = Parameters<LineBasicMaterial["onBeforeCompile"]>[0];
+
+interface DimensionFrameTickShaderState {
+  isOrthographic: number;
+  shader: DimensionFrameTickShader | null;
+  viewportHeight: number;
+}
+
 function FrameLines({
   color,
   geometry,
@@ -308,6 +295,76 @@ function FrameLines({
   renderOrder: number;
   screenLengthPx?: number;
 }) {
+  const shaderStateRef = useRef<DimensionFrameTickShaderState>({
+    isOrthographic: 1,
+    shader: null,
+    viewportHeight: 1,
+  });
+
+  useFrame(({ camera, size }) => {
+    if (screenLengthPx === undefined || size.height <= 0) return;
+    const state = shaderStateRef.current;
+    state.viewportHeight = size.height;
+    state.isOrthographic =
+      "isOrthographicCamera" in camera && camera.isOrthographicCamera ? 1 : 0;
+    const shader = state.shader;
+    if (!shader) return;
+    const viewportHeight = shader.uniforms.dimensionFrameViewportHeight as
+      | { value: number }
+      | undefined;
+    const isOrthographic = shader.uniforms.dimensionFrameIsOrthographic as
+      | { value: number }
+      | undefined;
+    if (viewportHeight) viewportHeight.value = state.viewportHeight;
+    if (isOrthographic) isOrthographic.value = state.isOrthographic;
+  });
+
+  const onBeforeCompile = useCallback(
+    (shader: DimensionFrameTickShader) => {
+      if (screenLengthPx !== undefined) {
+        const state = shaderStateRef.current;
+        shader.uniforms.dimensionFrameViewportHeight = { value: state.viewportHeight };
+        shader.uniforms.dimensionFrameIsOrthographic = { value: state.isOrthographic };
+        shader.uniforms.dimensionFramePixelLength = { value: screenLengthPx };
+        state.shader = shader;
+        shader.vertexShader = shader.vertexShader.replace(
+          "#include <common>",
+          `#include <common>
+attribute vec3 ${DIMENSION_FRAME_TICK_START_ATTRIBUTE};
+attribute vec3 ${DIMENSION_FRAME_TICK_DIRECTION_ATTRIBUTE};
+attribute float ${DIMENSION_FRAME_TICK_ENDPOINT_ATTRIBUTE};
+uniform float dimensionFrameViewportHeight;
+uniform float dimensionFrameIsOrthographic;
+uniform float dimensionFramePixelLength;`,
+        );
+        shader.vertexShader = shader.vertexShader.replace(
+          "#include <begin_vertex>",
+          `vec3 transformed = vec3(position);
+vec4 dimensionFrameStartView = modelViewMatrix * vec4(${DIMENSION_FRAME_TICK_START_ATTRIBUTE}, 1.0);
+float dimensionFrameDepth = max(-dimensionFrameStartView.z, 1e-12);
+float dimensionFrameProjectionScale = max(projectionMatrix[1][1] * dimensionFrameViewportHeight, 1e-12);
+float dimensionFrameWorldPerPixel = dimensionFrameIsOrthographic > 0.5
+  ? 2.0 / dimensionFrameProjectionScale
+  : 2.0 * dimensionFrameDepth / dimensionFrameProjectionScale;
+transformed = ${DIMENSION_FRAME_TICK_START_ATTRIBUTE} + ${DIMENSION_FRAME_TICK_DIRECTION_ATTRIBUTE} * dimensionFrameWorldPerPixel * dimensionFramePixelLength * ${DIMENSION_FRAME_TICK_ENDPOINT_ATTRIBUTE};`,
+        );
+      }
+      // Bias only projected depth; measured coordinates and tick values stay unchanged.
+      shader.vertexShader = shader.vertexShader.replace(
+        "#include <project_vertex>",
+        "#include <project_vertex>\ngl_Position.z -= 0.000002 * gl_Position.w;",
+      );
+    },
+    [screenLengthPx],
+  );
+  const customProgramCacheKey = useCallback(
+    () =>
+      screenLengthPx === undefined
+        ? "dimension-frame-depth-bias-v1"
+        : `dimension-frame-screen-tick-gpu-v1-${screenLengthPx}`,
+    [screenLengthPx],
+  );
+
   if (!geometry) return null;
   return (
     <lineSegments
@@ -323,110 +380,11 @@ function FrameLines({
         opacity={opacity}
         toneMapped={false}
         transparent
-        onBeforeCompile={(shader) => {
-          // Bias only projected depth; measured coordinates and tick values stay unchanged.
-          shader.vertexShader = shader.vertexShader.replace(
-            "#include <project_vertex>",
-            "#include <project_vertex>\ngl_Position.z -= 0.000002 * gl_Position.w;",
-          );
-        }}
-        customProgramCacheKey={() => "dimension-frame-depth-bias-v1"}
+        onBeforeCompile={onBeforeCompile}
+        customProgramCacheKey={customProgramCacheKey}
       />
-      {screenLengthPx === undefined ? null : (
-        <ScreenBoundTickLengths geometry={geometry} pixelLength={screenLengthPx} />
-      )}
     </lineSegments>
   );
-}
-
-/** Updates only tick endpoints, keeping their length stable in CSS pixels. */
-function ScreenBoundTickLengths({
-  geometry,
-  pixelLength,
-}: {
-  geometry: BufferGeometry;
-  pixelLength: number;
-}) {
-  const basePositions = useMemo(() => {
-    const attribute = geometry.getAttribute("position");
-    return new Float32Array(attribute.array as Float32Array);
-  }, [geometry]);
-  const frameStateRef = useRef<ScreenBoundTickFrameState | null>(null);
-
-  useFrame(({ camera, size }) => {
-    const frameState =
-      frameStateRef.current ?? createScreenBoundTickFrameState();
-    frameStateRef.current = frameState;
-    camera.updateMatrixWorld();
-    let changed =
-      !frameState.hasPreviousCameraMatrices || frameState.lastBasePositions !== basePositions;
-    frameState.lastBasePositions = basePositions;
-    const cameraMatrix = camera.matrixWorld.elements;
-    const projectionMatrix = camera.projectionMatrix.elements;
-    for (let index = 0; index < 16; index += 1) {
-      if (
-        frameState.previousCameraMatrices[index] !== cameraMatrix[index] ||
-        frameState.previousCameraMatrices[index + 16] !== projectionMatrix[index]
-      ) {
-        changed = true;
-      }
-      frameState.previousCameraMatrices[index] = cameraMatrix[index] ?? 0;
-      frameState.previousCameraMatrices[index + 16] = projectionMatrix[index] ?? 0;
-    }
-    if (frameState.previousCameraMatrices[32] !== size.height) changed = true;
-    frameState.previousCameraMatrices[32] = size.height;
-    frameState.hasPreviousCameraMatrices = true;
-    if (!changed || size.height <= 0) return;
-
-    camera.getWorldDirection(frameState.forward);
-    const positions = geometry.getAttribute("position");
-    for (let vertex = 0; vertex + 1 < positions.count; vertex += 2) {
-      const index = vertex * 3;
-      const endIndex = (vertex + 1) * 3;
-      const startX = basePositions[index] ?? 0;
-      const startY = basePositions[index + 1] ?? 0;
-      const startZ = basePositions[index + 2] ?? 0;
-      frameState.start.set(startX, startY, startZ);
-      frameState.direction
-        .set(
-          (basePositions[endIndex] ?? startX) - startX,
-          (basePositions[endIndex + 1] ?? startY) - startY,
-          (basePositions[endIndex + 2] ?? startZ) - startZ,
-        )
-        .normalize();
-      const worldLength =
-        worldPerPixelAt(camera, frameState.start, frameState.forward, size.height) * pixelLength;
-      positions.setXYZ(
-        vertex + 1,
-        startX + frameState.direction.x * worldLength,
-        startY + frameState.direction.y * worldLength,
-        startZ + frameState.direction.z * worldLength,
-      );
-    }
-    positions.needsUpdate = true;
-  });
-
-  return null;
-}
-
-interface ScreenBoundTickFrameState {
-  direction: Vector3;
-  forward: Vector3;
-  hasPreviousCameraMatrices: boolean;
-  lastBasePositions: Float32Array | null;
-  previousCameraMatrices: Float64Array;
-  start: Vector3;
-}
-
-function createScreenBoundTickFrameState(): ScreenBoundTickFrameState {
-  return {
-    direction: new Vector3(),
-    forward: new Vector3(),
-    hasPreviousCameraMatrices: false,
-    lastBasePositions: null,
-    previousCameraMatrices: new Float64Array(33),
-    start: new Vector3(),
-  };
 }
 
 function clampGridContrast(value: number): number {
@@ -448,10 +406,11 @@ function sameDimensionFrameOrientation(
 function useTrackedLineGeometry(
   tracker: Viewport3DResourceTracker,
   positions: Float32Array | null,
+  screenSpaceTicks = false,
 ): BufferGeometry | null {
   const geometry = useMemo(
-    () => (positions ? createDimensionFrameLineGeometry(positions) : null),
-    [positions],
+    () => (positions ? createDimensionFrameLineGeometry(positions, screenSpaceTicks) : null),
+    [positions, screenSpaceTicks],
   );
   useEffect(() => {
     if (!geometry) return undefined;
@@ -459,91 +418,6 @@ function useTrackedLineGeometry(
     return () => releaseDimensionFrameGeometry(tracker, geometry);
   }, [geometry, tracker]);
   return geometry;
-}
-
-export function createDimensionFrameLineGeometry(
-  positions: Float32Array,
-): BufferGeometry | null {
-  if (positions.length === 0) return null;
-  const geometry = new BufferGeometry();
-  geometry.setAttribute("position", new BufferAttribute(positions, 3));
-  geometry.computeBoundingSphere();
-  return geometry;
-}
-
-export function trackDimensionFrameGeometry(
-  tracker: Viewport3DResourceTracker,
-  geometry: BufferGeometry,
-): BufferGeometry {
-  return tracker.track("geometry", geometry);
-}
-
-export function releaseDimensionFrameGeometry(
-  tracker: Viewport3DResourceTracker,
-  geometry: BufferGeometry | null,
-): void {
-  tracker.release("geometry", geometry);
-}
-
-export function resolveDimensionFrameLayerColors(
-  colors: Viewport3DColors,
-): DimensionFrameLayerColors {
-  const hud = resolveHudColors(colors);
-  return {
-    axis: {
-      x: hudAxisColor(hud, "x"),
-      y: hudAxisColor(hud, "y"),
-      z: hudAxisColor(hud, "z"),
-    },
-    axisLine: hud.label,
-    extent: hud.label,
-    grid: hud.grid,
-    halo: hud.halo,
-    label: hud.label,
-    tick: hud.tick,
-  };
-}
-
-/** Text runs for one frame label: numbers, "x (nm)" titles and "Lx = 240 nm". */
-export function dimensionFrameLabelRuns(
-  label: DimensionFrameLabel,
-  colors: DimensionFrameLayerColors,
-): { runs: HudTextRun[]; style: HudTextStyle } {
-  const axisColor = colors.axis[label.axis];
-  if (label.kind === "tick") {
-    return {
-      runs: [{ color: colors.label, text: label.text, weight: 700 }],
-      style: { font: "mono", fontPx: TICK_LABEL_FONT_PX, halo: colors.halo },
-    };
-  }
-  if (label.kind === "title") {
-    return {
-      runs: [
-        { color: axisColor, italic: true, size: 1.15, text: label.text, weight: 800 },
-        { color: colors.label, text: ` (${label.unitLabel ?? ""})`, weight: 600 },
-      ],
-      style: { font: "ui", fontPx: TITLE_LABEL_FONT_PX, halo: colors.halo },
-    };
-  }
-  return {
-    runs: [
-      { color: axisColor, italic: true, text: "L", weight: 800 },
-      {
-        color: axisColor,
-        italic: true,
-        shiftPx: 3,
-        size: 0.72,
-        text: label.axis,
-        weight: 800,
-      },
-      {
-        color: colors.label,
-        text: ` = ${label.text} ${label.unitLabel ?? ""}`,
-        weight: 700,
-      },
-    ],
-    style: { font: "mono", fontPx: TICK_LABEL_FONT_PX, halo: colors.halo },
-  };
 }
 
 interface LabelFrameState {
@@ -820,25 +694,6 @@ function tickSpacingProbes(labels: DimensionFrameLabel[]): TickSpacingProbes {
     }
   }
   return probes;
-}
-
-/** Shows every 1st, 2nd or 5th number so neighbours stay legible. */
-export function tickThinningForSpacing(spacingPx: number, previous?: number): number {
-  if (previous === undefined) {
-    if (spacingPx >= TICK_LABEL_MIN_SPACING_PX) return 1;
-    if (spacingPx >= TICK_LABEL_MIN_SPACING_PX / 2) return 2;
-    return 5;
-  }
-  if (previous === 1) {
-    if (spacingPx < 15) return 5;
-    return spacingPx < TICK_LABEL_MIN_SPACING_PX - 4 ? 2 : 1;
-  }
-  if (previous === 2) {
-    if (spacingPx >= TICK_LABEL_MIN_SPACING_PX + 5) return 1;
-    return spacingPx < 15 ? 5 : 2;
-  }
-  if (spacingPx >= TICK_LABEL_MIN_SPACING_PX + 5) return 1;
-  return spacingPx >= TICK_LABEL_MIN_SPACING_PX / 2 + 3 ? 2 : 5;
 }
 
 const FRAME_AXES: readonly DimensionFrameAxis[] = ["x", "y", "z"];

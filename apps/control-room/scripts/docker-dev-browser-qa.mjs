@@ -562,9 +562,10 @@ const expectedAirboxDefaultFrame = (layout, planar) => {
   };
   const defaultSlice = planar?.default_slice;
   const plane = defaultSlice?.plane;
-  const positionFraction = defaultSlice?.position_fraction;
+  const positionFraction = defaultSlice?.position_fraction ?? Number.NaN;
   const operatorKind = defaultSlice?.operator?.kind;
-  if (!(["xy", "xz", "yz"].includes(plane)) || !Number.isFinite(positionFraction) ||
+  if (!(["xy", "xz", "yz"].includes(plane)) || typeof positionFraction !== "number" ||
+      !Number.isFinite(positionFraction) ||
       positionFraction < 0 || positionFraction > 1 || !["plane_sample", "slab_average"].includes(operatorKind)) {
     throw new Error("Current default planar slice presentation is not a supported axis-aligned slice");
   }

@@ -392,23 +392,17 @@ export function deriveAuthoredFdmUniverseOutsideMagneticSupport({
 }): Omit<FdmUniverseOutsideMagneticSupport, "kind"> | null {
   const domain = domainBounds3(domainBounds);
   if (!domain || !objects?.length) return null;
-  const magneticBounds = objects
-    .filter(authoredObjectIsMagnetic)
-    .map(authoredObjectBounds)
-    .filter((bounds): bounds is DomainBounds3 => bounds !== null)
-    .map((bounds) => ({
-      min: bounds.min.map((value, axis) => Math.max(value, domain.min[axis])) as [
-        number,
-        number,
-        number,
-      ],
-      max: bounds.max.map((value, axis) => Math.min(value, domain.max[axis])) as [
-        number,
-        number,
-        number,
-      ],
-    }))
-    .filter((bounds) => bounds.min.every((value, axis) => value <= bounds.max[axis]));
+  const magneticBounds: DomainBounds3[] = [];
+  for (const object of objects) {
+    if (!authoredObjectIsMagnetic(object)) continue;
+    const bounds = authoredObjectBounds(object);
+    if (!bounds) continue;
+    const clipped: DomainBounds3 = {
+      min: bounds.min.map((value, axis) => Math.max(value, domain.min[axis])) as [number, number, number],
+      max: bounds.max.map((value, axis) => Math.min(value, domain.max[axis])) as [number, number, number],
+    };
+    if (clipped.min.every((value, axis) => value <= clipped.max[axis])) magneticBounds.push(clipped);
+  }
   if (magneticBounds.length === 0) return null;
 
   const support = magneticBounds.reduce<DomainBounds3>(

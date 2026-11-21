@@ -6,12 +6,8 @@ import {
   type PlanarMonitor,
 } from "@/kernel/workspace/crossSectionWorkspace";
 
-import {
-  PlanarMonitorDefinitionEditor,
-  planarMonitorDefinitionAvailabilityErrors,
-  resolvePlanarMonitorDefinitionAvailability,
-  type PlanarMonitorDefinitionAvailability,
-} from "./PlanarMonitorDefinitionEditor";
+import { PlanarMonitorDefinitionEditor } from "./PlanarMonitorDefinitionEditor";
+import { planarMonitorDefinitionAvailabilityErrors, resolvePlanarMonitorDefinitionAvailability, type PlanarMonitorDefinitionAvailability } from "./PlanarMonitorDefinitionEditor.model";
 
 const monitor: PlanarMonitor = {
   id: "slab-1",

@@ -243,7 +243,6 @@ struct LoadedAcceptedRestore {
     previous_ack_sha256: Option<String>,
     proof_sha256: String,
     total_steps: usize,
-    catalog_revision: u64,
     activation_attempt: String,
     reconciliation_attempt: String,
     mode: AcceptedRestoreMode,
@@ -748,7 +747,6 @@ fn load_accepted_restore(
         previous_ack_sha256: predecessor.as_ref().map(|item| item.sha256.clone()),
         proof_sha256: input.proof_sha256.clone(),
         total_steps: catalog.tasks.len(),
-        catalog_revision: catalog.revision,
         activation_attempt: proof.activation_attempt.clone(),
         reconciliation_attempt: proof.reconciliation_attempt.clone(),
         mode,
@@ -2649,10 +2647,6 @@ fn validate_startup_provenance_record(
     Ok(())
 }
 
-fn validate_native_process_receipt(receipt: &Value, after_ready: bool) -> Result<()> {
-    validate_native_process_receipt_mode(receipt, after_ready, false)
-}
-
 fn validate_native_process_receipt_mode(
     receipt: &Value,
     after_ready: bool,
@@ -2691,6 +2685,7 @@ fn validate_native_process_receipt_mode(
     Ok(())
 }
 
+#[cfg(test)]
 fn validate_native_failure_probe(
     probe: &Value,
     process_receipt_sha256: &str,
@@ -3625,7 +3620,6 @@ mod tests {
             previous_ack_sha256: None,
             proof_sha256: "1".repeat(64),
             total_steps: 4,
-            catalog_revision: 12,
             activation_attempt: "2".repeat(32),
             reconciliation_attempt: "3".repeat(32),
             mode,

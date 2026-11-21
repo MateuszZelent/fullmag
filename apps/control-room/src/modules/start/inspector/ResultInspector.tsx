@@ -6,16 +6,16 @@ import { useEffect, useId, useRef, useState, useSyncExternalStore } from "react"
 import { tauriInvoke } from "@/kernel/persistence/ProjectDocumentController";
 
 import { selectResultBanner } from "../model/bannerModel";
-import { RESULTS_DOWNLOAD_FOLDER_MISSING, RESULTS_DOWNLOAD_NO_BACKEND, startDownload } from "../model/downloadUrl";
+import { startDownload } from "../model/downloadUrl";
 import { formatSimTime } from "../model/continueModel";
-import { formatBytes, formatOpened } from "../model/recentIndex";
+import { formatOpened } from "../model/recentIndex";
 import { resultChip, resultSourceName, stageLabel } from "../model/resultModel";
 import { scriptHistoryRows } from "../model/scriptEvents";
 import { copyText, displayPath } from "../model/scriptRowModel";
 import type { WorkspaceItemDetailState } from "../model/useWorkspaceItems";
 import { thumbnailSource } from "../model/workspaceApiAdapters";
-import type { ApiItemDetailAnswer, ApiWorkspaceItem, ResultDetail } from "../model/workspaceApiTypes";
-import { framesSummaryLine, type FramesPage } from "../model/framesModel";
+import type { ApiWorkspaceItem, ResultDetail } from "../model/workspaceApiTypes";
+import { type FramesPage } from "../model/framesModel";
 import { ProjectThumb } from "../ui/ProjectThumb";
 import { StatusPill } from "../ui/StatusPill";
 
@@ -28,7 +28,8 @@ import {
   InspectorTabs,
   type MenuAction,
 } from "./InspectorParts";
-import { KvGroup, chipList, kvRow, kvRowOrUnavailable, type KvRow } from "./KeyValueGroup";
+import { KvGroup } from "./KeyValueGroup";
+import { viewerRoute, downloadReason, resultFacts } from "./ResultInspector.model";
 
 export type ResultTab = "overview" | "stages" | "history";
 
@@ -40,36 +41,6 @@ const TABS: readonly { readonly id: ResultTab; readonly label: string }[] = [
 
 const subscribeNever = () => () => undefined;
 const serverInvoke = () => null;
-
-export const RESULTS_VIEWER_NEEDS_SOURCE =
-  "The results viewer opens the project that wrote this folder, and none is listed for it.";
-export const RESULTS_VIEWER_SOURCE_IS_SCRIPT =
-  "This folder was written by a script. The results viewer opens a project; run the script from its details to create one.";
-
-export interface ViewerRoute {
-  /** The project whose Results module shows the saved runs; null when there is none. */
-  readonly project: ApiWorkspaceItem | null;
-  /** Why "Open results viewer" is disabled; null when it can run. */
-  readonly reason: string | null;
-}
-
-/** The legacy project route used when standalone saved playback is unavailable. */
-export function viewerRoute(
-  item: Pick<ApiWorkspaceItem, "status">,
-  answer: ApiItemDetailAnswer | undefined,
-): ViewerRoute {
-  if (item.status === "missing") return { project: null, reason: "The folder is missing." };
-  const source = answer?.linkedSource;
-  if (source?.kind === "project") {
-    return source.status === "missing"
-      ? { project: null, reason: "The source project is missing." }
-      : { project: source, reason: null };
-  }
-  return {
-    project: null,
-    reason: source?.kind === "script" ? RESULTS_VIEWER_SOURCE_IS_SCRIPT : RESULTS_VIEWER_NEEDS_SOURCE,
-  };
-}
 
 export interface ResultInspectorProps {
   readonly item: ApiWorkspaceItem;
@@ -99,63 +70,6 @@ function resultDetailOf(detail: WorkspaceItemDetailState): ResultDetail | undefi
   return detail.kind === "ready" && detail.answer.detail?.kind === "result"
     ? detail.answer.detail
     : undefined;
-}
-
-/** Why "Download as zip" is off for this folder; null when it can run. */
-export function downloadReason(
-  item: Pick<ApiWorkspaceItem, "status">,
-  archiveUrl: ((id: string) => string) | undefined,
-): string | null {
-  if (item.status === "missing") return RESULTS_DOWNLOAD_FOLDER_MISSING;
-  return archiveUrl ? null : RESULTS_DOWNLOAD_NO_BACKEND;
-}
-
-/** What the preview image is, or why there is none; a result is never rendered as an image here. */
-export function previewNote(item: ApiWorkspaceItem): string {
-  if (!item.hasThumbnail) {
-    return "none: the folder holds no image and its source project has no stored preview";
-  }
-  return item.thumbnailOrigin === "source_project"
-    ? "stored preview of the source project, not a render of this result"
-    : "stored preview";
-}
-
-export function resultFacts(item: ApiWorkspaceItem, result: ResultDetail | undefined): KvRow[][] {
-  const total = result?.totalBytes ?? item.sizeBytes;
-  const run: KvRow[] = result
-    ? [
-        ...kvRowOrUnavailable("Run", result.runId),
-        ...kvRowOrUnavailable("Status", result.status),
-        ...kvRow("Started", result.startedAt ? formatOpened(result.startedAt) : undefined),
-        ...kvRow("Finished", result.finishedAt ? formatOpened(result.finishedAt) : undefined),
-        ...kvRowOrUnavailable(
-          "Format",
-          result.format
-            ? `${result.format}${result.formatVersion ? ` v${result.formatVersion}` : ""}`
-            : undefined,
-        ),
-      ]
-    : [];
-  const data: KvRow[] = [
-    ...(result ? kvRowOrUnavailable("Grid", result.grid) : []),
-    ...(result
-      ? kvRowOrUnavailable("Frames", result.frames === undefined ? undefined : result.frames.toLocaleString("en-US"))
-      : []),
-    ...(result?.framesIndex ? kvRow("Frame index", framesSummaryLine(result.framesIndex)) : []),
-    ...kvRowOrUnavailable("Size", total === undefined ? undefined : formatBytes(total)),
-    ...(result
-      ? kvRowOrUnavailable(
-          "Quantities",
-          result.quantities.length > 0 ? chipList(result.quantities) : undefined,
-        )
-      : []),
-  ];
-  const where: KvRow[] = [
-    ...kvRow("Preview", previewNote(item)),
-    ...kvRow("Modified", item.modifiedAt ? formatOpened(item.modifiedAt) : undefined),
-    ...kvRow("First seen", item.firstSeenAt ? formatOpened(item.firstSeenAt) : undefined),
-  ];
-  return [run, data, where];
 }
 
 function SourceLink({
@@ -270,9 +184,14 @@ export function ResultInspector({
 
   const pin = async () => {
     setBusy(true);
-    const failure = await onTogglePin(item.id, !item.pinned);
-    setBusy(false);
-    if (failure) report(failure);
+    try {
+      const failure = await onTogglePin(item.id, !item.pinned);
+      if (failure) report(failure);
+    } catch (error) {
+      report(error instanceof Error ? error.message : String(error));
+    } finally {
+      setBusy(false);
+    }
   };
 
   const reveal = () => {
@@ -280,19 +199,20 @@ export function ResultInspector({
   };
 
   const openViewer = async () => {
-    if (onOpenPlayback) {
-      if (missing) return;
-      setBusy(true);
-      const failure = await onOpenPlayback(item);
-      setBusy(false);
-      if (failure) report(failure);
-      return;
-    }
-    if (!route.project) return;
+    const project = route.project;
+    const open = onOpenPlayback
+      ? missing ? null : () => onOpenPlayback(item)
+      : project ? () => onOpenResults(project) : null;
+    if (!open) return;
     setBusy(true);
-    const failure = await onOpenResults(route.project);
-    setBusy(false);
-    if (failure) report(failure);
+    try {
+      const failure = await open();
+      if (failure) report(failure);
+    } catch (error) {
+      report(error instanceof Error ? error.message : String(error));
+    } finally {
+      setBusy(false);
+    }
   };
 
   const moreActions: MenuAction[] = [

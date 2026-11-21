@@ -1,10 +1,6 @@
 import { formatFrequencyHz } from "@/shared/domain/analysis/frequencyUnits";
 import type { FmrPeakPoint } from "@/shared/domain/analysis/frequencyDomainChartModels";
-import {
-  ANALYSIS_FIELD_VIEW_OPTIONS,
-  DEFAULT_ANALYSIS_FIELD_VIEW,
-  normalizeAnalysisFieldView,
-} from "../FrequencyDomainModeDisplayControls";
+import { ANALYSIS_FIELD_VIEW_OPTIONS, DEFAULT_ANALYSIS_FIELD_VIEW, normalizeAnalysisFieldView } from "../FrequencyDomainModeDisplayControls.model";
 
 export function formatBoolean(value: boolean | null | undefined): string {
   if (value === true) return "yes";

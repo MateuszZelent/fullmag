@@ -1535,7 +1535,7 @@ async function exerciseQualityReadStates(page) {
   assert(liveGates && liveGates.scope === "airbox" && liveGates.marker === 0,
     "Live quality response omitted marker-0 Airbox gate provenance");
 
-  const syntheticPassData = JSON.parse(JSON.stringify(liveSnapshot.data));
+  const syntheticPassData = structuredClone(liveSnapshot.data);
   syntheticPassData.quality.airbox_quality_gates = {
     ...syntheticPassData.quality.airbox_quality_gates,
     status: "pass",

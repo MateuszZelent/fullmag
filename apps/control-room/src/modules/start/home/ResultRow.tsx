@@ -12,6 +12,7 @@ import type { ApiWorkspaceItem } from "../model/workspaceApiTypes";
 import { thumbnailSource } from "../model/workspaceApiAdapters";
 import { ProjectThumb } from "../ui/ProjectThumb";
 import { StatusPill } from "../ui/StatusPill";
+import { resultRowDomId } from "./ResultRow.model";
 
 export interface ResultRowProps {
   readonly item: ApiWorkspaceItem;
@@ -24,8 +25,6 @@ export interface ResultRowProps {
   readonly onActivate: (id: string) => void;
   readonly onTogglePin: (id: string, pinned: boolean) => void;
 }
-
-export const resultRowDomId = (id: string) => `fm-start-result-${id}`;
 
 /**
  * A result folder in the recent list. It reuses the project row's grid: the

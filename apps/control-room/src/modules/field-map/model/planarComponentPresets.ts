@@ -6,18 +6,6 @@ type PlanarState = NonNullable<VisualizationStateResource["planar"]>;
 /** One-click component choices of the 2D toolbar (mumax3 Display panel). */
 export type PlanarComponentPreset = "direction" | "x" | "y" | "z" | "magnitude";
 
-export const PLANAR_COMPONENT_PRESETS: readonly {
-  label: string;
-  shortcut: string;
-  value: PlanarComponentPreset;
-}[] = [
-  { label: "Direction", shortcut: "V", value: "direction" },
-  { label: "x", shortcut: "X", value: "x" },
-  { label: "y", shortcut: "Y", value: "y" },
-  { label: "z", shortcut: "Z", value: "z" },
-  { label: "|v|", shortcut: "M", value: "magnitude" },
-];
-
 /**
  * Patch for a preset. Direction keeps the scalar magnitude for contours and
  * probes while the raster is coloured by the full vector; Cartesian
