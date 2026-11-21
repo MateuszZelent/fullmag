@@ -1,2 +1,3 @@
-// Keep the OpenAPI binary on a distinct Cargo crate root while preserving main.rs behavior.
-include!("main.rs");
+fn main() {
+    fullmag_api::print_openapi_v2();
+}

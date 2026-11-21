@@ -165,14 +165,24 @@ export function useEmbeddedInstanceTab(): boolean {
   return useSyncExternalStore(noSubscription, isEmbeddedInstanceTab, () => false);
 }
 
-export type PageLocation = Pick<Location, "hostname" | "protocol">;
+export type PageLocation = Pick<Location, "hostname" | "origin" | "protocol">;
+
+export function isPeerInstancePort(port: number, location: PageLocation): boolean {
+  if (location.protocol !== "http:" && location.protocol !== "https:") return false;
+  try {
+    return new URL(instanceOrigin(port, location)).origin !== location.origin;
+  } catch {
+    return false;
+  }
+}
 
 let pageLocation: PageLocation | null = null;
 
 function readPageLocation(): PageLocation | null {
   if (typeof window === "undefined") return null;
   // The page's host never changes without a navigation; keep one stable snapshot.
-  pageLocation ??= { hostname: window.location.hostname, protocol: window.location.protocol };
+  const { hostname, origin, protocol } = window.location;
+  pageLocation ??= { hostname, origin, protocol };
   return pageLocation;
 }
 

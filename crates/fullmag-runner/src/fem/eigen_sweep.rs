@@ -336,7 +336,7 @@ pub(super) fn preserve_interrupted_bias_field_sweep_run(
 
 pub(super) fn execute_bias_field_sweep_with_executor<F>(
     plan: &FemEigenPlanIR,
-    mut execute_sample: F,
+    execute_sample: F,
 ) -> Result<ExecutedRun, RunError>
 where
     F: FnMut(&FemEigenPlanIR, usize) -> Result<ExecutedRun, RunError>,

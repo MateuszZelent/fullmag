@@ -10,22 +10,7 @@ import {
   type VisualizationTargetSettings,
 } from "@/kernel/visualization/ObjectVisualizationController";
 
-import {
-  createMeshPartSurfaceGeometry,
-  hasMeshPartRenderableLayer,
-  resolveMeshPartSurfacePickIdentity,
-  resolveMeshPartBoundaryFaceIndexForPick,
-  resolveMeshPartVisibleScalarColorState,
-  resolveRetainedMeshPartScalarColors,
-  resolveMeshPartScalarColors,
-  resolveMeshPartVectorLayerInput,
-  resolveMeshPartWireframeEdgeIndices,
-  resolveMeshPartPointNodeSelection,
-  recordMeshPartSurfaceAdoption,
-  resolveMeshPartSurfacePassPolicies,
-  createMeshPartScalarShaderMaterials,
-  MESH_PART_SURFACE_USER_DATA,
-} from "./MeshPartLayer";
+import { createMeshPartSurfaceGeometry, hasMeshPartRenderableLayer, resolveMeshPartSurfacePickIdentity, resolveMeshPartBoundaryFaceIndexForPick, resolveMeshPartVisibleScalarColorState, resolveRetainedMeshPartScalarColors, resolveMeshPartScalarColors, resolveMeshPartVectorLayerInput, resolveMeshPartWireframeEdgeIndices, resolveMeshPartPointNodeSelection, recordMeshPartSurfaceAdoption, resolveMeshPartSurfacePassPolicies, createMeshPartScalarShaderMaterials, MESH_PART_SURFACE_USER_DATA } from "./MeshPartLayer.model";
 import { resolveMeshPartSurfaceMaterialPlan } from "./viewport3DSurfaceMaterialPlans";
 import {
   buildMeshPartScalarColorRetentionKey,
@@ -809,8 +794,12 @@ describe("MeshPartLayer", () => {
       fileURLToPath(new URL("./MeshPartLayer.tsx", import.meta.url)),
       "utf8",
     );
+    const modelSource = readFileSync(
+      fileURLToPath(new URL("./MeshPartLayer.model.ts", import.meta.url)),
+      "utf8",
+    );
 
-    expect(source).toContain("resolveViewport3DTargetVectorLayerInput");
+    expect(modelSource).toContain("resolveViewport3DTargetVectorLayerInput");
     expect(source).toContain("vectorLayerInput.buildReference");
     expect(source).toContain("vectorLayerInput.segments");
     expect(source).not.toContain("fieldModel?.partVectorBuilds.get(part.id)");
@@ -822,6 +811,10 @@ describe("MeshPartLayer", () => {
       fileURLToPath(new URL("./MeshPartLayer.tsx", import.meta.url)),
       "utf8",
     );
+    const modelSource = readFileSync(
+      fileURLToPath(new URL("./MeshPartLayer.model.ts", import.meta.url)),
+      "utf8",
+    );
 
     // Modal glyphs are phase-independent GPU glyphs; the layer phase cell is
     // bound into the glyph shader, never baked into segments.
@@ -830,7 +823,7 @@ describe("MeshPartLayer", () => {
     expect(source).toContain("<ComplexVectorGlyphLayer");
     expect(source).toContain("modeCompositionPhase ??");
     expect(source).not.toContain("modeCompositionPhaseRad");
-    expect(source).toContain("modalVectorsActive || renderPlan.vectors.visible");
+    expect(modelSource).toContain("modalVectorsActive || renderPlan.vectors.visible");
   });
 
   it("uses volume edges for full magnetic-object wireframe and surface edges for surface mode", () => {

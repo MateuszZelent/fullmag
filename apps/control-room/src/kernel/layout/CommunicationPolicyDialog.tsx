@@ -239,9 +239,7 @@ export function CommunicationPolicyDialog({
                     step={field.step}
                     type="number"
                     value={draft?.[field.key] ?? ""}
-                    onChange={(event) =>
-                      setNumber(field.key, Number(event.target.value))
-                    }
+                    onChange={(event) => setNumber(field.key, event.currentTarget.valueAsNumber)}
                   />
                 </label>
               ))}

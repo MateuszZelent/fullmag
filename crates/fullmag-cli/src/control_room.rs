@@ -372,9 +372,6 @@ pub(crate) enum DevelopmentRestartProgress {
 /// A replacement is ready only after the candidate owns the restored authoring
 /// state and the completion acknowledgement has reopened admission.
 pub(crate) struct CompletedDevelopmentRestart {
-    pub(crate) old_api_instance_id: String,
-    pub(crate) old_session_id: Option<String>,
-    pub(crate) old_session_epoch: u64,
     pub(crate) new_api_instance_id: String,
     pub(crate) session_id: Option<String>,
     pub(crate) session_epoch: u64,
@@ -387,9 +384,7 @@ pub(crate) struct CompletedDevelopmentRestart {
     pub(crate) commit_acknowledgement: Option<serde_json::Value>,
     pub(crate) stage_helper_pid: u32,
     pub(crate) readback_helper_pid: Option<u32>,
-    pub(crate) restore_helper_pid: u32,
     pub(crate) old_api_terminal: std::process::ExitStatus,
-    pub(crate) completion: serde_json::Value,
     pub(crate) replacement: crate::development_api_replacement::DevelopmentReplacementReceipt,
 }
 
@@ -590,7 +585,16 @@ fn emit_development_restart_probe_progress(event: DevelopmentRestartProgress) {
             );
             let _ = std::io::stdout().flush();
         }
-        DevelopmentRestartProgress::HandoffStaged { .. } => {}
+        DevelopmentRestartProgress::HandoffStaged { helper_pid } => println!(
+            "{}",
+            serde_json::json!({
+                "schema":"fullmag.development-cli-restart-progress.v1",
+                "event":"handoff_staged",
+                "helper_pid":helper_pid,
+                "waited":true,
+                "exit_code":0,
+            })
+        ),
         DevelopmentRestartProgress::OldApiExited { pid, exit_code } => println!(
             "{}",
             serde_json::json!({
@@ -729,34 +733,17 @@ impl ControlRoomGuard {
                 job.cancel();
                 match job.drain_after_cancel() {
                     Ok(true) => {
-                        crate::development_api_owner::CandidatePreparationPoll::Unavailable {
-                            helper_pid: job.helper_pid(),
-                        }
+                        crate::development_api_owner::CandidatePreparationPoll::Unavailable
                     }
-                    Ok(false) if job.cleanup_unconfirmed() => match job.helper_pid() {
-                        Some(helper_pid) => {
-                            crate::development_api_owner::CandidatePreparationPoll::Unconfirmed {
-                                helper_pid,
-                            }
-                        }
-                        None => {
-                            crate::development_api_owner::CandidatePreparationPoll::Unavailable {
-                                helper_pid: None,
-                            }
-                        }
-                    },
-                    Ok(false) | Err(_) => match job.helper_pid() {
-                        Some(helper_pid) => {
-                            crate::development_api_owner::CandidatePreparationPoll::Pending {
-                                helper_pid,
-                            }
-                        }
-                        None => {
-                            crate::development_api_owner::CandidatePreparationPoll::Unavailable {
-                                helper_pid: None,
-                            }
-                        }
-                    },
+                    Ok(false) if job.cleanup_unconfirmed() => {
+                        crate::development_api_owner::CandidatePreparationPoll::Unconfirmed
+                    }
+                    Ok(false) | Err(_) if job.helper_pid().is_some() => {
+                        crate::development_api_owner::CandidatePreparationPoll::Pending
+                    }
+                    Ok(false) | Err(_) => {
+                        crate::development_api_owner::CandidatePreparationPoll::Unavailable
+                    }
                 }
             }
         }
@@ -1044,7 +1031,6 @@ impl ControlRoomGuard {
         let readback_helper_pid = outcome.readback_helper_pid;
         let stage_helper_pid = staged.helper_pid;
         let staged_acknowledgement = staged.acknowledgement.clone();
-        let restore_helper_pid = prepared.helper_pid();
 
         // The API exit and accepted record are now confirmed. Release only the
         // kernel reservations before starting the replacement; the durable
@@ -1070,9 +1056,6 @@ impl ControlRoomGuard {
         )?;
 
         Ok(CompletedDevelopmentRestart {
-            old_api_instance_id,
-            old_session_id,
-            old_session_epoch,
             new_api_instance_id: replacement.api_instance_id.clone(),
             session_id: replacement.session_id.clone(),
             session_epoch: replacement.session_epoch,
@@ -1085,9 +1068,7 @@ impl ControlRoomGuard {
             commit_acknowledgement,
             stage_helper_pid,
             readback_helper_pid,
-            restore_helper_pid,
             old_api_terminal,
-            completion: replacement.completion.clone(),
             replacement,
         })
     }

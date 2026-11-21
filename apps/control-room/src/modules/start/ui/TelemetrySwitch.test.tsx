@@ -5,7 +5,8 @@ import type { PreferencesState } from "../model/startPreferences";
 import type { StartPreferencesController } from "../model/useStartPreferences";
 
 import { StartStatusBar } from "./StartStatusBar";
-import { TelemetrySwitch, UpdateNoticeItem, telemetryLabel } from "./TelemetrySwitch";
+import { TelemetrySwitch, UpdateNoticeItem } from "./TelemetrySwitch";
+import { telemetryLabel } from "./TelemetrySwitch.model";
 
 const ready = (telemetryEnabled: boolean, update?: { version?: string }): PreferencesState => ({
   kind: "ready",

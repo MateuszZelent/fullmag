@@ -18,19 +18,6 @@ export interface FullmagEngine {
   readonly bestFor: string;
 }
 
-export const FULLMAG_ENGINES: readonly FullmagEngine[] = [
-  {
-    name: "FDM",
-    bestFor:
-      "Regular films, nanowires, racetracks, disks, pillars, periodic cells, repeated time integration, and disconnected multilayers",
-  },
-  {
-    name: "FEM",
-    bestFor:
-      "Curved or irregular 3D bodies, conforming multi-region structures, local refinement, magnetic-plus-air domains, and modal or driven-response studies",
-  },
-];
-
 export interface FullmagAuthor {
   readonly name: string;
   readonly affiliation: string;
@@ -85,10 +72,7 @@ export const FULLMAG_FUNDING =
 /* ── Rich structured extensions derived from the repository README ────────── */
 
 export const FULLMAG_DOCS_URL = "https://fullmag.mzelent.pl/";
-export const FULLMAG_CONTROL_ROOM_URL = "https://fullmag.mzelent.pl/frontend/control-room/index.html";
 export const FULLMAG_PYTHON_API_URL = "https://fullmag.mzelent.pl/python-api/index.html";
-export const FULLMAG_PHYSICS_URL = "https://fullmag.mzelent.pl/physics/index.html";
-export const FULLMAG_NUMERICAL_URL = "https://fullmag.mzelent.pl/numerical-methods/index.html";
 export const FULLMAG_CAPABILITY_MATRIX_URL = "https://fullmag.mzelent.pl/architecture/planner-and-capabilities.html";
 
 export interface ExtendedAuthor extends FullmagAuthor {
@@ -277,8 +261,6 @@ export const FULLMAG_PIPELINE_STAGES: readonly ExecutionStage[] = [
     tag: "Reproducibility",
   },
 ];
-
-export const FULLMAG_EXECUTION_PIPELINE = FULLMAG_PIPELINE_STAGES;
 
 export interface PhysicsModuleInfo {
   readonly title: string;

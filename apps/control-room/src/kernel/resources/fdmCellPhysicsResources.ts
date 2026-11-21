@@ -163,11 +163,13 @@ export async function loadFdmCellPhysics(
         ...RESOLUTION, component: componentFor(field), position_m: target.centerM[axisIndex],
         expected_scene_revision: seed.scene_revision, expected_mesh_revision: seed.mesh_revision,
       };
+      // react-doctor-disable-next-line react-doctor/async-await-in-loop
       const meta = await api.data.fields.planar.meta(field.quantity_id, SOURCE, query, options);
       assertMeta(meta, target);
       if (meta.field_revision !== String(field.field_revision) || meta.section?.normal_axis !== axis) {
         throw new Error("Field revision or inspection plane changed during sampling.");
       }
+      // The probe depends on the exact sample token and revisions returned by this field's metadata.
       const probe = await api.data.fields.planar.probe(field.quantity_id, SOURCE, {
         ...query, sample_token: meta.sample_token,
         expected_carrier_revision: meta.carrier_revision, expected_field_revision: meta.field_revision,

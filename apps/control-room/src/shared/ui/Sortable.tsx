@@ -1,45 +1,15 @@
 "use client";
 
-import {
-  closestCenter,
-  DndContext,
-  KeyboardSensor,
-  PointerSensor,
-  useSensor,
-  useSensors,
-  type DragEndEvent,
-  type DraggableAttributes,
-  type UniqueIdentifier,
-} from "@dnd-kit/core";
-import {
-  horizontalListSortingStrategy,
-  SortableContext,
-  sortableKeyboardCoordinates,
-  useSortable,
-} from "@dnd-kit/sortable";
-import { CSS } from "@dnd-kit/utilities";
-import type { CSSProperties, ReactNode } from "react";
+import { closestCenter, DndContext, KeyboardSensor, PointerSensor, useSensor, useSensors, type DragEndEvent, type UniqueIdentifier } from "@dnd-kit/core";
+import { horizontalListSortingStrategy, SortableContext, sortableKeyboardCoordinates } from "@dnd-kit/sortable";
 
-type SortableListeners = ReturnType<typeof useSortable>["listeners"];
-
-interface SortableItemRenderProps {
-  attributes: DraggableAttributes;
-  isDragging: boolean;
-  listeners: SortableListeners;
-  setNodeRef: (element: HTMLElement | null) => void;
-  style: CSSProperties;
-}
+import type { ReactNode } from "react";
 
 interface SortableListProps {
   children: ReactNode;
   id: string;
   items: UniqueIdentifier[];
   onMove: (activeId: string, overId: string) => void;
-}
-
-interface SortableItemProps {
-  children: (props: SortableItemRenderProps) => ReactNode;
-  id: UniqueIdentifier;
 }
 
 export function SortableList({
@@ -81,26 +51,4 @@ export function SortableList({
       </SortableContext>
     </DndContext>
   );
-}
-
-export function SortableItem({ children, id }: SortableItemProps) {
-  const {
-    attributes,
-    listeners,
-    setNodeRef,
-    transform,
-    transition,
-    isDragging,
-  } = useSortable({ id });
-
-  return children({
-    attributes,
-    isDragging,
-    listeners,
-    setNodeRef,
-    style: {
-      transform: CSS.Transform.toString(transform),
-      transition,
-    },
-  });
 }

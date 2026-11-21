@@ -110,13 +110,6 @@ export function viewport3DCameraGestureActive(
   return ref?.current?.active === true;
 }
 
-export function viewport3DCameraGestureChanged(
-  ref: Viewport3DCameraGestureRef | null | undefined,
-  epoch: number,
-): boolean {
-  return isCurrentActiveEpoch(ref, epoch) && ref.current.changed;
-}
-
 export function viewport3DCameraGestureEpoch(
   ref: Viewport3DCameraGestureRef | null | undefined,
 ): number {

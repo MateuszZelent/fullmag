@@ -9,7 +9,7 @@ use anyhow::{bail, Context, Result};
 use fullmag_application::{
     CoordinatorError, CoordinatorMessage, DurableWorkerCoordinator, ExecutionError,
     RequestedExecution, ResourceKind, ResourceLease, RunId, TaskClaim, WorkerCommandEnvelope,
-    WorkerCoordinator, WorkerEvent, WorkerEventEnvelope, WORKER_PROTOCOL_SCHEMA,
+    WorkerCoordinator, WorkerEvent, WorkerEventEnvelope,
 };
 use fullmag_authoring::StudyInputSource;
 use fullmag_session::{FmsTaskLifecycle, FmsTaskReadiness, SessionStore};

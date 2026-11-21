@@ -13,7 +13,7 @@ import {
   isVisualizationAirboxId,
   isVisualizationAirboxRole,
 } from "@/kernel/selection/selectionTypes";
-import { boundedDisplayText, boundedItems } from "./airboxDisplay";
+import { boundedDisplayText, boundedItems } from "./airboxDisplay.model";
 
 type AirboxMeshPart = NonNullable<
   MeshSharedDomainManifestResource["mesh_parts"]

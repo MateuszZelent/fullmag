@@ -11,6 +11,16 @@ import {
 import { Button } from "@/shared/ui/Button";
 
 import { FeedbackBanner } from "../../primitives/FeedbackBanner";
+
+type FdmCellPhysicsStatus = ReturnType<typeof useFdmCellPhysicsResource>["status"];
+
+const FDM_CELL_PHYSICS_STATUS_LABELS: Record<FdmCellPhysicsStatus, string> = {
+  error: "Read error",
+  idle: "Waiting",
+  loading: "Loading",
+  ready: "Current",
+  stale: "Refreshing",
+};
 import { FieldRow } from "../../primitives/FieldRow";
 import { InspectorGroup } from "../../primitives/InspectorGroup";
 
@@ -55,12 +65,14 @@ const ENERGY_ORDER: Readonly<Record<string, number>> = {
   eden_total: 5,
 };
 
+const cellSampleFormatter = new Intl.NumberFormat("en-US", { maximumSignificantDigits: 6 });
+
 function formatNumber(value: number): string {
   if (!Number.isFinite(value)) return "Unavailable";
   if (value === 0) return "0";
   const absolute = Math.abs(value);
   if (absolute < 1e-3 || absolute >= 1e6) return value.toExponential(3);
-  return new Intl.NumberFormat("en-US", { maximumSignificantDigits: 6 }).format(value);
+  return cellSampleFormatter.format(value);
 }
 
 function formatPosition(values: readonly number[]): string {
@@ -300,15 +312,8 @@ function EnergyTable({
   );
 }
 
-function StatusLabel({ status }: { status: ReturnType<typeof useFdmCellPhysicsResource>["status"] }) {
-  const labels: Record<typeof status, string> = {
-    error: "Read error",
-    idle: "Waiting",
-    loading: "Loading",
-    ready: "Current",
-    stale: "Refreshing",
-  };
-  return <span className="fm-fdm-cell-physics__status" data-state={status}>{labels[status]}</span>;
+function StatusLabel({ status }: { status: FdmCellPhysicsStatus }) {
+  return <span className="fm-fdm-cell-physics__status" data-state={status}>{FDM_CELL_PHYSICS_STATUS_LABELS[status]}</span>;
 }
 
 function FieldSourceDetails({ rows }: { rows: readonly FdmCellQuantitySample[] }) {

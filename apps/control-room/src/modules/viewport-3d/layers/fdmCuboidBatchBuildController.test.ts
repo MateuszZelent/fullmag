@@ -1,10 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { FdmCuboidBuildResult } from "./fdmCuboidBuildModel";
-import {
-  createFdmCuboidBatchBuildController,
-  type FdmCuboidAsyncBuildEntry,
-} from "./FdmCuboidLayer";
+import { createFdmCuboidBatchBuildController, type FdmCuboidAsyncBuildEntry } from "./FdmCuboidLayer.model";
 
 const EMPTY_RESULT: FdmCuboidBuildResult = {
   model: null,

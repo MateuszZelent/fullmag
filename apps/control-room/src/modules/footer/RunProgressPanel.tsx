@@ -96,7 +96,7 @@ function useLiveClock(live: boolean): number | null {
   );
 }
 
-export function RunProgressView({ model }: { model: RunProgressModel }) {
+function RunProgressView({ model }: { model: RunProgressModel }) {
   const live = LIVE_PHASES.has(model.phase);
   const nowMs = useLiveClock(live);
   const [meshDetails, setMeshDetails] = useState(false);

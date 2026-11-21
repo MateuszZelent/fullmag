@@ -235,6 +235,7 @@ impl DirectQuadratureEvidence {
         Ok(())
     }
 
+    #[cfg(any(feature = "fem-native", test))]
     pub(crate) fn encode(&self) -> Result<Vec<u8>, RunError> {
         self.validate()?;
         let s = &self.snapshot;

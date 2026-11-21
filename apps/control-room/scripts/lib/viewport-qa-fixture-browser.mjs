@@ -444,7 +444,7 @@ async function ensureInteraction(page, {
     }
     return scene;
   }
-  const mutation = await commitSceneMutation(page, {
+  const mutationAndReadback = commitSceneMutation(page, {
     expectedSession,
     getSessionIdentity,
     timeout,
@@ -467,8 +467,11 @@ async function ensureInteraction(page, {
         && Number(interaction?.scene_revision) === finiteSceneRevision(scene);
     },
     steps,
-  });
-  const readback = await readObjectInteraction(page, expectedSession, QA_OBJECT_ID, kind, timeout);
+  }).then(async (mutation) => ({
+    mutation,
+    readback: await readObjectInteraction(page, expectedSession, QA_OBJECT_ID, kind, timeout),
+  }));
+  const { mutation, readback } = await mutationAndReadback;
   if (readback?.enabled !== true || readback?.present !== true
       || Number(readback.scene_revision) !== mutation.revision) {
     throw new Error(`${kind} interaction readback did not confirm the acknowledged revision.`);
@@ -634,11 +637,16 @@ export async function runViewportQaFixtureBrowser(page, {
 
     await assertExpectedSession(getSessionIdentity, expectedSession);
     const catalog = await apiJson(page, expectedSession, "/v2/sessions/current/data/fields", { timeout });
-    const availableSpatialQuantities = Array.isArray(catalog?.quantities)
-      ? catalog.quantities
-        .filter((entry) => entry?.available === true && entry?.spatial === true)
-        .map((entry) => ({ quantity_id: entry.quantity_id, field_revision: entry.field_revision }))
-      : [];
+    const availableSpatialQuantities = [];
+    if (Array.isArray(catalog?.quantities)) {
+      for (const entry of catalog.quantities) {
+        if (entry?.available !== true || entry?.spatial !== true) continue;
+        availableSpatialQuantities.push({
+          quantity_id: entry.quantity_id,
+          field_revision: entry.field_revision,
+        });
+      }
+    }
     if (availableSpatialQuantities.length === 0) {
       throw new Error("compute_fields completed, but data/fields exposed no available spatial field.");
     }

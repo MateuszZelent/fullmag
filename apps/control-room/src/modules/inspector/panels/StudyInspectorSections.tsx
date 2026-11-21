@@ -17,6 +17,7 @@ import type { CheckpointEntry } from "@/kernel/api/apiTypes";
 import type { ActiveLaneCapabilitySnapshot } from "@/kernel/resources/useActiveLaneCapabilities";
 import { Button } from "@/shared/ui/Button";
 import { FieldRow } from "../primitives/FieldRow";
+import { keyedOccurrences } from "@/shared/utils/keyedOccurrences";
 import { FeedbackBanner } from "../primitives/FeedbackBanner";
 import { FormField } from "../primitives/FormField";
 import { InspectorGroup } from "../primitives/InspectorGroup";
@@ -142,8 +143,8 @@ export function StudyRuntimeSection({
       {model.runtime.backendDiagnostic ? (
         <FieldRow label="Backend failure" value={model.runtime.backendDiagnostic} />
       ) : null}
-      {model.runtime.warnings?.map((warning, index) => (
-        <FieldRow key={`${index}:${warning}`} label="Runtime warning" value={warning} />
+      {keyedOccurrences(model.runtime.warnings ?? [], (warning) => warning).map(({ item: warning, key }) => (
+        <FieldRow key={key} label="Runtime warning" value={warning} />
       ))}
       <FieldRow label="Max torque" value={model.runtime.maxTorque} />
       {model.runtime.torqueDiagnostic ? (

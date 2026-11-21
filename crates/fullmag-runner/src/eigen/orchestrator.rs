@@ -172,6 +172,7 @@ pub(crate) fn run_path_or_single_controlled<S: ControlledSingleKSolver>(
 /// Aggregate only a contiguous planned k-sampling prefix, as used after a
 /// controlled adaptive-pool interruption. The full plan remains authoritative
 /// for selectors and provenance; no sample or mode is synthesized here.
+#[cfg(test)]
 pub(crate) fn run_path_prefix_or_single<S: SingleKSolver>(
     solver: &S,
     plan: &FemEigenPlanIR,

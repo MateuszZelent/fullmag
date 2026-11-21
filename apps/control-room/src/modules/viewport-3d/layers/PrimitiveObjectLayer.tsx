@@ -68,15 +68,15 @@ export function PrimitiveObjectLayer({
 }) {
   const invalidate = useBatchedInvalidate();
   const primitiveFrameKey = buildViewport3DPrimitiveFrameKey(primitiveModel);
-  const primitiveColorAssignments = useMemo(
-    () =>
-      createPrimitiveSurfaceColorAssignments(
-        primitiveModel?.objects
-          .filter((object) => isFerromagneticPrimitiveRole(object.role))
-          .map((object) => object.objectId) ?? [],
-      ),
-    [primitiveModel?.objects],
-  );
+  const primitiveColorAssignments = useMemo(() => {
+    const ferromagneticObjectIds: string[] = [];
+    for (const object of primitiveModel?.objects ?? []) {
+      if (isFerromagneticPrimitiveRole(object.role)) {
+        ferromagneticObjectIds.push(object.objectId);
+      }
+    }
+    return createPrimitiveSurfaceColorAssignments(ferromagneticObjectIds);
+  }, [primitiveModel?.objects]);
 
   useEffect(() => {
     tracker.recordDirtyFrame("primitive-geometry");

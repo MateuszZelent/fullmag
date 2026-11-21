@@ -80,10 +80,12 @@ pub(crate) struct DispersionCurveSelection {
 }
 
 impl DispersionCurveSelection {
+    #[cfg(test)]
     pub(crate) fn name(&self) -> &str {
         &self.name
     }
 
+    #[cfg(test)]
     pub(crate) fn include_branch_table(&self) -> bool {
         self.include_branch_table
     }
@@ -274,6 +276,7 @@ impl EigenOutputSelection {
         &self.field_mode_ids
     }
 
+    #[cfg(test)]
     pub(crate) fn tracking_mode_ids(&self) -> &BTreeSet<SampleModeId> {
         &self.tracking_mode_ids
     }
@@ -286,6 +289,7 @@ impl EigenOutputSelection {
         self.diagnostics_request
     }
 
+    #[cfg(test)]
     pub(crate) fn field_mode_ids_for_field(&self, field: &str) -> Option<&BTreeSet<SampleModeId>> {
         self.field_mode_ids_by_field.get(field)
     }
@@ -298,22 +302,27 @@ impl EigenOutputSelection {
         &self.field_sample_ids_by_field
     }
 
+    #[cfg(test)]
     pub(crate) fn selected_sample_ids(&self) -> &BTreeSet<usize> {
         &self.selected_sample_ids
     }
 
+    #[cfg(test)]
     pub(crate) fn tracked_branch_ids(&self) -> &BTreeSet<usize> {
         &self.tracked_branch_ids
     }
 
+    #[cfg(test)]
     pub(crate) fn dispersion_curves(&self) -> &[DispersionCurveSelection] {
         &self.dispersion_curves
     }
 
+    #[cfg(test)]
     pub(crate) fn has_spectrum_output(&self) -> bool {
         self.has_spectrum_output
     }
 
+    #[cfg(test)]
     pub(crate) fn has_dispersion_output(&self) -> bool {
         !self.dispersion_curves.is_empty()
     }
@@ -324,6 +333,7 @@ impl EigenOutputSelection {
             .any(|curve| curve.include_branch_table)
     }
 
+    #[cfg(test)]
     pub(crate) fn requires_branch_tracking(&self) -> bool {
         self.requires_branch_tracking
     }
@@ -342,6 +352,7 @@ impl EigenOutputSelection {
             .contains(&SampleModeId::new(sample_index, raw_mode_index))
     }
 
+    #[cfg(test)]
     pub(crate) fn contains_field_mode_for_field(
         &self,
         field: &str,
@@ -364,6 +375,7 @@ impl EigenOutputSelection {
             .contains(&SampleModeId::new(sample_index, raw_mode_index))
     }
 
+    #[cfg(test)]
     pub(crate) fn spectrum_modes_for_sample(
         &self,
         sample_index: usize,
@@ -374,6 +386,7 @@ impl EigenOutputSelection {
             .map(|mode_id| mode_id.raw_mode_index)
     }
 
+    #[cfg(test)]
     pub(crate) fn field_modes_for_sample(
         &self,
         sample_index: usize,
@@ -384,6 +397,7 @@ impl EigenOutputSelection {
             .map(|mode_id| mode_id.raw_mode_index)
     }
 
+    #[cfg(test)]
     pub(crate) fn tracking_modes_for_sample(
         &self,
         sample_index: usize,

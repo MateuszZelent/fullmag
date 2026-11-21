@@ -13,7 +13,7 @@ import { installSimulationPreparationTestDom } from "@/kernel/layout/simulationP
 import type { KernelApi } from "@/kernel/types";
 
 import FooterModule from "./FooterModule";
-import type { FooterTelemetryStatus } from "./FooterTelemetry";
+import type { FooterTelemetryStatus } from "./FooterTelemetry.model";
 
 const observation = vi.hoisted(() => ({
   status: null as FooterTelemetryStatus | null,

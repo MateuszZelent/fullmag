@@ -8,6 +8,7 @@
  */
 
 import { EmptyState } from "@/shared/ui/EmptyState";
+import { keyedOccurrences } from "@/shared/utils/keyedOccurrences";
 import type { InspectorPanelProps } from "../../inspectorTypes";
 import { FmrPeakInspector } from "./FmrPeakInspector";
 import { FieldRow } from "../../primitives/FieldRow";
@@ -59,13 +60,8 @@ export { FmrModalSpectrumInspectorPanel } from "./FmrModalSpectrumInspectorPanel
 export { EigenBranchInspectorPanel } from "./EigenBranchInspectorPanel";
 export { EigenDispersionInspectorPanel } from "./EigenDispersionInspectorPanel";
 export { EigenModeInspectorPanel } from "./EigenModeInspectorPanel";
-import {
-  buildFrequencyResponsePlotCommandInput,
-  FrequencyResponsePointInspectorPanel,
-  FrequencyResponseFrequencyPointsInspectorPanel,
-  FrequencyResponseCancelRequestedInspectorPanel,
-  FrequencyResponseDiagnosticsInspectorPanel,
-} from "./FrequencyResponseInspectorPanels";
+import { FrequencyResponsePointInspectorPanel, FrequencyResponseFrequencyPointsInspectorPanel, FrequencyResponseCancelRequestedInspectorPanel, FrequencyResponseDiagnosticsInspectorPanel } from "./FrequencyResponseInspectorPanels";
+import { buildFrequencyResponsePlotCommandInput } from "./FrequencyResponseInspectorPanels.model";
 import {
   useFmrResultSummary,
   useFrequencyDomainOverviewSummary,
@@ -110,12 +106,8 @@ export {
   frequencyDomainVisualizationReadiness,
   isDrivenExcitationMissing,
 } from "./frequencyDomainResultFormatting";
-export {
-  type FrequencyResponsePointResidualSummary,
-  countResidualEvidencePoints,
-  buildFrequencyResponsePointResidualSummary,
-  FrequencyResponsePointResidualFields,
-} from "./frequencyDomainResponseSummaries";
+export { FrequencyResponsePointResidualFields } from "./frequencyDomainResponseSummaries";
+export { type FrequencyResponsePointResidualSummary, countResidualEvidencePoints, buildFrequencyResponsePointResidualSummary } from "./frequencyDomainResponseSummaries.model";
 export {
   responseMapAvailabilityFromTypedResource,
 } from "./frequencyDomainEigenFmrSummaries";
@@ -139,18 +131,8 @@ export {
   FrequencyDomainResourceFamilyInspectorPanel,
   FrequencyDomainManifestResourceInspectorPanel,
 } from "./FrequencyDomainResourceInspectorPanels";
-export {
-  buildFrequencyResponsePlotCommandInput,
-  FrequencyResponsePointInspectorPanel,
-  FrequencyResponseFrequencyPointsInspectorPanel,
-  FrequencyResponseFieldsInspectorPanel,
-  FrequencyResponseProgressInspectorPanel,
-  FrequencyResponseCancelRequestedInspectorPanel,
-  FrequencyResponseObservableInspectorPanel,
-  FrequencyResponseObservablesInspectorPanel,
-  FrequencyResponseSweepInspectorPanel,
-  FrequencyResponseDiagnosticsInspectorPanel,
-} from "./FrequencyResponseInspectorPanels";
+export { FrequencyResponsePointInspectorPanel, FrequencyResponseFrequencyPointsInspectorPanel, FrequencyResponseFieldsInspectorPanel, FrequencyResponseProgressInspectorPanel, FrequencyResponseCancelRequestedInspectorPanel, FrequencyResponseObservableInspectorPanel, FrequencyResponseObservablesInspectorPanel, FrequencyResponseSweepInspectorPanel, FrequencyResponseDiagnosticsInspectorPanel } from "./FrequencyResponseInspectorPanels";
+export { buildFrequencyResponsePlotCommandInput } from "./FrequencyResponseInspectorPanels.model";
 
 export function FrequencyDomainCalculationModesInspectorPanel(
   props: InspectorPanelProps,
@@ -1769,12 +1751,17 @@ function FmrPeakBrowser({
 
   return (
     <div className="fm-frequency-domain-peak-browser">
-      {sortedPeaks.map((peak, index) => (
+      {keyedOccurrences(sortedPeaks, (peak) => JSON.stringify([
+        peak.source,
+        peak.frequencyHz,
+        peak.frequencyPointIndex,
+        peak.modeRef?.rawModeIndex,
+      ])).map(({ item: peak, key }) => (
         <article
           className="fm-frequency-domain-peak-card"
           data-source={peak.source}
           data-status={peak.validationStatus}
-          key={`${peak.source}:${peak.frequencyHz}:${peak.frequencyPointIndex ?? peak.modeRef?.rawModeIndex ?? index}`}
+          key={key}
         >
           <div className="fm-frequency-domain-peak-card__header">
             <div>

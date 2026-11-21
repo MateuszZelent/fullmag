@@ -4,11 +4,8 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { buildEigenResidualSummary } from "@/shared/domain/analysis/eigenResidualSummary";
 import { modalDampingObservables } from "@/shared/domain/analysis/modalDampingObservables";
 
-import {
-  buildEigenModeIdentityViewModel,
-  EigenModeDampingFields,
-  EigenModeResidualFields,
-} from "./EigenModeInspectorPanel";
+import { EigenModeDampingFields, EigenModeResidualFields } from "./EigenModeInspectorPanel";
+import { buildEigenModeIdentityViewModel } from "./EigenModeInspectorPanel.model";
 
 describe("EigenModeInspectorPanel model, damping, and residual fields", () => {
   it("keeps mode index, branch and field provenance together", () => {

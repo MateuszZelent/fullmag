@@ -12,15 +12,8 @@ import { RESULTS_DOWNLOAD_FOLDER_MISSING, RESULTS_DOWNLOAD_NO_BACKEND } from "..
 import type { WorkspaceItemDetailState } from "../model/useWorkspaceItems";
 import { parseApiItemDetail, type ResultDetail } from "../model/workspaceApiTypes";
 
-import {
-  RESULTS_VIEWER_NEEDS_SOURCE,
-  RESULTS_VIEWER_SOURCE_IS_SCRIPT,
-  ResultInspector,
-  downloadReason,
-  resultFacts,
-  viewerRoute,
-  type ResultInspectorProps,
-} from "./ResultInspector";
+import { ResultInspector, type ResultInspectorProps } from "./ResultInspector";
+import { RESULTS_VIEWER_NEEDS_SOURCE, RESULTS_VIEWER_SOURCE_IS_SCRIPT, downloadReason, resultFacts, viewerRoute } from "./ResultInspector.model";
 
 const rawResult = {
   id: "res-3",

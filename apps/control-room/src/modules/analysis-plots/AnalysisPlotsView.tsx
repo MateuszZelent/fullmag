@@ -30,8 +30,7 @@ import type { ChartSeries } from "./chartTableModel";
 import type { AnalysisFrequencyPresentationState } from "./hooks/useAnalysisFrequencyData";
 import type { ChartValueRange } from "./chartTableModel";
 import type { SpinWaveGammaFeatureSelection } from "./spinWaveGammaModel";
-import type { AnalysisResultProjectionSelection } from "./components/AnalysisResultProjectionSurface";
-import type { AnalysisResultItemKind } from "@/shared/domain/analysis/results";
+
 import type { FmrModalDrivenComparisonModel } from "@/shared/domain/analysis/frequencyDomainChartModels";
 import { ANALYSIS_COMPARISON_UNAVAILABLE_REASON } from "./analysisComparison";
 import {
@@ -39,6 +38,7 @@ import {
   legacyGammaFeatureSelectionRef,
   legacyTimeDomainSelectionPatch,
 } from "./legacyTimeDomainSelection";
+import { resultProjectionSelectionFromLegacyPoint } from "./AnalysisPlotsView.model";
 
 type AnalysisPlotsViewInput = {
   activeSubview?: AnalysisSubview;
@@ -188,21 +188,6 @@ function ignorePointSelection(): void {}
 function ignoreRangeSelection(): void {}
 function ignoreSeriesSelection(): void {}
 function ignoreDisplayUnitsChange(): void {}
-
-export function resultProjectionSelectionFromLegacyPoint(selection: {
-  itemId: string;
-  itemKind: AnalysisResultItemKind;
-  ordinal: number;
-  sampleId: string;
-}): AnalysisResultProjectionSelection {
-  return {
-    branchId: null,
-    itemId: selection.itemId,
-    itemKind: selection.itemKind,
-    ordinal: selection.ordinal,
-    sampleId: selection.sampleId,
-  };
-}
 
 function resolveActiveSubview(
   surface: AnalysisSurface,

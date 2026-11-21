@@ -40,7 +40,7 @@ import {
   modeFieldComponentOptions,
   selectedField3DPlotStatus,
 } from "./frequency-domain/FrequencyDomainHelpers";
-import { buildModeVisualizationBreadcrumbs } from "./mode-visualization/ModeVisualizationBreadcrumbs";
+import { buildModeVisualizationBreadcrumbs } from "./mode-visualization/ModeVisualizationBreadcrumbs.model";
 
 const executeMock = vi.fn(() => Promise.resolve({ status: "success" }));
 

@@ -51,11 +51,13 @@ export function buildSemanticRenderTargetCatalog({
   parts: readonly VisualizationMeshPartLike[];
   sceneObjectIds: ReadonlySet<string>;
 }): SemanticRenderTargetCatalog {
-  const canonicalSceneObjectIds = new Set(
-    [...sceneObjectIds]
-      .map(canonicalVisualizationSceneObjectId)
-      .filter((objectId) => !isVisualizationAirboxIdentity({ id: objectId })),
-  );
+  const canonicalSceneObjectIds = new Set<string>();
+  for (const sceneObjectId of sceneObjectIds) {
+    const objectId = canonicalVisualizationSceneObjectId(sceneObjectId);
+    if (!isVisualizationAirboxIdentity({ id: objectId })) {
+      canonicalSceneObjectIds.add(objectId);
+    }
+  }
   const mutableEntries = new Map<
     string,
     Omit<SemanticRenderTargetAddress, "carrierIds"> & { carrierIds: string[] }

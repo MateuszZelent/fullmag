@@ -167,6 +167,9 @@ pub enum StudyIRV04 {
         sampling: SamplingIR,
         spatial_representation: SpatialRepresentationIR,
     },
+    // The camel-case `mT` suffix is a public SI-unit field name and part of the
+    // serialized ProblemIR contract.
+    #[allow(non_snake_case)]
     Hysteresis {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         field_min_mT: Option<f64>,

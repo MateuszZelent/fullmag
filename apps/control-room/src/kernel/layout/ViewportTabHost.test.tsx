@@ -26,10 +26,8 @@ import { VisualizationDebugController } from "../visualization/VisualizationDebu
 import { VisualizationRegistrySyncController } from "../visualization/VisualizationRegistrySyncController";
 
 import { LayoutController } from "./LayoutController";
-import {
-  __viewportTabHostTestUtils,
-  ViewportTabHost,
-} from "./ViewportTabHost";
+import { ViewportTabHost } from "./ViewportTabHost";
+import { __viewportTabHostTestUtils } from "./ViewportTabHost.model";
 
 function TestModule() {
   return <div>Mounted viewport module</div>;

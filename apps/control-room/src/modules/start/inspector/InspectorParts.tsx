@@ -16,6 +16,7 @@ import { formatOpened } from "../model/recentIndex";
 import { copyText, formatDuration } from "../model/scriptRowModel";
 import type { ProjectStatus } from "../model/types";
 import { StatusPill } from "../ui/StatusPill";
+import { inspectorTabId, inspectorPanelId } from "./InspectorParts.model";
 
 /* ── Header ─────────────────────────────────────────────────────────────── */
 
@@ -153,9 +154,6 @@ export interface InspectorTabsProps<T extends string> {
   readonly label: string;
   readonly baseId: string;
 }
-
-export const inspectorTabId = (baseId: string, tab: string) => `${baseId}-tab-${tab}`;
-export const inspectorPanelId = (baseId: string) => `${baseId}-panel`;
 
 /** A WAI-ARIA tablist: arrows, Home and End move between tabs; only the selected one is a tab stop. */
 export function InspectorTabs<T extends string>({

@@ -84,6 +84,21 @@
   background: var(--fm-bg-panel);
 }
 
+.fm-analysis-plots__native-table {
+  width: 100%;
+  border-spacing: 0;
+}
+
+.fm-analysis-plots__native-table th {
+  font: inherit;
+  text-align: start;
+}
+
+.fm-analysis-plots__status-list {
+  margin: 0;
+  list-style: none;
+}
+
 .fm-analysis-plots__physical-context {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));

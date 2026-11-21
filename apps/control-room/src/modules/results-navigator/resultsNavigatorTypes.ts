@@ -637,11 +637,11 @@ function duplicateStableIds(values: readonly unknown[]): ReadonlySet<string> {
     const id = nonEmptyString(value);
     if (id) counts.set(id, (counts.get(id) ?? 0) + 1);
   }
-  return new Set(
-    [...counts.entries()]
-      .filter(([, count]) => count > 1)
-      .map(([id]) => id),
-  );
+  const duplicateIds = new Set<string>();
+  for (const [id, count] of counts) {
+    if (count > 1) duplicateIds.add(id);
+  }
+  return duplicateIds;
 }
 
 function fieldSweepAxisFromPayload(
@@ -916,10 +916,9 @@ function fieldSweepSamplesMatchSpectrum(
     const companionModeIds = companion.modes
       .map((mode) => mode.modeId)
       .filter((modeId): modeId is string => modeId != null);
-    return Boolean(
-      duplicateStableIds(companionModeIds).size === 0
-        && sample.modes.every((mode) => companionModeIds.includes(mode.modeId!)),
-    );
+    const companionModes = new Set(companionModeIds);
+    return companionModes.size === companionModeIds.length
+      && sample.modes.every((mode) => companionModes.has(mode.modeId!));
   });
 }
 
@@ -960,9 +959,9 @@ function singleCrossArtifactRevision(
   malformedRelations: ReadonlySet<string> = new Set(),
 ): string | null {
   if (malformedRelations.has(relation)) return null;
-  const revisions = references
-    .filter((reference) => reference.relation === relation)
-    .map((reference) => reference.revision);
+  const revisions = references.flatMap((reference) =>
+    reference.relation === relation ? [reference.revision] : [],
+  );
   return revisions.length === 1 ? revisions[0]! : null;
 }
 

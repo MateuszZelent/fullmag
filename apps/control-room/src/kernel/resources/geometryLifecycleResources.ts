@@ -95,18 +95,19 @@ import {
   isOptionalObjectInteractionKind,
 } from "../api/apiTypes";
 import {
-  decodeFdmRegionMembership,
   decodeFdmMultilayerActiveMask,
   FMBM_HEADER_LEN,
   validateFdmMultilayerActiveMaskContract,
   type DecodedFdmMultilayerActiveMask,
+} from "../api/codecs/fdmMultilayerActiveMaskCodec";
+import {
+  decodeFdmRegionMembership,
   FMRM_HEADER_LEN,
   validateFdmRegionMembershipContract,
   type DecodedFdmRegionMembership,
   type FdmRegionMembershipContractResult,
-  type DecodedMeshQualityData,
-  type DecodedTopology,
-} from "../api/codecs";
+} from "../api/codecs/fdmRegionMembershipCodec";
+import type { DecodedMeshQualityData, DecodedTopology } from "../api/codecs/types";
 import { ControlRoomApiError } from "../api/ControlRoomApi";
 import {
   resolveArtifactAssessment,

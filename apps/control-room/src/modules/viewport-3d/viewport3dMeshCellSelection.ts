@@ -7,7 +7,7 @@ import {
 import type {
   Viewport3DTopologyPartRenderModel,
 } from "./viewport3dRenderModel";
-import { resolveMeshPartSurfacePickIdentity } from "./layers/MeshPartLayer";
+import { resolveMeshPartSurfacePickIdentity } from "./layers/MeshPartLayer.model";
 import {
   isViewport3DTopologyCurrent,
   type Viewport3DTopologyFreshness,
