@@ -50,6 +50,11 @@ class PublicFemReciprocalM2FixtureTests(unittest.TestCase):
                 },
             ],
         )
+        universe_size = stage_ir["problem_meta"]["runtime_metadata"]["study_universe"]["size"]
+        body_size = (30.0e-9, 20.0e-9, 4.0e-9)
+        self.assertEqual(len(universe_size), len(body_size))
+        for airbox_extent, body_extent in zip(universe_size, body_size):
+            self.assertGreater(airbox_extent, body_extent)
         self.assertEqual(stage_ir["current_modules"][0]["model"], "magnetoresistive_poisson")
         self.assertEqual(stage_ir["current_modules"][0]["coupling"], "bidirectional")
         self.assertEqual(

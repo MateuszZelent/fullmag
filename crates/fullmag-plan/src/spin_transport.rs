@@ -5336,7 +5336,6 @@ mod tests {
                 "strict",
                 "--precision",
                 "double",
-                "--skip-geometry-assets",
             ])
             .current_dir(&repo_root)
             .env("PYTHONPATH", python_path)
@@ -5351,32 +5350,29 @@ mod tests {
         let exported: serde_json::Value =
             serde_json::from_slice(&output.stdout).expect("run-config JSON");
         let stage_ir = exported["stages"][0]["ir"].clone();
-        let mut problem: ProblemIR =
+        let problem: ProblemIR =
             serde_json::from_value(stage_ir).expect("public example ProblemIR");
-
-        // Use the small valid tetrahedral mesh already shared by planner
-        // contracts. The example's geometry, boundaries, materials, and
-        // solver policies still come directly from its Python-authored IR.
-        let (mut mesh, _, _) = fem_mesh_fixture();
-        mesh.mesh_name = "m2_body".into();
-        for node in &mut mesh.nodes {
-            node[0] = (node[0] - 0.5) * 30.0e-9;
-            node[1] = (node[1] - 0.5) * 20.0e-9;
-            node[2] = (node[2] - 0.5) * 4.0e-9;
-        }
-        problem.geometry_assets = Some(GeometryAssetsIR {
-            fem_domain_mesh_asset: Some(FemDomainMeshAssetIR {
-                mesh_source: None,
-                mesh: Some(mesh),
-                region_markers: vec![FemDomainRegionMarkerIR {
-                    geometry_name: "m2_body".into(),
-                    marker: 7,
-                }],
-                object_region_markers: Vec::new(),
-                build_report: None,
-            }),
-            ..GeometryAssetsIR::default()
-        });
+        // Keep geometry generation enabled: bootstrap-rust installs Gmsh, and
+        // the example's actual shared-domain mesh must reach the planner.
+        let domain_mesh = problem
+            .geometry_assets
+            .as_ref()
+            .and_then(|assets| assets.fem_domain_mesh_asset.as_ref())
+            .expect("public example's generated shared-domain mesh");
+        assert!(
+            domain_mesh
+                .mesh
+                .as_ref()
+                .is_some_and(|mesh| !mesh.nodes.is_empty()),
+            "public example must materialize its FEM mesh in the CI meshing environment"
+        );
+        assert!(
+            domain_mesh
+                .region_markers
+                .iter()
+                .any(|marker| marker.geometry_name == "m2_body"),
+            "public example's shared mesh must retain the transport body region"
+        );
 
         let plan = crate::plan(&problem).unwrap_or_else(|error| {
             panic!(

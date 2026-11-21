@@ -14,6 +14,8 @@ import fullmag as fm
 
 NM = 1.0e-9
 BODY_SIZE = (30.0 * NM, 20.0 * NM, 4.0 * NM)
+AIRBOX_PADDING = 10.0 * NM
+AIRBOX_SIZE = tuple(size + 2.0 * AIRBOX_PADDING for size in BODY_SIZE)
 M2_OPERATOR = "fem_charge_spin_conforming_h1_p1.reciprocal_m2.v1"
 
 
@@ -23,16 +25,17 @@ study.device("cpu", precision="double")
 study.mode("strict")
 study.universe(
     mode="manual",
-    size=BODY_SIZE,
+    # The explicit universe size is the outer shared-domain box. Keep air
+    # around the transport body even though this fixture disables demag.
+    size=AIRBOX_SIZE,
     center=(0.0, 0.0, 0.0),
     padding=(0.0, 0.0, 0.0),
 )
 study.universe.mesh(maximum_element_size=10.0 * NM)
 
 # Transport fixture isolates the reciprocal charge--spin/torque path.  The
-# production SP5/airbox gate owns demagnetization separately; disable it before
-# materializing the shared FEM mesh so the mesh/runtime contract cannot infer
-# an airbox demag realization from an earlier build request.
+# shared-domain FEM mesh still contains an airbox region, but demagnetization
+# stays disabled; the production SP5/airbox gate owns that physics separately.
 study.demag(enabled=False)
 
 body = study.geometry(fm.Box(size=BODY_SIZE, name="m2_body"), name="m2_body")

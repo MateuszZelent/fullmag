@@ -294,7 +294,10 @@ study.spin_torque(fm.DriftDiffusionSpinTorque("m2_torque", spin.id, region))
 study.stages.add_run(1.0e-15, stage_id="m2_run")
 ```
 
-This is a bounded reference pattern. The executable fixture `examples/fem_reciprocal_m2_public.py` adds conforming mesh and complete electrodes.
+This is a bounded reference pattern. The executable fixture
+`examples/fem_reciprocal_m2_public.py` adds a conforming shared-domain mesh,
+surrounding air, and complete electrodes. Its demagnetization energy remains
+disabled.
 
 ### C. Prescribed SOT comparison
 
