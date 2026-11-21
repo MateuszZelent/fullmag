@@ -2,12 +2,23 @@ import { readFileSync } from "node:fs";
 
 import { describe, expect, it } from "vitest";
 
-import {
-  createViewport3DCanvasLifecycleController,
-  sanitizeViewport3DCanvasMeasure,
-} from "./Viewport3DCanvas";
+import { createViewport3DCanvasLifecycleController, sanitizeViewport3DCanvasMeasure } from "./Viewport3DCanvas.model";
 
 describe("Viewport3DCanvas", () => {
+  it("registers the cameras used by the Drei camera components", () => {
+    const source = readFileSync(
+      new URL("./Viewport3DCanvas.tsx", import.meta.url),
+      "utf8",
+    );
+    const registration = source.slice(
+      source.indexOf("extend({"),
+      source.indexOf("});", source.indexOf("extend({")),
+    );
+
+    expect(registration).toContain("OrthographicCamera,");
+    expect(registration).toContain("PerspectiveCamera,");
+  });
+
   it("passes only stable R3F size keys to root.configure", () => {
     const size = sanitizeViewport3DCanvasMeasure({
       bottom: 340,

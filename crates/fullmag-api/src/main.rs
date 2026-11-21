@@ -2595,11 +2595,9 @@ fn parse_texture_projection_mode(value: &str) -> TextureProjectionMode {
 }
 
 #[tokio::main]
-async fn main() {
+async fn run_api_server() {
     fullmag_build_info::print_startup_stamp();
-    if option_env!("CARGO_BIN_NAME") == Some("fullmag-api-openapi")
-        || std::env::args().any(|arg| arg == "--print-openapi-v2")
-    {
+    if std::env::args().any(|arg| arg == "--print-openapi-v2") {
         println!(
             "{}",
             serde_json::to_string_pretty(&openapi_v2::openapi_json())
@@ -5604,6 +5602,7 @@ async fn get_or_load_current_live_scene_document_with_context(
         .ok_or_else(|| ApiError::not_found("no scene document available for current workspace"))
 }
 
+#[cfg(test)]
 pub(crate) async fn commit_current_live_scene_document(
     state: &Arc<AppState>,
     scene_document: SceneDocument,

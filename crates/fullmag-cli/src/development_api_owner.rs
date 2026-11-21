@@ -175,22 +175,6 @@ impl OwnerLaunch {
         }))
     }
 
-    /// Create owner credentials for the isolated native completion probe.
-    /// Ordinary launch paths continue to use a freshly generated token.
-    pub(crate) fn from_probe_environment() -> Result<Self> {
-        if env::var("FULLMAG_DEVELOPMENT_OWNER_PROBE").as_deref() != Ok("1") {
-            bail!("development API probe is not enabled");
-        }
-        let mut launch = Self::from_environment(true, false)?
-            .context("managed native development API probe is unavailable")?;
-        let token = required_environment_value("FULLMAG_DEVELOPMENT_OWNER_PROBE_TOKEN")?;
-        if !lower_hex(&token, 32) {
-            bail!("invalid development API probe token");
-        }
-        launch.owner_token = token;
-        Ok(launch)
-    }
-
     /// Create a fresh owner identity for a bundle validated by the managed
     /// candidate helper. The bundle's compiled identity is kept separate from
     /// the current launcher identity used by ordinary owner confirmation.
@@ -526,10 +510,10 @@ pub(crate) struct CanceledCandidateHelperEvidence {
 }
 
 pub(crate) enum CandidatePreparationPoll {
-    Pending { helper_pid: u32 },
-    Unconfirmed { helper_pid: u32 },
+    Pending,
+    Unconfirmed,
     Ready(SelectedDevelopmentCandidate),
-    Unavailable { helper_pid: Option<u32> },
+    Unavailable,
 }
 
 pub(crate) struct CandidatePreparationJob {
@@ -929,7 +913,7 @@ impl OwnedDevelopmentApi {
         job: &mut CandidatePreparationJob,
     ) -> CandidatePreparationPoll {
         if !job.is_pending() {
-            return CandidatePreparationPoll::Unavailable { helper_pid: None };
+            return CandidatePreparationPoll::Unavailable;
         }
         if Instant::now() >= job.deadline {
             job.cancel_requested = true;
@@ -942,45 +926,36 @@ impl OwnedDevelopmentApi {
                 }
                 match helper.poll() {
                     Ok(HelperPoll::Pending) => {
-                        let helper_pid = helper.helper_pid();
                         job.phase = CandidatePreparationPhase::Selector(helper);
-                        CandidatePreparationPoll::Pending { helper_pid }
+                        CandidatePreparationPoll::Pending
                     }
                     Ok(HelperPoll::Failed {
                         helper_pid, reason, ..
                     }) => {
-                        eprintln!("[fullmag] candidate selector ended unavailable: {reason}");
-                        CandidatePreparationPoll::Unavailable {
-                            helper_pid: Some(helper_pid),
-                        }
+                        eprintln!("[fullmag] candidate selector pid={helper_pid} ended unavailable: {reason}");
+                        CandidatePreparationPoll::Unavailable
                     }
                     Ok(HelperPoll::Unconfirmed { helper_pid, reason }) => {
                         job.cancel_requested = true;
                         job.report_cleanup_unconfirmed(helper_pid, reason);
                         job.phase = CandidatePreparationPhase::Selector(helper);
-                        CandidatePreparationPoll::Unconfirmed { helper_pid }
+                        CandidatePreparationPoll::Unconfirmed
                     }
                     Err(error) => {
                         if helper.is_terminal() {
-                            eprintln!(
-                                "[fullmag] candidate selector cleanup ended unavailable: {error:#}"
-                            );
-                            CandidatePreparationPoll::Unavailable {
-                                helper_pid: Some(helper.helper_pid()),
-                            }
+                            eprintln!("[fullmag] candidate selector pid={} cleanup ended unavailable: {error:#}", helper.helper_pid());
+                            CandidatePreparationPoll::Unavailable
                         } else {
-                            let helper_pid = helper.helper_pid();
                             job.phase = CandidatePreparationPhase::Selector(helper);
-                            CandidatePreparationPoll::Pending { helper_pid }
+                            CandidatePreparationPoll::Pending
                         }
                     }
                     Ok(HelperPoll::Completed {
                         helper_pid, output, ..
                     }) => {
                         if job.cancel_requested {
-                            return CandidatePreparationPoll::Unavailable {
-                                helper_pid: Some(helper_pid),
-                            };
+                            eprintln!("[fullmag] candidate selector pid={helper_pid} completed after cancellation");
+                            return CandidatePreparationPoll::Unavailable;
                         }
                         let next = self.start_candidate_owner_verification(
                             repo_root,
@@ -995,7 +970,6 @@ impl OwnedDevelopmentApi {
                                 candidate_bundle_id,
                                 candidate_manifest_sha256,
                             )) => {
-                                let verifier_helper_pid = verifier.helper_pid();
                                 job.phase = CandidatePreparationPhase::OwnerVerifier {
                                     helper: verifier,
                                     bundle_root,
@@ -1003,15 +977,11 @@ impl OwnedDevelopmentApi {
                                     candidate_manifest_sha256,
                                     selector_helper_pid: helper_pid,
                                 };
-                                CandidatePreparationPoll::Pending {
-                                    helper_pid: verifier_helper_pid,
-                                }
+                                CandidatePreparationPoll::Pending
                             }
                             Err(error) => {
                                 eprintln!("[fullmag] candidate selector result was unavailable: {error:#}");
-                                CandidatePreparationPoll::Unavailable {
-                                    helper_pid: Some(helper_pid),
-                                }
+                                CandidatePreparationPoll::Unavailable
                             }
                         }
                     }
@@ -1029,7 +999,6 @@ impl OwnedDevelopmentApi {
                 }
                 match helper.poll() {
                     Ok(HelperPoll::Pending) => {
-                        let helper_pid = helper.helper_pid();
                         job.phase = CandidatePreparationPhase::OwnerVerifier {
                             helper,
                             bundle_root,
@@ -1037,15 +1006,13 @@ impl OwnedDevelopmentApi {
                             candidate_manifest_sha256,
                             selector_helper_pid,
                         };
-                        CandidatePreparationPoll::Pending { helper_pid }
+                        CandidatePreparationPoll::Pending
                     }
                     Ok(HelperPoll::Failed {
                         helper_pid, reason, ..
                     }) => {
-                        eprintln!("[fullmag] candidate owner verifier ended unavailable: {reason}");
-                        CandidatePreparationPoll::Unavailable {
-                            helper_pid: Some(helper_pid),
-                        }
+                        eprintln!("[fullmag] candidate owner verifier pid={helper_pid} ended unavailable: {reason}");
+                        CandidatePreparationPoll::Unavailable
                     }
                     Ok(HelperPoll::Unconfirmed { helper_pid, reason }) => {
                         job.cancel_requested = true;
@@ -1057,16 +1024,13 @@ impl OwnedDevelopmentApi {
                             candidate_manifest_sha256,
                             selector_helper_pid,
                         };
-                        CandidatePreparationPoll::Unconfirmed { helper_pid }
+                        CandidatePreparationPoll::Unconfirmed
                     }
                     Err(error) => {
                         if helper.is_terminal() {
-                            eprintln!("[fullmag] candidate owner verifier cleanup ended unavailable: {error:#}");
-                            CandidatePreparationPoll::Unavailable {
-                                helper_pid: Some(helper.helper_pid()),
-                            }
+                            eprintln!("[fullmag] candidate owner verifier pid={} cleanup ended unavailable: {error:#}", helper.helper_pid());
+                            CandidatePreparationPoll::Unavailable
                         } else {
-                            let helper_pid = helper.helper_pid();
                             job.phase = CandidatePreparationPhase::OwnerVerifier {
                                 helper,
                                 bundle_root,
@@ -1074,16 +1038,15 @@ impl OwnedDevelopmentApi {
                                 candidate_manifest_sha256,
                                 selector_helper_pid,
                             };
-                            CandidatePreparationPoll::Pending { helper_pid }
+                            CandidatePreparationPoll::Pending
                         }
                     }
                     Ok(HelperPoll::Completed {
                         helper_pid, output, ..
                     }) => {
                         if job.cancel_requested {
-                            return CandidatePreparationPoll::Unavailable {
-                                helper_pid: Some(helper_pid),
-                            };
+                            eprintln!("[fullmag] candidate owner verifier pid={helper_pid} completed after cancellation");
+                            return CandidatePreparationPoll::Unavailable;
                         }
                         match self.finish_candidate_owner_verification(
                             &job.identity,
@@ -1097,16 +1060,14 @@ impl OwnedDevelopmentApi {
                             Ok(candidate) => CandidatePreparationPoll::Ready(candidate),
                             Err(error) => {
                                 eprintln!("[fullmag] candidate owner verifier result was unavailable: {error:#}");
-                                CandidatePreparationPoll::Unavailable {
-                                    helper_pid: Some(helper_pid),
-                                }
+                                CandidatePreparationPoll::Unavailable
                             }
                         }
                     }
                 }
             }
             CandidatePreparationPhase::Terminal => {
-                CandidatePreparationPoll::Unavailable { helper_pid: None }
+                CandidatePreparationPoll::Unavailable
             }
         }
     }
@@ -1993,7 +1954,6 @@ impl AuthoringAcquisition {
         Ok(PreparedDevelopmentRestore {
             accepted_commit: accepted,
             accepted_store_scope,
-            accepted_store_binding,
             commit_sha256,
             old_api_instance_id: self.api_instance_id.clone(),
             candidate_bundle_root: staged.candidate_bundle_root.clone(),
@@ -2688,7 +2648,6 @@ struct CandidateRestorePins {
 pub(crate) struct PreparedDevelopmentRestore {
     accepted_commit: fullmag_session::store::DevelopmentHandoffCommit,
     accepted_store_scope: Option<String>,
-    accepted_store_binding: String,
     commit_sha256: String,
     old_api_instance_id: String,
     candidate_bundle_root: PathBuf,
@@ -2707,10 +2666,6 @@ impl PreparedDevelopmentRestore {
 
     pub(crate) fn accepted_store_scope(&self) -> Option<&str> {
         self.accepted_store_scope.as_deref()
-    }
-
-    pub(crate) fn accepted_store_binding(&self) -> &str {
-        &self.accepted_store_binding
     }
 
     pub(crate) fn commit_sha256(&self) -> &str {
@@ -2764,21 +2719,6 @@ impl PreparedDevelopmentRestore {
         &self.preparation.project_document
     }
 
-    pub(crate) fn workspace_state(&self) -> &str {
-        &self.preparation.workspace_state
-    }
-
-    pub(crate) fn target_build_id(&self) -> &str {
-        &self.binding.target_build_id
-    }
-
-    pub(crate) fn handoff_id(&self) -> &str {
-        &self.preparation.handoff.handoff_id
-    }
-
-    pub(crate) fn snapshot_sha256(&self) -> &str {
-        &self.preparation.handoff.snapshot_sha256
-    }
 }
 
 enum StageHelperEvent {

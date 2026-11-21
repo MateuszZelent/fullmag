@@ -35,10 +35,6 @@ function formatScientificInput(value: number): string {
   return String(value);
 }
 
-export function formatObjectEditNumber(value: number): string {
-  return formatScientificInput(value);
-}
-
 function formatNumberInput(value: unknown, fallback: number): string {
   return formatScientificInput(asNumber(value) ?? fallback);
 }
@@ -123,8 +119,10 @@ function geometryCharacteristicLength(draft: GeometryObjectDraft): number {
     numericDraftValue(draft, "width"),
     numericDraftValue(draft, "archHeight"),
   ].filter((value): value is number => value !== null);
-  const positive = values.map(Math.abs).filter((value) => value > 0);
-  return positive.length > 0 ? Math.max(...positive) : 0;
+  return values.reduce((maximum, value) => {
+    const magnitude = Math.abs(value);
+    return magnitude > maximum ? magnitude : maximum;
+  }, 0);
 }
 
 function float64Ulp(value: number): number {

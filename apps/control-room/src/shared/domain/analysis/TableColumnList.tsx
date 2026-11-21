@@ -1,7 +1,4 @@
-export interface AxisColumnUnit {
-  column_id: string;
-  unit: string;
-}
+import { useId } from "react";
 
 export interface AxisColumnDescriptor extends AxisColumnUnit {
   component?: string | null;
@@ -11,8 +8,6 @@ export interface AxisColumnDescriptor extends AxisColumnUnit {
   reduction?: string | null;
   scope?: string;
 }
-
-const MAX_Y_AXIS_UNIT_GROUPS = 2;
 const THIRD_UNIT_DISABLED_REASON = "Select at most two Y-axis unit groups";
 
 export function TableColumnList({
@@ -34,9 +29,14 @@ export function TableColumnList({
   showQuantityId?: boolean;
   selectedSeriesIds: readonly string[];
 }) {
+  const controlId = useId();
   if (!columns) {
     return <div className="fm-analysis-plots__empty">No table schema</div>;
   }
+  const selectedSeries = new Set(selectedSeriesIds);
+  const selectedColumnIds = columns.flatMap((column) =>
+    selectedSeries.has(seriesIdForColumn(column.column_id)) ? [column.column_id] : [],
+  );
   return (
     <div className="fm-analysis-plots__columns">
       <div className="fm-analysis-plots__column-header">
@@ -47,12 +47,9 @@ export function TableColumnList({
       </div>
       {columns.map((column) => {
         const seriesId = seriesIdForColumn(column.column_id);
-        const yAxisChecked = selectedSeriesIds.includes(seriesId);
-        const selectedColumnIds = columns.flatMap((candidate) =>
-          selectedSeriesIds.includes(seriesIdForColumn(candidate.column_id))
-            ? [candidate.column_id]
-            : [],
-        );
+        const yAxisChecked = selectedSeries.has(seriesId);
+        const xControlId = `${controlId}-x-${column.column_id}`;
+        const yControlId = `${controlId}-y-${column.column_id}`;
         const nextCheckedIds = nextYAxisIdsForToggle(
           selectedColumnIds,
           column.column_id,
@@ -68,13 +65,14 @@ export function TableColumnList({
           ? THIRD_UNIT_DISABLED_REASON
           : undefined;
         return (
-          <label
+          <div
             key={column.column_id}
             className="fm-analysis-plots__column-row"
           >
             <input
               checked={xAxisId === column.column_id}
               className="fm-analysis-plots__radio"
+              id={xControlId}
               name={xAxisRadioName}
               type="radio"
               onChange={() => onSelectXAxis(column.column_id)}
@@ -83,6 +81,7 @@ export function TableColumnList({
               checked={yAxisChecked}
               className="fm-analysis-plots__checkbox"
               disabled={yAxisDisabled}
+              id={yControlId}
               title={checkboxTitle}
               type="checkbox"
               onChange={(event) =>
@@ -95,68 +94,20 @@ export function TableColumnList({
                 )
               }
             />
-            <span className="fm-analysis-plots__column-label">
+            <label className="sr-only" htmlFor={yControlId}>Y axis: {column.label}</label>
+            <label className="fm-analysis-plots__column-label" htmlFor={xControlId}>
+              <span className="sr-only">X axis: </span>
               {column.label}
               {showQuantityId ? (
                 <span className="fm-analysis-plots__column-id">{column.column_id}</span>
               ) : null}
-            </span>
+            </label>
             <span className="fm-analysis-plots__column-unit">{column.unit}</span>
-          </label>
+          </div>
         );
       })}
     </div>
   );
 }
-
-export function nextYAxisIdsForToggle(
-  yAxisIds: readonly string[],
-  columnId: string,
-  enabled: boolean,
-  options: {
-    columns?: readonly AxisColumnUnit[];
-    xAxisId?: string;
-  } = {},
-): string[] {
-  if (enabled) {
-    const nextIds = yAxisIds.includes(columnId)
-      ? [...yAxisIds]
-      : [...yAxisIds, columnId];
-    return options.columns
-      ? sanitizeYAxisIdsForUnitLimit(
-          nextIds,
-          options.columns,
-          options.xAxisId,
-        )
-      : nextIds;
-  }
-  if (!yAxisIds.includes(columnId)) return [...yAxisIds];
-  return yAxisIds.filter((id) => id !== columnId);
-}
-
-export function sanitizeYAxisIdsForUnitLimit(
-  yAxisIds: readonly string[],
-  columns: readonly AxisColumnUnit[],
-  xAxisId?: string,
-): string[] {
-  const unitByColumnId = new Map(
-    columns.map((column) => [column.column_id, column.unit] as const),
-  );
-  const selectedUnitGroups = new Set<string>();
-  const sanitized: string[] = [];
-  for (const columnId of yAxisIds) {
-    if (columnId === xAxisId) continue;
-    const unit = unitByColumnId.get(columnId);
-    if (unit === undefined) continue;
-    if (
-      !selectedUnitGroups.has(unit) &&
-      selectedUnitGroups.size >= MAX_Y_AXIS_UNIT_GROUPS
-    ) {
-      continue;
-    }
-    selectedUnitGroups.add(unit);
-    sanitized.push(columnId);
-  }
-  return sanitized;
-}
 import { toggleSelectedSeriesId } from "@/shared/analysis-charts/chartSeriesSelection";
+import { type AxisColumnUnit, nextYAxisIdsForToggle } from "./TableColumnList.model";

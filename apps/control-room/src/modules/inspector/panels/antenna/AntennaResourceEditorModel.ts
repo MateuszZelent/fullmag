@@ -43,15 +43,15 @@ export function createAntennaResourceDraft(scene: SceneResource, kind: AntennaEd
   return draft;
 }
 export function antennaResourceDependents(scene: SceneResource, kind: AntennaEditableKind, id: string): string[] {
-  if (kind === "projection") return (scene.solved_antenna_drives ?? []).filter((item) => item.projection_ref === id).map((item) => `drive:${item.id}`);
+  if (kind === "projection") return (scene.solved_antenna_drives ?? []).flatMap((item) => item.projection_ref === id ? [`drive:${item.id}`] : []);
   if (kind === "spectrum") return [];
   return [
-    ...(scene.antenna_field_solve_stages ?? []).filter((item) => item.port_mode_ids.includes(id)).map((item) => `field solve:${item.id}`),
-    ...(scene.solved_antenna_drives ?? []).filter((item) => item.port_mode_id === id).map((item) => `drive:${item.id}`),
-    ...(scene.antenna_spectrum_requests ?? []).filter((item) => item.port_mode_id === id).map((item) => `spectrum:${item.id}`),
+    ...(scene.antenna_field_solve_stages ?? []).flatMap((item) => item.port_mode_ids.includes(id) ? [`field solve:${item.id}`] : []),
+    ...(scene.solved_antenna_drives ?? []).flatMap((item) => item.port_mode_id === id ? [`drive:${item.id}`] : []),
+    ...(scene.antenna_spectrum_requests ?? []).flatMap((item) => item.port_mode_id === id ? [`spectrum:${item.id}`] : []),
     ...(scene.current_transports ?? []).flatMap((transport) => {
       const preparation = transport.external_lead_preparation as { drives?: Array<{ id: string; port_mode_ref: string }> } | null | undefined;
-      return (preparation?.drives ?? []).filter((drive) => drive.port_mode_ref === id).map((drive) => `terminal drive:${transport.name}/${drive.id}`);
+      return (preparation?.drives ?? []).flatMap((drive) => drive.port_mode_ref === id ? [`terminal drive:${transport.name}/${drive.id}`] : []);
     }),
   ];
 }

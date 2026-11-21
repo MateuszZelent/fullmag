@@ -2274,7 +2274,6 @@ impl SessionStore {
         validate_store_id(run_id)?;
         validate_store_id(decision_id)?;
         let relative = format!("runs/{run_id}/retry_decisions/{decision_id}.json");
-        let path = checked_path(&self.root, &relative)?;
         let Some(data) = read_optional_bounded_regular_file(
             &self.root,
             &relative,
@@ -3449,7 +3448,6 @@ impl SessionStore {
             "runs/{run_id}/coordinator_journal/{}/{entry_id}.json",
             direction.as_str()
         );
-        let path = checked_path(&self.root, &relative)?;
         let Some(data) = read_optional_bounded_regular_file(
             &self.root,
             &relative,
@@ -3707,6 +3705,7 @@ impl SessionStore {
     /// New entries must match the current task attempt/epoch in the durable
     /// run catalog. Existing immutable entries remain in the append-only
     /// catalog across retries; a newer revision may only append entries.
+    #[cfg(test)]
     pub(crate) fn commit_artifact_catalog(&self, catalog: &FmsArtifactCatalog) -> Result<()> {
         catalog.validate()?;
         let _lease = self.write_transaction()?;
@@ -4041,7 +4040,6 @@ impl SessionStore {
     pub fn read_artifact_catalog(&self, run_id: &str) -> Result<Option<FmsArtifactCatalog>> {
         validate_store_id(run_id)?;
         let relative = format!("runs/{run_id}/artifact_catalog.json");
-        let path = checked_path(&self.root, &relative)?;
         let Some(data) = read_optional_bounded_regular_file(
             &self.root,
             &relative,

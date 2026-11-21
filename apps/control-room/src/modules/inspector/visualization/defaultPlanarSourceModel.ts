@@ -43,7 +43,3 @@ export function positionFractionFromCoordinate(
   if (!Number.isFinite(coordinate) || max <= min) return 0.5;
   return Math.min(1, Math.max(0, (coordinate - min) / (max - min)));
 }
-
-export function defaultPlaneLabel(plane: DefaultPlanarPlane): string {
-  return plane.toUpperCase();
-}

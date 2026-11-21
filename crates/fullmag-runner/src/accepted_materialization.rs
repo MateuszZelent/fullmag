@@ -402,7 +402,7 @@ pub(crate) fn evaluate_lane_observables(
                 plan,
                 &requested,
             );
-            let selected = select_active_quantities(&requested, &active, implicit_default)?;
+            let _selected = select_active_quantities(&requested, &active, implicit_default)?;
             #[cfg(feature = "cuda")]
             {
                 let mut exact_plan = plan.clone();
@@ -418,7 +418,7 @@ pub(crate) fn evaluate_lane_observables(
                 crate::fdm::gpu::cuda::execute::apply_regional_drive_energy(
                     &exact_plan, &mut stats, input.values,
                 );
-                let snapshots = selected
+                let snapshots = _selected
                     .iter()
                     .map(|quantity| {
                         backend
@@ -432,7 +432,7 @@ pub(crate) fn evaluate_lane_observables(
                     .collect::<Result<Vec<_>, _>>()?;
                 fields.extend(fields_from_preview(
                     snapshots,
-                    &selected,
+                    &_selected,
                     input.layout.clone(),
                     "fdm:magnetic",
                     "magnetic",
@@ -518,7 +518,7 @@ pub(crate) fn evaluate_lane_observables(
                 plan,
                 &requested,
             );
-            let selected = select_active_quantities(&requested, &active, implicit_default)?;
+            let _selected = select_active_quantities(&requested, &active, implicit_default)?;
             #[cfg(feature = "fem-native")]
             {
                 if gpu && !cfg!(feature = "fem-gpu") {
@@ -571,7 +571,7 @@ pub(crate) fn evaluate_lane_observables(
                     .map_err(|error| error.to_string())?;
                 let node_count = exact_plan.mesh.nodes.len();
                 let stats = backend.snapshot_step_stats(node_count).map_err(|error| error.to_string())?;
-                let snapshots = selected.iter().map(|quantity| {
+                let snapshots = _selected.iter().map(|quantity| {
                     backend.copy_live_preview_field(&request_for_quantity(quantity), node_count)
                         .map_err(|error| error.to_string())
                 }).collect::<Result<Vec<_>, _>>()?;
@@ -591,7 +591,7 @@ pub(crate) fn evaluate_lane_observables(
                 }
                 fields.extend(fields_from_preview(
                     snapshots,
-                    &selected,
+                    &_selected,
                     input.layout.clone(),
                     "fem:local_nodes",
                     "magnetic",
@@ -894,6 +894,7 @@ fn full_resolution_request() -> crate::types::LivePreviewRequest {
     }
 }
 
+#[cfg(any(feature = "cuda", feature = "fem-native", feature = "fem-gpu", test))]
 fn request_for_quantity(quantity: &str) -> crate::types::LivePreviewRequest {
     crate::types::LivePreviewRequest { quantity: quantity.into(), ..full_resolution_request() }
 }

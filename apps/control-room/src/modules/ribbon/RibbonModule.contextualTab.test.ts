@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import { EMPTY_SELECTION, type Selection } from "@/kernel/selection/selectionTypes";
 
-import { __ribbonModuleTestUtils } from "./RibbonModule";
+import { __ribbonModuleTestUtils } from "./RibbonModule.model";
 
 const {
   contextualAnalysisModuleIdForSelection,

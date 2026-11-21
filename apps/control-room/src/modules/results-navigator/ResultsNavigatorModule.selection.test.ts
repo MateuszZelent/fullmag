@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import type { AnalysisResultDatasetManifestResource } from "@/kernel/api/apiTypes";
 import { analysisResultSelectionRef } from "@/shared/domain/analysis/results";
 
-import { resultSelectionForAnalysis } from "./ResultsNavigatorModule";
+import { resultSelectionForAnalysis } from "./ResultsNavigatorModule.model";
 
 const manifest = {
   dataset_id: "result:run-1:stage-1:modal-eigen-field-sweep",

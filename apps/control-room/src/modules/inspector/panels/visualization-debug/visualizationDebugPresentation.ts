@@ -9,7 +9,7 @@ import type {
   VisualizationDebugCarrierObservation,
   VisualizationDebugPanelModel,
 } from "./VisualizationDebugPanelModel";
-import { formatScientific } from "./VisualizationDebugSampleTable";
+import { formatScientific } from "./VisualizationDebugSampleTable.model";
 
 export function visualizationDebugEmptyStateMessage(
   state: VisualizationDebugPanelModel["state"],
@@ -60,17 +60,6 @@ export function latestSnapshotCaptureTime(
     viewport.snapshots.map((snapshot) => snapshot.capturedAtMs),
   );
   return captures.length > 0 ? Math.max(...captures) : 0;
-}
-
-export function aggregateDisposition(
-  snapshots: readonly VisualizationDebugSnapshot[],
-): VisualizationDebugDisposition {
-  for (const disposition of ["blocked", "degraded", "unknown", "ready"] as const) {
-    if (snapshots.some((snapshot) => snapshot.disposition === disposition)) {
-      return disposition;
-    }
-  }
-  return "unknown";
 }
 
 export function healthDiagnosis(

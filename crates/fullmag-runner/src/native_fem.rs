@@ -95,7 +95,7 @@ pub(crate) use steady_transport::test_resolved_plan as test_resolved_steady_tran
 #[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
 pub(crate) use steady_transport::{
     execute_native_fem_steady_transport_plans, solve_native_fem_steady_transport,
-    solve_native_fem_steady_transport_rt0, solve_native_fem_prepared_closed_loop, solve_native_fem_prepared_closed_loop_classified,
+    solve_native_fem_steady_transport_rt0, solve_native_fem_prepared_closed_loop_classified,
     NativeFemPreparedClosedLoopChargeRequest, PreparedClosedLoopRuntimeBinding, NativeFemSurfaceRt0Profile,
     NativeFemSteadyTransportBundle,
     NativeFemSteadyTransportExecution, NativeFemSteadyTransportGauge,
@@ -4627,23 +4627,6 @@ impl NativeFemBackend {
             return Err(self.last_error_or("FEM Fredkin-Koehler provenance read failed"));
         }
         runtime_info::NativeFemDemagFemBemProvenance::from_ffi(provenance)
-    }
-
-    pub(crate) fn gpu_performance_snapshot(
-        &self,
-    ) -> Result<runtime_info::NativeFemGpuPerformanceSnapshot, RunError> {
-        let mut snapshot = ffi::fullmag_fem_gpu_performance_snapshot_v1 {
-            abi_version: ffi::FULLMAG_FEM_GPU_PERFORMANCE_SNAPSHOT_V1_ABI_VERSION,
-            struct_size: std::mem::size_of::<ffi::fullmag_fem_gpu_performance_snapshot_v1>() as u32,
-            ..Default::default()
-        };
-        let rc = unsafe {
-            ffi::fullmag_fem_backend_gpu_performance_snapshot_v1(self.handle, &mut snapshot)
-        };
-        if rc != ffi::FULLMAG_FEM_OK {
-            return Err(self.last_error_or("FEM GPU performance snapshot read failed"));
-        }
-        runtime_info::NativeFemGpuPerformanceSnapshot::from_ffi(snapshot)
     }
 
     fn attach_transfer_audit(&self, stats: &mut StepStats) -> Result<(), RunError> {

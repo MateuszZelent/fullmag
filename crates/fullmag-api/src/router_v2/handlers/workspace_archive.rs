@@ -37,14 +37,11 @@ pub(crate) struct ArchiveEntry {
     pub absolute: PathBuf,
     /// Name inside the zip: relative, `/`-separated.
     pub name: String,
-    pub size: u64,
 }
 
 #[derive(Debug)]
 pub(crate) struct ArchivePlan {
-    pub root: PathBuf,
     pub entries: Vec<ArchiveEntry>,
-    pub total_bytes: u64,
 }
 
 /// A link of any kind: a symbolic link, or on Windows a junction or other
@@ -167,16 +164,11 @@ pub(crate) fn plan_archive(
             entries.push(ArchiveEntry {
                 absolute: path,
                 name,
-                size: meta.len(),
             });
         }
     }
     entries.sort_by(|a, b| a.name.cmp(&b.name));
-    Ok(ArchivePlan {
-        root,
-        entries,
-        total_bytes,
-    })
+    Ok(ArchivePlan { entries })
 }
 
 const LOCAL_HEADER: u32 = 0x0403_4b50;

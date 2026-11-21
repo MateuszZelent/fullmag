@@ -196,6 +196,7 @@ impl Aabb {
         }
     }
 
+    #[cfg(test)]
     fn overlaps(self, other: Self) -> bool {
         self.min_u <= other.max_u
             && other.min_u <= self.max_u

@@ -9,6 +9,7 @@ import {
   INSTANCE_TAB_FRAME_NAME,
   instanceOrigin,
   instanceTabs,
+  isPeerInstancePort,
   useInstanceTabs,
   usePageLocation,
 } from "./instanceTabs";
@@ -33,7 +34,9 @@ export function InstanceTabFrames() {
   const location = usePageLocation();
   const activePort = tabs.activePort;
   const open = new Set(tabs.openPorts);
-  const framed = tabs.framedPorts.filter((port) => open.has(port));
+  const framed = location === null
+    ? []
+    : tabs.framedPorts.filter((port) => open.has(port) && isPeerInstancePort(port, location));
   const known = new Set((discovery.data?.instances ?? []).map((instance) => instance.port));
   const activeUnavailable = activePort !== null && discovery.data !== null && !known.has(activePort);
   const frames = useRef(new Map<number, HTMLIFrameElement>());

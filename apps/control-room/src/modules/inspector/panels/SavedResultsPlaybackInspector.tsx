@@ -10,16 +10,7 @@ import { Button } from "@/shared/ui/Button";
 import { Input } from "@/shared/ui/Input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/shared/ui/Select";
 import { Slider } from "@/shared/ui/Slider";
-
-export function clampPlaybackFrameIndex(frameIndex: number, frameCount: number): number {
-  const lastFrame = Math.max(0, Math.floor(frameCount) - 1);
-  return Math.min(lastFrame, Math.max(0, Math.floor(frameIndex)));
-}
-
-export function formatSavedPlaybackTimeNs(seconds: number | undefined): string {
-  if (seconds === undefined || !Number.isFinite(seconds)) return "Unavailable";
-  return `${new Intl.NumberFormat("en-US", { maximumSignificantDigits: 6 }).format(seconds * 1e9)} ns`;
-}
+import { clampPlaybackFrameIndex, formatSavedPlaybackTimeNs } from "./SavedResultsPlaybackInspector.model";
 
 function frameTime(manifest: SavedPlaybackResource | null, stageId: string | null, frameIndex: number): number | undefined {
   const stage = manifest?.stages.find((candidate) => candidate.stage_id === stageId);

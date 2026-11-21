@@ -143,11 +143,10 @@ export class PendingFormRegistry {
   getTransitionSnapshot = (): PendingFormTransitionSnapshot => {
     const forms = [...this.forms.values()];
     const dirtyForms = forms.filter((form) => form.dirty);
-    const applyingOwners = new Set(
-      [...this.forms.entries()]
-        .filter(([, form]) => form.applying)
-        .map(([owner]) => owner),
-    );
+    const applyingOwners = new Set<symbol>();
+    for (const [owner, form] of this.forms) {
+      if (form.applying) applyingOwners.add(owner);
+    }
     if (this.preparation?.applyingOwner) {
       applyingOwners.add(this.preparation.applyingOwner);
     }
@@ -327,6 +326,8 @@ export class PendingFormRegistry {
           preparation.acceptedCleanUpdate = false;
           let applied: boolean;
           try {
+            // Each form must acknowledge its revision before the next form mutates the workspace.
+            // react-doctor-disable-next-line react-doctor/async-await-in-loop
             applied = await entry.form.apply();
           } finally {
             preparation.applyingOwner = null;

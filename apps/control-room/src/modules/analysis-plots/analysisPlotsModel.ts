@@ -9,7 +9,7 @@ import {
 import type { KernelEventMap } from "@/kernel/events/eventTypes";
 import type { ChartRangeModeState as AnalysisChartRangeMode } from "@/shared/analysis-charts/ChartControlBar";
 import { ANALYSIS_SCALAR_COLUMNS } from "./tableRowsAdapter";
-import { type AxisColumnUnit, sanitizeYAxisIdsForUnitLimit } from "@/shared/domain/analysis/TableColumnList";
+import { type AxisColumnUnit, sanitizeYAxisIdsForUnitLimit } from "@/shared/domain/analysis/TableColumnList.model";
 
 export function formatAnalysisPointValue(value: number, unit: string): string {
   const formatted =

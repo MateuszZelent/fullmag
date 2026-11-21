@@ -37,44 +37,54 @@ import {
   modeFieldComponentOptions,
   selectedField3DPlotStatus,
 } from "./FrequencyDomainHelpers";
-import {
-  FrequencyDomainModeDisplayControls,
-  analysisFieldViewLabel,
-  isActiveAnalysisFieldView,
-  normalizeAnalysisFieldView,
-  useFrequencyDomainModeDisplaySettings,
-} from "../FrequencyDomainModeDisplayControls";
+import { FrequencyDomainModeDisplayControls, useFrequencyDomainModeDisplaySettings } from "../FrequencyDomainModeDisplayControls";
+import { analysisFieldViewLabel, isActiveAnalysisFieldView, normalizeAnalysisFieldView } from "../FrequencyDomainModeDisplayControls.model";
+import { buildEigenModeIdentityViewModel } from "./EigenModeInspectorPanel.model";
 
-export interface EigenModeIdentityViewModel {
-  branchId: string | null;
-  fieldId: string | null;
-  label: string;
-  modeIndex: number | null;
-  resourceRef: string | null;
-  sampleIndex: number | null;
-}
-
-export function buildEigenModeIdentityViewModel(input: {
-  branchId?: string | null;
-  fieldId?: string | null;
-  modeIndex?: number | null;
-  resourceRef?: string | null;
-  sampleIndex?: number | null;
-}): EigenModeIdentityViewModel {
-  const sampleIndex = input.sampleIndex ?? null;
-  const modeIndex = input.modeIndex ?? null;
-  return {
-    branchId: input.branchId ?? null,
-    fieldId: input.fieldId ?? null,
-    label:
-      sampleIndex == null || modeIndex == null
-        ? "not selected"
-        : `sample ${sampleIndex}, mode ${modeIndex}`,
-    modeIndex,
-    resourceRef: input.resourceRef ?? null,
-    sampleIndex,
-  };
-}
+const EIGEN_MODE_3D_ACTIONS = [
+  {
+    icon: RotateCw,
+    label: "Rotated",
+    title: "Plot selected eigen mode with phase-rotated real display",
+    variant: "secondary" as const,
+    view: "phase_rotated_real" as const,
+  },
+  {
+    icon: Activity,
+    label: "Real",
+    title: "Plot selected eigen mode real component",
+    variant: "secondary" as const,
+    view: "real" as const,
+  },
+  {
+    icon: Activity,
+    label: "Imag",
+    title: "Plot selected eigen mode imaginary component",
+    variant: "secondary" as const,
+    view: "imag" as const,
+  },
+  {
+    icon: Activity,
+    label: "Abs",
+    title: "Plot selected eigen mode complex magnitude",
+    variant: "secondary" as const,
+    view: "abs" as const,
+  },
+  {
+    icon: RotateCw,
+    label: "Phase",
+    title: "Plot selected eigen mode phase",
+    variant: "secondary" as const,
+    view: "phase" as const,
+  },
+  {
+    icon: Play,
+    label: "Animate",
+    title: "Animate selected eigen mode phase in 3D",
+    variant: "secondary" as const,
+    view: "animate" as const,
+  },
+];
 
 export function EigenModeInspectorPanel({
   selection,
@@ -265,57 +275,13 @@ function EigenMode3DActions({
     );
   };
   const disabled = !summary.field3DReady;
-  const actions = [
-    {
-      icon: RotateCw,
-      label: "Rotated",
-      title: "Plot selected eigen mode with phase-rotated real display",
-      variant: "secondary" as const,
-      view: "phase_rotated_real" as const,
-    },
-    {
-      icon: Activity,
-      label: "Real",
-      title: "Plot selected eigen mode real component",
-      variant: "secondary" as const,
-      view: "real" as const,
-    },
-    {
-      icon: Activity,
-      label: "Imag",
-      title: "Plot selected eigen mode imaginary component",
-      variant: "secondary" as const,
-      view: "imag" as const,
-    },
-    {
-      icon: Activity,
-      label: "Abs",
-      title: "Plot selected eigen mode complex magnitude",
-      variant: "secondary" as const,
-      view: "abs" as const,
-    },
-    {
-      icon: RotateCw,
-      label: "Phase",
-      title: "Plot selected eigen mode phase",
-      variant: "secondary" as const,
-      view: "phase" as const,
-    },
-    {
-      icon: Play,
-      label: "Animate",
-      title: "Animate selected eigen mode phase in 3D",
-      variant: "secondary" as const,
-      view: "animate" as const,
-    },
-  ];
 
   return (
     <div role="group"
       aria-label="Selected eigen mode 3D visualization controls"
       className="fm-frequency-domain-visualization-actions"
     >
-      {actions.map((entry) => {
+      {EIGEN_MODE_3D_ACTIONS.map((entry) => {
         const Icon = entry.icon;
         const isActive =
           entry.view !== "animate" &&

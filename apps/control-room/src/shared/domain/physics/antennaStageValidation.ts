@@ -92,7 +92,8 @@ export function antennaInspectionValidationMessages(stage: AntennaSolveStage, sc
         || (transport.boundaries != null && (!Array.isArray(transport.boundaries) || transport.boundaries.length > 0))) {
       messages.push("Closed-circuit inspection conflicts with legacy electrodes or current-view bindings; resolve these explicit inputs before execution.");
     }
-    const ports = (scene.antenna_port_modes ?? []).filter((port) => stage.port_mode_ids.includes(port.id));
+    const selectedPortIds = new Set(stage.port_mode_ids);
+    const ports = (scene.antenna_port_modes ?? []).filter((port) => selectedPortIds.has(port.id));
     if (stage.port_mode_ids.length !== 1 || ports.length !== 1 || ports[0].schema_version !== "antenna_port_mode.v3"
         || ports[0].source_object_id !== stage.source_object_id || ports[0].current_transport_id !== stage.current_transport_id) {
       messages.push("Closed-circuit inspection requires one v3 source-cut port bound to this source and transport.");

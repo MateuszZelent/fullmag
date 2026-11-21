@@ -6,7 +6,6 @@ import type {
   AnalysisResultCoordinateRef,
   AnalysisResultCursor,
   AnalysisResultDatasetIdentity,
-  AnalysisResultProjectionPointSelection,
   AnalysisResultSelectionRef,
 } from "./types";
 
@@ -213,33 +212,4 @@ export function analysisResultCursorFromSelection(
     sampleId: selection.sampleId ?? null,
     stageId: selection.stageId,
   };
-}
-
-export function analysisResultCursorFromProjectionPoint(
-  identity: AnalysisResultDatasetIdentity,
-  point: AnalysisResultProjectionPointSelection,
-): AnalysisResultCursor {
-  return {
-    ...identity,
-    branchId: point.branchId,
-    coordinates: [],
-    fieldId: null,
-    fieldRevision: null,
-    itemId: point.itemId,
-    itemKind: null,
-    projectionId: point.projectionId,
-    projectionRevision: point.projectionRevision,
-    sampleId: point.sampleId,
-  };
-}
-
-export function analysisResultSnapshotMatches(
-  identity: AnalysisResultDatasetIdentity,
-  ref: Pick<AnalysisResultDatasetIdentity, "runId" | "datasetId" | "datasetRevision">,
-): boolean {
-  return (
-    identity.runId === ref.runId &&
-    identity.datasetId === ref.datasetId &&
-    identity.datasetRevision === ref.datasetRevision
-  );
 }

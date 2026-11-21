@@ -15,21 +15,8 @@ import type {
   Viewport3DTopologyRenderModel,
 } from "../viewport3dRenderModel";
 import { getViewport3DVisualProfile } from "../viewport3dVisualProfile";
-import {
-  AirboxLayerContent,
-  SelectionHighlightLayerContent,
-  airboxWireframeOpacityFromSettings,
-  buildBoundsVolumeWireframePositions,
-  resolveAirboxRuntimeVisualizationSettings,
-  resolveAirboxSurfaceColorState,
-  resolveAirboxMeshPartSurfacePickIdentity,
-  resolveAirboxTopologyVisualizationSettings,
-  resolveAirboxWireframeEdgeIndices,
-  resolveAirboxWireframePrimitive,
-  resolveAirboxWireframeSemantic,
-  resolvePartNodeIndices,
-  getUniqueSortedIndices,
-} from "./BoundsLayers";
+import { AirboxLayerContent, SelectionHighlightLayerContent } from "./BoundsLayers";
+import { airboxWireframeOpacityFromSettings, buildBoundsVolumeWireframePositions, resolveAirboxRuntimeVisualizationSettings, resolveAirboxSurfaceColorState, resolveAirboxMeshPartSurfacePickIdentity, resolveAirboxTopologyVisualizationSettings, resolveAirboxWireframeEdgeIndices, resolveAirboxWireframePrimitive, resolveAirboxWireframeSemantic, resolvePartNodeIndices, getUniqueSortedIndices } from "./BoundsLayers.model";
 import { VERTEX_COLOR_MATERIAL_COLOR } from "./viewport3DLayerSettings";
 import { resolveViewport3DMaterialProfile } from "./viewport3DMaterialProfile";
 

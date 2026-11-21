@@ -1005,6 +1005,18 @@ class Viewport3DStore {
 
 export const viewport3dStore = new Viewport3DStore();
 
+/** One route for every mode switch (settings, Inspector and the viewport toolbar). */
+export function selectViewport3DRenderMode(
+  current: "scientific" | "presentation",
+  renderMode: "scientific" | "presentation",
+): void {
+  if (renderMode === current) return;
+  viewport3dStore.setAppearance({ renderMode });
+  if (renderMode === "presentation") {
+    viewport3dStore.setEffectAmbientOcclusion(true);
+  }
+}
+
 /** Apply the Figure preset on explicit selection or entry into Presentation.
  * Subsequent individual effect edits and PNG export preserve user choices.
  */

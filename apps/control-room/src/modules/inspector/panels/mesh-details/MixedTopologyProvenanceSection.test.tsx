@@ -1,10 +1,8 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
-import {
-  MixedTopologyProvenanceSection,
-  resolveMixedTopologyPresentation,
-} from "./MixedTopologyProvenanceSection";
+import { MixedTopologyProvenanceSection } from "./MixedTopologyProvenanceSection";
+import { resolveMixedTopologyPresentation } from "./MixedTopologyProvenanceSection.model";
 
 describe("MixedTopologyProvenanceSection", () => {
   it("treats an unknown certificate status as unavailable", () => {

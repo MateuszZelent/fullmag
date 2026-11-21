@@ -11,7 +11,8 @@ import {
 import { planarToolStore } from "@/kernel/visualization/planarToolStore";
 
 import type { PlanarNodeProbeResult } from "../hooks/usePlanarNodeProbes";
-import { PlanarNodeInspector, PlanarNodeReadout, planarNodeReadoutText } from "./PlanarNodeReadout";
+import { PlanarNodeInspector, PlanarNodeReadout } from "./PlanarNodeReadout";
+import { planarNodeReadoutText } from "./PlanarNodeReadout.model";
 
 vi.mock("@/kernel/resources/planarFieldResources", () => ({ usePlanarProbeLoader: () => null }));
 

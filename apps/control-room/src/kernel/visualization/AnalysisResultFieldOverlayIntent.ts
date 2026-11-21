@@ -1,8 +1,10 @@
 import {
   asDecodedComplexFieldVector,
-  type DecodedComplexFieldVector,
-  type DecodedFieldVector,
-} from "../api/codecs";
+} from "../api/codecs/fieldVectorCodec";
+import type {
+  DecodedComplexFieldVector,
+  DecodedFieldVector,
+} from "../api/codecs/types";
 import type {
   AnalysisResultFieldRef,
   FieldVectorQuery,

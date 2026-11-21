@@ -8,6 +8,7 @@ import {
   useAntennaFieldSolutionPayloadResource,
 } from "@/kernel/resources/antennaResources";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/shared/ui/Select";
+import { keyedOccurrences } from "@/shared/utils/keyedOccurrences";
 
 import { FieldRow } from "../../primitives/FieldRow";
 import { InspectorGroup } from "../../primitives/InspectorGroup";
@@ -101,8 +102,8 @@ export function AntennaFieldBasisPreview({ solution, quantity = "magnetic_field_
       ) : payloadError ? (
         <p role="alert">Antenna field payload unavailable: {payloadError}</p>
       ) : samples ? (
-        samples.map((sample, index) => (
-          <div key={index} className="fm-antenna-field-preview__sample">
+        keyedOccurrences(samples, (sample) => JSON.stringify([sample.positionM, sample.value])).map(({ item: sample, key }, index) => (
+          <div key={key} className="fm-antenna-field-preview__sample">
             <FieldRow label={`Sample ${index + 1} position`} value={vectorValue(sample.positionM)} unit="m" />
             <FieldRow label={`Sample ${index + 1} ${spec.label.split(" ").at(-1)}`} value={spec.components === 1 ? sample.value[0].toExponential(3) : vectorValue(sample.value)} unit={spec.unit} />
           </div>

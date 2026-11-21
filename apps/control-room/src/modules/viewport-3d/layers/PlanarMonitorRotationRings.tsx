@@ -23,6 +23,13 @@ import {
 
 type Vec3 = [number, number, number];
 
+function pointerRay(event: ThreeEvent<PointerEvent>) {
+  return {
+    direction: [event.ray.direction.x, event.ray.direction.y, event.ray.direction.z] as Vec3,
+    origin: [event.ray.origin.x, event.ray.origin.y, event.ray.origin.z] as Vec3,
+  };
+}
+
 /** Rotation step of Shift+[ / Shift+] and of Shift-snapped ring drags. */
 export const PLANAR_ROTATION_STEP_RAD = (5 * Math.PI) / 180;
 
@@ -136,14 +143,10 @@ export function PlanarMonitorRotationRings({
   if (!shown) return null;
 
   const { center, frame, radius } = geometry;
-  const ray = (event: ThreeEvent<PointerEvent>) => ({
-    direction: [event.ray.direction.x, event.ray.direction.y, event.ray.direction.z] as Vec3,
-    origin: [event.ray.origin.x, event.ray.origin.y, event.ray.origin.z] as Vec3,
-  });
   const ringHandlers = (axis: Vec3, e1: Vec3, e2: Vec3) => ({
     onPointerDown: (event: ThreeEvent<PointerEvent>) => {
       event.stopPropagation();
-      const { direction, origin } = ray(event);
+      const { direction, origin } = pointerRay(event);
       const startAngle = ringAngle(origin, direction, center, axis, e1, e2);
       if (startAngle === null) return;
       const target = event.target as Element & {
@@ -165,7 +168,7 @@ export function PlanarMonitorRotationRings({
       const drag = dragRef.current;
       if (!drag || drag.pointerId !== event.pointerId) return;
       event.stopPropagation();
-      const { direction, origin } = ray(event);
+      const { direction, origin } = pointerRay(event);
       const angle = ringAngle(origin, direction, drag.center, drag.axis, drag.e1, drag.e2);
       if (angle === null) return;
       let delta = Math.atan2(Math.sin(angle - drag.startAngle), Math.cos(angle - drag.startAngle));
