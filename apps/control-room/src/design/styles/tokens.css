@@ -93,6 +93,7 @@
   --fm-font-size-2xs: 10px;
   --fm-font-size-xs: 11px;
   --fm-font-size-sm: 12px;
+  --fm-text-xs: 12px;
   --fm-font-size-md: 13px;
   --fm-font-size-base: var(--fm-font-size-md); /* semantic alias: base body text size */
   --fm-font-size-lg: 15px;

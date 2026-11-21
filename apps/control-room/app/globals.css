@@ -1,4 +1,5 @@
-@import "../src/design/styles/fonts.css";
+@layer fm-tokens, theme, fm-base, base, fm-primitives, fm-components, components, fm-modules, utilities;
+@import "../src/design/styles/fonts.css" layer(fm-tokens);
 @import "tailwindcss" source(none);
 @source "./**/*.{html,js,cjs,mjs,ts,cts,mts,jsx,tsx,md,mdx,json,css,mx3,vue,svelte}";
 @source "../src/**/*.{html,js,cjs,mjs,ts,cts,mts,jsx,tsx,md,mdx,json,css,mx3,vue,svelte}";
@@ -10,7 +11,12 @@
 @import "../src/design/styles/layout.css" layer(fm-base);
 @import "../src/design/styles/instance-tabs.css" layer(fm-base);
 @import "../src/design/styles/slots.css" layer(fm-base);
+@import "../src/design/styles/primitives.css" layer(fm-primitives);
 @import "../src/design/styles/dropdown.css" layer(fm-primitives);
+@import "../src/design/styles/context-menu.css" layer(fm-primitives);
+@import "../src/design/styles/tabs.css" layer(fm-primitives);
+@import "../src/design/styles/accordion.css" layer(fm-primitives);
+@import "../src/design/styles/command.css" layer(fm-primitives);
 @import "../src/design/styles/dialog.css" layer(fm-primitives);
 @import "../src/design/styles/dialog-new-problem.css" layer(fm-primitives);
 @import "../src/design/styles/dialog-mesh-build.css" layer(fm-primitives);
@@ -20,15 +26,11 @@
 @import "../src/design/styles/simulation-preparation-log.css" layer(fm-primitives);
 @import "../src/design/styles/dialog-communication-policy.css" layer(fm-primitives);
 @import "../src/design/styles/dialog-notifications.css" layer(fm-primitives);
-@import "../src/design/styles/accordion.css" layer(fm-primitives);
-@import "../src/design/styles/context-menu.css" layer(fm-primitives);
-@import "../src/design/styles/tabs.css" layer(fm-primitives);
-@import "../src/design/styles/command.css" layer(fm-primitives);
-@import "../src/design/styles/primitives.css" layer(fm-primitives);
 @import "../src/design/styles/header.css" layer(fm-components);
 @import "../src/design/styles/ribbon.css" layer(fm-components);
 @import "../src/design/styles/explorer.css" layer(fm-components);
-@import "../src/design/styles/inspector.css" layer(fm-modules);
+@import "../src/design/styles/inspector.css" layer(fm-components);
+@import "../src/design/styles/inspector-widgets.css" layer(fm-modules);
 @import "../src/design/styles/inspector-antenna.css" layer(fm-modules);
 @import "../src/design/styles/inspector-sinc.css" layer(fm-modules);
 @import "../src/design/styles/inspector-topological-charge.css" layer(fm-modules);
@@ -60,4 +62,6 @@
 @import "../src/design/styles/thread-manager.css" layer(fm-modules);
 @import "../src/design/styles/diagnostic-recorder.css" layer(fm-modules);
 @import "../src/design/styles/material-library.css" layer(fm-modules);
-@import "../src/design/styles/components/index.css" layer(fm-modules);
+@import "../src/design/styles/components/visualization-debug.css" layer(fm-modules);
+@import "../src/design/styles/start-screen.css" layer(fm-modules);
+@import "../src/design/styles/start-compute.css" layer(fm-modules);

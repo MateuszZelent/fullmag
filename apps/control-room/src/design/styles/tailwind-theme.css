@@ -18,14 +18,27 @@
   --color-fm-subtle: var(--fm-border-subtle);
   --color-fm-moderate: var(--fm-border-moderate);
   --color-fm-border: var(--fm-border-default);
+  --color-fm-control-border: var(--fm-border-control);
   --color-fm-strong: var(--fm-border-strong);
   --color-fm-accent: var(--fm-accent);
   --color-fm-accent-soft: var(--fm-accent-soft);
   --color-fm-success: var(--fm-success);
   --color-fm-warning: var(--fm-warning);
   --color-fm-danger: var(--fm-danger);
+  --color-fm-info: var(--fm-info);
+  --color-fm-live: var(--fm-live);
   --color-fm-stale: var(--fm-stale);
   --color-fm-degraded: var(--fm-degraded);
+  /* Semantic WCAG 1.4.3 AA text tokens (>= 4.5:1 in Mocha and Latte) */
+  --color-fm-accent-text: var(--fm-accent-text);
+  --color-fm-success-text: var(--fm-success-text);
+  --color-fm-warning-text: var(--fm-warning-text);
+  --color-fm-danger-text: var(--fm-danger-text);
+  --color-fm-info-text: var(--fm-info-text);
+  --color-fm-live-text: var(--fm-live-text);
+  --color-fm-stale-text: var(--fm-stale-text);
+  --color-fm-degraded-text: var(--fm-degraded-text);
+  --color-muted-foreground: var(--fm-text-muted);
   /* Visual language 2026-11 */
   --color-fm-glass: var(--fm-glass-bg);
   --color-fm-glass-strong: var(--fm-glass-strong);
@@ -34,12 +47,23 @@
   --color-fm-raised-selection: var(--fm-raised-bg);
   --color-fm-section: var(--fm-section-bg);
   --color-fm-hue-geometry: var(--fm-hue-geometry);
+  --color-fm-hue-geometry-text: var(--fm-hue-geometry-text);
   --color-fm-hue-material: var(--fm-hue-material);
+  --color-fm-hue-material-text: var(--fm-hue-material-text);
   --color-fm-hue-physics: var(--fm-hue-physics);
+  --color-fm-hue-physics-text: var(--fm-hue-physics-text);
   --color-fm-hue-study: var(--fm-hue-study);
+  --color-fm-hue-study-text: var(--fm-hue-study-text);
   --color-fm-hue-visualization: var(--fm-hue-visualization);
+  --color-fm-hue-visualization-text: var(--fm-hue-visualization-text);
   --color-fm-hue-mesh: var(--fm-hue-mesh);
+  --color-fm-hue-mesh-text: var(--fm-hue-mesh-text);
   --color-fm-hue-definition: var(--fm-hue-definition);
+  --color-fm-hue-definition-text: var(--fm-hue-definition-text);
+  /* Vector3 axis labels (>= 5.53:1 on --fm-field-bg) */
+  --color-fm-axis-x: var(--fm-axis-x);
+  --color-fm-axis-y: var(--fm-axis-y);
+  --color-fm-axis-z: var(--fm-axis-z);
   /* Spacing — generic scale */
   --spacing-fm-control-sm: var(--fm-control-height-sm);
   --spacing-fm-control-md: var(--fm-control-height-md);

@@ -1,0 +1,608 @@
+/* ============================================================================
+ * Consolidated lightweight scientific inspector widgets (layer: fm-modules).
+ * Shared across Waves 3–6 domain inspectors so parallel domain worktrees never
+ * conflict on CSS files and all 14 legacy fragment stylesheets can be retired.
+ * ========================================================================== */
+
+/* ── 1. Region precedence cards & Inherit / Override indicator ─────────────── */
+
+.fm-region-precedence-list {
+  display: grid;
+  gap: var(--fm-space-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  min-width: 0;
+}
+
+.fm-region-precedence-card {
+  --fm-region-swatch: var(--fm-hue-material);
+  display: grid;
+  grid-template-columns: auto auto minmax(0, 1fr) auto;
+  align-items: start;
+  gap: var(--fm-space-2);
+  min-width: 0;
+  padding: var(--fm-space-2) var(--fm-space-3);
+  border: 1px solid var(--fm-border-control);
+  border-radius: var(--fm-radius-field);
+  background: var(--fm-field-bg);
+  color: var(--fm-text-primary);
+  transition:
+    border-color var(--fm-duration-micro) var(--fm-ease-out-soft),
+    background-color var(--fm-duration-micro) var(--fm-ease-out-soft),
+    box-shadow var(--fm-duration-micro) var(--fm-ease-out-soft);
+}
+
+.fm-region-precedence-card:hover {
+  border-color: var(--fm-border-strong);
+}
+
+.fm-region-precedence-card[data-selected="true"] {
+  border-color: var(--fm-hue-material);
+  background: var(--fm-raised-bg);
+  box-shadow: var(--fm-elevation-sm);
+}
+
+.fm-region-precedence-card__rank {
+  display: inline-grid;
+  place-items: center;
+  min-inline-size: var(--fm-space-6);
+  min-block-size: var(--fm-space-6);
+  border-radius: var(--fm-radius-pill);
+  background: color-mix(in oklab, var(--fm-hue-material) 14%, transparent);
+  color: var(--fm-hue-material-text);
+  font-family: var(--fm-font-ui);
+  font-size: var(--fm-text-xs);
+  font-weight: var(--fm-font-weight-semibold);
+  font-variant-numeric: tabular-nums;
+}
+
+.fm-region-precedence-card__swatch {
+  inline-size: var(--fm-space-3);
+  block-size: var(--fm-space-3);
+  margin-block-start: var(--fm-space-1);
+  border-radius: var(--fm-radius-pill);
+  border: 1px solid var(--fm-border-control);
+  background: var(--fm-region-swatch, var(--fm-hue-material));
+  flex: none;
+}
+
+.fm-region-precedence-card__body {
+  display: grid;
+  gap: var(--fm-space-1);
+  min-width: 0;
+}
+
+.fm-region-precedence-card__title {
+  color: var(--fm-text-primary);
+  font-size: var(--fm-font-size-md);
+  font-weight: var(--fm-font-weight-medium);
+  line-height: var(--fm-line-height-control);
+  overflow-wrap: anywhere;
+}
+
+.fm-region-precedence-card__meta {
+  color: var(--fm-text-muted);
+  font-size: var(--fm-text-xs);
+  line-height: var(--fm-line-height-normal);
+  overflow-wrap: anywhere;
+}
+
+.fm-region-precedence-card__pill {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--fm-space-1);
+  padding-inline: var(--fm-space-2);
+  padding-block: var(--fm-space-1);
+  border-radius: var(--fm-radius-pill);
+  border: 1px solid var(--fm-border-control);
+  font-size: var(--fm-text-xs);
+  font-weight: var(--fm-font-weight-medium);
+  white-space: nowrap;
+}
+
+.fm-region-precedence-card__pill[data-override="inherited"] {
+  background: transparent;
+  color: var(--fm-text-muted);
+}
+
+.fm-region-precedence-card__pill[data-override="overridden"] {
+  border-color: color-mix(in oklab, var(--fm-accent) 45%, var(--fm-border-control));
+  background: color-mix(in oklab, var(--fm-accent) 12%, transparent);
+  color: var(--fm-accent-text);
+}
+
+/* ── 2. MathML equation & symbolic formula block ─────────────────────────── */
+
+.fm-math-equation {
+  display: grid;
+  gap: var(--fm-space-2);
+  min-width: 0;
+  padding: var(--fm-space-3);
+  border: 1px solid var(--fm-border-control);
+  border-radius: var(--fm-radius-field);
+  background: var(--fm-field-bg);
+  color: var(--fm-text-primary);
+}
+
+.fm-math-equation__caption {
+  margin: 0;
+  color: var(--fm-text-secondary);
+  font-size: var(--fm-text-xs);
+  font-weight: var(--fm-font-weight-medium);
+}
+
+.fm-math-equation math {
+  display: block;
+  max-inline-size: 100%;
+  overflow-x: auto;
+  padding-block: var(--fm-space-1);
+  color: var(--fm-text-primary);
+  font-family: var(--fm-font-symbol);
+  font-size: var(--fm-font-size-lg);
+  line-height: var(--fm-line-height-normal);
+}
+
+.fm-math-equation__terms {
+  display: grid;
+  gap: var(--fm-space-1);
+  margin: 0;
+  padding-block-start: var(--fm-space-2);
+  border-top: 1px solid var(--fm-border-subtle);
+}
+
+.fm-math-equation__term {
+  display: grid;
+  grid-template-columns: minmax(4rem, auto) minmax(0, 1fr);
+  align-items: baseline;
+  gap: var(--fm-space-2);
+  font-size: var(--fm-text-xs);
+}
+
+.fm-math-equation__term dt {
+  color: var(--fm-text-primary);
+  font-family: var(--fm-font-symbol);
+  font-style: italic;
+}
+
+.fm-math-equation__term dd {
+  margin: 0;
+  color: var(--fm-text-secondary);
+  line-height: var(--fm-line-height-normal);
+  overflow-wrap: anywhere;
+}
+
+/* ── 3. Mesh exchange-length (l_ex) guard & quality gate rows ────────────── */
+
+.fm-mesh-lex-guard {
+  display: grid;
+  gap: var(--fm-space-2);
+  min-width: 0;
+  padding: var(--fm-space-3);
+  border: 1px solid var(--fm-border-control);
+  border-radius: var(--fm-radius-field);
+  background: var(--fm-field-bg);
+}
+
+.fm-mesh-lex-guard[data-status="pass"] {
+  border-color: color-mix(in oklab, var(--fm-success) 55%, var(--fm-border-control));
+}
+
+.fm-mesh-lex-guard[data-status="warn"] {
+  border-color: color-mix(in oklab, var(--fm-warning) 55%, var(--fm-border-control));
+}
+
+.fm-mesh-lex-guard[data-status="failed"] {
+  border-color: color-mix(in oklab, var(--fm-danger) 55%, var(--fm-border-control));
+}
+
+.fm-mesh-lex-guard__header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--fm-space-2);
+  font-size: var(--fm-text-xs);
+}
+
+.fm-mesh-lex-guard__ratio {
+  color: var(--fm-text-primary);
+  font-weight: var(--fm-font-weight-semibold);
+  font-variant-numeric: tabular-nums;
+}
+
+.fm-mesh-lex-guard[data-status="pass"] .fm-mesh-lex-guard__ratio {
+  color: var(--fm-success-text);
+}
+
+.fm-mesh-lex-guard[data-status="warn"] .fm-mesh-lex-guard__ratio {
+  color: var(--fm-warning-text);
+}
+
+.fm-mesh-lex-guard[data-status="failed"] .fm-mesh-lex-guard__ratio {
+  color: var(--fm-danger-text);
+}
+
+.fm-mesh-lex-guard__meter {
+  block-size: var(--fm-space-2);
+  inline-size: 100%;
+  overflow: clip;
+  border-radius: var(--fm-radius-pill);
+  border: 1px solid var(--fm-border-control);
+  background: var(--fm-bg-panel);
+}
+
+.fm-mesh-lex-guard__fill {
+  block-size: 100%;
+  border-radius: inherit;
+  background: var(--fm-hue-mesh);
+}
+
+.fm-mesh-lex-guard[data-status="pass"] .fm-mesh-lex-guard__fill {
+  background: var(--fm-success);
+}
+
+.fm-mesh-lex-guard[data-status="warn"] .fm-mesh-lex-guard__fill {
+  background: var(--fm-warning);
+}
+
+.fm-mesh-lex-guard[data-status="failed"] .fm-mesh-lex-guard__fill {
+  background: var(--fm-danger);
+}
+
+.fm-mesh-gate-list {
+  display: grid;
+  gap: var(--fm-space-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  min-width: 0;
+}
+
+.fm-mesh-gate-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--fm-space-1);
+  min-width: 0;
+  padding: var(--fm-space-2) var(--fm-space-3);
+  border: 1px solid var(--fm-border-subtle);
+  border-inline-start: 3px solid var(--fm-border-control);
+  border-radius: var(--fm-radius-field);
+  background: var(--fm-field-bg);
+  font-size: var(--fm-text-xs);
+  font-variant-numeric: tabular-nums;
+}
+
+@container inspector (min-width: 22rem) {
+  .fm-mesh-gate-row {
+    grid-template-columns: minmax(0, 1.3fr) auto minmax(0, 0.9fr);
+    align-items: center;
+    gap: var(--fm-space-2);
+  }
+}
+
+.fm-mesh-gate-row[data-status="pass"] {
+  border-inline-start-color: var(--fm-success);
+  color: var(--fm-success-text);
+}
+
+.fm-mesh-gate-row[data-status="warn"] {
+  border-inline-start-color: var(--fm-warning);
+  color: var(--fm-warning-text);
+}
+
+.fm-mesh-gate-row[data-status="failed"] {
+  border-inline-start-color: var(--fm-danger);
+  background: color-mix(in oklab, var(--fm-danger) 10%, var(--fm-field-bg));
+  color: var(--fm-danger-text);
+}
+
+.fm-mesh-gate-row[data-status="info"] {
+  border-inline-start-color: var(--fm-info);
+  color: var(--fm-info-text);
+}
+
+.fm-mesh-gate-row__label {
+  color: var(--fm-text-primary);
+  font-weight: var(--fm-font-weight-medium);
+  overflow-wrap: anywhere;
+}
+
+.fm-mesh-gate-row__value {
+  color: currentColor;
+  font-weight: var(--fm-font-weight-semibold);
+  white-space: nowrap;
+}
+
+.fm-mesh-gate-row__threshold {
+  color: var(--fm-text-muted);
+  text-align: end;
+  white-space: nowrap;
+}
+
+/* ── 4. FDM 6-neighbor voxel topology grid (±X / ±Y / ±Z) ────────────────── */
+
+.fm-fdm-neighbor-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--fm-space-2);
+  min-width: 0;
+}
+
+@container inspector (min-width: 22rem) {
+  .fm-fdm-neighbor-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+.fm-fdm-neighbor-cell {
+  display: grid;
+  gap: var(--fm-space-1);
+  min-width: 0;
+  min-block-size: var(--fm-control-height-regular);
+  padding: var(--fm-space-2);
+  border: 1px solid var(--fm-border-control);
+  border-radius: var(--fm-radius-field);
+  background: var(--fm-field-bg);
+  color: var(--fm-text-primary);
+  cursor: pointer;
+  text-align: start;
+  font-size: var(--fm-text-xs);
+  font-variant-numeric: tabular-nums;
+  transition:
+    border-color var(--fm-duration-micro) var(--fm-ease-out-soft),
+    background-color var(--fm-duration-micro) var(--fm-ease-out-soft),
+    box-shadow var(--fm-duration-micro) var(--fm-ease-out-soft);
+}
+
+.fm-fdm-neighbor-cell:hover:not(:disabled) {
+  border-color: var(--fm-border-strong);
+  background: var(--fm-raised-bg);
+  box-shadow: var(--fm-elevation-sm);
+}
+
+.fm-fdm-neighbor-cell[data-selected="true"] {
+  border-color: var(--fm-hue-mesh);
+  background: var(--fm-raised-bg);
+  box-shadow: var(--fm-elevation-sm);
+}
+
+.fm-fdm-neighbor-cell[data-empty="true"],
+.fm-fdm-neighbor-cell:disabled {
+  border-style: dashed;
+  border-color: var(--fm-border-disabled);
+  background: var(--fm-bg-disabled);
+  color: var(--fm-text-disabled);
+  cursor: not-allowed;
+}
+
+.fm-fdm-neighbor-cell__dir {
+  font-weight: var(--fm-font-weight-semibold);
+}
+
+.fm-fdm-neighbor-cell[data-axis="x"] .fm-fdm-neighbor-cell__dir {
+  color: var(--fm-axis-x);
+}
+
+.fm-fdm-neighbor-cell[data-axis="y"] .fm-fdm-neighbor-cell__dir {
+  color: var(--fm-axis-y);
+}
+
+.fm-fdm-neighbor-cell[data-axis="z"] .fm-fdm-neighbor-cell__dir {
+  color: var(--fm-axis-z);
+}
+
+.fm-fdm-neighbor-cell__coord {
+  color: var(--fm-text-secondary);
+  font-family: var(--fm-font-mono);
+  font-size: var(--fm-text-xs);
+  overflow-wrap: anywhere;
+}
+
+/* ── 5. Study <PipelineStrip> & stage drag-and-drop handle ───────────────── */
+
+.fm-pipeline-strip {
+  display: flex;
+  align-items: stretch;
+  gap: var(--fm-space-2);
+  min-width: 0;
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  scrollbar-gutter: stable;
+  padding: var(--fm-space-1);
+  border: 1px solid var(--fm-border-control);
+  border-radius: var(--fm-radius-field);
+  background: var(--fm-field-bg);
+}
+
+.fm-pipeline-step {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--fm-space-2);
+  flex: none;
+  min-block-size: var(--fm-control-height-sm);
+  padding-inline: var(--fm-space-2);
+  padding-block: var(--fm-space-1);
+  border: 1px solid transparent;
+  border-radius: var(--fm-radius-segment);
+  background: transparent;
+  color: var(--fm-text-secondary);
+  cursor: pointer;
+  font-size: var(--fm-text-xs);
+  font-weight: var(--fm-font-weight-medium);
+  white-space: nowrap;
+  transition:
+    background-color var(--fm-duration-micro) var(--fm-ease-out-soft),
+    border-color var(--fm-duration-micro) var(--fm-ease-out-soft),
+    color var(--fm-duration-micro) var(--fm-ease-out-soft),
+    box-shadow var(--fm-duration-micro) var(--fm-ease-out-soft);
+}
+
+.fm-pipeline-step:hover:not(:disabled) {
+  color: var(--fm-text-primary);
+  background: color-mix(in oklab, var(--fm-raised-bg) 55%, transparent);
+}
+
+.fm-pipeline-step[data-active="true"] {
+  border-color: var(--fm-hue-study);
+  background: var(--fm-raised-bg);
+  color: var(--fm-text-primary);
+  box-shadow: var(--fm-elevation-sm);
+}
+
+.fm-pipeline-step__dot {
+  inline-size: var(--fm-space-2);
+  block-size: var(--fm-space-2);
+  border-radius: var(--fm-radius-pill);
+  background: var(--fm-text-muted);
+  flex: none;
+}
+
+.fm-pipeline-step[data-status="ready"] .fm-pipeline-step__dot,
+.fm-pipeline-step[data-status="completed"] .fm-pipeline-step__dot {
+  background: var(--fm-success);
+}
+
+.fm-pipeline-step[data-status="running"] .fm-pipeline-step__dot {
+  background: var(--fm-live);
+}
+
+.fm-pipeline-step[data-status="stale"] .fm-pipeline-step__dot {
+  background: var(--fm-stale);
+}
+
+.fm-pipeline-step[data-status="failed"] .fm-pipeline-step__dot {
+  background: var(--fm-danger);
+}
+
+.fm-pipeline-step[data-status="failed"] {
+  color: var(--fm-danger-text);
+}
+
+.fm-stage-drag-handle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-inline-size: var(--fm-space-6);
+  min-block-size: var(--fm-space-6);
+  border: 0;
+  border-radius: var(--fm-radius-sm);
+  background: transparent;
+  color: var(--fm-text-muted);
+  cursor: grab;
+  touch-action: none;
+}
+
+.fm-stage-drag-handle:hover {
+  color: var(--fm-text-primary);
+  background: var(--fm-bg-hover);
+}
+
+.fm-stage-drag-handle:active {
+  cursor: grabbing;
+}
+
+/* ── 6. Visualization <ColormapBar> & field layer list ───────────────────── */
+
+.fm-colormap-bar {
+  display: grid;
+  grid-template-columns: max-content minmax(4rem, 1fr) max-content;
+  align-items: center;
+  gap: var(--fm-space-2);
+  min-width: 0;
+  padding: var(--fm-space-2);
+  border: 1px solid var(--fm-border-control);
+  border-radius: var(--fm-radius-field);
+  background: var(--fm-field-bg);
+}
+
+.fm-colormap-bar__ramp {
+  block-size: var(--fm-space-3);
+  inline-size: 100%;
+  border-radius: var(--fm-radius-pill);
+  border: 1px solid var(--fm-border-control);
+  box-shadow: var(--fm-shadow-colorbar-inset);
+  forced-color-adjust: none;
+}
+
+.fm-colormap-bar__limit {
+  color: var(--fm-text-primary);
+  font-family: var(--fm-font-ui);
+  font-size: var(--fm-text-xs);
+  font-weight: var(--fm-font-weight-medium);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.fm-field-layer-list {
+  display: grid;
+  gap: var(--fm-space-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  min-width: 0;
+}
+
+.fm-field-layer-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--fm-space-2);
+  min-width: 0;
+  min-block-size: var(--fm-control-height-regular);
+  padding: var(--fm-space-2) var(--fm-space-3);
+  border: 1px solid var(--fm-border-control);
+  border-radius: var(--fm-radius-field);
+  background: var(--fm-field-bg);
+  font-size: var(--fm-text-xs);
+}
+
+.fm-field-layer-row[data-active="true"] {
+  border-color: var(--fm-hue-visualization);
+  background: var(--fm-raised-bg);
+  box-shadow: var(--fm-elevation-sm);
+}
+
+.fm-field-layer-row__label {
+  color: var(--fm-text-primary);
+  font-weight: var(--fm-font-weight-medium);
+  overflow-wrap: anywhere;
+}
+
+.fm-field-layer-row__meta {
+  color: var(--fm-text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ── 7. Reusable <ScientificEChart> host container ───────────────────────── */
+
+.fm-scientific-echart {
+  position: relative;
+  display: block;
+  inline-size: 100%;
+  min-inline-size: 0;
+  min-block-size: 140px;
+  border: 1px solid var(--fm-border-control);
+  border-radius: var(--fm-radius-field);
+  background: var(--fm-field-bg);
+  overflow: clip;
+}
+
+.fm-scientific-echart__canvas {
+  display: block;
+  inline-size: 100%;
+  block-size: 100%;
+}
+
+.fm-scientific-echart__status {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: var(--fm-space-3);
+  color: var(--fm-text-secondary);
+  font-size: var(--fm-text-xs);
+  text-align: center;
+  pointer-events: none;
+}

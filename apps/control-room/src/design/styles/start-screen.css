@@ -123,7 +123,7 @@
   min-height: 0;
   overflow-y: auto;
   border-right: 1px solid var(--fm-border-muted);
-  background: color-mix(in srgb, var(--fm-bg-chrome) 60%, transparent);
+  background: var(--fm-glass-bg);
   padding: var(--fm-space-3) var(--fm-space-2);
 }
 
@@ -197,117 +197,7 @@
   background: var(--fm-border-subtle);
 }
 
-/* ── Compute environment widget ───────────────────────────────────────── */
-
-.fm-start-env {
-  margin-top: auto;
-  border: 1px solid var(--fm-border-subtle);
-  border-radius: var(--fm-radius-md);
-  background: var(--fm-bg-panel);
-  padding: var(--fm-space-2);
-}
-
-.fm-start-env__title {
-  margin: 0;
-  color: var(--fm-start-meta);
-  font-size: var(--fm-font-size-2xs);
-  font-weight: var(--fm-font-weight-semibold);
-  letter-spacing: var(--fm-start-section-tracking);
-  padding: 0 var(--fm-space-1) var(--fm-space-2);
-  text-transform: uppercase;
-}
-
-.fm-start-env__row {
-  display: flex;
-  align-items: center;
-  gap: var(--fm-space-2);
-  min-width: 0;
-  color: var(--fm-text-secondary);
-  font-size: var(--fm-font-size-xs);
-}
-
-.fm-start-env__row + .fm-start-env__row {
-  margin-top: var(--fm-space-2);
-}
-
-.fm-start-env__dot {
-  flex: none;
-  width: var(--fm-space-2);
-  height: var(--fm-space-2);
-  border-radius: var(--fm-radius-pill);
-  background: var(--fm-text-muted);
-}
-
-.fm-start-env--ready .fm-start-env__dot { background: var(--fm-success); }
-.fm-start-env--busy .fm-start-env__dot { background: var(--fm-warning); }
-.fm-start-env--degraded .fm-start-env__dot { background: var(--fm-degraded); }
-
-.fm-start-env__name {
-  overflow: hidden;
-  color: var(--fm-text-primary);
-  font-weight: var(--fm-font-weight-semibold);
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.fm-start-env__val {
-  margin-left: auto;
-  color: var(--fm-start-meta);
-  font-family: var(--fm-font-mono);
-  font-size: var(--fm-font-size-2xs);
-  white-space: nowrap;
-}
-
-.fm-start-env__val--lead {
-  margin-left: 0;
-}
-
-.fm-start-env__meter {
-  height: var(--fm-slider-track-height);
-  margin-top: var(--fm-space-2);
-  overflow: hidden;
-  border-radius: var(--fm-radius-pill);
-  background: var(--fm-bg-panel-raised);
-}
-
-.fm-start-env__meter-fill {
-  height: 100%;
-  border-radius: var(--fm-radius-pill);
-  background: var(--fm-accent);
-}
-
-.fm-start-env__note {
-  margin: var(--fm-space-2) 0 0;
-  color: var(--fm-start-meta);
-  font-size: var(--fm-font-size-2xs);
-  line-height: var(--fm-line-height-normal);
-}
-
-.fm-start-env--degraded .fm-start-env__note {
-  color: var(--fm-project-migrate-text);
-}
-
-.fm-start-env__cfg {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: var(--fm-space-1);
-  width: 100%;
-  height: var(--fm-control-height-compact);
-  margin-top: var(--fm-space-2);
-  border: 0;
-  border-radius: var(--fm-radius-sm);
-  background: transparent;
-  color: var(--fm-start-meta);
-  cursor: pointer;
-  font: inherit;
-  font-size: var(--fm-font-size-xs);
-}
-
-.fm-start-env__cfg:hover {
-  background: var(--fm-bg-panel-raised);
-  color: var(--fm-text-primary);
-}
+/* Compute environment widget (.fm-start-env*) lives in start-compute.css. */
 
 .fm-start-copyable-id {
   display: inline-flex;
@@ -2726,12 +2616,14 @@
   accent-color: var(--fm-accent);
 }
 
+.fm-start :focus-visible,
 .fm-start-frames__slider:focus-visible,
 .fm-start-frames__step:focus-visible,
 .fm-start-switch:focus-visible,
 .fm-start-status__info:focus-visible {
-  outline: 2px solid var(--fm-focus-ring);
+  outline: 2px solid transparent;
   outline-offset: 2px;
+  box-shadow: var(--fm-focus-ring);
 }
 
 .fm-start-frames__step {

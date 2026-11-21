@@ -4,29 +4,29 @@ export const EMBED_FALLBACK_CSS = `
 :root,
 html[data-theme="light"] {
   color-scheme: light;
-  --fm-docs-bg-app: #eff1f5;
-  --fm-docs-bg-chrome: #e6e9ef;
-  --fm-docs-bg-surface: #f7f8fb;
-  --fm-docs-bg-elevated: #e6e9ef;
-  --fm-docs-bg-hover: #dce0e8;
+  --fm-docs-bg-app: #e9ecf3;
+  --fm-docs-bg-chrome: #eef0f6;
+  --fm-docs-bg-surface: #f5f6fa;
+  --fm-docs-bg-elevated: #fafbfd;
+  --fm-docs-bg-hover: #e3e6ee;
   --fm-docs-border-subtle: #ccd0da;
-  --fm-docs-border-default: #bcc0cc;
+  --fm-docs-border-default: #76798d;
   --fm-docs-text-primary: #4c4f69;
   --fm-docs-text-secondary: #525570;
   --fm-docs-text-muted: #585c71;
   --fm-docs-accent: #1e66f5;
   --fm-docs-accent-text: #044ee0;
   --fm-docs-accent-soft: #d3e5fd;
-  --fm-docs-success: #40a02b;
+  --fm-docs-success: #348622;
   --fm-docs-success-text: #256b15;
-  --fm-docs-info: #04a5e5;
-  --fm-docs-info-text: #09676c;
-  --fm-docs-warning: #df8e1d;
+  --fm-docs-info: #0284c7;
+  --fm-docs-info-text: #036397;
+  --fm-docs-warning: #a86808;
   --fm-docs-warning-text: #865006;
   --fm-docs-danger: #d20f39;
-  --fm-docs-danger-text: #ba092f;
-  --fm-docs-mauve-text: #771af0;
-  --fm-docs-peach: #fe640b;
+  --fm-docs-danger-text: #b4082d;
+  --fm-docs-mauve-text: #7218df;
+  --fm-docs-peach: #d44d00;
   --fm-docs-degraded-text: #a13b00;
   --root-bg: var(--fm-docs-bg-app);
   --color-base-100: var(--fm-docs-bg-app);
@@ -56,13 +56,13 @@ html[data-theme="light"] {
 
 html[data-theme="dark"] {
   color-scheme: dark;
-  --fm-docs-bg-app: #1e1e2e;
-  --fm-docs-bg-chrome: #181825;
-  --fm-docs-bg-surface: #242438;
-  --fm-docs-bg-elevated: #313244;
-  --fm-docs-bg-hover: #3b3c4f;
+  --fm-docs-bg-app: #0d0d16;
+  --fm-docs-bg-chrome: #12121c;
+  --fm-docs-bg-surface: #161622;
+  --fm-docs-bg-elevated: #24243a;
+  --fm-docs-bg-hover: #2a2b3e;
   --fm-docs-border-subtle: #313244;
-  --fm-docs-border-default: #45475a;
+  --fm-docs-border-default: #73778f;
   --fm-docs-text-primary: #cdd6f4;
   --fm-docs-text-secondary: #bac2de;
   --fm-docs-text-muted: #a6adc8;
@@ -106,16 +106,17 @@ html[data-theme="dark"] {
   --article-mono--color: var(--fm-docs-mauve-text);
 }
 
-html,
-body,
-.bg-base-100 {
-  background-color: var(--fm-docs-bg-app) !important;
+:root,
+html[data-fullmag-embedded],
+html[data-fullmag-embedded] body,
+html[data-fullmag-embedded] .bg-base-100 {
+  background-color: var(--fm-docs-bg-app);
   color: var(--fm-docs-text-primary);
 }
 
 html[data-fullmag-embedded] {
-  --header-height: 0px !important;
-  --announcement-height: 0px !important;
+  --header-height: 0px;
+  --announcement-height: 0px;
 }
 
 html[data-fullmag-embedded] #main-header,
@@ -124,19 +125,19 @@ html[data-fullmag-embedded] .fm-header-build-stamp,
 html[data-fullmag-embedded] .mode-select,
 html[data-fullmag-embedded] #announcement,
 html[data-fullmag-embedded] .announcement {
-  display: none !important;
+  display: none;
 }
 
-article > main div.highlight,
-article > main pre {
-  background-color: var(--fm-docs-bg-surface) !important;
+html[data-fullmag-embedded] article > main div.highlight,
+html[data-fullmag-embedded] article > main pre {
+  background-color: var(--fm-docs-bg-surface);
   border-color: var(--fm-docs-border-subtle);
   color: var(--fm-docs-text-primary);
 }
 
 .highlighted {
-  background-color: color-mix(in srgb, var(--fm-docs-warning) 22%, transparent);
-  border-color: color-mix(in srgb, var(--fm-docs-warning) 55%, transparent);
+  background-color: color-mix(in oklab, var(--fm-docs-warning) 22%, transparent);
+  border-color: color-mix(in oklab, var(--fm-docs-warning) 55%, transparent);
   color: var(--fm-docs-text-primary);
 }
 `;

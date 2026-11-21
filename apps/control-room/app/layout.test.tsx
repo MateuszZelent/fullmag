@@ -13,6 +13,10 @@ describe("RootLayout theme bootstrap", () => {
     expect(source).not.toContain("next/script");
     expect(source).not.toContain("beforeInteractive");
     expect(source).not.toContain("disablePerformanceDiagnostics: false");
+    expect(source).toContain('<meta name="color-scheme" content="light dark" />');
+    expect(source.indexOf('<meta name="color-scheme" content="light dark" />')).toBeLessThan(
+      source.indexOf('id="fm-theme-prepaint"'),
+    );
     expect(source).toContain('id="fm-theme-prepaint"');
     expect(source).toContain("THEME_BOOTSTRAP_SCRIPT");
     expect(source).toContain("dangerouslySetInnerHTML");

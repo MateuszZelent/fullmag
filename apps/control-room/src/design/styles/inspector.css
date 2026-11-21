@@ -274,7 +274,7 @@
 
 .fm-inspector-field-box > .fm-inspector-form-field__unit {
   padding-inline: var(--fm-space-1) var(--fm-space-3);
-  font-family: var(--fm-font-symbol);
+  font-family: var(--fm-font-ui);
   font-size: var(--fm-font-size-sm);
 }
 

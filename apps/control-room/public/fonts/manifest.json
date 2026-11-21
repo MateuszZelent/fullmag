@@ -14,6 +14,18 @@
       "bytes": 303144
     },
     {
+      "path": "STIXTwoText-Italic.woff2",
+      "source": "https://github.com/stipub/stixfonts/blob/v2.13b171/fonts/variable_ttf_woff2/STIXTwoText-Italic%5Bwght%5D.woff2",
+      "sha256": "a5e3f5f788a93cd23f015f6d6e1cc64b3239ad0a798aec5032c6be18e165f78d",
+      "bytes": 174452
+    },
+    {
+      "path": "STIXTwoText-Regular.woff2",
+      "source": "https://github.com/stipub/stixfonts/blob/v2.13b171/fonts/variable_ttf_woff2/STIXTwoText%5Bwght%5D.woff2",
+      "sha256": "e2a13a91ad5d98da25a6972e8b19ce216e1997037004d9051290d0094b10a58b",
+      "bytes": 158184
+    },
+    {
       "path": "LICENSE-Inter-OFL.txt",
       "source": "https://github.com/rsms/inter/blob/v4.1/LICENSE.txt",
       "sha256": "262481e844521b326f5ecd053e59b98c8b2da78c8ee1bdbb6e8174305e54935a",
@@ -26,6 +38,12 @@
       "bytes": 4398,
       "source_sha256": "30f0c136e3c88e422d0791acd97238870f9054a9729bc34cf2ff0d4ed8cac4ad",
       "formatting": "Trailing whitespace removed; license text unchanged."
+    },
+    {
+      "path": "LICENSE-STIXTwoText-OFL.txt",
+      "source": "https://github.com/stipub/stixfonts/blob/v2.13b171/OFL.txt",
+      "sha256": "0c8825913b60d858aacdb33c4ca6660a7d64b0d6464702efbb19313f5765861a",
+      "bytes": 4519
     }
   ]
 }
