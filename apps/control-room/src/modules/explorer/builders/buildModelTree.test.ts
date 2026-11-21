@@ -500,7 +500,6 @@ describe("buildModelTree", () => {
         "model:object:free-layer:magnetic-parameters:material",
         "model:object:free-layer:magnetic-parameters:uniaxial_anisotropy",
         "model:object:free-layer:magnetic-texture",
-        "model:object:free-layer:magnetic-texture:asset",
         "model:object:free-layer:mesh",
         "model:object:free-layer:visualization",
         "model:object:free-layer:visualization:debug",
@@ -690,7 +689,7 @@ describe("buildModelTree", () => {
     });
   });
 
-  it("marks grouping roots as nonselectable instead of routing them to placeholders", () => {
+  it("keeps collection and scope grouping roots selectable for canonical overview routing", () => {
     const nodes = flattenExplorerNodes(buildModelTree({
       domainDiscretization: "fem",
       objects: [{ id: "film", label: "Film" }],
@@ -703,7 +702,7 @@ describe("buildModelTree", () => {
       "objects.root",
     ]) {
       expect(nodes.find((node) => node.kind === kind), kind).toMatchObject({
-        selectable: false,
+        selectable: true,
       });
     }
   });
@@ -1107,37 +1106,29 @@ describe("buildModelTree", () => {
       "model:materials",
     );
     expect(flattened.map((node) => node.id)).not.toContain("model:physics");
-    expect(
-      flattened.find(
-        (node) => node.id === "model:object:box-1:magnetic-texture",
-      )?.badge,
-    ).toBe("preset_texture");
-    expect(
-      flattened.find(
-        (node) => node.id === "model:object:box-1:magnetic-texture:asset",
-      )?.label,
-    ).toBe("Vortex texture");
-    expect(
-      flattened.find(
-        (node) => node.id === "model:object:box-1:magnetic-texture:asset",
-      )?.kind,
-    ).toBe("object.magnetic-texture.asset");
+    const boxTextureNode = flattened.find(
+      (node) => node.id === "model:object:box-1:magnetic-texture",
+    );
+    expect(boxTextureNode).toMatchObject({
+      badge: "preset_texture",
+      icon: "compass",
+      kind: "object.magnetic-texture",
+    });
+    expect(boxTextureNode?.children).toBeUndefined();
+    expect(flattened.map((node) => node.id)).not.toContain(
+      "model:object:box-1:magnetic-texture:asset",
+    );
     expect(flattened.map((node) => node.id)).not.toContain(
       "model:object:box-1:magnetic-texture:load",
+    );
+    expect(flattened.map((node) => node.id)).not.toContain(
+      "model:object:box-1:magnetic-texture:transform",
     );
     expect(
       flattened.find(
         (node) => node.id === "model:object:box-1:magnetic-texture",
       )?.contextCommands,
     ).toEqual(expect.arrayContaining(["magnetization-texture.activate-load-file"]));
-    expect(flattened.map((node) => node.id)).toContain(
-      "model:object:box-1:magnetic-texture:transform",
-    );
-    expect(
-      flattened.find(
-        (node) => node.id === "model:object:box-1:magnetic-texture:transform",
-      )?.kind,
-    ).toBe("object.magnetic-texture.transform");
     expect(
       flattened.find((node) => node.id === "model:object:box-1")
         ?.contextCommands,
@@ -1715,7 +1706,7 @@ describe("buildModelTree", () => {
     ).toMatchObject({ kind: "object.region.regions", badge: "inherits none" });
     expect(
       flattened.find((node) => node.id === "model:physics:couplings"),
-    ).toMatchObject({ badge: "1", kind: "physics.couplings", selectable: false });
+    ).toMatchObject({ badge: "1", kind: "physics.couplings", selectable: true });
     expect(
       flattened.find(
         (node) => node.id === "model:physics:couplings:cpl-exchange",
@@ -1892,7 +1883,7 @@ describe("buildModelTree", () => {
     )).toEqual(["stale", "stale"]);
   });
 
-  it("shows object texture load nodes only after activation", () => {
+  it("keeps object magnetic texture as a childless leaf even when textureLoadEnabled is set", () => {
     const flattened = flattenExplorerNodes(
       buildModelTree({
         objects: [
@@ -1905,17 +1896,19 @@ describe("buildModelTree", () => {
       }),
     );
 
-    expect(
-      flattened.find(
-        (node) => node.id === "model:object:box-1:magnetic-texture:load",
-      ),
-    ).toMatchObject({
-      badge: "h5/zarr",
-      contextCommands: ["study.load-field-state"],
-      kind: "object.magnetic-texture.load",
-      label: "Load texture",
+    const loadTextureNode = flattened.find(
+      (node) => node.id === "model:object:box-1:magnetic-texture",
+    );
+    expect(loadTextureNode).toMatchObject({
+      icon: "compass",
+      kind: "object.magnetic-texture",
+      label: "Magnetic Texture",
       objectId: "box-1",
     });
+    expect(loadTextureNode?.children).toBeUndefined();
+    expect(flattened.map((node) => node.id)).not.toContain(
+      "model:object:box-1:magnetic-texture:load",
+    );
   });
 
   it("keeps the explorer renderable before the scene resource is loaded", () => {
@@ -3744,7 +3737,7 @@ describe("buildModelTree", () => {
       badge: "1 plot",
       kind: "visualizations-2d.root",
       label: "Visualizations 2D",
-      selectable: false,
+      selectable: true,
     });
     expect(
       flattened.find((node) => node.id === "model:visualizations-2d:draft"),
@@ -3995,7 +3988,7 @@ describe("buildModelTree", () => {
       expect(nodes.filter((node) => node.kind === "physics.scope.unresolved")).toEqual([
         expect.objectContaining({
           id: "model:physics:unresolved",
-          selectable: false,
+          selectable: true,
           status: diagnosticStatus,
         }),
       ]);
@@ -4027,7 +4020,7 @@ describe("buildModelTree", () => {
     expect(nodes.filter((node) => node.kind === "physics.scope.unresolved")).toEqual([
       expect.objectContaining({
         id: "model:physics:unresolved",
-        selectable: false,
+        selectable: true,
         status: "stale",
       }),
     ]);
@@ -4662,11 +4655,19 @@ describe("buildModelTree", () => {
       },
       { frozenSpins },
     );
-    const nodes = flattenExplorerNodes(tree).filter(
+    const flattened = flattenExplorerNodes(tree);
+    expect(
+      flattened.find((node) => node.id === "model:definitions:frozen-spins"),
+    ).toMatchObject({
+      id: "model:definitions:frozen-spins",
+      kind: "model.frozen-spins",
+      selectable: true,
+    });
+    const leaves = flattened.filter(
       (node) => node.kind === "object.frozen-spins",
     );
-    expect(nodes).toHaveLength(2); // One parent group node and one leaf node
-    const leaf = nodes.find((node) => node.constraintId === "pin-global-not");
+    expect(leaves).toHaveLength(1);
+    const leaf = leaves.find((node) => node.constraintId === "pin-global-not");
     expect(leaf).toBeDefined();
     expect(leaf).toMatchObject({
       constraintId: "pin-global-not",

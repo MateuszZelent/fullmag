@@ -39,7 +39,10 @@ import { modelTreeSnapshotFromScene } from "../explorer/builders/sceneModelTreeA
 import { runtimeExplorerSnapshotFromResources } from "../explorer/builders/runtimeExplorerSnapshot";
 import { resolveInspectorDescriptor } from "./inspectorDescriptor";
 import { resolveInspectorPanel } from "./inspectorRegistry";
-import { resolveInspectorRoute } from "./inspectorRouteCatalog";
+import {
+  resolveCanonicalSelectionKind,
+  resolveInspectorRoute,
+} from "./inspectorRouteCatalog";
 
 const canonicalResponseProgress: FrequencyDomainSweepProgressResource = {
   complete: false,
@@ -517,18 +520,26 @@ describe("inspector route coverage", () => {
     expect(new Set(routes.map((route) => route?.component)).size).toBe(kinds.length);
   });
 
-  it("gives every selectable semantic kind its own route component and owner", () => {
+  it("gives every canonical selectable semantic kind its own route component and owner", () => {
     const kinds = [...new Set(
       tabIds
         .flatMap((tabId) => nodesForTab(tabId))
         .filter((node) => node.selectable !== false)
         .map((node) => node.kind),
     )];
-    const routes = kinds.map((kind) => resolveInspectorRoute(kind));
+    const canonicalKinds = [
+      ...new Set(kinds.map((kind) => resolveCanonicalSelectionKind(kind))),
+    ];
+    const routes = canonicalKinds.map((kind) => resolveInspectorRoute(kind));
 
+    expect(kinds.every((kind) => resolveInspectorRoute(kind) !== null)).toBe(true);
     expect(routes.every(Boolean)).toBe(true);
-    expect(new Set(routes.map((route) => route?.component)).size).toBe(kinds.length);
-    expect(new Set(routes.map((route) => route?.id)).size).toBe(kinds.length);
+    expect(new Set(routes.map((route) => route?.component)).size).toBe(
+      canonicalKinds.length,
+    );
+    expect(new Set(routes.map((route) => route?.id)).size).toBe(
+      canonicalKinds.length,
+    );
   });
 
   it("covers the complete model and conditional resource trees before routing every selectable node", () => {

@@ -35,7 +35,7 @@ export function buildRuntimeJobTree(
     label: "Jobs",
     parentId: null,
     resourceState,
-    selectable: false,
+    selectable: true,
     status: resourceState === "error"
       ? "failed"
       : resourceState === "stale"

@@ -44,8 +44,12 @@ describe("Inspector design-system reference contract", () => {
 
     expect(inspector).toMatch(/\.fm-inspector__action-bar\s*\{[^}]*display: flex;[^}]*flex-wrap: wrap;/);
     expect(inspector).toMatch(/\.fm-inspector__action-controls\s*\{[^}]*display: flex;[^}]*flex-wrap: wrap;/);
-    expect(inspector).toMatch(/@container \(max-width: 390px\)\s*\{[^@]*\.fm-inspector__action-controls > button \{ flex: 1 1 auto; \}/);
-    expect(inspector).toMatch(/@container \(max-width: 560px\)[\s\S]*?\.fm-inspector__action-bar\s*\{[^}]*padding-inline: var\(--fm-space-2\)/);
+    expect(inspector).toMatch(
+      /@container inspector \(max-width: 24\.375rem\)\s*\{[\s\S]*?\.fm-inspector__action-controls\s*>\s*button\s*\{\s*flex:\s*1 1 auto;\s*\}/,
+    );
+    expect(inspector).toMatch(
+      /\.fm-inspector__action-bar\s*\{[\s\S]*?padding:\s*var\(--fm-space-2\)/,
+    );
     expect(footer).toContain('className="fm-inspector__action-controls"');
     expect(footer).toContain('className="fm-inspector__action-reason"');
   });
@@ -373,7 +377,7 @@ describe("Inspector design-system reference contract", () => {
     const panel = read(`src/modules/inspector/panels/${fileName}`);
 
     if (fileName === "PlaceholderPanel.tsx") {
-      expect(panel).toContain("ScientificInspectorTemplate");
+      expect(panel).toContain("InspectorTemplate");
     } else {
       expect(panel).toContain("InspectorGroup");
     }
@@ -381,7 +385,7 @@ describe("Inspector design-system reference contract", () => {
     expect(panel).not.toMatch(/import\s+\{\s*InspectorSection\s*\}/);
   });
 
-  it("removes the obsolete InspectorSection compatibility layer", () => {
+  it("removes the obsolete primitives/InspectorSection compatibility layer while keeping canonical template sections", () => {
     const inspectorCss = read("src/design/styles/inspector.css");
     const studyCss = read("src/design/styles/inspector-study.css");
 
@@ -393,7 +397,7 @@ describe("Inspector design-system reference contract", () => {
         ),
       ),
     ).toBe(false);
-    expect(inspectorCss).not.toContain(".fm-inspector-section");
+    expect(inspectorCss).toContain('.fm-inspector-section[data-state="open"]');
     expect(studyCss).not.toContain(".fm-inspector-section");
   });
 });

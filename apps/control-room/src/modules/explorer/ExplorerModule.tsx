@@ -12,6 +12,7 @@ import {
 
 import type { LiveStatusResource, SolverProfileResource } from "@/kernel/api/apiTypes";
 import { createCommandContext } from "@/kernel/commands/commandContext";
+import { useLayoutSelector } from "@/kernel/layout/useLayout";
 import {
   MESHING_BUILDS_CURRENT_PATH,
   MESHING_SHARED_DOMAIN_MANIFEST_PATH,
@@ -1021,6 +1022,23 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
       setExplorerActiveTab(tab);
     });
   }, [kernel.bus]);
+
+  const activeRibbonTab = useLayoutSelector((layout) => layout.activeModuleTab);
+  const previousRibbonTabRef = useRef(activeRibbonTab);
+  useEffect(() => {
+    const previousTab = previousRibbonTabRef.current;
+    previousRibbonTabRef.current = activeRibbonTab;
+    if (activeRibbonTab === "results" && previousTab !== "results") {
+      if (kernel.commands.get("explorer.activate-tab")) {
+        void kernel.commands.execute(
+          "explorer.activate-tab",
+          createCommandContext("explorer", kernel, { input: { tab: "results" } }),
+        );
+      } else {
+        setExplorerActiveTab("results");
+      }
+    }
+  }, [activeRibbonTab, kernel]);
 
   useEffect(() => {
     if (crossSectionExpansionIds.length === 0) return;

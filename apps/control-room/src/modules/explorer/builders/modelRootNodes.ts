@@ -86,7 +86,7 @@ export function buildPlanarMonitorNodes(
     kind: "model.planar.monitors",
     label: "Planar Monitors",
     parentId: "model:definitions",
-    selectable: false,
+    selectable: true,
     status: "ready",
   };
 }
@@ -114,10 +114,10 @@ export function buildUnscopedFrozenSpinsNodes(
     children,
     icon: "shield",
     id: "model:definitions:frozen-spins",
-    kind: "object.frozen-spins",
+    kind: "model.frozen-spins",
     label: "Frozen Spins (Unscoped)",
     parentId: "model:definitions",
-    selectable: false,
+    selectable: true,
     status: "ready",
   };
 }
@@ -143,7 +143,7 @@ export function buildDefinitionsNode(
     kind: "definitions.root",
     label: "Definitions",
     parentId: "model:session",
-    selectable: false,
+    selectable: true,
     status: "ready",
   });
 }
@@ -177,7 +177,7 @@ export function buildObjectsRootNode(
     parentId: "model:session",
     badge: `${objects.length}`,
     icon: "layers",
-    selectable: false,
+    selectable: true,
     status: "ready",
     children: objects.map((object) =>
       buildObjectExplorerNode(object, resources, physicsGraph),
@@ -194,7 +194,7 @@ export function buildCouplingsNode(couplings: readonly ModelTreeCouplingSnapshot
     parentId: "model:session",
     badge: `${couplings.length}`,
     icon: "activity",
-    selectable: false,
+    selectable: true,
     status: "ready",
     contextCommands: ["workspace.focus-selection"],
     children: couplings.map((coupling) => ({
@@ -240,7 +240,7 @@ export function buildPhysicsGraphUnavailableNode(
     parentId: "model:session",
     badge: "graph resource",
     icon: "activity",
-    selectable: false,
+    selectable: true,
     status: presentation.nodeStatus,
   });
 }
@@ -253,7 +253,7 @@ export function buildSessionRootNode(children: ExplorerNode[]): ExplorerNode {
     parentId: null,
     badge: "ProblemIR",
     icon: "folder",
-    selectable: false,
+    selectable: true,
     status: "ready",
     contextCommands: ["explorer.expand-all", "explorer.collapse-all"],
     children,

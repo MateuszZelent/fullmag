@@ -34,6 +34,7 @@ type ObjectSelectionKind =
   | "object.antenna.visualization"
   | "object.material"
   | "object.physics"
+  | "object.physics.scope"
   | "object.regions"
   | "object.region"
   | "object.region.geometry"
@@ -279,7 +280,49 @@ export type FdmDomainSelectionScope =
   | "region"
   | "universe-outside-support";
 
+export type ModelScopeSelectionKind =
+  | "session.root"
+  | "universe.root"
+  | "objects.root"
+  | "definitions.root"
+  | "model.frozen-spins"
+  | "model.planar.monitors"
+  | "visualizations-2d.root"
+  | "physics.couplings"
+  | "physics.field-drives"
+  | "physics.scope.global"
+  | "physics.scope.cross-object"
+  | "physics.scope.unresolved"
+  | "resources.root"
+  | "results.root"
+  | "jobs.root"
+  | "diagnostics.root";
+
+export type CanonicalNewSelectionKind =
+  | "study.stage.mask_field_drive"
+  | "results.hysteresis.point"
+  | "results.resonance.modal.field_sweep"
+  | "results.resonance.driven.fits"
+  | "results.resonance.kittel_fit"
+  | "mesh.part.visualization.debug"
+  | "model.frozen-spins";
+
+export type SelectionKind =
+  | ObjectSelectionKind
+  | FdmDomainSelectionKind
+  | ModelScopeSelectionKind
+  | CanonicalNewSelectionKind
+  | (string & {});
+
+export interface ModelScopeSelectionRef {
+  kind: ModelScopeSelectionKind;
+  nodeId: string;
+  scopeId: string;
+  type: "model-scope";
+}
+
 export type SelectionRef =
+  | ModelScopeSelectionRef
   | LiveChartSelectionRef
   | LiveChartPointSelectionRef
   | AnalysisResultSelectionRef
@@ -430,7 +473,7 @@ export type SelectionRef =
       carrierPartId?: string;
       elementFamily?: MeshElementFamily | null;
       globalCellOrdinal?: string | null;
-      kind: "mesh-part" | "mesh-part-airbox";
+      kind: "mesh-part" | "mesh-part-airbox" | "mesh.part.visualization.debug";
       nodeId: string;
       objectId: string | null;
       type: "mesh-part";
@@ -457,7 +500,7 @@ export type SelectionRef =
     }
   | {
       draftId: "draft";
-      kind: "mesh.cross-section.draft";
+      kind: "visualizations-2d.draft" | "mesh.cross-section.draft";
       nodeId: string;
       type: "cross-section-draft";
       visualizationTargetId: "cross-section:draft";
@@ -470,7 +513,7 @@ export type SelectionRef =
       visualizationTargetId: "planar-monitor:draft";
     }
   | {
-      kind: "mesh.cross-section.plot";
+      kind: "visualizations-2d.plot" | "mesh.cross-section.plot";
       nodeId: string;
       plotId: string;
       type: "cross-section-plot";
@@ -652,6 +695,7 @@ export type SelectionRef =
         | "study.stage.frequency_response.diagnostics"
         | "study.stage.fft_response"
         | "study.stage.hysteresis"
+        | "study.stage.mask_field_drive"
         | "study.stage.relax"
         | "study.stage.run"
         | "study.stage.table_autosave"
@@ -905,6 +949,13 @@ export function selectionRefEquals(
   if (left.type !== right.type) return false;
 
   switch (left.type) {
+    case "model-scope":
+      return (
+        right.type === "model-scope" &&
+        left.kind === right.kind &&
+        left.nodeId === right.nodeId &&
+        left.scopeId === right.scopeId
+      );
     case "observation-frame":
       return (
         right.type === "observation-frame" &&

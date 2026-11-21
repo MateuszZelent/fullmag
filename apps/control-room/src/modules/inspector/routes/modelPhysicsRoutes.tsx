@@ -1,0 +1,236 @@
+import { TopologicalChargeExtensionPanel } from "../extensions/topological-charge/TopologicalChargeExtensionPanel";
+import { CouplingInspectorPanel } from "../panels/CouplingInspectorPanel";
+import {
+  BuilderPrimitiveInspectorPanel,
+  FieldDriveInspectorPanel,
+  FieldDrivesInspectorPanel,
+  GeometryObjectInspectorPanel,
+  ObjectMaterialInspectorPanel,
+  ObjectRegionMagneticParametersInspectorPanel,
+} from "../panels/DedicatedExplorerInspectorPanels";
+import {
+  CrossObjectPhysicsScopeInspectorPanel,
+  DefinitionsRootInspectorPanel,
+  GlobalPhysicsScopeInspectorPanel,
+  ObjectsRootInspectorPanel,
+  PhysicsCouplingsInspectorPanel,
+  SessionRootInspectorPanel,
+  UniverseRootInspectorPanel,
+  UnresolvedPhysicsScopeInspectorPanel,
+} from "../panels/ModelTreeOverviewInspectorPanels";
+import { ObjectAbsorbingBoundaryInspectorPanel } from "../panels/ObjectAbsorbingBoundaryPanel";
+import { ObjectGeneralPanel } from "../panels/ObjectGeneralPanel";
+import {
+  ObjectRegionMeshPanel,
+  ObjectRegionOverviewPanel,
+} from "../panels/ObjectRegionsPanel";
+import { PhysicsGraphModuleInspectorPanel } from "../panels/PhysicsGraphModuleInspectorPanel";
+import { PhysicsInteractionPanel } from "../panels/PhysicsInteractionPanel";
+import { RegionsListPanel } from "../panels/RegionsListPanel";
+import {
+  OerstedFieldInspectorPanel,
+  SpinTorqueInspectorPanel,
+} from "../panels/SpinAuthoringInspector";
+import { SpinInterfaceInspectorPanel } from "../panels/SpinInterfaceInspector";
+import {
+  CurrentTransportInspectorPanel,
+  SpinTransportInspectorPanel,
+  StructuredCurrentClosureInspectorPanel,
+  StructuredCurrentSourceCutInspectorPanel,
+} from "../panels/TransportAuthoringInspector";
+import { FrozenSpinsInspectorPanel } from "../panels/constraint/FrozenSpinsInspectorPanel";
+
+import { defineInspectorRoute, type InspectorRoute } from "./routeTypes";
+
+/**
+ * Canonical Wave 4 (Volume III) domain route registry: Model roots, Object, Geometry,
+ * Material, Regions, Constraints, Physics, Transport & Field Drives (31 routes).
+ */
+export const MODEL_PHYSICS_ROUTES: readonly InspectorRoute[] = [
+  defineInspectorRoute({
+    component: SessionRootInspectorPanel,
+    id: "session-root",
+    selectionKinds: ["session.root"],
+    title: "Session Model",
+  }),
+  defineInspectorRoute({
+    component: UniverseRootInspectorPanel,
+    id: "universe-root",
+    selectionKinds: ["universe.root"],
+    title: "Universe",
+  }),
+  defineInspectorRoute({
+    component: ObjectsRootInspectorPanel,
+    id: "objects-root",
+    selectionKinds: ["objects.root"],
+    title: "Objects",
+  }),
+  defineInspectorRoute({
+    component: DefinitionsRootInspectorPanel,
+    id: "definitions-root",
+    selectionKinds: ["definitions.root"],
+    title: "Definitions",
+  }),
+  defineInspectorRoute({
+    component: PhysicsCouplingsInspectorPanel,
+    id: "physics-couplings",
+    selectionKinds: ["physics.couplings"],
+    title: "Couplings",
+  }),
+  defineInspectorRoute({
+    component: GlobalPhysicsScopeInspectorPanel,
+    id: "physics-scope-global",
+    selectionKinds: ["physics.scope.global"],
+    title: "Global Physics",
+  }),
+  defineInspectorRoute({
+    component: CrossObjectPhysicsScopeInspectorPanel,
+    id: "physics-scope-cross-object",
+    selectionKinds: ["physics.scope.cross-object"],
+    title: "Cross-object Interfaces",
+  }),
+  defineInspectorRoute({
+    component: UnresolvedPhysicsScopeInspectorPanel,
+    id: "physics-scope-unresolved",
+    selectionKinds: ["physics.scope.unresolved"],
+    title: "Unresolved Physics",
+  }),
+  defineInspectorRoute({
+    component: ObjectGeneralPanel,
+    id: "object-general",
+    selectionKinds: ["object.root"],
+    title: "Object General",
+  }),
+  defineInspectorRoute({
+    component: FrozenSpinsInspectorPanel,
+    id: "object-frozen-spins",
+    selectionKinds: ["object.frozen-spins"],
+    title: "Frozen Spins",
+  }),
+  defineInspectorRoute({
+    component: GeometryObjectInspectorPanel,
+    id: "geometry-object",
+    selectionKinds: ["object.geometry"],
+    title: "Geometry",
+  }),
+  defineInspectorRoute({
+    component: BuilderPrimitiveInspectorPanel,
+    id: "builder-primitive",
+    selectionKinds: ["builder.primitive"],
+    title: "Builder Primitive",
+  }),
+  defineInspectorRoute({
+    component: PhysicsInteractionPanel,
+    id: "physics-interaction",
+    selectionKinds: ["object.physics"],
+    title: "Physics Interaction",
+  }),
+  defineInspectorRoute({
+    component: PhysicsGraphModuleInspectorPanel,
+    id: "physics-graph-module",
+    selectionKinds: ["physics.module"],
+    title: "Physics Module",
+  }),
+  defineInspectorRoute({
+    component: CouplingInspectorPanel,
+    id: "physics-coupling",
+    selectionKinds: ["physics.coupling"],
+    title: "Coupling",
+  }),
+  defineInspectorRoute({
+    component: CurrentTransportInspectorPanel,
+    id: "physics-current-transport",
+    selectionKinds: ["physics.current-transport"],
+    title: "Charge transport",
+  }),
+  defineInspectorRoute({
+    component: StructuredCurrentClosureInspectorPanel,
+    id: "physics-structured-current-closure",
+    selectionKinds: ["physics.structured-current-closure"],
+    title: "Structured Current Closure",
+  }),
+  defineInspectorRoute({
+    component: StructuredCurrentSourceCutInspectorPanel,
+    id: "physics-structured-current-source-cut",
+    selectionKinds: ["physics.structured-current-source-cut"],
+    title: "Structured Current Source Cut",
+  }),
+  defineInspectorRoute({
+    component: SpinTransportInspectorPanel,
+    id: "physics-spin-transport",
+    selectionKinds: ["physics.spin-transport"],
+    title: "Spin transport",
+  }),
+  defineInspectorRoute({
+    component: SpinInterfaceInspectorPanel,
+    id: "physics-spin-interface",
+    selectionKinds: ["physics.spin-interface"],
+    title: "HM/FM interface",
+  }),
+  defineInspectorRoute({
+    component: SpinTorqueInspectorPanel,
+    id: "physics-spin-torque",
+    selectionKinds: ["physics.spin-torque"],
+    title: "Transport torque",
+  }),
+  defineInspectorRoute({
+    component: OerstedFieldInspectorPanel,
+    id: "physics-oersted-field",
+    selectionKinds: ["physics.oersted-field"],
+    title: "Oersted Field",
+  }),
+  defineInspectorRoute({
+    component: FieldDrivesInspectorPanel,
+    id: "physics-field-drive",
+    selectionKinds: ["physics.field-drives"],
+    title: "Field Drive",
+  }),
+  defineInspectorRoute({
+    component: FieldDriveInspectorPanel,
+    id: "physics-field-drive-item",
+    selectionKinds: ["physics.field-drive"],
+    title: "Field Drive Item",
+  }),
+  defineInspectorRoute({
+    component: ObjectAbsorbingBoundaryInspectorPanel,
+    id: "object-absorbing-boundary",
+    selectionKinds: ["object.absorbing-boundary"],
+    title: "Absorbing Boundary",
+  }),
+  defineInspectorRoute({
+    component: ObjectMaterialInspectorPanel,
+    id: "object-material-assignment",
+    selectionKinds: ["object.material"],
+    title: "Material Assignment",
+  }),
+  defineInspectorRoute({
+    component: RegionsListPanel,
+    id: "object-regions",
+    selectionKinds: ["object.regions"],
+    title: "Object Regions",
+  }),
+  defineInspectorRoute({
+    component: ObjectRegionOverviewPanel,
+    id: "object-region",
+    selectionKinds: ["object.region"],
+    title: "Object Region",
+  }),
+  defineInspectorRoute({
+    component: ObjectRegionMagneticParametersInspectorPanel,
+    id: "object-region-magnetic-parameters",
+    selectionKinds: ["object.region.magnetic-parameters"],
+    title: "Region Magnetic Parameters",
+  }),
+  defineInspectorRoute({
+    component: ObjectRegionMeshPanel,
+    id: "object-region-mesh",
+    selectionKinds: ["object.region.mesh"],
+    title: "Region Mesh",
+  }),
+  defineInspectorRoute({
+    component: TopologicalChargeExtensionPanel,
+    id: "object-extension-topological-charge",
+    selectionKinds: ["object.extension.topological-charge"],
+    title: "Topological Charge",
+  }),
+];

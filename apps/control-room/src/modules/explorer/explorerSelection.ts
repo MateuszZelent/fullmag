@@ -1,6 +1,7 @@
 import type {
   FdmDomainSelectionScope,
   FdmDomainSelectionKind,
+  ModelScopeSelectionKind,
   RegionVisualizationTargetId,
   Selection,
   SelectionRef,
@@ -9,6 +10,11 @@ import {
   modeVisualizationTargetId,
   visualizationTargetIdForSceneObject,
 } from "@/kernel/selection/selectionTypes";
+export {
+  LEGACY_SELECTION_KIND_REDIRECTS,
+  resolveCanonicalSelection,
+  resolveCanonicalSelectionKind,
+} from "@/kernel/selection/legacySelectionRedirects";
 import type { KernelApi, ModuleId } from "@/kernel/types";
 import type { AnalysisFieldOverlaySource } from "@/kernel/visualization/AnalysisFieldOverlayController";
 import type { PostprocessingDefinitionKind } from "@/shared/domain/analysis/postprocessingTypes";
@@ -57,6 +63,7 @@ const STUDY_STAGE_SELECTION_KINDS = new Set<string>([
   "study.stage.frequency_response.diagnostics",
   "study.stage.fft_response",
   "study.stage.hysteresis",
+  "study.stage.mask_field_drive",
   "study.stage.relax",
   "study.stage.run",
   "study.stage.table_autosave",
@@ -101,6 +108,25 @@ const FDM_DOMAIN_SELECTION_SCOPES: Record<
   "mesh.grid.provenance": "provenance",
   "mesh.grid.region": "region",
   "mesh.grid.universe-outside-support": "universe-outside-support",
+};
+
+const MODEL_SCOPE_IDS: Readonly<Partial<Record<ExplorerNode["kind"], string>>> = {
+  "session.root": "session",
+  "universe.root": "universe",
+  "objects.root": "objects",
+  "definitions.root": "definitions",
+  "model.frozen-spins": "frozen-spins",
+  "model.planar.monitors": "planar-monitors",
+  "visualizations-2d.root": "visualizations-2d",
+  "physics.couplings": "couplings",
+  "physics.field-drives": "field-drives",
+  "physics.scope.global": "global",
+  "physics.scope.cross-object": "cross-object",
+  "physics.scope.unresolved": "unresolved",
+  "resources.root": "resources",
+  "results.root": "results",
+  "jobs.root": "jobs",
+  "diagnostics.root": "diagnostics",
 };
 
 function isFdmDomainSelectionKind(
@@ -465,6 +491,7 @@ export function selectionRefFromNode(node: ExplorerNode): SelectionRef | null {
       node.kind === "object.antenna.visualization" ||
       node.kind === "object.material" ||
       node.kind === "object.physics" ||
+      node.kind === "object.physics.scope" ||
       node.kind === "object.regions" ||
       node.kind === "object.region" ||
       node.kind === "object.region.geometry" ||
@@ -567,7 +594,7 @@ export function selectionRefFromNode(node: ExplorerNode): SelectionRef | null {
   ) {
     return {
       draftId: node.crossSectionDraftId ?? "draft",
-      kind: "mesh.cross-section.draft",
+      kind: "visualizations-2d.draft",
       nodeId: node.id,
       type: "cross-section-draft",
       visualizationTargetId: "cross-section:draft",
@@ -580,7 +607,7 @@ export function selectionRefFromNode(node: ExplorerNode): SelectionRef | null {
     node.crossSectionPlotId
   ) {
     return {
-      kind: "mesh.cross-section.plot",
+      kind: "visualizations-2d.plot",
       nodeId: node.id,
       plotId: node.crossSectionPlotId,
       type: "cross-section-plot",
@@ -773,6 +800,16 @@ export function selectionRefFromNode(node: ExplorerNode): SelectionRef | null {
     };
   }
 
+  const scopeId = MODEL_SCOPE_IDS[node.kind];
+  if (scopeId) {
+    return {
+      kind: node.kind as ModelScopeSelectionKind,
+      nodeId: node.id,
+      scopeId,
+      type: "model-scope",
+    };
+  }
+
   return null;
 }
 
@@ -832,13 +869,16 @@ const FREQUENCY_DOMAIN_RESULT_KINDS = new Set<ExplorerNode["kind"]>([
   "results.resonance.modal.modes",
   "results.resonance.modal.mode",
   "results.resonance.modal.coupling",
+  "results.resonance.modal.field_sweep",
   "results.resonance.modal.provenance",
   "results.resonance.driven.spectrum",
   "results.resonance.driven.peaks",
+  "results.resonance.driven.fits",
   "results.resonance.driven.frequency_points",
   "results.resonance.driven.fields",
   "results.resonance.driven.field",
   "results.resonance.driven.provenance",
+  "results.resonance.kittel_fit",
   "results.dispersion.root",
   "results.dispersion.modal.stage",
   "results.dispersion.driven.stage",
@@ -895,23 +935,19 @@ function isFrequencyDomainSelectionNode(node: ExplorerNode): boolean {
 /** The selection an Explorer node stands for (also used by the Inspector path). */
 export function selectionFromExplorerNode(node: ExplorerNode): Omit<Selection, "moduleSource"> {
   const ref = selectionRefFromNode(node);
-  return {
-    kind:
-      ref?.type === "cross-section-draft" ||
-      ref?.type === "cross-section-plot" ||
-      ref?.type === "planar-monitor-draft" ||
-      (ref?.type === "mesh-part" &&
-        node.kind !== "mesh.unassigned" &&
-        node.kind !== "mesh.unassigned.part") ||
-      ref?.type === "current-transport" ||
+  const specializedPhysicsKind =
+    node.kind === "physics.module" &&
+    (ref?.type === "current-transport" ||
       ref?.type === "spin-transport" ||
       ref?.type === "spin-interface" ||
       ref?.type === "spin-torque" ||
       ref?.type === "oersted-field" ||
       ref?.type === "physics-field-drive" ||
-      ref?.type === "physics-module"
-        ? ref.kind
-        : node.kind,
+      ref?.type === "physics-module")
+      ? ref.kind
+      : null;
+  return {
+    kind: specializedPhysicsKind ?? node.kind,
     label: node.label,
     nodeId: node.id,
     objectId: node.objectId ?? null,

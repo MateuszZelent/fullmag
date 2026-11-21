@@ -217,11 +217,10 @@ export function buildObjectExplorerNode(
           object.magnetizationLabel ??
           object.magnetization ??
           "unassigned",
-        icon: "wave",
+        icon: "compass",
         objectId,
         status: object.magnetization ? "ready" : "degraded",
         contextCommands: ["magnetization-texture.activate-load-file"],
-        children: magneticTextureChildren(parentId, object),
       },
       {
         id: `${parentId}:mesh`,
@@ -604,11 +603,11 @@ function authoredRegionNode(
         kind: "object.region.texture",
         label: "Texture",
         parentId: nodeId,
-        badge: region.textureOverrideActive ? "override" : "inherits object",
-        icon: "wave",
+        badge: region.textureOverrideActive ? "Override" : "Inherited",
+        icon: "compass",
         objectId: object.id,
         regionId: region.id,
-        status: region.textureOverrideActive ? "ready" : "degraded",
+        status: "ready",
       },
       {
         id: `${nodeId}:visualization`,
@@ -839,55 +838,6 @@ function materialParametersBadge(keys: readonly string[]): string {
   if (keys.length === 0) return "parameters";
   return keys.slice(0, 3).join(", ");
 }
-
-function magneticTextureChildren(
-  parentId: string,
-  object: ModelTreeObjectSnapshot,
-): ExplorerNode[] {
-  const textureParent = `${parentId}:magnetic-texture`;
-  const children: ExplorerNode[] = [
-    {
-      id: `${textureParent}:asset`,
-      kind: "object.magnetic-texture.asset",
-      label: object.magnetizationLabel ?? object.magnetization ?? "No texture assigned",
-      parentId: textureParent,
-      badge: object.magnetization ?? "unassigned",
-      icon: "wave",
-      objectId: object.id,
-      status: object.magnetization ? "ready" : "degraded",
-    },
-  ];
-
-  if (object.textureLoadEnabled) {
-    children.push({
-      id: `${textureParent}:load`,
-      kind: "object.magnetic-texture.load",
-      label: "Load texture",
-      parentId: textureParent,
-      badge: "h5/zarr",
-      icon: "file",
-      objectId: object.id,
-      status: "ready",
-      contextCommands: ["study.load-field-state"],
-    });
-  }
-
-  if (object.textureTransformAvailable) {
-    children.push({
-      id: `${textureParent}:transform`,
-      kind: "object.magnetic-texture.transform",
-      label: "Texture Transform",
-      parentId: textureParent,
-      badge: "m0",
-      icon: "braces",
-      objectId: object.id,
-      status: "ready",
-    });
-  }
-
-  return children;
-}
-
 
 function physicsInteractionBadge(
   interaction: ModelTreePhysicsInteractionSnapshot,

@@ -1489,7 +1489,7 @@ describe("selectExplorerNode", () => {
     });
   });
 
-  it("selects saved cross-section parameter rows as the owning 2D plot", () => {
+  it("preserves visualizations-2d.parameter selection kind with canonical plot ref", () => {
     const kernel = makeKernel();
     const node: ExplorerNode = {
       crossSectionPlotId: "plot-1",
@@ -1502,12 +1502,12 @@ describe("selectExplorerNode", () => {
     selectExplorerNode(kernel, node, "explorer");
 
     expect(kernel.selection.get()).toMatchObject({
-      kind: "mesh.cross-section.plot",
+      kind: "visualizations-2d.parameter",
       label: "Quality",
       nodeId: "model:visualizations-2d:plot-1:quality",
       objectId: null,
       ref: {
-        kind: "mesh.cross-section.plot",
+        kind: "visualizations-2d.plot",
         nodeId: "model:visualizations-2d:plot-1:quality",
         plotId: "plot-1",
         type: "cross-section-plot",

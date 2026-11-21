@@ -49,7 +49,7 @@ export function buildRuntimeResourceTree(
       label: FAMILY_LABELS[family],
       parentId: "resources:root",
       resourceState: aggregateResourceState(resources),
-      selectable: false,
+      selectable: true,
       status: aggregateStatus(resources),
     }];
   });
@@ -63,7 +63,7 @@ export function buildRuntimeResourceTree(
     label: "Session Resources",
     parentId: null,
     resourceState: aggregateResourceState(descriptors),
-    selectable: false,
+    selectable: true,
     status: aggregateStatus(descriptors),
   }];
 }

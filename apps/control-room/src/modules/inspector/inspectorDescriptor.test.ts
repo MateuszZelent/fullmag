@@ -2,7 +2,10 @@ import { describe, expect, it } from "vitest";
 
 import type { Selection } from "@/kernel/selection/selectionTypes";
 
-import { resolveInspectorDescriptor } from "./inspectorDescriptor";
+import {
+  resolveInspectorDescriptor,
+  resolveInspectorDomain,
+} from "./inspectorDescriptor";
 
 function selection(kind: string, label = "Film"): Selection {
   return {
@@ -49,10 +52,36 @@ describe("resolveInspectorDescriptor", () => {
       cases.length,
     );
     expect(resolveInspectorDescriptor(selection("mesh-part-airbox"))).toMatchObject({
-      ownerId: "mesh-part-airbox-visualization",
+      domain: "visualization",
+      ownerId: "airbox-visualization",
       icon: "airbox",
       typeLabel: "Airbox mesh-part display",
     });
+  });
+
+  it("removes global RESULT_TABS and fake diagnostics tabs and labels resources honestly", () => {
+    expect(resolveInspectorDescriptor(selection("results.resonance.root"))).toMatchObject({
+      domain: "study",
+      tabs: [],
+      typeLabel: "Result",
+    });
+    expect(resolveInspectorDescriptor(selection("resources.runtime"))).toMatchObject({
+      domain: "definition",
+      tabs: [],
+      typeLabel: "Resource",
+    });
+    expect(resolveInspectorDescriptor(selection("diagnostics.solver"))).toMatchObject({
+      domain: "definition",
+      tabs: [],
+      typeLabel: "Diagnostics",
+    });
+    expect(resolveInspectorDomain("object.geometry")).toBe("geometry");
+    expect(resolveInspectorDomain("object.magnetic-texture")).toBe("material");
+    expect(resolveInspectorDomain("physics.exchange")).toBe("physics");
+    expect(resolveInspectorDomain("study.stage.relax")).toBe("study");
+    expect(resolveInspectorDomain("visualizations-2d.plot")).toBe("visualization");
+    expect(resolveInspectorDomain("mesh.shared-domain")).toBe("mesh");
+    expect(resolveInspectorDomain("definitions.root")).toBe("definition");
   });
 
   it("uses Geometry and Placement tabs for shared object authoring", () => {

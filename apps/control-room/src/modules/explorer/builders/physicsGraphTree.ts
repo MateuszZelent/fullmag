@@ -393,7 +393,7 @@ function buildScopeNode(
     ...(objectId ? { objectId } : {}),
     badge: `${modules.length}`,
     icon: "activity",
-    selectable: false,
+    selectable: true,
     status: "ready",
     children: [...modules]
       .sort((left, right) => left.module.id.localeCompare(right.module.id))

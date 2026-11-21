@@ -18,11 +18,13 @@ describe("PlaceholderPanel", () => {
 
     const html = renderToStaticMarkup(<PlaceholderPanel selection={selection} />);
 
-    // The shell renders the title; the panel states the gap as facts.
-    expect(html).toContain("Unsupported selection");
-    expect(html).toContain("Contract gap");
-    expect(html).toContain("No dedicated Inspector route is registered");
+    // The fallback renders through canonical InspectorTemplate without forbidden literals.
+    expect(html).toContain('data-slot="inspector-root"');
+    expect(html).toContain("No dedicated inspector registered");
+    expect(html).toContain("No editable properties for this selection");
     expect(html).toContain("results.future.product");
     expect(html).toContain("results:future-product");
+    expect(html.toLowerCase()).not.toContain("unknown");
+    expect(html.toLowerCase()).not.toContain("unavailable");
   });
 });
