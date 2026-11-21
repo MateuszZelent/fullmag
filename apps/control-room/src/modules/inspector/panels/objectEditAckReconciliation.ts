@@ -76,8 +76,12 @@ const CANONICAL_VECTOR_FIELDS = ["rotation", "scale", "size", "translation"] as 
 
 function sameCanonicalObject(left: GeometryObjectDraft, right: GeometryObjectDraft): boolean {
   return CANONICAL_SCALAR_FIELDS.every((field) => left[field] === right[field]) &&
-    CANONICAL_VECTOR_FIELDS.every((field) =>
-      left[field].every((value, index) => value === right[field][index]));
+    CANONICAL_VECTOR_FIELDS.every((field) => {
+      const leftVector = left[field];
+      const rightVector = right[field];
+      return leftVector.length === rightVector.length &&
+        leftVector.every((value, index) => value === rightVector[index]);
+    });
 }
 
 /**

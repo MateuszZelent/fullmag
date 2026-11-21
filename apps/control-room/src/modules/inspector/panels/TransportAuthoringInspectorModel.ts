@@ -611,11 +611,10 @@ export function buildSpinTransport(draft: SpinTransportDraft): SceneSpinTranspor
     if (hasDensityOfStates && (typeof densityOfStates !== "number" || !Number.isFinite(densityOfStates) || densityOfStates <= 0)) {
       throw new Error(`Spin material ${index + 1}: density_of_states_per_spin_Jinv_m3 must be finite and greater than zero.`);
     }
-    if (hasCapacitance && hasDensityOfStates) {
-      const expected = ELEMENTARY_CHARGE_C ** 2 * (densityOfStates as number);
-      const actual = capacitance as number;
-      const tolerance = 1e-12 * Math.max(Math.abs(actual), Math.abs(expected), 1e-300);
-      if (Math.abs(actual - expected) > tolerance) {
+    if (typeof capacitance === "number" && typeof densityOfStates === "number") {
+      const expected = ELEMENTARY_CHARGE_C ** 2 * densityOfStates;
+      const tolerance = 1e-12 * Math.max(Math.abs(capacitance), Math.abs(expected), 1e-300);
+      if (Math.abs(capacitance - expected) > tolerance) {
         throw new Error(`Spin material ${index + 1}: spin_capacitance_As_per_V_m3 must equal e^2 times density_of_states_per_spin_Jinv_m3.`);
       }
     }

@@ -98,11 +98,14 @@ export function regionalFieldDriveSamplingContext(
     sampling?.tableautosave,
   );
   const stages = Array.isArray(study?.stages) ? study.stages.filter(isRecord) : [];
+  const activeStageIds = activation?.kind === "stage_ids"
+    ? new Set(activation.stage_ids)
+    : null;
   const selectedStage = stages.find((stage) => {
     if (stage.kind !== "run") return false;
-    if (activation?.kind !== "stage_ids") return true;
+    if (!activeStageIds) return true;
     const id = typeof stage.stage_id === "string" ? stage.stage_id : stage.id;
-    return typeof id === "string" && activation.stage_ids.includes(id);
+    return typeof id === "string" && activeStageIds.has(id);
   });
   const solver = isRecord(study?.solver) ? study.solver : null;
   return {

@@ -2,7 +2,7 @@ import { act, useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import type { MaskFieldDriveResource, MaskTermResource, ReadyAntennaResource } from "@/kernel/api/apiTypes";
+import type { MaskFieldDriveResource, MaskTermResource, ReadyAntennaResource, SceneResource } from "@/kernel/api/apiTypes";
 import { EventBus } from "@/kernel/events/EventBus";
 import type { KernelEventMap } from "@/kernel/events/eventTypes";
 import { KernelContext } from "@/kernel/KernelContext";
@@ -81,6 +81,8 @@ vi.mock("@/shared/ui/Dialog", () => ({
   DialogTitle: ({ children }: { children: React.ReactNode }) => <h2>{children}</h2>,
 }));
 
+import * as explorer from "@/modules/explorer/public";
+import * as navigationScene from "./antenna/AntennaNavigationScene";
 import { MaskAntennaPanel } from "./MaskAntennaPanel";
 
 const SCOPE_KEY = "session=A&epoch=4&request_scope_epoch=api%3A1";
@@ -564,6 +566,49 @@ describe("MaskAntennaPanel draft across scene revisions", () => {
     expect(maskFunction(submittedDrive(view.model.replaceMaskFieldDrive).drive).outputs[2]).toBe(EDITED_BZ);
     expect(view.container.textContent).not.toContain(DIALOG);
     expect(view.controller.get().nodeId).toBe("model:physics:mask-antennas:other");
+  });
+
+  it("keeps Apply and Discard disabled until post-ACK navigation has a current scene", async () => {
+    const destination = { ...antennaSelection("other"), moduleSource: "inspector" };
+    const scene = { objects: [], scene_revision: 12 } as unknown as SceneResource;
+    const initialScene = vi.spyOn(navigationScene, "antennaNavigationScene").mockReturnValue(scene);
+    const refreshedScene = vi.spyOn(navigationScene, "antennaNavigationSceneState")
+      .mockReturnValue({ scene: null, error: null });
+    const links = vi.spyOn(explorer, "antennaNavigationLinks").mockReturnValue([
+      { key: "related", label: "Related antenna", reason: null, selection: destination },
+    ]);
+    let notifySceneChanged: (() => void) | undefined;
+    const observe = vi.spyOn(navigationScene, "observeAntennaNavigationScene")
+      .mockImplementation((_kernel, _scope, listener) => {
+        notifySceneChanged = listener;
+        return () => { notifySceneChanged = undefined; };
+      });
+    try {
+      publish([antenna("antenna", 2e-4), antenna("other", 1e-3)], 11);
+      const view = await mount(antennaSelection("antenna"));
+      await type(input(view.container, "Bz ="), EDITED_BZ);
+      await act(async () => view.controller.set(destination, "inspector"));
+      view.model.replaceMaskFieldDrive.mockResolvedValue(ack(12));
+      await act(async () => exactButton(view.container, "Apply and continue").click());
+      await settle();
+
+      expect(refreshedScene).toHaveBeenCalled();
+      expect(view.model.replaceMaskFieldDrive).toHaveBeenCalledOnce();
+      expect(exactButton(view.container, "Apply and continue").disabled).toBe(true);
+      expect(exactButton(view.container, "Discard").disabled).toBe(true);
+      expect(view.controller.get().nodeId).toBe(antennaSelection("antenna").nodeId);
+
+      refreshedScene.mockReturnValue({ scene, error: null });
+      await act(async () => notifySceneChanged?.());
+      expect(view.controller.get().nodeId).toBe(destination.nodeId);
+      expect(view.container.textContent).not.toContain(DIALOG);
+      expect(view.model.replaceMaskFieldDrive).toHaveBeenCalledOnce();
+    } finally {
+      observe.mockRestore();
+      links.mockRestore();
+      refreshedScene.mockRestore();
+      initialScene.mockRestore();
+    }
   });
 
   it("selects a created antenna without the dialog", async () => {

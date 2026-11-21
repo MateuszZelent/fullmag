@@ -51,7 +51,7 @@ function resourceState(
   return { error: resource.error, label, status: resource.status };
 }
 
-export function ProblemsPanelView({
+function ProblemsPanelView({
   model,
 }: {
   model: ProblemsProjectionModel;

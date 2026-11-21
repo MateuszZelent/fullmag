@@ -28,19 +28,3 @@ export const controlVariants = cva(
     },
   },
 );
-
-export const controlTextVariants = cva(
-  "min-w-0 font-fm-ui text-fm-control leading-fm-control",
-  {
-    variants: {
-      tone: {
-        disabled: "text-fm-disabled-text",
-        primary: "text-fm-primary",
-        secondary: "text-fm-secondary",
-      },
-    },
-    defaultVariants: {
-      tone: "primary",
-    },
-  },
-);

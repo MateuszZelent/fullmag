@@ -5,6 +5,7 @@ import {
   INSTANCE_TABS_STORAGE_KEY,
   MAX_MOUNTED_FRAMES,
   instanceOrigin,
+  isPeerInstancePort,
   instanceTabs,
   isEmbeddedInstanceTab,
 } from "./instanceTabs";
@@ -126,5 +127,19 @@ describe("instanceOrigin", () => {
     );
     expect(instanceOrigin(3210, { hostname: "[::1]", protocol: "http:" })).toBe("http://[::1]:3210");
     expect(instanceOrigin(3210, { hostname: "::1", protocol: "http:" })).toBe("http://[::1]:3210");
+  });
+});
+
+describe("isPeerInstancePort", () => {
+  it("keeps the parent origin out of the peer frames, including default ports", () => {
+    const secure = { hostname: "localhost", origin: "https://localhost", protocol: "https:" };
+    const development = {
+      hostname: "[::1]",
+      origin: "http://[::1]:3299",
+      protocol: "http:",
+    };
+    expect(isPeerInstancePort(443, secure)).toBe(false);
+    expect(isPeerInstancePort(3299, development)).toBe(false);
+    expect(isPeerInstancePort(3300, development)).toBe(true);
   });
 });

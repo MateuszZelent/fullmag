@@ -1,4 +1,5 @@
-import { chartColorNameForIndex, type ChartLegendItem } from "@/shared/analysis-charts/ChartLegend";
+import { type ChartLegendItem } from "@/shared/analysis-charts/ChartLegend";
+import { chartColorNameForIndex } from "@/shared/analysis-charts/ChartLegend.model";
 import { createChartDisplayTransform, formatChartDisplayValue } from "@/shared/analysis-charts/chartScalePolicy";
 import type { ChartSeries } from "@/shared/domain/analysis/chartSeries";
 import { compatibleLiveChartPanes, isLiveChartServerXAxisId } from "./liveChartsModel";

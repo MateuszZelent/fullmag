@@ -75,7 +75,8 @@ export async function scanFieldVectorDebugStatistics(
   let zeroCount = 0;
   const yieldToMain = options.yieldToMain ?? (() => Promise.resolve());
   throwIfAborted(options.signal);
-  for (let start = 0; start < values.length; start += SCAN_CHUNK_SIZE) {
+  const scanChunk = (start: number): Promise<void> => {
+    if (start >= values.length) return Promise.resolve();
     const end = Math.min(start + SCAN_CHUNK_SIZE, values.length);
     for (let index = start; index < end; index += 1) {
       const value = values[index]!;
@@ -87,10 +88,14 @@ export async function scanFieldVectorDebugStatistics(
       if (value > max) max = value;
     }
     if (end < values.length) {
-      await yieldToMain();
-      throwIfAborted(options.signal);
+      return yieldToMain().then(() => {
+        throwIfAborted(options.signal);
+        return scanChunk(end);
+      });
     }
-  }
+    return Promise.resolve();
+  };
+  await scanChunk(0);
   return Object.freeze({
     finiteCount,
     max: finiteCount ? max : null,

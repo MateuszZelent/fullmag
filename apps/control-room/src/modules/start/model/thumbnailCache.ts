@@ -51,7 +51,3 @@ const decoded = new LruCache<string, HTMLImageElement>(THUMBNAIL_CACHE_CAPACITY)
 export function pinThumbnail(src: string, image: HTMLImageElement): void {
   decoded.set(src, image);
 }
-
-export function isThumbnailPinned(src: string): boolean {
-  return decoded.has(src);
-}

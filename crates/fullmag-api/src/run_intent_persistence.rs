@@ -252,6 +252,7 @@ use fullmag_runtime_control::accepted_store::submit_store_root_for_layout;
 /// Resolve one exact portable project archive before accepting a durable run.
 /// `asset_paths` is an explicit ID-to-archive-path binding supplied by the
 /// caller; a display name, live session or mutable cache is never a source.
+#[cfg(test)]
 pub(crate) fn commit_archived_run_intent(
     store: &SessionStore,
     intent: &RunIntent,
@@ -343,6 +344,7 @@ fn commit_archived_run_intent_with_optional_backlog_limit(
     )
 }
 
+#[cfg(test)]
 pub(crate) fn commit_validated_run_intent(
     store: &SessionStore,
     intent: &RunIntent,
@@ -443,22 +445,6 @@ pub(crate) struct PreparedRunIntentCommit<'a> {
 /// Prepare the expensive accepted RunIntent checks outside the live-session
 /// transition. The returned payload owns the canonical definition, study,
 /// catalog, and immutable asset bytes that the later commit publishes.
-pub(crate) fn prepare_owned_run_intent_commit(
-    intent: RunIntent,
-    definition: &ProjectEnvelope,
-    study: &StudyPlan,
-    catalog: &StudyProblemCatalog,
-    asset_payloads: BTreeMap<String, Vec<u8>>,
-) -> Result<PreparedRunIntentCommit<'static>> {
-    prepare_run_intent_commit(
-        intent,
-        definition,
-        study,
-        catalog,
-        CommitAssetPayloads::Owned(asset_payloads),
-    )
-}
-
 /// Reuse the final accepted-study materialization produced after continuation
 /// has settled the Study and catalog. The sealed application value binds these
 /// immutable inputs to the canonical Study bytes, plan, and catalog bytes.

@@ -31,7 +31,7 @@ export interface EffectiveStudyFftResponse {
   responseComponent: "mx" | "my" | "mz";
   sourceStageId: string;
   susceptibilityFloorFraction: number;
-  window: "hann";
+  "window": "hann";
 }
 
 export interface EffectiveStudyWorkflowState {
@@ -59,20 +59,19 @@ export function resolveStudyWorkflowStateBefore(
   for (let index = 0; index < limit; index += 1) {
     const draft = drafts[index];
     if (draft.kind === "table_autosave") {
-      tableAutosave = draft.tableAutosave.enabled
+      const tableDraft = draft.tableAutosave;
+      const usesAutomaticSampling = tableDraft.samplingMode === "auto_sinc_cutoff";
+      tableAutosave = tableDraft.enabled
         ? {
-            autoSampling:
-              draft.tableAutosave.samplingMode === "auto_sinc_cutoff"
-                ? autoContext.result
-                : null,
-            quantities: commaSeparatedValues(draft.tableAutosave.tableQuantities),
+            autoSampling: usesAutomaticSampling ? autoContext.result : null,
+            quantities: commaSeparatedValues(tableDraft.tableQuantities),
             samplePeriodS:
-              draft.tableAutosave.samplingMode === "auto_sinc_cutoff"
+              usesAutomaticSampling
                 ? readySamplePeriod(autoContext.result)
-                : positiveNumber(draft.tableAutosave.samplePeriodS),
-            samplingMode: draft.tableAutosave.samplingMode,
+                : positiveNumber(tableDraft.samplePeriodS),
+            samplingMode: tableDraft.samplingMode,
             sourceDriveIds:
-              draft.tableAutosave.samplingMode === "auto_sinc_cutoff"
+              usesAutomaticSampling
                 ? autoContext.sourceDriveIds
                 : [],
             sourceStageId: draft.stageId,
@@ -81,29 +80,28 @@ export function resolveStudyWorkflowStateBefore(
       continue;
     }
     if (draft.kind === "autosave") {
-      if (!draft.autosave.enabled) {
-        if (draft.autosave.clearAll || !draft.autosave.quantity.trim()) {
+      const autosaveDraft = draft.autosave;
+      if (!autosaveDraft.enabled) {
+        if (autosaveDraft.clearAll || !autosaveDraft.quantity.trim()) {
           outputs.clear();
         } else {
-          outputs.delete(draft.autosave.quantity.trim());
+          outputs.delete(autosaveDraft.quantity.trim());
         }
         continue;
       }
-      const quantity = draft.autosave.quantity.trim();
+      const quantity = autosaveDraft.quantity.trim();
+      const usesAutomaticSampling = autosaveDraft.samplingMode === "auto_sinc_cutoff";
       outputs.set(quantity, {
-        autoSampling:
-          draft.autosave.samplingMode === "auto_sinc_cutoff"
-            ? autoContext.result
-            : null,
+        autoSampling: usesAutomaticSampling ? autoContext.result : null,
         everySeconds:
-          draft.autosave.samplingMode === "auto_sinc_cutoff"
+          usesAutomaticSampling
             ? readySamplePeriod(autoContext.result)
-            : positiveNumber(draft.autosave.everySeconds),
-        outputKind: draft.autosave.outputKind,
+            : positiveNumber(autosaveDraft.everySeconds),
+        outputKind: autosaveDraft.outputKind,
         quantity,
-        samplingMode: draft.autosave.samplingMode,
+        samplingMode: autosaveDraft.samplingMode,
         sourceDriveIds:
-          draft.autosave.samplingMode === "auto_sinc_cutoff"
+          usesAutomaticSampling
             ? autoContext.sourceDriveIds
             : [],
         sourceStageId: draft.stageId,
@@ -141,10 +139,11 @@ export function validateStudyWorkflow(
   for (const [index, draft] of drafts.entries()) {
     if (draft.kind !== "run") continue;
     const state = resolveStudyWorkflowStateBefore(drafts, index);
-    if (state.fftResponse?.analysis === "unsupported") {
+    const responseAnalysis = state.fftResponse?.analysis;
+    if (responseAnalysis === "unsupported") {
       issues.push({ index, message: "The imported response analysis is unrecognized; its raw request is preserved and no Gamma sampling contract is inferred.", severity: "error" });
     }
-    if (state.fftResponse?.analysis === "finite_k") {
+    if (responseAnalysis === "finite_k") {
       const m = state.outputs.find((output) => output.quantity === "m" && output.outputKind === "field");
       const h = state.outputs.find((output) => output.quantity === "H_drive" && output.outputKind === "field");
       if (!m || !h) {
@@ -153,7 +152,7 @@ export function validateStudyWorkflow(
         issues.push({ index, message: "Finite-k m and H_drive field clocks must resolve to the same positive sampling period.", severity: "error" });
       }
     }
-    if (state.fftResponse?.analysis === "gamma" && !state.tableAutosave) {
+    if (responseAnalysis === "gamma" && !state.tableAutosave) {
       issues.push({
         index,
         message:
@@ -162,14 +161,14 @@ export function validateStudyWorkflow(
       });
       continue;
     }
-    if (state.fftResponse?.analysis === "gamma" && state.tableAutosave) {
+    if (responseAnalysis === "gamma" && state.tableAutosave) {
       const quantities = new Set(
         state.tableAutosave.quantities.map((quantity) => quantity.toLowerCase()),
       );
-      if (!quantities.has(state.fftResponse.responseComponent)) {
+      if (!quantities.has(state.fftResponse?.responseComponent ?? "")) {
         issues.push({
           index,
-          message: `FFT response component ${state.fftResponse.responseComponent} is missing from the active table quantities.`,
+          message: `FFT response component ${state.fftResponse?.responseComponent ?? "unknown"} is missing from the active table quantities.`,
           severity: "error",
         });
       }

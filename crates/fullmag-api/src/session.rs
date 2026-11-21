@@ -707,10 +707,6 @@ fn field_generation_matches_snapshot(
     actual == format!("{}:{}", expected.run_id, expected.sequence)
 }
 
-fn snapshot_runtime_accepts_commands(snapshot: &SessionStateResponse) -> bool {
-    snapshot.runtime_status.can_accept_commands && !snapshot.runtime_status.is_busy
-}
-
 fn solver_profile_command_applied(
     record: &TrackedCommandRecord,
     snapshot: &SessionStateResponse,
@@ -2998,6 +2994,7 @@ pub(crate) fn apply_current_live_session_frame(
     finalize_current_live_apply(current, flags)
 }
 
+#[cfg(test)]
 pub(crate) fn apply_current_live_runtime_frame(
     current: &mut SessionStateResponse,
     frame: CurrentLiveRuntimeFrameRequest,

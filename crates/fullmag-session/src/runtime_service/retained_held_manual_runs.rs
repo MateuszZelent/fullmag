@@ -362,6 +362,7 @@ fn validate_preparation(
 
 /// Validate only the named subset; zero pins are legal here. The caller must
 /// check the nonempty v4 held list and combined exact inventory independently.
+#[cfg(test)]
 pub(crate) fn validate_held_manual_runs_subset(
     store: &SessionStore,
     pins: &[RetainedHeldManualRunPin],

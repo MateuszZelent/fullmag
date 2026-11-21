@@ -1,9 +1,7 @@
-mod scheduler_idle_backoff;
-mod scheduler_owner_control;
-mod worker_startup_gate;
-
-#[path = "accepted_fem_preparation_supervisor.rs"]
-mod accepted_fem_preparation_supervisor;
+use crate::{
+    accepted_fem_preparation_supervisor, scheduler_idle_backoff, scheduler_owner_control,
+    worker_startup_gate,
+};
 
 use anyhow::{bail, Context, Result};
 use fullmag_application::RunSpecification;
@@ -101,7 +99,7 @@ impl Drop for ActivePreparations {
     }
 }
 
-fn main() {
+pub(super) fn main() {
     if let Err(error) = run() {
         eprintln!("accepted FEM preparation scheduler failed: {error:#}");
         std::process::exit(1);
@@ -1098,6 +1096,7 @@ fn retry_store_writer_busy<T>(mut operation: impl FnMut() -> Result<T>) -> Resul
 
 /// Classify only the final result of acquiring the recovery fence. The
 /// transaction body has not run, so deferral cannot replay a durable effect.
+#[cfg(test)]
 fn classify_recovery_transaction<T>(result: Result<T>) -> Result<Option<T>> {
     match result.context("preparation scheduler: acquire recovery transaction") {
         Ok(transaction) => Ok(Some(transaction)),
@@ -1114,6 +1113,7 @@ fn classify_recovery_transaction<T>(result: Result<T>) -> Result<Option<T>> {
 
 /// A failed discovery returns no partial candidate list. Only typed writer
 /// contention is deferred; validation and identity failures remain fatal.
+#[cfg(test)]
 fn classify_candidate_discovery(
     result: Result<Vec<PreparationCandidate>>,
 ) -> Result<Option<Vec<PreparationCandidate>>> {
@@ -1465,8 +1465,13 @@ mod tests {
         })).unwrap();
         store.commit_run_catalog(&catalog).unwrap();
         let before = std::fs::read(root.join("runs").join(run_id).join("run_catalog.json")).unwrap();
+        // libtest lists the full module path without the crate name.
+        let (_, test_module) = module_path!().split_once("::").unwrap();
+        let test_name = format!(
+            "{test_module}::candidate_discovery_survives_cross_process_writer_and_preserves_pending_task"
+        );
         let mut holder = Command::new(std::env::current_exe().unwrap())
-            .args(["--exact", "tests::candidate_discovery_survives_cross_process_writer_and_preserves_pending_task", "--nocapture"])
+            .args(["--exact", &test_name, "--nocapture"])
             .env(HOLDER_ROOT, &root).stdin(Stdio::piped()).stdout(Stdio::piped()).spawn().unwrap();
         let mut output = std::io::BufReader::new(holder.stdout.take().unwrap());
         loop {

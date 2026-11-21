@@ -26,10 +26,11 @@ function Placeholder({ missing }: { readonly missing: boolean }) {
 function ThumbImage({ eager, src }: { readonly eager: boolean; readonly src: string }) {
   const [failed, setFailed] = useState(false);
   if (failed) return <Placeholder missing={false} />;
+  // The data plane already delivers a thumbnail, including browser-local blob URLs.
+  // The adjacent project title supplies the accessible name.
+  /* eslint-disable @next/next/no-img-element */
   return (
-    // Empty alt: the project name is always adjacent, so announcing the image
-    // would only repeat it. The inspector adds its own label.
-    // eslint-disable-next-line @next/next/no-img-element
+    // react-doctor-disable-next-line react-doctor/nextjs-no-img-element -- Browser-local thumbnails have no server optimizer.
     <img
       alt=""
       className="fm-start-thumb__img"
@@ -40,6 +41,7 @@ function ThumbImage({ eager, src }: { readonly eager: boolean; readonly src: str
       src={src}
     />
   );
+  /* eslint-enable @next/next/no-img-element */
 }
 
 /**

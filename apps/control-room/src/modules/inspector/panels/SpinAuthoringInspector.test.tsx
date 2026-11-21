@@ -6,13 +6,8 @@ import type { KernelApi } from "@/kernel/types";
 import { KernelContext } from "@/kernel/KernelContext";
 import type { Selection } from "@/kernel/selection/selectionTypes";
 
-import {
-  buildTorque,
-  OerstedFieldInspectorPanel,
-  resolveOerstedCurrentSource,
-  SpinTorqueInspectorPanel,
-  torqueModelPatch,
-} from "./SpinAuthoringInspector";
+import { OerstedFieldInspectorPanel, SpinTorqueInspectorPanel } from "./SpinAuthoringInspector";
+import { buildTorque, resolveOerstedCurrentSource, torqueModelPatch } from "./SpinAuthoringInspector.model";
 import { torqueCurrentBindingPatch } from "./SpinAuthoringInspectorModel";
 
 const torque = { kind: "zhang_li", id: "selected-torque", current_density: [7, 8, 9], degree: 0.73, beta: 0.21 };

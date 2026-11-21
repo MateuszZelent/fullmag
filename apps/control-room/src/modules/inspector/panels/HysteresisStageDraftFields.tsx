@@ -328,7 +328,7 @@ function hysteresisSettleStepKey(step: HysteresisSettleStepDraft): string {
   return `settle-step:${String(step.step_id ?? "")}:${String(step.kind ?? "")}:${String(step.method ?? "")}:${String(step.applies_to ?? "")}`;
 }
 
-export function HysteresisSettleBranchesEditor({
+function HysteresisSettleBranchesEditor({
   draft,
   onUpdate,
 }: {
@@ -441,7 +441,7 @@ export function HysteresisSettleBranchesEditor({
   );
 }
 
-export function HysteresisMinorLoopsEditor({
+function HysteresisMinorLoopsEditor({
   draft,
   onUpdate,
 }: {
@@ -550,7 +550,7 @@ export function HysteresisMinorLoopsEditor({
   );
 }
 
-export function HysteresisFieldSegmentsEditor({
+function HysteresisFieldSegmentsEditor({
   draft,
   onUpdate,
 }: {
@@ -676,7 +676,7 @@ export function HysteresisFieldSegmentsEditor({
   );
 }
 
-export function HysteresisDenseWindowsEditor({
+function HysteresisDenseWindowsEditor({
   draft,
   onUpdate,
 }: {
@@ -790,7 +790,7 @@ export function HysteresisDenseWindowsEditor({
   );
 }
 
-export function HysteresisSettleAlgorithmsEditor({
+function HysteresisSettleAlgorithmsEditor({
   draft,
   onUpdate,
 }: {

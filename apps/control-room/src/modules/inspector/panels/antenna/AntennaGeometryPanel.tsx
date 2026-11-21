@@ -14,13 +14,15 @@ function dimensions(value: unknown): Record<string, unknown> | null {
     ? value as Record<string, unknown> : null;
 }
 
+const geometryLengthFormatter = new Intl.NumberFormat("en", { maximumSignificantDigits: 4 });
+
 function length(value: unknown): string {
   if (typeof value !== "number" || !Number.isFinite(value)) return "Unavailable";
   const magnitude = Math.abs(value);
   const [scale, unit]: [number, string] = magnitude > 0 && magnitude < 1e-6 ? [1e-9, "nm"]
     : magnitude > 0 && magnitude < 1e-3 ? [1e-6, "µm"]
       : magnitude > 0 && magnitude < 1 ? [1e-3, "mm"] : [1, "m"];
-  return `${new Intl.NumberFormat("en", { maximumSignificantDigits: 4 }).format(value / scale)} ${unit}`;
+  return `${geometryLengthFormatter.format(value / scale)} ${unit}`;
 }
 
 function signalWidthRange(stations: unknown[]): string {

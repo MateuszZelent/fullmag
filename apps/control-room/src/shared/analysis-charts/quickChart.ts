@@ -138,10 +138,9 @@ export function buildQuickChartRenderModel({
       unit: window && xIndex >= 0 ? window.columns[xIndex]!.unit : "",
     },
     yAxes: renderStatus === "unsupported" ? [] : (unitGroups.length ? unitGroups : [{ unit: "" }]).map(({ unit }) => ({
-      label: [...new Set(renderSelected
-        .filter((entry) => chartUnitsCompatible(entry.column.unit, unit))
-        .map((entry) => entry.column.label))]
-        .join(", "),
+      label: [...new Set(renderSelected.flatMap((entry) =>
+        chartUnitsCompatible(entry.column.unit, unit) ? [entry.column.label] : [],
+      ))].join(", "),
       unit,
     })),
   };

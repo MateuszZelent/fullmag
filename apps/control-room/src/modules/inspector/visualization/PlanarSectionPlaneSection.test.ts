@@ -2,8 +2,8 @@ import { describe, expect, it } from "vitest";
 
 import type { PlanarSectionGeometry } from "@/kernel/visualization/planarSectionModel";
 
-import { sectionFractionFromNanometres } from "./PlanarSectionPlaneSection";
-import { planarCropFromEdit } from "./PlanarCropViewSection";
+import { sectionFractionFromNanometres } from "./PlanarSectionPlaneSection.model";
+import { planarCropFromEdit } from "./PlanarCropViewSection.model";
 
 const geometry = {
   plane: "xy", normal: "z", u: "x", v: "y",

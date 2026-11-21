@@ -15,10 +15,7 @@ use std::process::{Command, ExitStatus, Stdio};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
-#[path = "owned_worker_process.rs"]
-mod owned_worker_process;
-#[path = "compute_operator_env.rs"]
-mod compute_operator_env;
+use crate::{compute_operator_env, owned_worker_process};
 use owned_worker_process::OwnedWorkerProcess;
 
 const STORE_WRITER_RETRY_LIMIT: Duration = Duration::from_secs(5);
@@ -272,7 +269,7 @@ pub(crate) fn run_supervised_accepted_fem_preparation_with_host(
     let (prelaunch_stage, preflight) = {
         let mut stage = "read durable preparation resource lease";
         let result = (|| -> Result<PrelaunchOutcome> {
-            let mut active_lease = retry_store_writer_busy(|| {
+            let active_lease = retry_store_writer_busy(|| {
                 store.read_preparation_resource_lease(run_id, resource_id, lease_token)
             })
             .context("preflight: read durable preparation resource lease")?

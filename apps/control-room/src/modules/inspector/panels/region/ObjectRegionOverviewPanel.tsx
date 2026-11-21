@@ -6,30 +6,14 @@ import { FormField } from "../../primitives/FormField";
 import { FieldRow } from "../../primitives/FieldRow";
 import { InspectorGroup } from "../../primitives/InspectorGroup";
 import type { RegionEditRealizationPolicy } from "../ObjectRegionsPanelModel";
-import type { MeshInspectorLane } from "../fdmMeshInspectorModel";
+
 import {
   ObjectRegionMetadataSection,
   ObjectRegionActionsSection,
   ObjectRegionInlineDiagnostics,
   type RegionSubPanelProps,
 } from "./shared";
-
-export interface ObjectRegionOverviewLaneView {
-  inlineDiagnostics: boolean;
-  realization: MeshInspectorLane;
-}
-
-export function resolveObjectRegionOverviewLaneView(
-  meshLane: MeshInspectorLane = "unknown",
-): ObjectRegionOverviewLaneView {
-  if (meshLane === "fem") {
-    return { inlineDiagnostics: true, realization: "fem" };
-  }
-  if (meshLane === "fdm") {
-    return { inlineDiagnostics: false, realization: "fdm" };
-  }
-  return { inlineDiagnostics: false, realization: "unknown" };
-}
+import { resolveObjectRegionOverviewLaneView } from "./ObjectRegionOverviewPanel.model";
 
 export function ObjectRegionOverviewPanel({
   model,

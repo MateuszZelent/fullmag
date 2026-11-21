@@ -77,8 +77,9 @@ export function createStudyComputeObservationStore(
     list(sessionScopeKey: string): StudyComputeObservation[] {
       const owner = logicalSessionOwner(sessionScopeKey);
       if (!owner) return [];
-      return read().filter((entry) => entry.owner === owner)
-        .map(({ clientIntentId, kind }) => ({ clientIntentId, kind, sessionScopeKey }));
+      return read().flatMap((entry) => entry.owner === owner
+        ? [{ clientIntentId: entry.clientIntentId, kind: entry.kind, sessionScopeKey }]
+        : []);
     },
     remember({ clientIntentId, kind, sessionScopeKey }: StudyComputeObservation): void {
       const owner = logicalSessionOwner(sessionScopeKey);

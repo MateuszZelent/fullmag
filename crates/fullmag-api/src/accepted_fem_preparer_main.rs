@@ -1,9 +1,4 @@
-#[path = "accepted_fem_preparer.rs"]
-mod accepted_fem_preparer;
-#[path = "prepared_observation_bundle.rs"]
-mod prepared_observation_bundle;
-
-mod worker_startup_gate;
+use crate::{accepted_fem_preparer, worker_startup_gate};
 
 use anyhow::{bail, Context, Result};
 use std::path::PathBuf;
@@ -18,7 +13,7 @@ struct PreparerArgs {
     startup_gate: bool,
 }
 
-fn main() {
+pub(super) fn main() {
     if let Err(error) = run() {
         eprintln!("accepted FEM preparer failed: {error:#}");
         std::process::exit(1);

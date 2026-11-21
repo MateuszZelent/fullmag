@@ -36,8 +36,10 @@ export function antennaLayoutGeometry(scene: SceneResource | null, objectId: str
 
 export function widthStationDraft(geometry: JsonObject, previous: WidthStationDraft[] = []): WidthStationDraft[] {
   const stations = record(geometry.geometry_params)?.stations;
-  const rowIds = new Map(previous.filter((station) => station.s.trim() && Number.isFinite(Number(station.s)))
-    .map((station) => [Number(station.s), station.rowId]));
+  const rowIds = new Map(previous.flatMap((station) => {
+    const position = Number(station.s);
+    return station.s.trim() && Number.isFinite(position) ? [[position, station.rowId] as const] : [];
+  }));
   const reservedIds = new Set(previous.map((station) => station.rowId));
   const assignedIds = new Set<string>();
   return Array.isArray(stations) ? stations.map((entry, index) => {
@@ -202,8 +204,11 @@ export interface MicrostripCircuitDraft {
 
 export function microstripCircuitDraft(geometry: JsonObject, scene: SceneResource | null, objectId: string): MicrostripCircuitDraft {
   const loop = record(record(geometry.geometry_params)?.loop);
-  const currents = scene?.current_transports?.map(record).filter((current) => Array.isArray(current?.domain)
-    && current.domain.some((ref) => record(ref)?.object_id === objectId)) ?? [];
+  const currents = scene?.current_transports?.flatMap((entry) => {
+    const current = record(entry);
+    return Array.isArray(current?.domain) && current.domain.some((ref) => record(ref)?.object_id === objectId)
+      ? [current] : [];
+  }) ?? [];
   const closure = record(currents.length === 1 ? currents[0]?.structured_current_closure : null);
   const cuts = Array.isArray(closure?.source_cuts) ? closure.source_cuts : [];
   const cut = record(cuts.length === 1 ? cuts[0] : null);
@@ -278,8 +283,11 @@ export function buildMicrostripCircuitPatch(scene: SceneResource, objectId: stri
   const potential = finite(draft.potentialJumpV, "Source-cut potential jump");
   if (potential === 0) throw new Error("Source-cut potential jump must be non-zero in V.");
   const currents = scene.current_transports ?? [];
-  const matches = currents.map(record).filter((current) => Array.isArray(current?.domain)
-    && current.domain.some((ref) => record(ref)?.object_id === objectId));
+  const matches = currents.flatMap((entry) => {
+    const current = record(entry);
+    return Array.isArray(current?.domain) && current.domain.some((ref) => record(ref)?.object_id === objectId)
+      ? [current] : [];
+  });
   if (matches.length !== 1) throw new Error("The circuit requires exactly one explicitly authored charge transport for this object.");
   const current = matches[0]!;
   if (current.model !== "ohmic_poisson" || current.coupling !== "one_way"
@@ -287,7 +295,10 @@ export function buildMicrostripCircuitPatch(scene: SceneResource, objectId: stri
     throw new Error("Full circuits require one whole-object, one-way ohmic charge transport.");
   }
   const ports = scene.antenna_port_modes ?? [];
-  const matchingPorts = ports.map(record).filter((port) => port?.source_object_id === objectId && port.current_transport_id === current.name);
+  const matchingPorts = ports.flatMap((entry) => {
+    const port = record(entry);
+    return port?.source_object_id === objectId && port.current_transport_id === current.name ? [port] : [];
+  });
   if (matchingPorts.length !== 1) throw new Error("The circuit requires exactly one existing explicit signal/return observation port.");
   const port = matchingPorts[0]!;
   const branches = Array.isArray(port.branches) ? port.branches.map(record) : [];

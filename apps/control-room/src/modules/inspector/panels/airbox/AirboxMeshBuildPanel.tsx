@@ -7,6 +7,7 @@ import {
   useSceneResource,
 } from "@/kernel/resources/geometryLifecycleResources";
 import { shouldLoadRuntimeMeshBuild } from "@/kernel/resources/studyRuntimeResources";
+import { keyedOccurrences } from "@/shared/utils/keyedOccurrences";
 
 import type { InspectorPanelProps } from "../../inspectorTypes";
 import { AirboxFieldRow as FieldRow } from "./airboxDisplay";
@@ -16,6 +17,16 @@ import {
   buildAirboxMeshBuildModel,
   currentAirboxReportEvidence,
 } from "./airboxMeshInspectorModel";
+
+function stableRowIdentity(parts: readonly (string | number | null | undefined)[]) {
+  return parts
+    .map((part) => {
+      if (part == null) return "-;";
+      const value = String(part);
+      return `${value.length}:${value};`;
+    })
+    .join("");
+}
 
 export function AirboxMeshBuildPanel({ selection }: InspectorPanelProps) {
   void selection;
@@ -86,18 +97,27 @@ export function AirboxMeshBuildPanel({ selection }: InspectorPanelProps) {
         <FieldRow label="Latest build error" value={lifecycle.latestSuccess.lastBuildError ?? "none published"} />
       </InspectorGroup>
       <InspectorGroup title="Build Pipeline" badge={String(lifecycle.phases.length)}>
-        {lifecycle.phases.length ? lifecycle.phases.map((phase, index) => (
+        {lifecycle.phases.length ? keyedOccurrences(lifecycle.phases, (phase) => phase.id ?? stableRowIdentity([
+          phase.label,
+          phase.status,
+          phase.detail,
+        ])).map(({ item: phase, key }, index) => (
           <FieldRow
-            key={phase.id ?? index}
+            key={key}
             label={phase.label ?? phase.id ?? `Phase ${index + 1}`}
             value={`${phase.status ?? "unknown"}${phase.detail ? ` — ${phase.detail}` : ""}`}
           />
         )) : <FieldRow label="Pipeline" value="not published" />}
       </InspectorGroup>
       <InspectorGroup title="Operation Statuses" badge={String(lifecycle.operationStatuses.length)}>
-        {lifecycle.operationStatuses.length ? lifecycle.operationStatuses.map((operation, index) => (
+        {lifecycle.operationStatuses.length ? keyedOccurrences(lifecycle.operationStatuses, (operation) => stableRowIdentity([
+          operation.scope,
+          operation.kind,
+          operation.status,
+          operation.reason,
+        ])).map(({ item: operation, key }) => (
           <FieldRow
-            key={`${operation.scope}:${operation.kind}:${index}`}
+            key={key}
             label={`${operation.scope} / ${operation.kind}`}
             value={`${operation.status}${operation.reason ? ` — ${operation.reason}` : ""}`}
           />

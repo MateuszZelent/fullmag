@@ -156,15 +156,20 @@ function activationValue(activation: AntennaDrive["activation"]): string {
 function conductorDetails(objectId: string | null, scene: SceneResource | null): DetailModel {
   const object = scene?.objects?.find(candidate => candidate.id === objectId);
   const geometry = recordValue(object?.geometry), params = recordValue(geometry?.geometry_params);
-  const partIds = Array.isArray(params?.conductors) ? params.conductors.map(recordValue)
-    .flatMap(part => typeof part?.id === "string" ? [part.id] : []) : [];
+  const partIds = Array.isArray(params?.conductors) ? params.conductors.flatMap(value => {
+    const part = recordValue(value);
+    return typeof part?.id === "string" ? [part.id] : [];
+  }) : [];
   const loop = recordValue(params?.loop);
   if (loop?.enabled === true) for (const key of ["inlet_connection_part_id", "outlet_connection_part_id"]) {
     if (typeof loop[key] === "string") partIds.push(loop[key]);
   }
   const parts = [...new Set(partIds)].join(" · ") || "unavailable";
-  const currents = objectId ? (scene?.current_transports ?? []).map(recordValue).filter(current => Array.isArray(current?.domain)
-    && current.domain.some(ref => recordValue(ref)?.object_id === objectId)) : [];
+  const currents = objectId ? (scene?.current_transports ?? []).flatMap(value => {
+    const current = recordValue(value);
+    return Array.isArray(current?.domain) && current.domain.some(ref => recordValue(ref)?.object_id === objectId)
+      ? [current] : [];
+  }) : [];
   return {
     title: "Antenna conductor", badge: object ? currents.length ? `${currents.length} current modules` : "no current transport" : "missing",
     rows: [
@@ -177,8 +182,10 @@ function conductorDetails(objectId: string | null, scene: SceneResource | null):
       { label: "Authored mesh policy", value: object ? object.object_mesh ? "authored" : "default" : "unavailable" },
       ...currents.flatMap(current => {
         const name = textValue(current?.name);
-        const materials = Array.isArray(current?.materials) ? current.materials.map(recordValue)
-          .filter(assignment => recordValue(assignment?.region)?.object_id === objectId) : [];
+        const materials = Array.isArray(current?.materials) ? current.materials.flatMap(value => {
+          const assignment = recordValue(value);
+          return recordValue(assignment?.region)?.object_id === objectId ? [assignment] : [];
+        }) : [];
         return [
           { label: `Transport ${name}`, value: textValue(current?.model), mono: true },
           ...materials.map((assignment, index) => ({
@@ -924,7 +931,8 @@ export function AntennaCompositionPanel({
     <div className="fm-inspector-panel" data-inspector-owner={kind === "conductor" ? "object.antenna.conductor" : undefined}>
       {kind !== "conductor" ? <AntennaRelatedResources key={JSON.stringify(["related", scope, kind, resourceId])} scene={scene.data} selection={selection} scope={scope} available={scene.status === "ready" && scene.sessionScopeKey === scope && Boolean(scope)} /> : null}
       {kind === "spectrum" ? <InspectorGroup title={model.title} badge={model.badge}>
-        {model.rows.filter(row => ["Validation", "Runtime result", "Runtime error", "Stage catalog error"].includes(row.label)).map(row => <FieldRow key={row.label} label={row.label} value={row.value} />)}
+        {model.rows.map(row => ["Validation", "Runtime result", "Runtime error", "Stage catalog error"].includes(row.label)
+           ? <FieldRow key={row.label} label={row.label} value={row.value} /> : null)}
         <p className="fm-inspector-hint">Spatial spectrum of the antenna source field. Magnetic response and excited modes require separate analysis. Saving a request does not run FFT; FFT execution is not yet available in this workspace.</p>
       </InspectorGroup> : null}
       {kind === "spectrum" &&

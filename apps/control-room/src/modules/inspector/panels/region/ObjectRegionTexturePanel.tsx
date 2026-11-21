@@ -1,6 +1,7 @@
 "use client";
 
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useInspectorChildDraftRegistration } from "../../useInspectorChildDraftRegistration";
 import type { AuthoringTransactionResponse } from "@/kernel/api/apiTypes";
 import {
   acknowledgedAuthoringSceneRevision,
@@ -23,7 +24,6 @@ import {
 } from "@/kernel/resources/useActiveLaneCapabilities";
 import {
   ObjectRegionMetadataSection,
-  type RegionAuxiliaryDraftSession,
   type RegionSubPanelProps,
 } from "./shared";
 import {
@@ -60,7 +60,7 @@ export function ObjectRegionTexturePanel({
   model: regionModel,
   meshLane = "unknown",
   auxiliaryDraftOwnerKey,
-  reportAuxiliaryDraftSession,
+  auxiliaryDraftRegistry,
 }: RegionSubPanelProps) {
   const kernel = useKernel();
   const { api, authoringHistory, commands, resources } = kernel;
@@ -127,6 +127,7 @@ export function ObjectRegionTexturePanel({
   const [feedback, setFeedback] = useState<MagneticTextureFeedback>(null);
   const [pendingOperation, setPendingOperation] = useState<{
     id: number;
+    kind: "apply" | "show-loader";
     sessionScopeKey: string | null;
   } | null>(null);
   const nextPendingOperationId = useRef(0);
@@ -193,9 +194,9 @@ export function ObjectRegionTexturePanel({
     };
   }
 
-  function beginPendingOperation(): number {
+  function beginPendingOperation(kind: "apply" | "show-loader"): number {
     const operationId = ++nextPendingOperationId.current;
-    setPendingOperation({ id: operationId, sessionScopeKey });
+    setPendingOperation({ id: operationId, kind, sessionScopeKey });
     return operationId;
   }
 
@@ -231,7 +232,7 @@ export function ObjectRegionTexturePanel({
       return false;
     }
     mutationInFlight.current = true;
-    const operationId = beginPendingOperation();
+    const operationId = beginPendingOperation("apply");
     try {
       const target = buildMagnetizationApplyTarget(model, draftToApply);
       const response = await commitMagneticTextureApply(api, historyContext, target, model.baseRevision);
@@ -279,7 +280,7 @@ export function ObjectRegionTexturePanel({
 
   async function activateLoadTextureNode(): Promise<void> {
     if (mutationInFlight.current) return;
-    const operationId = beginPendingOperation();
+    const operationId = beginPendingOperation("show-loader");
     const commandContext = createCommandContext("inspector", kernel, {
       sourceDetail: "object-magnetic-texture",
     });
@@ -338,26 +339,13 @@ export function ObjectRegionTexturePanel({
     () => auxiliaryResetRef.current(),
     [],
   );
-  useEffect(() => {
-    if (!auxiliaryDraftOwnerKey || !reportAuxiliaryDraftSession) return;
-    const session: RegionAuxiliaryDraftSession = {
-      applying: pending && mutationInFlight.current,
-      apply: applyAuxiliaryDraft,
-      dirty,
-      reset: resetAuxiliaryDraft,
-      valid,
-    };
-    reportAuxiliaryDraftSession(auxiliaryDraftOwnerKey, session);
-    return () => reportAuxiliaryDraftSession(auxiliaryDraftOwnerKey, null);
-  }, [
-    applyAuxiliaryDraft,
-    auxiliaryDraftOwnerKey,
+  useInspectorChildDraftRegistration(auxiliaryDraftRegistry, auxiliaryDraftOwnerKey, {
+    applying: pending && pendingOperation?.kind === "apply",
+    apply: applyAuxiliaryDraft,
     dirty,
-    pending,
-    reportAuxiliaryDraftSession,
-    resetAuxiliaryDraft,
+    reset: resetAuxiliaryDraft,
     valid,
-  ]);
+  });
 
   return (
     <div className="fm-inspector-panel grid min-w-0 gap-fm-inspector-group">

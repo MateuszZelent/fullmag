@@ -61,6 +61,7 @@ pub(crate) struct StageTransportProvider {
 }
 
 impl StageTransportProvider {
+    #[cfg(test)]
     pub(crate) fn from_plan(plan: &FemPlanIR) -> Result<Option<Self>, RunError> {
         Self::from_plan_with_coupled(plan, None)
     }
