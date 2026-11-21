@@ -413,7 +413,6 @@ pub(crate) fn execute_reference_fdm_multilayer_with_checkpoint(
 
     if direct_multilayer_bb {
         return execute_reference_fdm_multilayer_bb(
-            plan,
             plan.relaxation
                 .as_ref()
                 .expect("PG-BB dispatch requires relaxation control"),
@@ -917,7 +916,6 @@ fn is_multilayer_projected_gradient_bb(plan: &FdmMultilayerPlanIR) -> bool {
 }
 
 fn execute_reference_fdm_multilayer_bb(
-    plan: &FdmMultilayerPlanIR,
     control: &RelaxationControlIR,
     contexts: Vec<LayerContext>,
     mut states: Vec<ExchangeLlgState>,

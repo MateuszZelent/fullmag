@@ -76,22 +76,3 @@ async function archiveCommand(
  */
 export const readProjectArchiveAtPath = (path: string): Promise<ArchiveResult> =>
   archiveCommand("open_project_archive_path", { path }, "Opening by path needs the desktop app.");
-
-/** Loads the checkpoint's project; the host continues the run once it is open. */
-export const resumeRun = (projectId: string, runId: string): Promise<ArchiveResult> =>
-  archiveCommand("resume_run", { projectId, runId }, "Resuming a run needs the desktop app.");
-
-/** Deletes the checkpoint file and keeps the project. */
-export async function discardCheckpoint(
-  projectId: string,
-  runId: string,
-): Promise<{ readonly ok: true } | { readonly ok: false; readonly reason: string }> {
-  const invoke = tauriInvoke();
-  if (!invoke) return { ok: false, reason: "Discarding a checkpoint needs the desktop app." };
-  try {
-    await invoke<unknown>("discard_checkpoint", { projectId, runId });
-    return { ok: true };
-  } catch (error) {
-    return { ok: false, reason: describe(error) };
-  }
-}

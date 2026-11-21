@@ -1,7 +1,7 @@
 "use client";
 
 import { FolderOpen, Play, Trash2 } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { useState } from "react";
 
 import { Button } from "@/shared/ui/Button";
 
@@ -46,15 +46,15 @@ export function ContinueCard({
   // The confirmation belongs to one checkpoint: when the latest one changes
   // (a new capture, or this one was deleted) it must be asked for again.
   const [confirming, setConfirming] = useState<string | null>(null);
+  // Keep the question visible while the runtime works, and clear it when the
+  // operation completes, before rendering the first non-busy frame.
+  const [previousBusy, setPreviousBusy] = useState(busy);
+  if (previousBusy !== busy) {
+    setPreviousBusy(busy);
+    if (!busy) setConfirming(null);
+  }
   const confirmingNow =
     discard.kind === "enabled" && confirming === discard.checkpointId ? discard : null;
-  // The question stays up, labelled busy, while the runtime works; once it
-  // answers (done or refused) the card returns to its resting state.
-  const wasBusy = useRef(false);
-  useEffect(() => {
-    if (wasBusy.current && !busy) setConfirming(null);
-    wasBusy.current = busy;
-  }, [busy]);
   return (
     <section
       aria-labelledby="fm-continue-heading"

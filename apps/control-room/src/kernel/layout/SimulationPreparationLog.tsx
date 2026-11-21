@@ -13,6 +13,7 @@ import {
 
 import { copyTextToClipboard } from "@/shared/browser/copyTextToClipboard";
 import { cn } from "@/shared/utils/className";
+import { keyedOccurrences } from "@/shared/utils/keyedOccurrences";
 import { Button } from "@/shared/ui/Button";
 import { Input } from "@/shared/ui/Input";
 import { ScrollArea } from "@/shared/ui/ScrollArea";
@@ -26,31 +27,9 @@ import {
 
 import type { SimulationPreparationLogEntryView } from "./simulationPreparationModel";
 
-interface ScrollMetrics {
-  readonly clientHeight: number;
-  readonly scrollHeight: number;
-  scrollTop: number;
-}
+import { followPreparationLogTail, isPreparationLogAtBottom } from "./simulationPreparationLogScroll";
 
 type PreparationLogLevelFilter = "all" | "errors" | "warnings";
-
-export function isPreparationLogAtBottom(
-  element: Pick<ScrollMetrics, "clientHeight" | "scrollHeight" | "scrollTop">,
-  tolerancePx = 4,
-): boolean {
-  return (
-    element.scrollHeight - element.scrollTop - element.clientHeight <= tolerancePx
-  );
-}
-
-export function followPreparationLogTail(
-  element: Pick<ScrollMetrics, "scrollHeight" | "scrollTop">,
-  shouldFollow: boolean,
-): void {
-  if (shouldFollow) {
-    element.scrollTop = element.scrollHeight;
-  }
-}
 
 function preparationLogViewport(
   root: HTMLDivElement | null,
@@ -129,12 +108,12 @@ function downloadPreparationLog(text: string): void {
 function preparationLogEntryKey(
   entry: SimulationPreparationLogEntryView,
 ): string {
-  return [
+  return JSON.stringify([
     entry.timestampLabel,
     entry.level,
     entry.stageLabel,
     entry.message,
-  ].join(":");
+  ]);
 }
 
 export function SimulationPreparationLog({
@@ -354,11 +333,11 @@ export function SimulationPreparationLogView({
           role="log"
         >
           {visibleEntries.length > 0 ? (
-            visibleEntries.map((entry, index) => (
+            keyedOccurrences(visibleEntries, preparationLogEntryKey).map(({ item: entry, key }) => (
               <article
                 className="fm-simulation-preparation-log__entry"
                 data-level={entry.level}
-                key={`${preparationLogEntryKey(entry)}:${index}`}
+                key={key}
               >
                 <div className="fm-simulation-preparation-log__metadata">
                   <time>{entry.timestampLabel}</time>

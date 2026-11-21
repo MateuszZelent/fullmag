@@ -24,6 +24,7 @@ pub(crate) mod transport_publication;
 /// still carries the physical start of the stage, so all Rust-side observables
 /// must map the native clock back to the canonical absolute clock before they
 /// evaluate an authored waveform or publish an antenna field.
+#[cfg(any(feature = "cuda", test))]
 pub(crate) fn canonical_fdm_time(plan: &fullmag_ir::FdmPlanIR, solver_time_s: f64) -> f64 {
     solver_time_s + plan.time_stage.start_time_s
 }
@@ -96,6 +97,7 @@ mod publication_clock_tests {
 }
 
 /// Return the authored waveform coordinate for a native FDM solver time.
+#[cfg(any(feature = "cuda", test))]
 pub(crate) fn canonical_fdm_waveform_time(
     plan: &fullmag_ir::FdmPlanIR,
     origin: fullmag_ir::FieldTimeOriginIR,

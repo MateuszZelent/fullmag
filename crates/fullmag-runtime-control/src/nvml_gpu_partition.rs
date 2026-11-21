@@ -36,6 +36,7 @@ pub(crate) enum NvmlProbeInconclusive {
     Unavailable,
     InvalidRecord,
     IncompleteEvidence,
+    #[cfg(not(unix))]
     UnsupportedPlatform,
 }
 
@@ -47,6 +48,7 @@ impl NvmlProbeInconclusive {
             Self::Unavailable => "unavailable",
             Self::InvalidRecord => "invalid_record",
             Self::IncompleteEvidence => "incomplete_evidence",
+            #[cfg(not(unix))]
             Self::UnsupportedPlatform => "unsupported_platform",
         }
     }

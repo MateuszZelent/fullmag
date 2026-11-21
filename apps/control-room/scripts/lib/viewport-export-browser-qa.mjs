@@ -1,3 +1,5 @@
+import { visitSequentially } from "./visitSequentially.mjs";
+
 const MAX_ACTION_TIMEOUT_MS = 30_000;
 const MAX_EXPORT_DOWNLOAD_TIMEOUT_MS = 20_000;
 const MAX_RESTORE_ACTION_TIMEOUT_MS = 3_000;
@@ -254,7 +256,7 @@ export async function runViewportExportBrowserQa(page, {
     await withTimeout(assertCanvas("before viewport PNG export QA"), timeoutMs, "initial canvas assertion");
     originalInspectorState = await readViewportInspectorState(page);
     await ensureSettingsOpen(page, "Export", timeoutMs);
-    originalSettings = await readSettings(page, settings, timeoutMs);
+    originalSettings = await readSettings(page, timeoutMs);
     if (expectedCaptureDpr === 2 && originalSettings.quality !== "Standard") {
       throw new Error(
         "A 2x capture-resolution check requires the Standard quality profile as its 1.25x baseline; found " +
@@ -447,7 +449,7 @@ export async function runViewportExportBrowserQa(page, {
         }
       });
       await restoreSetting(restorationErrors, "settings verification", async () => {
-        const restored = await readSettings(page, settings, restoreTimeoutMs);
+        const restored = await readSettings(page, restoreTimeoutMs);
         if (!sameSettings(originalSettings, restored)) {
           throw new Error(
             "expected " +
@@ -501,18 +503,27 @@ async function ensureSettingsOpen(page, section, timeout) {
   return ensureViewportSettingsSection(page, section, timeout);
 }
 
-async function readSettings(page, _settings, timeout) {
-  const exportRegion = await ensureSettingsOpen(page, "Export", timeout);
-  const [background, annotations, scale] = await Promise.all([
-    readChoiceInRegion(exportRegion, "PNG background", timeout),
-    exportRegion.getByRole("switch", {
-      name: "Include annotations",
-      exact: true,
-    }).isChecked({ timeout }),
-    readChoiceInRegion(exportRegion, "PNG resolution", timeout),
-  ]);
-  const quality = await readChoice(page, "Quality profile", timeout);
-  const frame = await readChoice(page, "Grid and axes", timeout);
+async function readSettings(page, timeout) {
+  const values = {};
+  await visitSequentially(["Export", "Quality", "View"], async (section) => {
+    const sectionSettings = await ensureSettingsOpen(page, section, timeout);
+    if (section === "Export") {
+      const [background, annotations, scale] = await Promise.all([
+        readChoiceInRegion(sectionSettings, "PNG background", timeout),
+        sectionSettings.getByRole("switch", {
+          name: "Include annotations",
+          exact: true,
+        }).isChecked({ timeout }),
+        readChoiceInRegion(sectionSettings, "PNG resolution", timeout),
+      ]);
+      Object.assign(values, { background, annotations, scale });
+    } else if (section === "Quality") {
+      values.quality = await readChoiceInRegion(sectionSettings, "Quality profile", timeout);
+    } else {
+      values.frame = await readChoiceInRegion(sectionSettings, "Grid and axes", timeout);
+    }
+  });
+  const { background, annotations, scale, quality, frame } = values;
   if (!Object.values(BACKGROUND_OPTIONS).includes(background)) {
     throw new Error("PNG background control exposed an unknown option: " + background);
   }
@@ -857,7 +868,7 @@ async function collectFailureDiagnostics({ assertCanvas, settings, page, routeBe
   }
   try {
     settingsVisible = await settings.isVisible();
-    if (settingsVisible) settingsSnapshot = await readSettings(page, settings, Math.min(timeout, 5_000));
+    if (settingsVisible) settingsSnapshot = await readSettings(page, Math.min(timeout, 5_000));
   } catch (error) {
     settingsError = error?.message ?? String(error);
   }

@@ -1,7 +1,7 @@
 "use client";
 
 import { BookOpen, Plus, Save, Trash2, X } from "lucide-react";
-import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useLayoutEffect, useReducer, useRef, useState } from "react";
 
 import type {
   MaterialLibraryEntryResource,
@@ -187,6 +187,40 @@ export function MaterialLibraryDialog(props: MaterialLibraryDialogProps) {
   />;
 }
 
+interface CatalogPosition {
+  readonly filter: MaterialCatalogFilter;
+  readonly query: string;
+  readonly showArchived: boolean;
+  readonly selectedId: string | null;
+  readonly detailVisible: boolean;
+}
+
+type CatalogPositionAction =
+  | { type: "filter"; filter: MaterialCatalogFilter }
+  | { type: "query"; query: string }
+  | { type: "toggleArchived" }
+  | { type: "select"; selectedId: string | null }
+  | { type: "selectSaved"; selectedId: string | null }
+  | { type: "showDetail"; visible: boolean };
+
+function updateCatalogPosition(
+  position: CatalogPosition,
+  action: CatalogPositionAction,
+): CatalogPosition {
+  switch (action.type) {
+    case "filter": return { ...position, filter: action.filter };
+    case "query": return { ...position, query: action.query };
+    case "toggleArchived": {
+      const showArchived = !position.showArchived;
+      const filter = showArchived && position.filter !== "published" ? "all" : position.filter;
+      return { ...position, filter, showArchived };
+    }
+    case "select": return { ...position, selectedId: action.selectedId };
+    case "selectSaved": return { ...position, selectedId: action.selectedId, query: "", filter: "all" };
+    case "showDetail": return { ...position, detailVisible: action.visible };
+  }
+}
+
 function MaterialLibraryContent({
   open, onOpenChange, onUseMaterial, modelMaterial, captureReturnFocus, restoreReturnFocus, sessionScopeKey,
 }: MaterialLibraryDialogProps & {
@@ -203,11 +237,14 @@ function MaterialLibraryContent({
   const searchRef = useRef<HTMLInputElement>(null);
   const alive = useRef(true);
   useEffect(() => { alive.current = true; return () => { alive.current = false; }; }, []);
-  const [query, setQuery] = useState("");
-  const [filter, setFilter] = useState<MaterialCatalogFilter>("all");
-  const [showArchived, setShowArchived] = useState(false);
-  const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [detailVisible, setDetailVisible] = useState(false);
+  const [{ detailVisible, filter, query, selectedId, showArchived }, moveCatalog] =
+    useReducer(updateCatalogPosition, {
+      detailVisible: false,
+      filter: "all",
+      query: "",
+      selectedId: null,
+      showArchived: false,
+    });
   const [focusRequest, setFocusRequest] = useState(0);
   const focusTarget = useRef<FocusTarget | null>(null);
   useEffect(() => {
@@ -251,7 +288,7 @@ function MaterialLibraryContent({
     draftRef.current = next;
     if (next) {
       viewRef.current = next.key;
-      setDetailVisible(true);
+      moveCatalog({ type: "showDetail", visible: true });
       if (previous?.key !== next.key) focusAfterRender("name");
     }
     setDraft(next);
@@ -279,7 +316,7 @@ function MaterialLibraryContent({
     setFeedback(null);
     switch (navigation.kind) {
       case "back":
-        setDetailVisible(false);
+        moveCatalog({ type: "showDetail", visible: false });
         focusAfterRender("search");
         break;
       case "close":
@@ -293,14 +330,14 @@ function MaterialLibraryContent({
       case "cancel":
         if (selected || selectedVersion) focusAfterRender("detail-heading");
         else {
-          setDetailVisible(false);
+          moveCatalog({ type: "showDetail", visible: false });
           focusAfterRender("search");
         }
         break;
       case "select":
         viewRef.current = navigation.id;
-        setSelectedId(navigation.id);
-        setDetailVisible(true);
+        moveCatalog({ type: "select", selectedId: navigation.id });
+        moveCatalog({ type: "showDetail", visible: true });
         focusAfterRender("detail-heading");
         break;
     }
@@ -323,7 +360,7 @@ function MaterialLibraryContent({
   function dismissConfirmation() {
     setConfirmation(null);
     if (draftRef.current || versionEditor) {
-      setDetailVisible(true);
+      moveCatalog({ type: "showDetail", visible: true });
       focusAfterRender(versionEditor ? "version-display-name" : "name");
     }
   }
@@ -388,9 +425,7 @@ function MaterialLibraryContent({
       if (!current || current.key !== snapshot.key) return;
       if (current.version === snapshot.version) {
         replaceDraft(null);
-        setSelectedId(saved.id);
-        setFilter("all");
-        setQuery("");
+        moveCatalog({ type: "selectSaved", selectedId: saved.id });
         if (continueToPublish) beginPublish(saved);
         else setFeedback({ kind: "success", message: "Material saved to database." });
       } else {
@@ -416,7 +451,7 @@ function MaterialLibraryContent({
       const deleted = await api.workspace.deleteMaterial(entry.id, { base_revision: entry.revision });
       resources.invalidate(MATERIAL_LIBRARY_RESOURCE_KEY, deleted.revision);
       if (!isCurrent()) return;
-      setSelectedId(null);
+      moveCatalog({ type: "select", selectedId: null });
       setFeedback({ kind: "success", message: "Material removed from database. Model copies are unchanged." });
     } catch (error) {
       if (isCurrent()) setFeedback({ kind: "error", message: error instanceof Error ? error.message : String(error), conflict: error instanceof ControlRoomApiError && error.status === 409 });
@@ -471,13 +506,13 @@ function MaterialLibraryContent({
       kind: "publish", entry, family, initialFamily: family, version: "", displayName: entry.name, sourceProject,
     });
     setFeedback(null);
-    setDetailVisible(true);
+    moveCatalog({ type: "showDetail", visible: true });
     focusAfterRender("version-display-name");
   }
 
   function beginManage(published: PublishedMaterialVersion) {
     setVersionEditor({ kind: "manage", published, displayName: published.display_name, archived: published.archived });
-    setDetailVisible(true);
+    moveCatalog({ type: "showDetail", visible: true });
     setFeedback(null);
     focusAfterRender("version-display-name");
   }
@@ -511,9 +546,7 @@ function MaterialLibraryContent({
       }
       if (!isCurrent()) return;
       setVersionEditor(null);
-      setSelectedId(saved.archived && !showArchived ? null : saved.source.catalog_id);
-      setFilter("all");
-      setQuery("");
+      moveCatalog({ type: "selectSaved", selectedId: saved.archived && !showArchived ? null : saved.source.catalog_id });
       setFeedback({ kind: "success", message: versionEditor.kind === "publish" ? "Material version published." : "Version details saved." });
       focusAfterRender("search");
     } catch (error) {
@@ -556,14 +589,13 @@ function MaterialLibraryContent({
           <section className="fm-material-library__catalog" aria-label="Material catalog">
             <div className="fm-material-library__toolbar">
               <label htmlFor={fieldId("search")}>Search materials</label>
-              <Input id={fieldId("search")} ref={searchRef} type="search" value={query} onChange={(event) => { if (!draftRef.current && !versionEditor) viewEpoch.current += 1; setQuery(event.target.value); }} />
-              <SegmentedControl aria-label="Material origin" columns={3} options={MATERIAL_CATALOG_FILTERS} value={filter} onValueChange={(value) => { if (!draftRef.current && !versionEditor) viewEpoch.current += 1; setFilter(value); }} />
+              <Input id={fieldId("search")} ref={searchRef} type="search" value={query} onChange={(event) => { if (!draftRef.current && !versionEditor) viewEpoch.current += 1; moveCatalog({ type: "query", query: event.target.value }); }} />
+              <SegmentedControl aria-label="Material origin" columns={3} options={MATERIAL_CATALOG_FILTERS} value={filter} onValueChange={(value) => { if (!draftRef.current && !versionEditor) viewEpoch.current += 1; moveCatalog({ type: "filter", filter: value }); }} />
               <div className="fm-material-library__catalog-actions">
                 <Button size="sm" type="button" onClick={newCustom}><Plus data-icon="inline-start" aria-hidden="true" />New material</Button>
                 <Button size="sm" type="button" variant="ghost" onClick={() => library.refetch()}>Refresh</Button>
                 <Button size="sm" type="button" variant="ghost" aria-pressed={showArchived} onClick={() => {
-                  if (!showArchived && filter !== "all" && filter !== "published") setFilter("all");
-                  setShowArchived(!showArchived);
+                  moveCatalog({ type: "toggleArchived" });
                 }}>Show archived versions</Button>
               </div>
               {modelMaterial ? <Button size="sm" type="button" onClick={copyModel}>Save model copy to database</Button> : null}

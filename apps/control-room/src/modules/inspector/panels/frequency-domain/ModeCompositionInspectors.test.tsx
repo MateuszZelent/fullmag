@@ -6,15 +6,8 @@ import type {
   ModeCompositionResource,
 } from "@/kernel/visualization/ModeCompositionController";
 
-import {
-  ModeCompositionActiveInspectorPanel,
-  ModeCompositionObjectInspectorPanel,
-  ModeCompositionObjectsInspectorPanel,
-  EigenSpectrumCompositionInspectorPanel,
-  eigenModeLayerAppearanceDefaults,
-  legalModeLayerComponents,
-  type ModeCompositionInspectorDependencies,
-} from "./ModeCompositionInspectors";
+import { ModeCompositionActiveInspectorPanel, ModeCompositionObjectInspectorPanel, ModeCompositionObjectsInspectorPanel, EigenSpectrumCompositionInspectorPanel, type ModeCompositionInspectorDependencies } from "./ModeCompositionInspectors";
+import { eigenModeLayerAppearanceDefaults, legalModeLayerComponents } from "./ModeCompositionInspectors.model";
 
 function layer(overrides: Partial<ModeCompositionLayer> = {}): ModeCompositionLayer {
   return {

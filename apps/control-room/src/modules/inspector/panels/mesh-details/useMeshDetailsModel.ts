@@ -77,14 +77,8 @@ import {
 } from "../MeshResourceView";
 import type { MeshSizeDistributionHoverBin } from "../MeshQualityChart";
 import { emitMeshSizeHistogramHover } from "../meshSizeHistogramHover";
-import {
-  resolveMixedCertificateQualityPresentation,
-  type MixedCertificateQualityPresentation,
-} from "./MeshQualityGatesSection";
-import {
-  resolveMixedTopologyPresentation,
-  type MixedTopologyPresentation,
-} from "./MixedTopologyProvenanceSection";
+import { resolveMixedCertificateQualityPresentation, type MixedCertificateQualityPresentation } from "./MeshQualityGatesSection.model";
+import { resolveMixedTopologyPresentation, type MixedTopologyPresentation } from "./MixedTopologyProvenanceSection.model";
 
 export type MeshDetailsLane = MeshInspectorLane;
 

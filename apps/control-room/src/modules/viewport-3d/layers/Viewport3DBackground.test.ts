@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { SRGBColorSpace } from "three";
 import type { Viewport3DColors } from "../viewport3dTypes";
-import { createViewportBackgroundTexture } from "./Viewport3DBackground";
+import { createViewportBackgroundTexture } from "./Viewport3DBackground.model";
 
 const colors = {
   background: "#222222", backgroundTop: "#111111", backgroundBottom: "#444444",

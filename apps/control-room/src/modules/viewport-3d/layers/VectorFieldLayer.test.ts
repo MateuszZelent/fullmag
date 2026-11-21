@@ -12,19 +12,7 @@ import {
 
 import { DEFAULT_OBJECT_VISUALIZATION } from "@/kernel/visualization/ObjectVisualizationController";
 
-import {
-  createVectorGlyphColorUploadRollback,
-  createVectorGlyphMatrixUploadRollback,
-  createVectorGlyphUploadKeys,
-  ensureWhiteVertexColorAttribute,
-  identifyVectorGlyphBuildResult,
-  recordVectorFieldAdoption,
-  resolveVectorGlyphDepthPolicy,
-  resolveVectorFieldAdoptionBuildKey,
-  resolveVectorFieldLayerStyle,
-  syncVectorGlyphMaterialStyle,
-  syncVectorGlyphColorState,
-} from "./VectorFieldLayer";
+import { createVectorGlyphColorUploadRollback, createVectorGlyphMatrixUploadRollback, createVectorGlyphUploadKeys, ensureWhiteVertexColorAttribute, identifyVectorGlyphBuildResult, recordVectorFieldAdoption, resolveVectorGlyphDepthPolicy, resolveVectorFieldAdoptionBuildKey, resolveVectorFieldLayerStyle, syncVectorGlyphMaterialStyle, syncVectorGlyphColorState } from "./VectorFieldLayer.model";
 import { createViewport3DGpuUploadManager } from "../build-engine/gpu/viewport3dGpuUploadManager";
 import { createViewport3DRenderAdoptionRegistry } from "../model/viewport3DRenderAdoptionRegistry";
 

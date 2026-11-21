@@ -4,7 +4,8 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import { startScreenStore } from "../model/startScreenState";
 
-import { KEY_GROUPS, LEARN_RESOURCES, LearnSection } from "./LearnSection";
+import { LearnSection } from "./LearnSection";
+import { KEY_GROUPS, LEARN_RESOURCES } from "./LearnSection.model";
 
 afterEach(() => {
   startScreenStore.resetForTests();

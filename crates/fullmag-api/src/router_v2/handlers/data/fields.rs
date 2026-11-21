@@ -95,7 +95,6 @@ static HDR_NODE_INDEX_COUNT: &str = "x-fullmag-node-index-count";
 static HDR_PAYLOAD_STATE: &str = "x-fullmag-payload-state";
 const HYSTERESIS_ZARR_STORE: &str = "hysteresis.zarr";
 const HYSTERESIS_ZARR_M_FIELD: &str = "fields/m";
-const FDM_MULTILAYER_AIRBOX_MANIFEST: &str = "fields/H_demag/airbox/manifest.json";
 const FDM_MULTILAYER_AIRBOX_SCHEMA: &str = "fdm_multilayer_observation.v1";
 const FDM_MULTILAYER_AIRBOX_SCHEMA_V2: &str = "fdm_multilayer_observation.v2";
 const FDM_MULTILAYER_AIRBOX_FIELD_SCHEMA: &str = "fdm_multilayer_observation_field.v1";

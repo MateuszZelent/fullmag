@@ -3,7 +3,8 @@ import { useMemo } from "react";
 import type { KernelApi } from "@/kernel/types";
 import type { AnalysisChartCursorPoint } from "@/shared/domain/analysis/chartCursorPoint";
 import { descriptorForFrequencyTable } from "@/shared/domain/analysis/analysisSurfaceDescriptor";
-import { ChartLegend, chartColorNameForIndex } from "@/shared/analysis-charts/ChartLegend";
+import { ChartLegend } from "@/shared/analysis-charts/ChartLegend";
+import { chartColorNameForIndex } from "@/shared/analysis-charts/ChartLegend.model";
 import { sanitizeSelectedSeriesIds } from "@/shared/analysis-charts/chartSeriesSelection";
 import { ChartSection } from "@/shared/analysis-charts/ChartSection";
 import { ChartDisplayUnitControls } from "@/shared/analysis-charts/ChartDisplayUnitControls";
@@ -177,10 +178,10 @@ export function AnalysisFrequencySurface({
 
   const yUnits = [...new Set(series.map((entry) => entry.unit))];
   const preferredYUnits = yUnits.map((unit) => {
-    const requested = series
-      .filter((entry) => entry.unit === unit)
-      .map((entry) => displayUnits?.[entry.quantity])
-      .filter((value): value is string => Boolean(value));
+    const requested = series.flatMap((entry) => {
+      const displayUnit = entry.unit === unit ? displayUnits?.[entry.quantity] : undefined;
+      return displayUnit ? [displayUnit] : [];
+    });
     return requested.length > 0 && requested.every((value) => value === requested[0])
       ? requested[0]
       : null;

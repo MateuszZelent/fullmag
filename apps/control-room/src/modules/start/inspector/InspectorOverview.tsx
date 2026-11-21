@@ -1,7 +1,9 @@
 import { formatBytes } from "../model/recentIndex";
 import type { ModelSummary } from "../model/types";
 
-import { KvGroup, chipList, kvRow as kvRowIfPresent, kvRowOrUnavailable } from "./KeyValueGroup";
+import { KvGroup } from "./KeyValueGroup";
+import { chipList } from "./KeyValueGroup.presentation";
+import { kvRow as kvRowIfPresent, kvRowOrUnavailable } from "./KeyValueGroup.model";
 
 /**
  * Answers "is this the project I mean, and can this machine run it?". Units

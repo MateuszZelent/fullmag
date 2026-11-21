@@ -1,6 +1,7 @@
 "use client";
 
-import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useEffectEvent, useLayoutEffect, useRef, useState, type ReactNode } from "react";
+// react-doctor-disable-next-line react-doctor/no-flush-sync -- Selection is changed imperatively after Apply or Discard; flush the accepted Inspector draft before that handoff.
 import { flushSync } from "react-dom";
 
 import { useKernel } from "@/kernel/KernelContext";
@@ -137,23 +138,29 @@ export function InspectorDirtySelectionGuard({
     }
   }, [controller, dismiss, isCurrent, kernel]);
 
-  // The form owns both its draft and its post-ACK scene synchronization.
-  useEffect(() => editSessions?.subscribe(() => {
+  const continueAfterEditSessionChange = useEffectEvent(() => {
     const transition = pendingRef.current;
     if (transition) continueWhenReady(transition);
-  }), [continueWhenReady, editSessions]);
+  });
+  const continueAfterNavigationSceneChange = useEffectEvent((transition: PendingTransition) => {
+    if (pendingRef.current === transition) continueWhenReady(transition);
+  });
+  const dismissIfHistoryInvalidatesTransition = useEffectEvent(() => {
+    const transition = pendingRef.current;
+    if (transition && !isCurrent(transition)) dismiss();
+  });
+
+  // The form owns both its draft and its post-ACK scene synchronization.
+  useEffect(() => editSessions?.subscribe(continueAfterEditSessionChange), [editSessions]);
 
   useEffect(() => {
     if (!pending?.relatedLinkKey) return;
     return observeAntennaNavigationScene(kernel, pending.scope, () => {
-      if (pendingRef.current === pending) continueWhenReady(pending);
+      continueAfterNavigationSceneChange(pending);
     });
-  }, [continueWhenReady, kernel, pending]);
+  }, [kernel, pending]);
 
-  useEffect(() => authoringHistory?.subscribe(() => {
-    const transition = pendingRef.current;
-    if (transition && !isCurrent(transition)) dismiss();
-  }), [authoringHistory, dismiss, isCurrent]);
+  useEffect(() => authoringHistory?.subscribe(dismissIfHistoryInvalidatesTransition), [authoringHistory]);
 
   // Scope changes and unmount invalidate callbacks already waiting on Apply/Reset.
   useLayoutEffect(() => dismiss, [dismiss, scope]);
@@ -198,7 +205,7 @@ export function InspectorDirtySelectionGuard({
 
   async function decide(apply: boolean): Promise<void> {
     const transition = pendingRef.current;
-    if (!transition || transition.running) return;
+    if (!transition || transition.running || transition.acknowledged) return;
     if (!isCurrent(transition)) { dismiss(); return; }
     const owner = transition.session;
     if (owner.applying || owner.lockReason || (apply && (!owner.valid || owner.applyBlockReason))) return;
@@ -225,10 +232,18 @@ export function InspectorDirtySelectionGuard({
       if (isCurrent(transition)) {
         const detail = cause instanceof Error ? cause.message : "The Inspector changes could not be applied or discarded.";
         setError(`${detail} The selection was kept; review the draft before retrying.`);
-      } else if (pendingRef.current === transition) dismiss();
+      } else if (pendingRef.current === transition) {
+        pendingRef.current = null;
+        transition.resolveBuild?.(false);
+        setPending(null);
+        setError(null);
+      }
     } finally {
       transition.running = false;
-      if (pendingRef.current === transition && !transition.acknowledged) setBusy(false);
+      if (pendingRef.current === null || (pendingRef.current === transition && !transition.acknowledged)) {
+        // react-doctor-disable-next-line react-doctor/no-loading-flag-reset-outside-finally -- The ownership guard keeps an older request from clearing the busy state of a newer transition.
+        setBusy(false);
+      }
     }
   }
 

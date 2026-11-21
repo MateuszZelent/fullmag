@@ -120,6 +120,7 @@ fn time_dependence_multiplier(waveform: Option<&TimeDependenceIR>, t: f64) -> f6
     crate::time_dependence::evaluate_optional_time_dependence(waveform, t)
 }
 
+#[cfg(any(feature = "fem-native", test))]
 fn legacy_antenna_current_at_time(drive: &fullmag_ir::RfDriveIR, absolute_time_s: f64) -> f64 {
     drive.current_a * time_dependence_multiplier(drive.waveform.as_ref(), absolute_time_s)
 }
@@ -283,11 +284,7 @@ pub(crate) fn dynamic_antenna_drive_terms(
     terms
 }
 
-#[cfg_attr(not(feature = "fem-gpu"), allow(dead_code))]
-pub(crate) fn compute_antenna_field(plan: &FemPlanIR) -> Result<Vec<[f64; 3]>, RunError> {
-    compute_antenna_field_at_time(plan, plan.time_stage.start_time_s)
-}
-
+#[cfg(any(feature = "fem-native", test))]
 pub(crate) fn compute_antenna_field_at_time(
     plan: &FemPlanIR,
     absolute_time_s: f64,
@@ -342,6 +339,7 @@ pub(crate) fn compute_antenna_field_at_time(
     Ok(total)
 }
 
+#[cfg(any(feature = "fem-native", test))]
 fn validate_observed_antenna_field(
     field: &[[f64; 3]],
     absolute_time_s: f64,
@@ -356,6 +354,7 @@ fn validate_observed_antenna_field(
     Ok(())
 }
 
+#[cfg(any(feature = "fem-native", test))]
 fn add_solved_antenna_fields(
     plan: &FemPlanIR,
     absolute_time_s: f64,

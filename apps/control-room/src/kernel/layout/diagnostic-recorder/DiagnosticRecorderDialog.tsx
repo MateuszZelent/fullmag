@@ -333,40 +333,44 @@ function BuildEngineSummary({
           No build-engine records.
         </div>
       ) : (
-        <div className="fm-diagnostic-recorder__table" role="table">
-          <div
+        <div className="fm-diagnostic-recorder__table">
+          <table className="fm-diagnostic-recorder__native-table">
+          <thead>
+            <tr
             className="fm-diagnostic-recorder__row fm-diagnostic-recorder__row--header"
-            role="row"
           >
-            <span role="columnheader">Lane</span>
-            <span role="columnheader">Jobs</span>
-            <span role="columnheader">Aborted</span>
-            <span role="columnheader">Queue</span>
-            <span role="columnheader">Worker</span>
-            <span role="columnheader">Transfer</span>
-            <span role="columnheader">Upload</span>
-            <span role="columnheader">Output</span>
-            <span role="columnheader">Fallbacks</span>
-            <span role="columnheader">Fallback reasons</span>
-          </div>
+            <th scope="col">Lane</th>
+            <th scope="col">Jobs</th>
+            <th scope="col">Aborted</th>
+            <th scope="col">Queue</th>
+            <th scope="col">Worker</th>
+            <th scope="col">Transfer</th>
+            <th scope="col">Upload</th>
+            <th scope="col">Output</th>
+            <th scope="col">Fallbacks</th>
+            <th scope="col">Fallback reasons</th>
+          </tr>
+          </thead>
+          <tbody>
           {summary.lanes.slice(0, 12).map((lane) => (
-            <div
+            <tr
               className="fm-diagnostic-recorder__row"
               key={lane.lane}
-              role="row"
             >
-              <span role="cell">{lane.lane}</span>
-              <span role="cell">{lane.jobs}</span>
-              <span role="cell">{lane.aborted}</span>
-              <span role="cell">{formatMs(lane.queueWaitMaxMs)}</span>
-              <span role="cell">{formatMs(lane.workerComputeMaxMs)}</span>
-              <span role="cell">{formatMs(lane.transferMaxMs)}</span>
-              <span role="cell">{formatMs(lane.mainUploadMaxMs)}</span>
-              <span role="cell">{formatBytes(lane.outputBytes)}</span>
-              <span role="cell">{lane.fallbackCount}</span>
-              <span role="cell">{formatFallbackReasons(lane.fallbackReasons)}</span>
-            </div>
+              <td>{lane.lane}</td>
+              <td>{lane.jobs}</td>
+              <td>{lane.aborted}</td>
+              <td>{formatMs(lane.queueWaitMaxMs)}</td>
+              <td>{formatMs(lane.workerComputeMaxMs)}</td>
+              <td>{formatMs(lane.transferMaxMs)}</td>
+              <td>{formatMs(lane.mainUploadMaxMs)}</td>
+              <td>{formatBytes(lane.outputBytes)}</td>
+              <td>{lane.fallbackCount}</td>
+              <td>{formatFallbackReasons(lane.fallbackReasons)}</td>
+            </tr>
           ))}
+          </tbody>
+          </table>
         </div>
       )}
     </section>
@@ -405,30 +409,34 @@ function StaleRevisionSummary({
           No stale visible revisions.
         </div>
       ) : (
-        <div className="fm-diagnostic-recorder__table" role="table">
-          <div
+        <div className="fm-diagnostic-recorder__table">
+          <table className="fm-diagnostic-recorder__native-table">
+          <thead>
+            <tr
             className="fm-diagnostic-recorder__row fm-diagnostic-recorder__row--header"
-            role="row"
           >
-            <span role="columnheader">State</span>
-            <span role="columnheader">Lane</span>
-            <span role="columnheader">Target</span>
-            <span role="columnheader">Displayed</span>
-            <span role="columnheader">Target revision</span>
-          </div>
+            <th scope="col">State</th>
+            <th scope="col">Lane</th>
+            <th scope="col">Target</th>
+            <th scope="col">Displayed</th>
+            <th scope="col">Target revision</th>
+          </tr>
+          </thead>
+          <tbody>
           {visibleRevisionRows(summary).map((row) => (
-            <div
+            <tr
               className="fm-diagnostic-recorder__row"
               key={`${row.state}:${row.target.targetKey}:${row.target.displayedRevision}:${row.target.targetRevision}`}
-              role="row"
             >
-              <span role="cell">{row.state}</span>
-              <span role="cell">{row.target.lane ?? "n/a"}</span>
-              <span role="cell">{row.target.targetKey ?? "n/a"}</span>
-              <span role="cell">{row.target.displayedRevision ?? "n/a"}</span>
-              <span role="cell">{row.target.targetRevision ?? "n/a"}</span>
-            </div>
+              <td>{row.state}</td>
+              <td>{row.target.lane ?? "n/a"}</td>
+              <td>{row.target.targetKey ?? "n/a"}</td>
+              <td>{row.target.displayedRevision ?? "n/a"}</td>
+              <td>{row.target.targetRevision ?? "n/a"}</td>
+            </tr>
           ))}
+          </tbody>
+          </table>
         </div>
       )}
     </section>
@@ -459,35 +467,39 @@ function WorkerPoolSummary({
           No worker-pool status.
         </div>
       ) : (
-        <div className="fm-diagnostic-recorder__table" role="table">
-          <div
+        <div className="fm-diagnostic-recorder__table">
+          <table className="fm-diagnostic-recorder__native-table">
+          <thead>
+            <tr
             className="fm-diagnostic-recorder__row fm-diagnostic-recorder__row--header"
-            role="row"
           >
-            <span role="columnheader">Pool</span>
-            <span role="columnheader">Active jobs</span>
-            <span role="columnheader">Workers</span>
-            <span role="columnheader">Max workers</span>
-            <span role="columnheader">Updated</span>
-          </div>
+            <th scope="col">Pool</th>
+            <th scope="col">Active jobs</th>
+            <th scope="col">Workers</th>
+            <th scope="col">Max workers</th>
+            <th scope="col">Updated</th>
+          </tr>
+          </thead>
+          <tbody>
           {records.map((record) => {
             const updatedAt = formatDiagnosticTimestamp(record.timestampMs);
             return (
-              <div
+              <tr
                 className="fm-diagnostic-recorder__row"
                 key={record.poolId}
-                role="row"
               >
-                <span role="cell">{record.poolId}</span>
-                <span role="cell">{record.activeJobs}</span>
-                <span role="cell">{record.workerCount}</span>
-                <span role="cell">{record.maxWorkers}</span>
-                <span role="cell" suppressHydrationWarning>
+                <td>{record.poolId}</td>
+                <td>{record.activeJobs}</td>
+                <td>{record.workerCount}</td>
+                <td>{record.maxWorkers}</td>
+                <td suppressHydrationWarning>
                   {updatedAt}
-                </span>
-              </div>
+                </td>
+              </tr>
             );
           })}
+          </tbody>
+          </table>
         </div>
       )}
     </section>
@@ -521,38 +533,42 @@ function RecordTable({ records }: { records: readonly DiagnosticAnyRecord[] }) {
     );
   }
   return (
-    <div className="fm-diagnostic-recorder__table" role="table">
-      <div
+    <div className="fm-diagnostic-recorder__table">
+      <table className="fm-diagnostic-recorder__native-table">
+      <thead>
+        <tr
         className="fm-diagnostic-recorder__row fm-diagnostic-recorder__row--header"
-        role="row"
       >
-        <span role="columnheader">Time</span>
-        <span role="columnheader">Lane</span>
-        <span role="columnheader">Severity</span>
-        <span role="columnheader">Name</span>
-        <span role="columnheader">Duration</span>
-      </div>
+        <th scope="col">Time</th>
+        <th scope="col">Lane</th>
+        <th scope="col">Severity</th>
+        <th scope="col">Name</th>
+        <th scope="col">Duration</th>
+      </tr>
+      </thead>
+      <tbody>
       {visibleRecords.map((record) => {
         const recordedAt = formatDiagnosticTimestamp(record.timestampMs);
         return (
-          <div
+          <tr
             className="fm-diagnostic-recorder__row"
             data-severity={record.severity}
             key={record.id || `${record.timestampMs}:${record.name}`}
-            role="row"
           >
-            <span role="cell" suppressHydrationWarning>
+            <td suppressHydrationWarning>
               {recordedAt}
-            </span>
-            <span role="cell">{record.lane}</span>
-            <span role="cell">{record.severity}</span>
-            <span role="cell" title={record.name}>
+            </td>
+            <td>{record.lane}</td>
+            <td>{record.severity}</td>
+            <td title={record.name}>
               {record.name}
-            </span>
-            <span role="cell">{formatMs(record.durationMs)}</span>
-          </div>
+            </td>
+            <td>{formatMs(record.durationMs)}</td>
+          </tr>
         );
       })}
+      </tbody>
+      </table>
     </div>
   );
 }

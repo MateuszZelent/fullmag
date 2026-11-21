@@ -226,17 +226,8 @@ import {
   resolveViewport3DFieldVectorForDomain,
   safeViewport3DDomainGenerationId,
 } from "../model/viewport3DFieldDomainCompatibility";
-import {
-  buildFdmVectorSegments,
-  buildFdmVectorSampledCellIndices,
-  createFdmVectorOnlyBuildInput,
-  resolveFdmVectorGlyphScaleForCellSize,
-  resolveFdmVectorGlyphSamplingSpacingScale,
-  useFdmCuboidBuildResult,
-  useFdmCuboidBuildResults,
-  type FdmCuboidAsyncBuildEntry,
-  type FdmCuboidInstanceModel,
-} from "../layers/FdmCuboidLayer";
+import { buildFdmVectorSampledCellIndices, createFdmVectorOnlyBuildInput, resolveFdmVectorGlyphScaleForCellSize, resolveFdmVectorGlyphSamplingSpacingScale, useFdmCuboidBuildResult, useFdmCuboidBuildResults, type FdmCuboidInstanceModel } from "../layers/FdmCuboidLayer";
+import { buildFdmVectorSegments, type FdmCuboidAsyncBuildEntry } from "../layers/FdmCuboidLayer.model";
 import { resolveFdmAirboxPassPlan } from "../layers/fdmAirboxPassPlan";
 import {
   buildViewport3DFdmTargetSurfaceCellIndices,
@@ -548,11 +539,13 @@ function resolveViewport3DAvailableFieldQuantityIds(
   catalog: FieldCatalogResource | null,
 ): ReadonlySet<string> | null {
   if (!catalog) return null;
-  return new Set(
-    catalog.quantities
-      .filter((quantity) => quantity.available)
-      .map((quantity) => resolveCanonicalQuantityId(quantity.quantity_id)),
-  );
+  const quantityIds = new Set<string>();
+  for (const quantity of catalog.quantities) {
+    if (quantity.available) {
+      quantityIds.add(resolveCanonicalQuantityId(quantity.quantity_id));
+    }
+  }
+  return quantityIds;
 }
 
 export function mergeViewport3DQuantityCapabilityIds(
@@ -2121,11 +2114,12 @@ export function resolveViewport3DPublishedModelQuantityIds(
   quantityCatalog: QuantityCatalogResource | null,
   objects: readonly NonNullable<VisualizationObjectContext["object"]>[] | null,
 ): ReadonlySet<string> {
-  return new Set(
-    [...(fieldQuantityIds ?? [])]
-      .map((id) => resolveViewport3DModelQuantityId(id, quantityCatalog, objects))
-      .filter(Boolean),
-  );
+  const resolved = new Set<string>();
+  for (const id of fieldQuantityIds ?? []) {
+    const resolvedId = resolveViewport3DModelQuantityId(id, quantityCatalog, objects);
+    if (resolvedId) resolved.add(resolvedId);
+  }
+  return resolved;
 }
 
 export function resolveViewport3DActiveQuantityId({
@@ -8006,7 +8000,6 @@ export function useViewport3DSceneModel({
     visualizationRevision,
   };
 }
-
 
 function measureViewport3DModelBuild<T>(name: string, build: () => T): T {
   const performanceTarget =

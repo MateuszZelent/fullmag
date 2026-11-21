@@ -9,15 +9,16 @@ function resolveFrom(
   requestedIds: readonly string[],
   available: readonly LiveChartSeriesIdentity[],
 ): string[] {
-  return available
-    .filter((series) => requestedIds.some((requestedId) => (
-      requestedId === series.id ||
-      requestedId === series.quantity ||
-      tableColumnIdFromSeriesId(requestedId) === series.quantity ||
-      tableColumnIdFromSeriesId(requestedId) === tableColumnIdFromSeriesId(series.id)
-    )))
-    .map((series) => series.id)
-    .filter((id, index, ids) => ids.indexOf(id) === index);
+  const ids = new Set<string>();
+  for (const series of available) {
+    const columnId = tableColumnIdFromSeriesId(series.id);
+    if (requestedIds.some((requestedId) => {
+      const requestedColumn = tableColumnIdFromSeriesId(requestedId);
+      return requestedId === series.id || requestedId === series.quantity ||
+        requestedColumn === series.quantity || requestedColumn === columnId;
+    })) ids.add(series.id);
+  }
+  return [...ids];
 }
 
 /**

@@ -4,7 +4,7 @@ import {
 } from "@/kernel/visualization/ObjectVisualizationController";
 import type { ColorRepresentation } from "three";
 
-import type { VectorFieldLayerVectorStyle } from "./VectorFieldLayer";
+import type { VectorFieldLayerVectorStyle } from "./VectorFieldLayer.model";
 import type { Viewport3DMaterialProfile } from "./viewport3DMaterialProfile";
 
 export const VERTEX_COLOR_MATERIAL_COLOR = 0xffffff;
@@ -17,12 +17,6 @@ export function resolveMeshPartPresentationColor(
 ): ColorRepresentation {
   const owner = objectId ? objects.find((object) => object.objectId === objectId) : null;
   return owner?.role === "antenna" ? colors.antenna ?? colors.mesh : colors.mesh;
-}
-
-export function opacityFromSettings(
-  settings: VisualizationTargetSettings,
-): number {
-  return percentToUnit(settings.surfaceOpacityPercent);
 }
 
 export function percentToUnit(value: number): number {

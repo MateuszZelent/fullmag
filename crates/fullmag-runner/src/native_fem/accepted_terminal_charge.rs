@@ -13,6 +13,7 @@ use std::ffi::CString;
 pub(super) mod record;
 pub(crate) use record::AcceptedTerminalChargeRecord;
 
+#[cfg(any(feature = "fem-native", feature = "fem-gpu"))]
 pub(crate) use fullmag_antenna_artifacts::charge::{
     AcceptedChargeInterface, DIGEST_SCHEMA, MAX_PAYLOAD_BYTES, OPERATOR_VERSION,
 };

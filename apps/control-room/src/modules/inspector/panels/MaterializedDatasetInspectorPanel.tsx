@@ -3,16 +3,18 @@
 import type { MaterializedDatasetResource } from "@/kernel/api/apiTypes";
 import { useProjectDocumentSnapshot } from "@/kernel/persistence/ProjectDocumentStatus";
 import { useMaterializedDatasetResource } from "@/kernel/resources/solutionSetResources";
-import type { PinnedMaterializedDatasetSelectionRef, Selection } from "@/kernel/selection/selectionTypes";
+
 import { useSavedFieldPresentation } from "@/kernel/visualization/useObjectVisualization";
 import { materializedDatasetSelectionMatches } from "@/kernel/visualization/savedFieldPresentation";
 export { materializedDatasetSelectionMatches } from "@/kernel/visualization/savedFieldPresentation";
-import { SavedFieldVisualizationPanel, savedFieldPresentationForDataset } from "./SavedFieldVisualizationPanel";
+import { SavedFieldVisualizationPanel } from "./SavedFieldVisualizationPanel";
+import { savedFieldPresentationForDataset } from "./SavedFieldVisualizationPanel.model";
 import { Badge } from "@/shared/ui/Badge";
 
 import { InspectorGroup } from "../primitives/InspectorGroup";
 import type { InspectorPanelProps } from "../inspectorTypes";
 import { MaterializedDatasetValues } from "./MaterializedDatasetValues";
+import { materializedDatasetSelection, materializedDatasetSelectionMatchesProject } from "./MaterializedDatasetInspectorPanel.model";
 
 export function MaterializedDatasetInspectorPanel({ selection }: InspectorPanelProps) {
   const ref = materializedDatasetSelection(selection);
@@ -134,19 +136,6 @@ export function MaterializedDatasetInspectorPanel({ selection }: InspectorPanelP
       <MaterializedDatasetValues key={JSON.stringify(ref)} dataset={data} />
     </div>
   );
-}
-
-export function materializedDatasetSelection(
-  selection: Selection,
-): PinnedMaterializedDatasetSelectionRef | null {
-  return selection.ref?.type === "materialized-dataset" ? selection.ref : null;
-}
-
-export function materializedDatasetSelectionMatchesProject(
-  ref: PinnedMaterializedDatasetSelectionRef,
-  activeProjectId: string | null,
-): boolean {
-  return activeProjectId === ref.projectId;
 }
 
 function formatFunctionSpace(

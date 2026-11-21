@@ -76,7 +76,17 @@ export function antennaRunStageOptions(scene: SceneResource | null): Array<{ id:
     const name = entry.label ?? stage.name ?? stage.label;
     return [{ id, label: typeof name === "string" && name.trim() ? name.trim() : `Run ${index + 1}` }];
   });
-  return options.filter(option => options.filter(item => item.id === option.id).length === 1).map(option => ({ ...option, label: options.filter(item => item.label === option.label).length > 1 ? `${option.label} [${option.id}]` : option.label }));
+  const idCounts = new Map<string, number>();
+  const labelCounts = new Map<string, number>();
+  for (const option of options) {
+    idCounts.set(option.id, (idCounts.get(option.id) ?? 0) + 1);
+    labelCounts.set(option.label, (labelCounts.get(option.label) ?? 0) + 1);
+  }
+  return options.flatMap(option => {
+    if (idCounts.get(option.id) !== 1) return [];
+    const label = (labelCounts.get(option.label) ?? 0) > 1 ? `${option.label} [${option.id}]` : option.label;
+    return [{ ...option, label }];
+  });
 }
 
 export function antennaRunStageIds(scene: SceneResource | null): string[] {

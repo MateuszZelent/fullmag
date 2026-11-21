@@ -338,7 +338,8 @@ describe("useViewport3DChunkedScalarColors", () => {
 
     expect(source).toContain("const chunkedScalarColorBuffers = new WeakMap");
     expect(source).toContain("const chunkedScalarColorBuffersByPartAndMode = new WeakMap");
-    expect(source).toContain("useReducer");
+    expect(source).toContain("createChunkedScalarColorStateStore");
+    expect(source).toContain("useSyncExternalStore");
     expect(source).toContain("chunkedScalarColorReducer");
     expect(source).toContain("releaseChunkedScalarColorToken");
     expect(source).not.toContain("useState");

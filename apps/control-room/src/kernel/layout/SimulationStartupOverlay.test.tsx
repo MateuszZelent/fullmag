@@ -11,12 +11,8 @@ import type { ResourceResult } from "../resources/resourceTypes";
 import { KernelContext } from "../KernelContext";
 import type { KernelApi } from "../types";
 
-import {
-  SimulationStartupOverlayView,
-  openSimulationPreparationDiagnostics,
-  resolveSimulationStartupOverlayState,
-  shouldRefreshSimulationStartupStatus,
-} from "./SimulationStartupOverlay";
+import { SimulationStartupOverlayView } from "./SimulationStartupOverlay";
+import { openSimulationPreparationDiagnostics, resolveSimulationStartupOverlayState, shouldRefreshSimulationStartupStatus } from "./SimulationStartupOverlay.model";
 import {
   resolveSimulationPreparationViewModel,
   serializeSimulationPreparationDiagnostics,

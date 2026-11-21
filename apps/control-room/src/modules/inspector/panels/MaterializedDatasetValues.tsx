@@ -24,7 +24,7 @@ export function MaterializedDatasetValues({ dataset }: { dataset: MaterializedDa
 function ValuesPage({ dataset, pageSize, total }: {
   dataset: MaterializedDatasetResource; pageSize: bigint; total: bigint;
 }) {
-  const [offset, setOffset] = useState(BigInt(0));
+  const [offset, setOffset] = useState(() => BigInt(0));
   const [component, setComponent] = useState(0);
   const count = total - offset < pageSize ? total - offset : pageSize;
   const range = useMemo(() => ({

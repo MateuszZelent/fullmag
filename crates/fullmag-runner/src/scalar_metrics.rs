@@ -216,28 +216,6 @@ pub(crate) fn weighted_average_m_from_object_scalars(
 }
 
 #[cfg_attr(not(feature = "fem-gpu"), allow(dead_code))]
-pub(crate) fn set_object_average_m(
-    per_object: &mut HashMap<String, HashMap<String, f64>>,
-    object_id: &str,
-    magnetization: &[[f64; 3]],
-    start: usize,
-    count: usize,
-) {
-    if count == 0 || start >= magnetization.len() {
-        return;
-    }
-    let end = start.saturating_add(count).min(magnetization.len());
-    if end <= start {
-        return;
-    }
-    let [mx, my, mz] = average_magnetization_components(&magnetization[start..end]);
-    let entry = per_object.entry(object_id.to_string()).or_default();
-    entry.insert("mx".to_string(), mx);
-    entry.insert("my".to_string(), my);
-    entry.insert("mz".to_string(), mz);
-}
-
-#[cfg_attr(not(feature = "fem-gpu"), allow(dead_code))]
 fn normalized_weights(weights: &[(String, f64)]) -> Vec<(String, f64)> {
     let mut filtered = Vec::new();
     for (name, weight) in weights {

@@ -1368,6 +1368,7 @@ function useHysteresisChartView({
 
   const elementRef = useRef<HTMLDivElement | null>(null);
   const chartRef = useRef<ECharts | null>(null);
+  const [chartError, setChartError] = useState<string | null>(null);
   const subscribeToSelection = useCallback(
     (onStoreChange: () => void) => kernel.selection.subscribe(onStoreChange),
     [kernel.selection],
@@ -1584,6 +1585,8 @@ function useHysteresisChartView({
       if (latestOptionRef.current) {
         chart.setOption(latestOptionRef.current, HYSTERESIS_CHART_SET_OPTION_OPTS);
       }
+    }).catch((error: unknown) => {
+      if (!disposed) setChartError(error instanceof Error ? error.message : String(error));
     });
 
     const resizeObserver = new ResizeObserver(() => {
@@ -1650,6 +1653,7 @@ function useHysteresisChartView({
       <div className="fm-hysteresis-controls">
         <div className="fm-hysteresis-control-group">
           <select
+            aria-label="Magnetization component"
             className="fm-analysis-plots__select"
             value={yAxisKey}
             onChange={(e) => setYAxisKey(e.target.value as YAxisKey)}
@@ -1663,6 +1667,7 @@ function useHysteresisChartView({
           </select>
 
           <select
+            aria-label="Field units"
             className="fm-analysis-plots__select"
             value={xAxisUnit}
             onChange={(e) => setXAxisUnit(e.target.value as XAxisUnit)}
@@ -1672,6 +1677,7 @@ function useHysteresisChartView({
           </select>
 
           <select
+            aria-label="Hysteresis view"
             className="fm-analysis-plots__select"
             value={viewMode}
             onChange={(e) => {
@@ -1790,6 +1796,7 @@ function useHysteresisChartView({
         </div>
       </div>
 
+      {chartError ? <p role="status">Could not initialize the chart: {chartError}</p> : null}
       <div
         ref={elementRef}
         className="fm-hysteresis-chart-canvas"

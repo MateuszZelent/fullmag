@@ -815,10 +815,10 @@ mod source_contract_tests {
     }
 
     #[test]
-    fn both_api_binary_roots_register_the_fem_modules() {
+    fn shared_api_and_worker_test_roots_register_the_fem_modules() {
         for source in [
             include_str!("main.rs"),
-            include_str!("accepted_worker_main.rs"),
+            include_str!("test_roots/accepted_worker.rs"),
         ] {
             assert!(source.contains("mod accepted_fem_state;"));
             assert!(source.contains("mod accepted_fem_gpu_state;"));

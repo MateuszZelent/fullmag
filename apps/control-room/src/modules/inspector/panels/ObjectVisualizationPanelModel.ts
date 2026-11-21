@@ -2229,34 +2229,22 @@ export function visualizationQuantityItems(
   quantityCatalog?: QuantityCatalogResource | null,
   targetAvailability?: ReadonlyMap<string, TargetFieldAvailability>,
 ): Array<{ disabled?: boolean; label: string; value: string }> {
-  const capabilityItems = quantityCatalog
-    ? quantityCatalog.quantities
-        .filter(
-          targetKind === "airbox"
-            ? quantityCatalogEntrySupportsAnyAirboxVisualization
-            : quantityCatalogEntrySupportsAnySpatialVisualization,
-        )
-        .map((quantity) =>
-          quantityCatalogPickerItem(quantity, quantity.label || quantity.id),
-        )
-    : [];
-  const fieldItems = fieldCatalog
-    ? fieldCatalog.quantities
-        .filter(
-          (quantity) =>
-            fieldCatalogQuantitySupportsSpatialVisualization(quantity) &&
-            (targetKind !== "airbox" || quantity.domain === "full_domain"),
-        )
-        .map((quantity) => {
-          const canonicalQuantityId = resolveCanonicalQuantityId(
-            quantity.quantity_id,
-          );
-          return {
-            label: quantity.label || canonicalQuantityId,
-            value: quantity.quantity_id,
-          };
-        })
-    : [];
+  const supportsTarget = targetKind === "airbox"
+    ? quantityCatalogEntrySupportsAnyAirboxVisualization
+    : quantityCatalogEntrySupportsAnySpatialVisualization;
+  const capabilityItems = quantityCatalog?.quantities.flatMap((quantity) =>
+    supportsTarget(quantity)
+      ? [quantityCatalogPickerItem(quantity, quantity.label || quantity.id)]
+      : [],
+  ) ?? [];
+  const fieldItems = fieldCatalog?.quantities.flatMap((quantity) => {
+    if (!fieldCatalogQuantitySupportsSpatialVisualization(quantity)) return [];
+    if (targetKind === "airbox" && quantity.domain !== "full_domain") return [];
+    return [{
+      label: quantity.label || resolveCanonicalQuantityId(quantity.quantity_id),
+      value: quantity.quantity_id,
+    }];
+  }) ?? [];
   const baseItems = quantityCatalog
     ? mergeVisualizationQuantityItems<{ disabled?: boolean; label: string; value: string }>(
         mergeVisualizationQuantityItems(capabilityItems, fieldItems),
@@ -2356,16 +2344,12 @@ export function visualizationQuantitySelectionState({ activeQuantityId, items, l
 function pendingAirboxQuantityItems(
   quantityCatalog: QuantityCatalogResource,
 ): Array<{ disabled: true; label: string; value: string }> {
-  return quantityCatalog.quantities
-    .filter(
-      (quantity) =>
-        quantity.domain === "full_domain" &&
-        (quantity.shape === "vector_field" || quantity.shape === "spatial_scalar") &&
-        quantity.interactive_preview &&
-        !quantityCatalogEntrySupportsAirbox(quantity),
-    )
-    .map((quantity) => ({
-      disabled: true,
+  return quantityCatalog.quantities.flatMap((quantity) => {
+    const spatial = quantity.shape === "vector_field" || quantity.shape === "spatial_scalar";
+    if (quantity.domain !== "full_domain" || !spatial || !quantity.interactive_preview ||
+        quantityCatalogEntrySupportsAirbox(quantity)) return [];
+    return [{
+      disabled: true as const,
       // A term the study does not contain (no external field, say) never
       // becomes available; anything else is still waiting for the solver.
       label: `${quantity.label || quantity.id} (${
@@ -2374,7 +2358,8 @@ function pendingAirboxQuantityItems(
           : "not available yet"
       })`,
       value: quantity.id,
-    }));
+    }];
+  });
 }
 
 function mergeVisualizationQuantityItems<

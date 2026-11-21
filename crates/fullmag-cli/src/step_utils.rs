@@ -46,6 +46,7 @@ pub(crate) struct ScriptOutputPaths {
     pub(crate) is_sibling_zarr_bundle: bool,
 }
 
+#[cfg(test)]
 pub(crate) fn resolve_script_output_paths(
     script_path: &Path,
     explicit_output_dir: Option<&Path>,
@@ -84,6 +85,7 @@ pub(crate) fn initialize_zarr_group(path: &Path, attributes: serde_json::Value) 
     Ok(())
 }
 
+#[cfg(test)]
 pub(crate) fn initialize_script_result_bundle(
     paths: &ScriptOutputPaths,
     script_path: &Path,
@@ -110,6 +112,7 @@ pub(crate) fn initialize_script_result_bundle(
     Ok(())
 }
 
+#[cfg(test)]
 pub(crate) fn replace_and_initialize_script_result_bundle(
     paths: &ScriptOutputPaths,
     script_path: &Path,

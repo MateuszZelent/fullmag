@@ -124,13 +124,13 @@ function PlanGroup({ children, title }: { children: React.ReactNode; title: stri
   return (
     <section className="fm-sampling-plan__group">
       <h5>{title}</h5>
-      <div className="fm-sampling-plan__metrics" role="list" aria-label={`${title} sampling parameters`}>
+      <ul className="fm-sampling-plan__metrics" aria-label={`${title} sampling parameters`}>
         {children}
-      </div>
+      </ul>
     </section>
   );
 }
 
 function Metric({ label, value }: { label: string; value: string }) {
-  return <span role="listitem"><small>{label}</small><strong>{value}</strong></span>;
+  return <li><small>{label}</small><strong>{value}</strong></li>;
 }

@@ -441,6 +441,7 @@ fn ordered_target_digest(positions: &[[f64; 3]]) -> String {
     format!("{:x}", hash.finalize())
 }
 impl SurfaceRt0EvidenceV1 {
+    #[cfg(any(feature = "fem-gpu", test))]
     pub(crate) fn new(
         snapshot: SurfaceRt0Snapshot,
         signed_normalization_a: f64,

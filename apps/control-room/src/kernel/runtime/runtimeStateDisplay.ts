@@ -108,12 +108,6 @@ export function resolveRuntimeUserSolvePhase({
   return null;
 }
 
-export function isRuntimeAwaitingUserSolve(
-  source: RuntimeUserSolvePhaseSource,
-): boolean {
-  return resolveRuntimeUserSolvePhase(source) === "awaiting_user_solve";
-}
-
 export function formatRuntimeUserSolvePhaseLabel(
   phase: RuntimeUserSolvePhase,
 ): string {
