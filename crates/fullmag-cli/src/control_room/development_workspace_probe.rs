@@ -19,8 +19,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 use super::{
-    api_port, configure_child_process, emit_development_restart_probe_progress,
-    emit_owner_probe_process_started, init_api_port, repo_root, runtime_state_root,
+    api_port, configure_child_process, emit_owner_probe_process_started, init_api_port, repo_root,
+    runtime_state_root,
     BootstrapProcessGuard, ChildProcess, ControlRoomGuard,
 };
 use crate::{

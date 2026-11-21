@@ -360,9 +360,9 @@ export function ObjectGeneralPanel({ selection }: InspectorPanelProps) {
   const primitiveColorAssignments = useMemo(
     () =>
       createPrimitiveSurfaceColorAssignments(
-        scene.data?.objects
-          ?.filter((entry) => isFerromagneticPrimitiveRole(entry.role))
-          .map((entry) => entry.id) ?? [],
+        scene.data?.objects?.flatMap((entry) =>
+          isFerromagneticPrimitiveRole(entry.role) ? [entry.id] : [],
+        ) ?? [],
       ),
     [scene.data?.objects],
   );

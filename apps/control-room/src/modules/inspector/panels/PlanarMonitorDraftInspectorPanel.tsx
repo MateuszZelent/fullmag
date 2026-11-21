@@ -23,10 +23,8 @@ import { Button } from "@/shared/ui/Button";
 
 import { useRegisterInspectorEditSession } from "../InspectorEditSession";
 import { MeshResourceEmpty } from "./MeshResourceView";
-import {
-  PlanarMonitorDefinitionEditor,
-  planarMonitorDefinitionAvailabilityErrors,
-} from "./PlanarMonitorDefinitionEditor";
+import { PlanarMonitorDefinitionEditor } from "./PlanarMonitorDefinitionEditor";
+import { planarMonitorDefinitionAvailabilityErrors } from "./PlanarMonitorDefinitionEditor.model";
 import { usePlanarMonitorDefinitionAvailability } from "./usePlanarMonitorDefinitionAvailability";
 
 export function PlanarMonitorDraftInspectorPanel() {

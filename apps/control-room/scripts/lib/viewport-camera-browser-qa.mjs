@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { visitSequentially } from "./visitSequentially.mjs";
 import {
   ensureViewportSettingsSection,
   getViewportCameraRegion,
@@ -124,11 +125,11 @@ export async function runViewportCameraBrowserQa(page, options = {}) {
       await setCameraDialogOpen(page, cameraDialog, false, timeout);
       const originalSurfacePasses = await readSurfacePasses(page, timeout);
       try {
-        for (const pose of [
+        await visitSequentially([
           { name: "ring-close-oblique", position: [1.6710714031932422e-7, -6.101199092239823e-7, 2.0428454917790962e-7], target: [0, 0, 1.55e-7], projection: "perspective" },
           { name: "ring-close-front", position: [6e-7, 0, 1.608e-7], target: [0, 0, 1.608e-7], projection: "perspective" },
           { name: "ring-close-ortho", position: [6e-7, 0, 1.608e-7], target: [0, 0, 1.608e-7], projection: "orthographic" },
-        ]) {
+        ], async (pose) => {
           await setCameraDialogOpen(page, cameraDialog, true, timeout);
           await fillVector(cameraDialog, "Position (m)", pose.position);
           await fillVector(cameraDialog, "Target (m)", pose.target);
@@ -138,7 +139,7 @@ export async function runViewportCameraBrowserQa(page, options = {}) {
           mutationStarted = true;
           await cameraDialog.getByRole("button", { exact: true, name: "Apply" }).click({ timeout });
           await waitForCamera(page, viewport, pose, timeout);
-          for (const mode of ["Shaded surface", "Shaded + wireframe", "Wireframe"]) {
+          await visitSequentially(["Shaded surface", "Shaded + wireframe", "Wireframe"], async (mode) => {
             await setCameraDialogOpen(page, cameraDialog, false, timeout);
             await setSurfaceRenderMode(page, mode, timeout);
             const capture = await captureCanvas(page, {
@@ -160,8 +161,8 @@ export async function runViewportCameraBrowserQa(page, options = {}) {
             // This fixed fixture has a red CoFeB ring. HUD axes alone must not
             // qualify a blank canvas after a topology resource failure.
             if (mode !== "Wireframe") assertRingSurfacePixels(capture);
-          }
-        }
+          });
+        });
       } finally {
         await setCameraDialogOpen(page, cameraDialog, false, timeout);
         await restoreSurfacePasses(page, originalSurfacePasses, timeout);
@@ -184,7 +185,7 @@ export async function runViewportCameraBrowserQa(page, options = {}) {
     await setCameraDialogOpen(page, cameraDialog, true, timeout);
     await restoreCamera(page, cameraDialog, originalCamera, originalDialogValues, timeout);
 
-    for (let toggleIndex = 0; toggleIndex < 2; toggleIndex += 1) {
+    await visitSequentially([0, 1], async () => {
       const before = await readCamera(viewport);
       const expectedProjection = before.projection === "perspective"
         ? "orthographic"
@@ -214,9 +215,9 @@ export async function runViewportCameraBrowserQa(page, options = {}) {
         snapshots,
         embedPng: false,
       }));
-    }
+    });
 
-    for (const fovDegrees of [35, 70]) {
+    await visitSequentially([35, 70], async (fovDegrees) => {
       await setCameraDialogOpen(page, cameraDialog, true, timeout);
       await fillVector(cameraDialog, "Position (m)", originalCamera.position);
       await fillVector(cameraDialog, "Target (m)", originalCamera.target);
@@ -238,7 +239,7 @@ export async function runViewportCameraBrowserQa(page, options = {}) {
       assertCameraFinite(fitted, `Fit at FOV ${fovDegrees}`);
       await assertCanvas(`Fit at FOV ${fovDegrees}`);
       fovChecks.push({ fov_degrees: fovDegrees, camera_before_fit: actual, camera_after_fit: fitted });
-    }
+    });
     const narrowFov = snapshots.get("fov-35");
     const wideFov = snapshots.get("fov-70");
     if (!narrowFov?.pixels || !wideFov?.pixels ||
@@ -263,7 +264,7 @@ export async function runViewportCameraBrowserQa(page, options = {}) {
       throw new Error("Initial camera position and target do not define a usable radius");
     }
 
-    for (const pose of CAMERA_POSES) {
+    await visitSequentially(CAMERA_POSES, async (pose) => {
       const direction = normalize(pose.direction);
       const position = target.map((value, index) => value + radius * direction[index]);
       await setCameraDialogOpen(page, cameraDialog, true, timeout);
@@ -300,7 +301,7 @@ export async function runViewportCameraBrowserQa(page, options = {}) {
         capture: capture.name,
         view_cube_interaction: "NOT VERIFIED",
       });
-    }
+    });
 
     const beforeFit = await readCamera(viewport);
     await setCameraDialogOpen(page, cameraDialog, false, timeout);
@@ -463,9 +464,9 @@ async function readSurfacePasses(page, timeout) {
   try {
     const mode = (await page.locator('[role="menuitemradio"][aria-checked="true"]').innerText()).trim();
     const passes = {};
-    for (const name of SURFACE_PASS_LABELS) {
+    await visitSequentially(SURFACE_PASS_LABELS, async (name) => {
       passes[name] = await page.getByRole("menuitemcheckbox", { name, exact: true }).getAttribute("aria-checked") === "true";
-    }
+    });
     return { mode, passes };
   } finally {
     await page.keyboard.press("Escape");
@@ -487,13 +488,13 @@ async function restoreSurfacePasses(page, original, timeout) {
   await setSurfaceRenderMode(page, original.mode, timeout);
   await openSurfaceMenu(page, timeout);
   try {
-    for (const [name, checked] of Object.entries(original.passes)) {
+    await visitSequentially(Object.entries(original.passes), async ([name, checked]) => {
       const control = page.getByRole("menuitemcheckbox", { name, exact: true });
       if ((await control.getAttribute("aria-checked") === "true") !== checked) {
         await control.click({ timeout });
       }
       await page.getByRole("menuitemcheckbox", { name, exact: true, checked }).waitFor({ state: "visible", timeout });
-    }
+    });
   } finally {
     await page.keyboard.press("Escape");
   }
@@ -652,7 +653,7 @@ async function exercisePointerGestures(page, { viewport, canvas, assertCanvas, t
   await page.mouse.move(rect.x + rect.width * 0.25, rect.y + rect.height * 0.45);
   await page.mouse.down();
   try {
-    for (const fraction of [0.32, 0.39, 0.46, 0.53, 0.60]) {
+    await visitSequentially([0.32, 0.39, 0.46, 0.53, 0.60], async (fraction) => {
       await page.mouse.move(rect.x + rect.width * fraction, rect.y + rect.height * 0.45, { steps: 4 });
       await page.waitForTimeout(32);
       const sample = await page.evaluate(() => {
@@ -673,7 +674,7 @@ async function exercisePointerGestures(page, { viewport, canvas, assertCanvas, t
         throw new Error("Orbit pointer gesture unexpectedly changed its distance");
       }
       samples.push(sample);
-    }
+    });
   } finally {
     await page.mouse.up();
   }
@@ -802,9 +803,9 @@ async function fillVector(cameraRegion, legend, values) {
   if (await fieldset.count() !== 1 || await inputs.count() !== 3) {
     throw new Error(`Camera controls do not expose exactly three ${legend} inputs`);
   }
-  for (let index = 0; index < 3; index += 1) {
+  await visitSequentially([0, 1, 2], async (index) => {
     await inputs.nth(index).fill(formatInputNumber(values[index]));
-  }
+  });
 }
 
 function getScalarInput(cameraRegion, label) {

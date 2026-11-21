@@ -48,7 +48,7 @@ describe("DiagnosticRecorderDialog", () => {
 
   it("marks live diagnostic timestamp cells as intentionally hydration-variant", () => {
     const suppressedTimestampCells = source.match(
-      /<span role="cell" suppressHydrationWarning>/g,
+      /<td\s+suppressHydrationWarning>/g,
     );
 
     expect(suppressedTimestampCells).toHaveLength(2);

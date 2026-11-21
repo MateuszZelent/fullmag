@@ -360,33 +360,33 @@ function executionSummary(
 
 function buildPreparationRow(preparation: SimulationPreparationResource | null): RunStepRow | null {
   if (!preparation) return null;
-  const children: RunStepRow[] = preparation.stages
-    .filter((stage) => stage.id !== "ready")
-    .map((stage) => {
-      const state = normalizeRunStepState(stage.status);
-      const startedAtMs = finite(stage.started_at_unix_ms);
-      const endedAtMs = finite(stage.completed_at_unix_ms);
-      return {
-        children: [],
-        durationMs: finite(stage.duration_ms) ??
-          (startedAtMs !== null && endedAtMs !== null ? Math.max(0, endedAtMs - startedAtMs) : null),
-        endedAtMs,
-        id: `preparation:${stage.id}`,
-        kind: "substep" as const,
-        message: state === "failed" && preparation.failure?.stage_id === stage.id
-          ? preparation.failure.summary
-          : null,
-        messageTone: state === "failed" ? "danger" as const : "neutral" as const,
-        metric: null,
-        ordinal: null,
-        percent: state === "completed" || state === "skipped" ? 100 : clampPercent(stage.progress_percent),
-        progressLabel: text(stage.progress_label),
-        startedAtMs,
-        state,
-        subtitle: state === "active" ? readableDetail(stage.detail) : null,
-        title: stage.label,
-      };
+  const children: RunStepRow[] = [];
+  for (const stage of preparation.stages) {
+    if (stage.id === "ready") continue;
+    const state = normalizeRunStepState(stage.status);
+    const startedAtMs = finite(stage.started_at_unix_ms);
+    const endedAtMs = finite(stage.completed_at_unix_ms);
+    children.push({
+      children: [],
+      durationMs: finite(stage.duration_ms) ??
+        (startedAtMs !== null && endedAtMs !== null ? Math.max(0, endedAtMs - startedAtMs) : null),
+      endedAtMs,
+      id: `preparation:${stage.id}`,
+      kind: "substep" as const,
+      message: state === "failed" && preparation.failure?.stage_id === stage.id
+        ? preparation.failure.summary
+        : null,
+      messageTone: state === "failed" ? "danger" as const : "neutral" as const,
+      metric: null,
+      ordinal: null,
+      percent: state === "completed" || state === "skipped" ? 100 : clampPercent(stage.progress_percent),
+      progressLabel: text(stage.progress_label),
+      startedAtMs,
+      state,
+      subtitle: state === "active" ? readableDetail(stage.detail) : null,
+      title: stage.label,
     });
+  }
   const state = preparationState(preparation.status);
   const settled = children.filter((child) => child.state === "completed" || child.state === "skipped").length;
   const active = children.find((child) => child.state === "active");

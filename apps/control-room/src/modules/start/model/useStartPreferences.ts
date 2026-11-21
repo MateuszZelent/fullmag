@@ -33,28 +33,29 @@ export function useStartPreferences(): StartPreferencesController {
   useEffect(() => {
     alive.current = true;
     const controller = new AbortController();
-    void (async () => {
-      try {
-        const [telemetry, update] = await Promise.all([
-          api.workspace.setting(TELEMETRY_SETTING_KEY, { signal: controller.signal }),
-          api.workspace.setting(UPDATE_SETTING_KEY, { signal: controller.signal }),
-        ]);
-        if (!alive.current) return;
-        setState({
-          kind: "ready",
-          telemetryEnabled: telemetryEnabledOf(parseSettingAnswer(telemetry)),
-          update: updateNoticeOf(parseSettingAnswer(update)),
-        });
-      } catch (error) {
-        if (!alive.current || controller.signal.aborted) return;
-        setState({
-          kind: "unavailable",
-          reason: isRouteMissing(error)
-            ? WORKSPACE_SETTINGS_UNAVAILABLE
-            : `Could not read the settings: ${error instanceof Error ? error.message : String(error)}`,
-        });
-      }
-    })();
+    const { signal } = controller;
+    void Promise.resolve().then(() => {
+      signal.throwIfAborted();
+      return Promise.all([
+        api.workspace.setting(TELEMETRY_SETTING_KEY, { signal }),
+        api.workspace.setting(UPDATE_SETTING_KEY, { signal }),
+      ]);
+    }).then(([telemetry, update]) => {
+      if (controller.signal.aborted) return;
+      setState({
+        kind: "ready",
+        telemetryEnabled: telemetryEnabledOf(parseSettingAnswer(telemetry)),
+        update: updateNoticeOf(parseSettingAnswer(update)),
+      });
+    }).catch((error: unknown) => {
+      if (controller.signal.aborted) return;
+      setState({
+        kind: "unavailable",
+        reason: isRouteMissing(error)
+          ? WORKSPACE_SETTINGS_UNAVAILABLE
+          : `Could not read the settings: ${error instanceof Error ? error.message : String(error)}`,
+      });
+    });
     return () => {
       alive.current = false;
       controller.abort();

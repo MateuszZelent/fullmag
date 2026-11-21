@@ -5,9 +5,9 @@ use fullmag_ir::{
     StageCompletionIR,
 };
 use crate::observation::ObservationClock;
-pub use fullmag_quantities::{
-    FemMaterialFieldLocation, FemRepresentationReceipt, FemStateRepresentation,
-};
+pub use fullmag_quantities::FemRepresentationReceipt;
+#[cfg(any(feature = "fem-native", feature = "fem-gpu"))]
+pub use fullmag_quantities::{FemMaterialFieldLocation, FemStateRepresentation};
 use serde::{de::Error as DeError, Deserialize, Deserializer, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
@@ -1285,8 +1285,9 @@ mod all_in_gpu_fem_transfer_audit_tests {
     use super::{
         CpuFixedCouplingTelemetry, CpuFixedTransferDiagnostics,
         ExecutionProvenance, FdmMultilayerStageTelemetry, FdmMultilayerTransferTelemetry,
-        FemMaterialFieldLocation, FemRepresentationReceipt, FemStateRepresentation, StepStats,
+        FemRepresentationReceipt, StepStats,
     };
+    use fullmag_quantities::{FemMaterialFieldLocation, FemStateRepresentation};
 
     #[test]
     fn step_stats_carry_hot_loop_transfer_audit() {

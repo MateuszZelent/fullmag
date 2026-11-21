@@ -6,7 +6,7 @@ import { Button } from "@/shared/ui/Button";
 
 import { SectionHeader } from "../ui/SectionHeader";
 import { StatusPill } from "../ui/StatusPill";
-import { sessionPillStatus } from "./ActiveSessions";
+import { sessionPillStatus } from "./ActiveSessions.model";
 
 export interface OtherInstance {
   /** Control Room port of the instance; its origin also serves its API. */

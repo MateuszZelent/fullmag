@@ -1,7 +1,7 @@
 "use client";
 
 import { ExternalLink, Search } from "lucide-react";
-import { useCallback, useEffect, useRef, useState, useSyncExternalStore, type FormEvent } from "react";
+import { useCallback, useEffect, useEffectEvent, useRef, useState, useSyncExternalStore, type FormEvent } from "react";
 
 import {
   EMBED_FALLBACK_CSS,
@@ -161,19 +161,19 @@ export function DocsSection() {
     frameRef.current?.contentWindow?.postMessage(themeMessage(theme), window.location.origin);
   }, [applyNavigatedPath, theme]);
 
+  const handleDocsMessage = useEffectEvent((event: MessageEvent) => {
+    // Accept messages only from the same-origin documentation frame we own.
+    if (event.origin !== window.location.origin || event.source !== frameRef.current?.contentWindow) return;
+    const message = parseDocsMessage(event.data);
+    if (!message) return;
+    if (message.type === "ready") sendTheme();
+    else applyNavigatedPath(message.path);
+  });
   useEffect(() => {
-    const onMessage = (event: MessageEvent) => {
-      // Only the frame this component owns, on this origin, is listened to.
-      if (event.origin !== window.location.origin) return;
-      if (event.source !== frameRef.current?.contentWindow) return;
-      const message = parseDocsMessage(event.data);
-      if (!message) return;
-      if (message.type === "ready") sendTheme();
-      else applyNavigatedPath(message.path);
-    };
+    const onMessage = (event: MessageEvent) => handleDocsMessage(event);
     window.addEventListener("message", onMessage);
     return () => window.removeEventListener("message", onMessage);
-  }, [applyNavigatedPath, sendTheme]);
+  }, []);
 
   // A theme change after the page is up reaches it without a reload.
   useEffect(() => {

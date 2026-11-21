@@ -14,6 +14,7 @@ import {
 import { useKernel } from "../KernelContext";
 import { useLayoutSelector } from "./useLayout";
 import type { ModuleConfig, ModuleManifest, ModuleProps, SlotId } from "../types";
+import { resolveSlotModuleManifest } from "./SlotHost.model";
 
 interface SlotHostProps {
   slotId: SlotId;
@@ -21,15 +22,6 @@ interface SlotHostProps {
   moduleManifest?: ModuleManifest | null;
   /** Stable fallback for a lazy module while its client chunk is loading. */
   loadingFallback?: ReactNode;
-}
-
-export function resolveSlotModuleManifest(
-  registered: readonly ModuleManifest[],
-  activeModuleTab: string,
-): ModuleManifest | null {
-  return registered.find((candidate) => candidate.activationTab === activeModuleTab) ??
-    registered[0] ??
-    null;
 }
 
 /**

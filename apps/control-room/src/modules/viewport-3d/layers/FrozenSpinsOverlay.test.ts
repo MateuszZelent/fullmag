@@ -1,11 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { Viewport3DResourceTracker } from "../viewport3dDiagnostics";
-import {
-  buildFrozenSpinsOverlayModel,
-  buildFrozenSpinsOverlayModelFromField,
-  createFrozenSpinsOverlayResources,
-} from "./FrozenSpinsOverlay";
+import { buildFrozenSpinsOverlayModel, buildFrozenSpinsOverlayModelFromField, createFrozenSpinsOverlayResources } from "./FrozenSpinsOverlay.model";
 
 describe("buildFrozenSpinsOverlayModel", () => {
   const mask = {

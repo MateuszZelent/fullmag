@@ -502,12 +502,14 @@ export function useAntennaInspectionDisplayPayloadResource(
           descriptor.byte_count > 64 * 1024 * 1024) {
         throw new Error("antenna display payload exceeds its complete bounded transport contract");
       }
-      const expectedEtag = await antennaInspectionPayloadEtag(inspection, payloadKind, descriptor.sha256);
-      const result = await api.data.antenna.externalLeadInspectionPayload(
-        display.runtime_stage_id, payloadKind as AntennaInspectionPayloadKind, display.content_digest,
-        { signal, sessionScopeKey, range: options.range,
-          maxResponseBytes: Math.min(options.maxResponseBytes ?? descriptor.byte_count, descriptor.byte_count) },
-      );
+      const [expectedEtag, result] = await Promise.all([
+        antennaInspectionPayloadEtag(inspection, payloadKind, descriptor.sha256),
+        api.data.antenna.externalLeadInspectionPayload(
+          display.runtime_stage_id, payloadKind as AntennaInspectionPayloadKind, display.content_digest,
+          { signal, sessionScopeKey, range: options.range,
+            maxResponseBytes: Math.min(options.maxResponseBytes ?? descriptor.byte_count, descriptor.byte_count) },
+        ),
+      ]);
       const pinned = requireMatchingAntennaPayloadRevision(result, expectedEtag);
       const complete = !options.range || options.range === `bytes=0-${descriptor.byte_count - 1}`;
       if (pinned?.status === "ready" && complete) {
@@ -557,10 +559,13 @@ export function useAntennaExternalLeadInspectionPayloadResource(
       if (!inspection || !ownerMatches || !hasPayload || !stageId || !payloadKind || !contentDigest) return null;
       const descriptor = closed ? closed.payloads[payloadKind as ClosedLoopPayloadKind] : inspection.manifest?.[payloadKind as AntennaInspectionManifestPayloadKind];
       if (!descriptor) throw new Error("antenna inspection has no selected payload descriptor");
-      const expectedEtag = await antennaInspectionPayloadEtag(inspection, payloadKind, descriptor.sha256);
-      const result = await api.data.antenna.externalLeadInspectionPayload(
-        stageId, payloadKind as AntennaInspectionPayloadKind, contentDigest, { signal, sessionScopeKey, range: options.range, maxResponseBytes: options.maxResponseBytes },
-      );
+      const [expectedEtag, result] = await Promise.all([
+        antennaInspectionPayloadEtag(inspection, payloadKind, descriptor.sha256),
+        api.data.antenna.externalLeadInspectionPayload(
+          stageId, payloadKind as AntennaInspectionPayloadKind, contentDigest,
+          { signal, sessionScopeKey, range: options.range, maxResponseBytes: options.maxResponseBytes },
+        ),
+      ]);
       return requireMatchingAntennaPayloadRevision(result, expectedEtag);
     },
     [api, closed, contentDigest, hasPayload, inspection, options.maxResponseBytes, options.range, ownerMatches, payloadKind, stageId],

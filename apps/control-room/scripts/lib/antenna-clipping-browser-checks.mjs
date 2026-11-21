@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { visitSequentially } from "./visitSequentially.mjs";
 
 /** Shared production section command, sync controller and renderer; synthetic SI data only. */
 export async function verifyAntennaClipping({ page, root, open, shot }) {
@@ -16,10 +17,10 @@ export async function verifyAntennaClipping({ page, root, open, shot }) {
     await page.getByRole("option", { name: label, exact: true }).click();
     const surface = root.getByRole("button", { name: "Toggle Surface", exact: true });
     if (await surface.getAttribute("aria-pressed") !== "true") await surface.click();
-    for (const layer of ["Points", "Vectors"]) {
+    await visitSequentially(["Points", "Vectors"], async (layer) => {
       const toggle = root.getByRole("button", { name: `Toggle ${layer}`, exact: true });
       if (await toggle.isEnabled() && await toggle.getAttribute("aria-pressed") === "true") await toggle.click();
-    }
+    });
     await page.waitForFunction(q => window.__antennaFieldCanvas?.().quantity === q && window.__antennaFieldCanvas().surfaceTriangles === 4, quantity);
     await root.getByRole("button", { name: /Clipping & Section/ }).click();
     await page.waitForFunction(() => document.querySelector('button[aria-label="Section enabled"]')?.matches(":enabled"));

@@ -5,12 +5,7 @@ import { useEffect, useMemo, useReducer, useRef } from "react";
 import { createCommandContext } from "@/kernel/commands/commandContext";
 import { resumeMeshBuildObservation } from "@/kernel/authoring/geometryLifecycleCommandContributions";
 import { initialMeshBuildDialogState, meshBuildDialogReducer } from "./mesh-build/meshBuildDialogState";
-import {
-  FDM_MESH_COMMAND_NOT_APPLICABLE_REASON,
-  UNKNOWN_MESH_COMMAND_LANE_REASON,
-  resolveMeshCommandLane,
-  type MeshCommandLane,
-} from "@/kernel/authoring/geometryLifecycleCommandContributions";
+import { FDM_MESH_COMMAND_NOT_APPLICABLE_REASON, UNKNOWN_MESH_COMMAND_LANE_REASON } from "@/kernel/authoring/geometryLifecycleCommandContributions";
 import {
   useSceneResource,
   useDomainMetaResource,
@@ -49,6 +44,7 @@ import {
   meshBuildDialogRuntimeStatusEquals,
   selectMeshBuildDialogRuntimeStatus,
 } from "./MeshBuildDialogRuntimeStatus";
+import { resolveMeshBuildDialogLane, shouldLoadMeshBuildDialogFemResources, meshBuildDialogUnavailableMessage } from "./MeshBuildDialog.model";
 
 function asRecord(value: unknown): JsonObject | null {
   return value && typeof value === "object" && !Array.isArray(value)
@@ -77,32 +73,13 @@ type MeshBuildDialogSnapshot = {
   };
 };
 
-export function resolveMeshBuildDialogLane(
-  discretization: unknown,
-): MeshCommandLane {
-  return resolveMeshCommandLane(discretization);
-}
-
-export function shouldLoadMeshBuildDialogFemResources(
-  open: boolean,
-  lane: MeshCommandLane,
-): boolean {
-  return open && lane === "fem";
-}
-
-export function meshBuildDialogUnavailableMessage(
-  lane: MeshCommandLane,
-  fdmGridRefreshReason?: string,
-): string | null {
-  if (lane === "fdm") {
-    return (
-      fdmGridRefreshReason ??
-      "FDM grid and membership masks are rebuilt by an atomic execution-plan replan. Use Mesh → Build Grid."
-    );
-  }
-  if (lane === "unknown") return UNKNOWN_MESH_COMMAND_LANE_REASON;
-  return null;
-}
+const tuple3 = (values: readonly number[] | null | undefined): [number, number, number] | null => {
+  if (!values || values.length < 3) return null;
+  const t = [values[0], values[1], values[2]];
+  return t.every((v) => typeof v === "number" && Number.isFinite(v))
+    ? (t as [number, number, number])
+    : null;
+};
 
 export function MeshBuildDialog({ kernel }: { kernel: KernelApi }) {
   const [state, dispatch] = useReducer(meshBuildDialogReducer, initialMeshBuildDialogState);
@@ -276,14 +253,6 @@ export function MeshBuildDialog({ kernel }: { kernel: KernelApi }) {
     draft: currentSnapshot?.requestedPolicy,
     scope: objectId ? "object" : "shared-domain",
   });
-
-  const tuple3 = (values: readonly number[] | null | undefined): [number, number, number] | null => {
-    if (!values || values.length < 3) return null;
-    const t = [values[0], values[1], values[2]];
-    return t.every((v) => typeof v === "number" && Number.isFinite(v))
-      ? (t as [number, number, number])
-      : null;
-  };
 
   const geometryBounds = useMemo(() => {
     const bounds = fdmDomain.data?.bounds;

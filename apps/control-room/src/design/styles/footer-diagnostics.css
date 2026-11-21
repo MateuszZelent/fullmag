@@ -57,6 +57,14 @@
   overflow: auto;
 }
 
+.fm-footer-diagnostics__log-table {
+  display: grid;
+}
+
+.fm-footer-diagnostics__log tbody {
+  display: contents;
+}
+
 .fm-footer-diagnostics__log-row {
   display: grid;
   grid-template-columns: var(--fm-footer-diag-label-col-width) var(--fm-footer-diag-value-col-width) minmax(0, 1fr);
@@ -213,6 +221,9 @@
 
 .fm-footer-diagnostics__trace-rows {
   display: grid;
+  margin: 0;
+  padding: 0;
+  list-style: none;
   min-width: 0;
   gap: 1px;
 }
@@ -277,6 +288,7 @@
 }
 
 .fm-footer-diagnostics__profile-row > * {
+  text-align: start;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;

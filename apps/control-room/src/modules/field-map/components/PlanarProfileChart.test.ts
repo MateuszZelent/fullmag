@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import type { PlanarFieldProfileResource } from "@/kernel/api/apiTypes";
 
-import { planarProfileChartModel } from "./PlanarProfileChart";
+import { planarProfileChartModel } from "./PlanarProfileChart.model";
 
 function point(
   s_m: number,

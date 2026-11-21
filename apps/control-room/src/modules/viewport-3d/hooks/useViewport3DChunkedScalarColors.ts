@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useReducer, useRef } from "react";
+import { useEffect, useMemo, useRef, useSyncExternalStore } from "react";
 
 import { buildViewport3DFieldColorJobKey } from "../build-engine/viewport3dBuildJobKeys";
 import { buildVertexScalarColorsOffMainThread } from "../viewport3dColorTransformScheduler";
@@ -271,6 +271,24 @@ export function chunkedScalarColorReducer(
       };
     }
   }
+}
+
+function createChunkedScalarColorStateStore() {
+  let snapshot = CHUNKED_SCALAR_COLOR_INITIAL_STATE;
+  const listeners = new Set<() => void>();
+  return {
+    getSnapshot: () => snapshot,
+    subscribe(listener: () => void) {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    },
+    transition(action: ChunkedScalarColorAction) {
+      const next = chunkedScalarColorReducer(snapshot, action);
+      if (next === snapshot) return;
+      snapshot = next;
+      for (const listener of listeners) listener();
+    },
+  };
 }
 
 function sameChunkedScalarColorSettledBuild(
@@ -778,10 +796,16 @@ export function useViewport3DChunkedScalarColors({
   const combinedDisplayModesKey = requestedPartDisplayModesKey
     ? `${displayModesKey}||${requestedPartDisplayModesKey}`
     : displayModesKey;
-  const [chunkedColorState, dispatchChunkedColorState] = useReducer(
-    chunkedScalarColorReducer,
-    CHUNKED_SCALAR_COLOR_INITIAL_STATE,
+  const chunkedColorStateStore = useMemo(
+    () => createChunkedScalarColorStateStore(),
+    [],
   );
+  const chunkedColorState = useSyncExternalStore(
+    chunkedColorStateStore.subscribe,
+    chunkedColorStateStore.getSnapshot,
+    chunkedColorStateStore.getSnapshot,
+  );
+  const transitionChunkedColorState = chunkedColorStateStore.transition;
   const activeBuildIdRef = useRef(0);
   const activeControllerRef = useRef<AbortController | null>(null);
   const activeTokenRef = useRef<object | null>(null);
@@ -864,8 +888,8 @@ export function useViewport3DChunkedScalarColors({
     activeBuildIdRef.current += 1;
     activeControllerRef.current?.abort();
     activeControllerRef.current = null;
-    dispatchChunkedColorState({ type: "reset" });
-  }, [chunkedColorState.chunkedState, compatibilityRequest]);
+    transitionChunkedColorState({ type: "reset" });
+  }, [chunkedColorState.chunkedState, compatibilityRequest, transitionChunkedColorState]);
 
   useEffect(() => {
     const settledIdentity = {
@@ -899,7 +923,7 @@ export function useViewport3DChunkedScalarColors({
     activeControllerRef.current = controller;
     void Promise.resolve().then(() => {
       if (activeBuildIdRef.current === buildId) {
-        dispatchChunkedColorState({ type: "start" });
+        transitionChunkedColorState({ type: "start" });
       }
     });
 
@@ -948,7 +972,7 @@ export function useViewport3DChunkedScalarColors({
           retiredTokens.push(activeTokenRef.current);
         }
         activeTokenRef.current = token;
-        dispatchChunkedColorState({
+        transitionChunkedColorState({
           chunkedState: {
             buildKey: combinedModesKey,
             colorPalette,
@@ -1117,7 +1141,7 @@ export function useViewport3DChunkedScalarColors({
         if (builtAnyEntry) {
           publishEntries(false);
         } else {
-          dispatchChunkedColorState({
+          transitionChunkedColorState({
             settled: { ...settledIdentity, buildKey: combinedModesKey },
             type: "finish",
           });
@@ -1128,7 +1152,7 @@ export function useViewport3DChunkedScalarColors({
       }
     })().catch(() => {
       if (activeBuildIdRef.current === buildId) {
-        dispatchChunkedColorState({
+        transitionChunkedColorState({
           settled: { ...settledIdentity, buildKey: combinedModesKey },
           type: "finish",
         });
@@ -1147,6 +1171,7 @@ export function useViewport3DChunkedScalarColors({
     chunkedColorState.chunkedState?.fieldVector,
     chunkedColorState.pending,
     chunkedColorState.settled,
+    transitionChunkedColorState,
     buildDomainId,
     buildSessionId,
     buildIdentityFieldVector,

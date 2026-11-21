@@ -293,13 +293,17 @@ export function buildVisualizationDebugPanelModel({
     }
   }
   const exactDiagnostics = diagnostics
-    .filter(
-      (entry) =>
-        entry.resourceKey !== null &&
-        entry.resourceKey !== undefined &&
-        resourceKeys.has(entry.resourceKey),
+    .reduce<{ entry: RequestDiagnosticEntry; index: number }[]>(
+      (matches, entry, index) => {
+        if (
+          entry.resourceKey !== null &&
+          entry.resourceKey !== undefined &&
+          resourceKeys.has(entry.resourceKey)
+        ) matches.push({ entry, index });
+        return matches;
+      },
+      [],
     )
-    .map((entry, index) => ({ entry, index }))
     .sort(
       (left, right) =>
         right.entry.timestampMs - left.entry.timestampMs ||
@@ -329,9 +333,11 @@ export function buildVisualizationDebugPanelModel({
     return Object.freeze({
       carriers: Object.freeze(carriers),
       clientAcks: Object.freeze(
-        (clientAcks?.entries ?? [])
-          .filter((entry) => entry.viewport_id === viewportId)
-          .map((entry) => Object.freeze({ ...entry, scope: "viewport-wide" as const })),
+        (clientAcks?.entries ?? []).flatMap((entry) =>
+          entry.viewport_id === viewportId
+            ? [Object.freeze({ ...entry, scope: "viewport-wide" as const })]
+            : [],
+        ),
       ),
       snapshots: Object.freeze(group.snapshots),
       viewportId,
@@ -794,10 +800,11 @@ function buildCompositeHealth({
             ),
           );
         }
+        const cacheByteLength = carrier.cache.byteLength;
         if (
           observation.wireByteLength !== null &&
-          carrier.cache.byteLength !== null &&
-          observation.wireByteLength !== carrier.cache.byteLength
+          cacheByteLength !== null &&
+          observation.wireByteLength !== cacheByteLength
         ) {
           derivedIssues.push(
             issue(
@@ -807,7 +814,7 @@ function buildCompositeHealth({
               "Exact decoded transport and cache byte counts differ.",
               [
                 `wire=${observation.wireByteLength}`,
-                `cache=${carrier.cache.byteLength}`,
+                `cache=${cacheByteLength}`,
               ],
             ),
           );

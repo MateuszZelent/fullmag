@@ -1,5 +1,7 @@
 //! Signed closed-loop field publication. Raw inspection is not scientific qualification.
-use super::closed_loop_field_evidence::{ClosedLoopFieldEvidence, ClosedLoopFieldSnapshot};
+use super::closed_loop_field_evidence::ClosedLoopFieldEvidence;
+#[cfg(any(feature = "fem-gpu", test))]
+use super::closed_loop_field_evidence::ClosedLoopFieldSnapshot;
 use super::{AntennaFieldSolutionSignatures, AntennaSampleCarrier};
 use crate::types::{AuxiliaryArtifact, RunError};
 use serde::{Deserialize, Serialize};
@@ -70,6 +72,7 @@ pub(crate) struct ClosedLoopAcceptedSourceInputV2 {
     /// Exact serialized already-hashed authored input body from the admitted planner.
     pub authored_input_json: Vec<u8>,
 }
+#[cfg(any(feature = "fem-gpu", test))]
 #[derive(Debug, Clone)]
 pub(crate) struct ClosedLoopFieldSolutionInputV2 {
     pub asset_id: String,
@@ -157,12 +160,6 @@ pub(crate) fn normalization_scale(current: f64, absolute_flux: f64) -> Result<f6
         return Err(invalid("normalization_not_resolvable"));
     }
     Ok(scale)
-}
-/// No scientific receipt schema has been approved for this source family.
-pub(crate) fn require_qualified(_manifest: &[u8]) -> Result<(), RunError> {
-    Err(invalid(
-        "source_not_qualified: closed-loop v2 scientific receipt is not available",
-    ))
 }
 /// One framed identity shared by the live writer and cold reader.
 pub(crate) fn field_signature(
@@ -273,6 +270,7 @@ fn path_identifier(s: &str) -> Result<(), RunError> {
     }
     Ok(())
 }
+#[cfg(any(feature = "fem-gpu", test))]
 fn floats(values: impl IntoIterator<Item = f64>, scale: f64) -> Result<Vec<u8>, RunError> {
     let values = values.into_iter();
     let (minimum, _) = values.size_hint();
@@ -406,6 +404,7 @@ fn source_valid(s: &ClosedLoopAcceptedSourceInputV2) -> Result<(), RunError> {
     }
     Ok(())
 }
+#[cfg(any(feature = "fem-gpu", test))]
 fn insert_payload(
     m: &mut ManifestV2,
     artifacts: &mut Vec<AuxiliaryArtifact>,
@@ -437,6 +436,7 @@ fn copy_bytes(bytes: &[u8]) -> Result<Vec<u8>, RunError> {
     out.extend_from_slice(bytes);
     Ok(out)
 }
+#[cfg(any(feature = "fem-gpu", test))]
 fn records(s: &ClosedLoopAcceptedSourceInputV2) -> Result<(Vec<u8>, Vec<u8>, Vec<u8>), RunError> {
     let mut cells = Vec::new();
     let mut faces = Vec::new();
@@ -491,6 +491,7 @@ fn records(s: &ClosedLoopAcceptedSourceInputV2) -> Result<(Vec<u8>, Vec<u8>, Vec
     }
     Ok((cells, faces, weak))
 }
+#[cfg(any(feature = "fem-gpu", test))]
 pub(crate) fn build(
     input: &ClosedLoopFieldSolutionInputV2,
 ) -> Result<Vec<AuxiliaryArtifact>, RunError> {

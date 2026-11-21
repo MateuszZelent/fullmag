@@ -13,8 +13,8 @@ import {
 
 import { createViewport3DRenderAdoptionRegistry as createUnscopedViewport3DRenderAdoptionRegistry } from "../model/viewport3DRenderAdoptionRegistry";
 import { buildViewport3DTargetFieldBuffer } from "../model/viewport3DTargetFieldBuffer";
-import { recordFdmCuboidSurfaceAdoption } from "../layers/FdmCuboidLayer";
-import { recordMeshPartSurfaceAdoption } from "../layers/MeshPartLayer";
+import { recordFdmCuboidSurfaceAdoption } from "../layers/FdmCuboidLayer.model";
+import { recordMeshPartSurfaceAdoption } from "../layers/MeshPartLayer.model";
 import { resolveViewport3DScalarColorBufferKey } from "../viewport3dFieldMapping";
 import {
   createViewport3DVisualizationDebugPublisher,

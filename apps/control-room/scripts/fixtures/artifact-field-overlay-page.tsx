@@ -39,7 +39,8 @@ import { Viewport3DFieldLabel } from "@/modules/viewport-3d/Viewport3DFieldLabel
 import { useArtifactFieldOverlay } from "@/modules/viewport-3d/hooks/useArtifactFieldOverlay";
 import { artifactRenderedSurfaceRanges } from "@/modules/viewport-3d/model/artifactFieldOverlayModel";
 import { viewport3dStore } from "@/modules/viewport-3d/viewport3dStore";
-import { resolveArtifactFieldColorbars, Viewport3DColorbar } from "@/modules/viewport-3d/Viewport3DModule";
+import { Viewport3DColorbar } from "@/modules/viewport-3d/Viewport3DModule";
+import { resolveArtifactFieldColorbars } from "@/modules/viewport-3d/Viewport3DModule.model";
 import { ArtifactFieldLayer } from "@/modules/viewport-3d/layers/ArtifactFieldLayer";
 import { VectorGlyphDerivedBufferCacheProvider } from "@/modules/viewport-3d/layers/vectorGlyphDerivedBufferRuntime";
 import { Viewport3DCanvas } from "@/modules/viewport-3d/Viewport3DCanvas";
@@ -293,7 +294,10 @@ function View({ fixture, dedicated = false }: { fixture: ReturnType<typeof makeF
     <button aria-pressed={presentation} onClick={() => setPresentation(value => !value)}>Toggle fixture presentation</button>
     <button aria-pressed={solid} onClick={() => setSolid(value => !value)}>Toggle fixture solid surface</button>
     <label>Geometry scope<select aria-label="Fixture geometry scope" value={settings.geometryScope} onChange={event => { void patch({ geometryScope: event.target.value as "full" | "surface" }); }}><option value="full">Full</option><option value="surface">Surface</option></select></label>
-    <label>Glyph budget<input aria-label="Fixture glyph budget" type="number" min={0} value={settings.vectorBudget} onChange={event => { void patch({ vectorBudget: Number(event.target.value) }); }} /></label></> : null}
+    <label>Glyph budget<input aria-label="Fixture glyph budget" type="number" min={0} value={settings.vectorBudget} onChange={event => {
+      const budget = event.currentTarget.valueAsNumber;
+      if (Number.isSafeInteger(budget) && budget >= 0) void patch({ vectorBudget: budget });
+    }} /></label></> : null}
     <p role="status">{result.error ?? (result.model ? `${quantity}: historical inspection · ${result.model.count} samples` : "No historical model")}</p>
     <div data-artifact-field-hud><Viewport3DFieldLabel quantityId="m" label="m" historical={result.historical} model={result.model} error={result.error} /></div>
     <div data-quantity-data-probes>

@@ -1,6 +1,7 @@
 "use client";
 
 import { EmptyState } from "@/shared/ui/EmptyState";
+import { keyedOccurrences } from "@/shared/utils/keyedOccurrences";
 import { useState } from "react";
 import { Activity, Eye } from "lucide-react";
 
@@ -60,9 +61,9 @@ export function FmrResponseSweepInspectorPanel(props: InspectorPanelProps) {
     resourceStatus: summary.resourceStatus,
     selectedFrequencyHz,
   });
-  const drivenPeaks = view.peaks
-    .filter((row) => row.peak.source === "driven_response")
-    .map((row) => row.peak);
+  const drivenPeaks = view.peaks.flatMap((row) =>
+    row.peak.source === "driven_response" ? [row.peak] : [],
+  );
 
   const selectResponsePoint = (point: FrequencyResponsePoint): void => {
     setSelectedFrequencyHz(point.frequencyHz);
@@ -298,11 +299,15 @@ function FmrResponsePointBrowser({
 
   return (
     <div className="fm-frequency-domain-response-browser">
-      {sortedPoints.map((point, index) => (
+      {keyedOccurrences(sortedPoints, (point) => JSON.stringify([
+        point.observableId,
+        point.frequencyIndex ?? point.frequencyHz,
+        point.fieldId,
+      ])).map(({ item: point, key }, index) => (
         <article
           className="fm-frequency-domain-response-card"
           data-status={point.fieldId ? "ready" : "missing"}
-          key={`${point.observableId}:${point.frequencyHz}:${point.frequencyIndex ?? index}`}
+          key={key}
         >
           <div className="fm-frequency-domain-response-card__header">
             <div>

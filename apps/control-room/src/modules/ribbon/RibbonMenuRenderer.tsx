@@ -6,7 +6,6 @@ import {
   useRef,
   useState,
   type CSSProperties,
-  type MouseEvent,
   type ReactNode,
 } from "react";
 
@@ -329,18 +328,9 @@ function ColorMenuItem({
   node: ColorNode;
   onCommand?: (commandId: string, input?: unknown) => void;
 }) {
-  const inputRef = useRef<HTMLInputElement>(null);
   const pickerValue = isColorPickerValue(node.value)
     ? node.value
     : colorInputValue(255, 255, 255);
-
-  const handleSwatchClick = useCallback(
-    (e: MouseEvent) => {
-      e.stopPropagation();
-      if (!node.disabled) inputRef.current?.click();
-    },
-    [node.disabled],
-  );
 
   return (
     <div
@@ -351,26 +341,17 @@ function ColorMenuItem({
       <span
         className="fm-dropdown-color__swatch"
         style={{ background: node.value }}
-        onClick={handleSwatchClick}
-        role="button"
-        aria-label={`Pick color: ${node.label}`}
-        tabIndex={node.disabled ? -1 : 0}
-        onKeyDown={(e) => {
-          if (e.key === "Enter" || e.key === " ") {
-            e.preventDefault();
-            e.stopPropagation();
-            if (!node.disabled) inputRef.current?.click();
-          }
-        }}
       >
         <input
-          ref={inputRef}
+          aria-label={`Pick color: ${node.label}`}
           type="color"
           className="fm-dropdown-color__input"
           value={pickerValue}
           disabled={node.disabled}
           readOnly={!node.commandId}
-          tabIndex={-1}
+          onKeyDown={(event) => {
+            if (event.key === "Enter" || event.key === " ") event.stopPropagation();
+          }}
           onChange={(e) => {
             const next = e.target.value;
             if (node.commandId) {

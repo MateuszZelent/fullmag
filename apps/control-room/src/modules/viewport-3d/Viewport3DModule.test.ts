@@ -2,30 +2,8 @@ import { readFileSync } from "node:fs";
 
 import { describe, expect, it, vi } from "vitest";
 
-import {
-  buildViewport3DCameraRegistryPatch,
-  buildViewport3DColorbarTargetPlans,
-  formatHysteresisReplayGlyphVector,
-  formatHysteresisReplayLabel,
-  notifyMeshTopologyRendered,
-  resolveViewport3DColorbarLegendsFromPlans,
-  resolveViewport3DColorbarPlansForRender,
-  resolveViewport3DColorbarRangeStates,
-  resolveViewport3DRequestedColorbarGroupKeys,
-  resolveRetainedViewport3DColorbarPlansForStore,
-  resolveRetainedViewport3DScalarColorbarLegends,
-  resolveViewport3DColorbarLegend,
-  resolveViewport3DVisualizationFrameAck,
-  resolveViewport3DVisualizationAckRegistration,
-  resolveViewport3DMeshQualityLegend,
-  resolveViewport3DVectorSegmentLengthRange,
-  createViewport3DPointerHoldLifecycle,
-  resolveViewport3DVisualizationAckDataIdentity,
-  resolveViewport3DScalarColorbarLegend,
-  resolveViewport3DScalarColorbarLegends,
-  shouldClearRetainedViewport3DScalarColorbarLegends,
-  shouldRetainViewport3DScalarColorbarLegends,
-} from "./Viewport3DModule";
+import { resolveViewport3DColorbarRangeStates } from "./Viewport3DModule";
+import { buildViewport3DCameraRegistryPatch, buildViewport3DColorbarTargetPlans, formatHysteresisReplayGlyphVector, formatHysteresisReplayLabel, notifyMeshTopologyRendered, resolveViewport3DColorbarLegendsFromPlans, resolveViewport3DColorbarPlansForRender, resolveViewport3DRequestedColorbarGroupKeys, resolveRetainedViewport3DColorbarPlansForStore, resolveRetainedViewport3DScalarColorbarLegends, resolveViewport3DColorbarLegend, resolveViewport3DVisualizationFrameAck, resolveViewport3DVisualizationAckRegistration, resolveViewport3DMeshQualityLegend, resolveViewport3DVectorSegmentLengthRange, createViewport3DPointerHoldLifecycle, resolveViewport3DVisualizationAckDataIdentity, resolveViewport3DScalarColorbarLegend, resolveViewport3DScalarColorbarLegends, shouldClearRetainedViewport3DScalarColorbarLegends, shouldRetainViewport3DScalarColorbarLegends } from "./Viewport3DModule.model";
 import { createViewport3DRenderAdoptionRegistry } from "./model/viewport3DRenderAdoptionRegistry";
 import { planViewport3DColorbars } from "./model/viewport3DColorbarPlan";
 import type { VisualizationTargetSettings } from "@/kernel/visualization/ObjectVisualizationController";
@@ -176,11 +154,14 @@ describe("FEM visualization ACK data identity", () => {
       "utf8",
     );
     const callbackStart = source.indexOf(
-      "const onVisualizationFrameCommitted = useCallback",
+      "const handleVisualizationFrameCommit = useEffectEvent",
     );
     const callback = source.slice(
       callbackStart,
-      source.indexOf("useEffect(() => {", callbackStart),
+      source.indexOf(
+        "useEffect(() => {\n    const consumeFrameCommits",
+        callbackStart,
+      ),
     );
 
     expect(callback).toContain(
@@ -195,11 +176,14 @@ describe("FEM visualization ACK data identity", () => {
       "utf8",
     );
     const callbackStart = source.indexOf(
-      "const onVisualizationFrameCommitted = useCallback",
+      "const handleVisualizationFrameCommit = useEffectEvent",
     );
     const callback = source.slice(
       callbackStart,
-      source.indexOf("useEffect(() => {", callbackStart),
+      source.indexOf(
+        "useEffect(() => {\n    const consumeFrameCommits",
+        callbackStart,
+      ),
     );
 
     expect(callback).toContain(
@@ -278,7 +262,7 @@ function visualizationSettings(
 
 describe("resolveViewport3DMeshQualityLegend", () => {
   it("keeps the render revision in the commit id and uses the supplied wall clock", async () => {
-    const moduleExports = (await import("./Viewport3DModule")) as unknown as {
+    const moduleExports = (await import("./Viewport3DModule.model")) as unknown as {
       buildViewport3DVisualizationDebugFrameCommit?: (input: {
         airboxVectorsVisible?: boolean;
         airboxWireframeVisible?: boolean;
@@ -312,7 +296,7 @@ describe("resolveViewport3DMeshQualityLegend", () => {
   });
 
   it("binds Airbox display flags to the committed WebGL frame", async () => {
-    const moduleExports = (await import("./Viewport3DModule")) as unknown as {
+    const moduleExports = (await import("./Viewport3DModule.model")) as unknown as {
       buildViewport3DVisualizationDebugFrameCommit?: (input: {
         airboxVectorsVisible?: boolean;
         airboxWireframeVisible?: boolean;
@@ -350,15 +334,16 @@ describe("resolveViewport3DMeshQualityLegend", () => {
       "utf8",
     );
     const callbackStart = source.indexOf(
-      "const onVisualizationFrameCommitted = useCallback",
+      "const handleVisualizationFrameCommit = useEffectEvent",
     );
     const callback = source.slice(
       callbackStart,
       source.indexOf("const handleCanvasCreated", callbackStart),
     );
 
-    expect(callback).toContain("revision: number,");
-    expect(callback).toContain("airboxFrameState: Viewport3DAirboxFrameState");
+    expect(callback).toContain("frameState: Viewport3DAirboxFrameState;");
+    expect(callback).toContain("revision: number;");
+    expect(callback).toContain("frameState: airboxFrameState,");
     expect(callback).toContain("...airboxFrameState");
     expect(callback).not.toContain("dataset");
     expect(callback).not.toContain("closest<HTMLElement>");
@@ -2214,7 +2199,7 @@ describe("Viewport3DModule scene wiring", () => {
     expect(source).toContain("const orbitDebugEnabled =");
     expect(source).toContain("orbitDebugEnabled && clientReady && colors");
     expect(source).toContain(
-      "onOrbitDebugAnglesChange={\n              orbitDebugEnabled ? syncOrbitDebugAngles : undefined\n            }",
+      "orbitDebugStore={orbitDebugEnabled ? orbitDebugStore : undefined}",
     );
     expect(source).toContain("Viewport3DOrbitDebugPanel");
     expect(source).toContain('aria-label="Temporary orbit controls"');
@@ -2222,7 +2207,8 @@ describe("Viewport3DModule scene wiring", () => {
     expect(source).toContain('label="Polar"');
     expect(source).toContain("orbitDebugRevision");
     expect(source).toContain("orbitDebugCommitRevision");
-    expect(source).toContain("onAnglesCommit={commitOrbitDebugAngles}");
+    expect(source).toContain("onAnglesChange={orbitDebugStore.applyAngles}");
+    expect(source).toContain("onAnglesCommit={orbitDebugStore.commitAngles}");
   });
 
   it("keeps diagnostic region visibility off by default and source selection separate", () => {

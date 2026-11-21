@@ -774,6 +774,7 @@ impl StepUpdateView {
         self.kind.is_physical_observation() && self.validate_record_kind().is_ok()
     }
 
+    #[cfg(test)]
     pub(crate) fn is_solver_progress(&self) -> bool {
         self.kind.is_solver_progress() && self.validate_record_kind().is_ok()
     }

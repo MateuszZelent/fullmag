@@ -10,10 +10,8 @@ import {
   type TestElement,
 } from "@/kernel/layout/simulationPreparationTestDom.test-support";
 
-import {
-  FooterTelemetry,
-  type FooterTelemetryStatus,
-} from "./FooterTelemetry";
+import { FooterTelemetry } from "./FooterTelemetry";
+import { type FooterTelemetryStatus } from "./FooterTelemetry.model";
 
 const hooks = vi.hoisted(() => ({
   scene: null as { data: unknown; status: string } | null,

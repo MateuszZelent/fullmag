@@ -209,7 +209,7 @@ export interface StudyFftResponseStageDraft {
   enabled: boolean;
   responseComponent: "mx" | "my" | "mz";
   susceptibilityFloorFraction: string;
-  window: "hann";
+  "window": "hann";
   rawRequest?: JsonObject;
   readOnly?: boolean;
 }

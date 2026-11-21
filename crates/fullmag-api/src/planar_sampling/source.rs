@@ -337,6 +337,7 @@ pub(crate) fn resolve_default_planar_source(
 /// `Default` source resolution with optional FEM node-plane stops of a swept
 /// mesh. When the slice normal is the sweep axis, the published section lists
 /// the node planes and a request within tolerance samples exactly on a plane.
+#[cfg(test)]
 pub(crate) fn resolve_default_planar_source_with_stops(
     domain: &DomainMeta,
     default_slice: &DefaultPlanarSliceState,

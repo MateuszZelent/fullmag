@@ -15,23 +15,11 @@ import { getViewport3DVisualProfile } from "../viewport3dVisualProfile";
 import { registerViewport3DCapturePipeline, type Viewport3DComposedCaptureFrame } from "../viewport3dImageExport";
 import { Viewport3DAlphaToneMapping } from "./Viewport3DAlphaToneMapping";
 import { enableViewport3DHudRaycasting, VIEWPORT_3D_HUD_LAYER } from "../viewport3dHudLayer";
-
-export function resolveViewport3DPostProcessingPolicy({
-  available,
-  quantitativeDataVisible,
-  renderMode,
-}: {
-  available: boolean;
-  quantitativeDataVisible: boolean;
-  renderMode: "scientific" | "presentation";
-}): { dataProtected: boolean; enabled: boolean } {
-  const dataProtected =
-    renderMode === "scientific" && quantitativeDataVisible;
-  return { dataProtected, enabled: available && !dataProtected };
-}
+import { resolveViewport3DPostProcessingPolicy } from "./PostProcessingLayer.model";
 
 /** Owns the same demand-driven draw pipeline for the viewport and high-resolution PNG. */
-export function PostProcessingLayer({ quantitativeDataVisible = false, sceneSpan = 1 }: {
+export function PostProcessingLayer({ onFrameReady, quantitativeDataVisible = false, sceneSpan = 1 }: {
+  onFrameReady?: () => void;
   quantitativeDataVisible?: boolean;
   sceneSpan?: number;
 }) {
@@ -157,6 +145,8 @@ export function PostProcessingLayer({ quantitativeDataVisible = false, sceneSpan
   useFrame(renderBase, 1);
   useFrame(() => {
     if (visualProfileId !== "capture" || appearance.exportAnnotations) renderAnnotations();
+    // Runs after the explicit base and annotation draws above in priority order.
+    onFrameReady?.();
   }, 2);
 
   if (!hasEffects) return null;

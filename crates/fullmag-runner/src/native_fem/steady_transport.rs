@@ -251,7 +251,6 @@ fn validate_charge_potential_snapshot(
 #[derive(Debug, Clone)]
 pub(crate) struct NativeFemSteadyTransportRt0Result {
     pub charge_potential_snapshot: NativeFemChargePotentialSnapshot,
-    pub closed_loop_source_snapshot: Option<ClosedLoopSourceSnapshot>,
     pub prepared_closed_loop_source_snapshot: Option<PreparedClosedLoopAcceptedSnapshot>,
     pub rt0_dof_values: Vec<f64>,
     pub canonical_face_records: Vec<([u64; 3], f64)>,
@@ -1207,12 +1206,6 @@ pub(crate) struct NativeFemSurfaceRt0Profile {
     pub phase_wall_time_ns: [u64; 9],
 }
 
-pub(crate) fn solve_native_fem_prepared_closed_loop(
-    request:&NativeFemPreparedClosedLoopChargeRequest,input:&fullmag_ir::ResolvedAntennaClosedLoopCurrentInputIR,
-    binding:&PreparedClosedLoopRuntimeBinding,target_points:Option<&[[f64;3]]>,
-)->Result<NativeFemSteadyTransportRt0Result,RunError>{
-    solve_native_fem_prepared_closed_loop_classified(request,input,binding,target_points,None,None,None)
-}
 pub(crate) fn solve_native_fem_prepared_closed_loop_classified(
     request:&NativeFemPreparedClosedLoopChargeRequest,input:&fullmag_ir::ResolvedAntennaClosedLoopCurrentInputIR,
     binding:&PreparedClosedLoopRuntimeBinding,target_points:Option<&[[f64;3]]>,
@@ -1480,19 +1473,11 @@ fn solve_rt0_common(request:Rt0NumericInput<'_>,view:Rt0InputView<'_>,oersted_me
         )
         .collect::<Vec<_>>();
 
-    let mut closed_descriptor = None;
-    let mut external_descriptor = None;
     let mut closed_source_cuts = Vec::new();
     let mut closed_source_cut_pairs = Vec::new();
     let mut closure_strings = Vec::new();
-    let mut lead_packed = None;
-    let mut lead_conductivity = Vec::new();
-    let mut lead_stable_version = None;
-    let mut lead_interface_pairs = Vec::new();
-    let mut lead_minus_electrodes = Vec::new();
-    let mut lead_plus_electrodes = Vec::new();
 
-    let closure_kind = match view.closure {
+    let (closure_kind, closed_descriptor, external_descriptor, _external_lead_storage) = match view.closure {
         ConservativeCurrentClosureIR::ClosedGeometry {
             operator_version,
             revision,
@@ -1534,8 +1519,12 @@ fn solve_rt0_common(request:Rt0NumericInput<'_>,view:Rt0InputView<'_>,oersted_me
                     source_cuts: const_ptr(&closed_source_cuts),
                     source_cut_count: closed_source_cuts.len() as u64,
                 };
-            closed_descriptor = Some(source_cut_closure);
-            ffi::FULLMAG_FEM_STEADY_TRANSPORT_RT0_CLOSURE_CLOSED_GEOMETRY
+            (
+                ffi::FULLMAG_FEM_STEADY_TRANSPORT_RT0_CLOSURE_CLOSED_GEOMETRY,
+                Some(source_cut_closure),
+                None,
+                None,
+            )
         }
         ConservativeCurrentClosureIR::ExternalLead {
             operator_version,
@@ -1560,11 +1549,10 @@ fn solve_rt0_common(request:Rt0NumericInput<'_>,view:Rt0InputView<'_>,oersted_me
                 lead_conductivity_digest,
                 "lead conductivity digest",
             )?);
-            lead_packed = Some(super::PackedNativeMesh::new(lead_mesh));
-            lead_conductivity = lead_conductivity_spm_per_element.clone();
+            let lead_packed = super::PackedNativeMesh::new(lead_mesh);
+            let lead_conductivity = lead_conductivity_spm_per_element.clone();
             let lead_version = c_string("stable_mesh_vertex_u64.v1", "lead identity version")?;
-            lead_stable_version = Some(lead_version);
-            lead_interface_pairs = interface_pairs
+            let lead_interface_pairs: Vec<ffi::fullmag_fem_steady_transport_rt0_interface_pair_v1> = interface_pairs
                 .iter()
                 .map(
                     |(device, lead)| ffi::fullmag_fem_steady_transport_rt0_interface_pair_v1 {
@@ -1573,23 +1561,19 @@ fn solve_rt0_common(request:Rt0NumericInput<'_>,view:Rt0InputView<'_>,oersted_me
                     },
                 )
                 .collect();
-            lead_minus_electrodes = minus_outer_electrode_face_vertex_ids
+            let lead_minus_electrodes: Vec<u64> = minus_outer_electrode_face_vertex_ids
                 .iter()
                 .flatten()
                 .copied()
                 .collect();
-            lead_plus_electrodes = plus_outer_electrode_face_vertex_ids
+            let lead_plus_electrodes: Vec<u64> = plus_outer_electrode_face_vertex_ids
                 .iter()
                 .flatten()
                 .copied()
                 .collect();
-            let lead_packed_ref = lead_packed.as_ref().expect("lead mesh packed");
-            let lead_mesh_desc = lead_packed_ref.descriptor(lead_mesh);
+            let lead_mesh_desc = lead_packed.descriptor(lead_mesh);
             let lead_identity = ffi::fullmag_fem_steady_transport_rt0_stable_vertex_identities_v1 {
-                version: lead_stable_version
-                    .as_ref()
-                    .expect("lead identity")
-                    .as_ptr(),
+                version: lead_version.as_ptr(),
                 local_to_stable_vertex_ids: const_ptr(lead_stable_vertex_ids),
                 local_to_stable_vertex_ids_len: lead_stable_vertex_ids.len() as u64,
             };
@@ -1611,8 +1595,19 @@ fn solve_rt0_common(request:Rt0NumericInput<'_>,view:Rt0InputView<'_>,oersted_me
                 plus_outer_electrode_face_count: (lead_plus_electrodes.len() / 3) as u64,
                 lead_conductivity_digest: closure_strings[4].as_ptr(),
             };
-            external_descriptor = Some(lead);
-            ffi::FULLMAG_FEM_STEADY_TRANSPORT_RT0_CLOSURE_EXTERNAL_LEAD
+            (
+                ffi::FULLMAG_FEM_STEADY_TRANSPORT_RT0_CLOSURE_EXTERNAL_LEAD,
+                None,
+                Some(lead),
+                Some((
+                    lead_packed,
+                    lead_conductivity,
+                    lead_version,
+                    lead_interface_pairs,
+                    lead_minus_electrodes,
+                    lead_plus_electrodes,
+                )),
+            )
         }
     };
 
@@ -2133,7 +2128,6 @@ fn solve_rt0_common(request:Rt0NumericInput<'_>,view:Rt0InputView<'_>,oersted_me
     };
     Ok(NativeFemSteadyTransportRt0Result {
         charge_potential_snapshot,
-        closed_loop_source_snapshot,
         prepared_closed_loop_source_snapshot,
         rt0_dof_values: rt0_dof_values
             .into_iter()

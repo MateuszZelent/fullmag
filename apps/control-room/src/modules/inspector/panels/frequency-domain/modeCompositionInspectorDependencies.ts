@@ -55,9 +55,10 @@ export function modeCompositionSpectrumFromArtifact(
   artifact: FrequencyDomainJsonArtifactResource | null,
 ): ModeCompositionInspectorSpectrum | null {
   const payload = unwrapArtifactPayload(artifact);
-  const samples = array(payload?.samples)
-    .map(mapSpectrumSample)
-    .filter((sample): sample is ModeCompositionSpectrumSample => sample !== null);
+  const samples = array(payload?.samples).flatMap((value) => {
+    const sample = mapSpectrumSample(value);
+    return sample === null ? [] : [sample];
+  });
   return samples.length > 0 ? { samples } : null;
 }
 
@@ -68,13 +69,15 @@ export function compatibleObjectsFromScene(
   const participantIds = participatingObjectIds(unwrapArtifactPayload(artifact));
   if (participantIds.size === 0) return [];
 
-  return (scene?.objects ?? [])
-    .filter((object) => participantIds.has(object.id))
-    .map((object) => ({
-      label: nonEmptyString(object.name) ?? object.id,
-      objectId: object.id,
-      targetId: `object:${object.id}`,
-    }));
+  return (scene?.objects ?? []).flatMap((object) =>
+    participantIds.has(object.id)
+      ? [{
+          label: nonEmptyString(object.name) ?? object.id,
+          objectId: object.id,
+          targetId: `object:${object.id}`,
+        }]
+      : [],
+  );
 }
 
 function mapSpectrumSample(value: unknown): ModeCompositionSpectrumSample | null {
@@ -82,9 +85,10 @@ function mapSpectrumSample(value: unknown): ModeCompositionSpectrumSample | null
   const sampleId = nonEmptyString(record?.sample_id);
   if (!record || !sampleId) return null;
   const sampleIndex = finiteInteger(record.sample_index);
-  const modes = array(record.modes)
-    .map(mapSpectrumMode)
-    .filter((mode): mode is ModeCompositionSpectrumMode => mode !== null);
+  const modes = array(record.modes).flatMap((value) => {
+    const mode = mapSpectrumMode(value);
+    return mode === null ? [] : [mode];
+  });
   return {
     label: sampleIndex === null ? sampleId : `Sample ${sampleIndex}`,
     modes,

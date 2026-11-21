@@ -12,13 +12,8 @@ import {
   TestNode,
 } from "@/kernel/layout/simulationPreparationTestDom.test-support";
 
-import {
-  FrozenSpinsEditor as ScopedFrozenSpinsEditor,
-  FrozenSpinsInspectorPanel,
-  FrozenSpinsPreviewDetails,
-  frozenSpinsPreviewTopologyFingerprint,
-  resolveFrozenSpinsSolverBinding,
-} from "./FrozenSpinsInspectorPanel";
+import { FrozenSpinsEditor as ScopedFrozenSpinsEditor, FrozenSpinsInspectorPanel, FrozenSpinsPreviewDetails } from "./FrozenSpinsInspectorPanel";
+import { frozenSpinsPreviewTopologyFingerprint, resolveFrozenSpinsSolverBinding } from "./FrozenSpinsInspectorPanel.model";
 
 const preview = {
   activation_candidate_token: "fsact-candidate-1",

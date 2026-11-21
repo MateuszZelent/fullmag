@@ -154,7 +154,8 @@ export function AntennaTerminalsPanel({ selection: selected }: InspectorPanelPro
           <FormField label="Signed outward actuator current" unit="A" hint="Positive leaves the outer electrode; negative enters. Enter each current explicitly; port weights are not an actuation law." value={row.currentA} disabled={!editable} onChange={(event) => updateRow(index, { currentA: event.currentTarget.value })} />
         </InspectorGroup>)}
       </> : null}
-      {(scene.data?.antenna_field_solve_stages ?? []).filter((stage) => stage.source_object_id === objectId).map((stage) => <FieldRow key={stage.id} label={`Inspection readiness · ${stage.id}`} value={antennaInspectionValidationMessages(stage, scene.data).join(" · ")} />)}
+      {(scene.data?.antenna_field_solve_stages ?? []).map((stage) => stage.source_object_id === objectId
+         ? <FieldRow key={stage.id} label={`Inspection readiness · ${stage.id}`} value={antennaInspectionValidationMessages(stage, scene.data).join(" · ")} /> : null)}
       {errors.length ? <FeedbackBanner kind="warning" message={errors[0]} /> : null}
       {scene.error ? <FeedbackBanner kind="error" message={scene.error.message} /> : null}
       {feedback?.key === key ? <FeedbackBanner kind={feedback.kind} message={feedback.message} /> : null}

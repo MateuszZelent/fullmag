@@ -1,11 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { Ray, Vector3 } from "three";
 
-import {
-  createMoveGestureController,
-  installMoveGestureTerminalListeners,
-  moveAxisPointerHandlers,
-} from "./MoveObjectGizmo";
+import { createMoveGestureController, installMoveGestureTerminalListeners, moveAxisPointerHandlers } from "./MoveObjectGizmo.model";
 import { isMoveCommitPending } from "./moveCommitLock";
 import {
   DATA_FIELDS_PATH,

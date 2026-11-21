@@ -6,7 +6,8 @@ import type { KernelApi } from "@/kernel/types";
 import type { ResourceResult } from "@/kernel/resources/resourceTypes";
 import type { AnalysisChartCursorPoint } from "@/shared/domain/analysis/chartCursorPoint";
 import type { ChartTableWindow } from "@/shared/domain/analysis/chartDataPlan";
-import { ChartLegend, chartColorNameForIndex } from "@/shared/analysis-charts/ChartLegend";
+import { ChartLegend } from "@/shared/analysis-charts/ChartLegend";
+import { chartColorNameForIndex } from "@/shared/analysis-charts/ChartLegend.model";
 import { sanitizeSelectedSeriesIds } from "@/shared/analysis-charts/chartSeriesSelection";
 import { ChartSection } from "@/shared/analysis-charts/ChartSection";
 import { ChartDisplayUnitControls } from "@/shared/analysis-charts/ChartDisplayUnitControls";
@@ -77,10 +78,10 @@ export const AnalysisTableSurface = memo(function AnalysisTableSurface({
   const visibleSeries = chartSeries.filter(({ id }) => selected.has(id));
   const yUnits = [...new Set(chartSeries.map((series) => series.unit))];
   const preferredYUnits = yUnits.map((unit) => {
-    const requested = chartSeries
-      .filter((series) => series.unit === unit)
-      .map((series) => displayUnits?.[series.quantity])
-      .filter((value): value is string => Boolean(value));
+    const requested = chartSeries.flatMap((series) => {
+      const displayUnit = series.unit === unit ? displayUnits?.[series.quantity] : undefined;
+      return displayUnit ? [displayUnit] : [];
+    });
     return requested.length > 0 && requested.every((value) => value === requested[0])
       ? requested[0]
       : null;
