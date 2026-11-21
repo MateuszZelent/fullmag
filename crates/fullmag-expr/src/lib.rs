@@ -1,4 +1,5 @@
-//! Equation language `field_expr.v1` of mask and time functions.
+//! Equation language `field_expr.v1` of mask and time functions and of the
+//! profile and distance formulas of an absorbing boundary layer.
 //!
 //! Contract: `docs/specs/mask-function-v1.md`. The crate parses and evaluates
 //! functions (`parameters -> locals -> outputs`) and compiles time functions to
@@ -23,13 +24,40 @@ pub const FIELD_EXPR_VERSION: &str = "field_expr.v1";
 /// terms active in one stage.
 pub const MAX_MASK_TERMS: usize = 8;
 
-/// Which leading variables a function may read.
+/// Which leading variables a function may read, and which functions it may call
+/// (`docs/specs/mask-function-v1.md`, section 3).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FunctionKind {
     /// `(x, y, z) -> (Bx, By, Bz)`; three outputs.
     Mask,
     /// `t -> number`; one output.
     Time,
+    /// `u -> number`; one dimensionless output. The ramp profile of an
+    /// absorbing boundary layer (section 8).
+    Profile,
+    /// `(x, y, z) -> number`; one output in metres. The distance coordinate of
+    /// an absorbing boundary layer (section 8).
+    Distance,
+}
+
+impl FunctionKind {
+    /// Word used in error messages: "a time function may not use 'x'".
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            Self::Mask => "mask",
+            Self::Time => "time",
+            Self::Profile => "profile",
+            Self::Distance => "distance",
+        }
+    }
+
+    /// Number of outputs a function of this kind returns.
+    pub(crate) fn output_count(self) -> usize {
+        match self {
+            Self::Mask => 3,
+            Self::Time | Self::Profile | Self::Distance => 1,
+        }
+    }
 }
 
 /// A function as stored in `ProblemIR` (`FunctionIR`).

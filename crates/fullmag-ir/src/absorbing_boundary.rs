@@ -3,15 +3,124 @@ use crate::{
     AbsorbingBoundaryLayerIR, AbsorbingBoundaryProfileIR, SpatialAbsorbingGeometryIR,
     SpatialAbsorbingLayerIR,
 };
+use fullmag_expr::{
+    compile_function, CompiledFunction, FunctionError, FunctionKind, FunctionSource,
+};
 use std::collections::BTreeSet;
 
 const TOLERANCE: f64 = 1e-12;
 const VALIDATION_STEPS: u32 = 256;
+/// Longest custom profile or distance formula, in characters.
+const MAX_FORMULA_CHARACTERS: usize = 256;
+
+/// Why a custom profile or distance formula is rejected
+/// (`docs/specs/mask-function-v1.md`, section 8).
+#[derive(Debug, Clone, PartialEq)]
+enum FormulaError {
+    /// Blank, longer than 256 characters, or not printable ASCII.
+    Text(&'static str),
+    /// Rejected by the formula language of `fullmag-expr`.
+    Syntax(FunctionError),
+    /// A profile value that is not finite.
+    Undefined { u: f64 },
+    /// A finite profile value outside [0, 1].
+    Range { u: f64 },
+    /// `p(0) != 0` or `p(1) != 1`.
+    Endpoint,
+}
+
+impl FormulaError {
+    /// Category of `tests/fixtures/absorbing_boundary_formula_cases.json`.
+    #[cfg(test)]
+    fn category(&self) -> &'static str {
+        match self {
+            Self::Text(_) => "text",
+            Self::Syntax(_) => "syntax",
+            Self::Undefined { .. } | Self::Range { .. } => "range",
+            Self::Endpoint => "endpoint",
+        }
+    }
+}
+
+impl std::fmt::Display for FormulaError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Text(reason) => write!(formatter, "expression {reason}"),
+            Self::Syntax(error) => write!(
+                formatter,
+                "expression error {} at character {}: {}",
+                error.code, error.position, error.message
+            ),
+            Self::Undefined { u } => write!(formatter, "expression is undefined at u={u}"),
+            Self::Range { u } => write!(
+                formatter,
+                "expression must return a value in [0, 1] at u={u}"
+            ),
+            Self::Endpoint => write!(formatter, "expression must equal 0 at u=0 and 1 at u=1"),
+        }
+    }
+}
+
+/// Compile one formula of `kind` after the text rules of the layer.
+fn compile_formula(source: &str, kind: FunctionKind) -> Result<CompiledFunction, FormulaError> {
+    if source.trim().is_empty() {
+        return Err(FormulaError::Text("must not be blank"));
+    }
+    if source.len() > MAX_FORMULA_CHARACTERS {
+        return Err(FormulaError::Text("must have at most 256 characters"));
+    }
+    if !source
+        .bytes()
+        .all(|byte| byte == b'\t' || (b' '..=b'~').contains(&byte))
+    {
+        return Err(FormulaError::Text(
+            "must contain printable ASCII characters only",
+        ));
+    }
+    let outputs = [source.to_string()];
+    compile_function(
+        &FunctionSource {
+            parameters: &[],
+            locals: &[],
+            outputs: &outputs,
+        },
+        kind,
+    )
+    .map_err(FormulaError::Syntax)
+}
+
+/// Compile a profile and probe it at `u = k/256`, `k = 0..=256`.
+fn compile_profile_formula(source: &str) -> Result<CompiledFunction, FormulaError> {
+    let formula = compile_formula(source, FunctionKind::Profile)?;
+    for step in 0..=VALIDATION_STEPS {
+        checked_profile_value(&formula, f64::from(step) / f64::from(VALIDATION_STEPS))?;
+    }
+    Ok(formula)
+}
+
+/// Value of a profile at `u` in [0, 1]: finite, within [0, 1] up to the
+/// tolerance, and exactly `u` at the endpoints.
+fn checked_profile_value(formula: &CompiledFunction, u: f64) -> Result<f64, FormulaError> {
+    let weight = formula.eval_profile(u);
+    if !weight.is_finite() {
+        return Err(FormulaError::Undefined { u });
+    }
+    if !(-TOLERANCE..=1.0 + TOLERANCE).contains(&weight) {
+        return Err(FormulaError::Range { u });
+    }
+    if u == 0.0 || u == 1.0 {
+        if (weight - u).abs() > TOLERANCE {
+            return Err(FormulaError::Endpoint);
+        }
+        return Ok(u);
+    }
+    Ok(weight.clamp(0.0, 1.0))
+}
 
 /// A scalar ramp ready to be sampled repeatedly by the material planner.
 pub struct ResolvedAbsorbingBoundaryProfile {
     kind: AbsorbingBoundaryProfileIR,
-    expression: Option<Expression>,
+    formula: Option<CompiledFunction>,
 }
 
 impl AbsorbingBoundaryLayerIR {
@@ -22,9 +131,9 @@ impl AbsorbingBoundaryLayerIR {
 
 impl ResolvedAbsorbingBoundaryProfile {
     pub fn compile(kind: AbsorbingBoundaryProfileIR, source: Option<&str>) -> Result<Self, String> {
-        let expression = match (kind, source) {
+        let formula = match (kind, source) {
             (AbsorbingBoundaryProfileIR::Custom, Some(source)) => {
-                Some(Parser::parse(source, &["u"])?)
+                Some(compile_profile_formula(source).map_err(|error| error.to_string())?)
             }
             (AbsorbingBoundaryProfileIR::Custom, None) => {
                 return Err(
@@ -36,33 +145,13 @@ impl ResolvedAbsorbingBoundaryProfile {
                 return Err("expression requires a custom absorbing boundary profile".into());
             }
         };
-        let profile = ResolvedAbsorbingBoundaryProfile { kind, expression };
-        if profile.expression.is_some() {
-            for step in 0..=VALIDATION_STEPS {
-                profile.evaluate(f64::from(step) / f64::from(VALIDATION_STEPS))?;
-            }
-        }
-        Ok(profile)
+        Ok(ResolvedAbsorbingBoundaryProfile { kind, formula })
     }
-}
 
-impl ResolvedAbsorbingBoundaryProfile {
     pub fn evaluate(&self, value: f64) -> Result<f64, String> {
         let u = value.clamp(0.0, 1.0);
-        if let Some(expression) = &self.expression {
-            let weight = expression
-                .evaluate(&[u])
-                .ok_or_else(|| format!("expression is undefined at u={u}"))?;
-            if !(-TOLERANCE..=1.0 + TOLERANCE).contains(&weight) {
-                return Err(format!("expression must return a value in [0, 1] at u={u}"));
-            }
-            if u == 0.0 || u == 1.0 {
-                if (weight - u).abs() > TOLERANCE {
-                    return Err("expression must equal 0 at u=0 and 1 at u=1".into());
-                }
-                return Ok(u);
-            }
-            return Ok(weight.clamp(0.0, 1.0));
+        if let Some(formula) = &self.formula {
+            return checked_profile_value(formula, u).map_err(|error| error.to_string());
         }
         if u == 0.0 || u == 1.0 {
             return Ok(u);
@@ -76,222 +165,29 @@ impl ResolvedAbsorbingBoundaryProfile {
                 (1.0 + (4.0 * u - 2.0).tanh() / 2.0_f64.tanh()) / 2.0
             }
             AbsorbingBoundaryProfileIR::Custom => {
-                unreachable!("compiled custom profile has an expression")
+                unreachable!("compiled custom profile has a formula")
             }
         })
     }
 }
 
-/// A restricted spatial expression evaluated in metres in the layer frame.
-pub struct AbsorbingBoundaryCoordinate(Expression);
+/// A distance formula `d(x, y, z)` evaluated in metres in the layer frame.
+pub struct AbsorbingBoundaryCoordinate(CompiledFunction);
 
 impl AbsorbingBoundaryCoordinate {
     pub fn compile(source: &str) -> Result<Self, String> {
-        Parser::parse(source, &["x", "y", "z"]).map(Self)
+        compile_formula(source, FunctionKind::Distance)
+            .map(Self)
+            .map_err(|error| error.to_string())
     }
 
     pub fn evaluate(&self, point: [f64; 3]) -> Result<f64, String> {
-        self.0
-            .evaluate(&point)
-            .ok_or_else(|| format!("distance expression is undefined at {point:?}"))
-    }
-}
-
-type UnaryOperation = fn(f64) -> f64;
-type BinaryOperation = fn(f64, f64) -> f64;
-
-enum Expression {
-    Number(f64),
-    Variable(usize),
-    Unary(UnaryOperation, Box<Self>),
-    Binary(BinaryOperation, Box<Self>, Box<Self>),
-}
-
-impl Expression {
-    fn evaluate(&self, variables: &[f64]) -> Option<f64> {
-        let value = match self {
-            Self::Number(value) => *value,
-            Self::Variable(index) => variables[*index],
-            Self::Unary(operation, operand) => operation(operand.evaluate(variables)?),
-            Self::Binary(operation, left, right) => {
-                operation(left.evaluate(variables)?, right.evaluate(variables)?)
-            }
-        };
-        value.is_finite().then_some(value)
-    }
-}
-
-struct Parser<'a> {
-    remaining: &'a str,
-    variables: &'static [&'static str],
-}
-
-impl<'a> Parser<'a> {
-    fn parse(source: &'a str, variables: &'static [&'static str]) -> Result<Expression, String> {
-        if source.is_empty()
-            || source.len() > 256
-            || !source
-                .bytes()
-                .all(|ch| ch.is_ascii_alphanumeric() || b".+*/(), \t-".contains(&ch))
-        {
-            return Err("expression must contain 1 to 256 ASCII math characters".into());
+        let value = self.0.eval_distance(point);
+        if value.is_finite() {
+            Ok(value)
+        } else {
+            Err(format!("distance expression is undefined at {point:?}"))
         }
-        let mut parser = Self {
-            remaining: source,
-            variables,
-        };
-        let expression = parser.parse_expression(0)?;
-        if !parser.remaining.trim_ascii().is_empty() {
-            return Err(parser.expected("end of expression"));
-        }
-        Ok(expression)
-    }
-
-    fn parse_expression(&mut self, minimum_precedence: u8) -> Result<Expression, String> {
-        let mut left = self.parse_operand()?;
-        loop {
-            self.skip_whitespace();
-            let Some((token, operation, precedence, right_precedence)) = self.operator() else {
-                return Ok(left);
-            };
-            if precedence < minimum_precedence {
-                return Ok(left);
-            }
-            self.remaining = &self.remaining[token.len()..];
-            let right = self.parse_expression(right_precedence)?;
-            left = Expression::Binary(operation, Box::new(left), Box::new(right));
-        }
-    }
-
-    fn parse_operand(&mut self) -> Result<Expression, String> {
-        if self.consume("+") {
-            return self.parse_expression(3);
-        }
-        if self.consume("-") {
-            let operand = self.parse_expression(3)?;
-            return Ok(Expression::Unary(|value| -value, Box::new(operand)));
-        }
-        if self.consume("(") {
-            return self.parenthesized();
-        }
-        if self
-            .remaining
-            .starts_with(|ch: char| ch.is_ascii_digit() || ch == '.')
-        {
-            return self.number();
-        }
-        let name = self.take_while(|ch| ch.is_ascii_alphanumeric());
-        if let Some(index) = self.variables.iter().position(|&var| var == name) {
-            return Ok(Expression::Variable(index));
-        }
-        if self.variables.len() == 3 && matches!(name, "min" | "max") {
-            if !self.consume("(") {
-                return Err(self.expected("'(' after the function name"));
-            }
-            let left = self.parse_expression(0)?;
-            if !self.consume(",") {
-                return Err(self.expected("two arguments separated by ','"));
-            }
-            let right = self.parenthesized()?;
-            let operation = if name == "min" { f64::min } else { f64::max };
-            return Ok(Expression::Binary(
-                operation,
-                Box::new(left),
-                Box::new(right),
-            ));
-        }
-        let function: UnaryOperation = match name {
-            "abs" => f64::abs,
-            "sqrt" => f64::sqrt,
-            "exp" => f64::exp,
-            "log" => f64::ln,
-            "log1p" => f64::ln_1p,
-            "tanh" => f64::tanh,
-            "sin" => f64::sin,
-            "cos" => f64::cos,
-            _ => return Err(self.expected("a coordinate, a number, or a supported math function")),
-        };
-        if !self.consume("(") {
-            return Err(self.expected("'(' after the function name"));
-        }
-        Ok(Expression::Unary(function, Box::new(self.parenthesized()?)))
-    }
-
-    fn parenthesized(&mut self) -> Result<Expression, String> {
-        let expression = self.parse_expression(0)?;
-        if !self.consume(")") {
-            return Err(self.expected("')'"));
-        }
-        Ok(expression)
-    }
-
-    fn number(&mut self) -> Result<Expression, String> {
-        let source = self.remaining;
-        let integer = self.take_while(|ch| ch.is_ascii_digit());
-        let mut integer_only = true;
-        if let Some(after_dot) = self.remaining.strip_prefix('.') {
-            self.remaining = after_dot;
-            self.take_while(|ch| ch.is_ascii_digit());
-            integer_only = false;
-        }
-        if self.remaining.starts_with(['e', 'E']) {
-            self.remaining = &self.remaining[1..];
-            if self.remaining.starts_with(['+', '-']) {
-                self.remaining = &self.remaining[1..];
-            }
-            self.take_while(|ch| ch.is_ascii_digit());
-            integer_only = false;
-        }
-        if integer_only && integer.starts_with('0') && integer.bytes().any(|ch| ch != b'0') {
-            return Err(self.expected("an integer without a leading zero"));
-        }
-        source[..source.len() - self.remaining.len()]
-            .parse::<f64>()
-            .ok()
-            .filter(|value| value.is_finite())
-            .map(Expression::Number)
-            .ok_or_else(|| self.expected("a finite decimal number"))
-    }
-
-    fn operator(&self) -> Option<(&'static str, BinaryOperation, u8, u8)> {
-        if self.remaining.starts_with("**") {
-            return Some(("**", f64::powf, 4, 4));
-        }
-        match self.remaining.as_bytes().first()? {
-            b'+' => Some(("+", |left, right| left + right, 1, 2)),
-            b'-' => Some(("-", |left, right| left - right, 1, 2)),
-            b'*' => Some(("*", |left, right| left * right, 2, 3)),
-            b'/' => Some(("/", |left, right| left / right, 2, 3)),
-            _ => None,
-        }
-    }
-
-    fn skip_whitespace(&mut self) {
-        self.remaining = self.remaining.trim_ascii_start();
-    }
-
-    fn consume(&mut self, token: &str) -> bool {
-        self.skip_whitespace();
-        if let Some(rest) = self.remaining.strip_prefix(token) {
-            self.remaining = rest;
-            return true;
-        }
-        false
-    }
-
-    fn take_while(&mut self, predicate: impl Fn(u8) -> bool) -> &'a str {
-        let length = self
-            .remaining
-            .bytes()
-            .take_while(|ch| predicate(*ch))
-            .count();
-        let (taken, rest) = self.remaining.split_at(length);
-        self.remaining = rest;
-        taken
-    }
-
-    fn expected(&self, expected: &str) -> String {
-        format!("invalid expression: expected {expected}")
     }
 }
 
@@ -570,42 +466,161 @@ mod tests {
         );
     }
 
-    #[test]
-    fn scalar_expression_obeys_precedence_and_rejects_unbounded_operations() {
-        for (source, expected) in [
-            ("-u**2", -0.25),
-            ("u**2**2", 0.0625),
-            ("2e-1 + (u - .1) * 2", 1.0),
-            ("sqrt(u * u)", 0.5),
-            ("2**-u**2", 2.0_f64.powf(-0.25)),
-        ] {
-            let output = Parser::parse(source, &["u"])
-                .unwrap()
-                .evaluate(&[0.5])
-                .unwrap();
-            assert!((output - expected).abs() < 1e-12, "{source}");
-        }
-        for source in [
-            "u # comment",
-            "u**1_0",
-            "01*u",
-            "u.real",
-            "(sqrt)(u)",
-            "((abs))(u)",
-            "other(u)",
-            "u/ /u",
-            "u 2",
-            "u**0x2",
-            "u**0o2",
-            "u**0b10",
-        ] {
-            assert!(Parser::parse(source, &["u"]).is_err(), "{source}");
-        }
+    const CASES: &str = include_str!("../tests/fixtures/absorbing_boundary_formula_cases.json");
+    /// Values of the Python evaluator that preceded the shared formula language.
+    const BASELINE: &str =
+        include_str!("../tests/fixtures/absorbing_boundary_formula_baseline.json");
+
+    /// Equal, or adjacent binary64 values of the same sign.
+    /// The old values were recorded with one libm; another libm may differ in the
+    /// last bits of `log1p`, `exp` and friends, so allow a few units in the last place.
+    fn within_ulps(a: f64, b: f64) -> bool {
+        a == b || (a.is_sign_negative() == b.is_sign_negative() && a.to_bits().abs_diff(b.to_bits()) <= 4)
+    }
+
+    fn close(a: f64, b: f64) -> bool {
+        within_ulps(a, b) || (a - b).abs() <= 1e-14 * a.abs().max(b.abs())
+    }
+
+    fn check_rejection(name: &str, case: &serde_json::Value, error: &FormulaError) {
         assert_eq!(
-            Parser::parse("1/exp(999)", &["u"])
+            error.category(),
+            case["error"].as_str().unwrap(),
+            "{name}: {error}"
+        );
+        if let Some(code) = case.get("code") {
+            match error {
+                FormulaError::Syntax(error) => {
+                    assert_eq!(error.code, code.as_str().unwrap(), "{name}: {}", error.message)
+                }
+                other => panic!("{name}: expected {code}, got {other}"),
+            }
+        }
+    }
+
+    #[test]
+    fn shared_profile_formula_cases_and_old_values() {
+        let cases: serde_json::Value = serde_json::from_str(CASES).unwrap();
+        let baseline: serde_json::Value = serde_json::from_str(BASELINE).unwrap();
+        let mut compared = 0;
+        for case in cases["profile"].as_array().unwrap() {
+            let name = case["name"].as_str().unwrap();
+            let text = case["text"].as_str().unwrap();
+            let public = ResolvedAbsorbingBoundaryProfile::compile(
+                AbsorbingBoundaryProfileIR::Custom,
+                Some(text),
+            );
+            match compile_profile_formula(text) {
+                Ok(formula) => {
+                    assert!(case["accept"].as_bool().unwrap(), "{name}: accepted {text:?}");
+                    for sample in case["samples"].as_array().unwrap() {
+                        let u = sample[0].as_f64().unwrap();
+                        let expected = sample[1].as_f64().unwrap();
+                        let value = checked_profile_value(&formula, u).unwrap();
+                        assert!(close(value, expected), "{name} at u={u}: {value} != {expected}");
+                    }
+                    let profile = public.unwrap();
+                    if let Some(old) = baseline["profile"].get(name) {
+                        for (step, old) in old.as_array().unwrap().iter().enumerate() {
+                            let u = step as f64 / 256.0;
+                            let value = profile.evaluate(u).unwrap();
+                            let old = old.as_f64().unwrap();
+                            assert!(within_ulps(value, old), "{name} at u={u}: {value} != {old}");
+                        }
+                        compared += 1;
+                    }
+                }
+                Err(error) => {
+                    assert!(!case["accept"].as_bool().unwrap(), "{name}: {error}");
+                    check_rejection(name, case, &error);
+                    assert_eq!(public.err(), Some(error.to_string()), "{name}");
+                }
+            }
+        }
+        assert_eq!(compared, baseline["profile"].as_object().unwrap().len());
+    }
+
+    #[test]
+    fn shared_distance_formula_cases_and_old_values() {
+        let cases: serde_json::Value = serde_json::from_str(CASES).unwrap();
+        let baseline: serde_json::Value = serde_json::from_str(BASELINE).unwrap();
+        let points: Vec<[f64; 3]> = cases["distance_points"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|point| {
+                [
+                    point[0].as_f64().unwrap(),
+                    point[1].as_f64().unwrap(),
+                    point[2].as_f64().unwrap(),
+                ]
+            })
+            .collect();
+        let mut compared = 0;
+        for case in cases["distance"].as_array().unwrap() {
+            let name = case["name"].as_str().unwrap();
+            let text = case["text"].as_str().unwrap();
+            let public = AbsorbingBoundaryCoordinate::compile(text);
+            match compile_formula(text, FunctionKind::Distance) {
+                Ok(_) => {
+                    assert!(case["accept"].as_bool().unwrap(), "{name}: accepted {text:?}");
+                    let coordinate = public.unwrap();
+                    let samples = case["samples"].as_array().unwrap();
+                    assert_eq!(samples.len(), points.len(), "{name}");
+                    for (point, expected) in points.iter().zip(samples) {
+                        let expected = expected.as_f64().unwrap();
+                        let value = coordinate.evaluate(*point).unwrap();
+                        assert!(close(value, expected), "{name} at {point:?}: {value} != {expected}");
+                    }
+                    if let Some(old) = baseline["distance"].get(name) {
+                        for (point, old) in points.iter().zip(old.as_array().unwrap()) {
+                            let value = coordinate.evaluate(*point).unwrap();
+                            let old = old.as_f64().unwrap();
+                            assert!(within_ulps(value, old), "{name} at {point:?}: {value} != {old}");
+                        }
+                        compared += 1;
+                    }
+                }
+                Err(error) => {
+                    assert!(!case["accept"].as_bool().unwrap(), "{name}: {error}");
+                    check_rejection(name, case, &error);
+                    assert_eq!(public.err(), Some(error.to_string()), "{name}");
+                }
+            }
+        }
+        assert_eq!(compared, baseline["distance"].as_object().unwrap().len());
+    }
+
+    #[test]
+    fn formula_errors_carry_the_engine_code_and_position() {
+        let profile = ResolvedAbsorbingBoundaryProfile::compile(
+            AbsorbingBoundaryProfileIR::Custom,
+            Some("u + 01*u"),
+        )
+        .err()
+        .unwrap();
+        assert!(
+            profile.starts_with("expression error expr_syntax at character 4: "),
+            "{profile}"
+        );
+        let distance = AbsorbingBoundaryCoordinate::compile("x + t").err().unwrap();
+        assert!(
+            distance.starts_with("expression error mask_function_wrong_variable at character 4: "),
+            "{distance}"
+        );
+        // An intermediate infinity is IEEE arithmetic; only the value is checked.
+        let profile = ResolvedAbsorbingBoundaryProfile::compile(
+            AbsorbingBoundaryProfileIR::Custom,
+            Some("u + 1/exp(999)"),
+        )
+        .unwrap();
+        assert_eq!(profile.evaluate(0.5), Ok(0.5));
+        assert_eq!(
+            AbsorbingBoundaryCoordinate::compile("1/(y-3)")
                 .unwrap()
-                .evaluate(&[0.5]),
-            None
+                .evaluate([0.0, 3.0, 0.0])
+                .unwrap_err(),
+            "distance expression is undefined at [0.0, 3.0, 0.0]"
         );
     }
 }
