@@ -436,7 +436,9 @@ function overlayStateFromContext(
   const selectedRef = selectedFrequencyDomainRef(context);
   const selectedResultRef = selectedAnalysisResultRef(context);
   const modalRow = resolvedSource === "eigen-mode" &&
-    selectedRef?.studyProduct === "modal_eigen" &&
+    (selectedRef?.kind === "results.resonance.modal.spectrum" ||
+      selectedRef?.kind === "results.resonance.modal.modes") &&
+    selectedRef.studyProduct === "modal_eigen" &&
     input.fieldId === fieldId &&
     input.sampleIndex != null &&
     input.modeIndex != null

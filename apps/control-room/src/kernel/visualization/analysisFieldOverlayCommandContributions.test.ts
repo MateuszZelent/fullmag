@@ -368,7 +368,7 @@ describe("analysis field overlay commands", () => {
     });
   });
 
-  it("hands a canonical eigenmode SelectionRef to the overlay as a stable mode intent", async () => {
+  it("preserves the tracked mode identity when a branch supplies plot parameters", async () => {
     const commands = commandRegistry();
     const overlay = new AnalysisFieldOverlayController();
     const selection = new SelectionController(new EventBus<KernelEventMap>());
@@ -389,6 +389,7 @@ describe("analysis field overlay commands", () => {
           nodeId: "results:eigen:sample-k0:mode-2",
           sampleId: "sample-k0",
           sampleIndex: 0,
+          studyProduct: "modal_eigen",
           type: "frequency-domain",
         },
       },
@@ -401,6 +402,12 @@ describe("analysis field overlay commands", () => {
         analysisFieldOverlay: overlay,
         selection,
         source: "test",
+      },
+      {
+        fieldId: "analysis:eigen:sample-k0:mode-2:delta_m_xyz",
+        modeIndex: 2,
+        sampleIndex: 0,
+        source: "eigen-mode",
       },
     );
 
