@@ -415,3 +415,9 @@
   overflow-y: hidden;
   scrollbar-width: none;
 }
+
+/* A collapsed ribbon is only its tab strip: the shell row shrinks to it. */
+.fm-workspace-shell:has(.fm-ribbon[data-expanded="false"]) {
+  --fm-ribbon-height: 40px;
+}
+

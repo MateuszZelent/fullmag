@@ -304,15 +304,11 @@
   background: var(--fm-danger);
 }
 
+/* Connection and session state read as one status pill. */
 .fm-header__session-badge {
-  border: 1px solid var(--fm-border-subtle);
-  border-radius: var(--fm-radius-xs);
   color: var(--fm-text-muted);
-  font-size: var(--fm-font-size-2xs);
-  letter-spacing: 0.08em;
-  margin-left: var(--fm-space-1);
-  padding: 1px var(--fm-space-1);
-  text-transform: uppercase;
+  font-size: var(--fm-font-size-xs);
+  font-weight: var(--fm-font-weight-medium);
 }
 
 .fm-header__project-status {
@@ -474,10 +470,10 @@
 .fm-header__helper-trigger {
   min-height: var(--fm-control-height-compact);
   border: 1px solid var(--fm-border-subtle);
-  border-radius: var(--fm-radius-sm);
-  padding: 2px var(--fm-space-2);
+  border-radius: var(--fm-radius-pill);
+  padding: 2px var(--fm-space-3) 2px var(--fm-space-2);
   margin-left: var(--fm-space-2);
-  background: var(--fm-bg-panel);
+  background: var(--fm-field-bg);
   cursor: pointer;
   display: inline-flex;
   align-items: center;
@@ -751,3 +747,62 @@
     transition-property: background-color, border-color, color;
   }
 }
+
+/* ── Header zones (redesign 2026-11) ──
+   Left: brand and menu. Centre: command search, centred in the free space.
+   Right: one status pill, the helper, the run group and the project. */
+.fm-header {
+  gap: var(--fm-space-2);
+  padding-inline: var(--fm-space-3) var(--fm-space-2);
+}
+
+.fm-header__search {
+  margin-inline: auto;
+  width: min(360px, 26vw);
+}
+
+/* Home lives in the instance bar; the menu keeps it only as "Back to
+   simulation" while Home is open. */
+.fm-header__nav-item[data-start-nav="true"]:not([data-active="true"]) {
+  display: none;
+}
+
+.fm-header__session-indicator {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--fm-space-2);
+  height: var(--fm-control-height-compact);
+  border: 1px solid var(--fm-border-subtle);
+  border-radius: var(--fm-radius-pill);
+  background: var(--fm-field-bg);
+  padding-inline: var(--fm-space-3);
+  color: var(--fm-text-primary);
+  font-size: var(--fm-font-size-xs);
+  font-weight: var(--fm-font-weight-medium);
+}
+
+.fm-header__session-indicator .fm-header__session-dot {
+  margin: 0;
+}
+
+.fm-header__session-divider {
+  width: 1px;
+  height: 12px;
+  background: var(--fm-border-default);
+}
+
+.fm-header__helper-trigger {
+  margin-left: 0;
+}
+
+.fm-header__separator {
+  height: 20px;
+  margin-inline: var(--fm-space-1);
+  background: var(--fm-border-muted);
+}
+
+.fm-header__project-status {
+  border-radius: var(--fm-radius-pill);
+  padding-inline: var(--fm-space-2);
+}
+
