@@ -307,16 +307,16 @@ def _selected_dev_cuda_target(environment):
     if explicit and _DEV_CUDA_TARGET_RE.fullmatch(explicit) is None:
         raise BuildControlError(f"{DEV_CUDA_TARGET_ENV} must be one real target, such as 86-real")
     found = _host_cuda_targets()
-    if len(found) > 1:
-        raise BuildControlError("Docker DEV requires one host CUDA capability; found " +
-                                ", ".join(sorted(found)))
-    if found:
-        detected = next(iter(found))
-        if explicit and explicit != detected:
-            raise BuildControlError(f"{DEV_CUDA_TARGET_ENV}={explicit} differs from host CUDA target {detected}")
-        return detected
     if explicit:
+        if found and explicit not in found:
+            raise BuildControlError(f"{DEV_CUDA_TARGET_ENV}={explicit} is not among the detected "
+                                    "host CUDA targets: " + ", ".join(sorted(found)))
         return explicit
+    if len(found) > 1:
+        raise BuildControlError(f"Docker DEV detected multiple host targets; set {DEV_CUDA_TARGET_ENV} "
+                                "to one of: " + ", ".join(sorted(found)))
+    if found:
+        return next(iter(found))
     raise BuildControlError("Could not verify a host CUDA target; confirm the GPU compute capability "
                             f"and set {DEV_CUDA_TARGET_ENV} to one real target, such as 86-real")
 
