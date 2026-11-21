@@ -2860,6 +2860,10 @@ def _render_shape_expression(entry: Mapping[str, object]) -> str:
         if kind == "sphere" and radii is None:
             radius = _finite_number(params.get("radius"))
             radii = (radius, radius, radius) if radius is not None else None
+        elif radii is None:
+            radii = _scene_float_sequence(
+                (params.get("rx"), params.get("ry"), params.get("rz")), count=3
+            )
         if not _is_vector3(radii):
             raise ValueError("Ellipsoid geometry requires three finite radii.")
         constructor = "fm.Sphere" if kind == "sphere" and len(set(radii)) == 1 else "fm.Ellipsoid"
