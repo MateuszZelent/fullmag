@@ -42,7 +42,7 @@ export function formatViewportModelSourceSummary(source: ViewportModelSource | n
 function hasExportableVectors(target: Export3DTargetInput, vtk: boolean): boolean {
   if (!vtk && target.renderedVectors) return true;
   return target.field?.componentCount === 3 &&
-    (vtk || target.renderedVectors !== null || target.field.kind === "complex");
+    (vtk || target.renderedVectors !== null);
 }
 
 export function defaultIncludeVectorsForSource(source: ViewportModelSource | null): boolean {

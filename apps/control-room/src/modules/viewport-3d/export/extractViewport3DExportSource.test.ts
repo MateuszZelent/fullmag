@@ -628,13 +628,14 @@ describe("extractViewport3DExportSource", () => {
     expect(caps.supportsVolumetricVtu).toBe(true);
     expect(caps.boundsM?.max[0]).toBeCloseTo(10e-9);
 
-    const segments = Float32Array.of(1e-6, 0, 0, 1.2e-6, 0, 0, 1);
+    const segments = Float32Array.of(1e-6, 0, 0, 1.2e-6, 0, 0);
     const colors = Float32Array.of(0.1, 0.7, 0.4);
     const fieldModel = input.fieldModel!;
     const visibleAirbox = extractViewport3DExportSource({
       ...input,
       airboxSettings: { visible: true, vectorsVisible: true, vectorAlphaPercent: 65 },
       vectorLayersEnabled: true,
+      vectorOpacityScale: 0.92,
       fieldModel: {
         ...fieldModel,
         targetPasses: new Map([
@@ -648,8 +649,9 @@ describe("extractViewport3DExportSource", () => {
         ]),
       },
     });
-    expect(visibleAirbox.targets.find(({ role }) => role === "airbox")?.renderedVectors)
-      .toMatchObject({ segmentsM: segments, colors, opacity: 0.65 });
+    const visibleVectors = visibleAirbox.targets.find(({ role }) => role === "airbox")?.renderedVectors;
+    expect(visibleVectors).toMatchObject({ segmentsM: Float32Array.of(...segments, 1), colors });
+    expect(visibleVectors?.opacity).toBeCloseTo(0.65 * 0.92);
     const exported = await executeViewportModelExport({
       source: visibleAirbox,
       format: "glb",
@@ -660,6 +662,48 @@ describe("extractViewport3DExportSource", () => {
       signal: new AbortController().signal,
     });
     expect(exported.stats.arrowCount).toBe(1);
+
+    for (const topologyModel of [
+      undefined,
+      { ...input.topologyModel!, magneticParts: [], airboxParts: [] },
+    ]) {
+      const fallback = extractViewport3DExportSource({
+        ...input,
+        topologyModel,
+        vectorLayersEnabled: true,
+        fieldVector: input.fieldModel?.targetPasses.get("part-magnet")?.fieldBuffer?.decodedFieldVector,
+        fallbackSettings: { vectorsVisible: false },
+      });
+      expect(fallback.targets).toHaveLength(1);
+      expect(fallback.targets[0]?.renderedVectors).toBeNull();
+      expect(defaultIncludeVectorsForSource(fallback)).toBe(false);
+    }
+
+    const magneticPass = fieldModel.targetPasses.get("part-magnet")!;
+    const complexSource = extractViewport3DExportSource({
+      ...input,
+      vectorLayersEnabled: false,
+      analysisComplexField: {
+        componentCount: 3,
+        dtype: "complex128",
+        grid: [4, 1, 1],
+        pointCount: 4,
+        quantityId: "mode",
+        valueCount: 12,
+        values: new Float64Array(24).fill(1),
+        nodeIndices: new Uint32Array([0, 1, 2, 3]),
+      },
+      fieldModel: {
+        ...fieldModel,
+        targetPasses: new Map([["part-magnet", {
+          ...magneticPass,
+          vectors: { ...magneticPass.vectors, complexGlyphs: {} as never },
+        }]]),
+      },
+    });
+    expect(complexSource.targets[0]?.field?.kind).toBe("complex");
+    expect(complexSource.targets[0]?.renderedVectors).toBeNull();
+    expect(defaultIncludeVectorsForSource(complexSource)).toBe(false);
   });
 
   it("falls back to authored primitive objects with world coordinates and magnetization previews", async () => {

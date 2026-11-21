@@ -26,6 +26,7 @@ import {
   viewport3DOrbitDebugEnabledFromBrowserConfig,
   viewport3DVectorLayersEnabledFromBrowserConfig,
 } from "@/kernel/browserFullmagConfig";
+import { resolveViewport3DMaterialProfile } from "./layers/viewport3DMaterialProfile";
 import type { MeshSizeHistogramHighlight } from "@/kernel/events/eventTypes";
 import { useInstanceTabHidden } from "@/kernel/layout/instanceTabVisibility";
 import { useMeshHistogramBinElementsResource } from "@/kernel/resources/geometryLifecycleResources";
@@ -893,6 +894,9 @@ function LiveViewport3DModule({
           includeHiddenAirbox: !sceneModel.savedViewportActive,
           vectorFallbackColor: colors ? String(colors.field) : undefined,
           vectorLayersEnabled: viewport3DVectorLayersEnabledFromBrowserConfig(),
+          vectorOpacityScale: resolveViewport3DMaterialProfile(
+            getViewport3DVisualProfile(sceneModel.visualProfileId),
+          ).glyphs.opacityScale,
         });
       }}
       clientReady={clientReady}

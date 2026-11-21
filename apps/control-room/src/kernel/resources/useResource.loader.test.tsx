@@ -426,6 +426,58 @@ describe("useResource loader callback", () => {
     }
   });
 
+  it("announces one terminal vector-load failure after deferring transient conflicts", async () => {
+    vi.useFakeTimers();
+    const dom = installSimulationPreparationTestDom();
+    const container = dom.document.createElement("div");
+    dom.document.body.appendChild(container);
+    const bus = new EventBus<KernelEventMap>();
+    const kernel = {
+      api: {},
+      bus,
+      diagnosticRecorder: new DiagnosticRecorderController({ config: { enabled: false } }),
+      resources: new ResourceInvalidationController(bus),
+    } as unknown as KernelApi;
+    const onFailure = vi.fn();
+    const unsubscribe = bus.on("resource:load-failed", onFailure);
+    const load = vi.fn(async () => {
+      throw Object.assign(new Error("spatial domain updated"), {
+        code: "field_domain_changed",
+        status: 409,
+      });
+    });
+    const retryPolicy = {
+      deadlineMs: 1000,
+      maxAttempts: 2,
+      retryAfterMs: 50,
+      keepLoadingWhileRetrying: true,
+      retryableConflictReasonCodes: ["field_domain_changed"],
+    };
+    const root = createRoot(container as unknown as Element);
+
+    function Harness() {
+      const resource = useResource({ load, retryPolicy, resourceKey: "data/fields/H_ext/airbox" });
+      return <div>{resource.status}</div>;
+    }
+
+    try {
+      await act(async () => {
+        root.render(<KernelContext.Provider value={kernel}><Harness /></KernelContext.Provider>);
+      });
+      await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+      expect(container.textContent).toContain("loading");
+      expect(onFailure).not.toHaveBeenCalled();
+      await act(async () => { await vi.advanceTimersByTimeAsync(50); });
+      expect(load).toHaveBeenCalledTimes(2);
+      expect(container.textContent).toContain("error");
+      expect(onFailure).toHaveBeenCalledTimes(1);
+    } finally {
+      await act(async () => root.unmount());
+      unsubscribe();
+      dom.restore();
+    }
+  });
+
   it("keeps optional resource errors visible without emitting a global failure notification", async () => {
     vi.useFakeTimers();
     const dom = installSimulationPreparationTestDom();

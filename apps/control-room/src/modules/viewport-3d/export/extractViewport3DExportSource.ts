@@ -80,28 +80,20 @@ interface ViewportExportVectorSettings {
   readonly visible?: boolean;
 }
 
-export interface Viewport3DExportFdmSettings extends ViewportExportVectorSettings {
+export type Viewport3DExportAirboxSettings = ViewportExportVectorSettings & {
   readonly activeQuantityId?: string | null;
   readonly opacity?: number | null;
   readonly scalarColorPalette?: string | null;
-  readonly shaderColorMode?: string | null;
   readonly shaderMonoColor?: string | null;
   readonly shaderVisible?: boolean;
   readonly surfaceColorSource?: string | null;
   readonly surfaceOpacityPercent?: number | null;
   readonly wireframeVisible?: boolean;
-}
+};
 
-export interface Viewport3DExportAirboxSettings extends ViewportExportVectorSettings {
-  readonly activeQuantityId?: string | null;
-  readonly opacity?: number | null;
-  readonly scalarColorPalette?: string | null;
-  readonly shaderMonoColor?: string | null;
-  readonly shaderVisible?: boolean;
-  readonly surfaceColorSource?: string | null;
-  readonly surfaceOpacityPercent?: number | null;
-  readonly wireframeVisible?: boolean;
-}
+export type Viewport3DExportFdmSettings = Viewport3DExportAirboxSettings & {
+  readonly shaderColorMode?: string | null;
+};
 
 export interface Viewport3DExportSourceInput {
   readonly airboxSettings?: Viewport3DExportAirboxSettings | null;
@@ -111,6 +103,7 @@ export interface Viewport3DExportSourceInput {
   readonly analysisOverlay?: AnalysisFieldOverlayState | null;
   readonly domainId?: string | null;
   readonly domainSummary?: string | null;
+  readonly fallbackSettings?: ViewportExportVectorSettings | null;
   readonly fdmAirboxFieldVector?: DecodedFieldVector | null;
   readonly fdmAirboxVectorGlyphColors?: { readonly colors: Float32Array } | null;
   readonly fdmAirboxVectorSegments?: Float32Array | null;
@@ -118,6 +111,7 @@ export interface Viewport3DExportSourceInput {
   readonly fdmVectorSegments?: Float32Array | null;
   readonly vectorFallbackColor?: string;
   readonly vectorLayersEnabled?: boolean;
+  readonly vectorOpacityScale?: number;
   readonly fdmDomain?: FdmGridRenderDomain | null;
   readonly fdmExportMembership?: {
     readonly regionIds: Uint32Array;
@@ -511,19 +505,28 @@ function captureRenderedVectors(
   colors: Float32Array | null | undefined,
 ): Export3DRenderedVectors | null | undefined {
   if (input.vectorLayersEnabled === false || !settings?.vectorsVisible ||
-      settings.visible === false || !segments?.length || segments.length % 7 !== 0) {
+      settings.visible === false || !segments || segments.length < 6) {
     return input.vectorLayersEnabled === undefined ? undefined : null;
+  }
+  let segmentsM = segments;
+  if (segments.length % 7 !== 0) {
+    const count = Math.floor(segments.length / 6);
+    segmentsM = new Float32Array(count * 7);
+    for (let index = 0; index < count; index += 1) {
+      segmentsM.set(segments.subarray(index * 6, index * 6 + 6), index * 7);
+      segmentsM[index * 7 + 6] = 1;
+    }
   }
   const colorMode = settings.vectorColorMode ?? input.vectorColorMode ?? "orientation";
   const style = resolveVectorFieldLayerStyle({
     colorMode,
     fallbackColor: input.vectorFallbackColor ?? "#ffffff",
-    opacity: (settings.vectorAlphaPercent ?? 100) / 100,
+    opacity: (settings.vectorAlphaPercent ?? 100) / 100 * (input.vectorOpacityScale ?? 1),
     style: { monoColor: settings.vectorMonoColor, thickness: settings.vectorThickness },
   });
   const mono = new Color(style.materialColor).convertLinearToSRGB();
   return {
-    segmentsM: segments,
+    segmentsM,
     colors: colors ?? buildVectorGlyphColors(segments, colorMode),
     monochromeColor: [mono.r, mono.g, mono.b],
     opacity: style.materialOpacity,
@@ -1205,14 +1208,16 @@ function extractFemTargets(
   });
 
   for (const pm of visibleMagneticParts) {
+    const { part, surfaceIndices } = pm;
+    const partId = part.id;
     const partMask = new Uint8Array(nodeCount);
     const markedCount = markNodeSelection(pm.fullNodeSelection, partMask, nodeCount);
     if (markedCount === 0) {
-      markNodeSelection(pm.part, partMask, nodeCount);
+      markNodeSelection(part, partMask, nodeCount);
     }
-    if (pm.surfaceIndices) {
-      for (let i = 0; i < pm.surfaceIndices.length; i += 1) {
-        const idx = pm.surfaceIndices[i] ?? -1;
+    if (surfaceIndices) {
+      for (let i = 0; i < surfaceIndices.length; i += 1) {
+        const idx = surfaceIndices[i] ?? -1;
         if (idx >= 0 && idx < nodeCount) partMask[idx] = 1;
       }
     }
@@ -1224,41 +1229,40 @@ function extractFemTargets(
       nodeCount,
       partMask,
     );
-    const partSettings = input.getPartSettings?.(pm.part);
+    const partSettings = input.getPartSettings?.(part);
     const partLabel =
-      (pm.part as { readonly label?: string | null }).label || pm.part.id;
+      (part as { readonly label?: string | null }).label || partId;
     const built = buildFemTargetFromSelection({
-      id: pm.part.id,
+      id: partId,
       name: partLabel,
       positionsM,
       nodeCount,
-      surfaceIndices: pm.surfaceIndices,
+      surfaceIndices: surfaceIndices,
       topology,
       allowedNodes: partMask,
-      elementStart: pm.part.element_start,
-      elementCount: pm.part.element_count,
+      elementStart: part.element_start,
+      elementCount: part.element_count,
       field,
       appearance: resolveTargetAppearance(partSettings, field, defaultPalette, input.analysisOverlay?.appearance),
     });
-    const vectors = input.fieldModel?.targetPasses.get(pm.part.id)?.vectors;
+    const vectors = input.fieldModel?.targetPasses.get(partId)?.vectors;
     if (built) targets.push({
       ...built,
-      renderedVectors: vectors?.complexGlyphs ? undefined : captureRenderedVectors(
+      renderedVectors: vectors?.complexGlyphs && input.vectorLayersEnabled !== false ? undefined : captureRenderedVectors(
         input,
         partSettings,
-        vectors?.segments ?? input.fieldModel?.partVectorSegments.get(pm.part.id),
+        vectors?.segments ?? input.fieldModel?.partVectorSegments.get(partId),
         vectors?.glyphColors,
       ),
     });
   }
 
-  if (
-    targets.length === 0 &&
-    topologyModel &&
-    topologyModel.magneticParts.length === 0 &&
-    topologyModel.airboxParts.length === 0 &&
-    (topologyModel.fallbackSurfaceIndices.length > 0 || (topology?.cellCount ?? 0) > 0)
-  ) {
+  const hasFallbackGeometry = topologyModel
+    ? topologyModel.magneticParts.length === 0 &&
+      topologyModel.airboxParts.length === 0 &&
+      (topologyModel.fallbackSurfaceIndices.length > 0 || (topology?.cellCount ?? 0) > 0)
+    : Boolean(topology);
+  if (targets.length === 0 && hasFallbackGeometry) {
     const allNodes = new Uint8Array(nodeCount).fill(1);
     const field = input.analysisComplexField
       ? convertComplexFieldToExportInput(
@@ -1273,35 +1277,22 @@ function extractFemTargets(
       name: input.domainId || "FEM Mesh",
       positionsM,
       nodeCount,
-      surfaceIndices: topologyModel.fallbackSurfaceIndices,
+      surfaceIndices: topologyModel?.fallbackSurfaceIndices ?? null,
       topology,
       allowedNodes: allNodes,
       field,
       appearance: resolveTargetAppearance(null, field, defaultPalette, input.analysisOverlay?.appearance),
     });
-    if (built) targets.push(built);
-  } else if (targets.length === 0 && !topologyModel && topology) {
-    const allNodes = new Uint8Array(nodeCount).fill(1);
-    const field = input.analysisComplexField
-      ? convertComplexFieldToExportInput(
-          input.analysisComplexField,
-          overlayComplexOptions(input.analysisOverlay),
-        )
-      : input.fieldVector
-        ? convertRealFieldToExportInput(input.fieldVector)
-        : null;
-    const built = buildFemTargetFromSelection({
-      id: input.domainId || "fem-mesh",
-      name: input.domainId || "FEM Mesh",
-      positionsM,
-      nodeCount,
-      surfaceIndices: null,
-      topology,
-      allowedNodes: allNodes,
-      field,
-      appearance: resolveTargetAppearance(null, field, defaultPalette, input.analysisOverlay?.appearance),
+    const vectors = input.fieldModel?.targetPasses.get(FULL_VIEWPORT_3D_TARGET_ID)?.vectors;
+    if (built) targets.push({
+      ...built,
+      renderedVectors: vectors?.complexGlyphs && input.vectorLayersEnabled !== false ? undefined : captureRenderedVectors(
+        input,
+        input.fallbackSettings,
+        vectors?.segments ?? input.fieldModel?.fullVectorSegments,
+        vectors?.glyphColors,
+      ),
     });
-    if (built) targets.push(built);
   }
 
   if (topologyModel && (input.includeHiddenAirbox || input.airboxSettings?.visible)) {
@@ -1349,7 +1340,7 @@ function extractFemTargets(
       if (built) targets.push({
         ...built,
         role: "airbox",
-        renderedVectors: vectors?.complexGlyphs ? undefined : captureRenderedVectors(
+        renderedVectors: vectors?.complexGlyphs && input.vectorLayersEnabled !== false ? undefined : captureRenderedVectors(
           input,
           airboxSettings,
           vectors?.segments ?? input.fieldModel?.partVectorSegments.get(partId),
