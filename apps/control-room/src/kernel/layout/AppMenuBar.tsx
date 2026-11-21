@@ -442,6 +442,7 @@ function StartNavItem({
       aria-current={active && !returning ? "page" : undefined}
       className="fm-header__nav-item"
       data-active={active ? "true" : undefined}
+      data-start-nav="true"
       size="sm"
       title={label}
       type="button"
@@ -919,7 +920,8 @@ function SessionAppMenuBar() {
           data-status={sessionDisplay.indicatorStatus}
           aria-label={sessionDisplay.indicatorLabel}
         />
-        <span>{sessionDisplay.connectionLabel}</span>
+        <span className="fm-header__session-label">{sessionDisplay.connectionLabel}</span>
+        <span aria-hidden="true" className="fm-header__session-divider" />
         <span className="fm-header__session-badge">
           {sessionDisplay.sessionBadge}
         </span>

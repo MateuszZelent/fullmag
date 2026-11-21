@@ -6,8 +6,9 @@
   flex: none;
   align-items: flex-end;
   min-width: 0;
-  border-bottom: 1px solid var(--fm-border-subtle);
-  background: var(--fm-bg-chrome);
+  border-bottom: 1px solid var(--fm-border-muted);
+  /* One top-chrome surface with the menu and ribbon bars below it. */
+  background: color-mix(in srgb, var(--fm-bg-chrome) 70%, transparent);
   padding: var(--fm-space-1) var(--fm-space-2) 0;
 }
 

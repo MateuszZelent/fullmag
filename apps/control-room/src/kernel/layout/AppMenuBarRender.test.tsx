@@ -60,7 +60,9 @@ describe("AppMenuBar", () => {
 
     expect(html).toContain("fm-button");
     expect(html).toContain("fm-header__nav-item");
-    expect(html).toContain("fm-header__action-btn");
+    // The theme control is a Light / System / Dark segmented group.
+    expect(html).toContain('class="fm-theme-switcher"');
+    expect(html).toContain("fm-theme-switcher__option");
     // Home leads the main menu; the brand no longer opens a menu of its own.
     expect(html).toContain('aria-current="page"');
     expect(html).not.toContain("fm-header__app-trigger");
@@ -71,16 +73,11 @@ describe("AppMenuBar", () => {
     expect(html).toContain('aria-label="Color theme: System (currently dark)"');
 
     const themeSwitcherSource = readFileSync(themeSwitcherSourceUrl, "utf8");
-    expect(themeSwitcherSource).toContain("<DropdownMenuLabel>Color theme</DropdownMenuLabel>");
-    expect(themeSwitcherSource).toContain(
-      '<DropdownMenuRadioItem value="light">Light</DropdownMenuRadioItem>',
-    );
-    expect(themeSwitcherSource).toContain(
-      '<DropdownMenuRadioItem value="dark">Dark</DropdownMenuRadioItem>',
-    );
-    expect(themeSwitcherSource).toContain(
-      '<DropdownMenuRadioItem value="system">System</DropdownMenuRadioItem>',
-    );
+    // One radio per preference inside the labelled radiogroup.
+    expect(themeSwitcherSource).toContain('role="radiogroup"');
+    expect(themeSwitcherSource).toContain('{ icon: Sun, label: "Light", value: "light" }');
+    expect(themeSwitcherSource).toContain('{ icon: Monitor, label: "System", value: "system" }');
+    expect(themeSwitcherSource).toContain('{ icon: Moon, label: "Dark", value: "dark" }');
   });
 
   it("connects the API error dialog to its accessible description", () => {

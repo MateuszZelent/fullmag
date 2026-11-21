@@ -146,6 +146,7 @@ pub struct RunPerformanceRecorder {
     timing_nonzero: [bool; TIMING_COLUMN_COUNT],
     counter_nonzero: [bool; COUNTER_COLUMN_COUNT],
     latest_stats_row: Option<StepRow>,
+    stage_start_time_s: Option<f64>,
 }
 
 impl RunPerformanceRecorder {
@@ -225,6 +226,7 @@ impl RunPerformanceRecorder {
             timing_nonzero: [false; TIMING_COLUMN_COUNT],
             counter_nonzero: [false; COUNTER_COLUMN_COUNT],
             latest_stats_row: None,
+            stage_start_time_s: None,
         }
     }
 
@@ -327,6 +329,10 @@ impl RunPerformanceRecorder {
             stats,
         );
 
+        if stats.step == 0 && valid_solver_time(stats.time) {
+            self.stage_start_time_s.get_or_insert(stats.time);
+        }
+
         self.unique_step_callbacks = self.unique_step_callbacks.saturating_add(1);
         self.sum_step_reported_rejected_attempts = self
             .sum_step_reported_rejected_attempts
@@ -407,6 +413,7 @@ impl RunPerformanceRecorder {
             timing_nonzero: self.timing_nonzero,
             counter_nonzero: self.counter_nonzero,
             latest_stats_row: self.latest_stats_row,
+            stage_start_time_s: self.stage_start_time_s,
             writer_start_error: self.writer_start_error.clone(),
         }
     }
@@ -679,6 +686,7 @@ struct FinalSnapshot {
     timing_nonzero: [bool; TIMING_COLUMN_COUNT],
     counter_nonzero: [bool; COUNTER_COLUMN_COUNT],
     latest_stats_row: Option<StepRow>,
+    stage_start_time_s: Option<f64>,
     writer_start_error: Option<String>,
 }
 
@@ -735,6 +743,7 @@ fn writer_thread(
     let mut live_sequence = 0_u64;
     let mut latest_row = None;
     let mut first_step = None;
+    let mut stage_start_time_s = None;
     let mut received_rows = 0_u64;
     let resource = write_resource_sample(
         &mut resources,
@@ -745,7 +754,7 @@ fn writer_thread(
         "start",
     );
     publish_live_performance(&performance_dir, &identity, &mut live_points, &mut live_sequence,
-        resource, latest_row, first_step, received_rows, None, &mut diagnostics);
+        resource, latest_row, first_step, received_rows, stage_start_time_s, None, &mut diagnostics);
 
     let mut next_sample = Instant::now() + RESOURCE_SAMPLE_INTERVAL;
     loop {
@@ -760,7 +769,7 @@ fn writer_thread(
                 "interval",
             );
             publish_live_performance(&performance_dir, &identity, &mut live_points, &mut live_sequence,
-                resource, latest_row, first_step, received_rows, None, &mut diagnostics);
+                resource, latest_row, first_step, received_rows, stage_start_time_s, None, &mut diagnostics);
             flush_writer(&mut steps, "steps.csv", &mut diagnostics);
             flush_writer(&mut resources, "resources.csv", &mut diagnostics);
             next_sample = Instant::now() + RESOURCE_SAMPLE_INTERVAL;
@@ -769,6 +778,9 @@ fn writer_thread(
         match receiver.recv_timeout(timeout) {
             Ok(row) => {
                 first_step.get_or_insert(row.step);
+                if row.step == 0 && valid_solver_time(row.time_s) {
+                    stage_start_time_s.get_or_insert(row.time_s);
+                }
                 latest_row = Some(row);
                 received_rows = received_rows.saturating_add(1);
                 match steps.as_mut() {
@@ -809,7 +821,8 @@ fn writer_thread(
             fallback_final_snapshot(identity.clone(), realization, started_at, started_at_unix_ms)
         });
     publish_live_performance(&performance_dir, &identity, &mut live_points, &mut live_sequence,
-        final_resource, latest_row, first_step, received_rows, Some(&final_snapshot), &mut diagnostics);
+        final_resource, latest_row, first_step, received_rows, stage_start_time_s,
+        Some(&final_snapshot), &mut diagnostics);
     let _ = write_summary(&performance_dir, &final_snapshot, &diagnostics);
     diagnostics
 }
@@ -846,6 +859,7 @@ fn fallback_final_snapshot(
         timing_nonzero: [false; TIMING_COLUMN_COUNT],
         counter_nonzero: [false; COUNTER_COLUMN_COUNT],
         latest_stats_row: None,
+        stage_start_time_s: None,
         writer_start_error: Some("recorder_finalized_without_finish_snapshot".to_owned()),
     }
 }
@@ -1003,6 +1017,7 @@ fn publish_live_performance(
     latest: Option<StepRow>,
     first_step: Option<u64>,
     received_rows: u64,
+    stage_start_time_s: Option<f64>,
     final_snapshot: Option<&FinalSnapshot>,
     diagnostics: &mut WriterDiagnostics,
 ) {
@@ -1010,6 +1025,13 @@ fn publish_live_performance(
     // must carry metrics from that same terminal step, never a delivered prefix.
     let latest = final_snapshot.map(|snapshot| snapshot.latest_stats_row).unwrap_or(latest);
     let step = final_snapshot.and_then(|s| s.last_step).or(latest.map(|s| s.step));
+    let solver_clock = latest
+        .filter(|row| Some(row.step) == step && valid_solver_time(row.time_s) && valid_solver_dt(row.dt_s))
+        .map(|row| json!({ "step_index": row.step, "time_s": row.time_s, "dt_s": row.dt_s }));
+    let stage_start_time_s = final_snapshot
+        .and_then(|snapshot| snapshot.stage_start_time_s)
+        .or(stage_start_time_s)
+        .filter(|time_s| valid_solver_time(*time_s));
     let observed = final_snapshot.map(|s| s.unique_step_callbacks)
         .or(latest.map(|s| s.unique_step_callback_count)).unwrap_or(0);
     let gpu_reason = resource.get("gpu_unavailable_reason").cloned().unwrap_or(Value::Null);
@@ -1033,7 +1055,8 @@ fn publish_live_performance(
         }).unwrap_or("running"),
         "elapsed_monotonic_ns": elapsed,
         "first_step_index": final_snapshot.and_then(|s| s.first_step).or(first_step),
-        "step_index": step, "unique_step_callback_records": observed,
+        "step_index": step, "solver_clock": solver_clock, "stage_start_time_s": stage_start_time_s,
+        "unique_step_callback_records": observed,
         "rows_dropped": final_snapshot.map(|s| s.dropped_rows).unwrap_or_else(|| observed.saturating_sub(received_rows)),
         "collection_overhead_ns": final_snapshot.map(|s| s.collection_overhead_ns),
         "latest_step_wall_ns": latest.and_then(|s| s.callback_delta_ns_per_step_gap),
@@ -1050,6 +1073,14 @@ fn publish_live_performance(
         fs::rename(temporary, directory.join("live.v1.json"))
     })();
     if let Err(error) = result { record_writer_error(diagnostics, format!("publish performance live snapshot: {error}")); }
+}
+
+fn valid_solver_time(time_s: f64) -> bool {
+    time_s.is_finite() && time_s >= 0.0
+}
+
+fn valid_solver_dt(dt_s: f64) -> bool {
+    dt_s.is_finite() && dt_s >= 0.0
 }
 
 struct ProcessSample {
@@ -1460,6 +1491,7 @@ mod tests {
             timing_nonzero: [false; TIMING_COLUMN_COUNT],
             counter_nonzero: [false; COUNTER_COLUMN_COUNT],
             latest_stats_row: None,
+            stage_start_time_s: None,
         }
     }
 
@@ -1589,6 +1621,7 @@ mod tests {
             Some(last_delivered),
             Some(4),
             2,
+            None,
             Some(&snapshot),
             &mut diagnostics,
         );
@@ -1609,6 +1642,50 @@ mod tests {
             summary["terminal_stats_snapshot"]["timings_ns"]["relaxation_line_search_wall_time_ns"],
             777
         );
+    }
+
+    #[test]
+    fn live_snapshot_keeps_solver_clock_and_nonzero_stage_origin_coherent() {
+        let (sender, _receiver) = mpsc::sync_channel(4);
+        let mut recorder = recorder(Some(sender), json!({}));
+        let mut start = stats(0);
+        start.time = 20e-9;
+        start.dt = 0.0;
+        recorder.observe(&start);
+        let mut latest = stats(7);
+        latest.time = 27.488e-9;
+        latest.dt = 0.0;
+        recorder.observe(&latest);
+        let snapshot = recorder.final_snapshot("completed");
+
+        let test_dir = TestDir::new();
+        let performance_dir = test_dir.0.join("performance");
+        fs::create_dir(&performance_dir).expect("create performance output directory");
+        let mut points = VecDeque::new();
+        let mut sequence = 0;
+        let mut diagnostics = WriterDiagnostics::default();
+        publish_live_performance(
+            &performance_dir,
+            &json!({}),
+            &mut points,
+            &mut sequence,
+            json!({ "elapsed_monotonic_ns": 1, "gpu_uuid": null, "gpu_unavailable_reason": null }),
+            None,
+            Some(0),
+            0,
+            None,
+            Some(&snapshot),
+            &mut diagnostics,
+        );
+
+        let live: Value = serde_json::from_slice(
+            &fs::read(performance_dir.join("live.v1.json")).expect("read published snapshot"),
+        ).expect("parse published snapshot");
+        assert_eq!(live["step_index"], 7);
+        assert_eq!(live["solver_clock"]["step_index"], 7);
+        assert_eq!(live["solver_clock"]["time_s"], 27.488e-9);
+        assert_eq!(live["solver_clock"]["dt_s"], 0.0);
+        assert_eq!(live["stage_start_time_s"], 20e-9);
     }
 
     #[test]
@@ -1639,6 +1716,7 @@ mod tests {
                 None,
                 None,
                 0,
+                None,
                 None,
                 &mut diagnostics,
             );

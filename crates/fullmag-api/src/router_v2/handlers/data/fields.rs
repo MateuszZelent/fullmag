@@ -1845,6 +1845,37 @@ fn legacy_pending_field_freshness(snapshot: &SessionStateResponse) -> FieldFresh
     }
 }
 
+// Run admission binds the SessionManifest and RunManifest to the same run ID.
+// The accepted field generation is not a terminal-run marker: same-run
+// replacements can be published while a later stage is still running.
+fn current_run_has_live_field_provider(snapshot: &SessionStateResponse) -> bool {
+    snapshot
+        .run
+        .as_ref()
+        .is_some_and(|run| run.run_id == snapshot.session.run_id && run.status == "running")
+}
+
+/// A live run can materialize any resolved field the worker supports, even
+/// when the field is not the currently selected viewport quantity. The read
+/// itself records demand before reaching this check, so return a retryable
+/// response while the worker captures that demand on its next observation.
+fn active_run_field_request_pending(
+    snapshot: &SessionStateResponse,
+    snapshot_id: Option<&str>,
+    quantity_id: &str,
+) -> bool {
+    snapshot_id.is_none()
+        && current_run_has_live_field_provider(snapshot)
+        && snapshot
+            .live_state
+            .as_ref()
+            .is_some_and(|state| state.status == "running")
+        && !materializer_status(snapshot, quantity_id).is_some_and(|status| {
+            status.state == fullmag_runner::LiveFieldMaterializationState::Error
+        })
+        && capability_supports_quantity(snapshot, quantity_id) == Some(true)
+}
+
 fn validate_field_vector_generation_precondition(
     query: &FieldVectorQuery,
     snapshot: &SessionStateResponse,
@@ -5330,16 +5361,11 @@ async fn get_field_vector_unfenced(
                 quantity_id,
             )
             .await;
-            let selected_quantity =
-                canonical_quantity_id(&snapshot.display_selection.selection.quantity);
-            let legacy_pending = requested_snapshot_id.is_none()
-                && selected_quantity.as_ref() == quantity_id
-                && !is_fem_runtime(snapshot)
-                && snapshot
-                    .live_state
-                    .as_ref()
-                    .is_some_and(|state| state.status == "running")
-                && !(quantity_id == "m" && invalid_live_magnetization_is_present(snapshot));
+            let live_run_pending = active_run_field_request_pending(
+                snapshot,
+                requested_snapshot_id,
+                quantity_id,
+            ) && !(quantity_id == "m" && invalid_live_magnetization_is_present(snapshot));
             if materializer_pending {
                 let generation_id = domain_generation_id(snapshot);
                 return Ok(pending_field_vector_response(
@@ -5362,13 +5388,13 @@ async fn get_field_vector_unfenced(
                 )
                 .await);
             }
-            if legacy_pending {
+            if live_run_pending {
                 let generation_id = domain_generation_id(snapshot);
                 return Ok(pending_field_vector_response(
                     query,
                     quantity_id,
                     generation_id,
-                    "field_unmaterialized",
+                    "field_materialization_pending",
                     None,
                 )
                 .await);
@@ -9594,6 +9620,133 @@ mod tests {
             supports_lossy_fallback_override: false,
         });
         snapshot
+    }
+
+    fn mark_field_provider_running(snapshot: &mut crate::types::SessionStateResponse) {
+        snapshot.run = Some(crate::types::RunManifest {
+            run_id: snapshot.session.run_id.clone(),
+            session_id: snapshot.session.session_id.clone(),
+            status: "running".into(),
+            total_steps: 0,
+            final_time: None,
+            final_e_ex: None,
+            final_e_demag: None,
+            final_e_ext: None,
+            final_e_ani: None,
+            final_e_dmi: None,
+            final_e_rotated_dmi: None,
+            final_e_total: None,
+            artifact_dir: String::new(),
+        });
+        snapshot.live_state = Some(
+            serde_json::from_value(serde_json::json!({
+                "status": "running",
+                "updated_at_unix_ms": 1,
+                "latest_step": {
+                    "step": 1,
+                    "time": 1.0e-12,
+                    "dt": 1.0e-12,
+                    "e_ex": 0.0,
+                    "e_demag": 0.0,
+                    "e_ext": 0.0,
+                    "e_total": 0.0,
+                    "max_dm_dt": 0.0,
+                    "max_h_eff": 0.0,
+                    "wall_time_ns": 0,
+                    "grid": [1, 1, 1],
+                    "field_materialization_states": [],
+                    "finished": false
+                }
+            }))
+            .expect("running live state should deserialize"),
+        );
+    }
+
+    #[test]
+    fn requested_supported_field_waits_for_live_capture_even_when_not_selected() {
+        let mut snapshot = snapshot_with_field_provider("H_demag");
+        mark_field_provider_running(&mut snapshot);
+        assert_eq!(snapshot.display_selection.selection.quantity, "m");
+
+        assert!(super::active_run_field_request_pending(
+            &snapshot,
+            None,
+            "H_demag",
+        ));
+        assert!(!super::active_run_field_request_pending(
+            &snapshot,
+            Some("historical-stage"),
+            "H_demag",
+        ));
+        assert!(!super::active_run_field_request_pending(
+            &snapshot,
+            None,
+            "unknown-field",
+        ));
+
+        let mut torque_snapshot = snapshot_with_field_provider("torque");
+        mark_field_provider_running(&mut torque_snapshot);
+        assert!(super::active_run_field_request_pending(
+            &torque_snapshot,
+            None,
+            "torque",
+        ));
+
+        let mut failed_materialization = snapshot.clone();
+        failed_materialization
+            .live_state
+            .as_mut()
+            .unwrap()
+            .latest_step
+            .field_materialization_states
+            .push(fullmag_runner::LiveFieldMaterializationStatus {
+                quantity: "H_demag".into(),
+                source_step: 1,
+                request_revision: 1,
+                state: fullmag_runner::LiveFieldMaterializationState::Error,
+                error: Some("capture failed".into()),
+            });
+        assert!(!super::active_run_field_request_pending(
+            &failed_materialization,
+            None,
+            "H_demag",
+        ));
+
+        snapshot.live_state.as_mut().unwrap().status = "completed".into();
+        assert!(!super::active_run_field_request_pending(
+            &snapshot,
+            None,
+            "H_demag",
+        ));
+    }
+
+    #[test]
+    fn same_run_replacement_generation_does_not_hide_active_field_provider() {
+        let mut snapshot = snapshot_with_field_provider("H_demag");
+        mark_field_provider_running(&mut snapshot);
+        assert!(super::active_run_field_request_pending(
+            &snapshot,
+            None,
+            "H_demag",
+        ));
+
+        snapshot.accepted_terminal_field_generation =
+            Some(crate::types::CurrentLiveFieldGeneration {
+                run_id: snapshot.session.run_id.clone(),
+                sequence: 1,
+            });
+        assert!(super::active_run_field_request_pending(
+            &snapshot,
+            None,
+            "H_demag",
+        ));
+
+        snapshot.run.as_mut().unwrap().status = "completed".into();
+        assert!(!super::active_run_field_request_pending(
+            &snapshot,
+            None,
+            "H_demag",
+        ));
     }
 
     fn add_physical_field_source(

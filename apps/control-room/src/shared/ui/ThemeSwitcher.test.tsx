@@ -14,7 +14,12 @@ describe("ThemeSwitcher", () => {
     );
 
     expect(html).toContain("fm-theme-switcher");
+    expect(html).toContain('role="radiogroup"');
     expect(html).toContain('aria-label="Color theme: System (currently dark)"');
+    for (const label of ["Light", "System", "Dark"]) {
+      expect(html).toContain(`aria-label="${label}"`);
+    }
+    expect(html.match(/role="radio"/g)).toHaveLength(3);
     expect(html).toContain("fm-button");
   });
 });

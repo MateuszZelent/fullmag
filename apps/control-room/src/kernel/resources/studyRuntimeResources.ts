@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef } from "react";
-import { fieldCatalogResourceKey } from "./fieldCatalogScope";
+import { fieldCatalogResourceKey, fieldCatalogRevisionKey } from "./fieldCatalogScope";
 
 import {
   ANALYSIS_FREQUENCY_DOMAIN_EIGEN_BRANCHES_V2_PATH,
@@ -2441,8 +2441,13 @@ export function useQuantityCatalogResource({
   runId,
 }: RuntimeResourceOptions & { stageId?: string | null; runId?: string | null } = {}) {
   const { api } = useKernel();
+  const activeRunId = useSessionStatusSelector(
+    ({ data }) => data?.run?.run_id ?? null,
+    { enabled },
+  );
+  const catalogRunId = runId === undefined ? activeRunId : runId;
   const { resourceKey, sessionIdentity } = useSessionScopedResourceKey(
-    fieldCatalogResourceKey(DATA_QUANTITIES_PATH, stageId, runId),
+    fieldCatalogResourceKey(DATA_QUANTITIES_PATH, stageId, catalogRunId),
   );
   const load = useCallback(
     ({ sessionScopeKey, signal }: { sessionScopeKey?: string; signal: AbortSignal }) =>
@@ -2453,8 +2458,22 @@ export function useQuantityCatalogResource({
   return useResource<QuantityCatalogResource>({
     enabled: enabled && sessionIdentity !== null && (stageId == null || stageId.length > 0),
     load,
-    resolveRevision: (data) => stageId == null ? data.schema_version : JSON.stringify([data.schema_version, data.quantities.map(entry => [entry.id, entry.materialization_state, entry.resolved_capability])]),
+    resolveRevision: (data) => JSON.stringify([
+      data.schema_version,
+      data.quantities.map((entry) => [
+        entry.id,
+        entry.capability_state,
+        entry.solver_capability,
+        entry.requestable,
+        entry.renderable,
+        entry.materializable,
+        entry.materialization_state,
+        entry.materialization_reason_code,
+        entry.resolved_capability,
+      ]),
+    ]),
     resourceKey,
+    revisionKey: fieldCatalogRevisionKey(DATA_QUANTITIES_PATH, stageId),
   });
 }
 

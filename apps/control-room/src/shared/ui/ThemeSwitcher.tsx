@@ -6,14 +6,12 @@ import { useTheme } from "@/design/theme/ThemeProvider";
 import type { ThemeMode, ThemePreference } from "@/design/theme/themePreference";
 
 import { Button } from "./Button";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuLabel,
-  DropdownMenuRadioGroup,
-  DropdownMenuRadioItem,
-  DropdownMenuTrigger,
-} from "./DropdownMenu";
+
+const THEME_OPTIONS = [
+  { icon: Sun, label: "Light", value: "light" },
+  { icon: Monitor, label: "System", value: "system" },
+  { icon: Moon, label: "Dark", value: "dark" },
+] as const;
 
 interface ThemeSwitcherProps {
   theme: ThemeMode;
@@ -22,8 +20,6 @@ interface ThemeSwitcherProps {
 
 export function ThemeSwitcher({ theme, onThemeChange }: ThemeSwitcherProps) {
   const { preference } = useTheme();
-  const Icon =
-    preference === "system" ? Monitor : preference === "dark" ? Moon : Sun;
   const preferenceLabel =
     preference === "system"
       ? `System (currently ${theme})`
@@ -31,35 +27,31 @@ export function ThemeSwitcher({ theme, onThemeChange }: ThemeSwitcherProps) {
         ? "Dark"
         : "Light";
 
+  // Light / System / Dark as one segmented control (mockup header); the group
+  // keeps the "Color theme: ..." label that tests and browser checks use.
   return (
-    <DropdownMenu>
-      <DropdownMenuTrigger asChild>
+    <div
+      aria-label={`Color theme: ${preferenceLabel}`}
+      className="fm-theme-switcher"
+      role="radiogroup"
+      title={`Color theme: ${preferenceLabel}`}
+    >
+      {THEME_OPTIONS.map(({ icon: OptionIcon, label, value }) => (
         <Button
-          aria-label={`Color theme: ${preferenceLabel}`}
-          className="fm-header__action-btn fm-theme-switcher"
+          aria-checked={preference === value}
+          aria-label={label}
+          className="fm-theme-switcher__option"
+          key={value}
+          role="radio"
           size="icon"
-          title={`Color theme: ${preferenceLabel}`}
+          title={label}
           type="button"
           variant="ghost"
+          onClick={() => onThemeChange(value)}
         >
-          <Icon size={14} aria-hidden="true" />
+          <OptionIcon size={13} aria-hidden="true" />
         </Button>
-      </DropdownMenuTrigger>
-      <DropdownMenuContent align="end">
-        <DropdownMenuLabel>Color theme</DropdownMenuLabel>
-        <DropdownMenuRadioGroup
-          value={preference}
-          onValueChange={(value) => {
-            if (value === "light" || value === "dark" || value === "system") {
-              onThemeChange(value);
-            }
-          }}
-        >
-          <DropdownMenuRadioItem value="light">Light</DropdownMenuRadioItem>
-          <DropdownMenuRadioItem value="dark">Dark</DropdownMenuRadioItem>
-          <DropdownMenuRadioItem value="system">System</DropdownMenuRadioItem>
-        </DropdownMenuRadioGroup>
-      </DropdownMenuContent>
-    </DropdownMenu>
+      ))}
+    </div>
   );
 }

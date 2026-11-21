@@ -7,12 +7,17 @@ interface RibbonTabStripProps {
   tabs: readonly RibbonStripTabDef[];
   activeTabId: RibbonStripTabId;
   onTabClick: (tabId: RibbonStripTabId) => void;
+  /** Pointer selection; defaults to onTabClick (keyboard keeps onTabClick). */
+  onTabPress?: (tabId: RibbonStripTabId) => void;
+  onTabDoubleClick?: (tabId: RibbonStripTabId) => void;
 }
 
 export function RibbonTabStrip({
   tabs,
   activeTabId,
   onTabClick,
+  onTabPress = onTabClick,
+  onTabDoubleClick,
 }: RibbonTabStripProps) {
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent<HTMLDivElement>) => {
@@ -60,7 +65,8 @@ export function RibbonTabStrip({
           aria-controls="fm-ribbon-tabpanel"
           aria-selected={tab.id === activeTabId}
           tabIndex={tab.id === activeTabId ? 0 : -1}
-          onClick={() => onTabClick(tab.id)}
+          onClick={() => onTabPress(tab.id)}
+          onDoubleClick={onTabDoubleClick ? () => onTabDoubleClick(tab.id) : undefined}
         >
           {tab.label}
         </button>

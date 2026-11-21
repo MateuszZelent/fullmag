@@ -755,6 +755,62 @@ describe("study runtime command contributions", () => {
     expect(submit).not.toHaveBeenCalled();
   });
 
+  it("does not block Compute while a live viewport preference is being saved", async () => {
+    const registry = registryWithStudyRuntimeCommands();
+    const pendingForms = new PendingFormRegistry();
+    pendingForms.register(Symbol("visualization"), {
+      apply: () => true,
+      applying: true,
+      dirty: true,
+      mode: "liveViewport",
+      reset: () => undefined,
+      valid: true,
+    });
+    const submit = vi.fn(async () => ({
+      accepted: true,
+      command_id: "cmd-solve",
+      error: null,
+    }));
+    const context = {
+      api: { commands: { submit } } as never,
+      pendingForms,
+      resourceData: runtimeResourceData(),
+      source: "ribbon" as const,
+    };
+
+    expect(registry.isEnabled("study.run", context)).toBe(true);
+    expectPendingAcceptedRuntimeCommand(
+      await registry.execute("study.run", context),
+      "Study compute command accepted.",
+      "cmd-solve",
+    );
+    expect(submit).toHaveBeenCalledOnce();
+  });
+
+  it("continues to block Compute while a staged Inspector save is applying", () => {
+    const registry = registryWithStudyRuntimeCommands();
+    const pendingForms = new PendingFormRegistry();
+    pendingForms.register(Symbol("authoring"), {
+      apply: () => true,
+      applying: true,
+      dirty: false,
+      mode: "staged",
+      reset: () => undefined,
+      valid: true,
+    });
+    const context = {
+      api: {} as never,
+      pendingForms,
+      resourceData: runtimeResourceData(),
+      source: "ribbon" as const,
+    };
+
+    expect(registry.isEnabled("study.run", context)).toBe(false);
+    expect(registry.get("study.run")?.disabledReason?.(context)).toBe(
+      "Wait for the Inspector save to finish before starting Compute.",
+    );
+  });
+
   it("rechecks Inspector edits after refreshing Compute preconditions", async () => {
     const registry = registryWithStudyRuntimeCommands();
     const pendingForms = new PendingFormRegistry();
