@@ -3208,24 +3208,7 @@ FrequencyDomainStatus assemble_poisson_airbox_shared_domain(
                             physical_dshape(local_test, 0),
                             physical_dshape(local_test, 1),
                             physical_dshape(local_test, 2)};
-                        double grad_trial[3] = {
-                            physical_dshape(local_trial, 0),
-                            physical_dshape(local_trial, 1),
-                            physical_dshape(local_trial, 2)};
-                        double h_phi[3] = {
-                            -grad_trial[0], -grad_trial[1], -grad_trial[2]};
-                        double m_cross_h[3] = {
-                            m0[1] * h_phi[2] - m0[2] * h_phi[1],
-                            m0[2] * h_phi[0] - m0[0] * h_phi[2],
-                            m0[0] * h_phi[1] - m0[1] * h_phi[0]};
-                        double torque[3] = {
-                            -request.gamma0_m_per_a_s * m_cross_h[0],
-                            -request.gamma0_m_per_a_s * m_cross_h[1],
-                            -request.gamma0_m_per_a_s * m_cross_h[2]};
                         for (std::uint32_t component = 0; component < 2u; ++component) {
-                            const double *test_frame = component == 0u
-                                ? request.tangent_frames[test_node].e1
-                                : request.tangent_frames[test_node].e2;
                             const double *trial_frame = component == 0u
                                 ? request.tangent_frames[trial_node].e1
                                 : request.tangent_frames[trial_node].e2;
@@ -3233,27 +3216,16 @@ FrequencyDomainStatus assemble_poisson_airbox_shared_domain(
                                 trial_frame[0] * grad_test[0] +
                                 trial_frame[1] * grad_test[1] +
                                 trial_frame[2] * grad_test[2];
-                            a_phiq_full.add(
-                                test_node,
-                                2u * trial_node + component,
+                            const double source_entry =
                                 -test_sign * trial_sign * ms * shape[local_trial] *
-                                    source_projection * weight);
-                            const double torque_projection =
-                                // The magnetic row is the energy-Hessian
-                                // test represented in the frequency
-                                // dictionary: v_h = -m0 x (T p).  The
-                                // torque already contains -gamma0 m0 x
-                                // delta_h, so the two rotations cancel and
-                                // leave the reciprocal scalar-field Hessian.
-                                (-(m0[1] * test_frame[2] - m0[2] * test_frame[1])) * torque[0] +
-                                (-(m0[2] * test_frame[0] - m0[0] * test_frame[2])) * torque[1] +
-                                (-(m0[0] * test_frame[1] - m0[1] * test_frame[0])) * torque[2];
+                                source_projection * weight;
+                            const std::uint64_t magnetic_dof = 2u * trial_node + component;
+                            a_phiq_full.add(test_node, magnetic_dof, source_entry);
+                            // Use the adjoint of the same nodal P1 source. An
+                            // extra projection against the quadrature-point
+                            // m0 changes the test field for nonuniform m0.
                             a_qphi_full.add(
-                                2u * test_node + component,
-                                trial_node,
-                                -test_sign * trial_sign * shape[local_test] *
-                                    (request.mu0_T_m_A * ms / request.gamma0_m_per_a_s) *
-                                    torque_projection * weight);
+                                magnetic_dof, test_node, -request.mu0_T_m_A * source_entry);
                         }
                         // Assemble all four tangent-component entries.  The
                         // gyrotropic block is skew-symmetric only after the
