@@ -337,9 +337,10 @@ function SavedPlaybackCanvas({
 }) {
   const { diagnosticRecorder } = useKernel();
   const { colors: themeColors } = useViewport3DColors();
+  const background = themeColors?.background;
   const sceneBackground = useMemo(
-    () => themeColors ? new Color(themeColors.background) : null,
-    [themeColors?.background],
+    () => background === undefined ? null : new Color(background),
+    [background],
   );
   const camera = useMemo(() => {
     const radius = Math.max(...geometry.size);
@@ -354,7 +355,7 @@ function SavedPlaybackCanvas({
       <div ref={containerRef} className="fm-saved-playback-canvas" tabIndex={0} role="region" aria-label="Saved result 3D view">
         <Viewport3DErrorBoundary diagnosticRecorder={diagnosticRecorder}>
           <Viewport3DCanvas camera={camera} className="fm-viewport-3d" frameloop="demand" gl={{ preserveDrawingBuffer: true, antialias: true }}
-            style={{ background: typeof themeColors?.background === "string" ? themeColors.background : "var(--fm-bg-viewport)" }}>
+            style={{ background: typeof background === "string" ? background : "var(--fm-bg-viewport)" }}>
             {sceneBackground ? <primitive attach="background" object={sceneBackground} /> : null}
             <Viewport3DCaptureSource />
             <SavedCamera geometry={geometry} frameIndex={frameIndex} />
