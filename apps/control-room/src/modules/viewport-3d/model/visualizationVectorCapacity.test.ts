@@ -6,7 +6,11 @@ import type {
   FdmRegionMembershipResource,
   MeshSharedDomainManifestResource,
 } from "@/kernel/api/apiTypes";
-import { resolveVisualizationVectorCapacityForTarget } from "@/modules/inspector/panels/ObjectVisualizationPanelModel";
+import {
+  resolveVisualizationVectorBudgetRange,
+  resolveVisualizationVectorBudgetValues,
+  resolveVisualizationVectorCapacityForTarget,
+} from "@/modules/inspector/panels/ObjectVisualizationPanelModel";
 
 import {
   femVisualizationVectorCapacitySource,
@@ -85,6 +89,98 @@ describe("visualization vector capacity", () => {
       anchorKind: "cell",
       fullCount: 198_080,
       targetId: "airbox",
+    });
+  });
+
+  it("derives exact FDM object capacity from a validated FMRM when support summary is absent", () => {
+    const gridFingerprint = "a".repeat(64);
+    const cellCount = 512 * 256;
+    const domain = {
+      bounds: { max: [512, 256, 1], min: [0, 0, 0] },
+      coordinate_system: "cartesian",
+      counts: { cells: cellCount },
+      dimension: 2,
+      discretization: "FDM",
+      domain_id: "film-grid",
+      generation_id: "film-generation",
+      grid: {
+        origin: [0, 0, 0],
+        shape: [512, 256, 1],
+        spacing: [1, 1, 1],
+      },
+      units: {},
+    } as DomainMetaResource;
+    const membership = {
+      binary_path: "mesh/fdm_region_membership.v2.bin",
+      cell_count: cellCount,
+      cell_m: [1, 1, 1],
+      counts: [512, 256, 1],
+      domain_generation_id: "film-generation",
+      encoding: "FMRM:u32_membership_le",
+      freshness: "current",
+      grid_fingerprint: gridFingerprint,
+      mesh_revision: 3,
+      origin_m: [0, 0, 0],
+      region_legend: [
+        { numeric_id: 1, object_id: "film", region_id: "region-1" },
+        { numeric_id: 2, object_id: "film", region_id: "region-250" },
+      ],
+      region_membership_revision: 4,
+      schema_version: "fdm_region_membership.v2",
+    } as FdmRegionMembershipResource;
+    const regionIds = new Uint32Array(cellCount);
+    regionIds.fill(1);
+    for (let index = cellCount / 2; index < cellCount - 1; index += 1) {
+      regionIds[index] = 2;
+    }
+    regionIds[cellCount - 1] = FMRM_INACTIVE_REGION_ID;
+    const realizedMembership = {
+      cellCount,
+      counts: [512, 256, 1] as [number, number, number],
+      formatVersion: 2,
+      gridFingerprint,
+      legendCount: 2,
+      payloadKind: 2,
+      regionIds,
+      semanticStatus: "canonical" as const,
+    };
+
+    const capacity = resolveVisualizationVectorCapacityForTarget({
+      domain,
+      fdmMembership: membership,
+      fdmRealizedMembership: realizedMembership,
+      target: { id: "object:film", kind: "object" },
+    });
+    const range = resolveVisualizationVectorBudgetRange({
+      capacity,
+      sceneCap: 16_384,
+      target: { id: "object:film", kind: "object" },
+    });
+
+    expect(capacity).toMatchObject({
+      anchorKind: "cell",
+      exact: true,
+      fullCount: cellCount - 1,
+      generation: "film-generation",
+      revision: "3:4",
+      targetId: "object:film",
+    });
+    expect(range).toMatchObject({
+      availableAnchorCount: cellCount - 1,
+      exact: true,
+      max: 16_384,
+    });
+    expect(
+      resolveVisualizationVectorBudgetValues({
+        range,
+        requestedBudget: 50,
+        sceneCap: 16_384,
+      }),
+    ).toMatchObject({
+      effective: 50,
+      max: 16_384,
+      normalizedRequested: 50,
+      requested: 50,
     });
   });
 
