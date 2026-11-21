@@ -159,7 +159,7 @@ impl BinaryOp {
             Self::Sub => "-",
             Self::Mul => "*",
             Self::Div => "/",
-            Self::Pow => "^",
+            Self::Pow => "**",
         }
     }
 }
@@ -369,10 +369,14 @@ impl Parser<'_> {
         }
     }
 
+    /// `atom ("**" unary)?`, with `^` as a legacy spelling of `**`. As in
+    /// Python, the exponent is a `unary`, so `**` is right-associative, binds
+    /// tighter than a unary minus on its left (`-x**2 == -(x**2)`) and accepts
+    /// one on its right (`2**-x**2 == 2**(-(x**2))`).
     fn power(&mut self) -> Result<Node, ExprError> {
         let base = self.atom()?;
         let token = self.peek().clone();
-        if token.kind != TokenKind::Caret {
+        if token.kind != TokenKind::Power {
             return Ok(base);
         }
         self.advance();

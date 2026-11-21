@@ -50,7 +50,7 @@ _MATH_ALIASES = {"fabs": "abs"}
 # functions by fullmag.model.space_time before it reaches the IR.
 _VARIABLES = {"mask": ("x", "y", "z"), "time": ("t",), "space_time": ("x", "y", "z", "t")}
 _RESERVED = frozenset({"x", "y", "z", "t", "pi"}) | _FUNCTIONS_1 | _FUNCTIONS_2
-_AUGMENTED_OPERATORS = {ast.Add: "+", ast.Sub: "-", ast.Mult: "*", ast.Div: "/", ast.Pow: "^"}
+_AUGMENTED_OPERATORS = {ast.Add: "+", ast.Sub: "-", ast.Mult: "*", ast.Div: "/", ast.Pow: "**"}
 
 
 class MaskFunctionError(ValueError):
@@ -555,7 +555,7 @@ def _closure_values(function: Callable[..., object]) -> dict[str, object]:
 def _to_field_expr(text: str, renames: Mapping[str, str] | None = None) -> str:
     """Rewrite a checked Python expression as ``field_expr.v1`` text.
 
-    Formatting and parentheses are kept; ``**`` becomes ``^``, ``math.`` is
+    Formatting, parentheses and ``**`` are kept; ``math.`` is
     dropped, ``math.fabs`` becomes ``abs``, comments and line breaks become
     spaces, numbers that ``field_expr.v1`` cannot read (``1_000``) are
     written with ``repr``, and names in ``renames`` are replaced by their
@@ -592,9 +592,7 @@ def _to_field_expr(text: str, renames: Mapping[str, str] | None = None) -> str:
             index += 1
             continue
         skip_dot = False
-        if token.type == tokenize.OP and token.string == "**":
-            parts.append("^")
-        elif token.type == tokenize.NAME and token.string in _MATH_ALIASES and _previous_was_math(tokens, index):
+        if token.type == tokenize.NAME and token.string in _MATH_ALIASES and _previous_was_math(tokens, index):
             parts.append(_MATH_ALIASES[token.string])
         elif token.type == tokenize.NUMBER:
             parts.append(_number_text(token.string))

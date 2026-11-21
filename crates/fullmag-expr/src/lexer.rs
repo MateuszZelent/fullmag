@@ -10,7 +10,8 @@ pub(crate) enum TokenKind {
     Minus,
     Star,
     Slash,
-    Caret,
+    /// `**`, or the legacy spelling `^`; both mean the same operator.
+    Power,
     LeftParen,
     RightParen,
     Comma,
@@ -38,9 +39,18 @@ pub(crate) fn tokenize(source: &str) -> Result<Vec<Token>, ExprError> {
         let kind = match byte {
             b'+' => TokenKind::Plus,
             b'-' => TokenKind::Minus,
+            b'*' if bytes.get(index + 1) == Some(&b'*') => {
+                // `**` only when the two stars touch, as in Python (`* *` is two tokens).
+                index += 2;
+                tokens.push(Token {
+                    kind: TokenKind::Power,
+                    position,
+                });
+                continue;
+            }
             b'*' => TokenKind::Star,
             b'/' => TokenKind::Slash,
-            b'^' => TokenKind::Caret,
+            b'^' => TokenKind::Power,
             b'(' => TokenKind::LeftParen,
             b')' => TokenKind::RightParen,
             b',' => TokenKind::Comma,

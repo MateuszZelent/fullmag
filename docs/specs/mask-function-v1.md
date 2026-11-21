@@ -67,14 +67,27 @@ fills `study.new_vector_mask()` in ordinary Python.
 expr   := term (("+" | "-") term)*
 term   := unary (("*" | "/") unary)*
 unary  := ("-" | "+") unary | power
-power  := atom ("^" unary)?                     # right-associative
+power  := atom (("**" | "^") unary)?            # right-associative
 atom   := number | name | name "(" expr ("," expr)* ")" | "(" expr ")"
 number := digits ["." digits] [exponent] | "." digits [exponent]
 exponent := ("e" | "E") ["+" | "-"] digits
 name   := [A-Za-z_][A-Za-z0-9_]*
 ```
 
-- Whitespace between tokens is ignored.
+- Whitespace between tokens is ignored. `**` is one token: its two stars must
+  touch (`* *` is a syntax error, as in Python).
+- `**` is the power operator, with Python's precedence: it is
+  right-associative (`2**3**2` is `2**9`), binds tighter than a unary minus on
+  its left (`-x**2` is `-(x**2)`) and accepts a unary minus on its right
+  (`2**-x**2` is `2**(-(x**2))`). So an equation written with `**` is a
+  Python expression over the names of this section, with the value Python
+  gives it except where IEEE-754 and Python differ (below).
+- `^` is a legacy spelling of `**`: the same token with the same precedence.
+  Equations stored before `**` became canonical (2026-11-20) keep loading with
+  their meaning; writers emit `**` only. The version stays `field_expr.v1`
+  because the change adds a spelling and changes no meaning: every text
+  accepted before is accepted with the same value and the same time bytecode.
+  An equation with `**` is not readable by builds older than this change.
 - Variables: `x`, `y`, `z` in a mask function; `t` in a time function.
 - Reserved names: `x y z t pi` and the function names. A parameter or a local
   may not use a reserved name or a Python keyword (`lambda`, `class`, …), since
@@ -88,9 +101,17 @@ name   := [A-Za-z_][A-Za-z0-9_]*
   64 locals per function. With its locals substituted, an equation has at most
   65 536 nodes and 512 levels of nesting (a chain of locals that doubles at each
   step is rejected before it is expanded).
-- Arithmetic is IEEE-754 binary64. `x^y` is `pow(x, y)`.
-- The Python transpiler writes `**` as `^`, keeps parentheses, and writes numeric
-  literals with `repr`.
+- Arithmetic is IEEE-754 binary64. `x**y` is `pow(x, y)`. Where Python raises
+  or leaves the reals, the equation gives an IEEE value instead: `0.0**-1` is
+  `inf` (Python: `ZeroDivisionError`), `(-8)**(1/3)` is NaN (Python: a complex
+  number), an overflow is `inf` (Python: `OverflowError`); integer literals are
+  binary64, not Python integers. A non-finite mask or time value is rejected
+  with `mask_expression_non_finite` (section 5).
+- The Python transpiler keeps `**`, parentheses and formatting, and writes
+  numeric literals with `repr`. The canonical text of `fullmag-expr`
+  (`CompiledFunction::canonical_outputs`) is a fully parenthesized Python
+  expression with `**`; a negative folded parameter is parenthesized
+  (`((-2.0)**2.0)`).
 
 Error codes (`FunctionError.code`):
 
@@ -204,7 +225,7 @@ of (factor of position) × (factor of time):
 | `u + v`, `u - v`, `-u` | the terms of the operands; a minus sign goes to the position factor |
 | `u * v` | every product of a term of `u` and a term of `v` |
 | `u / v`, with `v` of one kind | `v` divides the factor of its kind |
-| `u ^ n`, `n` = 2, 3, 4 | the repeated product |
+| `u ** n`, `n` = 2, 3, 4 | the repeated product |
 | `sin(a + b)` | `(sin(a), cos(b))`, `(cos(a), sin(b))` |
 | `cos(a + b)` | `(cos(a), cos(b))`, `(-sin(a), sin(b))` |
 | `exp(a + b)` | `(exp(a), exp(b))` |
@@ -225,5 +246,5 @@ No algebraic simplification is done: `cos(w * t) * sin(w * t)` and
 `sin(w * t) * cos(w * t)` are two terms. Any other expression that depends on
 both position and time is rejected with `mask_not_separable` and the
 expression (for a call, the whole call, for example
-`exp(-(x - v * t) ^ 2 / s ^ 2)`); more than 8 terms are rejected with
+`exp(-(x - v * t) ** 2 / s ** 2)`); more than 8 terms are rejected with
 `mask_too_many_terms`.
