@@ -375,6 +375,20 @@ impl CompiledFunction {
         evaluate(&self.outputs[0], &variables, &locals)
     }
 
+    /// Value of a material parameter field at a point (metres, in the frame
+    /// of the field). Panics for another kind. The value is not checked: it
+    /// may be NaN or infinite; the owner of the field checks it.
+    pub fn eval_field(&self, point_m: [f64; 3]) -> f64 {
+        assert!(
+            self.kind == FunctionKind::Field,
+            "eval_field called on a {} function",
+            self.kind.label()
+        );
+        let variables = [point_m[0], point_m[1], point_m[2], 0.0, 0.0];
+        let locals = self.evaluate_locals(&variables);
+        evaluate(&self.outputs[0], &variables, &locals)
+    }
+
     /// `false` when every output is a constant (for example the static term `1`).
     pub fn depends_on_variables(&self) -> bool {
         self.outputs

@@ -28,8 +28,9 @@ The solver never calls Python. A mask equation is evaluated by the planner only.
 
 The same equation language also carries the two formulas of an absorbing
 boundary layer, a ramp profile `u -> number` and a distance `(x, y, z) -> number`
-(section 8). They are not mask field drives; they share the parser, the
-evaluator and the error codes.
+(section 8), and the equations of material parameter fields
+`(x, y, z) -> number` (section 9). They are not mask field drives; they share
+the parser, the evaluator and the error codes.
 
 (mask-function-v1-python)=
 ## 2. Restricted Python
@@ -103,7 +104,8 @@ name   := [A-Za-z_][A-Za-z0-9_]*
   A profile or distance formula (section 8) rejects `^` with `expr_syntax`: no
   stored formula of those kinds used it.
 - Variables: `x`, `y`, `z` in a mask function; `t` in a time function; `u`
-  in a profile; `x`, `y`, `z` in a distance (section 8). `u` is a variable
+  in a profile; `x`, `y`, `z` in a distance (section 8) and in a field
+  (section 9). `u` is a variable
   of a profile only: in the other kinds it is an ordinary name.
 - Reserved names: `x y z t pi` and the original function names. Profiles and distances also reserve `log1p`.
   A parameter or a local may not use a reserved name or a Python keyword
@@ -115,10 +117,10 @@ name   := [A-Za-z_][A-Za-z0-9_]*
   exp log sqrt abs`; two arguments — `atan2 min max`. These are available in
   every kind. Two more one-argument functions depend on the kind:
 
-  | Function | Mask | Time | Profile | Distance |
-  |---|---|---|---|---|
-  | `log1p(a)` = $\ln(1+a)$ | no | no | yes | yes |
-  | `heaviside(a)` (0, ½ at 0, 1) | yes | yes | no | no |
+  | Function | Mask | Time | Profile | Distance | Field |
+  |---|---|---|---|---|---|
+  | `log1p(a)` = $\ln(1+a)$ | no | no | yes | yes | no |
+  | `heaviside(a)` (0, ½ at 0, 1) | yes | yes | no | no | yes |
 
   `log1p` has no opcode in `fullmag_time_expr.v1` (section 4), so a time
   function cannot use it; `heaviside` serves the spin-transfer-torque time
@@ -157,7 +159,7 @@ Error codes (`FunctionError.code`):
 | `expr_unknown_name` | a name is not a variable, parameter, earlier local, `pi` or function |
 | `expr_arity` | wrong number of function arguments, or wrong number of outputs |
 | `expr_too_large` | a limit of this section is exceeded |
-| `mask_function_wrong_variable` | `t` in a mask function, or `x`, `y`, `z` in a time function; `x`, `y`, `z`, `t` in a profile; `t` in a distance |
+| `mask_function_wrong_variable` | `t` in a mask function, or `x`, `y`, `z` in a time function; `x`, `y`, `z`, `t` in a profile; `t` in a distance or a field |
 | `expr_name_invalid` | a parameter or local uses a reserved name, a Python keyword or a duplicate name |
 
 Every error carries the path (`parameters[i]`, `locals[i]`, `outputs[c]`) and the
@@ -321,3 +323,45 @@ stores up to two formulas as plain strings in `ProblemIR`:
   position (`FormulaError`, `character N: …`) but not the Rust error code.
 - The accept/reject table shared by the Rust and Python tests is
   `crates/fullmag-ir/tests/fixtures/absorbing_boundary_formula_cases.json`.
+
+(mask-function-v1-field)=
+## 9. Field functions (material parameter fields)
+
+`fm.fields.function` (`docs/specs/material-assignment-and-spatial-fields-v0.md`,
+section 3.3) stores a scalar material parameter as a function of the field kind:
+
+| Field | Kind (`FunctionKind`) | Variables | Output |
+|---|---|---|---|
+| `MaterialParameterFieldIR::Function.function` | `Field` | `x`, `y`, `z` (metres, in the field's `frame`) | one number, in the SI unit of the parameter |
+
+- A field function is a `FunctionIR` of section 3 with exactly one output:
+  parameters, ordered locals, and the functions of a mask (`heaviside`
+  included, `log1p` not), `pi` and `**`. `^` is rejected with `expr_syntax`
+  (no stored field equation used it). The engine evaluates it with
+  `CompiledFunction::eval_field`; the value is not checked there.
+- Two authored forms give the same `FunctionIR`. An equation string (the main
+  form) becomes one output and its parameters, in the order of the call, with
+  no `name` and no locals. A `def` (`x, y, z` first) goes through the transpiler
+  of section 2 with the kind `field` (one returned number, `heaviside`
+  allowed) and keeps its `name` and locals. `name` present means "write back as
+  a `def`"; absent means "write back as a string". Parameter `source` texts are
+  not stored for field functions.
+- The Python front end checks a string like a formula of section 8: `ast`
+  syntax-tree rules (no `eval`), token rules, nesting depth; a free name must be
+  `x`, `y`, `z`, `pi`, a function or a parameter given at the call, and every
+  given parameter must be used. Errors are `FieldFunctionError`
+  (`character N: …`, `line N: …`, `parameter 'name': …`).
+- `ProblemIR` validation (`MaterialParameterFieldIR::compile_function`) adds:
+  scalar parameter only (`material_field_function_invalid` for
+  `anisotropy_axis`), `expression_version` `field_expr.v1`, finite parameter
+  values, a `name` that `validate_name` accepts (not reserved, not a keyword).
+  Function, parameter and local names use ASCII identifiers. Python reserves
+  `__debug__` against binding in all three positions.
+  Engine errors keep their code with the path `function.outputs[0]`,
+  `function.locals[i]` or `function.parameters[i]`.
+- The planner compiles the function once per resolution and evaluates it at
+  every FDM cell centre and FEM node; the material parameter's own range rules
+  apply to the sampled values.
+- Version: the field kind adds texts to `field_expr.v1` and changes the value of
+  none, so the version is kept. A `ProblemIR` with a function field is not
+  readable by builds older than this change.

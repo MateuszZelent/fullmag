@@ -1,5 +1,6 @@
-//! Equation language `field_expr.v1` of mask and time functions and of the
-//! profile and distance formulas of an absorbing boundary layer.
+//! Equation language `field_expr.v1` of mask and time functions, of the
+//! profile and distance formulas of an absorbing boundary layer and of
+//! material parameter fields.
 //!
 //! Contract: `docs/specs/mask-function-v1.md`. The crate parses and evaluates
 //! functions (`parameters -> locals -> outputs`) and compiles time functions to
@@ -38,6 +39,10 @@ pub enum FunctionKind {
     /// `(x, y, z) -> number`; one output in metres. The distance coordinate of
     /// an absorbing boundary layer (section 8).
     Distance,
+    /// `(x, y, z) -> number`; one output in the SI unit of a material
+    /// parameter. A material parameter field `fm.fields.function` (section 9);
+    /// the functions of a mask.
+    Field,
 }
 
 impl FunctionKind {
@@ -48,6 +53,7 @@ impl FunctionKind {
             Self::Time => "time",
             Self::Profile => "profile",
             Self::Distance => "distance",
+            Self::Field => "field",
         }
     }
 
@@ -55,7 +61,7 @@ impl FunctionKind {
     pub(crate) fn output_count(self) -> usize {
         match self {
             Self::Mask => 3,
-            Self::Time | Self::Profile | Self::Distance => 1,
+            Self::Time | Self::Profile | Self::Distance | Self::Field => 1,
         }
     }
 }

@@ -742,6 +742,10 @@ def _validate_material_parameter_field(parameter: str, field_value: MaterialPara
     unit = payload.get("unit")
     if field_kind == "sampled" and not isinstance(unit, str):
         raise ValueError(f"{parameter} sampled field unit must be {expected_unit!r}")
+    if field_kind == "function" and parameter == "AnisotropyAxis":
+        raise ValueError(
+            "AnisotropyAxis is a vector parameter; fm.fields.function gives a scalar field"
+        )
     if parameter in {"Alpha", "AnisotropyAxis"}:
         allowed_units = {expected_unit, "dimensionless"}
     else:

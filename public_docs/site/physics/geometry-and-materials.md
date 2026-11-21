@@ -290,7 +290,13 @@ under the owning object region and is resolved together with the shared mesh.
 | `radial(center=, radius=, inside=, outside=, frame="object", unit=None)` | finite center/values and positive radius | inside/outside radial profile |
 | `sampled(asset_id=, component_count=, location=, unit=)` | non-empty asset, count >= 1, valid location and unit | immutable asset reference |
 
-For `linear` and `radial`, `frame` is exactly `object` or `world`. Object-frame coordinates follow
+`fm.fields.function(source, frame="object", unit=None, **values)` builds a fifth, scalar kind: an
+equation of `x, y, z` given as a string (for example
+`fm.fields.function("a0 + a_max*max(0.0, (x - x_edge)/L)**3", a0=0.01, a_max=0.5, x_edge=2e-6, L=600e-9)`)
+or as a mumax3-style `def`. See
+{ref}`python-api-materials-spatial-parameter-fields-python-api` for the full contract.
+
+For `linear`, `radial`, and `function`, `frame` is exactly `object` or `world`. Object-frame coordinates follow
 the object; world-frame coordinates remain fixed in the laboratory frame. Supported material
 parameter names are `Ms`, `Aex`, `Alpha`, `Ku1`, `Ku2`, `AnisotropyAxis`, `Kc1`, `Kc2`, `Kc3`,
 `Dind`, and `Dbulk`; ProblemIR normalizes them to lower-case canonical names.

@@ -14978,6 +14978,12 @@ export interface components {
             kind: "sampled";
             location: components["schemas"]["SceneMaterialFieldLocation"];
             unit: string;
+        } | {
+            frame?: components["schemas"]["SceneRegionFrame"];
+            function: Record<string, unknown>;
+            /** @enum {string} */
+            kind: "function";
+            unit?: string | null;
         };
         /** @enum {string} */
         SceneMaterialParameterName: "ms" | "aex" | "alpha" | "ku1" | "ku2" | "anisotropy_axis" | "kc1" | "kc2" | "kc3" | "dind" | "dbulk";

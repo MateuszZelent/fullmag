@@ -9,6 +9,9 @@ run; the Rust planner and solvers evaluate the equations.
 The same syntax-tree checker validates the formula strings of an absorbing
 boundary layer (``compile_formula``, section 8 of the contract): a profile of
 ``u`` and a distance of ``x, y, z``, evaluated here for validation and sampling.
+Material parameter fields (``fm.fields.function``, section 9) use the
+transpiler and the formula checker with the kind ``field``; see
+``fullmag.model.field_function``.
 
 Values of the further parameters are given where the function is used::
 
@@ -54,6 +57,8 @@ _FUNCTIONS_1 = frozenset(
 _FUNCTIONS_2 = frozenset({"atan2", "min", "max"})
 # Profile and distance formulas also have log1p; it has no time opcode.
 _FORMULA_FUNCTIONS_1 = _FUNCTIONS_1 | {"log1p"}
+# A material field has the functions of a mask in field_expr.v1, heaviside included.
+_FIELD_FUNCTIONS_1 = _FUNCTIONS_1 | {"heaviside"}
 _MATH_ALIASES = {"fabs": "abs"}
 # "space_time": one function of position and time, split into mask and time
 # functions by fullmag.model.space_time before it reaches the IR. "profile" and
@@ -64,8 +69,11 @@ _VARIABLES = {
     "space_time": ("x", "y", "z", "t"),
     "profile": ("u",),
     "distance": ("x", "y", "z"),
+    "field": ("x", "y", "z"),
 }
-_RESERVED = frozenset({"x", "y", "z", "t", "pi"}) | _FUNCTIONS_1 | _FUNCTIONS_2
+_RESERVED = frozenset({"x", "y", "z", "t", "pi"}) | _FIELD_FUNCTIONS_1 | _FUNCTIONS_2
+# How a function of each kind is called in a script, for error messages.
+_CALLS = {"mask": "fm.mask", "time": "fm.time", "field": "fm.fields.function"}
 _AUGMENTED_OPERATORS = {ast.Add: "+", ast.Sub: "-", ast.Mult: "*", ast.Div: "/", ast.Pow: "**"}
 
 
@@ -225,7 +233,8 @@ def _bind(cls, transpiled: _TranspiledFunction, values: Mapping[str, float]):
         else:
             raise MaskFunctionError(
                 f"parameter {name!r}: no value; pass it as "
-                f"fm.{transpiled.kind}({transpiled.name}, {name}=...)"
+                f"{_CALLS.get(transpiled.kind, 'fm.' + transpiled.kind)}"
+                f"({transpiled.name}, {name}=...)"
             )
     parameters.extend(FunctionParameter(name, value) for name, value in transpiled.captured)
     return cls(
@@ -245,8 +254,8 @@ def _function_source(function: Callable[..., object]) -> tuple[str, int]:
         )
     if function.__name__ == "<lambda>":
         raise MaskFunctionError(
-            f"line {function.__code__.co_firstlineno}: a lambda cannot be a mask or "
-            "time function; write it with 'def'"
+            f"line {function.__code__.co_firstlineno}: a lambda cannot be a mask, time or field "
+            "function; write it with 'def'"
         )
     try:
         lines, first_line = inspect.getsourcelines(function)
@@ -401,6 +410,8 @@ class _Transpiler(_ExpressionChecker):
     ) -> None:
         self.function = function
         self.kind = kind
+        if kind == "field":
+            self.functions_1 = _FIELD_FUNCTIONS_1
         self.source = source
         self.first_line = first_line
         self.definition = definition
@@ -512,8 +523,20 @@ class _Transpiler(_ExpressionChecker):
             outputs = tuple(self.expression(element) for element in returned.elts)
         else:
             if isinstance(returned, ast.Tuple):
-                raise self.fail(returned, "a time function must return one number")
+                raise self.fail(returned, f"a {self.kind} function must return one number")
             outputs = (self.expression(returned),)
+
+        if self.kind == "field":
+            if definition.name in _RESERVED:
+                raise self.fail(definition, f"function name {definition.name!r} is reserved")
+            for role, identifiers in (
+                ("function", (definition.name,)),
+                ("parameter", (*self.parameters, *self.captured)),
+                ("local", (name for name, _ in self.locals)),
+            ):
+                for name in identifiers:
+                    if not name.isascii():
+                        raise self.fail(definition, f"{role} name {name!r} must be ASCII")
 
         return _TranspiledFunction(
             kind=self.kind,
@@ -577,7 +600,7 @@ class _Transpiler(_ExpressionChecker):
             return
         if name in {"x", "y", "z", "t"}:
             raise self.fail(node, f"{name!r} cannot be used in a {self.kind} function")
-        if name in _FUNCTIONS_1 or name in _FUNCTIONS_2:
+        if name in self.functions_1 or name in _FUNCTIONS_2:
             raise self.fail(node, f"function {name!r} must be called")
         if name in self.assigned:
             raise self.fail(node, f"local {name!r} is used before it is assigned")
@@ -666,6 +689,18 @@ def compile_formula(text: str, kind: str) -> Callable[..., float]:
 
 @lru_cache(maxsize=256)
 def _compile_formula(text: str, kind: str) -> Callable[..., float]:
+    tree = _check_formula_text(text, lambda offset: _FormulaChecker(kind, offset))
+    return _evaluator(tree, _VARIABLES[kind])
+
+
+def _check_formula_text(
+    text: str, make_checker: Callable[[int], _ExpressionChecker]
+) -> ast.expr:
+    """The checked syntax tree of one formula line.
+
+    ``make_checker`` builds the checker of the formula's kind from the column
+    of the first character after leading blanks.
+    """
     if not text.isascii():
         position = next(index for index, character in enumerate(text) if not character.isascii())
         raise FormulaError(f"character {position}: only ASCII characters are allowed")
@@ -684,13 +719,13 @@ def _compile_formula(text: str, kind: str) -> Callable[..., float]:
         raise FormulaError(f"character {offset + column}: {error.msg}") from None
     except (ValueError, RecursionError, MemoryError) as error:
         raise FormulaError(f"character {offset}: {error}") from None
-    checker = _FormulaChecker(kind, offset)
+    checker = make_checker(offset)
     try:
         checker.check(tree)
     except RecursionError:
         raise FormulaError(f"character {offset}: the formula is nested too deeply") from None
     _check_formula_nesting(tree, tokens, offset)
-    return _evaluator(tree, _VARIABLES[kind])
+    return tree
 
 
 def _formula_tokens(text: str, offset: int) -> list[tokenize.TokenInfo]:
@@ -827,6 +862,15 @@ def _ieee_max(left: float, right: float) -> float:
     return left if left >= right else right
 
 
+def _heaviside(value: float) -> float:
+    """``fullmag-expr`` heaviside: 0, 1/2 at 0, 1; NaN for a non-finite argument."""
+    if not math.isfinite(value):
+        return math.nan
+    if value == 0.0:
+        return 0.5
+    return 1.0 if value > 0.0 else 0.0
+
+
 def _signed_infinity(value: float) -> float:
     return math.copysign(math.inf, value)
 
@@ -850,6 +894,7 @@ _FORMULA_EVALUATORS_1: dict[str, Callable[[float], float]] = {
     "log1p": _ieee_log1p,
     "sqrt": _ieee(math.sqrt, _infinity),
     "abs": math.fabs,
+    "heaviside": _heaviside,
 }
 _FORMULA_EVALUATORS_2: dict[str, Callable[[float, float], float]] = {
     "atan2": math.atan2,

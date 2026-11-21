@@ -47,7 +47,7 @@ impl Variable {
     /// Whether a function of `kind` may read this variable.
     fn is_read_by(self, kind: FunctionKind) -> bool {
         match kind {
-            FunctionKind::Mask | FunctionKind::Distance => {
+            FunctionKind::Mask | FunctionKind::Distance | FunctionKind::Field => {
                 matches!(self, Self::X | Self::Y | Self::Z)
             }
             FunctionKind::Time => self == Self::T,
@@ -113,12 +113,15 @@ impl Func1 {
     }
 
     /// `log1p` has no time opcode and serves the absorbing-boundary formulas;
-    /// `heaviside` serves time expressions (`docs/specs/mask-function-v1.md`,
-    /// section 3).
+    /// `heaviside` serves time expressions; a material field has the functions
+    /// of a mask (`docs/specs/mask-function-v1.md`, section 3).
     pub(crate) fn is_available_in(self, kind: FunctionKind) -> bool {
         match self {
             Self::Log1p => matches!(kind, FunctionKind::Profile | FunctionKind::Distance),
-            Self::Heaviside => matches!(kind, FunctionKind::Mask | FunctionKind::Time),
+            Self::Heaviside => matches!(
+                kind,
+                FunctionKind::Mask | FunctionKind::Time | FunctionKind::Field
+            ),
             _ => true,
         }
     }
