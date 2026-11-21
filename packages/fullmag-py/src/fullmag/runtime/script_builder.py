@@ -1458,7 +1458,7 @@ def _render_scene_document_bootstrap(
             if isinstance(entry, Mapping) and entry.get("enabled") is False
         }
         if isinstance(material, Mapping):
-            for key in ("Ms", "Aex", "alpha", "Dind", "Dbulk", "Ku1", "Kc1"):
+            for key in ("Ms", "Aex", "alpha", "Dind", "Dbulk", "Ku1", "Ku2", "Kc1", "Kc2", "Kc3"):
                 if (key == "Dind" and "interfacial_dmi" in inactive_dmi_kinds
                         or key == "Dbulk" and "bulk_dmi" in inactive_dmi_kinds):
                     continue
@@ -1480,6 +1480,12 @@ def _render_scene_document_bootstrap(
             anis_u = material.get("anisU") or material.get("anis_u")
             if isinstance(anis_u, (list, tuple)) and len(anis_u) == 3:
                 lines.append(f"{handle}.anisU = {_python_literal(tuple(anis_u))}")
+            anis_c1 = material.get("anisC1") or material.get("anis_c1")
+            if isinstance(anis_c1, (list, tuple)) and len(anis_c1) == 3:
+                lines.append(f"{handle}.anisC1 = {_python_literal(tuple(anis_c1))}")
+            anis_c2 = material.get("anisC2") or material.get("anis_c2")
+            if isinstance(anis_c2, (list, tuple)) and len(anis_c2) == 3:
+                lines.append(f"{handle}.anisC2 = {_python_literal(tuple(anis_c2))}")
         # Match the final renderer before stage capture validates the Problem.
         # Explicit object anisotropy is already authored physics, not a fallback.
         normalized_stack = _ensure_geometry_physics_stack(
@@ -1487,10 +1493,28 @@ def _render_scene_document_bootstrap(
             material_dind=material.get("Dind") if isinstance(material, Mapping) else None,
             material_dbulk=material.get("Dbulk") if isinstance(material, Mapping) else None,
         )
+        dmi_normal = _physics_stack_dmi_interface_normal(normalized_stack)
+        if (
+            _physics_stack_dmi_value(normalized_stack) is not None
+            and dmi_normal is not None
+            and not _is_default_z_normal(dmi_normal)
+        ):
+            lines.append(
+                f"{handle}.dmi_interface_normal = {_python_literal(tuple(dmi_normal))}"
+            )
         uniaxial = _physics_stack_uniaxial_params(normalized_stack)
         if uniaxial is not None:
             lines.append(f"{handle}.Ku1 = {_python_literal(uniaxial['ku1'])}")
+            if uniaxial["ku2"] != 0.0:
+                lines.append(f"{handle}.Ku2 = {_python_literal(uniaxial['ku2'])}")
             lines.append(f"{handle}.anisU = {_python_literal(tuple(uniaxial['axis']))}")
+        cubic = _physics_stack_cubic_params(normalized_stack)
+        if cubic is not None:
+            lines.append(f"{handle}.Kc1 = {_python_literal(cubic['kc1'])}")
+            lines.append(f"{handle}.Kc2 = {_python_literal(cubic['kc2'])}")
+            lines.append(f"{handle}.Kc3 = {_python_literal(cubic['kc3'])}")
+            lines.append(f"{handle}.anisC1 = {_python_literal(tuple(cubic['axis1']))}")
+            lines.append(f"{handle}.anisC2 = {_python_literal(tuple(cubic['axis2']))}")
         magnetization = raw_object.get("magnetization")
         if isinstance(magnetization, Mapping):
             texture_expression = _render_texture_expression(magnetization)
@@ -4595,10 +4619,28 @@ def _render_geometry_and_materials(
         )
         if magnet.material.Ku1 is not None:
             lines.append(f"{var_name}.Ku1 = {_py_float_roundtrip(magnet.material.Ku1)}")
+        if magnet.material.Ku2 is not None:
+            lines.append(f"{var_name}.Ku2 = {_py_float_roundtrip(magnet.material.Ku2)}")
         if magnet.material.anisU is not None:
             lines.append(
                 f"{var_name}.anisU = ({_py_float_roundtrip(magnet.material.anisU[0])}, "
                 f"{_py_float_roundtrip(magnet.material.anisU[1])}, {_py_float_roundtrip(magnet.material.anisU[2])})"
+            )
+        if magnet.material.Kc1 is not None:
+            lines.append(f"{var_name}.Kc1 = {_py_float_roundtrip(magnet.material.Kc1)}")
+        if magnet.material.Kc2 is not None:
+            lines.append(f"{var_name}.Kc2 = {_py_float_roundtrip(magnet.material.Kc2)}")
+        if magnet.material.Kc3 is not None:
+            lines.append(f"{var_name}.Kc3 = {_py_float_roundtrip(magnet.material.Kc3)}")
+        if magnet.material.anisC1 is not None:
+            lines.append(
+                f"{var_name}.anisC1 = ({_py_float_roundtrip(magnet.material.anisC1[0])}, "
+                f"{_py_float_roundtrip(magnet.material.anisC1[1])}, {_py_float_roundtrip(magnet.material.anisC1[2])})"
+            )
+        if magnet.material.anisC2 is not None:
+            lines.append(
+                f"{var_name}.anisC2 = ({_py_float_roundtrip(magnet.material.anisC2[0])}, "
+                f"{_py_float_roundtrip(magnet.material.anisC2[1])}, {_py_float_roundtrip(magnet.material.anisC2[2])})"
             )
         rendered_initial_override = _render_initial_state_override(
             initial_state_override,
@@ -4621,6 +4663,12 @@ def _render_geometry_and_materials(
         dmi = _magnet_dmi(problem, magnet, "Dind", InterfacialDMI)
         if dmi is not None:
             lines.append(f"{var_name}.Dind = {_py_float_roundtrip(dmi)}")
+            dmi_normal = _magnet_interfacial_dmi_normal(problem)
+            if dmi_normal is not None and not _is_default_z_normal(dmi_normal):
+                lines.append(
+                    f"{var_name}.dmi_interface_normal = ({_py_float_roundtrip(dmi_normal[0])}, "
+                    f"{_py_float_roundtrip(dmi_normal[1])}, {_py_float_roundtrip(dmi_normal[2])})"
+                )
         bulk_dmi = _magnet_dmi(problem, magnet, "Dbulk", BulkDMI)
         if bulk_dmi is not None:
             lines.append(f"{var_name}.Dbulk = {_py_float_roundtrip(bulk_dmi)}")
@@ -5367,19 +5415,44 @@ def _render_geometries_from_override(
         dmi = _physics_stack_dmi_value(physics_stack)
         if dmi is not None:
             lines.append(f"{var_name}.Dind = {_py_float_roundtrip(dmi)}")
+            dmi_normal = _physics_stack_dmi_interface_normal(physics_stack)
+            if dmi_normal is not None and not _is_default_z_normal(dmi_normal):
+                lines.append(
+                    f"{var_name}.dmi_interface_normal = ({_py_float_roundtrip(dmi_normal[0])}, "
+                    f"{_py_float_roundtrip(dmi_normal[1])}, {_py_float_roundtrip(dmi_normal[2])})"
+                )
         bulk_dmi = _physics_stack_bulk_dmi_value(physics_stack)
         if bulk_dmi is not None:
             lines.append(f"{var_name}.Dbulk = {_py_float_roundtrip(bulk_dmi)}")
         uniaxial = _physics_stack_uniaxial_params(physics_stack)
         if uniaxial is not None:
             ku1_val = uniaxial["ku1"]  # type: ignore[index]
+            ku2_val = uniaxial["ku2"]  # type: ignore[index]
             lines.append(f"{var_name}.Ku1 = {_py_float_roundtrip(ku1_val)}")  # type: ignore[arg-type]
+            if ku2_val != 0.0:
+                lines.append(f"{var_name}.Ku2 = {_py_float_roundtrip(ku2_val)}")  # type: ignore[arg-type]
             axis = uniaxial["axis"]  # type: ignore[index]
             axis0 = axis[0]  # type: ignore[index]
             axis1 = axis[1]  # type: ignore[index]
             axis2 = axis[2]  # type: ignore[index]
             lines.append(
                 f"{var_name}.anisU = ({_py_float_roundtrip(axis0)}, {_py_float_roundtrip(axis1)}, {_py_float_roundtrip(axis2)})"
+            )
+        cubic = _physics_stack_cubic_params(physics_stack)
+        if cubic is not None:
+            kc1_val = cubic["kc1"]  # type: ignore[index]
+            kc2_val = cubic["kc2"]  # type: ignore[index]
+            kc3_val = cubic["kc3"]  # type: ignore[index]
+            axis1 = cubic["axis1"]  # type: ignore[index]
+            axis2 = cubic["axis2"]  # type: ignore[index]
+            lines.append(f"{var_name}.Kc1 = {_py_float_roundtrip(kc1_val)}")  # type: ignore[arg-type]
+            lines.append(f"{var_name}.Kc2 = {_py_float_roundtrip(kc2_val)}")  # type: ignore[arg-type]
+            lines.append(f"{var_name}.Kc3 = {_py_float_roundtrip(kc3_val)}")  # type: ignore[arg-type]
+            lines.append(
+                f"{var_name}.anisC1 = ({_py_float_roundtrip(axis1[0])}, {_py_float_roundtrip(axis1[1])}, {_py_float_roundtrip(axis1[2])})"
+            )
+            lines.append(
+                f"{var_name}.anisC2 = ({_py_float_roundtrip(axis2[0])}, {_py_float_roundtrip(axis2[1])}, {_py_float_roundtrip(axis2[2])})"
             )
 
         rendered_initial_override = _render_initial_state_override(
@@ -5491,7 +5564,42 @@ _GEOMETRY_INTERACTION_ORDER = (
     "rotated_interfacial_dmi",
     "bulk_dmi",
     "uniaxial_anisotropy",
+    "cubic_anisotropy",
 )
+
+
+def _is_default_z_normal(normal: Sequence[float]) -> bool:
+    return (
+        len(normal) == 3
+        and abs(float(normal[0])) <= 1e-12
+        and abs(float(normal[1])) <= 1e-12
+        and abs(float(normal[2]) - 1.0) <= 1e-12
+    )
+
+
+def _normalize_unit_vec3(
+    raw: object,
+    *,
+    field: str,
+    fallback: tuple[float, float, float],
+) -> list[float]:
+    if raw is None:
+        vec = list(fallback)
+    elif isinstance(raw, (list, tuple)) and len(raw) == 3:
+        vec = []
+        for idx, item in enumerate(raw):
+            if isinstance(item, bool) or not isinstance(item, (int, float)):
+                raise ValueError(f"{field}[{idx}] must be a finite number")
+            val = float(item)
+            if not math.isfinite(val):
+                raise ValueError(f"{field}[{idx}] must be finite")
+            vec.append(val)
+    else:
+        raise ValueError(f"{field} must be a 3-element numeric vector")
+    norm = math.sqrt(vec[0] * vec[0] + vec[1] * vec[1] + vec[2] * vec[2])
+    if norm <= 1e-12:
+        raise ValueError(f"{field} must have nonzero norm")
+    return [vec[0] / norm, vec[1] / norm, vec[2] / norm]
 
 
 def _normalize_geometry_interaction_entry(
@@ -5511,12 +5619,17 @@ def _normalize_geometry_interaction_entry(
         )
     if kind in {"exchange", "demag"}:
         return {"kind": kind, "enabled": bool(raw.get("enabled", True)), "params": None}
-    params = raw.get("params") if isinstance(raw.get("params"), dict) else {}  # type: ignore[assignment]
+    params = dict(raw.get("params")) if isinstance(raw.get("params"), dict) else {}  # type: ignore[arg-type]
     if kind == "interfacial_dmi":
         dind = _number_or_none(params.get("dind"))
         if dind is None:
             dind = _number_or_none(material_dind)
         params["dind"] = dind if dind is not None else 1e-3
+        params["interface_normal"] = _normalize_unit_vec3(
+            params.get("interface_normal"),
+            field="interfacial_dmi.interface_normal",
+            fallback=(0.0, 0.0, 1.0),
+        )
     elif kind == "bulk_dmi":
         dbulk = _number_or_none(params.get("dbulk"))
         if dbulk is None:
@@ -5524,8 +5637,35 @@ def _normalize_geometry_interaction_entry(
         params["dbulk"] = dbulk if dbulk is not None else 1e-3
     elif kind == "uniaxial_anisotropy":
         ku1 = _number_or_none(params.get("ku1"))
+        ku2 = _number_or_none(params.get("ku2"))
         params["ku1"] = ku1 if ku1 is not None else 0.0
+        params["ku2"] = ku2 if ku2 is not None else 0.0
         params["axis"] = _normalize_vec3(params.get("axis"), fallback=(0.0, 0.0, 1.0))
+    elif kind == "cubic_anisotropy":
+        kc1 = _number_or_none(params.get("kc1"))
+        kc2 = _number_or_none(params.get("kc2"))
+        kc3 = _number_or_none(params.get("kc3"))
+        axis1 = _normalize_unit_vec3(
+            params.get("axis1"),
+            field="cubic_anisotropy.axis1",
+            fallback=(1.0, 0.0, 0.0),
+        )
+        axis2 = _normalize_unit_vec3(
+            params.get("axis2"),
+            field="cubic_anisotropy.axis2",
+            fallback=(0.0, 1.0, 0.0),
+        )
+        dot = axis1[0] * axis2[0] + axis1[1] * axis2[1] + axis1[2] * axis2[2]
+        if abs(dot) >= 1e-6:
+            raise ValueError(
+                "cubic_anisotropy axis1 and axis2 must be orthogonal "
+                "(|c1·c2| / (||c1|| ||c2||) < 1e-6)"
+            )
+        params["kc1"] = kc1 if kc1 is not None else 0.0
+        params["kc2"] = kc2 if kc2 is not None else 0.0
+        params["kc3"] = kc3 if kc3 is not None else 0.0
+        params["axis1"] = axis1
+        params["axis2"] = axis2
     return {
         "kind": kind,
         "enabled": bool(raw.get("enabled", True)),
@@ -5585,6 +5725,25 @@ def _physics_stack_dmi_value(stack: list[dict[str, object]]) -> float | None:
     return None
 
 
+def _physics_stack_dmi_interface_normal(
+    stack: list[dict[str, object]],
+) -> list[float] | None:
+    for entry in stack:
+        if entry.get("kind") != "interfacial_dmi":
+            continue
+        if not bool(entry.get("enabled", True)):
+            return None
+        params = entry.get("params") if isinstance(entry.get("params"), dict) else {}  # type: ignore[assignment]
+        if params.get("interface_normal") is None:
+            return [0.0, 0.0, 1.0]
+        return _normalize_unit_vec3(
+            params.get("interface_normal"),
+            field="interfacial_dmi.interface_normal",
+            fallback=(0.0, 0.0, 1.0),
+        )
+    return None
+
+
 def _physics_stack_bulk_dmi_value(stack: list[dict[str, object]]) -> float | None:
     for entry in stack:
         if entry.get("kind") != "bulk_dmi":
@@ -5606,8 +5765,45 @@ def _physics_stack_uniaxial_params(
             return None
         params = entry.get("params") if isinstance(entry.get("params"), dict) else {}  # type: ignore[assignment]
         ku1 = _number_or_none(params.get("ku1"))
+        ku2 = _number_or_none(params.get("ku2"))
         axis = _normalize_vec3(params.get("axis"), fallback=(0.0, 0.0, 1.0))
-        return {"ku1": ku1 if ku1 is not None else 0.0, "axis": axis}
+        return {
+            "ku1": ku1 if ku1 is not None else 0.0,
+            "ku2": ku2 if ku2 is not None else 0.0,
+            "axis": axis,
+        }
+    return None
+
+
+def _physics_stack_cubic_params(
+    stack: list[dict[str, object]],
+) -> dict[str, object] | None:
+    for entry in stack:
+        if entry.get("kind") != "cubic_anisotropy":
+            continue
+        if not bool(entry.get("enabled", True)):
+            return None
+        params = entry.get("params") if isinstance(entry.get("params"), dict) else {}  # type: ignore[assignment]
+        kc1 = _number_or_none(params.get("kc1"))
+        kc2 = _number_or_none(params.get("kc2"))
+        kc3 = _number_or_none(params.get("kc3"))
+        axis1 = _normalize_unit_vec3(
+            params.get("axis1"),
+            field="cubic_anisotropy.axis1",
+            fallback=(1.0, 0.0, 0.0),
+        )
+        axis2 = _normalize_unit_vec3(
+            params.get("axis2"),
+            field="cubic_anisotropy.axis2",
+            fallback=(0.0, 1.0, 0.0),
+        )
+        return {
+            "kc1": kc1 if kc1 is not None else 0.0,
+            "kc2": kc2 if kc2 is not None else 0.0,
+            "kc3": kc3 if kc3 is not None else 0.0,
+            "axis1": axis1,
+            "axis2": axis2,
+        }
     return None
 
 
@@ -12014,11 +12210,17 @@ def _export_geometry_entry(
         {"kind": "demag", "enabled": _problem_has_demag(problem), "params": None},
     ]
     if dmi_val is not None:
+        dmi_normal = _magnet_interfacial_dmi_normal(problem)
         physics_stack.append(
             {
                 "kind": "interfacial_dmi",
                 "enabled": True,
-                "params": {"dind": dmi_val},
+                "params": {
+                    "dind": dmi_val,
+                    "interface_normal": (
+                        list(dmi_normal) if dmi_normal is not None else [0.0, 0.0, 1.0]
+                    ),
+                },
             }
         )
     if bulk_dmi_val is not None:
@@ -12029,18 +12231,46 @@ def _export_geometry_entry(
                 "params": {"dbulk": bulk_dmi_val},
             }
         )
-    if mat.Ku1 is not None or mat.anisU is not None:
+    if mat.Ku1 is not None or mat.Ku2 is not None or mat.anisU is not None:
         physics_stack.append(
             {
                 "kind": "uniaxial_anisotropy",
                 "enabled": True,
                 "params": {
                     "ku1": mat.Ku1 if mat.Ku1 is not None else 0.0,
+                    "ku2": mat.Ku2 if mat.Ku2 is not None else 0.0,
                     "axis": (
                         [float(mat.anisU[0]), float(mat.anisU[1]), float(mat.anisU[2])]
                         if mat.anisU is not None
                         else [0.0, 0.0, 1.0]
                     ),
+                },
+            }
+        )
+    if any(
+        value is not None
+        for value in (mat.Kc1, mat.Kc2, mat.Kc3, mat.anisC1, mat.anisC2)
+    ):
+        axis1 = _normalize_unit_vec3(
+            list(mat.anisC1) if mat.anisC1 is not None else None,
+            field="cubic_anisotropy.axis1",
+            fallback=(1.0, 0.0, 0.0),
+        )
+        axis2 = _normalize_unit_vec3(
+            list(mat.anisC2) if mat.anisC2 is not None else None,
+            field="cubic_anisotropy.axis2",
+            fallback=(0.0, 1.0, 0.0),
+        )
+        physics_stack.append(
+            {
+                "kind": "cubic_anisotropy",
+                "enabled": True,
+                "params": {
+                    "kc1": mat.Kc1 if mat.Kc1 is not None else 0.0,
+                    "kc2": mat.Kc2 if mat.Kc2 is not None else 0.0,
+                    "kc3": mat.Kc3 if mat.Kc3 is not None else 0.0,
+                    "axis1": axis1,
+                    "axis2": axis2,
                 },
             }
         )
@@ -12430,6 +12660,17 @@ def _magnet_dmi(
                 return None
         return term.D
     return material_value
+
+
+def _magnet_interfacial_dmi_normal(problem: Problem) -> list[float] | None:
+    for term in problem.energy:
+        if isinstance(term, InterfacialDMI) and term.interface_normal is not None:
+            return _normalize_unit_vec3(
+                list(term.interface_normal),
+                field="interfacial_dmi.interface_normal",
+                fallback=(0.0, 0.0, 1.0),
+            )
+    return None
 
 
 def _material_dmi_mirror_matches(

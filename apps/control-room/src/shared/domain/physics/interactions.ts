@@ -355,7 +355,7 @@ const INTERACTION_SPECS: readonly InteractionSpec[] = [
         id: "d_bulk",
         kind: "number",
         label: "D_bulk",
-        unit: "J/m^3",
+        unit: "J/m^2",
       },
     ],
     id: "bulk_dmi",

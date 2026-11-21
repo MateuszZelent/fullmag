@@ -581,7 +581,9 @@ class MagnetHandle:
     # Public state consumed by export, plus the dedicated control handles.
     # Unknown attributes must not appear to configure physics and then vanish.
     _PUBLIC_ATTRIBUTES = frozenset({
-        "region_name", "Ms", "Aex", "Ku1", "anisU", "Kc1",
+        "region_name", "Ms", "Aex", "Ku1", "Ku2", "anisU",
+        "Kc1", "Kc2", "Kc3", "anisC1", "anisC2",
+        "dmi_interface_normal",
         "mesh", "regions",
     })
 
@@ -609,8 +611,14 @@ class MagnetHandle:
         self._dbulk_value: float | None = None
         self._active_material_dmi: set[str] = set()
         self.Ku1: float | None = None
+        self.Ku2: float | None = None
         self.anisU: tuple[float, float, float] | None = None
         self.Kc1: float | None = None
+        self.Kc2: float | None = None
+        self.Kc3: float | None = None
+        self.anisC1: tuple[float, float, float] | None = None
+        self.anisC2: tuple[float, float, float] | None = None
+        self.dmi_interface_normal: tuple[float, float, float] | None = None
         self._m_value: Any = None
         self._m_proxy = MagnetizationHandle(self)
         self._field_states: dict[str, object] = {}
@@ -794,8 +802,13 @@ class MagnetHandle:
             A=self.Aex,
             alpha=self._alpha_value,
             Ku1=self.Ku1,
+            Ku2=self.Ku2,
             anisU=as_vector3(self.anisU, "anisU") if self.anisU is not None else None,
             Kc1=self.Kc1,
+            Kc2=self.Kc2,
+            Kc3=self.Kc3,
+            anisC1=as_vector3(self.anisC1, "anisC1") if self.anisC1 is not None else None,
+            anisC2=as_vector3(self.anisC2, "anisC2") if self.anisC2 is not None else None,
             Dind=self._dmi_coefficient("Dind"),
             Dbulk=self._dmi_coefficient("Dbulk"),
         )
@@ -10315,7 +10328,8 @@ def _build_problem(
     # The legacy study surface lowers uniform material DMI to one explicit
     # global term. Mixed per-object values cannot be represented that way.
     if dind is not None:
-        energy.append(InterfacialDMI(D=dind))
+        dind_normal = _uniform_material_dmi_interface_normal(s._magnets)
+        energy.append(InterfacialDMI(D=dind, interface_normal=dind_normal))
     if dbulk is not None:
         energy.append(BulkDMI(D=dbulk))
     energy.extend(s._explicit_energy_terms)
@@ -10661,6 +10675,27 @@ def _uniform_material_dmi_coefficient(
     if all(value is None for value in values):
         return None
     return effective_values[0]
+
+
+def _uniform_material_dmi_interface_normal(
+    magnets: Sequence[MagnetHandle],
+) -> tuple[float, float, float] | None:
+    """Return a shared InterfacialDMI interface_normal when authored on handles."""
+    normals = [
+        as_vector3(magnet.dmi_interface_normal, "dmi_interface_normal")
+        for magnet in magnets
+        if magnet.dmi_interface_normal is not None
+    ]
+    if not normals:
+        return None
+    first = normals[0]
+    for other in normals[1:]:
+        if any(abs(a - b) > 1e-12 for a, b in zip(first, other)):
+            raise ValueError(
+                "legacy study-level InterfacialDMI interface_normal lowering requires "
+                "all magnets to agree on dmi_interface_normal"
+            )
+    return first
 
 
 # ---------------------------------------------------------------------------

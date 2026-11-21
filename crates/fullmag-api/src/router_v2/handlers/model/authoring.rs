@@ -3292,7 +3292,7 @@ pub async fn patch_authoring_magnetization_asset(
     path = "/v2/sessions/current/model/objects/{object_id}/interactions/{interaction_kind}",
     params(
         ("object_id" = String, Path, description = "Canonical scene object id"),
-        ("interaction_kind" = String, Path, description = "Object interaction kind: exchange | demag | interfacial_dmi | bulk_dmi | uniaxial_anisotropy")
+        ("interaction_kind" = String, Path, description = "Object interaction kind: exchange | demag | interfacial_dmi | bulk_dmi | uniaxial_anisotropy | cubic_anisotropy")
     ),
     responses(
         (status = 200, description = "Canonical object interaction resource", body = ObjectInteractionResource),
@@ -3341,7 +3341,7 @@ pub async fn get_authoring_object_interaction(
     path = "/v2/sessions/current/model/objects/{object_id}/interactions/{interaction_kind}",
     params(
         ("object_id" = String, Path, description = "Canonical scene object id"),
-        ("interaction_kind" = String, Path, description = "Object interaction kind: exchange | demag | interfacial_dmi | bulk_dmi | uniaxial_anisotropy")
+        ("interaction_kind" = String, Path, description = "Object interaction kind: exchange | demag | interfacial_dmi | bulk_dmi | uniaxial_anisotropy | cubic_anisotropy")
     ),
     request_body = ObjectInteractionPatchRequest,
     responses(
@@ -5685,6 +5685,7 @@ fn magnetic_interaction_kind_id(kind: ScriptBuilderMagneticInteractionKind) -> &
         ScriptBuilderMagneticInteractionKind::RotatedInterfacialDmi => "rotated_interfacial_dmi",
         ScriptBuilderMagneticInteractionKind::BulkDmi => "bulk_dmi",
         ScriptBuilderMagneticInteractionKind::UniaxialAnisotropy => "uniaxial_anisotropy",
+        ScriptBuilderMagneticInteractionKind::CubicAnisotropy => "cubic_anisotropy",
     }
 }
 
@@ -5762,6 +5763,7 @@ fn parse_interaction_kind(raw: &str) -> Result<ScriptBuilderMagneticInteractionK
         }
         "bulk_dmi" => Ok(ScriptBuilderMagneticInteractionKind::BulkDmi),
         "uniaxial_anisotropy" => Ok(ScriptBuilderMagneticInteractionKind::UniaxialAnisotropy),
+        "cubic_anisotropy" => Ok(ScriptBuilderMagneticInteractionKind::CubicAnisotropy),
         _ => Err(ApiError::bad_request(format!(
             "unsupported interaction kind: {raw}"
         ))),
@@ -5776,6 +5778,7 @@ fn interaction_kind_str(kind: ScriptBuilderMagneticInteractionKind) -> &'static 
         ScriptBuilderMagneticInteractionKind::RotatedInterfacialDmi => "rotated_interfacial_dmi",
         ScriptBuilderMagneticInteractionKind::BulkDmi => "bulk_dmi",
         ScriptBuilderMagneticInteractionKind::UniaxialAnisotropy => "uniaxial_anisotropy",
+        ScriptBuilderMagneticInteractionKind::CubicAnisotropy => "cubic_anisotropy",
     }
 }
 
@@ -5859,14 +5862,10 @@ fn apply_interaction_patch(
     }
 
     let default_params = match kind {
-        ScriptBuilderMagneticInteractionKind::InterfacialDmi => Value::Object(
-            [(
-                "dind".to_string(),
-                Value::from(material_dind.unwrap_or(1e-3)),
-            )]
-            .into_iter()
-            .collect(),
-        ),
+        ScriptBuilderMagneticInteractionKind::InterfacialDmi => serde_json::json!({
+            "dind": material_dind.unwrap_or(1e-3),
+            "interface_normal": [0.0, 0.0, 1.0]
+        }),
         ScriptBuilderMagneticInteractionKind::RotatedInterfacialDmi => Value::Object(
             [("d".to_string(), Value::from(3.0e-3))]
                 .into_iter()
@@ -5882,7 +5881,15 @@ fn apply_interaction_patch(
         ),
         ScriptBuilderMagneticInteractionKind::UniaxialAnisotropy => serde_json::json!({
             "ku1": 0.0,
+            "ku2": 0.0,
             "axis": [0.0, 0.0, 1.0]
+        }),
+        ScriptBuilderMagneticInteractionKind::CubicAnisotropy => serde_json::json!({
+            "kc1": 0.0,
+            "kc2": 0.0,
+            "kc3": 0.0,
+            "axis1": [1.0, 0.0, 0.0],
+            "axis2": [0.0, 1.0, 0.0]
         }),
         _ => Value::Object(Default::default()),
     };
@@ -5914,17 +5921,111 @@ fn apply_interaction_patch(
     Ok(())
 }
 
+fn parse_unit_axis3_param(
+    map: &serde_json::Map<String, Value>,
+    key: &str,
+    default: [f64; 3],
+) -> Result<[f64; 3], ApiError> {
+    let Some(value) = map.get(key) else {
+        return Ok(default);
+    };
+    let Some(items) = value.as_array() else {
+        return Err(ApiError::bad_request(format!(
+            "{key} must be a 3-element numeric array"
+        )));
+    };
+    if items.len() != 3 {
+        return Err(ApiError::bad_request(format!(
+            "{key} must contain exactly 3 numeric values"
+        )));
+    }
+    let mut vec = [0.0; 3];
+    for (idx, item) in items.iter().enumerate() {
+        let Some(v) = item.as_f64() else {
+            return Err(ApiError::bad_request(format!(
+                "{key}[{idx}] must be a finite number"
+            )));
+        };
+        if !v.is_finite() {
+            return Err(ApiError::bad_request(format!("{key}[{idx}] must be finite")));
+        }
+        vec[idx] = v;
+    }
+    let norm = (vec[0] * vec[0] + vec[1] * vec[1] + vec[2] * vec[2]).sqrt();
+    if norm <= 1e-12 {
+        return Err(ApiError::bad_request(format!(
+            "{key} must have a nonzero norm"
+        )));
+    }
+    Ok([vec[0] / norm, vec[1] / norm, vec[2] / norm])
+}
+
 fn expect_object_params(
     value: Value,
     kind: ScriptBuilderMagneticInteractionKind,
 ) -> Result<serde_json::Map<String, Value>, ApiError> {
-    match value {
-        Value::Object(map) => Ok(map),
-        _ => Err(ApiError::bad_request(format!(
-            "invalid params payload for interaction: {}",
-            interaction_kind_str(kind)
-        ))),
+    let mut map = match value {
+        Value::Object(map) => map,
+        _ => {
+            return Err(ApiError::bad_request(format!(
+                "invalid params payload for interaction: {}",
+                interaction_kind_str(kind)
+            )))
+        }
+    };
+    match kind {
+        ScriptBuilderMagneticInteractionKind::InterfacialDmi => {
+            let normal = parse_unit_axis3_param(&map, "interface_normal", [0.0, 0.0, 1.0])?;
+            map.insert(
+                "interface_normal".to_string(),
+                Value::Array(normal.into_iter().map(Value::from).collect()),
+            );
+        }
+        ScriptBuilderMagneticInteractionKind::UniaxialAnisotropy => {
+            if !map.contains_key("ku2") {
+                map.insert("ku2".to_string(), Value::from(0.0));
+            }
+        }
+        ScriptBuilderMagneticInteractionKind::CubicAnisotropy => {
+            for key in ["kc1", "kc2", "kc3"] {
+                let scalar = match map.get(key) {
+                    Some(val) => {
+                        let v = val.as_f64().ok_or_else(|| {
+                            ApiError::bad_request(format!(
+                                "cubic_anisotropy.{key} must be a finite number"
+                            ))
+                        })?;
+                        if !v.is_finite() {
+                            return Err(ApiError::bad_request(format!(
+                                "cubic_anisotropy.{key} must be finite"
+                            )));
+                        }
+                        v
+                    }
+                    None => 0.0,
+                };
+                map.insert(key.to_string(), Value::from(scalar));
+            }
+            let c1 = parse_unit_axis3_param(&map, "axis1", [1.0, 0.0, 0.0])?;
+            let c2 = parse_unit_axis3_param(&map, "axis2", [0.0, 1.0, 0.0])?;
+            let dot = c1[0] * c2[0] + c1[1] * c2[1] + c1[2] * c2[2];
+            if dot.abs() >= 1e-6 {
+                return Err(ApiError::bad_request(
+                    "cubic_anisotropy axis1 and axis2 must be orthogonal (|c1·c2| / (||c1|| ||c2||) < 1e-6)",
+                ));
+            }
+            map.insert(
+                "axis1".to_string(),
+                Value::Array(c1.into_iter().map(Value::from).collect()),
+            );
+            map.insert(
+                "axis2".to_string(),
+                Value::Array(c2.into_iter().map(Value::from).collect()),
+            );
+        }
+        _ => {}
     }
+    Ok(map)
 }
 
 #[cfg(test)]

@@ -1458,6 +1458,7 @@ _INTERACTION_ORDER = (
     "interfacial_dmi",
     "bulk_dmi",
     "uniaxial_anisotropy",
+    "cubic_anisotropy",
 )
 
 
@@ -1486,12 +1487,37 @@ def _canonical_scene_stage(raw_stage: object) -> object:
 
 
 def _normalize_axis3(value: object) -> list[float]:
-    if isinstance(value, list) and len(value) == 3:
+    if isinstance(value, (list, tuple)) and len(value) == 3:
         try:
             return [float(value[0]), float(value[1]), float(value[2])]
         except (TypeError, ValueError):
             return [0.0, 0.0, 1.0]
     return [0.0, 0.0, 1.0]
+
+
+def _normalize_unit_axis3(
+    value: object,
+    *,
+    field: str,
+    fallback: tuple[float, float, float],
+) -> list[float]:
+    if value is None:
+        raw = list(fallback)
+    elif isinstance(value, (list, tuple)) and len(value) == 3:
+        raw = []
+        for idx, item in enumerate(value):
+            if isinstance(item, bool) or not isinstance(item, (int, float)):
+                raise ValueError(f"{field}[{idx}] must be a finite number")
+            numeric = float(item)
+            if not math.isfinite(numeric):
+                raise ValueError(f"{field}[{idx}] must be finite")
+            raw.append(numeric)
+    else:
+        raise ValueError(f"{field} must be a 3-element numeric vector")
+    norm = math.sqrt(raw[0] * raw[0] + raw[1] * raw[1] + raw[2] * raw[2])
+    if norm <= 1e-12:
+        raise ValueError(f"{field} must have nonzero norm")
+    return [raw[0] / norm, raw[1] / norm, raw[2] / norm]
 
 
 def _default_interaction_params(
@@ -1502,12 +1528,23 @@ def _default_interaction_params(
 ) -> dict[str, object] | None:
     if kind == "interfacial_dmi":
         dind = _number_or_none(material_dind)
-        return {"dind": dind if dind is not None else 1e-3}
+        return {
+            "dind": dind if dind is not None else 1e-3,
+            "interface_normal": [0.0, 0.0, 1.0],
+        }
     if kind == "bulk_dmi":
         dbulk = _number_or_none(material_dbulk)
         return {"dbulk": dbulk if dbulk is not None else 1e-3}
     if kind == "uniaxial_anisotropy":
-        return {"ku1": 0.0, "axis": [0.0, 0.0, 1.0]}
+        return {"ku1": 0.0, "ku2": 0.0, "axis": [0.0, 0.0, 1.0]}
+    if kind == "cubic_anisotropy":
+        return {
+            "kc1": 0.0,
+            "kc2": 0.0,
+            "kc3": 0.0,
+            "axis1": [1.0, 0.0, 0.0],
+            "axis2": [0.0, 1.0, 0.0],
+        }
     return None
 
 
@@ -1541,6 +1578,11 @@ def _normalize_interaction_entry(
         if dind is None:
             dind = _number_or_none(material_dind)
         params_map["dind"] = dind if dind is not None else 1e-3
+        params_map["interface_normal"] = _normalize_unit_axis3(
+            params_map.get("interface_normal"),
+            field="interfacial_dmi.interface_normal",
+            fallback=(0.0, 0.0, 1.0),
+        )
     elif kind == "bulk_dmi":
         dbulk = _number_or_none(params_map.get("dbulk"))
         if dbulk is None:
@@ -1548,8 +1590,35 @@ def _normalize_interaction_entry(
         params_map["dbulk"] = dbulk if dbulk is not None else 1e-3
     elif kind == "uniaxial_anisotropy":
         ku1 = _number_or_none(params_map.get("ku1"))
+        ku2 = _number_or_none(params_map.get("ku2"))
         params_map["ku1"] = ku1 if ku1 is not None else 0.0
+        params_map["ku2"] = ku2 if ku2 is not None else 0.0
         params_map["axis"] = _normalize_axis3(params_map.get("axis"))
+    elif kind == "cubic_anisotropy":
+        kc1 = _number_or_none(params_map.get("kc1"))
+        kc2 = _number_or_none(params_map.get("kc2"))
+        kc3 = _number_or_none(params_map.get("kc3"))
+        axis1 = _normalize_unit_axis3(
+            params_map.get("axis1"),
+            field="cubic_anisotropy.axis1",
+            fallback=(1.0, 0.0, 0.0),
+        )
+        axis2 = _normalize_unit_axis3(
+            params_map.get("axis2"),
+            field="cubic_anisotropy.axis2",
+            fallback=(0.0, 1.0, 0.0),
+        )
+        dot = axis1[0] * axis2[0] + axis1[1] * axis2[1] + axis1[2] * axis2[2]
+        if abs(dot) >= 1e-6:
+            raise ValueError(
+                "cubic_anisotropy axis1 and axis2 must be orthogonal "
+                "(|c1·c2| / (||c1|| ||c2||) < 1e-6)"
+            )
+        params_map["kc1"] = kc1 if kc1 is not None else 0.0
+        params_map["kc2"] = kc2 if kc2 is not None else 0.0
+        params_map["kc3"] = kc3 if kc3 is not None else 0.0
+        params_map["axis1"] = axis1
+        params_map["axis2"] = axis2
     return {
         "kind": kind,
         "enabled": bool(raw.get("enabled", True)),

@@ -457,6 +457,11 @@ describe("physics interaction catalog", () => {
       id: "rotated_interfacial_dmi",
       values: { d: "0.003" },
     });
+    expect(findInteractionSpec("bulk_dmi")?.fields[0]).toMatchObject({
+      id: "d_bulk",
+      label: "D_bulk",
+      unit: "J/m^2",
+    });
   });
 
   it("separates global uniform external field from regional field sources", () => {

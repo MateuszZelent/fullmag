@@ -1608,13 +1608,14 @@ fn builder_fdm_from_scene(
     })
 }
 
-const INTERACTION_ORDER: [ScriptBuilderMagneticInteractionKind; 6] = [
+const INTERACTION_ORDER: [ScriptBuilderMagneticInteractionKind; 7] = [
     ScriptBuilderMagneticInteractionKind::Exchange,
     ScriptBuilderMagneticInteractionKind::Demag,
     ScriptBuilderMagneticInteractionKind::InterfacialDmi,
     ScriptBuilderMagneticInteractionKind::RotatedInterfacialDmi,
     ScriptBuilderMagneticInteractionKind::BulkDmi,
     ScriptBuilderMagneticInteractionKind::UniaxialAnisotropy,
+    ScriptBuilderMagneticInteractionKind::CubicAnisotropy,
 ];
 
 fn ensure_object_physics_stack(
@@ -1720,7 +1721,13 @@ fn normalize_interaction_entry(
                 .and_then(Value::as_f64)
                 .or(material_dind)
                 .unwrap_or(1e-3);
+            let interface_normal =
+                normalize_unit_axis3(params.get("interface_normal"), [0.0, 0.0, 1.0]);
             params.insert("dind".to_string(), Value::from(dind));
+            params.insert(
+                "interface_normal".to_string(),
+                Value::Array(interface_normal.into_iter().map(Value::from).collect()),
+            );
             ScriptBuilderMagneticInteractionEntry {
                 kind: ScriptBuilderMagneticInteractionKind::InterfacialDmi,
                 enabled: entry.enabled,
@@ -1754,14 +1761,40 @@ fn normalize_interaction_entry(
         ScriptBuilderMagneticInteractionKind::UniaxialAnisotropy => {
             let mut params = params_map(entry.params.as_ref());
             let ku1 = params.get("ku1").and_then(Value::as_f64).unwrap_or(0.0);
+            let ku2 = params.get("ku2").and_then(Value::as_f64).unwrap_or(0.0);
             let axis = normalize_axis3(params.get("axis"));
             params.insert("ku1".to_string(), Value::from(ku1));
+            params.insert("ku2".to_string(), Value::from(ku2));
             params.insert(
                 "axis".to_string(),
                 Value::Array(axis.into_iter().map(Value::from).collect()),
             );
             ScriptBuilderMagneticInteractionEntry {
                 kind: ScriptBuilderMagneticInteractionKind::UniaxialAnisotropy,
+                enabled: entry.enabled,
+                params: Some(Value::Object(params)),
+            }
+        }
+        ScriptBuilderMagneticInteractionKind::CubicAnisotropy => {
+            let mut params = params_map(entry.params.as_ref());
+            let kc1 = params.get("kc1").and_then(Value::as_f64).unwrap_or(0.0);
+            let kc2 = params.get("kc2").and_then(Value::as_f64).unwrap_or(0.0);
+            let kc3 = params.get("kc3").and_then(Value::as_f64).unwrap_or(0.0);
+            let (axis1, axis2) =
+                normalize_cubic_axes3(params.get("axis1"), params.get("axis2"));
+            params.insert("kc1".to_string(), Value::from(kc1));
+            params.insert("kc2".to_string(), Value::from(kc2));
+            params.insert("kc3".to_string(), Value::from(kc3));
+            params.insert(
+                "axis1".to_string(),
+                Value::Array(axis1.into_iter().map(Value::from).collect()),
+            );
+            params.insert(
+                "axis2".to_string(),
+                Value::Array(axis2.into_iter().map(Value::from).collect()),
+            );
+            ScriptBuilderMagneticInteractionEntry {
+                kind: ScriptBuilderMagneticInteractionKind::CubicAnisotropy,
                 enabled: entry.enabled,
                 params: Some(Value::Object(params)),
             }
@@ -1785,6 +1818,65 @@ fn normalize_axis3(value: Option<&Value>) -> [f64; 3] {
         ],
         _ => [0.0, 0.0, 1.0],
     }
+}
+
+fn normalize_unit_axis3(value: Option<&Value>, fallback: [f64; 3]) -> [f64; 3] {
+    let raw = match value {
+        Some(Value::Array(values)) if values.len() == 3 => [
+            values[0].as_f64().unwrap_or(fallback[0]),
+            values[1].as_f64().unwrap_or(fallback[1]),
+            values[2].as_f64().unwrap_or(fallback[2]),
+        ],
+        _ => fallback,
+    };
+    if !raw.iter().all(|component| component.is_finite()) {
+        return fallback;
+    }
+    let norm = (raw[0] * raw[0] + raw[1] * raw[1] + raw[2] * raw[2]).sqrt();
+    if norm <= 1e-12 {
+        fallback
+    } else {
+        [raw[0] / norm, raw[1] / norm, raw[2] / norm]
+    }
+}
+
+fn normalize_cubic_axes3(
+    raw_axis1: Option<&Value>,
+    raw_axis2: Option<&Value>,
+) -> ([f64; 3], [f64; 3]) {
+    let c1 = normalize_unit_axis3(raw_axis1, [1.0, 0.0, 0.0]);
+    let mut c2 = normalize_unit_axis3(raw_axis2, [0.0, 1.0, 0.0]);
+    let dot = c1[0] * c2[0] + c1[1] * c2[1] + c1[2] * c2[2];
+    if dot.abs() >= 1e-6 {
+        let proj = [
+            c2[0] - dot * c1[0],
+            c2[1] - dot * c1[1],
+            c2[2] - dot * c1[2],
+        ];
+        let norm = (proj[0] * proj[0] + proj[1] * proj[1] + proj[2] * proj[2]).sqrt();
+        if norm > 1e-12 {
+            c2 = [proj[0] / norm, proj[1] / norm, proj[2] / norm];
+        } else {
+            let candidate = if c1[0].abs() < 0.9 {
+                [1.0, 0.0, 0.0]
+            } else {
+                [0.0, 1.0, 0.0]
+            };
+            let cross = [
+                c1[1] * candidate[2] - c1[2] * candidate[1],
+                c1[2] * candidate[0] - c1[0] * candidate[2],
+                c1[0] * candidate[1] - c1[1] * candidate[0],
+            ];
+            let cross_norm =
+                (cross[0] * cross[0] + cross[1] * cross[1] + cross[2] * cross[2]).sqrt();
+            c2 = [
+                cross[0] / cross_norm,
+                cross[1] / cross_norm,
+                cross[2] / cross_norm,
+            ];
+        }
+    }
+    (c1, c2)
 }
 
 fn upsert_interaction(
