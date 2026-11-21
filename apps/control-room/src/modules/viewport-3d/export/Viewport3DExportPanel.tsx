@@ -22,6 +22,7 @@ import type { Viewport3DExportMode } from "../viewport3dInspectorState";
 import { useViewport3DCommandState, viewport3dStore } from "../viewport3dStore";
 import {
   computeViewportModelExportCapabilities,
+  defaultIncludeAirboxForSource,
   defaultIncludeVectorsForSource,
   downloadExport3DModel,
   executeViewportModelExport,
@@ -104,7 +105,7 @@ export function Viewport3DExportPanel({
   const [format, setFormat] = useState<Export3DFormat>("glb");
   const [customFilename, setCustomFilename] = useState<string | null>(null);
   const [includeVectorsOverride, setIncludeVectorsOverride] = useState<boolean | null>(null);
-  const [includeAirbox, setIncludeAirbox] = useState(false);
+  const [includeAirboxOverride, setIncludeAirbox] = useState<boolean | null>(null);
   const [animate, setAnimate] = useState(false);
   const [exporting, setExporting] = useState(false);
   const [exportError, setExportError] = useState<string | null>(null);
@@ -118,6 +119,7 @@ export function Viewport3DExportPanel({
   }, []);
 
   const source = sourceState.source;
+  const includeAirbox = includeAirboxOverride ?? defaultIncludeAirboxForSource(source);
   const sourceError = sourceState.error;
   const loadingSource =
     shouldLoad3D &&
@@ -156,7 +158,7 @@ export function Viewport3DExportPanel({
         animate,
         filename: effectiveFilename,
         format,
-        includeAirbox,
+        includeAirbox: includeAirboxOverride ?? defaultIncludeAirboxForSource(freshSource),
         includeVectors: effectiveVectors,
         signal: controller.signal,
         source: freshSource,

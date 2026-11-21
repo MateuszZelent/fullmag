@@ -709,8 +709,11 @@ const FIELD_VECTOR_ABORT_STALE_INFLIGHT = false;
 
 const FIELD_VECTOR_RETRY_POLICY: ResourceRetryPolicy = {
   deadlineMs: 30_000,
+  keepLoadingWhileRetrying: true,
   maxAttempts: 5,
+  maxConflictAttempts: 3,
   retryAfterMs: 250,
+  retryableConflictReasonCodes: ["field_domain_changed"],
   retryableReasonCodes: [
     "field_materialization_pending",
     "field_pending",

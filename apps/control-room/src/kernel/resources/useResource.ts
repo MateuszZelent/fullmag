@@ -391,6 +391,16 @@ function useResourceLoader<TData>({
     resolveRevision ?? NOOP_RESOLVE_REVISION,
   );
   const retryResourceKey = useRef(runtimeResourceKey);
+  const reportDeferredRetry = useRef<(() => void) | null>(null);
+  const observeDeferredRetry = enabled && retryPolicy?.keepLoadingWhileRetrying === true;
+
+  useEffect(() => {
+    if (!observeDeferredRetry) return;
+    const unsubscribe = runtimeStore.subscribe(runtimeResourceKey, () => {
+      reportDeferredRetry.current?.();
+    });
+    return unsubscribe;
+  }, [observeDeferredRetry, runtimeResourceKey, runtimeStore]);
 
   useEffect(() => {
     if (retryResourceKey.current !== runtimeResourceKey) {
@@ -414,6 +424,62 @@ function useResourceLoader<TData>({
     let cancelled = false;
     let completed = false;
     let started = false;
+
+
+    const reportSettlement = (snapshot: ResourceRuntimeSnapshot<TData>) => {
+      completed = true;
+      if (hasManualRefresh) {
+        setLoadedRefreshToken(refreshToken);
+      }
+      if (snapshot.status === "ready") {
+        recordResourceHookDiagnostic({
+          action: "set",
+          diagnosticRecorder,
+          detail: { status: snapshot.status },
+          resourceKey,
+          revision: snapshot.revision,
+        });
+      }
+      if (snapshot.status === "error") {
+        const error =
+          snapshot.error ??
+          new Error("Resource load failed without error detail");
+        const failure = normalizeResourceLoadFailure(error);
+        if (shouldNotifyResourceLoadFailure(notifyOnError, error)) {
+          emitResourceLoadFailed({
+            bus,
+            error,
+            resourceKey,
+            revision: externalRevision,
+          });
+        }
+        recordResourceHookDiagnostic({
+          action: "miss",
+          diagnosticRecorder,
+          detail: {
+            cause: failure.cause,
+            errorName: failure.errorName,
+            reason: "load-failed",
+            status: failure.status,
+          },
+          resourceKey,
+          revision: externalRevision,
+          severity: "warning",
+        });
+        errorCountRef.current += 1;
+      } else {
+        errorCountRef.current = 0;
+      }
+    };
+
+    const reportDeferredSettlement = () => {
+      const next = runtimeStore.getSnapshot(runtimeResourceKey);
+      if ((next.status !== "ready" && next.status !== "error") ||
+          next.settledResourceKey !== runtimeResourceKey ||
+          next.settledExternalRevision !== externalRevision) return;
+      reportDeferredRetry.current = null;
+      reportSettlement(next);
+    };
 
     const snapshotAtEffect = runtimeStore.getSnapshot(runtimeResourceKey);
     const externalRevisionChanged =
@@ -458,55 +524,23 @@ function useResourceLoader<TData>({
           resourceKey: runtimeResourceKey,
         })
         .then((snapshot) => {
-          completed = true;
           if (cancelled) return;
-          if (hasManualRefresh) {
-            setLoadedRefreshToken(refreshToken);
+          if (retryPolicy?.keepLoadingWhileRetrying &&
+              (snapshot.status === "loading" || snapshot.status === "stale") &&
+              runtimeStore.hasPendingLoad(runtimeResourceKey)) {
+            reportDeferredRetry.current = reportDeferredSettlement;
+            reportDeferredSettlement();
+            return;
           }
-          if (snapshot.status === "ready") {
-            recordResourceHookDiagnostic({
-              action: "set",
-              diagnosticRecorder,
-              detail: { status: snapshot.status },
-              resourceKey,
-              revision: snapshot.revision,
-            });
-          }
-          if (snapshot.status === "error") {
-            const error =
-              snapshot.error ??
-              new Error("Resource load failed without error detail");
-            const failure = normalizeResourceLoadFailure(error);
-            if (shouldNotifyResourceLoadFailure(notifyOnError, error)) {
-              emitResourceLoadFailed({
-                bus,
-                error,
-                resourceKey,
-                revision: externalRevision,
-              });
-            }
-            recordResourceHookDiagnostic({
-              action: "miss",
-              diagnosticRecorder,
-              detail: {
-                cause: failure.cause,
-                errorName: failure.errorName,
-                reason: "load-failed",
-                status: failure.status,
-              },
-              resourceKey,
-              revision: externalRevision,
-              severity: "warning",
-            });
-            errorCountRef.current += 1;
-          } else {
-            errorCountRef.current = 0;
-          }
+          reportSettlement(snapshot);
         });
     }, delay);
 
     return () => {
       cancelled = true;
+      if (reportDeferredRetry.current === reportDeferredSettlement) {
+        reportDeferredRetry.current = null;
+      }
       clearTimeout(timeoutId);
       if (started && !completed) {
         recordResourceHookDiagnostic({
