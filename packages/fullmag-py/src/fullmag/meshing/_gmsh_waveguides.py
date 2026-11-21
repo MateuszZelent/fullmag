@@ -7,6 +7,7 @@ from typing import Any
 
 from fullmag.model._antenna_terminal import antenna_terminal_marker
 from fullmag.model.geometry import (
+    AntennaLayout,
     ArchWaveguide,
     CPWAntennaLayout,
     MicrostripAntennaLayout,
@@ -68,7 +69,7 @@ def add_arch_waveguide_to_occ(
 
 def add_antenna_layout_to_occ(
     gmsh: Any,
-    geometry: MicrostripAntennaLayout | CPWAntennaLayout,
+    geometry: AntennaLayout,
     *,
     scale: float = 1.0,
 ) -> list[tuple[int, int]]:
@@ -86,7 +87,7 @@ def add_antenna_layout_to_occ(
 
 def add_antenna_layout_parts_to_occ(
     gmsh: Any,
-    geometry: MicrostripAntennaLayout | CPWAntennaLayout,
+    geometry: AntennaLayout,
     *,
     scale: float = 1.0,
     source_cut_offset_m: float | None = None,
@@ -190,7 +191,7 @@ def _surface_center(gmsh: Any, surface_tag: int) -> tuple[float, float, float]:
 
 def add_antenna_layout_terminal_physical_groups(
     gmsh: Any,
-    geometry: MicrostripAntennaLayout | CPWAntennaLayout,
+    geometry: AntennaLayout,
     part_tags_by_id: dict[str, list[tuple[int, int]]],
     *,
     scale: float = 1.0,

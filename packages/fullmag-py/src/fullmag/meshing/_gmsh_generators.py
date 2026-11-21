@@ -10,6 +10,7 @@ from numpy.typing import NDArray
 
 from fullmag._progress import emit_progress
 from fullmag.model.geometry import (
+    ANTENNA_LAYOUT_TYPES,
     ArchWaveguide,
     Box,
     CPWAntennaLayout,
@@ -394,8 +395,7 @@ def generate_mesh(
             Ellipsoid,
             Ellipse,
             ArchWaveguide,
-            MicrostripAntennaLayout,
-            CPWAntennaLayout,
+            *ANTENNA_LAYOUT_TYPES,
         ),
     ):
         # A chain of Translate wrapping an ImportedGeometry cannot go through
@@ -694,7 +694,7 @@ def _generate_csg_mesh(
         _configure_gmsh_threads(gmsh)
         gmsh.model.add("fullmag_csg")
         antenna_part_tags = None
-        if isinstance(geometry, (MicrostripAntennaLayout, CPWAntennaLayout)):
+        if isinstance(geometry, ANTENNA_LAYOUT_TYPES):
             antenna_part_tags = add_antenna_layout_parts_to_occ(
                 gmsh,
                 geometry,
@@ -849,7 +849,7 @@ def _add_geometry_to_occ(
         return [(3, tag)]
     if isinstance(geometry, ArchWaveguide):
         return add_arch_waveguide_to_occ(gmsh, geometry, scale=scale)
-    if isinstance(geometry, (MicrostripAntennaLayout, CPWAntennaLayout)):
+    if isinstance(geometry, ANTENNA_LAYOUT_TYPES):
         return add_antenna_layout_to_occ(gmsh, geometry, scale=scale)
     if isinstance(geometry, Difference):
         base_tags = _add_geometry_to_occ(gmsh, geometry.base, scale=scale)

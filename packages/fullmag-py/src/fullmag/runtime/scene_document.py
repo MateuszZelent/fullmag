@@ -2148,7 +2148,13 @@ def build_builder_from_scene_document(scene: dict[str, Any]) -> dict[str, Any]:
         geometry = dict(obj.get("geometry") or {})
         geometry_params = dict(geometry.get("geometry_params") or {})
         transform = dict(obj.get("transform") or {})
-        if geometry.get("geometry_kind") in {"MicrostripAntennaLayout", "CPWAntennaLayout"}:
+        if geometry.get("geometry_kind") in {
+            "MicrostripAntennaLayout",
+            "CPWAntennaLayout",
+            "MeanderAntennaLayout",
+            "InductiveLoopLayout",
+            "PiecewisePath3DLayout",
+        }:
             geometry_params = _compose_antenna_owner_transform(geometry_params, transform, object_id)
         else:
             translation = _owner_frame_translation(transform, object_id)

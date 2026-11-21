@@ -1,0 +1,196 @@
+"""Tests for Task 3A: OVF 1.0/2.0 & NPZ field-state imports and trilinear antipodal fallback."""
+
+from __future__ import annotations
+
+import math
+import struct
+from pathlib import Path
+
+import numpy as np
+import pytest
+
+from fullmag.init.state_io import (
+    FieldState,
+    load_field_state,
+    load_magnetization,
+    parse_ovf_bytes,
+    resample_imported_field,
+    save_ovf,
+)
+
+
+def _make_ovf1_binary4_be(
+    nx: int,
+    ny: int,
+    nz: int,
+    dx: float,
+    dy: float,
+    dz: float,
+    vectors: list[tuple[float, float, float]],
+    *,
+    value_multiplier: float = 1.0,
+) -> bytes:
+    header = "\n".join(
+        [
+            "# OOMMF: rectangular mesh v1.0",
+            "# Segment count: 1",
+            "# Begin: Segment",
+            "# Begin: Header",
+            "# Title: test_ovf1",
+            "# meshtype: rectangular",
+            "# meshunit: m",
+            "# xmin: 0",
+            "# ymin: 0",
+            "# zmin: 0",
+            f"# xmax: {nx * dx}",
+            f"# ymax: {ny * dy}",
+            f"# zmax: {nz * dz}",
+            f"# xstepsize: {dx}",
+            f"# ystepsize: {dy}",
+            f"# zstepsize: {dz}",
+            f"# xnodes: {nx}",
+            f"# ynodes: {ny}",
+            f"# znodes: {nz}",
+            f"# valuemultiplier: {value_multiplier}",
+            "# End: Header",
+            "# Begin: Data Binary 4",
+        ]
+    ).encode("ascii") + b"\n"
+    payload = bytearray(struct.pack(">f", 1234567.0))
+    for vx, vy, vz in vectors:
+        payload.extend(struct.pack(">3f", vx, vy, vz))
+    trailer = b"\n# End: Data Binary 4\n# End: Segment\n"
+    return header + bytes(payload) + trailer
+
+
+def test_ovf2_binary4_and_npz_roundtrip(tmp_path: Path) -> None:
+    nx, ny, nz = 3, 2, 1
+    dx, dy, dz = 5e-9, 5e-9, 5e-9
+    # Canonical x-fastest loop order: idx = x + nx * (y + ny * z)
+    vectors = [
+        (1.0, 0.0, 0.0),
+        (0.0, 1.0, 0.0),
+        (0.0, 0.0, 1.0),
+        (-1.0, 0.0, 0.0),
+        (0.0, -1.0, 0.0),
+        (0.0, 0.0, -1.0),
+    ]
+
+    # 1. OVF 2.0 Binary 4 roundtrip
+    ovf_bin4 = tmp_path / "state_bin4.ovf"
+    save_ovf(
+        ovf_bin4,
+        vectors,
+        grid_shape=(nx, ny, nz),
+        grid_spacing=(dx, dy, dz),
+        grid_origin=(0.0, 0.0, 0.0),
+        encoding="binary4",
+    )
+    loaded_bin4 = load_field_state(ovf_bin4)
+    assert loaded_bin4.source_format == "ovf"
+    assert loaded_bin4.grid_shape == (nx, ny, nz)
+    assert loaded_bin4.grid_spacing == pytest.approx((dx, dy, dz))
+    np.testing.assert_allclose(loaded_bin4.values, vectors, atol=1e-6)
+
+    # Also test load_magnetization directly on OVF
+    loaded_mag = load_magnetization(ovf_bin4)
+    assert loaded_mag.source_format == "ovf"
+    np.testing.assert_allclose(loaded_mag.values, vectors, atol=1e-6)
+
+    # 2. OVF 2.0 Binary 8 & Text roundtrip
+    ovf_bin8 = tmp_path / "state_bin8.ovf"
+    save_ovf(
+        ovf_bin8,
+        vectors,
+        grid_shape=(nx, ny, nz),
+        grid_spacing=(dx, dy, dz),
+        encoding="binary8",
+    )
+    loaded_bin8 = load_field_state(ovf_bin8)
+    np.testing.assert_allclose(loaded_bin8.values, vectors, atol=1e-15)
+
+    ovf_text = tmp_path / "state_text.ovf"
+    save_ovf(
+        ovf_text,
+        vectors,
+        grid_shape=(nx, ny, nz),
+        grid_spacing=(dx, dy, dz),
+        encoding="text",
+    )
+    loaded_text = load_field_state(ovf_text)
+    np.testing.assert_allclose(loaded_text.values, vectors, atol=1e-12)
+
+    # 3. OVF 1.0 big-endian Binary 4 with valuemultiplier
+    ovf1_bytes = _make_ovf1_binary4_be(
+        nx,
+        ny,
+        nz,
+        dx,
+        dy,
+        dz,
+        [(0.5 * x, 0.5 * y, 0.5 * z) for (x, y, z) in vectors],
+        value_multiplier=2.0,
+    )
+    parsed_ovf1 = parse_ovf_bytes(ovf1_bytes)
+    assert parsed_ovf1.grid_shape == (nx, ny, nz)
+    np.testing.assert_allclose(parsed_ovf1.values, vectors, atol=1e-6)
+
+    # 4. NPZ 4D structured [Nz, Ny, Nx, 3] roundtrip (allow_pickle=False)
+    npz_path = tmp_path / "state.npz"
+    arr_4d = np.asarray(vectors, dtype=np.float64).reshape((nz, ny, nx, 3))
+    np.savez(
+        npz_path,
+        m=arr_4d,
+        origin=np.array([0.0, 0.0, 0.0]),
+        spacing=np.array([dx, dy, dz]),
+    )
+    loaded_npz = load_field_state(npz_path)
+    assert loaded_npz.source_format == "npz"
+    assert loaded_npz.grid_shape == (nx, ny, nz)
+    assert loaded_npz.grid_spacing == pytest.approx((dx, dy, dz))
+    np.testing.assert_allclose(loaded_npz.values, vectors, atol=1e-15)
+
+
+def test_trilinear_antipodal_wall_midpoint_falls_back_to_unit_nearest() -> None:
+    """Review Focus #4: 2x1x1 grid with [0,0,1] and [0,0,-1] sampled at exact midpoint
+    must NEVER yield NaN or zero — it deterministically falls back to unit Nearest."""
+    source = FieldState(
+        values=[(0.0, 0.0, 1.0), (0.0, 0.0, -1.0)],
+        quantity_id="m",
+        target_kind="object",
+        target_id="bar",
+        units="1",
+        source_path=None,
+        source_format="ovf",
+        dataset=None,
+        sample_index=None,
+        grid_shape=(2, 1, 1),
+        grid_origin=(0.0, 0.0, 0.0),
+        grid_spacing=(10e-9, 10e-9, 10e-9),
+    )
+
+    # Cell 0 center = (5nm, 5nm, 5nm), Cell 1 center = (15nm, 5nm, 5nm).
+    # Exact midpoint = (10nm, 5nm, 5nm) -> trilinear sum is 0.5*[0,0,1] + 0.5*[0,0,-1] = [0,0,0].
+    target_points = np.array(
+        [
+            [5e-9, 5e-9, 5e-9],
+            [10e-9, 5e-9, 5e-9],
+            [15e-9, 5e-9, 5e-9],
+        ],
+        dtype=np.float64,
+    )
+    resampled = resample_imported_field(source, target_points, interpolation="trilinear")
+    assert resampled.shape == (3, 3)
+    assert np.all(np.isfinite(resampled))
+
+    np.testing.assert_allclose(resampled[0], [0.0, 0.0, 1.0], atol=1e-12)
+    np.testing.assert_allclose(resampled[2], [0.0, 0.0, -1.0], atol=1e-12)
+
+    midpoint_vec = resampled[1]
+    midpoint_norm = float(np.linalg.norm(midpoint_vec))
+    assert math.isfinite(midpoint_norm)
+    assert abs(midpoint_norm - 1.0) < 1e-12
+
+    # Must match deterministic Nearest fallback identically
+    nearest = resample_imported_field(source, target_points, interpolation="nearest")
+    np.testing.assert_allclose(midpoint_vec, nearest[1], atol=1e-12)

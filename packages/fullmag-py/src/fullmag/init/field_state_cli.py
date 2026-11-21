@@ -37,6 +37,9 @@ def _read(path: Path, *, format: str, dataset: str | None, sample: int) -> int:
         "source_format": state.source_format,
         "dataset": state.dataset,
         "sample_index": state.sample_index,
+        "grid_shape": list(state.grid_shape) if state.grid_shape is not None else None,
+        "grid_origin": list(state.grid_origin) if state.grid_origin is not None else None,
+        "grid_spacing": list(state.grid_spacing) if state.grid_spacing is not None else None,
     }
     print(json.dumps(payload, allow_nan=False))
     return 0

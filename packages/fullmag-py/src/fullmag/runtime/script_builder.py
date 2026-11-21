@@ -65,6 +65,7 @@ from fullmag.model.dynamics import (
 from fullmag.model.energy import BulkDMI, Constant, CubicAnisotropy, Demag, Exchange, InterfacialDMI, Magnetoelastic, OerstedField, OerstedCylinder, PiecewiseLinear, Pulse, RotatedInterfacialDMI, SincPulse, Sinusoidal, ThermalNoise, UniaxialAnisotropy, Zeeman
 from fullmag.model.eigen import serialize_k_sampling
 from fullmag.model.geometry import (
+    ANTENNA_LAYOUT_TYPES,
     CPWAntennaLayout,
     ArchWaveguide,
     Box,
@@ -73,8 +74,12 @@ from fullmag.model.geometry import (
     Ellipse,
     Ellipsoid,
     ImportedGeometry,
+    InductiveLoopLayout,
     Intersection,
+    MeanderAntennaLayout,
     MicrostripAntennaLayout,
+    Path3DWaypoint,
+    PiecewisePath3DLayout,
     SinWaveguide,
     Translate,
     Union,
@@ -11348,6 +11353,31 @@ def _render_excitation_analysis_override(
     return f"{_surface_call(surface, 'spin_wave_excitation')}({', '.join(kwargs)})"
 
 
+def _render_antenna_transform_kwarg(params: Mapping[str, object]) -> str | None:
+    transform = _normalize_mapping(params.get("transform"))
+    rotation = transform.get("rotation_matrix")
+    translation = transform.get("translation_m")
+    identity_rotation = ((1.0, 0.0, 0.0), (0.0, 1.0, 0.0), (0.0, 0.0, 1.0))
+    if rotation is not None or translation is not None:
+        rotation_tuple = (
+            tuple(tuple(float(component) for component in row) for row in rotation)
+            if isinstance(rotation, list)
+            else identity_rotation
+        )
+        translation_tuple = (
+            tuple(float(component) for component in translation)
+            if isinstance(translation, list)
+            else (0.0, 0.0, 0.0)
+        )
+        if rotation_tuple != identity_rotation or any(component != 0.0 for component in translation_tuple):
+            return (
+                "transform=fm.RigidTransform("
+                f"rotation_matrix={_python_literal(rotation_tuple)}, "
+                f"translation_m={_python_literal(translation_tuple)})"
+            )
+    return None
+
+
 def _render_antenna_layout_expr(
     kind: str,
     params: Mapping[str, object],
@@ -11355,6 +11385,98 @@ def _render_antenna_layout_expr(
     name: str,
 ) -> str:
     normalized_kind = kind.lower()
+
+    def number(key: str, *aliases: str) -> str:
+        value = params.get(key)
+        for alias in aliases:
+            if value is None:
+                value = params.get(alias)
+        numeric = _finite_number(value)
+        if numeric is None:
+            raise ValueError(f"{kind} geometry requires finite {key}")
+        return _py_float_roundtrip(numeric)
+
+    conductor_ids = {
+        entry.get("kind"): entry.get("id")
+        for entry in params.get("conductors", [])
+        if isinstance(entry, Mapping)
+    }
+    transform_kw = _render_antenna_transform_kwarg(params)
+
+    if normalized_kind in {"meander", "meanderantennalayout", "meander_antenna_layout"}:
+        kwargs = [
+            f"name={_py_repr(name)}",
+            f"length_m={number('length_m', 'length')}",
+            f"signal_width_m={number('signal_width_m', 'width')}",
+            f"thickness_m={number('thickness_m', 'thickness')}",
+            f"conductivity_s_per_m={number('conductivity_s_per_m', 'conductivity')}",
+            f"finger_count={int(str(params.get('finger_count', 4)))}",
+            f"pitch_m={number('pitch_m', 'pitch')}",
+        ]
+        if params.get("bend_radius_m") not in {None, 0.0}:
+            kwargs.append(f"bend_radius_m={number('bend_radius_m', 'bend_radius')}")
+        if transform_kw is not None:
+            kwargs.append(transform_kw)
+        sig_id = params.get("signal_part_id", conductor_ids.get("signal"))
+        if isinstance(sig_id, str) and sig_id and sig_id != "signal":
+            kwargs.append(f"signal_part_id={_py_repr(sig_id)}")
+        return f"fm.MeanderAntennaLayout({', '.join(kwargs)})"
+
+    if normalized_kind in {"inductive_loop", "inductivelooplayout", "inductive_loop_layout"}:
+        kwargs = [
+            f"name={_py_repr(name)}",
+            f"loop_shape={_py_repr(str(params.get('loop_shape', 'circular')))}",
+            f"inner_radius_m={number('inner_radius_m', 'inner_radius')}",
+            f"signal_width_m={number('signal_width_m', 'width')}",
+            f"thickness_m={number('thickness_m', 'thickness')}",
+            f"conductivity_s_per_m={number('conductivity_s_per_m', 'conductivity')}",
+        ]
+        if params.get("turns") not in {None, 1}:
+            kwargs.append(f"turns={int(str(params['turns']))}")
+        if params.get("bend_radius_m") not in {None, 0.0}:
+            kwargs.append(f"bend_radius_m={number('bend_radius_m')}")
+        if params.get("feed_gap_m") is not None:
+            kwargs.append(f"feed_gap_m={number('feed_gap_m')}")
+        if params.get("pitch_m") is not None:
+            kwargs.append(f"pitch_m={number('pitch_m')}")
+        if transform_kw is not None:
+            kwargs.append(transform_kw)
+        sig_id = params.get("signal_part_id", conductor_ids.get("signal"))
+        if isinstance(sig_id, str) and sig_id and sig_id != "signal":
+            kwargs.append(f"signal_part_id={_py_repr(sig_id)}")
+        return f"fm.InductiveLoopLayout({', '.join(kwargs)})"
+
+    if normalized_kind in {"piecewise_3d_path", "piecewisepath3dlayout", "piecewise_path_3d_layout"}:
+        raw_waypoints = params.get("waypoints")
+        if not isinstance(raw_waypoints, list) or len(raw_waypoints) < 2:
+            raise ValueError(f"{kind} geometry requires at least two waypoints")
+        wp_exprs: list[str] = []
+        for raw_wp in raw_waypoints:
+            wp = _normalize_mapping(raw_wp)
+            wp_parts = [
+                f"x_m={_py_float_roundtrip(float(wp.get('x_m', wp.get('x', 0.0))))}",
+                f"y_m={_py_float_roundtrip(float(wp.get('y_m', wp.get('y', 0.0))))}",
+                f"z_m={_py_float_roundtrip(float(wp.get('z_m', wp.get('z', 0.0))))}",
+            ]
+            if wp.get("width_m") is not None:
+                wp_parts.append(f"width_m={_py_float_roundtrip(float(wp['width_m']))}")
+            if wp.get("bend_radius_m") not in {None, 0.0}:
+                wp_parts.append(f"bend_radius_m={_py_float_roundtrip(float(wp['bend_radius_m']))}")
+            wp_exprs.append(f"fm.Path3DWaypoint({', '.join(wp_parts)})")
+        kwargs = [
+            f"name={_py_repr(name)}",
+            "waypoints=(" + ", ".join(wp_exprs) + ",)",
+            f"signal_width_m={number('signal_width_m', 'width')}",
+            f"thickness_m={number('thickness_m', 'thickness')}",
+            f"conductivity_s_per_m={number('conductivity_s_per_m', 'conductivity')}",
+        ]
+        if transform_kw is not None:
+            kwargs.append(transform_kw)
+        sig_id = params.get("signal_part_id", conductor_ids.get("signal"))
+        if isinstance(sig_id, str) and sig_id and sig_id != "signal":
+            kwargs.append(f"signal_part_id={_py_repr(sig_id)}")
+        return f"fm.PiecewisePath3DLayout({', '.join(kwargs)})"
+
     if normalized_kind in {"cpw", "cpwantennalayout", "cpw_antenna_layout"}:
         constructor = "fm.CPWAntennaLayout"
         station_type = "fm.CPWWidthStation"
@@ -11367,16 +11489,6 @@ def _render_antenna_layout_expr(
         station_type = "fm.MicrostripWidthStation"
     else:
         raise ValueError(f"unsupported antenna layout kind '{kind}'")
-
-    def number(key: str, *aliases: str) -> str:
-        value = params.get(key)
-        for alias in aliases:
-            if value is None:
-                value = params.get(alias)
-        numeric = _finite_number(value)
-        if numeric is None:
-            raise ValueError(f"{kind} geometry requires finite {key}")
-        return _py_float_roundtrip(numeric)
 
     def number_from(mapping: Mapping[str, object], key: str, *aliases: str) -> str:
         value = mapping.get(key)
@@ -11416,24 +11528,8 @@ def _render_antenna_layout_expr(
         f"conductivity_s_per_m={number('conductivity_s_per_m', 'conductivity')}",
         "stations=(" + ", ".join(stations) + ",)",
     ]
-    transform = _normalize_mapping(params.get("transform"))
-    rotation = transform.get("rotation_matrix")
-    translation = transform.get("translation_m")
-    identity_rotation = ((1.0, 0.0, 0.0), (0.0, 1.0, 0.0), (0.0, 0.0, 1.0))
-    if rotation is not None or translation is not None:
-        rotation_tuple = tuple(tuple(float(component) for component in row) for row in rotation) if isinstance(rotation, list) else identity_rotation
-        translation_tuple = tuple(float(component) for component in translation) if isinstance(translation, list) else (0.0, 0.0, 0.0)
-        if rotation_tuple != identity_rotation or any(component != 0.0 for component in translation_tuple):
-            kwargs.append(
-                "transform=fm.RigidTransform("
-                f"rotation_matrix={_python_literal(rotation_tuple)}, "
-                f"translation_m={_python_literal(translation_tuple)})"
-            )
-    conductor_ids = {
-        entry.get("kind"): entry.get("id")
-        for entry in params.get("conductors", [])
-        if isinstance(entry, Mapping)
-    }
+    if transform_kw is not None:
+        kwargs.append(transform_kw)
     if constructor == "fm.MicrostripAntennaLayout":
         loop = params.get("loop")
         if isinstance(loop, Mapping) and loop.get("enabled") is True:
@@ -11553,6 +11649,15 @@ def _render_geometry_expr_from_override(
         "MicrostripAntennaLayout",
         "microstrip",
         "microstrip_antenna_layout",
+        "MeanderAntennaLayout",
+        "meander",
+        "meander_antenna_layout",
+        "InductiveLoopLayout",
+        "inductive_loop",
+        "inductive_loop_layout",
+        "PiecewisePath3DLayout",
+        "piecewise_3d_path",
+        "piecewise_path_3d_layout",
     }:
         expr = _render_antenna_layout_expr(kind, params, name=name)
     elif kind == "Translate":
@@ -11603,7 +11708,7 @@ def _render_geometry_expr_from_override(
 
 
 def _render_geometry_expr(geometry: object, *, magnet_name: str, source_root: Path) -> str:
-    if isinstance(geometry, (MicrostripAntennaLayout, CPWAntennaLayout)):
+    if isinstance(geometry, ANTENNA_LAYOUT_TYPES):
         return _render_antenna_layout_expr(
             type(geometry).__name__,
             {key: value for key, value in geometry.to_ir().items() if key not in {"name", "kind"}},
@@ -12477,7 +12582,7 @@ def _export_geometry_descriptor(
     *,
     flatten_translation: bool,
 ) -> dict[str, object]:
-    if isinstance(geom, (MicrostripAntennaLayout, CPWAntennaLayout)):
+    if isinstance(geom, ANTENNA_LAYOUT_TYPES):
         payload = dict(geom.to_ir())
         payload.pop("name", None)
         payload.pop("kind", None)

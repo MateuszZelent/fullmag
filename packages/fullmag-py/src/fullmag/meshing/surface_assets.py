@@ -9,6 +9,8 @@ from typing import Any
 import numpy as np
 
 from fullmag.model.geometry import (
+    ANTENNA_LAYOUT_TYPES,
+    AntennaLayout,
     ArchWaveguide,
     Box,
     CPWAntennaLayout,
@@ -280,7 +282,7 @@ def build_surface_preview_payload(geometry: Geometry) -> dict[str, object] | Non
 
 
 def _antenna_layout_to_trimesh(
-    geometry: MicrostripAntennaLayout | CPWAntennaLayout,
+    geometry: AntennaLayout,
     trimesh: Any,
 ) -> Any:
     """Build a watertight preview mesh for every conductor in a layout.
@@ -351,7 +353,7 @@ def export_geometry_to_stl(
     trimesh = _import_trimesh()
     if isinstance(geometry, Box):
         mesh = trimesh.creation.box(extents=geometry.size)
-    elif isinstance(geometry, (MicrostripAntennaLayout, CPWAntennaLayout)):
+    elif isinstance(geometry, ANTENNA_LAYOUT_TYPES):
         mesh = _antenna_layout_to_trimesh(geometry, trimesh)
     elif isinstance(geometry, Cylinder):
         mesh = trimesh.creation.cylinder(
@@ -440,7 +442,7 @@ def _geometry_to_trimesh(
             through_thickness_element_ratio=through_thickness_element_ratio,
             through_thickness_symmetric=through_thickness_symmetric,
         )
-    if isinstance(geometry, (MicrostripAntennaLayout, CPWAntennaLayout)):
+    if isinstance(geometry, ANTENNA_LAYOUT_TYPES):
         return _antenna_layout_to_trimesh(geometry, trimesh)
     if isinstance(geometry, Difference):
         coaxial = _coaxial_cylinder_difference(geometry)

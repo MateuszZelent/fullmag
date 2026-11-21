@@ -382,6 +382,14 @@ pub(crate) fn build_live_status(
         preview_2d: true,
         preview_3d: true,
         algorithms_available: relaxation_algorithms_available(),
+        field_state_import_formats: vec![
+            "field_state_json".to_string(),
+            "ovf".to_string(),
+            "npz".to_string(),
+            "npy".to_string(),
+            "zarr".to_string(),
+            "h5".to_string(),
+        ],
         active_lane: active_lane_capability_snapshot(snapshot, is_fem),
         transport_authoring: Some(crate::router_v2::handlers::transport_authoring_policy::transport_authoring_capabilities()),
     };
