@@ -2,7 +2,7 @@ import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { describe, expect, it, vi } from "vitest";
 
-import type { ScalarWindowResource, SceneResource } from "@/kernel/api/apiTypes";
+import type { RunPerformanceResource, ScalarWindowResource, SceneResource, SolverStatusResource } from "@/kernel/api/apiTypes";
 import { EventBus } from "@/kernel/events/EventBus";
 import type { KernelEventMap } from "@/kernel/events/eventTypes";
 import {
@@ -17,6 +17,8 @@ const hooks = vi.hoisted(() => ({
   scene: null as { data: unknown; status: string } | null,
   scalarColumns: [] as string[][],
   history: null as ScalarWindowResource | null,
+  performance: null as RunPerformanceResource | null,
+  solverStatus: null as SolverStatusResource | null,
 }));
 
 vi.mock("@/kernel/resources/geometryLifecycleResources", () => ({
@@ -41,7 +43,11 @@ vi.mock("@/kernel/resources/studyRuntimeResources", () => {
     useFrequencyDomainResponseProgressResource: () => emptyResource(),
     useFrequencyDomainResponseSweepResource: () => emptyResource(),
     useObjectMetricsResource: () => emptyResource(),
-    useRunPerformanceResource: () => emptyResource(),
+    useRunPerformanceResource: () => ({
+      ...emptyResource(),
+      data: hooks.performance,
+      status: hooks.performance ? "ready" : "idle",
+    }),
     useScalarWindowResource: (options: { columns: readonly string[]; limit: number }) => {
       hooks.scalarColumns.push([...options.columns]);
       if (options.limit > 1 && hooks.history) {
@@ -49,7 +55,11 @@ vi.mock("@/kernel/resources/studyRuntimeResources", () => {
       }
       return emptyResource();
     },
-    useSolverStatusResource: () => emptyResource(),
+    useSolverStatusResource: () => ({
+      ...emptyResource(),
+      data: hooks.solverStatus,
+      status: hooks.solverStatus ? "ready" : "idle",
+    }),
   };
 });
 
@@ -92,6 +102,236 @@ function cardLabels(container: TestElement): string[] {
 }
 
 describe("FooterTelemetry scene refresh stability", () => {
+  it("uses the current run stage summary when the runtime does not publish stage execution", async () => {
+    const dom = installSimulationPreparationTestDom();
+    const container = dom.document.createElement("div");
+    dom.document.body.appendChild(container);
+    const root = createRoot(container as unknown as Element);
+    const bus = new EventBus<KernelEventMap>();
+    const baseStatus = telemetryStatus();
+    const status = {
+      ...baseStatus,
+      run: {
+        ...baseStatus.run!,
+        stage_count: 6,
+        stage_index: 1,
+        stage_label: "Relax",
+      },
+    };
+    hooks.scene = { data: null, status: "idle" };
+
+    try {
+      await act(async () =>
+        root.render(
+          <FooterTelemetry
+            bus={bus}
+            status={status}
+            stageExecution={{ data: null, status: "ready" }}
+            view="overview"
+          />,
+        ),
+      );
+
+      expect(container.querySelector(".fm-footer-telemetry__stage-badge")?.textContent)
+        .toBe("Stage 2/6");
+      expect(container.querySelector(".fm-footer-telemetry__stage-label")?.textContent)
+        .toBe("Relax · progress not published");
+      expect(container.querySelector(".fm-footer-telemetry__stage-bar")?.getAttribute("aria-valuenow"))
+        .toBeNull();
+      expect(container.querySelector(".fm-footer-telemetry__notice")?.textContent)
+        .toBe("Stage progress not published by this runtime");
+    } finally {
+      await act(async () => root.unmount());
+      dom.restore();
+    }
+  });
+
+  it("uses only matching performance progress when stage execution is unpublished", async () => {
+    const dom = installSimulationPreparationTestDom();
+    const container = dom.document.createElement("div");
+    dom.document.body.appendChild(container);
+    const root = createRoot(container as unknown as Element);
+    const bus = new EventBus<KernelEventMap>();
+    const baseStatus = telemetryStatus();
+    const status = {
+      ...baseStatus,
+      run: {
+        ...baseStatus.run!,
+        stage_count: 6,
+        stage_index: 1,
+        stage_label: "Relax",
+      },
+    };
+    hooks.scene = { data: null, status: "idle" };
+    hooks.performance = {
+      state: "running",
+      run_id: "run-1",
+      task_id: "task-1",
+      step_id: "stage-id-1",
+      attempt_id: "attempt-1",
+      ownership_epoch: 1,
+      stage_index: 1,
+      step_index: 9423,
+      first_step_index: 0,
+      elapsed_monotonic_ns: 120_000_000_000,
+      solver_clock: { step_index: 9423, time_s: 7.488e-9, dt_s: 1e-12 },
+      progress_fraction: 0.3744,
+      sample_sequence: 9424,
+      unique_step_callback_records: 9424,
+      gpu_scope: "whole_device",
+      points: [],
+      rows_dropped: 0,
+      revision: "performance-current",
+    } as RunPerformanceResource;
+
+    try {
+      await act(async () =>
+        root.render(
+          <FooterTelemetry
+            bus={bus}
+            status={status}
+            stageExecution={{ data: null, status: "ready" }}
+            view="overview"
+          />,
+        ),
+      );
+
+      expect(container.querySelector(".fm-footer-telemetry__stage-badge")?.textContent)
+        .toBe("Stage 2/6");
+      expect(container.querySelector(".fm-footer-telemetry__stage-label")?.textContent)
+        .toBe("Relax · 37%");
+      expect(container.querySelector(".fm-footer-telemetry__stage-bar")?.getAttribute("aria-valuenow"))
+        .toBe("37.44");
+      expect(container.querySelector(".fm-footer-telemetry__notice"))
+        .toBeNull();
+
+      hooks.performance = { ...hooks.performance, stage_index: 0 } as RunPerformanceResource;
+      await act(async () =>
+        root.render(
+          <FooterTelemetry
+            bus={bus}
+            status={status}
+            stageExecution={{ data: null, status: "ready" }}
+            view="overview"
+          />,
+        ),
+      );
+      expect(container.querySelector(".fm-footer-telemetry__stage-label")?.textContent)
+        .toBe("Relax · progress not published");
+      expect(container.querySelector(".fm-footer-telemetry__notice")?.textContent)
+        .toBe("Stage progress not published by this runtime");
+    } finally {
+      await act(async () => root.unmount());
+      hooks.performance = null;
+      dom.restore();
+    }
+  });
+
+  it("keeps the accepted terminal stage fraction when the run completes", async () => {
+    const dom = installSimulationPreparationTestDom();
+    const container = dom.document.createElement("div");
+    dom.document.body.appendChild(container);
+    const root = createRoot(container as unknown as Element);
+    const bus = new EventBus<KernelEventMap>();
+    const baseStatus = telemetryStatus();
+    const status: FooterTelemetryStatus = {
+      ...baseStatus,
+      run: {
+        ...baseStatus.run!,
+        stage_count: 1,
+        stage_index: 0,
+        stage_label: "Immediate pulse",
+      },
+      solver: { ...baseStatus.solver, state: "completed" },
+    };
+    hooks.scene = { data: null, status: "idle" };
+    hooks.performance = {
+      state: "completed",
+      run_id: "run-1",
+      task_id: "task-1",
+      step_id: "pulse-stage-id",
+      attempt_id: "attempt-1",
+      ownership_epoch: 1,
+      stage_index: 0,
+      step_index: 28_070,
+      first_step_index: 0,
+      elapsed_monotonic_ns: 120_000_000_000,
+      solver_clock: { step_index: 28_070, time_s: 8e-9, dt_s: 1e-13 },
+      progress_fraction: 1,
+      sample_sequence: 28_071,
+      unique_step_callback_records: 28_071,
+      gpu_scope: "whole_device",
+      points: [],
+      rows_dropped: 0,
+      revision: "performance-completed",
+    } as RunPerformanceResource;
+
+    try {
+      await act(async () =>
+        root.render(
+          <FooterTelemetry
+            bus={bus}
+            status={status}
+            stageExecution={{ data: null, status: "ready" }}
+            view="overview"
+          />,
+        ),
+      );
+      expect(container.querySelector(".fm-footer-telemetry__stage-badge")?.textContent)
+        .toBe("Stage 1/1");
+      expect(container.querySelector(".fm-footer-telemetry__stage-label")?.textContent)
+        .toBe("Immediate pulse · 100%");
+      expect(container.querySelector(".fm-footer-telemetry__stage-bar")?.getAttribute("aria-valuenow"))
+        .toBe("100");
+      expect(cardLabels(container)).toContain("Stage rate");
+    } finally {
+      await act(async () => root.unmount());
+      hooks.performance = null;
+      dom.restore();
+    }
+  });
+
+  it("keeps the exact run integrator visible through a brief solver-status gap", async () => {
+    const dom = installSimulationPreparationTestDom();
+    const container = dom.document.createElement("div");
+    dom.document.body.appendChild(container);
+    const root = createRoot(container as unknown as Element);
+    const bus = new EventBus<KernelEventMap>();
+    const status = telemetryStatus();
+    hooks.scene = { data: null, status: "idle" };
+    hooks.solverStatus = {
+      algorithm: "fdm",
+      integrator: "rk45",
+      run_id: "run-1",
+    } as SolverStatusResource;
+    const render = () => act(async () =>
+      root.render(
+        <FooterTelemetry
+          bus={bus}
+          status={status}
+          stageExecution={{ data: null, status: "ready" }}
+          view="overview"
+        />,
+      ),
+    );
+    const solverValue = () => container
+      .querySelectorAll(".fm-footer-telemetry__metric")
+      .find((metric) => metric.querySelector(".fm-footer-telemetry__metric-label")?.textContent === "Solver")
+      ?.querySelector(".fm-footer-telemetry__metric-number")?.textContent;
+
+    try {
+      await render();
+      expect(solverValue()).toBe("RK45");
+      hooks.solverStatus = null;
+      await render();
+      expect(solverValue()).toBe("RK45");
+    } finally {
+      await act(async () => root.unmount());
+      hooks.solverStatus = null;
+      dom.restore();
+    }
+  });
+
   it("keeps a ready nonmagnetic scene's cards stable through stale refresh and ready", async () => {
     const dom = installSimulationPreparationTestDom();
     const container = dom.document.createElement("div");
@@ -160,15 +400,16 @@ describe("FooterTelemetry scene refresh stability", () => {
         expect.arrayContaining([
           "step",
           "time",
+          "dt",
+          "pseudo_time_s",
           "mx",
           "my",
           "mz",
           "e_total",
         ]),
       );
-      expect(requestedColumns).not.toContain("pseudo_time_s");
       expect(requestedColumns).not.toContain("active_runtime_s");
-      expect(requestedColumns).toHaveLength(6);
+      expect(requestedColumns).toHaveLength(8);
     } finally {
       await act(async () => root.unmount());
       dom.restore();

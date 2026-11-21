@@ -807,6 +807,14 @@ if(FULLMAG_ENABLE_CUDA)
     add_test(NAME fdm_endpoint_cache_cuda_runtime
         COMMAND endpoint_cache_cuda_runtime)
 
+    add_executable(fdm_stats_dt_cuda_runtime_contract
+        tests/stats_dt_cuda_runtime.cpp)
+    target_include_directories(fdm_stats_dt_cuda_runtime_contract PRIVATE
+        ${CMAKE_SOURCE_DIR}/include)
+    target_link_libraries(fdm_stats_dt_cuda_runtime_contract PRIVATE fullmag_fdm)
+    add_test(NAME fdm_stats_dt_cuda_runtime_contract
+        COMMAND fdm_stats_dt_cuda_runtime_contract)
+
     add_executable(local_pipeline_fusion_cuda_contract
         tests/local_pipeline_fusion_cuda_contract.cu)
     target_include_directories(local_pipeline_fusion_cuda_contract PRIVATE

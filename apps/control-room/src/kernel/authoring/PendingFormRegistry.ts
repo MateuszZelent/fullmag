@@ -26,6 +26,8 @@ export interface PendingFormSnapshot {
 
 export interface PendingFormTransitionSnapshot {
   applyingOwnerCount: number;
+  computeApplyingOwnerCount: number;
+  computeDirtyOwnerCount: number;
   blockedReason: string | null;
   canApplyPendingChanges: boolean;
   dirtyOwnerCount: number;
@@ -144,14 +146,27 @@ export class PendingFormRegistry {
     const forms = [...this.forms.values()];
     const dirtyForms = forms.filter((form) => form.dirty);
     const applyingOwners = new Set<symbol>();
+    const computeApplyingOwners = new Set<symbol>();
     for (const [owner, form] of this.forms) {
-      if (form.applying) applyingOwners.add(owner);
+      if (form.applying) {
+        applyingOwners.add(owner);
+        // Live viewport writes change presentation preferences, not solver inputs.
+        if (form.mode !== "liveViewport") computeApplyingOwners.add(owner);
+      }
     }
     if (this.preparation?.applyingOwner) {
       applyingOwners.add(this.preparation.applyingOwner);
+      computeApplyingOwners.add(this.preparation.applyingOwner);
     }
-    if (this.commandOwner !== null) applyingOwners.add(this.commandOwner);
+    if (this.commandOwner !== null) {
+      applyingOwners.add(this.commandOwner);
+      computeApplyingOwners.add(this.commandOwner);
+    }
     const applyingOwnerCount = applyingOwners.size;
+    const computeApplyingOwnerCount = computeApplyingOwners.size;
+    const computeDirtyOwnerCount = dirtyForms.filter(
+      (form) => form.mode !== "liveViewport",
+    ).length;
     const invalidDirtyOwnerCount = dirtyForms.filter(
       (form) => !form.valid,
     ).length;
@@ -196,6 +211,8 @@ export class PendingFormRegistry {
 
     return {
       applyingOwnerCount,
+      computeApplyingOwnerCount,
+      computeDirtyOwnerCount,
       blockedReason,
       canApplyPendingChanges,
       dirtyOwnerCount: dirtyForms.length,

@@ -1099,8 +1099,8 @@ function useObjectVisualizationPanelState(
           ?.activeMask ?? null
       : null,
     fdmNativeLayer: nativeLayerCapacity,
-    fdmRealizedRegionIds: fdmTarget
-      ? fdmMembershipBinary.data?.regionIds ?? null
+    fdmRealizedMembership: fdmTarget
+      ? fdmMembershipBinary.data ?? null
       : null,
     femManifest: fdmTarget ? null : manifest.data,
     multilayerAirbox: multilayerAirboxCapacity,

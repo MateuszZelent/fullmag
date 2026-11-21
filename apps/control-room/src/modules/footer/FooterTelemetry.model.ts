@@ -6,9 +6,23 @@ import { isRuntimeStateActive } from "@/kernel/runtime/runtimeStateDisplay";
 type FooterScalarResourceSample = {
   revision: number;
   row: Record<string, number>;
+  series: ScalarWindowResource["series"];
   runId: string;
   sessionId: string;
 };
+
+export type FooterMeanTimestep = {
+  attemptId: string;
+  firstStep: number;
+  lastStep: number;
+  secondsPerStep: number;
+  stepCount: number;
+};
+
+export type FooterScalarAttemptReference = Pick<
+  NonNullable<ScalarWindowResource["series"]>,
+  "run_id" | "task_id" | "step_id" | "attempt_id" | "ownership_epoch"
+>;
 
 export type FooterRelaxationAlgorithm = NonNullable<
   LiveStatusResource["solver"]["relaxation_algorithm"]
@@ -38,6 +52,9 @@ export type FooterTelemetryStatus = {
     | "run_id"
     | "selection_confidence"
     | "selection_reason"
+    | "stage_count"
+    | "stage_index"
+    | "stage_label"
     | "solver_steps"
     | "solver_time"
   > | null;
@@ -85,6 +102,9 @@ export function selectFooterTelemetryStatus(
           run_id: data.run.run_id,
           selection_confidence: data.run.selection_confidence ?? null,
           selection_reason: data.run.selection_reason,
+          stage_count: data.run.stage_count,
+          stage_index: data.run.stage_index,
+          stage_label: data.run.stage_label,
           solver_steps: data.run.solver_steps,
           solver_time: data.run.solver_time,
         }
@@ -139,6 +159,9 @@ export function footerTelemetryStatusEquals(
       previous.run?.selection_confidence ?? null,
       next.run?.selection_confidence ?? null,
     ) &&
+    Object.is(previous.run?.stage_count ?? null, next.run?.stage_count ?? null) &&
+    Object.is(previous.run?.stage_index ?? null, next.run?.stage_index ?? null) &&
+    Object.is(previous.run?.stage_label ?? null, next.run?.stage_label ?? null) &&
     Object.is(
       previous.run?.solver_steps ?? null,
       next.run?.solver_steps ?? null,
@@ -232,6 +255,8 @@ export function resolveFooterScalarResourceSample(
       window.rows.length !== 1 || window.returned_rows !== 1 ||
       source.session_id !== status.sessionId || source.run_id !== status.run.run_id ||
       source.request_scope_epoch !== status.requestScopeEpoch ||
+      (window.series !== null && window.series !== undefined &&
+        window.series.run_id !== source.run_id) ||
       !Number.isSafeInteger(window.revision) || window.revision < 0 ||
       source.scalar_revision !== window.revision ||
       !Number.isSafeInteger(source.source_step) || source.source_step < 0 ||
@@ -242,7 +267,102 @@ export function resolveFooterScalarResourceSample(
     if (typeof value === "number" && Number.isFinite(value)) row[column] = value;
   }
   if (row.step !== source.source_step || scalarSampleMagnetization(row) === null) return null;
-  return { revision: window.revision, row, runId: source.run_id, sessionId: source.session_id };
+  return {
+    revision: window.revision,
+    row,
+    series: window.series ?? null,
+    runId: source.run_id,
+    sessionId: source.session_id,
+  };
+}
+
+/**
+ * Mean physical or pseudotime step over the latest two valid samples in one
+ * accepted scalar attempt. This is deliberately a span average, never a claim
+ * about the most recent solver step.
+ */
+export function resolveFooterMeanTimestep(
+  status: FooterTelemetryStatus | null | undefined,
+  window: ScalarWindowResource | null | undefined,
+  clockColumn: "time" | "pseudo_time_s" = "time",
+  expectedAttempt?: FooterScalarAttemptReference | null,
+  expectedStageId?: string | null,
+): FooterMeanTimestep | null {
+  const series = window?.series;
+  if (
+    !status?.run?.run_id || !status.sessionEpoch || !window || !series ||
+    series.run_id !== status.run.run_id || !hasFooterText(series.task_id) ||
+    !hasFooterText(series.step_id) || !hasFooterText(series.case_id) ||
+    !hasFooterText(series.attempt_id) || !Number.isSafeInteger(series.ownership_epoch) ||
+    series.ownership_epoch < 0 || window.rows.length < 2 ||
+    (expectedStageId !== null && expectedStageId !== undefined &&
+      series.step_id !== expectedStageId) ||
+    (expectedAttempt !== null && expectedAttempt !== undefined &&
+      !sameFooterScalarAttempt(series, expectedAttempt)) ||
+    window.returned_rows !== window.rows.length ||
+    window.observation_frames.length !== window.rows.length
+  ) {
+    return null;
+  }
+
+  const stepColumn = window.columns.indexOf("step");
+  const timeColumn = window.columns.indexOf("time");
+  const clockColumnIndex = window.columns.indexOf(clockColumn);
+  if (stepColumn < 0 || timeColumn < 0 || clockColumnIndex < 0) return null;
+
+  const samplesByStep = new Map<number, { clockSeconds: number }>();
+  for (const [index, row] of window.rows.entries()) {
+    const frame = window.observation_frames[index];
+    const step = row[stepColumn];
+    const physicalTime = row[timeColumn];
+    const clockSeconds = row[clockColumnIndex];
+    if (
+      !frame || frame.session_epoch !== status.sessionEpoch ||
+      !Number.isSafeInteger(step) || step < 0 || frame.source_step !== step ||
+      typeof physicalTime !== "number" || !Number.isFinite(physicalTime) ||
+      typeof frame.source_time_seconds !== "number" ||
+      frame.source_time_seconds !== physicalTime ||
+      typeof clockSeconds !== "number" || !Number.isFinite(clockSeconds)
+    ) {
+      continue;
+    }
+    samplesByStep.set(step, { clockSeconds });
+  }
+
+  const samples = [...samplesByStep.entries()].toSorted(([left], [right]) => left - right);
+  if (samples.length < 2) return null;
+  const [first, last] = samples.slice(-2);
+  if (!first || !last) return null;
+  const [firstStep, firstSample] = first;
+  const [lastStep, lastSample] = last;
+  const stepCount = lastStep - firstStep;
+  const timeDelta = lastSample.clockSeconds - firstSample.clockSeconds;
+  if (stepCount <= 0 || timeDelta <= 0 || !Number.isFinite(timeDelta)) return null;
+  const secondsPerStep = timeDelta / stepCount;
+  if (!Number.isFinite(secondsPerStep) || secondsPerStep <= 0) return null;
+
+  return {
+    attemptId: series.attempt_id,
+    firstStep,
+    lastStep,
+    secondsPerStep,
+    stepCount,
+  };
+}
+
+function sameFooterScalarAttempt(
+  series: NonNullable<ScalarWindowResource["series"]>,
+  expected: FooterScalarAttemptReference,
+): boolean {
+  return series.run_id === expected.run_id &&
+    series.task_id === expected.task_id &&
+    series.step_id === expected.step_id &&
+    series.attempt_id === expected.attempt_id &&
+    series.ownership_epoch === expected.ownership_epoch;
+}
+
+function hasFooterText(value: unknown): value is string {
+  return typeof value === "string" && value.trim().length > 0;
 }
 
 export function resolveFooterSolverStatus(

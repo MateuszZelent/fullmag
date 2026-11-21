@@ -303,7 +303,7 @@ describe("FooterTelemetry", () => {
     expect(byId["max-torque"]?.value).toBe("6.000000e-3 T");
     expect(byId.step?.value).toBe("99");
     expect(byId.rate?.label).toBe("End-to-end rate");
-    expect(byId.rate?.detail).toBe("Closed profiler span");
+    expect(byId.rate?.detail).toBe("Closed end-to-end runner span");
 
   });
 
@@ -352,7 +352,11 @@ describe("FooterTelemetry", () => {
 
   it.each([null, Number.NaN, Number.POSITIVE_INFINITY, 0])("distinguishes absent torque and timestep from genuine zero: %s", (value) => {
     const telemetryStatus = selectFooterTelemetryStatus({
-      data: { ...status, solver: { ...status.solver, max_torque_T: value, dt: value } },
+      data: {
+        ...status,
+        run: { ...status.run!, solver_time: 0 },
+        solver: { ...status.solver, max_torque_T: value, dt: value },
+      },
       error: null, refetch: () => {}, revision: 1, status: "ready",
     });
     const model = buildFooterTelemetryModel(telemetryStatus, null);
@@ -433,8 +437,9 @@ describe("FooterTelemetry", () => {
 
     expect(byId.time?.label).toBe("Sim time");
     expect(byId.time?.detail).toBe("Physical simulation time");
-    expect(byId.time?.value).toBe("4.000000e-9");
-    expect(byId.time?.unit).toBe("s");
+    expect(byId.time?.value).toBe("4");
+    expect(byId.time?.unit).toBe("ns");
+    expect(byId.time?.numeric).toBe(4e-9);
     expect(byId["sim-time"]).toBeUndefined();
     expect(byId.dt?.value).toBe("1.000000e-13");
     expect(byId.dt?.unit).toBe("s");
@@ -554,16 +559,16 @@ describe("FooterTelemetry", () => {
     const byId = Object.fromEntries(model.metrics.map((metric) => [metric.id, metric]));
 
     expect(byId["active-solver"]?.value).toBe("LLG + RK23");
-    expect(byId.time?.value).toBe("0.000000e+0");
+    expect(byId.time?.value).toBe("0");
     expect(byId.time?.unit).toBe("s");
     expect(byId.dt?.value).toBe("0.000000e+0");
     expect(byId.dt?.unit).toBe("s");
   });
 
   it.each([
-    { solverTime: 0, expectedTime: "0.000000e+0" },
-    { solverTime: 3601, expectedTime: "3,601" },
-  ])("preserves current-run time $solverTime without inferring a solver from foreign provenance", ({ solverTime, expectedTime }) => {
+    { solverTime: 0, expectedTime: "0", expectedUnit: "s" },
+    { solverTime: 3601, expectedTime: "3.601", expectedUnit: "ks" },
+  ])("preserves current-run time $solverTime without inferring a solver from foreign provenance", ({ solverTime, expectedTime, expectedUnit }) => {
     const telemetryStatus = selectFooterTelemetryStatus({
       data: {
         ...status,
@@ -635,7 +640,7 @@ describe("FooterTelemetry", () => {
       expect(byId["active-solver"]?.value).toBe("Unknown");
       expect(byId["active-solver"]?.detail).toContain("Runtime solver provenance unavailable");
       expect(byId.time?.value).toBe(expectedTime);
-      expect(byId.time?.unit).toBe("s");
+      expect(byId.time?.unit).toBe(expectedUnit);
       expect(byId.dt?.value).toBe("1.000000e-12");
       expect(byId.dt?.unit).toBe("s");
     }
@@ -791,7 +796,7 @@ describe("FooterTelemetry", () => {
       "Landau–Lifshitz–Gilbert overdamped with Heun integrator",
     );
     expect(byId.time?.label).toBe("Sim time");
-    expect(byId.time?.value).toBe("0.000000e+0");
+    expect(byId.time?.value).toBe("0");
     expect(byId.time?.unit).toBe("s");
     expect(byId["sim-time"]).toBeUndefined();
     expect(byId.dt?.value).toBe("0.000000e+0");
@@ -900,7 +905,33 @@ describe("FooterTelemetry", () => {
     expect(byId["solver-max-error"]?.subdetail).toBe("Within tolerance");
   });
 
-  it("keeps small simulation times readable in seconds and marks absent values", () => {
+  it.each([
+    { seconds: 712e-12, value: "712", unit: "ps" },
+    { seconds: 1e-9, value: "1", unit: "ns" },
+    { seconds: 1.2345e-9, value: "1.2345", unit: "ns" },
+    { seconds: 7e-8, value: "70", unit: "ns" },
+    { seconds: 999.999999e-12, value: "1", unit: "ns" },
+    { seconds: 0, value: "0", unit: "s" },
+    { seconds: Number.NaN, value: "—", unit: undefined },
+  ])("formats Run simulation time $seconds seconds as $value $unit", ({ seconds, value, unit }) => {
+    const telemetryStatus = selectFooterTelemetryStatus({
+      data: { ...status, run: { ...status.run!, solver_time: seconds } },
+      error: null,
+      refetch: () => {},
+      revision: 1,
+      status: "ready",
+    });
+    const metric = buildFooterTelemetryModel(telemetryStatus, null).metrics.find(({ id }) => id === "time");
+    expect(metric).toBeDefined();
+    const reading = `${metric?.value}${metric?.unit ? ` ${metric.unit}` : ""}`;
+    expect(reading).toBe(`${value}${unit ? ` ${unit}` : ""}`);
+    expect(metric?.value).not.toContain(",");
+    expect(metric?.value).not.toMatch(/[eE][+-]?\d+/);
+    expect(metric?.unit).toBe(unit);
+    expect(metric?.numeric).toBe(Number.isFinite(seconds) ? seconds : null);
+  });
+
+  it("keeps rates independent when Run time is unavailable", () => {
     const telemetryStatus = selectFooterTelemetryStatus({
       data: {
         ...status,
@@ -914,8 +945,9 @@ describe("FooterTelemetry", () => {
     const model = buildFooterTelemetryModel(telemetryStatus, null);
     const byId = Object.fromEntries(model.metrics.map((metric) => [metric.id, metric]));
 
-    expect(byId.time?.value).toBe("4.000000e-9");
-    expect(byId.time?.unit).toBe("s");
+    expect(byId.time?.value).toBe("4");
+    expect(byId.time?.unit).toBe("ns");
+    expect(byId.time?.numeric).toBe(4e-9);
     expect(byId.rate?.value).toBe("4.2");
     expect(byId.rate?.unit).toBe("steps/s");
 
@@ -927,11 +959,11 @@ describe("FooterTelemetry", () => {
     }, null);
     const emptyById = Object.fromEntries(emptyModel.metrics.map((metric) => [metric.id, metric]));
     expect(emptyById.time?.value).toBe("—");
-    expect(emptyById.time?.unit).toBe("s");
+    expect(emptyById.time?.unit).toBeUndefined();
     expect(emptyById.rate?.value).toBe("—");
     expect(emptyById.rate?.subdetail).toBe("— steps");
     expect(emptyById.step?.value).toBe("—");
-    expect(emptyById.step?.subdetail).toBe("t=— s");
+    expect(emptyById.step?.subdetail).toBe("t=—");
     expect(emptyById.dt?.value).toBe("—");
     expect(emptyById["max-torque"]?.value).toBe("—");
   });
@@ -977,6 +1009,97 @@ describe("FooterTelemetry", () => {
     expect(byId["avg-mx"]?.subdetail).toBe("Accepted scalar observation");
   });
 
+  it("uses physical time for a terminal run when a scalar pseudotime is not tied to a minimizer", () => {
+    const telemetryStatus = selectFooterTelemetryStatus({
+      data: {
+        ...status,
+        run: { ...status.run!, solver_steps: 175_203, solver_time: 7e-8 },
+        solver: {
+          ...status.solver,
+          algorithm: "fdm",
+          relaxation_algorithm: null,
+          state: "awaiting_command",
+        },
+      },
+      error: null,
+      refetch: () => {},
+      revision: 1,
+      status: "ready",
+    });
+    const model = buildFooterTelemetryModel(
+      telemetryStatus,
+      null,
+      null,
+      {
+        revision: 26,
+        row: { mx: 1, my: 0, mz: 0, pseudo_time_s: 0, step: 175_203, time: 7e-8 },
+        requestScopeEpoch: status.session.request_scope_epoch,
+        runId: status.run!.run_id,
+        sessionId: status.session.session_id,
+        step: 175_203,
+        time: 7e-8,
+      },
+      null,
+      null,
+      null,
+      null,
+      { currentRunStatus: "cancelled" },
+    );
+    const time = model.metrics.find(({ id }) => id === "time");
+
+    expect(time?.label).toBe("Sim time");
+    expect(time?.value).toBe("70");
+    expect(time?.unit).toBe("ns");
+    expect(time?.numeric).toBe(7e-8);
+  });
+
+  it("preserves zero pseudotime for an active direct minimizer", () => {
+    const telemetryStatus = selectFooterTelemetryStatus({
+      data: {
+        ...status,
+        solver: {
+          ...status.solver,
+          algorithm: "projected_gradient_bb",
+          relaxation_algorithm: "projected_gradient_bb",
+          state: "running",
+        },
+      },
+      error: null,
+      refetch: () => {},
+      revision: 1,
+      status: "ready",
+    });
+    const model = buildFooterTelemetryModel(telemetryStatus, null, solverStatusFixture({
+      algorithm: "projected_gradient_bb",
+      can_accept_commands: false,
+      converged: false,
+      dt_seconds: 0,
+      integrator: null,
+      is_busy: true,
+      last_error: null,
+      max_torque_T: 0,
+      active_runtime_seconds: 0,
+      pseudo_time_seconds: 0,
+      relaxation_algorithm: "projected_gradient_bb",
+      revision: 11,
+      run_id: status.run?.run_id ?? null,
+      runtime_state: "running",
+      runtime_status_code: "running",
+      runtime_status_kind: "running",
+      session_status: "running",
+      sim_time_seconds: 7e-8,
+      stage_kind: "relax",
+      step_index: 1,
+      warnings: [],
+    }));
+    const time = model.metrics.find(({ id }) => id === "time");
+
+    expect(time?.label).toBe("Pseudo time");
+    expect(time?.value).toBe("0");
+    expect(time?.unit).toBe("s");
+    expect(time?.numeric).toBe(0);
+  });
+
   it("shows pseudotime and keeps physical simulation time separate for direct minimizers", () => {
     const telemetryStatus = selectFooterTelemetryStatus({
       data: status,
@@ -1017,29 +1140,33 @@ describe("FooterTelemetry", () => {
           mx: 1, my: 0, mz: 0,
           pseudo_time_s: 9e-6,
           step: 9,
-          time: 0,
+          time: 7e-8,
         },
         requestScopeEpoch: "test-api:0",
         runId: "run-1",
         sessionId: "session-1",
         step: 9,
-        time: 0,
+        time: 7e-8,
       },
     );
     const byId = Object.fromEntries(model.metrics.map((metric) => [metric.id, metric]));
 
     expect(byId.time?.label).toBe("Pseudo time");
     expect(byId.time?.detail).toBe("Direct minimizer pseudotime");
-    expect(byId.time?.value).toBe("9.000000e-6");
-    expect(byId.time?.unit).toBe("s");
+    expect(byId.time?.value).toBe("9");
+    expect(byId.time?.unit).toBe("µs");
+    expect(byId.time?.numeric).toBe(9e-6);
     expect(byId["sim-time"]?.label).toBe("Sim time");
     expect(byId["sim-time"]?.detail).toBe("Physical simulation time");
+    expect(byId["sim-time"]?.value).toBe("70");
+    expect(byId["sim-time"]?.unit).toBe("ns");
+    expect(byId["sim-time"]?.numeric).toBe(7e-8);
     expect(byId["active-runtime"]?.label).toBe("Runtime");
     expect(byId["active-runtime"]?.value).toBe("0.200 s");
     expect(byId.dt?.label).toBe("Pseudo dt");
     expect(byId.dt?.detail).toBe("Minimizer pseudotime step");
     expect(byId["active-solver"]?.value).toBe("BB");
-    expect(byId.step?.subdetail).toBe("t=0.000000e+0 s");
+    expect(byId.step?.subdetail).toBe("τ=9 µs");
   });
 
   it("shows frequency-response sweep progress instead of time-step progress", () => {
@@ -1552,7 +1679,7 @@ describe("FooterTelemetry", () => {
       unscopedHistory,
     );
     expect(after.metrics).toEqual(before.metrics);
-    expect(after.metrics.find(({ id }) => id === "time")?.label).toBe("Pseudo time");
+    expect(after.metrics.find(({ id }) => id === "time")?.label).toBe("Sim time");
 
     const completedStatus = selectFooterTelemetryStatus({
       data: {
@@ -1746,5 +1873,32 @@ describe("FooterTelemetry", () => {
     expect(resolvePrimaryTelemetryObjectId(scene)).toBe("arch_waveguide");
     expect(resolvePrimaryTelemetryObjectId(scene, "missing")).toBe("arch_waveguide");
     expect(resolvePrimaryTelemetryObjectId({ objects: [], revision: 3 })).toBeNull();
+  });
+
+  it("observes current-run stage summary changes in the telemetry selector", () => {
+    const selected = selectFooterTelemetryStatus({
+      data: status,
+      error: null,
+      refetch: () => {},
+      revision: 1,
+      status: "ready",
+    });
+    const next = selectFooterTelemetryStatus({
+      data: {
+        ...status,
+        run: {
+          ...status.run!,
+          stage_index: 1,
+          stage_label: "pulse",
+        },
+      },
+      error: null,
+      refetch: () => {},
+      revision: 2,
+      status: "ready",
+    });
+
+    expect(selected?.run).toMatchObject({ stage_count: 1, stage_index: 0, stage_label: "relax" });
+    expect(footerTelemetryStatusEquals(selected, next)).toBe(false);
   });
 });

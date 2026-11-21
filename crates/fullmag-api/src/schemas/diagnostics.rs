@@ -685,6 +685,15 @@ pub struct RunPerformancePointResource {
     pub gpu_power_watts: Option<f64>,
 }
 
+/// Physical clock from the same accepted solver callback as `step_index`.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, ToSchema)]
+pub struct RunPerformanceSolverClockResource {
+    pub step_index: u64,
+    pub time_s: f64,
+    /// Accepted solver timestep; zero is preserved as a measured value.
+    pub dt_s: f64,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct RunPerformanceResource {
     pub revision: String,
@@ -693,12 +702,17 @@ pub struct RunPerformanceResource {
     pub run_id: Option<String>,
     pub task_id: Option<String>,
     pub step_id: Option<String>,
+    /// Zero-based position in the accepted StudyPlan stage order.
+    pub stage_index: Option<u32>,
     pub attempt_id: Option<String>,
     pub ownership_epoch: Option<u64>,
     pub sample_sequence: u64,
     pub elapsed_monotonic_ns: u64,
     pub first_step_index: Option<u64>,
     pub step_index: Option<u64>,
+    pub solver_clock: Option<RunPerformanceSolverClockResource>,
+    /// Fraction of the accepted bounded stage duration, clamped to [0, 1].
+    pub progress_fraction: Option<f64>,
     pub unique_step_callback_records: u64,
     pub rows_dropped: u64,
     pub collection_overhead_ns: Option<u64>,
