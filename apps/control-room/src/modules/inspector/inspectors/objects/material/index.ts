@@ -3,8 +3,11 @@ export {
   type MaterialLibraryPickerDialogProps,
 } from "./MaterialLibraryPickerDialog";
 export {
+  computePendingPhysicsActivations,
   type MaterialPhysicsSyncParams,
   type MaterialPhysicsSyncResult,
+  type PendingPhysicsActivation,
+  type PhysicsActivationError,
   syncMaterialPhysicsAutoActivation,
 } from "./materialPhysicsAutoActivation";
 export {

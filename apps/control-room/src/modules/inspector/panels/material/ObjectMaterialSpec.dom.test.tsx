@@ -464,9 +464,24 @@ describe("ObjectMaterialSpec (Wave 4 Feature-Parity & Constitutive Authoring)", 
       Dbulk: 0,
     });
 
-    const regime = classifyUniaxialAnisotropyRegime(-2.0e5, 1.5e5);
-    expect(regime.label).toContain("Easy cone");
-    expect(regime.coneAngleDeg).toBeCloseTo(54.7356, 2);
+    // Cosine convention E(θ) = -Ku1 cos²θ - Ku2 cos⁴θ (docs/physics/fem_anisotropy_uniaxial.md):
+    // Case 1: Ku1 = -2e5, Ku2 = +1.5e5 => Ku2 > 0, Ku1 + Ku2 = -0.5e5 < 0 => Easy plane (NOT easy cone!)
+    const easyPlaneRegime = classifyUniaxialAnisotropyRegime(-2.0e5, 1.5e5);
+    expect(easyPlaneRegime.label).toBe("Easy plane");
+    expect(easyPlaneRegime.coneAngleDeg).toBeNull();
+
+    // Case 2: Ku1 = +1e5, Ku2 = -1.5e5 => Ku2 < 0, c² = -Ku1/(2 Ku2) = 1/3 => Easy cone 54.7°!
+    const easyConeRegime = classifyUniaxialAnisotropyRegime(1.0e5, -1.5e5);
+    expect(easyConeRegime.label).toContain("Easy cone");
+    expect(easyConeRegime.label).toContain("54.7°");
+    expect(easyConeRegime.coneAngleDeg).toBeCloseTo(54.7356, 2);
+
+    // Case 3: Easy axis and isotropic
+    expect(classifyUniaxialAnisotropyRegime(4.5e5, 1.5e5)).toEqual({
+      label: "Easy axis",
+      coneAngleDeg: null,
+    });
+    expect(classifyUniaxialAnisotropyRegime(0, 0).label).toContain("Isotropic");
 
     const lex = computeExchangeLengthMeters(8.0e5, 13e-12);
     expect((lex ?? 0) * 1e9).toBeCloseTo(5.6858, 2);
@@ -488,7 +503,8 @@ describe("ObjectMaterialSpec (Wave 4 Feature-Parity & Constitutive Authoring)", 
     expect(mounted.host.textContent).toContain("Anisotropy field (Bk = 2\u00b7Ku1/Ms)");
     // Bk = 2 * (-2.0e5) / 1.42e6 = -0.2817 T (-281.7 mT)
     expect(mounted.host.textContent).toContain("-281.7 mT");
-    expect(mounted.host.textContent).toContain("Easy cone");
+    // Cosine convention: Ku1 = -2e5, Ku2 = +1.5e5 => Easy plane (NOT easy cone)
+    expect(mounted.host.textContent).toContain("Easy plane");
     expect(mounted.host.textContent).toContain("Shared across 2 objects");
     expect(findElements(mounted.host, (el) => el.tagName === "SELECT")).toHaveLength(0);
 
@@ -1198,5 +1214,111 @@ describe("ObjectMaterialSpec (Wave 4 Feature-Parity & Constitutive Authoring)", 
     );
     expect(mounted.host.textContent).not.toContain("Retry Assignment");
     assertNoTemplateInvalidationKeys();
+  });
+
+  it("renders Easy cone 54.7° for Ku1 = +1e5, Ku2 = -1.5e5 and enforces explicit opt-in physics activation without empty catch", async () => {
+    mocks.sceneData = {
+      ...defaultSceneFixture(),
+      study: { demag_enabled: false, exchange_enabled: false },
+      objects: [
+        {
+          id: "disk-a",
+          name: "Disk A",
+          role: "magnet",
+          material_ref: "shared-co",
+          physics_stack: [
+            {
+              kind: "uniaxial_anisotropy",
+              enabled: true,
+              params: { ku1: 1.0e5, ku2: -1.5e5, axis: [0, 0, 1] },
+            },
+          ],
+        },
+      ],
+    };
+
+    mounted = mountWave4TestElement(
+      <ObjectMaterialInspectorPanel selection={makeSelection("disk-a")} />,
+    );
+
+    // Cosine convention Easy cone 54.7° displayed in UI
+    expect(mounted.host.textContent).toContain("Easy cone (\u03b8 = 54.7\u00b0)");
+    // Explicit opt-in switch defaults OFF and lists pending physics modules
+    const optInRow = findElement(
+      mounted.host,
+      (el) => el.getAttribute("data-row") === "activateRequiredPhysics",
+      "activateRequiredPhysics row",
+    );
+    const optInSwitch = findElement(
+      optInRow,
+      (el) => el.getAttribute("role") === "switch",
+      "activateRequiredPhysics switch",
+    );
+    expect(optInSwitch.getAttribute("aria-checked")).toBe("false");
+    expect(mounted.host.textContent).toContain(
+      "Also enable required physics modules on Apply",
+    );
+    expect(mounted.host.textContent).toContain("Exchange");
+    expect(mounted.host.textContent).toContain("Demag");
+
+    // 1. With opt-in OFF (default), editing alpha and clicking Apply must NOT activate exchange or study demag
+    const alphaInput = findElement(
+      findElement(
+        mounted.host,
+        (el) => el.getAttribute("data-row") === "alpha",
+        "alpha row",
+      ),
+      (el) => el.tagName === "INPUT",
+      "alpha input",
+    );
+    act(() => {
+      editTextOrNumberInput(alphaInput, "0.015");
+    });
+    const applyBtn = findElement(
+      mounted.host,
+      (el) => el.tagName === "BUTTON" && Boolean(el.textContent?.includes("Apply")),
+    );
+    await act(async () => {
+      applyBtn?.dispatchEvent(new TestEvent("click", { bubbles: true }));
+    });
+    expect(mocks.patchObjectInteraction).not.toHaveBeenCalled();
+    expect(mocks.commitTransaction).not.toHaveBeenCalled();
+
+    // 2. Toggle explicit opt-in ON and simulate an exchange activation error -> surfaced clearly, never swallowed!
+    mocks.patchObjectInteraction.mockRejectedValueOnce(
+      new Error("Exchange interaction rejected by active lane"),
+    );
+    act(() => {
+      optInSwitch.dispatchEvent(new TestEvent("click", { bubbles: true }));
+    });
+    expect(optInSwitch.getAttribute("aria-checked")).toBe("true");
+    await act(async () => {
+      applyBtn?.dispatchEvent(new TestEvent("click", { bubbles: true }));
+    });
+
+    expect(mocks.patchObjectInteraction).toHaveBeenCalledWith(
+      "disk-a",
+      "exchange",
+      expect.objectContaining({ enabled: true, present: true }),
+      { sessionScopeKey: "session=s1&epoch=e1&request_scope_epoch=r1" },
+    );
+    expect(mocks.commitTransaction).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: "merge_patch",
+        merge_patch: {
+          study: {
+            demag_enabled: true,
+            exchange_enabled: true,
+          },
+        },
+      }),
+      { sessionScopeKey: "session=s1&epoch=e1&request_scope_epoch=r1" },
+    );
+    expect(mounted.host.textContent).toContain(
+      "Material saved, but physics module activation failed",
+    );
+    expect(mounted.host.textContent).toContain(
+      "Exchange: Exchange interaction rejected by active lane",
+    );
   });
 }, 25_000);

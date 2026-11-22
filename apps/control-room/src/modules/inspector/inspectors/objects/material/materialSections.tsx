@@ -15,12 +15,14 @@ import type {
   MaterialReferenceResource,
   SceneMaterialResource,
   SceneMaterialSource,
+  SceneResource,
 } from "@/kernel/api/apiTypes";
 import {
   formatMaterialSourceChange,
   materialSourceChanges,
   materialSourceStatus,
 } from "@/shared/domain/material/materialLibrary";
+import { Badge } from "@/shared/ui/Badge";
 import { Button } from "@/shared/ui/Button";
 
 import {
@@ -44,6 +46,7 @@ import type {
   InspectorSectionSpec,
 } from "../../../template";
 import { MaterialLibraryPickerDialog } from "./MaterialLibraryPickerDialog";
+import { computePendingPhysicsActivations } from "./materialPhysicsAutoActivation";
 import {
   classifyUniaxialAnisotropyRegime,
   computeExchangeLengthMeters,
@@ -65,6 +68,7 @@ export interface SessionMaterialOption {
 
 export interface BuildMaterialSectionsParams {
   readonly baseline: UnifiedObjectMaterialDraft;
+  readonly sceneData: SceneResource | null | undefined;
   readonly sessionMaterials: readonly SessionMaterialOption[];
   readonly existingMaterialIds: ReadonlySet<string>;
   readonly dialogModelMaterial: SceneMaterialResource | undefined;
@@ -83,6 +87,7 @@ export interface BuildMaterialSectionsParams {
 
 export function buildMaterialSpecSections({
   baseline,
+  sceneData,
   sessionMaterials,
   existingMaterialIds,
   dialogModelMaterial,
@@ -200,6 +205,57 @@ export function buildMaterialSpecSections({
               return null;
             }
             return v.trim().length === 0 ? "Material name cannot be empty." : null;
+          },
+        },
+        {
+          key: "activateRequiredPhysics",
+          type: "switch",
+          label: "Also enable required physics modules on Apply",
+          hint: "Explicit opt-in: off by default so material edits never silently activate physics modules.",
+          showWhen: (d) => d.isMagneticBody,
+        },
+        {
+          type: "custom",
+          wide: true,
+          label: "Physics modules to enable",
+          showWhen: (d) => d.isMagneticBody,
+          render: (ctx) => {
+            const pending = computePendingPhysicsActivations(ctx.draft, sceneData);
+            return (
+              <div
+                className="flex flex-col gap-1.5 rounded-md border border-[var(--fm-border)] bg-[var(--fm-surface-2)] px-2.5 py-2"
+                data-slot="material-physics-optin-summary"
+              >
+                <div className="flex items-center justify-between gap-2 text-xs">
+                  <span className="font-medium text-[var(--fm-text)]">
+                    {ctx.draft.activateRequiredPhysics
+                      ? "Will enable on Apply"
+                      : "Pending physics modules (opt-in off)"}
+                  </span>
+                  <span className="font-mono text-xs text-[var(--fm-text-muted)]">
+                    {pending.length}
+                  </span>
+                </div>
+                {pending.length > 0 ? (
+                  <div className="flex flex-wrap gap-1">
+                    {pending.map((item) => (
+                      <Badge
+                        key={item.id}
+                        variant={
+                          ctx.draft.activateRequiredPhysics ? "accent" : "secondary"
+                        }
+                      >
+                        {item.label}
+                      </Badge>
+                    ))}
+                  </div>
+                ) : (
+                  <span className="text-xs text-[var(--fm-text-muted)]">
+                    All required physics modules are already active.
+                  </span>
+                )}
+              </div>
+            );
           },
         },
       ],
@@ -511,7 +567,7 @@ export function buildMaterialSpecSections({
           symbolInfo: {
             name: "First-order uniaxial anisotropy constant",
             definition:
-              "Leading sin\u00b2\u03b8 magnetocrystalline energy density: E_u = -Ku1 (m\u00b7u)\u00b2 - Ku2 (m\u00b7u)\u2074.",
+              "Leading cos\u00b2\u03b8 magnetocrystalline energy density: E_u = -Ku1 (m\u00b7u)\u00b2 - Ku2 (m\u00b7u)\u2074.",
             siUnit: "J/m\u00b3",
           },
           units: ANISOTROPY_UNITS,
@@ -530,7 +586,7 @@ export function buildMaterialSpecSections({
           symbolInfo: {
             name: "Second-order uniaxial anisotropy constant",
             definition:
-              "Fourth-order sin\u2074\u03b8 uniaxial term governing easy-cone phases and PMA thermal stability.",
+              "Fourth-order cos\u2074\u03b8 uniaxial term in E_u = -Ku1 (m\u00b7u)\u00b2 - Ku2 (m\u00b7u)\u2074; easy-cone equilibrium requires Ku2 < 0 and 0 < -Ku1/(2\u00b7Ku2) < 1.",
             siUnit: "J/m\u00b3",
             typicalRange: "hcp Co \u2248 150 kJ/m\u00b3",
           },

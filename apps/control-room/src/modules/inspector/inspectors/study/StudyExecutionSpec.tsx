@@ -178,6 +178,26 @@ function StudyExecutionInspectorPanelView({
   );
   const baseline = hydratedBaseline ?? fallbackBaseline;
 
+  const requestedBackendHint =
+    globalDraftForPreview?.requestedBackend?.trim().toLowerCase() ?? null;
+
+  const formatDiscretizationFact = useCallback(
+    (draft: StudyExecutionDraft): string => {
+      const requested =
+        requestedBackendHint ||
+        draft.requestedDiscretization?.trim().toLowerCase() ||
+        draft.discretization.toLowerCase();
+      const lockedDisc = resolveLockedSessionDiscretization(draft);
+      if (requested === "auto") {
+        return lockedDisc ? `Auto \u2192 ${lockedDisc.toUpperCase()}` : "Auto";
+      }
+      return lockedDisc
+        ? lockedDisc.toUpperCase()
+        : draft.discretization.toUpperCase();
+    },
+    [requestedBackendHint],
+  );
+
   const spec = useMemo<InspectorSpec<StudyExecutionDraft>>(
     () => ({
       id: "study.execution",
@@ -204,10 +224,7 @@ function StudyExecutionInspectorPanelView({
       },
       facts: (draft): readonly InspectorFact[] => {
         const resolved = resolveEffectiveDeviceDisplay(draft);
-        const lockedDisc = resolveLockedSessionDiscretization(draft);
-        const discLabel = lockedDisc
-          ? lockedDisc.toUpperCase()
-          : draft.discretization.toUpperCase();
+        const discLabel = formatDiscretizationFact(draft);
         return [
           { id: "disc", label: "Discretization", value: discLabel },
           {
@@ -338,24 +355,14 @@ function StudyExecutionInspectorPanelView({
           icon: Cpu,
           modeTabId: "hardware",
           defaultOpen: true,
-          summary: (d) => {
-            const lockedDisc = resolveLockedSessionDiscretization(d);
-            const discSummary = lockedDisc
-              ? lockedDisc.toUpperCase()
-              : d.discretization.toUpperCase();
-            return `${discSummary} · ${resolveEffectiveDeviceDisplay(d).factValue}`;
-          },
+          summary: (d) =>
+            `${formatDiscretizationFact(d)} · ${resolveEffectiveDeviceDisplay(d).factValue}`,
           rows: [
             {
               label: "Discretization",
               type: "readonly",
               hint: "Assigned by the session simulation mode",
-              format: (d) => {
-                const lockedDisc = resolveLockedSessionDiscretization(d);
-                if (lockedDisc === "fem") return "FEM (Session)";
-                if (lockedDisc === "fdm") return "FDM (Session)";
-                return `${d.discretization.toUpperCase()} (Session)`;
-              },
+              format: (d) => `${formatDiscretizationFact(d)} (Session)`,
             },
             {
               key: "requestedDevice",
@@ -731,6 +738,7 @@ function StudyExecutionInspectorPanelView({
       baseline.executionProfileBound,
       baseline.sessionDiscretization,
       canSubscribeResources,
+      formatDiscretizationFact,
       globalDraftForPreview,
       lastAuthoringError,
       onApplyFdmGrid,

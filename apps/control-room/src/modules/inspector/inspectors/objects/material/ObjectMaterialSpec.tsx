@@ -52,7 +52,10 @@ import type {
   InspectorNotice,
   InspectorSpec,
 } from "../../../template";
-import { commitObjectMaterialDraft } from "./materialPhysicsAutoActivation";
+import {
+  commitObjectMaterialDraft,
+  type PhysicsActivationError,
+} from "./materialPhysicsAutoActivation";
 import { buildMaterialSpecSections } from "./materialSections";
 import {
   buildBaselineMaterialDraft,
@@ -128,6 +131,7 @@ export function ObjectMaterialInspectorPanel({ selection }: InspectorPanelProps)
 
   const [catalogOpen, setCatalogOpen] = useState(false);
   const [conflictState, setConflictState] = useState<RevisionConflictState | null>(null);
+  const [activationErrors, setActivationErrors] = useState<readonly PhysicsActivationError[]>([]);
 
   const objectId =
     selection.ref?.type === "scene-object"
@@ -231,6 +235,7 @@ export function ObjectMaterialInspectorPanel({ selection }: InspectorPanelProps)
 
   const handleRefreshAndRebase = useCallback(() => {
     setConflictState(null);
+    setActivationErrors([]);
     void scene.refetch?.();
     void materialResource.refetch?.();
     void uniaxialResource.refetch?.();
@@ -691,6 +696,16 @@ export function ObjectMaterialInspectorPanel({ selection }: InspectorPanelProps)
       },
       notices: (draft): readonly InspectorNotice<UnifiedObjectMaterialDraft>[] => {
         const list: InspectorNotice<UnifiedObjectMaterialDraft>[] = [];
+        if (activationErrors.length > 0) {
+          list.push({
+            id: "material-physics-activation-errors",
+            tone: "err",
+            title: "Material saved, but physics module activation failed",
+            text: activationErrors
+              .map((item) => `${item.label}: ${item.message}`)
+              .join(" · "),
+          });
+        }
         if (conflictState) {
           list.push({
             id: "material-revision-conflict",
@@ -734,6 +749,7 @@ export function ObjectMaterialInspectorPanel({ selection }: InspectorPanelProps)
       },
       sections: buildMaterialSpecSections({
         baseline,
+        sceneData: scene.data,
         sessionMaterials,
         existingMaterialIds,
         dialogModelMaterial,
@@ -755,9 +771,10 @@ export function ObjectMaterialInspectorPanel({ selection }: InspectorPanelProps)
           if (!objectId) return false;
           const historyContext = makeHistoryContext();
           const requestScopeOptions = sessionScopeKey ? { sessionScopeKey } : undefined;
+          setActivationErrors([]);
 
           try {
-            await runAuthoringMutationWithHistory(
+            const commitResult = await runAuthoringMutationWithHistory(
               historyContext,
               !draft.materialId && !draft.pendingNewMaterial && prev.materialId
                 ? `Unassign material from ${draft.objectName}`
@@ -777,6 +794,9 @@ export function ObjectMaterialInspectorPanel({ selection }: InspectorPanelProps)
                 }),
             );
             setConflictState(null);
+            if (commitResult.activationErrors.length > 0) {
+              setActivationErrors(commitResult.activationErrors);
+            }
             return true;
           } catch (error) {
             if (
@@ -797,6 +817,7 @@ export function ObjectMaterialInspectorPanel({ selection }: InspectorPanelProps)
       },
     }),
     [
+      activationErrors,
       activeReferences,
       activeSourceSnapshot,
       baseline,

@@ -242,21 +242,29 @@ export function classifyUniaxialAnisotropyRegime(
   if (Math.abs(ku1) < 1e-12 && Math.abs(ku2) < 1e-12) {
     return { label: "Isotropic (Ku1 = Ku2 = 0)", coneAngleDeg: null };
   }
-  if (ku1 < 0 && ku2 > 0 && -ku1 < 2 * ku2) {
-    const sinTheta = Math.sqrt(Math.max(0, Math.min(1, -ku1 / (2 * ku2))));
-    const deg = (Math.asin(sinTheta) * 180) / Math.PI;
-    return {
-      label: `Easy cone (\u03b8 = ${deg.toFixed(1)}\u00b0)`,
-      coneAngleDeg: deg,
-    };
+  // Cosine convention (docs/physics/fem_anisotropy_uniaxial.md):
+  // E(θ) = -Ku1 cos²θ - Ku2 cos⁴θ = -Ku1 c² - Ku2 c⁴, c = m·u ∈ [0, 1].
+  // Stationary point: dE/d(c²) = -Ku1 - 2 Ku2 c² = 0 => c² = -Ku1 / (2 Ku2),
+  // local minimum requires d²E/d(c²)² = -2 Ku2 > 0 <=> Ku2 < 0.
+  if (ku2 < 0) {
+    const cosSq = -ku1 / (2 * ku2);
+    if (cosSq > 0 && cosSq < 1) {
+      const deg = (Math.acos(Math.sqrt(cosSq)) * 180) / Math.PI;
+      return {
+        label: `Easy cone (\u03b8 = ${deg.toFixed(1)}\u00b0)`,
+        coneAngleDeg: deg,
+      };
+    }
   }
-  if (ku1 + ku2 > 0 && ku1 >= 0) {
+  // Compare boundary energies E(c²=0) = 0 vs E(c²=1) = -(Ku1 + Ku2).
+  const boundarySum = ku1 + ku2;
+  if (boundarySum > 1e-12) {
     return { label: "Easy axis", coneAngleDeg: null };
   }
-  if (ku1 + 2 * ku2 < 0) {
+  if (boundarySum < -1e-12) {
     return { label: "Easy plane", coneAngleDeg: null };
   }
-  return { label: "Bistable / higher-order uniaxial", coneAngleDeg: null };
+  return { label: "Degenerate (Ku1 + Ku2 = 0)", coneAngleDeg: null };
 }
 
 export function buildUniaxialInteractionPayload(draft: {
@@ -373,6 +381,8 @@ export interface UnifiedObjectMaterialDraft {
   c11: number;
   c12: number;
   c44: number;
+  // Explicit opt-in physics module activation on Apply (default false, ADR 0086)
+  activateRequiredPhysics: boolean;
 }
 
 export interface RevisionConflictState {
@@ -835,6 +845,7 @@ export function buildBaselineMaterialDraft(
     c11,
     c12,
     c44,
+    activateRequiredPhysics: false,
   };
 }
 

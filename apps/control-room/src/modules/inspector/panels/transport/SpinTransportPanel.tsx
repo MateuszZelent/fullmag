@@ -82,14 +82,14 @@ function createSpinPanelDraft(
   initialScope: { objectId: string; regionId?: string | null } | null,
   exists: boolean,
   fallbackCurrentSource = "current",
-  sessionDiscretization: "fdm" | "fem" | null = null,
 ): SpinTransportPanelDraft {
   const base = spinTransportDraft(value, initialScope);
   return {
     ...base,
     currentSourceId: value?.current_source_id ?? fallbackCurrentSource,
-    executionDiscretization:
-      sessionDiscretization ?? base.executionDiscretization,
+    // Preserve authored executionDiscretization ("auto", "fem", or "fdm") —
+    // never overwrite saved intent with the active session lane.
+    executionDiscretization: base.executionDiscretization,
     exists,
   };
 }
@@ -256,14 +256,8 @@ export function SpinTransportInspectorPanel({ selection }: InspectorPanelProps) 
         knownSelected ? null : initialScope,
         knownSelected !== null,
         defaultCurrentSource,
-        session.sessionDiscretization,
       ),
-    [
-      defaultCurrentSource,
-      initialScope,
-      knownSelected,
-      session.sessionDiscretization,
-    ],
+    [defaultCurrentSource, initialScope, knownSelected],
   );
 
   const effectiveSelection = useMemo<Selection>(
@@ -885,15 +879,18 @@ export function SpinTransportInspectorPanel({ selection }: InspectorPanelProps) 
               label: "Discretization",
               hint: "Assigned by the session simulation mode",
               format: (d) => {
-                const active =
-                  session.sessionDiscretization ??
-                  (d.executionDiscretization === "fdm" ||
-                  d.executionDiscretization === "fem"
-                    ? d.executionDiscretization
-                    : null);
-                if (active === "fem") return "FEM (Session)";
-                if (active === "fdm") return "FDM (Session)";
-                return "Auto (Session)";
+                const authored = d.executionDiscretization;
+                const active = session.sessionDiscretization;
+                if (authored === "auto") {
+                  return active ? `Auto \u2192 ${active.toUpperCase()}` : "Auto";
+                }
+                if (authored === "fem" || authored === "fdm") {
+                  if (active && active !== authored) {
+                    return `${authored.toUpperCase()} (Session active: ${active.toUpperCase()})`;
+                  }
+                  return `${authored.toUpperCase()} (Session)`;
+                }
+                return active ? `${active.toUpperCase()} (Session)` : "Auto";
               },
             },
             {

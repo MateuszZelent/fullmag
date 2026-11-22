@@ -24,17 +24,160 @@ import {
 import {
   buildConstitutiveMergePatch,
   buildUniaxialInteractionPayload,
+  errorMessage,
   orthogonalizeAxisGramSchmidt,
   resolveMaterialPropertiesFromDraft,
   suggestNewMaterialId,
   type UnifiedObjectMaterialDraft,
 } from "./materialShared";
 
+export interface PendingPhysicsActivation {
+  readonly id:
+    | "exchange"
+    | "uniaxial_anisotropy"
+    | "cubic_anisotropy"
+    | "interfacial_dmi"
+    | "bulk_dmi"
+    | "study.demag_enabled"
+    | "study.exchange_enabled";
+  readonly label: string;
+  readonly scope: "object" | "study";
+}
+
+export interface PhysicsActivationError {
+  readonly module: string;
+  readonly label: string;
+  readonly message: string;
+}
+
+function readCommittedPhysicsStackState(
+  scene: SceneResource | null | undefined,
+  objectId: string,
+): Map<string, boolean> {
+  const state = new Map<string, boolean>();
+  const committedObj = scene?.objects?.find((o) => o.id === objectId);
+  const stack = (
+    committedObj as unknown as { physics_stack?: unknown[] } | undefined
+  )?.physics_stack;
+  if (!Array.isArray(stack)) return state;
+  for (const entry of stack) {
+    if (!entry || typeof entry !== "object") continue;
+    const rec = entry as Record<string, unknown>;
+    const kind =
+      typeof rec.kind === "string" ? rec.kind.trim().toLowerCase() : "";
+    if (!kind) continue;
+    state.set(kind, rec.enabled !== false);
+  }
+  return state;
+}
+
+function readCommittedStudyPhysicsFlags(
+  scene: SceneResource | null | undefined,
+): { demagEnabled?: boolean; exchangeEnabled?: boolean } {
+  const study = (
+    scene as unknown as {
+      study?: { demag_enabled?: boolean; exchange_enabled?: boolean };
+    } | null | undefined
+  )?.study;
+  return {
+    demagEnabled: study?.demag_enabled,
+    exchangeEnabled: study?.exchange_enabled,
+  };
+}
+
+/**
+ * Pure summary of physics modules that will be enabled on Apply when the user
+ * explicitly opts in via `draft.activateRequiredPhysics` (ADR 0086).
+ */
+export function computePendingPhysicsActivations(
+  draft: UnifiedObjectMaterialDraft,
+  scene: SceneResource | null | undefined,
+): readonly PendingPhysicsActivation[] {
+  if (!draft.isMagneticBody) return [];
+  if (!draft.materialId && !draft.pendingNewMaterial && !draft.msSet && !draft.aexSet) {
+    return [];
+  }
+  const stackState = readCommittedPhysicsStackState(scene, draft.objectId);
+  const studyFlags = readCommittedStudyPhysicsFlags(scene);
+  const pending: PendingPhysicsActivation[] = [];
+
+  if (draft.aexSet && draft.aex > 0 && stackState.get("exchange") !== true) {
+    pending.push({ id: "exchange", label: "Exchange", scope: "object" });
+  }
+  if (
+    (draft.uniaxialEnabled ||
+      Math.abs(draft.ku1) > 0 ||
+      Math.abs(draft.ku2) > 0) &&
+    stackState.get("uniaxial_anisotropy") !== true
+  ) {
+    pending.push({
+      id: "uniaxial_anisotropy",
+      label: "Uniaxial anisotropy",
+      scope: "object",
+    });
+  }
+  if (
+    (draft.cubicEnabled ||
+      Math.abs(draft.kc1) > 0 ||
+      Math.abs(draft.kc2) > 0 ||
+      Math.abs(draft.kc3) > 0) &&
+    stackState.get("cubic_anisotropy") !== true
+  ) {
+    pending.push({
+      id: "cubic_anisotropy",
+      label: "Cubic anisotropy",
+      scope: "object",
+    });
+  }
+  if (
+    draft.dindSet &&
+    draft.dind !== 0 &&
+    stackState.get("interfacial_dmi") !== true
+  ) {
+    pending.push({
+      id: "interfacial_dmi",
+      label: "Interfacial DMI",
+      scope: "object",
+    });
+  }
+  if (
+    draft.dbulkSet &&
+    draft.dbulk !== 0 &&
+    stackState.get("bulk_dmi") !== true
+  ) {
+    pending.push({ id: "bulk_dmi", label: "Bulk DMI", scope: "object" });
+  }
+  if (
+    draft.msSet &&
+    draft.ms > 0 &&
+    studyFlags.demagEnabled === false
+  ) {
+    pending.push({
+      id: "study.demag_enabled",
+      label: "Demag",
+      scope: "study",
+    });
+  }
+  if (
+    draft.aexSet &&
+    draft.aex > 0 &&
+    studyFlags.exchangeEnabled === false
+  ) {
+    pending.push({
+      id: "study.exchange_enabled",
+      label: "Exchange (study)",
+      scope: "study",
+    });
+  }
+  return pending;
+}
+
 export interface MaterialPhysicsSyncParams {
   readonly objectId: string;
   readonly draft: UnifiedObjectMaterialDraft;
   readonly prev: UnifiedObjectMaterialDraft;
-  readonly materialTouched: boolean;
+  readonly sceneData: SceneResource | null | undefined;
+  readonly studyFlagsAlreadyCommitted?: boolean;
   readonly latestRevision: number | null;
   readonly latestCommittedScene: SceneResource | null;
   readonly sessionScopeKey: string | null;
@@ -47,14 +190,15 @@ export interface MaterialPhysicsSyncResult {
   readonly latestRevision: number | null;
   readonly latestCommittedScene: SceneResource | null;
   readonly interactionTouched: boolean;
+  readonly activationErrors: readonly PhysicsActivationError[];
 }
 
 /**
- * Synchronizes uniaxial & cubic anisotropy interactions (auto-enabling on non-zero
- * Ku1/Ku2/Kc1/Kc2/Kc3) and auto-activates canonical physics interactions
- * (`exchange`, `interfacial_dmi`, `bulk_dmi`, plus study `demag_enabled` /
- * `exchange_enabled` flags) when a material is newly assigned or a parameter
- * transitions to non-zero, while respecting existing manual disables.
+ * Synchronizes explicit uniaxial & cubic anisotropy edits and — ONLY when the
+ * user explicitly opts in via `draft.activateRequiredPhysics` (ADR 0086) —
+ * enables required canonical physics interactions (`exchange`, `interfacial_dmi`,
+ * `bulk_dmi`, plus study `demag_enabled` / `exchange_enabled` flags).
+ * Never swallows errors silently; returns structured `activationErrors`.
  */
 export async function syncMaterialPhysicsAutoActivation(
   params: MaterialPhysicsSyncParams,
@@ -63,7 +207,8 @@ export async function syncMaterialPhysicsAutoActivation(
     objectId,
     draft,
     prev,
-    materialTouched,
+    sceneData,
+    studyFlagsAlreadyCommitted = false,
     sessionScopeKey,
     requestScopeOptions,
     api,
@@ -71,20 +216,30 @@ export async function syncMaterialPhysicsAutoActivation(
   } = params;
   let { latestRevision, latestCommittedScene } = params;
   let interactionTouched = false;
+  const activationErrors: PhysicsActivationError[] = [];
 
-  // Auto-enable uniaxial/cubic anisotropy when non-zero Ku/Kc is entered
-  const autoUniaxialEnabled =
-    draft.uniaxialEnabled ||
-    ((draft.ku1 !== prev.ku1 || draft.ku2 !== prev.ku2) &&
-      (Math.abs(draft.ku1) > 0 || Math.abs(draft.ku2) > 0));
+  const effectiveScene = latestCommittedScene ?? sceneData;
+  const committedStackState = readCommittedPhysicsStackState(
+    effectiveScene,
+    objectId,
+  );
+
+  // Only enable anisotropy beyond the user's explicit toggle when opted in.
+  const effectiveUniaxialEnabled = draft.activateRequiredPhysics
+    ? draft.uniaxialEnabled ||
+      Math.abs(draft.ku1) > 0 ||
+      Math.abs(draft.ku2) > 0
+    : draft.uniaxialEnabled;
   const effectiveUniaxialDraft =
-    autoUniaxialEnabled !== draft.uniaxialEnabled
-      ? { ...draft, uniaxialEnabled: autoUniaxialEnabled }
+    effectiveUniaxialEnabled !== draft.uniaxialEnabled
+      ? { ...draft, uniaxialEnabled: effectiveUniaxialEnabled }
       : draft;
 
-  // Atomically persist uniaxial anisotropy WITH lossless Ku2!
   const uniaxialChanged =
     effectiveUniaxialDraft.uniaxialEnabled !== prev.uniaxialEnabled ||
+    (draft.activateRequiredPhysics &&
+      effectiveUniaxialEnabled &&
+      committedStackState.get("uniaxial_anisotropy") !== true) ||
     draft.ku1 !== prev.ku1 ||
     draft.ku2 !== prev.ku2 ||
     JSON.stringify(draft.uniaxialAxis) !== JSON.stringify(prev.uniaxialAxis);
@@ -110,16 +265,17 @@ export async function syncMaterialPhysicsAutoActivation(
     );
   }
 
-  const autoCubicEnabled =
-    draft.cubicEnabled ||
-    ((draft.kc1 !== prev.kc1 ||
-      draft.kc2 !== prev.kc2 ||
-      draft.kc3 !== prev.kc3) &&
-      (Math.abs(draft.kc1) > 0 ||
-        Math.abs(draft.kc2) > 0 ||
-        Math.abs(draft.kc3) > 0));
+  const effectiveCubicEnabled = draft.activateRequiredPhysics
+    ? draft.cubicEnabled ||
+      Math.abs(draft.kc1) > 0 ||
+      Math.abs(draft.kc2) > 0 ||
+      Math.abs(draft.kc3) > 0
+    : draft.cubicEnabled;
   const cubicChanged =
-    autoCubicEnabled !== prev.cubicEnabled ||
+    effectiveCubicEnabled !== prev.cubicEnabled ||
+    (draft.activateRequiredPhysics &&
+      effectiveCubicEnabled &&
+      committedStackState.get("cubic_anisotropy") !== true) ||
     draft.kc1 !== prev.kc1 ||
     draft.kc2 !== prev.kc2 ||
     draft.kc3 !== prev.kc3 ||
@@ -135,9 +291,9 @@ export async function syncMaterialPhysicsAutoActivation(
       cubicKind,
       {
         base_revision: latestRevision,
-        enabled: autoCubicEnabled,
+        enabled: effectiveCubicEnabled,
         present:
-          autoCubicEnabled ||
+          effectiveCubicEnabled ||
           Math.abs(draft.kc1) > 0 ||
           Math.abs(draft.kc2) > 0 ||
           Math.abs(draft.kc3) > 0,
@@ -163,57 +319,35 @@ export async function syncMaterialPhysicsAutoActivation(
     );
   }
 
-  // Auto-activate canonical physics interactions from material parameters
-  // when a material is newly assigned OR a parameter transitions to non-zero
-  // (only for interactions not yet present on the object so manual disables are respected).
-  const newlyAssignedMaterial =
-    draft.pendingNewMaterial ||
-    (Boolean(draft.materialId) && draft.materialId !== prev.materialId);
+  // Explicit opt-in physics activation ONLY (ADR 0086). Never activates silently.
   if (
+    draft.activateRequiredPhysics &&
     draft.isMagneticBody &&
-    materialTouched &&
     typeof api.model.patchObjectInteraction === "function"
   ) {
-    const committedObj = latestCommittedScene?.objects?.find(
-      (o) => o.id === objectId,
-    );
-    const existingStack = Array.isArray(
-      (committedObj as unknown as { physics_stack?: unknown[] } | undefined)
-        ?.physics_stack,
-    )
-      ? (committedObj as unknown as { physics_stack: unknown[] }).physics_stack
-      : [];
-    const stackKinds = new Set(
-      existingStack
-        .map((entry) =>
-          entry && typeof entry === "object"
-            ? (entry as Record<string, unknown>).kind
-            : null,
-        )
-        .filter((k): k is string => typeof k === "string"),
-    );
-    const aexActivated =
-      draft.aexSet &&
-      draft.aex > 0 &&
-      (newlyAssignedMaterial || !prev.aexSet || prev.aex <= 0);
-    const dindActivated =
-      draft.dindSet &&
-      draft.dind !== 0 &&
-      (newlyAssignedMaterial || !prev.dindSet || prev.dind === 0);
-    const dbulkActivated =
-      draft.dbulkSet &&
-      draft.dbulk !== 0 &&
-      (newlyAssignedMaterial || !prev.dbulkSet || prev.dbulk === 0);
-    const autoKinds: Array<{ kind: ObjectInteractionKind; condition: boolean }> = [
-      { kind: "exchange", condition: aexActivated },
-      { kind: "interfacial_dmi", condition: dindActivated },
+    const optInKinds: ReadonlyArray<{
+      kind: ObjectInteractionKind;
+      label: string;
+      condition: boolean;
+    }> = [
+      {
+        kind: "exchange",
+        label: "Exchange",
+        condition: draft.aexSet && draft.aex > 0,
+      },
+      {
+        kind: "interfacial_dmi",
+        label: "Interfacial DMI",
+        condition: draft.dindSet && draft.dind !== 0,
+      },
       {
         kind: "bulk_dmi" as unknown as ObjectInteractionKind,
-        condition: dbulkActivated,
+        label: "Bulk DMI",
+        condition: draft.dbulkSet && draft.dbulk !== 0,
       },
     ];
-    for (const { kind, condition } of autoKinds) {
-      if (!condition || stackKinds.has(kind)) continue;
+    for (const { kind, label, condition } of optInKinds) {
+      if (!condition || committedStackState.get(kind) === true) continue;
       try {
         const ack = await api.model.patchObjectInteraction(
           objectId,
@@ -232,53 +366,65 @@ export async function syncMaterialPhysicsAutoActivation(
           resolveObjectInteractionResourceKey(objectId, kind),
           fallbackRevision(latestRevision),
         );
-      } catch {
-        // Best-effort auto-activation: never fail material save if lane/endpoint rejects.
+      } catch (error) {
+        activationErrors.push({
+          module: kind,
+          label,
+          message: errorMessage(error),
+        });
       }
     }
-    const studyObj = (
-      latestCommittedScene as unknown as {
-        study?: { demag_enabled?: boolean; exchange_enabled?: boolean };
-      } | null
-    )?.study;
-    const enableDemag =
-      draft.msSet &&
-      draft.ms > 0 &&
-      (newlyAssignedMaterial || !prev.msSet || prev.ms <= 0) &&
-      studyObj?.demag_enabled === false;
-    const enableExchange =
-      aexActivated && studyObj?.exchange_enabled === false;
-    if (
-      (enableDemag || enableExchange) &&
-      typeof api.model.commitTransaction === "function"
-    ) {
-      try {
-        const studyTx = await api.model.commitTransaction(
-          {
-            ...(latestRevision !== null ? { base_revision: latestRevision } : {}),
-            kind: "merge_patch",
-            merge_patch: {
-              study: {
-                ...(enableDemag ? { demag_enabled: true } : {}),
-                ...(enableExchange ? { exchange_enabled: true } : {}),
+
+    if (!studyFlagsAlreadyCommitted) {
+      const studyFlags = readCommittedStudyPhysicsFlags(
+        latestCommittedScene ?? sceneData,
+      );
+      const enableDemag =
+        draft.msSet && draft.ms > 0 && studyFlags.demagEnabled === false;
+      const enableExchange =
+        draft.aexSet && draft.aex > 0 && studyFlags.exchangeEnabled === false;
+      if (
+        (enableDemag || enableExchange) &&
+        typeof api.model.commitTransaction === "function"
+      ) {
+        try {
+          const studyTx = await api.model.commitTransaction(
+            {
+              ...(latestRevision !== null
+                ? { base_revision: latestRevision }
+                : {}),
+              kind: "merge_patch",
+              merge_patch: {
+                study: {
+                  ...(enableDemag ? { demag_enabled: true } : {}),
+                  ...(enableExchange ? { exchange_enabled: true } : {}),
+                },
               },
             },
-          },
-          requestScopeOptions,
-        );
-        latestRevision = studyTx.scene_revision;
-        latestCommittedScene = studyTx.committed_scene;
-        interactionTouched = true;
-        publishCommittedSceneResource(
-          resources,
-          studyTx.committed_scene,
-          studyTx.scene_revision,
-          undefined,
-          true,
-          sessionScopeKey,
-        );
-      } catch {
-        // Best-effort study flag activation.
+            requestScopeOptions,
+          );
+          latestRevision = studyTx.scene_revision;
+          latestCommittedScene = studyTx.committed_scene;
+          interactionTouched = true;
+          publishCommittedSceneResource(
+            resources,
+            studyTx.committed_scene,
+            studyTx.scene_revision,
+            undefined,
+            true,
+            sessionScopeKey,
+          );
+        } catch (error) {
+          const labels = [
+            ...(enableDemag ? ["Demag"] : []),
+            ...(enableExchange ? ["Exchange (study)"] : []),
+          ];
+          activationErrors.push({
+            module: "study.physics_flags",
+            label: labels.join(" & "),
+            message: errorMessage(error),
+          });
+        }
       }
     }
   }
@@ -287,6 +433,7 @@ export async function syncMaterialPhysicsAutoActivation(
     latestRevision,
     latestCommittedScene,
     interactionTouched,
+    activationErrors,
   };
 }
 
@@ -317,10 +464,12 @@ export async function commitObjectMaterialDraft({
 }: CommitObjectMaterialDraftParams): Promise<{
   committed_scene: SceneResource | null;
   scene_revision: number | null;
+  activationErrors: readonly PhysicsActivationError[];
 }> {
   let latestRevision = baseRevision ?? sceneData?.revision ?? null;
   let latestCommittedScene: SceneResource | null = null;
   let materialTouched = false;
+  let studyFlagsAlreadyCommitted = false;
   const invalidatedMaterialIds = new Set<string>();
   if (prev.materialId) {
     invalidatedMaterialIds.add(prev.materialId);
@@ -505,6 +654,26 @@ export async function commitObjectMaterialDraft({
         sceneData?.current_transports,
         draft.sigma !== prev.sigma,
       );
+      // Bundle opt-in study physics flags into the same merge_patch transaction
+      // to avoid a redundant commitTransaction round-trip.
+      if (draft.activateRequiredPhysics && draft.isMagneticBody) {
+        const studyFlags = readCommittedStudyPhysicsFlags(
+          latestCommittedScene ?? sceneData,
+        );
+        const enableDemag =
+          draft.msSet && draft.ms > 0 && studyFlags.demagEnabled === false;
+        const enableExchange =
+          draft.aexSet && draft.aex > 0 && studyFlags.exchangeEnabled === false;
+        if (enableDemag || enableExchange) {
+          const studyPatch = (mergePatch.study ?? {}) as Record<string, unknown>;
+          mergePatch.study = {
+            ...studyPatch,
+            ...(enableDemag ? { demag_enabled: true } : {}),
+            ...(enableExchange ? { exchange_enabled: true } : {}),
+          } as unknown as typeof mergePatch.study;
+          studyFlagsAlreadyCommitted = true;
+        }
+      }
       const mergeTx = await api.model.commitTransaction(
         {
           ...(latestRevision !== null ? { base_revision: latestRevision } : {}),
@@ -531,7 +700,8 @@ export async function commitObjectMaterialDraft({
     objectId,
     draft,
     prev,
-    materialTouched,
+    sceneData,
+    studyFlagsAlreadyCommitted,
     latestRevision,
     latestCommittedScene,
     sessionScopeKey,
@@ -541,7 +711,7 @@ export async function commitObjectMaterialDraft({
   });
   latestRevision = physicsSync.latestRevision;
   latestCommittedScene = physicsSync.latestCommittedScene;
-  const { interactionTouched } = physicsSync;
+  const { interactionTouched, activationErrors } = physicsSync;
 
   const rev = fallbackRevision(latestRevision);
   if (materialTouched) {
@@ -550,15 +720,16 @@ export async function commitObjectMaterialDraft({
       resources.invalidate(resolveMaterialResourceKey(matId), rev);
     }
   }
-  if (interactionTouched) {
+  if (interactionTouched || studyFlagsAlreadyCommitted) {
     invalidateAuthoringMutationDependents(resources, "interaction", rev);
   }
-  if (materialTouched || interactionTouched) {
+  if (materialTouched || interactionTouched || studyFlagsAlreadyCommitted) {
     resources.invalidate(MODEL_PHYSICS_GRAPH_PATH, rev);
   }
 
   return {
     committed_scene: latestCommittedScene,
     scene_revision: latestRevision,
+    activationErrors,
   };
 }

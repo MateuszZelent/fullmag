@@ -1598,14 +1598,53 @@ export function ObjectOverviewInspectorPanel({ selection }: InspectorPanelProps)
             const reqOptions = currentSessionScopeKey
               ? { sessionScopeKey: currentSessionScopeKey }
               : undefined;
+            const expectedPrevRole = roleToApiValue(prev.role);
             const nextRole = roleToApiValue(draft.role);
             const tx = await runAuthoringMutationWithHistory(
               context,
               `Change role ${draft.name.trim()}`,
               async ({ before, baseRevision: capturedRev }) => {
-                const commitRev = latestRevision ?? capturedRev ?? 0;
-                const sourceObjects =
-                  (latestScene ?? before ?? scene.data)?.objects ?? [];
+                // Fetch the freshest authoritative scene before constructing
+                // the objects[] patch so concurrent edits to sibling objects
+                // are never clobbered by stale local cache.
+                let authoritativeScene: SceneResource | null | undefined =
+                  latestScene ?? before ?? scene.data;
+                if (typeof kernel.api.model.scene === "function") {
+                  authoritativeScene = reqOptions
+                    ? await kernel.api.model.scene(reqOptions)
+                    : await kernel.api.model.scene();
+                }
+                const sourceObjects = authoritativeScene?.objects ?? [];
+                const targetObject = sourceObjects.find(
+                  (obj) => obj.id === objectId,
+                );
+                if (!targetObject) {
+                  throw new Error(
+                    `Object "${objectId}" no longer exists in the latest scene.`,
+                  );
+                }
+                const currentServerRole =
+                  typeof targetObject.role === "string" &&
+                  targetObject.role.trim().length > 0
+                    ? targetObject.role.trim().toLowerCase()
+                    : "magnet";
+                if (
+                  currentServerRole !== expectedPrevRole &&
+                  currentServerRole !== nextRole
+                ) {
+                  throw new Error(
+                    `Revision conflict: object "${objectId}" role changed concurrently to "${currentServerRole}". Refresh and retry.`,
+                  );
+                }
+                const commitRev =
+                  typeof authoritativeScene?.revision === "number"
+                    ? authoritativeScene.revision
+                    : (latestRevision ?? capturedRev);
+                if (typeof commitRev !== "number") {
+                  throw new Error(
+                    "Cannot update object role without a known scene base_revision.",
+                  );
+                }
                 const nextObjects = sourceObjects.map((obj) =>
                   obj.id === objectId ? { ...obj, role: nextRole } : obj,
                 );

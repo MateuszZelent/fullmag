@@ -100,7 +100,7 @@ export function MaterialLibraryPickerDialog({
           <DialogHeader>
             <DialogTitle>Assign Reference Material</DialogTitle>
             <DialogDescription>
-              Select a curated micromagnetic standard to stage on this object. Relevant physics interactions (exchange, demag, anisotropy, DMI) activate automatically on Apply.
+              Select a curated micromagnetic standard to stage on this object. Enable &ldquo;Also enable required physics modules on Apply&rdquo; in the Material inspector if you also want to activate matching physics modules.
             </DialogDescription>
           </DialogHeader>
           <div className="flex flex-col gap-2">
