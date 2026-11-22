@@ -359,7 +359,11 @@ describe("Inspector design-system reference contract", () => {
     "ChartInspectorPanel.tsx",
     "ModeVisualizationInspectorPanel.tsx",
     "frequency-domain/FmrPeakInspector.tsx",
-    "frequency-domain/FrequencyDomainResultInspectors.tsx",
+    "../inspectors/results/frequency-domain/FrequencyDomainOverviewSpecs.tsx",
+    "../inspectors/results/frequency-domain/FrequencyDomainEigenSpecs.tsx",
+    "../inspectors/results/frequency-domain/FrequencyDomainFmrSpecs.tsx",
+    "../inspectors/results/frequency-domain/FrequencyDomainComparisonSpec.tsx",
+    "../inspectors/results/frequency-domain/FrequencyDomainResourceSpecs.tsx",
   ])("keeps results panel %s on compact groups", (fileName) => {
     const panel = read(`src/modules/inspector/panels/${fileName}`);
 

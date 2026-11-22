@@ -431,10 +431,13 @@ describe("Inspector permanent CI architecture guard", () => {
 
   it("keeps mesh.root, study.execution, and physics.spin-transport locked to session discretization with zero editable FEM/FDM switchers", () => {
     const meshRootSpec = stripComments(
-      readFileSync(
-        join(inspectorRoot, "panels/mesh-details/MeshDomainSpecs.tsx"),
+      `${readFileSync(
+        join(inspectorRoot, "inspectors/mesh/meshShared.ts"),
         "utf8",
-      ),
+      )}\n${readFileSync(
+        join(inspectorRoot, "inspectors/mesh/MeshRootSpec.tsx"),
+        "utf8",
+      )}`,
     );
     expect(meshRootSpec).toContain("resolveSessionDiscretization");
     expect(meshRootSpec).toContain('label: "Session method"');
@@ -444,10 +447,13 @@ describe("Inspector permanent CI architecture guard", () => {
     expect(meshRootSpec).not.toContain("patchStudy(");
 
     const studyBranchSpec = stripComments(
-      readFileSync(
-        join(inspectorRoot, "panels/study/StudyBranchSpecs.tsx"),
+      `${readFileSync(
+        join(inspectorRoot, "inspectors/study/studyShared.ts"),
         "utf8",
-      ),
+      )}\n${readFileSync(
+        join(inspectorRoot, "inspectors/study/StudyExecutionSpec.tsx"),
+        "utf8",
+      )}`,
     );
     expect(studyBranchSpec).toContain("resolveLockedSessionDiscretization");
     expect(studyBranchSpec).toContain('"Assigned by the session simulation mode"');
@@ -473,5 +479,40 @@ describe("Inspector permanent CI architecture guard", () => {
     expect(spinTransportPanel).not.toMatch(
       /type:\s*["']segmented["'][\s\S]{0,240}?key:\s*["']executionDiscretization["']/,
     );
+  });
+
+  it("enforces Explorer-aligned modular inspector layout (shared/ + 7 branch dirs) and <= 950 LOC per modular file", () => {
+    expect(existsSync(join(inspectorRoot, "shared/index.ts"))).toBe(true);
+    const requiredBranches = [
+      "definitions",
+      "universe",
+      "objects",
+      "mesh",
+      "study",
+      "results",
+      "visualizations",
+    ] as const;
+
+    for (const branch of requiredBranches) {
+      expect(
+        existsSync(join(inspectorRoot, "inspectors", branch, "index.ts")),
+        `Missing Explorer-aligned inspector branch barrel: inspectors/${branch}/index.ts`,
+      ).toBe(true);
+    }
+
+    const modularFiles = collectFiles(
+      join(inspectorRoot, "inspectors"),
+      (_fullPath, name) => /\.(?:ts|tsx)$/.test(name) && !isTestOrSupportFile(name),
+    );
+    expect(modularFiles.length).toBeGreaterThanOrEqual(100);
+
+    const oversized: string[] = [];
+    for (const filePath of modularFiles) {
+      const lineCount = readFileSync(filePath, "utf8").split("\n").length;
+      if (lineCount > 950) {
+        oversized.push(`${toPosixRelative(filePath)} (${lineCount} LOC > 950)`);
+      }
+    }
+    expect(oversized).toEqual([]);
   });
 });
