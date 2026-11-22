@@ -66,7 +66,7 @@ describe("TextureTransformGizmo & 3D surface preview synchronization", () => {
     expect(renderToStaticMarkup(createElement(Viewport3DTextureTransformLayer, props))).toBe("");
   });
 
-  it("handles Q/W/E/R/T keyboard shortcuts and ignores editable inputs", () => {
+  it("scopes Q/W/E/R/T shortcuts to the 3D viewport or active gizmo/binding and ignores editable inputs", () => {
     const listeners = new Map<string, (event: Event) => void>();
     const fakeWindow = {
       addEventListener: (type: string, cb: (event: Event) => void) => {
@@ -77,7 +77,13 @@ describe("TextureTransformGizmo & 3D surface preview synchronization", () => {
       },
     };
     const cleanup = installTextureGizmoKeyboardShortcuts(fakeWindow as never);
-    const dispatchKey = (key: string, targetTag = "DIV") => {
+    const dispatchKey = (
+      key: string,
+      target: {
+        tagName?: string;
+        closest?: (selector: string) => unknown;
+      } = { tagName: "DIV" },
+    ) => {
       const preventDefault = vi.fn();
       listeners.get("keydown")?.({
         key,
@@ -85,36 +91,87 @@ describe("TextureTransformGizmo & 3D surface preview synchronization", () => {
         metaKey: false,
         altKey: false,
         defaultPrevented: false,
-        target: { tagName: targetTag },
+        target,
         preventDefault,
       } as unknown as Event);
       return preventDefault;
     };
+    const viewportCanvasTarget = { tagName: "CANVAS" };
+    const viewportContainerTarget = {
+      tagName: "DIV",
+      closest: (selector: string) =>
+        selector.includes(".fm-viewport-3d") ? { tagName: "DIV" } : null,
+    };
 
     expect(getTextureDraftBridgeSnapshot().gizmoEnabled).toBe(false);
 
-    // Typing "t" inside an INPUT must be ignored
-    expect(dispatchKey("t", "INPUT")).not.toHaveBeenCalled();
+    // Keys outside the 3D viewport with no active gizmo/binding must NOT be intercepted
+    for (const key of ["t", "q", "w", "e", "r"]) {
+      expect(dispatchKey(key, { tagName: "DIV" })).not.toHaveBeenCalled();
+    }
     expect(getTextureDraftBridgeSnapshot().gizmoEnabled).toBe(false);
 
-    // Pressing "T" on viewport toggles gizmo ON
-    expect(dispatchKey("t")).toHaveBeenCalledTimes(1);
+    // Typing "t" inside an INPUT must be ignored even inside a viewport container
+    expect(
+      dispatchKey("t", {
+        tagName: "INPUT",
+        closest: () => ({ tagName: "DIV" }),
+      }),
+    ).not.toHaveBeenCalled();
+    expect(getTextureDraftBridgeSnapshot().gizmoEnabled).toBe(false);
+
+    // Pressing "T" on viewport canvas toggles gizmo ON
+    expect(dispatchKey("t", viewportCanvasTarget)).toHaveBeenCalledTimes(1);
     expect(getTextureDraftBridgeSnapshot().gizmoEnabled).toBe(true);
     expect(getTextureDraftBridgeSnapshot().transformScope).toBe("texture");
 
-    // Q -> view, W -> translate, E -> rotate, R -> scale
-    dispatchKey("q");
+    // Once gizmo is active, Q/W/E/R work even if target is a non-editable container
+    expect(dispatchKey("q", { tagName: "DIV" })).toHaveBeenCalledTimes(1);
     expect(getTextureDraftBridgeSnapshot().gizmoMode).toBe("view");
-    dispatchKey("w");
+    expect(dispatchKey("w", viewportContainerTarget)).toHaveBeenCalledTimes(1);
     expect(getTextureDraftBridgeSnapshot().gizmoMode).toBe("translate");
-    dispatchKey("e");
+    expect(dispatchKey("e", viewportCanvasTarget)).toHaveBeenCalledTimes(1);
     expect(getTextureDraftBridgeSnapshot().gizmoMode).toBe("rotate");
-    dispatchKey("r");
+    expect(dispatchKey("r", viewportCanvasTarget)).toHaveBeenCalledTimes(1);
     expect(getTextureDraftBridgeSnapshot().gizmoMode).toBe("scale");
 
     // Pressing "T" again toggles gizmo OFF
-    dispatchKey("t");
+    expect(dispatchKey("t", viewportCanvasTarget)).toHaveBeenCalledTimes(1);
     expect(getTextureDraftBridgeSnapshot().gizmoEnabled).toBe(false);
+
+    // After gizmo is OFF, outside-viewport keys are again left alone
+    expect(dispatchKey("w", { tagName: "DIV" })).not.toHaveBeenCalled();
+
+    // When an active texture inspector binding exists, T/W work from non-editable targets
+    const owner = Symbol("shortcut-binding");
+    const bounds = resolveTargetBoundsMeters(
+      {
+        revision: 1,
+        objects: [
+          {
+            id: "disk",
+            role: "magnet",
+            geometry: {
+              geometry_kind: "Cylinder",
+              geometry_params: { radius: 50e-9, height: 5e-9 },
+            },
+          },
+        ],
+      } as unknown as SceneResource,
+      { kind: "object", objectId: "disk" },
+    );
+    registerTextureInspectorBinding(owner, {
+      target: { kind: "object", objectId: "disk" },
+      draft: createDefaultMagneticTextureDraft("bloch_skyrmion", bounds, "object"),
+      bounds,
+      patchDraft: vi.fn(),
+      fitCharacteristicSize: vi.fn(),
+      resetTransform: vi.fn(),
+    });
+    expect(dispatchKey("t", { tagName: "DIV" })).toHaveBeenCalledTimes(1);
+    expect(getTextureDraftBridgeSnapshot().gizmoEnabled).toBe(true);
+    // Editable input is still ignored even when activeBinding & gizmoEnabled are true
+    expect(dispatchKey("r", { tagName: "TEXTAREA" })).not.toHaveBeenCalled();
 
     cleanup();
   });

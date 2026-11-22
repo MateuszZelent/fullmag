@@ -1,7 +1,7 @@
 "use client";
 
 import { Activity, Grid3x3, History, Layers, Ruler, Settings2 } from "lucide-react";
-import { useCallback, useMemo, type ReactNode } from "react";
+import { useCallback, useMemo, useState, type ReactNode } from "react";
 
 import { restoreMeshHistoryToDraft } from "@/kernel/authoring/meshBuildHistoryRestore";
 import { createCommandContext } from "@/kernel/commands/commandContext";
@@ -31,6 +31,7 @@ import {
 } from "../../panels/mesh-details/MeshQualityAndHistorySpecViews";
 import { resolveMixedTopologyPresentation } from "../../panels/mesh-details/MixedTopologyProvenanceSection.model";
 import { resolveRetainedMeshArtifact } from "../../panels/mesh-details/useMeshDetailsModel";
+import { MeshRebuildConfirmDialog } from "./MeshRebuildConfirmDialog";
 import {
   asNumber,
   asRecord,
@@ -231,6 +232,17 @@ export function MeshBuildsInspectorSpecPanel({
     [historyEntries],
   );
 
+  const [confirmRebuildOpen, setConfirmRebuildOpen] = useState(false);
+
+  const isAlreadyMaterialized =
+    activeLane === "fdm"
+      ? Boolean(
+          domainMeta.data?.grid?.shape &&
+            domainMeta.data.grid.shape.length >= 3 &&
+            domainMeta.data.grid.shape.every((n) => typeof n === "number" && n > 0),
+        )
+      : Boolean(manifestRes.data);
+
   const handleBuildSharedDomain = useCallback(async () => {
     const cmd = activeLane === "fdm" ? "grid.build-fdm" : "mesh.build-shared-domain";
     await kernel.commands.execute(
@@ -247,6 +259,14 @@ export function MeshBuildsInspectorSpecPanel({
       }),
     );
   }, [activeLane, kernel, sceneRes.data, sessionScopeKey, sessionStatusData]);
+
+  const requestBuildSharedDomain = useCallback(() => {
+    if (isAlreadyMaterialized) {
+      setConfirmRebuildOpen(true);
+      return;
+    }
+    void handleBuildSharedDomain();
+  }, [handleBuildSharedDomain, isAlreadyMaterialized]);
 
   const handleRestoreEntry = useCallback(
     (entry: MeshBuildHistoryEntry) => {
@@ -276,8 +296,14 @@ export function MeshBuildsInspectorSpecPanel({
         primaryHeaderAction: {
           icon: Grid3x3,
           label:
-            activeLane === "fdm" ? "Re-voxelize Grid" : "Build Shared-Domain Mesh",
-          onRun: handleBuildSharedDomain,
+            activeLane === "fdm"
+              ? isAlreadyMaterialized
+                ? "Re-voxelize Grid"
+                : "Build Structured Grid"
+              : isAlreadyMaterialized
+                ? "Rebuild Shared-Domain Mesh"
+                : "Build Shared-Domain Mesh",
+          onRun: requestBuildSharedDomain,
         },
         extraMenuActions: [
           {
@@ -355,11 +381,15 @@ export function MeshBuildsInspectorSpecPanel({
               size="sm"
               type="button"
               variant="secondary"
-              onClick={() => {
-                void handleBuildSharedDomain();
-              }}
+              onClick={requestBuildSharedDomain}
             >
-              {activeLane === "fdm" ? "Re-voxelize Grid" : "Build Shared-Domain Mesh"}
+              {activeLane === "fdm"
+                ? isAlreadyMaterialized
+                  ? "Re-voxelize Grid"
+                  : "Build Structured Grid"
+                : isAlreadyMaterialized
+                  ? "Rebuild Shared-Domain Mesh"
+                  : "Build Shared-Domain Mesh"}
             </Button>
           ),
           icon: Activity,
@@ -522,19 +552,38 @@ export function MeshBuildsInspectorSpecPanel({
       entryOptions,
       femMode,
       freshness,
-      handleBuildSharedDomain,
       handleRestoreEntry,
       historyEntries,
       historyRes.data,
+      isAlreadyMaterialized,
       lastBuildError,
       mixedTopology,
       operationStatuses,
       reportRes.data,
+      requestBuildSharedDomain,
       retainedArtifact,
       stageRows,
       thinFilmDiagnostics,
     ],
   );
 
-  return <SpecInspectorHost baseline={baseline} selection={selection} spec={spec} />;
+  return (
+    <>
+      <SpecInspectorHost baseline={baseline} selection={selection} spec={spec} />
+      <MeshRebuildConfirmDialog
+        actionLabel={
+          activeLane === "fdm" ? "Re-voxelize Grid" : "Rebuild Shared-Domain Mesh"
+        }
+        lane={activeLane === "fdm" ? "fdm" : "fem"}
+        open={confirmRebuildOpen}
+        summary={
+          activeLane === "fdm" && domainMeta.data?.grid?.shape
+            ? domainMeta.data.grid.shape.join(" × ")
+            : null
+        }
+        onConfirm={handleBuildSharedDomain}
+        onOpenChange={setConfirmRebuildOpen}
+      />
+    </>
+  );
 }

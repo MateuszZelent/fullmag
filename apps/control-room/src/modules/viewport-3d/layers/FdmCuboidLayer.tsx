@@ -526,6 +526,7 @@ const FdmCuboidSurfacePass = memo(function FdmCuboidSurfacePass({
     invalidate,
     materialMetalness,
     materialRoughness,
+    renderPlan.surface.visible,
     surfaceMaterial,
     surfaceMaterialColor,
     surfaceOpacity,
@@ -557,7 +558,13 @@ const FdmCuboidSurfacePass = memo(function FdmCuboidSurfacePass({
     material.color.set(wireframeColor);
     material.opacity = wireframeOpacity;
     invalidate();
-  }, [invalidate, wireframeColor, wireframeMaterial, wireframeOpacity]);
+  }, [
+    invalidate,
+    renderPlan.wireframe.visible,
+    wireframeColor,
+    wireframeMaterial,
+    wireframeOpacity,
+  ]);
   useEffect(() => () => tracker.release("geometry", geometry), [geometry, tracker]);
   useEffect(
     () => () => tracker.release("material", surfaceMaterial),
@@ -568,6 +575,8 @@ const FdmCuboidSurfacePass = memo(function FdmCuboidSurfacePass({
     [wireframeMaterial, tracker],
   );
 
+  const uploadedSurfaceMeshRef = useRef<InstancedMesh | null>(null);
+  const uploadedWireframeMeshRef = useRef<InstancedMesh | null>(null);
   const surfaceMatrixRevisionRef = useRef<string | null>(null);
   const wireframeMatrixRevisionRef = useRef<string | null>(null);
   const colorRevisionRef = useRef<string | null>(null);
@@ -575,6 +584,15 @@ const FdmCuboidSurfacePass = memo(function FdmCuboidSurfacePass({
     const surface = surfaceRef.current;
     const wireframe = wireframeRef.current;
     if (!surface || !wireframe) return;
+    if (uploadedSurfaceMeshRef.current !== surface) {
+      uploadedSurfaceMeshRef.current = surface;
+      surfaceMatrixRevisionRef.current = null;
+      colorRevisionRef.current = null;
+    }
+    if (uploadedWireframeMeshRef.current !== wireframe) {
+      uploadedWireframeMeshRef.current = wireframe;
+      wireframeMatrixRevisionRef.current = null;
+    }
     const matrixChanged =
       surfaceMatrixRevisionRef.current !== preparedInstances.contentRevision ||
       wireframeMatrixRevisionRef.current !== preparedInstances.contentRevision;

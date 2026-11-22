@@ -1160,6 +1160,79 @@ function Viewport3DOverlayLayerStack({
   );
 }
 
+export function hasActiveViewport3DFemFieldData(
+  fieldModel: Viewport3DFieldRenderModel | null | undefined,
+): boolean {
+  if (!fieldModel) return false;
+  if (fieldModel.analysisOverlayActive) return true;
+  if (fieldModel.scalarColors) return true;
+  for (const entry of fieldModel.scalarColorsByMode.values()) {
+    if (entry) return true;
+  }
+  for (const partModes of fieldModel.scalarColorsByPartAndMode.values()) {
+    for (const entry of partModes.values()) {
+      if (entry) return true;
+    }
+  }
+  for (const pass of fieldModel.targetPasses.values()) {
+    if (pass.surface.scalarColors) return true;
+  }
+  return false;
+}
+
+export function resolveViewport3DLiveFieldCoveredObjectIds({
+  fdmCuboidLayerEnabled,
+  fdmNativeLayerViews,
+  fdmTargetViews,
+  fieldModel,
+  primitiveModel,
+  savedViewportActive,
+}: {
+  fdmCuboidLayerEnabled: boolean;
+  fdmNativeLayerViews: readonly FdmNativeLayerRenderView[];
+  fdmTargetViews: readonly Viewport3DFdmTargetRenderView[];
+  fieldModel: Viewport3DFieldRenderModel | null | undefined;
+  primitiveModel: Viewport3DPrimitiveRenderModel | null | undefined;
+  savedViewportActive: boolean;
+}): ReadonlySet<string> {
+  const ids = new Set<string>();
+  if (savedViewportActive) return ids;
+
+  // FDM cuboid lane: collect objects from quantitative target/native-layer views.
+  if (fdmCuboidLayerEnabled) {
+    for (const view of fdmTargetViews) {
+      if (view.surfaceColors || view.vectorSegments?.length) {
+        if (
+          view.ownerTarget.kind === "object" &&
+          view.ownerTarget.id.startsWith("object:")
+        ) {
+          ids.add(view.ownerTarget.id.slice("object:".length));
+        }
+      }
+    }
+    for (const view of fdmNativeLayerViews) {
+      if (
+        (view.surfaceColors || view.vectorSegments?.length) &&
+        view.model &&
+        view.model.count > 0
+      ) {
+        ids.add(view.domain.objectId);
+      }
+    }
+  }
+
+  // FEM lane: only cover objects when fieldModel actually carries live field
+  // colors or an active analysis overlay (an empty shell must not suppress
+  // authored magnetization overlays).
+  if (primitiveModel && hasActiveViewport3DFemFieldData(fieldModel)) {
+    for (const obj of primitiveModel.objects) {
+      ids.add(obj.objectId);
+    }
+  }
+
+  return ids;
+}
+
 export function resolveViewport3DRealizedFdmObjectIds({
   fdmNativeLayerViews,
   fdmTargetViews,
@@ -1415,31 +1488,18 @@ function Viewport3DModelLayerStack({
   // Set of objectIds currently covered by an active live discretized solver field.
   // Used by Viewport3DTextureTransformLayer to suppress the static authored
   // magnetization overlay when live simulation results are being rendered.
-  const liveFieldCoveredObjectIds = useMemo(() => {
-    const ids = new Set<string>();
-    // FDM cuboid lane: collect objects from quantitative target/native-layer views.
-    if (fdmCuboidLayerEnabled && !savedViewportActive) {
-      for (const view of fdmTargetViews) {
-        if (view.surfaceColors || view.vectorSegments?.length) {
-          if (view.ownerTarget.kind === "object" && view.ownerTarget.id.startsWith("object:")) {
-            ids.add(view.ownerTarget.id.slice("object:".length));
-          }
-        }
-      }
-      for (const view of fdmNativeLayerViews) {
-        if ((view.surfaceColors || view.vectorSegments?.length) && view.model && view.model.count > 0) {
-          ids.add(view.domain.objectId);
-        }
-      }
-    }
-    // FEM lane: when fieldModel is active, all topology-meshed objects are covered.
-    if (fieldModel && !savedViewportActive && primitiveModel) {
-      for (const obj of primitiveModel.objects) {
-        ids.add(obj.objectId);
-      }
-    }
-    return ids;
-  }, [fdmCuboidLayerEnabled, fdmTargetViews, fdmNativeLayerViews, fieldModel, savedViewportActive, primitiveModel]);
+  const liveFieldCoveredObjectIds = useMemo(
+    () =>
+      resolveViewport3DLiveFieldCoveredObjectIds({
+        fdmCuboidLayerEnabled,
+        fdmNativeLayerViews,
+        fdmTargetViews,
+        fieldModel,
+        primitiveModel,
+        savedViewportActive,
+      }),
+    [fdmCuboidLayerEnabled, fdmTargetViews, fdmNativeLayerViews, fieldModel, savedViewportActive, primitiveModel],
+  );
 
   if (!sceneLayersEnabled) return null;
 

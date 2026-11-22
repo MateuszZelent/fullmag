@@ -17,6 +17,8 @@ import {
 } from "react";
 
 import type {
+  DomainMetaResource,
+  FdmRegionMembershipResource,
   FieldVectorQuery,
   FieldCatalogResource,
   FieldMetaResource,
@@ -32,6 +34,7 @@ import type {
 import {
   asDecodedComplexFieldVector,
   FMRM_INACTIVE_REGION_ID,
+  type DecodedFdmRegionMembership,
   type DecodedFieldVector,
 } from "@/kernel/api/codecs";
 import { ControlRoomApiError } from "@/kernel/api/ControlRoomApi";
@@ -3199,6 +3202,79 @@ export function resolveViewport3DSceneCameraView({
   };
 }
 
+export function resolveViewport3DFdmMembershipRefreshKey({
+  domainMeta,
+  fdmLaneActive,
+  liveViewportResourcesEnabled,
+  membership,
+  membershipStatus,
+}: {
+  domainMeta: DomainMetaResource | null | undefined;
+  fdmLaneActive: boolean;
+  liveViewportResourcesEnabled: boolean;
+  membership: FdmRegionMembershipResource | null | undefined;
+  membershipStatus: string;
+}): string | null {
+  if (!liveViewportResourcesEnabled || !fdmLaneActive) return null;
+  if (membershipStatus === "loading") return null;
+  if (domainMeta?.discretization !== "fdm" || !domainMeta.grid) return null;
+  const shape = domainMeta.grid.shape;
+  if (
+    shape.length < 3 ||
+    shape.some((count) => !Number.isFinite(count) || count <= 0)
+  ) {
+    return null;
+  }
+  const domainGenerationId = domainMeta.generation_id?.trim() ?? "";
+  if (!domainGenerationId) return null;
+  const shapeKey = `${shape[0]}x${shape[1]}x${shape[2]}`;
+  const spacingKey = domainMeta.grid.spacing.slice(0, 3).join(",");
+  if (!membership) {
+    return `missing:${domainGenerationId}:${shapeKey}:${spacingKey}`;
+  }
+  const membershipGenerationId = membership.domain_generation_id?.trim() ?? "";
+  const countsMismatch =
+    membership.counts.length < 3 ||
+    membership.counts[0] !== shape[0] ||
+    membership.counts[1] !== shape[1] ||
+    membership.counts[2] !== shape[2];
+  if (
+    membershipGenerationId !== domainGenerationId ||
+    countsMismatch ||
+    membership.freshness.trim().toLowerCase() !== "current"
+  ) {
+    return `stale:${domainGenerationId}:${shapeKey}:${spacingKey}|membership=${membershipGenerationId}:${membership.grid_fingerprint}:${membership.freshness}`;
+  }
+  return null;
+}
+
+export function resolveViewport3DFdmMembershipBinaryRefreshKey({
+  binary,
+  binaryStatus,
+  fdmLaneActive,
+  liveViewportResourcesEnabled,
+  membership,
+}: {
+  binary: DecodedFdmRegionMembership | null | undefined;
+  binaryStatus: string;
+  fdmLaneActive: boolean;
+  liveViewportResourcesEnabled: boolean;
+  membership: FdmRegionMembershipResource | null | undefined;
+}): string | null {
+  if (!liveViewportResourcesEnabled || !fdmLaneActive || !membership) return null;
+  if (binaryStatus === "loading") return null;
+  const expectedFingerprint = membership.grid_fingerprint?.trim() ?? "";
+  if (!expectedFingerprint) return null;
+  if (
+    !binary ||
+    binary.gridFingerprint !== expectedFingerprint ||
+    binary.cellCount !== membership.cell_count
+  ) {
+    return `${membership.domain_generation_id}:${expectedFingerprint}:${membership.cell_count}`;
+  }
+  return null;
+}
+
 export function useViewport3DSceneModel({
   commandState,
   colors,
@@ -3588,15 +3664,71 @@ export function useViewport3DSceneModel({
     },
     [availableFieldQuantityIds, liveMagnetizationUnavailable, quantityCatalog.data],
   );
+  const fdmMembershipRefreshRef = useRef<string | null>(null);
+  const fdmMembershipBinaryRefreshRef = useRef<string | null>(null);
   const fdmRegionMembership = useFdmRegionMembershipResource({
     enabled: liveViewportResourcesEnabled && fdmLaneActive,
   });
+  const fdmRegionMembershipBinaryRevision = fdmRegionMembership.data
+    ? `${resourceDataRevision(fdmRegionMembership) ?? "0"}:${fdmRegionMembership.data.domain_generation_id}:${fdmRegionMembership.data.grid_fingerprint}`
+    : resourceDataRevision(fdmRegionMembership);
   const fdmRegionMembershipBinary = useFdmRegionMembershipBinaryResource(null, {
     enabled:
       liveViewportResourcesEnabled &&
       Boolean(fdmLaneActive && fdmRegionMembership.data),
-    revision: resourceDataRevision(fdmRegionMembership),
+    revision: fdmRegionMembershipBinaryRevision,
   });
+  // `grid.build-fdm` materializes the execution plan and advances `domainMeta`
+  // without bumping `region_realization_revisions.membership` (which stays 0
+  // when membership is synthesized on demand from the execution plan). Without
+  // explicit reconciliation here, the pre-build 204 `null` membership stays
+  // cached and prevents `FdmCuboidLayer` from replacing the coarse primitive.
+  useEffect(() => {
+    if (!liveViewportResourcesEnabled || !fdmLaneActive) {
+      fdmMembershipRefreshRef.current = null;
+      return;
+    }
+    const refreshKey = resolveViewport3DFdmMembershipRefreshKey({
+      domainMeta: domainMeta.data,
+      fdmLaneActive,
+      liveViewportResourcesEnabled,
+      membership: fdmRegionMembership.data,
+      membershipStatus: fdmRegionMembership.status,
+    });
+    if (!refreshKey || fdmMembershipRefreshRef.current === refreshKey) {
+      return;
+    }
+    fdmMembershipRefreshRef.current = refreshKey;
+    fdmRegionMembership.refetch();
+  }, [
+    domainMeta.data,
+    fdmLaneActive,
+    fdmRegionMembership,
+    liveViewportResourcesEnabled,
+  ]);
+  useEffect(() => {
+    if (!liveViewportResourcesEnabled || !fdmLaneActive) {
+      fdmMembershipBinaryRefreshRef.current = null;
+      return;
+    }
+    const refreshKey = resolveViewport3DFdmMembershipBinaryRefreshKey({
+      binary: fdmRegionMembershipBinary.data,
+      binaryStatus: fdmRegionMembershipBinary.status,
+      fdmLaneActive,
+      liveViewportResourcesEnabled,
+      membership: fdmRegionMembership.data,
+    });
+    if (!refreshKey || fdmMembershipBinaryRefreshRef.current === refreshKey) {
+      return;
+    }
+    fdmMembershipBinaryRefreshRef.current = refreshKey;
+    fdmRegionMembershipBinary.refetch();
+  }, [
+    fdmLaneActive,
+    fdmRegionMembership.data,
+    fdmRegionMembershipBinary,
+    liveViewportResourcesEnabled,
+  ]);
   const fdmDomainPresentation = useMemo(
     () =>
       fdmLaneActive && domainMeta.data?.discretization === "fdm" && domainMeta.data.grid

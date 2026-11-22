@@ -96,13 +96,47 @@ function isEditableKeyboardTarget(target: EventTarget | null): boolean {
   return false;
 }
 
+function isInsideViewport3DContainer(target: EventTarget | null): boolean {
+  if (!target || typeof target !== "object") return false;
+  const el = target as {
+    tagName?: string;
+    classList?: { contains?: (cls: string) => boolean };
+    closest?: (selector: string) => unknown;
+  };
+  if ((el.tagName ?? "").toUpperCase() === "CANVAS") return true;
+  if (
+    el.classList?.contains?.("fm-viewport-3d") ||
+    el.classList?.contains?.("fm-viewport-3d__canvas")
+  ) {
+    return true;
+  }
+  if (typeof el.closest === "function") {
+    return Boolean(
+      el.closest(".fm-viewport-3d, .fm-viewport-3d__canvas, [data-viewport-3d-canvas]"),
+    );
+  }
+  return false;
+}
+
 export function installTextureGizmoKeyboardShortcuts(
   target: Pick<Window, "addEventListener" | "removeEventListener">,
+  options?: {
+    isViewportFocused?: (eventTarget: EventTarget | null) => boolean;
+  },
 ): () => void {
   const onKeyDown = (rawEvent: Event) => {
     const event = rawEvent as KeyboardEvent;
     if (event.defaultPrevented || event.ctrlKey || event.metaKey || event.altKey) return;
     if (isEditableKeyboardTarget(event.target)) return;
+    const bridge = getTextureDraftBridgeSnapshot();
+    const sessionActive = bridge.gizmoEnabled || bridge.activeBinding !== null;
+    const activeElement =
+      typeof document !== "undefined" ? document.activeElement : null;
+    const viewportFocused =
+      options?.isViewportFocused?.(event.target) ??
+      (isInsideViewport3DContainer(event.target) ||
+        isInsideViewport3DContainer(activeElement));
+    if (!sessionActive && !viewportFocused) return;
     if (handleTextureGizmoShortcutKey(event.key)) {
       event.preventDefault();
     }

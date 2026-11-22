@@ -25,6 +25,7 @@ import { Button } from "@/shared/ui/Button";
 import { FdmMeshWorkflowCard } from "../../panels/mesh-details/FdmMeshWorkflowCard";
 import { resolveMeshTopologyCounts } from "../../panels/mesh-details/meshTopologyCounts";
 import { FemMeshReadinessGuideCard } from "../../panels/mesh-guide/FemMeshReadinessGuideCard";
+import { MeshRebuildConfirmDialog } from "./MeshRebuildConfirmDialog";
 import {
   applyMeshRootFemPolicy,
   buildEffectiveFemDefaultsPatch,
@@ -51,6 +52,9 @@ export function MeshRootInspectorSpecPanel({ selection }: InspectorPanelProps): 
   const kernel = useKernel();
   const sessionIdentity = sessionStatusHooks.useSessionResourceIdentity();
   const sessionStatusData = sessionStatusHooks.useSessionStatusSelector((s) => s.data);
+  const sessionStatusRefetch = sessionStatusHooks.useSessionStatusSelector(
+    (s) => s.refetch,
+  );
   const sessionScopeKey = sessionRequestScopeKey(sessionIdentity) ?? undefined;
   const activeLane =
     sessionStatusHooks.useSessionStatusSelector(
@@ -118,6 +122,13 @@ export function MeshRootInspectorSpecPanel({ selection }: InspectorPanelProps): 
     resolvedCounts?.node_count ??
     asNumber(asRecord(manifest.data?.topology_counts)?.nodes);
   const [fdmBuildError, setFdmBuildError] = useState<string | null>(null);
+  const [femDefaultsLoaded, setFemDefaultsLoaded] = useState(false);
+  const [pendingRebuild, setPendingRebuild] = useState<{
+    actionLabel: string;
+    lane: "fdm" | "fem";
+    onConfirm: () => Promise<void>;
+    summary: string | null;
+  } | null>(null);
   const buildingNow = Boolean(activeBuild.data?.active_build);
   const fdmGridBuilt = Boolean(
     domainMeta.data?.grid &&
@@ -148,15 +159,45 @@ export function MeshRootInspectorSpecPanel({ selection }: InspectorPanelProps): 
       setFdmBuildError(null);
       try {
         let latestScene: SceneResource | null = scene.data ?? null;
+        let nextSessionStatus = sessionStatusData ?? null;
         if (isMeshRootFdmDraftModified(draft, base) || !hasAuthoredFdmSizing) {
           const committed = await persistFdmDiscretizationPolicy(draft);
           if (committed) latestScene = committed;
+          const committedRev =
+            asNumber(asRecord(latestScene)?.revision) ??
+            asNumber(asRecord(latestScene)?.scene_revision);
+          const fetchFreshStatus = kernel.api?.sessions?.current?.status;
+          if (typeof fetchFreshStatus === "function") {
+            try {
+              const fresh = await fetchFreshStatus(
+                sessionScopeKey ? { sessionScopeKey } : undefined,
+              );
+              if (fresh) nextSessionStatus = fresh;
+            } catch {
+              // Fall back to advancing the cached status snapshot below.
+            }
+          }
+          if (nextSessionStatus && committedRev !== null) {
+            const prevRev = asNumber(nextSessionStatus.resources?.scene_revision) ?? 0;
+            if (committedRev > prevRev) {
+              nextSessionStatus = {
+                ...nextSessionStatus,
+                resources: {
+                  ...nextSessionStatus.resources,
+                  scene_revision: committedRev,
+                },
+              };
+            }
+          }
+          if (typeof sessionStatusRefetch === "function") {
+            void sessionStatusRefetch();
+          }
         }
         const result = await kernel.commands.execute(
           "grid.build-fdm",
           createCommandContext("inspector", kernel, {
             resourceData: {
-              ...(sessionStatusData ? { [SESSION_STATUS_KEY]: sessionStatusData } : {}),
+              ...(nextSessionStatus ? { [SESSION_STATUS_KEY]: nextSessionStatus } : {}),
               ...(latestScene
                 ? { [geometryLifecycleResources.SCENE_RESOURCE_KEY]: latestScene }
                 : {}),
@@ -198,6 +239,21 @@ export function MeshRootInspectorSpecPanel({ selection }: InspectorPanelProps): 
           err instanceof Error ? err.message : "Failed to build shared-domain FEM mesh.",
         );
       }
+    };
+    const requestBuildFemMesh = (sourceDetail: string, actionLabel: string) => {
+      if (manifest.data) {
+        setPendingRebuild({
+          actionLabel,
+          lane: "fem",
+          onConfirm: () => runBuildFemMesh(sourceDetail),
+          summary:
+            femElements !== null && femElements !== undefined
+              ? `${femElements.toLocaleString("en-US")} elements`
+              : null,
+        });
+        return;
+      }
+      void runBuildFemMesh(sourceDetail);
     };
     return {
       id: "mesh.root",
@@ -360,8 +416,8 @@ export function MeshRootInspectorSpecPanel({ selection }: InspectorPanelProps): 
             id: "fem-stale-mesh",
             quickFix: {
               label: "Rebuild Mesh",
-              onApply: async () => {
-                await runBuildFemMesh("mesh.root.notice");
+              onApply: () => {
+                requestBuildFemMesh("mesh.root.notice", "Rebuild Mesh");
               },
             },
             text: `Geometry or mesh policy changed since scene revision ${manifestSourceRev} (current revision ${sceneRev}). Rebuild mesh before running solvers.`,
@@ -460,6 +516,13 @@ export function MeshRootInspectorSpecPanel({ selection }: InspectorPanelProps): 
           defaultOpen: true,
           footer: (ctx) => {
             const modified = isMeshRootFdmDraftModified(ctx.draft, ctx.baseline);
+            const label = fdmGridBuilt
+              ? modified
+                ? "Save & Re-voxelize Grid"
+                : "Re-voxelize Grid"
+              : modified || !hasAuthoredFdmSizing
+                ? "Save & Build Grid"
+                : "Build Structured Grid";
             return (
               <div className="flex flex-wrap gap-2">
                 <Button
@@ -467,16 +530,20 @@ export function MeshRootInspectorSpecPanel({ selection }: InspectorPanelProps): 
                   type="button"
                   variant="primary"
                   onClick={() => {
+                    if (fdmGridBuilt) {
+                      const shape = resolveGridShape(ctx.draft);
+                      setPendingRebuild({
+                        actionLabel: label,
+                        lane: "fdm",
+                        onConfirm: () => runBuildFdmGrid(ctx.draft, ctx.baseline),
+                        summary: `${shape[0]} × ${shape[1]} × ${shape[2]}`,
+                      });
+                      return;
+                    }
                     void runBuildFdmGrid(ctx.draft, ctx.baseline);
                   }}
                 >
-                  {fdmGridBuilt
-                    ? modified
-                      ? "Save & Re-voxelize Grid"
-                      : "Re-voxelize Grid"
-                    : modified || !hasAuthoredFdmSizing
-                      ? "Save & Build Grid"
-                      : "Build Structured Grid"}
+                  {label}
                 </Button>
               </div>
             );
@@ -590,8 +657,13 @@ export function MeshRootInspectorSpecPanel({ selection }: InspectorPanelProps): 
                 variant="secondary"
                 onClick={() => {
                   ctx.patchDraft(
-                    buildEffectiveFemDefaultsPatch(sharedPolicy.data, universePolicy.data),
+                    buildEffectiveFemDefaultsPatch(
+                      sharedPolicy.data,
+                      universePolicy.data,
+                      baseline.hmaxM,
+                    ),
                   );
+                  setFemDefaultsLoaded(true);
                 }}
               >
                 Load Effective Defaults
@@ -601,10 +673,17 @@ export function MeshRootInspectorSpecPanel({ selection }: InspectorPanelProps): 
                 type="button"
                 variant="secondary"
                 onClick={() => {
-                  void runBuildFemMesh("mesh.root.footer");
+                  requestBuildFemMesh(
+                    "mesh.root.footer",
+                    manifest.data
+                      ? "Rebuild Shared-Domain Mesh"
+                      : "Build Shared-Domain Mesh",
+                  );
                 }}
               >
-                Build Shared-Domain Mesh
+                {manifest.data
+                  ? "Rebuild Shared-Domain Mesh"
+                  : "Build Shared-Domain Mesh"}
               </Button>
             </div>
           ),
@@ -735,7 +814,9 @@ export function MeshRootInspectorSpecPanel({ selection }: InspectorPanelProps): 
         },
       ],
       commitBar: {
-        allowCleanApply: (d) => d.lane === "fdm" && !hasAuthoredFdmSizing,
+        allowCleanApply: (d) =>
+          (d.lane === "fdm" && !hasAuthoredFdmSizing) ||
+          (d.lane === "fem" && femDefaultsLoaded),
         applyLabel: (d) =>
           d.lane === "fdm" && !hasAuthoredFdmSizing ? "Apply Grid Sizing" : "Apply",
         cleanMessage: (d) =>
@@ -743,7 +824,9 @@ export function MeshRootInspectorSpecPanel({ selection }: InspectorPanelProps): 
             ? hasAuthoredFdmSizing
               ? "FDM grid sizing matches session policy"
               : "Review cell size Δ and click Apply Grid Sizing or Build Structured Grid"
-            : "FEM shared-domain policy is up to date",
+            : femDefaultsLoaded
+              ? "Effective FEM defaults loaded — click Apply to persist shared-domain policy"
+              : "FEM shared-domain policy is up to date",
         mode: "staged",
         onApply: async (draft) => {
           if (draft.lane === "fdm") {
@@ -756,6 +839,7 @@ export function MeshRootInspectorSpecPanel({ selection }: InspectorPanelProps): 
               sharedPolicyData: sharedPolicy.data,
               universePolicyData: universePolicy.data,
             });
+            setFemDefaultsLoaded(false);
           }
           kernel.resources.invalidate(
             geometryLifecycleResources.MESH_SUMMARY_RESOURCE_KEY,
@@ -767,11 +851,13 @@ export function MeshRootInspectorSpecPanel({ selection }: InspectorPanelProps): 
     };
   }, [
     activeLane,
+    baseline.hmaxM,
     buildingNow,
     domainMeta.data,
     fdmBuildError,
     fdmGridBuilt,
     femActive,
+    femDefaultsLoaded,
     femElements,
     femNodes,
     hasAuthoredFdmSizing,
@@ -783,10 +869,26 @@ export function MeshRootInspectorSpecPanel({ selection }: InspectorPanelProps): 
     sceneRev,
     sessionScopeKey,
     sessionStatusData,
+    sessionStatusRefetch,
     sharedPolicy.data,
     summary.data,
     universePolicy.data,
   ]);
 
-  return <SpecInspectorHost baseline={baseline} selection={selection} spec={spec} />;
+  return (
+    <>
+      <SpecInspectorHost baseline={baseline} selection={selection} spec={spec} />
+      <MeshRebuildConfirmDialog
+        actionLabel={pendingRebuild?.actionLabel}
+        busy={buildingNow}
+        lane={pendingRebuild?.lane ?? (femActive ? "fem" : "fdm")}
+        open={pendingRebuild !== null}
+        summary={pendingRebuild?.summary}
+        onConfirm={() => pendingRebuild?.onConfirm()}
+        onOpenChange={(open) => {
+          if (!open) setPendingRebuild(null);
+        }}
+      />
+    </>
+  );
 }

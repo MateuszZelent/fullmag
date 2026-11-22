@@ -264,9 +264,9 @@ export async function persistMeshRootFdmPolicy(input: {
   kernel: ReturnType<typeof useKernel>;
   sceneData: SceneResource | null | undefined;
   sessionScopeKey: string | undefined;
-  universePolicyData: MeshUniverseConfigResource | null | undefined;
+  universePolicyData?: MeshUniverseConfigResource | null | undefined;
 }): Promise<SceneResource | null> {
-  const { draft, kernel, sceneData, sessionScopeKey, universePolicyData } = input;
+  const { draft, kernel, sceneData, sessionScopeKey } = input;
   const reqOptions = sessionScopeKey ? { sessionScopeKey } : undefined;
   const nx = draft.fftSmoothSnap
     ? snapSevenSmooth(draft.gridCountX)
@@ -346,24 +346,6 @@ export async function persistMeshRootFdmPolicy(input: {
       kernel.api.resourceCacheScope,
     );
   }
-  const uniResource: MeshUniverseConfigResource =
-    universePolicyData ?? {
-      config: null,
-      effective_config: null,
-      revision: 0,
-    };
-  if (uniResource.config !== null && uniResource.config !== undefined) {
-    const uniDraft = rebaseAirboxMeshPolicyDraft(
-      draftFromUniverseMeshPolicyResource(uniResource),
-      universePolicyData ?? null,
-    );
-    const builtUni = buildAirboxMeshPolicyReplaceRequest(uniDraft, {
-      lane: "fdm",
-    });
-    if (!("error" in builtUni) && builtUni.request) {
-      await kernel.api.meshing.replaceUniversePolicy(builtUni.request, reqOptions);
-    }
-  }
   invalidateAuthoringMutationDependents(
     kernel.resources,
     "geometry",
@@ -374,10 +356,6 @@ export async function persistMeshRootFdmPolicy(input: {
     `w5:${Date.now()}`,
   );
   kernel.resources.invalidate(SESSION_STATUS_KEY, `w5:${Date.now()}`);
-  kernel.resources.invalidate(
-    geometryLifecycleResources.MESH_UNIVERSE_POLICY_RESOURCE_KEY,
-    `w5:${Date.now()}`,
-  );
   return committedScene ?? null;
 }
 
@@ -447,18 +425,34 @@ export async function applyMeshRootFemPolicy(input: {
       revision: 0,
     };
   if (uniResource.config !== null && uniResource.config !== undefined) {
-    const uniDraft = rebaseAirboxMeshPolicyDraft(
-      {
-        ...draftFromUniverseMeshPolicyResource(uniResource),
-        narrowRegionResolution: String(draft.narrowRegionResolution),
-      },
-      universePolicyData ?? null,
-    );
-    const builtUni = buildAirboxMeshPolicyReplaceRequest(uniDraft, {
-      lane: "fem",
-    });
-    if (!("error" in builtUni) && builtUni.request) {
-      await kernel.api.meshing.replaceUniversePolicy(builtUni.request, reqOptions);
+    const baseUniDraft = draftFromUniverseMeshPolicyResource(uniResource);
+    const existingAirboxHmax = asNumber(baseUniDraft.airboxHmax);
+    // Backend rejects `airbox_narrow_region_resolution` unless `airbox_hmax`
+    // (maximum_element_size) is explicitly configured on the universe policy.
+    if (existingAirboxHmax !== null && existingAirboxHmax > 0) {
+      const uniDraft = rebaseAirboxMeshPolicyDraft(
+        {
+          ...baseUniDraft,
+          narrowRegionResolution: String(draft.narrowRegionResolution),
+        },
+        universePolicyData ?? null,
+      );
+      const builtUni = buildAirboxMeshPolicyReplaceRequest(uniDraft, {
+        lane: "fem",
+      });
+      const builtConfig =
+        !("error" in builtUni) && builtUni.request
+          ? asRecord(builtUni.request.config)
+          : null;
+      const requestAirboxHmax = asNumber(builtConfig?.airbox_hmax);
+      if (
+        !("error" in builtUni) &&
+        builtUni.request &&
+        requestAirboxHmax !== null &&
+        requestAirboxHmax > 0
+      ) {
+        await kernel.api.meshing.replaceUniversePolicy(builtUni.request, reqOptions);
+      }
     }
   }
 
@@ -483,6 +477,7 @@ export async function applyMeshRootFemPolicy(input: {
 export function buildEffectiveFemDefaultsPatch(
   sharedPolicyData: MeshSharedDomainConfigResource | null | undefined,
   universePolicyData: MeshUniverseConfigResource | null | undefined,
+  fallbackHmaxM?: number | null,
 ): Partial<MeshRootDraft> {
   const sharedEffective = asRecord(asRecord(sharedPolicyData)?.effective_config);
   const effShared = draftFromEffectiveSharedDomainResource(
@@ -508,7 +503,17 @@ export function buildEffectiveFemDefaultsPatch(
     optimizeMethod: effShared.optimizeMethod || "Netgen",
     optimizeQuality: effShared.optimize,
   };
-  const hmax = asNumber(effShared.hMax) ?? asNumber(effUni.airboxHmax);
+  const fallbackPositiveHmax =
+    typeof fallbackHmaxM === "number" &&
+    Number.isFinite(fallbackHmaxM) &&
+    fallbackHmaxM > 0
+      ? fallbackHmaxM
+      : null;
+  const hmax =
+    asNumber(effShared.hMax) ??
+    asNumber(effUni.airboxHmax) ??
+    fallbackPositiveHmax ??
+    5e-9;
   const hmin = asNumber(effShared.hMin) ?? asNumber(effUni.airboxHmin);
   const growth =
     asNumber(effShared.growthRate) ?? asNumber(effUni.airboxGrowthRate);
@@ -517,7 +522,7 @@ export function buildEffectiveFemDefaultsPatch(
   const narrow =
     asNumber(effShared.narrowRegionResolution) ??
     asNumber(effUni.narrowRegionResolution);
-  if (hmax !== null && hmax > 0) patch.hmaxM = hmax;
+  patch.hmaxM = hmax > 0 ? hmax : 5e-9;
   if (hmin !== null && hmin > 0) patch.hminM = hmin;
   if (growth !== null && growth > 0) patch.growthRate = growth;
   if (curv !== null && curv > 0) patch.curvatureFactor = curv;

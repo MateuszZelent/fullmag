@@ -27,6 +27,7 @@ import { resolveFdmDisplaySampling } from "@/shared/domain/mesh/fdmDisplaySampli
 
 import type { FdmGridLegendEntry } from "../../../panels/fdm-grid/fdmGridInspectorModel";
 import { FdmMeshWorkflowCard } from "../../../panels/mesh-details/FdmMeshWorkflowCard";
+import { MeshRebuildConfirmDialog } from "../MeshRebuildConfirmDialog";
 import {
   buildFdmGridBreadcrumbs,
   buildFdmGridNotices,
@@ -68,6 +69,7 @@ export function FdmGridInspectorSpecPanel({ selection }: InspectorPanelProps): R
     tone: "info" | "warn" | "err";
     text: string;
   } | null>(null);
+  const [confirmRebuildOpen, setConfirmRebuildOpen] = useState(false);
 
   const { ownerObjectId, regionId, scope } = useMemo(
     () => resolveGridSubScope(selection),
@@ -190,6 +192,15 @@ export function FdmGridInspectorSpecPanel({ selection }: InspectorPanelProps): R
     [domainMeta.data, membership, origin, shape, spacing, totalCells],
   );
 
+  const isGridMaterialized = totalCells > 0 && Boolean(membership) && isMembershipCompatible;
+  const requestBuildFdmGrid = useCallback(() => {
+    if (isGridMaterialized) {
+      setConfirmRebuildOpen(true);
+      return;
+    }
+    void executeBuildFdmGrid();
+  }, [executeBuildFdmGrid, isGridMaterialized]);
+
   const validatedSupport = useMemo(
     () =>
       membership && isMembershipCompatible
@@ -292,6 +303,14 @@ export function FdmGridInspectorSpecPanel({ selection }: InspectorPanelProps): R
       header: {
         breadcrumbs: buildFdmGridBreadcrumbs(scope, regionId),
         canFitView: true,
+        primaryHeaderAction:
+          scope === "domain" || scope === "descriptor"
+            ? {
+                icon: Grid3x3,
+                label: isGridMaterialized ? "Re-voxelize Grid" : "Build Structured Grid",
+                onRun: requestBuildFdmGrid,
+              }
+            : undefined,
         extraMenuActions: [
           {
             icon: Ruler,
@@ -760,6 +779,7 @@ export function FdmGridInspectorSpecPanel({ selection }: InspectorPanelProps): R
     executeBuildFdmGrid,
     hasPersistedOverride,
     isAirboxTarget,
+    isGridMaterialized,
     isMembershipCompatible,
     isMultilayer,
     legend,
@@ -770,6 +790,7 @@ export function FdmGridInspectorSpecPanel({ selection }: InspectorPanelProps): R
     origin,
     ownerObjectId,
     regionId,
+    requestBuildFdmGrid,
     resetVizTarget,
     sceneRes.data,
     scope,
@@ -784,11 +805,25 @@ export function FdmGridInspectorSpecPanel({ selection }: InspectorPanelProps): R
   ]);
 
   return (
-    <SpecInspectorHost
-      baseline={baseline}
-      selection={selection}
-      spec={spec}
-      onAfterFieldChange={handleAfterFieldChange}
-    />
+    <>
+      <SpecInspectorHost
+        baseline={baseline}
+        selection={selection}
+        spec={spec}
+        onAfterFieldChange={handleAfterFieldChange}
+      />
+      <MeshRebuildConfirmDialog
+        actionLabel="Re-voxelize Grid"
+        lane="fdm"
+        open={confirmRebuildOpen}
+        summary={
+          totalCells > 0
+            ? `${shape.join(" × ")} · ${totalCells.toLocaleString("en-US")} cells`
+            : null
+        }
+        onConfirm={executeBuildFdmGrid}
+        onOpenChange={setConfirmRebuildOpen}
+      />
+    </>
   );
 }

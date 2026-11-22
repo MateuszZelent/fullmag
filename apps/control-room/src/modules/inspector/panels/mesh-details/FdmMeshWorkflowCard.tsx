@@ -27,6 +27,7 @@ import { readStudyStageSource } from "@/shared/domain/study/studyStageSource";
 import { Badge } from "@/shared/ui/Badge";
 import { Button } from "@/shared/ui/Button";
 
+import { MeshRebuildConfirmDialog } from "../../inspectors/mesh/MeshRebuildConfirmDialog";
 import { createStudyGlobalDraft } from "../StudyGlobalAuthoringModel";
 import {
   buildStudyStagesMergePatch,
@@ -417,6 +418,7 @@ export function FdmMeshWorkflowCard({
   const kernel = useKernel();
   const [addingStage, setAddingStage] = useState(false);
   const [runningBuild, setRunningBuild] = useState(false);
+  const [confirmRebuildOpen, setConfirmRebuildOpen] = useState(false);
   const [localError, setLocalError] = useState<string | null>(null);
 
   const workflow = useMemo(
@@ -990,11 +992,30 @@ export function FdmMeshWorkflowCard({
         size="sm"
         type="button"
         variant={isGridBuilt && !cellSizeModified ? "secondary" : "primary"}
-        onClick={() => void handleBuildClick()}
+        onClick={() => {
+          if (isGridBuilt) {
+            setConfirmRebuildOpen(true);
+            return;
+          }
+          void handleBuildClick();
+        }}
       >
         <Grid3x3 aria-hidden="true" size={14} />
         <span>{primaryBuildLabel}</span>
       </Button>
+      <MeshRebuildConfirmDialog
+        actionLabel={primaryBuildLabel}
+        busy={isBusy}
+        lane="fdm"
+        open={confirmRebuildOpen}
+        summary={
+          workflow.step4BuildGrid.shapeText && workflow.step4BuildGrid.voxelCount > 0
+            ? `${workflow.step4BuildGrid.shapeText} · ${workflow.step4BuildGrid.voxelCount.toLocaleString("en-US")} cells`
+            : workflow.step4BuildGrid.shapeText
+        }
+        onConfirm={handleBuildClick}
+        onOpenChange={setConfirmRebuildOpen}
+      />
     </section>
   );
 }

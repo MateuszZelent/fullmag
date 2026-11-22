@@ -508,6 +508,20 @@ function resolveFdmMembershipObjectIds(
     );
     if (objectId) objectIds.add(objectId);
   }
+  if (membership.region_legend.length === 0 && sceneObjectIds?.size === 1) {
+    const soleSceneObjectId = [...sceneObjectIds]
+      .map((sceneId) => normalizeMembershipObjectId(sceneId))
+      .filter((sceneId): sceneId is string => Boolean(sceneId))
+      .map(canonicalVisualizationSceneObjectId)[0];
+    if (soleSceneObjectId) {
+      // A homogeneous single-object scene has only one possible authored owner
+      // for active-unassigned (region_id = 0) cells. When backend membership
+      // omits object_ids or emits a magnet/geometry alias that differs from the
+      // sole authored scene object id, bind directly to that sole scene object
+      // so visualization settings and realized-object suppression align.
+      return new Set([soleSceneObjectId]);
+    }
+  }
   return objectIds;
 }
 

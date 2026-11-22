@@ -8,7 +8,7 @@ import {
   Settings2,
   ShieldCheck,
 } from "lucide-react";
-import { useCallback, useMemo, type ReactNode } from "react";
+import { useCallback, useMemo, useState, type ReactNode } from "react";
 
 import { createCommandContext } from "@/kernel/commands/commandContext";
 import { useKernel } from "@/kernel/KernelContext";
@@ -41,6 +41,7 @@ import {
   type SharedDomainPolicyDraft,
 } from "../../panels/mesh-details/sharedDomainMeshPolicyDraft";
 import { recordField } from "../../panels/MeshResourceView";
+import { MeshRebuildConfirmDialog } from "./MeshRebuildConfirmDialog";
 import {
   asNumber,
   asRecord,
@@ -76,6 +77,29 @@ export function MeshSharedDomainInspectorSpecPanel({
   const activeBuild = geometryLifecycleResources.useMeshBuildCurrent();
   const sharedReport = geometryLifecycleResources.useMeshSharedDomainReportResource();
   const capabilities = useSafeMeshCapabilitiesResource();
+  const [confirmRebuildOpen, setConfirmRebuildOpen] = useState(false);
+
+  const executeBuildSharedDomain = useCallback(() => {
+    void kernel.commands.execute(
+      "mesh.build-shared-domain",
+      createCommandContext("inspector", kernel, {
+        resourceData: {
+          ...(sessionStatusData ? { [SESSION_STATUS_KEY]: sessionStatusData } : {}),
+          ...(scene.data
+            ? { [geometryLifecycleResources.SCENE_RESOURCE_KEY]: scene.data }
+            : {}),
+          ...(capabilities.data
+            ? {
+                [geometryLifecycleResources.MESH_CAPABILITIES_RESOURCE_KEY]:
+                  capabilities.data,
+              }
+            : {}),
+        },
+        sessionScopeKey: sessionScopeKey ?? null,
+        sourceDetail: "mesh.shared-domain.footer",
+      }),
+    );
+  }, [capabilities.data, kernel, scene.data, sessionScopeKey, sessionStatusData]);
 
   const baseline = useMemo<SharedDomainSpecDraft>(() => {
     const parsed = draftFromSharedDomainResource(policy.data ?? null);
@@ -257,28 +281,14 @@ export function MeshSharedDomainInspectorSpecPanel({
                 type="button"
                 variant="primary"
                 onClick={() => {
-                  void kernel.commands.execute(
-                    "mesh.build-shared-domain",
-                    createCommandContext("inspector", kernel, {
-                      resourceData: {
-                        ...(sessionStatusData ? { [SESSION_STATUS_KEY]: sessionStatusData } : {}),
-                        ...(scene.data
-                          ? { [geometryLifecycleResources.SCENE_RESOURCE_KEY]: scene.data }
-                          : {}),
-                        ...(capabilities.data
-                          ? {
-                              [geometryLifecycleResources.MESH_CAPABILITIES_RESOURCE_KEY]:
-                                capabilities.data,
-                            }
-                          : {}),
-                      },
-                      sessionScopeKey: sessionScopeKey ?? null,
-                      sourceDetail: "mesh.shared-domain.footer",
-                    }),
-                  );
+                  if (manifestRec) {
+                    setConfirmRebuildOpen(true);
+                    return;
+                  }
+                  executeBuildSharedDomain();
                 }}
               >
-                Build Shared-Domain Mesh
+                {manifestRec ? "Rebuild Shared-Domain Mesh" : "Build Shared-Domain Mesh"}
               </Button>
             </div>
           ),
@@ -596,9 +606,9 @@ export function MeshSharedDomainInspectorSpecPanel({
       },
     };
   }, [
-    capabilities.data,
     counts,
     editorCapabilities,
+    executeBuildSharedDomain,
     kernel,
     manifest.data,
     manifest.status,
@@ -606,18 +616,30 @@ export function MeshSharedDomainInspectorSpecPanel({
     mixedTopology,
     policy.data,
     qualityStats,
-    scene.data,
     sessionScopeKey,
-    sessionStatusData,
     summary.data,
   ]);
 
   return (
-    <SpecInspectorHost
-      baseline={baseline}
-      selection={selection}
-      spec={spec}
-      onAfterFieldChange={handleAfterFieldChange}
-    />
+    <>
+      <SpecInspectorHost
+        baseline={baseline}
+        selection={selection}
+        spec={spec}
+        onAfterFieldChange={handleAfterFieldChange}
+      />
+      <MeshRebuildConfirmDialog
+        actionLabel="Rebuild Shared-Domain Mesh"
+        lane="fem"
+        open={confirmRebuildOpen}
+        summary={
+          counts?.element_count != null
+            ? `${counts.element_count.toLocaleString("en-US")} elements`
+            : null
+        }
+        onConfirm={executeBuildSharedDomain}
+        onOpenChange={setConfirmRebuildOpen}
+      />
+    </>
   );
 }

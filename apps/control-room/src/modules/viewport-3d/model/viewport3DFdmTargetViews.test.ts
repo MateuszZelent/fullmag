@@ -570,4 +570,41 @@ describe("buildViewport3DFdmTargetViews", () => {
     expect(second.get("region:right:core")).toBe(first.get("region:right:core"));
     expect(second.get("region:left:core")).not.toBe(first.get("region:left:core"));
   });
+
+  it("binds a homogeneous single-object 25x25x5 grid to the sole scene object when object_ids is empty or aliased", () => {
+    const totalCells = 25 * 25 * 5;
+    const realizedRegionIds = new Uint32Array(totalCells); // all 0 (active-unassigned)
+    const source: FdmCuboidInstanceModel = {
+      cellIndices: Uint32Array.from({ length: totalCells }, (_, index) => index),
+      cellSize: [4e-9, 4e-9, 4e-9],
+      centers: new Float32Array(totalCells * 3),
+      count: totalCells,
+      gridShape: [25, 25, 5],
+      matrices: new Float32Array(totalCells * 16),
+      matrixContentRevision: "box-25x25x5-matrix",
+      membershipRevision: "box-25x25x5-membership",
+      regionIds: realizedRegionIds,
+    };
+
+    for (const objectIds of [[], ["New box"], ["New box", "new_box_geom"]]) {
+      const result = buildViewport3DFdmTargetViews({
+        membership: membership({
+          cell_count: totalCells,
+          counts: [25, 25, 5],
+          object_ids: objectIds,
+          region_legend: [],
+        }),
+        model: source,
+        realizedRegionIds,
+        sceneObjectIds: new Set(["new-box-1"]),
+      });
+
+      expect(result.status).toBe("ready");
+      expect(result.views).toHaveLength(1);
+      expect(result.views[0]?.target.id).toBe("object:new-box-1");
+      expect(result.views[0]?.ownerTarget.id).toBe("object:new-box-1");
+      expect(result.views[0]?.instanceOrdinals.length).toBe(totalCells);
+      expect(result.views[0]?.surfaceInstanceOrdinals.length).toBeGreaterThan(0);
+    }
+  });
 });
