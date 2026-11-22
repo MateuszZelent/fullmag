@@ -91,7 +91,7 @@ export function TransportCollectionEditor(props: TransportCollectionEditorProps)
   } catch (error) {
     return (
       <div
-        className="rounded-md border border-[var(--fm-border)] bg-[var(--fm-surface-2)] p-2.5 text-xs text-[var(--fm-danger,#ef4444)]"
+        className="rounded-md border border-[var(--fm-border)] bg-[var(--fm-surface-2)] p-2.5 text-xs text-[var(--fm-danger)]"
         role="alert"
       >
         {error instanceof Error ? error.message : String(error)}

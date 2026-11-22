@@ -2169,7 +2169,7 @@ export function ObjectMaterialInspectorPanel({ selection }: InspectorPanelProps)
               key: "uniaxialAxis",
               type: "vector3",
               label: "Uniaxial symmetry axis",
-              symbol: <>u&#770;</>,
+              symbol: <>{"u\u0302"}</>,
               axisPresets: true,
               normalizeAction: true,
               showWhen: (d) => d.uniaxialEnabled,
@@ -2258,7 +2258,7 @@ export function ObjectMaterialInspectorPanel({ selection }: InspectorPanelProps)
               label: "Crystal axis [100]",
               symbol: (
                 <>
-                  c&#770;<sub>1</sub>
+                  {"c\u0302"}<sub>1</sub>
                 </>
               ),
               axisPresets: true,
@@ -2273,7 +2273,7 @@ export function ObjectMaterialInspectorPanel({ selection }: InspectorPanelProps)
               label: "Crystal axis [010]",
               symbol: (
                 <>
-                  c&#770;<sub>2</sub>
+                  {"c\u0302"}<sub>2</sub>
                 </>
               ),
               axisPresets: true,
@@ -2356,7 +2356,7 @@ export function ObjectMaterialInspectorPanel({ selection }: InspectorPanelProps)
                   )
                 }
               >
-                Orthogonalize c&#8322; (Gram-Schmidt)
+                {"Orthogonalize c\u2082 (Gram-Schmidt)"}
               </Button>
             ) : null,
         },

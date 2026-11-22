@@ -2816,7 +2816,7 @@ export function ObjectRegionMagneticParametersInspectorPanel({
               key: "anisotropyAxis",
               type: "vector3",
               label: "Regional uniaxial axis",
-              symbol: <>u&#770;</>,
+              symbol: <>{"u\u0302"}</>,
               axisPresets: true,
               normalizeAction: true,
               showWhen: (d) => d.axisOverridden,

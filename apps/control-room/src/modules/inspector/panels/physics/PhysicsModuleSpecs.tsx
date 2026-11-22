@@ -2128,7 +2128,7 @@ export function PhysicsModuleInspectorPanel({ selection }: InspectorPanelProps) 
                     key: "uniaxialAxis" as const,
                     type: "vector3" as const,
                     label: "Easy / cone symmetry axis",
-                    symbol: <>u&#770;</>,
+                    symbol: <>{"u\u0302"}</>,
                     axisPresets: true,
                     normalizeAction: true,
                     showWhen: (d: PhysicsModuleDraft) => d.moduleKind === "uniaxial_anisotropy",
@@ -2201,7 +2201,7 @@ export function PhysicsModuleInspectorPanel({ selection }: InspectorPanelProps) 
                     label: "Crystal axis [100]",
                     symbol: (
                       <>
-                        c&#770;<sub>1</sub>
+                        {"c\u0302"}<sub>1</sub>
                       </>
                     ),
                     axisPresets: true,
@@ -2216,7 +2216,7 @@ export function PhysicsModuleInspectorPanel({ selection }: InspectorPanelProps) 
                     label: "Crystal axis [010]",
                     symbol: (
                       <>
-                        c&#770;<sub>2</sub>
+                        {"c\u0302"}<sub>2</sub>
                       </>
                     ),
                     axisPresets: true,
@@ -2250,7 +2250,7 @@ export function PhysicsModuleInspectorPanel({ selection }: InspectorPanelProps) 
                     key: "interfaceNormal" as const,
                     type: "vector3" as const,
                     label: "Symmetry-breaking interface normal",
-                    symbol: <>n&#770;</>,
+                    symbol: <>{"n\u0302"}</>,
                     axisPresets: true,
                     normalizeAction: true,
                     showWhen: (d: PhysicsModuleDraft) => d.moduleKind === "interfacial_dmi",

@@ -14,6 +14,7 @@ import {
 } from "lucide-react";
 import { useCallback, useContext, useMemo, useState, useSyncExternalStore } from "react";
 
+import { SESSION_CURRENT_PATH } from "@/kernel/api/apiPaths";
 import { KernelContext } from "@/kernel/KernelContext";
 import {
   runtimeExplorerDetailStore,
@@ -508,7 +509,7 @@ export function RuntimeResourcesOverviewView({ selection }: InspectorPanelProps)
           label: "Refresh Resources",
           icon: RefreshCw,
           onRun: () => {
-            kernel?.resources.invalidatePrefix("/v2/", "inspector-refresh");
+            kernel?.resources.invalidatePrefix(SESSION_CURRENT_PATH, "inspector-refresh");
           },
         },
       },
