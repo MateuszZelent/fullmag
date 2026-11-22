@@ -21,11 +21,16 @@ async function axisDigest(axis: readonly number[]): Promise<string> {
 }
 
 /** Verify authored f64 little-endian axes before admitting historical binary requests. */
-export function useAntennaSpectrumGridCompatibility(spectrum: AntennaSourceSpectrumResource, grid: AntennaSpectrumKGrid, enabled: boolean): Verdict {
-  const transform = spectrum.sampling.transform;
-  const uHash = spectrum.payloads?.k_u_rad_per_m.sha256;
-  const vHash = spectrum.payloads?.k_v_rad_per_m.sha256;
-  const uCount = spectrum.k_u_count, vCount = spectrum.k_v_count;
+export function useAntennaSpectrumGridCompatibility(
+  spectrum: AntennaSourceSpectrumResource | null | undefined,
+  grid: AntennaSpectrumKGrid,
+  enabled: boolean,
+): Verdict {
+  const transform = spectrum?.sampling?.transform;
+  const uHash = spectrum?.payloads?.k_u_rad_per_m?.sha256;
+  const vHash = spectrum?.payloads?.k_v_rad_per_m?.sha256;
+  const uCount = spectrum?.k_u_count ?? 0;
+  const vCount = spectrum?.k_v_count ?? 0;
   const plan = useMemo(() => {
     if (!enabled) return PENDING;
     if (transform !== "nonuniform_spatial_fft") return grid

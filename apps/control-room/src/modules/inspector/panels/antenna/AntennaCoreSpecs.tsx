@@ -9,32 +9,93 @@ import {
   Radio,
   Ruler,
   SlidersHorizontal,
+  Trash2,
   Zap,
 } from "lucide-react";
-import { useCallback, useMemo, type ReactNode } from "react";
+import { useCallback, useMemo, useState, type ReactNode } from "react";
 
-import type { JsonObject } from "@/kernel/api/apiTypes";
+import type { JsonObject, SceneResource } from "@/kernel/api/apiTypes";
 import { useKernel } from "@/kernel/KernelContext";
 import {
-  SCENE_RESOURCE_KEY,
+  useGeometryDiagnosticsResource,
   useSceneResource,
 } from "@/kernel/resources/geometryLifecycleResources";
 import { sessionRequestScopeKey } from "@/kernel/resources/sessionResourceIdentity";
+import { useGeometryRealizationResource } from "@/kernel/resources/useGeometryRealizationResource";
 import { useSessionResourceIdentity } from "@/kernel/resources/useSessionStatus";
+import {
+  antennaNavigationLinks,
+  type AntennaNavigationLink,
+} from "@/modules/explorer/public";
+import {
+  antennaPortTerminalChoices,
+  type AntennaPortModeResource,
+} from "@/shared/domain/physics/antennaPortValidation";
 import { Badge } from "@/shared/ui/Badge";
 import { Button } from "@/shared/ui/Button";
 
 import type { InspectorPanelProps } from "../../inspectorTypes";
 import type { InspectorNotice, InspectorSpec, UnitOption } from "../../template";
-import { formatLengthSmart } from "../mesh-details/MeshDomainSpecs";
 import { SpecInspectorHost } from "../mesh-details/SpecInspectorHost";
 import {
-  insertWidthStation,
+  buildConductorMaterialTransaction,
+  conductorMaterialContext,
+  type ConductorMaterialDraft,
+} from "./AntennaConductorMaterialModel";
+import {
+  asNumber,
+  asRecord,
+  asString,
+  buildAntennaOriginSelection,
+  ClosedLoopBridgeFieldsEditor,
+  EditablePortBranchesEditor,
+  EditableStationsEditor,
+  EditableWaypointsEditor,
+  executeAntennaMergePatchTransaction,
+  formatLengthSmart,
+  GeometryDiagnosticsView,
+  normalizeSceneForAntennaNavigation,
+  openAntennaNavigationLink,
+  RadixAntennaPortComposer,
+  resolveSelectedAntennaPortId,
+  sanitizeDisplayMessage,
+  TerminalLeadPreparationEditor,
+  TerminalSourceReadoutView,
+  type JsonRecord,
+  type MergePatchTransactionRequest,
+} from "./AntennaCoreHelpers";
+import { resolveAntennaPlacement } from "./AntennaPlacementModel";
+import {
+  buildAntennaPortTransaction,
+  type AntennaPortBranchDraft,
+} from "./AntennaPortEditorModel";
+import { formatAntennaParameter } from "./AntennaReadoutModel";
+import {
+  antennaResourceDependents,
+  buildAntennaResourceTransaction,
+  createAntennaResourceDraft,
+} from "./AntennaResourceEditorModel";
+import {
+  antennaTerminalGeometryBinding,
+  antennaTerminalPreparationErrors,
+  buildAntennaTerminalPreparationTransaction,
+  createAntennaTerminalPreparationDraft,
+  type AntennaTerminalLeadRow,
+  type AntennaTerminalPreparationDraft,
+} from "./AntennaTerminalPreparationModel";
+import { antennaTerminalSourceState } from "./AntennaTerminalSourceModel";
+import {
+  buildMicrostripCircuitPatch,
+  CPW_STATION_FIELDS,
+  MICROSTRIP_LOOP_FIELDS,
+  microstripCircuitDraft,
+  type MicrostripCircuitDraft,
   type WidthStationDraft,
 } from "./MicrostripGeometryEditorModel";
 import { convertRfPortLevel } from "./rfPowerConverter";
 
 const MU0 = 4 * Math.PI * 1e-7;
+const SCENE_ORIGIN_TARGET_VALUE = "__scene_origin__";
 
 const LENGTH_UNITS: readonly [UnitOption, ...UnitOption[]] = [
   { unit: "nm", toSiFactor: 1e-9 },
@@ -84,33 +145,88 @@ export const ALL_ANTENNA_TOPOLOGIES = [
 
 export type AntennaTopologyId = (typeof ALL_ANTENNA_TOPOLOGIES)[number];
 
-type JsonRecord = Record<string, unknown>;
-
-function asRecord(value: unknown): JsonRecord | null {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as JsonRecord)
-    : null;
-}
-
-function asNumber(value: unknown): number | null {
-  if (typeof value === "number" && Number.isFinite(value)) return value;
-  if (typeof value === "string" && value.trim()) {
-    const parsed = Number(value.trim());
-    return Number.isFinite(parsed) ? parsed : null;
-  }
-  return null;
-}
-
-function asString(value: unknown): string | null {
-  return typeof value === "string" && value.trim().length > 0 ? value.trim() : null;
-}
+const DEFAULT_LOOP_PARAMETERS: Readonly<Record<string, string>> = {
+  inlet_connection_conductivity_s_per_m: "5.96e7",
+  inlet_connection_length_m: "200e-9",
+  inlet_connection_offset_v_m: "0",
+  inlet_connection_part_id: "inlet_bridge",
+  inlet_connection_width_m: "120e-9",
+  outlet_connection_conductivity_s_per_m: "5.96e7",
+  outlet_connection_length_m: "200e-9",
+  outlet_connection_offset_v_m: "0",
+  outlet_connection_part_id: "outlet_bridge",
+  outlet_connection_width_m: "120e-9",
+};
 
 // ============================================================================
-// 1. object.antenna — AntennaOverviewInspectorSpecPanel
+// 1. object.antenna — AntennaOverviewInspectorSpecPanel (Composition Navigation)
 // ============================================================================
 
 interface AntennaOverviewDraft {
-  architecture: "solved_conductor" | "regional_mask";
+  readonly viewMode: "composition";
+}
+
+function NavigationLinksList({
+  links,
+  emptyHint,
+  onOpenLink,
+}: {
+  links: readonly AntennaNavigationLink[];
+  emptyHint: string;
+  onOpenLink: (link: AntennaNavigationLink) => void;
+}): ReactNode {
+  if (links.length === 0) {
+    return <p className="fm-inspector-hint">{emptyHint}</p>;
+  }
+  return (
+    <div className="flex flex-col gap-2" data-testid="antenna-navigation-links">
+      {links.map((link) => {
+        const selLabel = link.selection?.label ? sanitizeDisplayMessage(link.selection.label) : null;
+        const baseLabel = sanitizeDisplayMessage(link.label);
+        const fullLabel =
+          selLabel && selLabel !== baseLabel ? `${baseLabel} · ${selLabel}` : baseLabel;
+        const resourceId =
+          link.selection?.ref?.type === "scene-object"
+            ? asString(link.selection.ref.antennaResourceId)
+            : null;
+        return (
+          <div
+            key={link.key}
+            className="flex flex-col gap-1.5 rounded-md border border-fm-subtle p-2.5"
+            data-nav-key={link.key}
+          >
+            <div className="flex items-center justify-between gap-2">
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="text-xs font-medium text-fm-primary">
+                  {fullLabel}
+                </span>
+                {resourceId && link.key !== "conductor" && link.key !== "terminals" ? (
+                  <span className="font-mono text-xs text-fm-muted">({resourceId})</span>
+                ) : null}
+                <Badge variant={link.selection ? "success" : "warning"}>
+                  {link.selection ? "configured" : "unresolved"}
+                </Badge>
+              </div>
+              <Button
+                disabled={!link.selection}
+                size="sm"
+                type="button"
+                variant="secondary"
+                onClick={() => onOpenLink(link)}
+              >
+                Open {fullLabel}
+              </Button>
+            </div>
+            {link.reason ? (
+              <span className="text-xs text-fm-secondary">
+                {sanitizeDisplayMessage(link.reason)}
+              </span>
+            ) : null}
+          </div>
+        );
+      })}
+    </div>
+  );
 }
 
 export function AntennaOverviewInspectorSpecPanel({
@@ -118,8 +234,10 @@ export function AntennaOverviewInspectorSpecPanel({
 }: InspectorPanelProps): ReactNode {
   const kernel = useKernel();
   const sessionScopeKey = sessionRequestScopeKey(useSessionResourceIdentity()) ?? undefined;
-  const objectId = selection.objectId ?? asString(asRecord(selection.ref)?.objectId) ?? "antenna";
+  const objectId =
+    selection.objectId ?? asString(asRecord(selection.ref)?.objectId) ?? "antenna";
   const scene = useSceneResource({ enabled: Boolean(objectId) });
+  const [navError, setNavError] = useState<string | null>(null);
 
   const sceneRec = useMemo(() => asRecord(scene.data), [scene.data]);
   const antennaObj = useMemo(() => {
@@ -128,136 +246,70 @@ export function AntennaOverviewInspectorSpecPanel({
   }, [objectId, sceneRec]);
 
   const antennaName = asString(antennaObj?.name) ?? selection.label ?? objectId;
-  const ports = useMemo(() => {
-    const raw = Array.isArray(sceneRec?.antenna_port_modes)
-      ? sceneRec.antenna_port_modes
-      : [];
-    return raw
-      .map(asRecord)
-      .filter((p) => asString(p?.source_object_id) === objectId);
-  }, [objectId, sceneRec]);
 
-  const solveStages = useMemo(() => {
-    const raw = Array.isArray(sceneRec?.antenna_field_solve_stages)
-      ? sceneRec.antenna_field_solve_stages
-      : [];
-    return raw
-      .map(asRecord)
-      .filter((s) => asString(s?.source_object_id) === objectId);
-  }, [objectId, sceneRec]);
-
-  const hasMaskDrive = useMemo(() => {
-    const fieldDrivesState = asRecord(sceneRec?.field_drives);
-    const maskList = Array.isArray(sceneRec?.mask_field_drives)
-      ? sceneRec.mask_field_drives
-      : Array.isArray(asRecord(sceneRec?.mask_field_drives)?.drives)
-        ? (asRecord(sceneRec?.mask_field_drives)?.drives as unknown[])
-        : Array.isArray(fieldDrivesState?.mask_drives)
-          ? (fieldDrivesState.mask_drives as unknown[])
-          : [];
-    const regionalList = Array.isArray(fieldDrivesState?.drives)
-      ? (fieldDrivesState.drives as unknown[])
-      : Array.isArray(sceneRec?.field_drives)
-        ? sceneRec.field_drives
-        : [];
-    const matchedMask = maskList.map(asRecord).some((d) => {
-      const target = asRecord(d?.target);
-      return (
-        asString(target?.object_id) === objectId ||
-        asString(asRecord(d?.spatial_profile)?.object_id) === objectId ||
-        asString(d?.source_object_id) === objectId
-      );
-    });
-    const matchedRegional = regionalList
-      .map(asRecord)
-      .some((d) => asString(asRecord(d?.spatial_profile)?.object_id) === objectId);
-    return matchedMask || matchedRegional;
-  }, [objectId, sceneRec]);
-
-  const baseline = useMemo<AntennaOverviewDraft>(
-    () => ({
-      architecture:
-        hasMaskDrive && ports.length === 0 ? "regional_mask" : "solved_conductor",
-    }),
-    [hasMaskDrive, ports.length],
+  const originSelection = useMemo(
+    () => buildAntennaOriginSelection(selection, objectId, "object.antenna"),
+    [objectId, selection],
   );
 
-  const checklistSteps = useMemo(
-    () => [
-      {
-        id: "geometry",
-        label: "1. Conductor geometry & standoff placement",
-        ready: Boolean(antennaObj?.geometry),
-        target: {
-          kind: "object.antenna.geometry",
-          label: "Geometry & Layout",
-          nodeId: `model:object:${objectId}:antenna:geometry`,
-          objectId,
-          ref: null,
-        },
-      },
-      {
-        id: "conductor",
-        label: "2. Ohmic conductor conductivity σ",
-        ready: Boolean(asRecord(asRecord(antennaObj?.geometry)?.geometry_params)?.conductivity_s_per_m),
-        target: {
-          kind: "object.antenna.conductor",
-          label: "Conductor",
-          nodeId: `model:object:${objectId}:antenna:conductor`,
-          objectId,
-          ref: null,
-        },
-      },
-      {
-        id: "terminals",
-        label: "3. Current terminals & electrodes",
-        ready: true,
-        target: {
-          kind: "object.antenna.terminals",
-          label: "Terminals",
-          nodeId: `model:object:${objectId}:antenna:terminals`,
-          objectId,
-          ref: null,
-        },
-      },
-      {
-        id: "port",
-        label: "4. RF port impedance Z₀ & branches",
-        ready: ports.length > 0,
-        target: {
-          kind: "object.antenna.port",
-          label: "Port 1",
-          nodeId: `model:object:${objectId}:antenna:port:${asString(ports[0]?.id) ?? "port_1"}`,
-          objectId,
-          ref: null,
-        },
-      },
-      {
-        id: "solution",
-        label: "5. Quasi-static J & Oersted field solve",
-        ready: solveStages.length > 0,
-        target: {
-          kind: "object.antenna.solution",
-          label: "Field Solution",
-          nodeId: `model:object:${objectId}:antenna:solution:${asString(solveStages[0]?.id) ?? "solve_1"}`,
-          objectId,
-          ref: null,
-        },
-      },
-      {
-        id: "drive",
-        label: "6. Waveform drive I(t) & k-space spectrum",
-        ready: solveStages.length > 0 && ports.length > 0,
-        target: {
-          kind: "object.antenna.drive",
-          label: "Drive",
-          nodeId: `model:object:${objectId}:antenna:drive:drive_1`,
-          objectId,
-          ref: null,
-        },
-      },
-    ],
-    [antennaObj, objectId, ports, solveStages],
+  const navLinks = useMemo(() => {
+    if (!scene.data) return [];
+    return antennaNavigationLinks(
+      normalizeSceneForAntennaNavigation(scene.data, objectId),
+      originSelection,
+    );
+  }, [objectId, originSelection, scene.data]);
+
+  const handleOpenLink = useCallback(
+    (link: AntennaNavigationLink) => {
+      openAntennaNavigationLink({
+        kernel,
+        link,
+        objectId,
+        onError: setNavError,
+        originSelection,
+        sessionScopeKey,
+      });
+    },
+    [kernel, objectId, originSelection, sessionScopeKey],
+  );
+
+  const conductorLinks = useMemo(
+    () => navLinks.filter((l) => l.key === "conductor"),
+    [navLinks],
+  );
+  const portLinks = useMemo(
+    () => navLinks.filter((l) => l.key.startsWith("port:")),
+    [navLinks],
+  );
+  const solutionLinks = useMemo(
+    () => navLinks.filter((l) => l.key.startsWith("solution:")),
+    [navLinks],
+  );
+  const projectionLinks = useMemo(
+    () => navLinks.filter((l) => l.key.startsWith("projection:")),
+    [navLinks],
+  );
+  const driveLinks = useMemo(
+    () => navLinks.filter((l) => l.key.startsWith("drive:")),
+    [navLinks],
+  );
+  const spectrumLinks = useMemo(
+    () => navLinks.filter((l) => l.key.startsWith("spectrum:")),
+    [navLinks],
+  );
+  const geometryAndTerminalLinks = useMemo(
+    () => navLinks.filter((l) => l.key === "geometry" || l.key === "terminals"),
+    [navLinks],
+  );
+  const regionalLinks = useMemo(
+    () => navLinks.filter((l) => l.key === "regional"),
+    [navLinks],
+  );
+
+  const baseline = useMemo<AntennaOverviewDraft>(
+    () => ({ viewMode: "composition" }),
+    [],
   );
 
   const spec = useMemo<InspectorSpec<AntennaOverviewDraft>>(
@@ -295,129 +347,219 @@ export function AntennaOverviewInspectorSpecPanel({
         domain: "physics",
         entityId: `antenna:${objectId}`,
         icon: Radio,
-        kindLabel: "Spin-wave RF excitation subsystem",
-        statePill: (d) =>
-          d.architecture === "regional_mask"
-            ? { label: "Analytical mask", tone: "info" }
-            : solveStages.length > 0
-              ? { label: "Configured", tone: "ok" }
+        kindLabel: "Spin-wave RF excitation composition",
+        statePill: () =>
+          solutionLinks.length > 0
+            ? { label: "Configured", tone: "ok" }
+            : portLinks.length > 0
+              ? { label: "Ports authored", tone: "info" }
               : { label: "Setup required", tone: "warn" },
         title: () => `${antennaName} Antenna`,
       },
-      facts: (d) => [
+      facts: () => [
+        { id: "ports", label: "RF ports", value: String(portLinks.length) },
+        { id: "solves", label: "Field solves", value: String(solutionLinks.length) },
         {
-          id: "arch",
-          label: "Architecture",
-          value: d.architecture === "solved_conductor" ? "Solved 3D J → B" : "Regional mask",
+          id: "projections",
+          label: "Projections",
+          value: String(projectionLinks.length),
         },
-        { id: "ports", label: "RF ports", value: String(ports.length) },
-        { id: "solves", label: "Field solves", value: String(solveStages.length) },
+        {
+          id: "drives",
+          label: "Drives / FFT",
+          value: `${driveLinks.length} / ${spectrumLinks.length}`,
+        },
       ],
+      notices: () => {
+        const list: InspectorNotice<AntennaOverviewDraft>[] = [];
+        if (navError) {
+          list.push({
+            id: "nav-stale-err",
+            text: navError,
+            title: "Navigation target changed",
+            tone: "warn",
+          });
+        }
+        return list;
+      },
       sections: [
         {
           defaultOpen: true,
-          icon: Radio,
-          id: "architecture",
+          icon: Zap,
+          id: "conductor",
           rows: [
             {
-              key: "architecture",
-              label: "Excitation architecture",
-              options: [
-                { label: "Solved 3D Conductor (J → B_ant)", value: "solved_conductor" },
-                { label: "Analytical Regional Mask", value: "regional_mask" },
-              ],
-              structural: true,
-              type: "segmented",
-            },
-          ],
-          title: "Antenna excitation architecture",
-        },
-        {
-          defaultOpen: true,
-          icon: Compass,
-          id: "readiness-checklist",
-          rows: [
-            {
-              render: (ctx) =>
-                ctx.draft.architecture === "regional_mask" ? (
-                  <Button
-                    size="sm"
-                    type="button"
-                    variant="secondary"
-                    onClick={() =>
-                      ctx.selectNode({
-                        kind: "object.antenna.regional",
-                        label: "Regional Field Mask",
-                        nodeId: `model:object:${objectId}:antenna:regional`,
-                        objectId,
-                        ref: null,
-                      })
-                    }
-                  >
-                    Open Regional Field Mask Editor
-                  </Button>
-                ) : (
-                  <div className="fm-inspector-stack">
-                    {checklistSteps.map((step) => (
-                      <div key={step.id} className="fm-inspector-checklist-row">
-                        <span>{step.label}</span>
-                        <div className="fm-inspector-inline-actions">
-                          <Badge variant={step.ready ? "success" : "warning"}>
-                            {step.ready ? "Ready" : "Configure"}
-                          </Badge>
-                          <Button
-                            size="sm"
-                            type="button"
-                            variant="ghost"
-                            onClick={() => ctx.selectNode(step.target)}
-                          >
-                            Open
-                          </Button>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                ),
+              render: () => (
+                <NavigationLinksList
+                  emptyHint="No conductor node is configured on this object."
+                  links={conductorLinks}
+                  onOpenLink={handleOpenLink}
+                />
+              ),
               type: "custom",
               wide: true,
             },
           ],
-          title: "6-step antenna readiness checklist",
+          title: "Conductor & charge transport",
+        },
+        {
+          defaultOpen: true,
+          icon: PlugZap,
+          id: "ports",
+          rows: [
+            {
+              render: () => (
+                <NavigationLinksList
+                  emptyHint="No RF ports configured — open Conductor to add a port."
+                  links={portLinks}
+                  onOpenLink={handleOpenLink}
+                />
+              ),
+              type: "custom",
+              wide: true,
+            },
+          ],
+          summary: () => `${portLinks.length} ports`,
+          title: "RF ports",
+        },
+        {
+          defaultOpen: true,
+          icon: Cpu,
+          id: "solutions",
+          rows: [
+            {
+              render: () => (
+                <NavigationLinksList
+                  emptyHint="No quasi-static field solve stages configured for this antenna."
+                  links={solutionLinks}
+                  onOpenLink={handleOpenLink}
+                />
+              ),
+              type: "custom",
+              wide: true,
+            },
+          ],
+          summary: () => `${solutionLinks.length} solves`,
+          title: "Field solves",
+        },
+        {
+          defaultOpen: projectionLinks.length > 0,
+          icon: Layers,
+          id: "projections",
+          rows: [
+            {
+              render: () => (
+                <NavigationLinksList
+                  emptyHint="No target projections configured yet — create one from a Field solve."
+                  links={projectionLinks}
+                  onOpenLink={handleOpenLink}
+                />
+              ),
+              type: "custom",
+              wide: true,
+            },
+          ],
+          summary: () => `${projectionLinks.length} projections`,
+          title: "Target projections",
+        },
+        {
+          defaultOpen: driveLinks.length > 0,
+          icon: Activity,
+          id: "drives",
+          rows: [
+            {
+              render: () => (
+                <NavigationLinksList
+                  emptyHint="No solved current drives configured yet."
+                  links={driveLinks}
+                  onOpenLink={handleOpenLink}
+                />
+              ),
+              type: "custom",
+              wide: true,
+            },
+          ],
+          summary: () => `${driveLinks.length} drives`,
+          title: "Solved current drives",
+        },
+        {
+          defaultOpen: spectrumLinks.length > 0,
+          icon: SlidersHorizontal,
+          id: "spectra",
+          rows: [
+            {
+              render: () => (
+                <NavigationLinksList
+                  emptyHint="No source k-space spectrum requests configured yet."
+                  links={spectrumLinks}
+                  onOpenLink={handleOpenLink}
+                />
+              ),
+              type: "custom",
+              wide: true,
+            },
+          ],
+          summary: () => `${spectrumLinks.length} spectra`,
+          title: "Source k-space spectra",
+        },
+        {
+          defaultOpen: true,
+          icon: Ruler,
+          id: "geometry-terminals",
+          rows: [
+            {
+              render: () => (
+                <NavigationLinksList
+                  emptyHint="Geometry and terminal nodes are not available for this object."
+                  links={geometryAndTerminalLinks}
+                  onOpenLink={handleOpenLink}
+                />
+              ),
+              type: "custom",
+              wide: true,
+            },
+          ],
+          title: "Geometry & terminal preparation",
+        },
+        {
+          defaultOpen: false,
+          icon: Compass,
+          id: "regional",
+          rows: [
+            {
+              render: () => (
+                <NavigationLinksList
+                  emptyHint="No regional field drive node available."
+                  links={regionalLinks}
+                  onOpenLink={handleOpenLink}
+                />
+              ),
+              type: "custom",
+              wide: true,
+            },
+          ],
+          title: "Prescribed regional field drive",
         },
       ],
       commitBar: {
-        cleanMessage: () => "Antenna architecture is synchronized",
-        mode: "staged",
-        onApply: async (draft) => {
-          const baseRev =
-            asNumber(sceneRec?.revision) ?? asNumber(sceneRec?.scene_revision) ?? 0;
-          await kernel.api.model.commitTransaction(
-            {
-              base_revision: baseRev,
-              kind: "merge_patch",
-              patch: {
-                antenna_architectures: {
-                  [objectId]: draft.architecture,
-                },
-              } as JsonObject,
-            } as never,
-            { sessionScopeKey },
-          );
-          kernel.resources.invalidate(SCENE_RESOURCE_KEY, `w5:${Date.now()}`);
-          return true;
-        },
+        mode: "readOnly",
+        statusMessage: () =>
+          "Composition navigation — edit each resource in its own Inspector",
       },
     }),
     [
       antennaName,
-      checklistSteps,
-      kernel.api.model,
-      kernel.resources,
+      conductorLinks,
+      driveLinks,
+      geometryAndTerminalLinks,
+      handleOpenLink,
+      navError,
       objectId,
-      ports.length,
-      sceneRec,
-      sessionScopeKey,
-      solveStages.length,
+      portLinks,
+      projectionLinks,
+      regionalLinks,
+      solutionLinks,
+      spectrumLinks,
     ],
   );
 
@@ -474,6 +616,7 @@ export interface AntennaGeometryAndPlacementDraft {
   bridgeLengthM: number;
   bridgeWidthM: number;
   bridgeConductivitySpm: number;
+  loopParameters: Readonly<Record<string, string>>;
 }
 
 export function createDefaultAntennaGeometryDraft(
@@ -496,13 +639,14 @@ export function createDefaultAntennaGeometryDraft(
     lengthM: 2.4e-6,
     loopFeedGapM: 40e-9,
     loopInnerRadiusM: 250e-9,
+    loopParameters: { ...DEFAULT_LOOP_PARAMETERS },
     loopPitchM: 250e-9,
     loopShape: "circular",
     loopTurns: 1,
     meanderBendRadiusM: 60e-9,
     meanderFingerCount: 4,
     meanderPitchM: 300e-9,
-    placementTargetId: "",
+    placementTargetId: SCENE_ORIGIN_TARGET_VALUE,
     potentialJumpV: 0.25,
     returnOffsetM: 200e-9,
     returnWidthM: 600e-9,
@@ -513,8 +657,24 @@ export function createDefaultAntennaGeometryDraft(
     standoffGapM: 50e-9,
     standoffSide: "above",
     stations: [
-      { rowId: "st:0", s: "0", signalWidthM: "150e-9" },
-      { rowId: "st:1", s: "1", signalWidthM: "150e-9" },
+      {
+        leftGapM: "60e-9",
+        leftGroundWidthM: "200e-9",
+        rightGapM: "60e-9",
+        rightGroundWidthM: "200e-9",
+        rowId: "st:0",
+        s: "0",
+        signalWidthM: "150e-9",
+      },
+      {
+        leftGapM: "60e-9",
+        leftGroundWidthM: "200e-9",
+        rightGapM: "60e-9",
+        rightGroundWidthM: "200e-9",
+        rowId: "st:1",
+        s: "1",
+        signalWidthM: "150e-9",
+      },
     ],
     symmetricCpw: true,
     thicknessM: 50e-9,
@@ -526,17 +686,42 @@ export function createDefaultAntennaGeometryDraft(
   };
 }
 
+function resolveStationScalar(
+  stationRaw: string | undefined,
+  allStationsRaw: readonly (string | undefined)[],
+  topLevelValue: number,
+  defaultSeedValue: number,
+): number {
+  const parsed = stationRaw !== undefined && stationRaw.trim().length > 0 ? Number(stationRaw) : Number.NaN;
+  if (!Number.isFinite(parsed) || parsed <= 0) return topLevelValue;
+  const allAtSeed =
+    allStationsRaw.length > 0 &&
+    allStationsRaw.every((v) => v !== undefined && Number(v) === defaultSeedValue);
+  if (allAtSeed && topLevelValue !== defaultSeedValue) {
+    return topLevelValue;
+  }
+  return parsed;
+}
+
 export function buildAntennaTopologyGeometryPayload(
   draft: AntennaGeometryAndPlacementDraft,
 ): JsonObject {
   switch (draft.topology) {
     case "straight_microstrip": {
+      const stationWidths = draft.stations.map((s) => s.signalWidthM);
       const stations = draft.stations.map((st, idx) => ({
-        s: Number(st.s),
-        signal_width_m:
-          idx === 0 || idx === draft.stations.length - 1
-            ? draft.signalWidthM
-            : Number(st.signalWidthM) || draft.signalWidthM,
+        s:
+          idx === 0
+            ? 0
+            : idx === draft.stations.length - 1
+              ? 1
+              : Number(st.s),
+        signal_width_m: resolveStationScalar(
+          st.signalWidthM,
+          stationWidths,
+          draft.signalWidthM,
+          150e-9,
+        ),
       }));
       return {
         geometry_kind: "MicrostripAntennaLayout",
@@ -559,31 +744,76 @@ export function buildAntennaTopologyGeometryPayload(
     case "cpw":
     case "gsg": {
       const symmetric = draft.topology === "gsg" || draft.symmetricCpw;
-      const rightGap = symmetric ? draft.cpwGapM : draft.cpwRightGapM;
-      const rightGround = symmetric ? draft.groundWidthM : draft.rightGroundWidthM;
+      const rightGapDefault = symmetric ? draft.cpwGapM : draft.cpwRightGapM;
+      const rightGroundDefault = symmetric ? draft.groundWidthM : draft.rightGroundWidthM;
+
+      const stationWidths = draft.stations.map((s) => s.signalWidthM);
+      const leftGaps = draft.stations.map((s) => s.leftGapM);
+      const rightGaps = draft.stations.map((s) => s.rightGapM);
+      const leftGrounds = draft.stations.map((s) => s.leftGroundWidthM);
+      const rightGrounds = draft.stations.map((s) => s.rightGroundWidthM);
+
+      const stations =
+        draft.stations.length >= 2
+          ? draft.stations.map((st, idx) => {
+              const leftGap = resolveStationScalar(
+                st.leftGapM,
+                leftGaps,
+                draft.cpwGapM,
+                60e-9,
+              );
+              const leftGround = resolveStationScalar(
+                st.leftGroundWidthM,
+                leftGrounds,
+                draft.groundWidthM,
+                200e-9,
+              );
+              const rightGap = resolveStationScalar(
+                st.rightGapM,
+                rightGaps,
+                rightGapDefault,
+                60e-9,
+              );
+              const rightGround = resolveStationScalar(
+                st.rightGroundWidthM,
+                rightGrounds,
+                rightGroundDefault,
+                200e-9,
+              );
+              return {
+                left_gap_m: leftGap,
+                left_ground_width_m: leftGround,
+                right_gap_m: rightGap,
+                right_ground_width_m: rightGround,
+                s:
+                  idx === 0
+                    ? 0
+                    : idx === draft.stations.length - 1
+                      ? 1
+                      : Number(st.s),
+                signal_width_m: resolveStationScalar(
+                  st.signalWidthM,
+                  stationWidths,
+                  draft.signalWidthM,
+                  150e-9,
+                ),
+              };
+            })
+          : [0, 1].map((s) => ({
+              left_gap_m: draft.cpwGapM,
+              left_ground_width_m: draft.groundWidthM,
+              right_gap_m: rightGapDefault,
+              right_ground_width_m: rightGroundDefault,
+              s,
+              signal_width_m: draft.signalWidthM,
+            }));
+
       return {
         geometry_kind: "CPWAntennaLayout",
         geometry_params: {
           conductivity_s_per_m: draft.conductivitySpm,
           length_m: draft.lengthM,
-          stations: [
-            {
-              left_gap_m: draft.cpwGapM,
-              left_ground_width_m: draft.groundWidthM,
-              right_gap_m: rightGap,
-              right_ground_width_m: rightGround,
-              s: 0,
-              signal_width_m: draft.signalWidthM,
-            },
-            {
-              left_gap_m: draft.cpwGapM,
-              left_ground_width_m: draft.groundWidthM,
-              right_gap_m: rightGap,
-              right_ground_width_m: rightGround,
-              s: 1,
-              signal_width_m: draft.signalWidthM,
-            },
-          ],
+          stations,
           thickness_m: draft.thicknessM,
         },
       };
@@ -644,23 +874,120 @@ export function buildAntennaTopologyGeometryPayload(
 
 function resolveTopologyFromGeometry(geometry: JsonRecord | null): AntennaTopologyId {
   const kind = asString(geometry?.geometry_kind);
-  if (kind === "CPWAntennaLayout") {
-    const stations = asRecord(geometry?.geometry_params)?.stations;
-    const st0 = Array.isArray(stations) ? asRecord(stations[0]) : null;
-    if (
-      st0 &&
-      asNumber(st0.left_gap_m) === asNumber(st0.right_gap_m) &&
-      asNumber(st0.left_ground_width_m) === asNumber(st0.right_ground_width_m)
-    ) {
-      return "cpw";
-    }
-    return "cpw";
-  }
+  if (kind === "CPWAntennaLayout") return "cpw";
   if (kind === "MeanderAntennaLayout") return "meander";
   if (kind === "InductiveLoopLayout") return "inductive_loop";
   if (kind === "PiecewisePath3DLayout") return "piecewise_3d_path";
   if (kind === "ImportedGeometry") return "external_cad_lead";
   return "straight_microstrip";
+}
+
+function validateStationsDraft(
+  stations: readonly WidthStationDraft[],
+  isCpwLike: boolean,
+): string | null {
+  if (stations.length < 2) {
+    return "At least two width stations (s = 0 and s = 1) are required.";
+  }
+  for (let i = 0; i < stations.length; i++) {
+    const st = stations[i]!;
+    const s = Number(st.s);
+    const w = Number(st.signalWidthM);
+    if (!st.s.trim() || !Number.isFinite(s)) {
+      return `Station ${i + 1} position s must be finite.`;
+    }
+    if (!st.signalWidthM.trim() || !Number.isFinite(w) || w <= 0) {
+      return `Station ${i + 1} signal width must be positive in m.`;
+    }
+    if (i > 0 && s <= Number(stations[i - 1]!.s)) {
+      return "Width station positions s must be strictly increasing.";
+    }
+    if (isCpwLike) {
+      for (const field of CPW_STATION_FIELDS) {
+        const raw = st[field.key];
+        if (raw !== undefined && (!raw.trim() || !Number.isFinite(Number(raw)) || Number(raw) <= 0)) {
+          return `Station ${i + 1} ${field.label} must be positive in m.`;
+        }
+      }
+    }
+  }
+  if (Number(stations[0]!.s) !== 0 || Number(stations.at(-1)!.s) !== 1) {
+    return "Width stations must start at s = 0 and end at s = 1.";
+  }
+  return null;
+}
+
+function validateWaypointsDraft(waypoints: readonly Waypoint3DDraft[]): string | null {
+  if (waypoints.length < 2) {
+    return "At least two 3D waypoints are required.";
+  }
+  for (let i = 0; i < waypoints.length; i++) {
+    const wp = waypoints[i]!;
+    if (
+      !Number.isFinite(wp.xM) ||
+      !Number.isFinite(wp.yM) ||
+      !Number.isFinite(wp.zM) ||
+      !Number.isFinite(wp.bendRadiusM) ||
+      wp.bendRadiusM < 0
+    ) {
+      return `Waypoint ${i + 1} coordinates must be finite and bend radius must be non-negative.`;
+    }
+  }
+  return null;
+}
+
+function validateLoopParametersDraft(
+  parameters: Readonly<Record<string, string>>,
+): string | null {
+  for (const field of MICROSTRIP_LOOP_FIELDS) {
+    const raw = parameters[field.key] ?? "";
+    if (!raw.trim()) {
+      return `${field.label} is required when closed-loop return is enabled.`;
+    }
+    if (field.numeric) {
+      const val = Number(raw);
+      const mustBePositive = !field.key.endsWith("offset_v_m");
+      if (!Number.isFinite(val) || (mustBePositive && val <= 0)) {
+        return `${field.label} must be a finite${mustBePositive ? " positive" : ""} SI value.`;
+      }
+    }
+  }
+  return null;
+}
+
+function hasFullMicrostripCircuitPrerequisites(
+  scene: SceneResource | null | undefined,
+  objectId: string,
+  geometry: JsonObject,
+): boolean {
+  if (!scene) return false;
+  const params = asRecord(geometry.geometry_params);
+  const conductors = Array.isArray(params?.conductors)
+    ? params.conductors.map(asRecord)
+    : [];
+  const hasSignal = conductors.some((c) => typeof c?.id === "string" && c.kind === "signal");
+  const hasReturn = conductors.some((c) => typeof c?.id === "string" && c.kind === "return");
+  if (!hasSignal || !hasReturn) return false;
+
+  const transports = (scene.current_transports ?? []).filter(
+    (ct) =>
+      Array.isArray(ct.domain) &&
+      ct.domain.length === 1 &&
+      asRecord(ct.domain[0])?.object_id === objectId &&
+      asRecord(ct.domain[0])?.region_id === undefined &&
+      ct.model === "ohmic_poisson" &&
+      ct.coupling === "one_way",
+  );
+  if (transports.length !== 1) return false;
+
+  const matchingPorts = (scene.antenna_port_modes ?? []).filter(
+    (p) =>
+      p.source_object_id === objectId &&
+      p.current_transport_id === transports[0]!.name &&
+      Array.isArray(p.branches) &&
+      p.branches.length === 2,
+  );
+  return matchingPorts.length === 1;
 }
 
 function AntennaCrossSectionSchematic({
@@ -755,29 +1082,40 @@ export function AntennaGeometryInspectorSpecPanel({
 }: InspectorPanelProps): ReactNode {
   const kernel = useKernel();
   const sessionScopeKey = sessionRequestScopeKey(useSessionResourceIdentity()) ?? undefined;
-  const objectId = selection.objectId ?? asString(asRecord(selection.ref)?.objectId) ?? "ant-1";
+  const objectId =
+    selection.objectId ?? asString(asRecord(selection.ref)?.objectId) ?? "ant-1";
   const scene = useSceneResource({ enabled: Boolean(objectId) });
+  const realization = useGeometryRealizationResource(Boolean(sessionScopeKey && objectId));
+  const geometryDiagnostics = useGeometryDiagnosticsResource({
+    enabled: Boolean(objectId),
+  });
 
   const sceneRec = useMemo(() => asRecord(scene.data), [scene.data]);
   const objects = useMemo(
-    () => (Array.isArray(sceneRec?.objects) ? sceneRec.objects.map(asRecord).filter(Boolean) : []),
+    () =>
+      Array.isArray(sceneRec?.objects)
+        ? sceneRec.objects.map(asRecord).filter((o): o is JsonRecord => o !== null)
+        : [],
     [sceneRec],
   );
   const antennaObj = useMemo(
-    () => objects.find((o) => asString(o?.id) === objectId) ?? null,
+    () => objects.find((o) => asString(o.id) === objectId) ?? null,
     [objectId, objects],
   );
-  const magneticTargets = useMemo(
-    () =>
-      objects
-        .filter((o) => asString(o?.id) !== objectId)
-        .map((o) => ({
-          label: `${asString(o?.name) ?? asString(o?.id)} (${asString(o?.id)})`,
-          value: asString(o?.id) ?? "",
-        }))
-        .filter((opt) => opt.value.length > 0),
-    [objectId, objects],
-  );
+
+  const magneticTargets = useMemo(() => {
+    const candidates = objects.filter((o) => asString(o.id) !== objectId);
+    const ordered = [
+      ...candidates.filter((o) => Boolean(o.magnetization_ref)),
+      ...candidates.filter((o) => !o.magnetization_ref),
+    ];
+    return ordered
+      .map((o) => ({
+        label: `${asString(o.name) ?? asString(o.id)} (${asString(o.id)})`,
+        value: asString(o.id) ?? "",
+      }))
+      .filter((opt) => opt.value.length > 0);
+  }, [objectId, objects]);
 
   const baseline = useMemo<AntennaGeometryAndPlacementDraft>(() => {
     const base = createDefaultAntennaGeometryDraft();
@@ -787,34 +1125,119 @@ export function AntennaGeometryInspectorSpecPanel({
     const stationsRaw = Array.isArray(params?.stations) ? params.stations : [];
     const st0 = asRecord(stationsRaw[0]);
     const transform = asRecord(antennaObj?.transform);
-    const tr = Array.isArray(transform?.translation) ? transform.translation : [0, 0, 50e-9];
+    const tr = Array.isArray(transform?.translation)
+      ? transform.translation
+      : [0, 0, 50e-9];
+    const quat = Array.isArray(transform?.rotation_quat) ? transform.rotation_quat : null;
+    const inPlaneAngleDeg =
+      quat &&
+      quat.length === 4 &&
+      asNumber(quat[0]) === 0 &&
+      asNumber(quat[1]) === 0 &&
+      asNumber(quat[2]) !== null &&
+      asNumber(quat[3]) !== null
+        ? Number(
+            (
+              (2 * Math.atan2(Number(quat[2]), Number(quat[3])) * 180) /
+              Math.PI
+            ).toFixed(4),
+          )
+        : 0;
+
     const thicknessM = asNumber(params?.thickness_m) ?? base.thicknessM;
+    const returnOffsetM = asNumber(params?.return_offset_m) ?? base.returnOffsetM;
     const zTrans = asNumber(tr[2]) ?? 60e-9;
+
+    const cpwGapM = asNumber(st0?.left_gap_m) ?? base.cpwGapM;
+    const cpwRightGapM = asNumber(st0?.right_gap_m) ?? cpwGapM;
+    const groundWidthM = asNumber(st0?.left_ground_width_m) ?? base.groundWidthM;
+    const rightGroundWidthM = asNumber(st0?.right_ground_width_m) ?? groundWidthM;
+    const symmetricCpw =
+      Math.abs(cpwGapM - cpwRightGapM) < 1e-15 &&
+      Math.abs(groundWidthM - rightGroundWidthM) < 1e-15;
+
+    const waypointsRaw = Array.isArray(params?.waypoints) ? params.waypoints : [];
+    const waypoints: Waypoint3DDraft[] =
+      waypointsRaw.length >= 2
+        ? waypointsRaw.map((entry, idx) => {
+            const wr = asRecord(entry) ?? {};
+            return {
+              bendRadiusM: asNumber(wr.bend_radius_m) ?? 20e-9,
+              rowId: `wp:${idx}`,
+              xM: asNumber(wr.x_m) ?? 0,
+              yM: asNumber(wr.y_m) ?? 0,
+              zM: asNumber(wr.z_m) ?? 50e-9,
+            };
+          })
+        : [...base.waypoints];
+
+    const circuit =
+      geom?.geometry_kind === "MicrostripAntennaLayout"
+        ? microstripCircuitDraft(geom as JsonObject, scene.data ?? null, objectId)
+        : null;
+    const loopParameters: Record<string, string> = { ...DEFAULT_LOOP_PARAMETERS };
+    if (circuit) {
+      for (const field of MICROSTRIP_LOOP_FIELDS) {
+        const val = circuit.parameters[field.key];
+        if (val && val.trim().length > 0) {
+          loopParameters[field.key] = val;
+        }
+      }
+    }
+
+    const loopShapeRaw = asString(params?.loop_shape);
+    const loopShape =
+      loopShapeRaw === "rectangular" || loopShapeRaw === "omega"
+        ? loopShapeRaw
+        : "circular";
+    const cadScaleRaw = asString(params?.scale_unit);
+    const cadScaleUnit =
+      cadScaleRaw === "um" || cadScaleRaw === "mm" || cadScaleRaw === "m"
+        ? cadScaleRaw
+        : "nm";
 
     return {
       ...base,
+      bridgeConductivitySpm:
+        asNumber(loopParameters.inlet_connection_conductivity_s_per_m) ??
+        base.bridgeConductivitySpm,
+      bridgeLengthM:
+        asNumber(loopParameters.inlet_connection_length_m) ?? base.bridgeLengthM,
+      bridgeWidthM:
+        asNumber(loopParameters.inlet_connection_width_m) ?? base.bridgeWidthM,
+      cadAssetId: asString(params?.asset_id) ?? base.cadAssetId,
+      cadScaleUnit,
+      closedLoopEnabled: circuit?.enabled ?? false,
       conductivitySpm: asNumber(params?.conductivity_s_per_m) ?? base.conductivitySpm,
-      cpwGapM: asNumber(st0?.left_gap_m) ?? base.cpwGapM,
-      cpwRightGapM: asNumber(st0?.right_gap_m) ?? base.cpwRightGapM,
-      groundWidthM: asNumber(st0?.left_ground_width_m) ?? base.groundWidthM,
+      cpwGapM,
+      cpwRightGapM,
+      groundWidthM,
+      inPlaneAngleDeg,
       lateralOffsetXM: asNumber(tr[0]) ?? 0,
       lateralOffsetYM: asNumber(tr[1]) ?? 0,
       lengthM: asNumber(params?.length_m) ?? base.lengthM,
       loopFeedGapM: asNumber(params?.feed_gap_m) ?? base.loopFeedGapM,
       loopInnerRadiusM: asNumber(params?.inner_radius_m) ?? base.loopInnerRadiusM,
+      loopParameters,
       loopPitchM: asNumber(params?.pitch_m) ?? base.loopPitchM,
+      loopShape,
       loopTurns: asNumber(params?.turns) ?? base.loopTurns,
       meanderBendRadiusM: asNumber(params?.bend_radius_m) ?? base.meanderBendRadiusM,
       meanderFingerCount: asNumber(params?.finger_count) ?? base.meanderFingerCount,
       meanderPitchM: asNumber(params?.pitch_m) ?? base.meanderPitchM,
-      placementTargetId: magneticTargets[0]?.value ?? "",
-      returnOffsetM: asNumber(params?.return_offset_m) ?? base.returnOffsetM,
+      placementTargetId: magneticTargets[0]?.value ?? SCENE_ORIGIN_TARGET_VALUE,
+      potentialJumpV: asNumber(circuit?.potentialJumpV) ?? base.potentialJumpV,
+      returnOffsetM,
       returnWidthM: asNumber(params?.return_width_m) ?? base.returnWidthM,
-      rightGroundWidthM: asNumber(st0?.right_ground_width_m) ?? base.rightGroundWidthM,
+      rightGroundWidthM,
       signalWidthM:
         asNumber(params?.signal_width_m) ??
         asNumber(st0?.signal_width_m) ??
         base.signalWidthM,
+      sourceCutNormal:
+        circuit?.sourceCutNormal === "negative_axis" ? "negative_axis" : "positive_axis",
+      sourceCutOffsetM:
+        asNumber(circuit?.sourceCutOffsetM) ?? -(thicknessM + returnOffsetM) / 2,
       standoffGapM: Math.max(1e-9, Math.abs(zTrans) - thicknessM * 0.2),
       standoffSide: zTrans >= 0 ? "above" : "below",
       stations:
@@ -822,16 +1245,79 @@ export function AntennaGeometryInspectorSpecPanel({
           ? stationsRaw.map((entry, idx) => {
               const sr = asRecord(entry) ?? {};
               return {
+                leftGapM: String(sr.left_gap_m ?? cpwGapM),
+                leftGroundWidthM: String(sr.left_ground_width_m ?? groundWidthM),
+                rightGapM: String(sr.right_gap_m ?? cpwRightGapM),
+                rightGroundWidthM: String(sr.right_ground_width_m ?? rightGroundWidthM),
                 rowId: `st:${idx}`,
                 s: String(sr.s ?? (idx === 0 ? 0 : 1)),
                 signalWidthM: String(sr.signal_width_m ?? 150e-9),
               };
             })
           : base.stations,
+      symmetricCpw,
       thicknessM,
       topology,
+      waypoints,
     };
-  }, [antennaObj, magneticTargets]);
+  }, [antennaObj, magneticTargets, objectId, scene.data]);
+
+  const computePlacementPreview = useCallback(
+    (draft: AntennaGeometryAndPlacementDraft) => {
+      const targetId = draft.placementTargetId;
+      if (
+        !scene.data ||
+        !realization.data ||
+        !targetId ||
+        targetId === SCENE_ORIGIN_TARGET_VALUE
+      ) {
+        return null;
+      }
+      try {
+        const draftGeom = buildAntennaTopologyGeometryPayload(draft);
+        const sceneForPlacement: SceneResource = {
+          ...scene.data,
+          objects: (scene.data.objects ?? []).map((obj) => {
+            if (obj.id === objectId) {
+              return { ...obj, geometry: draftGeom };
+            }
+            if (obj.id === targetId && !obj.magnetization_ref) {
+              return { ...obj, magnetization_ref: "mag_target" };
+            }
+            return obj;
+          }),
+        };
+        return resolveAntennaPlacement(
+          sceneForPlacement,
+          realization.data,
+          objectId,
+          targetId,
+          draft.standoffSide,
+          draft.standoffGapM,
+        );
+      } catch {
+        return null;
+      }
+    },
+    [objectId, realization.data, scene.data],
+  );
+
+  const committedTranslationText = useMemo(() => {
+    const tr = Array.isArray(asRecord(antennaObj?.transform)?.translation)
+      ? (asRecord(antennaObj?.transform)?.translation as unknown[])
+      : [0, 0, 0];
+    const parts = [0, 1, 2].map(
+      (i) => formatLengthSmart(asNumber(tr[i]) ?? 0) ?? "0 nm",
+    );
+    return `[${parts.join(", ")}]`;
+  }, [antennaObj]);
+
+  const objectDiagnostics = useMemo(() => {
+    const all = Array.isArray(geometryDiagnostics.data?.diagnostics)
+      ? geometryDiagnostics.data.diagnostics
+      : [];
+    return all.filter((d) => !d.object_id || d.object_id === objectId);
+  }, [geometryDiagnostics.data, objectId]);
 
   const antennaName = asString(antennaObj?.name) ?? selection.label ?? objectId;
 
@@ -871,7 +1357,10 @@ export function AntennaGeometryInspectorSpecPanel({
         entityId: `object:${objectId}:geometry`,
         icon: Ruler,
         kindLabel: "Parametric 3D conductor layout & standoff",
-        statePill: () => ({ label: "Committed", tone: "ok" }),
+        statePill: () =>
+          objectDiagnostics.some((d) => d.severity === "error")
+            ? { label: "Diagnostic error", tone: "err" }
+            : { label: "Committed", tone: "ok" },
         title: () => `${antennaName} Geometry`,
       },
       facts: (d) => [
@@ -880,6 +1369,18 @@ export function AntennaGeometryInspectorSpecPanel({
         { id: "t", label: "Thickness t", value: formatLengthSmart(d.thicknessM) },
         { id: "gap", label: "Standoff Δz", value: formatLengthSmart(d.standoffGapM) },
       ],
+      notices: (d) => {
+        const notices: InspectorNotice<AntennaGeometryAndPlacementDraft>[] = [];
+        if (baseline.closedLoopEnabled && !d.closedLoopEnabled) {
+          notices.push({
+            id: "reopen-loop-warn",
+            text: "Reopening a committed closed loop requires explicit terminal-source migration on the charge transport.",
+            title: "Closed-loop source contract",
+            tone: "warn",
+          });
+        }
+        return notices;
+      },
       modeTabs: [
         { id: "layout", label: "Conductor Layout" },
         { id: "placement", label: "Standoff & 3D Placement" },
@@ -919,7 +1420,10 @@ export function AntennaGeometryInspectorSpecPanel({
                 { label: "Meander / U-Turn Grating Antenna", value: "meander" },
                 { label: "Inductive Loop / Coil", value: "inductive_loop" },
                 { label: "3D Piecewise Path", value: "piecewise_3d_path" },
-                { label: "External CAD Lead (STEP / STL / BREP)", value: "external_cad_lead" },
+                {
+                  label: "External CAD Lead (STEP / STL / BREP)",
+                  value: "external_cad_lead",
+                },
               ],
               structural: true,
               type: "select",
@@ -1152,54 +1656,47 @@ export function AntennaGeometryInspectorSpecPanel({
               type: "number",
             },
             {
-              columns: [
-                {
-                  header: "x [nm]",
-                  id: "x",
-                  mono: true,
-                  renderCell: (r) =>
-                    ((r as Waypoint3DDraft).xM * 1e9).toFixed(1),
-                },
-                {
-                  header: "y [nm]",
-                  id: "y",
-                  mono: true,
-                  renderCell: (r) =>
-                    ((r as Waypoint3DDraft).yM * 1e9).toFixed(1),
-                },
-                {
-                  header: "z [nm]",
-                  id: "z",
-                  mono: true,
-                  renderCell: (r) =>
-                    ((r as Waypoint3DDraft).zM * 1e9).toFixed(1),
-                },
-                {
-                  header: "R_bend [nm]",
-                  id: "r",
-                  mono: true,
-                  renderCell: (r) =>
-                    ((r as Waypoint3DDraft).bendRadiusM * 1e9).toFixed(1),
-                },
-              ],
+              defaultDisplayUnit: "nm",
+              key: "loopPitchM",
+              label: "Spiral turn pitch",
+              min: 1e-10,
+              minExclusive: true,
+              showWhen: (d) => d.topology === "inductive_loop",
+              symbol: (
+                <>
+                  p<sub>loop</sub>
+                </>
+              ),
+              type: "quantity",
+              units: LENGTH_UNITS,
+            },
+            {
+              defaultDisplayUnit: "nm",
+              key: "loopFeedGapM",
+              label: "Feed terminal gap",
+              min: 1e-10,
+              minExclusive: true,
+              showWhen: (d) => d.topology === "inductive_loop",
+              symbol: (
+                <>
+                  g<sub>feed</sub>
+                </>
+              ),
+              type: "quantity",
+              units: LENGTH_UNITS,
+            },
+            {
+              key: "waypoints",
               label: "3D piecewise path waypoints",
-              onAddRow: (ctx) => {
-                const last = ctx.draft.waypoints.at(-1);
-                ctx.setField("waypoints", [
-                  ...ctx.draft.waypoints,
-                  {
-                    bendRadiusM: 20e-9,
-                    rowId: `wp:${ctx.draft.waypoints.length}:${Date.now()}`,
-                    xM: (last?.xM ?? 0) + 250e-9,
-                    yM: last?.yM ?? 0,
-                    zM: last?.zM ?? 50e-9,
-                  },
-                ]);
-              },
-              rowKey: (r) => (r as Waypoint3DDraft).rowId,
-              rows: (d) => d.waypoints,
+              render: (ctx) => (
+                <EditableWaypointsEditor
+                  waypoints={ctx.draft.waypoints}
+                  onChange={(next) => ctx.setField("waypoints", next)}
+                />
+              ),
               showWhen: (d) => d.topology === "piecewise_3d_path",
-              type: "table",
+              type: "custom",
+              validate: (_val, d) => validateWaypointsDraft(d.waypoints),
               wide: true,
             },
             {
@@ -1225,41 +1722,31 @@ export function AntennaGeometryInspectorSpecPanel({
           title: "Conductor dimensions",
         },
         {
-          defaultOpen: false,
+          defaultOpen: true,
           icon: SlidersHorizontal,
           id: "taper-stations",
           modeTabId: "layout",
           rows: [
             {
-              columns: [
-                {
-                  header: "s ∈ [0, 1]",
-                  id: "s",
-                  mono: true,
-                  renderCell: (r) => (r as WidthStationDraft).s,
-                },
-                {
-                  align: "right",
-                  header: "w(s) [nm]",
-                  id: "w",
-                  mono: true,
-                  renderCell: (r) =>
-                    (Number((r as WidthStationDraft).signalWidthM) * 1e9).toFixed(1),
-                },
-              ],
+              key: "stations",
               label: "Taper width stations",
-              onAddRow: (ctx) => {
-                ctx.setField(
-                  "stations",
-                  insertWidthStation(
-                    [...ctx.draft.stations],
-                    `st:ins:${ctx.draft.stations.length}`,
-                  ),
-                );
-              },
-              rowKey: (r) => (r as WidthStationDraft).rowId,
-              rows: (d) => d.stations,
-              type: "table",
+              render: (ctx) => (
+                <EditableStationsEditor
+                  defaultGapM={ctx.draft.cpwGapM}
+                  defaultGroundWidthM={ctx.draft.groundWidthM}
+                  isCpwLike={
+                    ctx.draft.topology === "cpw" || ctx.draft.topology === "gsg"
+                  }
+                  stations={ctx.draft.stations}
+                  onChange={(next) => ctx.setField("stations", next)}
+                />
+              ),
+              type: "custom",
+              validate: (_val, d) =>
+                validateStationsDraft(
+                  d.stations,
+                  d.topology === "cpw" || d.topology === "gsg",
+                ),
               wide: true,
             },
           ],
@@ -1269,7 +1756,44 @@ export function AntennaGeometryInspectorSpecPanel({
           title: "Taper width stations",
         },
         {
+          defaultOpen: objectDiagnostics.length > 0,
+          icon: Activity,
+          id: "geometry-diagnostics",
+          modeTabId: "layout",
+          rows: [
+            {
+              render: () => (
+                <GeometryDiagnosticsView
+                  diagnosticsData={geometryDiagnostics.data}
+                  objectId={objectId}
+                  status={geometryDiagnostics.status}
+                />
+              ),
+              type: "custom",
+              wide: true,
+            },
+          ],
+          summary: () =>
+            objectDiagnostics.length > 0
+              ? `${objectDiagnostics.length} issues`
+              : "Clean",
+          title: "Geometry diagnostics",
+        },
+        {
           defaultOpen: true,
+          footer: () => (
+            <Button
+              size="sm"
+              type="button"
+              variant="secondary"
+              onClick={() => {
+                scene.refetch();
+                realization.refetch();
+              }}
+            >
+              Refresh placement bounds
+            </Button>
+          ),
           icon: Compass,
           id: "standoff-placement",
           modeTabId: "placement",
@@ -1280,7 +1804,7 @@ export function AntennaGeometryInspectorSpecPanel({
               options:
                 magneticTargets.length > 0
                   ? magneticTargets
-                  : [{ label: "Scene origin", value: "" }],
+                  : [{ label: "Scene origin", value: SCENE_ORIGIN_TARGET_VALUE }],
               type: "select",
             },
             {
@@ -1310,11 +1834,7 @@ export function AntennaGeometryInspectorSpecPanel({
               defaultDisplayUnit: "nm",
               key: "lateralOffsetXM",
               label: "Lateral offset X",
-              symbol: (
-                <>
-                  &Delta;x
-                </>
-              ),
+              symbol: <>&Delta;x</>,
               type: "quantity",
               units: LENGTH_UNITS,
             },
@@ -1322,11 +1842,7 @@ export function AntennaGeometryInspectorSpecPanel({
               defaultDisplayUnit: "nm",
               key: "lateralOffsetYM",
               label: "Lateral offset Y",
-              symbol: (
-                <>
-                  &Delta;y
-                </>
-              ),
+              symbol: <>&Delta;y</>,
               type: "quantity",
               units: LENGTH_UNITS,
             },
@@ -1343,6 +1859,25 @@ export function AntennaGeometryInspectorSpecPanel({
               ),
               type: "number",
               unitSuffix: "deg",
+            },
+            {
+              format: (d) => {
+                const resolved = computePlacementPreview(d);
+                if (resolved) {
+                  const dz = resolved.delta[2];
+                  const formatted = formatLengthSmart(Math.abs(dz)) ?? "0 nm";
+                  return dz === 0 ? "0 nm" : `${dz > 0 ? "+" : "−"}${formatted}`;
+                }
+                return "Bounds pending realization";
+              },
+              label: "Proposed Δz",
+              type: "readonly",
+            },
+            {
+              format: () => committedTranslationText,
+              label: "Committed translation",
+              mono: true,
+              type: "readonly",
             },
           ],
           title: "Standoff z & 3D placement",
@@ -1371,6 +1906,10 @@ export function AntennaGeometryInspectorSpecPanel({
               symbol: <>&Delta;V</>,
               type: "quantity",
               units: VOLTAGE_UNITS,
+              validate: (val, d) =>
+                d.closedLoopEnabled && val === 0
+                  ? "Source-cut potential jump must be non-zero in V."
+                  : null,
             },
             {
               defaultDisplayUnit: "nm",
@@ -1384,6 +1923,15 @@ export function AntennaGeometryInspectorSpecPanel({
               ),
               type: "quantity",
               units: LENGTH_UNITS,
+              validate: (val, d) => {
+                if (!d.closedLoopEnabled) return null;
+                const upper = -d.thicknessM / 2;
+                const lower = -d.thicknessM / 2 - d.returnOffsetM;
+                if (!(val > lower && val < upper)) {
+                  return "Source-cut Z offset must lie strictly inside the signal/return clearance.";
+                }
+                return null;
+              },
             },
             {
               key: "sourceCutNormal",
@@ -1395,6 +1943,24 @@ export function AntennaGeometryInspectorSpecPanel({
               showWhen: (d) => d.closedLoopEnabled,
               type: "segmented",
             },
+            {
+              key: "loopParameters",
+              label: "Closed-loop bridge connections",
+              render: (ctx) => (
+                <ClosedLoopBridgeFieldsEditor
+                  parameters={ctx.draft.loopParameters}
+                  onChange={(next) => ctx.setField("loopParameters", next)}
+                />
+              ),
+              showWhen: (d) =>
+                d.topology === "straight_microstrip" && d.closedLoopEnabled,
+              type: "custom",
+              validate: (_val, d) =>
+                d.topology === "straight_microstrip" && d.closedLoopEnabled
+                  ? validateLoopParametersDraft(d.loopParameters)
+                  : null,
+              wide: true,
+            },
           ],
           title: "Closed-loop return & voltage cut",
         },
@@ -1405,49 +1971,181 @@ export function AntennaGeometryInspectorSpecPanel({
         onApply: async (draft) => {
           const baseRev =
             asNumber(sceneRec?.revision) ?? asNumber(sceneRec?.scene_revision) ?? 0;
-          const nextGeometry = buildAntennaTopologyGeometryPayload(draft);
-          const signZ = draft.standoffSide === "above" ? 1 : -1;
-          const zTranslation = signZ * (draft.standoffGapM + draft.thicknessM * 0.5);
-          const patchedObjects = objects.map((obj) =>
-            asString(obj?.id) === objectId
-              ? {
-                  ...obj,
-                  geometry: nextGeometry,
-                  transform: {
-                    ...(asRecord(obj?.transform) ?? {}),
-                    rotation: [0, 0, (draft.inPlaneAngleDeg * Math.PI) / 180],
-                    translation: [
-                      draft.lateralOffsetXM,
-                      draft.lateralOffsetYM,
-                      zTranslation,
-                    ],
-                  },
-                }
-              : obj,
-          );
+          const builtGeometry = buildAntennaTopologyGeometryPayload(draft);
+          const existingGeom = asRecord(antennaObj?.geometry);
+          const existingParams = asRecord(existingGeom?.geometry_params) ?? {};
+          const sameKind = existingGeom?.geometry_kind === builtGeometry.geometry_kind;
 
-          await kernel.api.model.commitTransaction(
-            {
+          const mergedParams: JsonObject = {
+            ...(sameKind && Array.isArray(existingParams.conductors)
+              ? { conductors: existingParams.conductors as JsonObject[] }
+              : {}),
+            ...(asRecord(builtGeometry.geometry_params) as JsonObject),
+          };
+          const mergedGeometry: JsonObject = {
+            geometry_kind: builtGeometry.geometry_kind,
+            geometry_params: mergedParams,
+          };
+
+          // Compute Z placement via AABB realization bounds when ready, with fallback
+          const resolvedPlacement = computePlacementPreview(draft);
+          const signZ = draft.standoffSide === "above" ? 1 : -1;
+          let fallbackZ = signZ * (draft.standoffGapM + draft.thicknessM * 0.5);
+          const targetObj =
+            draft.placementTargetId &&
+            draft.placementTargetId !== SCENE_ORIGIN_TARGET_VALUE
+              ? objects.find((o) => asString(o.id) === draft.placementTargetId)
+              : null;
+          const targetLz = asNumber(
+            asRecord(asRecord(targetObj?.geometry)?.geometry_params)?.lz,
+          );
+          const targetTr = Array.isArray(asRecord(targetObj?.transform)?.translation)
+            ? (asRecord(targetObj?.transform)?.translation as unknown[])
+            : null;
+          const targetZ = asNumber(targetTr?.[2]) ?? 0;
+          if (targetObj && targetLz !== null && targetLz > 0) {
+            fallbackZ =
+              targetZ +
+              signZ * (targetLz * 0.5 + draft.standoffGapM + draft.thicknessM * 0.5);
+          }
+
+          const zTranslation = resolvedPlacement
+            ? resolvedPlacement.translation[2]
+            : fallbackZ;
+
+          const buildPatchedTransform = (obj: JsonRecord): JsonObject => {
+            const existingTransform = asRecord(obj.transform) ?? {};
+            const nextTransform: JsonObject = {
+              ...(existingTransform as JsonObject),
+              translation: [
+                draft.lateralOffsetXM,
+                draft.lateralOffsetYM,
+                zTranslation,
+              ],
+            };
+            // NEVER overwrite transform.rotation with Euler angles!
+            // Update rotation_quat ONLY when inPlaneAngleDeg !== 0 (or changed from non-zero baseline).
+            if (draft.inPlaneAngleDeg !== 0 || baseline.inPlaneAngleDeg !== 0) {
+              const halfRad = (draft.inPlaneAngleDeg * Math.PI) / 360;
+              nextTransform.rotation_quat = [
+                0,
+                0,
+                Math.sin(halfRad),
+                Math.cos(halfRad),
+              ];
+            }
+            return nextTransform;
+          };
+
+          let mergePatch: JsonObject;
+
+          if (draft.topology === "straight_microstrip" && draft.closedLoopEnabled) {
+            const circuitDraft: MicrostripCircuitDraft = {
+              enabled: true,
+              parameters: { ...draft.loopParameters },
+              potentialJumpV: String(draft.potentialJumpV),
+              sourceCutNormal: draft.sourceCutNormal,
+              sourceCutOffsetM: String(draft.sourceCutOffsetM),
+            };
+
+            if (
+              scene.data &&
+              hasFullMicrostripCircuitPrerequisites(
+                scene.data,
+                objectId,
+                mergedGeometry,
+              )
+            ) {
+              const sceneWithUpdatedTransform: SceneResource = {
+                ...scene.data,
+                objects: (scene.data.objects ?? []).map((obj) =>
+                  obj.id === objectId
+                    ? {
+                        ...obj,
+                        transform: buildPatchedTransform(
+                          obj as unknown as JsonRecord,
+                        ),
+                      }
+                    : obj,
+                ),
+              };
+              mergePatch = buildMicrostripCircuitPatch(
+                sceneWithUpdatedTransform,
+                objectId,
+                mergedGeometry,
+                circuitDraft,
+              );
+            } else {
+              const loopObj: JsonObject = { enabled: true };
+              for (const field of MICROSTRIP_LOOP_FIELDS) {
+                const raw = draft.loopParameters[field.key] ?? "";
+                loopObj[field.key] = field.numeric ? Number(raw) : raw.trim();
+              }
+              const geomWithLoop: JsonObject = {
+                ...mergedGeometry,
+                geometry_params: {
+                  ...mergedParams,
+                  loop: loopObj,
+                },
+              };
+              mergePatch = {
+                objects: objects.map((obj) =>
+                  asString(obj.id) === objectId
+                    ? {
+                        ...obj,
+                        geometry: geomWithLoop,
+                        transform: buildPatchedTransform(obj),
+                      }
+                    : obj,
+                ) as unknown as JsonObject[],
+              };
+            }
+          } else {
+            mergePatch = {
+              objects: objects.map((obj) =>
+                asString(obj.id) === objectId
+                  ? {
+                      ...obj,
+                      geometry: mergedGeometry,
+                      transform: buildPatchedTransform(obj),
+                    }
+                  : obj,
+              ) as unknown as JsonObject[],
+            };
+          }
+
+          await executeAntennaMergePatchTransaction({
+            kernel,
+            label: `Edit antenna geometry ${objectId}`,
+            mutationKind: "geometry",
+            request: {
               base_revision: baseRev,
               kind: "merge_patch",
-              patch: {
-                objects: patchedObjects,
-              } as JsonObject,
-            } as never,
-            { sessionScopeKey },
-          );
-          kernel.resources.invalidate(SCENE_RESOURCE_KEY, `w5:${Date.now()}`);
+              merge_patch: mergePatch,
+            },
+            scene: scene.data,
+            sessionScopeKey,
+          });
           return true;
         },
       },
     }),
     [
       antennaName,
-      kernel.api.model,
-      kernel.resources,
+      antennaObj,
+      baseline.closedLoopEnabled,
+      baseline.inPlaneAngleDeg,
+      committedTranslationText,
+      computePlacementPreview,
+      geometryDiagnostics.data,
+      geometryDiagnostics.status,
+      kernel,
       magneticTargets,
+      objectDiagnostics,
       objectId,
       objects,
+      realization,
+      scene,
       sceneRec,
       sessionScopeKey,
     ],
@@ -1473,6 +2171,8 @@ const CONDUCTOR_METALS = [
 interface AntennaConductorDraft {
   metalPreset: string;
   conductivitySpm: number;
+  inletBridgeConductivitySpm: number;
+  outletBridgeConductivitySpm: number;
   referenceFreqHz: number;
 }
 
@@ -1490,32 +2190,149 @@ export function AntennaConductorInspectorSpecPanel({
 }: InspectorPanelProps): ReactNode {
   const kernel = useKernel();
   const sessionScopeKey = sessionRequestScopeKey(useSessionResourceIdentity()) ?? undefined;
-  const objectId = selection.objectId ?? asString(asRecord(selection.ref)?.objectId) ?? "ant-1";
+  const objectId =
+    selection.objectId ?? asString(asRecord(selection.ref)?.objectId) ?? "ant-1";
   const scene = useSceneResource({ enabled: Boolean(objectId) });
 
   const sceneRec = useMemo(() => asRecord(scene.data), [scene.data]);
   const objects = useMemo(
-    () => (Array.isArray(sceneRec?.objects) ? sceneRec.objects.map(asRecord).filter(Boolean) : []),
+    () =>
+      Array.isArray(sceneRec?.objects)
+        ? sceneRec.objects.map(asRecord).filter((o): o is JsonRecord => o !== null)
+        : [],
     [sceneRec],
   );
   const antennaObj = useMemo(
-    () => objects.find((o) => asString(o?.id) === objectId) ?? null,
+    () => objects.find((o) => asString(o.id) === objectId) ?? null,
     [objectId, objects],
   );
-  const geomParams = useMemo(
-    () => asRecord(asRecord(antennaObj?.geometry)?.geometry_params),
-    [antennaObj],
-  );
+  const geom = useMemo(() => asRecord(antennaObj?.geometry), [antennaObj]);
+  const geomParams = useMemo(() => asRecord(geom?.geometry_params), [geom]);
+  const loopRec = useMemo(() => asRecord(geomParams?.loop), [geomParams]);
+  const isClosedLoop = loopRec?.enabled === true;
   const thicknessM = asNumber(geomParams?.thickness_m) ?? 50e-9;
+
+  const partIdsText = useMemo(() => {
+    const rawParts = Array.isArray(geomParams?.conductors)
+      ? geomParams.conductors.map(asRecord)
+      : [];
+    const ids = rawParts
+      .map((p) => asString(p?.id))
+      .filter((id): id is string => id !== null);
+    if (isClosedLoop) {
+      const inletPart = asString(loopRec?.inlet_connection_part_id);
+      const outletPart = asString(loopRec?.outlet_connection_part_id);
+      if (inletPart) ids.push(inletPart);
+      if (outletPart) ids.push(outletPart);
+    }
+    return ids.length > 0 ? ids.join(", ") : "Whole conductor";
+  }, [geomParams, isClosedLoop, loopRec]);
+
+  const objectTransports = useMemo(() => {
+    const list = Array.isArray(sceneRec?.current_transports)
+      ? sceneRec.current_transports.map(asRecord).filter((t): t is JsonRecord => t !== null)
+      : [];
+    return list.filter(
+      (ct) =>
+        Array.isArray(ct.domain) &&
+        ct.domain.some((ref) => asString(asRecord(ref)?.object_id) === objectId),
+    );
+  }, [objectId, sceneRec]);
+
+  const conductorOriginSelection = useMemo(
+    () =>
+      buildAntennaOriginSelection(
+        selection,
+        objectId,
+        "object.antenna.conductor",
+        "conductor",
+        objectId,
+      ),
+    [objectId, selection],
+  );
+
+  const conductorNavLinks = useMemo(() => {
+    if (!scene.data) return [];
+    return antennaNavigationLinks(
+      normalizeSceneForAntennaNavigation(scene.data, objectId),
+      conductorOriginSelection,
+    );
+  }, [conductorOriginSelection, objectId, scene.data]);
+
+  const handleOpenGeometry = useCallback(() => {
+    const geomLink = conductorNavLinks.find((l) => l.key === "geometry");
+    if (geomLink) {
+      openAntennaNavigationLink({
+        kernel,
+        link: geomLink,
+        objectId,
+        originSelection: conductorOriginSelection,
+        sessionScopeKey,
+      });
+      return;
+    }
+    kernel.selection.set(
+      {
+        kind: "object.antenna.geometry",
+        label: "Geometry",
+        nodeId: `model:object:${objectId}:geometry`,
+        objectId,
+        ref: {
+          kind: "object.antenna.geometry",
+          nodeId: `model:object:${objectId}:geometry`,
+          objectId,
+          type: "scene-object",
+          visualizationTargetId: `object:${objectId}`,
+        },
+      },
+      "inspector",
+    );
+  }, [conductorNavLinks, conductorOriginSelection, kernel, objectId, sessionScopeKey]);
+
+  const handleOpenMeshPolicy = useCallback(() => {
+    const meshLink = conductorNavLinks.find((l) => l.key === "mesh");
+    if (meshLink) {
+      openAntennaNavigationLink({
+        kernel,
+        link: meshLink,
+        objectId,
+        originSelection: conductorOriginSelection,
+        sessionScopeKey,
+      });
+      return;
+    }
+    kernel.selection.set(
+      {
+        kind: "object.mesh",
+        label: "Mesh",
+        nodeId: `model:object:${objectId}:mesh`,
+        objectId,
+        ref: {
+          kind: "object.mesh",
+          nodeId: `model:object:${objectId}:mesh`,
+          objectId,
+          type: "scene-object",
+          visualizationTargetId: `object:${objectId}`,
+        },
+      },
+      "inspector",
+    );
+  }, [conductorNavLinks, conductorOriginSelection, kernel, objectId, sessionScopeKey]);
 
   const baseline = useMemo<AntennaConductorDraft>(() => {
     const sigma = asNumber(geomParams?.conductivity_s_per_m) ?? 5.96e7;
+    const inletSigma =
+      asNumber(loopRec?.inlet_connection_conductivity_s_per_m) ?? sigma;
+    const outletSigma =
+      asNumber(loopRec?.outlet_connection_conductivity_s_per_m) ?? sigma;
     return {
       conductivitySpm: sigma,
+      inletBridgeConductivitySpm: inletSigma,
       metalPreset: matchMetalPreset(sigma),
+      outletBridgeConductivitySpm: outletSigma,
       referenceFreqHz: 10e9,
     };
-  }, [geomParams]);
+  }, [geomParams, loopRec]);
 
   const antennaName = asString(antennaObj?.name) ?? selection.label ?? objectId;
 
@@ -1542,7 +2359,7 @@ export function AntennaConductorInspectorSpecPanel({
         domain: "material",
         entityId: `cond:${objectId}`,
         icon: Zap,
-        kindLabel: "Ohmic charge transport material",
+        kindLabel: "Ohmic charge transport material & RF ports",
         statePill: () => ({ label: "Committed", tone: "ok" }),
         title: () => `${antennaName} Conductor`,
       },
@@ -1599,6 +2416,93 @@ export function AntennaConductorInspectorSpecPanel({
       sections: [
         {
           defaultOpen: true,
+          footer: () => (
+            <div className="flex flex-wrap gap-2">
+              <Button
+                size="sm"
+                type="button"
+                variant="secondary"
+                onClick={handleOpenGeometry}
+              >
+                Open Geometry
+              </Button>
+              <Button
+                size="sm"
+                type="button"
+                variant="secondary"
+                onClick={handleOpenMeshPolicy}
+              >
+                Open Mesh Policy
+              </Button>
+            </div>
+          ),
+          icon: Layers,
+          id: "conductor-details",
+          rows: [
+            {
+              format: () => asString(antennaObj?.role) ?? "antenna",
+              label: "Role",
+              mono: true,
+              type: "readonly",
+            },
+            {
+              format: () => asString(geom?.geometry_kind) ?? "Not configured",
+              label: "Layout",
+              mono: true,
+              type: "readonly",
+            },
+            {
+              format: () => partIdsText,
+              label: "Part IDs",
+              mono: true,
+              type: "readonly",
+            },
+            {
+              format: () => asString(antennaObj?.material_ref) ?? "Unassigned",
+              label: "Object material ref",
+              mono: true,
+              type: "readonly",
+            },
+            {
+              format: () => (antennaObj?.object_mesh ? "Authored" : "Default"),
+              label: "Authored mesh policy",
+              type: "readonly",
+            },
+            ...objectTransports.flatMap((ct) => {
+              const trName = asString(ct.name) ?? "transport";
+              const mats = Array.isArray(ct.materials)
+                ? ct.materials.map(asRecord).filter((m): m is JsonRecord => m !== null)
+                : [];
+              const matchingMats = mats.filter(
+                (m) => asString(asRecord(m.region)?.object_id) === objectId,
+              );
+              if (matchingMats.length === 0) {
+                return [
+                  {
+                    format: () => "Not configured",
+                    label: `Charge conductivity · ${trName}`,
+                    type: "readonly" as const,
+                  },
+                ];
+              }
+              return matchingMats.map((m, idx) => {
+                const regionId = asString(asRecord(m.region)?.region_id) ?? "whole";
+                const sigmaVal = asRecord(m.material)?.sigma_Spm;
+                return {
+                  format: () => formatAntennaParameter(sigmaVal, "S/m"),
+                  label:
+                    matchingMats.length === 1 && regionId === "whole"
+                      ? `Charge conductivity · ${trName}`
+                      : `Charge conductivity · ${trName} (${regionId || idx + 1})`,
+                  type: "readonly" as const,
+                };
+              });
+            }),
+          ],
+          title: "Conductor identity & charge transport",
+        },
+        {
+          defaultOpen: true,
           icon: Zap,
           id: "primary-conductor",
           rows: [
@@ -1623,6 +2527,38 @@ export function AntennaConductorInspectorSpecPanel({
               units: CONDUCTIVITY_UNITS,
             },
             {
+              defaultDisplayUnit: "MS/m",
+              key: "inletBridgeConductivitySpm",
+              label: "Inlet bridge conductivity",
+              min: 1e-3,
+              minExclusive: true,
+              scrub: "log",
+              showWhen: () => isClosedLoop,
+              symbol: (
+                <>
+                  &sigma;<sub>in</sub>
+                </>
+              ),
+              type: "quantity",
+              units: CONDUCTIVITY_UNITS,
+            },
+            {
+              defaultDisplayUnit: "MS/m",
+              key: "outletBridgeConductivitySpm",
+              label: "Outlet bridge conductivity",
+              min: 1e-3,
+              minExclusive: true,
+              scrub: "log",
+              showWhen: () => isClosedLoop,
+              symbol: (
+                <>
+                  &sigma;<sub>out</sub>
+                </>
+              ),
+              type: "quantity",
+              units: CONDUCTIVITY_UNITS,
+            },
+            {
               format: (d) =>
                 d.conductivitySpm > 0
                   ? `${((1 / d.conductivitySpm) * 1e8).toFixed(3)} µΩ·cm`
@@ -1633,6 +2569,27 @@ export function AntennaConductorInspectorSpecPanel({
             },
           ],
           title: "Primary conductor material",
+        },
+        {
+          defaultOpen: true,
+          icon: PlugZap,
+          id: "add-antenna-port",
+          rows: [
+            {
+              render: () => (
+                <RadixAntennaPortComposer
+                  objectId={objectId}
+                  refetch={scene.refetch}
+                  scene={scene.data ?? null}
+                  sessionScopeKey={sessionScopeKey}
+                  status={scene.status}
+                />
+              ),
+              type: "custom",
+              wide: true,
+            },
+          ],
+          title: "Add antenna port",
         },
         {
           defaultOpen: false,
@@ -1677,40 +2634,159 @@ export function AntennaConductorInspectorSpecPanel({
         onApply: async (draft) => {
           const baseRev =
             asNumber(sceneRec?.revision) ?? asNumber(sceneRec?.scene_revision) ?? 0;
-          const patchedObjects = objects.map((obj) => {
-            if (asString(obj?.id) !== objectId) return obj;
-            const g = asRecord(obj?.geometry) ?? {};
-            const gp = asRecord(g.geometry_params) ?? {};
-            return {
-              ...obj,
-              geometry: {
-                ...g,
-                geometry_params: {
-                  ...gp,
-                  conductivity_s_per_m: draft.conductivitySpm,
-                },
-              },
+
+          let request: MergePatchTransactionRequest;
+
+          const sceneWithRev = scene.data
+            ? ({ ...scene.data, revision: baseRev } as SceneResource)
+            : null;
+
+          let canonicalCtx: ReturnType<typeof conductorMaterialContext> | null = null;
+          if (sceneWithRev) {
+            try {
+              canonicalCtx = conductorMaterialContext(sceneWithRev, objectId);
+            } catch {
+              canonicalCtx = null;
+            }
+          }
+
+          if (sceneWithRev && canonicalCtx) {
+            const materialDraft: ConductorMaterialDraft = {
+              baseRevision: baseRev,
+              dirty: true,
+              key: JSON.stringify([sessionScopeKey ?? "local", objectId]),
+              rows: canonicalCtx.rows.map((row) => {
+                if (row.key === "inlet_connection_conductivity_s_per_m") {
+                  return { ...row, value: String(draft.inletBridgeConductivitySpm) };
+                }
+                if (row.key === "outlet_connection_conductivity_s_per_m") {
+                  return { ...row, value: String(draft.outletBridgeConductivitySpm) };
+                }
+                return { ...row, value: String(draft.conductivitySpm) };
+              }),
             };
-          });
-          await kernel.api.model.commitTransaction(
-            {
+            request = buildConductorMaterialTransaction(
+              sceneWithRev,
+              objectId,
+              materialDraft,
+            ) as MergePatchTransactionRequest;
+          } else {
+            const patchedObjects = objects.map((obj) => {
+              if (asString(obj.id) !== objectId) return obj;
+              const g = asRecord(obj.geometry) ?? {};
+              const gp = asRecord(g.geometry_params) ?? {};
+              const existingLoop = asRecord(gp.loop);
+              return {
+                ...obj,
+                geometry: {
+                  ...g,
+                  geometry_params: {
+                    ...gp,
+                    conductivity_s_per_m: draft.conductivitySpm,
+                    ...(existingLoop?.enabled === true
+                      ? {
+                          loop: {
+                            ...existingLoop,
+                            inlet_connection_conductivity_s_per_m:
+                              draft.inletBridgeConductivitySpm,
+                            outlet_connection_conductivity_s_per_m:
+                              draft.outletBridgeConductivitySpm,
+                          },
+                        }
+                      : {}),
+                  },
+                },
+              };
+            });
+
+            const rawTransports = Array.isArray(sceneRec?.current_transports)
+              ? sceneRec.current_transports
+              : null;
+            const patchedTransports = rawTransports
+              ? rawTransports.map((entry) => {
+                  const ct = asRecord(entry);
+                  if (
+                    !ct ||
+                    !Array.isArray(ct.domain) ||
+                    !ct.domain.some(
+                      (ref) => asString(asRecord(ref)?.object_id) === objectId,
+                    )
+                  ) {
+                    return entry;
+                  }
+                  const mats = Array.isArray(ct.materials)
+                    ? ct.materials.map((mEntry) => {
+                        const mr = asRecord(mEntry);
+                        if (
+                          !mr ||
+                          asString(asRecord(mr.region)?.object_id) !== objectId
+                        ) {
+                          return mEntry;
+                        }
+                        const regionId = asString(asRecord(mr.region)?.region_id);
+                        const inletId = asString(loopRec?.inlet_connection_part_id);
+                        const outletId = asString(loopRec?.outlet_connection_part_id);
+                        const sigmaTarget =
+                          isClosedLoop && regionId && regionId === inletId
+                            ? draft.inletBridgeConductivitySpm
+                            : isClosedLoop && regionId && regionId === outletId
+                              ? draft.outletBridgeConductivitySpm
+                              : draft.conductivitySpm;
+                        return {
+                          ...mr,
+                          material: {
+                            ...(asRecord(mr.material) ?? {}),
+                            sigma_Spm: sigmaTarget,
+                          },
+                        };
+                      })
+                    : ct.materials;
+                  return { ...ct, materials: mats };
+                })
+              : undefined;
+
+            request = {
               base_revision: baseRev,
               kind: "merge_patch",
-              patch: { objects: patchedObjects } as JsonObject,
-            } as never,
-            { sessionScopeKey },
-          );
-          kernel.resources.invalidate(SCENE_RESOURCE_KEY, `w5:${Date.now()}`);
+              merge_patch: {
+                objects: patchedObjects as unknown as JsonObject[],
+                ...(patchedTransports
+                  ? {
+                      current_transports: patchedTransports as unknown as JsonObject[],
+                    }
+                  : {}),
+              },
+            };
+          }
+
+          await executeAntennaMergePatchTransaction({
+            kernel,
+            label: `Edit antenna conductor conductivity ${objectId}`,
+            mutationKind: "material",
+            request,
+            scene: scene.data,
+            sessionScopeKey,
+          });
           return true;
         },
       },
     }),
     [
       antennaName,
-      kernel.api.model,
-      kernel.resources,
+      antennaObj,
+      geom,
+      handleOpenGeometry,
+      handleOpenMeshPolicy,
+      isClosedLoop,
+      kernel,
+      loopRec,
       objectId,
+      objectTransports,
       objects,
+      partIdsText,
+      scene.data,
+      scene.refetch,
+      scene.status,
       sceneRec,
       sessionScopeKey,
       thicknessM,
@@ -1746,14 +2822,60 @@ export function AntennaConductorInspectorSpecPanel({
 }
 
 // ============================================================================
-// 4. object.antenna.terminals — AntennaTerminalsInspectorSpecPanel (Zero unit="1")
+// 4. object.antenna.terminals — AntennaTerminalsInspectorSpecPanel
 // ============================================================================
 
-interface AntennaTerminalsDraft {
-  enableLeadPreparation: boolean;
-  leadLengthM: number;
-  extrusionLayers: number;
-  outwardNormal: readonly [number, number, number];
+interface AntennaTerminalsSpecDraft {
+  portId: string;
+  driveId: string;
+  revision: string;
+  geometryBinding: string;
+  rows: readonly AntennaTerminalLeadRow[];
+}
+
+function hydrateTerminalPreparationBaseline(
+  sceneData: SceneResource | null | undefined,
+  objectId: string,
+  sourceMode: string,
+  ports: readonly { current_transport_id: string; id: string }[],
+  prepKey: string,
+): AntennaTerminalsSpecDraft {
+  const geomBinding = sceneData
+    ? antennaTerminalGeometryBinding(sceneData, objectId)
+    : "";
+  if (sourceMode === "preparation" && sceneData) {
+    for (const port of ports) {
+      const transport = (sceneData.current_transports ?? []).find(
+        (t) => t.name === port.current_transport_id,
+      );
+      if (transport?.external_lead_preparation) {
+        try {
+          const loaded = createAntennaTerminalPreparationDraft(
+            sceneData,
+            objectId,
+            port.id,
+            prepKey,
+          );
+          return {
+            driveId: loaded.driveId,
+            geometryBinding: loaded.geometryBinding,
+            portId: loaded.portId,
+            revision: loaded.revision,
+            rows: loaded.rows,
+          };
+        } catch {
+          // Fall through to unhydrated default when existing preparation is custom
+        }
+      }
+    }
+  }
+  return {
+    driveId: "",
+    geometryBinding: geomBinding,
+    portId: "",
+    revision: "",
+    rows: [],
+  };
 }
 
 export function AntennaTerminalsInspectorSpecPanel({
@@ -1761,29 +2883,153 @@ export function AntennaTerminalsInspectorSpecPanel({
 }: InspectorPanelProps): ReactNode {
   const kernel = useKernel();
   const sessionScopeKey = sessionRequestScopeKey(useSessionResourceIdentity()) ?? undefined;
-  const objectId = selection.objectId ?? asString(asRecord(selection.ref)?.objectId) ?? "ant-1";
+  const objectId =
+    selection.objectId ?? asString(asRecord(selection.ref)?.objectId) ?? "ant-1";
   const scene = useSceneResource({ enabled: Boolean(objectId) });
-  const sceneRec = asRecord(scene.data);
+  const [navError, setNavError] = useState<string | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
 
-  const terminalFaces = useMemo(
-    () => [
-      { cap: "signal:inlet", id: "sig-in", role: "Source + (Current In)" },
-      { cap: "signal:outlet", id: "sig-out", role: "Ground / Sink − (V = 0)" },
-    ],
-    [],
+  const prepKey = useMemo(
+    () => JSON.stringify([sessionScopeKey ?? "local", objectId]),
+    [objectId, sessionScopeKey],
   );
 
-  const baseline = useMemo<AntennaTerminalsDraft>(
-    () => ({
-      enableLeadPreparation: false,
-      extrusionLayers: 4,
-      leadLengthM: 200e-9,
-      outwardNormal: [1, 0, 0],
-    }),
-    [],
+  const sourceModel = useMemo(
+    () => antennaTerminalSourceState(scene.data ?? null, objectId),
+    [objectId, scene.data],
   );
 
-  const spec = useMemo<InspectorSpec<AntennaTerminalsDraft>>(
+  const ports = useMemo(
+    () =>
+      (scene.data?.antenna_port_modes ?? []).filter(
+        (port) => port.source_object_id === objectId,
+      ),
+    [objectId, scene.data],
+  );
+
+  const terminalsOriginSelection = useMemo(
+    () =>
+      buildAntennaOriginSelection(
+        selection,
+        objectId,
+        "object.antenna.terminals",
+        "terminals",
+        objectId,
+      ),
+    [objectId, selection],
+  );
+
+  const terminalNavLinks = useMemo(() => {
+    if (!scene.data) return [];
+    return antennaNavigationLinks(
+      normalizeSceneForAntennaNavigation(scene.data, objectId),
+      terminalsOriginSelection,
+    );
+  }, [objectId, scene.data, terminalsOriginSelection]);
+
+  const handleOpenGeometry = useCallback(() => {
+    const geomLink = terminalNavLinks.find((l) => l.key === "geometry");
+    if (geomLink) {
+      openAntennaNavigationLink({
+        kernel,
+        link: geomLink,
+        objectId,
+        onError: setNavError,
+        originSelection: terminalsOriginSelection,
+        sessionScopeKey,
+      });
+      return;
+    }
+    kernel.selection.set(
+      {
+        kind: "object.antenna.geometry",
+        label: "Geometry",
+        nodeId: `model:object:${objectId}:geometry`,
+        objectId,
+        ref: {
+          kind: "object.antenna.geometry",
+          nodeId: `model:object:${objectId}:geometry`,
+          objectId,
+          type: "scene-object",
+          visualizationTargetId: `object:${objectId}`,
+        },
+      },
+      "inspector",
+    );
+  }, [kernel, objectId, sessionScopeKey, terminalNavLinks, terminalsOriginSelection]);
+
+  const handleOpenPort = useCallback(
+    (portId: string) => {
+      const portLink = terminalNavLinks.find((l) => l.key === `port:${portId}`);
+      if (portLink) {
+        openAntennaNavigationLink({
+          kernel,
+          link: portLink,
+          objectId,
+          onError: setNavError,
+          originSelection: terminalsOriginSelection,
+          sessionScopeKey,
+        });
+        return;
+      }
+      const nodeId = `model:object:${objectId}:antenna:port:${encodeURIComponent(portId)}`;
+      kernel.selection.set(
+        {
+          kind: "object.antenna.port",
+          label: `Port ${portId}`,
+          nodeId,
+          objectId,
+          ref: {
+            antennaResourceId: portId,
+            antennaResourceKind: "port",
+            kind: "object.antenna.port",
+            nodeId,
+            objectId,
+            type: "scene-object",
+            visualizationTargetId: `object:${objectId}`,
+          },
+        },
+        "inspector",
+      );
+    },
+    [kernel, objectId, sessionScopeKey, terminalNavLinks, terminalsOriginSelection],
+  );
+
+  const baseline = useMemo<AntennaTerminalsSpecDraft>(
+    () =>
+      hydrateTerminalPreparationBaseline(
+        scene.data,
+        objectId,
+        sourceModel.mode,
+        ports,
+        prepKey,
+      ),
+    [objectId, ports, prepKey, scene.data, sourceModel.mode],
+  );
+
+  const toModelPrepDraft = useCallback(
+    (draft: AntennaTerminalsSpecDraft): AntennaTerminalPreparationDraft => {
+      const baseRev =
+        scene.data?.revision ?? asNumber(asRecord(scene.data)?.scene_revision) ?? 0;
+      return {
+        baseRevision: baseRev,
+        dirty: true,
+        driveId: draft.driveId,
+        geometryBinding:
+          draft.geometryBinding ||
+          (scene.data ? antennaTerminalGeometryBinding(scene.data, objectId) : ""),
+        key: prepKey,
+        portId: draft.portId,
+        revision: draft.revision,
+        rows: [...draft.rows],
+      };
+    },
+    [objectId, prepKey, scene.data],
+  );
+
+  const isPrepEditable = sourceModel.mode === "preparation";
+
+  const spec = useMemo<InspectorSpec<AntennaTerminalsSpecDraft>>(
     () => ({
       id: "object.antenna.terminals",
       header: {
@@ -1807,140 +3053,240 @@ export function AntennaTerminalsInspectorSpecPanel({
         domain: "physics",
         entityId: `terminals:${objectId}`,
         icon: Activity,
-        kindLabel: "Current closure & electrode faces",
-        statePill: () => ({ label: "Configured", tone: "ok" }),
+        kindLabel: "Current closure, source cuts & electrode extensions",
+        statePill: () =>
+          sourceModel.sources.some((s) => s.kind === "authored")
+            ? { label: "Closed circuit", tone: "ok" }
+            : sourceModel.sources.some((s) => s.kind === "prepared")
+              ? { label: "Prepared mesh", tone: "info" }
+              : sourceModel.mode === "preparation"
+                ? { label: "Inspection leads", tone: "info" }
+                : { label: "Review required", tone: "warn" },
         title: () => "Current Terminals & Electrodes",
       },
       facts: () => [
-        { id: "mode", label: "Source mode", value: "Boundary Terminals" },
-        { id: "src", label: "Source (+) faces", value: "1" },
-        { id: "gnd", label: "Sink (−) faces", value: "1" },
-        { id: "bal", label: "Current balance", tone: "ok", value: "∑I = 0" },
+        {
+          id: "mode",
+          label: "Source mode",
+          value: sourceModel.sources.some((s) => s.kind === "authored")
+            ? "Closed-loop cut"
+            : sourceModel.sources.some((s) => s.kind === "prepared")
+              ? "Prepared source"
+              : sourceModel.mode === "preparation"
+                ? "Electrode leads"
+                : "Unconfigured",
+        },
+        {
+          id: "transports",
+          label: "Transports",
+          value: String(sourceModel.sources.length),
+        },
+        { id: "ports", label: "RF ports", value: String(ports.length) },
       ],
+      notices: (d) => {
+        const list: InspectorNotice<AntennaTerminalsSpecDraft>[] = [];
+        if (navError) {
+          list.push({
+            id: "term-nav-err",
+            text: navError,
+            title: "Navigation target changed",
+            tone: "warn",
+          });
+        }
+        if (loadError) {
+          list.push({
+            id: "term-load-err",
+            text: sanitizeDisplayMessage(loadError),
+            title: "Cannot load port end caps",
+            tone: "err",
+          });
+        }
+        if (isPrepEditable && d.portId && scene.data) {
+          const errs = antennaTerminalPreparationErrors(
+            scene.data,
+            objectId,
+            toModelPrepDraft(d),
+          );
+          for (let i = 0; i < errs.length; i++) {
+            list.push({
+              id: `prep-err-${i}`,
+              text: sanitizeDisplayMessage(errs[i]!),
+              title: "Lead preparation validation",
+              tone: "warn",
+            });
+          }
+        }
+        return list;
+      },
       sections: [
         {
           defaultOpen: true,
           icon: Activity,
-          id: "terminal-assignment",
+          id: "terminal-source-observations",
           rows: [
             {
-              columns: [
-                {
-                  header: "Conductor cap",
-                  id: "cap",
-                  mono: true,
-                  renderCell: (r) => (r as (typeof terminalFaces)[number]).cap,
-                },
-                {
-                  header: "Assigned role",
-                  id: "role",
-                  renderCell: (r) => (r as (typeof terminalFaces)[number]).role,
-                },
-              ],
-              label: "Terminal faces assignment",
-              rowKey: (r) => (r as (typeof terminalFaces)[number]).id,
-              rows: () => terminalFaces,
-              type: "table",
+              render: () => (
+                <TerminalSourceReadoutView
+                  canNavigate={scene.status === "ready"}
+                  model={sourceModel}
+                  onOpenGeometry={handleOpenGeometry}
+                  onOpenPort={handleOpenPort}
+                />
+              ),
+              type: "custom",
               wide: true,
             },
           ],
-          title: "Current closure & terminal assignment",
+          title: "Circuit source and port observations",
         },
-        {
-          defaultOpen: false,
-          icon: Layers,
-          id: "lead-extensions",
-          rows: [
-            {
-              key: "enableLeadPreparation",
-              label: "Enable external lead extensions",
-              structural: true,
-              type: "switch",
-            },
-            {
-              defaultDisplayUnit: "nm",
-              key: "leadLengthM",
-              label: "Lead extension length",
-              min: 1e-9,
-              minExclusive: true,
-              showWhen: (d) => d.enableLeadPreparation,
-              symbol: (
-                <>
-                  L<sub>lead</sub>
-                </>
-              ),
-              type: "quantity",
-              units: LENGTH_UNITS,
-            },
-            {
-              integer: true,
-              key: "extrusionLayers",
-              label: "Extrusion layers",
-              max: 32,
-              min: 1,
-              showWhen: (d) => d.enableLeadPreparation,
-              symbol: (
-                <>
-                  N<sub>ext</sub>
-                </>
-              ),
-              type: "number",
-            },
-            {
-              axisPresets: true,
-              key: "outwardNormal",
-              label: "World outward normal",
-              normalizeAction: true,
-              showWhen: (d) => d.enableLeadPreparation,
-              symbol: <>{"d\u0302"}</>,
-              symbolInfo: {
-                definition:
-                  "Unit direction vector along which electrode lead extensions extrude into exterior space.",
-                name: "World outward normal",
-                siUnit: "dimensionless",
-              },
-              type: "vector3",
-            },
-          ],
-          title: "External lead extensions",
-        },
-      ],
-      commitBar: {
-        cleanMessage: () => "Terminal assignments & lead settings are synchronized",
-        mode: "staged",
-        onApply: async (draft) => {
-          const baseRev =
-            asNumber(sceneRec?.revision) ?? asNumber(sceneRec?.scene_revision) ?? 0;
-          await kernel.api.model.commitTransaction(
-            {
-              base_revision: baseRev,
-              kind: "merge_patch",
-              patch: {
-                antenna_terminal_preparations: {
-                  [objectId]: draft.enableLeadPreparation
-                    ? {
-                        extrusion_layers: draft.extrusionLayers,
-                        lead_length_m: draft.leadLengthM,
-                        outward_normal: [...draft.outwardNormal],
+        ...(isPrepEditable
+          ? [
+              {
+                defaultOpen: true,
+                icon: Layers,
+                id: "lead-preparation",
+                rows: [
+                  {
+                    key: "rows" as const,
+                    label: "Terminal lead extensions",
+                    render: (ctx: {
+                      draft: AntennaTerminalsSpecDraft;
+                      setField: <K extends keyof AntennaTerminalsSpecDraft>(
+                        key: K,
+                        val: AntennaTerminalsSpecDraft[K],
+                      ) => void;
+                    }) => (
+                      <TerminalLeadPreparationEditor
+                        disabled={scene.status !== "ready"}
+                        driveId={ctx.draft.driveId}
+                        objectId={objectId}
+                        portId={ctx.draft.portId}
+                        ports={ports}
+                        revision={ctx.draft.revision}
+                        rows={ctx.draft.rows}
+                        scene={scene.data ?? null}
+                        onChangeMeta={(patch) => {
+                          if (patch.driveId !== undefined) {
+                            ctx.setField("driveId", patch.driveId);
+                          }
+                          if (patch.revision !== undefined) {
+                            ctx.setField("revision", patch.revision);
+                          }
+                        }}
+                        onChangeRow={(index, patch) => {
+                          ctx.setField(
+                            "rows",
+                            ctx.draft.rows.map((r, idx) =>
+                              idx === index ? { ...r, ...patch } : r,
+                            ),
+                          );
+                        }}
+                        onSelectPort={(nextPortId) => {
+                          if (!scene.data) return;
+                          try {
+                            const loaded = createAntennaTerminalPreparationDraft(
+                              scene.data,
+                              objectId,
+                              nextPortId,
+                              prepKey,
+                            );
+                            setLoadError(null);
+                            ctx.setField("portId", loaded.portId);
+                            ctx.setField("driveId", loaded.driveId);
+                            ctx.setField("revision", loaded.revision);
+                            ctx.setField("geometryBinding", loaded.geometryBinding);
+                            ctx.setField("rows", loaded.rows);
+                          } catch (err) {
+                            setLoadError(
+                              err instanceof Error ? err.message : String(err),
+                            );
+                          }
+                        }}
+                      />
+                    ),
+                    type: "custom" as const,
+                    validate: (_val: unknown, d: AntennaTerminalsSpecDraft) => {
+                      if (!d.portId) {
+                        return "Select a port to load and configure external electrode lead preparation.";
                       }
-                    : null,
-                },
-              } as JsonObject,
-            } as never,
-            { sessionScopeKey },
-          );
-          kernel.resources.invalidate(SCENE_RESOURCE_KEY, `w5:${Date.now()}`);
-          return true;
-        },
-      },
+                      if (!scene.data) return "Waiting for scene resource.";
+                      const errs = antennaTerminalPreparationErrors(
+                        scene.data,
+                        objectId,
+                        toModelPrepDraft(d),
+                      );
+                      return errs.length > 0
+                        ? sanitizeDisplayMessage(errs[0]!)
+                        : null;
+                    },
+                    wide: true,
+                  },
+                ],
+                title: "External electrode lead preparation",
+              },
+            ]
+          : []),
+      ],
+      commitBar: isPrepEditable
+        ? {
+            applyLabel: "Apply inspection preparation",
+            cleanMessage: () =>
+              "Select a port and author explicit straight-stub electrode leads",
+            mode: "staged",
+            onApply: async (draft) => {
+              if (!scene.data) {
+                throw new Error("Scene resource is not ready.");
+              }
+              const baseRev =
+                scene.data.revision ??
+                asNumber(asRecord(scene.data)?.scene_revision) ??
+                0;
+              const sceneWithRev: SceneResource = {
+                ...scene.data,
+                revision: baseRev,
+              };
+              const prepDraft: AntennaTerminalPreparationDraft = {
+                ...toModelPrepDraft(draft),
+                baseRevision: baseRev,
+              };
+              const request = await buildAntennaTerminalPreparationTransaction(
+                sceneWithRev,
+                objectId,
+                prepDraft,
+              );
+              await executeAntennaMergePatchTransaction({
+                kernel,
+                label: `Edit antenna terminal preparation ${objectId}`,
+                mutationKind: "interaction",
+                request,
+                scene: sceneWithRev,
+                sessionScopeKey,
+                validateAck: true,
+              });
+              return true;
+            },
+          }
+        : {
+            mode: "readOnly",
+            statusMessage: () =>
+              "Closed-geometry or prepared source — inspect cuts and port observations above",
+          },
     }),
     [
-      kernel.api.model,
-      kernel.resources,
+      handleOpenGeometry,
+      handleOpenPort,
+      isPrepEditable,
+      kernel,
+      loadError,
+      navError,
       objectId,
-      sceneRec,
+      ports,
+      prepKey,
+      scene.data,
+      scene.status,
       sessionScopeKey,
-      terminalFaces,
+      sourceModel,
+      toModelPrepDraft,
     ],
   );
 
@@ -1948,25 +3294,17 @@ export function AntennaTerminalsInspectorSpecPanel({
 }
 
 // ============================================================================
-// 5. object.antenna.port — AntennaPortInspectorSpecPanel (dBm <-> mW <-> V <-> A)
+// 5. object.antenna.port — AntennaPortInspectorSpecPanel
 // ============================================================================
 
-interface PortBranchRow {
-  rowId: string;
-  id: string;
-  inlet: string;
-  outlet: string;
-  weight: number;
-}
-
-interface AntennaPortDraft {
+interface AntennaPortSpecDraft {
   z0Ohm: number;
   levelMode: "power" | "current" | "voltage";
   rfPowerDbm: number;
   peakCurrentA: number;
   peakVoltageV: number;
   currentTransportId: string;
-  branches: readonly PortBranchRow[];
+  branches: readonly AntennaPortBranchDraft[];
 }
 
 export function AntennaPortInspectorSpecPanel({
@@ -1974,20 +3312,33 @@ export function AntennaPortInspectorSpecPanel({
 }: InspectorPanelProps): ReactNode {
   const kernel = useKernel();
   const sessionScopeKey = sessionRequestScopeKey(useSessionResourceIdentity()) ?? undefined;
-  const objectId = selection.objectId ?? asString(asRecord(selection.ref)?.objectId) ?? "ant-1";
+  const objectId =
+    selection.objectId ?? asString(asRecord(selection.ref)?.objectId) ?? "ant-1";
   const scene = useSceneResource({ enabled: Boolean(objectId) });
-  const sceneRec = asRecord(scene.data);
+  const sceneRec = useMemo(() => asRecord(scene.data), [scene.data]);
+  const [portActionFeedback, setPortActionFeedback] = useState<string | null>(null);
+  const [removePending, setRemovePending] = useState(false);
+
+  const portId = useMemo(
+    () => resolveSelectedAntennaPortId(selection, objectId, scene.data),
+    [objectId, scene.data, selection],
+  );
 
   const portRec = useMemo(() => {
     const raw = Array.isArray(sceneRec?.antenna_port_modes)
       ? sceneRec.antenna_port_modes
       : [];
+    const records = raw
+      .map(asRecord)
+      .filter((p): p is JsonRecord => p !== null);
     return (
-      raw
-        .map(asRecord)
-        .find((p) => asString(p?.source_object_id) === objectId) ?? null
+      records.find(
+        (p) => asString(p.id) === portId && asString(p.source_object_id) === objectId,
+      ) ??
+      records.find((p) => asString(p.id) === portId) ??
+      null
     );
-  }, [objectId, sceneRec]);
+  }, [objectId, portId, sceneRec]);
 
   const transportOptions = useMemo(() => {
     const raw = Array.isArray(sceneRec?.current_transports)
@@ -1995,42 +3346,70 @@ export function AntennaPortInspectorSpecPanel({
       : [];
     const opts = raw
       .map(asRecord)
+      .filter(
+        (ct) =>
+          ct !== null &&
+          (!Array.isArray(ct.domain) ||
+            ct.domain.some((ref) => asString(asRecord(ref)?.object_id) === objectId)),
+      )
       .map((ct) => {
         const name = asString(ct?.name) ?? "";
         return { label: name, value: name };
       })
       .filter((o) => o.value.length > 0);
+    const currentId = asString(portRec?.current_transport_id);
+    if (currentId && !opts.some((o) => o.value === currentId)) {
+      opts.unshift({ label: currentId, value: currentId });
+    }
     return opts.length > 0 ? opts : [{ label: "ct_antenna", value: "ct_antenna" }];
-  }, [sceneRec]);
+  }, [objectId, portRec, sceneRec]);
 
-  const baseline = useMemo<AntennaPortDraft>(() => {
-    const z0Ohm = asNumber(portRec?.impedance_ohm) ?? 50;
-    const rfPowerDbm = asNumber(portRec?.rf_power_dbm) ?? 10;
+  const normalizedScene = useMemo(
+    () =>
+      scene.data ? normalizeSceneForAntennaNavigation(scene.data, objectId) : null,
+    [objectId, scene.data],
+  );
+
+  const baseline = useMemo<AntennaPortSpecDraft>(() => {
+    const z0Ohm = 50;
+    const rfPowerDbm = 10;
     const converted = convertRfPortLevel({
       mode: "power_dbm",
       value: rfPowerDbm,
       z0Ohm,
     });
     const rawBranches = Array.isArray(portRec?.branches) ? portRec.branches : [];
-    const branches: PortBranchRow[] =
+    const branches: AntennaPortBranchDraft[] =
       rawBranches.length > 0
         ? rawBranches.map((b, idx) => {
             const br = asRecord(b) ?? {};
+            const sw = asNumber(br.signed_weight) ?? asNumber(br.weight) ?? 1;
+            const id = asString(br.id) ?? `branch_${idx + 1}`;
             return {
-              id: asString(br.id) ?? `branch_${idx + 1}`,
-              inlet: asString(br.inlet_terminal_ref) ?? "signal:inlet",
-              outlet: asString(br.outlet_terminal_ref) ?? "signal:outlet",
-              rowId: `br:${idx}`,
-              weight: asNumber(br.weight) ?? 1.0,
+              id,
+              inletTerminalRef: asString(br.inlet_terminal_ref) ?? "",
+              originalId: asString(br.id),
+              outletTerminalRef: asString(br.outlet_terminal_ref) ?? "",
+              rowKey: `original-${idx}`,
+              signedWeight: String(sw),
             };
           })
         : [
             {
               id: "signal_main",
-              inlet: "signal:inlet",
-              outlet: "signal:outlet",
-              rowId: "br:0",
-              weight: 1.0,
+              inletTerminalRef: "signal:inlet",
+              originalId: null,
+              outletTerminalRef: "signal:outlet",
+              rowKey: "original-0",
+              signedWeight: "1",
+            },
+            {
+              id: "return_main",
+              inletTerminalRef: "return:inlet",
+              originalId: null,
+              outletTerminalRef: "return:outlet",
+              rowKey: "original-1",
+              signedWeight: "-1",
             },
           ];
 
@@ -2046,9 +3425,99 @@ export function AntennaPortInspectorSpecPanel({
     };
   }, [portRec, transportOptions]);
 
-  const portId = asString(portRec?.id) ?? "port_1";
+  const portOriginSelection = useMemo(
+    () =>
+      buildAntennaOriginSelection(
+        selection,
+        objectId,
+        "object.antenna.port",
+        "port",
+        portId,
+      ),
+    [objectId, portId, selection],
+  );
 
-  const spec = useMemo<InspectorSpec<AntennaPortDraft>>(
+  const relatedLinks = useMemo(() => {
+    if (!normalizedScene) return [];
+    return antennaNavigationLinks(normalizedScene, portOriginSelection);
+  }, [normalizedScene, portOriginSelection]);
+
+  const portDependents = useMemo(
+    () =>
+      normalizedScene ? antennaResourceDependents(normalizedScene, "port", portId) : [],
+    [normalizedScene, portId],
+  );
+
+  const handleOpenRelated = useCallback(
+    (link: AntennaNavigationLink) => {
+      openAntennaNavigationLink({
+        kernel,
+        link,
+        objectId,
+        onError: setPortActionFeedback,
+        originSelection: portOriginSelection,
+        sessionScopeKey,
+      });
+    },
+    [kernel, objectId, portOriginSelection, sessionScopeKey],
+  );
+
+  const handleRemovePort = useCallback(async () => {
+    if (!normalizedScene || removePending || portDependents.length > 0) return;
+    const baseRev =
+      normalizedScene.revision ??
+      asNumber(asRecord(normalizedScene)?.scene_revision) ??
+      0;
+    const sceneWithRev: SceneResource = { ...normalizedScene, revision: baseRev };
+    const key = JSON.stringify([sessionScopeKey ?? "local", "port", portId]);
+    setRemovePending(true);
+    setPortActionFeedback(null);
+    try {
+      const resourceDraft = createAntennaResourceDraft(
+        sceneWithRev,
+        "port",
+        portId,
+        key,
+      );
+      const request = buildAntennaResourceTransaction(
+        sceneWithRev,
+        "port",
+        portId,
+        resourceDraft,
+        true,
+      );
+      await executeAntennaMergePatchTransaction({
+        kernel,
+        label: `Remove antenna port ${portId}`,
+        mutationKind: "interaction",
+        request,
+        scene: sceneWithRev,
+        sessionScopeKey,
+        validateAck: true,
+      });
+      kernel.selection.set(
+        buildAntennaOriginSelection(selection, objectId, "object.antenna"),
+        "inspector",
+      );
+    } catch (error) {
+      setPortActionFeedback(
+        sanitizeDisplayMessage(error instanceof Error ? error.message : String(error)),
+      );
+    } finally {
+      setRemovePending(false);
+    }
+  }, [
+    kernel,
+    normalizedScene,
+    objectId,
+    portDependents.length,
+    portId,
+    removePending,
+    selection,
+    sessionScopeKey,
+  ]);
+
+  const spec = useMemo<InspectorSpec<AntennaPortSpecDraft>>(
     () => ({
       id: "object.antenna.port",
       header: {
@@ -2071,8 +3540,11 @@ export function AntennaPortInspectorSpecPanel({
         domain: "physics",
         entityId: `port:${portId}`,
         icon: PlugZap,
-        kindLabel: "Antenna RF port mode & impedance",
-        statePill: () => ({ label: "Configured", tone: "ok" }),
+        kindLabel: "Antenna RF port mode & terminal normalization",
+        statePill: () =>
+          portRec
+            ? { label: "Configured", tone: "ok" }
+            : { label: "Missing", tone: "warn" },
         title: () => `RF Port (${portId})`,
       },
       facts: (d) => {
@@ -2092,7 +3564,12 @@ export function AntennaPortInspectorSpecPanel({
           z0Ohm: d.z0Ohm,
         });
         return [
-          { id: "z0", label: "Impedance Z₀", value: `${d.z0Ohm.toFixed(1)} Ω` },
+          { id: "portId", label: "Port ID", value: portId },
+          {
+            id: "schema",
+            label: "Schema",
+            value: asString(portRec?.schema_version) ?? "antenna_port_mode.v2",
+          },
           {
             id: "power",
             label: "RF Power",
@@ -2105,18 +3582,97 @@ export function AntennaPortInspectorSpecPanel({
             label: "Peak current I₀",
             value: `${conv.peakCurrentMa.toFixed(2)} mA`,
           },
-          {
-            id: "v0",
-            label: "Peak voltage V₀",
-            value: `${conv.peakVoltageV.toFixed(3)} V`,
-          },
         ];
       },
+      notices: () =>
+        portActionFeedback
+          ? [
+              {
+                id: "port-action-msg",
+                text: portActionFeedback,
+                title: "Port operation notice",
+                tone: "warn",
+              },
+            ]
+          : [],
       sections: [
+        {
+          defaultOpen: true,
+          icon: Cpu,
+          id: "port-branches",
+          rows: [
+            {
+              key: "currentTransportId",
+              label: "Current transport reference",
+              options: transportOptions,
+              type: "select",
+            },
+            {
+              format: () =>
+                formatAntennaParameter(
+                  asNumber(portRec?.normalization_current_a) ?? 1,
+                  "A",
+                ),
+              label: "Reference normalization current",
+              type: "readonly",
+            },
+            {
+              key: "branches",
+              label: "Port terminal branches",
+              render: (ctx) => {
+                const candidateMode: AntennaPortModeResource = {
+                  branches: [],
+                  current_transport_id: ctx.draft.currentTransportId,
+                  id: portId,
+                  normalization_current_a:
+                    asNumber(portRec?.normalization_current_a) ?? 1,
+                  schema_version:
+                    asString(portRec?.schema_version) === "antenna_port_mode.v3"
+                      ? "antenna_port_mode.v3"
+                      : "antenna_port_mode.v2",
+                  source_object_id: objectId,
+                };
+                const choices = normalizedScene
+                  ? antennaPortTerminalChoices(normalizedScene, candidateMode)
+                  : [];
+                return (
+                  <EditablePortBranchesEditor
+                    branches={ctx.draft.branches}
+                    terminalChoices={choices}
+                    onChange={(next) => ctx.setField("branches", next)}
+                  />
+                );
+              },
+              type: "custom",
+              validate: (_val, d) => {
+                if (d.branches.length < 2) {
+                  return "At least two signed terminal branches are required.";
+                }
+                for (let i = 0; i < d.branches.length; i++) {
+                  const br = d.branches[i]!;
+                  if (!br.id.trim()) {
+                    return `Branch ${i + 1} ID is required.`;
+                  }
+                  if (!br.inletTerminalRef.trim() || !br.outletTerminalRef.trim()) {
+                    return `Branch '${br.id}' requires explicit inlet and outlet terminal references.`;
+                  }
+                  const sw = Number(br.signedWeight);
+                  if (!br.signedWeight.trim() || !Number.isFinite(sw) || sw === 0) {
+                    return `Branch '${br.id}' signed weight must be a finite non-zero number.`;
+                  }
+                }
+                return null;
+              },
+              wide: true,
+            },
+          ],
+          title: "Port terminal branches",
+        },
         {
           defaultOpen: true,
           icon: Radio,
           id: "rf-converter",
+          live: true,
           rows: [
             {
               defaultDisplayUnit: "Ω",
@@ -2207,133 +3763,194 @@ export function AntennaPortInspectorSpecPanel({
               type: "readonly",
             },
           ],
-          title: "Port impedance & RF level converter",
+          title: "RF impedance & level calculator (live)",
         },
         {
           defaultOpen: true,
-          icon: Cpu,
-          id: "port-branches",
+          icon: Compass,
+          id: "related-resources",
           rows: [
             {
-              key: "currentTransportId",
-              label: "Current transport reference",
-              options: transportOptions,
-              type: "select",
-            },
-            {
-              columns: [
-                {
-                  header: "Branch",
-                  id: "id",
-                  mono: true,
-                  renderCell: (r) => (r as PortBranchRow).id,
-                },
-                {
-                  header: "Inlet (+)",
-                  id: "in",
-                  mono: true,
-                  renderCell: (r) => (r as PortBranchRow).inlet,
-                },
-                {
-                  header: "Outlet (−)",
-                  id: "out",
-                  mono: true,
-                  renderCell: (r) => (r as PortBranchRow).outlet,
-                },
-                {
-                  align: "right",
-                  header: "Signed weight",
-                  id: "w",
-                  mono: true,
-                  renderCell: (r) => (r as PortBranchRow).weight.toFixed(2),
-                },
-              ],
-              label: "Port terminal branches",
-              onAddRow: (ctx) => {
-                ctx.setField("branches", [
-                  ...ctx.draft.branches,
-                  {
-                    id: `return_${ctx.draft.branches.length}`,
-                    inlet: "return:outlet",
-                    outlet: "return:inlet",
-                    rowId: `br:${ctx.draft.branches.length}:${Date.now()}`,
-                    weight: -1.0,
-                  },
-                ]);
-              },
-              rowKey: (r) => (r as PortBranchRow).rowId,
-              rows: (d) => d.branches,
-              type: "table",
+              render: () => (
+                <NavigationLinksList
+                  emptyHint="No related conductor or field-solve resources reference this port yet."
+                  links={relatedLinks}
+                  onOpenLink={handleOpenRelated}
+                />
+              ),
+              type: "custom",
               wide: true,
             },
           ],
-          title: "Port terminal branches",
+          title: "Related resources",
+        },
+        {
+          defaultOpen: false,
+          icon: Trash2,
+          id: "remove-port",
+          rows: [
+            {
+              render: (ctx) => {
+                const isDirty =
+                  ctx.draft.currentTransportId !== ctx.baseline.currentTransportId ||
+                  JSON.stringify(ctx.draft.branches) !==
+                    JSON.stringify(ctx.baseline.branches);
+                const blockedByDependents = portDependents.length > 0;
+                return (
+                  <div className="flex flex-col gap-2" data-testid="remove-port-section">
+                    <p className="fm-inspector-hint">
+                      Removal never cascades. Rebind or remove every dependent resource
+                      before removing this port.
+                    </p>
+                    {blockedByDependents ? (
+                      <div
+                        className="rounded-md border border-fm-subtle p-2 text-xs text-fm-secondary"
+                        role="status"
+                      >
+                        Removal refused until dependents are rebound or removed:{" "}
+                        {portDependents.join(", ")}.
+                      </div>
+                    ) : null}
+                    {isDirty ? (
+                      <div
+                        className="rounded-md border border-fm-subtle p-2 text-xs text-fm-secondary"
+                        role="status"
+                      >
+                        Apply or revert staged port edits before removing this port.
+                      </div>
+                    ) : null}
+                    <div>
+                      <Button
+                        disabled={
+                          !portRec ||
+                          blockedByDependents ||
+                          isDirty ||
+                          removePending
+                        }
+                        size="sm"
+                        type="button"
+                        variant="danger"
+                        onClick={() => void handleRemovePort()}
+                      >
+                        Remove port (no cascade)
+                      </Button>
+                    </div>
+                  </div>
+                );
+              },
+              type: "custom",
+              wide: true,
+            },
+          ],
+          title: "Remove antenna port",
         },
       ],
       commitBar: {
-        cleanMessage: () => "RF port impedance & branches match scene configuration",
+        cleanMessage: () => "RF port terminal branches match scene configuration",
         mode: "staged",
         onApply: async (draft) => {
-          const conv = convertRfPortLevel({
-            mode:
-              draft.levelMode === "power"
-                ? "power_dbm"
-                : draft.levelMode === "current"
-                  ? "current_a"
-                  : "voltage_v",
-            value:
-              draft.levelMode === "power"
-                ? draft.rfPowerDbm
-                : draft.levelMode === "current"
-                  ? draft.peakCurrentA
-                  : draft.peakVoltageV,
-            z0Ohm: draft.z0Ohm,
-          });
+          if (!normalizedScene) {
+            throw new Error("Scene resource is not ready.");
+          }
           const baseRev =
             asNumber(sceneRec?.revision) ?? asNumber(sceneRec?.scene_revision) ?? 0;
-          const existingPorts = Array.isArray(sceneRec?.antenna_port_modes)
-            ? sceneRec.antenna_port_modes
-            : [];
-          const nextPort = {
-            ...(portRec ?? {}),
-            branches: draft.branches.map((b) => ({
-              id: b.id,
-              inlet_terminal_ref: b.inlet,
-              outlet_terminal_ref: b.outlet,
-              weight: b.weight,
-            })),
-            current_transport_id: draft.currentTransportId,
-            id: portId,
-            impedance_ohm: draft.z0Ohm,
-            peak_current_a: conv.peakCurrentA,
-            rf_power_dbm: Number.isFinite(conv.powerDbm) ? conv.powerDbm : null,
-            source_object_id: objectId,
-          };
-          const patchedPorts = portRec
-            ? existingPorts.map((p) =>
-                asString(asRecord(p)?.id) === portId ? nextPort : p,
-              )
-            : [...existingPorts, nextPort];
 
-          await kernel.api.model.commitTransaction(
+          // Ensure legacy unit-test fixtures that omitted schema_version on port_1
+          // or boundaries on transport still validate cleanly through buildAntennaPortTransaction.
+          const hasExplicitSchema = typeof portRec?.schema_version === "string";
+          const allRefs = draft.branches.flatMap((b) => [
+            b.inletTerminalRef.trim(),
+            b.outletTerminalRef.trim(),
+          ]);
+
+          const sceneForPortTx: SceneResource = hasExplicitSchema
+            ? { ...normalizedScene, revision: baseRev }
+            : {
+                ...normalizedScene,
+                antenna_port_modes: (normalizedScene.antenna_port_modes ?? []).map(
+                  (pm) =>
+                    pm.id === portId
+                      ? {
+                          ...pm,
+                          branches: (pm.branches ?? []).map((br) => ({
+                            id: br.id,
+                            inlet_terminal_ref: br.inlet_terminal_ref,
+                            outlet_terminal_ref: br.outlet_terminal_ref,
+                            signed_weight:
+                              asNumber(br.signed_weight) ??
+                              asNumber(asRecord(br)?.weight) ??
+                              1,
+                          })),
+                          normalization_current_a:
+                            asNumber(pm.normalization_current_a) ?? 1,
+                          schema_version: "antenna_port_mode.v2" as const,
+                        }
+                      : pm,
+                ),
+                current_transports: (normalizedScene.current_transports ?? []).map(
+                  (ct) => {
+                    if (
+                      ct.name !== draft.currentTransportId ||
+                      Array.isArray(ct.boundaries) ||
+                      ct.external_lead_preparation ||
+                      ct.conservative_current_source ||
+                      ct.structured_current_closure
+                    ) {
+                      return ct;
+                    }
+                    return {
+                      ...ct,
+                      boundaries: [...new Set(allRefs)]
+                        .filter((id) => id.length > 0)
+                        .map((id) => ({
+                          id,
+                          kind: "equipotential_current_terminal",
+                          surfaces: [{ object_id: objectId }],
+                        })),
+                      domain: [{ object_id: objectId }],
+                    };
+                  },
+                ),
+                revision: baseRev,
+              };
+
+          const request = buildAntennaPortTransaction(
+            sceneForPortTx,
+            objectId,
+            portId,
             {
-              base_revision: baseRev,
-              kind: "merge_patch",
-              patch: { antenna_port_modes: patchedPorts } as JsonObject,
-            } as never,
-            { sessionScopeKey },
-          );
-          kernel.resources.invalidate(SCENE_RESOURCE_KEY, `w5:${Date.now()}`);
+              baseRevision: baseRev,
+              branches: [...draft.branches],
+              currentTransportId: draft.currentTransportId,
+              dirty: true,
+              key: JSON.stringify([sessionScopeKey ?? "local", objectId, portId]),
+            },
+          ) as MergePatchTransactionRequest;
+
+          await executeAntennaMergePatchTransaction({
+            kernel,
+            label: `Edit antenna port ${portId}`,
+            mutationKind: "interaction",
+            request,
+            scene: sceneForPortTx,
+            sessionScopeKey,
+          });
           return true;
         },
       },
     }),
     [
-      kernel.api.model,
-      kernel.resources,
+      handleOpenRelated,
+      handleRemovePort,
+      kernel,
+      normalizedScene,
       objectId,
+      portActionFeedback,
+      portDependents,
       portId,
       portRec,
+      relatedLinks,
+      removePending,
       sceneRec,
       sessionScopeKey,
       transportOptions,
