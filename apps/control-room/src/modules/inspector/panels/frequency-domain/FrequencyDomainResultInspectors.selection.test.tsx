@@ -1,10 +1,44 @@
-import { describe, expect, it } from "vitest";
+import { renderToStaticMarkup } from "react-dom/server";
+import { describe, expect, it, vi } from "vitest";
 
 import { EMPTY_SELECTION, type Selection } from "@/kernel/selection/selectionTypes";
 import { createModeFieldOverlayIntent } from "@/kernel/visualization/ModeFieldOverlayIntent";
-import type { EigenDispersionPoint } from "@/shared/domain/analysis/frequencyDomainChartModels";
+import type { EigenDispersionPoint, EigenSpectrumPoint } from "@/shared/domain/analysis/frequencyDomainChartModels";
 
-import { buildEigenDispersionPointSelectionRefFromSelection } from "./FrequencyDomainResultInspectors";
+import {
+  buildEigenDispersionPointSelectionRefFromSelection,
+  EigenSpectrumInspectorPanel,
+} from "./FrequencyDomainResultInspectors";
+
+const mocks = vi.hoisted(() => ({
+  chart: vi.fn<(_props: {
+    onSelectMode: (target: EigenSpectrumPoint) => void;
+    onPlotMode: (target: EigenSpectrumPoint) => void;
+  }) => null>(() => null),
+  execute: vi.fn(),
+  select: vi.fn(),
+  spectrum: vi.fn(),
+}));
+
+vi.mock("@/kernel/KernelContext", async (importOriginal) => ({
+  ...await importOriginal<typeof import("@/kernel/KernelContext")>(),
+  useKernel: () => ({
+    commands: { execute: mocks.execute },
+    selection: { set: mocks.select },
+  }),
+}));
+vi.mock("@/kernel/visualization/AnalysisFieldOverlayController", async (importOriginal) => ({
+  ...await importOriginal<typeof import("@/kernel/visualization/AnalysisFieldOverlayController")>(),
+  useRenderableAnalysisFieldOverlay: () => null,
+}));
+vi.mock("../FrequencyDomainCharts", async (importOriginal) => ({
+  ...await importOriginal<typeof import("../FrequencyDomainCharts")>(),
+  FrequencyDomainSpectrumChart: mocks.chart,
+}));
+vi.mock("./frequencyDomainEigenFmrSummaries", async (importOriginal) => ({
+  ...await importOriginal<typeof import("./frequencyDomainEigenFmrSummaries")>(),
+  useEigenSpectrumSummary: mocks.spectrum,
+}));
 
 const dispersionPoint: EigenDispersionPoint = {
   analyticFrequencyHz: null,
@@ -96,4 +130,74 @@ describe("dispersion Inspector selection handoff", () => {
     expect(ref.type === "frequency-domain" ? createModeFieldOverlayIntent(ref) : null)
       .toBeNull();
   });
+});
+
+
+it("inspects a spectrum point and plots its phase-rotated field from the published stage", () => {
+  const point: EigenSpectrumPoint = {
+    branchId: null,
+    dampingRateHz: null,
+    displayModeIndex: 2,
+    frequencyHz: 7.5e9,
+    imaginaryFrequencyHz: null,
+    modeFieldAvailable: true,
+    modeFieldId: dispersionPoint.modeFieldId,
+    modeFieldResourceKey: dispersionPoint.modeFieldResourceKey,
+    modeId: dispersionPoint.modeId,
+    rawModeIndex: 2,
+    residualNorm: null,
+    sampleId: dispersionPoint.sampleId,
+    sampleIndex: 0,
+    tangentLeakageMax: null,
+  };
+  const selection: Selection = {
+    ...EMPTY_SELECTION,
+    kind: "results.resonance.modal.spectrum",
+    ref: {
+      analysisRunId: "published-run",
+      analysisStageId: "modal-stage",
+      artifactRevision: "published-revision",
+      kind: "results.resonance.modal.spectrum",
+      nodeId: "spectrum",
+      type: "frequency-domain",
+    },
+  };
+  mocks.spectrum.mockReturnValue({
+    badge: "ready",
+    spectrumModel: { points: [point] },
+    spectrumPublication: {
+      generation_id: "spectrum-generation",
+      run_id: "published-run",
+      stage_id: "modal-stage",
+    },
+  });
+
+  renderToStaticMarkup(<EigenSpectrumInspectorPanel selection={selection} />);
+  const chart = mocks.chart.mock.lastCall?.[0];
+  expect(chart).toEqual(expect.objectContaining({
+    onSelectMode: expect.any(Function),
+    onPlotMode: expect.any(Function),
+  }));
+  const { onSelectMode, onPlotMode } = chart!;
+  onSelectMode(point);
+  expect(mocks.select).toHaveBeenCalledWith(expect.objectContaining({
+    kind: "results.resonance.modal.mode",
+    ref: expect.objectContaining({
+      analysisRunId: "published-run",
+      analysisStageId: "modal-stage",
+      artifactRevision: "published-revision",
+      fieldId: point.modeFieldId,
+    }),
+  }), "inspector");
+
+  onPlotMode(point);
+  expect(mocks.execute).toHaveBeenCalledWith(
+    "analysis.eigen.plot-mode-3d",
+    expect.anything(),
+    expect.objectContaining({
+      artifactGenerationId: "spectrum-generation",
+      fieldId: point.modeFieldId,
+      view: "phase_rotated_real",
+    }),
+  );
 });

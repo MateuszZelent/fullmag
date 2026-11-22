@@ -1405,7 +1405,11 @@ export function EigenSpectrumInspectorPanel({ selection }: InspectorPanelProps) 
   return (
     <div data-inspector-surface="eigen-spectrum">
       <InspectorGroup title="Eigenfrequency Spectrum" summary={summary.frequencyRange}>
-        <FrequencyDomainSpectrumChart model={summary.spectrumModel} onPlotMode={browser.onView} />
+        <FrequencyDomainSpectrumChart
+          model={summary.spectrumModel}
+          onPlotMode={(point) => browser.onView(point, "phase_rotated_real")}
+          onSelectMode={browser.onInspect}
+        />
       </InspectorGroup>
       <InspectorGroup title="Modes" summary={`${summary.fieldOverlayCount} profiles · ${summary.modeCount} frequencies`}>
         <EigenModeBrowser {...browser} points={summary.spectrumModel.points} />
@@ -1479,7 +1483,10 @@ function useEigenModeBrowser(
       ref: { ...ref, kind },
     }, "inspector");
   };
-  const onView = (point: EigenSpectrumPoint): void => {
+  const onView = (
+    point: EigenSpectrumPoint,
+    view: "abs" | "phase_rotated_real" = "abs",
+  ): void => {
     if (!hasSpectrum || !eigenModeFieldAvailable(point) || !point.modeFieldId) return;
     void kernel.commands.execute(
       "analysis.eigen.plot-mode-3d",
@@ -1497,7 +1504,7 @@ function useEigenModeBrowser(
         sampleId: point.sampleId,
         sampleIndex: point.sampleIndex,
         source: "eigen-mode",
-        view: "abs",
+        view,
       },
     );
   };
