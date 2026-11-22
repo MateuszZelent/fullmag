@@ -2079,6 +2079,7 @@ pub(crate) async fn publish_accepted_frontier_preparation(
         match publication {
             Ok(published) => return Ok(published),
             Err(error) if error.code.as_deref() == Some("accepted_preparation_pending") => {
+                state.development_admission.refresh_runtime_failure_fence().await;
                 if let Some(reason) = state.development_admission.runtime_failure_reason() {
                     return Err(accepted_preparation_runtime_failure(reason));
                 }
