@@ -10,6 +10,7 @@ use std::{
         atomic::{AtomicBool, Ordering},
         Arc, OnceLock,
     },
+    time::Duration,
 };
 
 use axum::{
@@ -19,17 +20,41 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use futures_core::Stream;
-use tokio::sync::{OwnedRwLockReadGuard, OwnedRwLockWriteGuard, RwLock};
+use tokio::sync::{OwnedRwLockReadGuard, OwnedRwLockWriteGuard, RwLock, Semaphore};
 
 use crate::{error::ApiError, types::AppState};
 
 const RUNTIME_FAILURE_FENCE_ENV: &str = "FULLMAG_API_RUNTIME_FAILURE_FENCE";
+const FENCE_OBSERVATION_BUDGET: Duration = Duration::from_millis(750);
+const RUNTIME_FAILURE_FALLBACK: &str =
+    "Runtime execution is unavailable. API diagnostics remain available; inspect the backend log for the cause. No task was restarted.";
+
+pub(crate) async fn bounded_storage_observation<T: Send + 'static>(
+    slots: &Arc<Semaphore>,
+    budget: Duration,
+    observe: impl FnOnce() -> T + Send + 'static,
+) -> Option<T> {
+    tokio::time::timeout(budget, async {
+        let slot = slots.clone().acquire_owned().await.ok()?;
+        tokio::task::spawn_blocking(move || {
+            // A timed-out request cannot release the slot while I/O is pending.
+            let _slot = slot;
+            observe()
+        })
+        .await
+        .ok()
+    })
+    .await
+    .ok()
+    .flatten()
+}
 
 #[derive(Debug)]
 struct AdmissionState {
     closed: AtomicBool,
     mutations: Arc<RwLock<()>>,
     runtime_failure_fence_path: OnceLock<Result<Option<PathBuf>, ()>>,
+    fence_observation: Arc<Semaphore>,
     runtime_failure_fenced: AtomicBool,
     runtime_failure_reason: OnceLock<String>,
 }
@@ -40,6 +65,7 @@ impl Default for AdmissionState {
             closed: AtomicBool::new(false),
             mutations: Arc::new(RwLock::new(())),
             runtime_failure_fence_path: OnceLock::new(),
+            fence_observation: Arc::new(Semaphore::new(1)),
             runtime_failure_fenced: AtomicBool::new(false),
             runtime_failure_reason: OnceLock::new(),
         }
@@ -140,25 +166,44 @@ impl DevelopmentAdmission {
     /// in the backend log. The fence is diagnostic input, never permission to
     /// reopen admission. Keep the first initialization failure visible.
     pub(crate) fn runtime_failure_reason(&self) -> Option<&str> {
-        self.observe_runtime_failure_fence().then(|| {
-            self.0.runtime_failure_reason.get_or_init(|| {
-                let summary = match self.0.runtime_failure_fence_path.get() {
-                    Some(Ok(Some(path))) => public_runtime_failure_summary(path),
-                    _ => None,
-                };
-                summary.unwrap_or_else(||
-                    "Runtime execution is unavailable. API diagnostics remain available; inspect the backend log for the failing stage. No task was restarted.".to_owned())
-            }).as_str()
+        self.0.runtime_failure_fenced.load(Ordering::Acquire).then(|| {
+            self.0.runtime_failure_reason.get().map_or(RUNTIME_FAILURE_FALLBACK, String::as_str)
         })
     }
 
+    pub(crate) async fn refresh_runtime_failure_fence(&self) -> Option<bool> {
+        if self.runtime_failure_reason().is_some() {
+            return Some(true);
+        }
+        let configured = self.0.runtime_failure_fence_path.get_or_init(read_runtime_failure_fence_path);
+        if !matches!(configured, Ok(Some(_))) {
+            return Some(self.observe_runtime_failure_fence());
+        }
+        let admission = self.clone();
+        bounded_storage_observation(&self.0.fence_observation, FENCE_OBSERVATION_BUDGET, move || {
+            admission.observe_runtime_failure_fence()
+        })
+        .await
+        .or_else(|| self.runtime_failure_reason().map(|_| true))
+    }
+
+    async fn require_runtime_fence_observed(&self) -> Result<(), ApiError> {
+        if self.refresh_runtime_failure_fence().await.is_none() {
+            return Err(ApiError::with_status_and_code(
+                axum::http::StatusCode::SERVICE_UNAVAILABLE,
+                "runtime_unavailable",
+                "Workspace changes are temporarily unavailable while runtime storage is busy.",
+            ));
+        }
+        Ok(())
+    }
+
     pub(crate) async fn admit(&self) -> Result<OwnedRwLockReadGuard<()>, ApiError> {
-        self.observe_runtime_failure_fence();
+        self.require_runtime_fence_observed().await?;
         self.check_open()?;
         let permit = self.0.mutations.clone().read_owned().await;
-        // A handoff freeze or runtime failure can begin between the first
-        // check and acquiring the lock.
-        self.observe_runtime_failure_fence();
+        // A handoff freeze or runtime failure can begin while acquiring the lock.
+        self.require_runtime_fence_observed().await?;
         self.check_open()?;
         Ok(permit)
     }
@@ -205,6 +250,11 @@ impl DevelopmentAdmission {
 
         if should_latch {
             self.0.runtime_failure_fenced.store(true, Ordering::Release);
+            if let Ok(Some(path)) = configured {
+                if let Some(summary) = public_runtime_failure_summary(path) {
+                    let _ = self.0.runtime_failure_reason.set(summary);
+                }
+            }
         }
         self.0.runtime_failure_fenced.load(Ordering::Acquire)
     }
@@ -213,7 +263,7 @@ impl DevelopmentAdmission {
     /// Cancellation or an unsuccessful handoff reopens it through RAII.
     #[allow(dead_code)] // The guarded restart command is the next integration step.
     pub(crate) async fn begin_freeze(&self) -> Result<DevelopmentFreeze, ApiError> {
-        self.observe_runtime_failure_fence();
+        self.require_runtime_fence_observed().await?;
         if self.0.runtime_failure_fenced.load(Ordering::Acquire) {
             return Err(ApiError::with_status_and_code(
                 axum::http::StatusCode::SERVICE_UNAVAILABLE,
@@ -239,7 +289,7 @@ impl DevelopmentAdmission {
         freeze.exclusive = Some(self.0.mutations.clone().write_owned().await);
         // The supervisor may publish the marker while this handoff is waiting
         // for existing permits to drain. Do not proceed with ownership work.
-        self.observe_runtime_failure_fence();
+        self.require_runtime_fence_observed().await?;
         if self.0.runtime_failure_fenced.load(Ordering::Acquire) {
             return Err(ApiError::with_status_and_code(
                 axum::http::StatusCode::SERVICE_UNAVAILABLE,
@@ -373,9 +423,6 @@ pub(crate) async fn mutation_admission_middleware(
     request: axum::extract::Request,
     next: Next,
 ) -> Response {
-    let runtime_failure = state
-        .development_admission
-        .observe_runtime_failure_fence();
     let read_only_diagnostic = matches!(*request.method(), Method::GET | Method::HEAD)
         && (matches!(
             request.uri().path(),
@@ -391,7 +438,7 @@ pub(crate) async fn mutation_admission_middleware(
         || (request.method() == Method::GET
             && request.uri().query().is_none()
             && runtime_failure_snapshot_observation(request.uri().path()));
-    let observation = (matches!(*request.method(), Method::GET | Method::HEAD)
+    let observation = matches!(*request.method(), Method::GET | Method::HEAD)
         && matches!(
             request.uri().path(),
             "/healthz"
@@ -403,22 +450,21 @@ pub(crate) async fn mutation_admission_middleware(
                 | "/v2/platform/runtime-service"
                 | "/v2/platform/compute/profiles"
                 | "/v1/internal/live/current/control/wait"
-        ))
-        || (runtime_failure && read_only_diagnostic);
+        );
     let permit = if request.method() == Method::OPTIONS || observation {
         None
     } else {
         match state.development_admission.admit().await {
             Ok(permit) => Some(permit),
             Err(error) => {
-                // A runtime marker can appear after the initial observation.
-                // Retry only these read-only diagnostic routes if the error
-                // came from the now-visible sticky runtime fence; an ordinary
-                // handoff freeze must continue to reject them.
+                // Only a confirmed runtime failure makes these retained reads
+                // diagnostic. A handoff freeze or unconfirmed observation must
+                // continue to reject them.
                 if read_only_diagnostic
                     && state
                         .development_admission
-                        .observe_runtime_failure_fence()
+                        .runtime_failure_reason()
+                        .is_some()
                 {
                     None
                 } else {
@@ -514,6 +560,27 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn timed_out_storage_observation_keeps_its_slot_until_io_finishes() {
+        let slots = Arc::new(Semaphore::new(1));
+        let (release, blocked) = std::sync::mpsc::channel();
+        let (started, running) = tokio::sync::oneshot::channel();
+        let (result, ()) = tokio::join!(
+            bounded_storage_observation(&slots, Duration::from_millis(100), move || {
+                started.send(()).unwrap();
+                blocked.recv_timeout(Duration::from_secs(3)).unwrap();
+            }),
+            async { running.await.unwrap() },
+        );
+        assert_eq!(result, None);
+        assert_eq!(slots.available_permits(), 0);
+        release.send(()).unwrap();
+        assert_eq!(
+            bounded_storage_observation(&slots, Duration::from_secs(1), || 7).await,
+            Some(7)
+        );
     }
 
     #[tokio::test]
