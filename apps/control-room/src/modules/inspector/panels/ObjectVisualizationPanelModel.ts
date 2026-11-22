@@ -2229,6 +2229,7 @@ export function visualizationQuantityItems(
   fieldCatalog?: FieldCatalogResource | null,
   quantityCatalog?: QuantityCatalogResource | null,
   targetAvailability?: ReadonlyMap<string, TargetFieldAvailability>,
+  authoredMagnetizationAvailable?: boolean,
 ): Array<{ disabled?: boolean; label: string; value: string }> {
   const supportsTarget = targetKind === "airbox"
     ? quantityCatalogEntrySupportsAnyAirboxVisualization
@@ -2264,6 +2265,23 @@ export function visualizationQuantityItems(
       ? { ...item, disabled: true }
       : item;
   });
+
+  // When the object has a committed authored magnetization texture but no
+  // backend field is yet available (pre-Build-Grid), inject "m" as an
+  // enabled selectable so the inspector never shows "No compatible field
+  // available" for a texture that is visibly rendered in the 3D viewport.
+  const authoredMTextureItem =
+    authoredMagnetizationAvailable &&
+    targetKind !== "airbox" &&
+    !targetAwareItems.some(
+      (item) => resolveCanonicalQuantityId(item.value) === "m",
+    )
+      ? { value: "m", label: "Magnetization (initial texture)" }
+      : null;
+  const enrichedItems = authoredMTextureItem
+    ? [authoredMTextureItem, ...targetAwareItems]
+    : targetAwareItems;
+
   if (
     targetKind === "airbox" &&
     !fieldCatalog &&
@@ -2275,17 +2293,17 @@ export function visualizationQuantityItems(
 
   if (
     !activeQuantityId ||
-    targetAwareItems.some(
+    enrichedItems.some(
       (item) =>
         resolveCanonicalQuantityId(item.value) ===
         resolveCanonicalQuantityId(activeQuantityId),
     )
   ) {
-    return targetAwareItems;
+    return enrichedItems;
   }
 
   if (targetKind === "airbox" && (fieldCatalog || quantityCatalog)) {
-    return targetAwareItems;
+    return enrichedItems;
   }
 
   const activeCanonicalQuantityId = resolveCanonicalQuantityId(activeQuantityId);
@@ -2296,7 +2314,7 @@ export function visualizationQuantityItems(
         label: activeQuantityId,
         value: activeQuantityId,
       },
-      ...targetAwareItems,
+      ...enrichedItems,
     ];
   }
 
@@ -2308,7 +2326,7 @@ export function visualizationQuantityItems(
         : activeQuantityId,
       ...(fieldCatalog || quantityCatalog ? { disabled: true } : {}),
     },
-    ...targetAwareItems,
+    ...enrichedItems,
   ];
 }
 
@@ -3295,4 +3313,101 @@ export function resolveArtifactInspectionDataState({ executionSelected = true, c
   if (!quantityAvailable) return "Select a compatible field";
   if (!ownerReady) return "Select execution";
   return presentationReady ? "Historical snapshot" : "Loading historical result";
+}
+
+/**
+ * Returns `true` when the scene object identified by `objectId` has a
+ * committed magnetization texture that is NOT sourced from an external
+ * field file.
+ *
+ * "Committed" means the object's `magnetization_ref` resolves to an entry in
+ * `scene.magnetization_assets` whose `source_mode` is not `"field-file"`,
+ * OR at least one of the object's enabled regions carries an authored
+ * `texture_override.initial_magnetization`.
+ *
+ * Objects without any texture, or whose only texture is a loaded field file,
+ * return `false` so they continue to show the normal "No compatible field
+ * available" message.
+ */
+export function resolveSceneObjectAuthoredMagnetizationAvailable(
+  scene: { objects?: Array<Record<string, unknown>> | null; magnetization_assets?: Array<Record<string, unknown>> | null } | null | undefined,
+  objectId: string | null | undefined,
+): boolean {
+  if (!objectId || !scene) return false;
+  const objects = Array.isArray(scene.objects) ? scene.objects : [];
+  const object = objects.find(
+    (obj): obj is Record<string, unknown> =>
+      typeof obj === "object" && obj !== null && obj["id"] === objectId,
+  );
+  if (!object) return false;
+
+  // Check enabled authored region texture_overrides first.
+  const regions = Array.isArray(object["regions"]) ? object["regions"] : [];
+  for (const regionValue of regions) {
+    if (typeof regionValue !== "object" || !regionValue) continue;
+    const region = regionValue as Record<string, unknown>;
+    if (region["enabled"] === false) continue;
+    const textureOverride = typeof region["texture_override"] === "object" && region["texture_override"] !== null
+      ? region["texture_override"] as Record<string, unknown>
+      : null;
+    if (textureOverride && typeof textureOverride["initial_magnetization"] === "object" && textureOverride["initial_magnetization"] !== null) {
+      return true;
+    }
+  }
+
+  // Check the object's own magnetization_ref against the scene asset list.
+  const refId = typeof object["magnetization_ref"] === "string" ? object["magnetization_ref"].trim() : "";
+  if (!refId) return false;
+  const assets = Array.isArray(scene.magnetization_assets) ? scene.magnetization_assets : [];
+  const asset = assets.find(
+    (a): a is Record<string, unknown> =>
+      typeof a === "object" && a !== null && a["id"] === refId,
+  );
+  if (!asset) return false;
+  // Exclude external field-file sources — they are real field data, not authored textures.
+  const assetKind = typeof asset["kind"] === "string" ? asset["kind"] : "";
+  if (assetKind === "field_file" || assetKind === "field-file" || assetKind === "imported_field") {
+    return false;
+  }
+  const sourceMode = typeof asset["source_mode"] === "string" ? asset["source_mode"] : "";
+  return sourceMode !== "field-file";
+}
+
+/**
+ * Returns `true` when the region identified by `regionId` on object
+ * `objectId` has an authored magnetization texture available.
+ */
+export function resolveSceneRegionAuthoredMagnetizationAvailable(
+  scene: { objects?: Array<Record<string, unknown>> | null; magnetization_assets?: Array<Record<string, unknown>> | null } | null | undefined,
+  objectId: string | null | undefined,
+  regionId: string | null | undefined,
+): boolean {
+  if (!objectId || !scene) return false;
+  const objects = Array.isArray(scene.objects) ? scene.objects : [];
+  const object = objects.find(
+    (obj): obj is Record<string, unknown> =>
+      typeof obj === "object" && obj !== null && obj["id"] === objectId,
+  );
+  if (!object) return false;
+
+  // Check if the specific region has texture_override.initial_magnetization.
+  if (regionId) {
+    const regions = Array.isArray(object["regions"]) ? object["regions"] : [];
+    for (const regionValue of regions) {
+      if (typeof regionValue !== "object" || !regionValue) continue;
+      const region = regionValue as Record<string, unknown>;
+      if (region["enabled"] === false) continue;
+      const rid = region["region_id"] ?? region["id"];
+      if (rid !== regionId) continue;
+      const textureOverride = typeof region["texture_override"] === "object" && region["texture_override"] !== null
+        ? region["texture_override"] as Record<string, unknown>
+        : null;
+      if (textureOverride && typeof textureOverride["initial_magnetization"] === "object" && textureOverride["initial_magnetization"] !== null) {
+        return true;
+      }
+    }
+  }
+
+  // Fall back to the owner object's committed magnetization.
+  return resolveSceneObjectAuthoredMagnetizationAvailable(scene, objectId);
 }

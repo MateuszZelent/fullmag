@@ -24,8 +24,10 @@ import {
 } from "three";
 
 import type { SceneResource } from "@/kernel/api/apiTypes";
+import { resolveCanonicalQuantityId } from "@/kernel/api/quantityIds";
 import type { TargetMetricBounds, Vec3 } from "@/shared/domain/magnetization-texture/boundsResolver";
 import { resolveTargetBoundsMeters } from "@/shared/domain/magnetization-texture/boundsResolver";
+import type { VisualizationTargetSettings } from "@/kernel/visualization/ObjectVisualizationController";
 import {
   axisAngleToQuaternion,
   multiplyQuaternions,
@@ -1070,6 +1072,51 @@ export function createViewport3DTextureTransformModel(scene: SceneResource | nul
       const draft = hydrateMagneticTextureDraftFromInitializer(asset, bounds, "object");
       return { draft, bounds };
     },
+    /**
+     * Returns true when the object has a committed authored magnetization texture
+     * that is NOT an external field-file reference. Used to decide whether to render
+     * a persistent surface preview even when the Magnetic Texture editor is not active.
+     */
+    hasAuthoredMagnetization(objectId: string): boolean {
+      if (!scene) return false;
+      const sceneObjects = scene.objects;
+      if (!Array.isArray(sceneObjects)) return false;
+      const sceneObject = sceneObjects.find(
+        (entry) => typeof entry === "object" && entry !== null && (entry as Record<string, unknown>).id === objectId,
+      ) as Record<string, unknown> | undefined;
+      if (!sceneObject) return false;
+      // Check enabled authored region texture_override.initial_magnetization
+      const regions = sceneObject.regions;
+      if (Array.isArray(regions)) {
+        for (const region of regions) {
+          if (typeof region !== "object" || region === null) continue;
+          const r = region as Record<string, unknown>;
+          if (r.enabled === false) continue;
+          const textureOverride = r.texture_override as Record<string, unknown> | undefined;
+          if (
+            textureOverride &&
+            typeof textureOverride.initial_magnetization === "object" &&
+            textureOverride.initial_magnetization !== null
+          ) {
+            return true;
+          }
+        }
+      }
+      // Check object-level magnetization_ref → asset (excluding field-file)
+      const refId = sceneObject.magnetization_ref;
+      if (!refId || typeof refId !== "string") return false;
+      const assets = scene.magnetization_assets;
+      if (!Array.isArray(assets)) return false;
+      const asset = assets.find(
+        (a) => typeof a === "object" && a !== null && (a as Record<string, unknown>).id === refId,
+      ) as Record<string, unknown> | undefined;
+      if (!asset) return false;
+      const assetKind = typeof asset.kind === "string" ? asset.kind : "";
+      if (assetKind === "field_file" || assetKind === "field-file" || assetKind === "imported_field") {
+        return false;
+      }
+      return asset.source_mode !== "field-file";
+    },
     sampleSurfaceColors(options: Omit<SampleViewport3DSurfaceHslOptions, "scene">) {
       return sampleViewport3DSurfaceHslColors({ ...options, scene });
     },
@@ -1616,12 +1663,29 @@ export function Viewport3DTextureTransformLayer({
   selectedObjectId,
   textureTransformModel,
   tracker,
+  savedViewportActive = false,
+  getObjectSettings,
+  liveFieldCoveredObjectIds,
 }: {
   onGestureActiveChange?: (active: boolean) => void;
   primitiveModel: Viewport3DPrimitiveRenderModel | null;
   selectedObjectId: string | null;
   textureTransformModel: Viewport3DTextureTransformModel;
   tracker?: Viewport3DResourceTracker;
+  /** When true, a saved results playback is active — do not render authored texture overlays. */
+  savedViewportActive?: boolean;
+  /**
+   * Returns visualization settings for a primitive object. Used to gate authored
+   * texture overlay rendering: hides the overlay when the object is invisible,
+   * in wireframe mode, or uses solid color source.
+   */
+  getObjectSettings?: (object: Viewport3DPrimitiveObject) => VisualizationTargetSettings;
+  /**
+   * Set of objectIds that currently have an active live discretized solver field
+   * rendering (FDM or FEM). When an object is in this set, the static authored
+   * magnetization overlay is suppressed so it does not paint on top of live results.
+   */
+  liveFieldCoveredObjectIds?: ReadonlySet<string>;
 }) {
   const bridge = useSyncExternalStore(
     subscribeTextureDraftBridge,
@@ -1748,73 +1812,215 @@ export function Viewport3DTextureTransformLayer({
     };
   }, [invalidate, proxyGeometry, tracker]);
 
-  if (!colors || !selectedObject || !effectiveDraftAndBounds) return null;
+  // Persistent authored texture overlays for objects not covered by the live draft.
+  // Computed before the gizmo early-return so they render even when no active binding.
+  const activeBindingObjectId = bridge.activeBinding?.target.objectId ?? null;
+  const persistentOverlayObjects =
+    !savedViewportActive && getObjectSettings && primitiveModel
+      ? primitiveModel.objects.filter((obj) => {
+          if (obj.objectId === activeBindingObjectId) return false;
+          if (!textureTransformModel.hasAuthoredMagnetization(obj.objectId)) return false;
+          // Suppress static authored overlay when live solver results are displayed.
+          if (liveFieldCoveredObjectIds?.has(obj.objectId)) return false;
+          const s = getObjectSettings(obj);
+          // Before a solver/mesh field exists, resolveViewport3DPrimitiveVisualizationSettings
+          // turns shaderVisible off and sets primitiveVisible = true so shaded geometry stays visible.
+          // Honor BOTH flags so the authored magnetization surface renders on shaded primitives
+          // while still hiding cleanly in Wireframe/Off modes or when Solid color is chosen.
+          const surfaceVisible = s.shaderVisible || Boolean(s.primitiveVisible);
+          if (!s.visible || !surfaceVisible || s.surfaceColorSource === "solid") return false;
+          // Hide authored m overlay when the user has selected a different quantity.
+          if (s.activeQuantityId && resolveCanonicalQuantityId(s.activeQuantityId) !== "m") return false;
+          return true;
+        })
+      : [];
+
+  if (!colors || !selectedObject || !effectiveDraftAndBounds) {
+    if (persistentOverlayObjects.length === 0) return null;
+    return (
+      <>
+        {persistentOverlayObjects.map((obj) => {
+          const opacity = getObjectSettings
+            ? Math.max(0, Math.min(1, (getObjectSettings(obj).surfaceOpacityPercent ?? 92) / 100))
+            : 0.92;
+          return (
+            <AuthoredMagnetizationPersistentSurface
+              key={obj.objectId}
+              object={obj}
+              opacity={opacity}
+              textureTransformModel={textureTransformModel}
+              tracker={tracker}
+            />
+          );
+        })}
+      </>
+    );
+  }
 
   const { draft, bounds } = effectiveDraftAndBounds;
   const pose = resolveTextureGizmoWorldPose(draft, bounds);
 
   return (
-    <group
-      name={`texture-transform-layer:${selectedObject.objectId}`}
-      userData={{ gizmo: "texture-transform-layer", objectId: selectedObject.objectId }}
-    >
-      {surfaceGeometry ? (
-        <mesh
-          geometry={surfaceGeometry}
-          renderOrder={RENDER_POLICIES.selectionShell.renderOrder - 1}
-          userData={{
-            gizmo: "texture-surface-preview",
-            objectId: selectedObject.objectId,
-          }}
-        >
-          <meshBasicMaterial
-            opacity={0.92}
-            polygonOffset
-            polygonOffsetFactor={-1}
-            polygonOffsetUnits={-1}
-            toneMapped={false}
-            transparent
-            vertexColors
+    <>
+      {persistentOverlayObjects.map((obj) => {
+        const opacity = getObjectSettings
+          ? Math.max(0, Math.min(1, (getObjectSettings(obj).surfaceOpacityPercent ?? 92) / 100))
+          : 0.92;
+        return (
+          <AuthoredMagnetizationPersistentSurface
+            key={obj.objectId}
+            object={obj}
+            opacity={opacity}
+            textureTransformModel={textureTransformModel}
+            tracker={tracker}
           />
-        </mesh>
-      ) : null}
-
-      {handlesActive && bridge.gizmoMode !== "view" ? (
-        <TextureGizmoInteractiveHandles
-          colors={colors}
-          draft={draft}
-          gizmoMode={bridge.gizmoMode}
-          invalidate={invalidate}
-          objectId={selectedObject.objectId}
-          onGestureActiveChange={onGestureActiveChange}
-          pose={pose}
-          proxyGeometry={proxyGeometry}
-        />
-      ) : bridge.gizmoEnabled && bindingMatchesObject && proxyGeometry ? (
-        <group
-          name={`texture-gizmo-preview:${selectedObject.objectId}`}
-          position={pose.originWorld}
-          userData={{
-            gizmo: "texture-transform-preview",
-            mode: "view",
-            objectId: selectedObject.objectId,
-          }}
-        >
-          <lineSegments
-            geometry={proxyGeometry}
-            renderOrder={RENDER_POLICIES.selectionShell.renderOrder}
-            userData={{ gizmo: "texture-characteristic-proxy" }}
+        );
+      })}
+      <group
+        name={`texture-transform-layer:${selectedObject.objectId}`}
+        userData={{ gizmo: "texture-transform-layer", objectId: selectedObject.objectId }}
+      >
+        {surfaceGeometry ? (
+          <mesh
+            geometry={surfaceGeometry}
+            renderOrder={RENDER_POLICIES.selectionShell.renderOrder - 1}
+            userData={{
+              gizmo: "texture-surface-preview",
+              objectId: selectedObject.objectId,
+            }}
           >
-            <lineBasicMaterial
-              color={colors.accent}
-              depthTest={false}
-              opacity={0.85}
+            <meshBasicMaterial
+              opacity={0.92}
+              polygonOffset
+              polygonOffsetFactor={-1}
+              polygonOffsetUnits={-1}
               toneMapped={false}
               transparent
+              vertexColors
             />
-          </lineSegments>
-        </group>
-      ) : null}
-    </group>
+          </mesh>
+        ) : null}
+
+        {handlesActive && bridge.gizmoMode !== "view" ? (
+          <TextureGizmoInteractiveHandles
+            colors={colors}
+            draft={draft}
+            gizmoMode={bridge.gizmoMode}
+            invalidate={invalidate}
+            objectId={selectedObject.objectId}
+            onGestureActiveChange={onGestureActiveChange}
+            pose={pose}
+            proxyGeometry={proxyGeometry}
+          />
+        ) : bridge.gizmoEnabled && bindingMatchesObject && proxyGeometry ? (
+          <group
+            name={`texture-gizmo-preview:${selectedObject.objectId}`}
+            position={pose.originWorld}
+            userData={{
+              gizmo: "texture-transform-preview",
+              mode: "view",
+              objectId: selectedObject.objectId,
+            }}
+          >
+            <lineSegments
+              geometry={proxyGeometry}
+              renderOrder={RENDER_POLICIES.selectionShell.renderOrder}
+              userData={{ gizmo: "texture-characteristic-proxy" }}
+            >
+              <lineBasicMaterial
+                color={colors.accent}
+                depthTest={false}
+                opacity={0.85}
+                toneMapped={false}
+                transparent
+              />
+            </lineSegments>
+          </group>
+        ) : null}
+      </group>
+    </>
+  );
+}
+
+/**
+ * Renders the authored magnetization HSL surface for a single primitive object
+ * when it is not covered by an active live draft or a saved results playback.
+ * Uses its own hook set so it can be rendered per-object in a React.Fragment.
+ */
+function AuthoredMagnetizationPersistentSurface({
+  object,
+  opacity = 0.92,
+  textureTransformModel,
+  tracker,
+}: {
+  object: Viewport3DPrimitiveObject;
+  opacity?: number;
+  textureTransformModel: Viewport3DTextureTransformModel;
+  tracker?: Viewport3DResourceTracker;
+}) {
+  const invalidate = useBatchedInvalidate();
+
+  const draftAndBounds = useMemo(
+    () => textureTransformModel.getAuthoredDraft(object.objectId),
+    [object.objectId, textureTransformModel],
+  );
+
+  const subdividedMeshData = useMemo(() => {
+    if (!draftAndBounds) return null;
+    return buildSubdividedSurfacePreviewData(object, SURFACE_PREVIEW_GRID_RES);
+  }, [draftAndBounds, object]);
+
+  const surfaceColors = useMemo(() => {
+    if (!draftAndBounds || !subdividedMeshData) return null;
+    return textureTransformModel.sampleSurfaceColors({
+      objectId: object.objectId,
+      positionsWorld: subdividedMeshData.positionsWorld,
+      liveBinding: null,
+    });
+  }, [draftAndBounds, object.objectId, subdividedMeshData, textureTransformModel]);
+
+  const surfaceGeometry = useMemo(() => {
+    if (!subdividedMeshData || !surfaceColors) return null;
+    const geom = new BufferGeometry();
+    geom.setAttribute("position", new BufferAttribute(subdividedMeshData.positionsWorld, 3));
+    geom.setAttribute("color", new BufferAttribute(surfaceColors, 3));
+    geom.setIndex(new BufferAttribute(subdividedMeshData.indices, 1));
+    geom.computeVertexNormals();
+    return tracker ? tracker.track("geometry", geom) : geom;
+  }, [subdividedMeshData, surfaceColors, tracker]);
+
+  useEffect(() => {
+    if (!surfaceGeometry) return undefined;
+    invalidate();
+    return () => {
+      if (tracker) {
+        tracker.release("geometry", surfaceGeometry);
+      } else {
+        surfaceGeometry.dispose();
+      }
+    };
+  }, [invalidate, surfaceGeometry, tracker]);
+
+  if (!surfaceGeometry) return null;
+
+  return (
+    <mesh
+      geometry={surfaceGeometry}
+      renderOrder={RENDER_POLICIES.solidSurface.renderOrder + 1}
+      userData={{
+        gizmo: "texture-surface-preview",
+        objectId: object.objectId,
+      }}
+    >
+      <meshBasicMaterial
+        opacity={opacity}
+        polygonOffset
+        polygonOffsetFactor={0.5}
+        polygonOffsetUnits={0.5}
+        toneMapped={false}
+        transparent
+        vertexColors
+      />
+    </mesh>
   );
 }

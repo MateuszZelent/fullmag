@@ -158,6 +158,8 @@ import {
   type VisualizationVectorBudgetRange,
   visualizationResetActionLabel,
   parseRegionVisualizationTargetId,
+  resolveSceneObjectAuthoredMagnetizationAvailable,
+  resolveSceneRegionAuthoredMagnetizationAvailable,
 } from "./ObjectVisualizationPanelModel";
 import {
   selectObjectVisualizationManifestStatus,
@@ -1534,6 +1536,9 @@ function ObjectVisualizationPanelView({
   const shownAnalysisField = useRenderableAnalysisFieldOverlay(analysisFieldOverlay, {
     ignorePhase: true,
   });
+  // Scene data is needed to resolve whether the target has an authored
+  // magnetization texture (without touching useViewport3DSceneModel.ts).
+  const scene = useSceneResource({ enabled: !panel.artifactInspection });
   const {
     appliedBaseline: currentAppliedBaseline,
     airboxFieldCarrierIdentity,
@@ -1642,9 +1647,37 @@ function ObjectVisualizationPanelView({
       (fieldCatalog.status === "idle" && !fieldCatalog.data || quantityCatalog.status === "idle" && !quantityCatalog.data)
   );
   const quantityTargetKind = target.kind === "airbox" || isFdmUniverseOutsideSupportTarget(target) ? "airbox" : target.kind;
+  // Determine whether the selected object (or region) has a committed authored
+  // magnetization texture that is not an external field-file. When true the
+  // inspector injects "m" as a selectable quantity so the panel never shows
+  // "No compatible field available" for a texture already visible in 3D.
+  const authoredMagnetizationAvailable = !panel.artifactInspection && (() => {
+    if (target.kind === "object") {
+      const objectId = target.id.startsWith("object:") ? target.id.slice("object:".length) : target.id;
+      return resolveSceneObjectAuthoredMagnetizationAvailable(scene.data as Parameters<typeof resolveSceneObjectAuthoredMagnetizationAvailable>[0], objectId);
+    }
+    if (target.kind === "region") {
+      const parsed = parseRegionVisualizationTargetId(target.id);
+      if (!parsed) return false;
+      return resolveSceneRegionAuthoredMagnetizationAvailable(scene.data as Parameters<typeof resolveSceneRegionAuthoredMagnetizationAvailable>[0], parsed.objectId, parsed.regionId);
+    }
+    return false;
+  })();
+  const effectiveQuantityId =
+    authoredMagnetizationAvailable && !settings.activeQuantityId
+      ? "m"
+      : settings.activeQuantityId;
+  const quantitySectionSettings =
+    effectiveQuantityId !== settings.activeQuantityId
+      ? { ...settings, activeQuantityId: effectiveQuantityId }
+      : settings;
+  const surfaceSectionSettings =
+    effectiveQuantityId !== presentedSettings.activeQuantityId && !presentedSettings.activeQuantityId
+      ? { ...presentedSettings, activeQuantityId: effectiveQuantityId }
+      : presentedSettings;
   const quantitySelection = visualizationQuantitySelectionState({
-    activeQuantityId: settings.activeQuantityId,
-    items: visualizationQuantityItems(settings.activeQuantityId, quantityTargetKind, fieldCatalog.data, quantityCatalog.data, targetFieldAvailability),
+    activeQuantityId: effectiveQuantityId,
+    items: visualizationQuantityItems(effectiveQuantityId, quantityTargetKind, fieldCatalog.data, quantityCatalog.data, targetFieldAvailability, authoredMagnetizationAvailable),
     loading: fieldCatalogLoading,
     error: fieldCatalogError,
     executionRequired,
@@ -1728,7 +1761,8 @@ function ObjectVisualizationPanelView({
                     onFieldCatalogRequest={onFieldCatalogRequest}
                     patch={patch}
                     isFieldPending={isFieldPending}
-                    settings={settings}
+                    settings={quantitySectionSettings}
+                    authoredMagnetizationAvailable={authoredMagnetizationAvailable}
                     targetKind={
                       target.kind === "airbox" ||
                       isFdmUniverseOutsideSupportTarget(target)
@@ -1763,8 +1797,9 @@ function ObjectVisualizationPanelView({
               fieldMetaTarget={fieldMetaTarget}
               onFieldCatalogRequest={onFieldCatalogRequest}
               regionCarrier={regionCarrier}
-              settings={presentedSettings}
+              settings={surfaceSectionSettings}
               target={target}
+              authoredMagnetizationAvailable={authoredMagnetizationAvailable}
               />
             )}
             vectors={capabilities.supportsVectors && !isScalarSpatialQuantityId(settings.activeQuantityId) ? (

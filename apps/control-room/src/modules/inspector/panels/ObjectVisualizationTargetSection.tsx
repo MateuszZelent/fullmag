@@ -357,6 +357,7 @@ export function VisualizationSurfaceColoringSection({
   regionCarrier,
   settings,
   target,
+  authoredMagnetizationAvailable = false,
 }: {
   fieldMetaOverride?: ReturnType<typeof useVisualizationFieldMeta>;
   artifactFieldBinding?: ArtifactInspectorFieldBinding;
@@ -375,6 +376,8 @@ export function VisualizationSurfaceColoringSection({
   regionCarrier?: RegionVisualizationCarrier | null;
   settings: VisualizationTargetSettings;
   target: VisualizationTargetRef;
+  /** When true and the active quantity is "m" with no backend field, shows the authored texture status. */
+  authoredMagnetizationAvailable?: boolean;
 }) {
   const colorbarComponent = surfaceColorSourceFieldMetaComponent(
     settings.surfaceColorSource,
@@ -424,6 +427,9 @@ export function VisualizationSurfaceColoringSection({
     ...fieldMetaScopeQuery,
   });
   const fieldMeta = fieldMetaOverride ?? ownFieldMeta;
+  const surfaceColoringDisabled =
+    sectionDisabled("surface-coloring") &&
+    !(authoredMagnetizationAvailable && settings.visible && settings.shaderVisible);
   const surfaceSummary = settings.surfaceColorSource === "solid"
     ? "Solid color"
     : `By Quantity • ${settings.activeQuantityId ?? "H_eff"} (Auto)`;
@@ -443,7 +449,7 @@ export function VisualizationSurfaceColoringSection({
         />
       ) : null}
       <VisualizationSelectRow
-        disabled={sectionDisabled("surface-coloring")}
+        disabled={surfaceColoringDisabled}
         items={resolveSurfaceColorSourceItems(settings.activeQuantityId)}
         label="Color source"
         value={settings.surfaceColorSource}
@@ -458,7 +464,7 @@ export function VisualizationSurfaceColoringSection({
       <VisualizationSelectRow
         disabled={
           isFieldPending("surfaceProjectionMode") ||
-          sectionDisabled("surface-coloring") ||
+          surfaceColoringDisabled ||
           settings.surfaceColorSource === "solid"
         }
         items={SURFACE_FIELD_PROJECTION_ITEMS}
@@ -470,7 +476,7 @@ export function VisualizationSurfaceColoringSection({
       />
       {showFieldMeta ? (
         <ScalarColorbarControl
-          disabled={isFieldPending("scalarColorPalette") || sectionDisabled("surface-coloring")}
+          disabled={isFieldPending("scalarColorPalette") || surfaceColoringDisabled}
           fieldMeta={fieldMeta}
           palette={settings.scalarColorPalette}
           patch={patch}
@@ -486,7 +492,7 @@ export function VisualizationSurfaceColoringSection({
           <Switch
             aria-label="Add colorbar to viewport"
             checked={settings.viewportColorbarVisible}
-            disabled={isFieldPending("viewportColorbarVisible") || sectionDisabled("surface-coloring")}
+            disabled={isFieldPending("viewportColorbarVisible") || surfaceColoringDisabled}
             onCheckedChange={(checked: boolean) =>
               void patch({ viewportColorbarVisible: checked })
             }
@@ -495,14 +501,14 @@ export function VisualizationSurfaceColoringSection({
       ) : null}
       {settings.surfaceColorSource === "solid" ? (
         <ColorField
-          disabled={isFieldPending("shaderMonoColor") || sectionDisabled("surface-coloring")}
+          disabled={isFieldPending("shaderMonoColor") || surfaceColoringDisabled}
           label="Solid color"
           value={settings.shaderMonoColor}
           onChange={(value) => patchColor("shaderMonoColor", value)}
         />
       ) : null}
       <NumberField
-        disabled={isFieldPending("surfaceOpacityPercent") || sectionDisabled("surface-coloring")}
+        disabled={isFieldPending("surfaceOpacityPercent") || surfaceColoringDisabled}
         label="Surface opacity"
         max={100}
         min={0}
@@ -513,11 +519,15 @@ export function VisualizationSurfaceColoringSection({
       />
       <InspectorPropertyRow label="Field status">
         <span className="font-fm-mono text-fm-control text-fm-secondary">
-          {surfaceFieldStatus(
-            settings.surfaceColorSource,
-            fieldCatalog.data,
-            fieldCatalog.status,
-          )}
+          {authoredMagnetizationAvailable &&
+          resolveCanonicalQuantityId(settings.activeQuantityId) === "m" &&
+          !fieldCatalogQuantityAvailable(fieldCatalog.data, "m")
+            ? "Authored initial texture (m)"
+            : surfaceFieldStatus(
+                settings.surfaceColorSource,
+                fieldCatalog.data,
+                fieldCatalog.status,
+              )}
         </span>
       </InspectorPropertyRow>
     </InspectorGroup>
@@ -708,6 +718,7 @@ export function VisualizationQuantitySection({
   settings,
   targetFieldAvailability,
   targetKind,
+  authoredMagnetizationAvailable = false,
 }: {
   executionRequired?: boolean;
   fieldCatalog: FieldCatalogResource | null;
@@ -721,9 +732,12 @@ export function VisualizationQuantitySection({
   settings: VisualizationTargetSettings;
   targetFieldAvailability?: ReadonlyMap<string, TargetFieldAvailability>;
   targetKind?: VisualizationTargetKind;
+  /** When true, injects "Magnetization (initial texture)" as a selectable item. */
+  authoredMagnetizationAvailable?: boolean;
 }) {
   const quantityItems = visualizationQuantityItems(
     settings.activeQuantityId, targetKind, fieldCatalog, quantityCatalog, targetFieldAvailability,
+    authoredMagnetizationAvailable,
   );
   const { selectedValue, summary, status } = visualizationQuantitySelectionState({
     activeQuantityId: settings.activeQuantityId, items: quantityItems,
@@ -789,6 +803,9 @@ export function VisualizationQuantitySection({
       </div>
     </InspectorPropertyRow>
     {status === "selected" && selectedQuantity?.unit ? <FieldRow label="Field unit" value={selectedQuantity.unit} /> : null}
+    {status === "selected" && authoredMagnetizationAvailable && resolveCanonicalQuantityId(selectedValue ?? "") === "m" && !fieldCatalogQuantityAvailable(fieldCatalog, "m") ? (
+      <p role="status" className="fm-quantity-source-empty">Showing authored initial magnetization (m). Build the mesh or grid to materialize discretized solver fields.</p>
+    ) : null}
     {status === "execution-required" ? <p role="status" className="fm-quantity-source-empty">Select a source and execution above to load its field catalog. No simulation is started by this selection.</p> : null}
     {status === "unavailable" ? <p role="status">The selected quantity is not available for this target. Choose an available field or check its computation status.</p> : null}
     {status === "empty" ? <p role="status" className="fm-quantity-source-empty">

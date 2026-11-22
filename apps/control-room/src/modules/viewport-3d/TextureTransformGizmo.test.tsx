@@ -31,6 +31,7 @@ import {
   buildCharacteristicProxyWireframeSegments,
   buildSubdividedSurfacePreviewData,
   createTextureGizmoDragController,
+  createViewport3DTextureTransformModel,
   installTextureGizmoKeyboardShortcuts,
   pickTextureGizmoHandleFromGroup,
   resolveTextureGizmoWorldPose,
@@ -560,5 +561,53 @@ describe("TextureTransformGizmo & 3D surface preview synchronization", () => {
       handle: "uniform",
       key: "scale:uniform",
     });
+  });
+
+  it("keeps authored magnetization surface eligible only for objects with committed non-field-file textures", () => {
+    const scene = {
+      version: "scene.v2",
+      revision: 6,
+      objects: [
+        {
+          id: "authored-box",
+          name: "Authored box",
+          role: "magnet",
+          geometry: { geometry_kind: "Box", geometry_params: { size: [200e-9, 200e-9, 10e-9] } },
+          magnetization_ref: "mag:authored-box:skyrmion",
+        },
+        {
+          id: "plain-box",
+          name: "Plain box",
+          role: "magnet",
+          geometry: { geometry_kind: "Box", geometry_params: { size: [100e-9, 100e-9, 10e-9] } },
+          magnetization_ref: null,
+        },
+        {
+          id: "file-box",
+          name: "File box",
+          role: "magnet",
+          geometry: { geometry_kind: "Box", geometry_params: { size: [100e-9, 100e-9, 10e-9] } },
+          magnetization_ref: "mag:file-box:imported",
+        },
+      ],
+      magnetization_assets: [
+        {
+          id: "mag:authored-box:skyrmion",
+          kind: "preset_texture",
+          preset_kind: "bloch_skyrmion",
+          preset_params: { radius_m: 30e-9 },
+        },
+        {
+          id: "mag:file-box:imported",
+          kind: "field_file",
+          asset_path: "fields/init.ovf",
+        },
+      ],
+    } as unknown as SceneResource;
+
+    const model = createViewport3DTextureTransformModel(scene);
+    expect(model.hasAuthoredMagnetization("authored-box")).toBe(true);
+    expect(model.hasAuthoredMagnetization("plain-box")).toBe(false);
+    expect(model.hasAuthoredMagnetization("file-box")).toBe(false);
   });
 });

@@ -441,6 +441,7 @@ import {
   type Viewport3DFieldVectorEnvelope,
   type Viewport3DFieldVectorRequestOptions,
 } from "../viewport3dResources";
+import { createViewport3DTextureTransformModel } from "../TextureTransformGizmo";
 import type { Viewport3DFieldRefreshState } from "../viewport3dRefreshCountdown";
 import {
   isViewport3DTopologyCurrent,
@@ -3440,6 +3441,10 @@ export function useViewport3DSceneModel({
   );
   const domainMeta = useViewport3DDomainMeta(liveViewportResourcesEnabled);
   const scene = useViewport3DScene(liveViewportResourcesEnabled);
+  const textureTransformModel = useMemo(
+    () => createViewport3DTextureTransformModel(liveViewportResourcesEnabled ? scene.data : null),
+    [liveViewportResourcesEnabled, scene.data],
+  );
   const importedSurfaces = useViewport3DImportedSurfaces(scene.data, liveViewportResourcesEnabled);
   const sceneObjectIds = useMemo(
     () => visualizationSceneObjectIds(scene.data),
@@ -4677,9 +4682,9 @@ export function useViewport3DSceneModel({
           kind: "object",
           label: object.label,
         },
-        visualizationState: femLaneActive ? renderingState : null,
+        visualizationState: renderingState,
       }),
-    [femLaneActive, getObjectContext, objectVisualizationSnapshot, renderingState],
+    [getObjectContext, objectVisualizationSnapshot, renderingState],
   );
   const getRegionSettings = useCallback(
     (region: RegionOverlayInput) => {
@@ -4694,7 +4699,7 @@ export function useViewport3DSceneModel({
           kind: "object",
           label: objectId,
         },
-        visualizationState: femLaneActive ? renderingState : null,
+        visualizationState: renderingState,
       }).settings;
       return resolveTargetVisualization({
         objectContext: getObjectContext(objectId),
@@ -4705,12 +4710,11 @@ export function useViewport3DSceneModel({
           kind: "region",
           label: region.name ?? regionId,
         },
-        visualizationState: femLaneActive ? renderingState : null,
+        visualizationState: renderingState,
       }).effectiveSettings;
     },
     [
       fallbackSettings,
-      femLaneActive,
       getObjectContext,
       objectVisualizationSnapshot,
       renderingState,
@@ -7988,6 +7992,7 @@ export function useViewport3DSceneModel({
       : modeCompositionPhaseClock.phaseUniformByLayerId,
     subscribeComplexPhaseFrames,
     primitiveModel: savedSelectionActive ? null : primitiveModel,
+    textureTransformModel,
     sceneRefetch: savedSelectionActive ? () => undefined : scene.refetch,
     sceneRevision: savedSelectionActive ? null : primitiveModel.sceneRevision,
     sceneStatus: savedSelectionActive ? "idle" : scene.status,

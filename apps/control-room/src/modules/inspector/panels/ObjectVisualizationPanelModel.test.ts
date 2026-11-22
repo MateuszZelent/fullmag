@@ -75,6 +75,9 @@ import {
   VISUALIZATION_COLOR_MODE_ITEMS,
   visualizationOverrideStateLabel,
   visualizationQuantityItems,
+  visualizationQuantitySelectionState,
+  resolveSceneObjectAuthoredMagnetizationAvailable,
+  resolveSceneRegionAuthoredMagnetizationAvailable,
   fieldCatalogQuantityAvailable,
   fieldAvailabilityQueryForVisualizationTarget,
   visualizationResetActionLabel,
@@ -4456,6 +4459,83 @@ describe("ObjectVisualizationPanelModel", () => {
       title: "Airbox vectors are not scheduled",
     });
     expect(diagnostic.message).toContain("magnetic-only");
+  });
+
+  it("exposes authored initial magnetization (m) in Quantity source before grid preparation without breaking unauthored objects", () => {
+    const emptyFieldCatalog: FieldCatalogResource = {
+      domain_generation_id: "0",
+      quantities: [],
+      revision: 0,
+    };
+    const scene = {
+      objects: [
+        {
+          id: "new-box",
+          magnetization_ref: "mag:new-box:skyrmion",
+          regions: [
+            {
+              region_id: "reg-1",
+              enabled: true,
+              texture_override: { initial_magnetization: { kind: "uniform", direction: [0, 0, 1] } },
+            },
+          ],
+        },
+        {
+          id: "plain-box",
+          magnetization_ref: null,
+          regions: [],
+        },
+      ],
+      magnetization_assets: [
+        {
+          id: "mag:new-box:skyrmion",
+          kind: "preset_texture",
+          preset_kind: "bloch_skyrmion",
+        },
+      ],
+    };
+
+    expect(resolveSceneObjectAuthoredMagnetizationAvailable(scene, "new-box")).toBe(true);
+    expect(resolveSceneObjectAuthoredMagnetizationAvailable(scene, "plain-box")).toBe(false);
+    expect(resolveSceneRegionAuthoredMagnetizationAvailable(scene, "new-box", "reg-1")).toBe(true);
+
+    const authoredItems = visualizationQuantityItems(
+      "m",
+      "object",
+      emptyFieldCatalog,
+      null,
+      undefined,
+      true,
+    );
+    const authoredState = visualizationQuantitySelectionState({
+      activeQuantityId: "m",
+      items: authoredItems,
+      loading: false,
+    });
+    expect(authoredItems[0]).toMatchObject({
+      value: "m",
+      label: "Magnetization (initial texture)",
+    });
+    expect(authoredItems[0]?.disabled).toBeFalsy();
+    expect(authoredState.status).toBe("selected");
+    expect(authoredState.selectedValue).toBe("m");
+
+    const plainItems = visualizationQuantityItems(
+      "",
+      "object",
+      emptyFieldCatalog,
+      null,
+      undefined,
+      false,
+    );
+    const plainState = visualizationQuantitySelectionState({
+      activeQuantityId: "",
+      items: plainItems,
+      loading: false,
+    });
+    expect(plainItems).toEqual([]);
+    expect(plainState.status).toBe("empty");
+    expect(plainState.placeholder).toBe("No compatible field available");
   });
 });
 

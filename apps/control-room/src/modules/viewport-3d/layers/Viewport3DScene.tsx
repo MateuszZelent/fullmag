@@ -1412,6 +1412,35 @@ function Viewport3DModelLayerStack({
   }, [committedTopologyParts, topologyLayerEnabled, stageVisibility.baseGeometry, primitiveModel, topologyModel,
     topologyFreshness, fdmCuboidLayerEnabled, fdmNativeLayerViews, fdmTargetViews]);
 
+  // Set of objectIds currently covered by an active live discretized solver field.
+  // Used by Viewport3DTextureTransformLayer to suppress the static authored
+  // magnetization overlay when live simulation results are being rendered.
+  const liveFieldCoveredObjectIds = useMemo(() => {
+    const ids = new Set<string>();
+    // FDM cuboid lane: collect objects from quantitative target/native-layer views.
+    if (fdmCuboidLayerEnabled && !savedViewportActive) {
+      for (const view of fdmTargetViews) {
+        if (view.surfaceColors || view.vectorSegments?.length) {
+          if (view.ownerTarget.kind === "object" && view.ownerTarget.id.startsWith("object:")) {
+            ids.add(view.ownerTarget.id.slice("object:".length));
+          }
+        }
+      }
+      for (const view of fdmNativeLayerViews) {
+        if ((view.surfaceColors || view.vectorSegments?.length) && view.model && view.model.count > 0) {
+          ids.add(view.domain.objectId);
+        }
+      }
+    }
+    // FEM lane: when fieldModel is active, all topology-meshed objects are covered.
+    if (fieldModel && !savedViewportActive && primitiveModel) {
+      for (const obj of primitiveModel.objects) {
+        ids.add(obj.objectId);
+      }
+    }
+    return ids;
+  }, [fdmCuboidLayerEnabled, fdmTargetViews, fdmNativeLayerViews, fieldModel, savedViewportActive, primitiveModel]);
+
   if (!sceneLayersEnabled) return null;
 
   const authoredRegionOverlaysVisible = resolveAuthoredRegionOverlayVisibility({
@@ -1618,6 +1647,9 @@ function Viewport3DModelLayerStack({
         selectedObjectId={selectedObjectId}
         textureTransformModel={textureTransformModel}
         tracker={tracker}
+        savedViewportActive={savedViewportActive}
+        getObjectSettings={getObjectSettings}
+        liveFieldCoveredObjectIds={liveFieldCoveredObjectIds}
       />
       {topologyLayerEnabled ? (
         <group visible={stageVisibility.baseGeometry}>
