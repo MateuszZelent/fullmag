@@ -3,7 +3,12 @@ import { createRoot, hydrateRoot } from "react-dom/client";
 import { renderToStaticMarkup, renderToString } from "react-dom/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import type { DomainMetaResource, PlanarFieldMetaResource, VisualizationStateResource } from "@/kernel/api/apiTypes";
+import type {
+  DomainMetaResource,
+  PlanarFieldMetaResource,
+  SceneResource,
+  VisualizationStateResource,
+} from "@/kernel/api/apiTypes";
 import { installSimulationPreparationTestDom } from "@/kernel/layout/simulationPreparationTestDom.test-support";
 import type { Selection } from "@/kernel/selection/selectionTypes";
 import { fieldMapSurfaceStore } from "@/kernel/visualization/fieldMapSurfaceStore";
@@ -18,7 +23,9 @@ const mocks = vi.hoisted(() => ({
   projectionStatus: vi.fn((meta: { fold_count: number; non_injective: boolean; overlap_count: number }) =>
     meta.non_injective || meta.fold_count > 0 || meta.overlap_count > 0 ? "ambiguous" : "resolved"),
   metaAvailable: true,
+  metaError: null as Error | null,
   domain: null as DomainMetaResource | null,
+  scene: null as SceneResource | null,
   section: null as PlanarFieldMetaResource["section"] | null,
 
   queuePatch: vi.fn(),
@@ -64,10 +71,13 @@ vi.mock("@/kernel/api/codecs", () => ({
 vi.mock("./model/fieldMapRenderModel", () => ({
   buildFieldMapRenderModel: (input: unknown) => {
     const override = mocks.renderModel(input);
+    const typed = input as { colormap?: string; component?: string; layers: unknown };
     return override ?? {
+      colormap: typed.colormap,
+      component: typed.component,
       diagnostics: [],
       display: { axisUnit: "m", legendUnit: "A/m", probeScale: 1 },
-      layers: (input as { layers: unknown }).layers,
+      layers: typed.layers,
       range: null,
     };
   },
@@ -111,7 +121,9 @@ vi.mock("@/kernel/resources/planarFieldResources", () => ({
     mocks.meta(...args);
     const requestedSource = args[1] as { kind?: string } | undefined;
     const isDefault = requestedSource?.kind === "default";
-    const resource = mocks.renderReady && mocks.metaAvailable && !mocks.metaPending
+    const resource = mocks.metaError
+      ? { data: null, error: mocks.metaError, status: "error" }
+      : mocks.renderReady && mocks.metaAvailable && !mocks.metaPending
       ? {
           data: {
             canonical_unit: "A/m",
@@ -172,6 +184,7 @@ vi.mock("@/kernel/resources/planarFieldResources", () => ({
   // published only after every requested layer finished loading.
   usePlanarMaskResource: () => ({ data: null, error: null, status: mocks.renderReady ? "ready" : "idle" }),
   usePlanarMeshOverlayResource: () => ({ data: null, error: null, status: mocks.renderReady ? "ready" : "idle" }),
+  planarWindowFromQuery: () => ({}),
   planarWindowParams: (crop: { u_min_m: number; u_max_m: number; v_min_m: number; v_max_m: number } | null | undefined) =>
     crop
       ? {
@@ -203,6 +216,11 @@ vi.mock("@/kernel/resources/geometryLifecycleResources", () => ({
     data: mocks.domain,
     error: null,
     status: mocks.domain ? "ready" : "idle",
+  }),
+  useSceneResource: () => ({
+    data: mocks.scene,
+    error: null,
+    status: mocks.scene ? "ready" : "idle",
   }),
 }));
 
@@ -249,7 +267,9 @@ describe("FieldMapModule planar state ownership", () => {
     mocks.visualization.optimisticData = null;
     mocks.renderReady = false;
     mocks.metaAvailable = true;
+    mocks.metaError = null;
     mocks.domain = null;
+    mocks.scene = null;
     mocks.section = null;
     mocks.scalarPending = false;
     mocks.metaPending = false;
@@ -882,6 +902,151 @@ describe("FieldMapModule planar state ownership", () => {
       expect.objectContaining({ include_mesh: false, quality: "export", resolution_x: 1024, resolution_y: 1024, vector_budget: 0 }),
       { enabled: true },
     );
+  });
+
+  it("renders live authored magnetization pre-solver in layers mode when backend returns field_unmaterialized", async () => {
+    mocks.metaError = Object.assign(
+      new Error("quantity_not_materialized: This quantity has no published data yet."),
+      { code: "quantity_not_materialized" },
+    );
+    mocks.scene = {
+      revision: 5,
+      magnetization_assets: [
+        {
+          id: "mag-skyrmion",
+          kind: "preset_texture",
+          name: "Bloch Skyrmion",
+          preset_kind: "bloch_skyrmion",
+          preset_version: 2,
+          preset_params: { core_radius: 20e-9, polarity: 1, chirality: 1, plane: "xy" },
+          mapping: { space: "object", projection: "planar_xy", clamp_mode: "none" },
+        },
+      ],
+      objects: [
+        {
+          id: "free-layer",
+          name: "Free layer",
+          role: "magnet",
+          visible: true,
+          magnetization_ref: "mag-skyrmion",
+          geometry: {
+            geometry_kind: "box",
+            geometry_params: { size: [100e-9, 100e-9, 20e-9] },
+          },
+        },
+      ],
+    } as SceneResource;
+    mocks.visualization.data = {
+      planar: {
+        layer_model: "layers",
+        colormap: "hsl_direction",
+        component: "magnitude",
+        default_slice: {
+          operator: { kind: "plane_sample" },
+          plane: "xy",
+          position_fraction: 0.5,
+        },
+        interaction: { pan_u_m: 0, pan_v_m: 0, zoom: 1 },
+        layers: {
+          boundaries: false,
+          bounds: false,
+          contours: false,
+          mesh: false,
+          points: false,
+          probes: true,
+          raster: true,
+          streamlines: false,
+          vectors: false,
+        },
+        field_overlays: [
+          {
+            id: "all",
+            view_scope: { kind: "monitor_target" },
+            quantity_id: "m",
+            component: "z",
+            colormap: "coolwarm",
+            range: { mode: "auto", min: null, max: null },
+            raster_opacity: 0.9,
+            visible: true,
+            raster_visible: true,
+            vectors_visible: true,
+            contours_visible: true,
+            streamlines_visible: false,
+            points_visible: false,
+            mesh_visible: false,
+            vector_style: {
+              color_mode: "orientation",
+              length_mode: "uniform",
+              monochrome_color: "#ffffff",
+              opacity: 1,
+              scale: 1.2,
+              thickness: 1,
+            },
+          },
+        ],
+        quantity_id: "m",
+        quality: "interactive",
+        range: { mode: "auto" },
+        resolution: { height: 256, vector_budget: 1024, width: 256 },
+        source: { kind: "default" },
+        vector_style: {
+          color_mode: "orientation",
+          length_mode: "uniform",
+          monochrome_color: "#ffffff",
+          opacity: 1,
+          scale: 1,
+          thickness: 1,
+        },
+        view_scope: { kind: "monitor_target" },
+        viewport_colorbar_visible: true,
+        visible: true,
+      },
+    };
+    mocks.visualization.status = "ready";
+
+    const dom = installSimulationPreparationTestDom();
+    const container = dom.document.createElement("div");
+    const root = createRoot(container as unknown as Element);
+    try {
+      await act(async () => root.render(<FieldMapModule />));
+
+      // Must NOT show dead error screen; must render PlanarSurface + legend + ready status
+      expect(container.textContent).not.toContain("no published data yet");
+      expect(container.innerHTML).toContain("fm-field-map__canvas-stack");
+      expect(container.innerHTML).toContain('data-planar-field-source="authored_initial_state"');
+      expect(container.innerHTML).toContain('data-planar-status="ready"');
+
+      // Must bypass metaOnlyBase and honor the visible overlay layer's component, colormap, passes, and vector style
+      expect(mocks.renderModel).toHaveBeenLastCalledWith(expect.objectContaining({
+        colormap: "coolwarm",
+        component: "z",
+        rasterOpacity: 0.9,
+        vectorScale: 1.2,
+        layers: expect.objectContaining({
+          raster: true,
+          vectors: true,
+          contours: true,
+        }),
+      }));
+
+      // Must publish sectionGeometry and evidenceStatus: "ready" to fieldMapSurfaceStore
+      expect(fieldMapSurfaceStore.get().evidenceStatus).toBe("ready");
+      expect(fieldMapSurfaceStore.get().sectionGeometry).toMatchObject({
+        plane: "xy",
+        normal: "z",
+        normalMin: -10e-9,
+        normalMax: 10e-9,
+      });
+
+      // As soon as real backend solver data is ready, backend data takes precedence
+      mocks.metaError = null;
+      mocks.renderReady = true;
+      await act(async () => root.render(<FieldMapModule />));
+      expect(container.innerHTML).toContain('data-planar-field-source="live"');
+    } finally {
+      await act(async () => root.unmount());
+      dom.restore();
+    }
   });
 });
 function emptySelection(): Selection {
