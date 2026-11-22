@@ -89,6 +89,7 @@ import type {
   InspectorSpec,
   InspectorTone,
 } from "./types";
+import { getRegisteredControllerApplyHooks } from "./useInspectorSpecController";
 
 const MAX_FACTS = 4;
 const FORBIDDEN_FACT_RE =
@@ -169,12 +170,20 @@ function mapHeaderButtonVariant(
   return "secondary";
 }
 
+function resolveConfirmText<TDraft>(
+  value: string | ((draft: TDraft) => string) | undefined,
+  draft: TDraft,
+): string {
+  return typeof value === "function" ? value(draft) : (value ?? "");
+}
+
 interface PendingConfirmDialogState {
   title: string;
   description: string;
   confirmLabel: string;
   destructive?: boolean;
   onConfirm: () => void | Promise<void>;
+  onCancel?: () => void;
 }
 
 function NoticeCard<TDraft>({
@@ -243,7 +252,9 @@ export interface InspectorTemplateProps<TDraft> {
   onFieldTouch: (fieldKey: string) => void;
   onRevertField: (fieldKey: string) => void;
   onRevertAll?: () => void;
-  onApply?: () => Promise<boolean> | boolean | void;
+  onApply?: (options?: { confirmed?: boolean }) => Promise<boolean | void> | boolean | void;
+  onConfirmApply?: () => Promise<boolean | void> | boolean | void;
+  onCancelConfirmApply?: () => void;
   onResetDisplay?: () => Promise<void> | void;
   onFocusField?: (fieldKey: string) => void;
   onParseErrorChange?: (fieldKey: string, error: string | null) => void;
@@ -282,6 +293,8 @@ export function InspectorTemplate<TDraft>({
   onRevertField,
   onRevertAll,
   onApply,
+  onConfirmApply,
+  onCancelConfirmApply,
   onResetDisplay,
   onFocusField,
   onParseErrorChange,
@@ -315,10 +328,32 @@ export function InspectorTemplate<TDraft>({
   const [copiedId, setCopiedId] = useState(false);
   const [localApplying, setLocalApplying] = useState(false);
   const [pendingConfirm, setPendingConfirm] = useState<PendingConfirmDialogState | null>(null);
+  const pendingConfirmRef = useRef<PendingConfirmDialogState | null>(null);
   const [flashState, setFlashState] = useState<{
     fieldKey: string;
     kind: "applied" | "live" | "focus";
   } | null>(null);
+
+  const openPendingConfirm = useCallback((next: PendingConfirmDialogState) => {
+    pendingConfirmRef.current = next;
+    setPendingConfirm(next);
+  }, []);
+
+  const cancelPendingDialog = useCallback(() => {
+    const current = pendingConfirmRef.current;
+    if (!current) return;
+    pendingConfirmRef.current = null;
+    setPendingConfirm(null);
+    current.onCancel?.();
+  }, []);
+
+  const acceptPendingDialog = useCallback(() => {
+    const current = pendingConfirmRef.current;
+    if (!current) return;
+    pendingConfirmRef.current = null;
+    setPendingConfirm(null);
+    void current.onConfirm();
+  }, []);
 
   const [uncontrolledTabId, setUncontrolledTabId] = useState<string | undefined>(
     () => spec.modeTabs?.[0]?.id,
@@ -336,6 +371,7 @@ export function InspectorTemplate<TDraft>({
     setSearchOpen(false);
     setSearchQuery("");
     setDetailsOpen(false);
+    pendingConfirmRef.current = null;
     setPendingConfirm(null);
     if (scrollRef.current) {
       scrollRef.current.scrollTop = 0;
@@ -495,6 +531,24 @@ export function InspectorTemplate<TDraft>({
     }
   }, [baseline, draft, onApply, spec.commitBar]);
 
+  const runConfirmedApply = useCallback(async () => {
+    setLocalApplying(true);
+    try {
+      const controllerHooks = getRegisteredControllerApplyHooks(onApply);
+      if (onConfirmApply) {
+        await onConfirmApply();
+      } else if (controllerHooks) {
+        await controllerHooks.confirmPendingApply();
+      } else if (onApply) {
+        await onApply();
+      } else if (spec.commitBar.mode === "staged") {
+        await spec.commitBar.onApply(draft, baseline);
+      }
+    } finally {
+      setLocalApplying(false);
+    }
+  }, [baseline, draft, onApply, onConfirmApply, spec.commitBar]);
+
   const canCleanApply =
     spec.commitBar.mode === "staged" &&
     Boolean(
@@ -517,12 +571,21 @@ export function InspectorTemplate<TDraft>({
     if (spec.commitBar.mode === "staged") {
       const confirmSpec = spec.commitBar.confirmApply?.(draft, baseline) ?? null;
       if (confirmSpec) {
-        setPendingConfirm({
+        const controllerHooks = getRegisteredControllerApplyHooks(onApply);
+        controllerHooks?.stagePendingConfirm(confirmSpec);
+        openPendingConfirm({
           title: confirmSpec.title,
           description: confirmSpec.description,
           confirmLabel: confirmSpec.confirmLabel,
           destructive: confirmSpec.destructive,
-          onConfirm: runDirectApply,
+          onConfirm: runConfirmedApply,
+          onCancel: () => {
+            if (onCancelConfirmApply) {
+              onCancelConfirmApply();
+            } else {
+              getRegisteredControllerApplyHooks(onApply)?.cancelPendingApply();
+            }
+          },
         });
         return;
       }
@@ -538,6 +601,10 @@ export function InspectorTemplate<TDraft>({
     invalidFields.size,
     isApplying,
     lockReason,
+    onApply,
+    onCancelConfirmApply,
+    openPendingConfirm,
+    runConfirmedApply,
     runDirectApply,
     spec.commitBar,
   ]);
@@ -714,21 +781,23 @@ export function InspectorTemplate<TDraft>({
           <Copy aria-hidden="true" size={14} />
           <span>Copy node ID</span>
         </DropdownMenuItem>
-        <DropdownMenuItem
-          onSelect={() => {
-            const code =
-              spec.toPythonModuleSnippet?.(draft) ??
-              buildFallbackPythonSnippet(spec, draft);
-            actionContext.openCodePreview(
-              `${spec.identity.title(draft)} as Python`,
-              "python",
-              code,
-            );
-          }}
-        >
-          <FileCode2 aria-hidden="true" size={14} />
-          <span>Show as Python</span>
-        </DropdownMenuItem>
+        {onOpenCodePreview ? (
+          <DropdownMenuItem
+            onSelect={() => {
+              const code =
+                spec.toPythonModuleSnippet?.(draft) ??
+                buildFallbackPythonSnippet(spec, draft);
+              onOpenCodePreview(
+                `${spec.identity.title(draft)} as Python`,
+                "python",
+                code,
+              );
+            }}
+          >
+            <FileCode2 aria-hidden="true" size={14} />
+            <span>Show as Python</span>
+          </DropdownMenuItem>
+        ) : null}
         {onRevealInTree ? (
           <DropdownMenuItem onSelect={() => onRevealInTree()}>
             <ListTree aria-hidden="true" size={14} />
@@ -755,9 +824,12 @@ export function InspectorTemplate<TDraft>({
                   disabled={Boolean(action.disabledReason)}
                   onSelect={() => {
                     if (action.confirm) {
-                      setPendingConfirm({
-                        title: action.confirm.title,
-                        description: action.confirm.description,
+                      openPendingConfirm({
+                        title: resolveConfirmText(action.confirm.title, draft),
+                        description: resolveConfirmText(
+                          action.confirm.description ?? action.confirm.message,
+                          draft,
+                        ),
                         confirmLabel: action.confirm.confirmLabel,
                         destructive: action.destructive,
                         onConfirm: () => action.onSelect(actionContext),
@@ -805,9 +877,12 @@ export function InspectorTemplate<TDraft>({
           <DropdownMenuItem
             onSelect={() => {
               const del = spec.header.deleteAction!;
-              setPendingConfirm({
-                title: del.confirmTitle(draft),
-                description: del.confirmDescription,
+              openPendingConfirm({
+                title: resolveConfirmText(del.confirmTitle, draft),
+                description: resolveConfirmText(
+                  del.confirmDescription ?? del.confirmMessage,
+                  draft,
+                ),
                 confirmLabel: del.label ?? "Delete",
                 destructive: true,
                 onConfirm: () => del.onDelete(actionContext),
@@ -1086,9 +1161,12 @@ export function InspectorTemplate<TDraft>({
                 variant={mapHeaderButtonVariant(primaryAction.variant)}
                 onClick={() => {
                   if (primaryAction.confirm) {
-                    setPendingConfirm({
-                      title: primaryAction.confirm.title,
-                      description: primaryAction.confirm.description,
+                    openPendingConfirm({
+                      title: resolveConfirmText(primaryAction.confirm.title, draft),
+                      description: resolveConfirmText(
+                        primaryAction.confirm.description ?? primaryAction.confirm.message,
+                        draft,
+                      ),
                       confirmLabel: primaryAction.confirm.confirmLabel,
                       destructive: primaryAction.variant === "destructive",
                       onConfirm: () => primaryAction.onRun(actionContext),
@@ -1264,7 +1342,7 @@ export function InspectorTemplate<TDraft>({
         <AlertDialog
           open={pendingConfirm !== null}
           onOpenChange={(open) => {
-            if (!open) setPendingConfirm(null);
+            if (!open) cancelPendingDialog();
           }}
         >
           <AlertDialogContent>
@@ -1273,14 +1351,10 @@ export function InspectorTemplate<TDraft>({
               <AlertDialogDescription>{pendingConfirm?.description}</AlertDialogDescription>
             </AlertDialogHeader>
             <AlertDialogFooter>
-              <AlertDialogCancel>Cancel</AlertDialogCancel>
+              <AlertDialogCancel onClick={cancelPendingDialog}>Cancel</AlertDialogCancel>
               <AlertDialogAction
                 variant={pendingConfirm?.destructive ? "danger" : "primary"}
-                onClick={() => {
-                  const action = pendingConfirm?.onConfirm;
-                  setPendingConfirm(null);
-                  if (action) void action();
-                }}
+                onClick={acceptPendingDialog}
               >
                 {pendingConfirm?.confirmLabel}
               </AlertDialogAction>

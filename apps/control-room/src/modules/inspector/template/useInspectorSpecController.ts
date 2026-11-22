@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
 import type { Selection } from "@/kernel/selection/selectionTypes";
 
@@ -31,6 +31,27 @@ export interface InspectorConfirmApplyState {
   description: string;
   confirmLabel: string;
   destructive?: boolean;
+}
+
+export type InspectorRequestApplyHandler = (options?: {
+  confirmed?: boolean;
+}) => Promise<boolean>;
+
+export interface RegisteredControllerApplyHooks {
+  confirmPendingApply: () => Promise<boolean>;
+  cancelPendingApply: () => void;
+  stagePendingConfirm: (confirmSpec: InspectorConfirmApplyState) => void;
+}
+
+const controllerApplyHooksRegistry = new WeakMap<
+  (...args: never[]) => unknown,
+  RegisteredControllerApplyHooks
+>();
+
+export function getRegisteredControllerApplyHooks(
+  fn: ((...args: never[]) => unknown) | undefined,
+): RegisteredControllerApplyHooks | undefined {
+  return fn ? controllerApplyHooksRegistry.get(fn) : undefined;
 }
 
 export interface UseInspectorSpecControllerOptions<TDraft> {
@@ -70,7 +91,7 @@ export interface InspectorSpecController<TDraft> {
   revertAll: () => void;
   touchField: (fieldKey: string) => void;
   setParseError: (fieldKey: string, error: string | null) => void;
-  requestApply: () => Promise<boolean>;
+  requestApply: InspectorRequestApplyHandler;
   confirmPendingApply: () => Promise<boolean>;
   cancelPendingApply: () => void;
   resetDisplay: () => Promise<void>;
@@ -464,8 +485,8 @@ export function useInspectorSpecController<TDraft extends object>(
     }));
 
     try {
-      const ok = await spec.commitBar.onApply(draft, effectiveBaseline);
-      if (ok) {
+      const result = await spec.commitBar.onApply(draft, effectiveBaseline);
+      if (result !== false) {
         updateScoped((prev) => ({
           ...prev,
           stagedOverrides: {},
@@ -524,7 +545,43 @@ export function useInspectorSpecController<TDraft extends object>(
         : spec.commitBar.allowCleanApply,
     );
 
-  const requestApply = useCallback(async (): Promise<boolean> => {
+  const stagePendingConfirm = useCallback(
+    (confirmSpec: InspectorConfirmApplyState) => {
+      updateScoped((prev) => ({ ...prev, pendingConfirm: confirmSpec }));
+    },
+    [updateScoped],
+  );
+
+  const confirmPendingApply = useCallback(async (): Promise<boolean> => {
+    if (spec.commitBar.mode !== "staged") return false;
+    if (applying || (!canCleanApply && dirtyFields.size === 0) || Boolean(lockReason)) {
+      return false;
+    }
+    if (invalidFields.size > 0) {
+      updateScoped((prev) => ({
+        ...prev,
+        pendingConfirm: null,
+        forceShowErrors: true,
+      }));
+      return false;
+    }
+    return executeApply();
+  }, [
+    applying,
+    canCleanApply,
+    dirtyFields.size,
+    executeApply,
+    invalidFields.size,
+    lockReason,
+    spec.commitBar.mode,
+    updateScoped,
+  ]);
+
+  const cancelPendingApply = useCallback(() => {
+    updateScoped((prev) => ({ ...prev, pendingConfirm: null }));
+  }, [updateScoped]);
+
+  const requestApplyInternal = useCallback(async (): Promise<boolean> => {
     if (spec.commitBar.mode !== "staged") return false;
     if (applying || (!canCleanApply && dirtyFields.size === 0) || Boolean(lockReason)) {
       return false;
@@ -537,7 +594,7 @@ export function useInspectorSpecController<TDraft extends object>(
 
     const confirmSpec = spec.commitBar.confirmApply?.(draft, effectiveBaseline) ?? null;
     if (confirmSpec) {
-      updateScoped((prev) => ({ ...prev, pendingConfirm: confirmSpec }));
+      stagePendingConfirm(confirmSpec);
       return false;
     }
 
@@ -552,16 +609,23 @@ export function useInspectorSpecController<TDraft extends object>(
     invalidFields.size,
     lockReason,
     spec.commitBar,
+    stagePendingConfirm,
     updateScoped,
   ]);
 
-  const confirmPendingApply = useCallback(async (): Promise<boolean> => {
-    return executeApply();
-  }, [executeApply]);
+  const requestApply = useCallback<InspectorRequestApplyHandler>(
+    (applyOptions?: { confirmed?: boolean }) =>
+      applyOptions?.confirmed ? confirmPendingApply() : requestApplyInternal(),
+    [confirmPendingApply, requestApplyInternal],
+  );
 
-  const cancelPendingApply = useCallback(() => {
-    updateScoped((prev) => ({ ...prev, pendingConfirm: null }));
-  }, [updateScoped]);
+  useLayoutEffect(() => {
+    controllerApplyHooksRegistry.set(requestApply, {
+      confirmPendingApply,
+      cancelPendingApply,
+      stagePendingConfirm,
+    });
+  }, [cancelPendingApply, confirmPendingApply, requestApply, stagePendingConfirm]);
 
   const resetDisplay = useCallback(async (): Promise<void> => {
     if (spec.commitBar.mode !== "liveViewport") return;

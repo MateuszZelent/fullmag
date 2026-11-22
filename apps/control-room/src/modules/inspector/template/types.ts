@@ -65,8 +65,9 @@ export interface InspectorNodeMenuAction<TDraft> {
   disabledReason?: string;
   /** When set, running this action first requires confirmation in an AlertDialog. */
   confirm?: {
-    title: string;
-    description: string;
+    title: string | ((draft: TDraft) => string);
+    description?: string | ((draft: TDraft) => string);
+    message?: string | ((draft: TDraft) => string);
     confirmLabel: string;
   };
   onSelect: (ctx: InspectorActionContext<TDraft>) => void | Promise<void>;
@@ -89,8 +90,9 @@ export interface InspectorHeaderSpec<TDraft> {
     variant?: "outline" | "secondary" | "destructive";
     disabledReason?: string;
     confirm?: {
-      title: string;
-      description: string;
+      title: string | ((draft: TDraft) => string);
+      description?: string | ((draft: TDraft) => string);
+      message?: string | ((draft: TDraft) => string);
       confirmLabel: string;
     };
     onRun: (ctx: InspectorActionContext<TDraft>) => void | Promise<void>;
@@ -100,9 +102,10 @@ export interface InspectorHeaderSpec<TDraft> {
   /** Optional node delete action backed by a mandatory AlertDialog confirmation. */
   deleteAction?: {
     label?: string;
-    confirmTitle: (draft: TDraft) => string;
-    confirmDescription: string;
-    onDelete: (ctx: InspectorActionContext<TDraft>) => Promise<void>;
+    confirmTitle: string | ((draft: TDraft) => string);
+    confirmDescription?: string | ((draft: TDraft) => string);
+    confirmMessage?: string | ((draft: TDraft) => string);
+    onDelete: (ctx: InspectorActionContext<TDraft>) => void | Promise<void>;
   };
 }
 
@@ -430,7 +433,10 @@ export type CommitBarSpec<TDraft> =
         confirmLabel: string;
         destructive?: boolean;
       } | null;
-      onApply: (draft: TDraft, baseline: TDraft) => Promise<boolean>;
+      onApply: (
+        draft: TDraft,
+        baseline: TDraft,
+      ) => Promise<boolean | void> | boolean | void;
       onRevert?: (baseline: TDraft) => void;
     }
   | {

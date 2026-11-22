@@ -90,6 +90,26 @@ function sliceBoundsAxes(
   return { cu: cy, cv: cz, cn: cx, lu: ly, lv: lz, ln: lx, uIndex: 1, vIndex: 2 };
 }
 
+function resolveRegionOutlineStroke(canvas: HTMLCanvasElement): string {
+  const docRoot =
+    canvas.ownerDocument?.documentElement ??
+    (typeof document !== "undefined" ? document.documentElement : null);
+  const readTokens = (target: Element | null): string => {
+    if (!target || typeof getComputedStyle !== "function") return "";
+    try {
+      const styles = getComputedStyle(target);
+      if (!styles || typeof styles.getPropertyValue !== "function") return "";
+      return (
+        styles.getPropertyValue("--fm-accent").trim() ||
+        styles.getPropertyValue("--fm-text-primary").trim()
+      );
+    } catch {
+      return "";
+    }
+  };
+  return readTokens(canvas) || readTokens(docRoot) || "rgba(248, 250, 255, 0.9)";
+}
+
 export interface TexturePreviewCanvasProps {
   draft: MagneticTextureDraft;
   bounds: TargetMetricBounds;
@@ -240,7 +260,7 @@ export function TexturePreviewCanvas({
       const regH = regMeta.lv * scalePxPerM;
       ctx.save();
       ctx.setLineDash([4, 2.5]);
-      ctx.strokeStyle = "#cba6f7";
+      ctx.strokeStyle = resolveRegionOutlineStroke(canvas);
       ctx.lineWidth = 1.4;
       ctx.strokeRect(regX, regY, regW, regH);
       ctx.restore();
@@ -339,6 +359,24 @@ export function TexturePreviewCanvas({
 
   useEffect(() => {
     drawCanvas();
+  }, [drawCanvas]);
+
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    const rootHtml =
+      canvas?.ownerDocument?.documentElement ??
+      (typeof document !== "undefined" ? document.documentElement : null);
+    if (!rootHtml || typeof MutationObserver !== "function") return;
+    const observer = new MutationObserver(() => {
+      drawCanvas();
+    });
+    observer.observe(rootHtml, {
+      attributeFilter: ["data-theme", "class", "style"],
+      attributes: true,
+    });
+    return () => {
+      observer.disconnect();
+    };
   }, [drawCanvas]);
 
   const updateTranslationFromPointer = useCallback(
@@ -455,7 +493,8 @@ export function TexturePreviewCanvas({
           <div
             className="h-12 w-2.5 rounded-full border border-fm-subtle"
             style={{
-              background: "linear-gradient(to bottom, #f0f2f8 0%, #89b4fa 50%, #0f1017 100%)",
+              background:
+                "linear-gradient(to bottom, hsl(225 33% 96%) 0%, var(--fm-accent) 50%, hsl(232 21% 7%) 100%)",
             }}
           />
           <span>−1</span>

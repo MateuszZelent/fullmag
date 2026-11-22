@@ -184,6 +184,11 @@ import {
   sanitizeInspectorFacts,
 } from "./InspectorTemplate";
 import type { InspectorFact, InspectorSpec } from "./types";
+import {
+  resetPersistedInspectorModeTabs,
+  useInspectorSpecController,
+  type InspectorSpecController,
+} from "./useInspectorSpecController";
 
 interface SampleDraft {
   name: string;
@@ -397,6 +402,7 @@ let restoreDom: (() => void) | null = null;
 afterEach(() => {
   restoreDom?.();
   restoreDom = null;
+  resetPersistedInspectorModeTabs();
 });
 
 describe("InspectorTemplate", () => {
@@ -1171,13 +1177,13 @@ describe("InspectorTemplate", () => {
       ),
     ).toHaveLength(0);
 
-    // Merged menu includes both Inspector node actions and PanelFrame actions.
+    // Merged menu includes Inspector node actions and PanelFrame actions, omitting "Show as Python" without a handler.
     const menuItems = findElements(
       container,
       (el) => el.getAttribute("role") === "menuitem",
     ).map((item) => item.textContent.trim());
     expect(menuItems).toContain("Copy node ID");
-    expect(menuItems).toContain("Show as Python");
+    expect(menuItems).not.toContain("Show as Python");
     expect(menuItems).toContain("Expand all sections");
     expect(menuItems).toContain("Hide panel");
 
@@ -1355,6 +1361,360 @@ describe("InspectorTemplate", () => {
     expect(dirtyButtons).toHaveLength(2);
     expect(stagedActions.textContent).toContain("Revert");
     expect(stagedActions.textContent).toContain("Apply Texture");
+
+    act(() => {
+      root.unmount();
+    });
+  });
+
+  it("executes_confirmPendingApply_and_commits_draft_when_confirming_costly_apply_with_useInspectorSpecController", async () => {
+    const env = installSimulationPreparationTestDom();
+    restoreDom = env.restore;
+    const container = env.document.createElement("div");
+    env.document.body.appendChild(container);
+    const root = createRoot(container as unknown as Element);
+
+    const committedPayloads: SampleDraft[] = [];
+    const onApply = vi.fn(async (draft: SampleDraft): Promise<void> => {
+      committedPayloads.push(draft);
+    });
+
+    const spec = createSampleSpec({
+      commitBar: {
+        mode: "staged",
+        cleanMessage: () => "Up to date · Scene rev 4",
+        confirmApply: (draft) => ({
+          title: `Rebuild mesh for alpha=${draft.alpha}?`,
+          description: "Discretization changes invalidate cached results.",
+          confirmLabel: "Confirm & Rebuild",
+        }),
+        onApply,
+      },
+    });
+
+    let latestController!: InspectorSpecController<SampleDraft>;
+
+    function ControllerBackedHarness() {
+      const controller = useInspectorSpecController(spec, BASE_SELECTION, BASE_DRAFT);
+      latestController = controller;
+      return (
+        <InspectorTemplate
+          activeModeTabId={controller.activeModeTabId}
+          animationKey={controller.animationKey}
+          appliedFlash={controller.appliedFlash}
+          applyError={controller.applyError}
+          applying={controller.applying}
+          baseline={controller.baseline}
+          dirtyFields={controller.dirtyFields}
+          displayUnits={controller.displayUnits}
+          draft={controller.draft}
+          forceShowErrors={controller.forceShowErrors}
+          invalidFields={controller.invalidFields}
+          selection={BASE_SELECTION}
+          spec={spec}
+          touchedFields={controller.touchedFields}
+          onActiveModeTabChange={controller.setActiveModeTabId}
+          onApply={controller.requestApply}
+          onDisplayUnitChange={controller.setDisplayUnit}
+          onFieldChange={controller.setField}
+          onFieldTouch={controller.touchField}
+          onFocusField={controller.focusField}
+          onParseErrorChange={controller.setParseError}
+          onPatchDraft={controller.patchDraft}
+          onResetDisplay={controller.resetDisplay}
+          onRevertAll={controller.revertAll}
+          onRevertField={controller.revertField}
+        />
+      );
+    }
+
+    act(() => {
+      root.render(<ControllerBackedHarness />);
+    });
+
+    expect(latestController.phase).toBe("stagedClean");
+
+    // Stage an edit via controller.
+    act(() => {
+      latestController.setField("alpha", 0.025);
+    });
+    expect(latestController.dirty).toBe(true);
+    expect(latestController.phase).toBe("dirtyValid");
+
+    const stagedActions = findElement(
+      container,
+      (el) => el.getAttribute("data-slot") === "commit-bar-staged-actions",
+      "staged actions bar",
+    );
+    const applyBtn = findElement(
+      stagedActions,
+      (el) => el.tagName === "BUTTON" && el.textContent.includes("Apply"),
+      "Apply button",
+    );
+
+    // 1. Clicking Apply opens the confirmation dialog and transitions controller to confirmCostly.
+    act(() => {
+      applyBtn.click();
+    });
+    expect(latestController.phase).toBe("confirmCostly");
+    expect(onApply).not.toHaveBeenCalled();
+
+    const firstDialog = findElement(
+      container,
+      (el) => el.getAttribute("role") === "alertdialog",
+      "first confirmation dialog",
+    );
+    expect(firstDialog.textContent).toContain("Rebuild mesh for alpha=0.025?");
+
+    // Cancelling closes the dialog, restores dirtyValid, and does not invoke onApply.
+    const cancelBtn = findElement(
+      firstDialog,
+      (el) => el.tagName === "BUTTON" && el.textContent.trim() === "Cancel",
+      "Cancel button",
+    );
+    act(() => {
+      cancelBtn.click();
+    });
+    expect(
+      findElements(container, (el) => el.getAttribute("role") === "alertdialog"),
+    ).toHaveLength(0);
+    expect(latestController.phase).toBe("dirtyValid");
+    expect(latestController.dirty).toBe(true);
+    expect(onApply).not.toHaveBeenCalled();
+
+    // 2. Clicking Apply again and confirming executes confirmPendingApply() -> onApply and commits!
+    act(() => {
+      applyBtn.click();
+    });
+    const secondDialog = findElement(
+      container,
+      (el) => el.getAttribute("role") === "alertdialog",
+      "second confirmation dialog",
+    );
+    const confirmBtn = findElement(
+      secondDialog,
+      (el) => el.tagName === "BUTTON" && el.textContent.includes("Confirm & Rebuild"),
+      "Confirm & Rebuild button",
+    );
+
+    await act(async () => {
+      confirmBtn.click();
+    });
+
+    expect(onApply).toHaveBeenCalledTimes(1);
+    expect(committedPayloads).toHaveLength(1);
+    expect(committedPayloads[0]?.alpha).toBe(0.025);
+    expect(latestController.dirty).toBe(false);
+    expect(latestController.appliedFlash).toBe(true);
+    expect(latestController.phase).toBe("appliedFlash");
+
+    act(() => {
+      root.unmount();
+    });
+  });
+
+  it("resolves_both_string_and_function_confirmTitle_and_confirmMessage_without_TypeError", async () => {
+    const env = installSimulationPreparationTestDom();
+    restoreDom = env.restore;
+    const container = env.document.createElement("div");
+    env.document.body.appendChild(container);
+    const root = createRoot(container as unknown as Element);
+
+    const onDeleteStatic = vi.fn(async () => undefined);
+    const onDeleteDynamic = vi.fn(async () => undefined);
+
+    // 1. Static string confirmTitle + confirmMessage
+    act(() => {
+      root.render(
+        <InspectorTemplate
+          baseline={BASE_DRAFT}
+          dirtyFields={new Set()}
+          draft={BASE_DRAFT}
+          invalidFields={new Map()}
+          selection={BASE_SELECTION}
+          spec={createSampleSpec({
+            header: {
+              breadcrumbs: [{ id: "transport", label: "Charge Transport" }],
+              deleteAction: {
+                label: "Delete Charge Transport",
+                confirmTitle: "Delete charge transport?",
+                confirmMessage: "Removes current source from session.",
+                onDelete: onDeleteStatic,
+              },
+            },
+          })}
+          touchedFields={new Set()}
+          onFieldChange={() => undefined}
+          onFieldTouch={() => undefined}
+          onRevertField={() => undefined}
+        />,
+      );
+    });
+
+    const deleteStaticItem = findElement(
+      container,
+      (el) =>
+        el.getAttribute("role") === "menuitem" &&
+        el.textContent.includes("Delete Charge Transport"),
+      "static delete menuitem",
+    );
+    act(() => {
+      deleteStaticItem.click();
+    });
+
+    const staticDialog = findElement(
+      container,
+      (el) => el.getAttribute("role") === "alertdialog",
+      "static delete confirmation dialog",
+    );
+    expect(staticDialog.textContent).toContain("Delete charge transport?");
+    expect(staticDialog.textContent).toContain("Removes current source from session.");
+
+    const confirmStaticBtn = findElement(
+      staticDialog,
+      (el) =>
+        el.tagName === "BUTTON" && el.textContent.includes("Delete Charge Transport"),
+      "confirm static delete button",
+    );
+    await act(async () => {
+      confirmStaticBtn.click();
+    });
+    expect(onDeleteStatic).toHaveBeenCalledTimes(1);
+
+    // 2. Function confirmTitle + function confirmMessage / confirmDescription
+    act(() => {
+      root.render(
+        <InspectorTemplate
+          baseline={BASE_DRAFT}
+          dirtyFields={new Set()}
+          draft={{ ...BASE_DRAFT, name: "CoFeB strip" }}
+          invalidFields={new Map()}
+          selection={BASE_SELECTION}
+          spec={createSampleSpec({
+            header: {
+              breadcrumbs: [{ id: "film", label: "CoFeB strip" }],
+              deleteAction: {
+                label: "Delete Object",
+                confirmTitle: (d) => `Delete "${d.name}"?`,
+                confirmMessage: (d) => `Permanently deletes ${d.name} (Ms=${d.ms}).`,
+                onDelete: onDeleteDynamic,
+              },
+            },
+          })}
+          touchedFields={new Set()}
+          onFieldChange={() => undefined}
+          onFieldTouch={() => undefined}
+          onRevertField={() => undefined}
+        />,
+      );
+    });
+
+    const deleteDynamicItem = findElement(
+      container,
+      (el) =>
+        el.getAttribute("role") === "menuitem" &&
+        el.textContent.includes("Delete Object"),
+      "dynamic delete menuitem",
+    );
+    act(() => {
+      deleteDynamicItem.click();
+    });
+
+    const dynamicDialog = findElement(
+      container,
+      (el) => el.getAttribute("role") === "alertdialog",
+      "dynamic delete confirmation dialog",
+    );
+    expect(dynamicDialog.textContent).toContain('Delete "CoFeB strip"?');
+    expect(dynamicDialog.textContent).toContain(
+      "Permanently deletes CoFeB strip (Ms=800000).",
+    );
+
+    const confirmDynamicBtn = findElement(
+      dynamicDialog,
+      (el) => el.tagName === "BUTTON" && el.textContent.includes("Delete Object"),
+      "confirm dynamic delete button",
+    );
+    await act(async () => {
+      confirmDynamicBtn.click();
+    });
+    expect(onDeleteDynamic).toHaveBeenCalledTimes(1);
+
+    act(() => {
+      root.unmount();
+    });
+  });
+
+  it("hides_show_as_python_without_handler_and_opens_preview_when_onOpenCodePreview_is_provided", () => {
+    const env = installSimulationPreparationTestDom();
+    restoreDom = env.restore;
+    const container = env.document.createElement("div");
+    env.document.body.appendChild(container);
+    const root = createRoot(container as unknown as Element);
+
+    // 1. Without onOpenCodePreview: "Show as Python" is hidden.
+    act(() => {
+      root.render(
+        <InspectorTemplate
+          baseline={BASE_DRAFT}
+          dirtyFields={new Set()}
+          draft={BASE_DRAFT}
+          invalidFields={new Map()}
+          selection={BASE_SELECTION}
+          spec={createSampleSpec({
+            toPythonModuleSnippet: (d) => `film.ms = ${d.ms}`,
+          })}
+          touchedFields={new Set()}
+          onFieldChange={() => undefined}
+          onFieldTouch={() => undefined}
+          onRevertField={() => undefined}
+        />,
+      );
+    });
+
+    const menuItemsWithoutHandler = findElements(
+      container,
+      (el) => el.getAttribute("role") === "menuitem",
+    ).map((el) => el.textContent.trim());
+    expect(menuItemsWithoutHandler).not.toContain("Show as Python");
+
+    // 2. With onOpenCodePreview: "Show as Python" renders and invokes the handler.
+    const onOpenCodePreview = vi.fn();
+    act(() => {
+      root.render(
+        <InspectorTemplate
+          baseline={BASE_DRAFT}
+          dirtyFields={new Set()}
+          draft={BASE_DRAFT}
+          invalidFields={new Map()}
+          selection={BASE_SELECTION}
+          spec={createSampleSpec({
+            toPythonModuleSnippet: (d) => `film.ms = ${d.ms}`,
+          })}
+          touchedFields={new Set()}
+          onFieldChange={() => undefined}
+          onFieldTouch={() => undefined}
+          onOpenCodePreview={onOpenCodePreview}
+          onRevertField={() => undefined}
+        />,
+      );
+    });
+
+    const showPythonItem = findElement(
+      container,
+      (el) =>
+        el.getAttribute("role") === "menuitem" &&
+        el.textContent.includes("Show as Python"),
+      "Show as Python menuitem",
+    );
+    act(() => {
+      showPythonItem.click();
+    });
+    expect(onOpenCodePreview).toHaveBeenCalledWith(
+      "Permalloy film as Python",
+      "python",
+      "film.ms = 800000",
+    );
 
     act(() => {
       root.unmount();

@@ -35,7 +35,10 @@ const SELECTION_A: Selection = {
 };
 
 function createMaterialSpec(
-  onApply: (draft: MaterialDraft, baseline: MaterialDraft) => Promise<boolean>,
+  onApply: (
+    draft: MaterialDraft,
+    baseline: MaterialDraft,
+  ) => Promise<boolean | void> | boolean | void,
   withConfirm = false,
 ): InspectorSpec<MaterialDraft> {
   return {
@@ -323,6 +326,111 @@ describe("useInspectorSpecController", () => {
     });
     expect(applied).toBe(false);
     expect(onApply).toHaveBeenCalledTimes(1);
+
+    act(() => {
+      root.unmount();
+    });
+  });
+
+  it("treats Promise<void> and void onApply handlers as success and rejects only explicit false or thrown errors", async () => {
+    vi.useFakeTimers();
+    const env = installSimulationPreparationTestDom();
+    restoreDom = env.restore;
+    const container = env.document.createElement("div");
+    env.document.body.appendChild(container);
+    const root = createRoot(container as unknown as Element);
+
+    let mode: "async-void" | "sync-void" | "explicit-false" | "throw" = "async-void";
+    const onApplied = vi.fn();
+    const onApply = vi.fn(
+      (draft: MaterialDraft): Promise<boolean | void> | boolean | void => {
+        void draft;
+        if (mode === "async-void") {
+          return Promise.resolve();
+        }
+        if (mode === "sync-void") {
+          return undefined;
+        }
+        if (mode === "explicit-false") {
+          return Promise.resolve(false);
+        }
+        return Promise.reject(new Error("409 revision conflict"));
+      },
+    );
+
+    const spec = createMaterialSpec(onApply, false);
+    let latest!: InspectorSpecController<MaterialDraft>;
+
+    function Harness({ baseline }: { baseline: MaterialDraft }) {
+      latest = useInspectorSpecController(spec, SELECTION_A, baseline, undefined, {
+        onApplied,
+      });
+      return null;
+    }
+
+    act(() => {
+      root.render(<Harness baseline={{ ms: 8e5, alpha: 0.008, showVectors: true }} />);
+    });
+
+    // 1. Promise<void> (`undefined`) succeeds and commits draft.
+    act(() => {
+      latest.setField("alpha", 0.015);
+    });
+    let applied = false;
+    await act(async () => {
+      applied = await latest.requestApply();
+    });
+    expect(applied).toBe(true);
+    expect(onApply).toHaveBeenCalledTimes(1);
+    expect(onApplied).toHaveBeenCalledWith(
+      expect.objectContaining({ alpha: 0.015 }),
+    );
+    expect(latest.phase).toBe("appliedFlash");
+    expect(latest.dirty).toBe(false);
+    expect(latest.applyError).toBeNull();
+
+    act(() => {
+      vi.advanceTimersByTime(3000);
+    });
+    expect(latest.phase).toBe("stagedClean");
+
+    // 2. Synchronous `void` (`undefined`) also succeeds.
+    mode = "sync-void";
+    act(() => {
+      latest.setField("alpha", 0.025);
+    });
+    await act(async () => {
+      applied = await latest.requestApply();
+    });
+    expect(applied).toBe(true);
+    expect(latest.phase).toBe("appliedFlash");
+    expect(latest.dirty).toBe(false);
+
+    // 3. Explicit `false` rejects and preserves staged draft + dirtyFields.
+    mode = "explicit-false";
+    act(() => {
+      latest.setField("alpha", 0.035);
+    });
+    await act(async () => {
+      applied = await latest.requestApply();
+    });
+    expect(applied).toBe(false);
+    expect(latest.phase).toBe("applyRejected");
+    expect(latest.dirty).toBe(true);
+    expect(latest.draft.alpha).toBe(0.035);
+    expect(latest.applyError).toBe(
+      "Changes could not be applied. Review highlighted fields.",
+    );
+
+    // 4. Rejected Promise preserves staged draft and surfaces error message.
+    mode = "throw";
+    await act(async () => {
+      applied = await latest.requestApply();
+    });
+    expect(applied).toBe(false);
+    expect(latest.phase).toBe("applyRejected");
+    expect(latest.dirty).toBe(true);
+    expect(latest.applyError).toBe("409 revision conflict");
 
     act(() => {
       root.unmount();
