@@ -33,22 +33,15 @@ fn run_performance_request_scope(
     tag = "platform"
 )]
 pub async fn get_health(State(state): State<Arc<AppState>>) -> Json<HealthResponse> {
-    let runtime_failure = state
-        .development_admission
-        .observe_runtime_failure_fence();
-    let active = if runtime_failure {
-        state
-            .current_live_state
-            .try_read()
-            .map(|current| current.is_some())
-            .unwrap_or(false)
-    } else {
-        state.current_live_state.read().await.is_some()
-    };
+    let fence = state.development_admission.refresh_runtime_failure_fence().await;
+    let current = tokio::time::timeout(std::time::Duration::from_millis(100), state.current_live_state.read()).await;
+    // A busy snapshot cannot prove the workspace is empty for a managed stop.
+    let degraded = fence != Some(false) || current.is_err();
+    let active = current.map(|snapshot| snapshot.is_some()).unwrap_or(true);
     let uptime = state.api_started_at.elapsed().as_secs();
 
     Json(HealthResponse {
-        status: if runtime_failure { "degraded" } else { "ok" }.into(),
+        status: if degraded { "degraded" } else { "ok" }.into(),
         uptime_seconds: uptime,
         api_contract_version: "1.0.0".into(),
         active_session: active,

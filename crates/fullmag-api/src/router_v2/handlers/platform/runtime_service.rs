@@ -12,7 +12,7 @@ use sha2::{Digest, Sha256};
 use crate::{
     error::ApiError,
     router_v2::handlers::shared::{conditional_json_response, stable_strong_etag},
-    schemas::runtime_service::RuntimeServiceStatusResource,
+    schemas::runtime_service::{RuntimeServiceStatusResource, RuntimeServiceStatusState},
     types::AppState,
 };
 
@@ -58,19 +58,27 @@ pub(crate) async fn observe_runtime_service(
     let explicit_config_path =
         std::env::var_os("FULLMAG_RUNTIME_SERVICE_CONFIG").map(PathBuf::from);
     let store_root = state.submit_store_root.clone();
-    let mut body = tokio::task::spawn_blocking(move || {
-        let config_path = resolve_config_path(store_root.as_deref(), explicit_config_path);
-        let observation_root = store_root.unwrap_or_default();
-        let observed = fullmag_runtime_control::application_service_status::observe(
-            &observation_root,
-            config_path.as_deref(),
-        );
-        RuntimeServiceStatusResource::from(observed)
-    })
-    .await
-    .map_err(|error| {
-        ApiError::internal(format!("runtime service observer task failed: {error}"))
-    })?;
+    let configured = explicit_config_path.is_some() || store_root.is_some();
+    let probe = crate::router_v2::middleware::development_admission::bounded_storage_observation(
+        &RUNTIME_PROBE_SLOTS,
+        std::time::Duration::from_secs(4),
+        move || {
+            let config_path = resolve_config_path(store_root.as_deref(), explicit_config_path);
+            let observation_root = store_root.unwrap_or_default();
+            RuntimeServiceStatusResource::from(
+                fullmag_runtime_control::application_service_status::observe(
+                    &observation_root,
+                    config_path.as_deref(),
+                ),
+            )
+        },
+    );
+    let (probe_result, fence) =
+        tokio::join!(probe, state.development_admission.refresh_runtime_failure_fence());
+    let mut body = probe_result.unwrap_or_else(|| delayed_runtime_observation(configured));
+    if fence.is_none() && body.state == RuntimeServiceStatusState::Ready {
+        body = delayed_runtime_observation(body.configured);
+    }
 
     // An old service descriptor can still say Ready after this API failed
     // initialization. Expose the execution block that actually governs this
@@ -88,6 +96,23 @@ pub(crate) async fn observe_runtime_service(
     }
 
     Ok(body)
+}
+
+// This API instance observes one native owner. Bound concurrent storage
+// probes from browser status refreshes and the runtime supervisor.
+static RUNTIME_PROBE_SLOTS: std::sync::LazyLock<std::sync::Arc<tokio::sync::Semaphore>> =
+    std::sync::LazyLock::new(|| std::sync::Arc::new(tokio::sync::Semaphore::new(4)));
+
+fn delayed_runtime_observation(configured: bool) -> RuntimeServiceStatusResource {
+    RuntimeServiceStatusResource {
+        schema_version: fullmag_runtime_control::application_service_status::APPLICATION_SERVICE_STATUS_SCHEMA.into(),
+        configured,
+        state: RuntimeServiceStatusState::ObservationUnknown,
+        reason: crate::schemas::runtime_service::RuntimeServiceStatusReason {
+            code: "live_probe_failed".into(),
+            message: "Runtime storage did not respond before the observation deadline.".into(),
+        },
+    }
 }
 
 /// Select the only configuration path that the read-only observer may inspect.
