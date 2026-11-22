@@ -560,7 +560,7 @@ fn select_current_accepted_scalar_row<'a>(
     Some(row)
 }
 
-fn accepted_solver_steps(snapshot: &SessionStateResponse, run_id: &str) -> u64 {
+pub(crate) fn accepted_solver_steps(snapshot: &SessionStateResponse, run_id: &str) -> u64 {
     let Some(magnetization) = snapshot.latest_fields.get("m") else {
         return 0;
     };

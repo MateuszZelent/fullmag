@@ -137,7 +137,9 @@ async fn submit_new_structured_command(
     let accepted_observations = crate::live_accepted_execution::docker_api_only_runtime()
         && matches!(&req, StructuredCommandRequest::ComputeFields { .. }
             | StructuredCommandRequest::ComputeEnergies { .. });
-    enforce_session_command_admission(&state, accepted_observations).await?;
+    let allow_prepared_fields = context.is_some()
+        && matches!(&req, StructuredCommandRequest::ComputeFields { .. });
+    enforce_session_command_admission(&state, accepted_observations, allow_prepared_fields).await?;
     validate_optional_request_context(&state, context).await?;
     validate_authored_run_target(&req)?;
     validate_relax_command_controls(&req)?;
@@ -444,7 +446,11 @@ async fn validate_optional_request_context(
     Ok(())
 }
 
-async fn enforce_session_command_admission(state: &Arc<AppState>, accepted_observations: bool) -> Result<(), ApiError> {
+async fn enforce_session_command_admission(
+    state: &Arc<AppState>,
+    accepted_observations: bool,
+    allow_prepared_fields: bool,
+) -> Result<(), ApiError> {
     let (terminal_status, run_terminal) = {
         let current = state.current_live_state.read().await;
         let snapshot = current
@@ -467,6 +473,12 @@ async fn enforce_session_command_admission(state: &Arc<AppState>, accepted_obser
         let run_terminal = snapshot.run.as_ref().is_some_and(|run| {
             matches!(run.status.as_str(), "completed" | "failed" | "cancelled")
         });
+        if accepted_observations && !run_terminal && allow_prepared_fields {
+            crate::live_prepared_fdm_fields::disabled_reason(snapshot).map_err(|reason| {
+                ApiError::conflict_with_code("prepared_field_evaluation_unavailable", reason)
+            })?;
+            return Ok(());
+        }
         (terminal_status, run_terminal)
     };
     if accepted_observations && !run_terminal {
@@ -619,13 +631,19 @@ async fn publish_materialized_fields_under_transition(
         .ok_or_else(|| ApiError::not_found("no current workspace"))?;
     crate::ensure_current_live_request_context(&snapshot, context,
         state.current_live_session_epoch.load(std::sync::atomic::Ordering::Acquire))?;
-    if command.kind == "compute_fields" {
+    let prepared = command.kind == "compute_fields"
+        && !snapshot.run.as_ref().is_some_and(|run| {
+            matches!(run.status.as_str(), "completed" | "failed" | "cancelled")
+        });
+    if prepared {
+        crate::live_prepared_fdm_fields::disabled_reason(&snapshot).map_err(ApiError::conflict)?;
+    } else if command.kind == "compute_fields" {
         command.field_materialization_requirements =
             compute_fields_materialization_requirements(&snapshot);
     }
     let energies_only = command.kind == "compute_energies";
     let requirements = command.field_materialization_requirements.clone();
-    if !energies_only && requirements.is_empty() {
+    if !prepared && !energies_only && requirements.is_empty() {
         return reject_session_command_impl_with_context(state, headers, command,
             "accepted_materialization_requirements_unavailable: no trusted resolved quantity requirements are published".into(),
             None).await;
@@ -656,9 +674,22 @@ async fn publish_materialized_fields_under_transition(
     let task_context = context.clone();
     let task_command_id = command_id.clone();
     tokio::spawn(async move {
+        let outcome = if prepared {
+            crate::live_prepared_fdm_fields::evaluate_and_publish(
+                &task_state, &task_context, snapshot, &task_command_id,
+            ).await
+        } else {
+            let _transition = task_state.current_live_session_transition.lock().await;
+            match crate::validate_current_live_request_context(&task_state, &task_context).await {
+                Ok(()) => crate::accepted_field_materialization::adopt_current_bundle(
+                    &task_state, energies_only, &requirements,
+                ).await,
+                Err(error) => Err(error),
+            }
+        };
         let _transition = task_state.current_live_session_transition.lock().await;
-        let result = complete_materialized_fields_under_transition(
-            &task_state, &task_context, &task_command_id, energies_only, &requirements,
+        let result = complete_field_materialization_under_transition(
+            &task_state, &task_context, &task_command_id, outcome,
         ).await;
         if let Err(error) = result {
             tracing::warn!(command_id = %task_command_id, error = %error,
@@ -674,17 +705,12 @@ async fn publish_materialized_fields_under_transition(
     Ok(response)
 }
 
-async fn complete_materialized_fields_under_transition(
+async fn complete_field_materialization_under_transition(
     state: &Arc<AppState>,
     context: &crate::types::CurrentLiveRequestContext,
     command_id: &str,
-    energies_only: bool,
-    requirements: &[FieldMaterializationRequirement],
+    outcome: Result<(), ApiError>,
 ) -> Result<(), ApiError> {
-    crate::validate_current_live_request_context(state, context).await?;
-    let outcome = crate::accepted_field_materialization::adopt_current_bundle(
-        state, energies_only, requirements,
-    ).await;
     let error = outcome.err().map(|error| error.message);
     let completed = error.is_none();
     let snapshot = state.current_live_state.read().await.as_ref().cloned()
@@ -1157,8 +1183,15 @@ fn validate_runtime_command_contract(
         if let Some(reason) = remesh_disabled_reason(Some(snapshot), ledger) {
             return Err(ApiError::conflict(reason));
         }
-    } else if is_compute_command(&command.kind) && has_active_mesh_command(ledger) {
-        return Err(ApiError::conflict("A mesh command is already active."));
+    } else if is_compute_command(&command.kind) {
+        if has_active_mesh_command(ledger) {
+            return Err(ApiError::conflict("A mesh command is already active."));
+        }
+        if matches!(command.kind.as_str(), "solve" | "run" | "relax") && ledger.iter().any(|record| {
+            record.command.kind == "compute_fields" && is_active_mesh_or_compute_command(record)
+        }) {
+            return Err(ApiError::conflict("Wait for Compute Fields to finish before starting the Study."));
+        }
     }
 
     Ok(())

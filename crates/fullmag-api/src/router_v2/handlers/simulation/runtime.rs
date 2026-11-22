@@ -2337,6 +2337,10 @@ fn runtime_command_disabled_reason(
                 }
                 if !snapshot.run.as_ref().is_some_and(|run|
                     matches!(run.status.as_str(), "completed" | "failed" | "cancelled")) {
+                    if kind == "compute_fields" {
+                        return crate::live_prepared_fdm_fields::disabled_reason(snapshot)
+                            .err().map(str::to_owned);
+                    }
                     return Some("Accepted observations require a terminal run.".into());
                 }
                 if snapshot.latest_fields.get("m").and_then(|m| m.get("state_object_ref")).is_none() {

@@ -366,7 +366,7 @@ pub(crate) fn plan_on_published_domain(
     })
 }
 
-fn qualified_base(
+pub(crate) fn qualified_base(
     snapshot: &SessionStateResponse,
     layout: &Value,
 ) -> Result<Option<(Vec<[f64; 3]>, Value)>, ApiError> {

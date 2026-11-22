@@ -49,6 +49,13 @@ mod preparation_retry_main;
 
 /// Run the API server executable.
 pub fn run_api() {
+    if std::env::args().nth(1).as_deref() == Some(live_prepared_fdm_fields::WORKER_ARGUMENT) {
+        if let Err(error) = live_prepared_fdm_fields::run_worker() {
+            eprintln!("Prepared field worker failed: {error:#}");
+            std::process::exit(1);
+        }
+        return;
+    }
     // `#[tokio::main]` turns this async entrypoint into a synchronous function.
     run_api_server()
 }
