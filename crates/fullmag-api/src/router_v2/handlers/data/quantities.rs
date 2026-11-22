@@ -98,13 +98,12 @@ fn annotate_runtime_quantity_state(
     let prepared_only = snapshot.capabilities.is_none() && !standalone_inspection && !field_only;
     let prepared_damping = prepared_only && quantity_spec("mat_alpha").is_some_and(|spec|
         prepared_damping_carriers(snapshot, spec, spec.domain.as_str()).is_some());
-    if prepared_only && !prepared_m_without_runtime_capabilities && !prepared_damping {
-        return;
-    }
-
     for entry in &mut response.quantities {
-        if prepared_only && !(entry.id == "m" && prepared_m_without_runtime_capabilities
-            || entry.id == "mat_alpha" && prepared_damping) {
+        if prepared_only
+            && !(entry.id == "m" && prepared_m_without_runtime_capabilities
+                || entry.id == "mat_alpha" && prepared_damping
+                || super::fields::has_saved_transport_field(snapshot, &entry.id))
+        {
             continue;
         }
         let Some(spec) = quantity_spec(&entry.id) else {
@@ -118,16 +117,16 @@ fn annotate_runtime_quantity_state(
             spec.domain.as_str(),
         );
         let supported = preliminary.provider == fullmag_runner::QuantityProviderCapability::Available
-            && preliminary.reason_code.as_deref() != Some(PREPARED_DAMPING_READ_ONLY);
+            && !matches!(preliminary.reason_code.as_deref(), Some(PREPARED_DAMPING_READ_ONLY | SAVED_TRANSPORT_READ_ONLY));
 
         let status = relevant_field_materialization_status(snapshot, &entry.id);
-        let resolved_field = resolve_current_spatial_field_metadata(
-            snapshot,
-            &entry.id,
-            usize::from(spec.n_comp),
-        )
-        .ok()
-        .flatten();
+        let resolved_field = super::fields::resolve_transport_spatial_field(snapshot, &entry.id)
+            .and_then(|saved| match saved {
+                Some(field) => Ok(Some(field)),
+                None => resolve_current_spatial_field_metadata(snapshot, &entry.id, usize::from(spec.n_comp)),
+            })
+            .ok()
+            .flatten();
         // Metadata resolution validates the descriptor's value_count and
         // current domain without reading a binary field payload.
         let has_payload = resolved_field.is_some()
@@ -290,6 +289,41 @@ pub(crate) fn current_field_carriers(
 }
 
 const PREPARED_DAMPING_READ_ONLY: &str = "prepared_damping_read_only";
+const SAVED_TRANSPORT_READ_ONLY: &str = "saved_transport_read_only";
+
+pub(super) fn saved_transport_capability(
+    snapshot: &SessionStateResponse,
+    spec: &QuantitySpec,
+    carriers: Vec<FieldCarrierDescriptor>,
+    scope: &str,
+) -> fullmag_runner::ResolvedQuantityCapability {
+    use fullmag_runner::{QuantityProviderCapability, QuantityPublicationCapability,
+        QuantityRenderCapability, QuantityRequestCapability, ResolvedQuantityCapability};
+
+    let provider = QuantityProviderCapability::Available;
+    let request = QuantityRequestCapability::FieldVector;
+    let materialization = if carriers.is_empty() {
+        QuantityMaterializationCapability::Unmaterialized
+    } else {
+        QuantityMaterializationCapability::Materialized
+    };
+    let projections = fullmag_runner::resolve_quantity_projection_capabilities(
+        spec, provider, request, materialization, &carriers,
+    );
+    let render = if spec.shape == fullmag_quantities::QuantityShape::TensorField {
+        QuantityRenderCapability::UnsupportedShape
+    } else {
+        QuantityRenderCapability::Renderable
+    };
+    ResolvedQuantityCapability {
+        quantity_id: spec.id.as_str().to_string(), provider, request, materialization, render,
+        publication: QuantityPublicationCapability::Interactive, scope: scope.to_string(),
+        reason_code: Some(SAVED_TRANSPORT_READ_ONLY.to_string()), lane: SAVED_TRANSPORT_READ_ONLY.to_string(),
+        precision: snapshot.session.resolved_precision.as_deref()
+            .unwrap_or(snapshot.session.precision.as_str()).to_string(),
+        carriers, projections,
+    }
+}
 
 /// A scene coefficient can be inspected before a solver has selected a provider.
 /// Require the exact current authored or plan-owned data and its physical carrier.
@@ -331,6 +365,9 @@ pub(crate) fn resolved_quantity_capability_for_snapshot(
     carriers: Vec<FieldCarrierDescriptor>,
     scope: &str,
 ) -> fullmag_runner::ResolvedQuantityCapability {
+    if super::fields::has_saved_transport_field(snapshot, spec.id.as_str()) {
+        return saved_transport_capability(snapshot, spec, carriers, scope);
+    }
     let precision = snapshot
         .session
         .resolved_precision
@@ -970,6 +1007,39 @@ mod tests {
             );
             assert!(resolved.carriers.is_empty());
         }
+    }
+
+    #[test]
+    fn completed_transport_catalog_exposes_saved_tensor_projections_without_solver_capabilities() {
+        let directory = tempfile::tempdir().unwrap();
+        let quantity = directory.path().join("fields/spin_current_tensor");
+        std::fs::create_dir_all(&quantity).unwrap();
+        std::fs::write(
+            quantity.join("step_000000.json"),
+            serde_json::to_vec(&serde_json::json!({
+                "observable": "spin_current_tensor",
+                "component_count": 9,
+                "revision": 1,
+                "values": [0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0],
+            })).unwrap(),
+        ).unwrap();
+        let mut snapshot = snapshot_with_field_provider("m");
+        snapshot.capabilities = None;
+        snapshot.metadata = None;
+        snapshot.session.artifact_dir = directory.path().display().to_string();
+
+        let mut response = QuantityCatalogResponse::build();
+        annotate_runtime_quantity_state(&mut response, &snapshot);
+
+        let tensor = response.quantities.iter().find(|entry| entry.id == "spin_current_tensor").unwrap();
+        assert!(tensor.requestable);
+        assert!(!tensor.materializable);
+        assert_eq!(tensor.materialization_state, "complete");
+        let capability = tensor.resolved_capability.as_ref().unwrap();
+        assert_eq!(capability.reason_code.as_deref(), Some("saved_transport_read_only"));
+        assert!(capability.projections.iter().any(|projection| projection.token == "frobenius"));
+        let demag = response.quantities.iter().find(|entry| entry.id == "H_demag").unwrap();
+        assert_eq!(demag.capability_state, "unknown");
     }
 
     #[test]

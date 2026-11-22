@@ -1,3 +1,4 @@
+import { isTransportConductorRole } from "@/shared/domain/physics/objectMagneticModel";
 import { formatValueWithUnit } from "@/shared/domain/physics/displayUnits";
 import { antennaRegionalSources } from "@/shared/domain/physics/antennaRegionalSource";
 import type {
@@ -172,13 +173,19 @@ export function buildObjectExplorerNode(
     };
   }
 
+  const magnetic = object.objectRole === undefined || object.objectRole === "magnet";
+  const conductor = isTransportConductorRole(object.objectRole);
+  const badge = conductor
+    ? (object.objectRole === "electrode" ? "Electrode" : "Conductor")
+    : object.geometryKind ?? "object";
+
   return {
     id: parentId,
     kind: "object.root",
     label: object.label,
     parentId: "model:objects",
-    badge: object.geometryKind ?? "object",
-    icon: "box",
+    badge,
+    icon: conductor ? "activity" : "box",
     objectId,
     objectRole: object.objectRole,
     status: meshStatus,
@@ -204,35 +211,39 @@ export function buildObjectExplorerNode(
         status: "ready",
         contextCommands: ["workspace.focus-selection"],
       },
-      regionsNode(parentId, object, resources),
-      ...frozenSpinsNodes(parentId, object.id, null, resources),
-      objectMaterialNode(parentId, object),
-      object.hasAbsorbingBoundary
-        ? {
-            id: `${parentId}:absorbing-boundary`,
-            kind: "object.absorbing-boundary",
-            label: "Absorbing Boundary",
-            parentId,
-            icon: "wave",
-            objectId,
-            status: "ready",
-          }
-        : null,
-      {
-        id: `${parentId}:magnetic-texture`,
-        kind: "object.magnetic-texture",
-        label: "Magnetic Texture",
-        parentId,
-        badge:
-          object.magnetizationKind ??
-          object.magnetizationLabel ??
-          object.magnetization ??
-          "unassigned",
-        icon: "compass",
-        objectId,
-        status: object.magnetization ? "ready" : "degraded",
-        contextCommands: ["magnetization-texture.activate-load-file"],
-      },
+      regionsNode(parentId, object, resources, magnetic),
+      ...(magnetic
+        ? [
+            ...frozenSpinsNodes(parentId, object.id, null, resources),
+            objectMaterialNode(parentId, object),
+            object.hasAbsorbingBoundary
+              ? {
+                  id: `${parentId}:absorbing-boundary`,
+                  kind: "object.absorbing-boundary" as const,
+                  label: "Absorbing Boundary",
+                  parentId,
+                  icon: "wave" as const,
+                  objectId,
+                  status: "ready" as const,
+                }
+              : null,
+            {
+              id: `${parentId}:magnetic-texture`,
+              kind: "object.magnetic-texture" as const,
+              label: "Magnetic Texture",
+              parentId,
+              badge:
+                object.magnetizationKind ??
+                object.magnetizationLabel ??
+                object.magnetization ??
+                "unassigned",
+              icon: "compass" as const,
+              objectId,
+              status: object.magnetization ? ("ready" as const) : ("degraded" as const),
+              contextCommands: ["magnetization-texture.activate-load-file"],
+            } satisfies ExplorerNode,
+          ]
+        : []),
       unifiedObjectPhysicsNode(parentId, object, physicsGraph, resources.currentTransports),
       {
         id: `${parentId}:mesh`,
@@ -256,7 +267,7 @@ export function buildObjectExplorerNode(
         status: "ready",
         contextCommands: ["workspace.focus-selection"],
         children: compactExplorerNodes([
-          modeVisualizationNode(`${parentId}:visualization`, object, resources),
+          magnetic ? modeVisualizationNode(`${parentId}:visualization`, object, resources) : null,
           visualizationDebugNode({
             kind: "object.visualization.debug",
             objectId,
@@ -264,7 +275,7 @@ export function buildObjectExplorerNode(
           }),
         ]),
       },
-      ...objectExtensionNodes(parentId, object),
+      ...(magnetic ? objectExtensionNodes(parentId, object) : []),
     ]),
   };
 }
@@ -518,6 +529,7 @@ function regionsNode(
   parentId: string,
   object: ModelTreeObjectSnapshot,
   resources: ModelTreeResources,
+  magnetic: boolean,
 ): ExplorerNode {
   const regions = object.regions ?? [];
   return {
@@ -531,7 +543,7 @@ function regionsNode(
     status: "ready",
     contextCommands: ["workspace.focus-selection", "mesh.open-regions"],
     children: regions.map((region) =>
-      authoredRegionNode(`${parentId}:regions`, object, region, resources),
+      authoredRegionNode(`${parentId}:regions`, object, region, resources, magnetic),
     ),
   };
 }
@@ -541,6 +553,7 @@ function authoredRegionNode(
   object: ModelTreeObjectSnapshot,
   region: NonNullable<ModelTreeObjectSnapshot["regions"]>[number],
   resources: ModelTreeResources,
+  magnetic: boolean,
 ): ExplorerNode {
   const nodeId = `${parentId}:${region.id}`;
   const status = region.enabled ? "ready" : "degraded";
@@ -569,8 +582,8 @@ function authoredRegionNode(
       "planar-monitor.create": planarMonitorRegionCreationInput(resources, object.id, region.id),
     },
     children: [
-      ...frozenSpinsNodes(nodeId, object.id, region.id, resources),
-      {
+      ...(magnetic ? frozenSpinsNodes(nodeId, object.id, region.id, resources) : []),
+      ...(magnetic ? [{
         id: `${nodeId}:magnetic-parameters`,
         kind: "object.region.magnetic-parameters",
         label: "Material",
@@ -583,7 +596,7 @@ function authoredRegionNode(
           region.materialOverrideCount > 0 || region.materialFieldCount > 0
             ? "ready"
             : "degraded",
-      },
+      } satisfies ExplorerNode] : []),
       {
         id: `${nodeId}:mesh`,
         kind: "object.region.mesh",
@@ -597,7 +610,7 @@ function authoredRegionNode(
         status: explorerStatusFromRegionMeshLifecycle(region),
         contextCommands: ["mesh.open-region-report", "mesh.open-regions"],
       },
-      {
+      ...(magnetic ? [{
         id: `${nodeId}:texture`,
         kind: "object.region.texture",
         label: "Texture",
@@ -607,7 +620,7 @@ function authoredRegionNode(
         objectId: object.id,
         regionId: region.id,
         status: "ready",
-      },
+      } satisfies ExplorerNode] : []),
       {
         id: `${nodeId}:visualization`,
         kind: "object.region.visualization",

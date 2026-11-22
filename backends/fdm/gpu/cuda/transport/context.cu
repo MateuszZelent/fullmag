@@ -2476,6 +2476,15 @@ extern "C" uint32_t fullmag_fdm_gpu_transport_solve_steady_spin_v1(
     result->transfer_count = output.transfer_count;
     result->transfer_bytes = output.transfer_bytes;
     result->peak_bytes = output.peak_bytes;
+    if (output.setup_h2d_count != 0) {
+        append_charge_telemetry(
+            parent, FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_DIRECTION_H2D,
+            FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_REASON_STATIC_UPLOAD_H2D,
+            FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_STATUS_SUCCESS,
+            FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_EVENT_TRANSFER,
+            output.setup_h2d_bytes, output.setup_h2d_count, 0, 0, 0,
+            snapshot.candidate_digest.data());
+    }
     if (status != FULLMAG_FDM_GPU_TRANSPORT_ERROR_OK) {
         if (!transactional) ++parent.spin_failed_rollback_count;
         append_charge_telemetry(
@@ -2494,13 +2503,6 @@ extern "C" uint32_t fullmag_fdm_gpu_transport_solve_steady_spin_v1(
     const uint32_t stage_sync_flags =
         FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_EVENT_SYNCHRONIZATION |
         FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_EVENT_PROVISIONAL;
-    append_charge_telemetry(
-        parent, FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_DIRECTION_H2D,
-        FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_REASON_CONTROL_STATE_H2D,
-        FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_STATUS_SUCCESS,
-        stage_transfer_flags, output.control_h2d_bytes,
-        output.control_h2d_count, request->attempt_id, request->stage_id,
-        output.iterations, snapshot.candidate_digest.data());
     append_charge_telemetry(
         parent, FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_DIRECTION_D2H,
         FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_REASON_SCALAR_REDUCTION_D2H,
@@ -4756,11 +4758,13 @@ bool context_unbind_gpu_transport_rhs(Context &ctx) {
         parent.spin_solve_active) {
         return false;
     }
+    const bool telemetry_imported =
+        import_transport_receipt_telemetry(ctx, parent);
     parent.llg_binding_owner_id = 0;
     parent.llg_binding_snapshot_slot = UINT64_MAX;
     parent.llg_binding_snapshot_generation = 0;
     ctx.gpu_transport_rhs = {};
-    return true;
+    return telemetry_imported;
 }
 
 bool context_begin_gpu_transport_step(Context &ctx, uint64_t attempt_id) {

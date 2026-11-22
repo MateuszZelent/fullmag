@@ -5930,7 +5930,7 @@ def _validate_completed_recovery_receipt(control, authorization, recovery_module
 
 
 def _native_failed_stop_recovery_context(
-    control, previous, *, backend_id, fresh_state, removed_container_proof=None,
+    control, previous, *, backend_id, fresh_state, removed_container_proof=None, actual=None,
 ):
     """Validate one managed native-failure stop journal for recreation.
 
@@ -5954,7 +5954,7 @@ def _native_failed_stop_recovery_context(
         from docker_volume_linux_supervision_stop import retained_context
         return retained_context(
             control, previous, journal, journal_raw, backend_id, fresh_state,
-            removed_container_proof=removed_container_proof,
+            removed_container_proof=removed_container_proof, retained_services=actual,
         )
     if journal.get("failure_kind") == "native-runtime-supervision-failure":
         from docker_volume_stop_failed import _supervision_failed_restart_context
@@ -6233,7 +6233,7 @@ def _retained_native_recovery_context(
     if not carried and metadata is None:
         native = _native_failed_stop_recovery_context(
             control, previous, backend_id=backend_id or previous.get("backend_container"),
-            fresh_state=fresh_state, removed_container_proof=removed_container_proof,
+            fresh_state=fresh_state, removed_container_proof=removed_container_proof, actual=actual,
         )
         if native is not None:
             return native
@@ -6302,7 +6302,7 @@ def _retained_native_recovery_context(
             return startup_stop
         native_restart = _native_failed_stop_recovery_context(
             control, previous, backend_id=backend_id or previous.get("backend_container"),
-            fresh_state=fresh_state, removed_container_proof=removed_container_proof,
+            fresh_state=fresh_state, removed_container_proof=removed_container_proof, actual=actual,
         )
         if native_restart is not None:
             return native_restart

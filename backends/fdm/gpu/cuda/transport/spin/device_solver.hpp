@@ -121,8 +121,8 @@ struct SolveOutput {
     uint64_t transfer_bytes = 0;
     uint64_t control_host_sync_count = 0;
     uint64_t forbidden_transfer_bytes = 0;
-    uint64_t control_h2d_count = 0;
-    uint64_t control_h2d_bytes = 0;
+    uint64_t setup_h2d_count = 0;
+    uint64_t setup_h2d_bytes = 0;
     uint64_t control_d2h_count = 0;
     uint64_t control_d2h_bytes = 0;
     uint64_t peak_bytes = 0;

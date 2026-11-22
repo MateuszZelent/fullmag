@@ -1165,11 +1165,14 @@ def pin_prepared_fresh_archive(control, operation, witness):
     _publish_cas(control, PREPARED_QUARANTINE, updated, expected_raw=raw)
 
 
-def retained_context(control, previous, journal, journal_raw, backend_id, fresh_state, *, removed_container_proof=None):
+def retained_context(control, previous, journal, journal_raw, backend_id, fresh_state, *,
+                     removed_container_proof=None, retained_services=None):
     from docker_build_control import docker_capture
     from docker_volume_reconcile import fingerprint
     from docker_volume_dev import _assert_private_restart_network, _retained_certificate
-    require(not fresh_state and removed_container_proof is None, 'requires exact stopped retained namespace')
+    require(not fresh_state and (removed_container_proof is None
+            or removed_container_proof.get('schema') == 'fullmag.docker-removed-recreation-container.v1'),
+            'requires exact stopped retained namespace')
     require(journal.get('failure_kind') == KIND and journal.get('state') == 'stopped-confirmed'
             and journal.get('schema') == 'fullmag.stop-failed-admission.v1' and journal.get('container_id') == backend_id
             and journal.get('image_id') == previous.get('inputs', {}).get('image_id')
@@ -1179,9 +1182,18 @@ def retained_context(control, previous, journal, journal_raw, backend_id, fresh_
             and journal.get('namespace_processes_absent') is True, 'stopped Linux supervision scope differs')
     require(control.read('development/current.json') == previous and control.read('development/verified.json') == previous,
             'retained development authority changed')
+    if removed_container_proof is not None:
+        # The recreation validator has authenticated the stopped snapshots
+        # against its terminal receipt and proved both exact IDs absent.
+        require(removed_container_proof.get('container_id') == backend_id
+                and removed_container_proof.get('frontend_container') == previous.get('frontend_container')
+                and removed_container_proof.get('image_id') == journal['image_id']
+                and isinstance(retained_services, dict) and set(retained_services) == {'backend', 'frontend'},
+                'removed Linux supervision evidence differs')
     services = {}
     for service, identifier in (('backend', backend_id), ('frontend', previous.get('frontend_container'))):
-        observed = json.loads(docker_capture('inspect', identifier).stdout)[0]
+        observed = (retained_services[service] if removed_container_proof is not None
+                    else json.loads(docker_capture('inspect', identifier).stdout)[0])
         pin = journal['service_pins'][service]
         require(observed.get('Id') == identifier and observed['State'].get('Running') is False
                 and observed['State'].get('Pid') == 0 and observed['State'].get('OOMKilled') is False
@@ -1193,7 +1205,8 @@ def retained_context(control, previous, journal, journal_raw, backend_id, fresh_
     document = control.read(base + '/compose.json')
     require(control.read(base + '/terminal.json') == previous
             and sha(canonical(document)) == previous.get('config_sha256'), 'retained terminal/Compose changed')
-    _assert_private_restart_network(services, {name: item['Id'] for name, item in services.items()}, control.project)
+    if removed_container_proof is None:
+        _assert_private_restart_network(services, {name: item['Id'] for name, item in services.items()}, control.project)
     _retained_certificate(Path(previous['state_root']), document)
     require(type(journal.get('terminal_only',False)) is bool, 'Invalid terminal observation mode')
     after = _probe(control, actual, journal['image_id'], stopped=True, terminal_only=journal.get('terminal_only',False))

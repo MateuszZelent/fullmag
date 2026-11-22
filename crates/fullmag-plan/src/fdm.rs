@@ -2920,14 +2920,6 @@ pub(crate) fn plan_fdm(
     let mut transport_object_masks = BTreeMap::new();
     let mut transport_region_masks = BTreeMap::new();
     if !active_transport_graph.spin_module_ids.is_empty() {
-        if provided_grid_asset.is_some() {
-            return Err(PlanError {
-                reasons: vec![
-                    "FDM transport common-grid planning does not accept a magnet-only precomputed grid asset; provide analytic charge-domain geometries"
-                        .to_string(),
-                ],
-            });
-        }
         let resolved = transport_common_grid(
             problem,
             magnet,
@@ -2936,6 +2928,26 @@ pub(crate) fn plan_fdm(
             cell_size,
             &active_transport_graph,
         )?;
+        if let Some(asset) = provided_grid_asset {
+            // Transport still derives every mask on the analytic charge domain.
+            // A precomputed magnetic grid can witness continuity across a
+            // staged current only if it describes exactly that same domain.
+            let matches_grid = asset.cells == resolved.2
+                && (0..3).all(|axis| {
+                    let tolerance = GRID_TOLERANCE * cell_size[axis];
+                    (asset.origin[axis] - resolved.3[axis]).abs() <= tolerance
+                        && (asset.cell_size[axis] - cell_size[axis]).abs() <= tolerance
+                })
+                && asset.active_mask == resolved.1;
+            if !matches_grid {
+                return Err(PlanError {
+                    reasons: vec![format!(
+                        "FDM transport precomputed magnetic grid '{}' differs from the analytic common grid",
+                        asset.geometry_name
+                    )],
+                });
+            }
+        }
         bounding_size = resolved.0;
         active_mask = Some(resolved.1);
         grid_cells = resolved.2;

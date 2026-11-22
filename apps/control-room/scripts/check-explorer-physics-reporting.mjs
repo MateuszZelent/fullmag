@@ -8,6 +8,7 @@ import vm from "node:vm";
 const paths = {
   adapter: "src/modules/explorer/builders/sceneModelTreeAdapter.ts",
   "@/kernel/selection/selectionTypes": "src/kernel/selection/selectionTypes.ts",
+  "@/shared/domain/physics/objectMagneticModel": "src/shared/domain/physics/objectMagneticModel.ts",
   "@/shared/domain/physics/torqueUnits": "src/shared/domain/physics/torqueUnits.ts",
   "@/shared/domain/study/stageExecutionIdentity": "src/shared/domain/study/stageExecutionIdentity.ts",
   "@/shared/domain/study/studyStageSource": "src/shared/domain/study/studyStageSource.ts",
@@ -119,6 +120,8 @@ const mixed = inspect({
     magnet("no-dmi"),
     magnet("aux", { role: "auxiliary", material_ref: "mat", physics_stack: [{ kind: "interfacial_dmi" }] }),
     magnet("antenna", { role: "antenna", material_ref: "mat", physics_stack: [{ kind: "demag" }] }),
+    magnet("beta_w", { role: "conductor", material_ref: "mat" }),
+    magnet("contact", { role: "electrode", material_ref: "mat" }),
     magnet("air", { role: "airbox", material_ref: "mat" }),
   ],
 });
@@ -129,6 +132,11 @@ assert.equal(kind(mixed.physicsInteractions, "exchange").objectCount, 3);
 assert.equal(kind(mixed.physicsInteractions, "demag").enabledCount, 2);
 assert.equal(kind(mixed.physicsInteractions, "demag").objectCount, 3);
 assert.deepEqual(mixed.objects.filter((object) => ["aux", "antenna"].includes(object.id)).map((object) => object.physicsInteractions), [[], []]);
+for (const [id, type] of [["beta_w", "conductor"], ["contact", "electrode"]]) {
+  const object = mixed.objects.find((item) => item.id === id);
+  assert.equal(object.objectRole, type);
+  assert.deepEqual(object.physicsInteractions, []);
+}
 assert.ok(!mixed.objects.some((object) => object.id === "air"));
 // Invalid duplicate IDs are rejected by authoring; reporting must still count
 // the same snapshot entries that the object tree receives rather than hide one.

@@ -322,10 +322,10 @@ fn run_scheduler(args: SchedulerArgs, shutdown_requested: Arc<AtomicBool>) -> Re
                 Ok(()) => {
                     reconciliation_deferred_detail = None;
                 }
-                Err(error) if is_store_writer_busy(&error) => {
+                Err(error) if should_defer_host_reconciliation(&error) => {
                     tracing::warn!(
                         error = ?error,
-                        "preparation scheduler deferred host reconciliation while the session store writer is busy"
+                        "preparation scheduler deferred host reconciliation"
                     );
                     let detail = format!("{error:#}");
                     if reconciliation_deferred_detail.as_deref() != Some(detail.as_str()) {
@@ -1163,9 +1163,7 @@ fn defer_if_compute_sample_expired<T>(
     // A sample that was stale when admission read it may be fresh again by
     // now; the typed refusal still means "wait for the sampler", never a
     // fatal admission error.
-    let sample_was_stale = error.chain().any(|cause| {
-        cause.is::<fullmag_session::host_resource_ledger::ComputeNodeSampleNotCurrent>()
-    });
+    let sample_was_stale = is_compute_node_sample_not_current(&error);
     if !sample_was_stale
         && preparation_admission_snapshot_ready(|| host.has_current_compute_snapshot())?
     {
@@ -1180,6 +1178,16 @@ fn defer_if_compute_sample_expired<T>(
         })
     );
     Ok(HostAdmissionOperation::Deferred)
+}
+
+fn is_compute_node_sample_not_current(error: &anyhow::Error) -> bool {
+    error.chain().any(|cause| {
+        cause.is::<fullmag_session::host_resource_ledger::ComputeNodeSampleNotCurrent>()
+    })
+}
+
+fn should_defer_host_reconciliation(error: &anyhow::Error) -> bool {
+    is_store_writer_busy(error) || is_compute_node_sample_not_current(error)
 }
 
 /// Busy writer or a transient store I/O failure: either way the pass changed
@@ -1401,10 +1409,24 @@ fn parse_usize(flag: &str, value: std::ffi::OsString) -> Result<usize> {
 mod tests {
     use super::{
         classify_candidate_discovery, classify_recovery_transaction, preparation_admission_snapshot_ready,
-        retry_host_admission_writer_busy, retry_store_writer_busy,
+        retry_host_admission_writer_busy, retry_store_writer_busy, should_defer_host_reconciliation,
         ActivePreparation, ActivePreparations, CompletedPreparation, HostAdmissionOperation,
     };
     use anyhow::Context;
+
+    #[test]
+    fn host_reconciliation_defers_stale_compute_samples_without_masking_fatal_errors() {
+        use fullmag_session::host_resource_ledger::ComputeNodeSampleNotCurrent;
+
+        let stale = anyhow::Error::new(ComputeNodeSampleNotCurrent)
+            .context("preparation scheduler: reconcile tentative store admissions");
+        assert!(should_defer_host_reconciliation(&stale));
+        assert!(should_defer_host_reconciliation(&anyhow::Error::new(
+            fullmag_session::StoreWriterBusy
+        )));
+        let invalid = anyhow::anyhow!("admission intent differs from its pinned host launch binding");
+        assert!(!should_defer_host_reconciliation(&invalid));
+    }
 
     #[test]
     fn candidate_discovery_defers_only_typed_busy() {

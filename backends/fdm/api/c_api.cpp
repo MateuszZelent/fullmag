@@ -2917,10 +2917,12 @@ int fullmag_fdm_context_unbind_gpu_transport_v1(fullmag_fdm_backend *handle) {
     if (reject_step_transaction_mutation(*ctx, "gpu_transport_unbind")) {
         return FULLMAG_FDM_ERR_INVALID;
     }
-    if (!context_unbind_gpu_transport_rhs(*ctx)) return FULLMAG_FDM_ERR_INVALID;
+    if (!ctx->gpu_transport_rhs.active) return FULLMAG_FDM_ERR_INVALID;
+    const bool telemetry_imported = context_unbind_gpu_transport_rhs(*ctx);
+    if (ctx->gpu_transport_rhs.active) return FULLMAG_FDM_ERR_INVALID;
     context_note_transport_revision_change(*ctx);
     fullmag_fdm_commit_operator_residency(*ctx);
-    return FULLMAG_FDM_OK;
+    return telemetry_imported ? FULLMAG_FDM_OK : FULLMAG_FDM_ERR_INVALID;
 #else
     (void)handle;
     return FULLMAG_FDM_ERR_CUDA;
@@ -4332,8 +4334,11 @@ void fullmag_fdm_backend_destroy(fullmag_fdm_backend *handle) {
     if (!handle) return;
 #if FULLMAG_HAS_CUDA
     auto *ctx = reinterpret_cast<Context *>(handle);
-    if (ctx->gpu_transport_rhs.active && !context_unbind_gpu_transport_rhs(*ctx)) {
-        return;
+    if (ctx->gpu_transport_rhs.active) {
+        (void)context_unbind_gpu_transport_rhs(*ctx);
+        // Import failure can be reported after an authenticated detach. Keep
+        // the Context alive only while transport still owns its buffers.
+        if (ctx->gpu_transport_rhs.active) return;
     }
     context_free_device(*ctx);
     delete ctx;

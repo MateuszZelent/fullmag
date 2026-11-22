@@ -488,6 +488,11 @@ pub(crate) fn resolve_spin_transport_with_active_graph(
                     (None, None, None, None)
                 }
             };
+        let fdm_object_cells = fdm_gpu_double
+            .as_ref()
+            .or(fdm_cpu_double.as_ref())
+            .map(|descriptor| fdm_transport_object_cells(context, descriptor))
+            .unwrap_or_default();
         plans.push(ResolvedSpinTransportPlanIR {
             module_id: module.id.clone(),
             current_source_id: module.current_source_id.clone(),
@@ -537,6 +542,7 @@ pub(crate) fn resolve_spin_transport_with_active_graph(
             } else {
                 Vec::new()
             },
+            fdm_object_cells,
             fdm_cpu_double,
             fdm_gpu_double,
             fdm_cpu_double_reciprocal,
@@ -549,6 +555,44 @@ pub(crate) fn resolve_spin_transport_with_active_graph(
     } else {
         Err(PlanError { reasons: errors })
     }
+}
+
+fn fdm_transport_object_cells(
+    context: &FdmSpinTransportResolutionContext<'_>,
+    descriptor: &ResolvedFdmSpinTransportIR,
+) -> BTreeMap<String, fullmag_ir::FdmTransportObjectCellsIR> {
+    let Some(object_masks) = context.object_masks_by_id else {
+        return BTreeMap::new();
+    };
+
+    fn intersect_ranges(object: &[bool], active: &[bool]) -> Vec<[usize; 2]> {
+        let mut ranges: Vec<[usize; 2]> = Vec::new();
+        for (index, (&owned, &active)) in object.iter().zip(active).enumerate() {
+            if !owned || !active {
+                continue;
+            }
+            match ranges.last_mut() {
+                Some(range) if range[1] == index => range[1] += 1,
+                _ => ranges.push([index, index + 1]),
+            }
+        }
+        ranges
+    }
+
+    object_masks
+        .iter()
+        .filter_map(|(id, mask)| {
+            if mask.len() != descriptor.charge_active_cells.len()
+                || mask.len() != descriptor.spin_active_cells.len()
+            {
+                return None;
+            }
+            let charge = intersect_ranges(mask, &descriptor.charge_active_cells);
+            let spin = intersect_ranges(mask, &descriptor.spin_active_cells);
+            (!charge.is_empty() || !spin.is_empty())
+                .then(|| (id.clone(), fullmag_ir::FdmTransportObjectCellsIR { charge, spin }))
+        })
+        .collect()
 }
 
 fn bounded_public_fdm_gpu_m1_scope_reasons(
@@ -1315,6 +1359,7 @@ pub(crate) fn resolve_m1_fem_spin_transport(
                     ]
                 },
                 inserted_default_boundaries: inserted_fem_default_boundaries(charge, module),
+                fdm_object_cells: BTreeMap::new(),
                 fdm_cpu_double: None,
                 fdm_gpu_double: None,
                 fdm_cpu_double_reciprocal: None,

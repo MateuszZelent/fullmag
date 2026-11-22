@@ -31,6 +31,11 @@ struct DeviceDiagnostics {
     uint8_t hierarchy_digest[32];
 };
 
+struct MaterializationDiagnostics {
+    double interface_balance;
+    double torque_balance;
+};
+
 struct Workspace {
     double *x = nullptr;
     double *rhs = nullptr;
@@ -1395,7 +1400,7 @@ __global__ void materialize_interfaces_kernel(SolveInput in,
 
 __global__ void materialize_kernel(SolveInput in, const double *solution,
                                    const double *rhs, Buffers buffers,
-                                   DeviceDiagnostics *diagnostics,
+                                   MaterializationDiagnostics *diagnostics,
                                    uint32_t mode) {
     if (mode == 2 && (blockIdx.x != 0 || threadIdx.x != 0)) return;
     const uint64_t cells = buffers.cells;
@@ -1648,11 +1653,6 @@ __global__ void materialize_kernel(SolveInput in, const double *solution,
             local_max = fmax(local_max, fabs(defect) / local_scale);
         }
     }
-    // The accepted algebraic operator is the normalized sparse FV operator.
-    // Its deterministic residual is the authoritative local/global closure;
-    // the integrated legacy oracle above remains a bounded diagnostic only.
-    diagnostics->local_balance = diagnostics->residual;
-    diagnostics->global_balance = diagnostics->residual;
     double interface_error = 0.0;
     double interface_scale = 0.0;
     for (uint64_t i = 0; i < interface_count; ++i) {
@@ -1669,8 +1669,10 @@ __global__ void materialize_kernel(SolveInput in, const double *solution,
     }
     diagnostics->interface_balance = interface_count == 0 ? 0.0
         : interface_error / fmax(interface_scale, 1.0e-300);
-    if (cells > 4096) { diagnostics->local_balance=diagnostics->residual;
-        diagnostics->torque_balance=0.0; return; }
+    if (cells > 4096) {
+        diagnostics->torque_balance = 0.0;
+        return;
+    }
     double torque_error = 0.0;
     double torque_scale = 0.0;
     const auto *formula = formula_ids(in);
@@ -1935,12 +1937,24 @@ uint32_t solve_device(const SolveInput &input, SolveOutput *output) noexcept {
             insert(p, n, record, 2);
             insert(p, n, record, 3);
         }
-        if(cudaMemcpyAsync(s.interface_row_offsets,offsets.data(),(cells+1)*sizeof(uint64_t),cudaMemcpyHostToDevice,input.stream)!=cudaSuccess ||
-           (interface_entries && (cudaMemcpyAsync(s.interface_columns,columns.data(),interface_entries*sizeof(uint32_t),cudaMemcpyHostToDevice,input.stream)!=cudaSuccess ||
-            cudaMemcpyAsync(s.interface_record_indices,records.data(),interface_entries*sizeof(uint32_t),cudaMemcpyHostToDevice,input.stream)!=cudaSuccess ||
-            cudaMemcpyAsync(s.interface_roles,roles.data(),interface_entries*sizeof(uint8_t),cudaMemcpyHostToDevice,input.stream)!=cudaSuccess))) {
-            release(state); return FULLMAG_FDM_GPU_TRANSPORT_ERROR_CUDA_RUNTIME_ERROR;
+        const uint64_t offsets_bytes = (cells + 1) * sizeof(uint64_t);
+        const uint64_t index_bytes = interface_entries * sizeof(uint32_t);
+        const uint64_t role_bytes = interface_entries * sizeof(uint8_t);
+        if (cudaMemcpyAsync(s.interface_row_offsets, offsets.data(),
+                            offsets_bytes, cudaMemcpyHostToDevice,
+                            input.stream) != cudaSuccess ||
+            (interface_entries != 0 &&
+             (cudaMemcpyAsync(s.interface_columns, columns.data(), index_bytes,
+                              cudaMemcpyHostToDevice, input.stream) != cudaSuccess ||
+              cudaMemcpyAsync(s.interface_record_indices, records.data(), index_bytes,
+                              cudaMemcpyHostToDevice, input.stream) != cudaSuccess ||
+              cudaMemcpyAsync(s.interface_roles, roles.data(), role_bytes,
+                              cudaMemcpyHostToDevice, input.stream) != cudaSuccess))) {
+            release(state);
+            return FULLMAG_FDM_GPU_TRANSPORT_ERROR_CUDA_RUNTIME_ERROR;
         }
+        output->setup_h2d_count = interface_entries == 0 ? 1 : 4;
+        output->setup_h2d_bytes = offsets_bytes + 2 * index_bytes + role_bytes;
     }
     trace_phase("storage_and_interface_csr");
     Buffers candidate{};
@@ -2070,13 +2084,12 @@ uint32_t solve_device(const SolveInput &input, SolveOutput *output) noexcept {
         release(candidate);
         return FULLMAG_FDM_GPU_TRANSPORT_ERROR_OUT_OF_MEMORY;
     }
-    DeviceDiagnostics diagnostics{}; diagnostics.iterations=metrics.iterations;
-    diagnostics.reason=FULLMAG_FDM_GPU_TRANSPORT_CONVERGENCE_CONVERGED;
-    diagnostics.residual=metrics.relative_residual;
-    DeviceDiagnostics *device_diagnostics=nullptr;
-    if(cudaMalloc(reinterpret_cast<void**>(&device_diagnostics),sizeof(DeviceDiagnostics))!=cudaSuccess ||
-       cudaMemcpyAsync(device_diagnostics,&diagnostics,sizeof(diagnostics),cudaMemcpyHostToDevice,input.stream)!=cudaSuccess) {
-       if(device_diagnostics) cudaFree(device_diagnostics); release(candidate); return FULLMAG_FDM_GPU_TRANSPORT_ERROR_OUT_OF_MEMORY;
+    MaterializationDiagnostics diagnostics{};
+    MaterializationDiagnostics *device_diagnostics = nullptr;
+    if (cudaMalloc(reinterpret_cast<void **>(&device_diagnostics),
+                   sizeof(MaterializationDiagnostics)) != cudaSuccess) {
+        release(candidate);
+        return FULLMAG_FDM_GPU_TRANSPORT_ERROR_OUT_OF_MEMORY;
     }
     materialize_kernel<<<blocks,256,0,input.stream>>>(
         input, s.solution_soa, s.rhs_soa, candidate, device_diagnostics,0);
@@ -2164,28 +2177,24 @@ uint32_t solve_device(const SolveInput &input, SolveOutput *output) noexcept {
     }
     trace_phase("materialize_and_diagnostics");
     output->buffers = candidate;
-    output->iterations = diagnostics.iterations;
-    output->reason = diagnostics.reason;
-    output->algebraic_residual = diagnostics.residual;
-    output->local_balance = diagnostics.local_balance;
-    output->global_balance = diagnostics.global_balance;
+    output->iterations = metrics.iterations;
+    output->reason = FULLMAG_FDM_GPU_TRANSPORT_CONVERGENCE_CONVERGED;
+    // The normalized sparse FV residual is the authoritative local/global closure.
+    output->algebraic_residual = metrics.relative_residual;
+    output->local_balance = metrics.relative_residual;
+    output->global_balance = metrics.relative_residual;
     output->interface_balance = diagnostics.interface_balance;
     output->torque_balance = diagnostics.torque_balance;
-    output->transfer_count = build.control_transfer_count +
-        metrics.control_transfer_count + 3;
-    output->transfer_bytes = build.control_transfer_bytes +
-        metrics.control_transfer_bytes + 2 * sizeof(DeviceDiagnostics) +
-        sizeof(result_words);
-    output->control_host_sync_count = build.control_host_sync_count +
-        metrics.control_host_sync_count + 4;
-    output->forbidden_transfer_bytes = metrics.forbidden_transfer_bytes;
-    output->control_h2d_count = 1;
-    output->control_h2d_bytes = sizeof(DeviceDiagnostics);
     output->control_d2h_count = build.control_transfer_count +
-        metrics.control_transfer_count + 2;
+        metrics.control_transfer_count + 3;
     output->control_d2h_bytes = build.control_transfer_bytes +
-        metrics.control_transfer_bytes + sizeof(DeviceDiagnostics) +
+        metrics.control_transfer_bytes + sizeof(digest_words) + sizeof(diagnostics) +
         sizeof(result_words);
+    output->transfer_count = output->control_d2h_count;
+    output->transfer_bytes = output->control_d2h_bytes;
+    output->control_host_sync_count = build.control_host_sync_count +
+        metrics.control_host_sync_count + 4 + (input.torque_destination != nullptr);
+    output->forbidden_transfer_bytes = metrics.forbidden_transfer_bytes;
     output->peak_bytes = solve_peak_bytes > materialization_peak_bytes
         ? solve_peak_bytes : materialization_peak_bytes;
     output->amg_apply_count = metrics.amg_applications;

@@ -30,7 +30,7 @@ ACCOUNTING_BY_PATH = (
     ("backends/fdm/gpu/cuda/runtime/reductions_fp64.cu", "fullmag_fdm_record_control_scalar_d2h", "control_scalar"),
     ("backends/fdm/gpu/cuda/transport/charge/device_solver.cu", "transfer_count", "transport_control"),
     ("backends/fdm/gpu/cuda/transport/context.cu", "append_charge_telemetry", "transport_telemetry"),
-    ("backends/fdm/gpu/cuda/transport/spin/device_solver.cu", "control_h2d_count", "transport_control"),
+    ("backends/fdm/gpu/cuda/transport/spin/device_solver.cu", "setup_h2d_count", "transport_control"),
     ("backends/fdm/gpu/cuda/transport/spin/sparse_solver.cu", "control_transfer_count", "preconditioner_control"),
 )
 CROSS_FUNCTION_ACCOUNTING = {
@@ -421,6 +421,8 @@ def accounting_for(
         return str(local_callsite["category"]), str(local_callsite["hook"])
     for prefix, owner, category in ACCOUNTING_BY_PATH:
         if path.startswith(prefix):
+            if path == "backends/fdm/gpu/cuda/transport/spin/device_solver.cu" and direction == "D2H":
+                owner = "control_d2h_count"
             if path == "backends/fdm/gpu/cuda/transport/charge/device_solver.cu":
                 for candidate in ("output->transfer_count", "copy_boundary"):
                     if candidate in function_source:

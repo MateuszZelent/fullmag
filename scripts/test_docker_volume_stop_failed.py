@@ -553,6 +553,35 @@ class SupervisionStopOperationTests(unittest.TestCase):
 
 
 class LinuxOOMReadyStopTests(unittest.TestCase):
+    def test_terminal_only_uses_exact_linux_receipt_after_failure_log_rolls_past_tail(self):
+        import contextlib, io, json, tempfile
+        from unittest.mock import patch
+        with tempfile.TemporaryDirectory() as temporary:
+            container_id = 'a' * 64
+            image_id = 'sha256:' + 'b' * 64
+            process_sha = 'c' * 64
+            args = ['stop', '--source-root', temporary, '--container-id', container_id,
+                    '--image-id', image_id, '--process-receipt-sha256', process_sha, '--terminal-only']
+            actual = {'Id': container_id, 'Image': image_id,
+                      'Config': {'Labels': {'com.docker.compose.project': 'own',
+                                            'com.docker.compose.service': 'backend'},
+                                 'Env': ['FULLMAG_SESSION_STORAGE_PROFILE=linux-native-v1']},
+                      'State': {'Running': True, 'OOMKilled': False}}
+            receipt = {'state': 'failed_outcome_retained', 'error': stop.SUPERVISION_FAILURE_ERROR}
+            responses = [SimpleNamespace(stdout=json.dumps(value).encode()) for value in
+                         ([actual], {'receipt': receipt, 'sha256': process_sha})]
+            with patch.object(sys, 'argv', args), patch.object(stop.storage, 'resolve_layout'), \
+                 patch.object(stop, 'compose_project_identity', return_value={'project_name': 'own'}), \
+                 patch.object(stop, 'validate_source_labels'), \
+                 patch.object(stop, 'docker_capture', side_effect=responses) as docker, \
+                 patch('docker_volume_linux_supervision_stop.stop', return_value={
+                     'state': 'stopped-confirmed', 'failure_kind': 'retained-linux'}) as dispatch, \
+                 contextlib.redirect_stdout(io.StringIO()):
+                stop.main()
+            self.assertEqual([call.args[0] for call in docker.call_args_list], ['inspect', 'exec'])
+            dispatch.assert_called_once()
+            self.assertEqual(dispatch.call_args.args[0].process_receipt_sha256, process_sha)
+
     def test_terminal_only_flag_refuses_oom_before_stop_dispatch(self):
         import json, tempfile, subprocess
         from unittest.mock import patch

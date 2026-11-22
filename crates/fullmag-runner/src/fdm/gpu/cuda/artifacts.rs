@@ -5,6 +5,10 @@ use crate::fdm::cpu::reference::{
     resolved_antenna_zeeman_field_for_count, resolved_drive_field_for_count,
 };
 use crate::fdm::gpu::cuda::native::NativeFdmBackend;
+use crate::fdm::gpu::cuda::spin_transport::{
+    GpuM1TransportSession, NativeGpuM1TransportAbi, GPU_M1_TRANSPORT_OUTPUT_FIELDS,
+};
+use crate::fdm::gpu::cuda::transport_publication::accepted_transport_field_snapshots;
 use crate::preview::build_grid_preview_field;
 use crate::quantities::normalized_quantity_name;
 use crate::schedules::{advance_due_schedules, is_due, same_time, OutputSchedule};
@@ -43,6 +47,57 @@ pub(crate) fn is_drive_field_quantity(name: &str) -> bool {
 /// `H_drive`); the native ABI has no observable for them.
 pub(crate) fn is_host_resolved_field_quantity(name: &str) -> bool {
     is_antenna_field_quantity(name) || is_drive_field_quantity(name)
+}
+
+fn is_gpu_m1_transport_publication_quantity(name: &str) -> bool {
+    GPU_M1_TRANSPORT_OUTPUT_FIELDS.contains(&name)
+}
+
+fn record_cuda_due_transport_fields(
+    backend_plan: &FdmPlanIR,
+    stats: &StepStats,
+    requested_fields: Vec<String>,
+    capture_ledger: &mut CudaFieldCaptureLedger,
+    artifacts: &mut ArtifactRecorder,
+    gpu_transport: Option<&mut GpuM1TransportSession<NativeGpuM1TransportAbi>>,
+) -> Result<(), RunError> {
+    if requested_fields.is_empty() {
+        return Ok(());
+    }
+    let transport = gpu_transport.ok_or_else(|| RunError {
+        message: "CUDA M1 transport field output is due without an active transport session".into(),
+    })?;
+    let module = backend_plan
+        .spin_transport_plans
+        .first()
+        .ok_or_else(|| RunError {
+            message: "CUDA M1 transport publication has no resolved spin module".into(),
+        })?;
+    let scope = format!(
+        "transport_module:{}:full_solve_domain",
+        module.module_id
+    );
+    let accepted_artifacts = transport
+        .readback_accepted_artifacts_for(&requested_fields)
+        .map_err(|error| RunError {
+            message: format!("reading accepted CUDA M1 transport fields failed: {error}"),
+        })?;
+    let snapshots = accepted_transport_field_snapshots(
+        backend_plan.grid.cells,
+        accepted_artifacts,
+        &requested_fields,
+        stats.step,
+        super::canonical_fdm_publication_time(backend_plan, stats.time),
+        stats.dt,
+        stats.step.saturating_add(1).max(1),
+        &scope,
+    )?;
+    for snapshot in snapshots {
+        let name = snapshot.name.clone();
+        artifacts.record_field_snapshot(snapshot)?;
+        capture_ledger.mark_recorded(&name, stats.step, stats.time);
+    }
+    Ok(())
 }
 
 pub(super) fn copy_resolved_host_field(
@@ -247,13 +302,16 @@ pub(crate) fn capture_initial_cuda_fields(
     );
     // The stage origin is a real initialized state even when an accepted-step
     // cadence does not divide its resumed step index.
-    #[cfg(feature = "fem-gpu")]
+    #[cfg(any(feature = "fem-gpu", feature = "cuda"))]
     append_unique_field_names(
         &mut due_field_names,
         artifacts.due_accepted_step_fields(stats.step, true),
     );
 
     for name in capture_ledger.uncaptured_names(due_field_names, stats.step, stats.time) {
+        if is_gpu_m1_transport_publication_quantity(&name) {
+            continue;
+        }
         if is_host_resolved_field_quantity(&name) {
             let values =
                 copy_cuda_field_snapshot_with_plan(backend, plan, &name, cell_count, stats.time)?;
@@ -358,6 +416,7 @@ pub(crate) fn record_cuda_due_outputs(
     steps: &mut Vec<StepStats>,
     capture_ledger: &mut CudaFieldCaptureLedger,
     artifacts: &mut ArtifactRecorder,
+    gpu_transport: Option<&mut GpuM1TransportSession<NativeGpuM1TransportAbi>>,
 ) -> Result<(), RunError> {
     let output_ir_due = scalar_schedules
         .iter()
@@ -396,12 +455,30 @@ pub(crate) fn record_cuda_due_outputs(
             .filter(|schedule| is_due(stats.time, schedule.next_time))
             .map(|schedule| schedule.name.clone()),
     );
-    #[cfg(feature = "fem-gpu")]
+    #[cfg(any(feature = "fem-gpu", feature = "cuda"))]
     append_unique_field_names(
         &mut due_field_names,
         artifacts.due_accepted_step_fields(stats.step, false),
     );
-    for name in capture_ledger.uncaptured_names(due_field_names, stats.step, stats.time) {
+    let due_field_names = capture_ledger.uncaptured_names(due_field_names, stats.step, stats.time);
+    let mut transport_names = Vec::new();
+    let mut native_names = Vec::new();
+    for name in due_field_names {
+        if is_gpu_m1_transport_publication_quantity(&name) {
+            transport_names.push(name);
+        } else {
+            native_names.push(name);
+        }
+    }
+    record_cuda_due_transport_fields(
+        plan,
+        stats,
+        transport_names,
+        capture_ledger,
+        artifacts,
+        gpu_transport,
+    )?;
+    for name in native_names {
         if is_host_resolved_field_quantity(&name) {
             let values =
                 copy_cuda_field_snapshot_with_plan(backend, plan, &name, cell_count, stats.time)?;
@@ -454,6 +531,7 @@ pub(crate) fn record_cuda_final_outputs(
     steps: &mut Vec<StepStats>,
     capture_ledger: &mut CudaFieldCaptureLedger,
     artifacts: &mut ArtifactRecorder,
+    gpu_transport: Option<&mut GpuM1TransportSession<NativeGpuM1TransportAbi>>,
 ) -> Result<(), RunError> {
     let Some(latest_stats) = latest_stats else {
         return Ok(());
@@ -483,17 +561,36 @@ pub(crate) fn record_cuda_final_outputs(
             })
             .map(|schedule| schedule.name.clone()),
     );
-    #[cfg(feature = "fem-gpu")]
+    #[cfg(any(feature = "fem-gpu", feature = "cuda"))]
     append_unique_field_names(
         &mut requested_field_names,
         artifacts.due_accepted_step_fields(latest_stats.step, true),
     );
 
-    for name in capture_ledger.uncaptured_names(
+    let requested_field_names = capture_ledger.uncaptured_names(
         requested_field_names,
         latest_stats.step,
         latest_stats.time,
-    ) {
+    );
+    let mut transport_names = Vec::new();
+    let mut native_names = Vec::new();
+    for name in requested_field_names {
+        if is_gpu_m1_transport_publication_quantity(&name) {
+            transport_names.push(name);
+        } else {
+            native_names.push(name);
+        }
+    }
+    record_cuda_due_transport_fields(
+        plan,
+        &latest_stats,
+        transport_names,
+        capture_ledger,
+        artifacts,
+        gpu_transport,
+    )?;
+
+    for name in native_names {
         if is_host_resolved_field_quantity(&name) {
             let values = copy_cuda_field_snapshot_with_plan(
                 backend,
@@ -906,7 +1003,7 @@ mod tests {
         std::fs::remove_dir_all(output_dir).expect("remove temporary pipeline output");
     }
 
-    #[cfg(feature = "fem-gpu")]
+    #[cfg(any(feature = "fem-gpu", feature = "cuda"))]
     #[test]
     fn accepted_step_field_and_table_autosaves_use_only_actual_steps() {
         use crate::artifact_pipeline::ArtifactPipeline;
@@ -961,6 +1058,20 @@ mod tests {
                     sample_period_policy: None,
                     every_steps: Some(100_000),
                 },
+                FieldAutosaveIR {
+                    kind: "field_autosave".into(),
+                    quantity: "spin_current_tensor".into(),
+                    every_seconds: None,
+                    sample_period_policy: None,
+                    every_steps: Some(100),
+                },
+                FieldAutosaveIR {
+                    kind: "field_autosave".into(),
+                    quantity: "torque_stt".into(),
+                    every_seconds: None,
+                    sample_period_policy: None,
+                    every_steps: Some(100),
+                },
             ],
         });
         let plan = ExecutionPlanIR {
@@ -996,7 +1107,7 @@ mod tests {
         .expect("start temporary stage-autosave pipeline");
         let sender = pipeline.sender();
         assert!(sender.has_accepted_step_autosave_schedules());
-        let mut recorder = ArtifactRecorder::streaming(ExecutionProvenance::default(), sender);
+        let mut recorder = ArtifactRecorder::streaming(crate::ExecutionProvenance::default(), sender);
         assert!(recorder.accepted_step_table_due(0));
         assert!(!recorder.accepted_step_table_due(9));
         assert!(recorder.accepted_step_table_due(10));
@@ -1004,16 +1115,22 @@ mod tests {
 
         assert_eq!(
             recorder.due_accepted_step_fields(0, true),
-            vec!["m", "H_eff"],
+            vec!["m", "H_eff", "spin_current_tensor", "torque_stt"],
             "the initialized stage state is an explicit, real sample"
         );
         assert!(recorder.due_accepted_step_fields(0, false).is_empty());
         assert!(recorder.due_accepted_step_fields(99, false).is_empty());
-        assert_eq!(recorder.due_accepted_step_fields(100, false), vec!["m"]);
-        assert_eq!(recorder.due_accepted_step_fields(200, false), vec!["m"]);
+        assert_eq!(
+            recorder.due_accepted_step_fields(100, false),
+            vec!["m", "spin_current_tensor", "torque_stt"]
+        );
+        assert_eq!(
+            recorder.due_accepted_step_fields(200, false),
+            vec!["m", "spin_current_tensor", "torque_stt"]
+        );
         assert_eq!(
             recorder.due_accepted_step_fields(271, true),
-            vec!["m", "H_eff"],
+            vec!["m", "H_eff", "spin_current_tensor", "torque_stt"],
             "the actual terminal accepted step is emitted once even off cadence"
         );
         assert!(recorder.due_accepted_step_fields(271, true).is_empty());

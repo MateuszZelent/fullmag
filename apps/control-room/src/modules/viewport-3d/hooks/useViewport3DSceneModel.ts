@@ -66,7 +66,7 @@ import {
   useModelRegionsResource,
 } from "@/kernel/resources/geometryLifecycleResources";
 import { deriveAuthoredFdmUniverseOutsideMagneticSupport } from "@/shared/domain/mesh/domainPresentation";
-import { hasEmptyObjectMagneticModel } from "@/shared/domain/physics/objectMagneticModel";
+import { hasEmptyObjectMagneticModel, isTransportConductorRole } from "@/shared/domain/physics/objectMagneticModel";
 import {
   resolveFieldMetaResourceKey,
   useMeshPeriodicPairsResource,
@@ -233,14 +233,17 @@ import {
 } from "../model/viewport3DFieldDomainCompatibility";
 import { buildFdmVectorSampledCellIndices, createFdmVectorOnlyBuildInput, resolveFdmVectorGlyphScaleForCellSize, resolveFdmVectorGlyphSamplingSpacingScale, useFdmCuboidBuildResult, useFdmCuboidBuildResults, type FdmCuboidInstanceModel } from "../layers/FdmCuboidLayer";
 import { buildFdmVectorSegments, type FdmCuboidAsyncBuildEntry } from "../layers/FdmCuboidLayer.model";
+import { resolveFdmCuboidMembershipRevision } from "../layers/fdmCuboidBuildModel";
 import { resolveFdmAirboxPassPlan } from "../layers/fdmAirboxPassPlan";
 import {
+  buildFdmConductorTargetView,
   buildViewport3DFdmTargetSurfaceCellIndices,
   buildViewport3DFdmTargetDefinitions,
   buildViewport3DFdmTargetViews,
   memoizeViewport3DFdmTargetRenderView,
   memoizeViewport3DFdmTargetSurfaceColors,
   memoizeViewport3DFdmSurfaceColors,
+  resolveFdmConductorRegionIds,
   type Viewport3DFdmTargetRenderView,
 } from "../model/viewport3DFdmTargetViews";
 import {
@@ -3807,13 +3810,19 @@ export function useViewport3DSceneModel({
       fdmRealizedRegionIds instanceof Uint32Array &&
       fdmRealizedRegionIds.length === fdmDomain.totalCells,
   );
+  const fdmMagneticRegionMembership = useMemo(() => {
+    const membership = fdmRegionMembership.data;
+    if (!membership?.object_ids?.length) return membership;
+    const objectIds = membership.object_ids.filter((id) =>
+      !isTransportConductorRole(sceneObjectsById.get(canonicalVisualizationSceneObjectId(id))?.role),
+    );
+    return objectIds.length === membership.object_ids.length
+      ? membership
+      : { ...membership, object_ids: objectIds };
+  }, [fdmRegionMembership.data, sceneObjectsById]);
   const fdmTargetDefinitionsResult = useMemo(
-    () =>
-      buildViewport3DFdmTargetDefinitions(
-        fdmRegionMembership.data,
-        sceneObjectIds,
-      ),
-    [fdmRegionMembership.data, sceneObjectIds],
+    () => buildViewport3DFdmTargetDefinitions(fdmMagneticRegionMembership, sceneObjectIds),
+    [fdmMagneticRegionMembership, sceneObjectIds],
   );
   const femDomain = useMemo(
     () =>
@@ -4671,8 +4680,28 @@ export function useViewport3DSceneModel({
       preparedPreviewAvailable && fdmLaneActive && nativeLayerFieldRequests.size > 0,
     { preparedSource, selectedTargetId: selectedVisualizationTargetId },
   );
+  const fdmConductorTargets = useMemo(() => fdmLaneActive && fdmDomain
+    ? (scene.data?.objects ?? []).filter((object) => isTransportConductorRole(object.role)).map((object) => ({
+        objectId: object.id,
+        target: {
+          id: visualizationTargetIdForSceneObject(object.id),
+          kind: "object" as const,
+          label: object.name ?? object.id,
+        },
+      }))
+    : [], [fdmDomain, fdmLaneActive, scene.data?.objects]);
   const fdmTargetSettingsById = useMemo(() => {
     const settingsById = new Map<string, VisualizationTargetSettings>();
+    for (const { objectId, target } of fdmConductorTargets) {
+      const resolved = resolveViewport3DFdmTargetVisualization({
+        objectContext: getObjectContext(objectId),
+        inheritedSettings: globalObjectBaseSettings,
+        snapshot: objectVisualizationSnapshot,
+        target,
+        visualizationState: renderingState,
+      }).effectiveSettings;
+      settingsById.set(target.id, resolveFdmViewportVisualizationSettings(resolved, true));
+    }
     if (!fdmMembershipCurrent || fdmTargetDefinitionsResult.status !== "ready") {
       return settingsById;
     }
@@ -4712,6 +4741,7 @@ export function useViewport3DSceneModel({
   }, [
     preparedObjectId,
     preparedRegionId,
+    fdmConductorTargets,
     fdmMembershipCurrent,
     fdmTargetDefinitionsResult,
     globalObjectBaseSettings,
@@ -4723,22 +4753,25 @@ export function useViewport3DSceneModel({
     () => [...fdmTargetSettingsById.values()],
     [fdmTargetSettingsById],
   );
-  const fdmTargetSettingsForPlanning = useMemo(
-    () =>
-      fdmTargetDefinitionsResult.status === "ready"
-        ? fdmTargetDefinitionsResult.definitions.flatMap((definition) => {
-            const settings = fdmTargetSettingsById.get(definition.target.id);
-            return settings
-              ? [{
-                  label: definition.target.label ?? definition.target.id,
-                  settings,
-                  targetId: definition.target.id,
-                }]
-              : [];
-          })
-        : [],
-    [fdmTargetDefinitionsResult, fdmTargetSettingsById],
-  );
+  const fdmTargetSettingsForPlanning = useMemo(() => {
+    const magneticTargets = fdmTargetDefinitionsResult.status === "ready"
+      ? fdmTargetDefinitionsResult.definitions.map(({ target }) => target)
+      : [];
+    const conductorIds = new Map<string, string>(fdmConductorTargets.map(({ objectId, target }) => [target.id, objectId]));
+    const targets = [
+      ...magneticTargets.filter((target) => !conductorIds.has(target.id)),
+      ...fdmConductorTargets.map(({ target }) => target),
+    ];
+    return targets.flatMap((target) => {
+      const settings = fdmTargetSettingsById.get(target.id);
+      return settings ? [{
+        label: target.label ?? target.id,
+        objectScopeId: conductorIds.get(target.id),
+        settings,
+        targetId: target.id,
+      }] : [];
+    });
+  }, [fdmConductorTargets, fdmTargetDefinitionsResult, fdmTargetSettingsById]);
   const airboxSettings = useMemo(
     () =>
       resolveTargetVisualization({
@@ -6031,21 +6064,96 @@ export function useViewport3DSceneModel({
   const fdmBuildResult = fdmBuildState?.result ?? undefined;
   const fdmInstanceModel: FdmCuboidInstanceModel | null | undefined =
     fdmBuildResult?.model;
-  const fdmTargetViewsResult = useMemo(
-    () =>
-      buildViewport3DFdmTargetViews({
-        membership: fdmRegionMembership.data,
-        model: fdmInstanceModel,
-        realizedRegionIds: fdmRealizedRegionIds,
-        sceneObjectIds,
-      }),
-    [
-      fdmInstanceModel,
-      fdmRealizedRegionIds,
-      fdmRegionMembership.data,
-      sceneObjectIds,
-    ],
+  const fdmConductorBuilds = useMemo(() => {
+    if (!fdmDomain || !fdmFieldDomainIdentity.meshTopologyHash || !fdmDomainGenerationId) return [];
+    return fdmConductorTargets.flatMap(({ objectId, target }) => {
+      const settings = fdmTargetSettingsById.get(target.id);
+      if (!settings) return [];
+      const field = resolveViewport3DTargetQuantityFieldVectorForTarget({
+        fieldVectors: targetQuantityFieldVectors.data ?? new Map<string, DecodedFieldVector>(),
+        quantityId: settings.activeQuantityId,
+        requests: targetQuantityFieldRequests,
+        targetId: target.id,
+      });
+      if (!field?.fieldVector.meshTopologyHash) return [];
+      const responseDomainGenerationId = resolveTrustedViewport3DResponseDomainGenerationId(
+        field.fieldVector,
+        targetQuantityFieldVectors.responseMetadataByRequestId.get(field.requestId) ?? null,
+      );
+      const compatible = resolveViewport3DFieldVectorForDomain({
+        domain: fdmFieldDomainIdentity,
+        fieldVector: field.fieldVector,
+        responseDomainGenerationId,
+      });
+      const realizedRegionIds = compatible
+        ? resolveFdmConductorRegionIds(compatible, objectId, fdmDomain.totalCells)
+        : null;
+      if (!realizedRegionIds) return [];
+      const membershipRevision = resolveFdmCuboidMembershipRevision(realizedRegionIds);
+      const topologyKey = `fdm-conductor:${target.id}:${fdmDomainGenerationId}:${membershipRevision}`;
+      const entry: FdmCuboidAsyncBuildEntry = {
+        buildKey: `${topologyKey}:fill=${visualProfile.voxelFillRatio}`,
+        cellSelection: "active",
+        domain: fdmDomain,
+        enabled: true,
+        groupKey: `fdm-cuboid:conductor:${target.id}`,
+        id: target.id,
+        maxVectorGlyphs: 0,
+        realizedRegionIds,
+        revisionSummary: topologyKey,
+        topologyKey,
+        vectorAnchorMode: "center",
+        vectorScale: 0,
+        voxelFillRatio: visualProfile.voxelFillRatio,
+        voxelMagnitudeThreshold: 0,
+        voxelTopography: FDM_AIRBOX_VOXEL_TOPOGRAPHY,
+      };
+      return [{ entry, realizedRegionIds, target }];
+    });
+  }, [
+    fdmConductorTargets,
+    fdmDomain,
+    fdmDomainGenerationId,
+    fdmFieldDomainIdentity,
+    fdmTargetSettingsById,
+    targetQuantityFieldRequests,
+    targetQuantityFieldVectors.data,
+    targetQuantityFieldVectors.responseMetadataByRequestId,
+    visualProfile.voxelFillRatio,
+  ]);
+  const fdmConductorBuildEntries = useMemo(
+    () => fdmConductorBuilds.map(({ entry }) => entry),
+    [fdmConductorBuilds],
   );
+  const fdmConductorBuildResults = useFdmCuboidBuildResults(fdmConductorBuildEntries);
+  const fdmTargetViewsResult = useMemo(() => {
+    const magnetic = buildViewport3DFdmTargetViews({
+      membership: fdmMagneticRegionMembership,
+      model: fdmInstanceModel,
+      realizedRegionIds: fdmRealizedRegionIds,
+      sceneObjectIds,
+    });
+    const conductorViews = fdmConductorBuilds.flatMap(({ entry, realizedRegionIds, target }) => {
+      const built = fdmConductorBuildResults.get(target.id);
+      return built?.buildKey === entry.buildKey && built.result?.model
+        ? [buildFdmConductorTargetView(target, built.result.model, realizedRegionIds)]
+        : [];
+    });
+    if (!conductorViews.length) return magnetic;
+    const conductorTargetIds = new Set(conductorViews.map(({ target }) => target.id));
+    return {
+      status: "ready" as const,
+      reason: null,
+      views: [...magnetic.views.filter(({ target }) => !conductorTargetIds.has(target.id)), ...conductorViews],
+    };
+  }, [
+    fdmConductorBuildResults,
+    fdmConductorBuilds,
+    fdmInstanceModel,
+    fdmRealizedRegionIds,
+    fdmMagneticRegionMembership,
+    sceneObjectIds,
+  ]);
   const fdmTargetVectorAllocations = useMemo(() => {
     const targets: Viewport3DVectorBudgetTarget[] = [];
     if (fdmTargetViewsResult.status === "ready") {

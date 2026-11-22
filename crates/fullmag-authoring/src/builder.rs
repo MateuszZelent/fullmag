@@ -398,6 +398,7 @@ pub enum StudyPrimitiveStageKind {
     FftResponse,
     SetField,
     SetCurrent,
+    SetTransportCurrent,
     SetSpinTorqueEnabled,
     SaveState,
     LoadState,
@@ -422,6 +423,7 @@ impl StudyPrimitiveStageKind {
         Self::FftResponse,
         Self::SetField,
         Self::SetCurrent,
+        Self::SetTransportCurrent,
         Self::SetSpinTorqueEnabled,
         Self::SaveState,
         Self::LoadState,
@@ -433,7 +435,7 @@ impl StudyPrimitiveStageKind {
     pub fn is_pipeline_input_configuration(self) -> bool {
         matches!(
             self,
-            Self::SetField | Self::SetCurrent | Self::SetSpinTorqueEnabled
+            Self::SetField | Self::SetCurrent | Self::SetTransportCurrent | Self::SetSpinTorqueEnabled
                 | Self::AddFieldDrive | Self::AddMaskFieldDrive
                 | Self::UpdateMaskFieldDrive | Self::RemoveFieldDrive
                 | Self::TableAutosave | Self::Autosave
@@ -1345,6 +1347,31 @@ mod tests {
             panic!("expected primitive spin torque toggle");
         };
         assert_eq!(node.stage_kind, StudyPrimitiveStageKind::SetSpinTorqueEnabled);
+        assert!(node.stage_kind.is_pipeline_input_configuration());
+    }
+
+    #[test]
+    fn script_imported_transport_current_is_an_input_configuration() {
+        let document: StudyPipelineDocument = serde_json::from_value(serde_json::json!({
+            "version": "study_pipeline.v1",
+            "nodes": [{
+                "id": "electrodes",
+                "label": "Set electrode current",
+                "source": "script_imported",
+                "node_kind": "primitive",
+                "stage_kind": "set_transport_current",
+                "payload": {
+                    "module_id": "charge",
+                    "terminal_outward_current_density_Apm2": {"w_in": -2.6e10, "w_out": 2.6e10}
+                }
+            }]
+        }))
+        .unwrap();
+
+        let StudyPipelineNode::Primitive(node) = &document.nodes[0] else {
+            panic!("expected a primitive electrode-current stage");
+        };
+        assert_eq!(node.stage_kind, StudyPrimitiveStageKind::SetTransportCurrent);
         assert!(node.stage_kind.is_pipeline_input_configuration());
     }
 

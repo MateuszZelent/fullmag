@@ -1200,6 +1200,13 @@ pub struct RequestedTransportExecutionIR {
     pub execution_mode: ExecutionMode,
 }
 
+/// Half-open ranges in the resolved single-grid FDM cell order.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct FdmTransportObjectCellsIR {
+    pub charge: Vec<[usize; 2]>,
+    pub spin: Vec<[usize; 2]>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ResolvedSpinTransportPlanIR {
     pub module_id: String,
@@ -1215,6 +1222,8 @@ pub struct ResolvedSpinTransportPlanIR {
     pub physical_residual_version: String,
     pub capabilities: Vec<String>,
     pub inserted_default_boundaries: Vec<String>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub fdm_object_cells: BTreeMap<String, FdmTransportObjectCellsIR>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fdm_cpu_double: Option<ResolvedFdmSpinTransportIR>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

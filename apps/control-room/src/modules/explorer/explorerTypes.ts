@@ -1,3 +1,4 @@
+import type { SceneObjectPresentationRole } from "@/shared/domain/physics/objectMagneticModel";
 import type { AnalysisModuleId } from "@/kernel/analysis-modules/analysisModuleContract";
 import type { CommandId } from "@/kernel/commands/commandTypes";
 import type {
@@ -414,7 +415,7 @@ export interface ExplorerNode {
   modeId?: string;
   modeIndex?: number;
   objectId?: string;
-  objectRole?: "antenna" | "magnet" | "auxiliary";
+  objectRole?: SceneObjectPresentationRole;
   antennaResourceId?: string;
   antennaResourceKind?:
     | "terminals"
@@ -483,7 +484,7 @@ export interface ModelTreeObjectSnapshot {
   regionId?: string | null;
   regions?: readonly ModelTreeObjectRegionSnapshot[];
   materialFields?: readonly ModelTreeMaterialFieldSnapshot[];
-  objectRole?: "antenna" | "magnet" | "auxiliary";
+  objectRole?: SceneObjectPresentationRole;
   regionMagnetization?: string | null;
   regionMagnetizationKind?: string | null;
   regionMagnetizationLabel?: string | null;

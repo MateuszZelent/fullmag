@@ -1989,8 +1989,11 @@ fn validate_failed_no_spawn_gate(
     state: HostResourceReservationState,
     gate: Option<&HostWorkerLaunchGate>,
 ) -> Result<()> {
-    if state != HostResourceReservationState::Committed {
-        bail!("failed no-spawn cancellation requires a committed reservation");
+    if !matches!(
+        state,
+        HostResourceReservationState::Tentative | HostResourceReservationState::Committed
+    ) {
+        bail!("failed no-spawn cancellation requires a tentative or committed reservation");
     }
     match gate {
         Some(HostWorkerLaunchGate::Pending | HostWorkerLaunchGate::Closed) => Ok(()),
@@ -2010,7 +2013,7 @@ fn validate_failed_no_spawn_reservation(
     expected_digest: &str,
 ) -> Result<()> {
     match reservation.state {
-        HostResourceReservationState::Committed => {
+        HostResourceReservationState::Tentative | HostResourceReservationState::Committed => {
             validate_failed_no_spawn_gate(
                 reservation.state,
                 reservation.worker_launch_gate.as_ref(),
@@ -2023,8 +2026,8 @@ fn validate_failed_no_spawn_reservation(
                 bail!("released no-spawn reservation lacks its closed gate or release proof");
             }
         }
-        HostResourceReservationState::Tentative | HostResourceReservationState::Quarantined => {
-            bail!("failed no-spawn cancellation requires a committed or released reservation")
+        HostResourceReservationState::Quarantined => {
+            bail!("failed no-spawn cancellation cannot use a quarantined reservation")
         }
     }
 
@@ -2035,27 +2038,27 @@ fn validate_failed_no_spawn_reservation(
     }
 
     let mut original = reservation.clone();
-    original.state = HostResourceReservationState::Committed;
     original.release_proof_sha256 = None;
-    let mut matches_original = false;
-    for gate in [
-        Some(HostWorkerLaunchGate::Pending),
-        Some(HostWorkerLaunchGate::Closed),
-    ] {
-        original.worker_launch_gate = gate;
-        if fullmag_session::canonical_json_sha256(&serde_json::to_value(&original)?)
-            == expected_digest
-        {
-            matches_original = true;
-            break;
+    // A closed gate can replay either the original Pending record or an
+    // already-closed record. An open gate cannot replay a closed one.
+    if reservation.worker_launch_gate != Some(HostWorkerLaunchGate::Closed) {
+        bail!("the current launch gate cannot replay the pinned cancellation record");
+    }
+    for state in [HostResourceReservationState::Tentative, HostResourceReservationState::Committed] {
+        if reservation.state != HostResourceReservationState::Released && reservation.state != state {
+            continue;
+        }
+        original.state = state;
+        for gate in [HostWorkerLaunchGate::Pending, HostWorkerLaunchGate::Closed] {
+            original.worker_launch_gate = Some(gate);
+            if fullmag_session::canonical_json_sha256(&serde_json::to_value(&original)?)
+                == expected_digest
+            {
+                return Ok(());
+            }
         }
     }
-    if !matches_original {
-        bail!(
-            "host reservation is not an allowed state transition from the pinned cancellation record"
-        );
-    }
-    Ok(())
+    bail!("host reservation is not an allowed state transition from the pinned cancellation record")
 }
 
 /// The local lease can only move once, from Active to Released.  Replaying a
@@ -2282,10 +2285,10 @@ fn cancel_failed_no_spawn(args: impl Iterator<Item = OsString>) -> Result<()> {
     }
     validate_failed_no_spawn_lease(&lease, &request.lease_sha256)?;
     match (reservation.state, lease.state) {
-        (HostResourceReservationState::Committed, FmsResourceLeaseState::Active)
+        (HostResourceReservationState::Tentative | HostResourceReservationState::Committed, FmsResourceLeaseState::Active)
             if reservation.worker_launch_gate == Some(HostWorkerLaunchGate::Closed)
                 || reservation.worker_launch_gate == Some(HostWorkerLaunchGate::Pending) => {}
-        (HostResourceReservationState::Committed, FmsResourceLeaseState::Released)
+        (HostResourceReservationState::Tentative | HostResourceReservationState::Committed, FmsResourceLeaseState::Released)
             if reservation.worker_launch_gate == Some(HostWorkerLaunchGate::Closed) => {}
         (HostResourceReservationState::Released, FmsResourceLeaseState::Released)
             if reservation.worker_launch_gate == Some(HostWorkerLaunchGate::Closed) => {}
@@ -2317,9 +2320,13 @@ fn cancel_failed_no_spawn(args: impl Iterator<Item = OsString>) -> Result<()> {
     {
         bail!("failed no-spawn cancellation found a worker process exit receipt");
     }
-    fullmag_runtime_control::ensure_admitted_task_coordinator_genesis(&store, &claim)
-        .context("recover exact pre-Prepare admission genesis for no-spawn cancellation")?;
-    let recovered = fullmag_runtime_control::recover_coordinator(&store, &claim)?;
+    fullmag_runtime_control::retry_store_writer_busy(|| {
+        fullmag_runtime_control::ensure_admitted_task_coordinator_genesis(&store, &claim)
+    })
+    .context("recover exact pre-Prepare admission genesis for no-spawn cancellation")?;
+    let recovered = fullmag_runtime_control::retry_store_writer_busy(|| {
+        fullmag_runtime_control::recover_coordinator(&store, &claim)
+    })?;
     if recovered
         .events
         .iter()
@@ -3327,7 +3334,7 @@ mod tests {
     }
 
     #[test]
-    fn failed_no_spawn_cancellation_rejects_consumed_or_uncommitted_gate() {
+    fn failed_no_spawn_cancellation_accepts_unused_gate_and_rejects_consumed_or_quarantined() {
         assert!(validate_failed_no_spawn_gate(
             HostResourceReservationState::Committed,
             Some(&HostWorkerLaunchGate::Pending),
@@ -3347,6 +3354,11 @@ mod tests {
         .is_err());
         assert!(validate_failed_no_spawn_gate(
             HostResourceReservationState::Tentative,
+            Some(&HostWorkerLaunchGate::Pending),
+        )
+        .is_ok());
+        assert!(validate_failed_no_spawn_gate(
+            HostResourceReservationState::Quarantined,
             Some(&HostWorkerLaunchGate::Pending),
         )
         .is_err());
@@ -3400,6 +3412,15 @@ mod tests {
             fullmag_session::canonical_json_sha256(&serde_json::to_value(&original).unwrap());
         assert!(validate_failed_no_spawn_reservation(&original, &original_digest).is_ok());
 
+        let mut tentative = original.clone();
+        tentative.state = HostResourceReservationState::Tentative;
+        let tentative_digest =
+            fullmag_session::canonical_json_sha256(&serde_json::to_value(&tentative).unwrap());
+        assert!(validate_failed_no_spawn_reservation(&tentative, &tentative_digest).is_ok());
+        assert!(validate_failed_no_spawn_reservation(&tentative, &original_digest).is_err());
+        tentative.worker_launch_gate = Some(HostWorkerLaunchGate::Closed);
+        assert!(validate_failed_no_spawn_reservation(&tentative, &tentative_digest).is_ok());
+
         original.worker_launch_gate = Some(HostWorkerLaunchGate::Closed);
         assert!(validate_failed_no_spawn_reservation(&original, &original_digest).is_ok());
 
@@ -3409,6 +3430,7 @@ mod tests {
             fullmag_session::canonical_json_sha256(&serde_json::to_value(&original).unwrap());
         assert!(validate_failed_no_spawn_reservation(&original, &released_digest).is_ok());
         assert!(validate_failed_no_spawn_reservation(&original, &original_digest).is_ok());
+        assert!(validate_failed_no_spawn_reservation(&original, &tentative_digest).is_ok());
 
         original.state = HostResourceReservationState::Committed;
         original.release_proof_sha256 = None;

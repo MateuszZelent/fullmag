@@ -1249,6 +1249,7 @@ pub(crate) fn execute_cuda_fdm(
                     &mut steps,
                     &mut field_capture_ledger,
                     &mut artifacts,
+                    gpu_transport.as_mut(),
                 )?;
                 continue;
             }
@@ -1332,6 +1333,13 @@ pub(crate) fn execute_cuda_fdm(
                 // backend's last accepted magnetization instead of retrying it.
                 break;
             };
+            if let Some(session) = gpu_transport.as_mut() {
+                session.observe_bound_llg_accepted_step().map_err(|error| RunError {
+                    message: format!(
+                        "observing accepted public GPU M1 step failed: {error}"
+                    ),
+                })?;
+            }
             // Adaptive integrators return the controller's next step size with
             // the accepted step; snapshots below replace `stats` and drop it.
             if let Some(next_dt) = stats.dt_suggested {
@@ -1633,6 +1641,7 @@ pub(crate) fn execute_cuda_fdm(
                 &mut steps,
                 &mut field_capture_ledger,
                 &mut artifacts,
+                gpu_transport.as_mut(),
             )?;
             let energy_plateau_range = if native_relaxation_control && !due_scalar_row {
                 energy_plateau.range()
@@ -1717,6 +1726,7 @@ pub(crate) fn execute_cuda_fdm(
         &mut steps,
         &mut field_capture_ledger,
         &mut artifacts,
+        gpu_transport.as_mut(),
     )?;
 
     let terminal_capture = latest_stats
@@ -1863,6 +1873,17 @@ pub(crate) fn execute_cuda_fdm(
         }
     }
     if let Some(session) = gpu_transport.as_mut() {
+        match session.transport_telemetry() {
+            Ok(telemetry) if telemetry.status == "pass" => {
+                provenance.fdm_gpu_transport_telemetry = Some(telemetry);
+            }
+            Ok(_) | Err(_) => {
+                // The native execution receipt imports every transport event at
+                // each RHS and at unbind. Do not fail a completed solve when the
+                // bounded public telemetry ring cannot support a full Rust-side
+                // summary for a long run.
+            }
+        }
         backend.unbind_gpu_transport()?;
         session.close().map_err(|error| RunError {
             message: format!("closing public GPU M1 transport session failed: {error}"),
