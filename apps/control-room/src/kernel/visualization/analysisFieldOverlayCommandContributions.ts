@@ -35,6 +35,7 @@ interface AnalysisFieldOverlayCommandInput {
   colormap?: string | null;
   componentBasis?: string | null;
   componentCount?: number | null;
+  artifactGenerationId?: string | null;
   artifactRevision?: number | string | null;
   equilibriumId?: string | null;
   fieldId?: string | null;
@@ -46,6 +47,7 @@ interface AnalysisFieldOverlayCommandInput {
   label?: string | null;
   kContextKind?: string | null;
   kPathCoordinateRadPerM?: number | null;
+  modeId?: string | null;
   modeIndex?: number | null;
   normalization?: string | null;
   observableId?: string | null;
@@ -55,6 +57,7 @@ interface AnalysisFieldOverlayCommandInput {
   resourceRef?: string | null;
   representation?: string | null;
   runId?: string | null;
+  sampleId?: string | null;
   sampleIndex?: number | null;
   source?: AnalysisFieldOverlaySource | null;
   stageId?: string | null;
@@ -432,10 +435,30 @@ function overlayStateFromContext(
     0;
   const selectedRef = selectedFrequencyDomainRef(context);
   const selectedResultRef = selectedAnalysisResultRef(context);
-  const modeIntent =
-    resolvedSource === "eigen-mode"
-      ? createModeFieldOverlayIntent(selectedRef)
-      : null;
+  const modalRow = resolvedSource === "eigen-mode" &&
+    (selectedRef?.kind === "results.resonance.modal.spectrum" ||
+      selectedRef?.kind === "results.resonance.modal.modes") &&
+    selectedRef.studyProduct === "modal_eigen" &&
+    input.fieldId === fieldId &&
+    input.sampleIndex != null &&
+    input.modeIndex != null
+    ? {
+        ...selectedRef,
+        fieldId,
+        kind: "results.eigen.mode" as const,
+        modeId: stringValue(input.modeId) ?? undefined,
+        modeIndex: input.modeIndex,
+        resourceRef: stringValue(input.resourceRef) ?? undefined,
+        sampleId: stringValue(input.sampleId) ?? undefined,
+        sampleIndex: input.sampleIndex,
+      }
+    : null;
+  const modeIntent = resolvedSource === "eigen-mode"
+    ? createModeFieldOverlayIntent(
+        modalRow ?? selectedRef,
+        modalRow ? stringValue(input.artifactGenerationId) : null,
+      )
+    : null;
   const analysisResultFieldIntent = createAnalysisResultFieldOverlayIntent(
     selectedResultRef,
   );
@@ -469,6 +492,7 @@ function overlayStateFromContext(
     identityRef?.kContextKind ?? kContextKindValue(input.kContextKind) ?? undefined;
   const resourceRef =
     analysisResultFieldIntent?.fieldRef.resource_key ??
+    modalRow?.resourceRef ??
     identityRef?.resourceRef ??
     stringValue(input.resourceRef) ??
     undefined;

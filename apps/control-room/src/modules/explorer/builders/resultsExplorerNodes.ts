@@ -1,3 +1,5 @@
+import { modalResultModeNodeId } from "@/shared/domain/analysis/modalResultNodeIdentity";
+
 import type { AnalysisModuleId } from "@/kernel/analysis-modules/analysisModuleContract";
 import {
   PIN_MODE_VISUALIZATION_COMMAND,
@@ -111,7 +113,13 @@ interface ResultResourceLike {
 }
 
 interface ResultManifestLike extends ResultResourceLike {
+  generation_id?: string | null;
+  generation_status?: string | null;
+  mesh_generation_id?: string | null;
   payload?: unknown;
+  revision?: string | number | null;
+  run_id?: string | null;
+  stage_id?: string | null;
 }
 
 export interface PhysicsFirstResultResourceInput {
@@ -119,12 +127,13 @@ export interface PhysicsFirstResultResourceInput {
   artifacts?: PostprocessingCatalogSnapshot<readonly ArtifactResource[]>;
   branches?: ResultResourceLike | null;
   currentRun?: { revision: number | string; run_id: string } | null;
+  datasets?: readonly AnalysisResultDatasetSummaryResource[] | null;
   dispersion?: (ResultResourceLike & { path_metadata?: unknown; text?: string | null }) | null;
   manifest?: { result_manifest?: ResultManifestLike | null } | null;
   observationFrames?: PostprocessingCatalogSnapshot<ObservationFrameListResource>;
   pinnedObservationFrameId?: string | null;
   responseSweep?: (ResultResourceLike & { payload?: unknown }) | null;
-  spectrum?: (ResultResourceLike & { payload?: unknown }) | null;
+  spectrum?: ResultManifestLike | null;
   tableCatalog?: PostprocessingCatalogSnapshot<TableListResource>;
 }
 
@@ -471,12 +480,39 @@ export function physicsFirstResultsSnapshotFromResources(
     resultContextRunId: runId,
   };
   if (!runId || !payload) return { contractGaps, snapshot: emptySnapshot };
+  if (resultManifest?.run_id && resultManifest.run_id !== runId) {
+    addContractGap("Frequency-domain artifact belongs to a different run");
+    return { contractGaps, snapshot: emptySnapshot };
+  }
 
   const studyProduct = nonEmptyString(payload.study_product);
-  const stageId = nonEmptyString(payload.stage_id);
+  const spectrum = input.spectrum;
+  const spectrumStageId =
+    studyProduct === "modal_eigen" && ready(spectrum) &&
+    resultManifest?.run_id === runId && spectrum?.run_id === runId &&
+    spectrum.generation_status === "member_verified_owner_bound" &&
+    spectrum.generation_id && spectrum.generation_id === resultManifest.generation_id
+      ? nonEmptyString(spectrum.stage_id)
+      : null;
+  const manifestStageId = nonEmptyString(payload.stage_id) ??
+    nonEmptyString(resultManifest?.stage_id);
+  const publishedStageId = manifestStageId ?? spectrumStageId;
+  // The CLI artifact can omit stage_id. Resolve it only from an unambiguous
+  // published catalog entry for the run that owns this artifact.
+  const stageCandidates = !publishedStageId && resultManifest?.run_id === runId
+    ? input.datasets?.filter((dataset) =>
+        dataset.run_id === runId &&
+        dataset.product_kind === studyProduct &&
+        dataset.status.resource === "ready" &&
+        dataset.status.execution === "published",
+      ) ?? []
+    : [];
+  const stageId = publishedStageId ??
+    (stageCandidates.length === 1 ? nonEmptyString(stageCandidates[0]?.stage_id) : null);
   const equilibriumId = nonEmptyString(payload.equilibrium_identity);
   const requested = record(payload.requested_execution);
-  const boundaryContext = nonEmptyString(requested?.boundary_context);
+  const boundaryContext = nonEmptyString(requested?.boundary_context) ??
+    nonEmptyString(payload.boundary_context);
   if (!equilibriumId) {
     addContractGap("Frequency-domain artifact does not publish equilibrium_identity");
   }
@@ -494,6 +530,7 @@ export function physicsFirstResultsSnapshotFromResources(
 
   const kSampling =
     kSamplingFromMetadata(input.dispersion?.path_metadata) ??
+    samplingFromRecord(record(payload.k_sampling)) ??
     kSamplingFromRequestedExecution(requested);
   if (boundaryContext === "floquet_periodic" && !kSampling) {
     addContractGap("Periodic/Floquet artifact does not publish a supported k sampling resource");
@@ -506,12 +543,15 @@ export function physicsFirstResultsSnapshotFromResources(
     ...payload,
     ...(kSampling ? { k_sampling: kSamplingForFrequencyContext(kSampling) } : {}),
     run_id: runId,
-  });
+    stage_id: stageId,
+  }, { meshGenerationId: resultManifest?.mesh_generation_id });
   for (const gap of frequencyContext.contractGaps) {
     addContractGap(gap);
   }
   const artifactRevision =
-    nonEmptyString(payload.revision) ?? input.currentRun?.revision ?? "unknown";
+    nonEmptyString(payload.revision) ??
+    (!manifestStageId ? resultManifest?.revision : null) ??
+    input.currentRun?.revision ?? "unknown";
   const products: PhysicsFirstResultProducts =
     studyProduct === "modal_eigen"
       ? {
@@ -548,7 +588,11 @@ export function physicsFirstResultsSnapshotFromResources(
     products,
     runId,
     stageId,
-    stageLabel: nonEmptyString(payload.stage_label) ?? stageId,
+    stageLabel: nonEmptyString(payload.stage_label) ??
+      input.datasets?.find((dataset) =>
+        dataset.run_id === runId && dataset.stage_id === stageId &&
+        dataset.product_kind === studyProduct,
+      )?.title ?? stageId,
     studyProduct,
   };
 
@@ -660,7 +704,9 @@ function analysisFieldTargetNodes(
   const classification = classifyFrequencyDomainResult(entry);
   return (entry.analysisFieldTargets ?? []).map((target) =>
     node(
-      `${parentId}:${target.source}:${key(target.fieldId)}`,
+      kind === "results.resonance.modal.mode"
+        ? modalResultModeNodeId(entry.runId, entry.stageId, target.fieldId)
+        : `${parentId}:${target.source}:${key(target.fieldId)}`,
       kind,
       target.label,
       parentId,

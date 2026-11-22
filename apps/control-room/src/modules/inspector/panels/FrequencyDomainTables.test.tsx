@@ -3,6 +3,7 @@ import { fieldVectorResourceKey } from "@/kernel/api/fieldQueryIdentity";
 import { describe, expect, it, vi } from "vitest";
 
 import {
+  EigenModeBrowser,
   FrequencyDomainBranchTable,
   FrequencyDomainFmrPeakTable,
   FrequencyDomainModeTable,
@@ -170,6 +171,42 @@ describe("FrequencyDomainTables", () => {
     expect(html).toContain("<span>Select</span>");
     expect(html).toContain("Mode field artifact is missing");
     expect(html).toContain("disabled=\"\"");
+  });
+
+  it("lists frequencies and offers 3D only for rows with a stored mode field", () => {
+    const point = {
+      branchId: null,
+      dampingRateHz: null,
+      displayModeIndex: 0,
+      frequencyHz: 1.56e9,
+      imaginaryFrequencyHz: null,
+      modeFieldAvailable: true,
+      modeFieldId: "field-0",
+      modeFieldResourceKey: "/data/field-0",
+      modeId: null,
+      rawModeIndex: 0,
+      residualNorm: null,
+      sampleIndex: 0,
+      tangentLeakageMax: null,
+    };
+    const html = renderToStaticMarkup(
+      <EigenModeBrowser
+        activeFieldId="field-0"
+        onInspect={vi.fn()}
+        onView={vi.fn()}
+        points={[
+          point,
+          { ...point, displayModeIndex: 1, frequencyHz: 6.47e9, modeFieldAvailable: false, rawModeIndex: 1 },
+        ]}
+      />,
+    );
+    expect(html).toContain('aria-label="Inspect Mode 1"');
+    expect(html).toContain('aria-label="View Mode 0 in 3D" aria-pressed="true"');
+    expect(html).toContain("Viewing");
+    expect(html).toContain("1.56 GHz");
+    expect(html).toContain("6.47 GHz");
+    expect(html).toContain("No field");
+    expect(html).not.toContain('aria-label="View Mode 1 in 3D"');
   });
 
   it("marks the selected eigen mode row for spectrum navigation", () => {

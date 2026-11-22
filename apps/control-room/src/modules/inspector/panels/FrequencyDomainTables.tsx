@@ -144,6 +144,77 @@ const RESPONSE_ACTIONS: readonly {
   },
 ];
 
+export function EigenModeBrowser({
+  activeFieldId,
+  onInspect,
+  onView,
+  points,
+}: {
+  activeFieldId?: string | null;
+  onInspect: (point: EigenSpectrumPoint) => void;
+  onView: (point: EigenSpectrumPoint) => void;
+  points: readonly EigenSpectrumPoint[];
+}) {
+  const rows = useMemo(
+    () => points.toSorted((left, right) =>
+      left.sampleIndex - right.sampleIndex ||
+      left.frequencyHz - right.frequencyHz ||
+      left.rawModeIndex - right.rawModeIndex,
+    ),
+    [points],
+  );
+
+  if (!rows.length) return <p role="status">No eigenmodes are available.</p>;
+  const multipleSamples = rows.some((point) => point.sampleIndex !== rows[0]?.sampleIndex);
+
+  return (
+    <div className="fm-frequency-domain-table-wrap">
+      <table aria-label="Eigenmodes" className="fm-frequency-domain-table fm-eigen-mode-browser">
+        <thead>
+          <tr>
+            <th scope="col">Mode</th>
+            <th scope="col">Frequency</th>
+            <th className="fm-frequency-domain-table__actions-heading" scope="col">Profile</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((point) => {
+            const label = multipleSamples
+              ? `Sample ${point.sampleIndex} · Mode ${point.rawModeIndex}`
+              : `Mode ${point.rawModeIndex}`;
+            const fieldReady = eigenModeFieldAvailable(point);
+            const active = Boolean(fieldReady && activeFieldId && point.modeFieldId === activeFieldId);
+            return (
+              <tr data-active={active || undefined} key={modeTablePointKey(point)}>
+                <td>
+                  <Button aria-label={`Inspect ${label}`} onClick={() => onInspect(point)} size="sm" type="button" variant="ghost">
+                    {label}
+                  </Button>
+                </td>
+                <td>{formatFrequencyHz(point.frequencyHz)}</td>
+                <td className="fm-eigen-mode-browser__profile">
+                  {fieldReady ? (
+                    <Button
+                      aria-label={`View ${label} in 3D`}
+                      aria-pressed={active}
+                      onClick={() => onView(point)}
+                      size="sm"
+                      type="button"
+                      variant={active ? "primary" : "secondary"}
+                    >
+                      {active ? "Viewing" : "View 3D"}
+                    </Button>
+                  ) : <span className="fm-eigen-mode-browser__missing">No field</span>}
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
 export function FrequencyDomainModeTable({
   onPlotMode,
   points,
