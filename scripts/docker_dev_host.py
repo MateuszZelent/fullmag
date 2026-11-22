@@ -53,7 +53,6 @@ def validate_host_path(path, label="host path"):
     return root
 
 
-
 def validate_linux_mounts(paths):
     """Admit Linux bind sources and their submounts without walking their trees."""
     if os.name == "nt" or not paths:

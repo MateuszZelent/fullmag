@@ -23,7 +23,9 @@ import threading
 import time
 import uuid
 
-from docker_dev_host import docker_argv, local_volume, require_host, validate_host_path
+from docker_dev_host import (
+    docker_argv, local_volume, require_host, validate_host_path, validate_linux_mounts,
+)
 
 
 MAX_DOCUMENT_BYTES = 8 * 1024 * 1024
@@ -967,7 +969,6 @@ def build_volume_toolchain(repo):
     from docker_compose_identity import compose_source_identity
     identity = compose_source_identity(repo)
     local_volume(repo)
-    from docker_dev_host import validate_linux_mounts
     validate_linux_mounts({repo: "toolchain build context"})
     configured = toolchain_configuration(repo, identity, direct_dev=True)
     service = configured["services"]["fem-gpu-toolchain"]
@@ -1069,6 +1070,7 @@ def build_volume_runtime_images(repo, control, toolchain, *, helper_source_bindi
     from bootstrap_docker_toolchain import read_input
     require_host()
     repo = validate_host_path(Path(repo).absolute(), "source checkout").resolve(strict=True)
+    validate_linux_mounts({repo: "runtime image build context"})
     helper_source = None
     if helper_source_binding is not None:
         import docker_helper_source as helper_source

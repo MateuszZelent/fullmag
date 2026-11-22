@@ -312,6 +312,19 @@ class BuildSpaceAdmissionTests(unittest.TestCase):
         self.assertEqual(len(fake.require_calls), 1)
         self.assertEqual(fake.build_calls, [])
 
+    def test_runtime_image_context_rejects_windows_submount_before_buildkit(self):
+        repo = Path(__file__).resolve().parents[1]
+        mountinfo = (
+            "1 0 8:1 / / rw - ext4 /dev/sda rw\n"
+            f"2 1 0:42 / {repo}/docker/windows-data rw - 9p E:\\134 rw\n"
+        )
+        with mock.patch.object(control, "validate_host_path", return_value=repo), \
+                mock.patch.object(control.Path, "read_text", return_value=mountinfo), \
+                mock.patch.object(control, "docker_capture") as docker:
+            with self.assertRaisesRegex(ValueError, "runtime image build context.*9p.*windows-data"):
+                control.build_volume_runtime_images(repo, mock.Mock(), {})
+        docker.assert_not_called()
+
     def test_warm_runtime_images_use_bounded_budget_and_exact_parent_labels(self):
         fake = FakeControl()
         result, _digests = self._run_runtime_images(fake)
