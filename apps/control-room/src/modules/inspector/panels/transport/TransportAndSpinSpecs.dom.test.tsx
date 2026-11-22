@@ -1378,7 +1378,16 @@ describe("Wave 4 Transport, Spin & Oersted Inspector Parity", () => {
       solverTab.click();
     });
 
-    // GPU option carries disabled notice from capability map
+    // Discretization is read-only session-locked (no editable FDM / FEM toggle) and GPU option carries disabled notice
+    expect(mounted.host.textContent).toContain("FDM (Session)");
+    expect(
+      findElements(
+        mounted.host,
+        (el) =>
+          el.tagName === "BUTTON" &&
+          (el.textContent?.trim() === "FDM" || el.textContent?.trim() === "FEM"),
+      ),
+    ).toHaveLength(0);
     expect(mounted.host.textContent).toContain(
       "GPU spin solver disabled on test host",
     );

@@ -82,11 +82,14 @@ function createSpinPanelDraft(
   initialScope: { objectId: string; regionId?: string | null } | null,
   exists: boolean,
   fallbackCurrentSource = "current",
+  sessionDiscretization: "fdm" | "fem" | null = null,
 ): SpinTransportPanelDraft {
   const base = spinTransportDraft(value, initialScope);
   return {
     ...base,
     currentSourceId: value?.current_source_id ?? fallbackCurrentSource,
+    executionDiscretization:
+      sessionDiscretization ?? base.executionDiscretization,
     exists,
   };
 }
@@ -253,8 +256,14 @@ export function SpinTransportInspectorPanel({ selection }: InspectorPanelProps) 
         knownSelected ? null : initialScope,
         knownSelected !== null,
         defaultCurrentSource,
+        session.sessionDiscretization,
       ),
-    [defaultCurrentSource, initialScope, knownSelected],
+    [
+      defaultCurrentSource,
+      initialScope,
+      knownSelected,
+      session.sessionDiscretization,
+    ],
   );
 
   const effectiveSelection = useMemo<Selection>(
@@ -872,14 +881,20 @@ export function SpinTransportInspectorPanel({ selection }: InspectorPanelProps) 
           modeTabId: "solver",
           rows: [
             {
-              type: "segmented",
-              key: "executionDiscretization",
+              type: "readonly",
               label: "Discretization",
-              options: [
-                { value: "auto", label: "Auto" },
-                { value: "fdm", label: "FDM" },
-                { value: "fem", label: "FEM" },
-              ],
+              hint: "Assigned by the session simulation mode",
+              format: (d) => {
+                const active =
+                  session.sessionDiscretization ??
+                  (d.executionDiscretization === "fdm" ||
+                  d.executionDiscretization === "fem"
+                    ? d.executionDiscretization
+                    : null);
+                if (active === "fem") return "FEM (Session)";
+                if (active === "fdm") return "FDM (Session)";
+                return "Auto (Session)";
+              },
             },
             {
               type: "select",
@@ -1155,6 +1170,7 @@ export function SpinTransportInspectorPanel({ selection }: InspectorPanelProps) 
       scene,
       sceneRevision,
       selection.objectId,
+      session.sessionDiscretization,
       singlePrecisionDisabledReason,
       spinRes,
       switcherOptions,

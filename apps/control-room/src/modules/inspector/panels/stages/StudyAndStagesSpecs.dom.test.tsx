@@ -500,6 +500,13 @@ describe("Task 22 — Study branches, spectral consolidation (24 -> 2), and 0 s 
     );
     expect(errorNotices.length).toBeGreaterThanOrEqual(1);
     const noticeText = container.textContent ?? "";
+    expect(noticeText).toContain("FDM (Session)");
+    expect(
+      findElements(
+        container,
+        (el) => el.tagName === "BUTTON" && el.textContent?.trim() === "FEM",
+      ),
+    ).toHaveLength(0);
     expect(noticeText).toContain("never silently falls back to CPU");
     expect(noticeText).toContain("Switch to Auto");
     expect(noticeText).toContain("Switch to CPU");

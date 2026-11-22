@@ -674,6 +674,16 @@ describe("Wave 6 connected production wiring (Study, Stages, PlanarMonitor, Viz,
       kernel,
     );
 
+    expect(host.textContent).toContain("FDM (Session)");
+    expect(
+      findElements(
+        host,
+        (el) =>
+          el.tagName === "BUTTON" &&
+          (el.textContent?.trim() === "FDM" || el.textContent?.trim() === "FEM"),
+      ),
+    ).toHaveLength(0);
+
     const cpuRadio = findElements(
       host,
       (el) => el.tagName === "BUTTON" && el.textContent?.trim() === "CPU",
@@ -698,6 +708,7 @@ describe("Wave 6 connected production wiring (Study, Stages, PlanarMonitor, Viz,
       kind: "merge_patch",
       merge_patch: {
         study: expect.objectContaining({
+          requested_backend: "fdm",
           requested_device: "cpu",
         }),
       },

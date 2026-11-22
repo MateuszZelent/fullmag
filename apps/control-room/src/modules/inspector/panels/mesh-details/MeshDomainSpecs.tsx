@@ -29,6 +29,10 @@ import { createCommandContext } from "@/kernel/commands/commandContext";
 import { useKernel } from "@/kernel/KernelContext";
 import * as geometryLifecycleResources from "@/kernel/resources/geometryLifecycleResources";
 import * as meshPolicyResourceCache from "@/kernel/resources/meshPolicyResourceCache";
+import {
+  resolveSessionAuthoringDiscretization,
+  resolveSessionDiscretization,
+} from "@/kernel/resources/sessionDiscretization";
 import { sessionRequestScopeKey } from "@/kernel/resources/sessionResourceIdentity";
 import * as sessionStatusHooks from "@/kernel/resources/useSessionStatus";
 import type { VisualizationRenderMode } from "@/kernel/visualization/ObjectVisualizationController";
@@ -275,14 +279,12 @@ function snapSevenSmooth(n: number): number {
 }
 
 function useActiveLane(): "fdm" | "fem" | "unresolved" {
-  const raw = sessionStatusHooks.useSessionStatusSelector(
-    (status) => status.data?.domain?.discretization ?? null,
+  const resolved = sessionStatusHooks.useSessionStatusSelector(
+    (status) =>
+      resolveSessionDiscretization(status.data) ??
+      resolveSessionAuthoringDiscretization(status.data),
   );
-  if (typeof raw !== "string") return "unresolved";
-  const normalized = raw.trim().toLowerCase();
-  if (normalized === "fdm") return "fdm";
-  if (normalized === "fem") return "fem";
-  return "unresolved";
+  return resolved ?? "unresolved";
 }
 
 function buildSafeMutationContext(
@@ -727,14 +729,13 @@ export function MeshRootInspectorSpecPanel({ selection }: InspectorPanelProps): 
           id: "discretization",
           rows: [
             {
-              key: "lane",
-              label: "Discretization",
-              options: [
-                { label: "FDM Grid", value: "fdm" },
-                { label: "FEM Mesh", value: "fem" },
-              ],
-              structural: true,
-              type: "segmented",
+              format: (d) =>
+                d.lane === "fem"
+                  ? "FEM (Unstructured Mesh)"
+                  : "FDM (Structured Grid)",
+              hint: "Assigned by the session simulation mode",
+              label: "Session method",
+              type: "readonly",
             },
             {
               key: "zStackMode",
@@ -1072,31 +1073,9 @@ export function MeshRootInspectorSpecPanel({ selection }: InspectorPanelProps): 
           d.lane === "fdm"
             ? "FDM grid sizing matches session policy"
             : "FEM shared-domain policy is up to date",
-        confirmApply: (draft, base) =>
-          draft.lane !== base.lane
-            ? {
-                confirmLabel: `Switch to ${draft.lane.toUpperCase()}`,
-                description:
-                  "Switching discretization lane updates study representation and invalidates lane-specific artifacts.",
-                title: `Switch session discretization to ${draft.lane.toUpperCase()}?`,
-              }
-            : null,
         mode: "staged",
-        onApply: async (draft, base) => {
+        onApply: async (draft) => {
           const reqOptions = sessionScopeKey ? { sessionScopeKey } : undefined;
-          let patchedStudyRevision: number | null = null;
-          if (draft.lane !== base.lane) {
-            const patchedStudy = await kernel.api.model.patchStudy(
-              { requested_backend: draft.lane },
-              reqOptions,
-            );
-            patchedStudyRevision = asNumber(asRecord(patchedStudy)?.scene_revision);
-            invalidateAuthoringMutationDependents(
-              kernel.resources,
-              "interaction",
-              patchedStudyRevision ?? `w5:${Date.now()}`,
-            );
-          }
 
           if (draft.lane === "fdm") {
             const nx = draft.fftSmoothSnap
@@ -1140,7 +1119,6 @@ export function MeshRootInspectorSpecPanel({ selection }: InspectorPanelProps): 
             };
 
             const baseRevision =
-              patchedStudyRevision ??
               asNumber(asRecord(scene.data)?.revision) ??
               asNumber(asRecord(scene.data)?.scene_revision) ??
               0;

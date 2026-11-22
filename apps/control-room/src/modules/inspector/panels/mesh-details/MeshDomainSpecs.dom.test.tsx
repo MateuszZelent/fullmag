@@ -922,11 +922,10 @@ describe("Task 18 MeshDomainSpecs, l_ex guard, FemMeshReadinessGuide and FDM tre
     });
   });
 
-  it("switches session discretization via patchStudy({ requested_backend }) and invalidates valid authoring dependent keys without throwing", async () => {
-    mocks.discretization = "fem";
+  it("locks mesh.root discretization strictly to the session mode (read-only FDM vs FEM, no editable lane switcher, no patchStudy mutation)", async () => {
+    mocks.discretization = "fdm";
     mocks.patchStudy.mockClear();
     mocks.commitTransaction.mockClear();
-    mocks.invalidate.mockClear();
 
     await act(async () => {
       harness.root.render(
@@ -947,15 +946,40 @@ describe("Task 18 MeshDomainSpecs, l_ex guard, FemMeshReadinessGuide and FDM tre
       );
     });
 
-    const fdmOption = findElement(
+    // FDM session: read-only Session method, no editable FDM Grid / FEM Mesh toggle, ONLY FDM controls
+    expect(harness.container.textContent).toContain("Session method");
+    expect(harness.container.textContent).toContain("FDM (Structured Grid)");
+    expect(harness.container.textContent).toContain(
+      "Assigned by the session simulation mode",
+    );
+    expect(harness.container.textContent).toContain("Global FDM grid sizing");
+    expect(harness.container.textContent).toContain("Z-stack mode");
+    expect(harness.container.textContent).not.toContain(
+      "Global FEM sizing & narrow-region resolution",
+    );
+    expect(harness.container.textContent).not.toContain("Load Effective Defaults");
+    expect(
+      findElements(
+        harness.container,
+        (el) =>
+          el.tagName === "BUTTON" &&
+          Boolean(
+            el.textContent?.includes("FDM Grid") ||
+              el.textContent?.includes("FEM Mesh"),
+          ),
+      ),
+    ).toHaveLength(0);
+
+    // Editing FDM Z-stack mode commits study.fdm without mutating requested_backend via patchStudy
+    const multilayerBtn = findElement(
       harness.container,
       (el) =>
         el.tagName === "BUTTON" &&
-        Boolean(el.textContent?.includes("FDM Grid")),
+        Boolean(el.textContent?.includes("Multilayer Z-slices")),
     );
-    expect(fdmOption).not.toBeNull();
+    expect(multilayerBtn).not.toBeNull();
     await act(async () => {
-      fdmOption!.click();
+      multilayerBtn!.click();
     });
 
     const applyBtn = findElement(
@@ -970,25 +994,48 @@ describe("Task 18 MeshDomainSpecs, l_ex guard, FemMeshReadinessGuide and FDM tre
       applyBtn!.click();
     });
 
-    // Confirm modal prompts before switching discretization lane
-    const confirmSwitchBtn = findElements(
-      document.body,
-      (el) =>
-        el.tagName === "BUTTON" &&
-        Boolean(el.textContent?.includes("Switch to FDM")),
-    )[0];
-    if (confirmSwitchBtn) {
-      await act(async () => {
-        confirmSwitchBtn.click();
-      });
-    }
+    expect(mocks.patchStudy).not.toHaveBeenCalled();
+    expect(mocks.commitTransaction).toHaveBeenCalledTimes(1);
 
-    expect(mocks.patchStudy).toHaveBeenCalledTimes(1);
-    expect(mocks.patchStudy).toHaveBeenCalledWith(
-      { requested_backend: "fdm" },
-      expect.anything(),
+    // FEM session: read-only Session method, no editable FDM Grid / FEM Mesh toggle, ONLY FEM controls
+    mocks.discretization = "fem";
+    await act(async () => {
+      harness.root.render(
+        createElement(
+          InspectorEditSessionProvider,
+          null,
+          createElement(MeshRootInspectorSpecPanel, {
+            selection: {
+              kind: "mesh.root",
+              label: "Mesh",
+              moduleSource: "explorer",
+              nodeId: "model:mesh:fem",
+              objectId: null,
+              ref: null,
+            },
+          }),
+        ),
+      );
+    });
+
+    expect(harness.container.textContent).toContain("Session method");
+    expect(harness.container.textContent).toContain("FEM (Unstructured Mesh)");
+    expect(harness.container.textContent).toContain(
+      "Global FEM sizing & narrow-region resolution",
     );
-    expect(mocks.patchStudy.mock.calls[0]?.[0]).not.toHaveProperty("discretization");
-    expect(mocks.invalidate).toHaveBeenCalled();
+    expect(harness.container.textContent).toContain("Load Effective Defaults");
+    expect(harness.container.textContent).not.toContain("Global FDM grid sizing");
+    expect(harness.container.textContent).not.toContain("Z-stack mode");
+    expect(
+      findElements(
+        harness.container,
+        (el) =>
+          el.tagName === "BUTTON" &&
+          Boolean(
+            el.textContent?.includes("FDM Grid") ||
+              el.textContent?.includes("FEM Mesh"),
+          ),
+      ),
+    ).toHaveLength(0);
   });
 });

@@ -43,6 +43,10 @@ import {
 } from "@/kernel/resources/geometryLifecycleResources";
 import type { ResourceKey } from "@/kernel/resources/resourceTypes";
 import {
+  resolveSessionAuthoringDiscretization,
+  resolveSessionDiscretization,
+} from "@/kernel/resources/sessionDiscretization";
+import {
   sessionRequestScopeKey,
   type SessionResourceIdentity,
 } from "@/kernel/resources/sessionResourceIdentity";
@@ -124,6 +128,7 @@ export const RESOURCE_KEYS = {
 export interface TransportSessionSnapshot {
   readonly sessionScopeKey: string | null;
   readonly capabilities: TransportAuthoringCapabilityMap | null;
+  readonly sessionDiscretization: "fdm" | "fem" | null;
   readonly hasLiveSessionStatus: boolean;
   readonly probeElement: ReactNode;
 }
@@ -134,16 +139,23 @@ function LiveSessionStatusProbe({
   onChange: (
     identity: SessionResourceIdentity | null,
     capabilities: TransportAuthoringCapabilityMap | null,
+    sessionDiscretization: "fdm" | "fem" | null,
   ) => void;
 }) {
   const identity = useSessionResourceIdentity();
   const capabilities = useSessionStatusSelector(
-    (status) => status.data?.capabilities.transport_authoring ?? null,
+    (status) => status.data?.capabilities?.transport_authoring ?? null,
+    { enabled: true },
+  );
+  const sessionDiscretization = useSessionStatusSelector(
+    (status) =>
+      resolveSessionDiscretization(status.data) ??
+      resolveSessionAuthoringDiscretization(status.data),
     { enabled: true },
   );
   useLayoutEffect(() => {
-    onChange(identity, capabilities);
-  }, [capabilities, identity, onChange]);
+    onChange(identity, capabilities, sessionDiscretization);
+  }, [capabilities, identity, onChange, sessionDiscretization]);
   return null;
 }
 
@@ -159,10 +171,12 @@ export function useTransportSessionContext(): TransportSessionSnapshot {
   const [probeState, setProbeState] = useState<{
     identity: SessionResourceIdentity | null;
     capabilities: TransportAuthoringCapabilityMap | null;
+    sessionDiscretization: "fdm" | "fem" | null;
     populated: boolean;
   }>({
     identity: null,
     capabilities: null,
+    sessionDiscretization: null,
     populated: false,
   });
 
@@ -170,16 +184,23 @@ export function useTransportSessionContext(): TransportSessionSnapshot {
     (
       identity: SessionResourceIdentity | null,
       capabilities: TransportAuthoringCapabilityMap | null,
+      sessionDiscretization: "fdm" | "fem" | null,
     ) => {
       setProbeState((prev) => {
         if (
           prev.populated &&
+          prev.sessionDiscretization === sessionDiscretization &&
           JSON.stringify(prev.identity) === JSON.stringify(identity) &&
           JSON.stringify(prev.capabilities) === JSON.stringify(capabilities)
         ) {
           return prev;
         }
-        return { identity, capabilities, populated: true };
+        return {
+          identity,
+          capabilities,
+          sessionDiscretization,
+          populated: true,
+        };
       });
     },
     [],
@@ -193,6 +214,7 @@ export function useTransportSessionContext(): TransportSessionSnapshot {
   return {
     sessionScopeKey: derivedScopeKey,
     capabilities: probeState.capabilities,
+    sessionDiscretization: probeState.sessionDiscretization,
     hasLiveSessionStatus: canSubscribeStatus,
     probeElement: canSubscribeStatus ? (
       <LiveSessionStatusProbe onChange={handleProbeChange} />

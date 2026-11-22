@@ -228,6 +228,21 @@ interface StudyExecutionDraft {
   sessionDiscretization: string | null;
 }
 
+function resolveLockedSessionDiscretization(
+  draft: Pick<StudyExecutionDraft, "discretization" | "sessionDiscretization">,
+): "fdm" | "fem" | null {
+  if (
+    draft.sessionDiscretization === "fem" ||
+    draft.sessionDiscretization === "fdm"
+  ) {
+    return draft.sessionDiscretization;
+  }
+  if (draft.discretization === "fem" || draft.discretization === "fdm") {
+    return draft.discretization;
+  }
+  return null;
+}
+
 function isExplicitFdmDraft(draft: StudyExecutionDraft): boolean {
   return isExplicitFdmStudy({
     requestedBackend: draft.executionProfileBound ? null : draft.discretization,
@@ -1386,10 +1401,12 @@ function parseVector3Text(
 function StudyExecutionProfileRadixCard({
   onApplyAssignment,
   sceneData,
+  sessionDiscretization,
   stages,
 }: {
   onApplyAssignment: (assignment: StudyExecutionProfileAssignment) => Promise<boolean>;
   sceneData: SceneResource | null;
+  sessionDiscretization: string | null;
   stages: readonly unknown[];
 }) {
   const resource = useExecutionProfilesResource();
@@ -1497,25 +1514,15 @@ function StudyExecutionProfileRadixCard({
       {draft.profile !== null ? (
         <div className="grid gap-1.5 border-t border-fm-border-subtle pt-2">
           <div className="fm-inspector-row" data-layout="inline">
-            <span className="fm-inspector-row__label">Backend override</span>
+            <span className="fm-inspector-row__label">Discretization</span>
             <div className="fm-inspector-row__control">
-              <Select
-                value={draft.overrides.backend || "__inherit__"}
-                onValueChange={(v) =>
-                  setOverride("backend", v === "__inherit__" ? "" : v)
-                }
-              >
-                <SelectTrigger aria-label="Backend override" density="compact">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="__inherit__">Inherit</SelectItem>
-                  <SelectItem value="auto">Auto</SelectItem>
-                  <SelectItem value="fdm">FDM</SelectItem>
-                  <SelectItem value="fem">FEM</SelectItem>
-                  <SelectItem value="hybrid">Hybrid</SelectItem>
-                </SelectContent>
-              </Select>
+              <span className="text-xs text-fm-secondary">
+                {sessionDiscretization === "fem"
+                  ? "FEM (Session)"
+                  : sessionDiscretization === "fdm"
+                    ? "FDM (Session)"
+                    : "Inherited from session"}
+              </span>
             </div>
           </div>
 
@@ -1728,13 +1735,15 @@ function ConnectedStudyExecutionInspectorPanel({
           : "auto";
     const rawDisc = globalDraft.requestedBackend.toLowerCase();
     const discretization: StudyExecutionDraft["discretization"] =
-      rawDisc === "fem"
-        ? "fem"
-        : rawDisc === "fdm"
-          ? "fdm"
-          : rawDisc === "hybrid"
-            ? "hybrid"
-            : "auto";
+      sessionDiscretization === "fem" || sessionDiscretization === "fdm"
+        ? sessionDiscretization
+        : rawDisc === "fem"
+          ? "fem"
+          : rawDisc === "fdm"
+            ? "fdm"
+            : rawDisc === "hybrid"
+              ? "hybrid"
+              : "auto";
     const precision: StudyExecutionDraft["precision"] =
       globalDraft.requestedPrecision === "single" ? "single" : "double";
     const qualificationMode: StudyExecutionDraft["qualificationMode"] =
@@ -1944,10 +1953,18 @@ function ConnectedStudyExecutionInspectorPanel({
       onApplyProfile={commitExecutionProfile}
       onCommitExecution={(draft) => {
         const explicitFdm = isExplicitFdmDraft(draft);
-        return commitGlobalDraft((base) => ({
-          ...base,
-          requestedBackend: draft.discretization,
-          requestedDevice: draft.requestedDevice,
+        return commitGlobalDraft((base) => {
+          const baseBackend = base.requestedBackend.trim().toLowerCase();
+          const preservedBackend =
+            sessionDiscretization === "fdm" || sessionDiscretization === "fem"
+              ? baseBackend === "auto"
+                ? "auto"
+                : sessionDiscretization
+              : base.requestedBackend;
+          return {
+            ...base,
+            requestedBackend: preservedBackend,
+            requestedDevice: draft.requestedDevice,
           requestedPrecision: draft.precision,
           requestedMode: draft.qualificationMode,
           exchangeEnabled: draft.exchangeEnabled,
@@ -2052,7 +2069,8 @@ function ConnectedStudyExecutionInspectorPanel({
             energyTolerance: String(draft.defaultEnergyToleranceJ),
             maxRelaxSteps: String(draft.defaultMaxRelaxSteps),
           },
-        }));
+          };
+        });
       }}
     />
   );
@@ -2184,14 +2202,10 @@ function StudyExecutionInspectorPanelView({
       },
       facts: (draft): readonly InspectorFact[] => {
         const resolved = resolveEffectiveDeviceDisplay(draft);
-        const discLabel =
-          draft.discretization === "auto"
-            ? isExplicitFdmDraft(draft)
-              ? "Auto → FDM"
-              : draft.sessionDiscretization === "fem"
-                ? "Auto → FEM"
-                : "Auto"
-            : draft.discretization.toUpperCase();
+        const lockedDisc = resolveLockedSessionDiscretization(draft);
+        const discLabel = lockedDisc
+          ? lockedDisc.toUpperCase()
+          : draft.discretization.toUpperCase();
         return [
           { id: "disc", label: "Discretization", value: discLabel },
           {
@@ -2275,12 +2289,13 @@ function StudyExecutionInspectorPanelView({
         }
         if (
           draft.parallelMode === "adaptive" &&
-          (draft.discretization !== "fem" || draft.requestedDevice !== "cpu")
+          (resolveLockedSessionDiscretization(draft) !== "fem" ||
+            draft.requestedDevice !== "cpu")
         ) {
           list.push({
             id: "adaptive-pool-lane",
             tone: "err",
-            text: "Adaptive worker pool requires explicit FEM discretization on CPU.",
+            text: "Adaptive worker pool requires an FEM session on CPU.",
             quickFix: {
               label: "Switch to Serial",
               onApply: (ctx) => ctx.setField("parallelMode", "serial"),
@@ -2305,6 +2320,7 @@ function StudyExecutionInspectorPanelView({
                     render: () => (
                       <StudyExecutionProfileRadixCard
                         sceneData={sceneData}
+                        sessionDiscretization={baseline.sessionDiscretization}
                         stages={stageDrafts}
                         onApplyAssignment={onApplyProfile}
                       />
@@ -2320,24 +2336,24 @@ function StudyExecutionInspectorPanelView({
           icon: Cpu,
           modeTabId: "hardware",
           defaultOpen: true,
-          summary: (d) =>
-            `${d.discretization.toUpperCase()} · ${resolveEffectiveDeviceDisplay(d).factValue}`,
+          summary: (d) => {
+            const lockedDisc = resolveLockedSessionDiscretization(d);
+            const discSummary = lockedDisc
+              ? lockedDisc.toUpperCase()
+              : d.discretization.toUpperCase();
+            return `${discSummary} · ${resolveEffectiveDeviceDisplay(d).factValue}`;
+          },
           rows: [
             {
-              key: "discretization",
               label: "Discretization",
-              type: "segmented",
-              structural: true,
-              disabledReason: (d) =>
-                d.executionProfileBound
-                  ? "Managed by bound execution profile."
-                  : null,
-              options: [
-                { value: "auto", label: "Auto" },
-                { value: "fdm", label: "FDM" },
-                { value: "fem", label: "FEM" },
-                { value: "hybrid", label: "Hybrid" },
-              ],
+              type: "readonly",
+              hint: "Assigned by the session simulation mode",
+              format: (d) => {
+                const lockedDisc = resolveLockedSessionDiscretization(d);
+                if (lockedDisc === "fem") return "FEM (Session)";
+                if (lockedDisc === "fdm") return "FDM (Session)";
+                return `${d.discretization.toUpperCase()} (Session)`;
+              },
             },
             {
               key: "requestedDevice",
@@ -2957,15 +2973,6 @@ function StudyExecutionInspectorPanelView({
       ],
       commitBar: {
         mode: "staged",
-        confirmApply: (draft, base) =>
-          draft.discretization !== base.discretization
-            ? {
-                title: `Switch discretization to ${draft.discretization.toUpperCase()}?`,
-                description:
-                  "Existing mesh or grid artifacts stay in session history, and the new discretization lane will be evaluated before computing.",
-                confirmLabel: "Switch discretization",
-              }
-            : null,
         onApply: async (draft) => {
           if (onCommitExecution) {
             return onCommitExecution(draft);
@@ -2976,6 +2983,7 @@ function StudyExecutionInspectorPanelView({
     }),
     [
       baseline.executionProfileBound,
+      baseline.sessionDiscretization,
       canSubscribeResources,
       globalDraftForPreview,
       lastAuthoringError,
