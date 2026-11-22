@@ -1,4 +1,4 @@
-"""Finalize only the historical pre-main libcuda loader refusal.
+"""Finalize known native cancellation failures with no durable side effects.
 
 The original request and unknown receipt remain unchanged. Only a technical
 terminal is published by exec in the authenticated original control helper;
@@ -23,11 +23,23 @@ from docker_volume_linux_supervision_stop import sha
 
 PHASE = 'cancel-failed-no-spawn'
 CONTROLLER_SHA256 = 'fb2ec6859577b06663677f654c72fd0dab727a90c5461f17a8647636810ecfca'
+WRITER_BUSY_CONTROLLER_SHA256 = '906969a3bccf9f2354640c15847cf7d9222cbc5085116706e7c0fbe6f20982f6'
 LOADER_ERROR = ('Native cancellation outcome requires receipt inspection; do not retry: Traceback (most recent call last):\n'
                 '  File "<string>", line 32, in <module>\n'
                 'RuntimeError: native cancellation did not complete: /opt/fullmag/package/bin/fullmag-runtime-service: '
                 'error while loading shared libraries: libcuda.so.1: cannot open shared object file: No such file or directory')
 SCHEMA = 'fullmag.docker-no-spawn-loader-reconciliation.v1'
+LOADER_REASON = 'exact-loader-refusal-before-native-main'
+WRITER_BUSY_REASON = 'store-writer-contention-with-unchanged-admission'
+WRITER_BUSY_ERROR = re.compile(
+    r'Native cancellation outcome requires receipt inspection; do not retry: Traceback \(most recent call last\):\n'
+    r'  File "<string>", line 43, in <module>\n'
+    r'RuntimeError: native cancellation did not complete: native runtime service failed: '
+    r'session store writer is busy: root=`/state/runs/docker-all/session-store`, conflict=native descriptor, '
+    r'observed_owner_pid=[1-9][0-9]*, observed_owner_acquired_at='
+    r'[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2}(?:\.[0-9]{1,9})? UTC, '
+    r'observed_owner_released=true: session store writer is busy'
+)
 
 
 def require(value, message):
@@ -39,6 +51,14 @@ def obj(raw):
     from docker_volume_linux_supervision_stop import decode
     require(isinstance(raw, bytes) and len(raw) <= 16 * 1024 * 1024, 'record exceeds bound')
     return decode(raw)
+
+
+def failure_kind(receipt):
+    if receipt.get('error') == LOADER_ERROR:
+        return LOADER_REASON, CONTROLLER_SHA256
+    if WRITER_BUSY_ERROR.fullmatch(receipt.get('error', '')):
+        return WRITER_BUSY_REASON, WRITER_BUSY_CONTROLLER_SHA256
+    raise ValueError('No-spawn reconciliation: unsupported native failure')
 
 
 def validate_receipt(control, raw, *, attempt, receipt_sha256, request_raw, selected, backend_id, image_id):
@@ -53,13 +73,13 @@ def validate_receipt(control, raw, *, attempt, receipt_sha256, request_raw, sele
     require(receipt.get('control_namespace', '') == control.namespace
             and receipt.get('namespace_registry_sha256') == control.namespace_registry_sha256, 'namespace differs')
     require(receipt.get('helper_container') == 'fullmag-control-' + attempt, 'helper name differs')
-    require(receipt.get('error') == LOADER_ERROR, 'only the exact historical loader refusal is supported')
+    _, controller_sha256 = failure_kind(receipt)
     inputs = receipt.get('inputs', {})
     expected = {'source_root': str(selected), 'request_sha256': sha(request_raw),
                 'backend_container_id': backend_id, 'image_id': image_id}
     require(all(inputs.get(k) == v for k, v in expected.items()), 'original request/backend/source/image differs')
     executor = inputs.get('executor', {})
-    require(executor.get('controller_sha256') == CONTROLLER_SHA256
+    require(executor.get('controller_sha256') == controller_sha256
             and executor.get('source_root') == str(selected)
             and isinstance(executor.get('commit'), str) and re.fullmatch('[0-9a-f]{40}', executor['commit']),
             'original controller executor is not the supported version')
@@ -70,7 +90,7 @@ def inventory_snapshot(store, ledger, owner_root, request, before, *, proc_root=
     """Caller holds existing OWNER, ledger WRITER and store WRITER locks.
 
     Pin every target-run file, including its catalogue and full coordinator
-    journal. A loader refusal can never create an execution or Stop record.
+    journal. An execution or Stop record prevents technical finalization.
     """
     # These names also exist in the self-contained readonly guest script.
     from pathlib import Path
@@ -108,7 +128,7 @@ def inventory_snapshot(store, ledger, owner_root, request, before, *, proc_root=
             and sha(canonical(lease)) == request['lease_sha256'], 'original active lease changed')
     document = decode(read(ledger / 'HOST_RESOURCE_LEDGER.json'))
     rows = [row for row in document.get('reservations', []) if row.get('identity') == identity]
-    require(len(rows) == 1 and rows[0] == before['reservation'] and rows[0].get('state') == 'committed'
+    require(len(rows) == 1 and rows[0] == before['reservation'] and rows[0].get('state') in {'committed', 'tentative'}
             and rows[0].get('worker_launch_gate') == {'state': 'pending'}
             and sha(canonical(rows[0])) == request['reservation_sha256'], 'original pending host reservation changed')
     require(not [row for row in document.get('reservations', []) if row.get('state') != 'released'
@@ -119,7 +139,41 @@ def inventory_snapshot(store, ledger, owner_root, request, before, *, proc_root=
             'target task is no longer the original preparing claim')
     claims = []
     command_files = [p for p in inventory['files'] if p.startswith('coordinator_journal/command/')]
-    require(len(command_files) == 2, 'original claim must retain exactly Prepare and Start')
+    event_files = [p for p in inventory['files'] if p.startswith('coordinator_journal/event/')]
+    if rows[0]['state'] == 'tentative':
+        require(not command_files and not event_files, 'tentative admission gained a coordinator record')
+        path = run / 'task_admissions' / identity['task_id'] / (identity['owner']['attempt_id'] + '.json')
+        admission = decode(read(path))
+        task = tasks[0]
+        genesis = task.get('coordinator_genesis')
+        watermark = task.get('coordinator_watermark')
+        if genesis is not None:
+            checkpoint = genesis.get('checkpoint', {})
+            require(watermark == {'command_sequence': 0, 'event_sequence': 0}
+                    and checkpoint.get('command_sequence') == checkpoint.get('event_sequence') == 0
+                    and checkpoint.get('claim') == before['claim']
+                    and checkpoint.get('task', {}).get('lifecycle') == 'preparing'
+                    and sha(canonical(checkpoint)) == genesis.get('checkpoint_sha256')
+                    and all(genesis.get(key) == identity[key] for key in ('run_id', 'task_id', 'lease_token'))
+                    and all(genesis.get(key) == identity['owner'][key] for key in ('attempt_id', 'ownership_epoch'))
+                    and genesis.get('lease_heartbeat_sequence') == lease['heartbeat_sequence'],
+                    'tentative admission coordinator advanced beyond matching genesis')
+        else:
+            require(watermark is None, 'tentative admission has a watermark without genesis')
+        original_task = {key: value for key, value in task.items()
+                         if key not in {'coordinator_genesis', 'coordinator_watermark'}}
+        require(admission.get('schema_version') == 'task_admission.v1'
+                and admission.get('task') == original_task and admission.get('lease') == lease,
+                'original immutable task admission changed')
+        claims = [dict(run_id=identity['run_id'], task_id=identity['task_id'],
+                       attempt_id=identity['owner']['attempt_id'],
+                       ownership_epoch=identity['owner']['ownership_epoch'],
+                       lease={key: lease[key] for key in ('resource_id', 'kind', 'budget', 'lease_token',
+                                                         'heartbeat_sequence')})]
+        require(claims == [before['claim']] and sha(canonical(claims[0])) == request['claim_sha256'],
+                'original pre-Prepare claim changed')
+    else:
+        require(len(command_files) == 2, 'original claim must retain exactly Prepare and Start')
     kinds = []
     for relative in command_files:
         entry = decode(read(run / relative))
@@ -130,14 +184,14 @@ def inventory_snapshot(store, ledger, owner_root, request, before, *, proc_root=
         claim = transition.get('checkpoint', {}).get('claim')
         if claim not in claims:
             claims.append(claim)
-    require(sorted(kinds) == ['prepare', 'start'] and claims == [before['claim']]
-            and sha(canonical(claims[0])) == request['claim_sha256'], 'original Prepare/Start claim changed or Stop appeared')
-    event_files = [p for p in inventory['files'] if p.startswith('coordinator_journal/event/')]
-    require(len(event_files) == 1, 'original claim has additional or missing worker events')
-    event = decode(read(run / event_files[0]))
-    require(event.get('task_id') == identity['task_id'] and event.get('attempt_id') == identity['owner']['attempt_id']
-            and event.get('payload', {}).get('message', {}).get('envelope', {}).get('event', {}).get('kind') == 'prepared',
-            'original Prepared event changed or worker execution event appeared')
+    if rows[0]['state'] == 'committed':
+        require(sorted(kinds) == ['prepare', 'start'] and claims == [before['claim']]
+                and sha(canonical(claims[0])) == request['claim_sha256'], 'original Prepare/Start claim changed or Stop appeared')
+        require(len(event_files) == 1, 'original claim has additional or missing worker events')
+        event = decode(read(run / event_files[0]))
+        require(event.get('task_id') == identity['task_id'] and event.get('attempt_id') == identity['owner']['attempt_id']
+                and event.get('payload', {}).get('message', {}).get('envelope', {}).get('event', {}).get('kind') == 'prepared',
+                'original Prepared event changed or worker execution event appeared')
     return {'run_inventory': inventory, 'owner_sha256': sha(owner_raw),
             'config_sha256': sha(canonical(config)), 'process_receipt_sha256': sha(process_raw),
             'lease_sha256': sha(canonical(lease)), 'reservation_sha256': sha(canonical(rows[0])),
@@ -314,6 +368,12 @@ def reconcile(control, *, attempt, receipt_sha256, request_raw, selected, backen
     original = control.read_bytes(root + '/receipt.json')
     receipt = validate_receipt(control, original, attempt=attempt, receipt_sha256=receipt_sha256,
         request_raw=request_raw, selected=selected, backend_id=backend_id, image_id=image_id)
+    reason, _ = failure_kind(receipt)
+    if reason == WRITER_BUSY_REASON:
+        require(before['reservation']['state'] == 'tentative', 'writer contention requires the original tentative admission')
+        effects = 'none-observed; original claim and Active/Tentative/Pending retained'
+    else:
+        effects = 'none-observed; original claim and Active/Committed/Pending retained'
     request = obj(request_raw)
     existing = control.read_bytes(root + '/terminal.json', optional=True)
     if existing is not None:
@@ -324,12 +384,12 @@ def reconcile(control, *, attempt, receipt_sha256, request_raw, selected, backen
                 and terminal.get('state') == 'failed-confirmed'
                 and set(proof) == {'schema', 'reason', 'original_receipt_sha256', 'request_sha256',
                     'original_helper', 'protected_target_run', 'native_effects', 'native_exit_status'}
-                and proof.get('schema') == SCHEMA and proof.get('reason') == 'exact-loader-refusal-before-native-main'
+                and proof.get('schema') == SCHEMA and proof.get('reason') == reason
                 and proof.get('original_receipt_sha256') == receipt_sha256
                 and proof.get('request_sha256') == sha(request_raw)
                 and proof.get('native_exit_status') == 'not-recorded'
-                and proof.get('native_effects') == 'none-observed; original claim and Active/Committed/Pending retained',
-                'existing technical terminal is not this exact loader reconciliation')
+                and proof.get('native_effects') == effects,
+                'existing technical terminal is not this exact reconciliation')
         require(control.read_bytes(root + '/request.json') == request_raw
                 and control.read_bytes(root + '/native-result.json', optional=True) is None
                 and observe() == before
@@ -360,19 +420,20 @@ def reconcile(control, *, attempt, receipt_sha256, request_raw, selected, backen
         require(control.read_bytes(root + '/terminal.json', optional=True) is None
                 and control.read_bytes(root + '/native-result.json', optional=True) is None,
                 'terminal or native result already exists; do not repeat')
-        require(observe() == before, 'native state changed since the pinned pre-main loader refusal')
+        require(observe() == before, 'native state changed since the pinned failure')
     check()
     helper = authenticate_helper(control, receipt)
     inventory = capture_inventory(backend_id, request, before)
     terminal = {**receipt, 'state': 'failed-confirmed', 'reconciliation': {
-        'schema': SCHEMA, 'reason': 'exact-loader-refusal-before-native-main',
+        'schema': SCHEMA, 'reason': reason,
         'original_receipt_sha256': receipt_sha256, 'request_sha256': sha(request_raw),
         'original_helper': helper, 'protected_target_run': inventory,
-        'native_effects': 'none-observed; original claim and Active/Committed/Pending retained',
+        'native_effects': effects,
         'native_exit_status': 'not-recorded'}, 'finished_at': time.time()}
     terminal_raw = canonical(terminal) + b'\n'
     if not apply:
-        return {'state': 'preview-loader-failure-no-mutation', 'attempt': attempt,
+        state = 'preview-loader-failure-no-mutation' if reason == LOADER_REASON else 'preview-writer-contention-no-mutation'
+        return {'state': state, 'attempt': attempt,
                 'terminal_sha256': sha(terminal_raw), 'protected_inventory_sha256': sha(canonical(inventory)),
                 'original_receipt_sha256': receipt_sha256, 'native_invoked': False}
     # The readonly backend guard serializes target-store changes until the

@@ -1118,6 +1118,48 @@ class DispatchTests(unittest.TestCase):
                     subject.retained_context(object(), {}, {}, b'{}', 'b' * 64, fresh_state,
                                              removed_container_proof=removed)
 
+    def test_completed_recreation_replays_pinned_linux_stop_with_removed_service_snapshots(self):
+        from types import SimpleNamespace
+        from unittest.mock import patch
+
+        backend, frontend, image = 'b' * 64, 'f' * 64, 'sha256:' + 'a' * 64
+        compose = {'name': 'fullmag-fixture'}
+        config_sha = subject.sha(subject.canonical(compose))
+        previous = dict(attempt='attempt', backend_container=backend, frontend_container=frontend,
+                        config_sha256=config_sha, state_root='/retained',
+                        inputs={'image_id': image, 'source_root': '/source'})
+        stop_probe = dict(process_receipt_sha256='1' * 64, owner_sha256='2' * 64,
+                          config_raw_sha256='3' * 64)
+        terminal_probe = dict(stop_probe, process_receipt_sha256='4' * 64)
+        stopped = dict(Running=False, Pid=0, OOMKilled=False, StartedAt='stopped-boot')
+        services = {'backend': {'Id': backend, 'State': stopped}, 'frontend': {'Id': frontend, 'State': stopped}}
+        proof = dict(schema='fullmag.docker-removed-recreation-container.v1',
+                     container_id=backend, frontend_container=frontend, image_id=image)
+        journal = dict(schema='fullmag.stop-failed-admission.v1', state='stopped-confirmed',
+                       failure_kind=subject.KIND, container_id=backend, image_id=image,
+                       source_root='/source', development_attempt='attempt', compose_config_sha256=config_sha,
+                       namespace_processes_absent=True, scope={}, terminal_only=True,
+                       service_pins={name: ['stopped-boot', service['Id']] for name, service in services.items()},
+                       supervision_probe=stop_probe, terminal_process_receipt_sha256='4' * 64,
+                       previous_config_sha256='3' * 64, cancellation={'proof': 'original'})
+        control = SimpleNamespace(project='fullmag-fixture',
+                                  read=lambda key: compose if key.endswith('compose.json') else previous)
+        journal_raw = subject.canonical(journal)
+        with patch('docker_build_control.docker_capture') as docker, \
+             patch('docker_volume_dev._retained_certificate'), \
+             patch('docker_volume_reconcile.fingerprint', side_effect=lambda service: service['Id']), \
+             patch.object(subject, '_probe', return_value=terminal_probe) as probe, \
+             patch.object(subject, 'cancellation', return_value=journal['cancellation']):
+            context = subject.retained_context(control, previous, journal, journal_raw, backend, False,
+                                               removed_container_proof=proof, retained_services=services)
+            self.assertEqual(context['previous_config_sha256'], '3' * 64)
+            probe.assert_called_once_with(control, services['backend'], image, stopped=True, terminal_only=True)
+            wrong = dict(services, frontend={'Id': 'c' * 64, 'State': stopped})
+            with self.assertRaisesRegex(ValueError, 'stopped service pin changed'):
+                subject.retained_context(control, previous, journal, journal_raw, backend, False,
+                                         removed_container_proof=proof, retained_services=wrong)
+            docker.assert_not_called()
+
 
 if __name__ == '__main__':
     unittest.main()

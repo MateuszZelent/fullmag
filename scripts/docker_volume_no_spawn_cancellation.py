@@ -76,7 +76,7 @@ def validate_request(request,probe,process_sha):
     for field in ('claim','lease','reservation'):
         require(sha(canonical(probe[field]))==request[field+'_sha256'],field+' changed')
     require(probe['reservation'].get('identity')==identity
-            and probe['reservation'].get('state')=='committed'
+            and probe['reservation'].get('state') in {'tentative', 'committed'}
             and probe['reservation'].get('worker_launch_gate')=={'state':'pending'}
             and probe['lease'].get('state')=='active','launch permit is not unused')
 

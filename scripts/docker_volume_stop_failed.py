@@ -1566,10 +1566,6 @@ def main():
         return 0
     if args.stop_frontend:
         raise BuildControlError('--stop-frontend requires the authenticated Linux OOM stop route')
-    log_result = docker_capture('logs','--since',actual['State']['StartedAt'],'--tail','100',args.container_id)
-    logs = (log_result.stdout + log_result.stderr).decode('utf-8','replace')
-    if 'Startup or runtime failed; admission closed:' not in logs:
-        raise BuildControlError('This backend incarnation has no confirmed failed-admission event')
     script='''import hashlib,json,pathlib,sys,os
 sys.path.insert(0,'/opt/fullmag')
 import runtime_service
@@ -1588,6 +1584,8 @@ print(json.dumps({'sha256':hashlib.sha256(raw).hexdigest(),'receipt':document,'a
     if (receipt.get('state') == 'failed_outcome_retained'
             and receipt.get('error') == SUPERVISION_FAILURE_ERROR
             and 'FULLMAG_SESSION_STORAGE_PROFILE=linux-native-v1' in actual.get('Config', {}).get('Env', [])):
+        # The retained stop revalidates the exact native receipt and
+        # cancellation proof. Its diagnostic API can outlast the log tail.
         from docker_volume_linux_supervision_stop import stop as stop_linux_supervision
         result = stop_linux_supervision(args, selected, identity, actual)
         print(json.dumps({'state': result['state'], 'failure_kind': result['failure_kind'],
@@ -1595,6 +1593,10 @@ print(json.dumps({'sha256':hashlib.sha256(raw).hexdigest(),'receipt':document,'a
         return
     if args.terminal_only:
         raise BuildControlError('Terminal-only stop requires the pinned Linux supervision failure')
+    log_result = docker_capture('logs','--since',actual['State']['StartedAt'],'--tail','100',args.container_id)
+    logs = (log_result.stdout + log_result.stderr).decode('utf-8','replace')
+    if 'Startup or runtime failed; admission closed:' not in logs:
+        raise BuildControlError('This backend incarnation has no confirmed failed-admission event')
     if (receipt.get('state') == 'failed_outcome_retained' and 'service_owner' in receipt
             and receipt.get('error') == SUPERVISION_FAILURE_ERROR
             and 'FULLMAG_SESSION_STORAGE_PROFILE=windows-folder-v1' in actual.get('Config', {}).get('Env', [])):

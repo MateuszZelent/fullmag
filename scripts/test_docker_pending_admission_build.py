@@ -39,6 +39,18 @@ class PendingAdmissionBuildTests(unittest.TestCase):
         repair.validate_pending_build_snapshot(pin,ledger,observed)
         self.assertEqual((pin,ledger,observed),before)
 
+    def test_tentative_admission_requires_its_own_exact_pin(self):
+        pin, ledger, observed = fixture()
+        ledger['reservations'][0]['state'] = 'tentative'
+        with self.assertRaisesRegex(ValueError, 'reservation/gate changed'):
+            repair.validate_pending_build_snapshot(pin, ledger, observed)
+        identity = pin['identity']
+        paths = {role: Path(value['path']) for role, value in pin['files'].items()}
+        tentative = collector.make_pending_build_pin(
+            ledger, paths, observed, identity['run_id'], identity['task_id'],
+        )
+        repair.validate_pending_build_snapshot(tentative, ledger, observed)
+
     def test_consumed_closed_extra_and_released_reservations_refuse(self):
         for mode in ('consumed','closed','released','extra'):
             pin,ledger,observed=fixture();row=ledger['reservations'][0]

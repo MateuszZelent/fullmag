@@ -1445,7 +1445,7 @@ impl HostRuntimeAdmission {
         for reservation in &snapshot.reservations {
             let identity = &reservation.identity;
             if identity.store_id != store_id
-                || reservation.state != HostResourceReservationState::Committed
+                || !matches!(reservation.state, HostResourceReservationState::Tentative | HostResourceReservationState::Committed)
                 || !matches!(&identity.owner, HostReservationOwner::Solver { .. })
                 || !matches!(
                     &reservation.worker_launch_gate,

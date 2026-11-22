@@ -1577,7 +1577,7 @@ impl HostResourceLedger {
             .iter()
             .find(|reservation| &reservation.identity == identity)
             .context("cancelled worker recovery has no exact host reservation")?;
-        if reservation.state != HostResourceReservationState::Committed
+        if !matches!(reservation.state, HostResourceReservationState::Tentative | HostResourceReservationState::Committed)
             || reservation.worker_launch_gate != Some(HostWorkerLaunchGate::Closed)
         {
             return Ok(false);
@@ -12266,6 +12266,41 @@ mod tests {
             .unwrap_err();
         assert!(error.downcast_ref::<WorkerLaunchFencedByStop>().is_some());
         assert!(!fixture.ledger.worker_has_pending_launch(&fixture.store, &fixture.lease).unwrap());
+    }
+
+    #[test]
+    fn tentative_worker_can_be_released_without_spawning() {
+        let fixture = v4_worker_launch_fixture("tentative-worker-close-before-launch");
+        let mut document = fixture.ledger.read_document_locked().unwrap();
+        let reservation = document
+            .reservations
+            .iter_mut()
+            .find(|reservation| reservation.identity == fixture.request.identity)
+            .unwrap();
+        reservation.state = HostResourceReservationState::Tentative;
+        fixture.ledger.publish_document_locked(&document).unwrap();
+        assert!(fixture
+            .ledger
+            .authorize_worker_launch(&fixture.store, &fixture.lease)
+            .is_err());
+        fixture
+            .ledger
+            .close_worker_launch_before_spawn(&fixture.store, &fixture.lease)
+            .unwrap();
+
+        let mut catalog = fixture.store.read_run_catalog(&fixture.lease.run_id).unwrap().unwrap();
+        catalog.revision += 1;
+        catalog.updated_at = chrono::Utc::now();
+        catalog.tasks[0].lifecycle = crate::FmsTaskLifecycle::Cancelled;
+        fixture.store.commit_run_catalog(&catalog).unwrap();
+        assert!(fixture.ledger
+            .reconcile_closed_cancelled_worker(&fixture.store, &fixture.request.identity)
+            .unwrap());
+        let released = fixture.ledger
+            .release_worker_without_spawn(&fixture.store, &fixture.request.identity)
+            .unwrap();
+        assert_eq!(released.state, HostResourceReservationState::Released);
+        assert_eq!(released.worker_launch_gate, Some(HostWorkerLaunchGate::Closed));
     }
 
     #[test]
