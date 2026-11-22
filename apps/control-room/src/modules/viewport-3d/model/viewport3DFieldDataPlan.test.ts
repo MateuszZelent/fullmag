@@ -1128,6 +1128,29 @@ describe("viewport3DFieldDataPlan", () => {
     }
   });
 
+  it("requests a complete carrier owned by the conductor even when the same quantity is primary", () => {
+    const plan = resolveViewport3DTargetQuantityFieldDemandPlan({
+      availableQuantityIds: new Set(["J_charge"]),
+      fdmSettings: null,
+      fdmTargetSettings: [{
+        label: "Beta W",
+        objectScopeId: "beta_w",
+        settings: { ...DEFAULT_OBJECT_VISUALIZATION, activeQuantityId: "J_charge",
+          shaderVisible: false, vectorsVisible: true, visible: true },
+        targetId: "object:beta_w",
+      }],
+      getPartSettings: () => DEFAULT_OBJECT_VISUALIZATION,
+      magneticPartScopedFieldIds: new Set(),
+      magneticParts: [],
+      maxVectorGlyphs: 256,
+      primaryFieldQuantityId: "J_charge",
+    });
+    expect([...plan.requests.values()]).toEqual([expect.objectContaining({
+      quantityId: "J_charge",
+      query: { component: "full", scope_kind: "object", scope_id: "beta_w" },
+    })]);
+  });
+
   it("keeps an advertised FDM Airbox H_eff request scoped when H_eff is also primary", () => {
     const fieldCatalog = {
       domain_generation_id: "fdm-terminal-generation",

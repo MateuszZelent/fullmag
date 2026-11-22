@@ -1,18 +1,20 @@
 import { describe, expect, it } from "vitest";
 
 import type { FdmRegionMembershipResource } from "@/kernel/api/apiTypes";
-import type { DecodedFieldVector } from "@/kernel/api/codecs";
+import { FMRM_INACTIVE_REGION_ID, type DecodedFieldVector } from "@/kernel/api/codecs";
 import { DEFAULT_OBJECT_VISUALIZATION } from "@/kernel/visualization/ObjectVisualizationController";
 
 import type { FdmCuboidInstanceModel } from "../layers/fdmCuboidBuildModel";
 import { buildViewport3DFdmInspectSample } from "../viewport3dInspect";
 import { buildViewport3DTargetFieldBuffer } from "./viewport3DTargetFieldBuffer";
 import {
+  buildFdmConductorTargetView,
   buildViewport3DFdmTargetSurfaceCellIndices,
   buildViewport3DFdmTargetViews,
   memoizeViewport3DFdmTargetRenderView,
   memoizeViewport3DFdmTargetSurfaceColors,
   memoizeViewport3DFdmSurfaceColors,
+  resolveFdmConductorRegionIds,
   type Viewport3DFdmTargetRenderView,
 } from "./viewport3DFdmTargetViews";
 
@@ -54,6 +56,27 @@ function model(regionIds: number[]): FdmCuboidInstanceModel {
     regionIds: Uint32Array.from(regionIds),
   };
 }
+
+it("builds conductor geometry only from an exact object-scoped field mapping", () => {
+  const field: DecodedFieldVector = {
+    dtype: "float64", grid: [2, 1, 1], indexing: "explicit_node_indices",
+    nComp: 1, nodeIndices: Uint32Array.of(1, 3), pointCount: 2,
+    quantityId: "V_electric", scopeKind: "object", scopeId: "beta_w",
+    valueCount: 2, values: Float64Array.of(1.2, 1.0),
+  };
+  const regionIds = resolveFdmConductorRegionIds(field, "beta_w", 4);
+  expect(regionIds).toEqual(Uint32Array.of(FMRM_INACTIVE_REGION_ID, 0, FMRM_INACTIVE_REGION_ID, 0));
+  expect(resolveFdmConductorRegionIds(field, "film", 4)).toBeNull();
+  expect(resolveFdmConductorRegionIds({ ...field, indexing: "sampled_node_indices" }, "beta_w", 4)).toBeNull();
+  expect(resolveFdmConductorRegionIds({ ...field, nodeIndices: Uint32Array.of(1, 4) }, "beta_w", 4)).toBeNull();
+  expect(resolveFdmConductorRegionIds({ ...field, nodeIndices: Uint32Array.of(1, 1) }, "beta_w", 4)).toBeNull();
+  const target = { id: "object:beta_w", kind: "object" as const };
+  const view = buildFdmConductorTargetView(target, {
+    ...model([0, 0]), cellIndices: Uint32Array.of(1, 3), gridShape: [4, 1, 1],
+  }, regionIds!);
+  expect(view.target).toBe(target);
+  expect(buildViewport3DFdmTargetSurfaceCellIndices(view)).toEqual(Uint32Array.of(1, 3));
+});
 
 describe("buildViewport3DFdmTargetViews", () => {
   it("does not promote geometry-only preview cells to realized target membership", () => {

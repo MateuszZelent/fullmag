@@ -299,6 +299,52 @@ export function buildViewport3DFdmTargetViews({
   return { reason: null, status: "ready", views };
 }
 
+export function resolveFdmConductorRegionIds(
+  field: DecodedFieldVector,
+  objectId: string,
+  gridCellCount: number,
+): Uint32Array | null {
+  const { nodeIndices, pointCount } = field;
+  if (
+    field.scopeKind !== "object" || field.scopeId !== objectId ||
+    field.indexing !== "explicit_node_indices" || !nodeIndices?.length ||
+    nodeIndices.length !== pointCount || pointCount > gridCellCount
+  ) return null;
+  const regionIds = new Uint32Array(gridCellCount).fill(FMRM_INACTIVE_REGION_ID);
+  for (const cell of nodeIndices) {
+    if (!Number.isSafeInteger(cell) || cell < 0 || cell >= gridCellCount ||
+        regionIds[cell] !== FMRM_INACTIVE_REGION_ID) return null;
+    regionIds[cell] = 0;
+  }
+  return regionIds;
+}
+
+export function buildFdmConductorTargetView(
+  target: VisualizationTargetRef,
+  sourceModel: FdmCuboidInstanceModel,
+  realizedRegionIds: Uint32Array,
+): Viewport3DFdmTargetView {
+  const instanceOrdinals = Uint32Array.from(sourceModel.cellIndices, (_cell, ordinal) => ordinal);
+  const surfaceInstanceOrdinals = resolveExactTargetSurfaceInstances({
+    instanceOrdinals,
+    model: sourceModel,
+    realizedRegionIds,
+    targetKind: "object",
+    targetId: target.id,
+    targetIdByNumericRegionId: new Map(),
+    ownerTargetIdByNumericRegionId: new Map(),
+    unassignedTargetId: target.id,
+  });
+  return {
+    cellIndices: sourceModel.cellIndices,
+    instanceOrdinals,
+    ownerTarget: target,
+    sourceModel,
+    surfaceInstanceOrdinals,
+    target,
+  };
+}
+
 export function memoizeViewport3DFdmTargetRenderView({
   build,
   fieldConsumersCompatible,

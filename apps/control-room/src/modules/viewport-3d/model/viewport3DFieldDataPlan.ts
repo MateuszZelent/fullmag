@@ -194,6 +194,7 @@ export interface Viewport3DTargetQuantityFieldRequestsOptions {
 
 export interface Viewport3DFdmTargetSettingsForPlanning {
   label: string;
+  objectScopeId?: string;
   settings: VisualizationTargetSettings;
   targetId: string;
 }
@@ -914,7 +915,7 @@ export function resolveViewport3DTargetQuantityFieldDemandPlan({
 
   for (const target of fdmTargetSettings) {
     if (
-      (target.targetId !== "airbox" && !target.settings.tensorProjection &&
+      (target.targetId !== "airbox" && !target.objectScopeId && !target.settings.tensorProjection &&
         sameViewport3DQuantityIdForPlanning(
           target.settings.activeQuantityId,
           primaryFieldQuantityId,
@@ -956,14 +957,8 @@ export function resolveViewport3DTargetQuantityFieldDemandPlan({
             target.targetId,
           ),
           replayQuery: selectedSnapshotQuery,
-          scopeId:
-            target.targetId === "airbox"
-              ? "airbox"
-              : null,
-          scopeKind:
-            target.targetId === "airbox"
-              ? "airbox"
-              : "full",
+          scopeId: target.objectScopeId ?? (target.targetId === "airbox" ? "airbox" : null),
+          scopeKind: target.objectScopeId ? "object" : target.targetId === "airbox" ? "airbox" : "full",
         },
       ),
     );
