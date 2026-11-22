@@ -132,6 +132,33 @@ export function InspectorSection<TDraft>({
   const SectionIcon = section.icon;
   const EmptyIcon = emptyState?.icon ?? SectionIcon;
 
+  if (section.flush) {
+    // A hosted workspace already draws its own groups; skip the section card
+    // and trigger so the panel keeps a single level of framing.
+    return (
+      <section
+        aria-label={section.title}
+        className="fm-inspector-section fm-inspector-section--flush"
+        data-section-id={section.id}
+        data-slot="inspector-section"
+      >
+        {matchedRows.map((row) => (
+          <PropertyRow
+            key={resolveStableRowKey(section.id, row)}
+            ctx={ctx}
+            externalError={row.key ? (invalidFields.get(row.key) ?? null) : null}
+            forceShowErrors={forceShowErrors}
+            liveRow={isLiveSection}
+            row={row}
+            touched={row.key ? touchedFields.has(row.key) : false}
+            onParseErrorChange={onParseErrorChange}
+            onTouchField={onTouchField}
+          />
+        ))}
+      </section>
+    );
+  }
+
   return (
     <Collapsible
       className="fm-inspector-section"

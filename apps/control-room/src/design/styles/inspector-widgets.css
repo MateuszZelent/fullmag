@@ -606,3 +606,185 @@
   text-align: center;
   pointer-events: none;
 }
+
+/* ── Child-inspector navigator (InspectorShortcutCards) ──
+   One hairline list; each row is a single button with a domain glyph, the
+   current value and a chevron.  No per-row card, no separate Open button. */
+.fm-shortcut-list {
+  display: grid;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.fm-shortcut-list__item + .fm-shortcut-list__item {
+  border-block-start: 1px solid var(--fm-border-subtle);
+}
+
+.fm-shortcut-list__row {
+  --fm-row-hue: var(--fm-accent);
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
+  align-items: center;
+  column-gap: var(--fm-space-2);
+  inline-size: 100%;
+  min-block-size: 40px;
+  padding: var(--fm-space-1) var(--fm-space-1);
+  border: 0;
+  border-radius: var(--fm-radius-sm);
+  background: transparent;
+  color: var(--fm-text-primary);
+  font: inherit;
+  text-align: start;
+  cursor: pointer;
+  transition: background-color var(--fm-duration-micro) var(--fm-ease-out-soft);
+}
+
+.fm-shortcut-list__row[data-domain="geometry"] { --fm-row-hue: var(--fm-hue-geometry); }
+.fm-shortcut-list__row[data-domain="material"] { --fm-row-hue: var(--fm-hue-material); }
+.fm-shortcut-list__row[data-domain="physics"] { --fm-row-hue: var(--fm-hue-physics); }
+.fm-shortcut-list__row[data-domain="study"] { --fm-row-hue: var(--fm-hue-study); }
+.fm-shortcut-list__row[data-domain="mesh"] { --fm-row-hue: var(--fm-hue-mesh); }
+.fm-shortcut-list__row[data-domain="visualization"] { --fm-row-hue: var(--fm-hue-visualization); }
+.fm-shortcut-list__row[data-domain="definition"] { --fm-row-hue: var(--fm-hue-definition); }
+
+.fm-shortcut-list__row:hover {
+  background: color-mix(in oklab, var(--fm-text-primary) 5%, transparent);
+}
+
+.fm-shortcut-list__row:focus-visible {
+  outline: 2px solid transparent;
+  box-shadow: var(--fm-focus-ring);
+}
+
+.fm-shortcut-list__icon {
+  display: grid;
+  inline-size: 26px;
+  block-size: 26px;
+  place-items: center;
+  border-radius: 8px;
+  background: color-mix(in oklab, var(--fm-row-hue) 13%, transparent);
+  color: var(--fm-row-hue);
+  transition: background-color var(--fm-duration-micro) var(--fm-ease-out-soft);
+}
+
+.fm-shortcut-list__row:hover .fm-shortcut-list__icon {
+  background: color-mix(in oklab, var(--fm-row-hue) 22%, transparent);
+}
+
+.fm-shortcut-list__copy {
+  display: grid;
+  min-width: 0;
+}
+
+.fm-shortcut-list__title {
+  overflow: hidden;
+  font-size: var(--fm-text-xs);
+  font-weight: var(--fm-font-weight-medium);
+  line-height: 1.3;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fm-shortcut-list__subtitle {
+  overflow: hidden;
+  color: var(--fm-text-muted);
+  font-size: var(--fm-text-xs);
+  line-height: 1.3;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fm-shortcut-list__value {
+  --fm-value-dot: var(--fm-text-muted);
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-inline-size: 11rem;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--fm-text-secondary);
+  font-size: var(--fm-text-xs);
+  font-variant-numeric: tabular-nums;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fm-shortcut-list__value[data-tone="ok"] { --fm-value-dot: var(--fm-success); }
+.fm-shortcut-list__value[data-tone="warn"] { --fm-value-dot: var(--fm-warning); color: var(--fm-warning-text); }
+.fm-shortcut-list__value[data-tone="err"] { --fm-value-dot: var(--fm-danger); color: var(--fm-danger-text); }
+.fm-shortcut-list__value[data-tone="info"] { --fm-value-dot: var(--fm-info); }
+
+.fm-shortcut-list__dot {
+  flex: none;
+  inline-size: 6px;
+  block-size: 6px;
+  border-radius: var(--fm-radius-pill);
+  background: var(--fm-value-dot);
+}
+
+.fm-shortcut-list__chevron {
+  color: var(--fm-text-muted);
+  transition:
+    color var(--fm-duration-micro) var(--fm-ease-out-soft),
+    translate var(--fm-duration-micro) var(--fm-ease-out-soft);
+}
+
+.fm-shortcut-list__row:hover .fm-shortcut-list__chevron {
+  color: var(--fm-text-primary);
+  translate: 2px 0;
+}
+
+/* Narrow Inspector: the value moves under the title so nothing is clipped. */
+@container inspector (max-width: 21rem) {
+  .fm-shortcut-list__row {
+    grid-template-columns: auto minmax(0, 1fr) auto;
+  }
+
+  .fm-shortcut-list__value {
+    grid-column: 2;
+    grid-row: 2;
+    max-inline-size: 100%;
+  }
+
+  .fm-shortcut-list__chevron {
+    grid-column: 3;
+    grid-row: 1 / span 2;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .fm-shortcut-list__row:hover .fm-shortcut-list__chevron {
+    translate: none;
+  }
+}
+
+/* ── Object extension toggles: hairline list instead of bordered boxes ── */
+.fm-extension-list {
+  display: grid;
+}
+
+.fm-extension-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--fm-space-3);
+  min-block-size: 44px;
+  padding: var(--fm-space-2) var(--fm-space-1);
+}
+
+.fm-extension-row + .fm-extension-row {
+  border-block-start: 1px solid var(--fm-border-subtle);
+}
+
+.fm-extension-row__hint {
+  margin: 0;
+  overflow: hidden;
+  color: var(--fm-text-muted);
+  font-size: var(--fm-text-xs);
+  line-height: 1.35;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  text-wrap: pretty;
+}

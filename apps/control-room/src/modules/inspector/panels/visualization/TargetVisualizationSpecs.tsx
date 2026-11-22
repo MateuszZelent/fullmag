@@ -277,12 +277,13 @@ function HostedVisualizationTemplateInner({
         entityId,
         statePill: () => statePill,
       },
-      facts: () => facts,
+      facts: () => facts ?? [],
       sections: [
         {
           id: "visualization-workspace",
           title: sectionTitle,
           icon,
+          flush: true,
           defaultOpen: true,
           rows: [
             {
@@ -1198,12 +1199,11 @@ export function AirboxVisualizationTemplatePanel({
         breadcrumbs={breadcrumbs}
         commitMode="liveViewport"
         entityId="airbox"
-        facts={[
-          { id: "scope", label: "Scope", value: "Universe (Airbox)" },
-          { id: "carrier", label: "Domain", value: "Stray & Oersted field" },
-        ]}
+        // The hosted panel shows its own metric strip (passes, source, mesh,
+        // data state); header facts would stack a second, redundant strip.
+        facts={[]}
         icon={Eye}
-        kindLabel="Stray-field & magnetostatic Airbox display"
+        kindLabel="Airbox display"
         ownerId="airbox.visualization"
         sectionTitle="Universe Field & Bounds Visualization"
         selection={selection}
@@ -1220,7 +1220,7 @@ export function AirboxVisualizationTemplatePanel({
       <ConnectedTargetVisualizationView
         breadcrumbs={breadcrumbs}
         idPrefix="airbox.visualization"
-        kindLabel="Stray-field & magnetostatic airbox display"
+        kindLabel="Airbox display"
         selection={selection}
         titleFallback="Airbox Visualization"
       />
@@ -1231,7 +1231,7 @@ export function AirboxVisualizationTemplatePanel({
     <FallbackSimpleTargetVizPanel
       breadcrumbs={breadcrumbs}
       idPrefix="airbox.visualization"
-      kindLabel="Stray-field & magnetostatic airbox display"
+      kindLabel="Airbox display"
       selection={selection}
       titleFallback="Airbox Visualization"
     />

@@ -171,7 +171,7 @@ import {
 import { ObjectVisualizationOverview } from "./ObjectVisualizationOverview";
 import { PlanarVisualizationSection } from "../visualization/PlanarVisualizationSection";
 import {
-  VisualizationContextSwitchControl,
+  VisualizationViewSwitch,
   useVisualizationViewContext,
 } from "../visualization/VisualizationContextSwitch";
 import { planarPresentationPatchFromThreeDimensional } from "../visualization/presentationSemantics";
@@ -1463,9 +1463,7 @@ export function VisualizationTargetInspectorPanel({
   if (visualizationViewContext === "planar") {
     return (
       <div className="fm-inspector-panel fm-scientific-inspector" data-inspector-owner={owner.id}>
-        <InspectorGroup title="View">
-          <VisualizationContextSwitchControl onPlanarActivate={syncSharedQuiverIntent} />
-        </InspectorGroup>
+        <VisualizationViewSwitch onPlanarActivate={syncSharedQuiverIntent} />
         {artifactInspection ? <FeedbackBanner kind="warning" message="Historical carrier inspection requires the 3D view. No magnetic grid or planar field is substituted." /> : <PlanarVisualizationSection selection={selection} />}
         {artifactInspection && children ? <div className="fm-viz-nav-sections">{children}</div> : null}
         {scientificInspectorContext}
@@ -1475,9 +1473,7 @@ export function VisualizationTargetInspectorPanel({
 
   return (
     <div className="fm-inspector-panel fm-scientific-inspector" data-inspector-owner={owner.id}>
-      <InspectorGroup title="View">
-        <VisualizationContextSwitchControl onPlanarActivate={syncSharedQuiverIntent} />
-      </InspectorGroup>
+      <VisualizationViewSwitch onPlanarActivate={syncSharedQuiverIntent} />
       {children ? <div className="fm-viz-nav-sections">{children}</div> : null}
       <ObjectVisualizationPanelView
         key={visualizationTargetKey(stablePanel.target)}

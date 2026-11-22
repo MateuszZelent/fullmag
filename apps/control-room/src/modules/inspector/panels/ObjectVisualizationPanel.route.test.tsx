@@ -296,6 +296,10 @@ vi.mock("../visualization/VisualizationContextSwitch", () => ({
     testState.planarActivate = onPlanarActivate ?? null;
     return null;
   },
+  VisualizationViewSwitch: ({ onPlanarActivate }: { onPlanarActivate?: () => void }) => {
+    testState.planarActivate = onPlanarActivate ?? null;
+    return null;
+  },
   useVisualizationViewContext: () => "3d",
 }));
 vi.mock("./ObjectVisualizationTargetSection", () => {

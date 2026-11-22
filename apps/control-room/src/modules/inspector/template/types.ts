@@ -391,6 +391,12 @@ export interface InspectorSectionSpec<TDraft> {
   modeTabId?: string;
   /** Initial expanded state (defaults to true). */
   defaultOpen?: boolean;
+  /**
+   * Renders the rows without the collapsible section card. Reserved for a
+   * single hosted workspace that already owns its own groups, so the panel
+   * does not stack a section card around nested group cards.
+   */
+  flush?: boolean;
   /** Marks a live display section inside a staged panel; renders a Live badge and never dirties staged drafts. */
   live?: boolean;
   /** Conditional section visibility predicate. */

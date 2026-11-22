@@ -3,8 +3,15 @@
 import {
   Activity,
   ArrowRight,
+  Atom,
   Box,
+  Compass,
+  Eye,
+  Grid3x3,
   Layers,
+  LayoutGrid,
+  Magnet,
+  Radio,
   Shield,
 } from "lucide-react";
 import {
@@ -817,6 +824,8 @@ export function ObjectOverviewInspectorPanel({ selection }: InspectorPanelProps)
       return [
         {
           id: "antenna-geometry",
+          icon: Box,
+          domain: "geometry",
           title: "Geometry",
           subtitle: "Conductor topology & dimensions",
           badge: baseline.geometryKind,
@@ -826,6 +835,8 @@ export function ObjectOverviewInspectorPanel({ selection }: InspectorPanelProps)
         },
         {
           id: "antenna-root",
+          icon: Radio,
+          domain: "physics",
           title: "Antenna",
           subtitle: "Ports, current excitation, field solve & target projection",
           selection: buildObjectSelection(objectId, "object.antenna", "Antenna", {
@@ -834,6 +845,8 @@ export function ObjectOverviewInspectorPanel({ selection }: InspectorPanelProps)
         },
         {
           id: "mesh",
+          icon: Grid3x3,
+          domain: "mesh",
           title: "Mesh",
           subtitle: "Object mesh policy & build report",
           badge: baseline.meshState.label,
@@ -844,6 +857,8 @@ export function ObjectOverviewInspectorPanel({ selection }: InspectorPanelProps)
         },
         {
           id: "visualization",
+          icon: Eye,
+          domain: "visualization",
           title: "Visualization",
           subtitle: "3D surface, wireframe & field display",
           selection: buildObjectSelection(objectId, "object.visualization", "Visualization", {
@@ -863,6 +878,8 @@ export function ObjectOverviewInspectorPanel({ selection }: InspectorPanelProps)
     return [
       {
         id: "geometry",
+          icon: Box,
+          domain: "geometry",
         title: "Geometry",
         subtitle: baseline.spanText
           ? `${baseline.geometryKind} \u00b7 ${baseline.spanText}`
@@ -872,6 +889,8 @@ export function ObjectOverviewInspectorPanel({ selection }: InspectorPanelProps)
       },
       {
         id: "material",
+          icon: Magnet,
+          domain: "material",
         title: "Material",
         subtitle: "Intrinsic magnetic, exchange, anisotropy & transport constants",
         badge: baseline.materialLabel,
@@ -880,6 +899,8 @@ export function ObjectOverviewInspectorPanel({ selection }: InspectorPanelProps)
       },
       {
         id: "magnetic-texture",
+          icon: Compass,
+          domain: "material",
         title: "Magnetic Texture",
         subtitle: "Initial magnetization m\u2080 preset, placement & field file",
         badge: String(textureKind),
@@ -887,6 +908,8 @@ export function ObjectOverviewInspectorPanel({ selection }: InspectorPanelProps)
       },
       {
         id: "regions",
+          icon: LayoutGrid,
+          domain: "definition",
         title: "Regions",
         subtitle: "Sub-volumes, precedence stack & spatial overrides",
         badge: `${baseline.regionCount}`,
@@ -894,12 +917,16 @@ export function ObjectOverviewInspectorPanel({ selection }: InspectorPanelProps)
       },
       {
         id: "physics",
+          icon: Atom,
+          domain: "physics",
         title: "Physics",
         subtitle: "Active Hamiltonian interactions, spin torques & transport",
         selection: buildObjectSelection(objectId, "object.physics", "Physics"),
       },
       {
         id: "mesh",
+          icon: Grid3x3,
+          domain: "mesh",
         title: "Mesh",
         subtitle: "Element sizing policy & discretization quality",
         badge: baseline.meshState.label,
@@ -908,6 +935,8 @@ export function ObjectOverviewInspectorPanel({ selection }: InspectorPanelProps)
       },
       {
         id: "visualization",
+          icon: Eye,
+          domain: "visualization",
         title: "Visualization",
         subtitle: "Surface shading, vector glyphs & opacity in 3D viewport",
         selection: buildObjectSelection(objectId, "object.visualization", "Visualization"),
@@ -1252,10 +1281,27 @@ export function ObjectOverviewInspectorPanel({ selection }: InspectorPanelProps)
           ],
         },
         {
+          id: "object-sub-resources",
+          title: "Components",
+          icon: Layers,
+          defaultOpen: true,
+          showWhen: (d) => d.exists,
+          summary: () => `${childCards.length} inspectors`,
+          rows: [
+            {
+              type: "custom",
+              wide: true,
+              render: (ctx) => (
+                <InspectorShortcutCards items={childCards} onSelect={ctx.selectNode} />
+              ),
+            },
+          ],
+        },
+        {
           id: "object-energies",
           title: "Micromagnetic energies",
           icon: Activity,
-          defaultOpen: true,
+          defaultOpen: false,
           showWhen: (d) => d.exists && !d.antennaWithoutMagnetization,
           summary: (d) => `${d.metrics.statusLabel} \u00b7 Total ${d.metrics.total}`,
           rows: [
@@ -1326,8 +1372,8 @@ export function ObjectOverviewInspectorPanel({ selection }: InspectorPanelProps)
               type: "custom",
               wide: true,
               render: (ctx) => (
-                <div className="flex flex-col gap-1.5" data-slot="object-extension-switches">
-                  <div className="flex items-center justify-between gap-2 rounded-md border border-[var(--fm-border)] bg-[var(--fm-surface-2)] px-2.5 py-2">
+                <div className="fm-extension-list" data-slot="object-extension-switches">
+                  <div className="fm-extension-row">
                     <div className="min-w-0 flex-1">
                       <div className="flex items-center gap-1.5">
                         <span className="text-xs font-medium text-[var(--fm-text)]">
@@ -1335,7 +1381,7 @@ export function ObjectOverviewInspectorPanel({ selection }: InspectorPanelProps)
                         </span>
                         {ctx.draft.hasSal ? <Badge data-tone="ok">Active</Badge> : null}
                       </div>
-                      <p className="truncate text-xs text-[var(--fm-text-muted)]">
+                      <p className="fm-extension-row__hint">
                         Spatial &alpha;(r) damping ramp suppressing edge spin-wave reflections
                       </p>
                     </div>
@@ -1368,7 +1414,7 @@ export function ObjectOverviewInspectorPanel({ selection }: InspectorPanelProps)
                     </div>
                   </div>
 
-                  <div className="flex items-center justify-between gap-2 rounded-md border border-[var(--fm-border)] bg-[var(--fm-surface-2)] px-2.5 py-2">
+                  <div className="fm-extension-row">
                     <div className="min-w-0 flex-1">
                       <div className="flex items-center gap-1.5">
                         <span className="text-xs font-medium text-[var(--fm-text)]">
@@ -1376,7 +1422,7 @@ export function ObjectOverviewInspectorPanel({ selection }: InspectorPanelProps)
                         </span>
                         {ctx.draft.hasFrozenSpins ? <Badge data-tone="ok">Pinned</Badge> : null}
                       </div>
-                      <p className="truncate text-xs text-[var(--fm-text-muted)]">
+                      <p className="fm-extension-row__hint">
                         Dirichlet spin pinning on object boundary or sub-volume
                       </p>
                     </div>
@@ -1417,7 +1463,7 @@ export function ObjectOverviewInspectorPanel({ selection }: InspectorPanelProps)
                     </div>
                   </div>
 
-                  <div className="flex items-center justify-between gap-2 rounded-md border border-[var(--fm-border)] bg-[var(--fm-surface-2)] px-2.5 py-2">
+                  <div className="fm-extension-row">
                     <div className="min-w-0 flex-1">
                       <div className="flex items-center gap-1.5">
                         <span className="text-xs font-medium text-[var(--fm-text)]">
@@ -1427,7 +1473,7 @@ export function ObjectOverviewInspectorPanel({ selection }: InspectorPanelProps)
                           <Badge data-tone="info">Enabled</Badge>
                         ) : null}
                       </div>
-                      <p className="truncate text-xs text-[var(--fm-text-muted)]">
+                      <p className="fm-extension-row__hint">
                         Berg-Lüscher skyrmion winding number diagnostic on 2D support
                       </p>
                     </div>
@@ -1460,23 +1506,6 @@ export function ObjectOverviewInspectorPanel({ selection }: InspectorPanelProps)
                     </div>
                   </div>
                 </div>
-              ),
-            },
-          ],
-        },
-        {
-          id: "object-sub-resources",
-          title: "Owned sub-resources",
-          icon: Layers,
-          defaultOpen: true,
-          showWhen: (d) => d.exists,
-          summary: () => `${childCards.length} child inspectors`,
-          rows: [
-            {
-              type: "custom",
-              wide: true,
-              render: (ctx) => (
-                <InspectorShortcutCards items={childCards} onSelect={ctx.selectNode} />
               ),
             },
           ],

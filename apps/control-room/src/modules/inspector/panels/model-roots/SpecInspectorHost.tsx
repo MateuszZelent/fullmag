@@ -1,7 +1,7 @@
 "use client";
 
-import { ArrowRight, Check, Copy } from "lucide-react";
-import { useCallback, useMemo, useState, type ReactNode } from "react";
+import { Check, ChevronRight, Copy, type LucideIcon } from "lucide-react";
+import { useCallback, useId, useMemo, useState, type ReactNode } from "react";
 
 import type { ResourceRevision, SceneResource } from "@/kernel/api/apiTypes";
 import { createCommandContext } from "@/kernel/commands/commandContext";
@@ -27,7 +27,6 @@ import {
   visualizationTargetIdForSceneObject,
   type Selection,
 } from "@/kernel/selection/selectionTypes";
-import { Badge } from "@/shared/ui/Badge";
 import { Button } from "@/shared/ui/Button";
 import {
   Dialog,
@@ -409,15 +408,32 @@ export function buildBuilderPrimitiveSelection(
 
 /* ── Reusable Shortcut Card List (for clean Parent -> Child overview navigation) ── */
 
+export type InspectorShortcutDomain =
+  | "geometry"
+  | "material"
+  | "physics"
+  | "study"
+  | "visualization"
+  | "mesh"
+  | "definition";
+
 export interface InspectorShortcutCardItem {
   id: string;
   title: string;
   subtitle?: string;
   badge?: string;
   tone?: InspectorTone;
+  /** Domain glyph; the row tints it with the domain hue. */
+  icon?: LucideIcon;
+  domain?: InspectorShortcutDomain;
   selection: Omit<Selection, "moduleSource">;
 }
 
+/**
+ * Child-inspector navigator: one hairline-separated list where each row is a
+ * single button (domain glyph, title, current value, state dot, chevron).
+ * Replaces stacked bordered cards with a separate "Open" button.
+ */
 export function InspectorShortcutCards({
   items,
   onSelect,
@@ -425,43 +441,49 @@ export function InspectorShortcutCards({
   items: readonly InspectorShortcutCardItem[];
   onSelect: (selection: Omit<Selection, "moduleSource">) => void;
 }) {
+  const listId = useId();
   return (
-    <div className="flex flex-col gap-1.5" data-slot="inspector-shortcut-cards">
-      {items.map((item) => (
-        <div
-          key={item.id}
-          className="flex items-center justify-between gap-2 rounded-md border border-[var(--fm-border)] bg-[var(--fm-surface-2)] px-2.5 py-2"
-        >
-          <div className="min-w-0 flex-1">
-            <div className="flex items-center gap-1.5">
-              <span className="truncate text-xs font-medium text-[var(--fm-text)]">
-                {item.title}
+    <ul className="fm-shortcut-list" data-slot="inspector-shortcut-cards">
+      {items.map((item) => {
+        const Icon = item.icon;
+        const value = item.badge ?? item.subtitle;
+        return (
+          <li key={item.id} className="fm-shortcut-list__item">
+            <button
+              aria-describedby={item.badge ? `${listId}-${item.id}-value` : undefined}
+              aria-label={`Open ${item.title}`}
+              className="fm-shortcut-list__row"
+              data-domain={item.domain}
+              type="button"
+              onClick={() => onSelect(item.selection)}
+            >
+              <span aria-hidden="true" className="fm-shortcut-list__icon">
+                {Icon ? <Icon size={15} strokeWidth={1.75} /> : null}
+              </span>
+              <span className="fm-shortcut-list__copy">
+                <span className="fm-shortcut-list__title">{item.title}</span>
+                {item.subtitle && item.subtitle !== value ? (
+                  <span className="fm-shortcut-list__subtitle">{item.subtitle}</span>
+                ) : null}
               </span>
               {item.badge ? (
-                <Badge className="shrink-0" data-tone={item.tone ?? "neutral"}>
+                <span
+                  className="fm-shortcut-list__value"
+                  data-tone={item.tone ?? "neutral"}
+                  id={`${listId}-${item.id}-value`}
+                >
+                  {item.tone && item.tone !== "neutral" ? (
+                    <span aria-hidden="true" className="fm-shortcut-list__dot" />
+                  ) : null}
                   {item.badge}
-                </Badge>
+                </span>
               ) : null}
-            </div>
-            {item.subtitle ? (
-              <p className="mt-0.5 truncate text-xs text-[var(--fm-text-muted)]">
-                {item.subtitle}
-              </p>
-            ) : null}
-          </div>
-          <Button
-            aria-label={`Open ${item.title}`}
-            size="sm"
-            type="button"
-            variant="ghost"
-            onClick={() => onSelect(item.selection)}
-          >
-            <span>Open</span>
-            <ArrowRight aria-hidden="true" size={12} />
-          </Button>
-        </div>
-      ))}
-    </div>
+              <ChevronRight aria-hidden="true" className="fm-shortcut-list__chevron" size={14} />
+            </button>
+          </li>
+        );
+      })}
+    </ul>
   );
 }
 
