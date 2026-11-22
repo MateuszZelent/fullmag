@@ -492,6 +492,16 @@ describe("ObjectMaterialSpec (Wave 4 Feature-Parity & Constitutive Authoring)", 
     expect(mounted.host.textContent).toContain("Shared across 2 objects");
     expect(findElements(mounted.host, (el) => el.tagName === "SELECT")).toHaveLength(0);
 
+    const assignFromLibraryBtn = findElement(
+      mounted.host,
+      (el) =>
+        el.tagName === "BUTTON" &&
+        Boolean(el.textContent?.includes("Assign from Library")),
+    );
+    act(() => {
+      assignFromLibraryBtn?.dispatchEvent(new TestEvent("click", { bubbles: true }));
+    });
+
     const cobaltBtn = findElement(
       mounted.host,
       (el) => el.getAttribute("data-preset-id") === "preset-cobalt",
@@ -499,6 +509,13 @@ describe("ObjectMaterialSpec (Wave 4 Feature-Parity & Constitutive Authoring)", 
     act(() => {
       cobaltBtn?.dispatchEvent(new TestEvent("click", { bubbles: true }));
     });
+    // Reference material shadcn Dialog must auto-close after selecting a preset
+    expect(
+      findElements(
+        mounted.host,
+        (el) => el.getAttribute("data-slot") === "reference-materials-popover",
+      ),
+    ).toHaveLength(0);
 
     const applyBtn = findElement(
       mounted.host,

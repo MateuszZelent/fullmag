@@ -55,10 +55,13 @@ import {
 } from "@/shared/domain/material/materialLibrary";
 import { Button } from "@/shared/ui/Button";
 import {
-  Popover,
-  PopoverContent,
-  PopoverTrigger,
-} from "@/shared/ui/Popover";
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/shared/ui/Dialog";
+import { Input } from "@/shared/ui/Input";
 
 import type { InspectorPanelProps } from "../../inspectorTypes";
 import type {
@@ -967,6 +970,17 @@ function ReferenceMaterialPickerPopover({
   hasActiveModelMaterial: boolean;
   onOpenFullCatalog: () => void;
 }) {
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const [query, setQuery] = useState("");
+  const filteredPresets = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    if (!q) return REFERENCE_MATERIALS_CATALOG;
+    return REFERENCE_MATERIALS_CATALOG.filter(
+      (preset) =>
+        preset.name.toLowerCase().includes(q) || preset.id.toLowerCase().includes(q),
+    );
+  }, [query]);
+
   const applyPreset = (preset: BuiltInReferenceMaterial) => {
     const generatedId = suggestNewMaterialId(
       `${preset.id}-${ctx.draft.objectId || "obj"}`,
@@ -998,43 +1012,69 @@ function ReferenceMaterialPickerPopover({
       sigma: preset.sigma,
       density: preset.density,
     });
+    setQuery("");
+    setPickerOpen(false);
   };
 
   return (
     <div className="flex flex-wrap gap-1.5" data-slot="material-assignment-actions">
-      <Popover>
-        <PopoverTrigger asChild>
-          <Button size="sm" type="button" variant="secondary">
-            <Sparkles aria-hidden="true" size={12} />
-            <span>Assign from Library</span>
-          </Button>
-        </PopoverTrigger>
-        <PopoverContent align="start" className="w-72 p-2">
-          <div className="flex flex-col gap-1" data-slot="reference-materials-popover">
-            <p className="px-1.5 py-1 text-xs font-semibold text-[var(--fm-text-muted)]">
-              Curated reference standards (9)
-            </p>
-            {REFERENCE_MATERIALS_CATALOG.map((preset) => (
-              <Button
-                key={preset.id}
-                className="flex h-auto w-full items-center justify-between rounded px-2 py-1.5 text-left text-xs text-[var(--fm-text)] hover:bg-[var(--fm-surface-3)]"
-                data-preset-id={preset.id}
-                size="sm"
-                type="button"
-                variant="ghost"
-                onClick={() => applyPreset(preset)}
-              >
-                <span className="font-medium">{preset.name}</span>
-                <span className="font-mono text-xs text-[var(--fm-text-muted)]">
-                  {preset.ms > 0
-                    ? `${(preset.ms / 1e3).toFixed(0)} kA/m`
-                    : `${(preset.sigma / 1e6).toFixed(1)} MS/m`}
-                </span>
-              </Button>
-            ))}
+      <Button
+        size="sm"
+        type="button"
+        variant="secondary"
+        onClick={() => setPickerOpen(true)}
+      >
+        <Sparkles aria-hidden="true" size={12} />
+        <span>Assign from Library</span>
+      </Button>
+      <Dialog open={pickerOpen} onOpenChange={setPickerOpen}>
+        <DialogContent
+          className="sm:max-w-md"
+          data-slot="reference-materials-popover"
+        >
+          <DialogHeader>
+            <DialogTitle>Assign Reference Material</DialogTitle>
+            <DialogDescription>
+              Select a curated micromagnetic standard to stage on this object. Relevant physics interactions (exchange, demag, anisotropy, DMI) activate automatically on Apply.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="flex flex-col gap-2">
+            <Input
+              aria-label="Filter reference materials"
+              placeholder="Filter materials (Permalloy, CoFeB, YIG, Co/Pt…)"
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+            />
+            <div className="flex max-h-72 flex-col gap-1 overflow-y-auto pr-1">
+              {filteredPresets.map((preset) => (
+                <Button
+                  key={preset.id}
+                  className="flex h-auto w-full items-center justify-between rounded-md border border-transparent px-2.5 py-2 text-left text-xs text-[var(--fm-text)] hover:border-[var(--fm-border)] hover:bg-[var(--fm-surface-3)]"
+                  data-preset-id={preset.id}
+                  size="sm"
+                  type="button"
+                  variant="ghost"
+                  onClick={() => applyPreset(preset)}
+                >
+                  <span className="flex flex-col gap-0.5">
+                    <span className="font-medium">{preset.name}</span>
+                    <span className="font-mono text-xs text-[var(--fm-text-muted)]">
+                      {preset.ms > 0
+                        ? `Ms ${(preset.ms / 1e3).toFixed(0)} kA/m · Aex ${(preset.aex * 1e12).toFixed(1)} pJ/m${Math.abs(preset.ku1) > 0 ? ` · Ku1 ${(preset.ku1 / 1e3).toFixed(0)} kJ/m³` : ""}${preset.dind !== 0 ? ` · Dind ${(preset.dind * 1e3).toFixed(1)} mJ/m²` : ""}`
+                        : `σ ${(preset.sigma / 1e6).toFixed(1)} MS/m`}
+                    </span>
+                  </span>
+                </Button>
+              ))}
+              {filteredPresets.length === 0 ? (
+                <p className="px-2 py-3 text-center text-xs text-[var(--fm-text-muted)]">
+                  No reference materials match “{query}”.
+                </p>
+              ) : null}
+            </div>
           </div>
-        </PopoverContent>
-      </Popover>
+        </DialogContent>
+      </Dialog>
 
       <Button
         size="sm"
@@ -2717,15 +2757,25 @@ export function ObjectMaterialInspectorPanel({ selection }: InspectorPanelProps)
                   }
                 }
 
+                // Auto-enable uniaxial/cubic anisotropy when non-zero Ku/Kc is entered
+                const autoUniaxialEnabled =
+                  draft.uniaxialEnabled ||
+                  ((draft.ku1 !== prev.ku1 || draft.ku2 !== prev.ku2) &&
+                    (Math.abs(draft.ku1) > 0 || Math.abs(draft.ku2) > 0));
+                const effectiveUniaxialDraft =
+                  autoUniaxialEnabled !== draft.uniaxialEnabled
+                    ? { ...draft, uniaxialEnabled: autoUniaxialEnabled }
+                    : draft;
+
                 // Atomically persist uniaxial anisotropy WITH lossless Ku2!
                 const uniaxialChanged =
-                  draft.uniaxialEnabled !== prev.uniaxialEnabled ||
+                  effectiveUniaxialDraft.uniaxialEnabled !== prev.uniaxialEnabled ||
                   draft.ku1 !== prev.ku1 ||
                   draft.ku2 !== prev.ku2 ||
                   JSON.stringify(draft.uniaxialAxis) !== JSON.stringify(prev.uniaxialAxis);
 
                 if (uniaxialChanged && draft.isMagneticBody) {
-                  const payload = buildUniaxialInteractionPayload(draft);
+                  const payload = buildUniaxialInteractionPayload(effectiveUniaxialDraft);
                   const ack = await kernel.api.model.patchObjectInteraction(
                     objectId,
                     "uniaxial_anisotropy",
@@ -2745,8 +2795,16 @@ export function ObjectMaterialInspectorPanel({ selection }: InspectorPanelProps)
                   );
                 }
 
+                const autoCubicEnabled =
+                  draft.cubicEnabled ||
+                  ((draft.kc1 !== prev.kc1 ||
+                    draft.kc2 !== prev.kc2 ||
+                    draft.kc3 !== prev.kc3) &&
+                    (Math.abs(draft.kc1) > 0 ||
+                      Math.abs(draft.kc2) > 0 ||
+                      Math.abs(draft.kc3) > 0));
                 const cubicChanged =
-                  draft.cubicEnabled !== prev.cubicEnabled ||
+                  autoCubicEnabled !== prev.cubicEnabled ||
                   draft.kc1 !== prev.kc1 ||
                   draft.kc2 !== prev.kc2 ||
                   draft.kc3 !== prev.kc3 ||
@@ -2762,9 +2820,9 @@ export function ObjectMaterialInspectorPanel({ selection }: InspectorPanelProps)
                     cubicKind,
                     {
                       base_revision: latestRevision,
-                      enabled: draft.cubicEnabled,
+                      enabled: autoCubicEnabled,
                       present:
-                        draft.cubicEnabled ||
+                        autoCubicEnabled ||
                         Math.abs(draft.kc1) > 0 ||
                         Math.abs(draft.kc2) > 0 ||
                         Math.abs(draft.kc3) > 0,
@@ -2788,6 +2846,126 @@ export function ObjectMaterialInspectorPanel({ selection }: InspectorPanelProps)
                     cubicResourceKey,
                     fallbackRevision(latestRevision),
                   );
+                }
+
+                // Auto-activate canonical physics interactions from material parameters
+                // when a material is newly assigned OR a parameter transitions to non-zero
+                // (only for interactions not yet present on the object so manual disables are respected).
+                const newlyAssignedMaterial =
+                  draft.pendingNewMaterial ||
+                  (Boolean(draft.materialId) && draft.materialId !== prev.materialId);
+                if (
+                  draft.isMagneticBody &&
+                  materialTouched &&
+                  typeof kernel.api.model.patchObjectInteraction === "function"
+                ) {
+                  const committedObj = latestCommittedScene?.objects?.find(
+                    (o) => o.id === objectId,
+                  );
+                  const existingStack = Array.isArray(
+                    (committedObj as unknown as { physics_stack?: unknown[] } | undefined)
+                      ?.physics_stack,
+                  )
+                    ? ((committedObj as unknown as { physics_stack: unknown[] }).physics_stack)
+                    : [];
+                  const stackKinds = new Set(
+                    existingStack
+                      .map((entry) =>
+                        entry && typeof entry === "object"
+                          ? (entry as Record<string, unknown>).kind
+                          : null,
+                      )
+                      .filter((k): k is string => typeof k === "string"),
+                  );
+                  const aexActivated =
+                    draft.aexSet &&
+                    draft.aex > 0 &&
+                    (newlyAssignedMaterial || !prev.aexSet || prev.aex <= 0);
+                  const dindActivated =
+                    draft.dindSet &&
+                    draft.dind !== 0 &&
+                    (newlyAssignedMaterial || !prev.dindSet || prev.dind === 0);
+                  const dbulkActivated =
+                    draft.dbulkSet &&
+                    draft.dbulk !== 0 &&
+                    (newlyAssignedMaterial || !prev.dbulkSet || prev.dbulk === 0);
+                  const autoKinds: Array<{ kind: ObjectInteractionKind; condition: boolean }> = [
+                    { kind: "exchange", condition: aexActivated },
+                    { kind: "interfacial_dmi", condition: dindActivated },
+                    {
+                      kind: "bulk_dmi" as unknown as ObjectInteractionKind,
+                      condition: dbulkActivated,
+                    },
+                  ];
+                  for (const { kind, condition } of autoKinds) {
+                    if (!condition || stackKinds.has(kind)) continue;
+                    try {
+                      const ack = await kernel.api.model.patchObjectInteraction(
+                        objectId,
+                        kind,
+                        {
+                          base_revision: latestRevision,
+                          enabled: true,
+                          present: true,
+                          params: {},
+                        },
+                        requestScopeOptions,
+                      );
+                      latestRevision = ack.scene_revision;
+                      interactionTouched = true;
+                      kernel.resources.invalidate(
+                        resolveObjectInteractionResourceKey(objectId, kind),
+                        fallbackRevision(latestRevision),
+                      );
+                    } catch {
+                      // Best-effort auto-activation: never fail material save if lane/endpoint rejects.
+                    }
+                  }
+                  const studyObj = (
+                    latestCommittedScene as unknown as {
+                      study?: { demag_enabled?: boolean; exchange_enabled?: boolean };
+                    } | null
+                  )?.study;
+                  const enableDemag =
+                    draft.msSet &&
+                    draft.ms > 0 &&
+                    (newlyAssignedMaterial || !prev.msSet || prev.ms <= 0) &&
+                    studyObj?.demag_enabled === false;
+                  const enableExchange =
+                    aexActivated && studyObj?.exchange_enabled === false;
+                  if (
+                    (enableDemag || enableExchange) &&
+                    typeof kernel.api.model.commitTransaction === "function"
+                  ) {
+                    try {
+                      const studyTx = await kernel.api.model.commitTransaction(
+                        {
+                          ...(latestRevision !== null ? { base_revision: latestRevision } : {}),
+                          kind: "merge_patch",
+                          merge_patch: {
+                            study: {
+                              ...(enableDemag ? { demag_enabled: true } : {}),
+                              ...(enableExchange ? { exchange_enabled: true } : {}),
+                            },
+                          },
+                        },
+                        requestScopeOptions,
+                      );
+                      latestRevision = studyTx.scene_revision;
+                      latestCommittedScene = studyTx.committed_scene;
+                      interactionTouched = true;
+                      publishCommittedSceneResource(
+                        kernel.resources,
+                        studyTx.committed_scene,
+                        studyTx.scene_revision,
+                        undefined,
+                        true,
+                        sessionScopeKey,
+                      );
+                    } catch {
+                      // Best-effort study flag activation.
+                    }
+                  }
                 }
 
                 const rev = fallbackRevision(latestRevision);

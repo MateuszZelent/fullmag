@@ -472,7 +472,11 @@ function MaterialLibraryContent({
     if (!startPending(operationKey)) return;
     setFeedback(null);
     try {
-      if (onUseMaterial) await onUseMaterial(selection);
+      if (onUseMaterial) {
+        await onUseMaterial(selection);
+        onOpenChange(false);
+        return;
+      }
       else {
         if (!sessionScopeKey) throw new Error("Open a model before using a database material.");
         const materialId = `mat:${globalThis.crypto.randomUUID()}`;
