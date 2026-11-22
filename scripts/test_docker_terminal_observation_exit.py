@@ -290,7 +290,7 @@ class ManagedIdleRestart(unittest.TestCase):
         fixture.args.port = 3203
         fixture.environment["FULLMAG_TOOLCHAIN_IMAGE_ID"] = existing.IMAGE
         fixture.document["services"]["backend"]["volumes"] = [
-            {"target": "/opt/fullmag/source-git", "source": "/fixture/source-git"}]
+            {"type": "bind", "target": "/opt/fullmag/source-git", "source": "/fixture/source-git", "read_only": True}]
         fixture.args.config_sha256 = hashlib.sha256(dev.canonical(fixture.document)).hexdigest()
         original_capture = fixture.capture
         def capture(*args, **kwargs):
