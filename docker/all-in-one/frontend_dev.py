@@ -109,6 +109,8 @@ EXPECTED_NODE_VERSION = "v24.18.0"
 EXPECTED_PNPM_VERSION = "10.8.1"
 
 INTERNAL_PORT = 8080
+NEXT_INTERNAL_PORT = 8082
+GATEWAY_SCRIPT = Path("scripts/docker-dev-gateway.cjs")
 API_PROXY_TARGET = "http://backend:8081"
 NEXT_DIST_DIR = ".next-control-room-8080"
 NEXT_RELATIVE = Path("node_modules/next/dist/bin/next")
@@ -1413,8 +1415,8 @@ def _safe_environment(
         # Leave the browser API-base variables unset.  The control-room
         # resolver then uses window.location.origin, so a host browser that
         # reaches the published port through either localhost or 127.0.0.1
-        # stays same-origin and uses the Next proxy.  The server-side proxy
-        # remains pinned separately by FULLMAG_API_PROXY_TARGET above.
+        # stays same-origin and uses the development ingress. Next can
+        # still use the pinned API origin for its server-side requests.
         "PNPM_HOME": str(PNPM_HOME),
         "COREPACK_HOME": str(COREPACK_HOME),
         # Keep Corepack on the exact packageManager selected by the seeded
@@ -1463,6 +1465,7 @@ def _receipt_base(
         "frontend_root": str(FRONTEND_ROOT),
         "inputs_manifest_digest": inputs.manifest_digest,
         "internal_port": INTERNAL_PORT,
+        "next_internal_port": NEXT_INTERNAL_PORT,
         "next_dist_dir": NEXT_DIST_DIR,
         "api_proxy_target": API_PROXY_TARGET,
         "live_directories": list(LIVE_DIRECTORY_NAMES),
@@ -2446,9 +2449,20 @@ def _next_command() -> list[str]:
         "--webpack",
         INSPECTOR_FLAG,
         "--hostname",
-        "0.0.0.0",
+        "127.0.0.1",
         "--port",
+        str(NEXT_INTERNAL_PORT),
+    ]
+
+
+def _frontend_command() -> list[str]:
+    return [
+        str(NODE_BINARY),
+        str(GATEWAY_SCRIPT),
         str(INTERNAL_PORT),
+        str(NEXT_INTERNAL_PORT),
+        API_PROXY_TARGET,
+        *_next_command(),
     ]
 
 
@@ -2470,7 +2484,7 @@ def _start_next(
     if receipt.get("uv_threadpool_size") != NODE_FS_THREADS:
         _fail("frontend receipt is missing the pinned Node filesystem thread count")
     app_root = inputs.workspace_root / "apps" / "control-room"
-    command = _next_command()
+    command = _frontend_command()
     environment = _safe_environment(
         inputs, watchpack_polling_ms=watchpack_polling_ms, watch_mode=watch_mode
     )
