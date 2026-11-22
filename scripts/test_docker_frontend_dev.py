@@ -341,7 +341,11 @@ class FrontendDevContractTests(TestCase):
         self.assertEqual(self.module.INSPECTOR_FLAG, "--inspect=127.0.0.1:0")
         self.assertNotIn("--inspect-brk", command)
         self.assertEqual(command[2:4], ["dev", "--webpack"])
-        self.assertEqual(command[-4:], ["--hostname", "0.0.0.0", "--port", "8080"])
+        self.assertEqual(command[-4:], ["--hostname", "127.0.0.1", "--port", "8082"])
+        self.assertEqual(self.module._frontend_command()[1:5], [
+            "scripts/docker-dev-gateway.mjs", "8080", "8082", "http://backend:8081",
+        ])
+        self.assertEqual(self.module._frontend_command()[5:], command)
 
         with isolated(self.module) as (_root, _workspace, inputs):
             with patch.dict(
@@ -421,6 +425,7 @@ class FrontendDevContractTests(TestCase):
                         "schema": healthcheck.FRONTEND_RECEIPT_SCHEMA,
                         "state": "running",
                         "internal_port": healthcheck.FRONTEND_INTERNAL_PORT,
+                        "next_internal_port": healthcheck.FRONTEND_NEXT_INTERNAL_PORT,
                         "owner_token": "owner-token",
                         "process_identity_schema": "linux-proc-v1",
                         "pid": pid,
@@ -447,7 +452,10 @@ class FrontendDevContractTests(TestCase):
                     receipt_path=receipt_path,
                     proc_root=proc_root,
                 )
-            connect.assert_called_once_with(("127.0.0.1", 8080), timeout=0.5)
+            self.assertEqual(
+                [entry.args[0] for entry in connect.call_args_list],
+                [("127.0.0.1", 8080), ("127.0.0.1", 8082)],
+            )
 
             stale_receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
             stale_receipt["process_start_time_ticks"] = 124
