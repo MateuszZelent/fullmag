@@ -506,12 +506,27 @@ def export_builder_draft(
     )
     if resources is not None:
         draft["compute_resources"] = resources.to_ir()
-    visualization_hint = _normalize_mapping(
-        _normalize_mapping(base_problem.runtime_metadata).get("visualization_hint")
-    )
+    runtime_meta = _normalize_mapping(base_problem.runtime_metadata)
+    visualization_hint = _normalize_mapping(runtime_meta.get("visualization_hint"))
+    draft_viz_hint: dict[str, object] = {}
     airbox_hint = visualization_hint.get("airbox")
     if airbox_hint is not None:
-        draft["visualization_hint"] = {"airbox": copy.deepcopy(airbox_hint)}
+        draft_viz_hint["airbox"] = copy.deepcopy(airbox_hint)
+    material_constitutive_hint = runtime_meta.get(
+        "material_constitutive",
+        visualization_hint.get("material_constitutive"),
+    )
+    if material_constitutive_hint is not None:
+        from fullmag.runtime.scene_document import canonical_material_constitutive_hint
+
+        canonical_mc = canonical_material_constitutive_hint(
+            material_constitutive_hint,
+            context="runtime_metadata.material_constitutive",
+        )
+        if canonical_mc:
+            draft_viz_hint["material_constitutive"] = canonical_mc
+    if draft_viz_hint:
+        draft["visualization_hint"] = draft_viz_hint
     if authored_problem.selections:
         draft["selections"] = [selection.to_ir() for selection in authored_problem.selections]
     constraints = authored_problem._collect_magnetization_constraints()
@@ -841,6 +856,30 @@ def render_loaded_problem_as_script(
         lines.append(
             f"fm.runtime_metadata('material_assets', {_py_literal(canonical_material_assets(material_metadata))})"
         )
+
+    base_runtime_meta = _normalize_mapping(base_problem.runtime_metadata)
+    base_viz_hint = _normalize_mapping(base_runtime_meta.get("visualization_hint"))
+    scene_viz_override = overrides.get("visualization_hint")
+    if scene_viz_override is not None:
+        if not isinstance(scene_viz_override, Mapping):
+            raise ValueError("SceneDocument.study.visualization_hint must be an object")
+        material_constitutive_meta = scene_viz_override.get("material_constitutive")
+    else:
+        material_constitutive_meta = base_runtime_meta.get(
+            "material_constitutive",
+            base_viz_hint.get("material_constitutive"),
+        )
+    if material_constitutive_meta is not None:
+        from fullmag.runtime.scene_document import canonical_material_constitutive_hint
+
+        canonical_mc = canonical_material_constitutive_hint(
+            material_constitutive_meta,
+            context="SceneDocument.study.visualization_hint.material_constitutive",
+        )
+        if canonical_mc:
+            lines.append(
+                f"fm.runtime_metadata('material_constitutive', {_py_literal(canonical_mc)})"
+            )
 
     normalized = "\n".join(lines).rstrip() + "\n"
     return normalized
@@ -4248,10 +4287,18 @@ def _render_runtime(
     if scene_visualization_hint is not None:
         if not isinstance(scene_visualization_hint, Mapping):
             raise ValueError("SceneDocument.study.visualization_hint must be an object")
-        visualization_hint = {
-            **visualization_hint,
-            **dict(scene_visualization_hint),
-        }
+        merged_viz_hint = dict(visualization_hint)
+        if "airbox" in scene_visualization_hint:
+            merged_viz_hint["airbox"] = scene_visualization_hint["airbox"]
+        else:
+            merged_viz_hint.pop("airbox", None)
+        if "material_constitutive" in scene_visualization_hint:
+            merged_viz_hint["material_constitutive"] = scene_visualization_hint[
+                "material_constitutive"
+            ]
+        else:
+            merged_viz_hint.pop("material_constitutive", None)
+        visualization_hint = merged_viz_hint
     if visualization_hint:
         active_qty = visualization_hint.get("active_quantity_id")
         if isinstance(active_qty, str) and active_qty.strip():

@@ -189,6 +189,105 @@ def _surface_center(gmsh: Any, surface_tag: int) -> tuple[float, float, float]:
     )
 
 
+def _cap_frame_from_quad(
+    quad_m: Any,
+    adj_quad_m: Any,
+    *,
+    scale: float,
+    characteristic_length: float,
+) -> tuple[
+    tuple[float, float, float],
+    tuple[float, float, float],
+    tuple[float, float, float],
+    tuple[float, float, float],
+    float,
+    float,
+    float,
+]:
+    """Compute scaled centroid, orthonormal (u, v, n) frame, half-extents, and tolerance for a 4-vertex cap quad."""
+    pts = [
+        (float(v[0]) * scale, float(v[1]) * scale, float(v[2]) * scale)
+        for v in quad_m
+    ]
+    adj_pts = [
+        (float(v[0]) * scale, float(v[1]) * scale, float(v[2]) * scale)
+        for v in adj_quad_m
+    ]
+    if len(pts) != 4:
+        raise ValueError("antenna conductor terminal section must have 4 vertices")
+
+    center = (
+        0.25 * sum(p[0] for p in pts),
+        0.25 * sum(p[1] for p in pts),
+        0.25 * sum(p[2] for p in pts),
+    )
+    adj_center = (
+        0.25 * sum(p[0] for p in adj_pts),
+        0.25 * sum(p[1] for p in adj_pts),
+        0.25 * sum(p[2] for p in adj_pts),
+    )
+    seg_dist = math.dist(center, adj_center)
+
+    e1 = (pts[1][0] - pts[0][0], pts[1][1] - pts[0][1], pts[1][2] - pts[0][2])
+    e3 = (pts[3][0] - pts[0][0], pts[3][1] - pts[0][1], pts[3][2] - pts[0][2])
+    w_len = math.hypot(*e1)
+    t_len = math.hypot(*e3)
+    cross = (
+        e1[1] * e3[2] - e1[2] * e3[1],
+        e1[2] * e3[0] - e1[0] * e3[2],
+        e1[0] * e3[1] - e1[1] * e3[0],
+    )
+    cross_len = math.hypot(*cross)
+    if w_len <= 0.0 or t_len <= 0.0 or cross_len <= 0.0:
+        raise ValueError("antenna conductor terminal cap is degenerate")
+
+    u_axis = (e1[0] / w_len, e1[1] / w_len, e1[2] / w_len)
+    n_axis = (cross[0] / cross_len, cross[1] / cross_len, cross[2] / cross_len)
+    v_axis = (
+        n_axis[1] * u_axis[2] - n_axis[2] * u_axis[1],
+        n_axis[2] * u_axis[0] - n_axis[0] * u_axis[2],
+        n_axis[0] * u_axis[1] - n_axis[1] * u_axis[0],
+    )
+
+    u_half = max(
+        abs(sum((p[c] - center[c]) * u_axis[c] for c in range(3))) for p in pts
+    )
+    v_half = max(
+        abs(sum((p[c] - center[c]) * v_axis[c] for c in range(3))) for p in pts
+    )
+    min_feature = min(w_len, t_len, seg_dist) if seg_dist > 0.0 else min(w_len, t_len)
+    max_feature = max(w_len, t_len, abs(characteristic_length))
+    tol = min(
+        0.05 * min_feature,
+        max(max_feature * 1.0e-6, min_feature * 1.0e-4),
+    )
+    tol = max(tol, min_feature * 1.0e-9)
+    return center, u_axis, v_axis, n_axis, u_half, v_half, tol
+
+
+def _point_lies_on_cap_quad(
+    point: tuple[float, float, float],
+    center: tuple[float, float, float],
+    u_axis: tuple[float, float, float],
+    v_axis: tuple[float, float, float],
+    n_axis: tuple[float, float, float],
+    u_half: float,
+    v_half: float,
+    tol: float,
+) -> bool:
+    dx = float(point[0]) - center[0]
+    dy = float(point[1]) - center[1]
+    dz = float(point[2]) - center[2]
+    dn = abs(dx * n_axis[0] + dy * n_axis[1] + dz * n_axis[2])
+    if dn > tol:
+        return False
+    du = abs(dx * u_axis[0] + dy * u_axis[1] + dz * u_axis[2])
+    if du > u_half + tol:
+        return False
+    dv = abs(dx * v_axis[0] + dy * v_axis[1] + dz * v_axis[2])
+    return dv <= v_half + tol
+
+
 def add_antenna_layout_terminal_physical_groups(
     gmsh: Any,
     geometry: AntennaLayout,
@@ -259,12 +358,12 @@ def add_antenna_layout_terminal_physical_groups(
     gmsh.model.addPhysicalGroup(3, all_volume_tags, tag=1)
     gmsh.model.setPhysicalName(3, 1, "magnetic")
 
-    axis = tuple(
-        float(geometry.transform.rotation_matrix[row][0]) for row in range(3)
-    )
-    origin = tuple(float(value) * scale for value in geometry.transform.translation_m)
+    sections = geometry._sections()
+    if len(sections) < 2:
+        raise ValueError(
+            f"antenna layout '{geometry.geometry_name}' requires at least two cross-sections"
+        )
     length = float(geometry.length_m) * scale
-    tolerance = max(abs(length) * 1.0e-8, abs(scale) * 1.0e-10, 1.0e-10)
 
     surfaces_by_part: dict[str, list[int]] = {}
     surface_owner: dict[int, str] = {}
@@ -295,24 +394,61 @@ def add_antenna_layout_terminal_physical_groups(
                     f"{surface_tag} between conductors '{previous}' and '{part_id}'"
                 )
 
+    get_value = getattr(gmsh.model, "getValue", None)
     terminal_tags: dict[tuple[str, str], list[int]] = {}
     for part_id, surfaces in surfaces_by_part.items():
-        for selector, target in (("local_u_min", 0.0), ("local_u_max", length)):
-            selected = []
+        inlet_quad = sections[0]["conductors"][part_id]  # type: ignore[index]
+        inlet_adj = sections[1]["conductors"][part_id]  # type: ignore[index]
+        outlet_quad = sections[-1]["conductors"][part_id]  # type: ignore[index]
+        outlet_adj = sections[-2]["conductors"][part_id]  # type: ignore[index]
+        cap_specs = (
+            ("local_u_min", inlet_quad, inlet_adj),
+            ("local_u_max", outlet_quad, outlet_adj),
+        )
+        for selector, cap_quad, adj_quad in cap_specs:
+            center, u_axis, v_axis, n_axis, u_half, v_half, tol = _cap_frame_from_quad(
+                cap_quad,
+                adj_quad,
+                scale=scale,
+                characteristic_length=length,
+            )
+            selected: list[int] = []
             for surface_tag in surfaces:
-                center = _surface_center(gmsh, surface_tag)
-                projection = sum(
-                    (center[index] - origin[index]) * axis[index]
-                    for index in range(3)
-                )
-                if abs(projection - target) <= tolerance:
-                    selected.append(surface_tag)
+                surf_center = _surface_center(gmsh, surface_tag)
+                if not _point_lies_on_cap_quad(
+                    surf_center, center, u_axis, v_axis, n_axis, u_half, v_half, tol
+                ):
+                    continue
+                if callable(get_value):
+                    vertices = gmsh.model.getBoundary(
+                        [(2, surface_tag)], recursive=True, oriented=False
+                    )
+                    corner_pts = [
+                        tuple(float(c) for c in get_value(0, abs(int(tag)), []))
+                        for dim, tag in vertices
+                        if int(dim) == 0
+                    ]
+                    if not corner_pts or not all(
+                        _point_lies_on_cap_quad(
+                            pt, center, u_axis, v_axis, n_axis, u_half, v_half, tol
+                        )
+                        for pt in corner_pts
+                    ):
+                        continue
+                selected.append(surface_tag)
             if not selected:
                 raise ValueError(
                     f"antenna layout '{geometry.geometry_name}' conductor '{part_id}' "
                     f"has no OCC surface for terminal selector '{selector}'"
                 )
             terminal_tags[(part_id, selector)] = sorted(set(selected))
+        if set(terminal_tags[(part_id, "local_u_min")]) & set(
+            terminal_tags[(part_id, "local_u_max")]
+        ):
+            raise ValueError(
+                f"antenna layout '{geometry.geometry_name}' conductor '{part_id}' "
+                "inlet and outlet terminal surfaces overlap"
+            )
 
     terminal_surface_set = {
         surface_tag

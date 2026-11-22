@@ -1239,6 +1239,28 @@ pub(crate) struct FieldStateImportResponse {
     pub warnings: Vec<String>,
 }
 
+fn deserialize_field_state_rows<'de, D>(deserializer: D) -> Result<Vec<[f64; 3]>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    use serde::Deserialize;
+    let raw_rows: Vec<Vec<f64>> = Vec::<Vec<f64>>::deserialize(deserializer)?;
+    let mut out = Vec::with_capacity(raw_rows.len());
+    for row in raw_rows {
+        match row.as_slice() {
+            [x, y, z] => out.push([*x, *y, *z]),
+            [s] => out.push([*s, 0.0, 0.0]),
+            other => {
+                return Err(serde::de::Error::custom(format!(
+                    "field-state row must have 1 or 3 components (valuedim 1 or 3), got {}",
+                    other.len()
+                )));
+            }
+        }
+    }
+    Ok(out)
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 struct FieldStateJsonArtifact {
     fullmag_kind: String,
@@ -1246,6 +1268,7 @@ struct FieldStateJsonArtifact {
     quantity_id: String,
     target: FieldStateTargetRef,
     component_count: u64,
+    #[serde(deserialize_with = "deserialize_field_state_rows")]
     values: Vec<[f64; 3]>,
     source_step: Option<u64>,
     source_time_s: Option<f64>,
@@ -1255,6 +1278,8 @@ struct FieldStateJsonArtifact {
     grid_origin: Option<[f64; 3]>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     grid_spacing: Option<[f64; 3]>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    origin_explicit: Option<bool>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -4453,6 +4478,7 @@ pub(crate) async fn export_field_state_with_context(
         grid_shape: export_grid_shape,
         grid_origin: export_grid_geometry.map(|(origin, _)| origin),
         grid_spacing: export_grid_geometry.map(|(_, spacing)| spacing),
+        origin_explicit: export_grid_geometry.map(|_| true),
     };
     drop(guard);
 
@@ -4564,9 +4590,27 @@ pub(crate) async fn inspect_field_state_with_context(
     }
     let default_mode = default_field_state_mode(&req.target, &req.quantity_id);
     if default_mode == "apply" {
-        if let Err(error) = validate_exact_field_state_shape(snapshot, &artifact) {
+        if artifact.component_count != 3 {
+            compatible = false;
+            warnings.push(format!(
+                "field-state apply requires 3-component vector data (valuedim=3), got valuedim={}",
+                artifact.component_count
+            ));
+        } else if let Err(error) = validate_exact_field_state_shape(snapshot, &artifact) {
             if can_resample_field_state(&artifact, snapshot) {
                 warnings.push(error.message);
+                match resample_field_state_to_snapshot_domain(
+                    &artifact,
+                    snapshot,
+                    "trilinear",
+                    req.quantity_id == "m",
+                ) {
+                    Ok((_, resample_warnings)) => warnings.extend(resample_warnings),
+                    Err(overlap_err) => {
+                        compatible = false;
+                        warnings.push(overlap_err);
+                    }
+                }
             } else {
                 compatible = false;
                 warnings.push(error.message);
@@ -4699,15 +4743,21 @@ pub(crate) async fn import_field_state_with_context(
         .interpolation
         .as_deref()
         .map(|value| value.trim().to_ascii_lowercase());
-    let applied_values = match requested_interpolation.as_deref() {
+    let normalize = req.quantity_id == "m";
+    let (applied_values, import_warnings) = match requested_interpolation.as_deref() {
         Some("nearest") | Some("trilinear") => {
             let mode = requested_interpolation.as_deref().unwrap_or("trilinear");
-            resample_field_state_to_snapshot_domain(&artifact, snapshot, mode)
+            resample_field_state_to_snapshot_domain(&artifact, snapshot, mode, normalize)
                 .map_err(ApiError::bad_request)?
         }
         None | Some("") | Some("exact") => {
             validate_exact_field_state_shape(snapshot, &artifact)?;
-            artifact.values.clone()
+            let values = if normalize {
+                normalize_imported_vectors(&artifact.values, 1.0e-12)
+            } else {
+                artifact.values.clone()
+            };
+            (values, Vec::new())
         }
         Some(other) => {
             return Err(ApiError::bad_request(format!(
@@ -4768,7 +4818,7 @@ pub(crate) async fn import_field_state_with_context(
         mode,
         applied_point_count,
         field_revision,
-        warnings: Vec::new(),
+        warnings: import_warnings,
     }))
 }
 
@@ -6294,6 +6344,7 @@ fn read_hysteresis_snapshot_as_field_state(
         grid_shape,
         grid_origin: None,
         grid_spacing: None,
+        origin_explicit: Some(false),
     })
 }
 
@@ -6427,8 +6478,8 @@ fn parse_ovf_bytes(
         .transpose()
         .map_err(|_| "OVF header 'valuedim' must be an integer".to_string())?
         .unwrap_or(3);
-    if valuedim != 3 {
-        return Err(format!("OVF magnetization import requires valuedim=3, got {valuedim}"));
+    if valuedim != 1 && valuedim != 3 {
+        return Err(format!("OVF valuedim must be 1 or 3, got {valuedim}"));
     }
 
     let parse_f64_opt = |key: &str, default: f64| -> Result<f64, String> {
@@ -6439,6 +6490,9 @@ fn parse_ovf_bytes(
             None => Ok(default),
         }
     };
+    let origin_explicit = headers.contains_key("xmin")
+        && headers.contains_key("ymin")
+        && headers.contains_key("zmin");
     let xmin = parse_f64_opt("xmin", 0.0)?;
     let ymin = parse_f64_opt("ymin", 0.0)?;
     let zmin = parse_f64_opt("zmin", 0.0)?;
@@ -6471,7 +6525,7 @@ fn parse_ovf_bytes(
         .and_then(|v| v.checked_mul(nz))
         .ok_or_else(|| "OVF grid dimensions overflow".to_string())?;
     let expected_scalars = expected_points
-        .checked_mul(3)
+        .checked_mul(valuedim)
         .ok_or_else(|| "OVF scalar count overflow".to_string())?;
 
     let mut scalars = Vec::with_capacity(expected_scalars);
@@ -6563,23 +6617,103 @@ fn parse_ovf_bytes(
     if scalars.iter().any(|v| !v.is_finite()) {
         return Err("OVF field data contains non-finite values".to_string());
     }
-    let values = scalars
-        .chunks_exact(3)
-        .map(|c| [c[0], c[1], c[2]])
-        .collect::<Vec<_>>();
+    let values = if valuedim == 3 {
+        scalars
+            .chunks_exact(3)
+            .map(|c| [c[0], c[1], c[2]])
+            .collect::<Vec<_>>()
+    } else {
+        scalars.into_iter().map(|s| [s, 0.0, 0.0]).collect::<Vec<_>>()
+    };
     Ok(FieldStateJsonArtifact {
         fullmag_kind: "field_state".to_string(),
         schema_version: 1,
-        quantity_id: "m".to_string(),
+        quantity_id: if valuedim == 3 {
+            "m".to_string()
+        } else {
+            "scalar".to_string()
+        },
         target: target.clone(),
-        component_count: 3,
+        component_count: valuedim as u64,
         values,
         source_step: None,
         source_time_s: None,
         grid_shape: Some([nx, ny, nz]),
         grid_origin: Some([xmin, ymin, zmin]),
         grid_spacing: Some([dx, dy, dz]),
+        origin_explicit: Some(origin_explicit),
     })
+}
+
+fn normalize_imported_vectors(values: &[[f64; 3]], zero_threshold: f64) -> Vec<[f64; 3]> {
+    values
+        .iter()
+        .map(|&[vx, vy, vz]| {
+            let norm = (vx * vx + vy * vy + vz * vz).sqrt();
+            if norm > zero_threshold {
+                [vx / norm, vy / norm, vz / norm]
+            } else {
+                [0.0, 0.0, 0.0]
+            }
+        })
+        .collect()
+}
+
+fn check_source_target_bbox_overlap(
+    dims: [usize; 3],
+    src_origin: [f64; 3],
+    src_spacing: [f64; 3],
+    origin_explicit: bool,
+    active_points: &[[f64; 3]],
+) -> Result<Vec<String>, String> {
+    let mut warnings = Vec::new();
+    if active_points.is_empty() {
+        return Ok(warnings);
+    }
+    let src_min = src_origin;
+    let src_max = [
+        src_origin[0] + (dims[0] as f64) * src_spacing[0],
+        src_origin[1] + (dims[1] as f64) * src_spacing[1],
+        src_origin[2] + (dims[2] as f64) * src_spacing[2],
+    ];
+    let tol = [
+        1.0e-9 * src_spacing[0],
+        1.0e-9 * src_spacing[1],
+        1.0e-9 * src_spacing[2],
+    ];
+    let mut out_count = 0usize;
+    let mut dst_min = [f64::INFINITY; 3];
+    let mut dst_max = [f64::NEG_INFINITY; 3];
+    for pt in active_points {
+        for a in 0..3 {
+            dst_min[a] = dst_min[a].min(pt[a]);
+            dst_max[a] = dst_max[a].max(pt[a]);
+        }
+        let inside = (0..3).all(|a| pt[a] >= src_min[a] - tol[a] && pt[a] <= src_max[a] + tol[a]);
+        if !inside {
+            out_count += 1;
+        }
+    }
+    if out_count == active_points.len() {
+        return Err(format!(
+            "source grid bounding box [{:.3e}..{:.3e}, {:.3e}..{:.3e}, {:.3e}..{:.3e}] m does not overlap target domain [{:.3e}..{:.3e}, {:.3e}..{:.3e}, {:.3e}..{:.3e}] m; check source origin (e.g. [0, L] vs centered [-L/2, L/2])",
+            src_min[0], src_max[0], src_min[1], src_max[1], src_min[2], src_max[2],
+            dst_min[0], dst_max[0], dst_min[1], dst_max[1], dst_min[2], dst_max[2],
+        ));
+    }
+    if !origin_explicit {
+        warnings.push(
+            "source grid_origin was omitted in artifact metadata and defaulted to [0, 0, 0] m; verify alignment against centered target geometry".to_string(),
+        );
+    }
+    if out_count > 0 {
+        warnings.push(format!(
+            "{out_count} of {} active target points lie outside source grid bounds [{:.3e}..{:.3e}, {:.3e}..{:.3e}, {:.3e}..{:.3e}] m and were clamped to boundary cells",
+            active_points.len(),
+            src_min[0], src_max[0], src_min[1], src_max[1], src_min[2], src_max[2],
+        ));
+    }
+    Ok(warnings)
 }
 
 fn nearest_nonzero_grid_vector(
@@ -6590,6 +6724,7 @@ fn nearest_nonzero_grid_vector(
     point: [f64; 3],
     zero_threshold: f64,
 ) -> [f64; 3] {
+    const DETERMINISTIC_UNIT_FALLBACK: [f64; 3] = [0.0, 0.0, 1.0];
     let [nx, ny, nz] = dims;
     let clamp_idx = |coord: f64, orig: f64, step: f64, n: usize| -> usize {
         ((coord - orig) / step).floor().clamp(0.0, (n - 1) as f64) as usize
@@ -6604,26 +6739,78 @@ fn nearest_nonzero_grid_vector(
     if norm(center_vec) > zero_threshold {
         return center_vec;
     }
-    let mut best = [0.0, 0.0, 0.0];
+
+    let mut best: Option<[f64; 3]> = None;
     let mut best_dist_sq = f64::INFINITY;
-    for dz in -1isize..=1 {
-        let jz = iz as isize + dz;
-        if jz < 0 || jz >= nz as isize {
-            continue;
-        }
-        let cz = origin[2] + (jz as f64 + 0.5) * spacing[2];
-        for dy in -1isize..=1 {
-            let jy = iy as isize + dy;
-            if jy < 0 || jy >= ny as isize {
-                continue;
+    let max_shell = nx.max(ny).max(nz).saturating_sub(1) as isize;
+    let mut found_shell = 0isize;
+
+    for r in 1..=max_shell {
+        let z_lo = (iz as isize - r).max(0) as usize;
+        let z_hi = (iz as isize + r).min(nz as isize - 1) as usize;
+        let y_lo = (iy as isize - r).max(0) as usize;
+        let y_hi = (iy as isize + r).min(ny as isize - 1) as usize;
+        let x_lo = (ix as isize - r).max(0) as usize;
+        let x_hi = (ix as isize + r).min(nx as isize - 1) as usize;
+
+        for jz in z_lo..=z_hi {
+            let on_z = (jz as isize - iz as isize).abs() == r;
+            let cz = origin[2] + (jz as f64 + 0.5) * spacing[2];
+            for jy in y_lo..=y_hi {
+                let on_yz = on_z || (jy as isize - iy as isize).abs() == r;
+                let cy = origin[1] + (jy as f64 + 0.5) * spacing[1];
+                for jx in x_lo..=x_hi {
+                    if !on_yz && (jx as isize - ix as isize).abs() != r {
+                        continue;
+                    }
+                    let cand = values[flat(jx, jy, jz)];
+                    if norm(cand) <= zero_threshold {
+                        continue;
+                    }
+                    let cx = origin[0] + (jx as f64 + 0.5) * spacing[0];
+                    let dist_sq = (point[0] - cx).powi(2)
+                        + (point[1] - cy).powi(2)
+                        + (point[2] - cz).powi(2);
+                    if dist_sq < best_dist_sq {
+                        best_dist_sq = dist_sq;
+                        best = Some(cand);
+                    }
+                }
             }
+        }
+        if best.is_some() {
+            found_shell = r;
+            break;
+        }
+    }
+
+    let Some(mut best_vec) = best else {
+        return DETERMINISTIC_UNIT_FALLBACK;
+    };
+
+    let best_dist = best_dist_sq.sqrt();
+    let rx = ((best_dist / spacing[0]).ceil() as isize) + 1;
+    let ry = ((best_dist / spacing[1]).ceil() as isize) + 1;
+    let rz = ((best_dist / spacing[2]).ceil() as isize) + 1;
+    let z_lo = (iz as isize - rz).max(0) as usize;
+    let z_hi = (iz as isize + rz).min(nz as isize - 1) as usize;
+    let y_lo = (iy as isize - ry).max(0) as usize;
+    let y_hi = (iy as isize + ry).min(ny as isize - 1) as usize;
+    let x_lo = (ix as isize - rx).max(0) as usize;
+    let x_hi = (ix as isize + rx).min(nx as isize - 1) as usize;
+
+    for jz in z_lo..=z_hi {
+        let dz_abs = (jz as isize - iz as isize).abs();
+        let cz = origin[2] + (jz as f64 + 0.5) * spacing[2];
+        for jy in y_lo..=y_hi {
+            let dy_abs = (jy as isize - iy as isize).abs();
             let cy = origin[1] + (jy as f64 + 0.5) * spacing[1];
-            for dx in -1isize..=1 {
-                let jx = ix as isize + dx;
-                if jx < 0 || jx >= nx as isize {
+            for jx in x_lo..=x_hi {
+                let dx_abs = (jx as isize - ix as isize).abs();
+                if dx_abs.max(dy_abs).max(dz_abs) <= found_shell {
                     continue;
                 }
-                let cand = values[flat(jx as usize, jy as usize, jz as usize)];
+                let cand = values[flat(jx, jy, jz)];
                 if norm(cand) <= zero_threshold {
                     continue;
                 }
@@ -6633,12 +6820,12 @@ fn nearest_nonzero_grid_vector(
                     + (point[2] - cz).powi(2);
                 if dist_sq < best_dist_sq {
                     best_dist_sq = dist_sq;
-                    best = cand;
+                    best_vec = cand;
                 }
             }
         }
     }
-    best
+    best_vec
 }
 
 fn validate_source_grid_for_resampling(
@@ -6697,6 +6884,7 @@ fn sample_field_state_at_point(
     spacing: [f64; 3],
     pt: [f64; 3],
     interpolation: &str,
+    normalize: bool,
 ) -> [f64; 3] {
     const ZERO_THRESHOLD: f64 = 1.0e-12;
     let [nx, ny, nz] = dims;
@@ -6706,13 +6894,13 @@ fn sample_field_state_at_point(
         if len > ZERO_THRESHOLD {
             [v[0] / len, v[1] / len, v[2] / len]
         } else {
-            [0.0, 0.0, 0.0]
+            [0.0, 0.0, 1.0]
         }
     };
 
     if interpolation == "nearest" {
         let v = nearest_nonzero_grid_vector(values, dims, origin, spacing, pt, ZERO_THRESHOLD);
-        return normalize_unit(v);
+        return if normalize { normalize_unit(v) } else { v };
     }
 
     let ux = ((pt[0] - (origin[0] + 0.5 * spacing[0])) / spacing[0]).clamp(0.0, (nx - 1) as f64);
@@ -6729,6 +6917,7 @@ fn sample_field_state_at_point(
     let tz = uz - (iz0 as f64);
 
     let mut acc = [0.0, 0.0, 0.0];
+    let mut weight_sum = 0.0;
     for (dz_i, jz, wz) in [(0, iz0, 1.0 - tz), (1, iz1, tz)] {
         if dz_i == 1 && iz1 == iz0 {
             continue;
@@ -6755,6 +6944,7 @@ fn sample_field_state_at_point(
                 acc[0] += w * c[0];
                 acc[1] += w * c[1];
                 acc[2] += w * c[2];
+                weight_sum += w;
             }
         }
     }
@@ -6762,9 +6952,20 @@ fn sample_field_state_at_point(
     if acc_norm <= ZERO_THRESHOLD {
         let fallback =
             nearest_nonzero_grid_vector(values, dims, origin, spacing, pt, ZERO_THRESHOLD);
-        normalize_unit(fallback)
-    } else {
+        if normalize {
+            normalize_unit(fallback)
+        } else {
+            fallback
+        }
+    } else if normalize {
         [acc[0] / acc_norm, acc[1] / acc_norm, acc[2] / acc_norm]
+    } else {
+        let inv_w = if weight_sum > ZERO_THRESHOLD {
+            1.0 / weight_sum
+        } else {
+            1.0
+        };
+        [acc[0] * inv_w, acc[1] * inv_w, acc[2] * inv_w]
     }
 }
 
@@ -6775,8 +6976,16 @@ fn resample_field_state_to_grid(
     target_spacing: [f64; 3],
     active_mask: Option<&[bool]>,
     interpolation: &str,
-) -> Result<Vec<[f64; 3]>, String> {
+    normalize: bool,
+) -> Result<(Vec<[f64; 3]>, Vec<String>), String> {
+    if artifact.component_count != 3 {
+        return Err(format!(
+            "field-state resampling requires 3-component vector data (valuedim=3), got valuedim={}",
+            artifact.component_count
+        ));
+    }
     let (dims, src_origin, src_spacing) = validate_source_grid_for_resampling(artifact)?;
+    let origin_explicit = artifact.grid_origin.is_some() && artifact.origin_explicit.unwrap_or(true);
     if target_grid.iter().any(|&n| n == 0) {
         return Err("target grid dimensions must all be positive".to_string());
     }
@@ -6791,6 +7000,7 @@ fn resample_field_state_to_grid(
         .checked_mul(tny)
         .and_then(|v| v.checked_mul(tnz))
         .ok_or_else(|| "target grid dimensions overflow".to_string())?;
+    let mut active_pts = Vec::with_capacity(total_cells);
     let mut output = Vec::with_capacity(total_cells);
     for z in 0..tnz {
         let pz = target_origin[2] + (z as f64 + 0.5) * target_spacing[2];
@@ -6804,6 +7014,7 @@ fn resample_field_state_to_grid(
                 }
                 let px = target_origin[0] + (x as f64 + 0.5) * target_spacing[0];
                 let pt = [px, py, pz];
+                active_pts.push(pt);
                 output.push(sample_field_state_at_point(
                     &artifact.values,
                     dims,
@@ -6811,19 +7022,30 @@ fn resample_field_state_to_grid(
                     src_spacing,
                     pt,
                     interpolation,
+                    normalize,
                 ));
             }
         }
     }
-    Ok(output)
+    let warnings =
+        check_source_target_bbox_overlap(dims, src_origin, src_spacing, origin_explicit, &active_pts)?;
+    Ok((output, warnings))
 }
 
 fn resample_field_state_to_snapshot_domain(
     artifact: &FieldStateJsonArtifact,
     snapshot: &SessionStateResponse,
     interpolation: &str,
-) -> Result<Vec<[f64; 3]>, String> {
+    normalize: bool,
+) -> Result<(Vec<[f64; 3]>, Vec<String>), String> {
+    if artifact.component_count != 3 {
+        return Err(format!(
+            "field-state resampling requires 3-component vector data (valuedim=3), got valuedim={}",
+            artifact.component_count
+        ));
+    }
     let (dims, src_origin, src_spacing) = validate_source_grid_for_resampling(artifact)?;
+    let origin_explicit = artifact.grid_origin.is_some() && artifact.origin_explicit.unwrap_or(true);
     if crate::router_v2::handlers::sessions::status::is_fem_snapshot(snapshot) {
         let mesh = snapshot
             .fem_mesh
@@ -6846,12 +7068,14 @@ fn resample_field_state_to_snapshot_domain(
             .as_ref()
             .filter(|indices| existing_count == Some(indices.len()) && indices.len() != mesh.nodes.len())
         {
+            let mut active_pts = Vec::with_capacity(indices.len());
             let mut output = Vec::with_capacity(indices.len());
             for &node_idx in indices {
                 let pt = *mesh
                     .nodes
                     .get(node_idx as usize)
                     .ok_or_else(|| "FEM magnetic node index out of bounds".to_string())?;
+                active_pts.push(pt);
                 output.push(sample_field_state_at_point(
                     &artifact.values,
                     dims,
@@ -6859,9 +7083,17 @@ fn resample_field_state_to_snapshot_domain(
                     src_spacing,
                     pt,
                     interpolation,
+                    normalize,
                 ));
             }
-            return Ok(output);
+            let warnings = check_source_target_bbox_overlap(
+                dims,
+                src_origin,
+                src_spacing,
+                origin_explicit,
+                &active_pts,
+            )?;
+            return Ok((output, warnings));
         }
         if let Some(existing) = existing_count {
             if existing != mesh.nodes.len() {
@@ -6871,14 +7103,17 @@ fn resample_field_state_to_snapshot_domain(
                 ));
             }
         }
+        let mut active_pts = Vec::new();
         let mut output = vec![[0.0, 0.0, 0.0]; mesh.nodes.len()];
         if let Some(indices) = mag_indices {
+            active_pts.reserve(indices.len());
             for node_idx in indices {
                 let idx = node_idx as usize;
                 let pt = *mesh
                     .nodes
                     .get(idx)
                     .ok_or_else(|| "FEM magnetic node index out of bounds".to_string())?;
+                active_pts.push(pt);
                 output[idx] = sample_field_state_at_point(
                     &artifact.values,
                     dims,
@@ -6886,9 +7121,11 @@ fn resample_field_state_to_snapshot_domain(
                     src_spacing,
                     pt,
                     interpolation,
+                    normalize,
                 );
             }
         } else {
+            active_pts.extend_from_slice(&mesh.nodes);
             for (idx, &pt) in mesh.nodes.iter().enumerate() {
                 output[idx] = sample_field_state_at_point(
                     &artifact.values,
@@ -6897,10 +7134,18 @@ fn resample_field_state_to_snapshot_domain(
                     src_spacing,
                     pt,
                     interpolation,
+                    normalize,
                 );
             }
         }
-        return Ok(output);
+        let warnings = check_source_target_bbox_overlap(
+            dims,
+            src_origin,
+            src_spacing,
+            origin_explicit,
+            &active_pts,
+        )?;
+        return Ok((output, warnings));
     }
 
     if let Some(layers) = resolve_fdm_multilayer_target_layers(snapshot) {
@@ -6914,18 +7159,25 @@ fn resample_field_state_to_snapshot_domain(
             })
             .ok_or_else(|| "multilayer FDM target grid dimensions overflow".to_string())?;
         let mut output = Vec::with_capacity(total_cells);
+        let mut all_warnings = Vec::new();
         for layer in &layers {
-            let layer_values = resample_field_state_to_grid(
+            let (layer_values, layer_warnings) = resample_field_state_to_grid(
                 artifact,
                 layer.dims,
                 layer.origin,
                 layer.spacing,
                 layer.active_mask.as_deref(),
                 interpolation,
+                normalize,
             )?;
             output.extend(layer_values);
+            for w in layer_warnings {
+                if !all_warnings.contains(&w) {
+                    all_warnings.push(w);
+                }
+            }
         }
-        return Ok(output);
+        return Ok((output, all_warnings));
     }
 
     let target_grid = active_domain_grid(snapshot)
@@ -6947,6 +7199,7 @@ fn resample_field_state_to_snapshot_domain(
         target_spacing,
         active_mask.as_deref(),
         interpolation,
+        normalize,
     )
 }
 

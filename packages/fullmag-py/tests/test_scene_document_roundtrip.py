@@ -408,5 +408,105 @@ def test_scene_round_trip_preserves_authored_global_mesh_order(tmp_path: Path) -
         assert builder_overrides_from_scene_document(rebuilt)["mesh"]["order"] == order
 
 
+def test_scene_document_round_trips_material_constitutive_visualization_hint(
+    tmp_path: Path,
+) -> None:
+    import pytest
+
+    source = tmp_path / "material_constitutive_source.py"
+    source.write_text(
+        """import fullmag as fm
+study = fm.study('material-constitutive-roundtrip')
+study.engine('fem')
+study.airbox.visualization(show=True, opacity=35.0)
+body = study.geometry(fm.Box(100e-9, 40e-9, 5e-9), name='film')
+body.Ms = 800e3
+body.Aex = 13e-12
+body.m = fm.texture.uniform(1, 0, 0)
+study.stages.add_run(stage_id='run', until=1e-12)
+""",
+        encoding="utf-8",
+    )
+    loaded = fm.load_problem_from_script(source, lightweight_assets=True)
+    scene = build_scene_document_from_builder(export_builder_draft(loaded))
+
+    constitutive_payload = {
+        "mat:film": {
+            "gamma": 1.847e11,
+            "lande_g": 2.1,
+            "conductivity": 5.8e6,
+            "density": 8900.0,
+            "magnetoelastic": {
+                "enabled": True,
+                "b1": -6.2e6,
+                "b2": -4.3e6,
+                "c11": 2.5e11,
+                "c12": 1.6e11,
+                "c44": 1.18e11,
+            },
+        }
+    }
+    scene["study"].setdefault("visualization_hint", {})[
+        "material_constitutive"
+    ] = constitutive_payload
+
+    rebuilt_builder = build_builder_from_scene_document(scene)
+    assert (
+        rebuilt_builder["visualization_hint"]["material_constitutive"]
+        == constitutive_payload
+    )
+    overrides = builder_overrides_from_scene_document(scene)
+    assert (
+        overrides["visualization_hint"]["material_constitutive"]
+        == constitutive_payload
+    )
+    assert overrides["visualization_hint"]["airbox"]["show"] is True
+
+    # 1. Direct SceneDocument -> canonical script -> reload -> SceneDocument round-trip
+    rendered_direct = render_scene_document_as_script(scene)
+    assert "fm.runtime_metadata('material_constitutive'" in rendered_direct
+    assert "study.airbox.visualization(" in rendered_direct
+
+    exported_direct = tmp_path / "exported_direct.py"
+    exported_direct.write_text(rendered_direct, encoding="utf-8")
+    reloaded_direct = fm.load_problem_from_script(exported_direct, lightweight_assets=True)
+    rebuilt_scene_direct = build_scene_document_from_builder(
+        export_builder_draft(reloaded_direct)
+    )
+    assert (
+        rebuilt_scene_direct["study"]["visualization_hint"]["material_constitutive"]
+        == constitutive_payload
+    )
+    assert (
+        rebuilt_scene_direct["study"]["visualization_hint"]["airbox"]["show"]
+        is True
+    )
+
+    # 2. Loaded script + SceneDocument overrides -> rewrite -> reload round-trip
+    rewritten = rewrite_loaded_problem_script(loaded, overrides=overrides)[
+        "rendered_source"
+    ]
+    exported_rewrite = tmp_path / "exported_rewrite.py"
+    exported_rewrite.write_text(rewritten, encoding="utf-8")
+    reloaded_rewrite = fm.load_problem_from_script(
+        exported_rewrite, lightweight_assets=True
+    )
+    rebuilt_scene_rewrite = build_scene_document_from_builder(
+        export_builder_draft(reloaded_rewrite)
+    )
+    assert (
+        rebuilt_scene_rewrite["study"]["visualization_hint"]["material_constitutive"]
+        == constitutive_payload
+    )
+
+    # 3. Unsupported fields inside material_constitutive are rejected explicitly
+    bad_scene = build_scene_document_from_builder(export_builder_draft(loaded))
+    bad_scene["study"]["visualization_hint"] = {
+        "material_constitutive": {"mat:film": {"unknown_knob": 1.0}}
+    }
+    with pytest.raises(ValueError, match="unsupported fields"):
+        build_builder_from_scene_document(bad_scene)
+
+
 if __name__ == "__main__":
     unittest.main()

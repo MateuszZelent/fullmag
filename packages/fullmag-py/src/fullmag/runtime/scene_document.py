@@ -2047,11 +2047,20 @@ def build_scene_document_from_builder(builder: dict[str, Any]) -> dict[str, Any]
     document["study"].update(_compute_resources_fields(builder, "builder"))
     visualization_hint = builder.get("visualization_hint")
     if isinstance(visualization_hint, Mapping):
+        study_viz_hint: dict[str, Any] = {}
         airbox_hint = visualization_hint.get("airbox")
         if airbox_hint is not None:
-            document["study"]["visualization_hint"] = {
-                "airbox": copy.deepcopy(airbox_hint)
-            }
+            study_viz_hint["airbox"] = copy.deepcopy(airbox_hint)
+        material_constitutive_hint = visualization_hint.get("material_constitutive")
+        if material_constitutive_hint is not None:
+            canonical_mc = canonical_material_constitutive_hint(
+                material_constitutive_hint,
+                context="builder.visualization_hint.material_constitutive",
+            )
+            if canonical_mc:
+                study_viz_hint["material_constitutive"] = canonical_mc
+        if study_viz_hint:
+            document["study"]["visualization_hint"] = study_viz_hint
     if "spin_torques" in builder:
         document["spin_torques"] = _canonical_spin_torques(
             builder["spin_torques"], scene_ids=True
@@ -2065,6 +2074,69 @@ def build_scene_document_from_builder(builder: dict[str, Any]) -> dict[str, Any]
             builder["oersted_terms"], scene_ids=True
         )
     return document
+
+
+def canonical_material_constitutive_hint(
+    raw: object,
+    *,
+    context: str = "SceneDocument.study.visualization_hint.material_constitutive",
+) -> dict[str, dict[str, Any]]:
+    """Validate and canonicalize ``visualization_hint.material_constitutive``."""
+    if not isinstance(raw, Mapping):
+        raise ValueError(f"{context} must be an object")
+    allowed_entry_keys = {
+        "gamma",
+        "lande_g",
+        "conductivity",
+        "density",
+        "magnetoelastic",
+    }
+    allowed_magnetoelastic_keys = {"enabled", "b1", "b2", "c11", "c12", "c44"}
+    canonical: dict[str, dict[str, Any]] = {}
+    for raw_key, raw_entry in raw.items():
+        if not isinstance(raw_key, str) or not raw_key.strip():
+            raise ValueError(f"{context} keys must be non-empty strings")
+        entry_ctx = f"{context}[{raw_key!r}]"
+        if not isinstance(raw_entry, Mapping):
+            raise ValueError(f"{entry_ctx} must be an object")
+        unknown = sorted(str(k) for k in set(raw_entry) - allowed_entry_keys)
+        if unknown:
+            raise ValueError(
+                f"{entry_ctx} has unsupported fields: {', '.join(unknown)}"
+            )
+        entry_out: dict[str, Any] = {}
+        for num_key in ("gamma", "lande_g", "conductivity", "density"):
+            if num_key in raw_entry and raw_entry[num_key] is not None:
+                entry_out[num_key] = _finite_number(
+                    raw_entry[num_key], f"{entry_ctx}.{num_key}"
+                )
+        if "magnetoelastic" in raw_entry and raw_entry["magnetoelastic"] is not None:
+            raw_me = raw_entry["magnetoelastic"]
+            me_ctx = f"{entry_ctx}.magnetoelastic"
+            if not isinstance(raw_me, Mapping):
+                raise ValueError(f"{me_ctx} must be an object")
+            unknown_me = sorted(
+                str(k) for k in set(raw_me) - allowed_magnetoelastic_keys
+            )
+            if unknown_me:
+                raise ValueError(
+                    f"{me_ctx} has unsupported fields: {', '.join(unknown_me)}"
+                )
+            me_out: dict[str, Any] = {}
+            if "enabled" in raw_me and raw_me["enabled"] is not None:
+                if not isinstance(raw_me["enabled"], bool):
+                    raise ValueError(f"{me_ctx}.enabled must be a boolean")
+                me_out["enabled"] = raw_me["enabled"]
+            for me_num_key in ("b1", "b2", "c11", "c12", "c44"):
+                if me_num_key in raw_me and raw_me[me_num_key] is not None:
+                    me_out[me_num_key] = _finite_number(
+                        raw_me[me_num_key], f"{me_ctx}.{me_num_key}"
+                    )
+            if me_out:
+                entry_out["magnetoelastic"] = me_out
+        if entry_out:
+            canonical[raw_key] = entry_out
+    return canonical
 
 
 def build_builder_from_scene_document(scene: dict[str, Any]) -> dict[str, Any]:
@@ -2400,6 +2472,34 @@ def build_builder_from_scene_document(scene: dict[str, Any]) -> dict[str, Any]:
         builder["pbc"] = _scene_pbc_to_ir(study["pbc"])
     if "fdm" in study:
         builder["fdm"] = copy.deepcopy(study.get("fdm"))
+    if "visualization_hint" in study and study["visualization_hint"] is not None:
+        raw_viz_hint = study["visualization_hint"]
+        if not isinstance(raw_viz_hint, Mapping):
+            raise ValueError(
+                "SceneDocument.study.visualization_hint must be an object"
+            )
+        unsupported_viz_fields = sorted(
+            str(name)
+            for name in set(raw_viz_hint) - {"airbox", "material_constitutive"}
+        )
+        if unsupported_viz_fields:
+            names = ", ".join(unsupported_viz_fields)
+            raise ValueError(
+                "SceneDocument.study.visualization_hint has unsupported fields: "
+                f"{names}"
+            )
+        builder_viz_hint: dict[str, Any] = {}
+        if raw_viz_hint.get("airbox") is not None:
+            builder_viz_hint["airbox"] = copy.deepcopy(raw_viz_hint["airbox"])
+        if raw_viz_hint.get("material_constitutive") is not None:
+            canonical_mc = canonical_material_constitutive_hint(
+                raw_viz_hint["material_constitutive"],
+                context="SceneDocument.study.visualization_hint.material_constitutive",
+            )
+            if canonical_mc:
+                builder_viz_hint["material_constitutive"] = canonical_mc
+        if builder_viz_hint:
+            builder["visualization_hint"] = builder_viz_hint
     if "field_drives" in scene:
         field_drives = scene["field_drives"]
         if not isinstance(field_drives, Mapping):
@@ -2794,10 +2894,12 @@ def builder_overrides_from_scene_document(scene: dict[str, Any]) -> dict[str, An
                     "SceneDocument.study.visualization_hint has unsupported fields: "
                     f"{names}"
                 )
-            if "airbox" in visualization_hint:
-                overrides["visualization_hint"] = {
-                    "airbox": copy.deepcopy(visualization_hint["airbox"])
-                }
+            if "visualization_hint" in builder:
+                overrides["visualization_hint"] = copy.deepcopy(
+                    builder["visualization_hint"]
+                )
+            else:
+                overrides["visualization_hint"] = {}
     if isinstance(raw_study, Mapping) and "pbc" in raw_study:
         # Missing is no override; explicit null intentionally clears PBC.
         overrides["pbc"] = copy.deepcopy(builder["pbc"])

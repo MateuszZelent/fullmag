@@ -1,0 +1,197 @@
+{
+  "document": {
+    "path": "docs/physics/0535-ovf-npz-field-state-import-and-trilinear-resampling.md",
+    "title": "OVF 1.0/2.0 and NPZ field-state import, domain-overlap validation, and masked trilinear resampling with antipodal fallback",
+    "status": "accepted_contract_not_production_qualified",
+    "updated": "2026-11-22"
+  },
+  "backend_matrix": [
+    {
+      "solver": "FDM",
+      "device": "CPU",
+      "role": "exact, nearest, and masked trilinear cell-center import",
+      "status": "source_and_test_evidence_runtime_separate"
+    },
+    {
+      "solver": "FDM",
+      "device": "GPU",
+      "role": "receives unit-normalized host-resampled state buffer",
+      "status": "not_runtime_qualified"
+    },
+    {
+      "solver": "FEM",
+      "device": "CPU",
+      "role": "nearest and masked trilinear P1 magnetic-node import",
+      "status": "source_and_test_evidence_runtime_separate"
+    },
+    {
+      "solver": "FEM",
+      "device": "GPU",
+      "role": "receives unit-normalized host-resampled nodal buffer",
+      "status": "not_runtime_qualified"
+    }
+  ],
+  "equations": [
+    {
+      "id": "ovf-bbox-overlap-gate",
+      "symbols": ["N_in", "M_pts", "o_a", "n_a", "h_a", "eps_a", "p_ja"],
+      "sources": ["py-resampler", "rust-bbox-check"]
+    },
+    {
+      "id": "trilinear-cell-coords",
+      "symbols": ["u_a", "n_a", "p_a", "o_a", "h_a", "i_a0", "i_a1", "t_a"],
+      "sources": ["py-resampler", "rust-sampler"]
+    },
+    {
+      "id": "masked-trilinear-sum",
+      "symbols": ["m_tilde", "m_vec", "w_abc", "W_sum", "eps_0"],
+      "sources": ["py-resampler", "rust-sampler"]
+    },
+    {
+      "id": "trilinear-antipodal-fallback",
+      "symbols": ["m_out", "m_tilde", "W_sum", "m_nn", "eps_0"],
+      "sources": ["py-nearest", "py-resampler", "rust-nearest", "rust-sampler"]
+    }
+  ],
+  "symbols": [
+    {"id": "m_vec", "latex": "$\\mathbf m$", "meaning": "źródłowy wektor pola (magnetyzacji)", "si_unit": "$1$"},
+    {"id": "m_tilde", "latex": "$\\tilde{\\mathbf m}$", "meaning": "nieznormalizowany akumulator maskowanej sumy trójliniowej", "si_unit": "$1$"},
+    {"id": "m_nn", "latex": "$\\mathbf m_{\\mathrm{NN}}$", "meaning": "wektor najbliższej euklidesowo niezerowej komórki źródłowej", "si_unit": "$1$"},
+    {"id": "m_out", "latex": "$\\mathbf m_{\\mathrm{out}}$", "meaning": "wynikowy wektor zresamplowanego pola", "si_unit": "$1$"},
+    {"id": "n_a", "latex": "$n_a$", "meaning": "liczba komórek siatki źródłowej wzdłuż osi $a$", "si_unit": "$1$"},
+    {"id": "o_a", "latex": "$o_a$", "meaning": "współrzędna początku siatki źródłowej wzdłuż osi $a$", "si_unit": "$\\mathrm{m}$"},
+    {"id": "h_a", "latex": "$h_a$", "meaning": "rozmiar komórki siatki źródłowej wzdłuż osi $a$", "si_unit": "$\\mathrm{m}$"},
+    {"id": "eps_a", "latex": "$\\varepsilon_a$", "meaning": "tolerancja numeryczna obwiedni brzegowej ($10^{-9} h_a$)", "si_unit": "$\\mathrm{m}$"},
+    {"id": "p_a", "latex": "$p_a$", "meaning": "współrzędna punktu docelowego wzdłuż osi $a$", "si_unit": "$\\mathrm{m}$"},
+    {"id": "p_ja", "latex": "$p_{j,a}$", "meaning": "składowa $a$ $j$-tego punktu docelowego", "si_unit": "$\\mathrm{m}$"},
+    {"id": "M_pts", "latex": "$M$", "meaning": "liczba aktywnych punktów docelowych", "si_unit": "$1$"},
+    {"id": "N_in", "latex": "$N_{\\mathrm{in}}$", "meaning": "liczba aktywnych punktów docelowych wewnątrz obwiedni źródła", "si_unit": "$1$"},
+    {"id": "u_a", "latex": "$u_a$", "meaning": "ciągły indeks komórkowy wzdłuż osi $a$", "si_unit": "$1$"},
+    {"id": "i_a0", "latex": "$i_{a,0}$", "meaning": "dolny indeks narożnika komórki interpolacji", "si_unit": "$1$"},
+    {"id": "i_a1", "latex": "$i_{a,1}$", "meaning": "górny indeks narożnika komórki interpolacji", "si_unit": "$1$"},
+    {"id": "t_a", "latex": "$t_a$", "meaning": "ułamkowa waga interpolacji liniowej wzdłuż osi $a$", "si_unit": "$1$"},
+    {"id": "w_abc", "latex": "$w_{\\alpha\\beta\\gamma}$", "meaning": "trójliniowa waga narożnika $(\\alpha,\\beta,\\gamma)$", "si_unit": "$1$"},
+    {"id": "W_sum", "latex": "$W$", "meaning": "suma wag niezerowych narożników komórki", "si_unit": "$1$"},
+    {"id": "eps_0", "latex": "$\\varepsilon_0$", "meaning": "próg odcięcia komórek zerowych i kancelacji antypodalnej ($10^{-12}$)", "si_unit": "$1$"}
+  ],
+  "sources": [
+    {
+      "id": "py-ovf-parse",
+      "path": "packages/fullmag-py/src/fullmag/init/state_io.py",
+      "symbol": "parse_ovf_bytes",
+      "responsibility": "Python OVF 1.0/2.0 parser"
+    },
+    {
+      "id": "py-ovf-save",
+      "path": "packages/fullmag-py/src/fullmag/init/state_io.py",
+      "symbol": "save_ovf",
+      "responsibility": "Python OVF 2.0 writer"
+    },
+    {
+      "id": "py-npz-load",
+      "path": "packages/fullmag-py/src/fullmag/init/state_io.py",
+      "symbol": "_load_numpy_field_values",
+      "responsibility": "Python NPZ 4D axis-order loader"
+    },
+    {
+      "id": "py-nearest",
+      "path": "packages/fullmag-py/src/fullmag/init/state_io.py",
+      "symbol": "_nearest_nonzero_cell",
+      "responsibility": "Python shell-expanding nearest nonzero cell"
+    },
+    {
+      "id": "py-resampler",
+      "path": "packages/fullmag-py/src/fullmag/init/state_io.py",
+      "symbol": "resample_imported_field",
+      "responsibility": "Python masked trilinear resampler"
+    },
+    {
+      "id": "rust-ovf-parse",
+      "path": "crates/fullmag-api/src/session_persistence.rs",
+      "symbol": "parse_ovf_bytes",
+      "responsibility": "Rust OVF 1.0/2.0 parser"
+    },
+    {
+      "id": "rust-bbox-check",
+      "path": "crates/fullmag-api/src/session_persistence.rs",
+      "symbol": "check_source_target_bbox_overlap",
+      "responsibility": "Rust source/target bounding-box overlap validator"
+    },
+    {
+      "id": "rust-nearest",
+      "path": "crates/fullmag-api/src/session_persistence.rs",
+      "symbol": "nearest_nonzero_grid_vector",
+      "responsibility": "Rust shell-expanding nearest nonzero vector"
+    },
+    {
+      "id": "rust-sampler",
+      "path": "crates/fullmag-api/src/session_persistence.rs",
+      "symbol": "sample_field_state_at_point",
+      "responsibility": "Rust masked trilinear point sampler"
+    }
+  ],
+  "public_api": {
+    "parameters": [
+      {
+        "python": "load_field_state.format",
+        "type": "str",
+        "default": "auto",
+        "si_unit": "$1$",
+        "validation": "auto, ovf, npz, npy, zarr, h5, or json",
+        "meaning": "format pliku wejściowego stanu pola",
+        "backend_support": "FDM/FEM CPU/GPU",
+        "problem_ir": "magnets[].initial_magnetization[kind=sampled_field]"
+      },
+      {
+        "python": "load_field_state.source_origin",
+        "type": "Sequence[float]",
+        "default": "None",
+        "si_unit": "$\\mathrm{m}$",
+        "validation": "finite 3-vector or None",
+        "meaning": "jawne nadpisanie początku siatki źródłowej",
+        "backend_support": "FDM/FEM CPU/GPU",
+        "problem_ir": "runtime resampling coordinate transform"
+      },
+      {
+        "python": "save_ovf.encoding",
+        "type": "str",
+        "default": "binary4",
+        "si_unit": "$1$",
+        "validation": "binary4, binary8, or text",
+        "meaning": "kodowanie bloku danych OVF 2.0",
+        "backend_support": "export utility",
+        "problem_ir": "artifact file encoding"
+      },
+      {
+        "python": "resample_imported_field.interpolation",
+        "type": "str",
+        "default": "trilinear",
+        "si_unit": "$1$",
+        "validation": "exact, nearest, or trilinear",
+        "meaning": "metoda interpolacji przestrzennej",
+        "backend_support": "FDM/FEM CPU/GPU",
+        "problem_ir": "session field-state import / sampled_field"
+      },
+      {
+        "python": "resample_imported_field.normalize",
+        "type": "bool",
+        "default": "True",
+        "si_unit": "$1$",
+        "validation": "bool",
+        "meaning": "renormalizacja wektorów wyjściowych do normy 1",
+        "backend_support": "FDM/FEM CPU/GPU",
+        "problem_ir": "magnets[].initial_magnetization.values"
+      },
+      {
+        "python": "resample_imported_field.zero_threshold",
+        "type": "float",
+        "default": "1e-12",
+        "si_unit": "$1$",
+        "validation": "finite and > 0",
+        "meaning": "próg normy wykluczający komórki próżniowe",
+        "backend_support": "FDM/FEM CPU/GPU",
+        "problem_ir": "resampling numerical threshold"
+      }
+    ]
+  }
+}

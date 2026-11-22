@@ -4,6 +4,7 @@ import json
 import math
 import shutil
 import struct
+import warnings
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal, Sequence
@@ -31,16 +32,19 @@ class FieldState:
     grid_shape: tuple[int, int, int] | None = None
     grid_origin: tuple[float, float, float] | None = None
     grid_spacing: tuple[float, float, float] | None = None
+    origin_explicit: bool = True
 
     @property
     def component_count(self) -> int:
         return len(self.values[0]) if self.values else 0
 
     def as_sampled_magnetization(self) -> SampledMagnetization:
-        if self.quantity_id != "m":
-            raise ValueError("only quantity 'm' can be used as sampled magnetization")
+        if self.quantity_id != "m" or self.component_count != 3:
+            raise ValueError(
+                "only 3-component quantity 'm' (valuedim=3) can be used as sampled magnetization"
+            )
         return SampledMagnetization(
-            self.values,
+            self.values,  # type: ignore[arg-type]
             source_path=self.source_path,
             source_format=self.source_format,
             dataset=self.dataset,
@@ -140,12 +144,33 @@ def load_field_state(
     format: str = "auto",
     dataset: str | None = None,
     sample: int = -1,
+    source_origin: Sequence[float] | None = None,
 ) -> FieldState:
     resolved = _resolve_state_path(path)
     normalized_format = _normalize_field_state_format(resolved, format)
+    explicit_origin = _extract_vec3(source_origin) if source_origin is not None else None
+    if source_origin is not None and explicit_origin is None:
+        raise ValueError("source_origin must be a finite 3-component coordinate vector")
 
     if normalized_format == "ovf":
-        return parse_ovf_bytes(resolved.read_bytes(), source_path=str(resolved))
+        ovf_state = parse_ovf_bytes(resolved.read_bytes(), source_path=str(resolved))
+        if explicit_origin is not None:
+            return FieldState(
+                values=ovf_state.values,
+                quantity_id=ovf_state.quantity_id,
+                target_kind=ovf_state.target_kind,
+                target_id=ovf_state.target_id,
+                units=ovf_state.units,
+                source_path=ovf_state.source_path,
+                source_format=ovf_state.source_format,
+                dataset=ovf_state.dataset,
+                sample_index=ovf_state.sample_index,
+                grid_shape=ovf_state.grid_shape,
+                grid_origin=explicit_origin,
+                grid_spacing=ovf_state.grid_spacing,
+                origin_explicit=True,
+            )
+        return ovf_state
 
     grid_shape: tuple[int, int, int] | None = None
     grid_origin: tuple[float, float, float] | None = None
@@ -178,7 +203,9 @@ def load_field_state(
         raise ValueError(f"unsupported field state format '{normalized_format}'")
 
     grid_shape = _extract_grid_shape(metadata.get("grid_shape"))
-    grid_origin = _extract_vec3(metadata.get("grid_origin", metadata.get("origin")))
+    file_origin = _extract_vec3(metadata.get("grid_origin", metadata.get("origin")))
+    grid_origin = explicit_origin if explicit_origin is not None else file_origin
+    origin_explicit = grid_origin is not None
     grid_spacing = _extract_vec3(metadata.get("grid_spacing", metadata.get("spacing")))
     resolved_sample_index = None if sample < 0 else sample
     return FieldState(
@@ -194,6 +221,7 @@ def load_field_state(
         grid_shape=grid_shape,
         grid_origin=grid_origin,
         grid_spacing=grid_spacing,
+        origin_explicit=origin_explicit,
     )
 
 
@@ -988,6 +1016,7 @@ def parse_ovf_bytes(raw: bytes, *, source_path: str | None = None) -> FieldState
     if valuedim not in (1, 3):
         raise ValueError(f"OVF valuedim must be 1 or 3, got {valuedim}")
 
+    origin_explicit = all(k in headers for k in ("xmin", "ymin", "zmin"))
     xmin = float(headers.get("xmin", "0.0"))
     ymin = float(headers.get("ymin", "0.0"))
     zmin = float(headers.get("zmin", "0.0"))
@@ -1075,6 +1104,7 @@ def parse_ovf_bytes(raw: bytes, *, source_path: str | None = None) -> FieldState
         grid_shape=(nx, ny, nz),
         grid_origin=(xmin, ymin, zmin),
         grid_spacing=(dx, dy, dz),
+        origin_explicit=origin_explicit,
     )
 
 
@@ -1170,6 +1200,7 @@ def _load_numpy_field_values(
         "target_kind": "object",
         "target_id": "body",
     }
+    axis_order: str | None = None
     raw_loaded = np.load(path, allow_pickle=False)
     try:
         if hasattr(raw_loaded, "files"):
@@ -1185,6 +1216,26 @@ def _load_numpy_field_values(
             ):
                 if meta_key in raw_loaded.files:
                     metadata[target_key] = np.asarray(raw_loaded[meta_key]).tolist()
+            if "axis_order" in raw_loaded.files:
+                raw_axis_order = raw_loaded["axis_order"]
+                if hasattr(raw_axis_order, "item"):
+                    raw_axis_order = raw_axis_order.item()
+                if isinstance(raw_axis_order, bytes):
+                    raw_axis_order = raw_axis_order.decode("utf-8")
+                axis_order = str(raw_axis_order).strip().lower()
+                if axis_order not in {"zyx", "xyz"}:
+                    raise ValueError(
+                        f"NPZ axis_order must be 'zyx' (canonical [Nz, Ny, Nx, C]) or 'xyz' ([Nx, Ny, Nz, C]), got {raw_axis_order!r}"
+                    )
+            reserved_meta = {
+                "origin",
+                "grid_origin",
+                "spacing",
+                "grid_spacing",
+                "grid_shape",
+                "axis_order",
+                "coords",
+            }
             selected_key = dataset
             if selected_key is None:
                 for preferred in ("m", "values", "magnetization", "fields/m"):
@@ -1195,9 +1246,9 @@ def _load_numpy_field_values(
                 vec_keys = [
                     key
                     for key in files
-                    if key not in {"origin", "grid_origin", "spacing", "grid_spacing", "grid_shape", "coords"}
+                    if key not in reserved_meta
                     and np.asarray(raw_loaded[key]).ndim >= 2
-                    and np.asarray(raw_loaded[key]).shape[-1] == 3
+                    and np.asarray(raw_loaded[key]).shape[-1] in (1, 3)
                 ]
                 if len(vec_keys) == 1:
                     selected_key = vec_keys[0]
@@ -1218,11 +1269,36 @@ def _load_numpy_field_values(
         if hasattr(raw_loaded, "close"):
             raw_loaded.close()
 
-    # Handle 4D structured grid [Nz, Ny, Nx, 3] (C-order gives x fastest: idx = x + nx*(y + ny*z))
+    # Handle 4D structured grid: canonical layout is [Nz, Ny, Nx, C] (x fastest in C-order: idx = x + nx*(y + ny*z))
     if arr.ndim == 4 and arr.shape[-1] in (1, 3):
-        nz, ny, nx, comp = arr.shape
-        metadata.setdefault("grid_shape", [int(nx), int(ny), int(nz)])
-        arr = np.ascontiguousarray(arr).reshape((nx * ny * nz, comp))
+        declared_shape = _extract_grid_shape(metadata.get("grid_shape"))
+        if axis_order == "xyz":
+            nx, ny, nz, comp = arr.shape
+            if declared_shape is not None and declared_shape != (nx, ny, nz):
+                raise ValueError(
+                    f"NPZ 4D array shape {tuple(arr.shape)} with axis_order='xyz' does not match grid_shape={declared_shape}"
+                )
+            arr = np.ascontiguousarray(np.transpose(arr, (2, 1, 0, 3))).reshape(
+                (nx * ny * nz, comp)
+            )
+            metadata["grid_shape"] = [int(nx), int(ny), int(nz)]
+        else:
+            d0, d1, d2, comp = arr.shape
+            if declared_shape is not None:
+                gx, gy, gz = declared_shape
+                if (d0, d1, d2) != (gz, gy, gx):
+                    if (d0, d1, d2) == (gx, gy, gz):
+                        raise ValueError(
+                            f"NPZ 4D array shape {tuple(arr.shape)} uses [Nx, Ny, Nz, C] axis order instead of canonical [Nz, Ny, Nx, C]=({gz}, {gy}, {gx}, {comp}) for grid_shape={declared_shape}; transpose with arr.transpose(2, 1, 0, 3) or include axis_order='xyz' explicitly"
+                        )
+                    raise ValueError(
+                        f"NPZ 4D array shape {tuple(arr.shape)} does not match canonical [Nz, Ny, Nx, C]=({gz}, {gy}, {gx}, {comp}) for grid_shape={declared_shape}"
+                    )
+                nz, ny, nx = gz, gy, gx
+            else:
+                nz, ny, nx = d0, d1, d2
+                metadata["grid_shape"] = [int(nx), int(ny), int(nz)]
+            arr = np.ascontiguousarray(arr).reshape((nx * ny * nz, comp))
     elif arr.ndim == 3 and arr.shape[-1] in (1, 3):
         arr = _select_field_sample(arr, sample=sample)
     elif arr.ndim == 2:
@@ -1235,9 +1311,17 @@ def _load_numpy_field_values(
     else:
         raise ValueError(f"unsupported NumPy field array shape {tuple(arr.shape)}")
 
+    if arr.shape[1] not in (1, 3):
+        raise ValueError(f"field state valuedim must be 1 or 3, got {arr.shape[1]}")
+    if arr.shape[1] == 1 and dataset_name not in {"m", "magnetization", "fields/m"}:
+        metadata["quantity_id"] = "scalar"
+
     if not np.all(np.isfinite(arr)):
         raise ValueError(f"{path} contains non-finite field values")
     return arr, dataset_name, metadata
+
+
+_DETERMINISTIC_UNIT_FALLBACK: tuple[float, float, float] = (0.0, 0.0, 1.0)
 
 
 def _nearest_nonzero_cell(
@@ -1258,28 +1342,73 @@ def _nearest_nonzero_cell(
     if norm > zero_threshold:
         return (float(v[0]), float(v[1]), float(v[2]))
 
-    best_vec = (0.0, 0.0, 0.0)
+    best_vec: tuple[float, float, float] | None = None
     best_dist_sq = math.inf
-    for dz in (-1, 0, 1):
-        jz = iz + dz
-        if not (0 <= jz < nz):
-            continue
+    max_shell = max(nx, ny, nz) - 1
+    found_shell = 0
+
+    for r in range(1, max_shell + 1):
+        z_lo = max(0, iz - r)
+        z_hi = min(nz - 1, iz + r)
+        y_lo = max(0, iy - r)
+        y_hi = min(ny - 1, iy + r)
+        x_lo = max(0, ix - r)
+        x_hi = min(nx - 1, ix + r)
+        for jz in range(z_lo, z_hi + 1):
+            on_z = abs(jz - iz) == r
+            cz = origin[2] + (jz + 0.5) * spacing[2]
+            for jy in range(y_lo, y_hi + 1):
+                on_yz = on_z or (abs(jy - iy) == r)
+                cy = origin[1] + (jy + 0.5) * spacing[1]
+                for jx in range(x_lo, x_hi + 1):
+                    if not (on_yz or abs(jx - ix) == r):
+                        continue
+                    cand = grid[jz, jy, jx]
+                    cnorm = math.sqrt(
+                        float(cand[0] * cand[0] + cand[1] * cand[1] + cand[2] * cand[2])
+                    )
+                    if cnorm <= zero_threshold:
+                        continue
+                    cx = origin[0] + (jx + 0.5) * spacing[0]
+                    dist_sq = (
+                        (point[0] - cx) ** 2
+                        + (point[1] - cy) ** 2
+                        + (point[2] - cz) ** 2
+                    )
+                    if dist_sq < best_dist_sq:
+                        best_dist_sq = dist_sq
+                        best_vec = (float(cand[0]), float(cand[1]), float(cand[2]))
+        if best_vec is not None:
+            found_shell = r
+            break
+
+    if best_vec is None:
+        return _DETERMINISTIC_UNIT_FALLBACK
+
+    # Refine across anisotropic cells whose Euclidean center distance could beat found_shell
+    best_dist = math.sqrt(best_dist_sq)
+    rx = int(math.ceil(best_dist / spacing[0])) + 1
+    ry = int(math.ceil(best_dist / spacing[1])) + 1
+    rz = int(math.ceil(best_dist / spacing[2])) + 1
+    for jz in range(max(0, iz - rz), min(nz - 1, iz + rz) + 1):
         cz = origin[2] + (jz + 0.5) * spacing[2]
-        for dy in (-1, 0, 1):
-            jy = iy + dy
-            if not (0 <= jy < ny):
-                continue
+        for jy in range(max(0, iy - ry), min(ny - 1, iy + ry) + 1):
             cy = origin[1] + (jy + 0.5) * spacing[1]
-            for dx in (-1, 0, 1):
-                jx = ix + dx
-                if not (0 <= jx < nx):
+            for jx in range(max(0, ix - rx), min(nx - 1, ix + rx) + 1):
+                if max(abs(jx - ix), abs(jy - iy), abs(jz - iz)) <= found_shell:
                     continue
                 cand = grid[jz, jy, jx]
-                cnorm = math.sqrt(float(cand[0] * cand[0] + cand[1] * cand[1] + cand[2] * cand[2]))
+                cnorm = math.sqrt(
+                    float(cand[0] * cand[0] + cand[1] * cand[1] + cand[2] * cand[2])
+                )
                 if cnorm <= zero_threshold:
                     continue
                 cx = origin[0] + (jx + 0.5) * spacing[0]
-                dist_sq = (point[0] - cx) ** 2 + (point[1] - cy) ** 2 + (point[2] - cz) ** 2
+                dist_sq = (
+                    (point[0] - cx) ** 2
+                    + (point[1] - cy) ** 2
+                    + (point[2] - cz) ** 2
+                )
                 if dist_sq < best_dist_sq:
                     best_dist_sq = dist_sq
                     best_vec = (float(cand[0]), float(cand[1]), float(cand[2]))
@@ -1307,11 +1436,17 @@ def resample_imported_field(
     ``nearest`` so every active output vector remains finite with unit norm.
     """
     np = _require_numpy()
+    origin_was_explicit = source_origin is not None
     if isinstance(source_values, FieldState):
+        if source_values.component_count != 3:
+            raise ValueError(
+                f"magnetization resampling requires 3-component vector data (valuedim=3), got valuedim={source_values.component_count}"
+            )
         if source_grid_shape is None:
             source_grid_shape = source_values.grid_shape
         if source_origin is None:
             source_origin = source_values.grid_origin
+            origin_was_explicit = source_values.origin_explicit
         if source_spacing is None:
             source_spacing = source_values.grid_spacing
         raw_src = source_values.values
@@ -1322,12 +1457,30 @@ def resample_imported_field(
 
     src = np.asarray(raw_src, dtype=np.float64)
     if src.ndim == 4 and src.shape[-1] == 3:
-        nz, ny, nx, _ = src.shape
-        if source_grid_shape is None:
+        d0, d1, d2, _ = src.shape
+        if source_grid_shape is not None:
+            gx, gy, gz = (
+                int(source_grid_shape[0]),
+                int(source_grid_shape[1]),
+                int(source_grid_shape[2]),
+            )
+            if (d0, d1, d2) != (gz, gy, gx):
+                if (d0, d1, d2) == (gx, gy, gz):
+                    raise ValueError(
+                        f"4D source_values shape {tuple(src.shape)} uses [Nx, Ny, Nz, 3] order instead of canonical [Nz, Ny, Nx, 3]=({gz}, {gy}, {gx}, 3) for source_grid_shape={source_grid_shape}; transpose with src.transpose(2, 1, 0, 3) first"
+                    )
+                raise ValueError(
+                    f"4D source_values shape {tuple(src.shape)} does not match canonical [Nz, Ny, Nx, 3]=({gz}, {gy}, {gx}, 3) for source_grid_shape={source_grid_shape}"
+                )
+            nz, ny, nx = gz, gy, gx
+        else:
+            nz, ny, nx = d0, d1, d2
             source_grid_shape = (int(nx), int(ny), int(nz))
         src = np.ascontiguousarray(src).reshape((nx * ny * nz, 3))
     elif src.ndim != 2 or src.shape[1] != 3:
-        raise ValueError(f"source_values must have shape [N, 3], got {tuple(src.shape)}")
+        raise ValueError(
+            f"source_values must have shape [N, 3] (valuedim=3), got {tuple(src.shape)}"
+        )
 
     pts = np.asarray(target_points, dtype=np.float64)
     if pts.ndim == 1:
@@ -1366,8 +1519,47 @@ def resample_imported_field(
         )
     origin = (float(source_origin[0]), float(source_origin[1]), float(source_origin[2]))
     spacing = (float(source_spacing[0]), float(source_spacing[1]), float(source_spacing[2]))
+    if not all(math.isfinite(o) for o in origin):
+        raise ValueError("source_origin components must be finite")
     if not all(math.isfinite(s) and s > 0.0 for s in spacing):
         raise ValueError("source_spacing components must be finite and positive")
+
+    if pts.shape[0] > 0:
+        src_min = np.array(origin, dtype=np.float64)
+        src_max = src_min + np.array([nx, ny, nz], dtype=np.float64) * np.array(
+            spacing, dtype=np.float64
+        )
+        tol_bound = 1.0e-9 * np.array(spacing, dtype=np.float64)
+        in_bounds = np.all(
+            (pts >= (src_min - tol_bound)) & (pts <= (src_max + tol_bound)),
+            axis=1,
+        )
+        n_out = int(pts.shape[0] - int(np.sum(in_bounds)))
+        if n_out == pts.shape[0]:
+            pts_min = pts.min(axis=0).tolist()
+            pts_max = pts.max(axis=0).tolist()
+            raise ValueError(
+                f"source grid bounding box [{src_min.tolist()} .. {src_max.tolist()}] m "
+                f"does not overlap target points [{pts_min} .. {pts_max}] m; "
+                "pass explicit source_origin=(...) when importing a [0, L] grid onto a centered [-L/2, L/2] domain"
+            )
+        if n_out > 0 or not origin_was_explicit:
+            diag_parts: list[str] = []
+            if not origin_was_explicit:
+                diag_parts.append(
+                    "source OVF header omitted xmin/ymin/zmin so origin defaulted to (0, 0, 0) m"
+                )
+            if n_out > 0:
+                diag_parts.append(
+                    f"{n_out} of {pts.shape[0]} target points lie outside source grid bounds "
+                    f"[{src_min.tolist()} .. {src_max.tolist()}] m and were clamped to boundary cells"
+                )
+            warnings.warn(
+                "; ".join(diag_parts)
+                + " (pass explicit source_origin=(...) if source/target domain origins differ)",
+                UserWarning,
+                stacklevel=2,
+            )
 
     # Canonical x-fastest flat layout maps to [nz, ny, nx, 3]
     grid = np.ascontiguousarray(src).reshape((nz, ny, nx, 3))
