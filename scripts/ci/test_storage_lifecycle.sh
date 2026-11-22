@@ -93,6 +93,8 @@ python -B scripts/test_docker_retained_recovery_context.py -v
 python -B scripts/test_runtime_service_successor.py -v
 python -B scripts/test_runtime_service_recovery_busy_retry.py -v
 python -B scripts/test_docker_dev_owned_control.py -v
+python -B scripts/test_docker_dev_host.py -v
+python -B scripts/test_docker_dev_storage.py -v
 python -B scripts/test_docker_dev_up.py -v
 python -B scripts/test_docker_script_output_mounts.py -v
 python -B scripts/test_docker_script_output_permissions.py -v

@@ -55,6 +55,43 @@ class DockerDevHostTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "symlink"):
                 host.validate_host_path(link / "scripts")
 
+    def test_linux_bind_rejects_nonlocal_mount_nested_under_ext4(self):
+        records = (
+            "1 0 8:1 / / rw - ext4 /dev/sda rw\n"
+            "2 1 0:42 / /home/fullmag/apps/Windows\\040data rw - 9p E:\\134 rw\n"
+        )
+        with mock.patch.object(host.Path, "read_text", return_value=records):
+            with self.assertRaisesRegex(ValueError, r"9p.*Windows data"):
+                host.validate_linux_mounts({Path("/home/fullmag"): "source checkout"})
+
+    def test_linux_bind_allows_native_submount_and_ignores_siblings(self):
+        records = (
+            "1 0 8:1 / / rw - ext4 /dev/sda rw\n"
+            "2 1 8:2 / /home/fullmag/data rw - ext4 /dev/sdb rw\n"
+            "3 1 0:42 / /home/fullmag-old/windows rw - drvfs H:\\134 rw\n"
+            "4 1 0:43 / /home/fullmag/.codex rw - tmpfs none rw\n"
+        )
+        with mock.patch.object(host.Path, "read_text", return_value=records):
+            host.validate_linux_mounts({Path("/home/fullmag"): "source checkout"})
+
+    def test_linux_compose_bind_rejects_windows_filesystem_above_source(self):
+        records = (
+            "1 0 8:1 / / rw - ext4 /dev/sda rw\n"
+            "2 1 0:42 / /mnt/e rw - 9p E:\\134 rw\n"
+        )
+        document = {"services": {"frontend": {"volumes": [
+            {"type": "bind", "source": "/mnt/e/project/src", "target": "/workspace/src"},
+            {"type": "volume", "source": "cache", "target": "/cache"},
+        ]}}}
+        with mock.patch.object(host.Path, "read_text", return_value=records):
+            with self.assertRaisesRegex(ValueError, r"frontend.*/workspace/src.*9p.*\/mnt/e"):
+                host.validate_compose_binds(document)
+
+    def test_native_windows_does_not_read_linux_mount_table(self):
+        with mock.patch.object(host, "os", SimpleNamespace(name="nt")), \
+                mock.patch.object(host.Path, "read_text", side_effect=AssertionError("Linux mount table read")):
+            host.validate_compose_binds({})
+
     def test_linux_storage_description_is_not_windows_attestation(self):
         with mock.patch.object(host.storage, "filesystem_type", return_value="ext4"):
             description = host.local_volume(Path(__file__).resolve().parent)
