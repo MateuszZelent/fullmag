@@ -8,7 +8,24 @@ import {
   resolveInspectorRoute,
   resolveUnknownInspectorRoute,
 } from "./inspectorRouteCatalog";
-import { ObjectRegionVisualizationTemplatePanel } from "./panels/visualization/TargetVisualizationSpecs";
+import {
+  FdmCellInspectorSpecPanel,
+  FdmGridInspectorSpecPanel,
+} from "./inspectors/mesh";
+import { MagneticTextureInspectorPanel } from "./inspectors/objects";
+import {
+  DispersionDrivenStageResultInspector,
+  DispersionModalStageResultInspector,
+  DispersionResponseFieldAtKResultInspector,
+  DynamicsResultTemplateInspector as DynamicsResultInspector,
+  FmrComparisonInspectorPanel,
+  ResonanceDrivenStageResultInspector,
+  ResonanceModalStageResultInspector,
+} from "./inspectors/results";
+import {
+  EigenmodesStageInspectorPanel as EigenmodesStageOverviewInspectorPanel,
+  FrequencyResponseStageInspectorPanel as FrequencyResponseStageOverviewInspectorPanel,
+} from "./inspectors/study";
 import {
   AirboxMeshBuildInspectorSpecPanel,
   AirboxMeshInspectorSpecPanel,
@@ -18,27 +35,11 @@ import {
   AirboxMeshTopologyInspectorSpecPanel,
   AirboxMultilayerTargetInspectorSpecPanel,
   AirboxRootInspectorSpecPanel,
-} from "./panels/airbox/AirboxAndBoundarySpecs";
-import { AirboxVisualizationDebugInspectorPanel } from "./panels/airbox/AirboxVisualizationDebugInspectorPanel";
+} from "./inspectors/universe";
 import {
-  FdmCellInspectorSpecPanel,
-  FdmGridInspectorSpecPanel,
-} from "./panels/fdm-grid/FdmGridAndCellSpecs";
-import { MagneticTextureInspectorPanel } from "./panels/magnetic-texture/MagneticTextureInspectorPanel";
-import { FmrComparisonInspectorPanel } from "./panels/frequency-domain/FrequencyDomainResultInspectors";
-import {
-  DispersionDrivenStageResultInspector,
-  DispersionModalStageResultInspector,
-  DispersionResponseFieldAtKResultInspector,
-  DynamicsResultInspector,
-  ResonanceDrivenStageResultInspector,
-  ResonanceModalStageResultInspector,
-} from "./panels/physics-first/PhysicsFirstResultInspectors";
-import {
-  EigenmodesStageOverviewInspectorPanel,
-  FrequencyResponseStageOverviewInspectorPanel,
-  StudyStageInspectorRouter,
-} from "./panels/StudyStageInspectorRouter";
+  AirboxVisualizationDebugInspectorPanel,
+  ObjectRegionVisualizationTemplatePanel,
+} from "./inspectors/visualizations";
 
 function frequencyDomainPanelId(kind: string): string {
   return `frequency-domain-${kind.replace(/[.:]/g, "-")}`;
@@ -587,7 +588,6 @@ describe("inspectorRegistry", () => {
       const panel = resolveInspectorPanel({ kind });
       expect(panel?.id).toBe(frequencyDomainPanelId(canonicalKind));
       expect(panel?.component).toBe(expectedComponent);
-      expect(panel?.component).not.toBe(StudyStageInspectorRouter);
     },
   );
 

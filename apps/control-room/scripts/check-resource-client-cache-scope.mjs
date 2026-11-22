@@ -314,13 +314,13 @@ assert.match(
 for (const path of [
   "src/kernel/authoring/AuthoringHistoryController.ts",
   "src/kernel/authoring/objectTranslationMutation.ts",
-  "src/modules/inspector/panels/GeometryObjectPanel.tsx",
+  "src/modules/inspector/inspectors/objects/geometry/geometryMutations.ts",
   "src/modules/inspector/panels/ObjectGeneralPanel.tsx",
-  "src/modules/inspector/panels/ObjectMaterialPanel.tsx",
-  "src/modules/inspector/panels/CouplingInspectorPanel.tsx",
-  "src/modules/inspector/panels/ObjectRegionsPanel.tsx",
-  "src/modules/inspector/panels/RegionsListPanel.tsx",
-  "src/modules/inspector/panels/region/ObjectRegionMagneticParametersPanel.tsx",
+  "src/modules/inspector/panels/magnetic-texture/MagneticTextureInspectorPanel.tsx",
+  "src/modules/inspector/inspectors/objects/physics/DemagAndCouplingSpecs.tsx",
+  "src/modules/inspector/panels/regionAuthoringInvalidation.ts",
+  "src/modules/inspector/panels/region/regionInspectorHelpers.ts",
+  "src/modules/inspector/inspectors/objects/physics/PhysicsModuleSpec.tsx",
 ]) {
   assert.match(readFileSync(path, "utf8"), /resourceCacheScope/);
 }

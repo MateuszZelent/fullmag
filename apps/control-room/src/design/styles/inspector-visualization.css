@@ -237,84 +237,6 @@
   margin-inline: -1px;
 }
 
-/* ── Axis segmented tabs ── */
-.fm-inspector-axis-tabs {
-  min-width: 0;
-}
-
-.fm-inspector-axis-tabs .fm-tabs-list {
-  gap: var(--fm-space-1);
-}
-
-.fm-inspector-axis-tab {
-  position: relative;
-  min-width: var(--fm-inspector-nav-icon-size);
-  padding: var(--fm-space-1) var(--fm-space-2);
-  font-size: var(--fm-font-size-xs);
-  font-weight: 650;
-  letter-spacing: 0.04em;
-}
-
-.fm-inspector-axis-tab[data-axis="x"][data-state="active"] {
-  box-shadow: inset 0 -2px 0 var(--fm-danger);
-}
-
-.fm-inspector-axis-tab[data-axis="y"][data-state="active"] {
-  box-shadow: inset 0 -2px 0 var(--fm-success);
-}
-
-.fm-inspector-axis-tab[data-axis="z"][data-state="active"] {
-  box-shadow: inset 0 -2px 0 var(--fm-accent);
-}
-
-/* ── Compound range slider ── */
-.fm-inspector-range-slider {
-  -webkit-appearance: none;
-  appearance: none;
-  width: 100%;
-  height: var(--fm-slider-track-height);
-  border-radius: 2px;
-  outline: none;
-  cursor: pointer;
-  border: none;
-  margin: var(--fm-space-1) 0;
-  background: linear-gradient(
-    to right,
-    var(--fm-accent) 0%,
-    var(--fm-accent) var(--pct, 50%),
-    var(--fm-border-default) var(--pct, 50%),
-    var(--fm-border-default) 100%
-  );
-}
-
-.fm-inspector-range-slider::-webkit-slider-thumb {
-  -webkit-appearance: none;
-  width: var(--fm-slider-thumb-size);
-  height: var(--fm-slider-thumb-size);
-  border-radius: 50%;
-  background: var(--fm-accent);
-  cursor: pointer;
-  box-shadow:
-    0 0 0 2px var(--fm-bg-panel-raised),
-    var(--fm-shadow-sm);
-  transition: transform var(--fm-transition-fast);
-}
-
-.fm-inspector-range-slider::-webkit-slider-thumb:hover {
-  transform: scale(1.15);
-}
-
-.fm-inspector-range-slider::-moz-range-thumb {
-  width: var(--fm-slider-thumb-size);
-  height: var(--fm-slider-thumb-size);
-  border: none;
-  border-radius: 50%;
-  background: var(--fm-accent);
-  cursor: pointer;
-  box-shadow:
-    0 0 0 2px var(--fm-bg-panel-raised),
-    var(--fm-shadow-sm);
-}
 
 /* ── Render mode tile grid: single 4-column row ── */
 .fm-viz-render-mode-grid {
@@ -648,9 +570,6 @@
 
   .fm-viz-color-swatch {
     transition-property: background, border-color, box-shadow;
-  }
-  .fm-inspector-range-slider::-webkit-slider-thumb {
-    transition: none;
   }
 }
 

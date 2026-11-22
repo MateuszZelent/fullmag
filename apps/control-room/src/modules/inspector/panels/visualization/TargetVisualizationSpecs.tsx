@@ -76,7 +76,7 @@ import {
 } from "../../template";
 import { AirboxVisualizationDebugContent } from "../airbox/AirboxVisualizationDebugInspectorPanel";
 import { AirboxVisualizationPanel } from "../airbox/AirboxVisualizationPanel";
-import { EigenModesVisualizationInspectorPanel } from "../frequency-domain/FrequencyDomainResultInspectors";
+import { EigenModesVisualizationInspectorPanel } from "../../inspectors/results/frequency-domain";
 import { MeshPartVisualizationPanel } from "../MeshPartVisualizationPanel";
 import { ModeVisualizationOverviewPanel } from "../mode-visualization/ModeVisualizationOverviewPanel";
 import { ObjectVisualizationPanel as ObjectVisualizationEntryPanel } from "../ObjectVisualizationEntryPanel";

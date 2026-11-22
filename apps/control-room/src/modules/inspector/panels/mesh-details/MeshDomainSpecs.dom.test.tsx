@@ -440,7 +440,7 @@ import {
   MeshUnassignedInspectorSpecPanel,
   MeshUnassignedPartInspectorSpecPanel,
   ObjectMeshInspectorSpecPanel,
-} from "./MeshDomainSpecs";
+} from "../../inspectors/mesh";
 
 describe("Task 18 MeshDomainSpecs, l_ex guard, FemMeshReadinessGuide and FDM tree", () => {
   let harness: MountedWave5TestDom;

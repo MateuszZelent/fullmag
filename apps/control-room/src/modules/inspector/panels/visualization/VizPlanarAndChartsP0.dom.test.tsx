@@ -257,8 +257,8 @@ import {
   ObjectVisualizationTemplatePanel,
   toggleObjectSurfacePartVectors,
 } from "./TargetVisualizationSpecs";
-import { PlanarMonitorTemplatePanel } from "../PlanarMonitorSpecs";
-import { LiveChartPointTemplatePanel } from "../ChartInspectorSpecs";
+import { PlanarMonitorTemplatePanel } from "../../inspectors/definitions";
+import { LiveChartPointTemplatePanel } from "../../inspectors/visualizations";
 import { Viewport3DSettingsInspectorSpecView } from "@/modules/viewport-3d/components/Viewport3DSettingsAndExportSpecs";
 
 let restoreDom: (() => void) | null = null;

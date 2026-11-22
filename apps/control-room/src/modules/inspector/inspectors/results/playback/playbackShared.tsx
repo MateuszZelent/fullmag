@@ -17,7 +17,7 @@ import { Button } from "@/shared/ui/Button";
 import { EmptyState } from "@/shared/ui/EmptyState";
 import type { InspectorPanelProps } from "../../../inspectorTypes";
 import type { InspectorSpec } from "../../../template";
-import { FrequencyDomainExportsInspectorPanel } from "../../../panels/frequency-domain/FrequencyDomainResultInspectors";
+import { FrequencyDomainExportsInspectorPanel } from "../frequency-domain";
 import { ConnectedInspectorSpec } from "../../../panels/study/ConnectedInspectorSpec";
 import type { PostprocessingInspectorModel } from "../../../panels/physics-first/postprocessingInspectorModel";
 

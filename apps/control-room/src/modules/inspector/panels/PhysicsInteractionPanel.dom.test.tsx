@@ -1,4 +1,4 @@
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync } from "node:fs";
 import { describe, expect, it, vi } from "vitest";
 
 import {
@@ -10,62 +10,8 @@ import { SESSION_STATUS_RESOURCE_KEY } from "@/kernel/resources/useSessionStatus
 import { allInteractionSpecs } from "@/shared/domain/physics/interactions";
 
 import { commitObjectInteractionMutation } from "./PhysicsInteractionPanel.model";
-import { interactionIdFromSelection } from "./PhysicsInteractionPanelModel";
 
 describe("PhysicsInteractionPanel lane contract", () => {
-  it("recognizes the canonical ribbon node for global rotated interfacial DMI", () => {
-    // ribbonCommands.ts emits global selections as model:physics:${interactionId}.
-    expect(
-      interactionIdFromSelection("model:physics:rotated_interfacial_dmi"),
-    ).toBe("rotated_interfacial_dmi");
-  });
-
-  it("uses the resolved interaction catalog and blocks unresolved writes", () => {
-    const source = readFileSync(
-      new URL("./PhysicsInteractionPanel.tsx", import.meta.url),
-      "utf8",
-    );
-
-    expect(source).toContain("useActiveLaneCapabilities(");
-    expect(source).toContain("resolveActiveLaneOperation(");
-    expect(source).toContain("interactionSpecsForDiscretization(");
-    expect(source).toContain("validateInteractionDraftForDiscretization(");
-    expect(source).toContain('if (interactionDiscretization === "unknown")');
-    expect(source).not.toContain("interactionSelectOptions()");
-    expect(source).not.toContain("AIRBOX_VISUALIZATION_TARGET");
-  });
-
-  it("guards the write path with the authoritative active-lane operation", () => {
-    const source = readFileSync(
-      new URL("./PhysicsInteractionPanel.tsx", import.meta.url),
-      "utf8",
-    );
-
-    expect(source).toContain("if (!activeLaneOperation.enabled)");
-    expect(source).toContain("activeLaneOperation.reason");
-  });
-
-  it("keeps pending and revision-conflict recovery scoped to one interaction", () => {
-    const source = readFileSync(
-      new URL("./PhysicsInteractionPanel.tsx", import.meta.url),
-      "utf8",
-    );
-
-    expect(source).toContain("interactionMutationKey(");
-    expect(source).toContain("mutations: Record<string");
-    expect(source).toContain("runAuthoringMutationWithHistory(");
-    expect(source).toContain(
-      "base_revision: baseRevision ?? resource.scene_revision",
-    );
-    expect(source).toContain(
-      "base_revision: baseRevision ?? sceneBaseRevision",
-    );
-    expect(source).toContain("resolveSceneResourceRevision(scene.data)");
-    expect(source).toContain("scene.refetch()");
-    expect(source).toContain("Draft preserved; scene refetched");
-    expect(source).not.toContain("JSON.stringify(draft)");
-  });
-
   it("invalidates from the final object interaction ACK without a synthetic fallback", async () => {
     const patch = vi.fn(async () => ({ scene_revision: 41 }));
     const invalidate = vi.fn();
@@ -91,11 +37,6 @@ describe("PhysicsInteractionPanel lane contract", () => {
         invalidate.mock.calls.filter(([key]) => key === resourceKey),
       ).toHaveLength(1);
     }
-    const source = readFileSync(
-      new URL("./PhysicsInteractionPanel.tsx", import.meta.url),
-      "utf8",
-    );
-    expect(source).not.toContain("Date.now()");
   });
 
   it("fails closed when the interaction ACK omits scene_revision", async () => {
@@ -119,12 +60,5 @@ describe("PhysicsInteractionPanel lane contract", () => {
       );
       expect(existsSync(mdUrl), `${spec.id} -> ${mdRelPath}`).toBe(true);
     }
-
-    const source = readFileSync(
-      new URL("./PhysicsInteractionPanel.tsx", import.meta.url),
-      "utf8",
-    );
-    expect(source).toContain("homeView.openDocs(spec.docsPage)");
-    expect(source).toContain("Open in documentation");
   });
 });

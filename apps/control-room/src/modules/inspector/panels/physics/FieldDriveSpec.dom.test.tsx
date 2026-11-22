@@ -489,7 +489,7 @@ vi.mock("@/kernel/resources/studyRuntimeResources", () => ({
 import {
   evaluateFieldDriveEnvelopeAtTime,
   FieldDriveInspectorPanel,
-} from "./FieldDriveSpec";
+} from "../../inspectors/objects/field-drives";
 
 /* ── Helpers ── */
 

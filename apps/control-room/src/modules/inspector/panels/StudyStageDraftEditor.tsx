@@ -5,6 +5,7 @@ import { parseQuantityInput } from "@/kernel/authoring/object-edit/quantityInput
 import { formatFrequencyHz } from "@/shared/domain/analysis/frequencyUnits";
 import { FormField } from "../primitives/FormField";
 import {
+  type FrequencyDomainAuthoringView,
   relaxationAlgorithmAvailability,
   type StudyStageDraft,
   type StudyStageDraftKind,
@@ -12,7 +13,6 @@ import {
 import {
   HysteresisStageDraftFields,
 } from "./HysteresisStageDraftFields";
-import { type FrequencyDomainAuthoringView } from "./stages/StageInspectorFrame";
 import { StageAutosaveSection } from "./stages/StageAutosaveSection";
 
 export function StudyStageDraftEditor({

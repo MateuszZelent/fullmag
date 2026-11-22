@@ -41,7 +41,7 @@ import {
   FrequencyResponseObservableInspectorPanel,
   FrequencyResponseObservablesInspectorPanel,
   FrequencyResponseSweepInspectorPanel,
-} from "../../../panels/frequency-domain/FrequencyDomainResultInspectors";
+} from "../frequency-domain";
 import { buildFrequencyResponsePlotCommandInput } from "../../../panels/frequency-domain/FrequencyResponseInspectorPanels.model";
 import { FrequencyDomainResponseChart } from "../../../panels/FrequencyDomainCharts";
 import { ConnectedInspectorSpec } from "../../../panels/study/ConnectedInspectorSpec";

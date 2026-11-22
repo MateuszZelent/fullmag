@@ -33,7 +33,7 @@ import {
   FrequencyResponseProgressInspectorPanel,
   FrequencyResponseProvenanceInspectorPanel,
   FrequencyResponseStudyInspectorPanel,
-} from "../../../panels/frequency-domain/FrequencyDomainResultInspectors";
+} from "../frequency-domain";
 import { ConnectedInspectorSpec } from "../../../panels/study/ConnectedInspectorSpec";
 import {
   frequencyDomainRef,

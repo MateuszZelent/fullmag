@@ -277,7 +277,7 @@ import {
   SessionRootInspectorPanel,
   UniverseRootInspectorPanel,
   UnresolvedPhysicsScopeInspectorPanel,
-} from "./ModelScopeSpecs";
+} from "../../inspectors/definitions";
 
 function makeSelection(kind: Selection["kind"], nodeId: string, label: string): Selection {
   return {

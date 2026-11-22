@@ -4760,3 +4760,20 @@ function asRecord(value: unknown): JsonRecord | null {
     ? (value as JsonRecord)
     : null;
 }
+
+export type FrequencyDomainAuthoringView =
+  | "calculation_mode"
+  | "overview"
+  | "setup"
+  | "equilibrium"
+  | "operator"
+  | "boundary"
+  | "periodic_pairs"
+  | "k_sampling"
+  | "k_path"
+  | "k_grid"
+  | "excitation"
+  | "sweep"
+  | "solver"
+  | "outputs"
+  | "diagnostics";

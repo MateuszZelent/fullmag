@@ -117,25 +117,26 @@ describe("Inspector visual contract", () => {
   });
 
   it("routes STT/SOT/SHE authoring drafts through the shared Inspector action bar", () => {
-    const authoringPanels = [
-      "TransportAuthoringInspector.tsx",
-      "SpinAuthoringInspector.tsx",
-      "SpinInterfaceInspector.tsx",
-    ].map((name) => readFileSync(join(inspectorRoot, "panels", name), "utf8"));
-    const interactionPanel = readFileSync(
-      join(inspectorRoot, "panels/PhysicsInteractionPanel.tsx"),
+    const authoringPanel = readFileSync(
+      join(inspectorRoot, "panels/TransportAuthoringInspector.tsx"),
       "utf8",
     );
     const overview = readFileSync(
       join(inspectorRoot, "panels/PhysicsInspectorOverview.tsx"),
       "utf8",
     );
+    const canonicalSpinSpecs = [
+      "inspectors/objects/transport/SpinTorqueSpec.tsx",
+      "panels/transport/SpinInterfacePanel.tsx",
+      "panels/transport/SpinTransportPanel.tsx",
+      "inspectors/objects/physics/PhysicsModuleSpec.tsx",
+    ].map((relPath) => readFileSync(join(inspectorRoot, relPath), "utf8"));
 
-    for (const source of authoringPanels) {
-      expect(source).toContain("useRegisterInspectorEditSession");
-    }
-    expect(interactionPanel).toContain("editSession={{");
+    expect(authoringPanel).toContain("useRegisterInspectorEditSession");
     expect(overview).toContain("PhysicsInspectorEditSessionBridge");
+    for (const source of canonicalSpinSpecs) {
+      expect(source).toMatch(/useInspectorSpecController|SpecInspectorHost/);
+    }
   });
 
   it("routes Study drafts through the shared Inspector action bar", () => {
@@ -143,15 +144,14 @@ describe("Inspector visual contract", () => {
       join(inspectorRoot, "panels/StudyInspectorPanel.tsx"),
       "utf8",
     );
-    const stageRouter = readFileSync(
-      join(inspectorRoot, "panels/StudyStageInspectorRouter.tsx"),
+    const canonicalStudyRoot = readFileSync(
+      join(inspectorRoot, "inspectors/study/StudyRootSpec.tsx"),
       "utf8",
     );
 
     expect(studyPanel).toContain("useRegisterInspectorEditSession");
     expect(studyPanel).toContain('type: "revertStageDrafts"');
-    expect(stageRouter).toContain("useRegisterInspectorEditSession");
-    expect(stageRouter).toMatch(/useRegisterInspectorEditSession\(\s*"staged"/);
+    expect(canonicalStudyRoot).toContain("ConnectedInspectorSpec");
   });
 
   it("keeps visualization Reset relative to the applied target baseline", () => {

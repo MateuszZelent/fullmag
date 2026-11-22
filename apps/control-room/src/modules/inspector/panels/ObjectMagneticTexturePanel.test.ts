@@ -44,51 +44,7 @@ describe("ObjectMagneticTexturePanel", () => {
     );
   });
 
-  it("uses semantic dirty checks instead of JSON stringification", () => {
-    const objectPanel = readFileSync(
-      new URL("./ObjectMagneticTexturePanel.tsx", import.meta.url),
-      "utf8",
-    );
-    const regionPanel = readFileSync(
-      new URL("./region/ObjectRegionTexturePanel.tsx", import.meta.url),
-      "utf8",
-    );
-
-    expect(objectPanel).toContain("objectMagneticTextureDraftDirty");
-    expect(regionPanel).toContain("objectMagneticTextureDraftDirty");
-    expect(objectPanel).not.toContain("JSON.stringify(draft)");
-    expect(regionPanel).not.toContain("JSON.stringify(draft)");
-  });
-
-  it("saves the asset and assignment through one atomic transaction", () => {
-    const source = readFileSync(
-      new URL("./ObjectMagneticTexturePanel.tsx", import.meta.url),
-      "utf8",
-    );
-
-    expect(source).toContain("buildMagnetizationApplyTarget(");
-    expect(source).toContain("commitMagneticTextureApply(");
-    expect(source).toContain("initial_magnetization.uniform");
-    expect(source).toContain("initial_magnetization.vortex");
-    expect(source).not.toContain("patchMagnetizationAsset(");
-    expect(source).not.toContain("patchRegion(");
-    expect(source).not.toContain("patchObject(model.objectId");
-  });
-
   it("records immediate texture writes through the shared authoring history boundary", () => {
-    const objectPanel = readFileSync(
-      new URL("./ObjectMagneticTexturePanel.tsx", import.meta.url),
-      "utf8",
-    );
-    const regionPanel = readFileSync(
-      new URL("./region/ObjectRegionTexturePanel.tsx", import.meta.url),
-      "utf8",
-    );
-
-    for (const source of [objectPanel, regionPanel]) {
-      expect(source).toContain("commitMagneticTextureApply(");
-      expect(source).toContain("model.baseRevision");
-    }
     const shared = readFileSync(new URL("./ObjectMagneticTexturePanelViewModel.ts", import.meta.url), "utf8");
     expect(shared).toContain("runAuthoringMutationWithHistory(");
     expect(shared).toContain("before.baseRevision !== baseRevision");

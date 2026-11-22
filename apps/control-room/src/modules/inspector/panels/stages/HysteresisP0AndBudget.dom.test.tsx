@@ -424,7 +424,7 @@ import {
   HysteresisDatasetResultInspector,
   HysteresisPointResultInspector,
   HysteresisRootResultInspector,
-} from "../physics-first/HysteresisResultSpecs";
+} from "../../inspectors/results/hysteresis";
 
 let restoreDom: (() => void) | null = null;
 

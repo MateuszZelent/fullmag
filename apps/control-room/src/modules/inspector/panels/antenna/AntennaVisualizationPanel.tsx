@@ -20,7 +20,7 @@ import { antennaStageValidationMessages } from "@/shared/domain/physics/antennaS
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/shared/ui/Select";
 
 import type { InspectorPanelProps } from "../../inspectorTypes";
-import { ScientificInspectorContext } from "../../components/ScientificInspectorTemplate";
+import { ScientificInspectorContext } from "../../components/InspectorContextGroups";
 import { FieldRow } from "../../primitives/FieldRow";
 import { FormField } from "../../primitives/FormField";
 import { InspectorGroup } from "../../primitives/InspectorGroup";

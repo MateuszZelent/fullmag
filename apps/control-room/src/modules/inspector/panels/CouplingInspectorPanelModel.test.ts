@@ -26,13 +26,12 @@ function couplingSelection(couplingId: string): Selection {
 describe("CouplingInspectorPanelModel", () => {
   it("keeps coupling repair actions wired to existing model transactions", () => {
     const source = readFileSync(
-      new URL("./CouplingInspectorPanel.tsx", import.meta.url),
+      new URL("../inspectors/objects/physics/DemagAndCouplingSpecs.tsx", import.meta.url),
       "utf8",
     );
 
-    expect(source).toContain("api.model.patchCoupling(");
-    expect(source).toContain("api.model.deleteCoupling(");
-    expect(source).toContain('model.enabled ? "Disable Coupling" : "Enable Coupling"');
+    expect(source).toContain("kernel.api.model.patchCoupling(");
+    expect(source).toContain("kernel.api.model.deleteCoupling(");
     expect(source).toContain("MODEL_COUPLINGS_RESOURCE_KEY");
     expect(source).toContain("publishCommittedSceneResource(");
   });

@@ -21,18 +21,22 @@ import {
   type TestElement,
   TestEvent,
 } from "../model-roots/wave4TestDom.test-support";
-import { buildOerstedFieldResource } from "./OerstedFieldPanel";
-import { buildSpinTorqueResource } from "./SpinTorquePanel";
 import {
+  buildSpinTorqueResource,
   computeAutoHallPolarization,
-  CurrentTransportInspectorPanel,
-  OerstedFieldInspectorPanel,
-  SpinInterfaceInspectorPanel,
   SpinTorqueInspectorPanel,
-  SpinTransportInspectorPanel,
+} from "../../inspectors/objects/transport";
+import { CurrentTransportInspectorPanel } from "./CurrentTransportPanel";
+import {
+  buildOerstedFieldResource,
+  OerstedFieldInspectorPanel,
+} from "./OerstedFieldPanel";
+import { SpinInterfaceInspectorPanel } from "./SpinInterfacePanel";
+import { SpinTransportInspectorPanel } from "./SpinTransportPanel";
+import {
   StructuredCurrentClosureInspectorPanel,
   StructuredCurrentSourceCutInspectorPanel,
-} from "./TransportAndSpinSpecs";
+} from "./StructuredClosurePanels";
 import type {
   KnownSceneOerstedField,
   KnownSceneSpinTorque,

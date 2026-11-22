@@ -118,16 +118,9 @@ describe("Inspector design-system reference contract", () => {
   });
 
   it.each([
-    "ObjectMaterialPanel.tsx",
     "ObjectGeneralPanel.tsx",
-    "GeometryObjectPanel.tsx",
-    "ObjectMagneticTexturePanel.tsx",
-    "PhysicsInteractionPanel.tsx",
     "RegionalFieldDrivePanel.tsx",
     "AntennaObjectPanel.tsx",
-    "CouplingInspectorPanel.tsx",
-    "CrossSectionInspectorPanel.tsx",
-    "CrossSectionSettingsEditor.tsx",
   ])("keeps migrated %s authoring on compact Inspector groups", (fileName) => {
     const panel = read(`src/modules/inspector/panels/${fileName}`);
 
@@ -140,6 +133,42 @@ describe("Inspector design-system reference contract", () => {
     }
   });
 
+  it.each([
+    "inspectors/objects/material/ObjectMaterialSpec.tsx",
+    "inspectors/objects/geometry/ObjectGeometrySpec.tsx",
+    "panels/magnetic-texture/MagneticTextureInspectorPanel.tsx",
+    "inspectors/objects/physics/PhysicsModuleSpec.tsx",
+    "inspectors/objects/physics/DemagAndCouplingSpecs.tsx",
+    "inspectors/objects/regions/RegionsRootSpec.tsx",
+    "inspectors/objects/regions/RegionDetailSpec.tsx",
+    "inspectors/objects/regions/RegionMagneticParametersSpec.tsx",
+    "inspectors/objects/regions/RegionMeshSpec.tsx",
+    "inspectors/universe/UniverseAndAirboxSpec.tsx",
+    "inspectors/universe/AirboxMeshOverviewSpec.tsx",
+    "inspectors/universe/AirboxMeshSizingSpecs.tsx",
+    "inspectors/universe/AirboxMeshBuildSpec.tsx",
+    "inspectors/universe/AirboxMeshQualityGatesSpec.tsx",
+    "inspectors/universe/AirboxMeshStatisticsSpec.tsx",
+    "inspectors/universe/AirboxMeshTopologySpec.tsx",
+    "inspectors/universe/BoundaryFaceSpecs.tsx",
+    "inspectors/mesh/MeshRootSpec.tsx",
+    "inspectors/mesh/MeshQualitySpec.tsx",
+    "inspectors/mesh/MeshBuildHistorySpec.tsx",
+    "inspectors/study/stages/RelaxStageSpec.tsx",
+    "inspectors/study/stages/RunStageSpec.tsx",
+    "inspectors/study/stages/EigenmodesStageSpec.tsx",
+    "inspectors/study/stages/FrequencyResponseStageSpec.tsx",
+    "inspectors/visualizations/Visualizations2DRootSpec.tsx",
+    "inspectors/visualizations/AnalysisChartSpecs.tsx",
+  ])("keeps canonical spec %s free of legacy InspectorSection and Accordion wrappers", (relPath) => {
+    const panel = read(`src/modules/inspector/${relPath}`);
+
+    expect(panel).not.toMatch(/<\/?InspectorSection\b/);
+    expect(panel).not.toMatch(/import\s+\{\s*InspectorSection\s*\}/);
+    expect(panel).not.toContain("fm-inspector-section");
+    expect(panel).not.toContain("<Accordion");
+  });
+
   it("keeps object extensions independent from legacy Accordion sections", () => {
     const extensions = read(
       "src/modules/inspector/extensions/ObjectExtensionsSection.tsx",
@@ -150,125 +179,12 @@ describe("Inspector design-system reference contract", () => {
     expect(extensions).not.toContain('value="extensions"');
   });
 
-  it("keeps migrated mesh policy sections on compact Inspector groups", () => {
-    const meshPolicy = read(
-      "src/modules/inspector/panels/ObjectMeshPolicyPanel.tsx",
-    );
+  it("keeps MeshResourceView on compact Inspector groups", () => {
+    const view = read("src/modules/inspector/panels/MeshResourceView.tsx");
 
-    expect(meshPolicy).toContain("InspectorGroup");
-    expect(meshPolicy).not.toMatch(/<\/?InspectorSection\b/);
-    expect(meshPolicy).not.toContain("<Accordion");
-    expect(meshPolicy).not.toContain("defaultCollapsed");
-  });
-
-  it.each([
-    "RegionsListPanel.tsx",
-    "region/ObjectRegionOverviewPanel.tsx",
-    "region/ObjectRegionGeometryPanel.tsx",
-    "region/ObjectRegionMeshPanel.tsx",
-    "region/ObjectRegionNestedRegionsPanel.tsx",
-    "region/ObjectRegionMagneticParametersPanel.tsx",
-    "region/ObjectRegionTexturePanel.tsx",
-    "region/ObjectRegionDiagnosticsPanel.tsx",
-    "region/shared.tsx",
-  ])("keeps migrated %s region UI on compact Inspector groups", (fileName) => {
-    const panel = read(`src/modules/inspector/panels/${fileName}`);
-
-    expect(panel).not.toMatch(/<\/?InspectorSection\b/);
-    expect(panel).not.toMatch(/import\s+\{\s*InspectorSection\s*\}/);
-    expect(panel).not.toContain("<Accordion");
-    expect(panel).not.toContain("defaultCollapsed");
-  });
-
-  it.each([
-    "AirboxOverviewPanel.tsx",
-    "AirboxMeshOverviewPanel.tsx",
-    "AirboxMeshParametersPanel.tsx",
-    "AirboxMeshBuildPanel.tsx",
-    "AirboxMeshQualityGatesPanel.tsx",
-    "AirboxMeshStatisticsPanel.tsx",
-    "AirboxMeshTopologyPanel.tsx",
-  ])("keeps migrated airbox/%s on compact Inspector groups", (fileName) => {
-    const panel = read(`src/modules/inspector/panels/airbox/${fileName}`);
-
-    expect(panel).toContain("InspectorGroup");
-    expect(panel).not.toMatch(/<\/?InspectorSection\b/);
-    expect(panel).not.toContain("<Accordion");
-    expect(panel).not.toContain("defaultCollapsed");
-  });
-
-  it.each([
-    "MeshResourceView.tsx",
-    "mesh-details/MeshOverviewSection.tsx",
-    "mesh-details/MeshBuildPipelineSection.tsx",
-    "mesh-details/MeshBuildHistorySection.tsx",
-    "mesh-details/MeshPolicyComparisonSection.tsx",
-    "mesh-details/MeshQualityGatesSection.tsx",
-    "mesh-details/MeshRealizedSizeFieldsSection.tsx",
-    "mesh-details/MeshViewportDeliverySection.tsx",
-    "mesh-details/MeshEditorCapabilitiesSection.tsx",
-  ])("keeps migrated %s mesh details on compact Inspector groups", (fileName) => {
-    const panel = read(`src/modules/inspector/panels/${fileName}`);
-
-    expect(panel).toContain("InspectorGroup");
-    expect(panel).not.toMatch(/<\/?InspectorSection\b/);
-    expect(panel).not.toContain("defaultCollapsed");
-  });
-
-  it("keeps the mesh details surface independent from a legacy Accordion", () => {
-    const panel = read("src/modules/inspector/panels/MeshDetailsPanel.tsx");
-
-    expect(panel).not.toContain("<Accordion");
-  });
-
-  it("uses compact groups in the shared Study stage frame", () => {
-    const frame = read(
-      "src/modules/inspector/panels/stages/StageInspectorFrame.tsx",
-    );
-    const router = read(
-      "src/modules/inspector/panels/StudyStageInspectorRouter.tsx",
-    );
-
-    expect(frame).toContain("InspectorGroup");
-    expect(frame).not.toMatch(/<\/?InspectorSection\b/);
-    expect(router).not.toContain("<Accordion");
-  });
-
-  it.each([
-    "RelaxStageInspector.tsx",
-    "SaveStateStageInspector.tsx",
-    "ChangeDeviceStageInspector.tsx",
-    "UnsupportedStageInspector.tsx",
-    "MaskFieldDriveStageInspector.tsx",
-  ])("keeps stages/%s on compact Inspector groups", (fileName) => {
-    const panel = read(`src/modules/inspector/panels/stages/${fileName}`);
-
-    expect(panel).toContain("InspectorGroup");
-    expect(panel).not.toMatch(/<\/?InspectorSection\b/);
-  });
-
-  it.each([
-    "RunStageInspector.tsx",
-    "AutosaveStageInspector.tsx",
-    "TableAutosaveStageInspector.tsx",
-    "FftResponseStageInspector.tsx",
-    "AddFieldDriveStageInspector.tsx",
-    "FrequencyDomainCalculationModeSection.tsx",
-  ])("keeps stages/%s controls on compact Inspector groups", (fileName) => {
-    const panel = read(`src/modules/inspector/panels/stages/${fileName}`);
-
-    expect(panel).toContain("InspectorGroup");
-    expect(panel).not.toMatch(/<\/?InspectorSection\b/);
-  });
-
-  it.each([
-    "EigenmodesStageInspector.tsx",
-    "FrequencyResponseStageInspector.tsx",
-  ])("keeps stages/%s frequency-domain UI on compact groups", (fileName) => {
-    const panel = read(`src/modules/inspector/panels/stages/${fileName}`);
-
-    expect(panel).toContain("InspectorGroup");
-    expect(panel).not.toMatch(/<\/?InspectorSection\b/);
+    expect(view).toContain("InspectorGroup");
+    expect(view).not.toMatch(/<\/?InspectorSection\b/);
+    expect(view).not.toContain("defaultCollapsed");
   });
 
   it("keeps the delegated Study surface and pipeline on compact groups", () => {
@@ -356,7 +272,6 @@ describe("Inspector design-system reference contract", () => {
 
   it.each([
     "ObjectVisualizationPanel.tsx",
-    "ChartInspectorPanel.tsx",
     "ModeVisualizationInspectorPanel.tsx",
     "frequency-domain/FmrPeakInspector.tsx",
     "../inspectors/results/frequency-domain/FrequencyDomainOverviewSpecs.tsx",
@@ -374,7 +289,6 @@ describe("Inspector design-system reference contract", () => {
 
   it.each([
     "PlaceholderPanel.tsx",
-    "boundary-faces/BoundaryFacesOverviewPanel.tsx",
     "visualization-debug/VisualizationDebugPanel.tsx",
     "../extensions/topological-charge/TopologicalChargeExtensionPanel.tsx",
   ])("keeps remaining Inspector surface %s on compact groups", (fileName) => {

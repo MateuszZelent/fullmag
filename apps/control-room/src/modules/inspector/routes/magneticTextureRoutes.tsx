@@ -1,4 +1,4 @@
-import { MagneticTextureInspectorPanel } from "../panels/magnetic-texture/MagneticTextureInspectorPanel";
+import { MagneticTextureInspectorPanel } from "../inspectors/objects";
 
 import { defineInspectorRoute, type InspectorRoute } from "./routeTypes";
 

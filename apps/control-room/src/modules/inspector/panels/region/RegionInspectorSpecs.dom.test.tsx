@@ -30,7 +30,7 @@ import {
   ObjectRegionOverviewInspectorPanel,
   RegionsCollectionInspectorPanel,
   resolveCanonicalRegionMeshLane,
-} from "./RegionInspectorSpecs";
+} from "../../inspectors/objects/regions";
 
 vi.mock("@radix-ui/react-tooltip", () => ({
   Provider: ({ children }: { children?: ReactNode }) => <>{children}</>,

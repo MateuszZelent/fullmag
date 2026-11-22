@@ -468,7 +468,7 @@ import {
   AntennaSolutionInspectorSpecPanel,
   AntennaSpectrumInspectorSpecPanel,
   AntennaVisualizationInspectorSpecPanel,
-} from "./AntennaExcitationAndVizSpecs";
+} from "../../inspectors/objects/antenna";
 
 function buildBaseScene(): Record<string, unknown> {
   return {

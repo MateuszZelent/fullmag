@@ -395,24 +395,24 @@ vi.mock(
 import {
   AnalysisChartPointTemplatePanel,
   LiveChartTemplatePanel,
-} from "../ChartInspectorSpecs";
+} from "../../inspectors/visualizations";
 import {
   PlanarMonitorDraftTemplatePanel,
   PlanarMonitorsOverviewTemplatePanel,
   PlanarMonitorTemplatePanel,
-} from "../PlanarMonitorSpecs";
+} from "../../inspectors/definitions";
 import {
   createDefaultStudyStageDraft,
   studyStageDraftToSceneStage,
 } from "../StudyStageAuthoringModel";
 import { HysteresisStageInspectorPanel } from "../stages/HysteresisStageSpec";
-import { RelaxStageInspectorPanel } from "../stages/TimeAndZeroDurationStageSpecs";
+import { RelaxStageInspectorPanel } from "../../inspectors/study/stages";
 import { ObjectVisualizationTemplatePanel } from "../visualization/TargetVisualizationSpecs";
 import {
   StudyExecutionInspectorPanel,
   StudyRootInspectorPanel,
   StudyStagesInspectorPanel,
-} from "./StudyBranchSpecs";
+} from "../../inspectors/study";
 
 let activeCleanup: (() => void) | null = null;
 

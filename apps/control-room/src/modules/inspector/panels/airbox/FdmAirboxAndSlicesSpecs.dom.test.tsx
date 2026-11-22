@@ -372,7 +372,7 @@ import {
   AirboxMultilayerTargetInspectorSpecPanel,
   AirboxRootInspectorSpecPanel,
   BoundaryFacesRootInspectorSpecPanel,
-} from "./AirboxAndBoundarySpecs";
+} from "../../inspectors/universe";
 
 function assertCleanInspectorDom(container: HTMLElement): void {
   const rawControls = findElements(container, (el) => {

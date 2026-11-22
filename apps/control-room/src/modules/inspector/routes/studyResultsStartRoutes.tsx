@@ -1,56 +1,15 @@
 import {
-  AnalysisChartPointTemplatePanel,
-  AnalysisChartTemplatePanel,
-  LiveChartPointTemplatePanel,
-  LiveChartTemplatePanel,
-  QuickChartTemplatePanel,
-} from "../panels/ChartInspectorSpecs";
-import {
   PlanarMonitorDraftTemplatePanel,
   PlanarMonitorsOverviewTemplatePanel,
   PlanarMonitorTemplatePanel,
-} from "../panels/PlanarMonitorSpecs";
-import {
-  RuntimeCapabilityDiagnosticInspectorPanel,
-  RuntimeCommandJobInspectorPanel,
-  RuntimeFrequencyDiagnosticInspectorPanel,
-  RuntimeHealthDiagnosticInspectorPanel,
-  RuntimeMeshDiagnosticInspectorPanel,
-  RuntimePerformanceDiagnosticInspectorPanel,
-  RuntimeProblemDiagnosticInspectorPanel,
-  RuntimeResourceInspectorPanel,
-  RuntimeRunJobInspectorPanel,
-  RuntimeSolverDiagnosticInspectorPanel,
-  RuntimeStageJobInspectorPanel,
-} from "../panels/RuntimeExplorerInspectorPanels";
-import {
-  DiagnosticsOverviewInspectorPanel,
-  JobsOverviewInspectorPanel,
-  ResourcesOverviewInspectorPanel,
-} from "../panels/RuntimeExplorerOverviewInspectorPanels";
-import { resolveFrequencyDomainNodeDetail } from "../panels/frequencyDomainNodeDetails";
+} from "../inspectors/definitions";
 import {
   AnalysisResultTemplateInspectorPanel,
-  HysteresisDatasetResultInspector,
-  HysteresisPointResultInspector,
-  HysteresisRootResultInspector,
-} from "../panels/physics-first/HysteresisResultSpecs";
-import {
   AnalysisViewDefinitionInspector,
   AnalysisViewsOverviewInspector,
   DerivedValueDefinitionInspector,
   DerivedValuesOverviewInspector,
-  ExportDefinitionInspector,
-  ExportsOverviewInspector,
-  FieldQuantityTemplateInspectorPanel,
-  MaterializedDatasetTemplateInspectorPanel,
-  ObservationFramesTemplateOverviewPanel,
-  ObservationFrameTemplateInspectorPanel,
-  PinnedVisualizationsTemplateInspectorPanel,
-  TableDefinitionInspector,
-  TablesOverviewInspector,
-} from "../panels/physics-first/PostprocessingAndPlaybackSpecs";
-import {
+  DiagnosticsOverviewInspectorPanel,
   DispersionBranchesResultInspector,
   DispersionDrivenStageResultInspector,
   DispersionKSamplingResultInspector,
@@ -62,6 +21,18 @@ import {
   DispersionResponseFieldAtKResultInspector,
   DispersionResponseMapResultInspector,
   DynamicsResultTemplateInspector,
+  ExportDefinitionInspector,
+  ExportsOverviewInspector,
+  FieldQuantityTemplateInspectorPanel,
+  FmrComparisonInspectorPanel,
+  HysteresisDatasetResultInspector,
+  HysteresisPointResultInspector,
+  HysteresisRootResultInspector,
+  JobsOverviewInspectorPanel,
+  MaterializedDatasetTemplateInspectorPanel,
+  ObservationFramesTemplateOverviewPanel,
+  ObservationFrameTemplateInspectorPanel,
+  PinnedVisualizationsTemplateInspectorPanel,
   ResonanceDrivenFitsResultInspector,
   ResonanceDrivenPeaksResultInspector,
   ResonanceDrivenSpectrumResultInspector,
@@ -76,36 +47,50 @@ import {
   ResonanceOverviewResultInspector,
   ResonanceResponseFieldResultInspector,
   ResonanceResponseFieldsResultInspector,
+  ResourcesOverviewInspectorPanel,
   ResultsOverviewInspectorPanel,
-} from "../panels/physics-first/ResonanceAndDispersionSpecs";
-import { FmrComparisonInspectorPanel } from "../panels/frequency-domain/FrequencyDomainResultInspectors";
-import { AirboxVisualizationDebugInspectorPanel } from "../panels/airbox/AirboxVisualizationDebugInspectorPanel";
-import { HysteresisStageInspectorPanel } from "../panels/stages/HysteresisStageSpec";
-import {
-  EigenmodesStageInspectorPanel,
-  FrequencyResponseStageInspectorPanel,
-} from "../panels/stages/SpectralStageSpecs";
+  RuntimeCapabilityDiagnosticInspectorPanel,
+  RuntimeCommandJobInspectorPanel,
+  RuntimeFrequencyDiagnosticInspectorPanel,
+  RuntimeHealthDiagnosticInspectorPanel,
+  RuntimeMeshDiagnosticInspectorPanel,
+  RuntimePerformanceDiagnosticInspectorPanel,
+  RuntimeProblemDiagnosticInspectorPanel,
+  RuntimeResourceInspectorPanel,
+  RuntimeRunJobInspectorPanel,
+  RuntimeSolverDiagnosticInspectorPanel,
+  RuntimeStageJobInspectorPanel,
+  TableDefinitionInspector,
+  TablesOverviewInspector,
+  resolveFrequencyDomainNodeDetail,
+} from "../inspectors/results";
 import {
   ActionStageFallbackInspectorPanel,
   AddFieldDriveStageInspectorPanel,
   AntennaFieldSolveStageInspectorPanel,
   AutosaveStageInspectorPanel,
   ChangeDeviceStageInspectorPanel,
+  EigenmodesStageInspectorPanel,
   FftResponseStageInspectorPanel,
+  FrequencyResponseStageInspectorPanel,
+  HysteresisStageInspectorPanel,
   MaskFieldDriveStageInspectorPanel,
   RelaxStageInspectorPanel,
   RunStageInspectorPanel,
   SaveStateStageInspectorPanel,
-  TableAutosaveStageInspectorPanel,
-} from "../panels/stages/TimeAndZeroDurationStageSpecs";
-import {
   StudyExecutionInspectorPanel,
   StudyRecoveryInspectorPanel,
   StudyRootInspectorPanel,
   StudyStagesInspectorPanel,
-} from "../panels/study/StudyBranchSpecs";
+  TableAutosaveStageInspectorPanel,
+} from "../inspectors/study";
 import {
+  AirboxVisualizationDebugInspectorPanel,
   AirboxVisualizationTemplatePanel,
+  AnalysisChartPointTemplatePanel,
+  AnalysisChartTemplatePanel,
+  LiveChartPointTemplatePanel,
+  LiveChartTemplatePanel,
   MeshPartVisualizationDebugTemplatePanel,
   MeshPartVisualizationTemplatePanel,
   ModeVisualizationTemplatePanel,
@@ -113,7 +98,8 @@ import {
   ObjectRegionVisualizationTemplatePanel,
   ObjectVisualizationDebugTemplatePanel,
   ObjectVisualizationTemplatePanel,
-} from "../panels/visualization/TargetVisualizationSpecs";
+  QuickChartTemplatePanel,
+} from "../inspectors/visualizations";
 
 import { defineInspectorRoute, type InspectorRoute } from "./routeTypes";
 

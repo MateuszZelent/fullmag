@@ -6,7 +6,7 @@ import type {
 } from "@/kernel/api/apiTypes";
 import type { Selection } from "@/kernel/selection/selectionTypes";
 
-import { validateBornCubicStability } from "../../../panels/material/ObjectMaterialSpec";
+import { validateBornCubicStability } from "../material";
 import {
   ELASTIC_MODULUS_UNITS,
   MAGNETOELASTIC_B_UNITS,

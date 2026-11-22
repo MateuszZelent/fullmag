@@ -94,7 +94,6 @@ import {
   StudyStageDraftEditor,
 } from "./StudyPipelineSection";
 import { createStudyGlobalDraft } from "./StudyGlobalAuthoringModel";
-import { StageInspectorFrame } from "./stages/StageInspectorFrame";
 import { createDefaultStudyStageDraft } from "./StudyStageAuthoringModel";
 
 function testBoundary(overrides: Record<string, string> = {}) {
@@ -121,60 +120,6 @@ function testRequested(overrides: Record<string, string> = {}) {
 }
 
 describe("StudyInspectorPanel", () => {
-  it("renders the Run action outside the read-only pipeline authoring fieldset", () => {
-    const html = renderToStaticMarkup(<StageInspectorFrame
-      authoringBusy={false}
-      authoringFeedback={null}
-      draft={{ ...createDefaultStudyStageDraft("relax", 0), pipelineNodeId: "relax-b" }}
-      draftIndex={0}
-      expectedKind="relax"
-      kindLabel="Relax"
-      onCommit={() => undefined}
-      onUpdateDraft={() => undefined}
-      stage={null}
-      stageExecutionRevision={null}
-      stageLaunch={{
-        disabledReason: null,
-        feedback: null,
-        label: "Run this stage",
-        onRun: () => undefined,
-      }}
-      validation={[]}
-    />);
-
-    expect(html).toContain("<fieldset");
-    expect(html).toContain("Canonical pipeline stage (read-only)");
-    expect(html.indexOf("Run this stage")).toBeGreaterThan(html.indexOf("</fieldset>"));
-    expect(html).not.toMatch(/<button[^>]*disabled=""[^>]*>(?:(?!<\/button>).)*Run this stage/);
-  });
-
-  it("opens the canonical Relax editor while keeping the stage identity fixed", () => {
-    const html = renderToStaticMarkup(<StageInspectorFrame
-      authoringBusy={false}
-      authoringFeedback={null}
-      draft={{
-        ...createDefaultStudyStageDraft("relax", 0),
-        pipelineNodeId: "relax-b", stageId: "relax-b",
-        rawStage: { kind: "relax", max_steps: "50" },
-      }}
-      draftIndex={0}
-      expectedKind="relax"
-      kindLabel="Relax"
-      onCommit={() => undefined}
-      onUpdateDraft={() => undefined}
-      pipelineDraftDirty
-      stage={null}
-      stageExecutionRevision={null}
-      validation={[]}
-    />);
-
-    expect(html).not.toMatch(/<fieldset[^>]*disabled=""/);
-    expect(html).not.toContain("Field every");
-    expect(html).toContain("Max steps");
-    expect(html).toContain("Save stage");
-    expect(html).toMatch(/<input[^>]*disabled=""[^>]*value="relax-b"/);
-  });
-
   it("keeps changes typed after the submitted stage draft while applying the ACK", () => {
     const globalDraft = createStudyGlobalDraft(null);
     const baseline = createDefaultStudyStageDraft("relax", 0);

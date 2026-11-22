@@ -39,7 +39,7 @@ import {
   EigenBranchesInspectorPanel,
   EigenModesInspectorPanel,
   FrequencyDomainResponseMapInspectorPanel,
-} from "../../../panels/frequency-domain/FrequencyDomainResultInspectors";
+} from "../frequency-domain";
 import { FrequencyDomainBranchTable } from "../../../panels/FrequencyDomainTables";
 import { ConnectedInspectorSpec } from "../../../panels/study/ConnectedInspectorSpec";
 import {

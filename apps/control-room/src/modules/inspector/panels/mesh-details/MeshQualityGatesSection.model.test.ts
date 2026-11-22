@@ -1,8 +1,5 @@
-import { createElement } from "react";
-import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
-import { MeshQualityGatesSection } from "./MeshQualityGatesSection";
 import { resolveMixedCertificateQualityPresentation } from "./MeshQualityGatesSection.model";
 
 describe("MeshQualityGatesSection.model", () => {
@@ -58,16 +55,5 @@ describe("MeshQualityGatesSection.model", () => {
     expect(presentation.familyGates[1]?.status).toBe("warn");
     expect(presentation.familyGates[2]?.family).toBe("prism6");
     expect(presentation.familyGates[2]?.status).toBe("pass");
-
-    const html = renderToStaticMarkup(
-      createElement(MeshQualityGatesSection, {
-        badge: "rejected",
-        gateRows: [],
-        mixedCertificate: presentation,
-      }),
-    );
-
-    expect(html).toContain('data-status="failed"');
-    expect(html).not.toContain('data-status="fail"');
   });
 });

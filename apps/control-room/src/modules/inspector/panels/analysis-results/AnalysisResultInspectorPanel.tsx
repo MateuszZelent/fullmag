@@ -22,7 +22,6 @@ import { Button } from "@/shared/ui/Button";
 import { FrequencyDomainModeDisplayControls, useFrequencyDomainModeDisplaySettings } from "../FrequencyDomainModeDisplayControls";
 import { ANALYSIS_FIELD_VIEW_OPTIONS } from "../FrequencyDomainModeDisplayControls.model";
 import { ModeVisualizationPhaseControl } from "../ModeVisualizationInspectorPanel";
-import { ScientificInspectorTemplate } from "../../components/ScientificInspectorTemplate";
 import { FieldRow } from "../../primitives/FieldRow";
 import { InspectorGroup } from "../../primitives/InspectorGroup";
 import { InspectorOverviewFrame } from "../../primitives/InspectorOverviewFrame";
@@ -127,18 +126,24 @@ export function AnalysisResultInspectorPanel({
       );
     }
     return (
-      <ScientificInspectorTemplate
-        breadcrumbs={["Results", "Analysis result"]}
-        diagnostics={["The selected node does not contain an analysis-result reference."]}
-        methodLabel="Run-scoped result dataset"
-        physicalLabel="Result"
-        status={{
-          availability: "missing",
-          execution: "not_applicable",
-          resource: "missing",
-        }}
-        title="Analysis result"
-      />
+      <div className="fm-inspector-panel" data-inspector-owner="results.analysis_result">
+        <InspectorOverviewFrame
+          metrics={[
+            { label: "Scope", value: "Result" },
+            { label: "Method", value: "Run-scoped result dataset" },
+            { label: "Status", value: "missing" },
+          ]}
+          primary={
+            <FieldRow
+              label="Reference"
+              value="The selected node does not contain an analysis-result reference."
+            />
+          }
+          primaryIcon={<Database size={18} strokeWidth={1.5} />}
+          primaryTitle="Analysis result"
+          sections={[]}
+        />
+      </div>
     );
   }
 

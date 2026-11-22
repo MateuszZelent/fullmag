@@ -5,7 +5,7 @@ import type { ReactElement } from "react";
 import type { JsonObject } from "@/kernel/api/apiTypes";
 import { Button } from "@/shared/ui/Button";
 
-import { orthogonalizeAxisGramSchmidt } from "../../../panels/material/ObjectMaterialSpec";
+import { orthogonalizeAxisGramSchmidt } from "../material";
 import {
   ANISOTROPY_UNITS,
   FIELD_TESLA_UNITS,

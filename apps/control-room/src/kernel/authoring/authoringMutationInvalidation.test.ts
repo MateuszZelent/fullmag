@@ -38,10 +38,10 @@ describe("authoring mutation readiness invalidation", () => {
   });
 
   it.each([
-    "../../modules/inspector/panels/ObjectMaterialPanel.tsx",
-    "../../modules/inspector/panels/ObjectMagneticTexturePanel.tsx",
-    "../../modules/inspector/panels/region/ObjectRegionTexturePanel.tsx",
-    "../../modules/inspector/panels/PhysicsInteractionPanel.tsx",
+    "../../modules/inspector/inspectors/objects/geometry/geometryMutations.ts",
+    "../../modules/inspector/inspectors/objects/physics/PhysicsModuleSpec.tsx",
+    "../../modules/inspector/panels/magnetic-texture/MagneticTextureInspectorPanel.tsx",
+    "../../modules/inspector/panels/PhysicsInteractionPanel.model.ts",
     "./magnetization-texture/commands.ts",
   ])("routes %s through the bounded dependent helper", (relativePath) => {
     const source = readFileSync(new URL(relativePath, import.meta.url), "utf8");

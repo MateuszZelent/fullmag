@@ -305,11 +305,9 @@ vi.mock("@/kernel/resources/geometryLifecycleResources", () => {
   };
 });
 
-import {
-  Visualizations2DDraftInspectorSpecPanel,
-  Visualizations2DPlotInspectorSpecPanel,
-  Visualizations2DRootInspectorSpecPanel,
-} from "./Visualizations2DSpecs";
+import { Visualizations2DDraftInspectorSpecPanel } from "../../inspectors/visualizations/Visualizations2DDraftSpec";
+import { Visualizations2DPlotInspectorSpecPanel } from "../../inspectors/visualizations/Visualizations2DPlotSpec";
+import { Visualizations2DRootInspectorSpecPanel } from "../../inspectors/visualizations/Visualizations2DRootSpec";
 
 function findButtonByText(root: TestElement, text: string): TestElement | null {
   return findElement(

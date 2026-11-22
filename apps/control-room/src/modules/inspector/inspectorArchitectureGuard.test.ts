@@ -1,5 +1,5 @@
 import { existsSync, readFileSync, readdirSync } from "node:fs";
-import { join, relative, sep } from "node:path";
+import { dirname, join, relative, resolve, sep } from "node:path";
 import { describe, expect, it } from "vitest";
 
 const appRoot = join(import.meta.dirname, "../../..");
@@ -59,21 +59,56 @@ const DOMAIN_ROUTE_REGISTRIES = [
 ] as const;
 
 const PURGED_LEGACY_INSPECTOR_WRAPPERS = [
+  "src/modules/inspector/components/ScientificInspectorTemplate.tsx",
   "src/modules/inspector/panels/DedicatedExplorerInspectorPanels.tsx",
+  "src/modules/inspector/panels/DedicatedInspectorRouteFrame.tsx",
   "src/modules/inspector/panels/ModelTreeOverviewInspectorPanels.tsx",
   "src/modules/inspector/panels/MaskAntennaPanel.tsx",
   "src/modules/inspector/panels/FieldQuantityInspectorPanel.tsx",
   "src/modules/inspector/panels/ObservationFrameInspectorPanel.tsx",
   "src/modules/inspector/panels/PhysicsGraphModuleInspectorPanel.tsx",
+  "src/modules/inspector/panels/ObjectMaterialPanel.tsx",
+  "src/modules/inspector/panels/ObjectMeshPolicyPanel.tsx",
+  "src/modules/inspector/panels/PhysicsInteractionPanel.tsx",
+  "src/modules/inspector/panels/ObjectMagneticTexturePanel.tsx",
+  "src/modules/inspector/panels/GeometryObjectPanel.tsx",
+  "src/modules/inspector/panels/MeshDetailsPanel.tsx",
+  "src/modules/inspector/panels/StudyStageInspectorRouter.tsx",
+  "src/modules/inspector/panels/ChartInspectorSpecs.tsx",
+  "src/modules/inspector/panels/PlanarMonitorSpecs.tsx",
+  "src/modules/inspector/panels/airbox/AirboxAndBoundarySpecs.tsx",
+  "src/modules/inspector/panels/airbox/AirboxInspectorIdentityFrame.tsx",
+  "src/modules/inspector/panels/airbox/airboxMeshSubSpecs.tsx",
   "src/modules/inspector/panels/analysis-results/PinnedVisualizationsInspectorPanel.tsx",
   "src/modules/inspector/panels/antenna/AntennaCompositionSummaryPanel.tsx",
+  "src/modules/inspector/panels/antenna/AntennaCoreSpecs.tsx",
+  "src/modules/inspector/panels/antenna/AntennaExcitationAndVizSpecs.tsx",
   "src/modules/inspector/panels/antenna/AntennaTerminalsPanel.tsx",
   "src/modules/inspector/panels/antenna/AntennaTerminalSourceDetails.tsx",
+  "src/modules/inspector/panels/cross-sections/Visualizations2DSpecs.tsx",
+  "src/modules/inspector/panels/fdm-grid/FdmGridAndCellSpecs.tsx",
+  "src/modules/inspector/panels/frequency-domain/FrequencyDomainResultInspectors.tsx",
   "src/modules/inspector/panels/frequency-domain/ModeCompositionInspectorRouteAdapter.tsx",
   "src/modules/inspector/panels/frequency-domain/modeCompositionInspectorDependencies.ts",
+  "src/modules/inspector/panels/geometry/ObjectGeometrySpec.tsx",
+  "src/modules/inspector/panels/material/ObjectMaterialSpec.tsx",
+  "src/modules/inspector/panels/mesh-details/MeshDomainSpecs.tsx",
+  "src/modules/inspector/panels/model-roots/ModelScopeSpecs.tsx",
+  "src/modules/inspector/panels/physics/FieldDriveMaskSpec.tsx",
+  "src/modules/inspector/panels/physics/FieldDriveSpec.tsx",
+  "src/modules/inspector/panels/physics/PhysicsModuleSpecs.tsx",
+  "src/modules/inspector/panels/physics-first/HysteresisResultSpecs.tsx",
   "src/modules/inspector/panels/physics-first/PhysicsFirstResultInspectorPanel.tsx",
+  "src/modules/inspector/panels/physics-first/PostprocessingAndPlaybackSpecs.tsx",
   "src/modules/inspector/panels/physics-first/PostprocessingResultInspectors.tsx",
+  "src/modules/inspector/panels/physics-first/ResonanceAndDispersionSpecs.tsx",
   "src/modules/inspector/panels/physics-first/ResultsOverviewInspectorPanel.tsx",
+  "src/modules/inspector/panels/region/RegionInspectorSpecs.tsx",
+  "src/modules/inspector/panels/stages/SpectralStageSpecs.tsx",
+  "src/modules/inspector/panels/stages/StageInspectorFrame.tsx",
+  "src/modules/inspector/panels/stages/TimeAndZeroDurationStageSpecs.tsx",
+  "src/modules/inspector/panels/study/StudyBranchSpecs.tsx",
+  "src/modules/inspector/panels/transport/TransportAndSpinSpecs.tsx",
   "src/modules/inspector/visualization/defaultPlanarSourceModel.ts",
 ] as const;
 
@@ -87,7 +122,120 @@ const FORBIDDEN_LEGACY_SHELL_SYMBOLS = [
   "StageInspectorFrame",
   "AirboxInspectorIdentityFrame",
   "PhysicsFirstResultInspectorPanel",
+  "PhysicsInspectorOverview",
 ] as const;
+
+const IMPORT_SPECIFIER_PATTERN =
+  /(?:import|export)\s+(?:type\s+)?(?:[\s\S]*?\s+from\s+)?["']([^"']+)["']|import\(\s*["']([^"']+)["']\s*\)/g;
+
+let cachedProductionImportGraph: {
+  readonly allProductionFiles: ReadonlySet<string>;
+  readonly inspectorProductionFiles: readonly string[];
+  readonly edges: ReadonlyMap<string, readonly string[]>;
+} | null = null;
+
+function buildProductionImportGraph(): {
+  readonly allProductionFiles: ReadonlySet<string>;
+  readonly inspectorProductionFiles: readonly string[];
+  readonly edges: ReadonlyMap<string, readonly string[]>;
+} {
+  if (cachedProductionImportGraph) {
+    return cachedProductionImportGraph;
+  }
+  const srcProductionFiles = collectFiles(
+    srcRoot,
+    (fullPath, name) =>
+      /\.(?:ts|tsx)$/.test(name) &&
+      !isTestOrSupportFile(name) &&
+      !fullPath.includes(`${sep}__tests__${sep}`),
+  );
+  const appEntryFiles = collectFiles(join(appRoot, "app"), (_fullPath, name) =>
+    /\.(?:ts|tsx)$/.test(name),
+  );
+  const fixtureFiles = collectFiles(
+    join(appRoot, "scripts/fixtures"),
+    (_fullPath, name) => /\.(?:ts|tsx)$/.test(name),
+  );
+
+  const allProductionFiles = new Set<string>([
+    ...srcProductionFiles,
+    ...appEntryFiles,
+    ...fixtureFiles,
+  ]);
+
+  const resolveImportSpecifier = (
+    fromFile: string,
+    specifier: string,
+  ): string | null => {
+    let basePath: string;
+    if (specifier.startsWith("@/")) {
+      basePath = resolve(srcRoot, specifier.slice(2));
+    } else if (specifier.startsWith(".")) {
+      basePath = resolve(dirname(fromFile), specifier);
+    } else {
+      return null;
+    }
+
+    const candidates = [
+      basePath,
+      `${basePath}.ts`,
+      `${basePath}.tsx`,
+      join(basePath, "index.ts"),
+      join(basePath, "index.tsx"),
+    ];
+    for (const candidate of candidates) {
+      if (allProductionFiles.has(candidate)) {
+        return candidate;
+      }
+    }
+    return null;
+  };
+
+  const edges = new Map<string, readonly string[]>();
+  for (const filePath of allProductionFiles) {
+    const cleaned = stripComments(readFileSync(filePath, "utf8"));
+    const targets = new Set<string>();
+    for (const match of cleaned.matchAll(IMPORT_SPECIFIER_PATTERN)) {
+      const specifier = match[1] ?? match[2];
+      if (!specifier) continue;
+      const resolved = resolveImportSpecifier(filePath, specifier);
+      if (resolved) {
+        targets.add(resolved);
+      }
+    }
+    edges.set(filePath, [...targets]);
+  }
+
+  const inspectorPrefix = `${inspectorRoot}${sep}`;
+  const inspectorProductionFiles = srcProductionFiles
+    .filter((filePath) => filePath.startsWith(inspectorPrefix))
+    .sort();
+
+  cachedProductionImportGraph = {
+    allProductionFiles,
+    inspectorProductionFiles,
+    edges,
+  };
+  return cachedProductionImportGraph;
+}
+
+function collectReachableFiles(
+  roots: readonly string[],
+  edges: ReadonlyMap<string, readonly string[]>,
+): Set<string> {
+  const visited = new Set<string>(roots);
+  const queue = [...roots];
+  while (queue.length > 0) {
+    const current = queue.pop()!;
+    for (const next of edges.get(current) ?? []) {
+      if (!visited.has(next)) {
+        visited.add(next);
+        queue.push(next);
+      }
+    }
+  }
+  return visited;
+}
 
 const TEMPLATE_INTERNAL_SEMANTIC_BUTTON_CLASSES = [
   "fm-inspector__commit-status",
@@ -207,21 +355,37 @@ function findNativeHtmlTitleAttributes(source: string): number[] {
 }
 
 describe("Inspector permanent CI architecture guard", () => {
-  it("keeps purged dead legacy inspector wrappers deleted and forbids legacy shell imports across canonical routes, template, and specs", () => {
+  it("keeps purged dead legacy inspector wrappers deleted and forbids legacy shell/frame imports across ALL app-reachable files under src/modules/inspector/", () => {
     const resurrectedWrappers = PURGED_LEGACY_INSPECTOR_WRAPPERS.filter(
       (relPath) => existsSync(join(appRoot, relPath)),
     );
     expect(resurrectedWrappers).toEqual([]);
 
+    const { inspectorProductionFiles, edges } = buildProductionImportGraph();
+    const appRoots = [
+      ...collectFiles(join(appRoot, "app"), (_fullPath, name) =>
+        /\.(?:ts|tsx)$/.test(name),
+      ),
+      join(inspectorRoot, "inspectorRouteCatalog.tsx"),
+      join(srcRoot, "modules/registry.ts"),
+    ];
+    const appReachable = collectReachableFiles(appRoots, edges);
+    const appReachableInspectorFiles = inspectorProductionFiles.filter((filePath) =>
+      appReachable.has(filePath),
+    );
+    expect(appReachableInspectorFiles.length).toBeGreaterThanOrEqual(400);
+
     const routePaths = DOMAIN_ROUTE_REGISTRIES.map((relPath) =>
       join(appRoot, relPath),
     );
     const guardedFiles = [
-      ...routePaths,
-      ...getTemplateFiles(),
-      ...getCanonicalSpecFiles(),
-    ];
-    expect(guardedFiles.length).toBeGreaterThanOrEqual(50);
+      ...new Set([
+        ...appReachableInspectorFiles,
+        ...routePaths,
+        ...getTemplateFiles(),
+        ...getCanonicalSpecFiles(),
+      ]),
+    ].sort();
 
     const legacyImportOrSymbolPattern = new RegExp(
       `\\b(?:${FORBIDDEN_LEGACY_SHELL_SYMBOLS.join("|")})\\b`,
@@ -238,6 +402,59 @@ describe("Inspector permanent CI architecture guard", () => {
     }
 
     expect(violations).toEqual([]);
+  });
+
+  it("wires domain route registries directly to modular inspectors/ branches and prevents orphaned/unreachable panel files under panels/ and inspectors/", () => {
+    const domainRouteFiles = DOMAIN_ROUTE_REGISTRIES.filter(
+      (relPath) => relPath !== "src/modules/inspector/inspectorRouteCatalog.tsx",
+    );
+    const indirectPanelRouteImports: string[] = [];
+    for (const relPath of domainRouteFiles) {
+      const cleaned = stripComments(readFileSync(join(appRoot, relPath), "utf8"));
+      for (const match of cleaned.matchAll(IMPORT_SPECIFIER_PATTERN)) {
+        const specifier = match[1] ?? match[2] ?? "";
+        if (
+          specifier.startsWith("../panels/") ||
+          specifier.startsWith("@/modules/inspector/panels/")
+        ) {
+          const line = lineNumberAt(cleaned, match.index ?? 0);
+          indirectPanelRouteImports.push(
+            `${relPath}:${line} imports legacy panels/ path "${specifier}" instead of ../inspectors/*`,
+          );
+        }
+      }
+    }
+    expect(indirectPanelRouteImports).toEqual([]);
+
+    const { inspectorProductionFiles, edges } = buildProductionImportGraph();
+    const reachabilityRoots = [
+      ...collectFiles(join(appRoot, "app"), (_fullPath, name) =>
+        /\.(?:ts|tsx)$/.test(name),
+      ),
+      ...collectFiles(join(appRoot, "scripts/fixtures"), (_fullPath, name) =>
+        /\.(?:ts|tsx)$/.test(name),
+      ),
+      join(inspectorRoot, "inspectorRouteCatalog.tsx"),
+      join(srcRoot, "modules/registry.ts"),
+    ];
+    const reachable = collectReachableFiles(reachabilityRoots, edges);
+
+    const unreachableTsxFiles = inspectorProductionFiles
+      .filter(
+        (filePath) => filePath.endsWith(".tsx") && !reachable.has(filePath),
+      )
+      .map(toPosixRelative);
+    expect(unreachableTsxFiles).toEqual([]);
+
+    const modularInspectorsPrefix = `${join(inspectorRoot, "inspectors")}${sep}`;
+    const unreachableModularFiles = inspectorProductionFiles
+      .filter(
+        (filePath) =>
+          filePath.startsWith(modularInspectorsPrefix) &&
+          !reachable.has(filePath),
+      )
+      .map(toPosixRelative);
+    expect(unreachableModularFiles).toEqual([]);
   });
 
   it("enforces zero raw HTML <input>, <select>, <textarea>, and <button> tags in canonical spec and template files", () => {

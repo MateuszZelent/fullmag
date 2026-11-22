@@ -39,7 +39,7 @@ import {
   EigenProvenanceInspectorPanel,
   EigenSpectrumInspectorPanel,
   EigenStudyInspectorPanel,
-} from "../../../panels/frequency-domain/FrequencyDomainResultInspectors";
+} from "../frequency-domain";
 import { FrequencyDomainSpectrumChart } from "../../../panels/FrequencyDomainCharts";
 import { ConnectedInspectorSpec } from "../../../panels/study/ConnectedInspectorSpec";
 import {

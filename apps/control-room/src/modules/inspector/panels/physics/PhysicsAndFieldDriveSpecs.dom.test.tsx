@@ -19,24 +19,26 @@ import {
 } from "../model-roots/wave4TestDom.test-support";
 import {
   computeAutoHallPolarization,
-  CurrentTransportInspectorPanel,
-  OerstedFieldInspectorPanel,
-  SpinInterfaceInspectorPanel,
   SpinTorqueInspectorPanel,
-  SpinTransportInspectorPanel,
+} from "../../inspectors/objects/transport";
+import { CurrentTransportInspectorPanel } from "../transport/CurrentTransportPanel";
+import { OerstedFieldInspectorPanel } from "../transport/OerstedFieldPanel";
+import { SpinInterfaceInspectorPanel } from "../transport/SpinInterfacePanel";
+import { SpinTransportInspectorPanel } from "../transport/SpinTransportPanel";
+import {
   StructuredCurrentClosureInspectorPanel,
   StructuredCurrentSourceCutInspectorPanel,
-} from "../transport/TransportAndSpinSpecs";
+} from "../transport/StructuredClosurePanels";
 import {
   evaluateFieldDriveEnvelopeAtTime,
   FieldDriveInspectorPanel,
-} from "./FieldDriveSpec";
+} from "../../inspectors/objects/field-drives";
 import {
   CouplingInspectorPanel,
   ObjectPhysicsInspectorPanel,
   PhysicsModuleInspectorPanel,
   resolveCanonicalPhysicsModuleKind,
-} from "./PhysicsModuleSpecs";
+} from "../../inspectors/objects/physics";
 
 vi.mock("@radix-ui/react-tooltip", () => ({
   Provider: ({ children }: { children?: ReactNode }) => <>{children}</>,
@@ -476,7 +478,8 @@ vi.mock("@/kernel/KernelContext", () => ({
   }),
 }));
 
-vi.mock("@/kernel/resources/geometryLifecycleResources", () => ({
+vi.mock("@/kernel/resources/geometryLifecycleResources", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/kernel/resources/geometryLifecycleResources")>()),
   MODEL_COUPLINGS_RESOURCE_KEY: "/api/v2/sessions/current/model/couplings",
   MODEL_REGION_DIAGNOSTICS_RESOURCE_KEY: "/api/v2/sessions/current/model/regions/diagnostics",
   publishCommittedSceneResource: vi.fn(),

@@ -225,7 +225,7 @@ import {
   FdmCellInspectorSpecPanel,
   FdmGridInspectorSpecPanel,
   FdmGridLayerInspectorSpecPanel,
-} from "./FdmGridAndCellSpecs";
+} from "../../inspectors/mesh/fdm";
 
 function resetDefaultFixtures(): void {
   mocks.executeCommand.mockClear();

@@ -109,7 +109,7 @@ import type { InspectorPanelProps } from "../inspectorTypes";
 import { useRegisterInspectorEditSession } from "../InspectorEditSession";
 import { ViewportCameraControls } from "../visualization/ViewportCameraControls";
 import { ViewportClippingControls } from "../visualization/ViewportClippingControls";
-import { ScientificInspectorContext } from "../components/ScientificInspectorTemplate";
+import { ScientificInspectorContext } from "../components/InspectorContextGroups";
 import { FieldRow } from "../primitives/FieldRow";
 import { FeedbackBanner } from "../primitives/FeedbackBanner";
 import { InspectorGroup } from "../primitives/InspectorGroup";

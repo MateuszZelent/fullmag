@@ -2265,21 +2265,6 @@ button.fm-inspector__commit-status--error {
   border-radius: 1px;
 }
 
-.fm-inspector-checkbox-row {
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto;
-  gap: var(--fm-space-2);
-  align-items: center;
-  min-height: var(--fm-control-height-regular);
-  color: var(--fm-text-primary);
-  font-size: var(--fm-font-size-xs);
-}
-
-.fm-inspector-checkbox-row__meta {
-  color: var(--fm-text-muted);
-  font-size: var(--fm-font-size-xs);
-}
-
 .fm-inspector-toolbar {
   display: flex;
   align-items: center;
@@ -2509,27 +2494,6 @@ button.fm-inspector__commit-status--error {
   gap: var(--fm-space-3);
   overflow-wrap: break-word;
   word-break: normal;
-}
-
-.fm-scientific-inspector__content {
-  display: grid;
-  min-width: 0;
-  gap: var(--fm-space-3);
-}
-
-.fm-scientific-inspector__breadcrumbs {
-  color: var(--fm-text-muted);
-  font-size: var(--fm-font-size-xs);
-}
-
-.fm-scientific-inspector__heading,
-.fm-scientific-inspector__badges,
-.fm-scientific-inspector__actions {
-  display: flex;
-  min-width: 0;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: var(--fm-space-2);
 }
 
 .fm-scientific-inspector__diagnostic {
@@ -2767,14 +2731,6 @@ button.fm-inspector__commit-status--error {
   display: flex;
   flex-wrap: wrap;
   gap: var(--fm-space-2);
-}
-
-.fm-inspector-quantity-unit {
-  width: 4.5rem;
-  min-width: 3.5rem;
-  flex: 0 0 auto;
-  font-size: var(--fm-inspector-control-font-size);
-  padding-inline: var(--fm-space-1);
 }
 
 .fm-inspector .fm-inspector-form-field--inline:has(.fm-inspector-checkbox) {

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { resolveInspectorRoute } from "./inspectorRouteCatalog";
-import { AntennaFieldSolveStageInspectorPanel } from "./panels/stages/TimeAndZeroDurationStageSpecs";
+import { AntennaFieldSolveStageInspectorPanel } from "./inspectors/study/stages";
 
 describe("antenna field-solve inspector route", () => {
   it("uses the dedicated Study stage inspector rather than the magnetic field-drive inspector", () => {

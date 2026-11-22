@@ -480,7 +480,7 @@ import {
   ResonanceModalFieldSweepResultInspector,
   ResonanceModalModeResultInspector,
   resolveSelectedDispersionPoint,
-} from "./ResonanceAndDispersionSpecs";
+} from "../../inspectors/results/resonance";
 import {
   computeDerivedMetricsFromPoints,
   HysteresisDatasetResultInspector,
@@ -488,7 +488,7 @@ import {
   HysteresisRootResultInspector,
   resolveHysteresisPointId,
   resolveHysteresisStageId,
-} from "./HysteresisResultSpecs";
+} from "../../inspectors/results/hysteresis";
 import {
   AnalysisViewsOverviewInspector,
   DerivedValuesOverviewInspector,
@@ -497,7 +497,7 @@ import {
   ObservationFrameTemplateInspectorPanel,
   PinnedVisualizationsTemplateInspectorPanel,
   TableDefinitionInspector,
-} from "./PostprocessingAndPlaybackSpecs";
+} from "../../inspectors/results/playback";
 
 let restoreDom: (() => void) | null = null;
 

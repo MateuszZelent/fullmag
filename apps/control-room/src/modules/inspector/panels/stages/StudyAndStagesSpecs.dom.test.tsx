@@ -417,13 +417,13 @@ import {
   StudyRecoveryInspectorPanel,
   StudyRootInspectorPanel,
   StudyStagesInspectorPanel,
-} from "../study/StudyBranchSpecs";
+} from "../../inspectors/study";
 import {
   EigenmodesStageInspectorPanel,
   FrequencyResponseStageInspectorPanel,
   parseExplicitFrequencySweepHz,
   SUPPORTED_FREQUENCY_RESPONSE_SOLVER_METHODS,
-} from "./SpectralStageSpecs";
+} from "../../inspectors/study/stages";
 import { HysteresisStageInspectorPanel } from "./HysteresisStageSpec";
 import { StageLiveTelemetryPanel } from "./StageSharedControls";
 import {
@@ -438,7 +438,7 @@ import {
   RunStageInspectorPanel,
   SaveStateStageInspectorPanel,
   TableAutosaveStageInspectorPanel,
-} from "./TimeAndZeroDurationStageSpecs";
+} from "../../inspectors/study/stages";
 
 let restoreDom: (() => void) | null = null;
 

@@ -8,7 +8,7 @@ import type { EigenDispersionPoint, EigenSpectrumPoint } from "@/shared/domain/a
 import {
   buildEigenDispersionPointSelectionRefFromSelection,
   EigenSpectrumInspectorPanel,
-} from "./FrequencyDomainResultInspectors";
+} from "../../inspectors/results/frequency-domain";
 
 const mocks = vi.hoisted(() => ({
   chart: vi.fn<(_props: {

@@ -18,14 +18,14 @@ import { InspectorEditSessionProvider } from "@/modules/inspector/InspectorEditS
 
 import {
   ALL_ANTENNA_TOPOLOGIES,
-  AntennaConductorInspectorSpecPanel,
-  AntennaGeometryInspectorSpecPanel,
-  AntennaOverviewInspectorSpecPanel,
-  AntennaPortInspectorSpecPanel,
-  AntennaTerminalsInspectorSpecPanel,
   buildAntennaTopologyGeometryPayload,
   createDefaultAntennaGeometryDraft,
-} from "./AntennaCoreSpecs";
+} from "../../inspectors/objects/antenna/antennaCoreShared";
+import { AntennaConductorInspectorSpecPanel } from "../../inspectors/objects/antenna/AntennaConductorSpec";
+import { AntennaGeometryInspectorSpecPanel } from "../../inspectors/objects/antenna/AntennaGeometrySpec";
+import { AntennaOverviewInspectorSpecPanel } from "../../inspectors/objects/antenna/AntennaOverviewSpec";
+import { AntennaPortInspectorSpecPanel } from "../../inspectors/objects/antenna/AntennaPortSpec";
+import { AntennaTerminalsInspectorSpecPanel } from "../../inspectors/objects/antenna/AntennaTerminalsSpec";
 import { formatAntennaParameter } from "./AntennaReadoutModel";
 import { antennaTerminalBoundaryMarker } from "./AntennaTerminalPreparationModel";
 import { convertRfPortLevel } from "./rfPowerConverter";

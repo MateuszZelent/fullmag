@@ -2,10 +2,6 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
-const panelSource = readFileSync(
-  join(process.cwd(), "src/modules/inspector/panels/MeshDetailsPanel.tsx"),
-  "utf8",
-);
 const modelSource = readFileSync(
   join(
     process.cwd(),
@@ -16,7 +12,6 @@ const modelSource = readFileSync(
 
 describe("MeshDetailsPanel performance contracts", () => {
   it("selects only mesh-gating session status fields instead of the full status resource", () => {
-    expect(panelSource).toContain("useMeshDetailsModel");
     expect(modelSource).toContain("useSessionStatusSelector");
     expect(modelSource).toContain("selectMeshDetailsRuntimeStatus");
     expect(modelSource).toContain("meshDetailsRuntimeStatusEquals");

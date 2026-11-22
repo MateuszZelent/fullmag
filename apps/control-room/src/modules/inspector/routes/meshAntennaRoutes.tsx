@@ -1,40 +1,7 @@
 import {
-  AirboxMeshBuildInspectorSpecPanel,
-  AirboxMeshInspectorSpecPanel,
-  AirboxMeshParametersInspectorSpecPanel,
-  AirboxMeshQualityGatesInspectorSpecPanel,
-  AirboxMeshStatisticsInspectorSpecPanel,
-  AirboxMeshTopologyInspectorSpecPanel,
-  AirboxMultilayerTargetInspectorSpecPanel,
-  AirboxRootInspectorSpecPanel,
-  BoundaryFacesRootInspectorSpecPanel,
-} from "../panels/airbox/AirboxAndBoundarySpecs";
-import {
-  AntennaConductorInspectorSpecPanel,
-  AntennaGeometryInspectorSpecPanel,
-  AntennaOverviewInspectorSpecPanel,
-  AntennaPortInspectorSpecPanel,
-  AntennaTerminalsInspectorSpecPanel,
-} from "../panels/antenna/AntennaCoreSpecs";
-import {
-  AntennaDriveInspectorSpecPanel,
-  AntennaProjectionInspectorSpecPanel,
-  AntennaRegionalMaskInspectorSpecPanel,
-  AntennaSolutionInspectorSpecPanel,
-  AntennaSpectrumInspectorSpecPanel,
-  AntennaVisualizationInspectorSpecPanel,
-} from "../panels/antenna/AntennaExcitationAndVizSpecs";
-import {
-  Visualizations2DDraftInspectorSpecPanel,
-  Visualizations2DPlotInspectorSpecPanel,
-  Visualizations2DRootInspectorSpecPanel,
-} from "../panels/cross-sections/Visualizations2DSpecs";
-import {
   FdmCellInspectorSpecPanel,
   FdmGridInspectorSpecPanel,
   FdmGridLayerInspectorSpecPanel,
-} from "../panels/fdm-grid/FdmGridAndCellSpecs";
-import {
   MeshBuildsInspectorSpecPanel,
   MeshQualityInspectorSpecPanel,
   MeshRegionsInspectorSpecPanel,
@@ -44,7 +11,36 @@ import {
   MeshUnassignedInspectorSpecPanel,
   MeshUnassignedPartInspectorSpecPanel,
   ObjectMeshInspectorSpecPanel,
-} from "../panels/mesh-details/MeshDomainSpecs";
+} from "../inspectors/mesh";
+import {
+  AntennaConductorInspectorSpecPanel,
+  AntennaDriveInspectorSpecPanel,
+  AntennaGeometryInspectorSpecPanel,
+  AntennaOverviewInspectorSpecPanel,
+  AntennaPortInspectorSpecPanel,
+  AntennaProjectionInspectorSpecPanel,
+  AntennaRegionalMaskInspectorSpecPanel,
+  AntennaSolutionInspectorSpecPanel,
+  AntennaSpectrumInspectorSpecPanel,
+  AntennaTerminalsInspectorSpecPanel,
+  AntennaVisualizationInspectorSpecPanel,
+} from "../inspectors/objects";
+import {
+  AirboxMeshBuildInspectorSpecPanel,
+  AirboxMeshInspectorSpecPanel,
+  AirboxMeshParametersInspectorSpecPanel,
+  AirboxMeshQualityGatesInspectorSpecPanel,
+  AirboxMeshStatisticsInspectorSpecPanel,
+  AirboxMeshTopologyInspectorSpecPanel,
+  AirboxMultilayerTargetInspectorSpecPanel,
+  AirboxRootInspectorSpecPanel,
+  BoundaryFacesRootInspectorSpecPanel,
+} from "../inspectors/universe";
+import {
+  Visualizations2DDraftInspectorSpecPanel,
+  Visualizations2DPlotInspectorSpecPanel,
+  Visualizations2DRootInspectorSpecPanel,
+} from "../inspectors/visualizations";
 
 import { defineInspectorRoute, type InspectorRoute } from "./routeTypes";
 

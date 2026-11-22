@@ -317,7 +317,7 @@ import {
   validateSimplePolygon,
   validateTorusRadii,
   validateTubeRadii,
-} from "./ObjectGeometrySpec";
+} from "../../inspectors/objects/geometry";
 
 function queryFirst(
   host: TestElement,

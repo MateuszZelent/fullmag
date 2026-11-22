@@ -423,15 +423,17 @@ vi.mock("@/kernel/workspace/useAnalysisViewPreferencesHydration", () => ({
 import {
   AnalysisChartPointTemplatePanel,
   AnalysisChartTemplatePanel,
+} from "../inspectors/visualizations/AnalysisChartSpecs";
+import {
   LiveChartPointTemplatePanel,
   LiveChartTemplatePanel,
-  QuickChartTemplatePanel,
-} from "./ChartInspectorSpecs";
+} from "../inspectors/visualizations/LiveChartSpecs";
+import { QuickChartTemplatePanel } from "../inspectors/visualizations/QuickChartSpec";
 import {
   PlanarMonitorDraftTemplatePanel,
   PlanarMonitorsOverviewTemplatePanel,
   PlanarMonitorTemplatePanel,
-} from "./PlanarMonitorSpecs";
+} from "../inspectors/definitions";
 
 const COMMITTED_MONITOR = {
   id: "plane-1",
@@ -1404,20 +1406,19 @@ describe("Planar Monitors & Charts full master feature parity inside InspectorTe
   it("enforces hygiene across owned planar & chart files: 0 raw <input>/<select>/<textarea>, 0 #hex, 0 <12px classes", () => {
     const appRoot = join(import.meta.dirname, "../../../..");
     const files = [
-      "src/modules/inspector/panels/PlanarMonitorSpecs.tsx",
-      "src/modules/inspector/panels/PlanarMonitorInspectorPanel.tsx",
+      "src/modules/inspector/inspectors/definitions/PlanarMonitorsOverviewSpec.tsx",
+      "src/modules/inspector/inspectors/definitions/PlanarMonitorDraftSpec.tsx",
+      "src/modules/inspector/inspectors/definitions/PlanarMonitorSpec.tsx",
       "src/modules/inspector/panels/PlanarMonitorDefinitionEditor.tsx",
-      "src/modules/inspector/panels/PlanarMonitorDraftInspectorPanel.tsx",
       "src/modules/inspector/visualization/PlanarVisualizationSection.tsx",
       "src/modules/inspector/visualization/PlanarTargetFieldSection.tsx",
       "src/modules/inspector/visualization/PlanarSectionPlaneSection.tsx",
       "src/modules/inspector/visualization/PlanarCropViewSection.tsx",
       "src/modules/inspector/visualization/PlanarFieldLayerList.tsx",
       "src/modules/inspector/visualization/PlanarPresentationSections.tsx",
-      "src/modules/inspector/panels/ChartInspectorSpecs.tsx",
-      "src/modules/inspector/panels/LiveChartInspectorPanel.tsx",
-      "src/modules/inspector/panels/ChartInspectorPanel.tsx",
-      "src/modules/inspector/panels/QuickChartInspectorPanel.tsx",
+      "src/modules/inspector/inspectors/visualizations/LiveChartSpecs.tsx",
+      "src/modules/inspector/inspectors/visualizations/AnalysisChartSpecs.tsx",
+      "src/modules/inspector/inspectors/visualizations/QuickChartSpec.tsx",
     ];
 
     for (const relPath of files) {
@@ -1427,8 +1428,12 @@ describe("Planar Monitors & Charts full master feature parity inside InspectorTe
       expect(src, relPath).not.toMatch(/\btext-\[(?:9|10|11)px\]|\btext-2xs\b/);
     }
     for (const specPath of [
-      "src/modules/inspector/panels/PlanarMonitorSpecs.tsx",
-      "src/modules/inspector/panels/ChartInspectorSpecs.tsx",
+      "src/modules/inspector/inspectors/definitions/PlanarMonitorsOverviewSpec.tsx",
+      "src/modules/inspector/inspectors/definitions/PlanarMonitorDraftSpec.tsx",
+      "src/modules/inspector/inspectors/definitions/PlanarMonitorSpec.tsx",
+      "src/modules/inspector/inspectors/visualizations/LiveChartSpecs.tsx",
+      "src/modules/inspector/inspectors/visualizations/AnalysisChartSpecs.tsx",
+      "src/modules/inspector/inspectors/visualizations/QuickChartSpec.tsx",
     ]) {
       const src = readFileSync(join(appRoot, specPath), "utf8");
       expect(src, specPath).not.toMatch(/<button\b/);

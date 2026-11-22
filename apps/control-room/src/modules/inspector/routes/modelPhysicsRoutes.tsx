@@ -1,11 +1,3 @@
-import { TopologicalChargeExtensionPanel } from "../extensions/topological-charge/TopologicalChargeExtensionPanel";
-import { FrozenSpinsInspectorPanel } from "../panels/constraint/FrozenSpinsInspectorPanel";
-import { ObjectAbsorbingBoundaryInspectorPanel } from "../panels/constraint/ObjectExtensionsSpecs";
-import {
-  BuilderPrimitiveInspectorPanel,
-  GeometryObjectInspectorPanel,
-} from "../panels/geometry/ObjectGeometrySpec";
-import { ObjectMaterialInspectorPanel } from "../panels/material/ObjectMaterialSpec";
 import {
   CrossObjectPhysicsScopeInspectorPanel,
   DefinitionsRootInspectorPanel,
@@ -16,29 +8,31 @@ import {
   SessionRootInspectorPanel,
   UniverseRootInspectorPanel,
   UnresolvedPhysicsScopeInspectorPanel,
-} from "../panels/model-roots/ModelScopeSpecs";
-import { ObjectOverviewInspectorPanel } from "../panels/object/ObjectOverviewSpec";
-import { FieldDriveInspectorPanel } from "../panels/physics/FieldDriveSpec";
+} from "../inspectors/definitions";
 import {
+  BuilderPrimitiveInspectorPanel,
   CouplingInspectorPanel,
+  CurrentTransportInspectorPanel,
+  FieldDriveInspectorPanel,
+  FrozenSpinsInspectorPanel,
+  GeometryObjectInspectorPanel,
+  ObjectAbsorbingBoundaryInspectorPanel,
+  ObjectMaterialInspectorPanel,
+  ObjectOverviewInspectorPanel,
   ObjectPhysicsInspectorPanel,
-  PhysicsModuleInspectorPanel,
-} from "../panels/physics/PhysicsModuleSpecs";
-import {
   ObjectRegionMagneticParametersInspectorPanel,
   ObjectRegionMeshInspectorPanel,
   ObjectRegionOverviewInspectorPanel,
-  RegionsCollectionInspectorPanel,
-} from "../panels/region/RegionInspectorSpecs";
-import {
-  CurrentTransportInspectorPanel,
   OerstedFieldInspectorPanel,
+  PhysicsModuleInspectorPanel,
+  RegionsCollectionInspectorPanel,
   SpinInterfaceInspectorPanel,
   SpinTorqueInspectorPanel,
   SpinTransportInspectorPanel,
   StructuredCurrentClosureInspectorPanel,
   StructuredCurrentSourceCutInspectorPanel,
-} from "../panels/transport/TransportAndSpinSpecs";
+  TopologicalChargeExtensionPanel,
+} from "../inspectors/objects";
 
 import { defineInspectorRoute, type InspectorRoute } from "./routeTypes";
 
