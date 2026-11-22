@@ -194,8 +194,8 @@
   flex-direction: column;
   min-height: 0;
   overflow: hidden;
-  /* Docked panels float over the page backdrop (specs/frontend-v2/10 §1a). */
-  padding: var(--fm-space-1);
+  /* Docked panels float over the page backdrop with breathing room below the ribbon (specs/frontend-v2/10 §1a). */
+  padding: var(--fm-space-2) var(--fm-space-1) var(--fm-space-1);
 }
 
 .fm-workspace-body > [data-panel-group],
@@ -426,3 +426,9 @@
   overflow-y: hidden;
   scrollbar-width: none;
 }
+
+/* A collapsed ribbon is only its tab strip: the shell row shrinks to it. */
+.fm-workspace-shell:has(.fm-ribbon[data-expanded="false"]) {
+  --fm-ribbon-height: 40px;
+}
+

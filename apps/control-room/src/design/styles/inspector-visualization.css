@@ -18,27 +18,27 @@
   font-weight: 500;
   letter-spacing: 0.01em;
   border-radius: var(--fm-radius-md);
-  border-color: var(--fm-border-subtle) !important;
-  background: var(--fm-bg-panel-raised) !important;
-  color: var(--fm-text-secondary) !important;
+  border-color: var(--fm-border-subtle);
+  background: var(--fm-bg-panel-raised);
+  color: var(--fm-text-secondary);
   transition:
     background var(--fm-transition-fast),
     border-color var(--fm-transition-fast),
-    color var(--fm-transition-fast) !important;
+    color var(--fm-transition-fast);
 }
 
 .fm-visualization-toggle:hover:not(:disabled) {
-  border-color: var(--fm-border-default) !important;
-  background: var(--fm-bg-hover) !important;
-  color: var(--fm-text-primary) !important;
+  border-color: var(--fm-border-default);
+  background: var(--fm-bg-hover);
+  color: var(--fm-text-primary);
 }
 
 /* Active toggle: accent tint */
 .fm-visualization-toggle[data-active="true"],
 .fm-visualization-toggle[aria-pressed="true"] {
-  border-color: color-mix(in srgb, var(--fm-accent) 40%, var(--fm-border-subtle)) !important;
-  background: color-mix(in srgb, var(--fm-accent) 12%, var(--fm-bg-panel-raised)) !important;
-  color: var(--fm-accent) !important;
+  border-color: color-mix(in srgb, var(--fm-accent) 40%, var(--fm-border-subtle));
+  background: color-mix(in srgb, var(--fm-accent) 12%, var(--fm-bg-panel-raised));
+  color: var(--fm-accent);
   font-weight: 600;
 }
 
@@ -508,7 +508,7 @@
 /* Inspector controls stay opaque through disclosure and resource updates. */
 /* Toggle chip: scale press feedback */
 .fm-visualization-toggle:active:not(:disabled) {
-  transform: scale(0.96) !important;
+  transform: scale(0.96);
 }
 
 /* Facts (specs/frontend-v2/13 §1a, slot 3): one recessed group with hairline
@@ -552,7 +552,8 @@
   font-variant-numeric: tabular-nums;
   font-weight: var(--fm-font-weight-medium);
   line-height: 1.3;
-  overflow-wrap: anywhere;
+  overflow-wrap: break-word;
+  word-break: normal;
 }
 
 /* The overview frame is shared by Visualization and Physics.  Container
@@ -624,27 +625,29 @@
 
 /* ── Reduced motion: no lift/scale/nudge; colour transitions remain ── */
 @media (prefers-reduced-motion: reduce) {
-  .fm-viz-render-mode-tile,
-  .fm-viz-render-mode-tile__icon,
-  .fm-viz-color-swatch,
-  .fm-visualization-toggle,
-  .fm-viz-layer-chip,
-  .fm-inspector__action-btn {
-    transform: none !important;
+  :is(
+    .fm-viz-render-mode-tile,
+    .fm-viz-render-mode-tile__icon,
+    .fm-viz-color-swatch,
+    .fm-visualization-toggle,
+    .fm-viz-layer-chip,
+    .fm-inspector__action-btn
+  ):is(*, :hover:not(:disabled), :active:not(:disabled)) {
+    transform: none;
   }
 
   .fm-viz-render-mode-tile__icon,
   .fm-inspector__action-btn:active:not(:disabled) {
-    transition: none !important;
+    transition: none;
   }
 
   .fm-viz-render-mode-tile,
   .fm-viz-layer-chip {
-    transition-property: background, border-color, color, box-shadow !important;
+    transition-property: background, border-color, color, box-shadow;
   }
 
   .fm-viz-color-swatch {
-    transition-property: background, border-color, box-shadow !important;
+    transition-property: background, border-color, box-shadow;
   }
   .fm-inspector-range-slider::-webkit-slider-thumb {
     transition: none;
@@ -916,4 +919,26 @@
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: var(--fm-space-2);
+}
+
+/* ── 3D View & 3D Export: bounded scroll region above docked CommitBar ── */
+.fm-inspector.fm-viewport-3d-settings > .fm-viewport-3d-settings__tabs {
+  flex: 1 1 0;
+  height: auto;
+  min-height: 0;
+  grid-template-rows: auto minmax(0, 1fr);
+  align-content: start;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+  scrollbar-width: thin;
+}
+
+.fm-inspector.fm-viewport-3d-settings .fm-viewport-3d-settings__panels {
+  grid-template-rows: auto;
+  overflow: visible;
+}
+
+.fm-inspector.fm-viewport-3d-settings .fm-viewport-3d-settings__panel {
+  overflow: visible;
 }
