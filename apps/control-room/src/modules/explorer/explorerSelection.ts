@@ -847,7 +847,7 @@ export function resolveCurrentExplorerSelectionNode(
   const selected = findExplorerNode(nodes, selectedNodeId);
   if (selected) return selected;
   if (ref?.type === "scene-object" && ref.kind === "object.absorbing-boundary") {
-    return findExplorerNode(currentTree, `model:object:${ref.objectId}:magnetic-parameters`);
+    return findExplorerNode(currentTree, `model:object:${ref.objectId}`);
   }
   if (ref?.type !== "postprocessing") return null;
   // A definition selection is tied to an immutable owner identity. If that

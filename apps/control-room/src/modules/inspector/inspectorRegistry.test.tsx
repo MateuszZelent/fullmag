@@ -8,23 +8,23 @@ import {
   resolveInspectorRoute,
   resolveUnknownInspectorRoute,
 } from "./inspectorRouteCatalog";
-import { ObjectRegionVisualizationPanel } from "./panels/ObjectRegionsPanel";
+import { ObjectRegionVisualizationTemplatePanel } from "./panels/visualization/TargetVisualizationSpecs";
 import {
-  AirboxMeshBuildLanePanel,
-  AirboxMeshOverviewLanePanel,
-  AirboxMeshParametersLanePanel,
-  AirboxMeshQualityGatesLanePanel,
-  AirboxMeshStatisticsLanePanel,
-  AirboxMeshTopologyLanePanel,
-  AirboxOverviewLanePanel,
-} from "./panels/airbox/AirboxInspectorLanePanel";
-import { FdmMultilayerAirboxTargetPanel } from "./panels/airbox/FdmMultilayerAirboxTargetPanel";
+  AirboxMeshBuildInspectorSpecPanel,
+  AirboxMeshInspectorSpecPanel,
+  AirboxMeshParametersInspectorSpecPanel,
+  AirboxMeshQualityGatesInspectorSpecPanel,
+  AirboxMeshStatisticsInspectorSpecPanel,
+  AirboxMeshTopologyInspectorSpecPanel,
+  AirboxMultilayerTargetInspectorSpecPanel,
+  AirboxRootInspectorSpecPanel,
+} from "./panels/airbox/AirboxAndBoundarySpecs";
 import { AirboxVisualizationDebugInspectorPanel } from "./panels/airbox/AirboxVisualizationDebugInspectorPanel";
 import {
-  FdmCellInspectorPanel,
-  FdmGridInspectorPanelRoute,
-  ObjectRegionTextureInspectorPanel,
-} from "./panels/DedicatedExplorerInspectorPanels";
+  FdmCellInspectorSpecPanel,
+  FdmGridInspectorSpecPanel,
+} from "./panels/fdm-grid/FdmGridAndCellSpecs";
+import { MagneticTextureInspectorPanel } from "./panels/magnetic-texture/MagneticTextureInspectorPanel";
 import { FmrComparisonInspectorPanel } from "./panels/frequency-domain/FrequencyDomainResultInspectors";
 import {
   DispersionDrivenStageResultInspector,
@@ -215,20 +215,20 @@ describe("inspectorRegistry", () => {
       "object-region-texture",
     );
     expect(resolveInspectorPanel({ kind: "object.region.texture" })?.component).toBe(
-      ObjectRegionTextureInspectorPanel,
+      MagneticTextureInspectorPanel,
     );
     expect(
       resolveInspectorPanel({ kind: "object.region-magnetic-texture" })?.id,
     ).toBe("object-region-texture");
     expect(
       resolveInspectorPanel({ kind: "object.region-magnetic-texture" })?.component,
-    ).toBe(ObjectRegionTextureInspectorPanel);
+    ).toBe(MagneticTextureInspectorPanel);
     expect(resolveInspectorPanel({ kind: "object.region.visualization" })?.id).toBe(
       "object-region-visualization",
     );
     expect(
       resolveInspectorPanel({ kind: "object.region.visualization" })?.component,
-    ).toBe(ObjectRegionVisualizationPanel);
+    ).toBe(ObjectRegionVisualizationTemplatePanel);
     expect(resolveInspectorPanel({ kind: "object.magnetic-texture" })?.id).toBe(
       "object-magnetic-texture",
     );
@@ -308,10 +308,10 @@ describe("inspectorRegistry", () => {
 
     expect(gridPanels.every((panel) => panel?.id === "fdm-grid")).toBe(true);
     expect(
-      gridPanels.every((panel) => panel?.component === FdmGridInspectorPanelRoute),
+      gridPanels.every((panel) => panel?.component === FdmGridInspectorSpecPanel),
     ).toBe(true);
     expect(cellPanel?.id).toBe("fdm-cell");
-    expect(cellPanel?.component).toBe(FdmCellInspectorPanel);
+    expect(cellPanel?.component).toBe(FdmCellInspectorSpecPanel);
   });
 
   it("does not prefix-match a future structured-grid node", () => {
@@ -375,30 +375,30 @@ describe("inspectorRegistry", () => {
   it("gives the multilayer Airbox target its own inspector", () => {
     const panel = resolveInspectorPanel({ kind: "airbox.multilayer.target" });
     expect(panel?.id).toBe("fdm-multilayer-airbox-target");
-    expect(panel?.component).toBe(FdmMultilayerAirboxTargetPanel);
+    expect(panel?.component).toBe(AirboxMultilayerTargetInspectorSpecPanel);
   });
 
   it("gives every Airbox mesh branch a distinct single-purpose panel", () => {
     const expected = [
-      ["airbox.root", "airbox-overview", AirboxOverviewLanePanel],
-      ["airbox.mesh", "airbox-mesh-overview", AirboxMeshOverviewLanePanel],
+      ["airbox.root", "airbox-overview", AirboxRootInspectorSpecPanel],
+      ["airbox.mesh", "airbox-mesh-overview", AirboxMeshInspectorSpecPanel],
       [
         "airbox.mesh.parameters",
         "airbox-mesh-parameters",
-        AirboxMeshParametersLanePanel,
+        AirboxMeshParametersInspectorSpecPanel,
       ],
       [
         "airbox.mesh.quality-gates",
         "airbox-mesh-quality-gates",
-        AirboxMeshQualityGatesLanePanel,
+        AirboxMeshQualityGatesInspectorSpecPanel,
       ],
       [
         "airbox.mesh.statistics",
         "airbox-mesh-statistics",
-        AirboxMeshStatisticsLanePanel,
+        AirboxMeshStatisticsInspectorSpecPanel,
       ],
-      ["airbox.mesh.topology", "airbox-mesh-topology", AirboxMeshTopologyLanePanel],
-      ["airbox.mesh.build", "airbox-mesh-build", AirboxMeshBuildLanePanel],
+      ["airbox.mesh.topology", "airbox-mesh-topology", AirboxMeshTopologyInspectorSpecPanel],
+      ["airbox.mesh.build", "airbox-mesh-build", AirboxMeshBuildInspectorSpecPanel],
     ] as const;
 
     for (const [kind, panelId, component] of expected) {

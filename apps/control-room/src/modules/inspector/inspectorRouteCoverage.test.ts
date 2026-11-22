@@ -534,11 +534,17 @@ describe("inspector route coverage", () => {
 
     expect(kinds.every((kind) => resolveInspectorRoute(kind) !== null)).toBe(true);
     expect(routes.every(Boolean)).toBe(true);
-    expect(new Set(routes.map((route) => route?.component)).size).toBe(
-      canonicalKinds.length,
-    );
     expect(new Set(routes.map((route) => route?.id)).size).toBe(
       canonicalKinds.length,
+    );
+    // `object.magnetic-texture` and `object.region.texture` intentionally share
+    // the unified `MagneticTextureInspectorPanel` across two distinct route IDs.
+    const nonSharedKinds = canonicalKinds.filter((kind) => kind !== "object.region.texture");
+    expect(
+      new Set(nonSharedKinds.map((kind) => resolveInspectorRoute(kind)?.component)).size,
+    ).toBe(nonSharedKinds.length);
+    expect(resolveInspectorRoute("object.region.texture")?.component).toBe(
+      resolveInspectorRoute("object.magnetic-texture")?.component,
     );
   });
 

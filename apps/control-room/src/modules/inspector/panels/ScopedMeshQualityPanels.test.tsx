@@ -182,8 +182,13 @@ const objectQualityPayload = {
   ],
 };
 
-vi.mock("@/kernel/resources/geometryLifecycleResources", () => ({
-  MESH_BUILD_CURRENT_RESOURCE_KEY: "meshing/builds/current",
+vi.mock("@/kernel/resources/geometryLifecycleResources", async (importOriginal) => {
+  const actual = await importOriginal<
+    typeof import("@/kernel/resources/geometryLifecycleResources")
+  >();
+  return {
+    ...actual,
+    MESH_BUILD_CURRENT_RESOURCE_KEY: "meshing/builds/current",
   MESH_BUILD_LATEST_SUCCESSFUL_RESOURCE_KEY: "meshing/builds/latest-successful",
   MESH_UNIVERSE_POLICY_RESOURCE_KEY: "meshing/universe/policy",
   SCENE_RESOURCE_KEY: "model/scene",
@@ -538,7 +543,8 @@ vi.mock("@/kernel/resources/geometryLifecycleResources", () => ({
     revision: 3,
     status: "ready",
   }),
-}));
+  };
+});
 
 vi.mock("@/kernel/visualization/useVisualizationStateResource", () => ({
   useVisualizationStateResource: () => ({

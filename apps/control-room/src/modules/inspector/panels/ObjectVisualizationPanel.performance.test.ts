@@ -273,8 +273,8 @@ describe("ObjectVisualizationPanel performance contracts", () => {
     expect(panelSource).toContain("shouldShowSurfaceFieldColorbar");
     expect(panelSource).toContain("surfaceColorSourceFieldMetaComponent");
     expect(panelSource).toContain("component: colorbarComponent ?? null");
-    expect(panelSource).toContain("SCALAR_COLOR_PALETTE_ITEMS.map");
-    expect(panelSource).toContain("scalarColorPalettePatch(event.target.value)");
+    expect(panelSource).toContain("items={SCALAR_COLOR_PALETTE_ITEMS}");
+    expect(panelSource).toContain("scalarColorPalettePatch(nextValue)");
     expect(panelSource).toContain("formatScalarColorbarValue");
     expect(panelSource).toContain("fieldMeta.data?.stats");
     expect(panelSource).not.toContain(">min<");

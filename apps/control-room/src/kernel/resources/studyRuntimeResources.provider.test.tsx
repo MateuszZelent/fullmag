@@ -880,11 +880,11 @@ describe("production runtime command resource provider", () => {
       .fn()
       .mockResolvedValueOnce(readinessAt(5))
       .mockImplementationOnce(() => nextReadiness.promise);
-    const patchMagnetizationAsset = vi.fn(async () => ({
-      asset: { id: "mag:body:region:body:uniform" },
-      scene_revision: 6,
+    const applyMagnetization = vi.fn(async () => ({
+      committed_scene: { revision: finalRevision },
+      revision: finalRevision,
+      scene_revision: finalRevision,
     }));
-    const patchRegion = vi.fn(async () => ({ revision: finalRevision }));
     const bus = new EventBus<KernelEventMap>();
     const resources = new ResourceInvalidationController(bus);
     const invalidations: Array<{ resourceKey: string; revision: unknown }> = [];
@@ -893,11 +893,10 @@ describe("production runtime command resource provider", () => {
     });
     const api = {
       model: {
+        applyMagnetization,
         geometry: {
           validation: async () => ({ diagnostics: [], revision: finalRevision }),
         },
-        patchMagnetizationAsset,
-        patchRegion,
         readiness: readinessLoad,
       },
       sessions: { ...sessionsApi, current: { status: statusLoad } },
@@ -966,21 +965,31 @@ describe("production runtime command resource provider", () => {
         api,
         resourceData: {
           ...latestResourceData,
-          [MODEL_SCENE_PATH]: { revision: 5 },
+          [MODEL_SCENE_PATH]: {
+            objects: [
+              {
+                id: "body",
+                regions: [{ region_id: "region:body" }],
+                role: "magnet",
+              },
+            ],
+            revision: 5,
+          },
         },
         resources,
         selection: {
           get: () => ({
-            kind: "object.region-magnetic-texture",
+            kind: "object.region.texture",
             objectId: "body",
             ref: {
-              kind: "object.region-magnetic-texture",
+              kind: "object.region.texture",
               objectId: "body",
               regionId: "region:body",
               type: "scene-object",
             },
           }),
         },
+        sessionScopeKey: SCRATCH_SESSION_SCOPE_KEY,
         source: "test" as const,
       } as unknown as CommandContext;
       await act(async () => {
@@ -1019,8 +1028,7 @@ describe("production runtime command resource provider", () => {
             resourceKey === SESSION_STATUS_RESOURCE_KEY && revision === finalRevision,
         ),
       ).toHaveLength(1);
-      expect(patchMagnetizationAsset).toHaveBeenCalledTimes(1);
-      expect(patchRegion).toHaveBeenCalledTimes(1);
+      expect(applyMagnetization).toHaveBeenCalledTimes(1);
     } finally {
       await act(async () => root.unmount());
       dom.restore();

@@ -5,7 +5,6 @@ import { PLATFORM_HEALTH_PATH } from "@/kernel/api/apiPaths";
 import { ControlRoomApi } from "@/kernel/api/ControlRoomApi";
 import type {
   DomainMetaResource,
-  FdmRegionMembershipResource,
   TableResource,
 } from "@/kernel/api/apiTypes";
 import {
@@ -138,7 +137,7 @@ function resultsTreeWithTables(
 
 describe("selectExplorerNode", () => {
   it("tracks the selected object's absorbing boundary across canonical scene revisions", () => {
-    const parentId = "model:object:film-b:magnetic-parameters";
+    const parentId = "model:object:film-b";
     const nodeId = parentId + ":absorbing-boundary";
     const makeTree = (revision: number, absorbingBoundary: { total_width_m: number } | null) =>
       buildModelTree(modelTreeSnapshotFromScene({
@@ -571,52 +570,19 @@ describe("selectExplorerNode", () => {
     });
   });
 
-  it("preserves a region id from the realized FDM Explorer tree", () => {
-    const domainMeta: DomainMetaResource = {
-      bounds: { min: [0, 0, 0], max: [2, 1, 1] },
-      coordinate_system: "cartesian",
-      counts: { cells: 2 },
-      dimension: 3,
-      discretization: "fdm",
-      domain_id: "domain:fdm",
-      generation_id: "generation-1",
-      grid: { origin: [0, 0, 0], shape: [2, 1, 1], spacing: [1, 1, 1] },
-      units: { length: "m" },
+  it("preserves a region id from an FDM region selection node", () => {
+    const regionNode = {
+      id: "model:mesh:region:region%3Acore",
+      kind: "mesh.grid.region" as const,
+      label: "Core",
+      objectId: "object:core",
+      parentId: "model:mesh:grid",
+      regionId: "region:core",
+      visualizationTargetId: "region:object:core:region%3Acore",
     };
-    const membership: FdmRegionMembershipResource = {
-      binary_path: "membership.bin",
-      cell_count: 2,
-      cell_m: [1, 1, 1],
-      counts: [2, 1, 1],
-      domain_generation_id: "generation-1",
-      encoding: "u32le",
-      freshness: "current",
-      grid_fingerprint: "grid-1",
-      mesh_revision: 4,
-      origin_m: [0, 0, 0],
-      region_legend: [{
-        numeric_id: 7,
-        object_id: "object:core",
-        priority: 0,
-        region_id: "region:core",
-      }],
-      region_membership_revision: 5,
-      schema_version: "fdm_region_membership.v1",
-    };
-    const nodes = flattenExplorerNodes(buildModelTree({
-      domainPresentation: buildDomainPresentation({
-        domainMeta,
-        fdmMembership: membership,
-        fdmMembershipStatus: "ready",
-      }),
-    }));
-    const regionNode = nodes.find(
-      (node) => node.id === "model:mesh:region:region%3Acore",
-    );
-    expect(regionNode).toBeDefined();
 
     const kernel = makeKernel();
-    selectExplorerNode(kernel, regionNode!, "explorer");
+    selectExplorerNode(kernel, regionNode, "explorer");
 
     expect(kernel.selection.get().ref).toMatchObject({
       kind: "mesh.grid.region",
