@@ -22,11 +22,27 @@ const mocks = vi.hoisted(() => ({
     revision: 4,
   }),
   patchStudy: vi.fn().mockResolvedValue({}),
-  replaceUniversePolicy: vi.fn().mockResolvedValue({}),
-  replaceSharedDomainPolicy: vi.fn().mockResolvedValue({}),
+  replaceUniversePolicy: vi.fn().mockResolvedValue({
+    config: { mode: "auto" },
+    effective_config: { mode: "auto" },
+    revision: 2,
+  }),
+  replaceSharedDomainPolicy: vi.fn().mockResolvedValue({
+    config: { hmax: 5e-9, hmin: 2e-9 },
+    revision: 3,
+  }),
+  commitTransaction: vi.fn().mockResolvedValue({
+    committed_scene: {
+      objects: [],
+      revision: 4,
+      scene_revision: 4,
+    },
+  }),
   invalidate: vi.fn(),
-  executeCommand: vi.fn().mockResolvedValue(undefined),
+  executeCommand: vi.fn().mockResolvedValue({ status: "completed" }),
   selectSet: vi.fn(),
+  patchTarget: vi.fn(),
+  clearTarget: vi.fn(),
   discretization: "fdm" as "fdm" | "fem",
 }));
 
@@ -63,20 +79,43 @@ vi.mock("@/kernel/KernelContext", async () => {
       },
       model: {
         patchStudy: mocks.patchStudy,
-        commitTransaction: vi.fn().mockResolvedValue({}),
+        commitTransaction: mocks.commitTransaction,
       },
     },
     bus: { emit: vi.fn(), on: () => () => undefined },
     commands: { execute: mocks.executeCommand },
     diagnosticRecorder: { record: vi.fn() },
-    layout: { setPanelVisible: vi.fn() },
+    layout: { setActiveTab: vi.fn(), setPanelVisible: vi.fn() },
     resources: {
       get: () => null,
       getRevision: () => 1,
       invalidate: mocks.invalidate,
       subscribe: () => () => undefined,
     },
-    selection: { set: mocks.selectSet },
+    selection: {
+      clear: vi.fn(),
+      get: () => ({
+        kind: "mesh.root",
+        label: "Mesh",
+        moduleSource: "explorer" as const,
+        nodeId: "model:mesh",
+        objectId: null,
+        ref: null,
+      }),
+      set: mocks.selectSet,
+      subscribe: () => () => undefined,
+    },
+    visualization: {
+      clearTarget: mocks.clearTarget,
+      getSettings: () => ({
+        boundsVisible: false,
+        renderMode: "surface",
+        surfaceOpacityPercent: 80,
+        visible: true,
+        wireframeVisible: true,
+      }),
+      patchTarget: mocks.patchTarget,
+    },
   };
   return {
     KernelContext: createContext<unknown>(kernelValue),
@@ -85,6 +124,7 @@ vi.mock("@/kernel/KernelContext", async () => {
 });
 
 vi.mock("@/kernel/resources/useSessionStatus", () => ({
+  SESSION_STATUS_RESOURCE_KEY: "/session/status",
   useSessionResourceIdentity: () => ({
     requestScopeEpoch: "1",
     sessionEpoch: "1",
@@ -103,21 +143,33 @@ vi.mock("@/kernel/resources/useSessionStatus", () => ({
     } as never),
 }));
 
-vi.mock("@/kernel/resources/geometryLifecycleResources", () => {
-  const ready = <T,>(data: T) => ({
-    data,
-    error: null,
-    refetch: vi.fn(),
-    revision: 1,
-    status: "ready" as const,
-  });
-  return {
+vi.mock(
+  "@/kernel/resources/geometryLifecycleResources",
+  async (importOriginal) => {
+    const actual =
+      await importOriginal<
+        typeof import("@/kernel/resources/geometryLifecycleResources")
+      >();
+    const ready = <T,>(data: T) => ({
+      data,
+      error: null,
+      refetch: vi.fn(),
+      revision: 1,
+      status: "ready" as const,
+    });
+    return {
+      ...actual,
+      MESH_BUILD_CURRENT_RESOURCE_KEY: "/meshing/builds/current",
+    MESH_BUILD_LATEST_SUCCESSFUL_RESOURCE_KEY: "/meshing/builds/latest-successful",
     MESH_SEMANTICS_RESOURCE_KEY: "/meshing/semantics",
     MESH_SHARED_DOMAIN_POLICY_RESOURCE_KEY: "/meshing/policies/shared-domain",
     MESH_SUMMARY_RESOURCE_KEY: "/meshing/summary",
     MESH_UNIVERSE_POLICY_RESOURCE_KEY: "/meshing/policies/universe",
     SCENE_RESOURCE_KEY: "/model/scene",
+    publishCommittedSceneResource: vi.fn(),
     resolveObjectMeshPolicyResourceKey: (id: string) => `/meshing/policies/objects/${id}`,
+    resolveObjectMeshQualityResourceKey: (id: string) => `/meshing/quality/objects/${id}`,
+    resolveObjectMeshReportResourceKey: (id: string) => `/meshing/reports/objects/${id}`,
     useDomainMetaResource: () =>
       ready({
         bounds: { max: [8e-7, 4e-7, 1e-9], min: [-8e-7, -4e-7, -1e-9] },
@@ -130,12 +182,102 @@ vi.mock("@/kernel/resources/geometryLifecycleResources", () => {
       }),
     useFdmMultilayerLayoutResource: () => ready({ available: false, layers: [] }),
     useGeometryValidationResource: () => ready({ errors: [], valid: true }),
-    useMeshBuildCurrent: () => ready({ active_build: null }),
-    useMeshBuildHistoryResource: () => ready({ entries: [] }),
+    useMeshBuildCurrent: () =>
+      ready({
+        active_build: null,
+        shared_domain_build_report: {
+          operation_statuses: [
+            { kind: "Fragment", reason: "Conformal union", status: "succeeded" },
+          ],
+          thin_film_diagnostics: [
+            {
+              actual_method: "swept_prism",
+              geometry_name: "Waveguide",
+              lateral_size: 8e-7,
+              thickness: 2e-9,
+              warnings: [],
+            },
+          ],
+        },
+      }),
+    useMeshBuildHistoryResource: () =>
+      ready({
+        history: [
+          {
+            build_id: "build-1",
+            canonical_policy_snapshot: {
+              objects: { "wg-1": { maximum_element_size: 6e-9 } },
+              universe: { airbox_hmax: 4e-8, mode: "auto" },
+            },
+            element_count: 14000,
+            id: "entry-1",
+            mesh_name: "mesh-v1",
+            mesh_target: "object:wg-1",
+            node_count: 3100,
+            restorable: true,
+          },
+          {
+            build_id: "build-2",
+            canonical_policy_snapshot: {
+              objects: { "wg-1": { maximum_element_size: 4e-9 } },
+              universe: { airbox_hmax: 3e-8, mode: "auto" },
+            },
+            element_count: 18400,
+            id: "entry-2",
+            mesh_name: "mesh-v2",
+            mesh_target: "study_domain",
+            node_count: 4200,
+            restorable: true,
+          },
+        ],
+      }),
     useMeshBuildLatestSuccessful: () => ready({ last_success: null }),
-    useMeshCapabilitiesResource: () => ready({ generators: ["gmsh"] }),
+    useMeshCapabilitiesResource: () =>
+      ready({
+        generators: ["gmsh"],
+        mesh_capabilities: {
+          "mesh.exact_layer_count": {
+            status: "validated",
+            supported_layer_counts: [1, 2, 3],
+          },
+          "mesh.swept.prism": { status: "validated" },
+          "mesh.topology.mixed_p1": { status: "validated" },
+          "mesh.transition.pyramid_tet": { status: "validated" },
+        },
+      }),
     useMeshSemanticsResource: () =>
       ready({
+        mesh_build_diagnostics: {
+          mesh_statistics: {
+            global: {
+              edge_length: { max: 8e-9, mean: 3.42e-9, min: 1.5e-9, std: 1.1e-9 },
+              element_count: 100,
+              gamma: {
+                below_threshold_count: 2,
+                below_threshold_fraction: 0.02,
+                histogram: [
+                  { count: 2, hi: 0.2, lo: 0 },
+                  { count: 98, hi: 1.0, lo: 0.2 },
+                ],
+                max: 0.96,
+                mean: 0.74,
+                min: 0.05,
+                p05: 0.31,
+                threshold: 0.2,
+              },
+            },
+            worst_elements: [
+              {
+                centroid: [0, 0, 0],
+                element_index: 42,
+                gamma: 0.05,
+                scope_label: "wg-1",
+                sicn: 0.15,
+                volume: 1.2e-27,
+              },
+            ],
+          },
+        },
         object_configs: [
           {
             config: { maximum_element_size: 4e-9, minimum_element_size: 2e-9 },
@@ -147,15 +289,43 @@ vi.mock("@/kernel/resources/geometryLifecycleResources", () => {
       }),
     useMeshSharedDomainManifestResource: () =>
       ready({
+        domain_mesh_mode: "shared_domain",
         generation_id: "gen-fem-2",
+        geometry_realization_revision: 3,
         mesh_id: "mesh-fem-2",
+        mesh_name: "shared-domain-v2",
+        mesh_parts: [
+          {
+            element_count: 12000,
+            id: "part-wg-1",
+            label: "Waveguide Part",
+            owner_object_id: "wg-1",
+            role: "magnetic",
+          },
+          {
+            element_count: 420,
+            id: "orphan-cad-1",
+            label: "Imported Bracket",
+            owner_object_id: null,
+            role: null,
+          },
+        ],
+        object_segments: [{ id: "seg-1" }],
+        regions: [{ element_count: 12000, id: "reg-1", owner_object_id: "wg-1" }],
         source_scene_revision: 3,
-        topology_counts: { elements: 18400, nodes: 4200 },
+        topology_counts: { boundary_face_count: 960, element_count: 18400, node_count: 4200 },
       }),
     useMeshSharedDomainPolicyResource: () =>
       ready({
-        config: { maximum_element_size: 5e-9, minimum_element_size: 2e-9 },
-        effective_config: { maximum_element_size: 5e-9, minimum_element_size: 2e-9 },
+        config: { hmax: 5e-9, hmin: 2e-9 },
+        effective_config: {
+          curvature_factor: 0.25,
+          growth_rate: 1.2,
+          hmax: 3.5e-9,
+          hmin: 1.5e-9,
+          narrow_region_resolution: 3,
+          optimize: "Netgen",
+        },
         revision: 2,
       }),
     useMeshSharedDomainQualityGatesResource: () =>
@@ -200,7 +370,20 @@ vi.mock("@/kernel/resources/geometryLifecycleResources", () => {
           p05_quality: 0.182,
         },
       }),
-    useMeshSharedDomainRealizedSizeFieldsResource: () => ready({ fields: [] }),
+    useMeshSharedDomainRealizedSizeFieldsResource: () =>
+      ready({
+        realized_size_fields: {
+          fields: [
+            {
+              kind: "Box",
+              params: { hmax: 4e-9, hmin: 2e-9 },
+              source: "object:wg-1",
+              status: "applied",
+            },
+          ],
+        },
+      }),
+    useMeshSharedDomainQualityResource: () => ready(null),
     useMeshSharedDomainReportResource: () => ready(null),
     useMeshSummaryResource: () => ready({ revision: 2 }),
     useObjectMeshPolicyResource: () =>
@@ -211,6 +394,9 @@ vi.mock("@/kernel/resources/geometryLifecycleResources", () => {
         revision: 3,
       }),
     useObjectMeshQualityResource: () => ready(null),
+    useObjectMeshReportResource: () => ready(null),
+    useObjectMeshSizeFieldResource: () => ready(null),
+    useObjectTopologyResource: () => ready(null),
     useSceneResource: () =>
       ready({
         materials: [
@@ -234,18 +420,25 @@ vi.mock("@/kernel/resources/geometryLifecycleResources", () => {
         revision: 3,
         scene_revision: 3,
       }),
-    useUniverseMeshPolicyResource: () =>
-      ready({
-        config: null,
-        effective_config: { mode: "auto", padding: [8e-8, 8e-8, 1.2e-7] },
-        revision: 1,
-      }),
-  };
-});
+      useUniverseMeshPolicyResource: () =>
+        ready({
+          config: null,
+          effective_config: { mode: "auto", padding: [8e-8, 8e-8, 1.2e-7] },
+          revision: 1,
+        }),
+    };
+  },
+);
 
 import {
+  MeshBuildsInspectorSpecPanel,
   MeshQualityInspectorSpecPanel,
+  MeshRegionsInspectorSpecPanel,
   MeshRootInspectorSpecPanel,
+  MeshSharedDomainInspectorSpecPanel,
+  MeshSizeFieldsInspectorSpecPanel,
+  MeshUnassignedInspectorSpecPanel,
+  MeshUnassignedPartInspectorSpecPanel,
   ObjectMeshInspectorSpecPanel,
 } from "./MeshDomainSpecs";
 
@@ -255,6 +448,12 @@ describe("Task 18 MeshDomainSpecs, l_ex guard, FemMeshReadinessGuide and FDM tre
   beforeEach(() => {
     harness = mountWave5TestDom();
     mocks.replaceObjectPolicy.mockClear();
+    mocks.replaceSharedDomainPolicy.mockClear();
+    mocks.replaceUniversePolicy.mockClear();
+    mocks.commitTransaction.mockClear();
+    mocks.executeCommand.mockClear();
+    mocks.patchTarget.mockClear();
+    mocks.clearTarget.mockClear();
     mocks.discretization = "fdm";
   });
 
@@ -345,6 +544,63 @@ describe("Task 18 MeshDomainSpecs, l_ex guard, FemMeshReadinessGuide and FDM tre
     expect(quickFixBtn).not.toBeNull();
   });
 
+  it("restores Load Effective Defaults in FEM mesh.root and persists canonical ScriptBuilderMeshState keys", async () => {
+    mocks.discretization = "fem";
+    await act(async () => {
+      harness.root.render(
+        createElement(
+          InspectorEditSessionProvider,
+          null,
+          createElement(MeshRootInspectorSpecPanel, {
+            selection: {
+              kind: "mesh.root",
+              label: "Mesh",
+              moduleSource: "explorer",
+              nodeId: "model:mesh",
+              objectId: null,
+              ref: null,
+            },
+          }),
+        ),
+      );
+    });
+
+    const loadDefaultsBtn = findElement(
+      harness.container,
+      (el) =>
+        el.tagName === "BUTTON" &&
+        Boolean(el.textContent?.includes("Load Effective Defaults")),
+    );
+    expect(loadDefaultsBtn).not.toBeNull();
+    await act(async () => {
+      loadDefaultsBtn!.click();
+    });
+
+    const applyBtn = findElement(
+      harness.container,
+      (el) =>
+        el.tagName === "BUTTON" &&
+        Boolean(el.textContent?.includes("Apply")) &&
+        !el.disabled,
+    );
+    expect(applyBtn).not.toBeNull();
+    await act(async () => {
+      applyBtn!.click();
+    });
+
+    expect(mocks.replaceSharedDomainPolicy).toHaveBeenCalledTimes(1);
+    const sentPayload = mocks.replaceSharedDomainPolicy.mock.calls[0]?.[0];
+    expect(sentPayload).not.toHaveProperty("base_revision");
+    expect(sentPayload.config).toMatchObject({
+      curvature_factor: "0.25",
+      growth_rate: "1.2",
+      hmax: "3.5e-9",
+      hmin: "1.5e-9",
+      narrow_region_resolution: "3",
+      optimize: "Netgen",
+    });
+  });
+
   it("sends PUT .../meshing/policies/objects/{id} with config: null when returning object.mesh to Inherit (zero DELETE)", async () => {
     mocks.discretization = "fem";
     await act(async () => {
@@ -394,9 +650,106 @@ describe("Task 18 MeshDomainSpecs, l_ex guard, FemMeshReadinessGuide and FDM tre
     expect(mocks.replaceObjectPolicy.mock.calls[0]?.[1]).toMatchObject({
       config: null,
     });
+    expect(mocks.replaceObjectPolicy.mock.calls[0]?.[1]).not.toHaveProperty(
+      "base_revision",
+    );
   });
 
-  it("renders ScientificEChart and failed family gate rows with data-status='failed' in mesh.quality", async () => {
+  it("renders Build Object Mesh, Build Shared-Domain Mesh, Refinement, Quality, and History tabs in object.mesh", async () => {
+    mocks.discretization = "fem";
+    await act(async () => {
+      harness.root.render(
+        createElement(
+          InspectorEditSessionProvider,
+          null,
+          createElement(ObjectMeshInspectorSpecPanel, {
+            selection: {
+              kind: "object.mesh",
+              label: "Mesh",
+              moduleSource: "explorer",
+              nodeId: "model:object:wg-1:mesh",
+              objectId: "wg-1",
+              ref: null,
+            },
+          }),
+        ),
+      );
+    });
+
+    const buildObjectBtn = findElement(
+      harness.container,
+      (el) =>
+        el.tagName === "BUTTON" &&
+        Boolean(el.textContent?.includes("Build Object Mesh")),
+    );
+    expect(buildObjectBtn).not.toBeNull();
+
+    const buildSharedBtn = findElement(
+      harness.container,
+      (el) =>
+        el.tagName === "BUTTON" &&
+        Boolean(el.textContent?.includes("Build Shared-Domain Mesh")),
+    );
+    expect(buildSharedBtn).not.toBeNull();
+
+    expect(harness.container.textContent).toContain("Refinement & Fields");
+    expect(harness.container.textContent).toContain("Quality");
+    expect(harness.container.textContent).toContain("History");
+  });
+
+  it("renders SolverMeshIdentity, Counts & Extents, and Capabilities on mesh.shared-domain without fabricated keys", async () => {
+    mocks.discretization = "fem";
+    await act(async () => {
+      harness.root.render(
+        createElement(
+          InspectorEditSessionProvider,
+          null,
+          createElement(MeshSharedDomainInspectorSpecPanel, {
+            selection: {
+              kind: "mesh.shared-domain",
+              label: "Shared Domain",
+              moduleSource: "explorer",
+              nodeId: "model:mesh:shared-domain",
+              objectId: null,
+              ref: null,
+            },
+          }),
+        ),
+      );
+    });
+
+    expect(harness.container.textContent).toContain("shared-domain-v2");
+    expect(harness.container.textContent).toContain("18,400");
+    expect(harness.container.textContent).toContain("960");
+  });
+
+  it("unwraps realized_size_fields.fields and renders Thin-film diagnostics on mesh.size-fields", async () => {
+    mocks.discretization = "fem";
+    await act(async () => {
+      harness.root.render(
+        createElement(
+          InspectorEditSessionProvider,
+          null,
+          createElement(MeshSizeFieldsInspectorSpecPanel, {
+            selection: {
+              kind: "mesh.size-fields",
+              label: "Size Fields",
+              moduleSource: "explorer",
+              nodeId: "model:mesh:size-fields",
+              objectId: null,
+              ref: null,
+            },
+          }),
+        ),
+      );
+    });
+
+    expect(harness.container.textContent).toContain("Box · object:wg-1");
+    expect(harness.container.textContent).toContain("Waveguide");
+    expect(harness.container.textContent).toContain("swept_prism");
+  });
+
+  it("renders ScientificEChart, failed family gate rows, Show heatmap, Refine worst region, and Worst elements in mesh.quality", async () => {
     mocks.discretization = "fem";
     await act(async () => {
       harness.root.render(
@@ -429,5 +782,143 @@ describe("Task 18 MeshDomainSpecs, l_ex guard, FemMeshReadinessGuide and FDM tre
     );
     expect(failedGates.length).toBeGreaterThan(0);
     expect(failedGates.some((el) => el.textContent?.includes("pyramid5"))).toBe(true);
+    expect(harness.container.textContent).toContain("Show heatmap");
+    expect(harness.container.textContent).toContain("Refine worst region");
+    expect(harness.container.textContent).toContain("Element 42");
+  });
+
+  it("renders real build comparison diff and Restore buttons on mesh.builds without fake FDM timings", async () => {
+    mocks.discretization = "fem";
+    await act(async () => {
+      harness.root.render(
+        createElement(
+          InspectorEditSessionProvider,
+          null,
+          createElement(MeshBuildsInspectorSpecPanel, {
+            selection: {
+              kind: "mesh.builds",
+              label: "Build History",
+              moduleSource: "explorer",
+              nodeId: "model:mesh:builds",
+              objectId: null,
+              ref: null,
+            },
+          }),
+        ),
+      );
+    });
+
+    expect(harness.container.textContent).toContain("Build #1 vs Build #2");
+    expect(harness.container.textContent).toContain("+4,400");
+    expect(harness.container.textContent).toContain("Restore object policy to draft");
+    expect(harness.container.textContent).toContain("Restore Airbox policy to draft");
+  });
+
+  it("renders hierarchy on mesh.regions and commits canonical merge_patch on mesh.unassigned.part", async () => {
+    mocks.discretization = "fem";
+    await act(async () => {
+      harness.root.render(
+        createElement(
+          InspectorEditSessionProvider,
+          null,
+          createElement(MeshRegionsInspectorSpecPanel, {
+            selection: {
+              kind: "mesh.regions",
+              label: "Regions",
+              moduleSource: "explorer",
+              nodeId: "model:mesh:regions",
+              objectId: null,
+              ref: null,
+            },
+          }),
+        ),
+      );
+    });
+    expect(harness.container.textContent).toContain("Waveguide");
+    expect(harness.container.textContent).toContain("Waveguide Part");
+
+    await act(async () => {
+      harness.root.render(
+        createElement(
+          InspectorEditSessionProvider,
+          null,
+          createElement(MeshUnassignedInspectorSpecPanel, {
+            selection: {
+              kind: "mesh.unassigned",
+              label: "Unassigned",
+              moduleSource: "explorer",
+              nodeId: "model:mesh:unassigned",
+              objectId: null,
+              ref: null,
+            },
+          }),
+        ),
+      );
+    });
+    expect(harness.container.textContent).toContain("Imported Bracket");
+
+    await act(async () => {
+      harness.root.render(
+        createElement(
+          InspectorEditSessionProvider,
+          null,
+          createElement(MeshUnassignedPartInspectorSpecPanel, {
+            selection: {
+              kind: "mesh.unassigned.part",
+              label: "Imported Bracket",
+              moduleSource: "explorer",
+              nodeId: "model:mesh:unassigned:orphan-cad-1",
+              objectId: null,
+              ref: {
+                carrierPartId: "orphan-cad-1",
+                kind: "mesh-part",
+                nodeId: "model:mesh:unassigned:orphan-cad-1",
+                objectId: null,
+                type: "mesh-part",
+                visualizationTargetId: "mesh-part:orphan-cad-1",
+              },
+            },
+          }),
+        ),
+      );
+    });
+
+    const ownershipTab = findElement(
+      harness.container,
+      (el) => el.tagName === "BUTTON" && Boolean(el.textContent?.includes("Ownership")),
+    );
+    expect(ownershipTab).not.toBeNull();
+    await act(async () => {
+      ownershipTab!.click();
+    });
+
+    const excludeBtn = findElement(
+      harness.container,
+      (el) => el.tagName === "BUTTON" && Boolean(el.textContent?.includes("Exclude part")),
+    );
+    expect(excludeBtn).not.toBeNull();
+    await act(async () => {
+      excludeBtn!.click();
+    });
+
+    const applyBtn = findElement(
+      harness.container,
+      (el) =>
+        el.tagName === "BUTTON" &&
+        Boolean(el.textContent?.includes("Apply")) &&
+        !el.disabled,
+    );
+    expect(applyBtn).not.toBeNull();
+    await act(async () => {
+      applyBtn!.click();
+    });
+
+    expect(mocks.commitTransaction).toHaveBeenCalledTimes(1);
+    const tx = mocks.commitTransaction.mock.calls[0]?.[0];
+    expect(tx.kind).toBe("merge_patch");
+    expect(tx).not.toHaveProperty("patch");
+    expect(tx.merge_patch.editor.mesh_part_assignments["orphan-cad-1"]).toEqual({
+      action: "ignore_nonphysical",
+    });
   });
 });

@@ -14,43 +14,38 @@ import {
   SlidersHorizontal,
   TriangleAlert,
 } from "lucide-react";
-import { useMemo, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 
-import type { JsonObject } from "@/kernel/api/apiTypes";
+import type {
+  AuthoringTransactionRequest,
+  JsonObject,
+  MeshUniverseConfigResource,
+  SceneResource,
+} from "@/kernel/api/apiTypes";
+import { runAuthoringMutationWithHistory } from "@/kernel/authoring/authoringHistoryMutation";
+import { invalidateAuthoringMutationDependents } from "@/kernel/authoring/authoringMutationInvalidation";
+import { restoreMeshHistoryToDraft } from "@/kernel/authoring/meshBuildHistoryRestore";
 import { createCommandContext } from "@/kernel/commands/commandContext";
 import { useKernel } from "@/kernel/KernelContext";
-import {
-  MESH_SEMANTICS_RESOURCE_KEY,
-  MESH_SHARED_DOMAIN_POLICY_RESOURCE_KEY,
-  MESH_SUMMARY_RESOURCE_KEY,
-  MESH_UNIVERSE_POLICY_RESOURCE_KEY,
-  SCENE_RESOURCE_KEY,
-  resolveObjectMeshPolicyResourceKey,
-  useDomainMetaResource,
-  useFdmMultilayerLayoutResource,
-  useMeshBuildCurrent,
-  useMeshBuildHistoryResource,
-  useMeshSemanticsResource,
-  useMeshSharedDomainManifestResource,
-  useMeshSharedDomainPolicyResource,
-  useMeshSharedDomainQualityGatesResource,
-  useMeshSharedDomainRealizedSizeFieldsResource,
-  useMeshSharedDomainReportResource,
-  useMeshSummaryResource,
-  useObjectMeshPolicyResource,
-  useObjectMeshQualityResource,
-  useSceneResource,
-  useUniverseMeshPolicyResource,
-} from "@/kernel/resources/geometryLifecycleResources";
+import * as geometryLifecycleResources from "@/kernel/resources/geometryLifecycleResources";
+import * as meshPolicyResourceCache from "@/kernel/resources/meshPolicyResourceCache";
 import { sessionRequestScopeKey } from "@/kernel/resources/sessionResourceIdentity";
+import * as sessionStatusHooks from "@/kernel/resources/useSessionStatus";
+import type { VisualizationRenderMode } from "@/kernel/visualization/ObjectVisualizationController";
 import {
-  useSessionResourceIdentity,
-  useSessionStatusSelector,
-} from "@/kernel/resources/useSessionStatus";
+  normalizeMeshBuildHistory,
+  type MeshBuildHistoryEntry,
+} from "@/shared/domain/mesh/meshBuildHistory";
+import { resolveMeshBuildFreshness } from "@/shared/domain/mesh/meshBuildFreshness";
+import { resolveMeshEditorCapabilities } from "@/shared/domain/mesh/meshEditorCapabilityModel";
+import { diffMeshPolicies, type MeshPolicyDiffRow } from "@/shared/domain/mesh/meshPolicyDiff";
+import { resolveMeshQualityRefinementState } from "@/shared/domain/mesh/meshQualityRefinement";
 import {
-  ScientificEChart,
-  type ResolvedChartThemePalette,
-} from "@/shared/charts/ScientificEChart";
+  normalizeMeshQualityStatistics,
+  type MeshQualityMetric,
+  type MeshQualityStatistics,
+  type MeshWorstElement,
+} from "@/shared/domain/mesh/qualityStatistics";
 import { Badge } from "@/shared/ui/Badge";
 import { Button } from "@/shared/ui/Button";
 
@@ -61,14 +56,73 @@ import type {
   InspectorTone,
   UnitOption,
 } from "../../template";
-import { FemMeshReadinessGuideCard } from "../mesh-guide/FemMeshReadinessGuideCard";
 import {
-  resolveMixedCertificateQualityPresentation,
-  type MixedCertificateFamilyGate,
-} from "./MeshQualityGatesSection.model";
+  buildAirboxMeshPolicyReplaceRequest,
+  draftFromEffectiveUniverseMeshPolicyResource,
+  draftFromUniverseMeshPolicyResource,
+  rebaseAirboxMeshPolicyDraft,
+} from "../airbox/airboxMeshPolicyDraft";
+import { FemMeshReadinessGuideCard } from "../mesh-guide/FemMeshReadinessGuideCard";
+import { MeshPartVisualizationPanel } from "../MeshPartVisualizationPanel";
+import type { MeshSizeDistributionHoverBin } from "../MeshQualityChart";
+import { recordField } from "../MeshResourceView";
+import { emitMeshSizeHistogramHover } from "../meshSizeHistogramHover";
+import { sizeFieldParamSummary } from "./meshDetailsSectionUtils";
+import {
+  formatCountClean,
+  MeshBuildHistorySpecView,
+  MeshEditorCapabilitiesSpecView,
+  MeshQualityStatisticsSpecView,
+  MixedTopologyProvenanceSpecView,
+  OperationStatusesSpecView,
+  QualityGatesSpecView,
+  sanitizeMeshDisplayText,
+  ThinFilmDiagnosticsSpecView,
+} from "./MeshQualityAndHistorySpecViews";
+import { resolveMixedCertificateQualityPresentation } from "./MeshQualityGatesSection.model";
+import { resolveMeshTopologyCounts } from "./meshTopologyCounts";
+import { resolveMixedTopologyPresentation } from "./MixedTopologyProvenanceSection.model";
+import {
+  buildSharedDomainPolicyConfig,
+  draftFromEffectiveSharedDomainResource,
+  draftFromSharedDomainResource,
+  formatPolicyJson,
+  type SharedDomainPolicyDraft,
+} from "./sharedDomainMeshPolicyDraft";
 import { SpecInspectorHost } from "./SpecInspectorHost";
+import {
+  buildSharedDomainPolicyDiffRows,
+  resolveCurrentMixedCertificateQualityPresentation,
+  resolveRetainedMeshArtifact,
+} from "./useMeshDetailsModel";
+
+export { ObjectMeshInspectorSpecPanel } from "./ObjectMeshSpecPanel";
 
 const MU0 = 4 * Math.PI * 1e-7;
+
+function safeModField<M extends object, K extends keyof M>(
+  mod: M,
+  key: K,
+): M[K] | undefined {
+  return key in mod ? mod[key] : undefined;
+}
+
+const SESSION_STATUS_KEY =
+  safeModField(sessionStatusHooks, "SESSION_STATUS_RESOURCE_KEY") ??
+  "/session/status";
+
+const useSafeMeshCapabilitiesResource =
+  safeModField(geometryLifecycleResources, "useMeshCapabilitiesResource") ??
+  (() =>
+    emptyResource<Parameters<typeof resolveMeshEditorCapabilities>[0]>());
+const useSafeMeshBuildLatestSuccessful =
+  safeModField(geometryLifecycleResources, "useMeshBuildLatestSuccessful") ??
+  (() => emptyResource<{ last_build_error?: unknown; last_success?: unknown }>());
+const useSafeMeshSharedDomainQualityResource =
+  safeModField(
+    geometryLifecycleResources,
+    "useMeshSharedDomainQualityResource",
+  ) ?? (() => emptyResource<{ quality?: unknown }>());
 
 const LENGTH_UNITS: readonly [UnitOption, ...UnitOption[]] = [
   { unit: "nm", toSiFactor: 1e-9 },
@@ -78,6 +132,16 @@ const LENGTH_UNITS: readonly [UnitOption, ...UnitOption[]] = [
 ];
 
 type JsonRecord = Record<string, unknown>;
+
+function emptyResource<T>() {
+  return {
+    data: null as T | null,
+    error: null,
+    refetch: () => Promise.resolve(null),
+    revision: 0,
+    status: "ready" as const,
+  };
+}
 
 function asRecord(value: unknown): JsonRecord | null {
   return value && typeof value === "object" && !Array.isArray(value)
@@ -198,8 +262,20 @@ export function computeExchangeLengthGuard(
   };
 }
 
+function snapSevenSmooth(n: number): number {
+  const start = Math.max(1, Math.round(n));
+  for (let candidate = start; candidate <= start * 4 + 8; candidate += 1) {
+    let rem = candidate;
+    for (const p of [2, 3, 5, 7]) {
+      while (rem % p === 0) rem /= p;
+    }
+    if (rem === 1) return candidate;
+  }
+  return start;
+}
+
 function useActiveLane(): "fdm" | "fem" | "unresolved" {
-  const raw = useSessionStatusSelector(
+  const raw = sessionStatusHooks.useSessionStatusSelector(
     (status) => status.data?.domain?.discretization ?? null,
   );
   if (typeof raw !== "string") return "unresolved";
@@ -207,6 +283,28 @@ function useActiveLane(): "fdm" | "fem" | "unresolved" {
   if (normalized === "fdm") return "fdm";
   if (normalized === "fem") return "fem";
   return "unresolved";
+}
+
+function buildSafeMutationContext(
+  kernel: ReturnType<typeof useKernel>,
+  sessionScopeKey: string | undefined,
+  sourceDetail: string,
+) {
+  const hasScopeGetter = typeof kernel.commands?.getSessionScopeKey === "function";
+  const base = createCommandContext("inspector", kernel, {
+    isCurrentSessionScope: sessionScopeKey
+      ? hasScopeGetter
+        ? () => kernel.commands.getSessionScopeKey?.() === sessionScopeKey
+        : () => true
+      : () => true,
+    sessionScopeKey: sessionScopeKey ?? null,
+    sourceDetail,
+  });
+  return {
+    ...base,
+    selection:
+      typeof kernel.selection?.get === "function" ? kernel.selection : undefined,
+  };
 }
 
 // ============================================================================
@@ -224,74 +322,202 @@ interface MeshRootDraft {
   fftSmoothSnap: boolean;
   hmaxM: number;
   hminM: number;
-  elementOrder: "1" | "2";
   growthRate: number;
   curvatureFactor: number;
-  generator: string;
+  narrowRegionResolution: number;
+  enableNarrowRegionRefinement: boolean;
+  elementsAcrossThickness: number;
+  anisotropyLimit: number;
+  optimizeMethod: string;
   optimizeQuality: boolean;
 }
 
 export function MeshRootInspectorSpecPanel({ selection }: InspectorPanelProps): ReactNode {
   const kernel = useKernel();
-  const sessionIdentity = useSessionResourceIdentity();
+  const sessionIdentity = sessionStatusHooks.useSessionResourceIdentity();
   const sessionScopeKey = sessionRequestScopeKey(sessionIdentity) ?? undefined;
   const activeLane = useActiveLane();
   const femActive = activeLane === "fem";
   const fdmActive = activeLane === "fdm";
 
-  const scene = useSceneResource({ enabled: activeLane !== "unresolved" });
-  const domainMeta = useDomainMetaResource({ enabled: fdmActive });
-  const multilayer = useFdmMultilayerLayoutResource({ enabled: fdmActive });
-  const sharedPolicy = useMeshSharedDomainPolicyResource({ enabled: femActive });
-  const universePolicy = useUniverseMeshPolicyResource({ enabled: activeLane !== "unresolved" });
-  const manifest = useMeshSharedDomainManifestResource({ enabled: femActive });
-  const activeBuild = useMeshBuildCurrent({ enabled: femActive });
-  const summary = useMeshSummaryResource({ enabled: femActive });
+  const scene = geometryLifecycleResources.useSceneResource({
+    enabled: activeLane !== "unresolved",
+  });
+  const domainMeta = geometryLifecycleResources.useDomainMetaResource({
+    enabled: fdmActive,
+  });
+  const multilayer = geometryLifecycleResources.useFdmMultilayerLayoutResource({
+    enabled: fdmActive,
+  });
+  const sharedPolicy = geometryLifecycleResources.useMeshSharedDomainPolicyResource({
+    enabled: femActive,
+  });
+  const universePolicy = geometryLifecycleResources.useUniverseMeshPolicyResource({
+    enabled: activeLane !== "unresolved",
+  });
+  const manifest = geometryLifecycleResources.useMeshSharedDomainManifestResource({
+    enabled: femActive,
+  });
+  const activeBuild = geometryLifecycleResources.useMeshBuildCurrent({
+    enabled: femActive,
+  });
+  const summary = geometryLifecycleResources.useMeshSummaryResource({
+    enabled: femActive,
+  });
 
   const baseline = useMemo<MeshRootDraft>(() => {
     const grid = domainMeta.data?.grid;
+    const studyRec = asRecord(asRecord(scene.data)?.study);
+    const fdmRec = asRecord(studyRec?.fdm);
+    const demagRec = asRecord(fdmRec?.demag);
+    const authoredCell = Array.isArray(fdmRec?.default_cell)
+      ? (fdmRec.default_cell as unknown[]).map(asNumber)
+      : [];
     const spacing = grid?.spacing ?? [4e-9, 4e-9, 2e-9];
     const shape = grid?.shape ?? [128, 64, 1];
+    const commonCells = Array.isArray(demagRec?.common_cells)
+      ? (demagRec.common_cells as unknown[]).map(asNumber)
+      : Array.isArray(demagRec?.common_cells_xy)
+        ? [
+            asNumber((demagRec.common_cells_xy as unknown[])[0]),
+            asNumber((demagRec.common_cells_xy as unknown[])[1]),
+            1,
+          ]
+        : [];
+
     const sharedCfg =
       asRecord(sharedPolicy.data?.config) ??
       asRecord(asRecord(sharedPolicy.data)?.effective_config);
+    const universeCfg =
+      asRecord(universePolicy.data?.config) ??
+      asRecord(universePolicy.data?.effective_config);
+    const narrowObj =
+      asRecord(sharedCfg?.narrow_region_resolution) ??
+      asRecord(universeCfg?.narrow_region_resolution);
+
+    const optRaw = sharedCfg?.optimize;
+    const optimizeMethod =
+      typeof optRaw === "string" && optRaw.trim().length > 0
+        ? optRaw.trim()
+        : "Netgen";
+    const optimizeQuality =
+      typeof optRaw === "string"
+        ? optRaw.trim().length > 0
+        : sharedCfg?.optimize_quality !== false;
+
+    const demagMode = asString(demagRec?.mode);
+    const demagStrategy = asString(demagRec?.strategy);
+    const isMultilayer =
+      demagMode === "two_d_stack" ||
+      demagStrategy === "multilayer_convolution" ||
+      Boolean(multilayer.data?.available);
+
     return {
+      anisotropyLimit:
+        asNumber(narrowObj?.anisotropy_limit) ??
+        asNumber(sharedCfg?.anisotropy_limit) ??
+        asNumber(universeCfg?.anisotropy_limit) ??
+        5,
       cellSizeM: [
-        spacing[0] && spacing[0] > 0 ? spacing[0] : 4e-9,
-        spacing[1] && spacing[1] > 0 ? spacing[1] : 4e-9,
-        spacing[2] && spacing[2] > 0 ? spacing[2] : 2e-9,
+        authoredCell[0] && authoredCell[0] > 0
+          ? authoredCell[0]
+          : spacing[0] && spacing[0] > 0
+            ? spacing[0]
+            : 4e-9,
+        authoredCell[1] && authoredCell[1] > 0
+          ? authoredCell[1]
+          : spacing[1] && spacing[1] > 0
+            ? spacing[1]
+            : 4e-9,
+        authoredCell[2] && authoredCell[2] > 0
+          ? authoredCell[2]
+          : spacing[2] && spacing[2] > 0
+            ? spacing[2]
+            : 2e-9,
       ],
-      curvatureFactor: asNumber(sharedCfg?.curvature_factor) ?? 0.35,
-      elementOrder: String(asNumber(sharedCfg?.element_order) ?? 1) === "2" ? "2" : "1",
-      fftSmoothSnap: true,
-      generator: asString(sharedCfg?.generator) ?? "gmsh",
-      gridCountX: shape[0] && shape[0] > 0 ? shape[0] : 128,
-      gridCountY: shape[1] && shape[1] > 0 ? shape[1] : 64,
-      gridCountZ: shape[2] && shape[2] > 0 ? shape[2] : 1,
-      growthRate: asNumber(sharedCfg?.growth_rate) ?? 1.3,
-      hmaxM: asNumber(sharedCfg?.maximum_element_size) ?? 5e-9,
-      hminM: asNumber(sharedCfg?.minimum_element_size) ?? 2e-9,
+      curvatureFactor:
+        asNumber(sharedCfg?.curvature_factor) ??
+        asNumber(universeCfg?.airbox_curvature_factor) ??
+        0.35,
+      elementsAcrossThickness:
+        asNumber(narrowObj?.elements_across_thickness) ??
+        asNumber(sharedCfg?.elements_across_thickness) ??
+        asNumber(universeCfg?.elements_across_thickness) ??
+        2,
+      enableNarrowRegionRefinement:
+        typeof narrowObj?.enable_narrow_region_refinement === "boolean"
+          ? narrowObj.enable_narrow_region_refinement
+          : typeof sharedCfg?.enable_narrow_region_refinement === "boolean"
+            ? (sharedCfg.enable_narrow_region_refinement as boolean)
+            : Boolean(
+                asNumber(sharedCfg?.narrow_region_resolution) ??
+                  asNumber(universeCfg?.airbox_narrow_region_resolution),
+              ),
+      fftSmoothSnap: typeof demagRec?.explain === "boolean" ? demagRec.explain : true,
+      gridCountX:
+        commonCells[0] && commonCells[0] > 0
+          ? commonCells[0]
+          : shape[0] && shape[0] > 0
+            ? shape[0]
+            : 128,
+      gridCountY:
+        commonCells[1] && commonCells[1] > 0
+          ? commonCells[1]
+          : shape[1] && shape[1] > 0
+            ? shape[1]
+            : 64,
+      gridCountZ:
+        commonCells[2] && commonCells[2] > 0
+          ? commonCells[2]
+          : shape[2] && shape[2] > 0
+            ? shape[2]
+            : 1,
+      growthRate:
+        asNumber(sharedCfg?.growth_rate) ??
+        asNumber(sharedCfg?.maximum_element_growth_rate) ??
+        asNumber(universeCfg?.airbox_growth_rate) ??
+        1.3,
+      hmaxM:
+        asNumber(sharedCfg?.hmax) ??
+        asNumber(sharedCfg?.maximum_element_size) ??
+        asNumber(universeCfg?.airbox_hmax) ??
+        5e-9,
+      hminM:
+        asNumber(sharedCfg?.hmin) ??
+        asNumber(sharedCfg?.minimum_element_size) ??
+        asNumber(universeCfg?.airbox_hmin) ??
+        2e-9,
       lane: femActive ? "fem" : "fdm",
-      optimizeQuality: sharedCfg?.optimize_quality !== false,
-      sizingMode: "cell_size",
-      zStackMode: multilayer.data?.available ? "multilayer" : "single_3d",
+      narrowRegionResolution:
+        asNumber(sharedCfg?.narrow_region_resolution) ??
+        asNumber(universeCfg?.airbox_narrow_region_resolution) ??
+        2,
+      optimizeMethod,
+      optimizeQuality,
+      sizingMode:
+        commonCells[0] && !authoredCell[0] ? "cell_count" : "cell_size",
+      zStackMode: isMultilayer ? "multilayer" : "single_3d",
     };
   }, [
     domainMeta.data?.grid,
     femActive,
     multilayer.data?.available,
+    scene.data,
     sharedPolicy.data,
+    universePolicy.data,
   ]);
 
   const sceneRev =
     asNumber(asRecord(scene.data)?.revision) ??
     asNumber(asRecord(scene.data)?.scene_revision);
   const manifestSourceRev = asNumber(asRecord(manifest.data)?.source_scene_revision);
-  const topologyCounts = asRecord(asRecord(manifest.data)?.topology_counts);
+  const resolvedCounts = resolveMeshTopologyCounts(manifest.data?.topology_counts);
   const femElements =
-    asNumber(topologyCounts?.elements) ?? asNumber(topologyCounts?.tetrahedra);
+    resolvedCounts?.element_count ??
+    asNumber(asRecord(manifest.data?.topology_counts)?.elements);
   const femNodes =
-    asNumber(topologyCounts?.nodes) ?? asNumber(topologyCounts?.vertices);
+    resolvedCounts?.node_count ??
+    asNumber(asRecord(manifest.data?.topology_counts)?.nodes);
   const buildingNow = Boolean(activeBuild.data?.active_build);
 
   const spec = useMemo<InspectorSpec<MeshRootDraft>>(() => {
@@ -336,7 +562,7 @@ export function MeshRootInspectorSpecPanel({ selection }: InspectorPanelProps): 
             await kernel.commands.execute(
               cmd,
               createCommandContext("inspector", kernel, {
-                sessionScopeKey,
+                sessionScopeKey: sessionScopeKey ?? null,
                 sourceDetail: "mesh.root",
               }),
             );
@@ -349,7 +575,7 @@ export function MeshRootInspectorSpecPanel({ selection }: InspectorPanelProps): 
         icon: Grid3x3,
         kindLabel:
           activeLane === "unresolved"
-            ? "Unresolved discretization"
+            ? "Session discretization"
             : femActive
               ? "Finite element mesh (FEM)"
               : "Finite difference grid (FDM)",
@@ -414,16 +640,22 @@ export function MeshRootInspectorSpecPanel({ selection }: InspectorPanelProps): 
           ];
         }
         return [
-          { id: "lane", label: "Lane", value: `FEM (P${draft.elementOrder})` },
+          { id: "lane", label: "Lane", value: "FEM" },
           {
             id: "elements",
             label: "Elements",
-            value: femElements !== null ? femElements.toLocaleString("en-US") : null,
+            value:
+              femElements !== null && femElements !== undefined
+                ? femElements.toLocaleString("en-US")
+                : null,
           },
           {
             id: "nodes",
             label: "Nodes",
-            value: femNodes !== null ? femNodes.toLocaleString("en-US") : null,
+            value:
+              femNodes !== null && femNodes !== undefined
+                ? femNodes.toLocaleString("en-US")
+                : null,
           },
           {
             id: "hmax",
@@ -475,7 +707,7 @@ export function MeshRootInspectorSpecPanel({ selection }: InspectorPanelProps): 
                 await kernel.commands.execute(
                   "mesh.build-shared-domain",
                   createCommandContext("inspector", kernel, {
-                    sessionScopeKey,
+                    sessionScopeKey: sessionScopeKey ?? null,
                     sourceDetail: "mesh.root.notice",
                   }),
                 );
@@ -579,7 +811,7 @@ export function MeshRootInspectorSpecPanel({ selection }: InspectorPanelProps): 
               key: "gridCountZ",
               label: "Cells along Z",
               min: 1,
-              showWhen: (d) => d.sizingMode === "cell_count",
+              showWhen: (d) => d.sizingMode === "cell_count" && d.zStackMode !== "multilayer",
               symbol: (
                 <>
                   N<sub>z</sub>
@@ -634,6 +866,81 @@ export function MeshRootInspectorSpecPanel({ selection }: InspectorPanelProps): 
         },
         {
           defaultOpen: true,
+          footer: (ctx) => (
+            <div className="flex flex-wrap gap-2">
+              <Button
+                size="sm"
+                type="button"
+                variant="secondary"
+                onClick={() => {
+                  const sharedEffective = asRecord(
+                    asRecord(sharedPolicy.data)?.effective_config,
+                  );
+                  const effShared = draftFromEffectiveSharedDomainResource(
+                    sharedPolicy.data
+                      ? {
+                          config:
+                            sharedEffective ?? sharedPolicy.data.config ?? null,
+                          effective_config: sharedEffective ?? null,
+                          revision: sharedPolicy.data.revision,
+                        }
+                      : null,
+                  );
+                  const uniResource: MeshUniverseConfigResource =
+                    universePolicy.data ?? {
+                      config: null,
+                      effective_config: null,
+                      revision: 0,
+                    };
+                  const effUni = draftFromEffectiveUniverseMeshPolicyResource({
+                    ...uniResource,
+                    config:
+                      uniResource.effective_config ?? uniResource.config ?? null,
+                  });
+                  const patch: Partial<MeshRootDraft> = {
+                    optimizeMethod: effShared.optimizeMethod || "Netgen",
+                    optimizeQuality: effShared.optimize,
+                  };
+                  const hmax = asNumber(effShared.hMax) ?? asNumber(effUni.airboxHmax);
+                  const hmin = asNumber(effShared.hMin) ?? asNumber(effUni.airboxHmin);
+                  const growth =
+                    asNumber(effShared.growthRate) ?? asNumber(effUni.airboxGrowthRate);
+                  const curv =
+                    asNumber(effShared.curvatureFactor) ?? asNumber(effUni.curvatureFactor);
+                  const narrow =
+                    asNumber(effShared.narrowRegionResolution) ??
+                    asNumber(effUni.narrowRegionResolution);
+                  if (hmax !== null && hmax > 0) patch.hmaxM = hmax;
+                  if (hmin !== null && hmin > 0) patch.hminM = hmin;
+                  if (growth !== null && growth > 0) patch.growthRate = growth;
+                  if (curv !== null && curv > 0) patch.curvatureFactor = curv;
+                  if (narrow !== null && narrow > 0) {
+                    patch.narrowRegionResolution = narrow;
+                    patch.enableNarrowRegionRefinement = true;
+                  }
+                  ctx.patchDraft(patch);
+                }}
+              >
+                Load Effective Defaults
+              </Button>
+              <Button
+                size="sm"
+                type="button"
+                variant="secondary"
+                onClick={() => {
+                  void kernel.commands.execute(
+                    "mesh.build-shared-domain",
+                    createCommandContext("inspector", kernel, {
+                      sessionScopeKey: sessionScopeKey ?? null,
+                      sourceDetail: "mesh.root.footer",
+                    }),
+                  );
+                }}
+              >
+                Build Shared-Domain Mesh
+              </Button>
+            </div>
+          ),
           icon: Ruler,
           id: "fem-sizing",
           rows: [
@@ -670,16 +977,6 @@ export function MeshRootInspectorSpecPanel({ selection }: InspectorPanelProps): 
               units: LENGTH_UNITS,
             },
             {
-              key: "elementOrder",
-              label: "Element polynomial order",
-              options: [
-                { label: "P1 Linear", value: "1" },
-                { label: "P2 Quadratic", value: "2" },
-              ],
-              symbol: <>p</>,
-              type: "segmented",
-            },
-            {
               key: "growthRate",
               label: "Size growth rate",
               max: 4,
@@ -698,25 +995,59 @@ export function MeshRootInspectorSpecPanel({ selection }: InspectorPanelProps): 
               type: "number",
             },
             {
-              key: "generator",
-              label: "3D mesh generator",
-              options: [
-                { label: "Gmsh (Delaunay / HXT)", value: "gmsh" },
-                { label: "Netgen", value: "netgen" },
-                { label: "TetGen", value: "tetgen" },
-              ],
-              type: "select",
+              key: "narrowRegionResolution",
+              label: "Narrow region resolution",
+              max: 16,
+              min: 0.5,
+              step: 0.5,
+              type: "number",
+            },
+            {
+              key: "enableNarrowRegionRefinement",
+              label: "Enable narrow-region refinement",
+              structural: true,
+              type: "switch",
+            },
+            {
+              integer: true,
+              key: "elementsAcrossThickness",
+              label: "Elements across thickness",
+              max: 16,
+              min: 1,
+              showWhen: (d) => d.enableNarrowRegionRefinement,
+              type: "number",
+            },
+            {
+              key: "anisotropyLimit",
+              label: "Anisotropy limit",
+              max: 50,
+              min: 1,
+              showWhen: (d) => d.enableNarrowRegionRefinement,
+              step: 0.5,
+              type: "number",
             },
             {
               key: "optimizeQuality",
-              label: "Post-mesh quality optimization",
+              label: "Optimize tetrahedral quality",
+              structural: true,
               type: "switch",
+            },
+            {
+              key: "optimizeMethod",
+              label: "Gmsh optimizer",
+              options: [
+                { label: "Netgen", value: "Netgen" },
+                { label: "HighOrder", value: "HighOrder" },
+                { label: "Relocate3D", value: "Relocate3D" },
+              ],
+              showWhen: (d) => d.optimizeQuality,
+              type: "select",
             },
           ],
           showWhen: (d) => d.lane === "fem",
           summary: (d) =>
-            `h_min ${formatLengthSmart(d.hminM)} → h_max ${formatLengthSmart(d.hmaxM)} · P${d.elementOrder}`,
-          title: "Global FEM sizing & generator",
+            `h_min ${formatLengthSmart(d.hminM)} → h_max ${formatLengthSmart(d.hmaxM)}`,
+          title: "Global FEM sizing & narrow-region resolution",
         },
       ],
       details: () => [
@@ -752,47 +1083,238 @@ export function MeshRootInspectorSpecPanel({ selection }: InspectorPanelProps): 
             : null,
         mode: "staged",
         onApply: async (draft, base) => {
+          const reqOptions = sessionScopeKey ? { sessionScopeKey } : undefined;
           if (draft.lane !== base.lane) {
             await kernel.api.model.patchStudy(
-              { discretization: draft.lane } as never,
-              { sessionScopeKey },
+              { requested_backend: draft.lane },
+              reqOptions,
             );
           }
+
           if (draft.lane === "fdm") {
-            const existingCfg = asRecord(universePolicy.data?.config) ?? {};
-            await kernel.api.meshing.replaceUniversePolicy(
-              {
-                base_revision: universePolicy.data?.revision ?? 0,
-                config: {
-                  ...existingCfg,
-                  cell_size: [...draft.cellSizeM],
-                  fft_smooth_snap: draft.fftSmoothSnap,
-                  grid_shape: [draft.gridCountX, draft.gridCountY, draft.gridCountZ],
-                } as JsonObject,
-              } as never,
-              { sessionScopeKey },
+            const nx = draft.fftSmoothSnap
+              ? snapSevenSmooth(draft.gridCountX)
+              : Math.max(1, Math.round(draft.gridCountX));
+            const ny = draft.fftSmoothSnap
+              ? snapSevenSmooth(draft.gridCountY)
+              : Math.max(1, Math.round(draft.gridCountY));
+            const nz = Math.max(1, Math.round(draft.gridCountZ));
+
+            const studyRec = asRecord(asRecord(scene.data)?.study);
+            const existingFdm = asRecord(studyRec?.fdm) ?? {};
+            const existingDemag = asRecord(existingFdm.demag) ?? {};
+            const demagStrategy =
+              draft.zStackMode === "multilayer"
+                ? "multilayer_convolution"
+                : "single_grid";
+            const demagMode =
+              draft.zStackMode === "multilayer" ? "two_d_stack" : "three_d";
+
+            const fdmPatch: JsonObject = {
+              ...(existingFdm as JsonObject),
+              default_cell:
+                draft.sizingMode === "cell_size" ? [...draft.cellSizeM] : null,
+              demag: {
+                ...(existingDemag as JsonObject),
+                common_cells:
+                  draft.sizingMode === "cell_count" &&
+                  draft.zStackMode !== "multilayer"
+                    ? [nx, ny, nz]
+                    : null,
+                common_cells_xy:
+                  draft.sizingMode === "cell_count" &&
+                  draft.zStackMode === "multilayer"
+                    ? [nx, ny]
+                    : null,
+                explain: draft.fftSmoothSnap,
+                mode: demagMode,
+                strategy: demagStrategy,
+              },
+            };
+
+            const baseRevision =
+              asNumber(asRecord(scene.data)?.revision) ??
+              asNumber(asRecord(scene.data)?.scene_revision) ??
+              0;
+            const mutationCtx = buildSafeMutationContext(
+              kernel,
+              sessionScopeKey,
+              "mesh.root.fdm",
             );
-            kernel.resources.invalidate(MESH_UNIVERSE_POLICY_RESOURCE_KEY, `w5:${Date.now()}`);
+            const committed = await runAuthoringMutationWithHistory(
+              mutationCtx,
+              "Update FDM discretization policy",
+              async (prep) => {
+                const tx: AuthoringTransactionRequest = {
+                  base_revision: prep.baseRevision ?? baseRevision,
+                  kind: "merge_patch",
+                  merge_patch: {
+                    study: {
+                      demag_realization: demagStrategy,
+                      fdm: fdmPatch,
+                    },
+                  },
+                };
+                return kernel.api.model.commitTransaction(tx, reqOptions);
+              },
+            );
+            const committedScene = asRecord(committed)?.committed_scene as
+              | SceneResource
+              | undefined;
+            if (
+              committedScene &&
+              geometryLifecycleResources.publishCommittedSceneResource
+            ) {
+              const committedRev =
+                asNumber(asRecord(committedScene)?.revision) ??
+                `w5:${Date.now()}`;
+              geometryLifecycleResources.publishCommittedSceneResource(
+                kernel.resources,
+                committedScene,
+                committedRev,
+                undefined,
+                true,
+                sessionScopeKey ?? null,
+                kernel.api.resourceCacheScope,
+              );
+            }
+            const uniResource: MeshUniverseConfigResource =
+              universePolicy.data ?? {
+                config: null,
+                effective_config: null,
+                revision: 0,
+              };
+            if (uniResource.config !== null && uniResource.config !== undefined) {
+              const uniDraft = rebaseAirboxMeshPolicyDraft(
+                draftFromUniverseMeshPolicyResource(uniResource),
+                universePolicy.data ?? null,
+              );
+              const builtUni = buildAirboxMeshPolicyReplaceRequest(uniDraft, {
+                lane: "fdm",
+              });
+              if (!("error" in builtUni) && builtUni.request) {
+                await kernel.api.meshing.replaceUniversePolicy(
+                  builtUni.request,
+                  reqOptions,
+                );
+              }
+            }
+            invalidateAuthoringMutationDependents(
+              kernel.resources,
+              "geometry",
+              `w5:${Date.now()}`,
+            );
+            kernel.resources.invalidate(
+              geometryLifecycleResources.SCENE_RESOURCE_KEY,
+              `w5:${Date.now()}`,
+            );
+            kernel.resources.invalidate(
+              SESSION_STATUS_KEY,
+              `w5:${Date.now()}`,
+            );
+            kernel.resources.invalidate(
+              geometryLifecycleResources.MESH_UNIVERSE_POLICY_RESOURCE_KEY,
+              `w5:${Date.now()}`,
+            );
           } else {
-            await kernel.api.meshing.sharedDomain.replacePolicy(
-              {
-                base_revision: sharedPolicy.data?.revision ?? 0,
-                config: {
-                  curvature_factor: draft.curvatureFactor,
-                  element_order: Number(draft.elementOrder),
-                  generator: draft.generator,
-                  growth_rate: draft.growthRate,
-                  maximum_element_size: draft.hmaxM,
-                  minimum_element_size: draft.hminM,
-                  optimize_quality: draft.optimizeQuality,
-                } as JsonObject,
-              } as never,
-              { sessionScopeKey },
+            const baseShared = draftFromSharedDomainResource(sharedPolicy.data ?? null);
+            const nextSharedDraft: SharedDomainPolicyDraft = {
+              ...baseShared,
+              authoredPresent: true,
+              curvatureFactor: String(draft.curvatureFactor),
+              growthRate: String(draft.growthRate),
+              hMax: String(draft.hmaxM),
+              hMin: String(draft.hminM),
+              narrowRegionResolution: String(draft.narrowRegionResolution),
+              optimize: draft.optimizeQuality,
+              optimizeMethod: draft.optimizeMethod || "Netgen",
+            };
+            const builtShared = buildSharedDomainPolicyConfig(nextSharedDraft);
+            if (!builtShared.ok) {
+              throw new Error(builtShared.error);
+            }
+            const configPayload: JsonObject = {
+              ...builtShared.config,
+              ...(draft.enableNarrowRegionRefinement
+                ? {
+                    anisotropy_limit: draft.anisotropyLimit,
+                    elements_across_thickness: draft.elementsAcrossThickness,
+                    enable_narrow_region_refinement: true,
+                  }
+                : {
+                    enable_narrow_region_refinement: false,
+                  }),
+            };
+
+            const nextShared = await kernel.api.meshing.sharedDomain.replacePolicy(
+              { config: configPayload },
+              reqOptions,
             );
-            kernel.resources.invalidate(MESH_SHARED_DOMAIN_POLICY_RESOURCE_KEY, `w5:${Date.now()}`);
-            kernel.resources.invalidate(MESH_SEMANTICS_RESOURCE_KEY, `w5:${Date.now()}`);
+            const nextRev =
+              typeof nextShared?.revision === "number"
+                ? nextShared.revision
+                : `w5:${Date.now()}`;
+
+            if (
+              sessionScopeKey &&
+              nextShared &&
+              typeof nextShared.revision === "number"
+            ) {
+              meshPolicyResourceCache.publishCommittedMeshPolicyResource?.(
+                kernel.resources,
+                geometryLifecycleResources.MESH_SHARED_DOMAIN_POLICY_RESOURCE_KEY,
+                sessionScopeKey,
+                nextShared,
+                kernel.api.resourceCacheScope,
+              );
+            }
+
+            const uniResource: MeshUniverseConfigResource =
+              universePolicy.data ?? {
+                config: null,
+                effective_config: null,
+                revision: 0,
+              };
+            if (uniResource.config !== null && uniResource.config !== undefined) {
+              const uniDraft = rebaseAirboxMeshPolicyDraft(
+                {
+                  ...draftFromUniverseMeshPolicyResource(uniResource),
+                  narrowRegionResolution: String(draft.narrowRegionResolution),
+                },
+                universePolicy.data ?? null,
+              );
+              const builtUni = buildAirboxMeshPolicyReplaceRequest(uniDraft, {
+                lane: "fem",
+              });
+              if (!("error" in builtUni) && builtUni.request) {
+                await kernel.api.meshing.replaceUniversePolicy(
+                  builtUni.request,
+                  reqOptions,
+                );
+              }
+            }
+
+            kernel.resources.invalidate(
+              geometryLifecycleResources.MESH_SHARED_DOMAIN_POLICY_RESOURCE_KEY,
+              nextRev,
+            );
+            kernel.resources.invalidate(
+              geometryLifecycleResources.MESH_SEMANTICS_RESOURCE_KEY,
+              nextRev,
+            );
+            kernel.resources.invalidate(
+              geometryLifecycleResources.SCENE_RESOURCE_KEY,
+              `mesh-policy:shared-domain:${String(nextRev)}`,
+            );
+            kernel.resources.invalidate(
+              SESSION_STATUS_KEY,
+              `mesh-policy:shared-domain:${String(nextRev)}`,
+            );
           }
-          kernel.resources.invalidate(MESH_SUMMARY_RESOURCE_KEY, `w5:${Date.now()}`);
+          kernel.resources.invalidate(
+            geometryLifecycleResources.MESH_SUMMARY_RESOURCE_KEY,
+            `w5:${Date.now()}`,
+          );
           return true;
         },
       },
@@ -818,442 +1340,113 @@ export function MeshRootInspectorSpecPanel({ selection }: InspectorPanelProps): 
 }
 
 // ============================================================================
-// 2. object.mesh — ObjectMeshInspectorSpecPanel (Zero DELETE, PUT config: null)
-// ============================================================================
-
-interface ObjectMeshDraft {
-  policyMode: "inherit" | "custom";
-  meshStrategy: "tet_auto" | "swept_prism" | "structured_hex";
-  hmaxM: number;
-  hminM: number;
-  growthRate: number;
-  layerCount: number;
-  layerProgression: number;
-  localBoundaryRefinement: boolean;
-  boundaryElementSizeM: number;
-}
-
-export function ObjectMeshInspectorSpecPanel({ selection }: InspectorPanelProps): ReactNode {
-  const kernel = useKernel();
-  const sessionScopeKey = sessionRequestScopeKey(useSessionResourceIdentity()) ?? undefined;
-  const activeLane = useActiveLane();
-  const objectId = selection.objectId ?? asString(asRecord(selection.ref)?.objectId) ?? "";
-
-  const scene = useSceneResource({ enabled: Boolean(objectId) });
-  const policyRes = useObjectMeshPolicyResource(objectId, {
-    enabled: Boolean(objectId) && activeLane === "fem",
-  });
-  const qualityRes = useObjectMeshQualityResource(objectId, {
-    enabled: Boolean(objectId) && activeLane === "fem",
-  });
-
-  const sceneObject = useMemo(() => {
-    const objs = Array.isArray(scene.data?.objects) ? scene.data.objects : [];
-    return objs.map(asRecord).find((obj) => asString(obj?.id) === objectId) ?? null;
-  }, [objectId, scene.data]);
-
-  const objectName = asString(sceneObject?.name) ?? (objectId || "Object");
-  const geometryRec = asRecord(sceneObject?.geometry);
-  const geometryKind =
-    asString(geometryRec?.geometry_kind) ?? asString(geometryRec?.kind) ?? "Primitive";
-
-  const baseline = useMemo<ObjectMeshDraft>(() => {
-    const rawConfig = asRecord(policyRes.data?.config);
-    const effective = asRecord(policyRes.data?.effective_config) ?? rawConfig;
-    const hasCustom = Boolean(rawConfig && Object.keys(rawConfig).length > 0);
-    const strategyRaw =
-      asString(rawConfig?.mesh_strategy) ?? asString(effective?.mesh_strategy) ?? "tet_auto";
-    const meshStrategy: ObjectMeshDraft["meshStrategy"] =
-      strategyRaw === "swept_prism" || strategyRaw === "structured_hex"
-        ? strategyRaw
-        : "tet_auto";
-    return {
-      boundaryElementSizeM:
-        asNumber(rawConfig?.boundary_element_size) ??
-        asNumber(effective?.minimum_element_size) ??
-        1.5e-9,
-      growthRate:
-        asNumber(rawConfig?.growth_rate) ?? asNumber(effective?.growth_rate) ?? 1.25,
-      hmaxM:
-        asNumber(rawConfig?.maximum_element_size) ??
-        asNumber(effective?.maximum_element_size) ??
-        4e-9,
-      hminM:
-        asNumber(rawConfig?.minimum_element_size) ??
-        asNumber(effective?.minimum_element_size) ??
-        2e-9,
-      layerCount: Math.max(1, Math.round(asNumber(rawConfig?.through_thickness_layers) ?? 3)),
-      layerProgression: asNumber(rawConfig?.layer_progression) ?? 1.0,
-      localBoundaryRefinement: Boolean(rawConfig?.boundary_element_size),
-      meshStrategy,
-      policyMode: hasCustom ? "custom" : "inherit",
-    };
-  }, [policyRes.data]);
-
-  const spec = useMemo<InspectorSpec<ObjectMeshDraft>>(() => {
-    const fdmMode = activeLane === "fdm";
-    const qualElemCount = asNumber(asRecord(qualityRes.data)?.element_count);
-    return {
-      id: "object.mesh",
-      header: {
-        breadcrumbs: [
-          {
-            id: "objects",
-            label: "Objects",
-            selection: {
-              kind: "objects.root",
-              label: "Objects",
-              nodeId: "model:objects",
-              objectId: null,
-              ref: null,
-            },
-          },
-          {
-            id: "object",
-            label: objectName,
-            selection: {
-              kind: "object.root",
-              label: objectName,
-              nodeId: `model:object:${objectId}`,
-              objectId,
-              ref: null,
-            },
-          },
-          { id: "mesh", label: "Mesh" },
-        ],
-        canFitView: true,
-      },
-      identity: {
-        domain: "mesh",
-        entityId: objectId ? `object:${objectId}:mesh` : undefined,
-        icon: Box,
-        kindLabel: fdmMode ? "FDM voxel participation" : "Object FEM mesh policy",
-        statePill: (d) =>
-          fdmMode
-            ? { label: "Structured mask", tone: "info" }
-            : d.policyMode === "custom"
-              ? { label: "Custom policy", tone: "ok" }
-              : { label: "Inherited", tone: "neutral" },
-        title: () => `${objectName} Mesh`,
-      },
-      facts: (d) => [
-        {
-          id: "mode",
-          label: "Policy mode",
-          value: fdmMode
-            ? "FDM Voxel Mask"
-            : d.policyMode === "custom"
-              ? "Custom override"
-              : "Inherit domain",
-        },
-        { id: "source", label: "Geometry source", value: geometryKind },
-        {
-          id: "hmax",
-          label: "Max element h_max",
-          value: fdmMode ? null : formatLengthSmart(d.hmaxM),
-        },
-        {
-          id: "elements",
-          label: "Realized elements",
-          value: qualElemCount !== null ? qualElemCount.toLocaleString("en-US") : null,
-        },
-      ],
-      modeTabs: fdmMode
-        ? undefined
-        : [
-            { id: "sizing", label: "Sizing & Strategy" },
-            { id: "layers", label: "Thin-Film Layers" },
-            { id: "refinement", label: "Local Refinement" },
-          ],
-      sections: fdmMode
-        ? [
-            {
-              defaultOpen: true,
-              icon: Grid3x3,
-              id: "fdm-participation",
-              rows: [
-                {
-                  format: () => "Included in Cartesian magnetic support mask",
-                  label: "Voxel participation",
-                  type: "readonly",
-                },
-                {
-                  format: () => geometryKind,
-                  label: "Rasterized geometry",
-                  type: "readonly",
-                },
-              ],
-              title: "Structured grid participation",
-            },
-          ]
-        : [
-            {
-              defaultOpen: true,
-              icon: SlidersHorizontal,
-              id: "policy-mode",
-              modeTabId: "sizing",
-              rows: [
-                {
-                  key: "policyMode",
-                  label: "Policy ownership",
-                  options: [
-                    { label: "Inherit shared domain", value: "inherit" },
-                    { label: "Custom object policy", value: "custom" },
-                  ],
-                  structural: true,
-                  type: "segmented",
-                },
-                {
-                  format: () =>
-                    geometryKind.toLowerCase().includes("import")
-                      ? `Imported CAD/surface (${geometryKind})`
-                      : `Parametric scene geometry (${geometryKind})`,
-                  label: "Mesh source provenance",
-                  type: "readonly",
-                },
-                {
-                  key: "meshStrategy",
-                  label: "Element topology strategy",
-                  options: [
-                    { label: "Unstructured Tet4/Tet10", value: "tet_auto" },
-                    { label: "Swept Thin-Film Prism6", value: "swept_prism" },
-                    { label: "Structured Hex8", value: "structured_hex" },
-                  ],
-                  showWhen: (d) => d.policyMode === "custom",
-                  structural: true,
-                  type: "select",
-                },
-                {
-                  defaultDisplayUnit: "nm",
-                  key: "hmaxM",
-                  label: "Max element size",
-                  min: 1e-11,
-                  minExclusive: true,
-                  scrub: "log",
-                  showWhen: (d) => d.policyMode === "custom",
-                  symbol: (
-                    <>
-                      h<sub>max</sub>
-                    </>
-                  ),
-                  type: "quantity",
-                  units: LENGTH_UNITS,
-                  validate: (val, d) =>
-                    val < d.hminM ? "h_max must be >= h_min." : null,
-                },
-                {
-                  defaultDisplayUnit: "nm",
-                  key: "hminM",
-                  label: "Min element size",
-                  min: 1e-11,
-                  minExclusive: true,
-                  scrub: "log",
-                  showWhen: (d) => d.policyMode === "custom",
-                  symbol: (
-                    <>
-                      h<sub>min</sub>
-                    </>
-                  ),
-                  type: "quantity",
-                  units: LENGTH_UNITS,
-                },
-                {
-                  key: "growthRate",
-                  label: "Interior growth rate",
-                  max: 4,
-                  min: 1.01,
-                  showWhen: (d) => d.policyMode === "custom",
-                  step: 0.05,
-                  symbol: <>g</>,
-                  type: "number",
-                },
-              ],
-              title: "Object sizing & strategy",
-            },
-            {
-              defaultOpen: true,
-              icon: Layers,
-              id: "thin-film-layers",
-              modeTabId: "layers",
-              rows: [
-                {
-                  disabledReason: (d) =>
-                    d.policyMode !== "custom"
-                      ? "Switch to Custom object policy on Sizing & Strategy to author swept prism layers."
-                      : d.meshStrategy !== "swept_prism"
-                        ? "Select Swept Thin-Film Prism6 strategy to configure through-thickness layers."
-                        : null,
-                  integer: true,
-                  key: "layerCount",
-                  label: "Through-thickness layers",
-                  max: 64,
-                  min: 1,
-                  symbol: (
-                    <>
-                      N<sub>layers</sub>
-                    </>
-                  ),
-                  type: "number",
-                },
-                {
-                  disabledReason: (d) =>
-                    d.policyMode !== "custom" || d.meshStrategy !== "swept_prism"
-                      ? "Available when Custom policy with Swept Thin-Film Prism6 is active."
-                      : null,
-                  key: "layerProgression",
-                  label: "Layer geometric progression",
-                  max: 3,
-                  min: 0.25,
-                  step: 0.05,
-                  symbol: (
-                    <>
-                      q<sub>z</sub>
-                    </>
-                  ),
-                  type: "number",
-                },
-              ],
-              title: "Through-thickness layer distribution",
-            },
-            {
-              defaultOpen: true,
-              icon: Ruler,
-              id: "local-refinement",
-              modeTabId: "refinement",
-              rows: [
-                {
-                  disabledReason: (d) =>
-                    d.policyMode !== "custom"
-                      ? "Enable Custom object policy to override boundary refinement."
-                      : null,
-                  key: "localBoundaryRefinement",
-                  label: "Refine exterior object boundaries",
-                  structural: true,
-                  type: "switch",
-                },
-                {
-                  defaultDisplayUnit: "nm",
-                  key: "boundaryElementSizeM",
-                  label: "Boundary target size",
-                  min: 1e-11,
-                  minExclusive: true,
-                  showWhen: (d) => d.policyMode === "custom" && d.localBoundaryRefinement,
-                  symbol: (
-                    <>
-                      h<sub>bnd</sub>
-                    </>
-                  ),
-                  type: "quantity",
-                  units: LENGTH_UNITS,
-                },
-              ],
-              title: "Boundary & interface refinement",
-            },
-          ],
-      commitBar: fdmMode
-        ? {
-            mode: "readOnly",
-            statusMessage: () => "FDM voxel mask derives automatically from object geometry",
-          }
-        : {
-            cleanMessage: (d) =>
-              d.policyMode === "inherit"
-                ? "Inheriting shared-domain FEM sizing"
-                : "Custom object mesh policy saved",
-            mode: "staged",
-            onApply: async (draft) => {
-              if (!objectId) return false;
-              const configPayload: JsonObject | null =
-                draft.policyMode === "inherit"
-                  ? null
-                  : ({
-                      growth_rate: draft.growthRate,
-                      maximum_element_size: draft.hmaxM,
-                      mesh_strategy: draft.meshStrategy,
-                      minimum_element_size: draft.hminM,
-                      ...(draft.meshStrategy === "swept_prism"
-                        ? {
-                            layer_progression: draft.layerProgression,
-                            through_thickness_layers: draft.layerCount,
-                          }
-                        : {}),
-                      ...(draft.localBoundaryRefinement
-                        ? { boundary_element_size: draft.boundaryElementSizeM }
-                        : {}),
-                    } as JsonObject);
-              await kernel.api.meshing.replaceObjectPolicy(
-                objectId,
-                {
-                  base_revision: policyRes.data?.revision ?? 0,
-                  config: configPayload,
-                } as never,
-                { sessionScopeKey },
-              );
-              kernel.resources.invalidate(
-                resolveObjectMeshPolicyResourceKey(objectId),
-                `w5:${Date.now()}`,
-              );
-              kernel.resources.invalidate(MESH_SEMANTICS_RESOURCE_KEY, `w5:${Date.now()}`);
-              return true;
-            },
-          },
-    };
-  }, [
-    activeLane,
-    geometryKind,
-    kernel.api.meshing,
-    kernel.resources,
-    objectId,
-    objectName,
-    policyRes.data,
-    qualityRes.data,
-    sessionScopeKey,
-  ]);
-
-  return <SpecInspectorHost baseline={baseline} selection={selection} spec={spec} />;
-}
-
-// ============================================================================
 // 3. mesh.shared-domain — MeshSharedDomainInspectorSpecPanel
 // ============================================================================
 
-interface SharedDomainDraft {
-  interfaceConformity: "conforming" | "mortar";
-  interfaceToleranceM: number;
-  periodicAxes: readonly string[];
-  floquetPhaseXDeg: number;
-  floquetPhaseYDeg: number;
+interface SharedDomainSpecDraft {
+  hMax: string;
+  hMin: string;
+  growthRate: string;
+  curvatureFactor: string;
+  narrowRegionResolution: string;
+  optimize: boolean;
+  optimizeMethod: string;
+  configText: string;
 }
 
 export function MeshSharedDomainInspectorSpecPanel({
   selection,
 }: InspectorPanelProps): ReactNode {
   const kernel = useKernel();
-  const sessionScopeKey = sessionRequestScopeKey(useSessionResourceIdentity()) ?? undefined;
-  const policy = useMeshSharedDomainPolicyResource();
-  const manifest = useMeshSharedDomainManifestResource();
+  const sessionScopeKey =
+    sessionRequestScopeKey(sessionStatusHooks.useSessionResourceIdentity()) ?? undefined;
 
-  const baseline = useMemo<SharedDomainDraft>(() => {
-    const cfg =
-      asRecord(policy.data?.config) ?? asRecord(asRecord(policy.data)?.effective_config);
-    const axes = Array.isArray(cfg?.periodic_axes)
-      ? cfg.periodic_axes.filter((x): x is string => typeof x === "string")
-      : [];
+  const policy = geometryLifecycleResources.useMeshSharedDomainPolicyResource();
+  const manifest = geometryLifecycleResources.useMeshSharedDomainManifestResource();
+  const summary = geometryLifecycleResources.useMeshSummaryResource();
+  const semantics = geometryLifecycleResources.useMeshSemanticsResource();
+  const activeBuild = geometryLifecycleResources.useMeshBuildCurrent();
+  const sharedReport = geometryLifecycleResources.useMeshSharedDomainReportResource();
+  const capabilities = useSafeMeshCapabilitiesResource();
+
+  const baseline = useMemo<SharedDomainSpecDraft>(() => {
+    const parsed = draftFromSharedDomainResource(policy.data ?? null);
     return {
-      floquetPhaseXDeg: asNumber(cfg?.floquet_phase_x_deg) ?? 0,
-      floquetPhaseYDeg: asNumber(cfg?.floquet_phase_y_deg) ?? 0,
-      interfaceConformity:
-        asString(cfg?.interface_conformity) === "mortar" ? "mortar" : "conforming",
-      interfaceToleranceM: asNumber(cfg?.interface_tolerance_m) ?? 1e-11,
-      periodicAxes: axes,
+      configText: parsed.configText,
+      curvatureFactor: parsed.curvatureFactor,
+      growthRate: parsed.growthRate,
+      hMax: parsed.hMax,
+      hMin: parsed.hMin,
+      narrowRegionResolution: parsed.narrowRegionResolution,
+      optimize: parsed.optimize,
+      optimizeMethod: parsed.optimizeMethod || "Netgen",
     };
   }, [policy.data]);
 
-  const spec = useMemo<InspectorSpec<SharedDomainDraft>>(() => {
-    const manifestRec = asRecord(manifest.data);
-    const periodicPairs = Array.isArray(manifestRec?.periodic_pairs)
-      ? manifestRec.periodic_pairs.map(asRecord).filter(Boolean)
-      : [];
+  const counts = useMemo(
+    () => resolveMeshTopologyCounts(manifest.data?.topology_counts),
+    [manifest.data?.topology_counts],
+  );
+
+  const meshStatistics =
+    asRecord(asRecord(semantics.data)?.mesh_build_diagnostics)?.mesh_statistics ??
+    asRecord(asRecord(sharedReport.data)?.report)?.mesh_statistics ??
+    null;
+  const qualityStats = useMemo(
+    () => normalizeMeshQualityStatistics(meshStatistics),
+    [meshStatistics],
+  );
+
+  const mixedTopology = useMemo(
+    () =>
+      resolveMixedTopologyPresentation({
+        buildReport:
+          activeBuild.data?.shared_domain_build_report ??
+          asRecord(asRecord(semantics.data)?.solver_mesh)?.build_report ??
+          asRecord(sharedReport.data)?.report,
+        manifest: manifest.data,
+        rejectionEvidence: activeBuild.data?.mixed_layer_topology_rejection,
+      }),
+    [activeBuild.data, manifest.data, semantics.data, sharedReport.data],
+  );
+
+  const editorCapabilities = useMemo(
+    () => resolveMeshEditorCapabilities(capabilities.data),
+    [capabilities.data],
+  );
+
+  const handleAfterFieldChange = useCallback(
+    <K extends keyof SharedDomainSpecDraft & string>(
+      key: K,
+      value: SharedDomainSpecDraft[K],
+      helpers: {
+        draft: SharedDomainSpecDraft;
+        patchDraft: (partial: Partial<SharedDomainSpecDraft>) => void;
+      },
+    ) => {
+      if (key === "configText") return;
+      const merged: SharedDomainPolicyDraft = {
+        authoredPresent: true,
+        configText: helpers.draft.configText,
+        curvatureFactor: helpers.draft.curvatureFactor,
+        growthRate: helpers.draft.growthRate,
+        hMax: helpers.draft.hMax,
+        hMin: helpers.draft.hMin,
+        narrowRegionResolution: helpers.draft.narrowRegionResolution,
+        optimize: helpers.draft.optimize,
+        optimizeMethod: helpers.draft.optimizeMethod,
+        [key]: value,
+      };
+      const built = buildSharedDomainPolicyConfig(merged);
+      if (built.ok) {
+        helpers.patchDraft({ configText: formatPolicyJson(built.config) });
+      }
+    },
+    [],
+  );
+
+  const spec = useMemo<InspectorSpec<SharedDomainSpecDraft>>(() => {
+    const manifestRec = manifest.data;
     return {
       id: "mesh.shared-domain",
       header: {
@@ -1272,6 +1465,19 @@ export function MeshSharedDomainInspectorSpecPanel({
           { id: "shared", label: "Shared Domain" },
         ],
         canFitView: true,
+        primaryHeaderAction: {
+          icon: Grid3x3,
+          label: "Build Shared-Domain Mesh",
+          onRun: async () => {
+            await kernel.commands.execute(
+              "mesh.build-shared-domain",
+              createCommandContext("inspector", kernel, {
+                sessionScopeKey: sessionScopeKey ?? null,
+                sourceDetail: "mesh.shared-domain",
+              }),
+            );
+          },
+        },
       },
       identity: {
         domain: "mesh",
@@ -1279,180 +1485,431 @@ export function MeshSharedDomainInspectorSpecPanel({
         icon: Layers,
         kindLabel: "Shared-domain FEM assembly",
         statePill: () =>
-          manifest.data
+          manifestRec
             ? { label: "Realized", tone: "ok" }
             : { label: "Not built", tone: "neutral" },
-        title: () => "Shared-Domain Assembly",
+        title: () => "Shared-Domain Mesh",
       },
       facts: (d) => [
         {
-          id: "conformity",
-          label: "Conformity",
-          value: d.interfaceConformity === "conforming" ? "Conforming" : "Mortar",
+          id: "hmax",
+          label: "Global h_max",
+          value: d.hMax === "auto" ? "Auto" : formatLengthSmart(asNumber(d.hMax)),
         },
         {
-          id: "tol",
-          label: "Weld tolerance",
-          value: formatLengthSmart(d.interfaceToleranceM),
+          id: "nodes",
+          label: "Nodes",
+          value:
+            counts?.node_count != null
+              ? counts.node_count.toLocaleString("en-US")
+              : null,
         },
         {
-          id: "pbc",
-          label: "Periodic axes",
-          value: d.periodicAxes.length > 0 ? d.periodicAxes.join(", ").toUpperCase() : "Open",
+          id: "elements",
+          label: "Elements",
+          value:
+            counts?.element_count != null
+              ? counts.element_count.toLocaleString("en-US")
+              : null,
         },
         {
-          id: "pairs",
-          label: "Periodic pairs",
-          value: periodicPairs.length > 0 ? String(periodicPairs.length) : null,
+          id: "parts",
+          label: "Mesh parts",
+          value:
+            manifestRec?.mesh_parts != null
+              ? String(manifestRec.mesh_parts.length)
+              : null,
         },
       ],
       sections: [
         {
           defaultOpen: true,
-          icon: Layers,
-          id: "assembly",
+          footer: (ctx) => (
+            <div className="flex flex-wrap gap-2">
+              <Button
+                size="sm"
+                type="button"
+                variant="secondary"
+                onClick={() => {
+                  const policyEffective = asRecord(
+                    asRecord(policy.data)?.effective_config,
+                  );
+                  const eff = draftFromEffectiveSharedDomainResource(
+                    policy.data
+                      ? {
+                          config: policyEffective ?? policy.data.config ?? null,
+                          effective_config: policyEffective ?? null,
+                          revision: policy.data.revision,
+                        }
+                      : null,
+                  );
+                  ctx.patchDraft({
+                    configText: eff.configText,
+                    curvatureFactor: eff.curvatureFactor,
+                    growthRate: eff.growthRate,
+                    hMax: eff.hMax,
+                    hMin: eff.hMin,
+                    narrowRegionResolution: eff.narrowRegionResolution,
+                    optimize: eff.optimize,
+                    optimizeMethod: eff.optimizeMethod || "Netgen",
+                  });
+                }}
+              >
+                Load Effective Defaults
+              </Button>
+              <Button
+                size="sm"
+                type="button"
+                variant="secondary"
+                onClick={() => {
+                  void kernel.commands.execute(
+                    "mesh.build-shared-domain",
+                    createCommandContext("inspector", kernel, {
+                      sessionScopeKey: sessionScopeKey ?? null,
+                      sourceDetail: "mesh.shared-domain.footer",
+                    }),
+                  );
+                }}
+              >
+                Build Shared-Domain Mesh
+              </Button>
+            </div>
+          ),
+          icon: Ruler,
+          id: "shared-domain-policy",
           rows: [
             {
-              key: "interfaceConformity",
-              label: "Interface conformity",
-              options: [
-                { label: "Conforming shared facets", value: "conforming" },
-                { label: "Non-conforming mortar", value: "mortar" },
-              ],
-              type: "segmented",
-            },
-            {
-              defaultDisplayUnit: "nm",
-              key: "interfaceToleranceM",
-              label: "Boolean fragment tolerance",
-              min: 1e-14,
-              minExclusive: true,
-              scrub: "log",
+              hint: "Positive length in meters or 'auto'",
+              key: "hMax",
+              label: "Global max element size (m)",
+              mono: true,
+              placeholder: "e.g. 5e-9 or auto",
               symbol: (
                 <>
-                  &epsilon;<sub>weld</sub>
+                  h<sub>max</sub>
                 </>
               ),
-              type: "quantity",
-              units: LENGTH_UNITS,
+              type: "text",
+            },
+            {
+              key: "hMin",
+              label: "Global min element size (m)",
+              mono: true,
+              placeholder: "e.g. 1e-9",
+              symbol: (
+                <>
+                  h<sub>min</sub>
+                </>
+              ),
+              type: "text",
+            },
+            {
+              key: "growthRate",
+              label: "Element growth rate",
+              mono: true,
+              placeholder: "e.g. 1.3",
+              symbol: <>g</>,
+              type: "text",
+            },
+            {
+              key: "curvatureFactor",
+              label: "Curvature factor",
+              mono: true,
+              placeholder: "e.g. 0.2",
+              symbol: <>&kappa;</>,
+              type: "text",
+            },
+            {
+              key: "narrowRegionResolution",
+              label: "Narrow region resolution",
+              mono: true,
+              placeholder: "e.g. 2",
+              type: "text",
+            },
+            {
+              key: "optimize",
+              label: "Optimize tetrahedral quality",
+              structural: true,
+              type: "switch",
+            },
+            {
+              key: "optimizeMethod",
+              label: "Gmsh optimizer",
+              options: [
+                { label: "Netgen", value: "Netgen" },
+                { label: "HighOrder", value: "HighOrder" },
+                { label: "Relocate3D", value: "Relocate3D" },
+              ],
+              showWhen: (d) => d.optimize,
+              type: "select",
             },
           ],
-          title: "Boolean fragment & interface conformity",
+          title: "Shared-domain mesh policy",
+        },
+        {
+          defaultOpen: true,
+          icon: ShieldCheck,
+          id: "solver-mesh-identity",
+          rows: [
+            {
+              format: () => manifestRec?.mesh_name ?? "Not built",
+              label: "Mesh name",
+              type: "readonly",
+            },
+            {
+              format: () => manifestRec?.mesh_id ?? "None",
+              label: "Mesh ID",
+              mono: true,
+              type: "readonly",
+            },
+            {
+              format: () => manifestRec?.generation_id ?? "No generation",
+              label: "Generation",
+              mono: true,
+              type: "readonly",
+            },
+            {
+              format: () =>
+                sanitizeMeshDisplayText(manifestRec?.domain_mesh_mode, "shared-domain"),
+              label: "Domain mode",
+              type: "readonly",
+            },
+            {
+              format: () =>
+                manifestRec?.source_scene_revision != null
+                  ? String(manifestRec.source_scene_revision)
+                  : "Not published",
+              label: "Source scene revision",
+              mono: true,
+              type: "readonly",
+            },
+            {
+              format: () =>
+                manifestRec?.geometry_realization_revision != null
+                  ? String(manifestRec.geometry_realization_revision)
+                  : "Not published",
+              label: "Geometry realization revision",
+              mono: true,
+              type: "readonly",
+            },
+            {
+              format: () => String(manifestRec?.mesh_parts?.length ?? 0),
+              label: "Mesh parts",
+              mono: true,
+              type: "readonly",
+            },
+            {
+              format: () => String(manifestRec?.object_segments?.length ?? 0),
+              label: "Object segments",
+              mono: true,
+              type: "readonly",
+            },
+            {
+              format: () => String(manifestRec?.regions?.length ?? 0),
+              label: "Regions",
+              mono: true,
+              type: "readonly",
+            },
+          ],
+          title: "Solver mesh identity",
+        },
+        {
+          defaultOpen: true,
+          icon: Layers,
+          id: "mesh-counts-extents",
+          rows: [
+            {
+              format: () => formatCountClean(counts?.node_count),
+              label: "Nodes",
+              mono: true,
+              type: "readonly",
+            },
+            {
+              format: () => formatCountClean(counts?.element_count),
+              label: "Elements",
+              mono: true,
+              type: "readonly",
+            },
+            {
+              format: () => formatCountClean(counts?.boundary_face_count),
+              label: "Boundary faces",
+              mono: true,
+              type: "readonly",
+            },
+            {
+              format: () => (counts ? "Shared-domain manifest" : "Not published"),
+              label: "Count source",
+              type: "readonly",
+            },
+            {
+              format: () =>
+                formatLengthSmart(
+                  qualityStats?.edgeLength?.min ??
+                    asNumber(recordField(asRecord(meshStatistics), "min_edge_length")),
+                ) ?? "Not published",
+              label: "Min edge",
+              mono: true,
+              type: "readonly",
+            },
+            {
+              format: () =>
+                formatLengthSmart(
+                  qualityStats?.edgeLength?.max ??
+                    asNumber(recordField(asRecord(meshStatistics), "max_edge_length")),
+                ) ?? "Not published",
+              label: "Max edge",
+              mono: true,
+              type: "readonly",
+            },
+            {
+              format: () =>
+                formatLengthSmart(
+                  qualityStats?.edgeLength?.mean ??
+                    asNumber(recordField(asRecord(meshStatistics), "mean_edge_length")),
+                ) ?? "Not published",
+              label: "Mean edge",
+              mono: true,
+              type: "readonly",
+            },
+          ],
+          title: "Counts & extents",
         },
         {
           defaultOpen: true,
           icon: Activity,
-          id: "periodic-floquet",
+          id: "mixed-topology-provenance",
           rows: [
             {
-              key: "periodicAxes",
-              label: "Periodic master/slave axes",
-              options: [
-                { label: "X", value: "x" },
-                { label: "Y", value: "y" },
-                { label: "Z", value: "z" },
-              ],
-              structural: true,
-              type: "toggles",
-            },
-            {
-              key: "floquetPhaseXDeg",
-              label: "Floquet phase along X",
-              max: 180,
-              min: -180,
-              showWhen: (d) => d.periodicAxes.includes("x"),
-              step: 1,
-              symbol: (
-                <>
-                  &psi;<sub>x</sub>
-                </>
-              ),
-              type: "number",
-              unitSuffix: "deg",
-            },
-            {
-              key: "floquetPhaseYDeg",
-              label: "Floquet phase along Y",
-              max: 180,
-              min: -180,
-              showWhen: (d) => d.periodicAxes.includes("y"),
-              step: 1,
-              symbol: (
-                <>
-                  &psi;<sub>y</sub>
-                </>
-              ),
-              type: "number",
-              unitSuffix: "deg",
-            },
-            {
-              columns: [
-                {
-                  header: "Axis",
-                  id: "axis",
-                  renderCell: (row) => String((row as JsonRecord).axis ?? "X"),
-                },
-                {
-                  align: "right",
-                  header: "Matched nodes",
-                  id: "count",
-                  mono: true,
-                  renderCell: (row) =>
-                    String((row as JsonRecord).matched_nodes ?? 0),
-                },
-                {
-                  align: "right",
-                  header: "Max residual",
-                  id: "residual",
-                  mono: true,
-                  renderCell: (row) =>
-                    formatLengthSmart(asNumber((row as JsonRecord).max_residual_m)) ?? "0 nm",
-                },
-              ],
-              label: "Matched periodic node pairs",
-              rowKey: (row) => String((row as JsonRecord).id ?? (row as JsonRecord).axis ?? "0"),
-              rows: () => periodicPairs as JsonRecord[],
-              showWhen: () => periodicPairs.length > 0,
-              type: "table",
+              render: () => <MixedTopologyProvenanceSpecView model={mixedTopology} />,
+              type: "custom",
               wide: true,
             },
           ],
-          title: "Periodic & Floquet boundary pairs",
+          showWhen: () => mixedTopology.visible,
+          title: "Mixed-topology provenance",
+        },
+        {
+          defaultOpen: false,
+          icon: Box,
+          id: "viewport-delivery",
+          rows: [
+            {
+              format: () =>
+                summary.data?.revision != null
+                  ? String(summary.data.revision)
+                  : "Not published",
+              label: "Backend mesh revision",
+              mono: true,
+              type: "readonly",
+            },
+            {
+              format: () => manifestRec?.generation_id ?? "Not published",
+              label: "Generation",
+              mono: true,
+              type: "readonly",
+            },
+            {
+              format: () => sanitizeMeshDisplayText(manifest.status, "ready"),
+              label: "Manifest state",
+              type: "readonly",
+            },
+            {
+              format: () => "Tracked in Mesh Jobs",
+              label: "Viewport acknowledgement",
+              type: "readonly",
+            },
+          ],
+          title: "Viewport delivery",
+        },
+        {
+          defaultOpen: false,
+          icon: Settings2,
+          id: "editor-capabilities",
+          rows: [
+            {
+              render: () => <MeshEditorCapabilitiesSpecView model={editorCapabilities} />,
+              type: "custom",
+              wide: true,
+            },
+          ],
+          title: "Mesh editor capabilities",
         },
       ],
       commitBar: {
-        cleanMessage: () => "Shared-domain assembly policy is synchronized",
+        cleanMessage: () => "Shared-domain mesh policy is synchronized",
         mode: "staged",
         onApply: async (draft) => {
-          const existing = asRecord(policy.data?.config) ?? {};
-          await kernel.api.meshing.sharedDomain.replacePolicy(
-            {
-              base_revision: policy.data?.revision ?? 0,
-              config: {
-                ...existing,
-                floquet_phase_x_deg: draft.floquetPhaseXDeg,
-                floquet_phase_y_deg: draft.floquetPhaseYDeg,
-                interface_conformity: draft.interfaceConformity,
-                interface_tolerance_m: draft.interfaceToleranceM,
-                periodic_axes: [...draft.periodicAxes],
-              } as JsonObject,
-            } as never,
-            { sessionScopeKey },
+          const built = buildSharedDomainPolicyConfig({
+            authoredPresent: true,
+            configText: draft.configText,
+            curvatureFactor: draft.curvatureFactor,
+            growthRate: draft.growthRate,
+            hMax: draft.hMax,
+            hMin: draft.hMin,
+            narrowRegionResolution: draft.narrowRegionResolution,
+            optimize: draft.optimize,
+            optimizeMethod: draft.optimizeMethod || "Netgen",
+          });
+          if (!built.ok) {
+            throw new Error(built.error);
+          }
+          const next = await kernel.api.meshing.sharedDomain.replacePolicy(
+            { config: built.config },
+            sessionScopeKey ? { sessionScopeKey } : undefined,
           );
-          kernel.resources.invalidate(MESH_SHARED_DOMAIN_POLICY_RESOURCE_KEY, `w5:${Date.now()}`);
+          const nextRev =
+            typeof next?.revision === "number" ? next.revision : `w5:${Date.now()}`;
+          if (sessionScopeKey && next && typeof next.revision === "number") {
+            meshPolicyResourceCache.publishCommittedMeshPolicyResource?.(
+              kernel.resources,
+              geometryLifecycleResources.MESH_SHARED_DOMAIN_POLICY_RESOURCE_KEY,
+              sessionScopeKey,
+              next,
+              kernel.api.resourceCacheScope,
+            );
+          }
+          kernel.resources.invalidate(
+            geometryLifecycleResources.MESH_SHARED_DOMAIN_POLICY_RESOURCE_KEY,
+            nextRev,
+          );
+          kernel.resources.invalidate(
+            geometryLifecycleResources.MESH_SEMANTICS_RESOURCE_KEY,
+            nextRev,
+          );
+          kernel.resources.invalidate(
+            geometryLifecycleResources.SCENE_RESOURCE_KEY,
+            `mesh-policy:shared-domain:${String(nextRev)}`,
+          );
+          kernel.resources.invalidate(
+            SESSION_STATUS_KEY,
+            `mesh-policy:shared-domain:${String(nextRev)}`,
+          );
           return true;
         },
       },
     };
   }, [
-    kernel.api.meshing.sharedDomain,
-    kernel.resources,
+    counts,
+    editorCapabilities,
+    kernel,
     manifest.data,
+    manifest.status,
+    meshStatistics,
+    mixedTopology,
     policy.data,
+    qualityStats,
     sessionScopeKey,
+    summary.data,
   ]);
 
-  return <SpecInspectorHost baseline={baseline} selection={selection} spec={spec} />;
+  return (
+    <SpecInspectorHost
+      baseline={baseline}
+      selection={selection}
+      spec={spec}
+      onAfterFieldChange={handleAfterFieldChange}
+    />
+  );
 }
 
 // ============================================================================
@@ -1460,42 +1917,62 @@ export function MeshSharedDomainInspectorSpecPanel({
 // ============================================================================
 
 interface SizeFieldsDraft {
-  ownerFilter: string;
+  sourceFilter: string;
 }
 
 export function MeshSizeFieldsInspectorSpecPanel({
   selection,
 }: InspectorPanelProps): ReactNode {
-  const sizeFieldsRes = useMeshSharedDomainRealizedSizeFieldsResource();
+  const sizeFieldsRes =
+    geometryLifecycleResources.useMeshSharedDomainRealizedSizeFieldsResource();
+  const activeBuild = geometryLifecycleResources.useMeshBuildCurrent();
+
   const rawFields = useMemo(() => {
     const rec = asRecord(sizeFieldsRes.data);
-    const list = Array.isArray(rec?.fields)
-      ? rec.fields
-      : Array.isArray(rec?.size_fields)
-        ? rec.size_fields
-        : [];
+    const nested = asRecord(rec?.realized_size_fields);
+    const list = Array.isArray(nested?.fields)
+      ? nested.fields
+      : Array.isArray(rec?.fields)
+        ? rec.fields
+        : Array.isArray(rec?.size_fields)
+          ? rec.size_fields
+          : [];
     return list.map((item, index) => {
       const r = asRecord(item) ?? {};
+      const params = r.params;
+      const summary = sizeFieldParamSummary(params);
+      const source =
+        asString(r.source) ??
+        asString(r.owner_object_id) ??
+        asString(r.owner) ??
+        "shared-domain";
+      const objectMatch = source.match(/^(?:object|object_mesh):(.+)$/);
       return {
-        bandM: asNumber(r.distance_max_m) ?? asNumber(r.band_m),
-        hmaxM: asNumber(r.h_max_m) ?? asNumber(r.maximum_element_size),
-        hminM: asNumber(r.h_min_m) ?? asNumber(r.minimum_element_size),
-        id: asString(r.id) ?? `sf-${index}`,
+        id: asString(r.id) ?? `${asString(r.kind) ?? "field"}-${source}-${index}`,
         kind: asString(r.kind) ?? "SizeField",
-        owner: asString(r.owner_object_id) ?? asString(r.owner) ?? "shared-domain",
+        objectId: objectMatch?.[1] ?? asString(r.owner_object_id) ?? null,
+        paramSummary: summary ?? sanitizeMeshDisplayText(r.reason ?? source, "applied"),
+        source,
+        status: sanitizeMeshDisplayText(r.status, "applied"),
       };
     });
   }, [sizeFieldsRes.data]);
 
-  const ownerOptions = useMemo(() => {
-    const owners = Array.from(new Set(rawFields.map((f) => f.owner)));
+  const thinFilmDiagnostics = useMemo(
+    () =>
+      activeBuild.data?.shared_domain_build_report?.thin_film_diagnostics ?? [],
+    [activeBuild.data],
+  );
+
+  const sourceOptions = useMemo(() => {
+    const sources = Array.from(new Set(rawFields.map((f) => f.source)));
     return [
-      { label: "All objects & Airbox", value: "all" },
-      ...owners.map((owner) => ({ label: owner, value: owner })),
+      { label: "All sources", value: "all" },
+      ...sources.map((src) => ({ label: src, value: src })),
     ];
   }, [rawFields]);
 
-  const baseline = useMemo<SizeFieldsDraft>(() => ({ ownerFilter: "all" }), []);
+  const baseline = useMemo<SizeFieldsDraft>(() => ({ sourceFilter: "all" }), []);
 
   const spec = useMemo<InspectorSpec<SizeFieldsDraft>>(
     () => ({
@@ -1520,7 +1997,7 @@ export function MeshSizeFieldsInspectorSpecPanel({
         domain: "mesh",
         entityId: "model:mesh:size-fields",
         icon: Ruler,
-        kindLabel: "Realized Gmsh size fields",
+        kindLabel: "Realized Gmsh size fields & thin-film diagnostics",
         statePill: () =>
           rawFields.length > 0
             ? { label: `${rawFields.length} active`, tone: "ok" }
@@ -1530,9 +2007,14 @@ export function MeshSizeFieldsInspectorSpecPanel({
       facts: () => [
         { id: "count", label: "Realized fields", value: String(rawFields.length) },
         {
-          id: "owners",
-          label: "Distinct owners",
-          value: String(Math.max(0, ownerOptions.length - 1)),
+          id: "sources",
+          label: "Distinct sources",
+          value: String(Math.max(0, sourceOptions.length - 1)),
+        },
+        {
+          id: "thin-film",
+          label: "Thin-film checks",
+          value: String(thinFilmDiagnostics.length),
         },
       ],
       sections: [
@@ -1551,61 +2033,53 @@ export function MeshSizeFieldsInspectorSpecPanel({
           id: "fields-table",
           rows: [
             {
-              key: "ownerFilter",
-              label: "Filter by owner",
-              options: ownerOptions,
+              key: "sourceFilter",
+              label: "Filter by source",
+              options: sourceOptions,
               showWhen: () => rawFields.length > 0,
               type: "select",
             },
             {
               columns: [
                 {
-                  header: "Owner & kind",
-                  id: "owner",
+                  header: "Kind & source",
+                  id: "kind",
                   renderCell: (row) => {
                     const r = row as (typeof rawFields)[number];
-                    return `${r.owner} · ${r.kind}`;
+                    return `${r.kind} · ${r.source}`;
                   },
                 },
                 {
-                  align: "right",
-                  header: "h_min → h_max",
-                  id: "range",
-                  mono: true,
-                  renderCell: (row) => {
-                    const r = row as (typeof rawFields)[number];
-                    return `${formatLengthSmart(r.hminM) ?? "—"} → ${formatLengthSmart(r.hmaxM) ?? "—"}`;
-                  },
+                  header: "Status",
+                  id: "status",
+                  renderCell: (row) => (row as (typeof rawFields)[number]).status,
                 },
                 {
                   align: "right",
-                  header: "Band d",
-                  id: "band",
+                  header: "Parameters",
+                  id: "params",
                   mono: true,
-                  renderCell: (row) => {
-                    const r = row as (typeof rawFields)[number];
-                    return formatLengthSmart(r.bandM) ?? "Global";
-                  },
+                  renderCell: (row) => (row as (typeof rawFields)[number]).paramSummary,
                 },
               ],
               label: "Realized size fields",
               onSelectRow: (row, ctx) => {
                 const r = row as (typeof rawFields)[number];
-                if (r.owner && r.owner !== "shared-domain" && r.owner !== "airbox") {
+                if (r.objectId) {
                   ctx.selectNode({
                     kind: "object.mesh",
                     label: "Mesh",
-                    nodeId: `model:object:${r.owner}:mesh`,
-                    objectId: r.owner,
+                    nodeId: `model:object:${r.objectId}:mesh`,
+                    objectId: r.objectId,
                     ref: null,
                   });
                 }
               },
               rowKey: (row) => (row as (typeof rawFields)[number]).id,
               rows: (d) =>
-                d.ownerFilter === "all"
+                d.sourceFilter === "all"
                   ? rawFields
-                  : rawFields.filter((f) => f.owner === d.ownerFilter),
+                  : rawFields.filter((f) => f.source === d.sourceFilter),
               showWhen: () => rawFields.length > 0,
               type: "table",
               wide: true,
@@ -1613,13 +2087,28 @@ export function MeshSizeFieldsInspectorSpecPanel({
           ],
           title: "Realized size fields",
         },
+        {
+          defaultOpen: true,
+          icon: Layers,
+          id: "thin-film-diagnostics",
+          rows: [
+            {
+              render: () => (
+                <ThinFilmDiagnosticsSpecView diagnostics={thinFilmDiagnostics} />
+              ),
+              type: "custom",
+              wide: true,
+            },
+          ],
+          title: "Thin-film diagnostics",
+        },
       ],
       commitBar: {
         mode: "readOnly",
-        statusMessage: () => "Click an object row to edit its source mesh policy",
+        statusMessage: () => "Click an object-scoped row to edit its source mesh policy",
       },
     }),
-    [ownerOptions, rawFields],
+    [rawFields, sourceOptions, thinFilmDiagnostics],
   );
 
   return <SpecInspectorHost baseline={baseline} selection={selection} spec={spec} />;
@@ -1630,15 +2119,35 @@ export function MeshSizeFieldsInspectorSpecPanel({
 // ============================================================================
 
 interface MeshRegionsDraft {
+  selectedPartId: string;
   highlightSelectedPart: boolean;
   deviationFilter: "all" | "deviations_only";
+}
+
+interface HierarchyRow {
+  id: string;
+  depth: number;
+  kindLabel: string;
+  label: string;
+  elementsText: string;
+  jumpSelection: {
+    kind: string;
+    label: string;
+    nodeId: string;
+    objectId: string | null;
+    ref: null;
+  } | null;
 }
 
 export function MeshRegionsInspectorSpecPanel({
   selection,
 }: InspectorPanelProps): ReactNode {
-  const manifest = useMeshSharedDomainManifestResource();
-  const semantics = useMeshSemanticsResource();
+  const kernel = useKernel();
+  const scene = geometryLifecycleResources.useSceneResource();
+  const manifest = geometryLifecycleResources.useMeshSharedDomainManifestResource();
+  const semantics = geometryLifecycleResources.useMeshSemanticsResource();
+  const activeBuild = geometryLifecycleResources.useMeshBuildCurrent();
+  const latestBuild = useSafeMeshBuildLatestSuccessful();
 
   const parts = useMemo(() => {
     const rec = asRecord(manifest.data);
@@ -1650,36 +2159,200 @@ export function MeshRegionsInspectorSpecPanel({
         id: asString(p.part_id) ?? asString(p.id) ?? `part-${idx}`,
         label: asString(p.label) ?? asString(p.name) ?? `Part ${idx + 1}`,
         ownerId: asString(p.owner_object_id),
+        regionId: asString(p.region_id),
+        role: asString(p.role),
       };
     });
   }, [manifest.data]);
 
-  const comparisons = useMemo(() => {
+  const hierarchyRows = useMemo<HierarchyRow[]>(() => {
+    const rows: HierarchyRow[] = [];
+    const objs = Array.isArray(scene.data?.objects) ? scene.data.objects : [];
+    const manifestRegions = Array.isArray(manifest.data?.regions)
+      ? manifest.data.regions.map(asRecord).filter(Boolean)
+      : [];
+
+    for (const rawObj of objs) {
+      const obj = asRecord(rawObj);
+      const objId = asString(obj?.id);
+      if (!objId) continue;
+      const objName = asString(obj?.name) ?? objId;
+      const objParts = parts.filter((p) => p.ownerId === objId);
+      const objElemSum = objParts.reduce((acc, p) => acc + p.elementCount, 0);
+      rows.push({
+        depth: 0,
+        elementsText: objElemSum > 0 ? objElemSum.toLocaleString("en-US") : "—",
+        id: `obj:${objId}`,
+        jumpSelection: {
+          kind: "object.mesh",
+          label: `${objName} Mesh`,
+          nodeId: `model:object:${objId}:mesh`,
+          objectId: objId,
+          ref: null,
+        },
+        kindLabel: "Object",
+        label: objName,
+      });
+
+      const authoredRegions = Array.isArray(obj?.regions)
+        ? obj.regions.map(asRecord).filter(Boolean)
+        : [];
+      for (const reg of authoredRegions) {
+        const regId = asString(reg?.id);
+        if (!regId) continue;
+        const regName = asString(reg?.name) ?? regId;
+        const regParts = objParts.filter((p) => p.regionId === regId);
+        const regElems = regParts.reduce((acc, p) => acc + p.elementCount, 0);
+        rows.push({
+          depth: 1,
+          elementsText: regElems > 0 ? regElems.toLocaleString("en-US") : "—",
+          id: `reg:${objId}:${regId}`,
+          jumpSelection: {
+            kind: "object.region.mesh",
+            label: `${regName} Mesh`,
+            nodeId: `model:object:${objId}:region:${regId}:mesh`,
+            objectId: objId,
+            ref: null,
+          },
+          kindLabel: "Region",
+          label: `↳ ${regName}`,
+        });
+      }
+
+      for (const mReg of manifestRegions) {
+        if (asString(mReg?.owner_object_id) !== objId) continue;
+        const mRegId = asString(mReg?.region_id) ?? asString(mReg?.id);
+        if (!mRegId || rows.some((r) => r.id === `reg:${objId}:${mRegId}`)) continue;
+        rows.push({
+          depth: 1,
+          elementsText: formatCountClean(asNumber(mReg?.element_count)),
+          id: `mreg:${objId}:${mRegId}`,
+          jumpSelection: null,
+          kindLabel: "Realized region",
+          label: `↳ ${asString(mReg?.label) ?? mRegId}`,
+        });
+      }
+
+      for (const part of objParts) {
+        rows.push({
+          depth: 2,
+          elementsText: part.elementCount.toLocaleString("en-US"),
+          id: `part:${part.id}`,
+          jumpSelection: null,
+          kindLabel: "Mesh part",
+          label: `  ↳ ${part.label}`,
+        });
+      }
+    }
+
+    const exteriorParts = parts.filter((p) => !p.ownerId);
+    for (const part of exteriorParts) {
+      rows.push({
+        depth: 0,
+        elementsText: part.elementCount.toLocaleString("en-US"),
+        id: `ext:${part.id}`,
+        jumpSelection:
+          part.role === "airbox"
+            ? {
+                kind: "airbox.mesh",
+                label: "Airbox Mesh",
+                nodeId: "model:airbox:mesh",
+                objectId: null,
+                ref: null,
+              }
+            : {
+                kind: "mesh.unassigned.part",
+                label: part.label,
+                nodeId: `model:mesh:unassigned:${encodeURIComponent(part.id)}`,
+                objectId: null,
+                ref: null,
+              },
+        kindLabel: part.role === "airbox" ? "Airbox" : "Unassigned part",
+        label: part.label,
+      });
+    }
+    return rows;
+  }, [manifest.data, parts, scene.data]);
+
+  const policyDiffRows = useMemo<MeshPolicyDiffRow[]>(() => {
+    const sharedRows = buildSharedDomainPolicyDiffRows({
+      activeBuild: activeBuild.data?.active_build,
+      latestBuild: latestBuild.data?.last_success,
+      semantics: semantics.data,
+    });
     const rec = asRecord(semantics.data);
     const configs = Array.isArray(rec?.object_configs) ? rec.object_configs : [];
-    return configs.map((entry, idx) => {
+    const objectRows: MeshPolicyDiffRow[] = [];
+    for (const entry of configs) {
       const item = asRecord(entry) ?? {};
-      const cfg = asRecord(item.config);
-      const eff = asRecord(item.effective_config);
-      const authored = asNumber(cfg?.maximum_element_size);
-      const realized = asNumber(eff?.maximum_element_size);
-      const diffRatio =
-        authored && realized && authored > 0
-          ? Math.abs(realized - authored) / authored
-          : 0;
-      return {
-        authored,
-        deviation: diffRatio > 0.15,
-        id: asString(item.object_id) ?? `obj-${idx}`,
-        realized,
-        status: diffRatio > 0.15 ? "Clamped" : "Matched",
-      };
-    });
-  }, [semantics.data]);
+      const objId = asString(item.object_id) ?? "object";
+      const cfg = asRecord(item.config) as JsonObject | null;
+      const eff = asRecord(item.effective_config) as JsonObject | null;
+      if (!cfg && !eff) continue;
+      const diffed = diffMeshPolicies({
+        current: cfg,
+        draft: cfg,
+        realized: eff,
+        scope: "object",
+      }).map((row) => ({
+        ...row,
+        label: `${objId} · ${row.label}`,
+      }));
+      objectRows.push(...diffed);
+    }
+    return [...sharedRows, ...objectRows];
+  }, [activeBuild.data?.active_build, latestBuild.data?.last_success, semantics.data]);
+
+  const partOptions = useMemo(
+    () =>
+      parts.length > 0
+        ? parts.map((p) => ({ label: p.label, value: p.id }))
+        : [{ label: "No mesh parts built", value: "" }],
+    [parts],
+  );
 
   const baseline = useMemo<MeshRegionsDraft>(
-    () => ({ deviationFilter: "all", highlightSelectedPart: false }),
-    [],
+    () => ({
+      deviationFilter: "all",
+      highlightSelectedPart: false,
+      selectedPartId: parts[0]?.id ?? "",
+    }),
+    [parts],
+  );
+
+  const applyPartHighlight = useCallback(
+    (partId: string, highlight: boolean) => {
+      if (!kernel.visualization?.patchTarget || !partId) return;
+      for (const p of parts) {
+        if (p.id === partId && highlight) {
+          kernel.visualization.patchTarget(
+            { id: p.id, kind: "part", label: p.label },
+            { boundsVisible: true, visible: true, wireframeVisible: true },
+          );
+        } else {
+          kernel.visualization.clearTarget?.({
+            id: p.id,
+            kind: "part",
+            label: p.label,
+          });
+        }
+      }
+    },
+    [kernel.visualization, parts],
+  );
+
+  const handleLiveChange = useCallback(
+    <K extends keyof MeshRegionsDraft & string>(
+      key: K,
+      value: MeshRegionsDraft[K],
+    ) => {
+      if (key === "highlightSelectedPart") {
+        applyPartHighlight(parts[0]?.id ?? "", Boolean(value));
+      } else if (key === "selectedPartId") {
+        applyPartHighlight(String(value), true);
+      }
+    },
+    [applyPartHighlight, parts],
   );
 
   const spec = useMemo<InspectorSpec<MeshRegionsDraft>>(
@@ -1706,7 +2379,7 @@ export function MeshRegionsInspectorSpecPanel({
         domain: "mesh",
         entityId: "model:mesh:regions",
         icon: Layers,
-        kindLabel: "Physical mesh groups & policy comparison",
+        kindLabel: "Region hierarchy, physical parts & policy comparison",
         statePill: () =>
           parts.length > 0
             ? { label: `${parts.length} parts`, tone: "ok" }
@@ -1715,25 +2388,32 @@ export function MeshRegionsInspectorSpecPanel({
       },
       facts: () => [
         { id: "parts", label: "Mesh parts", value: String(parts.length) },
-        { id: "configs", label: "Object policies", value: String(comparisons.length) },
+        { id: "hierarchy", label: "Hierarchy nodes", value: String(hierarchyRows.length) },
         {
           id: "diffs",
           label: "Policy diffs",
-          value: String(comparisons.filter((c) => c.deviation).length),
+          value: String(policyDiffRows.filter((r) => r.state !== "unchanged").length),
         },
       ],
       modeTabs: [
-        { id: "parts", label: "Regions & Parts" },
-        { id: "comparison", label: "Policy vs Realized" },
+        { id: "parts", label: "Hierarchy & Parts" },
+        { id: "comparison", label: "Policy Comparison" },
       ],
       sections: [
         {
           defaultOpen: true,
           icon: Layers,
-          id: "parts-section",
+          id: "region-hierarchy-section",
           live: true,
           modeTabId: "parts",
           rows: [
+            {
+              key: "selectedPartId",
+              label: "Target part",
+              options: partOptions,
+              showWhen: () => parts.length > 0,
+              type: "select",
+            },
             {
               key: "highlightSelectedPart",
               label: "Highlight selected part in 3D",
@@ -1742,33 +2422,38 @@ export function MeshRegionsInspectorSpecPanel({
             {
               columns: [
                 {
-                  header: "Part / Region",
+                  header: "Domain / Object / Region / Part",
                   id: "label",
-                  renderCell: (r) => (r as (typeof parts)[number]).label,
+                  renderCell: (r) => (r as HierarchyRow).label,
                 },
                 {
-                  header: "Owner",
-                  id: "owner",
-                  mono: true,
-                  renderCell: (r) => (r as (typeof parts)[number]).ownerId ?? "exterior",
+                  header: "Kind",
+                  id: "kind",
+                  renderCell: (r) => (r as HierarchyRow).kindLabel,
                 },
                 {
                   align: "right",
                   header: "Elements",
                   id: "elements",
                   mono: true,
-                  renderCell: (r) =>
-                    (r as (typeof parts)[number]).elementCount.toLocaleString("en-US"),
+                  renderCell: (r) => (r as HierarchyRow).elementsText,
                 },
               ],
-              label: "Physical mesh parts",
-              rowKey: (r) => (r as (typeof parts)[number]).id,
-              rows: () => parts,
+              label: "Mesh region & part hierarchy",
+              onSelectRow: (r, ctx) => {
+                const row = r as HierarchyRow;
+                if (row.jumpSelection) {
+                  ctx.selectNode(row.jumpSelection);
+                }
+              },
+              rowKey: (r) => (r as HierarchyRow).id,
+              rows: () => hierarchyRows,
+              showWhen: () => hierarchyRows.length > 0,
               type: "table",
               wide: true,
             },
           ],
-          title: "Realized physical groups",
+          title: "Region & physical part hierarchy",
         },
         {
           defaultOpen: true,
@@ -1781,141 +2466,217 @@ export function MeshRegionsInspectorSpecPanel({
               label: "Filter comparison",
               options: [
                 { label: "All parameters", value: "all" },
-                { label: "Deviations > 15% only", value: "deviations_only" },
+                { label: "Deviations only", value: "deviations_only" },
               ],
               type: "segmented",
             },
             {
               columns: [
                 {
-                  header: "Target",
-                  id: "target",
-                  mono: true,
-                  renderCell: (r) => (r as (typeof comparisons)[number]).id,
-                },
-                {
-                  align: "right",
-                  header: "Authored → Realized",
-                  id: "values",
-                  mono: true,
+                  header: "Parameter",
+                  id: "param",
                   renderCell: (r) => {
-                    const row = r as (typeof comparisons)[number];
-                    return `${formatLengthSmart(row.authored) ?? "Inherited"} → ${formatLengthSmart(row.realized) ?? "—"}`;
+                    const row = r as MeshPolicyDiffRow;
+                    return `${row.scope} · ${row.label}`;
                   },
                 },
                 {
                   align: "right",
-                  header: "Status",
-                  id: "status",
-                  renderCell: (r) => (r as (typeof comparisons)[number]).status,
+                  header: "Current / Draft",
+                  id: "current",
+                  mono: true,
+                  renderCell: (r) => {
+                    const row = r as MeshPolicyDiffRow;
+                    return row.currentValue === row.draftValue
+                      ? sanitizeMeshDisplayText(row.currentValue, "—")
+                      : `${sanitizeMeshDisplayText(row.currentValue, "—")} → ${sanitizeMeshDisplayText(row.draftValue, "—")}`;
+                  },
+                },
+                {
+                  align: "right",
+                  header: "Realized",
+                  id: "realized",
+                  mono: true,
+                  renderCell: (r) =>
+                    sanitizeMeshDisplayText((r as MeshPolicyDiffRow).realizedValue, "—"),
+                },
+                {
+                  align: "right",
+                  header: "Impact",
+                  id: "impact",
+                  renderCell: (r) =>
+                    sanitizeMeshDisplayText((r as MeshPolicyDiffRow).impact, "—"),
                 },
               ],
-              label: "Policy vs realized h_max",
-              rowKey: (r) => (r as (typeof comparisons)[number]).id,
+              label: "Policy vs realized mesh diff",
+              rowKey: (r) => {
+                const row = r as MeshPolicyDiffRow;
+                return `${row.scope}:${row.path}`;
+              },
               rows: (d) =>
                 d.deviationFilter === "deviations_only"
-                  ? comparisons.filter((c) => c.deviation)
-                  : comparisons,
+                  ? policyDiffRows.filter((r) => r.state !== "unchanged")
+                  : policyDiffRows,
               type: "table",
               wide: true,
             },
           ],
-          title: "Authored policy vs realized mesh",
+          title: "Policy comparison (Current · Draft · Realized · Impact)",
         },
       ],
       commitBar: {
         hasOverrides: (d, b) => d.highlightSelectedPart !== b.highlightSelectedPart,
         mode: "liveViewport",
-        onResetDisplay: () => undefined,
-        statusMessage: "Live 3D mesh part inspection",
+        onResetDisplay: () => {
+          for (const p of parts) {
+            kernel.visualization?.clearTarget?.({
+              id: p.id,
+              kind: "part",
+              label: p.label,
+            });
+          }
+        },
+        statusMessage: "Live 3D mesh part highlight",
       },
     }),
-    [comparisons, parts],
+    [hierarchyRows, kernel.visualization, partOptions, parts, policyDiffRows],
   );
 
-  return <SpecInspectorHost baseline={baseline} selection={selection} spec={spec} />;
+  return (
+    <SpecInspectorHost
+      baseline={baseline}
+      options={{ onLiveFieldChange: handleLiveChange }}
+      selection={selection}
+      spec={spec}
+      onAfterFieldChange={(key, value, helpers) => {
+        if (key === "highlightSelectedPart") {
+          applyPartHighlight(helpers.draft.selectedPartId, Boolean(value));
+        } else if (key === "selectedPartId" && helpers.draft.highlightSelectedPart) {
+          applyPartHighlight(String(value), true);
+        }
+      }}
+    />
+  );
 }
 
 // ============================================================================
-// 6. mesh.quality — MeshQualityInspectorSpecPanel (P1 familyGates + ECharts)
+// 6. mesh.quality — MeshQualityInspectorSpecPanel
 // ============================================================================
 
 interface MeshQualityDraft {
-  metric: "sicn" | "gamma" | "skewness" | "aspect_ratio";
-  edgeScale: "linear" | "log";
+  metric: "all" | "sicn" | "gamma" | "skewness" | "aspect_ratio";
 }
 
-function FamilyGatesDiagnosticTable({
-  gates,
-  checks,
-}: {
-  gates: readonly MixedCertificateFamilyGate[];
-  checks: readonly { id: string; status: "pass" | "warn" | "failed"; value: string }[];
-}): ReactNode {
-  return (
-    <div className="fm-inspector-stack">
-      {checks.length > 0 ? (
-        <div className="fm-mesh-detail-table" role="table" aria-label="Global quality gates">
-          {checks.map((check) => (
-            <div
-              key={check.id}
-              className="fm-mesh-detail-table__row fm-mesh-gate-row"
-              data-status={check.status}
-              role="row"
-            >
-              <span role="cell">{check.id}</span>
-              <span role="cell">{check.status}</span>
-              <span role="cell">{check.value}</span>
-            </div>
-          ))}
-        </div>
-      ) : null}
+function adaptQualityGatesStatisticsFallback(
+  statsRec: JsonRecord | null,
+): MeshQualityStatistics | null {
+  if (!statsRec) return null;
+  const normalized = normalizeMeshQualityStatistics(statsRec);
+  if (normalized && normalized.metrics.length > 0) {
+    return normalized;
+  }
+  const histograms = asRecord(statsRec.histograms);
+  if (!histograms) return normalized;
 
-      {gates.length > 0 ? (
-        <div
-          className="fm-mesh-detail-table"
-          role="table"
-          aria-label="Mixed-topology family quality gates"
-        >
-          {gates.map((gate) => (
-            <div
-              key={`${gate.family}:${gate.metric}`}
-              className="fm-mesh-detail-table__row fm-mesh-gate-row"
-              data-status={gate.status}
-              role="row"
-            >
-              <span role="cell">
-                {gate.family} · {gate.metric}
-              </span>
-              <span role="cell">
-                {gate.p05.toFixed(3)} / {gate.threshold.toFixed(3)} · {gate.status}
-              </span>
-              <span role="cell">
-                {gate.positiveJacobian ? "det J > 0" : "det J <= 0"} (
-                {gate.minimumJacobianM3.toExponential(2)} m³)
-              </span>
-            </div>
-          ))}
-        </div>
-      ) : null}
-    </div>
-  );
+  const metrics: MeshQualityMetric[] = [];
+  for (const [id, label] of [
+    ["sicn", "SICN"],
+    ["gamma", "Gamma (γ)"],
+    ["skewness", "Skewness"],
+    ["aspect_ratio", "Aspect ratio"],
+  ] as const) {
+    const histRec = asRecord(histograms[id]);
+    const rawBins = Array.isArray(histRec?.bins) ? histRec.bins : null;
+    if (!rawBins || rawBins.length === 0) continue;
+    const total = rawBins.reduce(
+      (acc, b) => acc + (asNumber(asRecord(b)?.count) ?? 0),
+      0,
+    );
+    const threshold = asNumber(histRec?.threshold);
+    metrics.push({
+      belowThresholdCount: null,
+      belowThresholdFraction: null,
+      histogram: rawBins.map((b) => {
+        const br = asRecord(b) ?? {};
+        const lo = asNumber(br.min) ?? asNumber(br.lo);
+        const hi = asNumber(br.max) ?? asNumber(br.hi);
+        const count = asNumber(br.count) ?? 0;
+        return {
+          count,
+          fraction: total > 0 ? count / total : 0,
+          hi,
+          label:
+            lo !== null && hi !== null
+              ? `${lo.toFixed(2)}–${hi.toFixed(2)}`
+              : asString(br.label) ?? "bin",
+          lo,
+        };
+      }),
+      id: id as MeshQualityMetric["id"],
+      label,
+      max: asNumber(histRec?.max) ?? null,
+      mean: asNumber(histRec?.mean) ?? null,
+      min: asNumber(histRec?.min) ?? asNumber(statsRec.min_quality),
+      p05: asNumber(histRec?.p05) ?? asNumber(statsRec.p05_quality),
+      threshold,
+    });
+  }
+
+  if (metrics.length === 0) return normalized;
+  const meanEdge = asNumber(statsRec.mean_edge_length_m);
+  return {
+    edgeLength:
+      meanEdge !== null
+        ? { max: null, mean: meanEdge, min: null, std: null }
+        : null,
+    elementCount: asNumber(statsRec.element_count),
+    meshName: null,
+    metrics,
+    qualitySource: "quality-gates",
+    sizeDistributions: normalized?.sizeDistributions ?? [],
+    volumeRatio: null,
+    warnings: normalized?.warnings ?? [],
+    worstElements: normalized?.worstElements ?? [],
+    worstElementsByMetric: normalized?.worstElementsByMetric ?? {
+      gamma: [],
+      sicn: [],
+    },
+  };
 }
 
 export function MeshQualityInspectorSpecPanel({
   selection,
 }: InspectorPanelProps): ReactNode {
-  const qualityGatesRes = useMeshSharedDomainQualityGatesResource();
-  const baseline = useMemo<MeshQualityDraft>(
-    () => ({ edgeScale: "linear", metric: "sicn" }),
-    [],
+  const kernel = useKernel();
+  const sessionScopeKey =
+    sessionRequestScopeKey(sessionStatusHooks.useSessionResourceIdentity()) ?? undefined;
+  const currentMeshRevision = sessionStatusHooks.useSessionStatusSelector(
+    (s) => s.data?.resources?.mesh_revision ?? null,
   );
 
+  const qualityGatesRes =
+    geometryLifecycleResources.useMeshSharedDomainQualityGatesResource();
+  const semanticsRes = geometryLifecycleResources.useMeshSemanticsResource();
+  const sharedReportRes = geometryLifecycleResources.useMeshSharedDomainReportResource();
+  const sharedQualityRes = useSafeMeshSharedDomainQualityResource();
+  const manifestRes = geometryLifecycleResources.useMeshSharedDomainManifestResource();
+  const summaryRes = geometryLifecycleResources.useMeshSummaryResource();
+
+  const baseline = useMemo<MeshQualityDraft>(() => ({ metric: "all" }), []);
+
   const rawData = asRecord(qualityGatesRes.data);
-  const mixedCertificate = useMemo(
-    () => resolveMixedCertificateQualityPresentation(rawData?.mixed_certificate ?? rawData),
-    [rawData],
-  );
+  const mixedCertificate = useMemo(() => {
+    if (rawData && Object.hasOwn(rawData, "revision")) {
+      return resolveCurrentMixedCertificateQualityPresentation({
+        currentMeshRevision,
+        data: qualityGatesRes.data,
+        resourceStatus: qualityGatesRes.status,
+      });
+    }
+    return resolveMixedCertificateQualityPresentation(
+      rawData?.mixed_certificate ?? rawData,
+    );
+  }, [currentMeshRevision, qualityGatesRes.data, qualityGatesRes.status, rawData]);
 
   const checks = useMemo(() => {
     const gatesObj = asRecord(rawData?.gates);
@@ -1932,78 +2693,139 @@ export function MeshQualityInspectorSpecPanel({
       return {
         id: asString(c.id) ?? `check_${index}`,
         status,
-        value: asString(c.value) ?? String(c.value ?? "—"),
+        value: sanitizeMeshDisplayText(c.value, "—"),
       };
     });
   }, [rawData?.gates]);
 
-  const statsRec = asRecord(rawData?.statistics);
-  const minQuality = asNumber(statsRec?.min_quality);
-  const p05Quality = asNumber(statsRec?.p05_quality);
-  const meanEdgeM = asNumber(statsRec?.mean_edge_length_m);
-  const elementCount = asNumber(statsRec?.element_count);
+  const qualityStatistics = useMemo<MeshQualityStatistics | null>(() => {
+    const primarySource =
+      asRecord(asRecord(semanticsRes.data)?.mesh_build_diagnostics)?.mesh_statistics ??
+      asRecord(asRecord(sharedReportRes.data)?.report)?.mesh_statistics ??
+      asRecord(sharedQualityRes.data)?.quality ??
+      null;
+    const normalizedPrimary = normalizeMeshQualityStatistics(primarySource);
+    if (normalizedPrimary && normalizedPrimary.metrics.length > 0) {
+      return normalizedPrimary;
+    }
+    return (
+      adaptQualityGatesStatisticsFallback(asRecord(rawData?.statistics)) ??
+      normalizedPrimary
+    );
+  }, [rawData?.statistics, semanticsRes.data, sharedQualityRes.data, sharedReportRes.data]);
 
-  const buildHistogramOption = useMemo(
-    () =>
-      (metric: MeshQualityDraft["metric"]) =>
-      (palette: ResolvedChartThemePalette) => {
-        const histograms = asRecord(statsRec?.histograms);
-        const metricHist = asRecord(histograms?.[metric]) ?? asRecord(histograms?.sicn);
-        const rawBins = Array.isArray(metricHist?.bins)
-          ? metricHist.bins
-          : [
-              { count: 4, max: 0.25, min: 0.0 },
-              { count: 28, max: 0.6, min: 0.25 },
-              { count: 68, max: 1.0, min: 0.6 },
-            ];
-        const threshold = asNumber(metricHist?.threshold) ?? 0.2;
-        const labels = rawBins.map((b) => {
-          const rec = asRecord(b);
-          const lo = asNumber(rec?.min) ?? 0;
-          const hi = asNumber(rec?.max) ?? 1;
-          return `${lo.toFixed(2)}–${hi.toFixed(2)}`;
-        });
-        const counts = rawBins.map((b) => {
-          const rec = asRecord(b);
-          const hi = asNumber(rec?.max) ?? 1;
-          const cnt = asNumber(rec?.count) ?? 0;
-          return {
-            itemStyle: {
-              color: hi <= threshold ? palette.danger : palette.accent,
-            },
-            value: cnt,
-          };
-        });
-        return {
-          animation: false,
-          grid: { bottom: 28, left: 42, right: 14, top: 16 },
-          series: [
-            {
-              data: counts,
-              name: metric.toUpperCase(),
-              type: "bar" as const,
-            },
-          ],
-          tooltip: {
-            backgroundColor: palette.tooltipBackground,
-            borderColor: palette.borderSubtle,
-            textStyle: { color: palette.textPrimary, fontSize: palette.fontSize },
-            trigger: "axis" as const,
-          },
-          xAxis: {
-            axisLabel: { color: palette.textMuted, fontSize: palette.fontSize },
-            data: labels,
-            type: "category" as const,
-          },
-          yAxis: {
-            axisLabel: { color: palette.textMuted, fontSize: palette.fontSize },
-            splitLine: { lineStyle: { color: palette.borderSubtle } },
-            type: "value" as const,
-          },
-        };
-      },
-    [statsRec?.histograms],
+  const refinementState = useMemo(
+    () => resolveMeshQualityRefinementState(qualityStatistics),
+    [qualityStatistics],
   );
+
+  useEffect(() => {
+    const currentGenerationId = manifestRes.data?.generation_id;
+    const currentSelection = kernel.selection?.get?.();
+    if (
+      currentSelection?.ref?.type === "mesh-quality-element" &&
+      currentSelection.ref.generationId &&
+      currentGenerationId &&
+      currentSelection.ref.generationId !== currentGenerationId
+    ) {
+      kernel.selection.clear?.("mesh");
+    }
+  }, [kernel.selection, manifestRes.data?.generation_id]);
+
+  const handleSelectMetric = useCallback(
+    (metric: MeshQualityMetric["id"]) => {
+      const nodeId = `model:mesh:quality:${metric}`;
+      kernel.selection?.set?.(
+        {
+          kind: "mesh.quality",
+          label: `Mesh quality ${metric.toUpperCase()}`,
+          nodeId,
+          objectId: null,
+          ref: {
+            kind: "mesh.quality.metric",
+            metric,
+            nodeId,
+            type: "mesh-quality-metric",
+            visualizationTargetId: `mesh:quality:metric:${metric}`,
+          },
+        },
+        "mesh",
+      );
+      kernel.layout?.setActiveTab?.("mesh");
+    },
+    [kernel.layout, kernel.selection],
+  );
+
+  const handleSelectWorstElement = useCallback(
+    (element: MeshWorstElement) => {
+      const nodeId = `model:mesh:quality:element:${element.elementIndex}`;
+      kernel.selection?.set?.(
+        {
+          kind: "mesh.quality",
+          label: `Worst mesh element ${element.elementIndex}`,
+          nodeId,
+          objectId: null,
+          ref: {
+            artifactId: manifestRes.data?.mesh_id ?? null,
+            centroid: element.centroid,
+            elementIndex: element.elementIndex,
+            generationId: manifestRes.data?.generation_id ?? null,
+            kind: "mesh.quality.element",
+            meshRevision: asNumber(summaryRes.data?.revision),
+            metric: "gamma",
+            nodeId,
+            type: "mesh-quality-element",
+            visualizationTargetId: `mesh:quality:element:${element.elementIndex}`,
+          },
+        },
+        "mesh",
+      );
+      kernel.layout?.setActiveTab?.("mesh");
+    },
+    [
+      kernel.layout,
+      kernel.selection,
+      manifestRes.data?.generation_id,
+      manifestRes.data?.mesh_id,
+      summaryRes.data?.revision,
+    ],
+  );
+
+  const handleRefineWorstElement = useCallback(() => {
+    if (!refinementState.plan) return;
+    void kernel.commands.execute(
+      "mesh.refine-worst-quality-element",
+      createCommandContext("inspector", kernel, {
+        sessionScopeKey: sessionScopeKey ?? null,
+        sourceDetail: "mesh.quality",
+      }),
+      {
+        elementIndex: refinementState.plan.elementIndex,
+        meshOptions: refinementState.plan.meshOptions,
+      },
+    );
+  }, [kernel, refinementState.plan, sessionScopeKey]);
+
+  const handleHoverSizeBin = useCallback(
+    (bin: MeshSizeDistributionHoverBin | null) => {
+      emitMeshSizeHistogramHover({
+        bin,
+        kernel,
+        scope: { kind: "all" },
+      });
+    },
+    [kernel],
+  );
+
+  const statsRec = asRecord(rawData?.statistics);
+  const minQuality =
+    qualityStatistics?.metrics[0]?.min ?? asNumber(statsRec?.min_quality);
+  const p05Quality =
+    qualityStatistics?.metrics[0]?.p05 ?? asNumber(statsRec?.p05_quality);
+  const meanEdgeM =
+    qualityStatistics?.edgeLength?.mean ?? asNumber(statsRec?.mean_edge_length_m);
+  const elementCount =
+    qualityStatistics?.elementCount ?? asNumber(statsRec?.element_count);
 
   const hasFailure =
     mixedCertificate.status === "rejected" ||
@@ -2029,6 +2851,15 @@ export function MeshQualityInspectorSpecPanel({
           { id: "quality", label: "Quality Gates" },
         ],
         canFitView: true,
+        primaryHeaderAction: refinementState.plan
+          ? {
+              icon: Gauge,
+              label: "Refine worst region",
+              onRun: async () => {
+                handleRefineWorstElement();
+              },
+            }
+          : undefined,
       },
       identity: {
         domain: "mesh",
@@ -2071,7 +2902,7 @@ export function MeshQualityInspectorSpecPanel({
           ? [
               {
                 id: "mixed-cert-rejected",
-                text: `Mixed-topology quality gate failed: ${mixedCertificate.reason}`,
+                text: `Mixed-topology quality gate failed: ${sanitizeMeshDisplayText(mixedCertificate.reason)}`,
                 title: "Certificate rejected",
                 tone: "err",
               },
@@ -2085,9 +2916,10 @@ export function MeshQualityInspectorSpecPanel({
           rows: [
             {
               render: () => (
-                <FamilyGatesDiagnosticTable
+                <QualityGatesSpecView
                   checks={checks}
                   gates={mixedCertificate.familyGates}
+                  mixedCertificate={mixedCertificate}
                 />
               ),
               type: "custom",
@@ -2107,8 +2939,9 @@ export function MeshQualityInspectorSpecPanel({
           rows: [
             {
               key: "metric",
-              label: "Quality metric",
+              label: "Quality metric filter",
               options: [
+                { label: "All", value: "all" },
                 { label: "SICN", value: "sicn" },
                 { label: "Gamma (γ)", value: "gamma" },
                 { label: "Skewness", value: "skewness" },
@@ -2118,17 +2951,21 @@ export function MeshQualityInspectorSpecPanel({
             },
             {
               render: (ctx) => (
-                <ScientificEChart
-                  ariaLabel={`FEM element quality histogram (${ctx.draft.metric})`}
-                  height={190}
-                  optionBuilder={buildHistogramOption(ctx.draft.metric)}
+                <MeshQualityStatisticsSpecView
+                  activeMetricFilter={ctx.draft.metric}
+                  refinementState={refinementState}
+                  statistics={qualityStatistics}
+                  onHoverSizeDistributionBin={handleHoverSizeBin}
+                  onRefineWorstElement={handleRefineWorstElement}
+                  onSelectMetric={handleSelectMetric}
+                  onSelectWorstElement={handleSelectWorstElement}
                 />
               ),
               type: "custom",
               wide: true,
             },
           ],
-          title: "Element quality distribution",
+          title: "Quality distributions, size bins & worst elements",
         },
       ],
       details: () => [
@@ -2151,18 +2988,23 @@ export function MeshQualityInspectorSpecPanel({
       ],
       commitBar: {
         mode: "readOnly",
-        statusMessage: () => "Read-only FEM quality qualification",
+        statusMessage: () => "Interactive FEM quality qualification & heatmap inspection",
       },
     }),
     [
-      buildHistogramOption,
       checks,
       elementCount,
+      handleHoverSizeBin,
+      handleRefineWorstElement,
+      handleSelectMetric,
+      handleSelectWorstElement,
       hasFailure,
       meanEdgeM,
       minQuality,
       mixedCertificate,
       p05Quality,
+      qualityStatistics,
+      refinementState,
     ],
   );
 
@@ -2170,7 +3012,7 @@ export function MeshQualityInspectorSpecPanel({
 }
 
 // ============================================================================
-// 7. mesh.builds — MeshBuildsInspectorSpecPanel (FEM & FDM unlocked)
+// 7. mesh.builds — MeshBuildsInspectorSpecPanel
 // ============================================================================
 
 interface MeshBuildsDraft {
@@ -2181,83 +3023,199 @@ interface MeshBuildsDraft {
 export function MeshBuildsInspectorSpecPanel({
   selection,
 }: InspectorPanelProps): ReactNode {
+  const kernel = useKernel();
+  const sessionScopeKey =
+    sessionRequestScopeKey(sessionStatusHooks.useSessionResourceIdentity()) ?? undefined;
   const activeLane = useActiveLane();
-  const historyRes = useMeshBuildHistoryResource({ enabled: activeLane === "fem" });
-  const reportRes = useMeshSharedDomainReportResource({ enabled: activeLane === "fem" });
-  const domainMeta = useDomainMetaResource({ enabled: activeLane === "fdm" });
+  const femMode = activeLane === "fem";
 
-  const entries = useMemo(() => {
+  const activeBuildRes = geometryLifecycleResources.useMeshBuildCurrent({
+    enabled: femMode,
+  });
+  const latestBuildRes = useSafeMeshBuildLatestSuccessful({ enabled: femMode });
+  const historyRes = geometryLifecycleResources.useMeshBuildHistoryResource({
+    enabled: femMode,
+  });
+  const reportRes = geometryLifecycleResources.useMeshSharedDomainReportResource({
+    enabled: femMode,
+  });
+  const manifestRes = geometryLifecycleResources.useMeshSharedDomainManifestResource({
+    enabled: femMode,
+  });
+  const summaryRes = geometryLifecycleResources.useMeshSummaryResource({
+    enabled: femMode,
+  });
+  const semanticsRes = geometryLifecycleResources.useMeshSemanticsResource({
+    enabled: femMode,
+  });
+  const sceneRes = geometryLifecycleResources.useSceneResource({
+    enabled: femMode,
+  });
+  const domainMeta = geometryLifecycleResources.useDomainMetaResource({
+    enabled: activeLane === "fdm",
+  });
+
+  const historyEntries = useMemo(() => {
     const rec = asRecord(historyRes.data);
-    const list = Array.isArray(rec?.entries)
-      ? rec.entries
-      : Array.isArray(rec?.builds)
-        ? rec.builds
-        : [];
-    return list.map((item, idx) => {
-      const b = asRecord(item) ?? {};
-      return {
-        durationMs: asNumber(b.duration_ms),
-        id: asString(b.build_id) ?? asString(b.id) ?? `build-${idx}`,
-        revision: asNumber(b.mesh_revision) ?? idx + 1,
-        status: asString(b.status) ?? "completed",
-      };
-    });
+    return normalizeMeshBuildHistory(
+      rec?.history ?? rec?.entries ?? rec?.builds ?? historyRes.data,
+    );
   }, [historyRes.data]);
 
   const baseline = useMemo<MeshBuildsDraft>(
     () => ({
-      compareA: entries[0]?.id ?? "latest",
-      compareB: entries[1]?.id ?? entries[0]?.id ?? "latest",
+      compareA: historyEntries[0]?.id ?? "latest",
+      compareB: historyEntries.at(-1)?.id ?? historyEntries[0]?.id ?? "latest",
     }),
-    [entries],
+    [historyEntries],
   );
+
+  const lastBuildError =
+    activeBuildRes.data?.last_build_error ?? latestBuildRes.data?.last_build_error;
+  const retainedArtifact = useMemo(
+    () =>
+      resolveRetainedMeshArtifact({
+        lastBuildError,
+        latestSuccess: latestBuildRes.data?.last_success,
+        manifest: manifestRes.data,
+        meshRevision: summaryRes.data?.revision,
+      }),
+    [
+      lastBuildError,
+      latestBuildRes.data?.last_success,
+      manifestRes.data,
+      summaryRes.data?.revision,
+    ],
+  );
+
+  const mixedTopology = useMemo(
+    () =>
+      resolveMixedTopologyPresentation({
+        buildReport:
+          activeBuildRes.data?.shared_domain_build_report ??
+          asRecord(asRecord(semanticsRes.data)?.solver_mesh)?.build_report ??
+          asRecord(reportRes.data)?.report,
+        manifest: manifestRes.data,
+        rejectionEvidence: activeBuildRes.data?.mixed_layer_topology_rejection,
+      }),
+    [activeBuildRes.data, manifestRes.data, reportRes.data, semanticsRes.data],
+  );
+
+  const operationStatuses = useMemo(
+    () =>
+      activeBuildRes.data?.shared_domain_build_report?.operation_statuses ?? [],
+    [activeBuildRes.data],
+  );
+  const thinFilmDiagnostics = useMemo(
+    () =>
+      activeBuildRes.data?.shared_domain_build_report?.thin_film_diagnostics ?? [],
+    [activeBuildRes.data],
+  );
+
+  const freshness = useMemo(() => {
+    if (!femMode) return null;
+    const sceneRec = asRecord(sceneRes.data);
+    const sceneRev =
+      asNumber(sceneRec?.revision) ?? asNumber(sceneRec?.scene_revision);
+    return resolveMeshBuildFreshness({
+      activeBuild: asRecord(activeBuildRes.data?.active_build),
+      latestBuild: asRecord(
+        activeBuildRes.data?.last_build_summary ?? latestBuildRes.data?.last_success,
+      ),
+      manifest: manifestRes.data as Record<string, unknown> | null | undefined,
+      sceneRevision: sceneRev,
+      statusMeshRevision: summaryRes.data?.revision,
+    });
+  }, [
+    activeBuildRes.data?.active_build,
+    activeBuildRes.data?.last_build_summary,
+    femMode,
+    latestBuildRes.data?.last_success,
+    manifestRes.data,
+    sceneRes.data,
+    summaryRes.data?.revision,
+  ]);
 
   const stageRows = useMemo(() => {
     if (activeLane === "fdm") {
-      const shape = domainMeta.data?.grid?.shape ?? [0, 0, 0];
+      const grid = domainMeta.data?.grid;
       return [
-        { duration: "1 ms", id: "bounds", stage: "Geometry Bounds", status: "Completed" },
         {
-          duration: "2 ms",
-          id: "plan",
-          stage: `Grid Plan (${shape.join(" × ")})`,
-          status: "Completed",
+          detail: grid?.shape ? grid.shape.join(" × ") : "Pending",
+          id: "fdm-grid",
+          stage: "Structured grid realization",
+          status: grid ? "Materialized" : "Not materialized",
         },
-        { duration: "4 ms", id: "mask", stage: "Region Voxel Mask", status: "Completed" },
-        { duration: "2 ms", id: "fft", stage: "Demag FFT Kernel Plan", status: "Completed" },
+        {
+          detail: grid?.spacing
+            ? grid.spacing.map((v) => formatLengthSmart(v) ?? String(v)).join(" × ")
+            : "Pending",
+          id: "fdm-spacing",
+          stage: "Voxel cell spacing",
+          status: grid ? "Resolved" : "Pending",
+        },
+        {
+          detail: domainMeta.data?.generation_id ?? "Pending",
+          id: "fdm-gen",
+          stage: "Domain generation",
+          status: domainMeta.data?.generation_id ? "Published" : "Pending",
+        },
       ];
     }
-    const rep = asRecord(reportRes.data);
-    const rawStages = Array.isArray(rep?.stages) ? rep.stages : [];
-    if (rawStages.length > 0) {
-      return rawStages.map((s, i) => {
-        const sr = asRecord(s) ?? {};
-        const ms = asNumber(sr.duration_ms);
-        return {
-          duration: ms !== null ? `${ms.toFixed(0)} ms` : "—",
-          id: asString(sr.id) ?? `stage-${i}`,
-          stage: asString(sr.name) ?? `Stage ${i + 1}`,
-          status: asString(sr.status) ?? "Completed",
-        };
-      });
-    }
-    return [
-      { duration: "—", id: "cad", stage: "CAD Realization & Boolean Fragment", status: "Ready" },
-      { duration: "—", id: "size", stage: "Size Fields Evaluation", status: "Ready" },
-      { duration: "—", id: "tet", stage: "3D Volume Meshing & Optimization", status: "Ready" },
-      { duration: "—", id: "cert", stage: "Quality Gate Certification", status: "Ready" },
-    ];
-  }, [activeLane, domainMeta.data?.grid?.shape, reportRes.data]);
+    const rep =
+      asRecord(activeBuildRes.data?.shared_domain_build_report) ??
+      asRecord(asRecord(reportRes.data)?.report) ??
+      asRecord(reportRes.data);
+    const rawStages = Array.isArray(rep?.stages)
+      ? rep.stages
+      : Array.isArray(activeBuildRes.data?.mesh_pipeline_status)
+        ? (activeBuildRes.data?.mesh_pipeline_status as unknown[])
+        : [];
+    return rawStages.map((s, i) => {
+      const sr = asRecord(s) ?? {};
+      const ms = asNumber(sr.duration_ms);
+      const sec = asNumber(sr.duration_s) ?? asNumber(sr.duration_seconds);
+      return {
+        detail:
+          ms !== null
+            ? `${ms.toFixed(0)} ms`
+            : sec !== null
+              ? `${sec.toPrecision(3)} s`
+              : sanitizeMeshDisplayText(sr.detail ?? sr.message, "—"),
+        id: asString(sr.id) ?? asString(sr.phase) ?? `stage-${i}`,
+        stage: asString(sr.name) ?? asString(sr.label) ?? asString(sr.phase) ?? `Stage ${i + 1}`,
+        status: sanitizeMeshDisplayText(sr.status ?? sr.state, "Recorded"),
+      };
+    });
+  }, [activeBuildRes.data, activeLane, domainMeta.data, reportRes.data]);
 
   const entryOptions = useMemo(
     () =>
-      entries.length > 0
-        ? entries.map((e) => ({
-            label: `Rev #${e.revision} · ${e.status}`,
+      historyEntries.length > 0
+        ? historyEntries.map((e) => ({
+            label: `#${e.index + 1} ${e.meshName ?? "mesh"} · ${e.id}`,
             value: e.id,
           }))
         : [{ label: "Current session revision", value: "latest" }],
-    [entries],
+    [historyEntries],
+  );
+
+  const handleBuildSharedDomain = useCallback(async () => {
+    const cmd = activeLane === "fdm" ? "grid.build-fdm" : "mesh.build-shared-domain";
+    await kernel.commands.execute(
+      cmd,
+      createCommandContext("inspector", kernel, {
+        sessionScopeKey: sessionScopeKey ?? null,
+        sourceDetail: "mesh.builds",
+      }),
+    );
+  }, [activeLane, kernel, sessionScopeKey]);
+
+  const handleRestoreEntry = useCallback(
+    (entry: MeshBuildHistoryEntry) => {
+      restoreMeshHistoryToDraft(kernel, entry);
+    },
+    [kernel],
   );
 
   const spec = useMemo<InspectorSpec<MeshBuildsDraft>>(
@@ -2278,6 +3236,12 @@ export function MeshBuildsInspectorSpecPanel({
           },
           { id: "builds", label: "Build History" },
         ],
+        primaryHeaderAction: {
+          icon: Grid3x3,
+          label:
+            activeLane === "fdm" ? "Re-voxelize Grid" : "Build Shared-Domain Mesh",
+          onRun: handleBuildSharedDomain,
+        },
         extraMenuActions: [
           {
             icon: History,
@@ -2287,7 +3251,11 @@ export function MeshBuildsInspectorSpecPanel({
               ctx.openCodePreview(
                 "Mesh build report JSON",
                 "json",
-                JSON.stringify(reportRes.data ?? historyRes.data ?? {}, null, 2),
+                JSON.stringify(
+                  reportRes.data ?? activeBuildRes.data ?? historyRes.data ?? {},
+                  null,
+                  2,
+                ),
               );
             },
           },
@@ -2298,9 +3266,13 @@ export function MeshBuildsInspectorSpecPanel({
         entityId: "model:mesh:builds",
         icon: History,
         kindLabel:
-          activeLane === "fdm" ? "FDM voxelization pipeline" : "FEM Gmsh build pipeline",
-        statePill: () => ({ label: "Recorded", tone: "ok" }),
-        title: () => "Mesh Build History",
+          activeLane === "fdm" ? "FDM voxelization provenance" : "FEM Gmsh build pipeline",
+        statePill: () => {
+          if (retainedArtifact) return { label: "Retained after failure", tone: "warn" };
+          if (freshness?.state === "stale") return { label: "Stale", tone: "warn" };
+          return { label: "Recorded", tone: "ok" };
+        },
+        title: () => "Mesh Build Pipeline & History",
       },
       facts: () => [
         {
@@ -2310,16 +3282,68 @@ export function MeshBuildsInspectorSpecPanel({
         },
         {
           id: "retained",
-          label: "Retained builds",
-          value: String(entries.length || 1),
+          label: "Recorded builds",
+          value: String(historyEntries.length),
+        },
+        {
+          id: "freshness",
+          label: "Freshness",
+          value: freshness ? sanitizeMeshDisplayText(freshness.state, "current") : null,
         },
       ],
+      notices: () => {
+        const list: InspectorNotice<MeshBuildsDraft>[] = [];
+        if (retainedArtifact?.state === "retained") {
+          list.push({
+            id: "retained-after-failure",
+            text: `Latest mesh build failed (${sanitizeMeshDisplayText(lastBuildError, "build error")}). Workspace retains ${retainedArtifact.meshName ?? retainedArtifact.meshId ?? "published mesh"} at revision ${retainedArtifact.meshRevision ?? "current"}.`,
+            title: "Retained published mesh after failed build",
+            tone: "warn",
+          });
+        } else if (lastBuildError) {
+          list.push({
+            id: "last-build-error",
+            text: sanitizeMeshDisplayText(lastBuildError),
+            title: "Last mesh build error",
+            tone: "err",
+          });
+        }
+        return list;
+      },
       sections: [
         {
           defaultOpen: true,
+          footer: () => (
+            <Button
+              size="sm"
+              type="button"
+              variant="secondary"
+              onClick={() => {
+                void handleBuildSharedDomain();
+              }}
+            >
+              {activeLane === "fdm" ? "Re-voxelize Grid" : "Build Shared-Domain Mesh"}
+            </Button>
+          ),
           icon: Activity,
           id: "active-pipeline",
           rows: [
+            {
+              format: () =>
+                lastBuildError
+                  ? sanitizeMeshDisplayText(lastBuildError)
+                  : "None",
+              label: "Last build error",
+              type: "readonly",
+            },
+            {
+              format: () =>
+                retainedArtifact?.state === "retained"
+                  ? `Yes — ${retainedArtifact.meshName ?? retainedArtifact.meshId ?? "published artifact"}`
+                  : "Not applicable",
+              label: "Retained after failure",
+              type: "readonly",
+            },
             {
               columns: [
                 {
@@ -2334,20 +3358,21 @@ export function MeshBuildsInspectorSpecPanel({
                 },
                 {
                   align: "right",
-                  header: "Duration",
-                  id: "duration",
+                  header: "Detail",
+                  id: "detail",
                   mono: true,
-                  renderCell: (r) => (r as (typeof stageRows)[number]).duration,
+                  renderCell: (r) => (r as (typeof stageRows)[number]).detail,
                 },
               ],
-              label: "Pipeline stage breakdown",
+              label: "Pipeline stages",
               rowKey: (r) => (r as (typeof stageRows)[number]).id,
               rows: () => stageRows,
+              showWhen: () => stageRows.length > 0,
               type: "table",
               wide: true,
             },
           ],
-          title: "Current build pipeline & stages",
+          title: "Build pipeline & rollback state",
         },
         {
           defaultOpen: true,
@@ -2360,7 +3385,11 @@ export function MeshBuildsInspectorSpecPanel({
                 ctx.openCodePreview(
                   "Mesh build report JSON",
                   "json",
-                  JSON.stringify(reportRes.data ?? historyRes.data ?? {}, null, 2),
+                  JSON.stringify(
+                    reportRes.data ?? activeBuildRes.data ?? historyRes.data ?? {},
+                    null,
+                    2,
+                  ),
                 )
               }
             >
@@ -2372,26 +3401,104 @@ export function MeshBuildsInspectorSpecPanel({
           rows: [
             {
               key: "compareA",
-              label: "Base build A",
+              label: "Base build (Before)",
               options: entryOptions,
+              showWhen: () => historyEntries.length >= 2,
               type: "select",
             },
             {
               key: "compareB",
-              label: "Target build B",
+              label: "Target build (After)",
               options: entryOptions,
+              showWhen: () => historyEntries.length >= 2,
               type: "select",
             },
+            {
+              render: (ctx) => (
+                <MeshBuildHistorySpecView
+                  afterId={ctx.draft.compareB}
+                  beforeId={ctx.draft.compareA}
+                  entries={historyEntries}
+                  onRestore={handleRestoreEntry}
+                />
+              ),
+              type: "custom",
+              wide: true,
+            },
           ],
-          title: "Build history & revision diff",
+          showWhen: () => femMode,
+          title: "Build history, revision comparison & policy restore",
+        },
+        {
+          defaultOpen: true,
+          icon: Layers,
+          id: "builds-mixed-topology",
+          rows: [
+            {
+              render: () => <MixedTopologyProvenanceSpecView model={mixedTopology} />,
+              type: "custom",
+              wide: true,
+            },
+          ],
+          showWhen: () => femMode && mixedTopology.visible,
+          title: "Mixed-topology provenance",
+        },
+        {
+          defaultOpen: false,
+          icon: Settings2,
+          id: "builds-operation-statuses",
+          rows: [
+            {
+              render: () => (
+                <OperationStatusesSpecView operationStatuses={operationStatuses} />
+              ),
+              type: "custom",
+              wide: true,
+            },
+          ],
+          showWhen: () => femMode,
+          title: "Operation statuses",
+        },
+        {
+          defaultOpen: false,
+          icon: Ruler,
+          id: "builds-thin-film",
+          rows: [
+            {
+              render: () => (
+                <ThinFilmDiagnosticsSpecView diagnostics={thinFilmDiagnostics} />
+              ),
+              type: "custom",
+              wide: true,
+            },
+          ],
+          showWhen: () => femMode,
+          title: "Thin-film diagnostics",
         },
       ],
       commitBar: {
         mode: "readOnly",
-        statusMessage: () => "Build provenance & revision history",
+        statusMessage: () => "Build provenance, comparison & draft policy restoration",
       },
     }),
-    [activeLane, entries.length, entryOptions, historyRes.data, reportRes.data, stageRows],
+    [
+      activeBuildRes.data,
+      activeLane,
+      entryOptions,
+      femMode,
+      freshness,
+      handleBuildSharedDomain,
+      handleRestoreEntry,
+      historyEntries,
+      historyRes.data,
+      lastBuildError,
+      mixedTopology,
+      operationStatuses,
+      reportRes.data,
+      retainedArtifact,
+      stageRows,
+      thinFilmDiagnostics,
+    ],
   );
 
   return <SpecInspectorHost baseline={baseline} selection={selection} spec={spec} />;
@@ -2408,7 +3515,8 @@ interface UnassignedRootDraft {
 export function MeshUnassignedInspectorSpecPanel({
   selection,
 }: InspectorPanelProps): ReactNode {
-  const manifest = useMeshSharedDomainManifestResource();
+  const kernel = useKernel();
+  const manifest = geometryLifecycleResources.useMeshSharedDomainManifestResource();
   const orphanParts = useMemo(() => {
     const rec = asRecord(manifest.data);
     const list = Array.isArray(rec?.mesh_parts) ? rec.mesh_parts : [];
@@ -2423,8 +3531,29 @@ export function MeshUnassignedInspectorSpecPanel({
   }, [manifest.data]);
 
   const baseline = useMemo<UnassignedRootDraft>(
-    () => ({ highlightAllOrphans: true }),
+    () => ({ highlightAllOrphans: false }),
     [],
+  );
+
+  const syncOrphansHighlight = useCallback(
+    (highlight: boolean) => {
+      if (!kernel.visualization?.patchTarget) return;
+      for (const part of orphanParts) {
+        if (highlight) {
+          kernel.visualization.patchTarget(
+            { id: part.id, kind: "part", label: part.label },
+            { boundsVisible: true, visible: true, wireframeVisible: true },
+          );
+        } else {
+          kernel.visualization.clearTarget?.({
+            id: part.id,
+            kind: "part",
+            label: part.label,
+          });
+        }
+      }
+    },
+    [kernel.visualization, orphanParts],
   );
 
   const spec = useMemo<InspectorSpec<UnassignedRootDraft>>(
@@ -2473,6 +3602,7 @@ export function MeshUnassignedInspectorSpecPanel({
           defaultOpen: true,
           icon: TriangleAlert,
           id: "orphans",
+          live: true,
           rows: [
             {
               key: "highlightAllOrphans",
@@ -2509,7 +3639,14 @@ export function MeshUnassignedInspectorSpecPanel({
                   label: part.label,
                   nodeId: `model:mesh:unassigned:${encodeURIComponent(part.id)}`,
                   objectId: null,
-                  ref: null,
+                  ref: {
+                    carrierPartId: part.id,
+                    kind: "mesh-part",
+                    nodeId: `model:mesh:unassigned:${encodeURIComponent(part.id)}`,
+                    objectId: null,
+                    type: "mesh-part",
+                    visualizationTargetId: `mesh-part:${part.id}`,
+                  },
                 });
               },
               rowKey: (r) => (r as (typeof orphanParts)[number]).id,
@@ -2524,14 +3661,29 @@ export function MeshUnassignedInspectorSpecPanel({
       commitBar: {
         hasOverrides: (d, b) => d.highlightAllOrphans !== b.highlightAllOrphans,
         mode: "liveViewport",
-        onResetDisplay: () => undefined,
-        statusMessage: "Select an unassigned part to bind it to a scene object or Airbox",
+        onResetDisplay: () => {
+          syncOrphansHighlight(false);
+        },
+        statusMessage: "Select an unassigned part to inspect display or bind ownership",
       },
     }),
-    [orphanParts],
+    [orphanParts, syncOrphansHighlight],
   );
 
-  return <SpecInspectorHost baseline={baseline} selection={selection} spec={spec} />;
+  return (
+    <SpecInspectorHost
+      baseline={baseline}
+      options={{
+        onLiveFieldChange: (key, value) => {
+          if (key === "highlightAllOrphans") {
+            syncOrphansHighlight(Boolean(value));
+          }
+        },
+      }}
+      selection={selection}
+      spec={spec}
+    />
+  );
 }
 
 interface UnassignedPartDraft {
@@ -2543,7 +3695,10 @@ interface UnassignedPartDraft {
   targetObjectId: string;
   newObjectName: string;
   newObjectRole: "magnetic" | "conductor" | "dielectric";
+  visible: boolean;
+  renderMode: VisualizationRenderMode;
   showWireframe: boolean;
+  showBounds: boolean;
   opacityPercent: number;
 }
 
@@ -2551,15 +3706,40 @@ export function MeshUnassignedPartInspectorSpecPanel({
   selection,
 }: InspectorPanelProps): ReactNode {
   const kernel = useKernel();
-  const sessionScopeKey = sessionRequestScopeKey(useSessionResourceIdentity()) ?? undefined;
-  const scene = useSceneResource();
+  const sessionScopeKey =
+    sessionRequestScopeKey(sessionStatusHooks.useSessionResourceIdentity()) ?? undefined;
+  const scene = geometryLifecycleResources.useSceneResource();
   const [appliedCount, setAppliedCount] = useState(0);
 
-  const partId =
-    (selection.ref as { meshPartId?: string } | null)?.meshPartId ??
+  const rawPartId =
+    (selection.ref as { carrierPartId?: string; meshPartId?: string } | null)
+      ?.carrierPartId ??
+    (selection.ref as { carrierPartId?: string; meshPartId?: string } | null)
+      ?.meshPartId ??
     selection.nodeId?.split(":").at(-1) ??
     "part";
+  const partId = decodeURIComponent(rawPartId);
   const partLabel = selection.label || partId;
+
+  const partTargetRef = useMemo(
+    () => ({ id: partId, kind: "part" as const, label: partLabel }),
+    [partId, partLabel],
+  );
+
+  const partVizSelection = useMemo(
+    () => ({
+      ...selection,
+      ref: {
+        carrierPartId: partId,
+        kind: "mesh-part" as const,
+        nodeId: selection.nodeId ?? `model:mesh:unassigned:${encodeURIComponent(partId)}`,
+        objectId: selection.objectId ?? null,
+        type: "mesh-part" as const,
+        visualizationTargetId: `mesh-part:${partId}`,
+      },
+    }),
+    [partId, selection],
+  );
 
   const objectOptions = useMemo(() => {
     const objs = Array.isArray(scene.data?.objects) ? scene.data.objects : [];
@@ -2574,16 +3754,48 @@ export function MeshUnassignedPartInspectorSpecPanel({
     return mapped.length > 0 ? mapped : [{ label: "Select object…", value: "" }];
   }, [scene.data]);
 
-  const baseline = useMemo<UnassignedPartDraft>(
-    () => ({
+  const baseline = useMemo<UnassignedPartDraft>(() => {
+    const currentSettings = kernel.visualization?.getSettings?.(partTargetRef);
+    return {
       assignmentAction: "assign_object",
       newObjectName: partLabel,
       newObjectRole: "magnetic",
-      opacityPercent: 80,
-      showWireframe: true,
+      opacityPercent: currentSettings?.surfaceOpacityPercent ?? 80,
+      renderMode: currentSettings?.renderMode ?? "surface",
+      showBounds: currentSettings?.boundsVisible ?? false,
+      showWireframe: currentSettings?.wireframeVisible ?? true,
       targetObjectId: objectOptions[0]?.value ?? "",
-    }),
-    [objectOptions, partLabel],
+      visible: currentSettings?.visible ?? true,
+    };
+  }, [kernel.visualization, objectOptions, partLabel, partTargetRef]);
+
+  const handleLivePartDisplayChange = useCallback(
+    <K extends keyof UnassignedPartDraft & string>(
+      key: K,
+      value: UnassignedPartDraft[K],
+    ) => {
+      if (!kernel.visualization?.patchTarget) return;
+      if (key === "visible") {
+        kernel.visualization.patchTarget(partTargetRef, { visible: Boolean(value) });
+      } else if (key === "renderMode") {
+        kernel.visualization.patchTarget(partTargetRef, {
+          renderMode: value as VisualizationRenderMode,
+        });
+      } else if (key === "showWireframe") {
+        kernel.visualization.patchTarget(partTargetRef, {
+          wireframeVisible: Boolean(value),
+        });
+      } else if (key === "showBounds") {
+        kernel.visualization.patchTarget(partTargetRef, {
+          boundsVisible: Boolean(value),
+        });
+      } else if (key === "opacityPercent") {
+        kernel.visualization.patchTarget(partTargetRef, {
+          surfaceOpacityPercent: Number(value),
+        });
+      }
+    },
+    [kernel.visualization, partTargetRef],
   );
 
   const spec = useMemo<InspectorSpec<UnassignedPartDraft>>(
@@ -2621,22 +3833,79 @@ export function MeshUnassignedPartInspectorSpecPanel({
         domain: "mesh",
         entityId: partId,
         icon: Box,
-        kindLabel: "Unassigned mesh volume",
+        kindLabel: "Mesh-part visualization & ownership",
         statePill: () =>
           appliedCount > 0
             ? { label: "Assigned", tone: "ok" }
-            : { label: "Orphan part", tone: "warn" },
+            : { label: "Unassigned part", tone: "warn" },
         title: () => partLabel,
       },
       facts: () => [
         { id: "part-id", label: "Part ID", value: partId },
-        { id: "dim", label: "Dimension", value: "3D Volume" },
+        { id: "dim", label: "Target", value: `mesh-part:${partId}` },
       ],
       modeTabs: [
-        { commitModeOverride: "staged", id: "assignment", label: "Assignment" },
-        { commitModeOverride: "liveViewport", id: "display", label: "Display" },
+        { commitModeOverride: "liveViewport", id: "display", label: "3D Display" },
+        { commitModeOverride: "staged", id: "assignment", label: "Ownership" },
       ],
       sections: [
+        {
+          defaultOpen: true,
+          icon: SlidersHorizontal,
+          id: "display-controls",
+          live: true,
+          modeTabId: "display",
+          rows:
+            typeof kernel.visualization?.subscribe === "function"
+              ? [
+                  {
+                    render: () => (
+                      <MeshPartVisualizationPanel selection={partVizSelection} />
+                    ),
+                    type: "custom",
+                    wide: true,
+                  },
+                ]
+              : [
+                {
+                  key: "visible",
+                  label: "Part visible in 3D",
+                  type: "switch",
+                },
+                {
+                  key: "renderMode",
+                  label: "Render mode",
+                  options: [
+                    { label: "Surface", value: "surface" },
+                    { label: "Surface + edges", value: "surface+edges" },
+                    { label: "Wireframe", value: "wireframe" },
+                    { label: "Points", value: "points" },
+                    { label: "Off", value: "off" },
+                  ],
+                  type: "select",
+                },
+                {
+                  key: "showWireframe",
+                  label: "Wireframe overlay",
+                  type: "switch",
+                },
+                {
+                  key: "showBounds",
+                  label: "Bounding box",
+                  type: "switch",
+                },
+                {
+                  key: "opacityPercent",
+                  label: "Surface opacity",
+                  max: 100,
+                  min: 10,
+                  step: 5,
+                  type: "range",
+                  unitSuffix: "%",
+                },
+              ],
+          title: "Mesh-part 3D visualization",
+        },
         {
           defaultOpen: true,
           icon: Layers,
@@ -2690,67 +3959,174 @@ export function MeshUnassignedPartInspectorSpecPanel({
           ],
           title: "Mesh part ownership binding",
         },
-        {
-          defaultOpen: true,
-          icon: SlidersHorizontal,
-          id: "display-controls",
-          live: true,
-          modeTabId: "display",
-          rows: [
-            {
-              key: "showWireframe",
-              label: "Show part wireframe",
-              type: "switch",
-            },
-            {
-              key: "opacityPercent",
-              label: "Surface opacity",
-              max: 100,
-              min: 10,
-              step: 5,
-              type: "range",
-              unitSuffix: "%",
-            },
-          ],
-          title: "3D part display",
-        },
       ],
       commitBar: {
         cleanMessage: () => "Select an ownership binding and click Apply",
         mode: "staged",
         onApply: async (draft) => {
+          const sceneRec = asRecord(scene.data);
           const baseRev =
-            asNumber(asRecord(scene.data)?.revision) ??
-            asNumber(asRecord(scene.data)?.scene_revision) ??
-            0;
-          await kernel.api.model.commitTransaction(
-            {
-              base_revision: baseRev,
-              kind: "merge_patch",
-              patch: {
-                mesh_part_bindings: {
+            asNumber(sceneRec?.revision) ?? asNumber(sceneRec?.scene_revision) ?? 0;
+          const existingObjects = Array.isArray(sceneRec?.objects)
+            ? (sceneRec.objects as JsonObject[])
+            : [];
+          const existingEditor = asRecord(sceneRec?.editor) ?? {};
+          const existingBindings = asRecord(existingEditor.mesh_part_assignments) ?? {};
+
+          let mergePatch: JsonObject;
+          if (draft.assignmentAction === "assign_object") {
+            const updatedObjects = existingObjects.map((rawObj) => {
+              const obj = asRecord(rawObj);
+              if (!obj || asString(obj.id) !== draft.targetObjectId) return rawObj;
+              const prevMesh = asRecord(obj.object_mesh) ?? {};
+              const prevBound = Array.isArray(prevMesh.bound_mesh_part_ids)
+                ? (prevMesh.bound_mesh_part_ids as string[])
+                : [];
+              const nextBound = Array.from(new Set([...prevBound, partId]));
+              return {
+                ...rawObj,
+                object_mesh: {
+                  ...(prevMesh as JsonObject),
+                  bound_mesh_part_ids: nextBound,
+                },
+              } as JsonObject;
+            });
+            mergePatch = {
+              editor: {
+                ...(existingEditor as JsonObject),
+                mesh_part_assignments: {
+                  ...(existingBindings as JsonObject),
                   [partId]: {
-                    action: draft.assignmentAction,
-                    new_object_name:
-                      draft.assignmentAction === "create_object"
-                        ? draft.newObjectName
-                        : undefined,
-                    new_object_role:
-                      draft.assignmentAction === "create_object"
-                        ? draft.newObjectRole
-                        : undefined,
-                    target_object_id:
-                      draft.assignmentAction === "assign_object"
-                        ? draft.targetObjectId
-                        : undefined,
+                    action: "assign_object",
+                    target_object_id: draft.targetObjectId,
                   },
                 },
-              } as JsonObject,
-            } as never,
-            { sessionScopeKey },
+              },
+              objects: updatedObjects,
+            };
+          } else if (draft.assignmentAction === "create_object") {
+            const slug =
+              draft.newObjectName
+                .trim()
+                .toLowerCase()
+                .replace(/[^a-z0-9_-]+/g, "_")
+                .replace(/^_+|_+$/g, "") || "part_object";
+            const existingIds = new Set(
+              existingObjects
+                .map((o) => asString(asRecord(o)?.id))
+                .filter((x): x is string => Boolean(x)),
+            );
+            let candidateId = slug;
+            let suffix = 2;
+            while (existingIds.has(candidateId)) {
+              candidateId = `${slug}_${suffix}`;
+              suffix += 1;
+            }
+            const role =
+              draft.newObjectRole === "magnetic" ? "magnet" : draft.newObjectRole;
+            const createdObject: JsonObject = {
+              id: candidateId,
+              name: draft.newObjectName.trim(),
+              object_mesh: {
+                bound_mesh_part_ids: [partId],
+              },
+              role,
+              visible: true,
+            };
+            mergePatch = {
+              editor: {
+                ...(existingEditor as JsonObject),
+                mesh_part_assignments: {
+                  ...(existingBindings as JsonObject),
+                  [partId]: {
+                    action: "create_object",
+                    target_object_id: candidateId,
+                  },
+                },
+              },
+              objects: [...existingObjects, createdObject],
+            };
+          } else if (draft.assignmentAction === "assign_airbox") {
+            const existingUniverse = asRecord(sceneRec?.universe) ?? {};
+            const prevParts = Array.isArray(existingUniverse.bound_mesh_part_ids)
+              ? (existingUniverse.bound_mesh_part_ids as string[])
+              : [];
+            mergePatch = {
+              editor: {
+                ...(existingEditor as JsonObject),
+                mesh_part_assignments: {
+                  ...(existingBindings as JsonObject),
+                  [partId]: { action: "assign_airbox" },
+                },
+              },
+              universe: {
+                ...(existingUniverse as JsonObject),
+                bound_mesh_part_ids: Array.from(new Set([...prevParts, partId])),
+              },
+            };
+          } else {
+            mergePatch = {
+              editor: {
+                ...(existingEditor as JsonObject),
+                mesh_part_assignments: {
+                  ...(existingBindings as JsonObject),
+                  [partId]: { action: "ignore_nonphysical" },
+                },
+              },
+            };
+          }
+
+          const reqOptions = sessionScopeKey ? { sessionScopeKey } : undefined;
+          const mutationCtx = buildSafeMutationContext(
+            kernel,
+            sessionScopeKey,
+            "mesh.unassigned.part",
           );
-          kernel.resources.invalidate(SCENE_RESOURCE_KEY, `w5:${Date.now()}`);
-          kernel.resources.invalidate(MESH_SEMANTICS_RESOURCE_KEY, `w5:${Date.now()}`);
+          const committed = await runAuthoringMutationWithHistory(
+            mutationCtx,
+            `Assign mesh part ${partLabel}`,
+            async (prep) => {
+              const tx: AuthoringTransactionRequest = {
+                base_revision: prep.baseRevision ?? baseRev,
+                kind: "merge_patch",
+                merge_patch: mergePatch,
+              };
+              return kernel.api.model.commitTransaction(tx, reqOptions);
+            },
+          );
+          const committedScene = asRecord(committed)?.committed_scene as
+            | SceneResource
+            | undefined;
+          if (
+            committedScene &&
+            geometryLifecycleResources.publishCommittedSceneResource
+          ) {
+            const committedRev =
+              asNumber(asRecord(committedScene)?.revision) ??
+              `w5:${Date.now()}`;
+            geometryLifecycleResources.publishCommittedSceneResource(
+              kernel.resources,
+              committedScene,
+              committedRev,
+              undefined,
+              true,
+              sessionScopeKey ?? null,
+              kernel.api.resourceCacheScope,
+            );
+          }
+          invalidateAuthoringMutationDependents(
+            kernel.resources,
+            "geometry",
+            `w5:${Date.now()}`,
+          );
+          kernel.resources.invalidate(
+            geometryLifecycleResources.SCENE_RESOURCE_KEY,
+            `w5:${Date.now()}`,
+          );
+          kernel.resources.invalidate(
+            geometryLifecycleResources.MESH_SEMANTICS_RESOURCE_KEY,
+            `w5:${Date.now()}`,
+          );
           setAppliedCount((c) => c + 1);
           return true;
         },
@@ -2758,15 +4134,22 @@ export function MeshUnassignedPartInspectorSpecPanel({
     }),
     [
       appliedCount,
-      kernel.api.model,
-      kernel.resources,
+      kernel,
       objectOptions,
       partId,
       partLabel,
+      partVizSelection,
       scene.data,
       sessionScopeKey,
     ],
   );
 
-  return <SpecInspectorHost baseline={baseline} selection={selection} spec={spec} />;
+  return (
+    <SpecInspectorHost
+      baseline={baseline}
+      options={{ onLiveFieldChange: handleLivePartDisplayChange }}
+      selection={selection}
+      spec={spec}
+    />
+  );
 }
