@@ -110,7 +110,7 @@ EXPECTED_PNPM_VERSION = "10.8.1"
 
 INTERNAL_PORT = 8080
 NEXT_INTERNAL_PORT = 8082
-GATEWAY_SCRIPT = Path("scripts/docker-dev-gateway.cjs")
+GATEWAY_SCRIPT = Path("scripts/docker-dev-gateway.mjs")
 API_PROXY_TARGET = "http://backend:8081"
 NEXT_DIST_DIR = ".next-control-room-8080"
 NEXT_RELATIVE = Path("node_modules/next/dist/bin/next")

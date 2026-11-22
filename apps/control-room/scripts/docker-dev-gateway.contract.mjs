@@ -1,9 +1,9 @@
-const assert = require("node:assert/strict");
-const { createHash } = require("node:crypto");
-const { createServer } = require("node:http");
-const { once } = require("node:events");
-const { test } = require("node:test");
-const { createDevGateway } = require("./docker-dev-gateway.cjs");
+import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
+import { createServer } from "node:http";
+import { once } from "node:events";
+import { test } from "node:test";
+import { createDevGateway } from "./docker-dev-gateway.mjs";
 
 async function listen(t, server) {
   server.listen(0, "127.0.0.1");

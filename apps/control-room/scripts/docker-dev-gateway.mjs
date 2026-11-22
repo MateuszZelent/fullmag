@@ -1,7 +1,9 @@
 // Keep same-origin API traffic independent of the Next development event loop.
-const { spawn } = require("node:child_process");
-const { createServer } = require("node:http");
-const { ProxyServer } = require("next/dist/compiled/httpxy");
+import { spawn } from "node:child_process";
+import { createServer } from "node:http";
+import httpxy from "next/dist/compiled/httpxy/index.js";
+
+const { ProxyServer } = httpxy;
 
 // The synchronous Mesh command can wait for rendering, capture and acceptance.
 const API_PROXY_TIMEOUT_MS = (30 + 90 + 1800) * 1000 + 250;
@@ -10,7 +12,7 @@ function isApiRequest(url) {
   return url === "/v2" || url.startsWith("/v2/") || url.startsWith("/v2?");
 }
 
-function createDevGateway({ apiTarget, nextTarget }) {
+export function createDevGateway({ apiTarget, nextTarget }) {
   const proxy = new ProxyServer({});
   function options(request) {
     if (!isApiRequest(request.url)) return { target: nextTarget };
@@ -64,6 +66,4 @@ function startGateway([port, nextPort, apiTarget, nextCommand, ...nextArgs]) {
   });
 }
 
-if (require.main === module) startGateway(process.argv.slice(2));
-
-module.exports = { createDevGateway };
+if (import.meta.main) startGateway(process.argv.slice(2));

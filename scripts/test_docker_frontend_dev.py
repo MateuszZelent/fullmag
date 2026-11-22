@@ -343,7 +343,7 @@ class FrontendDevContractTests(TestCase):
         self.assertEqual(command[2:4], ["dev", "--webpack"])
         self.assertEqual(command[-4:], ["--hostname", "127.0.0.1", "--port", "8082"])
         self.assertEqual(self.module._frontend_command()[1:5], [
-            "scripts/docker-dev-gateway.cjs", "8080", "8082", "http://backend:8081",
+            "scripts/docker-dev-gateway.mjs", "8080", "8082", "http://backend:8081",
         ])
         self.assertEqual(self.module._frontend_command()[5:], command)
 
