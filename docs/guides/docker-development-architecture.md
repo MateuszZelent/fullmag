@@ -18,6 +18,11 @@ worktree; oba kontenery dostają jego readonly bind mount.
 | `frontend` | Przypięte zależności JS, Next.js dev, HMR i proxy API | Jeden wybrany port `127.0.0.1:<port>:8080` |
 | `backend` | Walidacja pakietu, build do publikacji gdy potrzebny, potem API, Python DSL i native runtime | Wyłącznie `backend:8081` w prywatnej sieci projektu |
 
+W kontenerze `frontend` port 8080 obsługuje osobny proces Node. Przekazuje
+`/v2` wraz z WebSocketami do `backend:8081`, a strony, zasoby i HMR do
+Next.js na `127.0.0.1:8082`. Przeglądarka zachowuje jeden origin, a API
+pozostaje dostępne podczas kompilacji po zmianie źródeł UI.
+
 Backend zawiera FDM CPU, FDM GPU, FEM CPU i FEM GPU. Wybór realizacji następuje
 w modelu i plannerze, a wymuszone GPU nie ma cichego fallbacku CPU. Obecność
 bibliotek i udany build nie dowodzą wykonania ani obsługi dowolnego modelu.

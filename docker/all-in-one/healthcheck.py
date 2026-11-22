@@ -39,6 +39,7 @@ FRONTEND_RECEIPT_PATH = Path("/run/fullmag/frontend-owner/receipt.json")
 FRONTEND_RECEIPT_SCHEMA = "fullmag.docker-frontend-development-receipt.v1"
 FRONTEND_INTERNAL_HOST = "127.0.0.1"
 FRONTEND_INTERNAL_PORT = 8080
+FRONTEND_NEXT_INTERNAL_PORT = 8082
 FRONTEND_TCP_TIMEOUT_SECONDS = 0.5
 MAX_FRONTEND_RECEIPT_BYTES = 512 * 1024
 PROCESS_IDENTITY_FIELDS = (
@@ -186,7 +187,7 @@ def _check_frontend_dev_liveness(
     tcp_port: int = FRONTEND_INTERNAL_PORT,
     tcp_timeout: float = FRONTEND_TCP_TIMEOUT_SECONDS,
 ) -> None:
-    """Require the receipt owner and a listening Next TCP socket.
+    """Require the receipt owner, development ingress and Next TCP sockets.
 
     This intentionally performs no HTTP request.  Rendering ``/workspace`` from
     Docker's periodic health probe can start or invalidate a Next page while
@@ -202,6 +203,9 @@ def _check_frontend_dev_liveness(
         raise RuntimeError(f"frontend receipt is not running: {receipt.get('state')!r}")
     if receipt.get("internal_port") != FRONTEND_INTERNAL_PORT:
         raise RuntimeError("frontend receipt has an unexpected internal port")
+    next_port = receipt.get("next_internal_port")
+    if next_port is not None and next_port != FRONTEND_NEXT_INTERNAL_PORT:
+        raise RuntimeError("frontend receipt has an unexpected Next port")
     owner_token = receipt.get("owner_token")
     if not isinstance(owner_token, str) or not owner_token or len(owner_token) > 256:
         raise RuntimeError("frontend receipt has an invalid owner token")
@@ -211,9 +215,11 @@ def _check_frontend_dev_liveness(
         raise RuntimeError("frontend receipt owner identity does not match the live process")
     if tcp_host != FRONTEND_INTERNAL_HOST or tcp_port != FRONTEND_INTERNAL_PORT:
         raise RuntimeError("frontend TCP liveness target is not fixed")
+    ports = (tcp_port, FRONTEND_NEXT_INTERNAL_PORT) if next_port is not None else (tcp_port,)
     try:
-        with socket.create_connection((tcp_host, tcp_port), timeout=tcp_timeout):
-            pass
+        for port in ports:
+            with socket.create_connection((tcp_host, port), timeout=tcp_timeout):
+                pass
     except OSError as error:
         raise RuntimeError(f"frontend TCP liveness failed: {error}") from error
 
