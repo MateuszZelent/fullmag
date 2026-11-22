@@ -179,11 +179,24 @@ export function CommitBar<TDraft>({
 
   // Mode: "staged"
   const lockReason = spec.mode === "staged" ? (spec.lockReason?.(ctx.draft) ?? null) : null;
+  const canCleanApply =
+    spec.mode === "staged" &&
+    Boolean(
+      typeof spec.allowCleanApply === "function"
+        ? spec.allowCleanApply(ctx.draft, ctx.baseline)
+        : spec.allowCleanApply,
+    );
   const hasDirty = dirtyCount > 0;
   const hasErrors = invalidCount > 0;
-  const showActions = hasDirty;
+  const showActions = hasDirty || canCleanApply;
+  const applyButtonLabel =
+    spec.mode === "staged" && spec.applyLabel
+      ? typeof spec.applyLabel === "function"
+        ? spec.applyLabel(ctx.draft, hasDirty)
+        : spec.applyLabel
+      : "Apply";
   const barTone =
-    (hasErrors && (hasDirty || Boolean(applyError))) || Boolean(applyError)
+    (hasErrors && (showActions || Boolean(applyError))) || Boolean(applyError)
       ? "error"
       : hasDirty
         ? "draft"
@@ -219,7 +232,7 @@ export function CommitBar<TDraft>({
         <span className="fm-inspector__commit-text">{applyError}</span>
       </div>
     );
-  } else if (lockReason && hasDirty) {
+  } else if (lockReason && showActions) {
     statusContent = (
       <div className="fm-inspector__commit-status">
         <span aria-hidden="true" className="fm-inspector__commit-dot" data-tone="warn" />
@@ -264,18 +277,20 @@ export function CommitBar<TDraft>({
         data-slot="commit-bar-staged-actions"
         data-visible={showActions ? "true" : "false"}
       >
-        <Button
-          className="fm-inspector__commit-btn"
-          disabled={!showActions || applying}
-          size="sm"
-          tabIndex={showActions ? 0 : -1}
-          type="button"
-          variant="secondary"
-          onClick={onRevert}
-        >
-          <RotateCcw aria-hidden="true" data-icon="inline-start" size={14} />
-          Revert
-        </Button>
+        {hasDirty ? (
+          <Button
+            className="fm-inspector__commit-btn"
+            disabled={applying}
+            size="sm"
+            tabIndex={0}
+            type="button"
+            variant="secondary"
+            onClick={onRevert}
+          >
+            <RotateCcw aria-hidden="true" data-icon="inline-start" size={14} />
+            Revert
+          </Button>
+        ) : null}
         <Button
           className="fm-inspector__commit-btn"
           disabled={!showActions || applying || hasErrors || Boolean(lockReason)}
@@ -298,7 +313,7 @@ export function CommitBar<TDraft>({
           ) : (
             <Check aria-hidden="true" data-icon="inline-start" size={14} />
           )}
-          {applying ? "Applying" : "Apply"}
+          {applying ? "Applying" : applyButtonLabel}
           <kbd className="fm-inspector__commit-kbd">Ctrl ↵</kbd>
         </Button>
       </div>

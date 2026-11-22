@@ -154,6 +154,8 @@ export interface InspectorNotice<TDraft> {
   quickFix?: {
     label: string;
     ghost?: boolean;
+    disabled?: boolean;
+    disabledReason?: string;
     onApply: (ctx: InspectorActionContext<TDraft>) => void | Promise<void>;
   };
 }
@@ -407,6 +409,16 @@ export interface InspectorSectionSpec<TDraft> {
 export type CommitBarSpec<TDraft> =
   | {
       mode: "staged";
+      /**
+       * Allows applying even when `dirtyFields.size === 0` (e.g. creating a default
+       * draft resource or reapplying a texture after geometry/mesh rebuilds).
+       */
+      allowCleanApply?: boolean | ((draft: TDraft, baseline: TDraft) => boolean);
+      /**
+       * Optional label for the primary Apply button (defaults to `"Apply"`).
+       * Accepts either a static string or `(draft, dirty) => label`.
+       */
+      applyLabel?: string | ((draft: TDraft, dirty: boolean) => string);
       cleanMessage?: (draft: TDraft) => string;
       lockReason?: (draft: TDraft) => string | null;
       confirmApply?: (

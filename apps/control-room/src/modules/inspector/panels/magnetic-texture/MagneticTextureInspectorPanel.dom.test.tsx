@@ -15,6 +15,7 @@ import type { Selection } from "@/kernel/selection/selectionTypes";
 import { InspectorEditSessionProvider } from "@/modules/inspector/InspectorEditSession";
 import { resetPersistedInspectorModeTabs } from "@/modules/inspector/template";
 import { StageTextureAssignmentsEditor } from "@/modules/inspector/panels/stages/StageTextureAssignmentsEditor";
+import { observationSourceWorkspaceStore } from "@/kernel/workspace/observationSourceWorkspace";
 import { resetTextureDraftBridgeForTests } from "@/shared/domain/magnetization-texture/textureDraftBridge";
 
 vi.mock("@radix-ui/react-tooltip", () => ({
@@ -142,6 +143,103 @@ vi.mock("@radix-ui/react-tabs", async () => {
       );
     },
     Content: ({ children }: { children?: ReactNode }) => <div>{children}</div>,
+  };
+});
+
+vi.mock("@radix-ui/react-select", async () => {
+  const React = await import("react");
+  const SelectCtx = React.createContext<{
+    value?: string;
+    onValueChange?: (next: string) => void;
+    disabled?: boolean;
+  }>({});
+  return {
+    Root: ({
+      children,
+      value,
+      onValueChange,
+      disabled,
+    }: {
+      children?: ReactNode;
+      value?: string;
+      onValueChange?: (next: string) => void;
+      disabled?: boolean;
+    }) => (
+      <SelectCtx.Provider value={{ value, onValueChange, disabled }}>
+        <div data-slot="mock-select-root">{children}</div>
+      </SelectCtx.Provider>
+    ),
+    Group: ({ children }: { children?: ReactNode }) => <div>{children}</div>,
+    Value: () => {
+      const ctx = React.useContext(SelectCtx);
+      return <span>{ctx.value ?? ""}</span>;
+    },
+    Trigger: function MockSelectTrigger({
+      children,
+      className,
+      disabled,
+      id,
+    }: {
+      children?: ReactNode;
+      className?: string;
+      disabled?: boolean;
+      id?: string;
+    }) {
+      const ctx = React.useContext(SelectCtx);
+      return (
+        <button
+          className={className}
+          disabled={disabled ?? ctx.disabled}
+          id={id}
+          type="button"
+        >
+          {children}
+        </button>
+      );
+    },
+    Icon: ({ children }: { children?: ReactNode }) => <>{children}</>,
+    Portal: ({ children }: { children?: ReactNode }) => <>{children}</>,
+    Content: function MockSelectContent({ children }: { children?: ReactNode }) {
+      return <div data-slot="mock-select-content">{children}</div>;
+    },
+    Viewport: ({ children }: { children?: ReactNode }) => <div>{children}</div>,
+    ScrollUpButton: function MockSelectScrollUp({ children }: { children?: ReactNode }) {
+      return <div>{children}</div>;
+    },
+    ScrollDownButton: function MockSelectScrollDown({ children }: { children?: ReactNode }) {
+      return <div>{children}</div>;
+    },
+    Label: function MockSelectLabel({ children }: { children?: ReactNode }) {
+      return <div>{children}</div>;
+    },
+    Separator: function MockSelectSeparator() {
+      return <hr />;
+    },
+    Item: function MockSelectItem({
+      children,
+      value,
+      disabled,
+    }: {
+      children?: ReactNode;
+      value: string;
+      disabled?: boolean;
+    }) {
+      const ctx = React.useContext(SelectCtx);
+      return (
+        <button
+          aria-selected={ctx.value === value}
+          data-select-option={value}
+          disabled={disabled ?? ctx.disabled}
+          role="option"
+          type="button"
+          onClick={() => ctx.onValueChange?.(value)}
+        >
+          {children}
+        </button>
+      );
+    },
+    ItemText: ({ children }: { children?: ReactNode }) => <span>{children}</span>,
+    ItemIndicator: ({ children }: { children?: ReactNode }) => <>{children}</>,
   };
 });
 
@@ -337,12 +435,15 @@ describe("MagneticTextureInspectorPanel & StageTextureAssignmentsEditor on 8-slo
   });
 
   afterEach(() => {
+    observationSourceWorkspaceStore.reset();
     vi.clearAllMocks();
   });
 
   function createKernelMock(overrides?: {
     applyMagnetization?: ReturnType<typeof vi.fn>;
     inspectImport?: ReturnType<typeof vi.fn>;
+    preparedMagnetization?: ReturnType<typeof vi.fn>;
+    executeCommand?: ReturnType<typeof vi.fn>;
   }) {
     const applyMagnetization =
       overrides?.applyMagnetization ??
@@ -351,8 +452,21 @@ describe("MagneticTextureInspectorPanel & StageTextureAssignmentsEditor on 8-slo
         magnetization_apply: {
           operation_id: "op-1",
           scene_revision: 13,
-          scopes: [{ object_id: "nanodisk", region_id: (target as { region_id?: string }).region_id ?? null }],
+          scopes: [
+            {
+              object_id: "nanodisk",
+              region_id: (target as { region_id?: string }).region_id ?? null,
+            },
+          ],
           status: "initial_state_ready",
+          prepared_initial_state: {
+            scene_revision: 13,
+            initial_state_revision: 2,
+            publication_id: "pub-13",
+            observation_frame_id: "frame-13",
+            domain_generation_id: "mesh-13",
+            values_sha256: "b".repeat(64),
+          },
         },
         scene_revision: 13,
       }));
@@ -368,12 +482,34 @@ describe("MagneticTextureInspectorPanel & StageTextureAssignmentsEditor on 8-slo
         vector_count: 4096,
         zero_vector_count: 0,
       }));
+    const preparedMagnetization =
+      overrides?.preparedMagnetization ?? vi.fn(async () => ({}));
+    const executeCommand =
+      overrides?.executeCommand ?? vi.fn(async () => ({ status: "completed" }));
+    const clearSavedFieldPresentation = vi.fn();
+    const setArtifactFieldSelection = vi.fn();
+    const closePlayback = vi.fn();
+    const setActiveViewportMainModule = vi.fn();
     return {
       applyMagnetization,
+      clearSavedFieldPresentation,
+      closePlayback,
+      executeCommand,
       inspectImport,
+      preparedMagnetization,
+      setActiveViewportMainModule,
+      setArtifactFieldSelection,
       kernel: {
+        analysisFieldOverlay: {
+          clear: vi.fn(),
+        },
         api: {
           resourceCacheScope: "test-scope",
+          data: {
+            fields: {
+              preparedMagnetization,
+            },
+          },
           model: {
             applyMagnetization,
             scene: vi.fn(async () => mockSceneState.data),
@@ -393,16 +529,28 @@ describe("MagneticTextureInspectorPanel & StageTextureAssignmentsEditor on 8-slo
         },
         bus: { emit: vi.fn(), subscribe: () => () => undefined },
         commands: {
-          execute: vi.fn(async () => ({ status: "completed" })),
+          execute: executeCommand,
           getSessionScopeKey: () =>
             "session=session-1&epoch=1&request_scope_epoch=1",
+        },
+        layout: {
+          setActiveViewportMainModule,
         },
         resources: {
           invalidate: vi.fn(),
         },
+        savedResultsPlayback: {
+          getSnapshot: () => null,
+          close: closePlayback,
+        },
         selection: {
           get: () => null,
+          clear: vi.fn(),
           set: vi.fn(),
+        },
+        visualization: {
+          clearSavedFieldPresentation,
+          setArtifactFieldSelection,
         },
       },
     };
@@ -834,6 +982,412 @@ describe("MagneticTextureInspectorPanel & StageTextureAssignmentsEditor on 8-slo
         enabled: false,
         reason: "Legacy vortex gate active",
       });
+    } finally {
+      await act(async () => root.unmount());
+      dom.restore();
+    }
+  });
+
+  it("supports clean Reapply Texture, post-apply Show initial magnetization preview, and Clear (asset: null)", async () => {
+    const dom = installSimulationPreparationTestDom();
+    const container = dom.document.createElement("div");
+    dom.document.body.appendChild(container);
+    const root = createRoot(container as unknown as Element);
+    const {
+      applyMagnetization,
+      clearSavedFieldPresentation,
+      closePlayback,
+      kernel,
+      preparedMagnetization,
+      setActiveViewportMainModule,
+      setArtifactFieldSelection,
+    } = createKernelMock();
+    const selection: Selection = {
+      kind: "object.magnetic-texture",
+      label: "Magnetic texture",
+      moduleSource: "explorer",
+      nodeId: "model:object:nanodisk:magnetic-texture",
+      objectId: "nanodisk",
+      ref: {
+        kind: "object.magnetic-texture",
+        nodeId: "model:object:nanodisk:magnetic-texture",
+        objectId: "nanodisk",
+        type: "scene-object",
+        visualizationTargetId: "object:nanodisk",
+      },
+    };
+
+    try {
+      await act(async () => {
+        root.render(
+          <KernelContext.Provider value={kernel as never}>
+            <InspectorEditSessionProvider>
+              <MagneticTextureInspectorPanel selection={selection} />
+            </InspectorEditSessionProvider>
+          </KernelContext.Provider>,
+        );
+      });
+
+      // Item 4: Clean Reapply Texture is visible & enabled when dirtyFields is empty
+      const reapplyBtn = findElement(
+        container,
+        (el) => el.tagName === "BUTTON" && el.textContent.includes("Reapply Texture"),
+        "Reapply Texture button",
+      );
+      expect(reapplyBtn.disabled).toBe(false);
+
+      await act(async () => {
+        reapplyBtn.click();
+      });
+
+      expect(applyMagnetization).toHaveBeenCalledTimes(1);
+      expect(applyMagnetization.mock.calls[0]?.[0]).toMatchObject({
+        kind: "object",
+        object_id: "nanodisk",
+        asset: {
+          id: "mag:nanodisk:bloch_skyrmion",
+          preset_kind: "bloch_skyrmion",
+        },
+      });
+
+      // Item 1: Post-apply "Show initial magnetization" button probes preparedMagnetization and opens 3D preview
+      const showInitialBtn = findElement(
+        container,
+        (el) => el.tagName === "BUTTON" && el.textContent.trim() === "Show initial magnetization",
+        "Show initial magnetization button",
+      );
+      await act(async () => {
+        showInitialBtn.click();
+      });
+
+      expect(preparedMagnetization).toHaveBeenCalledTimes(1);
+      expect(clearSavedFieldPresentation).toHaveBeenCalledTimes(1);
+      expect(setArtifactFieldSelection).toHaveBeenCalledWith(null);
+      expect(closePlayback).toHaveBeenCalledTimes(1);
+      expect(setActiveViewportMainModule).toHaveBeenCalledWith("viewport-3d");
+      expect(observationSourceWorkspaceStore.getSnapshot().prepared).toMatchObject({
+        objectId: "nanodisk",
+        regionId: null,
+        source: {
+          publication_id: "pub-13",
+          scene_revision: 13,
+        },
+      });
+
+      // Item 2: Clear button commits { kind: "object", object_id, asset: null }
+      const clearBtn = findElement(
+        container,
+        (el) => el.getAttribute("data-testid") === "clear-magnetization-btn",
+        "Clear magnetization button",
+      );
+      await act(async () => {
+        clearBtn.click();
+      });
+
+      expect(applyMagnetization).toHaveBeenCalledTimes(2);
+      expect(applyMagnetization.mock.calls[1]?.[0]).toEqual({
+        kind: "object",
+        object_id: "nanodisk",
+        asset: null,
+      });
+    } finally {
+      await act(async () => root.unmount());
+      dom.restore();
+    }
+  });
+
+  it("opens Field file tab on redirected object.magnetic-texture.load and executes study.load-field-state on Load File", async () => {
+    const dom = installSimulationPreparationTestDom();
+    const container = dom.document.createElement("div");
+    dom.document.body.appendChild(container);
+    const root = createRoot(container as unknown as Element);
+    const executeCommand = vi.fn(async () => ({
+      status: "completed" as const,
+      message: "Field state loaded from disk.ovf.",
+    }));
+    const { kernel } = createKernelMock({ executeCommand });
+    const loadSelection: Selection = {
+      kind: "object.magnetic-texture.load",
+      label: "Load texture",
+      moduleSource: "explorer",
+      nodeId: "model:object:nanodisk:magnetic-texture:load",
+      objectId: "nanodisk",
+      ref: {
+        kind: "object.magnetic-texture.load",
+        nodeId: "model:object:nanodisk:magnetic-texture:load",
+        objectId: "nanodisk",
+        type: "scene-object",
+        visualizationTargetId: "object:nanodisk",
+      },
+    };
+
+    try {
+      await act(async () => {
+        root.render(
+          <KernelContext.Provider value={kernel as never}>
+            <InspectorEditSessionProvider>
+              <MagneticTextureInspectorPanel selection={loadSelection} />
+            </InspectorEditSessionProvider>
+          </KernelContext.Provider>,
+        );
+      });
+
+      const fieldFileTab = findElement(
+        container,
+        (el) => el.getAttribute("role") === "tab" && el.textContent.includes("Field file"),
+        "Field file tab",
+      );
+      expect(fieldFileTab.getAttribute("aria-selected")).toBe("true");
+
+      const loadBtn = findElement(
+        container,
+        (el) => el.getAttribute("data-testid") === "load-field-state-btn",
+        "Load File button",
+      );
+      await act(async () => {
+        loadBtn.click();
+      });
+
+      expect(executeCommand).toHaveBeenCalledWith(
+        "study.load-field-state",
+        expect.objectContaining({
+          sourceDetail: "object-magnetic-texture-load",
+        }),
+      );
+      expect(container.textContent).toContain("Field state loaded from disk.ovf.");
+    } finally {
+      await act(async () => root.unmount());
+      dom.restore();
+    }
+  });
+
+  it("edits full 3D [dx, dy, dz] relative center offsets in bounds_pct and bounds_norm while preserving Y and Z, and preserves custom asset.id", async () => {
+    const customScene = createTestScene() as unknown as {
+      magnetization_assets: Array<Record<string, unknown>>;
+      objects: Array<Record<string, unknown>>;
+    };
+    customScene.magnetization_assets[0]!.id = "custom_skyrmion_asset";
+    customScene.magnetization_assets[0]!.preset_version = 1;
+    customScene.magnetization_assets[0]!.mapping = {
+      space: "object",
+      projection: "planar_face",
+      clamp_mode: "background",
+      background_vector: [0, 1, 0],
+    };
+    customScene.magnetization_assets[0]!.texture_transform = {
+      translation: [0, 20e-9, 1e-9],
+      rotation_quat: [0, 0, 0, 1],
+      scale: [1, 1, 1],
+      pivot: [0, 0, 0],
+      rotate_vectors: true,
+    };
+    customScene.objects[0]!.magnetization_ref = "custom_skyrmion_asset";
+    mockSceneState.data = customScene as unknown as SceneResource;
+
+    const dom = installSimulationPreparationTestDom();
+    const container = dom.document.createElement("div");
+    dom.document.body.appendChild(container);
+    const root = createRoot(container as unknown as Element);
+    const { applyMagnetization, kernel } = createKernelMock();
+    const selection: Selection = {
+      kind: "object.magnetic-texture",
+      label: "Magnetic texture",
+      moduleSource: "explorer",
+      nodeId: "model:object:nanodisk:magnetic-texture",
+      objectId: "nanodisk",
+      ref: {
+        kind: "object.magnetic-texture",
+        nodeId: "model:object:nanodisk:magnetic-texture",
+        objectId: "nanodisk",
+        type: "scene-object",
+        visualizationTargetId: "object:nanodisk",
+      },
+    };
+
+    try {
+      await act(async () => {
+        root.render(
+          <KernelContext.Provider value={kernel as never}>
+            <InspectorEditSessionProvider>
+              <MagneticTextureInspectorPanel selection={selection} />
+            </InspectorEditSessionProvider>
+          </KernelContext.Provider>,
+        );
+      });
+
+      // Switch Offset coordinate mode to bounds_pct (%)
+      const pctOption = findElement(
+        container,
+        (el) => el.getAttribute("data-select-option") === "bounds_pct",
+        "bounds_pct option",
+      );
+      await act(async () => {
+        pctOption.click();
+      });
+
+      const relVector = findElement(
+        container,
+        (el) => el.getAttribute("data-testid") === "relative-center-offset-vector3",
+        "relative-center-offset-vector3",
+      );
+      const axisInputs = findElements(relVector, (el) => el.tagName === "INPUT");
+      expect(axisInputs).toHaveLength(3);
+
+      // Edit X to +25% (cylinder diameter = 100 nm -> +25 nm) while preserving Y = 20 nm, Z = 1 nm!
+      await act(async () => {
+        attachReactInputShim(axisInputs[0]!);
+        axisInputs[0]!.focus();
+        axisInputs[0]!.dispatchEvent(new TestEvent("focusin", { bubbles: true }));
+      });
+      await act(async () => {
+        setInputValue(axisInputs[0]!, "25");
+      });
+
+      // Switch to bounds_norm [-1..1] and edit Z to -0.5 (height = 5 nm, half-extent = 2.5 nm -> -1.25 nm)
+      const normOption = findElement(
+        container,
+        (el) => el.getAttribute("data-select-option") === "bounds_norm",
+        "bounds_norm option",
+      );
+      await act(async () => {
+        normOption.click();
+      });
+
+      const normInputs = findElements(
+        findElement(
+          container,
+          (el) => el.getAttribute("data-testid") === "relative-center-offset-vector3",
+          "norm vector",
+        ),
+        (el) => el.tagName === "INPUT",
+      );
+      await act(async () => {
+        attachReactInputShim(normInputs[2]!);
+        normInputs[2]!.focus();
+        normInputs[2]!.dispatchEvent(new TestEvent("focusin", { bubbles: true }));
+      });
+      await act(async () => {
+        setInputValue(normInputs[2]!, "-0.5");
+      });
+
+      // Apply Texture: custom asset.id "custom_skyrmion_asset" AND Y = 20 nm are preserved!
+      const applyBtn = findElement(
+        container,
+        (el) => el.tagName === "BUTTON" && el.textContent.includes("Apply Texture"),
+        "Apply Texture button",
+      );
+      await act(async () => {
+        applyBtn.click();
+      });
+
+      expect(applyMagnetization).toHaveBeenCalledTimes(1);
+      const savedPayload = applyMagnetization.mock.calls[0]?.[0] as {
+        kind: string;
+        object_id: string;
+        asset: {
+          id: string;
+          preset_version: number;
+          mapping: {
+            clamp_mode: string;
+            background_vector?: [number, number, number];
+          };
+          texture_transform: { translation: [number, number, number] };
+        };
+      };
+      expect(savedPayload.asset.id).toBe("custom_skyrmion_asset");
+      expect(savedPayload.asset.preset_version).toBe(2);
+      expect(savedPayload.asset.mapping.clamp_mode).toBe("background");
+      expect(savedPayload.asset.mapping.background_vector).toEqual([0, 1, 0]);
+      expect(savedPayload.asset.texture_transform.translation[0]).toBeCloseTo(25e-9, 15);
+      expect(savedPayload.asset.texture_transform.translation[1]).toBeCloseTo(20e-9, 15);
+      expect(savedPayload.asset.texture_transform.translation[2]).toBeCloseTo(-1.25e-9, 15);
+
+      // Editing Magnetization ref explicitly writes the new custom asset ID
+      const magRefRow = findElement(
+        container,
+        (el) => el.getAttribute("data-row") === "magnetizationRef",
+        "magnetizationRef row",
+      );
+      const magRefInput = findElement(magRefRow, (el) => el.tagName === "INPUT", "magRef input");
+      await act(async () => {
+        attachReactInputShim(magRefInput);
+        magRefInput.focus();
+        magRefInput.dispatchEvent(new TestEvent("focusin", { bubbles: true }));
+      });
+      await act(async () => {
+        setInputValue(magRefInput, "user:custom:m0");
+      });
+      const applyBtn2 = findElement(
+        container,
+        (el) => el.tagName === "BUTTON" && el.textContent.includes("Apply Texture"),
+        "Apply Texture button 2",
+      );
+      await act(async () => {
+        applyBtn2.click();
+      });
+      expect(applyMagnetization).toHaveBeenCalledTimes(2);
+      expect(
+        (applyMagnetization.mock.calls[1]?.[0] as { asset: { id: string } }).asset.id,
+      ).toBe("user:custom:m0");
+    } finally {
+      await act(async () => root.unmount());
+      dom.restore();
+    }
+  });
+
+  it("blocks Apply with a clear lockReason when a region target has no authored region record", async () => {
+    const dom = installSimulationPreparationTestDom();
+    const container = dom.document.createElement("div");
+    dom.document.body.appendChild(container);
+    const root = createRoot(container as unknown as Element);
+    const { applyMagnetization, kernel } = createKernelMock();
+    const unauthoredRegionSelection: Selection = {
+      kind: "object.region.texture",
+      label: "Magnetic texture",
+      moduleSource: "explorer",
+      nodeId: "model:object:nanodisk:region:missing_region:texture",
+      objectId: "nanodisk",
+      ref: {
+        kind: "object.region.texture",
+        nodeId: "model:object:nanodisk:region:missing_region:texture",
+        objectId: "nanodisk",
+        regionId: "missing_region",
+        type: "scene-object",
+        visualizationTargetId: "region:nanodisk:missing_region",
+      },
+    };
+
+    try {
+      await act(async () => {
+        root.render(
+          <KernelContext.Provider value={kernel as never}>
+            <InspectorEditSessionProvider>
+              <MagneticTextureInspectorPanel selection={unauthoredRegionSelection} />
+            </InspectorEditSessionProvider>
+          </KernelContext.Provider>,
+        );
+      });
+
+      expect(container.textContent).toContain(
+        "Select an authored magnetic region to apply its texture.",
+      );
+
+      const commitBar = findElement(
+        container,
+        (el) => el.getAttribute("data-slot") === "inspector-commit-bar",
+        "inspector-commit-bar",
+      );
+      const applyBtn = findElement(
+        commitBar,
+        (el) => el.tagName === "BUTTON" && el.textContent.includes("Texture"),
+        "locked Apply button",
+      );
+      expect(applyBtn.disabled).toBe(true);
+
+      await act(async () => {
+        applyBtn.click();
+      });
+      expect(applyMagnetization).not.toHaveBeenCalled();
     } finally {
       await act(async () => root.unmount());
       dom.restore();

@@ -11,14 +11,18 @@ import {
   SearchCheck,
   SlidersHorizontal,
   Sparkles,
+  Trash2,
+  Upload,
 } from "lucide-react";
-import type { ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 
-import type {
-  InspectorActionContext,
-  InspectorRowSpec,
-  InspectorSectionSpec,
-  UnitOption,
+import {
+  formatQuantityDisplay,
+  parseQuantityInputToSI,
+  type InspectorActionContext,
+  type InspectorRowSpec,
+  type InspectorSectionSpec,
+  type UnitOption,
 } from "@/modules/inspector/template";
 import type { TargetMetricBounds, Vec3 } from "@/shared/domain/magnetization-texture/boundsResolver";
 import {
@@ -47,7 +51,14 @@ import {
 } from "@/shared/domain/magnetization-texture/texturePresets";
 import { Badge } from "@/shared/ui/Badge";
 import { Button } from "@/shared/ui/Button";
+import {
+  InputGroup,
+  InputGroupAddon,
+  InputGroupInput,
+  InputGroupText,
+} from "@/shared/ui/InputGroup";
 import { SegmentedControl } from "@/shared/ui/SegmentedControl";
+import { cn } from "@/shared/utils/className";
 
 import { PresetGallery } from "./PresetGallery";
 import { TexturePreviewCanvas } from "./TexturePreviewCanvas";
@@ -200,6 +211,146 @@ function QuickOrientationBar({
   );
 }
 
+function RelativeAxisScalarInput({
+  axis,
+  axisTone,
+  ariaLabel,
+  value,
+  onCommit,
+}: {
+  axis: "x" | "y" | "z";
+  axisTone: "x" | "y" | "z";
+  ariaLabel: string;
+  value: number;
+  onCommit: (nextValue: number) => void;
+}) {
+  const formatted = formatQuantityDisplay(value, 1);
+  const [rawText, setRawText] = useState(formatted);
+  const focusedRef = useRef(false);
+
+  useEffect(() => {
+    if (!focusedRef.current) {
+      setRawText(formatted);
+    }
+  }, [formatted]);
+
+  return (
+    <InputGroup className="fm-inspector-vector3__cell">
+      <InputGroupAddon align="inline-start">
+        <InputGroupText
+          className={cn(
+            "fm-inspector-vector3__axis",
+            axisTone === "x" && "text-fm-axis-x",
+            axisTone === "y" && "text-fm-axis-y",
+            axisTone === "z" && "text-fm-axis-z",
+          )}
+        >
+          {axis}
+        </InputGroupText>
+      </InputGroupAddon>
+      <InputGroupInput
+        aria-label={ariaLabel}
+        autoComplete="off"
+        className="fm-inspector-vector3__input"
+        inputMode="decimal"
+        spellCheck={false}
+        type="text"
+        value={rawText}
+        onBlur={() => {
+          focusedRef.current = false;
+          const parsed = parseQuantityInputToSI(rawText, 1);
+          if (parsed !== null) {
+            if (!Object.is(parsed, value)) {
+              onCommit(parsed);
+            }
+            setRawText(formatQuantityDisplay(parsed, 1));
+          } else {
+            setRawText(formatted);
+          }
+        }}
+        onChange={(event) => {
+          const next = event.target.value;
+          setRawText(next);
+          const parsed = parseQuantityInputToSI(next, 1);
+          if (parsed !== null && !Object.is(parsed, value)) {
+            onCommit(parsed);
+          }
+        }}
+        onFocus={() => {
+          focusedRef.current = true;
+        }}
+      />
+    </InputGroup>
+  );
+}
+
+function RelativeBoundsOffsetField({
+  bounds,
+  ctx,
+}: {
+  bounds: TargetMetricBounds;
+  ctx: InspectorActionContext<MagneticTextureDraft>;
+}) {
+  const isPct = ctx.draft.translationUnitMode === "bounds_pct";
+  // bounds_pct: [-50% .. +50%] of bounds.size; bounds_norm: [-1 .. +1] normalized half-extent
+  const factor = isPct ? 100 : 2;
+  const origin: Vec3 =
+    ctx.draft.mappingSpace === "region"
+      ? [0, 0, 0]
+      : ctx.draft.mappingSpace === "world"
+        ? [...bounds.worldCenter]
+        : [...bounds.localCenter];
+
+  const spans: Vec3 = [
+    Math.max(bounds.size[0], 1e-18),
+    Math.max(bounds.size[1], 1e-18),
+    Math.max(bounds.size[2], 1e-18),
+  ];
+
+  const rel: Vec3 = [
+    ((ctx.draft.translationM[0] - origin[0]) / spans[0]) * factor,
+    ((ctx.draft.translationM[1] - origin[1]) / spans[1]) * factor,
+    ((ctx.draft.translationM[2] - origin[2]) / spans[2]) * factor,
+  ];
+
+  const updateAxis = (axisIndex: 0 | 1 | 2, nextRel: number) => {
+    const nextTranslation: Vec3 = [...ctx.draft.translationM];
+    nextTranslation[axisIndex] = origin[axisIndex] + (nextRel / factor) * spans[axisIndex];
+    ctx.setField("translationM", nextTranslation);
+  };
+
+  return (
+    <div className="fm-inspector-vector3" data-testid="relative-center-offset-vector3">
+      <div className="fm-inspector-vector3__row">
+        <div className="fm-inspector-vector3__grid">
+          <RelativeAxisScalarInput
+            ariaLabel={`Center offset x (${isPct ? "%" : "norm"})`}
+            axis="x"
+            axisTone="x"
+            value={rel[0]}
+            onCommit={(nextX) => updateAxis(0, nextX)}
+          />
+          <RelativeAxisScalarInput
+            ariaLabel={`Center offset y (${isPct ? "%" : "norm"})`}
+            axis="y"
+            axisTone="y"
+            value={rel[1]}
+            onCommit={(nextY) => updateAxis(1, nextY)}
+          />
+          <RelativeAxisScalarInput
+            ariaLabel={`Center offset z (${isPct ? "%" : "norm"})`}
+            axis="z"
+            axisTone="z"
+            value={rel[2]}
+            onCommit={(nextZ) => updateAxis(2, nextZ)}
+          />
+        </div>
+        <span className="fm-inspector-vector3__unit">{isPct ? "%" : "norm"}</span>
+      </div>
+    </div>
+  );
+}
+
 export interface BuildMagneticTextureSectionsOptions {
   hostContext: "object" | "region";
   bounds: TargetMetricBounds;
@@ -213,6 +364,16 @@ export interface BuildMagneticTextureSectionsOptions {
   inspectingFieldFile: boolean;
   onInspectFieldFile: (draft: MagneticTextureDraft) => void | Promise<void>;
   onCopyParentTextureToRegion?: (ctx: InspectorActionContext<MagneticTextureDraft>) => void;
+  showObjectAssignmentSection?: boolean;
+  defaultMagnetizationRefPlaceholder?: string;
+  canClearObjectTexture?: boolean;
+  clearObjectTextureDisabledReason?: string | null;
+  clearingObjectTexture?: boolean;
+  onClearObjectTexture?: () => void | Promise<void>;
+  canLoadFieldState?: boolean;
+  loadFieldStateDisabledReason?: string | null;
+  loadingFieldState?: boolean;
+  onLoadFieldState?: () => void | Promise<void>;
 }
 
 const PLANAR_2D_PRESETS = new Set<string>([
@@ -241,6 +402,16 @@ export function buildMagneticTextureInspectorSections({
   inspectingFieldFile,
   onInspectFieldFile,
   onCopyParentTextureToRegion,
+  showObjectAssignmentSection = false,
+  defaultMagnetizationRefPlaceholder,
+  canClearObjectTexture = false,
+  clearObjectTextureDisabledReason = null,
+  clearingObjectTexture = false,
+  onClearObjectTexture,
+  canLoadFieldState = false,
+  loadFieldStateDisabledReason = null,
+  loadingFieldState = false,
+  onLoadFieldState,
 }: BuildMagneticTextureSectionsOptions): readonly InspectorSectionSpec<MagneticTextureDraft>[] {
   const autoFace = resolveLargestFacePlane(bounds.size).toUpperCase();
   const targetWord = hostContext === "region" ? "region" : "object";
@@ -249,6 +420,52 @@ export function buildMagneticTextureInspectorSections({
     validateMagneticTextureDraft(draft).get(key) ?? null;
 
   const sections: InspectorSectionSpec<MagneticTextureDraft>[] = [];
+
+  if (hostContext === "object" && showObjectAssignmentSection) {
+    sections.push({
+      id: "object-assignment",
+      title: "Assignment",
+      icon: Compass,
+      defaultOpen: true,
+      summary: (d) => {
+        const refVal = typeof d.magnetizationRef === "string" ? d.magnetizationRef.trim() : "";
+        return refVal || defaultMagnetizationRefPlaceholder || "Auto asset ID";
+      },
+      rows: [
+        {
+          key: "magnetizationRef",
+          label: "Magnetization ref",
+          type: "expression",
+          placeholder: defaultMagnetizationRefPlaceholder ?? "mag:object:uniform",
+          hint: "Custom asset IDs are preserved across saves; leave blank to auto-name.",
+        },
+        ...(onClearObjectTexture
+          ? ([
+              {
+                type: "custom",
+                wide: true,
+                render: () => (
+                  <div className="flex justify-end">
+                    <Button
+                      data-testid="clear-magnetization-btn"
+                      disabled={!canClearObjectTexture || clearingObjectTexture}
+                      disabledReason={clearObjectTextureDisabledReason ?? undefined}
+                      size="sm"
+                      type="button"
+                      variant="secondary"
+                      onClick={() => void onClearObjectTexture()}
+                    >
+                      <Trash2 aria-hidden="true" size={14} />
+                      <span>{clearingObjectTexture ? "Clearing…" : "Clear"}</span>
+                    </Button>
+                  </div>
+                ),
+              },
+            ] as InspectorRowSpec<MagneticTextureDraft>[])
+          : []),
+      ],
+    });
+  }
 
   if (hostContext === "region") {
     sections.push({
@@ -1366,7 +1583,7 @@ export function buildMagneticTextureInspectorSections({
         options: [
           { value: "nm", label: "Metric SI (nm / µm / m)" },
           { value: "bounds_pct", label: "% of target bounds [−50% .. +50%]" },
-          { value: "bounds_norm", label: "Normalized box [−0.5 .. +0.5]" },
+          { value: "bounds_norm", label: "Normalized bounds [−1 .. +1]" },
         ],
       },
       {
@@ -1380,47 +1597,14 @@ export function buildMagneticTextureInspectorSections({
           d.translationUnitMode !== "bounds_pct" && d.translationUnitMode !== "bounds_norm",
       },
       {
+        key: "translationM",
+        label: "Center offset",
+        symbol: <>Δr</>,
         type: "custom",
         wide: true,
         showWhen: (d) =>
           d.translationUnitMode === "bounds_pct" || d.translationUnitMode === "bounds_norm",
-        render: (ctx) => {
-          const isPct = ctx.draft.translationUnitMode === "bounds_pct";
-          const factor = isPct ? 100 : 1;
-          const origin =
-            ctx.draft.mappingSpace === "region" ? ([0, 0, 0] as Vec3) : bounds.localCenter;
-          const rel: Vec3 = [
-            ((ctx.draft.translationM[0] - origin[0]) / bounds.size[0]) * factor,
-            ((ctx.draft.translationM[1] - origin[1]) / bounds.size[1]) * factor,
-            ((ctx.draft.translationM[2] - origin[2]) / bounds.size[2]) * factor,
-          ];
-          return (
-            <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-fm-subtle bg-fm-field px-2.5 py-1.5 text-xs tabular-nums">
-              <span className="text-fm-secondary">
-                Relative offset ({isPct ? "%" : "norm"}): ({rel.map((v) => v.toFixed(2)).join(", ")})
-              </span>
-              <div className="flex gap-1">
-                {([-25, 0, 25] as const).map((pct) => (
-                  <Button
-                    key={pct}
-                    size="sm"
-                    type="button"
-                    variant="ghost"
-                    onClick={() =>
-                      ctx.setField("translationM", [
-                        origin[0] + (pct / 100) * bounds.size[0],
-                        origin[1],
-                        origin[2],
-                      ])
-                    }
-                  >
-                    {pct === 0 ? "0%" : `${pct > 0 ? "+" : ""}${pct}% X`}
-                  </Button>
-                ))}
-              </div>
-            </div>
-          );
-        },
+        render: (ctx) => <RelativeBoundsOffsetField bounds={bounds} ctx={ctx} />,
       },
       {
         key: "rotationMode",
@@ -1687,7 +1871,21 @@ export function buildMagneticTextureInspectorSections({
         type: "custom",
         wide: true,
         render: (ctx) => (
-          <div className="flex justify-end">
+          <div className="flex flex-wrap justify-end gap-1.5">
+            {onLoadFieldState ? (
+              <Button
+                data-testid="load-field-state-btn"
+                disabled={!canLoadFieldState || loadingFieldState}
+                disabledReason={loadFieldStateDisabledReason ?? undefined}
+                size="sm"
+                type="button"
+                variant="primary"
+                onClick={() => void onLoadFieldState()}
+              >
+                <Upload aria-hidden="true" size={14} />
+                <span>{loadingFieldState ? "Loading…" : "Load File"}</span>
+              </Button>
+            ) : null}
             <Button
               data-testid="inspect-field-file-btn"
               disabled={inspectingFieldFile}
@@ -1967,6 +2165,23 @@ export function applyCoupledDraftFieldChange<K extends keyof MagneticTextureDraf
 
   if (THREE_DIMENSIONAL_OBJECT_LOCAL_PRESETS.has(current.presetKind) && key === "planeMode") {
     return { planeMode: "auto", resolvedPlane: "xy" };
+  }
+
+  if (
+    current.sourceMode !== "field-file" &&
+    (key === "fieldOrigin" ||
+      key === "fieldSourcePath" ||
+      key === "fieldArtifactRef" ||
+      key === "fieldSourceFormat" ||
+      key === "fieldDataset" ||
+      key === "fieldSampleIndex" ||
+      key === "fieldInterpolation" ||
+      key === "fieldRenormalize")
+  ) {
+    return {
+      sourceMode: "field-file",
+      [key]: value,
+    } as Partial<MagneticTextureDraft>;
   }
 
   return { [key]: value } as Partial<MagneticTextureDraft>;

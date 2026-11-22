@@ -516,9 +516,19 @@ export function useInspectorSpecController<TDraft extends object>(
     updateScoped,
   ]);
 
+  const canCleanApply =
+    spec.commitBar.mode === "staged" &&
+    Boolean(
+      typeof spec.commitBar.allowCleanApply === "function"
+        ? spec.commitBar.allowCleanApply(draft, effectiveBaseline)
+        : spec.commitBar.allowCleanApply,
+    );
+
   const requestApply = useCallback(async (): Promise<boolean> => {
     if (spec.commitBar.mode !== "staged") return false;
-    if (applying || dirtyFields.size === 0 || Boolean(lockReason)) return false;
+    if (applying || (!canCleanApply && dirtyFields.size === 0) || Boolean(lockReason)) {
+      return false;
+    }
 
     if (invalidFields.size > 0) {
       updateScoped((prev) => ({ ...prev, forceShowErrors: true }));
@@ -534,6 +544,7 @@ export function useInspectorSpecController<TDraft extends object>(
     return executeApply();
   }, [
     applying,
+    canCleanApply,
     dirtyFields.size,
     draft,
     effectiveBaseline,

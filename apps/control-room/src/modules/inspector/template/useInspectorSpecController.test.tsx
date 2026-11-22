@@ -25,7 +25,13 @@ const SELECTION_A: Selection = {
   moduleSource: "explorer",
   nodeId: "model:objects:film:material",
   objectId: "film",
-  ref: { type: "object", objectId: "film" },
+  ref: {
+    kind: "object.magnetic-parameters",
+    nodeId: "model:objects:film:material",
+    objectId: "film",
+    type: "scene-object",
+    visualizationTargetId: "object:film",
+  },
 };
 
 function createMaterialSpec(
@@ -241,6 +247,82 @@ describe("useInspectorSpecController", () => {
     });
     expect(latest.appliedFlash).toBe(false);
     expect(latest.phase).toBe("stagedClean");
+
+    act(() => {
+      root.unmount();
+    });
+  });
+
+  it("executes requestApply when dirtyFields is empty if allowCleanApply is enabled while respecting lockReason and invalidFields", async () => {
+    vi.useFakeTimers();
+    const env = installSimulationPreparationTestDom();
+    restoreDom = env.restore;
+    const container = env.document.createElement("div");
+    env.document.body.appendChild(container);
+    const root = createRoot(container as unknown as Element);
+
+    let locked = false;
+    const onApply = vi.fn(async () => true);
+    const baseSpec = createMaterialSpec(onApply, false);
+    const spec: InspectorSpec<MaterialDraft> = {
+      ...baseSpec,
+      commitBar: {
+        mode: "staged",
+        allowCleanApply: true,
+        applyLabel: (_draft, dirty) => (dirty ? "Apply" : "Reapply"),
+        lockReason: () => (locked ? "Locked by capability gate." : null),
+        onApply,
+      },
+    };
+    let latest!: InspectorSpecController<MaterialDraft>;
+
+    function Harness({ baseline }: { baseline: MaterialDraft }) {
+      latest = useInspectorSpecController(spec, SELECTION_A, baseline);
+      return null;
+    }
+
+    act(() => {
+      root.render(<Harness baseline={{ ms: 8e5, alpha: 0.008, showVectors: true }} />);
+    });
+
+    expect(latest.dirty).toBe(false);
+    expect(latest.dirtyFields.size).toBe(0);
+
+    // Clean apply succeeds when valid and unlocked.
+    let applied = false;
+    await act(async () => {
+      applied = await latest.requestApply();
+    });
+    expect(applied).toBe(true);
+    expect(onApply).toHaveBeenCalledTimes(1);
+    expect(latest.phase).toBe("appliedFlash");
+
+    act(() => {
+      vi.advanceTimersByTime(3000);
+    });
+    expect(latest.phase).toBe("stagedClean");
+
+    // Clean apply is blocked when lockReason is active.
+    locked = true;
+    act(() => {
+      root.render(<Harness baseline={{ ms: 8e5, alpha: 0.008, showVectors: true }} />);
+    });
+    await act(async () => {
+      applied = await latest.requestApply();
+    });
+    expect(applied).toBe(false);
+    expect(onApply).toHaveBeenCalledTimes(1);
+
+    // Clean apply is blocked when baseline has invalid field.
+    locked = false;
+    act(() => {
+      root.render(<Harness baseline={{ ms: 8e5, alpha: -0.1, showVectors: true }} />);
+    });
+    await act(async () => {
+      applied = await latest.requestApply();
+    });
+    expect(applied).toBe(false);
+    expect(onApply).toHaveBeenCalledTimes(1);
 
     act(() => {
       root.unmount();

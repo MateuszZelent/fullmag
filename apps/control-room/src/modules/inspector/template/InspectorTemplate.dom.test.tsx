@@ -207,7 +207,13 @@ const BASE_SELECTION: Selection = {
   moduleSource: "explorer",
   nodeId: "model:objects:film:material",
   objectId: "film",
-  ref: { type: "object", objectId: "film" },
+  ref: {
+    kind: "object.magnetic-parameters",
+    nodeId: "model:objects:film:material",
+    objectId: "film",
+    type: "scene-object",
+    visualizationTargetId: "object:film",
+  },
 };
 
 type TestInputCompat = TestElement & {
@@ -1254,6 +1260,101 @@ describe("InspectorTemplate", () => {
       "switch row",
     );
     expect(switchRow.className).toContain("fm-inspector-row--switch");
+
+    act(() => {
+      root.unmount();
+    });
+  });
+
+  it("shows and enables Apply without Revert when allowCleanApply is true on a clean staged draft", async () => {
+    const env = installSimulationPreparationTestDom();
+    restoreDom = env.restore;
+    const container = env.document.createElement("div");
+    env.document.body.appendChild(container);
+    const root = createRoot(container as unknown as Element);
+
+    const onApply = vi.fn(async () => true);
+
+    act(() => {
+      root.render(
+        <InspectorTemplate
+          baseline={BASE_DRAFT}
+          dirtyFields={new Set()}
+          draft={BASE_DRAFT}
+          invalidFields={new Map()}
+          selection={BASE_SELECTION}
+          spec={createSampleSpec({
+            commitBar: {
+              mode: "staged",
+              allowCleanApply: true,
+              applyLabel: (_draft, dirty) => (dirty ? "Apply Texture" : "Reapply Texture"),
+              cleanMessage: () => "Up to date with scene revision 4",
+              onApply,
+            },
+          })}
+          touchedFields={new Set()}
+          onApply={onApply}
+          onFieldChange={() => undefined}
+          onFieldTouch={() => undefined}
+          onRevertField={() => undefined}
+        />,
+      );
+    });
+
+    const stagedActions = findElement(
+      container,
+      (el) => el.getAttribute("data-slot") === "commit-bar-staged-actions",
+      "staged actions with allowCleanApply",
+    );
+    expect(stagedActions.getAttribute("data-visible")).toBe("true");
+
+    const actionButtons = findElements(stagedActions, (el) => el.tagName === "BUTTON");
+    expect(actionButtons).toHaveLength(1);
+    expect(actionButtons[0]?.textContent).toContain("Reapply Texture");
+    expect(stagedActions.textContent).not.toContain("Revert");
+
+    await act(async () => {
+      actionButtons[0]?.click();
+    });
+    expect(onApply).toHaveBeenCalledTimes(1);
+
+    // Ctrl+Enter also triggers clean apply.
+    const aside = findElement(container, (el) => el.tagName === "ASIDE", "inspector aside");
+    await act(async () => {
+      aside.dispatchEvent(createKeydownEvent("Enter", { ctrlKey: true }));
+    });
+    expect(onApply).toHaveBeenCalledTimes(2);
+
+    // Once dirty, both Revert and Apply Texture appear.
+    act(() => {
+      root.render(
+        <InspectorTemplate
+          baseline={BASE_DRAFT}
+          dirtyFields={new Set(["ms"])}
+          draft={{ ...BASE_DRAFT, ms: 8.5e5 }}
+          invalidFields={new Map()}
+          selection={BASE_SELECTION}
+          spec={createSampleSpec({
+            commitBar: {
+              mode: "staged",
+              allowCleanApply: true,
+              applyLabel: (_draft, dirty) => (dirty ? "Apply Texture" : "Reapply Texture"),
+              onApply,
+            },
+          })}
+          touchedFields={new Set(["ms"])}
+          onApply={onApply}
+          onFieldChange={() => undefined}
+          onFieldTouch={() => undefined}
+          onRevertField={() => undefined}
+        />,
+      );
+    });
+
+    const dirtyButtons = findElements(stagedActions, (el) => el.tagName === "BUTTON");
+    expect(dirtyButtons).toHaveLength(2);
+    expect(stagedActions.textContent).toContain("Revert");
+    expect(stagedActions.textContent).toContain("Apply Texture");
 
     act(() => {
       root.unmount();

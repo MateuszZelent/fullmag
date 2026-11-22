@@ -2,28 +2,37 @@
 
 import {
   Compass,
+  Eye,
   FolderOpen,
   Move3D,
   RotateCcw,
   Scaling,
   SlidersHorizontal,
   Sparkles,
+  Trash2,
 } from "lucide-react";
 import {
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
   useSyncExternalStore,
 } from "react";
 
-import type { MagnetizationApplyTarget } from "@/kernel/api/apiTypes";
+import type {
+  JsonObject,
+  MagnetizationApplyReceipt,
+  MagnetizationApplyTarget,
+} from "@/kernel/api/apiTypes";
+import type { components } from "@/kernel/api/generated/openapi-v2-types";
 import {
   acknowledgedAuthoringSceneRevision,
   invalidateAuthoringMutationDependents,
 } from "@/kernel/authoring/authoringMutationInvalidation";
 import { createCommandContext } from "@/kernel/commands/commandContext";
+import type { CommandId } from "@/kernel/commands/commandTypes";
 import { useKernel } from "@/kernel/KernelContext";
 import {
   publishCommittedSceneResource,
@@ -31,7 +40,10 @@ import {
   useModelRegionsResource,
   useSceneResource,
 } from "@/kernel/resources/geometryLifecycleResources";
-import { sessionRequestScopeKey } from "@/kernel/resources/sessionResourceIdentity";
+import {
+  sessionRequestScopeKey,
+  sessionResourceIdentityKey,
+} from "@/kernel/resources/sessionResourceIdentity";
 import {
   resolveActiveLaneOperation,
   useActiveLaneCapabilities,
@@ -42,6 +54,8 @@ import {
   useSessionStatusSelector,
 } from "@/kernel/resources/useSessionStatus";
 import type { RegionVisualizationTargetId } from "@/kernel/selection/selectionTypes";
+import { returnToCurrentFieldView } from "@/kernel/visualization/savedFieldPresentation";
+import { observationSourceWorkspaceStore } from "@/kernel/workspace/observationSourceWorkspace";
 import type { InspectorPanelProps } from "@/modules/inspector/inspectorTypes";
 import {
   commitMagneticTextureApply,
@@ -50,6 +64,7 @@ import {
 } from "@/modules/inspector/panels/ObjectMagneticTexturePanelViewModel";
 import {
   InspectorTemplate,
+  inspectorValuesEqual,
   useInspectorSpecController,
   type InspectorFact,
   type InspectorNotice,
@@ -61,6 +76,7 @@ import {
 } from "@/shared/domain/magnetization-texture/assetFactory";
 import { resolveTargetBoundsMeters } from "@/shared/domain/magnetization-texture/boundsResolver";
 import { resolveMagnetizationTextureModel } from "@/shared/domain/magnetization-texture/draftModel";
+import type { PresetTextureSpecV2 } from "@/shared/domain/magnetization-texture/evaluateV2Client";
 import {
   buildPresetSpecFromDraft,
   fitCharacteristicSizeToTarget,
@@ -72,6 +88,8 @@ import {
 } from "@/shared/domain/magnetization-texture/presetDefaults";
 import {
   extractMagnetizationTargetInputFromSelection,
+  isExplicitRegionSelectionKind,
+  parseRegionVisualizationTarget,
   resolveMagnetizationTextureTarget,
 } from "@/shared/domain/magnetization-texture/targetResolver";
 import {
@@ -85,6 +103,7 @@ import {
 import {
   canonicalPresetKind,
   humanPresetLabel,
+  type MagnetizationTexturePresetId,
 } from "@/shared/domain/magnetization-texture/texturePresets";
 import type { MagnetizationTextureTarget } from "@/shared/domain/magnetization-texture/types";
 
@@ -96,11 +115,106 @@ import {
 } from "./MagneticTextureCoreSections";
 
 type UnknownRecord = Record<string, unknown>;
+type SceneInitialMagnetization = components["schemas"]["SceneInitialMagnetization"];
+type SceneTextureMapping = components["schemas"]["SceneTextureMapping"];
+type SceneTextureTransform3D = components["schemas"]["SceneTextureTransform3D"];
+
+function buildSceneTextureMapping(
+  mapping: PresetTextureSpecV2["mapping"],
+): SceneTextureMapping | undefined {
+  if (!mapping) return undefined;
+  return {
+    ...(mapping.space ? { space: mapping.space } : {}),
+    ...(mapping.projection ? { projection: mapping.projection } : {}),
+    ...(mapping.clamp_mode ? { clamp_mode: mapping.clamp_mode } : {}),
+    ...(mapping.tile_period ? { tile_period: [...mapping.tile_period] } : {}),
+    ...(mapping.background_vector
+      ? { background_vector: [...mapping.background_vector] }
+      : {}),
+  };
+}
+
+function buildSceneTextureTransform(
+  transform: PresetTextureSpecV2["texture_transform"],
+): SceneTextureTransform3D | undefined {
+  if (!transform) return undefined;
+  return {
+    ...(transform.translation ? { translation: [...transform.translation] } : {}),
+    ...(transform.rotation_quat ? { rotation_quat: [...transform.rotation_quat] } : {}),
+    ...(transform.scale ? { scale: [...transform.scale] } : {}),
+    ...(transform.pivot ? { pivot: [...transform.pivot] } : {}),
+    ...(typeof transform.rotate_vectors === "boolean"
+      ? { rotate_vectors: transform.rotate_vectors }
+      : {}),
+  };
+}
 
 function asRecord(value: unknown): UnknownRecord | null {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value)
     ? (value as UnknownRecord)
     : null;
+}
+
+function normalizeMagnetizationRef(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  return trimmed && trimmed !== "unassigned" ? trimmed : null;
+}
+
+function parseRegionIdFromNodeId(nodeId: string | null | undefined): string | undefined {
+  if (!nodeId) return undefined;
+  const match = /:region:([^:]+)/.exec(nodeId);
+  return match?.[1] ? decodeURIComponent(match[1]) : undefined;
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+export function resolveSavedObjectMagnetizationAssetId(options: {
+  target: Extract<MagnetizationTextureTarget, { kind: "object" }>;
+  sourceMode: MagneticTextureDraft["sourceMode"];
+  presetKind: MagnetizationTexturePresetId;
+  draftMagnetizationRef: unknown;
+  committedAsset: UnknownRecord | null;
+  committedObjectRef: string | null;
+}): string {
+  const {
+    target,
+    sourceMode,
+    presetKind,
+    draftMagnetizationRef,
+    committedAsset,
+    committedObjectRef,
+  } = options;
+  const defaultNextId =
+    sourceMode === "field-file"
+      ? `mag:${target.objectId}:sampled`
+      : magnetizationTextureAssetId(target, presetKind);
+  const draftRef = normalizeMagnetizationRef(draftMagnetizationRef);
+  if (!draftRef) {
+    return defaultNextId;
+  }
+
+  const committedRef = normalizeMagnetizationRef(committedAsset?.id ?? committedObjectRef);
+  const committedKind = typeof committedAsset?.kind === "string" ? committedAsset.kind : null;
+  const committedPreset =
+    typeof committedAsset?.preset_kind === "string"
+      ? canonicalPresetKind(committedAsset.preset_kind)
+      : null;
+  const committedAutoId =
+    committedKind === "sampled" ||
+    committedKind === "file" ||
+    committedKind === "sampled_field"
+      ? `mag:${target.objectId}:sampled`
+      : committedPreset
+        ? magnetizationTextureAssetId(target, committedPreset)
+        : null;
+
+  if (committedRef && draftRef === committedRef && committedAutoId && committedRef === committedAutoId) {
+    return defaultNextId;
+  }
+  return draftRef;
 }
 
 export function resolveMagneticTextureCapabilityGate(
@@ -146,7 +260,8 @@ export function resolveMagneticTextureCapabilityGate(
 export function MagneticTextureInspectorPanel({ selection }: InspectorPanelProps) {
   const kernel = useKernel();
   const { api, authoringHistory, commands, resources } = kernel;
-  const sessionScopeKey = sessionRequestScopeKey(useSessionResourceIdentity());
+  const sessionIdentity = useSessionResourceIdentity();
+  const sessionScopeKey = sessionRequestScopeKey(sessionIdentity);
   const sessionStatusData = useSessionStatusSelector((status) => status.data);
   const activeLane = useActiveLaneCapabilities();
   const scene = useSceneResource();
@@ -158,22 +273,40 @@ export function MagneticTextureInspectorPanel({ selection }: InspectorPanelProps
     getTextureInspectorUiSnapshot,
   );
 
-  const hostContext: "object" | "region" =
-    selection.kind === "object.region.texture" ? "region" : "object";
+  const hostContext: "object" | "region" = isExplicitRegionSelectionKind(selection.kind)
+    ? "region"
+    : "object";
+
+  const isLoadSelection =
+    selection.kind === "object.magnetic-texture.load" ||
+    (selection.ref?.type === "scene-object" &&
+      selection.ref.kind === "object.magnetic-texture.load") ||
+    Boolean(selection.nodeId?.endsWith(":magnetic-texture:load"));
 
   const target = useMemo<MagnetizationTextureTarget>(() => {
-    const resolved = resolveMagnetizationTextureTarget(
-      extractMagnetizationTargetInputFromSelection(selection),
-      scene.data,
-    );
+    const input = extractMagnetizationTargetInputFromSelection(selection);
+    const resolved = resolveMagnetizationTextureTarget(input, scene.data);
     if (resolved) return resolved;
+
     const fallbackObjId =
-      (selection.ref?.type === "scene-object" ? selection.ref.objectId : selection.objectId) ??
+      (typeof input.objectId === "string" && input.objectId.trim()) ||
+      selection.objectId ||
       "object";
+    const parsedMeshRegion =
+      selection.ref?.type === "mesh-part"
+        ? parseRegionVisualizationTarget(selection.ref.visualizationTargetId)?.regionId
+        : undefined;
     const fallbackRegId =
-      selection.ref?.type === "scene-object" ? selection.ref.regionId : undefined;
-    if (hostContext === "region" && fallbackRegId) {
-      return { kind: "region", objectId: fallbackObjId, regionId: fallbackRegId };
+      (typeof input.regionId === "string" && input.regionId.trim()) ||
+      parsedMeshRegion ||
+      parseRegionIdFromNodeId(selection.nodeId);
+
+    if (hostContext === "region") {
+      return {
+        kind: "region",
+        objectId: fallbackObjId,
+        regionId: fallbackRegId || "region",
+      };
     }
     return { kind: "object", objectId: fallbackObjId };
   }, [hostContext, scene.data, selection]);
@@ -245,29 +378,58 @@ export function MagneticTextureInspectorPanel({ selection }: InspectorPanelProps
     }
   }, [objectBounds, parentDraft]);
 
+  const committedMagnetizationRef = useMemo(
+    () =>
+      target.kind === "object"
+        ? (normalizeMagnetizationRef(domainModel.asset?.id ?? domainModel.objectMagnetizationRef) ??
+          "")
+        : "",
+    [domainModel.asset?.id, domainModel.objectMagnetizationRef, target.kind],
+  );
+
   const baselineDraft = useMemo<MagneticTextureDraft>(() => {
     if (target.kind === "region") {
       const overrideInit = regionRec
         ? asRecord(regionRec.texture_override)?.initial_magnetization
         : null;
-      if (overrideInit) {
-        return hydrateMagneticTextureDraftFromInitializer(overrideInit, bounds, "region", {
-          inherited: false,
-        });
-      }
-      return hydrateMagneticTextureDraftFromInitializer(parentDomainModel.asset, bounds, "region", {
-        inherited: true,
-      });
+      const hydrated = overrideInit
+        ? hydrateMagneticTextureDraftFromInitializer(overrideInit, bounds, "region", {
+            inherited: false,
+          })
+        : hydrateMagneticTextureDraftFromInitializer(parentDomainModel.asset, bounds, "region", {
+            inherited: true,
+          });
+      return {
+        ...hydrated,
+        magnetizationRef: "",
+      };
     }
-    return hydrateMagneticTextureDraftFromInitializer(domainModel.asset, bounds, "object");
-  }, [bounds, domainModel.asset, parentDomainModel.asset, regionRec, target.kind]);
+    const hydrated = hydrateMagneticTextureDraftFromInitializer(
+      domainModel.asset,
+      bounds,
+      "object",
+    );
+    return {
+      ...hydrated,
+      magnetizationRef: committedMagnetizationRef,
+    };
+  }, [
+    bounds,
+    committedMagnetizationRef,
+    domainModel.asset,
+    parentDomainModel.asset,
+    regionRec,
+    target.kind,
+  ]);
 
   const supportedFieldFormats = useMemo<readonly string[]>(() => {
     const statusRec = asRecord(sessionStatusData);
     const capsRec = asRecord(statusRec?.capabilities);
     const rawList = capsRec?.field_state_import_formats;
     if (Array.isArray(rawList)) {
-      const cleaned = rawList.filter((item): item is string => typeof item === "string" && item.trim().length > 0);
+      const cleaned = rawList.filter(
+        (item): item is string => typeof item === "string" && item.trim().length > 0,
+      );
       if (cleaned.length > 0) return cleaned;
     }
     return ["field_state_json"];
@@ -277,7 +439,39 @@ export function MagneticTextureInspectorPanel({ selection }: InspectorPanelProps
     null,
   );
   const [inspectingFieldFile, setInspectingFieldFile] = useState(false);
+  const [clearingObjectTexture, setClearingObjectTexture] = useState(false);
+  const [clearedResetToken, setClearedResetToken] = useState(0);
+  const [loadingFieldState, setLoadingFieldState] = useState(false);
+  const [loadFieldFeedback, setLoadFieldFeedback] = useState<{
+    tone: "info" | "err";
+    message: string;
+  } | null>(null);
   const [appliedBannerMessage, setAppliedBannerMessage] = useState<string | null>(null);
+
+  const previewAbortRef = useRef<AbortController | null>(null);
+  const [lastApplyPreview, setLastApplyPreview] = useState<{
+    receipt: MagnetizationApplyReceipt;
+    sessionScopeKey: string;
+  } | null>(null);
+  const [previewLoading, setPreviewLoading] = useState(false);
+  const [previewError, setPreviewError] = useState<string | null>(null);
+
+  useLayoutEffect(() => () => previewAbortRef.current?.abort(), []);
+
+  const targetKey = formatTextureTargetKey(target);
+  const prevTargetKeyRef = useRef(targetKey);
+  useEffect(() => {
+    if (prevTargetKeyRef.current === targetKey) return;
+    prevTargetKeyRef.current = targetKey;
+    previewAbortRef.current?.abort();
+    previewAbortRef.current = null;
+    setPreviewLoading(false);
+    setPreviewError(null);
+    setLastApplyPreview(null);
+    setLoadFieldFeedback(null);
+    setAppliedBannerMessage(null);
+    setInspectionSummary(null);
+  }, [targetKey]);
 
   const handleInspectFieldFile = useCallback(
     async (draft: MagneticTextureDraft) => {
@@ -288,33 +482,44 @@ export function MagneticTextureInspectorPanel({ selection }: InspectorPanelProps
       if (!artifactRef || !api?.persistence?.fieldStates?.inspectImport) return;
       setInspectingFieldFile(true);
       try {
+        const inspectTarget =
+          target.kind === "region"
+            ? { kind: "region", id: target.regionId }
+            : { kind: "object", id: target.objectId };
         const res = asRecord(
           await api.persistence.fieldStates.inspectImport(
             {
               artifact_ref: artifactRef,
+              quantity_id: "m",
+              target: inspectTarget,
               ...(draft.fieldSourceFormat !== "auto" ? { format: draft.fieldSourceFormat } : {}),
-            } as never,
+            },
             sessionScopeKey ? { sessionScopeKey } : undefined,
           ),
         );
         if (res) {
-          const shape = Array.isArray(res.source_grid_shape) && res.source_grid_shape.length >= 3
-            ? ([
-                Number(res.source_grid_shape[0]) || 1,
-                Number(res.source_grid_shape[1]) || 1,
-                Number(res.source_grid_shape[2]) || 1,
-              ] as const)
-            : null;
+          const shape =
+            Array.isArray(res.source_grid_shape) && res.source_grid_shape.length >= 3
+              ? ([
+                  Number(res.source_grid_shape[0]) || 1,
+                  Number(res.source_grid_shape[1]) || 1,
+                  Number(res.source_grid_shape[2]) || 1,
+                ] as const)
+              : null;
           const datasets = Array.isArray(res.datasets)
             ? res.datasets.filter((d): d is string => typeof d === "string")
             : ["fields/m"];
+          const compatible =
+            typeof res.compatible === "boolean"
+              ? res.compatible
+              : res.compatibility !== "incompatible";
           setInspectionSummary({
-            vectorCount: Number(res.vector_count) || 0,
+            vectorCount: Number(res.vector_count ?? res.point_count) || 0,
             frameCount: Number(res.frame_count) || 1,
             sourceGridShape: shape,
             minNorm: typeof res.min_norm === "number" ? res.min_norm : 1,
             maxNorm: typeof res.max_norm === "number" ? res.max_norm : 1,
-            compatible: res.compatible !== false,
+            compatible,
             datasets,
           });
         }
@@ -322,8 +527,111 @@ export function MagneticTextureInspectorPanel({ selection }: InspectorPanelProps
         setInspectingFieldFile(false);
       }
     },
-    [api, sessionScopeKey],
+    [api, sessionScopeKey, target],
   );
+
+  const handleLoadFieldState = useCallback(async () => {
+    if (loadingFieldState) return;
+    if (!objectRec) {
+      setLoadFieldFeedback({
+        tone: "err",
+        message: "Select a committed magnetic object in the scene.",
+      });
+      return;
+    }
+    setLoadingFieldState(true);
+    setLoadFieldFeedback(null);
+    try {
+      const ctx = createCommandContext("inspector", kernel, {
+        resourceData: { [SCENE_RESOURCE_KEY]: scene.data },
+        sessionScopeKey: sessionScopeKey ?? undefined,
+        sourceDetail: "object-magnetic-texture-load",
+      });
+      const result = await commands.execute("study.load-field-state", ctx);
+      if (ctx.isCurrentSessionScope?.() === false) return;
+      setLoadFieldFeedback({
+        tone: result.status === "completed" ? "info" : "err",
+        message: result.message ?? "Magnetic texture load finished.",
+      });
+    } catch (error) {
+      setLoadFieldFeedback({
+        tone: "err",
+        message: errorMessage(error),
+      });
+    } finally {
+      setLoadingFieldState(false);
+    }
+  }, [commands, kernel, loadingFieldState, objectRec, scene.data, sessionScopeKey]);
+
+  const handleShowPreparedMagnetization = useCallback(async () => {
+    if (previewAbortRef.current || !lastApplyPreview || !sessionIdentity) return;
+    const { receipt, sessionScopeKey: previewScopeKey } = lastApplyPreview;
+    const source = receipt.prepared_initial_state;
+    const scope = receipt.scopes[0];
+    if (
+      sessionRequestScopeKey(sessionIdentity) !== previewScopeKey ||
+      !source ||
+      source.scene_revision !== receipt.scene_revision ||
+      receipt.status !== "initial_state_ready" ||
+      !scope
+    ) {
+      return;
+    }
+    const sessionIdentityKey = sessionResourceIdentityKey(sessionIdentity);
+    const abort = new AbortController();
+    const displayedObservation = observationSourceWorkspaceStore.getSnapshot();
+    const displayedResult = kernel.savedResultsPlayback?.getSnapshot();
+    const selectedTarget = kernel.selection.get();
+    previewAbortRef.current = abort;
+    setPreviewLoading(true);
+    setPreviewError(null);
+    try {
+      await kernel.api.data.fields.preparedMagnetization(
+        source,
+        { max_samples: 1 },
+        { sessionScopeKey: previewScopeKey, signal: abort.signal },
+      );
+      if (
+        abort.signal.aborted ||
+        kernel.commands.getSessionScopeKey() !== previewScopeKey ||
+        observationSourceWorkspaceStore.getSnapshot() !== displayedObservation ||
+        kernel.savedResultsPlayback?.getSnapshot() !== displayedResult ||
+        kernel.selection.get() !== selectedTarget
+      ) {
+        return;
+      }
+      if (kernel.visualization) {
+        if (selectedTarget) {
+          if (!returnToCurrentFieldView(kernel.visualization, kernel.selection, "inspector")) {
+            throw new Error(
+              "Apply or discard the current Inspector draft before opening the preview.",
+            );
+          }
+        } else {
+          kernel.visualization.clearSavedFieldPresentation();
+        }
+        kernel.visualization.setArtifactFieldSelection(null);
+      }
+      kernel.analysisFieldOverlay?.clear();
+      observationSourceWorkspaceStore.showPrepared({
+        source,
+        sessionIdentityKey,
+        objectId: scope.object_id,
+        regionId: scope.region_id ?? null,
+      });
+      kernel.savedResultsPlayback?.close();
+      kernel.layout?.setActiveViewportMainModule("viewport-3d");
+    } catch (failure) {
+      if (!abort.signal.aborted) {
+        setPreviewError(errorMessage(failure));
+      }
+    } finally {
+      if (previewAbortRef.current === abort) {
+        previewAbortRef.current = null;
+      }
+      setPreviewLoading(previewAbortRef.current !== null);
+    }
+  }, [kernel, lastApplyPreview, sessionIdentity]);
 
   const objectName =
     (typeof objectRec?.name === "string" && objectRec.name.trim()) || target.objectId;
@@ -339,61 +647,10 @@ export function MagneticTextureInspectorPanel({ selection }: InspectorPanelProps
     ? humanPresetLabel(parentDomainModel.asset.preset_kind, parentDomainModel.asset.kind)
     : "Uniform (+X)";
 
-  const handleCommitApply = useCallback(
-    async (draftToSave: MagneticTextureDraft): Promise<boolean> => {
+  const executeApplyTargetMutation = useCallback(
+    async (applyTarget: MagnetizationApplyTarget): Promise<boolean> => {
       if (!api || !sessionScopeKey || domainModel.baseRevision === null) {
         throw new Error("The saved scene and session are required to apply magnetization.");
-      }
-
-      let applyTarget: MagnetizationApplyTarget;
-      if (target.kind === "region") {
-        if (draftToSave.inheritanceMode === "inherit") {
-          applyTarget = {
-            kind: "region",
-            object_id: target.objectId,
-            region_id: target.regionId,
-            texture_override: null,
-          };
-        } else {
-          const initializer = serializeMagneticTextureDraftToInitializer(draftToSave, bounds);
-          applyTarget = {
-            kind: "region",
-            object_id: target.objectId,
-            region_id: target.regionId,
-            texture_override: {
-              initial_magnetization: initializer as never,
-            },
-          };
-        }
-      } else if (draftToSave.sourceMode === "field-file") {
-        const initializer = serializeMagneticTextureDraftToInitializer(draftToSave, bounds);
-        const assetId = `mag:${target.objectId}:sampled`;
-        applyTarget = {
-          kind: "object",
-          object_id: target.objectId,
-          asset: {
-            ...initializer,
-            id: assetId,
-            name: draftToSave.customUiLabel.trim() || "Imported field",
-          },
-        };
-      } else {
-        const presetKind = canonicalPresetKind(draftToSave.presetKind);
-        const assetId = magnetizationTextureAssetId(target, presetKind);
-        const initializer = serializeMagneticTextureDraftToInitializer(draftToSave, bounds);
-        applyTarget = {
-          kind: "object",
-          object_id: target.objectId,
-          asset: presetMagnetizationAsset({
-            id: assetId,
-            label: draftToSave.customUiLabel.trim() || null,
-            presetKind,
-            presetVersion: 2,
-            presetParams: (initializer.preset_params ?? {}) as never,
-            mapping: (initializer.mapping ?? null) as never,
-            textureTransform: (initializer.texture_transform ?? null) as never,
-          }),
-        };
       }
 
       const historyGeneration = authoringHistory?.getGeneration?.();
@@ -430,6 +687,13 @@ export function MagneticTextureInspectorPanel({ selection }: InspectorPanelProps
       const syncWarning = await syncAuthoringScriptBestEffort(api, sessionScopeKey);
       if (!historyContext.isCurrentSessionScope()) return false;
 
+      setPreviewError(null);
+      setLastApplyPreview(
+        response.magnetization_apply.status === "initial_state_ready" &&
+          response.magnetization_apply.prepared_initial_state
+          ? { receipt: response.magnetization_apply, sessionScopeKey }
+          : null,
+      );
       setAppliedBannerMessage(
         magneticTextureApplyMessage(response.magnetization_apply, syncWarning),
       );
@@ -438,15 +702,179 @@ export function MagneticTextureInspectorPanel({ selection }: InspectorPanelProps
     [
       api,
       authoringHistory,
-      bounds,
       commands,
       domainModel.baseRevision,
       resources,
       scene.data,
       sessionScopeKey,
+    ],
+  );
+
+  const handleCommitApply = useCallback(
+    async (draftToSave: MagneticTextureDraft): Promise<boolean> => {
+      if (target.kind === "region" && !domainModel.authoredRegion) {
+        throw new Error("Select an authored magnetic region to apply its texture.");
+      }
+
+      const unchanged = inspectorValuesEqual(draftToSave, baselineDraft);
+      let applyTarget: MagnetizationApplyTarget;
+
+      if (target.kind === "region") {
+        if (draftToSave.inheritanceMode === "inherit") {
+          applyTarget = {
+            kind: "region",
+            object_id: target.objectId,
+            region_id: target.regionId,
+            texture_override: null,
+          };
+        } else if (
+          unchanged &&
+          (domainModel.regionTextureOverride || domainModel.assignment === "object-inherited")
+        ) {
+          applyTarget = {
+            kind: "region",
+            object_id: target.objectId,
+            region_id: target.regionId,
+            texture_override: domainModel.regionTextureOverride ?? null,
+          };
+        } else {
+          const presetSpec = buildPresetSpecFromDraft(draftToSave, bounds);
+          const sceneMapping = buildSceneTextureMapping(presetSpec.mapping);
+          const sceneTransform = buildSceneTextureTransform(presetSpec.texture_transform);
+          const initialMagnetization: SceneInitialMagnetization = {
+            kind: "preset_texture",
+            preset_kind: presetSpec.preset_kind,
+            preset_version: presetSpec.preset_version,
+            preset_params: presetSpec.preset_params,
+            ...(sceneMapping ? { mapping: sceneMapping } : {}),
+            ...(sceneTransform ? { texture_transform: sceneTransform } : {}),
+          };
+          applyTarget = {
+            kind: "region",
+            object_id: target.objectId,
+            region_id: target.regionId,
+            texture_override: {
+              initial_magnetization: initialMagnetization,
+            },
+          };
+        }
+      } else if (unchanged && domainModel.asset) {
+        applyTarget = {
+          kind: "object",
+          object_id: target.objectId,
+          asset: domainModel.asset as unknown as JsonObject,
+        };
+      } else if (draftToSave.sourceMode === "field-file") {
+        const initializer = serializeMagneticTextureDraftToInitializer(draftToSave, bounds);
+        const assetId = resolveSavedObjectMagnetizationAssetId({
+          target,
+          sourceMode: "field-file",
+          presetKind: canonicalPresetKind(draftToSave.presetKind),
+          draftMagnetizationRef: draftToSave.magnetizationRef,
+          committedAsset: asRecord(domainModel.asset),
+          committedObjectRef: domainModel.objectMagnetizationRef,
+        });
+        applyTarget = {
+          kind: "object",
+          object_id: target.objectId,
+          asset: {
+            ...initializer,
+            id: assetId,
+            name: draftToSave.customUiLabel.trim() || "Imported field",
+          },
+        };
+      } else {
+        const presetKind = canonicalPresetKind(draftToSave.presetKind);
+        const assetId = resolveSavedObjectMagnetizationAssetId({
+          target,
+          sourceMode: "preset",
+          presetKind,
+          draftMagnetizationRef: draftToSave.magnetizationRef,
+          committedAsset: asRecord(domainModel.asset),
+          committedObjectRef: domainModel.objectMagnetizationRef,
+        });
+        const presetSpec = buildPresetSpecFromDraft(draftToSave, bounds);
+        const assetMapping = buildSceneTextureMapping(presetSpec.mapping);
+        const assetTransform = buildSceneTextureTransform(presetSpec.texture_transform);
+        applyTarget = {
+          kind: "object",
+          object_id: target.objectId,
+          asset: presetMagnetizationAsset({
+            id: assetId,
+            label: draftToSave.customUiLabel.trim() || null,
+            presetKind,
+            presetVersion: presetSpec.preset_version,
+            presetParams: (presetSpec.preset_params ?? {}) as JsonObject,
+            mapping: assetMapping ? ({ ...assetMapping } as JsonObject) : null,
+            textureTransform: assetTransform ? ({ ...assetTransform } as JsonObject) : null,
+          }),
+        };
+      }
+
+      return executeApplyTargetMutation(applyTarget);
+    },
+    [
+      baselineDraft,
+      bounds,
+      domainModel.asset,
+      domainModel.assignment,
+      domainModel.authoredRegion,
+      domainModel.objectMagnetizationRef,
+      domainModel.regionTextureOverride,
+      executeApplyTargetMutation,
       target,
     ],
   );
+
+  const controllerActionsRef = useRef<{
+    draft: MagneticTextureDraft;
+    bounds: typeof bounds;
+    patchDraft: (partial: Partial<MagneticTextureDraft>) => void;
+    revertAll: () => void;
+  }>({
+    draft: baselineDraft,
+    bounds,
+    patchDraft: () => undefined,
+    revertAll: () => undefined,
+  });
+
+  const handleClearObjectTexture = useCallback(async () => {
+    if (target.kind !== "object" || clearingObjectTexture || !objectRec) return;
+    setClearingObjectTexture(true);
+    try {
+      const ok = await executeApplyTargetMutation({
+        kind: "object",
+        object_id: target.objectId,
+        asset: null,
+      });
+      if (ok) {
+        setClearedResetToken((token) => token + 1);
+      }
+    } catch (error) {
+      setLoadFieldFeedback({
+        tone: "err",
+        message: errorMessage(error),
+      });
+    } finally {
+      setClearingObjectTexture(false);
+    }
+  }, [clearingObjectTexture, executeApplyTargetMutation, objectRec, target]);
+
+  const defaultMagnetizationRefPlaceholder = useMemo(
+    () =>
+      target.kind === "object"
+        ? baselineDraft.sourceMode === "field-file"
+          ? `mag:${target.objectId}:sampled`
+          : magnetizationTextureAssetId(target, canonicalPresetKind(baselineDraft.presetKind))
+        : undefined,
+    [baselineDraft.presetKind, baselineDraft.sourceMode, target],
+  );
+
+  const objectActionDisabledReason = !objectRec
+    ? "Select a committed magnetic object in the scene."
+    : !sessionScopeKey || domainModel.baseRevision === null
+      ? "The saved scene and session are required to apply magnetization."
+      : null;
 
   const sections = useMemo(
     () =>
@@ -471,15 +899,34 @@ export function MagneticTextureInspectorPanel({ selection }: InspectorPanelProps
             scale: [1, 1, 1],
           });
         },
+        showObjectAssignmentSection: hostContext === "object",
+        defaultMagnetizationRefPlaceholder,
+        canClearObjectTexture: hostContext === "object" && objectActionDisabledReason === null,
+        clearObjectTextureDisabledReason: objectActionDisabledReason,
+        clearingObjectTexture,
+        onClearObjectTexture: hostContext === "object" ? handleClearObjectTexture : undefined,
+        canLoadFieldState: hostContext === "object" && Boolean(objectRec),
+        loadFieldStateDisabledReason: !objectRec
+          ? "Select a committed magnetic object in the scene."
+          : null,
+        loadingFieldState,
+        onLoadFieldState: hostContext === "object" ? handleLoadFieldState : undefined,
       }),
     [
       bounds,
+      clearingObjectTexture,
+      defaultMagnetizationRefPlaceholder,
+      handleClearObjectTexture,
       handleInspectFieldFile,
+      handleLoadFieldState,
       hostContext,
       inspectingFieldFile,
       inspectionSummary,
+      loadingFieldState,
+      objectActionDisabledReason,
       objectBounds,
       objectName,
+      objectRec,
       parentDraft,
       parentPresetLabel,
       parentPreviewSpec,
@@ -488,11 +935,35 @@ export function MagneticTextureInspectorPanel({ selection }: InspectorPanelProps
     ],
   );
 
+  const hasCommittedTexture =
+    target.kind === "region"
+      ? Boolean(domainModel.regionTextureOverride || parentDomainModel.asset)
+      : Boolean(domainModel.asset);
+
+  const canShowPreparedPreview = useMemo(() => {
+    if (!lastApplyPreview || !sessionIdentity) return false;
+    const { receipt, sessionScopeKey: previewScopeKey } = lastApplyPreview;
+    const source = receipt.prepared_initial_state;
+    const scope = receipt.scopes[0];
+    if (
+      sessionRequestScopeKey(sessionIdentity) !== previewScopeKey ||
+      !source ||
+      source.scene_revision !== receipt.scene_revision ||
+      receipt.status !== "initial_state_ready" ||
+      !scope
+    ) {
+      return false;
+    }
+    const targetRegionId = target.kind === "region" ? target.regionId : null;
+    return scope.object_id === target.objectId && (scope.region_id ?? null) === targetRegionId;
+  }, [lastApplyPreview, sessionIdentity, target]);
+
   const spec = useMemo<InspectorSpec<MagneticTextureDraft>>(() => {
     const entityId =
       target.kind === "region"
         ? `${target.objectId}/${target.regionId}`
-        : domainModel.asset?.id ?? `mag:${target.objectId}:${canonicalPresetKind(baselineDraft.presetKind)}`;
+        : domainModel.asset?.id ??
+          `mag:${target.objectId}:${canonicalPresetKind(baselineDraft.presetKind)}`;
 
     const breadcrumbs =
       target.kind === "region"
@@ -539,7 +1010,8 @@ export function MagneticTextureInspectorPanel({ selection }: InspectorPanelProps
                   objectId: target.objectId,
                   regionId: target.regionId,
                   type: "scene-object" as const,
-                  visualizationTargetId: `region:${target.objectId}:${encodeURIComponent(target.regionId)}` as RegionVisualizationTargetId,
+                  visualizationTargetId:
+                    `region:${target.objectId}:${encodeURIComponent(target.regionId)}` as RegionVisualizationTargetId,
                 },
               },
             },
@@ -599,6 +1071,17 @@ export function MagneticTextureInspectorPanel({ selection }: InspectorPanelProps
           },
         },
         extraMenuActions: [
+          ...(canShowPreparedPreview
+            ? [
+                {
+                  id: "show-initial-magnetization",
+                  label: "Show initial magnetization",
+                  icon: Eye,
+                  disabledReason: previewLoading ? "Checking initial magnetization…" : undefined,
+                  onSelect: () => handleShowPreparedMagnetization(),
+                },
+              ]
+            : []),
           {
             id: "fit-characteristic-size",
             label:
@@ -625,7 +1108,7 @@ export function MagneticTextureInspectorPanel({ selection }: InspectorPanelProps
                 ? "Clear override (inherit from object)"
                 : "Reset to uniform +X",
             icon: Sparkles,
-            destructive: true,
+            destructive: target.kind === "region",
             onSelect: (ctx) => {
               if (target.kind === "region") {
                 ctx.setField("inheritanceMode", "inherit");
@@ -639,6 +1122,18 @@ export function MagneticTextureInspectorPanel({ selection }: InspectorPanelProps
               }
             },
           },
+          ...(target.kind === "object"
+            ? [
+                {
+                  id: "clear-object-magnetization",
+                  label: "Clear",
+                  icon: Trash2,
+                  destructive: true,
+                  disabledReason: objectActionDisabledReason ?? undefined,
+                  onSelect: () => handleClearObjectTexture(),
+                },
+              ]
+            : []),
         ],
       },
       identity: {
@@ -755,6 +1250,14 @@ export function MagneticTextureInspectorPanel({ selection }: InspectorPanelProps
           : undefined,
       notices: (draft): readonly InspectorNotice<MagneticTextureDraft>[] => {
         const list: InspectorNotice<MagneticTextureDraft>[] = [];
+        if (target.kind === "region" && objectRec && !domainModel.authoredRegion) {
+          list.push({
+            id: "unauthored-region-lock",
+            tone: "warn",
+            title: "Region not yet authored in scene",
+            text: "Select an authored magnetic region to apply its texture.",
+          });
+        }
         const capabilityGate = resolveMagneticTextureCapabilityGate(activeLane, draft);
         if (capabilityGate && !capabilityGate.enabled && capabilityGate.reason) {
           list.push({
@@ -762,6 +1265,36 @@ export function MagneticTextureInspectorPanel({ selection }: InspectorPanelProps
             tone: "err",
             title: "Unsupported in active solver lane",
             text: capabilityGate.reason,
+          });
+        }
+        if (canShowPreparedPreview) {
+          list.push({
+            id: "prepared-initial-magnetization",
+            tone: "info",
+            title: "Initial magnetization ready",
+            text: appliedBannerMessage ?? "Prepared initial magnetization is ready to inspect in 3D.",
+            quickFix: {
+              label: previewLoading
+                ? "Checking initial magnetization…"
+                : "Show initial magnetization",
+              disabled: previewLoading,
+              onApply: () => handleShowPreparedMagnetization(),
+            },
+          });
+        }
+        if (previewError) {
+          list.push({
+            id: "prepared-initial-magnetization-error",
+            tone: "err",
+            title: "Initial magnetization preview failed",
+            text: previewError,
+          });
+        }
+        if (loadFieldFeedback) {
+          list.push({
+            id: "load-field-state-feedback",
+            tone: loadFieldFeedback.tone,
+            text: loadFieldFeedback.message,
           });
         }
         if (draft.presetVersion === 1 && draft.inheritanceMode === "override") {
@@ -814,14 +1347,17 @@ export function MagneticTextureInspectorPanel({ selection }: InspectorPanelProps
         return list;
       },
       sections,
-      details: (draft) => [
-        { label: "Asset ID", value: entityId, mono: true },
-        { label: "Preset version", value: `v${draft.presetVersion}` },
-        {
-          label: "Target bounds",
-          value: `${(bounds.size[0] * 1e9).toPrecision(3)} × ${(bounds.size[1] * 1e9).toPrecision(3)} × ${(bounds.size[2] * 1e9).toPrecision(3)} nm (${bounds.source})`,
-        },
-      ],
+      details: (draft) => {
+        const draftRef = normalizeMagnetizationRef(draft.magnetizationRef);
+        return [
+          { label: "Asset ID", value: draftRef ?? entityId, mono: true },
+          { label: "Preset version", value: `v${draft.presetVersion}` },
+          {
+            label: "Target bounds",
+            value: `${(bounds.size[0] * 1e9).toPrecision(3)} × ${(bounds.size[1] * 1e9).toPrecision(3)} × ${(bounds.size[2] * 1e9).toPrecision(3)} nm (${bounds.source})`,
+          },
+        ];
+      },
       toPythonModuleSnippet: (draft) =>
         formatMagneticTexturePythonExpression(
           draft,
@@ -830,12 +1366,18 @@ export function MagneticTextureInspectorPanel({ selection }: InspectorPanelProps
         ),
       commitBar: {
         mode: "staged",
+        allowCleanApply: true,
+        applyLabel: (_draft, dirty) =>
+          dirty ? "Apply Texture" : hasCommittedTexture ? "Reapply Texture" : "Apply Texture",
         cleanMessage: () =>
           domainModel.baseRevision !== null
             ? `Up to date with scene revision ${domainModel.baseRevision}`
             : "Up to date",
         lockReason: (draft) => {
           if (!objectRec) return "Select a committed magnetic object in the scene.";
+          if (target.kind === "region" && !domainModel.authoredRegion) {
+            return "Select an authored magnetic region to apply its texture.";
+          }
           const capabilityGate = resolveMagneticTextureCapabilityGate(activeLane, draft);
           if (capabilityGate && !capabilityGate.enabled) {
             return capabilityGate.reason ?? "Unsupported magnetization operation.";
@@ -847,18 +1389,28 @@ export function MagneticTextureInspectorPanel({ selection }: InspectorPanelProps
     };
   }, [
     activeLane,
+    appliedBannerMessage,
     baselineDraft.inheritanceMode,
     baselineDraft.presetKind,
     bounds,
     bridgeSnapshot.gizmoEnabled,
+    canShowPreparedPreview,
     domainModel.asset,
+    domainModel.authoredRegion,
     domainModel.baseRevision,
+    handleClearObjectTexture,
     handleCommitApply,
+    handleShowPreparedMagnetization,
+    hasCommittedTexture,
     hostContext,
+    loadFieldFeedback,
+    objectActionDisabledReason,
     objectName,
     objectRec,
     parentDraft,
     parentPresetLabel,
+    previewError,
+    previewLoading,
     regionName,
     regionPriority,
     regionRec,
@@ -867,8 +1419,26 @@ export function MagneticTextureInspectorPanel({ selection }: InspectorPanelProps
   ]);
 
   const controller = useInspectorSpecController(spec, selection, baselineDraft, undefined, {
-    initialModeTabId: baselineDraft.sourceMode === "field-file" ? "field-file" : "preset",
+    initialModeTabId:
+      isLoadSelection || baselineDraft.sourceMode === "field-file" ? "field-file" : "preset",
   });
+
+  // Honor redirected `object.magnetic-texture.load` selections even when switching from another texture sub-node
+  const prevIsLoadRef = useRef(isLoadSelection);
+  useEffect(() => {
+    const becameLoad = isLoadSelection && !prevIsLoadRef.current;
+    prevIsLoadRef.current = isLoadSelection;
+    if (hostContext === "object" && becameLoad && controller.activeModeTabId !== "field-file") {
+      controller.setActiveModeTabId("field-file");
+    }
+  }, [controller, hostContext, isLoadSelection]);
+
+  const lastClearedTokenRef = useRef(0);
+  useEffect(() => {
+    if (clearedResetToken === lastClearedTokenRef.current) return;
+    lastClearedTokenRef.current = clearedResetToken;
+    controller.revertAll();
+  }, [clearedResetToken, controller]);
 
   // Synchronize Slot 4 modeTab ("preset" | "field-file") with draft.sourceMode on Object
   const handleModeTabChange = useCallback(
@@ -883,7 +1453,6 @@ export function MagneticTextureInspectorPanel({ selection }: InspectorPanelProps
   );
 
   // Respond to external command requests (`magnetization-texture.activate-load-file`)
-  const targetKey = formatTextureTargetKey(target);
   const lastHandledTabSeqRef = useRef(0);
   useEffect(() => {
     const req = bridgeSnapshot.tabRequest;
@@ -917,17 +1486,13 @@ export function MagneticTextureInspectorPanel({ selection }: InspectorPanelProps
 
   // Register live 60 FPS bidirectional draft binding with `TextureTransformGizmo`
   const bindingOwner = useMemo(() => Symbol("magnetic-texture-inspector-binding"), []);
-  const controllerActionsRef = useRef({
-    draft: controller.draft,
-    bounds,
-    patchDraft: controller.patchDraft,
-  });
 
   useEffect(() => {
     controllerActionsRef.current = {
       draft: controller.draft,
       bounds,
       patchDraft: controller.patchDraft,
+      revertAll: controller.revertAll,
     };
     registerTextureInspectorBinding(bindingOwner, {
       target,
@@ -950,18 +1515,25 @@ export function MagneticTextureInspectorPanel({ selection }: InspectorPanelProps
           ),
         ),
     });
-  }, [bindingOwner, bounds, controller.draft, controller.patchDraft, target]);
+  }, [
+    bindingOwner,
+    bounds,
+    controller.draft,
+    controller.patchDraft,
+    controller.revertAll,
+    target,
+  ]);
 
   useEffect(() => {
     return () => unregisterTextureInspectorBinding(bindingOwner);
   }, [bindingOwner]);
 
   const handleFitView = useCallback(
-    (commandId?: string) => {
+    (commandId?: CommandId) => {
       const ctx = createCommandContext("inspector", kernel, {
         sourceDetail: "magnetic-texture-inspector",
       });
-      void commands.execute((commandId ?? "viewport-3d.fit-selection") as never, ctx);
+      void commands.execute(commandId ?? "viewport-3d.fit-selection", ctx);
     },
     [commands, kernel],
   );
@@ -973,7 +1545,7 @@ export function MagneticTextureInspectorPanel({ selection }: InspectorPanelProps
       appliedFlash={controller.appliedFlash}
       appliedMessage={appliedBannerMessage}
       applyError={controller.applyError}
-      applying={controller.applying}
+      applying={controller.applying || clearingObjectTexture}
       baseline={controller.baseline}
       dirtyFields={controller.dirtyFields}
       displayUnits={controller.displayUnits}

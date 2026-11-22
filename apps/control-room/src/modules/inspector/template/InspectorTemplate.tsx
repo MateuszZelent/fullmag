@@ -213,6 +213,8 @@ function NoticeCard<TDraft>({
             ) : null}
             {notice.quickFix ? (
               <Button
+                disabled={Boolean(notice.quickFix.disabled)}
+                disabledReason={notice.quickFix.disabledReason}
                 size="sm"
                 type="button"
                 variant={notice.quickFix.ghost ? "ghost" : "secondary"}
@@ -493,9 +495,22 @@ export function InspectorTemplate<TDraft>({
     }
   }, [baseline, draft, onApply, spec.commitBar]);
 
+  const canCleanApply =
+    spec.commitBar.mode === "staged" &&
+    Boolean(
+      typeof spec.commitBar.allowCleanApply === "function"
+        ? spec.commitBar.allowCleanApply(draft, baseline)
+        : spec.commitBar.allowCleanApply,
+    );
+
   const triggerApply = useCallback(() => {
     if (effectiveCommitMode !== "staged") return;
-    if (dirtyFields.size === 0 || invalidFields.size > 0 || isApplying || Boolean(lockReason)) {
+    if (
+      (!canCleanApply && dirtyFields.size === 0) ||
+      invalidFields.size > 0 ||
+      isApplying ||
+      Boolean(lockReason)
+    ) {
       return;
     }
 
@@ -516,6 +531,7 @@ export function InspectorTemplate<TDraft>({
     void runDirectApply();
   }, [
     baseline,
+    canCleanApply,
     dirtyFields.size,
     draft,
     effectiveCommitMode,
