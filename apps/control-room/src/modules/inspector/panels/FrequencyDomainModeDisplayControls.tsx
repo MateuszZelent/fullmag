@@ -9,6 +9,14 @@ import type { SurfaceColorSource, VisualizationGeometryScope } from "@/kernel/vi
 import { useObjectVisualizationSelector } from "@/kernel/visualization/useObjectVisualization";
 import { useVisualizationStateResource } from "@/kernel/visualization/useVisualizationStateResource";
 import { Button } from "@/shared/ui/Button";
+import { Input } from "@/shared/ui/Input";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/shared/ui/Select";
 
 import {
   colorPickerInputValue,
@@ -306,7 +314,7 @@ interface FrequencyDomainModeDisplayControlsProps {
   settings: FrequencyDomainModeDisplaySettings;
   viewDefaultValue: string;
   viewOptions: readonly string[];
-  viewRef?: RefObject<HTMLSelectElement | null>;
+  viewRef?: RefObject<HTMLButtonElement | HTMLSelectElement | null>;
   viewTitle?: string;
 }
 
@@ -329,44 +337,71 @@ export function FrequencyDomainModeDisplayControls({
   )
     ? settings.component
     : componentOptions[0]?.value ?? settings.component;
+  const selectedViewLabel = analysisFieldViewLabel(selectedView);
+  const selectedComponentLabel =
+    componentOptions.find((item) => item.value === selectedComponent)?.label ??
+    selectedComponent;
+  const selectedColorSourceLabel = modeColorSourceLabel(settings.colorSource);
+  const selectedColormapLabel = modeColormapLabel(settings.colormap);
+  const selectedColorRangeLabel =
+    settings.colorRangeMode === "manual"
+      ? "Manual"
+      : settings.colorRangeMode === "symmetric"
+        ? "Symmetric"
+        : "Auto";
+  const selectedGeometryScopeLabel =
+    MODE_GEOMETRY_SCOPE_ITEMS.find((item) => item.value === settings.geometryScope)
+      ?.label ?? settings.geometryScope;
   return (
     <>
       <FieldRow
         label="Mode field view"
         value={
-          <select
-            aria-label={`${labelPrefix} 3D view`}
-            className="fm-inspector-select"
+          <Select
             disabled={disabled}
-            ref={viewRef}
-            title={viewTitle}
             value={selectedView}
-            onChange={(event) => settings.setView(event.target.value)}
+            onValueChange={(nextValue) => settings.setView(nextValue)}
           >
-            {viewOptions.map((view) => (
-              <option key={view} value={view}>
-                {analysisFieldViewLabel(view)}
-              </option>
-            ))}
-          </select>
+            <SelectTrigger
+              aria-label={`${labelPrefix} 3D view`}
+              ref={viewRef as RefObject<HTMLButtonElement | null> | undefined}
+              title={viewTitle}
+            >
+              <SelectValue placeholder={selectedViewLabel}>
+                {selectedViewLabel}
+              </SelectValue>
+            </SelectTrigger>
+            <SelectContent>
+              {viewOptions.map((view) => (
+                <SelectItem key={view} value={view}>
+                  {analysisFieldViewLabel(view)}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
         }
       />
       <FieldRow
         label="Mode component"
         value={
-          <select
-            aria-label={`${labelPrefix} field component`}
-            className="fm-inspector-select"
+          <Select
             disabled={disabled}
             value={selectedComponent}
-            onChange={(event) => settings.setComponent(event.target.value)}
+            onValueChange={(nextValue) => settings.setComponent(nextValue)}
           >
-            {componentOptions.map((item) => (
-              <option key={item.value} value={item.value}>
-                {item.label}
-              </option>
-            ))}
-          </select>
+            <SelectTrigger aria-label={`${labelPrefix} field component`}>
+              <SelectValue placeholder={selectedComponentLabel}>
+                {selectedComponentLabel}
+              </SelectValue>
+            </SelectTrigger>
+            <SelectContent>
+              {componentOptions.map((item) => (
+                <SelectItem key={item.value} value={item.value}>
+                  {item.label}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
         }
       />
       <FieldRow
@@ -399,19 +434,24 @@ export function FrequencyDomainModeDisplayControls({
       <FieldRow
         label="Mode color source"
         value={
-          <select
-            aria-label={`${labelPrefix} color source`}
-            className="fm-inspector-select"
+          <Select
             disabled={disabled}
             value={settings.colorSource}
-            onChange={(event) => settings.setColorSource(event.target.value)}
+            onValueChange={(nextValue) => settings.setColorSource(nextValue)}
           >
-            {SURFACE_COLOR_SOURCE_ITEMS.map((item) => (
-              <option key={item.value} value={item.value}>
-                {item.label}
-              </option>
-            ))}
-          </select>
+            <SelectTrigger aria-label={`${labelPrefix} color source`}>
+              <SelectValue placeholder={selectedColorSourceLabel}>
+                {selectedColorSourceLabel}
+              </SelectValue>
+            </SelectTrigger>
+            <SelectContent>
+              {SURFACE_COLOR_SOURCE_ITEMS.map((item) => (
+                <SelectItem key={item.value} value={item.value}>
+                  {item.label}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
         }
       />
       <FieldRow
@@ -426,7 +466,7 @@ export function FrequencyDomainModeDisplayControls({
               value={pickerValue}
               onChange={(event) => settings.setSolidColor(event.target.value)}
             />
-            <input
+            <Input
               aria-label={`${labelPrefix} solid color`}
               className="fm-visualization-color-field__value"
               disabled={disabled}
@@ -441,19 +481,24 @@ export function FrequencyDomainModeDisplayControls({
         label="Mode colormap"
         value={
           <div className="fm-inspector-colorbar-control">
-            <select
-              aria-label={`${labelPrefix} colormap`}
-              className="fm-inspector-select"
+            <Select
               disabled={disabled}
               value={settings.colormap}
-              onChange={(event) => settings.setColormap(event.target.value)}
+              onValueChange={(nextValue) => settings.setColormap(nextValue)}
             >
-              {SCALAR_COLOR_PALETTE_ITEMS.map((item) => (
-                <option key={item.value} value={item.value}>
-                  {item.label}
-                </option>
-              ))}
-            </select>
+              <SelectTrigger aria-label={`${labelPrefix} colormap`}>
+                <SelectValue placeholder={selectedColormapLabel}>
+                  {selectedColormapLabel}
+                </SelectValue>
+              </SelectTrigger>
+              <SelectContent>
+                {SCALAR_COLOR_PALETTE_ITEMS.map((item) => (
+                  <SelectItem key={item.value} value={item.value}>
+                    {item.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
             <span
               aria-hidden="true"
               className="fm-inspector-colorbar__ramp"
@@ -467,25 +512,29 @@ export function FrequencyDomainModeDisplayControls({
       <FieldRow
         label="Color range"
         value={
-          <select
-            aria-label={`${labelPrefix} color range mode`}
-            className="fm-inspector-select"
+          <Select
             disabled={disabled}
             value={settings.colorRangeMode}
-            onChange={(event) => settings.setColorRangeMode(event.target.value)}
+            onValueChange={(nextValue) => settings.setColorRangeMode(nextValue)}
           >
-            <option value="auto">Auto</option>
-            <option value="symmetric">Symmetric</option>
-            <option value="manual">Manual</option>
-          </select>
+            <SelectTrigger aria-label={`${labelPrefix} color range mode`}>
+              <SelectValue placeholder={selectedColorRangeLabel}>
+                {selectedColorRangeLabel}
+              </SelectValue>
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="auto">Auto</SelectItem>
+              <SelectItem value="symmetric">Symmetric</SelectItem>
+              <SelectItem value="manual">Manual</SelectItem>
+            </SelectContent>
+          </Select>
         }
       />
       <FieldRow
         label="Color minimum"
         value={
-          <input
+          <Input
             aria-label={`${labelPrefix} color minimum`}
-            className="fm-inspector-input"
             disabled={disabled || settings.colorRangeMode !== "manual"}
             step="any"
             type="number"
@@ -497,9 +546,8 @@ export function FrequencyDomainModeDisplayControls({
       <FieldRow
         label="Color maximum"
         value={
-          <input
+          <Input
             aria-label={`${labelPrefix} color maximum`}
-            className="fm-inspector-input"
             disabled={disabled || settings.colorRangeMode === "auto"}
             min={settings.colorRangeMode === "symmetric" ? "0" : undefined}
             step="any"
@@ -512,9 +560,8 @@ export function FrequencyDomainModeDisplayControls({
       <FieldRow
         label="Display gain"
         value={
-          <input
+          <Input
             aria-label={`${labelPrefix} display gain`}
-            className="fm-inspector-input"
             disabled={disabled}
             min="0"
             step="0.1"
@@ -527,9 +574,8 @@ export function FrequencyDomainModeDisplayControls({
       <FieldRow
         label="Vector budget"
         value={
-          <input
+          <Input
             aria-label={`${labelPrefix} vector budget`}
-            className="fm-inspector-input"
             disabled={disabled}
             max="20000"
             min="0"
@@ -543,27 +589,31 @@ export function FrequencyDomainModeDisplayControls({
       <FieldRow
         label="Vector scope"
         value={
-          <select
-            aria-label={`${labelPrefix} vector scope`}
-            className="fm-inspector-select"
+          <Select
             disabled={disabled}
             value={settings.geometryScope}
-            onChange={(event) => settings.setGeometryScope(event.target.value)}
+            onValueChange={(nextValue) => settings.setGeometryScope(nextValue)}
           >
-            {MODE_GEOMETRY_SCOPE_ITEMS.map((item) => (
-              <option key={item.value} value={item.value}>
-                {item.label}
-              </option>
-            ))}
-          </select>
+            <SelectTrigger aria-label={`${labelPrefix} vector scope`}>
+              <SelectValue placeholder={selectedGeometryScopeLabel}>
+                {selectedGeometryScopeLabel}
+              </SelectValue>
+            </SelectTrigger>
+            <SelectContent>
+              {MODE_GEOMETRY_SCOPE_ITEMS.map((item) => (
+                <SelectItem key={item.value} value={item.value}>
+                  {item.label}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
         }
       />
       <FieldRow
         label="Vector scale"
         value={
-          <input
+          <Input
             aria-label={`${labelPrefix} vector scale`}
-            className="fm-inspector-input"
             disabled={disabled}
             min="0"
             step="0.1"

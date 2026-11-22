@@ -8,6 +8,16 @@ import {
   teslaToMilliTesla,
 } from "@/shared/domain/physics/fieldDrive";
 import { buildSincPulsePreview } from "@/shared/domain/physics/sincPulsePreview";
+import { Checkbox } from "@/shared/ui/Checkbox";
+import { Input } from "@/shared/ui/Input";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/shared/ui/Select";
+import { Textarea } from "@/shared/ui/Textarea";
 
 import { FeedbackBanner } from "../../primitives/FeedbackBanner";
 import { FieldRow } from "../../primitives/FieldRow";
@@ -27,6 +37,50 @@ import { formatEditableNumber } from "./samplingPresentation";
 import { resolveStudyWorkflowStateBefore } from "./studyWorkflowState";
 
 const AXES = ["x", "y", "z"] as const;
+const EMPTY_SELECT_SENTINEL = "__none__";
+
+const TARGET_LABELS: Record<string, string> = {
+  global: "Global domain",
+  object: "Object",
+  region: "Stable region",
+};
+
+const SPATIAL_PROFILE_LABELS: Record<string, string> = {
+  geometry_mask: "Geometry mask",
+  sinc: "Spatial sinc",
+  uniform: "Uniform",
+};
+
+const WAVEFORM_LABELS: Record<string, string> = {
+  constant: "Constant",
+  piecewise_linear: "Piecewise linear",
+  pulse: "Rectangular pulse",
+  sinc_pulse: "Sinc pulse",
+  sinusoidal: "Sinusoidal",
+};
+
+const TIME_ORIGIN_LABELS: Record<string, string> = {
+  absolute: "Absolute simulation time",
+  stage_local: "Stage local",
+};
+
+const ACTIVATION_LABELS: Record<string, string> = {
+  all_time_evolution: "All following time stages",
+  stage_ids: "Selected following runs",
+};
+
+const WINDOW_LABELS: Record<string, string> = {
+  hann: "Hann",
+  none: "None",
+};
+
+function resolveOptionLabel(
+  items: readonly { id: string; label: string }[],
+  id: string,
+  emptyLabel: string,
+): string {
+  return items.find((item) => item.id === id)?.label ?? (id || emptyLabel);
+}
 
 export function AddFieldDriveStageInspector(props: StageInspectorFrameProps) {
   const draft = props.draft;
@@ -102,8 +156,7 @@ export function AddFieldDriveStageInspector(props: StageInspectorFrameProps) {
         />
         <label className="fm-inspector-field">
           <span>Drive ID</span>
-          <input
-            className="fm-inspector-input"
+          <Input
             disabled={!drive}
             value={drive?.id ?? ""}
             onChange={(event) =>
@@ -113,8 +166,7 @@ export function AddFieldDriveStageInspector(props: StageInspectorFrameProps) {
         </label>
         <label className="fm-inspector-field">
           <span>Name</span>
-          <input
-            className="fm-inspector-input"
+          <Input
             disabled={!drive}
             value={drive?.name ?? ""}
             onChange={(event) =>
@@ -124,10 +176,9 @@ export function AddFieldDriveStageInspector(props: StageInspectorFrameProps) {
         </label>
         <label className="fm-inspector-field">
           <span>Enabled</span>
-          <input
+          <Checkbox
             checked={drive?.enabled ?? false}
             disabled={!drive}
-            type="checkbox"
             onChange={(event) =>
               updateDrive((current) => ({
                 ...current,
@@ -155,9 +206,8 @@ export function AddFieldDriveStageInspector(props: StageInspectorFrameProps) {
           <span>Direction (x, y, z)</span>
           <div className="fm-inspector-vector-row">
             {AXES.map((axis, index) => (
-              <input
+              <Input
                 aria-label={`Direction ${axis}`}
-                className="fm-inspector-input"
                 disabled={!drive}
                 key={axis}
                 step="0.01"
@@ -176,34 +226,43 @@ export function AddFieldDriveStageInspector(props: StageInspectorFrameProps) {
         </label>
         <label className="fm-inspector-field">
           <span>Target</span>
-          <select
-            className="fm-inspector-input"
+          <Select
             disabled={!drive}
             value={drive?.target.kind ?? "global"}
-            onChange={(event) =>
+            onValueChange={(nextValue) =>
               updateDrive((current) => ({
                 ...current,
                 target:
-                  event.target.value === "object"
+                  nextValue === "object"
                     ? { kind: "object", object_id: "" }
-                    : event.target.value === "region"
+                    : nextValue === "region"
                       ? { kind: "region", object_id: "", region_id: "" }
                       : { kind: "global" },
               }))
             }
           >
-            <option value="global">Global domain</option>
-            <option value="object">Object</option>
-            <option value="region">Stable region</option>
-          </select>
+            <SelectTrigger aria-label="Target">
+              <SelectValue
+                placeholder={TARGET_LABELS[drive?.target.kind ?? "global"]}
+              >
+                {TARGET_LABELS[drive?.target.kind ?? "global"]}
+              </SelectValue>
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="global">Global domain</SelectItem>
+              <SelectItem value="object">Object</SelectItem>
+              <SelectItem value="region">Stable region</SelectItem>
+            </SelectContent>
+          </Select>
         </label>
         {drive && drive.target.kind !== "global" ? (
           <label className="fm-inspector-field">
             <span>Object</span>
-            <select
-              className="fm-inspector-input"
-              value={drive.target.object_id}
-              onChange={(event) =>
+            <Select
+              value={drive.target.object_id || EMPTY_SELECT_SENTINEL}
+              onValueChange={(nextValue) => {
+                const objectId =
+                  nextValue === EMPTY_SELECT_SENTINEL ? "" : nextValue;
                 updateDrive((current) => {
                   if (current.target.kind === "global") return current;
                   return {
@@ -211,60 +270,100 @@ export function AddFieldDriveStageInspector(props: StageInspectorFrameProps) {
                     target: current.target.kind === "region"
                       ? {
                           ...current.target,
-                          object_id: event.target.value,
+                          object_id: objectId,
                           region_id: "",
                         }
-                      : { ...current.target, object_id: event.target.value },
+                      : { ...current.target, object_id: objectId },
                   };
-                })
-              }
+                });
+              }}
             >
-              <option value="">Select an object</option>
-              {selectorOptions.objects.map((object) => (
-                <option key={object.id} value={object.id}>{object.label}</option>
-              ))}
-            </select>
+              <SelectTrigger aria-label="Object">
+                <SelectValue
+                  placeholder={resolveOptionLabel(
+                    selectorOptions.objects,
+                    drive.target.object_id,
+                    "Select an object",
+                  )}
+                >
+                  {resolveOptionLabel(
+                    selectorOptions.objects,
+                    drive.target.object_id,
+                    "Select an object",
+                  )}
+                </SelectValue>
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value={EMPTY_SELECT_SENTINEL}>Select an object</SelectItem>
+                {selectorOptions.objects
+                  .filter((object) => object.id !== "")
+                  .map((object) => (
+                    <SelectItem key={object.id} value={object.id}>
+                      {object.label}
+                    </SelectItem>
+                  ))}
+              </SelectContent>
+            </Select>
           </label>
         ) : null}
         {drive?.target.kind === "region" ? (
           <label className="fm-inspector-field">
             <span>Stable region</span>
-            <select
-              className="fm-inspector-input"
-              value={drive.target.region_id}
-              onChange={(event) =>
+            <Select
+              value={drive.target.region_id || EMPTY_SELECT_SENTINEL}
+              onValueChange={(nextValue) => {
+                const regionId =
+                  nextValue === EMPTY_SELECT_SENTINEL ? "" : nextValue;
                 updateDrive((current) =>
                   current.target.kind === "region"
                     ? {
                         ...current,
-                        target: { ...current.target, region_id: event.target.value },
+                        target: { ...current.target, region_id: regionId },
                       }
                     : current,
-                )
-              }
+                );
+              }}
             >
-              <option value="">Select a region</option>
-              {(selectorOptions.regionsByObject[drive.target.object_id] ?? []).map(
-                (region) => (
-                  <option key={region.id} value={region.id}>{region.label}</option>
-                ),
-              )}
-            </select>
+              <SelectTrigger aria-label="Stable region">
+                <SelectValue
+                  placeholder={resolveOptionLabel(
+                    selectorOptions.regionsByObject[drive.target.object_id] ?? [],
+                    drive.target.region_id,
+                    "Select a region",
+                  )}
+                >
+                  {resolveOptionLabel(
+                    selectorOptions.regionsByObject[drive.target.object_id] ?? [],
+                    drive.target.region_id,
+                    "Select a region",
+                  )}
+                </SelectValue>
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value={EMPTY_SELECT_SENTINEL}>Select a region</SelectItem>
+                {(selectorOptions.regionsByObject[drive.target.object_id] ?? [])
+                  .filter((region) => region.id !== "")
+                  .map((region) => (
+                    <SelectItem key={region.id} value={region.id}>
+                      {region.label}
+                    </SelectItem>
+                  ))}
+              </SelectContent>
+            </Select>
           </label>
         ) : null}
         <label className="fm-inspector-field">
           <span>Spatial profile</span>
-          <select
-            className="fm-inspector-input"
+          <Select
             disabled={!drive}
             value={drive?.spatial_profile.kind ?? "uniform"}
-            onChange={(event) =>
+            onValueChange={(nextValue) =>
               updateDrive((current) => ({
                 ...current,
                 spatial_profile:
-                  event.target.value === "sinc"
+                  nextValue === "sinc"
                     ? defaultSpatialSinc()
-                    : event.target.value === "geometry_mask"
+                    : nextValue === "geometry_mask"
                       ? {
                           envelope: { kind: "uniform" },
                           kind: "geometry_mask",
@@ -274,10 +373,21 @@ export function AddFieldDriveStageInspector(props: StageInspectorFrameProps) {
               }))
             }
           >
-            <option value="uniform">Uniform</option>
-            <option value="sinc">Spatial sinc</option>
-            <option value="geometry_mask">Geometry mask</option>
-          </select>
+            <SelectTrigger aria-label="Spatial profile">
+              <SelectValue
+                placeholder={
+                  SPATIAL_PROFILE_LABELS[drive?.spatial_profile.kind ?? "uniform"]
+                }
+              >
+                {SPATIAL_PROFILE_LABELS[drive?.spatial_profile.kind ?? "uniform"]}
+              </SelectValue>
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="uniform">Uniform</SelectItem>
+              <SelectItem value="sinc">Spatial sinc</SelectItem>
+              <SelectItem value="geometry_mask">Geometry mask</SelectItem>
+            </SelectContent>
+          </Select>
         </label>
         {drive?.spatial_profile.kind === "sinc" ? (
           <SpatialSincFields
@@ -291,35 +401,56 @@ export function AddFieldDriveStageInspector(props: StageInspectorFrameProps) {
           <>
             <label className="fm-inspector-field">
               <span>Mask geometry</span>
-              <select
-                className="fm-inspector-input"
-                value={drive.spatial_profile.object_id}
-                onChange={(event) =>
+              <Select
+                value={drive.spatial_profile.object_id || EMPTY_SELECT_SENTINEL}
+                onValueChange={(nextValue) => {
+                  const objectId =
+                    nextValue === EMPTY_SELECT_SENTINEL ? "" : nextValue;
                   updateDrive((current) =>
                     current.spatial_profile.kind === "geometry_mask"
                       ? {
                           ...current,
                           spatial_profile: {
                             ...current.spatial_profile,
-                            object_id: event.target.value,
+                            object_id: objectId,
                           },
                         }
                       : current,
-                  )
-                }
+                  );
+                }}
               >
-                <option value="">Select an object</option>
-                {selectorOptions.objects.map((object) => (
-                  <option key={object.id} value={object.id}>{object.label}</option>
-                ))}
-              </select>
+                <SelectTrigger aria-label="Mask geometry">
+                  <SelectValue
+                    placeholder={resolveOptionLabel(
+                      selectorOptions.objects,
+                      drive.spatial_profile.object_id,
+                      "Select an object",
+                    )}
+                  >
+                    {resolveOptionLabel(
+                      selectorOptions.objects,
+                      drive.spatial_profile.object_id,
+                      "Select an object",
+                    )}
+                  </SelectValue>
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value={EMPTY_SELECT_SENTINEL}>Select an object</SelectItem>
+                  {selectorOptions.objects
+                    .filter((object) => object.id !== "")
+                    .map((object) => (
+                      <SelectItem key={object.id} value={object.id}>
+                        {object.label}
+                      </SelectItem>
+                    ))}
+                </SelectContent>
+              </Select>
             </label>
             <label className="fm-inspector-field">
               <span>Envelope</span>
-              <select
-                className="fm-inspector-input"
+              <Select
                 value={drive.spatial_profile.envelope.kind}
-                onChange={(event) =>
+                onValueChange={(nextValue) =>
                   updateDrive((current) =>
                     current.spatial_profile.kind === "geometry_mask"
                       ? {
@@ -327,7 +458,7 @@ export function AddFieldDriveStageInspector(props: StageInspectorFrameProps) {
                           spatial_profile: {
                             ...current.spatial_profile,
                             envelope:
-                              event.target.value === "sinc"
+                              nextValue === "sinc"
                                 ? defaultSpatialSinc()
                                 : { kind: "uniform" },
                           },
@@ -336,9 +467,22 @@ export function AddFieldDriveStageInspector(props: StageInspectorFrameProps) {
                   )
                 }
               >
-                <option value="uniform">Uniform</option>
-                <option value="sinc">Spatial sinc</option>
-              </select>
+                <SelectTrigger aria-label="Envelope">
+                  <SelectValue
+                    placeholder={
+                      SPATIAL_PROFILE_LABELS[drive.spatial_profile.envelope.kind] ??
+                      drive.spatial_profile.envelope.kind
+                    }
+                  >
+                    {SPATIAL_PROFILE_LABELS[drive.spatial_profile.envelope.kind] ??
+                      drive.spatial_profile.envelope.kind}
+                  </SelectValue>
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="uniform">Uniform</SelectItem>
+                  <SelectItem value="sinc">Spatial sinc</SelectItem>
+                </SelectContent>
+              </Select>
             </label>
             {drive.spatial_profile.envelope.kind === "sinc" ? (
               <SpatialSincFields
@@ -368,40 +512,56 @@ export function AddFieldDriveStageInspector(props: StageInspectorFrameProps) {
       >
         <label className="fm-inspector-field">
           <span>Function in time</span>
-          <select
-            className="fm-inspector-input"
+          <Select
             disabled={!drive}
             value={drive?.waveform.kind ?? "constant"}
-            onChange={(event) =>
+            onValueChange={(nextValue) =>
               updateDrive((current) => ({
                 ...current,
-                waveform: defaultWaveform(event.target.value),
+                waveform: defaultWaveform(nextValue),
               }))
             }
           >
-            <option value="constant">Constant</option>
-            <option value="sinusoidal">Sinusoidal</option>
-            <option value="pulse">Rectangular pulse</option>
-            <option value="piecewise_linear">Piecewise linear</option>
-            <option value="sinc_pulse">Sinc pulse</option>
-          </select>
+            <SelectTrigger aria-label="Function in time">
+              <SelectValue
+                placeholder={WAVEFORM_LABELS[drive?.waveform.kind ?? "constant"]}
+              >
+                {WAVEFORM_LABELS[drive?.waveform.kind ?? "constant"]}
+              </SelectValue>
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="constant">Constant</SelectItem>
+              <SelectItem value="sinusoidal">Sinusoidal</SelectItem>
+              <SelectItem value="pulse">Rectangular pulse</SelectItem>
+              <SelectItem value="piecewise_linear">Piecewise linear</SelectItem>
+              <SelectItem value="sinc_pulse">Sinc pulse</SelectItem>
+            </SelectContent>
+          </Select>
         </label>
         <label className="fm-inspector-field">
           <span>Time origin</span>
-          <select
-            className="fm-inspector-input"
+          <Select
             disabled={!drive}
             value={drive?.time_origin ?? "stage_local"}
-            onChange={(event) =>
+            onValueChange={(nextValue) =>
               updateDrive((current) => ({
                 ...current,
-                time_origin: event.target.value as "absolute" | "stage_local",
+                time_origin: nextValue as "absolute" | "stage_local",
               }))
             }
           >
-            <option value="stage_local">Stage local</option>
-            <option value="absolute">Absolute simulation time</option>
-          </select>
+            <SelectTrigger aria-label="Time origin">
+              <SelectValue
+                placeholder={TIME_ORIGIN_LABELS[drive?.time_origin ?? "stage_local"]}
+              >
+                {TIME_ORIGIN_LABELS[drive?.time_origin ?? "stage_local"]}
+              </SelectValue>
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="stage_local">Stage local</SelectItem>
+              <SelectItem value="absolute">Absolute simulation time</SelectItem>
+            </SelectContent>
+          </Select>
         </label>
         {drive?.waveform.kind === "sinc_pulse" ? (
           <>
@@ -447,8 +607,7 @@ export function AddFieldDriveStageInspector(props: StageInspectorFrameProps) {
             />
             <label className="fm-inspector-field">
               <span>Waveform amplitude a</span>
-              <input
-                className="fm-inspector-input"
+              <Input
                 type="number"
                 value={drive.waveform.amplitude ?? 1}
                 onChange={(event) =>
@@ -559,8 +718,7 @@ export function AddFieldDriveStageInspector(props: StageInspectorFrameProps) {
         {drive?.waveform.kind === "piecewise_linear" ? (
           <label className="fm-inspector-field">
             <span>Points (time, value; one pair per line)</span>
-            <textarea
-              className="fm-inspector-input"
+            <Textarea
               rows={5}
               value={drive.waveform.points.map((point) => point.join(", ")).join("\n")}
               onChange={(event) => {
@@ -585,32 +743,41 @@ export function AddFieldDriveStageInspector(props: StageInspectorFrameProps) {
       >
         <label className="fm-inspector-field">
           <span>Activation</span>
-          <select
-            className="fm-inspector-input"
+          <Select
             disabled={!drive}
             value={drive?.activation.kind ?? "all_time_evolution"}
-            onChange={(event) =>
+            onValueChange={(nextValue) =>
               updateDrive((current) => ({
                 ...current,
                 activation:
-                  event.target.value === "stage_ids"
+                  nextValue === "stage_ids"
                     ? { kind: "stage_ids", stage_ids: [] }
                     : { kind: "all_time_evolution" },
               }))
             }
           >
-            <option value="all_time_evolution">All following time stages</option>
-            <option value="stage_ids">Selected following runs</option>
-          </select>
+            <SelectTrigger aria-label="Activation">
+              <SelectValue
+                placeholder={
+                  ACTIVATION_LABELS[drive?.activation.kind ?? "all_time_evolution"]
+                }
+              >
+                {ACTIVATION_LABELS[drive?.activation.kind ?? "all_time_evolution"]}
+              </SelectValue>
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all_time_evolution">All following time stages</SelectItem>
+              <SelectItem value="stage_ids">Selected following runs</SelectItem>
+            </SelectContent>
+          </Select>
         </label>
         {drive?.activation.kind === "stage_ids" ? (
           <fieldset className="fm-inspector-field">
             <legend>Following Run stages</legend>
             {subsequentRuns.map(({ candidate: run }) => (
               <label key={run.stageId}>
-                <input
+                <Checkbox
                   checked={activeStageIds.has(run.stageId)}
-                  type="checkbox"
                   onChange={(event) =>
                     updateDrive((current) => {
                       if (current.activation.kind !== "stage_ids") return current;
@@ -665,9 +832,8 @@ function SpatialSincFields({
         <span>Spatial axis (x, y, z)</span>
         <div className="fm-inspector-vector-row">
           {AXES.map((axisName, index) => (
-            <input
+            <Input
               aria-label={`Spatial axis ${axisName}`}
-              className="fm-inspector-input"
               key={axisName}
               step="0.01"
               type="number"
@@ -695,8 +861,7 @@ function SpatialSincFields({
       />
       <label className="fm-inspector-field">
         <span>Spatial width (m, optional)</span>
-        <input
-          className="fm-inspector-input"
+        <Input
           type="number"
           value={profile.width_m ?? ""}
           onChange={(event) =>
@@ -709,14 +874,22 @@ function SpatialSincFields({
       </label>
       <label className="fm-inspector-field">
         <span>Window</span>
-        <select
-          className="fm-inspector-input"
+        <Select
           value={profile.window ?? "none"}
-          onChange={(event) => onChange({ ...profile, window: event.target.value })}
+          onValueChange={(nextValue) => onChange({ ...profile, window: nextValue })}
         >
-          <option value="none">None</option>
-          <option value="hann">Hann</option>
-        </select>
+          <SelectTrigger aria-label="Window">
+            <SelectValue
+              placeholder={WINDOW_LABELS[profile.window ?? "none"] ?? profile.window ?? "None"}
+            >
+              {WINDOW_LABELS[profile.window ?? "none"] ?? profile.window ?? "None"}
+            </SelectValue>
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="none">None</SelectItem>
+            <SelectItem value="hann">Hann</SelectItem>
+          </SelectContent>
+        </Select>
       </label>
     </>
   );
@@ -734,8 +907,7 @@ function NumberField({
   return (
     <label className="fm-inspector-field">
       <span>{label}</span>
-      <input
-        className="fm-inspector-input"
+      <Input
         type="number"
         value={value}
         onChange={(event) => {

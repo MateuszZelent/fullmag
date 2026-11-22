@@ -512,16 +512,17 @@ export function MeshQualityStatisticsSpecView({
                 </>
               );
               return onSelectWorstElement ? (
-                <button
+                <Button
                   key={key}
-                  className="fm-mesh-detail-list__item"
+                  className="fm-mesh-detail-list__item h-auto w-full items-stretch justify-start"
                   data-element-index={element.elementIndex}
                   data-status="warning"
                   type="button"
+                  variant="ghost"
                   onClick={() => onSelectWorstElement(element)}
                 >
                   {content}
-                </button>
+                </Button>
               ) : (
                 <div
                   key={key}

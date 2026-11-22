@@ -1,5 +1,15 @@
 "use client";
 
+import { Checkbox } from "@/shared/ui/Checkbox";
+import { Input } from "@/shared/ui/Input";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/shared/ui/Select";
+
 import { FeedbackBanner } from "../../primitives/FeedbackBanner";
 import { FieldRow } from "../../primitives/FieldRow";
 import { FormField } from "../../primitives/FormField";
@@ -53,10 +63,9 @@ export function AutosaveStageInspector(props: StageInspectorFrameProps) {
         />
         <label className="fm-inspector-field">
           <span>Autosave quantity</span>
-          <input
+          <Checkbox
             checked={draft?.autosave.enabled ?? false}
             disabled={disabled}
-            type="checkbox"
             onChange={(event) =>
               draft && props.onUpdateDraft({
                 autosave: {
@@ -71,10 +80,9 @@ export function AutosaveStageInspector(props: StageInspectorFrameProps) {
         {!draft?.autosave.enabled ? (
           <label className="fm-inspector-field">
             <span>Clear every active autosave output</span>
-            <input
+            <Checkbox
               checked={draft?.autosave.clearAll ?? false}
               disabled={disabled}
-              type="checkbox"
               onChange={(event) =>
                 draft && props.onUpdateDraft({
                   autosave: {
@@ -89,8 +97,7 @@ export function AutosaveStageInspector(props: StageInspectorFrameProps) {
         ) : null}
         <label className="fm-inspector-field">
           <span>Quantity</span>
-          <input
-            className="fm-inspector-input"
+          <Input
             disabled={disabled || Boolean(draft?.autosave.clearAll)}
             value={draft?.autosave.quantity ?? ""}
             onChange={(event) =>
@@ -107,22 +114,32 @@ export function AutosaveStageInspector(props: StageInspectorFrameProps) {
           <>
             <label className="fm-inspector-field">
               <span>Output kind</span>
-              <select
-                className="fm-inspector-input"
+              <Select
                 disabled={disabled}
                 value={draft.autosave.outputKind}
-                onChange={(event) =>
+                onValueChange={(nextValue) =>
                   props.onUpdateDraft({
                     autosave: {
                       ...draft.autosave,
-                      outputKind: event.target.value as "field" | "scalar",
+                      outputKind: nextValue as "field" | "scalar",
                     },
                   })
                 }
               >
-                <option value="field">Field</option>
-                <option value="scalar">Scalar</option>
-              </select>
+                <SelectTrigger aria-label="Output kind">
+                  <SelectValue
+                    placeholder={
+                      draft.autosave.outputKind === "scalar" ? "Scalar" : "Field"
+                    }
+                  >
+                    {draft.autosave.outputKind === "scalar" ? "Scalar" : "Field"}
+                  </SelectValue>
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="field">Field</SelectItem>
+                  <SelectItem value="scalar">Scalar</SelectItem>
+                </SelectContent>
+              </Select>
             </label>
             <FormField
               disabled={disabled}

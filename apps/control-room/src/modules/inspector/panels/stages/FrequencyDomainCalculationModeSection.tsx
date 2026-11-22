@@ -5,6 +5,13 @@ import { CheckCircle2 } from "lucide-react";
 
 import { useFrequencyDomainManifestResource } from "@/kernel/resources/studyRuntimeResources";
 import { Button } from "@/shared/ui/Button";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/shared/ui/Select";
 
 import { FieldRow } from "../../primitives/FieldRow";
 import { InspectorGroup } from "../../primitives/InspectorGroup";
@@ -65,21 +72,24 @@ export function FrequencyDomainCalculationModeSection({
       <FieldRow
         label="Workflow mode"
         value={
-          <select
-            aria-label="Workflow mode"
-            className="fm-inspector-select"
+          <Select
             disabled={!draft}
             value={activeMode}
-            onChange={(event) =>
-              onUpdateDraft({ calculationMode: event.target.value })
+            onValueChange={(nextValue) =>
+              onUpdateDraft({ calculationMode: nextValue })
             }
           >
-            {rows.map((row) => (
-              <option key={row.mode} value={row.mode}>
-                {row.mode}
-              </option>
-            ))}
-          </select>
+            <SelectTrigger aria-label="Workflow mode">
+              <SelectValue placeholder={activeMode}>{activeMode}</SelectValue>
+            </SelectTrigger>
+            <SelectContent>
+              {rows.map((row) => (
+                <SelectItem key={row.mode} value={row.mode}>
+                  {row.mode}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
         }
       />
       <FieldRow

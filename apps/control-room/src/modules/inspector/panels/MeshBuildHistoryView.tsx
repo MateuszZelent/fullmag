@@ -18,6 +18,13 @@ import {
   MeshResourceEmpty,
 } from "./MeshResourceView";
 import { Button } from "@/shared/ui/Button";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/shared/ui/Select";
 
 function formatDelta(value: number | null): string {
   if (value === null) return "baseline";
@@ -139,43 +146,77 @@ export function MeshBuildHistoryView({
             <div className="fm-mesh-build-history__controls">
               <label>
                 <span>From</span>
-                  <select
-                    className="fm-inspector-select"
-                  onChange={(event) =>
-                    updateBeforeId(event.currentTarget.value)
-                  }
+                <Select
                   value={selection?.beforeId ?? entries[0].id}
+                  onValueChange={(nextValue) => updateBeforeId(nextValue)}
                 >
-                  {entries.map((entry) => (
-                    <option
-                      disabled={entry.id === selection?.afterId}
-                      key={entry.id}
-                      value={entry.id}
+                  <SelectTrigger aria-label="Compare from build">
+                    <SelectValue
+                      placeholder={buildOptionLabel(
+                        entries.find((e) => e.id === (selection?.beforeId ?? entries[0].id)) ??
+                          entries[0],
+                      )}
                     >
-                      {buildOptionLabel(entry)}
-                    </option>
-                  ))}
-                </select>
+                      {buildOptionLabel(
+                        entries.find((e) => e.id === (selection?.beforeId ?? entries[0].id)) ??
+                          entries[0],
+                      )}
+                    </SelectValue>
+                  </SelectTrigger>
+                  <SelectContent>
+                    {entries.map((entry) => (
+                      <SelectItem
+                        disabled={entry.id === selection?.afterId}
+                        key={entry.id}
+                        value={entry.id}
+                      >
+                        {buildOptionLabel(entry)}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
               </label>
               <label>
                 <span>To</span>
-                <select
-                  className="fm-inspector-select"
-                  onChange={(event) =>
-                    updateAfterId(event.currentTarget.value)
-                  }
-                  value={selection?.afterId ?? entries.at(-1)?.id}
+                <Select
+                  value={selection?.afterId ?? entries.at(-1)?.id ?? entries[0].id}
+                  onValueChange={(nextValue) => updateAfterId(nextValue)}
                 >
-                  {entries.map((entry) => (
-                    <option
-                      disabled={entry.id === selection?.beforeId}
-                      key={entry.id}
-                      value={entry.id}
+                  <SelectTrigger aria-label="Compare to build">
+                    <SelectValue
+                      placeholder={buildOptionLabel(
+                        entries.find(
+                          (e) =>
+                            e.id ===
+                            (selection?.afterId ?? entries.at(-1)?.id ?? entries[0].id),
+                        ) ??
+                          entries.at(-1) ??
+                          entries[0],
+                      )}
                     >
-                      {buildOptionLabel(entry)}
-                    </option>
-                  ))}
-                </select>
+                      {buildOptionLabel(
+                        entries.find(
+                          (e) =>
+                            e.id ===
+                            (selection?.afterId ?? entries.at(-1)?.id ?? entries[0].id),
+                        ) ??
+                          entries.at(-1) ??
+                          entries[0],
+                      )}
+                    </SelectValue>
+                  </SelectTrigger>
+                  <SelectContent>
+                    {entries.map((entry) => (
+                      <SelectItem
+                        disabled={entry.id === selection?.beforeId}
+                        key={entry.id}
+                        value={entry.id}
+                      >
+                        {buildOptionLabel(entry)}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
               </label>
             </div>
             <span>

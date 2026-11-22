@@ -12,6 +12,7 @@ import type {
   MeshWorstElement,
 } from "@/shared/domain/mesh/qualityStatistics";
 import type { MeshQualityRefinementState } from "@/shared/domain/mesh/meshQualityRefinement";
+import { Button } from "@/shared/ui/Button";
 import { keyedOccurrences } from "@/shared/utils/keyedOccurrences";
 
 import {
@@ -221,14 +222,16 @@ export function MeshQualityStatisticsView({
                     </span>
                   ) : null}
                   {onSelectMetric ? (
-                    <button
+                    <Button
                       className="fm-mesh-quality-metric__action"
                       data-metric-id={metric.id}
                       onClick={() => onSelectMetric(metric.id)}
+                      size="sm"
                       type="button"
+                      variant="secondary"
                     >
                       Show heatmap
-                    </button>
+                    </Button>
                   ) : null}
                 </div>
                 {split.belowCount !== null || split.meetsCount !== null ? (
@@ -294,14 +297,16 @@ export function MeshQualityStatisticsView({
             <p>{refinementState.reason}</p>
           </div>
           {refinementState.plan && onRefineWorstElement ? (
-            <button
+            <Button
               className="fm-mesh-quality-refinement__action"
               data-element-index={refinementState.plan.elementIndex}
               onClick={onRefineWorstElement}
+              size="sm"
               type="button"
+              variant="secondary"
             >
               Refine worst region
-            </button>
+            </Button>
           ) : null}
         </section>
       ) : null}
@@ -323,16 +328,17 @@ export function MeshQualityStatisticsView({
               );
               const key = `${element.elementIndex}:${element.scopeLabel}`;
               return onSelectWorstElement ? (
-                <button
-                  className="fm-mesh-detail-list__item"
+                <Button
+                  className="fm-mesh-detail-list__item h-auto w-full items-stretch justify-start"
                   data-element-index={element.elementIndex}
                   data-status="warning"
                   key={key}
                   onClick={() => onSelectWorstElement(element)}
                   type="button"
+                  variant="ghost"
                 >
                   {content}
-                </button>
+                </Button>
               ) : (
                 <div
                   className="fm-mesh-detail-list__item"
