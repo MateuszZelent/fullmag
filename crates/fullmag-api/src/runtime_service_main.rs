@@ -692,8 +692,30 @@ async fn select_pending_sample_with_control(
     // The control future is scoped to this helper. If sampling wins, the
     // generic selector joins it before returning, so this scope never drops
     // an accepted control socket. If control wins, it is already complete.
-    let mut control = Box::pin(drain_requested(listener, owner, config, store));
+    let mut control = Box::pin(drain_requested(listener, owner.descriptor(), config, store, None));
     select_sample_and_control(sample, control.as_mut()).await
+}
+
+/// Serve status from the last committed owner while the next heartbeat is
+/// waiting for storage. A terminal control result must join the writer first.
+async fn await_heartbeat_with_control<T>(
+    mut heartbeat: tokio::task::JoinHandle<T>,
+    listener: &TcpListener,
+    descriptor: &RuntimeServiceOwnerDescriptor,
+    config: &ServiceConfig,
+    store: &SessionStore,
+) -> (Result<T, tokio::task::JoinError>, Result<ControlObservation>) {
+    let last_ready_until = Instant::now() + Duration::from_secs(10);
+    loop {
+        let mut control = Box::pin(drain_requested(
+            listener, descriptor, config, store, Some(last_ready_until),
+        ));
+        match select_sample_and_control(Pin::new(&mut heartbeat), control.as_mut()).await {
+            RuntimeLoopEvent::SampleCompleted { sample, control } => return (sample, control),
+            RuntimeLoopEvent::ControlCompleted(Ok(ControlObservation::Continue)) => {}
+            RuntimeLoopEvent::ControlCompleted(control) => return (heartbeat.await, control),
+        }
+    }
 }
 
 async fn join_compute_node_sample(
@@ -754,9 +776,10 @@ fn valid_drain_request(bytes: &[u8], owner: &str) -> bool {
 
 async fn drain_requested(
     listener: &TcpListener,
-    owner: &RuntimeServiceOwner,
+    owner: &RuntimeServiceOwnerDescriptor,
     config: &ServiceConfig,
     store: &SessionStore,
+    last_ready_until: Option<Instant>,
 ) -> Result<ControlObservation> {
     let (mut stream, peer) =
         match tokio::time::timeout(Duration::from_millis(250), listener.accept()).await {
@@ -785,7 +808,7 @@ async fn drain_requested(
     })
     .await;
     let command = match parsed {
-        Ok(Ok(bytes)) => control_command(&bytes, owner.owner_token()),
+        Ok(Ok(bytes)) => control_command(&bytes, &owner.owner_token),
         _ => None,
     };
     if let Some(ControlCommand::IdleConfirmedDrain { nonce }) = &command {
@@ -793,7 +816,7 @@ async fn drain_requested(
         // durable admission fence under one writer transaction. The writer is
         // released before waiting for scheduler exit/checkpoint publication.
         match fullmag_runtime_control::retry_store_writer_busy(|| {
-            store.acquire_development_idle_fence(owner.owner_token(), nonce)
+            store.acquire_development_idle_fence(&owner.owner_token, nonce)
         }) {
             Ok(fence) => {
                 return Ok(ControlObservation::Drain(Some(DrainConfirmation {
@@ -823,10 +846,15 @@ async fn drain_requested(
     let drain = command == Some(ControlCommand::Drain);
     let response = match command {
         Some(ControlCommand::Drain) => serde_json::json!({"status": "draining"}),
+        Some(ControlCommand::Status { .. })
+            if last_ready_until.is_some_and(|deadline| Instant::now() >= deadline) =>
+        {
+            serde_json::json!({"status": "observation_pending"})
+        }
         Some(ControlCommand::Status { nonce }) => serde_json::json!({
             "schema_version": "runtime_service_status.v1",
             "nonce": nonce,
-            "owner": owner.descriptor(),
+            "owner": owner,
             "configuration": config,
         }),
         Some(ControlCommand::ConfirmedDrain { .. }) => unreachable!(),
@@ -2586,14 +2614,89 @@ fn run() -> Result<()> {
     }
 }
 
+fn publish_service_heartbeat(
+    owner: &mut RuntimeServiceOwner,
+    store: &SessionStore,
+    config: &ServiceConfig,
+    pools: (u64, u64),
+    children: Vec<RuntimeServiceChild>,
+    host_admission: Option<&fullmag_runtime_control::host_runtime::HostRuntimeAdmission>,
+    admission_deferred_at: &mut Option<Instant>,
+    admission_unknown: &mut bool,
+) -> Result<()> {
+    if let Some(admission) = host_admission {
+        match admission.compute_snapshot_admission_failure() {
+            Ok(None) => *admission_deferred_at = None,
+            Ok(Some(reason)) => {
+                if !host_admission_deferral_within_budget(
+                    admission_deferred_at,
+                    Instant::now(),
+                ) {
+                    *admission_unknown = true;
+                    owner.publish(
+                        RuntimeServiceState::Unknown,
+                        Some(pools.0),
+                        Some(pools.1),
+                        children.clone(),
+                    )?;
+                    bail!(
+                        "host compute-node freshness or topology admission was lost: {reason}"
+                    );
+                }
+                // The ledger still refuses reservations. Continue
+                // pool validation and owner heartbeat so a live
+                // service is not mistaken for an expired owner.
+                tracing::debug!(%reason, "host compute-node admission deferred");
+            }
+            Err(error) if is_store_writer_busy(&error) => {
+                // Contention is not evidence of a failed owner.
+                // Reservations still require a fresh snapshot;
+                // keep validating pools and publishing liveness.
+                // Do not consume the separate stale/topology
+                // observation budget without an observation.
+                tracing::warn!(error = ?error, "host admission observation deferred while the ledger writer is busy");
+            }
+            Err(error) => {
+                *admission_unknown = true;
+                owner.publish(
+                    RuntimeServiceState::Unknown,
+                    Some(pools.0),
+                    Some(pools.1),
+                    children.clone(),
+                )?;
+                bail!("host compute-node admission observation failed: {error:#}");
+            }
+        }
+    }
+    let compute = store
+        .read_scheduler_resource_pool(&config.compute_pool_id)?
+        .context("service compute pool disappeared")?;
+    let prep = store
+        .read_preparation_resource_pool(&config.preparation_pool_id)?
+        .context("service preparation pool disappeared")?;
+    if compute.generation != pools.0
+        || prep.generation != pools.1
+        || compute.resources != config.compute_resources
+        || prep.resources != config.preparation_resources
+    {
+        bail!("service-owned resource pool changed outside its configuration");
+    }
+    owner.publish(
+        RuntimeServiceState::Ready,
+        Some(pools.0),
+        Some(pools.1),
+        children,
+    )
+}
+
 fn run_service(path: PathBuf) -> Result<()> {
     let config = ServiceConfig::read(&path)?;
     let startup_started = Instant::now();
     let startup_deadline =
         startup_started + Duration::from_secs(config.startup_timeout_seconds);
-    let store = fullmag_runtime_control::retry_store_writer_busy(|| {
+    let store = Arc::new(fullmag_runtime_control::retry_store_writer_busy(|| {
         SessionStore::open_existing(&config.store_root)
-    })?;
+    })?);
     let identity = fullmag_build_info::identity();
     if identity.git_commit.len() != 40
         || !identity.git_commit.bytes().all(|b| b.is_ascii_hexdigit())
@@ -2649,6 +2752,8 @@ fn run_service(path: PathBuf) -> Result<()> {
     runtime.block_on(async {
         let listener = TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).await?;
         owner.set_control_address(Some(listener.local_addr()?.to_string()))?;
+        // Only one heartbeat worker may own this lock at a time.
+        let mut owner_slot = Some(owner);
         let mut children = Schedulers::default();
         let mut generations = None;
         let mut inventory_owner = None;
@@ -2773,7 +2878,7 @@ fn run_service(path: PathBuf) -> Result<()> {
             }
             ready?;
             startup_phase_event("ready", "complete", startup_started, startup_deadline);
-            owner.publish(
+            owner_slot.as_mut().expect("runtime owner is present").publish(
                 RuntimeServiceState::Ready,
                 Some(pools.0),
                 Some(pools.1),
@@ -2817,7 +2922,7 @@ fn run_service(path: PathBuf) -> Result<()> {
                             .expect("pending compute-node sample disappeared")
                             .as_mut(),
                         &listener,
-                        &owner,
+                        owner_slot.as_ref().expect("runtime owner is present"),
                         &config,
                         &store,
                     )
@@ -2890,7 +2995,7 @@ fn run_service(path: PathBuf) -> Result<()> {
                                 continue;
                             }
                             admission_unknown = true;
-                            owner.publish(
+                            owner_slot.as_mut().expect("runtime owner is present").publish(
                                 RuntimeServiceState::Unknown,
                                 generations.map(|p| p.0),
                                 generations.map(|p| p.1),
@@ -2919,7 +3024,8 @@ fn run_service(path: PathBuf) -> Result<()> {
                     }
                     continue;
                 }
-                match drain_requested(&listener, &owner, &config, &store).await? {
+                let descriptor = owner_slot.as_ref().expect("runtime owner is present").descriptor();
+                match drain_requested(&listener, descriptor, &config, &store, None).await? {
                     ControlObservation::Continue => {}
                     ControlObservation::Drain(confirmation) => {
                         drain_confirmation = confirmation;
@@ -2927,75 +3033,41 @@ fn run_service(path: PathBuf) -> Result<()> {
                     }
                 }
                 if heartbeat.elapsed() >= Duration::from_secs(1) {
-                    if let Some(admission) = host_admission.as_ref() {
-                        match admission.compute_snapshot_admission_failure() {
-                            Ok(None) => admission_deferred_at = None,
-                            Ok(Some(reason)) => {
-                                if !host_admission_deferral_within_budget(
-                                    &mut admission_deferred_at,
-                                    Instant::now(),
-                                ) {
-                                    admission_unknown = true;
-                                    owner.publish(
-                                        RuntimeServiceState::Unknown,
-                                        generations.map(|p| p.0),
-                                        generations.map(|p| p.1),
-                                        children.describe(),
-                                    )?;
-                                    bail!(
-                                        "host compute-node freshness or topology admission was lost: {reason}"
-                                    );
-                                }
-                                // The ledger still refuses reservations. Continue
-                                // pool validation and owner heartbeat so a live
-                                // service is not mistaken for an expired owner.
-                                tracing::debug!(%reason, "host compute-node admission deferred");
-                            }
-                            Err(error) if is_store_writer_busy(&error) => {
-                                // Contention is not evidence of a failed owner.
-                                // Reservations still require a fresh snapshot;
-                                // keep validating pools and publishing liveness.
-                                // Do not consume the separate stale/topology
-                                // observation budget without an observation.
-                                tracing::warn!(error = ?error, "host admission observation deferred while the ledger writer is busy");
-                            }
-                            Err(error) => {
-                                admission_unknown = true;
-                                owner.publish(
-                                    RuntimeServiceState::Unknown,
-                                    generations.map(|p| p.0),
-                                    generations.map(|p| p.1),
-                                    children.describe(),
-                                )?;
-                                bail!("host compute-node admission observation failed: {error:#}");
-                            }
-                        }
+                    let mut owner = owner_slot.take().expect("runtime owner is present");
+                    let descriptor = owner.descriptor().clone();
+                    let children = children.describe();
+                    let host_admission = host_admission.clone();
+                    let config_for_worker = config.clone();
+                    let store_for_worker = Arc::clone(&store);
+                    let pending = tokio::task::spawn_blocking(move || {
+                        let mut admission_deferred_at = admission_deferred_at;
+                        let mut admission_unknown = admission_unknown;
+                        let result = publish_service_heartbeat(
+                            &mut owner, &store_for_worker, &config_for_worker, pools,
+                            children, host_admission.as_ref(),
+                            &mut admission_deferred_at, &mut admission_unknown,
+                        );
+                        (owner, result, admission_deferred_at, admission_unknown)
+                    });
+                    let (completed, control) =
+                        await_heartbeat_with_control(pending, &listener, &descriptor, &config, &store).await;
+                    let (owner, result, deferred_at, unknown) =
+                        completed.context("runtime heartbeat worker failed")?;
+                    owner_slot = Some(owner);
+                    admission_deferred_at = deferred_at;
+                    admission_unknown = unknown;
+                    result?;
+                    if let ControlObservation::Drain(confirmation) = control? {
+                        drain_confirmation = confirmation;
+                        break;
                     }
-                    let compute = store
-                        .read_scheduler_resource_pool(&config.compute_pool_id)?
-                        .context("service compute pool disappeared")?;
-                    let prep = store
-                        .read_preparation_resource_pool(&config.preparation_pool_id)?
-                        .context("service preparation pool disappeared")?;
-                    if compute.generation != pools.0
-                        || prep.generation != pools.1
-                        || compute.resources != config.compute_resources
-                        || prep.resources != config.preparation_resources
-                    {
-                        bail!("service-owned resource pool changed outside its configuration");
-                    }
-                    owner.publish(
-                        RuntimeServiceState::Ready,
-                        Some(pools.0),
-                        Some(pools.1),
-                        children.describe(),
-                    )?;
                     heartbeat = Instant::now();
                 }
             }
             Ok(())
         }
         .await;
+        let mut owner = owner_slot.context("runtime heartbeat worker lost service ownership")?;
         let compute_observation = store.read_scheduler_resource_pool(&config.compute_pool_id);
         let prep_observation = store.read_preparation_resource_pool(&config.preparation_pool_id);
         let compute = compute_observation
@@ -3693,6 +3765,54 @@ mod tests {
                     .store(true, std::sync::atomic::Ordering::SeqCst);
             }
         }
+    }
+
+    #[tokio::test]
+    async fn control_status_answers_while_heartbeat_waits_for_storage() {
+        use tokio::io::{AsyncBufReadExt, BufReader};
+
+        let directory = tempfile::tempdir().unwrap();
+        let store = SessionStore::open(directory.path().join("store")).unwrap();
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let mut config = config();
+        config.store_root = store.root().to_path_buf();
+        let owner = RuntimeServiceOwner::acquire(&store, &config.target_id).unwrap();
+        let descriptor = owner.descriptor();
+        let (finish_write, wait_for_write) = std::sync::mpsc::channel();
+        let heartbeat = tokio::task::spawn_blocking(move || {
+            wait_for_write.recv_timeout(Duration::from_secs(3)).unwrap();
+        });
+        let probe = async {
+            let mut socket = tokio::net::TcpStream::connect(address).await.unwrap();
+            let mut request = serde_json::to_vec(&serde_json::json!({
+                "schema_version": "runtime_service_control.v1",
+                "owner_token": descriptor.owner_token,
+                "command": "status",
+                "nonce": "while-writing",
+            }))
+            .unwrap();
+            request.push(b'\n');
+            socket.write_all(&request).await.unwrap();
+            let mut response = String::new();
+            tokio::time::timeout(
+                Duration::from_secs(1),
+                BufReader::new(socket).read_line(&mut response),
+            )
+            .await
+            .expect("status was blocked behind heartbeat storage")
+            .unwrap();
+            let document: serde_json::Value = serde_json::from_str(&response).unwrap();
+            assert_eq!(document["nonce"], "while-writing");
+            assert_eq!(document["owner"]["owner_token"], descriptor.owner_token);
+            finish_write.send(()).unwrap();
+        };
+        let ((worker, control), ()) = tokio::join!(
+            await_heartbeat_with_control(heartbeat, &listener, descriptor, &config, &store),
+            probe,
+        );
+        worker.unwrap();
+        assert!(matches!(control.unwrap(), ControlObservation::Continue));
     }
 
     #[tokio::test]

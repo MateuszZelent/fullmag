@@ -5545,15 +5545,6 @@ async fn get_or_load_current_live_scene_document_with_context(
         if let Some(scene_document) = snapshot.scene_document.clone() {
             return Ok(scene_document);
         }
-        // Diagnostic reads may expose the retained model after a runtime
-        // failure, but must never re-execute Python to reconstruct a scene.
-        if state.development_admission.observe_runtime_failure_fence() {
-            return Err(ApiError::with_status_and_code(
-                axum::http::StatusCode::SERVICE_UNAVAILABLE,
-                "retained_scene_unavailable",
-                "No retained scene is available. Script loading is disabled after a runtime failure; inspect diagnostics before a managed restart.",
-            ));
-        }
         let script_path = snapshot.session.script_path.trim();
         if script_path.is_empty() {
             return Err(ApiError::not_found(
@@ -5563,6 +5554,16 @@ async fn get_or_load_current_live_scene_document_with_context(
         script_path.to_string()
     };
 
+    // Diagnostic reads may expose the retained model after a runtime
+    // failure, but must never re-execute Python to reconstruct a scene.
+    if state.development_admission.refresh_runtime_failure_fence().await != Some(false) {
+        return Err(ApiError::with_status_and_code(
+            axum::http::StatusCode::SERVICE_UNAVAILABLE,
+            "retained_scene_unavailable",
+            "No retained scene is available. Script loading is disabled after a runtime failure; inspect diagnostics before a managed restart.",
+        ));
+    }
+
     // Scene export invokes the Python helper and must not run while the
     // current-state write lock is held. Otherwise one slow helper request
     // blocks the session list and the browser reports no local session.
@@ -5570,6 +5571,7 @@ async fn get_or_load_current_live_scene_document_with_context(
     normalize_scene_document_magnetization_assets(&mut current_scene);
     let builder_adapter = scene_document_builder_projection(&current_scene).ok();
 
+    let can_publish = state.development_admission.refresh_runtime_failure_fence().await == Some(false);
     // Revalidate the pinned identity after the slow helper and serialize the
     // final publication with session transitions. A replaced `current`
     // workspace can therefore never receive the old request's scene.
@@ -5586,7 +5588,7 @@ async fn get_or_load_current_live_scene_document_with_context(
         )?;
     }
     if snapshot.scene_document.is_none() {
-        if state.development_admission.observe_runtime_failure_fence() {
+        if !can_publish || state.development_admission.runtime_failure_reason().is_some() {
             return Err(ApiError::with_status_and_code(
                 axum::http::StatusCode::SERVICE_UNAVAILABLE,
                 "retained_scene_unavailable",
