@@ -50,7 +50,7 @@ use crate::util::{
 use crate::validate::{
     planned_study_controls, validate_executable_outputs, validate_grid_asset_cell_size,
 };
-use crate::{AffineTransform3, BoundaryMembership, GeometryPredicate};
+use crate::{BoundaryMembership, GeometryPredicate};
 
 fn resolve_precision_policy(problem: &ProblemIR) -> Result<FdmPrecisionPolicyIR, PlanError> {
     let policy = problem
@@ -1748,7 +1748,8 @@ fn apply_region_texture_overrides(
         ..AffineTransform3::identity()
     };
     let object_bounds_local = problem
-        .geometries
+        .geometry
+        .entries
         .iter()
         .find(|geom| owner_names.contains(&geom.name()))
         .and_then(|geom| geometry_entry_bounds(geom).ok())

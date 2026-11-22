@@ -513,7 +513,8 @@ fn apply_fem_region_texture_overrides(
             ..crate::selection::geometry::AffineTransform3::identity()
         };
         let object_bounds_local = problem
-            .geometries
+            .geometry
+            .entries
             .iter()
             .find(|geom| geom.name() == owner_entry.geometry_name)
             .and_then(|geom| crate::selection::geometry::geometry_entry_bounds(geom).ok())
