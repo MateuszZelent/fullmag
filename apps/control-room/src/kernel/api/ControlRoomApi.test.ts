@@ -542,6 +542,29 @@ describe("field vector response metadata", () => {
     ).toEqual([]);
   });
 
+  it("recovers a legacy field ID only when its request, response header and binary prefix agree", async () => {
+    const quantityId = "spin_current_tensor";
+    const buffer = makeFieldVectorBuffer();
+    new Uint8Array(buffer, 28, 16).set(new TextEncoder().encode(quantityId.slice(0, 16)));
+    const api = new ControlRoomApi({
+      baseUrl: "http://127.0.0.1:8765",
+      fetchImpl: async () => binaryResponse(buffer.slice(0), {
+        headers: { "x-fullmag-quantity-id": quantityId, ...contractHeaders },
+      }),
+    });
+    const valid = await api.data.fields.vector(quantityId);
+    expect(valid).toMatchObject({
+      status: "ready", data: { quantityId }, responseMetadata: { identityIssues: [] },
+    });
+
+    const mismatched = await api.data.fields.vector("spin_current_tension");
+    expect(mismatched).toMatchObject({
+      status: "ready",
+      data: { quantityId: "spin_current_ten" },
+      responseMetadata: { identityIssues: [{ field: "quantityId" }] },
+    });
+  });
+
   it("treats sha256-prefixed topology headers as equal to FMVP raw hash bytes", () => {
     const topologyHash = "ab".repeat(32);
     const payload: DecodedFieldVector = {

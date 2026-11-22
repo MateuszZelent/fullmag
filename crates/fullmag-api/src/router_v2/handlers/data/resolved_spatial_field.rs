@@ -110,10 +110,21 @@ pub(crate) struct FdmNativeLayerMembershipCarrier {
     pub legend_fingerprint: String,
 }
 
-impl From<&ResolvedFdmMembership> for FdmCellMembership {
-    fn from(value: &ResolvedFdmMembership) -> Self {
+impl FdmCellMembership {
+    pub(super) fn for_magnetic_domain(
+        value: &ResolvedFdmMembership,
+        snapshot: &SessionStateResponse,
+    ) -> Self {
+        let object_ids = value.object_ids.iter().filter(|id| {
+            !snapshot.scene_document.as_ref().is_some_and(|scene| {
+                scene.objects.iter().any(|object| {
+                    matches!(object.role.as_str(), "conductor" | "electrode")
+                        && object_ids_match(&object.id, id)
+                })
+            })
+        }).cloned().collect();
         Self {
-            object_ids: value.object_ids.clone(),
+            object_ids,
             region_legend: value.region_legend.clone(),
             cell_membership: value.cell_membership.clone(),
         }
@@ -2499,7 +2510,7 @@ fn resolve_spatial_field_metadata<'a>(
             origin_m,
             cell_size_m,
             grid_fingerprint,
-            membership: membership.as_ref().map(FdmCellMembership::from),
+            membership: membership.as_ref().map(|membership| FdmCellMembership::for_magnetic_domain(membership, snapshot)),
             membership_error,
             multilayer_scope,
             coverage: None,
@@ -2643,6 +2654,34 @@ mod tests {
         resolve_fdm_object_indices, resolve_fem_node_mapping, EntityMapping, FdmCellMembership,
         ResolvedSpatialField, SpatialFieldCarrier, SpatialFieldProvenance, SpatialFieldSourceKind,
     };
+
+    #[test]
+    fn conductor_does_not_share_unassigned_magnetic_cells() {
+        let request = serde_json::from_value(serde_json::json!({
+            "session_id": "conductor-and-magnet",
+        })).unwrap();
+        let mut snapshot = crate::session::default_current_live_state(&request);
+        let mut scene = fullmag_authoring::SceneDocument::default();
+        for (id, role) in [("film", "magnet"), ("beta_w", "conductor")] {
+            scene.objects.push(serde_json::from_value(serde_json::json!({
+                "id": id, "name": id, "role": role, "material_ref": "",
+                "geometry": { "geometry_kind": "Box", "geometry_params": { "size": [1.0, 1.0, 1.0] } },
+            })).unwrap());
+        }
+        snapshot.scene_document = Some(scene);
+        let grid = super::ResolvedFdmMembership {
+            grid_fingerprint: "test-grid".into(),
+            counts: [3, 1, 1],
+            origin_m: [0.0; 3],
+            cell_m: [1.0; 3],
+            object_ids: vec!["film".into(), "beta_w".into()],
+            region_legend: vec![],
+            cell_membership: vec![u32::MAX, 0, 0],
+        };
+        let membership = FdmCellMembership::for_magnetic_domain(&grid, &snapshot);
+        assert_eq!(resolve_fdm_object_indices(&membership, "film").unwrap(), [1, 2]);
+        assert!(resolve_fdm_object_indices(&membership, "beta_w").is_err());
+    }
 
     fn fem_mesh() -> FemMeshPayload {
         FemMeshPayload {

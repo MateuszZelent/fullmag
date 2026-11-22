@@ -1,7 +1,10 @@
 import { normalizeScalarColorPalette as normalizeSharedScalarColorPalette } from "@/shared/visualization/scalarColorPalette";
 import type { ArtifactFieldSelection } from "./artifactFieldSelection";
 import { validAntennaColorRange, type AntennaColorRange } from "./antennaColorRange";
-import { hasEmptyObjectMagneticModel } from "@/shared/domain/physics/objectMagneticModel";
+import {
+  hasEmptyObjectMagneticModel,
+  isTransportConductorRole,
+} from "@/shared/domain/physics/objectMagneticModel";
 import { normalizeTensorProjection, type TensorProjectionToken } from "../api/tensorFieldProjection";
 import type {
   QuantityCatalogResource,
@@ -11,6 +14,7 @@ import type {
 } from "../api/apiTypes";
 import type { AntennaFieldIntent, AntennaFieldDisplayStatus } from "./antennaFieldIntent";
 import {
+  isConductorTransportQuantityId,
   isScalarSpatialQuantityId,
   normalizeQuantityIdOrDefault,
   quantityCatalogEntrySupportsSpatialVisualization,
@@ -80,8 +84,11 @@ export function resolveObjectVisualizationQuantityCatalog(
   object: VisualizationObjectContext["object"],
 ): QuantityCatalogResource | null {
   if (!catalog || !object) return null;
-  if (!hasEmptyObjectMagneticModel(object)) return catalog;
-  const quantities = catalog.quantities.filter((entry) => entry.domain !== "magnetic_only");
+  const conductor = isTransportConductorRole(object.role);
+  if (!conductor && !hasEmptyObjectMagneticModel(object)) return catalog;
+  const quantities = catalog.quantities.filter((entry) =>
+    conductor ? isConductorTransportQuantityId(entry.id) : entry.domain !== "magnetic_only",
+  );
   return quantities.length === catalog.quantities.length ? catalog : { ...catalog, quantities };
 }
 

@@ -3535,6 +3535,7 @@ mod tests {
                 physical_residual_version: "transport_balance_integrated_l2.v1".into(),
                 capabilities: vec!["transport.spin.steady_drift_diffusion".into()],
                 inserted_default_boundaries: vec![],
+                fdm_object_cells: Default::default(),
                 fdm_cpu_double: Some(descriptor),
                 fdm_gpu_double: None,
                 fdm_cpu_double_reciprocal: None,

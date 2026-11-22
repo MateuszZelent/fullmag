@@ -1,3 +1,4 @@
+import type { SceneObjectPresentationRole } from "@/shared/domain/physics/objectMagneticModel";
 import type { ModuleId } from "../types";
 import type { CrossSectionQualityMetric, ResourceRevision } from "../api/apiTypes";
 import type {
@@ -386,7 +387,7 @@ export type SelectionRef =
       kind: ObjectSelectionKind;
       nodeId: string;
       objectId: string;
-      objectRole?: "antenna" | "magnet" | "auxiliary";
+      objectRole?: SceneObjectPresentationRole;
       antennaResourceId?: string;
       antennaResourceKind?:
         | "terminals"

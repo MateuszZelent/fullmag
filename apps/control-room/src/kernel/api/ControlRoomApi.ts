@@ -702,6 +702,23 @@ export function parseTableSeriesIdentityHeader(
   };
 }
 
+function resolveLegacyFieldVectorQuantityId(
+  payload: DecodedFieldVector,
+  headerId: string | null,
+  requestedId: unknown,
+): DecodedFieldVector {
+  // Versions 2–4 carry a fixed 16-byte quantity ID. The response header
+  // can complete it only when it agrees exactly with the request and prefix.
+  if (
+    (payload.formatVersion === 2 || payload.formatVersion === 3 || payload.formatVersion === 4) &&
+    headerId && headerId === requestedId && /^[A-Za-z0-9_]{17,}$/.test(headerId) &&
+    payload.quantityId === headerId.slice(0, 16)
+  ) {
+    return { ...payload, quantityId: headerId };
+  }
+  return payload;
+}
+
 export function collectFieldVectorIdentityIssues(
   payload: DecodedFieldVector,
   metadata: FieldVectorResponseMetadata,
@@ -4665,14 +4682,14 @@ export class ControlRoomApi {
     );
   }
 
-  private requestFieldVector(
+  private async requestFieldVector(
     path: OpenApiV2Path,
     pathParams: PathParams,
     query: QueryParams,
     options: BinaryRequestOptions = {},
     expectedObservationFrameId?: string,
   ): Promise<BinaryResourceResult<DecodedFieldVector, FieldVectorResponseMetadata>> {
-    return this.requestBinaryResource(
+    const result = await this.requestBinaryResource(
       path,
       "field-vector",
       decodeFieldVector,
@@ -4702,8 +4719,9 @@ export class ControlRoomApi {
             409,
           );
         }
-        const identityIssues = collectFieldVectorIdentityIssues(data, metadata);
-        const artifactIdentityError = artifactFieldResponseIdentityError(String(pathParams.quantity_id), query, data, { ...metadata, identityIssues });
+        const field = resolveLegacyFieldVectorQuantityId(data, metadata.quantityId, pathParams.quantity_id);
+        const identityIssues = collectFieldVectorIdentityIssues(field, metadata);
+        const artifactIdentityError = artifactFieldResponseIdentityError(String(pathParams.quantity_id), query, field, { ...metadata, identityIssues });
         if (artifactIdentityError) throw new ControlRoomApiError(artifactIdentityError, 409);
         return {
           ...metadata,
@@ -4717,6 +4735,9 @@ export class ControlRoomApi {
         ? { "x-fullmag-expected-observation-frame-id": expectedObservationFrameId }
         : undefined,
     );
+    if (result.status !== "ready") return result;
+    const field = resolveLegacyFieldVectorQuantityId(result.data, result.responseMetadata.quantityId, pathParams.quantity_id);
+    return field === result.data ? result : { ...result, data: field };
   }
 
   private async requestFieldVectorOnDemand(

@@ -226,6 +226,15 @@ const CANONICAL_QUANTITY_IDS: Record<string, string> = {
   torque: "torque",
 };
 
+/** Transport outputs with physical support on conducting material. */
+const CONDUCTOR_TRANSPORT_QUANTITIES = new Set([
+  "V_electric", "J_charge", "spin_potential", "spin_current_tensor",
+]);
+
+export function isConductorTransportQuantityId(id: string): boolean {
+  return CONDUCTOR_TRANSPORT_QUANTITIES.has(resolveCanonicalQuantityId(id));
+}
+
 const SCALAR_SPATIAL_QUANTITY_IDS = new Set([
   "V_electric",
   "eden_ani",

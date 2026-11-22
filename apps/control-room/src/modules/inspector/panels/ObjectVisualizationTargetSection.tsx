@@ -683,6 +683,7 @@ function viewportRenderedRangeScopeKind(
 }
 
 export function VisualizationQuantitySection({
+  conductor,
   executionRequired = false,
   fieldCatalog,
   fieldCatalogLoading,
@@ -696,6 +697,7 @@ export function VisualizationQuantitySection({
   targetFieldAvailability,
   targetKind,
 }: {
+  conductor?: boolean;
   executionRequired?: boolean;
   fieldCatalog: FieldCatalogResource | null;
   fieldCatalogLoading: boolean;
@@ -710,7 +712,7 @@ export function VisualizationQuantitySection({
   targetKind?: VisualizationTargetKind;
 }) {
   const quantityItems = visualizationQuantityItems(
-    settings.activeQuantityId, targetKind, fieldCatalog, quantityCatalog, targetFieldAvailability,
+    settings.activeQuantityId, targetKind, fieldCatalog, quantityCatalog, targetFieldAvailability, conductor,
   );
   const { selectedValue, summary, status } = visualizationQuantitySelectionState({
     activeQuantityId: settings.activeQuantityId, items: quantityItems,

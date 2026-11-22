@@ -25,6 +25,7 @@ import {
   isAnalysisFieldQuantityId,
   fieldCatalogQuantitySupportsAirbox,
   fieldCatalogQuantitySupportsSpatialVisualization,
+  isConductorTransportQuantityId,
   isScalarSpatialQuantityId,
   quantityCatalogEntrySupportsAnyAirboxVisualization,
   quantityCatalogEntrySupportsAirbox,
@@ -2229,6 +2230,7 @@ export function visualizationQuantityItems(
   fieldCatalog?: FieldCatalogResource | null,
   quantityCatalog?: QuantityCatalogResource | null,
   targetAvailability?: ReadonlyMap<string, TargetFieldAvailability>,
+  conductor = false,
 ): Array<{ disabled?: boolean; label: string; value: string }> {
   const supportsTarget = targetKind === "airbox"
     ? quantityCatalogEntrySupportsAnyAirboxVisualization
@@ -2249,7 +2251,19 @@ export function visualizationQuantityItems(
   const baseItems = quantityCatalog
     ? mergeVisualizationQuantityItems<{ disabled?: boolean; label: string; value: string }>(
         mergeVisualizationQuantityItems(capabilityItems, fieldItems),
-        targetKind === "airbox" ? pendingAirboxQuantityItems(quantityCatalog) : [],
+        targetKind === "airbox"
+          ? pendingAirboxQuantityItems(quantityCatalog)
+          : conductor
+            ? quantityCatalog.quantities
+              .filter((quantity) =>
+                isConductorTransportQuantityId(quantity.id) && !supportsTarget(quantity),
+              )
+              .map((quantity) => ({
+                disabled: true,
+                label: quantity.label || quantity.id,
+                value: quantity.id,
+              }))
+            : [],
       )
     : targetKind === "airbox"
       ? fieldItems.filter((item) =>

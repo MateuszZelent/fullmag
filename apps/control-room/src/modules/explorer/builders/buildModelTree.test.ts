@@ -43,6 +43,31 @@ import {
 } from "./sceneModelTreeAdapter";
 import { resolveExplorerDomainLane } from "./meshExplorerNodes";
 
+describe("Conductor object hierarchy", () => {
+  it("keeps geometry and transport ancestors without magnetic object or region controls", () => {
+    const snapshot = modelTreeSnapshotFromScene({
+      objects: [
+        { id: "beta_w", role: "conductor", name: "Beta W", regions: [{
+          region_id: "contact", owner_object: "beta_w", name: "Contact",
+          shape: { kind: "sphere", center: [0, 0, 0], radius: 1 },
+        }] },
+        { id: "film", role: "magnet", name: "CoFeB" },
+      ],
+    });
+    const nodes = flattenExplorerNodes(buildModelTree(snapshot));
+    const conductor = nodes.find((node) => node.id === "model:object:beta_w");
+    expect(conductor).toMatchObject({ objectRole: "conductor", badge: "Conductor" });
+    const descendants = nodes.filter((node) => node.id.startsWith("model:object:beta_w:"));
+    expect(descendants.map((node) => node.kind)).toContain("object.visualization");
+    expect(descendants.map((node) => node.kind)).toContain("object.region.geometry");
+    expect(descendants.map((node) => node.kind)).toContain("object.region.mesh");
+    expect(descendants.some((node) =>
+      node.kind.includes("magnetic") || node.kind.includes("frozen") || node.kind === "object.region.texture"
+    )).toBe(false);
+    expect(nodes.some((node) => node.id === "model:object:film:magnetic-texture")).toBe(true);
+  });
+});
+
 describe("Explorer node contract", () => {
   it("preserves a valid node and its exported kind", () => {
     const kind: ExplorerNodeKind = "object.root";
