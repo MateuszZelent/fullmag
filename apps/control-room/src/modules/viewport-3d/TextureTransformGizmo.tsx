@@ -13,8 +13,16 @@ import {
   BufferAttribute,
   BufferGeometry,
   Color,
+  ConeGeometry,
+  CylinderGeometry,
   DoubleSide,
+  DynamicDrawUsage,
+  InstancedBufferAttribute,
+  InstancedMesh,
+  Matrix4,
+  MeshBasicMaterial,
   Plane,
+  Quaternion,
   Raycaster,
   Vector2,
   Vector3,
@@ -63,6 +71,14 @@ import { canonicalPresetKind } from "@/shared/domain/magnetization-texture/textu
 import { scalarColorRgb } from "@/shared/visualization/scalarColorPalette";
 
 import { useViewport3DColors } from "./hooks/useViewport3DColors";
+import {
+  ensureWhiteVertexColorAttribute,
+  resolveVectorGlyphDepthPolicy,
+} from "./layers/VectorFieldLayer.model";
+import {
+  buildVectorGlyphTransforms,
+  type VectorGlyphTransforms,
+} from "./layers/vectorGlyphGeometry";
 import { RENDER_POLICIES } from "./layers/viewport3DRenderPolicy";
 import { magnetizationHslLinearRgb } from "./orientation/magnetizationColor";
 import { useBatchedInvalidate } from "./viewport3dBatchedInvalidate";
@@ -74,6 +90,7 @@ import {
   type Viewport3DPrimitiveRenderModel,
 } from "./viewport3dPrimitiveModel";
 import type { Viewport3DColors } from "./viewport3dTypes";
+import { normalizeViewport3DVectorColorMode } from "./viewport3dVectorColoring";
 
 export type GizmoAxis = "x" | "y" | "z";
 export type GizmoPlane = "xy" | "xz" | "yz";
@@ -1105,9 +1122,16 @@ export function createTextureGizmoDragController(
   };
 }
 
-const AUTHORED_VECTOR_BUDGET_MIN = 64;
+const AUTHORED_VECTOR_BUDGET_MIN = 16;
 const AUTHORED_VECTOR_BUDGET_MAX = 2000;
-const AUTHORED_VECTOR_DEFAULT_BUDGET = 400;
+const AUTHORED_VECTOR_DEFAULT_BUDGET = 196;
+const AUTHORED_ARROW_LENGTH_FACTOR = 0.85;
+const AUTHORED_ARROW_HEAD_LENGTH_RATIO = 0.34;
+const AUTHORED_ARROW_HEAD_RADIUS_RATIO = 0.145;
+const AUTHORED_ARROW_SHAFT_RADIUS_RATIO = 0.052;
+const AUTHORED_VECTOR_THICKNESS_MIN = 0.25;
+const AUTHORED_VECTOR_THICKNESS_MAX = 4;
+const AUTHORED_VECTOR_UNIT_Y = new Vector3(0, 1, 0);
 
 interface CompiledAuthoredRegionLayer {
   readonly regionId: string;
@@ -1345,7 +1369,7 @@ function resolveGrid2DCounts(
 /**
  * Samples an evenly spaced 3D grid of anchor points across a primitive object's
  * bounds for authored magnetization vector arrows, honoring `vectorBudget`
- * (clamped 64..2000 when > 0), `geometryScope` ("surface" vs "full"), and shape.
+ * (clamped 16..2000 when > 0, default 196), `geometryScope` ("surface" vs "full"), and shape.
  */
 export function buildAuthoredMagnetizationVectorGridPoints(
   object: Viewport3DPrimitiveObject,
@@ -1397,8 +1421,8 @@ export function buildAuthoredMagnetizationVectorGridPoints(
   if (geometryScope === "surface") {
     const surfaceLift = (pitch: number): number =>
       surfaceOffsetEnabled
-        ? pitch * (0.18 + surfaceOffsetScale * 0.55)
-        : Math.max(pitch * 0.05, maxSpan * 0.002);
+        ? Math.max(pitch * (0.28 + surfaceOffsetScale * 0.55), maxSpan * 0.012)
+        : Math.max(pitch * 0.16, maxSpan * 0.006);
 
     if (object.kind === "sphere") {
       const approxArea = 4 * Math.PI * ((hx * hy + hy * hz + hz * hx) / 3);
@@ -1448,8 +1472,8 @@ export function buildAuthoredMagnetizationVectorGridPoints(
         };
       }
       // Thick cylinder: sample top/bottom caps + cylindrical mantle
-      const capBudget = Math.max(16, Math.round(targetCount * 0.25));
-      const mantleBudget = Math.max(16, targetCount - capBudget * 2);
+      const capBudget = Math.max(4, Math.round(targetCount * 0.25));
+      const mantleBudget = Math.max(8, targetCount - capBudget * 2);
       const capGrid = resolveGrid2DCounts(sx, sy, Math.round(capBudget * (4 / Math.PI)));
       const circumference = Math.PI * (hx + hy);
       const mantleGrid = resolveGrid2DCounts(circumference, sz, mantleBudget);
@@ -1685,7 +1709,7 @@ function resolveLinearMonoRgb(
   const candidates: Array<ColorRepresentation | undefined> = [
     monoColor,
     fallbackMonoColor,
-    "#38bdf8",
+    0x38bdf8,
   ];
   const parsed = new Color();
   for (const candidate of candidates) {
@@ -1719,7 +1743,8 @@ function resolveAuthoredArrowLinearRgb(
   scalarColorPalette: string,
   monoRgb: readonly [number, number, number],
 ): [number, number, number] {
-  switch (colorMode) {
+  const normalizedMode = normalizeViewport3DVectorColorMode(colorMode, "orientation");
+  switch (normalizedMode) {
     case "monochrome":
       return [monoRgb[0], monoRgb[1], monoRgb[2]];
     case "x":
@@ -1730,11 +1755,188 @@ function resolveAuthoredArrowLinearRgb(
       return scalarColorRgb((uz + 1) * 0.5, scalarColorPalette);
     case "magnitude":
       return scalarColorRgb(Math.min(1, Math.max(0, magnitude)), scalarColorPalette);
-    case "hsl":
     case "orientation":
     default:
       return magnetizationHslLinearRgb(ux, uy, uz);
   }
+}
+
+export interface AuthoredMagnetizationArrowSegmentsOptions {
+  readonly lengthScale?: number;
+  readonly centeringEnabled?: boolean;
+}
+
+export interface AuthoredMagnetizationArrowGlyphOptions
+  extends AuthoredMagnetizationArrowSegmentsOptions {
+  readonly colorMode?: string;
+  readonly monoColor?: ColorRepresentation;
+  readonly fallbackMonoColor?: ColorRepresentation;
+  readonly scalarColorPalette?: string;
+  readonly thickness?: number;
+}
+
+export interface AuthoredMagnetizationArrowGlyphData {
+  readonly segments: Float32Array;
+  readonly transforms: VectorGlyphTransforms;
+  readonly colors: Float32Array;
+  readonly arrowCount: number;
+}
+
+function clampAuthoredVectorThickness(value: number | null | undefined): number {
+  if (typeof value !== "number" || !Number.isFinite(value)) return 1;
+  return Math.min(AUTHORED_VECTOR_THICKNESS_MAX, Math.max(AUTHORED_VECTOR_THICKNESS_MIN, value));
+}
+
+function resolveAuthoredVectorCapacity(count: number): number {
+  const desired = Math.max(1, count);
+  let next = 1;
+  while (next < desired) next *= 2;
+  return Math.min(next, 1 << 16);
+}
+
+/**
+ * Builds 7-channel vector segments `[sx, sy, sz, ex, ey, ez, relMag]` from sampled
+ * world anchor points and magnetization vectors for instanced 3D cylinder+cone arrows.
+ */
+export function buildAuthoredMagnetizationArrowSegments(
+  positionsWorld: Float32Array,
+  sampledVectors: Float32Array,
+  pitch: number,
+  options: AuthoredMagnetizationArrowSegmentsOptions = {},
+): Float32Array {
+  const count = Math.min(
+    Math.floor(positionsWorld.length / 3),
+    Math.floor(sampledVectors.length / 3),
+  );
+  if (count <= 0) {
+    return new Float32Array(0);
+  }
+
+  const lengthScale = Math.min(
+    5,
+    Math.max(0.1, Number.isFinite(options.lengthScale) ? (options.lengthScale ?? 1) : 1),
+  );
+  const centeringEnabled = options.centeringEnabled ?? true;
+  const arrowLen = Math.max(pitch * AUTHORED_ARROW_LENGTH_FACTOR * lengthScale, 1e-12);
+
+  const segments = new Float32Array(count * 7);
+  let emitted = 0;
+
+  for (let i = 0; i < count; i += 1) {
+    const base = i * 3;
+    const ax = positionsWorld[base]!;
+    const ay = positionsWorld[base + 1]!;
+    const az = positionsWorld[base + 2]!;
+    const vx = sampledVectors[base]!;
+    const vy = sampledVectors[base + 1]!;
+    const vz = sampledVectors[base + 2]!;
+    const mag = Math.hypot(vx, vy, vz);
+    if (!Number.isFinite(mag) || mag < 1e-9) continue;
+
+    const ux = vx / mag;
+    const uy = vy / mag;
+    const uz = vz / mag;
+
+    const sx = centeringEnabled ? ax - ux * (arrowLen * 0.5) : ax;
+    const sy = centeringEnabled ? ay - uy * (arrowLen * 0.5) : ay;
+    const sz = centeringEnabled ? az - uz * (arrowLen * 0.5) : az;
+    const ex = sx + ux * arrowLen;
+    const ey = sy + uy * arrowLen;
+    const ez = sz + uz * arrowLen;
+
+    const out = emitted * 7;
+    segments[out] = sx;
+    segments[out + 1] = sy;
+    segments[out + 2] = sz;
+    segments[out + 3] = ex;
+    segments[out + 4] = ey;
+    segments[out + 5] = ez;
+    segments[out + 6] = Math.min(1, Math.max(0, mag));
+    emitted += 1;
+  }
+
+  return emitted === count ? segments : segments.subarray(0, emitted * 7);
+}
+
+/**
+ * Computes per-instance linear-sRGB colors (`count * 3`) for Three.js `instanceColor`
+ * across orientation (HSL wheel), monochrome, magnitude, and x/y/z scalar palette modes.
+ */
+export function buildAuthoredMagnetizationArrowInstanceColors(
+  segments: Float32Array,
+  options: Pick<
+    AuthoredMagnetizationArrowGlyphOptions,
+    "colorMode" | "monoColor" | "fallbackMonoColor" | "scalarColorPalette"
+  > = {},
+): Float32Array {
+  const stride = segments.length > 0 && segments.length % 7 === 0 ? 7 : 6;
+  const count = Math.floor(segments.length / stride);
+  if (count <= 0) {
+    return new Float32Array(0);
+  }
+
+  const colorMode = normalizeViewport3DVectorColorMode(options.colorMode, "orientation");
+  const scalarColorPalette = options.scalarColorPalette ?? "coolwarm";
+  const monoRgb = resolveLinearMonoRgb(options.monoColor, options.fallbackMonoColor);
+  const colors = new Float32Array(count * 3);
+
+  for (let i = 0; i < count; i += 1) {
+    const src = i * stride;
+    const dx = (segments[src + 3] ?? 0) - (segments[src] ?? 0);
+    const dy = (segments[src + 4] ?? 0) - (segments[src + 1] ?? 0);
+    const dz = (segments[src + 5] ?? 0) - (segments[src + 2] ?? 0);
+    const len = Math.hypot(dx, dy, dz);
+    const ux = len > 0 ? dx / len : 0;
+    const uy = len > 0 ? dy / len : 1;
+    const uz = len > 0 ? dz / len : 0;
+    const relMag = stride >= 7 ? (segments[src + 6] ?? 1) : 1;
+    const [r, g, b] = resolveAuthoredArrowLinearRgb(
+      ux,
+      uy,
+      uz,
+      relMag,
+      colorMode,
+      scalarColorPalette,
+      monoRgb,
+    );
+    const dst = i * 3;
+    colors[dst] = r;
+    colors[dst + 1] = g;
+    colors[dst + 2] = b;
+  }
+
+  return colors;
+}
+
+/**
+ * Builds 3D solid instanced arrow transforms (shaft cylinder + cone head) and
+ * linear-RGB per-instance colors matching Fullmag's native `VectorFieldLayer`.
+ */
+export function buildAuthoredMagnetizationArrowGlyphData(
+  positionsWorld: Float32Array,
+  sampledVectors: Float32Array,
+  pitch: number,
+  options: AuthoredMagnetizationArrowGlyphOptions = {},
+): AuthoredMagnetizationArrowGlyphData {
+  const segments = buildAuthoredMagnetizationArrowSegments(
+    positionsWorld,
+    sampledVectors,
+    pitch,
+    options,
+  );
+  const thickness = clampAuthoredVectorThickness(options.thickness);
+  const transforms = buildVectorGlyphTransforms(segments, {
+    headLengthRatio: AUTHORED_ARROW_HEAD_LENGTH_RATIO,
+    headRadiusRatio: AUTHORED_ARROW_HEAD_RADIUS_RATIO * thickness,
+    shaftRadiusRatio: AUTHORED_ARROW_SHAFT_RADIUS_RATIO * thickness,
+  });
+  const colors = buildAuthoredMagnetizationArrowInstanceColors(segments, options);
+  return {
+    segments,
+    transforms,
+    colors,
+    arrowCount: transforms.count,
+  };
 }
 
 /**
@@ -1768,7 +1970,7 @@ export function buildAuthoredMagnetizationArrowBuffers(
     Math.max(0.1, Number.isFinite(options.lengthScale) ? (options.lengthScale ?? 1) : 1),
   );
   const centeringEnabled = options.centeringEnabled ?? true;
-  const arrowLen = Math.max(pitch * 0.72 * lengthScale, 1e-12);
+  const arrowLen = Math.max(pitch * AUTHORED_ARROW_LENGTH_FACTOR * lengthScale, 1e-12);
   const headLen = arrowLen * 0.3;
   const headHalfWidth = arrowLen * 0.16;
 
@@ -2880,10 +3082,98 @@ function AuthoredMagnetizationPersistentSurface({
   );
 }
 
+function syncAuthoredVectorMaterial(
+  material: MeshBasicMaterial,
+  options: {
+    readonly opacity: number;
+    readonly transparent: boolean;
+    readonly depthTest: boolean;
+    readonly depthWrite: boolean;
+  },
+): void {
+  material.opacity = options.opacity;
+  material.transparent = options.transparent;
+  material.depthTest = options.depthTest;
+  material.depthWrite = options.depthWrite;
+  material.toneMapped = false;
+  material.vertexColors = true;
+  material.color.set("white");
+  material.needsUpdate = true;
+}
+
+function uploadAuthoredVectorGlyphInstances(options: {
+  readonly shaft: InstancedMesh;
+  readonly head: InstancedMesh;
+  readonly instanceColorAttr: InstancedBufferAttribute;
+  readonly glyphData: AuthoredMagnetizationArrowGlyphData;
+  readonly capacity: number;
+  readonly scratch: {
+    readonly direction: Vector3;
+    readonly matrix: Matrix4;
+    readonly position: Vector3;
+    readonly quaternion: Quaternion;
+    readonly scale: Vector3;
+  };
+}): void {
+  const { shaft, head, instanceColorAttr, glyphData, capacity, scratch } = options;
+  const count = Math.min(glyphData.arrowCount, capacity);
+  const { transforms, colors } = glyphData;
+  const { direction, matrix, position, quaternion, scale } = scratch;
+
+  shaft.instanceMatrix.setUsage(DynamicDrawUsage);
+  head.instanceMatrix.setUsage(DynamicDrawUsage);
+
+  (instanceColorAttr.array as Float32Array).set(colors.subarray(0, count * 3), 0);
+  instanceColorAttr.needsUpdate = true;
+
+  for (let i = 0; i < count; i += 1) {
+    const offset = i * 3;
+    direction.set(
+      transforms.directions[offset] ?? 0,
+      transforms.directions[offset + 1] ?? 1,
+      transforms.directions[offset + 2] ?? 0,
+    );
+    quaternion.setFromUnitVectors(AUTHORED_VECTOR_UNIT_Y, direction);
+
+    position.set(
+      transforms.shaftCenters[offset] ?? 0,
+      transforms.shaftCenters[offset + 1] ?? 0,
+      transforms.shaftCenters[offset + 2] ?? 0,
+    );
+    scale.set(
+      transforms.shaftScales[offset] ?? 0,
+      transforms.shaftScales[offset + 1] ?? 0,
+      transforms.shaftScales[offset + 2] ?? 0,
+    );
+    matrix.compose(position, quaternion, scale);
+    shaft.setMatrixAt(i, matrix);
+
+    position.set(
+      transforms.headCenters[offset] ?? 0,
+      transforms.headCenters[offset + 1] ?? 0,
+      transforms.headCenters[offset + 2] ?? 0,
+    );
+    scale.set(
+      transforms.headScales[offset] ?? 0,
+      transforms.headScales[offset + 1] ?? 0,
+      transforms.headScales[offset + 2] ?? 0,
+    );
+    matrix.compose(position, quaternion, scale);
+    head.setMatrixAt(i, matrix);
+  }
+
+  shaft.count = count;
+  head.count = count;
+  shaft.instanceColor = instanceColorAttr;
+  head.instanceColor = instanceColorAttr;
+  shaft.instanceMatrix.needsUpdate = true;
+  head.instanceMatrix.needsUpdate = true;
+}
+
 /**
- * Renders 3D magnetization vector arrows (shaft + 2-segment arrowhead chevron)
- * for a primitive object with a committed authored magnetic texture when no
- * discretized solver field buffer covers it yet.
+ * Renders 3D solid instanced magnetization vector arrows (cylinder shafts +
+ * cone arrowheads via `InstancedMesh`) for a primitive object with a committed
+ * authored magnetic texture when no discretized solver field buffer covers it yet.
  */
 function AuthoredMagnetizationPersistentVectors({
   fallbackMonoColor,
@@ -2901,6 +3191,9 @@ function AuthoredMagnetizationPersistentVectors({
   tracker?: Viewport3DResourceTracker;
 }) {
   const invalidate = useBatchedInvalidate();
+  const shaftRef = useRef<InstancedMesh>(null);
+  const headRef = useRef<InstancedMesh>(null);
+  const glyphPolicy = RENDER_POLICIES.glyphs;
 
   const grid = useMemo(
     () =>
@@ -2928,9 +3221,9 @@ function AuthoredMagnetizationPersistentVectors({
     }) ?? null;
   }, [grid.count, grid.positionsWorld, liveBinding, object.objectId, textureTransformModel]);
 
-  const arrowBuffers = useMemo(() => {
+  const glyphData = useMemo(() => {
     if (!sampledVectors || grid.count <= 0) return null;
-    return buildAuthoredMagnetizationArrowBuffers(
+    return buildAuthoredMagnetizationArrowGlyphData(
       grid.positionsWorld,
       sampledVectors,
       grid.pitch,
@@ -2941,6 +3234,7 @@ function AuthoredMagnetizationPersistentVectors({
         lengthScale: settings.vectorLengthScale,
         monoColor: settings.vectorMonoColor,
         scalarColorPalette: settings.scalarColorPalette,
+        thickness: settings.vectorThickness,
       },
     );
   }, [
@@ -2954,50 +3248,186 @@ function AuthoredMagnetizationPersistentVectors({
     settings.vectorColorMode,
     settings.vectorLengthScale,
     settings.vectorMonoColor,
+    settings.vectorThickness,
   ]);
 
-  const vectorGeometry = useMemo(() => {
-    if (!arrowBuffers || arrowBuffers.arrowCount <= 0) return null;
-    const geom = new BufferGeometry();
-    geom.setAttribute("position", new BufferAttribute(arrowBuffers.positions, 3));
-    geom.setAttribute("color", new BufferAttribute(arrowBuffers.colors, 3));
+  const glyphCount = glyphData?.arrowCount ?? 0;
+  const opacity = Math.max(0, Math.min(1, (settings.vectorAlphaPercent ?? 100) / 100));
+  const isRendered = Boolean(glyphData && glyphCount > 0 && opacity > 0);
+  const capacity = useMemo(() => resolveAuthoredVectorCapacity(glyphCount), [glyphCount]);
+  const depthPolicy = resolveVectorGlyphDepthPolicy(grid.renderOnTop);
+
+  const transformScratch = useMemo(
+    () => ({
+      direction: new Vector3(),
+      matrix: new Matrix4(),
+      position: new Vector3(),
+      quaternion: new Quaternion(),
+      scale: new Vector3(),
+    }),
+    [],
+  );
+
+  const shaftGeometry = useMemo(() => {
+    const geom = ensureWhiteVertexColorAttribute(new CylinderGeometry(1, 1, 1, 8));
     return tracker ? tracker.track("geometry", geom) : geom;
-  }, [arrowBuffers, tracker]);
+  }, [tracker]);
+
+  const headGeometry = useMemo(() => {
+    const geom = ensureWhiteVertexColorAttribute(new ConeGeometry(1, 1, 10));
+    return tracker ? tracker.track("geometry", geom) : geom;
+  }, [tracker]);
+
+  const material = useMemo(() => {
+    const mat = new MeshBasicMaterial({
+      color: "white",
+      depthTest: glyphPolicy.depthTest,
+      depthWrite: glyphPolicy.depthWrite,
+      side: glyphPolicy.side,
+      toneMapped: false,
+      vertexColors: true,
+    });
+    return tracker ? tracker.track("material", mat) : mat;
+  }, [glyphPolicy.depthTest, glyphPolicy.depthWrite, glyphPolicy.side, tracker]);
+
+  const instanceColorAttr = useMemo(() => {
+    const attr = new InstancedBufferAttribute(new Float32Array(capacity * 3), 3);
+    attr.setUsage(DynamicDrawUsage);
+    return attr;
+  }, [capacity]);
+
+  useEffect(
+    () => () => {
+      if (tracker) {
+        tracker.release("geometry", shaftGeometry);
+      } else {
+        shaftGeometry.dispose();
+      }
+    },
+    [shaftGeometry, tracker],
+  );
+
+  useEffect(
+    () => () => {
+      if (tracker) {
+        tracker.release("geometry", headGeometry);
+      } else {
+        headGeometry.dispose();
+      }
+    },
+    [headGeometry, tracker],
+  );
+
+  useEffect(
+    () => () => {
+      if (tracker) {
+        tracker.release("material", material);
+      } else {
+        material.dispose();
+      }
+    },
+    [material, tracker],
+  );
+
+  useEffect(
+    () => () => {
+      instanceColorAttr.dispose();
+    },
+    [instanceColorAttr],
+  );
 
   useEffect(() => {
-    if (!vectorGeometry) return undefined;
-    invalidate();
+    const shaft = shaftRef.current;
+    const head = headRef.current;
     return () => {
-      if (tracker) {
-        tracker.release("geometry", vectorGeometry);
-      } else {
-        vectorGeometry.dispose();
+      if (shaft) {
+        shaft.instanceColor = null;
+        shaft.instanceMatrix.dispose();
+      }
+      if (head) {
+        head.instanceColor = null;
+        head.instanceMatrix.dispose();
       }
     };
-  }, [invalidate, tracker, vectorGeometry]);
+  }, [capacity, isRendered]);
 
-  if (!vectorGeometry) return null;
+  useEffect(() => {
+    syncAuthoredVectorMaterial(material, {
+      opacity,
+      transparent: glyphPolicy.transparent || opacity < 0.99,
+      depthTest: depthPolicy.depthTest,
+      depthWrite: depthPolicy.depthWrite,
+    });
+    tracker?.recordDirtyFrame("vector-glyph-material");
+    invalidate();
+  }, [
+    depthPolicy.depthTest,
+    depthPolicy.depthWrite,
+    glyphPolicy.transparent,
+    invalidate,
+    material,
+    opacity,
+    tracker,
+  ]);
 
-  const opacity = Math.max(0, Math.min(1, (settings.vectorAlphaPercent ?? 100) / 100));
-  if (opacity <= 0) return null;
+  useEffect(() => {
+    const shaft = shaftRef.current;
+    const head = headRef.current;
+    if (!isRendered || !glyphData || !shaft || !head) return;
+
+    uploadAuthoredVectorGlyphInstances({
+      shaft,
+      head,
+      instanceColorAttr,
+      glyphData,
+      capacity,
+      scratch: transformScratch,
+    });
+
+    tracker?.recordDirtyFrame("vector-glyphs");
+    invalidate();
+  }, [
+    capacity,
+    glyphData,
+    instanceColorAttr,
+    invalidate,
+    isRendered,
+    tracker,
+    transformScratch,
+  ]);
+
+  if (!isRendered) return null;
 
   return (
-    <lineSegments
-      geometry={vectorGeometry}
-      renderOrder={RENDER_POLICIES.glyphs.renderOrder}
-      userData={{
-        gizmo: "texture-authored-vectors",
-        objectId: object.objectId,
-      }}
-    >
-      <lineBasicMaterial
-        depthTest={!grid.renderOnTop}
-        depthWrite={!grid.renderOnTop}
-        opacity={opacity}
-        toneMapped={false}
-        transparent={opacity < 1 || grid.renderOnTop}
-        vertexColors
+    <>
+      <instancedMesh
+        args={[shaftGeometry, material, capacity]}
+        count={0}
+        frustumCulled={false}
+        key={`authored-vector-shaft-${capacity}`}
+        material-depthTest={depthPolicy.depthTest}
+        material-depthWrite={depthPolicy.depthWrite}
+        ref={shaftRef}
+        renderOrder={glyphPolicy.renderOrder}
+        userData={{
+          gizmo: "texture-authored-vectors",
+          objectId: object.objectId,
+        }}
       />
-    </lineSegments>
+      <instancedMesh
+        args={[headGeometry, material, capacity]}
+        count={0}
+        frustumCulled={false}
+        key={`authored-vector-head-${capacity}`}
+        material-depthTest={depthPolicy.depthTest}
+        material-depthWrite={depthPolicy.depthWrite}
+        ref={headRef}
+        renderOrder={glyphPolicy.renderOrder}
+        userData={{
+          gizmo: "texture-authored-vectors",
+          objectId: object.objectId,
+        }}
+      />
+    </>
   );
 }

@@ -30,6 +30,9 @@ import {
   applyTextureGizmoScaleDrag,
   applyTextureGizmoTranslateDrag,
   buildAuthoredMagnetizationArrowBuffers,
+  buildAuthoredMagnetizationArrowGlyphData,
+  buildAuthoredMagnetizationArrowInstanceColors,
+  buildAuthoredMagnetizationArrowSegments,
   buildAuthoredMagnetizationVectorGridPoints,
   buildCharacteristicProxyWireframeSegments,
   buildSubdividedSurfacePreviewData,
@@ -675,7 +678,7 @@ describe("TextureTransformGizmo & 3D surface preview synchronization", () => {
     expect(model.hasAuthoredMagnetization("file-box")).toBe(false);
   });
 
-  it("samples authored magnetization vector grid, builds 3-segment chevron arrows with coloring modes, and honors centering/scale", () => {
+  it("samples authored magnetization vector grid down to budget 16 (default 196), lifts above surface, and builds solid 3D arrow transforms + linear-RGB instance colors", () => {
     const scene = {
       version: "scene.v2",
       revision: 8,
@@ -733,19 +736,39 @@ describe("TextureTransformGizmo & 3D surface preview synchronization", () => {
       sceneRevision: 8,
     };
 
-    // Budget clamping & zero budget
+    // Budget clamping (min 16, default 196, max 2000) & zero budget
     expect(buildAuthoredMagnetizationVectorGridPoints(slabObj, { budget: 0 }).count).toBe(0);
+    const defaultGrid = buildAuthoredMagnetizationVectorGridPoints(slabObj, {
+      geometryScope: "surface",
+    });
+    expect(defaultGrid.count).toBe(196);
     const lowGrid = buildAuthoredMagnetizationVectorGridPoints(slabObj, {
       budget: 12,
       geometryScope: "surface",
     });
-    expect(lowGrid.count).toBe(64);
+    expect(lowGrid.count).toBe(16);
+    const midLowGrid = buildAuthoredMagnetizationVectorGridPoints(slabObj, {
+      budget: 25,
+      geometryScope: "surface",
+    });
+    expect(midLowGrid.count).toBe(25);
     const highGrid = buildAuthoredMagnetizationVectorGridPoints(slabObj, {
       budget: 9999,
       geometryScope: "full",
     });
     expect(highGrid.count).toBeLessThanOrEqual(2000);
-    expect(highGrid.count).toBeGreaterThanOrEqual(64);
+    expect(highGrid.count).toBeGreaterThanOrEqual(16);
+
+    // Default thin-film surface lift sits cleanly above top face (+hz = 2.5 nm)
+    const defaultZ = defaultGrid.positionsWorld[2]!;
+    const expectedMinLift = Math.max(defaultGrid.pitch * 0.16, 100e-9 * 0.006);
+    expect(defaultZ).toBeCloseTo(2.5e-9 + expectedMinLift, 15);
+    const liftedGrid = buildAuthoredMagnetizationVectorGridPoints(slabObj, {
+      geometryScope: "surface",
+      surfaceOffsetEnabled: true,
+      surfaceOffsetScale: 1,
+    });
+    expect(liftedGrid.positionsWorld[2]!).toBeGreaterThan(defaultZ);
 
     // Evaluate skyrmion vectors through textureTransformModel
     const model = createViewport3DTextureTransformModel(scene);
@@ -761,52 +784,139 @@ describe("TextureTransformGizmo & 3D surface preview synchronization", () => {
       expect(mag).toBeCloseTo(1, 5);
     }
 
-    // Centering + lengthScale + chevron segment count
+    // 7-channel segment builder + real 3D solid instanced arrow transforms
     const singleAnchor = new Float32Array([0, 0, 0]);
     const unitX = new Float32Array([1, 0, 0]);
-    const centered = buildAuthoredMagnetizationArrowBuffers(singleAnchor, unitX, 10e-9, {
+    const segmentsCentered = buildAuthoredMagnetizationArrowSegments(singleAnchor, unitX, 10e-9, {
+      centeringEnabled: true,
+      lengthScale: 1,
+    });
+    expect(segmentsCentered.length).toBe(7);
+    // Length = 0.85 * pitch = 8.5 nm, centered around 0 -> [-4.25 nm, +4.25 nm]
+    expect(segmentsCentered[0]).toBeCloseTo(-4.25e-9, 15);
+    expect(segmentsCentered[3]).toBeCloseTo(4.25e-9, 15);
+    expect(segmentsCentered[6]).toBeCloseTo(1, 6);
+
+    const segmentsScaled = buildAuthoredMagnetizationArrowSegments(singleAnchor, unitX, 10e-9, {
+      centeringEnabled: false,
+      lengthScale: 2,
+    });
+    // Tail starts at anchor 0, tip extends to 2 * 0.85 * pitch = 17 nm
+    expect(segmentsScaled[0]).toBeCloseTo(0, 15);
+    expect(segmentsScaled[3]).toBeCloseTo(17e-9, 15);
+
+    // Thickness & lengthScale scaling on solid 3D cylinder shaft + cone head transforms
+    const baseGlyph = buildAuthoredMagnetizationArrowGlyphData(singleAnchor, unitX, 10e-9, {
+      centeringEnabled: true,
+      colorMode: "orientation",
+      lengthScale: 1,
+      thickness: 1,
+    });
+    const thickGlyph = buildAuthoredMagnetizationArrowGlyphData(singleAnchor, unitX, 10e-9, {
+      centeringEnabled: true,
+      colorMode: "orientation",
+      lengthScale: 1,
+      thickness: 2.5,
+    });
+    const longGlyph = buildAuthoredMagnetizationArrowGlyphData(singleAnchor, unitX, 10e-9, {
+      centeringEnabled: true,
+      colorMode: "orientation",
+      lengthScale: 2,
+      thickness: 1,
+    });
+    expect(baseGlyph.arrowCount).toBe(1);
+    const baseLen = 8.5e-9;
+    // Shaft length = (1 - 0.34) * arrowLen, head length = 0.34 * arrowLen
+    expect(baseGlyph.transforms.shaftScales[1]).toBeCloseTo(baseLen * 0.66, 15);
+    expect(baseGlyph.transforms.headScales[1]).toBeCloseTo(baseLen * 0.34, 15);
+    // Radii scale directly with thickness (0.052 * thickness, 0.145 * thickness)
+    expect(baseGlyph.transforms.shaftScales[0]).toBeCloseTo(baseLen * 0.052, 15);
+    expect(baseGlyph.transforms.headScales[0]).toBeCloseTo(baseLen * 0.145, 15);
+    expect(thickGlyph.transforms.shaftScales[0]! / baseGlyph.transforms.shaftScales[0]!).toBeCloseTo(2.5, 6);
+    expect(thickGlyph.transforms.headScales[0]! / baseGlyph.transforms.headScales[0]!).toBeCloseTo(2.5, 6);
+    // Length scales directly with lengthScale
+    expect(longGlyph.transforms.shaftScales[1]! / baseGlyph.transforms.shaftScales[1]!).toBeCloseTo(2, 6);
+    expect(longGlyph.transforms.headScales[1]! / baseGlyph.transforms.headScales[1]!).toBeCloseTo(2, 6);
+    // Thickness clamping (0.25..4)
+    const minThick = buildAuthoredMagnetizationArrowGlyphData(singleAnchor, unitX, 10e-9, {
+      thickness: 0.01,
+    });
+    const maxThick = buildAuthoredMagnetizationArrowGlyphData(singleAnchor, unitX, 10e-9, {
+      thickness: 99,
+    });
+    expect(minThick.transforms.shaftScales[0]).toBeCloseTo(baseLen * 0.052 * 0.25, 15);
+    expect(maxThick.transforms.headScales[0]).toBeCloseTo(baseLen * 0.145 * 4, 15);
+
+    // All per-instance color modes produce valid finite linear-RGB colors
+    const multiPos = new Float32Array([
+      0, 0, 0,
+      10e-9, 0, 0,
+      20e-9, 0, 0,
+      30e-9, 0, 0,
+    ]);
+    const multiVec = new Float32Array([
+      1, 0, 0, // +X, mag 1
+      0, -0.5, 0, // -Y, mag 0.5
+      0, 0, -1, // -Z, mag 1
+      0, 0, 1, // +Z, mag 1
+    ]);
+    const multiSegments = buildAuthoredMagnetizationArrowSegments(multiPos, multiVec, 10e-9);
+    for (const mode of ["orientation", "monochrome", "magnitude", "x", "y", "z"] as const) {
+      const colors = buildAuthoredMagnetizationArrowInstanceColors(multiSegments, {
+        colorMode: mode,
+        fallbackMonoColor: "#808080",
+        monoColor: "var(--fm-accent)",
+        scalarColorPalette: "coolwarm",
+      });
+      expect(colors.length, mode).toBe(12);
+      for (let i = 0; i < colors.length; i += 1) {
+        expect(Number.isFinite(colors[i]!), `${mode}[${i}]`).toBe(true);
+        expect(colors[i]!, `${mode}[${i}]`).toBeGreaterThanOrEqual(0);
+        expect(colors[i]!, `${mode}[${i}]`).toBeLessThanOrEqual(1);
+      }
+    }
+
+    // Orientation coloring matches magnetizationHslLinearRgb(1, 0, 0)
+    const [expectedR, expectedG, expectedB] = magnetizationHslLinearRgb(1, 0, 0);
+    expect(baseGlyph.colors[0]).toBeCloseTo(expectedR, 5);
+    expect(baseGlyph.colors[1]).toBeCloseTo(expectedG, 5);
+    expect(baseGlyph.colors[2]).toBeCloseTo(expectedB, 5);
+
+    // Monochrome converts sRGB midtone (#808080 ~ 0.502 sRGB -> ~0.2159 linear)
+    const monoLinear = buildAuthoredMagnetizationArrowInstanceColors(segmentsCentered, {
+      colorMode: "monochrome",
+      fallbackMonoColor: "#808080",
+      monoColor: "var(--fm-accent)",
+    });
+    expect(monoLinear[0]).toBeCloseTo(0.21586, 3);
+    expect(monoLinear[1]).toBeCloseTo(0.21586, 3);
+    expect(monoLinear[2]).toBeCloseTo(0.21586, 3);
+
+    // Component ("z") distinguishes -Z (blue) vs +Z (red) in coolwarm
+    const zColors = buildAuthoredMagnetizationArrowInstanceColors(multiSegments, {
+      colorMode: "z",
+      scalarColorPalette: "coolwarm",
+    });
+    expect(zColors[6 + 2]!).toBeGreaterThan(zColors[6]!);
+    expect(zColors[9]!).toBeGreaterThan(zColors[9 + 2]!);
+
+    // Magnitude distinguishes 0.5 vs 1.0 in viridis
+    const magColors = buildAuthoredMagnetizationArrowInstanceColors(multiSegments, {
+      colorMode: "magnitude",
+      scalarColorPalette: "viridis",
+    });
+    expect(magColors[0]).not.toBeCloseTo(magColors[3]!, 2);
+
+    // Legacy buildAuthoredMagnetizationArrowBuffers export remains compatible
+    const legacyCentered = buildAuthoredMagnetizationArrowBuffers(singleAnchor, unitX, 10e-9, {
       centeringEnabled: true,
       colorMode: "orientation",
       lengthScale: 1,
     });
-    expect(centered.arrowCount).toBe(1);
-    expect(centered.positions.length).toBe(18);
-    expect(centered.colors.length).toBe(18);
-    // Shaft centered around 0 along +X: tail = -0.36 * pitch, tip = +0.36 * pitch
-    expect(centered.positions[0]).toBeCloseTo(-3.6e-9, 15);
-    expect(centered.positions[3]).toBeCloseTo(3.6e-9, 15);
-    // Orientation coloring matches magnetizationHslLinearRgb(1, 0, 0)
-    const [expectedR, expectedG, expectedB] = magnetizationHslLinearRgb(1, 0, 0);
-    expect(centered.colors[0]).toBeCloseTo(expectedR, 5);
-    expect(centered.colors[1]).toBeCloseTo(expectedG, 5);
-    expect(centered.colors[2]).toBeCloseTo(expectedB, 5);
-
-    const tailAnchored = buildAuthoredMagnetizationArrowBuffers(singleAnchor, unitX, 10e-9, {
-      centeringEnabled: false,
-      colorMode: "monochrome",
-      fallbackMonoColor: "#00ff00",
-      lengthScale: 2,
-      monoColor: "var(--fm-accent)",
-    });
-    // Tail starts at anchor 0, tip extends to 2 * 0.72 * pitch = 14.4 nm
-    expect(tailAnchored.positions[0]).toBeCloseTo(0, 15);
-    expect(tailAnchored.positions[3]).toBeCloseTo(14.4e-9, 15);
-    // Monochrome fell back cleanly from CSS var() to green
-    expect(tailAnchored.colors[0]).toBeCloseTo(0, 5);
-    expect(tailAnchored.colors[1]).toBeCloseTo(1, 5);
-    expect(tailAnchored.colors[2]).toBeCloseTo(0, 5);
-
-    // Component coloring ("z") distinguishes +Z vs -Z
-    const zPairPos = new Float32Array([0, 0, 0, 10e-9, 0, 0]);
-    const zPairVec = new Float32Array([0, 0, -1, 0, 0, 1]);
-    const zArrows = buildAuthoredMagnetizationArrowBuffers(zPairPos, zPairVec, 10e-9, {
-      colorMode: "z",
-      scalarColorPalette: "coolwarm",
-    });
-    expect(zArrows.arrowCount).toBe(2);
-    // -Z (blue) vs +Z (red) in coolwarm
-    expect(zArrows.colors[2]!).toBeGreaterThan(zArrows.colors[0]!);
-    expect(zArrows.colors[18]!).toBeGreaterThan(zArrows.colors[20]!);
+    expect(legacyCentered.arrowCount).toBe(1);
+    expect(legacyCentered.positions.length).toBe(18);
+    expect(legacyCentered.positions[0]).toBeCloseTo(-4.25e-9, 15);
+    expect(legacyCentered.positions[3]).toBeCloseTo(4.25e-9, 15);
 
     // Direct sampleAuthoredMagnetizationVectors returns null for unknown object
     expect(
@@ -818,7 +928,7 @@ describe("TextureTransformGizmo & 3D surface preview synchronization", () => {
     ).toBeNull();
   });
 
-  it("renders AuthoredMagnetizationPersistentVectors when vectorsVisible is enabled and suppresses when covered by live field or saved viewport", () => {
+  it("renders AuthoredMagnetizationPersistentVectors as instanced 3D shaft + head meshes when vectorsVisible is enabled and suppresses when covered by live field or saved viewport", () => {
     const scene = {
       version: "scene.v2",
       revision: 9,
@@ -863,7 +973,7 @@ describe("TextureTransformGizmo & 3D surface preview synchronization", () => {
 
     const textureTransformModel = createViewport3DTextureTransformModel(scene);
 
-    // Vectors ON even when surface shader is OFF (wireframe/vectors-only mode) -> emits <lineSegments>
+    // Vectors ON even when surface shader is OFF (wireframe/vectors-only mode) -> emits two <instancedMesh> (shaft + head)
     const vectorsOnlyMarkup = renderToStaticMarkup(
       createElement(Viewport3DTextureTransformLayer, {
         getObjectSettings: () => ({
@@ -871,6 +981,7 @@ describe("TextureTransformGizmo & 3D surface preview synchronization", () => {
           activeQuantityId: "",
           primitiveVisible: false,
           shaderVisible: false,
+          vectorThickness: 1.5,
           vectorsVisible: true,
           visible: true,
         }),
@@ -881,7 +992,8 @@ describe("TextureTransformGizmo & 3D surface preview synchronization", () => {
         textureTransformModel,
       }),
     );
-    expect(vectorsOnlyMarkup).toContain("<lineSegments");
+    expect(vectorsOnlyMarkup.match(/<instancedMesh\b/g)?.length).toBe(2);
+    expect(vectorsOnlyMarkup).not.toContain("<lineSegments");
 
     // Suppressed when live solver field covers the object
     const liveCoveredMarkup = renderToStaticMarkup(
