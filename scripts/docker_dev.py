@@ -947,7 +947,9 @@ def _ensure_development_base(args: argparse.Namespace, repo: Path,
     return base
 
 
-def _select_source(repo: Path, source_root: Path | None) -> tuple[Path, dict[str, object]]:
+def _select_source(
+    repo: Path, source_root: Path | None, *, admit_linux_mounts: bool = False,
+) -> tuple[Path, dict[str, object]]:
     from docker_development_inputs import select_checkout
     from fullmag_storage import initialize_runtime, resolve_layout
 
@@ -955,6 +957,18 @@ def _select_source(repo: Path, source_root: Path | None) -> tuple[Path, dict[str
     if not selected.is_dir() or selected.is_symlink():
         raise _fail(f"selected source is not a real checkout: {selected}")
     layout = resolve_layout(selected, STORAGE_PROFILE)
+    if admit_linux_mounts and os.name != "nt":
+        from docker_dev_host import validate_host_path, validate_linux_mounts
+
+        root = validate_host_path(layout["storage_root"], "project storage")
+        validate_linux_mounts({
+            selected: "source checkout",
+            Path(layout["runs_root"]): "DEV run records",
+            root / "index": "storage index",
+            root / "locks": "storage locks",
+            root / ".fullmag-storage.json": "storage marker",
+            root / ".initialize.lock": "storage initialization lock",
+        })
     initialize_runtime(layout)
     return selected, layout
 
@@ -997,7 +1011,7 @@ def _workspace_state_root(layout: Mapping[str, object], project: str) -> Path:
 
     from fullmag_docker_runtime import _workspace_user_data_root
 
-    return _workspace_user_data_root(layout, project)
+    return _workspace_user_data_root(layout, project, admit_linux_mounts=True)
 
 
 def _backend_build_state_root(layout: Mapping[str, object], run_root: Path) -> Path:

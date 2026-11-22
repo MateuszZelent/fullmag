@@ -31,6 +31,38 @@ class DockerDevStorageTests(unittest.TestCase):
             self.assertIs(observed, layout)
             initialize_runtime.assert_called_once_with(layout)
 
+    def test_dev_mount_admission_precedes_storage_initialization(self):
+        with tempfile.TemporaryDirectory() as directory:
+            repo = Path(directory)
+            root = Path("/home/fullmag/storage")
+            runs_root = root / "runs" / "selected"
+            layout = {"storage_root": str(root), "runs_root": str(runs_root)}
+            mountinfo = (
+                "1 0 8:1 / / rw - ext4 /dev/sda rw\n"
+                "2 1 0:42 / /home/fullmag/storage/runs rw - 9p E:\\134 rw\n"
+            )
+            with patch("docker_development_inputs.select_checkout", return_value=repo), \
+                    patch.object(fullmag_storage, "resolve_layout", return_value=layout), \
+                    patch.object(fullmag_storage, "initialize_runtime") as initialize, \
+                    patch.object(fullmag_storage, "filesystem_type", return_value="ext4"), \
+                    patch.object(Path, "read_text", return_value=mountinfo):
+                with self.assertRaisesRegex(ValueError, "DEV run records.*9p.*storage/runs"):
+                    docker_dev._select_source(repo, None, admit_linux_mounts=True)
+            initialize.assert_not_called()
+
+    def test_workspace_data_mount_rejected_before_directory_creation(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            candidate = root / "user-data" / "fullmag-master"
+            mountinfo = (
+                "1 0 8:1 / / rw - ext4 /dev/sda rw\n"
+                f"2 1 0:42 / {root}/user-data rw - 9p E:\\134 rw\n"
+            )
+            with patch.object(Path, "read_text", return_value=mountinfo):
+                with self.assertRaisesRegex(ValueError, "workspace user-data.*9p"):
+                    docker_dev._workspace_state_root({"storage_root": str(root)}, "fullmag-master")
+            self.assertFalse(candidate.exists())
+
     def test_project_image_and_control_volume_are_stable_per_group(self):
         project = "fullmag-worktree-example"
         first_image = docker_dev._stable_project_image_reference(project, "runtime")

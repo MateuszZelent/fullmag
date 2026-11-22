@@ -2345,10 +2345,12 @@ def start(args, *, reuse_state=None, control=None, operation=None, prepared=None
         raise BuildControlError("Previous runtime configuration digest is not a lowercase SHA-256")
     require_host()
     host = _session_host()
-    selected, layout = _select_source(Path(args.repo_root).resolve(strict=True), args.source_root or args.repo_root)
+    selected, layout = _select_source(
+        Path(args.repo_root).resolve(strict=True), args.source_root or args.repo_root,
+        admit_linux_mounts=True,
+    )
     _revalidate_helper_source_binding(helper_source_binding, selected)
     validate_host_path(selected, "source checkout")
-    validate_linux_mounts({selected: "source checkout"})
     local_volume(Path(layout["storage_root"]))
     identity = _compose_identity(layout)
     from docker_dev_network import parse_requested_subnet, check_requested_subnet_available
@@ -2602,6 +2604,8 @@ def start(args, *, reuse_state=None, control=None, operation=None, prepared=None
             else:
                 state = storage.validate_path(Path(layout["runtime_root"]) / "docker-volume-dev" / token,
                                               layout["storage_root"], "session storage")
+            validate_linux_mounts({state: "session storage"})
+            if snapshot is None:
                 state.mkdir(parents=True, exist_ok=False)
             if os.name == "nt":
                 operation["receipt"]["windows_runtime_directories"] = list(
@@ -2683,7 +2687,8 @@ def start(args, *, reuse_state=None, control=None, operation=None, prepared=None
                     "Post-build continuation changed under the new development lease: " + str(error)
                 ) from error
         local_volume(state)
-        validate_linux_mounts({state: "session storage"})
+        if reuse_state is not None:
+            validate_linux_mounts({state: "retained session storage"})
         _pin_private_group_storage(control, operation, new_render=provided_operation is None)
         cache = _backend_cache(control, operation, layout, selected, image, toolchain["image_id"])
         operation["receipt"]["backend_volumes"] = cache["volume_names"]
