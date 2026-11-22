@@ -64,6 +64,7 @@ import {
   useSceneResource,
 } from "@/kernel/resources/geometryLifecycleResources";
 import { useObjectMetricsResource } from "@/kernel/resources/studyRuntimeResources";
+import { SESSION_STATUS_RESOURCE_KEY } from "@/kernel/resources/useSessionStatus";
 import { hasEmptyObjectMagneticModel } from "@/shared/domain/physics/objectMagneticModel";
 import { Badge } from "@/shared/ui/Badge";
 import { Button } from "@/shared/ui/Button";
@@ -393,6 +394,7 @@ function invalidateObjectOverviewResources(
   committedScene?: SceneResource | null,
   sessionScopeKey?: string | null,
   resourceCacheScope?: string | null,
+  options?: { metadataOnly?: boolean },
 ): void {
   if (committedScene) {
     publishCommittedSceneResource(
@@ -400,12 +402,18 @@ function invalidateObjectOverviewResources(
       committedScene,
       revision,
       undefined,
-      false,
+      true,
       sessionScopeKey,
       resourceCacheScope,
     );
   } else {
     resources.invalidate(MODEL_SCENE_PATH, revision);
+  }
+  if (options?.metadataOnly) {
+    resources.invalidate(MODEL_SCENE_PATH, revision);
+    resources.invalidate(MODEL_READINESS_PATH, revision);
+    resources.invalidate(SESSION_STATUS_RESOURCE_KEY, revision);
+    return;
   }
   if (typeof revision === "number") {
     invalidateAuthoringMutationDependents(resources, "geometry", revision);
@@ -479,21 +487,32 @@ export function ObjectOverviewInspectorPanel({ selection }: InspectorPanelProps)
       canonicalGeometryDraft,
     );
     const currentDraft = editSession.getSnapshot().draft;
-    if (
+    const sameBaseRevision =
       typeof currentDraft?.baseRevision === "number" &&
       Number.isFinite(currentDraft.baseRevision) &&
       typeof canonicalGeometryDraft.baseRevision === "number" &&
       Number.isFinite(canonicalGeometryDraft.baseRevision) &&
-      currentDraft.baseRevision === canonicalGeometryDraft.baseRevision
-    ) {
+      currentDraft.baseRevision === canonicalGeometryDraft.baseRevision;
+    const hasOnlyMetadataDrift = Boolean(
+      currentDraft &&
+        geometryDraftGeometryEquals(currentDraft, canonicalGeometryDraft) &&
+        geometryDraftTranslationEquals(currentDraft, canonicalGeometryDraft) &&
+        !objectEditMetadataEquals(currentDraft, canonicalGeometryDraft),
+    );
+    if (sameBaseRevision && !hasOnlyMetadataDrift) {
+      return;
+    }
+    const nextCanonical = canonicalDraftInSelectedUnits(
+      canonicalGeometryDraft,
+      currentDraft ?? canonicalGeometryDraft,
+    );
+    if (hasOnlyMetadataDrift) {
+      editSession.reset(identity, nextCanonical);
       return;
     }
     editSession.refreshCanonical(
       identity,
-      canonicalDraftInSelectedUnits(
-        canonicalGeometryDraft,
-        currentDraft ?? canonicalGeometryDraft,
-      ),
+      nextCanonical,
       rebaseDirtyDraftOntoUnchangedObject,
     );
   }, [
@@ -515,13 +534,11 @@ export function ObjectOverviewInspectorPanel({ selection }: InspectorPanelProps)
       canonicalGeometryDraft &&
       !geometryDraftTranslationEquals(objectEditDraft, canonicalGeometryDraft),
   );
-  const objectEditMetadataChanged = Boolean(
-    objectEditDraft &&
-      canonicalGeometryDraft &&
-      !objectEditMetadataEquals(objectEditDraft, canonicalGeometryDraft),
-  );
-  const objectEditDraftDirty =
-    geometryDraftChanged || transformDraftChanged || objectEditMetadataChanged;
+  // `ObjectOverviewSpec` stages identity fields (`name`, `notes`, `regionName`)
+  // in `useInspectorSpecController`, not in `objectEditSession`. Only staged
+  // 3D placement or geometry changes belong to the placement banner / Apply
+  // Placement action.
+  const objectEditDraftDirty = geometryDraftChanged || transformDraftChanged;
 
   useEffect(() => {
     if (editSession && editIdentity) {
@@ -1524,6 +1541,7 @@ export function ObjectOverviewInspectorPanel({ selection }: InspectorPanelProps)
               latestRevision = nextRev;
               latestScene = response;
 
+              const regionChanged = draft.regionName.trim() !== prev.regionName.trim();
               if (editSession && canonicalGeometryDraft) {
                 const snap = editSession.getSnapshot();
                 const ackedGeomDraft = resolveCommittedGeometryObjectDraft(response, objectId);
@@ -1533,14 +1551,19 @@ export function ObjectOverviewInspectorPanel({ selection }: InspectorPanelProps)
                   snap.draft &&
                   ackedGeomDraft
                 ) {
+                  // `ObjectOverviewSpec` does not mutate metadata on `editSession.draft`;
+                  // pass the submitted metadata as both `current` and `submitted` so
+                  // `reconcileObjectIdentityAck` adopts the ACKed identity cleanly while
+                  // still preserving any unsent geometry or placement edits from `snap.draft`.
+                  const submittedIdentityDraft = {
+                    ...snap.draft,
+                    name: draft.name.trim(),
+                    notes: draft.notes,
+                    region: optionalObjectReference(draft.regionName) ?? "unassigned",
+                  };
                   const reconciled = reconcileObjectIdentityAck(
-                    snap.draft,
-                    {
-                      ...snap.draft,
-                      name: draft.name.trim(),
-                      notes: draft.notes,
-                      region: optionalObjectReference(draft.regionName) ?? "unassigned",
-                    },
+                    submittedIdentityDraft,
+                    submittedIdentityDraft,
                     canonicalGeometryDraft,
                     { ...ackedGeomDraft, baseRevision: nextRev },
                   );
@@ -1555,7 +1578,32 @@ export function ObjectOverviewInspectorPanel({ selection }: InspectorPanelProps)
                 response,
                 currentSessionScopeKey,
                 kernel.api.resourceCacheScope,
+                { metadataOnly: !regionChanged },
               );
+              const nextTrimmedName = draft.name.trim();
+              if (
+                nextTrimmedName !== prev.name.trim() &&
+                typeof kernel.selection?.get === "function" &&
+                typeof kernel.selection?.set === "function"
+              ) {
+                const currentSel = kernel.selection.get();
+                if (
+                  currentSel.objectId === objectId &&
+                  currentSel.kind === "object.root" &&
+                  currentSel.label !== nextTrimmedName
+                ) {
+                  kernel.selection.set(
+                    {
+                      kind: currentSel.kind,
+                      label: nextTrimmedName,
+                      nodeId: currentSel.nodeId,
+                      objectId: currentSel.objectId,
+                      ref: currentSel.ref,
+                    },
+                    "inspector",
+                  );
+                }
+              }
             } finally {
               if (editSession && typeof mutationToken === "number") {
                 editSession.endSceneMutation(mutationToken);
@@ -1695,6 +1743,7 @@ export function ObjectOverviewInspectorPanel({ selection }: InspectorPanelProps)
       handleToggleTopologicalCharge,
       kernel.api,
       kernel.resources,
+      kernel.selection,
       objectEditDraftDirty,
       objectId,
       scene.data,
