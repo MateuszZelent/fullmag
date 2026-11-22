@@ -2,12 +2,53 @@
 
 import React from "react";
 import { ArrowDown, ArrowUp, Plus, Trash2 } from "lucide-react";
-import { Button } from "@/shared/ui/Button";
-import { FormField } from "../primitives/FormField";
-import { InspectorGroup } from "../primitives/InspectorGroup";
-import { type StudyStageDraft } from "./StudyStageAuthoringModel";
 
-export type HysteresisSettleStepDraft = {
+import { Button } from "@/shared/ui/Button";
+import { Checkbox } from "@/shared/ui/Checkbox";
+import { Input } from "@/shared/ui/Input";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/shared/ui/Select";
+
+import {
+  hysteresisFieldUnitScaleToTesla,
+  type StudyStageDraft,
+} from "./StudyStageAuthoringModel";
+
+export interface StableDraftRow {
+  readonly _rowId: string;
+}
+
+let fallbackRowCounter = 0;
+const initialSlotRowIdCache = new Map<string, string>();
+
+function generateStableRowId(): string {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+    return crypto.randomUUID();
+  }
+  fallbackRowCounter += 1;
+  return `hyst-row-${fallbackRowCounter}`;
+}
+
+function ensureRowId(existingId: unknown, slotKey?: string): string {
+  if (typeof existingId === "string" && existingId.length > 0) {
+    return existingId;
+  }
+  if (slotKey) {
+    const cached = initialSlotRowIdCache.get(slotKey);
+    if (cached) return cached;
+    const created = generateStableRowId();
+    initialSlotRowIdCache.set(slotKey, created);
+    return created;
+  }
+  return generateStableRowId();
+}
+
+export type HysteresisSettleStepDraft = StableDraftRow & {
   [key: string]: unknown;
   step_id?: string;
   kind?: string;
@@ -18,6 +59,9 @@ export type HysteresisSettleStepDraft = {
   energy_tolerance?: number | string;
   max_steps?: number | string;
   timestep_s?: number | string;
+  timestep_min_s?: number | string;
+  max_pseudotime_s?: number | string;
+  max_physical_time_s?: number | string;
   retry_timestep_scale?: number | string;
   retry_max_attempts?: number | string;
   applies_to?: unknown;
@@ -25,7 +69,7 @@ export type HysteresisSettleStepDraft = {
   on_non_convergence?: string;
 };
 
-export type HysteresisFieldSegmentDraft = {
+export type HysteresisFieldSegmentDraft = StableDraftRow & {
   segmentId: string;
   label: string;
   startField: string;
@@ -36,7 +80,7 @@ export type HysteresisFieldSegmentDraft = {
   reason: string;
 };
 
-export type HysteresisDenseWindowDraft = {
+export type HysteresisDenseWindowDraft = StableDraftRow & {
   centerField: string;
   halfWidth: string;
   step: string;
@@ -44,37 +88,38 @@ export type HysteresisDenseWindowDraft = {
   reason: string;
 };
 
-export type HysteresisMinorLoopDraft = {
+export type HysteresisMinorLoopDraft = StableDraftRow & {
   reversalField: string;
   returnField: string;
   parentBranch: string;
   closurePolicy: string;
 };
 
-export type HysteresisSettleBranchDraft = {
+export type HysteresisSettleBranchDraft = StableDraftRow & {
   branchId: string;
   when: string;
   run: string;
 };
 
-export const DEFAULT_RELAX_SETTLE_STEP: HysteresisSettleStepDraft = {
+export const DEFAULT_RELAX_SETTLE_STEP: Omit<HysteresisSettleStepDraft, "_rowId"> = {
   kind: "relax",
   method: "llg_overdamped",
   alpha: 1,
-  torque_tolerance: "1e-6",
+  torque_tolerance: "100",
   max_steps: 10000,
   on_non_convergence: "continue_with_warning",
 };
 
-export const DEFAULT_MINIMIZE_SETTLE_STEP: HysteresisSettleStepDraft = {
+export const DEFAULT_MINIMIZE_SETTLE_STEP: Omit<HysteresisSettleStepDraft, "_rowId"> = {
   kind: "minimize",
   method: "projected_gradient_bb",
+  torque_tolerance: "100",
   energy_tolerance: "1e-20",
   max_steps: 200,
   on_non_convergence: "continue_with_warning",
 };
 
-export const DEFAULT_DYNAMICS_SETTLE_STEP: HysteresisSettleStepDraft = {
+export const DEFAULT_DYNAMICS_SETTLE_STEP: Omit<HysteresisSettleStepDraft, "_rowId"> = {
   damping: 1,
   kind: "dynamics_settle",
   max_steps: 200,
@@ -82,6 +127,90 @@ export const DEFAULT_DYNAMICS_SETTLE_STEP: HysteresisSettleStepDraft = {
   on_non_convergence: "continue_with_warning",
   timestep_s: "1e-12",
 };
+
+const FIELD_UNIT_OPTIONS = [
+  { value: "mT", label: "mT" },
+  { value: "T", label: "T" },
+  { value: "Oe", label: "Oe" },
+  { value: "kA/m", label: "kA/m" },
+] as const;
+
+function convertFieldStringBetweenUnits(
+  raw: string,
+  fromUnit: string,
+  toUnit: string,
+): string {
+  const num = Number(raw.trim());
+  if (!Number.isFinite(num)) return raw;
+  const tesla = num * hysteresisFieldUnitScaleToTesla(fromUnit);
+  const targetScale = hysteresisFieldUnitScaleToTesla(toUnit);
+  const converted = tesla / targetScale;
+  return Number(converted.toPrecision(7)).toString();
+}
+
+function LabeledInputRow({
+  ariaLabel,
+  label,
+  onChange,
+  unit,
+  value,
+}: {
+  ariaLabel?: string;
+  label: string;
+  onChange: (next: string) => void;
+  unit?: string;
+  value: string;
+}) {
+  return (
+    <div className="fm-inspector-row" data-layout="inline">
+      <span className="fm-inspector-row__label">{label}</span>
+      <div className="fm-inspector-row__control flex items-center gap-1.5">
+        <Input
+          aria-label={ariaLabel ?? label}
+          className="h-fm-control-sm"
+          type="text"
+          value={value}
+          onChange={(event) => onChange(event.target.value)}
+        />
+        {unit ? <span className="text-xs text-fm-muted shrink-0">{unit}</span> : null}
+      </div>
+    </div>
+  );
+}
+
+function LabeledSelectRow({
+  ariaLabel,
+  label,
+  onChange,
+  options,
+  value,
+}: {
+  ariaLabel?: string;
+  label: string;
+  onChange: (next: string) => void;
+  options: ReadonlyArray<{ value: string; label: string }>;
+  value: string;
+}) {
+  return (
+    <div className="fm-inspector-row" data-layout="inline">
+      <span className="fm-inspector-row__label">{label}</span>
+      <div className="fm-inspector-row__control">
+        <Select value={value} onValueChange={onChange}>
+          <SelectTrigger aria-label={ariaLabel ?? label} density="compact">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {options.map((option) => (
+              <SelectItem key={option.value} value={option.value}>
+                {option.label}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </div>
+    </div>
+  );
+}
 
 export function HysteresisStageDraftFields({
   algorithmsAvailable,
@@ -92,182 +221,181 @@ export function HysteresisStageDraftFields({
   draft: StudyStageDraft;
   onUpdate: (patch: Partial<StudyStageDraft>) => void;
 }) {
+  const storageRecord = parseStoragePolicyDraft(draft.storagePolicy);
+  const updateStorage = (patch: Record<string, unknown>) => {
+    const next = { ...storageRecord, ...patch };
+    onUpdate({ storagePolicy: JSON.stringify(next) });
+  };
+
   return (
-    <>
-      <FormField
+    <div className="grid gap-3">
+      <LabeledSelectRow
         label="Protocol"
-        type="select"
-        value={draft.protocolKind}
-        onChange={(event) => onUpdate({ protocolKind: event.target.value })}
-      >
-        <option value="major_loop">Major loop</option>
-        <option value="major_with_minor_loops">Major with minor loops</option>
-        <option value="virgin_curve">Virgin curve</option>
-        <option value="virgin_then_major_loop">Virgin then major loop</option>
-      </FormField>
-      <FormField
+        options={[
+          { value: "major_loop", label: "Major loop (+H -> -H -> +H)" },
+          { value: "major_with_minor_loops", label: "Major with minor loops" },
+          { value: "virgin_curve", label: "Virgin curve (0 -> +H)" },
+          { value: "virgin_then_major_loop", label: "Virgin then major loop" },
+        ]}
+        value={draft.protocolKind || "major_loop"}
+        onChange={(protocolKind) => onUpdate({ protocolKind })}
+      />
+      <LabeledSelectRow
         label="Initial state"
-        type="select"
-        value={draft.initialStatePolicy}
-        onChange={(event) =>
-          onUpdate({ initialStatePolicy: event.target.value })
-        }
-      >
-        <option value="as_authored">As authored</option>
-        <option value="zero_field_relaxed">Zero-field relaxed</option>
-        <option value="positive_saturation">Positive saturation</option>
-        <option value="negative_saturation">Negative saturation</option>
-        <option value="checkpoint">Checkpoint</option>
-      </FormField>
+        options={[
+          { value: "as_authored", label: "Preceding stage / authored m0" },
+          { value: "zero_field_relaxed", label: "Relax at B = 0 first" },
+          { value: "positive_saturation", label: "Positive saturation (+H)" },
+          { value: "negative_saturation", label: "Negative saturation (-H)" },
+          { value: "checkpoint", label: "Checkpoint" },
+        ]}
+        value={draft.initialStatePolicy || "positive_saturation"}
+        onChange={(initialStatePolicy) => onUpdate({ initialStatePolicy })}
+      />
       {draft.initialStatePolicy === "checkpoint" ? (
-        <FormField
+        <LabeledInputRow
           label="Initial state ref"
           value={draft.initialStateRef}
-          onChange={(event) =>
-            onUpdate({ initialStateRef: event.target.value })
-          }
+          onChange={(initialStateRef) => onUpdate({ initialStateRef })}
         />
       ) : null}
-      <FormField
+
+      <LabeledSelectRow
         label="Orientation mode"
-        type="select"
-        value={draft.orientationMode}
-        onChange={(event) => onUpdate({ orientationMode: event.target.value })}
-      >
-        <option value="preset">Preset</option>
-        <option value="sample">Sample angles</option>
-        <option value="global">Global vector</option>
-      </FormField>
+        options={[
+          { value: "preset", label: "Axis preset" },
+          { value: "sample", label: "Angles (theta, phi)" },
+          { value: "global", label: "Global vector 3D" },
+        ]}
+        value={draft.orientationMode || "preset"}
+        onChange={(orientationMode) => onUpdate({ orientationMode })}
+      />
       {draft.orientationMode === "sample" ? (
         <>
-          <FormField
+          <LabeledInputRow
             label="Theta"
             unit="deg"
             value={draft.thetaDeg}
-            onChange={(event) => onUpdate({ thetaDeg: event.target.value })}
+            onChange={(thetaDeg) => onUpdate({ thetaDeg })}
           />
-          <FormField
+          <LabeledInputRow
             label="Phi"
             unit="deg"
             value={draft.phiDeg}
-            onChange={(event) => onUpdate({ phiDeg: event.target.value })}
+            onChange={(phiDeg) => onUpdate({ phiDeg })}
           />
         </>
       ) : draft.orientationMode === "global" ? (
-        <FormField
+        <LabeledInputRow
           label="Field vector"
           value={draft.customDirection}
-          onChange={(event) =>
-            onUpdate({ customDirection: event.target.value })
-          }
+          onChange={(customDirection) => onUpdate({ customDirection })}
         />
       ) : (
-        <FormField
+        <LabeledSelectRow
           label="Field preset"
-          type="select"
-          value={draft.customDirection}
-          onChange={(event) =>
-            onUpdate({ customDirection: event.target.value })
-          }
-        >
-          <option value="oop_positive">OOP +z</option>
-          <option value="oop_negative">OOP -z</option>
-          <option value="in_plane_x">In-plane x</option>
-          <option value="in_plane_y">In-plane y</option>
-        </FormField>
+          options={[
+            { value: "oop_positive", label: "OOP +z" },
+            { value: "oop_negative", label: "OOP -z" },
+            { value: "in_plane_x", label: "In-plane +x" },
+            { value: "in_plane_y", label: "In-plane +y" },
+          ]}
+          value={draft.customDirection || "oop_positive"}
+          onChange={(customDirection) => onUpdate({ customDirection })}
+        />
       )}
-      <FormField
+
+      <LabeledSelectRow
         label="Measurement axis"
-        type="select"
-        value={draft.measurementAxis}
-        onChange={(event) => onUpdate({ measurementAxis: event.target.value })}
-      >
-        <option value="field_axis">Field axis</option>
-        <option value="sample_normal">Sample normal</option>
-        <option value="easy_axis">Easy axis</option>
-        <option value="custom">Custom</option>
-      </FormField>
+        options={[
+          { value: "field_axis", label: "Along applied field" },
+          { value: "sample_normal", label: "Sample normal (+z)" },
+          { value: "easy_axis", label: "Primary easy axis" },
+          { value: "custom", label: "Custom projection vector" },
+        ]}
+        value={draft.measurementAxis || "field_axis"}
+        onChange={(measurementAxis) => onUpdate({ measurementAxis })}
+      />
       {draft.measurementAxis === "custom" ? (
-        <FormField
+        <LabeledInputRow
           label="Measurement vector"
           value={draft.measurementAxisCustomVector}
-          onChange={(event) =>
-            onUpdate({ measurementAxisCustomVector: event.target.value })
+          onChange={(measurementAxisCustomVector) =>
+            onUpdate({ measurementAxisCustomVector })
           }
         />
       ) : null}
-      <FormField
+
+      <LabeledSelectRow
         label="Schedule mode"
-        type="select"
-        value={draft.fieldScheduleMode}
-        onChange={(event) =>
-          onUpdate({ fieldScheduleMode: event.target.value })
-        }
-      >
-        <option value="simple">Simple</option>
-        <option value="piecewise">Piecewise</option>
-      </FormField>
-      <FormField
+        options={[
+          { value: "simple", label: "Uniform range" },
+          { value: "piecewise", label: "Field segments" },
+        ]}
+        value={draft.fieldScheduleMode || "simple"}
+        onChange={(fieldScheduleMode) => onUpdate({ fieldScheduleMode })}
+      />
+      <LabeledInputRow
         label="Minimum field"
         unit="mT"
         value={draft.fieldMinMt}
-        onChange={(event) => onUpdate({ fieldMinMt: event.target.value })}
+        onChange={(fieldMinMt) => onUpdate({ fieldMinMt })}
       />
-      <FormField
+      <LabeledInputRow
         label="Maximum field"
         unit="mT"
         value={draft.fieldMaxMt}
-        onChange={(event) => onUpdate({ fieldMaxMt: event.target.value })}
+        onChange={(fieldMaxMt) => onUpdate({ fieldMaxMt })}
       />
-      <FormField
+      <LabeledInputRow
         label="Field step"
         unit="mT"
         value={draft.fieldStepMt}
-        onChange={(event) => onUpdate({ fieldStepMt: event.target.value })}
+        onChange={(fieldStepMt) => onUpdate({ fieldStepMt })}
       />
+
       {draft.fieldScheduleMode === "piecewise" ? (
         <HysteresisFieldSegmentsEditor draft={draft} onUpdate={onUpdate} />
       ) : null}
+
       <HysteresisDenseWindowsEditor draft={draft} onUpdate={onUpdate} />
-      <FormField
+
+      <LabeledSelectRow
         label="Saturation mode"
-        type="select"
-        value={draft.saturationMode}
-        onChange={(event) => onUpdate({ saturationMode: event.target.value })}
-      >
-        <option value="none">None</option>
-        <option value="auto">Auto detect</option>
-      </FormField>
+        options={[
+          { value: "none", label: "Fixed field bounds" },
+          { value: "auto", label: "Stop branch early at saturation" },
+        ]}
+        value={draft.saturationMode || "none"}
+        onChange={(saturationMode) => onUpdate({ saturationMode })}
+      />
       {draft.saturationMode === "auto" ? (
         <>
-          <FormField
+          <LabeledInputRow
             label="Max probe field"
             unit="mT"
             value={draft.maxProbeField}
-            onChange={(event) =>
-              onUpdate({ maxProbeField: event.target.value })
-            }
+            onChange={(maxProbeField) => onUpdate({ maxProbeField })}
           />
-          <FormField
+          <LabeledInputRow
             label="Saturation thresholds"
             value={draft.saturationThresholds}
-            onChange={(event) =>
-              onUpdate({ saturationThresholds: event.target.value })
+            onChange={(saturationThresholds) =>
+              onUpdate({ saturationThresholds })
             }
           />
         </>
       ) : null}
-      <FormField
+
+      <LabeledSelectRow
         label="Settle pipeline"
-        type="select"
-        value={draft.settlePipelineMode}
-        onChange={(event) =>
-          onUpdate({ settlePipelineMode: event.target.value })
-        }
-      >
-        <option value="sequence">Sequence</option>
-        <option value="tree">Tree</option>
-      </FormField>
+        options={[
+          { value: "sequence", label: "Sequential chain" },
+          { value: "tree", label: "Conditional fallback tree" },
+        ]}
+        value={draft.settlePipelineMode || "sequence"}
+        onChange={(settlePipelineMode) => onUpdate({ settlePipelineMode })}
+      />
       <HysteresisSettleAlgorithmsEditor
         algorithmsAvailable={algorithmsAvailable}
         draft={draft}
@@ -276,70 +404,840 @@ export function HysteresisStageDraftFields({
       {draft.settlePipelineMode === "tree" ? (
         <HysteresisSettleBranchesEditor draft={draft} onUpdate={onUpdate} />
       ) : null}
-      <HysteresisMinorLoopsEditor draft={draft} onUpdate={onUpdate} />
-      <HysteresisAdvancedJsonSection draft={draft} onUpdate={onUpdate} />
-      <FormField
-        label="Storage policy"
-        rows={5}
-        type="textarea"
-        value={draft.storagePolicy}
-        onChange={(event) => onUpdate({ storagePolicy: event.target.value })}
-      />
-      <FormField
-        checked={draft.storageEstimateAcknowledged}
-        label="Storage estimate acknowledged"
-        type="checkbox"
-        onChange={(event) =>
-          onUpdate({ storageEstimateAcknowledged: event.target.checked })
-        }
-      />
-      <FormField
-        label="Torque tol"
+
+      {draft.protocolKind === "major_with_minor_loops" ? (
+        <HysteresisMinorLoopsEditor draft={draft} onUpdate={onUpdate} />
+      ) : (
+        <div className="fm-inspector-row" data-layout="inline">
+          <span className="fm-inspector-row__label">Minor loops</span>
+          <span className="text-xs text-fm-secondary">
+            Enable Major with minor loops protocol to configure reversals
+          </span>
+        </div>
+      )}
+
+      <div className="fm-inspector-form-section">
+        <div className="fm-inspector-form-section__header">
+          <strong>Storage policy</strong>
+        </div>
+        <LabeledSelectRow
+          label="Snapshot storage mode"
+          options={[
+            { value: "none", label: "None (scalar table only)" },
+            { value: "key_events", label: "Key events (Hc & Mr)" },
+            { value: "selected", label: "Selected cadence" },
+            { value: "every_n", label: "Every N points" },
+            { value: "every_step", label: "Every field point" },
+          ]}
+          value={String(storageRecord.magnetization ?? "key_events")}
+          onChange={(magnetization) =>
+            updateStorage({
+              magnetization,
+              ...(magnetization === "every_n" || magnetization === "selected"
+                ? { every_n: Number(storageRecord.every_n ?? 5) || 5 }
+                : {}),
+            })
+          }
+        />
+        {storageRecord.magnetization === "every_n" ||
+        storageRecord.magnetization === "selected" ? (
+          <LabeledInputRow
+            label="Snapshot cadence N"
+            value={String(storageRecord.every_n ?? 5)}
+            onChange={(raw) => {
+              const parsed = Number(raw.trim());
+              updateStorage({
+                every_n: Number.isFinite(parsed) ? parsed : raw,
+              });
+            }}
+          />
+        ) : null}
+        <div className="fm-inspector-row" data-layout="inline">
+          <span className="fm-inspector-row__label">
+            Storage estimate acknowledged
+          </span>
+          <div className="fm-inspector-row__control">
+            <Checkbox
+              aria-label="Storage estimate acknowledged"
+              checked={Boolean(draft.storageEstimateAcknowledged)}
+              onChange={(event) =>
+                onUpdate({ storageEstimateAcknowledged: event.target.checked })
+              }
+            />
+          </div>
+        </div>
+      </div>
+
+      <LabeledInputRow
+        label="Stage torque tolerance"
         unit="A/m"
-        hint="Canonical maximum |m × H_eff| threshold. Tesla is display-only via μ₀ conversion."
         value={draft.torqueTolerance}
-        onChange={(event) => onUpdate({ torqueTolerance: event.target.value })}
+        onChange={(torqueTolerance) => onUpdate({ torqueTolerance })}
       />
-    </>
+    </div>
   );
 }
 
-function hysteresisSettleBranchKey(branch: HysteresisSettleBranchDraft): string {
-  return `settle-branch:${branch.branchId}:${branch.when}`;
-}
-
-function hysteresisMinorLoopKey(loop: HysteresisMinorLoopDraft): string {
-  return `minor-loop:${loop.reversalField}:${loop.returnField}:${loop.parentBranch}`;
-}
-
-function hysteresisFieldSegmentKey(
-  segment: HysteresisFieldSegmentDraft,
-): string {
-  return `field-segment:${segment.segmentId}:${segment.startField}:${segment.stopField}`;
-}
-
-function hysteresisDenseWindowKey(
-  window: HysteresisDenseWindowDraft,
-): string {
-  return `dense-window:${window.centerField}:${window.halfWidth}:${window.priority}`;
-}
-
-function hysteresisSettleStepKey(step: HysteresisSettleStepDraft): string {
-  return `settle-step:${String(step.step_id ?? "")}:${String(step.kind ?? "")}:${String(step.method ?? "")}:${String(step.applies_to ?? "")}`;
-}
-
-function HysteresisSettleBranchesEditor({
+export function HysteresisFieldSegmentsEditor({
   draft,
   onUpdate,
 }: {
   draft: StudyStageDraft;
   onUpdate: (patch: Partial<StudyStageDraft>) => void;
 }) {
-  const branches = parseHysteresisSettleBranches(draft.settleBranches);
+  const segments = parseHysteresisFieldSegments(draft.fieldSegments, draft.stageId);
+  const commitSegments = (nextSegments: HysteresisFieldSegmentDraft[]) => {
+    onUpdate({ fieldSegments: JSON.stringify(nextSegments) });
+  };
+  const updateSegment = (
+    index: number,
+    patch: Partial<HysteresisFieldSegmentDraft>,
+  ) => {
+    commitSegments(
+      segments.map((segment, segmentIndex) =>
+        segmentIndex === index ? { ...segment, ...patch } : segment,
+      ),
+    );
+  };
+
+  return (
+    <div className="fm-inspector-form-section">
+      <div className="fm-inspector-form-section__header">
+        <strong>Piecewise field segments</strong>
+      </div>
+      {segments.map((segment, index) => (
+        <div className="fm-inspector-form-section" key={segment._rowId}>
+          <div className="fm-inspector-form-section__header">
+            <strong>Segment {index + 1}</strong>
+            <div className="fm-inspector-toolbar">
+              <Button
+                aria-label={`Remove segment ${index + 1}`}
+                disabled={segments.length <= 1}
+                size="icon"
+                type="button"
+                variant="ghost"
+                onClick={() =>
+                  commitSegments(
+                    segments.filter((_, segmentIndex) => segmentIndex !== index),
+                  )
+                }
+              >
+                <Trash2 size={14} aria-hidden="true" />
+              </Button>
+            </div>
+          </div>
+          <LabeledInputRow
+            ariaLabel={`Segment ${index + 1} ID`}
+            label="Segment ID"
+            value={segment.segmentId}
+            onChange={(segmentId) => updateSegment(index, { segmentId })}
+          />
+          <LabeledInputRow
+            ariaLabel={`Segment ${index + 1} label`}
+            label="Label"
+            value={segment.label}
+            onChange={(label) => updateSegment(index, { label })}
+          />
+          <LabeledSelectRow
+            ariaLabel={`Segment ${index + 1} unit`}
+            label="Field unit"
+            options={FIELD_UNIT_OPTIONS}
+            value={segment.unit || "mT"}
+            onChange={(nextUnit) =>
+              updateSegment(index, {
+                startField: convertFieldStringBetweenUnits(
+                  segment.startField,
+                  segment.unit || "mT",
+                  nextUnit,
+                ),
+                stopField: convertFieldStringBetweenUnits(
+                  segment.stopField,
+                  segment.unit || "mT",
+                  nextUnit,
+                ),
+                step: convertFieldStringBetweenUnits(
+                  segment.step,
+                  segment.unit || "mT",
+                  nextUnit,
+                ),
+                unit: nextUnit,
+              })
+            }
+          />
+          <LabeledInputRow
+            ariaLabel={`Segment ${index + 1} start field`}
+            label="Start field"
+            unit={segment.unit || "mT"}
+            value={segment.startField}
+            onChange={(startField) => updateSegment(index, { startField })}
+          />
+          <LabeledInputRow
+            ariaLabel={`Segment ${index + 1} stop field`}
+            label="Stop field"
+            unit={segment.unit || "mT"}
+            value={segment.stopField}
+            onChange={(stopField) => updateSegment(index, { stopField })}
+          />
+          <LabeledInputRow
+            ariaLabel={`Segment ${index + 1} step`}
+            label="Step"
+            unit={segment.unit || "mT"}
+            value={segment.step}
+            onChange={(step) => updateSegment(index, { step })}
+          />
+          <LabeledSelectRow
+            ariaLabel={`Segment ${index + 1} endpoint policy`}
+            label="Endpoint policy"
+            options={[
+              { value: "include_stop", label: "Include stop" },
+              { value: "skip_start", label: "Skip start" },
+              { value: "include_both", label: "Include both" },
+            ]}
+            value={segment.endpointPolicy}
+            onChange={(endpointPolicy) =>
+              updateSegment(index, { endpointPolicy })
+            }
+          />
+        </div>
+      ))}
+      <div className="fm-inspector-toolbar">
+        <Button
+          size="sm"
+          type="button"
+          variant="secondary"
+          onClick={() =>
+            commitSegments([
+              ...segments,
+              defaultHysteresisFieldSegment(segments.length),
+            ])
+          }
+        >
+          <Plus size={13} aria-hidden="true" />
+          <span>Add segment</span>
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+export function HysteresisDenseWindowsEditor({
+  draft,
+  onUpdate,
+}: {
+  draft: StudyStageDraft;
+  onUpdate: (patch: Partial<StudyStageDraft>) => void;
+}) {
+  const windows = parseHysteresisDenseWindows(draft.denseWindows, draft.stageId);
+  const commitWindows = (nextWindows: HysteresisDenseWindowDraft[]) => {
+    onUpdate({ denseWindows: JSON.stringify(nextWindows) });
+  };
+  const updateWindow = (
+    index: number,
+    patch: Partial<HysteresisDenseWindowDraft>,
+  ) => {
+    commitWindows(
+      windows.map((window, windowIndex) =>
+        windowIndex === index ? { ...window, ...patch } : window,
+      ),
+    );
+  };
+
+  return (
+    <div className="fm-inspector-form-section">
+      <div className="fm-inspector-form-section__header">
+        <strong>Dense refinement windows · Dense windows</strong>
+      </div>
+      {windows.map((window, index) => (
+        <div className="fm-inspector-form-section" key={window._rowId}>
+          <div className="fm-inspector-form-section__header">
+            <strong>Window {index + 1}</strong>
+            <div className="fm-inspector-toolbar">
+              <Button
+                aria-label={`Remove dense window ${index + 1}`}
+                size="icon"
+                type="button"
+                variant="ghost"
+                onClick={() =>
+                  commitWindows(
+                    windows.filter((_, windowIndex) => windowIndex !== index),
+                  )
+                }
+              >
+                <Trash2 size={14} aria-hidden="true" />
+              </Button>
+            </div>
+          </div>
+          <LabeledInputRow
+            ariaLabel={`Window ${index + 1} center field`}
+            label="Center field"
+            unit="mT"
+            value={window.centerField}
+            onChange={(centerField) => updateWindow(index, { centerField })}
+          />
+          <LabeledInputRow
+            ariaLabel={`Window ${index + 1} half width`}
+            label="Half width"
+            unit="mT"
+            value={window.halfWidth}
+            onChange={(halfWidth) => updateWindow(index, { halfWidth })}
+          />
+          <LabeledInputRow
+            ariaLabel={`Window ${index + 1} step`}
+            label="Fine step"
+            unit="mT"
+            value={window.step}
+            onChange={(step) => updateWindow(index, { step })}
+          />
+          <LabeledInputRow
+            ariaLabel={`Window ${index + 1} priority`}
+            label="Priority"
+            value={window.priority}
+            onChange={(priority) => updateWindow(index, { priority })}
+          />
+          <LabeledInputRow
+            ariaLabel={`Window ${index + 1} reason`}
+            label="Reason"
+            value={window.reason}
+            onChange={(reason) => updateWindow(index, { reason })}
+          />
+        </div>
+      ))}
+      <div className="fm-inspector-toolbar">
+        <Button
+          size="sm"
+          type="button"
+          variant="secondary"
+          onClick={() =>
+            commitWindows([
+              ...windows,
+              defaultHysteresisDenseWindow(windows.length, draft),
+            ])
+          }
+        >
+          <Plus size={13} aria-hidden="true" />
+          <span>Add window</span>
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+export function HysteresisMinorLoopsEditor({
+  draft,
+  onUpdate,
+}: {
+  draft: StudyStageDraft;
+  onUpdate: (patch: Partial<StudyStageDraft>) => void;
+}) {
+  const loops = parseHysteresisMinorLoops(draft.minorLoops, draft.stageId);
+  const commitLoops = (nextLoops: HysteresisMinorLoopDraft[]) => {
+    onUpdate({ minorLoops: JSON.stringify(nextLoops) });
+  };
+  const updateLoop = (
+    index: number,
+    patch: Partial<HysteresisMinorLoopDraft>,
+  ) => {
+    commitLoops(
+      loops.map((loop, loopIndex) =>
+        loopIndex === index ? { ...loop, ...patch } : loop,
+      ),
+    );
+  };
+
+  return (
+    <div className="fm-inspector-form-section">
+      <div className="fm-inspector-form-section__header">
+        <strong>Minor loops</strong>
+      </div>
+      {loops.map((loop, index) => (
+        <div className="fm-inspector-form-section" key={loop._rowId}>
+          <div className="fm-inspector-form-section__header">
+            <strong>Loop {index + 1}</strong>
+            <div className="fm-inspector-toolbar">
+              <Button
+                aria-label={`Remove minor loop ${index + 1}`}
+                size="icon"
+                type="button"
+                variant="ghost"
+                onClick={() =>
+                  commitLoops(loops.filter((_, loopIndex) => loopIndex !== index))
+                }
+              >
+                <Trash2 size={14} aria-hidden="true" />
+              </Button>
+            </div>
+          </div>
+          <LabeledInputRow
+            ariaLabel={`Minor loop ${index + 1} reversal field`}
+            label="Reversal field"
+            unit="mT"
+            value={loop.reversalField}
+            onChange={(reversalField) => updateLoop(index, { reversalField })}
+          />
+          <LabeledInputRow
+            ariaLabel={`Minor loop ${index + 1} return field`}
+            label="Return field"
+            unit="mT"
+            value={loop.returnField}
+            onChange={(returnField) => updateLoop(index, { returnField })}
+          />
+          <LabeledSelectRow
+            ariaLabel={`Minor loop ${index + 1} parent branch`}
+            label="Parent branch"
+            options={[
+              { value: "descending", label: "Descending" },
+              { value: "ascending", label: "Ascending" },
+              { value: "major", label: "Major" },
+            ]}
+            value={loop.parentBranch}
+            onChange={(parentBranch) => updateLoop(index, { parentBranch })}
+          />
+          <LabeledSelectRow
+            ariaLabel={`Minor loop ${index + 1} closure policy`}
+            label="Closure policy"
+            options={[
+              { value: "branch_only", label: "Branch only" },
+              { value: "resume_parent", label: "Resume parent" },
+              { value: "replace_parent", label: "Replace parent" },
+            ]}
+            value={loop.closurePolicy}
+            onChange={(closurePolicy) => updateLoop(index, { closurePolicy })}
+          />
+        </div>
+      ))}
+      <div className="fm-inspector-toolbar">
+        <Button
+          size="sm"
+          type="button"
+          variant="secondary"
+          onClick={() =>
+            commitLoops([
+              ...loops,
+              defaultHysteresisMinorLoop(loops.length, draft),
+            ])
+          }
+        >
+          <Plus size={13} aria-hidden="true" />
+          <span>Add minor loop</span>
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+export function HysteresisSettleAlgorithmsEditor({
+  algorithmsAvailable,
+  draft,
+  onUpdate,
+}: {
+  algorithmsAvailable?: readonly string[];
+  draft: StudyStageDraft;
+  onUpdate: (patch: Partial<StudyStageDraft>) => void;
+}) {
+  const steps = parseHysteresisSettleSteps(draft.settleSteps, draft.stageId);
+  const commitSteps = (nextSteps: HysteresisSettleStepDraft[]) => {
+    onUpdate({
+      settleSteps: JSON.stringify(
+        nextSteps.map((step) => {
+          const {
+            _rowId,
+            alpha,
+            applies_to,
+            damping,
+            energy_tolerance,
+            kind,
+            max_physical_time_s,
+            max_pseudotime_s,
+            max_steps,
+            method,
+            on_non_convergence,
+            retry_max_attempts,
+            retry_timestep_scale,
+            step_id,
+            stop_criteria,
+            timestep_min_s,
+            timestep_s,
+            torque_tolerance,
+            ...preservedFields
+          } = step;
+          const serializedStep: Record<string, unknown> = {
+            ...preservedFields,
+            _rowId,
+            step_id,
+            kind,
+            method,
+            on_non_convergence,
+          };
+          copyDefinedSettleStepValue({ alpha } as HysteresisSettleStepDraft, serializedStep, "alpha", Number);
+          copyDefinedSettleStepValue({ damping } as HysteresisSettleStepDraft, serializedStep, "damping", Number);
+          copyDefinedSettleStepValue(
+            { torque_tolerance } as HysteresisSettleStepDraft,
+            serializedStep,
+            "torque_tolerance",
+            Number,
+          );
+          copyDefinedSettleStepValue(
+            { energy_tolerance } as HysteresisSettleStepDraft,
+            serializedStep,
+            "energy_tolerance",
+            Number,
+          );
+          copyDefinedSettleStepValue({ max_steps } as HysteresisSettleStepDraft, serializedStep, "max_steps", Number);
+          copyDefinedSettleStepValue(
+            { timestep_s } as HysteresisSettleStepDraft,
+            serializedStep,
+            "timestep_s",
+            Number,
+          );
+          copyDefinedSettleStepValue(
+            { timestep_min_s } as HysteresisSettleStepDraft,
+            serializedStep,
+            "timestep_min_s",
+            Number,
+          );
+          copyDefinedSettleStepValue(
+            { max_pseudotime_s } as HysteresisSettleStepDraft,
+            serializedStep,
+            "max_pseudotime_s",
+            Number,
+          );
+          copyDefinedSettleStepValue(
+            { max_physical_time_s } as HysteresisSettleStepDraft,
+            serializedStep,
+            "max_physical_time_s",
+            Number,
+          );
+          copyDefinedSettleStepValue(
+            { retry_timestep_scale } as HysteresisSettleStepDraft,
+            serializedStep,
+            "retry_timestep_scale",
+            Number,
+          );
+          copyDefinedSettleStepValue(
+            { retry_max_attempts } as HysteresisSettleStepDraft,
+            serializedStep,
+            "retry_max_attempts",
+            Number,
+          );
+          if (applies_to != null) {
+            serializedStep.applies_to = parseJsonObjectOrString(String(applies_to));
+          }
+          if (stop_criteria != null) {
+            serializedStep.stop_criteria = parseJsonObjectOrString(
+              String(stop_criteria),
+            );
+          }
+          return serializedStep;
+        }),
+      ),
+    });
+  };
+  const updateStep = (
+    index: number,
+    patch: Partial<HysteresisSettleStepDraft>,
+  ) => {
+    commitSteps(
+      steps.map((step, stepIndex) =>
+        stepIndex === index ? { ...step, ...patch } : step,
+      ),
+    );
+  };
+  const moveStep = (index: number, direction: "up" | "down") => {
+    const nextSteps = [...steps];
+    const targetIndex = direction === "up" ? index - 1 : index + 1;
+    if (targetIndex < 0 || targetIndex >= steps.length) return;
+    const temp = nextSteps[index]!;
+    nextSteps[index] = nextSteps[targetIndex]!;
+    nextSteps[targetIndex] = temp;
+    commitSteps(nextSteps);
+  };
+
+  return (
+    <div className="fm-inspector-form-section">
+      <div className="fm-inspector-form-section__header">
+        <strong>Settle algorithms · Settle steps</strong>
+      </div>
+      {steps.map((step, index) => {
+        const stepKind = step.kind || "relax";
+        return (
+          <div className="fm-inspector-form-section" key={step._rowId}>
+            <div className="fm-inspector-form-section__header">
+              <strong>Algorithm {index + 1}</strong>
+              <div className="fm-inspector-toolbar">
+                <Button
+                  aria-label="Move algorithm up"
+                  disabled={index === 0}
+                  size="icon"
+                  type="button"
+                  variant="ghost"
+                  onClick={() => moveStep(index, "up")}
+                >
+                  <ArrowUp size={14} aria-hidden="true" />
+                </Button>
+                <Button
+                  aria-label="Move algorithm down"
+                  disabled={index === steps.length - 1}
+                  size="icon"
+                  type="button"
+                  variant="ghost"
+                  onClick={() => moveStep(index, "down")}
+                >
+                  <ArrowDown size={14} aria-hidden="true" />
+                </Button>
+                <Button
+                  aria-label={`Remove step ${index + 1}`}
+                  disabled={steps.length <= 1}
+                  size="icon"
+                  type="button"
+                  variant="ghost"
+                  onClick={() =>
+                    commitSteps(steps.filter((_, stepIndex) => stepIndex !== index))
+                  }
+                >
+                  <Trash2 size={14} aria-hidden="true" />
+                </Button>
+              </div>
+            </div>
+            <LabeledInputRow
+              ariaLabel={`Step ${index + 1} ID`}
+              label="Step ID"
+              value={String(step.step_id ?? "")}
+              onChange={(step_id) => updateStep(index, { step_id })}
+            />
+            <LabeledSelectRow
+              ariaLabel={`Step ${index + 1} kind`}
+              label="Kind"
+              options={[
+                { value: "relax", label: "Relaxation" },
+                { value: "minimize", label: "Energy minimization" },
+                { value: "dynamics_settle", label: "Dynamics settle" },
+              ]}
+              value={stepKind}
+              onChange={(nextKind) => {
+                const defaults =
+                  nextKind === "relax"
+                    ? DEFAULT_RELAX_SETTLE_STEP
+                    : nextKind === "minimize"
+                      ? DEFAULT_MINIMIZE_SETTLE_STEP
+                      : DEFAULT_DYNAMICS_SETTLE_STEP;
+                updateStep(index, {
+                  ...defaults,
+                  _rowId: step._rowId,
+                  kind: nextKind,
+                  step_id: step.step_id,
+                });
+              }}
+            />
+            <LabeledSelectRow
+              ariaLabel={`Step ${index + 1} method`}
+              label="Method"
+              options={hysteresisSettleMethodOptions(stepKind).map((option) => {
+                const unavailable =
+                  Array.isArray(algorithmsAvailable) &&
+                  algorithmsAvailable.length > 0 &&
+                  !algorithmsAvailable.includes(option);
+                const baseLabel = hysteresisSettleMethodLabel(option);
+                return {
+                  value: option,
+                  label: unavailable
+                    ? `${baseLabel} (unavailable on active lane)`
+                    : baseLabel,
+                };
+              })}
+              value={String(step.method ?? "")}
+              onChange={(method) => updateStep(index, { method })}
+            />
+            {stepKind === "relax" ? (
+              <LabeledInputRow
+                ariaLabel={`Step ${index + 1} alpha`}
+                label="Alpha"
+                value={String(step.alpha ?? "")}
+                onChange={(alpha) => updateStep(index, { alpha })}
+              />
+            ) : null}
+            {stepKind === "relax" || stepKind === "minimize" ? (
+              <LabeledInputRow
+                ariaLabel={`Step ${index + 1} torque tolerance`}
+                label="Max torque tolerance"
+                unit="A/m"
+                value={String(step.torque_tolerance ?? "")}
+                onChange={(torque_tolerance) =>
+                  updateStep(index, { torque_tolerance })
+                }
+              />
+            ) : null}
+            {stepKind === "minimize" ? (
+              <LabeledInputRow
+                ariaLabel={`Step ${index + 1} energy tolerance`}
+                label="Energy tolerance"
+                unit="J"
+                value={String(step.energy_tolerance ?? "")}
+                onChange={(energy_tolerance) =>
+                  updateStep(index, { energy_tolerance })
+                }
+              />
+            ) : null}
+            {stepKind === "dynamics_settle" ? (
+              <>
+                <LabeledInputRow
+                  ariaLabel={`Step ${index + 1} damping`}
+                  label="Damping"
+                  value={String(step.damping ?? "")}
+                  onChange={(damping) => updateStep(index, { damping })}
+                />
+                <LabeledInputRow
+                  ariaLabel={`Step ${index + 1} timestep`}
+                  label="Timestep"
+                  unit="s"
+                  value={String(step.timestep_s ?? "")}
+                  onChange={(timestep_s) => updateStep(index, { timestep_s })}
+                />
+                <LabeledInputRow
+                  ariaLabel={`Step ${index + 1} retry scale`}
+                  label="Retry scale"
+                  value={String(step.retry_timestep_scale ?? "")}
+                  onChange={(retry_timestep_scale) =>
+                    updateStep(index, { retry_timestep_scale })
+                  }
+                />
+                <LabeledInputRow
+                  ariaLabel={`Step ${index + 1} retry attempts`}
+                  label="Retry attempts"
+                  value={String(step.retry_max_attempts ?? "")}
+                  onChange={(retry_max_attempts) =>
+                    updateStep(index, { retry_max_attempts })
+                  }
+                />
+              </>
+            ) : null}
+            <LabeledInputRow
+              ariaLabel={`Step ${index + 1} max steps`}
+              label="Max steps"
+              value={String(step.max_steps ?? "")}
+              onChange={(max_steps) => updateStep(index, { max_steps })}
+            />
+            <LabeledSelectRow
+              ariaLabel={`Step ${index + 1} non-convergence`}
+              label="On non-convergence"
+              options={[
+                { value: "continue_with_warning", label: "Continue with warning" },
+                { value: "stop_stage", label: "Stop stage" },
+                { value: "run_next_algorithm", label: "Run next algorithm" },
+                { value: "retry_with_smaller_dt", label: "Retry with smaller dt" },
+              ]}
+              value={String(step.on_non_convergence ?? "continue_with_warning")}
+              onChange={(on_non_convergence) =>
+                updateStep(index, { on_non_convergence })
+              }
+            />
+            <LabeledInputRow
+              ariaLabel={`Step ${index + 1} applies to`}
+              label="Applies to (optional)"
+              value={
+                step.applies_to == null
+                  ? ""
+                  : typeof step.applies_to === "string"
+                    ? step.applies_to
+                    : JSON.stringify(step.applies_to)
+              }
+              onChange={(raw) =>
+                updateStep(index, {
+                  applies_to: raw.trim() ? raw : undefined,
+                })
+              }
+            />
+            <LabeledInputRow
+              ariaLabel={`Step ${index + 1} stop criteria`}
+              label="Stop criteria JSON (optional)"
+              value={
+                step.stop_criteria == null
+                  ? ""
+                  : typeof step.stop_criteria === "string"
+                    ? step.stop_criteria
+                    : JSON.stringify(step.stop_criteria)
+              }
+              onChange={(raw) =>
+                updateStep(index, {
+                  stop_criteria: raw.trim() ? raw : undefined,
+                })
+              }
+            />
+          </div>
+        );
+      })}
+      <div className="fm-inspector-toolbar fm-mt-2">
+        <Button
+          size="sm"
+          type="button"
+          variant="secondary"
+          onClick={() =>
+            commitSteps([
+              ...steps,
+              {
+                ...DEFAULT_RELAX_SETTLE_STEP,
+                _rowId: generateStableRowId(),
+                step_id: `relax-${steps.length + 1}`,
+              },
+            ])
+          }
+        >
+          <Plus size={13} aria-hidden="true" />
+          <span>Add relax</span>
+        </Button>
+        <Button
+          size="sm"
+          type="button"
+          variant="secondary"
+          onClick={() =>
+            commitSteps([
+              ...steps,
+              {
+                ...DEFAULT_MINIMIZE_SETTLE_STEP,
+                _rowId: generateStableRowId(),
+                step_id: `minimize-${steps.length + 1}`,
+              },
+            ])
+          }
+        >
+          <Plus size={13} aria-hidden="true" />
+          <span>Add minimize</span>
+        </Button>
+        <Button
+          size="sm"
+          type="button"
+          variant="secondary"
+          onClick={() =>
+            commitSteps([
+              ...steps,
+              {
+                ...DEFAULT_DYNAMICS_SETTLE_STEP,
+                _rowId: generateStableRowId(),
+                step_id: `dynamics-${steps.length + 1}`,
+              },
+            ])
+          }
+        >
+          <Plus size={13} aria-hidden="true" />
+          <span>Add dynamics</span>
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+export function HysteresisSettleBranchesEditor({
+  draft,
+  onUpdate,
+}: {
+  draft: StudyStageDraft;
+  onUpdate: (patch: Partial<StudyStageDraft>) => void;
+}) {
+  const branches = parseHysteresisSettleBranches(draft.settleBranches, draft.stageId);
   const commitBranches = (nextBranches: HysteresisSettleBranchDraft[]) => {
     onUpdate({
       settleBranches: JSON.stringify(
         nextBranches.map((branch) => ({
+          _rowId: branch._rowId,
           branch_id: branch.branchId,
           run: parseJsonObjectOrString(branch.run),
           when: branch.when,
@@ -364,25 +1262,19 @@ function HysteresisSettleBranchesEditor({
         <strong>Settle branches</strong>
       </div>
       {branches.map((branch, index) => (
-        <div
-          className="fm-inspector-form-section"
-          key={hysteresisSettleBranchKey(branch)}
-        >
+        <div className="fm-inspector-form-section" key={branch._rowId}>
           <div className="fm-inspector-form-section__header">
             <strong>Branch {index + 1}</strong>
             <div className="fm-inspector-toolbar">
               <Button
-                aria-label="Remove settle branch"
+                aria-label={`Remove settle branch ${index + 1}`}
                 disabled={branches.length <= 1}
                 size="icon"
-                title="Remove settle branch"
                 type="button"
                 variant="ghost"
                 onClick={() =>
                   commitBranches(
-                    branches.filter(
-                      (_, branchIndex) => branchIndex !== index,
-                    ),
+                    branches.filter((_, branchIndex) => branchIndex !== index),
                   )
                 }
               >
@@ -390,34 +1282,29 @@ function HysteresisSettleBranchesEditor({
               </Button>
             </div>
           </div>
-          <FormField
+          <LabeledInputRow
+            ariaLabel={`Branch ${index + 1} ID`}
             label="Branch ID"
             value={branch.branchId}
-            onChange={(event) =>
-              updateBranch(index, { branchId: event.target.value })
-            }
+            onChange={(branchId) => updateBranch(index, { branchId })}
           />
-          <FormField
+          <LabeledSelectRow
+            ariaLabel={`Branch ${index + 1} trigger`}
             label="Trigger"
-            type="select"
+            options={[
+              { value: "non_converged", label: "Non-converged fallback" },
+              { value: "fallback", label: "Fallback" },
+              { value: "run_next_algorithm", label: "Run next algorithm" },
+              { value: "always", label: "Always" },
+            ]}
             value={branch.when}
-            onChange={(event) =>
-              updateBranch(index, { when: event.target.value })
-            }
-          >
-            <option value="non_converged">Non-converged fallback</option>
-            <option value="fallback">Fallback</option>
-            <option value="run_next_algorithm">Run next algorithm</option>
-            <option value="always">Always</option>
-          </FormField>
-          <FormField
+            onChange={(when) => updateBranch(index, { when })}
+          />
+          <LabeledInputRow
+            ariaLabel={`Branch ${index + 1} run step JSON`}
             label="Run step JSON"
-            rows={5}
-            type="textarea"
             value={branch.run}
-            onChange={(event) =>
-              updateBranch(index, { run: event.target.value })
-            }
+            onChange={(run) => updateBranch(index, { run })}
           />
         </div>
       ))}
@@ -441,775 +1328,86 @@ function HysteresisSettleBranchesEditor({
   );
 }
 
-function HysteresisMinorLoopsEditor({
-  draft,
-  onUpdate,
-}: {
-  draft: StudyStageDraft;
-  onUpdate: (patch: Partial<StudyStageDraft>) => void;
-}) {
-  const loops = parseHysteresisMinorLoops(draft.minorLoops);
-  const commitLoops = (nextLoops: HysteresisMinorLoopDraft[]) => {
-    onUpdate({ minorLoops: JSON.stringify(nextLoops) });
-  };
-  const updateLoop = (
-    index: number,
-    patch: Partial<HysteresisMinorLoopDraft>,
-  ) => {
-    commitLoops(
-      loops.map((loop, loopIndex) =>
-        loopIndex === index ? { ...loop, ...patch } : loop,
-      ),
-    );
-  };
-
-  return (
-    <div className="fm-inspector-form-section">
-      <div className="fm-inspector-form-section__header">
-        <strong>Minor loops</strong>
-      </div>
-      {loops.map((loop, index) => (
-        <div
-          className="fm-inspector-form-section"
-          key={hysteresisMinorLoopKey(loop)}
-        >
-          <div className="fm-inspector-form-section__header">
-            <strong>Loop {index + 1}</strong>
-            <div className="fm-inspector-toolbar">
-              <Button
-                aria-label="Remove minor loop"
-                disabled={loops.length <= 1}
-                size="icon"
-                title="Remove minor loop"
-                type="button"
-                variant="ghost"
-                onClick={() =>
-                  commitLoops(
-                    loops.filter((_, loopIndex) => loopIndex !== index),
-                  )
-                }
-              >
-                <Trash2 size={14} aria-hidden="true" />
-              </Button>
-            </div>
-          </div>
-          <FormField
-            label="Reversal field"
-            unit="mT"
-            value={loop.reversalField}
-            onChange={(event) =>
-              updateLoop(index, { reversalField: event.target.value })
-            }
-          />
-          <FormField
-            label="Return field"
-            unit="mT"
-            value={loop.returnField}
-            onChange={(event) =>
-              updateLoop(index, { returnField: event.target.value })
-            }
-          />
-          <FormField
-            label="Parent branch"
-            type="select"
-            value={loop.parentBranch}
-            onChange={(event) =>
-              updateLoop(index, { parentBranch: event.target.value })
-            }
-          >
-            <option value="descending">Descending</option>
-            <option value="ascending">Ascending</option>
-            <option value="major">Major</option>
-          </FormField>
-          <FormField
-            label="Closure policy"
-            type="select"
-            value={loop.closurePolicy}
-            onChange={(event) =>
-              updateLoop(index, { closurePolicy: event.target.value })
-            }
-          >
-            <option value="branch_only">Branch only</option>
-            <option value="resume_parent">Resume parent</option>
-            <option value="replace_parent">Replace parent</option>
-          </FormField>
-        </div>
-      ))}
-      <div className="fm-inspector-toolbar">
-        <Button
-          size="sm"
-          type="button"
-          variant="secondary"
-          onClick={() => commitLoops([...loops, defaultHysteresisMinorLoop(loops.length, draft)])}
-        >
-          <Plus size={13} aria-hidden="true" />
-          <span>Add minor loop</span>
-        </Button>
-      </div>
-    </div>
-  );
-}
-
-function HysteresisFieldSegmentsEditor({
-  draft,
-  onUpdate,
-}: {
-  draft: StudyStageDraft;
-  onUpdate: (patch: Partial<StudyStageDraft>) => void;
-}) {
-  const segments = parseHysteresisFieldSegments(draft.fieldSegments);
-  const commitSegments = (nextSegments: HysteresisFieldSegmentDraft[]) => {
-    onUpdate({ fieldSegments: JSON.stringify(nextSegments) });
-  };
-  const updateSegment = (
-    index: number,
-    patch: Partial<HysteresisFieldSegmentDraft>,
-  ) => {
-    commitSegments(
-      segments.map((segment, segmentIndex) =>
-        segmentIndex === index ? { ...segment, ...patch } : segment,
-      ),
-    );
-  };
-
-  return (
-    <div className="fm-inspector-form-section">
-      <div className="fm-inspector-form-section__header">
-        <strong>Piecewise field segments</strong>
-      </div>
-      {segments.map((segment, index) => (
-        <div
-          className="fm-inspector-form-section"
-          key={hysteresisFieldSegmentKey(segment)}
-        >
-          <div className="fm-inspector-form-section__header">
-            <strong>Segment {index + 1}</strong>
-            <div className="fm-inspector-toolbar">
-              <Button
-                aria-label="Remove segment"
-                disabled={segments.length <= 1}
-                size="icon"
-                title="Remove segment"
-                type="button"
-                variant="ghost"
-                onClick={() =>
-                  commitSegments(
-                    segments.filter(
-                      (_, segmentIndex) => segmentIndex !== index,
-                    ),
-                  )
-                }
-              >
-                <Trash2 size={14} aria-hidden="true" />
-              </Button>
-            </div>
-          </div>
-          <FormField
-            label="Segment ID"
-            value={segment.segmentId}
-            onChange={(event) =>
-              updateSegment(index, { segmentId: event.target.value })
-            }
-          />
-          <FormField
-            label="Label"
-            value={segment.label}
-            onChange={(event) =>
-              updateSegment(index, { label: event.target.value })
-            }
-          />
-          <FormField
-            label="Start field"
-            unit="mT"
-            value={segment.startField}
-            onChange={(event) =>
-              updateSegment(index, { startField: event.target.value })
-            }
-          />
-          <FormField
-            label="Stop field"
-            unit="mT"
-            value={segment.stopField}
-            onChange={(event) =>
-              updateSegment(index, { stopField: event.target.value })
-            }
-          />
-          <FormField
-            label="Step"
-            unit="mT"
-            value={segment.step}
-            onChange={(event) =>
-              updateSegment(index, { step: event.target.value })
-            }
-          />
-          <FormField
-            label="Endpoint policy"
-            type="select"
-            value={segment.endpointPolicy}
-            onChange={(event) =>
-              updateSegment(index, { endpointPolicy: event.target.value })
-            }
-          >
-            <option value="include_stop">Include stop</option>
-            <option value="skip_start">Skip start</option>
-            <option value="include_both">Include both</option>
-          </FormField>
-        </div>
-      ))}
-      <div className="fm-inspector-toolbar">
-        <Button
-          size="sm"
-          type="button"
-          variant="secondary"
-          onClick={() =>
-            commitSegments([
-              ...segments,
-              defaultHysteresisFieldSegment(segments.length),
-            ])
-          }
-        >
-          <Plus size={13} aria-hidden="true" />
-          <span>Add segment</span>
-        </Button>
-      </div>
-    </div>
-  );
-}
-
-function HysteresisDenseWindowsEditor({
-  draft,
-  onUpdate,
-}: {
-  draft: StudyStageDraft;
-  onUpdate: (patch: Partial<StudyStageDraft>) => void;
-}) {
-  const windows = parseHysteresisDenseWindows(draft.denseWindows);
-  const commitWindows = (nextWindows: HysteresisDenseWindowDraft[]) => {
-    onUpdate({ denseWindows: JSON.stringify(nextWindows) });
-  };
-  const updateWindow = (
-    index: number,
-    patch: Partial<HysteresisDenseWindowDraft>,
-  ) => {
-    commitWindows(
-      windows.map((window, windowIndex) =>
-        windowIndex === index ? { ...window, ...patch } : window,
-      ),
-    );
-  };
-
-  return (
-    <div className="fm-inspector-form-section">
-      <div className="fm-inspector-form-section__header">
-        <strong>Dense refinement windows</strong>
-      </div>
-      {windows.map((window, index) => (
-        <div
-          className="fm-inspector-form-section"
-          key={hysteresisDenseWindowKey(window)}
-        >
-          <div className="fm-inspector-form-section__header">
-            <strong>Window {index + 1}</strong>
-            <div className="fm-inspector-toolbar">
-              <Button
-                aria-label="Remove dense window"
-                disabled={windows.length <= 1}
-                size="icon"
-                title="Remove dense window"
-                type="button"
-                variant="ghost"
-                onClick={() =>
-                  commitWindows(
-                    windows.filter(
-                      (_, windowIndex) => windowIndex !== index,
-                    ),
-                  )
-                }
-              >
-                <Trash2 size={14} aria-hidden="true" />
-              </Button>
-            </div>
-          </div>
-          <FormField
-            label="Center field"
-            unit="mT"
-            value={window.centerField}
-            onChange={(event) =>
-              updateWindow(index, { centerField: event.target.value })
-            }
-          />
-          <FormField
-            label="Half width"
-            unit="mT"
-            value={window.halfWidth}
-            onChange={(event) =>
-              updateWindow(index, { halfWidth: event.target.value })
-            }
-          />
-          <FormField
-            label="Step"
-            unit="mT"
-            value={window.step}
-            onChange={(event) =>
-              updateWindow(index, { step: event.target.value })
-            }
-          />
-          <FormField
-            label="Priority"
-            value={window.priority}
-            onChange={(event) =>
-              updateWindow(index, { priority: event.target.value })
-            }
-          />
-          <FormField
-            label="Reason"
-            value={window.reason}
-            onChange={(event) =>
-              updateWindow(index, { reason: event.target.value })
-            }
-          />
-        </div>
-      ))}
-      <div className="fm-inspector-toolbar">
-        <Button
-          size="sm"
-          type="button"
-          variant="secondary"
-          onClick={() =>
-            commitWindows([
-              ...windows,
-              defaultHysteresisDenseWindow(windows.length, draft),
-            ])
-          }
-        >
-          <Plus size={13} aria-hidden="true" />
-          <span>Add window</span>
-        </Button>
-      </div>
-    </div>
-  );
-}
-
-function HysteresisSettleAlgorithmsEditor({
-  draft,
-  onUpdate,
-}: {
-  algorithmsAvailable?: readonly string[];
-  draft: StudyStageDraft;
-  onUpdate: (patch: Partial<StudyStageDraft>) => void;
-}) {
-  const steps = parseHysteresisSettleSteps(draft.settleSteps);
-  const commitSteps = (nextSteps: HysteresisSettleStepDraft[]) => {
-    onUpdate({
-      settleSteps: JSON.stringify(
-        nextSteps.map((step) => {
-          const serializedStep: Record<string, unknown> = {
-            step_id: step.step_id,
-            kind: step.kind,
-            method: step.method,
-            on_non_convergence: step.on_non_convergence,
-          };
-          copyDefinedSettleStepValue(step, serializedStep, "alpha", Number);
-          copyDefinedSettleStepValue(step, serializedStep, "damping", Number);
-          copyDefinedSettleStepValue(
-            step,
-            serializedStep,
-            "torque_tolerance",
-            Number,
-          );
-          copyDefinedSettleStepValue(
-            step,
-            serializedStep,
-            "energy_tolerance",
-            Number,
-          );
-          copyDefinedSettleStepValue(step, serializedStep, "max_steps", Number);
-          copyDefinedSettleStepValue(
-            step,
-            serializedStep,
-            "timestep_s",
-            Number,
-          );
-          copyDefinedSettleStepValue(
-            step,
-            serializedStep,
-            "retry_timestep_scale",
-            Number,
-          );
-          copyDefinedSettleStepValue(
-            step,
-            serializedStep,
-            "retry_max_attempts",
-            Number,
-          );
-          if (step.applies_to != null) {
-            serializedStep.applies_to = parseJsonObjectOrString(
-              String(step.applies_to),
-            );
-          }
-          if (step.stop_criteria != null) {
-            serializedStep.stop_criteria = parseJsonObjectOrString(
-              String(step.stop_criteria),
-            );
-          }
-          return serializedStep;
-        }),
-      ),
-    });
-  };
-  const updateStep = (
-    index: number,
-    patch: Partial<HysteresisSettleStepDraft>,
-  ) => {
-    commitSteps(
-      steps.map((step, stepIndex) =>
-        stepIndex === index ? { ...step, ...patch } : step,
-      ),
-    );
-  };
-  const moveStep = (index: number, direction: "up" | "down") => {
-    const nextSteps = [...steps];
-    const targetIndex = direction === "up" ? index - 1 : index + 1;
-    if (targetIndex < 0 || targetIndex >= steps.length) return;
-    const temp = nextSteps[index];
-    nextSteps[index] = nextSteps[targetIndex];
-    nextSteps[targetIndex] = temp;
-    commitSteps(nextSteps);
-  };
-
-  return (
-    <div className="fm-inspector-form-section">
-      <div className="fm-inspector-form-section__header">
-        <strong>Settle algorithms</strong>
-      </div>
-      {steps.map((step, index) => {
-        const stepKind = step.kind || "relax";
-        return (
-          <div
-            className="fm-inspector-form-section"
-            key={hysteresisSettleStepKey(step)}
-          >
-            <div className="fm-inspector-form-section__header">
-              <strong>Algorithm {index + 1}</strong>
-              <div className="fm-inspector-toolbar">
-                <Button
-                  aria-label="Move algorithm up"
-                  disabled={index === 0}
-                  size="icon"
-                  title="Move up"
-                  type="button"
-                  variant="ghost"
-                  onClick={() => moveStep(index, "up")}
-                >
-                  <ArrowUp size={14} aria-hidden="true" />
-                </Button>
-                <Button
-                  aria-label="Move algorithm down"
-                  disabled={index === steps.length - 1}
-                  size="icon"
-                  title="Move down"
-                  type="button"
-                  variant="ghost"
-                  onClick={() => moveStep(index, "down")}
-                >
-                  <ArrowDown size={14} aria-hidden="true" />
-                </Button>
-                <Button
-                  aria-label="Remove algorithm"
-                  disabled={steps.length <= 1}
-                  size="icon"
-                  title="Remove algorithm"
-                  type="button"
-                  variant="ghost"
-                  onClick={() =>
-                    commitSteps(
-                      steps.filter((_, stepIndex) => stepIndex !== index),
-                    )
-                  }
-                >
-                  <Trash2 size={14} aria-hidden="true" />
-                </Button>
-              </div>
-            </div>
-            <FormField
-              label="Step ID"
-              value={String(step.step_id ?? "")}
-              onChange={(event) =>
-                updateStep(index, { step_id: event.target.value })
-              }
-            />
-            <FormField
-              label="Kind"
-              type="select"
-              value={stepKind}
-              onChange={(event) => {
-                const nextKind = event.target.value;
-                const defaults =
-                  nextKind === "relax"
-                    ? DEFAULT_RELAX_SETTLE_STEP
-                    : nextKind === "minimize"
-                      ? DEFAULT_MINIMIZE_SETTLE_STEP
-                      : DEFAULT_DYNAMICS_SETTLE_STEP;
-                updateStep(index, {
-                  ...defaults,
-                  kind: nextKind,
-                  step_id: step.step_id,
-                });
-              }}
-            >
-              <option value="relax">Relaxation</option>
-              <option value="minimize">Energy minimization</option>
-              <option value="dynamics_settle">Dynamics settle</option>
-            </FormField>
-            <FormField
-              label="Method"
-              type="select"
-              value={String(step.method ?? "")}
-              onChange={(event) =>
-                updateStep(index, { method: event.target.value })
-              }
-            >
-              {hysteresisSettleMethodOptions(stepKind).map((option) => (
-                <option key={option} value={option}>
-                  {hysteresisSettleMethodLabel(option)}
-                </option>
-              ))}
-            </FormField>
-            {stepKind === "relax" ? (
-              <>
-                <FormField
-                  label="Alpha"
-                  type="number"
-                  value={String(step.alpha ?? "")}
-                  onChange={(event) =>
-                    updateStep(index, { alpha: event.target.value })
-                  }
-                />
-                <FormField
-                  label="Torque tolerance"
-                  value={String(step.torque_tolerance ?? "")}
-                  onChange={(event) =>
-                    updateStep(index, { torque_tolerance: event.target.value })
-                  }
-                />
-              </>
-            ) : null}
-            {stepKind === "minimize" ? (
-              <FormField
-                label="Energy tolerance"
-                value={String(step.energy_tolerance ?? "")}
-                onChange={(event) =>
-                  updateStep(index, { energy_tolerance: event.target.value })
-                }
-              />
-            ) : null}
-            {stepKind === "dynamics_settle" ? (
-              <>
-                <FormField
-                  label="Damping"
-                  type="number"
-                  value={String(step.damping ?? "")}
-                  onChange={(event) =>
-                    updateStep(index, { damping: event.target.value })
-                  }
-                />
-                <FormField
-                  label="Timestep"
-                  value={String(step.timestep_s ?? "")}
-                  onChange={(event) =>
-                    updateStep(index, { timestep_s: event.target.value })
-                  }
-                />
-                <FormField
-                  label="Retry scale"
-                  type="number"
-                  value={String(step.retry_timestep_scale ?? "")}
-                  onChange={(event) =>
-                    updateStep(index, {
-                      retry_timestep_scale: event.target.value,
-                    })
-                  }
-                />
-                <FormField
-                  label="Retry attempts"
-                  type="number"
-                  value={String(step.retry_max_attempts ?? "")}
-                  onChange={(event) =>
-                    updateStep(index, {
-                      retry_max_attempts: event.target.value,
-                    })
-                  }
-                />
-              </>
-            ) : null}
-            <FormField
-              label="Max steps"
-              type="number"
-              value={String(step.max_steps ?? "")}
-              onChange={(event) =>
-                updateStep(index, { max_steps: event.target.value })
-              }
-            />
-            <FormField
-              label="Applies to"
-              value={formatHysteresisSettleJsonishValue(step.applies_to)}
-              onChange={(event) =>
-                updateStep(index, {
-                  applies_to: parseHysteresisSettleJsonishValue(
-                    event.target.value,
-                  ),
-                })
-              }
-            />
-            <FormField
-              label="Stop criteria"
-              value={formatHysteresisSettleJsonishValue(step.stop_criteria)}
-              onChange={(event) =>
-                updateStep(index, {
-                  stop_criteria: parseHysteresisSettleJsonishValue(
-                    event.target.value,
-                  ),
-                })
-              }
-            />
-            <FormField
-              label="On non-convergence"
-              type="select"
-              value={String(step.on_non_convergence ?? "")}
-              onChange={(event) =>
-                updateStep(index, { on_non_convergence: event.target.value })
-              }
-            >
-              <option value="continue_with_warning">
-                Continue with warning
-              </option>
-              <option value="stop_stage">Stop stage</option>
-              <option value="run_next_algorithm">Run next algorithm</option>
-              <option value="retry_with_smaller_dt">Retry with smaller timestep</option>
-            </FormField>
-          </div>
-        );
-      })}
-      <div className="fm-inspector-toolbar fm-mt-2">
-        <Button
-          size="sm"
-          type="button"
-          variant="secondary"
-          onClick={() =>
-            commitSteps([
-              ...steps,
-              {
-                ...DEFAULT_RELAX_SETTLE_STEP,
-                step_id: `relax-${steps.length + 1}`,
-              },
-            ])
-          }
-        >
-          <Plus size={13} aria-hidden="true" />
-          <span>Add relax</span>
-        </Button>
-        <Button
-          size="sm"
-          type="button"
-          variant="secondary"
-          onClick={() =>
-            commitSteps([
-              ...steps,
-              {
-                ...DEFAULT_MINIMIZE_SETTLE_STEP,
-                step_id: `minimize-${steps.length + 1}`,
-              },
-            ])
-          }
-        >
-          <Plus size={13} aria-hidden="true" />
-          <span>Add minimize</span>
-        </Button>
-        <Button
-          size="sm"
-          type="button"
-          variant="secondary"
-          onClick={() =>
-            commitSteps([
-              ...steps,
-              {
-                ...DEFAULT_DYNAMICS_SETTLE_STEP,
-                step_id: `dynamics-${steps.length + 1}`,
-              },
-            ])
-          }
-        >
-          <Plus size={13} aria-hidden="true" />
-          <span>Add dynamics</span>
-        </Button>
-      </div>
-    </div>
-  );
-}
-
-// ── Parsing and utility functions ──
-
-export function parseHysteresisSettleSteps(value: string | null | undefined): HysteresisSettleStepDraft[] {
+export function parseHysteresisSettleSteps(
+  value: string | null | undefined,
+  scopeId = "default",
+): HysteresisSettleStepDraft[] {
   try {
     const raw = value ? JSON.parse(value) : null;
-    if (Array.isArray(raw)) {
-      return raw.map((item) => {
-        const step: HysteresisSettleStepDraft = {};
-        if (isRecord(item)) {
-          step.step_id = stringFromUnknown(item.step_id, "");
-          step.kind = stringFromUnknown(item.kind, "relax");
-          step.method = stringFromUnknown(item.method, "");
-          step.on_non_convergence = stringFromUnknown(
-            item.on_non_convergence,
+    if (Array.isArray(raw) && raw.length > 0) {
+      return raw.map((item, idx) => {
+        const record = isRecord(item) ? item : {};
+        const step: HysteresisSettleStepDraft = {
+          ...record,
+          _rowId: ensureRowId(record._rowId, `${scopeId}:settleStep:${idx}`),
+          step_id: stringFromUnknown(record.step_id, ""),
+          kind: stringFromUnknown(record.kind, "relax"),
+          method: stringFromUnknown(record.method, ""),
+          on_non_convergence: stringFromUnknown(
+            record.on_non_convergence,
             "continue_with_warning",
-          );
-          normalizeHysteresisSettleStepPatch(item, step, "alpha");
-          normalizeHysteresisSettleStepPatch(item, step, "damping");
-          normalizeHysteresisSettleStepPatch(item, step, "torque_tolerance");
-          normalizeHysteresisSettleStepPatch(item, step, "energy_tolerance");
-          normalizeHysteresisSettleStepPatch(item, step, "max_steps");
-          normalizeHysteresisSettleStepPatch(item, step, "timestep_s");
-          normalizeHysteresisSettleStepPatch(item, step, "retry_timestep_scale");
-          normalizeHysteresisSettleStepPatch(item, step, "retry_max_attempts");
-          if (item.applies_to != null) {
-            step.applies_to = item.applies_to;
-          }
-          if (item.stop_criteria != null) {
-            step.stop_criteria = item.stop_criteria;
-          }
+          ),
+        };
+        for (const numericKey of [
+          "alpha",
+          "damping",
+          "torque_tolerance",
+          "energy_tolerance",
+          "max_steps",
+          "timestep_s",
+          "timestep_min_s",
+          "max_pseudotime_s",
+          "max_physical_time_s",
+          "retry_timestep_scale",
+          "retry_max_attempts",
+        ]) {
+          normalizeHysteresisSettleStepPatch(record, step, numericKey);
         }
+        if (record.applies_to != null) step.applies_to = record.applies_to;
+        if (record.stop_criteria != null) step.stop_criteria = record.stop_criteria;
         return step;
       });
     }
   } catch {
-    // Return default fallback below
+    // Fallback below
   }
-  return [{ ...DEFAULT_RELAX_SETTLE_STEP, step_id: "relax-1" }];
+  return [
+    {
+      ...DEFAULT_RELAX_SETTLE_STEP,
+      _rowId: ensureRowId(undefined, `${scopeId}:settleStep:0`),
+      step_id: "relax-1",
+    },
+  ];
 }
 
 export function parseHysteresisFieldSegments(
   value: string | null | undefined,
+  scopeId = "default",
 ): HysteresisFieldSegmentDraft[] {
   try {
     const parsed = value ? JSON.parse(value) : null;
-    if (!Array.isArray(parsed)) return [defaultHysteresisFieldSegment(0)];
-    const segments = parsed.flatMap((segment) =>
-      isRecord(segment) ? [normalizeHysteresisFieldSegment(segment, 0)] : [],
+    if (!Array.isArray(parsed)) return [];
+    return parsed.flatMap((segment, idx) =>
+      isRecord(segment)
+        ? [normalizeHysteresisFieldSegment(segment, idx, scopeId)]
+        : [],
     );
-    return segments.length > 0 ? segments : [defaultHysteresisFieldSegment(0)];
   } catch {
-    return [defaultHysteresisFieldSegment(0)];
+    return [];
   }
 }
 
 function normalizeHysteresisFieldSegment(
   segment: Record<string, unknown>,
   index: number,
+  scopeId: string,
 ): HysteresisFieldSegmentDraft {
+  const unit = stringFromUnknown(segment.unit, "mT");
   return {
+    _rowId: ensureRowId(segment._rowId, `${scopeId}:fieldSegment:${index}`),
     endpointPolicy: stringFromUnknown(
       segment.endpointPolicy ?? segment.endpoint_policy,
-      "include_both",
+      "include_stop",
     ),
     label: stringFromUnknown(segment.label, `Segment ${index + 1}`),
     reason: stringFromUnknown(segment.reason, ""),
@@ -1219,58 +1417,59 @@ function normalizeHysteresisFieldSegment(
     ),
     startField: stringFromUnknown(
       segment.startField ?? segment.start_field ?? segment.start,
-      "0",
+      unit === "T" ? "0.2" : "200",
     ),
-    step: stringFromUnknown(segment.step, "0.1"),
+    step: stringFromUnknown(segment.step, unit === "T" ? "0.005" : "5"),
     stopField: stringFromUnknown(
       segment.stopField ?? segment.stop_field ?? segment.stop,
-      "1.0",
+      unit === "T" ? "-0.2" : "-200",
     ),
-    unit: stringFromUnknown(segment.unit, "T"),
+    unit,
   };
 }
 
-function defaultHysteresisFieldSegment(
-  index: number,
-): HysteresisFieldSegmentDraft {
+function defaultHysteresisFieldSegment(index: number): HysteresisFieldSegmentDraft {
   return {
-    endpointPolicy: "include_both",
+    _rowId: generateStableRowId(),
+    endpointPolicy: "include_stop",
     label: `Segment ${index + 1}`,
     reason: "",
     segmentId: `seg-${index + 1}`,
-    startField: "0",
-    step: "0.1",
-    stopField: "1.0",
-    unit: "T",
+    startField: "200",
+    step: "5",
+    stopField: "-200",
+    unit: "mT",
   };
 }
 
 export function parseHysteresisDenseWindows(
   value: string | null | undefined,
+  scopeId = "default",
 ): HysteresisDenseWindowDraft[] {
   try {
     const parsed = value ? JSON.parse(value) : null;
-    if (!Array.isArray(parsed)) return [defaultHysteresisDenseWindow(0)];
+    if (!Array.isArray(parsed)) return [];
     let index = 0;
-    const windows = parsed.flatMap((window) => {
+    return parsed.flatMap((window) => {
       if (!isRecord(window)) return [];
-      const normalized = normalizeHysteresisDenseWindow(window, index);
+      const normalized = normalizeHysteresisDenseWindow(window, index, scopeId);
       index += 1;
       return [normalized];
     });
-    return windows.length > 0 ? windows : [defaultHysteresisDenseWindow(0)];
   } catch {
-    return [defaultHysteresisDenseWindow(0)];
+    return [];
   }
 }
 
 function normalizeHysteresisDenseWindow(
   window: Record<string, unknown>,
   index: number,
+  scopeId: string,
 ): HysteresisDenseWindowDraft {
   return {
+    _rowId: ensureRowId(window._rowId, `${scopeId}:denseWindow:${index}`),
     centerField: stringFromUnknown(
-      window.centerField ?? window.center_mT ?? window.center,
+      window.centerField ?? window.centerMt ?? window.center_mT ?? window.center,
       "0",
     ),
     halfWidth: stringFromUnknown(
@@ -1278,11 +1477,11 @@ function normalizeHysteresisDenseWindow(
         window.halfWidthMt ??
         window.half_width_mT ??
         window.half_width,
-      "",
+      "20",
     ),
     priority: stringFromUnknown(window.priority, String(index + 1)),
     reason: stringFromUnknown(window.reason, ""),
-    step: stringFromUnknown(window.step ?? window.stepMt ?? window.step_mT, ""),
+    step: stringFromUnknown(window.step ?? window.stepMt ?? window.step_mT, "1"),
   };
 }
 
@@ -1291,51 +1490,97 @@ function defaultHysteresisDenseWindow(
   draft?: StudyStageDraft,
 ): HysteresisDenseWindowDraft {
   return {
+    _rowId: generateStableRowId(),
     centerField: "0",
-    halfWidth: "",
+    halfWidth: "20",
     priority: String(index + 1),
-    reason: index === 0 ? "remanence" : "",
-    step: draft?.fieldStepMt ?? "",
+    reason: index === 0 ? "coercivity" : "",
+    step: draft?.fieldStepMt || "1",
   };
 }
 
-export function parseHysteresisMinorLoops(value: string | null | undefined): HysteresisMinorLoopDraft[] {
+export function parseHysteresisMinorLoops(
+  value: string | null | undefined,
+  scopeId = "default",
+): HysteresisMinorLoopDraft[] {
   try {
     const parsed = value ? JSON.parse(value) : null;
-    if (!Array.isArray(parsed)) return [defaultHysteresisMinorLoop(0)];
-    const loops = parsed.flatMap((loop) =>
-      isRecord(loop) ? [normalizeHysteresisMinorLoop(loop)] : [],
+    if (!Array.isArray(parsed)) return [];
+    return parsed.flatMap((loop, idx) =>
+      isRecord(loop) ? [normalizeHysteresisMinorLoop(loop, idx, scopeId)] : [],
     );
-    return loops.length > 0 ? loops : [defaultHysteresisMinorLoop(0)];
   } catch {
-    return [defaultHysteresisMinorLoop(0)];
+    return [];
   }
+}
+
+function normalizeHysteresisMinorLoop(
+  loop: Record<string, unknown>,
+  index: number,
+  scopeId: string,
+): HysteresisMinorLoopDraft {
+  return {
+    _rowId: ensureRowId(loop._rowId, `${scopeId}:minorLoop:${index}`),
+    closurePolicy: stringFromUnknown(
+      loop.closurePolicy ?? loop.closure_policy ?? loop.continuation_policy,
+      "branch_only",
+    ),
+    parentBranch: stringFromUnknown(
+      loop.parentBranch ?? loop.parent_branch,
+      "descending",
+    ),
+    returnField: stringFromUnknown(
+      loop.returnField ?? loop.returnMt ?? loop.return_mT,
+      "-50",
+    ),
+    reversalField: stringFromUnknown(
+      loop.reversalField ?? loop.reversalMt ?? loop.reversal_mT,
+      "50",
+    ),
+  };
+}
+
+function defaultHysteresisMinorLoop(
+  index: number,
+  draft?: StudyStageDraft,
+): HysteresisMinorLoopDraft {
+  const fieldStep = Number(draft?.fieldStepMt);
+  const offset = Number.isFinite(fieldStep) && fieldStep > 0 ? fieldStep : 25;
+  return {
+    _rowId: generateStableRowId(),
+    closurePolicy: "branch_only",
+    parentBranch: "descending",
+    returnField: String(-offset * (index + 1)),
+    reversalField: String(offset * (index + 1)),
+  };
 }
 
 export function parseHysteresisSettleBranches(
   value: string | null | undefined,
+  scopeId = "default",
 ): HysteresisSettleBranchDraft[] {
   try {
     const parsed = value ? JSON.parse(value) : null;
-    if (!Array.isArray(parsed)) return [defaultHysteresisSettleBranch(0)];
+    if (!Array.isArray(parsed)) return [];
     let branchIndex = 0;
-    const branches = parsed.flatMap((branch) => {
+    return parsed.flatMap((branch) => {
       if (!isRecord(branch)) return [];
-      const normalized = normalizeHysteresisSettleBranch(branch, branchIndex);
+      const normalized = normalizeHysteresisSettleBranch(branch, branchIndex, scopeId);
       branchIndex += 1;
       return [normalized];
     });
-    return branches.length > 0 ? branches : [defaultHysteresisSettleBranch(0)];
   } catch {
-    return [defaultHysteresisSettleBranch(0)];
+    return [];
   }
 }
 
 function normalizeHysteresisSettleBranch(
   branch: Record<string, unknown>,
   index: number,
+  scopeId: string,
 ): HysteresisSettleBranchDraft {
   return {
+    _rowId: ensureRowId(branch._rowId, `${scopeId}:settleBranch:${index}`),
     branchId: stringFromUnknown(
       branch.branchId ?? branch.branch_id,
       index === 0 ? "non_converged_fallback" : `settle_branch_${index + 1}`,
@@ -1349,11 +1594,21 @@ function defaultHysteresisSettleBranch(
   index: number,
 ): HysteresisSettleBranchDraft {
   return {
+    _rowId: generateStableRowId(),
     branchId:
       index === 0 ? "non_converged_fallback" : `settle_branch_${index + 1}`,
     run: JSON.stringify(DEFAULT_RELAX_SETTLE_STEP),
     when: index === 0 ? "non_converged" : "always",
   };
+}
+
+function parseStoragePolicyDraft(value: string): Record<string, unknown> {
+  try {
+    const parsed = JSON.parse(value || "{}") as unknown;
+    return isRecord(parsed) ? parsed : { magnetization: "key_events" };
+  } catch {
+    return { magnetization: "key_events" };
+  }
 }
 
 function stringifyJsonDraftValue(value: unknown, fallback: unknown): string {
@@ -1369,43 +1624,6 @@ function parseJsonObjectOrString(value: string): unknown {
   } catch {
     return value;
   }
-}
-
-function normalizeHysteresisMinorLoop(
-  loop: Record<string, unknown>,
-): HysteresisMinorLoopDraft {
-  return {
-    closurePolicy: stringFromUnknown(
-      loop.closurePolicy ?? loop.closure_policy,
-      "branch_only",
-    ),
-    parentBranch: stringFromUnknown(
-      loop.parentBranch ?? loop.parent_branch,
-      "descending",
-    ),
-    returnField: stringFromUnknown(
-      loop.returnField ?? loop.returnMt ?? loop.return_mT,
-      "",
-    ),
-    reversalField: stringFromUnknown(
-      loop.reversalField ?? loop.reversalMt ?? loop.reversal_mT,
-      "",
-    ),
-  };
-}
-
-function defaultHysteresisMinorLoop(
-  index: number,
-  draft?: StudyStageDraft,
-): HysteresisMinorLoopDraft {
-  const fieldStep = Number(draft?.fieldStepMt);
-  const offset = Number.isFinite(fieldStep) && fieldStep > 0 ? fieldStep : 25;
-  return {
-    closurePolicy: "branch_only",
-    parentBranch: "descending",
-    returnField: String(-offset * (index + 1)),
-    reversalField: String(offset * (index + 1)),
-  };
 }
 
 function stringFromUnknown(value: unknown, fallback: string): string {
@@ -1436,7 +1654,7 @@ function copyDefinedSettleStepValue(
     const stringValue = String(value).trim();
     if (stringValue) {
       const parsedValue = parseFunc(stringValue);
-      if (!isNaN(parsedValue)) {
+      if (!Number.isNaN(parsedValue)) {
         target[field] = parsedValue;
       } else {
         target[field] = stringValue;
@@ -1445,9 +1663,6 @@ function copyDefinedSettleStepValue(
   }
 }
 
-// Must stay aligned with SUPPORTED_SETTLE_METHODS_BY_KIND in
-// StudyStageAuthoringModel: offering a method the validator rejects makes
-// the structured editor produce an unappliable draft.
 function hysteresisSettleMethodOptions(kind?: string) {
   if (kind === "minimize") {
     return ["projected_gradient_bb", "nonlinear_cg", "tangent_plane_implicit"];
@@ -1475,58 +1690,6 @@ function hysteresisSettleMethodLabel(method: string): string {
   return HYSTERESIS_SETTLE_METHOD_LABELS[method] ?? method;
 }
 
-function formatHysteresisSettleJsonishValue(value: unknown): string {
-  return stringifyJsonDraftValue(value, "{}");
-}
-
-function parseHysteresisSettleJsonishValue(value: string): unknown {
-  return parseJsonObjectOrString(value);
-}
-
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-/**
- * Raw JSON for lists that also have structured editors above. Both surfaces
- * edit the same draft string; the structured editors are the primary path, so
- * the JSON stays collapsed and only shows fields relevant to the current mode.
- */
-function HysteresisAdvancedJsonSection({
-  draft,
-  onUpdate,
-}: {
-  draft: StudyStageDraft;
-  onUpdate: (patch: Partial<StudyStageDraft>) => void;
-}) {
-  return (
-    <InspectorGroup title="Advanced JSON" collapsible defaultOpen={false}>
-      {draft.fieldScheduleMode === "piecewise" ? (
-        <FormField
-          hint="Same data as the field segment editor above."
-          label="Field segments JSON"
-          rows={5}
-          type="textarea"
-          value={draft.fieldSegments}
-          onChange={(event) => onUpdate({ fieldSegments: event.target.value })}
-        />
-      ) : null}
-      <FormField
-        hint="Same data as the dense window editor above."
-        label="Dense windows JSON"
-        rows={5}
-        type="textarea"
-        value={draft.denseWindows}
-        onChange={(event) => onUpdate({ denseWindows: event.target.value })}
-      />
-      <FormField
-        hint="Same data as the settle algorithm editor above."
-        label="Settle steps JSON"
-        rows={5}
-        type="textarea"
-        value={draft.settleSteps}
-        onChange={(event) => onUpdate({ settleSteps: event.target.value })}
-      />
-    </InspectorGroup>
-  );
 }

@@ -4,6 +4,27 @@ import { createRoot } from "react-dom/client";
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+vi.mock("@radix-ui/react-slider", () => ({
+  Root: ({
+    children,
+    onValueChange: _onValueChange,
+    onValueCommit: _onValueCommit,
+    ...rest
+  }: {
+    children?: ReactNode;
+    onValueChange?: (next: number[]) => void;
+    onValueCommit?: (next: number[]) => void;
+    value?: number[];
+  }) => (
+    <div data-slot="mock-slider" {...rest}>
+      {children}
+    </div>
+  ),
+  Track: ({ children }: { children?: ReactNode }) => <div>{children}</div>,
+  Range: () => <div />,
+  Thumb: () => <div />,
+}));
+
 import { Accordion } from "@/shared/ui/Accordion";
 import { KernelContext } from "@/kernel/KernelContext";
 import {
@@ -1212,7 +1233,7 @@ describe("Study stage inspectors", () => {
 
     expect(html).toContain("Solver Configuration");
     expect(html).toContain("Requested execution");
-    expect(html).toContain("cpu; backend/device/precision resolved by planner");
+    expect(html).toContain("auto; backend/device/precision resolved by planner");
     expect(html).toContain("Solver lane");
     expect(html).toContain("native SLEPc shift-invert modal lane with reference CPU parity path");
     expect(html).toContain("Tolerance policy");
@@ -1469,7 +1490,7 @@ describe("Study stage inspectors", () => {
 
     expect(html).toContain("Solver Configuration");
     expect(html).toContain("Requested execution");
-    expect(html).toContain("cpu; double precision production slice");
+    expect(html).toContain("auto; double precision production slice");
     expect(html).toContain("Solver lane");
     expect(html).toContain("matrix_free_solver; krylov_solver = gmres");
     expect(html).toContain("Tolerance policy");

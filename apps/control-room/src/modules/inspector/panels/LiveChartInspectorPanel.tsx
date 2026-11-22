@@ -6,6 +6,7 @@ import { KernelContext } from "@/kernel/KernelContext";
 import { useLiveChartPreferencesHydration } from "@/kernel/workspace/useLiveChartPreferencesHydration";
 import { isLiveChartPresetId, liveChartPreset, type LiveChartPresetId } from "@/shared/analysis-charts/liveChartPresets";
 import { resolveLiveChartSelectedSeriesIds } from "@/shared/analysis-charts/liveChartSelection";
+import { Checkbox } from "@/shared/ui/Checkbox";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/shared/ui/Select";
 import { Switch } from "@/shared/ui/Switch";
 
@@ -151,11 +152,10 @@ export function LiveChartInspectorPanel({
               const checked = selectedSeriesIdSet.has(series.id);
               return (
                 <label className="fm-live-chart-inspector__series-row" key={series.id}>
-                  <input
+                  <Checkbox
                     aria-label={`Show ${series.quantity}`}
                     checked={checked}
                     className="fm-live-chart-inspector__checkbox"
-                    type="checkbox"
                     onChange={() => {
                       const next = checked
                         ? selectedSeriesIds.filter((id) => id !== series.id)

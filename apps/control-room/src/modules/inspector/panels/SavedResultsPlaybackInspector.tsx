@@ -109,10 +109,23 @@ export function SavedResultsPlaybackInspector() {
     kernel.savedResultsPlayback?.selectFrame(clampPlaybackFrameIndex(next, frameCount));
   };
   return (
-    <section aria-label="Saved results playback Inspector" className="fm-saved-results-playback-inspector">
-      <header className="fm-saved-results-playback-inspector__header">
-        <h2 className="fm-saved-results-playback-inspector__title">Saved result playback</h2>
-        <p className="fm-saved-results-playback-inspector__name" title={selection.name}>{selection.name}</p>
+    <section
+      aria-label="Saved results playback Inspector"
+      className="fm-inspector fm-saved-results-playback-inspector"
+      data-domain="visualization"
+      data-slot="inspector-root"
+    >
+      <header className="fm-inspector__header fm-saved-results-playback-inspector__header" data-slot="inspector-header">
+        <div className="fm-inspector__path-bar">
+          <span className="text-xs text-fm-muted">Start › Saved Results › {selection.name}</span>
+        </div>
+        <div className="fm-inspector__identity">
+          <div>
+            <h2 className="fm-saved-results-playback-inspector__title">Saved result playback</h2>
+            <p className="fm-saved-results-playback-inspector__name">{selection.name}</p>
+          </div>
+          <span className="fm-inspector-state-pill" data-tone="ok">Read-only</span>
+        </div>
         <p className="fm-saved-results-playback-inspector__readonly" role="note">
           Read-only playback. No source project or active session is required.
         </p>
@@ -122,7 +135,7 @@ export function SavedResultsPlaybackInspector() {
         <p className="fm-saved-results-playback-inspector__status" role="status">Reading the saved result manifest…</p>
       ) : manifestResource.status === "error" && !manifest ? (
         <p className="fm-saved-results-playback-inspector__error" role="alert">
-          Could not read this saved result folder: {manifestResource.error?.message ?? "Unknown error."}
+          Could not read this saved result folder: {manifestResource.error?.message ?? "Manifest could not be decoded."}
         </p>
       ) : manifest ? (
         <>
@@ -178,7 +191,7 @@ export function SavedResultsPlaybackInspector() {
             <div className="fm-saved-results-playback-inspector__frame-heading">
               <h3 className="fm-saved-results-playback-inspector__label">Frame</h3>
               <output className="fm-saved-results-playback-inspector__frame-value" htmlFor="fm-saved-results-frame">
-                {hasFrames ? `${frameIndex + 1} / ${frameCount}` : "Unavailable"}
+                {hasFrames ? `${frameIndex + 1} / ${frameCount}` : "0 / 0"}
               </output>
             </div>
             <Slider

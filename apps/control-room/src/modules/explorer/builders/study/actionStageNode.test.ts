@@ -3,9 +3,14 @@ import { describe, expect, it } from "vitest";
 import { buildActionStageNode } from "./actionStageNode";
 
 describe("buildActionStageNode", () => {
-  it("labels the stage actions of a mask antenna as in the exported script", () => {
-    expect(buildActionStageNode({ index: 0, kind: "add_mask_field_drive" }).label).toBe("Add Antenna 1");
-    expect(buildActionStageNode({ index: 2, kind: "update_mask_field_drive" }).label).toBe("Update Antenna 3");
+  it("labels mask antenna stage actions as in the exported script and routes them to study.stage.mask_field_drive", () => {
+    const addNode = buildActionStageNode({ index: 0, kind: "add_mask_field_drive" });
+    const updateNode = buildActionStageNode({ index: 2, kind: "update_mask_field_drive" });
+
+    expect(addNode.label).toBe("Add Antenna 1");
+    expect(addNode.kind).toBe("study.stage.mask_field_drive");
+    expect(updateNode.label).toBe("Update Antenna 3");
+    expect(updateNode.kind).toBe("study.stage.mask_field_drive");
   });
 
   it("keeps the generic label and the action selection kind for other actions", () => {
@@ -13,6 +18,5 @@ describe("buildActionStageNode", () => {
 
     expect(node.label).toBe("Remove Field Drive 2");
     expect(node.kind).toBe("study.stage.action");
-    expect(buildActionStageNode({ index: 0, kind: "add_mask_field_drive" }).kind).toBe("study.stage.action");
   });
 });

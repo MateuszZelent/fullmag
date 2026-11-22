@@ -11,12 +11,7 @@ import {
 } from "@/shared/ui/Accordion";
 import { Input } from "@/shared/ui/Input";
 import { Slider } from "@/shared/ui/Slider";
-import {
-  Tabs,
-  TabsContent,
-  TabsList,
-  TabsTrigger,
-} from "@/shared/ui/Tabs";
+import { TabsContent } from "@/shared/ui/Tabs";
 import {
   VIEWPORT_3D_CAPTURE_PROFILE_DESCRIPTION,
   VIEWPORT_3D_QUALITY_PROFILE_DESCRIPTIONS,
@@ -25,6 +20,7 @@ import {
   type Viewport3DQualityProfileId,
 } from "@/shared/viewport3dQualityLabels";
 
+import { Viewport3DInspectorTemplateShell } from "./Viewport3DSettingsAndExportSpecs";
 import {
   Choice,
   SettingsGroup,
@@ -74,50 +70,36 @@ export function Viewport3DSettingsContent({
   const qualityOptions = selectedQuality === "capture"
     ? [...VIEWPORT_3D_QUALITY_PROFILE_OPTIONS, ["capture", "Capture"] as const]
     : VIEWPORT_3D_QUALITY_PROFILE_OPTIONS;
+  const renderModeLabel = appearance.renderMode === "presentation"
+    ? "Presentation"
+    : "Scientific";
 
   return (
-    <section
-      aria-label="3D View Settings"
-      className="fm-viewport-3d-settings"
+    <Viewport3DInspectorTemplateShell
+      aboveTabs={<Viewport3DVisualizationModeControl />}
+      activeTab={activeSection}
+      ariaLabel="3D View Settings"
+      breadcrumbAriaLabel="3D view breadcrumb"
+      breadcrumbCurrent="3D View"
+      facts={[
+        { id: "mode", label: "Mode", value: renderModeLabel },
+        { id: "frame", label: "Frame", value: state.widgets.dimensionFrameMode },
+        { id: "quality", label: "Quality", value: currentQualityLabel },
+      ]}
+      footerStatusText="Live · 3D viewport settings apply immediately"
+      icon={SlidersHorizontal}
+      onTabChange={(value) => {
+        if (isViewport3DSettingsSection(value)) onSectionChange(value);
+      }}
+      ownerId="viewport-3d.settings"
+      stateLabel="Live"
+      stateTone="live"
+      subtitle="Camera, appearance and render quality"
+      tabs={SETTINGS_SECTIONS}
+      tabsAriaLabel="3D view settings sections"
+      title="3D View"
     >
-      {/* Identity header shared with the Inspector template (specs/frontend-v2/13 §1a). */}
-      <header className="fm-viewport-3d-settings__header">
-        <span aria-hidden="true" className="fm-viewport-3d-settings__header-icon">
-          <SlidersHorizontal size={18} strokeWidth={1.75} />
-        </span>
-        <span className="fm-viewport-3d-settings__header-copy">
-          <h2 className="fm-viewport-3d-settings__title">3D View</h2>
-          <span className="fm-viewport-3d-settings__subtitle">Camera, appearance and render quality</span>
-        </span>
-      </header>
-      <Tabs
-        className="fm-viewport-3d-settings__tabs"
-        onValueChange={(value) => {
-          if (isViewport3DSettingsSection(value)) onSectionChange(value);
-        }}
-        value={activeSection}
-      >
-        <div className="fm-viewport-3d-settings__field-list">
-          <Viewport3DVisualizationModeControl />
-          <TabsList
-            aria-label="3D view settings sections"
-            className="fm-viewport-3d-settings__tab-list"
-            presentation="segmented"
-          >
-            {SETTINGS_SECTIONS.map((section) => (
-              <TabsTrigger
-                className="fm-viewport-3d-settings__tab"
-                key={section.id}
-                value={section.id}
-              >
-                {section.label}
-              </TabsTrigger>
-            ))}
-          </TabsList>
-        </div>
-
-        <div className="fm-viewport-3d-settings__panels">
-          <TabsContent forceMount hidden={activeSection !== "view"} className="fm-viewport-3d-settings__panel" value="view">
+      <TabsContent forceMount hidden={activeSection !== "view"} className="fm-viewport-3d-settings__panel pb-16" value="view">
             <div className="fm-viewport-3d-settings__camera-content">
               {cameraContent}
             </div>
@@ -200,7 +182,7 @@ export function Viewport3DSettingsContent({
             </SettingsGroup>
           </TabsContent>
 
-          <TabsContent forceMount hidden={activeSection !== "appearance"} className="fm-viewport-3d-settings__panel" value="appearance">
+          <TabsContent forceMount hidden={activeSection !== "appearance"} className="fm-viewport-3d-settings__panel pb-16" value="appearance">
             <SettingsGroup
               onReset={() => onCommand("viewport-3d.reset-appearance-background")}
               resetLabel="Reset backgrounds"
@@ -324,7 +306,7 @@ export function Viewport3DSettingsContent({
             ) : null}
           </TabsContent>
 
-          <TabsContent forceMount hidden={activeSection !== "quality"} className="fm-viewport-3d-settings__panel" value="quality">
+          <TabsContent forceMount hidden={activeSection !== "quality"} className="fm-viewport-3d-settings__panel pb-16" value="quality">
             <SettingsGroup title="Quality and effects">
               <Choice
                 describedBy="fm-view-quality-help fm-view-quality-description"
@@ -429,9 +411,7 @@ export function Viewport3DSettingsContent({
               </Accordion>
             </SettingsGroup>
           </TabsContent>
-        </div>
-      </Tabs>
-    </section>
+    </Viewport3DInspectorTemplateShell>
   );
 }
 

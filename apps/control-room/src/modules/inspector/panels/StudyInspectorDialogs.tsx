@@ -10,6 +10,14 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/shared/ui/Dialog";
+import { Input } from "@/shared/ui/Input";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/shared/ui/Select";
 
 export function RestoreCheckpointDialog({
   checkpoints,
@@ -46,24 +54,26 @@ export function RestoreCheckpointDialog({
           {checkpoints.length > 0 ? (
             <div className="fm-study-checkpoint-list" role="listbox">
               {checkpoints.map((entry) => (
-                <button
+                <Button
                   key={entry.checkpoint_id}
+                  aria-selected={entry.checkpoint_id === checkpoint?.checkpoint_id}
                   className="fm-study-checkpoint-list__item"
                   data-selected={
                     entry.checkpoint_id === checkpoint?.checkpoint_id
                       ? "true"
                       : undefined
                   }
-                  type="button"
                   role="option"
-                  aria-selected={entry.checkpoint_id === checkpoint?.checkpoint_id}
+                  size="sm"
+                  type="button"
+                  variant="ghost"
                   onClick={() => onSelectCheckpoint(entry.checkpoint_id)}
                 >
                   <span>{entry.checkpoint_id}</span>
                   <small>
                     {entry.resume_class} · step {entry.step}
                   </small>
-                </button>
+                </Button>
               ))}
             </div>
           ) : null}
@@ -192,7 +202,7 @@ export function ImportStateDialog({
           </DialogDescription>
         </DialogHeader>
         <div className="fm-dialog__body">
-          <input
+          <Input
             aria-label="FMS file"
             accept=".fms,application/octet-stream"
             className="fm-study-file-input"
@@ -245,17 +255,19 @@ export function ImportStateDialog({
                   }
                 />
               </dl>
-              <label className="fm-study-select">
+              <div className="fm-study-select">
                 <span>Restore mode</span>
-                <select
-                  value={restoreMode}
-                  onChange={(event) => onRestoreModeChange(event.target.value)}
-                >
-                  <option value="resume">resume</option>
-                  <option value="initial_condition">initial_condition</option>
-                  <option value="config_only">config_only</option>
-                </select>
-              </label>
+                <Select value={restoreMode} onValueChange={onRestoreModeChange}>
+                  <SelectTrigger aria-label="Restore mode" density="compact">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="resume">resume</SelectItem>
+                    <SelectItem value="initial_condition">initial_condition</SelectItem>
+                    <SelectItem value="config_only">config_only</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
             </>
           ) : null}
         </div>

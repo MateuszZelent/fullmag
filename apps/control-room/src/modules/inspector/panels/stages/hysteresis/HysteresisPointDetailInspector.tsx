@@ -3,7 +3,6 @@
 import { useCallback, useMemo } from "react";
 
 import type { HysteresisPointSchema } from "@/kernel/api/apiTypes";
-import { createCommandContext } from "@/kernel/commands/commandContext";
 import {
   clearHysteresisPointSelectionForLive,
   hysteresisPointVectorResourceRef,
@@ -13,6 +12,7 @@ import { Button } from "@/shared/ui/Button";
 
 import { FieldRow } from "../../../primitives/FieldRow";
 import { InspectorGroup } from "../../../primitives/InspectorGroup";
+import { buildStudyCommandContext } from "../../study/useConnectedStudyAuthoring";
 import {
   hysteresisInitialStateActionPresentation,
   hysteresisReplayActionPresentation,
@@ -34,7 +34,7 @@ export function HysteresisPointDetailInspector({
   pointDetail: HysteresisPointSchema | null | undefined;
 }) {
   const commandContext = useMemo(
-    () => createCommandContext("inspector", kernel),
+    () => buildStudyCommandContext(kernel),
     [kernel],
   );
   const selectedPoint =
@@ -182,29 +182,34 @@ function HysteresisPointDetail({
       )}
       <div className="fm-hysteresis-inspector-actions">
         <Button
-          size="sm"
-          variant="secondary"
+          aria-label="Load Snapshot in 3D"
           disabled={replayAction.disabled}
+          disabledReason={replayAction.title}
+          size="sm"
+          type="button"
+          variant="secondary"
           onClick={() => onLoadPointIn3D(point)}
-          title={replayAction.title}
         >
           Load 3D
         </Button>
         <Button
-          size="sm"
-          variant="secondary"
+          aria-label="Use as Initial State"
           disabled={initialStateAction.disabled}
+          disabledReason={initialStateAction.title}
+          size="sm"
+          type="button"
+          variant="secondary"
           onClick={() => onUsePointAsInitialState(point)}
-          title={initialStateAction.title}
         >
           Use as initial
         </Button>
         {snapshotLoaded && (
           <Button
+            aria-label="Return the 3D viewport to the live magnetization field"
             size="sm"
+            type="button"
             variant="secondary"
             onClick={onReturnToLive}
-            title="Return the 3D viewport to the live magnetization field"
           >
             Return to live
           </Button>

@@ -24,24 +24,39 @@ import type { CommandContext } from "@/kernel/commands/commandTypes";
 import type { Selection } from "@/kernel/selection/selectionTypes";
 import type { ModuleId } from "@/kernel/types";
 import {
-  useHysteresisBranchesResource,
-  useHysteresisFamilyResource,
-  useHysteresisMetricsResource,
-  useHysteresisMinorLoopsResource,
-  useHysteresisOrientationResource,
   useHysteresisPointsResource,
   useHysteresisProgressResource,
-  useHysteresisProtocolResource,
   type HysteresisBranch,
   type HysteresisMinorLoop,
 } from "@/kernel/resources/studyRuntimeResources";
 import type { KernelApi } from "@/kernel/types";
 import { Button } from "@/shared/ui/Button";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/shared/ui/Select";
+import { Slider } from "@/shared/ui/Slider";
 import { useToolbarRovingFocus } from "@/shared/ui/useToolbarRovingFocus";
 import { ChevronLeft, ChevronRight, Pause, Play, ZoomOut } from "lucide-react";
 
+export interface HysteresisChartProvidedData {
+  angularFamily?: HysteresisAngularFamilyResource | null;
+  branchMode?: string | null;
+  branches?: readonly HysteresisBranch[];
+  metrics?: HysteresisMetricsSchema | null;
+  minorLoops?: readonly HysteresisMinorLoop[];
+  orientation?: HysteresisOrientationSchema | null;
+  points: readonly HysteresisPointSchema[];
+  pointsRevision?: string | number | null;
+  progress?: HysteresisProgressSchema | null;
+}
+
 interface HysteresisChartProps {
   commandSource?: CommandContext["source"];
+  data?: HysteresisChartProvidedData;
   kernel: KernelApi;
   stageId: string;
 }
@@ -125,10 +140,10 @@ function progressSettleLabel(
 }
 
 export function selectedHysteresisPointId(
-  selection: Selection,
+  selection: Selection | null | undefined,
   stageId: string,
 ): number | null {
-  const ref = selection.ref;
+  const ref = selection?.ref;
   if (
     ref?.type !== "analysis-chart-point" ||
     ref.stageId !== stageId ||
@@ -1328,41 +1343,49 @@ export function buildHysteresisChartOption({
 export const HYSTERESIS_CHART_SET_OPTION_OPTS: SetOptionOpts = { replaceMerge: ["series"] };
 
 export function HysteresisChart(props: HysteresisChartProps) {
-  return useHysteresisChartView(props);
+  if (props.data !== undefined) {
+    return <HysteresisChartPresentational {...props} data={props.data} />;
+  }
+  return <ConnectedHysteresisChart {...props} />;
 }
 
-function useHysteresisChartView({
+function ConnectedHysteresisChart(props: HysteresisChartProps) {
+  const pointsRes = useHysteresisPointsResource(props.stageId);
+  const progressRes = useHysteresisProgressResource(props.stageId);
+  const data = useMemo<HysteresisChartProvidedData>(
+    () => ({
+      points: Array.isArray(pointsRes.data?.points)
+        ? pointsRes.data.points
+        : EMPTY_HYSTERESIS_POINTS,
+      pointsRevision: pointsRes.revision ?? null,
+      progress: progressRes.data ?? null,
+    }),
+    [pointsRes.data?.points, pointsRes.revision, progressRes.data],
+  );
+  return <HysteresisChartPresentational {...props} data={data} />;
+}
+
+function HysteresisChartPresentational({
   commandSource = "analysis-plots",
+  data,
   kernel,
   stageId,
-}: HysteresisChartProps) {
-  const pointsRes = useHysteresisPointsResource(stageId);
-  const branchesRes = useHysteresisBranchesResource(stageId);
-  const familyRes = useHysteresisFamilyResource(stageId);
-  const minorLoopsRes = useHysteresisMinorLoopsResource(stageId);
-  const metricsRes = useHysteresisMetricsResource(stageId);
-  const orientationRes = useHysteresisOrientationResource(stageId);
-  const progressRes = useHysteresisProgressResource(stageId);
-  const protocolRes = useHysteresisProtocolResource(stageId);
-
-  const points = Array.isArray(pointsRes.data?.points)
-    ? pointsRes.data.points
-    : EMPTY_HYSTERESIS_POINTS;
-  const branches = Array.isArray(branchesRes.data?.branches)
-    ? branchesRes.data.branches
-    : EMPTY_HYSTERESIS_BRANCHES;
-  const minorLoops = Array.isArray(minorLoopsRes.data?.minor_loops)
-    ? minorLoopsRes.data.minor_loops
-    : EMPTY_HYSTERESIS_MINOR_LOOPS;
-  const angularFamily = familyRes.data;
-  const metrics = metricsRes.data?.metrics;
-  const progress = progressRes.data;
-  const branchMode = protocolRes.data?.branch_mode ?? null;
+}: HysteresisChartProps & { data: HysteresisChartProvidedData }) {
+  const points = data.points ?? EMPTY_HYSTERESIS_POINTS;
+  const branches = data.branches ?? EMPTY_HYSTERESIS_BRANCHES;
+  const minorLoops = data.minorLoops ?? EMPTY_HYSTERESIS_MINOR_LOOPS;
+  const angularFamily = data.angularFamily ?? null;
+  const metrics = data.metrics ?? undefined;
+  const progress = data.progress ?? null;
+  const branchMode = data.branchMode ?? null;
+  const pointsRevision = data.pointsRevision ?? null;
+  const orientationData = data.orientation ?? null;
 
   const [yAxisKey, setYAxisKey] = useState<YAxisKey>("m_parallel");
   const [xAxisUnit, setXAxisUnit] = useState<XAxisUnit>("mT");
   const [viewMode, setViewMode] = useState<ViewMode>("full");
   const [isPlaying, setIsPlaying] = useState(false);
+  const [themeRevision, setThemeRevision] = useState(0);
   const playerToolbarRef = useRef<HTMLDivElement>(null);
   const playerToolbarKeyDown = useToolbarRovingFocus(playerToolbarRef, { deps: [isPlaying] });
 
@@ -1370,17 +1393,18 @@ function useHysteresisChartView({
   const chartRef = useRef<ECharts | null>(null);
   const [chartError, setChartError] = useState<string | null>(null);
   const subscribeToSelection = useCallback(
-    (onStoreChange: () => void) => kernel.selection.subscribe(onStoreChange),
+    (onStoreChange: () => void) =>
+      kernel.selection?.subscribe?.(onStoreChange) ?? (() => undefined),
     [kernel.selection],
   );
   const selectedPointId = useSyncExternalStore(
     subscribeToSelection,
     useCallback(
-      () => selectedHysteresisPointId(kernel.selection.get(), stageId),
+      () => selectedHysteresisPointId(kernel.selection?.get?.(), stageId),
       [kernel.selection, stageId],
     ),
     useCallback(
-      () => selectedHysteresisPointId(kernel.selection.get(), stageId),
+      () => selectedHysteresisPointId(kernel.selection?.get?.(), stageId),
       [kernel.selection, stageId],
     ),
   );
@@ -1435,8 +1459,8 @@ function useHysteresisChartView({
     return `${computed}/${series.length} angular variants computed${pending > 0 ? `, ${pending} pending` : ""}`;
   }, [angularFamily]);
   const targetMetadata = useMemo(
-    () => hysteresisTargetMetadataFromOrientation(orientationRes.data),
-    [orientationRes.data],
+    () => hysteresisTargetMetadataFromOrientation(orientationData),
+    [orientationData],
   );
   const commandContext = useMemo(
     () => createCommandContext(commandSource, kernel),
@@ -1594,9 +1618,21 @@ function useHysteresisChartView({
     });
     resizeObserver.observe(element);
 
+    let themeObserver: MutationObserver | null = null;
+    if (typeof MutationObserver !== "undefined" && typeof document !== "undefined" && document.documentElement) {
+      themeObserver = new MutationObserver(() => {
+        setThemeRevision((prev) => prev + 1);
+      });
+      themeObserver.observe(document.documentElement, {
+        attributes: true,
+        attributeFilter: ["data-theme", "class"],
+      });
+    }
+
     return () => {
       disposed = true;
       resizeObserver.disconnect();
+      themeObserver?.disconnect();
       if (chart) {
         chart.off("click", onClick);
         chart.dispose();
@@ -1614,15 +1650,15 @@ function useHysteresisChartView({
       activePoint,
       angularFamily,
       branchMode,
-      branches,
+      branches: [...branches],
       colors: readHysteresisChartColors(element),
       formatXValue,
       liveFieldValue,
       liveSweep,
       liveYValue,
       metrics,
-      minorLoops,
-      points,
+      minorLoops: [...minorLoops],
+      points: [...points],
       // The very first option on a fresh instance carries the full zoom window.
       preserveZoomWindow: chart != null && latestOptionRef.current != null,
       viewMode,
@@ -1631,7 +1667,7 @@ function useHysteresisChartView({
     });
     latestOptionRef.current = option;
     chart?.setOption(option, HYSTERESIS_CHART_SET_OPTION_OPTS);
-  }, [activePoint, angularFamily, branchMode, branches, formatXValue, liveFieldValue, liveSweep, liveYValue, metrics, minorLoops, points, viewMode, xAxisUnit, yAxisKey]);
+  }, [activePoint, angularFamily, branchMode, branches, formatXValue, liveFieldValue, liveSweep, liveYValue, metrics, minorLoops, points, themeRevision, viewMode, xAxisUnit, yAxisKey]);
 
   return (
     <div
@@ -1640,7 +1676,7 @@ function useHysteresisChartView({
       data-hysteresis-active-snapshot-id={activePointSnapshotId ?? ""}
       data-hysteresis-live-field-mt={liveFieldValue ?? ""}
       data-hysteresis-point-count={points.length}
-      data-hysteresis-points-revision={pointsRes.revision ?? ""}
+      data-hysteresis-points-revision={pointsRevision ?? ""}
       data-hysteresis-stage-id={stageId}
       role="group"
       aria-label="Hysteresis chart"
@@ -1648,53 +1684,60 @@ function useHysteresisChartView({
       onKeyDown={handleKeyDown}
     >
       <div className="fm-hysteresis-provenance" role="status">
-        {hysteresisPointsProvenanceLabel(pointsRes.revision)}
+        {hysteresisPointsProvenanceLabel(pointsRevision)}
       </div>
       <div className="fm-hysteresis-controls">
         <div className="fm-hysteresis-control-group">
-          <select
-            aria-label="Magnetization component"
-            className="fm-analysis-plots__select"
+          <Select
             value={yAxisKey}
-            onChange={(e) => setYAxisKey(e.target.value as YAxisKey)}
+            onValueChange={(val) => setYAxisKey(val as YAxisKey)}
           >
-            <option value="m_parallel">M_parallel</option>
-            <option value="m_oop">M_oop</option>
-            <option value="m_ip">M_ip</option>
-            <option value="m_avg_x">M_x</option>
-            <option value="m_avg_y">M_y</option>
-            <option value="m_avg_z">M_z</option>
-          </select>
+            <SelectTrigger aria-label="Magnetization component" density="compact">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="m_parallel">M_parallel</SelectItem>
+              <SelectItem value="m_oop">M_oop</SelectItem>
+              <SelectItem value="m_ip">M_ip</SelectItem>
+              <SelectItem value="m_avg_x">M_x</SelectItem>
+              <SelectItem value="m_avg_y">M_y</SelectItem>
+              <SelectItem value="m_avg_z">M_z</SelectItem>
+            </SelectContent>
+          </Select>
 
-          <select
-            aria-label="Field units"
-            className="fm-analysis-plots__select"
+          <Select
             value={xAxisUnit}
-            onChange={(e) => setXAxisUnit(e.target.value as XAxisUnit)}
+            onValueChange={(val) => setXAxisUnit(val as XAxisUnit)}
           >
-            <option value="mT">mT (B_ext)</option>
-            <option value="kA/m">kA/m (H_ext)</option>
-          </select>
+            <SelectTrigger aria-label="Field units" density="compact">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="mT">mT (B_ext)</SelectItem>
+              <SelectItem value="kA/m">kA/m (H_ext)</SelectItem>
+            </SelectContent>
+          </Select>
 
-          <select
-            aria-label="Hysteresis view"
-            className="fm-analysis-plots__select"
+          <Select
             value={viewMode}
-            onChange={(e) => {
-              if (isViewMode(e.target.value)) {
-                setViewMode(e.target.value);
-              }
+            onValueChange={(val) => {
+              if (isViewMode(val)) setViewMode(val);
             }}
           >
-            <option value="full">Full Loop</option>
-            <option value="virgin">Virgin</option>
-            <option value="forward">Forward Branch</option>
-            <option value="return">Return Branch</option>
-            <option value="minor">Minor Loops</option>
-            <option value="oop-ip-overlay">OOP/IP Overlay</option>
-            <option value="rgb-overlay">RGB Components</option>
-            <option value="angular-family">Angular Family</option>
-          </select>
+            <SelectTrigger aria-label="Hysteresis view" density="compact">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="full">Full Loop</SelectItem>
+              <SelectItem value="virgin">Virgin</SelectItem>
+              <SelectItem value="forward">Forward Branch</SelectItem>
+              <SelectItem value="return">Return Branch</SelectItem>
+              <SelectItem value="minor">Minor Loops</SelectItem>
+              <SelectItem value="oop-ip-overlay">OOP/IP Overlay</SelectItem>
+              <SelectItem value="rgb-overlay">RGB Components</SelectItem>
+              <SelectItem value="angular-family">Angular Family</SelectItem>
+            </SelectContent>
+          </Select>
         </div>
 
         {viewMode === "angular-family" && angularFamilyStatus ? (
@@ -1725,7 +1768,6 @@ function useHysteresisChartView({
             }
             disabled={navigationIndex <= 0}
             aria-label="Previous hysteresis point"
-            title="Previous hysteresis point"
           >
             <ChevronLeft aria-hidden="true" size={16} />
           </Button>
@@ -1753,7 +1795,6 @@ function useHysteresisChartView({
             }
             disabled={points.length === 0 || navigationIndex >= points.length - 1}
             aria-label="Next hysteresis point"
-            title="Next hysteresis point"
           >
             <ChevronRight aria-hidden="true" size={16} />
           </Button>
@@ -1762,7 +1803,7 @@ function useHysteresisChartView({
             variant="primary"
             onClick={loadSelectedPointIn3D}
             disabled={replayAction.disabled}
-            title={replayAction.title}
+            aria-label={replayAction.title}
           >
             Load in 3D
           </Button>
@@ -1771,7 +1812,7 @@ function useHysteresisChartView({
             variant="secondary"
             onClick={useSelectedPointAsInitialState}
             disabled={initialStateAction.disabled}
-            title={initialStateAction.title}
+            aria-label={initialStateAction.title}
           >
             Use as initial
           </Button>
@@ -1780,7 +1821,7 @@ function useHysteresisChartView({
             variant="secondary"
             onClick={resetZoom}
             disabled={points.length === 0}
-            title="Reset local chart zoom"
+            aria-label="Reset local chart zoom"
           >
             <ZoomOut aria-hidden="true" size={14} />
             Reset zoom
@@ -1789,7 +1830,7 @@ function useHysteresisChartView({
             size="sm"
             variant="secondary"
             onClick={returnToLive}
-            title="Return the 3D viewport to the live magnetization field"
+            aria-label="Return the 3D viewport to the live magnetization field"
           >
             Live
           </Button>
@@ -1827,21 +1868,21 @@ function useHysteresisChartView({
             )}
           </div>
           {points.length > 0 && (
-            <input
-              type="range"
-              min="0"
-              max={points.length - 1}
-              value={resolvedActiveIndex >= 0 ? resolvedActiveIndex : 0}
-              onChange={(e) => {
+            <Slider
+              aria-label="Hysteresis point scrubber"
+              className="fm-hysteresis-scrubber"
+              max={Math.max(0, points.length - 1)}
+              min={0}
+              step={1}
+              value={[resolvedActiveIndex >= 0 ? resolvedActiveIndex : 0]}
+              valueText={() => scrubberValueText}
+              onValueChange={(vals) => {
                 const nextIndex = resolveHysteresisScrubberPointIndex(
-                  e.target.value,
+                  vals[0] ?? 0,
                   points.length,
                 );
                 if (nextIndex != null) selectPoint(nextIndex);
               }}
-              aria-label="Hysteresis point scrubber"
-              aria-valuetext={scrubberValueText}
-              className="fm-hysteresis-scrubber"
             />
           )}
         </div>

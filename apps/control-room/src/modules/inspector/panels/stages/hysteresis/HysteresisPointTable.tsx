@@ -2,6 +2,12 @@
 
 import type { HysteresisPointSchema } from "@/kernel/api/apiTypes";
 import { Button } from "@/shared/ui/Button";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/shared/ui/Tooltip";
 
 import {
   hysteresisInitialStateActionPresentation,
@@ -107,16 +113,27 @@ function HysteresisPointTableRow({
       <td>{point.branch_id ?? point.branch_ids?.join(", ") ?? "n/a"}</td>
       <td>
         {point.adaptive_inserted ? (
-          <span
-            className="fm-hysteresis-inspector-point-source"
-            title={
-              refinementReason
-                ? `Adaptive refinement: ${refinementReason}`
-                : "Adaptive refinement"
-            }
-          >
-            Adaptive
-          </span>
+          <TooltipProvider delayDuration={250}>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <span
+                  aria-label={
+                    refinementReason
+                      ? `Adaptive refinement: ${refinementReason}`
+                      : "Adaptive refinement"
+                  }
+                  className="fm-hysteresis-inspector-point-source"
+                >
+                  Adaptive
+                </span>
+              </TooltipTrigger>
+              <TooltipContent>
+                {refinementReason
+                  ? `Adaptive refinement: ${refinementReason}`
+                  : "Adaptive refinement"}
+              </TooltipContent>
+            </Tooltip>
+          </TooltipProvider>
         ) : (
           "Planned"
         )}
@@ -136,8 +153,8 @@ function HysteresisPointTableRow({
           size="sm"
           variant="secondary"
           disabled={replayAction.disabled}
+          disabledReason={replayAction.title}
           onClick={() => onLoadPointIn3D(point)}
-          title={replayAction.title}
           className="fm-hysteresis-inspector-action"
         >
           3D
@@ -146,35 +163,35 @@ function HysteresisPointTableRow({
           size="sm"
           variant="secondary"
           disabled={initialStateAction.disabled}
+          disabledReason={initialStateAction.title}
           onClick={() => onUsePointAsInitialState(point)}
-          title={initialStateAction.title}
           className="fm-hysteresis-inspector-action"
         >
           Init
         </Button>
         <Button
+          aria-label={`Select point ${point.point_id} for comparison`}
           size="sm"
           variant="secondary"
           onClick={() => onComparePoint(point)}
-          title="Select this point in the hysteresis chart for comparison."
           className="fm-hysteresis-inspector-action"
         >
           Compare
         </Button>
         <Button
+          aria-label={`Bookmark point ${point.point_id}`}
           size="sm"
           variant="secondary"
           onClick={() => onBookmarkPoint(point)}
-          title="Bookmark this point in the browser session."
           className="fm-hysteresis-inspector-action"
         >
           Bookmark
         </Button>
         <Button
+          aria-label={`Export point ${point.point_id} as CSV`}
           size="sm"
           variant="secondary"
           onClick={() => onExportPoint(point)}
-          title="Export this point as a CSV file."
           className="fm-hysteresis-inspector-action"
         >
           Export

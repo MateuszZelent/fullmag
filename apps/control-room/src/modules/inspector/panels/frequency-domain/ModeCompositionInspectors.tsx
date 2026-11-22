@@ -4,6 +4,7 @@ import { useState } from "react";
 
 import type { ModeCompositionLayer, ModeCompositionResource, ModeFieldComponent, ModeFieldRepresentation } from "@/kernel/visualization/ModeCompositionController";
 import { Button } from "@/shared/ui/Button";
+import { Input } from "@/shared/ui/Input";
 import {
   Select,
   SelectContent,
@@ -283,12 +284,12 @@ function ModeCompositionObjectLayerEditor({
         <FieldRow label="Field lifecycle" value={layer?.enabled ? "Preparing/ready state is owned by the render plan." : "idle"} />
         <Button disabled={!canEnable} size="sm" type="button" variant="primary" onClick={enableLayer}>Enable mode layer</Button>
       </InspectorGroup>
-      <InspectorGroup title="Mode source" badge={selectedMode?.modeId ?? "Unavailable"}>
+      <InspectorGroup title="Mode source" badge={selectedMode?.modeId ?? "—"}>
         <div className="fm-mode-composition-inspector__controls">
           <label className="fm-mode-composition-inspector__control"><span>Mode sample</span><Select value={sample?.sampleId ?? ""} onValueChange={(value) => { setSampleId(value); const next = samples.find((candidate) => candidate.sampleId === value); setModeId(next?.modes[0]?.modeId ?? ""); }}><SelectTrigger aria-label="Mode sample"><SelectValue /></SelectTrigger><SelectContent className="fm-inspector-select-content">{samples.map((candidate) => <SelectItem key={candidate.sampleId} value={candidate.sampleId}>{candidate.label}</SelectItem>)}</SelectContent></Select></label>
           <label className="fm-mode-composition-inspector__control"><span>Mode</span><Select value={selectedMode?.modeId ?? ""} onValueChange={setModeId}><SelectTrigger aria-label="Mode selection"><SelectValue /></SelectTrigger><SelectContent className="fm-inspector-select-content">{sample?.modes.map((mode) => <SelectItem key={mode.modeId} value={mode.modeId}>{`Mode ${mode.rawModeIndex ?? mode.modeId} · ${formatFrequency(mode.frequencyHz)}`}</SelectItem>)}</SelectContent></Select></label>
         </div>
-        <FieldRow label="Mode field" value={selectedMode?.fieldId ?? "Unavailable"} />
+        <FieldRow label="Mode field" value={selectedMode?.fieldId ?? "—"} />
         <FieldRow label="Residual" value={formatResidual(selectedMode?.residualNorm)} />
       </InspectorGroup>
       <InspectorGroup title="Component and representation">
@@ -302,7 +303,7 @@ function ModeCompositionObjectLayerEditor({
       <InspectorGroup title="Phase and animation">
         <div className="fm-mode-composition-inspector__controls">
           <label className="fm-mode-composition-inspector__control"><span>Phase (rad)</span><Slider aria-label="Phase (rad)" valueText={(v) => `${v.toFixed(2)} rad`} disabled={!layer} max={Math.PI} min={-Math.PI} step={0.01} value={[layer?.phase_rad ?? 0]} onValueChange={([phase_rad]) => updateLayer({ phase_rad })} /></label>
-          <label className="fm-mode-composition-inspector__control"><span>Animation rate (Hz)</span><input aria-label="Animation rate (Hz)" className="fm-mode-composition-inspector__number" disabled={!layer} min="0" step="0.1" type="number" value={layer?.animation.rate_hz ?? 0} onChange={(event) => { const value = event.currentTarget.value; if (value === "" || !layer) return; const rate_hz = Number(value); if (Number.isFinite(rate_hz) && rate_hz >= 0) updateLayer({ animation: { ...layer.animation, rate_hz } }); }} /></label>
+          <label className="fm-mode-composition-inspector__control"><span>Animation rate (Hz)</span><Input aria-label="Animation rate (Hz)" className="fm-mode-composition-inspector__number" disabled={!layer} min="0" step="0.1" type="number" value={layer?.animation.rate_hz ?? 0} onChange={(event) => { const value = event.currentTarget.value; if (value === "" || !layer) return; const rate_hz = Number(value); if (Number.isFinite(rate_hz) && rate_hz >= 0) updateLayer({ animation: { ...layer.animation, rate_hz } }); }} /></label>
           <div className="fm-mode-composition-inspector__inline-control"><Switch aria-label="Animate mode layer" checked={layer?.animation.enabled ?? false} disabled={!layer} onCheckedChange={(enabled) => layer && updateLayer({ animation: { ...layer.animation, enabled } })} /><span>Animate mode layer</span></div>
         </div>
       </InspectorGroup>

@@ -141,7 +141,10 @@ export function FmrModalSpectrumInspectorPanel(props: InspectorPanelProps) {
           value="shared across all FMR modes; selecting a mode changes field data only"
         />
         <FieldRow label="Chart route" value={summary.modalChartRoute} />
-        <FieldRow label="Scientific trust" value={view.trust} />
+        <FieldRow
+          label="Scientific trust"
+          value={view.trust === "unknown" ? "unverified" : view.trust}
+        />
         <FieldRow
           label="Selected mode"
           value={view.selectedModeKey ?? "none"}
@@ -150,7 +153,7 @@ export function FmrModalSpectrumInspectorPanel(props: InspectorPanelProps) {
       </InspectorGroup>
       <InspectorGroup
         title="FMR Modal Spectrum Provenance"
-        badge={view.trust}
+        badge={view.trust === "unknown" ? "unverified" : view.trust}
       >
         {view.provenance.map((item) => (
           <FieldRow key={item.label} label={item.label} value={item.value} />
@@ -260,9 +263,9 @@ function FmrResonanceBrowser({
           </div>
           <div className="fm-frequency-domain-resonance-card__actions">
             <Button
+              aria-label={`Inspect sample ${point.sampleIndex} mode ${point.rawModeIndex}`}
               className="fm-inspector-action-button"
               size="sm"
-              title="Open this eigen mode inspector"
               type="button"
               variant="secondary"
               onClick={() => onSelectMode(point)}
@@ -271,14 +274,11 @@ function FmrResonanceBrowser({
               <span>Inspect</span>
             </Button>
             <Button
+              aria-label={`Plot sample ${point.sampleIndex} mode ${point.rawModeIndex} in 3D`}
               className="fm-inspector-action-button"
               disabled={!eigenModeFieldAvailable(point)}
+              disabledReason="This mode has no linked 3D field payload"
               size="sm"
-              title={
-                eigenModeFieldAvailable(point)
-                  ? "Plot this modal resonance in 3D"
-                  : "This mode has no linked 3D field payload"
-              }
               type="button"
               variant="primary"
               onClick={() => onPlotMode(point)}

@@ -20,6 +20,7 @@ import { isFlowMajorTensorDescriptor, normalizeTensorProjection } from "@/kernel
 import { resolveCanonicalQuantityId, quantityUnitForColorbar, quantityCatalogEntrySpatialProjections } from "@/kernel/api/quantityIds";
 import { primitiveMonoColorForRole } from "@/kernel/visualization/primitiveSurfaceColor";
 import { Button } from "@/shared/ui/Button";
+import { Input } from "@/shared/ui/Input";
 import {
   SegmentedControl,
 } from "@/shared/ui/SegmentedControl";
@@ -94,11 +95,47 @@ import {
 } from "../visualization/VisualizationInspectorControls";
 import { surfaceFieldStatus } from "./ObjectVisualizationHelpers";
 import { FeedbackBanner } from "../primitives/FeedbackBanner";
-import { FormField } from "../primitives/FormField";
 import { FieldRow } from "../primitives/FieldRow";
 import { InspectorGroup } from "../primitives/InspectorGroup";
 import { colorValueLabel, computedRgbToHex, isThemeColorToken } from "@/shared/color/colorValueLabel";
 import { InspectorPropertyRow } from "../primitives/InspectorPropertyRow";
+
+function VisualizationSelectRow({
+  disabled,
+  items,
+  label,
+  onValueChange,
+  placeholder,
+  value,
+}: {
+  disabled?: boolean;
+  items: ReadonlyArray<{ label: string; value: string }>;
+  label: string;
+  onValueChange: (value: string) => void;
+  placeholder?: string;
+  value: string;
+}) {
+  return (
+    <InspectorPropertyRow label={label}>
+      <Select
+        disabled={disabled}
+        value={value || undefined}
+        onValueChange={onValueChange}
+      >
+        <SelectTrigger aria-label={label}>
+          <SelectValue placeholder={placeholder ?? "Select option"} />
+        </SelectTrigger>
+        <SelectContent>
+          {items.map((item) => (
+            <SelectItem key={item.value} value={item.value}>
+              {item.label}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+    </InspectorPropertyRow>
+  );
+}
 
 const GEOMETRY_SCOPES = [
   { label: "Surface", value: "surface" },
@@ -405,44 +442,32 @@ export function VisualizationSurfaceColoringSection({
           message={regionFieldWarning}
         />
       ) : null}
-      <FormField
+      <VisualizationSelectRow
         disabled={sectionDisabled("surface-coloring")}
+        items={resolveSurfaceColorSourceItems(settings.activeQuantityId)}
         label="Color source"
-        type="select"
         value={settings.surfaceColorSource}
-        onChange={(event) => {
-          const surfaceColorSource = event.target.value as SurfaceColorSource;
+        onValueChange={(nextValue) => {
+          const surfaceColorSource = nextValue as SurfaceColorSource;
           if (surfaceColorSource !== "solid") {
             onFieldCatalogRequest();
           }
           void patch({ surfaceColorSource });
         }}
-      >
-        {resolveSurfaceColorSourceItems(settings.activeQuantityId).map((source) => (
-          <option key={source.value} value={source.value}>
-            {source.label}
-          </option>
-        ))}
-      </FormField>
-      <FormField
+      />
+      <VisualizationSelectRow
         disabled={
           isFieldPending("surfaceProjectionMode") ||
           sectionDisabled("surface-coloring") ||
           settings.surfaceColorSource === "solid"
         }
+        items={SURFACE_FIELD_PROJECTION_ITEMS}
         label="Projection"
-        type="select"
         value={settings.surfaceProjectionMode}
-        onChange={(event) =>
-          void patch(surfaceFieldProjectionModePatch(event.target.value))
+        onValueChange={(nextValue) =>
+          void patch(surfaceFieldProjectionModePatch(nextValue))
         }
-      >
-        {SURFACE_FIELD_PROJECTION_ITEMS.map((item) => (
-          <option key={item.value} value={item.value}>
-            {item.label}
-          </option>
-        ))}
-      </FormField>
+      />
       {showFieldMeta ? (
         <ScalarColorbarControl
           disabled={isFieldPending("scalarColorPalette") || sectionDisabled("surface-coloring")}
@@ -572,35 +597,23 @@ export function ScalarColorbarControl({
         : "loading field range";
   return (
     <div className="fm-inspector-colorbar-control">
-      <FormField
+      <VisualizationSelectRow
         disabled={disabled}
+        items={SCALAR_COLOR_PALETTE_ITEMS}
         label="Color map"
-        type="select"
         value={palette}
-        onChange={(event) => void patch(scalarColorPalettePatch(event.target.value))}
-      >
-        {SCALAR_COLOR_PALETTE_ITEMS.map((item) => (
-          <option key={item.value} value={item.value}>
-            {item.label}
-          </option>
-        ))}
-      </FormField>
+        onValueChange={(nextValue) => void patch(scalarColorPalettePatch(nextValue))}
+      />
       {supportsDisplayUnitToggle ? (
-        <FormField
+        <VisualizationSelectRow
           disabled={disabled}
+          items={displayUnitItems}
           label="Display unit"
-          type="select"
           value={effectiveDisplayUnit}
-          onChange={(event) =>
-            setDisplayUnit(event.target.value as ScalarColorbarDisplayUnit)
+          onValueChange={(nextValue) =>
+            setDisplayUnit(nextValue as ScalarColorbarDisplayUnit)
           }
-        >
-          {displayUnitItems.map((item) => (
-            <option key={item.value} value={item.value}>
-              {item.label}
-            </option>
-          ))}
-        </FormField>
+        />
       ) : null}
       <div role="img"
         className="fm-inspector-colorbar"
@@ -785,22 +798,17 @@ export function VisualizationQuantitySection({
     </p> : null}
     {isFlowMajorTensorDescriptor(descriptor) ? (
       <>
-      <FormField
+      <VisualizationSelectRow
         disabled={!settings.visible || isFieldPending("tensorProjection")}
-        inline
+        items={tensorOptions}
         label="Tensor projection"
-        type="select"
+        placeholder="Select tensor projection"
         value={settings.tensorProjection ?? ""}
-        onChange={(event) => {
-          const tensorProjection = normalizeTensorProjection(event.target.value);
+        onValueChange={(nextValue) => {
+          const tensorProjection = normalizeTensorProjection(nextValue);
           if (tensorProjection && tensorOptions.some((option) => option.value === tensorProjection)) void patch({ tensorProjection, surfaceColorSource: "colormap" });
         }}
-      >
-        <option disabled value="">Select tensor projection</option>
-        {tensorOptions.map((option) => (
-          <option key={option.value} value={option.value}>{option.label}</option>
-        ))}
-      </FormField>
+      />
       </>
     ) : null}
     </>
@@ -900,7 +908,7 @@ export function VisualizationVectorsSection({
     label: string;
     vectorsVisible: boolean;
   }>;
-  onTogglePartVectors?: (visible: boolean) => void;
+  onTogglePartVectors?: (partId: string, visible: boolean) => void;
   patch: PatchVisualizationTarget;
   patchColor: (field: "vectorMonoColor", value: string) => void;
   patchNumber: (
@@ -1142,18 +1150,20 @@ export function VisualizationVectorsSection({
         <fieldset className="fm-visualization-part-toggles" aria-label="Object target vector visibility">
           <span className="fm-visualization-part-toggles__label">Object surfaces</span>
           {meshParts.map((part) => (
-            <label key={part.id} className="fm-visualization-part-toggle">
-              <input
-                type="checkbox"
+            <div key={part.id} className="fm-visualization-part-toggle flex items-center justify-between gap-2">
+              <div className="min-w-0">
+                <span className="block truncate">{part.label}</span>
+                <span className="fm-visualization-part-toggle__target block text-xs text-fm-muted">
+                  {part.actionTargetLabel}
+                </span>
+              </div>
+              <Switch
+                aria-label={`Toggle vectors on ${part.label}`}
                 checked={part.vectorsVisible}
                 disabled={vectorsUnavailable || isFieldPending("vectorsVisible")}
-                onChange={(e) => onTogglePartVectors(e.target.checked)}
+                onCheckedChange={(checked) => onTogglePartVectors(part.id, checked)}
               />
-              <span>{part.label}</span>
-              <span className="fm-visualization-part-toggle__target">
-                {part.actionTargetLabel}
-              </span>
-            </label>
+            </div>
           ))}
         </fieldset>
       )}
@@ -1357,7 +1367,7 @@ export function ColorField({
           ref={swatchRef}
           style={value ? { background: value } : undefined}
         />
-        <input
+        <Input
           aria-label={`${label} picker`}
           className="fm-viz-color-swatch h-fm-control-sm w-fm-control-sm shrink-0 cursor-pointer rounded-fm-control border border-fm-subtle bg-fm-canvas p-1 disabled:cursor-not-allowed disabled:border-fm-disabled-border disabled:bg-fm-disabled disabled:opacity-100"
           defaultValue={themeToken ? undefined : colorPickerInputValue(value)}
@@ -1369,7 +1379,7 @@ export function ColorField({
           onFocus={seedPicker}
           onPointerDown={seedPicker}
         />
-        <input
+        <Input
           aria-label={`${label} value`}
           className={cn(
             "min-w-0 flex-1 font-fm-mono",
@@ -1377,7 +1387,6 @@ export function ColorField({
           )}
           disabled={disabled}
           placeholder={colorValueLabel(value)}
-          title={value}
           type="text"
           value={themeToken ? "" : value}
           onChange={(event) => onChange(event.currentTarget.value)}

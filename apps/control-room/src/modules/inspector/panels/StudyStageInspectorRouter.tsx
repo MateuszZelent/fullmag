@@ -37,6 +37,10 @@ import { summarizeMaskFieldDriveStage } from "./stages/maskFieldDriveStageSummar
 import { StageInitialStateSelector } from "./stages/StageInitialStateSelector";
 import { StageTextureAssignmentsEditor } from "./stages/StageTextureAssignmentsEditor";
 import type { FrequencyDomainAuthoringView } from "./stages/StageInspectorFrame";
+import {
+  EigenmodesStageInspectorPanel,
+  FrequencyResponseStageInspectorPanel,
+} from "./stages/SpectralStageSpecs";
 import { validateStudyWorkflow } from "./stages/studyWorkflowState";
 
 export function StudyStageInspectorRouter({ selection }: InspectorPanelProps) {
@@ -383,7 +387,7 @@ function makeFrequencyDomainStagePanel(displayName: string) {
 }
 
 export const EigenmodesStageOverviewInspectorPanel =
-  makeFrequencyDomainStagePanel("EigenmodesStageOverviewInspectorPanel");
+  EigenmodesStageInspectorPanel;
 export const EigenmodesSetupStageInspectorPanel =
   makeFrequencyDomainStagePanel("EigenmodesSetupStageInspectorPanel");
 export const EigenmodesCalculationModeStageInspectorPanel =
@@ -406,7 +410,7 @@ export const EigenmodesDiagnosticsStageInspectorPanel =
   makeFrequencyDomainStagePanel("EigenmodesDiagnosticsStageInspectorPanel");
 
 export const FrequencyResponseStageOverviewInspectorPanel =
-  makeFrequencyDomainStagePanel("FrequencyResponseStageOverviewInspectorPanel");
+  FrequencyResponseStageInspectorPanel;
 export const FrequencyResponseSetupStageInspectorPanel =
   makeFrequencyDomainStagePanel("FrequencyResponseSetupStageInspectorPanel");
 export const FrequencyResponseCalculationModeStageInspectorPanel =

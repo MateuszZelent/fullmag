@@ -4,6 +4,11 @@ import { BookOpen, Copy, Download } from "lucide-react";
 import { useState } from "react";
 
 import { Button } from "@/shared/ui/Button";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/shared/ui/Tooltip";
 
 import { copyScript, saveScriptFile } from "../model/scriptExport";
 import {
@@ -17,6 +22,7 @@ import { estimateFor, templateScript, templateScriptFileName, type StudyTemplate
 import type { ComputeProbeState } from "../model/types";
 import { CreateProjectAction } from "../ui/CreateProjectAction";
 import { SolverBadge } from "../ui/SolverBadge";
+import { StartInspectorTemplateFrame } from "./StartScreenInspectorSpecs";
 
 export function TemplateDetails({
   template,
@@ -59,16 +65,45 @@ export function TemplateDetails({
   };
 
   return (
-    <aside aria-label="Template details" className="fm-start__inspector fm-start-inspector">
-      <header className="fm-start-inspector__head">
-        <h2 className="fm-start-inspector__name">{template.name}</h2>
-        <div className="fm-start-chips">
-          <SolverBadge solver={template.solver} />
-          <span className="fm-start-chip" title={estimate.note}>
-            {estimate.text}
-          </span>
+    <StartInspectorTemplateFrame
+      ariaLabel="Template details"
+      breadcrumbs={["Start", "Templates", template.name]}
+      customIdentity={
+        <div className="fm-start-inspector__head">
+          <h2 className="fm-start-inspector__name">{template.name}</h2>
+          <div className="fm-start-chips">
+            <SolverBadge solver={template.solver} />
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <span className="fm-start-chip">{estimate.text}</span>
+              </TooltipTrigger>
+              <TooltipContent>{estimate.note}</TooltipContent>
+            </Tooltip>
+          </div>
         </div>
-      </header>
+      }
+      footer={
+        <>
+          <div className="fm-start-inspector__foot">
+            <Button
+              className="fm-start-inspector__open"
+              disabled={!create.available || busy}
+              onClick={() => void createScript()}
+              type="button"
+              variant="primary"
+            >
+              {busy ? "Waiting for the Save dialog…" : "Create script from template…"}
+            </Button>
+          </div>
+          {create.reason ? (
+            <p className="fm-start-inspector__note fm-start-inspector__footnote">{create.reason}</p>
+          ) : null}
+        </>
+      }
+      specId="start.template"
+      title={template.name}
+      typeLabel="Study template"
+    >
       <div className="fm-start-inspector__body">
         <p className="fm-start-inspector__note">{template.description}</p>
         <section className="fm-start-kv">
@@ -85,13 +120,15 @@ export function TemplateDetails({
         <section className="fm-start-kv">
           <h3 className="fm-start-kv__title">Reproduces</h3>
           <p className="fm-start-inspector__note">{template.reference}</p>
-          <button
+          <Button
             className="fm-start-link fm-start-template__docs"
             onClick={() => startScreenStore.requestDocs(template.docsPage)}
+            size="sm"
             type="button"
+            variant="ghost"
           >
             <BookOpen aria-hidden="true" size={12} /> Read the documentation
-          </button>
+          </Button>
         </section>
         {script !== null ? (
           <section className="fm-start-kv">
@@ -126,21 +163,6 @@ export function TemplateDetails({
           {message ? <p className="fm-start-notice fm-start-notice--warning">{message}</p> : null}
         </div>
       </div>
-      <footer className="fm-start-inspector__foot">
-        <Button
-          className="fm-start-inspector__open"
-          disabled={!create.available || busy}
-          onClick={() => void createScript()}
-          title={create.reason ?? undefined}
-          type="button"
-          variant="primary"
-        >
-          {busy ? "Waiting for the Save dialog…" : "Create script from template…"}
-        </Button>
-      </footer>
-      {create.reason ? (
-        <p className="fm-start-inspector__note fm-start-inspector__footnote">{create.reason}</p>
-      ) : null}
-    </aside>
+    </StartInspectorTemplateFrame>
   );
 }

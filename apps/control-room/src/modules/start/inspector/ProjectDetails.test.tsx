@@ -171,10 +171,10 @@ describe("ProjectDetails Overview", () => {
     }
   });
 
-  it("reads 'unavailable' for a field the backend did not send, when it sent a summary", () => {
+  it("omits optional fields the backend did not send instead of printing unavailable", () => {
     const html = render({ detail: ready() });
-    expect(html).toMatch(/Periodicity<\/dt><dd>unavailable</);
-    expect(html).toMatch(/Excitation<\/dt><dd>unavailable</);
+    expect(html).not.toContain("unavailable");
+    expect(html).not.toContain("Periodicity");
   });
 
   it("leaves absent fields out for the desktop's own summary", () => {

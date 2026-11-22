@@ -245,7 +245,7 @@ export function ReferenceImportSection() {
           </InspectorPropertyRow>
           <p className="text-fm-xs text-fm-muted">
             {points?.ok
-              ? `${points.points.length} points. The path column is read as the chart's path coordinate; the comparison status stays unknown until reference metadata is recorded.`
+              ? `${points.points.length} points. The path column is read as the chart's path coordinate; the comparison status remains unverified until reference metadata is recorded.`
               : points?.reason}
             {table.skippedRowCount > 0 ? ` ${table.skippedRowCount} non-numeric rows were skipped.` : ""}
           </p>

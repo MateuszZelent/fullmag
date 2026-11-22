@@ -4,6 +4,11 @@ import { Play } from "lucide-react";
 import { useEffect, useId, useState } from "react";
 
 import { Button } from "@/shared/ui/Button";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/shared/ui/Tooltip";
 
 import { selectScriptBanner } from "../model/bannerModel";
 import { formatBytes, formatOpened } from "../model/recentIndex";
@@ -28,6 +33,7 @@ import { InspectorActionBar, InspectorHeader, InspectorPanel, InspectorTabs, Run
 import { ScriptRunPanel } from "./ScriptRunPanel";
 import { scriptFacts } from "./ScriptInspector.model";
 import { scriptMenus, READ_ONLY_REASON, scriptChecks } from "./ScriptInspector.presentation";
+import { StartInspectorTemplateFrame } from "./StartScreenInspectorSpecs";
 
 export type ScriptTab = "overview" | "history" | "runs";
 
@@ -241,42 +247,90 @@ export function ScriptInspector({
   const showRunNote = runner.phase.kind !== "idle";
 
   return (
-    <aside aria-label="Script details" className="fm-start__inspector fm-start-inspector" data-kind="script">
-      <div
-        aria-label={previewSrc ? `Last result of ${item.name}` : undefined}
-        className="fm-start-preview"
-        role={previewSrc ? "img" : undefined}
-      >
-        <span className="fm-start-preview__label">Last result</span>
-        <ProjectThumb eager size="preview" src={previewSrc} status={item.status === "missing" ? "missing" : "ready"} />
-      </div>
-
-      <InspectorHeader
-        chips={
-          <>
-            <span className="fm-start-badge fm-start-badge--script" title="Python script">
-              .py
-            </span>
-            {item.status !== "ready" ? <StatusPill status={item.status} /> : null}
-            {chip ? <StatusPill label={chip.label} status={chip.status} title={chip.title} /> : null}
-            {script?.syntax && !script.syntax.ok ? (
-              <StatusPill label="Syntax error" status="failed" title="Python could not parse the script" />
-            ) : null}
-          </>
-        }
-        moreActions={menus.more}
-        name={item.name}
-        onCopyFailed={() => setNotice({ tone: "error", text: "Could not copy the path to the clipboard." })}
-        onTogglePin={() => void run(() => onTogglePin(item.id, !item.pinned))}
-        path={path}
-        pinDisabledReason={readOnly ? READ_ONLY_REASON : null}
-        pinned={item.pinned}
-      />
-
-      <ContextBanner banner={banner} />
-
-      <InspectorTabs baseId={baseId} label="Script sections" onChange={setTab} tabs={TABS} value={tab} />
-
+    <StartInspectorTemplateFrame
+      ariaLabel="Script details"
+      breadcrumbs={["Start", "Scripts", item.name]}
+      customIdentity={
+        <InspectorHeader
+          chips={
+            <>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <span className="fm-start-badge fm-start-badge--script">.py</span>
+                </TooltipTrigger>
+                <TooltipContent>Python script</TooltipContent>
+              </Tooltip>
+              {item.status !== "ready" ? <StatusPill status={item.status} /> : null}
+              {chip ? <StatusPill label={chip.label} status={chip.status} title={chip.title} /> : null}
+              {script?.syntax && !script.syntax.ok ? (
+                <StatusPill label="Syntax error" status="failed" title="Python could not parse the script" />
+              ) : null}
+            </>
+          }
+          moreActions={menus.more}
+          name={item.name}
+          onCopyFailed={() => setNotice({ tone: "error", text: "Could not copy the path to the clipboard." })}
+          onTogglePin={() => void run(() => onTogglePin(item.id, !item.pinned))}
+          path={path}
+          pinDisabledReason={readOnly ? READ_ONLY_REASON : null}
+          pinned={item.pinned}
+        />
+      }
+      dataKind="script"
+      footer={
+        <InspectorActionBar
+          externalDisabledReason={missing ? "The file is missing." : desktopReason}
+          externalLabel="Reveal in folder"
+          onExternal={() => void run(() => onReveal(item.id))}
+          onPrimary={() => void run(() => onOpen(item.id), "Recorded as opened.")}
+          primaryAction="open-script"
+          primaryDisabledReason={
+            missing ? "The file is missing." : (desktopReason ?? (busy ? "Another action is running" : null))
+          }
+          primaryLabel="Open script"
+          splitActions={menus.split}
+        >
+          <Button
+            aria-describedby={runDisabledReason ? `${baseId}-run-reason` : undefined}
+            className="fm-start-inspector__run"
+            data-action="run-script"
+            disabled={runDisabledReason !== null}
+            onClick={() => {
+              setTab("runs");
+              void runner.prepare();
+            }}
+            title={runDisabledReason ?? undefined}
+            type="button"
+            variant="secondary"
+          >
+            <Play aria-hidden="true" size={14} />
+            Run in new window
+          </Button>
+          {runDisabledReason ? (
+            <p className="fm-start-inspector__note" id={`${baseId}-run-reason`}>
+              {runDisabledReason}.
+            </p>
+          ) : null}
+        </InspectorActionBar>
+      }
+      modeTabs={
+        <InspectorTabs baseId={baseId} label="Script sections" onChange={setTab} tabs={TABS} value={tab} />
+      }
+      notices={banner ? <ContextBanner banner={banner} /> : undefined}
+      preview={
+        <div
+          aria-label={previewSrc ? `Last result of ${item.name}` : undefined}
+          className="fm-start-preview"
+          role={previewSrc ? "img" : undefined}
+        >
+          <span className="fm-start-preview__label">Last result</span>
+          <ProjectThumb eager size="preview" src={previewSrc} status={item.status === "missing" ? "missing" : "ready"} />
+        </div>
+      }
+      specId="start.script"
+      title={item.name}
+      typeLabel="Python script"
+    >
       <InspectorPanel baseId={baseId} tab={tab}>
         {showRunNote ? <ScriptRunPanel controller={runner} executionAvailability={executionAvailability} /> : null}
 
@@ -389,41 +443,6 @@ export function ScriptInspector({
           <div className="fm-start-banner__copy">{notice.text}</div>
         </div>
       ) : null}
-
-      <InspectorActionBar
-        externalDisabledReason={missing ? "The file is missing." : desktopReason}
-        externalLabel="Reveal in folder"
-        onExternal={() => void run(() => onReveal(item.id))}
-        onPrimary={() => void run(() => onOpen(item.id), "Recorded as opened.")}
-        primaryAction="open-script"
-        primaryDisabledReason={
-          missing ? "The file is missing." : (desktopReason ?? (busy ? "Another action is running" : null))
-        }
-        primaryLabel="Open script"
-        splitActions={menus.split}
-      >
-        <Button
-          aria-describedby={runDisabledReason ? `${baseId}-run-reason` : undefined}
-          className="fm-start-inspector__run"
-          data-action="run-script"
-          disabled={runDisabledReason !== null}
-          onClick={() => {
-            setTab("runs");
-            void runner.prepare();
-          }}
-          title={runDisabledReason ?? undefined}
-          type="button"
-          variant="secondary"
-        >
-          <Play aria-hidden="true" size={14} />
-          Run in new window
-        </Button>
-        {runDisabledReason ? (
-          <p className="fm-start-inspector__note" id={`${baseId}-run-reason`}>
-            {runDisabledReason}.
-          </p>
-        ) : null}
-      </InspectorActionBar>
-    </aside>
+    </StartInspectorTemplateFrame>
   );
 }

@@ -21,7 +21,7 @@ export function buildRuntimeJobTree(
     resourceRef: descriptor.detail.key,
     runtimeDescriptorId: descriptor.id,
     runtimeResourceKey: descriptor.detail.key,
-    selectable: descriptor.selectable,
+    selectable: descriptor.kind === "stage" ? true : descriptor.selectable,
   }));
   const executionState = aggregateExecution(descriptors);
   const resourceState = aggregateResourceState(descriptors);

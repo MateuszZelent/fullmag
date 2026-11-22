@@ -91,6 +91,7 @@ export interface PhysicsFirstAnalysisFieldTarget {
 export interface PhysicsFirstResultsSnapshot {
   contractGaps?: readonly string[];
   entries: readonly PhysicsFirstResultEntry[];
+  fieldQuantities?: ReadonlyArray<{ id: string; label?: string; unit?: string }>;
   observationFrames?: PostprocessingCatalogSnapshot<ObservationFrameListResource>;
   pinnedObservationFrameId?: string | null;
   postprocessing?: PhysicsFirstPostprocessingSnapshot;
@@ -129,9 +130,11 @@ export interface PhysicsFirstResultResourceInput {
   currentRun?: { revision: number | string; run_id: string } | null;
   datasets?: readonly AnalysisResultDatasetSummaryResource[] | null;
   dispersion?: (ResultResourceLike & { path_metadata?: unknown; text?: string | null }) | null;
+  fieldCatalog?: { quantities?: ReadonlyArray<{ id: string; label?: string; unit?: string }> } | null;
   manifest?: { result_manifest?: ResultManifestLike | null } | null;
   observationFrames?: PostprocessingCatalogSnapshot<ObservationFrameListResource>;
   pinnedObservationFrameId?: string | null;
+  responseMap?: (ResultResourceLike & { payload?: unknown }) | null;
   responseSweep?: (ResultResourceLike & { payload?: unknown }) | null;
   spectrum?: ResultManifestLike | null;
   tableCatalog?: PostprocessingCatalogSnapshot<TableListResource>;
@@ -566,6 +569,10 @@ export function physicsFirstResultsSnapshotFromResources(
           frequencyPoints: ready(input.responseSweep),
           peaks: ready(input.responseSweep),
           responseFields: ready(input.responseSweep),
+          responseMap: ready(
+            input.responseMap ??
+              (record(payload.response_map) as ResultResourceLike | null),
+          ),
           responseSpectrum: ready(input.responseSweep),
         };
   const drive = frequencyContext.evidence?.drive;
@@ -601,6 +608,9 @@ export function physicsFirstResultsSnapshotFromResources(
     snapshot: {
       contractGaps: [...contractGaps],
       entries: [entry],
+      ...(input.fieldCatalog?.quantities?.length
+        ? { fieldQuantities: input.fieldCatalog.quantities }
+        : {}),
       ...(input.observationFrames ? { observationFrames: input.observationFrames } : {}),
       ...(input.pinnedObservationFrameId
         ? { pinnedObservationFrameId: input.pinnedObservationFrameId }
@@ -1478,6 +1488,18 @@ export function buildPhysicsFirstResultsTree(snapshot: PhysicsFirstResultsSnapsh
             dispersionStages,
           ),
           "analysis.dispersion",
+        ),
+        ...(snapshot.fieldQuantities ?? []).map((q) =>
+          node(
+            `results:field:${q.id}`,
+            "results.field_quantity",
+            q.label ?? q.id,
+            resultsId,
+            {
+              ...(q.unit ? { badge: q.unit } : {}),
+              status: "completed",
+            },
+          ),
         ),
         postprocessingRootWithChildren(
           `${resultsId}:analysis-views`,

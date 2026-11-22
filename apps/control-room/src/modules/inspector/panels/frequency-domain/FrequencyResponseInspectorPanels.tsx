@@ -4,7 +4,8 @@ import type { InspectorPanelProps } from "../../inspectorTypes";
 import { FieldRow } from "../../primitives/FieldRow";
 import { InspectorGroup } from "../../primitives/InspectorGroup";
 import { StudyProgressBar } from "../StudyProgressBar";
-import { Activity, Play, RotateCw } from "lucide-react";
+import { Activity, Pin, Play, RotateCw } from "lucide-react";
+import { PIN_MODE_VISUALIZATION_COMMAND } from "@/kernel/analysis-modules/postprocessingCommandContributions";
 import { createCommandContext } from "@/kernel/commands/commandContext";
 import { useKernel } from "@/kernel/KernelContext";
 import { useFrequencyDomainManifestResource } from "@/kernel/resources/studyRuntimeResources";
@@ -223,9 +224,9 @@ function FrequencyResponsePoint3DActions({
             aria-pressed={isActive}
             className="fm-inspector-action-button"
             disabled={disabled}
+            disabledReason={summary.field3DStatus}
             key={entry.view}
             size="sm"
-            title={disabled ? summary.field3DStatus : entry.title}
             type="button"
             variant={isActive ? "primary" : entry.variant}
             onClick={() => plot(entry.view)}
@@ -239,14 +240,34 @@ function FrequencyResponsePoint3DActions({
         aria-label="Stop response field animation"
         className="fm-inspector-action-button"
         disabled={disabled}
+        disabledReason={summary.field3DStatus}
         size="sm"
-        title={disabled ? summary.field3DStatus : "Stop response field animation"}
         type="button"
         variant="secondary"
         onClick={stopAnimation}
       >
         <RotateCw aria-hidden="true" size={13} />
         <span>Stop animate</span>
+      </Button>
+      <Button
+        aria-label="Pin Mode Visualization"
+        className="fm-inspector-action-button"
+        disabled={!summary.fieldId}
+        disabledReason="Response field payload is required to pin a 3D visualization"
+        size="sm"
+        type="button"
+        variant="secondary"
+        onClick={() => {
+          void kernel.commands.execute(
+            PIN_MODE_VISUALIZATION_COMMAND,
+            createCommandContext("inspector", kernel, {
+              sourceDetail: "results.frequency_response.frequency_point",
+            }),
+          );
+        }}
+      >
+        <Pin aria-hidden="true" size={13} />
+        <span>Pin Mode Visualization</span>
       </Button>
     </div>
   );

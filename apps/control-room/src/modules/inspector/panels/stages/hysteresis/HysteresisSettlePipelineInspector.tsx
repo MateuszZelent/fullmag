@@ -1,8 +1,17 @@
 "use client";
 
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/shared/ui/Select";
+import { Textarea } from "@/shared/ui/Textarea";
+
 import { FieldRow } from "../../../primitives/FieldRow";
-import { FormField } from "../../../primitives/FormField";
 import { InspectorGroup } from "../../../primitives/InspectorGroup";
+import { InspectorPropertyRow } from "../../../primitives/InspectorPropertyRow";
 import {
   displayValue,
   isRecord,
@@ -109,38 +118,55 @@ export function HysteresisSettlePipelineInspector({
             <strong>Draft controls</strong>
             <span>Save stage commits changes</span>
           </div>
-          <FormField
-            label="Settle pipeline mode"
-            type="select"
-            value={draft.settlePipelineMode}
-            onChange={(event) =>
-              onUpdateDraft({ settlePipelineMode: event.target.value })
-            }
+          <InspectorPropertyRow
+            className="fm-inspector-form-field"
+            label={<span className="fm-inspector-form-field__label">Settle pipeline mode</span>}
+            layout="stacked"
           >
-            <option value="sequence">Sequence</option>
-            <option value="tree">Tree</option>
-          </FormField>
-          <FormField
-            label="Settle steps JSON"
-            rows={5}
-            type="textarea"
-            value={draft.settleSteps}
-            onChange={(event) =>
-              onUpdateDraft({ settleSteps: event.target.value })
-            }
-          />
+            <Select
+              value={draft.settlePipelineMode}
+              onValueChange={(nextValue) =>
+                onUpdateDraft({ settlePipelineMode: nextValue })
+              }
+            >
+              <SelectTrigger aria-label="Settle pipeline mode">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="sequence">Sequence</SelectItem>
+                <SelectItem value="tree">Tree</SelectItem>
+              </SelectContent>
+            </Select>
+          </InspectorPropertyRow>
+          <InspectorPropertyRow
+            className="fm-inspector-form-field"
+            label={<span className="fm-inspector-form-field__label">Settle steps JSON</span>}
+            layout="stacked"
+          >
+            <Textarea
+              aria-label="Settle steps JSON"
+              rows={5}
+              value={draft.settleSteps}
+              onChange={(event) =>
+                onUpdateDraft({ settleSteps: event.currentTarget.value })
+              }
+            />
+          </InspectorPropertyRow>
           {draft.settlePipelineMode === "tree" ? (
-            <>
-              <FormField
-                label="Fallback branches JSON"
+            <InspectorPropertyRow
+              className="fm-inspector-form-field"
+              label={<span className="fm-inspector-form-field__label">Fallback branches JSON</span>}
+              layout="stacked"
+            >
+              <Textarea
+                aria-label="Fallback branches JSON"
                 rows={4}
-                type="textarea"
                 value={draft.settleBranches}
                 onChange={(event) =>
-                  onUpdateDraft({ settleBranches: event.target.value })
+                  onUpdateDraft({ settleBranches: event.currentTarget.value })
                 }
               />
-            </>
+            </InspectorPropertyRow>
           ) : null}
         </div>
       ) : null}

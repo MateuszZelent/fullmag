@@ -64,11 +64,11 @@ describe("physics-first result root Inspectors", () => {
       />,
     );
 
-    expect(html).toContain("Legacy time-domain selection");
-    expect(html).toContain("legacy/partial");
+    expect(html).toContain('data-slot="inspector-root"');
+    expect(html).toContain("legacy:gamma:peak:7");
     expect(html).toContain("1.250000e+10 Hz");
-    expect(html).toContain("Unavailable from legacy reader");
-    expect(html).toContain("Not published; keep this selection legacy/partial");
+    expect(html).toContain("Source artifact");
+    expect(html).toContain(ANALYSIS_SPIN_WAVE_GAMMA_V1_PATH);
   });
 
   it("separates modal and driven products in the Resonance root", () => {

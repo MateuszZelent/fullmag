@@ -1,8 +1,66 @@
-import { act } from "react";
+import { act, createContext, useContext, type ReactNode } from "react";
 import { createRoot, hydrateRoot } from "react-dom/client";
 import { renderToStaticMarkup } from "react-dom/server";
 import { readFileSync } from "node:fs";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+
+const MockSelectContext = createContext<{
+  ariaLabel?: string;
+  id?: string;
+  onValueChange?: (value: string) => void;
+  value?: string;
+}>({});
+vi.mock("@/shared/ui/Select", () => ({
+  Select: ({
+    children,
+    onValueChange,
+    value,
+  }: {
+    children?: ReactNode;
+    onValueChange?: (value: string) => void;
+    value?: string;
+  }) => {
+    const triggerMeta: { ariaLabel?: string; id?: string } = {};
+    return (
+      <MockSelectContext.Provider value={{ ...triggerMeta, onValueChange, value }}>
+        {children}
+      </MockSelectContext.Provider>
+    );
+  },
+  SelectTrigger: (props: { "aria-label"?: string; id?: string }) => {
+    const ctx = useContext(MockSelectContext);
+    ctx.ariaLabel = props["aria-label"];
+    ctx.id = props.id;
+    return null;
+  },
+  SelectValue: () => null,
+  SelectContent: ({ children }: { children?: ReactNode }) => {
+    const ctx = useContext(MockSelectContext);
+    return (
+      <select
+        aria-label={ctx.ariaLabel}
+        id={ctx.id}
+        value={ctx.value}
+        onChange={(event) => ctx.onValueChange?.(event.currentTarget.value)}
+      >
+        {children}
+      </select>
+    );
+  },
+  SelectItem: ({
+    children,
+    disabled,
+    value,
+  }: {
+    children?: ReactNode;
+    disabled?: boolean;
+    value: string;
+  }) => (
+    <option disabled={disabled} value={value}>
+      {children}
+    </option>
+  ),
+}));
 
 import {
   installSimulationPreparationTestDom,

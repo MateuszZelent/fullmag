@@ -47,10 +47,10 @@ describe("pageProblem", () => {
 describe("FrameScrubber markup", () => {
   it("is a labelled range slider with prev/next and says it is an index, not images", () => {
     const html = render();
-    expect(html).toContain('type="range"');
+    expect(html).toContain('role="slider"');
     expect(html).toContain('aria-label="Saved frame"');
-    expect(html).toContain('max="9"');
-    expect(html).toContain('min="0"');
+    expect(html).toContain('aria-valuemax="9"');
+    expect(html).toContain('aria-valuemin="0"');
     expect(html).toContain('aria-label="Previous frame"');
     expect(html).toContain('aria-label="Next frame"');
     expect(html).toContain(FRAME_INDEX_NOTE);

@@ -23,6 +23,14 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/shared/ui/Dialog";
+import { Input } from "@/shared/ui/Input";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/shared/ui/Select";
 
 import {
   buildViewport3DCameraPoseFromOrientation,
@@ -268,21 +276,23 @@ export function Viewport3DCameraDialog({
               value={draft.distance}
               onChange={(value) => updateScalarDraft("distance", value)}
             />
-            <label className="fm-viewport-camera-dialog__field">
+            <div className="fm-viewport-camera-dialog__field">
               <span>Projection</span>
-              <select
+              <Select
                 value={draft.projection}
-                onChange={(event) =>
-                  updateScalarDraft(
-                    "projection",
-                    event.target.value as CameraProjection,
-                  )
+                onValueChange={(nextValue) =>
+                  updateScalarDraft("projection", nextValue as CameraProjection)
                 }
               >
-                <option value="perspective">Perspective</option>
-                <option value="orthographic">Orthographic</option>
-              </select>
-            </label>
+                <SelectTrigger aria-label="Projection">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="perspective">Perspective</SelectItem>
+                  <SelectItem value="orthographic">Orthographic</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
             <CameraScalarInput
               label="FOV"
               value={draft.fovDegrees}
@@ -388,11 +398,13 @@ function CameraVectorInputs({
       {(["X", "Y", "Z"] as const).map((axis, index) => (
         <label key={axis} className="fm-viewport-camera-dialog__axis-field">
           <span>{axis}</span>
-          <input
+          <Input
+            aria-label={`${label} ${axis}`}
             inputMode="decimal"
             type="number"
             value={values[index]}
-            onChange={(event) => onChange(index, event.target.value)}
+            onChange={(event) => onChange(index, event.currentTarget.value)}
+            onInput={(event) => onChange(index, event.currentTarget.value)}
           />
         </label>
       ))}
@@ -415,11 +427,13 @@ function CameraScalarInput({
     <label className="fm-viewport-camera-dialog__field">
       <span>{label}</span>
       <span className="fm-viewport-camera-dialog__input-with-unit">
-        <input
+        <Input
+          aria-label={label}
           inputMode="decimal"
           type="number"
           value={value}
-          onChange={(event) => onChange(event.target.value)}
+          onChange={(event) => onChange(event.currentTarget.value)}
+          onInput={(event) => onChange(event.currentTarget.value)}
         />
         {unit ? <small>{unit}</small> : null}
       </span>

@@ -3,7 +3,6 @@
 import { useCallback, useMemo } from "react";
 
 import type { HysteresisPointSchema } from "@/kernel/api/apiTypes";
-import { createCommandContext } from "@/kernel/commands/commandContext";
 import {
   clearHysteresisPointSelectionForLive,
   hysteresisPointVectorResourceRef,
@@ -13,6 +12,7 @@ import { Button } from "@/shared/ui/Button";
 
 import { FieldRow } from "../../../primitives/FieldRow";
 import { InspectorGroup } from "../../../primitives/InspectorGroup";
+import { buildStudyCommandContext } from "../../study/useConnectedStudyAuthoring";
 import {
   hysteresisInitialStateActionPresentation,
   hysteresisReplayActionPresentation,
@@ -34,7 +34,7 @@ export function HysteresisSnapshotsInspector({
   const policy = parseJsonRecord(draft?.storagePolicy);
   const savedPoints = points.filter((point) => point.snapshot_id);
   const commandContext = useMemo(
-    () => createCommandContext("inspector", kernel),
+    () => buildStudyCommandContext(kernel),
     [kernel],
   );
   const returnToLive = useCallback(() => {
@@ -119,10 +119,10 @@ export function HysteresisSnapshotsInspector({
             </span>
           </div>
           <Button
+            aria-label="Return the 3D viewport to the live magnetization field"
             size="sm"
             variant="secondary"
             onClick={returnToLive}
-            title="Return the 3D viewport to the live magnetization field"
           >
             Return to live
           </Button>
@@ -200,8 +200,8 @@ function HysteresisSnapshotRow({
           size="sm"
           variant="secondary"
           disabled={replayAction.disabled}
+          disabledReason={replayAction.title}
           onClick={() => onLoadPointIn3D(point)}
-          title={replayAction.title}
           className="fm-hysteresis-inspector-action"
         >
           3D
@@ -210,8 +210,8 @@ function HysteresisSnapshotRow({
           size="sm"
           variant="secondary"
           disabled={initialStateAction.disabled}
+          disabledReason={initialStateAction.title}
           onClick={() => onUsePointAsInitialState(point)}
-          title={initialStateAction.title}
           className="fm-hysteresis-inspector-action"
         >
           Init

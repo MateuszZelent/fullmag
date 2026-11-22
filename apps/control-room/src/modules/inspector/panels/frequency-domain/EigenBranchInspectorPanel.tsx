@@ -326,12 +326,8 @@ function BranchSampleTable({
                     aria-label={`Open sample ${point.sampleIndex} mode ${point.rawModeIndex}`}
                     className="fm-inspector-action-button"
                     disabled={!openModeRef}
+                    disabledReason="Current eigen-mode result owner identity is unavailable"
                     size="sm"
-                    title={
-                      openModeRef
-                        ? `Open sample ${point.sampleIndex} mode ${point.rawModeIndex}`
-                        : "Current eigen-mode result owner identity is unavailable"
-                    }
                     type="button"
                     variant="secondary"
                     onClick={() => {
@@ -345,14 +341,12 @@ function BranchSampleTable({
                     aria-label={`Plot sample ${point.sampleIndex} mode ${point.rawModeIndex} in 3D`}
                     className="fm-inspector-action-button"
                     disabled={!handoff}
-                    size="sm"
-                    title={
+                    disabledReason={
                       !hasModeField
                         ? "Mode field artifact is missing"
-                        : handoff
-                          ? `Plot sample ${point.sampleIndex} mode ${point.rawModeIndex} in 3D`
-                          : "Current mode field owner identity is unavailable"
+                        : "Current mode field owner identity is unavailable"
                     }
+                    size="sm"
                     type="button"
                     variant="primary"
                     onClick={() => plotMode(point, handoff)}
@@ -371,7 +365,6 @@ function BranchSampleTable({
           aria-label="Export branch CSV"
           className="fm-inspector-action-button"
           size="sm"
-          title="Export branch CSV"
           type="button"
           variant="secondary"
           onClick={exportBranchCsv}

@@ -11,16 +11,16 @@ export function FrequencyDomainPublishedIdentityRows({
 }) {
   return (
     <>
-      <FieldRow label="Artifact path" value={state.source.artifactPath ?? "unknown"} />
-      <FieldRow label="Schema version" value={state.source.schemaVersion ?? "unknown"} />
-      <FieldRow label="Content digest" value={state.source.contentDigest ?? "unknown"} />
-      <FieldRow label="Run" value={state.source.runId ?? "unknown"} />
-      <FieldRow label="Stage" value={state.source.stageId ?? "unknown"} />
-      <FieldRow label="Resolved backend" value={state.source.backend ?? "unknown"} />
-      <FieldRow label="Resolved device" value={state.source.device ?? "unknown"} />
-      <FieldRow label="Resolved precision" value={state.source.precision ?? "unknown"} />
-      <FieldRow label="Qualification" value={qualification} />
-      <FieldRow label="Provenance" value={state.source.provenance ?? "unknown"} />
+      <FieldRow label="Artifact path" value={state.source.artifactPath ?? "—"} />
+      <FieldRow label="Schema version" value={state.source.schemaVersion ?? "—"} />
+      <FieldRow label="Content digest" value={state.source.contentDigest ?? "—"} />
+      <FieldRow label="Run" value={state.source.runId ?? "—"} />
+      <FieldRow label="Stage" value={state.source.stageId ?? "—"} />
+      <FieldRow label="Resolved backend" value={state.source.backend ?? "—"} />
+      <FieldRow label="Resolved device" value={state.source.device ?? "—"} />
+      <FieldRow label="Resolved precision" value={state.source.precision ?? "—"} />
+      <FieldRow label="Qualification" value={qualification === "unknown" ? "unverified" : qualification} />
+      <FieldRow label="Provenance" value={state.source.provenance ?? "—"} />
     </>
   );
 }

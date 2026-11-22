@@ -3,7 +3,6 @@
 import { useCallback, useMemo } from "react";
 
 import type { HysteresisPointSchema } from "@/kernel/api/apiTypes";
-import { createCommandContext } from "@/kernel/commands/commandContext";
 
 import {
   clearHysteresisPointSelectionForLive,
@@ -14,6 +13,7 @@ import {
 import { Button } from "@/shared/ui/Button";
 
 import { InspectorGroup } from "../../../primitives/InspectorGroup";
+import { buildStudyCommandContext } from "../../study/useConnectedStudyAuthoring";
 import type { HysteresisInspectorCommonProps } from "./HysteresisInspectorTypes";
 import { HysteresisPointTable } from "./HysteresisPointTable";
 
@@ -34,7 +34,7 @@ export function HysteresisPointsInspector({
   | "targetMetadata"
 >) {
   const commandContext = useMemo(
-    () => createCommandContext("inspector", kernel),
+    () => buildStudyCommandContext(kernel),
     [kernel],
   );
   const returnToLive = useCallback(() => {
@@ -114,12 +114,8 @@ export function HysteresisPointsInspector({
           size="sm"
           variant="secondary"
           disabled={points.length === 0}
+          disabledReason="No hysteresis points are available to export"
           onClick={exportLoopCsv}
-          title={
-            points.length > 0
-              ? "Export the calculated hysteresis points as CSV"
-              : "No hysteresis points are available to export"
-          }
         >
           Export loop CSV
         </Button>
@@ -142,10 +138,10 @@ export function HysteresisPointsInspector({
             </span>
           </div>
           <Button
+            aria-label="Return the 3D viewport to the live magnetization field"
             size="sm"
             variant="secondary"
             onClick={returnToLive}
-            title="Return the 3D viewport to the live magnetization field"
           >
             Return to live
           </Button>

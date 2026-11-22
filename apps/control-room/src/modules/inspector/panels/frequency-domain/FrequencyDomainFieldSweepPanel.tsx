@@ -54,9 +54,24 @@ export function EigenFieldSweepInspectorPanel(props: InspectorPanelProps) {
   return (
     <div data-inspector-surface="eigen-field-sweep" data-status={panelStatus}>
       <InspectorGroup title="Eigen Field Sweep" badge={panelStatus}>
-        <FieldRow label="Resource state" value={state.resource} />
-        <FieldRow label="Artifact state" value={state.artifact} />
-        <FieldRow label="Qualification state" value={typedPayload ? state.qualification : "unsupported"} />
+        <FieldRow
+          label="Resource state"
+          value={state.resource}
+        />
+        <FieldRow
+          label="Artifact state"
+          value={state.artifact === "unknown" ? "—" : state.artifact}
+        />
+        <FieldRow
+          label="Qualification state"
+          value={
+            !typedPayload
+              ? "unsupported"
+              : state.qualification === "unknown"
+                ? "unverified"
+                : state.qualification
+          }
+        />
         <FieldRow label="Selection binding" value={state.binding} />
         <FieldRow
           label="Last-valid snapshot"

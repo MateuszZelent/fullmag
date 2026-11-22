@@ -91,7 +91,7 @@ describe("ResultInspector overview", () => {
   it("links the source and makes the link a button that selects it", () => {
     const html = render();
     const link = button(html, "select-source");
-    expect(link).toContain('title="Show sp4 in the list"');
+    expect(link).toContain('aria-label="Show sp4 in the list"');
     expect(html).toContain("sp4</button>");
     expect(html).toContain("Source hash");
   });
@@ -324,8 +324,8 @@ describe("ResultInspector frame index", () => {
   it("shows the scrubber and a range row when the run wrote an index and the backend can page it", () => {
     const html = render({ detail: withIndex(), loadFrames: vi.fn() });
     expect(html).toContain("Saved frames");
-    expect(html).toContain('type="range"');
-    expect(html).toContain('max="11"');
+    expect(html).toContain('role="slider"');
+    expect(html).toContain('aria-valuemax="11"');
     expect(html).toContain("frame 1 of 12");
     expect(html).toMatch(/Frame index<\/dt><dd>12 frames · 0 ns to 0.011 ns</);
     expect(html).toContain("No image is rendered per frame");
@@ -333,13 +333,13 @@ describe("ResultInspector frame index", () => {
 
   it("offers no scrubber without a pager and says why", () => {
     const html = render({ detail: withIndex() });
-    expect(html).not.toContain('type="range"');
+    expect(html).not.toContain('role="slider"');
     expect(html).toContain("frame index is available from a Fullmag backend");
   });
 
   it("says a folder without an index keeps only counts, and never fakes frames", () => {
     const html = render({ loadFrames: vi.fn() });
-    expect(html).not.toContain('type="range"');
+    expect(html).not.toContain('role="slider"');
     expect(html).toContain("400 frames are saved, but this folder has no frame index");
   });
 

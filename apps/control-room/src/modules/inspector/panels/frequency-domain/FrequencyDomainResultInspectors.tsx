@@ -259,9 +259,9 @@ function CalculationModeActions() {
   return (
     <div className="fm-frequency-domain-table__actions">
       <Button
+        aria-label="Open FMR workbench"
         className="fm-inspector-action-button"
         size="sm"
-        title="Open FMR workbench"
         type="button"
         variant="secondary"
         onClick={() =>
@@ -277,9 +277,9 @@ function CalculationModeActions() {
         <span>Open FMR workbench</span>
       </Button>
       <Button
+        aria-label="Open modal spectrum"
         className="fm-inspector-action-button"
         size="sm"
-        title="Open modal spectrum"
         type="button"
         variant="secondary"
         onClick={() =>
@@ -295,9 +295,9 @@ function CalculationModeActions() {
         <span>Open modal spectrum</span>
       </Button>
       <Button
+        aria-label="Open response sweep"
         className="fm-inspector-action-button"
         size="sm"
-        title="Open response sweep"
         type="button"
         variant="secondary"
         onClick={() =>
@@ -313,9 +313,9 @@ function CalculationModeActions() {
         <span>Open response sweep</span>
       </Button>
       <Button
+        aria-label="Open dispersion"
         className="fm-inspector-action-button"
         size="sm"
-        title="Open dispersion"
         type="button"
         variant="secondary"
         onClick={() =>
@@ -370,10 +370,10 @@ function ResultShortcutActions({
     <div className="fm-frequency-domain-table__actions">
       {actions.map((action) => (
         <Button
+          aria-label={action.title}
           key={action.nodeId}
           className="fm-inspector-action-button"
           size="sm"
-          title={action.title}
           type="button"
           variant="secondary"
           onClick={() => openResult(action)}
@@ -1068,9 +1068,9 @@ function FmrWorkflowActions() {
   return (
     <div className="fm-frequency-domain-table__actions">
       <Button
+        aria-label="Open the modal FMR spectrum inspector"
         className="fm-inspector-action-button"
         size="sm"
-        title="Open the modal FMR spectrum inspector"
         type="button"
         variant="secondary"
         onClick={() =>
@@ -1086,9 +1086,9 @@ function FmrWorkflowActions() {
         <span>Open modal spectrum</span>
       </Button>
       <Button
+        aria-label="Open the driven FMR response sweep inspector"
         className="fm-inspector-action-button"
         size="sm"
-        title="Open the driven FMR response sweep inspector"
         type="button"
         variant="secondary"
         onClick={() =>
@@ -1104,9 +1104,9 @@ function FmrWorkflowActions() {
         <span>Open response sweep</span>
       </Button>
       <Button
+        aria-label="Open the FMR peak table inspector"
         className="fm-inspector-action-button"
         size="sm"
-        title="Open the FMR peak table inspector"
         type="button"
         variant="secondary"
         onClick={() =>
@@ -1122,9 +1122,9 @@ function FmrWorkflowActions() {
         <span>Open FMR peaks</span>
       </Button>
       <Button
+        aria-label="Open the modal-vs-driven FMR comparison inspector"
         className="fm-inspector-action-button"
         size="sm"
-        title="Open the modal-vs-driven FMR comparison inspector"
         type="button"
         variant="primary"
         onClick={() =>
@@ -1755,9 +1755,9 @@ function FmrPeakBrowser({
           </div>
           <div className="fm-frequency-domain-peak-card__actions">
             <Button
+              aria-label="Select this FMR peak"
               className="fm-inspector-action-button"
               size="sm"
-              title="Select this FMR peak"
               type="button"
               variant="secondary"
               onClick={() => onSelectPeak(peak)}
@@ -1766,14 +1766,11 @@ function FmrPeakBrowser({
               <span>Select</span>
             </Button>
             <Button
+              aria-label="Plot this FMR peak field in 3D"
               className="fm-inspector-action-button"
               disabled={!peak.fieldId}
+              disabledReason="This peak has no linked 3D field payload"
               size="sm"
-              title={
-                peak.fieldId
-                  ? "Plot this FMR peak field in 3D"
-                  : "This peak has no linked 3D field payload"
-              }
               type="button"
               variant="primary"
               onClick={() => onPlotPeak(peak)}
@@ -1893,9 +1890,9 @@ function FmrPeakActions({
   return (
     <div className="fm-frequency-domain-table__actions">
       <Button
+        aria-label="Open source result surface"
         className="fm-inspector-action-button"
         size="sm"
-        title="Open source result surface"
         type="button"
         variant="secondary"
         onClick={openSourceInspector}
@@ -1904,10 +1901,11 @@ function FmrPeakActions({
         <span>Open source result</span>
       </Button>
       <Button
+        aria-label={linkedTargetLabel}
         className="fm-inspector-action-button"
         disabled={!summary.hasLinkedTarget}
+        disabledReason="No linked mode or frequency point is recorded"
         size="sm"
-        title={linkedTargetLabel}
         type="button"
         variant="secondary"
         onClick={openLinkedTarget}
@@ -1916,14 +1914,11 @@ function FmrPeakActions({
         <span>{linkedTargetLabel}</span>
       </Button>
       <Button
+        aria-label="Plot linked field in 3D"
         className="fm-inspector-action-button"
         disabled={!summary.fieldId}
+        disabledReason="This FMR peak has no linked field payload"
         size="sm"
-        title={
-          summary.fieldId
-            ? "Plot linked field in 3D"
-            : "This FMR peak has no linked field payload"
-        }
         type="button"
         variant="primary"
         onClick={plotLinkedField}
@@ -1935,7 +1930,7 @@ function FmrPeakActions({
   );
 }
 
-export function FmrComparisonInspectorPanel(props: InspectorPanelProps) {
+export function FmrComparisonInspectorContent(props: InspectorPanelProps) {
   void props;
   const summary = useFmrComparisonSummary();
   const kernel = useKernel();
@@ -2157,14 +2152,11 @@ function FmrComparisonActions({
   return (
     <div className="fm-frequency-domain-table__actions">
       <Button
+        aria-label="Open the modal eigenmode behind this comparison"
         className="fm-inspector-action-button"
         disabled={!summary.modalPeakPoint?.modeRef}
+        disabledReason="No modal eigenmode is linked to this comparison"
         size="sm"
-        title={
-          summary.modalPeakPoint?.modeRef
-            ? "Open the modal eigenmode behind this comparison"
-            : "No modal eigenmode is linked to this comparison"
-        }
         type="button"
         variant="secondary"
         onClick={openModal}
@@ -2173,14 +2165,11 @@ function FmrComparisonActions({
         <span>Open modal mode</span>
       </Button>
       <Button
+        aria-label="Open the driven response point behind this comparison"
         className="fm-inspector-action-button"
         disabled={summary.drivenPeakPoint?.frequencyPointIndex == null}
+        disabledReason="No driven response point is linked to this comparison"
         size="sm"
-        title={
-          summary.drivenPeakPoint?.frequencyPointIndex != null
-            ? "Open the driven response point behind this comparison"
-            : "No driven response point is linked to this comparison"
-        }
         type="button"
         variant="secondary"
         onClick={openDriven}
@@ -2189,14 +2178,11 @@ function FmrComparisonActions({
         <span>Open driven point</span>
       </Button>
       <Button
+        aria-label="Plot the modal comparison field in 3D"
         className="fm-inspector-action-button"
         disabled={!summary.modalPeakPoint?.fieldId}
+        disabledReason="Modal comparison field is missing"
         size="sm"
-        title={
-          summary.modalPeakPoint?.fieldId
-            ? "Plot the modal comparison field in 3D"
-            : "Modal comparison field is missing"
-        }
         type="button"
         variant="primary"
         onClick={plotModal}
@@ -2205,14 +2191,11 @@ function FmrComparisonActions({
         <span>Plot modal field</span>
       </Button>
       <Button
+        aria-label="Plot the driven comparison field in 3D"
         className="fm-inspector-action-button"
         disabled={!summary.drivenPeakPoint?.fieldId}
+        disabledReason="Driven comparison field is missing"
         size="sm"
-        title={
-          summary.drivenPeakPoint?.fieldId
-            ? "Plot the driven comparison field in 3D"
-            : "Driven comparison field is missing"
-        }
         type="button"
         variant="primary"
         onClick={plotDriven}
@@ -2288,14 +2271,11 @@ function FmrComparisonPairBrowser({
           </div>
           <div className="fm-frequency-domain-comparison-card__actions">
             <Button
+              aria-label="Open the modal eigenmode in the inspector"
               className="fm-inspector-action-button"
               disabled={!pair.modalPeak.modeRef}
+              disabledReason="This comparison has no linked modal eigenmode"
               size="sm"
-              title={
-                pair.modalPeak.modeRef
-                  ? "Open the modal eigenmode in the inspector"
-                  : "This comparison has no linked modal eigenmode"
-              }
               type="button"
               variant="secondary"
               onClick={() => onOpenModal(pair)}
@@ -2304,14 +2284,11 @@ function FmrComparisonPairBrowser({
               <span>Modal</span>
             </Button>
             <Button
+              aria-label="Open the driven response point in the inspector"
               className="fm-inspector-action-button"
               disabled={pair.drivenPeak.frequencyPointIndex == null}
+              disabledReason="This comparison has no linked driven response point"
               size="sm"
-              title={
-                pair.drivenPeak.frequencyPointIndex != null
-                  ? "Open the driven response point in the inspector"
-                  : "This comparison has no linked driven response point"
-              }
               type="button"
               variant="secondary"
               onClick={() => onOpenDriven(pair)}
@@ -2320,14 +2297,11 @@ function FmrComparisonPairBrowser({
               <span>Driven</span>
             </Button>
             <Button
+              aria-label="Plot the modal comparison field in 3D"
               className="fm-inspector-action-button"
               disabled={!pair.modalPeak.fieldId}
+              disabledReason="Modal comparison field is missing"
               size="sm"
-              title={
-                pair.modalPeak.fieldId
-                  ? "Plot the modal comparison field in 3D"
-                  : "Modal comparison field is missing"
-              }
               type="button"
               variant="primary"
               onClick={() => onPlotModal(pair)}
@@ -2336,14 +2310,11 @@ function FmrComparisonPairBrowser({
               <span>Plot modal</span>
             </Button>
             <Button
+              aria-label="Plot the driven comparison field in 3D"
               className="fm-inspector-action-button"
               disabled={!pair.drivenPeak.fieldId}
+              disabledReason="Driven comparison field is missing"
               size="sm"
-              title={
-                pair.drivenPeak.fieldId
-                  ? "Plot the driven comparison field in 3D"
-                  : "Driven comparison field is missing"
-              }
               type="button"
               variant="primary"
               onClick={() => onPlotDriven(pair)}
@@ -2585,3 +2556,5 @@ export function FrequencyResponseDiagnosticsResourceInspectorPanel(
 ) {
   return <FrequencyResponseDiagnosticsInspectorPanel {...props} />;
 }
+
+export { FrequencyDomainComparisonResultInspector as FmrComparisonInspectorPanel } from "../physics-first/ResonanceAndDispersionSpecs";

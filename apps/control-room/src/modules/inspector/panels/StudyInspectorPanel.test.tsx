@@ -18,6 +18,74 @@ vi.mock("@radix-ui/react-dialog", async (importOriginal) => {
   };
 });
 
+vi.mock("@radix-ui/react-select", async () => {
+  const React = await import("react");
+  const Ctx = React.createContext<{
+    value?: string;
+    onValueChange?: (next: string) => void;
+  }>({});
+  return {
+    Root: ({
+      children,
+      value,
+      onValueChange,
+    }: {
+      children?: ReactNode;
+      value?: string;
+      onValueChange?: (next: string) => void;
+    }) => (
+      <Ctx.Provider value={{ value, onValueChange }}>
+        <div data-slot="mock-select-root">{children}</div>
+      </Ctx.Provider>
+    ),
+    Group: ({ children }: { children?: ReactNode }) => <div>{children}</div>,
+    Value: ({ placeholder }: { placeholder?: string }) => {
+      const ctx = React.useContext(Ctx);
+      return <span>{ctx.value || placeholder || ""}</span>;
+    },
+    Trigger: ({ children, ...rest }: { children?: ReactNode }) => (
+      <button type="button" {...rest}>
+        {children}
+      </button>
+    ),
+    Icon: ({ children }: { children?: ReactNode }) => <>{children}</>,
+    Portal: ({ children }: { children?: ReactNode }) => <>{children}</>,
+    Content: ({ children }: { children?: ReactNode }) => (
+      <div data-slot="mock-select-content">{children}</div>
+    ),
+    Viewport: ({ children }: { children?: ReactNode }) => <div>{children}</div>,
+    Item: ({
+      children,
+      value,
+      disabled,
+    }: {
+      children?: ReactNode;
+      value: string;
+      disabled?: boolean;
+    }) => {
+      const ctx = React.useContext(Ctx);
+      return (
+        <button
+          aria-selected={ctx.value === value}
+          data-select-value={value}
+          disabled={disabled}
+          role="option"
+          type="button"
+          onClick={() => ctx.onValueChange?.(value)}
+        >
+          {children}
+        </button>
+      );
+    },
+    ItemText: ({ children }: { children?: ReactNode }) => <span>{children}</span>,
+    ItemIndicator: ({ children }: { children?: ReactNode }) => <>{children}</>,
+    Label: ({ children }: { children?: ReactNode }) => <div>{children}</div>,
+    Separator: () => <hr />,
+    ScrollUpButton: () => null,
+    ScrollDownButton: () => null,
+  };
+});
+
 import { CommandDetailDialog, ImportStateDialog, RestoreCheckpointDialog, StudyBoundarySection, StudyCommandButton, StudyRuntimeSection, StudySelectedStageSection, studyInspectorPanelReducer, studyInspectorRuntimeStatusEquals } from "./StudyInspectorPanel";
 import { deriveK0ModalExecutionReadiness, applyStudyDraftsWithPartialFailure } from "./StudyInspectorPanel.model";
 import {

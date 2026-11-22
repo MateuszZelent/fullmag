@@ -793,7 +793,6 @@ function ProjectBatchesPage({ projectId }: { readonly projectId: string }) {
               aria-expanded={selected}
               className="h-auto max-w-full justify-start px-0 py-1 text-left"
               size="sm"
-              title={batch.batch_id}
               variant="ghost"
               onClick={() => selectBatch(batch.batch_id)}
             >
@@ -925,26 +924,26 @@ function ProjectBatchesPage({ projectId }: { readonly projectId: string }) {
                       !task.cancellation_requested && isCancelableTaskLifecycle(task.lifecycle));
                   return (
                     <div className="grid min-w-0 gap-1 border-b border-fm-subtle pb-2 last:border-b-0 last:pb-0" key={batchCase.case_id}>
-                      <div className="flex min-w-0 items-center justify-between gap-2 text-fm-xs">
-                        <span className="truncate font-medium text-fm-primary" title={batchCase.case_id}>
+                      <div className="flex min-w-0 items-center justify-between gap-2 text-xs">
+                        <span className="truncate font-medium text-fm-primary">
                           {batchCase.case_id}
                         </span>
                         <span className="shrink-0 text-fm-muted">{caseStateLabel(batchCase.state)}</span>
                       </div>
-                      <div className="break-words text-fm-xs text-fm-muted">
+                      <div className="break-words text-xs text-fm-muted">
                         {formatParameterTuple(batchCase.parameter_tuple, cases.data?.axes ?? [])}
                       </div>
-                      <div className="truncate text-fm-xs text-fm-muted" title={batchCase.planned_run_id}>
+                      <div className="truncate text-xs text-fm-muted">
                         Planned run: {batchCase.planned_run_id}
                       </div>
                       {publishedRun ? (
                         <>
-                          <div className="truncate text-fm-xs text-fm-muted" title={publishedRun.run_id}>
+                          <div className="truncate text-xs text-fm-muted">
                             Published child run: {publishedRun.run_id}
                           </div>
-                          <div className="text-fm-xs text-fm-muted">
+                          <div className="text-xs text-fm-muted">
                             {publishedRun.catalog_state === "materialized"
-                              ? `Task catalog revision ${publishedRun.catalog_revision ?? "unknown"} · ${publishedRun.tasks.length} task(s)`
+                              ? `Task catalog revision ${publishedRun.catalog_revision ?? "—"} · ${publishedRun.tasks.length} task(s)`
                               : "Task catalog pending materialization"}
                           </div>
                           {publishedRun.catalog_state === "pending_materialization" ? (
@@ -982,7 +981,7 @@ function ProjectBatchesPage({ projectId }: { readonly projectId: string }) {
                             </>
                           ) : null}
                           {publishedRun.tasks.map((task) => (
-                            <div className="truncate text-fm-xs text-fm-muted" key={task.task_id} title={task.task_id}>
+                            <div className="truncate text-xs text-fm-muted" key={task.task_id}>
                               {task.lifecycle}{task.cancellation_requested ? " · cancellation requested" : ""} · {task.task_id}
                             </div>
                           ))}
@@ -1029,9 +1028,9 @@ function ProjectBatchesPage({ projectId }: { readonly projectId: string }) {
                           {selectedRun.error ? <p role="alert">Could not load run details: {selectedRun.error.message}</p> : null}
                           {selectedRunResource ? (
                             <>
-                              <div className="text-fm-xs text-fm-muted">
+                              <div className="text-xs text-fm-muted">
                                 {selectedRunResource.catalog_state === "materialized"
-                                  ? `Task catalog revision ${selectedRunResource.catalog_revision ?? "unknown"}`
+                                  ? `Task catalog revision ${selectedRunResource.catalog_revision ?? "—"}`
                                   : "Task catalog has not been materialized"}
                               </div>
                               {selectedRunResource.tasks.map((task) => {
@@ -1063,7 +1062,7 @@ function ProjectBatchesPage({ projectId }: { readonly projectId: string }) {
                                         ? ` · blocked: ${task.readiness.reason}`
                                         : " · ready"}
                                     </div>
-                                    <div className="truncate text-fm-muted" title={task.task_id}>
+                                    <div className="truncate text-fm-muted">
                                       {task.task_id}
                                     </div>
                                     {cancellationRequested ? (

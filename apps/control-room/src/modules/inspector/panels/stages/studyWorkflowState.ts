@@ -135,8 +135,10 @@ export function resolveStudyWorkflowStateBefore(
 export function validateStudyWorkflow(
   drafts: readonly StudyStageDraft[],
 ): StudyWorkflowValidationIssue[] {
+  if (!Array.isArray(drafts)) return [];
   const issues: StudyWorkflowValidationIssue[] = [];
-  for (const [index, draft] of drafts.entries()) {
+  for (let index = 0; index < drafts.length; index += 1) {
+    const draft = drafts[index]!;
     if (draft.kind !== "run") continue;
     const state = resolveStudyWorkflowStateBefore(drafts, index);
     const responseAnalysis = state.fftResponse?.analysis;

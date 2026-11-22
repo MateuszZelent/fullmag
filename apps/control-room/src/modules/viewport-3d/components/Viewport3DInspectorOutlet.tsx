@@ -5,6 +5,10 @@ import {
   registerViewport3DExportHost,
   registerViewport3DInspectorHost,
 } from "../viewport3dInspectorState";
+import {
+  Viewport3DExportPlaceholder,
+  Viewport3DSettingsPlaceholder,
+} from "./Viewport3DSettingsAndExportSpecs";
 
 export function Viewport3DInspectorOutlet() {
   const release = useRef<(() => void) | null>(null);
@@ -14,9 +18,9 @@ export function Viewport3DInspectorOutlet() {
   }, []);
   return (
     <div className="fm-viewport-inspector-outlet" ref={ref}>
-      <p className="fm-viewport-inspector-outlet__placeholder">
-        Open the 3D viewport to adjust its view settings.
-      </p>
+      <div className="fm-viewport-inspector-outlet__placeholder">
+        <Viewport3DSettingsPlaceholder />
+      </div>
     </div>
   );
 }
@@ -29,9 +33,9 @@ export function Viewport3DExportPanelOutlet() {
   }, []);
   return (
     <div className="fm-viewport-inspector-outlet" ref={ref}>
-      <p className="fm-viewport-inspector-outlet__placeholder">
-        Open the 3D viewport to export a PNG image or 3D model.
-      </p>
+      <div className="fm-viewport-inspector-outlet__placeholder">
+        <Viewport3DExportPlaceholder />
+      </div>
     </div>
   );
 }

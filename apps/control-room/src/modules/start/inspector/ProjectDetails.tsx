@@ -31,6 +31,7 @@ import {
 } from "./InspectorParts";
 import { AuthorsPanel, HistoryPanel, RunsPanel } from "./ProvenancePanels";
 import { resultsDownload } from "./ProvenancePanels.model";
+import { StartInspectorTemplateFrame } from "./StartScreenInspectorSpecs";
 
 const TABS: readonly { readonly id: InspectorTab; readonly label: string }[] = [
   { id: "overview", label: "Overview" },
@@ -194,55 +195,82 @@ export function ProjectDetails({
     : [];
 
   return (
-    <aside aria-label="Project details" className="fm-start__inspector fm-start-inspector">
-      <div
-        aria-label={entry.thumbnail ? `Last result of ${entry.name}` : undefined}
-        className="fm-start-preview"
-        role={entry.thumbnail ? "img" : undefined}
-      >
-        <span className="fm-start-preview__label">Last result</span>
-        <ProjectThumb eager size="preview" src={entry.thumbnail} status={entry.status} />
-      </div>
-
-      <InspectorHeader
-        chips={
-          <>
-            <SolverBadge solver={entry.solver} />
-            <StatusPill status={entry.status} />
-            {entry.revision !== undefined ? (
-              <span className="fm-start-chip">rev {entry.revision}</span>
-            ) : null}
-            {entry.manifestSchemaVersion ? (
-              <span className="fm-start-chip">schema {entry.manifestSchemaVersion}</span>
-            ) : null}
-            {entry.tags?.map((tag) => (
-              <span className="fm-start-chip" key={tag}>
-                #{tag}
-              </span>
-            ))}
-          </>
-        }
-        moreActions={moreActions}
-        name={entry.name}
-        onCopyFailed={() => setNotice("Could not copy the path to the clipboard.")}
-        onTogglePin={() => onTogglePin(entry.projectId, !entry.pinned)}
-        path={entry.path}
-        pinned={entry.pinned ?? false}
-      />
-
-      <ContextBanner
-        banner={banner}
-        onAction={(id) => {
-          if (id === "forget") onForget(entry.projectId);
-        }}
-      />
-
-      <InspectorTabs baseId={baseId} label="Project sections" onChange={setTab} tabs={TABS} value={tab} />
-
+    <StartInspectorTemplateFrame
+      ariaLabel="Project details"
+      breadcrumbs={["Start", "Projects", entry.name]}
+      customIdentity={
+        <InspectorHeader
+          chips={
+            <>
+              <SolverBadge solver={entry.solver} />
+              <StatusPill status={entry.status} />
+              {entry.revision !== undefined ? (
+                <span className="fm-start-chip">rev {entry.revision}</span>
+              ) : null}
+              {entry.manifestSchemaVersion ? (
+                <span className="fm-start-chip">schema {entry.manifestSchemaVersion}</span>
+              ) : null}
+              {entry.tags?.map((tag) => (
+                <span className="fm-start-chip" key={tag}>
+                  #{tag}
+                </span>
+              ))}
+            </>
+          }
+          moreActions={moreActions}
+          name={entry.name}
+          onCopyFailed={() => setNotice("Could not copy the path to the clipboard.")}
+          onTogglePin={() => onTogglePin(entry.projectId, !entry.pinned)}
+          path={entry.path}
+          pinned={entry.pinned ?? false}
+        />
+      }
+      footer={
+        <InspectorActionBar
+          externalDisabledReason={revealReason}
+          externalLabel="Reveal in file manager"
+          onExternal={reveal}
+          onPrimary={open}
+          primaryAction="open-project"
+          primaryDisabledReason={missing ? "The file is missing." : openDisabledReason}
+          primaryLabel={openLabel(entry)}
+          splitActions={splitActions}
+        />
+      }
+      modeTabs={
+        <InspectorTabs baseId={baseId} label="Project sections" onChange={setTab} tabs={TABS} value={tab} />
+      }
+      notices={
+        banner ? (
+          <ContextBanner
+            banner={banner}
+            onAction={(id) => {
+              if (id === "forget") onForget(entry.projectId);
+            }}
+          />
+        ) : undefined
+      }
+      preview={
+        <div
+          aria-label={entry.thumbnail ? `Last result of ${entry.name}` : undefined}
+          className="fm-start-preview"
+          role={entry.thumbnail ? "img" : undefined}
+        >
+          <span className="fm-start-preview__label">Last result</span>
+          <ProjectThumb eager size="preview" src={entry.thumbnail} status={entry.status} />
+        </div>
+      }
+      specId="start.project"
+      title={entry.name}
+      typeLabel="Project archive"
+    >
       <InspectorPanel baseId={baseId} tab={tab}>
         {tab === "overview" ? (
           <>
-            <InspectorOverview listEveryField={project?.summary !== undefined} summary={summary} />
+            <InspectorOverview
+              hasRuns={project ? project.runs.length > 0 : undefined}
+              summary={summary}
+            />
             {detail.kind === "loading" ? (
               <p className="fm-start-inspector__note">Reading the project…</p>
             ) : null}
@@ -281,17 +309,6 @@ export function ProjectDetails({
           <div className="fm-start-banner__copy">{openError}</div>
         </div>
       ) : null}
-
-      <InspectorActionBar
-        externalDisabledReason={revealReason}
-        externalLabel="Reveal in file manager"
-        onExternal={reveal}
-        onPrimary={open}
-        primaryAction="open-project"
-        primaryDisabledReason={missing ? "The file is missing." : openDisabledReason}
-        primaryLabel={openLabel(entry)}
-        splitActions={splitActions}
-      />
-    </aside>
+    </StartInspectorTemplateFrame>
   );
 }

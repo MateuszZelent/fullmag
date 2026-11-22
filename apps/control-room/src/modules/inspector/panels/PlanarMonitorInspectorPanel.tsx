@@ -377,7 +377,6 @@ function CommittedPlanarMonitorEditor({
           <Button
             aria-pressed={pickFaceArmed}
             size="sm"
-            title="Click an object face in the 3D view to place this monitor on it"
             type="button"
             variant={pickFaceArmed ? "primary" : "ghost"}
             onClick={() => planarMonitorFramePreviewStore.setPickFaceArmed(!pickFaceArmed)}

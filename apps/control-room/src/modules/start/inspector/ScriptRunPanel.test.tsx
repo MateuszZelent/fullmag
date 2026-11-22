@@ -84,15 +84,22 @@ describe("ScriptRunPanel", () => {
     const phase: RunPhase = { kind: "ready", handle, preflight: preflight() };
     try {
       await act(async () => root.render(<ScriptRunPanel controller={controller(phase)} />));
-      const device = findElement(container, (element) => element.tagName === "SELECT", "device selector");
-      device.value = "cpu";
-      await act(async () => device.dispatchEvent(new TestEvent("change", { bubbles: true })));
-      expect(device.value).toBe("cpu");
+      const cpuChoice = findElement(
+        container,
+        (element) => element.getAttribute("role") === "radio" && element.getAttribute("data-value") === "cpu",
+        "cpu device radio",
+      );
+      await act(async () => cpuChoice.dispatchEvent(new TestEvent("click", { bubbles: true })));
+      expect(cpuChoice.getAttribute("aria-checked")).toBe("true");
       await act(async () => root.unmount());
       root = createRoot(container as unknown as Element);
       await act(async () => root.render(<ScriptRunPanel controller={controller(phase)} />));
-      const restoredDevice = findElement(container, (element) => element.tagName === "SELECT", "restored device selector");
-      expect(restoredDevice.value).toBe("cpu");
+      const restoredCpu = findElement(
+        container,
+        (element) => element.getAttribute("role") === "radio" && element.getAttribute("data-value") === "cpu",
+        "restored cpu device radio",
+      );
+      expect(restoredCpu.getAttribute("aria-checked")).toBe("true");
     } finally {
       await act(async () => root.unmount());
       dom.restore();
@@ -113,7 +120,9 @@ describe("ScriptRunPanel", () => {
     }
     expect(html).toContain("Review and run");
     // Managed results are the default; next to the script needs its own confirmation.
-    expect(html).toMatch(/type="radio"[^>]*checked=""[^>]*\/><span>In a Fullmag run folder/);
+    expect(html).toMatch(/data-value="managed"[^>]*role="radio"/);
+    expect(html).toContain('data-state="checked"');
+    expect(html).toContain("In a Fullmag run folder");
     expect(html).not.toContain("Write results into a folder beside the script");
   });
 
@@ -123,7 +132,7 @@ describe("ScriptRunPanel", () => {
       unavailableExecutionAvailability,
     );
 
-    expect(html).toMatch(/<option[^>]*disabled=""[^>]*value="gpu"/);
+    expect(html).toMatch(/data-value="gpu"[^>]*disabled=""/);
     expect(html).toContain("GPU only (no CPU fallback) (unavailable)");
     expect(html).toContain("GPU is unavailable");
   });
@@ -143,10 +152,13 @@ describe("ScriptRunPanel", () => {
           executionAvailability={confirmedGpuExecutionAvailability}
         />,
       ));
-      const device = findElement(container, (element) => element.tagName === "SELECT", "device selector");
-      device.value = "gpu";
-      await act(async () => device.dispatchEvent(new TestEvent("change", { bubbles: true })));
-      expect(device.value).toBe("gpu");
+      const gpuChoice = findElement(
+        container,
+        (element) => element.getAttribute("role") === "radio" && element.getAttribute("data-value") === "gpu",
+        "gpu device radio",
+      );
+      await act(async () => gpuChoice.dispatchEvent(new TestEvent("click", { bubbles: true })));
+      expect(gpuChoice.getAttribute("aria-checked")).toBe("true");
 
       await act(async () => root.render(
         <ScriptRunPanel
@@ -154,13 +166,17 @@ describe("ScriptRunPanel", () => {
           executionAvailability={unavailableExecutionAvailability}
         />,
       ));
-      const retainedDevice = findElement(container, (element) => element.tagName === "SELECT", "device selector");
+      const retainedGpu = findElement(
+        container,
+        (element) => element.getAttribute("role") === "radio" && element.getAttribute("data-value") === "gpu",
+        "retained gpu device radio",
+      );
       const runButton = findElement(
         container,
         (element) => element.tagName === "BUTTON" && element.getAttribute("data-action") === "confirm-run",
         "run button",
       );
-      expect(retainedDevice.value).toBe("gpu");
+      expect(retainedGpu.getAttribute("aria-checked")).toBe("true");
       expect(runButton.disabled).toBe(true);
       await act(async () => runButton.dispatchEvent(new TestEvent("click", { bubbles: true })));
       expect(run).not.toHaveBeenCalled();

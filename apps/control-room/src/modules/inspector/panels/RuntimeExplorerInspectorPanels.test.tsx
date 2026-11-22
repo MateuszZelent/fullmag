@@ -114,7 +114,7 @@ describe("Runtime Explorer Inspector panels", () => {
     expect(source).not.toContain("selection.ref.detail");
   });
 
-  it("renders complete resource metadata and explicit unavailable values", async () => {
+  it("renders resource metadata and omits empty storage rows when sizeBytes and cache are null", async () => {
     const html = await renderPanel(
       RuntimeResourceInspectorPanel,
       selection("resources.runtime"),
@@ -124,9 +124,9 @@ describe("Runtime Explorer Inspector panels", () => {
     expect(html).toContain("Resource key");
     expect(html).toContain("generation-4");
     expect(html).toContain("Condition");
-    expect(html).toContain("Cache");
-    expect(html).toContain("Unavailable");
     expect(html).toContain("/runs/run-4");
+    expect(html).not.toContain("SizeUnavailable");
+    expect(html).not.toContain("CacheUnavailable");
   });
 
   it("marks an absent descriptor owner as unavailable and unverified", async () => {
@@ -157,13 +157,24 @@ describe("Runtime Explorer Inspector panels", () => {
   it.each([
     ["run", RuntimeRunJobInspectorPanel],
     ["stage", RuntimeStageJobInspectorPanel],
-    ["command", RuntimeCommandJobInspectorPanel],
   ] as const)("shows lifecycle and execution provenance for every %s job Inspector", async (kind, Panel) => {
     const html = await renderPanel(Panel, selection(`jobs.${kind}`), detail);
 
     expect(html).toContain("Lifecycle status");
     expect(html).toContain("Requested execution");
     expect(html).toContain("Resolved execution");
+  });
+
+  it("renders dedicated Command Execution provenance for jobs.command without empty Requested/Resolved blocks", async () => {
+    const html = await renderPanel(
+      RuntimeCommandJobInspectorPanel,
+      selection("jobs.command"),
+      detail,
+    );
+
+    expect(html).toContain("Command Execution");
+    expect(html).toContain("Lifecycle status");
+    expect(html).not.toContain("Requested execution");
   });
 
   it("renders contract gaps as unavailable rather than healthy", async () => {

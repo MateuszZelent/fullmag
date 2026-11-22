@@ -55,6 +55,7 @@ export function PlanarMonitorDraftInspectorPanel() {
       authoringHistory: kernel.authoringHistory,
       sessionScopeKey: operationSessionScopeKey,
       isCurrentSessionScope: () =>
+        operationSessionScopeKey !== null &&
         kernel.commands.getSessionScopeKey() === operationSessionScopeKey &&
         (historyGeneration === undefined ||
           kernel.authoringHistory?.getGeneration?.() === historyGeneration),

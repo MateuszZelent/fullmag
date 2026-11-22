@@ -40,6 +40,8 @@ const STUDY_EXECUTION_COMMANDS = [
   "study.resume",
   "study.stop",
   "study.skip",
+  "study.compute-observables",
+  "study.materialize-fields",
   "study.compute-fields",
   "study.compute-energies",
 ];

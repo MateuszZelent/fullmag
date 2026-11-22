@@ -136,7 +136,8 @@ vi.mock("@/kernel/visualization/useVisualizationStateResource", () => ({
   },
 }));
 
-vi.mock("@/kernel/resources/geometryLifecycleResources", () => ({
+vi.mock("@/kernel/resources/geometryLifecycleResources", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/kernel/resources/geometryLifecycleResources")>()),
   useFdmMultilayerLayoutResource: () => ({
     data: null,
     error: null,

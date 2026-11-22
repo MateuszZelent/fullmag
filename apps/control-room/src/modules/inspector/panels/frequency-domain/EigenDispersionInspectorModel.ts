@@ -26,6 +26,7 @@ import {
 } from "@/shared/domain/analysis/frequencyDomainChartModels";
 import type { EigenDispersionPoint } from "@/shared/domain/analysis/frequencyDomainChartModels";
 import { formatFrequencyHz, formatFrequencyRangeHz } from "@/shared/domain/analysis/frequencyUnits";
+import { minMaxFinite } from "@/shared/charts/ScientificEChart";
 
 export interface EigenDispersionPointViewModel {
   branchId: string;
@@ -225,9 +226,9 @@ function dispersionValidationIntentSummary(
   const validation = record(manifestPayload?.validation);
   const dispersionValidation = record(validation?.dispersion_validation);
   if (!dispersionValidation) return "not available";
-  const kind = stringValue(dispersionValidation.kind) ?? "unknown";
+  const kind = stringValue(dispersionValidation.kind) ?? "—";
   const analyticModel =
-    stringValue(dispersionValidation.analytic_model) ?? "unknown";
+    stringValue(dispersionValidation.analytic_model) ?? "—";
   const maxK = finiteNumber(dispersionValidation.max_k_rad_per_m);
   const frequencyWindow = record(dispersionValidation.frequency_window_hz);
   const frequencyMin = finiteNumber(frequencyWindow?.min);
@@ -239,7 +240,7 @@ function dispersionValidationIntentSummary(
     .flatMap((scenario) => {
       const scenarioRecord = record(scenario);
       if (!scenarioRecord) return [];
-      const geometry = stringValue(scenarioRecord.geometry) ?? "unknown";
+      const geometry = stringValue(scenarioRecord.geometry) ?? "—";
       const branchId = stringValue(scenarioRecord.branch_id) ?? "unlabelled";
       const sampleIndices = Array.isArray(scenarioRecord.sample_indices)
         ? scenarioRecord.sample_indices.length
@@ -384,11 +385,12 @@ function formatFrequency(valueHz: number | null | undefined): string {
 }
 
 function formatNumberRange(values: readonly number[], unit = ""): string {
-  if (!values.length) return "not available";
-  return `${formatNumber(Math.min(...values))}-${formatNumber(Math.max(...values))}${unit}`;
+  const bounds = minMaxFinite(values);
+  if (!bounds) return "not available";
+  return `${formatNumber(bounds.min)}-${formatNumber(bounds.max)}${unit}`;
 }
 
 function maxFinite(values: readonly number[]): number | null {
-  if (!values.length) return null;
-  return Math.max(...values);
+  const bounds = minMaxFinite(values);
+  return bounds ? bounds.max : null;
 }

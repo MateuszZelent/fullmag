@@ -5,6 +5,7 @@ import { artifactFieldCatalogMatchesOwner, artifactFieldLocatorHasAcceptedGlobal
 import { useVisualizationFieldMeta } from "@/kernel/resources/useVisualizationFieldMeta";
 import { useSessionResourceIdentity } from "@/kernel/resources/useSessionStatus";
 import { Eye } from "lucide-react";
+import { Checkbox } from "@/shared/ui/Checkbox";
 import React, {
   useCallback,
   useEffect,
@@ -65,16 +66,35 @@ import {
 import {
   useVisualizationStateResource,
 } from "@/kernel/visualization/useVisualizationStateResource";
-import {
-  useMeshSharedDomainManifestResource,
-  useMeshRegionMembershipResource,
-  useSceneResource,
-  useDomainMetaResource,
-  useFdmRegionMembershipResource,
-  useFdmRegionMembershipBinaryResource,
-  useFdmMultilayerLayoutResource,
-  useFdmMultilayerLayerActiveMasksResource,
-} from "@/kernel/resources/geometryLifecycleResources";
+import * as geometryLifecycleResources from "@/kernel/resources/geometryLifecycleResources";
+
+const useMeshSharedDomainManifestResource =
+  geometryLifecycleResources.useMeshSharedDomainManifestResource;
+const useSceneResource = geometryLifecycleResources.useSceneResource;
+const useMeshRegionMembershipResource =
+  geometryLifecycleResources.useMeshRegionMembershipResource ??
+  (() => ({ data: null, error: null, revision: null, status: "idle" as const }));
+const useDomainMetaResource =
+  geometryLifecycleResources.useDomainMetaResource ??
+  (() => ({ data: null, error: null, revision: null, status: "idle" as const }));
+const useFdmRegionMembershipResource =
+  geometryLifecycleResources.useFdmRegionMembershipResource ??
+  (() => ({ data: null, error: null, revision: null, status: "idle" as const }));
+const useFdmRegionMembershipBinaryResource =
+  geometryLifecycleResources.useFdmRegionMembershipBinaryResource ??
+  (() => ({
+    availability: { reason: "loading" as const, status: "pending" as const },
+    data: null,
+    error: null,
+    revision: null,
+    status: "idle" as const,
+  }));
+const useFdmMultilayerLayoutResource =
+  geometryLifecycleResources.useFdmMultilayerLayoutResource ??
+  (() => ({ data: null, error: null, revision: null, status: "idle" as const }));
+const useFdmMultilayerLayerActiveMasksResource =
+  geometryLifecycleResources.useFdmMultilayerLayerActiveMasksResource ??
+  (() => ({ data: null, error: null, revision: null, status: "idle" as const }));
 import {
   canonicalVisualizationSceneObjectId,
   isVisualizationAirboxIdentity,
@@ -129,7 +149,9 @@ import {
   resolveVisualizationPanelIdentityKey,
   shouldLoadObjectVisualizationFieldCatalog,
   shouldShowPrimitiveDisplayToggle,
+  queuePartVectorVisibilityPatch,
   queueTargetVectorVisibilityPatch,
+  resolveObjectVisualizationPanelTarget,
   resolveSelectedTargetVectorMeshPartRows,
   resolveObjectVisualizationPanelSelectionTarget,
   visualizationOverrideStateLabel,
@@ -1007,10 +1029,29 @@ function useObjectVisualizationPanelState(
       visualizationState: displayVisualizationState,
     });
     if (scopedPartRows.length <= 1) return undefined;
+    const rawMeshParts = manifest.data?.mesh_parts ?? [];
     return scopedPartRows.map((part) => {
+      const matchedPart = rawMeshParts.find((candidate) => candidate.id === part.id);
+      const partTarget = matchedPart
+        ? resolveObjectVisualizationPanelTarget({
+            part: matchedPart,
+            sceneObjectIds,
+            visualizationState: displayVisualizationState,
+          })
+        : null;
+      const partSettings = partTarget
+        ? resolveTargetVisualization({
+            inheritedSettings: settings ?? undefined,
+            objectContext,
+            snapshot,
+            target: partTarget,
+            visualizationState: displayVisualizationState,
+          }).settings
+        : null;
       return {
         ...part,
-        vectorsVisible: settings?.vectorsVisible ?? false,
+        vectorsVisible:
+          partSettings?.vectorsVisible ?? settings?.vectorsVisible ?? false,
       };
     });
   })();
@@ -1139,8 +1180,22 @@ function useObjectVisualizationPanelState(
     (fdmTarget
       ? fdmMembership.data?.grid_fingerprint ?? null
       : manifest.data?.topology_fingerprint ?? null);
-  function onTogglePartVectors(visible: boolean) {
+  function onTogglePartVectors(partId: string, visible: boolean) {
     if (!resolvedTarget || !displayVisualizationState) return;
+    const matchedPart = manifest.data?.mesh_parts?.find(
+      (candidate) => candidate.id === partId,
+    );
+    if (matchedPart) {
+      queuePartVectorVisibilityPatch({
+        controller: visualization,
+        part: matchedPart,
+        sceneObjectIds,
+        state: displayVisualizationState,
+        sync: visualizationSync,
+        visible,
+      });
+      return;
+    }
     queueTargetVectorVisibilityPatch({
       controller: visualization,
       state: displayVisualizationState,
@@ -1431,11 +1486,43 @@ export function VisualizationTargetInspectorPanel({
   );
 }
 
-export function ObjectVisualizationPanel({ selection, sceneOverride }: InspectorPanelProps & { sceneOverride?: ReturnType<typeof useSceneResource> }) {
+export function ObjectVisualizationPanel({
+  ownerOverride,
+  sceneOverride,
+  selection,
+}: InspectorPanelProps & {
+  ownerOverride?: VisualizationInspectorOwner;
+  sceneOverride?: ReturnType<typeof useSceneResource>;
+}) {
   const ownScene = useSceneResource({ enabled: !sceneOverride });
   const scene = sceneOverride ?? ownScene;
-  if (!scene.data) return <div className="fm-inspector-panel"><p role="status">Resolving visualization owner…</p></div>;
-  return <VisualizationTargetInspectorPanel owner={OBJECT_VISUALIZATION_OWNER} selection={selection} sceneOverride={scene} />;
+  if (!scene.data) {
+    if (scene.status === "error" || scene.error) {
+      return (
+        <div className="fm-inspector-panel">
+          <FeedbackBanner
+            kind="error"
+            message={
+              scene.error?.message ??
+              "Could not load model scene for visualization owner."
+            }
+          />
+        </div>
+      );
+    }
+    return (
+      <div className="fm-inspector-panel">
+        <p role="status">Resolving visualization owner…</p>
+      </div>
+    );
+  }
+  return (
+    <VisualizationTargetInspectorPanel
+      owner={ownerOverride ?? OBJECT_VISUALIZATION_OWNER}
+      selection={selection}
+      sceneOverride={scene}
+    />
+  );
 }
 
 function ObjectVisualizationPanelView({
@@ -1783,9 +1870,8 @@ function ObjectVisualizationPanelView({
               value={`${childRegionOverrideCount}/${childRegionTargets.length}`}
             />
             <label className="fm-visualization-part-toggle">
-              <input
+              <Checkbox
                 checked={patchChildRegions}
-                type="checkbox"
                 onChange={(event) => setPatchChildRegions(event.target.checked)}
               />
               <span>Apply edits to child regions</span>

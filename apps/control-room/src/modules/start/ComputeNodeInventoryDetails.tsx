@@ -263,8 +263,26 @@ function NodeSnapshotCard({
                   ? `${Object.keys(nodePolicy.gpuVramReserves).length} device UUIDs`
                   : "None"}
               />
-              <InventoryMetric label="Priority levels" value={`${nodePolicy.priorityOrder.length}`} />
-              <InventoryMetric label="Allowed parallelism patterns" value={`${nodePolicy.parallelismPatternCount}`} />
+              <InventoryMetric
+                label="Priority order"
+                value={
+                  nodePolicy.priorityOrder.length
+                    ? nodePolicy.priorityOrder.map((level) => `P${level}`).join(" → ")
+                    : "Default"
+                }
+              />
+              <InventoryMetric
+                label="Allowed parallelism patterns"
+                value={
+                  nodePolicy.allowedParallelismPatterns
+                    .map((pattern) =>
+                      pattern.kind === "single_process"
+                        ? "Single process"
+                        : `Distributed (${pattern.ranks} ranks × ${pattern.threads_per_rank} threads)`,
+                    )
+                    .join(" · ") || "None"
+                }
+              />
             </dl>
             {nodePolicy.blockingReasons.length > 0 ? (
               <p className="fm-start-compute-settings__reason">
@@ -344,7 +362,7 @@ function describeGpuPartition(partition: ComputeNodeGpuPartition): string {
     case "mig":
       return `MIG ${partition.partitionId} · parent ${partition.parentGpuUuid}`;
     case "unknown":
-      return "Unknown partition";
+      return "Partition not reported";
   }
 }
 
@@ -370,7 +388,7 @@ function freshnessLabel(freshness: string | null): string {
   return freshness === "current" ? "Current sample"
     : freshness === "stale" ? "Stale sample"
       : freshness === "unavailable" ? "Unavailable sample"
-        : "Freshness unknown";
+        : "Freshness not reported";
 }
 
 function nodeStatePresentation(

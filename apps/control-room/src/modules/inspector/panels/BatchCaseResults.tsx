@@ -213,8 +213,7 @@ export function BatchCaseResults({
     >
       <header className="flex min-w-0 items-center gap-2">
         <h4
-          className="m-0 min-w-0 flex-1 truncate text-fm-xs font-semibold text-fm-primary"
-          title={`${solution.solution_set_id} · revision ${solution.revision}`}
+          className="m-0 min-w-0 flex-1 truncate text-xs font-semibold text-fm-primary"
         >
           {solution.solution_set_id} · revision {solution.revision}
         </h4>
@@ -273,10 +272,7 @@ export function BatchCaseResults({
                     setSelectedArtifactId(null);
                   }}
                 >
-                  <span
-                    className="min-w-0 truncate"
-                    title={`${member.member_id} · ${member.task_id} · ${member.stage_id}`}
-                  >
+                  <span className="min-w-0 truncate">
                     {member.member_id} · {member.task_id} · {member.stage_id}
                   </span>
                   <span className="ml-auto shrink-0 text-fm-xs opacity-80">
@@ -334,7 +330,7 @@ export function BatchCaseResults({
                     variant={selectedArtifactId === artifact.artifact_id ? "primary" : "ghost"}
                     onClick={() => setSelectedArtifactId(artifact.artifact_id)}
                   >
-                    <span className="min-w-0 truncate" title={artifact.artifact_id}>{artifact.artifact_id}</span>
+                    <span className="min-w-0 truncate">{artifact.artifact_id}</span>
                     <span className="ml-auto shrink-0 text-fm-xs opacity-80">
                       {artifact.kind} · {artifact.integrity}
                     </span>
@@ -471,11 +467,11 @@ function SolutionScalarDetails({ data }: { data: SolutionScalarResource }) {
     <dl className="m-0 grid min-w-0 gap-1 text-fm-xs">
       <div className="grid min-w-0 grid-cols-[auto_minmax(0,1fr)] gap-x-2">
         <dt className="text-fm-muted">Quantity</dt>
-        <dd className="m-0 min-w-0 truncate text-fm-primary" title={data.quantity_id}>{data.quantity_id}</dd>
+        <dd className="m-0 min-w-0 truncate text-fm-primary">{data.quantity_id}</dd>
       </div>
       <div className="grid min-w-0 grid-cols-[auto_minmax(0,1fr)] gap-x-2">
         <dt className="text-fm-muted">Attempt</dt>
-        <dd className="m-0 min-w-0 truncate text-fm-primary" title={data.attempt_id}>{data.attempt_id}</dd>
+        <dd className="m-0 min-w-0 truncate text-fm-primary">{data.attempt_id}</dd>
       </div>
       <div className="grid min-w-0 grid-cols-[auto_minmax(0,1fr)] gap-x-2">
         <dt className="text-fm-muted">Value</dt>
