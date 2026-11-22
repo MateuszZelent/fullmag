@@ -32,6 +32,15 @@ const BASE_CHECKPOINT_FEATURES: u64 =
 const CHECKPOINT_HOST_BYTES_PER_CELL_LIMIT: u64 = 4096;
 const CHECKPOINT_HOST_FIXED_BYTES_LIMIT: u64 = 1 << 20;
 const BOUNDED_CONTROL_TRANSFER_BYTES: u64 = 4096;
+const TELEMETRY_RECORD_PAGE_SIZE: usize = 128;
+
+pub(crate) const GPU_M1_TRANSPORT_OUTPUT_FIELDS: [&str; 5] = [
+    "V_electric",
+    "J_charge",
+    "spin_potential",
+    "spin_current_tensor",
+    "torque_stt",
+];
 
 #[derive(Default)]
 struct GpuM1TransportTelemetryAccumulator {
@@ -48,6 +57,7 @@ struct GpuM1TransportTelemetryAccumulator {
     solved_rhs_records: u64,
     failed_records: u64,
     accepted_steps: u64,
+    sequence_gap: bool,
 }
 
 impl GpuM1TransportTelemetryAccumulator {
@@ -121,7 +131,8 @@ impl GpuM1TransportTelemetryAccumulator {
     }
 
     fn summary(&self) -> FdmGpuTransportTelemetry {
-        let all_stage_records_present = self.accepted_steps > 0 && self.record_count > 0;
+        let all_stage_records_present =
+            self.accepted_steps > 0 && self.record_count > 0 && !self.sequence_gap;
         let torque_provenance =
             if all_stage_records_present && self.solved_rhs_records >= self.accepted_steps {
                 "solved_transport"
@@ -294,6 +305,105 @@ pub(crate) struct PreparedGpuM1Descriptor {
     charge_faces: Vec<ffi::fullmag_fdm_gpu_transport_charge_face_v1>,
     spin_faces: Vec<ffi::fullmag_fdm_gpu_transport_spin_boundary_face_v1>,
     formula_ids: Vec<ffi::fullmag_fdm_gpu_transport_formula_ids_v1>,
+}
+
+pub(crate) fn overlay_specified_current_faces(
+    mut charge_faces: Vec<super::charge_transport::GpuChargeBoundaryFace>,
+    specified_faces: &[fullmag_ir::ResolvedSpecifiedCurrentFaceIR],
+) -> Result<Vec<super::charge_transport::GpuChargeBoundaryFace>, GpuM1TransportError> {
+    if specified_faces.is_empty() {
+        return Ok(charge_faces);
+    }
+
+    let neutral_source_id = super::charge_transport::stable_source_id("default:insulating");
+    if neutral_source_id == 0 {
+        return Err(invalid(
+            "GPU M1 neutral charge boundary source id hashed to zero",
+        ));
+    }
+
+    let mut expanded_indices = BTreeMap::new();
+    for (index, face) in charge_faces.iter().enumerate() {
+        if expanded_indices
+            .insert((face.axis, face.canonical_face_index), index)
+            .is_some()
+        {
+            return Err(invalid(
+                "expanded GPU M1 charge boundaries contain duplicate canonical faces",
+            ));
+        }
+    }
+
+    let mut specified_indices = BTreeMap::new();
+    let mut specified_sides = std::collections::BTreeSet::new();
+    for specified in specified_faces {
+        let axis = u32::from(specified.axis);
+        let side = i32::from(specified.outward_normal_sign);
+        if axis > 2
+            || !matches!(side, -1 | 1)
+            || specified.source_id.trim().is_empty()
+            || !specified.area_m2.is_finite()
+            || specified.area_m2 <= 0.0
+            || !specified.outward_current_density_apm2.is_finite()
+        {
+            return Err(invalid(
+                "GPU M1 specified current face has invalid axis, orientation, source, area, or density",
+            ));
+        }
+        let key = (axis, specified.face_index);
+        let index = *expanded_indices.get(&key).ok_or_else(|| {
+            invalid("GPU M1 specified current face is orphaned from the expanded boundary map")
+        })?;
+        let face = &charge_faces[index];
+        if face.side != side
+            || face.outward_sign != side
+            || face.adjacent_cell != specified.adjacent_cell
+            || (face.area_m2 - specified.area_m2).abs() > 1.0e-12 * face.area_m2
+            || face.kind != super::charge_transport::GpuChargeBoundaryKind::ExactCurrentDensity
+            || (face.value != 0.0 && face.value != specified.outward_current_density_apm2)
+        {
+            return Err(invalid(
+                "GPU M1 specified current face disagrees with its resolved exterior boundary geometry or claim",
+            ));
+        }
+        let source_id = super::charge_transport::stable_source_id(&specified.source_id);
+        if source_id == 0 || source_id == neutral_source_id {
+            return Err(invalid(
+                "GPU M1 specified current source id is reserved or collides with neutral insulation",
+            ));
+        }
+        if specified_indices
+            .insert(key, (index, specified, source_id))
+            .is_some()
+        {
+            return Err(invalid(
+                "GPU M1 specified current faces contain duplicate canonical face records",
+            ));
+        }
+        specified_sides.insert((axis, side));
+    }
+
+    // A side-wide summary cannot distinguish electrode cells from insulating walls.
+    for face in &mut charge_faces {
+        if specified_sides.contains(&(face.axis, face.side)) {
+            if face.kind != super::charge_transport::GpuChargeBoundaryKind::ExactCurrentDensity {
+                return Err(invalid(
+                    "GPU M1 specified current side has a non-current resolved boundary claim",
+                ));
+            }
+            face.kind = super::charge_transport::GpuChargeBoundaryKind::Insulating;
+            face.value = 0.0;
+            face.source_id = neutral_source_id;
+        }
+    }
+    for (_, (index, specified, source_id)) in specified_indices {
+        let face = &mut charge_faces[index];
+        face.kind = super::charge_transport::GpuChargeBoundaryKind::ExactCurrentDensity;
+        face.value = specified.outward_current_density_apm2;
+        face.source_id = source_id;
+    }
+
+    Ok(charge_faces)
 }
 
 impl PreparedGpuM1Descriptor {
@@ -572,39 +682,44 @@ impl PreparedGpuM1Descriptor {
             });
         }
 
-        let charge_faces = super::charge_transport::expand_resolved_boundaries(
+        let expanded_charge_faces = super::charge_transport::expand_resolved_boundaries(
             &descriptor.charge_boundaries,
             &descriptor.charge_active_cells,
             grid,
             plan.cell_size,
         )
-        .map_err(|error| invalid(error.to_string()))?
-        .into_iter()
-        .map(|face| ffi::fullmag_fdm_gpu_transport_charge_face_v1 {
-            prefix: prefix_with_features::<ffi::fullmag_fdm_gpu_transport_charge_face_v1>(
-                ffi::FULLMAG_FDM_GPU_TRANSPORT_FEATURE_M1_CHARGE,
-            ),
-            kind: match face.kind {
-                super::charge_transport::GpuChargeBoundaryKind::Voltage => {
-                    ffi::FULLMAG_FDM_GPU_TRANSPORT_CHARGE_BOUNDARY_VOLTAGE
-                }
-                super::charge_transport::GpuChargeBoundaryKind::ExactCurrentDensity => {
-                    ffi::FULLMAG_FDM_GPU_TRANSPORT_CHARGE_BOUNDARY_EXACT_DENSITY
-                }
-                super::charge_transport::GpuChargeBoundaryKind::Insulating => {
-                    ffi::FULLMAG_FDM_GPU_TRANSPORT_CHARGE_BOUNDARY_INSULATING
-                }
-            },
-            axis: face.axis,
-            side: face.side,
-            outward_sign: face.outward_sign,
-            adjacent_cell: face.adjacent_cell,
-            canonical_face_index: face.canonical_face_index,
-            area: face.area_m2,
-            value: face.value,
-            source_id: face.source_id,
-        })
-        .collect();
+        .map_err(|error| invalid(error.to_string()))?;
+        let expanded_charge_faces = overlay_specified_current_faces(
+            expanded_charge_faces,
+            &descriptor.specified_current_faces,
+        )?;
+        let charge_faces = expanded_charge_faces
+            .into_iter()
+            .map(|face| ffi::fullmag_fdm_gpu_transport_charge_face_v1 {
+                prefix: prefix_with_features::<ffi::fullmag_fdm_gpu_transport_charge_face_v1>(
+                    ffi::FULLMAG_FDM_GPU_TRANSPORT_FEATURE_M1_CHARGE,
+                ),
+                kind: match face.kind {
+                    super::charge_transport::GpuChargeBoundaryKind::Voltage => {
+                        ffi::FULLMAG_FDM_GPU_TRANSPORT_CHARGE_BOUNDARY_VOLTAGE
+                    }
+                    super::charge_transport::GpuChargeBoundaryKind::ExactCurrentDensity => {
+                        ffi::FULLMAG_FDM_GPU_TRANSPORT_CHARGE_BOUNDARY_EXACT_DENSITY
+                    }
+                    super::charge_transport::GpuChargeBoundaryKind::Insulating => {
+                        ffi::FULLMAG_FDM_GPU_TRANSPORT_CHARGE_BOUNDARY_INSULATING
+                    }
+                },
+                axis: face.axis,
+                side: face.side,
+                outward_sign: face.outward_sign,
+                adjacent_cell: face.adjacent_cell,
+                canonical_face_index: face.canonical_face_index,
+                area: face.area_m2,
+                value: face.value,
+                source_id: face.source_id,
+            })
+            .collect();
         let spin_faces = materialize_spin_boundaries(descriptor, grid, plan.cell_size)?;
         let interfaces = materialize_interfaces(
             descriptor,
@@ -1125,13 +1240,11 @@ fn materialize_interfaces(
         {
             let from = interface.from_cell as usize;
             let to = interface.to_cell as usize;
-            if descriptor.magnetic_active_mask[from]
-                || descriptor.torque_target_cells[from]
-                || !descriptor.magnetic_active_mask[to]
-                || !descriptor.torque_target_cells[to]
-            {
+            // The mixing law follows the magnetic interface. The separate
+            // torque target mask controls only which cells receive the LLG term.
+            if descriptor.magnetic_active_mask[from] || !descriptor.magnetic_active_mask[to] {
                 return Err(invalid(
-                    "GPU M1 mixing interface requires exactly to_cell to be the magnetic torque owner",
+                    "GPU M1 mixing interface requires exactly to_cell to be magnetic",
                 ));
             }
             let magnetization = initial_magnetization[to];
@@ -1865,6 +1978,21 @@ impl<A: GpuM1TransportAbi> GpuM1TransportSession<A> {
     pub(crate) fn readback_accepted_artifacts(
         &self,
     ) -> Result<AcceptedGpuM1TransportArtifacts, GpuM1TransportError> {
+        self.readback_accepted_artifacts_for(&GPU_M1_TRANSPORT_OUTPUT_FIELDS.map(str::to_owned))
+    }
+
+    pub(crate) fn readback_accepted_artifacts_for(
+        &self,
+        requested_fields: &[String],
+    ) -> Result<AcceptedGpuM1TransportArtifacts, GpuM1TransportError> {
+        if requested_fields
+            .iter()
+            .any(|name| !GPU_M1_TRANSPORT_OUTPUT_FIELDS.contains(&name.as_str()))
+        {
+            return Err(invalid(
+                "GPU M1 artifact readback requested an unsupported publication field",
+            ));
+        }
         let snapshot = self
             .accepted_snapshot
             .as_ref()
@@ -1873,85 +2001,119 @@ impl<A: GpuM1TransportAbi> GpuM1TransportSession<A> {
             .filter(|sequence| *sequence == snapshot.accepted_sequence)
             .ok_or(GpuM1TransportError::SpinSnapshotRequired)?;
 
+        let requested = |name: &str| requested_fields.iter().any(|field| field == name);
+        if requested_fields.is_empty() {
+            return Ok(AcceptedGpuM1TransportArtifacts {
+                potential_v: Vec::new(),
+                charge_current_j_c: std::array::from_fn(|_| Vec::new()),
+                spin_accumulation_mu_s: std::array::from_fn(|_| Vec::new()),
+                spin_current_q_ia: std::array::from_fn(|_| std::array::from_fn(|_| Vec::new())),
+                torque_stt: std::array::from_fn(|_| Vec::new()),
+            });
+        }
+
         let cell_count = usize::try_from(self.cell_count)
             .map_err(|_| invalid("GPU M1 artifact cell count overflows usize"))?;
         let face_counts = face_component_counts(self.grid)?;
-        let charge_count = face_counts.iter().try_fold(0_usize, |total, count| {
-            total
-                .checked_add(*count)
-                .ok_or_else(|| invalid("GPU M1 charge artifact count overflows usize"))
-        })?;
-        let spin_vector_count = cell_count
-            .checked_mul(3)
-            .ok_or_else(|| invalid("GPU M1 spin vector artifact count overflows usize"))?;
-        let q_count = charge_count
-            .checked_mul(3)
-            .ok_or_else(|| invalid("GPU M1 spin-current artifact count overflows usize"))?;
+        let charge_count = || {
+            face_counts.iter().try_fold(0_usize, |total, count| {
+                total
+                    .checked_add(*count)
+                    .ok_or_else(|| invalid("GPU M1 charge artifact count overflows usize"))
+            })
+        };
+        let spin_vector_count = || {
+            cell_count
+                .checked_mul(3)
+                .ok_or_else(|| invalid("GPU M1 spin vector artifact count overflows usize"))
+        };
 
-        let mut potential_v = vec![0.0; cell_count];
-        let mut charge_current = vec![0.0; charge_count];
-        let mut spin_accumulation = vec![0.0; spin_vector_count];
-        let mut spin_current = vec![0.0; q_count];
-        let mut torque = vec![0.0; spin_vector_count];
-        self.readback_accepted_field(
-            snapshot,
-            ffi::FULLMAG_FDM_GPU_TRANSPORT_ARTIFACT_FIELD_V,
-            ffi::FULLMAG_FDM_GPU_TRANSPORT_COMPONENT_ORDER_SCALAR,
-            &mut potential_v,
-        )?;
-        self.readback_accepted_field(
-            snapshot,
-            ffi::FULLMAG_FDM_GPU_TRANSPORT_ARTIFACT_FIELD_J_C,
-            ffi::FULLMAG_FDM_GPU_TRANSPORT_COMPONENT_ORDER_ORIENTED_FACE_XYZ,
-            &mut charge_current,
-        )?;
-        self.readback_accepted_field(
-            snapshot,
-            ffi::FULLMAG_FDM_GPU_TRANSPORT_ARTIFACT_FIELD_MU_S,
-            ffi::FULLMAG_FDM_GPU_TRANSPORT_COMPONENT_ORDER_SOA_XYZ,
-            &mut spin_accumulation,
-        )?;
-        self.readback_accepted_field(
-            snapshot,
-            ffi::FULLMAG_FDM_GPU_TRANSPORT_ARTIFACT_FIELD_Q_IA,
-            ffi::FULLMAG_FDM_GPU_TRANSPORT_COMPONENT_ORDER_ORIENTED_FACE_XYZ,
-            &mut spin_current,
-        )?;
-        self.readback_accepted_field(
-            snapshot,
-            ffi::FULLMAG_FDM_GPU_TRANSPORT_ARTIFACT_FIELD_TORQUE_STT,
-            ffi::FULLMAG_FDM_GPU_TRANSPORT_COMPONENT_ORDER_SOA_XYZ,
-            &mut torque,
-        )?;
+        let mut potential_v = Vec::new();
+        if requested("V_electric") {
+            potential_v.resize(cell_count, 0.0);
+            self.readback_accepted_field(
+                snapshot,
+                ffi::FULLMAG_FDM_GPU_TRANSPORT_ARTIFACT_FIELD_V,
+                ffi::FULLMAG_FDM_GPU_TRANSPORT_COMPONENT_ORDER_SCALAR,
+                &mut potential_v,
+            )?;
+        }
 
-        let [x_faces, y_faces, z_faces] = face_counts;
-        let charge_current_j_c = [
-            charge_current[..x_faces].to_vec(),
-            charge_current[x_faces..x_faces + y_faces].to_vec(),
-            charge_current[x_faces + y_faces..x_faces + y_faces + z_faces].to_vec(),
-        ];
-        let spin_accumulation_mu_s = [
-            spin_accumulation[..cell_count].to_vec(),
-            spin_accumulation[cell_count..2 * cell_count].to_vec(),
-            spin_accumulation[2 * cell_count..].to_vec(),
-        ];
-        let torque_stt = [
-            torque[..cell_count].to_vec(),
-            torque[cell_count..2 * cell_count].to_vec(),
-            torque[2 * cell_count..].to_vec(),
-        ];
-        let mut q_offset = 0;
-        let spin_current_q_ia = std::array::from_fn(|axis| {
-            let component_count = face_counts[axis];
-            let axis_end = q_offset + 3 * component_count;
-            let components = [
-                spin_current[q_offset..q_offset + component_count].to_vec(),
-                spin_current[q_offset + component_count..q_offset + 2 * component_count].to_vec(),
-                spin_current[q_offset + 2 * component_count..axis_end].to_vec(),
+        let mut charge_current_j_c = std::array::from_fn(|_| Vec::new());
+        if requested("J_charge") {
+            let mut charge_current = vec![0.0; charge_count()?];
+            self.readback_accepted_field(
+                snapshot,
+                ffi::FULLMAG_FDM_GPU_TRANSPORT_ARTIFACT_FIELD_J_C,
+                ffi::FULLMAG_FDM_GPU_TRANSPORT_COMPONENT_ORDER_ORIENTED_FACE_XYZ,
+                &mut charge_current,
+            )?;
+            let [x_faces, y_faces, z_faces] = face_counts;
+            charge_current_j_c = [
+                charge_current[..x_faces].to_vec(),
+                charge_current[x_faces..x_faces + y_faces].to_vec(),
+                charge_current[x_faces + y_faces..x_faces + y_faces + z_faces].to_vec(),
             ];
-            q_offset = axis_end;
-            components
-        });
+        }
+
+        let mut spin_accumulation_mu_s = std::array::from_fn(|_| Vec::new());
+        if requested("spin_potential") {
+            let mut spin_accumulation = vec![0.0; spin_vector_count()?];
+            self.readback_accepted_field(
+                snapshot,
+                ffi::FULLMAG_FDM_GPU_TRANSPORT_ARTIFACT_FIELD_MU_S,
+                ffi::FULLMAG_FDM_GPU_TRANSPORT_COMPONENT_ORDER_SOA_XYZ,
+                &mut spin_accumulation,
+            )?;
+            spin_accumulation_mu_s = [
+                spin_accumulation[..cell_count].to_vec(),
+                spin_accumulation[cell_count..2 * cell_count].to_vec(),
+                spin_accumulation[2 * cell_count..].to_vec(),
+            ];
+        }
+
+        let mut spin_current_q_ia = std::array::from_fn(|_| std::array::from_fn(|_| Vec::new()));
+        if requested("spin_current_tensor") {
+            let spin_current_count = charge_count()?
+                .checked_mul(3)
+                .ok_or_else(|| invalid("GPU M1 spin-current artifact count overflows usize"))?;
+            let mut spin_current = vec![0.0; spin_current_count];
+            self.readback_accepted_field(
+                snapshot,
+                ffi::FULLMAG_FDM_GPU_TRANSPORT_ARTIFACT_FIELD_Q_IA,
+                ffi::FULLMAG_FDM_GPU_TRANSPORT_COMPONENT_ORDER_ORIENTED_FACE_XYZ,
+                &mut spin_current,
+            )?;
+            let mut q_offset = 0;
+            spin_current_q_ia = std::array::from_fn(|axis| {
+                let component_count = face_counts[axis];
+                let axis_end = q_offset + 3 * component_count;
+                let components = [
+                    spin_current[q_offset..q_offset + component_count].to_vec(),
+                    spin_current[q_offset + component_count..q_offset + 2 * component_count]
+                        .to_vec(),
+                    spin_current[q_offset + 2 * component_count..axis_end].to_vec(),
+                ];
+                q_offset = axis_end;
+                components
+            });
+        }
+
+        let mut torque_stt = std::array::from_fn(|_| Vec::new());
+        if requested("torque_stt") {
+            let mut torque = vec![0.0; spin_vector_count()?];
+            self.readback_accepted_field(
+                snapshot,
+                ffi::FULLMAG_FDM_GPU_TRANSPORT_ARTIFACT_FIELD_TORQUE_STT,
+                ffi::FULLMAG_FDM_GPU_TRANSPORT_COMPONENT_ORDER_SOA_XYZ,
+                &mut torque,
+            )?;
+            torque_stt = [
+                torque[..cell_count].to_vec(),
+                torque[cell_count..2 * cell_count].to_vec(),
+                torque[2 * cell_count..].to_vec(),
+            ];
+        }
 
         Ok(AcceptedGpuM1TransportArtifacts {
             potential_v,
@@ -1975,24 +2137,37 @@ impl<A: GpuM1TransportAbi> GpuM1TransportSession<A> {
             .ok_or(GpuM1TransportError::ChargeSnapshotRequired)?;
         self.accepted_spin_sequence = Some(snapshot.accepted_sequence);
         self.telemetry.accepted_steps = self.telemetry.accepted_steps.saturating_add(1);
-        self.refresh_telemetry()?;
         Ok(())
     }
 
     fn refresh_telemetry(&mut self) -> Result<(), GpuM1TransportError> {
-        let mut records = [ffi::fullmag_fdm_gpu_transport_telemetry_v1::default(); 128];
-        let count = self
-            .abi
-            .query_telemetry(self.context_handle(), self.telemetry.cursor, &mut records)
-            .map_err(|status| GpuM1TransportError::AbiFailure {
-                operation: "query_telemetry",
-                status,
-            })?;
-        if count > records.len() {
-            return Err(invalid("GPU M1 telemetry query returned too many records"));
-        }
-        for record in records.iter().take(count) {
-            self.telemetry.record(record);
+        loop {
+            let cursor_before = self.telemetry.cursor;
+            let mut records = [ffi::fullmag_fdm_gpu_transport_telemetry_v1::default();
+                TELEMETRY_RECORD_PAGE_SIZE];
+            let count = self
+                .abi
+                .query_telemetry(self.context_handle(), self.telemetry.cursor, &mut records)
+                .map_err(|status| GpuM1TransportError::AbiFailure {
+                    operation: "query_telemetry",
+                    status,
+                })?;
+            if count > records.len() {
+                return Err(invalid("GPU M1 telemetry query returned too many records"));
+            }
+            for record in records.iter().take(count) {
+                if record.audit_sequence != self.telemetry.cursor.saturating_add(1) {
+                    self.telemetry.sequence_gap = true;
+                }
+                self.telemetry.record(record);
+            }
+            if count < records.len() {
+                break;
+            }
+            if self.telemetry.cursor == cursor_before {
+                self.telemetry.sequence_gap = true;
+                break;
+            }
         }
         Ok(())
     }

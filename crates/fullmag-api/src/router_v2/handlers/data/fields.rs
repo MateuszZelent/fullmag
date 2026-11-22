@@ -767,21 +767,59 @@ pub(crate) fn resolved_fdm_multilayer_airbox_field(
     Ok(field)
 }
 
+pub(crate) fn transport_artifact_frame(
+    artifact_dir: &std::path::Path,
+    quantity_id: &str,
+) -> Result<Option<(String, Option<u64>)>, ApiError> {
+    if !STEADY_TRANSPORT_FIELDS.contains(&quantity_id) {
+        return Ok(None);
+    }
+    use fullmag_runner::frames_index::{FramesIndexDocument, FRAMES_INDEX_FILE, FRAMES_INDEX_SCHEMA};
+
+    let latest_step = if try_resolve_artifact_path(artifact_dir, FRAMES_INDEX_FILE)?.is_some() {
+        let index: FramesIndexDocument =
+            serde_json::from_value(read_json_artifact_value(artifact_dir, FRAMES_INDEX_FILE)?)
+                .map_err(|error| ApiError::internal(format!("invalid saved frame index: {error}")))?;
+        if index.schema != FRAMES_INDEX_SCHEMA {
+            return Err(ApiError::internal("unsupported saved frame index schema"));
+        }
+        index
+            .frames
+            .iter()
+            .filter(|frame| frame.quantity_ids.iter().any(|id| id == quantity_id))
+            .map(|frame| frame.step)
+            .max()
+    } else {
+        None
+    };
+    let step = latest_step.unwrap_or(0);
+    let relative_path = format!("fields/{quantity_id}/step_{step:06}.json");
+    Ok(try_resolve_artifact_path(artifact_dir, &relative_path)?
+        .map(|_| (relative_path, latest_step)))
+}
+
+pub(super) fn has_saved_transport_field(snapshot: &SessionStateResponse, quantity_id: &str) -> bool {
+    STEADY_TRANSPORT_FIELDS.contains(&quantity_id) && current_artifact_dir(snapshot)
+        .is_some_and(|root| transport_artifact_frame(&root, quantity_id).is_ok_and(|frame| frame.is_some()))
+}
+
 fn canonical_transport_field_artifact(
     snapshot: &SessionStateResponse,
     quantity_id: &str,
-) -> Result<Option<serde_json::Value>, ApiError> {
+) -> Result<Option<(String, serde_json::Value)>, ApiError> {
     if !STEADY_TRANSPORT_FIELDS.contains(&quantity_id) {
         return Ok(None);
     }
     let Some(artifact_dir) = current_artifact_dir(snapshot) else {
         return Ok(None);
     };
-    let relative_path = format!("fields/{quantity_id}/step_000000.json");
-    if try_resolve_artifact_path(&artifact_dir, &relative_path)?.is_none() {
+    let Some((relative_path, latest_step)) = transport_artifact_frame(&artifact_dir, quantity_id)? else {
         return Ok(None);
-    }
+    };
     let artifact = read_json_artifact_value(&artifact_dir, &relative_path)?;
+    if latest_step.is_some() && artifact.get("step").and_then(serde_json::Value::as_u64) != latest_step {
+        return Err(ApiError::internal("saved transport field step differs from the frame index"));
+    }
     let component_count = artifact
         .get("component_count")
         .and_then(serde_json::Value::as_u64)
@@ -808,7 +846,7 @@ fn canonical_transport_field_artifact(
             "canonical transport field artifact '{relative_path}' has invalid identity, shape, values, or revision"
         )));
     }
-    Ok(Some(artifact))
+    Ok(Some((relative_path, artifact)))
 }
 
 fn canonical_transport_field_artifact_revision(artifact: Option<&serde_json::Value>) -> u64 {
@@ -867,11 +905,11 @@ fn canonical_transport_artifact_provenance(
     })
 }
 
-fn resolve_transport_spatial_field<'a>(
+pub(super) fn resolve_transport_spatial_field<'a>(
     snapshot: &'a SessionStateResponse,
     quantity_id: &str,
 ) -> Result<Option<ResolvedSpatialField<'a>>, ApiError> {
-    let Some(artifact) = canonical_transport_field_artifact(snapshot, quantity_id)? else {
+    let Some((relative_path, artifact)) = canonical_transport_field_artifact(snapshot, quantity_id)? else {
         return Ok(None);
     };
     let spec = quantity_spec(quantity_id).ok_or_else(|| {
@@ -884,15 +922,31 @@ fn resolve_transport_spatial_field<'a>(
     })?;
     let revision = canonical_transport_field_artifact_revision(Some(&artifact));
     let point_count = values.len() / usize::from(spec.n_comp);
-    let grid = json_field_grid(&artifact).unwrap_or([point_count as u32, 1, 1]);
+    let grid = json_field_grid(&artifact);
     let provenance = canonical_transport_artifact_provenance(&artifact, quantity_id)?;
+    let generation = format!("{relative_path}@{revision}");
+    let physical_layout = artifact.get("layout");
+    let saved_geometry = physical_layout.and_then(|layout| {
+        Some((
+            serde_json::from_value::<[f64; 3]>(layout.get("origin_m")?.clone()).ok()?,
+            serde_json::from_value::<[f64; 3]>(layout.get("cell_size")?.clone()).ok()?,
+        ))
+    });
+    if is_fdm_snapshot(snapshot) && grid.is_some() && saved_geometry.is_some()
+        && saved_geometry == crate::router_v2::handlers::sessions::status::fdm_grid_geometry(snapshot)
+    {
+        return super::resolved_spatial_field::resolve_spatial_field_from_values(
+            snapshot, quantity_id, usize::from(spec.n_comp), values, grid,
+            SpatialFieldSourceKind::Persisted, revision, Some(generation), provenance,
+        ).map(Some);
+    }
     ResolvedSpatialField::from_artifact_linear(
         quantity_id,
         usize::from(spec.n_comp),
         values,
-        grid,
+        grid.unwrap_or([point_count as u32, 1, 1]),
         revision,
-        format!("fields/{quantity_id}/step_000000.json@{revision}"),
+        generation,
         provenance,
     )
     .map(Some)
@@ -2341,6 +2395,7 @@ pub async fn get_field_catalog(
     }
 
     let mut catalog_revision = current_field_catalog_revision(snapshot);
+    let mut saved_transport_quantities = BTreeSet::new();
     for quantity_id in STEADY_TRANSPORT_FIELDS {
         if quantities.iter().any(|q| q.quantity_id == quantity_id) {
             continue;
@@ -2348,6 +2403,7 @@ pub async fn get_field_catalog(
         let Some(field) = resolve_transport_spatial_field(snapshot, quantity_id)? else {
             continue;
         };
+        saved_transport_quantities.insert(quantity_id);
         remember_materialized_carrier(&mut materialized_carriers, &field);
         catalog_revision = catalog_revision.max(field.quantity_revision);
         push_field_descriptor(
@@ -2526,12 +2582,14 @@ pub async fn get_field_catalog(
         } else {
             Vec::new()
         };
-        apply_field_descriptor_capability(
-            descriptor,
-            resolved_quantity_capability_for_snapshot(
-                snapshot, spec, materialization, carriers, scope,
-            ),
-        );
+        let resolved = if descriptor.available && saved_transport_quantities.contains(descriptor.quantity_id.as_str()) {
+            descriptor.ui_exposed = true;
+            descriptor.spatial = true;
+            super::quantities::saved_transport_capability(snapshot, spec, carriers, scope)
+        } else {
+            resolved_quantity_capability_for_snapshot(snapshot, spec, materialization, carriers, scope)
+        };
+        apply_field_descriptor_capability(descriptor, resolved);
     }
 
     Ok(Json(FieldCatalog {
@@ -2669,12 +2727,12 @@ pub(crate) fn resolve_target_field_availability(
         Some("quantity_not_supported"),
     );
 
-    let (mut supported, support_reason) = target_quantity_support(
-        snapshot,
-        &scope_kind,
-        spec,
-        is_fdm_multilayer_snapshot(snapshot),
-    );
+    let transport_field = resolve_transport_spatial_field(snapshot, &quantity_id);
+    let (mut supported, support_reason) = if matches!(&transport_field, Ok(Some(_))) {
+        (true, None)
+    } else {
+        target_quantity_support(snapshot, &scope_kind, spec, is_fdm_multilayer_snapshot(snapshot))
+    };
     if !supported {
         result.reason_code = support_reason.map(str::to_string);
         return Ok(result);
@@ -2787,7 +2845,7 @@ pub(crate) fn resolve_target_field_availability(
     }
 
     let source =
-        resolve_transport_spatial_field(snapshot, &quantity_id).and_then(
+        transport_field.and_then(
             |transport| match transport {
                 Some(field) => Ok(Some(field)),
                 None => {
@@ -10708,6 +10766,39 @@ mod tests {
         assert_eq!(without_provenance.provenance.device, None);
         assert_eq!(without_provenance.provenance.precision, None);
 
+        let torque_dir = artifact_dir.join("fields/torque_stt");
+        std::fs::create_dir_all(&torque_dir).unwrap();
+        for step in [1_u64, 5] {
+            std::fs::write(
+                torque_dir.join(format!("step_{step:06}.json")),
+                serde_json::to_vec(&serde_json::json!({
+                    "observable": "torque_stt",
+                    "component_count": 3,
+                    "step": step,
+                    "revision": step + 10,
+                    "values": [1.0, 0.0, 0.0],
+                })).unwrap(),
+            ).unwrap();
+        }
+        let mut frames = fullmag_runner::frames_index::FramesIndexWriter::new(&artifact_dir, Some("pulse".into()));
+        for step in [1_u64, 5] {
+            frames.record_buffered(
+                "torque_stt", step, (step as f64) * 2e-14,
+                format!("fields/torque_stt/step_{step:06}.json").into(), None
+            ).unwrap();
+        }
+        frames.finish().unwrap();
+        let (path, artifact) = super::canonical_transport_field_artifact(&snapshot, "torque_stt")
+            .unwrap().unwrap();
+        assert_eq!(path, "fields/torque_stt/step_000005.json");
+        assert_eq!(artifact["revision"].as_u64(), Some(15));
+        let query = TargetFieldAvailabilityQuery { scope_kind: Some("full".into()), ..Default::default() };
+        let torque = resolve_target_field_availability(&snapshot, "torque_stt", &query).unwrap();
+        assert!(torque.supported && torque.materialized);
+        assert_eq!(torque.revision, Some(15));
+        let absent_spin = resolve_target_field_availability(&snapshot, "spin_current_tensor", &query).unwrap();
+        assert!(!absent_spin.materialized);
+
         let malformed_dir = artifact_dir.join("fields/spin_current_tensor");
         std::fs::create_dir_all(&malformed_dir).expect("malformed transport quantity directory");
         std::fs::write(
@@ -10726,6 +10817,8 @@ mod tests {
         )
         .expect("write malformed transport artifact");
         assert!(resolve_transport_spatial_field(&snapshot, "spin_current_tensor").is_err());
+        let bad_spin = resolve_target_field_availability(&snapshot, "spin_current_tensor", &query).unwrap();
+        assert!(!bad_spin.materialized);
 
         std::fs::remove_dir_all(artifact_dir).expect("remove transport provenance fixture");
     }

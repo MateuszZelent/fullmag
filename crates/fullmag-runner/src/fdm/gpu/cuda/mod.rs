@@ -17,7 +17,7 @@ pub(crate) mod route;
 #[cfg(any(feature = "cuda", test))]
 #[allow(dead_code)]
 pub(crate) mod spin_transport;
-#[cfg(test)]
+#[cfg(any(feature = "cuda", test))]
 pub(crate) mod transport_publication;
 
 /// The native FDM clock starts at zero for every execution.  `TimeStageContextIR`

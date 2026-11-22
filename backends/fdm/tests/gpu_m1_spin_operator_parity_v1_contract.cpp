@@ -115,9 +115,9 @@ void require_llg_stage_transfer_audit(
                 context, cursor, records.data(), records.size(), &count) ==
                 FULLMAG_FDM_GPU_TRANSPORT_ERROR_OK,
             scenario + ": LLG stage telemetry query failed");
-    require(count == 5 * expected_stages,
+    require(count == 4 * expected_stages,
             scenario + ": LLG stage transfer audit has the wrong record count");
-    std::array<uint64_t, 5> reason_counts{};
+    std::array<uint64_t, 4> reason_counts{};
     for (uint64_t index = 0; index < count; ++index) {
         const auto &record = records[index];
         require(record.status ==
@@ -130,16 +130,8 @@ void require_llg_stage_transfer_audit(
                       FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_EVENT_PROVISIONAL) != 0),
                 scenario + ": LLG stage audit identity/status drifted");
         switch (record.reason) {
-        case FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_REASON_CONTROL_STATE_H2D:
-            ++reason_counts[0];
-            require(record.direction ==
-                        FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_DIRECTION_H2D &&
-                        record.bytes > 0 && record.bytes <= 4096 &&
-                        record.count > 0,
-                    scenario + ": invalid bounded H2D control transfer");
-            break;
         case FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_REASON_SCALAR_REDUCTION_D2H:
-            ++reason_counts[1];
+            ++reason_counts[0];
             require(record.direction ==
                         FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_DIRECTION_D2H &&
                         record.bytes > 0 && record.bytes <= 4096 &&
@@ -147,14 +139,14 @@ void require_llg_stage_transfer_audit(
                     scenario + ": invalid bounded D2H scalar reduction");
             break;
         case FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_REASON_STREAM_SYNCHRONIZE:
-            ++reason_counts[2];
+            ++reason_counts[1];
             require(record.direction ==
                         FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_DIRECTION_DEVICE_INTERNAL &&
                         record.bytes == 0 && record.count > 0,
                     scenario + ": invalid local stream synchronization audit");
             break;
         case FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_REASON_SOLVE_STATE_D2D:
-            ++reason_counts[3];
+            ++reason_counts[2];
             require(record.direction ==
                         FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_DIRECTION_D2D &&
                         record.bytes == 3 * cell_count * sizeof(double) &&
@@ -162,7 +154,7 @@ void require_llg_stage_transfer_audit(
                     scenario + ": invalid device-resident torque handoff");
             break;
         case FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_REASON_SOLVED_TRANSPORT_RHS:
-            ++reason_counts[4];
+            ++reason_counts[3];
             require(record.direction ==
                         FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_DIRECTION_DEVICE_INTERNAL &&
                         record.bytes == 0 && record.count == 1 &&
@@ -958,6 +950,37 @@ GpuResult solve_gpu(const Scenario &scenario) {
         require(fullmag_fdm_context_bind_gpu_transport_v1(llg, &binding) ==
                     FULLMAG_FDM_OK,
                 scenario.name + ": public transport-to-LLG binding failed");
+        fullmag_fdm_gpu_workspace_telemetry_v1 workspace_telemetry{};
+        workspace_telemetry.abi_version =
+            FULLMAG_FDM_GPU_WORKSPACE_TELEMETRY_ABI_V1;
+        workspace_telemetry.struct_size = sizeof(workspace_telemetry);
+        constexpr uint64_t complete_workspace_metrics =
+            FULLMAG_FDM_GPU_WORKSPACE_METRIC_IDENTITY |
+            FULLMAG_FDM_GPU_WORKSPACE_METRIC_ALLOCATIONS |
+            FULLMAG_FDM_GPU_WORKSPACE_METRIC_FFT_PLANS |
+            FULLMAG_FDM_GPU_WORKSPACE_METRIC_FOOTPRINT |
+            FULLMAG_FDM_GPU_WORKSPACE_METRIC_REVISIONS;
+        require(fullmag_fdm_backend_get_gpu_workspace_telemetry_v1(
+                    llg, &workspace_telemetry) == FULLMAG_FDM_OK &&
+                    workspace_telemetry.setup_complete == 1 &&
+                    workspace_telemetry.accounting_valid == 1 &&
+                    workspace_telemetry.metric_valid_mask ==
+                        complete_workspace_metrics &&
+                    workspace_telemetry.setup_device_allocation_count > 0 &&
+                    workspace_telemetry.setup_device_allocation_bytes > 0 &&
+                    workspace_telemetry.total_device_allocation_count ==
+                        workspace_telemetry.setup_device_allocation_count &&
+                    workspace_telemetry.total_device_allocation_bytes ==
+                        workspace_telemetry.setup_device_allocation_bytes &&
+                    workspace_telemetry.step_device_allocation_count == 0 &&
+                    workspace_telemetry.step_device_allocation_bytes == 0 &&
+                    workspace_telemetry.step_fft_plan_creation_count == 0 &&
+                    workspace_telemetry.workspace_bytes <=
+                        workspace_telemetry.peak_vram_bytes &&
+                    workspace_telemetry.prepared_fft_workspace_count <=
+                        workspace_telemetry.total_fft_plan_creation_count,
+                scenario.name +
+                    ": transport binding invalidated strict-compatible LLG workspace telemetry");
         require(fullmag_fdm_context_bind_gpu_transport_v1(llg, &binding) ==
                     FULLMAG_FDM_ERR_INVALID,
                 scenario.name + ": duplicate bind was not rejected");
@@ -1109,6 +1132,8 @@ GpuResult solve_gpu(const Scenario &scenario) {
             cells(scenario), 3);
         const SpinAudit heun_after_fresh = spin_audit(created.context_handle);
         const std::vector<double> heun_fresh_m = read_llg_m(llg, cells(scenario));
+        const auto heun_receipt_before_final_artifact_readbacks =
+            query_execution_receipt(llg, scenario.name);
         const std::vector<double> heun_fresh_mu = readback(
             created.context_handle, snapshot,
             FULLMAG_FDM_GPU_TRANSPORT_ARTIFACT_FIELD_MU_S, 3 * cells(scenario));
@@ -1122,6 +1147,24 @@ GpuResult solve_gpu(const Scenario &scenario) {
         require(fullmag_fdm_context_unbind_gpu_transport_v1(llg) ==
                     FULLMAG_FDM_OK,
                 scenario.name + ": fresh Heun owner could not release claim");
+        const auto heun_receipt_after_final_artifact_readbacks =
+            query_execution_receipt(llg, scenario.name);
+        fullmag_fdm_local_pipeline_telemetry_v1 final_pipeline{};
+        final_pipeline.abi_version = FULLMAG_FDM_LOCAL_PIPELINE_TELEMETRY_ABI_V1;
+        final_pipeline.struct_size = sizeof(final_pipeline);
+        require(fullmag_fdm_backend_get_local_pipeline_telemetry_v1(
+                    llg, &final_pipeline) == FULLMAG_FDM_OK &&
+                    final_pipeline.required_operator_mask ==
+                        heun_receipt_after_final_artifact_readbacks.required_operator_mask &&
+                    (final_pipeline.required_operator_mask &
+                     FULLMAG_FDM_OPERATOR_GPU_TRANSPORT) != 0,
+                scenario.name + ": final strict pipeline identity lost the executed transport operator");
+        require(heun_receipt_after_final_artifact_readbacks
+                        .observation_full_vector_d2h_count >
+                    heun_receipt_before_final_artifact_readbacks
+                        .observation_full_vector_d2h_count,
+                scenario.name +
+                    ": authenticated unbind omitted final cadence-authorized artifact D2H");
         fullmag_fdm_backend_destroy(llg);
         llg = fullmag_fdm_backend_create(&llg_plan);
         require(llg != nullptr && fullmag_fdm_backend_last_error(llg) == nullptr &&

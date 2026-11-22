@@ -1524,6 +1524,7 @@ mod tests {
                 "eigenmodes",
                 "frequency_response",
                 "hysteresis",
+                "antenna_field_solve",
                 "change_device",
                 "add_field_drive",
                 "add_mask_field_drive",
@@ -1534,6 +1535,8 @@ mod tests {
                 "fft_response",
                 "set_field",
                 "set_current",
+                "set_transport_current",
+                "set_spin_torque_enabled",
                 "save_state",
                 "load_state",
                 "export"

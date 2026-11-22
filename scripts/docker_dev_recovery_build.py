@@ -211,7 +211,7 @@ def validate_pending_build_snapshot(pin, ledger, observed):
     rows=ledger.get('reservations');require(isinstance(rows,list) and all(isinstance(r,dict) for r in rows), 'Invalid pending ledger')
     active=[r for r in rows if r.get('state')!='released'];require(len(active)==1,'Pending build requires one occupied reservation')
     row=active[0];rid={k:identity[k] for k in ('store_id','run_id','task_id','resource_id','lease_token')};rid['owner']={'kind':'solver','attempt_id':identity['attempt_id'],'ownership_epoch':identity['ownership_epoch']}
-    require(row.get('identity')==rid and row.get('state')=='committed' and row.get('worker_launch_gate')=={'state':'pending'}
+    require(row.get('identity')==rid and row.get('state') in {'tentative', 'committed'} and row.get('worker_launch_gate')=={'state':'pending'}
             and digest(row)==pin['reservation_sha256'], 'Pending reservation/gate changed')
     require(set(observed)==set(pin['files'])=={'catalog','lease','admission','launch'}, 'Pending build file roles differ')
     values={}

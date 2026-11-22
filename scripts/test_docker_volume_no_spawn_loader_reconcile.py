@@ -61,6 +61,24 @@ class ReceiptTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'namespace'):
             self.validate(receipt)
 
+    def test_writer_contention_requires_matching_controller_and_released_writer(self):
+        _, _, receipt, _ = self.fixture()
+        receipt['error'] = (
+            'Native cancellation outcome requires receipt inspection; do not retry: Traceback (most recent call last):\n'
+            '  File "<string>", line 43, in <module>\n'
+            'RuntimeError: native cancellation did not complete: native runtime service failed: '
+            'session store writer is busy: root=`/state/runs/docker-all/session-store`, conflict=native descriptor, '
+            'observed_owner_pid=42, observed_owner_acquired_at=2026-11-22 14:51:23.201607166 UTC, '
+            'observed_owner_released=true: session store writer is busy'
+        )
+        with self.assertRaisesRegex(ValueError, 'controller'):
+            self.validate(receipt)
+        receipt['inputs']['executor']['controller_sha256'] = subject.WRITER_BUSY_CONTROLLER_SHA256
+        self.validate(receipt)
+        receipt['error'] = receipt['error'].replace('released=true', 'released=false')
+        with self.assertRaisesRegex(ValueError, 'unsupported native failure'):
+            self.validate(receipt)
+
 
 
 
@@ -134,6 +152,37 @@ class InventoryTests(unittest.TestCase):
         changed['worker_launch_gate'] = {'state': 'consumed', 'token': 'used'}
         self.save(self.ledger/'HOST_RESOURCE_LEDGER.json', {'reservations': [changed]})
         with self.assertRaisesRegex(ValueError, 'pending host reservation'):
+            self.snapshot()
+
+    def test_tentative_admission_must_match_immutable_claim_without_genesis(self):
+        import shutil
+        shutil.rmtree(self.run/'coordinator_journal')
+        identity = self.request['identity']
+        identity['owner']['ownership_epoch'] = 1
+        lease = dict(self.before['lease'], resource_id='cpu', kind='cpu', budget={},
+                     lease_token='lease-a', heartbeat_sequence=0)
+        reservation = dict(self.before['reservation'], state='tentative')
+        task = self.before['task']
+        claim = dict(run_id='run-a', task_id='task-a', attempt_id='attempt-a', ownership_epoch=1,
+                     lease={key: value for key, value in lease.items() if key != 'state'})
+        self.save(self.run/'resource_leases/cpu/lease-a.json', lease)
+        self.save(self.ledger/'HOST_RESOURCE_LEDGER.json', {'reservations': [reservation]})
+        self.save(self.run/'task_admissions/task-a/attempt-a.json',
+                  {'schema_version': 'task_admission.v1', 'task': task, 'lease': lease})
+        self.before.update(reservation=reservation, lease=lease, claim=claim)
+        for name in ('reservation', 'lease', 'claim'):
+            self.request[name + '_sha256'] = subject.sha(subject.canonical(self.before[name]))
+        self.snapshot()
+        checkpoint = dict(command_sequence=0, event_sequence=0, claim=claim, task=task)
+        genesis = dict(run_id='run-a', task_id='task-a', attempt_id='attempt-a', ownership_epoch=1,
+                       lease_token='lease-a', lease_heartbeat_sequence=0, checkpoint=checkpoint,
+                       checkpoint_sha256=subject.sha(subject.canonical(checkpoint)))
+        self.before['task'] = dict(task, coordinator_genesis=genesis,
+                                   coordinator_watermark={'command_sequence': 0, 'event_sequence': 0})
+        self.save(self.run/'run_catalog.json', {'tasks': [self.before['task']]})
+        self.snapshot()
+        self.save(self.run/'coordinator_journal/event/started.json', {})
+        with self.assertRaisesRegex(ValueError, 'gained a coordinator record'):
             self.snapshot()
 
     def test_generated_guard_source_compiles_and_technical_script_is_create_only(self):
