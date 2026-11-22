@@ -967,6 +967,8 @@ def build_volume_toolchain(repo):
     from docker_compose_identity import compose_source_identity
     identity = compose_source_identity(repo)
     local_volume(repo)
+    from docker_dev_host import validate_linux_mounts
+    validate_linux_mounts({repo: "toolchain build context"})
     configured = toolchain_configuration(repo, identity, direct_dev=True)
     service = configured["services"]["fem-gpu-toolchain"]
     build = service["build"]

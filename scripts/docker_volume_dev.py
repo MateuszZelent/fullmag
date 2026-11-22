@@ -22,7 +22,10 @@ import fullmag_storage as storage
 from docker_build_control import (BuildControl, BuildControlError, DockerObservationBudgetExceeded, canonical, control_read_script, docker_capture,
                                   compose_capture, build_volume_toolchain, build_volume_runtime_images, bounded_capture,
                                   DEV_CUDA_TARGET_ENV, mirror_console, receipt_dev_cuda_target)
-from docker_dev_host import docker_argv, require_host, local_volume, validate_host_path
+from docker_dev_host import (
+    docker_argv, local_volume, require_host, validate_compose_binds, validate_host_path,
+    validate_linux_mounts,
+)
 import docker_preclaim_cancelled_restart as preclaim_restart
 import docker_saved_authoring_history as retained_history
 
@@ -2345,6 +2348,7 @@ def start(args, *, reuse_state=None, control=None, operation=None, prepared=None
     selected, layout = _select_source(Path(args.repo_root).resolve(strict=True), args.source_root or args.repo_root)
     _revalidate_helper_source_binding(helper_source_binding, selected)
     validate_host_path(selected, "source checkout")
+    validate_linux_mounts({selected: "source checkout"})
     local_volume(Path(layout["storage_root"]))
     identity = _compose_identity(layout)
     from docker_dev_network import parse_requested_subnet, check_requested_subnet_available
@@ -2679,6 +2683,7 @@ def start(args, *, reuse_state=None, control=None, operation=None, prepared=None
                     "Post-build continuation changed under the new development lease: " + str(error)
                 ) from error
         local_volume(state)
+        validate_linux_mounts({state: "session storage"})
         _pin_private_group_storage(control, operation, new_render=provided_operation is None)
         cache = _backend_cache(control, operation, layout, selected, image, toolchain["image_id"])
         operation["receipt"]["backend_volumes"] = cache["volume_names"]
@@ -2953,6 +2958,7 @@ def start(args, *, reuse_state=None, control=None, operation=None, prepared=None
         from docker_script_output_mounts import configure as configure_script_output, validate as validate_script_output
         configure_script_output(document, selected)
         validate_script_output(document)
+        validate_compose_binds(document)
         _prepare_script_output_permissions(document)
         # All writable bind destinations are runtime/user stores, never build data.
         for service in (backend, frontend):
@@ -8318,6 +8324,10 @@ def _retained_operation(
             image_config,
             allow_legacy_frontend=recreate_services or (service == 'frontend' and legacy_oom_recreation),
         )
+    # Stop/retirement must be available even for a legacy mount we would no
+    # longer admit on start.
+    if not stop_after_drain and not retire_only:
+        validate_compose_binds(document)
     retirement_drain_raw = None
     if retire_only:
         _require_retirement_stopped_pair(actual)
