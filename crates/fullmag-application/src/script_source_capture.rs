@@ -13,6 +13,8 @@ const SOURCE_LIMIT: u64 = 8 * 1024 * 1024;
 const RUNTIME_LIMIT: u64 = 128 * 1024 * 1024;
 const FILE_LIMIT: u64 = 32 * 1024 * 1024;
 pub const METADATA_LIMIT: usize = 8 * 1024 * 1024;
+// A run configuration can carry dense FDM masks in addition to the source inventory.
+const RUN_CONFIG_RESPONSE_LIMIT: usize = 16 * 1024 * 1024;
 pub const MATERIAL_CATALOG_UNAVAILABLE: &[u8] = br#"{"unavailable":true}"#;
 
 pub struct CapturedScriptSource {
@@ -293,13 +295,24 @@ fn material_catalog_lookup_error(stderr: &[u8]) -> Option<(&str, bool)> {
     (valid(family) && valid(version)).then_some((key, unavailable))
 }
 
+fn export_output_limit(options: &CaptureOptions<'_>) -> usize {
+    if !options.scene_only || options.include_run_config {
+        RUN_CONFIG_RESPONSE_LIMIT
+    } else {
+        METADATA_LIMIT
+    }
+}
+
 fn response(
     args: &[String],
     input: Option<File>,
+    maximum: usize,
     run: &mut impl FnMut(&[String], usize, Option<File>) -> Result<std::process::Output>,
 ) -> Result<CaptureEnvelope> {
-    let output = run(args, METADATA_LIMIT, input)?;
-    if output.stdout.len()>METADATA_LIMIT || output.stderr.len()>METADATA_LIMIT { bail!("accepted source capture metadata bound"); }
+    let output = run(args, maximum, input)?;
+    if output.stdout.len().saturating_add(output.stderr.len()) > maximum {
+        bail!("accepted source capture output exceeds the {maximum} byte limit");
+    }
     if !output.status.success() {
         if output.status.code() == Some(27) {
             if let Some((key, unavailable)) = material_catalog_lookup_error(&output.stderr) {
@@ -325,7 +338,12 @@ pub fn capture_authored_script(script: &Path, fullmag: &Path, options: &CaptureO
     };
     let script = absolute.as_path();
     regular_file(script)?;
-    let first = response(&helper_arguments(script, fullmag, "inventory", options, None), None, &mut run)?;
+    let first = response(
+        &helper_arguments(script, fullmag, "inventory", options, None),
+        None,
+        METADATA_LIMIT,
+        &mut run,
+    )?;
     if first.config.is_some() || first.scene.is_some() {
         bail!("inventory must not execute authored script");
     }
@@ -334,13 +352,18 @@ pub fn capture_authored_script(script: &Path, fullmag: &Path, options: &CaptureO
     for record in &first.capture.records {
         files.insert(record.relative_path.clone(), read_pinned(record)?);
     }
-    let second = response(&helper_arguments(
-        script,
-        fullmag,
-        "export",
-        options,
-        Some(&first.capture.inventory_sha256),
-    ), options.material_catalog.map(material_catalog_input).transpose()?, &mut run)?;
+    let second = response(
+        &helper_arguments(
+            script,
+            fullmag,
+            "export",
+            options,
+            Some(&first.capture.inventory_sha256),
+        ),
+        options.material_catalog.map(material_catalog_input).transpose()?,
+        export_output_limit(options),
+        &mut run,
+    )?;
     validate_capture(&second.capture, script, fullmag)?;
     let expects_config = !options.scene_only || options.include_run_config;
     if second.config.is_some() != expects_config
@@ -428,6 +451,54 @@ fn record_identity(record: &FileRecord) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn only_exports_with_run_config_accept_large_responses() {
+        #[cfg(unix)]
+        use std::os::unix::process::ExitStatusExt;
+        #[cfg(windows)]
+        use std::os::windows::process::ExitStatusExt;
+
+        let mut stdout = vec![b' '; 12 * 1024 * 1024];
+        stdout.extend_from_slice(br#"{"capture":{"schema_version":"test","entry_relative_path":"source/study.py","records":[],"runtime":{},"inventory_sha256":"test"}}"#);
+        let run_config = CaptureOptions {
+            scene_only: true,
+            include_run_config: true,
+            ..Default::default()
+        };
+        let scene_only = CaptureOptions {
+            include_run_config: false,
+            ..run_config
+        };
+        for (options, accepted) in [
+            (scene_only, false),
+            (run_config, true),
+            (CaptureOptions::default(), true),
+        ] {
+            let limit = export_output_limit(&options);
+            let received = response(&[], None, limit, &mut |_, maximum, _| {
+                assert_eq!(maximum, limit);
+                Ok(std::process::Output {
+                    status: std::process::ExitStatus::from_raw(0),
+                    stdout: stdout.clone(),
+                    stderr: Vec::new(),
+                })
+            });
+            assert_eq!(received.is_ok(), accepted);
+        }
+
+        let oversized = response(&[], None, RUN_CONFIG_RESPONSE_LIMIT, &mut |_, _, _| {
+            Ok(std::process::Output {
+                status: std::process::ExitStatus::from_raw(0),
+                stdout: vec![b' '; RUN_CONFIG_RESPONSE_LIMIT],
+                stderr: vec![b'!'],
+            })
+        });
+        assert_eq!(
+            oversized.err().unwrap().to_string(),
+            format!("accepted source capture output exceeds the {RUN_CONFIG_RESPONSE_LIMIT} byte limit"),
+        );
+    }
+
     #[test]
     fn passes_a_rewound_snapshot_only_to_the_export_phase() {
         let payload = br#"[{"source":{"version":{"family":"yig","version":"sample"}}}]"#;
