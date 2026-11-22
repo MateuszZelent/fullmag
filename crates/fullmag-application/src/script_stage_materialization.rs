@@ -81,6 +81,46 @@ mod canonical_relaxation_time_tests {
     }
 
     #[test]
+    fn staged_fdm_current_keeps_cell_topology_but_moving_a_terminal_does_not() {
+        let mut previous = ProblemIR::bootstrap_example();
+        previous.backend_policy.requested_backend = fullmag_ir::BackendTarget::Fdm;
+        previous.current_modules.push(serde_json::from_value(serde_json::json!({
+            "kind": "current_transport",
+            "name": "charge",
+            "model": "ohmic_poisson",
+            "domain": [],
+            "materials": [],
+            "gauge": "zero_mean",
+            "solver": {
+                "engine": "cg",
+                "linear": {"relative_tolerance": 1e-8, "absolute_tolerance": 0.0, "max_iterations": 100},
+                "operator_version": "test",
+                "physical_residual_version": "test"
+            },
+            "boundaries": [
+                {"kind": "normal_current_electrode", "id": "in", "surfaces": [],
+                    "outward_current_density_Apm2": 0.0}
+            ],
+        })).unwrap());
+
+        let mut next = previous.clone();
+        let fullmag_ir::CurrentModuleIR::CurrentTransport { definition: Some(definition), .. } =
+            &mut next.current_modules[0] else { unreachable!() };
+        let fullmag_ir::ChargeBoundaryIR::NormalCurrentElectrode {
+            outward_current_density_apm2, ..
+        } = &mut definition.boundaries[0] else { unreachable!() };
+        *outward_current_density_apm2 = -2.6e10;
+        assert!(compatible_physical_state_topology(&previous, &next));
+
+        let fullmag_ir::CurrentModuleIR::CurrentTransport { definition: Some(definition), .. } =
+            &mut next.current_modules[0] else { unreachable!() };
+        let fullmag_ir::ChargeBoundaryIR::NormalCurrentElectrode { id, .. } =
+            &mut definition.boundaries[0] else { unreachable!() };
+        *id = "a-different-terminal".into();
+        assert!(!compatible_physical_state_topology(&previous, &next));
+    }
+
+    #[test]
     fn preview_stage_budget_accumulates_and_preflights_sweeps() {
         let mut budget = Some(StageExpansionBudget::new(256));
         record_stage_count(&mut budget, 255).unwrap();
@@ -884,7 +924,11 @@ fn same_runtime_state_topology(previous: &ProblemIR, current: &ProblemIR) -> boo
         && previous.regions == current.regions
         && same_material_topology(&previous.materials, &current.materials)
         && same_magnet_topology(&previous.magnets, &current.magnets)
-        && previous.current_modules == current.current_modules
+        && (previous.current_modules == current.current_modules
+            || (previous.backend_policy.requested_backend == fullmag_ir::BackendTarget::Fdm
+                && previous.current_modules.len() == current.current_modules.len()
+                && previous.current_modules.iter().zip(&current.current_modules)
+                    .all(|(previous, current)| same_current_module_topology(previous, current))))
         && previous.spin_torque_modules == current.spin_torque_modules
         && previous.elastic_materials == current.elastic_materials
         && previous.elastic_bodies == current.elastic_bodies
@@ -894,6 +938,40 @@ fn same_runtime_state_topology(previous: &ProblemIR, current: &ProblemIR) -> boo
         && previous.air_box_policy == current.air_box_policy
         && previous.pbc == current.pbc
         && previous.mesh_semantics == current.mesh_semantics
+}
+
+fn same_current_module_topology(
+    previous: &fullmag_ir::CurrentModuleIR,
+    current: &fullmag_ir::CurrentModuleIR,
+) -> bool {
+    use fullmag_ir::{ChargeBoundaryIR::NormalCurrentElectrode, CurrentModuleIR::CurrentTransport};
+
+    if previous == current {
+        return true;
+    }
+    let mut previous = previous.clone();
+    let (
+        CurrentTransport { definition: Some(previous_definition), .. },
+        CurrentTransport { definition: Some(current_definition), .. },
+    ) = (&mut previous, current)
+    else {
+        return false;
+    };
+
+    // A staged current changes the boundary forcing without changing the
+    // transported magnetization's cells or the identity of a terminal.
+    for (previous_boundary, current_boundary) in
+        previous_definition.boundaries.iter_mut().zip(&current_definition.boundaries)
+    {
+        if let (
+            NormalCurrentElectrode { outward_current_density_apm2: previous_density, .. },
+            NormalCurrentElectrode { outward_current_density_apm2: current_density, .. },
+        ) = (previous_boundary, current_boundary)
+        {
+            *previous_density = *current_density;
+        }
+    }
+    &previous == current
 }
 
 #[doc(hidden)]

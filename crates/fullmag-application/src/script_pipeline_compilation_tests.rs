@@ -516,6 +516,48 @@ fn validate_snapshot_gate(input: &ScriptExecutionConfig) -> Result<()> {
 }
 
 #[test]
+fn transport_current_snapshots_require_the_same_authored_terminal_currents() {
+    use crate::script_stage_contract::{ScriptExecutionStage, ScriptExecutionStageAction};
+
+    let mut input = physical_snapshots();
+    let mut snapshot = input.stages[1].ir.clone();
+    snapshot.problem_meta.runtime_metadata
+        .insert("active_stage_id".into(), json!("pulse-current"));
+    input.study_pipeline.as_mut().unwrap().nodes.insert(1, serde_json::from_value(json!({
+        "node_kind": "primitive",
+        "id": "pulse-current",
+        "label": "Pulse current",
+        "stage_kind": "set_transport_current",
+        "payload": {
+            "module_id": "charge",
+            "terminal_outward_current_density_Apm2": {"left": -2.6e10, "right": 2.6e10}
+        }
+    })).unwrap());
+    let mut action = ScriptExecutionStageAction::SetTransportCurrent {
+        module_id: "charge".into(),
+        terminal_outward_current_density_apm2: BTreeMap::from([
+            ("left".into(), -2.6e10),
+            ("right".into(), 2.6e10),
+        ]),
+    };
+    input.stages.insert(1, ScriptExecutionStage {
+        ir: snapshot,
+        default_until_seconds: None,
+        entrypoint_kind: "flat_set_transport_current".into(),
+        action: Some(action.clone()),
+    });
+
+    validate_snapshot_gate(&input).unwrap();
+    let ScriptExecutionStageAction::SetTransportCurrent {
+        terminal_outward_current_density_apm2, ..
+    } = &mut action else { unreachable!() };
+    terminal_outward_current_density_apm2.insert("right".into(), 0.0);
+    input.stages[1].action = Some(action);
+    let error = validate_snapshot_gate(&input).unwrap_err();
+    assert!(error.to_string().contains("differs from its authored payload"));
+}
+
+#[test]
 fn antenna_action_snapshots_match_exact_selection_without_conflating_owner_id() {
     assert!(validate_snapshot_gate(&antenna_action_snapshots()).is_ok());
     assert!(validate_snapshot_gate(&physical_snapshots()).is_ok());
