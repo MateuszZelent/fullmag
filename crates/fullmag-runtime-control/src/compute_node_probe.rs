@@ -2320,6 +2320,17 @@ fn discover_nvidia_gpus(previous_devices: Option<&[GpuDeviceSnapshot]>) -> Resul
     };
     let stdout = String::from_utf8(output).context("nvidia-smi output is not UTF-8")?;
     let mut devices = parse_nvidia_smi_output(&stdout, includes_mig_mode)?;
+    if std::env::var("FULLMAG_HOST_LEDGER_PROFILE").as_deref() == Ok("group-ledger-v1") {
+        if let Ok(selected) = std::env::var("FULLMAG_DEV_CUDA_DEVICE_UUID") {
+            devices.retain(|device| selected.eq_ignore_ascii_case(&device.uuid));
+            let [device] = devices.as_mut_slice() else {
+                bail!("the pinned DEV CUDA UUID is missing or ambiguous in the NVIDIA inventory");
+            };
+            device.uuid = selected;
+            // CUDA_VISIBLE_DEVICES exposes this single GPU at ordinal zero.
+            device.local_ordinal = Observation::Available { value: 0 };
+        }
+    }
     let mig_enabled = if includes_mig_mode {
         nvidia_smi_mig_enabled_uuids(&stdout)
     } else {
