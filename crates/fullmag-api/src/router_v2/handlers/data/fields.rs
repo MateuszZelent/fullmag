@@ -10871,7 +10871,7 @@ mod tests {
                 })).unwrap(),
             ).unwrap();
             let field = resolve_transport_spatial_field(&snapshot, "V_electric").unwrap().unwrap();
-            assert_eq!(matches!(field.carrier, SpatialFieldCarrier::FdmCells { .. }), geometric);
+            assert_eq!(matches!(field.carrier, super::SpatialFieldCarrier::FdmCells { .. }), geometric);
         }
     }
 
