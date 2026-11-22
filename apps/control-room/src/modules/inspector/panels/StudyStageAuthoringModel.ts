@@ -1330,6 +1330,65 @@ export function createDefaultStudyStageDraft(
   });
 }
 
+/**
+ * Equips a newly authored `relax` stage draft with a valid explicit timestep
+ * policy so `+ Add Stage -> Relaxation -> Apply` and 1-click `Add Relax Stage`
+ * succeed out of the box without violating backend validation rules:
+ * - Adaptive RK23 (`dt_initial = 5e-14`, `dt_min = 1e-16`, `dt_max = 1e-11`,
+ *   `atol = 1e-5`, `rtol = 0`, `tolerance_mode = "max_error"`) when double
+ *   precision is active and adaptive execution is permitted (`backend === "fem"`
+ *   or `device === "cpu"` or no execution constraint provided).
+ * - Explicit fixed timestep (`fixed_timestep = "5e-14"`, `integrator = "rk23"`)
+ *   on FDM `auto` / `gpu` or single-precision sessions where adaptive FDM is
+ *   gated to explicit CPU double precision.
+ */
+export function withDefaultRelaxTimestepPolicy(
+  draft: StudyStageDraft,
+  execution?: {
+    backend?: string | null;
+    device?: string | null;
+    precision?: string | null;
+  },
+): StudyStageDraft {
+  if (
+    draft.kind !== "relax" ||
+    draft.algorithm !== "llg_overdamped" ||
+    draft.timestepMode !== "auto"
+  ) {
+    return draft;
+  }
+  const hasExecutionConstraint = execution !== undefined;
+  const backend = execution?.backend?.trim().toLowerCase() ?? "";
+  const device = execution?.device?.trim().toLowerCase() ?? "";
+  const precision = execution?.precision?.trim().toLowerCase() || "double";
+  const canUseAdaptive =
+    !hasExecutionConstraint ||
+    (precision === "double" && (backend === "fem" || device === "cpu"));
+  if (canUseAdaptive) {
+    return {
+      ...draft,
+      dt: "5e-14",
+      dtMax: "1e-11",
+      dtMin: "1e-16",
+      maxError: "1e-5",
+      solver: draft.solver === "rk45" ? "rk45" : "rk23",
+      timestepConflict: false,
+      timestepMode: "adaptive",
+      toleranceMode: "max_error",
+    };
+  }
+  return {
+    ...draft,
+    dt: "5e-14",
+    solver:
+      draft.solver === "rk45" || draft.solver === "heun"
+        ? draft.solver
+        : "rk23",
+    timestepConflict: false,
+    timestepMode: "fixed",
+  };
+}
+
 const STAGE_TEXTURE_ASSIGNMENTS_SCHEMA = "fullmag.magnetization-assignments.v1";
 
 export type StageTextureAssignment = JsonObject & {

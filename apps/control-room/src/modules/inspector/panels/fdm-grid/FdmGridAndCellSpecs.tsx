@@ -25,6 +25,7 @@ import {
 import {
   DATA_DOMAIN_META_PATH,
   DATA_FIELDS_PATH,
+  MODEL_SCENE_PATH,
 } from "@/kernel/api/apiPaths";
 import type {
   DomainMetaResource,
@@ -50,6 +51,7 @@ import {
 } from "@/kernel/resources/fdmCellPhysicsResources";
 import * as geometryLifecycleResources from "@/kernel/resources/geometryLifecycleResources";
 import type { ResourceResult } from "@/kernel/resources/resourceTypes";
+import * as sessionStatusHooks from "@/kernel/resources/useSessionStatus";
 import type {
   FdmCellMaskState,
   FdmDomainSelectionScope,
@@ -96,6 +98,7 @@ import {
   scalarColorPalettePatch,
   visualizationOverridesForTargetReset,
 } from "../ObjectVisualizationPanelModel";
+import { FdmMeshWorkflowCard } from "../mesh-details/FdmMeshWorkflowCard";
 import { SpecInspectorHost } from "../mesh-details/SpecInspectorHost";
 import type { FdmGridLegendEntry } from "./fdmGridInspectorModel";
 
@@ -146,6 +149,22 @@ const useSceneResourceSafe =
     sessionScopeKey: null,
     status: "idle" as const,
   }));
+function useSessionStatusDataSafe(): unknown {
+  const kernel = useKernel();
+  const enabled = Boolean(
+    (kernel?.api as { sessions?: { current?: { status?: unknown } } } | undefined)
+      ?.sessions?.current?.status,
+  );
+  const hook = sessionStatusHooks.useSessionStatusSelector;
+  if (typeof hook === "function") {
+    return hook((status) => status.data ?? null, { enabled });
+  }
+  return null;
+}
+function useSessionScopeKeySafe(): string | null {
+  const kernel = useKernel();
+  return kernel.commands?.getSessionScopeKey?.() ?? null;
+}
 const useModelRegionsResourceSafe =
   geometryLifecycleResources.useModelRegionsResource ??
   ((): ResourceResult<RegionListResource> => ({
@@ -725,6 +744,9 @@ function resolveGridVisualizationTarget(
 export function FdmGridInspectorSpecPanel({ selection }: InspectorPanelProps): ReactNode {
   const kernel = useKernel();
   const domainMeta = useDomainMetaResourceSafe();
+  const sceneRes = useSceneResourceSafe();
+  const sessionStatusData = useSessionStatusDataSafe();
+  const sessionScopeKey = useSessionScopeKeySafe();
   const membershipRes = useFdmRegionMembershipResourceSafe({ enabled: true });
   const multilayerRes = useFdmMultilayerLayoutResourceSafe();
   const [buildFeedback, setBuildFeedback] = useState<{
@@ -765,12 +787,24 @@ export function FdmGridInspectorSpecPanel({ selection }: InspectorPanelProps): R
   const executeBuildFdmGrid = useCallback(async () => {
     if (!kernel?.commands?.execute) return;
     try {
+      const statusKey =
+        sessionStatusHooks.SESSION_STATUS_RESOURCE_KEY ?? "session:status";
+      const resourceData: Record<string, unknown> = {};
+      if (domainMeta.data) {
+        resourceData[DATA_DOMAIN_META_PATH] = domainMeta.data;
+      }
+      if (sessionStatusData) {
+        resourceData[statusKey] = sessionStatusData;
+      }
+      if (sceneRes.data) {
+        resourceData[MODEL_SCENE_PATH] = sceneRes.data;
+      }
       const result = await kernel.commands.execute(
         "grid.build-fdm",
         createCommandContext("inspector", kernel, {
-          resourceData: domainMeta.data
-            ? { [DATA_DOMAIN_META_PATH]: domainMeta.data }
-            : undefined,
+          resourceData:
+            Object.keys(resourceData).length > 0 ? resourceData : undefined,
+          sessionScopeKey: sessionScopeKey ?? null,
           sourceDetail: "mesh.grid",
         }),
       );
@@ -803,7 +837,7 @@ export function FdmGridInspectorSpecPanel({ selection }: InspectorPanelProps): R
         tone: "err",
       });
     }
-  }, [domainMeta.data, kernel]);
+  }, [domainMeta.data, kernel, sceneRes.data, sessionScopeKey, sessionStatusData]);
 
   const shape: [number, number, number] = useMemo(() => {
     const raw = domainMeta.data?.grid?.shape ?? [0, 0, 0];
@@ -1099,11 +1133,6 @@ export function FdmGridInspectorSpecPanel({ selection }: InspectorPanelProps): R
             },
           },
         ],
-        primaryHeaderAction: {
-          icon: RefreshCw,
-          label: "Build FDM Grid",
-          onRun: () => executeBuildFdmGrid(),
-        },
       },
       identity: {
         domain: "mesh",
@@ -1188,7 +1217,9 @@ export function FdmGridInspectorSpecPanel({ selection }: InspectorPanelProps): R
         } else if (
           !membership &&
           !isMultilayer &&
-          domainMeta.status === "ready"
+          domainMeta.status === "ready" &&
+          scope !== "domain" &&
+          scope !== "descriptor"
         ) {
           list.push({
             id: "fdm-membership-missing",
@@ -1249,6 +1280,39 @@ export function FdmGridInspectorSpecPanel({ selection }: InspectorPanelProps): R
         return list;
       },
       sections: [
+        ...(scope === "domain" || scope === "descriptor"
+          ? [
+              {
+                defaultOpen: true,
+                icon: Compass,
+                id: "fdm-workflow",
+                rows: [
+                  {
+                    render: (ctx: InspectorActionContext<FdmGridDraft>) => (
+                      <FdmMeshWorkflowCard
+                        buildError={
+                          buildFeedback?.tone === "err" ? buildFeedback.text : null
+                        }
+                        domainMeta={domainMeta.data}
+                        gridMaterialized={totalCells > 0 && Boolean(membership)}
+                        sceneData={sceneRes.data}
+                        sessionScopeKey={sessionScopeKey}
+                        onBuildGrid={() => executeBuildFdmGrid()}
+                        onSelectNode={(next) => ctx.selectNode(next)}
+                      />
+                    ),
+                    type: "custom" as const,
+                    wide: true,
+                  },
+                ],
+                summary: () =>
+                  totalCells > 0 && membership
+                    ? `${shape.join(" × ")} ready`
+                    : "Follow steps 1 → 4",
+                title: "Structured grid workflow",
+              },
+            ]
+          : []),
         ...(scope === "region" || regionId !== null
           ? [
               {
@@ -1744,8 +1808,7 @@ export function FdmGridInspectorSpecPanel({ selection }: InspectorPanelProps): R
     buildFeedback,
     commonLayout,
     displaySampling,
-    domainMeta.data?.domain_id,
-    domainMeta.data?.generation_id,
+    domainMeta.data,
     domainMeta.error?.message,
     domainMeta.status,
     executeBuildFdmGrid,
@@ -1762,8 +1825,10 @@ export function FdmGridInspectorSpecPanel({ selection }: InspectorPanelProps): R
     ownerObjectId,
     regionId,
     resetVizTarget,
+    sceneRes.data,
     scope,
     selectedRegion,
+    sessionScopeKey,
     shape,
     spacing,
     totalCells,
@@ -1849,6 +1914,8 @@ export function FdmGridLayerInspectorSpecPanel({
     multilayerRes.data,
   );
   const sceneRes = useSceneResourceSafe();
+  const sessionStatusData = useSessionStatusDataSafe();
+  const sessionScopeKey = useSessionScopeKeySafe();
 
   const layerId = useMemo(
     () => extractLayerIdFromSelection(selection),
@@ -1913,16 +1980,28 @@ export function FdmGridLayerInspectorSpecPanel({
 
   const executeBuildFdmGrid = useCallback(async () => {
     if (!kernel?.commands?.execute) return;
+    const statusKey =
+      sessionStatusHooks.SESSION_STATUS_RESOURCE_KEY ?? "session:status";
+    const resourceData: Record<string, unknown> = {};
+    if (domainMeta.data) {
+      resourceData[DATA_DOMAIN_META_PATH] = domainMeta.data;
+    }
+    if (sessionStatusData) {
+      resourceData[statusKey] = sessionStatusData;
+    }
+    if (sceneRes.data) {
+      resourceData[MODEL_SCENE_PATH] = sceneRes.data;
+    }
     await kernel.commands.execute(
       "grid.build-fdm",
       createCommandContext("inspector", kernel, {
-        resourceData: domainMeta.data
-          ? { [DATA_DOMAIN_META_PATH]: domainMeta.data }
-          : undefined,
+        resourceData:
+          Object.keys(resourceData).length > 0 ? resourceData : undefined,
+        sessionScopeKey: sessionScopeKey ?? null,
         sourceDetail: "mesh.grid.layer",
       }),
     );
-  }, [domainMeta.data, kernel]);
+  }, [domainMeta.data, kernel, sceneRes.data, sessionScopeKey, sessionStatusData]);
 
   const layerMetrics = useMemo(() => {
     const summary = resolveLayerSummaryFromMembership(

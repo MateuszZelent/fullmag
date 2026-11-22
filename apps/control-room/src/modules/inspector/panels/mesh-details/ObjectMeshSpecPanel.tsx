@@ -369,13 +369,25 @@ export function ObjectMeshInspectorSpecPanel({
     });
   }, [buildHistoryRes.data, objectId]);
 
+  const sessionStatusData = sessionStatusHooks.useSessionStatusSelector((s) => s.data);
   const commandContext = useMemo(
     () =>
       createCommandContext("inspector", kernel, {
+        resourceData: {
+          ...(sessionStatusData
+            ? {
+                [sessionStatusHooks.SESSION_STATUS_RESOURCE_KEY ?? "session:status"]:
+                  sessionStatusData,
+              }
+            : {}),
+          ...(scene.data
+            ? { [geometryLifecycleResources.SCENE_RESOURCE_KEY]: scene.data }
+            : {}),
+        },
         sessionScopeKey: sessionScopeKey ?? null,
         sourceDetail: "object.mesh",
       }),
-    [kernel, sessionScopeKey],
+    [kernel, scene.data, sessionScopeKey, sessionStatusData],
   );
 
   const persistObjectPolicy = useCallback(
@@ -640,33 +652,6 @@ export function ObjectMeshInspectorSpecPanel({
           { id: "mesh", label: "Mesh" },
         ],
         canFitView: true,
-        primaryHeaderAction: fdmMode
-          ? {
-              icon: Grid3x3,
-              label: fdmGridMissing
-                ? hasAuthoredFdmCell
-                  ? "Build FDM Grid"
-                  : "Configure Cell Size"
-                : "Re-voxelize / Build Grid",
-              onRun: async () => {
-                if (fdmGridMissing && !hasAuthoredFdmCell) {
-                  openSessionMeshSizing();
-                  return;
-                }
-                await kernel.commands.execute("grid.build-fdm", commandContext);
-              },
-            }
-          : {
-              icon: Grid3x3,
-              label: "Build Object Mesh",
-              onRun: async (ctx) => {
-                await runMeshBuildCommand(
-                  "mesh.build-selected",
-                  ctx.draft,
-                  ctx.baseline,
-                );
-              },
-            },
         extraMenuActions: fdmMode
           ? undefined
           : [

@@ -67,6 +67,7 @@ import {
   rebaseAirboxMeshPolicyDraft,
 } from "../airbox/airboxMeshPolicyDraft";
 import { FemMeshReadinessGuideCard } from "../mesh-guide/FemMeshReadinessGuideCard";
+import { FdmMeshWorkflowCard } from "./FdmMeshWorkflowCard";
 import { MeshPartVisualizationPanel } from "../MeshPartVisualizationPanel";
 import type { MeshSizeDistributionHoverBin } from "../MeshQualityChart";
 import { recordField } from "../MeshResourceView";
@@ -427,6 +428,7 @@ interface MeshRootDraft {
 export function MeshRootInspectorSpecPanel({ selection }: InspectorPanelProps): ReactNode {
   const kernel = useKernel();
   const sessionIdentity = sessionStatusHooks.useSessionResourceIdentity();
+  const sessionStatusData = sessionStatusHooks.useSessionStatusSelector((s) => s.data);
   const sessionScopeKey = sessionRequestScopeKey(sessionIdentity) ?? undefined;
   const activeLane = useActiveLane();
   const femActive = activeLane === "fem";
@@ -610,6 +612,7 @@ export function MeshRootInspectorSpecPanel({ selection }: InspectorPanelProps): 
   const femNodes =
     resolvedCounts?.node_count ??
     asNumber(asRecord(manifest.data?.topology_counts)?.nodes);
+  const [fdmBuildError, setFdmBuildError] = useState<string | null>(null);
   const buildingNow = Boolean(activeBuild.data?.active_build);
   const fdmGridBuilt = Boolean(
     domainMeta.data?.grid &&
@@ -691,7 +694,6 @@ export function MeshRootInspectorSpecPanel({ selection }: InspectorPanelProps): 
             kind: "merge_patch",
             merge_patch: {
               study: {
-                demag_realization: demagStrategy,
                 fdm: fdmPatch,
               },
             },
@@ -753,14 +755,12 @@ export function MeshRootInspectorSpecPanel({ selection }: InspectorPanelProps): 
         geometryLifecycleResources.MESH_UNIVERSE_POLICY_RESOURCE_KEY,
         `w5:${Date.now()}`,
       );
+      return committedScene ?? null;
     },
     [kernel, scene.data, sessionScopeKey, universePolicy.data],
   );
 
   const spec = useMemo<InspectorSpec<MeshRootDraft>>(() => {
-    const hasPriorArtifacts = Boolean(
-      femActive ? manifest.data || (summary.data?.revision ?? 0) > 0 : fdmGridBuilt,
-    );
     const resolveEffectiveFdmGridShape = (draft: MeshRootDraft): [number, number, number] => {
       if (draft.sizingMode === "cell_count") {
         return [
@@ -788,16 +788,59 @@ export function MeshRootInspectorSpecPanel({ selection }: InspectorPanelProps): 
       draft.cellSizeM[1] !== base.cellSizeM[1] ||
       draft.cellSizeM[2] !== base.cellSizeM[2];
     const runBuildFdmGrid = async (draft: MeshRootDraft, base: MeshRootDraft) => {
-      if (isDraftModified(draft, base) || !hasAuthoredFdmSizing) {
-        await persistFdmDiscretizationPolicy(draft);
+      setFdmBuildError(null);
+      try {
+        let latestScene: SceneResource | null = scene.data ?? null;
+        if (isDraftModified(draft, base) || !hasAuthoredFdmSizing) {
+          const committed = await persistFdmDiscretizationPolicy(draft);
+          if (committed) latestScene = committed;
+        }
+        const result = await kernel.commands.execute(
+          "grid.build-fdm",
+          createCommandContext("inspector", kernel, {
+            resourceData: {
+              ...(sessionStatusData ? { [SESSION_STATUS_KEY]: sessionStatusData } : {}),
+              ...(latestScene
+                ? { [geometryLifecycleResources.SCENE_RESOURCE_KEY]: latestScene }
+                : {}),
+            },
+            sessionScopeKey: sessionScopeKey ?? null,
+            sourceDetail: "mesh.root",
+          }),
+        );
+        if (result?.status === "failed" && result.message) {
+          setFdmBuildError(result.message);
+        }
+      } catch (err) {
+        setFdmBuildError(
+          err instanceof Error ? err.message : "Failed to save FDM grid sizing.",
+        );
       }
-      await kernel.commands.execute(
-        "grid.build-fdm",
-        createCommandContext("inspector", kernel, {
-          sessionScopeKey: sessionScopeKey ?? null,
-          sourceDetail: "mesh.root",
-        }),
-      );
+    };
+    const runBuildFemMesh = async (sourceDetail: string) => {
+      setFdmBuildError(null);
+      try {
+        const result = await kernel.commands.execute(
+          "mesh.build-shared-domain",
+          createCommandContext("inspector", kernel, {
+            resourceData: {
+              ...(sessionStatusData ? { [SESSION_STATUS_KEY]: sessionStatusData } : {}),
+              ...(scene.data
+                ? { [geometryLifecycleResources.SCENE_RESOURCE_KEY]: scene.data }
+                : {}),
+            },
+            sessionScopeKey: sessionScopeKey ?? null,
+            sourceDetail,
+          }),
+        );
+        if (result?.status === "failed" && result.message) {
+          setFdmBuildError(result.message);
+        }
+      } catch (err) {
+        setFdmBuildError(
+          err instanceof Error ? err.message : "Failed to build shared-domain FEM mesh.",
+        );
+      }
     };
     return {
       id: "mesh.root",
@@ -817,39 +860,6 @@ export function MeshRootInspectorSpecPanel({ selection }: InspectorPanelProps): 
           { id: "mesh", label: "Mesh" },
         ],
         canFitView: true,
-        primaryHeaderAction: {
-          confirm: hasPriorArtifacts
-            ? {
-                confirmLabel: femActive ? "Rebuild mesh" : "Re-voxelize grid",
-                description:
-                  "Rebuilding discretization invalidates downstream mesh-pinned solver states for earlier revisions.",
-                title: femActive
-                  ? "Rebuild shared-domain FEM mesh?"
-                  : "Re-voxelize structured FDM grid?",
-              }
-            : undefined,
-          icon: Grid3x3,
-          label: femActive
-            ? manifest.data
-              ? "Rebuild Mesh"
-              : "Build Mesh"
-            : fdmGridBuilt
-              ? "Re-voxelize Grid"
-              : "Build Structured Grid",
-          onRun: async (ctx) => {
-            if (!femActive) {
-              await runBuildFdmGrid(ctx.draft, ctx.baseline);
-              return;
-            }
-            await kernel.commands.execute(
-              "mesh.build-shared-domain",
-              createCommandContext("inspector", kernel, {
-                sessionScopeKey: sessionScopeKey ?? null,
-                sourceDetail: "mesh.root",
-              }),
-            );
-          },
-        },
       },
       identity: {
         domain: "mesh",
@@ -948,27 +958,16 @@ export function MeshRootInspectorSpecPanel({ selection }: InspectorPanelProps): 
       },
       notices: (draft) => {
         const list: InspectorNotice<MeshRootDraft>[] = [];
+        if (fdmBuildError) {
+          list.push({
+            id: "fdm-build-error",
+            text: fdmBuildError,
+            title: draft.lane === "fem" ? "FEM mesh build failed" : "FDM grid configuration failed",
+            tone: "err",
+          });
+        }
         if (draft.lane === "fdm") {
           const shape = resolveEffectiveFdmGridShape(draft);
-          if (!fdmGridBuilt) {
-            list.push({
-              focusFieldKey: "cellSizeM",
-              id: "fdm-not-built",
-              quickFix: {
-                label: hasAuthoredFdmSizing
-                  ? "Build Structured Grid"
-                  : "Save & Build Grid",
-                onApply: async (ctx) => {
-                  await runBuildFdmGrid(ctx.draft, ctx.baseline);
-                },
-              },
-              text: hasAuthoredFdmSizing
-                ? "Cell size is configured, but the structured FDM grid has not been built yet. Build the grid to materialize voxel cells and enable grid wireframe."
-                : "Set Cell size (Δx, Δy, Δz) below and build the structured FDM grid to materialize voxel cells and enable grid wireframe.",
-              title: "FDM grid not built yet",
-              tone: "warn",
-            });
-          }
           const guard = computeExchangeLengthGuard(scene.data, draft.cellSizeM, shape);
           if (guard?.exceeds) {
             const maxNm = (guard.maxActiveCellM * 1e9).toFixed(2);
@@ -1002,13 +1001,7 @@ export function MeshRootInspectorSpecPanel({ selection }: InspectorPanelProps): 
             quickFix: {
               label: "Rebuild Mesh",
               onApply: async () => {
-                await kernel.commands.execute(
-                  "mesh.build-shared-domain",
-                  createCommandContext("inspector", kernel, {
-                    sessionScopeKey: sessionScopeKey ?? null,
-                    sourceDetail: "mesh.root.notice",
-                  }),
-                );
+                await runBuildFemMesh("mesh.root.notice");
               },
             },
             text: `Geometry or mesh policy changed since scene revision ${manifestSourceRev} (current revision ${sceneRev}). Rebuild mesh before running solvers.`,
@@ -1019,6 +1012,62 @@ export function MeshRootInspectorSpecPanel({ selection }: InspectorPanelProps): 
         return list;
       },
       sections: [
+        {
+          defaultOpen: true,
+          icon: Compass,
+          id: "fdm-workflow",
+          rows: [
+            {
+              render: (ctx) => {
+                const shape = resolveEffectiveFdmGridShape(ctx.draft);
+                return (
+                  <FdmMeshWorkflowCard
+                    activeCellSizeM={ctx.draft.cellSizeM}
+                    activeGridShape={shape}
+                    buildBusy={buildingNow}
+                    buildError={fdmBuildError}
+                    canAutoSaveCellSize
+                    cellSizeModified={isDraftModified(ctx.draft, ctx.baseline)}
+                    domainMeta={domainMeta.data}
+                    gridMaterialized={fdmGridBuilt}
+                    sceneData={scene.data}
+                    sessionScopeKey={sessionScopeKey ?? null}
+                    onBuildGrid={() => runBuildFdmGrid(ctx.draft, ctx.baseline)}
+                    onFocusCellSize={() => {
+                      const inspectorControl = (
+                        kernel as unknown as {
+                          inspector?: { focusRow?: (rowKey: string) => void };
+                        }
+                      ).inspector;
+                      inspectorControl?.focusRow?.("cellSizeM");
+                    }}
+                    onSelectNode={(next) => ctx.selectNode(next)}
+                  />
+                );
+              },
+              type: "custom",
+              wide: true,
+            },
+          ],
+          showWhen: (d) => d.lane === "fdm",
+          summary: () => (fdmGridBuilt ? "Grid ready" : "Follow steps 1 → 4"),
+          title: "FDM grid workflow",
+        },
+        {
+          defaultOpen: !manifest.data,
+          icon: Compass,
+          id: "fem-readiness",
+          rows: [
+            {
+              render: () => <FemMeshReadinessGuideCard compact={Boolean(manifest.data)} />,
+              type: "custom",
+              wide: true,
+            },
+          ],
+          showWhen: (d) => d.lane === "fem",
+          summary: () => (manifest.data ? "Shared-domain mesh built" : "Follow steps 1 → 6"),
+          title: "FEM mesh workflow",
+        },
         {
           defaultOpen: true,
           icon: Settings2,
@@ -1172,21 +1221,6 @@ export function MeshRootInspectorSpecPanel({ selection }: InspectorPanelProps): 
           title: "Global FDM grid sizing",
         },
         {
-          defaultOpen: !manifest.data,
-          icon: Compass,
-          id: "fem-readiness",
-          rows: [
-            {
-              render: () => <FemMeshReadinessGuideCard compact={Boolean(manifest.data)} />,
-              type: "custom",
-              wide: true,
-            },
-          ],
-          showWhen: (d) => d.lane === "fem",
-          summary: () => (manifest.data ? "Shared-domain mesh built" : "Action required"),
-          title: "Readiness checklist",
-        },
-        {
           defaultOpen: true,
           footer: (ctx) => (
             <div className="flex flex-wrap gap-2">
@@ -1250,13 +1284,7 @@ export function MeshRootInspectorSpecPanel({ selection }: InspectorPanelProps): 
                 type="button"
                 variant="secondary"
                 onClick={() => {
-                  void kernel.commands.execute(
-                    "mesh.build-shared-domain",
-                    createCommandContext("inspector", kernel, {
-                      sessionScopeKey: sessionScopeKey ?? null,
-                      sourceDetail: "mesh.root.footer",
-                    }),
-                  );
+                  void runBuildFemMesh("mesh.root.footer");
                 }}
               >
                 Build Shared-Domain Mesh
@@ -1511,6 +1539,8 @@ export function MeshRootInspectorSpecPanel({ selection }: InspectorPanelProps): 
   }, [
     activeLane,
     buildingNow,
+    domainMeta.data,
+    fdmBuildError,
     fdmGridBuilt,
     femActive,
     femElements,
@@ -1523,6 +1553,7 @@ export function MeshRootInspectorSpecPanel({ selection }: InspectorPanelProps): 
     scene.data,
     sceneRev,
     sessionScopeKey,
+    sessionStatusData,
     sharedPolicy.data,
     summary.data,
     universePolicy.data,
@@ -1552,7 +1583,9 @@ export function MeshSharedDomainInspectorSpecPanel({
   const kernel = useKernel();
   const sessionScopeKey =
     sessionRequestScopeKey(sessionStatusHooks.useSessionResourceIdentity()) ?? undefined;
+  const sessionStatusData = sessionStatusHooks.useSessionStatusSelector((s) => s.data);
 
+  const scene = geometryLifecycleResources.useSceneResource();
   const policy = geometryLifecycleResources.useMeshSharedDomainPolicyResource();
   const manifest = geometryLifecycleResources.useMeshSharedDomainManifestResource();
   const summary = geometryLifecycleResources.useMeshSummaryResource();
@@ -1657,19 +1690,6 @@ export function MeshSharedDomainInspectorSpecPanel({
           { id: "shared", label: "Shared Domain" },
         ],
         canFitView: true,
-        primaryHeaderAction: {
-          icon: Grid3x3,
-          label: "Build Shared-Domain Mesh",
-          onRun: async () => {
-            await kernel.commands.execute(
-              "mesh.build-shared-domain",
-              createCommandContext("inspector", kernel, {
-                sessionScopeKey: sessionScopeKey ?? null,
-                sourceDetail: "mesh.shared-domain",
-              }),
-            );
-          },
-        },
       },
       identity: {
         domain: "mesh",
@@ -1752,11 +1772,20 @@ export function MeshSharedDomainInspectorSpecPanel({
               <Button
                 size="sm"
                 type="button"
-                variant="secondary"
+                variant="primary"
                 onClick={() => {
                   void kernel.commands.execute(
                     "mesh.build-shared-domain",
                     createCommandContext("inspector", kernel, {
+                      resourceData: {
+                        ...(sessionStatusData ? { [SESSION_STATUS_KEY]: sessionStatusData } : {}),
+                        ...(scene.data
+                          ? { [geometryLifecycleResources.SCENE_RESOURCE_KEY]: scene.data }
+                          : {}),
+                        ...(capabilities.data
+                          ? { [geometryLifecycleResources.MESH_CAPABILITIES_RESOURCE_KEY]: capabilities.data }
+                          : {}),
+                      },
                       sessionScopeKey: sessionScopeKey ?? null,
                       sourceDetail: "mesh.shared-domain.footer",
                     }),
@@ -2081,6 +2110,7 @@ export function MeshSharedDomainInspectorSpecPanel({
       },
     };
   }, [
+    capabilities.data,
     counts,
     editorCapabilities,
     kernel,
@@ -2090,7 +2120,9 @@ export function MeshSharedDomainInspectorSpecPanel({
     mixedTopology,
     policy.data,
     qualityStats,
+    scene.data,
     sessionScopeKey,
+    sessionStatusData,
     summary.data,
   ]);
 
@@ -3218,6 +3250,7 @@ export function MeshBuildsInspectorSpecPanel({
   const kernel = useKernel();
   const sessionScopeKey =
     sessionRequestScopeKey(sessionStatusHooks.useSessionResourceIdentity()) ?? undefined;
+  const sessionStatusData = sessionStatusHooks.useSessionStatusSelector((s) => s.data);
   const activeLane = useActiveLane();
   const femMode = activeLane === "fem";
 
@@ -3241,7 +3274,7 @@ export function MeshBuildsInspectorSpecPanel({
     enabled: femMode,
   });
   const sceneRes = geometryLifecycleResources.useSceneResource({
-    enabled: femMode,
+    enabled: activeLane !== "unresolved",
   });
   const domainMeta = geometryLifecycleResources.useDomainMetaResource({
     enabled: activeLane === "fdm",
@@ -3397,11 +3430,17 @@ export function MeshBuildsInspectorSpecPanel({
     await kernel.commands.execute(
       cmd,
       createCommandContext("inspector", kernel, {
+        resourceData: {
+          ...(sessionStatusData ? { [SESSION_STATUS_KEY]: sessionStatusData } : {}),
+          ...(sceneRes.data
+            ? { [geometryLifecycleResources.SCENE_RESOURCE_KEY]: sceneRes.data }
+            : {}),
+        },
         sessionScopeKey: sessionScopeKey ?? null,
         sourceDetail: "mesh.builds",
       }),
     );
-  }, [activeLane, kernel, sessionScopeKey]);
+  }, [activeLane, kernel, sceneRes.data, sessionScopeKey, sessionStatusData]);
 
   const handleRestoreEntry = useCallback(
     (entry: MeshBuildHistoryEntry) => {

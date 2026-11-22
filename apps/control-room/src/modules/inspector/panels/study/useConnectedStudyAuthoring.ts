@@ -86,6 +86,7 @@ import {
   createDefaultStudyStageDraft,
   createStudyStageDrafts,
   validateStudyStageDraft,
+  withDefaultRelaxTimestepPolicy,
   type K0ModalExecutionReadiness,
   type StudyStageDraft,
   type StudyStageDraftKind,
@@ -618,7 +619,14 @@ export function useKernelStudyAuthoring(selection: Selection) {
       const matched = matchSelectedStageDraft(currentDrafts, selection);
       const baseStage =
         matched.draft ??
-        createDefaultStudyStageDraft(fallbackKind, matched.index);
+        withDefaultRelaxTimestepPolicy(
+          createDefaultStudyStageDraft(fallbackKind, matched.index),
+          {
+            backend: currentGlobal.requestedBackend,
+            device: currentGlobal.requestedDevice,
+            precision: currentGlobal.requestedPrecision,
+          },
+        );
       const updated = patcher(baseStage);
       const profileBound = current.scene
         ? hasStudyExecutionProfile(current.scene)

@@ -110,6 +110,7 @@ import type { StudyInspectorModel } from "../StudyInspectorPanelModel";
 import { StudyProgressBar } from "../StudyProgressBar";
 import {
   createDefaultStudyStageDraft,
+  withDefaultRelaxTimestepPolicy,
   type StudyStageDraft,
   type StudyStageDraftKind,
 } from "../StudyStageAuthoringModel";
@@ -3151,6 +3152,7 @@ function ConnectedStudyStagesInspectorPanel({ selection }: InspectorPanelProps) 
   const {
     commitStageDraftList,
     executeStudyCommand,
+    globalDraft,
     isCanonicalPipeline,
     lastAuthoringError,
     sceneData,
@@ -3207,9 +3209,16 @@ function ConnectedStudyStagesInspectorPanel({ selection }: InspectorPanelProps) 
               stageEnabled: item.enabled,
             };
           }
-          const created = createDefaultStudyStageDraft(
-            item.kind as StudyStageDraftKind,
-            idx,
+          const created = withDefaultRelaxTimestepPolicy(
+            createDefaultStudyStageDraft(
+              item.kind as StudyStageDraftKind,
+              idx,
+            ),
+            {
+              backend: globalDraft.requestedBackend,
+              device: globalDraft.requestedDevice,
+              precision: globalDraft.requestedPrecision,
+            },
           );
           return {
             ...created,
