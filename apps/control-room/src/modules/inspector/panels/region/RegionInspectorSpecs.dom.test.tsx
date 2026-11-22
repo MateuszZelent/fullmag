@@ -23,6 +23,7 @@ import {
   serializeRegionShapeState,
 } from "./regionInspectorHelpers";
 import {
+  assignDescendingPrecedencePriorities,
   extractSelectionTarget,
   ObjectRegionMagneticParametersInspectorPanel,
   ObjectRegionMeshInspectorPanel,
@@ -633,8 +634,18 @@ describe("RegionInspectorSpecs & Constraints/Extensions (Task 16 + Wave 4 Slice 
     });
     expect(mocks.commitTransaction).toHaveBeenCalledWith(
       expect.objectContaining({
-        kind: "reorder_object_regions",
-        region_ids: ["reg-rim", "reg-core"],
+        kind: "merge_patch",
+        merge_patch: {
+          objects: [
+            expect.objectContaining({
+              id: "film",
+              regions: [
+                expect.objectContaining({ region_id: "reg-rim", priority: 5 }),
+                expect.objectContaining({ region_id: "reg-core", priority: 1 }),
+              ],
+            }),
+          ],
+        },
       }),
       expect.objectContaining({ sessionScopeKey: "s1" }),
     );
@@ -657,6 +668,7 @@ describe("RegionInspectorSpecs & Constraints/Extensions (Task 16 + Wave 4 Slice 
     expect(mounted.host.textContent).not.toMatch(/\bunknown\b/i);
 
     // Region Material Overrides + 1-click Reset to Inherited
+    mocks.commitTransaction.mockClear();
     const matSel: Selection = {
       kind: "object.region.magnetic-parameters",
       label: "Material",
@@ -682,9 +694,21 @@ describe("RegionInspectorSpecs & Constraints/Extensions (Task 16 + Wave 4 Slice 
     await act(async () => {
       applyBtn?.dispatchEvent(new TestEvent("click", { bubbles: true }));
     });
-    expect(mocks.patchObjectMaterialFields).toHaveBeenCalledWith(
-      "film",
-      [],
+    expect(mocks.commitTransaction).toHaveBeenCalledTimes(1);
+    expect(mocks.patchObjectRegion).not.toHaveBeenCalled();
+    expect(mocks.patchObjectMaterialFields).not.toHaveBeenCalled();
+    expect(mocks.commitTransaction).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: "merge_patch",
+        merge_patch: {
+          objects: [
+            expect.objectContaining({
+              id: "film",
+              material_parameter_fields: [],
+            }),
+          ],
+        },
+      }),
       expect.objectContaining({ sessionScopeKey: "s1" }),
     );
 
@@ -1186,15 +1210,29 @@ describe("RegionInspectorSpecs & Constraints/Extensions (Task 16 + Wave 4 Slice 
       applyBtn?.dispatchEvent(new TestEvent("click", { bubbles: true }));
     });
 
-    expect(mocks.patchObjectRegion).toHaveBeenCalledWith(
-      "film",
-      "reg-core",
+    expect(mocks.commitTransaction).toHaveBeenCalledTimes(1);
+    expect(mocks.patchObjectRegion).not.toHaveBeenCalled();
+    expect(mocks.patchObjectMaterialFields).not.toHaveBeenCalled();
+    expect(mocks.commitTransaction).toHaveBeenCalledWith(
       expect.objectContaining({
-        material_overrides: expect.arrayContaining([
-          expect.objectContaining({ parameter: "aex" }),
-          expect.objectContaining({ parameter: "ms" }),
-        ]),
-        material_transition: { kind: "sharp" },
+        kind: "merge_patch",
+        merge_patch: {
+          objects: [
+            expect.objectContaining({
+              id: "film",
+              regions: expect.arrayContaining([
+                expect.objectContaining({
+                  region_id: "reg-core",
+                  material_overrides: expect.arrayContaining([
+                    expect.objectContaining({ parameter: "aex" }),
+                    expect.objectContaining({ parameter: "ms" }),
+                  ]),
+                  material_transition: { kind: "sharp" },
+                }),
+              ]),
+            }),
+          ],
+        },
       }),
       expect.objectContaining({ sessionScopeKey: "s1" }),
     );
@@ -1367,5 +1405,96 @@ describe("RegionInspectorSpecs & Constraints/Extensions (Task 16 + Wave 4 Slice 
     expect(mounted.host.textContent).not.toContain("\\hat{\\mathbf m}");
     expect(mounted.host.textContent).not.toMatch(/\bunavailable\b/i);
     expect(findElements(mounted.host, (el) => el.tagName === "SELECT")).toHaveLength(0);
+  });
+
+  it("commits combined constitutive overrides, transition, and scalar fields in one atomic merge_patch and breaks equal-priority ties on reorder", async () => {
+    expect(assignDescendingPrecedencePriorities([5, 1])).toEqual([5, 1]);
+    expect(assignDescendingPrecedencePriorities([0, 0])).toEqual([1, 0]);
+    expect(assignDescendingPrecedencePriorities([5, 5, 1])).toEqual([6, 5, 1]);
+
+    const coreRegion = mocks.sceneData.objects[0]!.regions[0]!;
+    coreRegion.material_overrides = [
+      {
+        parameter: "aex",
+        priority: 5,
+        conflict_policy: "higher_priority_wins",
+        value: { kind: "constant", unit: "J/m", value: 11e-12 },
+      },
+    ];
+    coreRegion.material_transition = {
+      kind: "metric",
+      width: 6e-9,
+      scope: "boundary",
+    };
+
+    const matSel: Selection = {
+      kind: "object.region.magnetic-parameters",
+      label: "Material",
+      moduleSource: "explorer",
+      nodeId: "model:object:film:regions:reg-core:magnetic-parameters",
+      objectId: "film",
+      ref: null,
+    };
+    mounted = mountWave4TestElement(
+      <ObjectRegionMagneticParametersInspectorPanel selection={matSel} />,
+    );
+
+    // Simultaneously edit scalar material_parameter_fields (reset) + constitutive overrides + transition
+    act(() => {
+      findElement(
+        mounted!.host,
+        (el) =>
+          el.tagName === "BUTTON" && Boolean(el.textContent?.includes("Reset to Inherited")),
+      )?.dispatchEvent(new TestEvent("click", { bubbles: true }));
+    });
+    act(() => {
+      findElement(
+        mounted!.host,
+        (el) =>
+          el.tagName === "BUTTON" &&
+          Boolean(el.textContent?.includes("Add Constitutive Override")),
+      )?.dispatchEvent(new TestEvent("click", { bubbles: true }));
+    });
+    act(() => {
+      findElement(
+        mounted!.host,
+        (el) => el.tagName === "BUTTON" && el.textContent === "Sharp",
+      )?.dispatchEvent(new TestEvent("click", { bubbles: true }));
+    });
+
+    await act(async () => {
+      findElement(
+        mounted!.host,
+        (el) => el.tagName === "BUTTON" && Boolean(el.textContent?.includes("Apply")),
+      )?.dispatchEvent(new TestEvent("click", { bubbles: true }));
+    });
+
+    // Single atomic transaction — never two sequential API writes!
+    expect(mocks.commitTransaction).toHaveBeenCalledTimes(1);
+    expect(mocks.patchObjectRegion).not.toHaveBeenCalled();
+    expect(mocks.patchObjectMaterialFields).not.toHaveBeenCalled();
+    expect(mocks.commitTransaction).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: "merge_patch",
+        merge_patch: {
+          objects: [
+            expect.objectContaining({
+              id: "film",
+              material_parameter_fields: [],
+              regions: expect.arrayContaining([
+                expect.objectContaining({
+                  region_id: "reg-core",
+                  material_overrides: [
+                    expect.objectContaining({ parameter: "ms" }),
+                  ],
+                  material_transition: { kind: "sharp" },
+                }),
+              ]),
+            }),
+          ],
+        },
+      }),
+      expect.objectContaining({ sessionScopeKey: "s1" }),
+    );
   });
 });

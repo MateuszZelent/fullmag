@@ -1081,4 +1081,105 @@ describe("ObjectMaterialSpec (Wave 4 Feature-Parity & Constitutive Authoring)", 
     });
     expect(mounted.host.textContent).not.toContain("Scene revision conflict (HTTP 409)");
   });
+
+  it("recovers cleanly via Retry Assignment when MaterialAssignmentAfterCreateError occurs after createMaterial", async () => {
+    mocks.sceneData = {
+      revision: 40,
+      materials: [],
+      objects: [
+        {
+          id: "cu-line-1",
+          name: "Copper Strip",
+          role: "conductor",
+          material_ref: "",
+        },
+      ],
+    };
+
+    const createdScene = {
+      revision: 41,
+      materials: [
+        {
+          id: "mat:copper-strip",
+          name: "Copper Strip Material",
+          properties: { Ms: null, Aex: null, alpha: 0.008, Dind: null, Dbulk: null },
+        },
+      ],
+      objects: mocks.sceneData.objects,
+    };
+
+    mocks.createMaterial.mockResolvedValueOnce({
+      committed_scene: createdScene,
+      scene_revision: 41,
+    });
+    mocks.patchObject
+      .mockRejectedValueOnce(
+        new ControlRoomApiError("scene revision conflict during assignment", {
+          code: "revision_conflict",
+          status: 409,
+        }),
+      )
+      .mockResolvedValueOnce({
+        ...createdScene,
+        revision: 42,
+        objects: [
+          {
+            id: "cu-line-1",
+            name: "Copper Strip",
+            role: "conductor",
+            material_ref: "mat:copper-strip",
+          },
+        ],
+      });
+
+    mounted = mountWave4TestElement(
+      <ObjectMaterialInspectorPanel selection={makeSelection("cu-line-1")} />,
+    );
+
+    const newIdInput = findElement(
+      findElement(
+        mounted.host,
+        (el) => el.getAttribute("data-row") === "newMaterialId",
+        "New material ID row",
+      ),
+      (el) => el.tagName === "INPUT",
+      "New material ID input",
+    );
+    act(() => {
+      editTextOrNumberInput(newIdInput, "mat:copper-strip");
+    });
+
+    const applyBtn = findElement(
+      mounted.host,
+      (el) => el.tagName === "BUTTON" && Boolean(el.textContent?.includes("Apply")),
+    );
+    await act(async () => {
+      applyBtn?.dispatchEvent(new TestEvent("click", { bubbles: true }));
+    });
+
+    // Partial failure surfaced with Retry Assignment quick-fix
+    expect(mocks.createMaterial).toHaveBeenCalledTimes(1);
+    expect(mocks.patchObject).toHaveBeenCalledTimes(1);
+    expect(mounted.host.textContent).toContain("Retry Assignment");
+
+    // Advance scene revision and click Retry Assignment -> assigns mat:copper-strip without crashing on .trim()!
+    mocks.sceneData = createdScene;
+    const retryBtn = findElement(
+      mounted.host,
+      (el) => el.tagName === "BUTTON" && Boolean(el.textContent?.includes("Retry Assignment")),
+      "Retry Assignment button",
+    );
+    await act(async () => {
+      retryBtn.dispatchEvent(new TestEvent("click", { bubbles: true }));
+    });
+
+    expect(mocks.patchObject).toHaveBeenCalledTimes(2);
+    expect(mocks.patchObject).toHaveBeenLastCalledWith(
+      "cu-line-1",
+      { base_revision: 41, material_ref: "mat:copper-strip" },
+      { sessionScopeKey: "session=s1&epoch=e1&request_scope_epoch=r1" },
+    );
+    expect(mounted.host.textContent).not.toContain("Retry Assignment");
+    assertNoTemplateInvalidationKeys();
+  });
 }, 25_000);

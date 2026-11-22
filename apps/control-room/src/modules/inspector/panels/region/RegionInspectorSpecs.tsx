@@ -23,7 +23,10 @@ import {
   type ReactNode,
 } from "react";
 
-import type { FrozenSpinsSelectionExpression } from "@/kernel/api/apiTypes";
+import type {
+  FrozenSpinsSelectionExpression,
+  JsonValue,
+} from "@/kernel/api/apiTypes";
 import { createCommandContext } from "@/kernel/commands/commandContext";
 import { useKernel } from "@/kernel/KernelContext";
 import {
@@ -173,6 +176,32 @@ function formatVectorSpanAuto(vec: readonly [number, number, number]): string {
   return `${formatLengthAuto(vec[0])} \u00d7 ${formatLengthAuto(vec[1])} \u00d7 ${formatLengthAuto(vec[2])}`;
 }
 
+function toJsonValue(value: unknown): JsonValue {
+  return JSON.parse(JSON.stringify(value)) as JsonValue;
+}
+
+/**
+ * Computes strictly descending integer priorities for an ordered precedence stack
+ * (index 0 = highest precedence, matching `crates/fullmag-plan/src/region_conflict.rs`).
+ * Preserves existing distinct priority values (e.g. `[5, 1]` -> `[5, 1]`) and breaks
+ * equal-priority ties monotonically (`[0, 0]` -> `[1, 0]`, `[5, 5, 1]` -> `[6, 5, 1]`).
+ */
+export function assignDescendingPrecedencePriorities(
+  currentPriorities: readonly number[],
+): number[] {
+  const n = currentPriorities.length;
+  if (n === 0) return [];
+  const sortedDesc = [...currentPriorities]
+    .map((p) => (Number.isFinite(p) ? Math.trunc(p) : 0))
+    .sort((a, b) => b - a);
+  const assigned = new Array<number>(n);
+  assigned[n - 1] = sortedDesc[n - 1]!;
+  for (let i = n - 2; i >= 0; i--) {
+    assigned[i] = Math.max(sortedDesc[i]!, assigned[i + 1]! + 1);
+  }
+  return assigned;
+}
+
 /* ── 1. RegionsCollectionInspectorPanel (`object.regions`) ── */
 
 interface RegionPrecedenceItem {
@@ -231,7 +260,7 @@ export function RegionsCollectionInspectorPanel({ selection }: InspectorPanelPro
 
   const items = useMemo<readonly RegionPrecedenceItem[]>(() => {
     const matFields = sceneObj?.material_parameter_fields ?? [];
-    return (sceneObj?.regions ?? []).map((reg) => {
+    const mapped = (sceneObj?.regions ?? []).map((reg, originalIndex) => {
       const rec = reg as unknown as Record<string, unknown>;
       const id = String(rec.region_id ?? "");
       const shapeKind = formatRegionShapeKindLabel(rec.shape);
@@ -271,18 +300,25 @@ export function RegionsCollectionInspectorPanel({ selection }: InspectorPanelPro
       else if (warningCount > 0) badges.push(`${warningCount} warning`);
 
       return {
-        id,
-        name: String(rec.name ?? id),
-        priority,
-        shapeKind,
-        enabled: rec.enabled !== false,
-        overrideSummary: badges.length > 0 ? badges.join(" \u00b7 ") : "Inherits object",
-        couplingCount: couplings.length,
-        warningCount,
-        errorCount,
-        raw: rec,
+        originalIndex,
+        item: {
+          id,
+          name: String(rec.name ?? id),
+          priority,
+          shapeKind,
+          enabled: rec.enabled !== false,
+          overrideSummary: badges.length > 0 ? badges.join(" \u00b7 ") : "Inherits object",
+          couplingCount: couplings.length,
+          warningCount,
+          errorCount,
+          raw: rec,
+        },
       };
     });
+    mapped.sort(
+      (a, b) => b.item.priority - a.item.priority || a.originalIndex - b.originalIndex,
+    );
+    return mapped.map((entry) => entry.item);
   }, [
     couplingsResource.data,
     meshLaneInfo.lane,
@@ -437,30 +473,67 @@ export function RegionsCollectionInspectorPanel({ selection }: InspectorPanelPro
 
   const handleReorder = useCallback(
     async (fromIdx: number, toIdx: number) => {
-      if (!objectId || toIdx < 0 || toIdx >= items.length) return;
-      const nextIds = items.map((it) => it.id);
-      const [moved] = nextIds.splice(fromIdx, 1);
+      if (!objectId || toIdx < 0 || toIdx >= items.length || fromIdx === toIdx) return;
+      const reordered = [...items];
+      const [moved] = reordered.splice(fromIdx, 1);
       if (!moved) return;
-      nextIds.splice(toIdx, 0, moved);
+      reordered.splice(toIdx, 0, moved);
+      const nextPriorities = assignDescendingPrecedencePriorities(
+        reordered.map((it) => it.priority),
+      );
 
       const tx = await executeRegionMutationWithHistory({
         kernel,
-        label: `Reorder regions on ${objectId}`,
+        label: `Update region precedence on ${objectId}`,
         sceneData: scene.data,
         sessionScopeKey,
         sourceDetail: "object-regions-reorder",
-        mutation: async (prep, writeOpts) =>
-          kernel.api.model.commitTransaction(
+        mutation: async (prep, writeOpts) => {
+          const baseScene = prep.before ?? scene.data;
+          const nextObjects = (baseScene?.objects ?? []).map((obj) => {
+            if (obj.id !== objectId) return obj;
+            const byId = new Map(
+              (obj.regions ?? []).map((reg) => [String(reg.region_id ?? ""), reg]),
+            );
+            const nextRegions = reordered.flatMap((entry, idx) => {
+              const existing = byId.get(entry.id);
+              if (!existing) return [];
+              return [
+                {
+                  ...existing,
+                  priority: nextPriorities[idx]!,
+                },
+              ];
+            });
+            const rawTags = (obj as { tags?: unknown }).tags;
+            const hasTagsArray = Array.isArray(rawTags);
+            const existingTags = hasTagsArray ? (rawTags as string[]) : [];
+            const nextTags = existingTags.includes("mesh:dirty")
+              ? existingTags
+              : [...existingTags, "mesh:dirty"];
+            return {
+              ...obj,
+              regions: nextRegions,
+              ...(hasTagsArray ? { tags: nextTags } : {}),
+            };
+          });
+          return kernel.api.model.commitTransaction(
             {
-              base_revision: prep.baseRevision ?? scene.data?.revision ?? null,
-              kind: "reorder_object_regions",
-              object_id: objectId,
-              region_ids: nextIds,
+              base_revision:
+                writeOpts?.baseRevision ??
+                prep.baseRevision ??
+                scene.data?.revision ??
+                null,
+              kind: "merge_patch",
+              merge_patch: {
+                objects: toJsonValue(nextObjects),
+              },
             },
             writeOpts?.sessionScopeKey
               ? { sessionScopeKey: writeOpts.sessionScopeKey }
               : undefined,
-          ),
+          );
+        },
       });
 
       await finalizeRegionAuthoringCommit({
@@ -697,7 +770,7 @@ export function RegionsCollectionInspectorPanel({ selection }: InspectorPanelPro
         },
         {
           id: "regions-precedence-stack",
-          title: "Precedence stack (later overrides earlier)",
+          title: "Precedence stack (higher priority wins)",
           icon: Layers,
           defaultOpen: true,
           summary: (d) => `${d.items.length} ordered regions`,
@@ -995,6 +1068,19 @@ export function ObjectRegionOverviewInspectorPanel({ selection }: InspectorPanel
       (typeof regionRec?.realization_policy === "string" &&
         regionRec.realization_policy !== "inherit");
 
+    const sortedRegionIds = regions
+      .map((r, originalIndex) => {
+        const rec = r as unknown as Record<string, unknown>;
+        const p =
+          typeof rec.priority === "number" && Number.isFinite(rec.priority)
+            ? Math.trunc(rec.priority)
+            : 0;
+        return { id: String(rec.region_id ?? ""), priority: p, originalIndex };
+      })
+      .sort((a, b) => b.priority - a.priority || a.originalIndex - b.originalIndex)
+      .map((entry) => entry.id);
+    const sortedIdx = sortedRegionIds.indexOf(regionId);
+
     return {
       objectId,
       objectName: sceneObj?.name?.trim() || objectId || "Object",
@@ -1004,7 +1090,7 @@ export function ObjectRegionOverviewInspectorPanel({ selection }: InspectorPanel
       enabled: regionRec?.enabled !== false,
       priority,
       frame,
-      precedenceRank: regionIdx >= 0 ? regionIdx + 1 : 1,
+      precedenceRank: sortedIdx >= 0 ? sortedIdx + 1 : regionIdx >= 0 ? regionIdx + 1 : 1,
       totalRegions: regions.length,
       ...parsedShape,
       materialOverrideCount: constitutiveCount + fieldCount,
@@ -1020,7 +1106,7 @@ export function ObjectRegionOverviewInspectorPanel({ selection }: InspectorPanel
     regionId,
     regionIdx,
     regionRec,
-    regions.length,
+    regions,
     sceneObj?.material_parameter_fields,
     sceneObj?.name,
     selection.label,
@@ -2823,10 +2909,6 @@ export function ObjectRegionMagneticParametersInspectorPanel({
         cleanMessage: () => "Regional material assignments match SceneDocument",
         lockReason: (d) => (!d.exists ? "Select an existing authored region." : null),
         onApply: async (draft, base) => {
-          const otherRegionFields: SceneMaterialParameterAssignment[] = (
-            sceneObj?.material_parameter_fields ?? []
-          ).filter((f) => f.region_id !== regionId);
-
           const nextRegionFields: SceneMaterialParameterAssignment[] = [
             ...draft.preservedExtraRegionFields.map((f) => structuredClone(f)),
           ];
@@ -2898,60 +2980,70 @@ export function ObjectRegionMagneticParametersInspectorPanel({
             JSON.stringify(nextRegionFields) !== JSON.stringify(currentRegionFields) ||
             (!constitutiveChanged && !transitionChanged);
 
+          const nextTransitionValue =
+            draft.transitionKind === "sharp" && !draft.hadAuthoredTransition
+              ? { kind: "sharp" as const }
+              : serializeRegionMaterialTransition(draft);
+
           const outcome = await executeRegionMutationWithHistory({
             kernel,
             label: `Update regional magnetic parameters on ${draft.regionName}`,
             sceneData: scene.data,
             sessionScopeKey,
             sourceDetail: "object-region-magnetic-parameters-apply",
-            mutation: async (_prep, writeOpts) => {
-              let latestScene = scene.data ?? null;
-              let latestRevision = writeOpts?.baseRevision;
-
-              if (constitutiveChanged || transitionChanged) {
-                const regionPatch: SceneObjectRegionPatch = {};
-                if (constitutiveChanged) {
-                  regionPatch.material_overrides = nextConstitutive;
-                }
-                if (transitionChanged) {
-                  regionPatch.material_transition =
-                    draft.transitionKind === "sharp" && !draft.hadAuthoredTransition
-                      ? { kind: "sharp" }
-                      : serializeRegionMaterialTransition(draft);
-                }
-                const regTx = await kernel.api.model.patchObjectRegion(
-                  objectId,
-                  regionId,
-                  regionPatch,
-                  writeOpts,
+            mutation: async (prep, writeOpts) => {
+              const baseScene = prep.before ?? scene.data;
+              const nextObjects = (baseScene?.objects ?? []).map((obj) => {
+                if (obj.id !== objectId) return obj;
+                const preservedOtherFields = (obj.material_parameter_fields ?? []).filter(
+                  (f) => f.region_id !== regionId,
                 );
-                latestScene = regTx.committed_scene;
-                latestRevision = regTx.scene_revision;
-              }
-
-              if (fieldsChanged) {
-                const nextOpts =
-                  latestRevision !== undefined || sessionScopeKey
+                return {
+                  ...obj,
+                  ...(constitutiveChanged || transitionChanged
                     ? {
-                        ...(latestRevision !== undefined
-                          ? { baseRevision: latestRevision }
-                          : {}),
-                        ...(sessionScopeKey ? { sessionScopeKey } : {}),
+                        regions: (obj.regions ?? []).map((reg) =>
+                          reg.region_id === regionId
+                            ? {
+                                ...reg,
+                                ...(constitutiveChanged
+                                  ? { material_overrides: nextConstitutive }
+                                  : {}),
+                                ...(transitionChanged
+                                  ? { material_transition: nextTransitionValue }
+                                  : {}),
+                              }
+                            : reg,
+                        ),
                       }
-                    : undefined;
-                const fieldsTx = await kernel.api.model.patchObjectMaterialFields(
-                  objectId,
-                  [...otherRegionFields, ...nextRegionFields],
-                  nextOpts,
-                );
-                latestScene = fieldsTx.committed_scene;
-                latestRevision = fieldsTx.scene_revision;
-              }
+                    : {}),
+                  ...(fieldsChanged
+                    ? {
+                        material_parameter_fields: [
+                          ...preservedOtherFields,
+                          ...nextRegionFields,
+                        ],
+                      }
+                    : {}),
+                };
+              });
 
-              return {
-                committed_scene: latestScene,
-                scene_revision: latestRevision,
-              };
+              return kernel.api.model.commitTransaction(
+                {
+                  base_revision:
+                    writeOpts?.baseRevision ??
+                    prep.baseRevision ??
+                    scene.data?.revision ??
+                    null,
+                  kind: "merge_patch",
+                  merge_patch: {
+                    objects: toJsonValue(nextObjects),
+                  },
+                },
+                writeOpts?.sessionScopeKey
+                  ? { sessionScopeKey: writeOpts.sessionScopeKey }
+                  : undefined,
+              );
             },
           });
 

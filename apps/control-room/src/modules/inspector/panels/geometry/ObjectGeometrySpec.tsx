@@ -68,6 +68,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/shared/ui/Dialog";
+import { DisabledReason } from "@/shared/ui/DisabledReason";
 import { Input } from "@/shared/ui/Input";
 
 import type { InspectorPanelProps } from "../../inspectorTypes";
@@ -167,7 +168,7 @@ export interface ObjectGeometrySpecDraft {
   polygonVertices: readonly PolygonVertexRow[];
   // ImportedMesh
   meshAssetPath: string;
-  meshUnitScale: "nm" | "um" | "mm" | "m";
+  meshUnitScale: number;
   // Transform
   translation: readonly [number, number, number];
   eulerDeg: readonly [number, number, number];
@@ -391,10 +392,52 @@ export function normalizeScaleForUniformLock(
   ];
 }
 
+export function isUniformPositiveScale(
+  scale: readonly [number, number, number],
+): boolean {
+  const [sx, sy, sz] = scale;
+  if (!Number.isFinite(sx) || !Number.isFinite(sy) || !Number.isFinite(sz)) {
+    return false;
+  }
+  if (sx <= 0 || sy <= 0 || sz <= 0) {
+    return false;
+  }
+  const tol = 1e-9 * Math.max(1, Math.abs(sx));
+  return Math.abs(sx - sy) <= tol && Math.abs(sx - sz) <= tol;
+}
+
+export function canBakeScaleIntoDraft(
+  draft: Pick<ObjectGeometrySpecDraft, "primitiveKind" | "scale">,
+): { ok: true } | { ok: false; reason: string } {
+  if (draft.scale.some((c) => !Number.isFinite(c) || c <= 0)) {
+    return {
+      ok: false,
+      reason: "All scale factors must be strictly positive before baking.",
+    };
+  }
+  if (
+    draft.primitiveKind === "ImportedMesh" &&
+    !isUniformPositiveScale(draft.scale)
+  ) {
+    return {
+      ok: false,
+      reason:
+        "ImportedMesh only supports uniform unit_scale baking (sx = sy = sz).",
+    };
+  }
+  return { ok: true };
+}
+
 export function bakeScaleIntoDraft(
   draft: ObjectGeometrySpecDraft,
 ): Partial<ObjectGeometrySpecDraft> {
   const [sx, sy, sz] = draft.scale;
+  if (!Number.isFinite(sx) || !Number.isFinite(sy) || !Number.isFinite(sz)) {
+    return {};
+  }
+  if (sx <= 0 || sy <= 0 || sz <= 0) {
+    return {};
+  }
   const uni = Math.cbrt(Math.abs(sx * sy * sz)) || 1;
   const resetScale: readonly [number, number, number] = [1, 1, 1];
   switch (draft.primitiveKind) {
@@ -456,12 +499,36 @@ export function bakeScaleIntoDraft(
         })),
         scale: resetScale,
       };
-    default:
-      return { scale: resetScale };
+    case "ImportedMesh":
+      if (!isUniformPositiveScale(draft.scale)) {
+        return {};
+      }
+      return {
+        meshUnitScale: Number((draft.meshUnitScale * Math.abs(sx)).toPrecision(12)),
+        scale: resetScale,
+      };
   }
 }
 
 /* ── Serialization & Parsing ── */
+
+function parseImportedMeshUnitScale(raw: unknown): number {
+  if (typeof raw === "number" && Number.isFinite(raw) && raw > 0) {
+    return raw;
+  }
+  switch (raw) {
+    case "nm":
+      return 1e-9;
+    case "um":
+      return 1e-6;
+    case "mm":
+      return 1e-3;
+    case "m":
+      return 1;
+    default:
+      return 1e-9;
+  }
+}
 
 function normalizePrimitiveKind(raw: string | null | undefined): CanonicalPrimitiveKind {
   const clean = (raw ?? "").trim().toLowerCase().replace(/[\s_-]+/g, "");
@@ -962,7 +1029,7 @@ export function buildBaselineFromScene(
       archAngleRad: Math.PI / 3,
       polygonVertices: defaultPolygon,
       meshAssetPath: "",
-      meshUnitScale: "nm",
+      meshUnitScale: 1e-9,
       translation: [0, 0, 0],
       eulerDeg: [0, 0, 0],
       pivotMode: "centroid",
@@ -1013,7 +1080,7 @@ export function buildBaselineFromScene(
       archAngleRad: Math.PI / 3,
       polygonVertices: defaultPolygon,
       meshAssetPath: "",
-      meshUnitScale: "nm",
+      meshUnitScale: 1e-9,
       translation: [0, 0, 0],
       eulerDeg: [0, 0, 0],
       pivotMode: "centroid",
@@ -1159,13 +1226,7 @@ export function buildBaselineFromScene(
     archAngleRad: typeof params.arc_angle_rad === "number" ? params.arc_angle_rad : Math.PI / 3,
     polygonVertices: parsedVerts,
     meshAssetPath: typeof params.asset_path === "string" ? params.asset_path : "",
-    meshUnitScale:
-      params.unit_scale === "nm" ||
-      params.unit_scale === "um" ||
-      params.unit_scale === "mm" ||
-      params.unit_scale === "m"
-        ? params.unit_scale
-        : "nm",
+    meshUnitScale: parseImportedMeshUnitScale(params.unit_scale),
     translation,
     eulerDeg,
     pivotMode,
@@ -2182,15 +2243,17 @@ function SharedGeometrySpecPanel({
             },
             {
               key: "meshUnitScale",
-              type: "segmented",
+              type: "quantity",
               label: "Coordinate unit scale",
+              units: LENGTH_UNITS,
+              defaultDisplayUnit: "nm",
+              min: 0,
+              minExclusive: true,
               showWhen: (d) => d.primitiveKind === "ImportedMesh",
-              options: [
-                { value: "nm", label: "nm" },
-                { value: "um", label: "\u00b5m" },
-                { value: "mm", label: "mm" },
-                { value: "m", label: "m" },
-              ],
+              validate: (v) =>
+                Number.isFinite(v) && v > 0
+                  ? null
+                  : "Coordinate unit scale must be strictly positive.",
             },
           ],
         },
@@ -2262,26 +2325,52 @@ function SharedGeometrySpecPanel({
                   : null,
             },
           ],
-          footer: (ctx) => (
-            <div className="flex flex-wrap gap-1.5">
+          footer: (ctx) => {
+            const bakeCheck = canBakeScaleIntoDraft(ctx.draft);
+            const bakeButton = (
               <Button
+                disabled={!bakeCheck.ok}
                 size="sm"
                 type="button"
                 variant="secondary"
-                onClick={() => ctx.patchDraft(bakeScaleIntoDraft(ctx.draft))}
+                onClick={() => {
+                  if (!bakeCheck.ok) return;
+                  ctx.patchDraft(bakeScaleIntoDraft(ctx.draft));
+                }}
               >
                 Bake Scale into Dimensions
               </Button>
-              <Button
-                size="sm"
-                type="button"
-                variant="ghost"
-                onClick={() => ctx.setField("scale", [1, 1, 1])}
-              >
-                Reset Scale [1, 1, 1]
-              </Button>
-            </div>
-          ),
+            );
+            return (
+              <div className="flex flex-col gap-1.5">
+                <div className="flex flex-wrap gap-1.5">
+                  {bakeCheck.ok ? (
+                    bakeButton
+                  ) : (
+                    <DisabledReason reason={bakeCheck.reason}>
+                      {bakeButton}
+                    </DisabledReason>
+                  )}
+                  <Button
+                    size="sm"
+                    type="button"
+                    variant="ghost"
+                    onClick={() => ctx.setField("scale", [1, 1, 1])}
+                  >
+                    Reset Scale [1, 1, 1]
+                  </Button>
+                </div>
+                {!bakeCheck.ok && ctx.draft.primitiveKind === "ImportedMesh" ? (
+                  <p
+                    className="text-xs text-[var(--fm-text-muted)]"
+                    data-slot="imported-mesh-bake-scale-hint"
+                  >
+                    {bakeCheck.reason}
+                  </p>
+                ) : null}
+              </div>
+            );
+          },
         },
 
         /* ── TAB 3: BOOLEAN CSG ── */

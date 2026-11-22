@@ -230,7 +230,6 @@ vi.mock("@/kernel/KernelContext", async () => {
     resources: {
       get: () => null,
       getRevision: () => 1,
-      getSnapshot: () => ({ data: null, error: null, revision: null, status: "idle" }),
       invalidate: kernelSpies.invalidateResource,
       subscribe: () => () => undefined,
     },

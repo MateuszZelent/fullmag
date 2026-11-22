@@ -55,6 +55,21 @@ vi.mock("@radix-ui/react-select", () => ({
   ScrollDownButton: () => null,
   Separator: () => <hr />,
 }));
+vi.mock("@radix-ui/react-dialog", () => ({
+  Root: ({ children, open }: { children?: ReactNode; open?: boolean }) =>
+    open ? <div data-slot="mock-dialog-root">{children}</div> : null,
+  Trigger: ({ children }: { children?: ReactNode }) => <>{children}</>,
+  Portal: ({ children }: { children?: ReactNode }) => <>{children}</>,
+  Overlay: () => <div />,
+  Content: ({ children, role }: { children?: ReactNode; role?: string }) => (
+    <div data-slot="mock-dialog-content" role={role ?? "dialog"}>
+      {children}
+    </div>
+  ),
+  Title: ({ children }: { children?: ReactNode }) => <h2>{children}</h2>,
+  Description: ({ children }: { children?: ReactNode }) => <p>{children}</p>,
+  Close: ({ children }: { children?: ReactNode }) => <>{children}</>,
+}));
 vi.mock("@/shared/charts/ScientificEChart", () => ({
   ScientificEChart: ({ ariaLabel }: { ariaLabel?: string }) => (
     <div aria-label={ariaLabel} data-slot="echart-mock" />
@@ -62,7 +77,11 @@ vi.mock("@/shared/charts/ScientificEChart", () => ({
 }));
 
 const mocks = vi.hoisted(() => ({
+  sessionScopeKey: "session-1" as string | null,
   patchObject: vi.fn().mockResolvedValue({ revision: 6 }),
+  publishCommittedScene: vi.fn(),
+  invalidate: vi.fn(),
+  selectionSet: vi.fn(),
   sceneData: {
     revision: 5,
     materials: [{ id: "py", name: "Permalloy", properties: { alpha: 0.008 } }],
@@ -107,23 +126,23 @@ vi.mock("@/kernel/KernelContext", () => ({
     },
     commands: {
       execute: vi.fn(),
-      getSessionScopeKey: () => "session-1",
+      getSessionScopeKey: () => mocks.sessionScopeKey,
     },
     resources: {
-      invalidate: vi.fn(),
+      invalidate: mocks.invalidate,
       setOptimisticData: vi.fn(),
     },
     selection: {
-      set: vi.fn(),
+      set: mocks.selectionSet,
     },
   }),
 }));
 
 vi.mock("@/kernel/resources/geometryLifecycleResources", () => ({
-  publishCommittedSceneResource: vi.fn(),
+  publishCommittedSceneResource: mocks.publishCommittedScene,
   useSceneResource: () => ({
     data: mocks.sceneData,
-    sessionScopeKey: "session-1",
+    sessionScopeKey: mocks.sessionScopeKey,
     status: "ready",
     error: null,
   }),
@@ -137,7 +156,12 @@ describe("ObjectAbsorbingBoundaryInspectorPanel parity", () => {
   afterEach(() => {
     mounted?.unmount();
     mounted = null;
-    mocks.patchObject.mockClear();
+    mocks.sessionScopeKey = "session-1";
+    mocks.patchObject.mockReset();
+    mocks.patchObject.mockResolvedValue({ revision: 6 });
+    mocks.publishCommittedScene.mockClear();
+    mocks.invalidate.mockClear();
+    mocks.selectionSet.mockClear();
   });
 
   it("preserves maxDamping = 0, exposes Add layer / Duplicate layer / Reverse normal, and surfaces Missing region fallback", () => {
@@ -190,5 +214,73 @@ describe("ObjectAbsorbingBoundaryInspectorPanel parity", () => {
 
     expect(findElements(mounted.host, (el) => el.tagName === "SELECT")).toHaveLength(0);
     expect(mounted.host.textContent).not.toMatch(/\b(unknown|unavailable)\b/i);
+  });
+
+  it("guards SAL delete against stale response when session switches or closes mid-flight", async () => {
+    const selection: Selection = {
+      kind: "object.absorbing-boundary",
+      label: "Absorbing Boundary",
+      moduleSource: "explorer",
+      nodeId: "model:object:strip-1:absorbing-boundary",
+      objectId: "strip-1",
+      ref: {
+        kind: "object.absorbing-boundary",
+        nodeId: "model:object:strip-1:absorbing-boundary",
+        objectId: "strip-1",
+        type: "scene-object",
+      },
+    };
+
+    let resolveDelete!: (value: { revision: number }) => void;
+    mocks.patchObject.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveDelete = resolve;
+        }),
+    );
+
+    mounted = mountWave4TestElement(
+      <ObjectAbsorbingBoundaryInspectorPanel selection={selection} />,
+    );
+
+    const removeMenuBtn = findElement(
+      mounted.host,
+      (el) =>
+        el.tagName === "BUTTON" &&
+        Boolean(el.textContent?.includes("Remove Absorbing Boundary")),
+    );
+    expect(removeMenuBtn).not.toBeNull();
+    act(() => {
+      removeMenuBtn?.dispatchEvent(new TestEvent("click", { bubbles: true }));
+    });
+
+    const confirmDeleteBtn = findElement(
+      mounted.host,
+      (el) => el.getAttribute("data-slot") === "alert-dialog-action",
+    );
+    expect(confirmDeleteBtn).not.toBeNull();
+    await act(async () => {
+      confirmDeleteBtn?.click();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(mocks.patchObject).toHaveBeenCalledWith(
+      "strip-1",
+      { base_revision: 5, absorbing_boundary: null },
+      { baseRevision: 5, sessionScopeKey: "session-1" },
+    );
+
+    // Session closes/switches BEFORE delete response resolves
+    mocks.sessionScopeKey = null;
+
+    await act(async () => {
+      resolveDelete({ revision: 6 });
+      await Promise.resolve();
+    });
+
+    expect(mocks.publishCommittedScene).not.toHaveBeenCalled();
+    expect(mocks.invalidate).not.toHaveBeenCalled();
+    expect(mocks.selectionSet).not.toHaveBeenCalled();
   });
 });

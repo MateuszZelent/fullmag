@@ -921,4 +921,74 @@ describe("Task 18 MeshDomainSpecs, l_ex guard, FemMeshReadinessGuide and FDM tre
       action: "ignore_nonphysical",
     });
   });
+
+  it("switches session discretization via patchStudy({ requested_backend }) and invalidates valid authoring dependent keys without throwing", async () => {
+    mocks.discretization = "fem";
+    mocks.patchStudy.mockClear();
+    mocks.commitTransaction.mockClear();
+    mocks.invalidate.mockClear();
+
+    await act(async () => {
+      harness.root.render(
+        createElement(
+          InspectorEditSessionProvider,
+          null,
+          createElement(MeshRootInspectorSpecPanel, {
+            selection: {
+              kind: "mesh.root",
+              label: "Mesh",
+              moduleSource: "explorer",
+              nodeId: "model:mesh",
+              objectId: null,
+              ref: null,
+            },
+          }),
+        ),
+      );
+    });
+
+    const fdmOption = findElement(
+      harness.container,
+      (el) =>
+        el.tagName === "BUTTON" &&
+        Boolean(el.textContent?.includes("FDM Grid")),
+    );
+    expect(fdmOption).not.toBeNull();
+    await act(async () => {
+      fdmOption!.click();
+    });
+
+    const applyBtn = findElement(
+      harness.container,
+      (el) =>
+        el.tagName === "BUTTON" &&
+        Boolean(el.textContent?.includes("Apply")) &&
+        !el.disabled,
+    );
+    expect(applyBtn).not.toBeNull();
+    await act(async () => {
+      applyBtn!.click();
+    });
+
+    // Confirm modal prompts before switching discretization lane
+    const confirmSwitchBtn = findElements(
+      document.body,
+      (el) =>
+        el.tagName === "BUTTON" &&
+        Boolean(el.textContent?.includes("Switch to FDM")),
+    )[0];
+    if (confirmSwitchBtn) {
+      await act(async () => {
+        confirmSwitchBtn.click();
+      });
+    }
+
+    expect(mocks.patchStudy).toHaveBeenCalledTimes(1);
+    expect(mocks.patchStudy).toHaveBeenCalledWith(
+      { requested_backend: "fdm" },
+      expect.anything(),
+    );
+    expect(mocks.patchStudy.mock.calls[0]?.[0]).not.toHaveProperty("discretization");
+    expect(mocks.invalidate).toHaveBeenCalled();
+  });
 });

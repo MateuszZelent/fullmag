@@ -487,8 +487,10 @@ export function useDebouncedTransportValidation({
         signal: controller.signal,
       })
         .then((response) => {
-          const currentCommandScope = kernel.commands?.getSessionScopeKey?.();
-          const scopeMatches = !currentCommandScope || currentCommandScope === sessionScopeKey;
+          const scopeMatches =
+            typeof kernel.commands?.getSessionScopeKey === "function"
+              ? (kernel.commands.getSessionScopeKey() ?? null) === sessionScopeKey
+              : true;
           if (
             !controller.signal.aborted &&
             scopeMatches &&
@@ -498,8 +500,10 @@ export function useDebouncedTransportValidation({
           }
         })
         .catch((error: unknown) => {
-          const currentCommandScope = kernel.commands?.getSessionScopeKey?.();
-          const scopeMatches = !currentCommandScope || currentCommandScope === sessionScopeKey;
+          const scopeMatches =
+            typeof kernel.commands?.getSessionScopeKey === "function"
+              ? (kernel.commands.getSessionScopeKey() ?? null) === sessionScopeKey
+              : true;
           if (
             !controller.signal.aborted &&
             scopeMatches &&

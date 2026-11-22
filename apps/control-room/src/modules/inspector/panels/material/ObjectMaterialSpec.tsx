@@ -1229,10 +1229,12 @@ export function ObjectMaterialInspectorPanel({ selection }: InspectorPanelProps)
     async (ctx: InspectorActionContext<UnifiedObjectMaterialDraft>) => {
       const pending = conflictState?.pendingAssignmentError;
       if (!pending || !objectId) return;
+      const createdMaterialId = pending.materialId.trim();
+      if (!createdMaterialId) return;
       const createdMaterialName =
-        pending.created.committed_scene?.materials?.find(
-          (m) => m.id === pending.materialId,
-        )?.name ?? pending.materialId;
+        pending.created.committed_scene?.materials
+          ?.find((m) => m.id === createdMaterialId)
+          ?.name?.trim() || createdMaterialId;
       const historyContext = makeHistoryContext();
       try {
         const patchedScene = await runAuthoringMutationWithHistory(
@@ -1242,7 +1244,7 @@ export function ObjectMaterialInspectorPanel({ selection }: InspectorPanelProps)
             kernel.api.model.patchObject(
               objectId,
               buildMaterialAssignmentPatch(
-                { materialRef: pending.materialId },
+                { materialRef: createdMaterialId },
                 baseRevision ?? scene.data?.revision ?? pending.assignmentBaseRevision,
               ),
               sessionScopeKey ? { sessionScopeKey } : undefined,
@@ -1259,12 +1261,13 @@ export function ObjectMaterialInspectorPanel({ selection }: InspectorPanelProps)
         );
         invalidateAuthoringMutationDependents(kernel.resources, "material", rev);
         kernel.resources.invalidate(
-          resolveMaterialResourceKey(pending.materialId),
+          resolveMaterialResourceKey(createdMaterialId),
           rev,
         );
         setConflictState(null);
         ctx.patchDraft({
-          materialId: pending.materialId,
+          materialId: createdMaterialId,
+          newMaterialId: createdMaterialId,
           materialName: createdMaterialName,
           pendingNewMaterial: false,
         });
@@ -1354,16 +1357,35 @@ export function ObjectMaterialInspectorPanel({ selection }: InspectorPanelProps)
                 authoringWriteOptions(initialRevision, sessionScopeKey),
                 clonedAsset.source ? { source: clonedAsset.source } : undefined,
               );
-              const patched = await kernel.api.model.patchObject(
-                objectId,
-                buildMaterialAssignmentPatch(
-                  { materialRef: clonedAsset.materialId },
-                  created.scene_revision,
-                ),
-                sessionScopeKey ? { sessionScopeKey } : undefined,
+              publishCommittedSceneResource(
+                kernel.resources,
+                created.committed_scene,
+                fallbackRevision(created.scene_revision),
+                undefined,
+                true,
+                sessionScopeKey,
               );
-              latestScene = patched;
-              latestRevision = patched.revision ?? created.scene_revision;
+              try {
+                const patched = await kernel.api.model.patchObject(
+                  objectId,
+                  buildMaterialAssignmentPatch(
+                    { materialRef: clonedAsset.materialId },
+                    created.scene_revision,
+                  ),
+                  sessionScopeKey ? { sessionScopeKey } : undefined,
+                );
+                latestScene = patched;
+                latestRevision = patched.revision ?? created.scene_revision;
+              } catch (patchErr) {
+                throw new MaterialAssignmentAfterCreateError(
+                  objectId,
+                  clonedAsset.materialId,
+                  created,
+                  null,
+                  patchErr,
+                  sessionScopeKey,
+                );
+              }
             }
 
             if (typeof kernel.api.model.commitTransaction === "function") {
@@ -1495,14 +1517,34 @@ export function ObjectMaterialInspectorPanel({ selection }: InspectorPanelProps)
               authoringWriteOptions(initialRevision, sessionScopeKey),
               asset.source ? { source: asset.source } : undefined,
             );
-            const patched = await kernel.api.model.patchObject(
-              objectId,
-              buildMaterialAssignmentPatch(
-                { materialRef: asset.materialId },
-                created.scene_revision,
-              ),
-              sessionScopeKey ? { sessionScopeKey } : undefined,
+            publishCommittedSceneResource(
+              kernel.resources,
+              created.committed_scene,
+              fallbackRevision(created.scene_revision),
+              undefined,
+              true,
+              sessionScopeKey,
             );
+            let patched: SceneResource;
+            try {
+              patched = await kernel.api.model.patchObject(
+                objectId,
+                buildMaterialAssignmentPatch(
+                  { materialRef: asset.materialId },
+                  created.scene_revision,
+                ),
+                sessionScopeKey ? { sessionScopeKey } : undefined,
+              );
+            } catch (patchErr) {
+              throw new MaterialAssignmentAfterCreateError(
+                objectId,
+                asset.materialId,
+                created,
+                null,
+                patchErr,
+                sessionScopeKey,
+              );
+            }
             return {
               committed_scene: patched,
               scene_revision: patched.revision ?? created.scene_revision,
@@ -2532,16 +2574,35 @@ export function ObjectMaterialInspectorPanel({ selection }: InspectorPanelProps)
                           [],
                           authoringWriteOptions(latestRevision, sessionScopeKey),
                         );
-                      const patchedScene = await kernel.api.model.patchObject(
-                        objectId,
-                        buildMaterialAssignmentPatch(
-                          { materialRef: resolvedMatId },
-                          tx.scene_revision,
-                        ),
-                        requestScopeOptions,
+                      publishCommittedSceneResource(
+                        kernel.resources,
+                        tx.committed_scene,
+                        fallbackRevision(tx.scene_revision),
+                        undefined,
+                        true,
+                        sessionScopeKey,
                       );
-                      latestRevision = patchedScene.revision ?? tx.scene_revision;
-                      latestCommittedScene = patchedScene;
+                      try {
+                        const patchedScene = await kernel.api.model.patchObject(
+                          objectId,
+                          buildMaterialAssignmentPatch(
+                            { materialRef: resolvedMatId },
+                            tx.scene_revision,
+                          ),
+                          requestScopeOptions,
+                        );
+                        latestRevision = patchedScene.revision ?? tx.scene_revision;
+                        latestCommittedScene = patchedScene;
+                      } catch (patchErr) {
+                        throw new MaterialAssignmentAfterCreateError(
+                          objectId,
+                          resolvedMatId,
+                          tx,
+                          null,
+                          patchErr,
+                          sessionScopeKey,
+                        );
+                      }
                     }
                     materialTouched = true;
                     publishCommittedSceneResource(

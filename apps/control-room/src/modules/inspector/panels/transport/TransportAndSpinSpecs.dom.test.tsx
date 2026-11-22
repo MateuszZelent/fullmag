@@ -1141,6 +1141,19 @@ describe("Wave 4 Transport, Spin & Oersted Inspector Parity", () => {
     });
 
     expect(state.replaceCurrentTransport).toHaveBeenCalledOnce();
+    expect(state.validateTransport).toHaveBeenLastCalledWith(
+      {
+        validation_version: "transport-authoring-validation.v1",
+        base_revision: 12,
+        candidate: expect.objectContaining({
+          kind: "current_transport",
+          operation: "replace",
+          path_id: "ct-loop",
+          resource: expect.objectContaining({ name: "ct-loop" }),
+        }),
+      },
+      { sessionScopeKey: SCOPE_KEY },
+    );
     const saved = state.replaceCurrentTransport.mock.calls[0]![1]
       .resource as KnownSceneCurrentTransport;
     expect(saved.domain).toHaveLength(2);
@@ -1421,6 +1434,19 @@ describe("Wave 4 Transport, Spin & Oersted Inspector Parity", () => {
     });
 
     expect(state.replaceSpinTransport).toHaveBeenCalledOnce();
+    expect(state.validateTransport).toHaveBeenLastCalledWith(
+      {
+        validation_version: "transport-authoring-validation.v1",
+        base_revision: 12,
+        candidate: expect.objectContaining({
+          kind: "spin_transport",
+          operation: "replace",
+          path_id: "st-bilayer",
+          resource: expect.objectContaining({ id: "st-bilayer" }),
+        }),
+      },
+      { sessionScopeKey: SCOPE_KEY },
+    );
     const savedSpin = state.replaceSpinTransport.mock.calls[0]![1]
       .resource as KnownSceneSpinTransport;
     expect(savedSpin.solver.linear.max_iterations).toBe(1200);
@@ -1549,6 +1575,20 @@ describe("Wave 4 Transport, Spin & Oersted Inspector Parity", () => {
     });
 
     expect(state.replaceSpinTransport).toHaveBeenCalledOnce();
+    expect(state.validateTransport).toHaveBeenCalledWith(
+      {
+        validation_version: "transport-authoring-validation.v1",
+        base_revision: 12,
+        candidate: expect.objectContaining({
+          kind: "spin_interface",
+          operation: "replace",
+          owner_spin_transport_id: "st-bilayer",
+          interface_id: "iface-hm-fm",
+          resource: expect.objectContaining({ id: "iface-hm-fm" }),
+        }),
+      },
+      { sessionScopeKey: SCOPE_KEY },
+    );
     const submittedOwner = state.replaceSpinTransport.mock.calls[0]![1]
       .resource as KnownSceneSpinTransport;
     expect(submittedOwner.boundaries).toEqual(richSpinTransport.boundaries);
@@ -1625,6 +1665,19 @@ describe("Wave 4 Transport, Spin & Oersted Inspector Parity", () => {
     });
 
     expect(state.replaceSpinTorque).toHaveBeenCalledOnce();
+    expect(state.validateTransport).toHaveBeenLastCalledWith(
+      {
+        validation_version: "transport-authoring-validation.v1",
+        base_revision: 12,
+        candidate: expect.objectContaining({
+          kind: "spin_torque",
+          operation: "replace",
+          path_id: "cpp-1",
+          resource: expect.objectContaining({ kind: "interface_cpp", id: "cpp-1" }),
+        }),
+      },
+      { sessionScopeKey: SCOPE_KEY },
+    );
     const savedCpp = state.replaceSpinTorque.mock.calls[0]![1].resource as Record<
       string,
       unknown
@@ -1921,6 +1974,25 @@ describe("Wave 4 Transport, Spin & Oersted Inspector Parity", () => {
     });
 
     expect(state.replaceOerstedField).toHaveBeenCalledOnce();
+    expect(state.validateTransport).toHaveBeenLastCalledWith(
+      {
+        validation_version: "transport-authoring-validation.v1",
+        base_revision: 12,
+        candidate: expect.objectContaining({
+          kind: "oersted_field",
+          operation: "replace",
+          path_id: "oe-wire",
+          resource: expect.objectContaining({ kind: "oersted_cylinder", id: "oe-wire" }),
+        }),
+      },
+      { sessionScopeKey: SCOPE_KEY },
+    );
+    for (const [req] of state.validateTransport.mock.calls as [Record<string, unknown>][]) {
+      expect(req).toHaveProperty("candidate");
+      expect(req).not.toHaveProperty("kind");
+      expect(req).not.toHaveProperty("operation");
+      expect(req).not.toHaveProperty("resource");
+    }
     expect(state.replaceOerstedField.mock.calls[0]![1].resource).toEqual({
       kind: "oersted_cylinder",
       id: "oe-wire",

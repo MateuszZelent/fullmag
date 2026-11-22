@@ -488,26 +488,39 @@ export function ObjectAbsorbingBoundaryInspectorPanel({ selection }: InspectorPa
     baselineRef.current = baseline;
   }, [baseline]);
 
-  const buildHistoryContext = useCallback(() => {
-    const historyGeneration = kernel.authoringHistory?.getGeneration?.();
-    const baseCtx = createCommandContext("inspector", kernel, {
-      resourceData: { [MODEL_SCENE_PATH]: scene.data },
-      ...(effectiveScopeKey ? { sessionScopeKey: effectiveScopeKey } : {}),
-      isCurrentSessionScope: () => {
-        const activeScope = kernel.commands?.getSessionScopeKey?.();
-        if (effectiveScopeKey && activeScope && activeScope !== effectiveScopeKey) {
-          return false;
-        }
-        return (
-          historyGeneration === undefined ||
-          kernel.authoringHistory?.getGeneration?.() === historyGeneration
-        );
-      },
-    });
-    return typeof kernel.selection?.get === "function"
-      ? baseCtx
-      : { ...baseCtx, selection: undefined };
-  }, [effectiveScopeKey, kernel, scene.data]);
+  const currentScopeKeyRef = useRef(effectiveScopeKey);
+  useEffect(() => {
+    currentScopeKeyRef.current = effectiveScopeKey;
+  }, [effectiveScopeKey]);
+
+  const buildHistoryContext = useCallback(
+    (requestScopeKey: string | null = effectiveScopeKey) => {
+      const historyGeneration = kernel.authoringHistory?.getGeneration?.();
+      const baseCtx = createCommandContext("inspector", kernel, {
+        resourceData: { [MODEL_SCENE_PATH]: scene.data },
+        ...(requestScopeKey ? { sessionScopeKey: requestScopeKey } : {}),
+        isCurrentSessionScope: () => {
+          if (currentScopeKeyRef.current !== requestScopeKey) {
+            return false;
+          }
+          if (typeof kernel.commands?.getSessionScopeKey === "function") {
+            const activeScope = kernel.commands.getSessionScopeKey() ?? null;
+            if (activeScope !== requestScopeKey) {
+              return false;
+            }
+          }
+          return (
+            historyGeneration === undefined ||
+            kernel.authoringHistory?.getGeneration?.() === historyGeneration
+          );
+        },
+      });
+      return typeof kernel.selection?.get === "function"
+        ? baseCtx
+        : { ...baseCtx, selection: undefined };
+    },
+    [effectiveScopeKey, kernel, scene.data],
+  );
 
   const spec = useMemo<InspectorSpec<AbsorbingBoundarySpecDraft>>(
     () => ({
@@ -536,7 +549,8 @@ export function ObjectAbsorbingBoundaryInspectorPanel({ selection }: InspectorPa
                 confirmDescription:
                   "This disables and removes all absorbing damping layers from this object.",
                 onDelete: async (ctx) => {
-                  const historyContext = buildHistoryContext();
+                  const requestScopeKey = effectiveScopeKey;
+                  const historyContext = buildHistoryContext(requestScopeKey);
                   const updated = await runAuthoringMutationWithHistory(
                     historyContext,
                     `Remove absorbing boundary ${objectId}`,
@@ -548,12 +562,22 @@ export function ObjectAbsorbingBoundaryInspectorPanel({ selection }: InspectorPa
                           base_revision: commitRev,
                           absorbing_boundary: null,
                         },
-                        authoringWriteOptions(commitRev, effectiveScopeKey),
+                        authoringWriteOptions(commitRev, requestScopeKey),
                       );
                     },
                   );
+                  if (historyContext.isCurrentSessionScope?.() === false) {
+                    return;
+                  }
                   const rev = fallbackRevision(updated.revision ?? baseRevision);
-                  publishCommittedSceneResource(kernel.resources, updated, rev);
+                  publishCommittedSceneResource(
+                    kernel.resources,
+                    updated,
+                    rev,
+                    undefined,
+                    true,
+                    requestScopeKey,
+                  );
                   if (typeof rev === "number") {
                     invalidateAuthoringMutationDependents(kernel.resources, "material", rev);
                   } else {
@@ -1056,7 +1080,8 @@ export function ObjectAbsorbingBoundaryInspectorPanel({ selection }: InspectorPa
             throw new Error(precheck.error);
           }
 
-          const historyContext = buildHistoryContext();
+          const requestScopeKey = effectiveScopeKey;
+          const historyContext = buildHistoryContext(requestScopeKey);
           const lease = objectMaterialMutationCoordinator.acquire(
             mutationScopeKey,
             "Absorbing boundary",
@@ -1105,7 +1130,7 @@ export function ObjectAbsorbingBoundaryInspectorPanel({ selection }: InspectorPa
                 return kernel.api.model.patchObject(
                   objectId,
                   built.patch,
-                  authoringWriteOptions(commitRevision, effectiveScopeKey),
+                  authoringWriteOptions(commitRevision, requestScopeKey),
                 );
               },
             );
@@ -1127,7 +1152,14 @@ export function ObjectAbsorbingBoundaryInspectorPanel({ selection }: InspectorPa
               setAcknowledgedBase({ objectId, revision: revNum, draft: acknowledged });
             }
             const rev = fallbackRevision(response.revision ?? revNum);
-            publishCommittedSceneResource(kernel.resources, response, rev);
+            publishCommittedSceneResource(
+              kernel.resources,
+              response,
+              rev,
+              undefined,
+              true,
+              requestScopeKey,
+            );
             if (typeof rev === "number") {
               invalidateAuthoringMutationDependents(kernel.resources, "material", rev);
             } else {

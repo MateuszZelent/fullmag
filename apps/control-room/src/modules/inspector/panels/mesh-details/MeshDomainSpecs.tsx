@@ -1084,10 +1084,17 @@ export function MeshRootInspectorSpecPanel({ selection }: InspectorPanelProps): 
         mode: "staged",
         onApply: async (draft, base) => {
           const reqOptions = sessionScopeKey ? { sessionScopeKey } : undefined;
+          let patchedStudyRevision: number | null = null;
           if (draft.lane !== base.lane) {
-            await kernel.api.model.patchStudy(
+            const patchedStudy = await kernel.api.model.patchStudy(
               { requested_backend: draft.lane },
               reqOptions,
+            );
+            patchedStudyRevision = asNumber(asRecord(patchedStudy)?.scene_revision);
+            invalidateAuthoringMutationDependents(
+              kernel.resources,
+              "interaction",
+              patchedStudyRevision ?? `w5:${Date.now()}`,
             );
           }
 
@@ -1133,6 +1140,7 @@ export function MeshRootInspectorSpecPanel({ selection }: InspectorPanelProps): 
             };
 
             const baseRevision =
+              patchedStudyRevision ??
               asNumber(asRecord(scene.data)?.revision) ??
               asNumber(asRecord(scene.data)?.scene_revision) ??
               0;

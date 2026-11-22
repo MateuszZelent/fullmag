@@ -306,10 +306,12 @@ import {
   bakeScaleIntoDraft,
   buildBaselineFromScene,
   BuilderPrimitiveInspectorPanel,
+  canBakeScaleIntoDraft,
   createPolygonVertexRow,
   GeometryObjectInspectorPanel,
   resolveMeshStatusFromObject,
   resolvePreviewOverlayDraft,
+  serializeGeometryPayload,
   serializeTransformPayload,
   validateArchWaveguide,
   validateSimplePolygon,
@@ -1132,5 +1134,87 @@ describe("ObjectOverviewSpec & ObjectGeometrySpec (Wave 4 Parity)", () => {
       queryFirst(mounted.host, (el) => el.getAttribute("data-revision-conflict") === "true"),
     ).toBeNull();
     expect(session.getSnapshot().dirty).toBe(false);
+  });
+
+  it("bakes uniform ImportedMesh scale into unit_scale and disables non-uniform ImportedMesh scale baking", () => {
+    const importedObjUniform = {
+      id: "mesh-import-1",
+      name: "CAD Housing",
+      role: "magnet",
+      geometry: {
+        geometry_kind: "ImportedMesh",
+        geometry_params: {
+          asset_path: "assets/housing.stl",
+          unit_scale: 1e-3,
+        },
+      },
+      transform: {
+        translation: [0, 0, 0],
+        rotation_quat: [0, 0, 0, 1],
+        scale: [2.5, 2.5, 2.5],
+        pivot: [0, 0, 0],
+      },
+    };
+
+    const importedSel: Selection = {
+      kind: "object.geometry",
+      label: "Geometry",
+      moduleSource: "explorer",
+      nodeId: "model:object:mesh-import-1:geometry",
+      objectId: "mesh-import-1",
+      ref: null,
+    };
+
+    const uniformDraft = buildBaselineFromScene(
+      importedSel,
+      { objects: [importedObjUniform], materials: [], revision: 1 } as never,
+      false,
+    );
+    expect(canBakeScaleIntoDraft(uniformDraft)).toEqual({ ok: true });
+    const bakedUniform = bakeScaleIntoDraft(uniformDraft);
+    expect(bakedUniform).toEqual({
+      meshUnitScale: 2.5e-3,
+      scale: [1, 1, 1],
+    });
+    expect(serializeGeometryPayload({ ...uniformDraft, ...bakedUniform })).toEqual({
+      geometry_kind: "ImportedMesh",
+      geometry_params: {
+        asset_path: "assets/housing.stl",
+        unit_scale: 2.5e-3,
+      },
+    });
+
+    // Non-uniform ImportedMesh scale keeps scale & unit_scale untouched and disables UI button with clear message
+    const importedObjNonUniform = {
+      ...importedObjUniform,
+      transform: {
+        ...importedObjUniform.transform,
+        scale: [2, 3, 1],
+      },
+    };
+    mocks.sceneData = {
+      ...mocks.sceneData,
+      objects: [importedObjNonUniform],
+    };
+
+    const nonUniformDraft = buildBaselineFromScene(
+      importedSel,
+      mocks.sceneData as never,
+      false,
+    );
+    const nonUniformCheck = canBakeScaleIntoDraft(nonUniformDraft);
+    expect(nonUniformCheck.ok).toBe(false);
+    expect(bakeScaleIntoDraft(nonUniformDraft)).toEqual({});
+
+    mounted = mountWave4TestElement(<GeometryObjectInspectorPanel selection={importedSel} />);
+    act(() => {
+      queryFirst(mounted!.host, (el) => el.getAttribute("data-tab-value") === "transform")?.click();
+    });
+
+    const bakeBtn = findButtonByText(mounted.host, "Bake Scale into Dimensions");
+    expect(bakeBtn.disabled).toBe(true);
+    expect(mounted.host.textContent).toContain(
+      "ImportedMesh only supports uniform unit_scale baking (sx = sy = sz).",
+    );
   });
 });
