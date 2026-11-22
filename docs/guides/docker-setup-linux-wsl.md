@@ -65,6 +65,13 @@ przestrzeni mountów Dockera jest obserwowane i sprawdzane przed utrzymaniem
 ledgera hosta. Brak integracji WSL, niedostępne ACL lub niezgodny filesystem
 kończą się błędem; launcher nie przenosi sesji do tymczasowego storage.
 
+Na hoście z kartami o różnych compute capability ustaw w `.env` jeden cel
+wykryty przez `nvidia-smi --query-gpu=name,compute_cap --format=csv,noheader`,
+np. `FULLMAG_DEV_CUDA_ARCHITECTURES=86-real` dla RTX 3080. Kompilacja DEV
+użyje tego celu. Backend GPU wymaga dokładnie jednej pasującej karty i używa
+jej UUID w CUDA oraz we własnym rejestrze zasobów grupy. Aby wymagać
+dostępu do GPU przy uruchamianiu, użyj `just docker-dev "$PWD" 3197 "" required`.
+
 Recepta uwzględnia `FULLMAG_CUDA_*`, `FULLMAG_HYPRE_GPU_ARCHITECTURES` oraz
 `FULLMAG_PETSC_CUDA_ARCHITECTURES` z `.env`. Dobierz je do GPU i wersji CUDA.
 `FULLMAG_MFEM_BUILD_JOBS` domyślnie wynosi `1`, ponieważ kompilacja szablonów

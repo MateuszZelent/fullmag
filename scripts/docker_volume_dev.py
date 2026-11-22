@@ -2099,14 +2099,24 @@ def _retained_device_access(previous, document):
     return access
 
 
-def _probe_retained_device_access(device_access, image, project):
+def _retained_gpu_probe_options(document):
+    environment = document["services"]["backend"]["environment"]
+    target = environment.get(DEV_CUDA_TARGET_ENV)
+    if target and environment.get("FULLMAG_HOST_LEDGER_PROFILE") == "group-ledger-v1":
+        return {"cuda_target": target}
+    return {}
+
+
+def _probe_retained_device_access(device_access, image, project, **gpu_probe_options):
     """A retained profile cannot gain or lose GPU access during recreation."""
     from docker_dev import _resolve_gpu_access, _verify_docker_gpu_access
     if device_access not in ("cpu", "gpu"):
         raise BuildControlError("Retained device access must be cpu or gpu")
     if device_access == "cpu":
         return "cpu"
-    resolved = _verify_docker_gpu_access(_resolve_gpu_access("required"), "required", image, project)
+    resolved = _verify_docker_gpu_access(
+        _resolve_gpu_access("required"), "required", image, project, **gpu_probe_options,
+    )
     if resolved != device_access:
         raise BuildControlError("Current Docker GPU access differs from the retained device profile")
     return resolved
@@ -2425,10 +2435,19 @@ def start(args, *, reuse_state=None, control=None, operation=None, prepared=None
             if control.read(PREPARED_QUARANTINE).get('cancellation_admission') != prepared_recovery_constraints:
                 raise BuildControlError('Fresh prepared recovery constraints differ from the qualified archive')
     image = images["backend"]["image_id"]
+    gpu_probe_options = {}
+    if device_access == "gpu" and cuda_target and (
+        provided_operation is None or _uses_group_ledger(control, operation, new_render=False)
+    ):
+        gpu_probe_options["cuda_target"] = cuda_target
     if retained_device_access is None:
-        device_access = _verify_docker_gpu_access(device_access, policy, image, control.project)
+        device_access = _verify_docker_gpu_access(
+            device_access, policy, image, control.project, **gpu_probe_options,
+        )
     else:
-        device_access = _probe_retained_device_access(retained_device_access, image, control.project)
+        device_access = _probe_retained_device_access(
+            retained_device_access, image, control.project, **gpu_probe_options,
+        )
     _assert_no_running_fullmag(control.project, identity, **admission_context)
     if recreation_resume_proof is not None:
         if args.script is not None or getattr(args, "fresh_state", False):
@@ -9383,7 +9402,9 @@ with urllib.request.urlopen('http://127.0.0.1:8081/v2/platform/health',timeout=5
                 if validate_lost_linux_state(control, lost_state_pin, previous, document, actual, state) != lost_state:
                     raise BuildControlError("Lost-state evidence changed under the recreation lease")
                 operation["receipt"]["lost_linux_state"] = lost_state
-            _probe_retained_device_access(retained_device_access, image, control.project)
+            _probe_retained_device_access(
+                retained_device_access, image, control.project, **_retained_gpu_probe_options(document),
+            )
             control.write(operation["root"] + "/retained-containers.json", actual)
             if pre_activation_stop is not None:
                 operation["receipt"]["pre_activation_stop_receipt"] = pre_activation_stop

@@ -341,12 +341,29 @@ def _resolve_gpu_access(requested: str | None) -> str:
 
 
 def _verify_docker_gpu_access(
-    device_access: str, policy: str | None, image_id: str, compose_project: str
+    device_access: str, policy: str | None, image_id: str, compose_project: str,
+    *, cuda_target: str | None = None,
 ) -> str:
     """Confirm GPU visibility through Docker before publishing backend inputs."""
 
     if device_access != "gpu" or policy is None:
         return device_access
+    environment = ()
+    probe = CUDA_DEVICE_PROBE
+    if cuda_target:
+        environment = (
+            "--env", "FULLMAG_HOST_LEDGER_PROFILE=group-ledger-v1",
+            "--env", f"FULLMAG_DEV_CUDA_ARCHITECTURES={cuda_target}",
+        )
+        probe = (
+            "import sys; sys.path.insert(0, '/opt/fullmag'); import entrypoint\n"
+            "if hasattr(entrypoint, '_probe_cuda_devices'):\n"
+            "    entrypoint._probe_cuda_devices()\n"
+            "else:\n"
+            # Retained images built before the group GPU pin keep their
+            # original visibility proof until a new backend is rendered.
+            f"    {CUDA_DEVICE_PROBE}"
+        )
     try:
         _docker_capture(
             "run", "--rm", "--pull", "never", "--network", "none",
@@ -357,7 +374,7 @@ def _verify_docker_gpu_access(
             "--label", f"org.fullmag.compose.project={compose_project}",
             "--label", f"com.docker.compose.project={compose_project}",
             "--label", "com.docker.compose.service=backend-gpu-probe",
-            "--entrypoint", "/usr/local/bin/python3", image_id, "-c", CUDA_DEVICE_PROBE,
+            *environment, "--entrypoint", "/usr/local/bin/python3", image_id, "-c", probe,
             timeout=30,
         )
     except DirectDockerOutcomeUnknown:

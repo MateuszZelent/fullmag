@@ -52,10 +52,16 @@ class DevCudaTargetTests(unittest.TestCase):
                 "FULLMAG_DEV_CUDA_ARCHITECTURES": "86-real",
             }), "86-real")
 
+    def test_explicit_target_selects_a_detected_architecture_on_mixed_host(self):
+        with patch.object(control, "_host_cuda_targets", return_value={"86-real", "75-real"}):
+            self.assertEqual(control._selected_dev_cuda_target({
+                "FULLMAG_DEV_CUDA_ARCHITECTURES": "86-real",
+            }), "86-real")
+
     def test_mismatched_and_multiple_host_capabilities_are_rejected(self):
         selector = "FULLMAG_DEV_CUDA_ARCHITECTURES"
         for capabilities, options in (
-            ({"86-real", "89-real"}, {}), ({"86-real", "89-real"}, {selector: "86-real"}),
+            ({"86-real", "89-real"}, {}), ({"86-real", "89-real"}, {selector: "75-real"}),
             ({"86-real"}, {selector: "89-real"}), ({"86-real"}, {selector: "all"}),
             ({"86-real"}, {selector: "86-virtual"}), ({"86-real"}, {selector: "86-real;89-real"}),
         ):
