@@ -183,6 +183,9 @@ def prepare_initial_magnetization(
     *,
     object_transform: dict[str, object] | None = None,
     region_center: Sequence[float] | None = None,
+    target_bounds: tuple[Sequence[float], Sequence[float]] | None = None,
+    target_bounds_extent: Sequence[float] | None = None,
+    active_mask: Sequence[bool] | None = None,
 ) -> np.ndarray:
     """Sample an initial magnetization spec at the given points.
 
@@ -198,13 +201,26 @@ def prepare_initial_magnetization(
         sample_points: (N, 3) array of sample coordinates. For FDM: cell
             centers. For FEM: node coords restricted to magnetic parts only.
         object_transform: Optional geometry transform of the owning object.
-            Used when ``mapping.space == "object"``.
+            Used when ``mapping.space == "object"`` or ``"region"``.
+        region_center: Optional explicit region center in object-local space
+            when ``mapping.space == "region"``.
+        target_bounds: Optional analytic ``(min_pt, max_pt)`` AABB in source
+            space (before ``texture_transform``), used to derive both
+            ``region_center`` (when omitted) and default ``tile_period``.
+        target_bounds_extent: Optional explicit ``[Lx, Ly, Lz]`` target/domain
+            AABB extents in source space (before ``texture_transform``) used
+            as the canonical default ``tile_period`` when ``clamp_mode != "none"``
+            and ``tile_period`` is omitted.
+        active_mask: Optional boolean mask of active sample points.
 
     Returns:
         (N, 3) float64 array of normalized magnetization vectors.
     """
     from fullmag.init.preset_eval import evaluate_preset_texture
-    from fullmag.init.preset_eval_v2 import evaluate_preset_texture_v2
+    from fullmag.init.preset_eval_v2 import (
+        evaluate_preset_texture_v2,
+        resolve_default_tile_period,
+    )
 
     pts = np.asarray(sample_points, dtype=np.float64)
     if pts.ndim == 1:
@@ -253,11 +269,28 @@ def prepare_initial_magnetization(
             raise ValueError("preset_version must be an integer")
         preset_version = raw_preset_version
 
+        resolved_region_center = region_center
+        if resolved_region_center is None and target_bounds is not None:
+            b_min = np.asarray(target_bounds[0], dtype=np.float64).reshape(3)
+            b_max = np.asarray(target_bounds[1], dtype=np.float64).reshape(3)
+            resolved_region_center = (0.5 * (b_min + b_max)).tolist()
+        elif resolved_region_center is None and _mapping_space(mapping_ir) == "region" and active_mask is not None:
+            object_pts_all = _apply_inverse_transform(
+                pts,
+                object_transform if isinstance(object_transform, dict) else {},
+            )
+            active_indices = [i for i, active in enumerate(active_mask) if active]
+            if active_indices:
+                active_obj = object_pts_all[active_indices]
+                resolved_region_center = (
+                    0.5 * (active_obj.min(axis=0) + active_obj.max(axis=0))
+                ).tolist()
+
         mapped_pts = _map_points_into_mapping_space(
             pts,
             space=_mapping_space(mapping_ir),
             object_transform=object_transform,
-            region_center=region_center,
+            region_center=resolved_region_center,
         )
         if preset_version == 2:
             if not isinstance(transform_ir, dict):
@@ -310,6 +343,23 @@ def prepare_initial_magnetization(
                 and not isinstance(raw_axis_thickness, bool)
                 else None
             )
+            explicit_extent: Sequence[float] | None = target_bounds_extent
+            if explicit_extent is None and target_bounds is not None:
+                b_min = np.asarray(target_bounds[0], dtype=np.float64).reshape(3)
+                b_max = np.asarray(target_bounds[1], dtype=np.float64).reshape(3)
+                explicit_extent = tuple(max(float(b_max[i] - b_min[i]), 1.0e-12) for i in range(3))
+            resolved_target_extent: Sequence[float] | None = None
+            if clamp_mode != "none" and not isinstance(tile_period, (list, tuple)):
+                source_pts_list = [
+                    (float(row[0]), float(row[1]), float(row[2]))
+                    for idx, row in enumerate(mapped_pts)
+                    if active_mask is None or active_mask[idx]
+                ]
+                resolved_target_extent = resolve_default_tile_period(
+                    None,
+                    explicit_extent,
+                    source_pts_list,
+                )
             result = evaluate_preset_texture_v2(
                 preset_kind,
                 params,
@@ -323,6 +373,8 @@ def prepare_initial_magnetization(
                 axis_extent_mode=axis_extent_mode,
                 axis_thickness_m=axis_thickness_m,
                 pivot=raw_pivot if isinstance(raw_pivot, (list, tuple)) else (0.0, 0.0, 0.0),
+                target_bounds_extent=resolved_target_extent,
+                active_mask=active_mask,
             )
         else:
             raise ValueError(f"unsupported preset texture version {preset_version}")

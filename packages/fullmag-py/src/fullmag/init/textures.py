@@ -1072,6 +1072,13 @@ class texture:
         *,
         preset_version: int = 2,
     ) -> PresetTexture:
+        """Create a 3D Bloch point singularity preset (v2).
+
+        ``core_radius`` is validated positive as the physical core-indicator /
+        preview proxy radius while the analytic magnetization field follows
+        ``docs/physics/0534`` (exact scale-invariant 3D unit-sphere hedgehog
+        with regular origin limit ``polarity * (0, 0, sz)`` for ``r <= 1e-15 m``).
+        """
         _require_v2_preset(preset_version, "bloch_point")
         if bp_kind not in ("radial", "circulating", "hyperbolic"):
             raise ValueError("bp_kind must be 'radial', 'circulating', or 'hyperbolic'")

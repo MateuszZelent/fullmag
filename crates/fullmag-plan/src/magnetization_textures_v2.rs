@@ -558,6 +558,12 @@ fn vortex_wall(
     if point[0] > wall_half_width {
         return Ok([right_mx.signum(), 0.0, 0.0]);
     }
+    if !params.contains_key("circulation") {
+        let mut derived = params.clone();
+        let circulation = if left_mx * right_mx > 0.0 { 1 } else { -1 };
+        derived.insert("circulation".to_string(), Value::from(circulation));
+        return vortex(&derived, point, 1.0);
+    }
     vortex(params, point, 1.0)
 }
 
@@ -865,6 +871,8 @@ fn apply_clamp_mode_v2(
     pivot: [f64; 3],
     mapping: &TextureMappingIR,
     fallback_extent: Option<[f64; 3]>,
+    frame: Option<OrientedPlaneFrame>,
+    is_metric_preset: bool,
 ) -> Result<ClampOutcome, TextureError> {
     let mode = mapping.clamp_mode.as_str();
     if mode.is_empty() || mode == "none" {
@@ -902,11 +910,20 @@ fn apply_clamp_mode_v2(
         "background" => {
             let outside = (0..3).any(|i| rel[i].abs() > 0.5 * period[i]);
             if outside {
-                let bg = mapping.background_vector.unwrap_or([0.0, 0.0, 1.0]);
-                Ok(ClampOutcome::Background(normalize_checked(
-                    bg,
-                    "mapping.background_vector",
-                )?))
+                if let Some(bg) = mapping.background_vector {
+                    Ok(ClampOutcome::Background(normalize_checked(
+                        bg,
+                        "mapping.background_vector",
+                    )?))
+                } else {
+                    let default_local = [0.0, 0.0, 1.0];
+                    let resolved = if is_metric_preset {
+                        metric_vector(default_local, frame)
+                    } else {
+                        default_local
+                    };
+                    Ok(ClampOutcome::Background(resolved))
+                }
             } else {
                 Ok(ClampOutcome::Sample(transformed))
             }
@@ -1044,6 +1061,12 @@ fn spiral(params: &BTreeMap<String, Value>, point: [f64; 3]) -> Result<[f64; 3],
     normalize_checked(add(scale(e1, cos_phi), scale(e2, sin_phi)), "spiral")
 }
 
+/// 3D Bloch point hedgehog per `docs/physics/0534` (`texture-bloch-point-v2`).
+///
+/// `core_radius` is validated positive as the physical core-indicator / gizmo
+/// marker radius, while the continuum unit-vector field is the exact
+/// scale-invariant 3D hedgehog with regular origin limit `polarity * [0, 0, sz]`
+/// for `r <= 1e-15 m` (aligned across Rust, Python, and TypeScript).
 fn bloch_point(
     params: &BTreeMap<String, Value>,
     point: [f64; 3],
@@ -1078,6 +1101,10 @@ fn bloch_point(
     ])
 }
 
+fn nearest_int(value: f64) -> i64 {
+    (value + 0.5).floor() as i64
+}
+
 fn artificial_spin_ice(
     params: &BTreeMap<String, Value>,
     point: [f64; 3],
@@ -1101,12 +1128,12 @@ fn artificial_spin_ice(
     match lattice.as_str() {
         "square" => {
             let h_nu = (u / a).floor() as i64;
-            let h_nv = (v / a).round() as i64;
+            let h_nv = nearest_int(v / a);
             let h_du = u - (h_nu as f64 + 0.5) * a;
             let h_dv = v - (h_nv as f64) * a;
             let h_dist_sq = h_du * h_du + h_dv * h_dv;
 
-            let v_nu = (u / a).round() as i64;
+            let v_nu = nearest_int(u / a);
             let v_nv = (v / a).floor() as i64;
             let v_du = u - (v_nu as f64) * a;
             let v_dv = v - (v_nv as f64 + 0.5) * a;
@@ -1261,12 +1288,71 @@ fn source_position_for_point(point: &TextureSamplePoint, mapping: &TextureMappin
     }
 }
 
+/// Canonical default `tile_period` formula shared identically across Rust,
+/// Python (`preset_eval_v2.py`), and TypeScript (`evaluateV2Client.ts`).
+///
+/// 1. Explicit `mapping.tile_period` wins when provided.
+/// 2. Explicit `target_bounds_extent` (domain/region AABB extents in source space
+///    BEFORE `texture_transform`) is used when finite and positive on all 3 axes.
+/// 3. Otherwise compute the AABB extent over active sample points in source space
+///    BEFORE `texture_transform`, replacing any degenerate axis (`<= EPSILON`)
+///    with the maximum positive axis extent (returning `None` if all axes are
+///    degenerate).
+pub fn resolve_default_tile_period(
+    target_bounds_extent: Option<[f64; 3]>,
+    points: &[TextureSamplePoint],
+    mapping: &TextureMappingIR,
+) -> Option<[f64; 3]> {
+    if let Some(explicit) = mapping.tile_period {
+        return Some(explicit);
+    }
+    if let Some(ext) = target_bounds_extent {
+        if ext.iter().all(|&e| e.is_finite() && e > EPSILON) {
+            return Some(ext);
+        }
+    }
+    let mut min_pt = [f64::INFINITY; 3];
+    let mut max_pt = [f64::NEG_INFINITY; 3];
+    let mut any_active = false;
+    for point in points {
+        if !point.active {
+            continue;
+        }
+        let src = source_position_for_point(point, mapping);
+        if src.iter().all(|c| c.is_finite()) {
+            any_active = true;
+            for axis in 0..3 {
+                min_pt[axis] = min_pt[axis].min(src[axis]);
+                max_pt[axis] = max_pt[axis].max(src[axis]);
+            }
+        }
+    }
+    if !any_active {
+        return None;
+    }
+    let raw = [
+        max_pt[0] - min_pt[0],
+        max_pt[1] - min_pt[1],
+        max_pt[2] - min_pt[2],
+    ];
+    let max_ext = raw[0].max(raw[1]).max(raw[2]);
+    if !max_ext.is_finite() || max_ext <= EPSILON {
+        return None;
+    }
+    Some([
+        if raw[0] > EPSILON { raw[0] } else { max_ext },
+        if raw[1] > EPSILON { raw[1] } else { max_ext },
+        if raw[2] > EPSILON { raw[2] } else { max_ext },
+    ])
+}
+
 fn sample_v2(
     preset_kind: &str,
     params: &BTreeMap<String, Value>,
     mapping: &TextureMappingIR,
     transform: &TextureTransform3DIR,
     points: &[TextureSamplePoint],
+    target_bounds_extent: Option<[f64; 3]>,
 ) -> Result<Vec<[f64; 3]>, TextureError> {
     let frame = resolve_frame(params, mapping)?;
     if matches!(
@@ -1297,43 +1383,12 @@ fn sample_v2(
         && mapping.clamp_mode != "none"
         && mapping.tile_period.is_none()
     {
-        let mut min_pt = [f64::INFINITY; 3];
-        let mut max_pt = [f64::NEG_INFINITY; 3];
-        let mut any_active = false;
-        for point in points {
-            if !point.active {
-                continue;
-            }
-            let src = source_position_for_point(point, mapping);
-            if src.iter().all(|c| c.is_finite()) {
-                let t = prepared_transform.point_to_texture(src);
-                if t.iter().all(|c| c.is_finite()) {
-                    any_active = true;
-                    for axis in 0..3 {
-                        min_pt[axis] = min_pt[axis].min(t[axis]);
-                        max_pt[axis] = max_pt[axis].max(t[axis]);
-                    }
-                }
-            }
-        }
-        if any_active {
-            let ext = [
-                max_pt[0] - min_pt[0],
-                max_pt[1] - min_pt[1],
-                max_pt[2] - min_pt[2],
-            ];
-            if ext.iter().all(|&e| e.is_finite() && e > EPSILON) {
-                Some(ext)
-            } else {
-                None
-            }
-        } else {
-            None
-        }
+        resolve_default_tile_period(target_bounds_extent, points, mapping)
     } else {
         None
     };
 
+    let is_metric_preset = is_metric(preset_kind);
     let mut output = Vec::with_capacity(points.len());
     for point in points {
         let source_position = source_position_for_point(point, mapping);
@@ -1357,7 +1412,7 @@ fn sample_v2(
         }
         if let (Some(half_t), Some(bg)) = (half_axis_thickness, slab_background) {
             let rel = sub(transformed, prepared_transform.pivot);
-            let z_normal = if is_metric(preset_kind) {
+            let z_normal = if is_metric_preset {
                 frame.map_or(rel[2], |f| dot(rel, f.e_n))
             } else {
                 rel[2]
@@ -1372,6 +1427,8 @@ fn sample_v2(
             prepared_transform.pivot,
             mapping,
             fallback_extent,
+            frame,
+            is_metric_preset,
         )? {
             ClampOutcome::Background(bg) => {
                 output.push(prepared_transform.vector_to_source(bg));
@@ -1379,13 +1436,13 @@ fn sample_v2(
             }
             ClampOutcome::Sample(pt) => pt,
         };
-        let local_point = if is_metric(preset_kind) {
+        let local_point = if is_metric_preset {
             metric_point(clamped, frame)
         } else {
             clamped
         };
         let local_vector = local_evaluate(preset_kind, params, local_point)?;
-        let source_vector = if is_metric(preset_kind) {
+        let source_vector = if is_metric_preset {
             metric_vector(local_vector, frame)
         } else {
             local_vector
@@ -1395,13 +1452,14 @@ fn sample_v2(
     Ok(output)
 }
 
-pub fn sample_preset_texture_versioned(
+pub fn sample_preset_texture_versioned_with_bounds(
     preset_kind: &str,
     preset_version: u32,
     params: &BTreeMap<String, Value>,
     mapping: &TextureMappingIR,
     transform: &TextureTransform3DIR,
     points: &[TextureSamplePoint],
+    target_bounds_extent: Option<[f64; 3]>,
 ) -> Result<Vec<[f64; 3]>, TextureError> {
     match preset_version {
         1 => crate::magnetization_textures::sample_preset_texture(
@@ -1412,7 +1470,33 @@ pub fn sample_preset_texture_versioned(
             points,
         )
         .map_err(TextureError::Legacy),
-        2 => sample_v2(preset_kind, params, mapping, transform, points),
+        2 => sample_v2(
+            preset_kind,
+            params,
+            mapping,
+            transform,
+            points,
+            target_bounds_extent,
+        ),
         version => Err(TextureError::UnsupportedVersion(version)),
     }
+}
+
+pub fn sample_preset_texture_versioned(
+    preset_kind: &str,
+    preset_version: u32,
+    params: &BTreeMap<String, Value>,
+    mapping: &TextureMappingIR,
+    transform: &TextureTransform3DIR,
+    points: &[TextureSamplePoint],
+) -> Result<Vec<[f64; 3]>, TextureError> {
+    sample_preset_texture_versioned_with_bounds(
+        preset_kind,
+        preset_version,
+        params,
+        mapping,
+        transform,
+        points,
+        None,
+    )
 }

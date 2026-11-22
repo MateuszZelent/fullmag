@@ -27,14 +27,51 @@ import {
 } from "./presetDefaults";
 
 interface ParityFixtureCase {
+  case_id?: string;
   preset_kind: string;
   preset_version: number;
   params: Record<string, unknown>;
   projection: "object_local" | "planar_xy" | "planar_xz" | "planar_yz";
   rotation_quat: [number, number, number, number] | null;
+  space?: "object" | "region" | "world";
+  clamp_mode?: "none" | "clamp" | "repeat" | "mirror" | "background";
+  tile_period?: [number, number, number] | null;
+  background_vector?: [number, number, number] | null;
+  axis_extent_mode?: "uniform" | "thickness" | null;
+  axis_thickness_m?: number | null;
+  translation?: [number, number, number] | null;
+  scale?: [number, number, number] | null;
+  pivot?: [number, number, number] | null;
+  rotate_vectors?: boolean;
+  apply_point_transform?: boolean;
+  region_center?: [number, number, number] | null;
+  target_bounds_extent?: [number, number, number] | null;
   points: [number, number, number][];
   expected: [number, number, number][];
 }
+
+const EXPECTED_ALL_20_PRESETS = [
+  "uniform",
+  "random",
+  "vortex",
+  "antivortex",
+  "vortex_wall",
+  "bloch_skyrmion",
+  "neel_skyrmion",
+  "antiskyrmion",
+  "skyrmionium",
+  "hopfion",
+  "hopfion_compact_support",
+  "bimeron",
+  "domain_wall",
+  "two_domain",
+  "helical",
+  "conical",
+  "skyrmion_lattice",
+  "spiral",
+  "bloch_point",
+  "artificial_spin_ice",
+] as const;
 
 function maxInfinityNormDiff(
   actual: readonly [number, number, number],
@@ -54,25 +91,115 @@ describe("magnetization-texture V2 client evaluator, bounds and Fit Characterist
       "../../crates/fullmag-plan/tests/fixtures/magnetization_textures_v2_parity.json",
     );
     const cases = JSON.parse(readFileSync(fixturePath, "utf8")) as ParityFixtureCase[];
-    expect(cases).toHaveLength(16);
+    expect(cases).toHaveLength(35);
+    const coveredPresets = new Set(cases.map((c) => c.preset_kind));
+    for (const preset of EXPECTED_ALL_20_PRESETS) {
+      expect(coveredPresets.has(preset), `missing preset ${preset} in parity fixture`).toBe(true);
+    }
 
     for (const testCase of cases) {
-      const evaluated = evaluatePresetTextureV2Points(
-        testCase.preset_kind,
-        testCase.params,
-        testCase.points,
-        {
-          projection: testCase.projection,
-          rotationQuat: testCase.rotation_quat,
-        },
-      );
+      const label = testCase.case_id ?? testCase.preset_kind;
+      let evaluated: [number, number, number][];
+      if (testCase.apply_point_transform) {
+        const targetBounds =
+          testCase.region_center || testCase.target_bounds_extent
+            ? (() => {
+                const center = testCase.region_center ?? ([0, 0, 0] as [number, number, number]);
+                const size = testCase.target_bounds_extent ?? ([1, 1, 1] as [number, number, number]);
+                return {
+                  localMin: [
+                    center[0] - 0.5 * size[0],
+                    center[1] - 0.5 * size[1],
+                    center[2] - 0.5 * size[2],
+                  ] as [number, number, number],
+                  localMax: [
+                    center[0] + 0.5 * size[0],
+                    center[1] + 0.5 * size[1],
+                    center[2] + 0.5 * size[2],
+                  ] as [number, number, number],
+                  localCenter: center,
+                  size,
+                  worldCenter: center,
+                  source: "region-shape" as const,
+                };
+              })()
+            : null;
+        const spec = {
+          preset_kind: testCase.preset_kind,
+          preset_version: testCase.preset_version,
+          preset_params: testCase.params,
+          mapping: {
+            space: testCase.space ?? "object",
+            projection: testCase.projection,
+            clamp_mode: testCase.clamp_mode ?? "none",
+            tile_period: testCase.tile_period ?? null,
+            background_vector: testCase.background_vector ?? null,
+            axis_extent_mode: testCase.axis_extent_mode ?? null,
+            axis_thickness_m: testCase.axis_thickness_m ?? null,
+          },
+          texture_transform: {
+            translation: testCase.translation ?? [0, 0, 0],
+            rotation_quat: testCase.rotation_quat ?? [0, 0, 0, 1],
+            scale: testCase.scale ?? [1, 1, 1],
+            pivot: testCase.pivot ?? [0, 0, 0],
+            rotate_vectors: testCase.rotate_vectors !== false,
+          },
+        };
+        evaluated = samplePresetTextureV2Batch(spec, testCase.points, targetBounds);
+        // Also verify single-point evaluator matches batch when explicit period or targetBounds exists
+        if (testCase.tile_period || targetBounds) {
+          const singleFirst = samplePresetTextureV2Client(spec, testCase.points[0]!, targetBounds);
+          expect(maxInfinityNormDiff(singleFirst, evaluated[0]!), `${label} client vs batch`).toBeLessThan(1e-12);
+        }
+      } else {
+        evaluated = evaluatePresetTextureV2Points(
+          testCase.preset_kind,
+          testCase.params,
+          testCase.points,
+          {
+            projection: testCase.projection,
+            rotationQuat: testCase.rotation_quat,
+            rotateVectors: testCase.rotate_vectors,
+            clampMode: testCase.clamp_mode,
+            tilePeriod: testCase.tile_period,
+            backgroundVector: testCase.background_vector,
+            axisExtentMode: testCase.axis_extent_mode,
+            axisThicknessM: testCase.axis_thickness_m,
+            pivot: testCase.pivot ?? undefined,
+            targetBoundsExtent: testCase.target_bounds_extent,
+          },
+        );
+      }
       expect(evaluated).toHaveLength(testCase.expected.length);
       let maxErr = 0;
       for (let i = 0; i < evaluated.length; i += 1) {
         const err = maxInfinityNormDiff(evaluated[i]!, testCase.expected[i]!);
         if (err > maxErr) maxErr = err;
       }
-      expect(maxErr, `${testCase.preset_kind} max abs error`).toBeLessThan(1e-12);
+      expect(maxErr, `${label} max abs error`).toBeLessThan(1e-12);
+    }
+
+    // Verify default clamp_mode="background" passes through the oriented metric frame (xz -> [0,-1,0], yz -> [1,0,0])
+    for (const [plane, expectedBg] of [
+      ["xy", [0, 0, 1]],
+      ["xz", [0, -1, 0]],
+      ["yz", [1, 0, 0]],
+    ] as const) {
+      const bgVal = samplePresetTextureV2Client(
+        {
+          preset_kind: "vortex",
+          preset_version: 2,
+          preset_params: { plane, circulation: 1, core_polarity: 1, core_radius: 4e-9 },
+          mapping: {
+            space: "object",
+            projection: "object_local",
+            clamp_mode: "background",
+            tile_period: [20e-9, 20e-9, 20e-9],
+          },
+        },
+        [30e-9, 30e-9, 30e-9],
+      );
+      expect(maxInfinityNormDiff(bgVal, expectedBg), `default background plane=${plane}`).toBeLessThan(1e-12);
     }
 
     // Verify all 4 Wave-2 presets (skyrmion_lattice, spiral, bloch_point, artificial_spin_ice)

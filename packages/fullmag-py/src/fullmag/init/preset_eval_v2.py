@@ -392,6 +392,22 @@ def _sech(value: float) -> float:
     return 1.0 / math.cosh(value)
 
 
+def _fallback_wall_direction(axis: Vec3, left: Vec3, kind: str) -> Vec3:
+    projected = _sub(axis, _scale(left, _dot(axis, left)))
+    preferred = projected if kind == "neel" else _cross(axis, left)
+    if _norm(preferred) > _EPSILON:
+        return preferred
+    helper: Vec3 = (
+        (1.0, 0.0, 0.0)
+        if abs(axis[0]) < 0.9
+        else (0.0, 1.0, 0.0)
+        if abs(axis[1]) < 0.9
+        else (0.0, 0.0, 1.0)
+    )
+    tangent_one = _normalize(_cross(axis, helper), "wall_center_direction")
+    return tangent_one if kind == "bloch" else _cross(tangent_one, axis)
+
+
 def _domain_wall(params: Mapping[str, object], point: Sequence[float]) -> Vec3:
     kind = params.get("kind", "neel")
     if not isinstance(kind, str) or kind not in {"bloch", "neel"}:
@@ -407,10 +423,7 @@ def _domain_wall(params: Mapping[str, object], point: Sequence[float]) -> Vec3:
     if "wall_center_direction" in params:
         wall_direction = _vector(params, "wall_center_direction")
     else:
-        projected = _sub(axis, _scale(left, _dot(axis, left)))
-        if _norm(projected) <= _EPSILON:
-            raise _invalid("wall_center_direction", "required when the derived wall direction is degenerate")
-        wall_direction = projected if kind == "neel" else _cross(axis, left)
+        wall_direction = _fallback_wall_direction(axis, left, kind)
     wall_direction = _normalize(wall_direction, "wall_center_direction")
     if abs(_dot(wall_direction, left)) > 1.0e-10:
         raise _invalid("wall_center_direction", "must be orthogonal to the domain direction")
@@ -592,6 +605,13 @@ def _spiral(params: Mapping[str, object], point: Sequence[float]) -> Vec3:
 
 
 def _bloch_point(params: Mapping[str, object], point: Sequence[float]) -> Vec3:
+    """3D Bloch point hedgehog per docs/physics/0534 (texture-bloch-point-v2).
+
+    ``core_radius`` is validated positive as the physical core-marker / gizmo
+    indicator scale, while the continuum unit-vector magnetization field is the
+    exact scale-invariant 3D hedgehog with regular origin limit ``polarity * (0, 0, sz)``
+    for ``r <= 1e-15 m`` (aligned across Rust, Python, and TypeScript).
+    """
     bp_kind = _string(params, "bp_kind", "circulating")
     if bp_kind not in {"radial", "circulating", "hyperbolic"}:
         raise _invalid("bp_kind", "must be 'radial', 'circulating', or 'hyperbolic'")
@@ -615,6 +635,10 @@ def _bloch_point(params: Mapping[str, object], point: Sequence[float]) -> Vec3:
     )
 
 
+def _nearest_int(value: float) -> int:
+    return math.floor(value + 0.5)
+
+
 def _artificial_spin_ice(params: Mapping[str, object], point: Sequence[float]) -> Vec3:
     lattice = _string(params, "lattice", "square")
     vertex_state = _string(params, "vertex_state", "type_i_ground")
@@ -627,12 +651,12 @@ def _artificial_spin_ice(params: Mapping[str, object], point: Sequence[float]) -
     u, v = point[0], point[1]
     if lattice == "square":
         h_nu = math.floor(u / a)
-        h_nv = round(v / a)
+        h_nv = _nearest_int(v / a)
         h_du = u - (h_nu + 0.5) * a
         h_dv = v - h_nv * a
         h_dist_sq = h_du * h_du + h_dv * h_dv
 
-        v_nu = round(u / a)
+        v_nu = _nearest_int(u / a)
         v_nv = math.floor(v / a)
         v_du = u - v_nu * a
         v_dv = v - (v_nv + 0.5) * a
@@ -747,12 +771,76 @@ def _resolve_slab_background_v2(
     return local_bg
 
 
+def resolve_default_tile_period(
+    explicit_tile_period: Sequence[float] | None,
+    target_bounds_extent: Sequence[float] | None,
+    active_source_points: Sequence[Vec3],
+) -> Vec3 | None:
+    """Canonical default tile_period formula shared identically across Rust, Python, and TS.
+
+    1. Explicit ``tile_period`` wins when provided.
+    2. Explicit ``target_bounds_extent`` (domain/region AABB extents before
+       ``texture_transform``) is used when finite and positive on all 3 axes.
+    3. Otherwise compute the AABB extent over active source-space points before
+       ``texture_transform``, replacing any degenerate axis (<= _EPSILON) with
+       the maximum positive axis extent (failing closed with None when all axes
+       are degenerate).
+    """
+    if explicit_tile_period is not None:
+        return (
+            float(explicit_tile_period[0]),
+            float(explicit_tile_period[1]),
+            float(explicit_tile_period[2]),
+        )
+    if target_bounds_extent is not None:
+        ext = (
+            float(target_bounds_extent[0]),
+            float(target_bounds_extent[1]),
+            float(target_bounds_extent[2]),
+        )
+        if all(math.isfinite(e) and e > _EPSILON for e in ext):
+            return ext
+    if not active_source_points:
+        return None
+    min_x = min_y = min_z = math.inf
+    max_x = max_y = max_z = -math.inf
+    any_finite = False
+    for pt in active_source_points:
+        if math.isfinite(pt[0]) and math.isfinite(pt[1]) and math.isfinite(pt[2]):
+            any_finite = True
+            if pt[0] < min_x:
+                min_x = pt[0]
+            if pt[0] > max_x:
+                max_x = pt[0]
+            if pt[1] < min_y:
+                min_y = pt[1]
+            if pt[1] > max_y:
+                max_y = pt[1]
+            if pt[2] < min_z:
+                min_z = pt[2]
+            if pt[2] > max_z:
+                max_z = pt[2]
+    if not any_finite:
+        return None
+    raw = (max_x - min_x, max_y - min_y, max_z - min_z)
+    max_ext = max(raw)
+    if not math.isfinite(max_ext) or max_ext <= _EPSILON:
+        return None
+    return (
+        raw[0] if raw[0] > _EPSILON else max_ext,
+        raw[1] if raw[1] > _EPSILON else max_ext,
+        raw[2] if raw[2] > _EPSILON else max_ext,
+    )
+
+
 def _apply_clamp_mode_v2(
     point: Vec3,
     pivot: Vec3,
     clamp_mode: str,
     period: Vec3 | None,
     background_vector: Vec3 | None,
+    frame: tuple[Vec3, Vec3, Vec3] | None,
+    is_metric: bool,
 ) -> tuple[str, Vec3]:
     if not clamp_mode or clamp_mode == "none":
         return ("sample", point)
@@ -793,8 +881,15 @@ def _apply_clamp_mode_v2(
         )
     if clamp_mode == "background":
         if any(abs(rel[i]) > 0.5 * period[i] for i in range(3)):
-            bg = background_vector if background_vector is not None else (0.0, 0.0, 1.0)
-            return ("background", _normalize(bg, "mapping.background_vector"))
+            if background_vector is not None:
+                return ("background", _normalize(background_vector, "mapping.background_vector"))
+            default_local: Vec3 = (0.0, 0.0, 1.0)
+            resolved_bg = (
+                _vector_to_world(default_local, frame)
+                if (is_metric and frame is not None)
+                else default_local
+            )
+            return ("background", resolved_bg)
         return ("sample", point)
     raise _invalid("mapping.clamp_mode", f"unsupported clamp_mode '{clamp_mode}'")
 
@@ -883,6 +978,8 @@ def evaluate_preset_texture_v2(
     axis_extent_mode: str = "uniform",
     axis_thickness_m: float | None = None,
     pivot: Sequence[float] = (0.0, 0.0, 0.0),
+    target_bounds_extent: Sequence[float] | None = None,
+    active_mask: Sequence[bool] | None = None,
 ) -> EvaluatedTextureV2:
     if projection is not None and projection not in {
         "object_local",
@@ -902,6 +999,8 @@ def evaluate_preset_texture_v2(
         if any(not math.isfinite(component) for component in point):
             raise _invalid("sample_point", "all components must be finite")
         point_list.append(point)
+    if active_mask is not None and len(active_mask) != len(point_list):
+        raise _invalid("active_mask", "length must match sample point count")
 
     normalized_clamp = str(clamp_mode or "none").strip().lower()
     normalized_axis_extent = str(axis_extent_mode or "uniform").strip().lower()
@@ -910,6 +1009,8 @@ def evaluate_preset_texture_v2(
         normalized_clamp == "none"
         and half_axis_thickness is None
         and rotate_vectors is True
+        and active_mask is None
+        and target_bounds_extent is None
         and preset_kind not in _WAVE2_PRESETS
     )
     if use_native:
@@ -942,14 +1043,17 @@ def evaluate_preset_texture_v2(
     quaternion = _normalized_quaternion(rotation_quat) if (rotation_quat is not None and rotate_vectors) else None
     pivot_vec: Vec3 = (float(pivot[0]), float(pivot[1]), float(pivot[2]))
     period_vec: Vec3 | None = None
-    if tile_period is not None:
-        period_vec = (float(tile_period[0]), float(tile_period[1]), float(tile_period[2]))
-    elif normalized_clamp != "none" and point_list:
-        mins = [min(p[i] for p in point_list) for i in range(3)]
-        maxs = [max(p[i] for p in point_list) for i in range(3)]
-        extents = [maxs[i] - mins[i] for i in range(3)]
-        if all(e > _EPSILON for e in extents):
-            period_vec = (extents[0], extents[1], extents[2])
+    if normalized_clamp != "none":
+        active_points = (
+            [pt for pt, active in zip(point_list, active_mask) if active]
+            if active_mask is not None
+            else point_list
+        )
+        period_vec = resolve_default_tile_period(
+            tile_period,
+            target_bounds_extent,
+            active_points,
+        )
     bg_vec: Vec3 | None = (
         (float(background_vector[0]), float(background_vector[1]), float(background_vector[2]))
         if background_vector is not None
@@ -964,7 +1068,10 @@ def evaluate_preset_texture_v2(
     )
     is_metric = preset_kind in _METRIC_PRESETS
     values: list[Vec3] = []
-    for point in point_list:
+    for idx, point in enumerate(point_list):
+        if active_mask is not None and not active_mask[idx]:
+            values.append((0.0, 0.0, 0.0))
+            continue
         if half_axis_thickness is not None and slab_bg_vec is not None:
             rel_z = _sub(point, pivot_vec)
             z_normal = _dot(rel_z, frame[2]) if (is_metric and frame is not None) else rel_z[2]
@@ -977,6 +1084,8 @@ def evaluate_preset_texture_v2(
             normalized_clamp,
             period_vec,
             bg_vec,
+            frame,
+            is_metric,
         )
         if outcome_kind == "background":
             values.append(_rotate(outcome_vec, quaternion) if quaternion is not None else outcome_vec)

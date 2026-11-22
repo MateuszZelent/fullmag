@@ -270,7 +270,8 @@ export const MAGNETIZATION_TEXTURE_PRESETS: readonly MagnetizationTexturePreset[
       twist_rad: Math.PI / 2,
       core_radius: 1e-9,
     },
-    description: "Three-dimensional radial, circulating, or hyperbolic Bloch point singularity.",
+    description:
+      "Three-dimensional radial, circulating, or hyperbolic Bloch point hedgehog singularity (core_radius sets the core-marker indicator scale; analytic field follows docs/physics/0534).",
     id: "bloch_point",
     label: "Bloch point",
   },

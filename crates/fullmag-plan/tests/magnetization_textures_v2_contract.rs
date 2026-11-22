@@ -1,5 +1,10 @@
-use fullmag_ir::{TextureMappingIR, TextureTransform3DIR};
-use fullmag_plan::{sample_preset_texture_versioned, TextureSamplePoint};
+use fullmag_ir::{
+    RegionFrameIR, RegionShapeIR, TextureMappingIR, TextureProjectionMode, TextureTransform3DIR,
+};
+use fullmag_plan::{
+    region_shape_bounds_in_object_space, sample_preset_texture_versioned,
+    sample_preset_texture_versioned_with_bounds, AffineTransform3, TextureSamplePoint,
+};
 use serde_json::json;
 use std::collections::BTreeMap;
 
@@ -503,4 +508,363 @@ fn v2_hopfion_is_normalized_and_reverses_orientation_with_charge() {
         &[point(0.0, 0.0, 0.0)],
     )
     .is_err());
+}
+
+#[test]
+fn v2_clamp_modes_default_period_and_metric_background_frame_parity() {
+    let sk_params = params([
+        ("radius", json!(10.0e-9)),
+        ("wall_width", json!(3.0e-9)),
+        ("core_polarity", json!(-1)),
+        ("chirality", json!(1)),
+        ("plane", json!("xy")),
+    ]);
+
+    // 1. Unified default tile_period uses pre-transform source bbox so scale=0.5 tiles 2x cleanly
+    let pts = [
+        point(-25.0e-9, -25.0e-9, -5.0e-9),
+        point(0.0, 0.0, 0.0),
+        point(25.0e-9, 0.0, 0.0),
+        point(25.0e-9, 25.0e-9, 5.0e-9),
+    ];
+    let scale_half = TextureTransform3DIR {
+        scale: [0.5, 0.5, 1.0],
+        ..TextureTransform3DIR::default()
+    };
+    let repeat_default = TextureMappingIR {
+        clamp_mode: "repeat".to_string(),
+        ..TextureMappingIR::default()
+    };
+    let repeat_explicit = TextureMappingIR {
+        clamp_mode: "repeat".to_string(),
+        tile_period: Some([50.0e-9, 50.0e-9, 10.0e-9]),
+        ..TextureMappingIR::default()
+    };
+    let vals_default = sample_preset_texture_versioned(
+        "bloch_skyrmion",
+        2,
+        &sk_params,
+        &repeat_default,
+        &scale_half,
+        &pts,
+    )
+    .unwrap();
+    let vals_explicit = sample_preset_texture_versioned(
+        "bloch_skyrmion",
+        2,
+        &sk_params,
+        &repeat_explicit,
+        &scale_half,
+        &pts,
+    )
+    .unwrap();
+    for (a, b) in vals_default.iter().zip(vals_explicit.iter()) {
+        for c in 0..3 {
+            assert!((a[c] - b[c]).abs() < 1.0e-12);
+        }
+    }
+    assert!(vals_default[1][2] < -0.99);
+    assert!(vals_default[2][2] < -0.99);
+
+    // 2. Hard clamp and mirror modes
+    let mirror_mapping = TextureMappingIR {
+        clamp_mode: "mirror".to_string(),
+        tile_period: Some([50.0e-9, 50.0e-9, 10.0e-9]),
+        ..TextureMappingIR::default()
+    };
+    let mirror_vals = sample_preset_texture_versioned(
+        "bloch_skyrmion",
+        2,
+        &sk_params,
+        &mirror_mapping,
+        &TextureTransform3DIR::default(),
+        &[point(10.0e-9, 0.0, 0.0), point(40.0e-9, 0.0, 0.0)],
+    )
+    .unwrap();
+    for c in 0..3 {
+        assert!((mirror_vals[0][c] - mirror_vals[1][c]).abs() < 1.0e-12);
+    }
+
+    let clamp_mapping = TextureMappingIR {
+        clamp_mode: "clamp".to_string(),
+        tile_period: Some([50.0e-9, 50.0e-9, 10.0e-9]),
+        ..TextureMappingIR::default()
+    };
+    let clamp_vals = sample_preset_texture_versioned(
+        "bloch_skyrmion",
+        2,
+        &sk_params,
+        &clamp_mapping,
+        &TextureTransform3DIR::default(),
+        &[point(25.0e-9, 0.0, 0.0), point(80.0e-9, 0.0, 0.0)],
+    )
+    .unwrap();
+    for c in 0..3 {
+        assert!((clamp_vals[0][c] - clamp_vals[1][c]).abs() < 1.0e-12);
+    }
+
+    // 3. Default background vector passes through metric_vector frame on xy/xz/yz
+    for (plane, expected_bg) in [
+        ("xy", [0.0, 0.0, 1.0]),
+        ("xz", [0.0, -1.0, 0.0]),
+        ("yz", [1.0, 0.0, 0.0]),
+    ] {
+        let vortex_params = params([
+            ("plane", json!(plane)),
+            ("circulation", json!(1)),
+            ("core_polarity", json!(1)),
+            ("core_radius", json!(4.0e-9)),
+        ]);
+        let bg_mapping = TextureMappingIR {
+            clamp_mode: "background".to_string(),
+            tile_period: Some([20.0e-9, 20.0e-9, 20.0e-9]),
+            ..TextureMappingIR::default()
+        };
+        let vals = sample_preset_texture_versioned(
+            "vortex",
+            2,
+            &vortex_params,
+            &bg_mapping,
+            &TextureTransform3DIR::default(),
+            &[point(30.0e-9, 30.0e-9, 30.0e-9)],
+        )
+        .unwrap();
+        for c in 0..3 {
+            assert!((vals[0][c] - expected_bg[c]).abs() < 1.0e-12);
+        }
+    }
+}
+
+#[test]
+fn v2_rotate_vectors_false_thickness_confinement_and_region_space() {
+    // 1. rotate_vectors = false keeps spin vectors fixed while tilting spatial domain wall
+    let angle = std::f64::consts::FRAC_PI_4;
+    let q_z_45 = [0.0, 0.0, (0.5 * angle).sin(), (0.5 * angle).cos()];
+    let wall_params = params([
+        ("width", json!(10.0e-9)),
+        ("kind", json!("bloch")),
+        ("normal_axis", json!("x")),
+        ("left", json!([0.0, 0.0, 1.0])),
+        ("right", json!([0.0, 0.0, -1.0])),
+    ]);
+    let t_space_only = TextureTransform3DIR {
+        rotation_quat: q_z_45,
+        rotate_vectors: false,
+        ..TextureTransform3DIR::default()
+    };
+    let t_coupled = TextureTransform3DIR {
+        rotation_quat: q_z_45,
+        rotate_vectors: true,
+        ..TextureTransform3DIR::default()
+    };
+    let wall_center_pt = [point(-20.0e-9, 20.0e-9, 0.0)];
+    let m_space_only = sample_preset_texture_versioned(
+        "domain_wall",
+        2,
+        &wall_params,
+        &TextureMappingIR::default(),
+        &t_space_only,
+        &wall_center_pt,
+    )
+    .unwrap()[0];
+    let m_coupled = sample_preset_texture_versioned(
+        "domain_wall",
+        2,
+        &wall_params,
+        &TextureMappingIR::default(),
+        &t_coupled,
+        &wall_center_pt,
+    )
+    .unwrap()[0];
+    let inv_sqrt2 = std::f64::consts::FRAC_1_SQRT_2;
+    assert!((m_space_only[0]).abs() < 1.0e-12);
+    assert!((m_space_only[1] + 1.0).abs() < 1.0e-12);
+    assert!((m_coupled[0] - inv_sqrt2).abs() < 1.0e-12);
+    assert!((m_coupled[1] + inv_sqrt2).abs() < 1.0e-12);
+
+    // 2. axis_extent_mode = "thickness" confines skyrmion along e_n
+    let sk_params = params([
+        ("radius", json!(15.0e-9)),
+        ("wall_width", json!(4.0e-9)),
+        ("core_polarity", json!(-1)),
+        ("chirality", json!(1)),
+        ("plane", json!("xy")),
+    ]);
+    let slab_mapping = TextureMappingIR {
+        axis_extent_mode: Some("thickness".to_string()),
+        axis_thickness_m: Some(1.0e-9),
+        ..TextureMappingIR::default()
+    };
+    let slab_transform = TextureTransform3DIR {
+        translation: [0.0, 0.0, 2.0e-9],
+        ..TextureTransform3DIR::default()
+    };
+    let slab_vals = sample_preset_texture_versioned(
+        "bloch_skyrmion",
+        2,
+        &sk_params,
+        &slab_mapping,
+        &slab_transform,
+        &[point(0.0, 0.0, 2.0e-9), point(0.0, 0.0, 3.0e-9)],
+    )
+    .unwrap();
+    assert!(slab_vals[0][2] < -0.99);
+    assert!((slab_vals[1][2] - 1.0).abs() < 1.0e-12);
+
+    // 3. Analytic region bounds clipped to object bounds match TS resolveTargetBoundsMeters
+    let shape = RegionShapeIR::Box {
+        size: [40.0e-9, 20.0e-9, 10.0e-9],
+        center: [90.0e-9, 0.0, 0.0],
+    };
+    let object_bounds = ([-100.0e-9, -50.0e-9, -5.0e-9], [100.0e-9, 50.0e-9, 5.0e-9]);
+    let (rmin, rmax) = region_shape_bounds_in_object_space(
+        &shape,
+        RegionFrameIR::Object,
+        AffineTransform3::identity(),
+        Some(object_bounds),
+    )
+    .unwrap();
+    // Clipped x range is [70nm, 100nm] -> center 85nm, extent 30nm
+    assert!((rmin[0] - 70.0e-9).abs() < 1.0e-15);
+    assert!((rmax[0] - 100.0e-9).abs() < 1.0e-15);
+    let region_center = [
+        0.5 * (rmin[0] + rmax[0]),
+        0.5 * (rmin[1] + rmax[1]),
+        0.5 * (rmin[2] + rmax[2]),
+    ];
+    let region_extent = [rmax[0] - rmin[0], rmax[1] - rmin[1], rmax[2] - rmin[2]];
+    let vortex_params = params([
+        ("circulation", json!(1)),
+        ("core_polarity", json!(1)),
+        ("core_radius", json!(4.0e-9)),
+        ("plane", json!("xy")),
+    ]);
+    let region_mapping = TextureMappingIR {
+        space: "region".to_string(),
+        clamp_mode: "clamp".to_string(),
+        ..TextureMappingIR::default()
+    };
+    let region_pt = TextureSamplePoint {
+        position_world: [85.0e-9, 0.0, 0.0],
+        position_object: [85.0e-9, 0.0, 0.0],
+        position_region: Some([
+            85.0e-9 - region_center[0],
+            -region_center[1],
+            -region_center[2],
+        ]),
+        active: true,
+    };
+    let region_vals = sample_preset_texture_versioned_with_bounds(
+        "vortex",
+        2,
+        &vortex_params,
+        &region_mapping,
+        &TextureTransform3DIR::default(),
+        &[region_pt],
+        Some(region_extent),
+    )
+    .unwrap();
+    assert!((region_vals[0][2] - 1.0).abs() < 1.0e-12);
+}
+
+#[test]
+fn v2_wave2_presets_evaluate_unit_norm_and_reject_invalid_projection() {
+    let sk_lat = params([
+        ("lattice", json!("hexagonal")),
+        ("lattice_constant", json!(60.0e-9)),
+        ("radius", json!(15.0e-9)),
+        ("wall_width", json!(4.0e-9)),
+        ("kind", json!("bloch")),
+        ("core_polarity", json!(-1)),
+        ("chirality", json!(1)),
+        ("plane", json!("xy")),
+    ]);
+    let sk_vals = sample_preset_texture_versioned(
+        "skyrmion_lattice",
+        2,
+        &sk_lat,
+        &TextureMappingIR::default(),
+        &TextureTransform3DIR::default(),
+        &[point(0.0, 0.0, 0.0), point(60.0e-9, 0.0, 0.0)],
+    )
+    .unwrap();
+    for c in 0..3 {
+        assert!((sk_vals[0][c] - sk_vals[1][c]).abs() < 1.0e-12);
+    }
+
+    let spiral_params = params([
+        ("spiral_kind", json!("cycloidal")),
+        ("wavelength", json!(40.0e-9)),
+        ("propagation_axis", json!([1.0, 0.0, 0.0])),
+        ("chirality", json!(1)),
+        ("phase_rad", json!(0.0)),
+    ]);
+    let sp_vals = sample_preset_texture_versioned(
+        "spiral",
+        2,
+        &spiral_params,
+        &TextureMappingIR::default(),
+        &TextureTransform3DIR::default(),
+        &[point(0.0, 0.0, 0.0), point(40.0e-9, 0.0, 0.0)],
+    )
+    .unwrap();
+    for c in 0..3 {
+        assert!((sp_vals[0][c] - sp_vals[1][c]).abs() < 1.0e-12);
+    }
+
+    let bp_params = params([
+        ("bp_kind", json!("circulating")),
+        ("polarity", json!(1)),
+        ("twist_rad", json!(std::f64::consts::FRAC_PI_2)),
+        ("core_radius", json!(1.0e-9)),
+    ]);
+    let bp_vals = sample_preset_texture_versioned(
+        "bloch_point",
+        2,
+        &bp_params,
+        &TextureMappingIR::default(),
+        &TextureTransform3DIR::default(),
+        &[point(0.0, 0.0, 0.0), point(10.0e-9, 0.0, 0.0)],
+    )
+    .unwrap();
+    assert!((bp_vals[0][2] - 1.0).abs() < 1.0e-12);
+    assert!((bp_vals[1][1] - 1.0).abs() < 1.0e-12);
+    let planar = TextureMappingIR {
+        projection: TextureProjectionMode::PlanarXy,
+        ..TextureMappingIR::default()
+    };
+    assert!(sample_preset_texture_versioned(
+        "bloch_point",
+        2,
+        &bp_params,
+        &planar,
+        &TextureTransform3DIR::default(),
+        &[point(0.0, 0.0, 0.0)],
+    )
+    .is_err());
+
+    let asi_params = params([
+        ("lattice", json!("square")),
+        ("vertex_state", json!("type_i_ground")),
+        ("pitch", json!(50.0e-9)),
+        ("plane", json!("xy")),
+    ]);
+    let asi_vals = sample_preset_texture_versioned(
+        "artificial_spin_ice",
+        2,
+        &asi_params,
+        &TextureMappingIR::default(),
+        &TextureTransform3DIR::default(),
+        &[
+            point(25.0e-9, 0.0, 0.0),
+            point(-25.0e-9, 0.0, 0.0),
+            point(0.0, 25.0e-9, 0.0),
+            point(0.0, -25.0e-9, 0.0),
+        ],
+    )
+    .unwrap();
+    assert!((asi_vals[0][0] - 1.0).abs() < 1.0e-12);
+    assert!((asi_vals[1][0] + 1.0).abs() < 1.0e-12);
+    assert!((asi_vals[2][1] + 1.0).abs() < 1.0e-12);
+    assert!((asi_vals[3][1] - 1.0).abs() < 1.0e-12);
 }

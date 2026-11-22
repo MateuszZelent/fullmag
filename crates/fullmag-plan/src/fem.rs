@@ -507,7 +507,37 @@ fn apply_fem_region_texture_overrides(
                 },
             )
             .collect::<Vec<_>>();
-        let values = crate::region_textures::sample_region_initial_on_mask(
+        let owner_entry = &magnet_entries[resolved_region.entry_index];
+        let object_transform = crate::selection::geometry::AffineTransform3 {
+            translation_m: owner_entry.object_translation,
+            ..crate::selection::geometry::AffineTransform3::identity()
+        };
+        let object_bounds_local = problem
+            .geometries
+            .iter()
+            .find(|geom| geom.name() == owner_entry.geometry_name)
+            .and_then(|geom| crate::selection::geometry::geometry_entry_bounds(geom).ok())
+            .map(|(min_w, max_w)| {
+                (
+                    [
+                        min_w[0] - owner_entry.object_translation[0],
+                        min_w[1] - owner_entry.object_translation[1],
+                        min_w[2] - owner_entry.object_translation[2],
+                    ],
+                    [
+                        max_w[0] - owner_entry.object_translation[0],
+                        max_w[1] - owner_entry.object_translation[1],
+                        max_w[2] - owner_entry.object_translation[2],
+                    ],
+                )
+            });
+        let region_bounds_object = crate::selection::geometry::object_region_bounds_in_object_space(
+            resolved_region.region,
+            object_transform,
+            object_bounds_local,
+        )
+        .ok();
+        let values = crate::region_textures::sample_region_initial_on_mask_with_bounds(
             &format!(
                 "object_region '{}' FEM texture_override",
                 resolved_region.region.region_id
@@ -515,6 +545,7 @@ fn apply_fem_region_texture_overrides(
             &texture_override.initial_magnetization,
             &points,
             &selected,
+            region_bounds_object,
         )
         .map_err(|reason| PlanError {
             reasons: vec![reason],

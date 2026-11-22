@@ -612,6 +612,10 @@ function evalVortexWall(params: Record<string, unknown>, point: Vec3): Vec3 {
   if (rightMx === 0.0) throw invalid("right_mx", "must be finite and nonzero");
   if (point[0] < -wallHalfWidth) return [leftMx > 0 ? 1.0 : -1.0, 0.0, 0.0];
   if (point[0] > wallHalfWidth) return [rightMx > 0 ? 1.0 : -1.0, 0.0, 0.0];
+  if (params.circulation === undefined) {
+    const derivedCirculation = leftMx * rightMx > 0.0 ? 1 : -1;
+    return evalVortex({ ...params, circulation: derivedCirculation }, point, 1.0);
+  }
   return evalVortex(params, point, 1.0);
 }
 
@@ -885,6 +889,13 @@ function evalSpiral(params: Record<string, unknown>, point: Vec3): Vec3 {
   return normalizeChecked(add(scaleVec(e1, Math.cos(phase)), scaleVec(e2, Math.sin(phase))), "spiral");
 }
 
+/**
+ * 3D Bloch point hedgehog per docs/physics/0534 (texture-bloch-point-v2).
+ * `core_radius` is validated positive as the physical core-indicator / gizmo
+ * marker radius, while the analytic unit-vector field is the exact scale-invariant
+ * 3D hedgehog with regular origin limit `polarity * [0, 0, sz]` for `r <= 1e-15 m`
+ * (aligned across Rust, Python, and TypeScript).
+ */
 function evalBlochPoint(params: Record<string, unknown>, point: Vec3): Vec3 {
   const bpKind = stringParam(params, "bp_kind", "circulating");
   if (bpKind !== "radial" && bpKind !== "circulating" && bpKind !== "hyperbolic") {
@@ -914,6 +925,10 @@ function modEuclidInt(value: number, modulus: number): number {
   return r < 0 ? r + modulus : r;
 }
 
+function nearestInt(value: number): number {
+  return Math.floor(value + 0.5);
+}
+
 function evalArtificialSpinIce(params: Record<string, unknown>, point: Vec3): Vec3 {
   const lattice = stringParam(params, "lattice", "square");
   const vertexState = stringParam(params, "vertex_state", "type_i_ground");
@@ -932,12 +947,12 @@ function evalArtificialSpinIce(params: Record<string, unknown>, point: Vec3): Ve
   const v = point[1];
   if (lattice === "square") {
     const hNu = Math.floor(u / a);
-    const hNv = Math.round(v / a);
+    const hNv = nearestInt(v / a);
     const hDu = u - (hNu + 0.5) * a;
     const hDv = v - hNv * a;
     const hDistSq = hDu * hDu + hDv * hDv;
 
-    const vNu = Math.round(u / a);
+    const vNu = nearestInt(u / a);
     const vNv = Math.floor(v / a);
     const vDu = u - vNu * a;
     const vDv = v - (vNv + 0.5) * a;
@@ -1142,11 +1157,81 @@ function resolveSlabBackgroundV2(
   return localBg;
 }
 
+/**
+ * Canonical default tile_period formula shared identically across Rust, Python, and TS.
+ *
+ * 1. Explicit `tile_period` wins when provided.
+ * 2. Explicit `targetBoundsExtent` (domain/region AABB extents before `texture_transform`)
+ *    is used when finite and positive on all 3 axes.
+ * 3. Otherwise compute the AABB extent over active source-space points before
+ *    `texture_transform`, replacing any degenerate axis (<= EPSILON) with the maximum
+ *    positive axis extent (failing closed with null when all axes are degenerate).
+ */
+export function resolveDefaultTilePeriod(
+  explicitTilePeriod: readonly [number, number, number] | null | undefined,
+  targetBoundsExtent: readonly [number, number, number] | null | undefined,
+  activeSourcePoints: readonly Vec3[],
+): Vec3 | null {
+  if (explicitTilePeriod) {
+    return [explicitTilePeriod[0], explicitTilePeriod[1], explicitTilePeriod[2]];
+  }
+  if (
+    targetBoundsExtent &&
+    Number.isFinite(targetBoundsExtent[0]) &&
+    Number.isFinite(targetBoundsExtent[1]) &&
+    Number.isFinite(targetBoundsExtent[2]) &&
+    targetBoundsExtent[0] > EPSILON &&
+    targetBoundsExtent[1] > EPSILON &&
+    targetBoundsExtent[2] > EPSILON
+  ) {
+    return [targetBoundsExtent[0], targetBoundsExtent[1], targetBoundsExtent[2]];
+  }
+  if (activeSourcePoints.length === 0) {
+    return null;
+  }
+  let minX = Number.POSITIVE_INFINITY;
+  let minY = Number.POSITIVE_INFINITY;
+  let minZ = Number.POSITIVE_INFINITY;
+  let maxX = Number.NEGATIVE_INFINITY;
+  let maxY = Number.NEGATIVE_INFINITY;
+  let maxZ = Number.NEGATIVE_INFINITY;
+  let anyFinite = false;
+  for (let i = 0; i < activeSourcePoints.length; i += 1) {
+    const pt = activeSourcePoints[i]!;
+    if (Number.isFinite(pt[0]) && Number.isFinite(pt[1]) && Number.isFinite(pt[2])) {
+      anyFinite = true;
+      if (pt[0] < minX) minX = pt[0];
+      if (pt[0] > maxX) maxX = pt[0];
+      if (pt[1] < minY) minY = pt[1];
+      if (pt[1] > maxY) maxY = pt[1];
+      if (pt[2] < minZ) minZ = pt[2];
+      if (pt[2] > maxZ) maxZ = pt[2];
+    }
+  }
+  if (!anyFinite) {
+    return null;
+  }
+  const rawX = maxX - minX;
+  const rawY = maxY - minY;
+  const rawZ = maxZ - minZ;
+  const maxExt = Math.max(rawX, rawY, rawZ);
+  if (!Number.isFinite(maxExt) || maxExt <= EPSILON) {
+    return null;
+  }
+  return [
+    rawX > EPSILON ? rawX : maxExt,
+    rawY > EPSILON ? rawY : maxExt,
+    rawZ > EPSILON ? rawZ : maxExt,
+  ];
+}
+
 function applyClampModeV2(
   transformed: Vec3,
   pivot: Vec3,
   mapping: TextureMappingSpecV2 | undefined,
-  fallbackExtent?: readonly [number, number, number] | null,
+  fallbackExtent: readonly [number, number, number] | null | undefined,
+  frame: OrientedPlaneFrame | null,
+  isMetric: boolean,
 ): ClampOutcome {
   const mode = (mapping?.clamp_mode ?? "none").trim();
   if (!mode || mode === "none") {
@@ -1197,10 +1282,16 @@ function applyClampModeV2(
         Math.abs(rel[1]) > 0.5 * period[1] ||
         Math.abs(rel[2]) > 0.5 * period[2];
       if (outside) {
-        const bg = mapping?.background_vector ?? [0, 0, 1];
+        if (mapping?.background_vector) {
+          return {
+            kind: "background",
+            vector: normalizeChecked(mapping.background_vector, "mapping.background_vector"),
+          };
+        }
+        const defaultLocal: Vec3 = [0, 0, 1];
         return {
           kind: "background",
-          vector: normalizeChecked(bg, "mapping.background_vector"),
+          vector: isMetric && frame !== null ? frameVectorToWorld(defaultLocal, frame) : defaultLocal,
         };
       }
       return { kind: "sample", point: transformed };
@@ -1264,11 +1355,18 @@ export function samplePresetTextureV2Client(
       return vectorToSource(prepared, slabBg);
     }
   }
+  const fallbackExtent = resolveDefaultTilePeriod(
+    spec.mapping?.tile_period,
+    targetBounds?.size ?? null,
+    [],
+  );
   const outcome = applyClampModeV2(
     transformed,
     prepared.pivot,
     spec.mapping,
-    targetBounds?.size ?? null,
+    fallbackExtent,
+    frame,
+    isMetric,
   );
   if (outcome.kind === "background") {
     return vectorToSource(prepared, outcome.vector);
@@ -1304,11 +1402,24 @@ export function samplePresetTextureV2Batch(
       ? resolveSlabBackgroundV2(spec.preset_kind, params, frame, spec.mapping)
       : null;
   const isMetric = METRIC_PRESETS.has(spec.preset_kind);
-  const fallbackExtent = targetBounds?.size ?? null;
+
+  const sourcePositions: Vec3[] = new Array(points.length);
+  for (let i = 0; i < points.length; i += 1) {
+    sourcePositions[i] = sourcePositionForCoordinate(points[i]!, spec.mapping, targetBounds);
+  }
+  const clampMode = (spec.mapping?.clamp_mode ?? "none").trim();
+  const fallbackExtent =
+    clampMode && clampMode !== "none"
+      ? resolveDefaultTilePeriod(
+          spec.mapping?.tile_period,
+          targetBounds?.size ?? null,
+          sourcePositions,
+        )
+      : null;
 
   const out: Vec3[] = new Array(points.length);
   for (let i = 0; i < points.length; i += 1) {
-    const src = sourcePositionForCoordinate(points[i]!, spec.mapping, targetBounds);
+    const src = sourcePositions[i]!;
     const transformed = pointToTexture(prepared, src);
     if (halfAxisThickness !== null && slabBg !== null) {
       const rel = sub(transformed, prepared.pivot);
@@ -1318,7 +1429,14 @@ export function samplePresetTextureV2Batch(
         continue;
       }
     }
-    const outcome = applyClampModeV2(transformed, prepared.pivot, spec.mapping, fallbackExtent);
+    const outcome = applyClampModeV2(
+      transformed,
+      prepared.pivot,
+      spec.mapping,
+      fallbackExtent,
+      frame,
+      isMetric,
+    );
     if (outcome.kind === "background") {
       out[i] = vectorToSource(prepared, outcome.vector);
       continue;
@@ -1349,6 +1467,7 @@ export function evaluatePresetTextureV2Points(
     axisExtentMode?: TextureAxisExtentModeV2 | string | null;
     axisThicknessM?: number | null;
     pivot?: readonly [number, number, number];
+    targetBoundsExtent?: readonly [number, number, number] | null;
   },
 ): Vec3[] {
   const frame = resolveFrame(params, options?.projection);
@@ -1380,6 +1499,15 @@ export function evaluatePresetTextureV2Points(
       ? resolveSlabBackgroundV2(presetKind, params, frame, mapping)
       : null;
   const isMetric = METRIC_PRESETS.has(presetKind);
+  const clampMode = (mapping.clamp_mode ?? "none").trim();
+  const fallbackExtent =
+    clampMode && clampMode !== "none"
+      ? resolveDefaultTilePeriod(
+          mapping.tile_period,
+          options?.targetBoundsExtent ?? null,
+          points,
+        )
+      : null;
   const out: Vec3[] = new Array(points.length);
   for (let i = 0; i < points.length; i += 1) {
     const pt = points[i]!;
@@ -1391,7 +1519,7 @@ export function evaluatePresetTextureV2Points(
         continue;
       }
     }
-    const outcome = applyClampModeV2(pt, pivot, mapping, null);
+    const outcome = applyClampModeV2(pt, pivot, mapping, fallbackExtent, frame, isMetric);
     if (outcome.kind === "background") {
       out[i] = quat ? rotateVectorByQuaternion(outcome.vector, quat) : outcome.vector;
       continue;

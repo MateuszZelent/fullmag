@@ -83,6 +83,7 @@ function applyObjectTransformToPoint(pointLocal: Vec3, transform: UnknownRecord 
   if (!transform) return pointLocal;
   const scale = asVec3(transform.scale) ?? [1, 1, 1];
   const translation = asVec3(transform.translation) ?? [0, 0, 0];
+  const pivot = asVec3(transform.pivot) ?? [0, 0, 0];
   const rawQuat = Array.isArray(transform.rotation_quat) ? transform.rotation_quat : null;
   const quat: [number, number, number, number] =
     rawQuat &&
@@ -91,15 +92,15 @@ function applyObjectTransformToPoint(pointLocal: Vec3, transform: UnknownRecord 
       ? [rawQuat[0] as number, rawQuat[1] as number, rawQuat[2] as number, rawQuat[3] as number]
       : [0, 0, 0, 1];
   const scaled: Vec3 = [
-    pointLocal[0] * scale[0],
-    pointLocal[1] * scale[1],
-    pointLocal[2] * scale[2],
+    (pointLocal[0] - pivot[0]) * scale[0],
+    (pointLocal[1] - pivot[1]) * scale[1],
+    (pointLocal[2] - pivot[2]) * scale[2],
   ];
   const rotated = rotateByQuat(scaled, quat);
   return [
-    rotated[0] + translation[0],
-    rotated[1] + translation[1],
-    rotated[2] + translation[2],
+    pivot[0] + rotated[0] + translation[0],
+    pivot[1] + rotated[1] + translation[1],
+    pivot[2] + rotated[2] + translation[2],
   ];
 }
 
@@ -107,6 +108,7 @@ function inverseObjectTransformPoint(pointWorld: Vec3, transform: UnknownRecord 
   if (!transform) return pointWorld;
   const scale = asVec3(transform.scale) ?? [1, 1, 1];
   const translation = asVec3(transform.translation) ?? [0, 0, 0];
+  const pivot = asVec3(transform.pivot) ?? [0, 0, 0];
   const rawQuat = Array.isArray(transform.rotation_quat) ? transform.rotation_quat : null;
   const quat: [number, number, number, number] =
     rawQuat &&
@@ -120,15 +122,15 @@ function inverseObjectTransformPoint(pointWorld: Vec3, transform: UnknownRecord 
         ]
       : [0, 0, 0, 1];
   const shifted: Vec3 = [
-    pointWorld[0] - translation[0],
-    pointWorld[1] - translation[1],
-    pointWorld[2] - translation[2],
+    pointWorld[0] - translation[0] - pivot[0],
+    pointWorld[1] - translation[1] - pivot[1],
+    pointWorld[2] - translation[2] - pivot[2],
   ];
   const unrotated = rotateByQuat(shifted, quat);
   return [
-    Math.abs(scale[0]) > 1e-14 ? unrotated[0] / scale[0] : unrotated[0],
-    Math.abs(scale[1]) > 1e-14 ? unrotated[1] / scale[1] : unrotated[1],
-    Math.abs(scale[2]) > 1e-14 ? unrotated[2] / scale[2] : unrotated[2],
+    (Math.abs(scale[0]) > 1e-14 ? unrotated[0] / scale[0] : unrotated[0]) + pivot[0],
+    (Math.abs(scale[1]) > 1e-14 ? unrotated[1] / scale[1] : unrotated[1]) + pivot[1],
+    (Math.abs(scale[2]) > 1e-14 ? unrotated[2] / scale[2] : unrotated[2]) + pivot[2],
   ];
 }
 

@@ -86,7 +86,8 @@ pub use geometry::{
 };
 pub use magnetization_textures::{sample_preset_texture, TextureSamplePoint};
 pub use magnetization_textures_v2::{
-    sample_preset_texture_versioned, OrientedPlaneFrame, TextureError,
+    resolve_default_tile_period, sample_preset_texture_versioned,
+    sample_preset_texture_versioned_with_bounds, OrientedPlaneFrame, TextureError,
 };
 pub use physics_graph::{
     physics_graph_provenance_notes, physics_graph_realization_provenance,
@@ -113,7 +114,8 @@ pub use sampling::{
     SamplingResolutionIR, SAMPLING_RESOLUTION_SCHEMA_VERSION,
 };
 pub use selection::geometry::{
-    evaluate_geometry_predicate, AffineTransform3, BoundaryMembership, GeometryPredicate,
+    evaluate_geometry_predicate, object_region_bounds_in_object_space,
+    region_shape_bounds_in_object_space, AffineTransform3, BoundaryMembership, GeometryPredicate,
     SelectionError,
 };
 pub use selection::{

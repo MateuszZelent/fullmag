@@ -7,7 +7,7 @@ use std::collections::BTreeSet;
 use crate::PlanError;
 
 use crate::magnetization_textures::TextureSamplePoint;
-use crate::magnetization_textures_v2::sample_preset_texture_versioned;
+use crate::magnetization_textures_v2::sample_preset_texture_versioned_with_bounds;
 use crate::region_conflict::{resolve_region_conflict, RegionConflictCandidate};
 use crate::selection::geometry::{contains_point, GeometryPredicate};
 use crate::util::generate_random_unit_vectors;
@@ -228,6 +228,20 @@ pub(crate) fn sample_region_initial_on_mask(
     points: &[TextureSamplePoint],
     selected: &[bool],
 ) -> Result<Vec<[f64; 3]>, String> {
+    sample_region_initial_on_mask_with_bounds(context, initial, points, selected, None)
+}
+
+/// Materialize an initial-magnetization descriptor on a strict selection mask,
+/// using optional analytic `region_bounds_object = Some((min_obj, max_obj))` in
+/// object-local coordinates so `space = "region"` center and default `tile_period`
+/// match TS/Python analytic bounds without discretization drift.
+pub(crate) fn sample_region_initial_on_mask_with_bounds(
+    context: &str,
+    initial: &InitialMagnetizationIR,
+    points: &[TextureSamplePoint],
+    selected: &[bool],
+    region_bounds_object: Option<([f64; 3], [f64; 3])>,
+) -> Result<Vec<[f64; 3]>, String> {
     if points.len() != selected.len() {
         return Err(format!(
             "{context}: selection mask length {} does not match sample point count {}",
@@ -248,21 +262,39 @@ pub(crate) fn sample_region_initial_on_mask(
         return Ok(vec![[0.0, 0.0, 0.0]; points.len()]);
     }
 
-    let mut min_obj = [f64::INFINITY; 3];
-    let mut max_obj = [f64::NEG_INFINITY; 3];
-    for (point, active) in points.iter().zip(&active_selection) {
-        if *active {
-            for axis in 0..3 {
-                min_obj[axis] = min_obj[axis].min(point.position_object[axis]);
-                max_obj[axis] = max_obj[axis].max(point.position_object[axis]);
+    let (region_center_object, target_bounds_extent) =
+        if let Some((min_obj, max_obj)) = region_bounds_object.filter(|(mn, mx)| {
+            mn.iter().chain(mx.iter()).all(|c| c.is_finite())
+        }) {
+            let center = [
+                0.5 * (min_obj[0] + max_obj[0]),
+                0.5 * (min_obj[1] + max_obj[1]),
+                0.5 * (min_obj[2] + max_obj[2]),
+            ];
+            let extent = [
+                (max_obj[0] - min_obj[0]).max(1.0e-12),
+                (max_obj[1] - min_obj[1]).max(1.0e-12),
+                (max_obj[2] - min_obj[2]).max(1.0e-12),
+            ];
+            (center, Some(extent))
+        } else {
+            let mut min_obj = [f64::INFINITY; 3];
+            let mut max_obj = [f64::NEG_INFINITY; 3];
+            for (point, active) in points.iter().zip(&active_selection) {
+                if *active {
+                    for axis in 0..3 {
+                        min_obj[axis] = min_obj[axis].min(point.position_object[axis]);
+                        max_obj[axis] = max_obj[axis].max(point.position_object[axis]);
+                    }
+                }
             }
-        }
-    }
-    let region_center_object = [
-        0.5 * (min_obj[0] + max_obj[0]),
-        0.5 * (min_obj[1] + max_obj[1]),
-        0.5 * (min_obj[2] + max_obj[2]),
-    ];
+            let center = [
+                0.5 * (min_obj[0] + max_obj[0]),
+                0.5 * (min_obj[1] + max_obj[1]),
+                0.5 * (min_obj[2] + max_obj[2]),
+            ];
+            (center, None)
+        };
 
     let masked_points = points
         .iter()
@@ -328,13 +360,14 @@ pub(crate) fn sample_region_initial_on_mask(
             mapping,
             texture_transform,
             preset_version,
-        } => sample_preset_texture_versioned(
+        } => sample_preset_texture_versioned_with_bounds(
             preset_kind,
             *preset_version,
             preset_params,
             mapping,
             texture_transform,
             &masked_points,
+            target_bounds_extent,
         )
         .map_err(|error| format!("{context}: {error}"))?,
     };

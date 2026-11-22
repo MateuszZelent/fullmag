@@ -104,7 +104,12 @@ def test_mumax_factories_reject_nonpositive_scales(factory, arguments) -> None:
 )
 @pytest.mark.parametrize("clamp_mode", ["clamp", "repeat", "mirror"])
 def test_metric_mumax_presets_ignore_unit_box_clamp(texture, point, clamp_mode) -> None:
-    spec = texture.with_mapping(clamp_mode=clamp_mode).to_ir()
+    # In v2 (ADR 0087 / 0534), metric clamp modes operate in meters using tile_period
+    # rather than clamping to the legacy dimensionless unit box [-0.5, 0.5].
+    spec = texture.with_mapping(
+        clamp_mode=clamp_mode,
+        tile_period=(10.0, 10.0, 10.0),
+    ).to_ir()
     actual = prepare_initial_magnetization(spec, [point])[0]
     expected = evaluate_preset_texture_v2(
         texture.preset_kind,

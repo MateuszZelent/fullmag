@@ -463,3 +463,71 @@ def test_finite_axis_thickness_confines_translated_and_tilted_skyrmion_slab() ->
             axis_extent_mode="thickness",
             axis_thickness_m=0.0,
         )
+
+
+def test_default_tile_period_uses_pre_transform_source_bounds_and_metric_background() -> None:
+    # 1. Default tile_period when omitted uses source-space domain bbox BEFORE texture_transform,
+    #    so scaling by 0.5 tiles the 50nm domain twice across [-25nm, +25nm].
+    spec_scaled_repeat = (
+        texture.bloch_skyrmion(radius=10e-9, wall_width=3e-9, core_polarity=-1)
+        .scale(0.5, 0.5, 1.0)
+        .with_mapping(clamp_mode="repeat")
+        .to_ir()
+    )
+    pts = np.array(
+        [
+            [-25e-9, -25e-9, -5e-9],
+            [0.0, 0.0, 0.0],
+            [25e-9, 0.0, 0.0],
+            [25e-9, 25e-9, 5e-9],
+        ],
+        dtype=np.float64,
+    )
+    # Source bbox extent is [50nm, 50nm, 10nm]. After scale 0.5, x=+25nm -> x_tex=+50nm,
+    # which wraps modulo 50nm back to x_tex=0 -> skyrmion core (-Z)!
+    vals_default = prepare_initial_magnetization(spec_scaled_repeat, pts)
+    spec_explicit_repeat = (
+        texture.bloch_skyrmion(radius=10e-9, wall_width=3e-9, core_polarity=-1)
+        .scale(0.5, 0.5, 1.0)
+        .with_mapping(clamp_mode="repeat", tile_period=(50e-9, 50e-9, 10e-9))
+        .to_ir()
+    )
+    vals_explicit = prepare_initial_magnetization(spec_explicit_repeat, pts)
+    np.testing.assert_allclose(vals_default, vals_explicit, atol=1e-12)
+    assert vals_default[1, 2] < -0.99
+    assert vals_default[2, 2] < -0.99
+
+    # 2. Default background vector (when background_vector is omitted) passes through
+    #    the oriented metric frame: plane="xz" has e_n = (0, -1, 0), plane="yz" has e_n = (1, 0, 0).
+    for plane, expected_bg in (("xy", [0.0, 0.0, 1.0]), ("xz", [0.0, -1.0, 0.0]), ("yz", [1.0, 0.0, 0.0])):
+        bg_spec = (
+            texture.vortex(circulation=1, core_polarity=1, core_radius=4e-9, plane=plane)
+            .with_mapping(clamp_mode="background", tile_period=(20e-9, 20e-9, 20e-9))
+            .to_ir()
+        )
+        vals = prepare_initial_magnetization(
+            bg_spec,
+            np.array([[0.0, 0.0, 0.0], [30e-9, 30e-9, 30e-9]], dtype=np.float64),
+        )
+        np.testing.assert_allclose(vals[1], expected_bg, atol=1e-12)
+
+    # 3. space="region" with explicit analytic target_bounds derives both region_center and default tile_period
+    region_spec = (
+        texture.vortex(circulation=1, core_polarity=1, core_radius=4e-9, plane="xy")
+        .with_mapping(space="region", clamp_mode="clamp")
+        .to_ir()
+    )
+    region_bounds = ((80e-9, -10e-9, -5e-9), (120e-9, 10e-9, 5e-9))
+    vals_region_bounds = prepare_initial_magnetization(
+        region_spec,
+        np.array([[100e-9, 0.0, 0.0], [160e-9, 0.0, 0.0]], dtype=np.float64),
+        target_bounds=region_bounds,
+    )
+    # Center (100nm, 0, 0) -> region (0, 0, 0) -> core (+Z)
+    np.testing.assert_allclose(vals_region_bounds[0], [0.0, 0.0, 1.0], atol=1e-12)
+    # Clamped at x_region = +20nm (half of 40nm extent)
+    vals_clamped_ref = prepare_initial_magnetization(
+        texture.vortex(circulation=1, core_polarity=1, core_radius=4e-9, plane="xy").to_ir(),
+        np.array([[20e-9, 0.0, 0.0]], dtype=np.float64),
+    )
+    np.testing.assert_allclose(vals_region_bounds[1], vals_clamped_ref[0], atol=1e-12)
