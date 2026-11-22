@@ -1015,11 +1015,13 @@ function ReferenceMaterialPickerPopover({
               Curated reference standards (9)
             </p>
             {REFERENCE_MATERIALS_CATALOG.map((preset) => (
-              <button
+              <Button
                 key={preset.id}
-                className="flex items-center justify-between rounded px-2 py-1.5 text-left text-xs text-[var(--fm-text)] hover:bg-[var(--fm-surface-3)]"
+                className="flex h-auto w-full items-center justify-between rounded px-2 py-1.5 text-left text-xs text-[var(--fm-text)] hover:bg-[var(--fm-surface-3)]"
                 data-preset-id={preset.id}
+                size="sm"
                 type="button"
+                variant="ghost"
                 onClick={() => applyPreset(preset)}
               >
                 <span className="font-medium">{preset.name}</span>
@@ -1028,7 +1030,7 @@ function ReferenceMaterialPickerPopover({
                     ? `${(preset.ms / 1e3).toFixed(0)} kA/m`
                     : `${(preset.sigma / 1e6).toFixed(1)} MS/m`}
                 </span>
-              </button>
+              </Button>
             ))}
           </div>
         </PopoverContent>
