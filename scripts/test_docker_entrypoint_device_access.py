@@ -91,6 +91,32 @@ class DeviceAccessBoundaryTests(unittest.TestCase):
             self.assertEqual(entrypoint._configure_device_access(), "gpu")
             self.assertEqual(os.environ["LD_LIBRARY_PATH"], "/image/lib")
 
+    def test_dev_architecture_pins_the_matching_physical_uuid(self):
+        selected = "GPU-612c7813-b39f-703a-ec5d-547d79d3fe9f"
+        other = "GPU-29800bbf-865d-2464-c143-8caef386f74a"
+        with patch.dict(os.environ, {
+            "FULLMAG_HOST_LEDGER_PROFILE": "group-ledger-v1",
+            "FULLMAG_DEV_CUDA_ARCHITECTURES": "86-real",
+        }, clear=True), patch.object(entrypoint.subprocess, "check_output",
+                return_value=f"{other}, 7.5\n{selected}, 8.6\n"):
+            self.assertTrue(entrypoint._pin_dev_cuda_device())
+            self.assertEqual(os.environ["CUDA_VISIBLE_DEVICES"], selected)
+            self.assertEqual(os.environ["FULLMAG_DEV_CUDA_DEVICE_UUID"], selected)
+
+    def test_dev_architecture_requires_one_matching_device(self):
+        devices = ("GPU-612c7813-b39f-703a-ec5d-547d79d3fe9f, 8.6\n"
+                   "GPU-29800bbf-865d-2464-c143-8caef386f74a, 8.6\n")
+        with patch.dict(os.environ, {
+            "FULLMAG_HOST_LEDGER_PROFILE": "group-ledger-v1",
+        }, clear=True), patch.object(entrypoint.subprocess, "check_output",
+                return_value=devices):
+            for target in ("86-real", "75-real"):
+                with self.subTest(target=target), patch.dict(os.environ, {
+                    "FULLMAG_DEV_CUDA_ARCHITECTURES": target,
+                }):
+                    with self.assertRaisesRegex(RuntimeError, "exactly one physical GPU"):
+                        entrypoint._pin_dev_cuda_device()
+
     def test_legacy_environment_defaults_to_gpu(self):
         with patch.dict(os.environ, {"LD_LIBRARY_PATH": "/image/lib"}, clear=True):
             self.assertEqual(entrypoint._configure_device_access(), "gpu")

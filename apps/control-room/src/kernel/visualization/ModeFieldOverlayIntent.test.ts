@@ -90,6 +90,21 @@ describe("ModeFieldOverlayIntent", () => {
     expect(Object.isFrozen(intent)).toBe(true);
   });
 
+  it("keeps a mode preview bound to the spectrum's artifact generation", () => {
+    const intent = createModeFieldOverlayIntent(selection, "generation-snapshot");
+    const ready = {
+      ...metadata,
+      generation_status: "member_verified_owner_bound" as const,
+    };
+
+    expect(resolveModeFieldOverlayMetadata(intent!, {
+      ...ready, generation_id: "generation-snapshot",
+    }, "field-v1")).not.toBeNull();
+    expect(resolveModeFieldOverlayMetadata(intent!, {
+      ...ready, generation_id: "generation-replacement",
+    }, "field-v2")).toBeNull();
+  });
+
   it("accepts only canonical ready global XYZ complex field metadata", () => {
     const intent = createModeFieldOverlayIntent(selection)!;
 
@@ -145,6 +160,20 @@ describe("ModeFieldOverlayIntent", () => {
         topology,
       ),
     ).toBeNull();
+  });
+
+  it("joins a binary SHA-256 digest to the same prefixed topology fingerprint", () => {
+    const intent = createModeFieldOverlayIntent(selection)!;
+    const resolved = resolveModeFieldOverlayMetadata(intent, metadata, "field-v1")!;
+    const digest = "a".repeat(64);
+    const binary = { ...validBinary(5), meshTopologyHash: digest };
+
+    expect(validateModeFieldOverlayBinary(resolved, binary, {
+      ...topology, meshTopologyHash: `sha256:${digest}`,
+    })).not.toBeNull();
+    expect(validateModeFieldOverlayBinary(resolved, binary, {
+      ...topology, meshTopologyHash: `sha256:${"b".repeat(64)}`,
+    })).toBeNull();
   });
 
   it("fails closed for stale topology, invalid shape, or non-finite binary values", () => {

@@ -205,6 +205,7 @@ export function buildExplorerTree(
       contractGaps: resources.resultContextContractGaps,
       branches: resources.frequencyDomainBranches,
       currentRun: resources.currentRun,
+      datasets: resources.analysisDatasets,
       dispersion: resources.frequencyDomainDispersion,
       manifest: resources.frequencyDomainManifest,
       observationFrames: resources.observationFrames,

@@ -23,6 +23,8 @@ from pathlib import Path
 import re
 from types import SimpleNamespace
 
+from docker_dev_host import validate_compose_binds
+
 from docker_build_control import (
     BuildControl,
     BuildControlError,
@@ -401,7 +403,7 @@ def _selected_context(args: argparse.Namespace):
     from docker_dev import _compose_identity, _select_source
 
     repo_root = Path(args.repo_root).resolve(strict=True)
-    selected, layout = _select_source(repo_root, args.source_root)
+    selected, layout = _select_source(repo_root, args.source_root, admit_linux_mounts=True)
     identity = _compose_identity(layout)
     configured = toolchain_configuration(selected, identity)
     try:
@@ -1390,4 +1392,5 @@ def ensure_up(args: argparse.Namespace) -> None:
             )
         _activate_if_requested(group, args)
         return
+    validate_compose_binds(group.document)
     _reconcile_group(group, args)

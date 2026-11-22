@@ -1,7 +1,7 @@
 import { createRequire } from "node:module";
 import { afterEach, describe, expect, it } from "vitest";
 import type { Pass } from "postprocessing";
-import { PerspectiveCamera, Scene, type ShaderMaterial } from "three";
+import { PerspectiveCamera, Scene, type ShaderMaterial, type WebGLRenderTarget } from "three";
 import { prepareViewport3DAmbientOcclusion } from "./viewport3dAmbientOcclusionPrecision";
 
 // Exercise the actual transitive implementation used by the React wrapper.
@@ -12,6 +12,7 @@ type AmbientPass = Pass & {
   effectShaderQuad: { material: ShaderMaterial };
   effectCompositerQuad: { material: ShaderMaterial };
   depthDownsampleQuad: { material: ShaderMaterial };
+  depthDownsampleTarget: WebGLRenderTarget | null;
   setQualityMode(mode: string): void;
 };
 const { N8AOPostPass } = effectRequire("n8ao") as {
@@ -54,5 +55,25 @@ describe("N8AO SI normal precision compatibility", () => {
     expect(pass.effectShaderQuad.material.fragmentShader).toContain("fullmagStableCrossNormal(dpdx, dpdy)");
     expect(pass.effectCompositerQuad.material.fragmentShader).toContain("fullmagStableCrossNormal(dpdx, dpdy)");
     expect(pass.configuration.gammaCorrection).toBe(true);
+  });
+
+  it("exposes the first color attachment as the render target texture after enabling half resolution", () => {
+    const pass = createPass();
+    pass.configuration.halfRes = true;
+    const target = pass.depthDownsampleTarget!;
+    const attachments = target.textures;
+    expect(attachments).toHaveLength(2);
+
+    prepareViewport3DAmbientOcclusion([pass]);
+    expect(target.texture).toBe(attachments[0]);
+    expect(target.textures).toBe(attachments);
+
+    pass.configuration.halfRes = false;
+    pass.configuration.halfRes = true;
+    const recreated = pass.depthDownsampleTarget!;
+    expect(recreated).not.toBe(target);
+    prepareViewport3DAmbientOcclusion([pass]);
+    expect(recreated.texture).toBe(recreated.textures[0]);
+    expect(recreated.textures).toHaveLength(2);
   });
 });

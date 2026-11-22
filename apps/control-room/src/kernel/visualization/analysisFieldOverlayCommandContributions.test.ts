@@ -96,6 +96,55 @@ describe("analysis field overlay commands", () => {
     });
   });
 
+  it("binds a mode preview from a spectrum row without replacing the collection selection", async () => {
+    const commands = commandRegistry();
+    const overlay = new AnalysisFieldOverlayController();
+    overlay.setResultContext("run-fem");
+    const selection = new SelectionController(new EventBus<KernelEventMap>());
+    const kind = "results.resonance.modal.spectrum";
+    selection.set({
+      kind,
+      label: "Eigenfrequency Spectrum",
+      nodeId: "fem-spectrum",
+      objectId: null,
+      ref: {
+        analysisRunId: "run-fem",
+        analysisStageId: "stage-001",
+        artifactRevision: "sha256:spectrum",
+        equilibriumId: "sha256:equilibrium",
+        kContextKind: "finite_open",
+        kind,
+        nodeId: "fem-spectrum",
+        resourceRef: "spectrum",
+        studyProduct: "modal_eigen",
+        type: "frequency-domain",
+      },
+    }, "explorer");
+    const fieldId = "analysis:eigen:sample-0000:mode-0002";
+    const outcome = await commands.execute("analysis.eigen.plot-mode-3d", {
+      analysisFieldOverlay: overlay,
+      selection,
+      source: "test",
+    }, {
+      fieldId,
+      frequencyHz: 4.166e9,
+      modeIndex: 2,
+      representation: "complex-vector-xyz",
+      resourceRef: "mode-2-field",
+      sampleId: "k-sample-0000",
+      sampleIndex: 0,
+      source: "eigen-mode",
+      view: "abs",
+    });
+    expect(outcome.status).toBe("completed");
+    expect(selection.get().kind).toBe(kind);
+    expect(overlay.getSnapshot()).toMatchObject({
+      modeIntent: { analysisRunId: "run-fem", analysisStageId: "stage-001", fieldId, modeIndex: 2, sampleIndex: 0 },
+      provenance: { representation: "complex-vector-xyz", resourceRef: "mode-2-field" },
+      query: { view: "abs" },
+    });
+  });
+
   it("fails closed for a spectrum-only result item", () => {
     const commands = commandRegistry();
     const overlay = new AnalysisFieldOverlayController();
@@ -319,7 +368,7 @@ describe("analysis field overlay commands", () => {
     });
   });
 
-  it("hands a canonical eigenmode SelectionRef to the overlay as a stable mode intent", async () => {
+  it("preserves the tracked mode identity when a branch supplies plot parameters", async () => {
     const commands = commandRegistry();
     const overlay = new AnalysisFieldOverlayController();
     const selection = new SelectionController(new EventBus<KernelEventMap>());
@@ -340,6 +389,7 @@ describe("analysis field overlay commands", () => {
           nodeId: "results:eigen:sample-k0:mode-2",
           sampleId: "sample-k0",
           sampleIndex: 0,
+          studyProduct: "modal_eigen",
           type: "frequency-domain",
         },
       },
@@ -352,6 +402,12 @@ describe("analysis field overlay commands", () => {
         analysisFieldOverlay: overlay,
         selection,
         source: "test",
+      },
+      {
+        fieldId: "analysis:eigen:sample-k0:mode-2:delta_m_xyz",
+        modeIndex: 2,
+        sampleIndex: 0,
+        source: "eigen-mode",
       },
     );
 

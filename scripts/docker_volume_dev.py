@@ -22,7 +22,10 @@ import fullmag_storage as storage
 from docker_build_control import (BuildControl, BuildControlError, DockerObservationBudgetExceeded, canonical, control_read_script, docker_capture,
                                   compose_capture, build_volume_toolchain, build_volume_runtime_images, bounded_capture,
                                   DEV_CUDA_TARGET_ENV, mirror_console, receipt_dev_cuda_target)
-from docker_dev_host import docker_argv, require_host, local_volume, validate_host_path
+from docker_dev_host import (
+    docker_argv, local_volume, require_host, validate_compose_binds, validate_host_path,
+    validate_linux_mounts,
+)
 import docker_preclaim_cancelled_restart as preclaim_restart
 import docker_saved_authoring_history as retained_history
 
@@ -2099,14 +2102,24 @@ def _retained_device_access(previous, document):
     return access
 
 
-def _probe_retained_device_access(device_access, image, project):
+def _retained_gpu_probe_options(document):
+    environment = document["services"]["backend"]["environment"]
+    target = environment.get(DEV_CUDA_TARGET_ENV)
+    if target and environment.get("FULLMAG_HOST_LEDGER_PROFILE") == "group-ledger-v1":
+        return {"cuda_target": target}
+    return {}
+
+
+def _probe_retained_device_access(device_access, image, project, **gpu_probe_options):
     """A retained profile cannot gain or lose GPU access during recreation."""
     from docker_dev import _resolve_gpu_access, _verify_docker_gpu_access
     if device_access not in ("cpu", "gpu"):
         raise BuildControlError("Retained device access must be cpu or gpu")
     if device_access == "cpu":
         return "cpu"
-    resolved = _verify_docker_gpu_access(_resolve_gpu_access("required"), "required", image, project)
+    resolved = _verify_docker_gpu_access(
+        _resolve_gpu_access("required"), "required", image, project, **gpu_probe_options,
+    )
     if resolved != device_access:
         raise BuildControlError("Current Docker GPU access differs from the retained device profile")
     return resolved
@@ -2332,7 +2345,10 @@ def start(args, *, reuse_state=None, control=None, operation=None, prepared=None
         raise BuildControlError("Previous runtime configuration digest is not a lowercase SHA-256")
     require_host()
     host = _session_host()
-    selected, layout = _select_source(Path(args.repo_root).resolve(strict=True), args.source_root or args.repo_root)
+    selected, layout = _select_source(
+        Path(args.repo_root).resolve(strict=True), args.source_root or args.repo_root,
+        admit_linux_mounts=True,
+    )
     _revalidate_helper_source_binding(helper_source_binding, selected)
     validate_host_path(selected, "source checkout")
     local_volume(Path(layout["storage_root"]))
@@ -2425,10 +2441,19 @@ def start(args, *, reuse_state=None, control=None, operation=None, prepared=None
             if control.read(PREPARED_QUARANTINE).get('cancellation_admission') != prepared_recovery_constraints:
                 raise BuildControlError('Fresh prepared recovery constraints differ from the qualified archive')
     image = images["backend"]["image_id"]
+    gpu_probe_options = {}
+    if device_access == "gpu" and cuda_target and (
+        provided_operation is None or _uses_group_ledger(control, operation, new_render=False)
+    ):
+        gpu_probe_options["cuda_target"] = cuda_target
     if retained_device_access is None:
-        device_access = _verify_docker_gpu_access(device_access, policy, image, control.project)
+        device_access = _verify_docker_gpu_access(
+            device_access, policy, image, control.project, **gpu_probe_options,
+        )
     else:
-        device_access = _probe_retained_device_access(retained_device_access, image, control.project)
+        device_access = _probe_retained_device_access(
+            retained_device_access, image, control.project, **gpu_probe_options,
+        )
     _assert_no_running_fullmag(control.project, identity, **admission_context)
     if recreation_resume_proof is not None:
         if args.script is not None or getattr(args, "fresh_state", False):
@@ -2579,6 +2604,8 @@ def start(args, *, reuse_state=None, control=None, operation=None, prepared=None
             else:
                 state = storage.validate_path(Path(layout["runtime_root"]) / "docker-volume-dev" / token,
                                               layout["storage_root"], "session storage")
+            validate_linux_mounts({state: "session storage"})
+            if snapshot is None:
                 state.mkdir(parents=True, exist_ok=False)
             if os.name == "nt":
                 operation["receipt"]["windows_runtime_directories"] = list(
@@ -2660,6 +2687,8 @@ def start(args, *, reuse_state=None, control=None, operation=None, prepared=None
                     "Post-build continuation changed under the new development lease: " + str(error)
                 ) from error
         local_volume(state)
+        if reuse_state is not None:
+            validate_linux_mounts({state: "retained session storage"})
         _pin_private_group_storage(control, operation, new_render=provided_operation is None)
         cache = _backend_cache(control, operation, layout, selected, image, toolchain["image_id"])
         operation["receipt"]["backend_volumes"] = cache["volume_names"]
@@ -2934,6 +2963,7 @@ def start(args, *, reuse_state=None, control=None, operation=None, prepared=None
         from docker_script_output_mounts import configure as configure_script_output, validate as validate_script_output
         configure_script_output(document, selected)
         validate_script_output(document)
+        validate_compose_binds(document)
         _prepare_script_output_permissions(document)
         # All writable bind destinations are runtime/user stores, never build data.
         for service in (backend, frontend):
@@ -8299,6 +8329,10 @@ def _retained_operation(
             image_config,
             allow_legacy_frontend=recreate_services or (service == 'frontend' and legacy_oom_recreation),
         )
+    # Stop/retirement must be available even for a legacy mount we would no
+    # longer admit on start.
+    if not stop_after_drain and not retire_only:
+        validate_compose_binds(document)
     retirement_drain_raw = None
     if retire_only:
         _require_retirement_stopped_pair(actual)
@@ -9383,7 +9417,9 @@ with urllib.request.urlopen('http://127.0.0.1:8081/v2/platform/health',timeout=5
                 if validate_lost_linux_state(control, lost_state_pin, previous, document, actual, state) != lost_state:
                     raise BuildControlError("Lost-state evidence changed under the recreation lease")
                 operation["receipt"]["lost_linux_state"] = lost_state
-            _probe_retained_device_access(retained_device_access, image, control.project)
+            _probe_retained_device_access(
+                retained_device_access, image, control.project, **_retained_gpu_probe_options(document),
+            )
             control.write(operation["root"] + "/retained-containers.json", actual)
             if pre_activation_stop is not None:
                 operation["receipt"]["pre_activation_stop_receipt"] = pre_activation_stop

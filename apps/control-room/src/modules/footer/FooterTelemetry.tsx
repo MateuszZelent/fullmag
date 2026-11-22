@@ -4,7 +4,7 @@ import type { ReactNode } from "react";
 import { useEffect, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
 
-import type { CurrentRunResource, ScalarWindowResource, StageExecutionResource } from "@/kernel/api/apiTypes";
+import type { CurrentRunResource, RunPerformanceResource, ScalarWindowResource, StageExecutionResource } from "@/kernel/api/apiTypes";
 import type { EventBus } from "@/kernel/events/EventBus";
 import type { KernelEventMap } from "@/kernel/events/eventTypes";
 import { useSceneResource } from "@/kernel/resources/geometryLifecycleResources";
@@ -30,11 +30,14 @@ import {
 } from "./antennaFieldEta";
 
 import { type FooterTelemetryStatus, resolveFooterSolverStatus, resolveFooterAntennaStage, resolvePrimaryTelemetryObjectId, resolveFooterMagneticModelPresent } from "./FooterTelemetry.model";
-import { readAntennaProgress, buildFooterTelemetryModel, type FooterLiveScalarSample, type FooterAntennaProgress, isFrequencyResponseStageKind, type FooterFrequencyDomainProgress, type FooterTelemetryGroup, activeStageRecord, type FooterTelemetryMetric } from "./FooterTelemetry.presentation";
+import { readAntennaProgress, buildFooterTelemetryModel, type FooterLiveScalarSample, type FooterAntennaProgress, isFrequencyResponseStageKind, type FooterFrequencyDomainProgress, type FooterTelemetryGroup, type FooterTelemetryMetric } from "./FooterTelemetry.presentation";
+import { resolveFooterPerformanceProgressFraction } from "./footerPerformanceProgress";
+import { resolveFooterStageSelection, resolveFooterStepCounters, type FooterStageSelection } from "./footerStepCounters";
 
-const FOOTER_SCALAR_COLUMNS = ["step", "time", "mx", "my", "mz", "e_total"] as const;
-const FOOTER_HISTORY_COLUMNS = ["step", "e_total", "max_torque_T"] as const;
+const FOOTER_SCALAR_COLUMNS = ["step", "time", "dt", "pseudo_time_s", "mx", "my", "mz", "e_total"] as const;
+const FOOTER_HISTORY_COLUMNS = ["step", "time", "pseudo_time_s", "e_total", "max_torque_T"] as const;
 const HISTORY_LIMIT = 120;
+const FOOTER_INTEGER_FORMAT = new Intl.NumberFormat("en-US", { maximumFractionDigits: 0 });
 
 export function FooterTelemetry({
   bus,
@@ -52,6 +55,32 @@ export function FooterTelemetry({
 }) {
   const solverStatus = useSolverStatusResource({ enabled: Boolean(status) && view === "overview" });
   const solverStatusForRun = resolveFooterSolverStatus(status, solverStatus.data);
+  const currentSolverIntegrator = solverStatusForRun?.integrator?.trim() || null;
+  const observedStageIndex = status?.run?.stage_index;
+  const currentStageIndex = typeof observedStageIndex === "number" && Number.isSafeInteger(observedStageIndex)
+    ? observedStageIndex
+    : null;
+  const [lastKnownIntegrator, setLastKnownIntegrator] = useState<{
+    runId: string;
+    stageIndex: number | null;
+    value: string;
+  } | null>(null);
+  const currentRunId = status?.run?.run_id ?? null;
+  if (currentRunId && currentSolverIntegrator &&
+      (lastKnownIntegrator?.runId !== currentRunId ||
+        lastKnownIntegrator.stageIndex !== currentStageIndex ||
+        lastKnownIntegrator.value !== currentSolverIntegrator)) {
+    setLastKnownIntegrator({
+      runId: currentRunId,
+      stageIndex: currentStageIndex,
+      value: currentSolverIntegrator,
+    });
+  }
+  const runtimeIntegrator = currentSolverIntegrator ??
+    (lastKnownIntegrator && lastKnownIntegrator.runId === currentRunId &&
+      lastKnownIntegrator.stageIndex === currentStageIndex
+      ? lastKnownIntegrator.value
+      : null);
   const antennaStage = resolveFooterAntennaStage(status, stageExecution.data);
   const antennaNumerical = antennaStage ? readAntennaProgress(antennaStage.record) : null;
   const antennaNowMs = useAntennaStageClock(
@@ -124,27 +153,95 @@ export function FooterTelemetry({
   const stageExecutionUnpublished =
     stageExecution.data === null &&
     (stageExecution.status === "ready" || stageExecution.status === "idle");
+  const stageSelection = resolveFooterStageSelection(status, stageExecution.data);
+  const stageHandoff = Boolean(
+    stageSelection?.execution && stageSelection.runActive && stageSelection.activeStageIndex === null,
+  );
+  const stageProgress = resolveFooterStageProgress(
+    stageSelection, status, stageHandoff ? null : performance.data,
+    stageHandoff ? null : scalarWindow.data?.series,
+  );
+  const stepCounters = resolveFooterStepCounters(
+    status, stageExecution.data, performance.data, scalarWindow.data, performance.status, stageSelection,
+  );
   const telemetry = buildFooterTelemetryModel(
     status,
     objectId && objectMetrics.data?.object_id === objectId ? objectMetrics.data : null,
     solverStatusForRun,
-    liveSample,
+    stageHandoff ? null : liveSample,
     stageExecution.data,
     responseProgress.data,
     responseSweep.data,
-    scalarWindow.data,
+    stageHandoff ? null : scalarWindow.data,
     {
       magneticModelPresent: resolveFooterMagneticModelPresent(scene),
-      performance: performance.data,
+      performance: stageHandoff ? null : performance.data,
       performanceStatus: performance.status,
       performanceRefreshFailed: Boolean(performance.error || performance.refreshError),
       currentRunStatus: currentRunForStatus?.status,
+      scalarHistory: historyWindow.data,
+      runtimeIntegrator,
       nowMs: antennaNowMs,
       stageExecutionUnpublished,
+      stageHandoff,
+      stageProgressAvailable: stageProgress?.percent !== null && stageProgress !== null,
+      stageReference: stageProgress?.active && stageProgress.stageIndex !== null
+        ? { stageIndex: stageProgress.stageIndex, stageId: stageProgress.stageId }
+        : null,
       userSolvePhase,
     },
   );
-  const stageProgress = resolveFooterStageProgress(stageExecution.data);
+  const stepCounterMetrics = useMemo<FooterTelemetryMetric[]>(() => {
+    if (!status) return [];
+    const attempt = stepCounters.activeAttemptId
+      ? ` · ${stepCounters.activeStepSource === "sample" ? "sample" : "solver"} attempt ${stepCounters.activeAttemptId}`
+      : "";
+    const stageContext = stepCounters.activeStageIndex === null
+      ? stepCounters.handoff
+        ? `Between stages ${stepCounters.handoff.fromStageIndex + 1} and ${stepCounters.handoff.toStageIndex + 1}`
+        : "No active stage step counter"
+      : `Stage ${stepCounters.activeStageIndex + 1}${attempt}`;
+    const missingStages = stepCounters.missingStageIndexes.length > 0
+      ? `Missing stage counters: ${stepCounters.missingStageIndexes.map((index) => index + 1).join(", ")}`
+      : "";
+    const runValue = stepCounters.runSteps === null
+      ? "—"
+      : `${stepCounters.runStepsExact ? "" : "≥"}${FOOTER_INTEGER_FORMAT.format(stepCounters.runSteps)}`;
+    return [
+      {
+        detail: stepCounters.activeStepSource === "solver"
+          ? "Current stage-local step from the matching run, stage, and solver attempt."
+          : stepCounters.activeStepSource === "sample"
+            ? "Current stage-local step from the accepted scalar observation and its attempt identity."
+            : "No current stage-local step is verified.",
+        icon: <span aria-hidden="true">#</span>,
+        id: "stage-steps",
+        label: "Stage steps",
+        subdetail: stageContext,
+        unit: "steps",
+        value: stepCounters.stageSteps === null
+          ? "—"
+          : FOOTER_INTEGER_FORMAT.format(stepCounters.stageSteps),
+      },
+      {
+        detail: stepCounters.runStepsExact
+          ? "Sum of published completed-stage counts and the current stage-local count."
+          : missingStages || "Known subtotal only; one or more stage counters are unavailable.",
+        icon: <span aria-hidden="true">#</span>,
+        id: "run-steps",
+        label: "Run steps",
+        subdetail: missingStages || (stepCounters.handoff
+          ? `Stage handoff · ${stepCounters.handoff.fromStageIndex + 1} → ${stepCounters.handoff.toStageIndex + 1}`
+          : stepCounters.runStepsExact ? "Complete published count" : "Incomplete published count"),
+        unit: "steps",
+        value: runValue,
+      },
+    ];
+  }, [status, stepCounters]);
+  const displayMetrics = useMemo(
+    () => [...telemetry.metrics, ...stepCounterMetrics],
+    [stepCounterMetrics, telemetry.metrics],
+  );
   const legacyHistory = useTelemetryHistory(
     acceptedHistory ? null : runId,
     acceptedHistory ? null : telemetry.metrics.find((metric) => metric.id === "time")?.numeric ?? null,
@@ -206,7 +303,7 @@ export function FooterTelemetry({
       <TooltipProvider delayDuration={250} skipDelayDuration={120}>
         <div className="fm-footer-telemetry__metrics">
           <div role="group" className="fm-footer-telemetry__metrics-grid" aria-label="Simulation metrics">
-            <TelemetryBoard history={history} metrics={telemetry.metrics} stage={stageProgress} />
+            <TelemetryBoard history={history} metrics={displayMetrics} stage={stageProgress} />
           </div>
         </div>
       </TooltipProvider>
@@ -455,26 +552,88 @@ function TelemetryMetric({
  * run. Nothing is illustrative: absent data leaves the visual out. */
 
 type FooterStageProgress = {
-  index: number;
+  active: boolean;
+  badgeLabel: string;
+  handoffLabel: string | null;
+  index: number | null;
   label: string | null;
   percent: number | null;
-  total: number;
+  runActive: boolean;
+  stageId: string | null;
+  stageIndex: number | null;
+  total: number | null;
 };
 
 function resolveFooterStageProgress(
-  stageExecution: StageExecutionResource | null | undefined,
+  selection: FooterStageSelection | null,
+  status: FooterTelemetryStatus | null,
+  performance?: RunPerformanceResource | null,
+  scalarSeries?: ScalarWindowResource["series"] | null,
 ): FooterStageProgress | null {
-  const record = activeStageRecord(stageExecution);
-  if (!stageExecution || !record || !(stageExecution.total_stages > 0)) return null;
-  const percent = typeof record.progress_percent === "number" && Number.isFinite(record.progress_percent)
-    ? Math.min(100, Math.max(0, record.progress_percent))
-    : null;
-  return {
-    index: record.index + 1,
-    label: record.progress_label ?? record.label ?? record.kind ?? null,
-    percent,
-    total: stageExecution.total_stages,
-  };
+  if (!selection || (selection.terminal && selection.activeStageIndex === null)) return null;
+  const total = selection.totalStages;
+  const run = status?.run;
+  if (!run?.run_id || total === null) return null;
+
+  if (selection.activeStageIndex !== null) {
+    const record = selection.activeStage;
+    const stageIndex = selection.activeStageIndex;
+    const stageId = selection.activeStageId;
+    const performanceFraction = resolveFooterPerformanceProgressFraction(
+      run.run_id, performance, { stageIndex, stageId }, scalarSeries,
+    );
+    const recordPercent = typeof record?.progress_percent === "number" &&
+        Number.isFinite(record.progress_percent)
+      ? Math.min(100, Math.max(0, record.progress_percent))
+      : null;
+    const percent = recordPercent ?? (performanceFraction === null ? null : performanceFraction * 100);
+    if (selection.terminal && selection.execution === null && percent === null) return null;
+    return {
+      active: true,
+      badgeLabel: `Stage ${stageIndex + 1}/${total}`,
+      handoffLabel: null,
+      index: stageIndex + 1,
+      label: record?.progress_label ?? record?.label ?? record?.kind ?? (run.stage_label.trim() || null),
+      percent,
+      runActive: selection.runActive,
+      stageId,
+      stageIndex,
+      total,
+    };
+  }
+
+  if (selection.handoff) {
+    const from = selection.handoff.fromStageIndex + 1;
+    const to = selection.handoff.toStageIndex + 1;
+    return {
+      active: false,
+      badgeLabel: `Stage ${from} → ${to}`,
+      handoffLabel: `Between stages ${from} and ${to}`,
+      index: null,
+      label: null,
+      percent: null,
+      runActive: true,
+      stageId: null,
+      stageIndex: null,
+      total,
+    };
+  }
+
+  if (selection.runActive && selection.execution) {
+    return {
+      active: false,
+      badgeLabel: "Run active",
+      handoffLabel: "Current stage is not published",
+      index: null,
+      label: null,
+      percent: null,
+      runActive: true,
+      stageId: null,
+      stageIndex: null,
+      total,
+    };
+  }
+  return null;
 }
 
 type TelemetryHistory = { energy: readonly number[]; torque: readonly number[] };
@@ -589,7 +748,7 @@ type BoardCard = "run" | "magnetization" | "energy" | "convergence";
 
 /** Mockup cards and the metrics each one shows, in reading order. */
 const BOARD_CARDS: ReadonlyArray<{ id: BoardCard; title: string; group: FooterTelemetryGroup; metricIds: readonly string[] }> = [
-  { id: "run", title: "Run", group: "runtime", metricIds: ["solver-progress", "step", "dt", "rate", "active-solver", "sim-time", "active-runtime"] },
+  { id: "run", title: "Run", group: "runtime", metricIds: ["stage-steps", "run-steps", "solver-progress", "step", "dt", "rate", "stage-rate", "active-solver", "sim-time", "active-runtime"] },
   { id: "magnetization", title: "Magnetization", group: "magnetization", metricIds: ["avg-mx", "avg-my", "avg-mz", "avg-m"] },
   { id: "energy", title: "Energy", group: "energy", metricIds: ["energy-exchange", "energy-demag", "energy-zeeman", "energy-anisotropy", "energy-dmi"] },
   { id: "convergence", title: "Convergence", group: "solver", metricIds: ["solver-error", "solver-max-error"] },
@@ -646,8 +805,8 @@ function TelemetryBoard({
             <header className="fm-footer-telemetry__group-head">
               <h3 className="fm-footer-telemetry__group-title">{card.title}</h3>
               {card.id === "run" ? (
-                <span className="fm-footer-telemetry__stage-badge" data-idle={stage ? undefined : "true"}>
-                  {stage ? `Stage ${stage.index}/${stage.total}` : "No active run"}
+                <span className="fm-footer-telemetry__stage-badge" data-idle={stage?.active ? undefined : "true"}>
+                  {stage?.badgeLabel ?? "No active run"}
                 </span>
               ) : null}
               {card.id === "magnetization" ? <span className="fm-footer-telemetry__group-aside">mean over magnets</span> : null}
@@ -666,18 +825,24 @@ function TelemetryBoard({
             ) : null}
             {card.id === "run" ? (
               <div className="fm-footer-telemetry__stage-progress" data-idle={stage?.percent == null ? "true" : undefined}>
-                <Progress
-                  aria-label={stage ? `Stage ${stage.index} of ${stage.total} progress` : "Stage progress"}
-                  className="fm-footer-telemetry__stage-bar"
-                  value={stage?.percent ?? 0}
-                />
-                <span className="fm-footer-telemetry__stage-label">
-                  {stage?.percent != null
-                    ? `${stage.label ? `${stage.label} · ` : ""}${Math.round(stage.percent)}%`
-                    : stage
-                      ? `${stage.label ?? "Active stage"} · progress not published`
-                      : "Starts when Compute runs"}
-                </span>
+                {stage?.active ? (
+                  <>
+                    <Progress
+                      aria-label={`Stage ${stage.index} of ${stage.total} progress`}
+                      className="fm-footer-telemetry__stage-bar"
+                      value={stage.percent}
+                    />
+                    <span className="fm-footer-telemetry__stage-label">
+                      {stage.percent !== null
+                        ? `${stage.label ? `${stage.label} · ` : ""}${Math.round(stage.percent)}%`
+                        : `${stage.label ?? "Active stage"} · progress not published`}
+                    </span>
+                  </>
+                ) : (
+                  <span className="fm-footer-telemetry__stage-label">
+                    {stage?.handoffLabel ?? (stage?.runActive ? "Stage transition in progress" : "Starts when Compute runs")}
+                  </span>
+                )}
               </div>
             ) : null}
             {card.id === "energy" ? (

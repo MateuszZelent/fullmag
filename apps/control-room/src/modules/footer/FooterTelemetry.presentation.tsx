@@ -1,8 +1,8 @@
-import { type FooterTelemetryStatus, resolveFooterSolverStatus, resolveFooterAntennaStage, resolveFooterScalarResourceSample, resolveFooterActiveStageMethod, resolveFooterRuntimeRelaxationAlgorithm, scalarSampleNumber, isFooterLlgRuntimeStageMethod, scalarSampleMagnetization, type FooterAntennaStage, validStageTimestamp, type FooterRelaxationAlgorithm } from "./FooterTelemetry.model";
+import { type FooterTelemetryStatus, type FooterScalarAttemptReference, resolveFooterSolverStatus, resolveFooterAntennaStage, resolveFooterMeanTimestep, resolveFooterScalarResourceSample, resolveFooterActiveStageMethod, resolveFooterRuntimeRelaxationAlgorithm, scalarSampleNumber, isFooterLlgRuntimeStageMethod, scalarSampleMagnetization, type FooterAntennaStage, validStageTimestamp, type FooterRelaxationAlgorithm } from "./FooterTelemetry.model";
 import type { FrequencyDomainSweepProgressResource, ObjectMetricsResource, RunPerformanceResource, ScalarWindowResource, SolverStatusResource, StageExecutionResource } from "@/kernel/api/apiTypes";
 import type { ResourceResult } from "@/kernel/resources/resourceTypes";
 import { formatRuntimeStateLabel, formatRuntimeUserSolvePhaseLabel, isRuntimeStateActive, isRuntimeStateWaitingForCompute, resolveEffectiveRuntimeState, type RuntimeUserSolvePhase } from "@/kernel/runtime/runtimeStateDisplay";
-import { resolveFooterPerformanceStep } from "./footerPerformanceProgress";
+import { footerPerformanceMatchesScalarSeries, footerPerformanceStageMatches, resolveFooterPerformanceClock, resolveFooterPerformanceRate, resolveFooterPerformanceStep, type FooterPerformanceStageReference } from "./footerPerformanceProgress";
 import { Clock3, Gauge, Hash, Magnet, Radio, Zap } from "lucide-react";
 import { formatTorqueT } from "@/shared/domain/physics/torqueUnits";
 import type { ReactNode } from "react";
@@ -61,8 +61,13 @@ export function buildFooterTelemetryModel(
     performanceStatus?: ResourceResult<RunPerformanceResource>["status"];
     performanceRefreshFailed?: boolean;
     currentRunStatus?: string | null;
+    scalarHistory?: ScalarWindowResource | null;
+    runtimeIntegrator?: string | null;
+    stageProgressAvailable?: boolean;
+    stageReference?: FooterPerformanceStageReference | null;
     nowMs?: number | null;
     stageExecutionUnpublished?: boolean;
+    stageHandoff?: boolean;
     userSolvePhase?: RuntimeUserSolvePhase | null;
   },
 ) {
@@ -82,11 +87,18 @@ export function buildFooterTelemetryModel(
   const antennaStage = resolveFooterAntennaStage(status, stageExecution);
   if (antennaStage) return buildAntennaSolveTelemetry(antennaStage, runtimePhase?.nowMs ?? null);
 
-  const completedRun =
+  const stageHandoff = runtimePhase?.stageHandoff === true;
+  const completedRun = !stageHandoff && (
     isTerminalFooterSolverState(status.solver.state) ||
-    isTerminalFooterSolverState(runtimePhase?.currentRunStatus);
-  const liveSampleForStatus = resolveLiveSampleForStatus(status, liveSample, completedRun);
-  const resourceSample = resolveFooterScalarResourceSample(status, scalarWindow);
+    isTerminalFooterSolverState(runtimePhase?.currentRunStatus)
+  );
+  const liveSampleForStatus = stageHandoff
+    ? null
+    : resolveLiveSampleForStatus(status, liveSample, completedRun);
+  const resourceSample = stageHandoff
+    ? null
+    : resolveFooterScalarResourceSample(status, scalarWindow);
+  const performanceForTelemetry = stageHandoff ? null : runtimePhase?.performance;
   const scalarSample = !resourceSample ||
       (completedRun && resourceSample.row.step !== status.run?.solver_steps) ||
       (liveSampleForStatus && typeof liveSampleForStatus.revision === "number" &&
@@ -95,11 +107,27 @@ export function buildFooterTelemetryModel(
     : resourceSample;
   const liveRow = scalarSample?.row ?? null;
   const runSolverStatus = resolveFooterSolverStatus(status, solverStatus);
-  const runtimeState =
-    resolveEffectiveRuntimeState({
-      detailedRuntimeState: runSolverStatus?.runtime_state,
-      sessionSolverState: status?.solver?.state,
-    }) ?? "unknown";
+  const stageReference = runtimePhase?.stageReference ?? undefined;
+  const performanceClock = resolveFooterPerformanceClock(
+    status.run?.run_id, performanceForTelemetry, stageReference, resourceSample?.series,
+  );
+  const observedSolverStep = resolveFooterPerformanceStep(
+    status.run?.run_id, performanceForTelemetry, stageReference, resourceSample?.series,
+  );
+  const performanceMatchesStage = footerPerformanceStageMatches(
+    runtimePhase?.performance, stageReference,
+  ) && footerPerformanceMatchesScalarSeries(
+    runtimePhase?.performance, resourceSample?.series,
+  );
+  const performanceAttempt = observedSolverStep === null
+    ? null
+    : performanceAttemptReference(performanceForTelemetry);
+  const runtimeState = stageHandoff
+    ? "running"
+    : resolveEffectiveRuntimeState({
+        detailedRuntimeState: runSolverStatus?.runtime_state,
+        sessionSolverState: status?.solver?.state,
+      }) ?? "unknown";
   const runtimeStateLabel = formatRuntimeStateLabel(runtimeState);
   const activeStageMethod = resolveFooterActiveStageMethod(status, stageExecution);
   const runtimeRelaxationAlgorithm = resolveFooterRuntimeRelaxationAlgorithm(
@@ -109,21 +137,23 @@ export function buildFooterTelemetryModel(
   );
   const runtimeSolverDescription = describeFooterSolverAlgorithm(
     runtimeRelaxationAlgorithm,
-    runSolverStatus?.integrator,
+    runSolverStatus?.integrator?.trim() || runtimePhase?.runtimeIntegrator,
     activeStageMethod,
   );
   const activeSolverExecution = Boolean(status.run?.run_id) &&
     (isRuntimeStateActive(runtimeState) || activeStageMethod !== null);
-  const simTimeSeconds =
-    (completedRun
-      ? status?.run?.solver_time ??
-        runSolverStatus?.sim_time_seconds ??
-        scalarSampleNumber(liveRow, "time")
-      : scalarSampleNumber(liveRow, "time") ??
-        runSolverStatus?.sim_time_seconds ??
-        status?.run?.solver_time) ?? null;
+  const simTimeSeconds = stageHandoff
+    ? status.run?.solver_time ?? null
+    : (performanceClock?.timeSeconds ??
+        (completedRun
+          ? status.run?.solver_time ??
+            runSolverStatus?.sim_time_seconds ??
+            scalarSampleNumber(liveRow, "time")
+          : scalarSampleNumber(liveRow, "time") ??
+            runSolverStatus?.sim_time_seconds ??
+            status.run?.solver_time)) ?? null;
   const currentStageIsLlg = isFooterLlgRuntimeStageMethod(activeStageMethod);
-  const pseudoTimeSeconds = currentStageIsLlg
+  const pseudoTimeSeconds = stageHandoff || currentStageIsLlg
     ? null
     : scalarSampleNumber(liveRow, "pseudo_time_s") ??
       runSolverStatus?.pseudo_time_seconds ??
@@ -132,8 +162,11 @@ export function buildFooterTelemetryModel(
     scalarSampleNumber(liveRow, "active_runtime_s") ??
     objectNumber(runSolverStatus, "active_runtime_seconds") ??
     null;
-  const usesPseudoTime = pseudoTimeSeconds !== null;
-  const directMinimizerWithoutPseudoTime =
+  const usesPseudoTime = !stageHandoff &&
+    runtimeRelaxationAlgorithm !== null &&
+    runtimeRelaxationAlgorithm !== "llg_overdamped" &&
+    pseudoTimeSeconds !== null;
+  const directMinimizerWithoutPseudoTime = !stageHandoff &&
     runtimeRelaxationAlgorithm !== null &&
     runtimeRelaxationAlgorithm !== "llg_overdamped" &&
     !usesPseudoTime;
@@ -142,28 +175,64 @@ export function buildFooterTelemetryModel(
     : directMinimizerWithoutPseudoTime
       ? null
       : simTimeSeconds;
-  const totalSteps =
-    (completedRun
-      ? status?.run?.solver_steps ??
-        runSolverStatus?.step_index ??
-        status?.metrics?.total_steps
-      : scalarSampleNumber(liveRow, "step") ??
-        runSolverStatus?.step_index ??
-        status?.run?.solver_steps ??
-        status?.metrics?.total_steps) ?? null;
-  const observedSolverStep = resolveFooterPerformanceStep(
-    status.run?.run_id, runtimePhase?.performance,
+  const totalSteps = stageHandoff
+    ? status.run?.solver_steps ?? status.metrics.total_steps
+    : (completedRun
+        ? status.run?.solver_steps ??
+          runSolverStatus?.step_index ??
+          status.metrics.total_steps
+        : scalarSampleNumber(liveRow, "step") ??
+          runSolverStatus?.step_index ??
+          status.run?.solver_steps ??
+          status.metrics.total_steps) ?? null;
+  const measuredRate = resolveFooterPerformanceRate(
+    status.run?.run_id,
+    performanceForTelemetry,
+    resourceSample?.series,
+    stageReference,
   );
-  const stepsPerSecond = status?.metrics?.steps_per_second;
+  const stepsPerSecond = status.metrics.steps_per_second;
   const maxTorqueT =
     scalarSampleNumber(liveRow, "max_torque_T") ??
     runSolverStatus?.max_torque_T ??
     status?.solver?.max_torque_T;
-  const dt =
-    scalarSampleNumber(liveRow, "solver_dt") ??
-    scalarSampleNumber(liveRow, "dt") ??
-    runSolverStatus?.dt_seconds ??
-    status?.solver?.dt;
+  const reportedDt = stageHandoff || usesPseudoTime
+    ? null
+    : performanceClock?.dtSeconds ??
+      scalarSampleNumber(liveRow, "solver_dt") ??
+      scalarSampleNumber(liveRow, "dt") ??
+      runSolverStatus?.dt_seconds ??
+      status?.solver?.dt;
+  const activeClockSeconds = usesPseudoTime
+    ? pseudoTimeSeconds
+    : performanceClock?.timeSeconds ?? scalarSampleNumber(liveRow, "time") ?? simTimeSeconds;
+  const matchedSolverDtIsAuthoritative = !usesPseudoTime &&
+    performanceClock !== null &&
+    reportedDt === performanceClock.dtSeconds;
+  const zeroDtIsUnpublished = !matchedSolverDtIsAuthoritative &&
+    reportedDt === 0 &&
+    typeof activeClockSeconds === "number" && activeClockSeconds > 0;
+  const dt = typeof reportedDt === "number" && Number.isFinite(reportedDt) &&
+      (reportedDt > 0 || (reportedDt === 0 && !zeroDtIsUnpublished))
+    ? reportedDt
+    : null;
+  const scalarAttempt = scalarSample === resourceSample ? resourceSample?.series ?? null : null;
+  const expectedScalarAttempt = performanceAttempt ?? undefined;
+  const expectedStageId = stageReference?.stageId ?? null;
+  const meanTimestep = directMinimizerWithoutPseudoTime
+    ? null
+    : resolveFooterMeanTimestep(
+        status,
+        runtimePhase?.scalarHistory,
+        usesPseudoTime ? "pseudo_time_s" : "time",
+        expectedScalarAttempt,
+        expectedStageId,
+      );
+  const scalarSampleMatchesPerformance = !performanceAttempt || Boolean(scalarAttempt &&
+    sameFooterAttempt(performanceAttempt, scalarAttempt));
+  const validReportedDt = performanceClock || scalarSampleMatchesPerformance ? dt : null;
+  const resolvedDt = validReportedDt ?? meanTimestep?.secondsPerStep ?? null;
+  const usesMeanTimestep = validReportedDt === null && meanTimestep !== null;
   const errorEstimate =
     scalarSampleNumber(liveRow, "error_estimate") ?? runSolverStatus?.error_estimate ?? null;
   const maxError = scalarSampleNumber(liveRow, "max_error") ?? runSolverStatus?.max_error ?? null;
@@ -224,15 +293,35 @@ export function buildFooterTelemetryModel(
       numeric: finiteOrNull(sample?.[0]),
     };
   };
-  const timeSource = completedRun
-    ? "Current run status"
-    : liveRow
-      ? `Scalar revision ${String(scalarSample?.revision ?? "unavailable")}`
+  const physicalTimeSource = stageHandoff
+    ? "Run physical time · stage handoff"
+    : performanceClock
+      ? `Solver update · step ${formatInteger(performanceClock.stepIndex)} · Attempt ${performanceClock.attemptId}${performanceFreshness(runtimePhase)}`
+    : completedRun
+      ? "Current run status"
+      : liveRow
+        ? scalarResourceTimeSource(resourceSample, scalarSample === resourceSample)
       : runSolverStatus
         ? "Source: solver status"
         : status
           ? "Source: session status"
           : "Source unavailable";
+  const pseudoTimeSource = liveRow && scalarSampleNumber(liveRow, "pseudo_time_s") !== null
+    ? scalarResourceTimeSource(resourceSample, scalarSample === resourceSample)
+    : runSolverStatus?.pseudo_time_seconds !== null && runSolverStatus?.pseudo_time_seconds !== undefined
+      ? "Source: solver status pseudotime"
+      : "Source unavailable";
+  const timeSource = usesPseudoTime ? pseudoTimeSource : physicalTimeSource;
+  const primaryTimeDisplay = formatFooterSimulationTime(primaryTimeSeconds);
+  const simTimeDisplay = formatFooterSimulationTime(simTimeSeconds);
+  const displayedStepTimeSeconds = completedRun
+    ? simTimeSeconds
+    : liveRow
+      ? scalarSampleNumber(liveRow, usesPseudoTime ? "pseudo_time_s" : "time")
+      : usesPseudoTime
+        ? pseudoTimeSeconds
+        : performanceClock?.timeSeconds ?? objectMetrics?.time_seconds ?? simTimeSeconds;
+  const displayedStepTime = formatFooterSimulationTime(displayedStepTimeSeconds);
   const solverMetric: FooterTelemetryMetric = {
     detail: activeSolverExecution
       ? runtimeSolverDescription?.detail ?? "Runtime solver provenance unavailable"
@@ -257,6 +346,7 @@ export function buildFooterTelemetryModel(
   const stageProgressNotice =
     !frequencyDomainProgress &&
     runtimePhase?.stageExecutionUnpublished === true &&
+    runtimePhase.stageProgressAvailable !== true &&
     (active || runtimeState === "paused")
       ? STAGE_PROGRESS_NOT_PUBLISHED_LABEL
       : null;
@@ -279,8 +369,8 @@ export function buildFooterTelemetryModel(
         subdetail: directMinimizerWithoutPseudoTime
           ? "Not applicable: the runtime did not publish pseudotime"
           : timeSource,
-        unit: directMinimizerWithoutPseudoTime ? undefined : "s",
-        value: formatScientific(primaryTimeSeconds, "—"),
+        unit: directMinimizerWithoutPseudoTime ? undefined : primaryTimeDisplay.unit,
+        value: directMinimizerWithoutPseudoTime ? "—" : primaryTimeDisplay.value,
         numeric: finiteOrNull(primaryTimeSeconds),
       },
       ...(usesPseudoTime
@@ -290,9 +380,9 @@ export function buildFooterTelemetryModel(
               icon: <Clock3 size={14} aria-hidden="true" />,
               id: "sim-time",
               label: "Sim time",
-              subdetail: timeSource,
-              unit: "s",
-              value: formatScientific(simTimeSeconds, "—"),
+              subdetail: physicalTimeSource,
+              unit: simTimeDisplay.unit,
+              value: simTimeDisplay.value,
               numeric: finiteOrNull(simTimeSeconds),
             },
           ]
@@ -310,7 +400,7 @@ export function buildFooterTelemetryModel(
           ]
         : []),
       {
-        detail: "Closed profiler span",
+        detail: "Closed end-to-end runner span",
         icon: <Radio size={14} aria-hidden="true" />,
         id: "rate",
         label: "End-to-end rate",
@@ -319,12 +409,30 @@ export function buildFooterTelemetryModel(
         value: formatFixed(stepsPerSecond, 1, "—"),
       },
 
+      {
+        detail: performanceMatchesStage
+          ? "Measured current-stage step span over monotonic attempt time"
+          : "Measured identified-attempt step span over monotonic time",
+        icon: <Radio size={14} aria-hidden="true" />,
+        id: "stage-rate",
+        label: performanceMatchesStage ? "Stage rate" : "Attempt rate",
+        subdetail: measuredRate
+          ? `Steps ${formatInteger(measuredRate.firstStep)}–${formatInteger(measuredRate.lastStep)} · ${formatDuration(measuredRate.elapsedSeconds)} · Attempt ${measuredRate.attemptId}${performanceFreshness(runtimePhase)}`
+          : runtimePhase?.performanceRefreshFailed
+            ? "No matching measured span · refresh unavailable"
+            : "No matching measured stage span available",
+        unit: "steps/s",
+        value: formatFixed(measuredRate?.stepsPerSecond, 1, "—"),
+      },
+
       ...(observedSolverStep !== null ? [{
-        detail: "Last backend-reported solver step for the recorded stage. Field and scalar sample clocks are independent.",
+        detail: performanceMatchesStage
+          ? "Last backend-reported solver step for the current stage attempt. Field and scalar sample clocks are independent."
+          : "Last backend-reported solver step for this identified attempt. Field and scalar sample clocks are independent.",
         icon: <Hash size={14} aria-hidden="true" />,
         id: "solver-progress",
         label: "Solver step",
-        subdetail: `Stage ${runtimePhase?.performance?.step_id ?? "unknown"} · ${
+        subdetail: `${performanceMatchesStage ? status.run?.stage_label || "Current stage" : "Recorded attempt"} · Attempt ${runtimePhase?.performance?.attempt_id ?? "unknown"} · ${
           runtimePhase?.performanceRefreshFailed
             ? "last observed; refresh unavailable"
             : runtimePhase?.performanceStatus && runtimePhase.performanceStatus !== "ready"
@@ -335,37 +443,50 @@ export function buildFooterTelemetryModel(
         unit: "steps",
       }] : []),
       {
-        detail: observedSolverStep !== null ? "Step of the displayed telemetry sample" : "Latest step",
+        detail: observedSolverStep !== null && scalarSampleNumber(liveRow, "step") !== null
+          ? "Step of the displayed scalar observation"
+          : "Latest step",
         icon: <Hash size={14} aria-hidden="true" />,
         id: "step",
-        label: observedSolverStep !== null ? "Sample step" : "Step",
+        label: observedSolverStep !== null && scalarSampleNumber(liveRow, "step") !== null
+          ? "Sample step"
+          : "Step",
         subdetail: directMinimizerWithoutPseudoTime
           ? "Physical time not applicable"
-          : `t=${formatScientific(
-              completedRun || liveRow
-                ? simTimeSeconds
-                : objectMetrics?.time_seconds ?? simTimeSeconds,
-              "—",
-            )} s`,
+          : `${usesPseudoTime ? "τ" : "t"}=${displayedStepTime.value}${displayedStepTime.unit ? ` ${displayedStepTime.unit}` : ""}${scalarAttempt?.attempt_id ? ` · Attempt ${scalarAttempt.attempt_id}` : ""}`,
         value: formatInteger(
-          completedRun || liveRow ? totalSteps : objectMetrics?.step ?? totalSteps,
+          completedRun ? totalSteps : liveRow
+            ? scalarSampleNumber(liveRow, "step") ?? totalSteps
+            : objectMetrics?.step ?? totalSteps,
         ),
         unit: "steps",
       },
       {
         detail: usesPseudoTime
-          ? "Minimizer pseudotime step"
+          ? usesMeanTimestep
+            ? "Mean minimizer pseudotime step over accepted scalar samples"
+            : "Minimizer pseudotime step"
           : directMinimizerWithoutPseudoTime
             ? `${runtimeSolverDescription?.value ?? "Direct minimizer"} does not publish a physical timestep`
-            : "Solver timestep",
+            : usesMeanTimestep
+              ? "Mean physical timestep over accepted scalar samples"
+              : "Solver timestep",
         icon: <Clock3 size={14} aria-hidden="true" />,
         id: "dt",
-        label: usesPseudoTime ? "Pseudo dt" : "dt",
+        label: usesMeanTimestep
+          ? usesPseudoTime ? "Mean pseudo dt" : "Mean dt"
+          : usesPseudoTime ? "Pseudo dt" : "dt",
         subdetail: directMinimizerWithoutPseudoTime
           ? "Not applicable: no physical timestep is used"
-          : `State: ${runtimeStateLabel}`,
+          : meanTimestep && usesMeanTimestep
+            ? `Steps ${formatInteger(meanTimestep.firstStep)}–${formatInteger(meanTimestep.lastStep)} · ${formatInteger(meanTimestep.stepCount)} sample span · Attempt ${meanTimestep.attemptId}`
+            : performanceClock
+              ? `Solver step ${formatInteger(performanceClock.stepIndex)} · Attempt ${performanceClock.attemptId}`
+              : scalarSampleMatchesPerformance && scalarAttempt?.attempt_id
+                ? `Scalar sample · Attempt ${scalarAttempt.attempt_id}`
+                : `State: ${runtimeStateLabel}`,
         unit: directMinimizerWithoutPseudoTime ? undefined : "s",
-        value: formatScientific(directMinimizerWithoutPseudoTime ? null : dt, "—"),
+        value: formatScientific(directMinimizerWithoutPseudoTime ? null : resolvedDt, "—"),
       },
       solverMetric,
       ...(!usesPseudoTime && !directMinimizerWithoutPseudoTime &&
@@ -442,9 +563,10 @@ export function buildFooterTelemetryModel(
       energyMetric("anisotropy", "Anisotropy", "Anisotropy"),
       energyMetric("dmi", "DMI", "DMI"),
     ] satisfies FooterTelemetryMetric[]).filter((metric) =>
-      runtimePhase?.magneticModelPresent !== false ||
-      (metric.id !== "max-torque" && metricGroup(metric.id) !== "magnetization" &&
-        metricGroup(metric.id) !== "energy"),
+      (runtimePhase?.magneticModelPresent !== false ||
+        (metric.id !== "max-torque" && metricGroup(metric.id) !== "magnetization" &&
+          metricGroup(metric.id) !== "energy")) &&
+      (!stageHandoff || !["step", "dt", "stage-rate", "solver-progress"].includes(metric.id)),
     ),
     onlineDetail: status ? "Session state" : "Awaiting session",
     onlineTitle: userSolvePhase === "preparing_model"
@@ -1025,6 +1147,55 @@ function isTerminalFooterSolverState(value: unknown): boolean {
   return TERMINAL_FOOTER_SOLVER_STATES.has(value.trim().toLowerCase());
 }
 
+function performanceAttemptReference(
+  performance: RunPerformanceResource | null | undefined,
+): FooterScalarAttemptReference | null {
+  if (!performance || !performance.run_id || !performance.task_id ||
+      !performance.step_id || !performance.attempt_id ||
+      !Number.isSafeInteger(performance.ownership_epoch) ||
+      (performance.ownership_epoch ?? -1) < 0) return null;
+  return {
+    run_id: performance.run_id,
+    task_id: performance.task_id,
+    step_id: performance.step_id,
+    attempt_id: performance.attempt_id,
+    ownership_epoch: performance.ownership_epoch!,
+  };
+}
+
+function sameFooterAttempt(
+  expected: FooterScalarAttemptReference,
+  observed: NonNullable<ScalarWindowResource["series"]>,
+): boolean {
+  return expected.run_id === observed.run_id &&
+    expected.task_id === observed.task_id &&
+    expected.step_id === observed.step_id &&
+    expected.attempt_id === observed.attempt_id &&
+    expected.ownership_epoch === observed.ownership_epoch;
+}
+
+function scalarResourceTimeSource(
+  sample: ReturnType<typeof resolveFooterScalarResourceSample>,
+  selected: boolean,
+): string {
+  if (!selected || !sample) return "Live scalar sample";
+  const attemptId = sample.series?.attempt_id;
+  return attemptId
+    ? `Accepted scalar observation · Attempt ${attemptId}`
+    : "Accepted scalar observation";
+}
+
+function performanceFreshness(runtimePhase: {
+  performanceStatus?: ResourceResult<RunPerformanceResource>["status"];
+  performanceRefreshFailed?: boolean;
+} | undefined): string {
+  if (runtimePhase?.performanceRefreshFailed) return " · last observed; refresh unavailable";
+  if (runtimePhase?.performanceStatus && runtimePhase.performanceStatus !== "ready") {
+    return " · last observed; updating";
+  }
+  return "";
+}
+
 export type FooterTelemetryGroup = "runtime" | "solver" | "magnetization" | "energy";
 
 function metricGroup(id: string): FooterTelemetryGroup {
@@ -1077,6 +1248,44 @@ function formatInteger(value: number | null | undefined): string {
 
 function formatFrequencyGHz(valueHz: number): string {
   return `${(valueHz / 1.0e9).toFixed(3)} GHz`;
+}
+
+const SIMULATION_TIME_PREFIX_BY_EXPONENT: Readonly<Record<number, string>> = {
+  [-15]: "f",
+  [-12]: "p",
+  [-9]: "n",
+  [-6]: "µ",
+  [-3]: "m",
+  0: "",
+  3: "k",
+  6: "M",
+  9: "G",
+  12: "T",
+};
+const SIMULATION_TIME_NUMBER_FORMAT = new Intl.NumberFormat("en-US", {
+  maximumSignificantDigits: 6,
+  notation: "standard",
+  useGrouping: false,
+});
+
+function formatFooterSimulationTime(seconds: number | null | undefined): {
+  value: string;
+  unit?: string;
+} {
+  if (typeof seconds !== "number" || !Number.isFinite(seconds)) return { value: "—" };
+  if (seconds === 0) return { value: "0", unit: "s" };
+
+  const rawExponent = Math.floor(Math.log10(Math.abs(seconds)) / 3) * 3;
+  let exponent = Math.max(-15, Math.min(12, rawExponent));
+  let rounded = Number((seconds / 10 ** exponent).toPrecision(6));
+  if (Math.abs(rounded) >= 1_000 && exponent < 12) {
+    exponent += 3;
+    rounded = Number((seconds / 10 ** exponent).toPrecision(6));
+  }
+  return {
+    value: SIMULATION_TIME_NUMBER_FORMAT.format(rounded),
+    unit: `${SIMULATION_TIME_PREFIX_BY_EXPONENT[exponent] ?? ""}s`,
+  };
 }
 
 function formatScientific(

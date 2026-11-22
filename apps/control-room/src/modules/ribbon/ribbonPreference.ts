@@ -65,3 +65,53 @@ export function cycleRibbonDensity(): RibbonDensity {
   setRibbonDensity(next);
   return next;
 }
+
+/* ── Ribbon visibility ──
+ * Independent of density: a collapsed ribbon keeps only its tab strip so the
+ * workspace gains the height. Persisted per browser like the density. */
+const EXPANDED_STORAGE_KEY = "fullmag.control-room.ribbon-expanded.v1";
+let expanded = true;
+let expandedHydrated = false;
+const expandedListeners = new Set<() => void>();
+
+function hydrateExpandedFromStorage(): void {
+  if (expandedHydrated || typeof window === "undefined") return;
+  expandedHydrated = true;
+  try {
+    const stored = window.localStorage.getItem(EXPANDED_STORAGE_KEY);
+    if (stored === "false") expanded = false;
+  } catch {
+    // Storage can be unavailable in private or embedded browsing contexts.
+  }
+}
+
+export function getRibbonExpanded(): boolean {
+  return expanded;
+}
+
+export function getServerRibbonExpanded(): boolean {
+  return true;
+}
+
+export function subscribeRibbonExpanded(listener: () => void): () => void {
+  expandedListeners.add(listener);
+  hydrateExpandedFromStorage();
+  return () => expandedListeners.delete(listener);
+}
+
+export function setRibbonExpanded(next: boolean): void {
+  hydrateExpandedFromStorage();
+  if (expanded === next) return;
+  expanded = next;
+  try {
+    window.localStorage.setItem(EXPANDED_STORAGE_KEY, String(next));
+  } catch {
+    // Keep the preference for this page even when persistence is unavailable.
+  }
+  for (const listener of expandedListeners) listener();
+}
+
+export function toggleRibbonExpanded(): boolean {
+  setRibbonExpanded(!getRibbonExpanded());
+  return expanded;
+}

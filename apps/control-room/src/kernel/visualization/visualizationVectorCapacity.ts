@@ -1,4 +1,7 @@
-import { FMRM_INACTIVE_REGION_ID } from "@/kernel/api/codecs";
+import {
+  FMRM_INACTIVE_REGION_ID,
+  type DecodedFdmRegionMembership,
+} from "@/kernel/api/codecs";
 import type {
   DomainMetaResource,
   FdmRegionMembershipResource,
@@ -91,7 +94,8 @@ export interface VisualizationVectorCapacityDescriptorInput {
 export interface FdmVisualizationVectorCapacitySourceInput {
   domain: DomainMetaResource | null | undefined;
   membership: FdmRegionMembershipResource | null | undefined;
-  realizedRegionIds?: ArrayLike<number> | null;
+  /** Full FMRM payload returned by the resource hook after contract validation. */
+  realizedMembership?: DecodedFdmRegionMembership | null;
   revision?: string | number | null;
 }
 
@@ -103,7 +107,7 @@ export interface FdmVisualizationVectorCapacitySourceInput {
 export function fdmVisualizationVectorCapacitySource({
   domain,
   membership,
-  realizedRegionIds = null,
+  realizedMembership = null,
   revision,
 }: FdmVisualizationVectorCapacitySourceInput): FdmVisualizationVectorCapacitySource | null {
   const shape = tuple3(domain?.grid?.shape);
@@ -112,9 +116,24 @@ export function fdmVisualizationVectorCapacitySource({
   }
   const total = product(shape);
   if (!Number.isSafeInteger(total) || total <= 0) return null;
+  const alignedMembership = resolveAlignedCanonicalFdmMembership({
+    domain,
+    membership,
+    realizedMembership,
+    shape,
+    total,
+  });
   const support = membership?.magnetic_support;
-  const activeCellCount = safeCount(support?.active_cell_count);
-  const inactiveCellCount = safeCount(support?.inactive_cell_count);
+  const supportCounts = support === null || support === undefined
+    ? alignedMembership && membership
+      ? countCanonicalFdmSupportCells(alignedMembership.regionIds, membership)
+      : null
+    : {
+        activeCellCount: safeCount(support.active_cell_count),
+        inactiveCellCount: safeCount(support.inactive_cell_count),
+      };
+  const activeCellCount = supportCounts?.activeCellCount ?? null;
+  const inactiveCellCount = supportCounts?.inactiveCellCount ?? null;
   if (
     activeCellCount === null ||
     inactiveCellCount === null ||
@@ -129,7 +148,7 @@ export function fdmVisualizationVectorCapacitySource({
     gridFingerprint: membership?.grid_fingerprint ?? null,
     inactiveCellCount,
     kind: "fdm",
-    realizedRegionIds,
+    realizedRegionIds: alignedMembership?.regionIds ?? null,
     regionLegend: membership?.region_legend?.map((entry) => ({
       numeric_id: entry.numeric_id,
       object_id: entry.object_id,
@@ -142,6 +161,89 @@ export function fdmVisualizationVectorCapacitySource({
         : null),
     shape,
   };
+}
+
+function resolveAlignedCanonicalFdmMembership({
+  domain,
+  membership,
+  realizedMembership,
+  shape,
+  total,
+}: {
+  domain: DomainMetaResource;
+  membership: FdmRegionMembershipResource | null | undefined;
+  realizedMembership: DecodedFdmRegionMembership | null;
+  shape: readonly [number, number, number];
+  total: number;
+}): DecodedFdmRegionMembership | null {
+  if (
+    !membership ||
+    !realizedMembership ||
+    membership.schema_version !== "fdm_region_membership.v2" ||
+    membership.encoding !== "FMRM:u32_membership_le" ||
+    membership.freshness.trim().toLowerCase() !== "current" ||
+    membership.domain_generation_id !== domain.generation_id ||
+    !membership.grid_fingerprint ||
+    membership.cell_count !== total ||
+    domain.counts.cells !== total ||
+    !sameShape(membership.counts, shape) ||
+    realizedMembership.semanticStatus !== "canonical" ||
+    realizedMembership.formatVersion !== 2 ||
+    realizedMembership.payloadKind !== 2 ||
+    realizedMembership.cellCount !== total ||
+    realizedMembership.regionIds.length !== total ||
+    realizedMembership.gridFingerprint !== membership.grid_fingerprint ||
+    !sameShape(realizedMembership.counts, shape) ||
+    realizedMembership.legendCount !== membership.region_legend.length
+  ) {
+    return null;
+  }
+  return realizedMembership;
+}
+
+function countCanonicalFdmSupportCells(
+  regionIds: ArrayLike<number>,
+  membership: FdmRegionMembershipResource,
+): { activeCellCount: number; inactiveCellCount: number } | null {
+  const validRegionIds = new Set<number>([0]);
+  for (const [index, entry] of membership.region_legend.entries()) {
+    if (
+      !Number.isSafeInteger(entry.numeric_id) ||
+      entry.numeric_id !== index + 1 ||
+      entry.object_id.trim().length === 0 ||
+      entry.region_id.trim().length === 0 ||
+      validRegionIds.has(entry.numeric_id) ||
+      entry.numeric_id >= FMRM_INACTIVE_REGION_ID
+    ) {
+      return null;
+    }
+    validRegionIds.add(entry.numeric_id);
+  }
+
+  let activeCellCount = 0;
+  let inactiveCellCount = 0;
+  for (let index = 0; index < regionIds.length; index += 1) {
+    const regionId = regionIds[index];
+    if (regionId === FMRM_INACTIVE_REGION_ID) {
+      inactiveCellCount += 1;
+    } else if (regionId !== undefined && validRegionIds.has(regionId)) {
+      // ID zero is the canonical active-unassigned sentinel, not inactivity.
+      activeCellCount += 1;
+    } else {
+      return null;
+    }
+  }
+  return { activeCellCount, inactiveCellCount };
+}
+
+function sameShape(
+  candidate: readonly number[] | null | undefined,
+  expected: readonly [number, number, number],
+): boolean {
+  return candidate?.length === 3 &&
+    candidate[0] === expected[0] &&
+    candidate[1] === expected[1] &&
+    candidate[2] === expected[2];
 }
 
 /** Adapt one already-validated native layer carrier without consulting DomainMeta. */

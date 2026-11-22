@@ -612,6 +612,18 @@
   font-size: var(--fm-font-size-2xs);
 }
 
+.fm-eigen-mode-browser tr[data-active] {
+  background: var(--fm-bg-selected);
+}
+
+.fm-eigen-mode-browser__profile {
+  text-align: right;
+}
+
+.fm-eigen-mode-browser__missing {
+  color: var(--fm-text-muted);
+}
+
 .fm-frequency-domain-visualization-actions {
   display: flex;
   flex-wrap: wrap;

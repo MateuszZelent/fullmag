@@ -58,7 +58,7 @@ def _group(*, backend_running=True, frontend_running=True, healthy=True, ui_mode
         attempt="a" * 32,
         config_sha256="b" * 64,
         port=3297,
-        document={"name": "fullmag-master"},
+        document={"name": "fullmag-master", "services": {"backend": {}, "frontend": {}}},
         terminal={
             "state": "succeeded",
             "backend_container": "c" * 64,
@@ -85,6 +85,22 @@ def _group(*, backend_running=True, frontend_running=True, healthy=True, ui_mode
 
 
 class DockerDevUpReconciliationTests(unittest.TestCase):
+    def test_retained_windows_bind_is_rejected_before_reconciliation(self):
+        group = _group()
+        group.document["services"]["backend"]["volumes"] = [
+            {"type": "bind", "source": "/home/fullmag/sessions", "target": "/state"},
+        ]
+        mountinfo = (
+            "1 0 8:1 / / rw - ext4 /dev/sda rw\n"
+            "2 1 0:42 / /home/fullmag/sessions/windows rw - 9p E:\\134 rw\n"
+        )
+        with patch.object(docker_dev_up, "_discover_group", return_value=group), \
+                patch.object(docker_dev_up.Path, "read_text", return_value=mountinfo), \
+                patch.object(docker_dev_up, "_reconcile_group") as reconcile:
+            with self.assertRaisesRegex(ValueError, "/state.*9p.*sessions/windows"):
+                docker_dev_up.ensure_up(_args())
+        reconcile.assert_not_called()
+
     def test_lifecycle_recreation_preserves_the_pinned_explicit_network_subnet(self):
         group = _group()
         group.document["networks"] = {"fullmag": {"driver": "bridge", "ipam": {

@@ -1,3 +1,5 @@
+import { canonicalMeshTopologyHash } from "@/shared/domain/mesh/topologyFingerprint";
+
 import type { FieldVectorResponseMetadata } from "@/kernel/api/apiTypes";
 import type { DecodedFieldVector } from "@/kernel/api/codecs";
 
@@ -276,11 +278,6 @@ export function resolveViewport3DFieldDomainCompatibility({
   return field.formatVersion === 2 && domain.discretization !== "fdm"
     ? { reason: "fmvp-v2-legacy", status: "degraded" }
     : { reason: "compatible", status: "compatible" };
-}
-
-export function canonicalMeshTopologyHash(value: string): string {
-  const match = /^(?:sha256:)?([0-9a-f]{64})$/i.exec(value);
-  return match?.[1]?.toLowerCase() ?? value;
 }
 
 function hasDuplicateFieldNodeIndex(

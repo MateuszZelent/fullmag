@@ -867,7 +867,7 @@ def _compose_source_environment(project, source_identity):
     }
 
 
-def _workspace_user_data_root(layout, project):
+def _workspace_user_data_root(layout, project, *, admit_linux_mounts=False):
     """Create the durable user-data namespace for one validated Compose group."""
 
     if not isinstance(project, str) or re.fullmatch(r"[a-z0-9][a-z0-9_-]*", project) is None:
@@ -878,6 +878,10 @@ def _workspace_user_data_root(layout, project):
     candidate = storage.validate_path(
         storage_root / "user-data" / project, storage_root, "workspace user-data root"
     )
+    if admit_linux_mounts:
+        from docker_dev_host import validate_linux_mounts
+
+        validate_linux_mounts({candidate: "workspace user-data root"})
     candidate.mkdir(parents=True, exist_ok=True)
     # Revalidate after creation so a concurrent junction/symlink substitution is
     # rejected before the host path is handed to Docker Desktop.

@@ -72,6 +72,18 @@ class DockerCpuAccessContract(unittest.TestCase):
                     "gpu", "required", "sha256:" + "a" * 64, "fullmag-test"
                 )
 
+    def test_group_gpu_probe_pins_the_toolchain_target_before_start(self):
+        image = "sha256:" + "a" * 64
+        with patch.object(docker_dev, "_docker_capture") as run:
+            self.assertEqual(docker_dev._verify_docker_gpu_access(
+                "gpu", "required", image, "fullmag-test", cuda_target="86-real",
+            ), "gpu")
+        arguments = run.call_args.args
+        self.assertIn("FULLMAG_DEV_CUDA_ARCHITECTURES=86-real", arguments)
+        self.assertIn("FULLMAG_HOST_LEDGER_PROFILE=group-ledger-v1", arguments)
+        self.assertIn("entrypoint._probe_cuda_devices()", arguments[-1])
+        compile(arguments[-1], "<cuda-probe>", "exec")
+
     def test_compose_cpu_has_no_gpu_overlay_or_device_request(self):
         with tempfile.TemporaryDirectory() as directory:
             repo = Path(directory)

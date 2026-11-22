@@ -1,3 +1,5 @@
+import { canonicalMeshTopologyHash } from "@/shared/domain/mesh/topologyFingerprint";
+
 import type { DecodedFieldVector } from "@/kernel/api/codecs";
 import { fieldVectorComponentsSemanticallyEqual } from "@/kernel/api/fieldQueryIdentity";
 import {
@@ -20,10 +22,7 @@ import type {
   Viewport3DFieldVectorCacheEntryDiagnostics,
 } from "../viewport3dResources";
 import { buildFieldVectorDebugSamples } from "./scanFieldVectorDebugStatistics";
-import {
-  canonicalMeshTopologyHash,
-  resolveTrustedViewport3DResponseDomainGenerationId,
-} from "./viewport3DFieldDomainCompatibility";
+import { resolveTrustedViewport3DResponseDomainGenerationId } from "./viewport3DFieldDomainCompatibility";
 
 const MAX_DEBUG_CARRIERS = 8;
 const MAX_DEBUG_TEXT_LENGTH = 256;

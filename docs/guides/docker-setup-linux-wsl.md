@@ -9,10 +9,14 @@ python3 -B scripts/setup_docker.py
 
 Kreator pyta o bezwzględną ścieżkę storage, zarejestrowany checkout źródeł
 i port. Dla Linux/WSL checkout i storage muszą znajdować się na lokalnym
-ext4, xfs albo btrfs. Można używać checkoutu w katalogu domowym WSL; nie trzeba
-przenosić go do Windows. Katalogi tymczasowe i sieciowe nie są storage tej
-trasy. Nie podawaj ścieżek Windows ani mountów dysków Windows typu `/mnt/c`;
-walidacja tej konfiguracji obejmuje lokalne systemy plików Linux.
+ext4, xfs albo btrfs. Użyj checkoutu w katalogu domowym WSL i lokalnego
+storage Linux. Launcher DEV sprawdza także podrzędne mounty w kontekście
+buildu, źródłach i bindach backendu i frontendu (w tym Git, sesjach, danych
+użytkownika i katalogu zapisu skryptów). Jeśli pod lokalnym katalogiem leży
+mount 9p/DrvFs, start lub wznowienie zgłosi jego ścieżkę. Osobny dysk VHDX
+zamontowany w WSL jako ext4 jest dopuszczalny. Katalogi tymczasowe i sieciowe
+nie są storage tej trasy. Działające grupy i ich mounty nie są zmieniane przez
+samą aktualizację launchera.
 
 Zapis następuje po potwierdzeniu planu. Kreator zachowuje istniejące hasła
 i pozostałe wpisy `.env` głównego checkoutu. Ustawienia źródeł i portu zapisuje
@@ -64,6 +68,13 @@ zachowuje `windows-folder-v1` i własną walidację NTFS/ReFS. Mapowanie WSL do
 przestrzeni mountów Dockera jest obserwowane i sprawdzane przed utrzymaniem
 ledgera hosta. Brak integracji WSL, niedostępne ACL lub niezgodny filesystem
 kończą się błędem; launcher nie przenosi sesji do tymczasowego storage.
+
+Na hoście z kartami o różnych compute capability ustaw w `.env` jeden cel
+wykryty przez `nvidia-smi --query-gpu=name,compute_cap --format=csv,noheader`,
+np. `FULLMAG_DEV_CUDA_ARCHITECTURES=86-real` dla RTX 3080. Kompilacja DEV
+użyje tego celu. Backend GPU wymaga dokładnie jednej pasującej karty i używa
+jej UUID w CUDA oraz we własnym rejestrze zasobów grupy. Aby wymagać
+dostępu do GPU przy uruchamianiu, użyj `just docker-dev "$PWD" 3197 "" required`.
 
 Recepta uwzględnia `FULLMAG_CUDA_*`, `FULLMAG_HYPRE_GPU_ARCHITECTURES` oraz
 `FULLMAG_PETSC_CUDA_ARCHITECTURES` z `.env`. Dobierz je do GPU i wersji CUDA.

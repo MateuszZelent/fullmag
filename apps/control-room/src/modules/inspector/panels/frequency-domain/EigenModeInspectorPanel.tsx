@@ -27,6 +27,7 @@ import {
   resolveModalPhasorConvention,
   type ModalDampingObservables,
 } from "@/shared/domain/analysis/modalDampingObservables";
+import { modalSpectrumMatchesSelection } from "@/shared/domain/analysis/modalResultNodeIdentity";
 import { Button } from "@/shared/ui/Button";
 
 import type { InspectorPanelProps } from "../../inspectorTypes";
@@ -109,37 +110,11 @@ export function EigenModeInspectorPanel({
       data-inspector-owner="frequency-domain.eigen-mode"
       data-inspector-surface="eigen-mode"
     >
-      <InspectorGroup title="Eigen Mode Control" badge={summary.badge}>
-        <FieldRow label="Canonical object" value="Eigenmodes mode" />
-        <FieldRow label="Mode identity" value={summary.modeIdentity} />
-        <FieldRow label="Frequency" value={summary.frequencyDisplay} />
-        <FieldRow label="Imaginary frequency" value={summary.imaginaryFrequency} />
-        <EigenModeDampingFields damping={summary.damping} />
-        <FieldRow label="Angular frequency" value={summary.angularFrequency} />
+      <InspectorGroup title={summary.modeIdentity} summary={summary.frequencyDisplay}>
         <FieldRow label="Mode field" value={summary.fieldStatus} />
-        <FieldRow label="Mode field resource" value={summary.fieldResource} />
-        <FieldRow label="Available field views" value={summary.availableViews} />
-        <EigenModeResidualFields residual={summary.residual} />
-        <FieldRow label="Tangent leakage max" value={summary.tangentLeakageMax} />
-        <FieldRow label="Dominant polarization" value={summary.dominantPolarization} />
-        <FieldRow label="3D workflow" value={summary.workflow} />
+        <EigenMode3DActions settings={modeDisplaySettings} summary={summary} />
       </InspectorGroup>
-      <InspectorGroup
-        title="Eigen Mode 3D Visualization"
-        badge={summary.actionBadge}
-      >
-        <FieldRow label="Field ID" value={summary.fieldIdLabel} />
-        <FieldRow label="Field resource" value={summary.fieldResource} />
-        <FieldRow label="Default view" value={summary.defaultViewLabel} />
-        <FieldRow label="Phase convention" value={summary.phaseConvention} />
-        <FieldRow
-          label="Shared style preset"
-          value="one shared eigen/response mode visualization preset; switching modes keeps color, shader, vector, phase, and colormap controls"
-        />
-        <FieldRow
-          label="Volume inspection roadmap"
-          value="clip planes and shader opacity remain planned for internal-mode inspection"
-        />
+      <InspectorGroup collapsible title="Display">
         <FrequencyDomainModeDisplayControls
           componentOptions={summary.componentOptions}
           disabled={!summary.field3DReady}
@@ -148,7 +123,17 @@ export function EigenModeInspectorPanel({
           viewDefaultValue={summary.defaultView}
           viewOptions={summary.availableViewValues}
         />
-        <EigenMode3DActions settings={modeDisplaySettings} summary={summary} />
+      </InspectorGroup>
+      <InspectorGroup collapsible defaultOpen={false} title="Mode details">
+        <FieldRow label="Imaginary frequency" value={summary.imaginaryFrequency} />
+        <EigenModeDampingFields damping={summary.damping} />
+        <FieldRow label="Angular frequency" value={summary.angularFrequency} />
+        <EigenModeResidualFields residual={summary.residual} />
+        <FieldRow label="Tangent leakage max" value={summary.tangentLeakageMax} />
+        <FieldRow label="Dominant polarization" value={summary.dominantPolarization} />
+        <FieldRow label="Phase convention" value={summary.phaseConvention} />
+        <FieldRow label="Field ID" value={summary.fieldIdLabel} />
+        <FieldRow label="Field resource" value={summary.fieldResource} />
       </InspectorGroup>
     </div>
   );
@@ -338,12 +323,24 @@ function useEigenModeSummary(selection: InspectorPanelProps["selection"]) {
     sampleIndex,
     modeIndex,
   );
-  const spectrumModel = buildEigenSpectrumChartModel(spectrum.data);
+  const modePublication = eigenMode.status === "ready" && eigenMode.data?.status === "ready"
+    ? eigenMode.data
+    : null;
+  const spectrumPublication = spectrum.status === "ready" && spectrum.data?.status === "ready"
+    ? spectrum.data
+    : null;
+  const publication = modePublication ?? spectrumPublication;
+  const publicationMatches = modalSpectrumMatchesSelection(publication, ref);
+  const spectrumModel = buildEigenSpectrumChartModel(
+    modalSpectrumMatchesSelection(spectrumPublication, ref) ? spectrumPublication : null,
+  );
   const spectrumPoint = spectrumModel.points.find(
     (point) =>
       point.sampleIndex === sampleIndex && point.rawModeIndex === modeIndex,
   );
-  const modePayload = readEigenModeResourcePayload(eigenMode.data, sampleIndex, modeIndex);
+  const modePayload = modalSpectrumMatchesSelection(modePublication, ref)
+    ? readEigenModeResourcePayload(modePublication, sampleIndex, modeIndex)
+    : null;
   const componentSummary = record(modePayload?.component_summary);
   const frequencyHz =
     finiteNumber(modePayload?.frequency_real_hz) ??
@@ -401,8 +398,10 @@ function useEigenModeSummary(selection: InspectorPanelProps["selection"]) {
     imaginaryFrequencyHz,
     rawPhasorConvention,
   );
-  const field3DReady =
-    fieldMeta.status === "ready" && canPlotSelectedFieldIn3D(fieldMeta.data);
+  const generationId = publication?.generation_id ?? null;
+  const field3DReady = publicationMatches && fieldMeta.status === "ready" &&
+    (!generationId || fieldMeta.data?.generation_id === generationId) &&
+    canPlotSelectedFieldIn3D(fieldMeta.data);
   const field3DStatus =
     fieldMeta.status === "ready"
       ? selectedField3DPlotStatus(fieldMeta.data)
@@ -447,7 +446,9 @@ function useEigenModeSummary(selection: InspectorPanelProps["selection"]) {
     fieldResource: fieldResource ?? "not available",
     field3DReady,
     field3DStatus,
-    fieldStatus: fieldId
+    fieldStatus: !publicationMatches
+      ? "Mode field unavailable for this run and stage"
+      : fieldId
       ? `${fieldId}; ${
           fieldMeta.status === "ready"
             ? selectedField3DPlotStatus(fieldMeta.data)

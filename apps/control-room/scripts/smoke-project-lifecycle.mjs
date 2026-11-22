@@ -1,5 +1,6 @@
 import { mkdir } from "node:fs/promises";
 import { resolve } from "node:path";
+import { openAppMenu } from "./lib/app-menu-browser.mjs";
 
 const workspaceUrl = process.env.CONTROL_ROOM_URL ?? "http://localhost:3100/workspace";
 const outputDir = resolve(
@@ -26,7 +27,7 @@ async function loadPlaywright() {
 }
 
 async function openFileMenuItem(page, label) {
-  await page.getByRole("button", { name: "File", exact: true }).click();
+  await openAppMenu(page, "File");
   // Radix includes the shortcut in the accessible name (`Save ProjectCtrl+S`),
   // so the label is matched as a prefix rather than exactly.
   const item = page.getByRole("menuitem", { name: new RegExp(`^${label}`) }).last();
@@ -173,8 +174,7 @@ try {
     secondDownload.suggestedFilename() === "roundtrip.fms",
     `Unexpected Open project download name: ${secondDownload.suggestedFilename()}`,
   );
-  const fileMenu = page.getByRole("button", { name: "File", exact: true });
-  await fileMenu.click();
+  await openAppMenu(page, "File");
   const closeProject = page.getByRole("menuitem", {
     name: "Close Project",
   });

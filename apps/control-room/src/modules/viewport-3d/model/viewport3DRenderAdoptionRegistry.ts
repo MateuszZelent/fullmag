@@ -121,6 +121,8 @@ export interface Viewport3DRenderAdoptionRegistry {
   snapshot(targetId: string): readonly Viewport3DRenderAdoptionReceipt[];
   subscribeActive(listener: () => void): () => void;
   subscribe(listener: (targetId: string) => void): () => void;
+  /** Current WebGL adoption receipts; unlike snapshot(), this does not require debug demand. */
+  activeSnapshot(targetId: string): readonly Viewport3DRenderAdoptionReceipt[];
 }
 
 const EMPTY_RECEIPTS: readonly Viewport3DRenderAdoptionReceipt[] = Object.freeze([]);
@@ -528,6 +530,27 @@ export function createViewport3DRenderAdoptionRegistry({
     },
     snapshot(targetId) {
       return receipts.get(targetId) ?? EMPTY_RECEIPTS;
+    },
+    activeSnapshot(targetId) {
+      const current: Viewport3DRenderAdoptionReceipt[] = [];
+      for (const owners of activePasses.values()) {
+        let selected: OwnedAdoption | null = null;
+        for (const owned of owners.values()) {
+          if (
+            ownerTargetIds(owned).includes(targetId) &&
+            (!selected ||
+              owned.receipt.adoptionSequence > selected.receipt.adoptionSequence)
+          ) {
+            selected = owned;
+          }
+        }
+        if (selected) {
+          current.push({ ...selected.receipt, targetId });
+        }
+      }
+      if (current.length === 0) return EMPTY_RECEIPTS;
+      current.sort((left, right) => left.adoptionSequence - right.adoptionSequence);
+      return Object.freeze(current);
     },
     setCarrierTargets(targetIdsByCarrierId) {
       carrierTargets = new Map(

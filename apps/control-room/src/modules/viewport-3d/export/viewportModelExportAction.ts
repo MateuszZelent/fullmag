@@ -1,6 +1,7 @@
 import type {
   Export3DFormat,
   Export3DResult,
+  Export3DTargetInput,
 } from "@/shared/export-3d/export3dTypes";
 
 import type { Viewport3DExportSource } from "./extractViewport3DExportSource";
@@ -38,14 +39,20 @@ export function formatViewportModelSourceSummary(source: ViewportModelSource | n
     .join(" · ") || "Current 3D view";
 }
 
+function hasExportableVectors(target: Export3DTargetInput, vtk: boolean): boolean {
+  if (!vtk && target.renderedVectors) return true;
+  return target.field?.componentCount === 3 &&
+    (vtk || target.renderedVectors !== null);
+}
+
 export function defaultIncludeVectorsForSource(source: ViewportModelSource | null): boolean {
-  if (!source) return false;
-  return source.targets.some(
-    (target) =>
-      target.role !== "airbox" &&
-      target.field?.componentCount === 3 &&
-      target.appearance?.includeVectors,
-  );
+  return source?.targets.some((target) => Boolean(target.renderedVectors) ||
+    (target.role !== "airbox" && hasExportableVectors(target, false) && target.appearance?.includeVectors),
+  ) ?? false;
+}
+
+export function defaultIncludeAirboxForSource(source: ViewportModelSource | null): boolean {
+  return source?.targets.some((target) => target.role === "airbox" && Boolean(target.renderedVectors)) ?? false;
 }
 
 export function computeViewportModelExportCapabilities(
@@ -56,7 +63,7 @@ export function computeViewportModelExportCapabilities(
   const vtk = format === "vtu" || format === "vtu_zip";
   const hasAirbox = source?.targets.some((target) => target.role === "airbox") ?? false;
   const targets = source?.targets.filter((target) => includeAirbox || target.role !== "airbox") ?? [];
-  const hasVectors = targets.some((target) => target.field?.componentCount === 3);
+  const hasVectors = targets.some((target) => hasExportableVectors(target, vtk));
   const canAnimate =
     format !== "vtu" &&
     targets.some(
@@ -67,7 +74,8 @@ export function computeViewportModelExportCapabilities(
   const missingAirboxVectors =
     hasAirbox &&
     includeAirbox &&
-    !targets.some((target) => target.role === "airbox" && target.field?.componentCount === 3);
+    !targets.some((target) => target.role === "airbox" &&
+      hasExportableVectors(target, vtk));
 
   return {
     vtk,
@@ -96,7 +104,7 @@ export async function executeViewportModelExport({
   signal: AbortSignal;
   source: ViewportModelSource;
 }): Promise<Export3DResult> {
-  const { canAnimate, targets } = computeViewportModelExportCapabilities(
+  const { canAnimate, targets, vtk } = computeViewportModelExportCapabilities(
     source,
     format,
     includeAirbox,
@@ -110,7 +118,8 @@ export async function executeViewportModelExport({
       ...target,
       appearance: {
         ...target.appearance,
-        includeVectors: includeVectors && target.field?.componentCount === 3,
+        includeVectors: includeVectors && hasExportableVectors(target, vtk) &&
+          (vtk || Boolean(target.renderedVectors) || target.appearance?.includeVectors !== false),
         includeSurface:
           target.appearance?.includeSurface || !target.appearance?.includeWireframe,
       },

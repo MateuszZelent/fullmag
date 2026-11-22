@@ -91,6 +91,32 @@ impl FramesIndexWriter {
         relative_path: String,
         bytes: Option<u64>,
     ) -> Result<(), String> {
+        self.record_with_publication(quantity, step, time_s, relative_path, bytes, true)
+    }
+
+    /// Record a frame in memory and defer publishing it until the matching
+    /// Zarr sample metadata is visible. The artifact writer calls `flush` only
+    /// after it has committed all pending `.zarray` shapes and sample indexes.
+    pub fn record_buffered(
+        &mut self,
+        quantity: &str,
+        step: u64,
+        time_s: f64,
+        relative_path: String,
+        bytes: Option<u64>,
+    ) -> Result<(), String> {
+        self.record_with_publication(quantity, step, time_s, relative_path, bytes, false)
+    }
+
+    fn record_with_publication(
+        &mut self,
+        quantity: &str,
+        step: u64,
+        time_s: f64,
+        relative_path: String,
+        bytes: Option<u64>,
+        publish_if_due: bool,
+    ) -> Result<(), String> {
         let merged = match self.document.frames.last_mut() {
             Some(last) if last.step == step && last.time_s == time_s => {
                 if !last.quantity_ids.iter().any(|id| id == quantity) {
@@ -123,7 +149,9 @@ impl FramesIndexWriter {
         }
         self.dirty_since_write += 1;
         let len = self.document.frames.len();
-        if len <= DENSE_REWRITE_LIMIT || self.dirty_since_write >= REWRITE_STRIDE {
+        if publish_if_due
+            && (len <= DENSE_REWRITE_LIMIT || self.dirty_since_write >= REWRITE_STRIDE)
+        {
             self.flush()?;
         }
         Ok(())
@@ -204,6 +232,22 @@ mod tests {
         assert_eq!(document.frames[1].bytes, Some(15));
         assert_eq!(document.frames[1].stage_id.as_deref(), Some("relax"));
         assert!(!dir.join(".frames.json.tmp").exists());
+        fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn buffered_records_publish_only_when_flushed() {
+        let dir = temp_leaf("buffered-publication");
+        let mut writer = FramesIndexWriter::new(&dir, Some("run".into()));
+        writer
+            .record_buffered("m", 3, 1e-12, "fields/m".into(), None)
+            .unwrap();
+
+        assert!(!dir.join(FRAMES_INDEX_FILE).exists());
+        writer.flush().unwrap();
+        let document = read(&dir);
+        assert_eq!(document.frames.len(), 1);
+        assert_eq!(document.frames[0].step, 3);
         fs::remove_dir_all(dir).ok();
     }
 

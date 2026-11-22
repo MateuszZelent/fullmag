@@ -175,6 +175,22 @@ describe("viewport3DRenderAdoptionRegistry", () => {
     });
 
     expect(registry.snapshot("airbox")).toEqual([]);
+    expect(registry.activeSnapshot("airbox")).toEqual([
+      expect.objectContaining({
+        carrierId: "part:air",
+        fieldBufferId: "field-1",
+        kind: "surface",
+        targetId: "airbox",
+      }),
+      expect.objectContaining({
+        carrierId: "part:air",
+        fieldBufferId: "field-1",
+        kind: "vector",
+        targetId: "airbox",
+        vectorBuildKey: "vector-1",
+      }),
+    ]);
+    expect(registry.activeSnapshot("another-target")).toEqual([]);
   });
 
   it("records bounded target and carrier specific surface and vector receipts", () => {

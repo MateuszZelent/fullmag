@@ -35724,6 +35724,14 @@
             "maxItems": 120,
             "type": "array"
           },
+          "progress_fraction": {
+            "description": "Fraction of the accepted bounded stage duration, clamped to [0, 1].",
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
           "reason": {
             "type": [
               "string",
@@ -35748,6 +35756,25 @@
             "format": "int64",
             "minimum": 0,
             "type": "integer"
+          },
+          "solver_clock": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/RunPerformanceSolverClockResource"
+              }
+            ]
+          },
+          "stage_index": {
+            "description": "Zero-based position in the accepted StudyPlan stage order.",
+            "format": "int32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
           },
           "state": {
             "type": "string"
@@ -35787,6 +35814,31 @@
           "rows_dropped",
           "gpu_scope",
           "points"
+        ],
+        "type": "object"
+      },
+      "RunPerformanceSolverClockResource": {
+        "description": "Physical clock from the same accepted solver callback as `step_index`.",
+        "properties": {
+          "dt_s": {
+            "description": "Accepted solver timestep; zero is preserved as a measured value.",
+            "format": "double",
+            "type": "number"
+          },
+          "step_index": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "time_s": {
+            "format": "double",
+            "type": "number"
+          }
+        },
+        "required": [
+          "step_index",
+          "time_s",
+          "dt_s"
         ],
         "type": "object"
       },

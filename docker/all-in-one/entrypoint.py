@@ -307,6 +307,50 @@ class StartupActivationOutcome(Exception):
         super().__init__(diagnostic.get("error", "startup activation outcome is unknown"))
 
 
+def _pin_dev_cuda_device():
+    """Scope the group's CUDA processes and physical inventory to one GPU."""
+    target = os.environ.get("FULLMAG_DEV_CUDA_ARCHITECTURES")
+    if not target or os.environ.get("FULLMAG_HOST_LEDGER_PROFILE") != "group-ledger-v1":
+        return False
+
+    devices = subprocess.check_output(
+        ["nvidia-smi", "--query-gpu=uuid,compute_cap", "--format=csv,noheader,nounits"],
+        text=True, timeout=10, stdin=subprocess.DEVNULL,
+    )
+    matches = []
+    for line in devices.splitlines():
+        device = re.fullmatch(
+            r"(GPU-[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}),\s*([1-9][0-9]?)\.([0-9])",
+            line.strip(), re.IGNORECASE,
+        )
+        if device is None:
+            raise RuntimeError("Could not verify the physical NVIDIA GPU inventory")
+        device_uuid, major, minor = device.groups()
+        if target == f"{major}{minor}-real":
+            matches.append("GPU-" + device_uuid[4:].lower())
+    if len(matches) != 1:
+        raise RuntimeError(f"DEV CUDA target {target} must match exactly one physical GPU, "
+                           f"found {len(matches)}")
+
+    # WSL exposes all GPUs to the container. The runtime's physical inventory
+    # must use the same UUID as the CUDA driver and the child solver processes.
+    os.environ["CUDA_VISIBLE_DEVICES"] = matches[0]
+    os.environ["FULLMAG_DEV_CUDA_DEVICE_UUID"] = matches[0]
+    return True
+
+
+def _probe_cuda_devices():
+    pinned = _pin_dev_cuda_device()
+    driver = ctypes.CDLL("libcuda.so.1")
+    if driver.cuInit(0) != 0:
+        raise RuntimeError("NVIDIA CUDA driver initialization failed")
+    count = ctypes.c_int()
+    if driver.cuDeviceGetCount(ctypes.byref(count)) != 0 or count.value < 1:
+        raise RuntimeError("No NVIDIA CUDA GPU available")
+    if pinned and count.value != 1:
+        raise RuntimeError("The CUDA driver did not expose exactly one pinned DEV GPU")
+
+
 def preflight():
     device_access = _configure_device_access()
     kind = subprocess.check_output(["stat", "-f", "-c", "%t", "/state"], text=True).strip()
@@ -321,12 +365,7 @@ def preflight():
         raise RuntimeError(f"Unsupported durable session filesystem 0x{kind}; "
                            "configure supported project storage; no ephemeral fallback")
     if device_access == DEVICE_ACCESS_GPU:
-        driver = ctypes.CDLL("libcuda.so.1")
-        if driver.cuInit(0) != 0:
-            raise RuntimeError("NVIDIA CUDA driver initialization failed")
-        count = ctypes.c_int()
-        if driver.cuDeviceGetCount(ctypes.byref(count)) != 0 or count.value < 1:
-            raise RuntimeError("No NVIDIA CUDA GPU available")
+        _probe_cuda_devices()
     control_root, fem_mesh_cache, cuda_cache = technical_paths()
     for directory in (control_root, fem_mesh_cache, cuda_cache):
         directory.mkdir(parents=True, exist_ok=True)

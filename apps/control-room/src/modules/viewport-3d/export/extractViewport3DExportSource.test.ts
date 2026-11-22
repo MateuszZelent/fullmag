@@ -9,6 +9,7 @@ import {
 } from "@/shared/export-3d";
 
 import { convertRealFieldToExportInput, extractViewport3DExportSource } from "./extractViewport3DExportSource";
+import { defaultIncludeAirboxForSource, defaultIncludeVectorsForSource, executeViewportModelExport } from "./viewportModelExportAction";
 
 describe("extractViewport3DExportSource", () => {
   useNodeBlobFileReader();
@@ -478,7 +479,7 @@ describe("extractViewport3DExportSource", () => {
     }
   });
 
-  it("extracts FEM mesh targets skipping hidden airbox and safely filtering/mapping volumeCells", () => {
+  it("extracts FEM mesh targets skipping hidden airbox and safely filtering/mapping volumeCells", async () => {
     // Nodes 0..3: magnetic tet [0..10nm]; Nodes 4..7: far-field airbox tet [0..1000nm]
     const positions = new Float32Array([
       0, 0, 0,
@@ -509,7 +510,7 @@ describe("extractViewport3DExportSource", () => {
       0, 0, 1,
     ]);
 
-    const source = extractViewport3DExportSource({
+    const input = {
       sessionDiscretization: "fem",
       domainId: "fem-disk",
       topology,
@@ -607,7 +608,8 @@ describe("extractViewport3DExportSource", () => {
         ]),
       },
       airboxSettings: { visible: false },
-    });
+    } as Parameters<typeof extractViewport3DExportSource>[0];
+    const source = extractViewport3DExportSource(input);
 
     expect(source.targets).toHaveLength(1);
     const femTarget = source.targets[0];
@@ -625,6 +627,83 @@ describe("extractViewport3DExportSource", () => {
     expect(caps.hasFemTargets).toBe(true);
     expect(caps.supportsVolumetricVtu).toBe(true);
     expect(caps.boundsM?.max[0]).toBeCloseTo(10e-9);
+
+    const segments = Float32Array.of(1e-6, 0, 0, 1.2e-6, 0, 0);
+    const colors = Float32Array.of(0.1, 0.7, 0.4);
+    const fieldModel = input.fieldModel!;
+    const visibleAirbox = extractViewport3DExportSource({
+      ...input,
+      airboxSettings: { visible: true, vectorsVisible: true, vectorAlphaPercent: 65 },
+      vectorLayersEnabled: true,
+      vectorOpacityScale: 0.92,
+      fieldModel: {
+        ...fieldModel,
+        targetPasses: new Map([
+          ...fieldModel.targetPasses,
+          ["part-airbox", {
+            fieldBuffer: null,
+            fieldBufferState: "missing",
+            surface: { passId: "airbox-surface", scalarColorMode: null, scalarColors: null, degradation: null },
+            vectors: { passId: "airbox-vectors", buildReference: null, segments, glyphColors: colors, degradation: null },
+          }],
+        ]),
+      },
+    });
+    const visibleVectors = visibleAirbox.targets.find(({ role }) => role === "airbox")?.renderedVectors;
+    expect(visibleVectors).toMatchObject({ segmentsM: Float32Array.of(...segments, 1), colors });
+    expect(visibleVectors?.opacity).toBeCloseTo(0.65 * 0.92);
+    const exported = await executeViewportModelExport({
+      source: visibleAirbox,
+      format: "glb",
+      filename: "airbox-vectors",
+      includeAirbox: defaultIncludeAirboxForSource(visibleAirbox),
+      includeVectors: defaultIncludeVectorsForSource(visibleAirbox),
+      animate: false,
+      signal: new AbortController().signal,
+    });
+    expect(exported.stats.arrowCount).toBe(1);
+
+    for (const topologyModel of [
+      undefined,
+      { ...input.topologyModel!, magneticParts: [], airboxParts: [] },
+    ]) {
+      const fallback = extractViewport3DExportSource({
+        ...input,
+        topologyModel,
+        vectorLayersEnabled: true,
+        fieldVector: input.fieldModel?.targetPasses.get("part-magnet")?.fieldBuffer?.decodedFieldVector,
+        fallbackSettings: { vectorsVisible: false },
+      });
+      expect(fallback.targets).toHaveLength(1);
+      expect(fallback.targets[0]?.renderedVectors).toBeNull();
+      expect(defaultIncludeVectorsForSource(fallback)).toBe(false);
+    }
+
+    const magneticPass = fieldModel.targetPasses.get("part-magnet")!;
+    const complexSource = extractViewport3DExportSource({
+      ...input,
+      vectorLayersEnabled: false,
+      analysisComplexField: {
+        componentCount: 3,
+        dtype: "complex128",
+        grid: [4, 1, 1],
+        pointCount: 4,
+        quantityId: "mode",
+        valueCount: 12,
+        values: new Float64Array(24).fill(1),
+        nodeIndices: new Uint32Array([0, 1, 2, 3]),
+      },
+      fieldModel: {
+        ...fieldModel,
+        targetPasses: new Map([["part-magnet", {
+          ...magneticPass,
+          vectors: { ...magneticPass.vectors, complexGlyphs: {} as never },
+        }]]),
+      },
+    });
+    expect(complexSource.targets[0]?.field?.kind).toBe("complex");
+    expect(complexSource.targets[0]?.renderedVectors).toBeNull();
+    expect(defaultIncludeVectorsForSource(complexSource)).toBe(false);
   });
 
   it("falls back to authored primitive objects with world coordinates and magnetization previews", async () => {
