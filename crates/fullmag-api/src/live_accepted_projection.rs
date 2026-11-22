@@ -285,6 +285,7 @@ struct DurableProjection {
     terminal_without_outputs: bool,
     status: &'static str,
     frequency_response_root: Option<std::path::PathBuf>,
+    transport_fields_root: Option<std::path::PathBuf>,
     accepted_runtime_capabilities: Option<fullmag_runner::BackendCapabilities>,
     accepted_runtime_mode: Option<fullmag_ir::ExecutionMode>,
     accepted_runtime_problem: Option<fullmag_ir::ProblemIR>,
@@ -1043,6 +1044,9 @@ fn load_durable_projection_with_journal(
     } else {
         None
     };
+    let transport_fields_root = durable_changed.then(|| {
+        completed_transport_fields_root(&store, &run_catalog, &task_order)
+    }).flatten();
     let verified = {
         let _elapsed = ProjectionPhaseTimer::new("verified_outputs");
         if durable_changed {
@@ -1226,6 +1230,7 @@ fn load_durable_projection_with_journal(
         terminal_without_outputs,
         status,
         frequency_response_root,
+        transport_fields_root,
         accepted_runtime_capabilities: None,
         accepted_runtime_mode: None,
         accepted_runtime_problem,
@@ -2534,6 +2539,30 @@ pub(crate) async fn read_current_accepted_frequency_progress(
     Ok(progress)
 }
 
+fn completed_transport_fields_root(
+    store: &fullmag_session::SessionStore,
+    run: &fullmag_session::FmsRunCatalog,
+    task_order: &std::collections::BTreeMap<String, usize>,
+) -> Option<std::path::PathBuf> {
+    use fullmag_session::FmsTaskLifecycle;
+
+    run.tasks
+        .iter()
+        .filter(|task| task.lifecycle == FmsTaskLifecycle::Succeeded)
+        .filter_map(|task| {
+            let order = *task_order.get(&task.task_id)?;
+            let root = crate::accepted_study_worker::existing_private_attempt_output_dir_for_identity(
+                store, &run.run_id, &task.task_id, task.attempt_id.as_deref()?, task.ownership_epoch?,
+            ).ok()?;
+            ["spin_current_tensor", "torque_stt"].iter().any(|quantity| {
+                crate::router_v2::handlers::data::fields::transport_artifact_frame(&root, quantity)
+                    .is_ok_and(|frame| frame.is_some())
+            }).then_some((order, root))
+        })
+        .max_by_key(|(order, _)| *order)
+        .map(|(_, root)| root)
+}
+
 fn completed_frequency_response_root(
     store: &fullmag_session::SessionStore,
     context: &ProjectionContext,
@@ -3733,10 +3762,13 @@ async fn apply_projection(
     let mut changed = profile_changed;
     let mut scalar_sample_advanced = false;
     if let Some(run) = next.run.as_mut() {
-        if let Some(root) = &projection.frequency_response_root {
-            let root = root.to_str().ok_or_else(|| ApiError::conflict("non-UTF8 response artifact root"))?;
+        if let Some(root) = projection.frequency_response_root.as_ref().or(projection.transport_fields_root.as_ref()) {
+            let root = root.to_str().ok_or_else(|| ApiError::conflict("non-UTF8 accepted artifact root"))?;
             if run.artifact_dir != root {
                 run.artifact_dir = root.to_owned();
+                if projection.transport_fields_root.is_some() {
+                    next.field_catalog_revision = next.field_catalog_revision.wrapping_add(1);
+                }
                 changed = true;
             }
         }

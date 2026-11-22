@@ -30,6 +30,7 @@ struct CapturedPayload {
     spin_faces_view: fullmag_fdm_gpu_transport_buffer_view_v1,
     formula_ids_view: fullmag_fdm_gpu_transport_buffer_view_v1,
     first_cell: ffi::fullmag_fdm_gpu_transport_spin_cell_v1,
+    cells: Vec<ffi::fullmag_fdm_gpu_transport_spin_cell_v1>,
     first_material: ffi::fullmag_fdm_gpu_transport_spin_material_v1,
     first_interface: ffi::fullmag_fdm_gpu_transport_spin_interface_v1,
     first_charge_face: ffi::fullmag_fdm_gpu_transport_charge_face_v1,
@@ -271,6 +272,7 @@ impl GpuM1TransportAbi for FakeAbi {
             spin_faces_view,
             formula_ids_view,
             first_cell: unsafe { first_record(cells_view) },
+            cells: unsafe { copied_records(cells_view) },
             first_material: unsafe { first_record(materials_view) },
             first_interface: unsafe { first_record(interfaces_view) },
             first_charge_face: unsafe { first_record(charge_faces_view) },
@@ -1282,7 +1284,7 @@ fn create_guard_retries_failed_destroy_after_missing_features() {
 }
 
 #[test]
-fn mixing_interface_requires_exact_to_cell_magnetic_torque_owner() {
+fn mixing_interface_requires_exact_to_cell_magnetic_owner() {
     for ownership in ["from_only", "both", "none"] {
         let mut plan = planned_public_gpu_m1();
         let descriptor = plan.spin_transport_plans[0]
@@ -1334,6 +1336,26 @@ fn mixing_interface_requires_exact_to_cell_magnetic_torque_owner() {
         Err(GpuM1TransportError::InvalidDescriptor(message))
             if message.contains("mixing interface requires exactly to_cell")
     ));
+}
+
+#[test]
+fn mixing_interface_preserves_spin_law_when_magnetic_cell_excludes_llg_torque() {
+    let mut plan = planned_public_gpu_m1();
+    let descriptor = plan.spin_transport_plans[0].fdm_gpu_double.as_mut().unwrap();
+    let to = descriptor.interfaces[0].to_cell as usize;
+    assert!(descriptor.magnetic_active_mask[to]);
+    assert!(descriptor.torque_target_cells[to]);
+    descriptor.torque_target_cells[to] = false;
+    descriptor.torque_target_masks[0].active_mask = descriptor.torque_target_cells.clone();
+
+    let prepared = PreparedGpuM1Descriptor::from_plan(&plan, 0).unwrap();
+    let abi = FakeAbi::default();
+    let mut session = GpuM1TransportSession::create(abi.clone(), prepared).unwrap();
+    session.close().unwrap();
+    let payload = abi.payload();
+    let interface = payload.interfaces.iter().find(|record| record.to_cell as usize == to).unwrap();
+    assert_eq!(interface.kind, ffi::FULLMAG_FDM_GPU_TRANSPORT_SPIN_INTERFACE_MIXING_CONDUCTANCE_V2);
+    assert_eq!(payload.cells[to].torque_target, 0);
 }
 
 #[test]

@@ -1240,13 +1240,11 @@ fn materialize_interfaces(
         {
             let from = interface.from_cell as usize;
             let to = interface.to_cell as usize;
-            if descriptor.magnetic_active_mask[from]
-                || descriptor.torque_target_cells[from]
-                || !descriptor.magnetic_active_mask[to]
-                || !descriptor.torque_target_cells[to]
-            {
+            // The mixing law follows the magnetic interface. The separate
+            // torque target mask controls only which cells receive the LLG term.
+            if descriptor.magnetic_active_mask[from] || !descriptor.magnetic_active_mask[to] {
                 return Err(invalid(
-                    "GPU M1 mixing interface requires exactly to_cell to be the magnetic torque owner",
+                    "GPU M1 mixing interface requires exactly to_cell to be magnetic",
                 ));
             }
             let magnetization = initial_magnetization[to];

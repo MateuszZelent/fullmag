@@ -1695,7 +1695,7 @@ pub(crate) fn existing_private_attempt_output_dir(
     )
 }
 
-fn existing_private_attempt_output_dir_for_identity(
+pub(crate) fn existing_private_attempt_output_dir_for_identity(
     store: &SessionStore,
     run_id: &str,
     task_id: &str,
@@ -3391,6 +3391,9 @@ fn execute_accepted_worker_start_with_snapshot(
                 terminal_stats_is_recordable(stats, reference, &accepted_step.claim)
             })
         });
+        // Transport lanes can publish completed outputs without an exact
+        // observation state. Keep state-bound completion metadata optional.
+        let completion = result.completion.filter(|_| accepted_state_ref.is_some());
         let observation_source = collect_fdm_cpu_observation_source(
             &attempt_output_dir,
             accepted_step,
@@ -3420,7 +3423,7 @@ fn execute_accepted_worker_start_with_snapshot(
             observation_source.as_ref(),
             terminal_publication.as_ref(),
             terminal_stats.as_ref(),
-            result.completion.as_ref(),
+            completion.as_ref(),
         )
         .context("persist immutable completed worker output receipt")?;
 
@@ -3434,7 +3437,7 @@ fn execute_accepted_worker_start_with_snapshot(
             accepted_state_ref,
             observation_source,
             terminal_stats,
-            completion: result.completion,
+            completion,
         })
     })();
     let storage_result = if let Some(storage) = &mut storage {

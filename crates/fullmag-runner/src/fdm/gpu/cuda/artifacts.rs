@@ -1107,7 +1107,7 @@ mod tests {
         .expect("start temporary stage-autosave pipeline");
         let sender = pipeline.sender();
         assert!(sender.has_accepted_step_autosave_schedules());
-        let mut recorder = ArtifactRecorder::streaming(ExecutionProvenance::default(), sender);
+        let mut recorder = ArtifactRecorder::streaming(crate::ExecutionProvenance::default(), sender);
         assert!(recorder.accepted_step_table_due(0));
         assert!(!recorder.accepted_step_table_due(9));
         assert!(recorder.accepted_step_table_due(10));
