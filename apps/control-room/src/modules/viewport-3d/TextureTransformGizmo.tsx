@@ -2013,10 +2013,11 @@ function AuthoredMagnetizationPersistentSurface({
       }}
     >
       <meshBasicMaterial
+        depthWrite={false}
         opacity={opacity}
         polygonOffset
-        polygonOffsetFactor={0.5}
-        polygonOffsetUnits={0.5}
+        polygonOffsetFactor={-1}
+        polygonOffsetUnits={-1}
         toneMapped={false}
         transparent
         vertexColors

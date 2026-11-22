@@ -2786,7 +2786,7 @@ def builder_overrides_from_scene_document(scene: dict[str, Any]) -> dict[str, An
                 )
             unsupported_visualization_fields = sorted(
                 str(name)
-                for name in set(visualization_hint) - {"airbox"}
+                for name in set(visualization_hint) - {"airbox", "material_constitutive"}
             )
             if unsupported_visualization_fields:
                 names = ", ".join(unsupported_visualization_fields)
@@ -2794,9 +2794,10 @@ def builder_overrides_from_scene_document(scene: dict[str, Any]) -> dict[str, An
                     "SceneDocument.study.visualization_hint has unsupported fields: "
                     f"{names}"
                 )
-            overrides["visualization_hint"] = copy.deepcopy(
-                dict(visualization_hint)
-            )
+            if "airbox" in visualization_hint:
+                overrides["visualization_hint"] = {
+                    "airbox": copy.deepcopy(visualization_hint["airbox"])
+                }
     if isinstance(raw_study, Mapping) and "pbc" in raw_study:
         # Missing is no override; explicit null intentionally clears PBC.
         overrides["pbc"] = copy.deepcopy(builder["pbc"])

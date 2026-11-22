@@ -1020,8 +1020,10 @@ def _reject_unrendered_scene_stage_fields(
         if key not in common_fields | rendered_fields
         and _has_scene_stage_content(value)
         # The typed stage state serializes unset eigenmode/frequency flags as
-        # ``false`` on every stage kind; that is absence, not authored intent.
+        # ``false`` on every stage kind, and active stages as ``enabled: true``;
+        # neither changes the rendered stage semantics.
         and not (value is False and key.startswith(("eigen_", "frequency_")))
+        and not (key == "enabled" and value is True)
     )
     if unsupported:
         names = ", ".join(unsupported)

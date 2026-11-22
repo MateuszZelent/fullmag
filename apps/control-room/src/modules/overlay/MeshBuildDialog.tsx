@@ -101,6 +101,10 @@ export function MeshBuildDialog({ kernel }: { kernel: KernelApi }) {
     runtimeStatus?.capabilities.active_lane ?? null,
     "shared_mesh_build",
   );
+  const fdmGridBuildOperation = resolveActiveLaneOperation(
+    runtimeStatus?.capabilities.active_lane ?? null,
+    "grid_build",
+  );
   const explicitFemLane = shouldLoadMeshBuildDialogFemResources(
     state.open,
     lane,
@@ -258,7 +262,13 @@ export function MeshBuildDialog({ kernel }: { kernel: KernelApi }) {
     const bounds = fdmDomain.data?.bounds;
     const min = tuple3(bounds?.min);
     const max = tuple3(bounds?.max);
-    if (min && max) return { min, max };
+    if (
+      min &&
+      max &&
+      (max[0] > min[0] || max[1] > min[1] || max[2] > min[2])
+    ) {
+      return { min, max };
+    }
     const objects = scene.data?.objects;
     if (!objects || objects.length === 0) return null;
     let minX = Infinity;
@@ -288,8 +298,22 @@ export function MeshBuildDialog({ kernel }: { kernel: KernelApi }) {
       : null;
   }, [fdmDomain.data?.bounds, scene.data?.objects]);
 
-  const gridSpacing = tuple3(fdmDomain.data?.grid?.spacing);
-  const gridShape = tuple3(fdmDomain.data?.grid?.shape);
+  const rawAuthoredFdmCell = asRecord(asRecord(asRecord(scene.data)?.study)?.fdm)?.default_cell;
+  const authoredFdmCell = tuple3(
+    Array.isArray(rawAuthoredFdmCell)
+      ? rawAuthoredFdmCell.filter((v): v is number => typeof v === "number")
+      : null,
+  );
+  const gridSpacing = tuple3(fdmDomain.data?.grid?.spacing) ?? authoredFdmCell;
+  const gridShape =
+    tuple3(fdmDomain.data?.grid?.shape) ??
+    (geometryBounds && gridSpacing && gridSpacing.every((v) => v > 0)
+      ? ([
+          Math.max(1, Math.ceil((geometryBounds.max[0] - geometryBounds.min[0]) / gridSpacing[0] - 1e-9)),
+          Math.max(1, Math.ceil((geometryBounds.max[1] - geometryBounds.min[1]) / gridSpacing[1] - 1e-9)),
+          Math.max(1, Math.ceil((geometryBounds.max[2] - geometryBounds.min[2]) / gridSpacing[2] - 1e-9)),
+        ] as [number, number, number])
+      : null);
   const gridTotalCells = gridShape ? gridShape[0] * gridShape[1] * gridShape[2] : null;
   const gridMemoryMB = gridTotalCells != null ? (gridTotalCells * 4) / (1024 * 1024) : null;
 
@@ -368,8 +392,16 @@ export function MeshBuildDialog({ kernel }: { kernel: KernelApi }) {
     dispatch({ open: false, type: "open" });
   }
 
+  const isFdmGridBuildRequest =
+    lane === "fdm" &&
+    (state.request?.commandId === "grid.build-fdm" ||
+      state.acceptedCommandId === "grid.build-fdm");
+  const activeBuildOperation = isFdmGridBuildRequest
+    ? fdmGridBuildOperation
+    : buildOperation;
+
   function confirmBuild(): void {
-    if (!state.request?.requestId || !stableSnapshotBefore || !snapshotCurrent || !buildOperation.enabled || state.phase !== "pre-build") return;
+    if (!state.request?.requestId || !stableSnapshotBefore || !snapshotCurrent || !activeBuildOperation.enabled || state.phase !== "pre-build") return;
     dispatch({ type: "submitting" });
     kernel.bus.emit("mesh:build-confirm-resolved", { requestId: state.request.requestId, confirmed: true, precondition: { scene_revision: stableSnapshotBefore.sceneRevision, mesh_revision: stableSnapshotBefore.meshRevision } });
   }
@@ -458,7 +490,7 @@ export function MeshBuildDialog({ kernel }: { kernel: KernelApi }) {
                 closeDialog();
                 openMeshBuildDiagnostics(kernel);
               }}
-              ready={snapshotCurrent && buildOperation.enabled}
+              ready={snapshotCurrent && fdmGridBuildOperation.enabled}
               rendered={state.lastCommandStatus === "rendered"}
               sceneRevision={sceneRevision}
               stale={stableSnapshotBefore !== null && !snapshotCurrent}

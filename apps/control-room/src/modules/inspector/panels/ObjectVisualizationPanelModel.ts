@@ -2258,9 +2258,11 @@ export function visualizationQuantityItems(
         )
       : fieldItems;
   const targetAwareItems = baseItems.map((item) => {
-    const availability = targetAvailability?.get(
-      resolveCanonicalQuantityId(item.value),
-    );
+    const canonicalId = resolveCanonicalQuantityId(item.value);
+    if (authoredMagnetizationAvailable && targetKind !== "airbox" && canonicalId === "m") {
+      return item;
+    }
+    const availability = targetAvailability?.get(canonicalId);
     return availability && !targetFieldAvailabilityIsSelectable(availability)
       ? { ...item, disabled: true }
       : item;
