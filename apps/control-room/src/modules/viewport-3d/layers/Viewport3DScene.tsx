@@ -38,6 +38,7 @@ import {
   useMemo,
   useRef,
   useState,
+  useSyncExternalStore,
   type RefObject,
 } from "react";
 import {
@@ -193,7 +194,15 @@ import type { Viewport3DVectorBuildReference } from "../viewport3dRenderModel";
 import { FrozenSpinsOverlay } from "./FrozenSpinsOverlay";
 import { type FrozenSpinsOverlayModel } from "./FrozenSpinsOverlay.model";
 import { Viewport3DMoveToolLayer, type Translation3 } from "../MoveObjectGizmo";
-import { Viewport3DTextureTransformLayer } from "../TextureTransformGizmo";
+import {
+  Viewport3DTextureTransformLayer,
+  type Viewport3DTextureTransformModel,
+} from "../TextureTransformGizmo";
+import {
+  getTextureDraftBridgeSnapshot,
+  isTextureGizmoHandleModeActive,
+  subscribeTextureDraftBridge,
+} from "@/shared/domain/magnetization-texture/textureDraftBridge";
 
 const EMPTY_REGION_OVERLAYS: readonly RegionOverlayInput[] = [];
 
@@ -311,6 +320,7 @@ interface Viewport3DSceneProps {
   selectionBounds: Viewport3DBounds | null;
   selectedObjectId: string | null;
   selectedRegionId: string | null;
+  textureTransformModel: Viewport3DTextureTransformModel;
   tracker: Viewport3DResourceTracker;
   topologyFreshness: Viewport3DTopologyFreshness;
   topologyIndexStatus: "idle" | "building" | "ready" | "unavailable";
@@ -1258,6 +1268,7 @@ function Viewport3DModelLayerStack({
   regionOverlays,
   selectedObjectId,
   selectedRegionId,
+  textureTransformModel,
   topologyFreshness,
   topology,
   topologyModel,
@@ -1324,6 +1335,7 @@ function Viewport3DModelLayerStack({
   | "regionOverlays"
   | "selectedObjectId"
   | "selectedRegionId"
+  | "textureTransformModel"
   | "topology"
   | "topologyFreshness"
   | "topologyModel"
@@ -1604,6 +1616,7 @@ function Viewport3DModelLayerStack({
         onGestureActiveChange={onMoveGestureActiveChange}
         primitiveModel={primitiveModel}
         selectedObjectId={selectedObjectId}
+        textureTransformModel={textureTransformModel}
         tracker={tracker}
       />
       {topologyLayerEnabled ? (
@@ -1750,6 +1763,7 @@ function Viewport3DInteractionAndHudStack({
   orbitDebugCommitRevision,
   orbitDebugRevision,
   rotationMode,
+  selectedObjectId,
   tracker,
   viewCubeVisible,
   moveGestureActive,
@@ -1770,6 +1784,7 @@ function Viewport3DInteractionAndHudStack({
   | "orbitDebugCommitRevision"
   | "orbitDebugRevision"
   | "rotationMode"
+  | "selectedObjectId"
   | "tracker"
   | "viewCubeVisible"
 > & {
@@ -1777,6 +1792,16 @@ function Viewport3DInteractionAndHudStack({
   moveGestureActive: boolean;
   quantitativeDataVisible: boolean;
 }) {
+  const textureBridge = useSyncExternalStore(
+    subscribeTextureDraftBridge,
+    getTextureDraftBridgeSnapshot,
+    getTextureDraftBridgeSnapshot,
+  );
+  const gizmoRotateLocked = isTextureGizmoHandleModeActive(
+    textureBridge,
+    selectedObjectId,
+  );
+
   return (
     <>
       <OrbitCameraControls
@@ -1793,7 +1818,8 @@ function Viewport3DInteractionAndHudStack({
         onCameraInteractionStart={onCameraInteractionStart}
         orbitDebugStore={orbitDebugStore}
         tracker={tracker}
-        interactionBlocked={moveGestureActive}
+        interactionBlocked={moveGestureActive || textureBridge.gestureActive}
+        rotateLocked={gizmoRotateLocked}
         rotationMode={rotationMode}
       />
       {viewport3DOrientationHudEnabledFromBrowserConfig() ? (
@@ -1968,6 +1994,7 @@ export function Viewport3DScene({
   selectionBounds,
   selectedObjectId,
   selectedRegionId,
+  textureTransformModel,
   tracker,
   topology,
   topologyFreshness,
@@ -2459,6 +2486,7 @@ export function Viewport3DScene({
         regionOverlays={regionOverlays}
         selectedObjectId={selectedObjectId}
         selectedRegionId={selectedRegionId}
+        textureTransformModel={textureTransformModel}
         sceneLayersEnabled={sceneLayersEnabled}
         savedViewportActive={savedViewportActive}
         stageVisibility={stageVisibility}
@@ -2527,6 +2555,7 @@ export function Viewport3DScene({
         onCameraInteractionStart={onCameraInteractionStart}
         orbitDebugStore={orbitDebugStore}
         rotationMode={rotationMode}
+        selectedObjectId={selectedObjectId}
         tracker={tracker}
         viewCubeVisible={viewCubeVisible}
         moveGestureActive={moveGestureActive}

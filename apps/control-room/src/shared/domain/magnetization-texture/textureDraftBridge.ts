@@ -110,12 +110,13 @@ export function registerTextureInspectorBinding(
 export function unregisterTextureInspectorBinding(owner: symbol): void {
   if (bindingOwner !== owner) return;
   bindingOwner = null;
-  if (currentSnapshot.gestureActive) {
-    currentUiSnapshot = {
-      ...currentUiSnapshot,
-      gestureActive: false,
-    };
-  }
+  currentUiSnapshot = {
+    ...currentUiSnapshot,
+    gizmoEnabled: false,
+    gizmoMode: "view",
+    transformScope: "object",
+    gestureActive: false,
+  };
   currentSnapshot = {
     ...currentUiSnapshot,
     activeBinding: null,
@@ -123,23 +124,61 @@ export function unregisterTextureInspectorBinding(owner: symbol): void {
   emit();
 }
 
+export function resolveActiveTextureGizmoMode(
+  snapshot: Pick<TextureInspectorUiSnapshot, "gizmoEnabled" | "gizmoMode">,
+): TextureGizmoMode {
+  return snapshot.gizmoEnabled ? snapshot.gizmoMode : "view";
+}
+
+export function isTextureGizmoHandleModeActive(
+  snapshot: TextureDraftBridgeSnapshot,
+  selectedObjectId?: string | null,
+): boolean {
+  if (!snapshot.gizmoEnabled || snapshot.gizmoMode === "view") return false;
+  const binding = snapshot.activeBinding;
+  if (!binding) return false;
+  if (selectedObjectId && binding.target.objectId !== selectedObjectId) return false;
+  if (
+    binding.target.kind === "region" &&
+    binding.draft.inheritanceMode === "inherit"
+  ) {
+    return false;
+  }
+  if (binding.draft.sourceMode === "field-file") {
+    return false;
+  }
+  return true;
+}
+
 export function toggleTextureGizmo(force?: boolean): boolean {
   const nextEnabled = force ?? !currentUiSnapshot.gizmoEnabled;
+  const nextMode: TextureGizmoMode =
+    nextEnabled && currentUiSnapshot.gizmoMode === "view"
+      ? "translate"
+      : currentUiSnapshot.gizmoMode;
   commitUiSnapshot({
     ...currentUiSnapshot,
     gizmoEnabled: nextEnabled,
-    transformScope: nextEnabled ? "texture" : currentUiSnapshot.transformScope,
+    gizmoMode: nextMode,
+    transformScope: nextEnabled ? "texture" : "object",
   });
   return nextEnabled;
 }
 
 export function setTextureGizmoMode(mode: TextureGizmoMode): void {
-  if (currentUiSnapshot.gizmoMode === mode && currentUiSnapshot.gizmoEnabled) return;
+  const nextScope: TransformScopeMode = mode === "view" ? "object" : "texture";
+  if (
+    currentUiSnapshot.gizmoMode === mode &&
+    currentUiSnapshot.gizmoEnabled &&
+    currentUiSnapshot.transformScope === nextScope
+  ) {
+    return;
+  }
   commitUiSnapshot({
     ...currentUiSnapshot,
     gizmoEnabled: true,
     gizmoMode: mode,
-    transformScope: "texture",
+    transformScope: nextScope,
   });
 }
 
@@ -220,12 +259,6 @@ export function handleTextureGizmoShortcutKey(rawKey: string): boolean {
   if (key === "t") {
     toggleTextureGizmo();
     return true;
-  }
-  if (!currentSnapshot.gizmoEnabled && currentSnapshot.activeBinding === null) {
-    return false;
-  }
-  if (!currentSnapshot.gizmoEnabled) {
-    return false;
   }
   if (key === "q") {
     setTextureGizmoMode("view");

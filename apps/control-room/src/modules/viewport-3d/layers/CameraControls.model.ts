@@ -137,8 +137,16 @@ export function installScaleAwareOrbitChange(
   };
 }
 
-export function resolveViewport3DCameraInteractionOptions(): Viewport3DCameraInteractionOptions {
-  return VIEWPORT_3D_CAMERA_INTERACTION_OPTIONS;
+export function resolveViewport3DCameraInteractionOptions(
+  overrides?: { rotateLocked?: boolean },
+): Viewport3DCameraInteractionOptions {
+  if (!overrides?.rotateLocked) {
+    return VIEWPORT_3D_CAMERA_INTERACTION_OPTIONS;
+  }
+  return {
+    ...VIEWPORT_3D_CAMERA_INTERACTION_OPTIONS,
+    enableRotate: false,
+  };
 }
 
 export function shouldSyncCameraControlsPose({

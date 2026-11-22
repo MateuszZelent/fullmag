@@ -1,16 +1,29 @@
 "use client";
 
-import type { ThreeEvent } from "@react-three/fiber";
-import { useEffect, useMemo, useSyncExternalStore } from "react";
+import { useThree, type ThreeEvent } from "@react-three/fiber";
+import {
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from "react";
 import {
   BufferAttribute,
   BufferGeometry,
+  DoubleSide,
   Plane,
+  Raycaster,
+  Vector2,
   Vector3,
+  type Camera,
+  type Group,
+  type Object3D,
   type Ray,
 } from "three";
 
-import { useSceneResource } from "@/kernel/resources/geometryLifecycleResources";
+import type { SceneResource } from "@/kernel/api/apiTypes";
 import type { TargetMetricBounds, Vec3 } from "@/shared/domain/magnetization-texture/boundsResolver";
 import { resolveTargetBoundsMeters } from "@/shared/domain/magnetization-texture/boundsResolver";
 import {
@@ -30,6 +43,7 @@ import {
   endTextureGizmoGesture,
   getTextureDraftBridgeSnapshot,
   handleTextureGizmoShortcutKey,
+  isTextureGizmoHandleModeActive,
   patchActiveTextureDraft,
   subscribeTextureDraftBridge,
   type TextureGizmoMode,
@@ -42,9 +56,11 @@ import { useBatchedInvalidate } from "./viewport3dBatchedInvalidate";
 import type { Viewport3DResourceTracker } from "./viewport3dDiagnostics";
 import {
   sampleViewport3DSurfaceHslColors,
+  type SampleViewport3DSurfaceHslOptions,
   type Viewport3DPrimitiveObject,
   type Viewport3DPrimitiveRenderModel,
 } from "./viewport3dPrimitiveModel";
+import type { Viewport3DColors } from "./viewport3dTypes";
 
 export type GizmoAxis = "x" | "y" | "z";
 export type GizmoPlane = "xy" | "xz" | "yz";
@@ -564,11 +580,62 @@ export function buildSubdividedSurfacePreviewData(
   };
 }
 
+export type GizmoHandleMode = Exclude<TextureGizmoMode, "view">;
+export type AnyGizmoHandleId = TranslateHandleId | GizmoAxis | ScaleHandleId;
+
+export interface GizmoHandleDescriptor {
+  readonly mode: GizmoHandleMode;
+  readonly handle: AnyGizmoHandleId;
+  readonly key: string;
+  readonly priority?: number;
+}
+
+export type PickedTextureGizmoTarget =
+  | {
+      readonly kind: "handle";
+      readonly mode: GizmoHandleMode;
+      readonly handle: AnyGizmoHandleId;
+      readonly key: string;
+      readonly point: Vec3;
+    }
+  | {
+      readonly kind: "center-anchor";
+      readonly point: Vec3;
+    };
+
+export interface GizmoDomCanvasLike {
+  getBoundingClientRect: () => { left: number; top: number; width: number; height: number };
+  setPointerCapture?: (pointerId: number) => void;
+  releasePointerCapture?: (pointerId: number) => void;
+  addEventListener?: HTMLElement["addEventListener"];
+  removeEventListener?: HTMLElement["removeEventListener"];
+  style?: { cursor: string };
+}
+
+export interface GizmoWindowTargetLike {
+  addEventListener: Window["addEventListener"];
+  removeEventListener: Window["removeEventListener"];
+}
+
+export interface TextureGizmoLiveDragContext {
+  readonly camera: Camera;
+  readonly canvas: GizmoDomCanvasLike | null;
+  readonly controls: { enabled?: boolean } | null;
+  readonly draft: MagneticTextureDraft;
+  readonly pose: TextureGizmoWorldPose;
+  readonly windowTarget: GizmoWindowTargetLike | null;
+  readonly onGestureActiveChange?: (active: boolean) => void;
+  readonly onActiveKeyChange?: (key: string | null) => void;
+  readonly invalidate: () => void;
+}
+
 interface ActiveDragSession {
   pointerId: number;
-  mode: Exclude<TextureGizmoMode, "view">;
-  handle: TranslateHandleId | GizmoAxis | ScaleHandleId;
+  mode: GizmoHandleMode;
+  handle: AnyGizmoHandleId;
+  key: string;
   dragPlane: Plane;
+  uniformDiagAxis: Vec3;
   startPoint: Vec3;
   startTranslationM: Vec3;
   startQuat: Quat4;
@@ -577,29 +644,13 @@ interface ActiveDragSession {
   uniformLocked: boolean;
   originWorld: Vec3;
   handleLength: number;
-  releaseCapture: (pointerId: number) => void;
+  prevControlsEnabled: boolean;
+  cleanupWindowListeners: () => void;
 }
 
-function createGizmoDragStore() {
-  let activeSession: ActiveDragSession | null = null;
-  return {
-    get(): ActiveDragSession | null {
-      return activeSession;
-    },
-    set(next: ActiveDragSession | null): void {
-      activeSession = next;
-    },
-    clear(): boolean {
-      if (!activeSession) return false;
-      activeSession = null;
-      return true;
-    },
-  };
-}
-
-function resolveDragPlaneNormal(
-  mode: Exclude<TextureGizmoMode, "view">,
-  handle: TranslateHandleId | GizmoAxis | ScaleHandleId,
+export function resolveDragPlaneNormal(
+  mode: GizmoHandleMode,
+  handle: AnyGizmoHandleId,
   rayDirection?: Vector3,
 ): Vector3 {
   if (mode === "rotate") {
@@ -610,10 +661,46 @@ function resolveDragPlaneNormal(
   if (handle === "xy") return new Vector3(0, 0, 1);
   if (handle === "xz") return new Vector3(0, 1, 0);
   if (handle === "yz") return new Vector3(1, 0, 0);
-  if (rayDirection && rayDirection.lengthSq() > 1e-12) {
-    return rayDirection.clone().normalize();
+
+  const viewDir =
+    rayDirection && rayDirection.lengthSq() > 1e-12
+      ? rayDirection.clone().normalize()
+      : new Vector3(0, 0, -1);
+
+  if (handle === "x" || handle === "y" || handle === "z") {
+    const axisVec =
+      handle === "x"
+        ? new Vector3(1, 0, 0)
+        : handle === "y"
+          ? new Vector3(0, 1, 0)
+          : new Vector3(0, 0, 1);
+    const perp = new Vector3().crossVectors(axisVec, viewDir);
+    if (perp.lengthSq() > 1e-6) {
+      return new Vector3().crossVectors(perp, axisVec).normalize();
+    }
+    return handle === "z" ? new Vector3(1, 0, 0) : new Vector3(0, 0, 1);
   }
-  return new Vector3(0, 0, 1);
+
+  return viewDir;
+}
+
+function resolveCameraDiagonalAxis(camera: Camera): Vec3 {
+  camera.updateMatrixWorld();
+  const e = camera.matrixWorld.elements;
+  const rx = e[0] ?? 1;
+  const ry = e[1] ?? 0;
+  const rz = e[2] ?? 0;
+  const ux = e[4] ?? 0;
+  const uy = e[5] ?? 1;
+  const uz = e[6] ?? 0;
+  const dx = rx + ux;
+  const dy = ry + uy;
+  const dz = rz + uz;
+  const len = Math.hypot(dx, dy, dz);
+  if (len > 1e-9) {
+    return [dx / len, dy / len, dz / len];
+  }
+  return [Math.SQRT1_2, Math.SQRT1_2, 0];
 }
 
 function extractEventPoint(event: ThreeEvent<PointerEvent>, fallback: Vec3): Vec3 {
@@ -633,222 +720,90 @@ function intersectRayOrFallback(ray: Ray | undefined, plane: Plane, fallback: Ve
   return fallback;
 }
 
-export function Viewport3DTextureTransformLayer({
-  onGestureActiveChange,
-  primitiveModel,
-  selectedObjectId,
-  tracker,
-}: {
-  onGestureActiveChange?: (active: boolean) => void;
-  primitiveModel: Viewport3DPrimitiveRenderModel | null;
-  selectedObjectId: string | null;
-  tracker?: Viewport3DResourceTracker;
-}) {
-  const bridge = useSyncExternalStore(
-    subscribeTextureDraftBridge,
-    getTextureDraftBridgeSnapshot,
-    getTextureDraftBridgeSnapshot,
-  );
-  const scene = useSceneResource();
-  const { colors } = useViewport3DColors();
-  const invalidate = useBatchedInvalidate();
-  const dragStore = useMemo(() => createGizmoDragStore(), []);
-
-  useEffect(() => {
-    if (typeof window === "undefined") return undefined;
-    return installTextureGizmoKeyboardShortcuts(window);
-  }, []);
-
-  useEffect(() => {
-    onGestureActiveChange?.(bridge.gestureActive);
-  }, [bridge.gestureActive, onGestureActiveChange]);
-
-  useEffect(
-    () => () => {
-      if (dragStore.clear()) {
-        endTextureGizmoGesture();
-      }
-    },
-    [dragStore],
-  );
-
-  const selectedObject = useMemo(() => {
-    if (!selectedObjectId || !primitiveModel?.objects.length) return null;
-    return (
-      primitiveModel.objects.find((candidate) => candidate.objectId === selectedObjectId) ??
-      null
-    );
-  }, [primitiveModel, selectedObjectId]);
-
-  const bindingMatchesObject = Boolean(
-    selectedObject &&
-      bridge.activeBinding &&
-      bridge.activeBinding.target.objectId === selectedObject.objectId,
-  );
-
-  const effectiveDraftAndBounds = useMemo((): {
-    draft: MagneticTextureDraft;
-    bounds: TargetMetricBounds;
-  } | null => {
-    if (!selectedObject) return null;
-    if (bindingMatchesObject && bridge.activeBinding) {
-      return {
-        draft: bridge.activeBinding.draft,
-        bounds: bridge.activeBinding.bounds,
-      };
-    }
-    if (!bridge.gizmoEnabled || !scene.data) return null;
-    const objTarget = { kind: "object" as const, objectId: selectedObject.objectId };
-    const bounds = resolveTargetBoundsMeters(scene.data, objTarget);
-    const sceneObj = scene.data.objects?.find((entry) => entry.id === selectedObject.objectId);
-    const asset = scene.data.magnetization_assets?.find(
-      (entry) => entry.id === sceneObj?.magnetization_ref,
-    );
-    const draft = hydrateMagneticTextureDraftFromInitializer(asset, bounds, "object");
-    return { draft, bounds };
-  }, [bindingMatchesObject, bridge.activeBinding, bridge.gizmoEnabled, scene.data, selectedObject]);
-
-  const showSurfacePreview = Boolean(
-    selectedObject &&
-      (bindingMatchesObject || bridge.gizmoEnabled) &&
-      effectiveDraftAndBounds?.draft.sourceMode !== "field-file",
-  );
-
-  const subdividedMeshData = useMemo(() => {
-    if (!selectedObject || !showSurfacePreview) return null;
-    return buildSubdividedSurfacePreviewData(selectedObject, SURFACE_PREVIEW_GRID_RES);
-  }, [selectedObject, showSurfacePreview]);
-
-  const surfaceColors = useMemo(() => {
-    if (!selectedObject || !subdividedMeshData || !showSurfacePreview) return null;
-    return sampleViewport3DSurfaceHslColors({
-      scene: scene.data ?? null,
-      objectId: selectedObject.objectId,
-      positionsWorld: subdividedMeshData.positionsWorld,
-      liveBinding: bindingMatchesObject ? bridge.activeBinding : null,
-    });
-  }, [
-    bindingMatchesObject,
-    bridge.activeBinding,
-    scene.data,
-    selectedObject,
-    showSurfacePreview,
-    subdividedMeshData,
-  ]);
-
-  const surfaceGeometry = useMemo(() => {
-    if (!subdividedMeshData || !surfaceColors) return null;
-    const geom = new BufferGeometry();
-    geom.setAttribute("position", new BufferAttribute(subdividedMeshData.positionsWorld, 3));
-    geom.setAttribute("color", new BufferAttribute(surfaceColors, 3));
-    geom.setIndex(new BufferAttribute(subdividedMeshData.indices, 1));
-    geom.computeVertexNormals();
-    return tracker ? tracker.track("geometry", geom) : geom;
-  }, [subdividedMeshData, surfaceColors, tracker]);
-
-  useEffect(() => {
-    if (!surfaceGeometry) return undefined;
-    invalidate();
-    return () => {
-      if (tracker) {
-        tracker.release("geometry", surfaceGeometry);
-      } else {
-        surfaceGeometry.dispose();
-      }
-    };
-  }, [invalidate, surfaceGeometry, tracker]);
-
-  const proxySegments = useMemo(() => {
-    if (!bridge.gizmoEnabled || !effectiveDraftAndBounds) return null;
-    return buildCharacteristicProxyWireframeSegments(
-      effectiveDraftAndBounds.draft,
-      effectiveDraftAndBounds.bounds,
-    );
-  }, [bridge.gizmoEnabled, effectiveDraftAndBounds]);
-
-  const proxyGeometry = useMemo(() => {
-    if (!proxySegments || proxySegments.length === 0) return null;
-    const geom = new BufferGeometry();
-    geom.setAttribute("position", new BufferAttribute(proxySegments, 3));
-    return tracker ? tracker.track("geometry", geom) : geom;
-  }, [proxySegments, tracker]);
-
-  useEffect(() => {
-    if (!proxyGeometry) return undefined;
-    invalidate();
-    return () => {
-      if (tracker) {
-        tracker.release("geometry", proxyGeometry);
-      } else {
-        proxyGeometry.dispose();
-      }
-    };
-  }, [invalidate, proxyGeometry, tracker]);
-
-  if (!colors || !selectedObject || !effectiveDraftAndBounds) return null;
-
-  const { draft, bounds } = effectiveDraftAndBounds;
-  const pose = resolveTextureGizmoWorldPose(draft, bounds);
-  const L = pose.handleLength;
-  const shaftRadius = Math.max(L * 0.032, 1e-12);
-  const tipSize = Math.max(L * 0.11, 1e-12);
-  const xColor = colors.danger ?? "#f38ba8";
-  const yColor = colors.success ?? "#a6e3a1";
-  const zColor = colors.accent;
-
-  const startHandleDrag = (
-    mode: Exclude<TextureGizmoMode, "view">,
-    handle: TranslateHandleId | GizmoAxis | ScaleHandleId,
-    event: ThreeEvent<PointerEvent>,
-  ) => {
-    event.stopPropagation();
-    const targetEl = event.target as unknown as {
-      setPointerCapture?: (id: number) => void;
-      releasePointerCapture?: (id: number) => void;
-    };
-    try {
-      targetEl.setPointerCapture?.(event.pointerId);
-    } catch {
-      // Ignore synthetic events without native pointer capture
-    }
-    const normal = resolveDragPlaneNormal(mode, handle, event.ray?.direction);
-    const anchor = new Vector3(...pose.originWorld);
-    const dragPlane = new Plane().setFromNormalAndCoplanarPoint(normal, anchor);
-    const fallbackPt = extractEventPoint(event, pose.originWorld);
-    const startPoint = intersectRayOrFallback(event.ray, dragPlane, fallbackPt);
-
-    dragStore.set({
-      pointerId: event.pointerId,
-      mode,
-      handle,
-      dragPlane,
-      startPoint,
-      startTranslationM: [...draft.translationM],
-      startQuat: [...draft.rotationQuat],
-      startEulerDeg: [...draft.eulerDeg],
-      startScale: [...draft.scale],
-      uniformLocked: draft.uniformScaleLocked,
-      originWorld: pose.originWorld,
-      handleLength: L,
-      releaseCapture: (id) => {
-        try {
-          targetEl.releasePointerCapture?.(id);
-        } catch {
-          // Ignore already released capture
+function readHandleFromObject(object: Object3D | null):
+  | { kind: "handle"; descriptor: GizmoHandleDescriptor }
+  | { kind: "center-anchor" }
+  | null {
+  let current: Object3D | null = object;
+  while (current) {
+    const ud = current.userData as
+      | {
+          gizmo?: string;
+          gizmoHandle?: GizmoHandleDescriptor;
         }
-      },
-    });
-    beginTextureGizmoGesture();
-    invalidate();
-  };
+      | undefined;
+    if (ud?.gizmoHandle) {
+      return { kind: "handle", descriptor: ud.gizmoHandle };
+    }
+    if (ud?.gizmo === "texture-center-anchor") {
+      return { kind: "center-anchor" };
+    }
+    current = current.parent;
+  }
+  return null;
+}
 
-  const moveHandleDrag = (event: ThreeEvent<PointerEvent>) => {
-    const session = dragStore.get();
-    if (!session || session.pointerId !== event.pointerId) return;
-    event.stopPropagation();
-    const fallbackPt = extractEventPoint(event, session.startPoint);
-    const currentPt = intersectRayOrFallback(event.ray, session.dragPlane, fallbackPt);
-    const shiftKey = Boolean(event.nativeEvent?.shiftKey);
+export function pickTextureGizmoHandleFromGroup(
+  group: Object3D,
+  raycaster: Raycaster,
+): PickedTextureGizmoTarget | null {
+  group.updateWorldMatrix(true, true);
+  const hits = raycaster.intersectObject(group, true);
+  if (hits.length === 0) return null;
+
+  let bestHandle: {
+    descriptor: GizmoHandleDescriptor;
+    point: Vec3;
+    priority: number;
+  } | null = null;
+  let centerAnchorHit: Vec3 | null = null;
+
+  for (const hit of hits) {
+    const resolved = readHandleFromObject(hit.object);
+    if (!resolved) continue;
+    const pt: Vec3 = [hit.point.x, hit.point.y, hit.point.z];
+    if (resolved.kind === "center-anchor") {
+      if (!centerAnchorHit) centerAnchorHit = pt;
+      continue;
+    }
+    const priority = resolved.descriptor.priority ?? 1;
+    if (!bestHandle || priority > bestHandle.priority) {
+      bestHandle = { descriptor: resolved.descriptor, point: pt, priority };
+    }
+  }
+
+  if (bestHandle) {
+    return {
+      kind: "handle",
+      mode: bestHandle.descriptor.mode,
+      handle: bestHandle.descriptor.handle,
+      key: bestHandle.descriptor.key,
+      point: bestHandle.point,
+    };
+  }
+  if (centerAnchorHit) {
+    return { kind: "center-anchor", point: centerAnchorHit };
+  }
+  return null;
+}
+
+export function createTextureGizmoDragController(
+  initialGetter?: () => TextureGizmoLiveDragContext,
+) {
+  let latestContext: TextureGizmoLiveDragContext | null = null;
+  const getContext = (): TextureGizmoLiveDragContext => {
+    if (initialGetter) return initialGetter();
+    if (!latestContext) {
+      throw new Error("TextureGizmoDragController context has not been synchronized.");
+    }
+    return latestContext;
+  };
+  let activeSession: ActiveDragSession | null = null;
+  const ndc = new Vector2();
+  const raycaster = new Raycaster();
+
+  const applyRayUpdate = (session: ActiveDragSession, ray: Ray, shiftKey: boolean) => {
+    const currentPt = intersectRayOrFallback(ray, session.dragPlane, session.startPoint);
 
     if (session.mode === "translate") {
       const delta: Vec3 = [
@@ -899,24 +854,27 @@ export function Viewport3DTextureTransformLayer({
       const handle = session.handle as ScaleHandleId;
       let ratio = 1;
       if (handle === "uniform") {
-        const d0 = Math.max(
-          Math.hypot(
-            session.startPoint[0] - session.originWorld[0],
-            session.startPoint[1] - session.originWorld[1],
-            session.startPoint[2] - session.originWorld[2],
+        const dx = currentPt[0] - session.startPoint[0];
+        const dy = currentPt[1] - session.startPoint[1];
+        const dz = currentPt[2] - session.startPoint[2];
+        const diagDelta =
+          dx * session.uniformDiagAxis[0] +
+          dy * session.uniformDiagAxis[1] +
+          dz * session.uniformDiagAxis[2];
+        ratio = Math.max(
+          MIN_SCALE_FACTOR,
+          Math.min(
+            MAX_SCALE_FACTOR,
+            Math.exp(diagDelta / Math.max(session.handleLength * 0.6, 1e-12)),
           ),
-          session.handleLength * 0.25,
         );
-        const d1 = Math.hypot(
-          currentPt[0] - session.originWorld[0],
-          currentPt[1] - session.originWorld[1],
-          currentPt[2] - session.originWorld[2],
-        );
-        ratio = Math.max(MIN_SCALE_FACTOR, d1 / d0);
       } else {
         const idx = handle === "x" ? 0 : handle === "y" ? 1 : 2;
         const deltaAxis = currentPt[idx]! - session.startPoint[idx]!;
-        ratio = Math.max(MIN_SCALE_FACTOR, 1 + deltaAxis / Math.max(session.handleLength, 1e-12));
+        ratio = Math.max(
+          MIN_SCALE_FACTOR,
+          1 + deltaAxis / Math.max(session.handleLength, 1e-12),
+        );
       }
       const nextScale = applyTextureGizmoScaleDrag(
         session.startScale,
@@ -927,29 +885,873 @@ export function Viewport3DTextureTransformLayer({
       );
       patchActiveTextureDraft({ scale: nextScale });
     }
-    invalidate();
+    getContext().invalidate();
   };
 
-  const finishHandleDrag = (event: ThreeEvent<PointerEvent>) => {
-    const session = dragStore.get();
-    if (!session || session.pointerId !== event.pointerId) return;
-    event.stopPropagation();
-    session.releaseCapture(session.pointerId);
-    dragStore.clear();
+  const finishDrag = (revertToStart: boolean): boolean => {
+    const session = activeSession;
+    if (!session) return false;
+    activeSession = null;
+    session.cleanupWindowListeners();
+
+    const ctx = getContext();
+    try {
+      ctx.canvas?.releasePointerCapture?.(session.pointerId);
+    } catch {
+      // Ignore already released pointer capture
+    }
+    if (ctx.canvas?.style) {
+      ctx.canvas.style.cursor = "";
+    }
+    if (ctx.controls && "enabled" in ctx.controls) {
+      ctx.controls.enabled = session.prevControlsEnabled;
+    }
+    if (revertToStart) {
+      patchActiveTextureDraft({
+        translationM: [...session.startTranslationM],
+        rotationQuat: [...session.startQuat],
+        eulerDeg: [...session.startEulerDeg],
+        scale: [...session.startScale],
+      });
+    }
+    ctx.onActiveKeyChange?.(null);
+    ctx.onGestureActiveChange?.(false);
     endTextureGizmoGesture();
-    invalidate();
+    ctx.invalidate();
+    return true;
   };
 
-  const pointerHandlersFor = (
-    mode: Exclude<TextureGizmoMode, "view">,
-    handle: TranslateHandleId | GizmoAxis | ScaleHandleId,
-  ) => ({
-    onPointerDown: (event: ThreeEvent<PointerEvent>) => startHandleDrag(mode, handle, event),
-    onPointerMove: moveHandleDrag,
-    onPointerUp: finishHandleDrag,
-    onPointerCancel: finishHandleDrag,
-    onLostPointerCapture: finishHandleDrag,
-  });
+  const beginDrag = ({
+    pointerId,
+    mode,
+    handle,
+    key,
+    ray,
+    hitPoint,
+  }: {
+    pointerId: number;
+    mode: GizmoHandleMode;
+    handle: AnyGizmoHandleId;
+    key: string;
+    ray?: Ray;
+    hitPoint: Vec3;
+  }): boolean => {
+    if (activeSession) return false;
+    const ctx = getContext();
+    const prevControlsEnabled = ctx.controls ? ctx.controls.enabled !== false : true;
+    if (ctx.controls && "enabled" in ctx.controls) {
+      ctx.controls.enabled = false;
+    }
+    ctx.onGestureActiveChange?.(true);
+    beginTextureGizmoGesture();
+    ctx.onActiveKeyChange?.(key);
+
+    try {
+      ctx.canvas?.setPointerCapture?.(pointerId);
+    } catch {
+      // Synthetic test events may not have native pointerId registration
+    }
+    if (ctx.canvas?.style) {
+      ctx.canvas.style.cursor = "grabbing";
+    }
+
+    const normal = resolveDragPlaneNormal(mode, handle, ray?.direction);
+    const anchor = new Vector3(...ctx.pose.originWorld);
+    const dragPlane = new Plane().setFromNormalAndCoplanarPoint(normal, anchor);
+    const startPoint = intersectRayOrFallback(ray, dragPlane, hitPoint);
+    const uniformDiagAxis = resolveCameraDiagonalAxis(ctx.camera);
+
+    const onWindowPointerMove = (rawEvent: Event) => {
+      const event = rawEvent as PointerEvent;
+      if (!activeSession || event.pointerId !== activeSession.pointerId) return;
+      const liveCtx = getContext();
+      const rect = liveCtx.canvas?.getBoundingClientRect();
+      if (!rect || rect.width <= 0 || rect.height <= 0) return;
+      ndc.set(
+        ((event.clientX - rect.left) / rect.width) * 2 - 1,
+        -((event.clientY - rect.top) / rect.height) * 2 + 1,
+      );
+      liveCtx.camera.updateMatrixWorld();
+      raycaster.setFromCamera(ndc, liveCtx.camera);
+      applyRayUpdate(activeSession, raycaster.ray, Boolean(event.shiftKey));
+    };
+
+    const onWindowPointerUp = (rawEvent: Event) => {
+      const event = rawEvent as PointerEvent;
+      if (!activeSession || event.pointerId !== activeSession.pointerId) return;
+      finishDrag(false);
+    };
+
+    const onWindowPointerCancel = (rawEvent: Event) => {
+      const event = rawEvent as PointerEvent;
+      if (!activeSession || event.pointerId !== activeSession.pointerId) return;
+      finishDrag(false);
+    };
+
+    const onWindowKeyDown = (rawEvent: Event) => {
+      const event = rawEvent as KeyboardEvent;
+      if (!activeSession || event.key !== "Escape") return;
+      event.preventDefault();
+      event.stopPropagation?.();
+      finishDrag(true);
+    };
+
+    const win = ctx.windowTarget;
+    if (win) {
+      win.addEventListener("pointermove", onWindowPointerMove);
+      win.addEventListener("pointerup", onWindowPointerUp);
+      win.addEventListener("pointercancel", onWindowPointerCancel);
+      win.addEventListener("keydown", onWindowKeyDown);
+    }
+
+    activeSession = {
+      pointerId,
+      mode,
+      handle,
+      key,
+      dragPlane,
+      uniformDiagAxis,
+      startPoint,
+      startTranslationM: [...ctx.draft.translationM],
+      startQuat: [...ctx.draft.rotationQuat],
+      startEulerDeg: [...ctx.draft.eulerDeg],
+      startScale: [...ctx.draft.scale],
+      uniformLocked: ctx.draft.uniformScaleLocked,
+      originWorld: [...ctx.pose.originWorld],
+      handleLength: ctx.pose.handleLength,
+      prevControlsEnabled,
+      cleanupWindowListeners: () => {
+        if (!win) return;
+        win.removeEventListener("pointermove", onWindowPointerMove);
+        win.removeEventListener("pointerup", onWindowPointerUp);
+        win.removeEventListener("pointercancel", onWindowPointerCancel);
+        win.removeEventListener("keydown", onWindowKeyDown);
+      },
+    };
+
+    ctx.invalidate();
+    return true;
+  };
+
+  return {
+    syncContext(next: TextureGizmoLiveDragContext): void {
+      latestContext = next;
+    },
+    isActive(): boolean {
+      return activeSession !== null;
+    },
+    beginDrag,
+    moveWithRay(pointerId: number, ray: Ray, shiftKey = false): void {
+      if (!activeSession || activeSession.pointerId !== pointerId) return;
+      applyRayUpdate(activeSession, ray, shiftKey);
+    },
+    endPointer(pointerId: number): boolean {
+      if (!activeSession || activeSession.pointerId !== pointerId) return false;
+      return finishDrag(false);
+    },
+    cancelEscape(): boolean {
+      return finishDrag(true);
+    },
+    dispose(): void {
+      finishDrag(false);
+    },
+  };
+}
+
+export function createViewport3DTextureTransformModel(scene: SceneResource | null) {
+  return {
+    getAuthoredDraft(objectId: string) {
+      if (!scene) return null;
+      const bounds = resolveTargetBoundsMeters(scene, { kind: "object", objectId });
+      const sceneObject = scene.objects?.find((entry) => entry.id === objectId);
+      const asset = scene.magnetization_assets?.find(
+        (entry) => entry.id === sceneObject?.magnetization_ref,
+      );
+      const draft = hydrateMagneticTextureDraftFromInitializer(asset, bounds, "object");
+      return { draft, bounds };
+    },
+    sampleSurfaceColors(options: Omit<SampleViewport3DSurfaceHslOptions, "scene">) {
+      return sampleViewport3DSurfaceHslColors({ ...options, scene });
+    },
+  };
+}
+
+export type Viewport3DTextureTransformModel = ReturnType<typeof createViewport3DTextureTransformModel>;
+
+function TextureGizmoInteractiveHandles({
+  colors,
+  draft,
+  gizmoMode,
+  invalidate,
+  objectId,
+  onGestureActiveChange,
+  pose,
+  proxyGeometry,
+}: {
+  colors: Viewport3DColors;
+  draft: MagneticTextureDraft;
+  gizmoMode: GizmoHandleMode;
+  invalidate: () => void;
+  objectId: string;
+  onGestureActiveChange?: (active: boolean) => void;
+  pose: TextureGizmoWorldPose;
+  proxyGeometry: BufferGeometry | null;
+}) {
+  const gl = useThree((s) => s.gl);
+  const camera = useThree((s) => s.camera);
+  const controls = useThree((s) => s.controls) as { enabled?: boolean } | null;
+
+  const gizmoGroupRef = useRef<Group>(null);
+  const [hoveredKey, setHoveredKey] = useState<string | null>(null);
+  const [activeKey, setActiveKey] = useState<string | null>(null);
+  const hoveredKeyRef = useRef<string | null>(null);
+
+  const [dragController] = useState(() => createTextureGizmoDragController());
+
+  useLayoutEffect(() => {
+    dragController.syncContext({
+      camera,
+      canvas: gl?.domElement ?? null,
+      controls,
+      draft,
+      pose,
+      windowTarget: typeof window === "undefined" ? null : window,
+      onGestureActiveChange,
+      onActiveKeyChange: setActiveKey,
+      invalidate,
+    });
+  }, [camera, controls, draft, dragController, gl, invalidate, onGestureActiveChange, pose]);
+
+  useEffect(
+    () => () => {
+      dragController.dispose();
+      if (hoveredKeyRef.current !== null && gl?.domElement?.style) {
+        gl.domElement.style.cursor = "";
+      }
+    },
+    [dragController, gl],
+  );
+
+  useEffect(() => {
+    const canvas = gl?.domElement;
+    if (!canvas?.addEventListener) return undefined;
+    const ndc = new Vector2();
+    const raycaster = new Raycaster();
+
+    const updateHoverKey = (nextKey: string | null) => {
+      if (hoveredKeyRef.current === nextKey) return;
+      hoveredKeyRef.current = nextKey;
+      setHoveredKey(nextKey);
+      if (!dragController.isActive() && canvas.style) {
+        canvas.style.cursor = nextKey ? "grab" : "";
+      }
+      invalidate();
+    };
+
+    const raycastCanvasEvent = (event: MouseEvent): PickedTextureGizmoTarget | null => {
+      const group = gizmoGroupRef.current;
+      if (!group) return null;
+      const rect = canvas.getBoundingClientRect();
+      if (rect.width <= 0 || rect.height <= 0) return null;
+      ndc.set(
+        ((event.clientX - rect.left) / rect.width) * 2 - 1,
+        -((event.clientY - rect.top) / rect.height) * 2 + 1,
+      );
+      camera.updateMatrixWorld();
+      raycaster.setFromCamera(ndc, camera);
+      return pickTextureGizmoHandleFromGroup(group, raycaster);
+    };
+
+    const onCanvasPointerMove = (event: PointerEvent) => {
+      if (dragController.isActive()) return;
+      const picked = raycastCanvasEvent(event);
+      updateHoverKey(
+        picked?.kind === "handle"
+          ? picked.key
+          : picked?.kind === "center-anchor"
+            ? "center-anchor"
+            : null,
+      );
+    };
+
+    const onCanvasPointerLeave = () => {
+      if (dragController.isActive()) return;
+      updateHoverKey(null);
+    };
+
+    const onCanvasPointerDownCapture = (event: PointerEvent) => {
+      if (event.button !== 0 || dragController.isActive()) return;
+      const picked = raycastCanvasEvent(event);
+      if (!picked) return;
+
+      event.preventDefault();
+      event.stopPropagation();
+      event.stopImmediatePropagation();
+
+      if (picked.kind === "center-anchor") {
+        if (event.detail >= 2) {
+          patchActiveTextureDraft({ translationM: [0, 0, 0] });
+          invalidate();
+        }
+        return;
+      }
+
+      dragController.beginDrag({
+        pointerId: event.pointerId,
+        mode: picked.mode,
+        handle: picked.handle,
+        key: picked.key,
+        ray: raycaster.ray,
+        hitPoint: picked.point,
+      });
+    };
+
+    const onCanvasDblClickCapture = (event: MouseEvent) => {
+      const picked = raycastCanvasEvent(event);
+      if (picked?.kind !== "center-anchor") return;
+      event.preventDefault();
+      event.stopPropagation();
+      event.stopImmediatePropagation();
+      patchActiveTextureDraft({ translationM: [0, 0, 0] });
+      invalidate();
+    };
+
+    canvas.addEventListener("pointerdown", onCanvasPointerDownCapture, { capture: true });
+    canvas.addEventListener("dblclick", onCanvasDblClickCapture, { capture: true });
+    canvas.addEventListener("pointermove", onCanvasPointerMove);
+    canvas.addEventListener("pointerleave", onCanvasPointerLeave);
+
+    return () => {
+      canvas.removeEventListener("pointerdown", onCanvasPointerDownCapture, { capture: true });
+      canvas.removeEventListener("dblclick", onCanvasDblClickCapture, { capture: true });
+      canvas.removeEventListener("pointermove", onCanvasPointerMove);
+      canvas.removeEventListener("pointerleave", onCanvasPointerLeave);
+    };
+  }, [camera, dragController, gl, invalidate]);
+
+  const L = pose.handleLength;
+  const shaftRadius = Math.max(L * 0.032, 1e-12);
+  const hitboxRadius = shaftRadius * 3.5;
+  const tipSize = Math.max(L * 0.11, 1e-12);
+  const coneRadius = Math.max(shaftRadius * 2.6, tipSize * 0.78);
+  const coneHeight = Math.max(tipSize * 1.9, L * 0.22);
+
+  const xColor = colors.hud?.axisX ?? colors.danger ?? colors.accent;
+  const yColor = colors.hud?.axisY ?? colors.success ?? colors.field;
+  const zColor = colors.hud?.axisZ ?? colors.accent;
+  const highlightColor = colors.textPrimary ?? colors.field;
+
+  const isHighlighted = (key: string) => activeKey === key || hoveredKey === key;
+
+  const handleR3FPointerDown = (
+    descriptor: GizmoHandleDescriptor,
+    event: ThreeEvent<PointerEvent>,
+  ) => {
+    event.stopPropagation();
+    event.nativeEvent?.stopImmediatePropagation?.();
+    if (dragController.isActive()) return;
+    dragController.beginDrag({
+      pointerId: event.pointerId,
+      mode: descriptor.mode,
+      handle: descriptor.handle,
+      key: descriptor.key,
+      ray: event.ray,
+      hitPoint: extractEventPoint(event, pose.originWorld),
+    });
+  };
+
+  return (
+    <group
+      name={`texture-gizmo:${objectId}`}
+      position={pose.originWorld}
+      ref={gizmoGroupRef}
+      userData={{
+        gizmo: "texture-transform",
+        mode: gizmoMode,
+        objectId,
+      }}
+    >
+      {proxyGeometry ? (
+        <lineSegments
+          geometry={proxyGeometry}
+          renderOrder={RENDER_POLICIES.selectionShell.renderOrder}
+          userData={{ gizmo: "texture-characteristic-proxy" }}
+        >
+          <lineBasicMaterial
+            color={colors.accent}
+            depthTest={false}
+            opacity={0.85}
+            toneMapped={false}
+            transparent
+          />
+        </lineSegments>
+      ) : null}
+
+      {gizmoMode !== "scale" ? (
+        <mesh
+          onDoubleClick={(event) => {
+            event.stopPropagation();
+            patchActiveTextureDraft({ translationM: [0, 0, 0] });
+            invalidate();
+          }}
+          renderOrder={RENDER_POLICIES.selectionShell.renderOrder + 2}
+          userData={{ gizmo: "texture-center-anchor" }}
+        >
+          <sphereGeometry
+            args={[tipSize * (hoveredKey === "center-anchor" ? 0.72 : 0.6), 16, 12]}
+          />
+          <meshBasicMaterial color={highlightColor} depthTest={false} toneMapped={false} />
+        </mesh>
+      ) : null}
+
+      {gizmoMode === "translate" ? (
+        <group userData={{ gizmoMode: "translate" }}>
+          {(
+            [
+              {
+                axis: "x" as const,
+                shaftPos: [L * 0.45, 0, 0] as Vec3,
+                conePos: [L, 0, 0] as Vec3,
+                hitboxPos: [L * 0.58, 0, 0] as Vec3,
+                rot: [0, 0, -Math.PI / 2] as Vec3,
+                color: xColor,
+              },
+              {
+                axis: "y" as const,
+                shaftPos: [0, L * 0.45, 0] as Vec3,
+                conePos: [0, L, 0] as Vec3,
+                hitboxPos: [0, L * 0.58, 0] as Vec3,
+                rot: [0, 0, 0] as Vec3,
+                color: yColor,
+              },
+              {
+                axis: "z" as const,
+                shaftPos: [0, 0, L * 0.45] as Vec3,
+                conePos: [0, 0, L] as Vec3,
+                hitboxPos: [0, 0, L * 0.58] as Vec3,
+                rot: [Math.PI / 2, 0, 0] as Vec3,
+                color: zColor,
+              },
+            ] as const
+          ).map(({ axis, shaftPos, conePos, hitboxPos, rot, color }) => {
+            const key = `translate:${axis}`;
+            const descriptor: GizmoHandleDescriptor = {
+              mode: "translate",
+              handle: axis,
+              key,
+              priority: 1,
+            };
+            const active = isHighlighted(key);
+            const activeColor = active ? highlightColor : color;
+            const radiusScale = active ? 1.25 : 1;
+            return (
+              <group key={axis}>
+                <mesh
+                  onPointerDown={(e) => handleR3FPointerDown(descriptor, e)}
+                  position={shaftPos}
+                  renderOrder={RENDER_POLICIES.selectionShell.renderOrder + 1}
+                  rotation={rot}
+                  userData={{ axis, gizmo: "texture-translate-axis", gizmoHandle: descriptor }}
+                >
+                  <cylinderGeometry
+                    args={[shaftRadius * radiusScale, shaftRadius * radiusScale, L * 0.9, 14]}
+                  />
+                  <meshBasicMaterial color={activeColor} depthTest={false} toneMapped={false} />
+                </mesh>
+                <mesh
+                  onPointerDown={(e) => handleR3FPointerDown(descriptor, e)}
+                  position={conePos}
+                  renderOrder={RENDER_POLICIES.selectionShell.renderOrder + 2}
+                  rotation={rot}
+                  userData={{ axis, gizmo: "texture-translate-cone", gizmoHandle: descriptor }}
+                >
+                  <coneGeometry args={[coneRadius * radiusScale, coneHeight, 16]} />
+                  <meshBasicMaterial color={activeColor} depthTest={false} toneMapped={false} />
+                </mesh>
+                <mesh
+                  onPointerDown={(e) => handleR3FPointerDown(descriptor, e)}
+                  position={hitboxPos}
+                  renderOrder={RENDER_POLICIES.selectionShell.renderOrder + 3}
+                  rotation={rot}
+                  userData={{ axis, gizmo: "texture-translate-hitbox", gizmoHandle: descriptor }}
+                >
+                  <cylinderGeometry args={[hitboxRadius, hitboxRadius, L * 1.05, 12]} />
+                  <meshBasicMaterial depthTest={false} depthWrite={false} opacity={0} transparent />
+                </mesh>
+              </group>
+            );
+          })}
+          {(
+            [
+              { plane: "xy" as const, pos: [L * 0.25, L * 0.25, 0] as Vec3, rot: [0, 0, 0] as Vec3, color: zColor },
+              { plane: "xz" as const, pos: [L * 0.25, 0, L * 0.25] as Vec3, rot: [Math.PI / 2, 0, 0] as Vec3, color: yColor },
+              { plane: "yz" as const, pos: [0, L * 0.25, L * 0.25] as Vec3, rot: [0, Math.PI / 2, 0] as Vec3, color: xColor },
+            ] as const
+          ).map(({ plane, pos, rot, color }) => {
+            const key = `translate:${plane}`;
+            const descriptor: GizmoHandleDescriptor = {
+              mode: "translate",
+              handle: plane,
+              key,
+              priority: 2,
+            };
+            const active = isHighlighted(key);
+            return (
+              <group key={plane} position={pos} rotation={rot}>
+                <mesh
+                  onPointerDown={(e) => handleR3FPointerDown(descriptor, e)}
+                  renderOrder={RENDER_POLICIES.selectionShell.renderOrder + 1}
+                  userData={{ gizmo: "texture-translate-plane", plane, gizmoHandle: descriptor }}
+                >
+                  <planeGeometry args={[L * 0.2, L * 0.2]} />
+                  <meshBasicMaterial
+                    color={active ? highlightColor : color}
+                    depthTest={false}
+                    opacity={active ? 0.78 : 0.48}
+                    side={DoubleSide}
+                    toneMapped={false}
+                    transparent
+                  />
+                </mesh>
+                <mesh
+                  onPointerDown={(e) => handleR3FPointerDown(descriptor, e)}
+                  renderOrder={RENDER_POLICIES.selectionShell.renderOrder + 3}
+                  userData={{ gizmo: "texture-translate-plane-hitbox", plane, gizmoHandle: descriptor }}
+                >
+                  <planeGeometry args={[L * 0.3, L * 0.3]} />
+                  <meshBasicMaterial
+                    depthTest={false}
+                    depthWrite={false}
+                    opacity={0}
+                    side={DoubleSide}
+                    transparent
+                  />
+                </mesh>
+              </group>
+            );
+          })}
+        </group>
+      ) : null}
+
+      {gizmoMode === "rotate" ? (
+        <group userData={{ gizmoMode: "rotate" }}>
+          {(
+            [
+              { axis: "x" as const, rot: [0, Math.PI / 2, 0] as Vec3, color: xColor },
+              { axis: "y" as const, rot: [Math.PI / 2, 0, 0] as Vec3, color: yColor },
+              { axis: "z" as const, rot: [0, 0, 0] as Vec3, color: zColor },
+            ] as const
+          ).map(({ axis, rot, color }) => {
+            const key = `rotate:${axis}`;
+            const descriptor: GizmoHandleDescriptor = {
+              mode: "rotate",
+              handle: axis,
+              key,
+              priority: 1,
+            };
+            const active = isHighlighted(key);
+            return (
+              <group key={axis} rotation={rot}>
+                <mesh
+                  onPointerDown={(e) => handleR3FPointerDown(descriptor, e)}
+                  renderOrder={RENDER_POLICIES.selectionShell.renderOrder + 1}
+                  userData={{ axis, gizmo: "texture-rotate-ring", gizmoHandle: descriptor }}
+                >
+                  <torusGeometry
+                    args={[L * 0.82, shaftRadius * (active ? 1.25 : 0.95), 14, 64]}
+                  />
+                  <meshBasicMaterial
+                    color={active ? highlightColor : color}
+                    depthTest={false}
+                    toneMapped={false}
+                  />
+                </mesh>
+                <mesh
+                  onPointerDown={(e) => handleR3FPointerDown(descriptor, e)}
+                  renderOrder={RENDER_POLICIES.selectionShell.renderOrder + 3}
+                  userData={{ axis, gizmo: "texture-rotate-hitbox", gizmoHandle: descriptor }}
+                >
+                  <torusGeometry args={[L * 0.82, hitboxRadius, 12, 48]} />
+                  <meshBasicMaterial depthTest={false} depthWrite={false} opacity={0} transparent />
+                </mesh>
+              </group>
+            );
+          })}
+        </group>
+      ) : null}
+
+      {gizmoMode === "scale" ? (
+        <group userData={{ gizmoMode: "scale" }}>
+          {(() => {
+            const uniformDescriptor: GizmoHandleDescriptor = {
+              mode: "scale",
+              handle: "uniform",
+              key: "scale:uniform",
+              priority: 2,
+            };
+            const uniformActive = isHighlighted("scale:uniform");
+            const uniformVisual = tipSize * (uniformActive ? 1.45 : 1.28);
+            const uniformHit = Math.max(tipSize * 2.4, hitboxRadius * 2);
+            return (
+              <group>
+                <mesh
+                  onPointerDown={(e) => handleR3FPointerDown(uniformDescriptor, e)}
+                  renderOrder={RENDER_POLICIES.selectionShell.renderOrder + 2}
+                  userData={{ gizmo: "texture-scale-uniform", gizmoHandle: uniformDescriptor }}
+                >
+                  <boxGeometry args={[uniformVisual, uniformVisual, uniformVisual]} />
+                  <meshBasicMaterial
+                    color={uniformActive ? highlightColor : colors.accent}
+                    depthTest={false}
+                    toneMapped={false}
+                  />
+                </mesh>
+                <mesh
+                  onPointerDown={(e) => handleR3FPointerDown(uniformDescriptor, e)}
+                  renderOrder={RENDER_POLICIES.selectionShell.renderOrder + 3}
+                  userData={{
+                    gizmo: "texture-scale-uniform-hitbox",
+                    gizmoHandle: uniformDescriptor,
+                  }}
+                >
+                  <boxGeometry args={[uniformHit, uniformHit, uniformHit]} />
+                  <meshBasicMaterial depthTest={false} depthWrite={false} opacity={0} transparent />
+                </mesh>
+              </group>
+            );
+          })()}
+          {(
+            [
+              {
+                axis: "x" as const,
+                stalkPos: [L * 0.5, 0, 0] as Vec3,
+                stalkHitPos: [L * 0.62, 0, 0] as Vec3,
+                cubePos: [L, 0, 0] as Vec3,
+                rot: [0, 0, -Math.PI / 2] as Vec3,
+                color: xColor,
+              },
+              {
+                axis: "y" as const,
+                stalkPos: [0, L * 0.5, 0] as Vec3,
+                stalkHitPos: [0, L * 0.62, 0] as Vec3,
+                cubePos: [0, L, 0] as Vec3,
+                rot: [0, 0, 0] as Vec3,
+                color: yColor,
+              },
+              {
+                axis: "z" as const,
+                stalkPos: [0, 0, L * 0.5] as Vec3,
+                stalkHitPos: [0, 0, L * 0.62] as Vec3,
+                cubePos: [0, 0, L] as Vec3,
+                rot: [Math.PI / 2, 0, 0] as Vec3,
+                color: zColor,
+              },
+            ] as const
+          ).map(({ axis, stalkPos, stalkHitPos, cubePos, rot, color }) => {
+            const key = `scale:${axis}`;
+            const descriptor: GizmoHandleDescriptor = {
+              mode: "scale",
+              handle: axis,
+              key,
+              priority: 1,
+            };
+            const active = isHighlighted(key);
+            const activeColor = active ? highlightColor : color;
+            const cubeSize = tipSize * (active ? 1.32 : 1.15);
+            const cubeHitSize = Math.max(tipSize * 3.2, hitboxRadius * 2.2);
+            return (
+              <group key={axis}>
+                <mesh
+                  onPointerDown={(e) => handleR3FPointerDown(descriptor, e)}
+                  position={stalkPos}
+                  renderOrder={RENDER_POLICIES.selectionShell.renderOrder + 1}
+                  rotation={rot}
+                  userData={{ axis, gizmo: "texture-scale-stalk", gizmoHandle: descriptor }}
+                >
+                  <cylinderGeometry
+                    args={[shaftRadius * (active ? 1.2 : 0.9), shaftRadius * (active ? 1.2 : 0.9), L, 12]}
+                  />
+                  <meshBasicMaterial color={activeColor} depthTest={false} toneMapped={false} />
+                </mesh>
+                <mesh
+                  onPointerDown={(e) => handleR3FPointerDown(descriptor, e)}
+                  position={cubePos}
+                  renderOrder={RENDER_POLICIES.selectionShell.renderOrder + 2}
+                  userData={{ axis, gizmo: "texture-scale-axis", gizmoHandle: descriptor }}
+                >
+                  <boxGeometry args={[cubeSize, cubeSize, cubeSize]} />
+                  <meshBasicMaterial color={activeColor} depthTest={false} toneMapped={false} />
+                </mesh>
+                <mesh
+                  onPointerDown={(e) => handleR3FPointerDown(descriptor, e)}
+                  position={stalkHitPos}
+                  renderOrder={RENDER_POLICIES.selectionShell.renderOrder + 3}
+                  rotation={rot}
+                  userData={{ axis, gizmo: "texture-scale-stalk-hitbox", gizmoHandle: descriptor }}
+                >
+                  <cylinderGeometry args={[hitboxRadius, hitboxRadius, L * 0.76, 12]} />
+                  <meshBasicMaterial depthTest={false} depthWrite={false} opacity={0} transparent />
+                </mesh>
+                <mesh
+                  onPointerDown={(e) => handleR3FPointerDown(descriptor, e)}
+                  position={cubePos}
+                  renderOrder={RENDER_POLICIES.selectionShell.renderOrder + 3}
+                  userData={{ axis, gizmo: "texture-scale-cube-hitbox", gizmoHandle: descriptor }}
+                >
+                  <boxGeometry args={[cubeHitSize, cubeHitSize, cubeHitSize]} />
+                  <meshBasicMaterial depthTest={false} depthWrite={false} opacity={0} transparent />
+                </mesh>
+              </group>
+            );
+          })}
+        </group>
+      ) : null}
+    </group>
+  );
+}
+
+export function Viewport3DTextureTransformLayer({
+  onGestureActiveChange,
+  primitiveModel,
+  selectedObjectId,
+  textureTransformModel,
+  tracker,
+}: {
+  onGestureActiveChange?: (active: boolean) => void;
+  primitiveModel: Viewport3DPrimitiveRenderModel | null;
+  selectedObjectId: string | null;
+  textureTransformModel: Viewport3DTextureTransformModel;
+  tracker?: Viewport3DResourceTracker;
+}) {
+  const bridge = useSyncExternalStore(
+    subscribeTextureDraftBridge,
+    getTextureDraftBridgeSnapshot,
+    getTextureDraftBridgeSnapshot,
+  );
+  const { colors } = useViewport3DColors();
+  const invalidate = useBatchedInvalidate();
+
+  useEffect(() => {
+    if (typeof window === "undefined") return undefined;
+    return installTextureGizmoKeyboardShortcuts(window);
+  }, []);
+
+  const targetObjectId = selectedObjectId ?? bridge.activeBinding?.target.objectId ?? null;
+
+  const selectedObject = useMemo(() => {
+    if (!targetObjectId || !primitiveModel?.objects.length) return null;
+    return (
+      primitiveModel.objects.find((candidate) => candidate.objectId === targetObjectId) ??
+      null
+    );
+  }, [primitiveModel, targetObjectId]);
+
+  const bindingMatchesObject = Boolean(
+    selectedObject &&
+      bridge.activeBinding &&
+      bridge.activeBinding.target.objectId === selectedObject.objectId,
+  );
+
+  const effectiveDraftAndBounds = useMemo((): {
+    draft: MagneticTextureDraft;
+    bounds: TargetMetricBounds;
+  } | null => {
+    if (!selectedObject) return null;
+    if (bindingMatchesObject && bridge.activeBinding) {
+      return {
+        draft: bridge.activeBinding.draft,
+        bounds: bridge.activeBinding.bounds,
+      };
+    }
+    if (!bridge.gizmoEnabled) return null;
+    return textureTransformModel.getAuthoredDraft(selectedObject.objectId);
+  }, [bindingMatchesObject, bridge.activeBinding, bridge.gizmoEnabled, selectedObject, textureTransformModel]);
+
+  const showSurfacePreview = Boolean(
+    selectedObject &&
+      (bindingMatchesObject || bridge.gizmoEnabled) &&
+      effectiveDraftAndBounds?.draft.sourceMode !== "field-file",
+  );
+
+  const subdividedMeshData = useMemo(() => {
+    if (!selectedObject || !showSurfacePreview) return null;
+    return buildSubdividedSurfacePreviewData(selectedObject, SURFACE_PREVIEW_GRID_RES);
+  }, [selectedObject, showSurfacePreview]);
+
+  const surfaceColors = useMemo(() => {
+    if (!selectedObject || !subdividedMeshData || !showSurfacePreview) return null;
+    return textureTransformModel.sampleSurfaceColors({
+      objectId: selectedObject.objectId,
+      positionsWorld: subdividedMeshData.positionsWorld,
+      liveBinding: bindingMatchesObject ? bridge.activeBinding : null,
+    });
+  }, [
+    bindingMatchesObject,
+    bridge.activeBinding,
+    selectedObject,
+    showSurfacePreview,
+    subdividedMeshData,
+    textureTransformModel,
+  ]);
+
+  const surfaceGeometry = useMemo(() => {
+    if (!subdividedMeshData || !surfaceColors) return null;
+    const geom = new BufferGeometry();
+    geom.setAttribute("position", new BufferAttribute(subdividedMeshData.positionsWorld, 3));
+    geom.setAttribute("color", new BufferAttribute(surfaceColors, 3));
+    geom.setIndex(new BufferAttribute(subdividedMeshData.indices, 1));
+    geom.computeVertexNormals();
+    return tracker ? tracker.track("geometry", geom) : geom;
+  }, [subdividedMeshData, surfaceColors, tracker]);
+
+  useEffect(() => {
+    if (!surfaceGeometry) return undefined;
+    invalidate();
+    return () => {
+      if (tracker) {
+        tracker.release("geometry", surfaceGeometry);
+      } else {
+        surfaceGeometry.dispose();
+      }
+    };
+  }, [invalidate, surfaceGeometry, tracker]);
+
+  const handlesActive = Boolean(
+    selectedObject &&
+      isTextureGizmoHandleModeActive(bridge, selectedObject.objectId),
+  );
+
+  const proxySegments = useMemo(() => {
+    if (!bridge.gizmoEnabled || !bindingMatchesObject || !effectiveDraftAndBounds) return null;
+    return buildCharacteristicProxyWireframeSegments(
+      effectiveDraftAndBounds.draft,
+      effectiveDraftAndBounds.bounds,
+    );
+  }, [bindingMatchesObject, bridge.gizmoEnabled, effectiveDraftAndBounds]);
+
+  const proxyGeometry = useMemo(() => {
+    if (!proxySegments || proxySegments.length === 0) return null;
+    const geom = new BufferGeometry();
+    geom.setAttribute("position", new BufferAttribute(proxySegments, 3));
+    return tracker ? tracker.track("geometry", geom) : geom;
+  }, [proxySegments, tracker]);
+
+  useEffect(() => {
+    if (!proxyGeometry) return undefined;
+    invalidate();
+    return () => {
+      if (tracker) {
+        tracker.release("geometry", proxyGeometry);
+      } else {
+        proxyGeometry.dispose();
+      }
+    };
+  }, [invalidate, proxyGeometry, tracker]);
+
+  if (!colors || !selectedObject || !effectiveDraftAndBounds) return null;
+
+  const { draft, bounds } = effectiveDraftAndBounds;
+  const pose = resolveTextureGizmoWorldPose(draft, bounds);
 
   return (
     <group
@@ -977,148 +1779,40 @@ export function Viewport3DTextureTransformLayer({
         </mesh>
       ) : null}
 
-      {bridge.gizmoEnabled ? (
+      {handlesActive && bridge.gizmoMode !== "view" ? (
+        <TextureGizmoInteractiveHandles
+          colors={colors}
+          draft={draft}
+          gizmoMode={bridge.gizmoMode}
+          invalidate={invalidate}
+          objectId={selectedObject.objectId}
+          onGestureActiveChange={onGestureActiveChange}
+          pose={pose}
+          proxyGeometry={proxyGeometry}
+        />
+      ) : bridge.gizmoEnabled && bindingMatchesObject && proxyGeometry ? (
         <group
-          name={`texture-gizmo:${selectedObject.objectId}`}
+          name={`texture-gizmo-preview:${selectedObject.objectId}`}
           position={pose.originWorld}
           userData={{
-            gizmo: "texture-transform",
-            mode: bridge.gizmoMode,
+            gizmo: "texture-transform-preview",
+            mode: "view",
             objectId: selectedObject.objectId,
           }}
         >
-          {proxyGeometry ? (
-            <lineSegments
-              geometry={proxyGeometry}
-              renderOrder={RENDER_POLICIES.selectionShell.renderOrder}
-              userData={{ gizmo: "texture-characteristic-proxy" }}
-            >
-              <lineBasicMaterial
-                color={colors.accent}
-                depthTest={false}
-                opacity={0.85}
-                toneMapped={false}
-                transparent
-              />
-            </lineSegments>
-          ) : null}
-
-          {/* Center anchor sphere — double-click centers texture in target bounds */}
-          <mesh
-            onDoubleClick={(event) => {
-              event.stopPropagation();
-              patchActiveTextureDraft({ translationM: [0, 0, 0] });
-              invalidate();
-            }}
-            renderOrder={RENDER_POLICIES.selectionShell.renderOrder + 1}
-            userData={{ gizmo: "texture-center-anchor" }}
+          <lineSegments
+            geometry={proxyGeometry}
+            renderOrder={RENDER_POLICIES.selectionShell.renderOrder}
+            userData={{ gizmo: "texture-characteristic-proxy" }}
           >
-            <sphereGeometry args={[tipSize * 0.55, 16, 12]} />
-            <meshBasicMaterial color={colors.textPrimary} depthTest={false} toneMapped={false} />
-          </mesh>
-
-          {bridge.gizmoMode === "translate" ? (
-            <group userData={{ gizmoMode: "translate" }}>
-              {(
-                [
-                  { axis: "x" as const, pos: [L * 0.5, 0, 0] as Vec3, rot: [0, 0, -Math.PI / 2] as Vec3, color: xColor },
-                  { axis: "y" as const, pos: [0, L * 0.5, 0] as Vec3, rot: [0, 0, 0] as Vec3, color: yColor },
-                  { axis: "z" as const, pos: [0, 0, L * 0.5] as Vec3, rot: [Math.PI / 2, 0, 0] as Vec3, color: zColor },
-                ] as const
-              ).map(({ axis, pos, rot, color }) => (
-                <mesh
-                  key={axis}
-                  {...pointerHandlersFor("translate", axis)}
-                  position={pos}
-                  renderOrder={RENDER_POLICIES.selectionShell.renderOrder + 1}
-                  rotation={rot}
-                  userData={{ axis, gizmo: "texture-translate-axis" }}
-                >
-                  <cylinderGeometry args={[shaftRadius, shaftRadius, L, 12]} />
-                  <meshBasicMaterial color={color} depthTest={false} toneMapped={false} />
-                </mesh>
-              ))}
-              {(
-                [
-                  { plane: "xy" as const, pos: [L * 0.22, L * 0.22, 0] as Vec3, rot: [0, 0, 0] as Vec3, color: zColor },
-                  { plane: "xz" as const, pos: [L * 0.22, 0, L * 0.22] as Vec3, rot: [Math.PI / 2, 0, 0] as Vec3, color: yColor },
-                  { plane: "yz" as const, pos: [0, L * 0.22, L * 0.22] as Vec3, rot: [0, Math.PI / 2, 0] as Vec3, color: xColor },
-                ] as const
-              ).map(({ plane, pos, rot, color }) => (
-                <mesh
-                  key={plane}
-                  {...pointerHandlersFor("translate", plane)}
-                  position={pos}
-                  renderOrder={RENDER_POLICIES.selectionShell.renderOrder + 1}
-                  rotation={rot}
-                  userData={{ gizmo: "texture-translate-plane", plane }}
-                >
-                  <planeGeometry args={[L * 0.18, L * 0.18]} />
-                  <meshBasicMaterial
-                    color={color}
-                    depthTest={false}
-                    opacity={0.45}
-                    toneMapped={false}
-                    transparent
-                  />
-                </mesh>
-              ))}
-            </group>
-          ) : null}
-
-          {bridge.gizmoMode === "rotate" ? (
-            <group userData={{ gizmoMode: "rotate" }}>
-              {(
-                [
-                  { axis: "x" as const, rot: [0, Math.PI / 2, 0] as Vec3, color: xColor },
-                  { axis: "y" as const, rot: [Math.PI / 2, 0, 0] as Vec3, color: yColor },
-                  { axis: "z" as const, rot: [0, 0, 0] as Vec3, color: zColor },
-                ] as const
-              ).map(({ axis, rot, color }) => (
-                <mesh
-                  key={axis}
-                  {...pointerHandlersFor("rotate", axis)}
-                  renderOrder={RENDER_POLICIES.selectionShell.renderOrder + 1}
-                  rotation={rot}
-                  userData={{ axis, gizmo: "texture-rotate-ring" }}
-                >
-                  <torusGeometry args={[L * 0.8, shaftRadius * 0.9, 12, 48]} />
-                  <meshBasicMaterial color={color} depthTest={false} toneMapped={false} />
-                </mesh>
-              ))}
-            </group>
-          ) : null}
-
-          {bridge.gizmoMode === "scale" ? (
-            <group userData={{ gizmoMode: "scale" }}>
-              <mesh
-                {...pointerHandlersFor("scale", "uniform")}
-                renderOrder={RENDER_POLICIES.selectionShell.renderOrder + 2}
-                userData={{ gizmo: "texture-scale-uniform" }}
-              >
-                <boxGeometry args={[tipSize * 1.25, tipSize * 1.25, tipSize * 1.25]} />
-                <meshBasicMaterial color={colors.accent} depthTest={false} toneMapped={false} />
-              </mesh>
-              {(
-                [
-                  { axis: "x" as const, pos: [L, 0, 0] as Vec3, color: xColor },
-                  { axis: "y" as const, pos: [0, L, 0] as Vec3, color: yColor },
-                  { axis: "z" as const, pos: [0, 0, L] as Vec3, color: zColor },
-                ] as const
-              ).map(({ axis, pos, color }) => (
-                <mesh
-                  key={axis}
-                  {...pointerHandlersFor("scale", axis)}
-                  position={pos}
-                  renderOrder={RENDER_POLICIES.selectionShell.renderOrder + 1}
-                  userData={{ axis, gizmo: "texture-scale-axis" }}
-                >
-                  <boxGeometry args={[tipSize, tipSize, tipSize]} />
-                  <meshBasicMaterial color={color} depthTest={false} toneMapped={false} />
-                </mesh>
-              ))}
-            </group>
-          ) : null}
+            <lineBasicMaterial
+              color={colors.accent}
+              depthTest={false}
+              opacity={0.85}
+              toneMapped={false}
+              transparent
+            />
+          </lineSegments>
         </group>
       ) : null}
     </group>

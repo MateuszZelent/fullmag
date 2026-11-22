@@ -1,3 +1,16 @@
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
+import {
+  BoxGeometry,
+  CylinderGeometry,
+  Group,
+  Mesh,
+  MeshBasicMaterial,
+  PerspectiveCamera,
+  Raycaster,
+  Vector2,
+  Vector3,
+} from "three";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { SceneResource } from "@/kernel/api/apiTypes";
@@ -17,10 +30,17 @@ import {
   applyTextureGizmoTranslateDrag,
   buildCharacteristicProxyWireframeSegments,
   buildSubdividedSurfacePreviewData,
+  createTextureGizmoDragController,
   installTextureGizmoKeyboardShortcuts,
+  pickTextureGizmoHandleFromGroup,
   resolveTextureGizmoWorldPose,
+  Viewport3DTextureTransformLayer,
 } from "./TextureTransformGizmo";
 import { sampleViewport3DSurfaceHslColors } from "./viewport3dPrimitiveModel";
+
+vi.mock("./viewport3dBatchedInvalidate", () => ({
+  useBatchedInvalidate: () => vi.fn(),
+}));
 
 describe("TextureTransformGizmo & 3D surface preview synchronization", () => {
   beforeEach(() => {
@@ -30,6 +50,19 @@ describe("TextureTransformGizmo & 3D surface preview synchronization", () => {
   afterEach(() => {
     resetTextureDraftBridgeForTests();
     vi.restoreAllMocks();
+  });
+
+  it("mounts in the renderer without the workspace KernelProvider", () => {
+    const props = {
+      primitiveModel: null,
+      selectedObjectId: null,
+      textureTransformModel: {
+        getAuthoredDraft: () => null,
+        sampleSurfaceColors: () => null,
+      },
+    };
+
+    expect(renderToStaticMarkup(createElement(Viewport3DTextureTransformLayer, props))).toBe("");
   });
 
   it("handles Q/W/E/R/T keyboard shortcuts and ignores editable inputs", () => {
@@ -293,5 +326,239 @@ describe("TextureTransformGizmo & 3D surface preview synchronization", () => {
     );
     expect(meshData.positionsWorld.length / 3).toBeGreaterThan(2000);
     expect(meshData.indices.length).toBeGreaterThan(6000);
+  });
+
+  it("synchronously locks OrbitControls, captures pointer on canvas, tracks window Raycaster drags for Translate/Rotate/Scale, and reverts on Escape", () => {
+    const target = { kind: "object" as const, objectId: "disk" };
+    const bounds = resolveTargetBoundsMeters(null, target);
+    let stagedDraft = {
+      ...createDefaultMagneticTextureDraft("bloch_skyrmion", bounds, "object"),
+      uniformScaleLocked: false,
+    };
+    const owner = Symbol("inspector-drag-test");
+    const syncBinding = () => {
+      registerTextureInspectorBinding(owner, {
+        target,
+        draft: stagedDraft,
+        bounds,
+        patchDraft: (partial) => {
+          stagedDraft = { ...stagedDraft, ...partial };
+          syncBinding();
+        },
+        fitCharacteristicSize: vi.fn(),
+        resetTransform: vi.fn(),
+      });
+    };
+    syncBinding();
+    toggleTextureGizmo(true);
+
+    const camera = new PerspectiveCamera(45, 1, 1e-10, 1e-3);
+    camera.position.set(0, 0, 300e-9);
+    camera.lookAt(0, 0, 0);
+    camera.updateProjectionMatrix();
+    camera.updateMatrixWorld();
+
+    const controls = { enabled: true };
+    const setPointerCapture = vi.fn();
+    const releasePointerCapture = vi.fn();
+    const canvas = {
+      getBoundingClientRect: () => ({ left: 0, top: 0, width: 400, height: 400 }),
+      setPointerCapture,
+      releasePointerCapture,
+      style: { cursor: "" },
+    };
+    const winListeners = new Map<string, EventListener>();
+    const fakeWin = {
+      addEventListener: vi.fn((type: string, cb: EventListenerOrEventListenerObject) => {
+        winListeners.set(type, cb as EventListener);
+      }),
+      removeEventListener: vi.fn((type: string) => {
+        winListeners.delete(type);
+      }),
+    };
+    const onGestureActiveChange = vi.fn();
+    const invalidate = vi.fn();
+
+    const controller = createTextureGizmoDragController(() => ({
+      camera,
+      canvas,
+      controls,
+      draft: stagedDraft,
+      pose: resolveTextureGizmoWorldPose(stagedDraft, bounds),
+      windowTarget: fakeWin as never,
+      onGestureActiveChange,
+      invalidate,
+    }));
+
+    // 1. Translate X drag via window pointermove + Raycaster
+    const startRaycaster = new Raycaster();
+    startRaycaster.setFromCamera(new Vector2(0, 0), camera);
+    expect(
+      controller.beginDrag({
+        pointerId: 42,
+        mode: "translate",
+        handle: "x",
+        key: "translate:x",
+        ray: startRaycaster.ray,
+        hitPoint: [0, 0, 0],
+      }),
+    ).toBe(true);
+
+    // Synchronous invariants BEFORE any async effect
+    expect(controls.enabled).toBe(false);
+    expect(onGestureActiveChange).toHaveBeenCalledExactlyOnceWith(true);
+    expect(getTextureDraftBridgeSnapshot().gestureActive).toBe(true);
+    expect(setPointerCapture).toHaveBeenCalledExactlyOnceWith(42);
+    expect(canvas.style.cursor).toBe("grabbing");
+
+    // Drag right across viewport (clientX: 200 -> 260)
+    winListeners.get("pointermove")?.({
+      pointerId: 42,
+      clientX: 260,
+      clientY: 200,
+      shiftKey: false,
+    } as unknown as Event);
+    expect(stagedDraft.translationM[0]).toBeGreaterThan(10e-9);
+    expect(stagedDraft.translationM[1]).toBe(0);
+
+    winListeners.get("pointerup")?.({ pointerId: 42 } as unknown as Event);
+    expect(controls.enabled).toBe(true);
+    expect(releasePointerCapture).toHaveBeenCalledWith(42);
+    expect(onGestureActiveChange).toHaveBeenLastCalledWith(false);
+    expect(getTextureDraftBridgeSnapshot().gestureActive).toBe(false);
+    expect(canvas.style.cursor).toBe("");
+
+    // 2. Scale X axis drag + Escape revert
+    const committedTx = [...stagedDraft.translationM];
+    const poseAfterTx = resolveTextureGizmoWorldPose(stagedDraft, bounds);
+    const scaleStartNdc = new Vector3(
+      poseAfterTx.originWorld[0] + poseAfterTx.handleLength,
+      0,
+      0,
+    ).project(camera);
+    const scaleStartRaycaster = new Raycaster();
+    scaleStartRaycaster.setFromCamera(new Vector2(scaleStartNdc.x, scaleStartNdc.y), camera);
+
+    controller.beginDrag({
+      pointerId: 55,
+      mode: "scale",
+      handle: "x",
+      key: "scale:x",
+      ray: scaleStartRaycaster.ray,
+      hitPoint: [poseAfterTx.originWorld[0] + poseAfterTx.handleLength, 0, 0],
+    });
+    expect(controls.enabled).toBe(false);
+
+    winListeners.get("pointermove")?.({
+      pointerId: 55,
+      clientX: ((scaleStartNdc.x + 0.25) * 0.5 + 0.5) * 400,
+      clientY: 200,
+      shiftKey: false,
+    } as unknown as Event);
+    expect(stagedDraft.scale[0]).toBeGreaterThan(1.1);
+    expect(stagedDraft.scale[1]).toBe(1);
+
+    // Escape cancels drag and restores start scale
+    const preventDefault = vi.fn();
+    winListeners.get("keydown")?.({
+      key: "Escape",
+      preventDefault,
+      stopPropagation: vi.fn(),
+    } as unknown as Event);
+    expect(preventDefault).toHaveBeenCalledOnce();
+    expect(stagedDraft.scale).toEqual([1, 1, 1]);
+    expect(stagedDraft.translationM).toEqual(committedTx);
+    expect(controls.enabled).toBe(true);
+    expect(getTextureDraftBridgeSnapshot().gestureActive).toBe(false);
+
+    // 3. Uniform center cube scale drag
+    const centerNdc = new Vector3(...poseAfterTx.originWorld).project(camera);
+    const centerRay = new Raycaster();
+    centerRay.setFromCamera(new Vector2(centerNdc.x, centerNdc.y), camera);
+    controller.beginDrag({
+      pointerId: 77,
+      mode: "scale",
+      handle: "uniform",
+      key: "scale:uniform",
+      ray: centerRay.ray,
+      hitPoint: poseAfterTx.originWorld,
+    });
+    winListeners.get("pointermove")?.({
+      pointerId: 77,
+      clientX: ((centerNdc.x + 0.2) * 0.5 + 0.5) * 400,
+      clientY: ((1 - (centerNdc.y + 0.2)) * 0.5) * 400,
+      shiftKey: false,
+    } as unknown as Event);
+    expect(stagedDraft.scale[0]).toBeGreaterThan(1.05);
+    expect(stagedDraft.scale[0]).toBeCloseTo(stagedDraft.scale[1], 8);
+    expect(stagedDraft.scale[0]).toBeCloseTo(stagedDraft.scale[2], 8);
+    controller.dispose();
+    expect(controls.enabled).toBe(true);
+  });
+
+  it("picks generous 3.5x invisible Scale stalk and end-cube hitboxes cleanly via Raycaster", () => {
+    const group = new Group();
+    const L = 55e-9;
+    const shaftRadius = L * 0.032;
+    const hitboxRadius = shaftRadius * 3.5;
+    const tipSize = L * 0.11;
+
+    const uniformHit = new Mesh(
+      new BoxGeometry(tipSize * 2.4, tipSize * 2.4, tipSize * 2.4),
+      new MeshBasicMaterial({ opacity: 0, transparent: true }),
+    );
+    uniformHit.userData = {
+      gizmoHandle: { mode: "scale", handle: "uniform", key: "scale:uniform", priority: 2 },
+    };
+    group.add(uniformHit);
+
+    const stalkHit = new Mesh(
+      new CylinderGeometry(hitboxRadius, hitboxRadius, L * 0.76, 12),
+      new MeshBasicMaterial({ opacity: 0, transparent: true }),
+    );
+    stalkHit.position.set(L * 0.62, 0, 0);
+    stalkHit.rotation.set(0, 0, -Math.PI / 2);
+    stalkHit.userData = {
+      gizmoHandle: { mode: "scale", handle: "x", key: "scale:x", priority: 1 },
+    };
+    group.add(stalkHit);
+
+    const cubeHit = new Mesh(
+      new BoxGeometry(tipSize * 3.2, tipSize * 3.2, tipSize * 3.2),
+      new MeshBasicMaterial({ opacity: 0, transparent: true }),
+    );
+    cubeHit.position.set(L, 0, 0);
+    cubeHit.userData = {
+      gizmoHandle: { mode: "scale", handle: "x", key: "scale:x", priority: 1 },
+    };
+    group.add(cubeHit);
+
+    const camera = new PerspectiveCamera(45, 1, 1e-10, 1e-3);
+    camera.position.set(0, 0, 250e-9);
+    camera.lookAt(0, 0, 0);
+    camera.updateProjectionMatrix();
+    camera.updateMatrixWorld();
+
+    // Off-center ray missing the thin 1.7 nm visual shaft (y = 4.5 nm > shaftRadius) STILL hits the 3.5x hitbox!
+    const offAxisPt = new Vector3(L * 0.6, shaftRadius * 2.5, 0).project(camera);
+    const raycaster = new Raycaster();
+    raycaster.setFromCamera(new Vector2(offAxisPt.x, offAxisPt.y), camera);
+    const pickedStalk = pickTextureGizmoHandleFromGroup(group, raycaster);
+    expect(pickedStalk).toMatchObject({
+      kind: "handle",
+      mode: "scale",
+      handle: "x",
+      key: "scale:x",
+    });
+
+    // Center ray hits uniform scale cube with priority
+    raycaster.setFromCamera(new Vector2(0, 0), camera);
+    const pickedCenter = pickTextureGizmoHandleFromGroup(group, raycaster);
+    expect(pickedCenter).toMatchObject({
+      kind: "handle",
+      mode: "scale",
+      handle: "uniform",
+      key: "scale:uniform",
+    });
   });
 });

@@ -1364,4 +1364,15 @@ describe("Viewport3DScene region overlay visibility", () => {
 
     expect(source).toContain("onSelectTarget={() => onSelectFdmTarget(view.target)}");
   });
+
+  it("locks OrbitControls rotation when an active texture gizmo handle mode is selected", () => {
+    const source = readFileSync(
+      new URL("./Viewport3DScene.tsx", import.meta.url),
+      "utf8",
+    );
+
+    expect(source).toContain("isTextureGizmoHandleModeActive(");
+    expect(source).toContain("rotateLocked={gizmoRotateLocked}");
+    expect(source).toContain("interactionBlocked={moveGestureActive || textureBridge.gestureActive}");
+  });
 });
