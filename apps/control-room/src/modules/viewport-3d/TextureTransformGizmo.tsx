@@ -12,12 +12,14 @@ import {
 import {
   BufferAttribute,
   BufferGeometry,
+  Color,
   DoubleSide,
   Plane,
   Raycaster,
   Vector2,
   Vector3,
   type Camera,
+  type ColorRepresentation,
   type Group,
   type Object3D,
   type Ray,
@@ -26,7 +28,10 @@ import {
 import type { SceneResource } from "@/kernel/api/apiTypes";
 import { resolveCanonicalQuantityId } from "@/kernel/api/quantityIds";
 import type { TargetMetricBounds, Vec3 } from "@/shared/domain/magnetization-texture/boundsResolver";
-import { resolveTargetBoundsMeters } from "@/shared/domain/magnetization-texture/boundsResolver";
+import {
+  pointInsideRegionShape,
+  resolveTargetBoundsMeters,
+} from "@/shared/domain/magnetization-texture/boundsResolver";
 import type { VisualizationTargetSettings } from "@/kernel/visualization/ObjectVisualizationController";
 import {
   axisAngleToQuaternion,
@@ -34,9 +39,12 @@ import {
   normalizeQuaternion,
   quaternionToEulerDegrees,
   rotateVectorByQuaternion,
+  samplePresetTextureV2Client,
+  type PresetTextureSpecV2,
   type Quat4,
 } from "@/shared/domain/magnetization-texture/evaluateV2Client";
 import {
+  buildPresetSpecFromDraft,
   hydrateMagneticTextureDraftFromInitializer,
   type MagneticTextureDraft,
 } from "@/shared/domain/magnetization-texture/presetDefaults";
@@ -49,11 +57,14 @@ import {
   patchActiveTextureDraft,
   subscribeTextureDraftBridge,
   type TextureGizmoMode,
+  type TextureInspectorDraftBinding,
 } from "@/shared/domain/magnetization-texture/textureDraftBridge";
 import { canonicalPresetKind } from "@/shared/domain/magnetization-texture/texturePresets";
+import { scalarColorRgb } from "@/shared/visualization/scalarColorPalette";
 
 import { useViewport3DColors } from "./hooks/useViewport3DColors";
 import { RENDER_POLICIES } from "./layers/viewport3DRenderPolicy";
+import { magnetizationHslLinearRgb } from "./orientation/magnetizationColor";
 import { useBatchedInvalidate } from "./viewport3dBatchedInvalidate";
 import type { Viewport3DResourceTracker } from "./viewport3dDiagnostics";
 import {
@@ -1094,6 +1105,764 @@ export function createTextureGizmoDragController(
   };
 }
 
+const AUTHORED_VECTOR_BUDGET_MIN = 64;
+const AUTHORED_VECTOR_BUDGET_MAX = 2000;
+const AUTHORED_VECTOR_DEFAULT_BUDGET = 400;
+
+interface CompiledAuthoredRegionLayer {
+  readonly regionId: string;
+  readonly priority: number;
+  readonly regionRecord: Record<string, unknown>;
+  readonly spec: PresetTextureSpecV2;
+  readonly regionBounds: TargetMetricBounds;
+}
+
+function asAuthoredRecord(value: unknown): Record<string, unknown> | null {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
+function asAuthoredString(value: unknown): string | null {
+  return typeof value === "string" && value.length > 0 ? value : null;
+}
+
+function asAuthoredNumber(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function isAuthoredFieldFileAsset(asset: Record<string, unknown>): boolean {
+  const kind = asAuthoredString(asset.kind) ?? "";
+  if (
+    kind === "sampled" ||
+    kind === "field_file" ||
+    kind === "field-file" ||
+    kind === "imported_field"
+  ) {
+    return true;
+  }
+  return asset.source_mode === "field-file";
+}
+
+export interface SampleAuthoredMagnetizationVectorsOptions {
+  readonly scene: SceneResource | null;
+  readonly objectId: string;
+  readonly positionsWorld: Float32Array;
+  readonly liveBinding?: TextureInspectorDraftBinding | null;
+}
+
+/**
+ * Evaluates unit magnetization vectors (mx, my, mz) at arbitrary world points
+ * using the canonical v2 preset texture evaluator and enabled region overrides
+ * (exact parity with `sampleViewport3DSurfaceHslColors`).
+ */
+export function sampleAuthoredMagnetizationVectors({
+  scene,
+  objectId,
+  positionsWorld,
+  liveBinding = null,
+}: SampleAuthoredMagnetizationVectorsOptions): Float32Array | null {
+  const pointCount = Math.floor(positionsWorld.length / 3);
+  if (pointCount <= 0) return null;
+
+  const sceneRec = asAuthoredRecord(scene);
+  const objectRec = Array.isArray(sceneRec?.objects)
+    ? sceneRec.objects
+        .map(asAuthoredRecord)
+        .find((entry) => entry && asAuthoredString(entry.id) === objectId) ?? null
+    : null;
+
+  const objectTarget = { kind: "object" as const, objectId };
+  const objectBounds =
+    liveBinding?.target.kind === "object" && liveBinding.target.objectId === objectId
+      ? liveBinding.bounds
+      : resolveTargetBoundsMeters(scene, objectTarget);
+  const objectTransform = asAuthoredRecord(objectRec?.transform);
+
+  let objectSpec: PresetTextureSpecV2 | null = null;
+  if (liveBinding?.target.kind === "object" && liveBinding.target.objectId === objectId) {
+    if (liveBinding.draft.sourceMode !== "field-file") {
+      objectSpec = buildPresetSpecFromDraft(liveBinding.draft, objectBounds);
+    }
+  } else if (sceneRec && objectRec) {
+    const refId = asAuthoredString(objectRec.magnetization_ref);
+    const asset =
+      refId && Array.isArray(sceneRec.magnetization_assets)
+        ? sceneRec.magnetization_assets
+            .map(asAuthoredRecord)
+            .find((entry) => entry && asAuthoredString(entry.id) === refId) ?? null
+        : null;
+    if (asset && !isAuthoredFieldFileAsset(asset)) {
+      const draft = hydrateMagneticTextureDraftFromInitializer(asset, objectBounds, "object");
+      objectSpec = buildPresetSpecFromDraft(draft, objectBounds);
+    }
+  }
+
+  const regionLayers: CompiledAuthoredRegionLayer[] = [];
+  const rawRegions = Array.isArray(objectRec?.regions) ? objectRec.regions : [];
+  for (const rawRegion of rawRegions) {
+    const reg = asAuthoredRecord(rawRegion);
+    if (!reg || reg.enabled === false) continue;
+    const regionId = asAuthoredString(reg.region_id);
+    if (!regionId) continue;
+    const priority = asAuthoredNumber(reg.priority) ?? 0;
+    const regBounds =
+      liveBinding?.target.kind === "region" &&
+      liveBinding.target.objectId === objectId &&
+      liveBinding.target.regionId === regionId
+        ? liveBinding.bounds
+        : resolveTargetBoundsMeters(scene, { kind: "region", objectId, regionId });
+
+    if (
+      liveBinding?.target.kind === "region" &&
+      liveBinding.target.objectId === objectId &&
+      liveBinding.target.regionId === regionId
+    ) {
+      if (
+        liveBinding.draft.inheritanceMode === "override" &&
+        liveBinding.draft.sourceMode !== "field-file"
+      ) {
+        regionLayers.push({
+          regionId,
+          priority,
+          regionRecord: reg,
+          spec: buildPresetSpecFromDraft(liveBinding.draft, regBounds),
+          regionBounds: regBounds,
+        });
+      }
+      continue;
+    }
+
+    const init = asAuthoredRecord(asAuthoredRecord(reg.texture_override)?.initial_magnetization);
+    if (init && !isAuthoredFieldFileAsset(init)) {
+      const regDraft = hydrateMagneticTextureDraftFromInitializer(init, regBounds, "region", {
+        inherited: false,
+      });
+      regionLayers.push({
+        regionId,
+        priority,
+        regionRecord: reg,
+        spec: buildPresetSpecFromDraft(regDraft, regBounds),
+        regionBounds: regBounds,
+      });
+    }
+  }
+
+  regionLayers.sort((left, right) => right.priority - left.priority);
+
+  if (!objectSpec && regionLayers.length === 0) {
+    return null;
+  }
+
+  const outVectors = new Float32Array(pointCount * 3);
+  for (let i = 0; i < pointCount; i += 1) {
+    const base = i * 3;
+    const worldPt: Vec3 = [
+      positionsWorld[base]!,
+      positionsWorld[base + 1]!,
+      positionsWorld[base + 2]!,
+    ];
+    const positionObject: Vec3 = [
+      worldPt[0] - objectBounds.worldCenter[0],
+      worldPt[1] - objectBounds.worldCenter[1],
+      worldPt[2] - objectBounds.worldCenter[2],
+    ];
+
+    let chosenSpec: PresetTextureSpecV2 | null = objectSpec;
+    let chosenBounds: TargetMetricBounds = objectBounds;
+    for (const layer of regionLayers) {
+      if (pointInsideRegionShape(positionObject, layer.regionRecord, objectTransform)) {
+        chosenSpec = layer.spec;
+        chosenBounds = layer.regionBounds;
+        break;
+      }
+    }
+
+    const positionRegion: Vec3 = [
+      worldPt[0] - chosenBounds.worldCenter[0],
+      worldPt[1] - chosenBounds.worldCenter[1],
+      worldPt[2] - chosenBounds.worldCenter[2],
+    ];
+
+    const spin = chosenSpec
+      ? samplePresetTextureV2Client(
+          chosenSpec,
+          {
+            positionObject,
+            positionRegion,
+            positionWorld: worldPt,
+          },
+          chosenBounds,
+        )
+      : ([1, 0, 0] as const);
+
+    outVectors[base] = spin[0];
+    outVectors[base + 1] = spin[1];
+    outVectors[base + 2] = spin[2];
+  }
+
+  return outVectors;
+}
+
+export interface AuthoredMagnetizationVectorGridOptions {
+  readonly budget?: number;
+  readonly geometryScope?: "surface" | "full";
+  readonly surfaceOffsetEnabled?: boolean;
+  readonly surfaceOffsetScale?: number;
+}
+
+export interface AuthoredMagnetizationVectorGrid {
+  readonly positionsWorld: Float32Array;
+  readonly pitch: number;
+  readonly count: number;
+  readonly renderOnTop: boolean;
+}
+
+function resolveGrid2DCounts(
+  spanA: number,
+  spanB: number,
+  targetCount: number,
+): { na: number; nb: number; pitch: number } {
+  const safeA = Math.max(spanA, 1e-12);
+  const safeB = Math.max(spanB, 1e-12);
+  const safeTarget = Math.max(1, Math.floor(targetCount));
+  const idealPitch = Math.sqrt((safeA * safeB) / safeTarget);
+  let na = Math.max(1, Math.round(safeA / idealPitch));
+  let nb = Math.max(1, Math.round(safeB / idealPitch));
+  while (na * nb > safeTarget && (na > 1 || nb > 1)) {
+    if (na / safeA >= nb / safeB && na > 1) {
+      na -= 1;
+    } else if (nb > 1) {
+      nb -= 1;
+    } else {
+      na -= 1;
+    }
+  }
+  const pitch = Math.max(1e-12, Math.min(safeA / na, safeB / nb));
+  return { na, nb, pitch };
+}
+
+/**
+ * Samples an evenly spaced 3D grid of anchor points across a primitive object's
+ * bounds for authored magnetization vector arrows, honoring `vectorBudget`
+ * (clamped 64..2000 when > 0), `geometryScope` ("surface" vs "full"), and shape.
+ */
+export function buildAuthoredMagnetizationVectorGridPoints(
+  object: Viewport3DPrimitiveObject,
+  options: AuthoredMagnetizationVectorGridOptions = {},
+): AuthoredMagnetizationVectorGrid {
+  const rawBudget = options.budget ?? AUTHORED_VECTOR_DEFAULT_BUDGET;
+  if (!Number.isFinite(rawBudget) || rawBudget <= 0) {
+    return { positionsWorld: new Float32Array(0), pitch: 1e-9, count: 0, renderOnTop: true };
+  }
+  const targetCount = Math.max(
+    AUTHORED_VECTOR_BUDGET_MIN,
+    Math.min(AUTHORED_VECTOR_BUDGET_MAX, Math.round(rawBudget)),
+  );
+  const geometryScope = options.geometryScope ?? "surface";
+  const surfaceOffsetEnabled = Boolean(options.surfaceOffsetEnabled);
+  const surfaceOffsetScale = Number.isFinite(options.surfaceOffsetScale)
+    ? Math.max(0, options.surfaceOffsetScale ?? 0)
+    : 0;
+
+  const [cx, cy, cz] = object.bounds.center;
+  const sx = Math.max(object.bounds.size[0], 1e-12);
+  const sy = Math.max(object.bounds.size[1], 1e-12);
+  const sz = Math.max(object.bounds.size[2], 1e-12);
+  const hx = sx * 0.5;
+  const hy = sy * 0.5;
+  const hz = sz * 0.5;
+  const maxSpan = Math.max(sx, sy, sz);
+  const points: number[] = [];
+
+  const innerRingRadiusSq =
+    object.kind === "cylinder-cylinder-difference" &&
+    object.csgPreview?.kind === "cylinder-cylinder-difference"
+      ? object.csgPreview.innerRadius * object.csgPreview.innerRadius
+      : 0;
+  const insideCylinderCrossSection = (dx: number, dy: number): boolean => {
+    const nx = dx / hx;
+    const ny = dy / hy;
+    if (nx * nx + ny * ny > 1.0001) return false;
+    if (innerRingRadiusSq > 0 && dx * dx + dy * dy < innerRingRadiusSq) return false;
+    return true;
+  };
+  const insideEllipsoid = (dx: number, dy: number, dz: number): boolean => {
+    const nx = dx / hx;
+    const ny = dy / hy;
+    const nz = dz / hz;
+    return nx * nx + ny * ny + nz * nz <= 1.0001;
+  };
+
+  if (geometryScope === "surface") {
+    const surfaceLift = (pitch: number): number =>
+      surfaceOffsetEnabled
+        ? pitch * (0.18 + surfaceOffsetScale * 0.55)
+        : Math.max(pitch * 0.05, maxSpan * 0.002);
+
+    if (object.kind === "sphere") {
+      const approxArea = 4 * Math.PI * ((hx * hy + hy * hz + hz * hx) / 3);
+      const pitch = Math.max(1e-12, Math.sqrt(approxArea / targetCount));
+      const lift = surfaceLift(pitch);
+      const goldenAngle = Math.PI * (3 - Math.sqrt(5));
+      for (let i = 0; i < targetCount; i += 1) {
+        const y = 1 - ((i + 0.5) / targetCount) * 2;
+        const r = Math.sqrt(Math.max(0, 1 - y * y));
+        const theta = goldenAngle * i;
+        const ux = Math.cos(theta) * r;
+        const uz = Math.sin(theta) * r;
+        points.push(
+          cx + ux * (hx + lift),
+          cy + y * (hy + lift),
+          cz + uz * (hz + lift),
+        );
+      }
+      return {
+        positionsWorld: new Float32Array(points),
+        pitch,
+        count: targetCount,
+        renderOnTop: false,
+      };
+    }
+
+    if (object.kind === "cylinder" || object.kind === "cylinder-cylinder-difference") {
+      const isThinDisk = sz <= 0.35 * Math.max(sx, sy);
+      if (isThinDisk) {
+        const { na, nb, pitch } = resolveGrid2DCounts(sx, sy, Math.round(targetCount * (4 / Math.PI)));
+        const lift = surfaceLift(pitch);
+        const z = cz + hz + lift;
+        for (let iy = 0; iy < nb; iy += 1) {
+          const dy = -hy + ((iy + 0.5) / nb) * sy;
+          for (let ix = 0; ix < na; ix += 1) {
+            const dx = -hx + ((ix + 0.5) / na) * sx;
+            if (insideCylinderCrossSection(dx, dy)) {
+              points.push(cx + dx, cy + dy, z);
+            }
+          }
+        }
+        return {
+          positionsWorld: new Float32Array(points),
+          pitch,
+          count: points.length / 3,
+          renderOnTop: true,
+        };
+      }
+      // Thick cylinder: sample top/bottom caps + cylindrical mantle
+      const capBudget = Math.max(16, Math.round(targetCount * 0.25));
+      const mantleBudget = Math.max(16, targetCount - capBudget * 2);
+      const capGrid = resolveGrid2DCounts(sx, sy, Math.round(capBudget * (4 / Math.PI)));
+      const circumference = Math.PI * (hx + hy);
+      const mantleGrid = resolveGrid2DCounts(circumference, sz, mantleBudget);
+      const pitch = Math.min(capGrid.pitch, mantleGrid.pitch);
+      const lift = surfaceLift(pitch);
+      for (const zSign of [1, -1] as const) {
+        const z = cz + zSign * (hz + lift);
+        for (let iy = 0; iy < capGrid.nb; iy += 1) {
+          const dy = -hy + ((iy + 0.5) / capGrid.nb) * sy;
+          for (let ix = 0; ix < capGrid.na; ix += 1) {
+            const dx = -hx + ((ix + 0.5) / capGrid.na) * sx;
+            if (insideCylinderCrossSection(dx, dy)) {
+              points.push(cx + dx, cy + dy, z);
+            }
+          }
+        }
+      }
+      for (let iz = 0; iz < mantleGrid.nb; iz += 1) {
+        const z = cz - hz + ((iz + 0.5) / mantleGrid.nb) * sz;
+        for (let it = 0; it < mantleGrid.na; it += 1) {
+          const theta = (2 * Math.PI * it) / mantleGrid.na;
+          const cosT = Math.cos(theta);
+          const sinT = Math.sin(theta);
+          points.push(cx + cosT * (hx + lift), cy + sinT * (hy + lift), z);
+        }
+      }
+      return {
+        positionsWorld: new Float32Array(points),
+        pitch,
+        count: points.length / 3,
+        renderOnTop: false,
+      };
+    }
+
+    // Box / general primitive surface sampling
+    const thinZ = sz <= 0.35 * Math.max(sx, sy);
+    const thinY = !thinZ && sy <= 0.35 * Math.max(sx, sz);
+    const thinX = !thinZ && !thinY && sx <= 0.35 * Math.max(sy, sz);
+    if (thinZ) {
+      const { na, nb, pitch } = resolveGrid2DCounts(sx, sy, targetCount);
+      const z = cz + hz + surfaceLift(pitch);
+      for (let iy = 0; iy < nb; iy += 1) {
+        const y = cy - hy + ((iy + 0.5) / nb) * sy;
+        for (let ix = 0; ix < na; ix += 1) {
+          const x = cx - hx + ((ix + 0.5) / na) * sx;
+          points.push(x, y, z);
+        }
+      }
+      return {
+        positionsWorld: new Float32Array(points),
+        pitch,
+        count: points.length / 3,
+        renderOnTop: true,
+      };
+    }
+    if (thinY) {
+      const { na, nb, pitch } = resolveGrid2DCounts(sx, sz, targetCount);
+      const y = cy + hy + surfaceLift(pitch);
+      for (let iz = 0; iz < nb; iz += 1) {
+        const z = cz - hz + ((iz + 0.5) / nb) * sz;
+        for (let ix = 0; ix < na; ix += 1) {
+          const x = cx - hx + ((ix + 0.5) / na) * sx;
+          points.push(x, y, z);
+        }
+      }
+      return {
+        positionsWorld: new Float32Array(points),
+        pitch,
+        count: points.length / 3,
+        renderOnTop: true,
+      };
+    }
+    if (thinX) {
+      const { na, nb, pitch } = resolveGrid2DCounts(sy, sz, targetCount);
+      const x = cx + hx + surfaceLift(pitch);
+      for (let iz = 0; iz < nb; iz += 1) {
+        const z = cz - hz + ((iz + 0.5) / nb) * sz;
+        for (let iy = 0; iy < na; iy += 1) {
+          const y = cy - hy + ((iy + 0.5) / na) * sy;
+          points.push(x, y, z);
+        }
+      }
+      return {
+        positionsWorld: new Float32Array(points),
+        pitch,
+        count: points.length / 3,
+        renderOnTop: true,
+      };
+    }
+
+    // Thick 3D box: distribute across all 6 faces proportional to area
+    const totalArea = 2 * (sx * sy + sy * sz + sz * sx);
+    const basePitch = Math.max(1e-12, Math.sqrt(totalArea / targetCount));
+    const lift = surfaceLift(basePitch);
+    const nx = Math.max(1, Math.round(sx / basePitch));
+    const ny = Math.max(1, Math.round(sy / basePitch));
+    const nz = Math.max(1, Math.round(sz / basePitch));
+    const pitch = Math.max(1e-12, Math.min(sx / nx, sy / ny, sz / nz));
+    // ±Z faces
+    for (const zSign of [1, -1] as const) {
+      const z = cz + zSign * (hz + lift);
+      for (let iy = 0; iy < ny; iy += 1) {
+        const y = cy - hy + ((iy + 0.5) / ny) * sy;
+        for (let ix = 0; ix < nx; ix += 1) {
+          const x = cx - hx + ((ix + 0.5) / nx) * sx;
+          points.push(x, y, z);
+        }
+      }
+    }
+    // ±Y faces
+    for (const ySign of [1, -1] as const) {
+      const y = cy + ySign * (hy + lift);
+      for (let iz = 0; iz < nz; iz += 1) {
+        const z = cz - hz + ((iz + 0.5) / nz) * sz;
+        for (let ix = 0; ix < nx; ix += 1) {
+          const x = cx - hx + ((ix + 0.5) / nx) * sx;
+          points.push(x, y, z);
+        }
+      }
+    }
+    // ±X faces
+    for (const xSign of [1, -1] as const) {
+      const x = cx + xSign * (hx + lift);
+      for (let iz = 0; iz < nz; iz += 1) {
+        const z = cz - hz + ((iz + 0.5) / nz) * sz;
+        for (let iy = 0; iy < ny; iy += 1) {
+          const y = cy - hy + ((iy + 0.5) / ny) * sy;
+          points.push(x, y, z);
+        }
+      }
+    }
+    return {
+      positionsWorld: new Float32Array(points),
+      pitch,
+      count: points.length / 3,
+      renderOnTop: false,
+    };
+  }
+
+  // Full volume sampling
+  const oversample =
+    object.kind === "sphere"
+      ? 6 / Math.PI
+      : object.kind === "cylinder" || object.kind === "cylinder-cylinder-difference"
+        ? 4 / Math.PI
+        : 1;
+  const effTarget = Math.max(1, Math.round(targetCount * oversample));
+  const h = Math.cbrt((sx * sy * sz) / effTarget);
+  let nx = Math.max(1, Math.round(sx / h));
+  let ny = Math.max(1, Math.round(sy / h));
+  let nz = Math.max(1, Math.round(sz / h));
+
+  // If thin along one axis (clamped to 1), redistribute the 2D plane nicely
+  if (nz === 1 && nx * ny < effTarget * 0.7) {
+    const g = resolveGrid2DCounts(sx, sy, effTarget);
+    nx = g.na;
+    ny = g.nb;
+  } else if (ny === 1 && nx * nz < effTarget * 0.7) {
+    const g = resolveGrid2DCounts(sx, sz, effTarget);
+    nx = g.na;
+    nz = g.nb;
+  } else if (nx === 1 && ny * nz < effTarget * 0.7) {
+    const g = resolveGrid2DCounts(sy, sz, effTarget);
+    ny = g.na;
+    nz = g.nb;
+  }
+
+  while (nx * ny * nz > effTarget && (nx > 1 || ny > 1 || nz > 1)) {
+    const rx = nx > 1 ? nx / sx : -1;
+    const ry = ny > 1 ? ny / sy : -1;
+    const rz = nz > 1 ? nz / sz : -1;
+    if (rx >= ry && rx >= rz) nx -= 1;
+    else if (ry >= rz) ny -= 1;
+    else nz -= 1;
+  }
+
+  for (let iz = 0; iz < nz; iz += 1) {
+    const dz = -hz + ((iz + 0.5) / nz) * sz;
+    for (let iy = 0; iy < ny; iy += 1) {
+      const dy = -hy + ((iy + 0.5) / ny) * sy;
+      for (let ix = 0; ix < nx; ix += 1) {
+        const dx = -hx + ((ix + 0.5) / nx) * sx;
+        if (
+          (object.kind === "cylinder" || object.kind === "cylinder-cylinder-difference") &&
+          !insideCylinderCrossSection(dx, dy)
+        ) {
+          continue;
+        }
+        if (object.kind === "sphere" && !insideEllipsoid(dx, dy, dz)) {
+          continue;
+        }
+        points.push(cx + dx, cy + dy, cz + dz);
+      }
+    }
+  }
+
+  const activeSpacings: number[] = [];
+  if (nx > 1) activeSpacings.push(sx / nx);
+  if (ny > 1) activeSpacings.push(sy / ny);
+  if (nz > 1) activeSpacings.push(sz / nz);
+  const pitch = Math.max(
+    1e-12,
+    activeSpacings.length > 0 ? Math.min(...activeSpacings) : maxSpan,
+  );
+
+  return {
+    positionsWorld: new Float32Array(points),
+    pitch,
+    count: points.length / 3,
+    renderOnTop: true,
+  };
+}
+
+export interface AuthoredMagnetizationArrowBuffersOptions {
+  readonly colorMode?: string;
+  readonly monoColor?: ColorRepresentation;
+  readonly fallbackMonoColor?: ColorRepresentation;
+  readonly scalarColorPalette?: string;
+  readonly lengthScale?: number;
+  readonly centeringEnabled?: boolean;
+}
+
+export interface AuthoredMagnetizationArrowBuffers {
+  readonly positions: Float32Array;
+  readonly colors: Float32Array;
+  readonly arrowCount: number;
+}
+
+function resolveLinearMonoRgb(
+  monoColor: ColorRepresentation | undefined,
+  fallbackMonoColor: ColorRepresentation | undefined,
+): [number, number, number] {
+  const candidates: Array<ColorRepresentation | undefined> = [
+    monoColor,
+    fallbackMonoColor,
+    "#38bdf8",
+  ];
+  const parsed = new Color();
+  for (const candidate of candidates) {
+    if (candidate === undefined || candidate === null) continue;
+    if (typeof candidate === "string") {
+      const trimmed = candidate.trim();
+      if (!trimmed || trimmed.startsWith("var(")) continue;
+      try {
+        parsed.set(trimmed);
+        return [parsed.r, parsed.g, parsed.b];
+      } catch {
+        continue;
+      }
+    }
+    try {
+      parsed.set(candidate);
+      return [parsed.r, parsed.g, parsed.b];
+    } catch {
+      // Try next fallback candidate
+    }
+  }
+  return [0.04, 0.5, 0.9];
+}
+
+function resolveAuthoredArrowLinearRgb(
+  ux: number,
+  uy: number,
+  uz: number,
+  magnitude: number,
+  colorMode: string,
+  scalarColorPalette: string,
+  monoRgb: readonly [number, number, number],
+): [number, number, number] {
+  switch (colorMode) {
+    case "monochrome":
+      return [monoRgb[0], monoRgb[1], monoRgb[2]];
+    case "x":
+      return scalarColorRgb((ux + 1) * 0.5, scalarColorPalette);
+    case "y":
+      return scalarColorRgb((uy + 1) * 0.5, scalarColorPalette);
+    case "z":
+      return scalarColorRgb((uz + 1) * 0.5, scalarColorPalette);
+    case "magnitude":
+      return scalarColorRgb(Math.min(1, Math.max(0, magnitude)), scalarColorPalette);
+    case "hsl":
+    case "orientation":
+    default:
+      return magnetizationHslLinearRgb(ux, uy, uz);
+  }
+}
+
+/**
+ * Builds vertex-colored `<lineSegments>` buffers (shaft + 2-segment arrowhead
+ * chevron = 3 segments / 6 vertices per arrow) from sampled world anchor points
+ * and magnetization vectors.
+ */
+export function buildAuthoredMagnetizationArrowBuffers(
+  positionsWorld: Float32Array,
+  vectors: Float32Array,
+  pitch: number,
+  options: AuthoredMagnetizationArrowBuffersOptions = {},
+): AuthoredMagnetizationArrowBuffers {
+  const count = Math.min(
+    Math.floor(positionsWorld.length / 3),
+    Math.floor(vectors.length / 3),
+  );
+  if (count <= 0) {
+    return {
+      positions: new Float32Array(0),
+      colors: new Float32Array(0),
+      arrowCount: 0,
+    };
+  }
+
+  const colorMode = (options.colorMode ?? "orientation").toLowerCase();
+  const scalarColorPalette = options.scalarColorPalette ?? "coolwarm";
+  const monoRgb = resolveLinearMonoRgb(options.monoColor, options.fallbackMonoColor);
+  const lengthScale = Math.min(
+    5,
+    Math.max(0.1, Number.isFinite(options.lengthScale) ? (options.lengthScale ?? 1) : 1),
+  );
+  const centeringEnabled = options.centeringEnabled ?? true;
+  const arrowLen = Math.max(pitch * 0.72 * lengthScale, 1e-12);
+  const headLen = arrowLen * 0.3;
+  const headHalfWidth = arrowLen * 0.16;
+
+  // 3 segments * 2 vertices * 3 floats = 18 floats per arrow
+  const outPositions = new Float32Array(count * 18);
+  const outColors = new Float32Array(count * 18);
+  let emitted = 0;
+
+  for (let i = 0; i < count; i += 1) {
+    const base = i * 3;
+    const ax = positionsWorld[base]!;
+    const ay = positionsWorld[base + 1]!;
+    const az = positionsWorld[base + 2]!;
+    const vx = vectors[base]!;
+    const vy = vectors[base + 1]!;
+    const vz = vectors[base + 2]!;
+    const mag = Math.hypot(vx, vy, vz);
+    if (!Number.isFinite(mag) || mag < 1e-9) continue;
+
+    const ux = vx / mag;
+    const uy = vy / mag;
+    const uz = vz / mag;
+
+    const tailX = centeringEnabled ? ax - ux * (arrowLen * 0.5) : ax;
+    const tailY = centeringEnabled ? ay - uy * (arrowLen * 0.5) : ay;
+    const tailZ = centeringEnabled ? az - uz * (arrowLen * 0.5) : az;
+    const tipX = tailX + ux * arrowLen;
+    const tipY = tailY + uy * arrowLen;
+    const tipZ = tailZ + uz * arrowLen;
+
+    // Perpendicular vector in plane for crisp chevron wings
+    const refX = Math.abs(uz) < 0.9 ? 0 : 1;
+    const refY = 0;
+    const refZ = Math.abs(uz) < 0.9 ? 1 : 0;
+    const px = uy * refZ - uz * refY;
+    const py = uz * refX - ux * refZ;
+    const pz = ux * refY - uy * refX;
+    const pLen = Math.hypot(px, py, pz) || 1;
+    const wx = (px / pLen) * headHalfWidth;
+    const wy = (py / pLen) * headHalfWidth;
+    const wz = (pz / pLen) * headHalfWidth;
+
+    const wingBaseX = tipX - ux * headLen;
+    const wingBaseY = tipY - uy * headLen;
+    const wingBaseZ = tipZ - uz * headLen;
+
+    const [r, g, b] = resolveAuthoredArrowLinearRgb(
+      ux,
+      uy,
+      uz,
+      mag,
+      colorMode,
+      scalarColorPalette,
+      monoRgb,
+    );
+
+    const out = emitted * 18;
+    // Segment 1: shaft (tail -> tip)
+    outPositions[out] = tailX;
+    outPositions[out + 1] = tailY;
+    outPositions[out + 2] = tailZ;
+    outPositions[out + 3] = tipX;
+    outPositions[out + 4] = tipY;
+    outPositions[out + 5] = tipZ;
+    // Segment 2: left chevron wing (tip -> wingA)
+    outPositions[out + 6] = tipX;
+    outPositions[out + 7] = tipY;
+    outPositions[out + 8] = tipZ;
+    outPositions[out + 9] = wingBaseX + wx;
+    outPositions[out + 10] = wingBaseY + wy;
+    outPositions[out + 11] = wingBaseZ + wz;
+    // Segment 3: right chevron wing (tip -> wingB)
+    outPositions[out + 12] = tipX;
+    outPositions[out + 13] = tipY;
+    outPositions[out + 14] = tipZ;
+    outPositions[out + 15] = wingBaseX - wx;
+    outPositions[out + 16] = wingBaseY - wy;
+    outPositions[out + 17] = wingBaseZ - wz;
+
+    for (let v = 0; v < 6; v += 1) {
+      outColors[out + v * 3] = r;
+      outColors[out + v * 3 + 1] = g;
+      outColors[out + v * 3 + 2] = b;
+    }
+    emitted += 1;
+  }
+
+  return {
+    positions: emitted === count ? outPositions : outPositions.subarray(0, emitted * 18),
+    colors: emitted === count ? outColors : outColors.subarray(0, emitted * 18),
+    arrowCount: emitted,
+  };
+}
+
 export function createViewport3DTextureTransformModel(scene: SceneResource | null) {
   return {
     getAuthoredDraft(objectId: string) {
@@ -1153,6 +1922,9 @@ export function createViewport3DTextureTransformModel(scene: SceneResource | nul
     },
     sampleSurfaceColors(options: Omit<SampleViewport3DSurfaceHslOptions, "scene">) {
       return sampleViewport3DSurfaceHslColors({ ...options, scene });
+    },
+    sampleVectors(options: Omit<SampleAuthoredMagnetizationVectorsOptions, "scene">) {
+      return sampleAuthoredMagnetizationVectors({ ...options, scene });
     },
   };
 }
@@ -1869,8 +2641,30 @@ export function Viewport3DTextureTransformLayer({
         })
       : [];
 
+  // Persistent authored magnetization 3D vector arrows for objects not covered by live solver fields.
+  const persistentVectorObjects =
+    !savedViewportActive && getObjectSettings && primitiveModel
+      ? primitiveModel.objects.filter((obj) => {
+          const isLiveBound =
+            obj.objectId === activeBindingObjectId &&
+            bridge.activeBinding?.draft.sourceMode !== "field-file";
+          if (!isLiveBound && !textureTransformModel.hasAuthoredMagnetization(obj.objectId)) {
+            return false;
+          }
+          if (liveFieldCoveredObjectIds?.has(obj.objectId)) return false;
+          const s = getObjectSettings(obj);
+          if (!s.visible || !s.vectorsVisible) return false;
+          if (s.activeQuantityId && resolveCanonicalQuantityId(s.activeQuantityId) !== "m") {
+            return false;
+          }
+          return true;
+        })
+      : [];
+
+  const fallbackVectorMonoColor = colors?.accent ?? colors?.field;
+
   if (!colors || !selectedObject || !effectiveDraftAndBounds) {
-    if (persistentOverlayObjects.length === 0) return null;
+    if (persistentOverlayObjects.length === 0 && persistentVectorObjects.length === 0) return null;
     return (
       <>
         {persistentOverlayObjects.map((obj) => {
@@ -1887,6 +2681,19 @@ export function Viewport3DTextureTransformLayer({
             />
           );
         })}
+        {getObjectSettings
+          ? persistentVectorObjects.map((obj) => (
+              <AuthoredMagnetizationPersistentVectors
+                key={`vectors:${obj.objectId}`}
+                fallbackMonoColor={fallbackVectorMonoColor}
+                liveBinding={obj.objectId === activeBindingObjectId ? bridge.activeBinding : null}
+                object={obj}
+                settings={getObjectSettings(obj)}
+                textureTransformModel={textureTransformModel}
+                tracker={tracker}
+              />
+            ))
+          : null}
       </>
     );
   }
@@ -1910,6 +2717,19 @@ export function Viewport3DTextureTransformLayer({
           />
         );
       })}
+      {getObjectSettings
+        ? persistentVectorObjects.map((obj) => (
+            <AuthoredMagnetizationPersistentVectors
+              key={`vectors:${obj.objectId}`}
+              fallbackMonoColor={fallbackVectorMonoColor}
+              liveBinding={obj.objectId === activeBindingObjectId ? bridge.activeBinding : null}
+              object={obj}
+              settings={getObjectSettings(obj)}
+              textureTransformModel={textureTransformModel}
+              tracker={tracker}
+            />
+          ))
+        : null}
       <group
         name={`texture-transform-layer:${selectedObject.objectId}`}
         userData={{ gizmo: "texture-transform-layer", objectId: selectedObject.objectId }}
@@ -2057,5 +2877,127 @@ function AuthoredMagnetizationPersistentSurface({
         vertexColors
       />
     </mesh>
+  );
+}
+
+/**
+ * Renders 3D magnetization vector arrows (shaft + 2-segment arrowhead chevron)
+ * for a primitive object with a committed authored magnetic texture when no
+ * discretized solver field buffer covers it yet.
+ */
+function AuthoredMagnetizationPersistentVectors({
+  fallbackMonoColor,
+  liveBinding = null,
+  object,
+  settings,
+  textureTransformModel,
+  tracker,
+}: {
+  fallbackMonoColor?: ColorRepresentation;
+  liveBinding?: TextureInspectorDraftBinding | null;
+  object: Viewport3DPrimitiveObject;
+  settings: VisualizationTargetSettings;
+  textureTransformModel: Viewport3DTextureTransformModel;
+  tracker?: Viewport3DResourceTracker;
+}) {
+  const invalidate = useBatchedInvalidate();
+
+  const grid = useMemo(
+    () =>
+      buildAuthoredMagnetizationVectorGridPoints(object, {
+        budget: settings.vectorBudget,
+        geometryScope: settings.geometryScope,
+        surfaceOffsetEnabled: settings.vectorSurfaceOffsetEnabled,
+        surfaceOffsetScale: settings.vectorSurfaceOffsetScale,
+      }),
+    [
+      object,
+      settings.geometryScope,
+      settings.vectorBudget,
+      settings.vectorSurfaceOffsetEnabled,
+      settings.vectorSurfaceOffsetScale,
+    ],
+  );
+
+  const sampledVectors = useMemo(() => {
+    if (grid.count <= 0) return null;
+    return textureTransformModel.sampleVectors?.({
+      objectId: object.objectId,
+      positionsWorld: grid.positionsWorld,
+      liveBinding,
+    }) ?? null;
+  }, [grid.count, grid.positionsWorld, liveBinding, object.objectId, textureTransformModel]);
+
+  const arrowBuffers = useMemo(() => {
+    if (!sampledVectors || grid.count <= 0) return null;
+    return buildAuthoredMagnetizationArrowBuffers(
+      grid.positionsWorld,
+      sampledVectors,
+      grid.pitch,
+      {
+        centeringEnabled: settings.vectorCenteringEnabled,
+        colorMode: settings.vectorColorMode,
+        fallbackMonoColor,
+        lengthScale: settings.vectorLengthScale,
+        monoColor: settings.vectorMonoColor,
+        scalarColorPalette: settings.scalarColorPalette,
+      },
+    );
+  }, [
+    fallbackMonoColor,
+    grid.count,
+    grid.pitch,
+    grid.positionsWorld,
+    sampledVectors,
+    settings.scalarColorPalette,
+    settings.vectorCenteringEnabled,
+    settings.vectorColorMode,
+    settings.vectorLengthScale,
+    settings.vectorMonoColor,
+  ]);
+
+  const vectorGeometry = useMemo(() => {
+    if (!arrowBuffers || arrowBuffers.arrowCount <= 0) return null;
+    const geom = new BufferGeometry();
+    geom.setAttribute("position", new BufferAttribute(arrowBuffers.positions, 3));
+    geom.setAttribute("color", new BufferAttribute(arrowBuffers.colors, 3));
+    return tracker ? tracker.track("geometry", geom) : geom;
+  }, [arrowBuffers, tracker]);
+
+  useEffect(() => {
+    if (!vectorGeometry) return undefined;
+    invalidate();
+    return () => {
+      if (tracker) {
+        tracker.release("geometry", vectorGeometry);
+      } else {
+        vectorGeometry.dispose();
+      }
+    };
+  }, [invalidate, tracker, vectorGeometry]);
+
+  if (!vectorGeometry) return null;
+
+  const opacity = Math.max(0, Math.min(1, (settings.vectorAlphaPercent ?? 100) / 100));
+  if (opacity <= 0) return null;
+
+  return (
+    <lineSegments
+      geometry={vectorGeometry}
+      renderOrder={RENDER_POLICIES.glyphs.renderOrder}
+      userData={{
+        gizmo: "texture-authored-vectors",
+        objectId: object.objectId,
+      }}
+    >
+      <lineBasicMaterial
+        depthTest={!grid.renderOnTop}
+        depthWrite={!grid.renderOnTop}
+        opacity={opacity}
+        toneMapped={false}
+        transparent={opacity < 1 || grid.renderOnTop}
+        vertexColors
+      />
+    </lineSegments>
   );
 }

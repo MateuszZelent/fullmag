@@ -1166,6 +1166,7 @@ export function hasActiveViewport3DFemFieldData(
   if (!fieldModel) return false;
   if (fieldModel.analysisOverlayActive) return true;
   if (fieldModel.scalarColors) return true;
+  if (fieldModel.fullVectorSegments?.length) return true;
   for (const entry of fieldModel.scalarColorsByMode.values()) {
     if (entry) return true;
   }
@@ -1174,8 +1175,19 @@ export function hasActiveViewport3DFemFieldData(
       if (entry) return true;
     }
   }
+  if (fieldModel.partVectorSegments) {
+    for (const segments of fieldModel.partVectorSegments.values()) {
+      if (segments?.length) return true;
+    }
+  }
   for (const pass of fieldModel.targetPasses.values()) {
-    if (pass.surface.scalarColors) return true;
+    if (
+      pass.surface?.scalarColors ||
+      pass.vectors?.segments?.length ||
+      pass.vectors?.complexGlyphs
+    ) {
+      return true;
+    }
   }
   return false;
 }

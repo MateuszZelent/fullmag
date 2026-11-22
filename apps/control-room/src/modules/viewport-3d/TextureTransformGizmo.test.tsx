@@ -24,10 +24,13 @@ import {
   toggleTextureGizmo,
 } from "@/shared/domain/magnetization-texture/textureDraftBridge";
 
+import { DEFAULT_OBJECT_VISUALIZATION } from "@/kernel/visualization/ObjectVisualizationController";
 import {
   applyTextureGizmoRotateDrag,
   applyTextureGizmoScaleDrag,
   applyTextureGizmoTranslateDrag,
+  buildAuthoredMagnetizationArrowBuffers,
+  buildAuthoredMagnetizationVectorGridPoints,
   buildCharacteristicProxyWireframeSegments,
   buildSubdividedSurfacePreviewData,
   createTextureGizmoDragController,
@@ -35,8 +38,10 @@ import {
   installTextureGizmoKeyboardShortcuts,
   pickTextureGizmoHandleFromGroup,
   resolveTextureGizmoWorldPose,
+  sampleAuthoredMagnetizationVectors,
   Viewport3DTextureTransformLayer,
 } from "./TextureTransformGizmo";
+import { magnetizationHslLinearRgb } from "./orientation/magnetizationColor";
 import { sampleViewport3DSurfaceHslColors } from "./viewport3dPrimitiveModel";
 
 vi.mock("./viewport3dBatchedInvalidate", () => ({
@@ -59,7 +64,9 @@ describe("TextureTransformGizmo & 3D surface preview synchronization", () => {
       selectedObjectId: null,
       textureTransformModel: {
         getAuthoredDraft: () => null,
+        hasAuthoredMagnetization: () => false,
         sampleSurfaceColors: () => null,
+        sampleVectors: () => null,
       },
     };
 
@@ -666,5 +673,266 @@ describe("TextureTransformGizmo & 3D surface preview synchronization", () => {
     expect(model.hasAuthoredMagnetization("authored-box")).toBe(true);
     expect(model.hasAuthoredMagnetization("plain-box")).toBe(false);
     expect(model.hasAuthoredMagnetization("file-box")).toBe(false);
+  });
+
+  it("samples authored magnetization vector grid, builds 3-segment chevron arrows with coloring modes, and honors centering/scale", () => {
+    const scene = {
+      version: "scene.v2",
+      revision: 8,
+      objects: [
+        {
+          id: "skyrmion-slab",
+          name: "Skyrmion slab",
+          role: "magnet",
+          geometry: {
+            geometry_kind: "Box",
+            geometry_params: { size: [100e-9, 100e-9, 5e-9] },
+          },
+          magnetization_ref: "mag:skyrmion-slab",
+        },
+        {
+          id: "uniform-disk",
+          name: "Uniform disk",
+          role: "magnet",
+          geometry: {
+            geometry_kind: "Cylinder",
+            geometry_params: { radius: 50e-9, height: 5e-9 },
+          },
+          magnetization_ref: "mag:uniform-x",
+        },
+      ],
+      magnetization_assets: [
+        {
+          id: "mag:skyrmion-slab",
+          kind: "preset_texture",
+          preset_kind: "bloch_skyrmion",
+          preset_version: 2,
+          preset_params: { radius_m: 25e-9, wall_width_m: 8e-9, polarity: 1, chirality: 1 },
+        },
+        {
+          id: "mag:uniform-x",
+          kind: "preset_texture",
+          preset_kind: "uniform",
+          preset_version: 2,
+          preset_params: { direction: [1, 0, 0] },
+        },
+      ],
+    } as unknown as SceneResource;
+
+    const slabObj = {
+      bounds: { center: [0, 0, 0] as [number, number, number], radius: 75e-9, size: [100e-9, 100e-9, 5e-9] as [number, number, number] },
+      csgPreview: null,
+      fallbackLabel: "primitive",
+      geometryKey: "skyrmion-slab:Box",
+      kind: "box" as const,
+      label: "Skyrmion slab",
+      magnetizationTexturePreview: null,
+      meshState: "primitive-only" as const,
+      objectId: "skyrmion-slab",
+      role: "magnet",
+      sceneRevision: 8,
+    };
+
+    // Budget clamping & zero budget
+    expect(buildAuthoredMagnetizationVectorGridPoints(slabObj, { budget: 0 }).count).toBe(0);
+    const lowGrid = buildAuthoredMagnetizationVectorGridPoints(slabObj, {
+      budget: 12,
+      geometryScope: "surface",
+    });
+    expect(lowGrid.count).toBe(64);
+    const highGrid = buildAuthoredMagnetizationVectorGridPoints(slabObj, {
+      budget: 9999,
+      geometryScope: "full",
+    });
+    expect(highGrid.count).toBeLessThanOrEqual(2000);
+    expect(highGrid.count).toBeGreaterThanOrEqual(64);
+
+    // Evaluate skyrmion vectors through textureTransformModel
+    const model = createViewport3DTextureTransformModel(scene);
+    const sampled = model.sampleVectors({
+      objectId: "skyrmion-slab",
+      positionsWorld: lowGrid.positionsWorld,
+    });
+    expect(sampled).not.toBeNull();
+    expect(sampled!.length).toBe(lowGrid.count * 3);
+    // All sampled spins are unit vectors
+    for (let i = 0; i < lowGrid.count; i += 1) {
+      const mag = Math.hypot(sampled![i * 3]!, sampled![i * 3 + 1]!, sampled![i * 3 + 2]!);
+      expect(mag).toBeCloseTo(1, 5);
+    }
+
+    // Centering + lengthScale + chevron segment count
+    const singleAnchor = new Float32Array([0, 0, 0]);
+    const unitX = new Float32Array([1, 0, 0]);
+    const centered = buildAuthoredMagnetizationArrowBuffers(singleAnchor, unitX, 10e-9, {
+      centeringEnabled: true,
+      colorMode: "orientation",
+      lengthScale: 1,
+    });
+    expect(centered.arrowCount).toBe(1);
+    expect(centered.positions.length).toBe(18);
+    expect(centered.colors.length).toBe(18);
+    // Shaft centered around 0 along +X: tail = -0.36 * pitch, tip = +0.36 * pitch
+    expect(centered.positions[0]).toBeCloseTo(-3.6e-9, 15);
+    expect(centered.positions[3]).toBeCloseTo(3.6e-9, 15);
+    // Orientation coloring matches magnetizationHslLinearRgb(1, 0, 0)
+    const [expectedR, expectedG, expectedB] = magnetizationHslLinearRgb(1, 0, 0);
+    expect(centered.colors[0]).toBeCloseTo(expectedR, 5);
+    expect(centered.colors[1]).toBeCloseTo(expectedG, 5);
+    expect(centered.colors[2]).toBeCloseTo(expectedB, 5);
+
+    const tailAnchored = buildAuthoredMagnetizationArrowBuffers(singleAnchor, unitX, 10e-9, {
+      centeringEnabled: false,
+      colorMode: "monochrome",
+      fallbackMonoColor: "#00ff00",
+      lengthScale: 2,
+      monoColor: "var(--fm-accent)",
+    });
+    // Tail starts at anchor 0, tip extends to 2 * 0.72 * pitch = 14.4 nm
+    expect(tailAnchored.positions[0]).toBeCloseTo(0, 15);
+    expect(tailAnchored.positions[3]).toBeCloseTo(14.4e-9, 15);
+    // Monochrome fell back cleanly from CSS var() to green
+    expect(tailAnchored.colors[0]).toBeCloseTo(0, 5);
+    expect(tailAnchored.colors[1]).toBeCloseTo(1, 5);
+    expect(tailAnchored.colors[2]).toBeCloseTo(0, 5);
+
+    // Component coloring ("z") distinguishes +Z vs -Z
+    const zPairPos = new Float32Array([0, 0, 0, 10e-9, 0, 0]);
+    const zPairVec = new Float32Array([0, 0, -1, 0, 0, 1]);
+    const zArrows = buildAuthoredMagnetizationArrowBuffers(zPairPos, zPairVec, 10e-9, {
+      colorMode: "z",
+      scalarColorPalette: "coolwarm",
+    });
+    expect(zArrows.arrowCount).toBe(2);
+    // -Z (blue) vs +Z (red) in coolwarm
+    expect(zArrows.colors[2]!).toBeGreaterThan(zArrows.colors[0]!);
+    expect(zArrows.colors[18]!).toBeGreaterThan(zArrows.colors[20]!);
+
+    // Direct sampleAuthoredMagnetizationVectors returns null for unknown object
+    expect(
+      sampleAuthoredMagnetizationVectors({
+        scene,
+        objectId: "missing",
+        positionsWorld: singleAnchor,
+      }),
+    ).toBeNull();
+  });
+
+  it("renders AuthoredMagnetizationPersistentVectors when vectorsVisible is enabled and suppresses when covered by live field or saved viewport", () => {
+    const scene = {
+      version: "scene.v2",
+      revision: 9,
+      objects: [
+        {
+          id: "authored-box",
+          name: "Authored box",
+          role: "magnet",
+          geometry: { geometry_kind: "Box", geometry_params: { size: [100e-9, 100e-9, 5e-9] } },
+          magnetization_ref: "mag:authored-box",
+        },
+      ],
+      magnetization_assets: [
+        {
+          id: "mag:authored-box",
+          kind: "preset_texture",
+          preset_kind: "bloch_skyrmion",
+          preset_version: 2,
+          preset_params: { radius_m: 25e-9 },
+        },
+      ],
+    } as unknown as SceneResource;
+
+    const primitiveModel = {
+      sceneRevision: 9,
+      objects: [
+        {
+          bounds: { center: [0, 0, 0] as [number, number, number], radius: 75e-9, size: [100e-9, 100e-9, 5e-9] as [number, number, number] },
+          csgPreview: null,
+          fallbackLabel: "primitive",
+          geometryKey: "authored-box:Box",
+          kind: "box" as const,
+          label: "Authored box",
+          magnetizationTexturePreview: null,
+          meshState: "primitive-only" as const,
+          objectId: "authored-box",
+          role: "magnet",
+          sceneRevision: 9,
+        },
+      ],
+    };
+
+    const textureTransformModel = createViewport3DTextureTransformModel(scene);
+
+    // Vectors ON even when surface shader is OFF (wireframe/vectors-only mode) -> emits <lineSegments>
+    const vectorsOnlyMarkup = renderToStaticMarkup(
+      createElement(Viewport3DTextureTransformLayer, {
+        getObjectSettings: () => ({
+          ...DEFAULT_OBJECT_VISUALIZATION,
+          activeQuantityId: "",
+          primitiveVisible: false,
+          shaderVisible: false,
+          vectorsVisible: true,
+          visible: true,
+        }),
+        liveFieldCoveredObjectIds: new Set(),
+        primitiveModel,
+        savedViewportActive: false,
+        selectedObjectId: null,
+        textureTransformModel,
+      }),
+    );
+    expect(vectorsOnlyMarkup).toContain("<lineSegments");
+
+    // Suppressed when live solver field covers the object
+    const liveCoveredMarkup = renderToStaticMarkup(
+      createElement(Viewport3DTextureTransformLayer, {
+        getObjectSettings: () => ({
+          ...DEFAULT_OBJECT_VISUALIZATION,
+          vectorsVisible: true,
+          visible: true,
+        }),
+        liveFieldCoveredObjectIds: new Set(["authored-box"]),
+        primitiveModel,
+        savedViewportActive: false,
+        selectedObjectId: null,
+        textureTransformModel,
+      }),
+    );
+    expect(liveCoveredMarkup).toBe("");
+
+    // Suppressed when saved viewport playback is active
+    const savedPlaybackMarkup = renderToStaticMarkup(
+      createElement(Viewport3DTextureTransformLayer, {
+        getObjectSettings: () => ({
+          ...DEFAULT_OBJECT_VISUALIZATION,
+          vectorsVisible: true,
+          visible: true,
+        }),
+        liveFieldCoveredObjectIds: new Set(),
+        primitiveModel,
+        savedViewportActive: true,
+        selectedObjectId: null,
+        textureTransformModel,
+      }),
+    );
+    expect(savedPlaybackMarkup).toBe("");
+
+    // Suppressed when user chose a different quantity (e.g. H_demag)
+    const otherQuantityMarkup = renderToStaticMarkup(
+      createElement(Viewport3DTextureTransformLayer, {
+        getObjectSettings: () => ({
+          ...DEFAULT_OBJECT_VISUALIZATION,
+          activeQuantityId: "H_demag",
+          vectorsVisible: true,
+          visible: true,
+        }),
+        liveFieldCoveredObjectIds: new Set(),
+        primitiveModel,
+        savedViewportActive: false,
+        selectedObjectId: null,
+        textureTransformModel,
+      }),
+    );
+    expect(otherQuantityMarkup).toBe("");
   });
 });

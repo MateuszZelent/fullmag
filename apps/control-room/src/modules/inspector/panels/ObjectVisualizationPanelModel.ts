@@ -3110,14 +3110,20 @@ export function buildAirboxVisibilityDiagnostic({
   };
 }
 
+export const AUTHORED_VECTOR_BUDGET_MIN = 64;
+export const AUTHORED_VECTOR_BUDGET_MAX = 2000;
+export const AUTHORED_VECTOR_BUDGET_STEP = 16;
+
 export function buildVisualizationPanelSections({
   artifactInspection = false,
+  authoredMagnetizationAvailable = false,
   effectiveSettings,
   lane = "unresolved",
   settings,
   target,
 }: {
   artifactInspection?: boolean;
+  authoredMagnetizationAvailable?: boolean;
   effectiveSettings: VisualizationTargetSettings;
   lane?: ObjectVisualizationLane;
   settings: VisualizationTargetSettings;
@@ -3127,6 +3133,8 @@ export function buildVisualizationPanelSections({
   const capabilities = target ? visualizationTargetCapabilities(target, artifactInspection) : null;
   const isAirboxTarget = target?.kind === "airbox" && !artifactInspection;
   const isFdmAirboxTarget = target ? isFdmUniverseOutsideSupportTarget(target) : false;
+  const authoredTargetEligible =
+    authoredMagnetizationAvailable && !isAirboxTarget && !isFdmAirboxTarget;
 
   if (capabilities?.supportsFieldData === false) {
     return [
@@ -3196,7 +3204,12 @@ export function buildVisualizationPanelSections({
 
   if (!isAirboxTarget && !isFdmAirboxTarget) {
     sections.push({
-      disabled: passDisabled || !effectiveSettings.shaderVisible,
+      disabled:
+        passDisabled ||
+        !(
+          effectiveSettings.shaderVisible ||
+          (authoredTargetEligible && settings.shaderVisible)
+        ),
       fields: [
         { id: "surfaceColorSource", kind: "mode", label: "Color source" },
         { id: "shaderMonoColor", kind: "color", label: "Solid color" },
@@ -3279,7 +3292,12 @@ export function buildVisualizationPanelSections({
       vectorFields.push({ id: "geometryScope", kind: "mode", label: "Arrow extent" });
     }
     sections.push({
-      disabled: passDisabled || !effectiveSettings.vectorsVisible,
+      disabled:
+        passDisabled ||
+        !(
+          effectiveSettings.vectorsVisible ||
+          (authoredTargetEligible && settings.vectorsVisible)
+        ),
       fields: vectorFields,
       id: "vectors",
       title: "Vectors",

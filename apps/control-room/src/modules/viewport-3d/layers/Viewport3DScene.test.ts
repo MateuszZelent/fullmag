@@ -1410,12 +1410,16 @@ describe("Viewport3DScene region overlay visibility", () => {
       ],
     } as never;
     const dummyColors = { colors: new Float32Array([1, 0, 0]) };
+    const dummySegments = new Float32Array([0, 0, 0, 1, 0, 0]);
     const populatedVariants = [
       { analysisOverlayActive: true, scalarColors: null, scalarColorsByMode: new Map(), scalarColorsByPartAndMode: new Map(), targetPasses: [] },
       { analysisOverlayActive: false, scalarColors: dummyColors, scalarColorsByMode: new Map(), scalarColorsByPartAndMode: new Map(), targetPasses: [] },
       { analysisOverlayActive: false, scalarColors: null, scalarColorsByMode: new Map([["orientation", dummyColors]]), scalarColorsByPartAndMode: new Map(), targetPasses: [] },
       { analysisOverlayActive: false, scalarColors: null, scalarColorsByMode: new Map(), scalarColorsByPartAndMode: new Map([["part1", new Map([["orientation", dummyColors]])]]), targetPasses: [] },
       { analysisOverlayActive: false, scalarColors: null, scalarColorsByMode: new Map(), scalarColorsByPartAndMode: new Map(), targetPasses: [{ surface: { scalarColors: dummyColors } }] },
+      { analysisOverlayActive: false, fullVectorSegments: dummySegments, scalarColors: null, scalarColorsByMode: new Map(), scalarColorsByPartAndMode: new Map(), targetPasses: [] },
+      { analysisOverlayActive: false, partVectorSegments: new Map([["part1", dummySegments]]), scalarColors: null, scalarColorsByMode: new Map(), scalarColorsByPartAndMode: new Map(), targetPasses: [] },
+      { analysisOverlayActive: false, scalarColors: null, scalarColorsByMode: new Map(), scalarColorsByPartAndMode: new Map(), targetPasses: [{ surface: { scalarColors: null }, vectors: { segments: dummySegments } }] },
     ];
 
     for (const fieldModel of populatedVariants) {

@@ -1820,13 +1820,25 @@ function showPreparedMagnetizationOnTarget<T extends VisualizationTargetSettings
 
 export function resolveViewport3DPrimitiveVisualizationSettings(
   input: Parameters<typeof resolveTargetVisualization>[0],
+  options?: { authoredMagnetizationAvailable?: boolean },
 ): VisualizationTargetSettings {
   const { settings, effectiveSettings } = resolveTargetVisualization(input);
   // A rejected field cannot remove the requested field-free geometry preview.
-  if (settings.visible && settings.shaderVisible && !effectiveSettings.shaderVisible) {
-    return { ...effectiveSettings, primitiveVisible: true };
+  const next: VisualizationTargetSettings =
+    settings.visible && settings.shaderVisible && !effectiveSettings.shaderVisible
+      ? { ...effectiveSettings, primitiveVisible: true }
+      : effectiveSettings;
+  // Preserve requested vectorsVisible for objects with committed authored
+  // magnetization when no discretized solver quantity is materialized yet.
+  if (
+    options?.authoredMagnetizationAvailable &&
+    settings.visible &&
+    settings.vectorsVisible &&
+    !next.vectorsVisible
+  ) {
+    return { ...next, vectorsVisible: true };
   }
-  return effectiveSettings;
+  return next;
 }
 
 export function resolveViewport3DPartVisualizationSettings({
@@ -4806,17 +4818,28 @@ export function useViewport3DSceneModel({
   );
   const getObjectSettings = useCallback(
     (object: Viewport3DPrimitiveObject) =>
-      resolveViewport3DPrimitiveVisualizationSettings({
-        objectContext: getObjectContext(object.objectId),
-        snapshot: objectVisualizationSnapshot,
-        target: {
-          id: visualizationTargetIdForSceneObject(object.objectId),
-          kind: "object",
-          label: object.label,
+      resolveViewport3DPrimitiveVisualizationSettings(
+        {
+          objectContext: getObjectContext(object.objectId),
+          snapshot: objectVisualizationSnapshot,
+          target: {
+            id: visualizationTargetIdForSceneObject(object.objectId),
+            kind: "object",
+            label: object.label,
+          },
+          visualizationState: renderingState,
         },
-        visualizationState: renderingState,
-      }),
-    [getObjectContext, objectVisualizationSnapshot, renderingState],
+        {
+          authoredMagnetizationAvailable:
+            textureTransformModel.hasAuthoredMagnetization(object.objectId),
+        },
+      ),
+    [
+      getObjectContext,
+      objectVisualizationSnapshot,
+      renderingState,
+      textureTransformModel,
+    ],
   );
   const getRegionSettings = useCallback(
     (region: RegionOverlayInput) => {

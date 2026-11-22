@@ -46,6 +46,7 @@ import { useVisualizationFieldMeta } from "@/kernel/resources/useVisualizationFi
 import { artifactSurfaceRangeKey, type ArtifactInspectorFieldBinding } from "@/kernel/visualization/artifactFieldSelection";
 import { useViewport3DRenderedScalarRange } from "@/modules/viewport-3d/public";
 import {
+  AUTHORED_VECTOR_BUDGET_MAX,
   buildVisualizationPanelSections,
   displayPassTogglePatch,
   fieldMetaScopeQueryForVisualizationTarget,
@@ -165,6 +166,7 @@ type SectionDisabled = (
 
 export function VisualizationDisplayPassesSection({
   artifactInspection = false,
+  authoredMagnetizationAvailable = false,
   displaySettings,
   passControlsDisabled,
   patch,
@@ -176,6 +178,7 @@ export function VisualizationDisplayPassesSection({
   presentationRole,
 }: {
   artifactInspection?: boolean;
+  authoredMagnetizationAvailable?: boolean;
   displaySettings: VisualizationTargetSettings;
   passControlsDisabled: boolean;
   patch: PatchVisualizationTarget;
@@ -187,6 +190,12 @@ export function VisualizationDisplayPassesSection({
   presentationRole?: string | null;
 }) {
   const capabilities = visualizationTargetCapabilities(target, artifactInspection);
+  const vectorsPressed =
+    (displaySettings.vectorsVisible ||
+      (authoredMagnetizationAvailable &&
+        target.kind !== "airbox" &&
+        settings.vectorsVisible)) &&
+    settings.visible;
   return (
     <div className="grid min-w-0 gap-0" data-slot="visualization-display-passes">
       {renderWarning ? (
@@ -233,7 +242,7 @@ export function VisualizationDisplayPassesSection({
                 icon: <ArrowRightLeft size={13} strokeWidth={1.75} aria-hidden="true" />,
                 id: "vectors",
                 label: "Vectors",
-                pressed: displaySettings.vectorsVisible && displaySettings.visible,
+                pressed: vectorsPressed,
                 onToggle: () => void patch(displayPassTogglePatch(settings, "vectorsVisible")),
               }]
             : []),
@@ -889,6 +898,7 @@ export function VisualizationWireframeSection({
 }
 
 export function VisualizationVectorsSection({
+  authoredMagnetizationAvailable = false,
   fieldMetaOverride,
   inspectionPresentation,
   artifactFieldBinding,
@@ -913,6 +923,7 @@ export function VisualizationVectorsSection({
   visualizationRevision,
   vectorTopologyHash,
 }: {
+  authoredMagnetizationAvailable?: boolean;
   fieldMetaOverride?: ReturnType<typeof useVisualizationFieldMeta>;
   artifactFieldBinding?: ArtifactInspectorFieldBinding;
   airboxFieldCarrierIdentity?: VisualizationVectorScopeIdentity | null;
@@ -999,8 +1010,23 @@ export function VisualizationVectorsSection({
     scopeId: fieldMetaScopeQuery.scope_id,
     scopeKind: viewportRenderedRangeScopeKind(fieldMetaScopeQuery.scope_kind),
   });
+  const authoredVectorsAvailable = Boolean(
+    authoredMagnetizationAvailable &&
+      targetKind !== "airbox" &&
+      settings.visible &&
+      settings.vectorsVisible,
+  );
+  const effectiveVectorBudgetRange: VisualizationVectorBudgetRange =
+    authoredVectorsAvailable && vectorBudgetRange.max === null
+      ? {
+          ...vectorBudgetRange,
+          max: AUTHORED_VECTOR_BUDGET_MAX,
+          min: 0,
+          step: 1,
+        }
+      : vectorBudgetRange;
   const budgetValues = resolveVisualizationVectorBudgetValues({
-    range: vectorBudgetRange,
+    range: effectiveVectorBudgetRange,
     requestedBudget: settings.vectorBudget,
     sceneCap,
   });
@@ -1012,7 +1038,8 @@ export function VisualizationVectorsSection({
     target,
     airboxFieldCarrierIdentity,
   );
-  const vectorsUnavailable = sectionDisabled("vectors");
+  const vectorsUnavailable =
+    sectionDisabled("vectors") && !authoredVectorsAvailable;
   const vectorColorPending = isFieldPending("vectorColorMode");
 
   const vectorsSummary = settings.geometryScope
@@ -1092,8 +1119,8 @@ export function VisualizationVectorsSection({
           disabled={vectorsUnavailable || isFieldPending("vectorBudget") || vectorBudgetUnavailable}
           label="Arrow budget"
           max={vectorBudgetMax}
-          min={vectorBudgetRange.min}
-          step={vectorBudgetRange.step}
+          min={effectiveVectorBudgetRange.min}
+          step={effectiveVectorBudgetRange.step}
           value={vectorBudgetValue}
           onChange={(value) => patchNumber("vectorBudget", value)}
         />

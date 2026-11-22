@@ -6515,4 +6515,33 @@ describe("FDM region membership reconciliation after grid.build-fdm", () => {
       }),
     ).toBeNull();
   });
+
+  it("preserves requested vectorsVisible on primitive objects with committed authored magnetization before solver fields exist", () => {
+    const controller = new ObjectVisualizationController();
+    const target = { id: "object:disk", kind: "object" as const, label: "Disk" };
+    controller.patchTarget(target, { vectorsVisible: true, visible: true });
+    const snapshot = controller.getSnapshot();
+    const input = {
+      objectContext: {
+        object: {
+          id: "disk",
+          magnetization_ref: "mag:disk",
+          physics_stack: [],
+          role: "magnet",
+        },
+        quantityCatalog: null,
+      },
+      snapshot,
+      target,
+    };
+
+    expect(
+      resolveViewport3DPrimitiveVisualizationSettings(input).vectorsVisible,
+    ).toBe(false);
+    expect(
+      resolveViewport3DPrimitiveVisualizationSettings(input, {
+        authoredMagnetizationAvailable: true,
+      }).vectorsVisible,
+    ).toBe(true);
+  });
 });

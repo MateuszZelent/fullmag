@@ -4537,6 +4537,56 @@ describe("ObjectVisualizationPanelModel", () => {
     expect(plainState.status).toBe("empty");
     expect(plainState.placeholder).toBe("No compatible field available");
   });
+
+  it("unlocks Vectors and Surface Coloring inspector sections for authored magnetization targets before solver fields exist", () => {
+    const preMeshSettings = {
+      ...DEFAULT_OBJECT_VISUALIZATION,
+      activeQuantityId: "",
+      shaderVisible: true,
+      vectorsVisible: true,
+      visible: true,
+    };
+    const effectiveSettings = resolveEffectiveVisualizationSettings(preMeshSettings);
+    // Without activeQuantityId, effectiveSettings forces shaderVisible & vectorsVisible false
+    expect(effectiveSettings.shaderVisible).toBe(false);
+    expect(effectiveSettings.vectorsVisible).toBe(false);
+
+    const objectTarget = { id: "object:disk", kind: "object" as const };
+    const lockedSections = buildVisualizationPanelSections({
+      authoredMagnetizationAvailable: false,
+      effectiveSettings,
+      settings: preMeshSettings,
+      target: objectTarget,
+    });
+    expect(lockedSections.find((s) => s.id === "vectors")?.disabled).toBe(true);
+    expect(lockedSections.find((s) => s.id === "surface-coloring")?.disabled).toBe(true);
+
+    const unlockedSections = buildVisualizationPanelSections({
+      authoredMagnetizationAvailable: true,
+      effectiveSettings,
+      settings: preMeshSettings,
+      target: objectTarget,
+    });
+    expect(unlockedSections.find((s) => s.id === "vectors")?.disabled).toBe(false);
+    expect(unlockedSections.find((s) => s.id === "surface-coloring")?.disabled).toBe(false);
+
+    // Airbox never unlocks authored magnetization controls, and hidden or vectors-off stays disabled
+    const airboxSections = buildVisualizationPanelSections({
+      authoredMagnetizationAvailable: true,
+      effectiveSettings,
+      settings: preMeshSettings,
+      target: { id: "airbox", kind: "airbox" },
+    });
+    expect(airboxSections.find((s) => s.id === "vectors")?.disabled).toBe(true);
+
+    const vectorsOffSections = buildVisualizationPanelSections({
+      authoredMagnetizationAvailable: true,
+      effectiveSettings,
+      settings: { ...preMeshSettings, vectorsVisible: false },
+      target: objectTarget,
+    });
+    expect(vectorsOffSections.find((s) => s.id === "vectors")?.disabled).toBe(true);
+  });
 });
 
 function meshPart(

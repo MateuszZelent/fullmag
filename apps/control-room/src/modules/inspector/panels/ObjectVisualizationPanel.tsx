@@ -1726,6 +1726,7 @@ function ObjectVisualizationPanelView({
               <>
                 <VisualizationDisplayPassesSection
               artifactInspection={panel.artifactInspection}
+              authoredMagnetizationAvailable={authoredMagnetizationAvailable}
               displaySettings={displaySettings}
               passControlsDisabled={passControlsDisabled}
               patch={patch}
@@ -1804,6 +1805,7 @@ function ObjectVisualizationPanelView({
             )}
             vectors={capabilities.supportsVectors && !isScalarSpatialQuantityId(settings.activeQuantityId) ? (
               <VisualizationVectorsSection
+              authoredMagnetizationAvailable={authoredMagnetizationAvailable}
               inspectionPresentation={panel.artifactPresentation}
               artifactFieldBinding={analysisFieldShown ? undefined : artifactFieldBinding}
               fieldMetaOverride={analysisFieldShown ? undefined : panel.sharedArtifactFieldMeta ?? undefined}
