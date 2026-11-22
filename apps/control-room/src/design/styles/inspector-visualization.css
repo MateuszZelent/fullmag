@@ -1044,3 +1044,249 @@
   overflow-wrap: anywhere;
   text-wrap: pretty;
 }
+
+/* ══ Visualization Inspector: full-pass refresh (style A) ══════════════════
+   One recipe from top to bottom: soft tinted wells instead of outlined
+   boxes, rectangular segmented controls instead of pills, quiet slider
+   readouts, and a keyboard-only focus ring.  Scoped to the Inspector so
+   other surfaces keep their own skin. */
+
+/* Group headers (Display, Vectors, Clipping, Camera, Advanced, …) */
+.fm-inspector .fm-inspector-group__row {
+  min-height: 34px;
+  border-radius: 10px;
+  --text-fm-sm: var(--fm-text-xs);
+}
+
+.fm-inspector .fm-inspector-group__row--toggle:focus {
+  outline: 2px solid transparent;
+  box-shadow: none;
+}
+
+.fm-inspector .fm-inspector-group__row--toggle:focus-visible {
+  box-shadow: inset 0 0 0 2px color-mix(in oklab, var(--fm-accent) 55%, transparent);
+}
+
+.fm-inspector .fm-inspector-group__summary {
+  color: var(--fm-text-muted);
+  font-size: var(--fm-text-xs);
+}
+
+/* Segmented controls: rectangular well, raised selection, wraps cleanly */
+.fm-inspector [data-slot="segmented-control"] {
+  --radius-fm-pill: 10px;
+  --color-fm-control-border: transparent;
+  --color-fm-field: color-mix(in oklab, var(--fm-text-primary) 5.5%, transparent);
+  gap: var(--fm-space-1) 0;
+  padding: 3px;
+}
+
+.fm-inspector [data-slot="segmented-control-item"] {
+  --radius-fm-pill: 7px;
+  font-size: var(--fm-text-xs);
+}
+
+.fm-inspector [data-slot="segmented-control-item"][data-state="unchecked"]:hover:not(:disabled) {
+  background: color-mix(in oklab, var(--fm-text-primary) 5%, transparent);
+}
+
+.fm-inspector [data-slot="segmented-control-item"][data-state="checked"] {
+  box-shadow:
+    0 1px 2px color-mix(in oklab, black 18%, transparent),
+    0 0 0 1px var(--fm-border-subtle);
+}
+
+/* Stacked numeric rows: label left, plain tabular value right, slider below */
+.fm-inspector [data-slot="inspector-property-row"][data-layout="stacked"] output {
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--fm-text-secondary);
+  font-family: var(--fm-font-ui);
+  font-size: var(--fm-text-xs);
+  font-weight: var(--fm-font-weight-medium);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0;
+}
+
+.fm-inspector .fm-viz-vector-subgroup {
+  gap: var(--fm-space-3);
+  padding: 0;
+  border: 0;
+  background: transparent;
+}
+
+/* Sliders: thin neutral track, accent fill, clean white thumb */
+.fm-inspector .fm-slider .fm-slider__track,
+.fm-inspector [data-slot="inspector-property-row"] [data-slot="visualization-number-control"] .fm-slider__track {
+  height: 4px;
+  border: 0;
+  border-radius: var(--fm-radius-pill);
+  background: color-mix(in oklab, var(--fm-text-primary) 12%, transparent);
+}
+
+.fm-inspector .fm-slider .fm-slider__range,
+.fm-inspector [data-slot="inspector-property-row"] [data-slot="visualization-number-control"] .fm-slider__range {
+  background: var(--fm-accent);
+}
+
+.fm-inspector .fm-slider .fm-slider__thumb,
+.fm-inspector [data-slot="inspector-property-row"] [data-slot="visualization-number-control"] .fm-slider__thumb {
+  width: 14px;
+  height: 14px;
+  border: 0;
+  background: var(--fm-bg-panel-raised);
+  box-shadow:
+    0 0 0 1px color-mix(in oklab, black 14%, transparent),
+    0 1px 3px color-mix(in oklab, black 30%, transparent);
+}
+
+.fm-inspector .fm-slider .fm-slider__thumb:hover,
+.fm-inspector [data-slot="inspector-property-row"] [data-slot="visualization-number-control"] .fm-slider__thumb:hover {
+  box-shadow:
+    0 0 0 1px color-mix(in oklab, black 14%, transparent),
+    0 1px 3px color-mix(in oklab, black 30%, transparent),
+    0 0 0 5px color-mix(in oklab, var(--fm-accent) 18%, transparent);
+}
+
+.fm-inspector .fm-slider .fm-slider__thumb:focus-visible {
+  box-shadow:
+    0 0 0 1px color-mix(in oklab, black 14%, transparent),
+    0 0 0 4px color-mix(in oklab, var(--fm-accent) 40%, transparent);
+}
+
+/* Colour-mode / vector toggle chips: same well as the pass chips */
+.fm-inspector .fm-visualization-toggle {
+  min-height: 30px;
+  height: auto;
+  border: 0;
+  border-radius: 8px;
+  background: color-mix(in oklab, var(--fm-text-primary) 5.5%, transparent);
+  color: var(--fm-text-secondary);
+  font-size: var(--fm-text-xs);
+  font-weight: var(--fm-font-weight-medium);
+  letter-spacing: 0;
+}
+
+.fm-inspector .fm-visualization-toggle:hover:not(:disabled) {
+  background: color-mix(in oklab, var(--fm-text-primary) 9%, transparent);
+  color: var(--fm-text-primary);
+}
+
+.fm-inspector .fm-visualization-toggle:is([data-active="true"], [aria-pressed="true"]) {
+  background: color-mix(in oklab, var(--fm-accent) 14%, transparent);
+  color: var(--fm-accent-text, var(--fm-accent));
+  font-weight: var(--fm-font-weight-medium);
+  box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--fm-accent) 32%, transparent);
+}
+
+/* "Viewport-only settings" note: a small caption, not an italic quote */
+.fm-inspector .fm-visualization-scope-note {
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  color: var(--fm-text-muted);
+  font-size: var(--fm-text-xs);
+  font-style: normal;
+}
+
+/* Part toggles: native-looking checkboxes in the accent colour */
+.fm-inspector .fm-visualization-part-toggles {
+  padding: 0;
+}
+
+.fm-inspector .fm-visualization-part-toggles__label {
+  color: var(--fm-text-secondary);
+  font-weight: var(--fm-font-weight-medium);
+}
+
+.fm-inspector .fm-visualization-part-toggle {
+  min-height: 28px;
+  padding: 0 var(--fm-space-1);
+  border-radius: 8px;
+}
+
+.fm-inspector .fm-visualization-part-toggle:hover {
+  background: color-mix(in oklab, var(--fm-text-primary) 5%, transparent);
+}
+
+.fm-inspector .fm-visualization-part-toggle input[type="checkbox"] {
+  width: 14px;
+  height: 14px;
+  border: 1.5px solid var(--fm-border-control);
+  border-radius: 4px;
+  background: transparent;
+}
+
+.fm-inspector .fm-visualization-part-toggle input[type="checkbox"]:checked {
+  border-color: var(--fm-accent);
+  background: var(--fm-accent);
+}
+
+.fm-inspector .fm-visualization-part-toggle input[type="checkbox"]:checked::after {
+  inset: 2px 4px 4px;
+  border: solid var(--fm-text-on-accent);
+  border-width: 0 2px 2px 0;
+  border-radius: 0;
+  background: transparent;
+  rotate: 45deg;
+}
+
+/* Colour swatch and colourbar limits sit on the same soft well */
+.fm-inspector .fm-viz-color-swatch {
+  border: 0;
+  border-radius: 8px;
+  background: color-mix(in oklab, var(--fm-text-primary) 5.5%, transparent);
+}
+
+.fm-inspector .fm-inspector-colorbar__limit {
+  color: var(--fm-text-muted);
+  font-size: var(--fm-text-xs);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Read-only rows (Advanced, Target, Status, Physical, Provenance) */
+.fm-inspector .fm-inspector-field-row {
+  min-height: 28px;
+  padding-inline: var(--fm-space-1);
+}
+
+.fm-inspector .fm-inspector-field-row:hover {
+  background: transparent;
+}
+
+.fm-inspector .fm-inspector-field-row + .fm-inspector-field-row {
+  border-block-start: 1px solid var(--fm-border-subtle);
+  border-radius: 0;
+}
+
+.fm-inspector .fm-inspector-field-row__label {
+  color: var(--fm-text-muted);
+  font-size: var(--fm-text-xs);
+  letter-spacing: 0;
+}
+
+.fm-inspector .fm-inspector-field-row__value {
+  font-size: var(--fm-text-xs);
+}
+
+.fm-inspector .fm-inspector-field-row__value--mono {
+  font-size: var(--fm-text-xs);
+  letter-spacing: 0;
+}
+
+/* Quantity source helper copy */
+.fm-inspector .fm-quantity-source-help,
+.fm-inspector .fm-quantity-source-empty {
+  color: var(--fm-text-muted);
+  font-size: var(--fm-text-xs);
+  line-height: 1.45;
+  text-wrap: pretty;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .fm-inspector .fm-slider .fm-slider__thumb {
+    transition: none;
+  }
+}

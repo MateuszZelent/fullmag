@@ -153,7 +153,9 @@ describe("control-room design styles", () => {
       ),
     ).toBe(true);
     expect(statements.slice(0, 6)).toEqual([
-      "@layer fm-tokens, theme, fm-base, base, fm-primitives, fm-components, components, fm-modules, utilities;",
+      // Tailwind preflight (`base`) must precede fm-base: its universal
+      // margin/padding/border reset otherwise wins over layout and slot styles.
+      "@layer fm-tokens, theme, base, fm-base, fm-primitives, fm-components, components, fm-modules, utilities;",
       '@import "../src/design/styles/fonts.css" layer(fm-tokens);',
       '@import "tailwindcss" source(none);',
       '@source "./**/*.{html,js,cjs,mjs,ts,cts,mts,jsx,tsx,md,mdx,json,css,mx3,vue,svelte}";',
@@ -604,7 +606,7 @@ describe("control-room design styles", () => {
   });
 
   it("spaces status bar dot and adjacent engine/method pills", () => {
-    const slotsCss = readAppFile("src/design/styles/slots.css");
+    const slotsCss = readAppFile("src/design/styles/status-bar.css");
 
     expect(slotsCss).toMatch(
       /\.fm-status-bar__dot\s*\{[^}]*margin-inline-end:\s*var\(--fm-space-1\);/,

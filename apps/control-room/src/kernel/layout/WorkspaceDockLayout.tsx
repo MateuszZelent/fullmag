@@ -24,6 +24,11 @@ import { useKernel } from "../KernelContext";
 import type { SavedResultsPlaybackSelection } from "../saved-results/SavedResultsPlaybackController";
 import { useSavedResultsPlaybackSelection } from "../saved-results/useSavedResultsPlayback";
 import { useLayoutSelector } from "./useLayout";
+import { useBottomDockExpanded } from "./bottomDockPreference";
+
+/* Height of the dock header (tab strip + run status) kept by a collapsed
+   dock; matches .fm-footer__bar plus the panel frame border. */
+const BOTTOM_DOCK_COLLAPSED_SIZE = "42px";
 import {
   ResizableHandle,
   ResizablePanel,
@@ -127,10 +132,13 @@ export function WorkspaceDockLayout() {
   const playbackOnly = Boolean(playbackSelection && !playbackSelection.studyResult);
   const projectOnly = useWorkspaceContentScope() === "project";
   const panelVisible = useLayoutSelector((layout) => layout.panelVisible);
+  const bottomDockExpanded = useBottomDockExpanded();
   const hasAuxViewportModule = !projectOnly && !playbackOnly && kernel.modules.forSlot("viewport-aux").length > 0;
   const [dockState, setDockState] = useState<WorkspaceDockState>({ layout: DEFAULT_WORKSPACE_LAYOUT, restored: false });
   const [panelModes, setPanelModes] = useState<Record<string, PanelMode>>({});
   const panels = useRef<Record<string, PanelImperativeHandle | null>>({});
+  // Docked and visible, but folded to its header like the collapsed ribbon.
+  const bottomDockFolded = panelVisible.bottom && !bottomDockExpanded && (panelModes["panel-bottom"] ?? "docked") === "docked";
   // Narrow windows give the content the width: side panels collapse to their
   // rails below 760 px and come back as they were when the window widens.
   // A rail icon still opens a panel docked in a narrow window.
@@ -184,8 +192,8 @@ export function WorkspaceDockLayout() {
     ...Object.fromEntries(dockState.layout.columns.map(({ slotId }) => [
       slotId, visible(slotId) && (slotId === "viewport-main" || (panelModes[slotId] ?? "docked") === "docked"),
     ])),
-    "panel-bottom": panelVisible.bottom && (panelModes["panel-bottom"] ?? "docked") === "docked",
-  }), [dockState.layout.columns, panelModes, panelVisible.bottom, visible]);
+    "panel-bottom": panelVisible.bottom && bottomDockExpanded && (panelModes["panel-bottom"] ?? "docked") === "docked",
+  }), [bottomDockExpanded, dockState.layout.columns, panelModes, panelVisible.bottom, visible]);
   const resetInspectorWidth = useCallback(() => {
     const initial = DEFAULT_WORKSPACE_LAYOUT.columns.find(column => column.slotId === "panel-right");
     if (initial) panels.current["panel-right"]?.resize(initial.defaultSize);
@@ -195,9 +203,14 @@ export function WorkspaceDockLayout() {
     for (const [id, panel] of Object.entries(panels.current)) {
       if (!panel || dockedPanels[id] === undefined) continue;
       if (dockedPanels[id]) { if (panel.isCollapsed()) panel.expand(); }
-      else if (!panel.isCollapsed()) panel.collapse();
+      else {
+        if (!panel.isCollapsed()) panel.collapse();
+        // A collapsed bottom dock switches between header-only and hidden
+        // without expanding in between, so size it explicitly.
+        if (id === "panel-bottom") panel.resize(bottomDockFolded ? BOTTOM_DOCK_COLLAPSED_SIZE : "0px");
+      }
     }
-  }, [dockedPanels, dockState.restored]);
+  }, [bottomDockFolded, dockedPanels, dockState.restored]);
 
   const columns = dockState.layout.columns.filter(column => column.slotId !== "viewport-aux" || hasAuxViewportModule);
   const move = (id: string, direction: -1 | 1) => {
@@ -229,8 +242,8 @@ export function WorkspaceDockLayout() {
         </div>
       </ResizablePanel>
       {!projectOnly && !playbackOnly ? <>
-        <ResizableHandle className="fm-resize-handle--horizontal" aria-label="Resize bottom diagnostics" style={dockedPanels["panel-bottom"] === false ? { display: "none" } : undefined} />
-        <ResizablePanel defaultSize={`${dockState.layout.bottomDockDefaultSize}%`} minSize="100px" className="fm-workspace-bottom-panel" id="panel-bottom" collapsible collapsedSize={0} panelRef={handle => { panels.current["panel-bottom"] = handle; }}>
+        <ResizableHandle className="fm-resize-handle--horizontal" aria-label="Resize bottom diagnostics" disabled={bottomDockFolded} style={dockedPanels["panel-bottom"] === false && !bottomDockFolded ? { display: "none" } : undefined} />
+        <ResizablePanel defaultSize={`${dockState.layout.bottomDockDefaultSize}%`} minSize="100px" className="fm-workspace-bottom-panel" data-folded={bottomDockFolded || undefined} id="panel-bottom" collapsible collapsedSize={bottomDockFolded ? BOTTOM_DOCK_COLLAPSED_SIZE : 0} panelRef={handle => { panels.current["panel-bottom"] = handle; }}>
           <PanelFrame id="panel-bottom" title="Diagnostics" visible={panelVisible.bottom} mode={panelModes["panel-bottom"] ?? "docked"} onModeChange={changeBottomMode} onHide={() => kernel.layout.setPanelVisible("bottom", false)}>
             <SlotHost slotId="panel-bottom" />
           </PanelFrame>

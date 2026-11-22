@@ -11,6 +11,7 @@
   --fm-space-2: 8px;
   --fm-space-3: 12px;
   --fm-space-4: 16px;
+  --fm-space-1-5: 6px;
   --fm-space-5: 20px;
   --fm-space-6: 24px;
   --fm-space-7: 28px;
@@ -53,6 +54,17 @@
   --fm-thread-progress-width: 54px;
   --fm-tree-indent: 15px;
   --fm-tree-guide-offset: 7px;
+
+  /* Rails, chips and toolbars: center surface rail, status bar, bottom dock */
+  --fm-rail-width: 48px;
+  --fm-rail-height: 48px;
+  --fm-rail-item-size: 36px;
+  --fm-rail-indicator-height: 3px;
+  --fm-chip-height: 18px;
+  --fm-status-control-height: 20px;
+  --fm-toolbar-segment-item-width: 26px;
+  --fm-telemetry-row-min: 18px;
+  --fm-telemetry-row-max: 30px;
 
   /* Icon / glyph column widths */
   --fm-icon-sm: 18px;   /* drag handle, tree chevron — between space-4 and space-5 */

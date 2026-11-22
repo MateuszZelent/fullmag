@@ -8,8 +8,10 @@
   --fm-bg-panel: #161622;
   --fm-bg-panel-raised: #24243a;
   --fm-bg-viewport: #0b0b13;
-  --fm-bg-viewport-top: #12121c;
-  --fm-bg-viewport-bottom: #2b2c3d;
+  /* Scene gradient: starts at the panel glass tone (raised) so it continues
+     the header above it, and settles to Mocha Mantle at the bottom. */
+  --fm-bg-viewport-top: #24243a;
+  --fm-bg-viewport-bottom: #181825;
   --fm-bg-overlay: #20202f;
   --fm-bg-selected: #223358;
   --fm-bg-canvas: #11111b;
@@ -188,8 +190,10 @@
   --fm-bg-panel: #f5f6fa;
   --fm-bg-panel-raised: #fafbfd;
   --fm-bg-viewport: #dde2ec;
-  --fm-bg-viewport-top: #ccd0da;
-  --fm-bg-viewport-bottom: #eff1f5;
+  /* Scene gradient: starts at the panel glass tone (raised) so it continues
+     the header above it, and settles to Latte Mantle at the bottom. */
+  --fm-bg-viewport-top: #fafbfd;
+  --fm-bg-viewport-bottom: #e6e9ef;
   --fm-bg-overlay: #f7f8fb;
   --fm-bg-selected: #d5e1fa;
   --fm-bg-canvas: #dce0e8;

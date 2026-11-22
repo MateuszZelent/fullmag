@@ -128,8 +128,9 @@ export interface Viewport3DToolbarProps {
 }
 
 /**
- * Presentation-only controls for the active 3D view, in four groups:
- * navigation (fit, camera menu, projection), inspection (values, layers),
+ * Controls for the active 3D view, in five groups: tools (orbit and the
+ * texture gizmo, one segmented switch, Q/W/E/R), navigation (fit, camera
+ * menu, projection), inspection (values, layers),
  * appearance (render mode and quality in one menu) and output (export,
  * settings). Container queries on the viewport drop labels first and then
  * fold the output group into the trailing "More" menu, so the pill stays
@@ -173,6 +174,31 @@ export function Viewport3DToolbar({
         ref={toolbarRef}
         role="toolbar"
       >
+        <div aria-label="Interaction mode" className="fm-viewport-3d-toolbar__group fm-viewport-3d-toolbar__segment" role="group">
+          {INTERACTION_MODES.map(({ icon: Icon, label, mode, testId }) => {
+            const isActive = activeInteractionMode === mode;
+            return (
+              <ToolbarTooltip content={label} key={mode}>
+                <Button
+                  aria-label={label}
+                  aria-pressed={isActive}
+                  className="fm-viewport-3d-toolbar__button fm-viewport-3d-toolbar__segment-item"
+                  data-active={isActive ? "true" : "false"}
+                  data-testid={testId}
+                  onClick={() => setTextureGizmoMode(mode)}
+                  size="icon"
+                  type="button"
+                  variant="ghost"
+                >
+                  <Icon aria-hidden="true" size={ICON_SIZE} />
+                </Button>
+              </ToolbarTooltip>
+            );
+          })}
+        </div>
+
+        <ToolbarSeparator />
+
         <div aria-label="Navigation" className="fm-viewport-3d-toolbar__group" role="group">
           <ToolbarTooltip content={fitReason ?? "Fit the scene to the viewport"}>
             <Button
@@ -262,31 +288,6 @@ export function Viewport3DToolbar({
               </span>
             </Button>
           </ToolbarTooltip>
-        </div>
-
-        <ToolbarSeparator />
-
-        <div aria-label="Interaction mode" className="fm-viewport-3d-toolbar__group" role="group">
-          {INTERACTION_MODES.map(({ icon: Icon, label, mode, testId }) => {
-            const isActive = activeInteractionMode === mode;
-            return (
-              <ToolbarTooltip content={label} key={mode}>
-                <Button
-                  aria-label={label}
-                  aria-pressed={isActive}
-                  className="fm-viewport-3d-toolbar__button"
-                  data-active={isActive ? "true" : "false"}
-                  data-testid={testId}
-                  onClick={() => setTextureGizmoMode(mode)}
-                  size="icon"
-                  type="button"
-                  variant="ghost"
-                >
-                  <Icon aria-hidden="true" size={ICON_SIZE} />
-                </Button>
-              </ToolbarTooltip>
-            );
-          })}
         </div>
 
         <ToolbarSeparator />

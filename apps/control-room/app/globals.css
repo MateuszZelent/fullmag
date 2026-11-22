@@ -1,4 +1,4 @@
-@layer fm-tokens, theme, fm-base, base, fm-primitives, fm-components, components, fm-modules, utilities;
+@layer fm-tokens, theme, base, fm-base, fm-primitives, fm-components, components, fm-modules, utilities;
 @import "../src/design/styles/fonts.css" layer(fm-tokens);
 @import "tailwindcss" source(none);
 @source "./**/*.{html,js,cjs,mjs,ts,cts,mts,jsx,tsx,md,mdx,json,css,mx3,vue,svelte}";
@@ -42,6 +42,9 @@
 @import "../src/design/styles/inspector-visualization.css" layer(fm-modules);
 @import "../src/design/styles/inspector-physics.css" layer(fm-modules);
 @import "../src/design/styles/inspector-fdm-cell.css" layer(fm-modules);
+@import "../src/design/styles/viewport-tabs.css" layer(fm-modules);
+@import "../src/design/styles/micro-motion.css" layer(fm-modules);
+@import "../src/design/styles/status-bar.css" layer(fm-modules);
 @import "../src/design/styles/viewport-3d.css" layer(fm-modules);
 @import "../src/design/styles/viewport-3d-toolbar.css" layer(fm-modules);
 @import "../src/design/styles/viewport-3d-settings.css" layer(fm-modules);

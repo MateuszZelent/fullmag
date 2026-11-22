@@ -1,6 +1,7 @@
 "use client";
 
-import { useSyncExternalStore } from "react";
+import { Info, Radio, RefreshCw } from "lucide-react";
+import { useSyncExternalStore, type ReactNode } from "react";
 
 import { useKernel } from "@/kernel/KernelContext";
 import {
@@ -22,6 +23,8 @@ import {
 } from "@/kernel/runtime/runtimeStateDisplay";
 import { useAwaitingComputeCommand } from "@/kernel/runtime/useAwaitingComputeCommand";
 import { Button } from "@/shared/ui/Button";
+import { Popover, PopoverContent, PopoverTrigger } from "@/shared/ui/Popover";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/shared/ui/Tooltip";
 
 import {
   buildStatusBarEngineModel,
@@ -182,97 +185,179 @@ export default function StatusBarModule() {
     kernel.bus.emit("footer:tab-requested", { tab });
   };
 
+  const freshnessLabel = formatStatusFreshnessLabel(statusFreshness);
+
+  /* Everything the bar shows, in full, for the details popover. Fields the
+     bar drops at narrow widths (container queries) stay reachable here. */
+  const details: Array<{ label: string; value: string; state?: string; title?: string }> = [
+    { label: "State", value: sessionState, state: statusFreshness },
+    { label: "Session", value: sessionName },
+    { label: "Runtime", value: runtimeVersion },
+    { label: "Mesh", value: mesh.label, state: mesh.state, title: mesh.title },
+    { label: "Realtime", value: realtimeLabel, state: realtimeConnection.status },
+    { label: "Status data", value: freshnessLabel, state: statusFreshness },
+    { label: "Engine", value: `${engine.label} — ${engine.detail}`, state: engine.state, title: engine.title },
+    { label: "Method", value: method.label, state: method.state, title: method.title },
+  ];
+
   return (
-    <div className="fm-status-bar" role="group" aria-label="Session status">
-      <span
-        className="fm-status-bar__dot"
-        data-status={statusFreshness}
-        aria-hidden="true"
-      />
-      <button
-        type="button"
-        className="fm-status-bar__button fm-status-bar__item fm-status-bar__item--clickable fm-status-bar__item--state"
-        onClick={() => handleItemClick("telemetry")}
-        title={sessionState}
-      >
-        {sessionState}
-      </button>
-      <span className="fm-status-bar__sep" aria-hidden="true" />
-      <button
-        type="button"
-        className="fm-status-bar__button fm-status-bar__item fm-status-bar__item--clickable"
-        onClick={() => handleItemClick("telemetry")}
-        title={sessionName}
-      >
-        {sessionName}
-      </button>
-      <span className="fm-status-bar__sep" aria-hidden="true" />
-      <span className="fm-status-bar__item" title={runtimeVersion}>{runtimeVersion}</span>
-      <span className="fm-status-bar__sep" aria-hidden="true" />
-      <button
-        type="button"
-        className="fm-status-bar__button fm-status-bar__item fm-status-bar__item--clickable"
-        data-state={mesh.state}
-        title={mesh.title}
-        aria-label={mesh.label}
-        onClick={() => handleItemClick("operations")}
-      >
-        {mesh.label}
-      </button>
-      <SimulationPreparationStatusEntry />
-      <span className="fm-status-bar__spacer" aria-hidden="true" />
-      <span role="group"
-        className="fm-status-bar__axis fm-status-bar__axis--connection"
-        data-state={realtimeConnection.status}
-        aria-label={`Realtime connection ${realtimeLabel}`}
-        title={`WebSocket connection: ${realtimeLabel}. Session status data freshness is shown separately.`}
-      >
-        Realtime {realtimeLabel}
-      </span>
-      <span role="group"
-        className="fm-status-bar__axis fm-status-bar__axis--freshness"
-        data-state={statusFreshness}
-        aria-label={`Session status data ${formatStatusFreshnessLabel(statusFreshness)}`}
-        title={`Session status resource fetch state: ${formatStatusFreshnessLabel(statusFreshness)}. WebSocket connection is shown separately.`}
-      >
-        Status {formatStatusFreshnessLabel(statusFreshness)}
-      </span>
-      <button
-        type="button"
-        className="fm-status-bar__button fm-status-bar__engine fm-status-bar__engine--clickable"
-        data-state={engine.state}
-        data-tone={engine.tone}
-        title={engine.title}
-        onClick={() => handleItemClick("diagnostics")}
-      >
-        <span className="fm-status-bar__engine-label">{engine.label}</span>
-        <span className="fm-status-bar__engine-sep" aria-hidden="true">
-          {" | "}
-        </span>
-        <span className="fm-status-bar__engine-detail">{engine.detail}</span>
-      </button>
-      {engine.awaitingCompute ? (
-        <Button
-          aria-disabled={compute.disabledReason !== null || compute.pending}
-          className="fm-status-bar__compute-cta"
-          onClick={compute.run}
-          size="sm"
-          title={compute.title}
-          type="button"
-          variant="primary"
-        >
-          {compute.pending ? "Submitting…" : "Compute"}
-        </Button>
-      ) : null}
-      <span role="group"
-        className="fm-status-bar__engine"
-        data-state={method.state}
-        data-method={method.method ?? "unresolved"}
-        aria-label="Simulation method"
-        title={method.title}
-      >
-        <span className="fm-status-bar__engine-label">{method.label}</span>
-      </span>
-    </div>
+    <TooltipProvider delayDuration={300}>
+      <div className="fm-status-bar" role="group" aria-label="Session status">
+        <span
+          className="fm-status-bar__dot"
+          data-status={statusFreshness}
+          aria-hidden="true"
+        />
+        <StatusTip content={`Session state: ${sessionState}`}>
+          <button
+            type="button"
+            className="fm-status-bar__button fm-status-bar__item fm-status-bar__item--clickable fm-status-bar__item--state"
+            onClick={() => handleItemClick("telemetry")}
+          >
+            {sessionState}
+          </button>
+        </StatusTip>
+        <span className="fm-status-bar__sep" data-priority="low" aria-hidden="true" />
+        <StatusTip content={sessionName}>
+          <button
+            type="button"
+            className="fm-status-bar__button fm-status-bar__item fm-status-bar__item--clickable"
+            data-priority="low"
+            onClick={() => handleItemClick("telemetry")}
+          >
+            {sessionName}
+          </button>
+        </StatusTip>
+        <span className="fm-status-bar__sep" data-priority="lowest" aria-hidden="true" />
+        <StatusTip content={`Runtime ${runtimeVersion}`}>
+          <span className="fm-status-bar__item" data-priority="lowest">
+            {runtimeVersion}
+          </span>
+        </StatusTip>
+        <span className="fm-status-bar__sep" data-priority="low" aria-hidden="true" />
+        <StatusTip content={mesh.title}>
+          <button
+            type="button"
+            className="fm-status-bar__button fm-status-bar__item fm-status-bar__item--clickable"
+            data-priority="low"
+            data-state={mesh.state}
+            aria-label={mesh.label}
+            onClick={() => handleItemClick("operations")}
+          >
+            {mesh.label}
+          </button>
+        </StatusTip>
+        <SimulationPreparationStatusEntry />
+        <span className="fm-status-bar__spacer" aria-hidden="true" />
+        <StatusTip content={`WebSocket connection: ${realtimeLabel}. Session status data freshness is shown separately.`}>
+          <span role="group"
+            className="fm-status-bar__axis fm-status-bar__axis--connection"
+            data-state={realtimeConnection.status}
+            aria-label={`Realtime connection ${realtimeLabel}`}
+          >
+            <Radio aria-hidden="true" className="fm-status-bar__axis-icon" size={12} />
+            <span className="fm-status-bar__axis-text">Realtime {realtimeLabel}</span>
+          </span>
+        </StatusTip>
+        <StatusTip content={`Session status resource fetch state: ${freshnessLabel}. WebSocket connection is shown separately.`}>
+          <span role="group"
+            className="fm-status-bar__axis fm-status-bar__axis--freshness"
+            data-state={statusFreshness}
+            aria-label={`Session status data ${freshnessLabel}`}
+          >
+            <RefreshCw aria-hidden="true" className="fm-status-bar__axis-icon" size={12} />
+            <span className="fm-status-bar__axis-text">Status {freshnessLabel}</span>
+          </span>
+        </StatusTip>
+        <StatusTip content={engine.title}>
+          <button
+            type="button"
+            className="fm-status-bar__button fm-status-bar__engine fm-status-bar__engine--clickable"
+            data-state={engine.state}
+            data-tone={engine.tone}
+            onClick={() => handleItemClick("diagnostics")}
+          >
+            <span className="fm-status-bar__engine-label">{engine.label}</span>
+            <span className="fm-status-bar__engine-detail">{engine.detail}</span>
+          </button>
+        </StatusTip>
+        {engine.awaitingCompute ? (
+          <StatusTip content={compute.title}>
+            <Button
+              aria-disabled={compute.disabledReason !== null || compute.pending}
+              className="fm-status-bar__compute-cta"
+              onClick={compute.run}
+              size="sm"
+              type="button"
+              variant="primary"
+            >
+              {compute.pending ? "Submitting…" : "Compute"}
+            </Button>
+          </StatusTip>
+        ) : null}
+        <StatusTip content={method.title}>
+          <span role="group"
+            className="fm-status-bar__engine"
+            data-state={method.state}
+            data-method={method.method ?? "unresolved"}
+            aria-label="Simulation method"
+          >
+            <span className="fm-status-bar__engine-label">{method.label}</span>
+          </span>
+        </StatusTip>
+        <Popover>
+          <StatusTip content="Session status details">
+            <PopoverTrigger asChild>
+              <button
+                type="button"
+                aria-label="Session status details"
+                className="fm-status-bar__button fm-status-bar__details-trigger"
+              >
+                <Info aria-hidden="true" size={13} />
+              </button>
+            </PopoverTrigger>
+          </StatusTip>
+          <PopoverContent
+            align="end"
+            aria-label="Session status details"
+            className="fm-status-bar__details"
+            side="top"
+            sideOffset={8}
+          >
+            <dl className="fm-status-bar__details-list">
+              {details.map(({ label, state, title, value }) => (
+                <div className="fm-status-bar__details-row" data-state={state} key={label}>
+                  <dt>{label}</dt>
+                  <dd>
+                    {value}
+                    {title ? <small className="fm-status-bar__details-note">{title}</small> : null}
+                  </dd>
+                </div>
+              ))}
+            </dl>
+            <div className="fm-status-bar__details-actions">
+              <Button size="sm" type="button" variant="ghost" onClick={() => handleItemClick("telemetry")}>
+                Telemetry
+              </Button>
+              <Button size="sm" type="button" variant="ghost" onClick={() => handleItemClick("operations")}>
+                Operations
+              </Button>
+              <Button size="sm" type="button" variant="ghost" onClick={() => handleItemClick("diagnostics")}>
+                Diagnostics
+              </Button>
+            </div>
+          </PopoverContent>
+        </Popover>
+      </div>
+    </TooltipProvider>
+  );
+}
+
+function StatusTip({ children, content }: { children: ReactNode; content: string }) {
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>{children}</TooltipTrigger>
+      <TooltipContent side="top">{content}</TooltipContent>
+    </Tooltip>
   );
 }

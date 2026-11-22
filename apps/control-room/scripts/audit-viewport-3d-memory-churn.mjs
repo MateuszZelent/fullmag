@@ -640,7 +640,8 @@ async function assertModelExportDownloads(page, viewport, canvas) {
     return data;
   };
 
-  await viewport.getByRole("button", { name: "Export 3D model", exact: true }).click();
+  await viewport.getByRole("button", { name: "Export", exact: true }).click();
+  await page.getByRole("menuitem", { name: "Export 3D model", exact: true }).click();
   await dialog.getByRole("checkbox", { name: "Include vector arrows" }).uncheck();
   const glb = await download(".glb");
   if (glb.length < 20 || glb.readUInt32LE(0) !== 0x46546c67 || glb.readUInt32LE(4) !== 2) {

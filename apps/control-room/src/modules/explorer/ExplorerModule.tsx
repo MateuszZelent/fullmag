@@ -457,7 +457,7 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
   });
   const commandQueue = useCommandQueueResource({ enabled: runtimeTabActive });
   const artifacts = useArtifactsResource({ enabled: resultsResourceActive });
-  const fieldCatalog = useFieldCatalogResource({ enabled: runtimeTabActive });
+  const fieldCatalog = useFieldCatalogResource({ enabled: resultsResourceActive });
   const tableCatalog = useTableListResource({ enabled: resultsResourceActive });
   const runtimeCommandIds = useMemo(
     () => (commandQueue.data?.commands ?? []).map((command) => command.command_id),
@@ -806,8 +806,10 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
               frequencyDomainBranches: resultContextIsCurrent ? frequencyDomainBranches.data : null,
               frequencyDomainDispersion: resultContextIsCurrent ? frequencyDomainDispersion.data : null,
               frequencyDomainManifest: resultContextIsCurrent ? frequencyDomainManifest.data : null,
+              frequencyDomainResponseMap: resultContextIsCurrent ? frequencyDomainResponseSweep.data : null,
               frequencyDomainResponseSweep: resultContextIsCurrent ? frequencyDomainResponseSweep.data : null,
               frequencyDomainSpectrum: resultContextIsCurrent ? frequencyDomainSpectrum.data : null,
+              fieldCatalog: resultContextIsCurrent ? runtimeSnapshot.source.fieldCatalog : undefined,
               observationFrames: resultContextIsCurrent
                 ? runtimeResourceSnapshot(observationFrames)
                 : undefined,

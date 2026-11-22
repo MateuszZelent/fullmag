@@ -1,0 +1,186 @@
+/* Selected/open state is read from aria-selected / aria-expanded, never from
+   data-state: the Tooltip wrapped around each trigger writes its own
+   data-state (closed / delayed-open) over the Tabs, Popover and Dropdown
+   one, which silently dropped the active highlight. */
+
+/* Center surface rail (specs/frontend-v2/10 §1a): the strip above the
+   viewport speaks the side-rail language turned horizontal — 36 px icon
+   items on the panel glass, the open surface raised with an accent glyph and an
+   indicator bar on the edge facing its content. Sits in fm-modules so it
+   wins over the generic line-tab primitive. */
+.fm-viewport-tabs__root {
+  grid-template-rows: auto minmax(0, 1fr);
+}
+
+/* The docked frame already paints the shared glass (layout.css), exactly as
+   behind the Explorer and Inspector headers. The bar and the tab root add no
+   fill of their own: slots.css gives them --fm-bg-chrome / --fm-bg-viewport,
+   which read as a darker band than the neighbouring panels in both themes. */
+.fm-viewport-tabs {
+  border: 0;
+  background: transparent;
+}
+
+.fm-viewport-tabs__bar {
+  min-height: var(--fm-rail-height);
+  gap: var(--fm-space-1);
+  border-bottom: 1px solid var(--fm-border-muted);
+  background: transparent;
+  padding-inline: var(--fm-space-2);
+}
+
+.fm-viewport-tabs__list.fm-tabs-list {
+  flex: 1;
+  height: auto;
+  min-height: 0;
+  gap: var(--fm-space-1);
+  border-bottom: 0;
+  /* The 6 px indicator offset needs room inside the strip. */
+  padding-block: var(--fm-space-1-5);
+}
+
+.fm-viewport-tabs__list .fm-viewport-tabs__trigger {
+  position: relative;
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: var(--fm-rail-item-size);
+  height: var(--fm-rail-item-size);
+  min-height: var(--fm-rail-item-size);
+  max-width: none;
+  overflow: visible;
+  border: 0;
+  border-radius: var(--fm-radius-field);
+  background: transparent;
+  box-shadow: none;
+  color: var(--fm-text-muted);
+  padding: 0;
+}
+
+@media (hover: hover) {
+  .fm-viewport-tabs__list .fm-viewport-tabs__trigger:hover:not(:disabled) {
+    background: color-mix(in srgb, var(--fm-text-primary) 7%, transparent);
+    color: var(--fm-text-primary);
+  }
+}
+
+.fm-viewport-tabs__list .fm-viewport-tabs__trigger:focus-visible {
+  outline: none;
+  box-shadow: var(--fm-focus-ring);
+}
+
+.fm-viewport-tabs__list .fm-viewport-tabs__trigger[aria-selected="true"]:not(:disabled) {
+  border: 0;
+  background: var(--fm-raised-bg);
+  /* Raised fill alone is near-white on near-white glass in the light theme;
+     a hairline accent ring keeps the open surface visible in both. */
+  box-shadow:
+    var(--fm-elevation-sm),
+    inset 0 0 0 1px color-mix(in srgb, var(--fm-accent) 38%, transparent);
+  color: var(--fm-accent);
+  font-weight: inherit;
+}
+
+/* Indicator bar under the active item, facing the surface it opens. */
+.fm-viewport-tabs__trigger::before {
+  position: absolute;
+  right: var(--fm-space-2);
+  bottom: calc(-1 * var(--fm-space-1-5));
+  left: var(--fm-space-2);
+  height: var(--fm-rail-indicator-height);
+  border-radius: var(--fm-radius-pill);
+  background: var(--fm-accent);
+  content: "";
+  scale: 0 1;
+}
+
+.fm-viewport-tabs__trigger[aria-selected="true"]::before {
+  scale: 1 1;
+}
+
+/* The split companion keeps a quieter mark: a dot, not the bar. */
+.fm-viewport-tabs__trigger[data-companion="true"]::after {
+  position: absolute;
+  top: var(--fm-space-1);
+  right: var(--fm-space-1);
+  width: var(--fm-space-1-5);
+  height: var(--fm-space-1-5);
+  border-radius: var(--fm-radius-pill);
+  background: var(--fm-hue-visualization);
+  content: "";
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .fm-viewport-tabs__trigger::before {
+    transition: scale var(--fm-duration-micro) var(--fm-ease-out-soft);
+  }
+}
+
+@media (forced-colors: active) {
+  .fm-viewport-tabs__trigger::before {
+    border-block-end: 3px solid Highlight;
+    background: none;
+  }
+}
+
+/* Sliding indicator (anchor positioning): one bar on the tab strip tethered
+   to the open tab, so it glides between tabs instead of switching on and off.
+   Where anchor positioning is missing (Firefox) the static per-tab bar above
+   stays. The bar is decoration only; aria-selected carries the state. */
+@supports (position-anchor: auto) {
+  .fm-viewport-tabs__trigger[aria-selected="true"] {
+    anchor-name: --fm-rail-active;
+  }
+
+  .fm-viewport-tabs__trigger::before {
+    display: none;
+  }
+
+  .fm-viewport-tabs__list.fm-tabs-list {
+    position: relative;
+  }
+
+  .fm-viewport-tabs__list.fm-tabs-list::before {
+    position: absolute;
+    position-anchor: --fm-rail-active;
+    /* Not position-area: it cannot be transitioned. */
+    top: calc(anchor(bottom) + var(--fm-space-1-5) - var(--fm-rail-indicator-height));
+    left: calc(anchor(left) + var(--fm-space-2));
+    right: calc(anchor(right) + var(--fm-space-2));
+    height: var(--fm-rail-indicator-height);
+    border-radius: var(--fm-radius-pill);
+    background: var(--fm-accent);
+    content: "";
+    pointer-events: none;
+  }
+
+  @media (prefers-reduced-motion: no-preference) {
+    .fm-viewport-tabs__list.fm-tabs-list::before {
+      transition: inset var(--fm-duration-panel) var(--fm-ease-out-soft);
+    }
+  }
+
+  @media (forced-colors: active) {
+    .fm-viewport-tabs__list.fm-tabs-list::before {
+      background: Highlight;
+    }
+  }
+}
+
+/* A new surface (3D, 2D, charts) eases in after the user switches tabs.
+   Only the first child of the surface animates, only opacity and a short
+   translate: the canvas is never resized. `backwards` fill leaves no
+   transform behind once it ends. The attribute is set by ViewportTabHost on
+   the first user switch, so a page load does not animate. */
+@media (prefers-reduced-motion: no-preference) {
+  .fm-viewport-tabs__surface[data-surface-motion] > * {
+    animation: fm-surface-enter var(--fm-duration-panel) var(--fm-ease-out-soft) backwards;
+  }
+}
+
+@keyframes fm-surface-enter {
+  from {
+    opacity: 0;
+    translate: 0 var(--fm-space-2);
+  }
+}

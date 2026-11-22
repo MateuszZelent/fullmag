@@ -1,0 +1,22 @@
+/* Press feedback for icon rails, toolbar buttons and dock tabs: a quick dip
+   in scale when the control is pressed. An animation, not a transition, so it
+   cannot replace the transition lists those controls already declare. Fires
+   on user action only and is off under prefers-reduced-motion. */
+@media (prefers-reduced-motion: no-preference) {
+  :where(
+    .fm-side-rail__item,
+    .fm-viewport-tabs__trigger,
+    .fm-viewport-3d-toolbar__button,
+    .fm-footer__tab,
+    .fm-footer__toggle,
+    .fm-ribbon__toggle
+  ):not(:disabled, [aria-disabled="true"]):active {
+    animation: fm-press var(--fm-duration-micro) var(--fm-ease-out-soft);
+  }
+}
+
+@keyframes fm-press {
+  50% {
+    scale: 0.92;
+  }
+}
