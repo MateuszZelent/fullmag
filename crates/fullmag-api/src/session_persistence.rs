@@ -1257,10 +1257,18 @@ struct FieldStateJsonArtifact {
     grid_spacing: Option<[f64; 3]>,
 }
 
+#[derive(Debug, Default, Deserialize)]
+struct HysteresisSnapshotLayout {
+    #[serde(default)]
+    grid_cells: Option<[usize; 3]>,
+}
+
 #[derive(Debug, Deserialize)]
 struct HysteresisMagnetizationSnapshotArtifact {
     quantity_id: String,
     values: Vec<[f64; 3]>,
+    #[serde(default)]
+    layout: Option<HysteresisSnapshotLayout>,
 }
 
 // ── Helpers ────────────────────────────────────────────────────────────
@@ -4425,6 +4433,14 @@ pub(crate) async fn export_field_state_with_context(
     }
     let artifact_dir = std::path::PathBuf::from(&snapshot.session.artifact_dir);
     let field_revision = field_revision(snapshot);
+    let export_grid_shape = active_domain_grid(snapshot).filter(|dims| {
+        dims[0]
+            .checked_mul(dims[1])
+            .and_then(|v| v.checked_mul(dims[2]))
+            == Some(vectors.len())
+    });
+    let export_grid_geometry =
+        export_grid_shape.and_then(|dims| resolve_target_fdm_geometry(snapshot, dims));
     let artifact = FieldStateJsonArtifact {
         fullmag_kind: "field_state".to_string(),
         schema_version: 1,
@@ -4434,9 +4450,9 @@ pub(crate) async fn export_field_state_with_context(
         values: vectors,
         source_step: Some(latest.step),
         source_time_s: Some(latest.time),
-        grid_shape: None,
-        grid_origin: None,
-        grid_spacing: None,
+        grid_shape: export_grid_shape,
+        grid_origin: export_grid_geometry.map(|(origin, _)| origin),
+        grid_spacing: export_grid_geometry.map(|(_, spacing)| spacing),
     };
     drop(guard);
 
@@ -4548,15 +4564,9 @@ pub(crate) async fn inspect_field_state_with_context(
     }
     let default_mode = default_field_state_mode(&req.target, &req.quantity_id);
     if default_mode == "apply" {
-        if let Err(error) = validate_checkpoint_restore_shape(snapshot, artifact.values.len()) {
-            let can_resample = artifact.grid_shape.is_some()
-                && artifact.grid_spacing.is_some()
-                && active_domain_grid(snapshot).is_some();
-            if can_resample {
-                warnings.push(format!(
-                    "{}; trilinear or nearest grid resampling will be used on apply",
-                    error.message
-                ));
+        if let Err(error) = validate_exact_field_state_shape(snapshot, &artifact) {
+            if can_resample_field_state(&artifact, snapshot) {
+                warnings.push(error.message);
             } else {
                 compatible = false;
                 warnings.push(error.message);
@@ -4692,30 +4702,12 @@ pub(crate) async fn import_field_state_with_context(
     let applied_values = match requested_interpolation.as_deref() {
         Some("nearest") | Some("trilinear") => {
             let mode = requested_interpolation.as_deref().unwrap_or("trilinear");
-            let target_grid = active_domain_grid(snapshot).ok_or_else(|| {
-                ApiError::bad_request("grid resampling requires an active structured target grid")
-            })?;
-            resample_field_state_to_grid(&artifact, target_grid, mode)
+            resample_field_state_to_snapshot_domain(&artifact, snapshot, mode)
                 .map_err(ApiError::bad_request)?
         }
         None | Some("") | Some("exact") => {
-            if validate_checkpoint_restore_shape(snapshot, artifact.values.len()).is_ok() {
-                artifact.values.clone()
-            } else if requested_interpolation.as_deref() != Some("exact")
-                && artifact.grid_shape.is_some()
-                && artifact.grid_spacing.is_some()
-            {
-                if let Some(target_grid) = active_domain_grid(snapshot) {
-                    resample_field_state_to_grid(&artifact, target_grid, "trilinear")
-                        .map_err(ApiError::bad_request)?
-                } else {
-                    validate_checkpoint_restore_shape(snapshot, artifact.values.len())?;
-                    artifact.values.clone()
-                }
-            } else {
-                validate_checkpoint_restore_shape(snapshot, artifact.values.len())?;
-                artifact.values.clone()
-            }
+            validate_exact_field_state_shape(snapshot, &artifact)?;
+            artifact.values.clone()
         }
         Some(other) => {
             return Err(ApiError::bad_request(format!(
@@ -4724,11 +4716,23 @@ pub(crate) async fn import_field_state_with_context(
         }
     };
     validate_checkpoint_restore_shape(snapshot, applied_values.len())?;
+    let resolved_target_grid = active_domain_grid(snapshot);
     let applied_point_count = applied_values.len() as u64;
     let live_state = snapshot
         .live_state
         .as_mut()
         .ok_or_else(|| ApiError::bad_request("field-state apply requires live state"))?;
+    if live_state.latest_step.grid == [0, 0, 0] {
+        if let Some([nx, ny, nz]) = resolved_target_grid {
+            if let (Ok(gx), Ok(gy), Ok(gz)) = (
+                u32::try_from(nx),
+                u32::try_from(ny),
+                u32::try_from(nz),
+            ) {
+                live_state.latest_step.grid = [gx, gy, gz];
+            }
+        }
+    }
     live_state.latest_step.magnetization = Some(flatten_magnetization(&applied_values));
     live_state.status = "paused".to_string();
     live_state.updated_at_unix_ms = now_unix_ms();
@@ -5803,14 +5807,349 @@ fn validate_field_state_import_format(format: &str) -> Result<(), ApiError> {
     )))
 }
 
-fn active_domain_grid(snapshot: &SessionStateResponse) -> Option<[usize; 3]> {
-    let grid = snapshot.live_state.as_ref()?.latest_step.grid;
-    let dims = [grid[0] as usize, grid[1] as usize, grid[2] as usize];
-    if dims.iter().all(|&n| n > 0) {
-        Some(dims)
-    } else {
-        None
+#[derive(Debug, Clone)]
+struct TargetFdmLayer {
+    dims: [usize; 3],
+    origin: [f64; 3],
+    spacing: [f64; 3],
+    active_mask: Option<Vec<bool>>,
+}
+
+fn parse_positive_dims3(value: &serde_json::Value) -> Option<[usize; 3]> {
+    let arr = value.as_array()?;
+    if arr.len() != 3 {
+        return None;
     }
+    let dims = [
+        usize::try_from(arr[0].as_u64()?).ok()?,
+        usize::try_from(arr[1].as_u64()?).ok()?,
+        usize::try_from(arr[2].as_u64()?).ok()?,
+    ];
+    dims.iter().all(|&n| n > 0).then_some(dims)
+}
+
+fn parse_finite_vec3(value: &serde_json::Value) -> Option<[f64; 3]> {
+    let arr = value.as_array()?;
+    if arr.len() != 3 {
+        return None;
+    }
+    let vec = [arr[0].as_f64()?, arr[1].as_f64()?, arr[2].as_f64()?];
+    vec.iter().all(|v| v.is_finite()).then_some(vec)
+}
+
+fn parse_positive_vec3(value: &serde_json::Value) -> Option<[f64; 3]> {
+    let vec = parse_finite_vec3(value)?;
+    vec.iter().all(|&v| v > 0.0).then_some(vec)
+}
+
+fn resolve_fdm_multilayer_target_layers(
+    snapshot: &SessionStateResponse,
+) -> Option<Vec<TargetFdmLayer>> {
+    if crate::router_v2::handlers::sessions::status::is_fem_snapshot(snapshot) {
+        return None;
+    }
+    let metadata = snapshot.metadata.as_ref()?;
+    let artifact = metadata
+        .get("artifact_layout")
+        .filter(|v| v.get("backend").and_then(serde_json::Value::as_str) == Some("fdm_multilayer"));
+    let backend_plan = metadata
+        .get("execution_plan")
+        .and_then(|v| v.get("backend_plan"))
+        .filter(|v| {
+            artifact.is_some()
+                || v.get("kind").and_then(serde_json::Value::as_str) == Some("fdm_multilayer")
+                || (v.get("layers").is_some() && v.get("common_cells").is_some())
+        });
+    let layers_val = backend_plan
+        .and_then(|v| v.get("layers"))
+        .or_else(|| artifact.and_then(|v| v.get("layers")))?
+        .as_array()?;
+    if layers_val.is_empty() {
+        return None;
+    }
+    let mut layers = Vec::with_capacity(layers_val.len());
+    let mut total_cells = 0usize;
+    for layer in layers_val {
+        let dims = layer.get("native_grid").and_then(parse_positive_dims3)?;
+        let cell_count = dims[0]
+            .checked_mul(dims[1])
+            .and_then(|v| v.checked_mul(dims[2]))?;
+        total_cells = total_cells.checked_add(cell_count)?;
+        let spacing = layer
+            .get("native_cell_size")
+            .or_else(|| layer.get("cell_size"))
+            .and_then(parse_positive_vec3)?;
+        let origin = match layer
+            .get("native_origin")
+            .or_else(|| layer.get("origin_m"))
+            .or_else(|| layer.get("origin"))
+        {
+            Some(v) => parse_finite_vec3(v)?,
+            None => [0.0, 0.0, 0.0],
+        };
+        let active_mask = layer
+            .get("native_active_mask")
+            .and_then(serde_json::Value::as_array)
+            .and_then(|arr| {
+                let mask: Option<Vec<bool>> = arr.iter().map(serde_json::Value::as_bool).collect();
+                mask.filter(|m| m.len() == cell_count)
+            });
+        layers.push(TargetFdmLayer {
+            dims,
+            origin,
+            spacing,
+            active_mask,
+        });
+    }
+    if let Some(existing) = snapshot
+        .live_state
+        .as_ref()
+        .and_then(|s| s.latest_step.magnetization.as_ref())
+        .filter(|m| !m.is_empty())
+    {
+        if existing.len() / 3 != total_cells {
+            return None;
+        }
+    }
+    Some(layers)
+}
+
+fn active_domain_grid(snapshot: &SessionStateResponse) -> Option<[usize; 3]> {
+    if crate::router_v2::handlers::sessions::status::is_fem_snapshot(snapshot) {
+        return None;
+    }
+    if let Some(layers) = resolve_fdm_multilayer_target_layers(snapshot) {
+        return (layers.len() == 1).then(|| layers[0].dims);
+    }
+    let latest_grid = snapshot
+        .live_state
+        .as_ref()
+        .map(|state| state.latest_step.grid);
+    let shape =
+        crate::router_v2::handlers::sessions::status::fdm_grid_shape(snapshot, latest_grid);
+    let dims = [shape[0] as usize, shape[1] as usize, shape[2] as usize];
+    if dims.iter().all(|&n| n > 0) {
+        return Some(dims);
+    }
+    snapshot
+        .latest_fields
+        .get("m")
+        .and_then(crate::router_v2::handlers::data::field_resolution::json_field_grid)
+        .and_then(|grid| {
+            let fallback = [grid[0] as usize, grid[1] as usize, grid[2] as usize];
+            fallback.iter().all(|&n| n > 0).then_some(fallback)
+        })
+}
+
+fn extract_fdm_geometry_from_json(
+    value: &serde_json::Value,
+    expected_grid: [usize; 3],
+) -> Option<([f64; 3], [f64; 3])> {
+    if let Some(explicit_grid_val) = value
+        .get("grid_cells")
+        .or_else(|| value.get("grid_shape"))
+        .or_else(|| value.get("shape"))
+        .or_else(|| value.get("cells"))
+        .or_else(|| value.get("grid").and_then(|g| g.get("cells")))
+    {
+        if parse_positive_dims3(explicit_grid_val) != Some(expected_grid) {
+            return None;
+        }
+    }
+    let spacing = value
+        .get("cell_size")
+        .or_else(|| value.get("cell_m"))
+        .or_else(|| value.get("native_cell_size"))
+        .or_else(|| value.get("grid_spacing"))
+        .or_else(|| value.get("spacing"))
+        .and_then(parse_positive_vec3)?;
+    let origin = match value
+        .get("origin_m")
+        .or_else(|| value.get("origin"))
+        .or_else(|| value.get("grid_origin"))
+        .or_else(|| value.get("native_origin"))
+    {
+        Some(orig_val) => parse_finite_vec3(orig_val)?,
+        None => [0.0, 0.0, 0.0],
+    };
+    Some((origin, spacing))
+}
+
+fn resolve_target_fdm_geometry(
+    snapshot: &SessionStateResponse,
+    target_grid: [usize; 3],
+) -> Option<([f64; 3], [f64; 3])> {
+    if crate::router_v2::handlers::sessions::status::is_fem_snapshot(snapshot) {
+        return None;
+    }
+    if let Some(layers) = resolve_fdm_multilayer_target_layers(snapshot) {
+        if layers.len() == 1 && layers[0].dims == target_grid {
+            return Some((layers[0].origin, layers[0].spacing));
+        }
+    }
+    if let Some(metadata) = snapshot.metadata.as_ref() {
+        if let Some(layout) = metadata.get("artifact_layout").filter(|l| {
+            l.get("backend")
+                .and_then(serde_json::Value::as_str)
+                .is_none_or(crate::router_v2::handlers::data::field_resolution::is_fdm_backend_kind)
+        }) {
+            if let Some(geom) = extract_fdm_geometry_from_json(layout, target_grid) {
+                return Some(geom);
+            }
+        }
+        if let Some(backend_plan) = metadata
+            .get("execution_plan")
+            .and_then(|p| p.get("backend_plan"))
+        {
+            if let Some(geom) = extract_fdm_geometry_from_json(backend_plan, target_grid) {
+                return Some(geom);
+            }
+            if let Some(grid_obj) = backend_plan.get("grid") {
+                if let Some(geom) = extract_fdm_geometry_from_json(grid_obj, target_grid) {
+                    return Some(geom);
+                }
+            }
+            if let Some(cert_obj) = backend_plan.get("grid_certificate") {
+                if let Some(geom) = extract_fdm_geometry_from_json(cert_obj, target_grid) {
+                    return Some(geom);
+                }
+            }
+        }
+    }
+    if let Some(layout) = snapshot
+        .latest_fields
+        .get("m")
+        .and_then(|v| v.get("layout"))
+    {
+        if let Some(geom) = extract_fdm_geometry_from_json(layout, target_grid) {
+            return Some(geom);
+        }
+    }
+    if let Some((origin, spacing)) =
+        crate::router_v2::handlers::sessions::status::fdm_grid_geometry(snapshot)
+    {
+        if origin.iter().all(|v| v.is_finite()) && spacing.iter().all(|&v| v.is_finite() && v > 0.0)
+        {
+            let shape = crate::router_v2::handlers::sessions::status::fdm_grid_shape(snapshot, None);
+            let shape_usize = [shape[0] as usize, shape[1] as usize, shape[2] as usize];
+            if shape == [0, 0, 0] || shape_usize == target_grid {
+                return Some((origin, spacing));
+            }
+        }
+    }
+    None
+}
+
+fn resolve_target_fdm_active_mask(
+    snapshot: &SessionStateResponse,
+    total_cells: usize,
+) -> Option<Vec<bool>> {
+    let arr = snapshot
+        .metadata
+        .as_ref()?
+        .get("execution_plan")?
+        .get("backend_plan")?
+        .get("active_mask")?
+        .as_array()?;
+    let mask: Option<Vec<bool>> = arr.iter().map(serde_json::Value::as_bool).collect();
+    mask.filter(|m| m.len() == total_cells)
+}
+
+fn target_expected_vector_count(snapshot: &SessionStateResponse) -> Option<usize> {
+    if let Some(count) = snapshot
+        .live_state
+        .as_ref()
+        .and_then(|state| state.latest_step.magnetization.as_ref())
+        .map(|values| values.len() / 3)
+    {
+        return Some(count);
+    }
+    if crate::router_v2::handlers::sessions::status::is_fem_snapshot(snapshot) {
+        return snapshot
+            .fem_mesh
+            .as_ref()
+            .and_then(|mesh| (!mesh.nodes.is_empty()).then_some(mesh.nodes.len()));
+    }
+    if let Some(layers) = resolve_fdm_multilayer_target_layers(snapshot) {
+        return layers.iter().try_fold(0usize, |acc, layer| {
+            layer.dims[0]
+                .checked_mul(layer.dims[1])
+                .and_then(|v| v.checked_mul(layer.dims[2]))
+                .and_then(|v| acc.checked_add(v))
+        });
+    }
+    let [nx, ny, nz] = active_domain_grid(snapshot)?;
+    nx.checked_mul(ny).and_then(|v| v.checked_mul(nz))
+}
+
+fn validate_exact_field_state_shape(
+    snapshot: &SessionStateResponse,
+    artifact: &FieldStateJsonArtifact,
+) -> Result<(), ApiError> {
+    if artifact.values.iter().flatten().any(|v| !v.is_finite()) {
+        return Err(ApiError::bad_request("field-state values must be finite"));
+    }
+    if let Some(src_dims) = artifact.grid_shape {
+        let expected_src = src_dims[0]
+            .checked_mul(src_dims[1])
+            .and_then(|v| v.checked_mul(src_dims[2]));
+        if src_dims.iter().any(|&n| n == 0) || expected_src != Some(artifact.values.len()) {
+            return Err(ApiError::bad_request(format!(
+                "source grid_shape [{}x{}x{}] does not match source vector count {}",
+                src_dims[0],
+                src_dims[1],
+                src_dims[2],
+                artifact.values.len()
+            )));
+        }
+        if crate::router_v2::handlers::sessions::status::is_fem_snapshot(snapshot)
+            && snapshot.fem_mesh.is_some()
+        {
+            return Err(ApiError::bad_request(format!(
+                "field-state structured grid_shape [{}x{}x{}] cannot be applied in exact mode onto an unstructured FEM mesh; choose 'nearest' or 'trilinear' interpolation to resample",
+                src_dims[0], src_dims[1], src_dims[2]
+            )));
+        }
+        if let Some(layers) = resolve_fdm_multilayer_target_layers(snapshot) {
+            if layers.len() > 1 {
+                return Err(ApiError::bad_request(format!(
+                    "field-state structured grid_shape [{}x{}x{}] cannot be applied in exact mode onto a {}-layer FDM target; choose 'nearest' or 'trilinear' interpolation to resample",
+                    src_dims[0],
+                    src_dims[1],
+                    src_dims[2],
+                    layers.len()
+                )));
+            }
+        }
+        if let Some(dst_dims) = active_domain_grid(snapshot) {
+            if src_dims != dst_dims {
+                return Err(ApiError::bad_request(format!(
+                    "field-state grid_shape [{}x{}x{}] does not match target grid_shape [{}x{}x{}] in exact import mode; choose 'nearest' or 'trilinear' interpolation to resample",
+                    src_dims[0],
+                    src_dims[1],
+                    src_dims[2],
+                    dst_dims[0],
+                    dst_dims[1],
+                    dst_dims[2]
+                )));
+            }
+        }
+    }
+    if let Err(err) = validate_checkpoint_restore_shape(snapshot, artifact.values.len()) {
+        return Err(ApiError::bad_request(format!(
+            "{}; choose 'nearest' or 'trilinear' interpolation to resample",
+            err.message
+        )));
+    }
+    if let Some(expected_count) = target_expected_vector_count(snapshot) {
+        if artifact.values.len() != expected_count {
+            return Err(ApiError::bad_request(format!(
+                "field-state vector count {} does not match active domain vector count {expected_count}; choose 'nearest' or 'trilinear' interpolation to resample",
+                artifact.values.len()
+            )));
+        }
+    }
+    Ok(())
 }
 
 fn sanitize_field_state_file_name(
@@ -5933,6 +6272,16 @@ fn read_hysteresis_snapshot_as_field_state(
     target: &FieldStateTargetRef,
 ) -> Result<FieldStateJsonArtifact, serde_json::Error> {
     let snapshot: HysteresisMagnetizationSnapshotArtifact = serde_json::from_slice(raw)?;
+    let grid_shape = snapshot
+        .layout
+        .and_then(|layout| layout.grid_cells)
+        .filter(|dims| {
+            dims.iter().all(|&n| n > 0)
+                && dims[0]
+                    .checked_mul(dims[1])
+                    .and_then(|v| v.checked_mul(dims[2]))
+                    == Some(snapshot.values.len())
+        });
     Ok(FieldStateJsonArtifact {
         fullmag_kind: "field_state".to_string(),
         schema_version: 1,
@@ -5942,7 +6291,7 @@ fn read_hysteresis_snapshot_as_field_state(
         values: snapshot.values,
         source_step: None,
         source_time_s: None,
-        grid_shape: None,
+        grid_shape,
         grid_origin: None,
         grid_spacing: None,
     })
@@ -6243,8 +6592,7 @@ fn nearest_nonzero_grid_vector(
 ) -> [f64; 3] {
     let [nx, ny, nz] = dims;
     let clamp_idx = |coord: f64, orig: f64, step: f64, n: usize| -> usize {
-        let raw = ((coord - orig) / step).floor() as isize;
-        raw.clamp(0, (n - 1) as isize) as usize
+        ((coord - orig) / step).floor().clamp(0.0, (n - 1) as f64) as usize
     };
     let ix = clamp_idx(point[0], origin[0], spacing[0], nx);
     let iy = clamp_idx(point[1], origin[1], spacing[1], ny);
@@ -6293,27 +6641,65 @@ fn nearest_nonzero_grid_vector(
     best
 }
 
-fn resample_field_state_to_grid(
+fn validate_source_grid_for_resampling(
     artifact: &FieldStateJsonArtifact,
-    target_grid: [usize; 3],
-    interpolation: &str,
-) -> Result<Vec<[f64; 3]>, String> {
-    const ZERO_THRESHOLD: f64 = 1.0e-12;
+) -> Result<([usize; 3], [f64; 3], [f64; 3]), String> {
+    if artifact.values.iter().flatten().any(|v| !v.is_finite()) {
+        return Err("source field-state values must be finite".to_string());
+    }
     let dims = artifact
         .grid_shape
         .ok_or_else(|| "resampling requires source grid_shape metadata".to_string())?;
     let origin = artifact.grid_origin.unwrap_or([0.0, 0.0, 0.0]);
+    if origin.iter().any(|o| !o.is_finite()) {
+        return Err("source grid_origin must be finite".to_string());
+    }
     let spacing = artifact
         .grid_spacing
         .ok_or_else(|| "resampling requires source grid_spacing metadata".to_string())?;
-    if dims.iter().any(|&n| n == 0) || dims[0] * dims[1] * dims[2] != artifact.values.len() {
+    let expected_points = dims[0]
+        .checked_mul(dims[1])
+        .and_then(|v| v.checked_mul(dims[2]));
+    if dims.iter().any(|&n| n == 0) || expected_points != Some(artifact.values.len()) {
         return Err("source grid_shape does not match source vector count".to_string());
     }
     if spacing.iter().any(|&s| !s.is_finite() || s <= 0.0) {
         return Err("source grid_spacing must be finite and positive".to_string());
     }
+    Ok((dims, origin, spacing))
+}
+
+fn can_resample_field_state(
+    artifact: &FieldStateJsonArtifact,
+    snapshot: &SessionStateResponse,
+) -> bool {
+    if validate_source_grid_for_resampling(artifact).is_err() {
+        return false;
+    }
+    if crate::router_v2::handlers::sessions::status::is_fem_snapshot(snapshot) {
+        return snapshot
+            .fem_mesh
+            .as_ref()
+            .is_some_and(|mesh| !mesh.nodes.is_empty() && mesh.nodes.iter().flatten().all(|v| v.is_finite()));
+    }
+    if resolve_fdm_multilayer_target_layers(snapshot).is_some() {
+        return true;
+    }
+    active_domain_grid(snapshot)
+        .and_then(|target_grid| resolve_target_fdm_geometry(snapshot, target_grid))
+        .is_some()
+}
+
+fn sample_field_state_at_point(
+    values: &[[f64; 3]],
+    dims: [usize; 3],
+    origin: [f64; 3],
+    spacing: [f64; 3],
+    pt: [f64; 3],
+    interpolation: &str,
+) -> [f64; 3] {
+    const ZERO_THRESHOLD: f64 = 1.0e-12;
     let [nx, ny, nz] = dims;
-    let [tnx, tny, tnz] = target_grid;
     let flat_src = |x: usize, y: usize, z: usize| x + nx * (y + ny * z);
     let normalize_unit = |v: [f64; 3]| -> [f64; 3] {
         let len = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt();
@@ -6324,95 +6710,244 @@ fn resample_field_state_to_grid(
         }
     };
 
-    let extent = [
-        (nx as f64) * spacing[0],
-        (ny as f64) * spacing[1],
-        (nz as f64) * spacing[2],
-    ];
-    let mut output = Vec::with_capacity(tnx * tny * tnz);
-    for z in 0..tnz {
-        let pz = origin[2] + ((z as f64 + 0.5) / (tnz as f64)) * extent[2];
-        for y in 0..tny {
-            let py = origin[1] + ((y as f64 + 0.5) / (tny as f64)) * extent[1];
-            for x in 0..tnx {
-                let px = origin[0] + ((x as f64 + 0.5) / (tnx as f64)) * extent[0];
-                let pt = [px, py, pz];
-                if interpolation == "nearest" {
-                    let v = nearest_nonzero_grid_vector(
-                        &artifact.values,
-                        dims,
-                        origin,
-                        spacing,
-                        pt,
-                        ZERO_THRESHOLD,
-                    );
-                    output.push(normalize_unit(v));
+    if interpolation == "nearest" {
+        let v = nearest_nonzero_grid_vector(values, dims, origin, spacing, pt, ZERO_THRESHOLD);
+        return normalize_unit(v);
+    }
+
+    let ux = ((pt[0] - (origin[0] + 0.5 * spacing[0])) / spacing[0]).clamp(0.0, (nx - 1) as f64);
+    let uy = ((pt[1] - (origin[1] + 0.5 * spacing[1])) / spacing[1]).clamp(0.0, (ny - 1) as f64);
+    let uz = ((pt[2] - (origin[2] + 0.5 * spacing[2])) / spacing[2]).clamp(0.0, (nz - 1) as f64);
+    let ix0 = ux.floor() as usize;
+    let iy0 = uy.floor() as usize;
+    let iz0 = uz.floor() as usize;
+    let ix1 = (ix0 + 1).min(nx - 1);
+    let iy1 = (iy0 + 1).min(ny - 1);
+    let iz1 = (iz0 + 1).min(nz - 1);
+    let tx = ux - (ix0 as f64);
+    let ty = uy - (iy0 as f64);
+    let tz = uz - (iz0 as f64);
+
+    let mut acc = [0.0, 0.0, 0.0];
+    for (dz_i, jz, wz) in [(0, iz0, 1.0 - tz), (1, iz1, tz)] {
+        if dz_i == 1 && iz1 == iz0 {
+            continue;
+        }
+        let w_z = if iz1 == iz0 { 1.0 } else { wz };
+        for (dy_i, jy, wy) in [(0, iy0, 1.0 - ty), (1, iy1, ty)] {
+            if dy_i == 1 && iy1 == iy0 {
+                continue;
+            }
+            let w_yz = w_z * if iy1 == iy0 { 1.0 } else { wy };
+            for (dx_i, jx, wx) in [(0, ix0, 1.0 - tx), (1, ix1, tx)] {
+                if dx_i == 1 && ix1 == ix0 {
                     continue;
                 }
-                let ux = ((px - (origin[0] + 0.5 * spacing[0])) / spacing[0])
-                    .clamp(0.0, (nx - 1) as f64);
-                let uy = ((py - (origin[1] + 0.5 * spacing[1])) / spacing[1])
-                    .clamp(0.0, (ny - 1) as f64);
-                let uz = ((pz - (origin[2] + 0.5 * spacing[2])) / spacing[2])
-                    .clamp(0.0, (nz - 1) as f64);
-                let ix0 = ux.floor() as usize;
-                let iy0 = uy.floor() as usize;
-                let iz0 = uz.floor() as usize;
-                let ix1 = (ix0 + 1).min(nx - 1);
-                let iy1 = (iy0 + 1).min(ny - 1);
-                let iz1 = (iz0 + 1).min(nz - 1);
-                let tx = ux - (ix0 as f64);
-                let ty = uy - (iy0 as f64);
-                let tz = uz - (iz0 as f64);
+                let w = w_yz * if ix1 == ix0 { 1.0 } else { wx };
+                if w <= 0.0 {
+                    continue;
+                }
+                let c = values[flat_src(jx, jy, jz)];
+                let cnorm = (c[0] * c[0] + c[1] * c[1] + c[2] * c[2]).sqrt();
+                if cnorm <= ZERO_THRESHOLD {
+                    continue;
+                }
+                acc[0] += w * c[0];
+                acc[1] += w * c[1];
+                acc[2] += w * c[2];
+            }
+        }
+    }
+    let acc_norm = (acc[0] * acc[0] + acc[1] * acc[1] + acc[2] * acc[2]).sqrt();
+    if acc_norm <= ZERO_THRESHOLD {
+        let fallback =
+            nearest_nonzero_grid_vector(values, dims, origin, spacing, pt, ZERO_THRESHOLD);
+        normalize_unit(fallback)
+    } else {
+        [acc[0] / acc_norm, acc[1] / acc_norm, acc[2] / acc_norm]
+    }
+}
 
-                let mut acc = [0.0, 0.0, 0.0];
-                for (dz_i, jz, wz) in [(0, iz0, 1.0 - tz), (1, iz1, tz)] {
-                    if dz_i == 1 && iz1 == iz0 {
-                        continue;
-                    }
-                    let w_z = if iz1 == iz0 { 1.0 } else { wz };
-                    for (dy_i, jy, wy) in [(0, iy0, 1.0 - ty), (1, iy1, ty)] {
-                        if dy_i == 1 && iy1 == iy0 {
-                            continue;
-                        }
-                        let w_yz = w_z * if iy1 == iy0 { 1.0 } else { wy };
-                        for (dx_i, jx, wx) in [(0, ix0, 1.0 - tx), (1, ix1, tx)] {
-                            if dx_i == 1 && ix1 == ix0 {
-                                continue;
-                            }
-                            let w = w_yz * if ix1 == ix0 { 1.0 } else { wx };
-                            if w <= 0.0 {
-                                continue;
-                            }
-                            let c = artifact.values[flat_src(jx, jy, jz)];
-                            let cnorm = (c[0] * c[0] + c[1] * c[1] + c[2] * c[2]).sqrt();
-                            if cnorm <= ZERO_THRESHOLD {
-                                continue;
-                            }
-                            acc[0] += w * c[0];
-                            acc[1] += w * c[1];
-                            acc[2] += w * c[2];
-                        }
-                    }
+fn resample_field_state_to_grid(
+    artifact: &FieldStateJsonArtifact,
+    target_grid: [usize; 3],
+    target_origin: [f64; 3],
+    target_spacing: [f64; 3],
+    active_mask: Option<&[bool]>,
+    interpolation: &str,
+) -> Result<Vec<[f64; 3]>, String> {
+    let (dims, src_origin, src_spacing) = validate_source_grid_for_resampling(artifact)?;
+    if target_grid.iter().any(|&n| n == 0) {
+        return Err("target grid dimensions must all be positive".to_string());
+    }
+    if target_origin.iter().any(|v| !v.is_finite()) {
+        return Err("target grid origin must be finite".to_string());
+    }
+    if target_spacing.iter().any(|&s| !s.is_finite() || s <= 0.0) {
+        return Err("target grid spacing must be finite and positive".to_string());
+    }
+    let [tnx, tny, tnz] = target_grid;
+    let total_cells = tnx
+        .checked_mul(tny)
+        .and_then(|v| v.checked_mul(tnz))
+        .ok_or_else(|| "target grid dimensions overflow".to_string())?;
+    let mut output = Vec::with_capacity(total_cells);
+    for z in 0..tnz {
+        let pz = target_origin[2] + (z as f64 + 0.5) * target_spacing[2];
+        for y in 0..tny {
+            let py = target_origin[1] + (y as f64 + 0.5) * target_spacing[1];
+            for x in 0..tnx {
+                let flat_dst = x + tnx * (y + tny * z);
+                if active_mask.is_some_and(|mask| mask.get(flat_dst) == Some(&false)) {
+                    output.push([0.0, 0.0, 0.0]);
+                    continue;
                 }
-                let acc_norm = (acc[0] * acc[0] + acc[1] * acc[1] + acc[2] * acc[2]).sqrt();
-                if acc_norm <= ZERO_THRESHOLD {
-                    let fallback = nearest_nonzero_grid_vector(
-                        &artifact.values,
-                        dims,
-                        origin,
-                        spacing,
-                        pt,
-                        ZERO_THRESHOLD,
-                    );
-                    output.push(normalize_unit(fallback));
-                } else {
-                    output.push([acc[0] / acc_norm, acc[1] / acc_norm, acc[2] / acc_norm]);
-                }
+                let px = target_origin[0] + (x as f64 + 0.5) * target_spacing[0];
+                let pt = [px, py, pz];
+                output.push(sample_field_state_at_point(
+                    &artifact.values,
+                    dims,
+                    src_origin,
+                    src_spacing,
+                    pt,
+                    interpolation,
+                ));
             }
         }
     }
     Ok(output)
+}
+
+fn resample_field_state_to_snapshot_domain(
+    artifact: &FieldStateJsonArtifact,
+    snapshot: &SessionStateResponse,
+    interpolation: &str,
+) -> Result<Vec<[f64; 3]>, String> {
+    let (dims, src_origin, src_spacing) = validate_source_grid_for_resampling(artifact)?;
+    if crate::router_v2::handlers::sessions::status::is_fem_snapshot(snapshot) {
+        let mesh = snapshot
+            .fem_mesh
+            .as_ref()
+            .ok_or_else(|| "resampling onto FEM target requires a materialized FEM mesh".to_string())?;
+        if mesh.nodes.is_empty() {
+            return Err("target FEM mesh contains no nodes".to_string());
+        }
+        if mesh.nodes.iter().flatten().any(|v| !v.is_finite()) {
+            return Err("target FEM mesh contains non-finite node coordinates".to_string());
+        }
+        let existing_count = snapshot
+            .live_state
+            .as_ref()
+            .and_then(|state| state.latest_step.magnetization.as_ref())
+            .map(|values| values.len() / 3);
+        let mag_indices =
+            crate::router_v2::handlers::data::field_resolution::fem_magnetic_node_indices(mesh);
+        if let Some(indices) = mag_indices
+            .as_ref()
+            .filter(|indices| existing_count == Some(indices.len()) && indices.len() != mesh.nodes.len())
+        {
+            let mut output = Vec::with_capacity(indices.len());
+            for &node_idx in indices {
+                let pt = *mesh
+                    .nodes
+                    .get(node_idx as usize)
+                    .ok_or_else(|| "FEM magnetic node index out of bounds".to_string())?;
+                output.push(sample_field_state_at_point(
+                    &artifact.values,
+                    dims,
+                    src_origin,
+                    src_spacing,
+                    pt,
+                    interpolation,
+                ));
+            }
+            return Ok(output);
+        }
+        if let Some(existing) = existing_count {
+            if existing != mesh.nodes.len() {
+                return Err(format!(
+                    "active FEM magnetization vector count {existing} does not match FEM mesh node count {}",
+                    mesh.nodes.len()
+                ));
+            }
+        }
+        let mut output = vec![[0.0, 0.0, 0.0]; mesh.nodes.len()];
+        if let Some(indices) = mag_indices {
+            for node_idx in indices {
+                let idx = node_idx as usize;
+                let pt = *mesh
+                    .nodes
+                    .get(idx)
+                    .ok_or_else(|| "FEM magnetic node index out of bounds".to_string())?;
+                output[idx] = sample_field_state_at_point(
+                    &artifact.values,
+                    dims,
+                    src_origin,
+                    src_spacing,
+                    pt,
+                    interpolation,
+                );
+            }
+        } else {
+            for (idx, &pt) in mesh.nodes.iter().enumerate() {
+                output[idx] = sample_field_state_at_point(
+                    &artifact.values,
+                    dims,
+                    src_origin,
+                    src_spacing,
+                    pt,
+                    interpolation,
+                );
+            }
+        }
+        return Ok(output);
+    }
+
+    if let Some(layers) = resolve_fdm_multilayer_target_layers(snapshot) {
+        let total_cells = layers
+            .iter()
+            .try_fold(0usize, |acc, layer| {
+                layer.dims[0]
+                    .checked_mul(layer.dims[1])
+                    .and_then(|v| v.checked_mul(layer.dims[2]))
+                    .and_then(|v| acc.checked_add(v))
+            })
+            .ok_or_else(|| "multilayer FDM target grid dimensions overflow".to_string())?;
+        let mut output = Vec::with_capacity(total_cells);
+        for layer in &layers {
+            let layer_values = resample_field_state_to_grid(
+                artifact,
+                layer.dims,
+                layer.origin,
+                layer.spacing,
+                layer.active_mask.as_deref(),
+                interpolation,
+            )?;
+            output.extend(layer_values);
+        }
+        return Ok(output);
+    }
+
+    let target_grid = active_domain_grid(snapshot)
+        .ok_or_else(|| "grid resampling requires an active target grid or FEM mesh".to_string())?;
+    let (target_origin, target_spacing) = resolve_target_fdm_geometry(snapshot, target_grid)
+        .ok_or_else(|| {
+            "grid resampling requires target grid physical geometry (origin_m and cell_size)"
+                .to_string()
+        })?;
+    let total_cells = target_grid[0]
+        .checked_mul(target_grid[1])
+        .and_then(|v| v.checked_mul(target_grid[2]))
+        .ok_or_else(|| "target grid dimensions overflow".to_string())?;
+    let active_mask = resolve_target_fdm_active_mask(snapshot, total_cells);
+    resample_field_state_to_grid(
+        artifact,
+        target_grid,
+        target_origin,
+        target_spacing,
+        active_mask.as_deref(),
+        interpolation,
+    )
 }
 
 fn convert_field_state_with_python(

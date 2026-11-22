@@ -194,3 +194,80 @@ def test_trilinear_antipodal_wall_midpoint_falls_back_to_unit_nearest() -> None:
     # Must match deterministic Nearest fallback identically
     nearest = resample_imported_field(source, target_points, interpolation="nearest")
     np.testing.assert_allclose(midpoint_vec, nearest[1], atol=1e-12)
+
+
+def test_exact_interpolation_rejects_same_vector_count_3d_shape_mismatch() -> None:
+    """P0 regression: a 4x2x1 source grid (8 vectors) must never silently copy
+    into a 2x2x2 target grid (8 vectors) in exact mode."""
+    vectors = [(1.0, 0.0, 0.0) if i < 4 else (0.0, 1.0, 0.0) for i in range(8)]
+    source = FieldState(
+        values=vectors,
+        quantity_id="m",
+        target_kind="object",
+        target_id="bar",
+        units="1",
+        source_path=None,
+        source_format="ovf",
+        dataset=None,
+        sample_index=None,
+        grid_shape=(4, 2, 1),
+        grid_origin=(0.0, 0.0, 0.0),
+        grid_spacing=(5e-9, 5e-9, 5e-9),
+    )
+    dummy_pts = np.zeros((8, 3), dtype=np.float64)
+
+    with pytest.raises(ValueError, match="grid mismatch"):
+        resample_imported_field(
+            source,
+            dummy_pts,
+            interpolation="exact",
+            target_grid_shape=(2, 2, 2),
+        )
+
+    exact_ok = resample_imported_field(
+        source,
+        dummy_pts,
+        interpolation="exact",
+        target_grid_shape=(4, 2, 1),
+    )
+    np.testing.assert_allclose(exact_ok, vectors, atol=1e-15)
+
+
+def test_nearest_and_trilinear_sample_cropped_and_shifted_target_coordinates() -> None:
+    """P0 regression: shifted/cropped targets must sample at their actual physical
+    cell coordinates mapped into source origin/spacing, not stretched source bounds."""
+    # Source: 4x1x1 grid spanning x in [0, 40nm] with dx = 10nm (centers at 5, 15, 25, 35 nm)
+    source = FieldState(
+        values=[
+            (1.0, 0.0, 0.0),
+            (0.0, 1.0, 0.0),
+            (0.0, 0.0, 1.0),
+            (-1.0, 0.0, 0.0),
+        ],
+        quantity_id="m",
+        target_kind="object",
+        target_id="bar",
+        units="1",
+        source_path=None,
+        source_format="ovf",
+        dataset=None,
+        sample_index=None,
+        grid_shape=(4, 1, 1),
+        grid_origin=(0.0, 0.0, 0.0),
+        grid_spacing=(10e-9, 10e-9, 10e-9),
+    )
+
+    # Cropped + shifted 2x1x1 target grid: origin = (20nm, 0, 0), dx = 10nm -> centers at 25nm, 35nm
+    shifted_target_pts = np.array(
+        [
+            [25e-9, 5e-9, 5e-9],
+            [35e-9, 5e-9, 5e-9],
+        ],
+        dtype=np.float64,
+    )
+    nearest_out = resample_imported_field(source, shifted_target_pts, interpolation="nearest")
+    trilinear_out = resample_imported_field(source, shifted_target_pts, interpolation="trilinear")
+
+    expected_right_half = np.array([[0.0, 0.0, 1.0], [-1.0, 0.0, 0.0]], dtype=np.float64)
+    np.testing.assert_allclose(nearest_out, expected_right_half, atol=1e-12)
+    np.testing.assert_allclose(trilinear_out, expected_right_half, atol=1e-12)
