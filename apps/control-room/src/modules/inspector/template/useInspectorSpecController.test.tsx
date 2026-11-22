@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { installSimulationPreparationTestDom } from "@/kernel/layout/simulationPreparationTestDom.test-support";
 import type { Selection } from "@/kernel/selection/selectionTypes";
 
+import { InspectorTemplate } from "./InspectorTemplate";
 import type { InspectorSpec } from "./types";
 import {
   resetPersistedInspectorModeTabs,
@@ -431,6 +432,226 @@ describe("useInspectorSpecController", () => {
     expect(latest.phase).toBe("applyRejected");
     expect(latest.dirty).toBe(true);
     expect(latest.applyError).toBe("409 revision conflict");
+
+    act(() => {
+      root.unmount();
+    });
+  });
+
+  it("detects server conflicts on dirty fields while auto-rebasing clean fields and supports keep-local / use-server resolution", () => {
+    const env = installSimulationPreparationTestDom();
+    restoreDom = env.restore;
+    const container = env.document.createElement("div");
+    env.document.body.appendChild(container);
+    const root = createRoot(container as unknown as Element);
+
+    const spec = createMaterialSpec(async () => true);
+    let latest!: InspectorSpecController<MaterialDraft>;
+
+    function Harness({ baseline }: { baseline: MaterialDraft }) {
+      latest = useInspectorSpecController(spec, SELECTION_A, baseline);
+      return (
+        <InspectorTemplate
+          appliedFlash={latest.appliedFlash}
+          applyError={latest.applyError}
+          applying={latest.applying}
+          baseline={latest.baseline}
+          conflictFields={latest.conflictFields}
+          dirtyFields={latest.dirtyFields}
+          draft={latest.draft}
+          invalidFields={latest.invalidFields}
+          selection={SELECTION_A}
+          spec={spec}
+          touchedFields={latest.touchedFields}
+          onApply={latest.requestApply}
+          onFieldChange={latest.setField}
+          onFieldTouch={latest.touchField}
+          onResolveConflict={latest.resolveConflict}
+          onRevertAll={latest.revertAll}
+          onRevertField={latest.revertField}
+        />
+      );
+    }
+
+    act(() => {
+      root.render(<Harness baseline={{ ms: 8e5, alpha: 0.008, showVectors: true }} />);
+    });
+
+    // User locally edits ms (baseline was 8e5) while leaving alpha clean.
+    act(() => {
+      latest.setField("ms", 8.2e5);
+    });
+    expect(latest.hasConflicts).toBe(false);
+    expect(latest.conflictFields.size).toBe(0);
+    expect(latest.conflictNotice).toBeNull();
+
+    // Server changes BOTH ms (8e5 -> 9.0e5, conflicts with dirty ms=8.2e5) AND alpha (0.008 -> 0.015, clean).
+    act(() => {
+      root.render(<Harness baseline={{ ms: 9.0e5, alpha: 0.015, showVectors: true }} />);
+    });
+
+    // Clean field rebases automatically; dirty field keeps local value AND records conflict!
+    expect(latest.draft.alpha).toBe(0.015);
+    expect(latest.draft.ms).toBe(8.2e5);
+    expect(latest.hasConflicts).toBe(true);
+    expect(latest.conflictFields.size).toBe(1);
+    expect(latest.conflictFields.get("ms")).toEqual({
+      key: "ms",
+      label: "Saturation magnetization",
+      baseValue: 8e5,
+      localValue: 8.2e5,
+      serverValue: 9.0e5,
+    });
+    expect(latest.conflictNotice?.title).toBe("1 field changed on server");
+    expect(container.textContent).toContain("1 field changed on server");
+    expect(container.textContent).toContain("1 field conflict with server");
+
+    // Resolving via "keep-local" clears the conflict, retains local value, and anchors to 9.0e5.
+    act(() => {
+      latest.resolveConflict("keep-local");
+    });
+    expect(latest.hasConflicts).toBe(false);
+    expect(latest.conflictFields.size).toBe(0);
+    expect(latest.draft.ms).toBe(8.2e5);
+    expect(latest.dirtyFields.has("ms")).toBe(true);
+
+    // If the server changes ms AGAIN (9.0e5 -> 9.5e5), conflict detection triggers again!
+    act(() => {
+      root.render(<Harness baseline={{ ms: 9.5e5, alpha: 0.015, showVectors: true }} />);
+    });
+    expect(latest.hasConflicts).toBe(true);
+    expect(latest.conflictFields.get("ms")?.baseValue).toBe(9.0e5);
+    expect(latest.conflictFields.get("ms")?.serverValue).toBe(9.5e5);
+
+    // Resolving via "use-server" adopts 9.5e5 and clears both dirty & conflict state.
+    act(() => {
+      latest.resolveConflict("use-server", "ms");
+    });
+    expect(latest.hasConflicts).toBe(false);
+    expect(latest.dirty).toBe(false);
+    expect(latest.draft.ms).toBe(9.5e5);
+
+    // No false conflict if server converges to the exact same value the user typed.
+    act(() => {
+      latest.setField("alpha", 0.03);
+    });
+    act(() => {
+      root.render(<Harness baseline={{ ms: 9.5e5, alpha: 0.03, showVectors: true }} />);
+    });
+    expect(latest.hasConflicts).toBe(false);
+    expect(latest.dirty).toBe(false);
+    expect(latest.draft.alpha).toBe(0.03);
+
+    act(() => {
+      root.unmount();
+    });
+  });
+
+  it("preserves newer edits typed while Apply is in flight (both on other fields and on the same field)", async () => {
+    vi.useFakeTimers();
+    const env = installSimulationPreparationTestDom();
+    restoreDom = env.restore;
+    const container = env.document.createElement("div");
+    env.document.body.appendChild(container);
+    const root = createRoot(container as unknown as Element);
+
+    let resolveFirstApply!: (ok: boolean) => void;
+    let resolveSecondApply!: (ok: boolean) => void;
+    let callIndex = 0;
+    const onApply = vi.fn(
+      () =>
+        new Promise<boolean>((resolve) => {
+          callIndex += 1;
+          if (callIndex === 1) {
+            resolveFirstApply = resolve;
+          } else {
+            resolveSecondApply = resolve;
+          }
+        }),
+    );
+
+    const spec = createMaterialSpec(onApply, false);
+    let latest!: InspectorSpecController<MaterialDraft>;
+
+    function Harness({ baseline }: { baseline: MaterialDraft }) {
+      latest = useInspectorSpecController(spec, SELECTION_A, baseline);
+      return null;
+    }
+
+    const initialBaseline: MaterialDraft = { ms: 8e5, alpha: 0.008, showVectors: true };
+    act(() => {
+      root.render(<Harness baseline={initialBaseline} />);
+    });
+
+    // 1. User edits ms = 8.5e5 and starts Apply.
+    act(() => {
+      latest.setField("ms", 8.5e5);
+    });
+
+    let applyPromise!: Promise<boolean>;
+    act(() => {
+      applyPromise = latest.requestApply();
+    });
+    expect(latest.applying).toBe(true);
+    expect(onApply).toHaveBeenCalledTimes(1);
+    expect(onApply).toHaveBeenCalledWith(
+      expect.objectContaining({ ms: 8.5e5, alpha: 0.008 }),
+      initialBaseline,
+    );
+
+    // 2. WHILE Apply #1 is still in flight, user edits BOTH a different field (alpha = 0.02)
+    //    AND types a newer value into the same field (ms = 9.0e5)!
+    act(() => {
+      latest.setField("alpha", 0.02);
+      latest.setField("ms", 9.0e5);
+    });
+
+    // 3. Apply #1 resolves -> submitted value (ms=8.5e5) is committed, while BOTH in-flight edits
+    //    (ms=9.0e5 and alpha=0.02) MUST be preserved!
+    await act(async () => {
+      resolveFirstApply(true);
+      await applyPromise;
+    });
+
+    expect(latest.applying).toBe(false);
+    expect(latest.draft.ms).toBe(9.0e5);
+    expect(latest.draft.alpha).toBe(0.02);
+    expect(latest.dirty).toBe(true);
+    expect(Array.from(latest.dirtyFields).sort()).toEqual(["alpha", "ms"]);
+    expect(latest.appliedFlash).toBe(false);
+    expect(latest.phase).toBe("dirtyValid");
+    expect(latest.hasConflicts).toBe(false);
+
+    // 4. Server echoes the committed revision from Apply #1 (ms=8.5e5, alpha=0.008).
+    //    Because in-flight ms=9.0e5 was anchored to submittedDraft.ms (8.5e5), NO false conflict!
+    const afterFirstBaseline: MaterialDraft = { ms: 8.5e5, alpha: 0.008, showVectors: true };
+    act(() => {
+      root.render(<Harness baseline={afterFirstBaseline} />);
+    });
+    expect(latest.hasConflicts).toBe(false);
+    expect(latest.draft.ms).toBe(9.0e5);
+    expect(latest.draft.alpha).toBe(0.02);
+    expect(Array.from(latest.dirtyFields).sort()).toEqual(["alpha", "ms"]);
+
+    // 5. Apply #2 submits (ms=9.0e5, alpha=0.02); while in flight, user only touches alpha=0.025.
+    //    On resolve, ms=9.0e5 (unchanged since submit) MUST clear while alpha=0.025 stays dirty!
+    let applyPromise2!: Promise<boolean>;
+    act(() => {
+      applyPromise2 = latest.requestApply();
+    });
+    act(() => {
+      latest.setField("alpha", 0.025);
+    });
+    await act(async () => {
+      resolveSecondApply(true);
+      await applyPromise2;
+    });
+
+    expect(latest.draft.ms).toBe(9.0e5);
+    expect(latest.draft.alpha).toBe(0.025);
+    expect(Array.from(latest.dirtyFields)).toEqual(["alpha"]);
+    expect(latest.dirtyFields.has("ms")).toBe(false);
+    expect(latest.hasConflicts).toBe(false);
 
     act(() => {
       root.unmount();

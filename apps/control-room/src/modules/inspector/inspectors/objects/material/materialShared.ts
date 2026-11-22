@@ -1,5 +1,6 @@
 import type {
   JsonObject,
+  JsonValue,
   MaterialPropertiesResource,
   MaterialReferenceResource,
   MaterialResource,
@@ -531,7 +532,7 @@ export function buildConstitutiveMergePatch(
     }
   }
 
-  return {
+  const mergePatch: JsonObject = {
     study: {
       ...(draft.isMagneticBody && Number.isFinite(draft.gamma) && draft.gamma > 0
         ? { solver: { gamma: String(draft.gamma) } }
@@ -555,15 +556,20 @@ export function buildConstitutiveMergePatch(
         },
       },
     },
-    ...(updatedCurrentTransports ? { current_transports: updatedCurrentTransports } : {}),
-  } as unknown as JsonObject;
+  };
+  if (updatedCurrentTransports) {
+    mergePatch.current_transports = JSON.parse(
+      JSON.stringify(updatedCurrentTransports),
+    ) as JsonValue;
+  }
+  return mergePatch;
 }
 
 function readInteractionEntry(
   sceneObj: SceneObject | undefined,
   kind: string,
 ): { enabled: boolean; params: Record<string, unknown> } | null {
-  const stack = (sceneObj as unknown as { physics_stack?: unknown[] } | undefined)?.physics_stack;
+  const stack = sceneObj?.physics_stack;
   if (!Array.isArray(stack)) return null;
   let matched: Record<string, unknown> | null = null;
   for (const raw of stack) {
@@ -688,7 +694,7 @@ export function buildBaselineMaterialDraft(
     (authoritativeMaterial.scene_revision >= sceneRevision || !sceneMat);
   const sceneProps = (sceneMat?.properties ?? {}) as Record<string, unknown>;
   const authProps = preferAuthoritativeMat
-    ? (authoritativeMaterial?.properties as unknown as Record<string, unknown>)
+    ? asRecord(authoritativeMaterial?.properties)
     : null;
   const props: Record<string, unknown> = authProps
     ? { ...sceneProps, ...authProps }

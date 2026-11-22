@@ -315,7 +315,7 @@ import {
   REFERENCE_MATERIALS_CATALOG,
   resolveMaterialPropertiesFromDraft,
   validateBornCubicStability,
-} from "./ObjectMaterialSpec";
+} from "../../inspectors/objects/material";
 import { ELECTRON_GAMMA_PER_G } from "../model-roots/SpecInspectorHost";
 
 type TestInputCompat = TestElement & {
@@ -541,26 +541,44 @@ describe("ObjectMaterialSpec (Wave 4 Feature-Parity & Constitutive Authoring)", 
       applyBtn?.dispatchEvent(new TestEvent("click", { bubbles: true }));
     });
 
-    expect(mocks.createMaterial).toHaveBeenCalledTimes(1);
+    // M8: Cobalt preset (new material + object assignment + uniaxial Ku1/Ku2 + constitutive study)
+    // must commit in ONE single atomic commitTransaction(merge_patch) call (no multi-revision drift!).
+    expect(mocks.createMaterial).not.toHaveBeenCalled();
+    expect(mocks.patchObjectInteraction).not.toHaveBeenCalled();
+    expect(mocks.commitTransaction).toHaveBeenCalledTimes(1);
     expect(mocks.commitTransaction).toHaveBeenCalledWith(
       expect.objectContaining({
+        base_revision: 21,
         kind: "merge_patch",
         merge_patch: expect.objectContaining({
+          materials: expect.arrayContaining([
+            expect.objectContaining({
+              name: "Cobalt (hcp Co)",
+              properties: expect.objectContaining({
+                Ms: 1.42e6,
+                Aex: 30e-12,
+                alpha: 0.01,
+              }),
+            }),
+          ]),
+          objects: expect.arrayContaining([
+            expect.objectContaining({
+              id: "disk-a",
+              physics_stack: expect.arrayContaining([
+                expect.objectContaining({
+                  kind: "uniaxial_anisotropy",
+                  enabled: true,
+                  params: expect.objectContaining({
+                    ku1: 4.5e5,
+                    ku2: 1.5e5,
+                  }),
+                }),
+              ]),
+            }),
+          ]),
           study: expect.objectContaining({
             solver: { gamma: String(2.18 * ELECTRON_GAMMA_PER_G) },
           }),
-        }),
-      }),
-      { sessionScopeKey: "session=s1&epoch=e1&request_scope_epoch=r1" },
-    );
-    expect(mocks.patchObjectInteraction).toHaveBeenCalledWith(
-      "disk-a",
-      "uniaxial_anisotropy",
-      expect.objectContaining({
-        enabled: true,
-        params: expect.objectContaining({
-          ku1: 4.5e5,
-          ku2: 1.5e5,
         }),
       }),
       { sessionScopeKey: "session=s1&epoch=e1&request_scope_epoch=r1" },
@@ -569,8 +587,11 @@ describe("ObjectMaterialSpec (Wave 4 Feature-Parity & Constitutive Authoring)", 
     assertNoTemplateInvalidationKeys();
   });
 
-  it("edits Ms + Ku1 on an already-assigned material and commits scoped patchMaterialAsset while preserving Ku2 = 150 kJ/m³", async () => {
-    mocks.patchObjectInteraction.mockResolvedValueOnce({ scene_revision: 23 });
+  it("edits Ms + Ku1 on an already-assigned material in a single atomic commitTransaction while preserving Ku2 = 150 kJ/m³", async () => {
+    mocks.commitTransaction.mockResolvedValueOnce({
+      committed_scene: { ...defaultSceneFixture(), revision: 22 },
+      scene_revision: 22,
+    });
     mounted = mountWave4TestElement(
       <ObjectMaterialInspectorPanel selection={makeSelection("disk-a")} />,
     );
@@ -610,44 +631,57 @@ describe("ObjectMaterialSpec (Wave 4 Feature-Parity & Constitutive Authoring)", 
     });
 
     expect(mocks.createMaterial).not.toHaveBeenCalled();
-    expect(mocks.patchMaterialAsset).toHaveBeenCalledWith(
-      "shared-co",
-      {
-        name: "Cobalt Film",
-        properties: {
-          Ms: 1.5e6,
-          Aex: 30e-12,
-          alpha: 0.01,
-          Dind: null,
-          Dbulk: null,
-        },
-      },
-      { baseRevision: 21, sessionScopeKey: "session=s1&epoch=e1&request_scope_epoch=r1" },
-    );
-    expect(mocks.patchObjectInteraction).toHaveBeenCalledWith(
-      "disk-a",
-      "uniaxial_anisotropy",
-      {
-        base_revision: 22,
-        enabled: true,
-        present: true,
-        params: {
-          ku1: -2.5e5,
-          ku2: 1.5e5,
-          axis: [0, 0, 1],
-        },
-      },
+    expect(mocks.patchMaterialAsset).not.toHaveBeenCalled();
+    expect(mocks.patchObjectInteraction).not.toHaveBeenCalled();
+    expect(mocks.commitTransaction).toHaveBeenCalledTimes(1);
+    expect(mocks.commitTransaction).toHaveBeenCalledWith(
+      expect.objectContaining({
+        base_revision: 21,
+        kind: "merge_patch",
+        merge_patch: expect.objectContaining({
+          materials: expect.arrayContaining([
+            expect.objectContaining({
+              id: "shared-co",
+              name: "Cobalt Film",
+              properties: expect.objectContaining({
+                Ms: 1.5e6,
+                Aex: 30e-12,
+                alpha: 0.01,
+                Dind: null,
+                Dbulk: null,
+              }),
+            }),
+          ]),
+          objects: expect.arrayContaining([
+            expect.objectContaining({
+              id: "disk-a",
+              material_ref: "shared-co",
+              physics_stack: expect.arrayContaining([
+                expect.objectContaining({
+                  kind: "uniaxial_anisotropy",
+                  enabled: true,
+                  params: {
+                    ku1: -2.5e5,
+                    ku2: 1.5e5,
+                    axis: [0, 0, 1],
+                  },
+                }),
+              ]),
+            }),
+          ]),
+        }),
+      }),
       { sessionScopeKey: "session=s1&epoch=e1&request_scope_epoch=r1" },
     );
     expect(mocks.invalidate).toHaveBeenCalledWith(
       "/v2/sessions/current/model/materials/shared-co",
-      23,
+      22,
     );
     expect(mocks.invalidate).toHaveBeenCalledWith(
       "/v2/sessions/current/model/objects/disk-a/interactions/uniaxial_anisotropy",
-      23,
+      22,
     );
-    expect(mocks.invalidate).toHaveBeenCalledWith(MODEL_SCENE_PATH, 23);
+    expect(mocks.invalidate).toHaveBeenCalledWith(MODEL_SCENE_PATH, 22);
     assertNoTemplateInvalidationKeys();
   });
 
@@ -954,33 +988,40 @@ describe("ObjectMaterialSpec (Wave 4 Feature-Parity & Constitutive Authoring)", 
       dupBtn.dispatchEvent(new TestEvent("click", { bubbles: true }));
     });
 
-    expect(mocks.createMaterial).toHaveBeenCalledTimes(1);
-    const [, clonedName, , clonedRefs, clonedOpts, clonedMeta] =
-      mocks.createMaterial.mock.calls[0] as [
-        string,
-        string,
-        unknown,
-        unknown,
-        unknown,
-        unknown,
-      ];
-    expect(clonedName).toBe("Cobalt Film copy");
-    expect(clonedRefs).toEqual([
-      {
-        label: "Co reference",
-        url: "https://doi.org/10.1063/1.1724669",
-        citation: "J. Appl. Phys. 32, 344S (1961)",
-      },
-    ]);
-    expect(clonedOpts).toEqual({ baseRevision: 21, sessionScopeKey: "session=s1&epoch=e1&request_scope_epoch=r1" });
-    expect(clonedMeta).toEqual({
-      assignToObjectId: "disk-a",
-      source: expect.objectContaining({
-        catalog_id: "builtin:cobalt",
-        catalog_revision: 3,
-        kind: "builtin",
+    expect(mocks.createMaterial).not.toHaveBeenCalled();
+    expect(mocks.commitTransaction).toHaveBeenCalledTimes(1);
+    expect(mocks.commitTransaction).toHaveBeenCalledWith(
+      expect.objectContaining({
+        base_revision: 21,
+        kind: "merge_patch",
+        merge_patch: expect.objectContaining({
+          materials: expect.arrayContaining([
+            expect.objectContaining({
+              name: "Cobalt Film copy",
+              references: [
+                {
+                  label: "Co reference",
+                  url: "https://doi.org/10.1063/1.1724669",
+                  citation: "J. Appl. Phys. 32, 344S (1961)",
+                },
+              ],
+              source: expect.objectContaining({
+                catalog_id: "builtin:cobalt",
+                catalog_revision: 3,
+                kind: "builtin",
+              }),
+            }),
+          ]),
+          objects: expect.arrayContaining([
+            expect.objectContaining({
+              id: "disk-a",
+              material_ref: expect.stringMatching(/^mat:/),
+            }),
+          ]),
+        }),
       }),
-    });
+      { sessionScopeKey: "session=s1&epoch=e1&request_scope_epoch=r1" },
+    );
     expect(mocks.historyRecord).toHaveBeenCalledTimes(1);
     assertNoTemplateInvalidationKeys();
   });
@@ -1169,25 +1210,21 @@ describe("ObjectMaterialSpec (Wave 4 Feature-Parity & Constitutive Authoring)", 
       <ObjectMaterialInspectorPanel selection={makeSelection("cu-line-1")} />,
     );
 
-    const newIdInput = findElement(
-      findElement(
-        mounted.host,
-        (el) => el.getAttribute("data-row") === "newMaterialId",
-        "New material ID row",
-      ),
-      (el) => el.tagName === "INPUT",
-      "New material ID input",
-    );
-    act(() => {
-      editTextOrNumberInput(newIdInput, "mat:copper-strip");
-    });
+    const catalogEntry: MaterialLibraryEntryResource = {
+      id: "builtin:copper",
+      revision: 1,
+      name: "Copper Strip Material",
+      kind: "builtin",
+      summary: "Seed Copper",
+      properties: { Ms: null, Aex: null, alpha: 0.008, Dind: null, Dbulk: null },
+      references: [],
+      source: null,
+    };
 
-    const applyBtn = findElement(
-      mounted.host,
-      (el) => el.tagName === "BUTTON" && Boolean(el.textContent?.includes("Apply")),
-    );
     await act(async () => {
-      applyBtn?.dispatchEvent(new TestEvent("click", { bubbles: true }));
+      await expect(
+        mocks.lastDialogProps?.onUseMaterial?.(catalogEntry),
+      ).rejects.toThrow(/conflict|assign/i);
     });
 
     // Partial failure surfaced with Retry Assignment quick-fix
@@ -1195,8 +1232,12 @@ describe("ObjectMaterialSpec (Wave 4 Feature-Parity & Constitutive Authoring)", 
     expect(mocks.patchObject).toHaveBeenCalledTimes(1);
     expect(mounted.host.textContent).toContain("Retry Assignment");
 
-    // Advance scene revision and click Retry Assignment -> assigns mat:copper-strip without crashing on .trim()!
-    mocks.sceneData = createdScene;
+    const createdMatId = (mocks.createMaterial.mock.calls[0] as [string])[0];
+    // Advance scene revision and click Retry Assignment -> assigns created material without crashing!
+    mocks.sceneData = {
+      ...createdScene,
+      materials: [{ ...createdScene.materials[0]!, id: createdMatId }],
+    };
     const retryBtn = findElement(
       mounted.host,
       (el) => el.tagName === "BUTTON" && Boolean(el.textContent?.includes("Retry Assignment")),
@@ -1209,14 +1250,14 @@ describe("ObjectMaterialSpec (Wave 4 Feature-Parity & Constitutive Authoring)", 
     expect(mocks.patchObject).toHaveBeenCalledTimes(2);
     expect(mocks.patchObject).toHaveBeenLastCalledWith(
       "cu-line-1",
-      { base_revision: 41, material_ref: "mat:copper-strip" },
+      { base_revision: 41, material_ref: createdMatId },
       { sessionScopeKey: "session=s1&epoch=e1&request_scope_epoch=r1" },
     );
     expect(mounted.host.textContent).not.toContain("Retry Assignment");
     assertNoTemplateInvalidationKeys();
   });
 
-  it("renders Easy cone 54.7° for Ku1 = +1e5, Ku2 = -1.5e5 and enforces explicit opt-in physics activation without empty catch", async () => {
+  it("renders Easy cone 54.7° for Ku1 = +1e5, Ku2 = -1.5e5 and commits explicit opt-in physics activation atomically without empty catch", async () => {
     mocks.sceneData = {
       ...defaultSceneFixture(),
       study: { demag_enabled: false, exchange_enabled: false },
@@ -1281,11 +1322,13 @@ describe("ObjectMaterialSpec (Wave 4 Feature-Parity & Constitutive Authoring)", 
     await act(async () => {
       applyBtn?.dispatchEvent(new TestEvent("click", { bubbles: true }));
     });
+    expect(mocks.patchMaterialAsset).toHaveBeenCalledTimes(1);
     expect(mocks.patchObjectInteraction).not.toHaveBeenCalled();
     expect(mocks.commitTransaction).not.toHaveBeenCalled();
 
-    // 2. Toggle explicit opt-in ON and simulate an exchange activation error -> surfaced clearly, never swallowed!
-    mocks.patchObjectInteraction.mockRejectedValueOnce(
+    // 2. Toggle explicit opt-in ON -> M8 consolidates object physics_stack (exchange) + study flags
+    //    into ONE single atomic commitTransaction call (all-or-nothing error safety!).
+    mocks.commitTransaction.mockRejectedValueOnce(
       new Error("Exchange interaction rejected by active lane"),
     );
     act(() => {
@@ -1296,29 +1339,50 @@ describe("ObjectMaterialSpec (Wave 4 Feature-Parity & Constitutive Authoring)", 
       applyBtn?.dispatchEvent(new TestEvent("click", { bubbles: true }));
     });
 
-    expect(mocks.patchObjectInteraction).toHaveBeenCalledWith(
-      "disk-a",
-      "exchange",
-      expect.objectContaining({ enabled: true, present: true }),
-      { sessionScopeKey: "session=s1&epoch=e1&request_scope_epoch=r1" },
-    );
+    expect(mocks.patchObjectInteraction).not.toHaveBeenCalled();
+    expect(mocks.commitTransaction).toHaveBeenCalledTimes(1);
     expect(mocks.commitTransaction).toHaveBeenCalledWith(
       expect.objectContaining({
+        base_revision: 21,
         kind: "merge_patch",
-        merge_patch: {
+        merge_patch: expect.objectContaining({
+          objects: expect.arrayContaining([
+            expect.objectContaining({
+              id: "disk-a",
+              physics_stack: expect.arrayContaining([
+                expect.objectContaining({
+                  kind: "exchange",
+                  enabled: true,
+                }),
+              ]),
+            }),
+          ]),
           study: {
             demag_enabled: true,
             exchange_enabled: true,
           },
-        },
+        }),
       }),
       { sessionScopeKey: "session=s1&epoch=e1&request_scope_epoch=r1" },
     );
+    // Error is surfaced clearly (never swallowed) and zero partial mutations were sent.
     expect(mounted.host.textContent).toContain(
-      "Material saved, but physics module activation failed",
+      "Exchange interaction rejected by active lane",
     );
-    expect(mounted.host.textContent).toContain(
-      "Exchange: Exchange interaction rejected by active lane",
+
+    // 3. Retry once backend accepts -> succeeds atomically in a single revision bump!
+    mocks.commitTransaction.mockResolvedValueOnce({
+      committed_scene: { ...mocks.sceneData, revision: 22 },
+      scene_revision: 22,
+    });
+    await act(async () => {
+      applyBtn?.dispatchEvent(new TestEvent("click", { bubbles: true }));
+    });
+    expect(mocks.commitTransaction).toHaveBeenCalledTimes(2);
+    expect(mocks.invalidate).toHaveBeenCalledWith(
+      "/v2/sessions/current/model/objects/disk-a/interactions/exchange",
+      22,
     );
+    assertNoTemplateInvalidationKeys();
   });
 }, 25_000);

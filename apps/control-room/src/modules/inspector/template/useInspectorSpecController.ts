@@ -10,8 +10,18 @@ import {
   type InspectorEditSessionV2,
 } from "../InspectorEditSession";
 import { evaluateInspectorRowError } from "./PropertyRow";
-import type { CommitBarSpec, InspectorSpec } from "./types";
+import type { CommitBarSpec, InspectorNotice, InspectorSpec } from "./types";
 import { inspectorValuesEqual } from "./unitConversion";
+
+export type InspectorConflictResolutionStrategy = "keep-local" | "use-server";
+
+export interface InspectorFieldConflict {
+  readonly key: string;
+  readonly label: string;
+  readonly baseValue: unknown;
+  readonly localValue: unknown;
+  readonly serverValue: unknown;
+}
 
 export type InspectorSessionPhase =
   | "readOnlyIdle"
@@ -71,6 +81,9 @@ export interface InspectorSpecController<TDraft> {
   readonly dirty: boolean;
   readonly dirtyFields: ReadonlySet<string>;
   readonly dirtyFieldLabels: readonly string[];
+  readonly conflictFields: ReadonlyMap<string, InspectorFieldConflict>;
+  readonly hasConflicts: boolean;
+  readonly conflictNotice: InspectorNotice<TDraft> | null;
   readonly invalidFields: ReadonlyMap<string, string>;
   readonly valid: boolean;
   readonly touchedFields: ReadonlySet<string>;
@@ -89,6 +102,7 @@ export interface InspectorSpecController<TDraft> {
   patchDraft: (partial: Partial<TDraft>) => void;
   revertField: (fieldKey: string) => void;
   revertAll: () => void;
+  resolveConflict: (strategy: InspectorConflictResolutionStrategy, fieldKey?: string) => void;
   touchField: (fieldKey: string) => void;
   setParseError: (fieldKey: string, error: string | null) => void;
   requestApply: InspectorRequestApplyHandler;
@@ -121,6 +135,8 @@ function resolveSelectionTargetKey(selection: Selection): string {
 interface ScopedEditState<TDraft> {
   targetKey: string;
   stagedOverrides: Partial<TDraft>;
+  /** Baseline value observed when each staged override was first edited (for server-conflict detection). */
+  stagedBaseValues: Partial<TDraft>;
   liveOverrides: Partial<TDraft>;
   committedBaseline: { forSourceBaseline: TDraft; value: TDraft } | null;
   touchedFields: Set<string>;
@@ -135,6 +151,7 @@ function createEmptyScopedState<TDraft>(targetKey: string): ScopedEditState<TDra
   return {
     targetKey,
     stagedOverrides: {},
+    stagedBaseValues: {},
     liveOverrides: {},
     committedBaseline: null,
     touchedFields: new Set(),
@@ -300,6 +317,40 @@ export function useInspectorSpecController<TDraft extends object>(
     return Array.from(dirtyFields).map((key) => fieldLabelLookup.get(key) ?? key);
   }, [dirtyFields, fieldLabelLookup]);
 
+  const conflictFields = useMemo<ReadonlyMap<string, InspectorFieldConflict>>(() => {
+    const conflicts = new Map<string, InspectorFieldConflict>();
+    if (spec.commitBar.mode !== "staged") return conflicts;
+    const serverRecord = effectiveBaseline as Record<string, unknown>;
+    const baseValuesRecord = activeScoped.stagedBaseValues as Record<string, unknown>;
+    const overrideEntries = Object.entries(activeScoped.stagedOverrides as Record<string, unknown>);
+    for (const [key, localValue] of overrideEntries) {
+      if (liveFieldKeys.has(key)) continue;
+      if (!Object.prototype.hasOwnProperty.call(baseValuesRecord, key)) continue;
+      const baseValue = baseValuesRecord[key];
+      const serverValue = serverRecord[key];
+      if (
+        !inspectorValuesEqual(localValue, serverValue) &&
+        !inspectorValuesEqual(serverValue, baseValue)
+      ) {
+        conflicts.set(key, {
+          key,
+          label: fieldLabelLookup.get(key) ?? key,
+          baseValue,
+          localValue,
+          serverValue,
+        });
+      }
+    }
+    return conflicts;
+  }, [
+    activeScoped.stagedBaseValues,
+    activeScoped.stagedOverrides,
+    effectiveBaseline,
+    fieldLabelLookup,
+    liveFieldKeys,
+    spec.commitBar.mode,
+  ]);
+
   const invalidFields = useMemo<ReadonlyMap<string, string>>(() => {
     const errors = new Map<string, string>();
     for (const section of spec.sections) {
@@ -367,14 +418,20 @@ export function useInspectorSpecController<TDraft extends object>(
       const baseRecord = effectiveBaseline as Record<string, unknown>;
       updateScoped((prev) => {
         const nextOverrides = { ...prev.stagedOverrides } as Record<string, unknown>;
+        const nextBaseValues = { ...prev.stagedBaseValues } as Record<string, unknown>;
         if (inspectorValuesEqual(value, baseRecord[key])) {
           delete nextOverrides[key];
+          delete nextBaseValues[key];
         } else {
+          if (!Object.prototype.hasOwnProperty.call(nextBaseValues, key)) {
+            nextBaseValues[key] = baseRecord[key];
+          }
           nextOverrides[key] = value;
         }
         return {
           ...prev,
           stagedOverrides: nextOverrides as Partial<TDraft>,
+          stagedBaseValues: nextBaseValues as Partial<TDraft>,
           appliedFlash: false,
           applyError: null,
         };
@@ -389,19 +446,25 @@ export function useInspectorSpecController<TDraft extends object>(
       const baseRecord = effectiveBaseline as Record<string, unknown>;
       updateScoped((prev) => {
         const nextStaged = { ...prev.stagedOverrides } as Record<string, unknown>;
+        const nextBaseValues = { ...prev.stagedBaseValues } as Record<string, unknown>;
         const nextLive = { ...prev.liveOverrides } as Record<string, unknown>;
         for (const [key, value] of Object.entries(partial as Record<string, unknown>)) {
           if (liveFieldKeys.has(key)) {
             nextLive[key] = value;
           } else if (inspectorValuesEqual(value, baseRecord[key])) {
             delete nextStaged[key];
+            delete nextBaseValues[key];
           } else {
+            if (!Object.prototype.hasOwnProperty.call(nextBaseValues, key)) {
+              nextBaseValues[key] = baseRecord[key];
+            }
             nextStaged[key] = value;
           }
         }
         return {
           ...prev,
           stagedOverrides: nextStaged as Partial<TDraft>,
+          stagedBaseValues: nextBaseValues as Partial<TDraft>,
           liveOverrides: nextLive as Partial<TDraft>,
           appliedFlash: false,
           applyError: null,
@@ -415,12 +478,15 @@ export function useInspectorSpecController<TDraft extends object>(
     (fieldKey: string) => {
       updateScoped((prev) => {
         const nextOverrides = { ...prev.stagedOverrides } as Record<string, unknown>;
+        const nextBaseValues = { ...prev.stagedBaseValues } as Record<string, unknown>;
         delete nextOverrides[fieldKey];
+        delete nextBaseValues[fieldKey];
         const nextParseErrors = new Map(prev.parseErrors);
         nextParseErrors.delete(fieldKey);
         return {
           ...prev,
           stagedOverrides: nextOverrides as Partial<TDraft>,
+          stagedBaseValues: nextBaseValues as Partial<TDraft>,
           parseErrors: nextParseErrors,
           applyError: null,
         };
@@ -434,6 +500,7 @@ export function useInspectorSpecController<TDraft extends object>(
     updateScoped((prev) => ({
       ...prev,
       stagedOverrides: {},
+      stagedBaseValues: {},
       touchedFields: new Set(),
       parseErrors: new Map(),
       forceShowErrors: false,
@@ -445,6 +512,66 @@ export function useInspectorSpecController<TDraft extends object>(
       spec.commitBar.onRevert?.(effectiveBaseline);
     }
   }, [clearAppliedTimer, effectiveBaseline, spec.commitBar, updateScoped]);
+
+  const resolveConflict = useCallback(
+    (strategy: InspectorConflictResolutionStrategy, fieldKey?: string) => {
+      const serverRecord = effectiveBaseline as Record<string, unknown>;
+      const targetKeys = fieldKey ? [fieldKey] : Array.from(conflictFields.keys());
+      if (targetKeys.length === 0) return;
+
+      updateScoped((prev) => {
+        const nextOverrides = { ...prev.stagedOverrides } as Record<string, unknown>;
+        const nextBaseValues = { ...prev.stagedBaseValues } as Record<string, unknown>;
+        const nextParseErrors = new Map(prev.parseErrors);
+        let changed = false;
+
+        for (const key of targetKeys) {
+          if (!Object.prototype.hasOwnProperty.call(nextOverrides, key)) continue;
+          changed = true;
+          if (strategy === "use-server") {
+            delete nextOverrides[key];
+            delete nextBaseValues[key];
+            nextParseErrors.delete(key);
+          } else {
+            nextBaseValues[key] = serverRecord[key];
+          }
+        }
+
+        if (!changed) return prev;
+        return {
+          ...prev,
+          stagedOverrides: nextOverrides as Partial<TDraft>,
+          stagedBaseValues: nextBaseValues as Partial<TDraft>,
+          parseErrors: nextParseErrors,
+          applyError: null,
+        };
+      });
+    },
+    [conflictFields, effectiveBaseline, updateScoped],
+  );
+
+  const conflictNotice = useMemo<InspectorNotice<TDraft> | null>(() => {
+    if (conflictFields.size === 0) return null;
+    const conflicts = Array.from(conflictFields.values());
+    const labels = conflicts.map((entry) => entry.label).join(", ");
+    const firstKey = conflicts[0]?.key as (keyof TDraft & string) | undefined;
+    return {
+      id: "inspector-server-conflict",
+      tone: "warn",
+      title:
+        conflicts.length === 1
+          ? "1 field changed on server"
+          : `${conflicts.length} fields changed on server`,
+      text: `Server updated ${labels} while you had local edits. Keep your local values or adopt the server revision.`,
+      ...(firstKey ? { focusFieldKey: firstKey } : {}),
+      quickFix: {
+        label: "Use server",
+        onApply: () => {
+          resolveConflict("use-server");
+        },
+      },
+    };
+  }, [conflictFields, resolveConflict]);
 
   const touchField = useCallback(
     (fieldKey: string) => {
@@ -477,6 +604,10 @@ export function useInspectorSpecController<TDraft extends object>(
 
   const executeApply = useCallback(async (): Promise<boolean> => {
     if (spec.commitBar.mode !== "staged") return false;
+    const submittedDraft = draft;
+    const submittedBaseline = baseline;
+    const submittedOverrides = { ...activeScoped.stagedOverrides } as Record<string, unknown>;
+
     setApplying(true);
     updateScoped((prev) => ({
       ...prev,
@@ -485,24 +616,69 @@ export function useInspectorSpecController<TDraft extends object>(
     }));
 
     try {
-      const result = await spec.commitBar.onApply(draft, effectiveBaseline);
+      const result = await spec.commitBar.onApply(submittedDraft, effectiveBaseline);
       if (result !== false) {
-        updateScoped((prev) => ({
-          ...prev,
-          stagedOverrides: {},
-          committedBaseline: { forSourceBaseline: baseline, value: draft },
-          touchedFields: new Set(),
-          parseErrors: new Map(),
-          forceShowErrors: false,
-          applyError: null,
-          appliedFlash: true,
-        }));
+        updateScoped((prev) => {
+          const prevOverrides = prev.stagedOverrides as Record<string, unknown>;
+          const prevBaseValues = prev.stagedBaseValues as Record<string, unknown>;
+          const submittedDraftRecord = submittedDraft as Record<string, unknown>;
+          const nextOverrides: Record<string, unknown> = {};
+          const nextBaseValues: Record<string, unknown> = {};
+          const nextTouched = new Set<string>();
+          const nextParseErrors = new Map<string, string>();
+
+          for (const [key, currentValue] of Object.entries(prevOverrides)) {
+            const wasSubmitted = Object.prototype.hasOwnProperty.call(
+              submittedOverrides,
+              key,
+            );
+            if (wasSubmitted && inspectorValuesEqual(currentValue, submittedOverrides[key])) {
+              continue;
+            }
+            nextOverrides[key] = currentValue;
+            if (wasSubmitted) {
+              nextBaseValues[key] = submittedDraftRecord[key];
+            } else if (Object.prototype.hasOwnProperty.call(prevBaseValues, key)) {
+              nextBaseValues[key] = prevBaseValues[key];
+            } else {
+              nextBaseValues[key] = submittedDraftRecord[key];
+            }
+            if (prev.touchedFields.has(key)) {
+              nextTouched.add(key);
+            }
+          }
+
+          for (const [key, err] of prev.parseErrors) {
+            const wasSubmittedCleanly =
+              Object.prototype.hasOwnProperty.call(submittedOverrides, key) &&
+              Object.prototype.hasOwnProperty.call(prevOverrides, key) &&
+              inspectorValuesEqual(prevOverrides[key], submittedOverrides[key]);
+            if (!wasSubmittedCleanly) {
+              nextParseErrors.set(key, err);
+            }
+          }
+
+          const hasRemainingEdits =
+            Object.keys(nextOverrides).length > 0 || nextParseErrors.size > 0;
+
+          return {
+            ...prev,
+            stagedOverrides: nextOverrides as Partial<TDraft>,
+            stagedBaseValues: nextBaseValues as Partial<TDraft>,
+            committedBaseline: { forSourceBaseline: submittedBaseline, value: submittedDraft },
+            touchedFields: nextTouched,
+            parseErrors: nextParseErrors,
+            forceShowErrors: false,
+            applyError: null,
+            appliedFlash: !hasRemainingEdits,
+          };
+        });
         clearAppliedTimer();
         appliedTimerRef.current = setTimeout(() => {
           appliedTimerRef.current = null;
-          updateScoped((prev) => ({ ...prev, appliedFlash: false }));
+          updateScoped((prev) => (prev.appliedFlash ? { ...prev, appliedFlash: false } : prev));
         }, appliedFlashMs);
-        options?.onApplied?.(draft);
+        options?.onApplied?.(submittedDraft);
         return true;
       }
 
@@ -527,6 +703,7 @@ export function useInspectorSpecController<TDraft extends object>(
       setApplying(false);
     }
   }, [
+    activeScoped.stagedOverrides,
     appliedFlashMs,
     baseline,
     clearAppliedTimer,
@@ -630,7 +807,12 @@ export function useInspectorSpecController<TDraft extends object>(
   const resetDisplay = useCallback(async (): Promise<void> => {
     if (spec.commitBar.mode !== "liveViewport") return;
     await spec.commitBar.onResetDisplay();
-    updateScoped((prev) => ({ ...prev, liveOverrides: {}, stagedOverrides: {} }));
+    updateScoped((prev) => ({
+      ...prev,
+      liveOverrides: {},
+      stagedOverrides: {},
+      stagedBaseValues: {},
+    }));
   }, [spec.commitBar, updateScoped]);
 
   const focusField = useCallback((fieldKey: keyof TDraft & string) => {
@@ -741,6 +923,9 @@ export function useInspectorSpecController<TDraft extends object>(
     dirty: dirtyFields.size > 0,
     dirtyFields,
     dirtyFieldLabels,
+    conflictFields,
+    hasConflicts: conflictFields.size > 0,
+    conflictNotice,
     invalidFields,
     valid: invalidFields.size === 0,
     touchedFields: activeScoped.touchedFields,
@@ -759,6 +944,7 @@ export function useInspectorSpecController<TDraft extends object>(
     patchDraft,
     revertField,
     revertAll,
+    resolveConflict,
     touchField,
     setParseError,
     requestApply,

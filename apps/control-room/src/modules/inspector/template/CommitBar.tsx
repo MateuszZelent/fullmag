@@ -21,6 +21,7 @@ export interface CommitBarProps<TDraft> {
   effectiveMode?: CommitBarSpec<TDraft>["mode"];
   ctx: InspectorActionContext<TDraft>;
   dirtyCount: number;
+  conflictCount?: number;
   invalidCount: number;
   firstInvalidFieldKey: (keyof TDraft & string) | null;
   applying: boolean;
@@ -39,6 +40,7 @@ export function CommitBar<TDraft>({
   effectiveMode,
   ctx,
   dirtyCount,
+  conflictCount = 0,
   invalidCount,
   firstInvalidFieldKey,
   applying,
@@ -187,6 +189,7 @@ export function CommitBar<TDraft>({
         : spec.allowCleanApply,
     );
   const hasDirty = dirtyCount > 0;
+  const hasConflicts = conflictCount > 0;
   const hasErrors = invalidCount > 0;
   const showActions = hasDirty || canCleanApply;
   const applyButtonLabel =
@@ -198,11 +201,13 @@ export function CommitBar<TDraft>({
   const barTone =
     (hasErrors && (showActions || Boolean(applyError))) || Boolean(applyError)
       ? "error"
-      : hasDirty
-        ? "draft"
-        : appliedFlash
-          ? "applied"
-          : "neutral";
+      : hasConflicts
+        ? "warn"
+        : hasDirty
+          ? "draft"
+          : appliedFlash
+            ? "applied"
+            : "neutral";
 
   const cleanText =
     (spec.mode === "staged" ? spec.cleanMessage?.(ctx.draft) : undefined) ??
@@ -211,6 +216,7 @@ export function CommitBar<TDraft>({
       : "Up to date");
 
   const errorLabel = `Fix ${invalidCount} ${invalidCount === 1 ? "field" : "fields"} to apply`;
+  const conflictLabel = `${conflictCount} ${conflictCount === 1 ? "field conflict" : "field conflicts"} with server`;
   const dirtyLabel = `${dirtyCount} unapplied ${dirtyCount === 1 ? "change" : "changes"}`;
 
   let statusContent: ReactNode;
@@ -237,6 +243,13 @@ export function CommitBar<TDraft>({
       <div className="fm-inspector__commit-status">
         <span aria-hidden="true" className="fm-inspector__commit-dot" data-tone="warn" />
         <span className="fm-inspector__commit-text">{lockReason}</span>
+      </div>
+    );
+  } else if (hasConflicts) {
+    statusContent = (
+      <div className="fm-inspector__commit-status fm-inspector__commit-status--conflict" role="alert">
+        <span aria-hidden="true" className="fm-inspector__commit-dot" data-tone="warn" />
+        <span className="fm-inspector__commit-text">{conflictLabel}</span>
       </div>
     );
   } else if (hasDirty) {

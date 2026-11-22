@@ -53,6 +53,7 @@ import type {
   InspectorSpec,
 } from "../../../template";
 import {
+  buildAtomicDuplicateAndUnlinkMergePatch,
   commitObjectMaterialDraft,
   type PhysicsActivationError,
 } from "./materialPhysicsAutoActivation";
@@ -337,6 +338,32 @@ export function ObjectMaterialInspectorPanel({ selection }: InspectorPanelProps)
           `Duplicate & Unlink ${clonedAsset.name}`,
           async ({ baseRevision }) => {
             const initialRevision = baseRevision ?? scene.data?.revision ?? null;
+            if (
+              scene.data?.objects?.some((o) => o.id === objectId) &&
+              typeof kernel.api.model.commitTransaction === "function"
+            ) {
+              const mergePatch = buildAtomicDuplicateAndUnlinkMergePatch(
+                scene.data,
+                objectId,
+                clonedAsset,
+                ctx.draft,
+              );
+              const tx = await kernel.api.model.commitTransaction(
+                {
+                  ...(initialRevision !== null
+                    ? { base_revision: initialRevision }
+                    : {}),
+                  kind: "merge_patch",
+                  merge_patch: mergePatch,
+                },
+                sessionScopeKey ? { sessionScopeKey } : undefined,
+              );
+              return {
+                committed_scene: tx.committed_scene,
+                scene_revision: tx.scene_revision,
+              };
+            }
+
             let latestScene: SceneResource;
             let latestRevision: number;
             if (ctx.draft.isMagneticBody && initialRevision !== null) {

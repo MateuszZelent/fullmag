@@ -89,7 +89,11 @@ import type {
   InspectorSpec,
   InspectorTone,
 } from "./types";
-import { getRegisteredControllerApplyHooks } from "./useInspectorSpecController";
+import {
+  getRegisteredControllerApplyHooks,
+  type InspectorConflictResolutionStrategy,
+  type InspectorFieldConflict,
+} from "./useInspectorSpecController";
 
 const MAX_FACTS = 4;
 const FORBIDDEN_FACT_RE =
@@ -245,6 +249,8 @@ export interface InspectorTemplateProps<TDraft> {
   draft: TDraft;
   baseline: TDraft;
   dirtyFields: ReadonlySet<string>;
+  conflictFields?: ReadonlyMap<string, InspectorFieldConflict>;
+  onResolveConflict?: (strategy: InspectorConflictResolutionStrategy, fieldKey?: string) => void;
   touchedFields: ReadonlySet<string>;
   invalidFields: ReadonlyMap<string, string>;
   onFieldChange: <K extends keyof TDraft & string>(key: K, value: TDraft[K]) => void;
@@ -285,6 +291,8 @@ export function InspectorTemplate<TDraft>({
   draft,
   baseline,
   dirtyFields,
+  conflictFields,
+  onResolveConflict,
   touchedFields,
   invalidFields,
   onFieldChange,
@@ -1269,8 +1277,53 @@ export function InspectorTemplate<TDraft>({
         >
           <div key={stableAnimationKey} className="fm-inspector__body-inner">
             {/* Slot 5: Notices */}
-            {notices.length > 0 ? (
+            {(conflictFields && conflictFields.size > 0) || notices.length > 0 ? (
               <div className="fm-inspector__notices" data-slot="inspector-notices">
+                {conflictFields && conflictFields.size > 0 ? (
+                  <div
+                    className="fm-inspector-notice"
+                    data-notice-id="inspector-server-conflict"
+                    data-slot="inspector-notice"
+                    data-tone="warn"
+                    role="alert"
+                  >
+                    <TriangleAlert aria-hidden="true" className="fm-inspector-notice__icon" size={16} />
+                    <div className="fm-inspector-notice__body">
+                      <p className="fm-inspector-notice__title">
+                        {conflictFields.size === 1
+                          ? "1 field changed on server"
+                          : `${conflictFields.size} fields changed on server`}
+                      </p>
+                      <p className="fm-inspector-notice__text">
+                        Server updated{" "}
+                        {Array.from(conflictFields.values())
+                          .map((entry) => entry.label)
+                          .join(", ")}{" "}
+                        while you had local edits.
+                      </p>
+                      {onResolveConflict ? (
+                        <div className="fm-inspector-notice__actions">
+                          <Button
+                            size="sm"
+                            type="button"
+                            variant="secondary"
+                            onClick={() => onResolveConflict("keep-local")}
+                          >
+                            Keep local
+                          </Button>
+                          <Button
+                            size="sm"
+                            type="button"
+                            variant="ghost"
+                            onClick={() => onResolveConflict("use-server")}
+                          >
+                            Use server
+                          </Button>
+                        </div>
+                      ) : null}
+                    </div>
+                  </div>
+                ) : null}
                 {notices.map((notice) => (
                   <NoticeCard key={notice.id} ctx={actionContext} notice={notice} />
                 ))}
@@ -1323,6 +1376,7 @@ export function InspectorTemplate<TDraft>({
           appliedMessage={appliedMessage}
           applyError={applyError}
           applying={isApplying}
+          conflictCount={conflictFields?.size ?? 0}
           ctx={actionContext}
           dirtyCount={dirtyFields.size}
           effectiveMode={effectiveCommitMode}
