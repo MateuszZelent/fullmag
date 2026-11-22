@@ -43,6 +43,7 @@ import type {
 
 type SceneCoupling = Extract<AuthoringTransactionRequest, { kind: "create_coupling" }>["coupling"];
 type SceneCouplingPatch = Extract<AuthoringTransactionRequest, { kind: "patch_coupling" }>["patch"];
+import { runAuthoringMutationWithHistory } from "@/kernel/authoring/authoringHistoryMutation";
 import { createCommandContext } from "@/kernel/commands/commandContext";
 import { MaterialLibraryDialog } from "@/kernel/layout/MaterialLibraryDialog";
 import { useKernel } from "@/kernel/KernelContext";
@@ -78,6 +79,12 @@ import { Switch } from "@/shared/ui/Switch";
 import type { InspectorPanelProps } from "../../inspectorTypes";
 import type { InspectorFact, InspectorNotice, InspectorSpec } from "../../template";
 import {
+  resolveAirboxInspectorAuthoringLane,
+  resolveAirboxInspectorLane,
+  useAirboxInspectorRuntimeStatus,
+} from "../airbox/airboxInspectorRuntimeStatus";
+import { navigateToStudyRoot } from "../airbox/airboxNavigation";
+import {
   buildBuilderPrimitiveSelection,
   buildObjectSelection,
   buildRootSelection,
@@ -88,6 +95,37 @@ import {
   SpecInspectorHost,
   type InspectorShortcutCardItem,
 } from "./SpecInspectorHost";
+
+function buildModelScopeMutationContext(
+  kernel: ReturnType<typeof useKernel>,
+  sceneData: unknown,
+  explicitScopeKey?: string | null,
+) {
+  const effectiveScopeKey =
+    explicitScopeKey ?? kernel.commands?.getSessionScopeKey?.() ?? null;
+  const historyGeneration = kernel.authoringHistory?.getGeneration?.();
+  const baseCtx = createCommandContext("inspector", kernel, {
+    resourceData: sceneData ? { [MODEL_SCENE_PATH]: sceneData } : undefined,
+    ...(effectiveScopeKey ? { sessionScopeKey: effectiveScopeKey } : {}),
+    isCurrentSessionScope: () => {
+      const activeScope = kernel.commands?.getSessionScopeKey?.();
+      if (effectiveScopeKey && activeScope && activeScope !== effectiveScopeKey) {
+        return false;
+      }
+      return (
+        historyGeneration === undefined ||
+        kernel.authoringHistory?.getGeneration?.() === historyGeneration
+      );
+    },
+  });
+  return {
+    context:
+      typeof kernel.selection?.get === "function"
+        ? baseCtx
+        : { ...baseCtx, selection: undefined },
+    reqOptions: effectiveScopeKey ? { sessionScopeKey: effectiveScopeKey } : undefined,
+  };
+}
 
 function extractFieldDriveItems(resourceData: unknown): Record<string, unknown>[] {
   if (!resourceData || typeof resourceData !== "object") return [];
@@ -243,12 +281,19 @@ export function SessionRootInspectorPanel({ selection }: InspectorPanelProps) {
   const couplingCount = scene.data?.couplings?.length ?? 0;
   const materialCount = scene.data?.materials?.length ?? 0;
   const studyRecord = (scene.data?.study ?? null) as Record<string, unknown> | null;
+  const sceneMeta = (scene.data?.scene ?? null) as Record<string, unknown> | null;
+  const rawSceneName = typeof sceneMeta?.name === "string" ? sceneMeta.name.trim() : "";
+  const rawStudyName = typeof studyRecord?.name === "string" ? studyRecord.name.trim() : "";
   const studyName =
-    typeof studyRecord?.name === "string" && studyRecord.name.trim()
-      ? studyRecord.name.trim()
-      : "Session Model";
+    rawSceneName && (rawSceneName !== "Scene" || !rawStudyName)
+      ? rawSceneName
+      : rawStudyName || rawSceneName || "Session Model";
   const studyDescription =
-    typeof studyRecord?.description === "string" ? studyRecord.description : "";
+    typeof sceneMeta?.notes === "string"
+      ? sceneMeta.notes
+      : typeof studyRecord?.description === "string"
+        ? studyRecord.description
+        : "";
   const activeLaneKind =
     (activeLane as { lane?: string } | null)?.lane ??
     (activeLane?.source?.kind === "planner" ? activeLane.resolved?.discretization : null);
@@ -566,16 +611,33 @@ export function SessionRootInspectorPanel({ selection }: InspectorPanelProps) {
         mode: "staged",
         cleanMessage: () => "Session metadata matches canonical ProblemIR",
         onApply: async (draft) => {
-          const tx = await kernel.api.model.commitTransaction({
-            kind: "merge_patch",
-            base_revision: scene.data?.revision ?? 0,
-            merge_patch: {
-              scene: {
-                name: draft.title.trim(),
-                notes: draft.notes,
-              },
+          const { context } = buildModelScopeMutationContext(
+            kernel,
+            scene.data,
+            scene.sessionScopeKey,
+          );
+          const reqOptions = scene.sessionScopeKey
+            ? { sessionScopeKey: scene.sessionScopeKey }
+            : undefined;
+          const tx = await runAuthoringMutationWithHistory(
+            context,
+            `Edit session metadata ${draft.title.trim()}`,
+            async ({ baseRevision: capturedRev }) => {
+              const payload = {
+                kind: "merge_patch" as const,
+                base_revision: capturedRev ?? scene.data?.revision ?? 0,
+                merge_patch: {
+                  scene: {
+                    name: draft.title.trim(),
+                    notes: draft.notes,
+                  },
+                },
+              };
+              return reqOptions
+                ? kernel.api.model.commitTransaction(payload, reqOptions)
+                : kernel.api.model.commitTransaction(payload);
             },
-          });
+          );
           publishCommittedSceneResource(kernel.resources, tx.committed_scene, tx.scene_revision);
           const rev = fallbackRevision(tx.scene_revision);
           kernel.resources.invalidate(MODEL_SCENE_PATH, rev);
@@ -585,7 +647,15 @@ export function SessionRootInspectorPanel({ selection }: InspectorPanelProps) {
         },
       },
     }),
-    [blockingChecks, branchCards, kernel, objects, scene.data?.revision, warningChecks],
+    [
+      blockingChecks,
+      branchCards,
+      kernel,
+      objects,
+      scene.data,
+      scene.sessionScopeKey,
+      warningChecks,
+    ],
   );
 
   return <SpecInspectorHost baseline={baseline} selection={selection} spec={spec} />;
@@ -610,6 +680,7 @@ export function UniverseRootInspectorPanel({ selection }: InspectorPanelProps) {
   const scene = useSceneResource();
   const meshSummary = useMeshSummaryResource();
   const activeLane = useActiveLaneCapabilities();
+  const runtimeStatus = useAirboxInspectorRuntimeStatus();
 
   const objects = useMemo(
     () => (scene.data?.objects ?? []).filter((o) => !isAirboxSceneObject(o)),
@@ -633,8 +704,34 @@ export function UniverseRootInspectorPanel({ selection }: InspectorPanelProps) {
   const activeLaneKind =
     (activeLane as { lane?: string } | null)?.lane ??
     (activeLane?.source?.kind === "planner" ? activeLane.resolved?.discretization : null);
+  const authoringLane = resolveAirboxInspectorAuthoringLane(selection, runtimeStatus);
+  const runtimeLane = resolveAirboxInspectorLane(selection, runtimeStatus);
+  const effectiveMethod =
+    authoringLane === "fdm" || authoringLane === "fem"
+      ? authoringLane
+      : activeLaneKind === "fdm" || activeLaneKind === "fem"
+        ? activeLaneKind
+        : null;
+  const knownMethod = effectiveMethod === "fdm" || effectiveMethod === "fem";
+  const runtimeMatchesAuthoring = runtimeStatus
+    ? Boolean(knownMethod && runtimeLane === effectiveMethod)
+    : knownMethod;
+  const showNewProblem = runtimeStatus?.authoring.state === "missing";
+  const showDiagnostics = runtimeStatus !== null ? !runtimeMatchesAuthoring : !knownMethod;
+  const studySettingsLabel =
+    effectiveMethod === "fdm" ? "Open FDM grid settings" : "Open Study settings";
+  const rawReason = runtimeStatus?.authoring.reason?.replace(
+    /\b(unknown|unavailable)\b/gi,
+    "pending",
+  );
+  const availabilityMessage = knownMethod
+    ? runtimeMatchesAuthoring
+      ? `The accepted ${effectiveMethod.toUpperCase()} method is active for outer-domain policy authoring.`
+      : `The accepted ${effectiveMethod.toUpperCase()} method is authored; runtime realization remains pending until domain meshing completes.`
+    : rawReason || "Choose an explicit FEM or FDM method before configuring the outer domain.";
+
   const laneLabel =
-    activeLaneKind === "fem" ? "FEM" : activeLaneKind === "fdm" ? "FDM" : null;
+    effectiveMethod === "fem" ? "FEM" : effectiveMethod === "fdm" ? "FDM" : null;
   const objectCount = objects.length;
 
   const baseline = useMemo<UniverseRootDraft>(
@@ -673,22 +770,39 @@ export function UniverseRootInspectorPanel({ selection }: InspectorPanelProps) {
         Math.max(aabb.span[1] * padFactor, 10e-9),
         Math.max(aabb.span[2] * padFactor, 10e-9),
       ];
-      const tx = await kernel.api.model.commitTransaction({
-        base_revision: scene.data?.revision ?? null,
-        kind: "patch_universe",
-        sync_study_universe_mesh: true,
-        universe: {
-          center: aabb.center,
-          size: paddedSize,
+      const { context } = buildModelScopeMutationContext(
+        kernel,
+        scene.data,
+        scene.sessionScopeKey,
+      );
+      const reqOptions = scene.sessionScopeKey
+        ? { sessionScopeKey: scene.sessionScopeKey }
+        : undefined;
+      const tx = await runAuthoringMutationWithHistory(
+        context,
+        "Fit universe bounds",
+        async ({ baseRevision: capturedRev }) => {
+          const payload = {
+            base_revision: capturedRev ?? scene.data?.revision ?? null,
+            kind: "patch_universe" as const,
+            sync_study_universe_mesh: true,
+            universe: {
+              center: aabb.center,
+              size: paddedSize,
+            },
+          };
+          return reqOptions
+            ? kernel.api.model.commitTransaction(payload, reqOptions)
+            : kernel.api.model.commitTransaction(payload);
         },
-      });
+      );
       publishCommittedSceneResource(kernel.resources, tx.committed_scene, tx.scene_revision);
     }
     const rev = fallbackRevision(null);
     kernel.resources.invalidate(MODEL_SCENE_PATH, rev);
     kernel.resources.invalidate(MODEL_UNIVERSE_PATH, rev);
     kernel.resources.invalidate(MESH_SUMMARY_RESOURCE_KEY, rev);
-  }, [aabb, kernel.api, kernel.resources, scene.data?.revision]);
+  }, [aabb, kernel, scene.data, scene.sessionScopeKey]);
 
   const domainShortcuts = useMemo<readonly InspectorShortcutCardItem[]>(
     () => [
@@ -838,6 +952,66 @@ export function UniverseRootInspectorPanel({ selection }: InspectorPanelProps) {
           ],
         },
         {
+          id: "universe-method-availability",
+          title: "Method & outer-domain availability",
+          icon: Sliders,
+          defaultOpen: true,
+          rows: [
+            {
+              type: "custom",
+              wide: true,
+              render: () => (
+                <div className="flex flex-col gap-2" data-slot="universe-method-availability">
+                  <p className="text-xs text-[var(--fm-text-muted)]" role="status">
+                    {availabilityMessage}
+                  </p>
+                  <div
+                    aria-label="Universe navigation"
+                    className="flex flex-wrap items-center gap-1.5"
+                    role="group"
+                  >
+                    <Button
+                      size="sm"
+                      type="button"
+                      variant="secondary"
+                      onClick={() => navigateToStudyRoot(kernel.selection)}
+                    >
+                      {studySettingsLabel}
+                    </Button>
+                    {showNewProblem ? (
+                      <Button
+                        size="sm"
+                        type="button"
+                        variant="primary"
+                        onClick={() => {
+                          void kernel.commands.execute(
+                            "workspace.new-problem",
+                            createCommandContext("inspector", kernel, {
+                              sourceDetail: "universe-authoring-availability",
+                            }),
+                          );
+                        }}
+                      >
+                        Choose method in New Problem
+                      </Button>
+                    ) : null}
+                    {showDiagnostics ? (
+                      <Button
+                        size="sm"
+                        type="button"
+                        variant="ghost"
+                        onClick={() => kernel.layout.openBottomPanel?.("diagnostics")}
+                      >
+                        Open diagnostics
+                      </Button>
+                    ) : null}
+                  </div>
+                </div>
+              ),
+            },
+          ],
+        },
+        {
           id: "universe-children",
           title: "Domain sub-resources",
           icon: Shield,
@@ -859,7 +1033,17 @@ export function UniverseRootInspectorPanel({ selection }: InspectorPanelProps) {
           "Outer-domain padding and mesh parameters are edited on the Airbox child node",
       },
     }),
-    [domainShortcuts, hasRealizedMesh, objects.length, runFitUniverse],
+    [
+      availabilityMessage,
+      domainShortcuts,
+      hasRealizedMesh,
+      kernel,
+      objects.length,
+      runFitUniverse,
+      showDiagnostics,
+      showNewProblem,
+      studySettingsLabel,
+    ],
   );
 
   return <SpecInspectorHost baseline={baseline} selection={selection} spec={spec} />;
@@ -1518,13 +1702,32 @@ export function GlobalPhysicsScopeInspectorPanel({ selection }: InspectorPanelPr
         ? studyRec.demag_enabled
         : isModActive("demag", true);
     const zeemanEnabled =
-      Boolean(studyRec?.external_field) || isModActive("zeeman", false);
+      Array.isArray(studyRec?.external_field) || isModActive("zeeman", false);
+    const pbcRec =
+      studyRec?.pbc && typeof studyRec.pbc === "object"
+        ? (studyRec.pbc as Record<string, unknown>)
+        : null;
     const pbcEnabled =
-      Boolean(studyRec?.periodic_boundary_conditions) || isModActive("periodic_bc", false);
+      Boolean(pbcRec) ||
+      Boolean(studyRec?.periodic_boundary_conditions) ||
+      isModActive("periodic_bc", false);
+    const thermalRec =
+      studyRec?.thermal_noise && typeof studyRec.thermal_noise === "object"
+        ? (studyRec.thermal_noise as Record<string, unknown>)
+        : null;
     const thermalEnabled =
+      (thermalRec !== null &&
+        typeof thermalRec.temperature === "number" &&
+        thermalRec.temperature > 0) ||
       (typeof studyRec?.temperature_k === "number" && studyRec.temperature_k > 0) ||
       isModActive("thermal_noise", false);
-    const rotatedDmiEnabled = isModActive("rotated_interfacial_dmi", false);
+    const rotatedDmiVal = studyRec?.rotated_interfacial_dmi;
+    const rotatedDmiEnabled =
+      (typeof rotatedDmiVal === "number" && Number.isFinite(rotatedDmiVal)) ||
+      (typeof rotatedDmiVal === "string" &&
+        rotatedDmiVal.trim() !== "" &&
+        Number.isFinite(Number(rotatedDmiVal))) ||
+      isModActive("rotated_interfacial_dmi", false);
 
     return [
       {
@@ -1586,25 +1789,73 @@ export function GlobalPhysicsScopeInspectorPanel({ selection }: InspectorPanelPr
       if (moduleKind === "demag") {
         patch.demag_enabled = nextEnabled;
       } else if (moduleKind === "thermal_noise") {
-        patch.temperature_k = nextEnabled ? 300 : 0;
+        const existingThermal =
+          studyRec?.thermal_noise && typeof studyRec.thermal_noise === "object"
+            ? (studyRec.thermal_noise as Record<string, unknown>)
+            : null;
+        const prevTemp =
+          typeof existingThermal?.temperature === "number" && existingThermal.temperature > 0
+            ? existingThermal.temperature
+            : 300;
+        const prevSeed =
+          typeof existingThermal?.seed === "string" && existingThermal.seed.trim()
+            ? existingThermal.seed.trim()
+            : undefined;
+        patch.thermal_noise = nextEnabled
+          ? {
+              temperature: prevTemp,
+              ...(prevSeed ? { seed: prevSeed } : {}),
+            }
+          : null;
       } else if (moduleKind === "zeeman") {
-        patch.external_field = nextEnabled ? [0, 0, 0.01] : null;
+        patch.external_field = nextEnabled
+          ? Array.isArray(studyRec?.external_field) && studyRec.external_field.length === 3
+            ? (studyRec.external_field as number[])
+            : [0, 0, 0.01]
+          : null;
       } else if (moduleKind === "periodic_bc") {
-        patch.periodic_boundary_conditions = nextEnabled ? { x: true, y: false, z: false } : null;
+        patch.pbc = nextEnabled
+          ? {
+              axes: ["periodic", "open", "open"],
+              demag: "macro_geometry",
+            }
+          : null;
       } else if (moduleKind === "rotated_interfacial_dmi") {
-        patch.rotated_interfacial_dmi_enabled = nextEnabled;
+        const existingDmi = studyRec?.rotated_interfacial_dmi;
+        const defaultDmi =
+          typeof existingDmi === "number" && Number.isFinite(existingDmi)
+            ? existingDmi
+            : 0.003;
+        patch.rotated_interfacial_dmi = nextEnabled ? defaultDmi : null;
       }
-      const tx = await kernel.api.model.commitTransaction({
-        kind: "merge_patch",
-        base_revision: scene.data?.revision ?? 0,
-        merge_patch: { study: patch },
-      });
+      const { context } = buildModelScopeMutationContext(
+        kernel,
+        scene.data,
+        scene.sessionScopeKey,
+      );
+      const reqOptions = scene.sessionScopeKey
+        ? { sessionScopeKey: scene.sessionScopeKey }
+        : undefined;
+      const tx = await runAuthoringMutationWithHistory(
+        context,
+        `${nextEnabled ? "Enable" : "Disable"} ${moduleKind}`,
+        async ({ baseRevision: capturedRev }) => {
+          const payload = {
+            kind: "merge_patch" as const,
+            base_revision: capturedRev ?? scene.data?.revision ?? 0,
+            merge_patch: { study: patch },
+          };
+          return reqOptions
+            ? kernel.api.model.commitTransaction(payload, reqOptions)
+            : kernel.api.model.commitTransaction(payload);
+        },
+      );
       publishCommittedSceneResource(kernel.resources, tx.committed_scene, tx.scene_revision);
       kernel.resources.invalidate(MODEL_STUDY_PATH, tx.scene_revision);
       kernel.resources.invalidate(MODEL_SCENE_PATH, tx.scene_revision);
       kernel.resources.invalidate(MODEL_PHYSICS_GRAPH_PATH, tx.scene_revision);
     },
-    [kernel.api.model, kernel.resources, scene.data?.revision],
+    [kernel, scene.data, scene.sessionScopeKey, studyRec],
   );
 
   const spec = useMemo<InspectorSpec<GlobalPhysicsDraft>>(
@@ -2024,7 +2275,7 @@ export function PhysicsCouplingsInspectorPanel({ selection }: InspectorPanelProp
     return rawList.map((entry) => {
       const rec = entry as Record<string, unknown>;
       const id = String(rec.coupling_id ?? rec.id ?? "");
-      const kind = String(rec.kind ?? "rkky");
+      const kind = String(rec.coupling_kind ?? rec.kind ?? "rkky");
       const epA = (rec.source ?? rec.endpoint_a ?? rec.side_a ?? null) as Record<
         string,
         unknown
@@ -2424,8 +2675,12 @@ export function FieldDrivesInspectorPanel({ selection }: InspectorPanelProps) {
       driveKind: "regional" | "mask",
       label: string,
       selectNode: (next: Omit<Selection, "moduleSource">) => void,
+      waveformHint?: "sinc_pulse" | "sinusoidal" | "gaussian_pulse",
     ) => {
-      const nodeId = `model:physics:field-drives:draft:${driveKind}`;
+      const nodeId =
+        driveKind === "regional" && waveformHint
+          ? `model:physics:field-drives:draft:regional:${waveformHint}`
+          : `model:physics:field-drives:draft:${driveKind}`;
       selectNode({
         kind: "physics.field-drive",
         label,
@@ -2542,7 +2797,12 @@ export function FieldDrivesInspectorPanel({ selection }: InspectorPanelProps) {
                     type="button"
                     variant="secondary"
                     onClick={() =>
-                      openNewDriveDraft("regional", "New Sinc Pulse Drive", ctx.selectNode)
+                      openNewDriveDraft(
+                        "regional",
+                        "New Sinc Pulse Drive",
+                        ctx.selectNode,
+                        "sinc_pulse",
+                      )
                     }
                   >
                     <Plus aria-hidden="true" size={12} />
@@ -2553,7 +2813,12 @@ export function FieldDrivesInspectorPanel({ selection }: InspectorPanelProps) {
                     type="button"
                     variant="secondary"
                     onClick={() =>
-                      openNewDriveDraft("regional", "New Harmonic Drive", ctx.selectNode)
+                      openNewDriveDraft(
+                        "regional",
+                        "New Harmonic Drive",
+                        ctx.selectNode,
+                        "sinusoidal",
+                      )
                     }
                   >
                     <Plus aria-hidden="true" size={12} />
@@ -2564,7 +2829,12 @@ export function FieldDrivesInspectorPanel({ selection }: InspectorPanelProps) {
                     type="button"
                     variant="secondary"
                     onClick={() =>
-                      openNewDriveDraft("regional", "New Gaussian Pulse", ctx.selectNode)
+                      openNewDriveDraft(
+                        "regional",
+                        "New Gaussian Pulse",
+                        ctx.selectNode,
+                        "gaussian_pulse",
+                      )
                     }
                   >
                     <Plus aria-hidden="true" size={12} />
@@ -2741,6 +3011,10 @@ export function UnresolvedPhysicsScopeInspectorPanel({ selection }: InspectorPan
   const kernel = useKernel();
   const scene = useSceneResource();
   const physicsGraph = usePhysicsGraphResource();
+  const fieldDrivesRes = useFieldDrivesResource();
+  const maskDrivesRes = useMaskFieldDrivesResource();
+  const couplingsRes = useModelCouplingsResource();
+  const frozenSpinsRes = useFrozenSpinsCollectionResource({ enabled: true });
   const [confirmClearOpen, setConfirmClearOpen] = useState(false);
 
   const objects = useMemo(
@@ -2807,25 +3081,57 @@ export function UnresolvedPhysicsScopeInspectorPanel({ selection }: InspectorPan
 
   const handleDeleteOrphanDrives = useCallback(async () => {
     setConfirmClearOpen(false);
-    for (const item of unresolvedItems) {
-      if (item.kind === "regional_field_drive") {
-        await kernel.api.model
-          .deleteFieldDrive(item.id, { base_revision: scene.data?.revision ?? null })
-          .catch(() => undefined);
-      } else if (item.kind === "mask_field_drive") {
-        await kernel.api.model
-          .deleteMaskFieldDrive(item.id, { base_revision: scene.data?.revision ?? null })
-          .catch(() => undefined);
-      } else if (item.kind === "coupling") {
-        await kernel.api.model
-          .deleteCoupling(item.id, { baseRevision: scene.data?.revision ?? undefined })
-          .catch(() => undefined);
-      }
-    }
+    const { context } = buildModelScopeMutationContext(
+      kernel,
+      scene.data,
+      scene.sessionScopeKey,
+    );
+    await runAuthoringMutationWithHistory(
+      context,
+      "Delete orphaned physics modules",
+      async ({ baseRevision: capturedRev }) => {
+        let rev = capturedRev ?? scene.data?.revision ?? null;
+        for (const item of unresolvedItems) {
+          if (item.kind === "regional_field_drive") {
+            const res = await kernel.api.model
+              .deleteFieldDrive(item.id, { base_revision: rev })
+              .catch(() => null);
+            if (res && typeof res.scene_revision === "number") rev = res.scene_revision;
+          } else if (item.kind === "mask_field_drive") {
+            const res = await kernel.api.model
+              .deleteMaskFieldDrive(item.id, { base_revision: rev })
+              .catch(() => null);
+            if (res && typeof res.scene_revision === "number") rev = res.scene_revision;
+          } else if (item.kind === "coupling") {
+            const res = await kernel.api.model
+              .deleteCoupling(item.id, { baseRevision: rev ?? undefined })
+              .catch(() => null);
+            if (res && typeof res.scene_revision === "number") rev = res.scene_revision;
+          } else if (item.kind === "frozen_spins" || item.kind === "magnetization_constraint") {
+            await kernel.api.model.frozenSpins
+              .delete?.(item.id, {
+                expected_revision: frozenSpinsRes.data?.revision ?? rev ?? 0,
+              })
+              ?.catch(() => null);
+          }
+        }
+        return rev;
+      },
+    );
     const rev = fallbackRevision(null);
     kernel.resources.invalidate(MODEL_PHYSICS_GRAPH_PATH, rev);
+    kernel.resources.invalidate(MODEL_FIELD_DRIVES_PATH, rev);
+    kernel.resources.invalidate(MODEL_MASK_FIELD_DRIVES_PATH, rev);
+    kernel.resources.invalidate(MODEL_COUPLINGS_PATH, rev);
+    kernel.resources.invalidate(MODEL_FROZEN_SPINS_PATH, rev);
     kernel.resources.invalidate(MODEL_SCENE_PATH, rev);
-  }, [kernel.api.model, kernel.resources, scene.data?.revision, unresolvedItems]);
+  }, [
+    frozenSpinsRes.data?.revision,
+    kernel,
+    scene.data,
+    scene.sessionScopeKey,
+    unresolvedItems,
+  ]);
 
   const spec = useMemo<InspectorSpec<UnresolvedPhysicsDraft>>(
     () => ({
@@ -2863,7 +3169,7 @@ export function UnresolvedPhysicsScopeInspectorPanel({ selection }: InspectorPan
           ? draft.items.map((item) => ({
               id: `unresolved-${item.id}`,
               tone: "err",
-              title: `${item.kind} · ${item.id}`,
+              title: `${item.kind} \u00b7 ${item.id}`,
               text: item.reason,
             }))
           : [
@@ -2894,7 +3200,13 @@ export function UnresolvedPhysicsScopeInspectorPanel({ selection }: InspectorPan
               options:
                 objectOptions.length > 0
                   ? objectOptions
-                  : [{ value: "", label: "No scene objects available", disabledReason: "Create a scene object first." }],
+                  : [
+                      {
+                        value: "",
+                        label: "No scene objects available",
+                        disabledReason: "Create a scene object first.",
+                      },
+                    ],
               disabledReason: () =>
                 objectOptions.length === 0
                   ? "Create a scene object before rebinding orphaned physics modules."
@@ -2930,34 +3242,243 @@ export function UnresolvedPhysicsScopeInspectorPanel({ selection }: InspectorPan
       ],
       commitBar: {
         mode: "staged",
+        allowCleanApply: (draft) => Boolean(draft.targetObjectId) && draft.items.length > 0,
+        applyLabel: "Rebind Orphaned Modules",
         cleanMessage: () => "Choose a replacement object to rebind unresolved modules",
         lockReason: (draft) =>
-          !draft.targetObjectId ? "Select a valid target object to rebind." : null,
+          !draft.targetObjectId
+            ? "Select a valid target object to rebind."
+            : draft.items.length === 0
+              ? "No unresolved physics modules require rebinding."
+              : null,
         onApply: async (draft) => {
-          if (!draft.targetObjectId) return false;
-          for (const item of draft.items) {
-            if (item.kind === "regional_field_drive") {
-              const listRes = await kernel.api.model.fieldDrives().catch(() => null);
-              const found = listRes?.drives?.find((d) => d.id === item.id);
-              if (found) {
-                await kernel.api.model.replaceFieldDrive(item.id, {
-                  base_revision: scene.data?.revision ?? null,
-                  drive: {
-                    ...found,
-                    target: { kind: "object", object_id: draft.targetObjectId },
-                  },
-                });
+          if (!draft.targetObjectId || draft.items.length === 0) return false;
+          const { context } = buildModelScopeMutationContext(
+            kernel,
+            scene.data,
+            scene.sessionScopeKey,
+          );
+          const reqOptions = scene.sessionScopeKey
+            ? { sessionScopeKey: scene.sessionScopeKey }
+            : undefined;
+
+          const cachedRegional = extractFieldDriveItems(fieldDrivesRes.data);
+          const sceneRegional = extractFieldDriveItems(scene.data?.field_drives);
+          const cachedMask = extractFieldDriveItems(maskDrivesRes.data);
+          const sceneMask = Array.isArray(
+            (scene.data?.field_drives as Record<string, unknown> | undefined)?.mask_drives,
+          )
+            ? ((scene.data!.field_drives as Record<string, unknown>).mask_drives as Record<
+                string,
+                unknown
+              >[])
+            : [];
+          const cachedCouplings =
+            (couplingsRes.data as { couplings?: unknown[]; items?: unknown[] } | null)
+              ?.couplings ??
+            (couplingsRes.data as { items?: unknown[] } | null)?.items ??
+            scene.data?.couplings ??
+            [];
+
+          let latestRev: number | null = scene.data?.revision ?? null;
+
+          await runAuthoringMutationWithHistory(
+            context,
+            `Rebind unresolved physics to ${draft.targetObjectId}`,
+            async ({ baseRevision: capturedRev }) => {
+              latestRev = capturedRev ?? latestRev;
+              const mergePatch: Record<string, unknown> = {};
+
+              for (const item of draft.items) {
+                if (item.kind === "regional_field_drive") {
+                  let found =
+                    cachedRegional.find((d) => String(d.id ?? "") === item.id) ??
+                    sceneRegional.find((d) => String(d.id ?? "") === item.id);
+                  if (!found && typeof kernel.api.model.fieldDrives === "function") {
+                    const listRes = await kernel.api.model.fieldDrives().catch(() => null);
+                    found = (listRes?.drives?.find((d) => d.id === item.id) ?? undefined) as
+                      | Record<string, unknown>
+                      | undefined;
+                  }
+                  if (found) {
+                    const payload = {
+                      base_revision: latestRev,
+                      drive: {
+                        ...(found as unknown as RegionalFieldDriveResource),
+                        target: { kind: "object" as const, object_id: draft.targetObjectId },
+                      },
+                    };
+                    const res = reqOptions
+                      ? await kernel.api.model.replaceFieldDrive(item.id, payload, reqOptions)
+                      : await kernel.api.model.replaceFieldDrive(item.id, payload);
+                    latestRev = res.scene_revision;
+                    publishCommittedSceneResource(
+                      kernel.resources,
+                      res.committed_scene,
+                      res.scene_revision,
+                    );
+                  }
+                } else if (item.kind === "mask_field_drive") {
+                  let found =
+                    cachedMask.find((d) => String(d.id ?? "") === item.id) ??
+                    sceneMask.find((d) => String(d.id ?? "") === item.id);
+                  const modelRec = kernel.api.model as unknown as Record<string, unknown>;
+                  if (!found && typeof modelRec.maskFieldDrives === "function") {
+                    const listRes = (await (
+                      modelRec.maskFieldDrives as () => Promise<{
+                        drives?: Record<string, unknown>[];
+                        items?: Record<string, unknown>[];
+                      }>
+                    )().catch(() => null));
+                    found = (listRes?.drives ?? listRes?.items ?? []).find(
+                      (d) => String(d.id ?? "") === item.id,
+                    );
+                  }
+                  if (found) {
+                    const payload = {
+                      base_revision: latestRev,
+                      drive: {
+                        ...(found as unknown as MaskFieldDriveResource),
+                        target: { kind: "object" as const, object_id: draft.targetObjectId },
+                      },
+                    };
+                    const res = reqOptions
+                      ? await kernel.api.model.replaceMaskFieldDrive(item.id, payload, reqOptions)
+                      : await kernel.api.model.replaceMaskFieldDrive(item.id, payload);
+                    latestRev = res.scene_revision;
+                    publishCommittedSceneResource(
+                      kernel.resources,
+                      res.committed_scene,
+                      res.scene_revision,
+                    );
+                  }
+                } else if (item.kind === "coupling") {
+                  const found = cachedCouplings.find((entry) => {
+                    const rec = entry as Record<string, unknown>;
+                    return String(rec.coupling_id ?? rec.id ?? "") === item.id;
+                  }) as Record<string, unknown> | undefined;
+                  const epA = (found?.source ?? found?.endpoint_a ?? null) as Record<
+                    string,
+                    unknown
+                  > | null;
+                  const epB = (found?.target ?? found?.endpoint_b ?? null) as Record<
+                    string,
+                    unknown
+                  > | null;
+                  const aId = String(epA?.object ?? epA?.object_id ?? "");
+                  const bId = String(epB?.object ?? epB?.object_id ?? "");
+                  const aMissing = !aId || !objectIds.has(aId);
+                  const bMissing = !bId || !objectIds.has(bId);
+                  const couplingPatch: SceneCouplingPatch = {
+                    ...(aMissing || (!aMissing && !bMissing)
+                      ? { source: { kind: "object", object: draft.targetObjectId } }
+                      : {}),
+                    ...(bMissing
+                      ? { target: { kind: "object", object: draft.targetObjectId } }
+                      : {}),
+                  };
+                  const res = await kernel.api.model.patchCoupling(item.id, couplingPatch, {
+                    baseRevision: latestRev ?? undefined,
+                    ...(reqOptions ?? {}),
+                  });
+                  latestRev = res.scene_revision;
+                  publishCommittedSceneResource(
+                    kernel.resources,
+                    res.committed_scene,
+                    res.scene_revision,
+                  );
+                } else if (
+                  item.kind === "frozen_spins" ||
+                  item.kind === "magnetization_constraint"
+                ) {
+                  const found = (frozenSpinsRes.data?.definitions ?? []).find(
+                    (d) => d.id === item.id,
+                  );
+                  if (found) {
+                    const payload = {
+                      expected_revision: frozenSpinsRes.data?.revision ?? latestRev ?? 0,
+                      definition: {
+                        ...found,
+                        selector: { kind: "in_object" as const, object_id: draft.targetObjectId },
+                      },
+                    };
+                    if (reqOptions) {
+                      await kernel.api.model.frozenSpins.patch(item.id, payload, reqOptions);
+                    } else {
+                      await kernel.api.model.frozenSpins.patch(item.id, payload);
+                    }
+                  }
+                } else {
+                  const collectionKey =
+                    item.kind === "spin_torque"
+                      ? "spin_torques"
+                      : item.kind === "oersted_field"
+                        ? "oersted_fields"
+                        : item.kind === "current_transport"
+                          ? "current_transports"
+                          : item.kind === "spin_transport"
+                            ? "spin_transports"
+                            : null;
+                  if (collectionKey && scene.data) {
+                    const sceneRec = scene.data as unknown as Record<string, unknown>;
+                    const list = Array.isArray(sceneRec[collectionKey])
+                      ? (sceneRec[collectionKey] as Record<string, unknown>[])
+                      : [];
+                    if (list.some((entry) => String(entry.id ?? "") === item.id)) {
+                      mergePatch[collectionKey] = list.map((entry) =>
+                        String(entry.id ?? "") === item.id
+                          ? { ...entry, object_id: draft.targetObjectId }
+                          : entry,
+                      );
+                    }
+                  }
+                }
               }
-            }
-          }
-          const rev = fallbackRevision(null);
+
+              if (Object.keys(mergePatch).length > 0) {
+                const payload = {
+                  kind: "merge_patch" as const,
+                  base_revision: latestRev ?? 0,
+                  merge_patch: mergePatch as JsonObject,
+                };
+                const tx = reqOptions
+                  ? await kernel.api.model.commitTransaction(payload, reqOptions)
+                  : await kernel.api.model.commitTransaction(payload);
+                latestRev = tx.scene_revision;
+                publishCommittedSceneResource(
+                  kernel.resources,
+                  tx.committed_scene,
+                  tx.scene_revision,
+                );
+              }
+              return latestRev;
+            },
+          );
+
+          const rev = fallbackRevision(latestRev);
           kernel.resources.invalidate(MODEL_PHYSICS_GRAPH_PATH, rev);
+          kernel.resources.invalidate(MODEL_FIELD_DRIVES_PATH, rev);
+          kernel.resources.invalidate(MODEL_MASK_FIELD_DRIVES_PATH, rev);
+          kernel.resources.invalidate(MODEL_COUPLINGS_PATH, rev);
+          kernel.resources.invalidate(MODEL_FROZEN_SPINS_PATH, rev);
           kernel.resources.invalidate(MODEL_SCENE_PATH, rev);
           return true;
         },
       },
     }),
-    [kernel.api.model, kernel.resources, objectOptions, scene.data?.revision, unresolvedItems.length],
+    [
+      couplingsRes.data,
+      fieldDrivesRes.data,
+      frozenSpinsRes.data?.definitions,
+      frozenSpinsRes.data?.revision,
+      kernel,
+      maskDrivesRes.data,
+      objectIds,
+      objectOptions,
+      scene.data,
+      scene.sessionScopeKey,
+      unresolvedItems.length,
+    ],
   );
 
   return (

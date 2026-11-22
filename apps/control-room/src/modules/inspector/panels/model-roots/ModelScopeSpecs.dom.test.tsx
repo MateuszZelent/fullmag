@@ -132,8 +132,17 @@ const mocks = vi.hoisted(() => ({
   readinessChecks: [
     { id: "mesh-missing", status: "warning", category: "mesh", message: "Mesh build recommended." },
   ],
+  airboxRuntimeStatus: null as {
+    authoring: { method: "fdm" | "fem" | null; state: string; reason?: string };
+    runtimeLane?: "fdm" | "fem" | "unresolved";
+  } | null,
   setSelection: vi.fn(),
+  executeCommand: vi.fn(),
+  openBottomPanel: vi.fn(),
   patchStudy: vi.fn().mockResolvedValue({}),
+  patchCoupling: vi.fn().mockResolvedValue({ committed_scene: {}, scene_revision: 8 }),
+  replaceFieldDrive: vi.fn().mockResolvedValue({ committed_scene: {}, scene_revision: 8 }),
+  replaceMaskFieldDrive: vi.fn().mockResolvedValue({ committed_scene: {}, scene_revision: 8 }),
   commitTransaction: vi.fn().mockResolvedValue({ committed_scene: { revision: 8 }, scene_revision: 8 }),
 }));
 
@@ -145,11 +154,11 @@ vi.mock("@/kernel/KernelContext", () => ({
         commitTransaction: mocks.commitTransaction,
         patchObject: vi.fn().mockResolvedValue({ revision: 8 }),
         createCoupling: vi.fn().mockResolvedValue({ committed_scene: {}, scene_revision: 8 }),
-        patchCoupling: vi.fn().mockResolvedValue({ committed_scene: {}, scene_revision: 8 }),
+        patchCoupling: mocks.patchCoupling,
         deleteCoupling: vi.fn().mockResolvedValue({ committed_scene: {}, scene_revision: 8 }),
-        replaceFieldDrive: vi.fn().mockResolvedValue({ committed_scene: {}, scene_revision: 8 }),
+        replaceFieldDrive: mocks.replaceFieldDrive,
         deleteFieldDrive: vi.fn().mockResolvedValue({ committed_scene: {}, scene_revision: 8 }),
-        replaceMaskFieldDrive: vi.fn().mockResolvedValue({ committed_scene: {}, scene_revision: 8 }),
+        replaceMaskFieldDrive: mocks.replaceMaskFieldDrive,
         deleteMaskFieldDrive: vi.fn().mockResolvedValue({ committed_scene: {}, scene_revision: 8 }),
         authoringScript: vi.fn().mockResolvedValue({ script: "# test" }),
         frozenSpins: {
@@ -159,11 +168,12 @@ vi.mock("@/kernel/KernelContext", () => ({
       },
     },
     commands: {
-      execute: vi.fn(),
+      execute: mocks.executeCommand,
       getSessionScopeKey: () => "session-1",
     },
     layout: {
       get: () => ({ activeViewportMainModuleId: "viewport-3d" }),
+      openBottomPanel: mocks.openBottomPanel,
       setPanelVisible: vi.fn(),
     },
     resources: {
@@ -174,6 +184,18 @@ vi.mock("@/kernel/KernelContext", () => ({
       set: mocks.setSelection,
     },
   }),
+}));
+
+vi.mock("../airbox/airboxInspectorRuntimeStatus", () => ({
+  useAirboxInspectorRuntimeStatus: () => mocks.airboxRuntimeStatus,
+  resolveAirboxInspectorAuthoringLane: (
+    _sel: unknown,
+    st: typeof mocks.airboxRuntimeStatus,
+  ) => st?.authoring.method ?? "unresolved",
+  resolveAirboxInspectorLane: (
+    _sel: unknown,
+    st: typeof mocks.airboxRuntimeStatus,
+  ) => st?.runtimeLane ?? (st?.authoring.method ?? "unresolved"),
 }));
 
 vi.mock("@/kernel/resources/geometryLifecycleResources", () => ({
@@ -393,5 +415,115 @@ describe("ModelScopeSpecs (Task 13)", () => {
     }
 
     expect(mounted.host.textContent).toContain("deleted-obj");
+  });
+
+  it("restores Universe method availability actions, canonical global study keys, coupling_kind, starter waveform hints, and clean unresolved rebind", async () => {
+    mocks.airboxRuntimeStatus = {
+      authoring: { method: null, state: "missing", reason: "Choose an explicit method." },
+      runtimeLane: "unresolved",
+    };
+
+    mounted = mountWave4TestElement(
+      <UniverseRootInspectorPanel
+        selection={makeSelection("universe.root", "model:universe", "Universe")}
+      />,
+    );
+
+    const newProblemBtn = findElement(
+      mounted.host,
+      (el) =>
+        el.tagName === "BUTTON" &&
+        Boolean(el.textContent?.includes("Choose method in New Problem")),
+    );
+    const diagBtn = findElement(
+      mounted.host,
+      (el) => el.tagName === "BUTTON" && Boolean(el.textContent?.includes("Open diagnostics")),
+    );
+    expect(newProblemBtn).not.toBeNull();
+    expect(diagBtn).not.toBeNull();
+
+    act(() => {
+      newProblemBtn?.dispatchEvent(new TestEvent("click", { bubbles: true }));
+      diagBtn?.dispatchEvent(new TestEvent("click", { bubbles: true }));
+    });
+    expect(mocks.executeCommand).toHaveBeenCalledWith(
+      "workspace.new-problem",
+      expect.anything(),
+    );
+    expect(mocks.openBottomPanel).toHaveBeenCalledWith("diagnostics");
+    mocks.airboxRuntimeStatus = null;
+
+    // FieldDrives starter waveform hints
+    mounted.rerender(
+      <FieldDrivesInspectorPanel
+        selection={makeSelection(
+          "physics.field-drives",
+          "model:physics:field-drives",
+          "Field Drives",
+        )}
+      />,
+    );
+    for (const [btnLabel, expectedSuffix] of [
+      ["Sinc Pulse", "sinc_pulse"],
+      ["Harmonic RF", "sinusoidal"],
+      ["Gaussian Pulse", "gaussian_pulse"],
+    ] as const) {
+      mocks.setSelection.mockClear();
+      const btn = findElement(
+        mounted.host,
+        (el) => el.tagName === "BUTTON" && Boolean(el.textContent?.includes(btnLabel)),
+      );
+      expect(btn).not.toBeNull();
+      act(() => {
+        btn?.dispatchEvent(new TestEvent("click", { bubbles: true }));
+      });
+      expect(mocks.setSelection).toHaveBeenCalledWith(
+        expect.objectContaining({
+          kind: "physics.field-drive",
+          nodeId: `model:physics:field-drives:draft:regional:${expectedSuffix}`,
+        }),
+        "inspector",
+      );
+    }
+
+    // Couplings `coupling_kind` reading
+    const prevCouplings = mocks.sceneData.couplings;
+    mocks.sceneData.couplings = [
+      {
+        id: "cpl-il",
+        name: "SAF Bilayer",
+        coupling_kind: "interlayer_exchange",
+        enabled: true,
+        source: { kind: "object", object: "strip-a" },
+        target: { kind: "object", object: "strip-b" },
+        parameters: { kind: "interlayer_exchange", j1: -1.5e-3, j2: -0.3e-3 },
+      } as unknown as (typeof prevCouplings)[number],
+    ];
+    mounted.rerender(
+      <PhysicsCouplingsInspectorPanel
+        selection={makeSelection("physics.couplings", "model:physics:couplings", "Couplings")}
+      />,
+    );
+    expect(mounted.host.textContent).toContain("Interlayer (J1+J2)");
+    mocks.sceneData.couplings = prevCouplings;
+
+    // Unresolved clean default rebind (`allowCleanApply: true`)
+    mounted.rerender(
+      <UnresolvedPhysicsScopeInspectorPanel
+        selection={makeSelection(
+          "physics.scope.unresolved",
+          "model:physics:unresolved",
+          "Unresolved Physics",
+        )}
+      />,
+    );
+    const rebindBtn = findElement(
+      mounted.host,
+      (el) =>
+        el.tagName === "BUTTON" &&
+        Boolean(el.textContent?.includes("Rebind Orphaned Modules")) &&
+        !el.hasAttribute("disabled"),
+    );
+    expect(rebindBtn).not.toBeNull();
   });
 });

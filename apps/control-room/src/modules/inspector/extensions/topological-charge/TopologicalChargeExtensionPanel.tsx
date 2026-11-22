@@ -1,6 +1,6 @@
 "use client";
 
-import { BookOpen, Calculator, Compass, Gauge } from "lucide-react";
+import { BookOpen, Calculator, Compass, Database, Gauge } from "lucide-react";
 import { createElement, useCallback, useMemo, useState } from "react";
 
 import { createCommandContext } from "@/kernel/commands/commandContext";
@@ -138,6 +138,7 @@ interface ProfileRow {
   readonly coordNm: string;
   readonly weightNm: string;
   readonly chargeText: string;
+  readonly statusLabel: string;
   readonly trustLabel: string;
 }
 
@@ -152,13 +153,32 @@ interface TopologicalChargeDraft {
   statusLabel: string;
   trustLabel: string;
   resolvedPlaneLabel: string;
+  resolvedSupportLabel: string;
   samplingLabel: string;
+  supportProfileLabel: string;
+  methodIdLabel: string;
+  quantityLabel: string;
+  schemaLabel: string;
+  fieldRevisionLabel: string;
+  meshRevisionLabel: string;
+  domainGenerationLabel: string;
+  meshGenerationLabel: string;
+  requestedExecutionLabel: string;
+  resolvedExecutionLabel: string;
   profileRows: readonly ProfileRow[];
 }
 
 function formatCleanLabel(raw: string | null | undefined, fallback: string): string {
   if (!raw || !raw.trim()) return fallback;
   return raw.replace(/_/g, " ");
+}
+
+function lookupModelRow(
+  rows: readonly { label: string; value: string }[],
+  label: string,
+  fallback = "\u2014",
+): string {
+  return rows.find((row) => row.label === label)?.value ?? fallback;
 }
 
 /**
@@ -212,10 +232,11 @@ export function TopologicalChargeExtensionPanel({ selection }: InspectorPanelPro
         typeof sample.charge === "number" && Number.isFinite(sample.charge)
           ? sample.charge.toFixed(6)
           : "\u2014",
+      statusLabel: formatCleanLabel(sample.status, "ready"),
       trustLabel: formatCleanLabel(sample.trust, "pending"),
     }));
 
-    const hasTriangles = Boolean(data?.quality && data.quality.total_triangle_count > 0);
+    const hasQuality = Boolean(data?.quality);
     return {
       calculationMode,
       plane,
@@ -242,12 +263,26 @@ export function TopologicalChargeExtensionPanel({ selection }: InspectorPanelPro
       resolvedPlaneLabel: data?.resolved_support?.plane
         ? data.resolved_support.plane.toUpperCase()
         : plane.toUpperCase(),
-      samplingLabel: hasTriangles
-        ? `${data!.quality.valid_triangle_count}/${data!.quality.total_triangle_count} triangles`
+      resolvedSupportLabel: formatCleanLabel(
+        data?.resolved_support?.support ?? support,
+        support,
+      ),
+      samplingLabel: hasQuality
+        ? lookupModelRow(model.rows, "Sampling")
         : "Click Compute to sample 2D support",
+      supportProfileLabel: lookupModelRow(model.rows, "Support profile"),
+      methodIdLabel: lookupModelRow(model.rows, "Method"),
+      quantityLabel: lookupModelRow(model.rows, "Quantity", "m"),
+      schemaLabel: lookupModelRow(model.rows, "Schema"),
+      fieldRevisionLabel: lookupModelRow(model.rows, "Field revision"),
+      meshRevisionLabel: lookupModelRow(model.rows, "Mesh revision"),
+      domainGenerationLabel: lookupModelRow(model.rows, "Domain generation"),
+      meshGenerationLabel: lookupModelRow(model.rows, "Mesh generation"),
+      requestedExecutionLabel: lookupModelRow(model.rows, "Requested execution"),
+      resolvedExecutionLabel: lookupModelRow(model.rows, "Resolved execution"),
       profileRows,
     };
-  }, [busy, calculationMode, plane, profileSamples, resource.data, support]);
+  }, [busy, calculationMode, model.rows, plane, profileSamples, resource.data, support]);
 
   const sortedWarnings = useMemo(() => {
     const list = [...(resource.data?.warnings ?? [])];
@@ -406,6 +441,18 @@ export function TopologicalChargeExtensionPanel({ selection }: InspectorPanelPro
             },
             {
               type: "readonly",
+              label: "Nearest integer",
+              mono: true,
+              format: (d) => d.nearestIntText ?? "\u2014",
+            },
+            {
+              type: "readonly",
+              label: "Integer error",
+              mono: true,
+              format: (d) => d.intErrorText ?? "\u2014",
+            },
+            {
+              type: "readonly",
               label: "Computation status",
               format: (d) => d.statusLabel,
             },
@@ -416,44 +463,127 @@ export function TopologicalChargeExtensionPanel({ selection }: InspectorPanelPro
             },
             {
               type: "readonly",
+              label: "Resolved support",
+              format: (d) => `${d.resolvedPlaneLabel} / ${d.resolvedSupportLabel}`,
+            },
+            {
+              type: "readonly",
               label: "Mesh support sampling",
               mono: true,
               format: (d) => d.samplingLabel,
             },
             {
-              type: "table",
+              type: "readonly",
+              label: "Support profile",
+              mono: true,
+              format: (d) => d.supportProfileLabel,
+            },
+            {
+              type: "custom",
               label: "Through-thickness profile Q(s)",
               wide: true,
               showWhen: (d) => d.profileRows.length > 0,
-              rowKey: (rawRow) => (rawRow as ProfileRow)._rowId,
-              rows: (d) => d.profileRows,
-              columns: [
-                {
-                  id: "s",
-                  header: "s (nm)",
-                  mono: true,
-                  renderCell: (rawRow) => (rawRow as ProfileRow).coordNm,
-                },
-                {
-                  id: "w",
-                  header: "\u0394s (nm)",
-                  mono: true,
-                  renderCell: (rawRow) => (rawRow as ProfileRow).weightNm,
-                },
-                {
-                  id: "q",
-                  header: "Q(s)",
-                  mono: true,
-                  align: "right",
-                  renderCell: (rawRow) => (rawRow as ProfileRow).chargeText,
-                },
-                {
-                  id: "trust",
-                  header: "Trust",
-                  align: "right",
-                  renderCell: (rawRow) => (rawRow as ProfileRow).trustLabel,
-                },
-              ],
+              render: ({ draft: d }) => (
+                <div className="fm-inspector-table" data-slot="topological-charge-profile-table">
+                  <div className="fm-inspector-table__wrap">
+                    <table
+                      aria-label="Through-thickness topological charge profile"
+                      className="fm-inspector-table__el"
+                    >
+                      <thead>
+                        <tr>
+                          <th scope="col">i</th>
+                          <th scope="col">s (nm)</th>
+                          <th scope="col">{"\u0394s (nm)"}</th>
+                          <th data-align="right" scope="col">
+                            Q(s)
+                          </th>
+                          <th scope="col">Status</th>
+                          <th data-align="right" scope="col">
+                            Trust
+                          </th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {d.profileRows.map((row) => (
+                          <tr key={row._rowId} data-row-key={row._rowId}>
+                            <td className="font-mono tabular-nums">{row.index}</td>
+                            <td className="font-mono tabular-nums">{row.coordNm}</td>
+                            <td className="font-mono tabular-nums">{row.weightNm}</td>
+                            <td className="font-mono tabular-nums" data-align="right">
+                              {row.chargeText}
+                            </td>
+                            <td>{row.statusLabel}</td>
+                            <td data-align="right">{row.trustLabel}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              ),
+            },
+          ],
+        },
+        {
+          id: "tc-provenance",
+          title: "Provenance & method metadata",
+          icon: Database,
+          defaultOpen: true,
+          rows: [
+            {
+              type: "readonly",
+              label: "Method",
+              mono: true,
+              format: (d) => d.methodIdLabel,
+            },
+            {
+              type: "readonly",
+              label: "Quantity",
+              mono: true,
+              format: (d) => d.quantityLabel,
+            },
+            {
+              type: "readonly",
+              label: "Schema",
+              mono: true,
+              format: (d) => d.schemaLabel,
+            },
+            {
+              type: "readonly",
+              label: "Field revision",
+              mono: true,
+              format: (d) => d.fieldRevisionLabel,
+            },
+            {
+              type: "readonly",
+              label: "Mesh revision",
+              mono: true,
+              format: (d) => d.meshRevisionLabel,
+            },
+            {
+              type: "readonly",
+              label: "Domain generation",
+              mono: true,
+              format: (d) => d.domainGenerationLabel,
+            },
+            {
+              type: "readonly",
+              label: "Mesh generation",
+              mono: true,
+              format: (d) => d.meshGenerationLabel,
+            },
+            {
+              type: "readonly",
+              label: "Requested execution",
+              mono: true,
+              format: (d) => d.requestedExecutionLabel,
+            },
+            {
+              type: "readonly",
+              label: "Resolved execution",
+              mono: true,
+              format: (d) => d.resolvedExecutionLabel,
             },
           ],
         },
@@ -461,16 +591,23 @@ export function TopologicalChargeExtensionPanel({ selection }: InspectorPanelPro
           id: "tc-formulation",
           title: "Berg-Lüscher discrete solid-angle formulation",
           icon: BookOpen,
-          defaultOpen: false,
+          defaultOpen: true,
           rows: [
             {
               type: "custom",
               wide: true,
               render: () => (
                 <div className="flex flex-col gap-2" data-slot="topological-charge-mathml">
-                  <p className="text-xs text-[var(--fm-text-muted)]">
-                    {model.method.description}
-                  </p>
+                  <div className="flex flex-wrap items-baseline justify-between gap-2">
+                    <p className="text-xs text-[var(--fm-text-muted)]">
+                      {model.method.description}
+                    </p>
+                    {model.method.sampleQuality !== "\u2014" ? (
+                      <span className="font-mono text-xs text-[var(--fm-text)]">
+                        {model.method.sampleQuality}
+                      </span>
+                    ) : null}
+                  </div>
                   <div className="fm-math-equation rounded border border-[var(--fm-border)] bg-[var(--fm-surface-2)] p-2">
                     <span className="mb-1 block text-xs font-semibold text-[var(--fm-text-muted)]">
                       Continuum surface integral
@@ -493,6 +630,11 @@ export function TopologicalChargeExtensionPanel({ selection }: InspectorPanelPro
                       </div>
                     ))}
                   </dl>
+                  <ul className="list-disc space-y-1 pl-4 text-xs text-[var(--fm-text-muted)]">
+                    {model.method.notes.map((note) => (
+                      <li key={note}>{note}</li>
+                    ))}
+                  </ul>
                 </div>
               ),
             },
@@ -505,7 +647,17 @@ export function TopologicalChargeExtensionPanel({ selection }: InspectorPanelPro
           "Diagnostic observable computed non-destructively from magnetization field m",
       },
     }),
-    [busy, model.method.description, model.method.terms, objectId, objectName, resource, sortedWarnings],
+    [
+      busy,
+      model.method.description,
+      model.method.notes,
+      model.method.sampleQuality,
+      model.method.terms,
+      objectId,
+      objectName,
+      resource,
+      sortedWarnings,
+    ],
   );
 
   const controller = useInspectorSpecController(spec, selection, baseline, undefined, {

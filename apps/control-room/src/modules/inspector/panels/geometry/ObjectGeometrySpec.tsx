@@ -2,59 +2,105 @@
 
 import {
   Box,
+  Check,
   Combine,
   Compass,
+  Copy,
   Move3d,
   Plus,
   Shapes,
   Trash2,
 } from "lucide-react";
-import { useCallback, useEffect, useMemo } from "react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 
-import {
-  MODEL_GEOMETRY_DIAGNOSTICS_PATH,
-  MODEL_GEOMETRY_VALIDATION_PATH,
-  MODEL_READINESS_PATH,
-  MODEL_SCENE_PATH,
-} from "@/kernel/api/apiPaths";
+import { MODEL_SCENE_PATH } from "@/kernel/api/apiPaths";
 import type { JsonObject, SceneResource } from "@/kernel/api/apiTypes";
+import { runAuthoringMutationWithHistory } from "@/kernel/authoring/authoringHistoryMutation";
 import {
+  acknowledgedAuthoringSceneRevision,
+  invalidateAuthoringMutationDependents,
+} from "@/kernel/authoring/authoringMutationInvalidation";
+import {
+  createObjectTransaction,
+  patchObjectGeometryTransaction,
   primitiveDraftOverlayStore,
   type PrimitiveDraft,
 } from "@/kernel/authoring/geometryLifecycleCommands";
+import {
+  geometryObjectEditSessionTargetKey,
+  resolveCommittedGeometryObjectDraft,
+} from "@/kernel/authoring/object-edit/objectEditDraftModel";
+import { ObjectEditSessionController } from "@/kernel/authoring/object-edit/ObjectEditSessionController";
+import type { GeometryObjectDraft } from "@/kernel/authoring/object-edit/objectEditTypes";
+import {
+  canonicalDraftInSelectedUnits,
+  parseDraftQuantityField,
+  updateQuantityFieldSI,
+} from "@/kernel/authoring/object-edit/quantityDraftFields";
+import { useObjectEditSelector } from "@/kernel/authoring/object-edit/useObjectEditSelector";
+import {
+  primitiveDraftBaseName,
+  resolveDraftObjectName,
+} from "@/kernel/authoring/uniqueObjectName";
+import { createCommandContext } from "@/kernel/commands/commandContext";
 import { useKernel } from "@/kernel/KernelContext";
 import {
-  MESH_BUILD_CURRENT_RESOURCE_KEY,
-  MESH_BUILD_LATEST_SUCCESSFUL_RESOURCE_KEY,
   publishCommittedSceneResource,
   useGeometryValidationResource,
   useSceneResource,
 } from "@/kernel/resources/geometryLifecycleResources";
+import { sessionRequestScopeKey } from "@/kernel/resources/sessionResourceIdentity";
+import { useSessionScopedResourceKey } from "@/kernel/resources/useSessionScopedResourceKey";
+import type { Selection } from "@/kernel/selection/selectionTypes";
 import { Button } from "@/shared/ui/Button";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/shared/ui/Dialog";
 import { Input } from "@/shared/ui/Input";
 
 import type { InspectorPanelProps } from "../../inspectorTypes";
-import type {
-  InspectorFact,
-  InspectorNotice,
-  InspectorSpec,
-  InspectorTone,
+import {
+  InspectorTemplate,
+  useInspectorSpecController,
+  type InspectorFact,
+  type InspectorNotice,
+  type InspectorSpec,
+  type InspectorTone,
 } from "../../template";
-import { summarizeGeometryValidationMessages } from "../geometryObjectPanelModel";
+import {
+  isPrimitiveDraftRevisionConflict,
+  rebaseGeometryObjectDraft,
+  resolveGeometryObjectDraft,
+  summarizeGeometryValidationMessages,
+} from "../geometryObjectPanelModel";
 import {
   ANGLE_UNITS,
   buildObjectSelection,
   buildRootSelection,
   eulerDegToQuat,
-  fallbackRevision,
   formatLengthAuto,
   formatSpanAuto,
   formatVolumeAuto,
   LENGTH_UNITS,
   quatToEulerDeg,
   type SceneObjectItem as SceneObject,
-  SpecInspectorHost,
 } from "../model-roots/SpecInspectorHost";
+import {
+  rebaseDirtyDraftOntoUnchangedObject,
+  reconcileObjectEditAck,
+} from "../objectEditAckReconciliation";
 
 /* ── Canonical 10 Primitive Kinds & Polygon Vertex Row ── */
 
@@ -72,6 +118,12 @@ export type CanonicalPrimitiveKind =
 
 export type ArchProfileMode = "parabolic_arch" | "circular_arc";
 export type CsgOperationMode = "none" | "union" | "difference" | "intersection";
+type RevisionConflictPhase =
+  | "conflict"
+  | "refreshing"
+  | "refetched"
+  | "rebased"
+  | "refresh-error";
 
 export interface PolygonVertexRow {
   readonly _rowId: string;
@@ -83,6 +135,8 @@ export interface ObjectGeometrySpecDraft {
   mode: "committed" | "draft-new" | "missing";
   objectId: string;
   draftName: string;
+  materialRef: string | null;
+  regionName: string;
   primitiveKind: CanonicalPrimitiveKind;
   symmetryAxis: "x" | "y" | "z";
   // Box / Ellipsoid
@@ -140,7 +194,41 @@ export function createPolygonVertexRow(x_m: number, y_m: number, id?: string): P
   };
 }
 
-/* ── Pure Validators (Exported for Direct Unit Testing) ── */
+function normalizeZero(value: number): number {
+  return Object.is(value, -0) || value === 0 ? 0 : value;
+}
+
+function axisVectorFromSymmetryAxis(axis: "x" | "y" | "z"): [number, number, number] {
+  if (axis === "x") return [1, 0, 0];
+  if (axis === "y") return [0, 1, 0];
+  return [0, 0, 1];
+}
+
+function parseSymmetryAxis(raw: unknown): "x" | "y" | "z" {
+  if (raw === "x" || raw === "y" || raw === "z") return raw;
+  if (Array.isArray(raw) && raw.length >= 3) {
+    const ax = Math.abs(Number(raw[0]) || 0);
+    const ay = Math.abs(Number(raw[1]) || 0);
+    const az = Math.abs(Number(raw[2]) || 0);
+    if (ax > ay && ax > az) return "x";
+    if (ay > ax && ay > az) return "y";
+  }
+  return "z";
+}
+
+function vec3ApproxEqual(
+  a: readonly [number, number, number],
+  b: readonly [number, number, number],
+  epsilon = 1e-15,
+): boolean {
+  return (
+    Math.abs(a[0] - b[0]) <= epsilon &&
+    Math.abs(a[1] - b[1]) <= epsilon &&
+    Math.abs(a[2] - b[2]) <= epsilon
+  );
+}
+
+/* ── Pure Validators & Coupled Helpers (Exported for Direct Unit Testing) ── */
 
 export interface ArchWaveguideValidationInput {
   archProfile: ArchProfileMode;
@@ -259,6 +347,50 @@ export function validateSimplePolygon(vertices: readonly PolygonVertexRow[]): st
   return null;
 }
 
+export function applyUniformScaleChange(
+  prevScale: readonly [number, number, number],
+  nextScale: readonly [number, number, number],
+  uniformScale: boolean,
+): readonly [number, number, number] {
+  if (!uniformScale) return nextScale;
+  const changedIndices: number[] = [];
+  for (let i = 0; i < 3; i++) {
+    if (!Object.is(prevScale[i], nextScale[i])) {
+      changedIndices.push(i);
+    }
+  }
+  if (changedIndices.length !== 1) {
+    return nextScale;
+  }
+  const idx = changedIndices[0]!;
+  const newVal = nextScale[idx]!;
+  if (!Number.isFinite(newVal) || newVal <= 0) {
+    return nextScale;
+  }
+  const prevVal = prevScale[idx]!;
+  if (!Number.isFinite(prevVal) || prevVal <= 0) {
+    return [newVal, newVal, newVal];
+  }
+  const ratio = newVal / prevVal;
+  return ([0, 1, 2] as const).map((axis) => {
+    if (axis === idx) return newVal;
+    const base = prevScale[axis]!;
+    if (!Number.isFinite(base) || base <= 0) return newVal;
+    return Number((base * ratio).toPrecision(12));
+  }) as unknown as readonly [number, number, number];
+}
+
+export function normalizeScaleForUniformLock(
+  scale: readonly [number, number, number],
+): readonly [number, number, number] {
+  const firstValid = scale.find((v) => Number.isFinite(v) && v > 0) ?? 1;
+  return [
+    Number.isFinite(scale[0]) && scale[0] > 0 ? scale[0] : firstValid,
+    Number.isFinite(scale[1]) && scale[1] > 0 ? scale[1] : firstValid,
+    Number.isFinite(scale[2]) && scale[2] > 0 ? scale[2] : firstValid,
+  ];
+}
+
 export function bakeScaleIntoDraft(
   draft: ObjectGeometrySpecDraft,
 ): Partial<ObjectGeometrySpecDraft> {
@@ -365,6 +497,19 @@ function normalizePrimitiveKind(raw: string | null | undefined): CanonicalPrimit
   }
 }
 
+function resolveDefaultDraftBaseName(
+  selection: InspectorPanelProps["selection"],
+  primitiveKind: CanonicalPrimitiveKind,
+): string {
+  const slug = (selection.nodeId?.split(":").at(-1) ?? "").toLowerCase();
+  if (slug === "box" || slug === "cylinder" || slug === "sphere" || slug === "thin-film") {
+    return primitiveDraftBaseName(selection.nodeId);
+  }
+  const trimmedLabel = selection.label?.trim();
+  if (trimmedLabel) return trimmedLabel;
+  return `New ${primitiveKind}`;
+}
+
 export function serializeGeometryPayload(draft: ObjectGeometrySpecDraft): JsonObject {
   const rawGeomParams = draft.preservedRawGeometry?.geometry_params;
   const baseParams: Record<string, unknown> =
@@ -390,7 +535,7 @@ export function serializeGeometryPayload(draft: ObjectGeometrySpecDraft): JsonOb
           ...baseParams,
           radius: draft.radius,
           height: draft.height,
-          axis: draft.symmetryAxis,
+          axis: axisVectorFromSymmetryAxis(draft.symmetryAxis),
         },
       };
       break;
@@ -521,19 +666,79 @@ export function serializeGeometryPayload(draft: ObjectGeometrySpecDraft): JsonOb
 
 export function serializeTransformPayload(draft: ObjectGeometrySpecDraft): JsonObject {
   const quat = eulerDegToQuat(draft.eulerDeg);
+  const [tx, ty, tz] = draft.translation;
   const pivot: [number, number, number] =
     draft.pivotMode === "custom"
-      ? [draft.pivotCustom[0], draft.pivotCustom[1], draft.pivotCustom[2]]
-      : [0, 0, 0];
+      ? [
+          normalizeZero(draft.pivotCustom[0]),
+          normalizeZero(draft.pivotCustom[1]),
+          normalizeZero(draft.pivotCustom[2]),
+        ]
+      : draft.pivotMode === "origin"
+        ? [normalizeZero(-tx), normalizeZero(-ty), normalizeZero(-tz)]
+        : [0, 0, 0];
   return {
-    translation: [draft.translation[0], draft.translation[1], draft.translation[2]],
+    translation: [normalizeZero(tx), normalizeZero(ty), normalizeZero(tz)],
     rotation_quat: quat,
     scale: [draft.scale[0], draft.scale[1], draft.scale[2]],
     pivot,
+    ...(draft.pivotMode !== "centroid" ? { pivot_mode: draft.pivotMode } : {}),
   };
 }
 
-function resolvePreviewOverlayDraft(draft: ObjectGeometrySpecDraft): PrimitiveDraft {
+export function resolvePreviewOverlayDraft(
+  draft: ObjectGeometrySpecDraft,
+  lastValid?: Partial<ObjectGeometrySpecDraft> | null,
+  externalErrors?: ReadonlyMap<string, string>,
+): PrimitiveDraft {
+  const errors: Record<string, string> = {};
+  if (externalErrors) {
+    for (const [k, v] of externalErrors.entries()) {
+      errors[k] = v;
+    }
+  }
+
+  const positiveValue = (
+    value: number,
+    fallback: number | undefined,
+    key: string,
+    label: string,
+  ): number | null => {
+    if (Number.isFinite(value) && value > 0) return value;
+    errors[key] ??= !Number.isFinite(value)
+      ? `${label} must be a finite SI value.`
+      : `${label} must be greater than 0.`;
+    return typeof fallback === "number" && Number.isFinite(fallback) && fallback > 0
+      ? fallback
+      : null;
+  };
+
+  const nonNegativeValue = (
+    value: number,
+    fallback: number | undefined,
+    key: string,
+    label: string,
+  ): number | null => {
+    if (Number.isFinite(value) && value >= 0) return value;
+    errors[key] ??= !Number.isFinite(value)
+      ? `${label} must be a finite SI value.`
+      : `${label} must be non-negative.`;
+    return typeof fallback === "number" && Number.isFinite(fallback) && fallback >= 0
+      ? fallback
+      : null;
+  };
+
+  const finiteValue = (
+    value: number,
+    fallback: number | undefined,
+    key: string,
+    label: string,
+  ): number | null => {
+    if (Number.isFinite(value)) return value;
+    errors[key] ??= `${label} must be a finite SI value.`;
+    return typeof fallback === "number" && Number.isFinite(fallback) ? fallback : null;
+  };
+
   const kind: PrimitiveDraft["kind"] =
     draft.primitiveKind === "Cylinder" ||
     draft.primitiveKind === "Tube" ||
@@ -542,33 +747,176 @@ function resolvePreviewOverlayDraft(draft: ObjectGeometrySpecDraft): PrimitiveDr
       : draft.primitiveKind === "Sphere"
         ? "Sphere"
         : "Box";
-  let dims: [number, number, number] = [draft.sizeX, draft.sizeY, draft.sizeZ];
+
+  let dims: [number, number, number] | null = null;
   if (draft.primitiveKind === "Cylinder") {
-    dims = [2 * draft.radius, draft.height, 2 * draft.radius];
+    const r = positiveValue(draft.radius, lastValid?.radius, "radius", "Radius");
+    const h = positiveValue(draft.height, lastValid?.height, "height", "Height");
+    dims = r !== null && h !== null ? [2 * r, h, 2 * r] : null;
   } else if (draft.primitiveKind === "Sphere") {
-    dims = [2 * draft.radius, 2 * draft.radius, 2 * draft.radius];
+    const r = positiveValue(draft.radius, lastValid?.radius, "radius", "Radius");
+    dims = r !== null ? [2 * r, 2 * r, 2 * r] : null;
   } else if (draft.primitiveKind === "Tube") {
-    dims = [2 * draft.outerRadius, draft.height, 2 * draft.outerRadius];
+    const outR = positiveValue(
+      draft.outerRadius,
+      lastValid?.outerRadius,
+      "outerRadius",
+      "Outer radius",
+    );
+    const inR = positiveValue(
+      draft.innerRadius,
+      lastValid?.innerRadius,
+      "innerRadius",
+      "Inner radius",
+    );
+    if (inR !== null && outR !== null && inR >= outR && draft.innerRadius >= draft.outerRadius) {
+      errors.innerRadius ??= "Inner radius R_in must be strictly smaller than outer radius R_out.";
+    }
+    const effOutR =
+      draft.innerRadius >= draft.outerRadius &&
+      typeof lastValid?.outerRadius === "number" &&
+      lastValid.outerRadius > 0
+        ? lastValid.outerRadius
+        : outR;
+    const h = positiveValue(draft.height, lastValid?.height, "height", "Height");
+    dims = effOutR !== null && h !== null ? [2 * effOutR, h, 2 * effOutR] : null;
+  } else if (draft.primitiveKind === "Cone") {
+    const bR = nonNegativeValue(
+      draft.bottomRadius,
+      lastValid?.bottomRadius,
+      "bottomRadius",
+      "Bottom radius",
+    );
+    const tR = nonNegativeValue(
+      draft.topRadius,
+      lastValid?.topRadius,
+      "topRadius",
+      "Top radius",
+    );
+    const h = positiveValue(draft.height, lastValid?.height, "height", "Height");
+    let maxR = bR !== null && tR !== null ? Math.max(bR, tR) : null;
+    if (maxR !== null && maxR <= 0) {
+      errors.bottomRadius ??= "At least one cone radius must be strictly positive.";
+      const fallbackMax = Math.max(lastValid?.bottomRadius ?? 0, lastValid?.topRadius ?? 0);
+      maxR = fallbackMax > 0 ? fallbackMax : null;
+    }
+    dims = maxR !== null && h !== null ? [2 * maxR, h, 2 * maxR] : null;
   } else if (draft.primitiveKind === "Torus") {
-    const d = 2 * (draft.majorRadius + draft.minorRadius);
-    dims = [d, d, 2 * draft.minorRadius];
+    const majR = positiveValue(
+      draft.majorRadius,
+      lastValid?.majorRadius,
+      "majorRadius",
+      "Major radius",
+    );
+    const minR = positiveValue(
+      draft.minorRadius,
+      lastValid?.minorRadius,
+      "minorRadius",
+      "Minor radius",
+    );
+    if (majR !== null && minR !== null) {
+      const d = 2 * (majR + minR);
+      dims = [d, d, 2 * minR];
+    }
   } else if (draft.primitiveKind === "ArchWaveguide") {
-    dims = [draft.length, draft.width, draft.height + draft.archHeight];
+    const len = positiveValue(draft.length, lastValid?.length, "length", "Span length");
+    const wid = positiveValue(draft.width, lastValid?.width, "width", "Strip width");
+    const h = positiveValue(draft.height, lastValid?.height, "height", "Height");
+    const archH = nonNegativeValue(
+      draft.archHeight,
+      lastValid?.archHeight,
+      "archHeight",
+      "Apex arch height",
+    );
+    dims = len !== null && wid !== null && h !== null && archH !== null
+      ? [len, wid, h + archH]
+      : null;
+  } else if (draft.primitiveKind === "PolygonExtrusion") {
+    const h = positiveValue(draft.height, lastValid?.height, "height", "Height");
+    const verts = draft.polygonVertices.length >= 3
+      ? draft.polygonVertices
+      : lastValid?.polygonVertices ?? [];
+    if (h !== null && verts.length >= 3) {
+      const xs = verts.map((v) => v.x_m);
+      const ys = verts.map((v) => v.y_m);
+      const spanX = Math.max(...xs) - Math.min(...xs);
+      const spanY = Math.max(...ys) - Math.min(...ys);
+      dims = [Math.max(spanX, 1e-9), Math.max(spanY, 1e-9), h];
+    }
+  } else {
+    const sx = positiveValue(draft.sizeX, lastValid?.sizeX, "sizeX", "Extent X");
+    const sy = positiveValue(draft.sizeY, lastValid?.sizeY, "sizeY", "Extent Y");
+    const sz = positiveValue(draft.sizeZ, lastValid?.sizeZ, "sizeZ", "Thickness Z");
+    dims = sx !== null && sy !== null && sz !== null ? [sx, sy, sz] : null;
   }
+
+  const fbTrans = lastValid?.translation;
+  const tx = finiteValue(draft.translation[0], fbTrans?.[0], "translation.0", "Position X");
+  const ty = finiteValue(draft.translation[1], fbTrans?.[1], "translation.1", "Position Y");
+  const tz = finiteValue(draft.translation[2], fbTrans?.[2], "translation.2", "Position Z");
+
   return {
     kind,
     dimensions: dims,
-    translation: [draft.translation[0], draft.translation[1], draft.translation[2]],
-    errors: {},
+    translation: tx !== null && ty !== null && tz !== null ? [tx, ty, tz] : null,
+    errors,
   };
 }
 
-function buildBaselineFromScene(
-  selection: Parameters<typeof resolveMeshStatusFromObject>[0] extends never
-    ? never
-    : InspectorPanelProps["selection"],
+function updateLastValidDraftSnapshot(
+  prev: ObjectGeometrySpecDraft,
+  current: ObjectGeometrySpecDraft,
+): ObjectGeometrySpecDraft {
+  const pos = (next: number, fb: number) => (Number.isFinite(next) && next > 0 ? next : fb);
+  const nonNeg = (next: number, fb: number) => (Number.isFinite(next) && next >= 0 ? next : fb);
+  const fin = (next: number, fb: number) => (Number.isFinite(next) ? next : fb);
+
+  const coneRadiiValid =
+    Number.isFinite(current.bottomRadius) &&
+    current.bottomRadius >= 0 &&
+    Number.isFinite(current.topRadius) &&
+    current.topRadius >= 0 &&
+    current.bottomRadius + current.topRadius > 0;
+
+  return {
+    ...current,
+    sizeX: pos(current.sizeX, prev.sizeX),
+    sizeY: pos(current.sizeY, prev.sizeY),
+    sizeZ: pos(current.sizeZ, prev.sizeZ),
+    radius: pos(current.radius, prev.radius),
+    height: pos(current.height, prev.height),
+    innerRadius:
+      Number.isFinite(current.innerRadius) &&
+      current.innerRadius > 0 &&
+      current.innerRadius < pos(current.outerRadius, prev.outerRadius)
+        ? current.innerRadius
+        : prev.innerRadius,
+    outerRadius:
+      Number.isFinite(current.outerRadius) &&
+      current.outerRadius > 0 &&
+      current.outerRadius > pos(current.innerRadius, prev.innerRadius)
+        ? current.outerRadius
+        : prev.outerRadius,
+    bottomRadius: coneRadiiValid ? current.bottomRadius : prev.bottomRadius,
+    topRadius: coneRadiiValid ? current.topRadius : prev.topRadius,
+    majorRadius: pos(current.majorRadius, prev.majorRadius),
+    minorRadius: pos(current.minorRadius, prev.minorRadius),
+    length: pos(current.length, prev.length),
+    width: pos(current.width, prev.width),
+    archHeight: nonNeg(current.archHeight, prev.archHeight),
+    translation: [
+      fin(current.translation[0], prev.translation[0]),
+      fin(current.translation[1], prev.translation[1]),
+      fin(current.translation[2], prev.translation[2]),
+    ],
+  };
+}
+
+export function buildBaselineFromScene(
+  selection: InspectorPanelProps["selection"],
   scene: SceneResource | null | undefined,
   forceBuilderMode: boolean,
+  fallbackOriginObjectId?: string | null,
 ): ObjectGeometrySpecDraft {
   const defaultPolygon: readonly PolygonVertexRow[] = [
     createPolygonVertexRow(-50e-9, -30e-9, "vtx-0"),
@@ -580,10 +928,18 @@ function buildBaselineFromScene(
   if (forceBuilderMode || selection.kind === "builder.primitive") {
     const slug = selection.nodeId?.split(":").at(-1) ?? "box";
     const primitiveKind = normalizePrimitiveKind(slug);
+    const baseName = resolveDefaultDraftBaseName(selection, primitiveKind);
+    const draftName = resolveDraftObjectName(
+      selection.label?.trim() || baseName,
+      baseName,
+      scene,
+    );
     return {
       mode: "draft-new",
       objectId: "draft",
-      draftName: selection.label?.trim() || `New ${primitiveKind}`,
+      draftName,
+      materialRef: null,
+      regionName: "",
       primitiveKind,
       symmetryAxis: "z",
       sizeX: 100e-9,
@@ -633,6 +989,8 @@ function buildBaselineFromScene(
       mode: "missing",
       objectId: objectId || "none",
       draftName: selection.label ?? "Geometry",
+      materialRef: null,
+      regionName: "",
       primitiveKind: "Box",
       symmetryAxis: "z",
       sizeX: 100e-9,
@@ -695,10 +1053,42 @@ function buildBaselineFromScene(
   const trArr = Array.isArray(tx.translation) ? tx.translation : [0, 0, 0];
   const scArr = Array.isArray(tx.scale) ? tx.scale : [1, 1, 1];
   const pvArr = Array.isArray(tx.pivot) ? tx.pivot : [0, 0, 0];
+  const translation: readonly [number, number, number] = [
+    Number(trArr[0]) || 0,
+    Number(trArr[1]) || 0,
+    Number(trArr[2]) || 0,
+  ];
+  const pivotVec: readonly [number, number, number] = [
+    Number(pvArr[0]) || 0,
+    Number(pvArr[1]) || 0,
+    Number(pvArr[2]) || 0,
+  ];
   const eulerDeg = quatToEulerDeg(
     Array.isArray(tx.rotation_quat) ? (tx.rotation_quat as number[]) : [0, 0, 0, 1],
   );
-  const hasCustomPivot = pvArr.some((v) => Math.abs(Number(v) || 0) > 1e-15);
+
+  let pivotMode: "centroid" | "origin" | "custom";
+  if (tx.pivot_mode === "origin" || tx.pivot_mode === "centroid" || tx.pivot_mode === "custom") {
+    pivotMode = tx.pivot_mode;
+  } else {
+    const isZeroPivot = pivotVec.every((v) => Math.abs(v) <= 1e-15);
+    const hasNonZeroTranslation = translation.some((v) => Math.abs(v) > 1e-15);
+    const matchesNegatedTranslation =
+      hasNonZeroTranslation &&
+      pivotVec.every(
+        (v, idx) =>
+          Math.abs(v + translation[idx]!) <= Math.max(1e-15, Math.abs(translation[idx]!) * 1e-9),
+      );
+    if (matchesNegatedTranslation) {
+      pivotMode = "origin";
+    } else if (!isZeroPivot) {
+      pivotMode = "custom";
+    } else if (fallbackOriginObjectId === objectId) {
+      pivotMode = "origin";
+    } else {
+      pivotMode = "centroid";
+    }
+  }
 
   const rawVerts = Array.isArray(params.vertices) ? params.vertices : null;
   const parsedVerts: readonly PolygonVertexRow[] =
@@ -716,16 +1106,21 @@ function buildBaselineFromScene(
   const csgOpRec = (geom?.csg_operation ?? null) as Record<string, unknown> | null;
   const csgTreeRec = (geom?.csg_tree ?? null) as JsonObject | null;
   const tags = Array.isArray(sceneObj.tags) ? sceneObj.tags : [];
-  const hasRealizedOrDirtyMesh = tags.includes("mesh:ready") || tags.includes("mesh:dirty");
+  const hasRealizedOrDirtyMesh =
+    tags.includes("mesh:ready") || tags.includes("mesh:dirty") || tags.includes("mesh:building");
   const meshStatusPill = resolveMeshStatusFromObject(sceneObj);
 
   return {
     mode: "committed",
     objectId,
     draftName: sceneObj.name?.trim() || objectId,
+    materialRef:
+      typeof sceneObj.material_ref === "string" && sceneObj.material_ref.trim().length > 0
+        ? sceneObj.material_ref
+        : null,
+    regionName: typeof sceneObj.region_name === "string" ? sceneObj.region_name : "",
     primitiveKind,
-    symmetryAxis:
-      params.axis === "x" || params.axis === "y" || params.axis === "z" ? params.axis : "z",
+    symmetryAxis: parseSymmetryAxis(params.axis),
     sizeX:
       typeof rawSize?.[0] === "number"
         ? rawSize[0]
@@ -771,14 +1166,10 @@ function buildBaselineFromScene(
       params.unit_scale === "m"
         ? params.unit_scale
         : "nm",
-    translation: [
-      Number(trArr[0]) || 0,
-      Number(trArr[1]) || 0,
-      Number(trArr[2]) || 0,
-    ],
+    translation,
     eulerDeg,
-    pivotMode: hasCustomPivot ? "custom" : "centroid",
-    pivotCustom: [Number(pvArr[0]) || 0, Number(pvArr[1]) || 0, Number(pvArr[2]) || 0],
+    pivotMode,
+    pivotCustom: pivotMode === "custom" ? pivotVec : [0, 0, 0],
     uniformScale:
       Math.abs((Number(scArr[0]) || 1) - (Number(scArr[1]) || 1)) < 1e-9 &&
       Math.abs((Number(scArr[1]) || 1) - (Number(scArr[2]) || 1)) < 1e-9,
@@ -798,13 +1189,19 @@ function buildBaselineFromScene(
   };
 }
 
-function resolveMeshStatusFromObject(sceneObj: SceneObject): {
+export function resolveMeshStatusFromObject(sceneObj: SceneObject): {
   tone: InspectorTone;
   label: string;
 } {
   const tags = Array.isArray(sceneObj.tags) ? sceneObj.tags : [];
-  if (tags.includes("mesh:failed") || tags.includes("validation:blocked")) {
+  if (tags.includes("validation:blocked")) {
     return { tone: "err", label: "Validation blocked" };
+  }
+  if (tags.includes("mesh:building")) {
+    return { tone: "live", label: "Mesh building" };
+  }
+  if (tags.includes("mesh:failed")) {
+    return { tone: "err", label: "Mesh failed" };
   }
   if (tags.includes("mesh:dirty")) {
     return { tone: "stale", label: "Mesh stale" };
@@ -895,34 +1292,237 @@ function computeDraftSummaryMetrics(draft: ObjectGeometrySpecDraft): {
   }
 }
 
-/* ── Shared Geometry Spec Implementation ── */
+/* ── Controlled Polygon Vertex Input (0 defaultValue) ── */
 
-function LiveDraftOverlayPublisher({ draft }: { draft: ObjectGeometrySpecDraft }) {
+function formatVertexNm(meters: number): string {
+  return String(Number((meters * 1e9).toFixed(3)));
+}
+
+function PolygonVertexAxisInput({
+  ariaLabel,
+  valueMeters,
+  onChangeMeters,
+}: {
+  ariaLabel: string;
+  valueMeters: number;
+  onChangeMeters: (nextMeters: number) => void;
+}) {
+  const canonicalText = formatVertexNm(valueMeters);
+  const [rawText, setRawText] = useState(canonicalText);
+  const [prevMeters, setPrevMeters] = useState(valueMeters);
+  const [lastCommittedMeters, setLastCommittedMeters] = useState(valueMeters);
+
+  if (!Object.is(valueMeters, prevMeters)) {
+    setPrevMeters(valueMeters);
+    if (!Object.is(valueMeters, lastCommittedMeters)) {
+      setLastCommittedMeters(valueMeters);
+      setRawText(canonicalText);
+    }
+  }
+
+  return (
+    <Input
+      aria-label={ariaLabel}
+      inputMode="decimal"
+      spellCheck={false}
+      type="text"
+      value={rawText}
+      onBlur={() => {
+        const trimmed = rawText.trim();
+        const parsed = trimmed.length > 0 ? Number(trimmed) : Number.NaN;
+        if (Number.isFinite(parsed)) {
+          const nextMeters = parsed * 1e-9;
+          setLastCommittedMeters(nextMeters);
+          if (!Object.is(nextMeters, valueMeters)) {
+            onChangeMeters(nextMeters);
+          }
+          setRawText(formatVertexNm(nextMeters));
+        } else {
+          setRawText(canonicalText);
+        }
+      }}
+      onChange={(event) => {
+        const nextText = event.target.value;
+        setRawText(nextText);
+        const trimmed = nextText.trim();
+        const parsed = trimmed.length > 0 ? Number(trimmed) : Number.NaN;
+        if (Number.isFinite(parsed)) {
+          const nextMeters = parsed * 1e-9;
+          setLastCommittedMeters(nextMeters);
+          if (!Object.is(nextMeters, valueMeters)) {
+            onChangeMeters(nextMeters);
+          }
+        }
+      }}
+    />
+  );
+}
+
+/* ── Panel-Level Live Draft Overlay Publisher (Never Tab-Scoped) ── */
+
+function LiveDraftOverlayPublisher({
+  draft,
+  baseline,
+  invalidFields,
+}: {
+  draft: ObjectGeometrySpecDraft;
+  baseline: ObjectGeometrySpecDraft;
+  invalidFields: ReadonlyMap<string, string>;
+}) {
+  const [lastValidSnapshot, setLastValidSnapshot] = useState<ObjectGeometrySpecDraft>(baseline);
+  const [prevDraft, setPrevDraft] = useState<ObjectGeometrySpecDraft>(draft);
+
+  if (draft !== prevDraft) {
+    setPrevDraft(draft);
+    setLastValidSnapshot((prev) =>
+      draft.primitiveKind !== prev.primitiveKind
+        ? updateLastValidDraftSnapshot(baseline, draft)
+        : updateLastValidDraftSnapshot(prev, draft),
+    );
+  }
+
+  const overlayDraft = useMemo(
+    () =>
+      draft.mode === "draft-new"
+        ? resolvePreviewOverlayDraft(draft, lastValidSnapshot, invalidFields)
+        : null,
+    [draft, invalidFields, lastValidSnapshot],
+  );
+
   useEffect(() => {
-    if (draft.mode === "draft-new") {
-      primitiveDraftOverlayStore.publish(resolvePreviewOverlayDraft(draft));
+    if (overlayDraft) {
+      primitiveDraftOverlayStore.publish(overlayDraft);
     } else {
       primitiveDraftOverlayStore.clear();
     }
-    return () => {
-      primitiveDraftOverlayStore.clear();
-    };
-  }, [draft]);
+  }, [overlayDraft]);
+
+  useEffect(() => () => primitiveDraftOverlayStore.clear(), []);
+
   return null;
 }
+
+function extractTranslationSIFromSessionDraft(
+  draft: GeometryObjectDraft,
+): readonly [number, number, number] | null {
+  const axes = ["translation.0", "translation.1", "translation.2"] as const;
+  const parsed = axes.map((field) => parseDraftQuantityField(draft, field));
+  const values = parsed.map((entry) =>
+    entry?.parseStatus === "valid" ? entry.parsedSI : entry?.lastValidSI ?? null,
+  );
+  if (values[0] === null || values[1] === null || values[2] === null) {
+    return null;
+  }
+  return [values[0], values[1], values[2]];
+}
+
+/* ── Shared Geometry Spec Implementation ── */
 
 function SharedGeometrySpecPanel({
   selection,
   forceBuilderMode,
 }: InspectorPanelProps & { forceBuilderMode: boolean }) {
   const kernel = useKernel();
+  const fallbackEditSession = useMemo(
+    () => new ObjectEditSessionController<GeometryObjectDraft>(),
+    [],
+  );
+  const objectEditSession = kernel.objectEditSession ?? fallbackEditSession;
+  const editSnapshot = useObjectEditSelector(objectEditSession);
+
+  const { sessionIdentity } = useSessionScopedResourceKey(MODEL_SCENE_PATH);
   const scene = useSceneResource();
   const validation = useGeometryValidationResource();
 
+  const resolveActiveScopeKey = useCallback((): string | null => {
+    const commandScope = kernel.commands?.getSessionScopeKey?.() ?? null;
+    const identityScope = sessionRequestScopeKey(sessionIdentity) ?? scene.sessionScopeKey ?? null;
+    return identityScope ?? commandScope;
+  }, [kernel.commands, scene.sessionScopeKey, sessionIdentity]);
+
+  const currentSessionScopeKey = resolveActiveScopeKey();
+  const sessionIdentityRef = useRef(sessionIdentity);
+  useLayoutEffect(() => {
+    sessionIdentityRef.current = sessionIdentity;
+  }, [sessionIdentity]);
+
+  const [lastOriginPivotObjectId, setLastOriginPivotObjectId] = useState<string | null>(null);
+  const [ownCreatePending, setOwnCreatePending] = useState(false);
+
+  /* ── 409 Revision Conflict State (Derived During Render — Zero Effect Cascades) ── */
+  const [revisionConflictPhase, setRevisionConflictPhase] =
+    useState<RevisionConflictPhase | null>(null);
+  const [conflictBaseRevision, setConflictBaseRevision] = useState<number | null>(null);
+  const [refreshSawLoading, setRefreshSawLoading] = useState(false);
+  const [prevConflictTargetKey, setPrevConflictTargetKey] = useState<string | null>(null);
+  const preConflictSessionBaselineRef = useRef<GeometryObjectDraft | null>(null);
+
   const baseline = useMemo(
-    () => buildBaselineFromScene(selection, scene.data, forceBuilderMode),
-    [forceBuilderMode, scene.data, selection],
+    () =>
+      buildBaselineFromScene(
+        selection,
+        scene.data,
+        forceBuilderMode,
+        lastOriginPivotObjectId,
+      ),
+    [forceBuilderMode, lastOriginPivotObjectId, scene.data, selection],
   );
+
+  const canonicalSessionDraft = useMemo(
+    () =>
+      baseline.mode === "committed"
+        ? resolveGeometryObjectDraft(selection, scene.data)
+        : null,
+    [baseline.mode, scene.data, selection],
+  );
+
+  const sessionTargetKey = useMemo(
+    () =>
+      canonicalSessionDraft
+        ? geometryObjectEditSessionTargetKey(currentSessionScopeKey, canonicalSessionDraft)
+        : null,
+    [canonicalSessionDraft, currentSessionScopeKey],
+  );
+
+  if (sessionTargetKey !== prevConflictTargetKey) {
+    setPrevConflictTargetKey(sessionTargetKey);
+    if (revisionConflictPhase !== null) setRevisionConflictPhase(null);
+    if (conflictBaseRevision !== null) setConflictBaseRevision(null);
+    if (refreshSawLoading) setRefreshSawLoading(false);
+  }
+
+  if (revisionConflictPhase === "refreshing") {
+    if (scene.status === "loading" || scene.status === "stale") {
+      if (!refreshSawLoading) setRefreshSawLoading(true);
+    } else if (scene.status === "error") {
+      setRevisionConflictPhase("refresh-error");
+    } else if (scene.status === "ready") {
+      const nextRev = typeof scene.data?.revision === "number" ? scene.data.revision : null;
+      if (refreshSawLoading || (nextRev !== null && nextRev !== conflictBaseRevision)) {
+        setRevisionConflictPhase("refetched");
+      }
+    }
+  }
+
+  const sessionMatchesTarget =
+    sessionTargetKey !== null && editSnapshot.identity?.targetKey === sessionTargetKey;
+  const editIdentity = sessionMatchesTarget ? editSnapshot.identity : null;
+  const ownObjectApplyPending = Boolean(
+    sessionMatchesTarget && editSnapshot.applyOperationId !== null,
+  );
+  const sceneWritePending = objectEditSession.hasPendingWrite(currentSessionScopeKey);
+  const placementGestureActive = objectEditSession.hasActiveGesture(currentSessionScopeKey);
+  const sceneMutationLockReason = placementGestureActive
+    ? "Finish or cancel the active placement gesture before applying or reverting scene changes."
+    : sceneWritePending && !ownObjectApplyPending && !ownCreatePending
+      ? "Another scene-changing action is pending in this session."
+      : null;
+
+  useEffect(() => {
+    if (revisionConflictPhase === null) {
+      preConflictSessionBaselineRef.current = null;
+    }
+  }, [revisionConflictPhase]);
 
   const validationMessages = useMemo(
     () =>
@@ -943,6 +1543,15 @@ function SharedGeometrySpecPanel({
     [baseline.objectId, scene.data?.objects],
   );
 
+  const materialOptions = useMemo(
+    () =>
+      (scene.data?.materials ?? []).map((mat) => ({
+        id: mat.id,
+        label: mat.name?.trim() ? `${mat.name} (${mat.id})` : mat.id,
+      })),
+    [scene.data?.materials],
+  );
+
   const createDraftSlugId = useCallback((draft: ObjectGeometrySpecDraft) => {
     const slug = draft.draftName
       .trim()
@@ -951,6 +1560,31 @@ function SharedGeometrySpecPanel({
       .replace(/^-|-$/g, "");
     return `${slug || draft.primitiveKind.toLowerCase()}-${Date.now().toString(36)}`;
   }, []);
+
+  const lastSyncedEditVersionRef = useRef<number>(-1);
+  const lastSyncedTargetKeyRef = useRef<string | null>(null);
+  const requestApplyRef = useRef<() => Promise<boolean>>(async () => false);
+
+  const handleRefetchConflict = useCallback(() => {
+    setRefreshSawLoading(false);
+    setRevisionConflictPhase("refreshing");
+    scene.refetch?.();
+  }, [scene]);
+
+  const handleRebaseConflict = useCallback(() => {
+    if (editIdentity && canonicalSessionDraft && preConflictSessionBaselineRef.current) {
+      const snap = objectEditSession.getSnapshot();
+      const currentSessionDraft = snap.draft ?? canonicalSessionDraft;
+      const rebasedSessionDraft = rebaseGeometryObjectDraft(
+        currentSessionDraft,
+        canonicalDraftInSelectedUnits(canonicalSessionDraft, currentSessionDraft),
+        preConflictSessionBaselineRef.current,
+      );
+      objectEditSession.updateDraft(editIdentity, () => rebasedSessionDraft);
+      lastSyncedEditVersionRef.current = objectEditSession.getSnapshot().editVersion;
+    }
+    setRevisionConflictPhase("rebased");
+  }, [canonicalSessionDraft, editIdentity, objectEditSession]);
 
   const spec = useMemo<InspectorSpec<ObjectGeometrySpecDraft>>(
     () => ({
@@ -1012,6 +1646,40 @@ function SharedGeometrySpecPanel({
       ],
       notices: (draft): readonly InspectorNotice<ObjectGeometrySpecDraft>[] => {
         const list: InspectorNotice<ObjectGeometrySpecDraft>[] = [];
+        if (revisionConflictPhase !== null) {
+          list.push({
+            id: "scene-revision-conflict",
+            tone: revisionConflictPhase === "rebased" ? "warn" : "err",
+            title: "Scene revision conflict",
+            text:
+              revisionConflictPhase === "rebased"
+                ? "Draft rebased onto the latest scene revision. Click Retry Apply to commit."
+                : revisionConflictPhase === "refetched"
+                  ? "Latest scene fetched. Click Rebase Draft to merge your edits onto the updated revision."
+                  : revisionConflictPhase === "refresh-error"
+                    ? "Scene refetch failed. Retry Refetch Scene before rebasing."
+                    : "The scene changed while this geometry edit was staged. Refetch and rebase before retrying.",
+            quickFix:
+              revisionConflictPhase === "conflict" || revisionConflictPhase === "refresh-error"
+                ? {
+                    label: "Refetch Scene",
+                    onApply: () => handleRefetchConflict(),
+                  }
+                : revisionConflictPhase === "refetched"
+                  ? {
+                      label: "Rebase Draft",
+                      onApply: () => handleRebaseConflict(),
+                    }
+                  : revisionConflictPhase === "rebased"
+                    ? {
+                        label: "Retry Apply",
+                        onApply: () => {
+                          void requestApplyRef.current();
+                        },
+                      }
+                    : undefined,
+          });
+        }
         if (draft.mode === "committed" && draft.hasRealizedOrDirtyMesh) {
           list.push({
             id: "mesh-stale-warning",
@@ -1031,6 +1699,60 @@ function SharedGeometrySpecPanel({
         return list;
       },
       sections: [
+        /* ── CONFLICT RESOLUTION BAR (ALL TABS WHEN ACTIVE) ── */
+        {
+          id: "geometry-revision-conflict-actions",
+          title: "Revision conflict recovery",
+          icon: Shapes,
+          defaultOpen: true,
+          showWhen: () => revisionConflictPhase !== null,
+          rows: [
+            {
+              type: "custom",
+              wide: true,
+              render: () => (
+                <div
+                  className="flex flex-wrap gap-1.5"
+                  data-revision-conflict="true"
+                >
+                  <Button
+                    disabled={
+                      revisionConflictPhase !== "conflict" &&
+                      revisionConflictPhase !== "refresh-error"
+                    }
+                    size="sm"
+                    type="button"
+                    variant="secondary"
+                    onClick={handleRefetchConflict}
+                  >
+                    Refetch Scene
+                  </Button>
+                  <Button
+                    disabled={revisionConflictPhase !== "refetched"}
+                    size="sm"
+                    type="button"
+                    variant="secondary"
+                    onClick={handleRebaseConflict}
+                  >
+                    Rebase Draft
+                  </Button>
+                  <Button
+                    disabled={revisionConflictPhase !== "rebased"}
+                    size="sm"
+                    type="button"
+                    variant="primary"
+                    onClick={() => {
+                      void requestApplyRef.current();
+                    }}
+                  >
+                    Retry Apply
+                  </Button>
+                </div>
+              ),
+            },
+          ],
+        },
+
         /* ── TAB 1: SHAPE ── */
         {
           id: "geometry-shape-kind",
@@ -1041,17 +1763,27 @@ function SharedGeometrySpecPanel({
           summary: (d) => d.primitiveKind,
           rows: [
             {
-              type: "custom",
-              wide: true,
-              showWhen: (d) => d.mode === "draft-new",
-              render: (ctx) => <LiveDraftOverlayPublisher draft={ctx.draft} />,
-            },
-            {
               key: "draftName",
               type: "text",
               label: "New object name",
               showWhen: (d) => d.mode === "draft-new",
               validate: (val) => (val.trim().length === 0 ? "Object name is required." : null),
+            },
+            {
+              key: "materialRef",
+              type: "reference",
+              label: "Material",
+              targetKindLabel: "Material",
+              showWhen: (d) => d.mode === "draft-new",
+              allowNone: { label: "Unassigned" },
+              options: () => materialOptions,
+            },
+            {
+              key: "regionName",
+              type: "text",
+              label: "Region",
+              placeholder: "Optional region name",
+              showWhen: (d) => d.mode === "draft-new",
             },
             {
               key: "primitiveKind",
@@ -1363,48 +2095,14 @@ function SharedGeometrySpecPanel({
               },
             },
 
-            /* PolygonExtrusion */
+            /* PolygonExtrusion — Single Controlled Vertex Editor */
             {
               key: "polygonVertices",
-              type: "table",
+              type: "custom",
               label: "2D contour vertices (nm)",
               wide: true,
               showWhen: (d) => d.primitiveKind === "PolygonExtrusion",
               validate: (verts) => validateSimplePolygon(verts as readonly PolygonVertexRow[]),
-              rowKey: (row: PolygonVertexRow) => row._rowId,
-              rows: (d) => d.polygonVertices,
-              onAddRow: (ctx) => {
-                const last = ctx.draft.polygonVertices.at(-1);
-                ctx.setField("polygonVertices", [
-                  ...ctx.draft.polygonVertices,
-                  createPolygonVertexRow((last?.x_m ?? 0) + 20e-9, last?.y_m ?? 0),
-                ]);
-              },
-              columns: [
-                {
-                  id: "idx",
-                  header: "#",
-                  mono: true,
-                  renderCell: (_row: PolygonVertexRow, idx: number) => String(idx + 1),
-                },
-                {
-                  id: "x",
-                  header: "x (nm)",
-                  mono: true,
-                  renderCell: (row: PolygonVertexRow) => Number((row.x_m * 1e9).toFixed(2)),
-                },
-                {
-                  id: "y",
-                  header: "y (nm)",
-                  mono: true,
-                  renderCell: (row: PolygonVertexRow) => Number((row.y_m * 1e9).toFixed(2)),
-                },
-              ],
-            },
-            {
-              type: "custom",
-              wide: true,
-              showWhen: (d) => d.primitiveKind === "PolygonExtrusion",
               render: (ctx) => (
                 <div className="flex flex-col gap-1.5" data-slot="polygon-vertex-editor">
                   {ctx.draft.polygonVertices.map((vtx, idx) => (
@@ -1412,35 +2110,29 @@ function SharedGeometrySpecPanel({
                       <span className="w-6 font-mono text-xs text-[var(--fm-text-muted)]">
                         V{idx + 1}
                       </span>
-                      <Input
-                        aria-label={`Vertex ${idx + 1} X (nm)`}
-                        defaultValue={String(Number((vtx.x_m * 1e9).toFixed(3)))}
-                        onBlur={(e) => {
-                          const parsed = Number(e.currentTarget.value);
-                          if (Number.isFinite(parsed)) {
-                            ctx.setField(
-                              "polygonVertices",
-                              ctx.draft.polygonVertices.map((item) =>
-                                item._rowId === vtx._rowId ? { ...item, x_m: parsed * 1e-9 } : item,
-                              ),
-                            );
-                          }
-                        }}
+                      <PolygonVertexAxisInput
+                        ariaLabel={`Vertex ${idx + 1} X (nm)`}
+                        valueMeters={vtx.x_m}
+                        onChangeMeters={(nextXm) =>
+                          ctx.setField(
+                            "polygonVertices",
+                            ctx.draft.polygonVertices.map((item) =>
+                              item._rowId === vtx._rowId ? { ...item, x_m: nextXm } : item,
+                            ),
+                          )
+                        }
                       />
-                      <Input
-                        aria-label={`Vertex ${idx + 1} Y (nm)`}
-                        defaultValue={String(Number((vtx.y_m * 1e9).toFixed(3)))}
-                        onBlur={(e) => {
-                          const parsed = Number(e.currentTarget.value);
-                          if (Number.isFinite(parsed)) {
-                            ctx.setField(
-                              "polygonVertices",
-                              ctx.draft.polygonVertices.map((item) =>
-                                item._rowId === vtx._rowId ? { ...item, y_m: parsed * 1e-9 } : item,
-                              ),
-                            );
-                          }
-                        }}
+                      <PolygonVertexAxisInput
+                        ariaLabel={`Vertex ${idx + 1} Y (nm)`}
+                        valueMeters={vtx.y_m}
+                        onChangeMeters={(nextYm) =>
+                          ctx.setField(
+                            "polygonVertices",
+                            ctx.draft.polygonVertices.map((item) =>
+                              item._rowId === vtx._rowId ? { ...item, y_m: nextYm } : item,
+                            ),
+                          )
+                        }
                       />
                       <Button
                         aria-label={`Remove vertex ${idx + 1}`}
@@ -1650,55 +2342,270 @@ function SharedGeometrySpecPanel({
       ],
       commitBar: {
         mode: "staged",
+        allowCleanApply: (d) => d.mode === "draft-new",
         cleanMessage: (d) =>
           d.mode === "draft-new"
             ? "Adjust dimensions and click Apply to create the scene object"
             : "Parametric geometry matches committed SceneDocument",
-        lockReason: (d) =>
-          d.mode === "missing" ? "Select an existing object or start a primitive draft." : null,
+        lockReason: (d) => {
+          if (d.mode === "missing") {
+            return "Select an existing object or start a primitive draft.";
+          }
+          if (sceneMutationLockReason) {
+            return sceneMutationLockReason;
+          }
+          if (revisionConflictPhase !== null && revisionConflictPhase !== "rebased") {
+            return "Resolve the scene revision conflict before applying this draft.";
+          }
+          return null;
+        },
+        onRevert: () => {
+          setRevisionConflictPhase(null);
+          setConflictBaseRevision(null);
+          setRefreshSawLoading(false);
+          preConflictSessionBaselineRef.current = null;
+          if (editIdentity && canonicalSessionDraft) {
+            const currentDraft = objectEditSession.getSnapshot().draft ?? canonicalSessionDraft;
+            objectEditSession.reset(
+              editIdentity,
+              canonicalDraftInSelectedUnits(canonicalSessionDraft, currentDraft),
+            );
+            lastSyncedEditVersionRef.current = objectEditSession.getSnapshot().editVersion;
+          }
+        },
         onApply: async (draft) => {
           const geometry = serializeGeometryPayload(draft);
           const transform = serializeTransformPayload(draft);
+          const capturedScopeKey = resolveActiveScopeKey();
+          const capturedCommandScopeKey = kernel.commands?.getSessionScopeKey?.();
+          const historyGeneration = kernel.authoringHistory?.getGeneration?.();
+          const isCurrentSessionScope = () => {
+            const activeIdentityScope =
+              sessionRequestScopeKey(sessionIdentityRef.current) ?? scene.sessionScopeKey ?? null;
+            const activeCommandScope = kernel.commands?.getSessionScopeKey?.();
+            const activeScope = activeIdentityScope ?? activeCommandScope ?? null;
+            if (activeScope !== capturedScopeKey) return false;
+            if (
+              capturedCommandScopeKey !== undefined &&
+              activeCommandScope !== undefined &&
+              activeCommandScope !== capturedCommandScopeKey
+            ) {
+              return false;
+            }
+            return (
+              historyGeneration === undefined ||
+              kernel.authoringHistory?.getGeneration?.() === historyGeneration
+            );
+          };
+
+          const historyContext = {
+            api: kernel.api,
+            authoringHistory: kernel.authoringHistory,
+            layout: kernel.layout,
+            resourceData: { [MODEL_SCENE_PATH]: scene.data },
+            selection: kernel.selection,
+            sessionScopeKey: capturedScopeKey,
+            isCurrentSessionScope,
+          };
+          const requestOptions = capturedScopeKey
+            ? { sessionScopeKey: capturedScopeKey }
+            : undefined;
+          const sceneRevision =
+            typeof scene.data?.revision === "number" && Number.isFinite(scene.data.revision)
+              ? scene.data.revision
+              : null;
 
           if (draft.mode === "draft-new") {
             const newId = createDraftSlugId(draft);
-            const tx = await kernel.api.model.commitTransaction({
-              base_revision: scene.data?.revision ?? null,
-              kind: "create_object",
-              object_id: newId,
-              name: draft.draftName.trim() || `New ${draft.primitiveKind}`,
-              geometry,
-              transform,
-            });
-            primitiveDraftOverlayStore.clear();
-            publishCommittedSceneResource(
-              kernel.resources,
-              tx.committed_scene,
-              tx.scene_revision,
+            const baseName = resolveDefaultDraftBaseName(selection, draft.primitiveKind);
+            const createName = resolveDraftObjectName(
+              draft.draftName.trim() || newId,
+              baseName,
+              scene.data,
             );
-            kernel.resources.invalidate(MODEL_GEOMETRY_VALIDATION_PATH, tx.scene_revision);
-            kernel.resources.invalidate(MODEL_READINESS_PATH, tx.scene_revision);
-            kernel.selection.set(
-              buildObjectSelection(newId, "object.root", draft.draftName.trim() || newId),
-              "inspector",
-            );
-            return true;
+            const optionalMaterialRef =
+              draft.materialRef &&
+              draft.materialRef.trim().length > 0 &&
+              draft.materialRef.trim() !== "unassigned"
+                ? draft.materialRef.trim()
+                : undefined;
+            const optionalRegionName =
+              draft.regionName.trim().length > 0 && draft.regionName.trim() !== "unassigned"
+                ? draft.regionName.trim()
+                : undefined;
+
+            const reservation = objectEditSession.beginSceneMutation(capturedScopeKey, newId);
+            if (reservation === null) {
+              throw new Error(
+                objectEditSession.hasActiveGesture(capturedScopeKey)
+                  ? "Finish or cancel the active placement gesture before applying scene changes."
+                  : "Another scene-changing action is pending in this session.",
+              );
+            }
+            setOwnCreatePending(true);
+            try {
+              let selectedCreatedObject = false;
+              const created = await runAuthoringMutationWithHistory(
+                historyContext,
+                `Create ${createName}`,
+                async ({ baseRevision }) => {
+                  const response = await createObjectTransaction(
+                    kernel.api,
+                    {
+                      base_revision: baseRevision ?? sceneRevision,
+                      geometry,
+                      ...(optionalMaterialRef ? { material_ref: optionalMaterialRef } : {}),
+                      name: createName,
+                      object_id: newId,
+                      ...(optionalRegionName ? { region_name: optionalRegionName } : {}),
+                      transform,
+                    },
+                    requestOptions,
+                  );
+                  if (isCurrentSessionScope()) {
+                    kernel.selection.set(
+                      buildObjectSelection(newId, "object.root", createName),
+                      "geometry-authoring",
+                    );
+                    selectedCreatedObject = true;
+                  }
+                  return response;
+                },
+                undefined,
+                {
+                  ...(sceneRevision !== null ? { expectedSceneRevision: sceneRevision } : {}),
+                  captureWorkspaceStateAfter: () => selectedCreatedObject,
+                },
+              );
+
+              if (!isCurrentSessionScope()) return false;
+              const rev = acknowledgedAuthoringSceneRevision(created);
+              setLastOriginPivotObjectId(draft.pivotMode === "origin" ? newId : null);
+              setRevisionConflictPhase(null);
+              setConflictBaseRevision(null);
+              primitiveDraftOverlayStore.clear();
+              publishCommittedSceneResource(
+                kernel.resources,
+                created.committed_scene,
+                rev,
+                undefined,
+                false,
+                capturedScopeKey,
+                kernel.api.resourceCacheScope,
+              );
+              invalidateAuthoringMutationDependents(kernel.resources, "geometry", rev);
+              return true;
+            } catch (error) {
+              if (isPrimitiveDraftRevisionConflict(error)) {
+                setConflictBaseRevision(sceneRevision);
+                setRefreshSawLoading(false);
+                setRevisionConflictPhase("conflict");
+              }
+              throw error;
+            } finally {
+              setOwnCreatePending(false);
+              objectEditSession.endSceneMutation(reservation);
+            }
           }
 
-          const updated = await kernel.api.model.patchObjectGeometry(draft.objectId, {
-            base_revision: scene.data?.revision ?? null,
-            geometry,
-            transform,
-          });
-          const rev = fallbackRevision(updated.revision);
-          publishCommittedSceneResource(kernel.resources, updated, rev);
-          kernel.resources.invalidate(MODEL_GEOMETRY_VALIDATION_PATH, rev);
-          kernel.resources.invalidate(MODEL_GEOMETRY_DIAGNOSTICS_PATH, rev);
-          kernel.resources.invalidate(MODEL_READINESS_PATH, rev);
-          kernel.resources.invalidate(MESH_BUILD_CURRENT_RESOURCE_KEY, rev);
-          kernel.resources.invalidate(MESH_BUILD_LATEST_SUCCESSFUL_RESOURCE_KEY, rev);
-          kernel.resources.invalidate(MODEL_SCENE_PATH, rev);
-          return true;
+          /* ── Committed object.geometry Apply ── */
+          if (!editIdentity) {
+            throw new Error("Geometry edit session is not ready. Try again.");
+          }
+          objectEditSession.updateDraft(editIdentity, (current) =>
+            ([0, 1, 2] as const).reduce(
+              (next, axis) =>
+                updateQuantityFieldSI(next, `translation.${axis}`, draft.translation[axis]),
+              current,
+            ),
+          );
+          lastSyncedEditVersionRef.current = objectEditSession.getSnapshot().editVersion;
+
+          const operation = objectEditSession.beginApply(editIdentity);
+          if (!operation) {
+            throw new Error(
+              objectEditSession.hasActiveGesture(capturedScopeKey)
+                ? "Finish or cancel the active placement gesture before applying scene changes."
+                : "Another scene-changing action is pending in this session.",
+            );
+          }
+
+          try {
+            const response = await runAuthoringMutationWithHistory(
+              historyContext,
+              `Edit geometry and placement ${draft.draftName}`,
+              ({ baseRevision }) =>
+                patchObjectGeometryTransaction(
+                  kernel.api,
+                  draft.objectId,
+                  {
+                    base_revision: baseRevision ?? sceneRevision,
+                    geometry,
+                    transform,
+                  },
+                  requestOptions,
+                ),
+              undefined,
+              sceneRevision !== null ? { expectedSceneRevision: sceneRevision } : undefined,
+            );
+
+            if (!isCurrentSessionScope()) {
+              objectEditSession.reject(operation);
+              return false;
+            }
+
+            const rev = acknowledgedAuthoringSceneRevision(response);
+            const hasCommittedObjectsArray = Array.isArray(response.committed_scene?.objects);
+            const resolvedCanonicalDraft = hasCommittedObjectsArray
+              ? resolveCommittedGeometryObjectDraft(
+                  response.committed_scene,
+                  operation.identity.objectId,
+                )
+              : {
+                  ...operation.submittedDraft,
+                  baseRevision: rev,
+                };
+            if (!resolvedCanonicalDraft) {
+              objectEditSession.reject(operation);
+              throw new Error("The acknowledged object is missing from the committed scene.");
+            }
+            const acknowledged = objectEditSession.acknowledge(
+              operation,
+              {
+                ...resolvedCanonicalDraft,
+                baseRevision: rev,
+              },
+              reconcileObjectEditAck,
+              { reconcileUnchangedDraft: true },
+            );
+            if (!acknowledged) return false;
+            lastSyncedEditVersionRef.current = objectEditSession.getSnapshot().editVersion;
+
+            setLastOriginPivotObjectId(draft.pivotMode === "origin" ? draft.objectId : null);
+            setRevisionConflictPhase(null);
+            setConflictBaseRevision(null);
+            preConflictSessionBaselineRef.current = null;
+            publishCommittedSceneResource(
+              kernel.resources,
+              response.committed_scene,
+              rev,
+              undefined,
+              false,
+              capturedScopeKey,
+              kernel.api.resourceCacheScope,
+            );
+            invalidateAuthoringMutationDependents(kernel.resources, "geometry", rev);
+            return true;
+          } catch (error) {
+            objectEditSession.reject(operation);
+            if (isPrimitiveDraftRevisionConflict(error)) {
+              preConflictSessionBaselineRef.current = canonicalSessionDraft;
+              setConflictBaseRevision(sceneRevision);
+              setRefreshSawLoading(false);
+              setRevisionConflictPhase("conflict");
+            }
+            throw error;
+          }
         },
       },
     }),
@@ -1706,18 +2613,333 @@ function SharedGeometrySpecPanel({
       baseline.draftName,
       baseline.mode,
       baseline.objectId,
+      canonicalSessionDraft,
       createDraftSlugId,
+      editIdentity,
       forceBuilderMode,
-      kernel.api.model,
+      handleRebaseConflict,
+      handleRefetchConflict,
+      kernel.api,
+      kernel.authoringHistory,
+      kernel.commands,
+      kernel.layout,
       kernel.resources,
       kernel.selection,
+      materialOptions,
+      objectEditSession,
       otherObjects,
-      scene.data?.revision,
+      resolveActiveScopeKey,
+      revisionConflictPhase,
+      scene.data,
+      scene.sessionScopeKey,
+      sceneMutationLockReason,
+      selection,
       validationMessages,
     ],
   );
 
-  return <SpecInspectorHost baseline={baseline} selection={selection} spec={spec} />;
+  const controller = useInspectorSpecController(spec, selection, baseline);
+
+  useLayoutEffect(() => {
+    requestApplyRef.current = controller.requestApply;
+  }, [controller.requestApply]);
+
+  /* ── Activate & Reconcile objectEditSession + Sync 3D Gizmo Translation Into Controller ── */
+  const controllerDraftRef = useRef(controller.draft);
+  useLayoutEffect(() => {
+    controllerDraftRef.current = controller.draft;
+  }, [controller.draft]);
+
+  useLayoutEffect(() => {
+    if (!canonicalSessionDraft || !sessionTargetKey) return;
+    const identity = objectEditSession.activate(
+      {
+        objectId: canonicalSessionDraft.objectId,
+        sessionScopeKey: currentSessionScopeKey,
+        targetKey: sessionTargetKey,
+      },
+      canonicalSessionDraft,
+    );
+    const currentSnap = objectEditSession.getSnapshot();
+    if (
+      !Number.isFinite(canonicalSessionDraft.baseRevision) ||
+      currentSnap.draft?.baseRevision !== canonicalSessionDraft.baseRevision
+    ) {
+      objectEditSession.refreshCanonical(
+        identity,
+        canonicalDraftInSelectedUnits(
+          canonicalSessionDraft,
+          currentSnap.draft ?? canonicalSessionDraft,
+        ),
+        rebaseDirtyDraftOntoUnchangedObject,
+      );
+    }
+
+    const latestSnap = objectEditSession.getSnapshot();
+    if (
+      latestSnap.identity?.draftId === identity.draftId &&
+      latestSnap.draft &&
+      latestSnap.draft.mode === "committed"
+    ) {
+      const targetChanged = lastSyncedTargetKeyRef.current !== sessionTargetKey;
+      const versionChanged = latestSnap.editVersion !== lastSyncedEditVersionRef.current;
+      if (targetChanged || versionChanged) {
+        lastSyncedTargetKeyRef.current = sessionTargetKey;
+        lastSyncedEditVersionRef.current = latestSnap.editVersion;
+        const sessionTranslation = extractTranslationSIFromSessionDraft(latestSnap.draft);
+        if (
+          sessionTranslation &&
+          !vec3ApproxEqual(sessionTranslation, controllerDraftRef.current.translation)
+        ) {
+          controller.setField("translation", sessionTranslation);
+        }
+      }
+    }
+  }, [
+    canonicalSessionDraft,
+    controller,
+    currentSessionScopeKey,
+    editSnapshot.editVersion,
+    objectEditSession,
+    sessionTargetKey,
+  ]);
+
+  /* ── Sync Inspector Dirty Flag Into objectEditSession (Compute & Delete Guards) ── */
+  useEffect(() => {
+    if (!editIdentity || baseline.mode !== "committed") return;
+    const snap = objectEditSession.getSnapshot();
+    if (snap.editVersion !== lastSyncedEditVersionRef.current) return;
+    objectEditSession.setDirty(editIdentity, controller.dirty);
+  }, [baseline.mode, controller.dirty, editIdentity, objectEditSession]);
+
+  /* ── Coupled Field Change Handler (uniformScale + live 3D Placement Preview) ── */
+  const pushTranslationToSession = useCallback(
+    (nextTranslation: readonly [number, number, number]) => {
+      if (!editIdentity || baseline.mode !== "committed") return;
+      objectEditSession.updateDraft(editIdentity, (current) =>
+        ([0, 1, 2] as const).reduce(
+          (next, axis) =>
+            updateQuantityFieldSI(next, `translation.${axis}`, nextTranslation[axis]),
+          current,
+        ),
+      );
+      lastSyncedEditVersionRef.current = objectEditSession.getSnapshot().editVersion;
+    },
+    [baseline.mode, editIdentity, objectEditSession],
+  );
+
+  const handleFieldChange = useCallback(
+    <K extends keyof ObjectGeometrySpecDraft & string>(
+      key: K,
+      value: ObjectGeometrySpecDraft[K],
+    ) => {
+      if (key === "scale") {
+        const nextScale = applyUniformScaleChange(
+          controller.draft.scale,
+          value as readonly [number, number, number],
+          controller.draft.uniformScale,
+        );
+        controller.setField("scale", nextScale);
+        return;
+      }
+      if (key === "uniformScale") {
+        const enabled = Boolean(value);
+        if (enabled) {
+          const normalized = normalizeScaleForUniformLock(controller.draft.scale);
+          controller.patchDraft({
+            uniformScale: true,
+            ...(vec3ApproxEqual(normalized, controller.draft.scale)
+              ? {}
+              : { scale: normalized }),
+          });
+        } else {
+          controller.setField("uniformScale", false);
+        }
+        return;
+      }
+      if (key === "translation") {
+        const nextVec = value as readonly [number, number, number];
+        controller.setField("translation", nextVec);
+        pushTranslationToSession(nextVec);
+        return;
+      }
+      controller.setField(key, value);
+    },
+    [controller, pushTranslationToSession],
+  );
+
+  const handlePatchDraft = useCallback(
+    (partial: Partial<ObjectGeometrySpecDraft>) => {
+      controller.patchDraft(partial);
+      if (partial.translation) {
+        pushTranslationToSession(partial.translation);
+      }
+    },
+    [controller, pushTranslationToSession],
+  );
+
+  const handleRevertField = useCallback(
+    (fieldKey: string) => {
+      controller.revertField(fieldKey);
+      if (fieldKey === "translation") {
+        pushTranslationToSession(controller.baseline.translation);
+      }
+    },
+    [controller, pushTranslationToSession],
+  );
+
+  const handleRevertAll = useCallback(() => {
+    if (
+      placementGestureActive ||
+      (sceneWritePending && !ownObjectApplyPending && !ownCreatePending)
+    ) {
+      return;
+    }
+    controller.revertAll();
+  }, [
+    controller,
+    ownCreatePending,
+    ownObjectApplyPending,
+    placementGestureActive,
+    sceneWritePending,
+  ]);
+
+  /* ── Standard Chrome Callbacks & Code Preview Dialog ── */
+  const [codePreview, setCodePreview] = useState<{
+    title: string;
+    language: "python" | "json";
+    code: string;
+  } | null>(null);
+  const [copiedCode, setCopiedCode] = useState(false);
+  const [statusToast, setStatusToast] = useState<string | null>(null);
+
+  const handleSelectNode = useCallback(
+    (next: Omit<Selection, "moduleSource">) => {
+      kernel.selection.set(next, "inspector");
+    },
+    [kernel.selection],
+  );
+
+  const handleFitView = useCallback(
+    (commandId?: Parameters<typeof kernel.commands.execute>[0]) => {
+      const resolvedId = commandId ?? "viewport-3d.fit-selection";
+      void kernel.commands.execute(resolvedId, createCommandContext("inspector", kernel));
+    },
+    [kernel],
+  );
+
+  const handleHideInspector = useCallback(() => {
+    kernel.layout.setPanelVisible("right", false);
+  }, [kernel.layout]);
+
+  const handleOpenCodePreview = useCallback(
+    (title: string, language: "python" | "json", code: string) => {
+      setCopiedCode(false);
+      setCodePreview({ title, language, code });
+    },
+    [],
+  );
+
+  const handleNotify = useCallback((title: string, description?: string) => {
+    setStatusToast(description ? `${title}: ${description}` : title);
+  }, []);
+
+  const codeLanguageLabel = useMemo(
+    () => (codePreview?.language === "json" ? "JSON payload" : "Python authoring snippet"),
+    [codePreview?.language],
+  );
+
+  return (
+    <>
+      {controller.draft.mode === "draft-new" ? (
+        <LiveDraftOverlayPublisher
+          baseline={controller.baseline}
+          draft={controller.draft}
+          invalidFields={controller.invalidFields}
+        />
+      ) : null}
+
+      <InspectorTemplate
+        activeModeTabId={controller.activeModeTabId}
+        animationKey={controller.animationKey}
+        appliedFlash={controller.appliedFlash}
+        applyError={controller.applyError}
+        applying={controller.applying}
+        baseline={controller.baseline}
+        dirtyFields={controller.dirtyFields}
+        displayUnits={controller.displayUnits}
+        draft={controller.draft}
+        forceShowErrors={controller.forceShowErrors}
+        invalidFields={controller.invalidFields}
+        selection={selection}
+        spec={spec}
+        touchedFields={controller.touchedFields}
+        onActiveModeTabChange={controller.setActiveModeTabId}
+        onApply={controller.requestApply}
+        onDisplayUnitChange={controller.setDisplayUnit}
+        onFieldChange={handleFieldChange}
+        onFieldTouch={controller.touchField}
+        onFitView={handleFitView}
+        onFocusField={(key) => controller.focusField(key as keyof ObjectGeometrySpecDraft & string)}
+        onHideInspector={handleHideInspector}
+        onNotify={handleNotify}
+        onOpenCodePreview={handleOpenCodePreview}
+        onParseErrorChange={controller.setParseError}
+        onPatchDraft={handlePatchDraft}
+        onResetDisplay={controller.resetDisplay}
+        onRevertAll={handleRevertAll}
+        onRevertField={handleRevertField}
+        onSelectNode={handleSelectNode}
+      />
+
+      {statusToast ? (
+        <span className="sr-only" role="status">
+          {statusToast}
+        </span>
+      ) : null}
+
+      <Dialog
+        open={codePreview !== null}
+        onOpenChange={(open) => {
+          if (!open) setCodePreview(null);
+        }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>{codePreview?.title ?? "Code preview"}</DialogTitle>
+            <DialogDescription>{codeLanguageLabel}</DialogDescription>
+          </DialogHeader>
+          <pre className="max-h-80 overflow-auto rounded-md border border-[var(--fm-border)] bg-[var(--fm-surface-2)] p-3 font-mono text-xs text-[var(--fm-text)]">
+            <code>{codePreview?.code ?? ""}</code>
+          </pre>
+          <DialogFooter>
+            <Button
+              size="sm"
+              type="button"
+              variant="secondary"
+              onClick={() => {
+                if (codePreview) {
+                  void navigator.clipboard?.writeText(codePreview.code).catch(() => undefined);
+                  setCopiedCode(true);
+                }
+              }}
+            >
+              {copiedCode ? <Check aria-hidden="true" size={14} /> : <Copy aria-hidden="true" size={14} />}
+              <span>{copiedCode ? "Copied" : "Copy"}</span>
+            </Button>
+            <Button
+              size="sm"
+              type="button"
+              variant="primary"
+              onClick={() => setCodePreview(null)}
+            >
+              Close
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </>
+  );
 }
 
 export function GeometryObjectInspectorPanel(props: InspectorPanelProps) {

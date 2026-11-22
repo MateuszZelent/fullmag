@@ -1,10 +1,15 @@
 "use client";
 
-import { Plus, Shield, Trash2, Waves } from "lucide-react";
-import { useMemo } from "react";
+import { Copy, FlipHorizontal2, Plus, Shield, Trash2, Waves } from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 
 import { MODEL_SCENE_PATH } from "@/kernel/api/apiPaths";
-import type { AbsorbingBoundaryConfig } from "@/kernel/api/apiTypes";
+import {
+  authoringWriteOptions,
+  runAuthoringMutationWithHistory,
+} from "@/kernel/authoring/authoringHistoryMutation";
+import { invalidateAuthoringMutationDependents } from "@/kernel/authoring/authoringMutationInvalidation";
+import { createCommandContext } from "@/kernel/commands/commandContext";
 import { useKernel } from "@/kernel/KernelContext";
 import {
   publishCommittedSceneResource,
@@ -17,19 +22,29 @@ import {
 import { Button } from "@/shared/ui/Button";
 
 import type { InspectorPanelProps } from "../../inspectorTypes";
-import type { InspectorFact, InspectorSpec } from "../../template";
+import type { InspectorFact, InspectorNotice, InspectorSpec } from "../../template";
+import { absorbingExpressionError } from "../absorbingExpressionValidation";
 import {
   ABSORBING_BOUNDARY_FACES,
   ABSORBING_BOUNDARY_PROFILES,
   absorbingBoundaryDraftFromObject,
+  absorbingBoundaryDraftKey,
+  buildAbsorbingBoundaryPatch,
+  createLayerDraft,
+  type AbsorbingBoundaryDraft,
+  type LayerDraft,
 } from "../ObjectAbsorbingBoundaryPanelModel";
+import {
+  objectMaterialMutationCoordinator,
+  objectMaterialMutationScopeKey,
+} from "../ObjectMaterialPanelEditSession";
+import { sceneResourceRevision } from "../ObjectMaterialPanelModel";
 import {
   buildObjectSelection,
   buildRootSelection,
   fallbackRevision,
   formatLengthAuto,
   LENGTH_UNITS,
-  normalizeVector3,
   SpecInspectorHost,
   vectorNorm,
 } from "../model-roots/SpecInspectorHost";
@@ -88,6 +103,8 @@ interface AbsorbingBoundarySpecDraft {
   objectId: string;
   objectName: string;
   exists: boolean;
+  salConfigured: boolean;
+  legacy: boolean;
   baseAlpha: number;
   activeLayerIndex: number;
   layers: readonly SalLayerSpecItem[];
@@ -109,6 +126,65 @@ interface AbsorbingBoundarySpecDraft {
   direction: "outward" | "inward";
   boundaryRegionId: string;
   distanceExpression: string;
+}
+
+function parseFiniteOrFallback(raw: string, fallback: number): number {
+  const num = Number(raw);
+  return raw.trim().length > 0 && Number.isFinite(num) ? num : fallback;
+}
+
+function layerDraftToSpecItem(l: LayerDraft): SalLayerSpecItem {
+  return {
+    _layerId: l.id,
+    name: l.name,
+    enabled: l.enabled,
+    targetRegionId: l.region,
+    contourKind: l.kind,
+    faces: l.faces.length > 0 ? l.faces : ["x+", "x-"],
+    totalWidth: parseFiniteOrFallback(l.totalWidth, 50e-9),
+    rampWidth: parseFiniteOrFallback(l.rampWidth, 40e-9),
+    maxDampingDelta: parseFiniteOrFallback(l.maxDamping, 0.5),
+    profile: l.profile || "smootherstep",
+    customExpression: l.expression,
+    frame: l.frame === "universe" ? "universe" : "object",
+    point: [
+      parseFiniteOrFallback(l.point[0], 0),
+      parseFiniteOrFallback(l.point[1], 0),
+      parseFiniteOrFallback(l.point[2], 0),
+    ],
+    orientation: [
+      parseFiniteOrFallback(l.orientation[0], 1),
+      parseFiniteOrFallback(l.orientation[1], 0),
+      parseFiniteOrFallback(l.orientation[2], 0),
+    ],
+    radius: parseFiniteOrFallback(l.radius, 5e-7),
+    direction: l.direction,
+    boundaryRegionId: l.boundaryRegion,
+    distanceExpression: l.distanceExpression,
+  };
+}
+
+function specItemToLayerDraft(l: SalLayerSpecItem): LayerDraft {
+  return {
+    id: l._layerId,
+    name: l.name,
+    enabled: l.enabled,
+    region: l.targetRegionId,
+    kind: l.contourKind,
+    faces: [...l.faces],
+    totalWidth: String(l.totalWidth),
+    rampWidth: String(l.rampWidth),
+    maxDamping: String(l.maxDampingDelta),
+    profile: l.profile,
+    frame: l.frame,
+    expression: l.customExpression,
+    point: [String(l.point[0]), String(l.point[1]), String(l.point[2])],
+    orientation: [String(l.orientation[0]), String(l.orientation[1]), String(l.orientation[2])],
+    radius: String(l.radius),
+    direction: l.direction,
+    boundaryRegion: l.boundaryRegionId,
+    distanceExpression: l.distanceExpression,
+  };
 }
 
 function hydrateActiveLayerFields(
@@ -183,6 +259,47 @@ function syncActiveLayerIntoList(draft: AbsorbingBoundarySpecDraft): SalLayerSpe
   );
 }
 
+function toAbsorbingBoundaryModelDraft(
+  draft: AbsorbingBoundarySpecDraft,
+  baseline: AbsorbingBoundarySpecDraft,
+): AbsorbingBoundaryDraft {
+  const syncedLayers = syncActiveLayerIntoList(draft);
+  const first = syncedLayers[0];
+  const baseFirst = baseline.layers[0];
+  const promotedToCollection =
+    syncedLayers.length !== 1 ||
+    !first ||
+    !baseFirst ||
+    first.name !== baseFirst.name ||
+    first.enabled !== baseFirst.enabled ||
+    first.targetRegionId !== baseFirst.targetRegionId ||
+    first.contourKind !== "faces";
+  return {
+    enabled: syncedLayers.length > 0,
+    legacy: draft.legacy && !promotedToCollection,
+    layers: syncedLayers.map(specItemToLayerDraft),
+  };
+}
+
+function nextUniqueLayerId(existing: readonly SalLayerSpecItem[]): string {
+  const used = new Set(existing.map((l) => l._layerId));
+  const candidate =
+    typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
+      ? crypto.randomUUID()
+      : `layer-${existing.length + 1}-${Date.now().toString(36)}`;
+  if (!used.has(candidate)) return candidate;
+  let seq = existing.length + 1;
+  while (used.has(`layer-${seq}`)) seq += 1;
+  return `layer-${seq}`;
+}
+
+function isConflictError(error: unknown): boolean {
+  const msg = error instanceof Error ? error.message : String(error);
+  return /409|revision_conflict|scene_revision_conflict|changed in another edit|Refresh the scene/i.test(
+    msg,
+  );
+}
+
 /* ── Absorbing Damping Curve Chart (<ScientificEChart>) ── */
 
 function SalDampingProfileChart({ draft }: { draft: AbsorbingBoundarySpecDraft }) {
@@ -194,9 +311,7 @@ function SalDampingProfileChart({ draft }: { draft: AbsorbingBoundarySpecDraft }
     const ys: number[] = [];
     for (let i = 0; i <= count; i++) {
       const dNm = (i / count) * totalNm;
-      const plateauStart = totalNm - rampNm;
       const u = dNm <= 0 ? 0 : dNm >= rampNm ? 1 : dNm / rampNm;
-      void plateauStart;
       const alphaEff =
         draft.baseAlpha +
         draft.maxDampingDelta * evaluateAbsorbingProfileFactor(draft.profile, u);
@@ -238,7 +353,9 @@ function SalDampingProfileChart({ draft }: { draft: AbsorbingBoundarySpecDraft }
   return (
     <div className="rounded-md border border-[var(--fm-border)] bg-[var(--fm-surface-2)] p-2">
       <div className="mb-1 flex items-center justify-between text-xs text-[var(--fm-text-muted)]">
-        <span>Effective damping profile &alpha;<sub>eff</sub>(d)</span>
+        <span>
+          Effective damping profile &alpha;<sub>eff</sub>(d)
+        </span>
         <span className="font-mono">
           {draft.baseAlpha.toFixed(4)} &rarr; {(draft.baseAlpha + draft.maxDampingDelta).toFixed(3)}
         </span>
@@ -257,16 +374,45 @@ function SalDampingProfileChart({ draft }: { draft: AbsorbingBoundarySpecDraft }
 export function ObjectAbsorbingBoundaryInspectorPanel({ selection }: InspectorPanelProps) {
   const kernel = useKernel();
   const scene = useSceneResource();
+  const effectiveScopeKey =
+    scene.sessionScopeKey ?? kernel.commands?.getSessionScopeKey?.() ?? null;
 
   const objectId =
     selection.ref?.type === "scene-object"
       ? selection.ref.objectId
-      : selection.objectId ?? "";
+      : (selection.objectId ?? "");
+
+  const mutationScopeKey = objectMaterialMutationScopeKey(effectiveScopeKey, objectId);
+  useSyncExternalStore(
+    objectMaterialMutationCoordinator.subscribe,
+    objectMaterialMutationCoordinator.getVersion,
+    objectMaterialMutationCoordinator.getVersion,
+  );
+  const activeCoordinatorOp = objectMaterialMutationCoordinator.getActive(mutationScopeKey);
 
   const sceneObj = useMemo(
-    () => scene.data?.objects?.find((o) => o.id === objectId),
+    () => scene.data?.objects?.find((o) => o.id === objectId) ?? null,
     [objectId, scene.data?.objects],
   );
+
+  const baseRevision = sceneResourceRevision(scene.data);
+  const [acknowledgedBase, setAcknowledgedBase] = useState<{
+    draft: AbsorbingBoundaryDraft;
+    objectId: string;
+    revision: number;
+  } | null>(null);
+  const [conflictNotice, setConflictNotice] = useState<string | null>(null);
+  const applyInFlightRef = useRef(false);
+
+  const parsedSceneDraft = useMemo(
+    () => absorbingBoundaryDraftFromObject(sceneObj),
+    [sceneObj],
+  );
+  const resourceRevision = baseRevision ?? -1;
+  const effectiveModelBase =
+    acknowledgedBase?.objectId === objectId && resourceRevision < acknowledgedBase.revision
+      ? acknowledgedBase.draft
+      : parsedSceneDraft;
 
   const baseAlpha = useMemo(() => {
     const matRef = sceneObj?.material_ref;
@@ -274,55 +420,94 @@ export function ObjectAbsorbingBoundaryInspectorPanel({ selection }: InspectorPa
     return typeof mat?.properties?.alpha === "number" ? mat.properties.alpha : 0.008;
   }, [scene.data?.materials, sceneObj?.material_ref]);
 
-  const regionOptions = useMemo(() => {
-    const base = [{ value: "", label: "Whole object volume" }];
-    for (const reg of sceneObj?.regions ?? []) {
-      const regId = String(reg.region_id ?? "");
-      if (!regId) continue;
-      base.push({
-        value: regId,
-        label: `${reg.name || regId} (${regId})`,
-      });
-    }
-    return base;
-  }, [sceneObj?.regions]);
+  const authoredRegions = useMemo(
+    () =>
+      (sceneObj?.regions ?? []).flatMap((reg) => {
+        const regId = String(reg.region_id ?? "");
+        if (!regId) return [];
+        const baseLabel =
+          reg.name && reg.name !== regId ? `${reg.name} (${regId})` : regId;
+        return [
+          {
+            id: regId,
+            label: `${baseLabel}${reg.enabled === false ? " (disabled)" : ""}`,
+          },
+        ];
+      }),
+    [sceneObj?.regions],
+  );
+
+  const regionIds = useMemo(() => authoredRegions.map((r) => r.id), [authoredRegions]);
 
   const baseline = useMemo<AbsorbingBoundarySpecDraft>(() => {
-    const parsed = absorbingBoundaryDraftFromObject(sceneObj as never);
-    const layers: SalLayerSpecItem[] = parsed.layers.map((l) => ({
-      _layerId: l.id,
-      name: l.name,
-      enabled: l.enabled,
-      targetRegionId: l.region,
-      contourKind: l.kind,
-      faces: l.faces.length > 0 ? l.faces : ["x+", "x-"],
-      totalWidth: Number(l.totalWidth) || 50e-9,
-      rampWidth: Number(l.rampWidth) || 40e-9,
-      maxDampingDelta: Number(l.maxDamping) || 0.5,
-      profile: l.profile || "smootherstep",
-      customExpression: l.expression || "u * u",
-      frame: l.frame === "universe" ? "universe" : "object",
-      point: [Number(l.point[0]) || 0, Number(l.point[1]) || 0, Number(l.point[2]) || 0],
-      orientation: [
-        Number(l.orientation[0]) || 1,
-        Number(l.orientation[1]) || 0,
-        Number(l.orientation[2]) || 0,
-      ],
-      radius: Number(l.radius) || 100e-9,
-      direction: l.direction,
-      boundaryRegionId: l.boundaryRegion,
-      distanceExpression: l.distanceExpression || "x",
-    }));
+    const layers = effectiveModelBase.layers.map(layerDraftToSpecItem);
     return {
       objectId,
       objectName: sceneObj?.name?.trim() || objectId || "Object",
       exists: Boolean(sceneObj),
+      salConfigured: effectiveModelBase.enabled,
+      legacy: effectiveModelBase.legacy,
       baseAlpha,
       activeLayerIndex: 0,
       layers,
       ...hydrateActiveLayerFields(layers, 0),
     };
-  }, [baseAlpha, objectId, sceneObj]);
+  }, [baseAlpha, effectiveModelBase, objectId, sceneObj]);
+
+  const targetRegionOptions = useMemo(() => {
+    const known = new Set(regionIds);
+    const missing = new Set<string>();
+    for (const l of baseline.layers) {
+      if (l.targetRegionId && !known.has(l.targetRegionId)) {
+        missing.add(l.targetRegionId);
+      }
+    }
+    return [
+      { value: "", label: "Whole object volume" },
+      ...[...missing].map((id) => ({ value: id, label: `Missing region (${id})` })),
+      ...authoredRegions.map((r) => ({ value: r.id, label: r.label })),
+    ];
+  }, [authoredRegions, baseline.layers, regionIds]);
+
+  const boundaryRegionOptions = useMemo(() => {
+    const known = new Set(regionIds);
+    const missing = new Set<string>();
+    for (const l of baseline.layers) {
+      if (l.boundaryRegionId && !known.has(l.boundaryRegionId)) {
+        missing.add(l.boundaryRegionId);
+      }
+    }
+    return [
+      ...[...missing].map((id) => ({ value: id, label: `Missing region (${id})` })),
+      ...authoredRegions.map((r) => ({ value: r.id, label: r.label })),
+    ];
+  }, [authoredRegions, baseline.layers, regionIds]);
+
+  const baselineRef = useRef(baseline);
+  useEffect(() => {
+    baselineRef.current = baseline;
+  }, [baseline]);
+
+  const buildHistoryContext = useCallback(() => {
+    const historyGeneration = kernel.authoringHistory?.getGeneration?.();
+    const baseCtx = createCommandContext("inspector", kernel, {
+      resourceData: { [MODEL_SCENE_PATH]: scene.data },
+      ...(effectiveScopeKey ? { sessionScopeKey: effectiveScopeKey } : {}),
+      isCurrentSessionScope: () => {
+        const activeScope = kernel.commands?.getSessionScopeKey?.();
+        if (effectiveScopeKey && activeScope && activeScope !== effectiveScopeKey) {
+          return false;
+        }
+        return (
+          historyGeneration === undefined ||
+          kernel.authoringHistory?.getGeneration?.() === historyGeneration
+        );
+      },
+    });
+    return typeof kernel.selection?.get === "function"
+      ? baseCtx
+      : { ...baseCtx, selection: undefined };
+  }, [effectiveScopeKey, kernel, scene.data]);
 
   const spec = useMemo<InspectorSpec<AbsorbingBoundarySpecDraft>>(
     () => ({
@@ -343,7 +528,7 @@ export function ObjectAbsorbingBoundaryInspectorPanel({ selection }: InspectorPa
         ],
         canFitView: baseline.exists,
         searchable: true,
-        ...(baseline.exists
+        ...(baseline.exists && baseline.salConfigured
           ? {
               deleteAction: {
                 label: "Remove Absorbing Boundary",
@@ -351,12 +536,29 @@ export function ObjectAbsorbingBoundaryInspectorPanel({ selection }: InspectorPa
                 confirmDescription:
                   "This disables and removes all absorbing damping layers from this object.",
                 onDelete: async (ctx) => {
-                  const updated = await kernel.api.model.patchObject(objectId, {
-                    base_revision: scene.data?.revision ?? null,
-                    absorbing_boundary: null,
-                  });
-                  const rev = fallbackRevision(updated.revision);
+                  const historyContext = buildHistoryContext();
+                  const updated = await runAuthoringMutationWithHistory(
+                    historyContext,
+                    `Remove absorbing boundary ${objectId}`,
+                    async ({ baseRevision: capturedRev }) => {
+                      const commitRev = capturedRev ?? baseRevision ?? null;
+                      return kernel.api.model.patchObject(
+                        objectId,
+                        {
+                          base_revision: commitRev,
+                          absorbing_boundary: null,
+                        },
+                        authoringWriteOptions(commitRev, effectiveScopeKey),
+                      );
+                    },
+                  );
+                  const rev = fallbackRevision(updated.revision ?? baseRevision);
                   publishCommittedSceneResource(kernel.resources, updated, rev);
+                  if (typeof rev === "number") {
+                    invalidateAuthoringMutationDependents(kernel.resources, "material", rev);
+                  } else {
+                    kernel.resources.invalidate(MODEL_SCENE_PATH, rev);
+                  }
                   ctx.selectNode(
                     buildObjectSelection(objectId, "object.root", baseline.objectName),
                   );
@@ -376,15 +578,78 @@ export function ObjectAbsorbingBoundaryInspectorPanel({ selection }: InspectorPa
           label: `${d.layers.length} layer${d.layers.length === 1 ? "" : "s"}`,
         }),
       },
-      facts: (d): readonly InspectorFact[] => [
-        { id: "width", label: "Total width", value: formatLengthAuto(d.totalWidth) },
-        { id: "ramp", label: "Ramp width", value: formatLengthAuto(d.rampWidth) },
-        {
-          id: "peak",
-          label: "Peak \u03b1",
-          value: (d.baseAlpha + d.maxDampingDelta).toFixed(3),
-        },
-      ],
+      facts: (d): readonly InspectorFact[] => {
+        const plateauM = d.totalWidth - d.rampWidth;
+        return [
+          { id: "width", label: "Total width", value: formatLengthAuto(d.totalWidth) },
+          { id: "ramp", label: "Ramp width", value: formatLengthAuto(d.rampWidth) },
+          {
+            id: "plateau",
+            label: "Plateau",
+            value: plateauM >= 0 ? formatLengthAuto(plateauM) : null,
+          },
+          {
+            id: "peak",
+            label: "Peak \u03b1",
+            value: (d.baseAlpha + d.maxDampingDelta).toFixed(3),
+          },
+        ];
+      },
+      notices: (d): readonly InspectorNotice<AbsorbingBoundarySpecDraft>[] => {
+        const list: InspectorNotice<AbsorbingBoundarySpecDraft>[] = [];
+        if (conflictNotice) {
+          list.push({
+            id: "sal-conflict",
+            tone: "err",
+            title: "Concurrent revision conflict",
+            text: conflictNotice,
+            quickFix: {
+              label: "Reload latest scene",
+              onApply: async (ctx) => {
+                setConflictNotice(null);
+                setAcknowledgedBase(null);
+                await scene.refetch?.();
+                ctx.patchDraft(baselineRef.current);
+              },
+            },
+          });
+        }
+
+        const modelDraft = toAbsorbingBoundaryModelDraft(d, baseline);
+        const validation = buildAbsorbingBoundaryPatch(modelDraft, baseRevision, regionIds);
+        const activeLayer = d.layers[d.activeLayerIndex] ?? d.layers[0];
+        if (
+          "error" in validation &&
+          validation.layerId &&
+          validation.layerId !== activeLayer?._layerId
+        ) {
+          const offendingIdx = d.layers.findIndex((l) => l._layerId === validation.layerId);
+          const offendingName =
+            (offendingIdx >= 0 ? d.layers[offendingIdx]?.name : null) || "Inactive layer";
+          list.push({
+            id: `sal-inactive-layer-${validation.layerId}`,
+            tone: "err",
+            title: `${offendingName} validation error`,
+            text: `${offendingName} \u2014 ${validation.error}`,
+            ...(offendingIdx >= 0
+              ? {
+                  quickFix: {
+                    label: `Inspect ${offendingName}`,
+                    onApply: (ctx) => {
+                      const synced = syncActiveLayerIntoList(ctx.draft);
+                      ctx.patchDraft({
+                        layers: synced,
+                        activeLayerIndex: offendingIdx,
+                        ...hydrateActiveLayerFields(synced, offendingIdx),
+                      });
+                    },
+                  },
+                }
+              : {}),
+          });
+        }
+        return list;
+      },
       sections: [
         {
           id: "sal-layers-bar",
@@ -397,24 +662,30 @@ export function ObjectAbsorbingBoundaryInspectorPanel({ selection }: InspectorPa
               wide: true,
               render: (ctx) => (
                 <div className="flex flex-wrap items-center gap-1.5" data-slot="sal-layer-pills">
-                  {ctx.draft.layers.map((layer, idx) => (
-                    <Button
-                      key={layer._layerId}
-                      size="sm"
-                      type="button"
-                      variant={idx === ctx.draft.activeLayerIndex ? "primary" : "secondary"}
-                      onClick={() => {
-                        const synced = syncActiveLayerIntoList(ctx.draft);
-                        ctx.patchDraft({
-                          layers: synced,
-                          activeLayerIndex: idx,
-                          ...hydrateActiveLayerFields(synced, idx),
-                        });
-                      }}
-                    >
-                      {idx === ctx.draft.activeLayerIndex ? ctx.draft.layerName : layer.name}
-                    </Button>
-                  ))}
+                  {ctx.draft.layers.map((layer, idx) => {
+                    const isSelected = idx === ctx.draft.activeLayerIndex;
+                    const displayName = isSelected ? ctx.draft.layerName : layer.name;
+                    const isEnabled = isSelected ? ctx.draft.layerEnabled : layer.enabled;
+                    return (
+                      <Button
+                        key={layer._layerId}
+                        size="sm"
+                        type="button"
+                        variant={isSelected ? "primary" : "secondary"}
+                        onClick={() => {
+                          const synced = syncActiveLayerIntoList(ctx.draft);
+                          ctx.patchDraft({
+                            layers: synced,
+                            activeLayerIndex: idx,
+                            ...hydrateActiveLayerFields(synced, idx),
+                          });
+                        }}
+                      >
+                        {displayName || "Unnamed layer"}
+                        {isEnabled ? "" : " (disabled)"}
+                      </Button>
+                    );
+                  })}
                   <Button
                     size="sm"
                     type="button"
@@ -422,13 +693,12 @@ export function ObjectAbsorbingBoundaryInspectorPanel({ selection }: InspectorPa
                     onClick={() => {
                       const synced = syncActiveLayerIntoList(ctx.draft);
                       const nextIdx = synced.length;
-                      const created: SalLayerSpecItem = {
-                        ...synced[0]!,
-                        _layerId: `layer-${nextIdx + 1}-${Date.now().toString(36).slice(-3)}`,
-                        name: `Layer ${nextIdx + 1}`,
-                      };
+                      const newId = nextUniqueLayerId(synced);
+                      const defaultLayer = createLayerDraft(newId, `Layer ${nextIdx + 1}`);
+                      const created = layerDraftToSpecItem(defaultLayer);
                       const nextLayers = [...synced, created];
                       ctx.patchDraft({
+                        legacy: false,
                         layers: nextLayers,
                         activeLayerIndex: nextIdx,
                         ...hydrateActiveLayerFields(nextLayers, nextIdx),
@@ -436,7 +706,37 @@ export function ObjectAbsorbingBoundaryInspectorPanel({ selection }: InspectorPa
                     }}
                   >
                     <Plus aria-hidden="true" size={12} />
-                    <span>Add Layer</span>
+                    <span>Add layer</span>
+                  </Button>
+                  <Button
+                    size="sm"
+                    type="button"
+                    variant="ghost"
+                    onClick={() => {
+                      const synced = syncActiveLayerIntoList(ctx.draft);
+                      const active = synced[ctx.draft.activeLayerIndex] ?? synced[0];
+                      if (!active) return;
+                      const nextIdx = synced.length;
+                      const copyId = nextUniqueLayerId(synced);
+                      const duplicated: SalLayerSpecItem = {
+                        ...active,
+                        _layerId: copyId,
+                        faces: [...active.faces],
+                        point: [...active.point],
+                        orientation: [...active.orientation],
+                        name: `${active.name || "Layer"} copy`,
+                      };
+                      const nextLayers = [...synced, duplicated];
+                      ctx.patchDraft({
+                        legacy: false,
+                        layers: nextLayers,
+                        activeLayerIndex: nextIdx,
+                        ...hydrateActiveLayerFields(nextLayers, nextIdx),
+                      });
+                    }}
+                  >
+                    <Copy aria-hidden="true" size={12} />
+                    <span>Duplicate layer</span>
                   </Button>
                   {ctx.draft.layers.length > 1 ? (
                     <Button
@@ -451,6 +751,7 @@ export function ObjectAbsorbingBoundaryInspectorPanel({ selection }: InspectorPa
                         );
                         const nextIdx = Math.max(0, ctx.draft.activeLayerIndex - 1);
                         ctx.patchDraft({
+                          legacy: false,
                           layers: filtered,
                           activeLayerIndex: nextIdx,
                           ...hydrateActiveLayerFields(filtered, nextIdx),
@@ -467,7 +768,7 @@ export function ObjectAbsorbingBoundaryInspectorPanel({ selection }: InspectorPa
               key: "layerName",
               type: "text",
               label: "Layer name",
-              validate: (v) => (v.trim().length === 0 ? "Layer name is required." : null),
+              validate: (v) => (v.trim().length === 0 ? "Enter a layer name." : null),
             },
             {
               key: "layerEnabled",
@@ -478,7 +779,11 @@ export function ObjectAbsorbingBoundaryInspectorPanel({ selection }: InspectorPa
               key: "targetRegionId",
               type: "select",
               label: "Target region",
-              options: regionOptions,
+              options: targetRegionOptions,
+              validate: (v) =>
+                v && !regionIds.includes(v)
+                  ? "Choose an existing target region or the whole object."
+                  : null,
             },
           ],
         },
@@ -494,7 +799,7 @@ export function ObjectAbsorbingBoundaryInspectorPanel({ selection }: InspectorPa
               label: "Contour geometry",
               structural: true,
               options: [
-                { value: "faces", label: "Bounding-box faces (x±, y±, z±)" },
+                { value: "faces", label: "Bounding-box faces (x\u00b1, y\u00b1, z\u00b1)" },
                 { value: "plane", label: "Arbitrary cut plane" },
                 { value: "cylinder", label: "Cylindrical radial shell" },
                 { value: "sphere", label: "Spherical radial shell" },
@@ -506,6 +811,7 @@ export function ObjectAbsorbingBoundaryInspectorPanel({ selection }: InspectorPa
               key: "frame",
               type: "segmented",
               label: "Coordinate frame",
+              showWhen: (d) => d.contourKind !== "region_boundary",
               options: [
                 { value: "object", label: "Object local" },
                 { value: "universe", label: "Universe world" },
@@ -540,9 +846,33 @@ export function ObjectAbsorbingBoundaryInspectorPanel({ selection }: InspectorPa
               label: "Normal / cylinder axis",
               axisPresets: true,
               normalizeAction: true,
+              hint: "For planes, damping increases along the normal toward the cut plane.",
               showWhen: (d) => d.contourKind === "plane" || d.contourKind === "cylinder",
               validate: (vec) =>
-                vectorNorm(vec) < 1e-12 ? "Direction vector must be non-zero." : null,
+                vectorNorm(vec) < 1e-12 ? "Enter a finite nonzero direction vector." : null,
+            },
+            {
+              type: "custom",
+              showWhen: (d) => d.contourKind === "plane",
+              render: (ctx) => (
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-xs text-[var(--fm-text-muted)]">
+                    Damping increases along the normal toward the plane.
+                  </span>
+                  <Button
+                    size="sm"
+                    type="button"
+                    variant="secondary"
+                    onClick={() => {
+                      const [ox, oy, oz] = ctx.draft.orientation;
+                      ctx.setField("orientation", [-ox || 0, -oy || 0, -oz || 0]);
+                    }}
+                  >
+                    <FlipHorizontal2 aria-hidden="true" size={12} />
+                    <span>Reverse normal</span>
+                  </Button>
+                </div>
+              ),
             },
             {
               key: "radius",
@@ -554,6 +884,15 @@ export function ObjectAbsorbingBoundaryInspectorPanel({ selection }: InspectorPa
               min: 0,
               minExclusive: true,
               showWhen: (d) => d.contourKind === "cylinder" || d.contourKind === "sphere",
+              validate: (v, d) => {
+                if (!Number.isFinite(v) || v <= 0) {
+                  return "Radius must be finite and positive.";
+                }
+                if (d.direction === "outward" && v < d.totalWidth) {
+                  return "An outward-rising layer needs a radius at least as large as its total width.";
+                }
+                return null;
+              },
             },
             {
               key: "direction",
@@ -570,45 +909,59 @@ export function ObjectAbsorbingBoundaryInspectorPanel({ selection }: InspectorPa
               type: "select",
               label: "Boundary reference region",
               showWhen: (d) => d.contourKind === "region_boundary",
-              options: regionOptions.filter((r) => r.value !== ""),
+              options: boundaryRegionOptions,
+              hint:
+                authoredRegions.length > 0
+                  ? "Measures inward distance in the selected region's coordinate frame."
+                  : "Create a region under this object's Regions node to anchor by boundary.",
               validate: (v) =>
-                !v ? "Select an authored region whose boundary anchors the layer." : null,
+                !v || !regionIds.includes(v)
+                  ? "Choose an existing region whose boundary the layer follows."
+                  : null,
             },
             {
               key: "distanceExpression",
               type: "expression",
               label: "Signed distance expression d(x, y, z)",
+              placeholder: "5e-7 - sqrt(x**2 + y**2)",
               allowedVariables: ["x", "y", "z"],
+              hint: "Coordinates and distance are in metres; layer occupies 0 \u2264 d \u2264 total width.",
               showWhen: (d) => d.contourKind === "expression",
-              validate: (v) =>
-                v.trim().length === 0 ? "Distance expression is required." : null,
+              validate: (v) => absorbingExpressionError(v, "distance") ?? null,
             },
             {
               key: "totalWidth",
               type: "quantity",
               label: "Total absorbing width",
-              symbol: <>w<sub>tot</sub></>,
+              symbol: (
+                <>
+                  w<sub>tot</sub>
+                </>
+              ),
               units: LENGTH_UNITS,
               defaultDisplayUnit: "nm",
               min: 0,
               minExclusive: true,
-              validate: (v) => (v > 0 ? null : "Total width must be positive."),
+              validate: (v) =>
+                Number.isFinite(v) && v > 0 ? null : "Total width must be a finite positive number.",
             },
             {
               key: "rampWidth",
               type: "quantity",
               label: "Ramp rise width",
-              symbol: <>w<sub>ramp</sub></>,
+              symbol: (
+                <>
+                  w<sub>ramp</sub>
+                </>
+              ),
               units: LENGTH_UNITS,
               defaultDisplayUnit: "nm",
               min: 0,
               minExclusive: true,
               validate: (v, d) =>
-                v <= 0
-                  ? "Ramp width must be positive."
-                  : v > d.totalWidth
-                    ? "Ramp width cannot exceed total absorbing width."
-                    : null,
+                !Number.isFinite(v) || v <= 0 || v > d.totalWidth
+                  ? "Ramp width must be positive and no greater than total width."
+                  : null,
             },
           ],
         },
@@ -622,10 +975,18 @@ export function ObjectAbsorbingBoundaryInspectorPanel({ selection }: InspectorPa
               key: "maxDampingDelta",
               type: "number",
               label: "Maximum damping increment",
-              symbol: <>&Delta;&alpha;<sub>max</sub></>,
-              min: 0.001,
+              symbol: (
+                <>
+                  &Delta;&alpha;<sub>max</sub>
+                </>
+              ),
+              hint: "Added to local material damping; set 0 for a diagnostic zero-damping layer.",
+              min: 0,
               step: 0.05,
-              validate: (v) => (v > 0 ? null : "Δα_max must be strictly positive."),
+              validate: (v) =>
+                Number.isFinite(v) && v >= 0
+                  ? null
+                  : "Maximum damping must be finite and non-negative.",
             },
             {
               key: "profile",
@@ -640,10 +1001,12 @@ export function ObjectAbsorbingBoundaryInspectorPanel({ selection }: InspectorPa
             {
               key: "customExpression",
               type: "expression",
-              label: "Custom profile f(u) on u ∈ [0, 1]",
+              label: "Custom profile f(u) on u \u2208 [0, 1]",
+              placeholder: "u**3",
               allowedVariables: ["u"],
+              hint: "Must stay within [0, 1] with f(0) = 0 and f(1) = 1.",
               showWhen: (d) => d.profile === "custom",
-              validate: (v) => (v.trim().length === 0 ? "Profile expression is required." : null),
+              validate: (v) => absorbingExpressionError(v, "profile") ?? null,
             },
             {
               type: "custom",
@@ -655,76 +1018,156 @@ export function ObjectAbsorbingBoundaryInspectorPanel({ selection }: InspectorPa
       ],
       commitBar: {
         mode: "staged",
-        cleanMessage: () => "Absorbing boundary configuration matches SceneDocument",
-        lockReason: (d) => (!d.exists ? "Select an existing scene object." : null),
-        onApply: async (draft) => {
-          const allLayers = syncActiveLayerIntoList(draft);
-          const serializedLayers = allLayers.map((l) => {
-            let geometry: Record<string, unknown>;
-            switch (l.contourKind) {
-              case "plane":
-                geometry = {
-                  kind: "plane",
-                  origin: [...l.point],
-                  normal: normalizeVector3(l.orientation, [1, 0, 0]),
-                };
-                break;
-              case "cylinder":
-                geometry = {
-                  kind: "cylinder",
-                  center: [...l.point],
-                  axis: normalizeVector3(l.orientation, [0, 0, 1]),
-                  radius_m: l.radius,
-                  direction: l.direction,
-                };
-                break;
-              case "sphere":
-                geometry = {
-                  kind: "sphere",
-                  center: [...l.point],
-                  radius_m: l.radius,
-                  direction: l.direction,
-                };
-                break;
-              case "region_boundary":
-                geometry = { kind: "region_boundary", region_id: l.boundaryRegionId };
-                break;
-              case "expression":
-                geometry = { kind: "expression", expression: l.distanceExpression.trim() };
-                break;
-              default:
-                geometry = { kind: "faces", faces: [...l.faces] };
-                break;
-            }
-            return {
-              layer_id: l._layerId,
-              name: l.name.trim(),
-              enabled: l.enabled,
-              ...(l.targetRegionId ? { region_id: l.targetRegionId } : {}),
-              total_width_m: l.totalWidth,
-              ramp_width_m: l.rampWidth,
-              max_damping: l.maxDampingDelta,
-              profile: l.profile,
-              ...(l.profile === "custom" ? { expression: l.customExpression.trim() } : {}),
-              frame: l.frame,
-              geometry,
-            };
-          });
+        allowCleanApply: (_, base) => !base.salConfigured,
+        applyLabel: (_, dirty) =>
+          !baseline.salConfigured && !dirty ? "Enable Absorbing Boundary" : "Apply",
+        cleanMessage: (d) =>
+          d.salConfigured
+            ? "Absorbing boundary configuration matches SceneDocument"
+            : "Ready to enable default spatial absorbing boundary",
+        lockReason: (d) => {
+          if (!d.exists) return "Select an existing scene object.";
+          if (activeCoordinatorOp) {
+            return `${activeCoordinatorOp.operation} is still saving. Wait for its acknowledgement before starting another update.`;
+          }
+          if (conflictNotice) return conflictNotice;
+          const modelDraft = toAbsorbingBoundaryModelDraft(d, baseline);
+          const validation = buildAbsorbingBoundaryPatch(modelDraft, baseRevision, regionIds);
+          const activeLayer = d.layers[d.activeLayerIndex] ?? d.layers[0];
+          if (
+            "error" in validation &&
+            validation.layerId &&
+            validation.layerId !== activeLayer?._layerId
+          ) {
+            const offendingName =
+              d.layers.find((l) => l._layerId === validation.layerId)?.name || "Layer";
+            return `${offendingName} \u2014 ${validation.error}`;
+          }
+          return null;
+        },
+        onRevert: () => {
+          setConflictNotice(null);
+        },
+        onApply: async (draft, currentBaseline) => {
+          if (applyInFlightRef.current) return false;
+          const modelDraft = toAbsorbingBoundaryModelDraft(draft, currentBaseline);
+          const precheck = buildAbsorbingBoundaryPatch(modelDraft, baseRevision, regionIds);
+          if ("error" in precheck) {
+            throw new Error(precheck.error);
+          }
 
-          const updated = await kernel.api.model.patchObject(objectId, {
-            base_revision: scene.data?.revision ?? null,
-            absorbing_boundary: {
-              layers: serializedLayers,
-            } as unknown as AbsorbingBoundaryConfig,
-          });
-          const rev = fallbackRevision(updated.revision);
-          publishCommittedSceneResource(kernel.resources, updated, rev);
-          kernel.resources.invalidate(MODEL_SCENE_PATH, rev);
-          return true;
+          const historyContext = buildHistoryContext();
+          const lease = objectMaterialMutationCoordinator.acquire(
+            mutationScopeKey,
+            "Absorbing boundary",
+          );
+          if (!lease) {
+            throw new Error(
+              "Another material or absorbing-boundary update is still saving. Wait for its acknowledgement.",
+            );
+          }
+
+          applyInFlightRef.current = true;
+          try {
+            const response = await runAuthoringMutationWithHistory(
+              historyContext,
+              `Update absorbing boundary ${objectId}`,
+              async ({ before, baseRevision: capturedRev }) => {
+                const commitRevision = capturedRev ?? baseRevision ?? null;
+                let commitRegionIds = regionIds;
+                if (
+                  before &&
+                  typeof capturedRev === "number" &&
+                  typeof baseRevision === "number" &&
+                  capturedRev !== baseRevision
+                ) {
+                  const currentObj = before.objects?.find((c) => c.id === objectId);
+                  const currentKey = absorbingBoundaryDraftKey(
+                    absorbingBoundaryDraftFromObject(currentObj),
+                  );
+                  if (!currentObj || currentKey !== absorbingBoundaryDraftKey(effectiveModelBase)) {
+                    throw new Error(
+                      "The absorbing boundary changed in another edit. Reload the latest scene before applying.",
+                    );
+                  }
+                  commitRegionIds = (currentObj.regions ?? []).flatMap((r) =>
+                    r.region_id ? [r.region_id] : [],
+                  );
+                }
+                const built = buildAbsorbingBoundaryPatch(
+                  modelDraft,
+                  commitRevision,
+                  commitRegionIds,
+                );
+                if ("error" in built) {
+                  throw new Error(built.error);
+                }
+                return kernel.api.model.patchObject(
+                  objectId,
+                  built.patch,
+                  authoringWriteOptions(commitRevision, effectiveScopeKey),
+                );
+              },
+            );
+
+            if (historyContext.isCurrentSessionScope?.() === false) {
+              return false;
+            }
+
+            setConflictNotice(null);
+            const revNum =
+              typeof response.revision === "number"
+                ? response.revision
+                : typeof baseRevision === "number"
+                  ? baseRevision + 1
+                  : null;
+            const savedObject = response.objects?.find((c) => c.id === objectId);
+            const acknowledged = absorbingBoundaryDraftFromObject(savedObject ?? precheck.patch);
+            if (revNum !== null) {
+              setAcknowledgedBase({ objectId, revision: revNum, draft: acknowledged });
+            }
+            const rev = fallbackRevision(response.revision ?? revNum);
+            publishCommittedSceneResource(kernel.resources, response, rev);
+            if (typeof rev === "number") {
+              invalidateAuthoringMutationDependents(kernel.resources, "material", rev);
+            } else {
+              kernel.resources.invalidate(MODEL_SCENE_PATH, rev);
+            }
+            return true;
+          } catch (error) {
+            if (isConflictError(error)) {
+              const message =
+                error instanceof Error
+                  ? error.message
+                  : "The absorbing boundary changed in another edit. Reload the latest scene before applying.";
+              setConflictNotice(message);
+              void scene.refetch?.();
+            }
+            throw error;
+          } finally {
+            applyInFlightRef.current = false;
+            objectMaterialMutationCoordinator.finish(lease);
+          }
         },
       },
     }),
-    [baseline.exists, baseline.objectName, kernel.api.model, kernel.resources, objectId, regionOptions, scene.data?.revision],
+    [
+      activeCoordinatorOp,
+      authoredRegions.length,
+      baseRevision,
+      baseline,
+      boundaryRegionOptions,
+      buildHistoryContext,
+      conflictNotice,
+      effectiveModelBase,
+      effectiveScopeKey,
+      kernel,
+      mutationScopeKey,
+      objectId,
+      regionIds,
+      scene,
+      targetRegionOptions,
+    ],
   );
 
   return <SpecInspectorHost baseline={baseline} selection={selection} spec={spec} />;

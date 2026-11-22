@@ -1,12 +1,19 @@
 "use client";
 
 import {
+  Activity,
   ArrowRight,
   Box,
   Layers,
   Shield,
 } from "lucide-react";
-import { useCallback, useMemo } from "react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useSyncExternalStore,
+} from "react";
 
 import {
   MODEL_FROZEN_SPINS_PATH,
@@ -15,17 +22,49 @@ import {
   MODEL_READINESS_PATH,
   MODEL_SCENE_PATH,
 } from "@/kernel/api/apiPaths";
-import type { AbsorbingBoundaryConfig } from "@/kernel/api/apiTypes";
+import type { JsonObject, ObjectMetricsResource, SceneResource } from "@/kernel/api/apiTypes";
+import {
+  authoringWriteOptions,
+  runAuthoringMutationWithHistory,
+} from "@/kernel/authoring/authoringHistoryMutation";
+import {
+  acknowledgedAuthoringSceneRevision,
+  invalidateAuthoringMutationDependents,
+} from "@/kernel/authoring/authoringMutationInvalidation";
+import { patchObjectGeometryTransaction } from "@/kernel/authoring/geometryLifecycleCommands";
+import {
+  geometryDraftGeometryEquals,
+  geometryDraftTranslationEquals,
+  geometryObjectEditSessionTargetKey,
+  resolveCommittedGeometryObjectDraft,
+} from "@/kernel/authoring/object-edit/objectEditDraftModel";
+import type { ObjectEditSessionController } from "@/kernel/authoring/object-edit/ObjectEditSessionController";
+import type {
+  GeometryObjectDraft,
+  ObjectEditSessionSnapshot,
+} from "@/kernel/authoring/object-edit/objectEditTypes";
+import { canonicalDraftInSelectedUnits } from "@/kernel/authoring/object-edit/quantityDraftFields";
+import {
+  deleteObjectWithHistory,
+  patchObjectIdentityWithHistory,
+} from "@/kernel/authoring/objectGeneralMutation";
+import { createCommandContext } from "@/kernel/commands/commandContext";
 import { useKernel } from "@/kernel/KernelContext";
 import { resolveObjectExtensionsSectionModel } from "@/kernel/object-extensions/ObjectExtensionsSectionModel";
 import { useObjectExtensionActivation } from "@/kernel/object-extensions/useObjectExtensionActivation";
-import { useFrozenSpinsCollectionResource } from "@/kernel/resources/frozenSpinsResources";
+import {
+  FROZEN_SPINS_ACTIVE_PREVIEW_RESOURCE_KEY,
+  frozenSpinsDefinitionResourceKey,
+  useFrozenSpinsCollectionResource,
+} from "@/kernel/resources/frozenSpinsResources";
 import {
   MESH_BUILD_CURRENT_RESOURCE_KEY,
   MESH_BUILD_LATEST_SUCCESSFUL_RESOURCE_KEY,
   publishCommittedSceneResource,
   useSceneResource,
 } from "@/kernel/resources/geometryLifecycleResources";
+import { useObjectMetricsResource } from "@/kernel/resources/studyRuntimeResources";
+import { hasEmptyObjectMagneticModel } from "@/shared/domain/physics/objectMagneticModel";
 import { Badge } from "@/shared/ui/Badge";
 import { Button } from "@/shared/ui/Button";
 import { Switch } from "@/shared/ui/Switch";
@@ -38,25 +77,77 @@ import type {
   InspectorTone,
 } from "../../template";
 import {
+  buildGeometryDraftPatch,
+  buildTransformDraftPatch,
+  mergeGeometryDescriptor,
+} from "../geometryObjectPanelModel";
+import {
   buildObjectSelection,
   buildRootSelection,
   fallbackRevision,
   formatSpanAuto,
   formatVolumeAuto,
   InspectorShortcutCards,
+  type InspectorShortcutCardItem,
   type SceneObjectItem as SceneObject,
   SpecInspectorHost,
-  type InspectorShortcutCardItem,
 } from "../model-roots/SpecInspectorHost";
+import {
+  buildAbsorbingBoundaryPatch,
+  createLayerDraft,
+} from "../ObjectAbsorbingBoundaryPanelModel";
+import {
+  objectEditMetadataEquals,
+  rebaseDirtyDraftOntoUnchangedObject,
+  reconcileObjectEditAck,
+  reconcileObjectIdentityAck,
+} from "../objectEditAckReconciliation";
+
+/* ── Safe Optional `objectEditSession` Subscription ── */
+
+const EMPTY_OBJECT_EDIT_SNAPSHOT: ObjectEditSessionSnapshot<GeometryObjectDraft> = {
+  applyOperationId: null,
+  dirty: false,
+  draft: null,
+  editVersion: 0,
+  identity: null,
+};
+const NOOP_SUBSCRIBE = () => () => undefined;
+const GET_EMPTY_SNAPSHOT = () => EMPTY_OBJECT_EDIT_SNAPSHOT;
+
+function useOptionalObjectEditSnapshot(
+  controller: ObjectEditSessionController<GeometryObjectDraft> | undefined,
+): ObjectEditSessionSnapshot<GeometryObjectDraft> {
+  return useSyncExternalStore(
+    controller ? controller.subscribe : NOOP_SUBSCRIBE,
+    controller ? controller.getSnapshot : GET_EMPTY_SNAPSHOT,
+    controller ? controller.getServerSnapshot : GET_EMPTY_SNAPSHOT,
+  );
+}
 
 /* ── Pure Helpers ── */
 
 type CanonicalObjectRole = "magnetic_body" | "conductor" | "spacer_dielectric" | "antenna";
 
+interface FormattedObjectMetrics {
+  readonly statusLabel: string;
+  readonly sample: string;
+  readonly source: string;
+  readonly magnetization: string;
+  readonly exchange: string;
+  readonly demag: string;
+  readonly zeeman: string;
+  readonly anisotropy: string;
+  readonly dmi: string;
+  readonly total: string;
+}
+
 interface ObjectOverviewDraft {
   objectId: string;
   exists: boolean;
+  antennaWithoutMagnetization: boolean;
   name: string;
+  regionName: string;
   role: CanonicalObjectRole;
   visible: boolean;
   notes: string;
@@ -71,6 +162,7 @@ interface ObjectOverviewDraft {
   frozenConstraintId: string | null;
   hasTopologicalCharge: boolean;
   dependentCouplingCount: number;
+  metrics: FormattedObjectMetrics;
 }
 
 function normalizeRole(sceneObj: SceneObject | undefined): CanonicalObjectRole {
@@ -99,6 +191,95 @@ function roleKindLabel(role: CanonicalObjectRole): string {
     default:
       return "Magnetic object";
   }
+}
+
+function optionalObjectReference(value: string): string | null {
+  const normalized = value.trim();
+  return normalized && normalized.toLowerCase() !== "unassigned" ? normalized : null;
+}
+
+function selectorReferencesObject(selector: unknown, targetObjectId: string): boolean {
+  if (!selector || typeof selector !== "object" || !targetObjectId) return false;
+  const rec = selector as Record<string, unknown>;
+  if (
+    (rec.kind === "in_object" || rec.kind === "in_region") &&
+    rec.object_id === targetObjectId
+  ) {
+    return true;
+  }
+  if (rec.kind === "not") {
+    const inner = rec.expression ?? rec.operand ?? rec.selector;
+    return selectorReferencesObject(inner, targetObjectId);
+  }
+  if (rec.kind === "and" || rec.kind === "or" || rec.kind === "xor") {
+    const children = rec.expressions ?? rec.operands ?? rec.items;
+    return (
+      Array.isArray(children) &&
+      children.some((child) => selectorReferencesObject(child, targetObjectId))
+    );
+  }
+  return false;
+}
+
+function formatEnergyJoules(value: unknown): string {
+  return typeof value === "number" && Number.isFinite(value)
+    ? `${value.toExponential(6)} J`
+    : "\u2014";
+}
+
+function formatObjectMetrics(
+  metrics: ObjectMetricsResource | null | undefined,
+  fetchStatus: string,
+): FormattedObjectMetrics {
+  if (!metrics) {
+    return {
+      statusLabel: fetchStatus === "loading" ? "Loading" : "Awaiting sample",
+      sample: "Initial / awaiting solver sample",
+      source: "\u2014",
+      magnetization: "\u2014",
+      exchange: "\u2014",
+      demag: "\u2014",
+      zeeman: "\u2014",
+      anisotropy: "\u2014",
+      dmi: "\u2014",
+      total: "\u2014",
+    };
+  }
+  const step = typeof metrics.step === "number" && Number.isFinite(metrics.step) ? metrics.step : null;
+  const time =
+    typeof metrics.time_seconds === "number" && Number.isFinite(metrics.time_seconds)
+      ? metrics.time_seconds
+      : null;
+  const avg = metrics.magnetization_average;
+  const hasAvg =
+    avg &&
+    typeof avg.mx === "number" &&
+    Number.isFinite(avg.mx) &&
+    typeof avg.my === "number" &&
+    Number.isFinite(avg.my) &&
+    typeof avg.mz === "number" &&
+    Number.isFinite(avg.mz);
+
+  return {
+    statusLabel: metrics.has_solver_sample ? "Computed" : "Initial",
+    sample:
+      step !== null && time !== null
+        ? `step ${step} @ ${time.toExponential(6)} s`
+        : "Initial state",
+    source:
+      typeof metrics.source === "string" && metrics.source.trim().length > 0
+        ? metrics.source
+        : "\u2014",
+    magnetization: hasAvg
+      ? `(${avg.mx.toFixed(6)}, ${avg.my.toFixed(6)}, ${avg.mz.toFixed(6)})`
+      : "\u2014",
+    exchange: formatEnergyJoules(metrics.energies?.exchange),
+    demag: formatEnergyJoules(metrics.energies?.demag),
+    zeeman: formatEnergyJoules(metrics.energies?.zeeman),
+    anisotropy: formatEnergyJoules(metrics.energies?.anisotropy),
+    dmi: formatEnergyJoules(metrics.energies?.dmi),
+    total: formatEnergyJoules(metrics.energies?.total),
+  };
 }
 
 function estimateGeometryMetrics(
@@ -141,10 +322,7 @@ function estimateGeometryMetrics(
       volumeText: formatVolumeAuto((4 / 3) * Math.PI * r * r * r),
     };
   }
-  if (
-    (lower === "ellipsoid") &&
-    Array.isArray(params.radii ?? params.size)
-  ) {
+  if (lower === "ellipsoid" && Array.isArray(params.radii ?? params.size)) {
     const arr = (params.radii ?? params.size) as unknown[];
     const rx = Number(arr[0]) || 0;
     const ry = Number(arr[1]) || 0;
@@ -160,10 +338,7 @@ function estimateGeometryMetrics(
       volumeText: formatVolumeAuto(vol),
     };
   }
-  if (
-    lower === "archwaveguide" ||
-    lower === "arch_waveguide"
-  ) {
+  if (lower === "archwaveguide" || lower === "arch_waveguide") {
     const l = Number(params.length) || 0;
     const w = Number(params.width) || 0;
     const h = Number(params.height) || 0;
@@ -194,20 +369,53 @@ function resolveMeshPill(tags: unknown): { tone: InspectorTone; label: string } 
   return { tone: "info", label: "Authored" };
 }
 
-function buildDefaultSalConfig(objectId: string): AbsorbingBoundaryConfig {
-  return {
-    layers: [
-      {
-        id: `sal-${objectId}`,
-        enabled: true,
-        target_region: objectId,
-        alpha_max_delta: 0.5,
-        width_m: 25e-9,
-        profile: { kind: "polynomial", exponent: 3 },
-        geometry: { kind: "outer_contour" },
-      },
-    ],
-  } as unknown as AbsorbingBoundaryConfig;
+function reconcileGeneralGeometryAck(
+  current: Parameters<typeof reconcileObjectEditAck>[0],
+  submitted: Parameters<typeof reconcileObjectEditAck>[1],
+  canonical: Parameters<typeof reconcileObjectEditAck>[2],
+): ReturnType<typeof reconcileObjectEditAck> {
+  return reconcileObjectEditAck(
+    current,
+    {
+      ...submitted,
+      material: canonical.material,
+      name: canonical.name,
+      notes: canonical.notes,
+      region: canonical.region,
+    },
+    canonical,
+  );
+}
+
+function invalidateObjectOverviewResources(
+  resources: ReturnType<typeof useKernel>["resources"],
+  revision: number | string,
+  committedScene?: SceneResource | null,
+  sessionScopeKey?: string | null,
+  resourceCacheScope?: string | null,
+): void {
+  if (committedScene) {
+    publishCommittedSceneResource(
+      resources,
+      committedScene,
+      revision,
+      undefined,
+      false,
+      sessionScopeKey,
+      resourceCacheScope,
+    );
+  } else {
+    resources.invalidate(MODEL_SCENE_PATH, revision);
+  }
+  if (typeof revision === "number") {
+    invalidateAuthoringMutationDependents(resources, "geometry", revision);
+  } else {
+    resources.invalidate(MODEL_GEOMETRY_VALIDATION_PATH, revision);
+    resources.invalidate(MODEL_GEOMETRY_DIAGNOSTICS_PATH, revision);
+    resources.invalidate(MODEL_READINESS_PATH, revision);
+    resources.invalidate(MESH_BUILD_CURRENT_RESOURCE_KEY, revision);
+    resources.invalidate(MESH_BUILD_LATEST_SUCCESSFUL_RESOURCE_KEY, revision);
+  }
 }
 
 /* ── ObjectOverviewInspectorPanel (`object.root`) ── */
@@ -218,15 +426,123 @@ export function ObjectOverviewInspectorPanel({ selection }: InspectorPanelProps)
   const frozenSpins = useFrozenSpinsCollectionResource({ enabled: true });
   const extensionActivation = useObjectExtensionActivation();
 
+  const currentSessionScopeKey =
+    scene.sessionScopeKey ?? kernel.commands?.getSessionScopeKey?.() ?? null;
+
   const objectId =
     selection.ref?.type === "scene-object"
       ? selection.ref.objectId
-      : selection.objectId ?? "";
+      : (selection.objectId ?? "");
 
   const sceneObject = useMemo(
     () => scene.data?.objects?.find((entry) => entry.id === objectId),
     [objectId, scene.data?.objects],
   );
+
+  const antennaWithoutMagnetization = Boolean(
+    sceneObject?.role === "antenna" && hasEmptyObjectMagneticModel(sceneObject),
+  );
+
+  const objectMetrics = useObjectMetricsResource(
+    sceneObject && !antennaWithoutMagnetization ? objectId : null,
+  );
+
+  /* ── `kernel.objectEditSession` Coordination ── */
+  const editSession = kernel.objectEditSession;
+  const editSnapshot = useOptionalObjectEditSnapshot(editSession);
+  const targetKey = geometryObjectEditSessionTargetKey(currentSessionScopeKey, {
+    mode: "committed",
+    objectId,
+  });
+  const sessionMatchesTarget = Boolean(
+    editSession &&
+      editSnapshot.identity?.targetKey === targetKey &&
+      editSnapshot.identity?.objectId === objectId,
+  );
+  const editIdentity = sessionMatchesTarget ? editSnapshot.identity : null;
+  const objectEditDraft = sessionMatchesTarget ? editSnapshot.draft : null;
+
+  const canonicalGeometryDraft = useMemo(
+    () =>
+      sceneObject ? resolveCommittedGeometryObjectDraft(scene.data, objectId) : null,
+    [objectId, scene.data, sceneObject],
+  );
+
+  useLayoutEffect(() => {
+    if (!editSession || !sceneObject || !canonicalGeometryDraft) return;
+    const identity = editSession.activate(
+      {
+        objectId,
+        sessionScopeKey: currentSessionScopeKey,
+        targetKey,
+      },
+      canonicalGeometryDraft,
+    );
+    const currentDraft = editSession.getSnapshot().draft;
+    if (
+      typeof currentDraft?.baseRevision === "number" &&
+      Number.isFinite(currentDraft.baseRevision) &&
+      typeof canonicalGeometryDraft.baseRevision === "number" &&
+      Number.isFinite(canonicalGeometryDraft.baseRevision) &&
+      currentDraft.baseRevision === canonicalGeometryDraft.baseRevision
+    ) {
+      return;
+    }
+    editSession.refreshCanonical(
+      identity,
+      canonicalDraftInSelectedUnits(
+        canonicalGeometryDraft,
+        currentDraft ?? canonicalGeometryDraft,
+      ),
+      rebaseDirtyDraftOntoUnchangedObject,
+    );
+  }, [
+    canonicalGeometryDraft,
+    currentSessionScopeKey,
+    editSession,
+    objectId,
+    sceneObject,
+    targetKey,
+  ]);
+
+  const geometryDraftChanged = Boolean(
+    objectEditDraft &&
+      canonicalGeometryDraft &&
+      !geometryDraftGeometryEquals(objectEditDraft, canonicalGeometryDraft),
+  );
+  const transformDraftChanged = Boolean(
+    objectEditDraft &&
+      canonicalGeometryDraft &&
+      !geometryDraftTranslationEquals(objectEditDraft, canonicalGeometryDraft),
+  );
+  const objectEditMetadataChanged = Boolean(
+    objectEditDraft &&
+      canonicalGeometryDraft &&
+      !objectEditMetadataEquals(objectEditDraft, canonicalGeometryDraft),
+  );
+  const objectEditDraftDirty =
+    geometryDraftChanged || transformDraftChanged || objectEditMetadataChanged;
+
+  useEffect(() => {
+    if (editSession && editIdentity) {
+      editSession.setDirty(editIdentity, objectEditDraftDirty);
+    }
+  }, [editIdentity, editSession, objectEditDraftDirty]);
+
+  const placementGestureActive = Boolean(
+    editSession?.hasActiveGesture(currentSessionScopeKey),
+  );
+  const sceneWritePending = Boolean(
+    editSession?.hasPendingWrite(currentSessionScopeKey),
+  );
+  const ownObjectApplyPending = Boolean(
+    sessionMatchesTarget && editSnapshot.applyOperationId !== null,
+  );
+  const sceneMutationLockReason = placementGestureActive
+    ? "Finish or cancel the active 3D placement gesture before applying or reverting scene changes."
+    : sceneWritePending && !ownObjectApplyPending
+      ? "Another scene-changing action is pending in this session."
+      : null;
 
   const materialLabel = useMemo(() => {
     const ref = sceneObject?.material_ref?.trim();
@@ -236,12 +552,14 @@ export function ObjectOverviewInspectorPanel({ selection }: InspectorPanelProps)
   }, [scene.data?.materials, sceneObject?.material_ref]);
 
   const objectFrozen = useMemo(() => {
-    return (
-      (frozenSpins.data?.definitions ?? []).find((def) => {
-        const sel = def.selector as Record<string, unknown> | undefined;
-        return sel?.kind === "in_object" && sel.object_id === objectId;
-      }) ?? null
-    );
+    const definitions = frozenSpins.data?.definitions ?? [];
+    // Prefer direct in_object match first, then any compound selector referencing objectId
+    const direct = definitions.find((def) => {
+      const sel = def.selector as Record<string, unknown> | undefined;
+      return sel?.kind === "in_object" && sel.object_id === objectId;
+    });
+    if (direct) return direct;
+    return definitions.find((def) => selectorReferencesObject(def.selector, objectId)) ?? null;
   }, [frozenSpins.data?.definitions, objectId]);
 
   const dependentCouplingCount = useMemo(() => {
@@ -272,6 +590,11 @@ export function ObjectOverviewInspectorPanel({ selection }: InspectorPanelProps)
     extensionsModel.extensions.find((ext) => ext.id === "topological_charge")?.enabled,
   );
 
+  const formattedMetrics = useMemo(
+    () => formatObjectMetrics(objectMetrics.data, objectMetrics.status),
+    [objectMetrics.data, objectMetrics.status],
+  );
+
   const baseline = useMemo<ObjectOverviewDraft>(() => {
     const role = normalizeRole(sceneObject);
     const metrics = estimateGeometryMetrics(sceneObject);
@@ -280,10 +603,14 @@ export function ObjectOverviewInspectorPanel({ selection }: InspectorPanelProps)
       salRec &&
         (Array.isArray(salRec.layers) ? salRec.layers.length > 0 : Object.keys(salRec).length > 0),
     );
+    const canonicalRegionName =
+      typeof sceneObject?.region_name === "string" ? sceneObject.region_name : "";
     return {
       objectId,
       exists: Boolean(sceneObject),
+      antennaWithoutMagnetization,
       name: sceneObject?.name?.trim() || selection.label || objectId || "Object",
+      regionName: canonicalRegionName,
       role,
       visible: sceneObject?.visible !== false,
       notes: sceneObject?.notes ?? "",
@@ -298,9 +625,12 @@ export function ObjectOverviewInspectorPanel({ selection }: InspectorPanelProps)
       frozenConstraintId: objectFrozen?.id ?? null,
       hasTopologicalCharge,
       dependentCouplingCount,
+      metrics: formattedMetrics,
     };
   }, [
+    antennaWithoutMagnetization,
     dependentCouplingCount,
+    formattedMetrics,
     hasTopologicalCharge,
     materialLabel,
     objectFrozen,
@@ -309,56 +639,149 @@ export function ObjectOverviewInspectorPanel({ selection }: InspectorPanelProps)
     selection.label,
   ]);
 
+  const buildAuthoringContext = useCallback(() => {
+    const historyGeneration = kernel.authoringHistory?.getGeneration?.();
+    const baseCtx = createCommandContext("inspector", kernel, {
+      resourceData: scene.data ? { [MODEL_SCENE_PATH]: scene.data } : undefined,
+      sourceDetail: "ObjectOverviewInspectorPanel",
+      ...(currentSessionScopeKey ? { sessionScopeKey: currentSessionScopeKey } : {}),
+      isCurrentSessionScope: () => {
+        const activeScope = kernel.commands?.getSessionScopeKey?.();
+        if (currentSessionScopeKey && activeScope && activeScope !== currentSessionScopeKey) {
+          return false;
+        }
+        return (
+          historyGeneration === undefined ||
+          kernel.authoringHistory?.getGeneration?.() === historyGeneration
+        );
+      },
+    });
+    return typeof kernel.selection?.get === "function"
+      ? baseCtx
+      : { ...baseCtx, selection: undefined };
+  }, [currentSessionScopeKey, kernel, scene.data]);
+
   const handleToggleSal = useCallback(
     async (enabled: boolean) => {
-      if (!objectId) return;
-      const updated = await kernel.api.model.patchObject(objectId, {
-        base_revision: scene.data?.revision ?? null,
-        absorbing_boundary: enabled ? buildDefaultSalConfig(objectId) : null,
-      });
-      publishCommittedSceneResource(
-        kernel.resources,
-        updated,
-        fallbackRevision(updated.revision),
+      if (!objectId || sceneMutationLockReason) return;
+      const baseRevision = scene.data?.revision ?? null;
+      const built = buildAbsorbingBoundaryPatch(
+        {
+          enabled,
+          legacy: false,
+          layers: [createLayerDraft("layer-1", "Layer 1")],
+        },
+        baseRevision,
       );
+      if ("error" in built) return;
+
+      const context = buildAuthoringContext();
+      const updated = await runAuthoringMutationWithHistory(
+        context,
+        `${enabled ? "Enable" : "Disable"} absorbing boundary ${objectId}`,
+        async ({ baseRevision: capturedRev }) => {
+          const commitRev = capturedRev ?? baseRevision;
+          const nextBuilt = buildAbsorbingBoundaryPatch(
+            {
+              enabled,
+              legacy: false,
+              layers: [createLayerDraft("layer-1", "Layer 1")],
+            },
+            commitRev,
+          );
+          if ("error" in nextBuilt) throw new Error(nextBuilt.error);
+          return kernel.api.model.patchObject(
+            objectId,
+            nextBuilt.patch,
+            authoringWriteOptions(commitRev, currentSessionScopeKey),
+          );
+        },
+      );
+      const rev = fallbackRevision(updated.revision ?? baseRevision);
+      publishCommittedSceneResource(kernel.resources, updated, rev);
+      if (typeof rev === "number") {
+        invalidateAuthoringMutationDependents(kernel.resources, "material", rev);
+      } else {
+        kernel.resources.invalidate(MODEL_SCENE_PATH, rev);
+      }
     },
-    [kernel.api.model, kernel.resources, objectId, scene.data?.revision],
+    [
+      buildAuthoringContext,
+      currentSessionScopeKey,
+      kernel.api.model,
+      kernel.resources,
+      objectId,
+      scene.data?.revision,
+      sceneMutationLockReason,
+    ],
   );
 
   const handleToggleFrozenSpins = useCallback(
     async (enabled: boolean) => {
-      if (!objectId) return;
+      if (!objectId || sceneMutationLockReason) return;
       const expectedRev = frozenSpins.data?.revision ?? scene.data?.revision ?? 0;
+      const context = buildAuthoringContext();
+      const reqOptions = currentSessionScopeKey
+        ? { sessionScopeKey: currentSessionScopeKey }
+        : undefined;
+
       if (objectFrozen) {
-        await kernel.api.model.frozenSpins.patch(objectFrozen.id, {
-          expected_revision: expectedRev,
-          definition: { ...objectFrozen, enabled },
-        });
+        const res = await runAuthoringMutationWithHistory(
+          context,
+          `${enabled ? "Enable" : "Disable"} Frozen Spins ${objectFrozen.id}`,
+          async ({ baseRevision: capturedRev }) => {
+            const payload = {
+              expected_revision: capturedRev ?? expectedRev,
+              definition: { ...objectFrozen, enabled },
+            };
+            return reqOptions
+              ? kernel.api.model.frozenSpins.patch(objectFrozen.id, payload, reqOptions)
+              : kernel.api.model.frozenSpins.patch(objectFrozen.id, payload);
+          },
+        );
+        const nextRev = fallbackRevision(res?.revision ?? expectedRev + 1);
+        kernel.resources.invalidate(MODEL_FROZEN_SPINS_PATH, nextRev);
+        kernel.resources.invalidate(frozenSpinsDefinitionResourceKey(objectFrozen.id), nextRev);
+        kernel.resources.invalidate(FROZEN_SPINS_ACTIVE_PREVIEW_RESOURCE_KEY, "");
       } else if (enabled) {
         const id = `frozen-${objectId}`;
-        await kernel.api.model.frozenSpins.create({
-          expected_revision: expectedRev,
-          definition: {
-            id,
-            name: `Frozen Spins (${sceneObject?.name ?? objectId})`,
-            enabled: true,
-            schema_version: "fullmag.frozen-spins.v1",
-            selector: { kind: "in_object", object_id: objectId },
-            reference: { kind: "capture_current_at_activation" },
-            membership: { kind: "static" },
-            activation: { kind: "all_stages" },
+        const res = await runAuthoringMutationWithHistory(
+          context,
+          `Create Frozen Spins ${id}`,
+          async ({ baseRevision: capturedRev }) => {
+            const payload = {
+              expected_revision: capturedRev ?? expectedRev,
+              definition: {
+                id,
+                name: `Frozen Spins (${sceneObject?.name ?? objectId})`,
+                enabled: true,
+                schema_version: "fullmag.frozen-spins.v1" as const,
+                selector: { kind: "in_object" as const, object_id: objectId },
+                reference: { kind: "capture_current_at_activation" as const },
+                membership: { kind: "static" as const },
+                activation: { kind: "all_stages" as const },
+              },
+            };
+            return reqOptions
+              ? kernel.api.model.frozenSpins.create(payload, reqOptions)
+              : kernel.api.model.frozenSpins.create(payload);
           },
-        });
+        );
+        const nextRev = fallbackRevision(res?.revision ?? expectedRev + 1);
+        kernel.resources.invalidate(MODEL_FROZEN_SPINS_PATH, nextRev);
+        kernel.resources.invalidate(frozenSpinsDefinitionResourceKey(id), nextRev);
       }
-      kernel.resources.invalidate(MODEL_FROZEN_SPINS_PATH, fallbackRevision(expectedRev + 1));
     },
     [
+      buildAuthoringContext,
+      currentSessionScopeKey,
       frozenSpins.data?.revision,
       kernel.api.model.frozenSpins,
       kernel.resources,
       objectFrozen,
       objectId,
       scene.data?.revision,
+      sceneMutationLockReason,
       sceneObject?.name,
     ],
   );
@@ -425,7 +848,7 @@ export function ObjectOverviewInspectorPanel({ selection }: InspectorPanelProps)
         id: "geometry",
         title: "Geometry",
         subtitle: baseline.spanText
-          ? `${baseline.geometryKind} · ${baseline.spanText}`
+          ? `${baseline.geometryKind} \u00b7 ${baseline.spanText}`
           : `${baseline.geometryKind} shape, transform & CSG`,
         badge: baseline.geometryKind,
         selection: buildObjectSelection(objectId, "object.geometry", "Geometry"),
@@ -441,7 +864,7 @@ export function ObjectOverviewInspectorPanel({ selection }: InspectorPanelProps)
       {
         id: "magnetic-texture",
         title: "Magnetic Texture",
-        subtitle: "Initial magnetization m₀ preset, placement & field file",
+        subtitle: "Initial magnetization m\u2080 preset, placement & field file",
         badge: String(textureKind),
         selection: buildObjectSelection(objectId, "object.magnetic-texture", "Magnetic Texture"),
       },
@@ -485,6 +908,141 @@ export function ObjectOverviewInspectorPanel({ selection }: InspectorPanelProps)
     sceneObject,
   ]);
 
+  const applyPendingObjectEditSession = useCallback(
+    async (canonicalScene?: SceneResource | null): Promise<boolean> => {
+      if (!editSession) return true;
+      const snapshot = editSession.getSnapshot();
+      const identity = snapshot.identity;
+      if (
+        !identity ||
+        identity.targetKey !== targetKey ||
+        identity.objectId !== objectId ||
+        !snapshot.draft
+      ) {
+        return true;
+      }
+      const applyScene = canonicalScene ?? scene.data;
+      const applyCanonicalDraft = resolveCommittedGeometryObjectDraft(applyScene, objectId);
+      if (!applyCanonicalDraft) return false;
+
+      const hasGeomOrTranslationChanges =
+        !geometryDraftGeometryEquals(snapshot.draft, applyCanonicalDraft) ||
+        !geometryDraftTranslationEquals(snapshot.draft, applyCanonicalDraft);
+      if (!hasGeomOrTranslationChanges) return true;
+
+      const operation = editSession.beginApply(identity);
+      if (!operation) return false;
+
+      const submittedDraft = operation.submittedDraft;
+      const submittedBaseRevision =
+        typeof applyScene?.revision === "number"
+          ? applyScene.revision
+          : submittedDraft.baseRevision;
+      const submittedObject = applyScene?.objects?.find(
+        (candidate) => candidate.id === operation.identity.objectId,
+      );
+      if (
+        typeof submittedBaseRevision !== "number" ||
+        !Number.isFinite(submittedBaseRevision) ||
+        !submittedObject?.geometry
+      ) {
+        editSession.reject(operation);
+        throw new Error("Canonical object geometry or scene revision is unavailable.");
+      }
+
+      const submittedGeometryChanged = !geometryDraftGeometryEquals(
+        submittedDraft,
+        applyCanonicalDraft,
+      );
+      const submittedGeometry = buildGeometryDraftPatch(submittedDraft);
+      if (submittedGeometryChanged && (submittedGeometry.error || !submittedGeometry.geometry)) {
+        editSession.reject(operation);
+        throw new Error(submittedGeometry.error ?? "Invalid geometry draft.");
+      }
+      const submittedTransform = buildTransformDraftPatch(
+        submittedDraft,
+        submittedObject.transform,
+      );
+      if (submittedTransform.error || !submittedTransform.transform) {
+        editSession.reject(operation);
+        throw new Error(submittedTransform.error ?? "Invalid transform draft.");
+      }
+      const submittedGeometryPayload = submittedGeometryChanged
+        ? mergeGeometryDescriptor(
+            submittedObject.geometry as unknown as JsonObject,
+            submittedGeometry.geometry as JsonObject,
+          )
+        : (submittedObject.geometry as unknown as JsonObject);
+
+      try {
+        const historyContext = buildAuthoringContext();
+        const reqOptions = currentSessionScopeKey
+          ? { sessionScopeKey: currentSessionScopeKey }
+          : undefined;
+        const response = await runAuthoringMutationWithHistory(
+          historyContext,
+          `Edit geometry and placement ${submittedDraft.name}`,
+          () =>
+            patchObjectGeometryTransaction(
+              kernel.api,
+              operation.identity.objectId,
+              {
+                base_revision: submittedBaseRevision,
+                geometry: submittedGeometryPayload,
+                transform: submittedTransform.transform as JsonObject,
+              },
+              reqOptions,
+            ),
+        );
+        if (historyContext.isCurrentSessionScope?.() === false) {
+          editSession.reject(operation);
+          return false;
+        }
+        const nextRevision = acknowledgedAuthoringSceneRevision(response);
+        const resolvedAck = resolveCommittedGeometryObjectDraft(
+          response.committed_scene,
+          operation.identity.objectId,
+        );
+        if (!resolvedAck) {
+          editSession.reject(operation);
+          return false;
+        }
+        const acknowledgedDraft = {
+          ...resolvedAck,
+          baseRevision: nextRevision,
+        };
+        const acked = editSession.acknowledge(
+          operation,
+          acknowledgedDraft,
+          reconcileGeneralGeometryAck,
+          { reconcileUnchangedDraft: true },
+        );
+        if (!acked) return false;
+        invalidateObjectOverviewResources(
+          kernel.resources,
+          nextRevision,
+          response.committed_scene,
+          currentSessionScopeKey,
+          kernel.api.resourceCacheScope,
+        );
+        return true;
+      } catch (error) {
+        editSession.reject(operation);
+        throw error;
+      }
+    },
+    [
+      buildAuthoringContext,
+      currentSessionScopeKey,
+      editSession,
+      kernel.api,
+      kernel.resources,
+      objectId,
+      scene.data,
+      targetKey,
+    ],
+  );
+
   const spec = useMemo<InspectorSpec<ObjectOverviewDraft>>(
     () => ({
       id: "object.overview",
@@ -503,7 +1061,7 @@ export function ObjectOverviewInspectorPanel({ selection }: InspectorPanelProps)
           { id: "object", label: baseline.name },
         ],
         canFitView: baseline.exists,
-        searchable: false,
+        searchable: true,
         ...(baseline.exists
           ? {
               deleteAction: {
@@ -514,19 +1072,43 @@ export function ObjectOverviewInspectorPanel({ selection }: InspectorPanelProps)
                     ? `Deleting "${baseline.name}" removes ${baseline.regionCount} authored region(s) and invalidates ${baseline.dependentCouplingCount} referencing coupling(s).`
                     : `Deleting "${baseline.name}" permanently removes it from the session model.`,
                 onDelete: async (ctx) => {
-                  const tx = await kernel.api.model.commitTransaction({
-                    base_revision: scene.data?.revision ?? null,
-                    kind: "delete_object",
-                    object_id: objectId,
-                  });
-                  publishCommittedSceneResource(
-                    kernel.resources,
-                    tx.committed_scene,
-                    tx.scene_revision,
-                  );
-                  kernel.resources.invalidate(MODEL_GEOMETRY_VALIDATION_PATH, tx.scene_revision);
-                  kernel.resources.invalidate(MODEL_READINESS_PATH, tx.scene_revision);
-                  ctx.selectNode(buildRootSelection("objects.root", "model:objects", "Objects"));
+                  if (sceneMutationLockReason) {
+                    throw new Error(sceneMutationLockReason);
+                  }
+                  if (objectEditDraftDirty) {
+                    throw new Error(
+                      "Apply or revert pending geometry/placement changes before deleting this object.",
+                    );
+                  }
+                  const mutationToken = editSession
+                    ? editSession.beginSceneMutation(currentSessionScopeKey, objectId)
+                    : Symbol("delete-object");
+                  if (mutationToken === null) {
+                    throw new Error("Another scene-changing action is pending in this session.");
+                  }
+                  try {
+                    const context = buildAuthoringContext();
+                    const response = await deleteObjectWithHistory(context, {
+                      baseRevision: scene.data?.revision ?? null,
+                      name: baseline.name,
+                      objectId,
+                    });
+                    if (context.isCurrentSessionScope?.() === false) return;
+                    invalidateObjectOverviewResources(
+                      kernel.resources,
+                      fallbackRevision(response.scene_revision),
+                      response.committed_scene,
+                      currentSessionScopeKey,
+                      kernel.api.resourceCacheScope,
+                    );
+                    ctx.selectNode(
+                      buildRootSelection("objects.root", "model:objects", "Objects"),
+                    );
+                  } finally {
+                    if (editSession && typeof mutationToken === "number") {
+                      editSession.endSceneMutation(mutationToken);
+                    }
+                  }
                 },
               },
             }
@@ -569,6 +1151,25 @@ export function ObjectOverviewInspectorPanel({ selection }: InspectorPanelProps)
           });
           return list;
         }
+        if (objectEditDraftDirty) {
+          list.push({
+            id: "pending-object-edit-session",
+            tone: "warn",
+            title: "Uncommitted placement or geometry changes",
+            text: "Staged 3D placement or geometry edits are pending on this object. Use Apply or Revert to commit or discard them.",
+            quickFix: {
+              label: "Inspect Geometry",
+              onApply: (ctx) =>
+                ctx.selectNode(
+                  buildObjectSelection(
+                    objectId,
+                    draft.role === "antenna" ? "object.antenna.geometry" : "object.geometry",
+                    "Geometry",
+                  ),
+                ),
+            },
+          });
+        }
         if (draft.role === "magnetic_body" && draft.materialLabel === "Unassigned") {
           list.push({
             id: "unassigned-material",
@@ -591,13 +1192,20 @@ export function ObjectOverviewInspectorPanel({ selection }: InspectorPanelProps)
           icon: Box,
           defaultOpen: true,
           showWhen: (d) => d.exists,
-          summary: (d) => `${roleKindLabel(d.role)} · ${d.visible ? "Visible" : "Hidden"}`,
+          summary: (d) => `${roleKindLabel(d.role)} \u00b7 ${d.visible ? "Visible" : "Hidden"}`,
           rows: [
             {
               key: "name",
               type: "text",
               label: "Object name",
               validate: (val) => (val.trim().length === 0 ? "Object name cannot be empty." : null),
+            },
+            {
+              key: "regionName",
+              type: "text",
+              label: "Region",
+              placeholder: "Optional logical region tag (unassigned when empty)",
+              showWhen: (d) => !d.antennaWithoutMagnetization,
             },
             {
               key: "role",
@@ -627,6 +1235,69 @@ export function ObjectOverviewInspectorPanel({ selection }: InspectorPanelProps)
           ],
         },
         {
+          id: "object-energies",
+          title: "Micromagnetic energies",
+          icon: Activity,
+          defaultOpen: true,
+          showWhen: (d) => d.exists && !d.antennaWithoutMagnetization,
+          summary: (d) => `${d.metrics.statusLabel} \u00b7 Total ${d.metrics.total}`,
+          rows: [
+            {
+              type: "readonly",
+              label: "Sample",
+              mono: true,
+              format: (d) => d.metrics.sample,
+            },
+            {
+              type: "readonly",
+              label: "Source",
+              format: (d) => `${d.metrics.source} (${d.metrics.statusLabel})`,
+            },
+            {
+              type: "readonly",
+              label: "Average m",
+              mono: true,
+              format: (d) => d.metrics.magnetization,
+            },
+            {
+              type: "readonly",
+              label: "Exchange",
+              mono: true,
+              format: (d) => d.metrics.exchange,
+            },
+            {
+              type: "readonly",
+              label: "Demag",
+              mono: true,
+              format: (d) => d.metrics.demag,
+            },
+            {
+              type: "readonly",
+              label: "Zeeman",
+              mono: true,
+              format: (d) => d.metrics.zeeman,
+            },
+            {
+              type: "readonly",
+              label: "Anisotropy",
+              mono: true,
+              format: (d) => d.metrics.anisotropy,
+            },
+            {
+              type: "readonly",
+              label: "DMI",
+              mono: true,
+              format: (d) => d.metrics.dmi,
+            },
+            {
+              type: "readonly",
+              label: "Total",
+              mono: true,
+              format: (d) => d.metrics.total,
+            },
+          ],
+        },
+        {
           id: "object-extensions",
           title: "Constraints & diagnostic extensions",
           icon: Shield,
@@ -648,13 +1319,14 @@ export function ObjectOverviewInspectorPanel({ selection }: InspectorPanelProps)
                         {ctx.draft.hasSal ? <Badge data-tone="ok">Active</Badge> : null}
                       </div>
                       <p className="truncate text-xs text-[var(--fm-text-muted)]">
-                        Spatial α(r) damping ramp suppressing edge spin-wave reflections
+                        Spatial &alpha;(r) damping ramp suppressing edge spin-wave reflections
                       </p>
                     </div>
                     <div className="flex shrink-0 items-center gap-1.5">
                       <Switch
                         aria-label="Toggle Absorbing boundary (SAL)"
                         checked={ctx.draft.hasSal}
+                        disabled={Boolean(sceneMutationLockReason)}
                         onCheckedChange={(checked) => void handleToggleSal(checked)}
                       />
                       {ctx.draft.hasSal ? (
@@ -695,6 +1367,7 @@ export function ObjectOverviewInspectorPanel({ selection }: InspectorPanelProps)
                       <Switch
                         aria-label="Toggle Frozen spins constraint"
                         checked={ctx.draft.hasFrozenSpins}
+                        disabled={Boolean(sceneMutationLockReason)}
                         onCheckedChange={(checked) => void handleToggleFrozenSpins(checked)}
                       />
                       {ctx.draft.frozenConstraintId ? (
@@ -711,7 +1384,13 @@ export function ObjectOverviewInspectorPanel({ selection }: InspectorPanelProps)
                               label: "Frozen Spins",
                               nodeId,
                               objectId,
-                              ref: null,
+                              ref: {
+                                constraintId: cid,
+                                kind: "object.frozen-spins",
+                                nodeId,
+                                objectId,
+                                type: "frozen-spins",
+                              },
                             });
                           }}
                         >
@@ -788,66 +1467,200 @@ export function ObjectOverviewInspectorPanel({ selection }: InspectorPanelProps)
       ],
       commitBar: {
         mode: "staged",
+        allowCleanApply: () => objectEditDraftDirty,
+        applyLabel: (_, dirty) =>
+          !dirty && objectEditDraftDirty ? "Apply Placement" : "Apply",
         cleanMessage: () =>
           "Geometry, material, texture, and visualization are edited on their dedicated child nodes",
-        lockReason: (d) => (!d.exists ? "Select an existing scene object." : null),
-        onApply: async (draft, prev) => {
-          if (!objectId) return false;
-          let latestRevision = scene.data?.revision ?? null;
-          if (draft.name.trim() !== prev.name.trim()) {
-            const tx = await kernel.api.model.commitTransaction({
-              base_revision: latestRevision,
-              kind: "rename_object",
-              name: draft.name.trim(),
-              object_id: objectId,
-            });
-            latestRevision = tx.scene_revision;
-            publishCommittedSceneResource(
-              kernel.resources,
-              tx.committed_scene,
-              tx.scene_revision,
+        lockReason: (d) => {
+          if (!d.exists) return "Select an existing scene object.";
+          if (sceneMutationLockReason) return sceneMutationLockReason;
+          return null;
+        },
+        onRevert: () => {
+          if (!editSession) return;
+          const snapshot = editSession.getSnapshot();
+          const canonicalDraft = resolveCommittedGeometryObjectDraft(scene.data, objectId);
+          if (
+            snapshot.identity &&
+            snapshot.identity.targetKey === targetKey &&
+            snapshot.draft &&
+            canonicalDraft
+          ) {
+            editSession.reset(
+              snapshot.identity,
+              canonicalDraftInSelectedUnits(canonicalDraft, snapshot.draft),
             );
           }
-          if (
+        },
+        onApply: async (draft, prev) => {
+          if (!objectId || sceneMutationLockReason) return false;
+          let latestScene: SceneResource | null = scene.data ?? null;
+          let latestRevision: number | null = scene.data?.revision ?? null;
+
+          const identityChanged =
+            draft.name.trim() !== prev.name.trim() ||
             draft.notes !== prev.notes ||
-            draft.visible !== prev.visible ||
-            draft.role !== prev.role
-          ) {
-            const updated = await kernel.api.model.patchObject(objectId, {
-              base_revision: latestRevision,
-              notes: draft.notes,
-              visible: draft.visible,
-              ...(draft.role !== prev.role ? ({ role: roleToApiValue(draft.role) } as Record<string, unknown>) : {}),
-            });
-            const rev = fallbackRevision(updated.revision);
-            latestRevision = typeof updated.revision === "number" ? updated.revision : latestRevision;
-            publishCommittedSceneResource(kernel.resources, updated, rev);
+            draft.regionName.trim() !== prev.regionName.trim();
+
+          if (identityChanged) {
+            const mutationToken = editSession
+              ? editSession.beginSceneMutation(currentSessionScopeKey, objectId)
+              : Symbol("identity-patch");
+            if (mutationToken === null) return false;
+            try {
+              const context = buildAuthoringContext();
+              const response = await patchObjectIdentityWithHistory(context, {
+                baseRevision: latestRevision,
+                name: draft.name.trim(),
+                notes: draft.notes,
+                objectId,
+                ...(draft.regionName.trim() !== prev.regionName.trim()
+                  ? { regionName: optionalObjectReference(draft.regionName) }
+                  : {}),
+              });
+              if (context.isCurrentSessionScope?.() === false) return false;
+              const nextRev = acknowledgedAuthoringSceneRevision(response);
+              latestRevision = nextRev;
+              latestScene = response;
+
+              if (editSession && canonicalGeometryDraft) {
+                const snap = editSession.getSnapshot();
+                const ackedGeomDraft = resolveCommittedGeometryObjectDraft(response, objectId);
+                if (
+                  snap.identity &&
+                  snap.identity.targetKey === targetKey &&
+                  snap.draft &&
+                  ackedGeomDraft
+                ) {
+                  const reconciled = reconcileObjectIdentityAck(
+                    snap.draft,
+                    {
+                      ...snap.draft,
+                      name: draft.name.trim(),
+                      notes: draft.notes,
+                      region: optionalObjectReference(draft.regionName) ?? "unassigned",
+                    },
+                    canonicalGeometryDraft,
+                    { ...ackedGeomDraft, baseRevision: nextRev },
+                  );
+                  editSession.updateDraft(snap.identity, () => reconciled.draft);
+                  editSession.setDirty(snap.identity, reconciled.dirty);
+                }
+              }
+
+              invalidateObjectOverviewResources(
+                kernel.resources,
+                nextRev,
+                response,
+                currentSessionScopeKey,
+                kernel.api.resourceCacheScope,
+              );
+            } finally {
+              if (editSession && typeof mutationToken === "number") {
+                editSession.endSceneMutation(mutationToken);
+              }
+            }
           }
-          const finalRev = fallbackRevision(latestRevision);
-          kernel.resources.invalidate(MODEL_GEOMETRY_VALIDATION_PATH, finalRev);
-          kernel.resources.invalidate(MODEL_GEOMETRY_DIAGNOSTICS_PATH, finalRev);
-          kernel.resources.invalidate(MODEL_READINESS_PATH, finalRev);
-          kernel.resources.invalidate(MESH_BUILD_CURRENT_RESOURCE_KEY, finalRev);
-          kernel.resources.invalidate(MESH_BUILD_LATEST_SUCCESSFUL_RESOURCE_KEY, finalRev);
-          kernel.resources.invalidate(MODEL_SCENE_PATH, finalRev);
+
+          if (draft.visible !== prev.visible) {
+            const context = buildAuthoringContext();
+            const updated = await runAuthoringMutationWithHistory(
+              context,
+              `Update visibility ${draft.name.trim()}`,
+              async ({ baseRevision: capturedRev }) => {
+                const commitRev = latestRevision ?? capturedRev;
+                return kernel.api.model.patchObject(
+                  objectId,
+                  {
+                    base_revision: commitRev,
+                    visible: draft.visible,
+                  },
+                  authoringWriteOptions(commitRev, currentSessionScopeKey),
+                );
+              },
+            );
+            const revNum =
+              typeof updated.revision === "number" ? updated.revision : latestRevision;
+            latestRevision = revNum;
+            latestScene = updated;
+            invalidateObjectOverviewResources(
+              kernel.resources,
+              fallbackRevision(revNum),
+              updated,
+              currentSessionScopeKey,
+              kernel.api.resourceCacheScope,
+            );
+          }
+
+          if (draft.role !== prev.role) {
+            const context = buildAuthoringContext();
+            const reqOptions = currentSessionScopeKey
+              ? { sessionScopeKey: currentSessionScopeKey }
+              : undefined;
+            const nextRole = roleToApiValue(draft.role);
+            const tx = await runAuthoringMutationWithHistory(
+              context,
+              `Change role ${draft.name.trim()}`,
+              async ({ before, baseRevision: capturedRev }) => {
+                const commitRev = latestRevision ?? capturedRev ?? 0;
+                const sourceObjects =
+                  (latestScene ?? before ?? scene.data)?.objects ?? [];
+                const nextObjects = sourceObjects.map((obj) =>
+                  obj.id === objectId ? { ...obj, role: nextRole } : obj,
+                );
+                const payload = {
+                  base_revision: commitRev,
+                  kind: "merge_patch" as const,
+                  merge_patch: { objects: nextObjects } as unknown as JsonObject,
+                };
+                return reqOptions
+                  ? kernel.api.model.commitTransaction(payload, reqOptions)
+                  : kernel.api.model.commitTransaction(payload);
+              },
+            );
+            latestRevision = tx.scene_revision;
+            latestScene = tx.committed_scene;
+            invalidateObjectOverviewResources(
+              kernel.resources,
+              fallbackRevision(tx.scene_revision),
+              tx.committed_scene,
+              currentSessionScopeKey,
+              kernel.api.resourceCacheScope,
+            );
+          }
+
+          if (objectEditDraftDirty) {
+            const geomOk = await applyPendingObjectEditSession(latestScene);
+            if (!geomOk) return false;
+          }
+
           return true;
         },
       },
     }),
     [
+      applyPendingObjectEditSession,
       baseline.dependentCouplingCount,
       baseline.exists,
       baseline.name,
       baseline.regionCount,
       baseline.role,
+      buildAuthoringContext,
+      canonicalGeometryDraft,
       childCards,
+      currentSessionScopeKey,
+      editSession,
       handleToggleFrozenSpins,
       handleToggleSal,
       handleToggleTopologicalCharge,
-      kernel.api.model,
+      kernel.api,
       kernel.resources,
+      objectEditDraftDirty,
       objectId,
-      scene.data?.revision,
+      scene.data,
+      sceneMutationLockReason,
+      targetKey,
     ],
   );
 
