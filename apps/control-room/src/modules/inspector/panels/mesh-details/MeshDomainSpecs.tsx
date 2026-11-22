@@ -199,6 +199,96 @@ function roundFriendlySubNanometerM(targetM: number): number {
 }
 
 /**
+ * Estimates the structured FDM grid dimensions [nx, ny, nz] from the authored
+ * scene bounding box and requested cell spacing. Returns null if no parametric
+ * object extents are present in the scene.
+ */
+export function estimateSceneFdmGridShape(
+  scene: unknown,
+  cellSizeM: readonly [number, number, number],
+  fftSmoothSnap: boolean,
+): [number, number, number] | null {
+  const sceneRec = asRecord(scene);
+  const rawObjects = Array.isArray(sceneRec?.objects) ? sceneRec.objects : [];
+  let minX = Infinity;
+  let minY = Infinity;
+  let minZ = Infinity;
+  let maxX = -Infinity;
+  let maxY = -Infinity;
+  let maxZ = -Infinity;
+
+  for (const rawObj of rawObjects) {
+    const obj = asRecord(rawObj);
+    if (!obj || obj.visible === false) continue;
+    const geom = asRecord(obj.geometry);
+    const params = asRecord(geom?.geometry_params);
+    const kind = asString(geom?.geometry_kind)?.toLowerCase() ?? "";
+    const transform = asRecord(obj.transform);
+    const translation = Array.isArray(transform?.translation)
+      ? transform.translation.map(asNumber)
+      : [0, 0, 0];
+    const scale = Array.isArray(transform?.scale)
+      ? transform.scale.map((v) => Math.abs(asNumber(v) ?? 1))
+      : [1, 1, 1];
+    const tx = translation[0] ?? 0;
+    const ty = translation[1] ?? 0;
+    const tz = translation[2] ?? 0;
+
+    let sx: number | null = null;
+    let sy: number | null = null;
+    let sz: number | null = null;
+    if (kind === "box" && Array.isArray(params?.size) && params.size.length >= 3) {
+      sx = asNumber(params.size[0]);
+      sy = asNumber(params.size[1]);
+      sz = asNumber(params.size[2]);
+    } else if (kind === "cylinder") {
+      const r = asNumber(params?.radius);
+      const h = asNumber(params?.height);
+      if (r !== null && h !== null) {
+        sx = r * 2;
+        sy = r * 2;
+        sz = h;
+      }
+    } else if (kind === "sphere") {
+      const r = asNumber(params?.radius);
+      if (r !== null) {
+        sx = r * 2;
+        sy = r * 2;
+        sz = r * 2;
+      }
+    }
+    if (sx === null || sy === null || sz === null || sx <= 0 || sy <= 0 || sz <= 0) {
+      continue;
+    }
+    const hx = (sx * (scale[0] || 1)) / 2;
+    const hy = (sy * (scale[1] || 1)) / 2;
+    const hz = (sz * (scale[2] || 1)) / 2;
+    minX = Math.min(minX, tx - hx);
+    maxX = Math.max(maxX, tx + hx);
+    minY = Math.min(minY, ty - hy);
+    maxY = Math.max(maxY, ty + hy);
+    minZ = Math.min(minZ, tz - hz);
+    maxZ = Math.max(maxZ, tz + hz);
+  }
+
+  if (!Number.isFinite(minX) || !Number.isFinite(maxX)) return null;
+  const ex = Math.max(1e-12, maxX - minX);
+  const ey = Math.max(1e-12, maxY - minY);
+  const ez = Math.max(1e-12, maxZ - minZ);
+  const dx = Math.max(1e-12, cellSizeM[0]);
+  const dy = Math.max(1e-12, cellSizeM[1]);
+  const dz = Math.max(1e-12, cellSizeM[2]);
+  const rawNx = Math.max(1, Math.ceil(ex / dx - 1e-9));
+  const rawNy = Math.max(1, Math.ceil(ey / dy - 1e-9));
+  const rawNz = Math.max(1, Math.ceil(ez / dz - 1e-9));
+  return [
+    fftSmoothSnap ? snapSevenSmooth(rawNx) : rawNx,
+    fftSmoothSnap ? snapSevenSmooth(rawNy) : rawNy,
+    rawNz,
+  ];
+}
+
+/**
  * Evaluates the magnetostatic exchange length l_ex = sqrt(2 A_ex / (mu_0 M_s^2))
  * across all materials referenced in the scene and checks max(Delta) against l_ex.
  */
@@ -521,9 +611,194 @@ export function MeshRootInspectorSpecPanel({ selection }: InspectorPanelProps): 
     resolvedCounts?.node_count ??
     asNumber(asRecord(manifest.data?.topology_counts)?.nodes);
   const buildingNow = Boolean(activeBuild.data?.active_build);
+  const fdmGridBuilt = Boolean(
+    domainMeta.data?.grid &&
+      Array.isArray(domainMeta.data.grid.shape) &&
+      domainMeta.data.grid.shape.every((n) => typeof n === "number" && n > 0),
+  );
+  const hasAuthoredFdmSizing = useMemo(() => {
+    const studyRec = asRecord(asRecord(scene.data)?.study);
+    const fdmRec = asRecord(studyRec?.fdm);
+    const demagRec = asRecord(fdmRec?.demag);
+    const hasCell =
+      Array.isArray(fdmRec?.default_cell) &&
+      fdmRec.default_cell.length >= 3 &&
+      fdmRec.default_cell.every((v) => (asNumber(v) ?? 0) > 0);
+    const hasCount =
+      (Array.isArray(demagRec?.common_cells) && demagRec.common_cells.length >= 3) ||
+      (Array.isArray(demagRec?.common_cells_xy) && demagRec.common_cells_xy.length >= 2);
+    return hasCell || hasCount;
+  }, [scene.data]);
+
+  const persistFdmDiscretizationPolicy = useCallback(
+    async (draft: MeshRootDraft) => {
+      const reqOptions = sessionScopeKey ? { sessionScopeKey } : undefined;
+      const nx = draft.fftSmoothSnap
+        ? snapSevenSmooth(draft.gridCountX)
+        : Math.max(1, Math.round(draft.gridCountX));
+      const ny = draft.fftSmoothSnap
+        ? snapSevenSmooth(draft.gridCountY)
+        : Math.max(1, Math.round(draft.gridCountY));
+      const nz = Math.max(1, Math.round(draft.gridCountZ));
+
+      const studyRec = asRecord(asRecord(scene.data)?.study);
+      const existingFdm = asRecord(studyRec?.fdm) ?? {};
+      const existingDemag = asRecord(existingFdm.demag) ?? {};
+      const demagStrategy =
+        draft.zStackMode === "multilayer"
+          ? "multilayer_convolution"
+          : "single_grid";
+      const demagMode =
+        draft.zStackMode === "multilayer" ? "two_d_stack" : "three_d";
+
+      const fdmPatch: JsonObject = {
+        ...(existingFdm as JsonObject),
+        default_cell:
+          draft.sizingMode === "cell_size" ? [...draft.cellSizeM] : null,
+        demag: {
+          ...(existingDemag as JsonObject),
+          common_cells:
+            draft.sizingMode === "cell_count" &&
+            draft.zStackMode !== "multilayer"
+              ? [nx, ny, nz]
+              : null,
+          common_cells_xy:
+            draft.sizingMode === "cell_count" &&
+            draft.zStackMode === "multilayer"
+              ? [nx, ny]
+              : null,
+          explain: draft.fftSmoothSnap,
+          mode: demagMode,
+          strategy: demagStrategy,
+        },
+      };
+
+      const baseRevision =
+        asNumber(asRecord(scene.data)?.revision) ??
+        asNumber(asRecord(scene.data)?.scene_revision) ??
+        0;
+      const mutationCtx = buildSafeMutationContext(
+        kernel,
+        sessionScopeKey,
+        "mesh.root.fdm",
+      );
+      const committed = await runAuthoringMutationWithHistory(
+        mutationCtx,
+        "Update FDM discretization policy",
+        async (prep) => {
+          const tx: AuthoringTransactionRequest = {
+            base_revision: prep.baseRevision ?? baseRevision,
+            kind: "merge_patch",
+            merge_patch: {
+              study: {
+                demag_realization: demagStrategy,
+                fdm: fdmPatch,
+              },
+            },
+          };
+          return kernel.api.model.commitTransaction(tx, reqOptions);
+        },
+      );
+      const committedScene = asRecord(committed)?.committed_scene as
+        | SceneResource
+        | undefined;
+      if (
+        committedScene &&
+        geometryLifecycleResources.publishCommittedSceneResource
+      ) {
+        const committedRev =
+          asNumber(asRecord(committedScene)?.revision) ?? `w5:${Date.now()}`;
+        geometryLifecycleResources.publishCommittedSceneResource(
+          kernel.resources,
+          committedScene,
+          committedRev,
+          undefined,
+          true,
+          sessionScopeKey ?? null,
+          kernel.api.resourceCacheScope,
+        );
+      }
+      const uniResource: MeshUniverseConfigResource =
+        universePolicy.data ?? {
+          config: null,
+          effective_config: null,
+          revision: 0,
+        };
+      if (uniResource.config !== null && uniResource.config !== undefined) {
+        const uniDraft = rebaseAirboxMeshPolicyDraft(
+          draftFromUniverseMeshPolicyResource(uniResource),
+          universePolicy.data ?? null,
+        );
+        const builtUni = buildAirboxMeshPolicyReplaceRequest(uniDraft, {
+          lane: "fdm",
+        });
+        if (!("error" in builtUni) && builtUni.request) {
+          await kernel.api.meshing.replaceUniversePolicy(
+            builtUni.request,
+            reqOptions,
+          );
+        }
+      }
+      invalidateAuthoringMutationDependents(
+        kernel.resources,
+        "geometry",
+        `w5:${Date.now()}`,
+      );
+      kernel.resources.invalidate(
+        geometryLifecycleResources.SCENE_RESOURCE_KEY,
+        `w5:${Date.now()}`,
+      );
+      kernel.resources.invalidate(SESSION_STATUS_KEY, `w5:${Date.now()}`);
+      kernel.resources.invalidate(
+        geometryLifecycleResources.MESH_UNIVERSE_POLICY_RESOURCE_KEY,
+        `w5:${Date.now()}`,
+      );
+    },
+    [kernel, scene.data, sessionScopeKey, universePolicy.data],
+  );
 
   const spec = useMemo<InspectorSpec<MeshRootDraft>>(() => {
-    const hasPriorArtifacts = Boolean(manifest.data || (summary.data?.revision ?? 0) > 0);
+    const hasPriorArtifacts = Boolean(
+      femActive ? manifest.data || (summary.data?.revision ?? 0) > 0 : fdmGridBuilt,
+    );
+    const resolveEffectiveFdmGridShape = (draft: MeshRootDraft): [number, number, number] => {
+      if (draft.sizingMode === "cell_count") {
+        return [
+          draft.fftSmoothSnap ? snapSevenSmooth(draft.gridCountX) : Math.max(1, Math.round(draft.gridCountX)),
+          draft.fftSmoothSnap ? snapSevenSmooth(draft.gridCountY) : Math.max(1, Math.round(draft.gridCountY)),
+          Math.max(1, Math.round(draft.gridCountZ)),
+        ];
+      }
+      return (
+        estimateSceneFdmGridShape(scene.data, draft.cellSizeM, draft.fftSmoothSnap) ?? [
+          draft.gridCountX,
+          draft.gridCountY,
+          draft.gridCountZ,
+        ]
+      );
+    };
+    const isDraftModified = (draft: MeshRootDraft, base: MeshRootDraft): boolean =>
+      draft.sizingMode !== base.sizingMode ||
+      draft.zStackMode !== base.zStackMode ||
+      draft.fftSmoothSnap !== base.fftSmoothSnap ||
+      draft.gridCountX !== base.gridCountX ||
+      draft.gridCountY !== base.gridCountY ||
+      draft.gridCountZ !== base.gridCountZ ||
+      draft.cellSizeM[0] !== base.cellSizeM[0] ||
+      draft.cellSizeM[1] !== base.cellSizeM[1] ||
+      draft.cellSizeM[2] !== base.cellSizeM[2];
+    const runBuildFdmGrid = async (draft: MeshRootDraft, base: MeshRootDraft) => {
+      if (isDraftModified(draft, base) || !hasAuthoredFdmSizing) {
+        await persistFdmDiscretizationPolicy(draft);
+      }
+      await kernel.commands.execute(
+        "grid.build-fdm",
+        createCommandContext("inspector", kernel, {
+          sessionScopeKey: sessionScopeKey ?? null,
+          sourceDetail: "mesh.root",
+        }),
+      );
+    };
     return {
       id: "mesh.root",
       header: {
@@ -558,11 +833,16 @@ export function MeshRootInspectorSpecPanel({ selection }: InspectorPanelProps): 
             ? manifest.data
               ? "Rebuild Mesh"
               : "Build Mesh"
-            : "Re-voxelize Grid",
-          onRun: async () => {
-            const cmd = femActive ? "mesh.build-shared-domain" : "grid.build-fdm";
+            : fdmGridBuilt
+              ? "Re-voxelize Grid"
+              : "Build Structured Grid",
+          onRun: async (ctx) => {
+            if (!femActive) {
+              await runBuildFdmGrid(ctx.draft, ctx.baseline);
+              return;
+            }
             await kernel.commands.execute(
-              cmd,
+              "mesh.build-shared-domain",
               createCommandContext("inspector", kernel, {
                 sessionScopeKey: sessionScopeKey ?? null,
                 sourceDetail: "mesh.root",
@@ -584,15 +864,18 @@ export function MeshRootInspectorSpecPanel({ selection }: InspectorPanelProps): 
         statePill: (draft) => {
           if (buildingNow) return { label: "Building", tone: "live" };
           if (draft.lane === "fdm") {
-            const guard = computeExchangeLengthGuard(scene.data, draft.cellSizeM, [
-              draft.gridCountX,
-              draft.gridCountY,
-              draft.gridCountZ,
-            ]);
+            const shape = resolveEffectiveFdmGridShape(draft);
+            const guard = computeExchangeLengthGuard(scene.data, draft.cellSizeM, shape);
             if (guard?.exceeds) {
               return {
                 label: guard.ratio > 1.5 ? "Exchange violation" : "Cell > l_ex",
                 tone: guard.ratio > 1.5 ? "err" : "warn",
+              };
+            }
+            if (!fdmGridBuilt) {
+              return {
+                label: hasAuthoredFdmSizing ? "Not built" : "Not configured",
+                tone: "warn",
               };
             }
             return { label: "Ready", tone: "ok" };
@@ -607,11 +890,8 @@ export function MeshRootInspectorSpecPanel({ selection }: InspectorPanelProps): 
       },
       facts: (draft) => {
         if (draft.lane === "fdm") {
-          const guard = computeExchangeLengthGuard(scene.data, draft.cellSizeM, [
-            draft.gridCountX,
-            draft.gridCountY,
-            draft.gridCountZ,
-          ]);
+          const shape = resolveEffectiveFdmGridShape(draft);
+          const guard = computeExchangeLengthGuard(scene.data, draft.cellSizeM, shape);
           const ratioTone: InspectorTone | undefined = guard
             ? guard.ratio <= 1.0
               ? "ok"
@@ -623,8 +903,8 @@ export function MeshRootInspectorSpecPanel({ selection }: InspectorPanelProps): 
             { id: "lane", label: "Lane", value: "FDM" },
             {
               id: "grid",
-              label: "Grid",
-              value: `${draft.gridCountX} × ${draft.gridCountY} × ${draft.gridCountZ}`,
+              label: fdmGridBuilt ? "Grid" : "Estimated grid",
+              value: `${shape[0]} × ${shape[1]} × ${shape[2]}`,
             },
             {
               id: "cell",
@@ -669,11 +949,27 @@ export function MeshRootInspectorSpecPanel({ selection }: InspectorPanelProps): 
       notices: (draft) => {
         const list: InspectorNotice<MeshRootDraft>[] = [];
         if (draft.lane === "fdm") {
-          const guard = computeExchangeLengthGuard(scene.data, draft.cellSizeM, [
-            draft.gridCountX,
-            draft.gridCountY,
-            draft.gridCountZ,
-          ]);
+          const shape = resolveEffectiveFdmGridShape(draft);
+          if (!fdmGridBuilt) {
+            list.push({
+              focusFieldKey: "cellSizeM",
+              id: "fdm-not-built",
+              quickFix: {
+                label: hasAuthoredFdmSizing
+                  ? "Build Structured Grid"
+                  : "Save & Build Grid",
+                onApply: async (ctx) => {
+                  await runBuildFdmGrid(ctx.draft, ctx.baseline);
+                },
+              },
+              text: hasAuthoredFdmSizing
+                ? "Cell size is configured, but the structured FDM grid has not been built yet. Build the grid to materialize voxel cells and enable grid wireframe."
+                : "Set Cell size (Δx, Δy, Δz) below and build the structured FDM grid to materialize voxel cells and enable grid wireframe.",
+              title: "FDM grid not built yet",
+              tone: "warn",
+            });
+          }
+          const guard = computeExchangeLengthGuard(scene.data, draft.cellSizeM, shape);
           if (guard?.exceeds) {
             const maxNm = (guard.maxActiveCellM * 1e9).toFixed(2);
             const lexNm = (guard.exchangeLengthM * 1e9).toFixed(2);
@@ -753,6 +1049,29 @@ export function MeshRootInspectorSpecPanel({ selection }: InspectorPanelProps): 
         },
         {
           defaultOpen: true,
+          footer: (ctx) => {
+            const modified = isDraftModified(ctx.draft, ctx.baseline);
+            return (
+              <div className="flex flex-wrap gap-2">
+                <Button
+                  size="sm"
+                  type="button"
+                  variant="primary"
+                  onClick={() => {
+                    void runBuildFdmGrid(ctx.draft, ctx.baseline);
+                  }}
+                >
+                  {fdmGridBuilt
+                    ? modified
+                      ? "Save & Re-voxelize Grid"
+                      : "Re-voxelize Grid"
+                    : modified || !hasAuthoredFdmSizing
+                      ? "Save & Build Grid"
+                      : "Build Structured Grid"}
+                </Button>
+              </div>
+            );
+          },
           icon: Grid3x3,
           id: "fdm-sizing",
           rows: [
@@ -846,8 +1165,10 @@ export function MeshRootInspectorSpecPanel({ selection }: InspectorPanelProps): 
             },
           ],
           showWhen: (d) => d.lane === "fdm",
-          summary: (d) =>
-            `${d.gridCountX} × ${d.gridCountY} × ${d.gridCountZ} · ${(d.cellSizeM[0] * 1e9).toFixed(2)} nm`,
+          summary: (d) => {
+            const shape = resolveEffectiveFdmGridShape(d);
+            return `${shape[0]} × ${shape[1]} × ${shape[2]} · ${Number((d.cellSizeM[0] * 1e9).toFixed(2))} nm`;
+          },
           title: "Global FDM grid sizing",
         },
         {
@@ -1069,139 +1390,21 @@ export function MeshRootInspectorSpecPanel({ selection }: InspectorPanelProps): 
         },
       ],
       commitBar: {
+        allowCleanApply: (d) => d.lane === "fdm" && !hasAuthoredFdmSizing,
+        applyLabel: (d) =>
+          d.lane === "fdm" && !hasAuthoredFdmSizing ? "Apply Grid Sizing" : "Apply",
         cleanMessage: (d) =>
           d.lane === "fdm"
-            ? "FDM grid sizing matches session policy"
+            ? hasAuthoredFdmSizing
+              ? "FDM grid sizing matches session policy"
+              : "Review cell size Δ and click Apply Grid Sizing or Build Structured Grid"
             : "FEM shared-domain policy is up to date",
         mode: "staged",
         onApply: async (draft) => {
           const reqOptions = sessionScopeKey ? { sessionScopeKey } : undefined;
 
           if (draft.lane === "fdm") {
-            const nx = draft.fftSmoothSnap
-              ? snapSevenSmooth(draft.gridCountX)
-              : Math.max(1, Math.round(draft.gridCountX));
-            const ny = draft.fftSmoothSnap
-              ? snapSevenSmooth(draft.gridCountY)
-              : Math.max(1, Math.round(draft.gridCountY));
-            const nz = Math.max(1, Math.round(draft.gridCountZ));
-
-            const studyRec = asRecord(asRecord(scene.data)?.study);
-            const existingFdm = asRecord(studyRec?.fdm) ?? {};
-            const existingDemag = asRecord(existingFdm.demag) ?? {};
-            const demagStrategy =
-              draft.zStackMode === "multilayer"
-                ? "multilayer_convolution"
-                : "single_grid";
-            const demagMode =
-              draft.zStackMode === "multilayer" ? "two_d_stack" : "three_d";
-
-            const fdmPatch: JsonObject = {
-              ...(existingFdm as JsonObject),
-              default_cell:
-                draft.sizingMode === "cell_size" ? [...draft.cellSizeM] : null,
-              demag: {
-                ...(existingDemag as JsonObject),
-                common_cells:
-                  draft.sizingMode === "cell_count" &&
-                  draft.zStackMode !== "multilayer"
-                    ? [nx, ny, nz]
-                    : null,
-                common_cells_xy:
-                  draft.sizingMode === "cell_count" &&
-                  draft.zStackMode === "multilayer"
-                    ? [nx, ny]
-                    : null,
-                explain: draft.fftSmoothSnap,
-                mode: demagMode,
-                strategy: demagStrategy,
-              },
-            };
-
-            const baseRevision =
-              asNumber(asRecord(scene.data)?.revision) ??
-              asNumber(asRecord(scene.data)?.scene_revision) ??
-              0;
-            const mutationCtx = buildSafeMutationContext(
-              kernel,
-              sessionScopeKey,
-              "mesh.root.fdm",
-            );
-            const committed = await runAuthoringMutationWithHistory(
-              mutationCtx,
-              "Update FDM discretization policy",
-              async (prep) => {
-                const tx: AuthoringTransactionRequest = {
-                  base_revision: prep.baseRevision ?? baseRevision,
-                  kind: "merge_patch",
-                  merge_patch: {
-                    study: {
-                      demag_realization: demagStrategy,
-                      fdm: fdmPatch,
-                    },
-                  },
-                };
-                return kernel.api.model.commitTransaction(tx, reqOptions);
-              },
-            );
-            const committedScene = asRecord(committed)?.committed_scene as
-              | SceneResource
-              | undefined;
-            if (
-              committedScene &&
-              geometryLifecycleResources.publishCommittedSceneResource
-            ) {
-              const committedRev =
-                asNumber(asRecord(committedScene)?.revision) ??
-                `w5:${Date.now()}`;
-              geometryLifecycleResources.publishCommittedSceneResource(
-                kernel.resources,
-                committedScene,
-                committedRev,
-                undefined,
-                true,
-                sessionScopeKey ?? null,
-                kernel.api.resourceCacheScope,
-              );
-            }
-            const uniResource: MeshUniverseConfigResource =
-              universePolicy.data ?? {
-                config: null,
-                effective_config: null,
-                revision: 0,
-              };
-            if (uniResource.config !== null && uniResource.config !== undefined) {
-              const uniDraft = rebaseAirboxMeshPolicyDraft(
-                draftFromUniverseMeshPolicyResource(uniResource),
-                universePolicy.data ?? null,
-              );
-              const builtUni = buildAirboxMeshPolicyReplaceRequest(uniDraft, {
-                lane: "fdm",
-              });
-              if (!("error" in builtUni) && builtUni.request) {
-                await kernel.api.meshing.replaceUniversePolicy(
-                  builtUni.request,
-                  reqOptions,
-                );
-              }
-            }
-            invalidateAuthoringMutationDependents(
-              kernel.resources,
-              "geometry",
-              `w5:${Date.now()}`,
-            );
-            kernel.resources.invalidate(
-              geometryLifecycleResources.SCENE_RESOURCE_KEY,
-              `w5:${Date.now()}`,
-            );
-            kernel.resources.invalidate(
-              SESSION_STATUS_KEY,
-              `w5:${Date.now()}`,
-            );
-            kernel.resources.invalidate(
-              geometryLifecycleResources.MESH_UNIVERSE_POLICY_RESOURCE_KEY,
-              `w5:${Date.now()}`,
-            );
+            await persistFdmDiscretizationPolicy(draft);
           } else {
             const baseShared = draftFromSharedDomainResource(sharedPolicy.data ?? null);
             const nextSharedDraft: SharedDomainPolicyDraft = {
@@ -1308,12 +1511,15 @@ export function MeshRootInspectorSpecPanel({ selection }: InspectorPanelProps): 
   }, [
     activeLane,
     buildingNow,
+    fdmGridBuilt,
     femActive,
     femElements,
     femNodes,
+    hasAuthoredFdmSizing,
     kernel,
     manifest.data,
     manifestSourceRev,
+    persistFdmDiscretizationPolicy,
     scene.data,
     sceneRev,
     sessionScopeKey,

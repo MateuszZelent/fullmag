@@ -582,6 +582,34 @@ export function ObjectMeshInspectorSpecPanel({
       d.policyMode !== "custom"
         ? "Switch Policy ownership to Custom object policy to edit per-object mesh parameters."
         : null;
+    const studyFdm = asRecord(asRecord(asRecord(scene.data)?.study)?.fdm);
+    const authoredDefaultCell =
+      Array.isArray(studyFdm?.default_cell) && studyFdm.default_cell.length >= 3
+        ? (studyFdm.default_cell as unknown[]).map(asNumber)
+        : null;
+    const hasAuthoredFdmCell = Boolean(
+      authoredDefaultCell && authoredDefaultCell.every((v) => v !== null && v > 0),
+    );
+    const authoredCellLabel =
+      hasAuthoredFdmCell && authoredDefaultCell
+        ? `${Number(((authoredDefaultCell[0] ?? 0) * 1e9).toFixed(2))} × ${Number(((authoredDefaultCell[1] ?? 0) * 1e9).toFixed(2))} × ${Number(((authoredDefaultCell[2] ?? 0) * 1e9).toFixed(2))} nm`
+        : null;
+    const fdmGridMissing =
+      fdmMode &&
+      (!fdmModel?.shape ||
+        Boolean(fdmModel.notice?.includes("DomainMeta is missing")));
+    const openSessionMeshSizing = () => {
+      kernel.selection.set(
+        {
+          kind: "mesh.root",
+          label: "Mesh",
+          nodeId: "model:mesh",
+          objectId: null,
+          ref: null,
+        },
+        "inspector",
+      );
+    };
 
     return {
       id: "object.mesh",
@@ -615,8 +643,16 @@ export function ObjectMeshInspectorSpecPanel({
         primaryHeaderAction: fdmMode
           ? {
               icon: Grid3x3,
-              label: "Re-voxelize / Build Grid",
+              label: fdmGridMissing
+                ? hasAuthoredFdmCell
+                  ? "Build FDM Grid"
+                  : "Configure Cell Size"
+                : "Re-voxelize / Build Grid",
               onRun: async () => {
+                if (fdmGridMissing && !hasAuthoredFdmCell) {
+                  openSessionMeshSizing();
+                  return;
+                }
                 await kernel.commands.execute("grid.build-fdm", commandContext);
               },
             }
@@ -712,7 +748,20 @@ export function ObjectMeshInspectorSpecPanel({
             tone: statusFeedback.tone,
           });
         }
-        if (fdmMode && fdmModel?.notice) {
+        if (fdmMode && fdmGridMissing) {
+          notices.push({
+            id: "fdm-notice",
+            quickFix: {
+              label: "Configure Cell Size",
+              onApply: openSessionMeshSizing,
+            },
+            text: authoredCellLabel
+              ? `Session cell size (${authoredCellLabel}) is configured, but the structured FDM grid has not been built yet. Build the grid to materialize voxel cells and enable grid wireframe.`
+              : "Cell size (Δx, Δy, Δz) is configured at the session Mesh level. Open Discretization & Mesh to set cell size and build the FDM grid.",
+            title: "FDM grid not built yet",
+            tone: "warn",
+          });
+        } else if (fdmMode && fdmModel?.notice) {
           notices.push({
             id: "fdm-notice",
             text: sanitizeMeshDisplayText(fdmModel.notice),
@@ -755,20 +804,41 @@ export function ObjectMeshInspectorSpecPanel({
             {
               defaultOpen: true,
               footer: () => (
-                <Button
-                  size="sm"
-                  type="button"
-                  variant="secondary"
-                  onClick={() => {
-                    void kernel.commands.execute("grid.build-fdm", commandContext);
-                  }}
-                >
-                  Re-voxelize / Build Grid
-                </Button>
+                <div className="flex flex-wrap gap-2">
+                  <Button
+                    size="sm"
+                    type="button"
+                    variant={fdmGridMissing && !hasAuthoredFdmCell ? "primary" : "secondary"}
+                    onClick={openSessionMeshSizing}
+                  >
+                    Configure Cell Size (Mesh)
+                  </Button>
+                  <Button
+                    size="sm"
+                    type="button"
+                    variant={fdmGridMissing && hasAuthoredFdmCell ? "primary" : "secondary"}
+                    onClick={() => {
+                      if (fdmGridMissing && !hasAuthoredFdmCell) {
+                        openSessionMeshSizing();
+                        return;
+                      }
+                      void kernel.commands.execute("grid.build-fdm", commandContext);
+                    }}
+                  >
+                    {fdmGridMissing ? "Build FDM Grid" : "Re-voxelize / Build Grid"}
+                  </Button>
+                </div>
               ),
               icon: Grid3x3,
               id: "fdm-participation",
               rows: [
+                {
+                  format: () => authoredCellLabel ?? "Not configured — set in Mesh",
+                  hint: "Structured FDM cell spacing (Δx, Δy, Δz) is shared across the session.",
+                  label: "Session cell size",
+                  mono: Boolean(authoredCellLabel),
+                  type: "readonly",
+                },
                 {
                   format: () => "Execution-plan owned structured grid (read-only)",
                   label: "Mesh policy",
@@ -1609,6 +1679,7 @@ export function ObjectMeshInspectorSpecPanel({
     geometryKind,
     hoverSizeDistributionBin,
     kernel.commands,
+    kernel.selection,
     objectId,
     objectName,
     persistObjectPolicy,
@@ -1617,6 +1688,7 @@ export function ObjectMeshInspectorSpecPanel({
     realizedObjectSizeFields.length,
     resource,
     runMeshBuildCommand,
+    scene.data,
     setStatusFeedback,
     sizeFieldKinds,
     statusFeedback,

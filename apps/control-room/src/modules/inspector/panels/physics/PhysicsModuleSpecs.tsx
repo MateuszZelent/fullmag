@@ -485,6 +485,42 @@ function readObjectInteractionState(
 }
 
 export function ObjectPhysicsInspectorPanel({ selection }: InspectorPanelProps) {
+  const leafMatch = selection.nodeId?.match(
+    /^model:(?:object:([^:]+):)?physics:([a-z0-9_]+)$/i,
+  );
+  if (leafMatch) {
+    const [, nodeObjectId, interactionId] = leafMatch;
+    const resolvedObjectId =
+      selection.objectId ??
+      (selection.ref?.type === "scene-object" ? selection.ref.objectId : null) ??
+      nodeObjectId ??
+      null;
+    const regionId =
+      selection.ref?.type === "scene-object" ? selection.ref.regionId : undefined;
+    return (
+      <PhysicsModuleInspectorPanel
+        selection={{
+          ...selection,
+          kind: "physics.module",
+          objectId: resolvedObjectId,
+          ref: {
+            kind: "physics.module",
+            nodeId: selection.nodeId!,
+            physicsModuleId: interactionId,
+            physicsModuleKind: interactionId,
+            physicsScopeKind: resolvedObjectId ? "object" : "global",
+            ...(resolvedObjectId ? { physicsScopeObjectIds: [resolvedObjectId] } : {}),
+            ...(regionId ? { regionId } : {}),
+            type: "physics-module",
+          },
+        }}
+      />
+    );
+  }
+  return <ObjectPhysicsMatrixInspectorPanel selection={selection} />;
+}
+
+function ObjectPhysicsMatrixInspectorPanel({ selection }: InspectorPanelProps) {
   const kernel = useKernel();
   const sessionScopeKey = sessionRequestScopeKey(useSessionResourceIdentity());
   const sessionDiscretization = useSessionStatusSelector((status) =>
