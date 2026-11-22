@@ -1,6 +1,11 @@
 .fm-mesh-build-confirm-dialog {
-  width: min(760px, calc(100vw - var(--fm-space-8)));
+  width: min(680px, calc(100vw - var(--fm-space-8)));
   max-height: min(760px, calc(100vh - 64px));
+  padding-bottom: var(--fm-space-4);
+}
+
+.fm-mesh-build-confirm-dialog--compact {
+  width: min(540px, calc(100vw - var(--fm-space-8)));
 }
 
 .fm-mesh-build-confirm {
