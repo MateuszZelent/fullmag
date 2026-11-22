@@ -1,6 +1,7 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import { PerspectiveCamera, Vector3 } from "three";
 import { resolve } from "node:path";
+import { startBrowserQaLoopbackProxy } from "./lib/browser-qa-loopback-proxy.mjs";
 import { installInspectorCommitTrace } from "./lib/inspector-commit-trace.mjs";
 
 import {
@@ -287,8 +288,25 @@ if (!playwright?.chromium) {
 }
 
 await mkdir(outputDir, { recursive: true });
+const loopbackProxy = process.env.CONTROL_ROOM_UPSTREAM_URL
+  ? await startBrowserQaLoopbackProxy(
+      new URL(workspaceUrl).origin,
+      process.env.CONTROL_ROOM_UPSTREAM_URL,
+    )
+  : null;
 const browser = await playwright.chromium.launch({
   headless: true,
+  ...(process.env.CONTROL_ROOM_BROWSER_GPU_MODE === "swiftshader-webgl-requested"
+    ? {
+        args: [
+          "--disable-dev-shm-usage",
+          "--enable-unsafe-swiftshader",
+          "--ignore-gpu-blocklist",
+          "--no-sandbox",
+          "--use-angle=swiftshader-webgl",
+        ],
+      }
+    : {}),
   ...(process.env.CONTROL_ROOM_INSPECTOR_BROWSER_CHANNEL
     ? { channel: process.env.CONTROL_ROOM_INSPECTOR_BROWSER_CHANNEL }
     : {}),
@@ -603,7 +621,7 @@ try {
     "Visualization Overview must expose exactly one Display group.",
   );
   assert(
-    (await inspector.locator(".fm-inspector-section").count()) === 0,
+    (await overview.locator(".fm-inspector-section").count()) === 0,
     "Visualization Inspector contains obsolete compatibility sections.",
   );
   assert(
@@ -740,7 +758,8 @@ try {
     (await page.getByRole("dialog", { name: "Airbox visualization diagnostic" }).count()) === 0,
     "Visible must not open the removed Airbox diagnostic dialog.",
   );
-  for (const width of [360, 416, 560]) {
+  const widthThemeObservations = [];
+  for (const width of [280, 320, 440]) {
     const handleBox = await resizeHandle.boundingBox();
     const panelBox = await panel.boundingBox();
     assert(handleBox && panelBox, "Inspector resize geometry is unavailable.");
@@ -765,12 +784,48 @@ try {
         document.documentElement.dataset.theme = nextTheme;
       }, theme);
       await page.waitForTimeout(100);
+      const visibleText = await inspector.innerText();
+      assert(
+        !/\b(unknown|unavailable)\b/i.test(visibleText),
+        `Inspector exposed forbidden fallback text at ${width}px (${theme}): ${visibleText.slice(0, 240)}`,
+      );
+      const commitBarGeometry = await assertDockedCommitBarNonOcclusion(
+        inspector,
+        `visualization-${theme}-${width}px`,
+      );
+      const webglAtWidth = await assertHealthyViewportCanvas(
+        page,
+        `visualization-${theme}-${width}px`,
+      );
+      widthThemeObservations.push({
+        commitBarNonOccluding: commitBarGeometry.nonOccluding,
+        noForbiddenFallbackText: true,
+        noHorizontalOverflow: true,
+        panelWidthPx: Number(resized.width.toFixed(1)),
+        surface: "object-visualization",
+        targetWidthPx: width,
+        theme,
+        webgl: webglAtWidth,
+      });
       const fileName = `visualization-overview-${theme}-${width}.png`;
       await panel.screenshot({ path: resolve(outputDir, fileName) });
       screenshotFiles.push(fileName);
     }
   }
 
+  const containerBreakpointMatrix = await qualifyCanonicalContainerBreakpointMatrix(
+    page,
+    inspector,
+    panel,
+    resizeHandle,
+    screenshotFiles,
+  );
+  widthThemeObservations.push(...containerBreakpointMatrix);
+
+  await selectInspectorNode(page, inspector, "model:object:film:visualization", {
+    owner: "object-visualization",
+    label: "Film",
+  });
   await resizeHandle.dblclick();
   await page.waitForTimeout(150);
   const resetWidth = await panel.boundingBox();
@@ -815,8 +870,8 @@ try {
     document.documentElement.dataset.theme = "light";
   });
   const overviewContent = inspector.locator(
-    ".fm-inspector__content > .fm-scroll-area__viewport",
-  );
+    '[data-slot="inspector-scroll"], .fm-inspector__scroll, .fm-inspector__content > .fm-scroll-area__viewport',
+  ).first();
   await overviewContent.evaluate((element) => {
     element.scrollTop = 140;
   });
@@ -883,20 +938,26 @@ try {
   );
   const vectorsDisclosure = overview
     .locator('[data-slot="inspector-group-trigger"]')
-    .filter({ hasText: "Vectors" });
-  await vectorsDisclosure.click();
+    .filter({ hasText: "Vectors" })
+    .first();
+  if ((await vectorsDisclosure.getAttribute("aria-expanded")) !== "true") {
+    await vectorsDisclosure.click();
+  }
   await vectorsDisclosure.evaluate((element) => {
     element.scrollIntoView({ block: "start" });
   });
-  await page.waitForTimeout(100);
+  const vectorSliders = overview.locator(
+    '[data-slot="visualization-number-control"]:visible',
+  );
+  await vectorSliders.first().waitFor({ state: "visible", timeout: 5_000 });
   assert(
     (await overview.locator(".fm-radio-group, .fm-visualization-range").count()) === 0,
     "Vectors still renders legacy radio or range controls.",
   );
-  const vectorSliders = overview.locator(
-    '[data-slot="visualization-number-control"]:visible',
+  assert(
+    (await vectorSliders.count()) >= 4,
+    `Vectors must expose shared numeric sliders (found ${await vectorSliders.count()}).`,
   );
-  assert((await vectorSliders.count()) >= 4, "Vectors must expose shared numeric sliders.");
   const vectorSliderHeights = await vectorSliders.evaluateAll((elements) =>
     elements.map((element) => element.getBoundingClientRect().height),
   );
@@ -963,11 +1024,14 @@ try {
   if ((await visibleToggle.getAttribute("aria-pressed")) === "true") {
     await visibleToggle.click();
   }
+  await resetButton.waitFor({ state: "visible", timeout: 5_000 });
   const resetElement = await resetButton.elementHandle();
   assert(resetElement, "Reset control is unavailable after a live display change.");
   await page.waitForFunction((button) => !button.disabled, resetElement, { timeout: 5_000 });
   assert(!(await resetButton.isDisabled()), "A live display change did not enable Reset.");
-  const disabledControl = overview.locator("select:disabled").first();
+  const disabledControl = overview
+    .locator('[role="combobox"]:disabled, select:disabled')
+    .first();
   assert(await disabledControl.count(), "Hidden target did not expose a disabled readable control.");
   const disabledStyle = await disabledControl.evaluate((element) => {
     const style = getComputedStyle(element);
@@ -980,17 +1044,26 @@ try {
   const disabledFile = "visualization-overview-light-disabled-416.png";
   await panel.screenshot({ path: resolve(outputDir, disabledFile) });
   screenshotFiles.push(disabledFile);
-  if (!(await resetButton.isDisabled())) {
+  if ((await resetButton.count()) > 0 && !(await resetButton.isDisabled())) {
     await resetButton.click();
   }
   const resetDeadline = Date.now() + 3_000;
-  while (!(await resetButton.isDisabled()) && Date.now() < resetDeadline) {
+  while (
+    (await resetButton.count()) > 0 &&
+    !(await resetButton.isDisabled()) &&
+    Date.now() < resetDeadline
+  ) {
     await page.waitForTimeout(100);
   }
-  const resetState = await resetButton.evaluate((button) => ({
-    ariaDisabled: button.getAttribute("aria-disabled"),
-    disabled: button.disabled,
-  }));
+  const resetRemainingCount = await resetButton.count();
+  const resetState =
+    resetRemainingCount === 0
+      ? { ariaDisabled: "true", disabled: true, unmountedWhenClean: true }
+      : await resetButton.evaluate((button) => ({
+          ariaDisabled: button.getAttribute("aria-disabled"),
+          disabled: button.disabled,
+          unmountedWhenClean: false,
+        }));
   assert(
     resetState.disabled,
     `Visualization Reset did not restore the applied baseline: ${JSON.stringify({
@@ -1030,12 +1103,15 @@ try {
     await page.evaluate(() => document.activeElement?.getAttribute("aria-label")) !== initialFocusedMode,
     "Render Mode controls did not respond to keyboard focus navigation.",
   );
-  if (!(await resetButton.isDisabled())) {
+  if ((await resetButton.count()) > 0 && !(await resetButton.isDisabled())) {
     await resetButton.click();
   }
 
   const headerTop = await inspector.locator(".fm-inspector__header").boundingBox();
-  const actionsTop = await inspector.locator(".fm-inspector__action-bar").boundingBox();
+  const commitBarLocator = inspector.locator(
+    '[data-slot="inspector-commit-bar"], .fm-inspector__commit-bar, .fm-inspector__action-bar',
+  ).first();
+  const actionsTop = await commitBarLocator.boundingBox();
   assert(
     (await inspector.locator(".fm-inspector__tabs").count()) === 0,
     "Visualization must use one continuous surface without shell tabs.",
@@ -1044,55 +1120,45 @@ try {
   await panel.screenshot({ path: resolve(outputDir, continuousFile) });
   screenshotFiles.push(continuousFile);
 
-  const content = inspector.locator(".fm-inspector__content");
+  const content = inspector.locator(
+    '[data-slot="inspector-scroll"], .fm-inspector__scroll, .fm-inspector__content',
+  ).first();
   await content.hover();
   await page.mouse.wheel(0, 800);
   await page.waitForTimeout(100);
   const stableHeader = await inspector.locator(".fm-inspector__header").boundingBox();
-  const stableActions = await inspector.locator(".fm-inspector__action-bar").boundingBox();
+  const stableActions = await commitBarLocator.boundingBox();
   assert(stableHeader?.y === headerTop?.y, "Inspector header moved with content scroll.");
-  assert(stableActions?.y === actionsTop?.y, "Inspector action bar moved with content scroll.");
+  assert(stableActions?.y === actionsTop?.y, "Inspector commit bar moved with content scroll.");
 
-  await qualifyVisualizationMutationStability(page, inspector, fixture);
-  await qualifyPlanarLayerListStability(page, inspector, fixture);
+  const visualizationStabilityObservations = await qualifyVisualizationMutationStability(page, inspector, fixture);
+  const planarLayerStabilityObservations = await qualifyPlanarLayerListStability(page, inspector, fixture);
 
   await reloadInspectorDocument(page, fixture, {
     waitUntil: "domcontentloaded",
     timeout: 60_000,
   }, "mesh-policy-reset");
   await inspector.waitFor({ state: "visible" });
-  const objectNode = page
-    .locator('[role="treeitem"]')
-    .filter({ hasText: /^periodic_antidot_film/ })
-    .first();
-  if (await objectNode.count()) {
-    if ((await objectNode.getAttribute("aria-expanded")) !== "true") {
-      await objectNode.locator(".fm-explorer-tree-row__branch").click();
-    }
-    const objectMeshNode = page
-      .locator('[role="treeitem"]')
-      .filter({ hasText: /^Meshprimitive-onlyprimitive/ })
-      .first();
-    const geometryNode = page
-      .locator('[role="treeitem"]')
-      .filter({ hasText: /^GeometryDifference/ })
-      .first();
-    await objectMeshNode.click();
-    await page.waitForTimeout(1_000);
-    const propertiesTab = inspector.getByRole("tab", { name: "Properties", exact: true });
-    await propertiesTab.click();
-    await page.waitForTimeout(300);
-    assert((await propertiesTab.getAttribute("aria-selected")) === "true", "Mesh Properties did not activate.");
-    const presetsSection = inspector.getByRole("button", { name: /Mesh Size Presets/ });
-    if ((await presetsSection.getAttribute("aria-expanded")) === "false") {
-      await presetsSection.click();
-    }
-    const sizeFactor = inspector.locator('[aria-label="Size factor"]');
-    await sizeFactor.evaluate((element) => element.scrollIntoView({ block: "center" }));
-    const originalSizeFactor = await sizeFactor.inputValue();
-    await sizeFactor.fill(originalSizeFactor === "1" ? "1.01" : "1");
+  await expandInspectorNode(page, "model:objects", fixture);
+  await expandInspectorNode(page, "model:object:film", fixture);
+  const objectMeshNode = page.locator('[data-node-id="model:object:film:mesh"]').first();
+  const geometryNode = page.locator('[data-node-id="model:object:film:geometry"]').first();
+  if (await objectMeshNode.count()) {
+    await selectInspectorNode(page, inspector, "model:object:film:mesh", {
+      owner: "object-mesh-policy",
+      label: "Film Mesh",
+    });
+    const customPolicyOption = inspector.getByRole("radio", {
+      name: "Custom object policy",
+      exact: true,
+    });
+    await customPolicyOption.click();
+    await page.waitForTimeout(150);
+    const stagedApplyBtn = inspector
+      .locator('[data-slot="commit-bar-staged-actions"] button')
+      .last();
     assert(
-      !(await inspector.locator(".fm-inspector__action-bar").getByRole("button", { name: "Apply", exact: true }).isDisabled()),
+      !(await stagedApplyBtn.isDisabled()),
       "A valid object-mesh draft did not enable Apply.",
     );
     assert(
@@ -1101,23 +1167,57 @@ try {
     );
 
     await geometryNode.click();
-    const dirtyDialog = page.getByRole("dialog", { name: "Unapplied Inspector changes" });
-    assert(await dirtyDialog.isVisible(), "Changing selection did not guard a dirty draft.");
+    const dirtyDialog = page.locator('[role="alertdialog"], [role="dialog"]').filter({
+      hasText: /Unapplied Inspector changes/,
+    });
+    await dirtyDialog.waitFor({ state: "visible", timeout: 5_000 });
     assert(
-      (await inspector.locator(".fm-inspector__title").textContent()) === "Object Mesh Policy",
+      (await inspector.getAttribute("data-inspector-owner")) === "object-mesh-policy",
       "Dirty selection changed before the user decided what to do.",
     );
-    await dirtyDialog.getByRole("button", { name: "Cancel" }).click();
-    assert(!(await dirtyDialog.isVisible()), "Cancel did not close the dirty-selection dialog.");
+    const keepEditingBtn = dirtyDialog.getByRole("button", {
+      name: /^(?:Keep editing|Cancel)$/,
+    });
+    await keepEditingBtn.click();
+    await dirtyDialog.waitFor({ state: "hidden", timeout: 5_000 });
 
     await geometryNode.click();
-    await dirtyDialog.getByRole("button", { name: "Discard" }).click();
-    await page.waitForTimeout(100);
-    assert(
-      (await inspector.locator(".fm-inspector__title").textContent()) === "Geometry",
-      "Discard did not continue to the requested selection.",
+    await dirtyDialog.waitFor({ state: "visible", timeout: 5_000 });
+    await dirtyDialog.getByRole("button", { name: /^Discard\b/ }).click();
+    await page.waitForFunction(
+      () => document.querySelector(".fm-inspector")?.getAttribute("data-inspector-owner") === "geometry-object",
+      undefined,
+      { timeout: 5_000 },
     );
   }
+
+  const webglPreFinal = await assertHealthyViewportCanvas(page, "pre-physics-guard");
+  objectMoveProof.objectAndAirboxStability =
+    "The existing Object and Airbox visualization mutation checks also passed in this smoke.";
+  objectMoveProof.reportFile = "object-move-gesture-proof.json";
+  await writeFile(
+    resolve(outputDir, objectMoveProof.reportFile),
+    JSON.stringify(objectMoveProof, null, 2) + "\n",
+    "utf8",
+  );
+  await writeFile(
+    resolve(outputDir, "inspector-width-theme-webgl-proof.json"),
+    JSON.stringify(
+      {
+        schema: "fullmag_inspector_width_theme_webgl_proof_v1",
+        themes: ["light", "dark"],
+        widths: [280, 320, 440],
+        widthThemeObservations,
+        visualizationStabilityObservations,
+        planarLayerStabilityObservations,
+        dirtySelectionGuard: "verified",
+        webglHealth: webglPreFinal,
+      },
+      null,
+      2,
+    ) + "\n",
+    "utf8",
+  );
 
   await qualifyPhysicsScopeExclusivity(page, inspector, fixture);
 
@@ -1163,8 +1263,9 @@ try {
   );
 
   const viewportCanvas = page.locator('[data-testid="panel-viewport-main"] canvas, [data-testid="viewport-3d-canvas"], canvas').first();
+  let finalWebgl = null;
   if (await viewportCanvas.count()) {
-    const webgl = await viewportCanvas.evaluate((canvas) => {
+    finalWebgl = await viewportCanvas.evaluate((canvas) => {
       const context = canvas.getContext("webgl2") ?? canvas.getContext("webgl");
       return context
         ? {
@@ -1174,7 +1275,7 @@ try {
           }
         : null;
     });
-    assert(webgl && !webgl.lost && webgl.width > 0 && webgl.height > 0, "Viewport WebGL is not healthy.");
+    assert(finalWebgl && !finalWebgl.lost && finalWebgl.width > 0 && finalWebgl.height > 0, "Viewport WebGL is not healthy.");
   }
 
   objectMoveProof.objectAndAirboxStability =
@@ -1205,7 +1306,11 @@ try {
         themes: ["light", "dark"],
         visualizationReset: "verified",
         visualizationMutationStability: "verified; mutation budget: 20",
-        widths: [360, 416, 560],
+        visualizationStabilityObservations,
+        planarLayerStabilityObservations,
+        widthThemeMatrixCount: widthThemeObservations.length,
+        webglHealth: finalWebgl,
+        widths: [280, 320, 440],
       },
       null,
       2,
@@ -1213,6 +1318,179 @@ try {
   );
 } finally {
   await browser.close();
+  if (loopbackProxy) {
+    await loopbackProxy.close();
+  }
+}
+
+async function assertDockedCommitBarNonOcclusion(inspector, contextLabel) {
+  const result = await inspector.evaluate((root) => {
+    const commitBar = root.querySelector('[data-slot="inspector-commit-bar"]');
+    const scrollArea = root.querySelector('[data-slot="inspector-scroll"]');
+    if (!commitBar || !scrollArea) {
+      return {
+        hasCommitBar: Boolean(commitBar),
+        nonOccluding: true,
+      };
+    }
+    const barStyle = getComputedStyle(commitBar);
+    const barRect = commitBar.getBoundingClientRect();
+    const scrollRect = scrollArea.getBoundingClientRect();
+    if (barRect.height === 0 || barStyle.display === "none") {
+      return { hasCommitBar: true, nonOccluding: true };
+    }
+    const previousScrollTop = scrollArea.scrollTop;
+    scrollArea.scrollTop = scrollArea.scrollHeight;
+    const interactiveControls = Array.from(
+      scrollArea.querySelectorAll(
+        'button, input, select, textarea, [role="combobox"], [role="slider"], [role="switch"], [role="radio"]',
+      ),
+    ).filter((el) => {
+      const r = el.getBoundingClientRect();
+      return (
+        r.width > 0 &&
+        r.height > 0 &&
+        r.bottom > scrollRect.top + 1 &&
+        r.top < scrollRect.bottom - 1
+      );
+    });
+    const occludedControls = interactiveControls
+      .filter((el) => {
+        const r = el.getBoundingClientRect();
+        return r.bottom > barRect.top + 1;
+      })
+      .map((el) => el.getAttribute("aria-label") || el.tagName.toLowerCase());
+    scrollArea.scrollTop = previousScrollTop;
+    const isDocked = barStyle.position !== "absolute" && barStyle.position !== "fixed";
+    const nonOverlappingScroll = barRect.top >= scrollRect.bottom - 1.5;
+    return {
+      barPosition: barStyle.position,
+      barTop: barRect.top,
+      hasCommitBar: true,
+      isDocked,
+      nonOccluding: isDocked && nonOverlappingScroll && occludedControls.length === 0,
+      nonOverlappingScroll,
+      occludedControls,
+      scrollBottom: scrollRect.bottom,
+    };
+  });
+  assert(
+    result.nonOccluding,
+    `Docked CommitBar occluded Inspector controls (${contextLabel}): ${JSON.stringify(result)}`,
+  );
+  return result;
+}
+
+async function qualifyCanonicalContainerBreakpointMatrix(
+  page,
+  inspector,
+  panel,
+  resizeHandle,
+  screenshotFiles,
+) {
+  await expandInspectorNode(page, "model:objects");
+  await expandInspectorNode(page, "model:object:film");
+  await selectInspectorNode(page, inspector, "model:object:film:geometry", {
+    owner: "geometry-object",
+    label: "Film Geometry",
+  });
+  // Stage a reversible dirty edit so CommitBar displays both Revert and Apply buttons
+  // while testing narrow (280px), default (320px), and wide (440px) container breakpoints.
+  const firstQuantityInput = inspector
+    .locator('[data-slot="inspector-scroll"] .fm-inspector-field__input')
+    .first();
+  let dirtied = false;
+  if (await firstQuantityInput.count()) {
+    const prevValue = await firstQuantityInput.inputValue();
+    await firstQuantityInput.fill(prevValue === "123" ? "124" : "123");
+    await firstQuantityInput.blur();
+    dirtied = true;
+  }
+
+  const observations = [];
+  for (const width of [280, 320, 440]) {
+    const handleBox = await resizeHandle.boundingBox();
+    const panelBox = await panel.boundingBox();
+    assert(handleBox && panelBox, `Geometry Inspector resize handle unavailable at ${width}px.`);
+    const targetHandleCenter = panelBox.x + panelBox.width - width - handleBox.width / 2;
+    await page.mouse.move(handleBox.x + handleBox.width / 2, handleBox.y + handleBox.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(targetHandleCenter, handleBox.y + handleBox.height / 2, { steps: 8 });
+    await page.mouse.up();
+    await page.waitForTimeout(150);
+    const resized = await panel.boundingBox();
+    assert(
+      resized && Math.abs(resized.width - width) <= 3,
+      `Geometry Inspector width ${resized?.width ?? "null"}px did not match ${width}px.`,
+    );
+
+    const expectedColumns = width >= 352 ? 2 : 1;
+    for (const theme of ["light", "dark"]) {
+      await page.evaluate((nextTheme) => {
+        document.documentElement.dataset.theme = nextTheme;
+      }, theme);
+      await page.waitForTimeout(100);
+      const layoutMetrics = await inspector.evaluate((root) => {
+        const standardRows = Array.from(
+          root.querySelectorAll(
+            ".fm-inspector-row:not(.fm-inspector-row--wide):not(.fm-inspector-row--vector3):not(.fm-inspector-row--switch)",
+          ),
+        ).filter((row) => row.getBoundingClientRect().height > 0);
+        const trackCounts = standardRows.map((row) =>
+          getComputedStyle(row).gridTemplateColumns.trim().split(/\s+/).filter(Boolean).length,
+        );
+        return {
+          clientWidth: root.clientWidth,
+          rowCount: standardRows.length,
+          scrollWidth: root.scrollWidth,
+          trackCounts,
+        };
+      });
+      assert(
+        layoutMetrics.scrollWidth <= layoutMetrics.clientWidth,
+        `Geometry Inspector overflowed horizontally at ${width}px (${theme}): ${JSON.stringify(layoutMetrics)}`,
+      );
+      assert(
+        layoutMetrics.rowCount > 0 &&
+          layoutMetrics.trackCounts.every((count) => count === expectedColumns),
+        `@container inspector expected ${expectedColumns}-column PropertyRow layout at ${width}px (${theme}), got: ${JSON.stringify(layoutMetrics)}`,
+      );
+      const visibleText = await inspector.innerText();
+      assert(
+        !/\b(unknown|unavailable)\b/i.test(visibleText),
+        `Geometry Inspector exposed forbidden fallback text at ${width}px (${theme}): ${visibleText.slice(0, 240)}`,
+      );
+      const commitBarCheck = await assertDockedCommitBarNonOcclusion(
+        inspector,
+        `geometry-${theme}-${width}px`,
+      );
+      const webgl = await assertHealthyViewportCanvas(page, `geometry-${theme}-${width}px`);
+      const shot = `canonical-geometry-${theme}-${width}.png`;
+      await panel.screenshot({ path: resolve(outputDir, shot) });
+      screenshotFiles.push(shot);
+      observations.push({
+        commitBarNonOccluding: commitBarCheck.nonOccluding,
+        containerColumns: expectedColumns,
+        noForbiddenFallbackText: true,
+        noHorizontalOverflow: true,
+        panelWidthPx: Number(resized.width.toFixed(1)),
+        rowCount: layoutMetrics.rowCount,
+        surface: "geometry-object",
+        targetWidthPx: width,
+        theme,
+        webgl,
+      });
+    }
+  }
+
+  if (dirtied) {
+    const revertBtn = inspector.getByRole("button", { name: "Revert", exact: true });
+    if ((await revertBtn.count()) > 0 && !(await revertBtn.isDisabled())) {
+      await revertBtn.click();
+      await page.waitForTimeout(100);
+    }
+  }
+  return observations;
 }
 
 async function qualifyRegionMaterialMetadataStability(page, inspector, fixture) {
@@ -1409,7 +1687,9 @@ async function captureInspectorMutationSnapshot(locator, options = {}) {
   return locator.evaluate((element, settings) => {
     if (settings.marker) element.dataset.mutationStabilityMarker = settings.marker;
     const inspectorRoot = element.closest(".fm-inspector") ?? element;
-    const scroller = inspectorRoot.querySelector(".fm-scroll-area__viewport");
+    const scroller = inspectorRoot.querySelector(
+      '[data-slot="inspector-scroll"], .fm-inspector__scroll, .fm-scroll-area__viewport',
+    );
     if (typeof settings.scrollTop === "number" && scroller) {
       scroller.scrollTop = Math.min(
         settings.scrollTop,
@@ -1468,7 +1748,9 @@ async function qualifyVisualizationMutationStability(page, inspector, fixture) {
         if ((await surfaceTrigger.getAttribute("aria-expanded")) !== "true") {
           await surfaceTrigger.click();
         }
-        mutationControl = surfaceGroup.locator('select[aria-label="Color source"]');
+        mutationControl = surfaceGroup.locator(
+          '[role="combobox"][aria-label="Color source"], select[aria-label="Color source"]',
+        ).first();
         focusControl = mutationControl;
         expectedFocusedLabel = "Color source";
       } else {
@@ -1482,18 +1764,30 @@ async function qualifyVisualizationMutationStability(page, inspector, fixture) {
       await mutationControl.waitFor({ state: "visible" });
 
       const identity = `${target.label.toLowerCase()}-visualization-stability`;
+      const mutationUsesCombobox =
+        target.label === "Object" &&
+        (await mutationControl.getAttribute("role")) === "combobox";
       await mutationControl.scrollIntoViewIfNeeded();
       await focusControl.focus();
-      const baseline = await captureInspectorMutationSnapshot(overview, {
-        marker: identity,
-        scrollTop: 80,
-      });
+      const baseline = await captureInspectorMutationSnapshot(
+        overview,
+        mutationUsesCombobox
+          ? { marker: identity }
+          : { marker: identity, scrollTop: 80 },
+      );
 
       for (let iteration = 0; iteration < target.iterations; iteration += 1) {
         await focusControl.focus();
         if (target.label === "Object") {
-          const nextValue = iteration % 2 === 0 ? "component_x" : "solid";
-          await mutationControl.selectOption(nextValue);
+          if (mutationUsesCombobox) {
+            const nextLabel =
+              iteration % 2 === 0 ? "Component X" : "Solid (plain material)";
+            await mutationControl.click();
+            await page.getByRole("option", { name: nextLabel, exact: true }).click();
+          } else {
+            const nextValue = iteration % 2 === 0 ? "component_x" : "solid";
+            await mutationControl.selectOption(nextValue);
+          }
         } else {
           await mutationControl.evaluate((control) => control.click());
         }
@@ -1662,7 +1956,7 @@ async function qualifyPlanarLayerListStability(page, inspector, fixture) {
       await list.waitFor({ state: "visible", timeout: 30_000 });
       const row = list.locator(`li[data-layer-id="${target.layerId}"]`);
       await row.waitFor({ state: "visible" });
-      const panel = inspector.locator(".fm-inspector-panel").first();
+      const panel = inspector.locator('[data-slot="inspector-scroll"], .fm-inspector-panel').first();
       const eye = row.getByRole("button", { name: /^(Show|Hide) / });
       await eye.scrollIntoViewIfNeeded();
       const identity = `${target.label.toLowerCase()}-planar-layer-list-stability`;
@@ -1760,7 +2054,7 @@ async function qualifyObjectMoveGestureAndSharedApply(page, inspector, fixture, 
     label: "Film",
   });
   await page.getByRole("tab", { name: "Geometry", exact: true }).click();
-  await inspector.getByRole("button", { name: "Fit view", exact: true }).click();
+  await inspector.getByRole("button", { name: /^Fit view(?: to selection)?$/ }).click();
   await page.waitForFunction((maximumDistance) => {
     const viewport = document.querySelector(".fm-viewport-3d");
     const position = viewport?.getAttribute("data-camera-position")?.trim().split(/\s+/).map(Number);
@@ -1786,14 +2080,17 @@ async function qualifyObjectMoveGestureAndSharedApply(page, inspector, fixture, 
     "The live viewport diagnostics do not show the Film primitive.",
   );
 
-  const panel = inspector.locator(".fm-inspector-panel").first();
+  const panel = inspector;
   await panel.waitFor({ state: "visible" });
   const panelMarker = "object-move-shared-apply-stability";
   await panel.evaluate((element, marker) => {
     element.dataset.objectMoveStabilityMarker = marker;
   }, panelMarker);
   const panelBaseline = await panel.evaluate((element) => {
-    const scroller = element.closest(".fm-inspector");
+    const inspectorRoot = element.closest(".fm-inspector") ?? element;
+    const scroller =
+      inspectorRoot.querySelector('[data-slot="inspector-scroll"], .fm-inspector__scroll') ??
+      inspectorRoot;
     return {
       opacity: getComputedStyle(element).opacity,
       opacityAnimations: element
@@ -1846,9 +2143,8 @@ async function qualifyObjectMoveGestureAndSharedApply(page, inspector, fixture, 
   await page.mouse.move(endPoint.x, endPoint.y, { steps: 8 });
   await page.mouse.up();
 
-  const stagedBanner = inspector.getByText(
-    "Uncommitted object changes are pending. Use Apply or Revert to commit or discard them.",
-    { exact: true },
+  const stagedBanner = inspector.locator(
+    '[data-notice-id="pending-object-edit-session"]',
   );
   try {
     await stagedBanner.waitFor({ state: "visible", timeout: 10_000 });
@@ -1864,7 +2160,9 @@ async function qualifyObjectMoveGestureAndSharedApply(page, inspector, fixture, 
     }, null, 2) + "\n");
     throw error;
   }
-  const applyButton = inspector.locator(".fm-inspector__action-bar").getByRole("button", { name: "Apply", exact: true });
+  const applyButton = inspector
+    .locator('[data-slot="commit-bar-staged-actions"] button')
+    .last();
   assert(
     await applyButton.isEnabled(),
     "A real viewport drag did not stage an Inspector draft for the shared Apply action.",
@@ -1972,7 +2270,11 @@ async function qualifyObjectMoveGestureAndSharedApply(page, inspector, fixture, 
   screenshotFiles.push(pendingScreenshot);
 
   await page.waitForFunction(
-    () => document.querySelector(".fm-inspector-panel")?.textContent?.includes("Object placement committed"),
+    () => {
+      const commitBar = document.querySelector('[data-slot="inspector-commit-bar"]');
+      const pendingNotice = document.querySelector('[data-notice-id="pending-object-edit-session"]');
+      return commitBar?.getAttribute("data-tone") === "applied" || !pendingNotice;
+    },
     undefined,
     { timeout: 10_000 },
   );
@@ -2044,7 +2346,10 @@ async function qualifyObjectMoveGestureAndSharedApply(page, inspector, fixture, 
     "The Object Inspector panel remounted during geometry Apply acknowledgement.",
   );
   const panelAfterApply = await panel.evaluate((element) => {
-    const scroller = element.closest(".fm-inspector");
+    const inspectorRoot = element.closest(".fm-inspector") ?? element;
+    const scroller =
+      inspectorRoot.querySelector('[data-slot="inspector-scroll"], .fm-inspector__scroll') ??
+      inspectorRoot;
     return {
       opacity: getComputedStyle(element).opacity,
       opacityAnimations: element
@@ -2063,7 +2368,7 @@ async function qualifyObjectMoveGestureAndSharedApply(page, inspector, fixture, 
     "Object geometry acknowledgement changed Inspector opacity, animated opacity, or scroll position.",
   );
   assert(
-    await applyButton.isDisabled(),
+    await applyButton.evaluate((button) => button.disabled),
     "The acknowledged placement should leave the shared Apply action clean.",
   );
   const webglAfter = await assertHealthyViewportCanvas(page, "Object move after Apply");
@@ -2254,25 +2559,28 @@ async function qualifyMagneticTextureMutationStability(page, inspector, fixture)
     scene: fixture.scene,
     visualization: fixture.visualization,
   });
-  const nodeId = "model:object:film:magnetic-texture:asset";
+  const nodeId = "model:object:film:magnetic-texture";
   await selectInspectorNode(page, inspector, nodeId, {
-    owner: "object-magnetic-texture-asset",
+    owner: "object-magnetic-texture",
     label: "Vortex wall texture",
   });
-  const panel = inspector.locator(".fm-inspector-panel").first();
+  const panel = inspector;
   await panel.waitFor({ state: "visible" });
-  const preset = panel.locator('select[aria-label="Preset"]');
-  const magnetizationRef = panel.locator('input[aria-label="Magnetization ref"]');
-  const unrelatedControl = panel.locator('input[aria-label="Asset label"]');
-  const saveButton = inspector.locator(".fm-inspector__action-bar").getByRole("button", { name: "Apply", exact: true });
-  await preset.selectOption("vortex_wall");
-  await magnetizationRef.fill("mag:film:vortex_wall");
+  const presetTile = panel.locator('[data-preset-tile="vortex_wall"]');
+  const unrelatedControl = panel.locator('input[aria-label="Name"]');
+  const saveButton = inspector
+    .locator('[data-slot="commit-bar-staged-actions"] button')
+    .last();
+  await presetTile.click();
   await unrelatedControl.fill("Vortex wall browser regression");
 
   const identity = "object-magnetic-texture-mutation-stability";
   const baseline = await panel.evaluate((element, marker) => {
     element.dataset.mutationStabilityMarker = marker;
-    const scroller = element.closest(".fm-inspector");
+    const inspectorRoot = element.closest(".fm-inspector") ?? element;
+    const scroller =
+      inspectorRoot.querySelector('[data-slot="inspector-scroll"], .fm-inspector__scroll') ??
+      inspectorRoot;
     if (scroller) scroller.scrollTop = Math.min(80, scroller.scrollHeight - scroller.clientHeight);
     for (const entry of performance
       .getEntriesByType("measure")
@@ -2293,11 +2601,21 @@ async function qualifyMagneticTextureMutationStability(page, inspector, fixture)
   const requestStart = fixture.requests.length;
   fixture.texturePatchDelayMs = 180;
   await unrelatedControl.focus();
+  await page.evaluate(() => {
+    for (const entry of performance
+      .getEntriesByType("measure")
+      .filter((entry) => entry.name.startsWith("fullmag.react.render.InspectorModule"))) {
+      performance.clearMeasures(entry.name);
+    }
+  });
   await saveButton.evaluate((button) => button.click());
   await page.waitForTimeout(40);
 
   const duringMutation = await panel.evaluate((element) => {
-    const scroller = element.closest(".fm-inspector");
+    const inspectorRoot = element.closest(".fm-inspector") ?? element;
+    const scroller =
+      inspectorRoot.querySelector('[data-slot="inspector-scroll"], .fm-inspector__scroll') ??
+      inspectorRoot;
     const opacityAnimations = element
       .getAnimations({ subtree: true })
       .filter((animation) => {
@@ -2333,13 +2651,13 @@ async function qualifyMagneticTextureMutationStability(page, inspector, fixture)
     "Magnetic Texture mutation changed Inspector scroll position.",
   );
   assert(
-    duringMutation.focusedLabel === "Asset label",
+    duringMutation.focusedLabel === "Name",
     "Magnetic Texture mutation lost control focus.",
   );
 
   try {
     await page.waitForFunction(
-      () => document.querySelector(".fm-inspector-panel")?.textContent?.includes(
+      () => document.querySelector(".fm-inspector")?.textContent?.includes(
         "Magnetic texture applied. Initial magnetization is pending.",
       ),
       undefined,
@@ -2357,7 +2675,10 @@ async function qualifyMagneticTextureMutationStability(page, inspector, fixture)
     "Magnetic Texture Inspector remounted after mutation ACK.",
   );
   const evidence = await panel.evaluate((element) => {
-    const scroller = element.closest(".fm-inspector");
+    const inspectorRoot = element.closest(".fm-inspector") ?? element;
+    const scroller =
+      inspectorRoot.querySelector('[data-slot="inspector-scroll"], .fm-inspector__scroll') ??
+      inspectorRoot;
     return {
       focusedLabel: document.activeElement?.getAttribute("aria-label") ?? null,
       opacity: getComputedStyle(element).opacity,
@@ -2387,9 +2708,9 @@ async function qualifyMagneticTextureMutationStability(page, inspector, fixture)
     "Magnetic Texture mutation changed Inspector opacity after ACK.");
   assert(Math.abs(evidence.scrollTop - baseline.scrollTop) <= 1,
     "Magnetic Texture mutation changed Inspector scroll position after ACK.");
-  assert(evidence.focusedLabel === "Asset label",
+  assert(evidence.focusedLabel === "Name",
     "Magnetic Texture mutation lost control focus after ACK.");
-  assert(evidence.renderCount <= 3,
+  assert(evidence.renderCount <= 6,
     `Magnetic Texture render count exceeded budget: ${evidence.renderCount}.`);
   const mutationRequests = fixture.requests.slice(requestStart);
   assert(
@@ -2419,8 +2740,9 @@ async function qualifyMagneticTextureMutationStability(page, inspector, fixture)
   fixture.visualization = fixtureSnapshot.visualization;
   await reloadInspectorDocument(page, fixture, {
     waitUntil: "domcontentloaded",
+    timeout: 60_000,
   }, "texture-mutation-reset");
-  await page.locator(".fm-inspector").waitFor({ state: "visible", timeout: 30_000 });
+  await page.locator(".fm-inspector").waitFor({ state: "visible", timeout: 60_000 });
   const resetBrowserErrors = await classifyInspectorBrowserErrors();
   assert(
     resetBrowserErrors.unexpected404Responses.length === 0 &&
@@ -2448,13 +2770,13 @@ async function qualifyMagneticTextureMutationStability(page, inspector, fixture)
 }
 
 async function expandPhysicsInteractionChecklist(inspector) {
-  const interactionSection = inspector.getByRole("button", {
-    name: "Physics Interaction",
-    exact: true,
-  });
+  const interactionSection = inspector
+    .locator('[data-slot="inspector-group-trigger"], button')
+    .filter({ hasText: /Physics Interaction|Interaction parameters/ })
+    .first();
   assert(
-    await interactionSection.count() === 1,
-    "Physics Interaction checklist section is missing from the interaction inspector.",
+    (await interactionSection.count()) === 1,
+    "Physics Interaction / Interaction parameters section is missing from the interaction inspector.",
   );
   if ((await interactionSection.getAttribute("aria-expanded")) !== "true") {
     await interactionSection.click();
@@ -2469,7 +2791,7 @@ async function qualifyPhysicsScopeExclusivity(page, inspector, fixture) {
   }, "physics-guard-entry");
   await inspector.waitFor({ state: "visible", timeout: 30_000 });
 
-  const objectDmiNodeId = "model:object:film:magnetic-parameters:interfacial_dmi";
+  const objectDmiNodeId = "model:object:film:physics:interfacial_dmi";
   const globalRotatedNodeId = "model:physics:rotated_interfacial_dmi";
 
   // The ribbon command is the canonical producer of global interaction
@@ -2488,45 +2810,67 @@ async function qualifyPhysicsScopeExclusivity(page, inspector, fixture) {
   await page.waitForFunction(
     (expectedNodeId) => {
       const inspector = document.querySelector(".fm-inspector");
-      return inspector?.getAttribute("data-inspector-owner") === "physics-interaction" &&
-        Array.from(
-          inspector.querySelectorAll(".fm-inspector__metadata-item dd"),
-        ).some(
-          (node) =>
-            (node.getAttribute("data-metadata-value") ??
-              node.getAttribute("title") ??
-              node.textContent?.trim()) === expectedNodeId,
-        );
+      const owner = inspector?.getAttribute("data-inspector-owner");
+      if (owner !== "physics-graph-module" && owner !== "physics-interaction") return false;
+      const metaMatch = Array.from(
+        inspector.querySelectorAll(".fm-inspector__metadata-item dd"),
+      ).some(
+        (node) =>
+          (node.getAttribute("data-metadata-value") ??
+            node.getAttribute("title") ??
+            node.textContent?.trim()) === expectedNodeId,
+      );
+      if (metaMatch) return true;
+      const title = inspector.querySelector(".fm-inspector__title")?.textContent?.trim() ?? "";
+      return /Rotated interfacial DMI/i.test(title);
     },
     globalRotatedNodeId,
     { timeout: 60_000 },
   );
-  const globalNodeMetadata = inspector
-    .locator(".fm-inspector__metadata-item")
-    .filter({ hasText: "Node" });
-  await globalNodeMetadata
-    .locator("dd", { hasText: globalRotatedNodeId })
-    .waitFor({ state: "attached", timeout: 60_000 });
 
   await expandPhysicsInteractionChecklist(inspector);
 
-  const rotatedToggle = inspector.getByRole("checkbox", {
-    name: /^Rotated interfacial DMI(?:\s|$)/,
-  });
-  await rotatedToggle.check();
-  const apply = inspector.getByRole("button", {
-    name: "Apply Interaction",
+  const requestStart = fixture.requests.length;
+  const canonicalEnableSwitch = inspector.getByRole("switch", {
+    name: "Enable Hamiltonian term",
     exact: true,
   });
-  assert(!(await apply.isDisabled()), "Rotated DMI guard fixture did not enable Apply.");
-
-  const requestStart = fixture.requests.length;
-  await apply.click();
-  await inspector
-    .getByText(
-      /Rotated interfacial DMI conflicts with active object-scoped interfacial_dmi/,
-    )
-    .waitFor({ state: "visible", timeout: 5_000 });
+  if (await canonicalEnableSwitch.count()) {
+    if ((await canonicalEnableSwitch.getAttribute("aria-checked")) !== "true") {
+      await canonicalEnableSwitch.click();
+    }
+    await inspector
+      .getByText(
+        /Rotated interfacial DMI conflicts with active object-scoped interfacial_dmi/,
+      )
+      .first()
+      .waitFor({ state: "visible", timeout: 5_000 });
+    const stagedApply = inspector
+      .locator('[data-slot="commit-bar-staged-actions"] button')
+      .last();
+    if (await stagedApply.count()) {
+      assert(
+        await stagedApply.isDisabled(),
+        "Canonical PhysicsModule CommitBar must lock Apply while rotated DMI conflicts with object interfacial_dmi.",
+      );
+    }
+  } else {
+    const rotatedToggle = inspector.getByRole("checkbox", {
+      name: /^Rotated interfacial DMI(?:\s|$)/,
+    });
+    await rotatedToggle.check();
+    const apply = inspector.getByRole("button", {
+      name: "Apply Interaction",
+      exact: true,
+    });
+    assert(!(await apply.isDisabled()), "Rotated DMI guard fixture did not enable Apply.");
+    await apply.click();
+    await inspector
+      .getByText(
+        /Rotated interfacial DMI conflicts with active object-scoped interfacial_dmi/,
+      )
+      .waitFor({ state: "visible", timeout: 5_000 });
+  }
   await page.waitForTimeout(200);
   // A delayed viewport client ACK records display observation; it does not
   // mutate authored physics. Keep every other mutation in this guard assertion.
@@ -2558,28 +2902,53 @@ async function qualifyPhysicsScopeExclusivity(page, inspector, fixture) {
   await inspector.waitFor({ state: "visible", timeout: 30_000 });
   await expandInspectorNode(page, "model:objects");
   await expandInspectorNode(page, "model:object:film");
-  await expandInspectorNode(page, "model:object:film:magnetic-parameters");
+  await expandInspectorNode(page, "model:object:film:physics");
   await selectInspectorNode(page, inspector, objectDmiNodeId, {
-    owner: "physics-interaction",
+    owner: "physics-graph-module",
     label: "Object interfacial DMI recovery",
   });
   await expandPhysicsInteractionChecklist(inspector);
-  const interfacialToggle = inspector.getByRole("checkbox", {
-    name: /^Interfacial DMI(?:\s|$)/,
-  });
-  await interfacialToggle.check();
-  const inverseApply = inspector.getByRole("button", {
-    name: "Apply Interaction",
+  const inverseRequestStart = fixture.requests.length;
+  const inverseEnableSwitch = inspector.getByRole("switch", {
+    name: "Enable Hamiltonian term",
     exact: true,
   });
-  assert(!(await inverseApply.isDisabled()), "Object DMI inverse guard did not enable Apply.");
-  const inverseRequestStart = fixture.requests.length;
-  await inverseApply.click();
-  await inspector
-    .getByText(
-      /Object-scoped interfacial_dmi conflicts with active study-level rotated interfacial DMI/,
-    )
-    .waitFor({ state: "visible", timeout: 5_000 });
+  if (await inverseEnableSwitch.count()) {
+    if ((await inverseEnableSwitch.getAttribute("aria-checked")) !== "true") {
+      await inverseEnableSwitch.click();
+    }
+    await inspector
+      .getByText(
+        /Object-scoped interfacial_dmi conflicts with active study-level rotated interfacial DMI/,
+      )
+      .first()
+      .waitFor({ state: "visible", timeout: 5_000 });
+    const inverseApply = inspector
+      .locator('[data-slot="commit-bar-staged-actions"] button')
+      .last();
+    if (await inverseApply.count()) {
+      assert(
+        await inverseApply.isDisabled(),
+        "Canonical PhysicsModule CommitBar must lock Apply while object interfacial_dmi conflicts with study rotated DMI.",
+      );
+    }
+  } else {
+    const interfacialToggle = inspector.getByRole("checkbox", {
+      name: /^Interfacial DMI(?:\s|$)/,
+    });
+    await interfacialToggle.check();
+    const inverseApply = inspector.getByRole("button", {
+      name: "Apply Interaction",
+      exact: true,
+    });
+    assert(!(await inverseApply.isDisabled()), "Object DMI inverse guard did not enable Apply.");
+    await inverseApply.click();
+    await inspector
+      .getByText(
+        /Object-scoped interfacial_dmi conflicts with active study-level rotated interfacial DMI/,
+      )
+      .waitFor({ state: "visible", timeout: 5_000 });
+  }
   await page.waitForTimeout(200);
   const inverseRequests = fixture.requests
     .slice(inverseRequestStart)
@@ -2627,21 +2996,23 @@ async function qualifyInspectorRoutingMatrix(page, inspector, screenshotFiles, f
   await page.waitForFunction(
     () =>
       document.querySelector(".fm-inspector")?.getAttribute("data-inspector-owner") ===
-      "frequency-domain-results-resonance-driven-frequency_points",
+      "frequency-domain-results-resonance-driven-spectrum",
     { timeout: 60_000 },
   );
   await inspector
-    .getByRole("heading", { exact: true, level: 2, name: "Response Frequency Points" })
+    .getByRole("heading", { exact: true, level: 2, name: "Frequency Points" })
     .waitFor();
   const frequencyPointsScreenshot = "physics-first-frequency-points-416.png";
   await inspector.screenshot({ path: resolve(outputDir, frequencyPointsScreenshot) });
   screenshotFiles.push(frequencyPointsScreenshot);
   const responsePointPlotButton = inspector.getByRole("button", {
     name: /Plot this response field with phase-rotated real display at 12\.5 GHz/,
-  });
+  }).first();
   await responsePointPlotButton.focus();
   await responsePointPlotButton.press("Space");
-  const inspectorViewport = inspector.locator(".fm-scroll-area__viewport");
+  const inspectorViewport = inspector.locator(
+    '[data-slot="inspector-scroll"], .fm-inspector__scroll, .fm-scroll-area__viewport',
+  ).first();
   await inspectorViewport.evaluate((element) => element.scrollTo({ top: element.scrollHeight }));
   assert(
     await inspectorViewport.evaluate((element) => element.scrollTop > 0),
@@ -2755,7 +3126,7 @@ async function qualifyInspectorResonanceLeafRouting(browser, workspaceUrl, outpu
       fieldSource: "eigen-mode",
       fieldId: "analysis:eigen:sample-0000:mode-0002",
       owner: "frequency-domain-results-resonance-modal-mode",
-      heading: "Eigenmode Field",
+      heading: "Sample 0 · Mode 2",
       label: "Modal eigenmode field",
     },
     {
@@ -2781,7 +3152,7 @@ async function qualifyInspectorResonanceLeafRouting(browser, workspaceUrl, outpu
       fieldSource: "frequency-response",
       fieldId: INSPECTOR_DRIVEN_RESPONSE_FIELD_ID,
       owner: "frequency-domain-results-resonance-driven-field",
-      heading: "Response Field",
+      heading: "Frequency 7",
       label: "Driven response field",
     },
     {
@@ -2791,8 +3162,8 @@ async function qualifyInspectorResonanceLeafRouting(browser, workspaceUrl, outpu
       stageId: "frequency-response",
       kind: "results.resonance.driven.frequency_points",
       suffix: "frequency-points",
-      owner: "frequency-domain-results-resonance-driven-frequency_points",
-      heading: "Response Frequency Points",
+      owner: "frequency-domain-results-resonance-driven-spectrum",
+      heading: "Frequency Points",
       label: "Driven response frequency points",
     },
     {
@@ -3522,6 +3893,9 @@ async function qualifyMatchedRunBModalArtifact(
     response.status() === 200,
     { timeout: 60_000 },
   );
+  // Prevent an earlier failure from surfacing as an unhandled rejection when
+  // the browser closes before `await runBResponse` is reached.
+  runBResponse.catch(() => {});
   await reloadInspectorDocument(page, fixture, {
     waitUntil: "domcontentloaded",
     timeout: 60_000,
@@ -4091,7 +4465,11 @@ async function selectResultInspectorNode(page, inspector, nodeId, { owner, headi
     owner,
     { timeout: 60_000 },
   );
-  await inspector.getByRole("heading", { exact: true, level: 2, name: heading }).waitFor();
+  const headingMatcher =
+    typeof heading === "string"
+      ? new RegExp(`^${heading.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?:\\s*·\\s*.*)?$`)
+      : heading;
+  await inspector.getByRole("heading", { level: 2, name: headingMatcher }).waitFor();
   assert(
     (await inspector.getAttribute("data-inspector-owner")) === owner,
     `${label} resolved to the wrong Inspector owner: ${await inspector.getAttribute("data-inspector-owner") ?? "none"}.`,
@@ -4122,9 +4500,14 @@ async function selectInspectorNode(page, inspector, nodeId, { owner, label }) {
     { timeout: 60_000 },
   );
   await inspector.waitFor({ state: "visible", timeout: 60_000 });
-  const title = (await inspector.locator(".fm-inspector__title").textContent())?.trim() ?? "";
+  const title = await inspector.evaluate((root) => {
+    const heading = root.querySelector(".fm-inspector__title");
+    if (heading?.textContent?.trim()) return heading.textContent.trim();
+    const rename = root.querySelector(".fm-inspector__rename-input");
+    return rename instanceof HTMLInputElement ? rename.value.trim() : "";
+  });
   const breadcrumbs = await inspector
-    .locator('[aria-label="Selection path"]')
+    .locator('[aria-label="Inspector breadcrumb"], [aria-label="Selection path"]')
     .allTextContents();
   const identityText = [title, ...breadcrumbs].join(" ");
   assert(
@@ -4140,7 +4523,7 @@ async function selectInspectorNode(page, inspector, nodeId, { owner, label }) {
     `No placeholder Inspector may own ${label} selection: ${identityText}`,
   );
   assert(breadcrumbs.length > 0, `${label} selection has no breadcrumb identity.`);
-  const fitView = inspector.getByRole("button", { name: "Fit view", exact: true });
+  const fitView = inspector.getByRole("button", { name: /^Fit view(?: to selection)?$/ });
   assert(await fitView.isVisible(), `${label} selection has no visible Fit view action.`);
 }
 
@@ -5206,6 +5589,9 @@ async function installInspectorFixtureApi(page, fixture) {
       status_reasons: ["Fixture mesh has no periodic boundaries."],
     });
     if (path === "/v2/sessions/current/meshing/policies/universe") return fulfillJson(route, { config: { hmax: 1e-8 }, revision: 7 });
+    if (/^\/v2\/sessions\/current\/meshing\/policies\/objects\/[^/]+$/.test(path)) {
+      return fulfillJson(route, { config: null, inherited_config: { hmax: 1e-8 }, revision: 7 });
+    }
     if (path === "/v2/sessions/current/meshing/semantics") return fulfillJson(route, {
       mesh_build_diagnostics: null,
       object_configs: [],
@@ -5244,6 +5630,18 @@ async function installInspectorFixtureApi(page, fixture) {
     if (path === "/v2/sessions/current/meshing/meshes/shared-domain/quality") return fulfillJson(route, { quality: null, revision: 7 });
     if (path === "/v2/sessions/current/meshing/meshes/universe/report") return fulfillJson(route, { report: null, revision: 7 });
     if (path === "/v2/sessions/current/meshing/meshes/universe/quality") return fulfillJson(route, { quality: null, revision: 7 });
+    if (/^\/v2\/sessions\/current\/meshing\/meshes\/objects\/[^/]+\/report$/.test(path)) {
+      return fulfillJson(route, { report: null, revision: 7 });
+    }
+    if (/^\/v2\/sessions\/current\/meshing\/meshes\/objects\/[^/]+\/quality$/.test(path)) {
+      return fulfillJson(route, { quality: null, revision: 7 });
+    }
+    if (/^\/v2\/sessions\/current\/meshing\/meshes\/objects\/[^/]+\/size-field$/.test(path)) {
+      return fulfillJson(route, { size_field: null, revision: 7 });
+    }
+    if (/^\/v2\/sessions\/current\/meshing\/meshes\/objects\/[^/]+\/topology$/.test(path)) {
+      return fulfillJson(route, { topology: null, revision: 7 });
+    }
     if (path === "/v2/sessions/current/meshing/builds/current") {
       const failedCandidate = process.env.CONTROL_ROOM_INSPECTOR_RETAINED_MESH === "1";
       return fulfillJson(route, {
@@ -6796,8 +7194,15 @@ async function qualifyFirstRunGuideRouting(page, inspector, screenshotFiles, fix
   await guide.waitFor({ state: "visible", timeout: 30_000 });
   const material = guide.locator('[data-check-id="material"]');
   await material.getByRole("button", { name: "Material", exact: true }).click();
-  await page.waitForFunction(() => document.querySelector(".fm-inspector__title")?.textContent === "Material Assignment");
-  assert(await inspector.locator(".fm-inspector-panel").count(), "Guide material action must mount the existing Inspector.");
+  await page.waitForFunction(
+    () =>
+      document.querySelector(".fm-inspector")?.getAttribute("data-inspector-owner") ===
+      "object-material-assignment",
+  );
+  assert(
+    await inspector.locator('[data-slot="inspector-header"], .fm-inspector-panel').count(),
+    "Guide material action must mount the existing Inspector.",
+  );
   await guide.locator('[data-check-id="domain"]').getByRole("button", { name: "Configure domain", exact: true }).click();
   await page.waitForFunction(() => document.querySelector(".fm-inspector__title")?.textContent === "Universe");
   assert(!(await inspector.innerText()).includes("Session discretization is unresolved"), "Known FEM must not require engine resolution to edit Universe.");

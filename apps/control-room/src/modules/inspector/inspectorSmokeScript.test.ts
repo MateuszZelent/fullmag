@@ -57,7 +57,7 @@ describe("explorer Inspector browser smoke script", () => {
     expect(smokeScript).toContain("mutation changed Inspector scroll position");
     expect(smokeScript).toContain("mutation lost control focus");
     expect(smokeScript).toContain("qualifyMagneticTextureMutationStability");
-    expect(smokeScript).toContain("model:object:film:magnetic-texture:asset");
+    expect(smokeScript).toContain("model:object:film:magnetic-texture");
     expect(smokeScript).toContain("Magnetic Texture Inspector remounted during mutation");
     expect(smokeScript).toContain("unrelated Asset label control was disabled");
     expect(smokeScript).toContain("Magnetic Texture mutation changed Inspector opacity");
@@ -66,7 +66,14 @@ describe("explorer Inspector browser smoke script", () => {
     expect(smokeScript).toContain("fullmag.react.render.InspectorModule");
     expect(smokeScript).toContain("Magnetic texture request budget");
     expect(smokeScript).toContain("mutation budget: 20");
-    expect(smokeScript).toContain("[360, 416, 560]");
+    expect(smokeScript).toContain("[280, 320, 440]");
+    expect(smokeScript).not.toContain("[360, 416, 560]");
+    expect(smokeScript).toContain('for (const theme of ["light", "dark"])');
+    expect(smokeScript).toContain("assertDockedCommitBarNonOcclusion");
+    expect(smokeScript).toContain('[data-slot="inspector-commit-bar"]');
+    expect(smokeScript).toContain("qualifyCanonicalContainerBreakpointMatrix");
+    expect(smokeScript).toContain("const expectedColumns = width >= 352 ? 2 : 1;");
+    expect(smokeScript).toContain("/\\b(unknown|unavailable)\\b/i");
     expect(smokeScript).toContain('document.body.style.zoom = "200%"');
     expect(smokeScript).toContain("visualization-overview-zoom-200.png");
     expect(smokeScript).toContain("Inspector overflows at 200% zoom");
