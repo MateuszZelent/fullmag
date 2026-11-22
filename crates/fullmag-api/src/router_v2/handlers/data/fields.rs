@@ -3899,6 +3899,7 @@ struct ResolvedFieldScope {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ResolvedFieldScopeDomain {
     Air,
+    Conductive,
     Magnetic,
 }
 
@@ -4014,6 +4015,13 @@ fn resolve_field_scope(
         )));
     }
     if is_fdm_snapshot(snapshot) {
+        if scope_kind == "object" {
+            if let Some(scope) = resolve_fdm_conductor_field_scope(
+                query, snapshot, quantity_id, raw_point_count,
+            )? {
+                return Ok(Some(scope));
+            }
+        }
         if let Some(ResolvedSpatialField {
             carrier:
                 SpatialFieldCarrier::FdmCells {
@@ -4141,6 +4149,83 @@ fn resolve_field_scope(
         value_indices,
         ..scope
     }))
+}
+
+fn resolve_fdm_conductor_field_scope(
+    query: &FieldVectorQuery,
+    snapshot: &SessionStateResponse,
+    quantity_id: &str,
+    point_count: usize,
+) -> Result<Option<ResolvedFieldScope>, ApiError> {
+    let spin = match quantity_id {
+        "V_electric" | "J_charge" => false,
+        "spin_potential" | "spin_current_tensor" => true,
+        _ => return Ok(None),
+    };
+    let scope_id = required_scope_id(query, "object")?;
+    let object_id = scope_id.strip_prefix("object:").unwrap_or(scope_id);
+    let Some(object) = snapshot.scene_document.as_ref().and_then(|scene| {
+        scene.objects.iter().find(|object| object.id == object_id)
+    }) else {
+        return Ok(None);
+    };
+    if !matches!(object.role.as_str(), "conductor" | "electrode") {
+        return Ok(None);
+    }
+
+    let missing_scope = || ApiError::not_found(format!(
+        "No resolved conductor cells for '{quantity_id}' on object '{}'", object.id,
+    ));
+    let plan = snapshot.metadata.as_ref().and_then(|metadata| metadata.execution_plan())
+        .ok_or_else(missing_scope)?;
+    let fullmag_ir::BackendPlanIR::Fdm(plan) = &plan.backend_plan else {
+        return Err(missing_scope());
+    };
+    let grid = plan.grid_certificate.as_ref().ok_or_else(missing_scope)?;
+    if grid.counts.iter().try_fold(1usize, |count, edge| count.checked_mul(*edge as usize))
+        != Some(point_count)
+    {
+        return Err(ApiError::conflict("Transport field does not match the certified FDM grid"));
+    }
+
+    let mut module_ranges = plan.spin_transport_plans.iter()
+        .filter_map(|module| module.fdm_object_cells.get(&object.id))
+        .map(|cells| if spin { &cells.spin } else { &cells.charge })
+        .filter(|ranges| !ranges.is_empty());
+    let ranges = module_ranges.next().ok_or_else(missing_scope)?;
+    if module_ranges.any(|other| other != ranges) {
+        return Err(ApiError::conflict(format!(
+            "Transport sources disagree on realized cells for conductor '{}'", object.id,
+        )));
+    }
+    let indices = expand_fdm_transport_cell_ranges(ranges, point_count)?;
+    Ok(Some(ResolvedFieldScope {
+        domain: ResolvedFieldScopeDomain::Conductive,
+        kind: "object".to_string(),
+        id: Some(object.id.clone()),
+        node_indices: indices.clone(),
+        value_indices: indices,
+        grid: None,
+        carrier_hash: Some(format!("sha256:{}", grid.grid_fingerprint)),
+    }))
+}
+
+fn expand_fdm_transport_cell_ranges(
+    ranges: &[[usize; 2]],
+    point_count: usize,
+) -> Result<Vec<usize>, ApiError> {
+    let mut indices = Vec::new();
+    let mut previous_end = 0;
+    for &[start, end] in ranges {
+        if start < previous_end || start >= end || end > point_count {
+            return Err(ApiError::conflict(
+                "Resolved conductor cell ranges overlap or exceed the FDM grid",
+            ));
+        }
+        indices.extend(start..end);
+        previous_end = end;
+    }
+    Ok(indices)
 }
 
 fn resolve_fdm_field_scope_from_carrier(
@@ -9530,6 +9615,15 @@ fn urlencoding(s: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn expands_only_exact_conductor_cells_inside_the_fdm_grid() {
+        let indices = super::expand_fdm_transport_cell_ranges(&[[1, 3], [5, 7]], 8).unwrap();
+        assert_eq!(indices, [1, 2, 5, 6]);
+        for invalid in [[[1, 4], [3, 7]], [[1, 4], [7, 9]], [[1, 4], [7, 7]]] {
+            assert!(super::expand_fdm_transport_cell_ranges(&invalid, 8).is_err());
+        }
+    }
+
     #[test]
     fn artifact_response_headers_follow_owned_scope_on_200_and_304() {
         use crate::router_v2::handlers::data::artifact_field_carrier::{

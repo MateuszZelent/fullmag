@@ -1,3 +1,4 @@
+import { resolveObjectVisualizationQuantityCatalog } from "./ObjectVisualizationController";
 import { describe, expect, it } from "vitest";
 
 import {
@@ -3344,6 +3345,21 @@ describe("authored object quantity context", () => {
       objectContext: { object, quantityCatalog: quantities },
     });
   }
+
+  it("preserves only conductor transport fields, including full-grid charge and spin quantities", () => {
+    const ids = ["V_electric", "J_charge", "spin_potential", "spin_current_tensor"];
+    const quantities = {
+      ...catalog(),
+      quantities: [catalog().quantities[0], ...[...ids, "torque_stt", "H_eff"].map((id) =>
+        catalog(id, "full_domain").quantities[0]
+      )],
+    };
+    const conductor = { id: "beta_w", role: "conductor" };
+    expect(resolveObjectVisualizationQuantityCatalog(quantities, conductor)?.quantities.map((entry) => entry.id)).toEqual(ids);
+    expect(resolveObjectVisualizationQuantityCatalog(quantities, { ...conductor, role: "electrode" })?.quantities.map((entry) => entry.id)).toEqual(ids);
+    expect(resolve(conductor, quantities, "V_electric").settings.activeQuantityId).toBe("V_electric");
+    expect(resolve(conductor, quantities, "torque_stt").settings.activeQuantityId).toBe("");
+  });
 
   it("never substitutes a magnetic default for unknown objects or catalogs", () => {
     expect(resolve(null, catalog()).settings.activeQuantityId).toBe("");

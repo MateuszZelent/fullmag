@@ -2,6 +2,17 @@ import type { SceneResource } from "@/kernel/api/apiTypes";
 
 type SceneObject = NonNullable<SceneResource["objects"]>[number];
 
+export type SceneObjectPresentationRole = "antenna" | "magnet" | "conductor" | "electrode" | "auxiliary";
+
+export function isTransportConductorRole(role: unknown): role is "conductor" | "electrode" {
+  return role === "conductor" || role === "electrode";
+}
+
+export function allowsObjectMagneticControls(object: SceneObject | null | undefined): boolean {
+  return !object?.role || object.role === "magnet"
+    || (object.role === "antenna" && !hasEmptyObjectMagneticModel(object));
+}
+
 /** Proves only the absence of any authored magnetic configuration, not capabilities of a configured stack. */
 export function hasEmptyObjectMagneticModel(object: SceneObject | null | undefined): boolean {
   return object != null && object.magnetization_ref == null

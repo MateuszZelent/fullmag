@@ -26,7 +26,11 @@ import {
 } from "@/kernel/authoring/objectGeneralMutation";
 import { createCommandContext } from "@/kernel/commands/commandContext";
 import { useKernel } from "@/kernel/KernelContext";
-import { hasEmptyObjectMagneticModel } from "@/shared/domain/physics/objectMagneticModel";
+import {
+  allowsObjectMagneticControls,
+  hasEmptyObjectMagneticModel,
+  isTransportConductorRole,
+} from "@/shared/domain/physics/objectMagneticModel";
 import {
   MESH_BUILD_CURRENT_RESOURCE_KEY,
   MESH_BUILD_LATEST_SUCCESSFUL_RESOURCE_KEY,
@@ -211,13 +215,15 @@ export function ObjectGeneralPanel({ selection }: InspectorPanelProps) {
     ? "object.antenna.geometry" : "object.geometry";
   const antennaWithoutMagnetization = sceneObject?.role === "antenna"
     && hasEmptyObjectMagneticModel(sceneObject);
+  const magneticControls = allowsObjectMagneticControls(sceneObject);
+  const conductor = isTransportConductorRole(sceneObject?.role);
   const visualizationState = useVisualizationStateResource({
     enabled: object.mode === "committed",
   });
   const displayVisualizationState =
     visualizationState.optimisticData ?? visualizationState.data;
   const objectMetrics = useObjectMetricsResource(
-    object.mode === "committed" && !antennaWithoutMagnetization ? object.objectId : null,
+    object.mode === "committed" && magneticControls ? object.objectId : null,
   );
 
   const draftKey = `${object.mode}:${object.objectId}:${object.revision}`;
@@ -906,7 +912,7 @@ export function ObjectGeneralPanel({ selection }: InspectorPanelProps) {
     <div className="fm-inspector-panel grid min-w-0 gap-fm-inspector-group">
       <InspectorMetricStrip
         metrics={[
-          { label: "Role", value: sceneObject?.role ?? "magnet" },
+          { label: "Role", value: conductor ? (sceneObject?.role === "electrode" ? "Electrode" : "Conductor") : sceneObject?.role ?? "magnet" },
           { label: "Shape", value: object.shape },
           {
             label: antennaWithoutMagnetization ? "Conductor" : "Material",
@@ -990,7 +996,7 @@ export function ObjectGeneralPanel({ selection }: InspectorPanelProps) {
         </InspectorGroup>
       ) : null}
 
-      {!antennaWithoutMagnetization ? <InspectorGroup title="Energies" badge={metricsModel.status} collapsible defaultOpen>
+      {magneticControls ? <InspectorGroup title="Energies" badge={metricsModel.status} collapsible defaultOpen>
         <FieldRow label="Fetch state" value={objectMetrics.status} />
         <FieldRow label="Sample" value={metricsModel.sample} />
         <FieldRow label="Source" value={metricsModel.source} />
@@ -1096,7 +1102,7 @@ export function ObjectGeneralPanel({ selection }: InspectorPanelProps) {
         )}
       </InspectorGroup>
 
-      {!antennaWithoutMagnetization ? (
+      {magneticControls ? (
         <ObjectExtensionsSection
           objectId={object.objectId}
           selection={selection}

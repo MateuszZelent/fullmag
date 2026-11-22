@@ -1,4 +1,6 @@
 "use client";
+
+import { isTransportConductorRole } from "@/shared/domain/physics/objectMagneticModel";
 import { isScalarSpatialQuantityId, resolveCanonicalQuantityId } from "@/kernel/api/quantityIds";
 
 import { artifactFieldCatalogMatchesOwner, artifactFieldLocatorHasAcceptedGlobalSampling, type ArtifactFieldSelection, artifactCarrierPresentationKey, artifactInspectionQuantity, artifactInspectorFieldBinding } from "@/kernel/visualization/artifactFieldSelection";
@@ -1224,7 +1226,8 @@ function useObjectVisualizationPanelState(
     carrierIdentity: vectorCapacity?.carrierId ?? targetFieldCarrier?.carrierId ?? null,
     setPatchChildRegions,
     primitiveDisplayToggleVisible,
-    presentationRole: scene.data?.objects?.find((object) => object.id === selection.objectId)?.role,
+    presentationRole: contextObject?.role,
+    conductorQuantityScope: hasObjectContext && isTransportConductorRole(contextObject?.role),
     vectorBudgetRange,
     vectorBudgetRanges,
     vectorCapacity,
@@ -1557,7 +1560,8 @@ function ObjectVisualizationPanelView({
   const quantityTargetKind = target.kind === "airbox" || isFdmUniverseOutsideSupportTarget(target) ? "airbox" : target.kind;
   const quantitySelection = visualizationQuantitySelectionState({
     activeQuantityId: settings.activeQuantityId,
-    items: visualizationQuantityItems(settings.activeQuantityId, quantityTargetKind, fieldCatalog.data, quantityCatalog.data, targetFieldAvailability),
+    items: visualizationQuantityItems(settings.activeQuantityId, quantityTargetKind, fieldCatalog.data,
+      quantityCatalog.data, targetFieldAvailability, panel.conductorQuantityScope),
     loading: fieldCatalogLoading,
     error: fieldCatalogError,
     executionRequired,
@@ -1631,6 +1635,7 @@ function ObjectVisualizationPanelView({
                   target.kind === "airbox" ||
                   isFdmUniverseOutsideSupportTarget(target)) ? (
                   <VisualizationQuantitySection
+                    conductor={panel.conductorQuantityScope}
                     fieldCatalog={fieldCatalog.data}
                     fieldCatalogLoading={fieldCatalogLoading}
                     fieldCatalogError={fieldCatalogError}

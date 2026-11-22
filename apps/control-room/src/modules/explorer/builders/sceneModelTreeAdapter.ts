@@ -1,3 +1,4 @@
+import { isTransportConductorRole } from "@/shared/domain/physics/objectMagneticModel";
 import type {
   CouplingListResource,
   HysteresisExecutionTreeResource,
@@ -485,7 +486,7 @@ function sceneObjectRole(
   object: Record<string, unknown>,
 ): ModelTreeObjectSnapshot["objectRole"] {
   const role = stringValue(object.role);
-  if (role === "antenna") return "antenna";
+  if (role === "antenna" || isTransportConductorRole(role)) return role;
   if (role && role !== "magnet") return "auxiliary";
   const hint = recordValue(object.visualization_hint);
   if (stringValue(hint?.role) === "antenna") return "antenna";
