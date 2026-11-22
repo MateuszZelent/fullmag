@@ -5754,6 +5754,22 @@ def _retired_recreation_result(control, receipt, source_root):
             "runtime_control_archive": dict(archive)}
 
 
+def _validate_fresh_storage_root(args, selected, layout, identity):
+    requested = getattr(args, "fresh_storage_root", None)
+    if requested is None:
+        return None
+    from docker_dev import STORAGE_PROFILE, _compose_identity
+
+    root = validate_host_path(requested, "fresh DEV project storage")
+    replacement = storage.resolve_layout(
+        selected, STORAGE_PROFILE, environ={**os.environ, "FULLMAG_PROJECT_STORAGE_ROOT": str(root)},
+    )
+    validate_linux_mounts({root: "fresh DEV project storage"})
+    if root == Path(layout["storage_root"]) or _compose_identity(replacement) != identity:
+        raise BuildControlError("Fresh storage must change the root of the same registered Compose group")
+    return str(root)
+
+
 def recreate(args):
     import docker_helper_source as helper_source
     helper_source.validate_option_pair(
@@ -9070,8 +9086,11 @@ with urllib.request.urlopen('http://127.0.0.1:8081/v2/platform/health',timeout=5
                         or labels.get("com.docker.compose.service") != "host-ledger-maintenance"):
                     raise BuildControlError("Recorded ledger helper identity/outcome differs")
                 helper_ids.append(helper_document["Id"])
+        destination_storage = _validate_fresh_storage_root(args, selected, layout, identity)
         recreate_inputs = {"attempt": args.attempt, "config_sha256": args.config_sha256,
                            **operator_probe_record}
+        if destination_storage is not None:
+            recreate_inputs["fresh_storage_root"] = destination_storage
         if prelaunch_failure_pin is not None:
             recreate_inputs["prelaunch_failure_stop"] = {
                 "attempt": prelaunch_failure_pin[0], "terminal_sha256": prelaunch_failure_pin[1],
@@ -9081,6 +9100,8 @@ with urllib.request.urlopen('http://127.0.0.1:8081/v2/platform/health',timeout=5
         if offline_attempt is not None:
             recreate_inputs["offline_reconciliation"] = offline_attempt
         with control.operation("recreate-services", recreate_inputs) as operation:
+            if destination_storage != _validate_fresh_storage_root(args, selected, layout, identity):
+                raise BuildControlError("Fresh destination storage changed under the recreation lease")
             if offline_attempt is not None:
                 if not validate_for_recreate(
                     control, previous, document, actual, selected, args.config_sha256,
@@ -9557,12 +9578,22 @@ with urllib.request.urlopen('http://127.0.0.1:8081/v2/platform/health',timeout=5
         recovery_context.update(accepted_reattach_context)
         if retained_restore_pin is not None and not fresh_state:
             recovery_context["cold_budget_restore"] = retained_restore_pin
-        return start(
-            args, reuse_state=reuse, retained_device_access=retained_device_access,
-            terminal_observation=terminal_observation, helper_source_binding=helper_source_binding,
-            **({'prepared_recovery_constraints': prepared_fresh_archive} if prepared_fresh_archive is not None else {}),
-            **recovery_context,
-        )
+        original_storage = os.environ.get("FULLMAG_PROJECT_STORAGE_ROOT")
+        if destination_storage is not None:
+            os.environ["FULLMAG_PROJECT_STORAGE_ROOT"] = destination_storage
+        try:
+            return start(
+                args, reuse_state=reuse, retained_device_access=retained_device_access,
+                terminal_observation=terminal_observation, helper_source_binding=helper_source_binding,
+                **({'prepared_recovery_constraints': prepared_fresh_archive} if prepared_fresh_archive is not None else {}),
+                **recovery_context,
+            )
+        finally:
+            if destination_storage is not None:
+                if original_storage is None:
+                    os.environ.pop("FULLMAG_PROJECT_STORAGE_ROOT", None)
+                else:
+                    os.environ["FULLMAG_PROJECT_STORAGE_ROOT"] = original_storage
     restart_backend = bool(getattr(args, "restart_backend", False))
     if headless and actual["frontend"]["State"].get("Running"):
         raise BuildControlError("Headless resume requires the exact frontend container to be stopped")

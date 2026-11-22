@@ -2957,6 +2957,8 @@ def _parser() -> argparse.ArgumentParser:
     recreate_volume.add_argument("--lost-state-stop", metavar="ATTEMPT@SHA256",
                                  help="Fresh Linux master only: bind the exact successful diagnostic-stop terminal when host state is lost")
     recreate_volume.add_argument("--fresh-state", action="store_true", help="Preserve the previous session and archive its runtime state before starting an empty session")
+    recreate_volume.add_argument("--fresh-storage-root", type=Path,
+                                 help="Start the fresh replacement on this operator-registered storage root")
     recreate_volume.set_defaults(profile="dev", image=None, toolchain_image=None, source_manifest=None,
                                  include_untracked=None, script=None)
 
@@ -3322,6 +3324,10 @@ def main(argv: Sequence[str] | None = None) -> int:
                 raise _fail(str(error)) from error
             if args.recovery_authorization is not None and helper_pair is not None:
                 raise _fail("helper-source pins are unsupported with --recovery-authorization")
+            if args.fresh_storage_root is not None and (
+                    not args.fresh_state or args.retire_only or args.recovery_authorization
+                    or args.resume_recreation or args.completed_recreation_attempt):
+                raise _fail("--fresh-storage-root requires a fresh replacement without retained recovery")
             if args.retire_only:
                 if not args.fresh_state or args.recovery_authorization or args.resume_recreation or args.completed_recreation_attempt:
                     raise _fail("retire-only requires fresh-state and cannot combine recovery or continuation")
