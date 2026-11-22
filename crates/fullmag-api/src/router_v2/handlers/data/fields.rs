@@ -10788,7 +10788,7 @@ mod tests {
             ).unwrap();
         }
         frames.finish().unwrap();
-        let (path, artifact) = canonical_transport_field_artifact(&snapshot, "torque_stt")
+        let (path, artifact) = super::canonical_transport_field_artifact(&snapshot, "torque_stt")
             .unwrap().unwrap();
         assert_eq!(path, "fields/torque_stt/step_000005.json");
         assert_eq!(artifact["revision"].as_u64(), Some(15));
