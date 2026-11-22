@@ -131,6 +131,12 @@ function buildSceneTextureMapping(
     ...(mapping.background_vector
       ? { background_vector: [...mapping.background_vector] }
       : {}),
+    ...(mapping.axis_extent_mode
+      ? { axis_extent_mode: mapping.axis_extent_mode }
+      : {}),
+    ...(typeof mapping.axis_thickness_m === "number"
+      ? { axis_thickness_m: mapping.axis_thickness_m }
+      : {}),
   };
 }
 
@@ -687,15 +693,34 @@ export function MagneticTextureInspectorPanel({ selection }: InspectorPanelProps
       const syncWarning = await syncAuthoringScriptBestEffort(api, sessionScopeKey);
       if (!historyContext.isCurrentSessionScope()) return false;
 
+      const receipt = response.magnetization_apply;
+      const preparedSource =
+        receipt.status === "initial_state_ready" &&
+        receipt.prepared_initial_state &&
+        receipt.prepared_initial_state.scene_revision === receipt.scene_revision
+          ? receipt.prepared_initial_state
+          : null;
       setPreviewError(null);
       setLastApplyPreview(
-        response.magnetization_apply.status === "initial_state_ready" &&
-          response.magnetization_apply.prepared_initial_state
-          ? { receipt: response.magnetization_apply, sessionScopeKey }
-          : null,
+        preparedSource ? { receipt, sessionScopeKey } : null,
       );
+      if (
+        preparedSource &&
+        sessionIdentity &&
+        receipt.scopes[0] &&
+        !kernel.savedResultsPlayback?.getSnapshot()
+      ) {
+        kernel.visualization?.setArtifactFieldSelection(null);
+        kernel.analysisFieldOverlay?.clear();
+        observationSourceWorkspaceStore.showPrepared({
+          source: preparedSource,
+          sessionIdentityKey: sessionResourceIdentityKey(sessionIdentity),
+          objectId: receipt.scopes[0].object_id,
+          regionId: receipt.scopes[0].region_id ?? null,
+        });
+      }
       setAppliedBannerMessage(
-        magneticTextureApplyMessage(response.magnetization_apply, syncWarning),
+        magneticTextureApplyMessage(receipt, syncWarning),
       );
       return true;
     },
@@ -704,8 +729,10 @@ export function MagneticTextureInspectorPanel({ selection }: InspectorPanelProps
       authoringHistory,
       commands,
       domainModel.baseRevision,
+      kernel,
       resources,
       scene.data,
+      sessionIdentity,
       sessionScopeKey,
     ],
   );

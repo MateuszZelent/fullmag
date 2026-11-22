@@ -14072,7 +14072,7 @@ def _render_preset_texture_expr(
     ui_label: str | None = None,
     preview_proxy: str | None = None,
 ) -> str:
-    normalized_mapping = {
+    normalized_mapping: dict[str, Any] = {
         "space": str((mapping or {}).get("space", "object")),
         "projection": str((mapping or {}).get("projection", "object_local")),
         "clamp_mode": str((mapping or {}).get("clamp_mode", "none")),
@@ -14081,6 +14081,12 @@ def _render_preset_texture_expr(
         normalized_mapping["tile_period"] = [float(v) for v in mapping["tile_period"]]
     if mapping and mapping.get("background_vector") is not None:
         normalized_mapping["background_vector"] = [float(v) for v in mapping["background_vector"]]
+    if mapping and mapping.get("axis_extent_mode") is not None:
+        extent_mode = str(mapping["axis_extent_mode"]).strip().lower()
+        if extent_mode and extent_mode != "uniform":
+            normalized_mapping["axis_extent_mode"] = extent_mode
+    if mapping and mapping.get("axis_thickness_m") is not None:
+        normalized_mapping["axis_thickness_m"] = float(mapping["axis_thickness_m"])
 
     normalized_transform = {
         "translation": [float(v) for v in (transform or {}).get("translation", (0.0, 0.0, 0.0))],
@@ -14131,6 +14137,14 @@ def _render_preset_texture_expr(
                 mapping_kwargs.append(
                     f"background_vector={_render_vector_literal(normalized_mapping['background_vector'])}"
                 )
+            if "axis_extent_mode" in normalized_mapping:
+                mapping_kwargs.append(
+                    f"axis_extent_mode={_py_repr(normalized_mapping['axis_extent_mode'])}"
+                )
+            if "axis_thickness_m" in normalized_mapping:
+                mapping_kwargs.append(
+                    f"axis_thickness_m={_py_number(normalized_mapping['axis_thickness_m'])}"
+                )
             if mapping_kwargs:
                 expr += f".with_mapping({', '.join(mapping_kwargs)})"
             return expr
@@ -14147,6 +14161,14 @@ def _render_preset_texture_expr(
     if "background_vector" in normalized_mapping:
         mapping_parts.append(
             f"background_vector={_render_vector_literal(normalized_mapping['background_vector'])}"
+        )
+    if "axis_extent_mode" in normalized_mapping:
+        mapping_parts.append(
+            f"axis_extent_mode={_py_repr(normalized_mapping['axis_extent_mode'])}"
+        )
+    if "axis_thickness_m" in normalized_mapping:
+        mapping_parts.append(
+            f"axis_thickness_m={_py_number(normalized_mapping['axis_thickness_m'])}"
         )
     mapping_expr = f"fm.TextureMapping({', '.join(mapping_parts)})"
 

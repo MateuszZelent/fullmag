@@ -22,6 +22,7 @@ export type TextureClampModeV2 =
   | "mirror"
   | "background";
 export type TextureMappingSpaceMode = "object" | "region" | "world";
+export type TextureAxisExtentModeV2 = "uniform" | "thickness";
 
 export interface TextureMappingSpecV2 {
   space?: TextureMappingSpaceMode | string;
@@ -29,6 +30,8 @@ export interface TextureMappingSpecV2 {
   clamp_mode?: TextureClampModeV2 | string;
   tile_period?: readonly [number, number, number] | null;
   background_vector?: readonly [number, number, number] | null;
+  axis_extent_mode?: TextureAxisExtentModeV2 | string | null;
+  axis_thickness_m?: number | null;
 }
 
 export interface TextureTransform3DSpecV2 {
@@ -1078,6 +1081,67 @@ type ClampOutcome =
   | { kind: "sample"; point: Vec3 }
   | { kind: "background"; vector: Vec3 };
 
+function validateAxisExtentV2(mapping: TextureMappingSpecV2 | undefined): number | null {
+  const rawMode = (mapping?.axis_extent_mode ?? "").trim();
+  if (!rawMode || rawMode.toLowerCase() === "uniform") {
+    return null;
+  }
+  if (rawMode.toLowerCase() === "thickness") {
+    const thickness = mapping?.axis_thickness_m;
+    if (typeof thickness !== "number" || !Number.isFinite(thickness) || thickness <= EPSILON) {
+      throw invalid(
+        "mapping.axis_thickness_m",
+        "positive axis_thickness_m is required when axis_extent_mode == 'thickness'",
+      );
+    }
+    return 0.5 * thickness;
+  }
+  throw invalid("mapping.axis_extent_mode", `unsupported axis_extent_mode '${rawMode}'`);
+}
+
+function resolveSlabBackgroundV2(
+  presetKind: string,
+  params: Record<string, unknown>,
+  frame: OrientedPlaneFrame | null,
+  mapping: TextureMappingSpecV2 | undefined,
+): Vec3 {
+  if (mapping?.background_vector) {
+    return normalizeChecked(mapping.background_vector, "mapping.background_vector");
+  }
+  let localBg: Vec3;
+  switch (presetKind) {
+    case "bloch_skyrmion":
+    case "neel_skyrmion":
+    case "antiskyrmion":
+    case "skyrmion_lattice": {
+      const polarity = signParam(params, "core_polarity", 1);
+      localBg = [0, 0, -polarity];
+      break;
+    }
+    case "skyrmionium":
+    case "hopfion": {
+      const bgSign = signParam(params, "background_sign", 1);
+      localBg = [0, 0, bgSign];
+      break;
+    }
+    case "bimeron": {
+      const bgSign = signParam(params, "background_sign", 1);
+      localBg = [bgSign, 0, 0];
+      break;
+    }
+    case "hopfion_compact_support":
+      localBg = [0, 0, 1];
+      break;
+    default:
+      localBg = [0, 0, 1];
+      break;
+  }
+  if (frame !== null && METRIC_PRESETS.has(presetKind)) {
+    return frameVectorToWorld(localBg, frame);
+  }
+  return localBg;
+}
+
 function applyClampModeV2(
   transformed: Vec3,
   pivot: Vec3,
@@ -1188,8 +1252,18 @@ export function samplePresetTextureV2Client(
     );
   }
   const prepared = prepareTransform(spec.texture_transform);
+  const halfAxisThickness = validateAxisExtentV2(spec.mapping);
+  const isMetric = METRIC_PRESETS.has(spec.preset_kind);
   const src = sourcePositionForCoordinate(pointMeters, spec.mapping, targetBounds);
   const transformed = pointToTexture(prepared, src);
+  if (halfAxisThickness !== null) {
+    const rel = sub(transformed, prepared.pivot);
+    const zNormal = isMetric && frame !== null ? dot(rel, frame.e_n) : rel[2];
+    if (Math.abs(zNormal) > halfAxisThickness * (1.0 + 1.0e-12)) {
+      const slabBg = resolveSlabBackgroundV2(spec.preset_kind, params, frame, spec.mapping);
+      return vectorToSource(prepared, slabBg);
+    }
+  }
   const outcome = applyClampModeV2(
     transformed,
     prepared.pivot,
@@ -1199,7 +1273,6 @@ export function samplePresetTextureV2Client(
   if (outcome.kind === "background") {
     return vectorToSource(prepared, outcome.vector);
   }
-  const isMetric = METRIC_PRESETS.has(spec.preset_kind);
   const localPt = isMetric && frame !== null ? frameCoordinates(outcome.point, frame) : outcome.point;
   const localVec = localEvaluate(spec.preset_kind, params, localPt);
   const srcVec = isMetric && frame !== null ? frameVectorToWorld(localVec, frame) : localVec;
@@ -1225,6 +1298,11 @@ export function samplePresetTextureV2Batch(
   }
   const prepared = prepareTransform(spec.texture_transform);
   localEvaluate(spec.preset_kind, params, [0, 0, 0]);
+  const halfAxisThickness = validateAxisExtentV2(spec.mapping);
+  const slabBg =
+    halfAxisThickness !== null
+      ? resolveSlabBackgroundV2(spec.preset_kind, params, frame, spec.mapping)
+      : null;
   const isMetric = METRIC_PRESETS.has(spec.preset_kind);
   const fallbackExtent = targetBounds?.size ?? null;
 
@@ -1232,6 +1310,14 @@ export function samplePresetTextureV2Batch(
   for (let i = 0; i < points.length; i += 1) {
     const src = sourcePositionForCoordinate(points[i]!, spec.mapping, targetBounds);
     const transformed = pointToTexture(prepared, src);
+    if (halfAxisThickness !== null && slabBg !== null) {
+      const rel = sub(transformed, prepared.pivot);
+      const zNormal = isMetric && frame !== null ? dot(rel, frame.e_n) : rel[2];
+      if (Math.abs(zNormal) > halfAxisThickness * (1.0 + 1.0e-12)) {
+        out[i] = vectorToSource(prepared, slabBg);
+        continue;
+      }
+    }
     const outcome = applyClampModeV2(transformed, prepared.pivot, spec.mapping, fallbackExtent);
     if (outcome.kind === "background") {
       out[i] = vectorToSource(prepared, outcome.vector);
@@ -1260,6 +1346,8 @@ export function evaluatePresetTextureV2Points(
     clampMode?: TextureClampModeV2 | string;
     tilePeriod?: readonly [number, number, number] | null;
     backgroundVector?: readonly [number, number, number] | null;
+    axisExtentMode?: TextureAxisExtentModeV2 | string | null;
+    axisThicknessM?: number | null;
     pivot?: readonly [number, number, number];
   },
 ): Vec3[] {
@@ -1282,12 +1370,27 @@ export function evaluatePresetTextureV2Points(
     clamp_mode: options?.clampMode ?? "none",
     tile_period: options?.tilePeriod ?? null,
     background_vector: options?.backgroundVector ?? null,
+    axis_extent_mode: options?.axisExtentMode ?? null,
+    axis_thickness_m: options?.axisThicknessM ?? null,
   };
   localEvaluate(presetKind, params, [0, 0, 0]);
+  const halfAxisThickness = validateAxisExtentV2(mapping);
+  const slabBg =
+    halfAxisThickness !== null
+      ? resolveSlabBackgroundV2(presetKind, params, frame, mapping)
+      : null;
   const isMetric = METRIC_PRESETS.has(presetKind);
   const out: Vec3[] = new Array(points.length);
   for (let i = 0; i < points.length; i += 1) {
     const pt = points[i]!;
+    if (halfAxisThickness !== null && slabBg !== null) {
+      const rel = sub(pt, pivot);
+      const zNormal = isMetric && frame !== null ? dot(rel, frame.e_n) : rel[2];
+      if (Math.abs(zNormal) > halfAxisThickness * (1.0 + 1.0e-12)) {
+        out[i] = quat ? rotateVectorByQuaternion(slabBg, quat) : slabBg;
+        continue;
+      }
+    }
     const outcome = applyClampModeV2(pt, pivot, mapping, null);
     if (outcome.kind === "background") {
       out[i] = quat ? rotateVectorByQuaternion(outcome.vector, quat) : outcome.vector;

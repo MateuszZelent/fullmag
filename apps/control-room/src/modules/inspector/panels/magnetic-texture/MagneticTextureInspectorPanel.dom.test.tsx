@@ -1,4 +1,4 @@
-import { act, useState, type ReactNode } from "react";
+import { act, useState, type ComponentProps, type ReactNode } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -1388,6 +1388,189 @@ describe("MagneticTextureInspectorPanel & StageTextureAssignmentsEditor on 8-slo
         applyBtn.click();
       });
       expect(applyMagnetization).not.toHaveBeenCalled();
+    } finally {
+      await act(async () => root.unmount());
+      dom.restore();
+    }
+  });
+
+  it("authors Finite thickness (axis_extent_mode + axis_thickness_m) on both object and region targets and auto-activates prepared_initial_state on Apply", async () => {
+    const dom = installSimulationPreparationTestDom();
+    const container = dom.document.createElement("div");
+    dom.document.body.appendChild(container);
+    const root = createRoot(container as unknown as Element);
+    const { applyMagnetization, kernel, setArtifactFieldSelection } = createKernelMock();
+    const objectSelection: Selection = {
+      kind: "object.magnetic-texture",
+      label: "Magnetic texture",
+      moduleSource: "explorer",
+      nodeId: "model:object:nanodisk:magnetic-texture",
+      objectId: "nanodisk",
+      ref: {
+        kind: "object.magnetic-texture",
+        nodeId: "model:object:nanodisk:magnetic-texture",
+        objectId: "nanodisk",
+        type: "scene-object",
+        visualizationTargetId: "object:nanodisk",
+      },
+    };
+    const regionSelection: Selection = {
+      kind: "object.region.texture",
+      label: "Magnetic texture",
+      moduleSource: "explorer",
+      nodeId: "model:object:nanodisk:region:ring:texture",
+      objectId: "nanodisk",
+      ref: {
+        kind: "object.region.texture",
+        nodeId: "model:object:nanodisk:region:ring:texture",
+        objectId: "nanodisk",
+        regionId: "ring",
+        type: "scene-object",
+        visualizationTargetId: "region:nanodisk:ring",
+      },
+    };
+
+    try {
+      await act(async () => {
+        root.render(
+          <KernelContext.Provider
+            value={kernel as unknown as ComponentProps<typeof KernelContext.Provider>["value"]}
+          >
+            <InspectorEditSessionProvider>
+              <MagneticTextureInspectorPanel selection={objectSelection} />
+            </InspectorEditSessionProvider>
+          </KernelContext.Provider>,
+        );
+      });
+
+      // Default mode is "Uniform through axis" — Axis thickness row is hidden
+      expect(
+        findElements(container, (el) => el.getAttribute("data-row") === "axisThicknessM"),
+      ).toHaveLength(0);
+
+      // Switch Through-axis extent segmented control to "Finite thickness"
+      const finiteBtn = findElement(
+        container,
+        (el) => el.tagName === "BUTTON" && el.textContent.trim() === "Finite thickness",
+        "Finite thickness option",
+      );
+      await act(async () => {
+        finiteBtn.click();
+      });
+
+      const thicknessRow = findElement(
+        container,
+        (el) => el.getAttribute("data-row") === "axisThicknessM",
+        "axisThicknessM row",
+      );
+      const thicknessInput = findElement(
+        thicknessRow,
+        (el) => el.tagName === "INPUT",
+        "axisThicknessM input",
+      );
+      // Default thickness is 1 nm; edit to 1.5 nm and apply on object target
+      expect(thicknessInput.value).toBe("1");
+      await act(async () => {
+        attachReactInputShim(thicknessInput);
+        thicknessInput.focus();
+        thicknessInput.dispatchEvent(new TestEvent("focusin", { bubbles: true }));
+      });
+      await act(async () => {
+        setInputValue(thicknessInput, "1.5");
+        thicknessInput.dispatchEvent(new TestEvent("blur", { bubbles: false }));
+      });
+
+      const applyObjectBtn = findElement(
+        container,
+        (el) => el.tagName === "BUTTON" && el.textContent.includes("Apply Texture"),
+        "Apply Texture object button",
+      );
+      await act(async () => {
+        applyObjectBtn.click();
+      });
+
+      expect(applyMagnetization).toHaveBeenCalledTimes(1);
+      const savedObjCall = applyMagnetization.mock.calls[0]?.[0] as {
+        kind: string;
+        object_id: string;
+        asset: { mapping: { axis_extent_mode: string; axis_thickness_m: number } };
+      };
+      expect(savedObjCall.kind).toBe("object");
+      expect(savedObjCall.object_id).toBe("nanodisk");
+      expect(savedObjCall.asset.mapping.axis_extent_mode).toBe("thickness");
+      expect(savedObjCall.asset.mapping.axis_thickness_m).toBeCloseTo(1.5e-9, 15);
+
+      // Bonus UX: Applying with status === "initial_state_ready" automatically activates prepared_initial_state!
+      expect(setArtifactFieldSelection).toHaveBeenCalledWith(null);
+      expect(observationSourceWorkspaceStore.getSnapshot().prepared).toMatchObject({
+        objectId: "nanodisk",
+        regionId: null,
+        source: {
+          publication_id: "pub-13",
+          scene_revision: 13,
+        },
+      });
+
+      // Now switch to Region target ("ring"), enable Finite thickness (default 1 nm), and Apply
+      await act(async () => {
+        root.render(
+          <KernelContext.Provider
+            value={kernel as unknown as ComponentProps<typeof KernelContext.Provider>["value"]}
+          >
+            <InspectorEditSessionProvider>
+              <MagneticTextureInspectorPanel selection={regionSelection} />
+            </InspectorEditSessionProvider>
+          </KernelContext.Provider>,
+        );
+      });
+
+      const regionFiniteBtn = findElement(
+        container,
+        (el) => el.tagName === "BUTTON" && el.textContent.trim() === "Finite thickness",
+        "Region Finite thickness option",
+      );
+      await act(async () => {
+        regionFiniteBtn.click();
+      });
+
+      const applyRegionBtn = findElement(
+        container,
+        (el) => el.tagName === "BUTTON" && el.textContent.includes("Apply Texture"),
+        "Apply Texture region button",
+      );
+      await act(async () => {
+        applyRegionBtn.click();
+      });
+
+      expect(applyMagnetization).toHaveBeenCalledTimes(2);
+      expect(applyMagnetization.mock.calls[1]?.[0]).toMatchObject({
+        kind: "region",
+        object_id: "nanodisk",
+        region_id: "ring",
+        texture_override: {
+          initial_magnetization: {
+            kind: "preset_texture",
+            mapping: {
+              space: "region",
+              axis_extent_mode: "thickness",
+              axis_thickness_m: 1e-9,
+            },
+          },
+        },
+      });
+
+      // Unmounting MagneticTextureInspectorPanel leaves prepared_initial_state active on the viewport!
+      await act(async () => {
+        root.render(<div />);
+      });
+      expect(observationSourceWorkspaceStore.getSnapshot().prepared).toMatchObject({
+        objectId: "nanodisk",
+        regionId: "ring",
+        source: {
+          publication_id: "pub-13",
+          scene_revision: 13,
+        },
+      });
     } finally {
       await act(async () => root.unmount());
       dom.restore();

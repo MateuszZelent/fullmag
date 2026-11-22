@@ -82,6 +82,11 @@ def _mapping_clamp_mode(mapping_ir: dict[str, object]) -> str:
     return str(raw).strip().lower() if isinstance(raw, str) and raw.strip() else "none"
 
 
+def _mapping_axis_extent_mode(mapping_ir: dict[str, object]) -> str:
+    raw = mapping_ir.get("axis_extent_mode")
+    return str(raw).strip().lower() if isinstance(raw, str) and raw.strip() else "uniform"
+
+
 def _validate_v2_texture_transform(transform: dict[str, object]) -> None:
     defaults: dict[str, Sequence[float]] = {
         "translation": (0.0, 0.0, 0.0),
@@ -297,6 +302,14 @@ def prepare_initial_magnetization(
             raw_pivot = transform_ir.get("pivot", (0.0, 0.0, 0.0)) if isinstance(transform_ir, dict) else (0.0, 0.0, 0.0)
             tile_period = mapping_ir.get("tile_period")
             background_vector = mapping_ir.get("background_vector")
+            axis_extent_mode = _mapping_axis_extent_mode(mapping_ir)
+            raw_axis_thickness = mapping_ir.get("axis_thickness_m")
+            axis_thickness_m = (
+                float(raw_axis_thickness)
+                if isinstance(raw_axis_thickness, (int, float))
+                and not isinstance(raw_axis_thickness, bool)
+                else None
+            )
             result = evaluate_preset_texture_v2(
                 preset_kind,
                 params,
@@ -307,6 +320,8 @@ def prepare_initial_magnetization(
                 clamp_mode=clamp_mode,
                 tile_period=tile_period if isinstance(tile_period, (list, tuple)) else None,
                 background_vector=background_vector if isinstance(background_vector, (list, tuple)) else None,
+                axis_extent_mode=axis_extent_mode,
+                axis_thickness_m=axis_thickness_m,
                 pivot=raw_pivot if isinstance(raw_pivot, (list, tuple)) else (0.0, 0.0, 0.0),
             )
         else:

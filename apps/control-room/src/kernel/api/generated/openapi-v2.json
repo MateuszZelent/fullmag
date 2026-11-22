@@ -40063,6 +40063,19 @@
       },
       "SceneTextureMapping": {
         "properties": {
+          "axis_extent_mode": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "axis_thickness_m": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
           "background_vector": {
             "items": {
               "format": "double",

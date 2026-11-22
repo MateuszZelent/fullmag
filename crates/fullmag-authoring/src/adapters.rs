@@ -2495,6 +2495,8 @@ impl From<crate::SceneTextureMapping> for fullmag_ir::TextureMappingIR {
             clamp_mode: m.clamp_mode,
             tile_period: m.tile_period,
             background_vector: m.background_vector,
+            axis_extent_mode: m.axis_extent_mode,
+            axis_thickness_m: m.axis_thickness_m,
         }
     }
 }

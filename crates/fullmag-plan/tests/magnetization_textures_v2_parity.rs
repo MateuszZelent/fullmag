@@ -56,6 +56,8 @@ fn mapping(projection: &str) -> TextureMappingIR {
         clamp_mode: "none".to_string(),
         tile_period: None,
         background_vector: None,
+        axis_extent_mode: None,
+        axis_thickness_m: None,
     }
 }
 

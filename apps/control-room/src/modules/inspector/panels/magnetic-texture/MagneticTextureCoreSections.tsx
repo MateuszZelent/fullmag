@@ -1540,7 +1540,11 @@ export function buildMagneticTextureInspectorSections({
     defaultOpen: true,
     showWhen: showPresetAuthoring,
     summary: (d) =>
-      `rot (${d.eulerDeg.map((a) => Math.round(a)).join("°, ")}°) · scale (${d.scale.map((s) => Number(s.toFixed(2))).join(", ")})`,
+      `rot (${d.eulerDeg.map((a) => Math.round(a)).join("°, ")}°) · scale (${d.scale.map((s) => Number(s.toFixed(2))).join(", ")})${
+        d.axisExtentMode === "thickness"
+          ? ` · tz ${(d.axisThicknessM * 1e9).toPrecision(3)} nm`
+          : ""
+      }`,
     rows: [
       {
         type: "custom",
@@ -1605,6 +1609,35 @@ export function buildMagneticTextureInspectorSections({
         showWhen: (d) =>
           d.translationUnitMode === "bounds_pct" || d.translationUnitMode === "bounds_norm",
         render: (ctx) => <RelativeBoundsOffsetField bounds={bounds} ctx={ctx} />,
+      },
+      {
+        key: "axisExtentMode",
+        label: "Through-axis extent",
+        type: "segmented",
+        structural: true,
+        options: [
+          { value: "uniform", label: "Uniform through axis" },
+          { value: "thickness", label: "Finite thickness" },
+        ],
+      },
+      {
+        key: "axisThicknessM",
+        label: "Axis thickness",
+        symbol: <>t<sub>z</sub></>,
+        symbolInfo: {
+          name: "Out-of-plane slab thickness",
+          definition:
+            "Confines the texture to |z'| ≤ t_z / 2 along the local texture normal axis; outside the slab spins assume the background orientation.",
+          siUnit: "m",
+          typicalRange: "0.5 nm – 20 nm",
+        },
+        type: "quantity",
+        units: METRIC_LENGTH_UNITS,
+        defaultDisplayUnit: "nm",
+        min: 1e-12,
+        scrub: "log",
+        showWhen: (d) => d.axisExtentMode === "thickness",
+        validate: fieldError("axisThicknessM"),
       },
       {
         key: "rotationMode",

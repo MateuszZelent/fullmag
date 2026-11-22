@@ -15475,6 +15475,9 @@ export interface components {
             surface_id: string;
         };
         SceneTextureMapping: {
+            axis_extent_mode?: string | null;
+            /** Format: double */
+            axis_thickness_m?: number | null;
             background_vector?: number[] | null;
             clamp_mode?: string;
             projection?: string;

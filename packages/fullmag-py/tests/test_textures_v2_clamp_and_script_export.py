@@ -373,3 +373,93 @@ def test_region_space_and_scene_document_roundtrip_preserve_new_fields() -> None
     vals_region = prepare_initial_magnetization(region_spec, region_pts)
     # Center point (100nm, 0, 0) maps to region-local (0, 0, 0) -> vortex core (+Z)
     np.testing.assert_allclose(vals_region[1], [0.0, 0.0, 1.0], atol=1e-12)
+
+
+def test_finite_axis_thickness_confines_translated_and_tilted_skyrmion_slab() -> None:
+    # 1 nm Bloch skyrmion translated to z = +2 nm (core_polarity=-1 -> natural background +Z)
+    skyrmion_1nm = (
+        texture.bloch_skyrmion(radius=15e-9, wall_width=4e-9, core_polarity=-1, chirality=1)
+        .translate(0.0, 0.0, 2.0e-9)
+        .with_mapping(axis_extent_mode="thickness", axis_thickness_m=1.0e-9)
+    )
+    ir = skyrmion_1nm.to_ir()
+    assert ir["mapping"]["axis_extent_mode"] == "thickness"
+    assert ir["mapping"]["axis_thickness_m"] == pytest.approx(1.0e-9)
+
+    pts = np.array(
+        [
+            [0.0, 0.0, 2.0e-9],     # slab center -> skyrmion core (-Z)
+            [0.0, 0.0, 1.5e-9],     # lower slab boundary (|z - 2nm| == 0.5nm) -> skyrmion core (-Z)
+            [0.0, 0.0, 2.5e-9],     # upper slab boundary (|z - 2nm| == 0.5nm) -> skyrmion core (-Z)
+            [15e-9, 0.0, 2.0e-9],   # skyrmion wall at r = radius inside slab -> in-plane (+Y)
+            [0.0, 0.0, 1.49e-9],    # just below slab -> natural background (+Z)
+            [0.0, 0.0, 2.51e-9],    # just above slab -> natural background (+Z)
+            [15e-9, 0.0, 0.0],      # z = 0 outside translated slab -> natural background (+Z)
+        ],
+        dtype=np.float64,
+    )
+    vals = prepare_initial_magnetization(ir, pts)
+    assert vals[0, 2] < -0.99
+    assert vals[1, 2] < -0.99
+    assert vals[2, 2] < -0.99
+    assert vals[3, 1] > 0.99 and abs(vals[3, 2]) < 1e-12
+    np.testing.assert_allclose(vals[4], [0.0, 0.0, 1.0], atol=1e-12)
+    np.testing.assert_allclose(vals[5], [0.0, 0.0, 1.0], atol=1e-12)
+    np.testing.assert_allclose(vals[6], [0.0, 0.0, 1.0], atol=1e-12)
+
+    # Core polarity +1 flips natural skyrmion background to -Z
+    skyrmion_pos_core = (
+        texture.neel_skyrmion(radius=15e-9, wall_width=4e-9, core_polarity=1)
+        .translate(0.0, 0.0, 2.0e-9)
+        .with_thickness(1.0e-9)
+    )
+    vals_pos = prepare_initial_magnetization(
+        skyrmion_pos_core.to_ir(),
+        np.array([[0.0, 0.0, 2.0e-9], [0.0, 0.0, 3.0e-9]], dtype=np.float64),
+    )
+    assert vals_pos[0, 2] > 0.99
+    np.testing.assert_allclose(vals_pos[1], [0.0, 0.0, -1.0], atol=1e-12)
+
+    # Custom background_vector + 90 deg X rotation tilts slab normal along -Y and rotates spins when rotate_vectors=True
+    tilted = (
+        texture.bloch_skyrmion(radius=15e-9, wall_width=4e-9, core_polarity=-1)
+        .rotate_x_deg(90.0)
+        .with_mapping(
+            axis_extent_mode="thickness",
+            axis_thickness_m=1.0e-9,
+            background_vector=(0.0, 3.0, 4.0),
+        )
+    )
+    # R_x(+90 deg) maps local (0, 0, z') -> world (0, -z', 0), and rotates bg (0, 0.6, 0.8) -> (0, -0.8, 0.6)
+    vals_tilted = prepare_initial_magnetization(
+        tilted.to_ir(),
+        np.array([[0.0, 0.0, 0.0], [0.0, 2.0e-9, 0.0]], dtype=np.float64),
+    )
+    np.testing.assert_allclose(vals_tilted[0], [0.0, 1.0, 0.0], atol=1e-6)  # core (0,0,-1) rotated +90 deg around X -> (0,+1,0)
+    np.testing.assert_allclose(vals_tilted[1], [0.0, -0.8, 0.6], atol=1e-12)
+
+    # Fluent script export & scene_document round-trip preserve axis_extent_mode & axis_thickness_m
+    rendered = _render_preset_texture_expr(
+        str(ir["preset_kind"]),
+        dict(ir["preset_params"]),
+        mapping=dict(ir["mapping"]),
+        transform=dict(ir["texture_transform"]),
+        preset_version=2,
+    )
+    assert ".with_mapping(" in rendered
+    assert 'axis_extent_mode="thickness"' in rendered
+    assert "axis_thickness_m=" in rendered
+    reconstructed = eval(rendered, {"fm": fm})
+    assert reconstructed.to_ir()["mapping"] == ir["mapping"]
+
+    # Validation rejects non-positive or missing axis_thickness_m when axis_extent_mode == "thickness"
+    with pytest.raises(ValueError, match="axis_thickness_m"):
+        TextureMapping(axis_extent_mode="thickness")
+    with pytest.raises(ValueError, match="axis_thickness_m"):
+        evaluate_preset_texture_v2(
+            "bloch_skyrmion",
+            {"radius": 15e-9, "wall_width": 4e-9},
+            [(0.0, 0.0, 0.0)],
+            axis_extent_mode="thickness",
+            axis_thickness_m=0.0,
+        )

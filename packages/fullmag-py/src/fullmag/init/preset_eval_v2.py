@@ -699,6 +699,54 @@ def _artificial_spin_ice(params: Mapping[str, object], point: Sequence[float]) -
     raise _invalid("lattice", "must be 'square' or 'kagome'")
 
 
+def _validate_axis_extent_v2(
+    axis_extent_mode: str,
+    axis_thickness_m: float | None,
+) -> float | None:
+    if not axis_extent_mode or axis_extent_mode == "uniform":
+        return None
+    if axis_extent_mode == "thickness":
+        if axis_thickness_m is None or isinstance(axis_thickness_m, bool):
+            raise _invalid(
+                "mapping.axis_thickness_m",
+                "positive axis_thickness_m is required when axis_extent_mode == 'thickness'",
+            )
+        try:
+            thickness = float(axis_thickness_m)
+        except (TypeError, ValueError) as exc:
+            raise _invalid("mapping.axis_thickness_m", "must be finite and positive") from exc
+        if not math.isfinite(thickness) or thickness <= _EPSILON:
+            raise _invalid("mapping.axis_thickness_m", "must be finite and positive")
+        return 0.5 * thickness
+    raise _invalid("mapping.axis_extent_mode", f"unsupported axis_extent_mode '{axis_extent_mode}'")
+
+
+def _resolve_slab_background_v2(
+    preset_kind: str,
+    params: Mapping[str, object],
+    frame: tuple[Vec3, Vec3, Vec3] | None,
+    background_vector: Vec3 | None,
+) -> Vec3:
+    if background_vector is not None:
+        return _normalize(background_vector, "mapping.background_vector")
+    if preset_kind in {"bloch_skyrmion", "neel_skyrmion", "antiskyrmion", "skyrmion_lattice"}:
+        polarity = _sign(params, "core_polarity", 1)
+        local_bg: Vec3 = (0.0, 0.0, -polarity)
+    elif preset_kind in {"skyrmionium", "hopfion"}:
+        bg_sign = _sign(params, "background_sign", 1)
+        local_bg = (0.0, 0.0, bg_sign)
+    elif preset_kind == "bimeron":
+        bg_sign = _sign(params, "background_sign", 1)
+        local_bg = (bg_sign, 0.0, 0.0)
+    elif preset_kind == "hopfion_compact_support":
+        local_bg = (0.0, 0.0, 1.0)
+    else:
+        local_bg = (0.0, 0.0, 1.0)
+    if frame is not None and preset_kind in _METRIC_PRESETS:
+        return _vector_to_world(local_bg, frame)
+    return local_bg
+
+
 def _apply_clamp_mode_v2(
     point: Vec3,
     pivot: Vec3,
@@ -832,6 +880,8 @@ def evaluate_preset_texture_v2(
     clamp_mode: str = "none",
     tile_period: Sequence[float] | None = None,
     background_vector: Sequence[float] | None = None,
+    axis_extent_mode: str = "uniform",
+    axis_thickness_m: float | None = None,
     pivot: Sequence[float] = (0.0, 0.0, 0.0),
 ) -> EvaluatedTextureV2:
     if projection is not None and projection not in {
@@ -854,8 +904,11 @@ def evaluate_preset_texture_v2(
         point_list.append(point)
 
     normalized_clamp = str(clamp_mode or "none").strip().lower()
+    normalized_axis_extent = str(axis_extent_mode or "uniform").strip().lower()
+    half_axis_thickness = _validate_axis_extent_v2(normalized_axis_extent, axis_thickness_m)
     use_native = (
         normalized_clamp == "none"
+        and half_axis_thickness is None
         and rotate_vectors is True
         and preset_kind not in _WAVE2_PRESETS
     )
@@ -904,8 +957,20 @@ def evaluate_preset_texture_v2(
     )
 
     _local(preset_kind, params, (0.0, 0.0, 0.0))
+    slab_bg_vec: Vec3 | None = (
+        _resolve_slab_background_v2(preset_kind, params, frame, bg_vec)
+        if half_axis_thickness is not None
+        else None
+    )
+    is_metric = preset_kind in _METRIC_PRESETS
     values: list[Vec3] = []
     for point in point_list:
+        if half_axis_thickness is not None and slab_bg_vec is not None:
+            rel_z = _sub(point, pivot_vec)
+            z_normal = _dot(rel_z, frame[2]) if (is_metric and frame is not None) else rel_z[2]
+            if abs(z_normal) > half_axis_thickness * (1.0 + 1.0e-12):
+                values.append(_rotate(slab_bg_vec, quaternion) if quaternion is not None else slab_bg_vec)
+                continue
         outcome_kind, outcome_vec = _apply_clamp_mode_v2(
             point,
             pivot_vec,
@@ -916,8 +981,8 @@ def evaluate_preset_texture_v2(
         if outcome_kind == "background":
             values.append(_rotate(outcome_vec, quaternion) if quaternion is not None else outcome_vec)
             continue
-        local_point = _coordinates(outcome_vec, frame) if frame is not None and preset_kind in _METRIC_PRESETS else outcome_vec
+        local_point = _coordinates(outcome_vec, frame) if frame is not None and is_metric else outcome_vec
         local_vector = _local(preset_kind, params, local_point)
-        world_vector = _vector_to_world(local_vector, frame) if frame is not None and preset_kind in _METRIC_PRESETS else local_vector
+        world_vector = _vector_to_world(local_vector, frame) if frame is not None and is_metric else local_vector
         values.append(_rotate(world_vector, quaternion) if quaternion is not None else world_vector)
     return EvaluatedTextureV2(values=values)

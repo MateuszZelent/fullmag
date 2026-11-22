@@ -802,6 +802,64 @@ fn wrap_metric_mirror(coord: f64, period: f64) -> f64 {
     folded - 0.5 * period
 }
 
+fn validate_axis_extent_v2(mapping: &TextureMappingIR) -> Result<Option<f64>, TextureError> {
+    let raw_mode = mapping.axis_extent_mode.as_deref().map(str::trim).unwrap_or("");
+    if raw_mode.is_empty() || raw_mode.eq_ignore_ascii_case("uniform") {
+        return Ok(None);
+    }
+    if raw_mode.eq_ignore_ascii_case("thickness") {
+        let thickness = mapping.axis_thickness_m.ok_or_else(|| {
+            invalid(
+                "mapping.axis_thickness_m",
+                "positive axis_thickness_m is required when axis_extent_mode == 'thickness'",
+            )
+        })?;
+        if !thickness.is_finite() || thickness <= EPSILON {
+            return Err(invalid(
+                "mapping.axis_thickness_m",
+                "must be finite and positive",
+            ));
+        }
+        return Ok(Some(0.5 * thickness));
+    }
+    Err(invalid(
+        "mapping.axis_extent_mode",
+        format!("unsupported axis_extent_mode '{raw_mode}'"),
+    ))
+}
+
+fn resolve_slab_background_v2(
+    preset_kind: &str,
+    params: &BTreeMap<String, Value>,
+    frame: Option<OrientedPlaneFrame>,
+    mapping: &TextureMappingIR,
+) -> Result<[f64; 3], TextureError> {
+    if let Some(bg) = mapping.background_vector {
+        return normalize_checked(bg, "mapping.background_vector");
+    }
+    let local_bg = match preset_kind {
+        "bloch_skyrmion" | "neel_skyrmion" | "antiskyrmion" | "skyrmion_lattice" => {
+            let polarity = sign(params, "core_polarity", 1)?;
+            [0.0, 0.0, -polarity]
+        }
+        "skyrmionium" | "hopfion" => {
+            let bg_sign = sign(params, "background_sign", 1)?;
+            [0.0, 0.0, bg_sign]
+        }
+        "bimeron" => {
+            let bg_sign = sign(params, "background_sign", 1)?;
+            [bg_sign, 0.0, 0.0]
+        }
+        "hopfion_compact_support" => [0.0, 0.0, 1.0],
+        _ => [0.0, 0.0, 1.0],
+    };
+    Ok(if is_metric(preset_kind) {
+        metric_vector(local_bg, frame)
+    } else {
+        local_bg
+    })
+}
+
 fn apply_clamp_mode_v2(
     transformed: [f64; 3],
     pivot: [f64; 3],
@@ -1223,6 +1281,17 @@ fn sample_v2(
     }
     let prepared_transform = PreparedTextureTransform::prepare(transform)?;
     local_evaluate(preset_kind, params, [0.0, 0.0, 0.0])?;
+    let half_axis_thickness = validate_axis_extent_v2(mapping)?;
+    let slab_background = if half_axis_thickness.is_some() {
+        Some(resolve_slab_background_v2(
+            preset_kind,
+            params,
+            frame,
+            mapping,
+        )?)
+    } else {
+        None
+    };
 
     let fallback_extent = if !mapping.clamp_mode.is_empty()
         && mapping.clamp_mode != "none"
@@ -1285,6 +1354,18 @@ fn sample_v2(
                 "sample_point",
                 "transformed coordinates must be finite",
             ));
+        }
+        if let (Some(half_t), Some(bg)) = (half_axis_thickness, slab_background) {
+            let rel = sub(transformed, prepared_transform.pivot);
+            let z_normal = if is_metric(preset_kind) {
+                frame.map_or(rel[2], |f| dot(rel, f.e_n))
+            } else {
+                rel[2]
+            };
+            if z_normal.abs() > half_t * (1.0 + 1.0e-12) {
+                output.push(prepared_transform.vector_to_source(bg));
+                continue;
+            }
         }
         let clamped = match apply_clamp_mode_v2(
             transformed,

@@ -388,6 +388,10 @@ pub struct MagnetizationMapping {
     pub tile_period: Option<[f64; 3]>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub background_vector: Option<[f64; 3]>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub axis_extent_mode: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub axis_thickness_m: Option<f64>,
 }
 
 impl Default for MagnetizationMapping {
@@ -398,6 +402,8 @@ impl Default for MagnetizationMapping {
             clamp_mode: default_mapping_clamp_mode(),
             tile_period: None,
             background_vector: None,
+            axis_extent_mode: None,
+            axis_thickness_m: None,
         }
     }
 }
@@ -1760,6 +1766,10 @@ pub struct SceneTextureMapping {
     pub tile_period: Option<[f64; 3]>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub background_vector: Option<[f64; 3]>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub axis_extent_mode: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub axis_thickness_m: Option<f64>,
 }
 
 impl Default for SceneTextureMapping {
@@ -1770,6 +1780,8 @@ impl Default for SceneTextureMapping {
             clamp_mode: default_mapping_clamp_mode(),
             tile_period: None,
             background_vector: None,
+            axis_extent_mode: None,
+            axis_thickness_m: None,
         }
     }
 }

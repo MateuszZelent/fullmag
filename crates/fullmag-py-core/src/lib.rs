@@ -366,6 +366,8 @@ fn sample_preset_texture_v2_json(
         clamp_mode: "none".to_string(),
         tile_period: None,
         background_vector: None,
+        axis_extent_mode: None,
+        axis_thickness_m: None,
     };
     let values = fullmag_plan::sample_preset_texture_versioned(
         preset_kind,

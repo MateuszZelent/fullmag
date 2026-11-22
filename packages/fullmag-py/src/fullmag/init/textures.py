@@ -185,6 +185,27 @@ class TextureMapping:
     clamp_mode: Literal["clamp", "repeat", "mirror", "none", "background"] = "none"
     tile_period: Vec3 | None = None
     background_vector: Vec3 | None = None
+    axis_extent_mode: Literal["uniform", "thickness"] = "uniform"
+    axis_thickness_m: float | None = None
+
+    def __post_init__(self) -> None:
+        if self.axis_extent_mode not in ("uniform", "thickness"):
+            raise ValueError(
+                f"axis_extent_mode must be 'uniform' or 'thickness', got {self.axis_extent_mode!r}"
+            )
+        if self.axis_extent_mode == "thickness":
+            if self.axis_thickness_m is None:
+                raise ValueError(
+                    "axis_thickness_m is required when axis_extent_mode == 'thickness'"
+                )
+        if self.axis_thickness_m is not None:
+            if isinstance(self.axis_thickness_m, bool) or not isinstance(
+                self.axis_thickness_m, (int, float)
+            ):
+                raise ValueError("axis_thickness_m must be a positive finite number")
+            thickness = float(self.axis_thickness_m)
+            if not math.isfinite(thickness) or thickness <= 0.0:
+                raise ValueError("axis_thickness_m must be finite and positive")
 
     def to_ir(self) -> dict[str, object]:
         result: dict[str, object] = {
@@ -198,6 +219,10 @@ class TextureMapping:
             result["background_vector"] = list(
                 _vec3(self.background_vector, "background_vector")
             )
+        if self.axis_extent_mode != "uniform":
+            result["axis_extent_mode"] = self.axis_extent_mode
+        if self.axis_thickness_m is not None:
+            result["axis_thickness_m"] = float(self.axis_thickness_m)
         return result
 
 
@@ -251,6 +276,8 @@ class PresetTexture:
         clamp_mode: Literal["none", "clamp", "repeat", "mirror", "background"] | None = None,
         tile_period: Sequence[float] | None = None,
         background_vector: Sequence[float] | None = None,
+        axis_extent_mode: Literal["uniform", "thickness"] | None = None,
+        axis_thickness_m: float | None = None,
     ) -> "PresetTexture":
         resolved_tile_period = (
             _vec3(tile_period, "tile_period")
@@ -262,6 +289,14 @@ class PresetTexture:
             if background_vector is not None
             else self.mapping.background_vector
         )
+        resolved_axis_extent_mode = (
+            axis_extent_mode if axis_extent_mode is not None else self.mapping.axis_extent_mode
+        )
+        resolved_axis_thickness_m = (
+            float(axis_thickness_m)
+            if axis_thickness_m is not None
+            else self.mapping.axis_thickness_m
+        )
         return replace(
             self,
             mapping=TextureMapping(
@@ -270,7 +305,15 @@ class PresetTexture:
                 clamp_mode=clamp_mode if clamp_mode is not None else self.mapping.clamp_mode,
                 tile_period=resolved_tile_period,
                 background_vector=resolved_background,
+                axis_extent_mode=resolved_axis_extent_mode,
+                axis_thickness_m=resolved_axis_thickness_m,
             ),
+        )
+
+    def with_thickness(self, axis_thickness_m: float) -> "PresetTexture":
+        return self.with_mapping(
+            axis_extent_mode="thickness",
+            axis_thickness_m=axis_thickness_m,
         )
 
     def with_pivot(self, pivot: Sequence[float]) -> "PresetTexture":

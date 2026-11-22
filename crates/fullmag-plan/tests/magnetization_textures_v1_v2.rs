@@ -29,6 +29,8 @@ fn versioned_sampler_accepts_v1_and_v2_without_changing_mapping_contract() {
         clamp_mode: "none".to_string(),
         tile_period: None,
         background_vector: None,
+        axis_extent_mode: None,
+        axis_thickness_m: None,
     };
     let transform = TextureTransform3DIR::default();
     let preset_params = params([("direction", json!([1.0, 0.0, 0.0]))]);

@@ -50,7 +50,7 @@ fn preset_texture_sample_log_key(
     texture_transform: &fullmag_ir::TextureTransform3DIR,
 ) -> String {
     format!(
-        "{}|{}|{}|{}|{:?}|{}/{}/{}/{:?}/{:?}|T:{}|R:{}|S:{}|P:{}|RV:{}",
+        "{}|{}|{}|{}|{:?}|{}/{}/{}/{:?}/{:?}/{:?}/{:?}|T:{}|R:{}|S:{}|P:{}|RV:{}",
         magnet_name,
         mesh_name,
         n_nodes,
@@ -61,6 +61,8 @@ fn preset_texture_sample_log_key(
         mapping.clamp_mode,
         mapping.tile_period,
         mapping.background_vector,
+        mapping.axis_extent_mode,
+        mapping.axis_thickness_m,
         texture_vector_log_key(&texture_transform.translation),
         texture_vector_log_key(&texture_transform.rotation_quat),
         texture_vector_log_key(&texture_transform.scale),
@@ -3008,6 +3010,8 @@ mod texture_object_space_tests {
                 clamp_mode: "none".to_string(),
                 tile_period: None,
                 background_vector: None,
+                axis_extent_mode: None,
+                axis_thickness_m: None,
             },
             texture_transform: TextureTransform3DIR::default(),
         };

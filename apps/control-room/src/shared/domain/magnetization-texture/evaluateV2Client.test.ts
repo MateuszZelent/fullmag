@@ -10,12 +10,15 @@ import {
   evaluatePresetTextureV2Points,
   quaternionToEulerDegrees,
   rotateVectorByQuaternion,
+  samplePresetTextureV2Batch,
   samplePresetTextureV2Client,
 } from "./evaluateV2Client";
 import {
+  buildPresetSpecFromDraft,
   computeRelativePresetDefaults,
   createDefaultMagneticTextureDraft,
   fitCharacteristicSizeToTarget,
+  formatMagneticTexturePythonExpression,
   hydrateMagneticTextureDraftFromInitializer,
   serializeMagneticTextureDraftToInitializer,
   synchronizePlaneAndProjection,
@@ -508,5 +511,104 @@ describe("magnetization-texture V2 client evaluator, bounds and Fit Characterist
       presetParams: { radius: 25e-9, wall_width: 5e-9, core_polarity: -1, chirality: 1 },
     });
     expect(createdAsset.ui_label).toBeNull();
+  });
+
+  it("evaluates finite Z-axis thickness confinement identically across client, batch, draft hydration, and Python export", () => {
+    const scene = {
+      revision: 1,
+      objects: [
+        {
+          id: "film",
+          name: "Film",
+          role: "magnet",
+          geometry: {
+            geometry_kind: "Box",
+            geometry_params: { size: [100e-9, 100e-9, 10e-9] },
+          },
+        },
+      ],
+    };
+    const bounds = resolveTargetBoundsMeters(
+      scene as unknown as Parameters<typeof resolveTargetBoundsMeters>[0],
+      { kind: "object", objectId: "film" },
+    );
+    const draft = {
+      ...createDefaultMagneticTextureDraft("bloch_skyrmion", bounds, "object"),
+      radiusM: 15e-9,
+      wallWidthM: 4e-9,
+      corePolarity: -1 as const,
+      chirality: 1 as const,
+      translationM: [0, 0, 2e-9] as [number, number, number],
+      axisExtentMode: "thickness" as const,
+      axisThicknessM: 1e-9,
+    };
+
+    const spec = buildPresetSpecFromDraft(draft, bounds);
+    expect(spec.mapping).toMatchObject({
+      space: "object",
+      projection: "object_local",
+      clamp_mode: "none",
+      axis_extent_mode: "thickness",
+      axis_thickness_m: 1e-9,
+    });
+
+    const samplePts: [number, number, number][] = [
+      [0, 0, 2.0e-9], // slab center -> core (-Z)
+      [0, 0, 1.5e-9], // lower slab face -> core (-Z)
+      [0, 0, 2.5e-9], // upper slab face -> core (-Z)
+      [15e-9, 0, 2.0e-9], // Bloch wall inside slab -> +Y
+      [0, 0, 1.49e-9], // below slab -> natural background (+Z)
+      [0, 0, 2.51e-9], // above slab -> natural background (+Z)
+      [15e-9, 0, 0], // z = 0 outside slab -> natural background (+Z)
+    ];
+
+    const batchVals = samplePresetTextureV2Batch(spec, samplePts, bounds);
+    for (let i = 0; i < samplePts.length; i += 1) {
+      const singleVal = samplePresetTextureV2Client(spec, samplePts[i]!, bounds);
+      expect(maxInfinityNormDiff(singleVal, batchVals[i]!)).toBeLessThan(1e-15);
+    }
+    expect(batchVals[0]![2]).toBeLessThan(-0.99);
+    expect(batchVals[1]![2]).toBeLessThan(-0.99);
+    expect(batchVals[2]![2]).toBeLessThan(-0.99);
+    expect(batchVals[3]![1]).toBeGreaterThan(0.99);
+    expect(maxInfinityNormDiff(batchVals[4]!, [0, 0, 1])).toBeLessThan(1e-12);
+    expect(maxInfinityNormDiff(batchVals[5]!, [0, 0, 1])).toBeLessThan(1e-12);
+    expect(maxInfinityNormDiff(batchVals[6]!, [0, 0, 1])).toBeLessThan(1e-12);
+
+    // Tilted 90 deg around X + explicit background_vector rotates both the 1 nm slab and background spin
+    const tiltedQuat = eulerDegreesToQuaternion([90, 0, 0]);
+    const tiltedPts = evaluatePresetTextureV2Points(
+      "bloch_skyrmion",
+      { radius: 15e-9, wall_width: 4e-9, core_polarity: -1, chirality: 1, plane: "xy" },
+      [
+        [0, 0, 0],
+        [0, 0, -2e-9],
+      ],
+      {
+        rotationQuat: tiltedQuat,
+        rotateVectors: true,
+        axisExtentMode: "thickness",
+        axisThicknessM: 1e-9,
+        backgroundVector: [0, 3, 4],
+      },
+    );
+    expect(maxInfinityNormDiff(tiltedPts[0]!, [0, 1, 0])).toBeLessThan(1e-6);
+    expect(maxInfinityNormDiff(tiltedPts[1]!, [0, -0.8, 0.6])).toBeLessThan(1e-12);
+
+    // Hydration, serialization, validation, and Python snippet roundtrip
+    const serialized = serializeMagneticTextureDraftToInitializer(draft, bounds);
+    const hydrated = hydrateMagneticTextureDraftFromInitializer(serialized, bounds, "object");
+    expect(hydrated.axisExtentMode).toBe("thickness");
+    expect(hydrated.axisThicknessM).toBeCloseTo(1e-9, 15);
+
+    const pyExpr = formatMagneticTexturePythonExpression(hydrated, bounds);
+    expect(pyExpr).toContain('axis_extent_mode="thickness"');
+    expect(pyExpr).toContain("axis_thickness_m=1e-9");
+
+    const invalidThicknessErrors = validateMagneticTextureDraft({
+      ...hydrated,
+      axisThicknessM: 0,
+    });
+    expect(invalidThicknessErrors.get("axisThicknessM")).toContain("positive");
   });
 });

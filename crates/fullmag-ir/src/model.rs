@@ -811,6 +811,10 @@ pub struct TextureMappingIR {
     pub tile_period: Option<[f64; 3]>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub background_vector: Option<[f64; 3]>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub axis_extent_mode: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub axis_thickness_m: Option<f64>,
 }
 
 /// Supported texture projection modes.
@@ -846,6 +850,8 @@ impl Default for TextureMappingIR {
             clamp_mode: default_texture_mapping_clamp_mode(),
             tile_period: None,
             background_vector: None,
+            axis_extent_mode: None,
+            axis_thickness_m: None,
         }
     }
 }

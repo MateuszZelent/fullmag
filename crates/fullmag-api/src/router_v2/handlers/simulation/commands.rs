@@ -2244,6 +2244,8 @@ fn initial_magnetization_for_object(
             clamp_mode: asset.mapping.clamp_mode.clone(),
             tile_period: asset.mapping.tile_period,
             background_vector: asset.mapping.background_vector,
+            axis_extent_mode: asset.mapping.axis_extent_mode.clone(),
+            axis_thickness_m: asset.mapping.axis_thickness_m,
         };
 
         let texture_transform = fullmag_ir::TextureTransform3DIR {

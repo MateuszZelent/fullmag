@@ -10,6 +10,7 @@ import {
   quaternionToEulerDegrees,
   type PresetTextureSpecV2,
   type Quat4,
+  type TextureAxisExtentModeV2,
   type TextureClampModeV2,
   type TextureMappingSpaceMode,
   type TextureProjectionModeV2,
@@ -118,6 +119,8 @@ export interface MagneticTextureDraft {
   clampMode: TextureClampModeV2;
   tilePeriodM: Vec3;
   backgroundVector: Vec3;
+  axisExtentMode: TextureAxisExtentModeV2;
+  axisThicknessM: number;
 
   // 6. Field File (sampled_field)
   fieldOrigin: "artifact" | "file";
@@ -508,6 +511,8 @@ export function createDefaultMagneticTextureDraft(
     clampMode: "none",
     tilePeriodM: [...bounds.size],
     backgroundVector: [0, 0, 1],
+    axisExtentMode: "uniform",
+    axisThicknessM: 1e-9,
 
     fieldOrigin: "file",
     fieldArtifactRef: "",
@@ -812,6 +817,11 @@ export function validateMagneticTextureDraft(
     }
     if (draft.clampMode === "background" && !isNonZeroFiniteVec3(draft.backgroundVector)) {
       errors.set("backgroundVector", "Background spin vector cannot be the zero vector.");
+    }
+  }
+  if (draft.axisExtentMode === "thickness") {
+    if (!Number.isFinite(draft.axisThicknessM) || draft.axisThicknessM <= 0) {
+      errors.set("axisThicknessM", "Axis thickness must be finite and positive.");
     }
   }
 
@@ -1299,6 +1309,17 @@ export function hydrateMagneticTextureDraftFromInitializer(
       ? rawClamp
       : "none";
 
+  const rawAxisExtent = String(mapping?.axis_extent_mode ?? "uniform")
+    .trim()
+    .toLowerCase();
+  const axisExtentMode: TextureAxisExtentModeV2 =
+    rawAxisExtent === "thickness" ? "thickness" : "uniform";
+  const rawAxisThickness = readNum(mapping, "axis_thickness_m", base.axisThicknessM);
+  const axisThicknessM =
+    Number.isFinite(rawAxisThickness) && rawAxisThickness > 0
+      ? rawAxisThickness
+      : base.axisThicknessM;
+
   const leftMxNum = readNum(params, "left_mx", 1);
   const rightMxNum = readNum(params, "right_mx", -1);
   const leftMxSign: -1 | 1 = leftMxNum < 0 ? -1 : 1;
@@ -1408,6 +1429,8 @@ export function hydrateMagneticTextureDraftFromInitializer(
     clampMode,
     tilePeriodM: readVec3(mapping, "tile_period", [...bounds.size]),
     backgroundVector: readVec3(mapping, "background_vector", [0, 0, 1]),
+    axisExtentMode,
+    axisThicknessM,
   };
 }
 
@@ -1622,6 +1645,12 @@ export function buildPresetSpecFromDraft(
       ...(draft.clampMode === "background"
         ? { background_vector: normalizeOrFallback(draft.backgroundVector, [0, 0, 1]) }
         : {}),
+      ...(draft.axisExtentMode === "thickness"
+        ? {
+            axis_extent_mode: "thickness",
+            axis_thickness_m: draft.axisThicknessM,
+          }
+        : {}),
     },
     texture_transform: {
       translation: draft.translationM,
@@ -1714,13 +1743,25 @@ export function formatMagneticTexturePythonExpression(
   if (Math.hypot(px, py, pz) > 1e-15) {
     chain.push(`.with_pivot(${pyTuple([px, py, pz])})`);
   }
-  if (draft.mappingSpace !== "object" || draft.clampMode !== "none") {
-    const mapArgs = [`space=${JSON.stringify(draft.mappingSpace)}`, `clamp_mode=${JSON.stringify(draft.clampMode)}`];
+  if (
+    draft.mappingSpace !== "object" ||
+    draft.clampMode !== "none" ||
+    draft.axisExtentMode === "thickness"
+  ) {
+    const mapArgs: string[] = [];
+    if (draft.mappingSpace !== "object" || draft.clampMode !== "none") {
+      mapArgs.push(`space=${JSON.stringify(draft.mappingSpace)}`);
+      mapArgs.push(`clamp_mode=${JSON.stringify(draft.clampMode)}`);
+    }
     if (draft.clampMode !== "none") {
       mapArgs.push(`tile_period=${pyTuple(draft.tilePeriodM)}`);
     }
     if (draft.clampMode === "background") {
       mapArgs.push(`background_vector=${pyTuple(draft.backgroundVector)}`);
+    }
+    if (draft.axisExtentMode === "thickness") {
+      mapArgs.push(`axis_extent_mode="thickness"`);
+      mapArgs.push(`axis_thickness_m=${draft.axisThicknessM}`);
     }
     chain.push(`.with_mapping(${mapArgs.join(", ")})`);
   }
