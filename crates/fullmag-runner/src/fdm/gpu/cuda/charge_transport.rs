@@ -823,7 +823,7 @@ fn parse_sha256(value: &str) -> Result<[u8; 32], GpuChargeTransportError> {
     Ok(digest)
 }
 
-fn stable_source_id(source_id: &str) -> u64 {
+pub(crate) fn stable_source_id(source_id: &str) -> u64 {
     let digest = Sha256::digest(source_id.as_bytes());
     u64::from_le_bytes(
         digest[..8]

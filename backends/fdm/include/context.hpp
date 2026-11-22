@@ -2375,7 +2375,15 @@ inline bool context_get_local_pipeline_telemetry_v1(
         FULLMAG_FDM_LOCAL_PIPELINE_METRIC_CAPTURED_NODES |
         FULLMAG_FDM_LOCAL_PIPELINE_METRIC_GRAPH_LIFECYCLE |
         FULLMAG_FDM_LOCAL_PIPELINE_METRIC_GRAPH_EXECUTIONS;
-    result.required_operator_mask = fullmag_fdm_required_operator_mask(ctx);
+    // The counters describe the execution lifetime, including a transport
+    // operator that was detached after its final accepted step. Keep this
+    // identity aligned with the strict execution receipt; active features
+    // are reported independently below.
+    {
+        const auto &receipt = *ctx.execution_receipt;
+        std::lock_guard<std::mutex> lock(receipt.accounting_mutex);
+        result.required_operator_mask = receipt.required_operator_mask;
+    }
     result.active_feature_mask =
         context_local_pipeline_active_feature_mask(ctx);
     result.source_revision = ctx.rhs_source_revision;
@@ -2418,10 +2426,13 @@ inline bool context_get_gpu_workspace_telemetry_v1(
             sizeof(fullmag_fdm_gpu_workspace_telemetry_v1)) {
         return false;
     }
+    // This telemetry covers Context-owned LLG workspace allocations, including
+    // setup-preallocated rollback buffers. M1 transport storage belongs to its
+    // registry Slot and separate allocator, so binding it does not invalidate
+    // these LLG counters.
     const bool accounting_valid =
         ctx.gpu_workspace_accounting_valid &&
-        !ctx.gpu_workspace_step_active &&
-        !ctx.gpu_transport_rhs.active;
+        !ctx.gpu_workspace_step_active;
     fullmag_fdm_gpu_workspace_telemetry_v1 result{};
     result.abi_version = FULLMAG_FDM_GPU_WORKSPACE_TELEMETRY_ABI_V1;
     result.struct_size = sizeof(result);

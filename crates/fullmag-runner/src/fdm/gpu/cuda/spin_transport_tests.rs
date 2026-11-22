@@ -779,10 +779,49 @@ fn accepted_bound_llg_step_enables_readback_without_a_second_spin_solve() {
     session.solve_charge(7, 11).unwrap();
 
     session.observe_bound_llg_accepted_step().unwrap();
+    assert_eq!(
+        abi.calls()
+            .iter()
+            .filter(|call| **call == "telemetry")
+            .count(),
+        0,
+        "accepted-step bookkeeping must not poll telemetry on every solver step"
+    );
     let artifacts = session.readback_accepted_artifacts().unwrap();
 
     assert_eq!(artifacts.potential_v, vec![100.0]);
     assert_eq!(abi.artifact_requests().len(), 5);
+}
+
+#[test]
+fn accepted_transport_readback_fetches_only_requested_artifact_fields() {
+    let abi = FakeAbi::default();
+    let mut session = GpuM1TransportSession::create(abi.clone(), raw_descriptor(2)).unwrap();
+    session.solve_charge(7, 11).unwrap();
+    session.observe_bound_llg_accepted_step().unwrap();
+
+    let artifacts = session
+        .readback_accepted_artifacts_for(&["torque_stt".into()])
+        .unwrap();
+
+    assert!(artifacts.potential_v.is_empty());
+    assert!(artifacts.charge_current_j_c.iter().all(Vec::is_empty));
+    assert!(artifacts.spin_accumulation_mu_s.iter().all(Vec::is_empty));
+    assert!(artifacts
+        .spin_current_q_ia
+        .iter()
+        .flatten()
+        .all(Vec::is_empty));
+    assert_eq!(
+        artifacts.torque_stt,
+        [vec![500.0], vec![501.0], vec![502.0]]
+    );
+    let requests = abi.artifact_requests();
+    assert_eq!(requests.len(), 1);
+    assert_eq!(
+        requests[0].field_id,
+        ffi::FULLMAG_FDM_GPU_TRANSPORT_ARTIFACT_FIELD_TORQUE_STT
+    );
 }
 
 #[test]
@@ -1687,4 +1726,197 @@ fn stage_checkpoint_rejects_foreign_identity_before_native_import() {
         ));
         assert!(!restored_abi.calls().contains(&"checkpoint_import"));
     }
+}
+
+#[test]
+fn specified_partial_current_faces_overlay_the_resolved_side_summary() {
+    use super::charge_transport::{GpuChargeBoundaryKind, expand_resolved_boundaries};
+    use fullmag_ir::{
+        ResolvedChargeBoundaryConditionIR as Condition, ResolvedChargeBoundaryFaceIR as Boundary,
+        ResolvedSpecifiedCurrentFaceIR as Specified, StructuredBoundaryFaceIR as Face,
+    };
+
+    let boundaries = [
+        Boundary {
+            source_id: "w_in".into(),
+            face: Face::XMin,
+            condition: Condition::OutwardNormalCurrentDensity {
+                current_density_apm2: 0.0,
+            },
+        },
+        Boundary {
+            source_id: "w_out".into(),
+            face: Face::XMax,
+            condition: Condition::OutwardNormalCurrentDensity {
+                current_density_apm2: 0.0,
+            },
+        },
+        Boundary {
+            source_id: "charge_outer".into(),
+            face: Face::YMin,
+            condition: Condition::Insulating,
+        },
+        Boundary {
+            source_id: "charge_outer".into(),
+            face: Face::YMax,
+            condition: Condition::Insulating,
+        },
+        Boundary {
+            source_id: "charge_outer".into(),
+            face: Face::ZMin,
+            condition: Condition::Insulating,
+        },
+        Boundary {
+            source_id: "charge_outer".into(),
+            face: Face::ZMax,
+            condition: Condition::Insulating,
+        },
+    ];
+    let grid = [2, 1, 2];
+    let cell_size = [2.0, 3.0, 5.0];
+    let active = [true; 4];
+    let original = expand_resolved_boundaries(&boundaries, &active, grid, cell_size).unwrap();
+    let unchanged = super::spin_transport::overlay_specified_current_faces(original.clone(), &[])
+        .expect("legacy descriptors remain unchanged without exact face records");
+    assert_eq!(unchanged, original);
+
+    let specified = [
+        Specified {
+            source_id: "w_in".into(),
+            axis: 0,
+            face_index: 0,
+            adjacent_cell: 0,
+            outward_normal_sign: -1,
+            area_m2: 15.0,
+            outward_current_density_apm2: -7.0,
+        },
+        Specified {
+            source_id: "w_out".into(),
+            axis: 0,
+            face_index: 2,
+            adjacent_cell: 1,
+            outward_normal_sign: 1,
+            area_m2: 15.0,
+            outward_current_density_apm2: 7.0,
+        },
+    ];
+    let overlaid =
+        super::spin_transport::overlay_specified_current_faces(original.clone(), &specified)
+            .unwrap();
+    let find = |axis, face_index| {
+        overlaid
+            .iter()
+            .find(|face| face.axis == axis && face.canonical_face_index == face_index)
+            .unwrap()
+    };
+    assert_eq!(find(0, 0).kind, GpuChargeBoundaryKind::ExactCurrentDensity);
+    assert_eq!(find(0, 0).value, -7.0);
+    assert_eq!(find(0, 2).kind, GpuChargeBoundaryKind::ExactCurrentDensity);
+    assert_eq!(find(0, 2).value, 7.0);
+    assert_eq!(find(0, 3).kind, GpuChargeBoundaryKind::Insulating);
+    assert_eq!(find(0, 3).value, 0.0);
+    assert_eq!(find(0, 5).kind, GpuChargeBoundaryKind::Insulating);
+    assert_eq!(find(0, 5).value, 0.0);
+    let source_id = super::charge_transport::stable_source_id;
+    assert_eq!(find(0, 0).source_id, source_id("w_in"));
+    assert_eq!(find(0, 2).source_id, source_id("w_out"));
+    assert_eq!(find(0, 3).source_id, source_id("default:insulating"));
+    for face in original.iter().filter(|face| face.axis != 0) {
+        assert_eq!(
+            overlaid
+                .iter()
+                .find(|candidate| {
+                    candidate.axis == face.axis
+                        && candidate.canonical_face_index == face.canonical_face_index
+                })
+                .unwrap(),
+            face,
+            "faces on sides without exact current claims are preserved"
+        );
+    }
+}
+
+#[test]
+fn specified_partial_current_faces_fail_closed_on_invalid_or_orphan_records() {
+    use super::charge_transport::expand_resolved_boundaries;
+    use fullmag_ir::{
+        ResolvedChargeBoundaryConditionIR as Condition, ResolvedChargeBoundaryFaceIR as Boundary,
+        ResolvedSpecifiedCurrentFaceIR as Specified, StructuredBoundaryFaceIR as Face,
+    };
+
+    let boundaries = [
+        Boundary {
+            source_id: "w_in".into(),
+            face: Face::XMin,
+            condition: Condition::OutwardNormalCurrentDensity {
+                current_density_apm2: 0.0,
+            },
+        },
+        Boundary {
+            source_id: "w_out".into(),
+            face: Face::XMax,
+            condition: Condition::OutwardNormalCurrentDensity {
+                current_density_apm2: 0.0,
+            },
+        },
+        Boundary {
+            source_id: "outer".into(),
+            face: Face::YMin,
+            condition: Condition::Insulating,
+        },
+        Boundary {
+            source_id: "outer".into(),
+            face: Face::YMax,
+            condition: Condition::Insulating,
+        },
+        Boundary {
+            source_id: "outer".into(),
+            face: Face::ZMin,
+            condition: Condition::Insulating,
+        },
+        Boundary {
+            source_id: "outer".into(),
+            face: Face::ZMax,
+            condition: Condition::Insulating,
+        },
+    ];
+    let original =
+        expand_resolved_boundaries(&boundaries, &[true; 4], [2, 1, 2], [2.0, 3.0, 5.0]).unwrap();
+    let current = Specified {
+        source_id: "w_in".into(),
+        axis: 0,
+        face_index: 0,
+        adjacent_cell: 0,
+        outward_normal_sign: -1,
+        area_m2: 15.0,
+        outward_current_density_apm2: -7.0,
+    };
+    let mut invalid = current.clone();
+    invalid.axis = 3;
+    assert!(
+        super::spin_transport::overlay_specified_current_faces(original.clone(), &[invalid])
+            .is_err()
+    );
+
+    let mut orphan = current.clone();
+    orphan.face_index = 999;
+    assert!(
+        super::spin_transport::overlay_specified_current_faces(original.clone(), &[orphan])
+            .is_err()
+    );
+
+    let mut bad_geometry = current.clone();
+    bad_geometry.adjacent_cell = 2;
+    assert!(
+        super::spin_transport::overlay_specified_current_faces(original.clone(), &[bad_geometry],)
+            .is_err()
+    );
+
+    assert!(
+        super::spin_transport::overlay_specified_current_faces(
+            original,
+            &[current.clone(), current]
+        )
+        .is_err()
+    );
 }

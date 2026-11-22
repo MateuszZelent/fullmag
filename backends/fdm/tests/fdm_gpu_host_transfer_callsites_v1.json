@@ -2006,44 +2006,44 @@
     "function_anchor": "solve_device@0576a9d87f2a675d",
     "api": "cudaMemcpyAsync",
     "api_ordinal": 1,
-    "call_hash": "c619df5334edd496",
+    "call_hash": "99297510a319e564",
     "direction_classifier": "H2D",
     "reason": "solve_device:cudaMemcpyAsync#1",
     "category": "transport_control",
-    "accounting_hook": "control_h2d_count"
+    "accounting_hook": "setup_h2d_count"
   },
   {
     "file": "backends/fdm/gpu/cuda/transport/spin/device_solver.cu",
     "function_anchor": "solve_device@0576a9d87f2a675d",
     "api": "cudaMemcpyAsync",
     "api_ordinal": 2,
-    "call_hash": "753fe0725f02b558",
+    "call_hash": "7aec461ccb60769b",
     "direction_classifier": "H2D",
     "reason": "solve_device:cudaMemcpyAsync#2",
     "category": "transport_control",
-    "accounting_hook": "control_h2d_count"
+    "accounting_hook": "setup_h2d_count"
   },
   {
     "file": "backends/fdm/gpu/cuda/transport/spin/device_solver.cu",
     "function_anchor": "solve_device@0576a9d87f2a675d",
     "api": "cudaMemcpyAsync",
     "api_ordinal": 3,
-    "call_hash": "17d293895b41dddf",
+    "call_hash": "c43f2e710f2c0a5e",
     "direction_classifier": "H2D",
     "reason": "solve_device:cudaMemcpyAsync#3",
     "category": "transport_control",
-    "accounting_hook": "control_h2d_count"
+    "accounting_hook": "setup_h2d_count"
   },
   {
     "file": "backends/fdm/gpu/cuda/transport/spin/device_solver.cu",
     "function_anchor": "solve_device@0576a9d87f2a675d",
     "api": "cudaMemcpyAsync",
     "api_ordinal": 4,
-    "call_hash": "f757eb896bf9d38f",
+    "call_hash": "01389c21d156a1e9",
     "direction_classifier": "H2D",
     "reason": "solve_device:cudaMemcpyAsync#4",
     "category": "transport_control",
-    "accounting_hook": "control_h2d_count"
+    "accounting_hook": "setup_h2d_count"
   },
   {
     "file": "backends/fdm/gpu/cuda/transport/spin/device_solver.cu",
@@ -2054,49 +2054,38 @@
     "direction_classifier": "D2H",
     "reason": "solve_device:cudaMemcpyAsync#5",
     "category": "transport_control",
-    "accounting_hook": "control_h2d_count"
+    "accounting_hook": "control_d2h_count"
   },
   {
     "file": "backends/fdm/gpu/cuda/transport/spin/device_solver.cu",
     "function_anchor": "solve_device@0576a9d87f2a675d",
     "api": "cudaMemcpyAsync",
     "api_ordinal": 6,
-    "call_hash": "1acbbfd6246e59ef",
-    "direction_classifier": "H2D",
+    "call_hash": "524c5a0ef7e992e5",
+    "direction_classifier": "D2H",
     "reason": "solve_device:cudaMemcpyAsync#6",
     "category": "transport_control",
-    "accounting_hook": "control_h2d_count"
+    "accounting_hook": "control_d2h_count"
   },
   {
     "file": "backends/fdm/gpu/cuda/transport/spin/device_solver.cu",
     "function_anchor": "solve_device@0576a9d87f2a675d",
     "api": "cudaMemcpyAsync",
     "api_ordinal": 7,
-    "call_hash": "524c5a0ef7e992e5",
+    "call_hash": "a710ed399d60d888",
     "direction_classifier": "D2H",
     "reason": "solve_device:cudaMemcpyAsync#7",
     "category": "transport_control",
-    "accounting_hook": "control_h2d_count"
+    "accounting_hook": "control_d2h_count"
   },
   {
     "file": "backends/fdm/gpu/cuda/transport/spin/device_solver.cu",
     "function_anchor": "solve_device@0576a9d87f2a675d",
     "api": "cudaMemcpyAsync",
     "api_ordinal": 8,
-    "call_hash": "a710ed399d60d888",
-    "direction_classifier": "D2H",
-    "reason": "solve_device:cudaMemcpyAsync#8",
-    "category": "transport_control",
-    "accounting_hook": "control_h2d_count"
-  },
-  {
-    "file": "backends/fdm/gpu/cuda/transport/spin/device_solver.cu",
-    "function_anchor": "solve_device@0576a9d87f2a675d",
-    "api": "cudaMemcpyAsync",
-    "api_ordinal": 9,
     "call_hash": "d03a815e8e6fd049",
     "direction_classifier": "D2D",
-    "reason": "solve_device:cudaMemcpyAsync#9",
+    "reason": "solve_device:cudaMemcpyAsync#8",
     "category": "device_internal",
     "accounting_hook": "none_device_internal"
   },

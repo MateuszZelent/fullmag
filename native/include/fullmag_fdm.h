@@ -1200,6 +1200,8 @@ static_assert(sizeof(fullmag_fdm_local_pipeline_telemetry_v1) == 208,
 #define FULLMAG_FDM_GPU_WORKSPACE_METRIC_FOOTPRINT (UINT64_C(1) << 3)
 #define FULLMAG_FDM_GPU_WORKSPACE_METRIC_REVISIONS (UINT64_C(1) << 4)
 
+/* Allocation and footprint metrics cover the LLG context workspace. The
+ * separately owned GPU transport context accounts for its own memory. */
 typedef struct {
     uint32_t abi_version;
     uint32_t struct_size;
@@ -1601,6 +1603,8 @@ int fullmag_fdm_context_bind_gpu_transport_v1(
     fullmag_fdm_backend *handle,
     const fullmag_fdm_gpu_transport_llg_binding_v1 *binding);
 
+/* An authenticated idle binding is released even if its final audit import
+ * fails. In that case the function returns FULLMAG_FDM_ERR_INVALID. */
 int fullmag_fdm_context_unbind_gpu_transport_v1(
     fullmag_fdm_backend *handle);
 
