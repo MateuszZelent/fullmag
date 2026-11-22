@@ -798,8 +798,23 @@ pub(crate) fn transport_artifact_frame(
         .map(|_| (relative_path, latest_step)))
 }
 
+fn current_transport_artifact_dir(snapshot: &SessionStateResponse) -> Option<std::path::PathBuf> {
+    let root = current_artifact_dir(snapshot)?;
+    if let Some(run) = snapshot.run.as_ref().filter(|run| run.run_id.starts_with("run-live-")) {
+        // Until the projector publishes this run's completed worker, the
+        // accepted manifest may still carry the previous session artifact root.
+        let receipt = read_json_artifact_value(&root, "worker_execution_completed.v1.json").ok()?;
+        if receipt.pointer("/identity/claim/run_id").and_then(serde_json::Value::as_str)
+            != Some(run.run_id.as_str())
+        {
+            return None;
+        }
+    }
+    Some(root)
+}
+
 pub(super) fn has_saved_transport_field(snapshot: &SessionStateResponse, quantity_id: &str) -> bool {
-    STEADY_TRANSPORT_FIELDS.contains(&quantity_id) && current_artifact_dir(snapshot)
+    STEADY_TRANSPORT_FIELDS.contains(&quantity_id) && current_transport_artifact_dir(snapshot)
         .is_some_and(|root| transport_artifact_frame(&root, quantity_id).is_ok_and(|frame| frame.is_some()))
 }
 
@@ -810,7 +825,7 @@ fn canonical_transport_field_artifact(
     if !STEADY_TRANSPORT_FIELDS.contains(&quantity_id) {
         return Ok(None);
     }
-    let Some(artifact_dir) = current_artifact_dir(snapshot) else {
+    let Some(artifact_dir) = current_transport_artifact_dir(snapshot) else {
         return Ok(None);
     };
     let Some((relative_path, latest_step)) = transport_artifact_frame(&artifact_dir, quantity_id)? else {
@@ -932,8 +947,18 @@ pub(super) fn resolve_transport_spatial_field<'a>(
             serde_json::from_value::<[f64; 3]>(layout.get("cell_size")?.clone()).ok()?,
         ))
     });
-    if is_fdm_snapshot(snapshot) && grid.is_some() && saved_geometry.is_some()
+    let saved_grid_fingerprint = physical_layout
+        .and_then(|layout| layout.get("grid_fingerprint"))
+        .and_then(serde_json::Value::as_str);
+    if is_fdm_snapshot(snapshot)
+        && grid.is_some_and(|cells| {
+            cells == crate::router_v2::handlers::sessions::status::fdm_grid_shape(snapshot, None)
+        })
+        && saved_geometry.is_some()
         && saved_geometry == crate::router_v2::handlers::sessions::status::fdm_grid_geometry(snapshot)
+        && saved_grid_fingerprint.is_some()
+        && saved_grid_fingerprint
+            == crate::router_v2::handlers::sessions::status::fdm_grid_fingerprint(snapshot)
     {
         return super::resolved_spatial_field::resolve_spatial_field_from_values(
             snapshot, quantity_id, usize::from(spec.n_comp), values, grid,
@@ -4339,7 +4364,10 @@ fn resolve_fdm_field_scope(
     };
     let mut canonical_scope_id = scope_id.to_string();
     let mut selected = match scope_kind {
-        "object" => resolve_fdm_object_indices(&FdmCellMembership::from(&membership), scope_id)?,
+        "object" => resolve_fdm_object_indices(
+            &FdmCellMembership::for_magnetic_domain(&membership, snapshot),
+            scope_id,
+        )?,
         "region" => {
             let requested_owner_object_id = query.owner_object_id.as_deref();
             let mut entries = membership.region_legend.iter().filter(|entry| {
@@ -5730,13 +5758,15 @@ async fn get_field_vector_unfenced(
         .and_then(|scope| scope.id.as_deref())
         .unwrap_or("");
     let node_indices_token = field_node_indices_cache_token(field_node_indices_u32.as_deref());
-    let airbox_membership_token = if airbox_field.is_some() {
+    let membership_token = if airbox_field.is_some() {
         format!(":airbox_membership=active_cells.v1:{node_indices_token}")
+    } else if resolved_scope.as_ref().is_some_and(|scope| scope.domain == ResolvedFieldScopeDomain::Conductive) {
+        format!(":conductor_membership={node_indices_token}")
     } else {
         String::new()
     };
     let etag = crate::router_v2::handlers::shared::stable_strong_etag(&format!(
-        "{}:{scope_token}{geometry_scope_token}{sample_token}{snapshot_token}{topology_etag_token}{airbox_membership_token}{observation_token}",
+        "{}:{scope_token}{geometry_scope_token}{sample_token}{snapshot_token}{topology_etag_token}{membership_token}{observation_token}",
         component_etag_token(
             quantity_id,
             session_id.as_str(),
@@ -10786,6 +10816,63 @@ mod tests {
         assert_eq!(sampled.value_indices, vec![1]);
         let expected_hash = format!("sha256:{}", "a".repeat(64));
         assert_eq!(scope.carrier_hash.as_deref(), Some(expected_hash.as_str()));
+    }
+
+    #[test]
+    fn accepted_transport_rejects_artifact_root_inherited_from_the_previous_run() {
+        let request = serde_json::from_value(serde_json::json!({
+            "session_id": "transport-artifact-ownership",
+        })).unwrap();
+        let directory = tempfile::tempdir().unwrap();
+        let mut snapshot = default_current_live_state(&request);
+        snapshot.run = Some(serde_json::from_value(serde_json::json!({
+            "run_id": "run-live-current", "session_id": "transport-artifact-ownership",
+            "status": "running", "total_steps": 1, "artifact_dir": directory.path(),
+        })).unwrap());
+        let receipt = directory.path().join("worker_execution_completed.v1.json");
+        for (owner, accepted) in [("run-live-previous", false), ("run-live-current", true)] {
+            std::fs::write(&receipt, serde_json::to_vec(&serde_json::json!({
+                "identity": { "claim": { "run_id": owner } },
+            })).unwrap()).unwrap();
+            assert_eq!(super::current_transport_artifact_dir(&snapshot).is_some(), accepted);
+        }
+    }
+
+    #[test]
+    fn saved_transport_requires_matching_lattice_for_geometric_scope() {
+        let request = serde_json::from_value(serde_json::json!({
+            "session_id": "transport-field-lattice",
+        })).unwrap();
+        let mut snapshot = default_current_live_state(&request);
+        snapshot.session.resolved_backend = Some("fdm".into());
+        snapshot.metadata = Some(serde_json::json!({
+            "artifact_layout": { "backend": "fdm", "origin_m": [0.0, 0.0, 0.0],
+                "cell_size": [1.0, 1.0, 1.0], "grid_cells": [2, 2, 1] },
+            "execution_plan": { "backend_plan": { "kind": "fdm",
+                "grid_certificate": { "grid_fingerprint": "current-grid" } } },
+        }).into());
+        let directory = tempfile::tempdir().unwrap();
+        let quantity_dir = directory.path().join("fields/V_electric");
+        std::fs::create_dir_all(&quantity_dir).unwrap();
+        snapshot.session.artifact_dir = directory.path().display().to_string();
+
+        for (cells, fingerprint, geometric) in [
+            ([2, 2, 1], "current-grid", true),
+            ([4, 1, 1], "current-grid", false),
+            ([2, 2, 1], "stale-grid", false),
+        ] {
+            std::fs::write(
+                quantity_dir.join("step_000000.json"),
+                serde_json::to_vec(&serde_json::json!({
+                    "observable": "V_electric", "component_count": 1, "revision": 1,
+                    "layout": { "origin_m": [0.0, 0.0, 0.0], "cell_size": [1.0, 1.0, 1.0],
+                        "grid_cells": cells, "grid_fingerprint": fingerprint },
+                    "values": [1.0, 2.0, 3.0, 4.0],
+                })).unwrap(),
+            ).unwrap();
+            let field = resolve_transport_spatial_field(&snapshot, "V_electric").unwrap().unwrap();
+            assert_eq!(matches!(field.carrier, SpatialFieldCarrier::FdmCells { .. }), geometric);
+        }
     }
 
     #[test]

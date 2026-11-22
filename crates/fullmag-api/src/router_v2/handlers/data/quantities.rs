@@ -98,13 +98,12 @@ fn annotate_runtime_quantity_state(
     let prepared_only = snapshot.capabilities.is_none() && !standalone_inspection && !field_only;
     let prepared_damping = prepared_only && quantity_spec("mat_alpha").is_some_and(|spec|
         prepared_damping_carriers(snapshot, spec, spec.domain.as_str()).is_some());
-    if prepared_only && !prepared_m_without_runtime_capabilities && !prepared_damping {
-        return;
-    }
-
     for entry in &mut response.quantities {
-        if prepared_only && !(entry.id == "m" && prepared_m_without_runtime_capabilities
-            || entry.id == "mat_alpha" && prepared_damping) {
+        if prepared_only
+            && !(entry.id == "m" && prepared_m_without_runtime_capabilities
+                || entry.id == "mat_alpha" && prepared_damping
+                || super::fields::has_saved_transport_field(snapshot, &entry.id))
+        {
             continue;
         }
         let Some(spec) = quantity_spec(&entry.id) else {
@@ -989,6 +988,39 @@ mod tests {
             );
             assert!(resolved.carriers.is_empty());
         }
+    }
+
+    #[test]
+    fn completed_transport_catalog_exposes_saved_tensor_projections_without_solver_capabilities() {
+        let directory = tempfile::tempdir().unwrap();
+        let quantity = directory.path().join("fields/spin_current_tensor");
+        std::fs::create_dir_all(&quantity).unwrap();
+        std::fs::write(
+            quantity.join("step_000000.json"),
+            serde_json::to_vec(&serde_json::json!({
+                "observable": "spin_current_tensor",
+                "component_count": 9,
+                "revision": 1,
+                "values": [0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0],
+            })).unwrap(),
+        ).unwrap();
+        let mut snapshot = snapshot_with_field_provider("m");
+        snapshot.capabilities = None;
+        snapshot.metadata = None;
+        snapshot.session.artifact_dir = directory.path().display().to_string();
+
+        let mut response = QuantityCatalogResponse::build();
+        annotate_runtime_quantity_state(&mut response, &snapshot);
+
+        let tensor = response.quantities.iter().find(|entry| entry.id == "spin_current_tensor").unwrap();
+        assert!(tensor.requestable);
+        assert!(!tensor.materializable);
+        assert_eq!(tensor.materialization_state, "complete");
+        let capability = tensor.resolved_capability.as_ref().unwrap();
+        assert_eq!(capability.reason_code.as_deref(), Some("saved_transport_read_only"));
+        assert!(capability.projections.iter().any(|projection| projection.token == "frobenius"));
+        let demag = response.quantities.iter().find(|entry| entry.id == "H_demag").unwrap();
+        assert_eq!(demag.capability_state, "unknown");
     }
 
     #[test]
