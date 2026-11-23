@@ -42,7 +42,7 @@ describe("analysis view preferences", () => {
       dispersion: ["dispersion.modal", "dispersion.driven-map", "dispersion.branches"],
       dynamics: ["dynamics.time-traces", "dynamics.temporal-fft", "dynamics.s-k-f"],
       hysteresis: ["hysteresis.loop", "hysteresis.branches"],
-      "resonance-fmr": ["resonance.eigenmodes", "resonance.frequency-response", "resonance.modal-driven"],
+      "resonance-fmr": ["resonance.eigenmodes", "resonance.frequency-response", "resonance.modal-driven", "resonance.absorption"],
     });
 
     const migrated = parseAnalysisViewPreferences({

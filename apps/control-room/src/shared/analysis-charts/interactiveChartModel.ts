@@ -186,6 +186,7 @@ function quantityLabelForUnit(
   ) {
     return "Normalized magnetization m";
   }
+  if (labels.every((label) => label === "absorbed_power")) return "Absorbed power";
   if (sameUnit.length === 1) return match.label || match.quantity;
   if (labels.every((label) => label.includes("torque"))) return "Torque";
   if (labels.every((label) => label.includes("residual"))) return "Residual";

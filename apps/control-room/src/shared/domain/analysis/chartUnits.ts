@@ -6,6 +6,7 @@ export type ChartDimension =
   | "field"
   | "frequency"
   | "phase"
+  | "power"
   | "time"
   | "wavevector";
 
@@ -64,6 +65,14 @@ const UNIT_DEFINITIONS: Readonly<Record<string, Omit<ChartUnit, "unit">>> =
       dimension: "frequency",
       scaleToCanonical: 1e9,
     },
+    "aW": { canonicalUnit: "W", dimension: "power", scaleToCanonical: 1e-18 },
+    "fW": { canonicalUnit: "W", dimension: "power", scaleToCanonical: 1e-15 },
+    "pW": { canonicalUnit: "W", dimension: "power", scaleToCanonical: 1e-12 },
+    "nW": { canonicalUnit: "W", dimension: "power", scaleToCanonical: 1e-9 },
+    "µW": { canonicalUnit: "W", dimension: "power", scaleToCanonical: 1e-6 },
+    "mW": { canonicalUnit: "W", dimension: "power", scaleToCanonical: 1e-3 },
+    "W": { canonicalUnit: "W", dimension: "power", scaleToCanonical: 1 },
+    "kW": { canonicalUnit: "W", dimension: "power", scaleToCanonical: 1e3 },
     "pJ": { canonicalUnit: "J", dimension: "energy", scaleToCanonical: 1e-12 },
     "nJ": { canonicalUnit: "J", dimension: "energy", scaleToCanonical: 1e-9 },
     "µJ": { canonicalUnit: "J", dimension: "energy", scaleToCanonical: 1e-6 },
