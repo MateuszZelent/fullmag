@@ -119,7 +119,9 @@ describe("Array3D lattice model & command contract (Etap C)", () => {
 
   it("dispatches apply_array_3d transaction via geometry.apply-array-3d command", async () => {
     const registry = new CommandRegistry();
-    registry.registerAll(GEOMETRY_LIFECYCLE_COMMANDS);
+    for (const command of GEOMETRY_LIFECYCLE_COMMANDS) {
+      registry.register(command);
+    }
     const bus = new EventBus<KernelEventMap>();
     const selection = new SelectionController(bus);
     const resources = new ResourceInvalidationController(bus);

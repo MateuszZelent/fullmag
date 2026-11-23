@@ -37,10 +37,10 @@ import type { InspectorPanelProps } from "../../../inspectorTypes";
 import {
   buildObjectSelection,
   buildRootSelection,
+  LENGTH_UNITS,
 } from "../../../panels/model-roots/SpecInspectorHost";
 import {
   InspectorTemplate,
-  LENGTH_UNITS,
   useInspectorSpecController,
   type InspectorFact,
   type InspectorSpec,
@@ -290,15 +290,17 @@ export function GeometryNodeInspectorPanel({ selection }: InspectorPanelProps) {
   const commitSceneResult = useCallback(
     (response: { committed_scene?: SceneResource; scene_revision?: number }) => {
       const rev = acknowledgedAuthoringSceneRevision(response);
-      publishCommittedSceneResource(
-        kernel.resources,
-        response.committed_scene,
-        rev,
-        undefined,
-        false,
-        sessionScopeKey,
-        kernel.api.resourceCacheScope,
-      );
+      if (response.committed_scene) {
+        publishCommittedSceneResource(
+          kernel.resources,
+          response.committed_scene,
+          rev,
+          undefined,
+          false,
+          sessionScopeKey,
+          kernel.api.resourceCacheScope,
+        );
+      }
       invalidateAuthoringMutationDependents(kernel.resources, "geometry", rev);
     },
     [kernel.api.resourceCacheScope, kernel.resources, sessionScopeKey],
@@ -323,7 +325,7 @@ export function GeometryNodeInspectorPanel({ selection }: InspectorPanelProps) {
   const spec = useMemo<InspectorSpec<GeometryNodeSpecDraft>>(
     () => ({
       id: "geometry-node-inspector",
-      chrome: {
+      header: {
         breadcrumbs: [
           {
             id: "objects",
@@ -358,18 +360,24 @@ export function GeometryNodeInspectorPanel({ selection }: InspectorPanelProps) {
       identity: {
         domain: "geometry",
         icon: Layers,
+        kindLabel: "CSG geometry operand",
+        statePill: (draft) =>
+          !draft.exists
+            ? { label: "Missing", tone: "warn" }
+            : draft.enabled
+              ? { label: "Active", tone: "ok" }
+              : { label: "Disabled", tone: "stale" },
         title: (draft) => draft.label,
-        subtitle: (draft) => `${draft.roleBadge} · ${draft.primitiveKind}`,
-        facts: (draft): InspectorFact[] =>
-          draft.exists
-            ? [
-                { label: "Role", value: draft.roleBadge },
-                { label: "Primitive", value: draft.primitiveKind },
-                { label: "Stack", value: `#${draft.index + 1} / ${draft.total}` },
-                { label: "State", value: draft.enabled ? "Active" : "Disabled" },
-              ]
-            : [{ label: "Status", value: "Node missing" }],
       },
+      facts: (draft): readonly InspectorFact[] =>
+        draft.exists
+          ? [
+              { id: "role", label: "Role", value: draft.roleBadge },
+              { id: "primitive", label: "Primitive", value: draft.primitiveKind },
+              { id: "stack", label: "Stack", value: `#${draft.index + 1} / ${draft.total}` },
+              { id: "state", label: "State", value: draft.enabled ? "Active" : "Disabled" },
+            ]
+          : [{ id: "status", label: "Status", value: "Node missing" }],
       sections: [
         {
           id: "geometry-node-state",

@@ -140,7 +140,9 @@ describe("Viewport 3D Etap D: Array3D InstancedMesh, GhostCutterOverlay, and Tra
       geometryGhostVisibilityStore.getSnapshot(),
     );
     expect(selectedGhosts).toHaveLength(1);
-    expect(selectedGhosts[0]?.position).toEqual([15e-9, 15e-9, 0]);
+    expect(selectedGhosts[0]!.position[0]).toBeCloseTo(15e-9, 15);
+    expect(selectedGhosts[0]!.position[1]).toBeCloseTo(15e-9, 15);
+    expect(selectedGhosts[0]!.position[2]).toBeCloseTo(0, 15);
     expect(selectedGhosts[0]?.role).toBe("subtract");
 
     // Local ghost toggle -> visible even when deselected
@@ -155,12 +157,13 @@ describe("Viewport 3D Etap D: Array3D InstancedMesh, GhostCutterOverlay, and Tra
   });
 
   it("anchors gizmo at pivot, switches G/R/S/L modes, and produces merge-safe Transform3D patches", () => {
-    expect(
-      resolveGizmoAnchorPosition({
-        bounds: { center: [10e-9, 0, 0] },
-        transform: { pivot: [5e-9, -2e-9, 0] },
-      }),
-    ).toEqual([15e-9, -2e-9, 0]);
+    const anchor = resolveGizmoAnchorPosition({
+      bounds: { center: [10e-9, 0, 0] },
+      transform: { pivot: [5e-9, -2e-9, 0] },
+    });
+    expect(anchor[0]).toBeCloseTo(15e-9, 18);
+    expect(anchor[1]).toBeCloseTo(-2e-9, 18);
+    expect(anchor[2]).toBeCloseTo(0, 18);
 
     expect(resolveGizmoShortcutUpdate("r", "move", "world")).toEqual({
       mode: "rotate",

@@ -68,11 +68,21 @@ function asRecord(value: unknown): Record<string, unknown> | null {
 }
 
 function readChildBounds(
-  sceneObj: { bounds?: unknown } | null | undefined,
+  sceneObj: unknown,
 ): { max: Vec3Tuple; min: Vec3Tuple; size: Vec3Tuple } {
-  const rec = asRecord(sceneObj?.bounds);
-  const rawMin = Array.isArray(rec?.min) ? rec.min : null;
-  const rawMax = Array.isArray(rec?.max) ? rec.max : null;
+  const objRec = asRecord(sceneObj);
+  const geomRec = asRecord(objRec?.geometry);
+  const rec = asRecord(objRec?.bounds) ?? geomRec;
+  const rawMin = Array.isArray(rec?.min)
+    ? rec.min
+    : Array.isArray(rec?.bounds_min)
+      ? rec.bounds_min
+      : null;
+  const rawMax = Array.isArray(rec?.max)
+    ? rec.max
+    : Array.isArray(rec?.bounds_max)
+      ? rec.bounds_max
+      : null;
   if (
     rawMin &&
     rawMax &&
@@ -85,7 +95,12 @@ function readChildBounds(
     const max: Vec3Tuple = [rawMax[0] as number, rawMax[1] as number, rawMax[2] as number];
     return { max, min, size: [max[0] - min[0], max[1] - min[1], max[2] - min[2]] };
   }
-  const rawSize = Array.isArray(rec?.size) ? rec.size : null;
+  const paramsRec = asRecord(geomRec?.geometry_params);
+  const rawSize = Array.isArray(rec?.size)
+    ? rec.size
+    : Array.isArray(paramsRec?.size)
+      ? paramsRec.size
+      : null;
   const sx = typeof rawSize?.[0] === "number" && Number.isFinite(rawSize[0]) ? rawSize[0] : 100e-9;
   const sy = typeof rawSize?.[1] === "number" && Number.isFinite(rawSize[1]) ? rawSize[1] : 100e-9;
   const sz = typeof rawSize?.[2] === "number" && Number.isFinite(rawSize[2]) ? rawSize[2] : 10e-9;
@@ -123,14 +138,15 @@ export function Array3DLatticeTableSection({
   targetOperandId,
 }: Array3DLatticeTableSectionProps) {
   const sceneObj = sceneData?.objects?.find((item) => item.id === objectId) ?? null;
+  const sceneGeometry = sceneObj?.geometry ?? null;
   const targetGeometry = useMemo(() => {
-    if (!sceneObj?.geometry) return null;
-    if (!targetOperandId) return sceneObj.geometry;
-    const composite = parseCompositeGeometry(sceneObj.geometry);
+    if (!sceneGeometry) return null;
+    if (!targetOperandId) return sceneGeometry;
+    const composite = parseCompositeGeometry(sceneGeometry);
     return (
       composite.operands.find((op) => op.operandId === targetOperandId)?.geometry ?? null
     );
-  }, [sceneObj?.geometry, targetOperandId]);
+  }, [sceneGeometry, targetOperandId]);
   const parsedExisting = useMemo(
     () => parseArray3DGeometry(targetGeometry),
     [targetGeometry],

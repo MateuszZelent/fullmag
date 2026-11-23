@@ -542,9 +542,6 @@ function SharedGeometrySpecPanel({
     }),
     [
       baseline,
-      baseline.draftName,
-      baseline.mode,
-      baseline.objectId,
       canonicalSessionDraft,
       createDraftSlugId,
       currentSessionScopeKey,

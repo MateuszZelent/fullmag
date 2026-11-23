@@ -315,7 +315,11 @@ function Array3DInstancedItem({
       }}
     >
       <meshStandardMaterial
-        color={descriptor.isCutter ? colors.warning : colors.accent}
+        color={
+          descriptor.isCutter
+            ? (colors.antenna ?? colors.danger ?? colors.accent)
+            : colors.accent
+        }
         depthWrite={!descriptor.isCutter}
         opacity={descriptor.isCutter ? 0.18 : 0.42}
         roughness={0.55}

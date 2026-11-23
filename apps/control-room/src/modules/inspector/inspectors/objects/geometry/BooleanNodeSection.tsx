@@ -162,15 +162,17 @@ export function BooleanNodeSection({
       try {
         const response = await mutation();
         const rev = acknowledgedAuthoringSceneRevision(response);
-        publishCommittedSceneResource(
-          kernel.resources,
-          response.committed_scene,
-          rev,
-          undefined,
-          false,
-          sessionScopeKey,
-          kernel.api.resourceCacheScope,
-        );
+        if (response.committed_scene) {
+          publishCommittedSceneResource(
+            kernel.resources,
+            response.committed_scene,
+            rev,
+            undefined,
+            false,
+            sessionScopeKey,
+            kernel.api.resourceCacheScope,
+          );
+        }
         invalidateAuthoringMutationDependents(kernel.resources, "geometry", rev);
       } catch (error) {
         setErrorMessage(
@@ -313,7 +315,14 @@ export function BooleanNodeSection({
 
   const handleAddCutout = (kind: QuickCutoutKind) => {
     if (baseRevision === null) return;
-    const geometry = buildQuickCutoutGeometry(kind, sceneObj.bounds);
+    const objRec = asRecord(sceneObj);
+    const geomRec = asRecord(objRec?.geometry);
+    const boundsSource =
+      objRec?.bounds ??
+      (geomRec?.bounds_min && geomRec?.bounds_max
+        ? { max: geomRec.bounds_max, min: geomRec.bounds_min }
+        : asRecord(geomRec?.geometry_params));
+    const geometry = buildQuickCutoutGeometry(kind, boundsSource);
     const label = `${kind} cutout ${parsed.operands.length}`;
     void commitOperandUpdate(() =>
       updateBooleanOperandsTransaction(

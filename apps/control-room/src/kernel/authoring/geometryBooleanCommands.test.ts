@@ -12,7 +12,9 @@ import { GEOMETRY_LIFECYCLE_COMMANDS } from "./geometryLifecycleCommandContribut
 
 function createRegistry(): CommandRegistry {
   const registry = new CommandRegistry();
-  registry.registerAll(GEOMETRY_LIFECYCLE_COMMANDS);
+  for (const command of GEOMETRY_LIFECYCLE_COMMANDS) {
+    registry.register(command);
+  }
   return registry;
 }
 

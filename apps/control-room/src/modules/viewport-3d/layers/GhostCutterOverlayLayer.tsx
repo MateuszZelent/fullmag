@@ -152,7 +152,7 @@ function GhostCutterMesh({
     >
       <mesh geometry={geometry}>
         <meshBasicMaterial
-          color={colors.warning}
+          color={colors.antenna ?? colors.danger ?? colors.accent}
           depthWrite={false}
           opacity={0.16}
           transparent
@@ -160,7 +160,7 @@ function GhostCutterMesh({
       </mesh>
       <lineSegments ref={lineRef} geometry={edgesGeometry}>
         <lineDashedMaterial
-          color={colors.warning}
+          color={colors.antenna ?? colors.danger ?? colors.accent}
           dashSize={dashUnit}
           depthWrite={false}
           gapSize={dashUnit * 0.65}
