@@ -282,37 +282,30 @@ async function verifySemanticTargetExplorerInvariant({ browser, url }) {
       undefined,
       { timeout: 5_000 },
     );
-    const boundaryFacesInspector = page.locator(".fm-inspector-panel", {
-      hasText: "Boundary Faces Overview",
+    const boundaryFacesInspector = page.locator('[data-slot="inspector-root"]').filter({
+      has: page.getByRole("heading", { name: "Boundary Faces", exact: true }),
     });
     await boundaryFacesInspector.waitFor({ state: "visible", timeout: 5_000 });
-    const boundaryFacesInspectorText = await boundaryFacesInspector.innerText();
-    if (!boundaryFacesInspectorText.includes("not an Airbox or unassigned mesh target")) {
-      throw new Error(
-        `Boundary Faces Inspector did not expose its Universe scope: ${boundaryFacesInspectorText}`,
-      );
-    }
-    const boundaryFacesFields = Object.fromEntries(
-      await boundaryFacesInspector
-        .locator(".fm-inspector-field-row")
-        .evaluateAll((rows) =>
-          rows.map((row) => [
-            row.querySelector(".fm-inspector-field-row__label")?.textContent?.trim() ?? "",
-            row.querySelector(".fm-inspector-field-row__value")?.textContent?.trim() ?? "",
-          ]),
-        ),
-    );
+
     const expectedBoundaryFacesFields = {
-      "Boundary faces": "4",
+      "Explorer address": "model:boundary-faces",
+      "Semantic role": "outer_boundary",
+      "Published boundary facets": "4",
       "Manifest state": "ready",
-      "Realized carriers": "1",
+      "Realized outer carriers": "1",
+      Scope: "Universe outer boundary; distinct from Airbox volume and unassigned mesh parts",
     };
+    const boundaryFacesFields = {};
     for (const [label, expectedValue] of Object.entries(expectedBoundaryFacesFields)) {
-      if (boundaryFacesFields[label] !== expectedValue) {
-        throw new Error(
-          `Boundary Faces Inspector field ${label}=${JSON.stringify(boundaryFacesFields[label])}; expected ${expectedValue}.`,
-        );
-      }
+      const field = boundaryFacesInspector.locator('[data-slot="inspector-row"]').filter({
+        has: page.getByText(label, { exact: true }),
+      });
+      const value = field.locator(".fm-inspector-readonly__value");
+      await field.getByText(expectedValue, { exact: true }).waitFor({
+        state: "visible",
+        timeout: 5_000,
+      });
+      boundaryFacesFields[label] = (await value.innerText()).trim();
     }
     const postInteractionWebgl = await canvas.evaluate((element) => {
       const gl =

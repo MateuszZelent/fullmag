@@ -563,4 +563,3 @@ export const ANTENNA_GEOMETRY_CLOSED_LOOP_SECTION: InspectorSectionSpec<AntennaG
           ],
           title: "Closed-loop return & voltage cut",
         };
-
