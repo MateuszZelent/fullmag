@@ -23067,6 +23067,84 @@ study.stages.add_run(stage_id="run", until=1e-12)
 }
 
 #[tokio::test]
+async fn live_view_continuity_reuses_the_full_published_fdm_airbox_layout() {
+    use crate::live_authored_initial_state::apply_preparation::{
+        plan_on_published_domain, PublishedDomainPlan,
+    };
+
+    let state = test_app_state_with_live_session().await;
+    let workspace = tempfile::tempdir().unwrap();
+    let source = workspace.path().join("disk.py");
+    fs::write(&source, r#"import fullmag as fm
+study = fm.study("Disk with Airbox")
+study.engine("fdm")
+study.device("cpu", precision="double")
+study.universe(mode="manual", size=(600e-9, 600e-9, 100e-9), center=(0, 0, 0), padding=(0, 0, 0))
+study.cell(12.5e-9, 12.5e-9, 5e-9)
+disk = study.geometry(fm.Cylinder(radius=150e-9, height=10e-9), name="disk")
+disk.Ms = 956e3
+disk.Aex = 10e-12
+disk.Ku1 = 717e3
+disk.anisU = (0, 0, 1)
+disk.Dind = 1.8e-3
+disk.alpha = 0.03
+disk.m = fm.texture.neel_skyrmion(radius=48e-9, wall_width=15e-9)
+study.stages.add_relax(stage_id="relax")
+"#).unwrap();
+    let scene = crate::script::load_scene_document_state(
+        &state.repo_root, workspace.path(), &source,
+    ).unwrap();
+    let requested = fullmag_application::RequestedExecution {
+        backend: "fdm".into(),
+        device: "cpu".into(),
+        precision: "double".into(),
+        mode: "strict".into(),
+        minimum_resources: None,
+    };
+    let config = crate::script::scene_document_to_prepared_script_config(
+        &state.repo_root, workspace.path(), &scene, &requested,
+    ).unwrap();
+    let mut problem = config.ir;
+    problem.geometry_assets = problem.geometry_assets.or(config.shared_geometry_assets);
+    let problem = fullmag_application::bind_declared_execution(&problem, vec![]).unwrap();
+    let plan = fullmag_plan::plan(&problem).unwrap();
+    let fullmag_ir::BackendPlanIR::Fdm(fdm) = &plan.backend_plan else {
+        panic!("expected a single FDM grid");
+    };
+    assert_eq!(fdm.grid.cells, [48, 48, 20]);
+    let layout = fullmag_runner::study_magnetization_layout_for_plan(&plan).unwrap();
+    assert_eq!(layout["active_cell_count"], 896);
+
+    let mut snapshot = state.current_live_state.read().await.as_ref().unwrap().clone();
+    snapshot.scene_document = Some(scene.clone());
+    snapshot.session.script_path = source.to_string_lossy().into_owned();
+    let context = crate::capture_current_live_request_context(&state).await.unwrap();
+    for published_layout in [fullmag_runner::live_fdm_grid_layout(fdm), layout.clone()] {
+        crate::session::apply_current_live_metadata(&mut snapshot, serde_json::json!({
+            "execution_plan": plan, "artifact_layout": published_layout,
+        }));
+        match plan_on_published_domain(
+            &state.repo_root, workspace.path(), None, &context, &snapshot, &scene,
+        ).unwrap() {
+            PublishedDomainPlan::Ready { layout: planned, .. } => assert_eq!(planned, layout),
+            PublishedDomainPlan::Pending(reason) => panic!("published FDM Airbox grid rejected: {reason}"),
+        }
+    }
+
+    let mut shifted = layout;
+    shifted["origin_m"][0] = serde_json::json!(-287.5e-9);
+    crate::session::apply_current_live_metadata(&mut snapshot, serde_json::json!({
+        "execution_plan": plan, "artifact_layout": shifted,
+    }));
+    assert!(matches!(
+        plan_on_published_domain(
+            &state.repo_root, workspace.path(), None, &context, &snapshot, &scene,
+        ).unwrap(),
+        PublishedDomainPlan::Pending("domain_layout_not_qualified")
+    ));
+}
+
+#[tokio::test]
 async fn absorbing_boundary_patch_moves_and_clears_live_alpha_without_rebuilding_grid() {
     let (state, _workspace, _source, object_id, scope, mesh_revision) = prepared_absorber_fixture("").await;
     let app = build_v2_router().with_state(state.clone());
