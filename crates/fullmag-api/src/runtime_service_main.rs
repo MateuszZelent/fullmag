@@ -6,7 +6,7 @@ mod runtime_service_unclaimed_cancellation;
 mod claimed_worker_interruption;
 use anyhow::{bail, Context, Result};
 use fullmag_session::{
-    compute_node_snapshot::{Reported, SampleFreshness},
+    compute_node_snapshot::{GpuDeviceSnapshot, Reported, SampleFreshness},
     host_resource_ledger::{
         DockerNamespaceTeardownAttestation, HostInventoryOwner, HostInventoryOwnerDescriptor,
         HostReservationIdentity, HostReservationOwner, HostResourceLedger,
@@ -89,9 +89,28 @@ fn startup_phase_event(phase: &str, status: &str, started_at: Instant, deadline:
     );
 }
 
+fn compute_node_refresh_failure(
+    freshness: SampleFreshness,
+    gpus: &Reported<Vec<GpuDeviceSnapshot>>,
+    requires_gpu_inventory: bool,
+) -> Option<String> {
+    if freshness != SampleFreshness::Current {
+        return Some(format!("compute-node sample freshness is {freshness:?}"));
+    }
+    match (requires_gpu_inventory, gpus) {
+        (true, Reported::Unavailable { reason, .. }) => {
+            Some(format!("current GPU inventory is unavailable: {reason:?}"))
+        }
+        (true, Reported::Available { value }) if value.is_empty() => {
+            Some("current GPU inventory is empty".into())
+        }
+        _ => None,
+    }
+}
+
 struct PublishedComputeNodeSample {
     owner: Arc<HostInventoryOwner>,
-    freshness: SampleFreshness,
+    refresh_failure: Option<String>,
 }
 
 type ComputeNodeSampleResult = Result<Option<PublishedComputeNodeSample>>;
@@ -188,14 +207,18 @@ async fn publish_compute_node_sample(
 
             Ok(Some(PublishedComputeNodeSample {
                 owner: inventory_owner,
-                freshness: snapshot.sample.freshness_at(chrono::Utc::now()),
+                refresh_failure: compute_node_refresh_failure(
+                    snapshot.sample.freshness_at(chrono::Utc::now()),
+                    &snapshot.gpus,
+                    !ledger.policy().gpu_vram_bytes_by_uuid.is_empty(),
+                ),
             }))
         })();
 
         let finished = Instant::now();
         let elapsed = finished.duration_since(started);
         let outcome = match &result {
-            Ok(Some(sample)) if sample.freshness == SampleFreshness::Current => "fresh",
+            Ok(Some(sample)) if sample.refresh_failure.is_none() => "fresh",
             Ok(Some(_)) => "unusable",
             Ok(None) => "other_producer",
             Err(_) => "failed",
@@ -3090,12 +3113,10 @@ fn run_service(path: PathBuf) -> Result<()> {
                     match sample_result {
                         Ok(Some(sample)) => {
                             inventory_owner = Some(sample.owner);
-                            if sample.freshness == SampleFreshness::Current {
-                                sample_refresh_failures.report_recovery();
+                            if let Some(failure) = sample.refresh_failure {
+                                sample_refresh_failures.report_failure(failure);
                             } else {
-                                sample_refresh_failures.report_failure(format_args!(
-                                    "published sample is {:?}", sample.freshness
-                                ));
+                                sample_refresh_failures.report_recovery();
                             }
                         }
                         Ok(None) => inventory_owner = None,
@@ -3412,6 +3433,34 @@ mod tests {
         assert_eq!(refresh.recovered(), 4);
         assert_eq!(refresh.recovered(), 0);
         assert_eq!(refresh.failed(), (1, false));
+    }
+
+    #[test]
+    fn fresh_partial_gpu_sample_is_an_incomplete_refresh_for_gpu_hosts() {
+        use fullmag_session::compute_node_snapshot::UnavailableReason;
+
+        let warm_inventory = Reported::Unavailable {
+            reason: UnavailableReason::ProbeFailed,
+            last_known: Some(Vec::new()),
+        };
+        assert_eq!(
+            compute_node_refresh_failure(SampleFreshness::Current, &warm_inventory, true)
+                .as_deref(),
+            Some("current GPU inventory is unavailable: ProbeFailed"),
+        );
+        assert_eq!(
+            compute_node_refresh_failure(SampleFreshness::Current, &warm_inventory, false),
+            None,
+        );
+
+        let empty_inventory = Reported::Available { value: Vec::new() };
+        assert_eq!(
+            compute_node_refresh_failure(SampleFreshness::Current, &empty_inventory, true)
+                .as_deref(),
+            Some("current GPU inventory is empty"),
+        );
+        assert!(compute_node_refresh_failure(SampleFreshness::Stale, &warm_inventory, false)
+            .is_some());
     }
 
     #[test]

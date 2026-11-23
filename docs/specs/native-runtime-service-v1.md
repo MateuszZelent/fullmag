@@ -222,8 +222,11 @@ i obsługuje drain. Działające workery zachowują nadzór. Po trzech kolejnych
 zakończonych odświeżeniach bez świeżej próbki usługa zapisuje alarm i dalej
 ponawia próbę. Licznik uwzględnia wynik publikacji oraz typowane przejściowe
 błędy blokady lub I/O. Odczyty tej samej próbki przez heartbeat i cykle,
-w których próbkę publikuje inny owner, nie zwiększają licznika. Świeża
-publikacja zeruje licznik i przywraca możliwość tworzenia rezerwacji.
+w których próbkę publikuje inny owner, nie zwiększają licznika. Na hoście
+z budżetem GPU świeża próbka zawierająca tylko ostatni znany inwentarz GPU
+nadal liczy się jako nieudane odświeżenie, ponieważ ledger wciąż odmawia
+rezerwacji GPU. Świeża próbka z bieżącym inwentarzem wymaganym przez profil
+zeruje licznik.
 
 Pierwsza próbka pozostaje warunkiem startu. Istniejący budżet 60 s dotyczy
 niepotwierdzonej tożsamości, np. niezgodności aktywnego ownera. Błędy schematu,
