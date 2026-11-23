@@ -319,7 +319,13 @@ pub(crate) fn plan_on_published_domain(
             {
                 return Ok(PublishedDomainPlan::Pending("domain_layout_not_qualified"));
             }
-            (None, compact && has_mask)
+            // A staged or restored single FDM publication can carry the full
+            // artifact layout instead of the compact Build Grid summary. The
+            // explicit native mask requires the same geometry capture in either
+            // case, after authenticating the published layout against its plan.
+            let uses_prepared_geometry = has_mask
+                && (compact || matches!(&published.backend_plan, BackendPlanIR::Fdm(_)));
+            (None, uses_prepared_geometry)
         }
     };
     let execution = RequestedExecution {

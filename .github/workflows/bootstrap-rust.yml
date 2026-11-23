@@ -66,6 +66,7 @@ jobs:
           cargo test --locked -p fullmag-plan --lib spatial_
           cargo test --locked -p fullmag-authoring --lib spatial_absorbers_reference_owned_regions_by_stable_id
           RUST_MIN_STACK=16777216 cargo test --locked -p fullmag-api --bin fullmag-api overlapping_csg_boundary_is_rejected_before_mesh_build
+          RUST_MIN_STACK=16777216 python3 -B scripts/ci/run_exact_cargo_test.py --locked -p fullmag-api --bin fullmag-api router_v2::tests::live_view_continuity_reuses_the_full_published_fdm_airbox_layout -- --exact
 
       - name: Run material provenance and authoring roundtrip contracts
         run: cargo test --locked -p fullmag-authoring --lib material_library_roundtrip
