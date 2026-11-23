@@ -1499,6 +1499,7 @@ async function qualifyRegionMaterialMetadataStability(page, inspector, fixture) 
   const materialNodeId = regionNodeId + ":magnetic-parameters";
   const identity = "region-material-metadata-stability";
   const renamedRegion = "Material Audit Core Renamed";
+  const expectedOverrides = structuredClone(fixture.materialAuditOriginalOverrides);
 
   await page.setViewportSize({ width: 1600, height: 660 });
   try {
@@ -1507,14 +1508,16 @@ async function qualifyRegionMaterialMetadataStability(page, inspector, fixture) 
     }
     await selectInspectorNode(page, inspector, regionNodeId, { owner: "object-region", label: "Object region" });
     const name = inspector.getByRole("textbox", { name: "Region name", exact: true });
-    const apply = inspector.getByRole("button", { name: "Apply Region", exact: true });
-    const unrelated = inspector.getByRole("combobox", { name: "Frame", exact: true });
+    const coordinateFrame = inspector.getByRole("radiogroup", { name: "Coordinate frame", exact: true });
+    const objectLocal = coordinateFrame.getByRole("radio", { name: "Object local", exact: true });
     await name.waitFor({ state: "visible" });
-    await unrelated.waitFor({ state: "visible" });
+    await objectLocal.waitFor({ state: "visible" });
     assert((await name.inputValue()) === "Material Audit Core", "Authored region fixture did not mount.");
 
     await name.fill(renamedRegion);
-    assert(!(await apply.isDisabled()), "Region name edit did not enable Apply Region.");
+    const apply = inspector.locator('[data-slot="commit-bar-staged-actions"] button').last();
+    assert((await apply.innerText()).includes("Apply"), "Region metadata Apply action did not mount.");
+    assert(!(await apply.isDisabled()), "Region name edit did not enable Apply.");
     await name.focus();
     const baseline = await captureInspectorMutationSnapshot(inspector, { marker: identity, scrollTop: 80 });
     assert(baseline.scrollTop > 0, "Region Inspector fixture was not scrollable.");
@@ -1525,134 +1528,151 @@ async function qualifyRegionMaterialMetadataStability(page, inspector, fixture) 
     await page.waitForTimeout(45);
     const during = await captureInspectorMutationSnapshot(inspector);
     assertRegionMetadataStable(baseline, during, identity, "pending");
-    assert(!(await unrelated.isDisabled()), "Pending region PATCH disabled the unrelated Frame control.");
-    assert(await apply.isDisabled(), "Apply Region was not pending during delayed ACK.");
+    assert(await objectLocal.isEnabled(), "Pending metadata Apply disabled the unrelated Coordinate frame control.");
+    assert(await apply.isDisabled() && (await apply.innerText()).includes("Applying"),
+      "The staged region Apply action did not remain pending during delayed ACK.");
 
-    await inspector.getByText("Object region updated.", { exact: true }).waitFor({ state: "visible", timeout: 10_000 });
+    await inspector.locator(".fm-inspector__commit-status--applied")
+      .waitFor({ state: "visible", timeout: 10_000 });
     const afterAck = await captureInspectorMutationSnapshot(inspector);
     assertRegionMetadataStable(baseline, afterAck, identity, "ACK");
     assert((await name.inputValue()) === renamedRegion, "Acknowledged region name was not displayed.");
 
     const requests = fixture.requests.slice(requestStart);
-    const patchPath = "PATCH /v2/sessions/current/model/objects/film/regions/" + regionId;
+    const transactionPath = "POST /v2/sessions/current/model/transactions";
+    const regionTransactions = requests.filter((entry) =>
+      entry === transactionPath || entry.startsWith(transactionPath + "?"),
+    );
     assert(
-      requests.filter((entry) => entry === patchPath).length === 1 &&
+      regionTransactions.length === 1 &&
+        fixture.regionMutationBodies[0]?.kind === "patch_object_region" &&
+        fixture.regionMutationBodies[0]?.object_id === "film" &&
+        fixture.regionMutationBodies[0]?.region_id === regionId &&
         requests.filter((entry) => entry === "POST /v2/sessions/current/model/syncs").length === 1 &&
         requests.length <= 12,
       "Region metadata request budget failed: " + JSON.stringify(requests),
     );
-    const normalize = (items) => items.map(({ parameter, priority, conflict_policy, value }) => ({
-      parameter, priority: priority ?? null, conflict_policy: conflict_policy ?? null, value,
-    }));
-    const submitted = fixture.regionMutationBodies[0]?.patch?.material_overrides ?? [];
-    const expectedProfileOverrides = fixture.materialAuditOriginalOverrides
-      .filter((override) => ["ms", "ku1"].includes(override.parameter));
-    const scalarPayload = Object.fromEntries(submitted
-      .filter((override) => ["aex", "alpha"].includes(override.parameter))
-      .map((override) => [override.parameter, override]));
+    const metadataPatch = fixture.regionMutationBodies[0]?.patch ?? {};
+    const metadataPatchKeys = new Set(["enabled", "frame", "name", "priority", "shape"]);
     assert(
-      Object.keys(scalarPayload).length === 2 &&
-        scalarPayload.aex?.priority === 1 && scalarPayload.aex?.conflict_policy === "error" &&
-        scalarPayload.aex?.value?.kind === "constant" && scalarPayload.aex?.value?.value === 0 && scalarPayload.aex?.value?.unit === "J/m" &&
-        scalarPayload.alpha?.priority === 2 && scalarPayload.alpha?.conflict_policy === "error" &&
-        scalarPayload.alpha?.value?.kind === "constant" && scalarPayload.alpha?.value?.value === 0 &&
-        (scalarPayload.alpha?.value?.unit == null || scalarPayload.alpha?.value?.unit === ""),
-      "Metadata PATCH changed Aex/alpha zero or canonical scalar metadata: " + JSON.stringify(scalarPayload),
+      Object.keys(metadataPatch).length > 0 &&
+        Object.keys(metadataPatch).every((key) => metadataPatchKeys.has(key)) &&
+        !Object.hasOwn(metadataPatch, "material_overrides") &&
+        metadataPatch.name === renamedRegion,
+      "Region overview Apply did not send a metadata-only partial patch: " + JSON.stringify(metadataPatch),
     );
+    const sceneRegion = fixture.scene.objects.find((item) => item.id === "film")
+      ?.regions?.find((region) => region.region_id === regionId);
+    const committedOverrides = sceneRegion?.material_overrides ?? [];
+    const materialResourceOverrides = fixture.materialAuditRegionResources
+      .find((region) => region.region_id === regionId)?.material_overrides ?? [];
     assert(
-      JSON.stringify(normalize(submitted.filter((override) => ["ms", "ku1"].includes(override.parameter)))) ===
-          JSON.stringify(normalize(expectedProfileOverrides)) &&
-        JSON.stringify(normalize((fixture.materialAuditRegionResources[0]?.material_overrides ?? [])
-          .filter((override) => ["ms", "ku1"].includes(override.parameter)))) ===
-          JSON.stringify(normalize(expectedProfileOverrides)),
-      "Metadata PATCH changed the read-only linear/radial profile payload.",
+      JSON.stringify(committedOverrides) === JSON.stringify(expectedOverrides) &&
+        JSON.stringify(materialResourceOverrides) === JSON.stringify(expectedOverrides),
+      "Metadata Apply changed the committed constitutive overrides or their profiles.",
     );
 
     await page.locator('[data-node-id="' + materialNodeId + '"]').click();
-    await inspector.getByRole("heading", { name: "Material Overrides", exact: true }).waitFor();
-    const scalarOverrides = await inspector.locator(".fm-region-override").evaluateAll((cards) => cards
-      .filter((card) => card.querySelector('input[aria-label="Local override"]'))
-      .map((card) => {
-        const inputs = Array.from(card.querySelectorAll("input"));
-        const selects = Array.from(card.querySelectorAll("select"));
-        const input = (label) => inputs.find((item) => item.labels?.[0]?.textContent?.trim() === label)?.value ?? null;
-        return {
-          parameter: selects[0]?.value ?? null,
-          value: input("Local override"), unit: input("Unit"),
-          priority: input("Override priority"), conflict: selects[1]?.value ?? null,
-          removeCount: Array.from(card.querySelectorAll("button")).filter((button) => button.textContent?.trim() === "Remove Override").length,
-        };
-      }),
-    );
-    const profiles = await inspector.locator(".fm-region-override").evaluateAll((items) =>
-      items.filter((item) => item.textContent?.includes("This profile is preserved unchanged."))
-        .map((item) => ({
-          inputs: item.querySelectorAll("input").length,
-          removeCount: Array.from(item.querySelectorAll("button")).filter((button) => button.textContent?.trim() === "Remove Override").length,
-          text: item.textContent?.replace(/\s+/g, " ").trim() ?? "",
-        })),
-    );
-    const removeCount = await inspector.getByRole("button", { name: "Remove Override", exact: true }).count();
-    const scalarByParameter = Object.fromEntries(scalarOverrides.map((item) => [item.parameter, item]));
-    assert(
-      scalarOverrides.length === 2 && scalarByParameter.aex?.value === "0" && scalarByParameter.alpha?.value === "0" &&
-        scalarByParameter.aex?.unit === "J/m" && scalarByParameter.alpha?.unit === "" &&
-        scalarByParameter.aex?.priority === "1" && scalarByParameter.alpha?.priority === "2" &&
-        scalarByParameter.aex?.conflict === "error" && scalarByParameter.alpha?.conflict === "error",
-      "Aex/alpha zero or canonical unit/priority/conflict metadata changed after rename: " + JSON.stringify(scalarOverrides),
-    );
-    assert(
-      profiles.length === 2 && profiles.every((item) => item.inputs === 0 && item.removeCount === 1) && removeCount === 4 &&
-        profiles.some((item) => item.text.includes("ms · linear")) &&
-        profiles.some((item) => item.text.includes("ku1 · radial")),
-      "Linear/radial profiles were not preserved as read-only removable overrides.",
-    );
+    await inspector.getByRole("heading", { name: renamedRegion + " · Material", exact: true }).waitFor();
+    const overridesSection = inspector.locator('[data-section-id="region-constitutive-overrides"]');
+    const overridesTrigger = overridesSection.getByRole("button", {
+      name: /^Constitutive region overrides \(material_overrides\)/,
+    });
+    await overridesTrigger.waitFor({ state: "visible" });
+    if ((await overridesTrigger.getAttribute("aria-expanded")) !== "true") {
+      await overridesTrigger.click();
+    }
+    const scalarOverrides = [];
+    for (const [parameter, expected] of [
+      ["aex", { value: "0", priority: "1" }],
+      ["alpha", { value: "0", priority: "2" }],
+    ]) {
+      const card = inspector.locator('[data-override-parameter="' + parameter + '"]');
+      await card.waitFor({ state: "visible" });
+      const value = await card.getByLabel("Constitutive value " + parameter, { exact: true }).inputValue();
+      const priority = await card.getByLabel("Constitutive priority " + parameter, { exact: true }).inputValue();
+      const conflict = await card.getByRole("combobox", {
+        name: "Constitutive conflict policy " + parameter, exact: true,
+      }).innerText();
+      scalarOverrides.push({ parameter, value, priority, conflict });
+      assert(
+        value === expected.value && priority === expected.priority && conflict === "Report conflict error",
+        "Aex/alpha zero or canonical priority/conflict metadata changed after region rename: " +
+          JSON.stringify(scalarOverrides),
+      );
+    }
+    const profiles = [];
+    for (const [parameter, kind] of [["ms", "linear"], ["ku1", "radial"]]) {
+      const card = inspector.locator('[data-override-parameter="' + parameter + '"]');
+      await card.waitFor({ state: "visible" });
+      const text = (await card.innerText()).replace(/\s+/g, " ").trim();
+      const inputs = await card.locator("input").count();
+      const removable = await card.getByRole("button", {
+        name: "Remove constitutive override " + parameter, exact: true,
+      }).isVisible();
+      profiles.push({ parameter, kind, inputs, removable, text });
+      assert(
+        inputs === 0 && removable && text.includes("(" + kind + ") preserved verbatim in SceneDocument."),
+        "The " + kind + " profile was not preserved as a read-only removable constitutive card: " + text,
+      );
+    }
+    const removeCount = await inspector.getByRole("button", {
+      name: /^Remove constitutive override /,
+    }).count();
+    assert(removeCount === 4, "The Inspector did not expose a removal action for every constitutive override card.");
 
     const ku1ParentRegionId = "material-audit-ku1-parent";
     const ku1ParentRegionNodeId = "model:object:film:regions:" + ku1ParentRegionId;
     const ku1ParentMaterialNodeId = ku1ParentRegionNodeId + ":magnetic-parameters";
-    const owner = fixture.scene.objects.find((item) => item.id === "film");
-    const ownerPhysicsStack = structuredClone(owner?.physics_stack ?? []);
     await selectInspectorNode(page, inspector, ku1ParentRegionNodeId, {
       owner: "object-region", label: "Ku1 parent region",
     });
     await expandInspectorNode(page, ku1ParentRegionNodeId, fixture);
     await page.locator('[data-node-id="' + ku1ParentMaterialNodeId + '"]').click();
-    await inspector.getByRole("heading", { name: "Material Overrides", exact: true }).waitFor();
-    const inheritedKu1Text = async () => inspector.locator(".fm-inspector-field-row").evaluateAll((rows) => {
-      const row = rows.find((item) =>
-        item.querySelector(".fm-inspector-field-row__label")?.textContent?.trim() === "ku1",
-      );
-      return row?.querySelector(".fm-inspector-field-row__value")?.textContent?.trim() ?? null;
+    await inspector.getByRole("heading", { name: "Ku1 Parent · Material", exact: true }).waitFor();
+    const ku1Mode = inspector.getByRole("combobox", {
+      name: "First-order uniaxial Ku1", exact: true,
     });
-    const inheritedKu1 = await inheritedKu1Text();
-    assert(
-      inheritedKu1 === "31000 J/m^3 (inherits parent)",
-      "Region did not display the owner physics_stack Ku1 value, including its disabled entry.",
-    );
-
+    assert((await ku1Mode.innerText()).trim() === "Inherited from Object",
+      "Ku1 regional mode did not start inherited from the Object.");
+    const owner = fixture.scene.objects.find((item) => item.id === "film");
+    const ownerPhysicsStack = structuredClone(owner?.physics_stack ?? []);
     const interactionRequestStart = fixture.requests.length;
-    await inspector.getByRole("button", { name: "Add Override", exact: true }).click();
-    const ku1Override = inspector.locator(".fm-region-override").last();
-    await ku1Override.locator("select").first().selectOption("ku1");
-    await ku1Override.locator('input[aria-label="Local override"]').waitFor({ state: "visible" });
-    await ku1Override.getByText("Inherited parent", { exact: true }).waitFor();
-    const localOverrideParent = await ku1Override.locator(".fm-inspector-field-row").evaluate((row) =>
-      row.querySelector(".fm-inspector-field-row__value")?.textContent?.trim() ?? null,
-    );
-    const interactionPatches = fixture.requests.slice(interactionRequestStart).filter((request) =>
-      request.startsWith("PATCH /v2/sessions/current/model/objects/film/interactions/"),
-    );
+    await ku1Mode.click();
+    await page.getByRole("option", { name: "Constant regional override", exact: true }).click();
+    const localKu1 = inspector.getByLabel("Regional Ku1 (base / inner)", { exact: true });
+    await localKu1.waitFor({ state: "visible" });
+    const localKu1Value = await localKu1.inputValue();
+    const localKu1Unit = await inspector.getByRole("button", {
+      name: "Regional Ku1 (base / inner) unit", exact: true,
+    }).innerText();
+    const localDraftWrites = fixture.requests.slice(interactionRequestStart)
+      .filter((request) => !request.startsWith("GET ") && !request.startsWith("OPTIONS "));
     assert(
-      await ku1Override.locator("select").first().inputValue() === "ku1" &&
-        localOverrideParent === "31000 J/m^3" && interactionPatches.length === 0 &&
+      Number(localKu1Value) === 31 && localKu1Unit.trim() === "kJ/m³" &&
+        localDraftWrites.length === 0 &&
         JSON.stringify(owner?.physics_stack ?? []) === JSON.stringify(ownerPhysicsStack),
-      "Adding a local Ku1 draft changed its inherited parent or mutated the owner interaction.",
+      "Selecting a constant Ku1 override did not stage the inherited 31 kJ/m³ value locally: " +
+        JSON.stringify({ localKu1Value, localKu1Unit, localDraftWrites }),
+    );
+    await inspector.getByRole("button", {
+      name: "Revert First-order uniaxial Ku1", exact: true,
+    }).click();
+    assert((await ku1Mode.innerText()).trim() === "Inherited from Object",
+      "Ku1 local draft did not revert to inherited mode.");
+    const localDraftWritesAfterRevert = fixture.requests.slice(interactionRequestStart)
+      .filter((request) => !request.startsWith("GET ") && !request.startsWith("OPTIONS "));
+    assert(
+      localDraftWritesAfterRevert.length === 0 &&
+        JSON.stringify(owner?.physics_stack ?? []) === JSON.stringify(ownerPhysicsStack),
+      "Reverting the local Ku1 draft wrote to the API or changed the owner physics stack.",
     );
     const ku1Inheritance = {
-      inherited_ku1: inheritedKu1,
-      local_override_parent: localOverrideParent,
-      interaction_patch_count: interactionPatches.length,
+      initial_mode: "inherited",
+      local_override_value: Number(localKu1Value),
+      local_override_unit: localKu1Unit.trim(),
+      local_draft_write_count: localDraftWrites.length,
+      writes_after_revert: localDraftWritesAfterRevert.length,
       owner_stack_unchanged: JSON.stringify(owner?.physics_stack ?? []) === JSON.stringify(ownerPhysicsStack),
     };
 
@@ -1661,7 +1681,8 @@ async function qualifyRegionMaterialMetadataStability(page, inspector, fixture) 
     await writeFile(resolve(outputDir, "region-material-metadata-browser-proof.json"), JSON.stringify({
       schema: "material_boundary_region_metadata_browser_proof.v1",
       fixture_only: true, live_api_verified: false, science_verified: false, gpu_verified: false,
-      region_id: regionId, acknowledged_name: renamedRegion, retained_overrides: submitted,
+      region_id: regionId, acknowledged_name: renamedRegion, metadata_patch: metadataPatch,
+      retained_overrides: committedOverrides,
       ku1_inheritance: ku1Inheritance,
       scalar_overrides_visible: scalarOverrides, preserved_profiles: profiles.map((item) => item.text),
       requests, baseline, during, afterAck, screenshot,
@@ -1677,8 +1698,20 @@ function assertRegionMetadataStable(before, after, identity, phase) {
   assert(after.connected && after.marker === identity && after.owner === before.owner,
     "Object region Inspector root changed during " + phase + ".");
   assert(after.focusedLabel === "Region name", "Region name focus was lost during " + phase + ".");
-  assert(after.opacity === before.opacity && after.opacityAnimations === 0,
-    "Region Inspector opacity changed or animated during " + phase + ".");
+  assert(after.opacity === before.opacity && before.rootOpacityAnimationDetails.length === 0 &&
+    after.rootOpacityAnimationDetails.length === 0,
+    "Region Inspector opacity changed or animated during " + phase + ": " + JSON.stringify({
+      baseline: {
+        opacity: before.opacity,
+        rootOpacityAnimations: before.rootOpacityAnimationDetails,
+        subtreeOpacityAnimations: before.opacityAnimationDetails,
+      },
+      current: {
+        opacity: after.opacity,
+        rootOpacityAnimations: after.rootOpacityAnimationDetails,
+        subtreeOpacityAnimations: after.opacityAnimationDetails,
+      },
+    }));
   assert(Math.abs(after.scrollTop - before.scrollTop) <= 1,
     "Region Inspector scroll changed during " + phase + ".");
 }
@@ -1698,10 +1731,25 @@ async function captureInspectorMutationSnapshot(locator, options = {}) {
     }
     const opacityAnimations = element
       .getAnimations({ subtree: true })
-      .filter((animation) => {
-        const frames = animation.effect?.getKeyframes?.() ?? [];
-        return frames.some((frame) => Object.hasOwn(frame, "opacity"));
-      });
+      .filter((animation) => (animation.effect?.getKeyframes?.() ?? [])
+        .some((frame) => Object.hasOwn(frame, "opacity")));
+    const describeOpacityAnimation = (animation) => {
+      const target = animation.effect?.target;
+      const targetElement = target instanceof Element ? target : null;
+      return {
+        currentTime: animation.currentTime,
+        opacityKeyframes: (animation.effect?.getKeyframes?.() ?? [])
+          .filter((frame) => Object.hasOwn(frame, "opacity"))
+          .map((frame) => ({ opacity: frame.opacity, offset: frame.offset })),
+        playState: animation.playState,
+        targetClass: targetElement?.getAttribute("class") ?? null,
+        targetDataSlot: targetElement?.getAttribute("data-slot") ?? null,
+        targetTag: targetElement?.tagName.toLowerCase() ?? null,
+      };
+    };
+    const rootOpacityAnimations = element.getAnimations()
+      .filter((animation) => (animation.effect?.getKeyframes?.() ?? [])
+        .some((frame) => Object.hasOwn(frame, "opacity")));
     return {
       connected: element.isConnected,
       focusedLabel: document.activeElement?.getAttribute("aria-label") ??
@@ -1709,6 +1757,8 @@ async function captureInspectorMutationSnapshot(locator, options = {}) {
       marker: element.dataset.mutationStabilityMarker,
       opacity: getComputedStyle(element).opacity,
       opacityAnimations: opacityAnimations.length,
+      opacityAnimationDetails: opacityAnimations.map(describeOpacityAnimation),
+      rootOpacityAnimationDetails: rootOpacityAnimations.map(describeOpacityAnimation),
       owner: inspectorRoot.getAttribute("data-inspector-owner"),
       scrollTop: scroller?.scrollTop ?? 0,
     };
@@ -5175,34 +5225,64 @@ async function installInspectorFixtureApi(page, fixture) {
         status: body.status ?? "ready",
       });
     }
-    if (
-      fixture.materialBoundaryAuditEnabled &&
-      path === "/v2/sessions/current/model/objects/film/regions/material-audit-core" &&
-      request.method() === "PATCH"
-    ) {
-      const body = request.postDataJSON() ?? {};
-      if (body.base_revision !== fixture.revision || typeof body.patch?.name !== "string" ||
-          !Array.isArray(body.patch.material_overrides)) {
-        fixture.unknownMutationPaths.push(request.method() + " " + path + ":invalid-region-metadata-patch");
-        return fulfillJson(route, { error: { code: "inspector_fixture_invalid_region_patch" } }, 422);
-      }
-      fixture.regionMutationBodies.push(structuredClone(body));
-      if (fixture.regionPatchDelayMs > 0) await new Promise((done) => setTimeout(done, fixture.regionPatchDelayMs));
-      const sceneRegion = fixture.scene.objects.find((item) => item.id === "film")?.regions?.[0];
-      const region = fixture.materialAuditRegionResources[0];
-      if (!sceneRegion || !region) return fulfillJson(route, { error: { code: "inspector_fixture_region_missing" } }, 404);
-      sceneRegion.name = region.name = body.patch.name;
-      fixture.revision += 1;
-      fixture.scene.revision = fixture.revision;
-      fixture.manifest.source_scene_revision = fixture.revision;
-      fixture.visualization.revision = fixture.revision;
-      return fulfillJson(route, {
-        committed_scene: fixture.scene, scene_revision: fixture.revision,
-        transaction_kind: "patch_object_region",
-      });
-    }
     if (path === "/v2/sessions/current/model/transactions" && request.method() === "POST") {
       const body = request.postDataJSON() ?? {};
+      if (body.kind === "patch_object_region") {
+        const patch = body.patch;
+        const patchKeys = patch && typeof patch === "object" && !Array.isArray(patch)
+          ? Object.keys(patch)
+          : [];
+        const metadataPatchKeys = new Set(["enabled", "frame", "name", "priority", "shape"]);
+        const object = fixture.scene.objects.find((item) => item.id === body.object_id);
+        const sceneRegion = object?.regions?.find((region) => region.region_id === body.region_id);
+        const materialRegion = fixture.materialAuditRegionResources.find(
+          (region) => region.region_id === body.region_id,
+        );
+        if (
+          !fixture.materialBoundaryAuditEnabled ||
+          body.object_id !== "film" ||
+          body.region_id !== "material-audit-core" ||
+          body.base_revision !== fixture.revision ||
+          typeof patch?.name !== "string" ||
+          patchKeys.length === 0 ||
+          patchKeys.some((key) => !metadataPatchKeys.has(key)) ||
+          Object.hasOwn(patch ?? {}, "material_overrides") ||
+          !sceneRegion ||
+          !materialRegion ||
+          fixture.regionMutationBodies.length > 0
+        ) {
+          fixture.unknownMutationPaths.push(
+            request.method() + " " + path + ":invalid-region-metadata-transaction",
+          );
+          return fulfillJson(
+            route,
+            { error: { code: "inspector_fixture_invalid_region_patch" } },
+            422,
+          );
+        }
+        fixture.regionMutationBodies.push(structuredClone(body));
+        const retainedOverrides = structuredClone(sceneRegion.material_overrides ?? []);
+        if (fixture.regionPatchDelayMs > 0) {
+          await new Promise((done) => setTimeout(done, fixture.regionPatchDelayMs));
+        }
+        object.regions = object.regions.map((region) =>
+          region.region_id === body.region_id
+            ? { ...region, ...structuredClone(patch), material_overrides: structuredClone(retainedOverrides) }
+            : region,
+        );
+        Object.assign(materialRegion, structuredClone(patch), {
+          material_overrides: structuredClone(retainedOverrides),
+        });
+        fixture.revision += 1;
+        fixture.scene.revision = fixture.revision;
+        fixture.manifest.source_scene_revision = fixture.revision;
+        fixture.visualization.revision = fixture.revision;
+        return fulfillJson(route, {
+          committed_scene: fixture.scene,
+          scene_revision: fixture.revision,
+          transaction_kind: body.kind,
+        });
+      }
       if (body.kind === "patch_object_geometry") {
         const objectMatches = fixture.scene.objects.filter(
           (candidate) => candidate.id === body.object_id,
