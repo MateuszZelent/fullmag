@@ -87,6 +87,7 @@ export interface ProjectExecutionSummary {
 export interface ProjectOutputsSummary {
   readonly frames?: number;
   readonly sizeBytes?: number;
+  readonly fields?: readonly string[];
 }
 
 export interface ProjectDetail {
@@ -344,7 +345,11 @@ function parseProjectDetail(value: Raw): ProjectDetail {
             tolerance: str(execution.tolerance),
             excitation: str(execution.excitation),
           },
-          outputs: { frames: num(outputs.frames), sizeBytes: num(outputs.size_bytes) },
+          outputs: {
+            frames: num(outputs.frames),
+            sizeBytes: num(outputs.size_bytes),
+            fields: strings(outputs.fields) ?? strings(outputs.output_fields),
+          },
         }
       : undefined,
     authors: provenance?.authors ?? [],

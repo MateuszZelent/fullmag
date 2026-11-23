@@ -6,13 +6,14 @@ import { Download, RefreshCw } from "lucide-react";
 import type { Export3DFormat } from "@/shared/export-3d/export3dTypes";
 import { Button } from "@/shared/ui/Button";
 import { Input } from "@/shared/ui/Input";
+import { TabsContent } from "@/shared/ui/Tabs";
 import {
-  Tabs,
-  TabsContent,
-  TabsList,
-  TabsTrigger,
-} from "@/shared/ui/Tabs";
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/shared/ui/Tooltip";
 
+import { Viewport3DInspectorTemplateShell } from "../components/Viewport3DSettingsAndExportSpecs";
 import {
   Choice,
   SettingsGroup,
@@ -183,53 +184,48 @@ export function Viewport3DExportPanel({
   }
 
   return (
-    <section
-      aria-label="3D Export"
-      className="fm-viewport-3d-settings fm-viewport-3d-export"
+    <Viewport3DInspectorTemplateShell
+      activeTab={activeMode}
+      ariaLabel="3D Export"
+      breadcrumbAriaLabel="3D export breadcrumb"
+      breadcrumbCurrent="3D Export"
+      className="fm-viewport-3d-export"
+      facts={[
+        {
+          id: "mode",
+          label: "Mode",
+          value: activeMode === "png" ? "PNG capture" : format.toUpperCase(),
+        },
+        {
+          id: "scale",
+          label: "Scale",
+          value: `${appearance.exportScale}×`,
+        },
+        {
+          id: "background",
+          label: "Background",
+          value: appearance.exportBackground === "transparent" ? "Transparent" : "Viewport",
+        },
+      ]}
+      footerStatusText="Live · PNG capture and 3D model export"
+      icon={Download}
+      onTabChange={(value) => {
+        if (value === "png" || value === "3d") onModeChange(value);
+      }}
+      ownerId="viewport-3d.export"
+      stateLabel={exporting || isCapturingPng ? "Exporting" : "Live"}
+      stateTone="live"
+      subtitle="PNG image and 3D model (GLB, glTF, VTK)"
+      tabs={EXPORT_MODES}
+      tabsAriaLabel="Export format"
+      title="3D Export"
     >
-      <header className="fm-viewport-3d-settings__header">
-        <span aria-hidden="true" className="fm-viewport-3d-settings__header-icon">
-          <Download size={18} strokeWidth={1.75} />
-        </span>
-        <span className="fm-viewport-3d-settings__header-copy">
-          <h2 className="fm-viewport-3d-settings__title">Export</h2>
-          <span className="fm-viewport-3d-settings__subtitle">
-            PNG image and 3D model (GLB, glTF, VTK)
-          </span>
-        </span>
-      </header>
-      <Tabs
-        className="fm-viewport-3d-settings__tabs"
-        onValueChange={(value) => {
-          if (value === "png" || value === "3d") onModeChange(value);
-        }}
-        value={activeMode}
+      <TabsContent
+        className="fm-viewport-3d-settings__panel"
+        forceMount
+        hidden={activeMode !== "png"}
+        value="png"
       >
-        <div className="fm-viewport-3d-settings__field-list">
-          <TabsList
-            aria-label="Export format"
-            className="fm-viewport-3d-settings__tab-list fm-viewport-3d-settings__tab-list--two"
-            presentation="segmented"
-          >
-            {EXPORT_MODES.map((mode) => (
-              <TabsTrigger
-                className="fm-viewport-3d-settings__tab"
-                key={mode.id}
-                value={mode.id}
-              >
-                {mode.label}
-              </TabsTrigger>
-            ))}
-          </TabsList>
-        </div>
-
-        <div className="fm-viewport-3d-settings__panels">
-          <TabsContent
-            className="fm-viewport-3d-settings__panel"
-            forceMount
-            hidden={activeMode !== "png"}
-            value="png"
-          >
             <SettingsGroup title="PNG export">
               <Choice
                 id="fm-view-export-background"
@@ -305,19 +301,23 @@ export function Viewport3DExportPanel({
                     ? "Preparing the current 3D view…"
                     : formatViewportModelSourceSummary(source)}
                 </p>
-                <Button
-                  aria-label="Refresh 3D export source"
-                  disabled={exporting || loadingSource}
-                  onClick={() => {
-                    setExportError(null);
-                    setReloadNonce((current) => current + 1);
-                  }}
-                  size="icon"
-                  title="Refresh from current 3D view"
-                  variant="ghost"
-                >
-                  <RefreshCw aria-hidden="true" size={14} />
-                </Button>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button
+                      aria-label="Refresh 3D export source"
+                      disabled={exporting || loadingSource}
+                      onClick={() => {
+                        setExportError(null);
+                        setReloadNonce((current) => current + 1);
+                      }}
+                      size="icon"
+                      variant="ghost"
+                    >
+                      <RefreshCw aria-hidden="true" size={14} />
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent>Refresh from current 3D view</TooltipContent>
+                </Tooltip>
               </div>
 
               <Choice
@@ -435,8 +435,6 @@ export function Viewport3DExportPanel({
               </div>
             </SettingsGroup>
           </TabsContent>
-        </div>
-      </Tabs>
-    </section>
+    </Viewport3DInspectorTemplateShell>
   );
 }

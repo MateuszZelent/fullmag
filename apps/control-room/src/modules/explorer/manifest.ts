@@ -8,7 +8,17 @@ import {
   collapseExplorerNodes,
   expandExplorerNodes,
   explorerStore,
+  setExplorerActiveTab,
 } from "./explorerStore";
+import type { ExplorerTabId } from "./explorerTypes";
+
+const VALID_EXPLORER_TABS = new Set<ExplorerTabId>([
+  "model",
+  "resources",
+  "results",
+  "jobs",
+  "diagnostics",
+]);
 
 function currentTabNodeIds(): string[] {
   const tabId = explorerStore.getSnapshot().activeTab;
@@ -44,6 +54,25 @@ export const explorerManifest: ModuleManifest = {
         run: () => {
           const tabId = explorerStore.getSnapshot().activeTab;
           collapseExplorerNodes(tabId, currentTabNodeIds());
+          return { status: "completed" };
+        },
+      },
+      {
+        id: "explorer.activate-tab",
+        title: "Activate Explorer Tab",
+        group: "explorer",
+        category: "Explorer",
+        scope: "workspace",
+        run: (ctx) => {
+          const input = ctx.input as { tab?: unknown } | undefined;
+          const tab =
+            typeof input?.tab === "string" &&
+            VALID_EXPLORER_TABS.has(input.tab as ExplorerTabId)
+              ? (input.tab as ExplorerTabId)
+              : null;
+          if (!tab) return { status: "failed", message: "Invalid explorer tab" };
+          setExplorerActiveTab(tab);
+          ctx.layout?.setPanelVisible("left", true);
           return { status: "completed" };
         },
       },

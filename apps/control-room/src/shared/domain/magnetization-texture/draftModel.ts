@@ -119,7 +119,7 @@ export function buildRegionTextureOverridePatch(
 }
 
 function inlineRegionTextureAsset(regionId: string, initializer: JsonRecord): MagnetizationAssetDraft {
-  const kind = asNonEmptyString(initializer.kind) ?? "unknown";
+  const kind = asNonEmptyString(initializer.kind) ?? "preset_texture";
   const asset: MagnetizationAssetDraft = {
     ...(initializer as JsonObject),
     id: `region-texture:${regionId}`,

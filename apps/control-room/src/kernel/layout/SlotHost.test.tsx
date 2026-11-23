@@ -74,7 +74,7 @@ function makeKernel(): KernelApi {
 }
 
 describe("SlotHost", () => {
-  it("activates a shared panel module from the canonical Results ribbon tab", () => {
+  it("keeps Explorer mounted on panel-left when the canonical Results ribbon tab is active", () => {
     const explorer: ModuleManifest = {
       id: "explorer",
       title: "Explorer",
@@ -90,7 +90,7 @@ describe("SlotHost", () => {
     };
 
     expect(resolveSlotModuleManifest([explorer, results], "results")?.id).toBe(
-      "results-navigator",
+      "explorer",
     );
     expect(resolveSlotModuleManifest([explorer, results], "home")?.id).toBe(
       "explorer",

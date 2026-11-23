@@ -1,6 +1,7 @@
 import type { Selection } from "@/kernel/selection/selectionTypes";
 
 import { resolveInspectorRoute } from "./inspectorRouteCatalog";
+import type { InspectorDomain } from "./template/types";
 
 export type InspectorStatusTone =
   | "neutral"
@@ -37,6 +38,7 @@ export type InspectorDescriptorIcon =
 
 export interface InspectorDescriptor {
   breadcrumbs: InspectorBreadcrumb[];
+  domain: InspectorDomain;
   icon: InspectorDescriptorIcon;
   metadata: InspectorMetadataItem[];
   ownerId: string;
@@ -53,13 +55,6 @@ const MESH_TABS: InspectorTabDescriptor[] = [
   { id: "policy", label: "Policy" },
   { id: "quality", label: "Quality" },
   { id: "history", label: "History" },
-];
-
-const RESULT_TABS: InspectorTabDescriptor[] = [
-  { id: "overview", label: "Overview" },
-  { id: "data", label: "Data" },
-  { id: "provenance", label: "Provenance" },
-  { id: "diagnostics", label: "Diagnostics" },
 ];
 
 interface FamilyDescriptor {
@@ -88,6 +83,81 @@ function titleCase(value: string): string {
     .replace(/\b\w/g, (character) => character.toUpperCase());
 }
 
+/**
+ * Maps any selection kind onto one of the 7 canonical visual domains
+ * (`--fm-hue-<domain>` / `--fm-hue-<domain>-text`).
+ */
+export function resolveInspectorDomain(kind: string | null): InspectorDomain {
+  if (!kind) return "definition";
+  if (
+    kind.includes("visualization") ||
+    kind.startsWith("visualizations-2d.") ||
+    kind.startsWith("model.planar.monitor") ||
+    kind.startsWith("analysis.chart") ||
+    kind.startsWith("live.chart") ||
+    kind === "results.quick_chart" ||
+    kind.startsWith("results.observation_frame") ||
+    kind.startsWith("results.pinned_visualizations") ||
+    kind === "mesh-part" ||
+    kind === "mesh-part-airbox"
+  ) {
+    return "visualization";
+  }
+  if (
+    kind === "fdm.cell" ||
+    kind.startsWith("mesh.") ||
+    kind.endsWith(".mesh") ||
+    kind.includes(".mesh.")
+  ) {
+    return "mesh";
+  }
+  if (
+    kind.includes("material") ||
+    kind.includes("magnetic-texture") ||
+    kind.includes("magnetic-parameters") ||
+    kind.endsWith(".texture")
+  ) {
+    return "material";
+  }
+  if (
+    kind.startsWith("physics.") ||
+    kind === "object.physics" ||
+    kind === "object.physics.scope" ||
+    kind === "object.absorbing-boundary" ||
+    kind === "object.extension.topological-charge" ||
+    kind.startsWith("object.antenna.") &&
+      (kind.endsWith(".terminals") ||
+        kind.endsWith(".conductor") ||
+        kind.endsWith(".port") ||
+        kind.endsWith(".solution") ||
+        kind.endsWith(".projection") ||
+        kind.endsWith(".drive") ||
+        kind.endsWith(".spectrum") ||
+        kind.endsWith(".regional"))
+  ) {
+    return "physics";
+  }
+  if (
+    kind.startsWith("study.") ||
+    kind.startsWith("results.") ||
+    kind.startsWith("jobs.") ||
+    kind === "analysis.result"
+  ) {
+    return "study";
+  }
+  if (
+    kind.startsWith("definitions.") ||
+    kind.startsWith("resources.") ||
+    kind.startsWith("diagnostics.") ||
+    kind === "session.root" ||
+    kind === "model.frozen-spins" ||
+    kind === "object.frozen-spins"
+  ) {
+    return "definition";
+  }
+  return "geometry";
+}
+
 function resolveFamily(kind: string): FamilyDescriptor {
   if (kind === "airbox.visualization") {
     return { tabs: [], typeLabel: "Airbox display" };
@@ -113,6 +183,9 @@ function resolveFamily(kind: string): FamilyDescriptor {
   if (kind === "object.region.visualization.debug") {
     return { tabs: [], typeLabel: "Region visualization debug" };
   }
+  if (kind === "mesh.part.visualization.debug") {
+    return { tabs: [], typeLabel: "Mesh-part visualization debug" };
+  }
   if (kind === "airbox.multilayer.target") {
     return { tabs: [], typeLabel: "Multilayer Airbox target" };
   }
@@ -124,16 +197,15 @@ function resolveFamily(kind: string): FamilyDescriptor {
   }
   if (kind.startsWith("diagnostics.")) {
     return {
-      tabs: [
-        { id: "overview", label: "Overview" },
-        { id: "evidence", label: "Evidence" },
-        { id: "diagnostics", label: "Diagnostics" },
-      ],
+      tabs: [],
       typeLabel: "Diagnostics",
     };
   }
-  if (kind.startsWith("results.") || kind.startsWith("resources.")) {
-    return { tabs: RESULT_TABS, typeLabel: "Result" };
+  if (kind.startsWith("resources.")) {
+    return { tabs: [], typeLabel: "Resource" };
+  }
+  if (kind.startsWith("results.")) {
+    return { tabs: [], typeLabel: "Result" };
   }
   if (kind.startsWith("study.")) {
     return { tabs: [], typeLabel: "Study" };
@@ -231,6 +303,7 @@ export function resolveInspectorDescriptor(
   if (!selection.kind) {
     return {
       breadcrumbs: [],
+      domain: "definition",
       icon: "object",
       metadata: [],
       ownerId: "empty-selection",
@@ -243,6 +316,7 @@ export function resolveInspectorDescriptor(
 
   const family = resolveFamily(selection.kind);
   const identity = inspectorIdentity(selection.kind);
+  const domain = resolveInspectorDomain(selection.kind);
   const title = selection.label ?? selection.objectId ?? family.typeLabel;
   const metadata: InspectorMetadataItem[] = [
     { label: "Kind", value: selection.kind },
@@ -252,6 +326,7 @@ export function resolveInspectorDescriptor(
   if (fdmCellRef) {
     return {
       breadcrumbs: resolveBreadcrumbs(selection, family.typeLabel),
+      domain,
       icon: identity.icon,
       metadata: [
         { label: "Selected IJK snapshot", value: `[${fdmCellRef.ijk.join(", ")}]` },
@@ -293,6 +368,7 @@ export function resolveInspectorDescriptor(
 
   return {
     breadcrumbs: resolveBreadcrumbs(selection, family.typeLabel),
+    domain,
     icon: identity.icon,
     metadata: metadata.slice(0, 4),
     ownerId: identity.ownerId,

@@ -8,103 +8,38 @@ import {
   resolveInspectorRoute,
   resolveUnknownInspectorRoute,
 } from "./inspectorRouteCatalog";
-import { ObjectRegionVisualizationPanel } from "./panels/ObjectRegionsPanel";
 import {
-  AirboxMeshBuildLanePanel,
-  AirboxMeshOverviewLanePanel,
-  AirboxMeshParametersLanePanel,
-  AirboxMeshQualityGatesLanePanel,
-  AirboxMeshStatisticsLanePanel,
-  AirboxMeshTopologyLanePanel,
-  AirboxOverviewLanePanel,
-} from "./panels/airbox/AirboxInspectorLanePanel";
-import { FdmMultilayerAirboxTargetPanel } from "./panels/airbox/FdmMultilayerAirboxTargetPanel";
-import { AirboxVisualizationDebugInspectorPanel } from "./panels/airbox/AirboxVisualizationDebugInspectorPanel";
+  FdmCellInspectorSpecPanel,
+  FdmGridInspectorSpecPanel,
+} from "./inspectors/mesh";
+import { MagneticTextureInspectorPanel } from "./inspectors/objects";
 import {
-  FdmCellInspectorPanel,
-  FdmGridActiveUnassignedInspectorPanel,
-  FdmGridDescriptorInspectorPanel,
-  FdmGridInspectorPanelRoute,
-  FdmGridMagneticSupportInspectorPanel,
-  FdmGridMaskInspectorPanel,
-  FdmGridProvenanceInspectorPanel,
-  FdmGridRegionInspectorPanel,
-  FdmGridUniverseOutsideSupportInspectorPanel,
-  ObjectMagneticTextureAssetInspectorPanel,
-  ObjectMagneticTextureLoadInspectorPanel,
-  ObjectMagneticTextureTransformInspectorPanel,
-  ObjectRegionMagneticTextureInspectorPanel,
-  ObjectRegionTextureInspectorPanel,
-} from "./panels/DedicatedExplorerInspectorPanels";
-import {
-  EigenModeInspectorPanel,
-  EigenBranchInspectorPanel,
-  EigenBranchesInspectorPanel,
-  EigenDiagnosticsInspectorPanel,
-  EigenKPathInspectorPanel,
-  EigenDispersionInspectorPanel,
-  EigenModesInspectorPanel,
-  EigenOverviewInspectorPanel,
-  EigenProvenanceInspectorPanel,
-  EigenSpectrumInspectorPanel,
-  EigenStudyInspectorPanel,
-  FrequencyDomainCalculationModesInspectorPanel,
-  FrequencyDomainDispersionInspectorPanel,
-  FrequencyDomainExportsInspectorPanel,
-  FrequencyDomainOverviewInspectorPanel,
-  FrequencyDomainResponseMapInspectorPanel,
-  FrequencyDomainRunInspectorPanel,
-  FrequencyResponseOverviewInspectorPanel,
-  FrequencyResponseCancelRequestedInspectorPanel,
-  FrequencyResponseDiagnosticsInspectorPanel,
-  FrequencyResponseObservableInspectorPanel,
-  FrequencyResponseObservablesInspectorPanel,
-  FrequencyResponseFrequencyPointsInspectorPanel,
-  FrequencyResponsePointInspectorPanel,
-  FrequencyResponseProvenanceInspectorPanel,
-  FrequencyResponseProgressInspectorPanel,
-  FrequencyResponseStudyInspectorPanel,
-  FrequencyResponseSweepInspectorPanel,
+  DispersionDrivenStageResultInspector,
+  DispersionModalStageResultInspector,
+  DispersionResponseFieldAtKResultInspector,
+  DynamicsResultTemplateInspector as DynamicsResultInspector,
   FmrComparisonInspectorPanel,
-  FmrModalSpectrumInspectorPanel,
-  FmrOverviewInspectorPanel,
-  FmrPeakInspectorPanel,
-  FmrPeaksInspectorPanel,
-} from "./panels/frequency-domain/FrequencyDomainResultInspectors";
+  ResonanceDrivenStageResultInspector,
+  ResonanceModalStageResultInspector,
+} from "./inspectors/results";
 import {
-  DispersionDrivenProvenanceResultInspector,
-  DispersionModalProvenanceResultInspector,
-  LegacyTimeDomainResultInspector,
-  ResonanceDrivenProvenanceResultInspector,
-  ResonanceModalProvenanceResultInspector,
-} from "./panels/physics-first/PhysicsFirstResultInspectors";
+  EigenmodesStageInspectorPanel as EigenmodesStageOverviewInspectorPanel,
+  FrequencyResponseStageInspectorPanel as FrequencyResponseStageOverviewInspectorPanel,
+} from "./inspectors/study";
 import {
-  EigenmodesBoundaryStageInspectorPanel,
-  EigenmodesCalculationModeStageInspectorPanel,
-  EigenmodesDiagnosticsStageInspectorPanel,
-  EigenmodesEquilibriumStageInspectorPanel,
-  EigenmodesKPathStageInspectorPanel,
-  EigenmodesOperatorStageInspectorPanel,
-  EigenmodesOutputsStageInspectorPanel,
-  EigenmodesPeriodicPairsStageInspectorPanel,
-  EigenmodesSetupStageInspectorPanel,
-  EigenmodesSolverStageInspectorPanel,
-  EigenmodesStageOverviewInspectorPanel,
-  FrequencyResponseBoundaryStageInspectorPanel,
-  FrequencyResponseCalculationModeStageInspectorPanel,
-  FrequencyResponseDiagnosticsStageInspectorPanel,
-  FrequencyResponseEquilibriumStageInspectorPanel,
-  FrequencyResponseExcitationStageInspectorPanel,
-  FrequencyResponseKGridStageInspectorPanel,
-  FrequencyResponseOperatorStageInspectorPanel,
-  FrequencyResponseOutputsStageInspectorPanel,
-  FrequencyResponsePeriodicPairsStageInspectorPanel,
-  FrequencyResponseSetupStageInspectorPanel,
-  FrequencyResponseSolverStageInspectorPanel,
-  FrequencyResponseStageOverviewInspectorPanel,
-  FrequencyResponseSweepStageInspectorPanel,
-  StudyStageInspectorRouter,
-} from "./panels/StudyStageInspectorRouter";
+  AirboxMeshBuildInspectorSpecPanel,
+  AirboxMeshInspectorSpecPanel,
+  AirboxMeshParametersInspectorSpecPanel,
+  AirboxMeshQualityGatesInspectorSpecPanel,
+  AirboxMeshStatisticsInspectorSpecPanel,
+  AirboxMeshTopologyInspectorSpecPanel,
+  AirboxMultilayerTargetInspectorSpecPanel,
+  AirboxRootInspectorSpecPanel,
+} from "./inspectors/universe";
+import {
+  AirboxVisualizationDebugInspectorPanel,
+  ObjectRegionVisualizationTemplatePanel,
+} from "./inspectors/visualizations";
 
 function frequencyDomainPanelId(kind: string): string {
   return `frequency-domain-${kind.replace(/[.:]/g, "-")}`;
@@ -126,7 +61,7 @@ describe("inspectorRegistry", () => {
     );
   });
 
-  it("gives runtime tree roots and resource diagnostics dedicated Inspectors", () => {
+  it("gives runtime tree roots dedicated Inspectors and redirects resource diagnostics to runtime resources", () => {
     expect(resolveInspectorPanel({ kind: "resources.root" })?.component.name).toBe(
       "ResourcesOverviewInspectorPanel",
     );
@@ -137,7 +72,7 @@ describe("inspectorRegistry", () => {
       "DiagnosticsOverviewInspectorPanel",
     );
     expect(resolveInspectorPanel({ kind: "diagnostics.resource" })?.component.name).toBe(
-      "RuntimeResourceDiagnosticInspectorPanel",
+      "RuntimeResourceInspectorPanel",
     );
   });
 
@@ -231,7 +166,7 @@ describe("inspectorRegistry", () => {
     );
   });
 
-  it("resolves object material selections to the material assignment panel", () => {
+  it("resolves object material selections and redirects legacy magnetic-parameters to object.material", () => {
     expect(resolveInspectorPanel({ kind: "object.material" })?.id).toBe(
       "object-material-assignment",
     );
@@ -239,7 +174,7 @@ describe("inspectorRegistry", () => {
       "object-absorbing-boundary",
     );
     expect(resolveInspectorPanel({ kind: "object.magnetic-parameters" })?.id).toBe(
-      "object-material",
+      "object-material-assignment",
     );
   });
 
@@ -249,7 +184,7 @@ describe("inspectorRegistry", () => {
     );
   });
 
-  it("resolves object region and magnetic texture groups", () => {
+  it("resolves object region and magnetic texture groups through canonical routes and redirects", () => {
     expect(resolveInspectorPanel({ kind: "object.regions" })?.id).toBe(
       "object-regions",
     );
@@ -257,71 +192,72 @@ describe("inspectorRegistry", () => {
       "object-region",
     );
     expect(resolveInspectorPanel({ kind: "object.region.geometry" })?.id).toBe(
-      "object-region-geometry",
+      "object-region",
     );
     expect(resolveInspectorPanel({ kind: "object.region.shape" })?.id).toBe(
-      "object-region-shape",
+      "object-region",
     );
     expect(
       resolveInspectorPanel({ kind: "object.region.magnetic-parameters" })?.id,
     ).toBe("object-region-magnetic-parameters");
     expect(resolveInspectorPanel({ kind: "object.region.material" })?.id).toBe(
-      "object-region-material",
+      "object-region-magnetic-parameters",
     );
     expect(resolveInspectorPanel({ kind: "object.region.mesh" })?.id).toBe(
       "object-region-mesh",
     );
     expect(resolveInspectorPanel({ kind: "object.region.regions" })?.id).toBe(
-      "object-region-regions",
+      "object-region",
     );
     expect(resolveInspectorPanel({ kind: "object.region.diagnostics" })?.id).toBe(
-      "object-region-diagnostics",
+      "object-region",
     );
     expect(resolveInspectorPanel({ kind: "object.region.texture" })?.id).toBe(
       "object-region-texture",
     );
     expect(resolveInspectorPanel({ kind: "object.region.texture" })?.component).toBe(
-      ObjectRegionTextureInspectorPanel,
+      MagneticTextureInspectorPanel,
     );
     expect(
       resolveInspectorPanel({ kind: "object.region-magnetic-texture" })?.id,
-    ).toBe("object-region-magnetic-texture");
+    ).toBe("object-region-texture");
     expect(
       resolveInspectorPanel({ kind: "object.region-magnetic-texture" })?.component,
-    ).toBe(ObjectRegionMagneticTextureInspectorPanel);
+    ).toBe(MagneticTextureInspectorPanel);
     expect(resolveInspectorPanel({ kind: "object.region.visualization" })?.id).toBe(
       "object-region-visualization",
     );
     expect(
       resolveInspectorPanel({ kind: "object.region.visualization" })?.component,
-    ).toBe(ObjectRegionVisualizationPanel);
+    ).toBe(ObjectRegionVisualizationTemplatePanel);
     expect(resolveInspectorPanel({ kind: "object.magnetic-texture" })?.id).toBe(
       "object-magnetic-texture",
     );
     expect(
       resolveInspectorPanel({ kind: "object.magnetic-texture.asset" })?.id,
-    ).toBe("object-magnetic-texture-asset");
+    ).toBe("object-magnetic-texture");
     expect(
       resolveInspectorPanel({ kind: "object.magnetic-texture.load" })?.id,
-    ).toBe("object-magnetic-texture-load");
+    ).toBe("object-magnetic-texture");
     expect(
       resolveInspectorPanel({ kind: "object.magnetic-texture.transform" })?.id,
-    ).toBe("object-magnetic-texture-transform");
+    ).toBe("object-magnetic-texture");
   });
 
-  it("keeps magnetic texture asset, load, and transform routes independently addressable", () => {
+  it("consolidates legacy magnetic texture asset, load, and transform aliases into object.magnetic-texture", () => {
+    const canonical = resolveInspectorPanel({ kind: "object.magnetic-texture" });
     const panels = [
       resolveInspectorPanel({ kind: "object.magnetic-texture.asset" }),
       resolveInspectorPanel({ kind: "object.magnetic-texture.load" }),
       resolveInspectorPanel({ kind: "object.magnetic-texture.transform" }),
     ];
 
-    expect(new Set(panels.map((panel) => panel?.id)).size).toBe(3);
-    expect(panels.map((panel) => panel?.component)).toEqual([
-      ObjectMagneticTextureAssetInspectorPanel,
-      ObjectMagneticTextureLoadInspectorPanel,
-      ObjectMagneticTextureTransformInspectorPanel,
-    ]);
+    expect(new Set(panels.map((panel) => panel?.id))).toEqual(
+      new Set(["object-magnetic-texture"]),
+    );
+    expect(panels.every((panel) => panel?.component === canonical?.component)).toBe(
+      true,
+    );
   });
 
   it("resolves object mesh selections to the object mesh policy panel", () => {
@@ -352,12 +288,12 @@ describe("inspectorRegistry", () => {
   it("keeps FDM grid as a technical detail below the product-level Mesh contract", () => {
     expect(resolveInspectorPanel({ kind: "mesh.root" })?.title).toBe("Mesh");
     expect(resolveInspectorPanel({ kind: "mesh.grid.descriptor" })?.title).toBe(
-      "FDM Grid Descriptor",
+      "FDM Mesh",
     );
   });
 
-  it("routes every structured FDM grid node and FDM cell to the dedicated grid inspector", () => {
-    const kinds = [
+  it("consolidates structured FDM grid sub-nodes onto mesh.grid while keeping fdm.cell distinct", () => {
+    const gridSubKinds = [
       "mesh.grid",
       "mesh.grid.descriptor",
       "mesh.grid.magnetic-support",
@@ -366,34 +302,17 @@ describe("inspectorRegistry", () => {
       "mesh.grid.provenance",
       "mesh.grid.region",
       "mesh.grid.universe-outside-support",
-      "fdm.cell",
     ] as const;
 
-    const panels = kinds.map((kind) => resolveInspectorPanel({ kind }));
+    const gridPanels = gridSubKinds.map((kind) => resolveInspectorPanel({ kind }));
+    const cellPanel = resolveInspectorPanel({ kind: "fdm.cell" });
 
-    expect(panels.map((panel) => panel?.id)).toEqual([
-      "fdm-grid",
-      "fdm-grid-descriptor",
-      "fdm-grid-magnetic-support",
-      "fdm-grid-active-unassigned",
-      "fdm-grid-mask",
-      "fdm-grid-provenance",
-      "fdm-grid-region",
-      "fdm-grid-universe-outside-support",
-      "fdm-cell",
-    ]);
-    expect(panels.map((panel) => panel?.component)).toEqual([
-      FdmGridInspectorPanelRoute,
-      FdmGridDescriptorInspectorPanel,
-      FdmGridMagneticSupportInspectorPanel,
-      FdmGridActiveUnassignedInspectorPanel,
-      FdmGridMaskInspectorPanel,
-      FdmGridProvenanceInspectorPanel,
-      FdmGridRegionInspectorPanel,
-      FdmGridUniverseOutsideSupportInspectorPanel,
-      FdmCellInspectorPanel,
-    ]);
-    expect(panels.every((panel) => panel?.id !== "placeholder")).toBe(true);
+    expect(gridPanels.every((panel) => panel?.id === "fdm-grid")).toBe(true);
+    expect(
+      gridPanels.every((panel) => panel?.component === FdmGridInspectorSpecPanel),
+    ).toBe(true);
+    expect(cellPanel?.id).toBe("fdm-cell");
+    expect(cellPanel?.component).toBe(FdmCellInspectorSpecPanel);
   });
 
   it("does not prefix-match a future structured-grid node", () => {
@@ -414,21 +333,26 @@ describe("inspectorRegistry", () => {
     );
   });
 
-  it("routes canonical hysteresis datasets to the typed result inspector", () => {
+  it("routes canonical hysteresis datasets to the dedicated hysteresis dataset inspector", () => {
     expect(resolveInspectorPanel({ kind: "results.hysteresis.dataset" })?.id).toBe(
-      "analysis-result",
+      "results-hysteresis-dataset",
     );
   });
 
-  it("routes bounded legacy time-domain selections to their dedicated inspector", () => {
-    for (const kind of [
-      "results.time_domain.spectral_feature",
-      "results.time_domain.dsf_point",
-    ]) {
-      const panel = resolveInspectorPanel({ kind });
-      expect(panel?.id).toBe(`frequency-domain-${kind.replace(/[.:]/g, "-")}`);
-      expect(panel?.component).toBe(LegacyTimeDomainResultInspector);
-    }
+  it("redirects legacy time-domain selections to their canonical dynamics and dispersion owners", () => {
+    const spectral = resolveInspectorPanel({
+      kind: "results.time_domain.spectral_feature",
+    });
+    expect(spectral?.id).toBe("frequency-domain-results-dynamics-root");
+    expect(spectral?.component).toBe(DynamicsResultInspector);
+
+    const dsfPoint = resolveInspectorPanel({
+      kind: "results.time_domain.dsf_point",
+    });
+    expect(dsfPoint?.id).toBe(
+      "frequency-domain-results-dispersion-driven-field_at_k",
+    );
+    expect(dsfPoint?.component).toBe(DispersionResponseFieldAtKResultInspector);
   });
 
   it("routes the Results root to a Results overview rather than Field Quantity", () => {
@@ -452,30 +376,30 @@ describe("inspectorRegistry", () => {
   it("gives the multilayer Airbox target its own inspector", () => {
     const panel = resolveInspectorPanel({ kind: "airbox.multilayer.target" });
     expect(panel?.id).toBe("fdm-multilayer-airbox-target");
-    expect(panel?.component).toBe(FdmMultilayerAirboxTargetPanel);
+    expect(panel?.component).toBe(AirboxMultilayerTargetInspectorSpecPanel);
   });
 
   it("gives every Airbox mesh branch a distinct single-purpose panel", () => {
     const expected = [
-      ["airbox.root", "airbox-overview", AirboxOverviewLanePanel],
-      ["airbox.mesh", "airbox-mesh-overview", AirboxMeshOverviewLanePanel],
+      ["airbox.root", "airbox-overview", AirboxRootInspectorSpecPanel],
+      ["airbox.mesh", "airbox-mesh-overview", AirboxMeshInspectorSpecPanel],
       [
         "airbox.mesh.parameters",
         "airbox-mesh-parameters",
-        AirboxMeshParametersLanePanel,
+        AirboxMeshParametersInspectorSpecPanel,
       ],
       [
         "airbox.mesh.quality-gates",
         "airbox-mesh-quality-gates",
-        AirboxMeshQualityGatesLanePanel,
+        AirboxMeshQualityGatesInspectorSpecPanel,
       ],
       [
         "airbox.mesh.statistics",
         "airbox-mesh-statistics",
-        AirboxMeshStatisticsLanePanel,
+        AirboxMeshStatisticsInspectorSpecPanel,
       ],
-      ["airbox.mesh.topology", "airbox-mesh-topology", AirboxMeshTopologyLanePanel],
-      ["airbox.mesh.build", "airbox-mesh-build", AirboxMeshBuildLanePanel],
+      ["airbox.mesh.topology", "airbox-mesh-topology", AirboxMeshTopologyInspectorSpecPanel],
+      ["airbox.mesh.build", "airbox-mesh-build", AirboxMeshBuildInspectorSpecPanel],
     ] as const;
 
     for (const [kind, panelId, component] of expected) {
@@ -516,15 +440,15 @@ describe("inspectorRegistry", () => {
     expect(panels[0]?.component).toBe(AirboxVisualizationDebugInspectorPanel);
   });
 
-  it("resolves cross-section selections to the cross-section inspector", () => {
+  it("redirects legacy cross-section selections to canonical visualizations-2d routes", () => {
     expect(resolveInspectorPanel({ kind: "mesh.cross-section" })?.id).toBe(
-      "cross-section",
+      "visualizations-2d-root",
     );
     expect(resolveInspectorPanel({ kind: "mesh.cross-section.draft" })?.id).toBe(
-      "cross-section-draft",
+      "visualizations-2d-draft",
     );
     expect(resolveInspectorPanel({ kind: "mesh.cross-section.plot" })?.id).toBe(
-      "cross-section-plot",
+      "visualizations-2d-plot",
     );
   });
 
@@ -559,99 +483,115 @@ describe("inspectorRegistry", () => {
     expect(
       resolveInspectorPanel({ kind: "study.stage.frequency_response.excitation" })
         ?.id,
-    ).toBe(frequencyDomainPanelId("study.stage.frequency_response.excitation"));
+    ).toBe(frequencyDomainPanelId("study.stage.frequency_response"));
     expect(resolveInspectorPanel({ kind: "study.stage.save_state" })?.id).toBe(
       "study-stage-save-state",
     );
   });
 
   it.each([
-    ["study.stage.eigenmodes", EigenmodesStageOverviewInspectorPanel],
-    ["study.stage.eigenmodes.setup", EigenmodesSetupStageInspectorPanel],
+    ["study.stage.eigenmodes", "study.stage.eigenmodes", EigenmodesStageOverviewInspectorPanel],
+    ["study.stage.eigenmodes.setup", "study.stage.eigenmodes", EigenmodesStageOverviewInspectorPanel],
     [
       "study.stage.eigenmodes.calculation_mode",
-      EigenmodesCalculationModeStageInspectorPanel,
+      "study.stage.eigenmodes",
+      EigenmodesStageOverviewInspectorPanel,
     ],
     [
       "study.stage.eigenmodes.equilibrium",
-      EigenmodesEquilibriumStageInspectorPanel,
+      "study.stage.eigenmodes",
+      EigenmodesStageOverviewInspectorPanel,
     ],
-    ["study.stage.eigenmodes.operator", EigenmodesOperatorStageInspectorPanel],
-    ["study.stage.eigenmodes.boundary", EigenmodesBoundaryStageInspectorPanel],
+    ["study.stage.eigenmodes.operator", "study.stage.eigenmodes", EigenmodesStageOverviewInspectorPanel],
+    ["study.stage.eigenmodes.boundary", "study.stage.eigenmodes", EigenmodesStageOverviewInspectorPanel],
     [
       "study.stage.eigenmodes.periodic_pairs",
-      EigenmodesPeriodicPairsStageInspectorPanel,
+      "study.stage.eigenmodes",
+      EigenmodesStageOverviewInspectorPanel,
     ],
-    ["study.stage.eigenmodes.k_path", EigenmodesKPathStageInspectorPanel],
-    ["study.stage.eigenmodes.solver", EigenmodesSolverStageInspectorPanel],
-    ["study.stage.eigenmodes.outputs", EigenmodesOutputsStageInspectorPanel],
+    ["study.stage.eigenmodes.k_path", "study.stage.eigenmodes", EigenmodesStageOverviewInspectorPanel],
+    ["study.stage.eigenmodes.solver", "study.stage.eigenmodes", EigenmodesStageOverviewInspectorPanel],
+    ["study.stage.eigenmodes.outputs", "study.stage.eigenmodes", EigenmodesStageOverviewInspectorPanel],
     [
       "study.stage.eigenmodes.diagnostics",
-      EigenmodesDiagnosticsStageInspectorPanel,
+      "study.stage.eigenmodes",
+      EigenmodesStageOverviewInspectorPanel,
     ],
     [
+      "study.stage.frequency_response",
       "study.stage.frequency_response",
       FrequencyResponseStageOverviewInspectorPanel,
     ],
     [
       "study.stage.frequency_response.setup",
-      FrequencyResponseSetupStageInspectorPanel,
+      "study.stage.frequency_response",
+      FrequencyResponseStageOverviewInspectorPanel,
     ],
     [
       "study.stage.frequency_response.calculation_mode",
-      FrequencyResponseCalculationModeStageInspectorPanel,
+      "study.stage.frequency_response",
+      FrequencyResponseStageOverviewInspectorPanel,
     ],
     [
       "study.stage.frequency_response.equilibrium",
-      FrequencyResponseEquilibriumStageInspectorPanel,
+      "study.stage.frequency_response",
+      FrequencyResponseStageOverviewInspectorPanel,
     ],
     [
       "study.stage.frequency_response.operator",
-      FrequencyResponseOperatorStageInspectorPanel,
+      "study.stage.frequency_response",
+      FrequencyResponseStageOverviewInspectorPanel,
     ],
     [
       "study.stage.frequency_response.boundary",
-      FrequencyResponseBoundaryStageInspectorPanel,
+      "study.stage.frequency_response",
+      FrequencyResponseStageOverviewInspectorPanel,
     ],
     [
       "study.stage.frequency_response.periodic_pairs",
-      FrequencyResponsePeriodicPairsStageInspectorPanel,
+      "study.stage.frequency_response",
+      FrequencyResponseStageOverviewInspectorPanel,
     ],
     [
       "study.stage.frequency_response.k_grid",
-      FrequencyResponseKGridStageInspectorPanel,
+      "study.stage.frequency_response",
+      FrequencyResponseStageOverviewInspectorPanel,
     ],
     [
       "study.stage.frequency_response.excitation",
-      FrequencyResponseExcitationStageInspectorPanel,
+      "study.stage.frequency_response",
+      FrequencyResponseStageOverviewInspectorPanel,
     ],
     [
       "study.stage.frequency_response.sweep",
-      FrequencyResponseSweepStageInspectorPanel,
+      "study.stage.frequency_response",
+      FrequencyResponseStageOverviewInspectorPanel,
     ],
     [
       "study.stage.frequency_response.solver",
-      FrequencyResponseSolverStageInspectorPanel,
+      "study.stage.frequency_response",
+      FrequencyResponseStageOverviewInspectorPanel,
     ],
     [
       "study.stage.frequency_response.outputs",
-      FrequencyResponseOutputsStageInspectorPanel,
+      "study.stage.frequency_response",
+      FrequencyResponseStageOverviewInspectorPanel,
     ],
     [
       "study.stage.frequency_response.diagnostics",
-      FrequencyResponseDiagnosticsStageInspectorPanel,
+      "study.stage.frequency_response",
+      FrequencyResponseStageOverviewInspectorPanel,
     ],
   ])(
-    "routes frequency-domain stage node %s to its dedicated inspector component",
-    (kind, expectedComponent) => {
+    "consolidates frequency-domain stage node %s onto canonical stage route %s",
+    (kind, canonicalKind, expectedComponent) => {
       const panel = resolveInspectorPanel({ kind });
-      expect(panel?.id).toBe(frequencyDomainPanelId(kind));
+      expect(panel?.id).toBe(frequencyDomainPanelId(canonicalKind));
       expect(panel?.component).toBe(expectedComponent);
-      expect(panel?.component).not.toBe(StudyStageInspectorRouter);
     },
   );
 
-  it("routes all frequency-domain result, resource, job, and diagnostic nodes away from placeholder", () => {
+  it("routes all canonical frequency-domain selection kinds away from placeholder", () => {
     for (const kind of FREQUENCY_DOMAIN_INSPECTOR_SELECTION_KINDS) {
       expect(resolveInspectorPanel({ kind })?.id, kind).toBe(
         frequencyDomainPanelId(kind),
@@ -659,158 +599,74 @@ describe("inspectorRegistry", () => {
     }
   });
 
-  it("routes primary frequency-domain workflow nodes to dedicated inspector components", () => {
+  it("redirects retired solver-first frequency-domain aliases to physics-first canonical owners", () => {
+    expect(resolveInspectorPanel({ kind: "results.frequency_domain.root" })?.id).toBe(
+      frequencyDomainPanelId("results.resonance.root"),
+    );
+    expect(resolveInspectorPanel({ kind: "results.frequency_domain.run" })?.id).toBe(
+      "results-overview",
+    );
     expect(
-      resolveInspectorPanel({ kind: "results.frequency_domain.root" })
-        ?.component,
-    ).toBe(FrequencyDomainOverviewInspectorPanel);
+      resolveInspectorPanel({ kind: "results.frequency_domain.calculation_modes" })?.id,
+    ).toBe(frequencyDomainPanelId("results.resonance.root"));
     expect(
-      resolveInspectorPanel({ kind: "results.frequency_domain.run" })
-        ?.component,
-    ).toBe(FrequencyDomainRunInspectorPanel);
+      resolveInspectorPanel({ kind: "results.frequency_domain.dispersion" })?.id,
+    ).toBe(frequencyDomainPanelId("results.dispersion.root"));
     expect(
-      resolveInspectorPanel({ kind: "results.frequency_domain.calculation_modes" })
-        ?.component,
-    ).toBe(FrequencyDomainCalculationModesInspectorPanel);
+      resolveInspectorPanel({ kind: "results.frequency_domain.response_map" })?.id,
+    ).toBe(frequencyDomainPanelId("results.dispersion.driven.response_map"));
+    expect(resolveInspectorPanel({ kind: "results.frequency_domain.fmr" })?.id).toBe(
+      frequencyDomainPanelId("results.resonance.root"),
+    );
     expect(
-      resolveInspectorPanel({ kind: "results.frequency_domain.dispersion" })
-        ?.component,
-    ).toBe(FrequencyDomainDispersionInspectorPanel);
+      resolveInspectorPanel({ kind: "results.frequency_domain.fmr_modal_spectrum" })?.id,
+    ).toBe(frequencyDomainPanelId("results.resonance.modal.spectrum"));
     expect(
-      resolveInspectorPanel({ kind: "results.frequency_domain.response_map" })
-        ?.component,
-    ).toBe(FrequencyDomainResponseMapInspectorPanel);
-  });
-
-  it("routes primary FMR result objects to dedicated inspector components", () => {
+      resolveInspectorPanel({ kind: "results.frequency_domain.fmr_peaks" })?.id,
+    ).toBe(frequencyDomainPanelId("results.resonance.driven.peaks"));
     expect(
-      resolveInspectorPanel({ kind: "results.frequency_domain.fmr" })
-        ?.component,
-    ).toBe(FmrOverviewInspectorPanel);
+      resolveInspectorPanel({ kind: "results.frequency_domain.fmr_peak" })?.id,
+    ).toBe(frequencyDomainPanelId("results.resonance.driven.peaks"));
     expect(
-      resolveInspectorPanel({
-        kind: "results.frequency_domain.fmr_modal_spectrum",
-      })?.component,
-    ).toBe(FmrModalSpectrumInspectorPanel);
-    expect(
-      resolveInspectorPanel({ kind: "results.frequency_domain.fmr_peaks" })
-        ?.component,
-    ).toBe(FmrPeaksInspectorPanel);
-    expect(
-      resolveInspectorPanel({ kind: "results.frequency_domain.fmr_peak" })
-        ?.component,
-    ).toBe(FmrPeakInspectorPanel);
-    expect(
-      resolveInspectorPanel({ kind: "results.frequency_domain.comparison" })
-        ?.component,
+      resolveInspectorPanel({ kind: "results.frequency_domain.comparison" })?.component,
     ).toBe(FmrComparisonInspectorPanel);
     expect(
-      resolveInspectorPanel({ kind: "results.frequency_domain.exports" })
-        ?.component,
-    ).toBe(FrequencyDomainExportsInspectorPanel);
+      resolveInspectorPanel({ kind: "results.frequency_domain.exports" })?.id,
+    ).toBe(frequencyDomainPanelId("results.exports.root"));
+    expect(resolveInspectorPanel({ kind: "results.eigen.root" })?.id).toBe(
+      frequencyDomainPanelId("results.resonance.modal.stage"),
+    );
+    expect(resolveInspectorPanel({ kind: "results.eigen.mode" })?.id).toBe(
+      frequencyDomainPanelId("results.resonance.modal.mode"),
+    );
+    expect(resolveInspectorPanel({ kind: "results.eigen.branches" })?.id).toBe(
+      frequencyDomainPanelId("results.dispersion.modal.branches"),
+    );
     expect(
-      resolveInspectorPanel({ kind: "results.eigen.root" })?.component,
-    ).toBe(EigenOverviewInspectorPanel);
+      resolveInspectorPanel({ kind: "results.frequency_response.root" })?.id,
+    ).toBe(frequencyDomainPanelId("results.resonance.driven.stage"));
     expect(
-      resolveInspectorPanel({ kind: "results.eigen.study" })?.component,
-    ).toBe(EigenStudyInspectorPanel);
-    expect(
-      resolveInspectorPanel({ kind: "results.eigen.mode" })?.component,
-    ).toBe(EigenModeInspectorPanel);
-    expect(
-      resolveInspectorPanel({ kind: "results.eigen.modes" })?.component,
-    ).toBe(EigenModesInspectorPanel);
-    expect(
-      resolveInspectorPanel({ kind: "results.eigen.spectrum" })?.component,
-    ).toBe(EigenSpectrumInspectorPanel);
-    expect(
-      resolveInspectorPanel({ kind: "results.eigen.k_path" })?.component,
-    ).toBe(EigenKPathInspectorPanel);
-    expect(
-      resolveInspectorPanel({ kind: "results.eigen.dispersion" })?.component,
-    ).toBe(EigenDispersionInspectorPanel);
-    expect(
-      resolveInspectorPanel({ kind: "results.eigen.branches" })?.component,
-    ).toBe(EigenBranchesInspectorPanel);
-    expect(
-      resolveInspectorPanel({ kind: "results.eigen.branch" })?.component,
-    ).toBe(EigenBranchInspectorPanel);
-    expect(
-      resolveInspectorPanel({ kind: "results.eigen.provenance" })?.component,
-    ).toBe(EigenProvenanceInspectorPanel);
-    expect(
-      resolveInspectorPanel({ kind: "results.eigen.diagnostics" })?.component,
-    ).toBe(EigenDiagnosticsInspectorPanel);
-    expect(
-      resolveInspectorPanel({ kind: "results.frequency_response.root" })
-        ?.component,
-    ).toBe(FrequencyResponseOverviewInspectorPanel);
-    expect(
-      resolveInspectorPanel({ kind: "results.frequency_response.study" })
-        ?.component,
-    ).toBe(FrequencyResponseStudyInspectorPanel);
-    expect(
-      resolveInspectorPanel({
-        kind: "results.frequency_response.frequency_points",
-      })?.component,
-    ).toBe(FrequencyResponseFrequencyPointsInspectorPanel);
-    expect(
-      resolveInspectorPanel({
-        kind: "results.frequency_response.frequency_point",
-      })?.component,
-    ).toBe(FrequencyResponsePointInspectorPanel);
-    expect(
-      resolveInspectorPanel({
-        kind: "results.frequency_response.observable",
-      })?.component,
-    ).toBe(FrequencyResponseObservableInspectorPanel);
-    expect(
-      resolveInspectorPanel({
-        kind: "results.frequency_response.observables",
-      })?.component,
-    ).toBe(FrequencyResponseObservablesInspectorPanel);
-    expect(
-      resolveInspectorPanel({ kind: "results.frequency_response.sweep" })
-        ?.component,
-    ).toBe(FrequencyResponseSweepInspectorPanel);
-    expect(
-      resolveInspectorPanel({ kind: "results.frequency_response.progress" })
-        ?.component,
-    ).toBe(FrequencyResponseProgressInspectorPanel);
-    expect(
-      resolveInspectorPanel({
-        kind: "results.frequency_response.cancel_requested",
-      })?.component,
-    ).toBe(FrequencyResponseCancelRequestedInspectorPanel);
-    expect(
-      resolveInspectorPanel({
-        kind: "results.frequency_response.provenance",
-      })?.component,
-    ).toBe(FrequencyResponseProvenanceInspectorPanel);
-    expect(
-      resolveInspectorPanel({
-        kind: "results.frequency_response.diagnostics",
-      })?.component,
-    ).toBe(FrequencyResponseDiagnosticsInspectorPanel);
+      resolveInspectorPanel({ kind: "results.frequency_response.sweep" })?.id,
+    ).toBe(frequencyDomainPanelId("results.resonance.driven.spectrum"));
   });
 
-  it("keeps physics-first provenance inspectors distinct by product family", () => {
+  it("folds physics-first provenance nodes into their parent stage inspectors", () => {
     expect(
       resolveInspectorPanel({ kind: "results.resonance.modal.provenance" })
         ?.component,
-    ).toBe(ResonanceModalProvenanceResultInspector);
+    ).toBe(ResonanceModalStageResultInspector);
     expect(
       resolveInspectorPanel({ kind: "results.resonance.driven.provenance" })
         ?.component,
-    ).toBe(ResonanceDrivenProvenanceResultInspector);
+    ).toBe(ResonanceDrivenStageResultInspector);
     expect(
       resolveInspectorPanel({ kind: "results.dispersion.modal.provenance" })
         ?.component,
-    ).toBe(DispersionModalProvenanceResultInspector);
+    ).toBe(DispersionModalStageResultInspector);
     expect(
       resolveInspectorPanel({ kind: "results.dispersion.driven.provenance" })
         ?.component,
-    ).toBe(DispersionDrivenProvenanceResultInspector);
+    ).toBe(DispersionDrivenStageResultInspector);
   });
 
   it("routes every non-authoring frequency-domain node to a dedicated inspector", () => {
@@ -849,7 +705,6 @@ describe("inspectorRegistry", () => {
       "results.resonance.modal.coupling",
       "results.resonance.driven.spectrum",
       "results.resonance.driven.peaks",
-      "results.resonance.driven.frequency_points",
       "results.resonance.driven.fields",
       "results.resonance.driven.field",
       "results.dispersion.root",

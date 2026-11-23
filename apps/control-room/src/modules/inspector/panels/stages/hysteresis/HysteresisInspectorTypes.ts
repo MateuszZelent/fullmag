@@ -24,7 +24,7 @@ import type {
   ActiveHysteresisBranchSelection,
   ActiveHysteresisSnapshotSelection,
 } from "./HysteresisInspectorUtils";
-import type { StageInspectorFrameProps } from "../StageInspectorFrame";
+import type { StudyStageDraft } from "../../StudyStageAuthoringModel";
 
 export interface HysteresisInspectorCommonProps {
   activeSnapshot: ActiveHysteresisSnapshotSelection | null;
@@ -33,12 +33,12 @@ export interface HysteresisInspectorCommonProps {
   adaptiveRefinement: HysteresisAdaptiveRefinementSchema | null | undefined;
   angularFamily: HysteresisAngularFamilyResource | null | undefined;
   branches: HysteresisBranchSchema[];
-  draft: StageInspectorFrameProps["draft"];
+  draft: StudyStageDraft | null;
   executionTree: HysteresisExecutionTreeResource | null | undefined;
   kernel: KernelApi;
   metrics: HysteresisMetricsSchema | null | undefined;
   minorLoops: HysteresisMinorLoopSchema[];
-  onUpdateDraft: StageInspectorFrameProps["onUpdateDraft"];
+  onUpdateDraft: (patch: Partial<StudyStageDraft>) => void;
   orientation: HysteresisOrientationSchema | null | undefined;
   points: HysteresisPointSchema[];
   progress: HysteresisProgressSchema | null | undefined;

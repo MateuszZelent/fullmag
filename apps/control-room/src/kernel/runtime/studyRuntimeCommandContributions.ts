@@ -2958,7 +2958,6 @@ export const STUDY_RUNTIME_COMMANDS: CommandContribution[] = [
         artifact_ref: artifactRef,
         target,
         quantity_id: quantityId,
-        format: "field_state_json",
       }, sessionRequestOptions(context));
       const obsoleteAfterInspection = obsoleteSessionResult(context);
       if (obsoleteAfterInspection) return obsoleteAfterInspection;

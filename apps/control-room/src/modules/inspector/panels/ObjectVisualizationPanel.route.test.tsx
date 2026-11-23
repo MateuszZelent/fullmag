@@ -136,7 +136,8 @@ vi.mock("@/kernel/visualization/useVisualizationStateResource", () => ({
   },
 }));
 
-vi.mock("@/kernel/resources/geometryLifecycleResources", () => ({
+vi.mock("@/kernel/resources/geometryLifecycleResources", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/kernel/resources/geometryLifecycleResources")>()),
   useFdmMultilayerLayoutResource: () => ({
     data: null,
     error: null,
@@ -292,6 +293,10 @@ vi.mock("../visualization/PlanarVisualizationSection", () => ({
 vi.mock("../visualization/VisualizationContextSwitch", () => ({
   VisualizationContextSwitch: () => null,
   VisualizationContextSwitchControl: ({ onPlanarActivate }: { onPlanarActivate?: () => void }) => {
+    testState.planarActivate = onPlanarActivate ?? null;
+    return null;
+  },
+  VisualizationViewSwitch: ({ onPlanarActivate }: { onPlanarActivate?: () => void }) => {
     testState.planarActivate = onPlanarActivate ?? null;
     return null;
   },

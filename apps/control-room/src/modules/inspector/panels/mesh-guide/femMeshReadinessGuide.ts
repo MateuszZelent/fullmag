@@ -35,12 +35,18 @@ export type FemMeshGuideOverallStatus =
 export type GuideSelection = Omit<Selection, "moduleSource">;
 
 export type FemMeshGuideActionTarget =
-  | { kind: "select-node"; selection: GuideSelection; tab?: "geometry" | "mesh" }
+  | {
+      kind: "select-node";
+      selection: GuideSelection;
+      tab?: "geometry" | "mesh";
+      focusRow?: string;
+    }
   | { kind: "execute-command"; commandId: string; label: string }
   | {
       kind: "focus-inspector-section";
       selection: GuideSelection;
       sectionId?: string;
+      focusRow?: string;
     };
 
 export interface FemMeshGuideParameterChip {
@@ -353,7 +359,7 @@ function buildObjectsRootSelection(): GuideSelection {
 
 function buildObjectGeneralSelection(obj: ParsedSceneObject): GuideSelection {
   return {
-    kind: "object",
+    kind: "object.root",
     label: obj.name,
     nodeId: `model:object:${obj.id}`,
     objectId: obj.id,
@@ -1071,7 +1077,7 @@ export function evaluateFemMeshReadinessGuide(
     const check = asRecord(item);
     if (!check) continue;
     const id = asString(check.id) ?? asString(check.metric) ?? "gate";
-    const status = (asString(check.status) ?? "unknown").toLowerCase();
+    const status = (asString(check.status) ?? "").toLowerCase();
     const value =
       asString(check.value) ??
       (asNumber(check.value) !== null ? String(asNumber(check.value)) : "");

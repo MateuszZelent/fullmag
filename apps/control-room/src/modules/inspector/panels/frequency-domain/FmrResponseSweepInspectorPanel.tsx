@@ -355,7 +355,6 @@ function FmrResponsePointBrowser({
               aria-label={`Inspect response point ${point.frequencyIndex ?? index}`}
               className="fm-inspector-action-button"
               size="sm"
-              title="Open this response frequency point inspector"
               type="button"
               variant="secondary"
               onClick={() => onSelectResponsePoint(point)}
@@ -367,12 +366,8 @@ function FmrResponsePointBrowser({
               aria-label={`Plot response point ${point.frequencyIndex ?? index} in 3D`}
               className="fm-inspector-action-button"
               disabled={!point.fieldId}
+              disabledReason="This response point has no linked 3D field payload"
               size="sm"
-              title={
-                point.fieldId
-                  ? "Plot this response field in 3D"
-                  : "This response point has no linked 3D field payload"
-              }
               type="button"
               variant="primary"
               onClick={() => onPlotResponsePoint(point)}

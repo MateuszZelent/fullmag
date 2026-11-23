@@ -24,8 +24,11 @@ export interface ToolbarRovingFocusOptions {
 
 export function toolbarItems(toolbar: HTMLElement, itemSelector: string): HTMLElement[] {
   return Array.from(toolbar.querySelectorAll<HTMLElement>(itemSelector)).filter(
-    // Items nested in a child toolbar belong to that toolbar's own tab stop.
-    (item) => item.closest("[role='toolbar']") === toolbar,
+    // Items nested in a child toolbar belong to that toolbar's own tab stop;
+    // items a container query folded into an overflow menu are skipped.
+    (item) =>
+      item.closest("[role='toolbar']") === toolbar &&
+      (typeof item.checkVisibility !== "function" || item.checkVisibility()),
   );
 }
 

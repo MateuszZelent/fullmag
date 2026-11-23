@@ -14,9 +14,10 @@ function Switch({
     <SwitchPrimitive.Root
       ref={ref}
       className={cn("fm-switch", className)}
+      data-slot="switch"
       {...props}
     >
-      <SwitchPrimitive.Thumb className="fm-switch__thumb" />
+      <SwitchPrimitive.Thumb className="fm-switch__thumb" data-slot="switch-thumb" />
     </SwitchPrimitive.Root>
   );
 }

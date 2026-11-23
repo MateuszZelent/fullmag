@@ -673,9 +673,9 @@ function dispersionValidationIntentSummary(
   const validation = record(manifestPayload?.validation);
   const dispersionValidation = record(validation?.dispersion_validation);
   if (!dispersionValidation) return "not available";
-  const kind = stringValue(dispersionValidation.kind) ?? "unknown";
+  const kind = stringValue(dispersionValidation.kind) ?? "—";
   const analyticModel =
-    stringValue(dispersionValidation.analytic_model) ?? "unknown";
+    stringValue(dispersionValidation.analytic_model) ?? "—";
   const maxK = finiteNumber(dispersionValidation.max_k_rad_per_m);
   const frequencyWindow = record(dispersionValidation.frequency_window_hz);
   const frequencyMin = finiteNumber(frequencyWindow?.min);
@@ -687,7 +687,7 @@ function dispersionValidationIntentSummary(
     .flatMap((scenario) => {
       const scenarioRecord = record(scenario);
       if (!scenarioRecord) return [];
-      const geometry = stringValue(scenarioRecord.geometry) ?? "unknown";
+      const geometry = stringValue(scenarioRecord.geometry) ?? "—";
       const branchId = stringValue(scenarioRecord.branch_id) ?? "unlabelled";
       const sampleIndices = Array.isArray(scenarioRecord.sample_indices)
         ? scenarioRecord.sample_indices.length
@@ -883,9 +883,16 @@ export function useEigenBranchesSummary() {
     representativeMode: representativePoint
       ? `sample ${representativePoint.sampleIndex}, mode ${representativePoint.rawModeIndex}, ${formatFrequency(representativePoint.frequencyRealHz)}`
       : "not available",
-    sampleCoverage: sampleValues.length
-      ? `sample ${Math.min(...sampleValues)}-${Math.max(...sampleValues)}`
-      : "not available",
+    sampleCoverage: (() => {
+      if (sampleValues.length === 0) return "not available";
+      let minSample = sampleValues[0]!;
+      let maxSample = sampleValues[0]!;
+      for (const v of sampleValues) {
+        if (v < minSample) minSample = v;
+        if (v > maxSample) maxSample = v;
+      }
+      return `sample ${minSample}-${maxSample}`;
+    })(),
   };
 }
 
@@ -945,10 +952,10 @@ export function useEigenSpectrumSummary() {
       identityParts.length > 0 ? identityParts.join("; ") : "not published",
     fieldAvailability:
       fieldsAvailable == null
-        ? "unknown"
+        ? "—"
         : fieldsAvailable
           ? "available"
-          : "unavailable",
+          : "not published",
     fieldOverlayCount,
     frequencyRange: formatFrequencyRange(frequencies),
     modeCount: spectrumModel.points.length,
@@ -958,12 +965,12 @@ export function useEigenSpectrumSummary() {
     residualCoverage: `${residualCount}/${spectrumModel.points.length} mode(s)`,
     solveStatus:
       solveSucceeded == null
-        ? "unknown"
+        ? "—"
         : solveSucceeded
           ? "succeeded"
           : "failed",
     spectrumCompleteness:
-      stringValue(payload?.spectrum_completeness) ?? "unknown",
+      stringValue(payload?.spectrum_completeness) ?? "—",
     spectrumModel,
     spectrumPublication: spectrum.status === "ready" && spectrum.data?.status === "ready"
       ? spectrum.data
@@ -971,7 +978,7 @@ export function useEigenSpectrumSummary() {
     spectrumResource: ANALYSIS_FREQUENCY_DOMAIN_EIGEN_SPECTRUM_V2_PATH,
     windowCertificate:
       windowComplete == null
-        ? "unknown"
+        ? "—"
         : windowComplete
           ? "complete"
           : "incomplete",
@@ -1024,11 +1031,11 @@ export function useFrequencyDomainResponseMapSummary() {
   const fieldCount =
     responseFieldResourcesFromManifest(manifestPayload).length ||
     responseModel.points.filter((point) => point.fieldId).length;
-  // The capability bit describes a legal execution lane, not a published
-  // k-by-f response resource. Until that typed resource is exposed, keep the
-  // result unavailable and fall back to the verified FMR response sweep.
+  const responseMapArtifact = record(manifestPayload?.response_map) as {
+    status?: string;
+  } | null;
   const responseMapAvailability =
-    responseMapAvailabilityFromTypedResource(null);
+    responseMapAvailabilityFromTypedResource(responseMapArtifact);
 
   return {
     availability: responseMapAvailability,

@@ -1,13 +1,20 @@
+/* Viewport toolbar: one glass pill that never wraps. Tiers follow the width
+   of the 3D viewport (container `fm-viewport-3d`), not the window:
+   wide      — icon + label or current value for every control;
+   < 60rem   — icons only (chevrons keep menus recognisable);
+   < 34rem   — the Output group folds into the trailing "More" menu.
+   The toolbar is not a size container itself: inline-size containment on a
+   shrink-to-fit pill would collapse its intrinsic width. */
 .fm-viewport-3d-toolbar {
-  container-type: inline-size;
   display: flex;
+  flex-wrap: nowrap;
   max-width: 100%;
   min-width: 0;
   height: var(--fm-control-height-regular);
   align-items: center;
   gap: var(--fm-space-1);
   overflow: visible;
-  padding-inline: var(--fm-space-2);
+  padding-inline: var(--fm-space-1);
 }
 
 .fm-viewport-3d-toolbar__group {
@@ -21,9 +28,28 @@
   border-radius: var(--fm-radius-pill);
   width: auto;
   min-width: var(--fm-control-height-compact);
+  min-height: var(--fm-control-height-compact);
   gap: var(--fm-space-1);
   padding-inline: var(--fm-space-2);
+  color: var(--fm-text-secondary);
   white-space: nowrap;
+}
+
+/* Toggles follow the selection rule: raised surface, domain-hued glyph. */
+.fm-viewport-3d-toolbar__button[aria-pressed="true"],
+.fm-viewport-3d-toolbar__button[aria-expanded="true"] {
+  background: var(--fm-raised-bg);
+  box-shadow: var(--fm-elevation-sm), inset 0 0 0 1px color-mix(in srgb, var(--fm-hue-visualization) 45%, transparent);
+  color: var(--fm-hue-visualization);
+}
+
+.fm-viewport-3d-toolbar__button[data-render-mode="presentation"] > svg:first-child {
+  color: var(--fm-accent);
+}
+
+.fm-viewport-3d-toolbar__button:focus-visible {
+  outline: none;
+  box-shadow: var(--fm-focus-ring);
 }
 
 .fm-viewport-3d-toolbar__label,
@@ -33,6 +59,27 @@
 
 .fm-viewport-3d-toolbar__current {
   color: var(--fm-text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.fm-viewport-3d-toolbar__label + .fm-viewport-3d-toolbar__chevron,
+.fm-viewport-3d-toolbar__current + .fm-viewport-3d-toolbar__chevron {
+  margin-inline-start: -2px;
+}
+
+.fm-viewport-3d-toolbar__chevron {
+  flex: none;
+  opacity: 0.7;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .fm-viewport-3d-toolbar__chevron {
+    transition: rotate var(--fm-duration-micro) var(--fm-ease-out-soft);
+  }
+}
+
+.fm-viewport-3d-toolbar__button[aria-expanded="true"] .fm-viewport-3d-toolbar__chevron {
+  rotate: 180deg;
 }
 
 .fm-viewport-3d-toolbar__separator {
@@ -41,26 +88,27 @@
   margin: var(--fm-space-2) 1px;
 }
 
-.fm-viewport-3d-toolbar__layers-content {
-  display: grid;
-  width: max-content;
-  min-width: 240px;
-  max-width: min(360px, calc(100vw - 16px));
-  max-height: min(70dvh, var(--radix-popover-content-available-height, 70dvh));
-  overflow-y: auto;
-  gap: var(--fm-space-2);
+.fm-viewport-3d-toolbar__more {
+  display: none;
 }
 
-@container (max-width: 760px) {
+@container fm-viewport-3d (max-width: 60rem) {
   .fm-viewport-3d-toolbar__label,
   .fm-viewport-3d-toolbar__current {
     display: none;
   }
 
   .fm-viewport-3d-toolbar__button {
-    width: var(--fm-control-height-compact);
-    min-width: var(--fm-control-height-compact);
     padding-inline: 0;
+  }
+
+  .fm-viewport-3d-toolbar__button:not(.fm-viewport-3d-toolbar__menu-button) {
+    width: var(--fm-control-height-compact);
+  }
+
+  .fm-viewport-3d-toolbar__menu-button {
+    gap: 0;
+    padding-inline: var(--fm-space-1-5) var(--fm-space-1);
   }
 
   .fm-viewport-3d-toolbar__separator {
@@ -68,37 +116,91 @@
   }
 }
 
-/* Visualization mode: two segments in the toolbar pill; the active one is raised. */
-.fm-viewport-3d-toolbar__mode {
+@container fm-viewport-3d (max-width: 34rem) {
+  .fm-viewport-3d-toolbar [data-collapsible] {
+    display: none;
+  }
+
+  .fm-viewport-3d-toolbar__more {
+    display: inline-flex;
+  }
+}
+
+/* Menus opened from the toolbar: grouped options with a short summary. */
+.fm-viewport-3d-toolbar__menu {
+  min-width: 15rem;
+  max-width: min(20rem, calc(100vw - var(--fm-space-4)));
+}
+
+.fm-viewport-3d-toolbar__view-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 2px;
+}
+
+.fm-viewport-3d-toolbar__option {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  column-gap: var(--fm-space-2);
+  row-gap: 1px;
+  align-items: center;
+}
+
+.fm-viewport-3d-toolbar__option > svg {
+  grid-row: span 2;
+  color: var(--fm-hue-visualization);
+}
+
+.fm-viewport-3d-toolbar__option:not(:has(> svg)) {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.fm-viewport-3d-toolbar__option-name {
+  color: var(--fm-text-primary);
+  font-weight: var(--fm-font-weight-medium);
+}
+
+.fm-viewport-3d-toolbar__option-summary {
+  color: var(--fm-text-muted);
+  font-size: var(--fm-font-size-2xs);
+  white-space: normal;
+}
+
+.fm-viewport-3d-toolbar__layers-content {
+  display: grid;
+  width: max-content;
+  min-width: 240px;
+  max-width: min(360px, calc(100vw - var(--fm-space-4)));
+  max-height: min(70dvh, var(--radix-popover-content-available-height, 70dvh));
+  overflow-y: auto;
+  gap: var(--fm-space-2);
+}
+
+@media (forced-colors: active) {
+  .fm-viewport-3d-toolbar__button[aria-pressed="true"] {
+    outline: 2px solid Highlight;
+  }
+}
+
+/* Tools segment (orbit, move, rotate, scale): one recessed track with the
+   active tool raised, so the mutually exclusive gizmo modes read as one
+   switch rather than four loose buttons. */
+.fm-viewport-3d-toolbar__segment {
   gap: 0;
   padding: 2px;
   border-radius: var(--fm-radius-pill);
   background: var(--fm-field-bg);
 }
 
-.fm-viewport-3d-toolbar__mode-item[aria-checked="true"] {
+.fm-viewport-3d-toolbar__segment .fm-viewport-3d-toolbar__segment-item {
+  min-width: var(--fm-toolbar-segment-item-width);
+  min-height: var(--fm-space-6);
+  width: var(--fm-toolbar-segment-item-width);
+  padding-inline: 0;
+}
+
+.fm-viewport-3d-toolbar__segment .fm-viewport-3d-toolbar__segment-item[aria-pressed="true"] {
   background: var(--fm-raised-bg);
   box-shadow: var(--fm-elevation-sm);
-  color: var(--fm-text-primary);
-}
-
-.fm-viewport-3d-toolbar__mode-item[data-render-mode="presentation"][aria-checked="true"] {
-  color: var(--fm-accent);
-}
-
-/* Quality menu: the profile name over what it changes. */
-.fm-viewport-3d-toolbar__quality-item {
-  display: grid;
-  gap: 1px;
-  align-items: start;
-}
-
-.fm-viewport-3d-toolbar__quality-name {
-  color: var(--fm-text-primary);
-  font-weight: var(--fm-font-weight-medium);
-}
-
-.fm-viewport-3d-toolbar__quality-summary {
-  color: var(--fm-text-muted);
-  font-size: var(--fm-font-size-2xs);
+  color: var(--fm-hue-visualization);
 }

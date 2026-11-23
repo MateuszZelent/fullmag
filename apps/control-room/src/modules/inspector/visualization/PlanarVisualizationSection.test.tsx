@@ -7,6 +7,7 @@ import type {
   PlanarCropState,
   PlanarFieldMetaResource,
   QuantityCatalogResource,
+  SceneResource,
   VisualizationStateResource,
 } from "@/kernel/api/apiTypes";
 import type { Selection } from "@/kernel/selection/selectionTypes";
@@ -30,6 +31,9 @@ const mocks = vi.hoisted(() => ({
   components: 3,
   discretization: "fem",
   section: null as unknown,
+  scene: null as SceneResource | null,
+  metaUnavailable: false,
+  fieldCatalogAvailable: true,
   optimisticPlanar: null as unknown,
   queuePatch: vi.fn(),
   queuePlanarFieldOverlayPatch: vi.fn(),
@@ -112,32 +116,48 @@ vi.mock("@/kernel/KernelContext", async (importOriginal) => ({
   }),
 }));
 
+vi.mock("@/kernel/resources/geometryLifecycleResources", () => ({
+  useSceneResource: () => ({
+    data: mocks.scene,
+    error: null,
+    status: mocks.scene ? "ready" : "idle",
+  }),
+}));
+
 vi.mock("@/kernel/resources/planarFieldResources", () => ({
   planarFieldQueryFromMeta: () => ({ ok: true, query: { sample_token: "planar-sample-v2:sample" } }),
-  usePlanarFieldMetaResource: () => ({
-    data: {
-      canonical_unit: "1",
-      component: "magnitude",
-      field_backend: "fem",
-      field_device: "cpu",
-      field_precision: "double",
-      field_source: "live",
-      frame: {
-        bounds_uv_m: [-25e-9, 25e-9, -30e-9, 30e-9],
-        full_bounds_uv_m: [-25e-9, 25e-9, -30e-9, 30e-9],
+  usePlanarFieldMetaResource: () => mocks.metaUnavailable
+    ? {
+        data: null,
+        error: new Error("quantity_not_materialized: This quantity has no published data yet."),
+        status: "error",
+      }
+    : {
+        data: {
+          canonical_unit: "1",
+          component: "magnitude",
+          field_backend: "fem",
+          field_device: "cpu",
+          field_precision: "double",
+          field_source: "live",
+          frame: {
+            bounds_uv_m: [-25e-9, 25e-9, -30e-9, 30e-9],
+            full_bounds_uv_m: [-25e-9, 25e-9, -30e-9, 30e-9],
+          },
+          mesh_overlay_descriptor: { available: true, boundary_classification: "exact", codec: "fmcs.v4" },
+          occupancy: { occupied_measure: 1 },
+          operator: { kind: "plane_sample" },
+          section: mocks.section,
+          source: { kind: "default", default_slice_hash: "sha256:slice", default_slice_revision: "1" },
+          sampling_method: "fem_plane_sample",
+          sampling_execution: "cpu",
+        },
+        error: null,
+        status: "ready",
       },
-      mesh_overlay_descriptor: { available: true, boundary_classification: "exact", codec: "fmcs.v4" },
-      occupancy: { occupied_measure: 1 },
-      operator: { kind: "plane_sample" },
-      section: mocks.section,
-      source: { kind: "default", default_slice_hash: "sha256:slice", default_slice_revision: "1" },
-      sampling_method: "fem_plane_sample",
-      sampling_execution: "cpu",
-    },
-    error: null,
-    status: "ready",
-  }),
-  usePlanarMaskResource: () => ({ data: new ArrayBuffer(1), error: null, status: "ready" }),
+  usePlanarMaskResource: () => mocks.metaUnavailable
+    ? { data: null, error: null, status: "idle" }
+    : { data: new ArrayBuffer(1), error: null, status: "ready" },
 }));
 
 vi.mock("@/kernel/resources/planarMonitorResources", () => ({
@@ -169,11 +189,15 @@ vi.mock("@/kernel/resources/studyRuntimeResources", () => ({
   }),
   useFieldCatalogResource: () => ({
     data: {
-      quantities: [
-        { available: true, components: mocks.components, label: "Magnetization", quantity_id: "m", unit: "1" },
-        { available: true, components: mocks.components, label: "Effective field", quantity_id: "h_eff", unit: "A/m" },
-        { available: true, components: mocks.components, label: "Demagnetizing field", quantity_id: "H_demag", unit: "A/m" },
-      ],
+      quantities: mocks.fieldCatalogAvailable
+        ? [
+            { available: true, components: mocks.components, label: "Magnetization", quantity_id: "m", unit: "1" },
+            { available: true, components: mocks.components, label: "Effective field", quantity_id: "h_eff", unit: "A/m" },
+            { available: true, components: mocks.components, label: "Demagnetizing field", quantity_id: "H_demag", unit: "A/m" },
+          ]
+        : [
+            { available: false, components: 3, label: "Magnetization", quantity_id: "m", unit: "1" },
+          ],
     },
   }),
 }));
@@ -275,6 +299,9 @@ describe("PlanarVisualizationSection", () => {
     mocks.optimisticPlanar = null;
     mocks.components = 3;
     mocks.section = null;
+    mocks.scene = null;
+    mocks.metaUnavailable = false;
+    mocks.fieldCatalogAvailable = true;
     for (const fn of [mocks.queuePatch, mocks.queuePlanarFieldOverlayPatch, mocks.queuePlanarTargetOverride,
       mocks.queuePlanarCropPatch, mocks.flushNow, mocks.execute]) fn.mockClear();
   });
@@ -588,6 +615,70 @@ describe("PlanarVisualizationSection", () => {
     } finally {
       await act(async () => root!.unmount());
       dom.restore();
+    }
+  });
+
+  it("unlocks 2D Inspector controls pre-solver when the scene has authored magnetization", async () => {
+    mocks.metaUnavailable = true;
+    mocks.fieldCatalogAvailable = false;
+    mocks.scene = {
+      revision: 2,
+      magnetization_assets: [
+        {
+          id: "mag-skyrmion",
+          kind: "preset_texture",
+          name: "Antiskyrmion",
+          preset_kind: "antiskyrmion",
+          preset_version: 2,
+          preset_params: { core_radius: 20e-9, polarity: 1 },
+        },
+      ],
+      objects: [
+        {
+          id: "free-layer",
+          role: "magnet",
+          visible: true,
+          magnetization_ref: "mag-skyrmion",
+          geometry: {
+            geometry_kind: "box",
+            geometry_params: { size: [100e-9, 80e-9, 20e-9] },
+          },
+          transform: { translation: [0, 0, 10e-9] },
+        },
+      ],
+    } as SceneResource;
+    fieldMapSurfaceStore.set({ evidenceStatus: "ready" });
+
+    const view = await mount(sceneSelection);
+    try {
+      // Status line shows Live (not Unavailable)
+      const statusLine = findControl(view.container, "2D view status");
+      expect(statusLine.textContent).toContain("Live");
+      expect(statusLine.textContent).not.toContain("Unavailable");
+
+      // Synthesized Magnetization quantity & components are unlocked
+      const quantitySelect = findControl(view.container, "Quantity");
+      expect(quantitySelect.disabled).toBe(false);
+      expect(quantitySelect.textContent).toContain("Magnetization (1)");
+
+      const componentSelect = findControl(view.container, "Component");
+      expect(componentSelect.disabled).toBe(false);
+
+      // Display passes (Color, Arrows, Contours, Streamlines, Points) are unlocked
+      for (const passLabel of ["Toggle Color", "Toggle Arrows", "Toggle Contours", "Toggle Streamlines", "Toggle Points"]) {
+        expect(findControl(view.container, passLabel).disabled).toBe(false);
+      }
+
+      // Section position input uses authored fallback bounds (z in [0, 20nm], mid = 10nm)
+      const positionInput = findControl(view.container, "Position (z)");
+      expect(positionInput.disabled).toBe(false);
+      expect(positionInput.value).toBe("10");
+
+      // Crop placeholders reflect authored bounds
+      expect(findControl(view.container, "x min").getAttribute("placeholder")).toBe("-50");
+      expect(findControl(view.container, "y max").getAttribute("placeholder")).toBe("40");
+    } finally {
+      await view.unmount();
     }
   });
 });

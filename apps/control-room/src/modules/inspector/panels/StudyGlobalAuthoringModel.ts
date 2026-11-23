@@ -357,7 +357,9 @@ export function validateStudyGlobalDraft(
     });
   }
   if (draft.parallelExecution.mode === "adaptive") {
-    validateAdaptiveWorkflow(issues, capabilities?.studyStages, capabilities?.studyStageDrafts);
+    issues.push(
+      ...validateAdaptiveWorkflow(capabilities?.studyStages, capabilities?.studyStageDrafts),
+    );
   }
   validateSolverDraft(issues, draft.solver, draft, capabilities);
   const explicitFdm = isExplicitFdmStudy({
@@ -398,13 +400,15 @@ export function validateStudyGlobalDraft(
 
 function validateRawAdaptiveStages(
   issues: StudyGlobalDraftValidation[],
-  stages: readonly unknown[] | undefined,
+  stages: unknown,
 ): void {
   const canonicalKinds = new Set([
     "relax", "minimize", "eigenmodes", "frequency_response", "run", "hysteresis",
     "change_device", "table_autosave", "autosave", "save_state", "fft_response", "add_field_drive",
   ]);
-  for (const raw of stages ?? []) {
+  const safeStages = Array.isArray(stages) ? stages : [];
+  for (let i = 0; i < safeStages.length; i += 1) {
+    const raw = safeStages[i];
     const stage = asRecord(raw);
     const rawKind = stage?.kind ?? stage?.entrypoint_kind;
     const kind = typeof rawKind === "string" ? rawKind.trim().toLowerCase().replace(/^flat_/, "") : "";
@@ -428,16 +432,19 @@ function validateRawAdaptiveStages(
   }
 }
 
-function validateAdaptiveWorkflow(
-  issues: StudyGlobalDraftValidation[],
-  rawStages: readonly unknown[] | undefined,
+export function validateAdaptiveWorkflow(
+  rawStages: unknown,
   previewStages?: readonly StudyStageDraft[],
-): void {
+): StudyGlobalDraftValidation[] {
+  const issues: StudyGlobalDraftValidation[] = [];
   validateRawAdaptiveStages(issues, rawStages);
-  const stages = previewStages ?? createStudyStageDrafts(rawStages ?? []);
+  const stages = Array.isArray(previewStages)
+    ? previewStages
+    : createStudyStageDrafts(rawStages);
   let hasSolverStage = false;
   let device = "cpu"; // The independent lane gate requires explicit FEM CPU.
-  for (const stage of stages ?? []) {
+  for (let i = 0; i < stages.length; i += 1) {
+    const stage = stages[i]!;
     if (stage.kind === "relax") {
       hasSolverStage = true;
     } else if (stage.kind === "eigenmodes") {
@@ -457,6 +464,7 @@ function validateAdaptiveWorkflow(
   if (!hasSolverStage) {
     issues.push({ message: "Adaptive parallel execution requires a known Relax or Eigen workflow.", severity: "error" });
   }
+  return issues;
 }
 
 function fdmDemagStrategyForDraft(draft: StudyGlobalDraft): string {

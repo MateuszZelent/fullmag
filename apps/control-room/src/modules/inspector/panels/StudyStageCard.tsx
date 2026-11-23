@@ -1,6 +1,7 @@
 "use client";
 
 import React from "react";
+import { Button } from "@/shared/ui/Button";
 import { type StudyStageModel } from "./StudyInspectorPanelModel";
 import { StudyProgressBar } from "./StudyProgressBar";
 
@@ -41,17 +42,18 @@ export function StageCard({
 
   if (onSelect) {
     return (
-      <button
-        className="fm-study-stage-card"
+      <Button
+        className="fm-study-stage-card h-auto w-full items-stretch justify-start"
         aria-current={active ? "step" : undefined}
         data-active={active ? "true" : undefined}
         data-selected={selected ? "true" : undefined}
         data-status={stage.status}
         type="button"
+        variant="ghost"
         onClick={onSelect}
       >
         {content}
-      </button>
+      </Button>
     );
   }
 

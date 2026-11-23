@@ -27,15 +27,27 @@
   padding: 2px var(--fm-space-3);
 }
 
+/* Run status in the dock header: one quiet chip — dot, state, and the
+   session phase as a muted second part behind a hairline. */
 .fm-footer-telemetry__status {
   display: inline-flex;
+  height: var(--fm-space-6);
   align-items: center;
-  gap: var(--fm-space-2);
+  gap: var(--fm-space-1-5);
   min-width: 0;
   flex: 0 1 auto;
+  border: 1px solid var(--fm-border-subtle);
+  border-radius: var(--fm-radius-pill);
+  background: var(--fm-field-bg);
   font-size: var(--fm-font-size-xs);
   line-height: 1.2;
+  padding-inline: var(--fm-space-2) var(--fm-space-3);
   white-space: nowrap;
+}
+
+.fm-footer-telemetry__status-title + .fm-footer-telemetry__status-online {
+  border-inline-start: 1px solid var(--fm-border-default);
+  padding-inline-start: var(--fm-space-1-5);
 }
 
 .fm-footer-telemetry__status-title {
@@ -304,9 +316,9 @@
 .fm-footer-telemetry__metric[data-group="energy"],
 .fm-footer-telemetry__tooltip[data-group="energy"] { --fm-metric-color: var(--fm-category-energy); }
 
-/* Tall dock: readouts gain size instead of stretching empty cards. */
-@container footer-metrics (height >= 168px) and (width >= 640px) {
-  .fm-footer-telemetry__metric { min-height: 28px; }
+/* Tall dock: readouts gain size instead of stretching empty cards
+   (row height itself follows the board, see "Height-adaptive board"). */
+@container footer-metrics (height >= 260px) and (width >= 640px) {
   .fm-footer-telemetry__metric-value { font-size: var(--fm-font-size-md); }
 }
 
@@ -702,3 +714,112 @@
 
 .fm-footer-telemetry__stage-badge[data-idle="true"] { color: var(--fm-text-muted); }
 .fm-footer-telemetry__stage-progress[data-idle="true"] .fm-footer-telemetry__stage-label { font-style: italic; }
+
+/* ── Height-adaptive board ──
+ * The board follows the dock height instead of scrolling. In the four-card
+ * row every card fills the board height; inside a card the readout rows
+ * share what is left after the card chrome (head, hero, progress):
+ *
+ *   row = clamp(18px, (board height − padding − chrome) / rows, 30px)
+ *
+ * 100cqb is the height of the footer-metrics size container. 18px keeps
+ * 11–12px text legible; 30px stops a tall dock from spacing rows apart.
+ * Height tiers then fold the Run readouts into two columns and drop
+ * secondary lines, so the vertical scrollbar is a last resort only. */
+.fm-footer-telemetry__group {
+  --fm-telemetry-chrome: 30px;
+  --fm-telemetry-rows: 4;
+  --fm-telemetry-row: clamp(
+    var(--fm-telemetry-row-min),
+    calc((100cqb - 2 * var(--fm-space-2) - var(--fm-telemetry-chrome)) / var(--fm-telemetry-rows)),
+    var(--fm-telemetry-row-max)
+  );
+}
+
+.fm-footer-telemetry__group[data-card="run"] {
+  --fm-telemetry-chrome: 92px;
+  --fm-telemetry-rows: 7;
+}
+
+.fm-footer-telemetry__group[data-card="energy"] {
+  --fm-telemetry-rows: 5;
+}
+
+.fm-footer-telemetry__group .fm-footer-telemetry__metric {
+  min-height: var(--fm-telemetry-row);
+}
+
+/* Rows take the card's remaining height and space out evenly. */
+.fm-footer-telemetry__group:not([data-card="convergence"]) > .fm-footer-telemetry__rows,
+.fm-footer-telemetry__group[data-card="magnetization"] .fm-footer-telemetry__rows,
+.fm-footer-telemetry__energy > .fm-footer-telemetry__rows {
+  flex: 1 1 auto;
+  align-content: space-evenly;
+  gap: 0;
+}
+
+.fm-footer-telemetry__energy {
+  flex: 1 1 auto;
+}
+
+@container footer-metrics (width >= 900px) {
+  .fm-footer-telemetry__metrics-grid {
+    grid-auto-rows: minmax(min-content, 1fr);
+    align-content: stretch;
+  }
+}
+
+/* Medium dock: tighter card chrome; Run readouts in two columns, which
+   roughly halves the card height. */
+@container footer-metrics (height < 240px) {
+  .fm-footer-telemetry__group {
+    gap: 0;
+    padding: var(--fm-space-1-5) var(--fm-space-3);
+  }
+
+  .fm-footer-telemetry__group[data-card="run"] {
+    --fm-telemetry-chrome: 78px;
+    --fm-telemetry-rows: 4;
+  }
+
+  .fm-footer-telemetry__group[data-card="run"] .fm-footer-telemetry__rows {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    column-gap: var(--fm-space-3);
+  }
+
+  .fm-footer-telemetry__hero { margin-top: 2px; }
+  .fm-footer-telemetry__hero-value { font-size: var(--fm-font-size-lg); }
+  .fm-footer-telemetry__stage-progress { margin-block: 2px; }
+  .fm-footer-telemetry__stage-bar { height: var(--fm-space-1); }
+  .fm-footer-telemetry__energy { gap: var(--fm-space-1); }
+  .fm-footer-telemetry__spark-frame,
+  .fm-footer-telemetry__spark-frame .fm-footer-telemetry__spark,
+  .fm-footer-telemetry__group[data-card="convergence"] .fm-footer-telemetry__spark { min-height: var(--fm-space-8); }
+}
+
+/* Short dock: secondary hints go (the idle "starts when Compute runs"
+   line, chart captions); values, units and the run progress stay. */
+@container footer-metrics (height < 180px) {
+  .fm-footer-telemetry__group[data-card="run"] { --fm-telemetry-chrome: 62px; }
+
+  .fm-footer-telemetry__stage-progress[data-idle="true"] .fm-footer-telemetry__stage-label,
+  .fm-footer-telemetry__caption { display: none; }
+
+  .fm-footer-telemetry__hero { margin-top: 0; }
+  .fm-footer-telemetry__hero-value { font-size: var(--fm-font-size-md); }
+  .fm-footer-telemetry__diverge { height: var(--fm-space-1-5); }
+}
+
+/* Very short dock: the idle progress bar carries no information. */
+@container footer-metrics (height < 140px) {
+  .fm-footer-telemetry__metrics-grid { padding: var(--fm-space-1) var(--fm-space-2); }
+
+  .fm-footer-telemetry__group {
+    --fm-telemetry-row-min: var(--fm-space-4);
+    padding-block: var(--fm-space-1);
+  }
+
+  .fm-footer-telemetry__group[data-card="run"] { --fm-telemetry-chrome: 40px; }
+  .fm-footer-telemetry__stage-progress[data-idle="true"] { display: none; }
+  .fm-footer-telemetry__group .fm-footer-telemetry__metric { padding-block: 0; }
+}

@@ -1,18 +1,31 @@
 "use client";
 
+import { lazy, Suspense } from "react";
+
 import { useQuantityCatalogResource } from "@/kernel/resources/studyRuntimeResources";
 import { useVisualizationStateResource } from "@/kernel/visualization/useVisualizationStateResource";
-import { useObjectVisualizationSelector, useSavedFieldPresentation } from "@/kernel/visualization/useObjectVisualization";
+import * as objectVisualizationHooks from "@/kernel/visualization/useObjectVisualization";
 import { AIRBOX_VISUALIZATION_TARGET, resolveTargetVisualization } from "@/kernel/visualization/ObjectVisualizationController";
 import { artifactUniverseCatalogHasExplicitLiveQuantity, artifactUniverseInspectionRoute } from "@/kernel/visualization/artifactFieldSelection";
 import { useSceneResource } from "@/kernel/resources/geometryLifecycleResources";
-import { SavedFieldVisualizationInspector } from "../SavedFieldVisualizationPanel";
 import { ArtifactInspectionSource, useArtifactInspectionSource } from "../ArtifactInspectionSource";
 import type { InspectorPanelProps } from "../../inspectorTypes";
 import {
   VisualizationTargetInspectorPanel,
   type VisualizationInspectorOwner,
 } from "../ObjectVisualizationPanel";
+
+const useObjectVisualizationSelector =
+  objectVisualizationHooks.useObjectVisualizationSelector;
+const useSavedFieldPresentation =
+  objectVisualizationHooks.useSavedFieldPresentation ??
+  (() => ({ presentation: null, projectMatches: false }));
+
+const LazySavedFieldVisualizationInspector = lazy(() =>
+  import("../SavedFieldVisualizationPanel").then((m) => ({
+    default: m.SavedFieldVisualizationInspector,
+  })),
+);
 
 const AIRBOX_VISUALIZATION_OWNER: VisualizationInspectorOwner = {
   actionSummary: "Universe sampling mesh, computed field, and display settings",
@@ -25,7 +38,13 @@ const AIRBOX_VISUALIZATION_OWNER: VisualizationInspectorOwner = {
 
 export function AirboxVisualizationPanel(props: InspectorPanelProps) {
   const { presentation } = useSavedFieldPresentation();
-  return presentation ? <SavedFieldVisualizationInspector /> : <CurrentAirboxVisualizationPanel {...props} />;
+  return presentation ? (
+    <Suspense fallback={null}>
+      <LazySavedFieldVisualizationInspector />
+    </Suspense>
+  ) : (
+    <CurrentAirboxVisualizationPanel {...props} />
+  );
 }
 
 function CurrentAirboxVisualizationPanel({ selection }: InspectorPanelProps) {

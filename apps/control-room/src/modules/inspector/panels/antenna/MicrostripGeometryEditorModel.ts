@@ -23,6 +23,24 @@ function record(value: unknown): Record<string, unknown> | null {
     : null;
 }
 
+export const SUPPORTED_ANTENNA_GEOMETRY_KINDS = [
+  "MicrostripAntennaLayout",
+  "CPWAntennaLayout",
+  "MeanderAntennaLayout",
+  "InductiveLoopLayout",
+  "PiecewisePath3DLayout",
+  "ImportedGeometry",
+] as const;
+
+export function anyAntennaGeometry(scene: SceneResource | null, objectId: string): JsonObject | null {
+  const object = scene?.objects?.find((candidate) => candidate.id === objectId);
+  const geometry = record(object?.geometry);
+  const kind = typeof geometry?.geometry_kind === "string" ? geometry.geometry_kind : "";
+  return (SUPPORTED_ANTENNA_GEOMETRY_KINDS as readonly string[]).includes(kind)
+    ? (geometry as JsonObject)
+    : null;
+}
+
 export function microstripGeometry(scene: SceneResource | null, objectId: string): JsonObject | null {
   const geometry = antennaLayoutGeometry(scene, objectId);
   return geometry?.geometry_kind === "MicrostripAntennaLayout" ? geometry : null;

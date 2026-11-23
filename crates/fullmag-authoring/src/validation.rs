@@ -505,10 +505,35 @@ fn validate_dmi_scope_exclusivity(
                 ScriptBuilderMagneticInteractionKind::InterfacialDmi => {
                     interfacial_present = true;
                     interfacial_enabled = interaction.enabled;
+                    if let Some(normal) = interaction
+                        .params
+                        .as_ref()
+                        .and_then(|params| params.get("interface_normal"))
+                    {
+                        validate_unit_axis_value(normal, "interfacial_dmi.interface_normal")?;
+                    }
                 }
                 ScriptBuilderMagneticInteractionKind::BulkDmi => {
                     bulk_present = true;
                     bulk_enabled = interaction.enabled;
+                }
+                ScriptBuilderMagneticInteractionKind::CubicAnisotropy => {
+                    if let Some(params) = interaction.params.as_ref().and_then(|v| v.as_object()) {
+                        let c1 = match params.get("axis1") {
+                            Some(value) => validate_unit_axis_value(value, "cubic_anisotropy.axis1")?,
+                            None => [1.0, 0.0, 0.0],
+                        };
+                        let c2 = match params.get("axis2") {
+                            Some(value) => validate_unit_axis_value(value, "cubic_anisotropy.axis2")?,
+                            None => [0.0, 1.0, 0.0],
+                        };
+                        let dot = c1[0] * c2[0] + c1[1] * c2[1] + c1[2] * c2[2];
+                        if dot.abs() >= 1e-6 {
+                            return Err(SceneDocumentValidationError::new(
+                                "cubic_anisotropy axis1 and axis2 must be orthogonal (|c1·c2| / (||c1|| ||c2||) < 1e-6)",
+                            ));
+                        }
+                    }
                 }
                 _ => {}
             }
@@ -550,6 +575,43 @@ fn validate_dmi_scope_exclusivity(
         "rotated_interfacial_dmi is study-scoped and cannot coexist with active object-scoped {}",
         conflicts.into_iter().collect::<Vec<_>>().join(", ")
     )))
+}
+
+fn validate_unit_axis_value(
+    value: &serde_json::Value,
+    field: &str,
+) -> Result<[f64; 3], SceneDocumentValidationError> {
+    let Some(arr) = value.as_array() else {
+        return Err(SceneDocumentValidationError::new(format!(
+            "{field} must be a 3-element numeric vector"
+        )));
+    };
+    if arr.len() != 3 {
+        return Err(SceneDocumentValidationError::new(format!(
+            "{field} must contain exactly 3 components"
+        )));
+    }
+    let mut out = [0.0; 3];
+    for (idx, item) in arr.iter().enumerate() {
+        let Some(v) = item.as_f64() else {
+            return Err(SceneDocumentValidationError::new(format!(
+                "{field}[{idx}] must be a finite number"
+            )));
+        };
+        if !v.is_finite() {
+            return Err(SceneDocumentValidationError::new(format!(
+                "{field}[{idx}] must be finite"
+            )));
+        }
+        out[idx] = v;
+    }
+    let norm = (out[0] * out[0] + out[1] * out[1] + out[2] * out[2]).sqrt();
+    if norm <= 1e-12 {
+        return Err(SceneDocumentValidationError::new(format!(
+            "{field} must have nonzero norm"
+        )));
+    }
+    Ok([out[0] / norm, out[1] / norm, out[2] / norm])
 }
 
 fn validate_scene_magnetization_constraints(

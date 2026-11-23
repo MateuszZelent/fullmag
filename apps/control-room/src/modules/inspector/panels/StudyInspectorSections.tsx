@@ -123,15 +123,17 @@ export function StudyRuntimeSection({
         label="Command"
         value={
           model.runtime.commandId ? (
-            <button
+            <Button
               type="button"
-              className="fm-study-command-link"
+              variant="ghost"
+              size="sm"
+              className="fm-study-command-link h-auto min-h-0"
               onClick={() => onOpenCommand(model.runtime.commandId ?? "")}
               title="Open command detail"
             >
               <span>{model.runtime.commandLabel}</span>
               <Info size={12} aria-hidden="true" />
-            </button>
+            </Button>
           ) : (
             model.runtime.commandLabel
           )

@@ -2180,9 +2180,13 @@ SceneResource = Dict[str, Any]
 SceneTextureMapping = TypedDict(
     'SceneTextureMapping',
     {
+        'axis_extent_mode': 'Optional[str]',
+        'axis_thickness_m': 'Optional[float]',
+        'background_vector': 'Optional[List[float]]',
         'clamp_mode': 'str',
         'projection': 'str',
         'space': 'str',
+        'tile_period': 'Optional[List[float]]',
     },
     total=False,
 )
@@ -2199,6 +2203,7 @@ SceneTextureTransform3D = TypedDict(
     'SceneTextureTransform3D',
     {
         'pivot': 'List[float]',
+        'rotate_vectors': 'bool',
         'rotation_quat': 'List[float]',
         'scale': 'List[float]',
         'translation': 'List[float]',

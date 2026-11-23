@@ -732,10 +732,10 @@ describe("viewport smoke projection round-trip", () => {
     expect(femTopologyAuditScript).toContain(
       '"model:mesh:unassigned:semantic-outer-boundary"',
     );
-    expect(femTopologyAuditScript).toContain("Boundary Faces Overview");
+    expect(femTopologyAuditScript).toContain('getByRole("heading", { name: "Boundary Faces", exact: true })');
     expect(femTopologyAuditScript).toContain("Outer boundary leaked into Unassigned mesh");
-    expect(femTopologyAuditScript).toContain('"Realized carriers": "1"');
-    expect(femTopologyAuditScript).toContain('"Boundary faces": "4"');
+    expect(femTopologyAuditScript).toContain('"Realized outer carriers": "1"');
+    expect(femTopologyAuditScript).toContain('"Published boundary facets": "4"');
     expect(femTopologyAuditScript).toContain('"Manifest state": "ready"');
     expect(femTopologyAuditScript).toContain("postInteractionWebgl");
     expect(femTopologyAuditScript).toContain(

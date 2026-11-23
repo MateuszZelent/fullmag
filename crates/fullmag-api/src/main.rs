@@ -15,8 +15,13 @@ use fullmag_authoring::{
     scene_document_has_unresolved_solve_prerequisites, validate_scene_document_for_authoring,
     MagnetizationAsset, SceneDocument,
 };
-use fullmag_ir::{TextureMappingIR, TextureProjectionMode, TextureTransform3DIR};
-use fullmag_plan::{sample_preset_texture_versioned, TextureSamplePoint};
+use fullmag_ir::{
+    RegionFrameIR, RegionShapeIR, TextureMappingIR, TextureProjectionMode, TextureTransform3DIR,
+};
+use fullmag_plan::{
+    region_shape_bounds_in_object_space, sample_preset_texture_versioned_with_bounds,
+    AffineTransform3, BoundaryMembership, GeometryPredicate, TextureSamplePoint,
+};
 use serde_json::{json, Value};
 use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
@@ -79,6 +84,7 @@ mod live_command_journal;
 mod live_compute_request;
 mod live_execution_binding;
 mod live_geometry_mesh_build;
+mod live_prepared_fdm_fields;
 mod accepted_field_materialization;
 mod accepted_field_materialization_worker;
 mod live_accepted_continuation;
@@ -6137,27 +6143,40 @@ fn rebuild_live_scene_magnetization(
             continue;
         }
         let object = &scene.objects[object_index];
-        let Some(magnetization_ref) = object.magnetization_ref.as_deref() else {
-            stats.skipped_objects += 1;
-            continue;
-        };
-        let Some(asset) = magnetization_assets.get(magnetization_ref).copied() else {
-            stats.skipped_objects += 1;
-            stats.warnings.push(format!(
-                "object '{}' references missing magnetization '{}'",
-                object.id, magnetization_ref
-            ));
-            continue;
-        };
-        let rewritten = apply_live_scene_magnetization_asset(
-            asset,
+        let object_bounds_local = compute_object_bounds_local(object, node_indices, &mesh.nodes);
+        let mut any_rewritten = false;
+        if let Some(magnetization_ref) = object.magnetization_ref.as_deref() {
+            if let Some(asset) = magnetization_assets.get(magnetization_ref).copied() {
+                if apply_live_scene_magnetization_asset(
+                    asset,
+                    object,
+                    node_indices,
+                    &mesh.nodes,
+                    object_bounds_local,
+                    &mut vectors,
+                    &mut stats,
+                ) {
+                    any_rewritten = true;
+                }
+            } else {
+                stats.warnings.push(format!(
+                    "object '{}' references missing magnetization '{}'",
+                    object.id, magnetization_ref
+                ));
+            }
+        }
+        if apply_live_scene_region_overrides(
             object,
             node_indices,
             &mesh.nodes,
+            object_bounds_local,
+            &magnetization_assets,
             &mut vectors,
             &mut stats,
-        );
-        if rewritten {
+        ) {
+            any_rewritten = true;
+        }
+        if any_rewritten {
             stats.rewritten_objects += 1;
         } else {
             stats.skipped_objects += 1;
@@ -6203,11 +6222,307 @@ fn rebuild_live_scene_magnetization(
     Some(stats)
 }
 
+fn scene_region_shape_to_ir(shape: &fullmag_authoring::SceneRegionShape) -> RegionShapeIR {
+    match shape {
+        fullmag_authoring::SceneRegionShape::Box { size, center } => RegionShapeIR::Box {
+            size: *size,
+            center: *center,
+        },
+        fullmag_authoring::SceneRegionShape::Cylinder {
+            radius,
+            height,
+            center,
+            axis,
+        } => RegionShapeIR::Cylinder {
+            radius: *radius,
+            height: *height,
+            center: *center,
+            axis: *axis,
+        },
+        fullmag_authoring::SceneRegionShape::Sphere { radius, center } => RegionShapeIR::Sphere {
+            radius: *radius,
+            center: *center,
+        },
+        fullmag_authoring::SceneRegionShape::Csg { expression } => RegionShapeIR::Csg {
+            expression: expression.clone(),
+        },
+    }
+}
+
+fn scene_region_frame_to_ir(frame: fullmag_authoring::SceneRegionFrame) -> RegionFrameIR {
+    match frame {
+        fullmag_authoring::SceneRegionFrame::Object => RegionFrameIR::Object,
+        fullmag_authoring::SceneRegionFrame::World => RegionFrameIR::World,
+    }
+}
+
+fn scene_transform_to_affine(transform: &fullmag_authoring::Transform3D) -> AffineTransform3 {
+    AffineTransform3 {
+        translation_m: transform.translation,
+        rotation_xyzw: transform.rotation_quat,
+        scale: transform.scale,
+        pivot_m: transform.pivot,
+    }
+}
+
+fn compute_object_bounds_local(
+    object: &fullmag_authoring::SceneObject,
+    node_indices: &[usize],
+    world_nodes: &[[f64; 3]],
+) -> Option<([f64; 3], [f64; 3])> {
+    if let (Some(min_b), Some(max_b)) = (object.geometry.bounds_min, object.geometry.bounds_max) {
+        if min_b.iter().chain(max_b.iter()).all(|c| c.is_finite()) {
+            return Some((min_b, max_b));
+        }
+    }
+    compute_nodes_bounds_local(object, node_indices, world_nodes)
+}
+
+fn compute_nodes_bounds_local(
+    object: &fullmag_authoring::SceneObject,
+    node_indices: &[usize],
+    world_nodes: &[[f64; 3]],
+) -> Option<([f64; 3], [f64; 3])> {
+    let mut min_pt = [f64::INFINITY; 3];
+    let mut max_pt = [f64::NEG_INFINITY; 3];
+    let mut any = false;
+    for &node_index in node_indices {
+        let local = apply_inverse_object_transform(world_nodes[node_index], &object.transform);
+        if local.iter().all(|c| c.is_finite()) {
+            any = true;
+            for axis in 0..3 {
+                min_pt[axis] = min_pt[axis].min(local[axis]);
+                max_pt[axis] = max_pt[axis].max(local[axis]);
+            }
+        }
+    }
+    any.then_some((min_pt, max_pt))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn sample_live_preset_texture_for_nodes(
+    preset_kind: &str,
+    preset_version: u32,
+    params: &BTreeMap<String, Value>,
+    mapping: &TextureMappingIR,
+    texture_transform: &TextureTransform3DIR,
+    object: &fullmag_authoring::SceneObject,
+    node_indices: &[usize],
+    world_nodes: &[[f64; 3]],
+    target_bounds_local: Option<([f64; 3], [f64; 3])>,
+    vectors: &mut [[f64; 3]],
+    stats: &mut LiveSceneMagnetizationRebuildStats,
+) -> bool {
+    let (region_center, target_bounds_extent) = match target_bounds_local {
+        Some((min_b, max_b)) => (
+            Some([
+                0.5 * (min_b[0] + max_b[0]),
+                0.5 * (min_b[1] + max_b[1]),
+                0.5 * (min_b[2] + max_b[2]),
+            ]),
+            Some([
+                (max_b[0] - min_b[0]).max(1.0e-12),
+                (max_b[1] - min_b[1]).max(1.0e-12),
+                (max_b[2] - min_b[2]).max(1.0e-12),
+            ]),
+        ),
+        None => (None, None),
+    };
+    let sample_points = node_indices
+        .iter()
+        .map(|&node_index| {
+            let world = world_nodes[node_index];
+            let pos_obj = apply_inverse_object_transform(world, &object.transform);
+            let pos_region = region_center.map(|center| {
+                [
+                    pos_obj[0] - center[0],
+                    pos_obj[1] - center[1],
+                    pos_obj[2] - center[2],
+                ]
+            });
+            TextureSamplePoint {
+                position_world: world,
+                position_object: pos_obj,
+                position_region: pos_region,
+                active: true,
+            }
+        })
+        .collect::<Vec<_>>();
+    match sample_preset_texture_versioned_with_bounds(
+        preset_kind,
+        preset_version,
+        params,
+        mapping,
+        texture_transform,
+        &sample_points,
+        target_bounds_extent,
+    ) {
+        Ok(sampled) => {
+            for (slot, value) in node_indices.iter().zip(sampled.iter()) {
+                vectors[*slot] = *value;
+            }
+            stats.rewritten_nodes += node_indices.len();
+            true
+        }
+        Err(error) => {
+            stats.warnings.push(format!(
+                "preset_texture '{}' for object '{}' failed: {}",
+                preset_kind, object.id, error
+            ));
+            false
+        }
+    }
+}
+
+fn apply_live_scene_region_overrides(
+    object: &fullmag_authoring::SceneObject,
+    node_indices: &[usize],
+    world_nodes: &[[f64; 3]],
+    object_bounds_local: Option<([f64; 3], [f64; 3])>,
+    magnetization_assets: &HashMap<&str, &MagnetizationAsset>,
+    vectors: &mut [[f64; 3]],
+    stats: &mut LiveSceneMagnetizationRebuildStats,
+) -> bool {
+    let mut regions = object
+        .regions
+        .iter()
+        .filter(|region| {
+            region.enabled
+                && (region.texture_override.is_some()
+                    || object
+                        .region_overrides
+                        .get(&region.region_id)
+                        .and_then(|ov| ov.magnetization_ref.as_deref())
+                        .is_some())
+        })
+        .collect::<Vec<_>>();
+    if regions.is_empty() {
+        return false;
+    }
+    regions.sort_by_key(|region| (region.priority, region.region_id.as_str()));
+    let obj_affine = scene_transform_to_affine(&object.transform);
+    let mut any_rewritten = false;
+    for region in regions {
+        let shape_ir = scene_region_shape_to_ir(&region.shape);
+        let frame_ir = scene_region_frame_to_ir(region.frame);
+        let predicate_transform = match frame_ir {
+            RegionFrameIR::Object => obj_affine,
+            RegionFrameIR::World => AffineTransform3::identity(),
+        };
+        let predicate = match GeometryPredicate::from_region_shape(
+            &shape_ir,
+            predicate_transform,
+            BoundaryMembership::inclusive(),
+        ) {
+            Ok(pred) => pred,
+            Err(error) => {
+                stats.warnings.push(format!(
+                    "region '{}' on object '{}' has invalid geometry: {}",
+                    region.region_id, object.id, error
+                ));
+                continue;
+            }
+        };
+        let region_nodes = node_indices
+            .iter()
+            .copied()
+            .filter(|&idx| predicate.contains(world_nodes[idx]).unwrap_or(false))
+            .collect::<Vec<_>>();
+        if region_nodes.is_empty() {
+            continue;
+        }
+        let region_bounds_local = region_shape_bounds_in_object_space(
+            &shape_ir,
+            frame_ir,
+            obj_affine,
+            object_bounds_local,
+        )
+        .ok()
+        .or_else(|| compute_nodes_bounds_local(object, &region_nodes, world_nodes));
+
+        if let Some(texture_override) = region.texture_override.as_ref() {
+            match &texture_override.initial_magnetization {
+                fullmag_authoring::SceneInitialMagnetization::PresetTexture {
+                    preset_kind,
+                    preset_params,
+                    preset_version,
+                    mapping,
+                    texture_transform,
+                } => {
+                    let mapping_ir = TextureMappingIR {
+                        space: mapping.space.clone(),
+                        projection: parse_texture_projection_mode(&mapping.projection),
+                        clamp_mode: mapping.clamp_mode.clone(),
+                        tile_period: mapping.tile_period,
+                        background_vector: mapping.background_vector,
+                        axis_extent_mode: mapping.axis_extent_mode.clone(),
+                        axis_thickness_m: mapping.axis_thickness_m,
+                    };
+                    let transform_ir = TextureTransform3DIR {
+                        translation: texture_transform.translation,
+                        rotation_quat: texture_transform.rotation_quat,
+                        scale: texture_transform.scale,
+                        pivot: texture_transform.pivot,
+                        rotate_vectors: texture_transform.rotate_vectors,
+                    };
+                    if sample_live_preset_texture_for_nodes(
+                        preset_kind,
+                        *preset_version,
+                        preset_params,
+                        &mapping_ir,
+                        &transform_ir,
+                        object,
+                        &region_nodes,
+                        world_nodes,
+                        region_bounds_local,
+                        vectors,
+                        stats,
+                    ) {
+                        any_rewritten = true;
+                    }
+                }
+                fullmag_authoring::SceneInitialMagnetization::Uniform { value } => {
+                    let norm = (value[0] * value[0] + value[1] * value[1] + value[2] * value[2]).sqrt();
+                    if norm.is_finite() && norm > 1.0e-14 {
+                        let unit = [value[0] / norm, value[1] / norm, value[2] / norm];
+                        for &slot in &region_nodes {
+                            vectors[slot] = unit;
+                        }
+                        stats.rewritten_nodes += region_nodes.len();
+                        any_rewritten = true;
+                    }
+                }
+                _ => {}
+            }
+        } else if let Some(asset_ref) = object
+            .region_overrides
+            .get(&region.region_id)
+            .and_then(|ov| ov.magnetization_ref.as_deref())
+        {
+            if let Some(asset) = magnetization_assets.get(asset_ref).copied() {
+                if apply_live_scene_magnetization_asset(
+                    asset,
+                    object,
+                    &region_nodes,
+                    world_nodes,
+                    region_bounds_local,
+                    vectors,
+                    stats,
+                ) {
+                    any_rewritten = true;
+                }
+            }
+        }
+    }
+    any_rewritten
+}
+
 fn apply_live_scene_magnetization_asset(
     asset: &MagnetizationAsset,
     object: &fullmag_authoring::SceneObject,
     node_indices: &[usize],
     world_nodes: &[[f64; 3]],
+    target_bounds_local: Option<([f64; 3], [f64; 3])>,
     vectors: &mut [[f64; 3]],
     stats: &mut LiveSceneMagnetizationRebuildStats,
 ) -> bool {
@@ -6228,47 +6543,31 @@ fn apply_live_scene_magnetization_asset(
                 space: asset.mapping.space.clone(),
                 projection: parse_texture_projection_mode(&asset.mapping.projection),
                 clamp_mode: asset.mapping.clamp_mode.clone(),
+                tile_period: asset.mapping.tile_period,
+                background_vector: asset.mapping.background_vector,
+                axis_extent_mode: asset.mapping.axis_extent_mode.clone(),
+                axis_thickness_m: asset.mapping.axis_thickness_m,
             };
             let texture_transform = TextureTransform3DIR {
                 translation: asset.texture_transform.translation,
                 rotation_quat: asset.texture_transform.rotation_quat,
                 scale: asset.texture_transform.scale,
                 pivot: asset.texture_transform.pivot,
+                rotate_vectors: asset.texture_transform.rotate_vectors,
             };
-            let sample_points = node_indices
-                .iter()
-                .map(|&node_index| {
-                    let world = world_nodes[node_index];
-                    TextureSamplePoint {
-                        position_world: world,
-                        position_object: apply_inverse_object_transform(world, &object.transform),
-                        active: true,
-                    }
-                })
-                .collect::<Vec<_>>();
-            match sample_preset_texture_versioned(
+            sample_live_preset_texture_for_nodes(
                 preset_kind,
                 asset.preset_version.unwrap_or(1),
                 &params,
                 &mapping,
                 &texture_transform,
-                &sample_points,
-            ) {
-                Ok(sampled) => {
-                    for (slot, value) in node_indices.iter().zip(sampled.iter()) {
-                        vectors[*slot] = *value;
-                    }
-                    stats.rewritten_nodes += node_indices.len();
-                    true
-                }
-                Err(error) => {
-                    stats.warnings.push(format!(
-                        "preset_texture '{}' for object '{}' failed: {}",
-                        preset_kind, object.id, error
-                    ));
-                    false
-                }
-            }
+                object,
+                node_indices,
+                world_nodes,
+                target_bounds_local,
+                vectors,
+                stats,
+            )
         }
         other => {
             stats.warnings.push(format!(

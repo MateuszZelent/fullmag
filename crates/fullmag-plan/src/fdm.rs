@@ -27,11 +27,17 @@ use crate::geometry::{
     LoweredBody, FDM_GRID_ESTIMATED_BYTES_PER_CELL,
 };
 use crate::magnetization_textures::TextureSamplePoint;
-use crate::magnetization_textures_v2::sample_preset_texture_versioned;
+use crate::magnetization_textures_v2::sample_preset_texture_versioned_with_bounds;
+use crate::mesh::{
+    set_texture_sample_region_positions, shape_texture_region_center_in_object_space,
+};
 use crate::oersted::{resolve_fdm_oersted_term, ResolvedOerstedTerm};
 use crate::region_conflict::{resolve_region_conflict, RegionConflictCandidate};
-use crate::region_textures::sample_region_initial_on_mask;
-use crate::selection::geometry::{contains_point, geometry_entry_bounds, normalize_axis};
+use crate::region_textures::sample_region_initial_on_mask_with_bounds;
+use crate::selection::geometry::{
+    contains_point, geometry_entry_bounds, normalize_axis, object_region_bounds_in_object_space,
+    AffineTransform3,
+};
 use crate::selection::{
     compile_fdm_frozen_spins, compile_fdm_points_frozen_spins, FdmFrozenSpinsDomain,
     FrozenSpinsCompileRequest, ResolvedFrozenSpinsReference, SelectionDofMembership,
@@ -47,7 +53,7 @@ use crate::util::{
 use crate::validate::{
     planned_study_controls, validate_executable_outputs, validate_grid_asset_cell_size,
 };
-use crate::{AffineTransform3, BoundaryMembership, GeometryPredicate};
+use crate::{BoundaryMembership, GeometryPredicate};
 
 fn resolve_precision_policy(problem: &ProblemIR) -> Result<FdmPrecisionPolicyIR, PlanError> {
     let policy = problem
@@ -423,6 +429,7 @@ fn grid_sample_points(
                 points.push(TextureSamplePoint {
                     position_world: world,
                     position_object: object,
+                    position_region: None,
                     active: active_mask.map(|mask| mask[idx]).unwrap_or(true),
                 });
             }
@@ -1739,6 +1746,43 @@ fn apply_region_texture_overrides(
         owner_translation,
         active_mask,
     );
+    let object_transform = AffineTransform3 {
+        translation_m: owner_translation,
+        ..AffineTransform3::identity()
+    };
+    let object_bounds_local = problem
+        .geometry
+        .entries
+        .iter()
+        .find(|geom| owner_names.contains(&geom.name()))
+        .and_then(|geom| geometry_entry_bounds(geom).ok())
+        .map(|(min_w, max_w)| {
+            (
+                [
+                    min_w[0] - owner_translation[0],
+                    min_w[1] - owner_translation[1],
+                    min_w[2] - owner_translation[2],
+                ],
+                [
+                    max_w[0] - owner_translation[0],
+                    max_w[1] - owner_translation[1],
+                    max_w[2] - owner_translation[2],
+                ],
+            )
+        })
+        .unwrap_or_else(|| {
+            let min_l = [
+                origin[0] - owner_translation[0],
+                origin[1] - owner_translation[1],
+                origin[2] - owner_translation[2],
+            ];
+            let max_l = [
+                min_l[0] + grid_cells[0] as f64 * cell_size[0],
+                min_l[1] + grid_cells[1] as f64 * cell_size[1],
+                min_l[2] + grid_cells[2] as f64 * cell_size[2],
+            ];
+            (min_l, max_l)
+        });
     for region in regions {
         let Some(&region_index) = region_index_by_id.get(&region.region_id) else {
             errors.push(format!(
@@ -1762,11 +1806,18 @@ fn apply_region_texture_overrides(
         if !selected.iter().any(|selected| *selected) {
             continue;
         }
-        let values = match sample_region_initial_on_mask(
+        let region_bounds_object = object_region_bounds_in_object_space(
+            region,
+            object_transform,
+            Some(object_bounds_local),
+        )
+        .ok();
+        let values = match sample_region_initial_on_mask_with_bounds(
             &format!("object_region '{}' FDM texture_override", region.region_id),
             &texture_override.initial_magnetization,
             &points,
             &selected,
+            region_bounds_object,
         ) {
             Ok(values) => values,
             Err(message) => {
@@ -3025,20 +3076,42 @@ pub(crate) fn plan_fdm(
                 texture_transform.scale[1],
                 texture_transform.scale[2],
             );
-            let points = grid_sample_points(
+            let mut points = grid_sample_points(
                 grid_cells,
                 cell_size,
                 native_origin,
                 top_level_translation,
                 active_mask.as_ref(),
             );
-            match sample_preset_texture_versioned(
+            if mapping.space.eq_ignore_ascii_case("region") {
+                set_texture_sample_region_positions(
+                    &mut points,
+                    shape_texture_region_center_in_object_space(&shape, top_level_translation),
+                );
+            }
+            let target_bounds_extent = shape_local_bounds(&shape)
+                .map(|(min_b, max_b)| {
+                    [
+                        (max_b[0] - min_b[0]).max(1.0e-12),
+                        (max_b[1] - min_b[1]).max(1.0e-12),
+                        (max_b[2] - min_b[2]).max(1.0e-12),
+                    ]
+                })
+                .or_else(|| {
+                    Some([
+                        (grid_cells[0] as f64 * cell_size[0]).max(1.0e-12),
+                        (grid_cells[1] as f64 * cell_size[1]).max(1.0e-12),
+                        (grid_cells[2] as f64 * cell_size[2]).max(1.0e-12),
+                    ])
+                });
+            match sample_preset_texture_versioned_with_bounds(
                 preset_kind,
                 *preset_version,
                 &preset_params,
                 mapping,
                 texture_transform,
                 &points,
+                target_bounds_extent,
             ) {
                 Ok(values) => values,
                 Err(message) => {
@@ -4949,20 +5022,45 @@ pub(crate) fn plan_fdm_multilayer(
                 texture_transform,
                 preset_version,
             }) => {
-                let points = grid_sample_points(
+                let mut points = grid_sample_points(
                     grid_cells,
                     cell_size,
                     native_origin,
                     placed.translation,
                     active_mask.as_ref(),
                 );
-                match sample_preset_texture_versioned(
+                if mapping.space.eq_ignore_ascii_case("region") {
+                    set_texture_sample_region_positions(
+                        &mut points,
+                        shape_texture_region_center_in_object_space(
+                            &placed.shape,
+                            [0.0; 3],
+                        ),
+                    );
+                }
+                let target_bounds_extent = shape_local_bounds(&placed.shape)
+                    .map(|(min_b, max_b)| {
+                        [
+                            (max_b[0] - min_b[0]).max(1.0e-12),
+                            (max_b[1] - min_b[1]).max(1.0e-12),
+                            (max_b[2] - min_b[2]).max(1.0e-12),
+                        ]
+                    })
+                    .or_else(|| {
+                        Some([
+                            (grid_cells[0] as f64 * cell_size[0]).max(1.0e-12),
+                            (grid_cells[1] as f64 * cell_size[1]).max(1.0e-12),
+                            (grid_cells[2] as f64 * cell_size[2]).max(1.0e-12),
+                        ])
+                    });
+                match sample_preset_texture_versioned_with_bounds(
                     preset_kind,
                     *preset_version,
                     &preset_params,
                     mapping,
                     texture_transform,
                     &points,
+                    target_bounds_extent,
                 ) {
                     Ok(values) => values,
                     Err(message) => {

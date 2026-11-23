@@ -23,6 +23,7 @@ function PopoverContent({
         ref={ref}
         align={align}
         collisionPadding={collisionPadding}
+        data-slot="popover-content"
         sideOffset={sideOffset}
         className={cn("fm-popover", className)}
         {...props}

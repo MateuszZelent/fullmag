@@ -289,6 +289,7 @@ struct PreparedTextureTransform {
     inverse_scale: [f64; 3],
     rotation: [f64; 4],
     inverse_rotation: [f64; 4],
+    rotate_vectors: bool,
 }
 
 impl PreparedTextureTransform {
@@ -331,6 +332,7 @@ impl PreparedTextureTransform {
             inverse_scale: transform.scale.map(f64::recip),
             rotation,
             inverse_rotation: [-rotation[0], -rotation[1], -rotation[2], rotation[3]],
+            rotate_vectors: transform.rotate_vectors,
         })
     }
 
@@ -345,7 +347,11 @@ impl PreparedTextureTransform {
     }
 
     fn vector_to_source(self, vector: [f64; 3]) -> [f64; 3] {
-        rotate_by_quaternion(vector, self.rotation)
+        if self.rotate_vectors {
+            rotate_by_quaternion(vector, self.rotation)
+        } else {
+            vector
+        }
     }
 }
 
@@ -551,6 +557,12 @@ fn vortex_wall(
     }
     if point[0] > wall_half_width {
         return Ok([right_mx.signum(), 0.0, 0.0]);
+    }
+    if !params.contains_key("circulation") {
+        let mut derived = params.clone();
+        let circulation = if left_mx * right_mx > 0.0 { 1 } else { -1 };
+        derived.insert("circulation".to_string(), Value::from(circulation));
+        return vortex(&derived, point, 1.0);
     }
     vortex(params, point, 1.0)
 }
@@ -776,6 +788,437 @@ fn bimeron(params: &BTreeMap<String, Value>, point: [f64; 3]) -> Result<[f64; 3]
     ])
 }
 
+enum ClampOutcome {
+    Sample([f64; 3]),
+    Background([f64; 3]),
+}
+
+fn wrap_metric_repeat(coord: f64, period: f64) -> f64 {
+    (coord + 0.5 * period).rem_euclid(period) - 0.5 * period
+}
+
+fn wrap_metric_mirror(coord: f64, period: f64) -> f64 {
+    let two_p = 2.0 * period;
+    let wrapped = (coord + 0.5 * period).rem_euclid(two_p);
+    let folded = if wrapped <= period {
+        wrapped
+    } else {
+        two_p - wrapped
+    };
+    folded - 0.5 * period
+}
+
+fn validate_axis_extent_v2(mapping: &TextureMappingIR) -> Result<Option<f64>, TextureError> {
+    let raw_mode = mapping.axis_extent_mode.as_deref().map(str::trim).unwrap_or("");
+    if raw_mode.is_empty() || raw_mode.eq_ignore_ascii_case("uniform") {
+        return Ok(None);
+    }
+    if raw_mode.eq_ignore_ascii_case("thickness") {
+        let thickness = mapping.axis_thickness_m.ok_or_else(|| {
+            invalid(
+                "mapping.axis_thickness_m",
+                "positive axis_thickness_m is required when axis_extent_mode == 'thickness'",
+            )
+        })?;
+        if !thickness.is_finite() || thickness <= EPSILON {
+            return Err(invalid(
+                "mapping.axis_thickness_m",
+                "must be finite and positive",
+            ));
+        }
+        return Ok(Some(0.5 * thickness));
+    }
+    Err(invalid(
+        "mapping.axis_extent_mode",
+        format!("unsupported axis_extent_mode '{raw_mode}'"),
+    ))
+}
+
+fn resolve_slab_background_v2(
+    preset_kind: &str,
+    params: &BTreeMap<String, Value>,
+    frame: Option<OrientedPlaneFrame>,
+    mapping: &TextureMappingIR,
+) -> Result<[f64; 3], TextureError> {
+    if let Some(bg) = mapping.background_vector {
+        return normalize_checked(bg, "mapping.background_vector");
+    }
+    let local_bg = match preset_kind {
+        "bloch_skyrmion" | "neel_skyrmion" | "antiskyrmion" | "skyrmion_lattice" => {
+            let polarity = sign(params, "core_polarity", 1)?;
+            [0.0, 0.0, -polarity]
+        }
+        "skyrmionium" | "hopfion" => {
+            let bg_sign = sign(params, "background_sign", 1)?;
+            [0.0, 0.0, bg_sign]
+        }
+        "bimeron" => {
+            let bg_sign = sign(params, "background_sign", 1)?;
+            [bg_sign, 0.0, 0.0]
+        }
+        "hopfion_compact_support" => [0.0, 0.0, 1.0],
+        _ => [0.0, 0.0, 1.0],
+    };
+    Ok(if is_metric(preset_kind) {
+        metric_vector(local_bg, frame)
+    } else {
+        local_bg
+    })
+}
+
+fn apply_clamp_mode_v2(
+    transformed: [f64; 3],
+    pivot: [f64; 3],
+    mapping: &TextureMappingIR,
+    fallback_extent: Option<[f64; 3]>,
+    frame: Option<OrientedPlaneFrame>,
+    is_metric_preset: bool,
+) -> Result<ClampOutcome, TextureError> {
+    let mode = mapping.clamp_mode.as_str();
+    if mode.is_empty() || mode == "none" {
+        return Ok(ClampOutcome::Sample(transformed));
+    }
+    let period = mapping.tile_period.or(fallback_extent).ok_or_else(|| {
+        invalid(
+            "mapping.tile_period",
+            "positive metric box/period [Px, Py, Pz] is required when clamp_mode != 'none'",
+        )
+    })?;
+    if period.iter().any(|&p| !p.is_finite() || p <= EPSILON) {
+        return Err(invalid(
+            "mapping.tile_period",
+            "all period components must be finite and positive",
+        ));
+    }
+    let rel = sub(transformed, pivot);
+    match mode {
+        "clamp" => Ok(ClampOutcome::Sample([
+            rel[0].clamp(-0.5 * period[0], 0.5 * period[0]) + pivot[0],
+            rel[1].clamp(-0.5 * period[1], 0.5 * period[1]) + pivot[1],
+            rel[2].clamp(-0.5 * period[2], 0.5 * period[2]) + pivot[2],
+        ])),
+        "repeat" => Ok(ClampOutcome::Sample([
+            wrap_metric_repeat(rel[0], period[0]) + pivot[0],
+            wrap_metric_repeat(rel[1], period[1]) + pivot[1],
+            wrap_metric_repeat(rel[2], period[2]) + pivot[2],
+        ])),
+        "mirror" => Ok(ClampOutcome::Sample([
+            wrap_metric_mirror(rel[0], period[0]) + pivot[0],
+            wrap_metric_mirror(rel[1], period[1]) + pivot[1],
+            wrap_metric_mirror(rel[2], period[2]) + pivot[2],
+        ])),
+        "background" => {
+            let outside = (0..3).any(|i| rel[i].abs() > 0.5 * period[i]);
+            if outside {
+                if let Some(bg) = mapping.background_vector {
+                    Ok(ClampOutcome::Background(normalize_checked(
+                        bg,
+                        "mapping.background_vector",
+                    )?))
+                } else {
+                    let default_local = [0.0, 0.0, 1.0];
+                    let resolved = if is_metric_preset {
+                        metric_vector(default_local, frame)
+                    } else {
+                        default_local
+                    };
+                    Ok(ClampOutcome::Background(resolved))
+                }
+            } else {
+                Ok(ClampOutcome::Sample(transformed))
+            }
+        }
+        other => Err(invalid(
+            "mapping.clamp_mode",
+            format!("unsupported clamp_mode '{other}'"),
+        )),
+    }
+}
+
+fn orthonormal_basis_from_normal(normal: [f64; 3]) -> Result<([f64; 3], [f64; 3]), TextureError> {
+    let reference = if normal[2].abs() < 0.9 {
+        [0.0, 0.0, 1.0]
+    } else {
+        [1.0, 0.0, 0.0]
+    };
+    let e1 = normalize_checked(cross(reference, normal), "spin_plane_normal")?;
+    let e2 = normalize_checked(cross(normal, e1), "spin_plane_normal")?;
+    Ok((e1, e2))
+}
+
+fn skyrmion_lattice(
+    params: &BTreeMap<String, Value>,
+    point: [f64; 3],
+) -> Result<[f64; 3], TextureError> {
+    let lattice = string(params, "lattice", Some("hexagonal"))?;
+    let a = positive(params, "lattice_constant", None)?;
+    let radius = positive(params, "radius", None)?;
+    if a <= 2.0 * radius {
+        return Err(invalid(
+            "lattice_constant",
+            "must be strictly greater than 2 * radius",
+        ));
+    }
+    let wall_type = match string(params, "kind", Some("bloch"))?.as_str() {
+        "bloch" => SkyrmionWallType::Bloch,
+        "neel" => SkyrmionWallType::Neel,
+        other => {
+            return Err(invalid(
+                "kind",
+                format!("must be 'bloch' or 'neel', got '{other}'"),
+            ));
+        }
+    };
+    let (u_ws, v_ws) = match lattice.as_str() {
+        "square" => (
+            wrap_metric_repeat(point[0], a),
+            wrap_metric_repeat(point[1], a),
+        ),
+        "hexagonal" => {
+            let sqrt3_half_a = 0.5 * 3.0_f64.sqrt() * a;
+            let f2 = point[1] / sqrt3_half_a;
+            let f1 = (point[0] - 0.5 * a * f2) / a;
+            let n1_0 = f1.round() as i64;
+            let n2_0 = f2.round() as i64;
+            let mut best_dist_sq = f64::INFINITY;
+            let mut best_u = point[0];
+            let mut best_v = point[1];
+            for d1 in -1..=1 {
+                for d2 in -1..=1 {
+                    let n1 = (n1_0 + d1) as f64;
+                    let n2 = (n2_0 + d2) as f64;
+                    let du = point[0] - (n1 * a + n2 * 0.5 * a);
+                    let dv = point[1] - (n2 * sqrt3_half_a);
+                    let dist_sq = du * du + dv * dv;
+                    if dist_sq < best_dist_sq {
+                        best_dist_sq = dist_sq;
+                        best_u = du;
+                        best_v = dv;
+                    }
+                }
+            }
+            (best_u, best_v)
+        }
+        other => {
+            return Err(invalid(
+                "lattice",
+                format!("must be 'hexagonal' or 'square', got '{other}'"),
+            ));
+        }
+    };
+    skyrmion(params, [u_ws, v_ws, point[2]], 1.0, wall_type)
+}
+
+fn spiral(params: &BTreeMap<String, Value>, point: [f64; 3]) -> Result<[f64; 3], TextureError> {
+    let spiral_kind = string(params, "spiral_kind", Some("cycloidal"))?;
+    let wavelength = positive(params, "wavelength", None)?;
+    let q_hat = normalize_checked(
+        vector(params, "propagation_axis", Some([1.0, 0.0, 0.0]))?,
+        "propagation_axis",
+    )?;
+    let chirality = sign(params, "chirality", 1)?;
+    let phase_rad = finite_number(params, "phase_rad", Some(0.0))?;
+    let (e1, e2) = match spiral_kind.as_str() {
+        "proper_screw" => orthonormal_basis_from_normal(q_hat)?,
+        "cycloidal" => {
+            let default_normal = if q_hat[1].abs() < 0.9 {
+                [0.0, 1.0, 0.0]
+            } else {
+                [0.0, 0.0, 1.0]
+            };
+            let raw_n = normalize_checked(
+                vector(params, "spin_plane_normal", Some(default_normal))?,
+                "spin_plane_normal",
+            )?;
+            let proj = dot(raw_n, q_hat);
+            if proj.abs() > 1.0 - 1.0e-6 {
+                return Err(invalid(
+                    "spin_plane_normal",
+                    "must not be parallel to propagation_axis for a cycloidal spiral",
+                ));
+            }
+            let n_s = normalize_checked(sub(raw_n, scale(q_hat, proj)), "spin_plane_normal")?;
+            let e2 = normalize_checked(cross(n_s, q_hat), "spin_plane_normal")?;
+            (q_hat, e2)
+        }
+        "custom_plane" => {
+            let n_s = normalize_checked(
+                vector(params, "spin_plane_normal", Some([0.0, 1.0, 0.0]))?,
+                "spin_plane_normal",
+            )?;
+            orthonormal_basis_from_normal(n_s)?
+        }
+        other => {
+            return Err(invalid(
+                "spiral_kind",
+                format!("must be 'cycloidal', 'proper_screw', or 'custom_plane', got '{other}'"),
+            ));
+        }
+    };
+    let phase = chirality * (2.0 * std::f64::consts::PI / wavelength) * dot(q_hat, point) + phase_rad;
+    let cos_phi = phase.cos();
+    let sin_phi = phase.sin();
+    normalize_checked(add(scale(e1, cos_phi), scale(e2, sin_phi)), "spiral")
+}
+
+/// 3D Bloch point hedgehog per `docs/physics/0534` (`texture-bloch-point-v2`).
+///
+/// `core_radius` is validated positive as the physical core-indicator / gizmo
+/// marker radius, while the continuum unit-vector field is the exact
+/// scale-invariant 3D hedgehog with regular origin limit `polarity * [0, 0, sz]`
+/// for `r <= 1e-15 m` (aligned across Rust, Python, and TypeScript).
+fn bloch_point(
+    params: &BTreeMap<String, Value>,
+    point: [f64; 3],
+) -> Result<[f64; 3], TextureError> {
+    let bp_kind = string(params, "bp_kind", Some("circulating"))?;
+    let default_twist = match bp_kind.as_str() {
+        "circulating" => std::f64::consts::FRAC_PI_2,
+        "radial" | "hyperbolic" => 0.0,
+        other => {
+            return Err(invalid(
+                "bp_kind",
+                format!("must be 'radial', 'circulating', or 'hyperbolic', got '{other}'"),
+            ));
+        }
+    };
+    let polarity = sign(params, "polarity", 1)?;
+    let twist = finite_number(params, "twist_rad", Some(default_twist))?;
+    let _core_radius = positive(params, "core_radius", Some(1.0e-9))?;
+    let r = norm(point);
+    let u_hat = if r <= 1.0e-15 {
+        [0.0, 0.0, 1.0]
+    } else {
+        scale(point, 1.0 / r)
+    };
+    let sz = if bp_kind == "hyperbolic" { -1.0 } else { 1.0 };
+    let v = [u_hat[0], u_hat[1], sz * u_hat[2]];
+    let (sin_t, cos_t) = twist.sin_cos();
+    Ok([
+        polarity * (cos_t * v[0] - sin_t * v[1]),
+        polarity * (sin_t * v[0] + cos_t * v[1]),
+        polarity * v[2],
+    ])
+}
+
+fn nearest_int(value: f64) -> i64 {
+    (value + 0.5).floor() as i64
+}
+
+fn artificial_spin_ice(
+    params: &BTreeMap<String, Value>,
+    point: [f64; 3],
+) -> Result<[f64; 3], TextureError> {
+    let lattice = string(params, "lattice", Some("square"))?;
+    let vertex_state = string(params, "vertex_state", Some("type_i_ground"))?;
+    if !matches!(
+        vertex_state.as_str(),
+        "type_i_ground" | "type_ii_polarized" | "monopole_pair"
+    ) {
+        return Err(invalid(
+            "vertex_state",
+            format!(
+                "must be 'type_i_ground', 'type_ii_polarized', or 'monopole_pair', got '{vertex_state}'"
+            ),
+        ));
+    }
+    let a = positive(params, "pitch", None)?;
+    let u = point[0];
+    let v = point[1];
+    match lattice.as_str() {
+        "square" => {
+            let h_nu = (u / a).floor() as i64;
+            let h_nv = nearest_int(v / a);
+            let h_du = u - (h_nu as f64 + 0.5) * a;
+            let h_dv = v - (h_nv as f64) * a;
+            let h_dist_sq = h_du * h_du + h_dv * h_dv;
+
+            let v_nu = nearest_int(u / a);
+            let v_nv = (v / a).floor() as i64;
+            let v_du = u - (v_nu as f64) * a;
+            let v_dv = v - (v_nv as f64 + 0.5) * a;
+            let v_dist_sq = v_du * v_du + v_dv * v_dv;
+
+            if h_dist_sq <= v_dist_sq {
+                let mut sign_val = if vertex_state == "type_ii_polarized" {
+                    1.0
+                } else if (h_nu + h_nv).rem_euclid(2) == 0 {
+                    1.0
+                } else {
+                    -1.0
+                };
+                if vertex_state == "monopole_pair" && h_nu == 0 && h_nv == 0 {
+                    sign_val = -sign_val;
+                }
+                Ok([sign_val, 0.0, 0.0])
+            } else {
+                let sign_val = if vertex_state == "type_ii_polarized" {
+                    1.0
+                } else if (v_nu + v_nv).rem_euclid(2) == 0 {
+                    -1.0
+                } else {
+                    1.0
+                };
+                Ok([0.0, sign_val, 0.0])
+            }
+        }
+        "kagome" => {
+            let sqrt3 = 3.0_f64.sqrt();
+            let b1 = [1.5 * a, 0.5 * sqrt3 * a];
+            let b2 = [1.5 * a, -0.5 * sqrt3 * a];
+            let f_sum = u / (1.5 * a);
+            let f_diff = v / (0.5 * sqrt3 * a);
+            let i0 = (0.5 * (f_sum + f_diff)).round() as i64;
+            let j0 = (0.5 * (f_sum - f_diff)).round() as i64;
+            let bonds = [
+                [1.0, 0.0],
+                [-0.5, 0.5 * sqrt3],
+                [-0.5, -0.5 * sqrt3],
+            ];
+            let mut best_dist_sq = f64::INFINITY;
+            let mut best_i = i0;
+            let mut best_j = j0;
+            let mut best_k = 0usize;
+            for di in -1..=1 {
+                for dj in -1..=1 {
+                    let ii = i0 + di;
+                    let jj = j0 + dj;
+                    let ax = (ii as f64) * b1[0] + (jj as f64) * b2[0];
+                    let ay = (ii as f64) * b1[1] + (jj as f64) * b2[1];
+                    for (k, bond) in bonds.iter().enumerate() {
+                        let mx = ax + 0.5 * a * bond[0];
+                        let my = ay + 0.5 * a * bond[1];
+                        let du = u - mx;
+                        let dv = v - my;
+                        let dist_sq = du * du + dv * dv;
+                        if dist_sq < best_dist_sq {
+                            best_dist_sq = dist_sq;
+                            best_i = ii;
+                            best_j = jj;
+                            best_k = k;
+                        }
+                    }
+                }
+            }
+            let bond = bonds[best_k];
+            let mut sign_val = if vertex_state == "type_ii_polarized" {
+                if best_k == 0 { 1.0 } else { -1.0 }
+            } else {
+                let out_bond = (best_i - best_j).rem_euclid(3) as usize;
+                if best_k == out_bond { 1.0 } else { -1.0 }
+            };
+            if vertex_state == "monopole_pair" && best_i == 0 && best_j == 0 && best_k == 0 {
+                sign_val = -sign_val;
+            }
+            Ok([sign_val * bond[0], sign_val * bond[1], 0.0])
+        }
+        other => Err(invalid(
+            "lattice",
+            format!("must be 'square' or 'kagome', got '{other}'"),
+        )),
+    }
+}
+
 fn local_evaluate(
     preset_kind: &str,
     params: &BTreeMap<String, Value>,
@@ -806,6 +1249,10 @@ fn local_evaluate(
         "two_domain" => two_domain(params, point),
         "helical" => helical(params, point),
         "conical" => conical(params, point),
+        "skyrmion_lattice" => skyrmion_lattice(params, point),
+        "spiral" => spiral(params, point),
+        "bloch_point" => bloch_point(params, point),
+        "artificial_spin_ice" => artificial_spin_ice(params, point),
         other => Err(invalid(
             "preset_kind",
             format!("unsupported preset '{other}'"),
@@ -826,7 +1273,77 @@ fn is_metric(preset_kind: &str) -> bool {
             | "bimeron"
             | "domain_wall"
             | "two_domain"
+            | "skyrmion_lattice"
+            | "artificial_spin_ice"
     )
+}
+
+fn source_position_for_point(point: &TextureSamplePoint, mapping: &TextureMappingIR) -> [f64; 3] {
+    if mapping.space.eq_ignore_ascii_case("region") {
+        point.position_region.unwrap_or(point.position_object)
+    } else if mapping.space.eq_ignore_ascii_case("object") {
+        point.position_object
+    } else {
+        point.position_world
+    }
+}
+
+/// Canonical default `tile_period` formula shared identically across Rust,
+/// Python (`preset_eval_v2.py`), and TypeScript (`evaluateV2Client.ts`).
+///
+/// 1. Explicit `mapping.tile_period` wins when provided.
+/// 2. Explicit `target_bounds_extent` (domain/region AABB extents in source space
+///    BEFORE `texture_transform`) is used when finite and positive on all 3 axes.
+/// 3. Otherwise compute the AABB extent over active sample points in source space
+///    BEFORE `texture_transform`, replacing any degenerate axis (`<= EPSILON`)
+///    with the maximum positive axis extent (returning `None` if all axes are
+///    degenerate).
+pub fn resolve_default_tile_period(
+    target_bounds_extent: Option<[f64; 3]>,
+    points: &[TextureSamplePoint],
+    mapping: &TextureMappingIR,
+) -> Option<[f64; 3]> {
+    if let Some(explicit) = mapping.tile_period {
+        return Some(explicit);
+    }
+    if let Some(ext) = target_bounds_extent {
+        if ext.iter().all(|&e| e.is_finite() && e > EPSILON) {
+            return Some(ext);
+        }
+    }
+    let mut min_pt = [f64::INFINITY; 3];
+    let mut max_pt = [f64::NEG_INFINITY; 3];
+    let mut any_active = false;
+    for point in points {
+        if !point.active {
+            continue;
+        }
+        let src = source_position_for_point(point, mapping);
+        if src.iter().all(|c| c.is_finite()) {
+            any_active = true;
+            for axis in 0..3 {
+                min_pt[axis] = min_pt[axis].min(src[axis]);
+                max_pt[axis] = max_pt[axis].max(src[axis]);
+            }
+        }
+    }
+    if !any_active {
+        return None;
+    }
+    let raw = [
+        max_pt[0] - min_pt[0],
+        max_pt[1] - min_pt[1],
+        max_pt[2] - min_pt[2],
+    ];
+    let max_ext = raw[0].max(raw[1]).max(raw[2]);
+    if !max_ext.is_finite() || max_ext <= EPSILON {
+        return None;
+    }
+    Some([
+        if raw[0] > EPSILON { raw[0] } else { max_ext },
+        if raw[1] > EPSILON { raw[1] } else { max_ext },
+        if raw[2] > EPSILON { raw[2] } else { max_ext },
+    ])
 }
 
 fn sample_v2(
@@ -835,24 +1352,46 @@ fn sample_v2(
     mapping: &TextureMappingIR,
     transform: &TextureTransform3DIR,
     points: &[TextureSamplePoint],
+    target_bounds_extent: Option<[f64; 3]>,
 ) -> Result<Vec<[f64; 3]>, TextureError> {
     let frame = resolve_frame(params, mapping)?;
-    if matches!(preset_kind, "hopfion" | "hopfion_compact_support") && frame.is_some() {
+    if matches!(
+        preset_kind,
+        "hopfion" | "hopfion_compact_support" | "bloch_point"
+    ) && frame.is_some()
+    {
         return Err(invalid(
             "mapping.projection",
-            "the selected hopfion preset is three-dimensional and requires object_local projection",
+            "the selected three-dimensional preset requires object_local projection",
         ));
     }
     let prepared_transform = PreparedTextureTransform::prepare(transform)?;
     local_evaluate(preset_kind, params, [0.0, 0.0, 0.0])?;
+    let half_axis_thickness = validate_axis_extent_v2(mapping)?;
+    let slab_background = if half_axis_thickness.is_some() {
+        Some(resolve_slab_background_v2(
+            preset_kind,
+            params,
+            frame,
+            mapping,
+        )?)
+    } else {
+        None
+    };
 
+    let fallback_extent = if !mapping.clamp_mode.is_empty()
+        && mapping.clamp_mode != "none"
+        && mapping.tile_period.is_none()
+    {
+        resolve_default_tile_period(target_bounds_extent, points, mapping)
+    } else {
+        None
+    };
+
+    let is_metric_preset = is_metric(preset_kind);
     let mut output = Vec::with_capacity(points.len());
     for point in points {
-        let source_position = if mapping.space.eq_ignore_ascii_case("object") {
-            point.position_object
-        } else {
-            point.position_world
-        };
+        let source_position = source_position_for_point(point, mapping);
         if source_position
             .iter()
             .any(|component| !component.is_finite())
@@ -871,13 +1410,39 @@ fn sample_v2(
                 "transformed coordinates must be finite",
             ));
         }
-        let local_point = if is_metric(preset_kind) {
-            metric_point(transformed, frame)
+        if let (Some(half_t), Some(bg)) = (half_axis_thickness, slab_background) {
+            let rel = sub(transformed, prepared_transform.pivot);
+            let z_normal = if is_metric_preset {
+                frame.map_or(rel[2], |f| dot(rel, f.e_n))
+            } else {
+                rel[2]
+            };
+            if z_normal.abs() > half_t * (1.0 + 1.0e-12) {
+                output.push(prepared_transform.vector_to_source(bg));
+                continue;
+            }
+        }
+        let clamped = match apply_clamp_mode_v2(
+            transformed,
+            prepared_transform.pivot,
+            mapping,
+            fallback_extent,
+            frame,
+            is_metric_preset,
+        )? {
+            ClampOutcome::Background(bg) => {
+                output.push(prepared_transform.vector_to_source(bg));
+                continue;
+            }
+            ClampOutcome::Sample(pt) => pt,
+        };
+        let local_point = if is_metric_preset {
+            metric_point(clamped, frame)
         } else {
-            transformed
+            clamped
         };
         let local_vector = local_evaluate(preset_kind, params, local_point)?;
-        let source_vector = if is_metric(preset_kind) {
+        let source_vector = if is_metric_preset {
             metric_vector(local_vector, frame)
         } else {
             local_vector
@@ -887,13 +1452,14 @@ fn sample_v2(
     Ok(output)
 }
 
-pub fn sample_preset_texture_versioned(
+pub fn sample_preset_texture_versioned_with_bounds(
     preset_kind: &str,
     preset_version: u32,
     params: &BTreeMap<String, Value>,
     mapping: &TextureMappingIR,
     transform: &TextureTransform3DIR,
     points: &[TextureSamplePoint],
+    target_bounds_extent: Option<[f64; 3]>,
 ) -> Result<Vec<[f64; 3]>, TextureError> {
     match preset_version {
         1 => crate::magnetization_textures::sample_preset_texture(
@@ -904,7 +1470,33 @@ pub fn sample_preset_texture_versioned(
             points,
         )
         .map_err(TextureError::Legacy),
-        2 => sample_v2(preset_kind, params, mapping, transform, points),
+        2 => sample_v2(
+            preset_kind,
+            params,
+            mapping,
+            transform,
+            points,
+            target_bounds_extent,
+        ),
         version => Err(TextureError::UnsupportedVersion(version)),
     }
+}
+
+pub fn sample_preset_texture_versioned(
+    preset_kind: &str,
+    preset_version: u32,
+    params: &BTreeMap<String, Value>,
+    mapping: &TextureMappingIR,
+    transform: &TextureTransform3DIR,
+    points: &[TextureSamplePoint],
+) -> Result<Vec<[f64; 3]>, TextureError> {
+    sample_preset_texture_versioned_with_bounds(
+        preset_kind,
+        preset_version,
+        params,
+        mapping,
+        transform,
+        points,
+        None,
+    )
 }

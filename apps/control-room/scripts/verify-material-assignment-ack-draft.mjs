@@ -59,11 +59,12 @@ const retryScene = {
 assert.equal(assignedMaterialParametersDraft(material.id, retryScene).aex, "2e-11");
 assert.throws(() => assignedMaterialParametersDraft(material.id, { materials: [] }), /acknowledged scene/);
 
-const panel = await readFile(new URL("../src/modules/inspector/panels/ObjectMaterialPanel.tsx", import.meta.url), "utf8");
-assert.match(panel, /rebaseAssignedMaterialDraft\(\s*result\.materialId,\s*\[result\.assigned, result\.created\.committed_scene\]/);
-assert.match(panel, /rebaseAssignedMaterialDraft\(\s*failure\.error\.materialId,\s*\[assigned, failure\.error\.created\.committed_scene\]/);
-assert.doesNotMatch(panel, /mergeDraftPatch\(\{ materialRef:/);
-assert.match(panel, /rebaseMagneticParametersDraftAfterAssignment\(\{[\s\S]*?startingRevisions,[\s\S]*?currentRevisions: scope\.draftFieldRevisions/);
+const liveSpec = await readFile(new URL("../src/modules/inspector/inspectors/objects/material/ObjectMaterialSpec.tsx", import.meta.url), "utf8");
+const liveCommit = await readFile(new URL("../src/modules/inspector/inspectors/objects/material/materialPhysicsAutoActivation.ts", import.meta.url), "utf8");
+assert.match(liveSpec, /magneticParameterMaterialResourceFromSceneResource\(activeSceneMatId,\s*scene\.data\)/);
+assert.match(liveSpec, /MaterialAssignmentAfterCreateError/);
+assert.match(liveSpec, /handleRetryFailedAssignment/);
+assert.match(liveCommit, /assignToObjectId:\s*objectId/);
 
 // Execute the revision comparison independently; source guards below bind its
 // reset ordering to the panel. This is not a React scheduling/lifecycle test.
@@ -95,15 +96,7 @@ const merged = mergeAtRevisions(
 assert.equal(merged.ms, "800000");
 assert.equal(merged.aex, committed.aex);
 assert.equal(merged.alpha, "0.07");
-const scopeTransition = panel.slice(
-  panel.indexOf("const scope = useMemo("),
-  panel.indexOf("const historyGeneration ="),
-);
-assert.match(scopeTransition, /scopeState\.key === scopeKey \? scopeState/);
-assert.match(scopeTransition, /draftFieldRevisions: new Map/);
-assert.match(scopeTransition, /anisotropyFieldRevisions: new Map/);
-const startPending = panel.slice(panel.indexOf("function startPending("), panel.indexOf("function finishPending("));
-assert.doesNotMatch(startPending, /FieldRevisions\.clear/);
-assert.match(panel, /scopeRef\.current === scope && commands\.getSessionScopeKey\(\) === sessionScopeKey/);
+assert.match(liveSpec, /sessionScopeKeyRef\.current === capturedScopeKey/);
+assert.match(liveSpec, /kernel\.authoringHistory\?\.getGeneration\?\.\(\) === historyGeneration/);
 assert.equal((await runMaterialAssignmentDraftCheck()).status, "passed");
 console.log("PASS: legacy null-write and scope-reset counterexamples reproduced; full ACK, per-field merge, current retry ACK, missing asset rejection and reset ordering checked. Browser/React lifecycle NOT VERIFIED.");

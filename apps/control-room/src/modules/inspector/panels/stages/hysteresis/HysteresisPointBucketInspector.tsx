@@ -3,7 +3,6 @@
 import { useCallback, useMemo } from "react";
 
 import type { HysteresisPointSchema } from "@/kernel/api/apiTypes";
-import { createCommandContext } from "@/kernel/commands/commandContext";
 import {
   hysteresisPointTargetMetadata,
   hysteresisPointVectorResourceRef,
@@ -11,6 +10,7 @@ import {
 
 import { FieldRow } from "../../../primitives/FieldRow";
 import { InspectorGroup } from "../../../primitives/InspectorGroup";
+import { buildStudyCommandContext } from "../../study/useConnectedStudyAuthoring";
 import type { HysteresisInspectorCommonProps } from "./HysteresisInspectorTypes";
 import { HysteresisPointTable } from "./HysteresisPointTable";
 
@@ -30,7 +30,7 @@ export function HysteresisPointBucketInspector({
   bucket: HysteresisPointBucket;
 }) {
   const commandContext = useMemo(
-    () => createCommandContext("inspector", kernel),
+    () => buildStudyCommandContext(kernel),
     [kernel],
   );
   const completedCount = progress?.completed_points ?? points.length;

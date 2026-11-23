@@ -83,7 +83,7 @@ export function SegmentedControl<T extends string>({
       aria-label={ariaLabel}
       aria-busy={pending || undefined}
       className={cn(
-        "grid min-w-0 gap-0.5 rounded-fm-pill border border-fm-subtle bg-fm-field p-0.5",
+        "grid min-w-0 gap-0.5 rounded-fm-pill border border-fm-control-border bg-fm-field p-0.5",
         columns === 2 && "grid-cols-2",
         columns === 3 && "grid-cols-3",
         columns === 4 && "grid-cols-4",
@@ -104,7 +104,7 @@ export function SegmentedControl<T extends string>({
             aria-checked={checked}
             aria-disabled={itemDisabled || pending || undefined}
             className={cn(
-              "h-fm-control-sm min-w-0 rounded-fm-pill px-2",
+              "h-fm-control-sm min-w-0 w-full overflow-hidden truncate whitespace-nowrap rounded-fm-pill px-1.5 text-center",
               "font-fm-ui text-fm-control leading-tight outline-none",
               "transition-[transform,background-color,color,box-shadow] duration-150 ease-fm-out-soft",
               "active:scale-[0.98] motion-reduce:active:scale-100",
@@ -123,7 +123,6 @@ export function SegmentedControl<T extends string>({
             key={option.value}
             role="radio"
             tabIndex={index === keyboardEntryIndex && !itemDisabled ? 0 : -1}
-            title={option.accessibleLabel}
             type="button"
             onClick={() => {
               if (!itemDisabled && !pending) onValueChange(option.value);

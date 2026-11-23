@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 
-import * as frequencyInspectors from "./frequency-domain/FrequencyDomainResultInspectors";
+import * as frequencyInspectors from "../inspectors/results/frequency-domain";
 
 import { resolveInspectorPanel } from "../inspectorRegistry";
 import {
@@ -9,13 +9,13 @@ import {
   ResonanceDrivenSpectrumResultInspector,
   ResonanceModalCouplingResultInspector,
   ResonanceModalSpectrumResultInspector,
-} from "./physics-first/PhysicsFirstResultInspectors";
+} from "../inspectors/results/resonance";
 import {
   buildFrequencyResponsePlotCommandInput,
   buildFrequencyResponsePointResidualSummary,
   countResidualEvidencePoints,
   FrequencyResponsePointResidualFields,
-} from "./frequency-domain/FrequencyDomainResultInspectors";
+} from "../inspectors/results/frequency-domain";
 
 describe("physics-first frequency result inspectors", () => {
   it("keeps response-map readiness fail-closed until a typed k-by-f resource exists", () => {

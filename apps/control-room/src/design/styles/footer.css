@@ -22,18 +22,76 @@
   padding: 2px var(--fm-space-2);
 }
 
+/* Dock tabs: one row that scrolls sideways without a visible scrollbar.
+   Edge fades show that more tabs sit beyond an edge; each fade grows only
+   as the strip scrolls away from that end (scroll-driven), so a strip
+   that fits has none. Narrow docks drop labels first (see container
+   queries below), so the strip usually fits without scrolling at all. */
+@property --fm-footer-fade-start {
+  syntax: "<length>";
+  inherits: false;
+  initial-value: 0px;
+}
+
+@property --fm-footer-fade-end {
+  syntax: "<length>";
+  inherits: false;
+  initial-value: 0px;
+}
+
 .fm-footer__tabs {
+  --fm-footer-fade-size: 2rem;
   flex: 1 1 auto;
   min-width: 0;
   justify-content: flex-start;
   overflow-x: auto;
   overflow-y: hidden;
-  scrollbar-width: thin;
-  scrollbar-color: var(--fm-border-strong) transparent;
-  scroll-padding-inline: var(--fm-space-2);
+  scrollbar-width: none;
+  scroll-padding-inline: var(--fm-footer-fade-size);
   border: 0;
   gap: var(--fm-space-1);
   padding-block: 2px;
+  mask:
+    linear-gradient(black, black) no-clip subtract,
+    linear-gradient(to right, black, transparent) 0 0 / var(--fm-footer-fade-start) 100% no-repeat no-clip,
+    linear-gradient(to right, transparent, black) 100% 0 / var(--fm-footer-fade-end) 100% no-repeat no-clip;
+  animation: fm-footer-fade-start linear both, fm-footer-fade-end linear both;
+  animation-timeline: scroll(self inline);
+  animation-range: 0 var(--fm-footer-fade-size), calc(100% - var(--fm-footer-fade-size)) 100%;
+}
+
+.fm-footer__tabs::-webkit-scrollbar {
+  display: none;
+}
+
+@keyframes fm-footer-fade-start {
+  to { --fm-footer-fade-start: var(--fm-footer-fade-size); }
+}
+
+@keyframes fm-footer-fade-end {
+  from { --fm-footer-fade-end: var(--fm-footer-fade-size); }
+}
+
+.fm-footer__tab-label {
+  min-width: 0;
+}
+
+/* Medium dock: inactive tabs show their icon only; the open tab keeps its
+   label. Labels stay in the accessibility tree (visually hidden). */
+@container footer (width < 1180px) {
+  .fm-footer__tab:not([data-state="active"]) {
+    position: relative;
+    padding-inline: var(--fm-space-2);
+  }
+
+  .fm-footer__tab:not([data-state="active"]) .fm-footer__tab-label {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
 }
 
 .fm-footer__tab {
@@ -227,4 +285,52 @@
 }
 @container footer (width < 1100px) {
   .fm-footer__telemetry-status .fm-footer-telemetry__status-online { display: none; }
+}
+
+/* Dock fold toggle: mirrors the ribbon toggle. Chevron points down while
+   the dock is open (folds it down to its tab strip) and up when folded. */
+.fm-footer__toggle {
+  flex: none;
+  width: var(--fm-control-height-compact);
+  height: var(--fm-control-height-compact);
+  border-radius: var(--fm-radius-pill);
+  color: var(--fm-text-muted);
+}
+
+@media (hover: hover) {
+  .fm-footer__toggle:hover {
+    background: color-mix(in srgb, var(--fm-text-primary) 6%, transparent);
+    color: var(--fm-text-primary);
+  }
+}
+
+.fm-footer__toggle svg {
+  transition: rotate var(--fm-duration-panel) var(--fm-ease-out-soft);
+}
+
+.fm-footer[data-expanded="false"] .fm-footer__toggle svg {
+  rotate: 180deg;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .fm-footer__toggle svg { transition: none; }
+}
+
+/* Folded dock: only the header row remains; the open tab loses its raised
+   look so the strip reads as a launcher, not an open panel. */
+.fm-footer[data-expanded="false"] {
+  grid-template-rows: auto 0;
+}
+
+.fm-footer[data-expanded="false"] .fm-footer__bar {
+  border-bottom-color: transparent;
+}
+
+.fm-footer[data-expanded="false"] > .fm-footer__content {
+  visibility: hidden;
+}
+
+.fm-footer[data-expanded="false"] .fm-footer__tab[data-state="active"] {
+  background: transparent;
+  box-shadow: none;
 }

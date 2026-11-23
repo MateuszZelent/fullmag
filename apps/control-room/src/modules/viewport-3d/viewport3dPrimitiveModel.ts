@@ -18,6 +18,21 @@ import {
   buildAuthoredCpwGeometry,
   type AuthoredAntennaGeometry,
 } from "@/shared/domain/geometry/authoredMicrostripGeometry";
+import {
+  pointInsideRegionShape,
+  resolveTargetBoundsMeters,
+  type TargetMetricBounds,
+} from "@/shared/domain/magnetization-texture/boundsResolver";
+import {
+  samplePresetTextureV2Client,
+  type PresetTextureSpecV2,
+} from "@/shared/domain/magnetization-texture/evaluateV2Client";
+import {
+  buildPresetSpecFromDraft,
+  hydrateMagneticTextureDraftFromInitializer,
+} from "@/shared/domain/magnetization-texture/presetDefaults";
+import type { TextureInspectorDraftBinding } from "@/shared/domain/magnetization-texture/textureDraftBridge";
+import { humanPresetLabel } from "@/shared/domain/magnetization-texture/texturePresets";
 
 import { magnetizationHslRgb } from "./orientation/magnetizationColor";
 import type { Viewport3DBounds } from "./viewport3dRenderModel";
@@ -572,6 +587,29 @@ function magnetizationAssetById(scene: JsonRecord, assetId: string | null): Json
   );
 }
 
+function firstAuthoredRegionTextureOverride(
+  object: JsonRecord,
+): { initializer: JsonRecord; regionId: string } | null {
+  if (!Array.isArray(object.regions)) return null;
+  const candidates = object.regions
+    .map(asRecord)
+    .filter((region): region is JsonRecord => Boolean(region && region.enabled !== false))
+    .sort((left, right) => {
+      const lp = asNumber(left.priority) ?? 0;
+      const rp = asNumber(right.priority) ?? 0;
+      return rp - lp;
+    });
+
+  for (const region of candidates) {
+    const regionId = asString(region.region_id);
+    const initializer = asRecord(asRecord(region.texture_override)?.initial_magnetization);
+    if (regionId && initializer) {
+      return { initializer, regionId };
+    }
+  }
+  return null;
+}
+
 function firstRegionOverrideMagnetizationRef(
   object: JsonRecord,
 ): { assetId: string; regionId: string } | null {
@@ -590,20 +628,46 @@ function magnetizationPreviewColor(
   asset: JsonRecord,
 ): string {
   if (presetKind === "uniform") {
-    return rgbToHex(
-      magnetizationHslRgb(
-        ...(asVec3(asRecord(asset.preset_params)?.direction) ?? [1, 0, 0]),
-      ),
-    );
+    const direction =
+      asVec3(asRecord(asset.preset_params)?.direction) ??
+      asVec3(asset.value) ??
+      [1, 0, 0];
+    return rgbToHex(magnetizationHslRgb(...direction));
   }
   if (presetKind === "vortex") return rgbToHex(VORTEX_PREVIEW_RGB);
   if (presetKind === "antivortex") return rgbToHex(ANTIVORTEX_PREVIEW_RGB);
-  if (presetKind === "random_seeded" || presetKind === "random") return rgbToHex(RANDOM_SEEDED_PREVIEW_RGB);
-  if (presetKind === "bloch_skyrmion" || presetKind === "neel_skyrmion" || presetKind === "bimeron") return rgbToHex(SKYRMION_PREVIEW_RGB);
-  if (presetKind === "domain_wall") return rgbToHex(DOMAIN_WALL_PREVIEW_RGB);
+  if (presetKind === "random_seeded" || presetKind === "random") {
+    return rgbToHex(RANDOM_SEEDED_PREVIEW_RGB);
+  }
+  if (
+    presetKind === "bloch_skyrmion" ||
+    presetKind === "neel_skyrmion" ||
+    presetKind === "antiskyrmion" ||
+    presetKind === "skyrmionium" ||
+    presetKind === "bimeron" ||
+    presetKind === "skyrmion_lattice"
+  ) {
+    return rgbToHex(SKYRMION_PREVIEW_RGB);
+  }
+  if (
+    presetKind === "domain_wall" ||
+    presetKind === "vortex_wall" ||
+    presetKind === "artificial_spin_ice"
+  ) {
+    return rgbToHex(DOMAIN_WALL_PREVIEW_RGB);
+  }
   if (presetKind === "two_domain") return rgbToHex(TWO_DOMAIN_PREVIEW_RGB);
-  if (presetKind === "helical") return rgbToHex(HELICAL_PREVIEW_RGB);
-  if (presetKind === "conical") return rgbToHex(CONICAL_PREVIEW_RGB);
+  if (presetKind === "helical" || presetKind === "spiral") {
+    return rgbToHex(HELICAL_PREVIEW_RGB);
+  }
+  if (
+    presetKind === "conical" ||
+    presetKind === "hopfion" ||
+    presetKind === "hopfion_compact_support" ||
+    presetKind === "bloch_point"
+  ) {
+    return rgbToHex(CONICAL_PREVIEW_RGB);
+  }
   return rgbToHex(DEFAULT_PREVIEW_RGB);
 }
 
@@ -621,6 +685,27 @@ function magnetizationTexturePreview(
   scene: JsonRecord,
   object: JsonRecord,
 ): Viewport3DMagnetizationTexturePreview | null {
+  const authoredRegion = firstAuthoredRegionTextureOverride(object);
+  if (authoredRegion) {
+    const init = authoredRegion.initializer;
+    const presetKind =
+      asString(init.preset_kind) ?? asString(init.kind) ?? "texture";
+    const pivot = asVec3(asRecord(init.texture_transform)?.pivot);
+    const assetId = `region-texture:${authoredRegion.regionId}`;
+    return {
+      assetId,
+      color: magnetizationPreviewColor(presetKind, init),
+      label:
+        asString(init.ui_label) ??
+        asString(init.name) ??
+        humanPresetLabel(presetKind, asString(init.kind)),
+      ...(pivot ? { pivot } : {}),
+      presetKind,
+      regionId: authoredRegion.regionId,
+      source: "region-override",
+    };
+  }
+
   const regionOverride = firstRegionOverrideMagnetizationRef(object);
   const assetId = regionOverride?.assetId ?? asString(object.magnetization_ref);
   const asset = magnetizationAssetById(scene, assetId);
@@ -902,4 +987,161 @@ export function resolvePrimitiveSelectionBounds(
     primitiveModel?.objects.find((object) => object.objectId === objectId)
       ?.bounds ?? null
   );
+}
+
+export interface SampleViewport3DSurfaceHslOptions {
+  readonly scene: SceneResource | null;
+  readonly objectId: string;
+  readonly positionsWorld: Float32Array;
+  readonly liveBinding?: TextureInspectorDraftBinding | null;
+}
+
+interface CompiledRegionLayer {
+  readonly regionId: string;
+  readonly priority: number;
+  readonly regionRecord: JsonRecord;
+  readonly spec: PresetTextureSpecV2;
+  readonly regionBounds: TargetMetricBounds;
+}
+
+export function sampleViewport3DSurfaceHslColors({
+  scene,
+  objectId,
+  positionsWorld,
+  liveBinding = null,
+}: SampleViewport3DSurfaceHslOptions): Float32Array | null {
+  const vertexCount = Math.floor(positionsWorld.length / 3);
+  if (vertexCount <= 0) return null;
+
+  const sceneRec = asRecord(scene);
+  const objectRec = Array.isArray(sceneRec?.objects)
+    ? sceneRec.objects.map(asRecord).find((entry) => entry && asString(entry.id) === objectId) ??
+      null
+    : null;
+
+  const objectTarget = { kind: "object" as const, objectId };
+  const objectBounds =
+    liveBinding?.target.kind === "object" && liveBinding.target.objectId === objectId
+      ? liveBinding.bounds
+      : resolveTargetBoundsMeters(scene, objectTarget);
+  const objectTransform = asRecord(objectRec?.transform);
+
+  let objectSpec: PresetTextureSpecV2 | null = null;
+  if (liveBinding?.target.kind === "object" && liveBinding.target.objectId === objectId) {
+    if (liveBinding.draft.sourceMode !== "field-file") {
+      objectSpec = buildPresetSpecFromDraft(liveBinding.draft, objectBounds);
+    }
+  } else if (sceneRec && objectRec) {
+    const asset = magnetizationAssetById(sceneRec, asString(objectRec.magnetization_ref));
+    if (asset && asString(asset.kind) !== "sampled") {
+      const draft = hydrateMagneticTextureDraftFromInitializer(asset, objectBounds, "object");
+      objectSpec = buildPresetSpecFromDraft(draft, objectBounds);
+    }
+  }
+
+  const regionLayers: CompiledRegionLayer[] = [];
+  const rawRegions = Array.isArray(objectRec?.regions) ? objectRec.regions : [];
+  for (const rawRegion of rawRegions) {
+    const reg = asRecord(rawRegion);
+    if (!reg || reg.enabled === false) continue;
+    const regionId = asString(reg.region_id);
+    if (!regionId) continue;
+    const priority = asNumber(reg.priority) ?? 0;
+    const regBounds =
+      liveBinding?.target.kind === "region" &&
+      liveBinding.target.objectId === objectId &&
+      liveBinding.target.regionId === regionId
+        ? liveBinding.bounds
+        : resolveTargetBoundsMeters(scene, { kind: "region", objectId, regionId });
+
+    if (
+      liveBinding?.target.kind === "region" &&
+      liveBinding.target.objectId === objectId &&
+      liveBinding.target.regionId === regionId
+    ) {
+      if (
+        liveBinding.draft.inheritanceMode === "override" &&
+        liveBinding.draft.sourceMode !== "field-file"
+      ) {
+        regionLayers.push({
+          regionId,
+          priority,
+          regionRecord: reg,
+          spec: buildPresetSpecFromDraft(liveBinding.draft, regBounds),
+          regionBounds: regBounds,
+        });
+      }
+      continue;
+    }
+
+    const init = asRecord(asRecord(reg.texture_override)?.initial_magnetization);
+    if (init && asString(init.kind) !== "sampled") {
+      const regDraft = hydrateMagneticTextureDraftFromInitializer(init, regBounds, "region", {
+        inherited: false,
+      });
+      regionLayers.push({
+        regionId,
+        priority,
+        regionRecord: reg,
+        spec: buildPresetSpecFromDraft(regDraft, regBounds),
+        regionBounds: regBounds,
+      });
+    }
+  }
+
+  regionLayers.sort((left, right) => right.priority - left.priority);
+
+  if (!objectSpec && regionLayers.length === 0) {
+    return null;
+  }
+
+  const outColors = new Float32Array(vertexCount * 3);
+  for (let i = 0; i < vertexCount; i += 1) {
+    const base = i * 3;
+    const worldPt: [number, number, number] = [
+      positionsWorld[base]!,
+      positionsWorld[base + 1]!,
+      positionsWorld[base + 2]!,
+    ];
+    const positionObject: [number, number, number] = [
+      worldPt[0] - objectBounds.worldCenter[0],
+      worldPt[1] - objectBounds.worldCenter[1],
+      worldPt[2] - objectBounds.worldCenter[2],
+    ];
+
+    let chosenSpec: PresetTextureSpecV2 | null = objectSpec;
+    let chosenBounds: TargetMetricBounds = objectBounds;
+    for (const layer of regionLayers) {
+      if (pointInsideRegionShape(positionObject, layer.regionRecord, objectTransform)) {
+        chosenSpec = layer.spec;
+        chosenBounds = layer.regionBounds;
+        break;
+      }
+    }
+
+    const positionRegion: [number, number, number] = [
+      worldPt[0] - chosenBounds.worldCenter[0],
+      worldPt[1] - chosenBounds.worldCenter[1],
+      worldPt[2] - chosenBounds.worldCenter[2],
+    ];
+
+    const spin = chosenSpec
+      ? samplePresetTextureV2Client(
+          chosenSpec,
+          {
+            positionObject,
+            positionRegion,
+            positionWorld: worldPt,
+          },
+          chosenBounds,
+        )
+      : ([1, 0, 0] as const);
+
+    const [r, g, b] = magnetizationHslRgb(spin[0], spin[1], spin[2]);
+    outColors[base] = r;
+    outColors[base + 1] = g;
+    outColors[base + 2] = b;
+  }
+
+  return outColors;
 }

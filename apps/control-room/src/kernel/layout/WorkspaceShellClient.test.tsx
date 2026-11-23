@@ -142,6 +142,50 @@ describe("WorkspaceShellClient Home entry surface", () => {
     }
   });
 
+  it("keeps an explicit session address in the reconnecting shell until the session is confirmed", async () => {
+    const sessionList = {
+      schema_version: "2.0.0",
+      sessions: [{
+        current: true,
+        name: "Workspace shell test",
+        session_id: "workspace-shell-session",
+        status: "running",
+      }],
+    };
+    const pending = deferred<typeof sessionList>();
+    const currentStatus = vi.fn(async () => ({
+      resources: {},
+      session: {
+        name: "Workspace shell test",
+        request_scope_epoch: "api-instance:workspace-shell-test",
+        session_epoch: "workspace-shell-session@1700000000000",
+        session_id: "workspace-shell-session",
+      },
+      domain: UNMATERIALIZED_DOMAIN,
+      lifecycle: ACTIVE_IDLE_LIFECYCLE,
+      solver: { state: "idle" },
+    }) as LiveStatusResource);
+    const { container, dispose } = await mountWorkspace(
+      makeKernel(vi.fn(() => pending.promise), currentStatus),
+      "/session/workspace-shell-test",
+    );
+
+    try {
+      expect(findByAttribute(container, "data-state", "session-reconnecting")).toBeTruthy();
+      expect(findByAttribute(container, "data-slot-id", "start-screen")).toBeNull();
+      expect(currentStatus).not.toHaveBeenCalled();
+
+      await act(async () => pending.resolve(sessionList));
+      await settle();
+
+      expect(findByAttribute(container, "data-state", "session-reconnecting")).toBeNull();
+      expect(findByAttribute(container, "data-slot-id", "start-screen")).toBeNull();
+      expect(findByAttribute(container, "data-slot-id", "viewport-main")).toBeTruthy();
+    } finally {
+      await dispose();
+    }
+  });
+
   it("keeps Home mounted while the initial session collection is loading", async () => {
     const pending = deferred<{ schema_version: string; sessions: never[] }>();
     const currentStatus = vi.fn();
@@ -674,8 +718,7 @@ describe("WorkspaceShellClient Home entry surface", () => {
   });
 
   it("hydrates the loading server snapshot before adopting confirmed absence", async () => {
-    // Home's lazy slot is covered by the lifecycle tests above; keep this
-    // resource snapshot assertion's SSR tree synchronous.
+    // The static HTML is shared by Home and session addresses.
     const kernel = makeKernel(
       vi.fn(async () => ({ schema_version: "2.0.0", sessions: [] })),
       vi.fn(),
@@ -687,7 +730,7 @@ describe("WorkspaceShellClient Home entry surface", () => {
         <WorkspaceShellClient />
       </KernelContext.Provider>,
     );
-    expect(serverHtml).toContain('data-state="home-session-reconnecting"');
+    expect(serverHtml).toContain('data-state="session-reconnecting"');
 
     const dom = installSimulationPreparationTestDom();
     const container = dom.document.createElement("div");
@@ -806,11 +849,12 @@ function makeKernel(
   } as unknown as KernelApi;
 }
 
-async function mountWorkspace(kernel: KernelApi): Promise<{
+async function mountWorkspace(kernel: KernelApi, pathname = "/workspace"): Promise<{
   container: TestElement;
   dispose: () => Promise<void>;
 }> {
   const dom = installSimulationPreparationTestDom();
+  Object.defineProperty(window.location, "pathname", { value: pathname });
   const storage = new Map<string, string>();
   Object.defineProperty(dom.document.defaultView!, "localStorage", {
     configurable: true,

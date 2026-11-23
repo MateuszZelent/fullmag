@@ -356,6 +356,7 @@ fn sample_preset_texture_v2_json(
         .map(|position| fullmag_plan::TextureSamplePoint {
             position_world: position,
             position_object: position,
+            position_region: None,
             active: true,
         })
         .collect::<Vec<_>>();
@@ -363,6 +364,10 @@ fn sample_preset_texture_v2_json(
         space: "object".to_string(),
         projection,
         clamp_mode: "none".to_string(),
+        tile_period: None,
+        background_vector: None,
+        axis_extent_mode: None,
+        axis_thickness_m: None,
     };
     let values = fullmag_plan::sample_preset_texture_versioned(
         preset_kind,

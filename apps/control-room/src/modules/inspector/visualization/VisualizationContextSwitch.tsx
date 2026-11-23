@@ -38,6 +38,25 @@ export function VisualizationContextSwitchControl({
   );
 }
 
+/**
+ * Inline "View" toolbar row: a label and a compact 3D/2D segment, without a
+ * group card, so the switch reads as a panel-level mode instead of a section.
+ */
+export function VisualizationViewSwitch({
+  onPlanarActivate,
+}: {
+  onPlanarActivate?: () => void;
+}) {
+  return (
+    <div className="fm-viz-view-switch" data-slot="visualization-view-switch">
+      <span className="fm-viz-view-switch__label">View</span>
+      <div className="fm-viz-view-switch__control">
+        <VisualizationContextSwitchControl onPlanarActivate={onPlanarActivate} />
+      </div>
+    </div>
+  );
+}
+
 export function useVisualizationViewContext(): VisualizationViewContext {
   const layout = useLayoutSelector(
     (state) => ({

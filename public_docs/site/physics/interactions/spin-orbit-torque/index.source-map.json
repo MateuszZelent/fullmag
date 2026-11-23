@@ -29,7 +29,7 @@
     {"id": "planner-vector-test", "path": "crates/fullmag-plan/src/spin_torque.rs", "symbol": "canonical_prescribed_sot_vector_binding_preserves_axes_and_reverses_signed_projection", "responsibility": "Check normalized geometry, signed current projection, and fixed polarization under reversal."},
     {"id": "fdm-gpu-test", "path": "crates/fullmag-runner/src/fdm/gpu/cuda/native.rs", "symbol": "native_fdm_prescribed_sot_matches_cpu_reference_for_fixed_trajectory_when_cuda_is_available", "responsibility": "Check bounded native FDM CUDA parity against the CPU reference."},
     {"id": "fem-gpu-test", "path": "backends/fem/tests/cuda_sot_contract.cpp", "symbol": "main", "responsibility": "Run the independent SI oracle and CPU/CUDA prescribed-SOT contract."},
-    {"id": "control-room", "path": "apps/control-room/src/modules/inspector/panels/SpinAuthoringInspector.tsx", "symbol": "SpinAuthoringInspector", "responsibility": "Expose prescribed SOT and the damping-like and field-like efficiencies."}
+    {"id": "control-room", "path": "apps/control-room/src/modules/inspector/inspectors/objects/transport/SpinTorqueSpec.tsx", "symbol": "SpinTorqueInspectorPanel", "responsibility": "Expose prescribed SOT and the damping-like and field-like efficiencies."}
   ],
   "symbols": [
     {"id": "m", "latex": "m", "meaning": "unit magnetization", "si_unit": "1"},

@@ -1,0 +1,285 @@
+{
+  "document": {
+    "path": "docs/physics/0534-magnetic-textures-v2-mapping-clamp-and-wave2-presets.md",
+    "title": "Magnetic preset textures v2: spatial mapping, boundary clamp modes, slab confinement, and lattice/3D presets",
+    "status": "accepted_contract_not_production_qualified",
+    "updated": "2026-11-22"
+  },
+  "backend_matrix": [
+    {
+      "solver": "FDM",
+      "device": "CPU",
+      "role": "cell-center v2 preset and mapping evaluation",
+      "status": "source_and_test_evidence_runtime_separate"
+    },
+    {
+      "solver": "FDM",
+      "device": "GPU",
+      "role": "consumes materialized unit-norm initial field",
+      "status": "not_runtime_qualified"
+    },
+    {
+      "solver": "FEM",
+      "device": "CPU",
+      "role": "nodal v2 preset and mapping evaluation",
+      "status": "source_and_test_evidence_runtime_separate"
+    },
+    {
+      "solver": "FEM",
+      "device": "GPU",
+      "role": "consumes materialized unit-norm initial field",
+      "status": "not_runtime_qualified"
+    }
+  ],
+  "equations": [
+    {
+      "id": "texture-rotate-vectors-v2",
+      "symbols": ["m_vec", "r_tex", "eta_rot"],
+      "sources": ["py-transform", "py-eval-v2"]
+    },
+    {
+      "id": "texture-axis-slab-v2",
+      "symbols": ["z_n", "h_z", "r_tex", "m_bg"],
+      "sources": ["rust-axis-extent", "py-eval-v2"]
+    },
+    {
+      "id": "texture-clamp-modes-v2",
+      "symbols": ["delta_i", "delta_tilde_i", "P_i", "p_piv", "m_bg"],
+      "sources": ["rust-clamp-default", "rust-clamp", "py-mapping"]
+    },
+    {
+      "id": "texture-skyrmion-lattice-v2",
+      "symbols": ["u_ws", "v_ws", "a_lat", "R_sk", "a_1", "a_2", "m_vec"],
+      "sources": ["rust-skx-lattice", "py-eval-v2"]
+    },
+    {
+      "id": "texture-spiral-v2",
+      "symbols": ["Phi_s", "chi_sp", "lambda_s", "q_hat", "varphi_0", "e_1", "e_2", "m_vec"],
+      "sources": ["rust-spiral", "py-eval-v2"]
+    },
+    {
+      "id": "texture-bloch-point-v2",
+      "symbols": ["p_bp", "s_z", "gamma_tw", "m_vec"],
+      "sources": ["rust-bloch-point", "py-eval-v2"]
+    },
+    {
+      "id": "texture-asi-v2",
+      "symbols": ["a_asi", "b_m", "d_m", "sigma_m", "m_vec"],
+      "sources": ["rust-asi", "py-eval-v2"]
+    }
+  ],
+  "symbols": [
+    {"id": "m_vec", "latex": "$\\mathbf m$", "meaning": "zredukowany wektor magnetyzacji", "si_unit": "$1$"},
+    {"id": "r_tex", "latex": "$\\mathbf r_{\\mathrm{tex}}$", "meaning": "współrzędna punktu w układzie tekstury", "si_unit": "$\\mathrm{m}$"},
+    {"id": "p_piv", "latex": "$\\mathbf p$", "meaning": "punkt obrotu i środek pudełka kafelkowania", "si_unit": "$\\mathrm{m}$"},
+    {"id": "eta_rot", "latex": "$\\eta_{\\mathrm{rot}}$", "meaning": "flaga obracania wektorów spinowych wraz z geometrią", "si_unit": "$1$"},
+    {"id": "h_z", "latex": "$h_z$", "meaning": "grubość aktywnej warstwy tekstury wzdłuż normalnej", "si_unit": "$\\mathrm{m}$"},
+    {"id": "z_n", "latex": "$z_n$", "meaning": "składowa położenia wzdłuż osi normalnej płaszczyzny", "si_unit": "$\\mathrm{m}$"},
+    {"id": "P_i", "latex": "$P_i$", "meaning": "okres / rozmiar pudełka kafelkowania wzdłuż osi $i$", "si_unit": "$\\mathrm{m}$"},
+    {"id": "delta_i", "latex": "$\\delta_i$", "meaning": "współrzędna względna przed złożeniem brzegowym", "si_unit": "$\\mathrm{m}$"},
+    {"id": "delta_tilde_i", "latex": "$\\tilde\\delta_i$", "meaning": "współrzędna względna po złożeniu brzegowym", "si_unit": "$\\mathrm{m}$"},
+    {"id": "m_bg", "latex": "$\\hat{\\mathbf m}_{\\mathrm{bg}}$", "meaning": "jednostkowy wektor magnetyzacji tła", "si_unit": "$1$"},
+    {"id": "a_lat", "latex": "$a_{\\mathrm{lat}}$", "meaning": "stała sieci skyrmionowej", "si_unit": "$\\mathrm{m}$"},
+    {"id": "R_sk", "latex": "$R$", "meaning": "promień pojedynczego skyrmionu w komórce sieci", "si_unit": "$\\mathrm{m}$"},
+    {"id": "a_1", "latex": "$\\mathbf a_1$", "meaning": "pierwszy wektor prymitywny sieci Bravais'go", "si_unit": "$\\mathrm{m}$"},
+    {"id": "a_2", "latex": "$\\mathbf a_2$", "meaning": "drugi wektor prymitywny sieci Bravais'go", "si_unit": "$\\mathrm{m}$"},
+    {"id": "u_ws", "latex": "$u_{\\mathrm{WS}}$", "meaning": "pierwsza współrzędna w komórce Wignera–Seitza", "si_unit": "$\\mathrm{m}$"},
+    {"id": "v_ws", "latex": "$v_{\\mathrm{WS}}$", "meaning": "druga współrzędna w komórce Wignera–Seitza", "si_unit": "$\\mathrm{m}$"},
+    {"id": "lambda_s", "latex": "$\\lambda_s$", "meaning": "długość fali spirali spinowej", "si_unit": "$\\mathrm{m}$"},
+    {"id": "q_hat", "latex": "$\\hat{\\mathbf q}$", "meaning": "znormalizowana oś propagacji spirali", "si_unit": "$1$"},
+    {"id": "chi_sp", "latex": "$\\chi$", "meaning": "chiralność skrętu spirali ($\\pm 1$)", "si_unit": "$1$"},
+    {"id": "varphi_0", "latex": "$\\varphi_0$", "meaning": "faza początkowa spirali", "si_unit": "$\\mathrm{rad}$"},
+    {"id": "Phi_s", "latex": "$\\Phi_s$", "meaning": "lokalny kąt fazy spirali", "si_unit": "$\\mathrm{rad}$"},
+    {"id": "e_1", "latex": "$\\mathbf e_1$", "meaning": "pierwsza oś płaszczyzny obrotu spinów", "si_unit": "$1$"},
+    {"id": "e_2", "latex": "$\\mathbf e_2$", "meaning": "druga oś płaszczyzny obrotu spinów", "si_unit": "$1$"},
+    {"id": "p_bp", "latex": "$p_{\\mathrm{bp}}$", "meaning": "polaryzacja rdzenia punktu Blocha ($\\pm 1$)", "si_unit": "$1$"},
+    {"id": "s_z", "latex": "$s_z$", "meaning": "znak osiowy punktu Blocha ($+1$ lub $-1$)", "si_unit": "$1$"},
+    {"id": "gamma_tw", "latex": "$\\gamma_{\\mathrm{tw}}$", "meaning": "kąt skręcenia azymutalnego punktu Blocha", "si_unit": "$\\mathrm{rad}$"},
+    {"id": "a_asi", "latex": "$a_{\\mathrm{asi}}$", "meaning": "podziałka sieci sztucznego lodu spinowego", "si_unit": "$\\mathrm{m}$"},
+    {"id": "b_m", "latex": "$\\mathbf b_m$", "meaning": "środek $m$-tej wyspy/więzi dipolowej", "si_unit": "$\\mathrm{m}$"},
+    {"id": "d_m", "latex": "$\\hat{\\mathbf d}_{m^\\star}$", "meaning": "jednostkowy kierunek osi łatwej najbliższej wyspy", "si_unit": "$1$"},
+    {"id": "sigma_m", "latex": "$\\sigma_{m^\\star}$", "meaning": "znak stanu Isingowskiego wyspy ($\\pm 1$)", "si_unit": "$1$"}
+  ],
+  "sources": [
+    {
+      "id": "rust-clamp-default",
+      "path": "crates/fullmag-ir/src/model.rs",
+      "symbol": "default_texture_mapping_clamp_mode",
+      "responsibility": "Rust clamp_mode default none"
+    },
+    {
+      "id": "rust-clamp",
+      "path": "crates/fullmag-plan/src/magnetization_textures_v2.rs",
+      "symbol": "apply_clamp_mode_v2",
+      "responsibility": "Rust clamp/repeat/mirror/background evaluation"
+    },
+    {
+      "id": "rust-axis-extent",
+      "path": "crates/fullmag-plan/src/magnetization_textures_v2.rs",
+      "symbol": "validate_axis_extent_v2",
+      "responsibility": "Rust slab thickness confinement validation"
+    },
+    {
+      "id": "rust-skx-lattice",
+      "path": "crates/fullmag-plan/src/magnetization_textures_v2.rs",
+      "symbol": "skyrmion_lattice",
+      "responsibility": "Rust skyrmion lattice preset"
+    },
+    {
+      "id": "rust-spiral",
+      "path": "crates/fullmag-plan/src/magnetization_textures_v2.rs",
+      "symbol": "spiral",
+      "responsibility": "Rust spin spiral preset"
+    },
+    {
+      "id": "rust-bloch-point",
+      "path": "crates/fullmag-plan/src/magnetization_textures_v2.rs",
+      "symbol": "bloch_point",
+      "responsibility": "Rust 3D Bloch point preset"
+    },
+    {
+      "id": "rust-asi",
+      "path": "crates/fullmag-plan/src/magnetization_textures_v2.rs",
+      "symbol": "artificial_spin_ice",
+      "responsibility": "Rust artificial spin ice preset"
+    },
+    {
+      "id": "py-eval-v2",
+      "path": "packages/fullmag-py/src/fullmag/init/preset_eval_v2.py",
+      "symbol": "evaluate_preset_texture_v2",
+      "responsibility": "Python v2 reference evaluator"
+    },
+    {
+      "id": "py-mapping",
+      "path": "packages/fullmag-py/src/fullmag/init/textures.py",
+      "symbol": "class TextureMapping",
+      "responsibility": "Python TextureMapping DSL"
+    },
+    {
+      "id": "py-transform",
+      "path": "packages/fullmag-py/src/fullmag/init/textures.py",
+      "symbol": "class TextureTransform3D",
+      "responsibility": "Python TextureTransform3D DSL"
+    },
+    {
+      "id": "py-script-render",
+      "path": "packages/fullmag-py/src/fullmag/runtime/script_builder.py",
+      "symbol": "_render_preset_texture_expr",
+      "responsibility": "Fluent canonical script export for v2 presets"
+    }
+  ],
+  "public_api": {
+    "parameters": [
+      {
+        "python": "TextureTransform3D.rotate_vectors",
+        "type": "bool",
+        "default": "True",
+        "si_unit": "$1$",
+        "validation": "bool",
+        "meaning": "obrót wektorów spinowych wraz z ramką przestrzenną",
+        "backend_support": "FDM/FEM CPU/GPU",
+        "problem_ir": "texture_transform.rotate_vectors"
+      },
+      {
+        "python": "TextureMapping.space",
+        "type": "str",
+        "default": "object",
+        "si_unit": "$1$",
+        "validation": "object, world, or region",
+        "meaning": "układ odniesienia współrzędnych próbkowania",
+        "backend_support": "FDM/FEM CPU/GPU",
+        "problem_ir": "mapping.space"
+      },
+      {
+        "python": "TextureMapping.clamp_mode",
+        "type": "str",
+        "default": "none",
+        "si_unit": "$1$",
+        "validation": "none, clamp, repeat, mirror, or background",
+        "meaning": "zachowanie poza pudełkiem kafelkowania",
+        "backend_support": "FDM/FEM CPU/GPU",
+        "problem_ir": "mapping.clamp_mode"
+      },
+      {
+        "python": "TextureMapping.tile_period",
+        "type": "tuple[float, float, float]",
+        "default": "None",
+        "si_unit": "$\\mathrm{m}$",
+        "validation": "3 finite values > 0",
+        "meaning": "rozmiary pudełka kafelkowania $[P_x,P_y,P_z]$",
+        "backend_support": "FDM/FEM CPU/GPU",
+        "problem_ir": "mapping.tile_period"
+      },
+      {
+        "python": "TextureMapping.background_vector",
+        "type": "tuple[float, float, float]",
+        "default": "None",
+        "si_unit": "$1$",
+        "validation": "finite, nonzero 3-vector",
+        "meaning": "kierunek magnetyzacji poza nośnikiem",
+        "backend_support": "FDM/FEM CPU/GPU",
+        "problem_ir": "mapping.background_vector"
+      },
+      {
+        "python": "TextureMapping.axis_extent_mode",
+        "type": "str",
+        "default": "uniform",
+        "si_unit": "$1$",
+        "validation": "uniform or thickness",
+        "meaning": "tryb rozciągłości wzdłuż osi normalnej",
+        "backend_support": "FDM/FEM CPU/GPU",
+        "problem_ir": "mapping.axis_extent_mode"
+      },
+      {
+        "python": "TextureMapping.axis_thickness_m",
+        "type": "float",
+        "default": "None",
+        "si_unit": "$\\mathrm{m}$",
+        "validation": "finite > 0 when axis_extent_mode == thickness",
+        "meaning": "grubość warstwy aktywnej tekstury",
+        "backend_support": "FDM/FEM CPU/GPU",
+        "problem_ir": "mapping.axis_thickness_m"
+      },
+      {
+        "python": "texture.skyrmion_lattice.lattice_constant",
+        "type": "float",
+        "default": "required",
+        "si_unit": "$\\mathrm{m}$",
+        "validation": "finite and > 2 * radius",
+        "meaning": "stała sieci Bravais'go skyrmionów",
+        "backend_support": "FDM/FEM CPU/GPU",
+        "problem_ir": "preset_params.lattice_constant"
+      },
+      {
+        "python": "texture.spiral.wavelength",
+        "type": "float",
+        "default": "required",
+        "si_unit": "$\\mathrm{m}$",
+        "validation": "finite and > 0",
+        "meaning": "długość fali spirali spinowej",
+        "backend_support": "FDM/FEM CPU/GPU",
+        "problem_ir": "preset_params.wavelength"
+      },
+      {
+        "python": "texture.bloch_point.bp_kind",
+        "type": "str",
+        "default": "circulating",
+        "si_unit": "$1$",
+        "validation": "radial, circulating, or hyperbolic",
+        "meaning": "typ topologiczny punktu Blocha 3D",
+        "backend_support": "FDM/FEM CPU/GPU",
+        "problem_ir": "preset_params.bp_kind"
+      },
+      {
+        "python": "texture.artificial_spin_ice.pitch",
+        "type": "float",
+        "default": "required",
+        "si_unit": "$\\mathrm{m}$",
+        "validation": "finite and > 0",
+        "meaning": "podziałka sieci sztucznego lodu spinowego",
+        "backend_support": "FDM/FEM CPU/GPU",
+        "problem_ir": "preset_params.pitch"
+      }
+    ]
+  }
+}

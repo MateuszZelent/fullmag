@@ -7,6 +7,7 @@ import { Tabs, TabsList, TabsTrigger } from "@/shared/ui/Tabs";
 
 import { useInstanceDiscovery } from "../resources/instanceDiscoveryResources";
 import { useSessionCollection } from "../resources/useSessionCollection";
+import { useSessionTabAddress } from "./useSessionTabAddress";
 import { homeView, useHomeViewOpen } from "./homeView";
 import { instanceTabLabel, sessionTone } from "./instanceTabModel";
 import { instanceOrigin, instanceTabs, useInstanceTabs, usePageLocation } from "./instanceTabs";
@@ -45,6 +46,7 @@ export function InstanceTabStrip() {
   const sessions = useSessionCollection();
   const tabs = useInstanceTabs();
   const homeOpen = useHomeViewOpen();
+  const sessionTabAddress = useSessionTabAddress();
   const location = usePageLocation();
   const current = sessions.resource.data?.sessions.find((entry) => entry.current) ?? null;
   // Instance status refreshes while it is on screen: Home (always shown
@@ -58,11 +60,12 @@ export function InstanceTabStrip() {
   );
   const discoveryKnown = discovery.data !== null;
 
+  const awaitingSession = !homeOpen && sessionTabAddress !== false && sessions.state !== "no-session";
   const value = tabs.activePort !== null
     ? `${INSTANCE_TAB_PREFIX}${tabs.activePort}`
     : current && !homeOpen
       ? SESSION_TAB
-      : HOME_TAB;
+      : awaitingSession ? "" : HOME_TAB;
 
   return (
     <nav aria-label="Sessions" className="fm-instance-tabs" data-instance-tabs="">

@@ -19,6 +19,7 @@ fn point(position: [f64; 3]) -> TextureSamplePoint {
     TextureSamplePoint {
         position_world: position,
         position_object: position,
+        position_region: None,
         active: true,
     }
 }

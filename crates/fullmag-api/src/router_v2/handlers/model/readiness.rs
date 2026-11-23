@@ -147,16 +147,14 @@ fn build_model_readiness(
             .unwrap_or_else(|| "model/magnetization-assets".into()),
         "Assign initial magnetization to every magnetic object.",
     );
-    let missing_interaction_object = solve_objects
-        .iter()
-        .find(|object| !object.physics_stack.iter().any(|entry| entry.enabled));
+    let global_interaction = scene.study.demag_enabled || scene.study.exchange_enabled;
+    let missing_interaction_object = solve_objects.iter().find(|object| {
+        !global_interaction && !object.physics_stack.iter().any(|entry| entry.enabled)
+    });
     let interactions = presence_check(
         "interactions",
         "Interactions",
-        !solve_objects.is_empty()
-            && solve_objects
-                .iter()
-                .all(|object| object.physics_stack.iter().any(|entry| entry.enabled)),
+        !solve_objects.is_empty() && missing_interaction_object.is_none(),
         &missing_interaction_object
             .map(|object| format!("model/objects/{}", object.id))
             .unwrap_or_else(|| "model/objects/interactions".into()),

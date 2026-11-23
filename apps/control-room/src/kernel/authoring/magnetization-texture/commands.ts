@@ -1,39 +1,87 @@
 import { MODEL_SCENE_PATH } from "@/kernel/api/apiPaths";
+import type {
+  JsonObject,
+  MagnetizationApplyTarget,
+  SceneResource,
+} from "@/kernel/api/apiTypes";
+import { runAuthoringMutationWithHistory } from "@/kernel/authoring/authoringHistoryMutation";
 import {
   acknowledgedAuthoringSceneRevision,
   invalidateAuthoringMutationDependents,
 } from "@/kernel/authoring/authoringMutationInvalidation";
-import {
-  prepareAuthoringMutation,
-  recordAuthoringMutationHistory,
-  authoringWriteOptions,
-} from "@/kernel/authoring/authoringHistoryMutation";
 import { obsoleteSessionResult } from "@/kernel/commands/commandSessionScope";
-import type { JsonObject } from "@/kernel/api/apiTypes";
 import type {
   CommandContext,
   CommandContribution,
   CommandResult,
 } from "@/kernel/commands/commandTypes";
-
+import { publishCommittedSceneResource } from "@/kernel/resources/geometryLifecycleResources";
 import {
   magnetizationTextureAssetId,
   presetMagnetizationAsset,
 } from "@/shared/domain/magnetization-texture/assetFactory";
-import { resolveMagnetizationTextureTarget } from "@/shared/domain/magnetization-texture/targetResolver";
+import { resolveTargetBoundsMeters } from "@/shared/domain/magnetization-texture/boundsResolver";
+import {
+  computeRelativePresetDefaults,
+  fitCharacteristicSizeToTarget,
+  hydrateMagneticTextureDraftFromInitializer,
+  resetDraftTransform,
+  serializeMagneticTextureDraftToInitializer,
+  synchronizePlaneAndProjection,
+} from "@/shared/domain/magnetization-texture/presetDefaults";
+import {
+  extractMagnetizationTargetInputFromSelection,
+  resolveMagnetizationTextureTarget,
+} from "@/shared/domain/magnetization-texture/targetResolver";
+import {
+  requestTextureInspectorTab,
+  runActiveTextureFitCharacteristicSize,
+  runActiveTextureResetTransform,
+  setTextureGizmoMode,
+  setTransformScope,
+  toggleTextureGizmo,
+  type TextureGizmoMode,
+  type TransformScopeMode,
+} from "@/shared/domain/magnetization-texture/textureDraftBridge";
+import {
+  canonicalPresetKind,
+  type MagnetizationTexturePresetId,
+} from "@/shared/domain/magnetization-texture/texturePresets";
 import type { MagnetizationTextureTarget } from "@/shared/domain/magnetization-texture/types";
+
+function selectedScene(context: CommandContext): SceneResource | null {
+  const raw = context.resourceData?.[MODEL_SCENE_PATH];
+  return raw && typeof raw === "object" && !Array.isArray(raw)
+    ? (raw as SceneResource)
+    : null;
+}
 
 function selectedTarget(context: CommandContext): MagnetizationTextureTarget | null {
   const selection = context.selection?.get();
-  const ref = selection?.ref?.type === "scene-object" ? selection.ref : null;
-  return resolveMagnetizationTextureTarget({
-    kind: selection?.kind,
-    objectId: ref?.objectId ?? selection?.objectId,
-    regionId: ref?.regionId,
-  });
+  return resolveMagnetizationTextureTarget(
+    extractMagnetizationTargetInputFromSelection(selection),
+    selectedScene(context),
+  );
+}
+
+function nonMagneticObjectReason(context: CommandContext): string | null {
+  const selection = context.selection?.get();
+  const input = extractMagnetizationTargetInputFromSelection(selection);
+  const objectId = input.objectId?.trim();
+  const scene = selectedScene(context);
+  if (!objectId || !scene?.objects) return null;
+  const obj = scene.objects.find((candidate) => candidate.id === objectId) as
+    | { role?: string }
+    | undefined;
+  if (obj?.role && obj.role !== "magnet") {
+    return `Selected object is non-magnetic (${obj.role}).`;
+  }
+  return null;
 }
 
 function disabledReason(context: CommandContext): string | null {
+  const nonMagnetic = nonMagneticObjectReason(context);
+  if (nonMagnetic) return nonMagnetic;
   if (!selectedTarget(context)) {
     return "Select an object or region texture target.";
   }
@@ -44,42 +92,123 @@ function disabledReason(context: CommandContext): string | null {
 }
 
 function loadFileDisabledReason(context: CommandContext): string | null {
-  const target = selectedTarget(context);
-  if (!target) {
-    return "Select an object texture target.";
-  }
-  if (target.kind !== "object") {
-    return "Field-state texture loading is available on object texture targets.";
+  const nonMagnetic = nonMagneticObjectReason(context);
+  if (nonMagnetic) return nonMagnetic;
+  if (!selectedTarget(context)) {
+    return "Select an object or region texture target.";
   }
   return null;
 }
 
 function sceneRevision(context: CommandContext): number | null {
-  const scene = context.resourceData?.[MODEL_SCENE_PATH];
-  if (!scene || typeof scene !== "object" || Array.isArray(scene)) return null;
+  const scene = selectedScene(context);
+  if (!scene) return null;
   const revision = (scene as Record<string, unknown>).revision;
-  return typeof revision === "number" && Number.isFinite(revision)
-    ? revision
-    : null;
+  return typeof revision === "number" && Number.isFinite(revision) ? revision : null;
 }
 
-import type { MagnetizationTexturePresetId } from "@/shared/domain/magnetization-texture/texturePresets";
-
-async function assignPreset(
+async function syncScriptBestEffort(
   context: CommandContext,
+  sessionScopeKey?: string,
+): Promise<void> {
+  const syncFn = context.api?.model?.syncAuthoringScript;
+  if (typeof syncFn !== "function") return;
+  try {
+    await syncFn({}, sessionScopeKey ? { sessionScopeKey } : undefined);
+  } catch {
+    // Best-effort script sync: managed copy updates never fail the committed scene transaction.
+  }
+}
+
+function buildPresetApplyTarget(
+  scene: SceneResource | null,
+  target: MagnetizationTextureTarget,
   presetKind: MagnetizationTexturePresetId,
-  presetParams: JsonObject,
-): Promise<CommandResult> {
-  const target = selectedTarget(context);
-  if (!target || !context.api) {
+): MagnetizationApplyTarget {
+  const canonicalKind = canonicalPresetKind(presetKind);
+  const bounds = resolveTargetBoundsMeters(scene, target);
+  const presetParams = computeRelativePresetDefaults(canonicalKind, bounds) as JsonObject;
+  const { mappingProjection } = synchronizePlaneAndProjection(
+    canonicalKind,
+    "auto",
+    "xy",
+    "object_local",
+    bounds,
+  );
+
+  if (target.kind === "region") {
     return {
-      status: "failed",
-      message: disabledReason(context) ?? "Magnetization target unavailable.",
+      kind: "region",
+      object_id: target.objectId,
+      region_id: target.regionId,
+      texture_override: {
+        initial_magnetization: {
+          kind: "preset_texture",
+          preset_kind: canonicalKind,
+          preset_version: 2,
+          preset_params: presetParams,
+          mapping: {
+            clamp_mode: "none",
+            projection: mappingProjection,
+            space: "region",
+          },
+          texture_transform: {
+            pivot: [0, 0, 0],
+            rotate_vectors: true,
+            rotation_quat: [0, 0, 0, 1],
+            scale: [1, 1, 1],
+            translation: [0, 0, 0],
+          },
+        } as never,
+      },
     };
   }
-  const obsoleteBeforeMutation = obsoleteSessionResult(context);
-  if (obsoleteBeforeMutation) return obsoleteBeforeMutation;
+
+  const assetId = magnetizationTextureAssetId(target, canonicalKind);
+  return {
+    kind: "object",
+    object_id: target.objectId,
+    asset: presetMagnetizationAsset({
+      id: assetId,
+      label: null,
+      presetKind: canonicalKind,
+      presetVersion: 2,
+      presetParams,
+      mapping: {
+        clamp_mode: "none",
+        projection: mappingProjection,
+        space: "object",
+      },
+      textureTransform: {
+        pivot: [0, 0, 0],
+        rotate_vectors: true,
+        rotation_quat: [0, 0, 0, 1],
+        scale: [1, 1, 1],
+        translation: bounds.localCenter,
+      },
+    }),
+  };
+}
+
+async function executeAtomicMagnetizationApply(
+  context: CommandContext,
+  historyLabel: string,
+  applyTarget: MagnetizationApplyTarget,
+): Promise<CommandResult> {
+  if (!context.api) {
+    return { status: "failed", message: "Control Room API is not available." };
+  }
+  const obsoleteBefore = obsoleteSessionResult(context);
+  if (obsoleteBefore) return obsoleteBefore;
+
   const sessionScopeKey = context.sessionScopeKey;
+  if (!sessionScopeKey) {
+    return { status: "failed", message: "Session scope is not ready." };
+  }
+  const baseRevision = sceneRevision(context);
+  if (baseRevision === null) {
+    return { status: "failed", message: "Scene revision is not loaded yet." };
+  }
 
   const historyContext = {
     api: context.api,
@@ -89,80 +218,75 @@ async function assignPreset(
     sessionScopeKey,
     isCurrentSessionScope: context.isCurrentSessionScope,
   };
-  const preparation = await prepareAuthoringMutation(historyContext);
-  const obsoleteAfterPreparation = obsoleteSessionResult(context);
-  if (obsoleteAfterPreparation) return obsoleteAfterPreparation;
-  const baseRevision = preparation.baseRevision ?? sceneRevision(context);
-  const requestOptions = sessionScopeKey ? { sessionScopeKey } : undefined;
-  const assetId = magnetizationTextureAssetId(target, presetKind);
-  try {
-    const assetResponse = await context.api.model.patchMagnetizationAsset(
-      assetId,
-      {
-        asset: presetMagnetizationAsset({
-          id: assetId,
-          presetKind,
-          presetParams,
-        }),
-        base_revision: baseRevision,
-      },
-      requestOptions,
-    );
-    const obsoleteAfterAsset = obsoleteSessionResult(context);
-    if (obsoleteAfterAsset) return obsoleteAfterAsset;
-    const assetRevision = acknowledgedAuthoringSceneRevision(assetResponse);
-    const assignmentResponse =
-      target.kind === "region"
-        ? await context.api.model.patchRegion(
-            target.regionId,
-            { magnetization_ref: assetId },
-            authoringWriteOptions(assetRevision, sessionScopeKey),
-          )
-        : await context.api.model.patchObject(target.objectId, {
-            base_revision: assetRevision,
-            magnetization_ref: assetId,
-          }, authoringWriteOptions(assetRevision, sessionScopeKey));
-    const obsoleteAfterAssignment = obsoleteSessionResult(context);
-    if (obsoleteAfterAssignment) return obsoleteAfterAssignment;
 
-    const revision = acknowledgedAuthoringSceneRevision(assignmentResponse);
-    await recordAuthoringMutationHistory(
-      historyContext,
-      `Assign ${presetKind} magnetization`,
-      preparation,
-      assignmentResponse,
-    );
-    const obsoleteAfterHistory = obsoleteSessionResult(context);
-    if (obsoleteAfterHistory) return obsoleteAfterHistory;
-    if (context.resources) {
-      invalidateAuthoringMutationDependents(
-        context.resources,
-        "magnetization",
+  const response = await runAuthoringMutationWithHistory(
+    historyContext,
+    historyLabel,
+    (before) => {
+      if (before.baseRevision !== null && before.baseRevision !== baseRevision) {
+        throw new Error(
+          "The scene changed before assigning magnetization. Retry on the refreshed scene.",
+        );
+      }
+      return context.api!.model.applyMagnetization(applyTarget, {
+        baseRevision,
+        sessionScopeKey,
+      });
+    },
+    undefined,
+    { expectedSceneRevision: baseRevision },
+  );
+
+  const obsoleteAfterApply = obsoleteSessionResult(context);
+  if (obsoleteAfterApply) return obsoleteAfterApply;
+
+  const revision = acknowledgedAuthoringSceneRevision(response);
+  if (context.resources) {
+    if ("publish" in context.resources && typeof context.resources.publish === "function") {
+      publishCommittedSceneResource(
+        context.resources as never,
+        response.committed_scene,
         revision,
+        undefined,
+        false,
+        sessionScopeKey,
+        context.api.resourceCacheScope,
       );
     }
-    return { status: "completed" };
-  } catch (error) {
-    const obsoleteAfterFailure = obsoleteSessionResult(context);
-    if (obsoleteAfterFailure) return obsoleteAfterFailure;
-    // The asset can be durable even when the second assignment request fails.
-    // Preserve that partial ACK in semantic history before surfacing the error.
-    await recordAuthoringMutationHistory(
-      historyContext,
-      `Assign ${presetKind} magnetization (partial)`,
-      preparation,
-    );
-    const obsoleteAfterPartialHistory = obsoleteSessionResult(context);
-    if (obsoleteAfterPartialHistory) return obsoleteAfterPartialHistory;
-    throw error;
+    invalidateAuthoringMutationDependents(context.resources, "magnetization", revision);
   }
+  await syncScriptBestEffort(context, sessionScopeKey);
+  const obsoleteAfterSync = obsoleteSessionResult(context);
+  if (obsoleteAfterSync) return obsoleteAfterSync;
+
+  return { status: "completed" };
+}
+
+async function assignPreset(
+  context: CommandContext,
+  presetKind: MagnetizationTexturePresetId,
+): Promise<CommandResult> {
+  const target = selectedTarget(context);
+  if (!target || !context.api) {
+    return {
+      status: "failed",
+      message: disabledReason(context) ?? "Magnetization target unavailable.",
+    };
+  }
+  const scene = selectedScene(context);
+  const applyTarget = buildPresetApplyTarget(scene, target, presetKind);
+  const scopeLabel = target.kind === "region" ? target.regionId : target.objectId;
+  return executeAtomicMagnetizationApply(
+    context,
+    `Assign ${canonicalPresetKind(presetKind)} magnetization (${scopeLabel})`,
+    applyTarget,
+  );
 }
 
 function presetCommand(
   id: string,
   title: string,
   presetKind: MagnetizationTexturePresetId,
-  presetParams: JsonObject,
 ): CommandContribution {
   return {
     category: "magnetization-texture",
@@ -170,8 +294,47 @@ function presetCommand(
     group: "magnetization-texture",
     id,
     isEnabled: (context) => disabledReason(context) === null,
-    run: (context) => assignPreset(context, presetKind, presetParams),
+    run: (context) => assignPreset(context, presetKind),
     scope: "selection",
+    title,
+  };
+}
+
+function gizmoModeCommand(
+  id: string,
+  title: string,
+  mode: TextureGizmoMode,
+): CommandContribution {
+  return {
+    category: "magnetization-texture",
+    disabledReason: loadFileDisabledReason,
+    group: "magnetization-texture",
+    id,
+    isEnabled: (context) => loadFileDisabledReason(context) === null,
+    run: () => {
+      setTextureGizmoMode(mode);
+      return { status: "completed" };
+    },
+    scope: "selection",
+    title,
+  };
+}
+
+function transformScopeCommand(
+  id: string,
+  title: string,
+  scope: TransformScopeMode,
+): CommandContribution {
+  return {
+    category: "magnetization-texture",
+    group: "magnetization-texture",
+    id,
+    isEnabled: () => true,
+    run: () => {
+      setTransformScope(scope);
+      return { status: "completed" };
+    },
+    scope: "global",
     title,
   };
 }
@@ -185,97 +348,293 @@ export const MAGNETIZATION_TEXTURE_COMMANDS: CommandContribution[] = [
     isEnabled: (context) => loadFileDisabledReason(context) === null,
     run: (context) => {
       const target = selectedTarget(context);
-      if (!target || target.kind !== "object") {
+      if (!target) {
         return {
           status: "failed",
           message:
-            loadFileDisabledReason(context) ??
-            "Object texture target unavailable.",
+            loadFileDisabledReason(context) ?? "Magnetization target unavailable.",
         };
       }
-      context.bus?.emit("explorer:texture-load-node-requested", {
-        objectId: target.objectId,
-        source: context.source === "test" ? "explorer" : context.source,
-      });
+      requestTextureInspectorTab(target, "field-file");
       return {
         status: "completed",
-        message: "Load texture node activated.",
+        message: "Field file mode activated.",
       };
     },
     scope: "selection",
-    title: "Load Texture",
+    title: "Load Texture from Field File",
   },
+  {
+    category: "magnetization-texture",
+    disabledReason: loadFileDisabledReason,
+    group: "magnetization-texture",
+    id: "magnetization-texture.toggle-gizmo",
+    isEnabled: (context) => loadFileDisabledReason(context) === null,
+    run: () => {
+      const enabled = toggleTextureGizmo();
+      return {
+        status: "completed",
+        message: enabled ? "3D texture gizmo enabled." : "3D texture gizmo hidden.",
+      };
+    },
+    scope: "selection",
+    title: "Toggle 3D Texture Gizmo",
+  },
+  gizmoModeCommand(
+    "magnetization-texture.gizmo-mode-view",
+    "Texture Gizmo: View [Q]",
+    "view",
+  ),
+  gizmoModeCommand(
+    "magnetization-texture.gizmo-mode-translate",
+    "Texture Gizmo: Translate [W]",
+    "translate",
+  ),
+  gizmoModeCommand(
+    "magnetization-texture.gizmo-mode-rotate",
+    "Texture Gizmo: Rotate [E]",
+    "rotate",
+  ),
+  gizmoModeCommand(
+    "magnetization-texture.gizmo-mode-scale",
+    "Texture Gizmo: Scale [R]",
+    "scale",
+  ),
+  transformScopeCommand(
+    "magnetization-texture.scope-object",
+    "Transform Scope: Object",
+    "object",
+  ),
+  transformScopeCommand(
+    "magnetization-texture.scope-texture",
+    "Transform Scope: Texture",
+    "texture",
+  ),
+  {
+    category: "magnetization-texture",
+    disabledReason,
+    group: "magnetization-texture",
+    id: "magnetization-texture.fit-characteristic-size",
+    isEnabled: (context) => disabledReason(context) === null,
+    run: async (context) => {
+      if (runActiveTextureFitCharacteristicSize()) {
+        return { status: "completed", message: "Characteristic size fitted in active draft." };
+      }
+      const target = selectedTarget(context);
+      const scene = selectedScene(context);
+      if (!target || !scene) {
+        return { status: "failed", message: "Select a magnetic object or region first." };
+      }
+      const bounds = resolveTargetBoundsMeters(scene, target);
+      const obj = scene.objects?.find((o) => o.id === target.objectId);
+      const currentInit =
+        target.kind === "region"
+          ? obj?.regions?.find((r) => r.region_id === target.regionId)?.texture_override
+              ?.initial_magnetization
+          : scene.magnetization_assets?.find((a) => a.id === obj?.magnetization_ref);
+      const hydrated = hydrateMagneticTextureDraftFromInitializer(
+        currentInit,
+        bounds,
+        target.kind === "region" ? "region" : "object",
+      );
+      const fitted = fitCharacteristicSizeToTarget(
+        { ...hydrated, inheritanceMode: "override" },
+        bounds,
+      );
+      const initializer = serializeMagneticTextureDraftToInitializer(fitted, bounds);
+      const applyTarget: MagnetizationApplyTarget =
+        target.kind === "region"
+          ? {
+              kind: "region",
+              object_id: target.objectId,
+              region_id: target.regionId,
+              texture_override: { initial_magnetization: initializer as never },
+            }
+          : {
+              kind: "object",
+              object_id: target.objectId,
+              asset: presetMagnetizationAsset({
+                id: magnetizationTextureAssetId(target, canonicalPresetKind(fitted.presetKind)),
+                label: fitted.customUiLabel.trim() || null,
+                presetKind: canonicalPresetKind(fitted.presetKind),
+                presetVersion: 2,
+                presetParams: (initializer.preset_params ?? {}) as never,
+                mapping: (initializer.mapping ?? null) as never,
+                textureTransform: (initializer.texture_transform ?? null) as never,
+              }),
+            };
+      return executeAtomicMagnetizationApply(
+        context,
+        "Fit characteristic texture size",
+        applyTarget,
+      );
+    },
+    scope: "selection",
+    title: "Fit Characteristic Size to Target",
+  },
+  {
+    category: "magnetization-texture",
+    disabledReason,
+    group: "magnetization-texture",
+    id: "magnetization-texture.reset-transform",
+    isEnabled: (context) => disabledReason(context) === null,
+    run: async (context) => {
+      if (runActiveTextureResetTransform()) {
+        return { status: "completed", message: "Texture transform reset in active draft." };
+      }
+      const target = selectedTarget(context);
+      const scene = selectedScene(context);
+      if (!target || !scene) {
+        return { status: "failed", message: "Select a magnetic object or region first." };
+      }
+      const bounds = resolveTargetBoundsMeters(scene, target);
+      const obj = scene.objects?.find((o) => o.id === target.objectId);
+      const currentInit =
+        target.kind === "region"
+          ? obj?.regions?.find((r) => r.region_id === target.regionId)?.texture_override
+              ?.initial_magnetization
+          : scene.magnetization_assets?.find((a) => a.id === obj?.magnetization_ref);
+      const hydrated = hydrateMagneticTextureDraftFromInitializer(
+        currentInit,
+        bounds,
+        target.kind === "region" ? "region" : "object",
+      );
+      const reset = resetDraftTransform(
+        { ...hydrated, inheritanceMode: "override" },
+        bounds,
+      );
+      const initializer = serializeMagneticTextureDraftToInitializer(reset, bounds);
+      const applyTarget: MagnetizationApplyTarget =
+        target.kind === "region"
+          ? {
+              kind: "region",
+              object_id: target.objectId,
+              region_id: target.regionId,
+              texture_override: { initial_magnetization: initializer as never },
+            }
+          : {
+              kind: "object",
+              object_id: target.objectId,
+              asset: presetMagnetizationAsset({
+                id: magnetizationTextureAssetId(target, canonicalPresetKind(reset.presetKind)),
+                label: reset.customUiLabel.trim() || null,
+                presetKind: canonicalPresetKind(reset.presetKind),
+                presetVersion: 2,
+                presetParams: (initializer.preset_params ?? {}) as never,
+                mapping: (initializer.mapping ?? null) as never,
+                textureTransform: (initializer.texture_transform ?? null) as never,
+              }),
+            };
+      return executeAtomicMagnetizationApply(context, "Reset texture transform", applyTarget);
+    },
+    scope: "selection",
+    title: "Reset Texture Transform",
+  },
+
+  // All 20 analytic presets (16 + 4 Wave-2 extensions)
   presetCommand(
     "magnetization-texture.assign-uniform",
     "Assign Uniform Magnetization",
     "uniform",
-    { direction: [1, 0, 0] },
   ),
   presetCommand(
     "magnetization-texture.assign-random-seeded",
     "Assign Random Seeded Magnetization",
-    "random_seeded",
-    { seed: 1 },
+    "random",
+  ),
+  presetCommand(
+    "magnetization-texture.assign-random",
+    "Assign Random Magnetization",
+    "random",
   ),
   presetCommand(
     "magnetization-texture.assign-vortex",
     "Assign Vortex Magnetization",
     "vortex",
-    { plane: "xy", circulation: 1, core_polarity: 1, core_radius: 1e-9 },
   ),
   presetCommand(
     "magnetization-texture.assign-antivortex",
     "Assign Antivortex Magnetization",
     "antivortex",
-    { plane: "xy", circulation: 1, core_polarity: 1, core_radius: 1e-9 },
   ),
   presetCommand(
     "magnetization-texture.assign-bloch-skyrmion",
     "Assign Bloch Skyrmion Magnetization",
     "bloch_skyrmion",
-    { plane: "xy", radius: 10e-9, wall_width: 2e-9, core_polarity: -1, chirality: 1 },
   ),
   presetCommand(
     "magnetization-texture.assign-neel-skyrmion",
     "Assign Néel Skyrmion Magnetization",
     "neel_skyrmion",
-    { plane: "xy", radius: 10e-9, wall_width: 2e-9, core_polarity: -1, chirality: 1 },
+  ),
+  presetCommand(
+    "magnetization-texture.assign-antiskyrmion",
+    "Assign Antiskyrmion Magnetization",
+    "antiskyrmion",
+  ),
+  presetCommand(
+    "magnetization-texture.assign-skyrmionium",
+    "Assign Skyrmionium Magnetization",
+    "skyrmionium",
   ),
   presetCommand(
     "magnetization-texture.assign-bimeron",
     "Assign Bimeron Magnetization",
     "bimeron",
-    {
-      plane: "xy",
-      radius: 10e-9,
-      wall_width: 2e-9,
-      vorticity: 1,
-      helicity_rad: 0,
-      background_sign: 1,
-    },
+  ),
+  presetCommand(
+    "magnetization-texture.assign-skyrmion-lattice",
+    "Assign Skyrmion Lattice Magnetization",
+    "skyrmion_lattice",
   ),
   presetCommand(
     "magnetization-texture.assign-domain-wall",
     "Assign Domain Wall Magnetization",
     "domain_wall",
-    { normal_axis: "x", center_offset: 0.0, width: 10e-9, left: [1, 0, 0], right: [-1, 0, 0], kind: "neel", wall_center_direction: [0, 1, 0] },
   ),
   presetCommand(
     "magnetization-texture.assign-two-domain",
     "Assign Two Domain Magnetization",
     "two_domain",
-    { normal_axis: "x", left: [1, 0, 0], right: [-1, 0, 0], sharp: true, wall: [0, 1, 0] },
+  ),
+  presetCommand(
+    "magnetization-texture.assign-vortex-wall",
+    "Assign Vortex Wall Magnetization",
+    "vortex_wall",
+  ),
+  presetCommand(
+    "magnetization-texture.assign-artificial-spin-ice",
+    "Assign Artificial Spin Ice Magnetization",
+    "artificial_spin_ice",
   ),
   presetCommand(
     "magnetization-texture.assign-helical",
     "Assign Helical Magnetization",
     "helical",
-    { wavevector: [1, 0, 0], e1: [1, 0, 0], e2: [0, 1, 0], phase_rad: 0.0 },
   ),
   presetCommand(
     "magnetization-texture.assign-conical",
     "Assign Conical Magnetization",
     "conical",
-    { wavevector: [1, 0, 0], cone_axis: [0, 0, 1], phase_rad: 0.0, cone_angle_rad: 0.785398 },
+  ),
+  presetCommand(
+    "magnetization-texture.assign-spiral",
+    "Assign Spiral Magnetization",
+    "spiral",
+  ),
+  presetCommand(
+    "magnetization-texture.assign-hopfion",
+    "Assign Hopfion Magnetization",
+    "hopfion",
+  ),
+  presetCommand(
+    "magnetization-texture.assign-hopfion-compact-support",
+    "Assign Hopfion (Compact Support) Magnetization",
+    "hopfion_compact_support",
+  ),
+  presetCommand(
+    "magnetization-texture.assign-bloch-point",
+    "Assign Bloch Point Magnetization",
+    "bloch_point",
   ),
 ];

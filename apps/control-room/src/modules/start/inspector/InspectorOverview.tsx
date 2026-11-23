@@ -7,15 +7,16 @@ import { kvRow as kvRowIfPresent, kvRowOrUnavailable } from "./KeyValueGroup.mod
 
 /**
  * Answers "is this the project I mean, and can this machine run it?". Units
- * are part of each value, and a field the index did not record is left out
- * instead of shown as a dash, unless `listEveryField` asks for the sketch's
- * full list, where a field the backend did not send reads "unavailable".
+ * are part of each value, and a field the index or archive did not record is
+ * omitted instead of displayed as "unavailable".
  */
 export function InspectorOverview({
   summary,
+  hasRuns,
   listEveryField = false,
 }: {
   readonly summary: ModelSummary | undefined;
+  readonly hasRuns?: boolean;
   readonly listEveryField?: boolean;
 }) {
   const kvRow = listEveryField ? kvRowOrUnavailable : kvRowIfPresent;
@@ -41,10 +42,16 @@ export function InspectorOverview({
     ...kvRow("Tolerance", summary.tolerance),
     ...kvRow("Excitation", summary.excitation),
   ];
+  const savedFieldsValue =
+    summary.outputFields && summary.outputFields.length > 0
+      ? chipList(summary.outputFields)
+      : hasRuns === false
+        ? "Not computed yet"
+        : undefined;
   const outputs = [
     ...kvRow("Frames", summary.outputFrames?.toLocaleString("en-US")),
     ...kvRow("Size", summary.outputBytes === undefined ? undefined : formatBytes(summary.outputBytes)),
-    ...kvRow("Fields", chipList(summary.outputFields)),
+    ...kvRowIfPresent("Saved fields", savedFieldsValue),
   ];
   if (model.length + execution.length + outputs.length === 0) {
     return <p className="fm-start-inspector__note">The recorded summary is empty.</p>;

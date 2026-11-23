@@ -75,6 +75,9 @@ import {
   VISUALIZATION_COLOR_MODE_ITEMS,
   visualizationOverrideStateLabel,
   visualizationQuantityItems,
+  visualizationQuantitySelectionState,
+  resolveSceneObjectAuthoredMagnetizationAvailable,
+  resolveSceneRegionAuthoredMagnetizationAvailable,
   fieldCatalogQuantityAvailable,
   fieldAvailabilityQueryForVisualizationTarget,
   visualizationResetActionLabel,
@@ -4456,6 +4459,133 @@ describe("ObjectVisualizationPanelModel", () => {
       title: "Airbox vectors are not scheduled",
     });
     expect(diagnostic.message).toContain("magnetic-only");
+  });
+
+  it("exposes authored initial magnetization (m) in Quantity source before grid preparation without breaking unauthored objects", () => {
+    const emptyFieldCatalog: FieldCatalogResource = {
+      domain_generation_id: "0",
+      quantities: [],
+      revision: 0,
+    };
+    const scene = {
+      objects: [
+        {
+          id: "new-box",
+          magnetization_ref: "mag:new-box:skyrmion",
+          regions: [
+            {
+              region_id: "reg-1",
+              enabled: true,
+              texture_override: { initial_magnetization: { kind: "uniform", direction: [0, 0, 1] } },
+            },
+          ],
+        },
+        {
+          id: "plain-box",
+          magnetization_ref: null,
+          regions: [],
+        },
+      ],
+      magnetization_assets: [
+        {
+          id: "mag:new-box:skyrmion",
+          kind: "preset_texture",
+          preset_kind: "bloch_skyrmion",
+        },
+      ],
+    };
+
+    expect(resolveSceneObjectAuthoredMagnetizationAvailable(scene, "new-box")).toBe(true);
+    expect(resolveSceneObjectAuthoredMagnetizationAvailable(scene, "plain-box")).toBe(false);
+    expect(resolveSceneRegionAuthoredMagnetizationAvailable(scene, "new-box", "reg-1")).toBe(true);
+
+    const authoredItems = visualizationQuantityItems(
+      "m",
+      "object",
+      emptyFieldCatalog,
+      null,
+      undefined,
+      true,
+    );
+    const authoredState = visualizationQuantitySelectionState({
+      activeQuantityId: "m",
+      items: authoredItems,
+      loading: false,
+    });
+    expect(authoredItems[0]).toMatchObject({
+      value: "m",
+      label: "Magnetization (initial texture)",
+    });
+    expect(authoredItems[0]?.disabled).toBeFalsy();
+    expect(authoredState.status).toBe("selected");
+    expect(authoredState.selectedValue).toBe("m");
+
+    const plainItems = visualizationQuantityItems(
+      "",
+      "object",
+      emptyFieldCatalog,
+      null,
+      undefined,
+      false,
+    );
+    const plainState = visualizationQuantitySelectionState({
+      activeQuantityId: "",
+      items: plainItems,
+      loading: false,
+    });
+    expect(plainItems).toEqual([]);
+    expect(plainState.status).toBe("empty");
+    expect(plainState.placeholder).toBe("No compatible field available");
+  });
+
+  it("unlocks Vectors and Surface Coloring inspector sections for authored magnetization targets before solver fields exist", () => {
+    const preMeshSettings = {
+      ...DEFAULT_OBJECT_VISUALIZATION,
+      activeQuantityId: "",
+      shaderVisible: true,
+      vectorsVisible: true,
+      visible: true,
+    };
+    const effectiveSettings = resolveEffectiveVisualizationSettings(preMeshSettings);
+    // Without activeQuantityId, effectiveSettings forces shaderVisible & vectorsVisible false
+    expect(effectiveSettings.shaderVisible).toBe(false);
+    expect(effectiveSettings.vectorsVisible).toBe(false);
+
+    const objectTarget = { id: "object:disk", kind: "object" as const };
+    const lockedSections = buildVisualizationPanelSections({
+      authoredMagnetizationAvailable: false,
+      effectiveSettings,
+      settings: preMeshSettings,
+      target: objectTarget,
+    });
+    expect(lockedSections.find((s) => s.id === "vectors")?.disabled).toBe(true);
+    expect(lockedSections.find((s) => s.id === "surface-coloring")?.disabled).toBe(true);
+
+    const unlockedSections = buildVisualizationPanelSections({
+      authoredMagnetizationAvailable: true,
+      effectiveSettings,
+      settings: preMeshSettings,
+      target: objectTarget,
+    });
+    expect(unlockedSections.find((s) => s.id === "vectors")?.disabled).toBe(false);
+    expect(unlockedSections.find((s) => s.id === "surface-coloring")?.disabled).toBe(false);
+
+    // Airbox never unlocks authored magnetization controls, and hidden or vectors-off stays disabled
+    const airboxSections = buildVisualizationPanelSections({
+      authoredMagnetizationAvailable: true,
+      effectiveSettings,
+      settings: preMeshSettings,
+      target: { id: "airbox", kind: "airbox" },
+    });
+    expect(airboxSections.find((s) => s.id === "vectors")?.disabled).toBe(true);
+
+    const vectorsOffSections = buildVisualizationPanelSections({
+      authoredMagnetizationAvailable: true,
+      effectiveSettings,
+      settings: { ...preMeshSettings, vectorsVisible: false },
+      target: objectTarget,
+    });
+    expect(vectorsOffSections.find((s) => s.id === "vectors")?.disabled).toBe(true);
   });
 });
 

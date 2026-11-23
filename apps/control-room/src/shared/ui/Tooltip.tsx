@@ -21,6 +21,7 @@ function TooltipContent({
       <TooltipPrimitive.Content
         ref={ref}
         collisionPadding={collisionPadding}
+        data-slot="tooltip-content"
         sideOffset={sideOffset}
         className={cn("fm-tooltip", className)}
         {...props}

@@ -1,3 +1,5 @@
+import { AlertTriangle, CheckCircle2, Grid3X3, Loader2 } from "lucide-react";
+
 import { Button } from "@/shared/ui/Button";
 
 export interface FdmGridBuildConfirmContentProps {
@@ -24,40 +26,58 @@ export interface FdmGridBuildConfirmContentProps {
   totalCells?: number | null;
 }
 
-function formatBounds(
-  bounds: { min: [number, number, number]; max: [number, number, number] } | null | undefined,
-): string {
-  if (!bounds) return "Extent derived from scene bounding box";
-  const fmt = (v: number) => {
-    const abs = Math.abs(v);
-    if (abs >= 1e-3 && abs < 1) return `${(v * 1e3).toFixed(2)} mm`;
-    if (abs >= 1e-6 && abs < 1e-3) return `${(v * 1e6).toFixed(2)} µm`;
-    if (abs > 0 && abs < 1e-6) return `${(v * 1e9).toFixed(2)} nm`;
-    return `${v.toFixed(3)} m`;
-  };
-  return `[${bounds.min.map(fmt).join(", ")}] to [${bounds.max.map(fmt).join(", ")}]`;
+function resolveLengthUnit(values: readonly number[]): {
+  scale: number;
+  unit: string;
+} {
+  const maxAbs = values.reduce((acc, v) => Math.max(acc, Math.abs(v)), 0);
+  if (maxAbs > 0 && maxAbs < 1e-6) return { scale: 1e9, unit: "nm" };
+  if (maxAbs >= 1e-6 && maxAbs < 1e-3) return { scale: 1e6, unit: "µm" };
+  if (maxAbs >= 1e-3 && maxAbs < 1) return { scale: 1e3, unit: "mm" };
+  return { scale: 1, unit: "m" };
 }
 
-function formatShape(shape: [number, number, number] | null | undefined): string {
-  if (!shape) return "Materialized upon build";
+function formatCompactNumber(value: number, maxDecimals = 2): string {
+  if (Math.abs(value) < 1e-12) return "0";
+  return Number(value.toFixed(maxDecimals)).toString();
+}
+
+function formatBounds(
+  bounds:
+    | { min: [number, number, number]; max: [number, number, number] }
+    | null
+    | undefined,
+): string {
+  if (!bounds) return "Derived from scene bounding box";
+  const all = [...bounds.min, ...bounds.max];
+  const { scale, unit } = resolveLengthUnit(all);
+  const minStr = bounds.min
+    .map((v) => formatCompactNumber(v * scale, 2))
+    .join(", ");
+  const maxStr = bounds.max
+    .map((v) => formatCompactNumber(v * scale, 2))
+    .join(", ");
+  return `[${minStr}] → [${maxStr}] ${unit}`;
+}
+
+function formatShape(
+  shape: [number, number, number] | null | undefined,
+): string {
+  if (!shape) return "Pending";
   return `${shape[0]} × ${shape[1]} × ${shape[2]}`;
 }
 
-function formatSpacing(spacing: [number, number, number] | null | undefined): string {
-  if (!spacing) return "Derived from domain configuration";
-  const fmt = (v: number) => {
-    const abs = Math.abs(v);
-    if (abs >= 1e-3 && abs < 1) return `${(v * 1e3).toFixed(2)} mm`;
-    if (abs >= 1e-6 && abs < 1e-3) return `${(v * 1e6).toFixed(2)} µm`;
-    if (abs > 0 && abs < 1e-6) return `${(v * 1e9).toFixed(2)} nm`;
-    return `${v.toExponential(2)} m`;
-  };
-  return `[${spacing.map(fmt).join(", ")}]`;
+function formatCellSize(
+  spacing: [number, number, number] | null | undefined,
+): string {
+  if (!spacing) return "Pending";
+  const { scale, unit } = resolveLengthUnit(spacing);
+  const parts = spacing.map((v) => formatCompactNumber(v * scale, 2));
+  return `${parts.join(" × ")} ${unit}`;
 }
 
 export function FdmGridBuildConfirmContent({
   commandId,
-  commandStatus,
   errorMessage,
   geometryBounds,
   gridMemoryMB,
@@ -77,133 +97,200 @@ export function FdmGridBuildConfirmContent({
 }: FdmGridBuildConfirmContentProps) {
   const phase = mode ?? "pre-build";
   const buildButtonLabel =
-    phase === "submitting" ? "Rebuilding grid in progress…" : "Build Grid & Materialize Masks";
+    phase === "submitting"
+      ? "Rebuilding grid…"
+      : "Build Grid & Materialize Masks";
+
+  const kpis = [
+    { label: "Grid", value: formatShape(gridShape) },
+    {
+      label: "Total cells",
+      value:
+        totalCells != null ? totalCells.toLocaleString("en-US") : "Pending",
+    },
+    { label: "Cell size", value: formatCellSize(gridSpacing) },
+    {
+      label: "Mask memory",
+      value: gridMemoryMB != null ? `${gridMemoryMB.toFixed(2)} MB` : "Pending",
+    },
+  ] as const;
 
   return (
-    <div className="fm-mesh-build-confirm" data-fdm-grid-build-phase={phase}>
-      <section className="fm-mesh-build-confirm__section" aria-label="Structured grid build target">
-        <h3 className="fm-mesh-build-confirm__section-title">FDM Structured Grid & Mask Refresh</h3>
-        <dl className="fm-dialog__details">
-          <div className="fm-dialog__details-row">
-            <dt className="fm-dialog__details-label">Target</dt>
-            <dd className="fm-dialog__details-value">Committed scene geometry & magnetic support</dd>
+    <div
+      className="flex min-w-0 flex-col gap-3.5"
+      data-fdm-grid-build-phase={phase}
+    >
+      {/* Top 4-tile KPI summary strip */}
+      <div
+        aria-label="FDM grid resolution & dimensions"
+        className="grid grid-cols-2 gap-2 sm:grid-cols-4"
+      >
+        {kpis.map((kpi) => (
+          <div
+            key={kpi.label}
+            className="flex min-w-0 flex-col gap-1 rounded-md border border-[var(--fm-border-subtle)] bg-[var(--fm-bg-panel)] px-3 py-2.5"
+          >
+            <span className="truncate text-[var(--fm-font-size-xs)] font-medium uppercase tracking-wider text-[var(--fm-text-muted)]">
+              {kpi.label}
+            </span>
+            <span className="truncate font-mono text-sm font-semibold tabular-nums text-[var(--fm-text-primary)]">
+              {kpi.value}
+            </span>
           </div>
-          <div className="fm-dialog__details-row">
-            <dt className="fm-dialog__details-label">Command</dt>
-            <dd className="fm-dialog__details-value">{commandId ?? "grid.build-fdm"}</dd>
-          </div>
-          <div className="fm-dialog__details-row">
-            <dt className="fm-dialog__details-label">Command state</dt>
-            <dd className="fm-dialog__details-value">{commandStatus}</dd>
-          </div>
-        </dl>
-      </section>
+        ))}
+      </div>
 
+      {/* Status banners (error / post-build / preflight loading or stale) */}
       {(phase === "error" || phase === "waiting") && errorMessage ? (
         <section
           aria-label="Grid build error"
-          className="fm-mesh-build-confirm__section fm-mesh-build-confirm__banner fm-mesh-build-confirm__banner--error"
+          className="flex items-start gap-2.5 rounded-md border border-[var(--fm-danger)] bg-[color-mix(in_srgb,var(--fm-danger)_10%,var(--fm-bg-panel))] px-3.5 py-2.5"
         >
-          <h3 className="fm-mesh-build-confirm__section-title">
-            {phase === "error" ? "Build Error" : "Observation paused"}
-          </h3>
-          <p className="fm-mesh-build-confirm__empty">{errorMessage}</p>
+          <AlertTriangle
+            aria-hidden="true"
+            className="mt-0.5 shrink-0 text-[var(--fm-danger-text)]"
+            size={15}
+          />
+          <div className="min-w-0 space-y-0.5">
+            <h3 className="m-0 text-xs font-semibold text-[var(--fm-danger-text)]">
+              {phase === "error" ? "Build Error" : "Observation paused"}
+            </h3>
+            <p className="m-0 text-xs text-[var(--fm-text-secondary)]">
+              {errorMessage}
+            </p>
+          </div>
         </section>
       ) : null}
 
       {phase === "post-build" ? (
-        <section aria-label="Grid build completed" className="fm-mesh-build-confirm__section fm-mesh-build-confirm__banner">
-          <h3 className="fm-mesh-build-confirm__section-title">Grid & Masks Materialized</h3>
-          <p className="fm-mesh-build-confirm__empty">
-            {rendered
-              ? "Published grid dimensions and membership masks rendered in the viewport."
-              : "New grid revision published. Viewport update complete."}
-          </p>
+        <section
+          aria-label="Grid build completed"
+          className="flex items-start gap-2.5 rounded-md border border-[color-mix(in_srgb,var(--fm-success)_45%,var(--fm-border-subtle))] bg-[color-mix(in_srgb,var(--fm-success)_10%,var(--fm-bg-panel))] px-3.5 py-2.5"
+        >
+          <CheckCircle2
+            aria-hidden="true"
+            className="mt-0.5 shrink-0 text-[var(--fm-success-text)]"
+            size={15}
+          />
+          <div className="min-w-0 space-y-0.5">
+            <h3 className="m-0 text-xs font-semibold text-[var(--fm-success-text)]">
+              Grid &amp; Masks Materialized
+            </h3>
+            <p className="m-0 text-xs text-[var(--fm-text-secondary)]">
+              {rendered
+                ? "Published grid dimensions and membership masks rendered in the viewport."
+                : "New grid revision published. Viewport update complete."}
+            </p>
+          </div>
         </section>
       ) : null}
 
       {!ready && phase === "pre-build" ? (
-        <p className="fm-mesh-build-confirm__empty">
-          {stale
-            ? "The model changed after this confirmation was prepared. Review an updated preflight."
-            : "Loading current scene geometry baseline…"}
-        </p>
+        <div className="flex items-center gap-2 rounded-md border border-[var(--fm-border-subtle)] bg-[var(--fm-bg-panel)] px-3.5 py-2 text-xs text-[var(--fm-text-muted)]">
+          <Loader2
+            aria-hidden="true"
+            className="shrink-0 animate-spin text-[var(--fm-accent-text)]"
+            size={13}
+          />
+          <span>
+            {stale
+              ? "The model changed after this confirmation was prepared. Review an updated preflight."
+              : "Loading current scene geometry baseline…"}
+          </span>
+        </div>
       ) : null}
 
-      <section className="fm-mesh-build-confirm__section" aria-label="Source scene geometry">
-        <h3 className="fm-mesh-build-confirm__section-title">Committed Scene Geometry</h3>
-        <dl className="fm-dialog__details">
-          <div className="fm-dialog__details-row">
-            <dt className="fm-dialog__details-label">Scene revision</dt>
-            <dd className="fm-dialog__details-value">
-              {sceneRevision != null ? `Revision ${sceneRevision}` : "loading"}
+      {/* Aligned Specification List */}
+      <section
+        aria-label="Source scene geometry"
+        className="overflow-hidden rounded-md border border-[var(--fm-border-subtle)] bg-[var(--fm-bg-panel)]"
+      >
+        <div className="border-b border-[var(--fm-border-subtle)] bg-[var(--fm-bg-elevated)] px-3.5 py-2">
+          <h3 className="m-0 text-xs font-semibold text-[var(--fm-text-primary)]">
+            FDM Structured Grid &amp; Mask Refresh
+          </h3>
+        </div>
+        <dl className="m-0 divide-y divide-[var(--fm-border-subtle)]">
+          <div className="flex items-center justify-between gap-4 px-3.5 py-2">
+            <dt className="shrink-0 text-xs text-[var(--fm-text-muted)]">
+              Target
+            </dt>
+            <dd className="m-0 text-right font-mono text-xs tabular-nums text-[var(--fm-text-primary)]">
+              Committed scene geometry &amp; magnetic support
             </dd>
           </div>
-          <div className="fm-dialog__details-row">
-            <dt className="fm-dialog__details-label">Authored objects</dt>
-            <dd className="fm-dialog__details-value">
+          <div className="flex items-center justify-between gap-4 px-3.5 py-2">
+            <dt className="shrink-0 text-xs text-[var(--fm-text-muted)]">
+              Authored objects
+            </dt>
+            <dd className="m-0 text-right font-mono text-xs tabular-nums text-[var(--fm-text-primary)]">
               {objectsCount} {objectsCount === 1 ? "object" : "objects"}
             </dd>
           </div>
-          <div className="fm-dialog__details-row">
-            <dt className="fm-dialog__details-label">Geometry extents</dt>
-            <dd className="fm-dialog__details-value font-mono">{formatBounds(geometryBounds)}</dd>
-          </div>
-        </dl>
-      </section>
-
-      <section className="fm-mesh-build-confirm__section" aria-label="FDM grid resolution & dimensions">
-        <h3 className="fm-mesh-build-confirm__section-title">FDM Grid & Discretization</h3>
-        <dl className="fm-dialog__details">
-          <div className="fm-dialog__details-row">
-            <dt className="fm-dialog__details-label">Cell size (Δx, Δy, Δz)</dt>
-            <dd className="fm-dialog__details-value font-mono">{formatSpacing(gridSpacing)}</dd>
-          </div>
-          <div className="fm-dialog__details-row">
-            <dt className="fm-dialog__details-label">Grid dimensions (Nx, Ny, Nz)</dt>
-            <dd className="fm-dialog__details-value font-mono">{formatShape(gridShape)}</dd>
-          </div>
-          <div className="fm-dialog__details-row">
-            <dt className="fm-dialog__details-label">Total grid cells</dt>
-            <dd className="fm-dialog__details-value">
-              {totalCells != null ? totalCells.toLocaleString("en-US") : "Calculated upon build"}
-            </dd>
-          </div>
-          <div className="fm-dialog__details-row">
-            <dt className="fm-dialog__details-label">Estimated mask memory</dt>
-            <dd className="fm-dialog__details-value">
-              {gridMemoryMB != null ? `${gridMemoryMB.toFixed(2)} MB` : "Calculated upon build"}
+          <div className="flex items-center justify-between gap-4 px-3.5 py-2">
+            <dt className="shrink-0 text-xs text-[var(--fm-text-muted)]">
+              Geometry extents
+            </dt>
+            <dd className="m-0 text-right font-mono text-xs tabular-nums text-[var(--fm-text-primary)]">
+              {formatBounds(geometryBounds)}
             </dd>
           </div>
           {membershipRevision != null ? (
-            <div className="fm-dialog__details-row">
-              <dt className="fm-dialog__details-label">Current mask revision</dt>
-              <dd className="fm-dialog__details-value">{membershipRevision}</dd>
+            <div className="flex items-center justify-between gap-4 px-3.5 py-2">
+              <dt className="shrink-0 text-xs text-[var(--fm-text-muted)]">
+                Current mask revision
+              </dt>
+              <dd className="m-0 text-right font-mono text-xs tabular-nums text-[var(--fm-text-primary)]">
+                Revision {membershipRevision}
+              </dd>
             </div>
           ) : null}
         </dl>
       </section>
 
-      <div className="fm-mesh-build-confirm__actions">
+      {/* Compact subtle command metadata line */}
+      <p className="m-0 px-0.5 font-mono text-xs tabular-nums text-[var(--fm-text-muted)]">
+        {commandId ?? "grid.build-fdm"} ·{" "}
+        {sceneRevision != null ? `Revision ${sceneRevision}` : "Scene baseline"}
+      </p>
+
+      {/* Polished Footer Actions */}
+      <div className="mt-1 flex flex-wrap items-center justify-between gap-2 border-t border-[var(--fm-border-subtle)] pt-3.5">
         <Button size="sm" type="button" variant="ghost" onClick={onCancel}>
           {phase === "pre-build" ? "Cancel" : "Close"}
         </Button>
-        {onOpenMeshOverview ? (
-          <Button size="sm" type="button" variant="secondary" onClick={onOpenMeshOverview}>
-            Mesh Overview
-          </Button>
-        ) : null}
-        {phase !== "pre-build" && phase !== "submitting" ? null : (
-          <Button
-            disabled={phase === "submitting" || !ready}
-            size="sm"
-            type="button"
-            variant="primary"
-            onClick={onApplyBuild}
-          >
-            {buildButtonLabel}
-          </Button>
-        )}
+        <div className="flex flex-wrap items-center gap-2">
+          {onOpenMeshOverview ? (
+            <Button
+              size="sm"
+              type="button"
+              variant="secondary"
+              onClick={onOpenMeshOverview}
+            >
+              Mesh Overview
+            </Button>
+          ) : null}
+          {phase !== "pre-build" && phase !== "submitting" ? null : (
+            <Button
+              disabled={phase === "submitting" || !ready}
+              size="sm"
+              type="button"
+              variant="primary"
+              onClick={onApplyBuild}
+            >
+              {phase === "submitting" ? (
+                <Loader2
+                  aria-hidden="true"
+                  className="animate-spin"
+                  size={13}
+                />
+              ) : (
+                <Grid3X3 aria-hidden="true" size={13} />
+              )}
+              <span>{buildButtonLabel}</span>
+            </Button>
+          )}
+        </div>
       </div>
     </div>
   );

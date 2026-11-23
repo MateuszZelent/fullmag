@@ -66,6 +66,7 @@ function DropdownMenuSubContent({
     <DropdownMenuPrimitive.SubContent
       ref={ref}
       collisionPadding={collisionPadding}
+      data-slot="dropdown-menu-sub-content"
       className={cn("fm-dropdown-content", className)}
       {...props}
     />
@@ -86,6 +87,7 @@ function DropdownMenuContent({
       <DropdownMenuPrimitive.Content
         ref={ref}
         collisionPadding={collisionPadding}
+        data-slot="dropdown-menu-content"
         sideOffset={sideOffset}
         className={cn("fm-dropdown-content", className)}
         {...props}

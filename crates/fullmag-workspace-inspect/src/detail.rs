@@ -108,6 +108,8 @@ schema_type! {
     pub struct OutputsSummary {
         pub frames: Option<u64>,
         pub size_bytes: Option<u64>,
+        #[serde(default)]
+        pub fields: Option<Vec<String>>,
     }
 }
 
@@ -172,6 +174,8 @@ schema_type! {
         pub frames: Option<u64>,
         #[serde(default)]
         pub duration_seconds: Option<f64>,
+        #[serde(default, alias = "output_fields", alias = "quantities")]
+        pub fields: Option<Vec<String>>,
     }
 }
 

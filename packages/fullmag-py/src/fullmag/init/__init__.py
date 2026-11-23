@@ -20,8 +20,11 @@ from .state_io import (
     load_field_state,
     infer_magnetization_state_format,
     load_magnetization,
+    parse_ovf_bytes,
+    resample_imported_field,
     save_field_state,
     save_magnetization,
+    save_ovf,
 )
 
 __all__ = [
@@ -42,7 +45,10 @@ __all__ = [
     "infer_magnetization_state_format",
     "load_field_state",
     "load_magnetization",
+    "parse_ovf_bytes",
+    "resample_imported_field",
     "save_field_state",
     "save_magnetization",
+    "save_ovf",
     "texture",
 ]

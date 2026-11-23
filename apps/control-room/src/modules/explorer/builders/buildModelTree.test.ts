@@ -7,7 +7,6 @@ import type {
   FdmRegionMembershipResource,
   FrozenSpinsCollectionResource,
   FrequencyDomainManifestResource,
-  HysteresisExecutionTreeResource,
   SceneResource,
 } from "@/kernel/api/apiTypes";
 import { buildDomainPresentation } from "@/shared/domain/mesh/domainPresentation";
@@ -17,8 +16,6 @@ import {
   ANALYSIS_FREQUENCY_DOMAIN_EIGEN_SPECTRUM_V2_PATH,
   ANALYSIS_FREQUENCY_DOMAIN_MANIFEST_V1_PATH,
   ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_MAGNETIC_SWEEP_PATH,
-  ANALYSIS_HYSTERESIS_POINT_PATH,
-  ANALYSIS_HYSTERESIS_SETTLE_TRACE_PATH,
   DATA_FIELD_VECTOR_PATH,
 } from "@/kernel/api/apiPaths";
 import {
@@ -58,9 +55,11 @@ describe("Conductor object hierarchy", () => {
     const conductor = nodes.find((node) => node.id === "model:object:beta_w");
     expect(conductor).toMatchObject({ objectRole: "conductor", badge: "Conductor" });
     const descendants = nodes.filter((node) => node.id.startsWith("model:object:beta_w:"));
+    expect(descendants.map((node) => node.kind)).toContain("object.geometry");
     expect(descendants.map((node) => node.kind)).toContain("object.visualization");
-    expect(descendants.map((node) => node.kind)).toContain("object.region.geometry");
+    expect(descendants.map((node) => node.kind)).toContain("object.region");
     expect(descendants.map((node) => node.kind)).toContain("object.region.mesh");
+    expect(descendants.map((node) => node.kind)).toContain("object.region.visualization");
     expect(descendants.some((node) =>
       node.kind.includes("magnetic") || node.kind.includes("frozen") || node.kind === "object.region.texture"
     )).toBe(false);
@@ -157,26 +156,8 @@ function fdmExplorerPresentation() {
   return buildDomainPresentation({ domainMeta, fdmMembership: membership, fdmMembershipStatus: "ready" });
 }
 
-function snapshotVectorResourceKey(snapshotId: string): string {
-  return `${DATA_FIELD_VECTOR_PATH.replace("{quantity_id}", "m")}?component=full&scope_kind=full&snapshot_id=${snapshotId}`;
-}
-
 function analysisFieldVectorResourceKey(fieldId: string): string {
   return `${DATA_FIELD_VECTOR_PATH.replace("{quantity_id}", fieldId)}?view=phase_rotated_real&phase_rad=0`;
-}
-
-function hysteresisPointResourceKey(stageId: string, pointId: number): string {
-  return ANALYSIS_HYSTERESIS_POINT_PATH.replace("{stage_id}", stageId).replace(
-    "{point_id}",
-    String(pointId),
-  );
-}
-
-function hysteresisSettleTraceResourceKey(stageId: string, pointId: number): string {
-  return ANALYSIS_HYSTERESIS_SETTLE_TRACE_PATH.replace("{stage_id}", stageId).replace(
-    "{point_id}",
-    String(pointId),
-  );
 }
 
 const frequencyDomainCapabilityFixture = {
@@ -521,11 +502,10 @@ describe("buildModelTree", () => {
         "model:object:free-layer",
         "model:object:free-layer:geometry",
         "model:object:free-layer:regions",
-        "model:object:free-layer:magnetic-parameters",
-        "model:object:free-layer:magnetic-parameters:material",
-        "model:object:free-layer:magnetic-parameters:uniaxial_anisotropy",
+        "model:object:free-layer:material",
+        "model:object:free-layer:physics",
+        "model:object:free-layer:physics:uniaxial_anisotropy",
         "model:object:free-layer:magnetic-texture",
-        "model:object:free-layer:magnetic-texture:asset",
         "model:object:free-layer:mesh",
         "model:object:free-layer:visualization",
         "model:object:free-layer:visualization:debug",
@@ -575,7 +555,7 @@ describe("buildModelTree", () => {
       label: "Airbox",
       parentId: "model:universe",
       resourceState: "stale",
-      statusReason: "Published FEM mesh has no source-scene provenance; freshness is unknown.",
+      statusReason: "Published FEM mesh has no source-scene provenance; freshness cannot be verified yet.",
     });
     expect(airbox?.children?.map(({ id, kind, label, parentId }) => ({
       id,
@@ -602,7 +582,7 @@ describe("buildModelTree", () => {
       availability: "available",
       executionState: "not_started",
       resourceState: "stale",
-      statusReason: "Published FEM mesh has no source-scene provenance; freshness is unknown.",
+      statusReason: "Published FEM mesh has no source-scene provenance; freshness cannot be verified yet.",
     });
     expect(mesh?.children?.map(({ id, kind, label, parentId }) => ({
       id,
@@ -715,7 +695,7 @@ describe("buildModelTree", () => {
     });
   });
 
-  it("marks grouping roots as nonselectable instead of routing them to placeholders", () => {
+  it("keeps collection and scope grouping roots selectable for canonical overview routing", () => {
     const nodes = flattenExplorerNodes(buildModelTree({
       domainDiscretization: "fem",
       objects: [{ id: "film", label: "Film" }],
@@ -728,7 +708,7 @@ describe("buildModelTree", () => {
       "objects.root",
     ]) {
       expect(nodes.find((node) => node.kind === kind), kind).toMatchObject({
-        selectable: false,
+        selectable: true,
       });
     }
   });
@@ -812,7 +792,7 @@ describe("buildModelTree", () => {
     ["loading", "mesh-building", "building", "loading"],
     ["stale", "mesh-stale", "mesh stale", "does not match"],
     ["error", "mesh-failed", "failed", "failed to load"],
-    ["unknown", "unavailable", "identity unknown", "identity is incomplete"],
+    ["unknown", "unavailable", "6 faces", "Analytical 6-face exterior bounds preview"],
   ] as const)(
     "does not infer a missing carrier from %s manifest evidence",
     (evidenceStatus, expectedStatus, expectedBadge, reason) => {
@@ -1099,70 +1079,60 @@ describe("buildModelTree", () => {
       flattened.find((node) => node.id === "model:object:box-1:mesh")?.badge,
     ).toBe("mesh stale");
     expect(
-      flattened.find((node) => node.id === "model:object:box-1:magnetic-parameters")
-        ?.label,
-    ).toBe("Magnetic Parameters");
+      flattened.find((node) => node.id === "model:object:box-1:material"),
+    ).toMatchObject({
+      badge: "Material 1",
+      kind: "object.material",
+      label: "Material",
+    });
+    expect(
+      flattened.find((node) => node.id === "model:object:box-1:physics"),
+    ).toMatchObject({
+      kind: "object.physics",
+      label: "Physics",
+    });
     expect(
       flattened.find(
-        (node) => node.id === "model:object:box-1:magnetic-parameters:material",
-      )?.label,
-    ).toBe("Material: Material 1");
-    expect(
-      flattened.find(
-        (node) => node.id === "model:object:box-1:magnetic-parameters:material",
-      )?.badge,
-    ).toBe("Aex, Dind, Ms");
-    expect(
-      flattened.find(
-        (node) =>
-          node.id === "model:object:box-1:magnetic-parameters:interfacial_dmi",
+        (node) => node.id === "model:object:box-1:physics:interfacial_dmi",
       )?.badge,
     ).toBe("active");
     expect(
       flattened.find(
-        (node) => node.id === "model:object:box-1:magnetic-parameters:exchange",
+        (node) => node.id === "model:object:box-1:physics:exchange",
       )?.badge,
     ).toBe("active");
     expect(
       flattened.find(
-        (node) => node.id === "model:object:box-1:magnetic-parameters:demag",
+        (node) => node.id === "model:object:box-1:physics:demag",
       )?.badge,
     ).toBe("disabled");
     expect(flattened.map((node) => node.id)).not.toContain(
       "model:materials",
     );
     expect(flattened.map((node) => node.id)).not.toContain("model:physics");
-    expect(
-      flattened.find(
-        (node) => node.id === "model:object:box-1:magnetic-texture",
-      )?.badge,
-    ).toBe("preset_texture");
-    expect(
-      flattened.find(
-        (node) => node.id === "model:object:box-1:magnetic-texture:asset",
-      )?.label,
-    ).toBe("Vortex texture");
-    expect(
-      flattened.find(
-        (node) => node.id === "model:object:box-1:magnetic-texture:asset",
-      )?.kind,
-    ).toBe("object.magnetic-texture.asset");
+    const boxTextureNode = flattened.find(
+      (node) => node.id === "model:object:box-1:magnetic-texture",
+    );
+    expect(boxTextureNode).toMatchObject({
+      badge: "preset_texture",
+      icon: "compass",
+      kind: "object.magnetic-texture",
+    });
+    expect(boxTextureNode?.children).toBeUndefined();
+    expect(flattened.map((node) => node.id)).not.toContain(
+      "model:object:box-1:magnetic-texture:asset",
+    );
     expect(flattened.map((node) => node.id)).not.toContain(
       "model:object:box-1:magnetic-texture:load",
+    );
+    expect(flattened.map((node) => node.id)).not.toContain(
+      "model:object:box-1:magnetic-texture:transform",
     );
     expect(
       flattened.find(
         (node) => node.id === "model:object:box-1:magnetic-texture",
       )?.contextCommands,
     ).toEqual(expect.arrayContaining(["magnetization-texture.activate-load-file"]));
-    expect(flattened.map((node) => node.id)).toContain(
-      "model:object:box-1:magnetic-texture:transform",
-    );
-    expect(
-      flattened.find(
-        (node) => node.id === "model:object:box-1:magnetic-texture:transform",
-      )?.kind,
-    ).toBe("object.magnetic-texture.transform");
     expect(
       flattened.find((node) => node.id === "model:object:box-1")
         ?.contextCommands,
@@ -1259,7 +1229,7 @@ describe("buildModelTree", () => {
         expect(
           tree.find(
             (node) =>
-              node.id === `model:object:${scenario.id}:magnetic-parameters:${kind}`,
+              node.id === `model:object:${scenario.id}:physics:${kind}`,
           ),
         ).toMatchObject({ badge: expectedBadge, status: expectedStatus });
       }
@@ -1324,7 +1294,7 @@ describe("buildModelTree", () => {
       expect(
         tree.find(
           (node) =>
-            node.id === `model:object:${objectId}:magnetic-parameters:interfacial_dmi`,
+            node.id === `model:object:${objectId}:physics:interfacial_dmi`,
         ),
       ).toMatchObject({ badge: "active", status: "ready" });
     }
@@ -1420,19 +1390,19 @@ describe("buildModelTree", () => {
     expect(
       tree.find(
         (node) =>
-          node.id === "model:object:film-a:magnetic-parameters:interfacial_dmi",
+          node.id === "model:object:film-a:physics:interfacial_dmi",
       ),
     ).toMatchObject({ badge: "disabled", status: "degraded" });
     expect(
       tree.find(
         (node) =>
-          node.id === "model:object:film-b:magnetic-parameters:interfacial_dmi",
+          node.id === "model:object:film-b:physics:interfacial_dmi",
       ),
     ).toMatchObject({ badge: "active", status: "ready" });
     expect(
       tree.some(
         (node) =>
-          node.id === "model:object:film-a:magnetic-parameters:unknown_future_interaction",
+          node.id === "model:object:film-a:physics:unknown_future_interaction",
       ),
     ).toBe(false);
   });
@@ -1692,11 +1662,6 @@ describe("buildModelTree", () => {
     );
     expect(
       flattened.find(
-        (node) => node.id === "model:object:film:regions:reg-core:geometry",
-      ),
-    ).toMatchObject({ badge: "cylinder", kind: "object.region.geometry" });
-    expect(
-      flattened.find(
         (node) => node.id === "model:object:film:regions:reg-core:mesh",
       ),
     ).toMatchObject({ badge: "current", status: "mesh-ready" });
@@ -1704,15 +1669,17 @@ describe("buildModelTree", () => {
       flattened.find(
         (node) =>
           node.id === "model:object:film:regions:reg-core:magnetic-parameters",
-      )?.badge,
-    ).toBe("1 override / 1 field");
+      ),
+    ).toMatchObject({
+      badge: "1 override / 1 field",
+      kind: "object.region.magnetic-parameters",
+      label: "Material",
+    });
     expect(
       flattened.find(
-        (node) =>
-          node.id ===
-          "model:object:film:regions:reg-core:magnetic-parameters:field-ms-core",
+        (node) => node.id === "model:object:film:regions:reg-core:texture",
       ),
-    ).toMatchObject({ badge: "authored_pending_realization", label: "Ms (A/m)" });
+    ).toMatchObject({ badge: "Inherited", kind: "object.region.texture" });
     expect(
       flattened.find(
         (node) =>
@@ -1734,13 +1701,8 @@ describe("buildModelTree", () => {
       regionId: "reg-core",
     });
     expect(
-      flattened.find(
-        (node) => node.id === "model:object:film:regions:reg-core:regions",
-      ),
-    ).toMatchObject({ kind: "object.region.regions", badge: "inherits none" });
-    expect(
       flattened.find((node) => node.id === "model:physics:couplings"),
-    ).toMatchObject({ badge: "1", kind: "physics.couplings", selectable: false });
+    ).toMatchObject({ badge: "1", kind: "physics.couplings", selectable: true });
     expect(
       flattened.find(
         (node) => node.id === "model:physics:couplings:cpl-exchange",
@@ -1799,19 +1761,19 @@ describe("buildModelTree", () => {
       flattened.find(
         (node) =>
           node.id ===
-          "model:object:film-b:regions:reg-core:magnetic-parameters:field-ms-core",
+          "model:object:film-b:regions:reg-core:magnetic-parameters",
       ),
     ).toMatchObject({
-      badge: "field",
+      badge: "1 field",
       kind: "object.region.magnetic-parameters",
-      label: "ms (A/m)",
+      label: "Material",
       objectId: "film-b",
       regionId: "reg-core",
     });
     expect(
       flattened.map((node) => node.id),
     ).not.toContain(
-      "model:object:film-a:regions:reg-core:magnetic-parameters:field-ms-core",
+      "model:object:film-a:regions:reg-core:magnetic-parameters",
     );
   });
 
@@ -1917,7 +1879,7 @@ describe("buildModelTree", () => {
     )).toEqual(["stale", "stale"]);
   });
 
-  it("shows object texture load nodes only after activation", () => {
+  it("keeps object magnetic texture as a childless leaf even when textureLoadEnabled is set", () => {
     const flattened = flattenExplorerNodes(
       buildModelTree({
         objects: [
@@ -1930,17 +1892,19 @@ describe("buildModelTree", () => {
       }),
     );
 
-    expect(
-      flattened.find(
-        (node) => node.id === "model:object:box-1:magnetic-texture:load",
-      ),
-    ).toMatchObject({
-      badge: "h5/zarr",
-      contextCommands: ["study.load-field-state"],
-      kind: "object.magnetic-texture.load",
-      label: "Load texture",
+    const loadTextureNode = flattened.find(
+      (node) => node.id === "model:object:box-1:magnetic-texture",
+    );
+    expect(loadTextureNode).toMatchObject({
+      icon: "compass",
+      kind: "object.magnetic-texture",
+      label: "Magnetic Texture",
       objectId: "box-1",
     });
+    expect(loadTextureNode?.children).toBeUndefined();
+    expect(flattened.map((node) => node.id)).not.toContain(
+      "model:object:box-1:magnetic-texture:load",
+    );
   });
 
   it("keeps the explorer renderable before the scene resource is loaded", () => {
@@ -2120,69 +2084,33 @@ describe("buildModelTree", () => {
         (node) => node.id === "model:study:stages:stage:eigen-1",
       ),
     ).toMatchObject({
+      badge: "modes",
       kind: "study.stage.eigenmodes",
       label: "Eigenmodes 6",
-    });
-    expect(
-      flattened.find(
-        (node) => node.id === "model:study:stages:stage:eigen-1:k-path",
-      ),
-    ).toMatchObject({
-      kind: "study.stage.eigenmodes.k_path",
-      label: "k-Path",
       stageId: "eigen-1",
       stageIndex: 5,
     });
     expect(
       flattened.find(
-        (node) =>
-          node.id === "model:study:stages:stage:eigen-1:periodic-pairs",
-      ),
-    ).toMatchObject({
-      kind: "study.stage.eigenmodes.periodic_pairs",
-      label: "Periodic Pairs",
-      stageId: "eigen-1",
-      stageIndex: 5,
-    });
+        (node) => node.id === "model:study:stages:stage:eigen-1",
+      )?.children,
+    ).toEqual([]);
     expect(
       flattened.find(
         (node) => node.id === "model:study:stages:stage:freq-1",
       ),
     ).toMatchObject({
+      badge: "frequency sweep",
       kind: "study.stage.frequency_response",
       label: "Frequency Response 7",
-    });
-    expect(
-      flattened.find(
-        (node) => node.id === "model:study:stages:stage:freq-1:excitation",
-      ),
-    ).toMatchObject({
-      kind: "study.stage.frequency_response.excitation",
-      label: "Excitation",
       stageId: "freq-1",
       stageIndex: 6,
     });
     expect(
       flattened.find(
-        (node) =>
-          node.id === "model:study:stages:stage:freq-1:periodic-pairs",
-      ),
-    ).toMatchObject({
-      kind: "study.stage.frequency_response.periodic_pairs",
-      label: "Periodic Pairs",
-      stageId: "freq-1",
-      stageIndex: 6,
-    });
-    expect(
-      flattened.find(
-        (node) => node.id === "model:study:stages:stage:freq-1:k-grid",
-      ),
-    ).toMatchObject({
-      kind: "study.stage.frequency_response.k_grid",
-      label: "k/f Grid",
-      stageId: "freq-1",
-      stageIndex: 6,
-    });
+        (node) => node.id === "model:study:stages:stage:freq-1",
+      )?.children,
+    ).toEqual([]);
     expect(flattened.map((node) => node.id)).not.toContain(
       "model:study:relax",
     );
@@ -2269,15 +2197,16 @@ describe("buildModelTree", () => {
     });
 
     const flattened = flattenExplorerNodes(buildModelTree(snapshot));
-
-    expect(flattened.map((node) => node.id)).toEqual(
-      expect.arrayContaining([
-        "model:study:stages:stage:eigen-free",
-        "model:study:stages:stage:eigen-free:setup",
-        "model:study:stages:stage:eigen-free:solver",
-        "model:study:stages:stage:eigen-free:diagnostics",
-      ]),
+    const stageNode = flattened.find(
+      (node) => node.id === "model:study:stages:stage:eigen-free",
     );
+
+    expect(stageNode).toMatchObject({
+      badge: "modes",
+      kind: "study.stage.eigenmodes",
+      label: "Eigenmodes 1",
+    });
+    expect(stageNode?.children).toEqual([]);
     expect(flattened.map((node) => node.id)).not.toEqual(
       expect.arrayContaining([
         "model:study:stages:stage:eigen-free:periodic-pairs",
@@ -2302,17 +2231,19 @@ describe("buildModelTree", () => {
     });
 
     const flattened = flattenExplorerNodes(buildModelTree(snapshot));
-
-    expect(flattened.map((node) => node.id)).toEqual(
-      expect.arrayContaining([
-        "model:study:stages:stage:eigen-periodic:boundary",
-        "model:study:stages:stage:eigen-periodic:periodic-pairs",
-        "model:study:stages:stage:eigen-periodic:k-path",
-      ]),
+    const stageNode = flattened.find(
+      (node) => node.id === "model:study:stages:stage:eigen-periodic",
     );
+
+    expect(stageNode).toMatchObject({
+      badge: "modes",
+      kind: "study.stage.eigenmodes",
+      label: "Eigenmodes 1",
+    });
+    expect(stageNode?.children).toEqual([]);
   });
 
-  it("reads eigen k-path text as a path sampling node", () => {
+  it("reads eigen k-path text as a consolidated eigenmodes stage leaf", () => {
     const snapshot = modelTreeSnapshotFromScene({
       objects: [],
       study: {
@@ -2327,12 +2258,16 @@ describe("buildModelTree", () => {
     });
 
     const flattened = flattenExplorerNodes(buildModelTree(snapshot));
-
-    expect(flattened.map((node) => node.id)).toEqual(
-      expect.arrayContaining([
-        "model:study:stages:stage:eigen-path:k-path",
-      ]),
+    const stageNode = flattened.find(
+      (node) => node.id === "model:study:stages:stage:eigen-path",
     );
+
+    expect(stageNode).toMatchObject({
+      badge: "modes",
+      kind: "study.stage.eigenmodes",
+      label: "Eigenmodes 1",
+    });
+    expect(stageNode?.children).toEqual([]);
   });
 
   it("omits periodic and k-grid response nodes without response-map semantics", () => {
@@ -2351,16 +2286,16 @@ describe("buildModelTree", () => {
     });
 
     const flattened = flattenExplorerNodes(buildModelTree(snapshot));
-
-    expect(flattened.map((node) => node.id)).toEqual(
-      expect.arrayContaining([
-        "model:study:stages:stage:response-free",
-        "model:study:stages:stage:response-free:setup",
-        "model:study:stages:stage:response-free:excitation",
-        "model:study:stages:stage:response-free:sweep",
-        "model:study:stages:stage:response-free:solver",
-      ]),
+    const stageNode = flattened.find(
+      (node) => node.id === "model:study:stages:stage:response-free",
     );
+
+    expect(stageNode).toMatchObject({
+      badge: "frequency sweep",
+      kind: "study.stage.frequency_response",
+      label: "Frequency Response 1",
+    });
+    expect(stageNode?.children).toEqual([]);
     expect(flattened.map((node) => node.id)).not.toEqual(
       expect.arrayContaining([
         "model:study:stages:stage:response-free:periodic-pairs",
@@ -2720,48 +2655,21 @@ describe("buildModelTree", () => {
       } as never,
     );
     const flattened = flattenExplorerNodes(buildModelTree(snapshot));
+    const stageNode = flattened.find(
+      (node) => node.id === "model:study:stages:stage:hysteresis-1",
+    );
 
-    expect(
-      flattened.filter(
-        (node) => node.id.includes(":field-point:") && !node.id.includes(":algorithm:"),
-      ),
-    ).toHaveLength(1);
-    expect(
-      flattened.find(
-        (node) =>
-          node.id ===
-          "model:study:stages:stage:hysteresis-1:field-point:4",
-      ),
-    ).toMatchObject({
-      badge: "25 mT / point 5",
-      label: "Current Field",
+    expect(stageNode).toMatchObject({
+      badge: "field sweep",
+      children: [],
+      kind: "study.stage.hysteresis",
+      label: "Hysteresis 1",
       status: "running",
     });
-    expect(
-      flattened.find(
-        (node) =>
-          node.id ===
-          "model:study:stages:stage:hysteresis-1:field-point:4:algorithm:0",
-      ),
-    ).toMatchObject({
-      badge: "llg_overdamped",
-      label: "Relax 1",
-      status: "completed",
-    });
-    expect(
-      flattened.find(
-        (node) =>
-          node.id ===
-          "model:study:stages:stage:hysteresis-1:field-point:4:algorithm:1",
-      ),
-    ).toMatchObject({
-      badge: "projected_gradient_bb",
-      label: "Minimize 2",
-      status: "running",
-    });
+    expect(flattened.filter((node) => node.id.startsWith("model:study:stages:stage:hysteresis-1:"))).toHaveLength(0);
   });
 
-  it("renders hysteresis active window from the backend execution tree", () => {
+  it("renders hysteresis active window as a consolidated stage leaf", () => {
     const snapshot = modelTreeSnapshotWithStageExecution(
       modelTreeSnapshotFromScene({
         objects: [],
@@ -2799,249 +2707,21 @@ describe("buildModelTree", () => {
         total_stages: 1,
       } as never,
     );
-    const executionTree: HysteresisExecutionTreeResource = {
-      active_point_index: 7,
-      after: 2,
-      before: 2,
-      include_bookmarks: false,
-      include_snapshots: false,
-      include_warnings: true,
-      revision: 22,
-      stage_id: "hysteresis-1",
-      stage_index: 0,
-      total_points: 21,
-      window: "active",
-      nodes: [
-        {
-          kind: "summary",
-          label: "Completed points",
-          node_id: "completed",
-          stage_id: "hysteresis-1",
-          status: "done",
-          updated_revision: 22,
-        },
-        {
-          children: [
-            {
-              kind: "settle_algorithm",
-              label: "Relax",
-              node_id: "point-7:relax",
-              point_id: 7,
-              resource_ref: hysteresisSettleTraceResourceKey("hysteresis-1", 7),
-              settle_step_id: "relax",
-              selection_ref: "hysteresis-settle:hysteresis-1:7:0",
-              stage_id: "hysteresis-1",
-              status: "done",
-              updated_revision: 22,
-            },
-            {
-              kind: "settle_algorithm",
-              label: "Minimize",
-              node_id: "point-7:minimize",
-              point_id: 7,
-              resource_ref: hysteresisSettleTraceResourceKey("hysteresis-1", 7),
-              settle_step_id: "minimize",
-              selection_ref: "hysteresis-settle:hysteresis-1:7:1",
-              stage_id: "hysteresis-1",
-              status: "active",
-              updated_revision: 22,
-            },
-            {
-              kind: "settle_algorithm",
-              label: "Dynamics settle",
-              node_id: "point-7:dynamics",
-              point_id: 7,
-              resource_ref: hysteresisSettleTraceResourceKey("hysteresis-1", 7),
-              settle_step_id: "dynamics",
-              selection_ref: "hysteresis-settle:hysteresis-1:7:2",
-              stage_id: "hysteresis-1",
-              status: "queued",
-              updated_revision: 22,
-            },
-            {
-              field_orientation: { kind: "preset", preset_name: "in_plane_x" },
-              field_revision: 12,
-              kind: "snapshot",
-              label: "Snapshot hysteresis_point_007",
-              measurement_axis: { kind: "custom", vector: [1, 0, 0] },
-              mesh_identity: "study_domain:rev-12",
-              node_id: "point-7:snapshot:hysteresis_point_007",
-              point_id: 7,
-              resource_ref: snapshotVectorResourceKey("hysteresis_point_007_from_resource"),
-              selection_ref: "hysteresis-snapshot:hysteresis-1:7:hysteresis_point_007_from_selection",
-              stage_id: "hysteresis-1",
-              status: "done",
-              updated_revision: 22,
-            },
-            {
-              kind: "warning",
-              label: "2 warning(s)",
-              node_id: "point-7:warnings",
-              point_id: 7,
-              resource_ref: hysteresisPointResourceKey("hysteresis-1", 7),
-              selection_ref: "hysteresis-warning:hysteresis-1:7",
-              stage_id: "hysteresis-1",
-              status: "warning",
-              updated_revision: 22,
-            },
-            {
-              kind: "snapshot",
-              label: "Snapshot hysteresis_point_missing missing",
-              node_id: "point-7:snapshot:hysteresis_point_missing",
-              point_id: 7,
-              resource_ref: snapshotVectorResourceKey("hysteresis_point_missing"),
-              selection_ref: "hysteresis-snapshot:hysteresis-1:7:hysteresis_point_missing",
-              stage_id: "hysteresis-1",
-              status: "missing",
-              updated_revision: 22,
-            },
-          ],
-          kind: "field_point",
-          label: "Field +30 mT",
-          node_id: "point-7",
-          point_id: 7,
-          resource_ref: hysteresisPointResourceKey("hysteresis-1", 7),
-          selection_ref: "hysteresis-point:hysteresis-1:7",
-          stage_id: "hysteresis-1",
-          status: "active",
-          updated_revision: 22,
-        },
-      ],
-    };
-    (snapshot.study!.stages[0] as { hysteresisExecutionTree?: HysteresisExecutionTreeResource })
-      .hysteresisExecutionTree = executionTree;
 
     const flattened = flattenExplorerNodes(buildModelTree(snapshot));
     const stageId = "model:study:stages:stage:hysteresis-1";
 
-    expect(flattened.find((node) => node.id === `${stageId}:points`)).toMatchObject({
-      badge: "8/21",
-      label: "Points",
+    expect(flattened.find((node) => node.id === stageId)).toMatchObject({
+      badge: "field sweep",
+      children: [],
+      kind: "study.stage.hysteresis",
+      label: "Hysteresis 1",
       status: "running",
     });
-    expect(flattened.find((node) => node.id === `${stageId}:field-point:7`)).toMatchObject({
-      badge: "Field +30 mT",
-      hysteresisExecutionNodeId: "point-7",
-      hysteresisExecutionNodeKind: "field_point",
-      hysteresisPointId: 7,
-      hysteresisSelectionRef: "hysteresis-point:hysteresis-1:7",
-      label: "Field +30 mT",
-      resourceRef: hysteresisPointResourceKey("hysteresis-1", 7),
-      status: "running",
-    });
-    expect(
-      flattened.find((node) => node.id === `${stageId}:field-point:7:algorithm:relax`),
-    ).toMatchObject({
-      hysteresisExecutionNodeId: "point-7:relax",
-      hysteresisExecutionNodeKind: "settle_algorithm",
-      hysteresisPointId: 7,
-      hysteresisSelectionRef: "hysteresis-settle:hysteresis-1:7:0",
-      label: "Relax",
-      resourceRef: hysteresisSettleTraceResourceKey("hysteresis-1", 7),
-      status: "completed",
-    });
-    expect(
-      flattened.find((node) => node.id === `${stageId}:field-point:7:algorithm:minimize`),
-    ).toMatchObject({
-      hysteresisSelectionRef: "hysteresis-settle:hysteresis-1:7:1",
-      label: "Minimize",
-      resourceRef: hysteresisSettleTraceResourceKey("hysteresis-1", 7),
-      status: "running",
-    });
-    expect(
-      flattened.find((node) => node.id === `${stageId}:field-point:7:algorithm:dynamics`),
-    ).toMatchObject({
-      hysteresisSelectionRef: "hysteresis-settle:hysteresis-1:7:2",
-      label: "Dynamics settle",
-      resourceRef: hysteresisSettleTraceResourceKey("hysteresis-1", 7),
-      status: "queued",
-    });
-    expect(
-      flattened.find((node) => node.id === `${stageId}:field-point:7:snapshot:hysteresis_point_007`),
-    ).toMatchObject({
-      contextCommands: expect.arrayContaining([
-        "hysteresis.use-point-as-initial-state",
-        "workspace.focus-selection",
-      ]),
-      contextCommandInputs: {
-        "hysteresis.use-point-as-initial-state": {
-          snapshotId: "hysteresis_point_007_from_selection",
-          snapshotResourceRef: snapshotVectorResourceKey("hysteresis_point_007_from_resource"),
-          stageId: "hysteresis-1",
-        },
-      },
-      fieldOrientation: JSON.stringify({ kind: "preset", preset_name: "in_plane_x" }),
-      fieldRevision: 12,
-      hysteresisSnapshotId: "hysteresis_point_007_from_selection",
-      measurementAxis: JSON.stringify({ kind: "custom", vector: [1, 0, 0] }),
-      meshIdentity: "study_domain:rev-12",
-      resourceRef: snapshotVectorResourceKey("hysteresis_point_007_from_resource"),
-      label: "Snapshot hysteresis_point_007",
-      status: "completed",
-    });
-    expect(
-      flattened.find(
-        (node) => node.id === `${stageId}:points:bookmarks`,
-      ),
-    ).toMatchObject({
-      badge: "1 event",
-      label: "Bookmarks",
-      status: "ready",
-    });
-    expect(
-      flattened.find(
-        (node) =>
-          node.id === `${stageId}:points:bookmarks:snapshot:hysteresis_point_007`,
-      ),
-    ).toMatchObject({
-      contextCommands: expect.arrayContaining([
-        "hysteresis.use-point-as-initial-state",
-        "workspace.focus-selection",
-      ]),
-      contextCommandInputs: {
-        "hysteresis.use-point-as-initial-state": {
-          snapshotId: "hysteresis_point_007_from_selection",
-          snapshotResourceRef: snapshotVectorResourceKey("hysteresis_point_007_from_resource"),
-          stageId: "hysteresis-1",
-        },
-      },
-      fieldOrientation: JSON.stringify({ kind: "preset", preset_name: "in_plane_x" }),
-      fieldRevision: 12,
-      hysteresisSnapshotId: "hysteresis_point_007_from_selection",
-      label: "Snapshot hysteresis_point_007",
-      measurementAxis: JSON.stringify({ kind: "custom", vector: [1, 0, 0] }),
-      meshIdentity: "study_domain:rev-12",
-      resourceRef: snapshotVectorResourceKey("hysteresis_point_007_from_resource"),
-      status: "completed",
-    });
-    expect(
-      flattened.find((node) => node.id === `${stageId}:field-point:7:warning:point-7-warnings`),
-    ).toMatchObject({
-      hysteresisExecutionNodeId: "point-7:warnings",
-      hysteresisExecutionNodeKind: "warning",
-      hysteresisSelectionRef: "hysteresis-warning:hysteresis-1:7",
-      hysteresisPointId: 7,
-      label: "2 warning(s)",
-      resourceRef: hysteresisPointResourceKey("hysteresis-1", 7),
-      status: "warning",
-    });
-    expect(
-      flattened.find((node) => node.id === `${stageId}:field-point:7:snapshot:hysteresis_point_missing`),
-    ).toMatchObject({
-      hysteresisExecutionNodeId: "point-7:snapshot:hysteresis_point_missing",
-      hysteresisExecutionNodeKind: "snapshot",
-      label: "Snapshot hysteresis_point_missing missing",
-      status: "failed",
-    });
-    expect(
-      flattened.find((node) => node.id === `${stageId}:field-point:7:snapshot:hysteresis_point_missing`),
-    ).not.toMatchObject({
-      contextCommands: expect.arrayContaining(["hysteresis.use-point-as-initial-state"]),
-      hysteresisSnapshotId: "hysteresis_point_missing",
-    });
+    expect(flattened.filter((node) => node.id.startsWith(`${stageId}:`))).toHaveLength(0);
   });
 
-  it("renders hysteresis branches from the backend execution tree", () => {
+  it("renders hysteresis branches inside the consolidated stage inspector without synthetic child nodes", () => {
     const snapshot = modelTreeSnapshotWithStageExecution(
       modelTreeSnapshotFromScene({
         objects: [],
@@ -3077,101 +2757,20 @@ describe("buildModelTree", () => {
         total_stages: 1,
       } as never,
     );
-    const executionTree: HysteresisExecutionTreeResource = {
-      active_point_index: 12,
-      after: 2,
-      before: 2,
-      include_bookmarks: false,
-      include_snapshots: false,
-      include_warnings: true,
-      revision: 32,
-      stage_id: "hysteresis-1",
-      stage_index: 0,
-      total_points: 41,
-      window: "active",
-      nodes: [
-        {
-          kind: "branch",
-          label: "Descending branch",
-          node_id: "branch:descending",
-          stage_id: "hysteresis-1",
-          status: "done",
-          updated_revision: 32,
-        },
-        {
-          kind: "branch",
-          label: "Ascending branch",
-          node_id: "branch:ascending",
-          stage_id: "hysteresis-1",
-          status: "active",
-          updated_revision: 32,
-          children: [
-            {
-              kind: "field_point",
-              label: "H = -20.000 mT",
-              node_id: "branch:ascending:point:12",
-              point_id: 12,
-              resource_ref: hysteresisPointResourceKey("hysteresis-1", 12),
-              stage_id: "hysteresis-1",
-              status: "active",
-              updated_revision: 32,
-            },
-          ],
-        },
-        {
-          kind: "branch",
-          label: "Minor loop 001",
-          node_id: "branch:minor-loop-001",
-          stage_id: "hysteresis-1",
-          status: "queued",
-          updated_revision: 32,
-        },
-      ],
-    };
-    (snapshot.study!.stages[0] as { hysteresisExecutionTree?: HysteresisExecutionTreeResource })
-      .hysteresisExecutionTree = executionTree;
 
     const flattened = flattenExplorerNodes(buildModelTree(snapshot));
     const stageId = "model:study:stages:stage:hysteresis-1";
 
-    expect(
-      flattened.flatMap((node) =>
-        node.parentId === `${stageId}:branches` ? [node.id] : [],
-      ),
-    ).toEqual([
-      `${stageId}:branches:branch:descending`,
-      `${stageId}:branches:branch:ascending`,
-      `${stageId}:branches:branch:minor-loop-001`,
-    ]);
-    expect(
-      flattened.find((node) => node.id === `${stageId}:branches:branch:ascending`),
-    ).toMatchObject({
-      branchId: "branch:ascending",
-      hysteresisExecutionNodeId: "branch:ascending",
-      hysteresisExecutionNodeKind: "branch",
-      label: "Ascending branch",
+    expect(flattened.find((node) => node.id === stageId)).toMatchObject({
+      badge: "field sweep",
+      children: [],
+      kind: "study.stage.hysteresis",
       status: "running",
     });
-    expect(
-      flattened.find(
-        (node) => node.id === `${stageId}:branches:branch:ascending:field-point:12`,
-      ),
-    ).toMatchObject({
-      hysteresisExecutionNodeId: "branch:ascending:point:12",
-      hysteresisExecutionNodeKind: "field_point",
-      hysteresisPointId: 12,
-      label: "H = -20.000 mT",
-      resourceRef: hysteresisPointResourceKey("hysteresis-1", 12),
-      status: "running",
-    });
-    expect(flattened.find((node) => node.id === `${stageId}:branches:forward`)).toBeUndefined();
-    expect(flattened.find((node) => node.id === `${stageId}:branches:return`)).toBeUndefined();
-    expect(
-      flattened.find((node) => node.id === `${stageId}:branches:minor-loops`),
-    ).toBeUndefined();
+    expect(flattened.filter((node) => node.parentId === stageId)).toHaveLength(0);
   });
 
-  it("renders hysteresis experiment structure without expanding every field point", () => {
+  it("renders hysteresis experiment structure as one consolidated stage leaf without expanding field points", () => {
     const snapshot = modelTreeSnapshotWithStageExecution(
       modelTreeSnapshotFromScene({
         objects: [],
@@ -3186,24 +2785,6 @@ describe("buildModelTree", () => {
               initial_protocol: "positive_saturation",
               branch_mode: "major_loop",
               saturation: { mode: "auto" },
-              settle_pipeline: {
-                kind: "sequence",
-                steps: [
-                  {
-                    kind: "minimize",
-                    method: "projected_gradient_bb",
-                    torque_tolerance: 5e-5,
-                    energy_tolerance: 1e-20,
-                    max_steps: 2000,
-                  },
-                  {
-                    kind: "relax",
-                    method: "llg_overdamped",
-                    torque_tolerance: 1e-5,
-                    max_steps: 10000,
-                  },
-                ],
-              },
             },
           ],
         },
@@ -3222,9 +2803,6 @@ describe("buildModelTree", () => {
             status: "running",
             current_field_mT: 25,
             current_point_index: 4,
-            current_settle_step_index: 0,
-            current_settle_step_kind: "minimize",
-            current_settle_step_method: "projected_gradient_bb",
           },
         ],
         total_stages: 1,
@@ -3233,113 +2811,16 @@ describe("buildModelTree", () => {
     const flattened = flattenExplorerNodes(buildModelTree(snapshot));
     const stageId = "model:study:stages:stage:hysteresis-1";
 
-    expect(
-      flattened.flatMap((node) =>
-        node.parentId === stageId ? [node.id] : [],
-      ),
-    ).toEqual(expect.arrayContaining([
-      `${stageId}:plan`,
-      `${stageId}:protocol`,
-      `${stageId}:orientation`,
-      `${stageId}:saturation`,
-      `${stageId}:adaptive-refinement`,
-      `${stageId}:angular-family`,
-      `${stageId}:settle-pipeline`,
-      `${stageId}:live-run`,
-      `${stageId}:branches`,
-      `${stageId}:points`,
-      `${stageId}:metrics`,
-      `${stageId}:snapshots`,
-      `${stageId}:field-point:4`,
-      `${stageId}:transitions`,
-    ]));
-    expect(flattened.find((node) => node.id === `${stageId}:plan`)).toMatchObject({
-      label: "Plan",
-      badge: "-100..100 mT / step 10",
-      status: "ready",
-    });
-    expect(flattened.find((node) => node.id === `${stageId}:live-run`)).toMatchObject({
-      label: "Live Run",
-      badge: "25 mT / point 5",
+    expect(flattened.find((node) => node.id === stageId)).toMatchObject({
+      badge: "field sweep",
+      children: [],
+      kind: "study.stage.hysteresis",
       status: "running",
     });
-    expect(flattened.find((node) => node.id === `${stageId}:orientation`)).toMatchObject({
-      label: "Orientation",
-      badge: "field axis",
-      status: "running",
-    });
-    expect(
-      flattened.find((node) => node.id === `${stageId}:adaptive-refinement`),
-    ).toMatchObject({
-      label: "Adaptive Refinement",
-      badge: "runtime pass",
-      status: "running",
-    });
-    expect(
-      flattened.find((node) => node.id === `${stageId}:angular-family`),
-    ).toMatchObject({
-      label: "Angular Family",
-      badge: "variants",
-      status: "running",
-    });
-    expect(
-      flattened.find((node) => node.id === `${stageId}:settle-pipeline`),
-    ).toMatchObject({
-      badge: "2 steps",
-      label: "Settle Pipeline",
-      status: "running",
-    });
-    expect(flattened.find((node) => node.id === `${stageId}:protocol`)).toMatchObject({
-      badge: "positive_saturation / major_loop",
-    });
-    expect(flattened.find((node) => node.id === `${stageId}:saturation`)).toMatchObject({
-      badge: "auto",
-      status: "ready",
-    });
-    expect(
-      flattened.flatMap((node) =>
-        node.parentId === `${stageId}:branches` ? [node.id] : [],
-      ),
-    ).toEqual(expect.arrayContaining([
-      `${stageId}:branches:forward`,
-      `${stageId}:branches:return`,
-      `${stageId}:branches:minor-loops`,
-    ]));
-    expect(
-      flattened.filter(
-        (node) => node.id.includes(":point:") && !node.id.includes(":field-point:"),
-      ),
-    ).toHaveLength(0);
-    expect(flattened.find((node) => node.id === `${stageId}:transitions`)).toMatchObject({
-      badge: "after completion",
-      label: "Transitions",
-      status: "queued",
-    });
-    expect(
-      flattened.find((node) => node.id === `${stageId}:transitions:continue`),
-    ).toMatchObject({
-      label: "Continue to next stage",
-      badge: "pending",
-      status: "queued",
-    });
-    expect(
-      flattened.find((node) => node.id === `${stageId}:transitions:continue`)
-        ?.contextCommands,
-    ).not.toEqual(expect.arrayContaining(["hysteresis.continue-to-next-stage"]));
-    expect(
-      flattened.find((node) => node.id === `${stageId}:transitions:export-loop`),
-    ).toMatchObject({
-      label: "Export loop CSV",
-      badge: "after completion",
-      status: "queued",
-    });
-    expect(
-      flattened.find((node) => node.id === `${stageId}:transitions:export-loop`)
-        ?.contextCommands,
-    ).not.toEqual(expect.arrayContaining(["hysteresis.export-loop-csv"]));
+    expect(flattened.filter((node) => node.parentId === stageId)).toHaveLength(0);
   });
 
-  it("keeps completed hysteresis continuation explicit without marking it executable", () => {
+  it("marks completed hysteresis stage nodes completed without synthesizing transition sub-nodes", () => {
     const snapshot = modelTreeSnapshotWithStageExecution(
       modelTreeSnapshotFromScene({
         objects: [],
@@ -3375,58 +2856,16 @@ describe("buildModelTree", () => {
     const flattened = flattenExplorerNodes(buildModelTree(snapshot));
     const stageId = "model:study:stages:stage:hysteresis-1";
 
-    expect(flattened.find((node) => node.id === `${stageId}:transitions`)).toMatchObject({
-      badge: "available",
-      label: "Transitions",
-      status: "ready",
+    expect(flattened.find((node) => node.id === stageId)).toMatchObject({
+      badge: "field sweep",
+      children: [],
+      kind: "study.stage.hysteresis",
+      status: "completed",
     });
-    expect(
-      flattened.find((node) => node.id === `${stageId}:transitions:continue`),
-    ).toMatchObject({
-      label: "Continue to next stage",
-      badge: "available",
-      contextCommands: expect.arrayContaining(["hysteresis.continue-to-next-stage"]),
-      contextCommandInputs: {
-        "hysteresis.continue-to-next-stage": {
-          stageId: "hysteresis-1",
-        },
-      },
-      status: "ready",
-    });
-    expect(
-      flattened.find(
-        (node) => node.id === `${stageId}:transitions:use-selected-point`,
-      ),
-    ).toMatchObject({
-      label: "Use selected point as initial state",
-      badge: "explicit action",
-      status: "ready",
-    });
-    expect(
-      flattened.find((node) => node.id === `${stageId}:transitions:export-loop`),
-    ).toMatchObject({
-      label: "Export loop CSV",
-      badge: "available",
-      contextCommands: expect.arrayContaining(["hysteresis.export-loop-csv"]),
-      contextCommandInputs: {
-        "hysteresis.export-loop-csv": {
-          stageId: "hysteresis-1",
-        },
-      },
-      status: "ready",
-    });
-    expect(
-      flattened.find(
-        (node) => node.id === `${stageId}:transitions:open-snapshots`,
-      ),
-    ).toMatchObject({
-      label: "Open snapshots",
-      badge: "snapshot branch",
-      status: "ready",
-    });
+    expect(flattened.filter((node) => node.parentId === stageId)).toHaveLength(0);
   });
 
-  it("renders hysteresis protocol and saturation from the stage contract", () => {
+  it("renders virgin-curve hysteresis stages as consolidated stage leaves", () => {
     const snapshot = modelTreeSnapshotFromScene({
       objects: [],
       study: {
@@ -3446,23 +2885,16 @@ describe("buildModelTree", () => {
     const flattened = flattenExplorerNodes(buildModelTree(snapshot));
     const stageId = "model:study:stages:stage:virgin-hysteresis";
 
-    expect(flattened.find((node) => node.id === `${stageId}:protocol`)).toMatchObject({
-      label: "Protocol",
-      badge: "zero_field_relaxed / virgin_curve",
-      status: "ready",
+    expect(flattened.find((node) => node.id === stageId)).toMatchObject({
+      badge: "field sweep",
+      children: [],
+      kind: "study.stage.hysteresis",
+      label: "Hysteresis 1",
     });
-    expect(flattened.find((node) => node.id === `${stageId}:saturation`)).toMatchObject({
-      label: "Saturation",
-      badge: "not configured",
-      status: "skipped",
-    });
-    expect(flattened.find((node) => node.id === `${stageId}:branches`)).toMatchObject({
-      label: "Branches",
-      badge: "virgin_curve",
-    });
+    expect(flattened.filter((node) => node.parentId === stageId)).toHaveLength(0);
   });
 
-  it("summarizes dense hysteresis point plans without rendering every point", () => {
+  it("summarizes dense hysteresis point plans as a single consolidated stage leaf", () => {
     const snapshot = modelTreeSnapshotWithStageExecution(
       modelTreeSnapshotFromScene({
         objects: [],
@@ -3474,17 +2906,6 @@ describe("buildModelTree", () => {
               field_max_mT: 1000,
               field_min_mT: -1000,
               field_step_mT: 10,
-              settle_pipeline: {
-                kind: "sequence",
-                steps: [
-                  {
-                    kind: "relax",
-                    method: "llg_overdamped",
-                    torque_tolerance: 1e-5,
-                    max_steps: 10000,
-                  },
-                ],
-              },
             },
           ],
         },
@@ -3503,9 +2924,6 @@ describe("buildModelTree", () => {
             status: "running",
             current_field_mT: -250,
             current_point_index: 125,
-            current_settle_step_index: 0,
-            current_settle_step_kind: "relax",
-            current_settle_step_method: "llg_overdamped",
           },
         ],
         total_stages: 1,
@@ -3513,55 +2931,13 @@ describe("buildModelTree", () => {
     );
     const flattened = flattenExplorerNodes(buildModelTree(snapshot));
 
-    expect(
-      flattened.filter(
-        (node) =>
-          node.id.includes(":field-point:") &&
-          !node.id.includes(":algorithm:"),
-      ),
-    ).toHaveLength(1);
-    expect(
-      flattened.find(
-        (node) => node.id === "model:study:stages:stage:hysteresis-1:points",
-      ),
-    ).toMatchObject({
-      badge: "126/201",
-      label: "Points",
+    expect(flattened.find((node) => node.id === "model:study:stages:stage:hysteresis-1")).toMatchObject({
+      badge: "field sweep",
+      children: [],
+      kind: "study.stage.hysteresis",
       status: "running",
     });
-    expect(
-      flattened.find(
-        (node) =>
-          node.id ===
-          "model:study:stages:stage:hysteresis-1:points:completed",
-      ),
-    ).toMatchObject({
-      badge: "+1000 mT ... -240 mT, 125 points",
-      label: "Completed Points",
-      status: "completed",
-    });
-    expect(
-      flattened.find(
-        (node) =>
-          node.id ===
-          "model:study:stages:stage:hysteresis-1:points:queued",
-      ),
-    ).toMatchObject({
-      badge: "-260 mT ... -1000 mT, 75 points",
-      label: "Queued Points",
-      status: "queued",
-    });
-    expect(
-      flattened.find(
-        (node) =>
-          node.id ===
-          "model:study:stages:stage:hysteresis-1:field-point:125",
-      ),
-    ).toMatchObject({
-      badge: "-250 mT / point 126",
-      label: "Current Field",
-      status: "running",
-    });
+    expect(flattened.filter((node) => node.id.startsWith("model:study:stages:stage:hysteresis-1:"))).toHaveLength(0);
   });
 
   it("adds visible study stage transition nodes from runtime metadata", () => {
@@ -3769,7 +3145,7 @@ describe("buildModelTree", () => {
       badge: "1 plot",
       kind: "visualizations-2d.root",
       label: "Visualizations 2D",
-      selectable: false,
+      selectable: true,
     });
     expect(
       flattened.find((node) => node.id === "model:visualizations-2d:draft"),
@@ -3787,33 +3163,11 @@ describe("buildModelTree", () => {
       status: "ready",
     });
     expect(
-      flattened.find(
-        (node) => node.id === "model:visualizations-2d:plot-1:frame",
-      ),
-    ).toMatchObject({
-      badge: "Universe / 0 deg",
-      kind: "visualizations-2d.parameter",
-      label: "Frame",
-    });
+      flattened.find((node) => node.id === "model:visualizations-2d:plot-1")?.children,
+    ).toBeUndefined();
     expect(
-      flattened.find(
-        (node) => node.id === "model:visualizations-2d:plot-1:quality",
-      ),
-    ).toMatchObject({
-      badge: "aspect_ratio / viridis",
-      kind: "visualizations-2d.parameter",
-      label: "Quality",
-    });
-    expect(
-      flattened.find(
-        (node) => node.id === "model:visualizations-2d:plot-1:render",
-      ),
-    ).toMatchObject({
-      badge: "wireframe on / shrink 0.8 / quality < 0.3",
-      kind: "visualizations-2d.parameter",
-      label: "Render",
-      status: "warning",
-    });
+      flattened.filter((node) => node.kind === "visualizations-2d.parameter"),
+    ).toHaveLength(0);
   });
 
   it("shows an uncommitted planar monitor draft under Definitions/Planar Monitors", () => {
@@ -4020,7 +3374,7 @@ describe("buildModelTree", () => {
       expect(nodes.filter((node) => node.kind === "physics.scope.unresolved")).toEqual([
         expect.objectContaining({
           id: "model:physics:unresolved",
-          selectable: false,
+          selectable: true,
           status: diagnosticStatus,
         }),
       ]);
@@ -4052,7 +3406,7 @@ describe("buildModelTree", () => {
     expect(nodes.filter((node) => node.kind === "physics.scope.unresolved")).toEqual([
       expect.objectContaining({
         id: "model:physics:unresolved",
-        selectable: false,
+        selectable: true,
         status: "stale",
       }),
     ]);
@@ -4084,33 +3438,30 @@ describe("buildModelTree", () => {
       label: "Mesh",
     });
     expect(nodes.map((node) => node.kind)).toEqual(
-      expect.not.arrayContaining(["mesh.unassigned", "boundary-faces.root"]),
+      expect.not.arrayContaining([
+        "mesh.unassigned",
+        "boundary-faces.root",
+        "mesh.shared-domain",
+        "mesh.quality",
+        "mesh.size-fields",
+        "mesh.regions",
+      ]),
     );
     expect(nodes.map((node) => node.kind)).toEqual(expect.arrayContaining([
-      "mesh.shared-domain", "mesh.builds", "mesh.quality", "mesh.size-fields",
-      "mesh.regions",
+      "mesh.grid",
+      "mesh.builds",
     ]));
-    expect(nodes.map((node) => node.id)).toEqual(expect.arrayContaining([
-      "model:mesh:grid", "model:mesh:magnetic-support", "model:mesh:active-unassigned",
-      "model:mesh:mask", "model:mesh:provenance", "model:mesh:region:region%3Acore",
-    ]));
-    expect(nodes.find((node) => node.id === "model:mesh")?.contextCommands).toEqual([
-      "grid.build-fdm",
-      "workspace.focus-selection",
-    ]);
-    for (const nodeId of [
-      "model:mesh:builds",
-      "model:mesh:quality",
-      "model:mesh:size-fields",
-      "model:mesh:regions",
-    ]) {
-      expect(nodes.find((node) => node.id === nodeId)).toMatchObject({
-        selectable: false,
-      });
-    }
-    expect(nodes.find((node) => node.id === "model:mesh:magnetic-support")?.label).toBe(
-      "Magnetic Support",
-    );
+    expect(nodes.find((node) => node.id === "model:mesh:grid")).toMatchObject({
+      contextCommands: ["grid.build-fdm"],
+      kind: "mesh.grid",
+      label: "Structured Grid",
+      selectable: true,
+    });
+    expect(nodes.find((node) => node.id === "model:mesh:builds")).toMatchObject({
+      kind: "mesh.builds",
+      label: "Build History",
+      selectable: true,
+    });
   });
 
   it("withholds FEM nodes during SSR hydration until an FDM lane is explicit", () => {
@@ -4186,43 +3537,6 @@ describe("buildModelTree", () => {
         label: "Mesh",
         parentId: "model:session",
       });
-      expect(meshRoot?.children?.map(({ id, kind, label, parentId }) => ({
-        id,
-        kind,
-        label,
-        parentId,
-      }))).toEqual([
-        {
-          id: "model:mesh:shared-domain",
-          kind: "mesh.shared-domain",
-          label: "Domain Mesh",
-          parentId: "model:mesh",
-        },
-        {
-          id: "model:mesh:builds",
-          kind: "mesh.builds",
-          label: "Build Pipeline",
-          parentId: "model:mesh",
-        },
-        {
-          id: "model:mesh:quality",
-          kind: "mesh.quality",
-          label: "Quality Gates",
-          parentId: "model:mesh",
-        },
-        {
-          id: "model:mesh:size-fields",
-          kind: "mesh.size-fields",
-          label: "Realized Size Fields",
-          parentId: "model:mesh",
-        },
-        {
-          id: "model:mesh:regions",
-          kind: "mesh.regions",
-          label: "Regions And Mesh Parts",
-          parentId: "model:mesh",
-        },
-      ]);
       expect(nodes.find((node) => node.id === "model:object:film:mesh")).toMatchObject({
         kind: "object.mesh",
         label: "Mesh",
@@ -4233,12 +3547,79 @@ describe("buildModelTree", () => {
         label: "Mesh",
         parentId: "model:object:film:regions:core",
       });
-      expect(nodes.find((node) => node.id === "model:airbox:mesh")).toMatchObject({
-        kind: "airbox.mesh",
-        label: "Mesh",
-        parentId: "model:airbox",
-      });
     }
+
+    expect(
+      fdmNodes
+        .find((node) => node.id === "model:mesh")
+        ?.children?.map(({ id, kind, label, parentId }) => ({
+          id,
+          kind,
+          label,
+          parentId,
+        })),
+    ).toEqual([
+      {
+        id: "model:mesh:grid",
+        kind: "mesh.grid",
+        label: "Structured Grid",
+        parentId: "model:mesh",
+      },
+      {
+        id: "model:mesh:builds",
+        kind: "mesh.builds",
+        label: "Build History",
+        parentId: "model:mesh",
+      },
+    ]);
+    expect(fdmNodes.find((node) => node.id === "model:airbox:mesh")).toBeUndefined();
+
+    expect(
+      femNodes
+        .find((node) => node.id === "model:mesh")
+        ?.children?.map(({ id, kind, label, parentId }) => ({
+          id,
+          kind,
+          label,
+          parentId,
+        })),
+    ).toEqual([
+      {
+        id: "model:mesh:shared-domain",
+        kind: "mesh.shared-domain",
+        label: "Domain Mesh",
+        parentId: "model:mesh",
+      },
+      {
+        id: "model:mesh:builds",
+        kind: "mesh.builds",
+        label: "Build History",
+        parentId: "model:mesh",
+      },
+      {
+        id: "model:mesh:quality",
+        kind: "mesh.quality",
+        label: "Quality Gates",
+        parentId: "model:mesh",
+      },
+      {
+        id: "model:mesh:size-fields",
+        kind: "mesh.size-fields",
+        label: "Realized Size Fields",
+        parentId: "model:mesh",
+      },
+      {
+        id: "model:mesh:regions",
+        kind: "mesh.regions",
+        label: "Regions And Mesh Parts",
+        parentId: "model:mesh",
+      },
+    ]);
+    expect(femNodes.find((node) => node.id === "model:airbox:mesh")).toMatchObject({
+      kind: "airbox.mesh",
+      label: "Mesh",
+      parentId: "model:airbox",
+    });
   });
 
   it("keeps the public FDM Airbox visualization target canonical before multilayer layout is ready", () => {
@@ -4254,16 +3635,7 @@ describe("buildModelTree", () => {
     expect(nodes.find((node) => node.id === "model:airbox")).toMatchObject({
       kind: "airbox.root", label: "Airbox", parentId: "model:universe",
     });
-    expect(nodes.find((node) => node.id === "model:airbox:mesh")).toMatchObject({
-      kind: "airbox.mesh", label: "Mesh", parentId: "model:airbox",
-    });
-    expect(nodes.map((node) => node.id)).toEqual(expect.arrayContaining([
-      "model:airbox:mesh:parameters",
-      "model:airbox:mesh:quality-gates",
-      "model:airbox:mesh:statistics",
-      "model:airbox:mesh:topology",
-      "model:airbox:mesh:build",
-    ]));
+    expect(nodes.find((node) => node.id === "model:airbox:mesh")).toBeUndefined();
     expect(nodes.find((node) => node.id === "model:airbox:visualization")).toMatchObject({
       kind: "airbox.visualization",
       label: "Visualization", parentId: "model:airbox",
@@ -4468,7 +3840,7 @@ describe("buildModelTree", () => {
       status: "mesh-stale",
     });
     expect(
-      nodes.find((node) => node.id === "model:mesh:shared-domain"),
+      nodes.find((node) => node.id === "model:mesh:grid"),
     ).toMatchObject({
       contextCommands: ["grid.build-fdm"],
     });
@@ -4483,7 +3855,7 @@ describe("buildModelTree", () => {
     });
   });
 
-  it("qualifies duplicate FDM region nodes by owner without changing unambiguous ids", () => {
+  it("consolidates duplicate FDM region legends inside Structured Grid without synthesizing mesh.grid.region tree nodes", () => {
     const base = fdmExplorerPresentation() as FdmDomainPresentation;
     const membership = base.fdmGrid.membership;
     expect(membership).not.toBeNull();
@@ -4507,20 +3879,16 @@ describe("buildModelTree", () => {
       },
     };
     const nodes = flattenExplorerNodes(buildModelTree({ domainPresentation: presentation }));
-    const regionNodes = nodes.filter((node) => node.kind === "mesh.grid.region");
 
-    expect(regionNodes.map((node) => node.id)).toEqual([
-      "model:mesh:region:object%3Acore:region%3Acore",
-      "model:mesh:region:object%3Aother:region%3Acore",
-    ]);
-    expect(regionNodes.map((node) => node.objectId)).toEqual([
-      "object:core",
-      "object:other",
-    ]);
-    expect(regionNodes.every((node) => node.parentId === "model:mesh:regions")).toBe(true);
+    expect(nodes.filter((node) => node.kind === "mesh.grid.region")).toEqual([]);
+    expect(nodes.find((node) => node.id === "model:mesh:grid")).toMatchObject({
+      kind: "mesh.grid",
+      label: "Structured Grid",
+      parentId: "model:mesh",
+    });
   });
 
-  it("canonicalizes FDM geometry aliases in region mesh nodes", () => {
+  it("keeps FDM structured grid consolidated when geometry aliases appear in region legends", () => {
     const base = fdmExplorerPresentation() as FdmDomainPresentation;
     const membership = base.fdmGrid.membership;
     expect(membership).not.toBeNull();
@@ -4541,11 +3909,11 @@ describe("buildModelTree", () => {
       domainPresentation: presentation,
       objects: [{ id: "film", label: "Film" }] as never,
     }));
-    const regionNode = nodes.find((node) => node.kind === "mesh.grid.region");
 
-    expect(regionNode).toMatchObject({
-      id: "model:mesh:region:region%3Acore",
-      objectId: "film",
+    expect(nodes.filter((node) => node.kind === "mesh.grid.region")).toEqual([]);
+    expect(nodes.find((node) => node.id === "model:mesh:grid")).toMatchObject({
+      kind: "mesh.grid",
+      parentId: "model:mesh",
     });
   });
 
@@ -4687,11 +4055,19 @@ describe("buildModelTree", () => {
       },
       { frozenSpins },
     );
-    const nodes = flattenExplorerNodes(tree).filter(
+    const flattened = flattenExplorerNodes(tree);
+    expect(
+      flattened.find((node) => node.id === "model:definitions:frozen-spins"),
+    ).toMatchObject({
+      id: "model:definitions:frozen-spins",
+      kind: "model.frozen-spins",
+      selectable: true,
+    });
+    const leaves = flattened.filter(
       (node) => node.kind === "object.frozen-spins",
     );
-    expect(nodes).toHaveLength(2); // One parent group node and one leaf node
-    const leaf = nodes.find((node) => node.constraintId === "pin-global-not");
+    expect(leaves).toHaveLength(1);
+    const leaf = leaves.find((node) => node.constraintId === "pin-global-not");
     expect(leaf).toBeDefined();
     expect(leaf).toMatchObject({
       constraintId: "pin-global-not",

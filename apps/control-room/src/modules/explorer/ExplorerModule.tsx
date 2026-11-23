@@ -12,6 +12,7 @@ import {
 
 import type { LiveStatusResource, SolverProfileResource } from "@/kernel/api/apiTypes";
 import { createCommandContext } from "@/kernel/commands/commandContext";
+import { useLayoutSelector } from "@/kernel/layout/useLayout";
 import {
   MESHING_BUILDS_CURRENT_PATH,
   MESHING_SHARED_DOMAIN_MANIFEST_PATH,
@@ -456,7 +457,7 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
   });
   const commandQueue = useCommandQueueResource({ enabled: runtimeTabActive });
   const artifacts = useArtifactsResource({ enabled: resultsResourceActive });
-  const fieldCatalog = useFieldCatalogResource({ enabled: runtimeTabActive });
+  const fieldCatalog = useFieldCatalogResource({ enabled: resultsResourceActive });
   const tableCatalog = useTableListResource({ enabled: resultsResourceActive });
   const runtimeCommandIds = useMemo(
     () => (commandQueue.data?.commands ?? []).map((command) => command.command_id),
@@ -805,8 +806,10 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
               frequencyDomainBranches: resultContextIsCurrent ? frequencyDomainBranches.data : null,
               frequencyDomainDispersion: resultContextIsCurrent ? frequencyDomainDispersion.data : null,
               frequencyDomainManifest: resultContextIsCurrent ? frequencyDomainManifest.data : null,
+              frequencyDomainResponseMap: resultContextIsCurrent ? frequencyDomainResponseSweep.data : null,
               frequencyDomainResponseSweep: resultContextIsCurrent ? frequencyDomainResponseSweep.data : null,
               frequencyDomainSpectrum: resultContextIsCurrent ? frequencyDomainSpectrum.data : null,
+              fieldCatalog: resultContextIsCurrent ? runtimeSnapshot.source.fieldCatalog : undefined,
               observationFrames: resultContextIsCurrent
                 ? runtimeResourceSnapshot(observationFrames)
                 : undefined,
@@ -951,7 +954,7 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
 
   useEffect(() => {
     if (!modelTabActive || selectedRef?.type !== "scene-object" ||
-      selectedRef.kind !== "object.magnetic-parameters") {
+      selectedRef.kind !== "object.root") {
       parentWithoutAbsorbingBoundary.current = null;
       return;
     }
@@ -1021,6 +1024,23 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
       setExplorerActiveTab(tab);
     });
   }, [kernel.bus]);
+
+  const activeRibbonTab = useLayoutSelector((layout) => layout.activeModuleTab);
+  const previousRibbonTabRef = useRef(activeRibbonTab);
+  useEffect(() => {
+    const previousTab = previousRibbonTabRef.current;
+    previousRibbonTabRef.current = activeRibbonTab;
+    if (activeRibbonTab === "results" && previousTab !== "results") {
+      if (kernel.commands.get("explorer.activate-tab")) {
+        void kernel.commands.execute(
+          "explorer.activate-tab",
+          createCommandContext("explorer", kernel, { input: { tab: "results" } }),
+        );
+      } else {
+        setExplorerActiveTab("results");
+      }
+    }
+  }, [activeRibbonTab, kernel]);
 
   useEffect(() => {
     if (crossSectionExpansionIds.length === 0) return;

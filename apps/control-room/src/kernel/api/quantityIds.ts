@@ -51,7 +51,8 @@ export function quantityCatalogEntrySupportsSpatialVisualization(
       resolved.quantity_id === "m" &&
       resolved.provider === "unavailable" &&
       resolved.reason_code === "prepared_initial_state" &&
-      resolved.lane === "unresolved" &&
+      typeof resolved.lane === "string" &&
+      resolved.lane.trim().length > 0 &&
       resolved.scope === "magnetic_only" &&
       resolved.request === "field_vector" &&
       resolved.materialization === "materialized" &&

@@ -3,6 +3,12 @@
 import { Copy, Download, FileCode2, FolderSearch, Trash2 } from "lucide-react";
 import { useEffect, useId, useRef, useState, useSyncExternalStore } from "react";
 
+import { Button } from "@/shared/ui/Button";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/shared/ui/Tooltip";
 import { tauriInvoke } from "@/kernel/persistence/ProjectDocumentController";
 
 import { selectResultBanner } from "../model/bannerModel";
@@ -30,6 +36,7 @@ import {
 } from "./InspectorParts";
 import { KvGroup } from "./KeyValueGroup";
 import { viewerRoute, downloadReason, resultFacts } from "./ResultInspector.model";
+import { StartInspectorTemplateFrame } from "./StartScreenInspectorSpecs";
 
 export type ResultTab = "overview" | "stages" | "history";
 
@@ -94,17 +101,31 @@ function SourceLink({
           <dt>{source?.kind === "project" || linked?.kind === "project" ? "Project" : "Script"}</dt>
           <dd>
             {linked ? (
-              <button
-                className="fm-start-link"
-                data-action="select-source"
-                onClick={() => onSelect(linked)}
-                title={`Show ${linked.name} in the list`}
-                type="button"
-              >
-                {label}
-              </button>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    aria-label={`Show ${linked.name} in the list`}
+                    className="fm-start-link"
+                    data-action="select-source"
+                    onClick={() => onSelect(linked)}
+                    size="sm"
+                    type="button"
+                    variant="ghost"
+                  >
+                    {label}
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>{`Show ${linked.name} in the list`}</TooltipContent>
+              </Tooltip>
+            ) : source?.path ? (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <span>{label}</span>
+                </TooltipTrigger>
+                <TooltipContent>{source.path}</TooltipContent>
+              </Tooltip>
             ) : (
-              <span title={source?.path}>{label}</span>
+              <span>{label}</span>
             )}
           </dd>
         </div>
@@ -277,49 +298,77 @@ export function ResultInspector({
   const historyRows = scriptHistoryRows(answer?.events ?? []);
 
   return (
-    <aside aria-label="Result details" className="fm-start__inspector fm-start-inspector" data-kind="result">
-      <div
-        aria-label={previewSrc ? `Preview of ${item.name}` : undefined}
-        className="fm-start-preview"
-        role={previewSrc ? "img" : undefined}
-      >
-        <span className="fm-start-preview__label">
-          {item.thumbnailOrigin === "source_project" ? "Last result · project preview" : "Last result"}
-        </span>
-        <ProjectThumb eager size="preview" src={previewSrc} status={missing ? "missing" : "ready"} />
-      </div>
-
-      <InspectorHeader
-        chips={
-          <>
-            <span className="fm-start-badge fm-start-badge--script" title="Result folder">
-              .zarr
-            </span>
-            {chip ? (
-              <StatusPill label={chip.label || undefined} status={chip.status} title={chip.title || undefined} />
-            ) : null}
-            {result?.runId ? <span className="fm-start-chip">run {result.runId}</span> : null}
-            {source ? <span className="fm-start-chip">{source}</span> : null}
-          </>
-        }
-        moreActions={moreActions}
-        name={item.name}
-        onCopyFailed={() => report("Could not copy the path to the clipboard.")}
-        onTogglePin={() => void pin()}
-        path={path}
-        pinDisabledReason={readOnly ? "The workspace database is read-only" : null}
-        pinned={item.pinned}
-      />
-
-      <ContextBanner
-        banner={banner}
-        onAction={(id) => {
-          if (id === "forget") onForget(item.id);
-        }}
-      />
-
-      <InspectorTabs baseId={baseId} label="Result sections" onChange={setTab} tabs={TABS} value={tab} />
-
+    <StartInspectorTemplateFrame
+      ariaLabel="Result details"
+      breadcrumbs={["Start", "Results", item.name]}
+      customIdentity={
+        <InspectorHeader
+          chips={
+            <>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <span className="fm-start-badge fm-start-badge--script">.zarr</span>
+                </TooltipTrigger>
+                <TooltipContent>Result folder</TooltipContent>
+              </Tooltip>
+              {chip ? (
+                <StatusPill label={chip.label || undefined} status={chip.status} title={chip.title || undefined} />
+              ) : null}
+              {result?.runId ? <span className="fm-start-chip">run {result.runId}</span> : null}
+              {source ? <span className="fm-start-chip">{source}</span> : null}
+            </>
+          }
+          moreActions={moreActions}
+          name={item.name}
+          onCopyFailed={() => report("Could not copy the path to the clipboard.")}
+          onTogglePin={() => void pin()}
+          path={path}
+          pinDisabledReason={readOnly ? "The workspace database is read-only" : null}
+          pinned={item.pinned}
+        />
+      }
+      dataKind="result"
+      footer={
+        <InspectorActionBar
+          externalDisabledReason={missing ? "The folder is missing." : invoke ? null : "Needs the desktop app"}
+          externalLabel="Reveal in file manager"
+          onExternal={reveal}
+          onPrimary={() => void openViewer()}
+          primaryAction="open-results-viewer"
+          primaryDisabledReason={viewerReason ?? (busy ? "Another action is running" : null)}
+          primaryLabel={onOpenPlayback ? "Open saved playback" : "Open results viewer"}
+          splitActions={splitActions}
+        />
+      }
+      modeTabs={
+        <InspectorTabs baseId={baseId} label="Result sections" onChange={setTab} tabs={TABS} value={tab} />
+      }
+      notices={
+        banner ? (
+          <ContextBanner
+            banner={banner}
+            onAction={(id) => {
+              if (id === "forget") onForget(item.id);
+            }}
+          />
+        ) : undefined
+      }
+      preview={
+        <div
+          aria-label={previewSrc ? `Preview of ${item.name}` : undefined}
+          className="fm-start-preview"
+          role={previewSrc ? "img" : undefined}
+        >
+          <span className="fm-start-preview__label">
+            {item.thumbnailOrigin === "source_project" ? "Last result · project preview" : "Last result"}
+          </span>
+          <ProjectThumb eager size="preview" src={previewSrc} status={missing ? "missing" : "ready"} />
+        </div>
+      }
+      specId="start.result"
+      title={item.name}
+      typeLabel="Result archive"
+    >
       <InspectorPanel baseId={baseId} tab={tab}>
         {tab === "overview" ? (
           <>
@@ -406,17 +455,6 @@ export function ResultInspector({
           <div className="fm-start-banner__copy">{notice}</div>
         </div>
       ) : null}
-
-      <InspectorActionBar
-        externalDisabledReason={missing ? "The folder is missing." : invoke ? null : "Needs the desktop app"}
-        externalLabel="Reveal in file manager"
-        onExternal={reveal}
-        onPrimary={() => void openViewer()}
-        primaryAction="open-results-viewer"
-        primaryDisabledReason={viewerReason ?? (busy ? "Another action is running" : null)}
-        primaryLabel={onOpenPlayback ? "Open saved playback" : "Open results viewer"}
-        splitActions={splitActions}
-      />
-    </aside>
+    </StartInspectorTemplateFrame>
   );
 }

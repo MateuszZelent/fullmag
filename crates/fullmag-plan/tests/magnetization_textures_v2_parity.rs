@@ -1,21 +1,64 @@
 use fullmag_ir::{TextureMappingIR, TextureProjectionMode, TextureTransform3DIR};
-use fullmag_plan::{sample_preset_texture_versioned, TextureSamplePoint};
+use fullmag_plan::{
+    sample_preset_texture_versioned, sample_preset_texture_versioned_with_bounds,
+    TextureSamplePoint,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::PathBuf;
 
 const FIXTURE: &str = "tests/fixtures/magnetization_textures_v2_parity.json";
 const POINT_COUNT: usize = 1000;
 
+fn default_space() -> String {
+    "object".to_string()
+}
+
+fn default_clamp_mode() -> String {
+    "none".to_string()
+}
+
+fn default_true() -> bool {
+    true
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 struct ParityCase {
+    #[serde(default)]
+    case_id: Option<String>,
     preset_kind: String,
     preset_version: u32,
     params: BTreeMap<String, Value>,
     projection: String,
     rotation_quat: Option<[f64; 4]>,
+    #[serde(default = "default_space")]
+    space: String,
+    #[serde(default = "default_clamp_mode")]
+    clamp_mode: String,
+    #[serde(default)]
+    tile_period: Option<[f64; 3]>,
+    #[serde(default)]
+    background_vector: Option<[f64; 3]>,
+    #[serde(default)]
+    axis_extent_mode: Option<String>,
+    #[serde(default)]
+    axis_thickness_m: Option<f64>,
+    #[serde(default)]
+    translation: Option<[f64; 3]>,
+    #[serde(default)]
+    scale: Option<[f64; 3]>,
+    #[serde(default)]
+    pivot: Option<[f64; 3]>,
+    #[serde(default = "default_true")]
+    rotate_vectors: bool,
+    #[serde(default)]
+    apply_point_transform: bool,
+    #[serde(default)]
+    region_center: Option<[f64; 3]>,
+    #[serde(default)]
+    target_bounds_extent: Option<[f64; 3]>,
     points: Vec<[f64; 3]>,
     expected: Vec<[f64; 3]>,
 }
@@ -37,22 +80,60 @@ fn point(position: [f64; 3]) -> TextureSamplePoint {
     TextureSamplePoint {
         position_world: position,
         position_object: position,
+        position_region: None,
         active: true,
     }
 }
 
-fn mapping(projection: &str) -> TextureMappingIR {
-    let projection = match projection {
+fn point_with_region_center(
+    position: [f64; 3],
+    region_center: Option<[f64; 3]>,
+) -> TextureSamplePoint {
+    TextureSamplePoint {
+        position_world: position,
+        position_object: position,
+        position_region: region_center.map(|center| {
+            [
+                position[0] - center[0],
+                position[1] - center[1],
+                position[2] - center[2],
+            ]
+        }),
+        active: true,
+    }
+}
+
+fn parse_projection(projection: &str) -> TextureProjectionMode {
+    match projection {
         "object_local" => TextureProjectionMode::ObjectLocal,
         "planar_xy" => TextureProjectionMode::PlanarXy,
         "planar_xz" => TextureProjectionMode::PlanarXz,
         "planar_yz" => TextureProjectionMode::PlanarYz,
         other => panic!("unsupported fixture projection {other}"),
-    };
+    }
+}
+
+fn mapping(projection: &str) -> TextureMappingIR {
     TextureMappingIR {
         space: "object".to_string(),
-        projection,
+        projection: parse_projection(projection),
         clamp_mode: "none".to_string(),
+        tile_period: None,
+        background_vector: None,
+        axis_extent_mode: None,
+        axis_thickness_m: None,
+    }
+}
+
+fn mapping_for_case(case: &ParityCase) -> TextureMappingIR {
+    TextureMappingIR {
+        space: case.space.clone(),
+        projection: parse_projection(&case.projection),
+        clamp_mode: case.clamp_mode.clone(),
+        tile_period: case.tile_period,
+        background_vector: case.background_vector,
+        axis_extent_mode: case.axis_extent_mode.clone(),
+        axis_thickness_m: case.axis_thickness_m,
     }
 }
 
@@ -96,11 +177,25 @@ fn make_case(
         None => values,
     };
     ParityCase {
+        case_id: None,
         preset_kind: preset_kind.to_string(),
         preset_version: 2,
         params,
         projection: projection.to_string(),
         rotation_quat,
+        space: default_space(),
+        clamp_mode: default_clamp_mode(),
+        tile_period: None,
+        background_vector: None,
+        axis_extent_mode: None,
+        axis_thickness_m: None,
+        translation: None,
+        scale: None,
+        pivot: None,
+        rotate_vectors: true,
+        apply_point_transform: false,
+        region_center: None,
+        target_bounds_extent: None,
         points: points.to_vec(),
         expected,
     }
@@ -327,29 +422,94 @@ fn v2_matches_shared_python_parity_fixture_for_all_presets() {
         .expect("run with FULLMAG_GENERATE_V2_PARITY=1 once to create the fixture");
     let cases: Vec<ParityCase> =
         serde_json::from_str(&content).expect("parity fixture should be valid JSON");
-    assert_eq!(cases.len(), 16);
+    assert_eq!(cases.len(), 35);
+
+    let covered_presets: BTreeSet<&str> = cases
+        .iter()
+        .map(|case| case.preset_kind.as_str())
+        .collect();
+    for preset in [
+        "uniform",
+        "random",
+        "vortex",
+        "antivortex",
+        "vortex_wall",
+        "bloch_skyrmion",
+        "neel_skyrmion",
+        "antiskyrmion",
+        "skyrmionium",
+        "hopfion",
+        "hopfion_compact_support",
+        "bimeron",
+        "domain_wall",
+        "two_domain",
+        "helical",
+        "conical",
+        "skyrmion_lattice",
+        "spiral",
+        "bloch_point",
+        "artificial_spin_ice",
+    ] {
+        assert!(
+            covered_presets.contains(preset),
+            "missing preset '{preset}' in v2 parity fixture"
+        );
+    }
+
     for case in cases {
         assert_eq!(case.preset_version, 2);
-        assert_eq!(case.points.len(), POINT_COUNT);
-        let mapping = mapping(&case.projection);
-        let points = case.points.iter().copied().map(point).collect::<Vec<_>>();
-        let actual = sample_preset_texture_versioned(
-            &case.preset_kind,
-            case.preset_version,
-            &case.params,
-            &mapping,
-            &TextureTransform3DIR::default(),
-            &points,
-        )
-        .unwrap_or_else(|error| panic!("{} fixture case failed: {error}", case.preset_kind));
-        let actual = match case.rotation_quat {
-            Some(quaternion) => actual
-                .into_iter()
-                .map(|value| rotate(value, quaternion))
-                .collect::<Vec<_>>(),
-            None => actual,
+        let label = case.case_id.as_deref().unwrap_or(&case.preset_kind);
+        let case_mapping = mapping_for_case(&case);
+        let actual = if case.apply_point_transform {
+            let points = case
+                .points
+                .iter()
+                .copied()
+                .map(|p| point_with_region_center(p, case.region_center))
+                .collect::<Vec<_>>();
+            let transform = TextureTransform3DIR {
+                translation: case.translation.unwrap_or([0.0, 0.0, 0.0]),
+                rotation_quat: case.rotation_quat.unwrap_or([0.0, 0.0, 0.0, 1.0]),
+                scale: case.scale.unwrap_or([1.0, 1.0, 1.0]),
+                pivot: case.pivot.unwrap_or([0.0, 0.0, 0.0]),
+                rotate_vectors: case.rotate_vectors,
+            };
+            sample_preset_texture_versioned_with_bounds(
+                &case.preset_kind,
+                case.preset_version,
+                &case.params,
+                &case_mapping,
+                &transform,
+                &points,
+                case.target_bounds_extent,
+            )
+            .unwrap_or_else(|error| panic!("{label} fixture case failed: {error}"))
+        } else {
+            let points = case.points.iter().copied().map(point).collect::<Vec<_>>();
+            let transform = TextureTransform3DIR {
+                pivot: case.pivot.unwrap_or([0.0, 0.0, 0.0]),
+                rotate_vectors: case.rotate_vectors,
+                ..TextureTransform3DIR::default()
+            };
+            let raw = sample_preset_texture_versioned_with_bounds(
+                &case.preset_kind,
+                case.preset_version,
+                &case.params,
+                &case_mapping,
+                &transform,
+                &points,
+                case.target_bounds_extent,
+            )
+            .unwrap_or_else(|error| panic!("{label} fixture case failed: {error}"));
+            match (case.rotation_quat, case.rotate_vectors) {
+                (Some(quaternion), true) => raw
+                    .into_iter()
+                    .map(|value| rotate(value, quaternion))
+                    .collect::<Vec<_>>(),
+                _ => raw,
+            }
         };
-        assert_eq!(actual.len(), case.expected.len());
+        assert_eq!(actual.len(), case.expected.len(), "{label} length mismatch");
         for (point_index, (actual, expected)) in actual.iter().zip(case.expected.iter()).enumerate()
         {
             for (component_index, (actual, expected)) in
@@ -357,8 +517,7 @@ fn v2_matches_shared_python_parity_fixture_for_all_presets() {
             {
                 assert!(
                     (actual - expected).abs() < 1.0e-12,
-                    "{} mismatch at point {point_index}:{component_index}: actual={actual} expected={expected}",
-                    case.preset_kind
+                    "{label} mismatch at point {point_index}:{component_index}: actual={actual} expected={expected}"
                 );
             }
         }

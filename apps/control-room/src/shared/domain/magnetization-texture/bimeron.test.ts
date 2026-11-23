@@ -7,11 +7,12 @@ describe("bimeron magnetization texture contract", () => {
   it("is present in the v2 catalog with metric defaults", () => {
     const preset = MAGNETIZATION_TEXTURE_PRESETS.find((entry) => entry.id === "bimeron");
 
-    expect(preset).toEqual({
+    expect(preset).toMatchObject({
+      category: "vortices_skyrmions",
       defaultParams: {
         plane: "xy",
-        radius: 10e-9,
-        wall_width: 2e-9,
+        radius: 25e-9,
+        wall_width: 5e-9,
         vorticity: 1,
         helicity_rad: 0,
         background_sign: 1,
@@ -29,4 +30,3 @@ describe("bimeron magnetization texture contract", () => {
     expect(command?.title).toBe("Assign Bimeron Magnetization");
   });
 });
-

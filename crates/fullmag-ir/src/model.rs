@@ -799,7 +799,7 @@ pub enum InitialMagnetizationIR {
     },
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct TextureMappingIR {
     #[serde(default = "default_texture_mapping_space")]
     pub space: String,
@@ -807,6 +807,14 @@ pub struct TextureMappingIR {
     pub projection: TextureProjectionMode,
     #[serde(default = "default_texture_mapping_clamp_mode")]
     pub clamp_mode: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tile_period: Option<[f64; 3]>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub background_vector: Option<[f64; 3]>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub axis_extent_mode: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub axis_thickness_m: Option<f64>,
 }
 
 /// Supported texture projection modes.
@@ -840,6 +848,10 @@ impl Default for TextureMappingIR {
             space: default_texture_mapping_space(),
             projection: TextureProjectionMode::default(),
             clamp_mode: default_texture_mapping_clamp_mode(),
+            tile_period: None,
+            background_vector: None,
+            axis_extent_mode: None,
+            axis_thickness_m: None,
         }
     }
 }
@@ -854,6 +866,8 @@ pub struct TextureTransform3DIR {
     pub scale: [f64; 3],
     #[serde(default = "default_texture_pivot")]
     pub pivot: [f64; 3],
+    #[serde(default = "default_texture_rotate_vectors")]
+    pub rotate_vectors: bool,
 }
 
 impl Default for TextureTransform3DIR {
@@ -863,6 +877,7 @@ impl Default for TextureTransform3DIR {
             rotation_quat: default_texture_rotation_quat(),
             scale: default_texture_scale(),
             pivot: default_texture_pivot(),
+            rotate_vectors: default_texture_rotate_vectors(),
         }
     }
 }
@@ -872,7 +887,11 @@ fn default_texture_mapping_space() -> String {
 }
 
 fn default_texture_mapping_clamp_mode() -> String {
-    "clamp".to_string()
+    "none".to_string()
+}
+
+fn default_texture_rotate_vectors() -> bool {
+    true
 }
 
 fn default_texture_translation() -> [f64; 3] {

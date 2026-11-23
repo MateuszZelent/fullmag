@@ -1,11 +1,16 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from "react";
 import { Clipboard } from "lucide-react";
 
-import type { Selection } from "@/kernel/selection/selectionTypes";
+import { useKernel } from "@/kernel/KernelContext";
+import { useLayoutSelector } from "@/kernel/layout/useLayout";
+import type { Selection, SelectionRef } from "@/kernel/selection/selectionTypes";
 import { resolveSessionDiscretization } from "@/kernel/resources/sessionDiscretization";
+import { useSolverStatusResource } from "@/kernel/resources/studyRuntimeResources";
 import { useSessionStatusSelector } from "@/kernel/resources/useSessionStatus";
+import { EMPTY_VISUALIZATION_DEBUG_SNAPSHOTS } from "@/kernel/visualization/VisualizationDebugController";
+import { useVisualizationClientAcksResource } from "@/kernel/visualization/useVisualizationClientAcksResource";
 import { Button } from "@/shared/ui/Button";
 import { keyedOccurrences } from "@/shared/utils/keyedOccurrences";
 
@@ -34,9 +39,14 @@ import {
   uniqueSnapshots,
   visualizationDebugEmptyStateMessage,
 } from "./visualizationDebugPresentation";
-import { VisualizationDebugPanelModelAdapter } from "./useVisualizationDebugPanelModel";
 import {
+  requestVisualizationDebugTarget,
+  VisualizationDebugPanelModelAdapter,
+} from "./useVisualizationDebugPanelModel";
+import {
+  buildVisualizationDebugPanelModel,
   resolveVisualizationDebugLane,
+  resolveVisualizationDebugTarget,
 } from "./VisualizationDebugPanelModel";
 import {
   buildVisualizationDebugExport,
@@ -48,6 +58,104 @@ import {
 } from "./visualizationDebugExport";
 
 const STALE_SNAPSHOT_AGE_MS = 30_000;
+const EMPTY_FIELD_META_MAP = new Map();
+
+function resolveMeshPartDebugTargetId(selection: Selection): string | null {
+  if (selection.kind !== "mesh.part.visualization.debug") return null;
+  if (selection.ref && "visualizationTargetId" in selection.ref) {
+    return String(selection.ref.visualizationTargetId);
+  }
+  return selection.nodeId ?? null;
+}
+
+function MeshPartVisualizationDebugAdapter({
+  children,
+  partTargetId,
+  selection,
+}: {
+  children: (model: VisualizationDebugPanelModel) => React.ReactNode;
+  partTargetId: string;
+  selection: Selection;
+}) {
+  const kernel = useKernel();
+  const activeViewportMainModuleId = useLayoutSelector(
+    (state) => state.activeViewportMainModuleId,
+  );
+  const clientAcks = useVisualizationClientAcksResource({ enabled: true });
+  useSolverStatusResource({ enabled: true });
+
+  useEffect(() => {
+    if (activeViewportMainModuleId !== "viewport-3d") return undefined;
+    return requestVisualizationDebugTarget(
+      kernel.visualizationDebug,
+      partTargetId,
+    );
+  }, [activeViewportMainModuleId, kernel.visualizationDebug, partTargetId]);
+
+  const snapshots = useSyncExternalStore(
+    useCallback(
+      (listener: () => void) =>
+        kernel.visualizationDebug.subscribe(partTargetId, listener),
+      [kernel.visualizationDebug, partTargetId],
+    ),
+    useCallback(
+      () => kernel.visualizationDebug.getSnapshots(partTargetId),
+      [kernel.visualizationDebug, partTargetId],
+    ),
+    () => EMPTY_VISUALIZATION_DEBUG_SNAPSHOTS,
+  );
+
+  const model = useMemo<VisualizationDebugPanelModel>(() => {
+    const syntheticId = partTargetId.startsWith("object:")
+      ? partTargetId
+      : `object:${partTargetId}`;
+    const syntheticRef: SelectionRef = {
+      kind: "object.visualization.debug",
+      nodeId: selection.nodeId ?? partTargetId,
+      objectId: selection.objectId ?? partTargetId,
+      type: "scene-object",
+      visualizationTargetId: syntheticId as `object:${string}`,
+    };
+    const adaptedSnapshots = snapshots.map((snapshot) =>
+      snapshot.target.id === partTargetId
+        ? { ...snapshot, target: { ...snapshot.target, id: syntheticId } }
+        : snapshot,
+    );
+    const built = buildVisualizationDebugPanelModel({
+      activeViewportMainModuleId,
+      clientAcks: clientAcks.data ?? null,
+      diagnostics: [],
+      fieldMetaByQueryKey: EMPTY_FIELD_META_MAP,
+      selection: syntheticRef,
+      snapshots: adaptedSnapshots,
+    });
+    return {
+      ...built,
+      target: {
+        id: partTargetId,
+        kind: "part",
+        selectionKind: "mesh.part.visualization.debug",
+      } as unknown as VisualizationDebugPanelModel["target"],
+      viewports: built.viewports.map((vp) => ({
+        ...vp,
+        snapshots: vp.snapshots.map((s) =>
+          s.target.id === syntheticId
+            ? { ...s, target: { ...s.target, id: partTargetId } }
+            : s,
+        ),
+      })),
+    };
+  }, [
+    activeViewportMainModuleId,
+    clientAcks.data,
+    partTargetId,
+    selection.nodeId,
+    selection.objectId,
+    snapshots,
+  ]);
+
+  return <>{children(model)}</>;
+}
 
 export function VisualizationDebugPanel({
   actionEnvironment,
@@ -70,6 +178,26 @@ export function VisualizationDebugPanel({
       >
         Visualization debug is unavailable until the session discretization is explicit.
       </div>
+    );
+  }
+  const meshPartTargetId =
+    resolveVisualizationDebugTarget(selection.ref) === null
+      ? resolveMeshPartDebugTargetId(selection)
+      : null;
+  if (meshPartTargetId) {
+    return (
+      <MeshPartVisualizationDebugAdapter
+        partTargetId={meshPartTargetId}
+        selection={selection}
+      >
+        {(model) => (
+          <VisualizationDebugPanelView
+            actionEnvironment={actionEnvironment}
+            createActions={createActions}
+            model={model}
+          />
+        )}
+      </MeshPartVisualizationDebugAdapter>
     );
   }
   return (
@@ -171,7 +299,11 @@ export function VisualizationDebugPanelView({
             role="status"
           >
             <strong>{displayDisposition}</strong>
-            <span>{healthDiagnosis(displayDisposition)}</span>
+            <span>
+              {displayDisposition === "unknown"
+                ? "Health is unknown because evidence is incomplete."
+                : healthDiagnosis(displayDisposition)}
+            </span>
             <span>Snapshot age {formatDuration(ageMs)}</span>
           </div>
         )}
@@ -334,7 +466,6 @@ export function VisualizationDebugPanelView({
             aria-label="Copy log"
             className="fm-visualization-debug-action"
             size="icon"
-            title="Copy debug log"
             type="button"
             variant="ghost"
             onClick={() => void actions.copyLog()}

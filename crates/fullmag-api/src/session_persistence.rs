@@ -1210,6 +1210,8 @@ pub(crate) struct FieldStateInspectResponse {
     pub default_mode: String,
     pub point_count: u64,
     pub component_count: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_grid_shape: Option<[u64; 3]>,
     pub warnings: Vec<String>,
 }
 
@@ -1220,6 +1222,10 @@ pub(crate) struct FieldStateImportRequest {
     pub quantity_id: String,
     #[serde(default)]
     pub mode: Option<String>,
+    #[serde(default)]
+    pub format: Option<String>,
+    #[serde(default)]
+    pub interpolation: Option<String>,
 }
 
 #[derive(Debug, Serialize, ToSchema)]
@@ -1233,6 +1239,28 @@ pub(crate) struct FieldStateImportResponse {
     pub warnings: Vec<String>,
 }
 
+fn deserialize_field_state_rows<'de, D>(deserializer: D) -> Result<Vec<[f64; 3]>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    use serde::Deserialize;
+    let raw_rows: Vec<Vec<f64>> = Vec::<Vec<f64>>::deserialize(deserializer)?;
+    let mut out = Vec::with_capacity(raw_rows.len());
+    for row in raw_rows {
+        match row.as_slice() {
+            [x, y, z] => out.push([*x, *y, *z]),
+            [s] => out.push([*s, 0.0, 0.0]),
+            other => {
+                return Err(serde::de::Error::custom(format!(
+                    "field-state row must have 1 or 3 components (valuedim 1 or 3), got {}",
+                    other.len()
+                )));
+            }
+        }
+    }
+    Ok(out)
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 struct FieldStateJsonArtifact {
     fullmag_kind: String,
@@ -1240,15 +1268,32 @@ struct FieldStateJsonArtifact {
     quantity_id: String,
     target: FieldStateTargetRef,
     component_count: u64,
+    #[serde(deserialize_with = "deserialize_field_state_rows")]
     values: Vec<[f64; 3]>,
     source_step: Option<u64>,
     source_time_s: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    grid_shape: Option<[usize; 3]>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    grid_origin: Option<[f64; 3]>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    grid_spacing: Option<[f64; 3]>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    origin_explicit: Option<bool>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct HysteresisSnapshotLayout {
+    #[serde(default)]
+    grid_cells: Option<[usize; 3]>,
 }
 
 #[derive(Debug, Deserialize)]
 struct HysteresisMagnetizationSnapshotArtifact {
     quantity_id: String,
     values: Vec<[f64; 3]>,
+    #[serde(default)]
+    layout: Option<HysteresisSnapshotLayout>,
 }
 
 // ── Helpers ────────────────────────────────────────────────────────────
@@ -4413,6 +4458,14 @@ pub(crate) async fn export_field_state_with_context(
     }
     let artifact_dir = std::path::PathBuf::from(&snapshot.session.artifact_dir);
     let field_revision = field_revision(snapshot);
+    let export_grid_shape = active_domain_grid(snapshot).filter(|dims| {
+        dims[0]
+            .checked_mul(dims[1])
+            .and_then(|v| v.checked_mul(dims[2]))
+            == Some(vectors.len())
+    });
+    let export_grid_geometry =
+        export_grid_shape.and_then(|dims| resolve_target_fdm_geometry(snapshot, dims));
     let artifact = FieldStateJsonArtifact {
         fullmag_kind: "field_state".to_string(),
         schema_version: 1,
@@ -4422,6 +4475,10 @@ pub(crate) async fn export_field_state_with_context(
         values: vectors,
         source_step: Some(latest.step),
         source_time_s: Some(latest.time),
+        grid_shape: export_grid_shape,
+        grid_origin: export_grid_geometry.map(|(origin, _)| origin),
+        grid_spacing: export_grid_geometry.map(|(_, spacing)| spacing),
+        origin_explicit: export_grid_geometry.map(|_| true),
     };
     drop(guard);
 
@@ -4487,9 +4544,7 @@ pub(crate) async fn inspect_field_state_with_context(
     Json(req): Json<FieldStateInspectRequest>,
     request_context: Option<&crate::types::CurrentLiveRequestContext>,
 ) -> Result<Json<FieldStateInspectResponse>, ApiError> {
-    if let Some(format) = req.format.as_deref() {
-        validate_field_state_json_format(format)?;
-    }
+    let detected_format = field_state_import_format(&req.artifact_ref, req.format.as_deref())?;
     let _transition = if request_context.is_some() {
         Some(state.current_live_session_transition.lock().await)
     } else {
@@ -4528,9 +4583,31 @@ pub(crate) async fn inspect_field_state_with_context(
     }
     let default_mode = default_field_state_mode(&req.target, &req.quantity_id);
     if default_mode == "apply" {
-        if let Err(error) = validate_checkpoint_restore_shape(snapshot, artifact.values.len()) {
+        if artifact.component_count != 3 {
             compatible = false;
-            warnings.push(error.message);
+            warnings.push(format!(
+                "field-state apply requires 3-component vector data (valuedim=3), got valuedim={}",
+                artifact.component_count
+            ));
+        } else if let Err(error) = validate_exact_field_state_shape(snapshot, &artifact) {
+            if can_resample_field_state(&artifact, snapshot) {
+                warnings.push(error.message);
+                match resample_field_state_to_snapshot_domain(
+                    &artifact,
+                    snapshot,
+                    "trilinear",
+                    req.quantity_id == "m",
+                ) {
+                    Ok((_, resample_warnings)) => warnings.extend(resample_warnings),
+                    Err(overlap_err) => {
+                        compatible = false;
+                        warnings.push(overlap_err);
+                    }
+                }
+            } else {
+                compatible = false;
+                warnings.push(error.message);
+            }
         }
     }
     let compatibility = if compatible {
@@ -4544,11 +4621,14 @@ pub(crate) async fn inspect_field_state_with_context(
         artifact_ref: req.artifact_ref,
         target: req.target,
         quantity_id: req.quantity_id,
-        format: "field_state_json".to_string(),
+        format: detected_format,
         compatibility,
         default_mode,
         point_count: artifact.values.len() as u64,
         component_count: artifact.component_count,
+        source_grid_shape: artifact
+            .grid_shape
+            .map(|[nx, ny, nz]| [nx as u64, ny as u64, nz as u64]),
         warnings,
     }))
 }
@@ -4559,6 +4639,7 @@ pub(crate) async fn import_field_state_with_context(
     Json(req): Json<FieldStateImportRequest>,
     request_context: Option<&crate::types::CurrentLiveRequestContext>,
 ) -> Result<Json<FieldStateImportResponse>, ApiError> {
+    field_state_import_format(&req.artifact_ref, req.format.as_deref())?;
     let mode = req
         .mode
         .clone()
@@ -4649,12 +4730,51 @@ pub(crate) async fn import_field_state_with_context(
     let artifact =
         read_field_state_artifact(&state.repo_root, snapshot, &req.artifact_ref, &req.target)?;
     validate_field_state_request_match(&artifact, &req.target, &req.quantity_id)?;
-    validate_checkpoint_restore_shape(snapshot, artifact.values.len())?;
+    let requested_interpolation = req
+        .interpolation
+        .as_deref()
+        .map(|value| value.trim().to_ascii_lowercase());
+    let normalize = req.quantity_id == "m";
+    let (applied_values, import_warnings) = match requested_interpolation.as_deref() {
+        Some("nearest") | Some("trilinear") => {
+            let mode = requested_interpolation.as_deref().unwrap_or("trilinear");
+            resample_field_state_to_snapshot_domain(&artifact, snapshot, mode, normalize)
+                .map_err(ApiError::bad_request)?
+        }
+        None | Some("") | Some("exact") => {
+            validate_exact_field_state_shape(snapshot, &artifact)?;
+            let values = if normalize {
+                normalize_imported_vectors(&artifact.values, 1.0e-12)
+            } else {
+                artifact.values.clone()
+            };
+            (values, Vec::new())
+        }
+        Some(other) => {
+            return Err(ApiError::bad_request(format!(
+                "unsupported field-state interpolation mode '{other}'; expected exact, nearest, or trilinear"
+            )));
+        }
+    };
+    validate_checkpoint_restore_shape(snapshot, applied_values.len())?;
+    let resolved_target_grid = active_domain_grid(snapshot);
+    let applied_point_count = applied_values.len() as u64;
     let live_state = snapshot
         .live_state
         .as_mut()
         .ok_or_else(|| ApiError::bad_request("field-state apply requires live state"))?;
-    live_state.latest_step.magnetization = Some(flatten_magnetization(&artifact.values));
+    if live_state.latest_step.grid == [0, 0, 0] {
+        if let Some([nx, ny, nz]) = resolved_target_grid {
+            if let (Ok(gx), Ok(gy), Ok(gz)) = (
+                u32::try_from(nx),
+                u32::try_from(ny),
+                u32::try_from(nz),
+            ) {
+                live_state.latest_step.grid = [gx, gy, gz];
+            }
+        }
+    }
+    live_state.latest_step.magnetization = Some(flatten_magnetization(&applied_values));
     live_state.status = "paused".to_string();
     live_state.updated_at_unix_ms = now_unix_ms();
     snapshot.state_version = snapshot.state_version.saturating_add(1);
@@ -4687,9 +4807,9 @@ pub(crate) async fn import_field_state_with_context(
         target: req.target,
         quantity_id: req.quantity_id,
         mode,
-        applied_point_count: artifact.values.len() as u64,
+        applied_point_count,
         field_revision,
-        warnings: Vec::new(),
+        warnings: import_warnings,
     }))
 }
 
@@ -5686,13 +5806,402 @@ fn normalize_field_state_export_format(format: &str) -> Result<String, ApiError>
     }
 }
 
-fn validate_field_state_json_format(format: &str) -> Result<(), ApiError> {
-    if format == "field_state_json" {
-        return Ok(());
+fn normalize_field_state_import_format(format: &str) -> String {
+    match format.trim().to_ascii_lowercase().as_str() {
+        "field_state_json" | "json" => "field_state_json".to_string(),
+        "ovf" | "omf" => "ovf".to_string(),
+        "npz" => "npz".to_string(),
+        "npy" => "npy".to_string(),
+        "zarr" => "zarr".to_string(),
+        "h5" | "hdf5" => "h5".to_string(),
+        other => other.to_string(),
     }
-    Err(ApiError::bad_request(
-        "backend field-state operations currently support format 'field_state_json'",
-    ))
+}
+
+fn infer_field_state_import_format(artifact_ref: &str) -> String {
+    let lower = artifact_ref.to_ascii_lowercase();
+    if lower.ends_with(".ovf") || lower.ends_with(".omf") {
+        "ovf".to_string()
+    } else if lower.ends_with(".npz") {
+        "npz".to_string()
+    } else if lower.ends_with(".npy") {
+        "npy".to_string()
+    } else if lower.ends_with(".zarr") || lower.ends_with(".zarr.zip") {
+        "zarr".to_string()
+    } else if lower.ends_with(".h5") || lower.ends_with(".hdf5") {
+        "h5".to_string()
+    } else {
+        "field_state_json".to_string()
+    }
+}
+
+fn field_state_import_format(
+    artifact_ref: &str,
+    requested_format: Option<&str>,
+) -> Result<String, ApiError> {
+    let inferred = infer_field_state_import_format(artifact_ref);
+    if let Some(requested) = requested_format {
+        let normalized = normalize_field_state_import_format(requested);
+        if !matches!(
+            normalized.as_str(),
+            "field_state_json" | "ovf" | "npz" | "npy" | "zarr" | "h5"
+        ) {
+            return Err(ApiError::bad_request(format!(
+                "unsupported field-state import format '{requested}'; expected field_state_json, ovf, npz, npy, zarr, or h5"
+            )));
+        }
+        if normalized != inferred {
+            return Err(ApiError::bad_request(format!(
+                "field-state format '{normalized}' does not match the artifact format '{inferred}'"
+            )));
+        }
+    }
+    Ok(inferred)
+}
+
+#[derive(Debug, Clone)]
+struct TargetFdmLayer {
+    dims: [usize; 3],
+    origin: [f64; 3],
+    spacing: [f64; 3],
+    active_mask: Option<Vec<bool>>,
+}
+
+fn parse_positive_dims3(value: &serde_json::Value) -> Option<[usize; 3]> {
+    let arr = value.as_array()?;
+    if arr.len() != 3 {
+        return None;
+    }
+    let dims = [
+        usize::try_from(arr[0].as_u64()?).ok()?,
+        usize::try_from(arr[1].as_u64()?).ok()?,
+        usize::try_from(arr[2].as_u64()?).ok()?,
+    ];
+    dims.iter().all(|&n| n > 0).then_some(dims)
+}
+
+fn parse_finite_vec3(value: &serde_json::Value) -> Option<[f64; 3]> {
+    let arr = value.as_array()?;
+    if arr.len() != 3 {
+        return None;
+    }
+    let vec = [arr[0].as_f64()?, arr[1].as_f64()?, arr[2].as_f64()?];
+    vec.iter().all(|v| v.is_finite()).then_some(vec)
+}
+
+fn parse_positive_vec3(value: &serde_json::Value) -> Option<[f64; 3]> {
+    let vec = parse_finite_vec3(value)?;
+    vec.iter().all(|&v| v > 0.0).then_some(vec)
+}
+
+fn resolve_fdm_multilayer_target_layers(
+    snapshot: &SessionStateResponse,
+) -> Option<Vec<TargetFdmLayer>> {
+    if crate::router_v2::handlers::sessions::status::is_fem_snapshot(snapshot) {
+        return None;
+    }
+    let metadata = snapshot.metadata.as_ref()?;
+    let artifact = metadata
+        .get("artifact_layout")
+        .filter(|v| v.get("backend").and_then(serde_json::Value::as_str) == Some("fdm_multilayer"));
+    let backend_plan = metadata
+        .get("execution_plan")
+        .and_then(|v| v.get("backend_plan"))
+        .filter(|v| {
+            artifact.is_some()
+                || v.get("kind").and_then(serde_json::Value::as_str) == Some("fdm_multilayer")
+                || (v.get("layers").is_some() && v.get("common_cells").is_some())
+        });
+    let layers_val = backend_plan
+        .and_then(|v| v.get("layers"))
+        .or_else(|| artifact.and_then(|v| v.get("layers")))?
+        .as_array()?;
+    if layers_val.is_empty() {
+        return None;
+    }
+    let mut layers = Vec::with_capacity(layers_val.len());
+    let mut total_cells = 0usize;
+    for layer in layers_val {
+        let dims = layer.get("native_grid").and_then(parse_positive_dims3)?;
+        let cell_count = dims[0]
+            .checked_mul(dims[1])
+            .and_then(|v| v.checked_mul(dims[2]))?;
+        total_cells = total_cells.checked_add(cell_count)?;
+        let spacing = layer
+            .get("native_cell_size")
+            .or_else(|| layer.get("cell_size"))
+            .and_then(parse_positive_vec3)?;
+        let origin = match layer
+            .get("native_origin")
+            .or_else(|| layer.get("origin_m"))
+            .or_else(|| layer.get("origin"))
+        {
+            Some(v) => parse_finite_vec3(v)?,
+            None => [0.0, 0.0, 0.0],
+        };
+        let active_mask = layer
+            .get("native_active_mask")
+            .and_then(serde_json::Value::as_array)
+            .and_then(|arr| {
+                let mask: Option<Vec<bool>> = arr.iter().map(serde_json::Value::as_bool).collect();
+                mask.filter(|m| m.len() == cell_count)
+            });
+        layers.push(TargetFdmLayer {
+            dims,
+            origin,
+            spacing,
+            active_mask,
+        });
+    }
+    if let Some(existing) = snapshot
+        .live_state
+        .as_ref()
+        .and_then(|s| s.latest_step.magnetization.as_ref())
+        .filter(|m| !m.is_empty())
+    {
+        if existing.len() / 3 != total_cells {
+            return None;
+        }
+    }
+    Some(layers)
+}
+
+fn active_domain_grid(snapshot: &SessionStateResponse) -> Option<[usize; 3]> {
+    if crate::router_v2::handlers::sessions::status::is_fem_snapshot(snapshot) {
+        return None;
+    }
+    if let Some(layers) = resolve_fdm_multilayer_target_layers(snapshot) {
+        return (layers.len() == 1).then(|| layers[0].dims);
+    }
+    let latest_grid = snapshot
+        .live_state
+        .as_ref()
+        .map(|state| state.latest_step.grid);
+    let shape =
+        crate::router_v2::handlers::sessions::status::fdm_grid_shape(snapshot, latest_grid);
+    let dims = [shape[0] as usize, shape[1] as usize, shape[2] as usize];
+    if dims.iter().all(|&n| n > 0) {
+        return Some(dims);
+    }
+    snapshot
+        .latest_fields
+        .get("m")
+        .and_then(crate::router_v2::handlers::data::field_resolution::json_field_grid)
+        .and_then(|grid| {
+            let fallback = [grid[0] as usize, grid[1] as usize, grid[2] as usize];
+            fallback.iter().all(|&n| n > 0).then_some(fallback)
+        })
+}
+
+fn extract_fdm_geometry_from_json(
+    value: &serde_json::Value,
+    expected_grid: [usize; 3],
+) -> Option<([f64; 3], [f64; 3])> {
+    if let Some(explicit_grid_val) = value
+        .get("grid_cells")
+        .or_else(|| value.get("grid_shape"))
+        .or_else(|| value.get("shape"))
+        .or_else(|| value.get("cells"))
+        .or_else(|| value.get("grid").and_then(|g| g.get("cells")))
+    {
+        if parse_positive_dims3(explicit_grid_val) != Some(expected_grid) {
+            return None;
+        }
+    }
+    let spacing = value
+        .get("cell_size")
+        .or_else(|| value.get("cell_m"))
+        .or_else(|| value.get("native_cell_size"))
+        .or_else(|| value.get("grid_spacing"))
+        .or_else(|| value.get("spacing"))
+        .and_then(parse_positive_vec3)?;
+    let origin = match value
+        .get("origin_m")
+        .or_else(|| value.get("origin"))
+        .or_else(|| value.get("grid_origin"))
+        .or_else(|| value.get("native_origin"))
+    {
+        Some(orig_val) => parse_finite_vec3(orig_val)?,
+        None => [0.0, 0.0, 0.0],
+    };
+    Some((origin, spacing))
+}
+
+fn resolve_target_fdm_geometry(
+    snapshot: &SessionStateResponse,
+    target_grid: [usize; 3],
+) -> Option<([f64; 3], [f64; 3])> {
+    if crate::router_v2::handlers::sessions::status::is_fem_snapshot(snapshot) {
+        return None;
+    }
+    if let Some(layers) = resolve_fdm_multilayer_target_layers(snapshot) {
+        if layers.len() == 1 && layers[0].dims == target_grid {
+            return Some((layers[0].origin, layers[0].spacing));
+        }
+    }
+    if let Some(metadata) = snapshot.metadata.as_ref() {
+        if let Some(layout) = metadata.get("artifact_layout").filter(|l| {
+            l.get("backend")
+                .and_then(serde_json::Value::as_str)
+                .is_none_or(crate::router_v2::handlers::data::field_resolution::is_fdm_backend_kind)
+        }) {
+            if let Some(geom) = extract_fdm_geometry_from_json(layout, target_grid) {
+                return Some(geom);
+            }
+        }
+        if let Some(backend_plan) = metadata
+            .get("execution_plan")
+            .and_then(|p| p.get("backend_plan"))
+        {
+            if let Some(geom) = extract_fdm_geometry_from_json(backend_plan, target_grid) {
+                return Some(geom);
+            }
+            if let Some(grid_obj) = backend_plan.get("grid") {
+                if let Some(geom) = extract_fdm_geometry_from_json(grid_obj, target_grid) {
+                    return Some(geom);
+                }
+            }
+            if let Some(cert_obj) = backend_plan.get("grid_certificate") {
+                if let Some(geom) = extract_fdm_geometry_from_json(cert_obj, target_grid) {
+                    return Some(geom);
+                }
+            }
+        }
+    }
+    if let Some(layout) = snapshot
+        .latest_fields
+        .get("m")
+        .and_then(|v| v.get("layout"))
+    {
+        if let Some(geom) = extract_fdm_geometry_from_json(layout, target_grid) {
+            return Some(geom);
+        }
+    }
+    if let Some((origin, spacing)) =
+        crate::router_v2::handlers::sessions::status::fdm_grid_geometry(snapshot)
+    {
+        if origin.iter().all(|v| v.is_finite()) && spacing.iter().all(|&v| v.is_finite() && v > 0.0)
+        {
+            let shape = crate::router_v2::handlers::sessions::status::fdm_grid_shape(snapshot, None);
+            let shape_usize = [shape[0] as usize, shape[1] as usize, shape[2] as usize];
+            if shape == [0, 0, 0] || shape_usize == target_grid {
+                return Some((origin, spacing));
+            }
+        }
+    }
+    None
+}
+
+fn resolve_target_fdm_active_mask(
+    snapshot: &SessionStateResponse,
+    total_cells: usize,
+) -> Option<Vec<bool>> {
+    let arr = snapshot
+        .metadata
+        .as_ref()?
+        .get("execution_plan")?
+        .get("backend_plan")?
+        .get("active_mask")?
+        .as_array()?;
+    let mask: Option<Vec<bool>> = arr.iter().map(serde_json::Value::as_bool).collect();
+    mask.filter(|m| m.len() == total_cells)
+}
+
+fn target_expected_vector_count(snapshot: &SessionStateResponse) -> Option<usize> {
+    if let Some(count) = snapshot
+        .live_state
+        .as_ref()
+        .and_then(|state| state.latest_step.magnetization.as_ref())
+        .map(|values| values.len() / 3)
+    {
+        return Some(count);
+    }
+    if crate::router_v2::handlers::sessions::status::is_fem_snapshot(snapshot) {
+        return snapshot
+            .fem_mesh
+            .as_ref()
+            .and_then(|mesh| (!mesh.nodes.is_empty()).then_some(mesh.nodes.len()));
+    }
+    if let Some(layers) = resolve_fdm_multilayer_target_layers(snapshot) {
+        return layers.iter().try_fold(0usize, |acc, layer| {
+            layer.dims[0]
+                .checked_mul(layer.dims[1])
+                .and_then(|v| v.checked_mul(layer.dims[2]))
+                .and_then(|v| acc.checked_add(v))
+        });
+    }
+    let [nx, ny, nz] = active_domain_grid(snapshot)?;
+    nx.checked_mul(ny).and_then(|v| v.checked_mul(nz))
+}
+
+fn validate_exact_field_state_shape(
+    snapshot: &SessionStateResponse,
+    artifact: &FieldStateJsonArtifact,
+) -> Result<(), ApiError> {
+    if artifact.values.iter().flatten().any(|v| !v.is_finite()) {
+        return Err(ApiError::bad_request("field-state values must be finite"));
+    }
+    if let Some(src_dims) = artifact.grid_shape {
+        let expected_src = src_dims[0]
+            .checked_mul(src_dims[1])
+            .and_then(|v| v.checked_mul(src_dims[2]));
+        if src_dims.iter().any(|&n| n == 0) || expected_src != Some(artifact.values.len()) {
+            return Err(ApiError::bad_request(format!(
+                "source grid_shape [{}x{}x{}] does not match source vector count {}",
+                src_dims[0],
+                src_dims[1],
+                src_dims[2],
+                artifact.values.len()
+            )));
+        }
+        if crate::router_v2::handlers::sessions::status::is_fem_snapshot(snapshot)
+            && snapshot.fem_mesh.is_some()
+        {
+            return Err(ApiError::bad_request(format!(
+                "field-state structured grid_shape [{}x{}x{}] cannot be applied in exact mode onto an unstructured FEM mesh; choose 'nearest' or 'trilinear' interpolation to resample",
+                src_dims[0], src_dims[1], src_dims[2]
+            )));
+        }
+        if let Some(layers) = resolve_fdm_multilayer_target_layers(snapshot) {
+            if layers.len() > 1 {
+                return Err(ApiError::bad_request(format!(
+                    "field-state structured grid_shape [{}x{}x{}] cannot be applied in exact mode onto a {}-layer FDM target; choose 'nearest' or 'trilinear' interpolation to resample",
+                    src_dims[0],
+                    src_dims[1],
+                    src_dims[2],
+                    layers.len()
+                )));
+            }
+        }
+        if let Some(dst_dims) = active_domain_grid(snapshot) {
+            if src_dims != dst_dims {
+                return Err(ApiError::bad_request(format!(
+                    "field-state grid_shape [{}x{}x{}] does not match target grid_shape [{}x{}x{}] in exact import mode; choose 'nearest' or 'trilinear' interpolation to resample",
+                    src_dims[0],
+                    src_dims[1],
+                    src_dims[2],
+                    dst_dims[0],
+                    dst_dims[1],
+                    dst_dims[2]
+                )));
+            }
+        }
+    }
+    if let Err(err) = validate_checkpoint_restore_shape(snapshot, artifact.values.len()) {
+        return Err(ApiError::bad_request(format!(
+            "{}; choose 'nearest' or 'trilinear' interpolation to resample",
+            err.message
+        )));
+    }
+    if let Some(expected_count) = target_expected_vector_count(snapshot) {
+        if artifact.values.len() != expected_count {
+            return Err(ApiError::bad_request(format!(
+                "field-state vector count {} does not match active domain vector count {expected_count}; choose 'nearest' or 'trilinear' interpolation to resample",
+                artifact.values.len()
+            )));
+        }
+    }
+    Ok(())
 }
 
 fn sanitize_field_state_file_name(
@@ -5773,21 +6282,40 @@ fn read_field_state_artifact(
     target: &FieldStateTargetRef,
 ) -> Result<FieldStateJsonArtifact, ApiError> {
     let artifact_path = resolve_session_artifact_ref(snapshot, artifact_ref)?;
-    let raw = std::fs::read(&artifact_path)
-        .map_err(|error| ApiError::not_found(format!("field-state artifact not found: {error}")))?;
-    let artifact: FieldStateJsonArtifact = match serde_json::from_slice(&raw) {
-        Ok(artifact) => artifact,
-        Err(json_error) if field_state_path_needs_python_loader(&artifact_path) => {
-            convert_field_state_with_python(repo_root, &artifact_path).map_err(|error| {
-                ApiError::bad_request(format!("{error}; JSON parse error was: {json_error}"))
-            })?
+    let format = infer_field_state_import_format(artifact_ref);
+    let artifact: FieldStateJsonArtifact = match format.as_str() {
+        "field_state_json" | "ovf" => {
+            let raw = std::fs::read(&artifact_path).map_err(|error| {
+                ApiError::not_found(format!("field-state artifact not found: {error}"))
+            })?;
+            if format == "ovf" {
+                return parse_ovf_bytes(&raw, target).map_err(ApiError::bad_request);
+            }
+            match serde_json::from_slice(&raw) {
+                Ok(artifact) => artifact,
+                Err(json_error) => {
+                    return read_hysteresis_snapshot_as_field_state(&raw, target).map_err(
+                        |snapshot_error| {
+                            ApiError::bad_request(format!(
+                                "invalid field-state artifact: {json_error}; hysteresis snapshot parse error was: {snapshot_error}"
+                            ))
+                        },
+                    );
+                }
+            }
         }
-        Err(json_error) => {
-            return read_hysteresis_snapshot_as_field_state(&raw, target).map_err(|snapshot_error| {
-                ApiError::bad_request(format!(
-                    "invalid field-state artifact: {json_error}; hysteresis snapshot parse error was: {snapshot_error}"
-                ))
-            });
+        _ => {
+            if !artifact_path.exists() {
+                return Err(ApiError::not_found("field-state artifact not found"));
+            }
+            let mut loaded = convert_field_state_with_python(repo_root, &artifact_path)
+                .map_err(ApiError::bad_request)?;
+            if matches!(loaded.target.id.as_str(), "unknown" | "body")
+                || loaded.target.kind == "unknown"
+            {
+                loaded.target = target.clone();
+            }
+            loaded
         }
     };
     if artifact.fullmag_kind != "field_state" || artifact.schema_version != 1 {
@@ -5803,6 +6331,16 @@ fn read_hysteresis_snapshot_as_field_state(
     target: &FieldStateTargetRef,
 ) -> Result<FieldStateJsonArtifact, serde_json::Error> {
     let snapshot: HysteresisMagnetizationSnapshotArtifact = serde_json::from_slice(raw)?;
+    let grid_shape = snapshot
+        .layout
+        .and_then(|layout| layout.grid_cells)
+        .filter(|dims| {
+            dims.iter().all(|&n| n > 0)
+                && dims[0]
+                    .checked_mul(dims[1])
+                    .and_then(|v| v.checked_mul(dims[2]))
+                    == Some(snapshot.values.len())
+        });
     Ok(FieldStateJsonArtifact {
         fullmag_kind: "field_state".to_string(),
         schema_version: 1,
@@ -5812,19 +6350,850 @@ fn read_hysteresis_snapshot_as_field_state(
         values: snapshot.values,
         source_step: None,
         source_time_s: None,
+        grid_shape,
+        grid_origin: None,
+        grid_spacing: None,
+        origin_explicit: Some(false),
     })
 }
 
-fn field_state_path_needs_python_loader(path: &std::path::Path) -> bool {
-    let name = path
-        .file_name()
-        .and_then(|value| value.to_str())
-        .unwrap_or_default()
-        .to_ascii_lowercase();
-    name.ends_with(".h5")
-        || name.ends_with(".hdf5")
-        || name.ends_with(".zarr")
-        || name.ends_with(".zarr.zip")
+fn read_ovf_line<'a>(raw: &'a [u8], cursor: &mut usize) -> Option<&'a [u8]> {
+    if *cursor >= raw.len() {
+        return None;
+    }
+    let start = *cursor;
+    let end = match raw[start..].iter().position(|&b| b == b'\n') {
+        Some(rel) => {
+            *cursor = start + rel + 1;
+            start + rel
+        }
+        None => {
+            *cursor = raw.len();
+            raw.len()
+        }
+    };
+    let slice = &raw[start..end];
+    Some(slice.strip_suffix(b"\r").unwrap_or(slice))
+}
+
+fn parse_ovf_bytes(
+    raw: &[u8],
+    target: &FieldStateTargetRef,
+) -> Result<FieldStateJsonArtifact, String> {
+    if raw.is_empty() {
+        return Err("OVF payload is empty".to_string());
+    }
+    let mut pos = 0usize;
+    let total_len = raw.len();
+
+    let first_line = String::from_utf8_lossy(
+        read_ovf_line(raw, &mut pos).ok_or_else(|| "OVF payload is empty".to_string())?,
+    )
+    .trim()
+    .to_string();
+    let ovf_version = if first_line.contains("OVF 2.0") {
+        2u8
+    } else if first_line.contains("v1.0")
+        || first_line.contains("OVF 1.0")
+        || first_line.contains("OOMMF")
+    {
+        1u8
+    } else {
+        return Err(format!("unsupported or missing OVF header line: '{first_line}'"));
+    };
+
+    let mut headers: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+    let mut data_mode: Option<&'static str> = None;
+    let mut data_start_offset = 0usize;
+
+    while let Some(line_bytes) = read_ovf_line(raw, &mut pos) {
+        let line = String::from_utf8_lossy(line_bytes).trim().to_string();
+        if line.is_empty() {
+            continue;
+        }
+        if !line.starts_with('#') {
+            return Err(format!("unexpected non-comment line before OVF data block: '{line}'"));
+        }
+        let body = line[1..].trim();
+        let lower = body.to_ascii_lowercase();
+        if lower.starts_with("begin: data") {
+            let tokens: Vec<String> = body
+                .split_whitespace()
+                .skip(2)
+                .map(|t| t.to_ascii_lowercase())
+                .collect();
+            data_mode = match tokens.iter().map(String::as_str).collect::<Vec<_>>().as_slice() {
+                ["text"] => Some("text"),
+                ["binary", "4"] => Some("binary4"),
+                ["binary", "8"] => Some("binary8"),
+                _ => return Err(format!("unsupported OVF data encoding: '{body}'")),
+            };
+            data_start_offset = pos;
+            break;
+        }
+        if let Some((key, val)) = body.split_once(':') {
+            let key_norm = key.trim().to_ascii_lowercase();
+            if key_norm != "begin" && key_norm != "end" {
+                headers.insert(key_norm, val.trim().to_string());
+            }
+        }
+    }
+
+    let mode = data_mode.ok_or_else(|| "OVF file is missing '# Begin: Data' block".to_string())?;
+    let meshtype = headers
+        .get("meshtype")
+        .map(|s| s.to_ascii_lowercase())
+        .unwrap_or_else(|| "rectangular".to_string());
+    if meshtype != "rectangular" {
+        return Err(format!("OVF meshtype '{meshtype}' is not supported; expected 'rectangular'"));
+    }
+
+    let parse_usize = |key: &str| -> Result<usize, String> {
+        headers
+            .get(key)
+            .ok_or_else(|| format!("OVF header missing '{key}'"))?
+            .parse::<usize>()
+            .map_err(|_| format!("OVF header '{key}' must be a positive integer"))
+            .and_then(|v| {
+                if v > 0 {
+                    Ok(v)
+                } else {
+                    Err(format!("OVF header '{key}' must be positive"))
+                }
+            })
+    };
+    let nx = parse_usize("xnodes")?;
+    let ny = parse_usize("ynodes")?;
+    let nz = parse_usize("znodes")?;
+    let valuedim = headers
+        .get("valuedim")
+        .map(|v| v.parse::<usize>())
+        .transpose()
+        .map_err(|_| "OVF header 'valuedim' must be an integer".to_string())?
+        .unwrap_or(3);
+    if valuedim != 1 && valuedim != 3 {
+        return Err(format!("OVF valuedim must be 1 or 3, got {valuedim}"));
+    }
+
+    let parse_f64_opt = |key: &str, default: f64| -> Result<f64, String> {
+        match headers.get(key) {
+            Some(v) => v
+                .parse::<f64>()
+                .map_err(|_| format!("OVF header '{key}' must be a finite number")),
+            None => Ok(default),
+        }
+    };
+    let origin_explicit = headers.contains_key("xmin")
+        && headers.contains_key("ymin")
+        && headers.contains_key("zmin");
+    let xmin = parse_f64_opt("xmin", 0.0)?;
+    let ymin = parse_f64_opt("ymin", 0.0)?;
+    let zmin = parse_f64_opt("zmin", 0.0)?;
+    let dx = match headers.get("xstepsize") {
+        Some(v) => v.parse::<f64>().map_err(|_| "invalid xstepsize".to_string())?,
+        None => (parse_f64_opt("xmax", nx as f64)? - xmin) / (nx as f64),
+    };
+    let dy = match headers.get("ystepsize") {
+        Some(v) => v.parse::<f64>().map_err(|_| "invalid ystepsize".to_string())?,
+        None => (parse_f64_opt("ymax", ny as f64)? - ymin) / (ny as f64),
+    };
+    let dz = match headers.get("zstepsize") {
+        Some(v) => v.parse::<f64>().map_err(|_| "invalid zstepsize".to_string())?,
+        None => (parse_f64_opt("zmax", nz as f64)? - zmin) / (nz as f64),
+    };
+    if ![dx, dy, dz].iter().all(|v| v.is_finite() && *v > 0.0) {
+        return Err("OVF step sizes must be finite and positive".to_string());
+    }
+    let multiplier = if ovf_version == 1 {
+        parse_f64_opt("valuemultiplier", 1.0)?
+    } else {
+        1.0
+    };
+    if !multiplier.is_finite() {
+        return Err("OVF valuemultiplier must be finite".to_string());
+    }
+
+    let expected_points = nx
+        .checked_mul(ny)
+        .and_then(|v| v.checked_mul(nz))
+        .ok_or_else(|| "OVF grid dimensions overflow".to_string())?;
+    let expected_scalars = expected_points
+        .checked_mul(valuedim)
+        .ok_or_else(|| "OVF scalar count overflow".to_string())?;
+
+    let mut scalars = Vec::with_capacity(expected_scalars);
+    match mode {
+        "text" => {
+            let tail = String::from_utf8_lossy(&raw[data_start_offset..]);
+            for line in tail.lines() {
+                let trimmed = line.trim();
+                if trimmed.is_empty() {
+                    continue;
+                }
+                if trimmed.starts_with('#') {
+                    if trimmed[1..].trim().to_ascii_lowercase().starts_with("end: data") {
+                        break;
+                    }
+                    continue;
+                }
+                for tok in trimmed.split_whitespace() {
+                    let val = tok
+                        .parse::<f64>()
+                        .map_err(|_| format!("invalid float '{tok}' in OVF Text data"))?;
+                    scalars.push(val * multiplier);
+                }
+            }
+            if scalars.len() != expected_scalars {
+                return Err(format!(
+                    "OVF Text data expected {expected_scalars} scalars, got {}",
+                    scalars.len()
+                ));
+            }
+        }
+        "binary4" => {
+            let needed = 4usize
+                .checked_add(expected_scalars.checked_mul(4).ok_or("OVF size overflow")?)
+                .ok_or("OVF size overflow")?;
+            if data_start_offset + needed > total_len {
+                return Err("OVF Binary 4 payload is truncated".to_string());
+            }
+            let slice = &raw[data_start_offset..data_start_offset + needed];
+            let read_f32 = |chunk: &[u8]| -> f32 {
+                let arr: [u8; 4] = [chunk[0], chunk[1], chunk[2], chunk[3]];
+                if ovf_version == 2 {
+                    f32::from_le_bytes(arr)
+                } else {
+                    f32::from_be_bytes(arr)
+                }
+            };
+            let magic = read_f32(&slice[0..4]);
+            if (magic - 1_234_567.0_f32).abs() > 0.0 {
+                return Err(format!(
+                    "OVF Binary 4 magic mismatch for OVF {ovf_version}.0: expected 1234567.0, got {magic}"
+                ));
+            }
+            for chunk in slice[4..].chunks_exact(4) {
+                scalars.push((read_f32(chunk) as f64) * multiplier);
+            }
+        }
+        "binary8" => {
+            let needed = 8usize
+                .checked_add(expected_scalars.checked_mul(8).ok_or("OVF size overflow")?)
+                .ok_or("OVF size overflow")?;
+            if data_start_offset + needed > total_len {
+                return Err("OVF Binary 8 payload is truncated".to_string());
+            }
+            let slice = &raw[data_start_offset..data_start_offset + needed];
+            let read_f64 = |chunk: &[u8]| -> f64 {
+                let arr: [u8; 8] = [
+                    chunk[0], chunk[1], chunk[2], chunk[3], chunk[4], chunk[5], chunk[6], chunk[7],
+                ];
+                if ovf_version == 2 {
+                    f64::from_le_bytes(arr)
+                } else {
+                    f64::from_be_bytes(arr)
+                }
+            };
+            let magic = read_f64(&slice[0..8]);
+            if (magic - 123_456_789_012_345.0_f64).abs() > 0.0 {
+                return Err(format!(
+                    "OVF Binary 8 magic mismatch for OVF {ovf_version}.0: expected 123456789012345.0, got {magic}"
+                ));
+            }
+            for chunk in slice[8..].chunks_exact(8) {
+                scalars.push(read_f64(chunk) * multiplier);
+            }
+        }
+        _ => return Err("unsupported OVF data mode".to_string()),
+    }
+
+    if scalars.iter().any(|v| !v.is_finite()) {
+        return Err("OVF field data contains non-finite values".to_string());
+    }
+    let values = if valuedim == 3 {
+        scalars
+            .chunks_exact(3)
+            .map(|c| [c[0], c[1], c[2]])
+            .collect::<Vec<_>>()
+    } else {
+        scalars.into_iter().map(|s| [s, 0.0, 0.0]).collect::<Vec<_>>()
+    };
+    Ok(FieldStateJsonArtifact {
+        fullmag_kind: "field_state".to_string(),
+        schema_version: 1,
+        quantity_id: if valuedim == 3 {
+            "m".to_string()
+        } else {
+            "scalar".to_string()
+        },
+        target: target.clone(),
+        component_count: valuedim as u64,
+        values,
+        source_step: None,
+        source_time_s: None,
+        grid_shape: Some([nx, ny, nz]),
+        grid_origin: Some([xmin, ymin, zmin]),
+        grid_spacing: Some([dx, dy, dz]),
+        origin_explicit: Some(origin_explicit),
+    })
+}
+
+fn normalize_imported_vectors(values: &[[f64; 3]], zero_threshold: f64) -> Vec<[f64; 3]> {
+    values
+        .iter()
+        .map(|&[vx, vy, vz]| {
+            let norm = (vx * vx + vy * vy + vz * vz).sqrt();
+            if norm > zero_threshold {
+                [vx / norm, vy / norm, vz / norm]
+            } else {
+                [0.0, 0.0, 0.0]
+            }
+        })
+        .collect()
+}
+
+fn check_source_target_bbox_overlap(
+    dims: [usize; 3],
+    src_origin: [f64; 3],
+    src_spacing: [f64; 3],
+    origin_explicit: bool,
+    active_points: &[[f64; 3]],
+) -> Result<Vec<String>, String> {
+    let mut warnings = Vec::new();
+    if active_points.is_empty() {
+        return Ok(warnings);
+    }
+    let src_min = src_origin;
+    let src_max = [
+        src_origin[0] + (dims[0] as f64) * src_spacing[0],
+        src_origin[1] + (dims[1] as f64) * src_spacing[1],
+        src_origin[2] + (dims[2] as f64) * src_spacing[2],
+    ];
+    let tol = [
+        1.0e-9 * src_spacing[0],
+        1.0e-9 * src_spacing[1],
+        1.0e-9 * src_spacing[2],
+    ];
+    let mut out_count = 0usize;
+    let mut dst_min = [f64::INFINITY; 3];
+    let mut dst_max = [f64::NEG_INFINITY; 3];
+    for pt in active_points {
+        for a in 0..3 {
+            dst_min[a] = dst_min[a].min(pt[a]);
+            dst_max[a] = dst_max[a].max(pt[a]);
+        }
+        let inside = (0..3).all(|a| pt[a] >= src_min[a] - tol[a] && pt[a] <= src_max[a] + tol[a]);
+        if !inside {
+            out_count += 1;
+        }
+    }
+    if out_count == active_points.len() {
+        return Err(format!(
+            "source grid bounding box [{:.3e}..{:.3e}, {:.3e}..{:.3e}, {:.3e}..{:.3e}] m does not overlap target domain [{:.3e}..{:.3e}, {:.3e}..{:.3e}, {:.3e}..{:.3e}] m; check source origin (e.g. [0, L] vs centered [-L/2, L/2])",
+            src_min[0], src_max[0], src_min[1], src_max[1], src_min[2], src_max[2],
+            dst_min[0], dst_max[0], dst_min[1], dst_max[1], dst_min[2], dst_max[2],
+        ));
+    }
+    if !origin_explicit {
+        warnings.push(
+            "source grid_origin was omitted in artifact metadata and defaulted to [0, 0, 0] m; verify alignment against centered target geometry".to_string(),
+        );
+    }
+    if out_count > 0 {
+        warnings.push(format!(
+            "{out_count} of {} active target points lie outside source grid bounds [{:.3e}..{:.3e}, {:.3e}..{:.3e}, {:.3e}..{:.3e}] m and were clamped to boundary cells",
+            active_points.len(),
+            src_min[0], src_max[0], src_min[1], src_max[1], src_min[2], src_max[2],
+        ));
+    }
+    Ok(warnings)
+}
+
+fn nearest_nonzero_grid_vector(
+    values: &[[f64; 3]],
+    dims: [usize; 3],
+    origin: [f64; 3],
+    spacing: [f64; 3],
+    point: [f64; 3],
+    zero_threshold: f64,
+) -> [f64; 3] {
+    const DETERMINISTIC_UNIT_FALLBACK: [f64; 3] = [0.0, 0.0, 1.0];
+    let [nx, ny, nz] = dims;
+    let clamp_idx = |coord: f64, orig: f64, step: f64, n: usize| -> usize {
+        ((coord - orig) / step).floor().clamp(0.0, (n - 1) as f64) as usize
+    };
+    let ix = clamp_idx(point[0], origin[0], spacing[0], nx);
+    let iy = clamp_idx(point[1], origin[1], spacing[1], ny);
+    let iz = clamp_idx(point[2], origin[2], spacing[2], nz);
+    let flat = |x: usize, y: usize, z: usize| x + nx * (y + ny * z);
+    let norm = |v: [f64; 3]| (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt();
+
+    let center_vec = values[flat(ix, iy, iz)];
+    if norm(center_vec) > zero_threshold {
+        return center_vec;
+    }
+
+    let mut best: Option<[f64; 3]> = None;
+    let mut best_dist_sq = f64::INFINITY;
+    let max_shell = nx.max(ny).max(nz).saturating_sub(1) as isize;
+    let mut found_shell = 0isize;
+
+    for r in 1..=max_shell {
+        let z_lo = (iz as isize - r).max(0) as usize;
+        let z_hi = (iz as isize + r).min(nz as isize - 1) as usize;
+        let y_lo = (iy as isize - r).max(0) as usize;
+        let y_hi = (iy as isize + r).min(ny as isize - 1) as usize;
+        let x_lo = (ix as isize - r).max(0) as usize;
+        let x_hi = (ix as isize + r).min(nx as isize - 1) as usize;
+
+        for jz in z_lo..=z_hi {
+            let on_z = (jz as isize - iz as isize).abs() == r;
+            let cz = origin[2] + (jz as f64 + 0.5) * spacing[2];
+            for jy in y_lo..=y_hi {
+                let on_yz = on_z || (jy as isize - iy as isize).abs() == r;
+                let cy = origin[1] + (jy as f64 + 0.5) * spacing[1];
+                for jx in x_lo..=x_hi {
+                    if !on_yz && (jx as isize - ix as isize).abs() != r {
+                        continue;
+                    }
+                    let cand = values[flat(jx, jy, jz)];
+                    if norm(cand) <= zero_threshold {
+                        continue;
+                    }
+                    let cx = origin[0] + (jx as f64 + 0.5) * spacing[0];
+                    let dist_sq = (point[0] - cx).powi(2)
+                        + (point[1] - cy).powi(2)
+                        + (point[2] - cz).powi(2);
+                    if dist_sq < best_dist_sq {
+                        best_dist_sq = dist_sq;
+                        best = Some(cand);
+                    }
+                }
+            }
+        }
+        if best.is_some() {
+            found_shell = r;
+            break;
+        }
+    }
+
+    let Some(mut best_vec) = best else {
+        return DETERMINISTIC_UNIT_FALLBACK;
+    };
+
+    let best_dist = best_dist_sq.sqrt();
+    let rx = ((best_dist / spacing[0]).ceil() as isize) + 1;
+    let ry = ((best_dist / spacing[1]).ceil() as isize) + 1;
+    let rz = ((best_dist / spacing[2]).ceil() as isize) + 1;
+    let z_lo = (iz as isize - rz).max(0) as usize;
+    let z_hi = (iz as isize + rz).min(nz as isize - 1) as usize;
+    let y_lo = (iy as isize - ry).max(0) as usize;
+    let y_hi = (iy as isize + ry).min(ny as isize - 1) as usize;
+    let x_lo = (ix as isize - rx).max(0) as usize;
+    let x_hi = (ix as isize + rx).min(nx as isize - 1) as usize;
+
+    for jz in z_lo..=z_hi {
+        let dz_abs = (jz as isize - iz as isize).abs();
+        let cz = origin[2] + (jz as f64 + 0.5) * spacing[2];
+        for jy in y_lo..=y_hi {
+            let dy_abs = (jy as isize - iy as isize).abs();
+            let cy = origin[1] + (jy as f64 + 0.5) * spacing[1];
+            for jx in x_lo..=x_hi {
+                let dx_abs = (jx as isize - ix as isize).abs();
+                if dx_abs.max(dy_abs).max(dz_abs) <= found_shell {
+                    continue;
+                }
+                let cand = values[flat(jx, jy, jz)];
+                if norm(cand) <= zero_threshold {
+                    continue;
+                }
+                let cx = origin[0] + (jx as f64 + 0.5) * spacing[0];
+                let dist_sq = (point[0] - cx).powi(2)
+                    + (point[1] - cy).powi(2)
+                    + (point[2] - cz).powi(2);
+                if dist_sq < best_dist_sq {
+                    best_dist_sq = dist_sq;
+                    best_vec = cand;
+                }
+            }
+        }
+    }
+    best_vec
+}
+
+fn validate_source_grid_for_resampling(
+    artifact: &FieldStateJsonArtifact,
+) -> Result<([usize; 3], [f64; 3], [f64; 3]), String> {
+    if artifact.values.iter().flatten().any(|v| !v.is_finite()) {
+        return Err("source field-state values must be finite".to_string());
+    }
+    let dims = artifact
+        .grid_shape
+        .ok_or_else(|| "resampling requires source grid_shape metadata".to_string())?;
+    let origin = artifact.grid_origin.unwrap_or([0.0, 0.0, 0.0]);
+    if origin.iter().any(|o| !o.is_finite()) {
+        return Err("source grid_origin must be finite".to_string());
+    }
+    let spacing = artifact
+        .grid_spacing
+        .ok_or_else(|| "resampling requires source grid_spacing metadata".to_string())?;
+    let expected_points = dims[0]
+        .checked_mul(dims[1])
+        .and_then(|v| v.checked_mul(dims[2]));
+    if dims.iter().any(|&n| n == 0) || expected_points != Some(artifact.values.len()) {
+        return Err("source grid_shape does not match source vector count".to_string());
+    }
+    if spacing.iter().any(|&s| !s.is_finite() || s <= 0.0) {
+        return Err("source grid_spacing must be finite and positive".to_string());
+    }
+    Ok((dims, origin, spacing))
+}
+
+fn can_resample_field_state(
+    artifact: &FieldStateJsonArtifact,
+    snapshot: &SessionStateResponse,
+) -> bool {
+    if validate_source_grid_for_resampling(artifact).is_err() {
+        return false;
+    }
+    if crate::router_v2::handlers::sessions::status::is_fem_snapshot(snapshot) {
+        return snapshot
+            .fem_mesh
+            .as_ref()
+            .is_some_and(|mesh| !mesh.nodes.is_empty() && mesh.nodes.iter().flatten().all(|v| v.is_finite()));
+    }
+    if resolve_fdm_multilayer_target_layers(snapshot).is_some() {
+        return true;
+    }
+    active_domain_grid(snapshot)
+        .and_then(|target_grid| resolve_target_fdm_geometry(snapshot, target_grid))
+        .is_some()
+}
+
+fn sample_field_state_at_point(
+    values: &[[f64; 3]],
+    dims: [usize; 3],
+    origin: [f64; 3],
+    spacing: [f64; 3],
+    pt: [f64; 3],
+    interpolation: &str,
+    normalize: bool,
+) -> [f64; 3] {
+    const ZERO_THRESHOLD: f64 = 1.0e-12;
+    let [nx, ny, nz] = dims;
+    let flat_src = |x: usize, y: usize, z: usize| x + nx * (y + ny * z);
+    let normalize_unit = |v: [f64; 3]| -> [f64; 3] {
+        let len = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt();
+        if len > ZERO_THRESHOLD {
+            [v[0] / len, v[1] / len, v[2] / len]
+        } else {
+            [0.0, 0.0, 1.0]
+        }
+    };
+
+    if interpolation == "nearest" {
+        let v = nearest_nonzero_grid_vector(values, dims, origin, spacing, pt, ZERO_THRESHOLD);
+        return if normalize { normalize_unit(v) } else { v };
+    }
+
+    let ux = ((pt[0] - (origin[0] + 0.5 * spacing[0])) / spacing[0]).clamp(0.0, (nx - 1) as f64);
+    let uy = ((pt[1] - (origin[1] + 0.5 * spacing[1])) / spacing[1]).clamp(0.0, (ny - 1) as f64);
+    let uz = ((pt[2] - (origin[2] + 0.5 * spacing[2])) / spacing[2]).clamp(0.0, (nz - 1) as f64);
+    let ix0 = ux.floor() as usize;
+    let iy0 = uy.floor() as usize;
+    let iz0 = uz.floor() as usize;
+    let ix1 = (ix0 + 1).min(nx - 1);
+    let iy1 = (iy0 + 1).min(ny - 1);
+    let iz1 = (iz0 + 1).min(nz - 1);
+    let tx = ux - (ix0 as f64);
+    let ty = uy - (iy0 as f64);
+    let tz = uz - (iz0 as f64);
+
+    let mut acc = [0.0, 0.0, 0.0];
+    let mut weight_sum = 0.0;
+    for (dz_i, jz, wz) in [(0, iz0, 1.0 - tz), (1, iz1, tz)] {
+        if dz_i == 1 && iz1 == iz0 {
+            continue;
+        }
+        let w_z = if iz1 == iz0 { 1.0 } else { wz };
+        for (dy_i, jy, wy) in [(0, iy0, 1.0 - ty), (1, iy1, ty)] {
+            if dy_i == 1 && iy1 == iy0 {
+                continue;
+            }
+            let w_yz = w_z * if iy1 == iy0 { 1.0 } else { wy };
+            for (dx_i, jx, wx) in [(0, ix0, 1.0 - tx), (1, ix1, tx)] {
+                if dx_i == 1 && ix1 == ix0 {
+                    continue;
+                }
+                let w = w_yz * if ix1 == ix0 { 1.0 } else { wx };
+                if w <= 0.0 {
+                    continue;
+                }
+                let c = values[flat_src(jx, jy, jz)];
+                let cnorm = (c[0] * c[0] + c[1] * c[1] + c[2] * c[2]).sqrt();
+                if cnorm <= ZERO_THRESHOLD {
+                    continue;
+                }
+                acc[0] += w * c[0];
+                acc[1] += w * c[1];
+                acc[2] += w * c[2];
+                weight_sum += w;
+            }
+        }
+    }
+    let acc_norm = (acc[0] * acc[0] + acc[1] * acc[1] + acc[2] * acc[2]).sqrt();
+    if acc_norm <= ZERO_THRESHOLD {
+        let fallback =
+            nearest_nonzero_grid_vector(values, dims, origin, spacing, pt, ZERO_THRESHOLD);
+        if normalize {
+            normalize_unit(fallback)
+        } else {
+            fallback
+        }
+    } else if normalize {
+        [acc[0] / acc_norm, acc[1] / acc_norm, acc[2] / acc_norm]
+    } else {
+        let inv_w = if weight_sum > ZERO_THRESHOLD {
+            1.0 / weight_sum
+        } else {
+            1.0
+        };
+        [acc[0] * inv_w, acc[1] * inv_w, acc[2] * inv_w]
+    }
+}
+
+fn resample_field_state_to_grid(
+    artifact: &FieldStateJsonArtifact,
+    target_grid: [usize; 3],
+    target_origin: [f64; 3],
+    target_spacing: [f64; 3],
+    active_mask: Option<&[bool]>,
+    interpolation: &str,
+    normalize: bool,
+) -> Result<(Vec<[f64; 3]>, Vec<String>), String> {
+    if artifact.component_count != 3 {
+        return Err(format!(
+            "field-state resampling requires 3-component vector data (valuedim=3), got valuedim={}",
+            artifact.component_count
+        ));
+    }
+    let (dims, src_origin, src_spacing) = validate_source_grid_for_resampling(artifact)?;
+    let origin_explicit = artifact.grid_origin.is_some() && artifact.origin_explicit.unwrap_or(true);
+    if target_grid.iter().any(|&n| n == 0) {
+        return Err("target grid dimensions must all be positive".to_string());
+    }
+    if target_origin.iter().any(|v| !v.is_finite()) {
+        return Err("target grid origin must be finite".to_string());
+    }
+    if target_spacing.iter().any(|&s| !s.is_finite() || s <= 0.0) {
+        return Err("target grid spacing must be finite and positive".to_string());
+    }
+    let [tnx, tny, tnz] = target_grid;
+    let total_cells = tnx
+        .checked_mul(tny)
+        .and_then(|v| v.checked_mul(tnz))
+        .ok_or_else(|| "target grid dimensions overflow".to_string())?;
+    let mut active_pts = Vec::with_capacity(total_cells);
+    let mut output = Vec::with_capacity(total_cells);
+    for z in 0..tnz {
+        let pz = target_origin[2] + (z as f64 + 0.5) * target_spacing[2];
+        for y in 0..tny {
+            let py = target_origin[1] + (y as f64 + 0.5) * target_spacing[1];
+            for x in 0..tnx {
+                let flat_dst = x + tnx * (y + tny * z);
+                if active_mask.is_some_and(|mask| mask.get(flat_dst) == Some(&false)) {
+                    output.push([0.0, 0.0, 0.0]);
+                    continue;
+                }
+                let px = target_origin[0] + (x as f64 + 0.5) * target_spacing[0];
+                let pt = [px, py, pz];
+                active_pts.push(pt);
+                output.push(sample_field_state_at_point(
+                    &artifact.values,
+                    dims,
+                    src_origin,
+                    src_spacing,
+                    pt,
+                    interpolation,
+                    normalize,
+                ));
+            }
+        }
+    }
+    let warnings =
+        check_source_target_bbox_overlap(dims, src_origin, src_spacing, origin_explicit, &active_pts)?;
+    Ok((output, warnings))
+}
+
+fn resample_field_state_to_snapshot_domain(
+    artifact: &FieldStateJsonArtifact,
+    snapshot: &SessionStateResponse,
+    interpolation: &str,
+    normalize: bool,
+) -> Result<(Vec<[f64; 3]>, Vec<String>), String> {
+    if artifact.component_count != 3 {
+        return Err(format!(
+            "field-state resampling requires 3-component vector data (valuedim=3), got valuedim={}",
+            artifact.component_count
+        ));
+    }
+    let (dims, src_origin, src_spacing) = validate_source_grid_for_resampling(artifact)?;
+    let origin_explicit = artifact.grid_origin.is_some() && artifact.origin_explicit.unwrap_or(true);
+    if crate::router_v2::handlers::sessions::status::is_fem_snapshot(snapshot) {
+        let mesh = snapshot
+            .fem_mesh
+            .as_ref()
+            .ok_or_else(|| "resampling onto FEM target requires a materialized FEM mesh".to_string())?;
+        if mesh.nodes.is_empty() {
+            return Err("target FEM mesh contains no nodes".to_string());
+        }
+        if mesh.nodes.iter().flatten().any(|v| !v.is_finite()) {
+            return Err("target FEM mesh contains non-finite node coordinates".to_string());
+        }
+        let existing_count = snapshot
+            .live_state
+            .as_ref()
+            .and_then(|state| state.latest_step.magnetization.as_ref())
+            .map(|values| values.len() / 3);
+        let mag_indices =
+            crate::router_v2::handlers::data::field_resolution::fem_magnetic_node_indices(mesh);
+        if let Some(indices) = mag_indices
+            .as_ref()
+            .filter(|indices| existing_count == Some(indices.len()) && indices.len() != mesh.nodes.len())
+        {
+            let mut active_pts = Vec::with_capacity(indices.len());
+            let mut output = Vec::with_capacity(indices.len());
+            for &node_idx in indices {
+                let pt = *mesh
+                    .nodes
+                    .get(node_idx as usize)
+                    .ok_or_else(|| "FEM magnetic node index out of bounds".to_string())?;
+                active_pts.push(pt);
+                output.push(sample_field_state_at_point(
+                    &artifact.values,
+                    dims,
+                    src_origin,
+                    src_spacing,
+                    pt,
+                    interpolation,
+                    normalize,
+                ));
+            }
+            let warnings = check_source_target_bbox_overlap(
+                dims,
+                src_origin,
+                src_spacing,
+                origin_explicit,
+                &active_pts,
+            )?;
+            return Ok((output, warnings));
+        }
+        if let Some(existing) = existing_count {
+            if existing != mesh.nodes.len() {
+                return Err(format!(
+                    "active FEM magnetization vector count {existing} does not match FEM mesh node count {}",
+                    mesh.nodes.len()
+                ));
+            }
+        }
+        let mut active_pts = Vec::new();
+        let mut output = vec![[0.0, 0.0, 0.0]; mesh.nodes.len()];
+        if let Some(indices) = mag_indices {
+            active_pts.reserve(indices.len());
+            for node_idx in indices {
+                let idx = node_idx as usize;
+                let pt = *mesh
+                    .nodes
+                    .get(idx)
+                    .ok_or_else(|| "FEM magnetic node index out of bounds".to_string())?;
+                active_pts.push(pt);
+                output[idx] = sample_field_state_at_point(
+                    &artifact.values,
+                    dims,
+                    src_origin,
+                    src_spacing,
+                    pt,
+                    interpolation,
+                    normalize,
+                );
+            }
+        } else {
+            active_pts.extend_from_slice(&mesh.nodes);
+            for (idx, &pt) in mesh.nodes.iter().enumerate() {
+                output[idx] = sample_field_state_at_point(
+                    &artifact.values,
+                    dims,
+                    src_origin,
+                    src_spacing,
+                    pt,
+                    interpolation,
+                    normalize,
+                );
+            }
+        }
+        let warnings = check_source_target_bbox_overlap(
+            dims,
+            src_origin,
+            src_spacing,
+            origin_explicit,
+            &active_pts,
+        )?;
+        return Ok((output, warnings));
+    }
+
+    if let Some(layers) = resolve_fdm_multilayer_target_layers(snapshot) {
+        let total_cells = layers
+            .iter()
+            .try_fold(0usize, |acc, layer| {
+                layer.dims[0]
+                    .checked_mul(layer.dims[1])
+                    .and_then(|v| v.checked_mul(layer.dims[2]))
+                    .and_then(|v| acc.checked_add(v))
+            })
+            .ok_or_else(|| "multilayer FDM target grid dimensions overflow".to_string())?;
+        let mut output = Vec::with_capacity(total_cells);
+        let mut all_warnings = Vec::new();
+        for layer in &layers {
+            let (layer_values, layer_warnings) = resample_field_state_to_grid(
+                artifact,
+                layer.dims,
+                layer.origin,
+                layer.spacing,
+                layer.active_mask.as_deref(),
+                interpolation,
+                normalize,
+            )?;
+            output.extend(layer_values);
+            for w in layer_warnings {
+                if !all_warnings.contains(&w) {
+                    all_warnings.push(w);
+                }
+            }
+        }
+        return Ok((output, all_warnings));
+    }
+
+    let target_grid = active_domain_grid(snapshot)
+        .ok_or_else(|| "grid resampling requires an active target grid or FEM mesh".to_string())?;
+    let (target_origin, target_spacing) = resolve_target_fdm_geometry(snapshot, target_grid)
+        .ok_or_else(|| {
+            "grid resampling requires target grid physical geometry (origin_m and cell_size)"
+                .to_string()
+        })?;
+    let total_cells = target_grid[0]
+        .checked_mul(target_grid[1])
+        .and_then(|v| v.checked_mul(target_grid[2]))
+        .ok_or_else(|| "target grid dimensions overflow".to_string())?;
+    let active_mask = resolve_target_fdm_active_mask(snapshot, total_cells);
+    resample_field_state_to_grid(
+        artifact,
+        target_grid,
+        target_origin,
+        target_spacing,
+        active_mask.as_deref(),
+        interpolation,
+        normalize,
+    )
 }
 
 fn convert_field_state_with_python(

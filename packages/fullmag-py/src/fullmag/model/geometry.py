@@ -885,7 +885,691 @@ class CPWAntennaLayout(_AntennaLayoutGeometry):
         )
 
 
-AntennaLayout: TypeAlias = MicrostripAntennaLayout | CPWAntennaLayout
+def _path_strip_sections(
+    transform: RigidTransform,
+    centerline: Sequence[tuple[float, float, float]],
+    widths: Sequence[float],
+    thickness_m: float,
+    part_id: str,
+) -> tuple[dict[str, object], ...]:
+    """Generate rectangular conductor cross-sections along a 3D centerline using parallel transport."""
+    n = len(centerline)
+    if n < 2:
+        raise ValueError("conductor centerline requires at least two points")
+
+    def _sub(a: tuple[float, float, float], b: tuple[float, float, float]) -> tuple[float, float, float]:
+        return (a[0] - b[0], a[1] - b[1], a[2] - b[2])
+
+    def _add(a: tuple[float, float, float], b: tuple[float, float, float]) -> tuple[float, float, float]:
+        return (a[0] + b[0], a[1] + b[1], a[2] + b[2])
+
+    def _scale(v: tuple[float, float, float], s: float) -> tuple[float, float, float]:
+        return (v[0] * s, v[1] * s, v[2] * s)
+
+    def _dot(a: tuple[float, float, float], b: tuple[float, float, float]) -> float:
+        return a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
+
+    def _cross(a: tuple[float, float, float], b: tuple[float, float, float]) -> tuple[float, float, float]:
+        return (
+            a[1] * b[2] - a[2] * b[1],
+            a[2] * b[0] - a[0] * b[2],
+            a[0] * b[1] - a[1] * b[0],
+        )
+
+    def _unit(v: tuple[float, float, float]) -> tuple[float, float, float]:
+        length = math.sqrt(_dot(v, v))
+        if length <= 1e-18:
+            return (1.0, 0.0, 0.0)
+        return (v[0] / length, v[1] / length, v[2] / length)
+
+    seg_tangents = [_unit(_sub(centerline[i + 1], centerline[i])) for i in range(n - 1)]
+    tangents: list[tuple[float, float, float]] = []
+    for i in range(n):
+        if i == 0:
+            tangents.append(seg_tangents[0])
+        elif i == n - 1:
+            tangents.append(seg_tangents[-1])
+        else:
+            avg = _add(seg_tangents[i - 1], seg_tangents[i])
+            if math.sqrt(_dot(avg, avg)) <= 1e-12:
+                tangents.append(seg_tangents[i])
+            else:
+                tangents.append(_unit(avg))
+
+    # Initialize orthonormal thickness axis B (prefer +Z when tangent is planar in XY)
+    t0 = tangents[0]
+    ref_b = (0.0, 0.0, 1.0) if abs(t0[2]) < 0.9 else (0.0, 1.0, 0.0)
+    n0 = _unit(_cross(ref_b, t0))
+    b0 = _unit(_cross(t0, n0))
+
+    frames: list[tuple[tuple[float, float, float], tuple[float, float, float], tuple[float, float, float]]] = [
+        (t0, n0, b0)
+    ]
+    for i in range(1, n):
+        prev_t, prev_n, prev_b = frames[-1]
+        cur_t = tangents[i]
+        # Parallel transport previous normal & binormal to new tangent
+        proj_n = _sub(prev_n, _scale(cur_t, _dot(prev_n, cur_t)))
+        if math.sqrt(_dot(proj_n, proj_n)) > 1e-12:
+            cur_n = _unit(proj_n)
+            cur_b = _unit(_cross(cur_t, cur_n))
+        else:
+            proj_b = _sub(prev_b, _scale(cur_t, _dot(prev_b, cur_t)))
+            cur_b = _unit(proj_b) if math.sqrt(_dot(proj_b, proj_b)) > 1e-12 else (0.0, 0.0, 1.0)
+            cur_n = _unit(_cross(cur_b, cur_t))
+        frames.append((cur_t, cur_n, cur_b))
+
+    half_t = 0.5 * thickness_m
+    total_len = 0.0
+    cum_lengths = [0.0]
+    for i in range(n - 1):
+        d = _sub(centerline[i + 1], centerline[i])
+        total_len += math.sqrt(_dot(d, d))
+        cum_lengths.append(total_len)
+
+    sections = []
+    for i, point in enumerate(centerline):
+        _, cur_n, cur_b = frames[i]
+        half_w = 0.5 * widths[i]
+        # Scale miter slightly at sharp 90-deg turns so width stays uniform
+        miter_scale = 1.0
+        if 0 < i < n - 1:
+            cos_half = max(0.35, min(1.0, _dot(seg_tangents[i], tangents[i])))
+            miter_scale = min(1.0 / cos_half, 1.6)
+        nw = _scale(cur_n, half_w * miter_scale)
+        tb = _scale(cur_b, half_t)
+        local_quad = (
+            _sub(_sub(point, nw), tb),
+            _sub(_add(point, nw), tb),
+            _add(_add(point, nw), tb),
+            _add(_sub(point, nw), tb),
+        )
+        world_quad = tuple(transform.apply(v) for v in local_quad)
+        s_val = cum_lengths[i] / total_len if total_len > 0.0 else float(i) / max(n - 1, 1)
+        sections.append(
+            {
+                "s": s_val,
+                "u_m": cum_lengths[i],
+                "conductors": {part_id: world_quad},
+                "vertices": world_quad,
+            }
+        )
+    return tuple(sections)
+
+
+@dataclass(frozen=True, slots=True, init=False)
+class MeanderAntennaLayout(_AntennaLayoutGeometry):
+    """3-D serpentine meander grating antenna for narrow-k spin-wave excitation."""
+
+    name: str
+    length_m: float
+    signal_width_m: float
+    thickness_m: float
+    conductivity_s_per_m: float
+    finger_count: int
+    pitch_m: float
+    bend_radius_m: float
+    transform: RigidTransform
+    signal_part_id: str
+
+    def __init__(
+        self,
+        name: str,
+        length_m: float | None = None,
+        signal_width_m: float | None = None,
+        thickness_m: float | None = None,
+        conductivity_s_per_m: float | None = None,
+        finger_count: int = 4,
+        pitch_m: float | None = None,
+        bend_radius_m: float = 0.0,
+        transform: RigidTransform | None = None,
+        signal_part_id: str = "signal",
+        *,
+        length: float | None = None,
+        width: float | None = None,
+        thickness: float | None = None,
+        conductivity: float | None = None,
+        pitch: float | None = None,
+        bend_radius: float | None = None,
+    ) -> None:
+        resolved_length = _antenna_alias(length_m, length, "length_m")
+        resolved_width = _antenna_alias(signal_width_m, width, "signal_width_m")
+        resolved_thickness = _antenna_alias(thickness_m, thickness, "thickness_m")
+        resolved_conductivity = _antenna_alias(conductivity_s_per_m, conductivity, "conductivity_s_per_m")
+        resolved_pitch = _antenna_alias(pitch_m, pitch, "pitch_m")
+        resolved_bend = bend_radius if bend_radius is not None else bend_radius_m
+        if any(
+            value is None
+            for value in (resolved_length, resolved_width, resolved_thickness, resolved_conductivity, resolved_pitch)
+        ):
+            raise TypeError(
+                "MeanderAntennaLayout requires length_m, signal_width_m, thickness_m, conductivity_s_per_m, and pitch_m"
+            )
+        if isinstance(finger_count, bool) or not isinstance(finger_count, int) or not (2 <= finger_count <= 64):
+            raise ValueError("finger_count must be an integer in [2, 64]")
+        val_length = _antenna_positive(resolved_length, "length_m")
+        val_width = _antenna_positive(resolved_width, "signal_width_m")
+        val_thickness = _antenna_positive(resolved_thickness, "thickness_m")
+        val_conductivity = _antenna_positive(resolved_conductivity, "conductivity_s_per_m")
+        val_pitch = _antenna_positive(resolved_pitch, "pitch_m")
+        val_bend = float(resolved_bend)
+        if not math.isfinite(val_bend) or val_bend < 0.0:
+            raise ValueError("bend_radius_m must be finite and non-negative")
+        if val_pitch <= val_width:
+            raise ValueError("pitch_m must be strictly greater than signal_width_m")
+        if 2.0 * val_bend + val_width > val_pitch + 1.0e-15:
+            raise ValueError(
+                "bend_radius_m causes meander self-intersection: require 2 * bend_radius_m + signal_width_m <= pitch_m"
+            )
+        resolved_transform = RigidTransform.identity() if transform is None else transform
+        if not isinstance(resolved_transform, RigidTransform):
+            raise TypeError("transform must be a RigidTransform")
+        object.__setattr__(self, "name", require_non_empty(name, "name"))
+        object.__setattr__(self, "length_m", val_length)
+        object.__setattr__(self, "signal_width_m", val_width)
+        object.__setattr__(self, "thickness_m", val_thickness)
+        object.__setattr__(self, "conductivity_s_per_m", val_conductivity)
+        object.__setattr__(self, "finger_count", finger_count)
+        object.__setattr__(self, "pitch_m", val_pitch)
+        object.__setattr__(self, "bend_radius_m", val_bend)
+        object.__setattr__(self, "transform", resolved_transform)
+        object.__setattr__(self, "signal_part_id", require_non_empty(signal_part_id, "signal_part_id"))
+
+    @property
+    def geometry_name(self) -> str:
+        return self.name
+
+    @property
+    def conductor_part_ids(self) -> tuple[str, ...]:
+        return (self.signal_part_id,)
+
+    @property
+    def dominant_wavenumber_rad_per_m(self) -> float:
+        return math.pi / self.pitch_m
+
+    def _sections(self) -> tuple[dict[str, object], ...]:
+        half_l = 0.5 * self.length_m
+        v_offset = 0.5 * (self.finger_count - 1) * self.pitch_m
+        pts: list[tuple[float, float, float]] = []
+        r_arc = self.bend_radius_m
+        arc_steps = 6
+        for k in range(self.finger_count):
+            vk = k * self.pitch_m - v_offset
+            u_start, u_end = (-half_l, half_l) if k % 2 == 0 else (half_l, -half_l)
+            if k == 0:
+                pts.append((u_start, vk, 0.0))
+            pts.append((u_end, vk, 0.0))
+            if k < self.finger_count - 1:
+                v_next = (k + 1) * self.pitch_m - v_offset
+                v_mid = 0.5 * (vk + v_next)
+                if r_arc > 0.0:
+                    sign_u = 1.0 if k % 2 == 0 else -1.0
+                    # Smooth semicircular U-turn centered at (u_end, v_mid)
+                    r_turn = 0.5 * self.pitch_m
+                    for step in range(1, arc_steps):
+                        theta = -0.5 * math.pi + math.pi * (step / arc_steps)
+                        pts.append(
+                            (
+                                u_end + sign_u * r_arc * math.cos(theta),
+                                v_mid + r_turn * math.sin(theta),
+                                0.0,
+                            )
+                        )
+                pts.append((u_end, v_next, 0.0))
+        return _path_strip_sections(
+            self.transform,
+            pts,
+            [self.signal_width_m] * len(pts),
+            self.thickness_m,
+            self.signal_part_id,
+        )
+
+    def to_ir(self) -> dict[str, object]:
+        return {
+            "name": self.name,
+            "kind": "meander",
+            "length_m": self.length_m,
+            "signal_width_m": self.signal_width_m,
+            "thickness_m": self.thickness_m,
+            "conductivity_s_per_m": self.conductivity_s_per_m,
+            "finger_count": self.finger_count,
+            "pitch_m": self.pitch_m,
+            "bend_radius_m": self.bend_radius_m,
+            "transform": self.transform.to_ir(),
+            "conductors": [{"id": self.signal_part_id, "kind": "signal"}],
+            "terminal_faces": {
+                self.signal_part_id: {"inlet": "local_u_min", "outlet": "local_u_max"}
+            },
+        }
+
+    @classmethod
+    def from_ir(cls, value: Mapping[str, object]) -> "MeanderAntennaLayout":
+        if value.get("kind") not in {"meander", "MeanderAntennaLayout", None}:
+            raise ValueError("meander layout kind is required")
+        (signal_id,) = _antenna_conductor_ids(value.get("conductors", ()), ("signal",))
+        return cls(
+            name=str(value["name"]),
+            length_m=value.get("length_m", value.get("length")),  # type: ignore[arg-type]
+            signal_width_m=value.get("signal_width_m", value.get("width")),  # type: ignore[arg-type]
+            thickness_m=value.get("thickness_m", value.get("thickness")),  # type: ignore[arg-type]
+            conductivity_s_per_m=value.get("conductivity_s_per_m", value.get("conductivity")),  # type: ignore[arg-type]
+            finger_count=int(value.get("finger_count", 4)),  # type: ignore[arg-type]
+            pitch_m=value.get("pitch_m", value.get("pitch")),  # type: ignore[arg-type]
+            bend_radius_m=float(value.get("bend_radius_m", 0.0)),  # type: ignore[arg-type]
+            transform=RigidTransform.from_ir(value.get("transform", RigidTransform.identity().to_ir())),  # type: ignore[arg-type]
+            signal_part_id=signal_id,
+        )
+
+
+@dataclass(frozen=True, slots=True, init=False)
+class InductiveLoopLayout(_AntennaLayoutGeometry):
+    """3-D circular, rounded-rectangular, or omega-shaped micro-coil antenna."""
+
+    name: str
+    loop_shape: Literal["circular", "rectangular", "omega"]
+    inner_radius_m: float
+    signal_width_m: float
+    thickness_m: float
+    conductivity_s_per_m: float
+    turns: int
+    bend_radius_m: float
+    feed_gap_m: float
+    pitch_m: float
+    transform: RigidTransform
+    signal_part_id: str
+
+    def __init__(
+        self,
+        name: str,
+        loop_shape: Literal["circular", "rectangular", "omega"] = "circular",
+        inner_radius_m: float | None = None,
+        signal_width_m: float | None = None,
+        thickness_m: float | None = None,
+        conductivity_s_per_m: float | None = None,
+        turns: int = 1,
+        bend_radius_m: float = 0.0,
+        feed_gap_m: float | None = None,
+        pitch_m: float | None = None,
+        transform: RigidTransform | None = None,
+        signal_part_id: str = "signal",
+        *,
+        inner_radius: float | None = None,
+        width: float | None = None,
+        thickness: float | None = None,
+        conductivity: float | None = None,
+    ) -> None:
+        if loop_shape not in ("circular", "rectangular", "omega"):
+            raise ValueError("loop_shape must be 'circular', 'rectangular', or 'omega'")
+        resolved_radius = _antenna_alias(inner_radius_m, inner_radius, "inner_radius_m")
+        resolved_width = _antenna_alias(signal_width_m, width, "signal_width_m")
+        resolved_thickness = _antenna_alias(thickness_m, thickness, "thickness_m")
+        resolved_conductivity = _antenna_alias(conductivity_s_per_m, conductivity, "conductivity_s_per_m")
+        if any(
+            value is None
+            for value in (resolved_radius, resolved_width, resolved_thickness, resolved_conductivity)
+        ):
+            raise TypeError(
+                "InductiveLoopLayout requires inner_radius_m, signal_width_m, thickness_m, and conductivity_s_per_m"
+            )
+        if isinstance(turns, bool) or not isinstance(turns, int) or not (1 <= turns <= 16):
+            raise ValueError("turns must be an integer in [1, 16]")
+        val_radius = _antenna_positive(resolved_radius, "inner_radius_m")
+        val_width = _antenna_positive(resolved_width, "signal_width_m")
+        val_thickness = _antenna_positive(resolved_thickness, "thickness_m")
+        val_conductivity = _antenna_positive(resolved_conductivity, "conductivity_s_per_m")
+        val_bend = float(bend_radius_m)
+        if not math.isfinite(val_bend) or val_bend < 0.0:
+            raise ValueError("bend_radius_m must be finite and non-negative")
+        if loop_shape == "rectangular" and val_bend > val_radius + 1.0e-15:
+            raise ValueError("bend_radius_m must not exceed inner_radius_m for rectangular loops")
+        val_gap = (
+            min(0.5 * val_radius, val_width)
+            if feed_gap_m is None
+            else _antenna_positive(feed_gap_m, "feed_gap_m")
+        )
+        if val_gap >= 2.0 * val_radius:
+            raise ValueError("feed_gap_m must be strictly smaller than 2 * inner_radius_m")
+        val_pitch = (
+            2.0 * val_width
+            if pitch_m is None
+            else _antenna_positive(pitch_m, "pitch_m")
+        )
+        if turns > 1 and val_pitch <= val_width:
+            raise ValueError("pitch_m must exceed signal_width_m for multi-turn loops")
+        resolved_transform = RigidTransform.identity() if transform is None else transform
+        if not isinstance(resolved_transform, RigidTransform):
+            raise TypeError("transform must be a RigidTransform")
+        object.__setattr__(self, "name", require_non_empty(name, "name"))
+        object.__setattr__(self, "loop_shape", loop_shape)
+        object.__setattr__(self, "inner_radius_m", val_radius)
+        object.__setattr__(self, "signal_width_m", val_width)
+        object.__setattr__(self, "thickness_m", val_thickness)
+        object.__setattr__(self, "conductivity_s_per_m", val_conductivity)
+        object.__setattr__(self, "turns", turns)
+        object.__setattr__(self, "bend_radius_m", val_bend)
+        object.__setattr__(self, "feed_gap_m", val_gap)
+        object.__setattr__(self, "pitch_m", val_pitch)
+        object.__setattr__(self, "transform", resolved_transform)
+        object.__setattr__(self, "signal_part_id", require_non_empty(signal_part_id, "signal_part_id"))
+
+    @property
+    def geometry_name(self) -> str:
+        return self.name
+
+    @property
+    def length_m(self) -> float:
+        return 2.0 * math.pi * (self.inner_radius_m + 0.5 * self.signal_width_m) * self.turns
+
+    @property
+    def conductor_part_ids(self) -> tuple[str, ...]:
+        return (self.signal_part_id,)
+
+    def _sections(self) -> tuple[dict[str, object], ...]:
+        r0 = self.inner_radius_m + 0.5 * self.signal_width_m
+        pts: list[tuple[float, float, float]] = []
+        if self.loop_shape in ("circular", "omega"):
+            half_gap_angle = math.asin(min(0.45, (0.5 * self.feed_gap_m + 0.5 * self.signal_width_m) / max(r0, 1e-18)))
+            start_angle = math.pi - half_gap_angle
+            sweep = 2.0 * math.pi * self.turns - 2.0 * half_gap_angle
+            steps = max(24, 32 * self.turns)
+            if self.loop_shape == "omega":
+                stem_x = -(r0 + self.inner_radius_m)
+                y_entry = r0 * math.sin(start_angle)
+                pts.append((stem_x, y_entry, 0.0))
+            for i in range(steps + 1):
+                frac = i / steps
+                angle = start_angle - frac * sweep
+                radius = r0 + (self.turns - 1) * self.pitch_m * frac
+                pts.append((radius * math.cos(angle), radius * math.sin(angle), 0.0))
+            if self.loop_shape == "omega":
+                r_end = r0 + (self.turns - 1) * self.pitch_m
+                stem_x = -(r_end + self.inner_radius_m)
+                y_exit = pts[-1][1]
+                pts.append((stem_x, y_exit, 0.0))
+        else:
+            # Rounded rectangular loop opening on the -u side
+            half_gap = 0.5 * self.feed_gap_m + 0.5 * self.signal_width_m
+            for turn in range(self.turns):
+                half = r0 + turn * self.pitch_m
+                f = min(self.bend_radius_m, 0.45 * half)
+                corners = [
+                    (-half, half_gap, 0.0),
+                    (-half, half - f, 0.0),
+                    (-half + f, half, 0.0),
+                    (half - f, half, 0.0),
+                    (half, half - f, 0.0),
+                    (half, -half + f, 0.0),
+                    (half - f, -half, 0.0),
+                    (-half + f, -half, 0.0),
+                    (-half, -half + f, 0.0),
+                    (-half, -half_gap, 0.0),
+                ]
+                for pt in corners:
+                    if not pts or math.dist(pts[-1], pt) > 1e-15:
+                        pts.append(pt)
+        return _path_strip_sections(
+            self.transform,
+            pts,
+            [self.signal_width_m] * len(pts),
+            self.thickness_m,
+            self.signal_part_id,
+        )
+
+    def to_ir(self) -> dict[str, object]:
+        return {
+            "name": self.name,
+            "kind": "inductive_loop",
+            "loop_shape": self.loop_shape,
+            "inner_radius_m": self.inner_radius_m,
+            "signal_width_m": self.signal_width_m,
+            "thickness_m": self.thickness_m,
+            "conductivity_s_per_m": self.conductivity_s_per_m,
+            "turns": self.turns,
+            "bend_radius_m": self.bend_radius_m,
+            "feed_gap_m": self.feed_gap_m,
+            "pitch_m": self.pitch_m,
+            "transform": self.transform.to_ir(),
+            "conductors": [{"id": self.signal_part_id, "kind": "signal"}],
+            "terminal_faces": {
+                self.signal_part_id: {"inlet": "local_u_min", "outlet": "local_u_max"}
+            },
+        }
+
+    @classmethod
+    def from_ir(cls, value: Mapping[str, object]) -> "InductiveLoopLayout":
+        if value.get("kind") not in {"inductive_loop", "InductiveLoopLayout", None}:
+            raise ValueError("inductive_loop layout kind is required")
+        (signal_id,) = _antenna_conductor_ids(value.get("conductors", ()), ("signal",))
+        return cls(
+            name=str(value["name"]),
+            loop_shape=str(value.get("loop_shape", "circular")),  # type: ignore[arg-type]
+            inner_radius_m=value.get("inner_radius_m", value.get("inner_radius")),  # type: ignore[arg-type]
+            signal_width_m=value.get("signal_width_m", value.get("width")),  # type: ignore[arg-type]
+            thickness_m=value.get("thickness_m", value.get("thickness")),  # type: ignore[arg-type]
+            conductivity_s_per_m=value.get("conductivity_s_per_m", value.get("conductivity")),  # type: ignore[arg-type]
+            turns=int(value.get("turns", 1)),  # type: ignore[arg-type]
+            bend_radius_m=float(value.get("bend_radius_m", 0.0)),  # type: ignore[arg-type]
+            feed_gap_m=value.get("feed_gap_m"),  # type: ignore[arg-type]
+            pitch_m=value.get("pitch_m"),  # type: ignore[arg-type]
+            transform=RigidTransform.from_ir(value.get("transform", RigidTransform.identity().to_ir())),  # type: ignore[arg-type]
+            signal_part_id=signal_id,
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class Path3DWaypoint:
+    """Single 3D centerline waypoint for ``PiecewisePath3DLayout``."""
+
+    x_m: float
+    y_m: float
+    z_m: float
+    width_m: float | None = None
+    bend_radius_m: float = 0.0
+
+    def __post_init__(self) -> None:
+        for attr in ("x_m", "y_m", "z_m"):
+            val = float(getattr(self, attr))
+            if not math.isfinite(val):
+                raise ValueError(f"waypoint {attr} must be finite")
+            object.__setattr__(self, attr, val)
+        if self.width_m is not None:
+            object.__setattr__(self, "width_m", _antenna_positive(self.width_m, "width_m"))
+        bend = float(self.bend_radius_m)
+        if not math.isfinite(bend) or bend < 0.0:
+            raise ValueError("waypoint bend_radius_m must be finite and non-negative")
+        object.__setattr__(self, "bend_radius_m", bend)
+
+    def to_ir(self) -> dict[str, float | None]:
+        result: dict[str, float | None] = {
+            "x_m": self.x_m,
+            "y_m": self.y_m,
+            "z_m": self.z_m,
+            "bend_radius_m": self.bend_radius_m,
+        }
+        if self.width_m is not None:
+            result["width_m"] = self.width_m
+        return result
+
+
+@dataclass(frozen=True, slots=True, init=False)
+class PiecewisePath3DLayout(_AntennaLayoutGeometry):
+    """Arbitrary 3-D piecewise conductor path / air-bridge with optional corner fillets."""
+
+    name: str
+    waypoints: tuple[Path3DWaypoint, ...]
+    signal_width_m: float
+    thickness_m: float
+    conductivity_s_per_m: float
+    transform: RigidTransform
+    signal_part_id: str
+
+    def __init__(
+        self,
+        name: str,
+        waypoints: Sequence[Path3DWaypoint | Mapping[str, object] | Sequence[float]],
+        signal_width_m: float | None = None,
+        thickness_m: float | None = None,
+        conductivity_s_per_m: float | None = None,
+        transform: RigidTransform | None = None,
+        signal_part_id: str = "signal",
+        *,
+        width: float | None = None,
+        thickness: float | None = None,
+        conductivity: float | None = None,
+    ) -> None:
+        resolved_width = _antenna_alias(signal_width_m, width, "signal_width_m")
+        resolved_thickness = _antenna_alias(thickness_m, thickness, "thickness_m")
+        resolved_conductivity = _antenna_alias(conductivity_s_per_m, conductivity, "conductivity_s_per_m")
+        if any(value is None for value in (resolved_width, resolved_thickness, resolved_conductivity)):
+            raise TypeError(
+                "PiecewisePath3DLayout requires signal_width_m, thickness_m, and conductivity_s_per_m"
+            )
+        if isinstance(waypoints, (str, bytes)) or not isinstance(waypoints, Sequence) or len(waypoints) < 2:
+            raise ValueError("PiecewisePath3DLayout requires at least two distinct 3D waypoints")
+        normalized_waypoints: list[Path3DWaypoint] = []
+        for entry in waypoints:
+            if isinstance(entry, Path3DWaypoint):
+                wp = entry
+            elif isinstance(entry, Mapping):
+                wp = Path3DWaypoint(
+                    x_m=float(entry.get("x_m", entry.get("x"))),  # type: ignore[arg-type]
+                    y_m=float(entry.get("y_m", entry.get("y"))),  # type: ignore[arg-type]
+                    z_m=float(entry.get("z_m", entry.get("z"))),  # type: ignore[arg-type]
+                    width_m=entry.get("width_m"),  # type: ignore[arg-type]
+                    bend_radius_m=float(entry.get("bend_radius_m", 0.0)),  # type: ignore[arg-type]
+                )
+            elif isinstance(entry, Sequence) and not isinstance(entry, (str, bytes)) and len(entry) == 3:
+                wp = Path3DWaypoint(float(entry[0]), float(entry[1]), float(entry[2]))
+            else:
+                raise TypeError("each waypoint must be a Path3DWaypoint, mapping, or 3-tuple")
+            if normalized_waypoints:
+                prev = normalized_waypoints[-1]
+                if math.dist((prev.x_m, prev.y_m, prev.z_m), (wp.x_m, wp.y_m, wp.z_m)) <= 1.0e-12:
+                    raise ValueError("consecutive 3D waypoints must be distinct")
+            normalized_waypoints.append(wp)
+        resolved_transform = RigidTransform.identity() if transform is None else transform
+        if not isinstance(resolved_transform, RigidTransform):
+            raise TypeError("transform must be a RigidTransform")
+        object.__setattr__(self, "name", require_non_empty(name, "name"))
+        object.__setattr__(self, "waypoints", tuple(normalized_waypoints))
+        object.__setattr__(self, "signal_width_m", _antenna_positive(resolved_width, "signal_width_m"))
+        object.__setattr__(self, "thickness_m", _antenna_positive(resolved_thickness, "thickness_m"))
+        object.__setattr__(self, "conductivity_s_per_m", _antenna_positive(resolved_conductivity, "conductivity_s_per_m"))
+        object.__setattr__(self, "transform", resolved_transform)
+        object.__setattr__(self, "signal_part_id", require_non_empty(signal_part_id, "signal_part_id"))
+
+    @property
+    def geometry_name(self) -> str:
+        return self.name
+
+    @property
+    def length_m(self) -> float:
+        return sum(
+            math.dist(
+                (a.x_m, a.y_m, a.z_m),
+                (b.x_m, b.y_m, b.z_m),
+            )
+            for a, b in zip(self.waypoints, self.waypoints[1:])
+        )
+
+    @property
+    def conductor_part_ids(self) -> tuple[str, ...]:
+        return (self.signal_part_id,)
+
+    def _sections(self) -> tuple[dict[str, object], ...]:
+        raw_pts = [(wp.x_m, wp.y_m, wp.z_m) for wp in self.waypoints]
+        raw_widths = [wp.width_m if wp.width_m is not None else self.signal_width_m for wp in self.waypoints]
+        pts: list[tuple[float, float, float]] = [raw_pts[0]]
+        widths: list[float] = [raw_widths[0]]
+        for idx in range(1, len(raw_pts) - 1):
+            wp = self.waypoints[idx]
+            prev_pt = raw_pts[idx - 1]
+            cur_pt = raw_pts[idx]
+            next_pt = raw_pts[idx + 1]
+            if wp.bend_radius_m > 0.0:
+                len_in = math.dist(prev_pt, cur_pt)
+                len_out = math.dist(cur_pt, next_pt)
+                trim = min(wp.bend_radius_m, 0.4 * len_in, 0.4 * len_out)
+                if trim > 1e-15:
+                    p_in = tuple(
+                        cur_pt[c] + (prev_pt[c] - cur_pt[c]) * (trim / len_in)
+                        for c in range(3)
+                    )
+                    p_out = tuple(
+                        cur_pt[c] + (next_pt[c] - cur_pt[c]) * (trim / len_out)
+                        for c in range(3)
+                    )
+                    # Quadratic Bezier corner fillet across 5 samples
+                    for step in range(5):
+                        t = step / 4.0
+                        omt = 1.0 - t
+                        bez = tuple(
+                            omt * omt * p_in[c] + 2.0 * omt * t * cur_pt[c] + t * t * p_out[c]
+                            for c in range(3)
+                        )
+                        if math.dist(pts[-1], bez) > 1e-15:
+                            pts.append(bez)
+                            widths.append(raw_widths[idx])
+                    continue
+            pts.append(cur_pt)
+            widths.append(raw_widths[idx])
+        if math.dist(pts[-1], raw_pts[-1]) > 1e-15:
+            pts.append(raw_pts[-1])
+            widths.append(raw_widths[-1])
+        return _path_strip_sections(
+            self.transform,
+            pts,
+            widths,
+            self.thickness_m,
+            self.signal_part_id,
+        )
+
+    def to_ir(self) -> dict[str, object]:
+        return {
+            "name": self.name,
+            "kind": "piecewise_3d_path",
+            "waypoints": [wp.to_ir() for wp in self.waypoints],
+            "signal_width_m": self.signal_width_m,
+            "thickness_m": self.thickness_m,
+            "conductivity_s_per_m": self.conductivity_s_per_m,
+            "transform": self.transform.to_ir(),
+            "conductors": [{"id": self.signal_part_id, "kind": "signal"}],
+            "terminal_faces": {
+                self.signal_part_id: {"inlet": "local_u_min", "outlet": "local_u_max"}
+            },
+        }
+
+    @classmethod
+    def from_ir(cls, value: Mapping[str, object]) -> "PiecewisePath3DLayout":
+        if value.get("kind") not in {"piecewise_3d_path", "PiecewisePath3DLayout", None}:
+            raise ValueError("piecewise_3d_path layout kind is required")
+        (signal_id,) = _antenna_conductor_ids(value.get("conductors", ()), ("signal",))
+        return cls(
+            name=str(value["name"]),
+            waypoints=value["waypoints"],  # type: ignore[arg-type]
+            signal_width_m=value.get("signal_width_m", value.get("width")),  # type: ignore[arg-type]
+            thickness_m=value.get("thickness_m", value.get("thickness")),  # type: ignore[arg-type]
+            conductivity_s_per_m=value.get("conductivity_s_per_m", value.get("conductivity")),  # type: ignore[arg-type]
+            transform=RigidTransform.from_ir(value.get("transform", RigidTransform.identity().to_ir())),  # type: ignore[arg-type]
+            signal_part_id=signal_id,
+        )
+
+
+ANTENNA_LAYOUT_TYPES = (
+    MicrostripAntennaLayout,
+    CPWAntennaLayout,
+    MeanderAntennaLayout,
+    InductiveLoopLayout,
+    PiecewisePath3DLayout,
+)
+
+AntennaLayout: TypeAlias = (
+    MicrostripAntennaLayout
+    | CPWAntennaLayout
+    | MeanderAntennaLayout
+    | InductiveLoopLayout
+    | PiecewisePath3DLayout
+)
 
 
 # ---------------------------------------------------------------------------
@@ -1308,6 +1992,9 @@ Geometry: TypeAlias = (
     | Translate
     | MicrostripAntennaLayout
     | CPWAntennaLayout
+    | MeanderAntennaLayout
+    | InductiveLoopLayout
+    | PiecewisePath3DLayout
 )
 
 

@@ -446,6 +446,7 @@ interface OrbitCameraControlsProps {
   orbitDebugStore?: Viewport3DOrbitDebugStore;
   tracker: Viewport3DResourceTracker;
   interactionBlocked?: boolean;
+  rotateLocked?: boolean;
   /** "camera" flies and looks around from the camera; "object" orbits the target. */
   rotationMode?: Viewport3DRotationModeForFly;
 }
@@ -465,13 +466,14 @@ function useOrbitCameraControlsModel({
   orbitDebugStore,
   tracker,
   interactionBlocked = false,
+  rotateLocked = false,
   rotationMode = "object",
 }: OrbitCameraControlsProps) {
   const { camera, size } = useThree();
   const invalidate = useBatchedInvalidate("camera");
   const gl = useThree((state) => state.gl);
   const controlsRef = useRef<OrbitControlsHandle>(null);
-  const options = resolveViewport3DCameraInteractionOptions();
+  const options = resolveViewport3DCameraInteractionOptions({ rotateLocked });
   const handledOrbitDebugRevisionRef = useRef(orbitDebugRevision);
   const handledOrbitDebugCommitRevisionRef = useRef(orbitDebugCommitRevision);
   const pendingOrbitDebugCommitRevisionRef = useRef(orbitDebugCommitRevision);

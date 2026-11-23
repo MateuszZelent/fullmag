@@ -4,6 +4,7 @@ import { useMemo } from "react";
 
 import * as geometryLifecycleResources from "@/kernel/resources/geometryLifecycleResources";
 import { useSessionStatusSelector } from "@/kernel/resources/useSessionStatus";
+import type { ResourceLoadState } from "@/shared/domain/mesh/artifactAssessment";
 
 import {
   evaluateFemMeshReadinessGuide,
@@ -39,6 +40,13 @@ function useOptionalResource<T>(
   return { data: null, status: "idle" };
 }
 
+function normalizeManifestLoadState(status: string): ResourceLoadState {
+  if (status === "loading" || status === "ready" || status === "stale" || status === "error") {
+    return status;
+  }
+  return "idle";
+}
+
 export function useFemMeshReadinessGuide(options?: {
   enabled?: boolean;
   selectedObjectId?: string | null;
@@ -69,6 +77,9 @@ export function useFemMeshReadinessGuide(options?: {
     enabled: femEnabled,
   });
   const meshSummary = useOptionalResource("useMeshSummaryResource", {
+    enabled: femEnabled,
+  });
+  const manifest = useOptionalResource("useMeshSharedDomainManifestResource", {
     enabled: femEnabled,
   });
   const activeBuild = useOptionalResource("useMeshBuildCurrent", {
@@ -115,6 +126,8 @@ export function useFemMeshReadinessGuide(options?: {
       activeBuild: activeBuild.data,
       geometryValidation: geometryValidation.data,
       latestBuild: latestBuild.data,
+      manifest: manifest.data,
+      manifestLoadState: normalizeManifestLoadState(manifest.status),
       meshSemantics: meshSemantics.data,
       meshSummary: meshSummary.data,
       qualityGates: qualityGates.data,
@@ -129,6 +142,8 @@ export function useFemMeshReadinessGuide(options?: {
     femEnabled,
     geometryValidation.data,
     latestBuild.data,
+    manifest.data,
+    manifest.status,
     meshSemantics.data,
     meshSummary.data,
     options?.selectedObjectId,

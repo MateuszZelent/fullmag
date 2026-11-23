@@ -8,7 +8,6 @@ import {
   Cpu,
   ExternalLink,
   Globe,
-  Sparkles,
 } from "lucide-react";
 import { useEffect, useState } from "react";
 
@@ -28,6 +27,7 @@ import { buildDiagnostics } from "../model/diagnostics";
 import { startScreenStore } from "../model/startScreenState";
 import type { ComputeProbeState, RecentIndexState } from "../model/types";
 import { useDesktopInvoke } from "../model/useDesktopInvoke";
+import { StartInspectorTemplateFrame } from "./StartScreenInspectorSpecs";
 
 export interface AboutInspectorProps {
   readonly compute: ComputeProbeState;
@@ -76,24 +76,28 @@ export function AboutInspector({ compute, index }: AboutInspectorProps) {
   const gpu = compute?.gpus?.[0];
 
   return (
-    <aside aria-label="About details and runtime" className="fm-start__inspector">
+    <StartInspectorTemplateFrame
+      ariaLabel="About details and runtime"
+      breadcrumbs={["Start", "About"]}
+      facts={[
+        {
+          id: "version",
+          label: "Version",
+          value: build?.version ? `v${build.version}` : "Dev build",
+        },
+        {
+          id: "arch",
+          label: "Discretization",
+          value: "Hybrid FDM + FEM",
+        },
+      ]}
+      specId="start.about"
+      statusLabel="Hybrid"
+      statusVariant="accent"
+      title="FullMag"
+      typeLabel="Hybrid micromagnetic simulation platform"
+    >
       <div className="fm-about-inspector">
-        {/* Header */}
-        <div className="fm-about-inspector__head">
-          <div className="fm-about-hero__logo fm-about-hero__logo--compact">
-            <Sparkles size={20} />
-          </div>
-          <div>
-            <h2 className="fm-about-inspector__title">
-              FullMag
-            </h2>
-            <div className="fm-about-inspector__badges">
-              <span className="fm-start-badge">v0.1.0</span>
-              <span className="fm-start-badge fm-start-badge--fem">Hybrid</span>
-            </div>
-          </div>
-        </div>
-
         {/* Quick Actions */}
         <div className="fm-about-inspector__card">
           <h3 className="fm-about-inspector__card-title">Quick Actions</h3>
@@ -214,6 +218,6 @@ export function AboutInspector({ compute, index }: AboutInspectorProps) {
           </a>
         </div>
       </div>
-    </aside>
+    </StartInspectorTemplateFrame>
   );
 }

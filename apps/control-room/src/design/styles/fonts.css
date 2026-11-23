@@ -1,4 +1,4 @@
-/* Inter v4.1 and JetBrains Mono v2.304; both font files are SIL OFL 1.1. */
+/* Inter v4.1, JetBrains Mono v2.304, and STIX Two Text v2.13b171; all font files are SIL OFL 1.1. */
 @font-face {
   font-family: "Inter";
   font-style: normal;
@@ -13,4 +13,20 @@
   font-weight: 100 800;
   font-display: swap;
   src: url("/fonts/JetBrainsMono-Variable-v2.304.ttf") format("truetype");
+}
+
+@font-face {
+  font-family: "STIX Two Text";
+  font-style: italic;
+  font-weight: 400 700;
+  font-display: swap;
+  src: url("/fonts/STIXTwoText-Italic.woff2") format("woff2");
+}
+
+@font-face {
+  font-family: "STIX Two Text";
+  font-style: normal;
+  font-weight: 400 700;
+  font-display: swap;
+  src: url("/fonts/STIXTwoText-Regular.woff2") format("woff2");
 }

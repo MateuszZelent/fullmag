@@ -1,13 +1,17 @@
 "use client";
 
-import { GitBranch, History, LineChart, Scale, Target, Waves } from "lucide-react";
+import { Box, GitBranch, History, LineChart, Pin, Scale, Target, Waves } from "lucide-react";
 import type { InspectorPanelProps } from "../../inspectorTypes";
 import { FieldRow } from "../../primitives/FieldRow";
 import { InspectorOverviewFrame } from "../../primitives/InspectorOverviewFrame";
+import { PIN_MODE_VISUALIZATION_COMMAND } from "@/kernel/analysis-modules/postprocessingCommandContributions";
+import { createCommandContext } from "@/kernel/commands/commandContext";
 import { useKernel } from "@/kernel/KernelContext";
-import { buildEigenBranchSelectionRef, buildEigenDispersionPointSelectionRef, type EigenBranch } from "@/shared/domain/analysis/frequencyDomainChartModels";
+import type { Selection } from "@/kernel/selection/selectionTypes";
+import { buildEigenBranchSelectionRef, buildEigenDispersionPointSelectionRef, eigenModeFieldAvailable, type EigenBranch } from "@/shared/domain/analysis/frequencyDomainChartModels";
 import type { EigenDispersionPoint } from "@/shared/domain/analysis/frequencyDomainChartModels";
 import { formatFrequencyHz } from "@/shared/domain/analysis/frequencyUnits";
+import { Button } from "@/shared/ui/Button";
 import { FrequencyDomainDispersionChart } from "../FrequencyDomainCharts";
 import { FrequencyDomainBranchTable } from "../FrequencyDomainTables";
 
@@ -18,40 +22,80 @@ import {
 import { buildEigenDispersionPointHandoffContext } from "./EigenDispersionInspectorPanel.model";
 
 export function EigenDispersionInspectorPanel({
+  onSelectDispersionSelection,
   selection,
-}: InspectorPanelProps) {
+}: InspectorPanelProps & {
+  onSelectDispersionSelection?: (next: Omit<Selection, "moduleSource">) => void;
+}) {
   const kernel = useKernel();
   const summary = useEigenDispersionInspectorSummary();
   const selectedPoint = selectedDispersionPoint(selection, summary.dispersionModel.points);
   const selectedPointModel = selectedPoint
     ? buildEigenDispersionPointViewModel(selectedPoint)
     : null;
+  const selectedGroupVelocity = selectedPoint
+    ? dispersionPointGroupVelocityMPerS(summary.dispersionModel.points, selectedPoint)
+    : null;
 
   const selectPoint = (point: EigenDispersionPoint): void => {
-    const ref = buildEigenDispersionPointSelectionRef(
+    const rawRef = buildEigenDispersionPointSelectionRef(
       point,
       buildEigenDispersionPointHandoffContext(selection),
     );
-    kernel.selection.set(
+    const selKind = selection.kind;
+    const keepPhysicsFirstKind =
+      selKind === "results.dispersion.modal.relation" ||
+      selKind === "results.dispersion.modal.branches";
+    const resolvedKind: string = keepPhysicsFirstKind ? selKind : rawRef.kind;
+    const ref =
+      keepPhysicsFirstKind && rawRef.type === "frequency-domain"
+        ? {
+            ...rawRef,
+            kind: resolvedKind,
+            modeIndex: point.rawModeIndex,
+            sampleIndex: point.sampleIndex,
+          }
+        : rawRef;
+    const nextSelection: Omit<Selection, "moduleSource"> = {
+      kind: resolvedKind,
+      label: dispersionPointLabel(point),
+      nodeId: keepPhysicsFirstKind ? (selection.nodeId ?? ref.nodeId) : ref.nodeId,
+      objectId: null,
+      ref,
+    };
+    onSelectDispersionSelection?.(nextSelection);
+    kernel.selection.set(nextSelection, "inspector");
+  };
+  const activateSelectedModeIn3D = (): void => {
+    if (!selectedPoint || !eigenModeFieldAvailable(selectedPoint) || !selectedPoint.modeFieldId) {
+      return;
+    }
+    void kernel.commands.execute(
+      "analysis.eigen.plot-mode-3d",
+      createCommandContext("inspector", kernel, {
+        sourceDetail: selection.kind ?? "results.dispersion.modal.relation",
+      }),
       {
-        kind: ref.kind,
-        label: dispersionPointLabel(point),
-        nodeId: ref.nodeId,
-        objectId: null,
-        ref,
+        fieldId: selectedPoint.modeFieldId,
+        label: dispersionPointLabel(selectedPoint),
+        phaseRad: 0,
+        source: "eigen-mode",
+        view: "phase_rotated_real",
       },
-      "inspector",
     );
   };
   const selectBranch = (branch: EigenBranch): void => {
     const ref = buildEigenBranchSelectionRef(branch);
+    const keepBranchesKind = selection.kind === "results.dispersion.modal.branches";
     kernel.selection.set(
       {
-        kind: ref.kind,
+        kind: keepBranchesKind ? "results.dispersion.modal.branches" : ref.kind,
         label: branch.label ?? `Branch ${branch.branchId}`,
-        nodeId: ref.nodeId,
+        nodeId: keepBranchesKind ? (selection.nodeId ?? ref.nodeId) : ref.nodeId,
         objectId: null,
-        ref,
+        ref: keepBranchesKind && ref.type === "frequency-domain"
+          ? { ...ref, kind: "results.dispersion.modal.branches" }
+          : ref,
       },
       "inspector",
     );
@@ -140,6 +184,16 @@ export function EigenDispersionInspectorPanel({
                   value={selectedPointModel?.branchId ?? "not available"}
                 />
                 <FieldRow
+                  label="Group velocity"
+                  value={
+                    selectedGroupVelocity != null
+                      ? `${(selectedGroupVelocity * 1e-3).toFixed(3)} km/s`
+                      : selectedPoint
+                        ? "—"
+                        : "not selected"
+                  }
+                />
+                <FieldRow
                   label="Mode field"
                   value={selectedPointModel ? (selectedPointModel.fieldAvailable ? "available" : "missing") : "not selected"}
                 />
@@ -147,6 +201,43 @@ export function EigenDispersionInspectorPanel({
                   label="Validation warning"
                   value={selectedPoint ? dispersionPointWarning(selectedPoint) : "not selected"}
                 />
+                {selectedPoint ? (
+                  <div className="fm-frequency-domain-table__actions">
+                    <Button
+                      aria-label="Activate Mode in 3D"
+                      className="fm-inspector-action-button"
+                      disabled={!selectedPointModel?.fieldAvailable || !selectedPoint.modeFieldId}
+                      disabledReason="Mode field artifact is not published for this (k, f) sample"
+                      size="sm"
+                      type="button"
+                      variant="primary"
+                      onClick={activateSelectedModeIn3D}
+                    >
+                      <Box aria-hidden="true" size={13} />
+                      <span>Activate in 3D</span>
+                    </Button>
+                    <Button
+                      aria-label="Pin Mode Visualization"
+                      className="fm-inspector-action-button"
+                      disabled={!selectedPointModel?.fieldAvailable || !selectedPoint.modeFieldId}
+                      disabledReason="Mode field artifact is required to pin a 3D visualization"
+                      size="sm"
+                      type="button"
+                      variant="secondary"
+                      onClick={() => {
+                        void kernel.commands.execute(
+                          PIN_MODE_VISUALIZATION_COMMAND,
+                          createCommandContext("inspector", kernel, {
+                            sourceDetail: selection.kind ?? "results.dispersion.modal.relation",
+                          }),
+                        );
+                      }}
+                    >
+                      <Pin aria-hidden="true" size={13} />
+                      <span>Pin Mode Visualization</span>
+                    </Button>
+                  </div>
+                ) : null}
               </>
             ),
           },
@@ -157,10 +248,33 @@ export function EigenDispersionInspectorPanel({
             icon: <LineChart size={16} strokeWidth={1.5} />,
             summary: summary.badge,
             content: (
-              <FrequencyDomainDispersionChart
-                model={summary.dispersionModel}
-                onSelectPoint={selectPoint}
-              />
+              <div className="grid gap-2">
+                <FrequencyDomainDispersionChart
+                  model={summary.dispersionModel}
+                  onSelectPoint={selectPoint}
+                />
+                {summary.dispersionModel.points.length > 0 ? (
+                  <div className="flex flex-wrap gap-1.5" role="group" aria-label="Dispersion sample quick selector">
+                    {summary.dispersionModel.points.map((pt) => {
+                      const active =
+                        selectedPoint?.sampleIndex === pt.sampleIndex &&
+                        selectedPoint?.rawModeIndex === pt.rawModeIndex;
+                      return (
+                        <Button
+                          aria-label={`Select dispersion point sample ${pt.sampleIndex} mode ${pt.rawModeIndex}`}
+                          key={`${pt.sampleIndex}:${pt.rawModeIndex}`}
+                          size="sm"
+                          type="button"
+                          variant={active ? "primary" : "secondary"}
+                          onClick={() => selectPoint(pt)}
+                        >
+                          {`k#${pt.sampleIndex} · ${(pt.frequencyHz * 1e-9).toFixed(2)} GHz`}
+                        </Button>
+                      );
+                    })}
+                  </div>
+                ) : null}
+              </div>
             ),
           },
           {
@@ -198,11 +312,18 @@ export function EigenDispersionInspectorPanel({
   );
 }
 
+const DISPERSION_POINT_SELECTION_KINDS = new Set([
+  "results.eigen.dispersion",
+  "results.dispersion.modal.relation",
+  "results.dispersion.modal.branches",
+  "results.dispersion.modal.mode_at_k",
+]);
+
 function selectedDispersionPoint(
   selection: InspectorPanelProps["selection"],
   points: readonly EigenDispersionPoint[],
 ): EigenDispersionPoint | null {
-  if (selection.kind !== "results.eigen.dispersion") return null;
+  if (!selection.kind || !DISPERSION_POINT_SELECTION_KINDS.has(selection.kind)) return null;
   const ref = selection.ref?.type === "frequency-domain" ? selection.ref : null;
   if (ref?.sampleIndex == null || ref.modeIndex == null) return null;
   return (
@@ -238,4 +359,28 @@ function formatNumber(value: number): string {
 
 function formatNumberOrUnavailable(value: number | null): string {
   return value == null ? "not available" : formatNumber(value);
+}
+
+function dispersionPointGroupVelocityMPerS(
+  points: readonly EigenDispersionPoint[],
+  target: EigenDispersionPoint,
+): number | null {
+  const branchPts = points
+    .filter((pt) =>
+      target.branchId
+        ? pt.branchId === target.branchId
+        : pt.rawModeIndex === target.rawModeIndex,
+    )
+    .toSorted((a, b) => a.pathS - b.pathS);
+  const idx = branchPts.findIndex(
+    (pt) =>
+      pt.sampleIndex === target.sampleIndex &&
+      pt.rawModeIndex === target.rawModeIndex,
+  );
+  if (idx < 0 || branchPts.length < 2) return null;
+  const left = branchPts[Math.max(0, idx - 1)]!;
+  const right = branchPts[Math.min(branchPts.length - 1, idx + 1)]!;
+  const dk = right.pathS - left.pathS;
+  if (!Number.isFinite(dk) || Math.abs(dk) < 1e-12) return null;
+  return (2 * Math.PI * (right.frequencyHz - left.frequencyHz)) / dk;
 }

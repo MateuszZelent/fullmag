@@ -123,6 +123,11 @@ import {
   interactionSpecsForDiscretization,
   type InteractionDiscretization,
 } from "@/shared/domain/physics/interactions";
+import { getTextureInspectorUiSnapshot } from "@/shared/domain/magnetization-texture/textureDraftBridge";
+import {
+  MAGNETIZATION_TEXTURE_CATEGORIES,
+  MAGNETIZATION_TEXTURE_PRESETS,
+} from "@/shared/domain/magnetization-texture/texturePresets";
 
 import { addAbsorbingBoundaryCommand } from "./absorbingBoundaryCommand";
 import type { RibbonMenuNode, RibbonTabContent } from "./ribbonTypes";
@@ -385,6 +390,44 @@ const geometryTab: RibbonTabContent = {
   ],
 };
 
+function buildMaterialsMorePresetsMenu(): RibbonMenuNode[] {
+  const nodes: RibbonMenuNode[] = [];
+  for (const category of MAGNETIZATION_TEXTURE_CATEGORIES) {
+    if (category.id === "all") continue;
+    nodes.push({
+      type: "label",
+      id: `mat-texture-more:cat:${category.id}`,
+      label: category.label,
+    });
+    const presetsInCategory = MAGNETIZATION_TEXTURE_PRESETS.filter(
+      (preset) => preset.category === category.id,
+    );
+    for (const preset of presetsInCategory) {
+      const slug =
+        preset.id === "random"
+          ? "random-seeded"
+          : preset.id.replaceAll("_", "-");
+      nodes.push({
+        type: "item",
+        id: `mat-texture-more:item:${preset.id}`,
+        label: preset.label,
+        commandId: `magnetization-texture.assign-${slug}`,
+      });
+    }
+    nodes.push({
+      type: "separator",
+      id: `mat-texture-more:sep:${category.id}`,
+    });
+  }
+  nodes.push({
+    type: "item",
+    id: "mat-texture-more:load-field-file",
+    label: "Load from field file…",
+    commandId: "magnetization-texture.activate-load-file",
+  });
+  return nodes;
+}
+
 const materialsTab: RibbonTabContent = {
   tabId: "materials",
   groups: [
@@ -405,12 +448,19 @@ const materialsTab: RibbonTabContent = {
       subtitle: "initial state",
       tone: "authoring",
       actions: [
-        { id: "mat-texture-inspector", icon: icon(Eye),      label: "Inspector",    preview: true, disabled: true, iconColor: "text-sky-400",     menu: menu("mat-texture-inspector", "Texture inspector", ["View texture", "Texture history", "Reset texture"]) },
-        { id: "magnetization-texture.assign-uniform", icon: icon(Magnet), label: "Uniform", iconColor: "text-amber-400" },
-        { id: "magnetization-texture.assign-random-seeded", icon: icon(Sparkles), label: "Random", iconColor: "text-emerald-400" },
-        { id: "magnetization-texture.assign-vortex", icon: icon(Circle), label: "Vortex", iconColor: "text-cyan-400" },
-        { id: "mat-texture-bloch-sky", icon: icon(Disc),     label: "Bloch Sky",    preview: true, iconColor: "text-violet-400", disabled: true },
-        { id: "mat-texture-neel-sky",  icon: icon(Disc),     label: "Néel Sky",     preview: true, iconColor: "text-purple-300", disabled: true },
+        { id: "mat-texture-inspector", icon: icon(Eye), label: "Inspector", preview: true, disabled: true, iconColor: "var(--fm-hue-material)", menu: menu("mat-texture-inspector", "Texture inspector", ["View texture", "Texture history", "Reset texture"]) },
+        { id: "magnetization-texture.assign-uniform", icon: icon(Magnet), label: "Uniform", iconColor: "var(--fm-hue-material)" },
+        { id: "magnetization-texture.assign-random-seeded", icon: icon(Sparkles), label: "Random", iconColor: "var(--fm-hue-material)" },
+        { id: "magnetization-texture.assign-vortex", icon: icon(Circle), label: "Vortex", iconColor: "var(--fm-hue-material)" },
+        { id: "magnetization-texture.assign-bloch-skyrmion", icon: icon(Disc), label: "Bloch Sky", iconColor: "var(--fm-hue-material)" },
+        { id: "magnetization-texture.assign-neel-skyrmion", icon: icon(Disc), label: "Néel Sky", iconColor: "var(--fm-hue-material)" },
+        {
+          id: "mat-texture-more",
+          icon: icon(Layers3),
+          label: "More Presets",
+          iconColor: "var(--fm-hue-material)",
+          menu: buildMaterialsMorePresetsMenu(),
+        },
       ],
     },
     {
@@ -423,9 +473,7 @@ const materialsTab: RibbonTabContent = {
           id: "mat-transform-scope",
           icon: icon(Target),
           label: "Scope",
-          preview: true,
-          disabled: true,
-          iconColor: "text-sky-400",
+          iconColor: "var(--fm-hue-material)",
           menu: [
             {
               type: "radio-group",
@@ -433,9 +481,16 @@ const materialsTab: RibbonTabContent = {
               label: "Transform scope",
               value: "object",
               items: [
-                { value: "object",  label: "Object transform" },
-                { value: "texture", label: "Texture transform" },
-                { value: "camera",  label: "Camera" },
+                {
+                  value: "object",
+                  label: "Object transform",
+                  commandId: "magnetization-texture.scope-object",
+                },
+                {
+                  value: "texture",
+                  label: "Texture transform",
+                  commandId: "magnetization-texture.scope-texture",
+                },
               ],
             },
           ],
@@ -444,22 +499,49 @@ const materialsTab: RibbonTabContent = {
           id: "mat-transform-tool",
           icon: icon(Move3D),
           label: "Tool",
-          preview: true,
-          disabled: true,
-          iconColor: "text-fuchsia-300",
+          iconColor: "var(--fm-hue-material)",
           menu: [
             {
               type: "radio-group",
               id: "mat-transform:tool",
               label: "Transform tool",
-              value: "move",
+              value: "translate",
               items: [
-                { value: "move",   label: "Move / Translate" },
-                { value: "rotate", label: "Rotate" },
-                { value: "scale",  label: "Scale",  disabled: true },
+                {
+                  value: "view",
+                  label: "View (Q)",
+                  commandId: "magnetization-texture.gizmo-mode-view",
+                },
+                {
+                  value: "translate",
+                  label: "Move / Translate (W)",
+                  commandId: "magnetization-texture.gizmo-mode-translate",
+                },
+                {
+                  value: "rotate",
+                  label: "Rotate (E)",
+                  commandId: "magnetization-texture.gizmo-mode-rotate",
+                },
+                {
+                  value: "scale",
+                  label: "Scale (R)",
+                  commandId: "magnetization-texture.gizmo-mode-scale",
+                },
               ],
             },
           ],
+        },
+        {
+          id: "magnetization-texture.fit-characteristic-size",
+          icon: icon(Maximize2),
+          label: "Fit Size",
+          iconColor: "var(--fm-hue-material)",
+        },
+        {
+          id: "magnetization-texture.reset-transform",
+          icon: icon(RotateCcw),
+          label: "Reset",
+          iconColor: "var(--fm-hue-material)",
         },
       ],
     },
@@ -1014,6 +1096,45 @@ export function buildRibbonTabContent(
 
   if (tabId === "geometry" && context) {
     resolvedContent = buildGeometryTabContent(content, context);
+  }
+
+  if (tabId === "materials") {
+    const uiState = getTextureInspectorUiSnapshot();
+    resolvedContent = {
+      ...content,
+      groups: content.groups.map((group) =>
+        group.id === "materials-transform"
+          ? {
+              ...group,
+              actions: group.actions.map((action) => {
+                if (action.id === "mat-transform-scope") {
+                  return {
+                    ...action,
+                    active: uiState.transformScope === "texture",
+                    menu: action.menu?.map((node) =>
+                      node.type === "radio-group"
+                        ? { ...node, value: uiState.transformScope }
+                        : node,
+                    ),
+                  };
+                }
+                if (action.id === "mat-transform-tool") {
+                  return {
+                    ...action,
+                    active: uiState.gizmoEnabled,
+                    menu: action.menu?.map((node) =>
+                      node.type === "radio-group"
+                        ? { ...node, value: uiState.gizmoMode }
+                        : node,
+                    ),
+                  };
+                }
+                return action;
+              }),
+            }
+          : group,
+      ),
+    };
   }
 
   if (tabId === "physics" && context) {

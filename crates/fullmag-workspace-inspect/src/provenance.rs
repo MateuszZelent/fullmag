@@ -103,6 +103,18 @@ pub fn normalise_run(value: &Value) -> Option<Value> {
     if let Some(seconds) = map.get("duration_seconds").and_then(Value::as_f64) {
         run.insert("duration_seconds".into(), json!(seconds));
     }
+    for key in ["fields", "output_fields", "quantities"] {
+        if let Some(items) = map.get(key).and_then(Value::as_array) {
+            let fields: Vec<Value> = items
+                .iter()
+                .filter_map(|item| item.as_str().filter(|s| !s.is_empty()).map(|s| Value::String(s.to_string())))
+                .collect();
+            if !fields.is_empty() {
+                run.insert("fields".into(), Value::Array(fields));
+                break;
+            }
+        }
+    }
     Some(Value::Object(run))
 }
 

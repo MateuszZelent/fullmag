@@ -8,8 +8,10 @@
   --fm-bg-panel: #161622;
   --fm-bg-panel-raised: #24243a;
   --fm-bg-viewport: #0b0b13;
-  --fm-bg-viewport-top: #12121c;
-  --fm-bg-viewport-bottom: #2b2c3d;
+  /* Scene gradient: starts at the panel glass tone (raised) so it continues
+     the header above it, and settles to Mocha Mantle at the bottom. */
+  --fm-bg-viewport-top: #24243a;
+  --fm-bg-viewport-bottom: #181825;
   --fm-bg-overlay: #20202f;
   --fm-bg-selected: #223358;
   --fm-bg-canvas: #11111b;
@@ -20,10 +22,12 @@
   --fm-surface-hover: var(--fm-bg-hover); /* semantic alias: hover state surface */
   --fm-bg-disabled: var(--fm-bg-muted);
 
+  /* Decorative dividers vs interactive WCAG 1.4.11 control boundaries (>= 3.43:1). */
   --fm-border-subtle: rgb(205 214 244 / 0.09);
   --fm-border-default: rgb(205 214 244 / 0.15);
-  --fm-border-moderate: color-mix(in srgb, var(--fm-border-default) 50%, var(--fm-border-strong));
-  --fm-border-strong: rgb(205 214 244 / 0.24);
+  --fm-border-control: #73778f;
+  --fm-border-strong: #7f849c;
+  --fm-border-moderate: color-mix(in oklab, var(--fm-border-default) 50%, var(--fm-border-strong));
   --fm-border-muted: rgb(205 214 244 / 0.06);
   --fm-border-disabled: var(--fm-border-muted);
 
@@ -33,7 +37,8 @@
   --fm-text-muted: var(--fm-text-tertiary);
   --fm-text-disabled: #7f849c; /* Overlay1: legible, clearly below tertiary */
   --fm-text-inverse: #11111b;
-  --fm-text-on-accent: #1e1e2e;
+  --fm-text-on-accent: #11111b; /* 8.91:1 on #89b4fa */
+  --fm-switch-thumb: var(--fm-text-on-accent);
 
   --fm-accent: #89b4fa;
   --fm-accent-strong: #b4befe;
@@ -89,22 +94,31 @@
   --fm-periodic-translation: #f9e2af;
   --fm-periodic-unpaired: #f38ba8;
 
+  /* Status UI / icon accents (WCAG 1.4.11 >= 3.0:1). */
   --fm-success: #a6e3a1;
   --fm-info: #89dceb;
   --fm-warning: #f9e2af;
   --fm-danger: #f38ba8;
+  --fm-live: #94e2d5;
   --fm-stale: #cba6f7;
   --fm-degraded: #fab387;
 
-  /* Status hues as small text. Mocha's palette clears 4.5:1 on its surfaces
-     except danger on the selected row, which is lightened. */
-  --fm-success-text: var(--fm-success);
-  --fm-warning-text: var(--fm-chart-yellow);
-  --fm-danger-text: #f592ad; /* 4.75:1 on the selected row */
-  --fm-degraded-text: var(--fm-degraded);
-  --fm-teal-text: var(--fm-chart-teal);
-  --fm-accent-text: var(--fm-accent);
-  --fm-mauve-text: var(--fm-chart-mauve);
+  /* Status semantic text hues (WCAG 1.4.3 >= 4.5:1 on panel, raised, selected, and 14% tint). */
+  --fm-accent-text: #89b4fa;
+  --fm-success-text: #a6e3a1;
+  --fm-warning-text: #f9e2af;
+  --fm-danger-text: #f592ad;
+  --fm-info-text: #89dceb;
+  --fm-live-text: #94e2d5;
+  --fm-stale-text: #cba6f7;
+  --fm-degraded-text: #fab387;
+  --fm-teal-text: var(--fm-live-text);
+  --fm-mauve-text: var(--fm-stale-text);
+
+  /* Vector3 component axis labels (>= 7.96:1 on --fm-field-bg). */
+  --fm-axis-x: #f38ba8;
+  --fm-axis-y: #a6e3a1;
+  --fm-axis-z: #89b4fa;
 
   /* Viewport thumbnails stay dark in both themes (they are viewport renders). */
   --fm-viewport-thumb-bg: #11111b;
@@ -135,13 +149,13 @@
   --fm-hud-cube-shade: #11111b;
 
   /* Visual language 2026-11: glass layers, recessed fields, raised selection, domain hues */
-  --fm-glass-bg: rgb(24 24 37 / 0.56);
-  --fm-glass-strong: rgb(30 30 46 / 0.78);
-  --fm-glass-line: rgb(205 214 244 / 0.1);
+  --fm-glass-bg: rgb(30 30 46 / 0.78);
+  --fm-glass-strong: rgb(36 36 56 / 0.92);
+  --fm-glass-line: rgb(205 214 244 / 0.13);
   --fm-glass-highlight: rgb(255 255 255 / 0.07);
-  --fm-field-bg: rgb(17 17 27 / 0.45);
-  --fm-raised-bg: rgb(255 255 255 / 0.11);
-  --fm-section-bg: rgb(205 214 244 / 0.025);
+  --fm-field-bg: #11111b;
+  --fm-raised-bg: #24243a;
+  --fm-section-bg: rgb(205 214 244 / 0.035);
   --fm-viewport-glow-a: rgb(203 166 247 / 0.14);
   --fm-viewport-glow-b: rgb(137 180 250 / 0.12);
   /* Page backdrop behind the floating panels: the base with a soft glow. */
@@ -149,13 +163,22 @@
     radial-gradient(1100px 700px at 18% 12%, rgb(137 180 250 / 0.13), transparent 62%),
     radial-gradient(900px 600px at 92% 30%, rgb(203 166 247 / 0.11), transparent 62%),
     var(--fm-bg-app);
-  --fm-hue-geometry: var(--fm-accent);
-  --fm-hue-material: var(--fm-chart-mauve);
-  --fm-hue-physics: var(--fm-chart-peach);
-  --fm-hue-study: var(--fm-success);
-  --fm-hue-visualization: var(--fm-chart-teal);
-  --fm-hue-mesh: var(--fm-chart-sky);
-  --fm-hue-definition: var(--fm-chart-pink);
+
+  /* Domain hues (UI/icons >= 3.0:1 and text >= 4.5:1). */
+  --fm-hue-geometry: #89b4fa;
+  --fm-hue-geometry-text: #89b4fa;
+  --fm-hue-material: #cba6f7;
+  --fm-hue-material-text: #cba6f7;
+  --fm-hue-physics: #fab387;
+  --fm-hue-physics-text: #fab387;
+  --fm-hue-study: #a6e3a1;
+  --fm-hue-study-text: #a6e3a1;
+  --fm-hue-visualization: #94e2d5;
+  --fm-hue-visualization-text: #94e2d5;
+  --fm-hue-mesh: #89dceb;
+  --fm-hue-mesh-text: #89dceb;
+  --fm-hue-definition: #f5c2e7;
+  --fm-hue-definition-text: #f5c2e7;
 }
 
 /* ===== Catppuccin Latte (light) ===== */
@@ -167,8 +190,10 @@
   --fm-bg-panel: #f5f6fa;
   --fm-bg-panel-raised: #fafbfd;
   --fm-bg-viewport: #dde2ec;
-  --fm-bg-viewport-top: #ccd0da;
-  --fm-bg-viewport-bottom: #eff1f5;
+  /* Scene gradient: starts at the panel glass tone (raised) so it continues
+     the header above it, and settles to Latte Mantle at the bottom. */
+  --fm-bg-viewport-top: #fafbfd;
+  --fm-bg-viewport-bottom: #e6e9ef;
   --fm-bg-overlay: #f7f8fb;
   --fm-bg-selected: #d5e1fa;
   --fm-bg-canvas: #dce0e8;
@@ -179,10 +204,12 @@
   --fm-surface-hover: var(--fm-bg-hover); /* semantic alias: hover state surface */
   --fm-bg-disabled: var(--fm-bg-muted);
 
+  /* Decorative dividers vs interactive WCAG 1.4.11 control boundaries (>= 3.61:1). */
   --fm-border-subtle: rgb(76 79 105 / 0.12);
   --fm-border-default: rgb(76 79 105 / 0.19);
-  --fm-border-moderate: color-mix(in srgb, var(--fm-border-default) 50%, var(--fm-border-strong));
-  --fm-border-strong: rgb(76 79 105 / 0.29);
+  --fm-border-control: #76798d;
+  --fm-border-strong: #6c6f85;
+  --fm-border-moderate: color-mix(in oklab, var(--fm-border-default) 50%, var(--fm-border-strong));
   --fm-border-muted: rgb(76 79 105 / 0.08);
   --fm-border-disabled: var(--fm-border-muted);
 
@@ -192,7 +219,8 @@
   --fm-text-muted: var(--fm-text-tertiary);
   --fm-text-disabled: #7c7f93; /* Overlay2: legible, clearly below tertiary */
   --fm-text-inverse: #eff1f5;
-  --fm-text-on-accent: #ffffff;
+  --fm-text-on-accent: #ffffff; /* 4.91:1 on #1e66f5 */
+  --fm-switch-thumb: var(--fm-text-on-accent);
 
   --fm-accent: #1e66f5;
   --fm-accent-strong: #7287fd;
@@ -220,15 +248,15 @@
   --fm-category-energy: #fe640b;
 
   --fm-explorer-icon-group: var(--fm-accent-strong);
-  --fm-explorer-icon-object: var(--fm-chart-peach);
-  --fm-explorer-icon-mesh: var(--fm-chart-yellow);
-  --fm-explorer-icon-field: var(--fm-chart-teal);
-  --fm-explorer-icon-visualization: var(--fm-chart-sky);
-  --fm-explorer-icon-results: var(--fm-chart-mauve);
-  --fm-explorer-icon-material: var(--fm-chart-red);
+  --fm-explorer-icon-object: var(--fm-hue-physics);
+  --fm-explorer-icon-mesh: var(--fm-warning);
+  --fm-explorer-icon-field: var(--fm-live);
+  --fm-explorer-icon-visualization: var(--fm-info);
+  --fm-explorer-icon-results: var(--fm-stale);
+  --fm-explorer-icon-material: var(--fm-danger);
   --fm-explorer-icon-config: var(--fm-success);
-  --fm-explorer-icon-code: var(--fm-chart-sky);
-  --fm-explorer-icon-region: var(--fm-chart-mauve);
+  --fm-explorer-icon-code: var(--fm-info);
+  --fm-explorer-icon-region: var(--fm-stale);
   --fm-explorer-icon-quality: var(--fm-success);
   --fm-explorer-icon-diagnostics: var(--fm-text-muted);
   --fm-explorer-icon-run: var(--fm-success);
@@ -236,39 +264,48 @@
   --fm-explorer-icon-data: var(--fm-text-muted);
 
   --fm-region-overlay-0: #d20f39;
-  --fm-region-overlay-1: #fe640b;
-  --fm-region-overlay-2: #df8e1d;
-  --fm-region-overlay-3: #40a02b;
-  --fm-region-overlay-4: #179299;
+  --fm-region-overlay-1: #d44d00;
+  --fm-region-overlay-2: #a86808;
+  --fm-region-overlay-3: #348622;
+  --fm-region-overlay-4: #148289;
   --fm-region-overlay-5: #1e66f5;
   --fm-region-overlay-6: #8839ef;
-  --fm-region-overlay-7: #ea76cb;
+  --fm-region-overlay-7: #c4389b;
   --fm-periodic-source: #1e66f5;
-  --fm-periodic-node-link: #40a02b;
-  --fm-periodic-translation: #df8e1d;
+  --fm-periodic-node-link: #348622;
+  --fm-periodic-translation: #a86808;
   --fm-periodic-unpaired: #d20f39;
 
-  --fm-success: #40a02b;
-  --fm-info: #04a5e5;
-  --fm-warning: #df8e1d;
+  /* Status UI / icon accents calibrated to WCAG 1.4.11 (>= 3.44:1 on field, panel, raised). */
+  --fm-success: #348622;
+  --fm-info: #0284c7;
+  --fm-warning: #a86808;
   --fm-danger: #d20f39;
+  --fm-live: #148289;
   --fm-stale: #8839ef;
-  --fm-degraded: #fe640b;
+  --fm-degraded: #d44d00;
 
-  /* Status hues as small text. Latte is an accent palette: the raw hues miss
-     4.5:1 on light surfaces, so these keep the hue and clear AA. */
-  --fm-success-text: #256b15; /* 4.51:1 */
-  --fm-warning-text: #865006; /* 4.55:1 */
-  --fm-danger-text: #ba092f; /* 4.54:1 */
-  --fm-degraded-text: #a13b00; /* 4.58:1 */
-  --fm-teal-text: #09676c; /* 4.54:1 */
-  --fm-accent-text: #044ee0; /* 4.54:1, also on --fm-bg-selected */
-  --fm-mauve-text: #771af0; /* 4.51:1 */
+  /* Status semantic text hues calibrated to WCAG 1.4.3 (>= 4.94:1 on panel, field, selected, 12% tint). */
+  --fm-accent-text: #044ee0;
+  --fm-success-text: #256b15;
+  --fm-warning-text: #865006;
+  --fm-danger-text: #b4082d;
+  --fm-info-text: #036397;
+  --fm-live-text: #09676c;
+  --fm-stale-text: #7218df;
+  --fm-degraded-text: #a13b00;
+  --fm-teal-text: var(--fm-live-text);
+  --fm-mauve-text: var(--fm-stale-text);
+
+  /* Vector3 component axis labels (>= 5.53:1 on --fm-field-bg). */
+  --fm-axis-x: #b4082d;
+  --fm-axis-y: #256b15;
+  --fm-axis-z: #044ee0;
 
   --fm-viewport-thumb-bg: #11111b;
   --fm-viewport-thumb-text: #a6adc8;
 
-  --fm-syntax-string: #40a02b;
+  --fm-syntax-string: #256b15;
   --fm-surface-3: #e6e9ef;
 
   --fm-shadow-panel: 0 14px 40px rgb(76 79 105 / 10%);
@@ -292,27 +329,36 @@
   --fm-hud-cube-edge: #8c8fa1;
   --fm-hud-cube-shade: #4c4f69;
 
-  /* Visual language 2026-11: fields are recessed, never bright white */
-  --fm-glass-bg: rgb(255 255 255 / 0.58);
-  --fm-glass-strong: rgb(255 255 255 / 0.78);
-  --fm-glass-line: rgb(255 255 255 / 0.85);
-  --fm-glass-highlight: rgb(255 255 255 / 0.95);
-  --fm-field-bg: rgb(76 79 105 / 0.055);
+  /* Visual language 2026-11: fields are recessed cool slate, never bright white */
+  --fm-glass-bg: rgb(246 247 251 / 0.86);
+  --fm-glass-strong: rgb(250 251 254 / 0.95);
+  --fm-glass-line: rgb(76 79 105 / 0.16);
+  --fm-glass-highlight: rgb(255 255 255 / 0.92);
+  --fm-field-bg: rgb(223 227 236 / 0.85);
   --fm-raised-bg: #ffffff;
-  --fm-section-bg: rgb(76 79 105 / 0.03);
+  --fm-section-bg: rgb(76 79 105 / 0.035);
   --fm-viewport-glow-a: rgb(136 57 239 / 0.16);
   --fm-viewport-glow-b: rgb(4 165 229 / 0.18);
   --fm-page-bg:
     radial-gradient(1100px 700px at 18% 12%, rgb(30 102 245 / 0.12), transparent 62%),
     radial-gradient(900px 600px at 92% 30%, rgb(136 57 239 / 0.11), transparent 62%),
     var(--fm-bg-app);
-  --fm-hue-geometry: var(--fm-accent);
-  --fm-hue-material: var(--fm-chart-mauve);
-  --fm-hue-physics: var(--fm-chart-peach);
-  --fm-hue-study: var(--fm-success);
-  --fm-hue-visualization: var(--fm-chart-teal);
-  --fm-hue-mesh: var(--fm-chart-sky);
-  --fm-hue-definition: var(--fm-chart-pink);
+
+  /* Domain hues (UI/icons >= 3.44:1 and text >= 4.94:1 across field, panel, selected). */
+  --fm-hue-geometry: #1e66f5;
+  --fm-hue-geometry-text: #044ee0;
+  --fm-hue-material: #8839ef;
+  --fm-hue-material-text: #7218df;
+  --fm-hue-physics: #d44d00;
+  --fm-hue-physics-text: #a13b00;
+  --fm-hue-study: #348622;
+  --fm-hue-study-text: #256b15;
+  --fm-hue-visualization: #148289;
+  --fm-hue-visualization-text: #09676c;
+  --fm-hue-mesh: #0284c7;
+  --fm-hue-mesh-text: #036397;
+  --fm-hue-definition: #c4389b;
+  --fm-hue-definition-text: #9d1d78;
 }
 
 /* Reduced transparency: glass layers become opaque panel surfaces. */
@@ -335,12 +381,12 @@
 
 .fm-inspector-alert.fm-alert-danger {
   border-left: 4px solid var(--fm-danger);
-  background: color-mix(in srgb, var(--fm-danger) 10%, transparent);
+  background: color-mix(in oklab, var(--fm-danger) 10%, transparent);
 }
 
 .fm-inspector-alert.fm-alert-warning {
   border-left: 4px solid var(--fm-warning);
-  background: color-mix(in srgb, var(--fm-warning) 10%, transparent);
+  background: color-mix(in oklab, var(--fm-warning) 10%, transparent);
 }
 
 /*

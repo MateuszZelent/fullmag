@@ -23,6 +23,7 @@ function DialogOverlay({
     <DialogPrimitive.Overlay
       ref={ref}
       className={cn("fm-dialog__overlay", className)}
+      data-slot="dialog-overlay"
       {...props}
     />
   );
@@ -40,6 +41,7 @@ function DialogContent({
       <DialogPrimitive.Content
         ref={ref}
         className={cn("fm-dialog", className)}
+        data-slot="dialog-content"
         {...props}
       />
     </DialogPortal>

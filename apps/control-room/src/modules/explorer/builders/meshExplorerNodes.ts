@@ -8,7 +8,6 @@ import type {
   FdmMultilayerLayoutResource,
 } from "@/kernel/api/apiTypes";
 import type { FdmDomainPresentation } from "@/shared/domain/mesh/domainPresentation";
-import { canonicalVisualizationSceneObjectId } from "@/kernel/selection/selectionTypes";
 import { meshPipelineStatusIsActive } from "@/shared/domain/mesh/buildPipeline";
 import {
   resolveMeshBuildFreshness,
@@ -27,6 +26,7 @@ export function meshRootStatus(mesh: ModelTreeSnapshot["mesh"]): ExplorerNodeSta
   if (mesh?.meshName) return "mesh-ready";
   return "mesh-stale";
 }
+
 function meshRootBadge(mesh: ModelTreeSnapshot["mesh"]): string {
   if (
     mesh?.lastError &&
@@ -53,12 +53,14 @@ export function meshFreshnessState(mesh: ModelTreeSnapshot["mesh"]): MeshFreshne
           status: mesh.latestBuildStatus,
         }
       : null,
-    manifest: mesh?.manifestSourceSceneRevision != null || mesh?.manifestValidatedSceneRevision != null
-      ? {
-          source_scene_revision: mesh.manifestSourceSceneRevision,
-          validated_for_scene_revision: mesh.manifestValidatedSceneRevision,
-        }
-      : null,
+    manifest:
+      mesh?.manifestSourceSceneRevision != null ||
+      mesh?.manifestValidatedSceneRevision != null
+        ? {
+            source_scene_revision: mesh.manifestSourceSceneRevision,
+            validated_for_scene_revision: mesh.manifestValidatedSceneRevision,
+          }
+        : null,
     sceneRevision: mesh?.sourceSceneRevision ?? null,
     statusMeshRevision: mesh?.meshRevision ?? null,
   }).state;
@@ -92,7 +94,9 @@ function meshBuildPipelineBadge(mesh: ModelTreeSnapshot["mesh"]): string {
   ) {
     return `failed · retained rev ${mesh.meshRevision}`;
   }
-  return `rev ${revision} · scene ${sourceSceneRevision ?? "unknown"}`;
+  return sourceSceneRevision != null
+    ? `rev ${revision} · scene ${sourceSceneRevision}`
+    : `rev ${revision}`;
 }
 
 export function buildMeshPolicyNode(mesh: ModelTreeSnapshot["mesh"]): ExplorerNode {
@@ -133,10 +137,11 @@ export function buildMeshPolicyNode(mesh: ModelTreeSnapshot["mesh"]): ExplorerNo
       {
         id: "model:mesh:builds",
         kind: "mesh.builds",
-        label: "Build Pipeline",
+        label: "Build History",
         parentId: "model:mesh",
         badge: meshBuildPipelineBadge(mesh),
         icon: "activity",
+        selectable: true,
         status,
         contextCommands: ["mesh.build-shared-domain", "mesh.open-builds"],
       },
@@ -209,125 +214,56 @@ export function buildFdmMeshPolicyNode(
   const fallbackOrigin = (domainMeta?.grid?.origin ?? [0, 0, 0]) as [number, number, number];
   const fallbackSpacing = (domainMeta?.grid?.spacing ?? [0, 0, 0]) as [number, number, number];
   const grid = presentation?.fdmGrid ?? {
-    descriptor: domainMeta?.grid ?? { origin: fallbackOrigin, shape: fallbackShape, spacing: fallbackSpacing },
+    descriptor: domainMeta?.grid ?? {
+      origin: fallbackOrigin,
+      shape: fallbackShape,
+      spacing: fallbackSpacing,
+    },
     gridFingerprint: null,
     membership: null,
     membershipStatus:
-      presentationStatus === "error" ? "error" : presentationStatus === "loading" ? "loading" : presentationStatus === "stale" ? "stale" : "missing",
+      presentationStatus === "error"
+        ? "error"
+        : presentationStatus === "loading"
+          ? "loading"
+          : presentationStatus === "stale"
+            ? "stale"
+            : "missing",
     origin: fallbackOrigin,
     shape: fallbackShape,
     spacing: fallbackSpacing,
     totalCells: fallbackShape.reduce((product, value) => product * value, 1),
   };
-  const membership = grid.membership;
   const resolvedStatus = presentation?.resourceStatus ?? grid.membershipStatus;
   const status: ExplorerNodeStatus =
     !presentation && presentationStatus === "error"
       ? "degraded"
       : resolvedStatus === "realized"
-      ? "mesh-ready"
-      : resolvedStatus === "error"
-        ? "mesh-failed"
-        : resolvedStatus === "loading"
-          ? "mesh-building"
-          : resolvedStatus === "stale" || resolvedStatus === "incompatible"
-            ? "mesh-stale"
-            : resolvedStatus === "authoring-grid" || resolvedStatus === "missing"
+        ? "mesh-ready"
+        : resolvedStatus === "error"
+          ? "mesh-failed"
+          : resolvedStatus === "loading"
+            ? "mesh-building"
+            : resolvedStatus === "stale" || resolvedStatus === "incompatible"
               ? "mesh-stale"
-            : presentationStatus === "error"
-              ? "degraded"
-              : presentationStatus === "loading"
-                ? "mesh-building"
-                : "ready";
+              : resolvedStatus === "authoring-grid" || resolvedStatus === "missing"
+                ? "mesh-stale"
+                : presentationStatus === "error"
+                  ? "degraded"
+                  : presentationStatus === "loading"
+                    ? "mesh-building"
+                    : "ready";
+
   const cellCount = grid.totalCells;
-  const domainMeshId = "model:mesh:shared-domain";
-  const regionsMeshId = "model:mesh:regions";
-  const regionLegend = membership?.region_legend ?? [];
-  const regionOwnersById = new Map<string, Set<string>>();
-  for (const entry of regionLegend) {
-    const owners = regionOwnersById.get(entry.region_id) ?? new Set<string>();
-    owners.add(canonicalVisualizationSceneObjectId(entry.object_id));
-    regionOwnersById.set(entry.region_id, owners);
-  }
-  const regionNodes = regionLegend.map((entry) => {
-    const objectId = canonicalVisualizationSceneObjectId(entry.object_id);
-    const owners = regionOwnersById.get(entry.region_id);
-    return {
-      // Preserve the legacy region-only id while the region is unambiguous.
-      // Once multiple ferromagnetic owners publish the same region id, include
-      // the owner so Explorer keys and selection identities cannot collide.
-      id:
-        owners?.size === 1
-          ? `model:mesh:region:${encodeURIComponent(entry.region_id)}`
-          : `model:mesh:region:${encodeURIComponent(objectId)}:${encodeURIComponent(entry.region_id)}`,
-      kind: "mesh.grid.region" as const,
-      label: entry.region_id,
-      parentId: regionsMeshId,
-      objectId,
-      regionId: entry.region_id,
-      badge: `${entry.numeric_id}`,
-      icon: "layers" as const,
-      status: "ready" as const,
-    };
-  });
-  const structuredGridDetails: ExplorerNode[] = [
-    {
-      id: "model:mesh:grid",
-      kind: "mesh.grid.descriptor",
-      label: "Structured Grid",
-      parentId: domainMeshId,
-      badge: `${grid.shape.join(" × ")} / ${cellCount} cells`,
-      icon: "mesh",
-      status,
-      contextCommands: ["grid.build-fdm"],
-    },
-    {
-      id: "model:mesh:magnetic-support",
-      kind: "mesh.grid.magnetic-support",
-      label: "Magnetic Support",
-      parentId: domainMeshId,
-      badge: `${grid.shape.join(" × ")} cells`,
-      icon: "layers",
-      status,
-    },
-    {
-      id: "model:mesh:active-unassigned",
-      kind: "mesh.grid.active-unassigned",
-      label: "Active / Unassigned Cells",
-      parentId: domainMeshId,
-      badge: "FDM membership",
-      icon: "layers",
-      status: membership ? "ready" : "stale",
-    },
-    {
-      id: "model:mesh:mask",
-      kind: "mesh.grid.mask",
-      label: "Cell Mask",
-      parentId: domainMeshId,
-      badge: membership ? membership.encoding : "pending",
-      icon: "shield",
-      status,
-    },
-    {
-      id: "model:mesh:provenance",
-      kind: "mesh.grid.provenance",
-      label: "Grid Provenance",
-      parentId: domainMeshId,
-      badge: grid.gridFingerprint ?? presentation?.generationId ?? domainMeta?.generation_id ?? "pending",
-      icon: "activity",
-      status: "ready",
-    },
-  ];
-  const multilayerDetails = fdmMultilayerLayoutNodes(
-    domainMeshId,
+  const structuredGridId = "model:mesh:grid";
+  const layerChildren = fdmMultilayerDirectLayerNodes(
+    structuredGridId,
     multilayerLayout,
     multilayerLayoutStatus,
   );
+
   return {
     id: "model:mesh",
-    // Mesh is the shared product-level summary for both FEM and FDM.  The
-    // structured representation is a detail of its domain-mesh child, not a
-    // second product-level "FDM Grid" node.
     kind: "mesh.root",
     label: "Mesh",
     parentId: "model:session",
@@ -337,62 +273,37 @@ export function buildFdmMeshPolicyNode(
     contextCommands: ["grid.build-fdm", "workspace.focus-selection"],
     children: [
       {
-        id: domainMeshId,
-        kind: "mesh.shared-domain",
-        label: "Domain Mesh",
+        id: structuredGridId,
+        kind: "mesh.grid",
+        label: "Structured Grid",
         parentId: "model:mesh",
-        badge: `structured grid · ${grid.shape.join(" × ")} / ${cellCount} cells`,
+        badge: `${grid.shape.join(" × ")} / ${cellCount} cells`,
         icon: "mesh",
+        selectable: true,
         status,
+        visualizationTargetId: "fdm-domain",
         contextCommands: ["grid.build-fdm"],
-        children: [...structuredGridDetails, ...multilayerDetails],
+        ...(layerChildren.length > 0 ? { children: layerChildren } : {}),
       },
       {
         id: "model:mesh:builds",
         kind: "mesh.builds",
-        label: "Build Pipeline",
+        label: "Build History",
         parentId: "model:mesh",
-        badge: grid.gridFingerprint ?? presentation?.generationId ?? domainMeta?.generation_id ?? "execution artifact",
+        badge:
+          grid.gridFingerprint ??
+          presentation?.generationId ??
+          domainMeta?.generation_id ??
+          "execution artifact",
         icon: "activity",
-        selectable: false,
+        selectable: true,
         status,
-      },
-      {
-        id: "model:mesh:quality",
-        kind: "mesh.quality",
-        label: "Quality Gates",
-        parentId: "model:mesh",
-        badge: "structured-grid checks",
-        icon: "gauge",
-        selectable: false,
-        status: "ready",
-      },
-      {
-        id: "model:mesh:size-fields",
-        kind: "mesh.size-fields",
-        label: "Realized Size Fields",
-        parentId: "model:mesh",
-        badge: "uniform spacing",
-        icon: "settings",
-        selectable: false,
-        status: "ready",
-      },
-      {
-        id: regionsMeshId,
-        kind: "mesh.regions",
-        label: "Regions And Mesh Parts",
-        parentId: "model:mesh",
-        badge: `${regionNodes.length} regions / structured cells`,
-        icon: "layers",
-        selectable: false,
-        status: regionNodes.length > 0 ? "ready" : "stale",
-        children: regionNodes,
       },
     ],
   };
 }
 
-function fdmMultilayerLayoutNodes(
+function fdmMultilayerDirectLayerNodes(
   parentId: string,
   layout: FdmMultilayerLayoutResource | null | undefined,
   resourceStatus: ModelTreeSnapshot["fdmMultilayerLayoutStatus"],
@@ -409,126 +320,33 @@ function fdmMultilayerLayoutNodes(
       : resourceStatus === "loading" || resourceStatus === "stale"
         ? "mesh-building"
         : "ready";
-  const common = layout.common_transform_layout;
-  const commonNode: ExplorerNode = {
-    id: `${parentId}:common-convolution-grid`,
-    kind: "mesh.grid.common",
-    label: "Common Convolution Grid",
-    parentId,
-    badge: common ? `${common.shape.join(" × ")} · diagnostic` : "not published",
-    icon: "mesh",
-    status: common ? status : "degraded",
-    selectable: true,
-    visualizationTargetId: "fdm-domain",
-    nativeGrid: common ? tuple3(common.shape) : undefined,
-    nativeCellSize: common ? tuple3(common.cell_size) : undefined,
-    nativeOrigin: common ? tuple3(common.origin) : undefined,
-  };
-  const layerNodes: ExplorerNode[] = layout.layers.map((layer): ExplorerNode => {
-    const layerParentId = `${parentId}:native-layers:${encodeURIComponent(layer.layer_id)}`;
-    return {
-      id: layerParentId,
-      kind: "mesh.grid.layer" as const,
-      label: layer.magnet_name,
-      parentId: `${parentId}:native-layers`,
-      layerId: layer.layer_id,
-      objectId: layer.object_id,
-      badge: `${layer.native_grid.join(" × ")} · ${layer.transfer_kind}`,
-      icon: "layers" as const,
-      status,
-      visualizationTargetId: "fdm-domain",
-      nativeGrid: tuple3(layer.native_grid),
-      nativeCellSize: tuple3(layer.native_cell_size),
-      nativeOrigin: tuple3(layer.native_origin),
-      gridFingerprint: layer.native_grid_fingerprint,
-      transferKind: layer.transfer_kind,
-      activeMaskPresent: layer.active_mask_present,
-      activeCellCount: layer.active_cell_count,
-      inactiveCellCount: layer.inactive_cell_count,
-      children: [
-        {
-          id: `${layerParentId}:native-grid`,
-          kind: "mesh.grid.layer.native-grid" as const,
-          label: "Native Grid",
-          parentId: layerParentId,
-          layerId: layer.layer_id,
-          objectId: layer.object_id,
-          badge: `${layer.native_grid.join(" × ")} · ${layer.native_grid_fingerprint ?? "no fingerprint"}`,
-          icon: "mesh" as const,
-          status,
-          visualizationTargetId: "fdm-domain",
-          nativeGrid: tuple3(layer.native_grid),
-          nativeCellSize: tuple3(layer.native_cell_size),
-          nativeOrigin: tuple3(layer.native_origin),
-          gridFingerprint: layer.native_grid_fingerprint,
-        },
-        {
-          id: `${layerParentId}:active-mask`,
-          kind: "mesh.grid.layer.mask" as const,
-          label: "Active Mask",
-          parentId: layerParentId,
-          layerId: layer.layer_id,
-          objectId: layer.object_id,
-          badge: layer.active_mask_present ? `${layer.active_cell_count} active` : "dense / implicit",
-          icon: "shield" as const,
-          status,
-          visualizationTargetId: "fdm-domain",
-          activeMaskPresent: layer.active_mask_present,
-          activeCellCount: layer.active_cell_count,
-          inactiveCellCount: layer.inactive_cell_count,
-        },
-        {
-          id: `${layerParentId}:transfer`,
-          kind: "mesh.grid.layer.transfer" as const,
-          label: "Transfer",
-          parentId: layerParentId,
-          layerId: layer.layer_id,
-          objectId: layer.object_id,
-          badge: layer.transfer_kind,
-          icon: "activity" as const,
-          status,
-          visualizationTargetId: "fdm-domain",
-          transferKind: layer.transfer_kind,
-        },
-        {
-          id: `${layerParentId}:provenance`,
-          kind: "mesh.grid.layer.provenance" as const,
-          label: "Provenance",
-          parentId: layerParentId,
-          layerId: layer.layer_id,
-          objectId: layer.object_id,
-          badge: layout.layout_fingerprint ?? "unfingerprinted",
-          icon: "activity" as const,
-          status,
-          visualizationTargetId: "fdm-domain",
-          gridFingerprint: layer.native_grid_fingerprint,
-        },
-      ],
-    };
-  });
-  return [
-    commonNode,
-    {
-      id: `${parentId}:native-layers`,
-      kind: "mesh.grid.layers",
-      label: "Native Layers",
-      parentId,
-      badge: `${layout.layers.length}`,
-      icon: "layers",
-      status,
-      selectable: false,
-      children: layerNodes,
-    },
-  ];
-}
 
-/**
- * FDM exposes the same product-level Airbox entry as FEM when the declared
- * universe contains cells outside the realized magnetic support.  The mesh
- * child remains a structured-grid selection; the shared child labels are
- * retained for navigation, while the FDM lane renders them as read-only
- * execution facts instead of FEM element-size/topology controls.
- */
+  const sortedLayers = [...layout.layers].sort(
+    (left, right) => (left.native_origin[2] ?? 0) - (right.native_origin[2] ?? 0),
+  );
+
+  return sortedLayers.map((layer): ExplorerNode => ({
+    id: `${parentId}:layer:${encodeURIComponent(layer.layer_id)}`,
+    kind: "mesh.grid.layer",
+    label: layer.magnet_name,
+    parentId,
+    layerId: layer.layer_id,
+    objectId: layer.object_id,
+    badge: `${layer.native_grid.join(" × ")} · ${layer.transfer_kind}`,
+    icon: "layers",
+    selectable: true,
+    status,
+    visualizationTargetId: "fdm-domain",
+    nativeGrid: tuple3(layer.native_grid),
+    nativeCellSize: tuple3(layer.native_cell_size),
+    nativeOrigin: tuple3(layer.native_origin),
+    gridFingerprint: layer.native_grid_fingerprint,
+    transferKind: layer.transfer_kind,
+    activeMaskPresent: layer.active_mask_present,
+    activeCellCount: layer.active_cell_count,
+    inactiveCellCount: layer.inactive_cell_count,
+  }));
+}
 
 export type ExplorerDomainLane = "fdm" | "fem" | "unresolved";
 

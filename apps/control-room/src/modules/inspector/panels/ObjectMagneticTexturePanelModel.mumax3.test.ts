@@ -41,13 +41,17 @@ describe("Mumax3 magnetic texture UI coverage", () => {
       "antiskyrmion",
       "skyrmionium",
       "bimeron",
+      "skyrmion_lattice",
       "domain_wall",
       "two_domain",
       "vortex_wall",
+      "artificial_spin_ice",
       "helical",
       "conical",
+      "spiral",
       "hopfion",
       "hopfion_compact_support",
+      "bloch_point",
     ]);
   });
 

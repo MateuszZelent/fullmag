@@ -34,6 +34,8 @@ import {
   resolveViewport3DActiveQuantityId,
   resolveViewport3DModelQuantityId,
   resolveViewport3DPublishedModelQuantityIds,
+  resolveViewport3DFdmMembershipBinaryRefreshKey,
+  resolveViewport3DFdmMembershipRefreshKey,
   resolveViewport3DAnalysisComplexFieldQuery,
   resolveViewport3DAnalysisComplexProjectionEnabled,
   resolveViewport3DModeFieldOverlaySourceIdentity,
@@ -6397,5 +6399,149 @@ describe("primitive geometry without a compatible field", () => {
     expect(resolve({ primitiveVisible: true, shaderVisible: false })).toMatchObject({
       primitiveVisible: true, shaderVisible: false, vectorsVisible: false,
     });
+  });
+});
+
+describe("FDM region membership reconciliation after grid.build-fdm", () => {
+  const builtDomainMeta = {
+    bounds: { min: [0, 0, 0], max: [100e-9, 100e-9, 20e-9] },
+    coordinate_system: "cartesian",
+    counts: { cells: 3125, nodes: 0 },
+    dimension: 3,
+    discretization: "fdm",
+    domain_id: "fdm-domain",
+    generation_id: "gen-25x25x5",
+    grid: {
+      origin: [0, 0, 0],
+      shape: [25, 25, 5],
+      spacing: [4e-9, 4e-9, 4e-9],
+    },
+    units: { length: "m" },
+  };
+
+  it("triggers a membership refetch when domainMeta materializes while membership is stuck at pre-build null", () => {
+    const key = resolveViewport3DFdmMembershipRefreshKey({
+      domainMeta: builtDomainMeta as never,
+      fdmLaneActive: true,
+      liveViewportResourcesEnabled: true,
+      membership: null,
+      membershipStatus: "ready",
+    });
+    expect(key).toContain("missing:gen-25x25x5:25x25x5");
+
+    // Does not double-trigger while already loading or when FEM lane is active
+    expect(
+      resolveViewport3DFdmMembershipRefreshKey({
+        domainMeta: builtDomainMeta as never,
+        fdmLaneActive: true,
+        liveViewportResourcesEnabled: true,
+        membership: null,
+        membershipStatus: "loading",
+      }),
+    ).toBeNull();
+    expect(
+      resolveViewport3DFdmMembershipRefreshKey({
+        domainMeta: builtDomainMeta as never,
+        fdmLaneActive: false,
+        liveViewportResourcesEnabled: true,
+        membership: null,
+        membershipStatus: "ready",
+      }),
+    ).toBeNull();
+  });
+
+  it("triggers a membership and binary refetch when domainMeta advances to a newer grid generation", () => {
+    const staleMembership = {
+      binary_path: "mesh/fdm_region_membership.fmrm",
+      cell_count: 1000,
+      cell_m: [10e-9, 10e-9, 10e-9],
+      counts: [10, 10, 10],
+      domain_generation_id: "gen-old",
+      encoding: "fmrm.v2",
+      freshness: "current",
+      grid_fingerprint: "fp-old",
+      mesh_revision: 1,
+      object_ids: ["new-box-1"],
+      origin_m: [0, 0, 0],
+      region_legend: [],
+      region_membership_revision: 0,
+      schema_version: "fdm_region_membership.v2",
+    };
+    const currentMembership = {
+      ...staleMembership,
+      cell_count: 3125,
+      counts: [25, 25, 5],
+      domain_generation_id: "gen-25x25x5",
+      grid_fingerprint: "fp-new",
+    };
+
+    expect(
+      resolveViewport3DFdmMembershipRefreshKey({
+        domainMeta: builtDomainMeta as never,
+        fdmLaneActive: true,
+        liveViewportResourcesEnabled: true,
+        membership: staleMembership as never,
+        membershipStatus: "ready",
+      }),
+    ).toContain("stale:gen-25x25x5:25x25x5");
+
+    expect(
+      resolveViewport3DFdmMembershipRefreshKey({
+        domainMeta: builtDomainMeta as never,
+        fdmLaneActive: true,
+        liveViewportResourcesEnabled: true,
+        membership: currentMembership as never,
+        membershipStatus: "ready",
+      }),
+    ).toBeNull();
+
+    expect(
+      resolveViewport3DFdmMembershipBinaryRefreshKey({
+        binary: { cellCount: 1000, gridFingerprint: "fp-old" } as never,
+        binaryStatus: "ready",
+        fdmLaneActive: true,
+        liveViewportResourcesEnabled: true,
+        membership: currentMembership as never,
+      }),
+    ).toBe("gen-25x25x5:fp-new:3125");
+
+    expect(
+      resolveViewport3DFdmMembershipBinaryRefreshKey({
+        binary: { cellCount: 3125, gridFingerprint: "fp-new" } as never,
+        binaryStatus: "ready",
+        fdmLaneActive: true,
+        liveViewportResourcesEnabled: true,
+        membership: currentMembership as never,
+      }),
+    ).toBeNull();
+  });
+
+  it("preserves requested vectorsVisible on primitive objects with committed authored magnetization before solver fields exist", () => {
+    const controller = new ObjectVisualizationController();
+    const target = { id: "object:disk", kind: "object" as const, label: "Disk" };
+    controller.patchTarget(target, { vectorsVisible: true, visible: true });
+    const snapshot = controller.getSnapshot();
+    const input = {
+      objectContext: {
+        object: {
+          id: "disk",
+          magnetization_ref: "mag:disk",
+          physics_stack: [],
+          role: "magnet",
+        },
+        quantityCatalog: null,
+      },
+      snapshot,
+      target,
+    };
+
+    expect(
+      resolveViewport3DPrimitiveVisualizationSettings(input).vectorsVisible,
+    ).toBe(false);
+    expect(
+      resolveViewport3DPrimitiveVisualizationSettings(input, {
+        authoredMagnetizationAvailable: true,
+      }).vectorsVisible,
+    ).toBe(true);
   });
 });

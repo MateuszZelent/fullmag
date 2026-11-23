@@ -38,6 +38,7 @@ import {
   useMemo,
   useRef,
   useState,
+  useSyncExternalStore,
   type RefObject,
 } from "react";
 import {
@@ -193,6 +194,15 @@ import type { Viewport3DVectorBuildReference } from "../viewport3dRenderModel";
 import { FrozenSpinsOverlay } from "./FrozenSpinsOverlay";
 import { type FrozenSpinsOverlayModel } from "./FrozenSpinsOverlay.model";
 import { Viewport3DMoveToolLayer, type Translation3 } from "../MoveObjectGizmo";
+import {
+  Viewport3DTextureTransformLayer,
+  type Viewport3DTextureTransformModel,
+} from "../TextureTransformGizmo";
+import {
+  getTextureDraftBridgeSnapshot,
+  isTextureGizmoHandleModeActive,
+  subscribeTextureDraftBridge,
+} from "@/shared/domain/magnetization-texture/textureDraftBridge";
 
 const EMPTY_REGION_OVERLAYS: readonly RegionOverlayInput[] = [];
 
@@ -310,6 +320,7 @@ interface Viewport3DSceneProps {
   selectionBounds: Viewport3DBounds | null;
   selectedObjectId: string | null;
   selectedRegionId: string | null;
+  textureTransformModel: Viewport3DTextureTransformModel;
   tracker: Viewport3DResourceTracker;
   topologyFreshness: Viewport3DTopologyFreshness;
   topologyIndexStatus: "idle" | "building" | "ready" | "unavailable";
@@ -1149,6 +1160,91 @@ function Viewport3DOverlayLayerStack({
   );
 }
 
+export function hasActiveViewport3DFemFieldData(
+  fieldModel: Viewport3DFieldRenderModel | null | undefined,
+): boolean {
+  if (!fieldModel) return false;
+  if (fieldModel.analysisOverlayActive) return true;
+  if (fieldModel.scalarColors) return true;
+  if (fieldModel.fullVectorSegments?.length) return true;
+  for (const entry of fieldModel.scalarColorsByMode.values()) {
+    if (entry) return true;
+  }
+  for (const partModes of fieldModel.scalarColorsByPartAndMode.values()) {
+    for (const entry of partModes.values()) {
+      if (entry) return true;
+    }
+  }
+  if (fieldModel.partVectorSegments) {
+    for (const segments of fieldModel.partVectorSegments.values()) {
+      if (segments?.length) return true;
+    }
+  }
+  for (const pass of fieldModel.targetPasses.values()) {
+    if (
+      pass.surface?.scalarColors ||
+      pass.vectors?.segments?.length ||
+      pass.vectors?.complexGlyphs
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
+export function resolveViewport3DLiveFieldCoveredObjectIds({
+  fdmCuboidLayerEnabled,
+  fdmNativeLayerViews,
+  fdmTargetViews,
+  fieldModel,
+  primitiveModel,
+  savedViewportActive,
+}: {
+  fdmCuboidLayerEnabled: boolean;
+  fdmNativeLayerViews: readonly FdmNativeLayerRenderView[];
+  fdmTargetViews: readonly Viewport3DFdmTargetRenderView[];
+  fieldModel: Viewport3DFieldRenderModel | null | undefined;
+  primitiveModel: Viewport3DPrimitiveRenderModel | null | undefined;
+  savedViewportActive: boolean;
+}): ReadonlySet<string> {
+  const ids = new Set<string>();
+  if (savedViewportActive) return ids;
+
+  // FDM cuboid lane: collect objects from quantitative target/native-layer views.
+  if (fdmCuboidLayerEnabled) {
+    for (const view of fdmTargetViews) {
+      if (view.surfaceColors || view.vectorSegments?.length) {
+        if (
+          view.ownerTarget.kind === "object" &&
+          view.ownerTarget.id.startsWith("object:")
+        ) {
+          ids.add(view.ownerTarget.id.slice("object:".length));
+        }
+      }
+    }
+    for (const view of fdmNativeLayerViews) {
+      if (
+        (view.surfaceColors || view.vectorSegments?.length) &&
+        view.model &&
+        view.model.count > 0
+      ) {
+        ids.add(view.domain.objectId);
+      }
+    }
+  }
+
+  // FEM lane: only cover objects when fieldModel actually carries live field
+  // colors or an active analysis overlay (an empty shell must not suppress
+  // authored magnetization overlays).
+  if (primitiveModel && hasActiveViewport3DFemFieldData(fieldModel)) {
+    for (const obj of primitiveModel.objects) {
+      ids.add(obj.objectId);
+    }
+  }
+
+  return ids;
+}
+
 export function resolveViewport3DRealizedFdmObjectIds({
   fdmNativeLayerViews,
   fdmTargetViews,
@@ -1257,6 +1353,7 @@ function Viewport3DModelLayerStack({
   regionOverlays,
   selectedObjectId,
   selectedRegionId,
+  textureTransformModel,
   topologyFreshness,
   topology,
   topologyModel,
@@ -1323,6 +1420,7 @@ function Viewport3DModelLayerStack({
   | "regionOverlays"
   | "selectedObjectId"
   | "selectedRegionId"
+  | "textureTransformModel"
   | "topology"
   | "topologyFreshness"
   | "topologyModel"
@@ -1398,6 +1496,22 @@ function Viewport3DModelLayerStack({
     return ids;
   }, [committedTopologyParts, topologyLayerEnabled, stageVisibility.baseGeometry, primitiveModel, topologyModel,
     topologyFreshness, fdmCuboidLayerEnabled, fdmNativeLayerViews, fdmTargetViews]);
+
+  // Set of objectIds currently covered by an active live discretized solver field.
+  // Used by Viewport3DTextureTransformLayer to suppress the static authored
+  // magnetization overlay when live simulation results are being rendered.
+  const liveFieldCoveredObjectIds = useMemo(
+    () =>
+      resolveViewport3DLiveFieldCoveredObjectIds({
+        fdmCuboidLayerEnabled,
+        fdmNativeLayerViews,
+        fdmTargetViews,
+        fieldModel,
+        primitiveModel,
+        savedViewportActive,
+      }),
+    [fdmCuboidLayerEnabled, fdmTargetViews, fdmNativeLayerViews, fieldModel, savedViewportActive, primitiveModel],
+  );
 
   if (!sceneLayersEnabled) return null;
 
@@ -1599,6 +1713,16 @@ function Viewport3DModelLayerStack({
         primitiveModel={primitiveModel}
         selectedObjectId={selectedObjectId}
       />
+      <Viewport3DTextureTransformLayer
+        onGestureActiveChange={onMoveGestureActiveChange}
+        primitiveModel={primitiveModel}
+        selectedObjectId={selectedObjectId}
+        textureTransformModel={textureTransformModel}
+        tracker={tracker}
+        savedViewportActive={savedViewportActive}
+        getObjectSettings={getObjectSettings}
+        liveFieldCoveredObjectIds={liveFieldCoveredObjectIds}
+      />
       {topologyLayerEnabled ? (
         <group visible={stageVisibility.baseGeometry}>
           <TopologyMeshLayer
@@ -1743,6 +1867,7 @@ function Viewport3DInteractionAndHudStack({
   orbitDebugCommitRevision,
   orbitDebugRevision,
   rotationMode,
+  selectedObjectId,
   tracker,
   viewCubeVisible,
   moveGestureActive,
@@ -1763,6 +1888,7 @@ function Viewport3DInteractionAndHudStack({
   | "orbitDebugCommitRevision"
   | "orbitDebugRevision"
   | "rotationMode"
+  | "selectedObjectId"
   | "tracker"
   | "viewCubeVisible"
 > & {
@@ -1770,6 +1896,16 @@ function Viewport3DInteractionAndHudStack({
   moveGestureActive: boolean;
   quantitativeDataVisible: boolean;
 }) {
+  const textureBridge = useSyncExternalStore(
+    subscribeTextureDraftBridge,
+    getTextureDraftBridgeSnapshot,
+    getTextureDraftBridgeSnapshot,
+  );
+  const gizmoRotateLocked = isTextureGizmoHandleModeActive(
+    textureBridge,
+    selectedObjectId,
+  );
+
   return (
     <>
       <OrbitCameraControls
@@ -1786,7 +1922,8 @@ function Viewport3DInteractionAndHudStack({
         onCameraInteractionStart={onCameraInteractionStart}
         orbitDebugStore={orbitDebugStore}
         tracker={tracker}
-        interactionBlocked={moveGestureActive}
+        interactionBlocked={moveGestureActive || textureBridge.gestureActive}
+        rotateLocked={gizmoRotateLocked}
         rotationMode={rotationMode}
       />
       {viewport3DOrientationHudEnabledFromBrowserConfig() ? (
@@ -1961,6 +2098,7 @@ export function Viewport3DScene({
   selectionBounds,
   selectedObjectId,
   selectedRegionId,
+  textureTransformModel,
   tracker,
   topology,
   topologyFreshness,
@@ -2452,6 +2590,7 @@ export function Viewport3DScene({
         regionOverlays={regionOverlays}
         selectedObjectId={selectedObjectId}
         selectedRegionId={selectedRegionId}
+        textureTransformModel={textureTransformModel}
         sceneLayersEnabled={sceneLayersEnabled}
         savedViewportActive={savedViewportActive}
         stageVisibility={stageVisibility}
@@ -2520,6 +2659,7 @@ export function Viewport3DScene({
         onCameraInteractionStart={onCameraInteractionStart}
         orbitDebugStore={orbitDebugStore}
         rotationMode={rotationMode}
+        selectedObjectId={selectedObjectId}
         tracker={tracker}
         viewCubeVisible={viewCubeVisible}
         moveGestureActive={moveGestureActive}

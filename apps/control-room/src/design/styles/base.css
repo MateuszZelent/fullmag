@@ -1,4 +1,11 @@
-* {
+:root {
+  /* Opt-in to animating intrinsic sizes (height/block-size: auto) where supported. */
+  interpolate-size: allow-keywords;
+}
+
+*,
+*::before,
+*::after {
   box-sizing: border-box;
 }
 
@@ -26,10 +33,42 @@ textarea {
   font: inherit;
 }
 
+/* Physics quantity symbols (Ms, A_ex, alpha, Ku1, Ku2, B_0) rendered in STIX Two Text italic. */
+.fm-sym {
+  font-family: var(--fm-font-symbol);
+  font-style: italic;
+  letter-spacing: 0;
+  font-size: 1.1em;
+}
+
+.fm-sym sub,
+.fm-sym sup {
+  font-size: 0.7em;
+  line-height: 0;
+}
+
+sub,
+sup {
+  line-height: 0;
+}
+
+:where(
+  a[href],
+  button,
+  input,
+  select,
+  textarea,
+  summary,
+  [role="tab"],
+  [role="radio"],
+  [role="switch"],
+  [tabindex="0"]
+):focus-visible,
 :focus-visible {
   border-radius: var(--fm-radius-sm);
   /* Transparent (not none): invisible normally, painted by forced colors. */
   outline: 2px solid transparent;
+  outline-offset: 2px;
   box-shadow: var(--fm-focus-ring);
 }
 
@@ -46,10 +85,19 @@ textarea {
 }
 
 /*
- * Reduced motion is handled per rule next to each animation or transition
- * (opt-in under `prefers-reduced-motion: no-preference`, or gentler
- * parameters under `reduce`). No global duration override.
+ * Global vestibular safety guard: snap animations and transitions when the user
+ * prefers reduced motion. Permitted system accessibility override in fm-base.
  */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
 
 /* Shared opacity-only crossfades used as reduced-motion alternatives. */
 @keyframes fm-reduced-fade-in {
@@ -69,17 +117,17 @@ textarea {
 }
 
 @keyframes accordion-down {
-  from { height: 0 }
-  to { height: var(--radix-accordion-content-height) }
+  from { height: 0; }
+  to { height: var(--radix-accordion-content-height); }
 }
 
 @keyframes accordion-up {
-  from { height: var(--radix-accordion-content-height) }
-  to { height: 0 }
+  from { height: var(--radix-accordion-content-height); }
+  to { height: 0; }
 }
 
-/* Screen-reader-only utility: visually hidden but accessible to assistive tech */
-.fm-visually-hidden {
+/* Screen-reader-only utility: visually hidden but accessible to assistive tech. */
+.fm-visually-hidden:where(:not(:focus-within, :active)) {
   position: absolute;
   width: 1px;
   height: 1px;
@@ -105,7 +153,7 @@ textarea {
   padding: var(--fm-space-2) var(--fm-space-4);
   background: var(--fm-bg-panel-raised);
   color: var(--fm-text-primary);
-  border: 1px solid var(--fm-border-default);
+  border: 1px solid var(--fm-border-control);
   border-radius: 0 0 var(--fm-radius-md) 0;
   font-family: var(--fm-font-ui);
   font-size: var(--fm-font-size-sm);

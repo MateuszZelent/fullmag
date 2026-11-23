@@ -143,13 +143,17 @@ const PRESET_IDS = new Set<string>([
   "antiskyrmion",
   "skyrmionium",
   "bimeron",
+  "skyrmion_lattice",
   "domain_wall",
   "two_domain",
   "vortex_wall",
+  "artificial_spin_ice",
   "helical",
   "conical",
+  "spiral",
   "hopfion",
   "hopfion_compact_support",
+  "bloch_point",
 ]);
 
 function asPresetKind(value: unknown): MagnetizationTexturePresetId | null {

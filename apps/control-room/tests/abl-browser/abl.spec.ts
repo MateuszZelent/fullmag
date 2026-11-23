@@ -238,44 +238,59 @@ test("ABL editor updates the live FDM damping field and canonical script", async
     await expect(quantity).toContainText(/alpha|damping|α/i);
   });
   await page.screenshot({ path: info.outputPath("shaded-material-alpha.png") });
-  const parentId = `model:object:${fixture.object_id}:magnetic-parameters`;
+  const parentId = `model:object:${fixture.object_id}`;
   const parent = page.locator(`[data-node-id="${parentId}"]`);
   const child = page.locator(`[data-node-id="${parentId}:absorbing-boundary"]`);
+  const enabled = page.getByRole("switch", { name: "Toggle Absorbing boundary (SAL)", exact: true });
+  const save = page.locator('[data-slot="inspector-commit-bar"]').getByRole("button", { name: /^Apply\b/ });
+  const field = (name: string) => page.locator("input,textarea").and(page.getByLabel(name, { exact: true }));
+  const select = async (name: string, option: string) => {
+    await page.getByRole("combobox", { name, exact: true }).click();
+    await page.getByRole("option", { name: option, exact: true }).click();
+  };
   await parent.click();
-  const enabled = page.getByRole("checkbox", { name: "Absorbing Boundary", exact: true });
-  const save = page.getByRole("button", { name: "Apply", exact: true });
-  await expect(enabled).not.toBeChecked();
+  await expect(enabled).toHaveAttribute("aria-checked", "false");
   await expect(child).toHaveCount(0);
-  await expect(page.getByLabel("Ramp width", { exact: true })).toHaveCount(0);
+  await expect(field("Ramp rise width")).toHaveCount(0);
   if (await parent.getAttribute("aria-expanded") === "true") {
     await parent.locator(".fm-explorer-tree-row__branch").click();
   }
-  await enabled.check();
   const [activation] = await Promise.all([
     page.waitForResponse(r => r.url() === objectUrl && r.request().method() === "PATCH"),
-    save.click(),
+    enabled.click(),
   ]);
   expect(activation.status()).toBe(200);
   const activatedScene = await readScene();
   expect(activatedScene.revision).toBeGreaterThan(revision);
   revision = activatedScene.revision;
-  expect(activatedScene.objects[0].absorbing_boundary.faces).toContain("x+");
+  const [initialLayer] = activatedScene.objects[0].absorbing_boundary.layers;
+  expect(initialLayer.geometry).toEqual({ kind: "faces", faces: ["x+"] });
   await expect(parent).toHaveAttribute("aria-expanded", "true");
   await expect(child).toBeVisible();
   await child.click();
-  const field = (name: string) => page.locator("input,select").and(page.getByLabel(name, { exact: true }));
-  const group = page.locator('section[data-slot="inspector-group"]').filter({ has: field("Profile") });
+  const group = page.locator('[data-slot="inspector-root"]').filter({
+    has: field("Maximum damping increment"),
+  });
   await expect(group).toBeVisible();
   const panel = await group.elementHandle();
   const apply = async (step: string, layer: Layer | null) => {
     await readScene();
-    const patch = layer ? { total_width_m: 40e-9, ramp_width_m: 20e-9, max_damping: layer.amplitude,
-      profile: layer.profile, frame: "universe", faces: [layer.face],
-      ...(layer.profile === "custom" ? { expression: "u**3" } : {}) } : null;
+    const patch = layer ? { layers: [{
+      layer_id: initialLayer.layer_id,
+      name: initialLayer.name,
+      enabled: true,
+      geometry: { kind: "faces", faces: [layer.face] },
+      total_width_m: 40e-9,
+      ramp_width_m: 20e-9,
+      max_damping: layer.amplitude,
+      profile: layer.profile,
+      frame: "universe",
+      ...(layer.profile === "custom" ? { expression: "u**3" } : {}),
+    }] } : null;
     await observeChange(step, layer, async () => {
       const [saved] = await Promise.all([
         page.waitForResponse((r) => r.url() === objectUrl && r.request().method() === "PATCH", { timeout }),
-        save.click(),
+        layer ? save.click() : enabled.click(),
       ]);
       expect(saved.status()).toBe(200);
       expect(saved.request().postDataJSON().absorbing_boundary).toEqual(patch);
@@ -289,7 +304,7 @@ test("ABL editor updates the live FDM damping field and canonical script", async
       expect(await group.evaluate((element, original) => element === original, panel)).toBe(true);
     } else {
       await expect(child).toHaveCount(0);
-      await expect(enabled).not.toBeChecked();
+      await expect(enabled).toHaveAttribute("aria-checked", "false");
     }
     if (layer?.profile === "custom" || !layer) {
       const rendered = await page.request.post(url("model/syncs"), { headers, data: { expected_scene_revision: revision } });
@@ -299,43 +314,43 @@ test("ABL editor updates the live FDM damping field and canonical script", async
       const calls = source.split("\n").filter((line: string) => line.includes(".alpha.absorbing_boundary("));
       expect(calls).toHaveLength(layer ? 1 : 0);
       if (layer) {
-        expect(calls[0]).toContain('expression="u**3"');
-        expect(calls[0]).toContain('faces=("x-",)');
+        expect(calls[0]).toContain("layers=[");
+        expect(source).toContain("expression='u**3'");
+        expect(source).toContain("geometry=fm.AbsorbingGeometry.faces(faces=['x-'])");
       }
       await writeFile(info.outputPath(step + "-export.py"), source);
     }
   };
-  await field("Total width").fill("4e-8");
-  await field("Ramp width").fill("2e-8");
-  await field("Maximum damping").fill("0.5");
-  await field("Frame").selectOption("universe");
-  await field("Profile").selectOption("logarithmic");
-  await field("x+").check();
-  await expect(field("Expression")).toHaveCount(0);
+  await field("Total absorbing width").fill("40");
+  await field("Ramp rise width").fill("20");
+  await field("Maximum damping increment").fill("0.5");
+  await page.getByRole("radio", { name: "Universe world", exact: true }).click();
+  await select("Ramp profile shape", "Logarithmic");
+  await expect(field("Custom profile f(u) on u ∈ [0, 1]")).toHaveCount(0);
   await apply("added-x-plus", { profile: "logarithmic", face: "x+", amplitude: 0.5 });
-  await field("x+").uncheck();
-  await field("x-").check();
-  await field("Profile").selectOption("tanh");
-  await field("Maximum damping").fill("0.8");
-  await expect(field("Expression")).toHaveCount(0);
+  await page.getByRole("button", { name: "X-", exact: true }).click();
+  await page.getByRole("button", { name: "X+", exact: true }).click();
+  await select("Ramp profile shape", "Tanh");
+  await field("Maximum damping increment").fill("0.8");
+  await expect(field("Custom profile f(u) on u ∈ [0, 1]")).toHaveCount(0);
   await apply("moved-x-minus", { profile: "tanh", face: "x-", amplitude: 0.8 });
-  await field("Profile").selectOption("custom");
-  await field("Expression").fill("u**3");
+  await select("Ramp profile shape", "Custom");
+  await field("Custom profile f(u) on u ∈ [0, 1]").fill("u**3");
   await apply("custom", { profile: "custom", face: "x-", amplitude: 0.8 });
   const left: Layer = { profile: "custom", face: "x-", amplitude: 0.8, boundaryNm: -80 };
   const right: Layer = { profile: "custom", face: "x+", amplitude: 0.3, boundaryNm: 40 };
-  await field("Geometry").selectOption("plane");
-  await field("Origin X").fill("-8e-8");
+  await select("Contour geometry", "Arbitrary cut plane");
+  await field("Reference origin / center x").fill("-80");
   await page.getByRole("button", { name: "Reverse normal" }).click();
   await field("Layer name").fill("Left plane");
   await page.getByRole("button", { name: "Duplicate layer" }).click();
   await field("Layer name").fill("Interior plane");
-  await field("Origin X").fill("4e-8");
+  await field("Reference origin / center x").fill("40");
   await page.getByRole("button", { name: "Reverse normal" }).click();
-  await field("Maximum damping").fill("0.3");
+  await field("Maximum damping increment").fill("0.3");
   // Hold the first collection PATCH to exercise draft focus and structural stability across pending and ACK.
   const inspectorSnapshot = () => group.evaluate(root => {
-    const scrollArea = root.closest(".fm-scroll-area__viewport");
+    const scrollArea = root.querySelector('[data-slot="inspector-scroll"]');
     if (!scrollArea) throw new Error("Missing Inspector scroll viewport");
     return {
       fields: [...root.querySelectorAll<HTMLInputElement | HTMLSelectElement>("input,select")].map(control => ({
@@ -367,7 +382,8 @@ test("ABL editor updates the live FDM damping field and canonical script", async
       const layers = scene.objects[0].absorbing_boundary.layers;
       expect(layers).toEqual(response.request().postDataJSON().absorbing_boundary.layers);
       expect(new Set(layers.map((item: { layer_id: string }) => item.layer_id)).size).toBe(expectedCount);
-      expect(layers[0]).toMatchObject({ name: "Left plane", geometry: { kind: "plane", normal: [-1, 0, 0], origin: [expectedCount === 2 ? -8e-8 : -6e-8, 0, 0] } });
+      expect(layers[0]).toMatchObject({ name: "Left plane", enabled: true, geometry: { kind: "plane", normal: [-1, 0, 0], origin: [expect.any(Number), 0, 0] } });
+      expect(layers[0].geometry.origin[0] * 1e9).toBeCloseTo(expectedCount === 2 ? -80 : -60, 10);
       if (expectedCount === 2) {
         expect(layers[1]).toMatchObject({ name: "Interior plane", enabled: expected.length === 2,
           geometry: { kind: "plane", normal: [1, 0, 0], origin: [4e-8, 0, 0] } });
@@ -375,9 +391,9 @@ test("ABL editor updates the live FDM damping field and canonical script", async
     });
     expect(await group.evaluate((element, original) => element === original, panel)).toBe(true);
   };
-  await field("Origin X").focus();
+  await field("Reference origin / center x").focus();
   const baseline = await inspectorSnapshot();
-  expect(baseline.focus).toBe("Origin X");
+  expect(baseline.focus).toBe("Reference origin / center x");
   expect(baseline.animations).toBe(0);
   const beforeCommits = await commitCount();
   let patchCount = 0;
@@ -403,14 +419,20 @@ test("ABL editor updates the live FDM damping field and canonical script", async
   } finally {
     await page.unroute(objectUrl);
   }
-  await field("Layer enabled").uncheck();
+  await expect(page.getByRole("button", { name: "Interior plane", exact: true }))
+    .toHaveAttribute("aria-pressed", "true");
+  await expect(field("Reference origin / center x")).toHaveValue("40");
+  await page.getByRole("switch", { name: "Enable absorbing layer", exact: true }).click();
   await saveLayers("interior-plane-disabled", [left], 2);
-  await page.getByRole("button", { name: "Remove layer" }).click();
+  await expect(page.getByRole("button", { name: "Interior plane (disabled)", exact: true }))
+    .toHaveAttribute("aria-pressed", "true");
+  await page.getByRole("button", { name: "Remove active layer" }).click();
+  await expect(page.getByRole("button", { name: "Left plane", exact: true }))
+    .toHaveAttribute("aria-pressed", "true");
   // Reposition the remaining plane so its field changes after removal as well.
-  await field("Origin X").fill("-6e-8");
+  await field("Reference origin / center x").fill("-60");
   await saveLayers("interior-plane-removed", [{ ...left, boundaryNm: -60 }], 1);
   await parent.click();
-  await enabled.uncheck();
   await apply("removed", null);
   // Pick the rendered film, then add its absorber from the Physics ribbon.
   await canvas.click();
@@ -427,7 +449,14 @@ test("ABL editor updates the live FDM damping field and canonical script", async
   expect(created.status()).toBe(200);
   const ribbonScene = await readScene();
   expect(ribbonScene.revision).toBeGreaterThan(revision);
-  expect(ribbonScene.objects[0].absorbing_boundary).toEqual(activatedScene.objects[0].absorbing_boundary);
+  expect(ribbonScene.objects[0].absorbing_boundary).toEqual({
+    faces: initialLayer.geometry.faces,
+    frame: initialLayer.frame,
+    profile: initialLayer.profile,
+    total_width_m: initialLayer.total_width_m,
+    ramp_width_m: initialLayer.ramp_width_m,
+    max_damping: initialLayer.max_damping,
+  });
   await expect(child).toHaveAttribute("aria-selected", "true");
   await expect(group).toBeVisible();
   await page.screenshot({ path: info.outputPath("ribbon-created-absorber.png") });

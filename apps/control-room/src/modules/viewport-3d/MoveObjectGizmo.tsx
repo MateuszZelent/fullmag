@@ -86,8 +86,8 @@ function MoveObjectGizmo({
       </mesh>
       {(["x", "y", "z"] as const).map((axis, index) => (
         <mesh
-          {...moveAxisPointerHandlers(controller, axis)}
           key={axis}
+          {...moveAxisPointerHandlers(controller, axis)}
           name={`move-axis:${axis}:${object.objectId}`}
           position={axisPosition(axis, length)}
           rotation={axisRotation(axis)}

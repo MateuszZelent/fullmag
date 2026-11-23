@@ -161,6 +161,7 @@ fn build_summary(scene: &Value, runs: &[ProjectRun]) -> ProjectSummary {
         outputs: OutputsSummary {
             frames: latest.and_then(|run| run.frames),
             size_bytes: latest.and_then(|run| run.output_bytes),
+            fields: latest.and_then(|run| run.fields.clone()),
         },
     }
 }

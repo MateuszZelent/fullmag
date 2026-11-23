@@ -18,6 +18,74 @@ vi.mock("@radix-ui/react-dialog", async (importOriginal) => {
   };
 });
 
+vi.mock("@radix-ui/react-select", async () => {
+  const React = await import("react");
+  const Ctx = React.createContext<{
+    value?: string;
+    onValueChange?: (next: string) => void;
+  }>({});
+  return {
+    Root: ({
+      children,
+      value,
+      onValueChange,
+    }: {
+      children?: ReactNode;
+      value?: string;
+      onValueChange?: (next: string) => void;
+    }) => (
+      <Ctx.Provider value={{ value, onValueChange }}>
+        <div data-slot="mock-select-root">{children}</div>
+      </Ctx.Provider>
+    ),
+    Group: ({ children }: { children?: ReactNode }) => <div>{children}</div>,
+    Value: ({ placeholder }: { placeholder?: string }) => {
+      const ctx = React.useContext(Ctx);
+      return <span>{ctx.value || placeholder || ""}</span>;
+    },
+    Trigger: ({ children, ...rest }: { children?: ReactNode }) => (
+      <button type="button" {...rest}>
+        {children}
+      </button>
+    ),
+    Icon: ({ children }: { children?: ReactNode }) => <>{children}</>,
+    Portal: ({ children }: { children?: ReactNode }) => <>{children}</>,
+    Content: ({ children }: { children?: ReactNode }) => (
+      <div data-slot="mock-select-content">{children}</div>
+    ),
+    Viewport: ({ children }: { children?: ReactNode }) => <div>{children}</div>,
+    Item: ({
+      children,
+      value,
+      disabled,
+    }: {
+      children?: ReactNode;
+      value: string;
+      disabled?: boolean;
+    }) => {
+      const ctx = React.useContext(Ctx);
+      return (
+        <button
+          aria-selected={ctx.value === value}
+          data-select-value={value}
+          disabled={disabled}
+          role="option"
+          type="button"
+          onClick={() => ctx.onValueChange?.(value)}
+        >
+          {children}
+        </button>
+      );
+    },
+    ItemText: ({ children }: { children?: ReactNode }) => <span>{children}</span>,
+    ItemIndicator: ({ children }: { children?: ReactNode }) => <>{children}</>,
+    Label: ({ children }: { children?: ReactNode }) => <div>{children}</div>,
+    Separator: () => <hr />,
+    ScrollUpButton: () => null,
+    ScrollDownButton: () => null,
+  };
+});
+
 import { CommandDetailDialog, ImportStateDialog, RestoreCheckpointDialog, StudyBoundarySection, StudyCommandButton, StudyRuntimeSection, StudySelectedStageSection, studyInspectorPanelReducer, studyInspectorRuntimeStatusEquals } from "./StudyInspectorPanel";
 import { deriveK0ModalExecutionReadiness, applyStudyDraftsWithPartialFailure } from "./StudyInspectorPanel.model";
 import {
@@ -26,7 +94,6 @@ import {
   StudyStageDraftEditor,
 } from "./StudyPipelineSection";
 import { createStudyGlobalDraft } from "./StudyGlobalAuthoringModel";
-import { StageInspectorFrame } from "./stages/StageInspectorFrame";
 import { createDefaultStudyStageDraft } from "./StudyStageAuthoringModel";
 
 function testBoundary(overrides: Record<string, string> = {}) {
@@ -53,60 +120,6 @@ function testRequested(overrides: Record<string, string> = {}) {
 }
 
 describe("StudyInspectorPanel", () => {
-  it("renders the Run action outside the read-only pipeline authoring fieldset", () => {
-    const html = renderToStaticMarkup(<StageInspectorFrame
-      authoringBusy={false}
-      authoringFeedback={null}
-      draft={{ ...createDefaultStudyStageDraft("relax", 0), pipelineNodeId: "relax-b" }}
-      draftIndex={0}
-      expectedKind="relax"
-      kindLabel="Relax"
-      onCommit={() => undefined}
-      onUpdateDraft={() => undefined}
-      stage={null}
-      stageExecutionRevision={null}
-      stageLaunch={{
-        disabledReason: null,
-        feedback: null,
-        label: "Run this stage",
-        onRun: () => undefined,
-      }}
-      validation={[]}
-    />);
-
-    expect(html).toContain("<fieldset");
-    expect(html).toContain("Canonical pipeline stage (read-only)");
-    expect(html.indexOf("Run this stage")).toBeGreaterThan(html.indexOf("</fieldset>"));
-    expect(html).not.toMatch(/<button[^>]*disabled=""[^>]*>(?:(?!<\/button>).)*Run this stage/);
-  });
-
-  it("opens the canonical Relax editor while keeping the stage identity fixed", () => {
-    const html = renderToStaticMarkup(<StageInspectorFrame
-      authoringBusy={false}
-      authoringFeedback={null}
-      draft={{
-        ...createDefaultStudyStageDraft("relax", 0),
-        pipelineNodeId: "relax-b", stageId: "relax-b",
-        rawStage: { kind: "relax", max_steps: "50" },
-      }}
-      draftIndex={0}
-      expectedKind="relax"
-      kindLabel="Relax"
-      onCommit={() => undefined}
-      onUpdateDraft={() => undefined}
-      pipelineDraftDirty
-      stage={null}
-      stageExecutionRevision={null}
-      validation={[]}
-    />);
-
-    expect(html).not.toMatch(/<fieldset[^>]*disabled=""/);
-    expect(html).not.toContain("Field every");
-    expect(html).toContain("Max steps");
-    expect(html).toContain("Save stage");
-    expect(html).toMatch(/<input[^>]*disabled=""[^>]*value="relax-b"/);
-  });
-
   it("keeps changes typed after the submitted stage draft while applying the ACK", () => {
     const globalDraft = createStudyGlobalDraft(null);
     const baseline = createDefaultStudyStageDraft("relax", 0);

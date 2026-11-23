@@ -298,6 +298,100 @@ pub(crate) fn geometry_entry_bounds(
     node_bounds(&node_from_geometry_entry(entry)?)
 }
 
+fn node_from_region_shape(shape: &RegionShapeIR) -> Result<GeometryNode, SelectionError> {
+    let node = match shape {
+        RegionShapeIR::Box { size, center } => GeometryNode::Box {
+            size_m: *size,
+            center_m: *center,
+        },
+        RegionShapeIR::Cylinder {
+            radius,
+            height,
+            center,
+            axis,
+        } => GeometryNode::Cylinder {
+            radius_m: *radius,
+            height_m: *height,
+            center_m: *center,
+            axis: normalize_axis(*axis)?,
+        },
+        RegionShapeIR::Sphere { radius, center } => GeometryNode::Sphere {
+            radius_m: *radius,
+            center_m: *center,
+        },
+        RegionShapeIR::Csg { expression } => node_from_geometry_entry(expression)?,
+    };
+    validate_node(&node)?;
+    Ok(node)
+}
+
+/// Compute the canonical analytic AABB `(min, max)` of a region shape in the
+/// owning object's local coordinate frame, optionally clipped to `object_bounds_local`.
+///
+/// Matches TypeScript `resolveTargetBoundsMeters` in
+/// `apps/control-room/src/shared/domain/magnetization-texture/boundsResolver.ts`
+/// so `space = "region"` center and default `tile_period` agree across TS, Python,
+/// FDM, FEM, and live-apply without discretization drift.
+pub fn region_shape_bounds_in_object_space(
+    shape: &RegionShapeIR,
+    frame: RegionFrameIR,
+    object_transform: AffineTransform3,
+    object_bounds_local: Option<([f64; 3], [f64; 3])>,
+) -> Result<([f64; 3], [f64; 3]), SelectionError> {
+    let raw_bounds = node_bounds(&node_from_region_shape(shape)?)?;
+    let (local_min, local_max) = match frame {
+        RegionFrameIR::Object => raw_bounds,
+        RegionFrameIR::World => {
+            let mut min_l = [f64::INFINITY; 3];
+            let mut max_l = [f64::NEG_INFINITY; 3];
+            for x in [raw_bounds.0[0], raw_bounds.1[0]] {
+                for y in [raw_bounds.0[1], raw_bounds.1[1]] {
+                    for z in [raw_bounds.0[2], raw_bounds.1[2]] {
+                        let local_pt = inverse_transform([x, y, z], object_transform)?;
+                        for axis in 0..3 {
+                            min_l[axis] = min_l[axis].min(local_pt[axis]);
+                            max_l[axis] = max_l[axis].max(local_pt[axis]);
+                        }
+                    }
+                }
+            }
+            (min_l, max_l)
+        }
+    };
+    if let Some((obj_min, obj_max)) = object_bounds_local {
+        let inter_min = [
+            local_min[0].max(obj_min[0]),
+            local_min[1].max(obj_min[1]),
+            local_min[2].max(obj_min[2]),
+        ];
+        let inter_max = [
+            local_max[0].min(obj_max[0]),
+            local_max[1].min(obj_max[1]),
+            local_max[2].min(obj_max[2]),
+        ];
+        if inter_min[0] <= inter_max[0]
+            && inter_min[1] <= inter_max[1]
+            && inter_min[2] <= inter_max[2]
+        {
+            return Ok((inter_min, inter_max));
+        }
+    }
+    Ok((local_min, local_max))
+}
+
+pub fn object_region_bounds_in_object_space(
+    region: &ObjectRegionIR,
+    object_transform: AffineTransform3,
+    object_bounds_local: Option<([f64; 3], [f64; 3])>,
+) -> Result<([f64; 3], [f64; 3]), SelectionError> {
+    region_shape_bounds_in_object_space(
+        &region.shape,
+        region.frame,
+        object_transform,
+        object_bounds_local,
+    )
+}
+
 fn node_from_geometry_entry(entry: &GeometryEntryIR) -> Result<GeometryNode, SelectionError> {
     let node = match entry {
         GeometryEntryIR::Box { size, .. } => GeometryNode::Box {

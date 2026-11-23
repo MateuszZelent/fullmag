@@ -111,6 +111,7 @@ export function detailToModelSummary(detail: ProjectDetail | undefined): ModelSu
     excitation: execution.excitation,
     outputFrames: outputs.frames,
     outputBytes: outputs.sizeBytes,
+    outputFields: outputs.fields,
   };
 }
 

@@ -477,6 +477,25 @@ pub(crate) fn resolved_quantity_capability_for_snapshot(
                 resolved.provider, resolved.request, resolved.materialization, &resolved.carriers);
         }
     }
+    // When a runtime provider is present (capabilities.is_some()) but the
+    // resolved provider is still unavailable, the prepared initial-state field
+    // may already be materialized and readable. Expose the prepared carrier
+    // while preserving the true resolved lane from capabilities (e.g., fdm/fem)
+    // instead of falsifying provenance with "unresolved".
+    if !field_only
+        && resolved.provider == fullmag_runner::QuantityProviderCapability::Unavailable
+        && resolved.reason_code.as_deref() != Some("prepared_initial_state")
+    {
+        if let Some(prepared_carriers) =
+            prepared_initial_state_m_carriers(snapshot, spec, scope)
+        {
+            resolved.request = fullmag_runner::QuantityRequestCapability::FieldVector;
+            resolved.materialization = QuantityMaterializationCapability::Materialized;
+            resolved.render = fullmag_runner::QuantityRenderCapability::Renderable;
+            resolved.reason_code = Some("prepared_initial_state".to_string());
+            resolved.carriers = prepared_carriers;
+        }
+    }
     resolved
 }
 

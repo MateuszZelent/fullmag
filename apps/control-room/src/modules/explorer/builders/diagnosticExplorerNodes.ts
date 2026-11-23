@@ -36,7 +36,7 @@ export function buildRuntimeDiagnosticTree(
     label: "Diagnostics",
     parentId: null,
     resourceState: aggregateResourceState(descriptors),
-    selectable: false,
+    selectable: true,
     status: aggregateStatus(descriptors),
 }];
 }

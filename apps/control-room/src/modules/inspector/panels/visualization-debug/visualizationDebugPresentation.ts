@@ -5,6 +5,8 @@ import type {
   VisualizationDebugSnapshot,
 } from "@/kernel/visualization/visualizationDebugTypes";
 
+import { minMaxFinite } from "@/shared/charts/ScientificEChart";
+
 import type {
   VisualizationDebugCarrierObservation,
   VisualizationDebugPanelModel,
@@ -59,7 +61,7 @@ export function latestSnapshotCaptureTime(
   const captures = model.viewports.flatMap((viewport) =>
     viewport.snapshots.map((snapshot) => snapshot.capturedAtMs),
   );
-  return captures.length > 0 ? Math.max(...captures) : 0;
+  return minMaxFinite(captures)?.max ?? 0;
 }
 
 export function healthDiagnosis(
@@ -72,7 +74,7 @@ export function healthDiagnosis(
   if (disposition === "blocked") {
     return "Visualization pipeline is blocked; inspect errors below.";
   }
-  return "Health is unknown because evidence is incomplete.";
+  return "Health is pending because evidence is incomplete.";
 }
 
 export function formatDuration(value: number | null): string {

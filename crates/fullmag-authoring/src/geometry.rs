@@ -986,6 +986,66 @@ fn validate_geometry_node(
                 ));
             }
         }
+        "MeanderAntennaLayout" => {
+            if *backend_target != GeometryBackendTarget::Fem {
+                diagnostics.push(error(
+                    "GEOMETRY_KIND_UNSUPPORTED",
+                    "MeanderAntennaLayout requires the FEM geometry pipeline.".to_string(),
+                    Some(object_id.to_string()),
+                    Some(path.to_string()),
+                    &["realize_geometry", "build_mesh", "run_solver"],
+                ));
+            }
+            if let Err(reason) = parse_meander_layout(&geometry.geometry_params) {
+                diagnostics.push(error(
+                    "GEOMETRY_PARAM_INVALID",
+                    format!("Invalid MeanderAntennaLayout: {reason}"),
+                    Some(object_id.to_string()),
+                    Some(path.to_string()),
+                    &["realize_geometry", "build_mesh", "run_solver"],
+                ));
+            }
+        }
+        "InductiveLoopLayout" => {
+            if *backend_target != GeometryBackendTarget::Fem {
+                diagnostics.push(error(
+                    "GEOMETRY_KIND_UNSUPPORTED",
+                    "InductiveLoopLayout requires the FEM geometry pipeline.".to_string(),
+                    Some(object_id.to_string()),
+                    Some(path.to_string()),
+                    &["realize_geometry", "build_mesh", "run_solver"],
+                ));
+            }
+            if let Err(reason) = parse_inductive_loop_layout(&geometry.geometry_params) {
+                diagnostics.push(error(
+                    "GEOMETRY_PARAM_INVALID",
+                    format!("Invalid InductiveLoopLayout: {reason}"),
+                    Some(object_id.to_string()),
+                    Some(path.to_string()),
+                    &["realize_geometry", "build_mesh", "run_solver"],
+                ));
+            }
+        }
+        "PiecewisePath3DLayout" => {
+            if *backend_target != GeometryBackendTarget::Fem {
+                diagnostics.push(error(
+                    "GEOMETRY_KIND_UNSUPPORTED",
+                    "PiecewisePath3DLayout requires the FEM geometry pipeline.".to_string(),
+                    Some(object_id.to_string()),
+                    Some(path.to_string()),
+                    &["realize_geometry", "build_mesh", "run_solver"],
+                ));
+            }
+            if let Err(reason) = parse_piecewise_path_3d_layout(&geometry.geometry_params) {
+                diagnostics.push(error(
+                    "GEOMETRY_PARAM_INVALID",
+                    format!("Invalid PiecewisePath3DLayout: {reason}"),
+                    Some(object_id.to_string()),
+                    Some(path.to_string()),
+                    &["realize_geometry", "build_mesh", "run_solver"],
+                ));
+            }
+        }
         "Difference" => validate_difference_node(
             &geometry.geometry_params,
             backend_target,
@@ -1496,10 +1556,309 @@ fn microstrip_layout_bounds(params: &Value) -> Option<([f64; 3], [f64; 3])> {
     Some((min, max))
 }
 
+struct MeanderLayout {
+    length_m: f64,
+    signal_width_m: f64,
+    thickness_m: f64,
+    finger_count: usize,
+    pitch_m: f64,
+    bend_radius_m: f64,
+    rotation: [[f64; 3]; 3],
+    translation: [f64; 3],
+}
+
+struct InductiveLoopLayout {
+    loop_shape: String,
+    inner_radius_m: f64,
+    signal_width_m: f64,
+    thickness_m: f64,
+    turns: usize,
+    pitch_m: f64,
+    rotation: [[f64; 3]; 3],
+    translation: [f64; 3],
+}
+
+struct PiecewisePath3DLayout {
+    waypoints: Vec<([f64; 3], f64)>,
+    thickness_m: f64,
+    rotation: [[f64; 3]; 3],
+    translation: [f64; 3],
+}
+
+fn parse_meander_layout(params: &Value) -> Result<MeanderLayout, &'static str> {
+    let positive = |key| match number_param(params, key) {
+        Some(value) if value.is_finite() && value > 0.0 => Ok(value),
+        _ => Err("length_m, signal_width_m, thickness_m, pitch_m and conductivity_s_per_m must be positive SI values"),
+    };
+    let length_m = positive("length_m")?;
+    let signal_width_m = positive("signal_width_m")?;
+    let thickness_m = positive("thickness_m")?;
+    positive("conductivity_s_per_m")?;
+    let pitch_m = positive("pitch_m")?;
+    let finger_count = params
+        .get("finger_count")
+        .and_then(Value::as_u64)
+        .ok_or("finger_count must be an integer in [2, 64]")?;
+    if !(2..=64).contains(&finger_count) {
+        return Err("finger_count must be an integer in [2, 64]");
+    }
+    let bend_radius_m = match params.get("bend_radius_m") {
+        None | Some(Value::Null) => 0.0,
+        Some(_) => number_param(params, "bend_radius_m")
+            .filter(|value| value.is_finite() && *value >= 0.0)
+            .ok_or("bend_radius_m must be a non-negative finite SI value")?,
+    };
+    if pitch_m <= signal_width_m {
+        return Err("pitch_m must be strictly greater than signal_width_m");
+    }
+    if 2.0 * bend_radius_m + signal_width_m > pitch_m + 1.0e-15 {
+        return Err("meander bend_radius_m causes self-intersection: require 2 * bend_radius_m + signal_width_m <= pitch_m");
+    }
+    let (rotation, translation) = parse_antenna_layout_transform(params)?;
+    Ok(MeanderLayout {
+        length_m,
+        signal_width_m,
+        thickness_m,
+        finger_count: finger_count as usize,
+        pitch_m,
+        bend_radius_m,
+        rotation,
+        translation,
+    })
+}
+
+fn parse_inductive_loop_layout(params: &Value) -> Result<InductiveLoopLayout, &'static str> {
+    let loop_shape = params
+        .get("loop_shape")
+        .and_then(Value::as_str)
+        .unwrap_or("circular");
+    if !matches!(loop_shape, "circular" | "rectangular" | "omega") {
+        return Err("loop_shape must be 'circular', 'rectangular', or 'omega'");
+    }
+    let positive = |key| match number_param(params, key) {
+        Some(value) if value.is_finite() && value > 0.0 => Ok(value),
+        _ => Err("inner_radius_m, signal_width_m, thickness_m and conductivity_s_per_m must be positive SI values"),
+    };
+    let inner_radius_m = positive("inner_radius_m")?;
+    let signal_width_m = positive("signal_width_m")?;
+    let thickness_m = positive("thickness_m")?;
+    positive("conductivity_s_per_m")?;
+    let turns = match params.get("turns") {
+        None | Some(Value::Null) => 1u64,
+        Some(v) => v.as_u64().ok_or("turns must be an integer in [1, 16]")?,
+    };
+    if !(1..=16).contains(&turns) {
+        return Err("turns must be an integer in [1, 16]");
+    }
+    let bend_radius_m = match params.get("bend_radius_m") {
+        None | Some(Value::Null) => 0.0,
+        Some(_) => number_param(params, "bend_radius_m")
+            .filter(|value| value.is_finite() && *value >= 0.0)
+            .ok_or("bend_radius_m must be a non-negative finite SI value")?,
+    };
+    if loop_shape == "rectangular" && bend_radius_m > inner_radius_m + 1.0e-15 {
+        return Err("bend_radius_m must not exceed inner_radius_m for rectangular loops");
+    }
+    if let Some(raw_gap) = params.get("feed_gap_m").filter(|v| !v.is_null()) {
+        let gap = raw_gap
+            .as_f64()
+            .filter(|v| v.is_finite() && *v > 0.0)
+            .ok_or("feed_gap_m must be positive when specified")?;
+        if gap >= 2.0 * inner_radius_m {
+            return Err("feed_gap_m must be strictly smaller than 2 * inner_radius_m");
+        }
+    }
+    let pitch_m = match params.get("pitch_m") {
+        None | Some(Value::Null) => 2.0 * signal_width_m,
+        Some(_) => {
+            let p = number_param(params, "pitch_m")
+                .filter(|value| value.is_finite() && *value > 0.0)
+                .ok_or("pitch_m must be a positive finite SI value")?;
+            if turns > 1 && p <= signal_width_m {
+                return Err("pitch_m must exceed signal_width_m for multi-turn loops");
+            }
+            p
+        }
+    };
+    let (rotation, translation) = parse_antenna_layout_transform(params)?;
+    Ok(InductiveLoopLayout {
+        loop_shape: loop_shape.to_string(),
+        inner_radius_m,
+        signal_width_m,
+        thickness_m,
+        turns: turns as usize,
+        pitch_m,
+        rotation,
+        translation,
+    })
+}
+
+fn parse_piecewise_path_3d_layout(params: &Value) -> Result<PiecewisePath3DLayout, &'static str> {
+    let positive = |key| match number_param(params, key) {
+        Some(value) if value.is_finite() && value > 0.0 => Ok(value),
+        _ => Err("signal_width_m, thickness_m and conductivity_s_per_m must be positive SI values"),
+    };
+    let default_width = positive("signal_width_m")?;
+    let thickness_m = positive("thickness_m")?;
+    positive("conductivity_s_per_m")?;
+    let raw_waypoints = params
+        .get("waypoints")
+        .and_then(Value::as_array)
+        .ok_or("waypoints must contain at least two distinct 3D points")?;
+    if raw_waypoints.len() < 2 {
+        return Err("waypoints must contain at least two distinct 3D points");
+    }
+    let mut waypoints: Vec<([f64; 3], f64)> = Vec::with_capacity(raw_waypoints.len());
+    for raw in raw_waypoints {
+        let (pt, width, bend) = if let Some(obj) = raw.as_object() {
+            let x = obj
+                .get("x_m")
+                .or_else(|| obj.get("x"))
+                .and_then(Value::as_f64)
+                .ok_or("waypoint x_m must be finite")?;
+            let y = obj
+                .get("y_m")
+                .or_else(|| obj.get("y"))
+                .and_then(Value::as_f64)
+                .ok_or("waypoint y_m must be finite")?;
+            let z = obj
+                .get("z_m")
+                .or_else(|| obj.get("z"))
+                .and_then(Value::as_f64)
+                .ok_or("waypoint z_m must be finite")?;
+            let w = match obj.get("width_m") {
+                None | Some(Value::Null) => default_width,
+                Some(val) => val
+                    .as_f64()
+                    .filter(|v| v.is_finite() && *v > 0.0)
+                    .ok_or("waypoint width_m must be positive")?,
+            };
+            let b = match obj.get("bend_radius_m") {
+                None | Some(Value::Null) => 0.0,
+                Some(val) => val
+                    .as_f64()
+                    .filter(|v| v.is_finite() && *v >= 0.0)
+                    .ok_or("waypoint bend_radius_m must be non-negative")?,
+            };
+            ([x, y, z], w, b)
+        } else if let Some(arr) = raw.as_array() {
+            if arr.len() != 3 {
+                return Err("waypoint array must have 3 coordinates");
+            }
+            let x = arr[0].as_f64().ok_or("waypoint x must be finite")?;
+            let y = arr[1].as_f64().ok_or("waypoint y must be finite")?;
+            let z = arr[2].as_f64().ok_or("waypoint z must be finite")?;
+            ([x, y, z], default_width, 0.0)
+        } else {
+            return Err("waypoint must be an object or 3-element coordinate array");
+        };
+        if !finite_vec3(pt) || !bend.is_finite() {
+            return Err("waypoint coordinates must be finite");
+        }
+        if let Some((prev, _)) = waypoints.last() {
+            let dx = pt[0] - prev[0];
+            let dy = pt[1] - prev[1];
+            let dz = pt[2] - prev[2];
+            if (dx * dx + dy * dy + dz * dz).sqrt() <= 1.0e-12 {
+                return Err("consecutive waypoints must be distinct");
+            }
+        }
+        waypoints.push((pt, width));
+    }
+    let (rotation, translation) = parse_antenna_layout_transform(params)?;
+    Ok(PiecewisePath3DLayout {
+        waypoints,
+        thickness_m,
+        rotation,
+        translation,
+    })
+}
+
+fn transform_bounds_corners(
+    local_min: [f64; 3],
+    local_max: [f64; 3],
+    rotation: [[f64; 3]; 3],
+    translation: [f64; 3],
+) -> ([f64; 3], [f64; 3]) {
+    let mut min = [f64::INFINITY; 3];
+    let mut max = [f64::NEG_INFINITY; 3];
+    for &x in &[local_min[0], local_max[0]] {
+        for &y in &[local_min[1], local_max[1]] {
+            for &z in &[local_min[2], local_max[2]] {
+                let local = [x, y, z];
+                for axis in 0..3 {
+                    let world = (0..3)
+                        .map(|component| rotation[axis][component] * local[component])
+                        .sum::<f64>()
+                        + translation[axis];
+                    min[axis] = min[axis].min(world);
+                    max[axis] = max[axis].max(world);
+                }
+            }
+        }
+    }
+    (min, max)
+}
+
+fn meander_layout_bounds(params: &Value) -> Option<([f64; 3], [f64; 3])> {
+    let layout = parse_meander_layout(params).ok()?;
+    let half_u = 0.5 * layout.length_m + layout.bend_radius_m + 0.5 * layout.signal_width_m;
+    let half_v = 0.5 * ((layout.finger_count - 1) as f64) * layout.pitch_m + 0.5 * layout.signal_width_m;
+    let half_w = 0.5 * layout.thickness_m;
+    Some(transform_bounds_corners(
+        [-half_u, -half_v, -half_w],
+        [half_u, half_v, half_w],
+        layout.rotation,
+        layout.translation,
+    ))
+}
+
+fn inductive_loop_layout_bounds(params: &Value) -> Option<([f64; 3], [f64; 3])> {
+    let layout = parse_inductive_loop_layout(params).ok()?;
+    let outer = layout.inner_radius_m
+        + ((layout.turns - 1) as f64) * layout.pitch_m
+        + layout.signal_width_m;
+    let extra_u_min = if layout.loop_shape == "omega" {
+        outer + layout.inner_radius_m
+    } else {
+        outer
+    };
+    let half_w = 0.5 * layout.thickness_m;
+    Some(transform_bounds_corners(
+        [-extra_u_min, -outer, -half_w],
+        [outer, outer, half_w],
+        layout.rotation,
+        layout.translation,
+    ))
+}
+
+fn piecewise_path_3d_layout_bounds(params: &Value) -> Option<([f64; 3], [f64; 3])> {
+    let layout = parse_piecewise_path_3d_layout(params).ok()?;
+    let mut local_min = [f64::INFINITY; 3];
+    let mut local_max = [f64::NEG_INFINITY; 3];
+    let half_t = 0.5 * layout.thickness_m;
+    for (pt, width) in layout.waypoints {
+        let pad = (0.5 * width).max(half_t);
+        for axis in 0..3 {
+            local_min[axis] = local_min[axis].min(pt[axis] - pad);
+            local_max[axis] = local_max[axis].max(pt[axis] + pad);
+        }
+    }
+    Some(transform_bounds_corners(
+        local_min,
+        local_max,
+        layout.rotation,
+        layout.translation,
+    ))
+}
+
 fn derive_geometry_bounds(geometry: &SceneGeometry) -> Option<([f64; 3], [f64; 3])> {
     match geometry.geometry_kind.as_str() {
         "MicrostripAntennaLayout" => microstrip_layout_bounds(&geometry.geometry_params),
         "CPWAntennaLayout" => cpw_layout_bounds(&geometry.geometry_params),
+        "MeanderAntennaLayout" => meander_layout_bounds(&geometry.geometry_params),
+        "InductiveLoopLayout" => inductive_loop_layout_bounds(&geometry.geometry_params),
+        "PiecewisePath3DLayout" => piecewise_path_3d_layout_bounds(&geometry.geometry_params),
         "Box" => {
             let size = vec3_param(&geometry.geometry_params, "size")
                 .or_else(|| vec3_param(&geometry.geometry_params, "dimensions"))?;

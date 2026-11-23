@@ -3135,6 +3135,21 @@ class StudyStageRerunContractTests(unittest.TestCase):
         "stage_builder", "command_adapter", "command_contributions", "study_compute_input", "tab_routes",
     )
 
+    def test_material_and_texture_source_pins_follow_migrated_inspectors(self):
+        material = self.qa._study_stage_rerun_source_paths("material-stage-a")
+        texture = self.qa._study_stage_rerun_source_paths("texture-stage-b")
+        expected = {
+            "material_panel": "apps/control-room/src/modules/inspector/inspectors/objects/material/ObjectMaterialSpec.tsx",
+            "material_edit_session_bridge": "apps/control-room/src/modules/inspector/InspectorEditSession.tsx",
+            "stage_inspector_router": "apps/control-room/src/modules/inspector/inspectors/study/StudyStagesSpec.tsx",
+            "initial_state_selector": "apps/control-room/src/modules/inspector/panels/stages/StageSharedControls.tsx",
+        }
+        sources = {**material, **texture}
+        for key, relative in expected.items():
+            self.assertEqual(sources[key], relative)
+        for relative in set(material.values()) | set(texture.values()):
+            self.assertTrue((ROOT / relative).is_file(), f"Missing Study rerun proof source: {relative}")
+
     @classmethod
     def setUpClass(cls):
         cls.qa = _load_qa_module()

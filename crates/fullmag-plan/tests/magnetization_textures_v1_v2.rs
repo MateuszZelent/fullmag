@@ -16,6 +16,7 @@ fn point(x: f64, y: f64, z: f64) -> TextureSamplePoint {
     TextureSamplePoint {
         position_world: [x, y, z],
         position_object: [x, y, z],
+        position_region: None,
         active: true,
     }
 }
@@ -26,6 +27,10 @@ fn versioned_sampler_accepts_v1_and_v2_without_changing_mapping_contract() {
         space: "object".to_string(),
         projection: fullmag_ir::TextureProjectionMode::ObjectLocal,
         clamp_mode: "none".to_string(),
+        tile_period: None,
+        background_vector: None,
+        axis_extent_mode: None,
+        axis_thickness_m: None,
     };
     let transform = TextureTransform3DIR::default();
     let preset_params = params([("direction", json!([1.0, 0.0, 0.0]))]);

@@ -1,6 +1,7 @@
 "use client";
 
 import { useKernel } from "@/kernel/KernelContext";
+import { Button } from "@/shared/ui/Button";
 
 import type { InspectorPanelProps } from "../../inspectorTypes";
 import { buildModeVisualizationBreadcrumbs } from "./ModeVisualizationBreadcrumbs.model";
@@ -26,13 +27,15 @@ export function ModeVisualizationBreadcrumbs({
           {breadcrumb.current ? (
             <span className="fm-inspector__breadcrumb">{breadcrumb.label}</span>
           ) : (
-            <button
+            <Button
               className="fm-inspector__breadcrumb"
+              size="sm"
               type="button"
+              variant="ghost"
               onClick={() => kernel.selection.set(breadcrumb.selection, "inspector")}
             >
               {breadcrumb.label}
-            </button>
+            </Button>
           )}
         </span>
       ))}

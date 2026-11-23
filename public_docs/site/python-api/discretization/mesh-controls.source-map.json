@@ -100,8 +100,8 @@
     },
     {
       "id": "object_ui",
-      "path": "apps/control-room/src/modules/inspector/panels/ObjectMeshPolicyPanel.tsx",
-      "symbol": "ObjectMeshPolicyPanel",
+      "path": "apps/control-room/src/modules/inspector/panels/mesh-details/ObjectMeshSpecPanel.tsx",
+      "symbol": "ObjectMeshInspectorSpecPanel",
       "responsibility": "Object policy editing, Apply Policy, build-selected command, quality, and history."
     },
     {
@@ -112,8 +112,8 @@
     },
     {
       "id": "airbox_ui",
-      "path": "apps/control-room/src/modules/inspector/panels/airbox/AirboxMeshParametersPanel.tsx",
-      "symbol": "AirboxMeshParametersPanel",
+      "path": "apps/control-room/src/modules/inspector/inspectors/universe/AirboxMeshSizingSpecs.tsx",
+      "symbol": "AirboxMeshParametersInspectorSpecPanel",
       "responsibility": "Universe/Airbox mesh controls, transaction lifecycle, and shared-domain build command."
     },
     {
@@ -124,8 +124,8 @@
     },
     {
       "id": "region_ui",
-      "path": "apps/control-room/src/modules/inspector/panels/region/ObjectRegionMeshPanel.tsx",
-      "symbol": "ObjectRegionMeshPanel",
+      "path": "apps/control-room/src/modules/inspector/inspectors/objects/regions/RegionMeshSpec.tsx",
+      "symbol": "ObjectRegionMeshInspectorPanel",
       "responsibility": "FEM regional mesh overrides and realized region quality."
     }
   ],

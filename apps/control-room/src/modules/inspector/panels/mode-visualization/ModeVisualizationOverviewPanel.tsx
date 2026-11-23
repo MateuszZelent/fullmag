@@ -45,6 +45,9 @@ export function ModeVisualizationOverviewPanel({
     targetLabel: target ? modeVisualizationSelectionLabel(target) : "Mode field",
     title: "Mode visualization",
   };
+  const isModesCollectionOverview =
+    selection.ref?.type === "frequency-domain" &&
+    selection.ref.kind === "results.eigen.modes.visualization";
   return (
     <>
       <ModeVisualizationBreadcrumbs selection={selection} />
@@ -66,6 +69,11 @@ export function ModeVisualizationOverviewPanel({
       />
       <VisualizationTargetInspectorPanel owner={owner} selection={selection}>
         <ModeVisualizationViewControls selection={selection} />
+        {isModesCollectionOverview ? (
+          <p className="text-xs text-fm-muted" role="note">
+            Shared mode-collection preset: switching the active eigenmode keeps surface, vector, and colormap settings intact.
+          </p>
+        ) : null}
       </VisualizationTargetInspectorPanel>
     </>
   );

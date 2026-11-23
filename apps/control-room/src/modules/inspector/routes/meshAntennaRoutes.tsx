@@ -1,0 +1,262 @@
+import {
+  FdmCellInspectorSpecPanel,
+  FdmGridInspectorSpecPanel,
+  FdmGridLayerInspectorSpecPanel,
+  MeshBuildsInspectorSpecPanel,
+  MeshQualityInspectorSpecPanel,
+  MeshRegionsInspectorSpecPanel,
+  MeshRootInspectorSpecPanel,
+  MeshSharedDomainInspectorSpecPanel,
+  MeshSizeFieldsInspectorSpecPanel,
+  MeshUnassignedInspectorSpecPanel,
+  MeshUnassignedPartInspectorSpecPanel,
+  ObjectMeshInspectorSpecPanel,
+} from "../inspectors/mesh";
+import {
+  AntennaConductorInspectorSpecPanel,
+  AntennaDriveInspectorSpecPanel,
+  AntennaGeometryInspectorSpecPanel,
+  AntennaOverviewInspectorSpecPanel,
+  AntennaPortInspectorSpecPanel,
+  AntennaProjectionInspectorSpecPanel,
+  AntennaRegionalMaskInspectorSpecPanel,
+  AntennaSolutionInspectorSpecPanel,
+  AntennaSpectrumInspectorSpecPanel,
+  AntennaTerminalsInspectorSpecPanel,
+  AntennaVisualizationInspectorSpecPanel,
+} from "../inspectors/objects";
+import {
+  AirboxMeshBuildInspectorSpecPanel,
+  AirboxMeshInspectorSpecPanel,
+  AirboxMeshParametersInspectorSpecPanel,
+  AirboxMeshQualityGatesInspectorSpecPanel,
+  AirboxMeshStatisticsInspectorSpecPanel,
+  AirboxMeshTopologyInspectorSpecPanel,
+  AirboxMultilayerTargetInspectorSpecPanel,
+  AirboxRootInspectorSpecPanel,
+  BoundaryFacesRootInspectorSpecPanel,
+} from "../inspectors/universe";
+import {
+  Visualizations2DDraftInspectorSpecPanel,
+  Visualizations2DPlotInspectorSpecPanel,
+  Visualizations2DRootInspectorSpecPanel,
+} from "../inspectors/visualizations";
+
+import { defineInspectorRoute, type InspectorRoute } from "./routeTypes";
+
+/**
+ * Canonical Wave 5 (Volume IV) domain route registry: Mesh FEM/FDM, FDM Grid & Cell,
+ * Airbox, Boundary Faces, 2D Cross-Sections, and Antenna subsystem (35 routes, 100% InspectorTemplate).
+ */
+export const MESH_ANTENNA_ROUTES: readonly InspectorRoute[] = [
+  defineInspectorRoute({
+    component: MeshUnassignedInspectorSpecPanel,
+    id: "mesh-unassigned",
+    selectionKinds: ["mesh.unassigned"],
+    title: "Unassigned Mesh Parts",
+  }),
+  defineInspectorRoute({
+    component: MeshUnassignedPartInspectorSpecPanel,
+    id: "mesh-unassigned-part",
+    selectionKinds: ["mesh.unassigned.part"],
+    title: "Unassigned Mesh Part",
+  }),
+  defineInspectorRoute({
+    component: Visualizations2DRootInspectorSpecPanel,
+    id: "visualizations-2d-root",
+    selectionKinds: ["visualizations-2d.root"],
+    title: "Visualizations 2D",
+  }),
+  defineInspectorRoute({
+    component: Visualizations2DDraftInspectorSpecPanel,
+    id: "visualizations-2d-draft",
+    selectionKinds: ["visualizations-2d.draft"],
+    title: "2D Visualization Draft",
+  }),
+  defineInspectorRoute({
+    component: Visualizations2DPlotInspectorSpecPanel,
+    id: "visualizations-2d-plot",
+    selectionKinds: ["visualizations-2d.plot"],
+    title: "2D Visualization Plot",
+  }),
+  defineInspectorRoute({
+    component: AntennaOverviewInspectorSpecPanel,
+    id: "antenna-composition",
+    selectionKinds: ["object.antenna"],
+    title: "Antenna composition",
+  }),
+  defineInspectorRoute({
+    component: AntennaRegionalMaskInspectorSpecPanel,
+    id: "antenna-object",
+    selectionKinds: ["object.antenna.regional"],
+    title: "Regional field drive",
+  }),
+  defineInspectorRoute({
+    component: AntennaGeometryInspectorSpecPanel,
+    id: "antenna-geometry",
+    selectionKinds: ["object.antenna.geometry"],
+    title: "Antenna geometry",
+  }),
+  defineInspectorRoute({
+    component: AntennaTerminalsInspectorSpecPanel,
+    id: "antenna-terminals",
+    selectionKinds: ["object.antenna.terminals"],
+    title: "Antenna terminals",
+  }),
+  defineInspectorRoute({
+    component: AntennaConductorInspectorSpecPanel,
+    id: "antenna-conductor",
+    selectionKinds: ["object.antenna.conductor"],
+    title: "Antenna conductor",
+  }),
+  defineInspectorRoute({
+    component: AntennaPortInspectorSpecPanel,
+    id: "antenna-port",
+    selectionKinds: ["object.antenna.port"],
+    title: "Antenna port",
+  }),
+  defineInspectorRoute({
+    component: AntennaSolutionInspectorSpecPanel,
+    id: "antenna-solution",
+    selectionKinds: ["object.antenna.solution"],
+    title: "Antenna field solve",
+  }),
+  defineInspectorRoute({
+    component: AntennaProjectionInspectorSpecPanel,
+    id: "antenna-projection",
+    selectionKinds: ["object.antenna.projection"],
+    title: "Antenna target projection",
+  }),
+  defineInspectorRoute({
+    component: AntennaDriveInspectorSpecPanel,
+    id: "antenna-drive",
+    selectionKinds: ["object.antenna.drive"],
+    title: "Solved antenna drive",
+  }),
+  defineInspectorRoute({
+    component: AntennaSpectrumInspectorSpecPanel,
+    id: "antenna-spectrum",
+    selectionKinds: ["object.antenna.spectrum"],
+    title: "Antenna spectrum",
+  }),
+  defineInspectorRoute({
+    component: AirboxRootInspectorSpecPanel,
+    id: "airbox-overview",
+    selectionKinds: ["airbox.root"],
+    title: "Airbox Overview",
+  }),
+  defineInspectorRoute({
+    component: AirboxMultilayerTargetInspectorSpecPanel,
+    id: "fdm-multilayer-airbox-target",
+    selectionKinds: ["airbox.multilayer.target"],
+    title: "Multilayer Airbox target",
+  }),
+  defineInspectorRoute({
+    component: BoundaryFacesRootInspectorSpecPanel,
+    id: "boundary-faces-overview",
+    selectionKinds: ["boundary-faces.root"],
+    title: "Boundary Faces",
+  }),
+  defineInspectorRoute({
+    component: AntennaVisualizationInspectorSpecPanel,
+    id: "antenna-visualization",
+    selectionKinds: ["object.antenna.visualization"],
+    title: "Antenna Visualization",
+  }),
+  defineInspectorRoute({
+    component: AirboxMeshInspectorSpecPanel,
+    id: "airbox-mesh-overview",
+    selectionKinds: ["airbox.mesh"],
+    title: "Airbox Mesh Overview",
+  }),
+  defineInspectorRoute({
+    component: AirboxMeshParametersInspectorSpecPanel,
+    id: "airbox-mesh-parameters",
+    selectionKinds: ["airbox.mesh.parameters"],
+    title: "Airbox Mesh Parameters",
+  }),
+  defineInspectorRoute({
+    component: AirboxMeshQualityGatesInspectorSpecPanel,
+    id: "airbox-mesh-quality-gates",
+    selectionKinds: ["airbox.mesh.quality-gates"],
+    title: "Airbox Mesh Quality Gates",
+  }),
+  defineInspectorRoute({
+    component: AirboxMeshStatisticsInspectorSpecPanel,
+    id: "airbox-mesh-statistics",
+    selectionKinds: ["airbox.mesh.statistics"],
+    title: "Airbox Mesh Statistics",
+  }),
+  defineInspectorRoute({
+    component: AirboxMeshTopologyInspectorSpecPanel,
+    id: "airbox-mesh-topology",
+    selectionKinds: ["airbox.mesh.topology"],
+    title: "Airbox Mesh Topology",
+  }),
+  defineInspectorRoute({
+    component: AirboxMeshBuildInspectorSpecPanel,
+    id: "airbox-mesh-build",
+    selectionKinds: ["airbox.mesh.build"],
+    title: "Airbox Mesh Build",
+  }),
+  defineInspectorRoute({
+    component: ObjectMeshInspectorSpecPanel,
+    id: "object-mesh-policy",
+    selectionKinds: ["object.mesh"],
+    title: "Object Mesh Policy",
+  }),
+  defineInspectorRoute({
+    component: MeshRootInspectorSpecPanel,
+    id: "mesh-details",
+    selectionKinds: ["mesh.root"],
+    title: "Mesh",
+  }),
+  defineInspectorRoute({
+    component: MeshSharedDomainInspectorSpecPanel,
+    id: "mesh-shared-domain",
+    selectionKinds: ["mesh.shared-domain"],
+    title: "Shared Domain Mesh",
+  }),
+  defineInspectorRoute({
+    component: MeshBuildsInspectorSpecPanel,
+    id: "mesh-builds",
+    selectionKinds: ["mesh.builds"],
+    title: "Mesh Builds",
+  }),
+  defineInspectorRoute({
+    component: MeshQualityInspectorSpecPanel,
+    id: "mesh-quality",
+    selectionKinds: ["mesh.quality"],
+    title: "Mesh Quality",
+  }),
+  defineInspectorRoute({
+    component: MeshSizeFieldsInspectorSpecPanel,
+    id: "mesh-size-fields",
+    selectionKinds: ["mesh.size-fields"],
+    title: "Mesh Size Fields",
+  }),
+  defineInspectorRoute({
+    component: MeshRegionsInspectorSpecPanel,
+    id: "mesh-regions",
+    selectionKinds: ["mesh.regions"],
+    title: "Mesh Regions",
+  }),
+  defineInspectorRoute({
+    component: FdmGridInspectorSpecPanel,
+    id: "fdm-grid",
+    selectionKinds: ["mesh.grid"],
+    title: "FDM Mesh",
+  }),
+  defineInspectorRoute({
+    component: FdmGridLayerInspectorSpecPanel,
+    id: "fdm-grid-layer",
+    selectionKinds: ["mesh.grid.layer"],
+    title: "FDM Grid Layer",
+  }),
+  defineInspectorRoute({
+    component: FdmCellInspectorSpecPanel,
+    id: "fdm-cell",
+    selectionKinds: ["fdm.cell"],
+    title: "FDM Cell",
+  }),
+];

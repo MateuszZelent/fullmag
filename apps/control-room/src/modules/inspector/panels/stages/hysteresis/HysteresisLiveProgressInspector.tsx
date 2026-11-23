@@ -2,12 +2,12 @@
 
 import { useCallback, useMemo } from "react";
 
-import { createCommandContext } from "@/kernel/commands/commandContext";
 import { HysteresisChart, clearHysteresisPointSelectionForLive } from "@/shared/domain/study/HysteresisChart";
 import { Button } from "@/shared/ui/Button";
 
 import { FieldRow } from "../../../primitives/FieldRow";
 import { InspectorGroup } from "../../../primitives/InspectorGroup";
+import { buildStudyCommandContext } from "../../study/useConnectedStudyAuthoring";
 import type { HysteresisInspectorCommonProps } from "./HysteresisInspectorTypes";
 
 export function HysteresisLiveProgressInspector({
@@ -21,7 +21,7 @@ export function HysteresisLiveProgressInspector({
   "activeSnapshot" | "kernel" | "points" | "progress" | "stageId"
 >) {
   const commandContext = useMemo(
-    () => createCommandContext("inspector", kernel),
+    () => buildStudyCommandContext(kernel),
     [kernel],
   );
   const handleReturnToLive = useCallback(() => {
@@ -60,10 +60,10 @@ export function HysteresisLiveProgressInspector({
             />
           )}
           <Button
+            aria-label="Return the 3D viewport to the live magnetization field"
             size="sm"
             variant="secondary"
             onClick={handleReturnToLive}
-            title="Return the 3D viewport to the live magnetization field"
           >
             Return to live
           </Button>

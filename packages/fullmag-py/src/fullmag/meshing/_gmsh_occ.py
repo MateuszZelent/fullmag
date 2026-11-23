@@ -5,6 +5,7 @@ import itertools
 import math
 
 from fullmag.model.geometry import (
+    ANTENNA_LAYOUT_TYPES,
     ArchWaveguide,
     Box,
     CPWAntennaLayout,
@@ -14,8 +15,11 @@ from fullmag.model.geometry import (
     Ellipsoid,
     Geometry,
     ImportedGeometry,
+    InductiveLoopLayout,
     Intersection,
+    MeanderAntennaLayout,
     MicrostripAntennaLayout,
+    PiecewisePath3DLayout,
     Translate,
     Union,
 )
@@ -125,8 +129,7 @@ def is_occ_compatible(geometries: list[Geometry]) -> bool:
                 Ellipsoid,
                 Ellipse,
                 ArchWaveguide,
-                MicrostripAntennaLayout,
-                CPWAntennaLayout,
+                *ANTENNA_LAYOUT_TYPES,
             ),
         ):
             continue

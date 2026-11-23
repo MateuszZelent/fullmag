@@ -175,4 +175,75 @@ describe("quantity catalog visualization selector", () => {
     expect(quantityCatalogEntrySupportsAirbox(quantity)).toBe(true);
     expect(quantityCatalogEntryHasAdoptableSpatialCarrier(quantity)).toBe(false);
   });
+
+  it("accepts prepared_initial_state magnetization with true resolved lane without requiring unresolved", () => {
+    const basePreparedM = {
+      id: "m",
+      domain: "magnetic_only",
+      shape: "vector_field",
+      location: "node",
+      n_comp: 3,
+      capability_state: "unsupported",
+      solver_capability: "unsupported",
+      requestable: true,
+      materializable: false,
+      renderable: true,
+      interactive_preview: true,
+      supports_preview_3d: true,
+      publication_state: "interactive",
+      resolved_capability: {
+        quantity_id: "m",
+        provider: "unavailable",
+        reason_code: "prepared_initial_state",
+        lane: "fdm_cpu_reference",
+        scope: "magnetic_only",
+        request: "field_vector",
+        materialization: "materialized",
+        render: "renderable",
+        publication: "interactive",
+        precision: "double",
+        carriers: [
+          {
+            carrier_id: "prepared:m:full",
+            carrier_fingerprint: "fp-1",
+            components: 3,
+            indexing: "node",
+            scope: "full",
+            scope_kind: "full",
+            view: "3D",
+            payload_state: "current",
+          },
+        ],
+      },
+    } as unknown as QuantityCatalogResource["quantities"][number];
+
+    expect(quantityCatalogEntrySupportsSpatialVisualization(basePreparedM)).toBe(true);
+    expect(
+      quantityCatalogEntrySupportsSpatialVisualization({
+        ...basePreparedM,
+        resolved_capability: {
+          ...basePreparedM.resolved_capability!,
+          lane: "fem_cpu_native",
+        },
+      }),
+    ).toBe(true);
+    expect(
+      quantityCatalogEntrySupportsSpatialVisualization({
+        ...basePreparedM,
+        resolved_capability: {
+          ...basePreparedM.resolved_capability!,
+          lane: "unresolved",
+        },
+      }),
+    ).toBe(true);
+    expect(
+      quantityCatalogEntrySupportsSpatialVisualization({
+        ...basePreparedM,
+        resolved_capability: {
+          ...basePreparedM.resolved_capability!,
+          lane: "",
+        },
+      }),
+    ).toBe(false);
+  });
 });

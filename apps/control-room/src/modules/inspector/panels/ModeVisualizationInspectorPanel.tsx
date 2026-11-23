@@ -17,6 +17,7 @@ import {
   type AnalysisFieldOverlayController,
 } from "@/kernel/visualization/AnalysisFieldOverlayController";
 import { Button } from "@/shared/ui/Button";
+import { Input } from "@/shared/ui/Input";
 import { SegmentedControl } from "@/shared/ui/SegmentedControl";
 
 import type { InspectorPanelProps } from "../inspectorTypes";
@@ -152,7 +153,7 @@ export function ModeVisualizationPhaseControl({
         unit="rad"
         value={
           <div className="fm-mode-phase-control__value">
-            <input
+            <Input
               aria-label="Mode visualization phase slider"
               aria-valuetext={`${committedPhaseValue} rad`}
               className="fm-mode-phase-control__slider"
@@ -164,7 +165,7 @@ export function ModeVisualizationPhaseControl({
               value={committedPhaseValue}
               onChange={(event) => commitPhase(event.currentTarget.value)}
             />
-            <input
+            <Input
               aria-label="Mode visualization phase"
               className="fm-inspector-input"
               disabled={disabled}

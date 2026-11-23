@@ -8,7 +8,7 @@ export function Input({
 }: ComponentPropsWithRef<"input">) {
   return (
     <input
-      className={cn("fm-inspector-input", className)}
+      className={cn("fm-inspector-input fm-input", className)}
       data-slot="input"
       {...props}
     />

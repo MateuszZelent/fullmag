@@ -6,6 +6,7 @@ import type {
   ArtifactResource,
   CurrentRunResource,
   CurrentTransportListResource,
+  FieldCatalogResource,
   FrozenSpinsCollectionResource,
   FrequencyDomainJsonArtifactResource,
   FrequencyDomainManifestResource,
@@ -31,9 +32,11 @@ export interface ExplorerTreeResources {
   activeAnalysisFieldOverlay?: AnalysisFieldOverlayState | null;
   artifacts?: RuntimeResourceSnapshot<ArtifactResource[]>;
   currentRun?: CurrentRunResource | null;
+  fieldCatalog?: RuntimeResourceSnapshot<FieldCatalogResource>;
   frequencyDomainBranches?: FrequencyDomainJsonArtifactResource | null;
   frequencyDomainDispersion?: FrequencyDomainTextArtifactResource | null;
   frequencyDomainManifest?: FrequencyDomainManifestResource | null;
+  frequencyDomainResponseMap?: FrequencyDomainJsonArtifactResource | null;
   frequencyDomainResponseSweep?: FrequencyDomainJsonArtifactResource | null;
   frequencyDomainSpectrum?: FrequencyDomainJsonArtifactResource | null;
   observationFrames?: RuntimeResourceSnapshot<ObservationFrameListResource>;

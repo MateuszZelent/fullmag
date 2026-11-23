@@ -183,6 +183,7 @@ export type StudyStageDraftKind =
   | "fft_response"
   | "frequency_response"
   | "hysteresis"
+  | "mask_field_drive"
   | "relax"
   | "run"
   | "save_state"
@@ -641,6 +642,7 @@ const DEFAULT_EIGENMODES_STAGE_DRAFT: StudyStageDraft = {
   ...DEFAULT_RELAX_STAGE_DRAFT,
   algorithm: "",
   calculationMode: "fmr_modal",
+  deviceTarget: "auto",
   dt: "",
   kind: "eigenmodes",
   maxSteps: "",
@@ -706,11 +708,24 @@ const DEFAULT_HYSTERESIS_STAGE_DRAFT: StudyStageDraft = {
   storageEstimateAcknowledged: false,
 };
 
+function normalizeStudyStageItems(stages: unknown): readonly unknown[] {
+  if (Array.isArray(stages)) return stages;
+  if (stages && typeof stages === "object") {
+    const rec = stages as Record<string, unknown>;
+    if (Array.isArray(rec.stages)) return rec.stages;
+    if (Array.isArray(rec.items)) return rec.items;
+  }
+  return [];
+}
+
 export function createStudyStageDrafts(
-  stages: readonly unknown[],
+  stages: unknown,
 ): StudyStageDraft[] {
+  const normalizedStages = normalizeStudyStageItems(stages);
+  if (normalizedStages.length === 0) return [];
   const drafts: StudyStageDraft[] = [];
-  for (const [sourceIndex, stage] of stages.entries()) {
+  for (let sourceIndex = 0; sourceIndex < normalizedStages.length; sourceIndex += 1) {
+    const stage = normalizedStages[sourceIndex];
     const record = asRecord(stage);
     if (stageKind(record) !== "run") {
       drafts.push(createStudyStageDraft(stage, drafts.length));
@@ -753,7 +768,8 @@ export function createStudyStageDrafts(
           ),
         );
         const outputs = Array.isArray(sampling.outputs) ? sampling.outputs : [];
-        for (const [outputIndex, outputValue] of outputs.entries()) {
+        for (let outputIndex = 0; outputIndex < outputs.length; outputIndex += 1) {
+          const outputValue = outputs[outputIndex];
           const output = asRecord(outputValue);
           const quantity = scalarText(
             output?.name ?? output?.field ?? output?.scalar,
@@ -805,7 +821,11 @@ export function createStudyStageDraft(
     scriptMagnetizationAssignments: record?.magnetization_assignments as JsonValue | undefined,
     stageEnabled: typeof record?.enabled === "boolean" ? record.enabled : undefined,
   };
-  if (kind === "unsupported" || kind === "antenna_field_solve") {
+  if (
+    kind === "unsupported" ||
+    kind === "antenna_field_solve" ||
+    kind === "mask_field_drive"
+  ) {
     return cloneStudyStageDraft({
       ...DEFAULT_RELAX_STAGE_DRAFT,
       kind,
@@ -1184,6 +1204,7 @@ export function createStudyStageDraft(
         : DEFAULT_HYSTERESIS_STAGE_DRAFT.storagePolicy,
       storageEstimateAcknowledged:
         DEFAULT_HYSTERESIS_STAGE_DRAFT.storageEstimateAcknowledged,
+      ...physicalMetadata,
     };
   }
 
@@ -1309,6 +1330,65 @@ export function createDefaultStudyStageDraft(
   });
 }
 
+/**
+ * Equips a newly authored `relax` stage draft with a valid explicit timestep
+ * policy so `+ Add Stage -> Relaxation -> Apply` and 1-click `Add Relax Stage`
+ * succeed out of the box without violating backend validation rules:
+ * - Adaptive RK23 (`dt_initial = 5e-14`, `dt_min = 1e-16`, `dt_max = 1e-11`,
+ *   `atol = 1e-5`, `rtol = 0`, `tolerance_mode = "max_error"`) when double
+ *   precision is active and adaptive execution is permitted (`backend === "fem"`
+ *   or `device === "cpu"` or no execution constraint provided).
+ * - Explicit fixed timestep (`fixed_timestep = "5e-14"`, `integrator = "rk23"`)
+ *   on FDM `auto` / `gpu` or single-precision sessions where adaptive FDM is
+ *   gated to explicit CPU double precision.
+ */
+export function withDefaultRelaxTimestepPolicy(
+  draft: StudyStageDraft,
+  execution?: {
+    backend?: string | null;
+    device?: string | null;
+    precision?: string | null;
+  },
+): StudyStageDraft {
+  if (
+    draft.kind !== "relax" ||
+    draft.algorithm !== "llg_overdamped" ||
+    draft.timestepMode !== "auto"
+  ) {
+    return draft;
+  }
+  const hasExecutionConstraint = execution !== undefined;
+  const backend = execution?.backend?.trim().toLowerCase() ?? "";
+  const device = execution?.device?.trim().toLowerCase() ?? "";
+  const precision = execution?.precision?.trim().toLowerCase() || "double";
+  const canUseAdaptive =
+    !hasExecutionConstraint ||
+    (precision === "double" && (backend === "fem" || device === "cpu"));
+  if (canUseAdaptive) {
+    return {
+      ...draft,
+      dt: "5e-14",
+      dtMax: "1e-11",
+      dtMin: "1e-16",
+      maxError: "1e-5",
+      solver: draft.solver === "rk45" ? "rk45" : "rk23",
+      timestepConflict: false,
+      timestepMode: "adaptive",
+      toleranceMode: "max_error",
+    };
+  }
+  return {
+    ...draft,
+    dt: "5e-14",
+    solver:
+      draft.solver === "rk45" || draft.solver === "heun"
+        ? draft.solver
+        : "rk23",
+    timestepConflict: false,
+    timestepMode: "fixed",
+  };
+}
+
 const STAGE_TEXTURE_ASSIGNMENTS_SCHEMA = "fullmag.magnetization-assignments.v1";
 
 export type StageTextureAssignment = JsonObject & {
@@ -1353,7 +1433,11 @@ function physicalStageMetadata(draft: StudyStageDraft): JsonObject {
 export function studyStageDraftToSceneStage(
   draft: StudyStageDraft,
 ): JsonObject {
-  if (draft.kind === "unsupported" || draft.kind === "antenna_field_solve") {
+  if (
+    draft.kind === "unsupported" ||
+    draft.kind === "antenna_field_solve" ||
+    draft.kind === "mask_field_drive"
+  ) {
     if (!draft.rawStage) {
       throw new Error("reference-only study stage requires its preserved raw payload");
     }
@@ -1577,7 +1661,9 @@ export function studyStageDraftToSceneStage(
     // Build settle pipeline
     let settle_pipeline: JsonObject | null = null;
     if (draft.settleSteps.trim() && draft.settleSteps.trim() !== "[]") {
-      const steps = parseJsonArrayValue(draft.settleSteps.trim());
+      const steps = parseJsonArrayValue(draft.settleSteps.trim()).map(
+        stripHysteresisEditorMetadata,
+      );
       if (draft.settlePipelineMode === "sequence") {
         settle_pipeline = {
           kind: "sequence",
@@ -1585,7 +1671,9 @@ export function studyStageDraftToSceneStage(
         };
       } else if (draft.settlePipelineMode === "tree") {
         const branches = draft.settleBranches.trim() && draft.settleBranches.trim() !== "[]"
-          ? parseJsonArrayValue(draft.settleBranches.trim())
+          ? parseJsonArrayValue(draft.settleBranches.trim()).map(
+            stripHysteresisEditorMetadata,
+          )
           : [];
         const alwaysBranches = steps.slice(1).map((step) => ({
           when: "always",
@@ -1632,6 +1720,7 @@ export function studyStageDraftToSceneStage(
       : null;
 
     const result: JsonObject = {
+      ...physicalStageMetadata(draft),
       entrypoint_kind: "flat_hysteresis",
       field_max_mT: requiredNumber(draft.fieldMaxMt, "field_max_mT"),
       field_min_mT: requiredSignedNumber(draft.fieldMinMt, "field_min_mT"),
@@ -1772,6 +1861,9 @@ export function validateStudyStageDraft(
       || antennaFieldSolvePortReferences(raw).length !== 1) {
       issues.push({ message: "Antenna field solve requires an explicit definition ID and exactly one executable port reference.", severity: "error" });
     }
+    return issues;
+  }
+  if (draft.kind === "mask_field_drive") {
     return issues;
   }
   if (draft.kind === "unsupported") {
@@ -2452,7 +2544,13 @@ export function buildStudyStagesMergePatch(
     return [draft.stageId, { draft, payload: payload as JsonObject }];
   }));
   const hasLocalEdits = stages.some((draft) => {
-    if (draft.kind !== "run" && draft.kind !== "relax") return false;
+    if (
+      draft.kind !== "run" &&
+      draft.kind !== "relax" &&
+      draft.kind !== "hysteresis"
+    ) {
+      return false;
+    }
     const original = persisted.get(draft.stageId)?.draft;
     return JSON.stringify(original?.stageMagnetizationAssignments) !== JSON.stringify(draft.stageMagnetizationAssignments)
       || original?.stageEnabled !== draft.stageEnabled;
@@ -2946,16 +3044,36 @@ function validateSettleStep(
       `${label} torque_tolerance`,
     );
   } else if (kind === "minimize") {
-    validatePositiveObjectNumber(
-      issues,
-      step.torque_tolerance ?? step.torqueTolerance,
-      `${label} torque_tolerance`,
-    );
-    validatePositiveObjectNumber(
-      issues,
-      step.energy_tolerance ?? step.energyTolerance,
-      `${label} energy_tolerance`,
-    );
+    const torqueRaw = step.torque_tolerance ?? step.torqueTolerance;
+    const energyRaw = step.energy_tolerance ?? step.energyTolerance;
+    const hasTorque =
+      torqueRaw !== undefined &&
+      torqueRaw !== null &&
+      String(torqueRaw).trim() !== "";
+    const hasEnergy =
+      energyRaw !== undefined &&
+      energyRaw !== null &&
+      String(energyRaw).trim() !== "";
+    if (!hasTorque && !hasEnergy) {
+      issues.push({
+        message: `${label} requires torque_tolerance or energy_tolerance.`,
+        severity: "error",
+      });
+    }
+    if (hasTorque) {
+      validatePositiveObjectNumber(
+        issues,
+        torqueRaw,
+        `${label} torque_tolerance`,
+      );
+    }
+    if (hasEnergy) {
+      validatePositiveObjectNumber(
+        issues,
+        energyRaw,
+        `${label} energy_tolerance`,
+      );
+    }
   } else if (kind === "dynamics_settle") {
     validatePositiveObjectNumber(issues, step.damping, `${label} damping`);
   }
@@ -3649,14 +3767,20 @@ function parseFieldSegmentDrafts(value: string): FieldSegmentDraft[] {
     for (const item of parsed) {
       const segment = asRecord(item);
       if (!segment) continue;
-      const start = finiteObjectNumber(segment.startField ?? segment.start_field ?? segment.start);
-      const stop = finiteObjectNumber(segment.stopField ?? segment.stop_field ?? segment.stop);
+      const startRaw = finiteObjectNumber(segment.startField ?? segment.start_field ?? segment.start);
+      const stopRaw = finiteObjectNumber(segment.stopField ?? segment.stop_field ?? segment.stop);
+      const unitRaw = typeof segment.unit === "string" ? segment.unit.trim() : "";
+      const scale = unitRaw ? hysteresisFieldUnitScaleToMillitesla(unitRaw) : 1;
       const endpointPolicy = stringValue(
         segment.endpointPolicy ?? segment.endpoint_policy,
         "",
       ).trim();
-      if (start === null || stop === null) continue;
-      segments.push({ endpointPolicy, start, stop });
+      if (startRaw === null || stopRaw === null) continue;
+      segments.push({
+        endpointPolicy,
+        start: startRaw * scale,
+        stop: stopRaw * scale,
+      });
     }
     return segments;
   } catch {
@@ -3751,6 +3875,14 @@ function stageKind(record: JsonRecord | null): StudyStageDraftKind {
   const kind = String(authoredKind);
   const normalized = kind.toLowerCase();
   if (normalized === "antenna_field_solve" || normalized === "flat_antenna_field_solve") return "antenna_field_solve";
+  if (
+    normalized === "add_mask_field_drive" ||
+    normalized === "update_mask_field_drive" ||
+    normalized === "flat_mask_field_drive" ||
+    normalized === "mask_field_drive"
+  ) {
+    return "mask_field_drive";
+  }
   if (normalized.includes("add_field_drive")) return "add_field_drive";
   if (normalized.includes("table_autosave")) return "table_autosave";
   if (normalized.includes("fft_response")) return "fft_response";
@@ -3879,6 +4011,10 @@ function spectralDraft(
         base.dampingPolicy,
       ),
       SPECTRAL_DAMPING_POLICY_ALIASES,
+    ),
+    deviceTarget: scalarText(
+      spectralRecordValue(record, kind, "device") ?? record?.requested_device,
+      base.deviceTarget,
     ),
     equilibriumArtifact: scalarText(
       spectralRecordValue(record, kind, "equilibrium_artifact"),
@@ -4176,27 +4312,76 @@ function objectText(value: unknown): string {
   return value === null || value === undefined ? "" : JSON.stringify(value);
 }
 
+const VACUUM_PERMEABILITY_T_M_PER_A = 4 * Math.PI * 1e-7;
+
+export function hysteresisFieldUnitScaleToTesla(unit: string): number {
+  const normalized = unit.trim();
+  if (normalized === "T") return 1;
+  if (normalized === "mT") return 1e-3;
+  if (normalized === "uT" || normalized === "µT") return 1e-6;
+  if (normalized === "Oe") return 1e-4;
+  if (normalized === "kA/m") return VACUUM_PERMEABILITY_T_M_PER_A * 1e3;
+  if (normalized === "A/m") return VACUUM_PERMEABILITY_T_M_PER_A;
+  return 1;
+}
+
+export function hysteresisFieldUnitScaleToMillitesla(unit: string): number {
+  const normalized = unit.trim();
+  if (normalized === "mT") return 1;
+  if (normalized === "T") return 1_000;
+  if (normalized === "uT" || normalized === "µT") return 1e-3;
+  if (normalized === "Oe") return 0.1;
+  if (normalized === "kA/m") return VACUUM_PERMEABILITY_T_M_PER_A * 1e6;
+  if (normalized === "A/m") return VACUUM_PERMEABILITY_T_M_PER_A * 1e3;
+  return 1;
+}
+
+function stripHysteresisEditorMetadata(value: JsonValue): JsonValue {
+  if (Array.isArray(value)) {
+    return value.map(stripHysteresisEditorMetadata);
+  }
+  if (value && typeof value === "object") {
+    const out: JsonObject = {};
+    for (const [k, v] of Object.entries(value)) {
+      if (k === "_rowId") continue;
+      out[k] = stripHysteresisEditorMetadata(v as JsonValue);
+    }
+    return out;
+  }
+  return value;
+}
+
 function normalizeHysteresisFieldSegment(value: unknown): JsonObject {
   const segment = asRecord(value);
   if (!segment) {
     return {};
   }
   const normalized: JsonObject = {};
-  const start = segment.start ?? segment.startField ?? segment.start_field;
-  const stop = segment.stop ?? segment.stopField ?? segment.stop_field;
-  const step = segment.step ?? segment.step_mT ?? segment.field_step_mT;
+  const start = finiteObjectNumber(
+    segment.start ?? segment.startField ?? segment.start_field,
+  );
+  const stop = finiteObjectNumber(
+    segment.stop ?? segment.stopField ?? segment.stop_field,
+  );
+  const step = finiteObjectNumber(
+    segment.step ?? segment.step_mT ?? segment.field_step_mT,
+  );
   const segmentId = segment.segment_id ?? segment.segmentId;
   const endpointPolicy = segment.endpoint_policy ?? segment.endpointPolicy;
+  const rawUnit = typeof segment.unit === "string" ? segment.unit.trim() : "";
+  const scale = rawUnit ? hysteresisFieldUnitScaleToMillitesla(rawUnit) : 1;
 
-  if (typeof start === "number") normalized.start = start;
-  if (typeof stop === "number") normalized.stop = stop;
-  if (typeof step === "number") normalized.step = step;
+  if (start !== null) normalized.start = start * scale;
+  if (stop !== null) normalized.stop = stop * scale;
+  if (step !== null) normalized.step = step * scale;
   if (typeof segmentId === "string") normalized.segment_id = segmentId;
   if (typeof segment.label === "string") normalized.label = segment.label;
   if (typeof endpointPolicy === "string") {
     normalized.endpoint_policy = endpointPolicy;
   }
-  if (typeof segment.reason === "string") normalized.reason = segment.reason;
+  if (typeof segment.reason === "string" && segment.reason.length > 0) {
+    normalized.reason = segment.reason;
+  }
   return normalized;
 }
 
@@ -4575,3 +4760,20 @@ function asRecord(value: unknown): JsonRecord | null {
     ? (value as JsonRecord)
     : null;
 }
+
+export type FrequencyDomainAuthoringView =
+  | "calculation_mode"
+  | "overview"
+  | "setup"
+  | "equilibrium"
+  | "operator"
+  | "boundary"
+  | "periodic_pairs"
+  | "k_sampling"
+  | "k_path"
+  | "k_grid"
+  | "excitation"
+  | "sweep"
+  | "solver"
+  | "outputs"
+  | "diagnostics";

@@ -207,9 +207,19 @@ export function buildExplorerTree(
       currentRun: resources.currentRun,
       datasets: resources.analysisDatasets,
       dispersion: resources.frequencyDomainDispersion,
+      fieldCatalog: resources.fieldCatalog?.data
+        ? {
+            quantities: resources.fieldCatalog.data.quantities.map((entry) => ({
+              id: entry.quantity_id,
+              label: entry.quantity_id,
+              unit: entry.unit,
+            })),
+          }
+        : null,
       manifest: resources.frequencyDomainManifest,
       observationFrames: resources.observationFrames,
       pinnedObservationFrameId: resources.pinnedObservationFrameId,
+      responseMap: resources.frequencyDomainResponseMap,
       responseSweep: resources.frequencyDomainResponseSweep,
       spectrum: resources.frequencyDomainSpectrum,
       artifacts: resources.artifacts,

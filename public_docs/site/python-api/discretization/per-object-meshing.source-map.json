@@ -70,8 +70,8 @@
     },
     {
       "id": "ui",
-      "path": "apps/control-room/src/modules/inspector/panels/ObjectMeshPolicyPanel.tsx",
-      "symbol": "ObjectMeshPolicyPanel",
+      "path": "apps/control-room/src/modules/inspector/panels/mesh-details/ObjectMeshSpecPanel.tsx",
+      "symbol": "ObjectMeshInspectorSpecPanel",
       "responsibility": "Control Room object mesh groups, transactions, and realized-resource views."
     },
     {

@@ -11,10 +11,12 @@ import {
 } from "lucide-react";
 import { useCallback, useState } from "react";
 
+import { MODEL_SCENE_PATH } from "@/kernel/api/apiPaths";
 import { createCommandContext } from "@/kernel/commands/commandContext";
 import { useKernel } from "@/kernel/KernelContext";
+import * as geometryLifecycleResources from "@/kernel/resources/geometryLifecycleResources";
 import { sessionRequestScopeKey } from "@/kernel/resources/sessionResourceIdentity";
-import { useSessionResourceIdentity } from "@/kernel/resources/useSessionStatus";
+import * as sessionStatusHooks from "@/kernel/resources/useSessionStatus";
 import { Badge } from "@/shared/ui/Badge";
 import { Button } from "@/shared/ui/Button";
 
@@ -98,7 +100,17 @@ function FemMeshReadinessGuideCardInner({
   universePolicy,
 }: FemMeshReadinessGuideCardProps) {
   const kernel = useKernel();
-  const sessionScopeKey = sessionRequestScopeKey(useSessionResourceIdentity());
+  const sessionScopeKey = sessionRequestScopeKey(
+    sessionStatusHooks.useSessionResourceIdentity(),
+  );
+  const sessionStatusData =
+    typeof sessionStatusHooks.useSessionStatusSelector === "function"
+      ? sessionStatusHooks.useSessionStatusSelector((status) => status.data ?? null)
+      : null;
+  const sceneRes =
+    typeof geometryLifecycleResources.useSceneResource === "function"
+      ? geometryLifecycleResources.useSceneResource({ enabled: true })
+      : { data: null };
   const guide = useFemMeshReadinessGuide({
     enabled: true,
     selectedObjectId,
@@ -108,15 +120,35 @@ function FemMeshReadinessGuideCardInner({
   });
   const [expanded, setExpanded] = useState(!compact);
   const [runningCommand, setRunningCommand] = useState(false);
+  const [commandError, setCommandError] = useState<string | null>(null);
 
   const executeGuideAction = useCallback(
     async (action: FemMeshGuideActionTarget) => {
+      setCommandError(null);
       if (
         action.kind === "select-node" ||
         action.kind === "focus-inspector-section"
       ) {
         kernel.layout?.setPanelVisible?.("right", true);
         kernel.selection?.set?.(action.selection, "inspector");
+        const targetTab = action.kind === "select-node" ? action.tab : undefined;
+        const targetRow =
+          action.focusRow ??
+          (action.kind === "focus-inspector-section" ? action.sectionId : undefined);
+        const inspectorControl = (
+          kernel as unknown as {
+            inspector?: {
+              setActiveTab?: (tab: string) => void;
+              focusRow?: (rowKey: string) => void;
+            };
+          }
+        ).inspector;
+        if (targetTab) {
+          inspectorControl?.setActiveTab?.(targetTab);
+        }
+        if (targetRow) {
+          inspectorControl?.focusRow?.(targetRow);
+        }
         onNavigate?.();
         return;
       }
@@ -125,17 +157,51 @@ function FemMeshReadinessGuideCardInner({
         if (runningCommand) return;
         setRunningCommand(true);
         try {
+          const statusKey =
+            sessionStatusHooks.SESSION_STATUS_RESOURCE_KEY ?? "session:status";
+          const resourceData: Record<string, unknown> = {};
+          if (sessionStatusData) {
+            resourceData[statusKey] = sessionStatusData;
+          }
+          if (sceneRes.data) {
+            resourceData[MODEL_SCENE_PATH] = sceneRes.data;
+          }
           const context = createCommandContext("inspector", kernel, {
+            resourceData:
+              Object.keys(resourceData).length > 0 ? resourceData : undefined,
             sessionScopeKey,
             sourceDetail: "fem-mesh-readiness-guide",
           });
-          await kernel.commands.execute(action.commandId, context);
+          const result = await kernel.commands.execute(action.commandId, context);
+          if (
+            result &&
+            typeof result === "object" &&
+            "status" in result &&
+            result.status === "failed" &&
+            typeof result.message === "string" &&
+            result.message.trim()
+          ) {
+            setCommandError(result.message.trim());
+          }
+        } catch (error) {
+          setCommandError(
+            error instanceof Error && error.message.trim()
+              ? error.message.trim()
+              : "Mesh command failed.",
+          );
         } finally {
           setRunningCommand(false);
         }
       }
     },
-    [kernel, onNavigate, runningCommand, sessionScopeKey],
+    [
+      kernel,
+      onNavigate,
+      runningCommand,
+      sceneRes.data,
+      sessionScopeKey,
+      sessionStatusData,
+    ],
   );
 
   if (!guide) {
@@ -163,15 +229,17 @@ function FemMeshReadinessGuideCardInner({
             {guide.totalRequiredSteps})
           </Badge>
         </div>
-        <button
+        <Button
           aria-expanded={expanded}
           aria-label="FEM Mesh Guide"
           className="fm-mesh-guide__toggle"
+          size="icon"
           type="button"
+          variant="ghost"
           onClick={() => setExpanded((prev) => !prev)}
         >
           {expanded ? <ChevronDown aria-hidden="true" size={14} /> : <ChevronRight aria-hidden="true" size={14} />}
-        </button>
+        </Button>
       </div>
 
       <div
@@ -211,6 +279,16 @@ function FemMeshReadinessGuideCardInner({
           </Button>
         ) : null}
       </div>
+
+      {commandError ? (
+        <div
+          className="mt-2 flex items-start gap-2 rounded-md border border-[var(--fm-err)]/40 bg-[var(--fm-err)]/10 px-2.5 py-1.5 text-[11px] text-[var(--fm-err-text)]"
+          role="alert"
+        >
+          <AlertTriangle aria-hidden="true" className="mt-0.5 shrink-0" size={13} />
+          <span>{commandError}</span>
+        </div>
+      ) : null}
 
       {expanded ? (
         <ol className="fm-mesh-guide__quest-list">

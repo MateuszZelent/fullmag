@@ -1,30 +1,41 @@
 "use client";
 
-import { useRef, type ReactNode } from "react";
+import { useRef, useSyncExternalStore, type ReactNode } from "react";
 import {
   Box,
   Camera,
-  Compass,
+  ChevronDown,
   Download,
+  Ellipsis,
   Eye,
   FlaskConical,
-  Gauge,
   Layers,
   Maximize,
+  Move,
   Orbit,
   Plane,
+  RotateCw,
+  Scaling,
   Settings,
   Sparkles,
 } from "lucide-react";
 
+import {
+  getTextureDraftBridgeSnapshot,
+  resolveActiveTextureGizmoMode,
+  setTextureGizmoMode,
+  subscribeTextureDraftBridge,
+} from "@/shared/domain/magnetization-texture/textureDraftBridge";
 import { Button } from "@/shared/ui/Button";
 import {
   DropdownMenu,
+  DropdownMenuCheckboxItem,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuLabel,
   DropdownMenuRadioGroup,
   DropdownMenuRadioItem,
+  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/shared/ui/DropdownMenu";
 import { Popover, PopoverContent, PopoverTrigger } from "@/shared/ui/Popover";
@@ -45,17 +56,44 @@ import type { Viewport3DVisualProfileId } from "../viewport3dVisualProfile";
 
 const ICON_SIZE = 16;
 
+const INTERACTION_MODES = [
+  {
+    icon: Orbit,
+    label: "Camera orbit (Q)",
+    mode: "view",
+    testId: "viewport-mode-camera",
+  },
+  {
+    icon: Move,
+    label: "Translate texture (W)",
+    mode: "translate",
+    testId: "viewport-mode-translate",
+  },
+  {
+    icon: RotateCw,
+    label: "Rotate texture (E)",
+    mode: "rotate",
+    testId: "viewport-mode-rotate",
+  },
+  {
+    icon: Scaling,
+    label: "Scale texture (R)",
+    mode: "scale",
+    testId: "viewport-mode-scale",
+  },
+] as const;
+
 /* Orbit turns the scene around its target; a free camera flies with the
    wheel (through objects too) and looks around from where it stands. */
 const CAMERA_MODES = [
   {
-    description: "Orbit: drag turns the view around the model; the wheel zooms towards it.",
+    description: "Drag turns the view around the model; the wheel zooms towards it.",
     icon: Orbit,
     label: "Orbit",
     value: "object",
   },
   {
-    description: "Free camera: the wheel flies forward and back at a steady speed, also into and through objects; drag looks around from the camera.",
+    description: "The wheel flies forward and back, also through objects; drag looks around.",
     icon: Plane,
     label: "Free camera",
     value: "camera",
@@ -66,13 +104,13 @@ const CAMERA_MODES = [
    soft shadows, ambient occlusion and tone mapping. */
 const RENDER_MODES = [
   {
-    description: "Scientific: exact field colors for quantitative reading. Lighting effects stay off while field data is shown.",
+    description: "Exact field colors for reading values.",
     icon: FlaskConical,
     label: "Scientific",
     value: "scientific",
   },
   {
-    description: "Presentation: studio lighting, soft shadows, ambient occlusion and tone mapping. Shading changes field colors; use Scientific to read values.",
+    description: "Studio light, soft shadows and tone mapping; shading changes field colors.",
     icon: Sparkles,
     label: "Presentation",
     value: "presentation",
@@ -89,7 +127,15 @@ export interface Viewport3DToolbarProps {
   fitDisabledReason?: string | null;
 }
 
-/** Compact, presentation-only controls for the active 3D view. */
+/**
+ * Controls for the active 3D view, in five groups: tools (orbit and the
+ * texture gizmo, one segmented switch, Q/W/E/R), navigation (fit, camera
+ * menu, projection), inspection (values, layers),
+ * appearance (render mode and quality in one menu) and output (export,
+ * settings). Container queries on the viewport drop labels first and then
+ * fold the output group into the trailing "More" menu, so the pill stays
+ * one row at any viewport width.
+ */
 export function Viewport3DToolbar({
   onCommand,
   projection,
@@ -100,6 +146,12 @@ export function Viewport3DToolbar({
   fitDisabledReason,
 }: Viewport3DToolbarProps) {
   const { appearance, widgets } = useViewport3DCommandState();
+  const textureBridge = useSyncExternalStore(
+    subscribeTextureDraftBridge,
+    getTextureDraftBridgeSnapshot,
+    getTextureDraftBridgeSnapshot,
+  );
+  const activeInteractionMode = resolveActiveTextureGizmoMode(textureBridge);
   const toolbarRef = useRef<HTMLDivElement>(null);
   const toolbarKeyDown = useToolbarRovingFocus(toolbarRef);
   const fitReason = fitDisabledReason?.trim() || null;
@@ -107,6 +159,11 @@ export function Viewport3DToolbar({
     ? "Capture"
     : VIEWPORT_3D_QUALITY_PROFILE_LABELS[qualityProfileId];
   const projectionLabel = projection === "orthographic" ? "Orthographic" : "Perspective";
+  const cameraMode = CAMERA_MODES.find(({ value }) => value === widgets.rotationMode) ?? CAMERA_MODES[0];
+  const renderMode = RENDER_MODES.find(({ value }) => value === appearance.renderMode) ?? RENDER_MODES[0];
+  const CameraModeIcon = cameraMode.icon;
+  const RenderModeIcon = renderMode.icon;
+  const appearanceLabel = `Appearance: ${renderMode.label}, quality ${qualityLabel}`;
 
   return (
     <TooltipProvider delayDuration={300}>
@@ -117,6 +174,31 @@ export function Viewport3DToolbar({
         ref={toolbarRef}
         role="toolbar"
       >
+        <div aria-label="Interaction mode" className="fm-viewport-3d-toolbar__group fm-viewport-3d-toolbar__segment" role="group">
+          {INTERACTION_MODES.map(({ icon: Icon, label, mode, testId }) => {
+            const isActive = activeInteractionMode === mode;
+            return (
+              <ToolbarTooltip content={label} key={mode}>
+                <Button
+                  aria-label={label}
+                  aria-pressed={isActive}
+                  className="fm-viewport-3d-toolbar__button fm-viewport-3d-toolbar__segment-item"
+                  data-active={isActive ? "true" : "false"}
+                  data-testid={testId}
+                  onClick={() => setTextureGizmoMode(mode)}
+                  size="icon"
+                  type="button"
+                  variant="ghost"
+                >
+                  <Icon aria-hidden="true" size={ICON_SIZE} />
+                </Button>
+              </ToolbarTooltip>
+            );
+          })}
+        </div>
+
+        <ToolbarSeparator />
+
         <div aria-label="Navigation" className="fm-viewport-3d-toolbar__group" role="group">
           <ToolbarTooltip content={fitReason ?? "Fit the scene to the viewport"}>
             <Button
@@ -138,34 +220,54 @@ export function Viewport3DToolbar({
           </ToolbarTooltip>
 
           <DropdownMenu modal={false}>
-            <ToolbarTooltip content="Choose a standard view direction">
+            <ToolbarTooltip content={`Standard views and navigation (${cameraMode.label})`}>
               <DropdownMenuTrigger asChild>
                 <Button
-                  aria-label="Standard views"
-                  className="fm-viewport-3d-toolbar__button"
+                  aria-label={`Camera: ${cameraMode.label}`}
+                  className="fm-viewport-3d-toolbar__button fm-viewport-3d-toolbar__menu-button"
+                  data-camera-mode={cameraMode.value}
                   size="icon"
                   type="button"
                   variant="ghost"
                 >
-                  <Compass aria-hidden="true" size={ICON_SIZE} />
-                  <span className="fm-viewport-3d-toolbar__label">Views</span>
+                  <CameraModeIcon aria-hidden="true" size={ICON_SIZE} />
+                  <span className="fm-viewport-3d-toolbar__label">Camera</span>
+                  <ChevronDown aria-hidden="true" className="fm-viewport-3d-toolbar__chevron" size={12} />
                 </Button>
               </DropdownMenuTrigger>
             </ToolbarTooltip>
-            <DropdownMenuContent align="start">
+            <DropdownMenuContent align="start" className="fm-viewport-3d-toolbar__menu">
               <DropdownMenuLabel>Standard views</DropdownMenuLabel>
-              {VIEW_DIRECTION_COMMANDS.map((command) => (
-                <DropdownMenuItem key={command.id} onSelect={() => onCommand(command.id)}>
-                  {command.label}
-                </DropdownMenuItem>
-              ))}
+              <div className="fm-viewport-3d-toolbar__view-grid">
+                {VIEW_DIRECTION_COMMANDS.map((command) => (
+                  <DropdownMenuItem
+                    aria-description={command.title}
+                    key={command.id}
+                    onSelect={() => onCommand(command.id)}
+                  >
+                    {command.label}
+                  </DropdownMenuItem>
+                ))}
+              </div>
+              <DropdownMenuSeparator />
+              <DropdownMenuLabel>Navigation</DropdownMenuLabel>
+              <DropdownMenuRadioGroup
+                value={widgets.rotationMode}
+                onValueChange={(value) => {
+                  if (value === "object" || value === "camera") viewport3dStore.setRotationMode(value);
+                }}
+              >
+                {CAMERA_MODES.map(({ description, icon: Icon, label, value }) => (
+                  <DropdownMenuRadioItem className="fm-viewport-3d-toolbar__option" key={value} value={value}>
+                    <Icon aria-hidden="true" data-icon size={ICON_SIZE} />
+                    <span className="fm-viewport-3d-toolbar__option-name">{label}</span>
+                    <span className="fm-viewport-3d-toolbar__option-summary">{description}</span>
+                  </DropdownMenuRadioItem>
+                ))}
+              </DropdownMenuRadioGroup>
             </DropdownMenuContent>
           </DropdownMenu>
-        </div>
 
-        <Separator className="fm-viewport-3d-toolbar__separator" orientation="vertical" />
-
-        <div aria-label="Projection" className="fm-viewport-3d-toolbar__group" role="group">
           <ToolbarTooltip
             content={`Switch to ${projection === "orthographic" ? "perspective" : "orthographic"} projection`}
           >
@@ -178,10 +280,9 @@ export function Viewport3DToolbar({
               onClick={() => onCommand("view-projection")}
               size="icon"
               type="button"
-              variant={projection === "orthographic" ? "primary" : "ghost"}
+              variant="ghost"
             >
               <Box aria-hidden="true" size={ICON_SIZE} />
-              <span className="fm-viewport-3d-toolbar__label">Projection</span>
               <span aria-hidden="true" className="fm-viewport-3d-toolbar__current">
                 {projectionLabel}
               </span>
@@ -189,7 +290,7 @@ export function Viewport3DToolbar({
           </ToolbarTooltip>
         </div>
 
-        <Separator className="fm-viewport-3d-toolbar__separator" orientation="vertical" />
+        <ToolbarSeparator />
 
         <div aria-label="Inspection" className="fm-viewport-3d-toolbar__group" role="group">
           <ToolbarTooltip content="Inspect field values in the view">
@@ -201,17 +302,13 @@ export function Viewport3DToolbar({
               onClick={() => onCommand("viewport-3d.inspect-toggle")}
               size="icon"
               type="button"
-              variant={inspectEnabled ? "primary" : "ghost"}
+              variant="ghost"
             >
               <Eye aria-hidden="true" size={ICON_SIZE} />
               <span className="fm-viewport-3d-toolbar__label">Inspect</span>
             </Button>
           </ToolbarTooltip>
-        </div>
 
-        <Separator className="fm-viewport-3d-toolbar__separator" orientation="vertical" />
-
-        <div aria-label="Layers" className="fm-viewport-3d-toolbar__group" role="group">
           <Popover modal={false}>
             <ToolbarTooltip content="Show or hide view layers">
               <PopoverTrigger asChild>
@@ -238,74 +335,47 @@ export function Viewport3DToolbar({
           </Popover>
         </div>
 
-        <Separator className="fm-viewport-3d-toolbar__separator" orientation="vertical" />
+        <ToolbarSeparator />
 
-        <div aria-label="Camera mode" className="fm-viewport-3d-toolbar__group fm-viewport-3d-toolbar__mode" role="radiogroup">
-          {CAMERA_MODES.map(({ description, icon: Icon, label, value }) => (
-            <ToolbarTooltip content={description} key={value}>
-              <Button
-                aria-checked={widgets.rotationMode === value}
-                aria-label={label}
-                className="fm-viewport-3d-toolbar__button fm-viewport-3d-toolbar__mode-item"
-                data-camera-mode={value}
-                role="radio"
-                size="icon"
-                type="button"
-                variant="ghost"
-                onClick={() => viewport3dStore.setRotationMode(value)}
-              >
-                <Icon aria-hidden="true" size={ICON_SIZE} />
-                <span className="fm-viewport-3d-toolbar__label">{label}</span>
-              </Button>
-            </ToolbarTooltip>
-          ))}
-        </div>
-
-        <Separator className="fm-viewport-3d-toolbar__separator" orientation="vertical" />
-
-        <div aria-label="Visualization mode" className="fm-viewport-3d-toolbar__group fm-viewport-3d-toolbar__mode" role="radiogroup">
-          {RENDER_MODES.map(({ description, icon: Icon, label, value }) => (
-            <ToolbarTooltip content={description} key={value}>
-              <Button
-                aria-checked={appearance.renderMode === value}
-                aria-label={label}
-                className="fm-viewport-3d-toolbar__button fm-viewport-3d-toolbar__mode-item"
-                data-render-mode={value}
-                role="radio"
-                size="icon"
-                type="button"
-                variant="ghost"
-                onClick={() => selectViewport3DRenderMode(appearance.renderMode, value)}
-              >
-                <Icon aria-hidden="true" size={ICON_SIZE} />
-                <span className="fm-viewport-3d-toolbar__label">{label}</span>
-              </Button>
-            </ToolbarTooltip>
-          ))}
-        </div>
-
-        <Separator className="fm-viewport-3d-toolbar__separator" orientation="vertical" />
-
-        <div aria-label="Quality" className="fm-viewport-3d-toolbar__group" role="group">
+        <div aria-label="Appearance" className="fm-viewport-3d-toolbar__group" role="group">
           <DropdownMenu modal={false}>
-            <ToolbarTooltip content={`Quality profile: ${qualityLabel}`}>
+            <ToolbarTooltip content={appearanceLabel}>
               <DropdownMenuTrigger asChild>
                 <Button
-                  aria-label={`Quality profile: ${qualityLabel}`}
-                  className="fm-viewport-3d-toolbar__button"
+                  aria-label={appearanceLabel}
+                  className="fm-viewport-3d-toolbar__button fm-viewport-3d-toolbar__menu-button"
+                  data-render-mode={renderMode.value}
                   size="icon"
                   type="button"
                   variant="ghost"
                 >
-                  <Gauge aria-hidden="true" size={ICON_SIZE} />
-                  <span className="fm-viewport-3d-toolbar__label">Quality</span>
+                  <RenderModeIcon aria-hidden="true" size={ICON_SIZE} />
                   <span aria-hidden="true" className="fm-viewport-3d-toolbar__current">
-                    {qualityLabel}
+                    {renderMode.label}, {qualityLabel}
                   </span>
+                  <ChevronDown aria-hidden="true" className="fm-viewport-3d-toolbar__chevron" size={12} />
                 </Button>
               </DropdownMenuTrigger>
             </ToolbarTooltip>
-            <DropdownMenuContent align="start">
+            <DropdownMenuContent align="center" className="fm-viewport-3d-toolbar__menu">
+              <DropdownMenuLabel>Render mode</DropdownMenuLabel>
+              <DropdownMenuRadioGroup
+                value={appearance.renderMode}
+                onValueChange={(value) => {
+                  if (value === "scientific" || value === "presentation") {
+                    selectViewport3DRenderMode(appearance.renderMode, value);
+                  }
+                }}
+              >
+                {RENDER_MODES.map(({ description, icon: Icon, label, value }) => (
+                  <DropdownMenuRadioItem className="fm-viewport-3d-toolbar__option" key={value} value={value}>
+                    <Icon aria-hidden="true" data-icon size={ICON_SIZE} />
+                    <span className="fm-viewport-3d-toolbar__option-name">{label}</span>
+                    <span className="fm-viewport-3d-toolbar__option-summary">{description}</span>
+                  </DropdownMenuRadioItem>
+                ))}
+              </DropdownMenuRadioGroup>
+              <DropdownMenuSeparator />
               <DropdownMenuLabel>Quality profile</DropdownMenuLabel>
               <DropdownMenuRadioGroup
                 onValueChange={(value) => {
@@ -317,13 +387,13 @@ export function Viewport3DToolbar({
               >
                 {VIEWPORT_3D_QUALITY_PROFILE_OPTIONS.map(([id, label]) => (
                   <DropdownMenuRadioItem
-                    className="fm-viewport-3d-toolbar__quality-item"
+                    aria-description={VIEWPORT_3D_QUALITY_PROFILE_DESCRIPTIONS[id]}
+                    className="fm-viewport-3d-toolbar__option"
                     key={id}
-                    title={VIEWPORT_3D_QUALITY_PROFILE_DESCRIPTIONS[id]}
                     value={id}
                   >
-                    <span className="fm-viewport-3d-toolbar__quality-name">{label}</span>
-                    <span className="fm-viewport-3d-toolbar__quality-summary">
+                    <span className="fm-viewport-3d-toolbar__option-name">{label}</span>
+                    <span className="fm-viewport-3d-toolbar__option-summary">
                       {VIEWPORT_3D_QUALITY_PROFILE_SUMMARIES[id]}
                     </span>
                   </DropdownMenuRadioItem>
@@ -333,42 +403,34 @@ export function Viewport3DToolbar({
           </DropdownMenu>
         </div>
 
-        <Separator className="fm-viewport-3d-toolbar__separator" orientation="vertical" />
+        <ToolbarSeparator collapsible />
 
-        <div aria-label="Export" className="fm-viewport-3d-toolbar__group" role="group">
-          <ToolbarTooltip content="Capture the current 3D view as a PNG">
-            <Button
-              aria-label="Export PNG"
-              className="fm-viewport-3d-toolbar__button"
-              data-command-id="viewport-3d.capture-frame"
-              onClick={() => onCommand("viewport-3d.capture-frame")}
-              size="icon"
-              type="button"
-              variant="ghost"
-            >
-              <Camera aria-hidden="true" size={ICON_SIZE} />
-              <span className="fm-viewport-3d-toolbar__label">PNG</span>
-            </Button>
-          </ToolbarTooltip>
-          <ToolbarTooltip content="Export the current view as a 3D model">
-            <Button
-              aria-label="Export 3D model"
-              className="fm-viewport-3d-toolbar__button"
-              data-command-id="viewport-3d.export-model"
-              onClick={() => onCommand("viewport-3d.export-model")}
-              size="icon"
-              type="button"
-              variant="ghost"
-            >
-              <Download aria-hidden="true" size={ICON_SIZE} />
-              <span className="fm-viewport-3d-toolbar__label">3D model</span>
-            </Button>
-          </ToolbarTooltip>
-        </div>
+        <div
+          aria-label="Output"
+          className="fm-viewport-3d-toolbar__group"
+          data-collapsible="true"
+          role="group"
+        >
+          <DropdownMenu modal={false}>
+            <ToolbarTooltip content="Export the current view">
+              <DropdownMenuTrigger asChild>
+                <Button
+                  aria-label="Export"
+                  className="fm-viewport-3d-toolbar__button"
+                  size="icon"
+                  type="button"
+                  variant="ghost"
+                >
+                  <Download aria-hidden="true" size={ICON_SIZE} />
+                  <span className="fm-viewport-3d-toolbar__label">Export</span>
+                </Button>
+              </DropdownMenuTrigger>
+            </ToolbarTooltip>
+            <DropdownMenuContent align="end" className="fm-viewport-3d-toolbar__menu">
+              <ExportMenuItems onCommand={onCommand} />
+            </DropdownMenuContent>
+          </DropdownMenu>
 
-        <Separator className="fm-viewport-3d-toolbar__separator" orientation="vertical" />
-
-        <div aria-label="Settings" className="fm-viewport-3d-toolbar__group" role="group">
           <ToolbarTooltip content="Open view settings">
             <Button
               aria-label="View settings"
@@ -378,15 +440,74 @@ export function Viewport3DToolbar({
               onClick={() => onCommand("viewport-3d.toggle-settings")}
               size="icon"
               type="button"
-              variant={settingsOpen ? "primary" : "ghost"}
+              variant="ghost"
             >
               <Settings aria-hidden="true" size={ICON_SIZE} />
               <span className="fm-viewport-3d-toolbar__label">Settings</span>
             </Button>
           </ToolbarTooltip>
         </div>
+
+        {/* Visible only when a container query folds the Output group. */}
+        <DropdownMenu modal={false}>
+          <ToolbarTooltip content="More view tools">
+            <DropdownMenuTrigger asChild>
+              <Button
+                aria-label="More view tools"
+                className="fm-viewport-3d-toolbar__button fm-viewport-3d-toolbar__more"
+                size="icon"
+                type="button"
+                variant="ghost"
+              >
+                <Ellipsis aria-hidden="true" size={ICON_SIZE} />
+              </Button>
+            </DropdownMenuTrigger>
+          </ToolbarTooltip>
+          <DropdownMenuContent align="end" className="fm-viewport-3d-toolbar__menu">
+            <ExportMenuItems onCommand={onCommand} />
+            <DropdownMenuSeparator />
+            <DropdownMenuCheckboxItem
+              checked={settingsOpen}
+              onCheckedChange={() => onCommand("viewport-3d.toggle-settings")}
+            >
+              View settings
+            </DropdownMenuCheckboxItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
       </div>
     </TooltipProvider>
+  );
+}
+
+function ExportMenuItems({ onCommand }: { onCommand: (id: string) => void }) {
+  return (
+    <>
+      <DropdownMenuLabel>Export view</DropdownMenuLabel>
+      <DropdownMenuItem
+        data-command-id="viewport-3d.capture-frame"
+        onSelect={() => onCommand("viewport-3d.capture-frame")}
+      >
+        <Camera aria-hidden="true" data-icon size={ICON_SIZE} />
+        Export PNG
+      </DropdownMenuItem>
+      <DropdownMenuItem
+        data-command-id="viewport-3d.export-model"
+        onSelect={() => onCommand("viewport-3d.export-model")}
+      >
+        <Download aria-hidden="true" data-icon size={ICON_SIZE} />
+        Export 3D model
+      </DropdownMenuItem>
+    </>
+  );
+}
+
+function ToolbarSeparator({ collapsible = false }: { collapsible?: boolean }) {
+  return (
+    <Separator
+      className="fm-viewport-3d-toolbar__separator"
+      data-collapsible={collapsible || undefined}
+      orientation="vertical"
+    />
   );
 }
 

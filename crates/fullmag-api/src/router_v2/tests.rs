@@ -4180,12 +4180,18 @@ async fn status_exposes_planner_owned_active_lane_capability_snapshot() {
         active_lane["operations"]["region_membership"]["state"],
         "semantic_only"
     );
+    for operation in [
+        "initial_magnetization.preset_v2",
+        "initial_magnetization.sampled_field",
+    ] {
+        assert_eq!(active_lane["operations"][operation]["state"], "supported");
+    }
     assert_eq!(
         active_lane["operations"]
             .as_object()
             .expect("operation capability map")
             .len(),
-        34
+        crate::router_v2::handlers::sessions::status::ACTIVE_LANE_OPERATION_IDS.len()
     );
     assert!(active_lane["operations"]["study.frequency_response"]["reason"].is_string());
     assert!(active_lane["operations"]["study.frequency_response"]["requires"].is_array());
@@ -32514,6 +32520,37 @@ async fn field_state_export_inspect_and_apply_round_trips_live_magnetization() {
         .expect("field-state export should include artifact_ref")
         .to_string();
 
+    for endpoint in [
+        "/v2/sessions/current/persistence/field-states/imports/inspections",
+        "/v2/sessions/current/persistence/field-states/imports",
+    ] {
+        let rejected = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(endpoint)
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::json!({
+                            "artifact_ref": artifact_ref,
+                            "target": { "kind": "object", "id": "body" },
+                            "quantity_id": "m",
+                            "format": "ovf",
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(rejected.status(), StatusCode::BAD_REQUEST);
+        assert!(body_json(rejected).await["message"]
+            .as_str()
+            .unwrap()
+            .contains("does not match the artifact format 'h5'"));
+    }
+
     let inspect_response = app
         .clone()
         .oneshot(
@@ -32746,8 +32783,7 @@ async fn uploaded_h5_field_state_can_be_inspected_and_applied() {
                             "kind": "object",
                             "id": "body"
                         },
-                        "quantity_id": "m",
-                        "format": "field_state_json"
+                        "quantity_id": "m"
                     })
                     .to_string(),
                 ))
@@ -32765,6 +32801,7 @@ async fn uploaded_h5_field_state_can_be_inspected_and_applied() {
     );
     assert_eq!(inspected["compatibility"], "compatible");
     assert_eq!(inspected["point_count"], 2);
+    assert_eq!(inspected["format"], "h5");
 
     let import_response = app
         .oneshot(
@@ -57033,11 +57070,13 @@ async fn readiness_routes_missing_object_assignments_to_the_object() {
             "algorithm": "projected_gradient_bb", "stage_id": "relax-1"
         }));
         scene.study.requested_backend = "fem".into();
+        scene.study.demag_enabled = false;
+        scene.study.exchange_enabled = false;
         scene.objects[0].magnetization_ref = None;
         scene.objects[0].physics_stack.clear();
         snapshot.scene_document = Some(scene);
     }
-    let response = build_v2_router().with_state(state).oneshot(
+    let response = build_v2_router().with_state(state.clone()).oneshot(
         Request::builder().uri("/v2/sessions/current/model/readiness").body(Body::empty()).unwrap()
     ).await.unwrap();
     assert_eq!(response.status(), StatusCode::OK);
@@ -57047,6 +57086,26 @@ async fn readiness_routes_missing_object_assignments_to_the_object() {
         assert_eq!(check["state"], "blocked");
         assert_eq!(check["target_resource"], "model/objects/body");
     }
+
+    state
+        .current_live_state
+        .write()
+        .await
+        .as_mut()
+        .unwrap()
+        .scene_document
+        .as_mut()
+        .unwrap()
+        .study
+        .demag_enabled = true;
+    let response = build_v2_router().with_state(state).oneshot(
+        Request::builder().uri("/v2/sessions/current/model/readiness").body(Body::empty()).unwrap()
+    ).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = body_json(response).await;
+    let interactions = body["checks"].as_array().unwrap().iter()
+        .find(|check| check["id"] == "interactions").unwrap();
+    assert_eq!(interactions["state"], "complete");
 }
 
 

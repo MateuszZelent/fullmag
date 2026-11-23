@@ -19,6 +19,7 @@ export {
 export {
   setInspectorActiveTab,
   useInspectorActiveTab,
+  useInspectorStagedDirtyCount,
   useInspectorTabs,
   type InspectorTabInfo,
 } from "./InspectorTabState";

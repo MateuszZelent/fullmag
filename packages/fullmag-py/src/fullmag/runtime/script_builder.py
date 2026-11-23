@@ -65,6 +65,7 @@ from fullmag.model.dynamics import (
 from fullmag.model.energy import BulkDMI, Constant, CubicAnisotropy, Demag, Exchange, InterfacialDMI, Magnetoelastic, OerstedField, OerstedCylinder, PiecewiseLinear, Pulse, RotatedInterfacialDMI, SincPulse, Sinusoidal, ThermalNoise, UniaxialAnisotropy, Zeeman
 from fullmag.model.eigen import serialize_k_sampling
 from fullmag.model.geometry import (
+    ANTENNA_LAYOUT_TYPES,
     CPWAntennaLayout,
     ArchWaveguide,
     Box,
@@ -73,8 +74,12 @@ from fullmag.model.geometry import (
     Ellipse,
     Ellipsoid,
     ImportedGeometry,
+    InductiveLoopLayout,
     Intersection,
+    MeanderAntennaLayout,
     MicrostripAntennaLayout,
+    Path3DWaypoint,
+    PiecewisePath3DLayout,
     SinWaveguide,
     Translate,
     Union,
@@ -501,12 +506,27 @@ def export_builder_draft(
     )
     if resources is not None:
         draft["compute_resources"] = resources.to_ir()
-    visualization_hint = _normalize_mapping(
-        _normalize_mapping(base_problem.runtime_metadata).get("visualization_hint")
-    )
+    runtime_meta = _normalize_mapping(base_problem.runtime_metadata)
+    visualization_hint = _normalize_mapping(runtime_meta.get("visualization_hint"))
+    draft_viz_hint: dict[str, object] = {}
     airbox_hint = visualization_hint.get("airbox")
     if airbox_hint is not None:
-        draft["visualization_hint"] = {"airbox": copy.deepcopy(airbox_hint)}
+        draft_viz_hint["airbox"] = copy.deepcopy(airbox_hint)
+    material_constitutive_hint = runtime_meta.get(
+        "material_constitutive",
+        visualization_hint.get("material_constitutive"),
+    )
+    if material_constitutive_hint is not None:
+        from fullmag.runtime.scene_document import canonical_material_constitutive_hint
+
+        canonical_mc = canonical_material_constitutive_hint(
+            material_constitutive_hint,
+            context="runtime_metadata.material_constitutive",
+        )
+        if canonical_mc:
+            draft_viz_hint["material_constitutive"] = canonical_mc
+    if draft_viz_hint:
+        draft["visualization_hint"] = draft_viz_hint
     if authored_problem.selections:
         draft["selections"] = [selection.to_ir() for selection in authored_problem.selections]
     constraints = authored_problem._collect_magnetization_constraints()
@@ -837,6 +857,30 @@ def render_loaded_problem_as_script(
             f"fm.runtime_metadata('material_assets', {_py_literal(canonical_material_assets(material_metadata))})"
         )
 
+    base_runtime_meta = _normalize_mapping(base_problem.runtime_metadata)
+    base_viz_hint = _normalize_mapping(base_runtime_meta.get("visualization_hint"))
+    scene_viz_override = overrides.get("visualization_hint")
+    if scene_viz_override is not None:
+        if not isinstance(scene_viz_override, Mapping):
+            raise ValueError("SceneDocument.study.visualization_hint must be an object")
+        material_constitutive_meta = scene_viz_override.get("material_constitutive")
+    else:
+        material_constitutive_meta = base_runtime_meta.get(
+            "material_constitutive",
+            base_viz_hint.get("material_constitutive"),
+        )
+    if material_constitutive_meta is not None:
+        from fullmag.runtime.scene_document import canonical_material_constitutive_hint
+
+        canonical_mc = canonical_material_constitutive_hint(
+            material_constitutive_meta,
+            context="SceneDocument.study.visualization_hint.material_constitutive",
+        )
+        if canonical_mc:
+            lines.append(
+                f"fm.runtime_metadata('material_constitutive', {_py_literal(canonical_mc)})"
+            )
+
     normalized = "\n".join(lines).rstrip() + "\n"
     return normalized
 
@@ -1015,8 +1059,10 @@ def _reject_unrendered_scene_stage_fields(
         if key not in common_fields | rendered_fields
         and _has_scene_stage_content(value)
         # The typed stage state serializes unset eigenmode/frequency flags as
-        # ``false`` on every stage kind; that is absence, not authored intent.
+        # ``false`` on every stage kind, and active stages as ``enabled: true``;
+        # neither changes the rendered stage semantics.
         and not (value is False and key.startswith(("eigen_", "frequency_")))
+        and not (key == "enabled" and value is True)
     )
     if unsupported:
         names = ", ".join(unsupported)
@@ -1458,7 +1504,7 @@ def _render_scene_document_bootstrap(
             if isinstance(entry, Mapping) and entry.get("enabled") is False
         }
         if isinstance(material, Mapping):
-            for key in ("Ms", "Aex", "alpha", "Dind", "Dbulk", "Ku1", "Kc1"):
+            for key in ("Ms", "Aex", "alpha", "Dind", "Dbulk", "Ku1", "Ku2", "Kc1", "Kc2", "Kc3"):
                 if (key == "Dind" and "interfacial_dmi" in inactive_dmi_kinds
                         or key == "Dbulk" and "bulk_dmi" in inactive_dmi_kinds):
                     continue
@@ -1480,6 +1526,12 @@ def _render_scene_document_bootstrap(
             anis_u = material.get("anisU") or material.get("anis_u")
             if isinstance(anis_u, (list, tuple)) and len(anis_u) == 3:
                 lines.append(f"{handle}.anisU = {_python_literal(tuple(anis_u))}")
+            anis_c1 = material.get("anisC1") or material.get("anis_c1")
+            if isinstance(anis_c1, (list, tuple)) and len(anis_c1) == 3:
+                lines.append(f"{handle}.anisC1 = {_python_literal(tuple(anis_c1))}")
+            anis_c2 = material.get("anisC2") or material.get("anis_c2")
+            if isinstance(anis_c2, (list, tuple)) and len(anis_c2) == 3:
+                lines.append(f"{handle}.anisC2 = {_python_literal(tuple(anis_c2))}")
         # Match the final renderer before stage capture validates the Problem.
         # Explicit object anisotropy is already authored physics, not a fallback.
         normalized_stack = _ensure_geometry_physics_stack(
@@ -1487,10 +1539,28 @@ def _render_scene_document_bootstrap(
             material_dind=material.get("Dind") if isinstance(material, Mapping) else None,
             material_dbulk=material.get("Dbulk") if isinstance(material, Mapping) else None,
         )
+        dmi_normal = _physics_stack_dmi_interface_normal(normalized_stack)
+        if (
+            _physics_stack_dmi_value(normalized_stack) is not None
+            and dmi_normal is not None
+            and not _is_default_z_normal(dmi_normal)
+        ):
+            lines.append(
+                f"{handle}.dmi_interface_normal = {_python_literal(tuple(dmi_normal))}"
+            )
         uniaxial = _physics_stack_uniaxial_params(normalized_stack)
         if uniaxial is not None:
             lines.append(f"{handle}.Ku1 = {_python_literal(uniaxial['ku1'])}")
+            if uniaxial["ku2"] != 0.0:
+                lines.append(f"{handle}.Ku2 = {_python_literal(uniaxial['ku2'])}")
             lines.append(f"{handle}.anisU = {_python_literal(tuple(uniaxial['axis']))}")
+        cubic = _physics_stack_cubic_params(normalized_stack)
+        if cubic is not None:
+            lines.append(f"{handle}.Kc1 = {_python_literal(cubic['kc1'])}")
+            lines.append(f"{handle}.Kc2 = {_python_literal(cubic['kc2'])}")
+            lines.append(f"{handle}.Kc3 = {_python_literal(cubic['kc3'])}")
+            lines.append(f"{handle}.anisC1 = {_python_literal(tuple(cubic['axis1']))}")
+            lines.append(f"{handle}.anisC2 = {_python_literal(tuple(cubic['axis2']))}")
         magnetization = raw_object.get("magnetization")
         if isinstance(magnetization, Mapping):
             texture_expression = _render_texture_expression(magnetization)
@@ -4217,10 +4287,18 @@ def _render_runtime(
     if scene_visualization_hint is not None:
         if not isinstance(scene_visualization_hint, Mapping):
             raise ValueError("SceneDocument.study.visualization_hint must be an object")
-        visualization_hint = {
-            **visualization_hint,
-            **dict(scene_visualization_hint),
-        }
+        merged_viz_hint = dict(visualization_hint)
+        if "airbox" in scene_visualization_hint:
+            merged_viz_hint["airbox"] = scene_visualization_hint["airbox"]
+        else:
+            merged_viz_hint.pop("airbox", None)
+        if "material_constitutive" in scene_visualization_hint:
+            merged_viz_hint["material_constitutive"] = scene_visualization_hint[
+                "material_constitutive"
+            ]
+        else:
+            merged_viz_hint.pop("material_constitutive", None)
+        visualization_hint = merged_viz_hint
     if visualization_hint:
         active_qty = visualization_hint.get("active_quantity_id")
         if isinstance(active_qty, str) and active_qty.strip():
@@ -4595,10 +4673,28 @@ def _render_geometry_and_materials(
         )
         if magnet.material.Ku1 is not None:
             lines.append(f"{var_name}.Ku1 = {_py_float_roundtrip(magnet.material.Ku1)}")
+        if magnet.material.Ku2 is not None:
+            lines.append(f"{var_name}.Ku2 = {_py_float_roundtrip(magnet.material.Ku2)}")
         if magnet.material.anisU is not None:
             lines.append(
                 f"{var_name}.anisU = ({_py_float_roundtrip(magnet.material.anisU[0])}, "
                 f"{_py_float_roundtrip(magnet.material.anisU[1])}, {_py_float_roundtrip(magnet.material.anisU[2])})"
+            )
+        if magnet.material.Kc1 is not None:
+            lines.append(f"{var_name}.Kc1 = {_py_float_roundtrip(magnet.material.Kc1)}")
+        if magnet.material.Kc2 is not None:
+            lines.append(f"{var_name}.Kc2 = {_py_float_roundtrip(magnet.material.Kc2)}")
+        if magnet.material.Kc3 is not None:
+            lines.append(f"{var_name}.Kc3 = {_py_float_roundtrip(magnet.material.Kc3)}")
+        if magnet.material.anisC1 is not None:
+            lines.append(
+                f"{var_name}.anisC1 = ({_py_float_roundtrip(magnet.material.anisC1[0])}, "
+                f"{_py_float_roundtrip(magnet.material.anisC1[1])}, {_py_float_roundtrip(magnet.material.anisC1[2])})"
+            )
+        if magnet.material.anisC2 is not None:
+            lines.append(
+                f"{var_name}.anisC2 = ({_py_float_roundtrip(magnet.material.anisC2[0])}, "
+                f"{_py_float_roundtrip(magnet.material.anisC2[1])}, {_py_float_roundtrip(magnet.material.anisC2[2])})"
             )
         rendered_initial_override = _render_initial_state_override(
             initial_state_override,
@@ -4621,6 +4717,12 @@ def _render_geometry_and_materials(
         dmi = _magnet_dmi(problem, magnet, "Dind", InterfacialDMI)
         if dmi is not None:
             lines.append(f"{var_name}.Dind = {_py_float_roundtrip(dmi)}")
+            dmi_normal = _magnet_interfacial_dmi_normal(problem)
+            if dmi_normal is not None and not _is_default_z_normal(dmi_normal):
+                lines.append(
+                    f"{var_name}.dmi_interface_normal = ({_py_float_roundtrip(dmi_normal[0])}, "
+                    f"{_py_float_roundtrip(dmi_normal[1])}, {_py_float_roundtrip(dmi_normal[2])})"
+                )
         bulk_dmi = _magnet_dmi(problem, magnet, "Dbulk", BulkDMI)
         if bulk_dmi is not None:
             lines.append(f"{var_name}.Dbulk = {_py_float_roundtrip(bulk_dmi)}")
@@ -5367,19 +5469,44 @@ def _render_geometries_from_override(
         dmi = _physics_stack_dmi_value(physics_stack)
         if dmi is not None:
             lines.append(f"{var_name}.Dind = {_py_float_roundtrip(dmi)}")
+            dmi_normal = _physics_stack_dmi_interface_normal(physics_stack)
+            if dmi_normal is not None and not _is_default_z_normal(dmi_normal):
+                lines.append(
+                    f"{var_name}.dmi_interface_normal = ({_py_float_roundtrip(dmi_normal[0])}, "
+                    f"{_py_float_roundtrip(dmi_normal[1])}, {_py_float_roundtrip(dmi_normal[2])})"
+                )
         bulk_dmi = _physics_stack_bulk_dmi_value(physics_stack)
         if bulk_dmi is not None:
             lines.append(f"{var_name}.Dbulk = {_py_float_roundtrip(bulk_dmi)}")
         uniaxial = _physics_stack_uniaxial_params(physics_stack)
         if uniaxial is not None:
             ku1_val = uniaxial["ku1"]  # type: ignore[index]
+            ku2_val = uniaxial["ku2"]  # type: ignore[index]
             lines.append(f"{var_name}.Ku1 = {_py_float_roundtrip(ku1_val)}")  # type: ignore[arg-type]
+            if ku2_val != 0.0:
+                lines.append(f"{var_name}.Ku2 = {_py_float_roundtrip(ku2_val)}")  # type: ignore[arg-type]
             axis = uniaxial["axis"]  # type: ignore[index]
             axis0 = axis[0]  # type: ignore[index]
             axis1 = axis[1]  # type: ignore[index]
             axis2 = axis[2]  # type: ignore[index]
             lines.append(
                 f"{var_name}.anisU = ({_py_float_roundtrip(axis0)}, {_py_float_roundtrip(axis1)}, {_py_float_roundtrip(axis2)})"
+            )
+        cubic = _physics_stack_cubic_params(physics_stack)
+        if cubic is not None:
+            kc1_val = cubic["kc1"]  # type: ignore[index]
+            kc2_val = cubic["kc2"]  # type: ignore[index]
+            kc3_val = cubic["kc3"]  # type: ignore[index]
+            axis1 = cubic["axis1"]  # type: ignore[index]
+            axis2 = cubic["axis2"]  # type: ignore[index]
+            lines.append(f"{var_name}.Kc1 = {_py_float_roundtrip(kc1_val)}")  # type: ignore[arg-type]
+            lines.append(f"{var_name}.Kc2 = {_py_float_roundtrip(kc2_val)}")  # type: ignore[arg-type]
+            lines.append(f"{var_name}.Kc3 = {_py_float_roundtrip(kc3_val)}")  # type: ignore[arg-type]
+            lines.append(
+                f"{var_name}.anisC1 = ({_py_float_roundtrip(axis1[0])}, {_py_float_roundtrip(axis1[1])}, {_py_float_roundtrip(axis1[2])})"
+            )
+            lines.append(
+                f"{var_name}.anisC2 = ({_py_float_roundtrip(axis2[0])}, {_py_float_roundtrip(axis2[1])}, {_py_float_roundtrip(axis2[2])})"
             )
 
         rendered_initial_override = _render_initial_state_override(
@@ -5491,7 +5618,42 @@ _GEOMETRY_INTERACTION_ORDER = (
     "rotated_interfacial_dmi",
     "bulk_dmi",
     "uniaxial_anisotropy",
+    "cubic_anisotropy",
 )
+
+
+def _is_default_z_normal(normal: Sequence[float]) -> bool:
+    return (
+        len(normal) == 3
+        and abs(float(normal[0])) <= 1e-12
+        and abs(float(normal[1])) <= 1e-12
+        and abs(float(normal[2]) - 1.0) <= 1e-12
+    )
+
+
+def _normalize_unit_vec3(
+    raw: object,
+    *,
+    field: str,
+    fallback: tuple[float, float, float],
+) -> list[float]:
+    if raw is None:
+        vec = list(fallback)
+    elif isinstance(raw, (list, tuple)) and len(raw) == 3:
+        vec = []
+        for idx, item in enumerate(raw):
+            if isinstance(item, bool) or not isinstance(item, (int, float)):
+                raise ValueError(f"{field}[{idx}] must be a finite number")
+            val = float(item)
+            if not math.isfinite(val):
+                raise ValueError(f"{field}[{idx}] must be finite")
+            vec.append(val)
+    else:
+        raise ValueError(f"{field} must be a 3-element numeric vector")
+    norm = math.sqrt(vec[0] * vec[0] + vec[1] * vec[1] + vec[2] * vec[2])
+    if norm <= 1e-12:
+        raise ValueError(f"{field} must have nonzero norm")
+    return [vec[0] / norm, vec[1] / norm, vec[2] / norm]
 
 
 def _normalize_geometry_interaction_entry(
@@ -5511,12 +5673,17 @@ def _normalize_geometry_interaction_entry(
         )
     if kind in {"exchange", "demag"}:
         return {"kind": kind, "enabled": bool(raw.get("enabled", True)), "params": None}
-    params = raw.get("params") if isinstance(raw.get("params"), dict) else {}  # type: ignore[assignment]
+    params = dict(raw.get("params")) if isinstance(raw.get("params"), dict) else {}  # type: ignore[arg-type]
     if kind == "interfacial_dmi":
         dind = _number_or_none(params.get("dind"))
         if dind is None:
             dind = _number_or_none(material_dind)
         params["dind"] = dind if dind is not None else 1e-3
+        params["interface_normal"] = _normalize_unit_vec3(
+            params.get("interface_normal"),
+            field="interfacial_dmi.interface_normal",
+            fallback=(0.0, 0.0, 1.0),
+        )
     elif kind == "bulk_dmi":
         dbulk = _number_or_none(params.get("dbulk"))
         if dbulk is None:
@@ -5524,8 +5691,35 @@ def _normalize_geometry_interaction_entry(
         params["dbulk"] = dbulk if dbulk is not None else 1e-3
     elif kind == "uniaxial_anisotropy":
         ku1 = _number_or_none(params.get("ku1"))
+        ku2 = _number_or_none(params.get("ku2"))
         params["ku1"] = ku1 if ku1 is not None else 0.0
+        params["ku2"] = ku2 if ku2 is not None else 0.0
         params["axis"] = _normalize_vec3(params.get("axis"), fallback=(0.0, 0.0, 1.0))
+    elif kind == "cubic_anisotropy":
+        kc1 = _number_or_none(params.get("kc1"))
+        kc2 = _number_or_none(params.get("kc2"))
+        kc3 = _number_or_none(params.get("kc3"))
+        axis1 = _normalize_unit_vec3(
+            params.get("axis1"),
+            field="cubic_anisotropy.axis1",
+            fallback=(1.0, 0.0, 0.0),
+        )
+        axis2 = _normalize_unit_vec3(
+            params.get("axis2"),
+            field="cubic_anisotropy.axis2",
+            fallback=(0.0, 1.0, 0.0),
+        )
+        dot = axis1[0] * axis2[0] + axis1[1] * axis2[1] + axis1[2] * axis2[2]
+        if abs(dot) >= 1e-6:
+            raise ValueError(
+                "cubic_anisotropy axis1 and axis2 must be orthogonal "
+                "(|c1·c2| / (||c1|| ||c2||) < 1e-6)"
+            )
+        params["kc1"] = kc1 if kc1 is not None else 0.0
+        params["kc2"] = kc2 if kc2 is not None else 0.0
+        params["kc3"] = kc3 if kc3 is not None else 0.0
+        params["axis1"] = axis1
+        params["axis2"] = axis2
     return {
         "kind": kind,
         "enabled": bool(raw.get("enabled", True)),
@@ -5585,6 +5779,25 @@ def _physics_stack_dmi_value(stack: list[dict[str, object]]) -> float | None:
     return None
 
 
+def _physics_stack_dmi_interface_normal(
+    stack: list[dict[str, object]],
+) -> list[float] | None:
+    for entry in stack:
+        if entry.get("kind") != "interfacial_dmi":
+            continue
+        if not bool(entry.get("enabled", True)):
+            return None
+        params = entry.get("params") if isinstance(entry.get("params"), dict) else {}  # type: ignore[assignment]
+        if params.get("interface_normal") is None:
+            return [0.0, 0.0, 1.0]
+        return _normalize_unit_vec3(
+            params.get("interface_normal"),
+            field="interfacial_dmi.interface_normal",
+            fallback=(0.0, 0.0, 1.0),
+        )
+    return None
+
+
 def _physics_stack_bulk_dmi_value(stack: list[dict[str, object]]) -> float | None:
     for entry in stack:
         if entry.get("kind") != "bulk_dmi":
@@ -5606,8 +5819,45 @@ def _physics_stack_uniaxial_params(
             return None
         params = entry.get("params") if isinstance(entry.get("params"), dict) else {}  # type: ignore[assignment]
         ku1 = _number_or_none(params.get("ku1"))
+        ku2 = _number_or_none(params.get("ku2"))
         axis = _normalize_vec3(params.get("axis"), fallback=(0.0, 0.0, 1.0))
-        return {"ku1": ku1 if ku1 is not None else 0.0, "axis": axis}
+        return {
+            "ku1": ku1 if ku1 is not None else 0.0,
+            "ku2": ku2 if ku2 is not None else 0.0,
+            "axis": axis,
+        }
+    return None
+
+
+def _physics_stack_cubic_params(
+    stack: list[dict[str, object]],
+) -> dict[str, object] | None:
+    for entry in stack:
+        if entry.get("kind") != "cubic_anisotropy":
+            continue
+        if not bool(entry.get("enabled", True)):
+            return None
+        params = entry.get("params") if isinstance(entry.get("params"), dict) else {}  # type: ignore[assignment]
+        kc1 = _number_or_none(params.get("kc1"))
+        kc2 = _number_or_none(params.get("kc2"))
+        kc3 = _number_or_none(params.get("kc3"))
+        axis1 = _normalize_unit_vec3(
+            params.get("axis1"),
+            field="cubic_anisotropy.axis1",
+            fallback=(1.0, 0.0, 0.0),
+        )
+        axis2 = _normalize_unit_vec3(
+            params.get("axis2"),
+            field="cubic_anisotropy.axis2",
+            fallback=(0.0, 1.0, 0.0),
+        )
+        return {
+            "kc1": kc1 if kc1 is not None else 0.0,
+            "kc2": kc2 if kc2 is not None else 0.0,
+            "kc3": kc3 if kc3 is not None else 0.0,
+            "axis1": axis1,
+            "axis2": axis2,
+        }
     return None
 
 
@@ -11152,6 +11402,31 @@ def _render_excitation_analysis_override(
     return f"{_surface_call(surface, 'spin_wave_excitation')}({', '.join(kwargs)})"
 
 
+def _render_antenna_transform_kwarg(params: Mapping[str, object]) -> str | None:
+    transform = _normalize_mapping(params.get("transform"))
+    rotation = transform.get("rotation_matrix")
+    translation = transform.get("translation_m")
+    identity_rotation = ((1.0, 0.0, 0.0), (0.0, 1.0, 0.0), (0.0, 0.0, 1.0))
+    if rotation is not None or translation is not None:
+        rotation_tuple = (
+            tuple(tuple(float(component) for component in row) for row in rotation)
+            if isinstance(rotation, list)
+            else identity_rotation
+        )
+        translation_tuple = (
+            tuple(float(component) for component in translation)
+            if isinstance(translation, list)
+            else (0.0, 0.0, 0.0)
+        )
+        if rotation_tuple != identity_rotation or any(component != 0.0 for component in translation_tuple):
+            return (
+                "transform=fm.RigidTransform("
+                f"rotation_matrix={_python_literal(rotation_tuple)}, "
+                f"translation_m={_python_literal(translation_tuple)})"
+            )
+    return None
+
+
 def _render_antenna_layout_expr(
     kind: str,
     params: Mapping[str, object],
@@ -11159,6 +11434,98 @@ def _render_antenna_layout_expr(
     name: str,
 ) -> str:
     normalized_kind = kind.lower()
+
+    def number(key: str, *aliases: str) -> str:
+        value = params.get(key)
+        for alias in aliases:
+            if value is None:
+                value = params.get(alias)
+        numeric = _finite_number(value)
+        if numeric is None:
+            raise ValueError(f"{kind} geometry requires finite {key}")
+        return _py_float_roundtrip(numeric)
+
+    conductor_ids = {
+        entry.get("kind"): entry.get("id")
+        for entry in params.get("conductors", [])
+        if isinstance(entry, Mapping)
+    }
+    transform_kw = _render_antenna_transform_kwarg(params)
+
+    if normalized_kind in {"meander", "meanderantennalayout", "meander_antenna_layout"}:
+        kwargs = [
+            f"name={_py_repr(name)}",
+            f"length_m={number('length_m', 'length')}",
+            f"signal_width_m={number('signal_width_m', 'width')}",
+            f"thickness_m={number('thickness_m', 'thickness')}",
+            f"conductivity_s_per_m={number('conductivity_s_per_m', 'conductivity')}",
+            f"finger_count={int(str(params.get('finger_count', 4)))}",
+            f"pitch_m={number('pitch_m', 'pitch')}",
+        ]
+        if params.get("bend_radius_m") not in {None, 0.0}:
+            kwargs.append(f"bend_radius_m={number('bend_radius_m', 'bend_radius')}")
+        if transform_kw is not None:
+            kwargs.append(transform_kw)
+        sig_id = params.get("signal_part_id", conductor_ids.get("signal"))
+        if isinstance(sig_id, str) and sig_id and sig_id != "signal":
+            kwargs.append(f"signal_part_id={_py_repr(sig_id)}")
+        return f"fm.MeanderAntennaLayout({', '.join(kwargs)})"
+
+    if normalized_kind in {"inductive_loop", "inductivelooplayout", "inductive_loop_layout"}:
+        kwargs = [
+            f"name={_py_repr(name)}",
+            f"loop_shape={_py_repr(str(params.get('loop_shape', 'circular')))}",
+            f"inner_radius_m={number('inner_radius_m', 'inner_radius')}",
+            f"signal_width_m={number('signal_width_m', 'width')}",
+            f"thickness_m={number('thickness_m', 'thickness')}",
+            f"conductivity_s_per_m={number('conductivity_s_per_m', 'conductivity')}",
+        ]
+        if params.get("turns") not in {None, 1}:
+            kwargs.append(f"turns={int(str(params['turns']))}")
+        if params.get("bend_radius_m") not in {None, 0.0}:
+            kwargs.append(f"bend_radius_m={number('bend_radius_m')}")
+        if params.get("feed_gap_m") is not None:
+            kwargs.append(f"feed_gap_m={number('feed_gap_m')}")
+        if params.get("pitch_m") is not None:
+            kwargs.append(f"pitch_m={number('pitch_m')}")
+        if transform_kw is not None:
+            kwargs.append(transform_kw)
+        sig_id = params.get("signal_part_id", conductor_ids.get("signal"))
+        if isinstance(sig_id, str) and sig_id and sig_id != "signal":
+            kwargs.append(f"signal_part_id={_py_repr(sig_id)}")
+        return f"fm.InductiveLoopLayout({', '.join(kwargs)})"
+
+    if normalized_kind in {"piecewise_3d_path", "piecewisepath3dlayout", "piecewise_path_3d_layout"}:
+        raw_waypoints = params.get("waypoints")
+        if not isinstance(raw_waypoints, list) or len(raw_waypoints) < 2:
+            raise ValueError(f"{kind} geometry requires at least two waypoints")
+        wp_exprs: list[str] = []
+        for raw_wp in raw_waypoints:
+            wp = _normalize_mapping(raw_wp)
+            wp_parts = [
+                f"x_m={_py_float_roundtrip(float(wp.get('x_m', wp.get('x', 0.0))))}",
+                f"y_m={_py_float_roundtrip(float(wp.get('y_m', wp.get('y', 0.0))))}",
+                f"z_m={_py_float_roundtrip(float(wp.get('z_m', wp.get('z', 0.0))))}",
+            ]
+            if wp.get("width_m") is not None:
+                wp_parts.append(f"width_m={_py_float_roundtrip(float(wp['width_m']))}")
+            if wp.get("bend_radius_m") not in {None, 0.0}:
+                wp_parts.append(f"bend_radius_m={_py_float_roundtrip(float(wp['bend_radius_m']))}")
+            wp_exprs.append(f"fm.Path3DWaypoint({', '.join(wp_parts)})")
+        kwargs = [
+            f"name={_py_repr(name)}",
+            "waypoints=(" + ", ".join(wp_exprs) + ",)",
+            f"signal_width_m={number('signal_width_m', 'width')}",
+            f"thickness_m={number('thickness_m', 'thickness')}",
+            f"conductivity_s_per_m={number('conductivity_s_per_m', 'conductivity')}",
+        ]
+        if transform_kw is not None:
+            kwargs.append(transform_kw)
+        sig_id = params.get("signal_part_id", conductor_ids.get("signal"))
+        if isinstance(sig_id, str) and sig_id and sig_id != "signal":
+            kwargs.append(f"signal_part_id={_py_repr(sig_id)}")
+        return f"fm.PiecewisePath3DLayout({', '.join(kwargs)})"
+
     if normalized_kind in {"cpw", "cpwantennalayout", "cpw_antenna_layout"}:
         constructor = "fm.CPWAntennaLayout"
         station_type = "fm.CPWWidthStation"
@@ -11171,16 +11538,6 @@ def _render_antenna_layout_expr(
         station_type = "fm.MicrostripWidthStation"
     else:
         raise ValueError(f"unsupported antenna layout kind '{kind}'")
-
-    def number(key: str, *aliases: str) -> str:
-        value = params.get(key)
-        for alias in aliases:
-            if value is None:
-                value = params.get(alias)
-        numeric = _finite_number(value)
-        if numeric is None:
-            raise ValueError(f"{kind} geometry requires finite {key}")
-        return _py_float_roundtrip(numeric)
 
     def number_from(mapping: Mapping[str, object], key: str, *aliases: str) -> str:
         value = mapping.get(key)
@@ -11220,24 +11577,8 @@ def _render_antenna_layout_expr(
         f"conductivity_s_per_m={number('conductivity_s_per_m', 'conductivity')}",
         "stations=(" + ", ".join(stations) + ",)",
     ]
-    transform = _normalize_mapping(params.get("transform"))
-    rotation = transform.get("rotation_matrix")
-    translation = transform.get("translation_m")
-    identity_rotation = ((1.0, 0.0, 0.0), (0.0, 1.0, 0.0), (0.0, 0.0, 1.0))
-    if rotation is not None or translation is not None:
-        rotation_tuple = tuple(tuple(float(component) for component in row) for row in rotation) if isinstance(rotation, list) else identity_rotation
-        translation_tuple = tuple(float(component) for component in translation) if isinstance(translation, list) else (0.0, 0.0, 0.0)
-        if rotation_tuple != identity_rotation or any(component != 0.0 for component in translation_tuple):
-            kwargs.append(
-                "transform=fm.RigidTransform("
-                f"rotation_matrix={_python_literal(rotation_tuple)}, "
-                f"translation_m={_python_literal(translation_tuple)})"
-            )
-    conductor_ids = {
-        entry.get("kind"): entry.get("id")
-        for entry in params.get("conductors", [])
-        if isinstance(entry, Mapping)
-    }
+    if transform_kw is not None:
+        kwargs.append(transform_kw)
     if constructor == "fm.MicrostripAntennaLayout":
         loop = params.get("loop")
         if isinstance(loop, Mapping) and loop.get("enabled") is True:
@@ -11357,6 +11698,15 @@ def _render_geometry_expr_from_override(
         "MicrostripAntennaLayout",
         "microstrip",
         "microstrip_antenna_layout",
+        "MeanderAntennaLayout",
+        "meander",
+        "meander_antenna_layout",
+        "InductiveLoopLayout",
+        "inductive_loop",
+        "inductive_loop_layout",
+        "PiecewisePath3DLayout",
+        "piecewise_3d_path",
+        "piecewise_path_3d_layout",
     }:
         expr = _render_antenna_layout_expr(kind, params, name=name)
     elif kind == "Translate":
@@ -11407,7 +11757,7 @@ def _render_geometry_expr_from_override(
 
 
 def _render_geometry_expr(geometry: object, *, magnet_name: str, source_root: Path) -> str:
-    if isinstance(geometry, (MicrostripAntennaLayout, CPWAntennaLayout)):
+    if isinstance(geometry, ANTENNA_LAYOUT_TYPES):
         return _render_antenna_layout_expr(
             type(geometry).__name__,
             {key: value for key, value in geometry.to_ir().items() if key not in {"name", "kind"}},
@@ -12014,11 +12364,17 @@ def _export_geometry_entry(
         {"kind": "demag", "enabled": _problem_has_demag(problem), "params": None},
     ]
     if dmi_val is not None:
+        dmi_normal = _magnet_interfacial_dmi_normal(problem)
         physics_stack.append(
             {
                 "kind": "interfacial_dmi",
                 "enabled": True,
-                "params": {"dind": dmi_val},
+                "params": {
+                    "dind": dmi_val,
+                    "interface_normal": (
+                        list(dmi_normal) if dmi_normal is not None else [0.0, 0.0, 1.0]
+                    ),
+                },
             }
         )
     if bulk_dmi_val is not None:
@@ -12029,18 +12385,46 @@ def _export_geometry_entry(
                 "params": {"dbulk": bulk_dmi_val},
             }
         )
-    if mat.Ku1 is not None or mat.anisU is not None:
+    if mat.Ku1 is not None or mat.Ku2 is not None or mat.anisU is not None:
         physics_stack.append(
             {
                 "kind": "uniaxial_anisotropy",
                 "enabled": True,
                 "params": {
                     "ku1": mat.Ku1 if mat.Ku1 is not None else 0.0,
+                    "ku2": mat.Ku2 if mat.Ku2 is not None else 0.0,
                     "axis": (
                         [float(mat.anisU[0]), float(mat.anisU[1]), float(mat.anisU[2])]
                         if mat.anisU is not None
                         else [0.0, 0.0, 1.0]
                     ),
+                },
+            }
+        )
+    if any(
+        value is not None
+        for value in (mat.Kc1, mat.Kc2, mat.Kc3, mat.anisC1, mat.anisC2)
+    ):
+        axis1 = _normalize_unit_vec3(
+            list(mat.anisC1) if mat.anisC1 is not None else None,
+            field="cubic_anisotropy.axis1",
+            fallback=(1.0, 0.0, 0.0),
+        )
+        axis2 = _normalize_unit_vec3(
+            list(mat.anisC2) if mat.anisC2 is not None else None,
+            field="cubic_anisotropy.axis2",
+            fallback=(0.0, 1.0, 0.0),
+        )
+        physics_stack.append(
+            {
+                "kind": "cubic_anisotropy",
+                "enabled": True,
+                "params": {
+                    "kc1": mat.Kc1 if mat.Kc1 is not None else 0.0,
+                    "kc2": mat.Kc2 if mat.Kc2 is not None else 0.0,
+                    "kc3": mat.Kc3 if mat.Kc3 is not None else 0.0,
+                    "axis1": axis1,
+                    "axis2": axis2,
                 },
             }
         )
@@ -12247,7 +12631,7 @@ def _export_geometry_descriptor(
     *,
     flatten_translation: bool,
 ) -> dict[str, object]:
-    if isinstance(geom, (MicrostripAntennaLayout, CPWAntennaLayout)):
+    if isinstance(geom, ANTENNA_LAYOUT_TYPES):
         payload = dict(geom.to_ir())
         payload.pop("name", None)
         payload.pop("kind", None)
@@ -12430,6 +12814,17 @@ def _magnet_dmi(
                 return None
         return term.D
     return material_value
+
+
+def _magnet_interfacial_dmi_normal(problem: Problem) -> list[float] | None:
+    for term in problem.energy:
+        if isinstance(term, InterfacialDMI) and term.interface_normal is not None:
+            return _normalize_unit_vec3(
+                list(term.interface_normal),
+                field="interfacial_dmi.interface_normal",
+                fallback=(0.0, 0.0, 1.0),
+            )
+    return None
 
 
 def _material_dmi_mirror_matches(
@@ -13404,6 +13799,7 @@ _DEFAULT_TEXTURE_TRANSFORM = {
     "rotation_quat": [0.0, 0.0, 0.0, 1.0],
     "scale": [1.0, 1.0, 1.0],
     "pivot": [0.0, 0.0, 0.0],
+    "rotate_vectors": True,
 }
 
 _DEFAULT_TEXTURE_PREVIEW_PROXY = {
@@ -13412,13 +13808,22 @@ _DEFAULT_TEXTURE_PREVIEW_PROXY = {
     "random_seeded": "none",
     "vortex": "disc",
     "antivortex": "disc",
+    "vortex_wall": "box",
     "bloch_skyrmion": "disc",
     "neel_skyrmion": "disc",
+    "antiskyrmion": "disc",
+    "skyrmionium": "disc",
     "bimeron": "disc",
+    "hopfion": "sphere",
+    "hopfion_compact_support": "torus",
     "domain_wall": "box",
     "two_domain": "box",
     "helical": "box",
     "conical": "box",
+    "skyrmion_lattice": "disc",
+    "spiral": "box",
+    "bloch_point": "sphere",
+    "artificial_spin_ice": "box",
 }
 
 
@@ -13547,7 +13952,163 @@ def _render_texture_factory_call(
         if params.get("phase_rad") not in {None, 0.0}:
             kwargs.append(f"phase_rad={_py_number(float(params['phase_rad']))}")
         return f"fm.texture.conical({', '.join(kwargs)})"
+    if preset_kind == "antiskyrmion":
+        radius = params.get("radius")
+        wall_width = params.get("wall_width")
+        if radius is None or wall_width is None:
+            return None
+        kwargs = [
+            f"radius={_py_number(float(radius))}",
+            f"wall_width={_py_number(float(wall_width))}",
+            f"chirality={int(str(params.get('chirality', 1)))}",
+            f"core_polarity={int(str(params.get('core_polarity', -1)))}",
+        ]
+        if params.get("plane") not in {None, "xy"}:
+            kwargs.append(f"plane={_py_repr(str(params['plane']))}")
+        return f"fm.texture.antiskyrmion({', '.join(kwargs)})"
+    if preset_kind == "skyrmionium":
+        inner_radius = params.get("inner_radius")
+        outer_radius = params.get("outer_radius")
+        wall_width = params.get("wall_width")
+        if inner_radius is None or outer_radius is None or wall_width is None:
+            return None
+        kwargs = [
+            f"inner_radius={_py_number(float(inner_radius))}",
+            f"outer_radius={_py_number(float(outer_radius))}",
+            f"wall_width={_py_number(float(wall_width))}",
+            f"kind={_py_repr(str(params.get('kind', 'neel')))}",
+            f"chirality={int(str(params.get('chirality', 1)))}",
+            f"background_sign={int(str(params.get('background_sign', 1)))}",
+        ]
+        if params.get("plane") not in {None, "xy"}:
+            kwargs.append(f"plane={_py_repr(str(params['plane']))}")
+        return f"fm.texture.skyrmionium({', '.join(kwargs)})"
+    if preset_kind == "vortex_wall":
+        wall_half_width = params.get("wall_half_width")
+        if wall_half_width is None:
+            return None
+        kwargs = [
+            f"wall_half_width={_py_number(float(wall_half_width))}",
+            f"left_mx={_py_number(float(params.get('left_mx', 1.0)))}",
+            f"right_mx={_py_number(float(params.get('right_mx', -1.0)))}",
+        ]
+        if params.get("circulation") is not None:
+            kwargs.append(f"circulation={int(str(params['circulation']))}")
+        kwargs.append(f"core_polarity={int(str(params.get('core_polarity', 1)))}")
+        kwargs.append(f"core_radius={_py_number(float(params.get('core_radius', 1.0e-9)))}")
+        if params.get("plane") not in {None, "xy"}:
+            kwargs.append(f"plane={_py_repr(str(params['plane']))}")
+        return f"fm.texture.vortex_wall({', '.join(kwargs)})"
+    if preset_kind == "hopfion":
+        radius = params.get("radius")
+        if radius is None:
+            return None
+        kwargs = [
+            f"radius={_py_number(float(radius))}",
+            f"hopf_charge={int(str(params.get('hopf_charge', 1)))}",
+            f"background_sign={int(str(params.get('background_sign', 1)))}",
+            f"axial_scale={_py_number(float(params.get('axial_scale', 1.0)))}",
+            f"phase_rad={_py_number(float(params.get('phase_rad', 0.0)))}",
+        ]
+        return f"fm.texture.hopfion({', '.join(kwargs)})"
+    if preset_kind == "hopfion_compact_support":
+        major_radius = params.get("major_radius")
+        minor_radius = params.get("minor_radius")
+        if major_radius is None or minor_radius is None:
+            return None
+        kwargs = [
+            f"major_radius={_py_number(float(major_radius))}",
+            f"minor_radius={_py_number(float(minor_radius))}",
+        ]
+        return f"fm.texture.hopfion_compact_support({', '.join(kwargs)})"
+    if preset_kind == "skyrmion_lattice":
+        lattice_constant = params.get("lattice_constant")
+        radius = params.get("radius")
+        wall_width = params.get("wall_width")
+        if lattice_constant is None or radius is None or wall_width is None:
+            return None
+        kwargs = [
+            f"lattice_constant={_py_number(float(lattice_constant))}",
+            f"radius={_py_number(float(radius))}",
+            f"wall_width={_py_number(float(wall_width))}",
+            f"lattice={_py_repr(str(params.get('lattice', 'hexagonal')))}",
+            f"kind={_py_repr(str(params.get('kind', 'bloch')))}",
+            f"chirality={int(str(params.get('chirality', 1)))}",
+            f"core_polarity={int(str(params.get('core_polarity', -1)))}",
+        ]
+        if params.get("plane") not in {None, "xy"}:
+            kwargs.append(f"plane={_py_repr(str(params['plane']))}")
+        return f"fm.texture.skyrmion_lattice({', '.join(kwargs)})"
+    if preset_kind == "spiral":
+        wavelength = params.get("wavelength")
+        if wavelength is None:
+            return None
+        kwargs = [
+            f"wavelength={_py_number(float(wavelength))}",
+            f"spiral_kind={_py_repr(str(params.get('spiral_kind', 'cycloidal')))}",
+        ]
+        propagation_axis = params.get("propagation_axis")
+        if isinstance(propagation_axis, list) and len(propagation_axis) == 3:
+            kwargs.append(f"propagation_axis={_render_vector_literal(propagation_axis)}")
+        spin_plane_normal = params.get("spin_plane_normal")
+        if isinstance(spin_plane_normal, list) and len(spin_plane_normal) == 3:
+            kwargs.append(f"spin_plane_normal={_render_vector_literal(spin_plane_normal)}")
+        kwargs.append(f"chirality={int(str(params.get('chirality', 1)))}")
+        if params.get("phase_rad") not in {None, 0.0}:
+            kwargs.append(f"phase_rad={_py_number(float(params['phase_rad']))}")
+        return f"fm.texture.spiral({', '.join(kwargs)})"
+    if preset_kind == "bloch_point":
+        kwargs = [
+            f"bp_kind={_py_repr(str(params.get('bp_kind', 'circulating')))}",
+            f"polarity={int(str(params.get('polarity', 1)))}",
+            f"twist_rad={_py_number(float(params.get('twist_rad', math.pi / 2.0)))}",
+            f"core_radius={_py_number(float(params.get('core_radius', 1.0e-9)))}",
+        ]
+        return f"fm.texture.bloch_point({', '.join(kwargs)})"
+    if preset_kind == "artificial_spin_ice":
+        pitch = params.get("pitch")
+        if pitch is None:
+            return None
+        kwargs = [
+            f"pitch={_py_number(float(pitch))}",
+            f"lattice={_py_repr(str(params.get('lattice', 'square')))}",
+            f"vertex_state={_py_repr(str(params.get('vertex_state', 'type_i_ground')))}",
+        ]
+        if params.get("plane") not in {None, "xy"}:
+            kwargs.append(f"plane={_py_repr(str(params['plane']))}")
+        return f"fm.texture.artificial_spin_ice({', '.join(kwargs)})"
     return None
+
+
+def _quat_to_euler_xyz_deg_exact(quat: Sequence[object]) -> tuple[float, float, float] | None:
+    if len(quat) != 4:
+        return None
+    qx, qy, qz, qw = (float(quat[0]), float(quat[1]), float(quat[2]), float(quat[3]))
+    norm = math.sqrt(qx * qx + qy * qy + qz * qz + qw * qw)
+    if not math.isfinite(norm) or norm <= 1e-14:
+        return None
+    qx, qy, qz, qw = qx / norm, qy / norm, qz / norm, qw / norm
+    sinp = 2.0 * (qw * qy - qz * qx)
+    sinp_clamped = max(-1.0, min(1.0, sinp))
+    ry = math.asin(sinp_clamped)
+    if abs(abs(sinp_clamped) - 1.0) < 1e-9:
+        rx = 0.0
+        rz = math.atan2(-2.0 * (qx * qy - qw * qz), 1.0 - 2.0 * (qx * qx + qz * qz))
+    else:
+        rx = math.atan2(2.0 * (qw * qx + qy * qz), 1.0 - 2.0 * (qx * qx + qy * qy))
+        rz = math.atan2(2.0 * (qw * qz + qx * qy), 1.0 - 2.0 * (qy * qy + qz * qz))
+    # Verify exact roundtrip under extrinsic XYZ (q = qz * qy * qx)
+    cx, sx = math.cos(0.5 * rx), math.sin(0.5 * rx)
+    cy, sy = math.cos(0.5 * ry), math.sin(0.5 * ry)
+    cz, sz = math.cos(0.5 * rz), math.sin(0.5 * rz)
+    rqx = sx * cy * cz - cx * sy * sz
+    rqy = cx * sy * cz + sx * cy * sz
+    rqz = cx * cy * sz - sx * sy * cz
+    rqw = cx * cy * cz + sx * sy * sz
+    dot_q = abs(qx * rqx + qy * rqy + qz * rqz + qw * rqw)
+    if dot_q < 1.0 - 1e-11:
+        return None
+    return (math.degrees(rx), math.degrees(ry), math.degrees(rz))
 
 
 def _render_preset_texture_expr(
@@ -13560,32 +14121,115 @@ def _render_preset_texture_expr(
     ui_label: str | None = None,
     preview_proxy: str | None = None,
 ) -> str:
-    normalized_mapping = dict(mapping or _DEFAULT_TEXTURE_MAPPING)
-    normalized_transform = dict(transform or _DEFAULT_TEXTURE_TRANSFORM)
+    normalized_mapping: dict[str, Any] = {
+        "space": str((mapping or {}).get("space", "object")),
+        "projection": str((mapping or {}).get("projection", "object_local")),
+        "clamp_mode": str((mapping or {}).get("clamp_mode", "none")),
+    }
+    if mapping and mapping.get("tile_period") is not None:
+        normalized_mapping["tile_period"] = [float(v) for v in mapping["tile_period"]]
+    if mapping and mapping.get("background_vector") is not None:
+        normalized_mapping["background_vector"] = [float(v) for v in mapping["background_vector"]]
+    if mapping and mapping.get("axis_extent_mode") is not None:
+        extent_mode = str(mapping["axis_extent_mode"]).strip().lower()
+        if extent_mode and extent_mode != "uniform":
+            normalized_mapping["axis_extent_mode"] = extent_mode
+    if mapping and mapping.get("axis_thickness_m") is not None:
+        normalized_mapping["axis_thickness_m"] = float(mapping["axis_thickness_m"])
+
+    normalized_transform = {
+        "translation": [float(v) for v in (transform or {}).get("translation", (0.0, 0.0, 0.0))],
+        "rotation_quat": [float(v) for v in (transform or {}).get("rotation_quat", (0.0, 0.0, 0.0, 1.0))],
+        "scale": [float(v) for v in (transform or {}).get("scale", (1.0, 1.0, 1.0))],
+        "pivot": [float(v) for v in (transform or {}).get("pivot", (0.0, 0.0, 0.0))],
+        "rotate_vectors": bool((transform or {}).get("rotate_vectors", True)),
+    }
     factory_expr = _render_texture_factory_call(preset_kind, params)
     if (
         factory_expr is not None
-        and normalized_mapping == _DEFAULT_TEXTURE_MAPPING
         and preset_version == 2
-        and normalized_transform == _DEFAULT_TEXTURE_TRANSFORM
         and ui_label is None
+        and normalized_transform["rotate_vectors"] is True
         and preview_proxy in {None, _DEFAULT_TEXTURE_PREVIEW_PROXY.get(preset_kind)}
     ):
-        return factory_expr
+        euler_deg = _quat_to_euler_xyz_deg_exact(normalized_transform["rotation_quat"])
+        if euler_deg is not None:
+            expr = factory_expr
+            tx, ty, tz = normalized_transform["translation"]
+            if any(abs(v) > 1e-18 for v in (tx, ty, tz)):
+                expr += f".translate({_py_number(tx)}, {_py_number(ty)}, {_py_number(tz)})"
+            rx_deg, ry_deg, rz_deg = euler_deg
+            if abs(rx_deg) > 1e-9:
+                expr += f".rotate_x_deg({_py_number(rx_deg)})"
+            if abs(ry_deg) > 1e-9:
+                expr += f".rotate_y_deg({_py_number(ry_deg)})"
+            if abs(rz_deg) > 1e-9:
+                expr += f".rotate_z_deg({_py_number(rz_deg)})"
+            sx, sy, sz = normalized_transform["scale"]
+            if any(abs(v - 1.0) > 1e-12 for v in (sx, sy, sz)):
+                expr += f".scale({_py_number(sx)}, {_py_number(sy)}, {_py_number(sz)})"
+            px, py, pz = normalized_transform["pivot"]
+            if any(abs(v) > 1e-18 for v in (px, py, pz)):
+                expr += f".with_pivot({_render_vector_literal((px, py, pz))})"
+            mapping_kwargs: list[str] = []
+            if normalized_mapping["space"] != "object":
+                mapping_kwargs.append(f"space={_py_repr(normalized_mapping['space'])}")
+            if normalized_mapping["projection"] != "object_local":
+                mapping_kwargs.append(f"projection={_py_repr(normalized_mapping['projection'])}")
+            if normalized_mapping["clamp_mode"] != "none":
+                mapping_kwargs.append(f"clamp_mode={_py_repr(normalized_mapping['clamp_mode'])}")
+            if "tile_period" in normalized_mapping:
+                mapping_kwargs.append(
+                    f"tile_period={_render_vector_literal(normalized_mapping['tile_period'])}"
+                )
+            if "background_vector" in normalized_mapping:
+                mapping_kwargs.append(
+                    f"background_vector={_render_vector_literal(normalized_mapping['background_vector'])}"
+                )
+            if "axis_extent_mode" in normalized_mapping:
+                mapping_kwargs.append(
+                    f"axis_extent_mode={_py_repr(normalized_mapping['axis_extent_mode'])}"
+                )
+            if "axis_thickness_m" in normalized_mapping:
+                mapping_kwargs.append(
+                    f"axis_thickness_m={_py_number(normalized_mapping['axis_thickness_m'])}"
+                )
+            if mapping_kwargs:
+                expr += f".with_mapping({', '.join(mapping_kwargs)})"
+            return expr
 
-    mapping_expr = (
-        "fm.TextureMapping("
-        f"space={_py_repr(str(normalized_mapping.get('space', 'object')))}, "
-        f"projection={_py_repr(str(normalized_mapping.get('projection', 'object_local')))}, "
-        f"clamp_mode={_py_repr(str(normalized_mapping.get('clamp_mode', 'none')))})"
-    )
-    transform_expr = (
-        "fm.TextureTransform3D("
-        f"translation={_py_literal(tuple(normalized_transform.get('translation', (0.0, 0.0, 0.0))))}, "
-        f"rotation_quat={_py_literal(tuple(normalized_transform.get('rotation_quat', (0.0, 0.0, 0.0, 1.0))))}, "
-        f"scale={_py_literal(tuple(normalized_transform.get('scale', (1.0, 1.0, 1.0))))}, "
-        f"pivot={_py_literal(tuple(normalized_transform.get('pivot', (0.0, 0.0, 0.0))))})"
-    )
+    mapping_parts = [
+        f"space={_py_repr(normalized_mapping['space'])}",
+        f"projection={_py_repr(normalized_mapping['projection'])}",
+        f"clamp_mode={_py_repr(normalized_mapping['clamp_mode'])}",
+    ]
+    if "tile_period" in normalized_mapping:
+        mapping_parts.append(
+            f"tile_period={_render_vector_literal(normalized_mapping['tile_period'])}"
+        )
+    if "background_vector" in normalized_mapping:
+        mapping_parts.append(
+            f"background_vector={_render_vector_literal(normalized_mapping['background_vector'])}"
+        )
+    if "axis_extent_mode" in normalized_mapping:
+        mapping_parts.append(
+            f"axis_extent_mode={_py_repr(normalized_mapping['axis_extent_mode'])}"
+        )
+    if "axis_thickness_m" in normalized_mapping:
+        mapping_parts.append(
+            f"axis_thickness_m={_py_number(normalized_mapping['axis_thickness_m'])}"
+        )
+    mapping_expr = f"fm.TextureMapping({', '.join(mapping_parts)})"
+
+    transform_parts = [
+        f"translation={_py_literal(tuple(normalized_transform['translation']))}",
+        f"rotation_quat={_py_literal(tuple(normalized_transform['rotation_quat']))}",
+        f"scale={_py_literal(tuple(normalized_transform['scale']))}",
+        f"pivot={_py_literal(tuple(normalized_transform['pivot']))}",
+    ]
+    if normalized_transform["rotate_vectors"] is False:
+        transform_parts.append("rotate_vectors=False")
+    transform_expr = f"fm.TextureTransform3D({', '.join(transform_parts)})"
     return (
         "fm.PresetTexture("
         f"preset_version={preset_version}, "

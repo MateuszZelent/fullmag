@@ -1,5 +1,52 @@
 import { renderToStaticMarkup } from "react-dom/server";
+import { createContext, useContext, type ReactNode } from "react";
 import { describe, expect, it, vi } from "vitest";
+
+const MockSelectContext = createContext<{
+  onValueChange?: (value: string) => void;
+  value?: string;
+}>({});
+vi.mock("@/shared/ui/Select", () => ({
+  Select: ({
+    children,
+    onValueChange,
+    value,
+  }: {
+    children?: ReactNode;
+    onValueChange?: (value: string) => void;
+    value?: string;
+  }) => (
+    <MockSelectContext.Provider value={{ onValueChange, value }}>
+      {children}
+    </MockSelectContext.Provider>
+  ),
+  SelectTrigger: () => null,
+  SelectValue: () => null,
+  SelectContent: ({ children }: { children?: ReactNode }) => {
+    const { onValueChange, value } = useContext(MockSelectContext);
+    return (
+      <select
+        value={value}
+        onChange={(event) => onValueChange?.(event.currentTarget.value)}
+      >
+        {children}
+      </select>
+    );
+  },
+  SelectItem: ({
+    children,
+    disabled,
+    value,
+  }: {
+    children?: ReactNode;
+    disabled?: boolean;
+    value: string;
+  }) => (
+    <option disabled={disabled} value={value}>
+      {children}
+    </option>
+  ),
+}));
 
 import {
   planarMonitorDraftFromMonitor,

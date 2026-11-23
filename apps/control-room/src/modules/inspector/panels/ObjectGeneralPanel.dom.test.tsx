@@ -22,7 +22,6 @@ import type { Selection } from "@/kernel/selection/selectionTypes";
 
 import { InspectorFooter } from "../InspectorFooter";
 import { ObjectGeneralPanel } from "./ObjectGeneralPanel";
-import { GeometryObjectPanel } from "./GeometryObjectPanel";
 
 const mocks = vi.hoisted(() => ({
   commitTransaction: vi.fn(),
@@ -597,121 +596,6 @@ describe("ObjectGeneralPanel staged identity edits", () => {
     }
   });
 
-  it("keeps newer General metadata through sequential identity and geometry ACKs", async () => {
-    const before = mocks.sceneData as {
-      objects: Array<Record<string, unknown>>;
-      revision: number;
-      scene_revision: number;
-    };
-    const beforeObject = before.objects[0];
-    const identityAck = {
-      ...before,
-      objects: [{ ...beforeObject, name: "Updated magnet" }],
-      revision: 11,
-      scene_revision: 11,
-    };
-    mocks.readScene.mockReset();
-    mocks.readScene
-      .mockResolvedValueOnce(before)
-      .mockResolvedValueOnce(identityAck);
-    let finishIdentityPatch!: (value: unknown) => void;
-    const identityPatchResult = new Promise((resolve) => {
-      finishIdentityPatch = resolve;
-    });
-    mocks.patchObject.mockReturnValueOnce(identityPatchResult);
-    const geometryAck = {
-      committed_scene: {
-        ...identityAck,
-        objects: [{
-          ...beforeObject,
-          geometry: {
-            geometry_kind: "Box",
-            geometry_params: { size: [2e-7, 1e-7, 1e-8] },
-          },
-          name: "Updated magnet",
-        }],
-        revision: 12,
-        scene_revision: 12,
-      },
-      scene_revision: 12,
-    };
-    let finishGeometryPatch!: (value: unknown) => void;
-    const geometryPatchResult = new Promise((resolve) => {
-      finishGeometryPatch = resolve;
-    });
-    mocks.commitTransaction.mockReturnValueOnce(geometryPatchResult);
-    const dom = installSimulationPreparationTestDom();
-    const container = dom.document.createElement("div");
-    const { createRoot } = await import("react-dom/client");
-    const root = createRoot(container as unknown as Element);
-    try {
-      await act(async () => root.render(
-        <InspectorEditSessionProvider>
-          <ObjectGeneralPanel selection={selection} />
-          <GeometryObjectPanel selection={selection} />
-          <InspectorSessionProbe />
-        <InspectorFooter focusDisabled onFocus={() => undefined} />
-        </InspectorEditSessionProvider>,
-      ));
-      await act(async () => changeInput(container, "Name", "Updated magnet"));
-      await act(async () => changeInput(container, "Size X", "2e-7"));
-
-      expect(findButton(container, "Apply").disabled).toBe(false);
-      await act(async () => {
-        findButton(container, "Apply").click();
-        await Promise.resolve();
-        await Promise.resolve();
-      });
-      expect(mocks.patchObject).toHaveBeenCalledOnce();
-
-      await act(async () => changeInput(container, "Name", "Newer raw magnet"));
-      expect(mocks.objectEditSession!.getSnapshot().draft?.name).toBe("Newer raw magnet");
-
-      await act(async () => {
-        finishIdentityPatch(identityAck);
-        await identityPatchResult;
-        await Promise.resolve();
-        await Promise.resolve();
-      });
-      expect(mocks.commitTransaction).toHaveBeenCalledOnce();
-      await act(async () => {
-        finishGeometryPatch(geometryAck);
-        await geometryPatchResult;
-      });
-
-      expect(mocks.patchObject).toHaveBeenCalledWith(
-        "object-a",
-        { base_revision: 10, name: "Updated magnet" },
-        { sessionScopeKey: "session=A&epoch=1" },
-      );
-      expect(mocks.commitTransaction).toHaveBeenCalledOnce();
-      expect(mocks.commitTransaction).toHaveBeenCalledWith(
-        expect.objectContaining({
-          base_revision: 11,
-          geometry: { geometry_kind: "Box", geometry_params: { size: [2e-7, 1e-7, 1e-8] } },
-          kind: "patch_object_geometry",
-          object_id: "object-a",
-        }),
-        { sessionScopeKey: "session=A&epoch=1" },
-      );
-      expect(mocks.recordHistory).toHaveBeenCalledTimes(2);
-      expect(findInput(container, "Name").value).toBe("Newer raw magnet");
-      expect(findButton(container, "Apply").disabled).toBe(false);
-      expect(mocks.objectEditSession!.getSnapshot()).toMatchObject({
-        dirty: true,
-        draft: {
-          baseRevision: 12,
-          name: "Newer raw magnet",
-          notes: "Original notes",
-          objectId: "object-a",
-        },
-      });
-    } finally {
-      await act(async () => root.unmount());
-      dom.restore();
-    }
-  });
-
   it("suppresses history and feedback when the session changes before the identity ACK", async () => {
     let finishPatch!: (value: unknown) => void;
     const patchResult = new Promise((resolve) => { finishPatch = resolve; });
@@ -844,95 +728,7 @@ describe("ObjectGeneralPanel staged identity edits", () => {
     }
   });
 
-  it("serializes General and Geometry Apply while retaining edits entered during the ACK", async () => {
-    let finishCommit!: (value: unknown) => void;
-    const commitResult = new Promise((resolve) => { finishCommit = resolve; });
-    mocks.commitTransaction.mockReturnValue(commitResult);
-    const dom = installSimulationPreparationTestDom();
-    const container = dom.document.createElement("div");
-    const { createRoot } = await import("react-dom/client");
-    const root = createRoot(container as unknown as Element);
-    try {
-      await act(async () => root.render(
-        <InspectorEditSessionProvider>
-          <ObjectGeneralPanel selection={selection} />
-          <GeometryObjectPanel selection={selection} />
-          <InspectorSessionProbe />
-        <InspectorFooter focusDisabled onFocus={() => undefined} />
-        </InspectorEditSessionProvider>,
-      ));
-      await act(async () => changeInput(container, "Size X", "2e-7"));
-
-      expect(findButton(container, "Apply").disabled).toBe(false);
-      await act(async () => {
-        findButton(container, "Apply").click();
-        await Promise.resolve();
-        await Promise.resolve();
-      });
-      expect(mocks.commitTransaction).toHaveBeenCalledOnce();
-
-      await act(async () => changeInput(container, "Size X", "3e-7"));
-      expect(findInput(container, "Size X").value).toBe("3e-7");
-      expect(findButton(container, "Global Apply").disabled).toBe(true);
-      await act(async () => {
-        findButton(container, "Force Registered Apply").click();
-        await Promise.resolve();
-      });
-      expect(mocks.commitTransaction).toHaveBeenCalledOnce();
-
-      await act(async () => {
-        finishCommit({
-          committed_scene: {
-            objects: [{
-              geometry: { geometry_kind: "Box", geometry_params: { size: [2e-7, 1e-7, 1e-8] } },
-              id: "object-a",
-              name: "Magnet",
-              notes: "Original notes",
-              transform: {
-                pivot: [0, 0, 0],
-                rotation_quat: [0, 0, 0, 1],
-                scale: [1, 1, 1],
-                translation: [0, 0, 0],
-              },
-            }],
-            revision: 11,
-            scene_revision: 11,
-          },
-          scene_revision: 11,
-        });
-        await commitResult;
-      });
-
-      expect(mocks.commitTransaction).toHaveBeenCalledOnce();
-      expect(mocks.commitTransaction).toHaveBeenCalledWith(
-        expect.objectContaining({
-          base_revision: 10,
-          geometry: { geometry_kind: "Box", geometry_params: { size: [2e-7, 1e-7, 1e-8] } },
-          kind: "patch_object_geometry",
-          object_id: "object-a",
-          transform: {
-            pivot: [0, 0, 0],
-            rotation_quat: [0, 0, 0, 1],
-            scale: [1, 1, 1],
-            translation: [0, 0, 0],
-          },
-        }),
-        { sessionScopeKey: "session=A&epoch=1" },
-      );
-      expect(mocks.objectEditSession!.getSnapshot()).toMatchObject({
-        dirty: true,
-        draft: { baseRevision: 11, objectId: "object-a", size: ["3e-7", "1e-7", "1e-8"] },
-      });
-      expect(mocks.publishCommittedScene).toHaveBeenCalledOnce();
-      expect(mocks.recordHistory).toHaveBeenCalledOnce();
-      expect(container.textContent).toContain("Geometry and placement committed.");
-    } finally {
-      await act(async () => root.unmount());
-      dom.restore();
-    }
-  });
-
-  it("hides ferromagnetic Material, Region, and Energies fields for antenna objects and suppresses duplicate Identity fields on Geometry child routes", async () => {
+  it("hides ferromagnetic Material, Region, and Energies fields for antenna objects", async () => {
     mocks.sceneData = {
       objects: [{
         geometry: { geometry_kind: "Box", geometry_params: { size: [1e-7, 1e-7, 1e-8] } },
@@ -968,18 +764,6 @@ describe("ObjectGeneralPanel staged identity edits", () => {
       expect(
         findElements(container, (el) => el.tagName === "INPUT" && el.getAttribute("aria-label") === "Region"),
       ).toHaveLength(0);
-
-      await act(async () => root.render(
-        <InspectorEditSessionProvider>
-          <GeometryObjectPanel
-            selection={{
-              ...objectSelection("antenna-1", "Stripline Geometry"),
-              kind: "object.antenna.geometry",
-            }}
-          />
-        </InspectorEditSessionProvider>,
-      ));
-      expect(container.textContent).not.toContain("Identity and references");
     } finally {
       await act(async () => root.unmount());
       dom.restore();

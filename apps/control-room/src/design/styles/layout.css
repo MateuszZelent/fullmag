@@ -194,8 +194,8 @@
   flex-direction: column;
   min-height: 0;
   overflow: hidden;
-  /* Docked panels float over the page backdrop (specs/frontend-v2/10 §1a). */
-  padding: var(--fm-space-1);
+  /* Docked panels float over the page backdrop with breathing room below the ribbon (specs/frontend-v2/10 §1a). */
+  padding: var(--fm-space-2) var(--fm-space-1) var(--fm-space-1);
 }
 
 .fm-workspace-body > [data-panel-group],
@@ -332,6 +332,17 @@
 .fm-side-rail[data-side="left"] .fm-side-rail__item::before { right: -6px; }
 .fm-side-rail[data-side="right"] .fm-side-rail__item::before { left: -6px; }
 .fm-side-rail__item[aria-pressed="true"]::before { scale: 1 1; }
+
+.fm-side-rail__dirty-dot {
+  position: absolute;
+  top: 5px;
+  right: 5px;
+  width: 8px;
+  height: 8px;
+  border-radius: var(--fm-radius-pill);
+  background: var(--fm-accent);
+  box-shadow: 0 0 0 2px var(--fm-bg-panel);
+}
 
 @media (prefers-reduced-motion: reduce) {
   .fm-side-rail__item,

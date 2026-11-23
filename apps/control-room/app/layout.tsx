@@ -30,6 +30,7 @@ export default function RootLayout({
       suppressHydrationWarning
     >
       <head>
+        <meta name="color-scheme" content="light dark" />
         <script
           id="fm-theme-prepaint"
           suppressHydrationWarning

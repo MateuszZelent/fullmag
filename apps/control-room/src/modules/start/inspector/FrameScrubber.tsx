@@ -3,8 +3,19 @@
 import { ChevronLeft, ChevronRight } from "lucide-react";
 import { useEffect, useId, useState } from "react";
 
-import { FRAMES_PAGE_SIZE, frameLabel, formatFrameTime, pageStartOf, type FrameEntry, type FramesPage, type FramesSummary } from "../model/framesModel";
-import { pageProblem, type FrameStep, stepPosition } from "./FrameScrubber.model";
+import { Button } from "@/shared/ui/Button";
+import { Slider } from "@/shared/ui/Slider";
+
+import {
+  FRAMES_PAGE_SIZE,
+  formatFrameTime,
+  frameLabel,
+  pageStartOf,
+  type FrameEntry,
+  type FramesPage,
+  type FramesSummary,
+} from "../model/framesModel";
+import { pageProblem, stepPosition, type FrameStep } from "./FrameScrubber.model";
 
 export const FRAME_INDEX_NOTE =
   "Index of saved frames: the step and time of each snapshot the run wrote. No image is rendered per frame.";
@@ -66,6 +77,14 @@ export function FrameScrubber({ itemId, summary, loadPage, stageName }: FrameScr
   const label = frameLabel(current, total, frame);
   const stage = frame?.stageId ? (stageName?.(frame.stageId) ?? frame.stageId) : undefined;
   const move = (step: FrameStep) => setPosition(stepPosition(current, total, step));
+  const stepSpan =
+    summary.firstStep !== undefined && summary.lastStep !== undefined
+      ? `steps ${summary.firstStep.toLocaleString("en-US")}..${summary.lastStep.toLocaleString("en-US")}`
+      : null;
+  const stageSummary =
+    summary.stages.length > 0
+      ? summary.stages.map((entry) => `${stageName?.(entry.stageId) ?? entry.stageId} (${entry.count})`).join(", ")
+      : null;
 
   return (
     <section aria-labelledby={headingId} className="fm-start-frames" data-frames={total}>
@@ -74,39 +93,49 @@ export function FrameScrubber({ itemId, summary, loadPage, stageName }: FrameScr
       </h3>
       <p className="fm-start-inspector__note">{FRAME_INDEX_NOTE}</p>
       <div className="fm-start-frames__controls">
-        <button
+        <Button
           aria-label="Previous frame"
           className="fm-start-frames__step"
           disabled={current === 0}
           onClick={() => move("previous")}
+          size="icon"
           type="button"
+          variant="ghost"
         >
           <ChevronLeft aria-hidden="true" size={14} />
-        </button>
-        <input
+        </Button>
+        <Slider
           aria-label="Saved frame"
-          aria-valuetext={label}
           className="fm-start-frames__slider"
-          max={total - 1}
+          max={Math.max(0, total - 1)}
           min={0}
-          onChange={(event) => setPosition(Number(event.currentTarget.value))}
+          onValueChange={(values) => {
+            if (values[0] !== undefined) setPosition(values[0]);
+          }}
           step={1}
-          type="range"
-          value={current}
+          value={[current]}
+          valueText={() => label}
         />
-        <button
+        <Button
           aria-label="Next frame"
           className="fm-start-frames__step"
           disabled={current >= total - 1}
           onClick={() => move("next")}
+          size="icon"
           type="button"
+          variant="ghost"
         >
           <ChevronRight aria-hidden="true" size={14} />
-        </button>
+        </Button>
       </div>
       <p aria-live="polite" className="fm-start-frames__label">
         {label}
       </p>
+      {stepSpan || stageSummary ? (
+        <p className="fm-start-frames__meta">
+          {[stepSpan, stageSummary].filter(Boolean).join(" · ")}
+        </p>
+      ) : null}
       {frame ? (
         <p className="fm-start-frames__meta">
           {[

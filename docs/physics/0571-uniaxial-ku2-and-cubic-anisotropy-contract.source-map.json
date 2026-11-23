@@ -1,0 +1,209 @@
+{
+  "document": {
+    "path": "docs/physics/0571-uniaxial-ku2-and-cubic-anisotropy-contract.md",
+    "title": "Higher-order uniaxial (Ku2) and cubic (Kc1, Kc2, Kc3) magnetocrystalline anisotropy contract",
+    "status": "accepted_contract_not_production_qualified",
+    "updated": "2026-11-22"
+  },
+  "backend_matrix": [
+    {
+      "solver": "FDM",
+      "device": "CPU",
+      "role": "cell-center local field and energy",
+      "status": "source_and_test_evidence_runtime_separate"
+    },
+    {
+      "solver": "FDM",
+      "device": "GPU",
+      "role": "cell-center kernel parity contract",
+      "status": "not_runtime_qualified"
+    },
+    {
+      "solver": "FEM",
+      "device": "CPU",
+      "role": "P1 nodal lumped-weight field and energy",
+      "status": "source_and_test_evidence_runtime_separate"
+    },
+    {
+      "solver": "FEM",
+      "device": "GPU",
+      "role": "P1 nodal anisotropy realization",
+      "status": "not_runtime_qualified"
+    }
+  ],
+  "equations": [
+    {
+      "id": "uniaxial-ku2-energy",
+      "symbols": ["E_uni", "K_u1", "K_u2", "m_vec", "u_vec"],
+      "sources": ["py-material", "py-uniaxial", "rust-material-ir"]
+    },
+    {
+      "id": "uniaxial-ku2-field",
+      "symbols": ["H_uni", "K_u1", "K_u2", "m_vec", "u_vec", "mu_0", "M_s"],
+      "sources": ["py-uniaxial", "rust-material-ir"]
+    },
+    {
+      "id": "uniaxial-ku2-cone-angle",
+      "symbols": ["K_u1", "K_u2", "theta_c"],
+      "sources": ["ui-ku2-classifier"]
+    },
+    {
+      "id": "cubic-anisotropy-energy",
+      "symbols": ["E_cub", "K_c1", "K_c2", "K_c3", "sigma_inv", "c_1", "c_2", "c_3"],
+      "sources": ["py-cubic", "rust-energy-ir", "scene-anisotropy"]
+    },
+    {
+      "id": "cubic-anisotropy-field",
+      "symbols": ["H_cub", "mu_0", "M_s", "c_1", "c_2", "c_3"],
+      "sources": ["py-cubic", "rust-energy-ir"]
+    }
+  ],
+  "symbols": [
+    {"id": "m_vec", "latex": "$\\mathbf m$", "meaning": "zredukowany wektor magnetyzacji", "si_unit": "$1$"},
+    {"id": "u_vec", "latex": "$\\mathbf u$", "meaning": "znormalizowana oś anizotropii jednoosiowej", "si_unit": "$1$"},
+    {"id": "K_u1", "latex": "$K_{u1}$", "meaning": "stała jednoosiowa drugiego rzędu", "si_unit": "$\\mathrm{J\\,m^{-3}}$"},
+    {"id": "K_u2", "latex": "$K_{u2}$", "meaning": "stała jednoosiowa czwartego rzędu", "si_unit": "$\\mathrm{J\\,m^{-3}}$"},
+    {"id": "theta_c", "latex": "$\\theta_c$", "meaning": "kąt rozwarcia stożka łatwego namagnesowania", "si_unit": "$\\mathrm{rad}$"},
+    {"id": "c_1", "latex": "$\\mathbf c_1$", "meaning": "pierwsza oś krystalograficzna bazy kubicznej", "si_unit": "$1$"},
+    {"id": "c_2", "latex": "$\\mathbf c_2$", "meaning": "druga oś krystalograficzna bazy kubicznej", "si_unit": "$1$"},
+    {"id": "c_3", "latex": "$\\mathbf c_3$", "meaning": "trzecia oś kubiczna $\\mathbf c_1\\times\\mathbf c_2$", "si_unit": "$1$"},
+    {"id": "sigma_inv", "latex": "$\\sigma$", "meaning": "czwartorzędowy niezmiennik kubiczny", "si_unit": "$1$"},
+    {"id": "K_c1", "latex": "$K_{c1}$", "meaning": "pierwsza stała anizotropii kubicznej", "si_unit": "$\\mathrm{J\\,m^{-3}}$"},
+    {"id": "K_c2", "latex": "$K_{c2}$", "meaning": "druga stała anizotropii kubicznej", "si_unit": "$\\mathrm{J\\,m^{-3}}$"},
+    {"id": "K_c3", "latex": "$K_{c3}$", "meaning": "trzecia stała anizotropii kubicznej", "si_unit": "$\\mathrm{J\\,m^{-3}}$"},
+    {"id": "M_s", "latex": "$M_s$", "meaning": "namagnesowanie nasycenia", "si_unit": "$\\mathrm{A\\,m^{-1}}$"},
+    {"id": "mu_0", "latex": "$\\mu_0$", "meaning": "przenikalność magnetyczna próżni", "si_unit": "$\\mathrm{H\\,m^{-1}}$"},
+    {"id": "E_uni", "latex": "$E_{\\mathrm{uni}}$", "meaning": "całkowita energia anizotropii jednoosiowej", "si_unit": "$\\mathrm{J}$"},
+    {"id": "E_cub", "latex": "$E_{\\mathrm{cub}}$", "meaning": "całkowita energia anizotropii kubicznej", "si_unit": "$\\mathrm{J}$"},
+    {"id": "H_uni", "latex": "$\\mathbf H_{\\mathrm{uni}}$", "meaning": "pole efektywne anizotropii jednoosiowej", "si_unit": "$\\mathrm{A\\,m^{-1}}$"},
+    {"id": "H_cub", "latex": "$\\mathbf H_{\\mathrm{cub}}$", "meaning": "pole efektywne anizotropii kubicznej", "si_unit": "$\\mathrm{A\\,m^{-1}}$"}
+  ],
+  "sources": [
+    {
+      "id": "py-material",
+      "path": "packages/fullmag-py/src/fullmag/model/structure.py",
+      "symbol": "class Material",
+      "responsibility": "Python material Ku1/Ku2/Kc fields"
+    },
+    {
+      "id": "py-uniaxial",
+      "path": "packages/fullmag-py/src/fullmag/model/energy.py",
+      "symbol": "class UniaxialAnisotropy",
+      "responsibility": "Python uniaxial energy descriptor"
+    },
+    {
+      "id": "py-cubic",
+      "path": "packages/fullmag-py/src/fullmag/model/energy.py",
+      "symbol": "class CubicAnisotropy",
+      "responsibility": "Python cubic energy descriptor"
+    },
+    {
+      "id": "scene-anisotropy",
+      "path": "packages/fullmag-py/src/fullmag/runtime/scene_document.py",
+      "symbol": "build_builder_from_scene_document",
+      "responsibility": "SceneDocument anisotropy validation and lowering"
+    },
+    {
+      "id": "rust-material-ir",
+      "path": "crates/fullmag-ir/src/model.rs",
+      "symbol": "MaterialIR",
+      "responsibility": "Rust MaterialIR anisotropy fields"
+    },
+    {
+      "id": "rust-energy-ir",
+      "path": "crates/fullmag-ir/src/study.rs",
+      "symbol": "EnergyTermIR",
+      "responsibility": "Rust EnergyTermIR variants"
+    },
+    {
+      "id": "ui-ku2-classifier",
+      "path": "apps/control-room/src/modules/inspector/inspectors/objects/material/materialShared.ts",
+      "symbol": "function classifyUniaxialAnisotropyRegime",
+      "responsibility": "Control Room cosine-convention Ku2 regime classifier"
+    }
+  ],
+  "public_api": {
+    "parameters": [
+      {
+        "python": "Material.Ku1",
+        "type": "float",
+        "default": "0.0",
+        "si_unit": "$\\mathrm{J\\,m^{-3}}$",
+        "validation": "finite real",
+        "meaning": "stała jednoosiowa drugiego rzędu",
+        "backend_support": "FDM CPU/GPU, FEM CPU/GPU",
+        "problem_ir": "magnets[].material.uniaxial_anisotropy_k1"
+      },
+      {
+        "python": "Material.Ku2",
+        "type": "float",
+        "default": "0.0",
+        "si_unit": "$\\mathrm{J\\,m^{-3}}$",
+        "validation": "finite real",
+        "meaning": "stała jednoosiowa czwartego rzędu",
+        "backend_support": "FDM CPU/GPU, FEM CPU",
+        "problem_ir": "magnets[].material.uniaxial_anisotropy_k2"
+      },
+      {
+        "python": "Material.anisU",
+        "type": "tuple[float, float, float]",
+        "default": "(0.0, 0.0, 1.0)",
+        "si_unit": "$1$",
+        "validation": "finite, nonzero 3-vector",
+        "meaning": "oś anizotropii jednoosiowej",
+        "backend_support": "FDM CPU/GPU, FEM CPU/GPU",
+        "problem_ir": "magnets[].material.anisotropy_axis"
+      },
+      {
+        "python": "CubicAnisotropy.kc1",
+        "type": "float",
+        "default": "0.0",
+        "si_unit": "$\\mathrm{J\\,m^{-3}}$",
+        "validation": "finite real",
+        "meaning": "pierwsza stała anizotropii kubicznej",
+        "backend_support": "FDM CPU/GPU, FEM CPU",
+        "problem_ir": "energy[kind=cubic_anisotropy].kc1"
+      },
+      {
+        "python": "CubicAnisotropy.kc2",
+        "type": "float",
+        "default": "0.0",
+        "si_unit": "$\\mathrm{J\\,m^{-3}}$",
+        "validation": "finite real",
+        "meaning": "druga stała anizotropii kubicznej",
+        "backend_support": "FDM CPU/GPU, FEM CPU",
+        "problem_ir": "energy[kind=cubic_anisotropy].kc2"
+      },
+      {
+        "python": "CubicAnisotropy.kc3",
+        "type": "float",
+        "default": "0.0",
+        "si_unit": "$\\mathrm{J\\,m^{-3}}$",
+        "validation": "finite real",
+        "meaning": "trzecia stała anizotropii kubicznej",
+        "backend_support": "FEM CPU; FDM rejects nonzero kc3 if unsupported",
+        "problem_ir": "energy[kind=cubic_anisotropy].kc3"
+      },
+      {
+        "python": "CubicAnisotropy.axis1",
+        "type": "tuple[float, float, float]",
+        "default": "(1.0, 0.0, 0.0)",
+        "si_unit": "$1$",
+        "validation": "finite, nonzero, orthogonal to axis2",
+        "meaning": "pierwsza oś kubiczna",
+        "backend_support": "FDM CPU/GPU, FEM CPU",
+        "problem_ir": "energy[kind=cubic_anisotropy].axis1"
+      },
+      {
+        "python": "CubicAnisotropy.axis2",
+        "type": "tuple[float, float, float]",
+        "default": "(0.0, 1.0, 0.0)",
+        "si_unit": "$1$",
+        "validation": "finite, nonzero, orthogonal to axis1",
+        "meaning": "druga oś kubiczna",
+        "backend_support": "FDM CPU/GPU, FEM CPU",
+        "problem_ir": "energy[kind=cubic_anisotropy].axis2"
+      }
+    ]
+  }
+}

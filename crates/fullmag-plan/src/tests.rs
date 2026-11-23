@@ -1882,6 +1882,8 @@ fn fem_domain_full_sampled_field_copies_by_global_node_indices() {
         magnet_name: "free".to_string(),
         geometry_name: "free_geom".to_string(),
         object_translation: [0.0, 0.0, 0.0],
+        texture_region_center_object: None,
+        texture_target_bounds_extent: None,
         initial_magnetization: Some(InitialMagnetizationIR::SampledField {
             values: vec![
                 [0.0, 10.0, 100.0],
@@ -1962,6 +1964,8 @@ fn fem_domain_preset_texture_samples_final_mesh_node_order() {
         magnet_name: "free".to_string(),
         geometry_name: "free_geom".to_string(),
         object_translation: [0.0, 0.0, 0.0],
+        texture_region_center_object: None,
+        texture_target_bounds_extent: None,
         initial_magnetization: Some(InitialMagnetizationIR::PresetTexture {
             preset_kind: "vortex".to_string(),
             preset_version: 1,
@@ -2942,6 +2946,8 @@ fn pack_preserves_shared_interface_nodes_within_one_object() {
         magnet_name: "body".to_string(),
         geometry_name: "body_geom".to_string(),
         object_translation: [0.0, 0.0, 0.0],
+        texture_region_center_object: None,
+        texture_target_bounds_extent: None,
         initial_magnetization: Some(InitialMagnetizationIR::RandomSeeded { seed: 17 }),
     };
     let expected = crate::mesh::initial_vectors_for_magnet(
@@ -2951,6 +2957,8 @@ fn pack_preserves_shared_interface_nodes_within_one_object() {
         packed.nodes.len(),
         Some(&packed.nodes),
         Some(&packed.nodes),
+        None,
+        None,
     )
     .expect("whole-object initial texture should sample");
     let mut actual = vec![[0.0, 0.0, 0.0]; packed.nodes.len()];
@@ -2968,6 +2976,8 @@ fn pack_preserves_shared_interface_nodes_within_one_object() {
         magnet_name: "body".to_string(),
         geometry_name: "body_geom".to_string(),
         object_translation: [0.0, 0.0, 0.0],
+        texture_region_center_object: None,
+        texture_target_bounds_extent: None,
         initial_magnetization: Some(InitialMagnetizationIR::PresetTexture {
             preset_version: 1,
             preset_kind: "neel_skyrmion".to_string(),
@@ -2989,6 +2999,8 @@ fn pack_preserves_shared_interface_nodes_within_one_object() {
         packed.nodes.len(),
         Some(&packed.nodes),
         Some(&packed.nodes),
+        None,
+        None,
     )
     .expect("whole-object preset texture should sample");
     let mut actual_texture = vec![[0.0, 0.0, 0.0]; packed.nodes.len()];
@@ -12819,6 +12831,8 @@ fn fem_eigen_shared_domain_region_samples_equilibrium_once_per_object() {
         fem.mesh.nodes.len(),
         Some(&fem.mesh.nodes),
         Some(&fem.mesh.nodes),
+        None,
+        None,
     )
     .expect("whole-object equilibrium should sample");
 

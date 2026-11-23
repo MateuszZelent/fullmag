@@ -382,6 +382,14 @@ pub(crate) fn build_live_status(
         preview_2d: true,
         preview_3d: true,
         algorithms_available: relaxation_algorithms_available(),
+        field_state_import_formats: vec![
+            "field_state_json".to_string(),
+            "ovf".to_string(),
+            "npz".to_string(),
+            "npy".to_string(),
+            "zarr".to_string(),
+            "h5".to_string(),
+        ],
         active_lane: active_lane_capability_snapshot(snapshot, is_fem),
         transport_authoring: Some(crate::router_v2::handlers::transport_authoring_policy::transport_authoring_capabilities()),
     };
@@ -552,7 +560,7 @@ fn select_current_accepted_scalar_row<'a>(
     Some(row)
 }
 
-fn accepted_solver_steps(snapshot: &SessionStateResponse, run_id: &str) -> u64 {
+pub(crate) fn accepted_solver_steps(snapshot: &SessionStateResponse, run_id: &str) -> u64 {
     let Some(magnetization) = snapshot.latest_fields.get("m") else {
         return 0;
     };
@@ -640,7 +648,7 @@ pub(crate) fn current_live_session_epoch(snapshot: &SessionStateResponse) -> Str
     )
 }
 
-pub(crate) const ACTIVE_LANE_OPERATION_IDS: [&str; 34] = [
+pub(crate) const ACTIVE_LANE_OPERATION_IDS: [&str; 36] = [
     "grid_build",
     "shared_mesh_build",
     "field_quantity",
@@ -651,6 +659,8 @@ pub(crate) const ACTIVE_LANE_OPERATION_IDS: [&str; 34] = [
     "hover_select_cell",
     "initial_magnetization.uniform",
     "initial_magnetization.vortex",
+    "initial_magnetization.preset_v2",
+    "initial_magnetization.sampled_field",
     "interaction.exchange",
     "interaction.demag",
     "interaction.dmi",
@@ -1084,6 +1094,37 @@ fn active_lane_operations(
             } else {
                 unsupported(
                     "Vortex initial magnetization requires a resolved FDM or FEM lane.",
+                    &["discretization:fdm_or_fem"],
+                )
+            },
+        ),
+        (
+            "initial_magnetization.preset_v2".into(),
+            if is_fdm || is_fem {
+                supported(
+                    "Analytic v2 texture presets are executable in the resolved FDM/FEM lane.",
+                    &["initial_magnetization:preset_v2", "resolved_lane_identity"],
+                )
+            } else {
+                unsupported(
+                    "Analytic v2 texture presets require a resolved FDM or FEM lane.",
+                    &["discretization:fdm_or_fem"],
+                )
+            },
+        ),
+        (
+            "initial_magnetization.sampled_field".into(),
+            if is_fdm || is_fem {
+                supported(
+                    "Imported sampled-field initial magnetization is executable in the resolved FDM/FEM lane.",
+                    &[
+                        "initial_magnetization:sampled_field",
+                        "resolved_lane_identity",
+                    ],
+                )
+            } else {
+                unsupported(
+                    "Imported sampled-field initial magnetization requires a resolved FDM or FEM lane.",
                     &["discretization:fdm_or_fem"],
                 )
             },

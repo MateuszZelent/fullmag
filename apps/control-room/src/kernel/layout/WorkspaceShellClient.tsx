@@ -29,11 +29,14 @@ import { sessionRequestScopeKey } from "../resources/sessionResourceIdentity";
 import { homeView, useHomeViewOpen } from "./homeView";
 import { useLayoutSelector } from "./useLayout";
 import { useRealtimeConnection } from "../realtime/useRealtimeConnection";
+import { useSessionTabAddress } from "./useSessionTabAddress";
 
 export function WorkspaceShellClient() {
   const savedPlayback = useSavedResultsPlaybackSelection();
   const sessions = useSessionCollection();
   const project = useProjectDocumentSnapshot();
+  const sessionTabAddress = useSessionTabAddress();
+  const homeOpen = useHomeViewOpen();
   const sessionStatus = useSessionBootstrapStatus({
     collection: sessions.resource.data,
     enabled: sessions.state === "ready",
@@ -116,14 +119,18 @@ export function WorkspaceShellClient() {
     return <ProjectWorkspaceShell sessionState={sessionState} onRetry={onRetry} />;
   }
 
-  // Home is the entry surface, not a session-loading state. Keep its module
-  // mounted while collection/status requests retry so a backend interruption
-  // cannot replace the page with a full-screen loading/error gate.
   if (sessionState !== "ready") {
+    // The static shell has no address until hydration. Keep it neutral until
+    // the address is known, or a requested session is confirmed or ruled out.
+    const awaitingSession = !homeOpen && sessionTabAddress !== false && sessionState !== "no-session";
     return (
       <>
         <SlotHost slotId="app-menu" />
-        <HomeShell state={sessionState} onRetry={onRetry} />
+        {awaitingSession ? (
+          <SessionReconnectShell canRetry={sessionState !== "loading"} onRetry={onRetry} />
+        ) : (
+          <HomeShell state={sessionState} onRetry={onRetry} />
+        )}
       </>
     );
   }
@@ -210,6 +217,33 @@ function ProjectWorkspaceShell({
       {homeOpen ? <HomeOverlay /> : null}
       <CommandFeedbackPresenter />
     </WorkspaceContentScopeProvider>
+  );
+}
+
+function SessionReconnectShell({ canRetry, onRetry }: {
+  readonly canRetry: boolean;
+  readonly onRetry: () => void;
+}) {
+  return (
+    <>
+      <RuntimeDegradedBanner />
+      <section
+        className="grid h-full min-h-0 place-content-center gap-2 bg-fm-app p-8 text-center text-fm-primary"
+        data-state="session-reconnecting"
+        id="fm-main-content"
+      >
+        <div role="status">
+          <h1 className="m-0 font-fm-ui text-fm-lg font-semibold">Connecting to session</h1>
+          <p className="m-0 text-fm-secondary">Waiting for Fullmag to confirm the active session.</p>
+        </div>
+        {canRetry ? (
+          <div>
+            <Button size="sm" type="button" variant="secondary" onClick={onRetry}>Retry</Button>
+          </div>
+        ) : null}
+      </section>
+      <CommandFeedbackPresenter />
+    </>
   );
 }
 

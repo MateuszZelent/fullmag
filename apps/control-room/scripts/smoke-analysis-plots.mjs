@@ -221,14 +221,9 @@ async function assertNoVisibleResourceErrors(page, errors) {
   if (errors.length > 0) {
     throw new Error(`Browser page errors before screenshot capture: ${errors.join(" | ")}`);
   }
-  const errorNotifications = page.locator(
-    '.fm-notifications__toast[data-kind="error"], .fm-toast[data-variant="error"]',
-  );
-  const visibleErrors = [];
-  for (let index = 0; index < await errorNotifications.count(); index += 1) {
-    const notification = errorNotifications.nth(index);
-    if (await notification.isVisible()) visibleErrors.push(await notification.innerText());
-  }
+  const visibleErrors = await page.locator(
+    '.fm-notifications__toast[data-kind="error"]:visible, .fm-toast[data-variant="error"]:visible',
+  ).allTextContents();
   if (visibleErrors.length > 0) {
     throw new Error(
       `Visible resource error notification before screenshot capture: ${visibleErrors.join(" | ")}`,
@@ -557,19 +552,21 @@ async function verifyPointSelection(page) {
 }
 
 async function verifyAnalysisInspectorSummary(page, datasetRef) {
-  const inspector = page.locator(".fm-inspector-panel");
-  await inspector.getByText("Analysis chart", { exact: true }).waitFor({
+  const inspector = page.locator('[data-slot="inspector-root"][data-inspector-owner="chart-point"]');
+  const chart = inspector.locator('[data-section-id="analysis-parent-chart"]');
+  await chart.getByText("Analysis Chart", { exact: true }).waitFor({
     state: "visible",
     timeout: timeoutMs,
   });
-  const text = await inspector.innerText();
+  const text = await chart.innerText();
   for (const required of ["Surface", "Dataset", datasetRef, "X axis", "Range", "Series"]) {
     if (!text.includes(required)) {
       throw new Error(`Analysis Inspector is missing ${required}: ${text}`);
     }
   }
+  const inspectorText = await inspector.innerText();
   for (const forbidden of ["Chart controls", "Following", "Resume live chart updates", "Pause live chart updates"]) {
-    if (text.includes(forbidden)) {
+    if (inspectorText.includes(forbidden)) {
       throw new Error(`Analysis Inspector still exposes Live Chart control ${forbidden}.`);
     }
   }
@@ -2381,6 +2378,15 @@ async function installAnalysisDatasetFixtureRoutes(page, frequencyDomainFixture 
           total_count: 0,
           unsupported_reason: "no validated result dataset artifacts are published",
         }),
+        contentType: "application/json",
+        headers: cors,
+        status: 200,
+      });
+      return;
+    }
+    if (url.pathname === "/v2/sessions/current/data/fields") {
+      await route.fulfill({
+        body: JSON.stringify({ domain_generation_id: "0", quantities: [], revision: 0 }),
         contentType: "application/json",
         headers: cors,
         status: 200,

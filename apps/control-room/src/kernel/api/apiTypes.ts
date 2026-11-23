@@ -31,7 +31,9 @@ export type ObjectInteractionKind =
   | "exchange"
   | "demag"
   | "interfacial_dmi"
-  | "uniaxial_anisotropy";
+  | "bulk_dmi"
+  | "uniaxial_anisotropy"
+  | "cubic_anisotropy";
 
 interface BaseAuthoringTransaction {
   base_revision?: number | null;
@@ -1439,7 +1441,10 @@ export function isOptionalObjectInteractionKind(
   kind: ObjectInteractionKind,
 ): boolean {
   return (
-    kind === "interfacial_dmi" || kind === "uniaxial_anisotropy"
+    kind === "interfacial_dmi" ||
+    kind === "bulk_dmi" ||
+    kind === "uniaxial_anisotropy" ||
+    kind === "cubic_anisotropy"
   );
 }
 

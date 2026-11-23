@@ -1,7 +1,8 @@
 "use client";
 
-import { Database, GitCommit, Table2, TriangleAlert, Waves } from "lucide-react";
+import { Pin, Database, GitCommit, Table2, TriangleAlert, Waves } from "lucide-react";
 
+import { PIN_MODE_VISUALIZATION_COMMAND } from "@/kernel/analysis-modules/postprocessingCommandContributions";
 import {
   useAnalysisResultBranchResource,
   useAnalysisResultDatasetManifestResource,
@@ -17,10 +18,10 @@ import {
   analysisResultFieldOverlayAdapter,
   createAnalysisResultFieldOverlayIntent,
 } from "@/kernel/visualization/AnalysisResultFieldOverlayIntent";
+import { Button } from "@/shared/ui/Button";
 import { FrequencyDomainModeDisplayControls, useFrequencyDomainModeDisplaySettings } from "../FrequencyDomainModeDisplayControls";
 import { ANALYSIS_FIELD_VIEW_OPTIONS } from "../FrequencyDomainModeDisplayControls.model";
 import { ModeVisualizationPhaseControl } from "../ModeVisualizationInspectorPanel";
-import { ScientificInspectorTemplate } from "../../components/ScientificInspectorTemplate";
 import { FieldRow } from "../../primitives/FieldRow";
 import { InspectorGroup } from "../../primitives/InspectorGroup";
 import { InspectorOverviewFrame } from "../../primitives/InspectorOverviewFrame";
@@ -30,9 +31,22 @@ import {
 } from "@/shared/domain/analysis/results";
 import { buildAnalysisResultInspectorModel } from "./analysisResultInspectorModel";
 
-function display(value: string | number | null | undefined): string {
-  if (value == null || value === "") return "Unavailable";
+function display(
+  value: string | number | null | undefined,
+  placeholder = "Unavailable",
+): string {
+  if (value == null || value === "") return placeholder;
   return String(value);
+}
+
+function sanitizeRows<T extends { value: string }>(
+  rows: readonly T[],
+  placeholder: string,
+): readonly T[] {
+  if (placeholder === "Unavailable") return rows;
+  return rows.map((row) =>
+    row.value === "Unavailable" ? { ...row, value: placeholder } : row,
+  );
 }
 
 function resultSelection(selection: Selection) {
@@ -61,8 +75,13 @@ function focusLabel(focus: string | undefined): string {
 }
 
 export function AnalysisResultInspectorPanel({
+  embedded = false,
+  emptyPlaceholder = "Unavailable",
   selection,
-}: InspectorPanelProps) {
+}: InspectorPanelProps & {
+  embedded?: boolean;
+  emptyPlaceholder?: string;
+}) {
   const resultRef = resultSelection(selection);
   const sampleId = resultRef?.sampleId;
   const sampleQuery = sampleId ? { limit: 1, sample_id: sampleId } : {};
@@ -96,19 +115,35 @@ export function AnalysisResultInspectorPanel({
   );
 
   if (!resultRef) {
+    if (embedded) {
+      return (
+        <InspectorGroup title="Result diagnostics">
+          <FieldRow
+            label="Reference"
+            value="The selected node does not contain an analysis-result reference."
+          />
+        </InspectorGroup>
+      );
+    }
     return (
-      <ScientificInspectorTemplate
-        breadcrumbs={["Results", "Analysis result"]}
-        diagnostics={["The selected node does not contain an analysis-result reference."]}
-        methodLabel="Run-scoped result dataset"
-        physicalLabel="Result"
-        status={{
-          availability: "missing",
-          execution: "not_applicable",
-          resource: "missing",
-        }}
-        title="Analysis result"
-      />
+      <div className="fm-inspector-panel" data-inspector-owner="results.analysis_result">
+        <InspectorOverviewFrame
+          metrics={[
+            { label: "Scope", value: "Result" },
+            { label: "Method", value: "Run-scoped result dataset" },
+            { label: "Status", value: "missing" },
+          ]}
+          primary={
+            <FieldRow
+              label="Reference"
+              value="The selected node does not contain an analysis-result reference."
+            />
+          }
+          primaryIcon={<Database size={18} strokeWidth={1.5} />}
+          primaryTitle="Analysis result"
+          sections={[]}
+        />
+      </div>
     );
   }
 
@@ -148,32 +183,42 @@ export function AnalysisResultInspectorPanel({
       ? ["The selected field is marked unsupported by the result adapter."]
       : []),
   ];
-  const inspectorModel = buildAnalysisResultInspectorModel({
+  const rawInspectorModel = buildAnalysisResultInspectorModel({
     item: itemData,
     manifest: manifestData,
   });
+  const inspectorModel =
+    emptyPlaceholder === "Unavailable"
+      ? rawInspectorModel
+      : {
+          axes: sanitizeRows(rawInspectorModel.axes, emptyPlaceholder),
+          metadata: sanitizeRows(rawInspectorModel.metadata, emptyPlaceholder),
+          provenance: sanitizeRows(rawInspectorModel.provenance, emptyPlaceholder),
+          relations: sanitizeRows(rawInspectorModel.relations, emptyPlaceholder),
+          sources: sanitizeRows(rawInspectorModel.sources, emptyPlaceholder),
+        };
 
   const properties: readonly { label: string; mono?: boolean; unit?: string; value: string }[] = [
     { label: "Run", mono: true, value: resultRef.runId },
     { label: "Stage", mono: true, value: resultRef.stageId },
     { label: "Dataset", mono: true, value: resultRef.datasetId },
     { label: "Dataset revision", mono: true, value: resultRef.datasetRevision },
-    { label: "Sample", mono: true, value: display(resultRef.sampleId) },
-    { label: "Item", mono: true, value: display(resultRef.itemId) },
-    { label: "Item kind", value: display(resultRef.itemKind) },
-    { label: "Frequency", unit: "Hz", value: display(itemData?.frequency_hz) },
-    { label: "Tracking score", value: display(itemData?.quality.tracking_score) },
-    { label: "Branch", mono: true, value: display(resultRef.branchId ?? itemData?.branch_id) },
-    { label: "Branch points", value: display(branchData?.point_count) },
-    { label: "Field", mono: true, value: display(resultRef.fieldId ?? itemData?.field_ref?.field_id) },
-    { label: "Projection", mono: true, value: display(resultRef.projectionId) },
-    { label: "Projection point", value: display(resultRef.projectionOrdinal) },
+    { label: "Sample", mono: true, value: display(resultRef.sampleId, emptyPlaceholder) },
+    { label: "Item", mono: true, value: display(resultRef.itemId, emptyPlaceholder) },
+    { label: "Item kind", value: display(resultRef.itemKind, emptyPlaceholder) },
+    { label: "Frequency", unit: "Hz", value: display(itemData?.frequency_hz, emptyPlaceholder) },
+    { label: "Tracking score", value: display(itemData?.quality.tracking_score, emptyPlaceholder) },
+    { label: "Branch", mono: true, value: display(resultRef.branchId ?? itemData?.branch_id, emptyPlaceholder) },
+    { label: "Branch points", value: display(branchData?.point_count, emptyPlaceholder) },
+    { label: "Field", mono: true, value: display(resultRef.fieldId ?? itemData?.field_ref?.field_id, emptyPlaceholder) },
+    { label: "Projection", mono: true, value: display(resultRef.projectionId, emptyPlaceholder) },
+    { label: "Projection point", value: display(resultRef.projectionOrdinal, emptyPlaceholder) },
     {
       label: "Sample coordinates",
       value:
         sampleData?.coordinates
           .map((coordinate) => `${coordinate.axis_id}=${coordinate.label ?? coordinate.token}`)
-          .join(" · ") ?? "Unavailable",
+          .join(" · ") ?? emptyPlaceholder,
     },
   ];
   const provenance = [
@@ -181,16 +226,41 @@ export function AnalysisResultInspectorPanel({
     {
       label: "Source revision",
       mono: true,
-      value: display(itemData?.source_revision ?? branchData?.source_revision),
+      value: display(itemData?.source_revision ?? branchData?.source_revision, emptyPlaceholder),
     },
     {
       label: "Field revision",
       mono: true,
-      value: display(resultRef.fieldRevision ?? itemData?.field_ref?.field_revision),
+      value: display(resultRef.fieldRevision ?? itemData?.field_ref?.field_revision, emptyPlaceholder),
     },
-    { label: "Resource transport", value: display(transportStatus) },
+    { label: "Resource transport", value: display(transportStatus, emptyPlaceholder) },
     { label: "Selection source", value: selection.moduleSource },
   ];
+
+  if (embedded) {
+    return (
+      <div className="grid min-w-0 gap-3" data-inspector-owner="results.analysis_result">
+        <InspectorGroup title="Dataset & Item Identity" badge={focusLabel(resultRef.focus)}>
+          {properties.map((row) => <FieldRow key={row.label} {...row} />)}
+        </InspectorGroup>
+        <AnalysisResultFieldControls emptyPlaceholder={emptyPlaceholder} selectionRef={resultRef} />
+        <AnalysisResultMetadata model={inspectorModel} />
+        <InspectorGroup
+          title="Diagnostics"
+          badge={diagnostics.length > 0 ? `${diagnostics.length} notes` : "none"}
+        >
+          {diagnostics.length > 0 ? (
+            [...new Set(diagnostics)].map((line) => <FieldRow key={line} label="Note" value={line} />)
+          ) : (
+            <FieldRow label="Diagnostics" value="None" />
+          )}
+        </InspectorGroup>
+        <InspectorGroup title="Provenance">
+          {provenance.map((row) => <FieldRow key={row.label} {...row} />)}
+        </InspectorGroup>
+      </div>
+    );
+  }
 
   return (
     <div className="fm-inspector-panel" data-inspector-owner="results.analysis_result">
@@ -199,11 +269,11 @@ export function AnalysisResultInspectorPanel({
           { label: "Focus", value: focusLabel(resultRef.focus) },
           {
             label: "Status",
-            value: display(status?.completeness ?? transportStatus),
+            value: display(status?.completeness ?? transportStatus, emptyPlaceholder),
             tone: status?.completeness === "complete" ? "success" : "neutral",
           },
-          { label: "Residual L2", value: display(itemData?.quality.residual_relative_l2) },
-          { label: "Axes", value: display(manifestData?.axes.length) },
+          { label: "Residual L2", value: display(itemData?.quality.residual_relative_l2, emptyPlaceholder) },
+          { label: "Axes", value: display(manifestData?.axes.length, emptyPlaceholder) },
         ]}
         primary={properties.map((row) => <FieldRow key={row.label} {...row} />)}
         primaryIcon={<Database size={18} strokeWidth={1.5} />}
@@ -214,7 +284,7 @@ export function AnalysisResultInspectorPanel({
             title: "Result field visualization",
             icon: <Waves size={16} strokeWidth={1.5} />,
             defaultOpen: true,
-            content: <AnalysisResultFieldControls selectionRef={resultRef} />,
+            content: <AnalysisResultFieldControls emptyPlaceholder={emptyPlaceholder} selectionRef={resultRef} />,
           },
           {
             id: "metadata",
@@ -283,8 +353,10 @@ function AnalysisResultMetadata({
 }
 
 function AnalysisResultFieldControls({
+  emptyPlaceholder = "Unavailable",
   selectionRef,
 }: {
+  emptyPlaceholder?: string;
   selectionRef: AnalysisResultSelectionRef;
 }) {
   const kernel = useKernel();
@@ -344,31 +416,51 @@ function AnalysisResultFieldControls({
       <FieldRow
         label="Field revision"
         mono
-        value={display(selectionRef.fieldRevision ?? selectionRef.fieldRef?.field_revision)}
+        value={display(selectionRef.fieldRevision ?? selectionRef.fieldRef?.field_revision, emptyPlaceholder)}
       />
       <FieldRow
         label="Representation"
-        value={display(selectionRef.fieldRef?.representation)}
+        value={display(selectionRef.fieldRef?.representation, emptyPlaceholder)}
       />
       <FieldRow
         label="Result mesh"
         mono
-        value={display(meshRef?.mesh_id)}
+        value={display(meshRef?.mesh_id, emptyPlaceholder)}
       />
       <FieldRow
         label="Topology fingerprint"
         mono
-        value={display(meshRef?.topology_fingerprint)}
+        value={display(meshRef?.topology_fingerprint, emptyPlaceholder)}
       />
       {fieldIntent && adapter ? (
         <div className="fm-frequency-domain-table__actions">
-          <button
+          <Button
             className="fm-inspector-action-button"
+            size="sm"
             type="button"
+            variant="primary"
             onClick={() => settings.setView(settings.view)}
           >
             Plot {adapter.label} in 3D
-          </button>
+          </Button>
+          <Button
+            aria-label="Pin Mode Visualization"
+            className="fm-inspector-action-button"
+            size="sm"
+            type="button"
+            variant="secondary"
+            onClick={() => {
+              void kernel.commands.execute(
+                PIN_MODE_VISUALIZATION_COMMAND,
+                createCommandContext("inspector", kernel, {
+                  sourceDetail: "analysis-result",
+                }),
+              );
+            }}
+          >
+            <Pin aria-hidden="true" size={13} />
+            <span>Pin Mode Visualization</span>
+          </Button>
         </div>
       ) : null}
       {fieldIntent && adapter ? (
@@ -407,7 +499,7 @@ function AnalysisResultFieldControls({
         </p>
       ) : null}
       {activeOverlayOwned ? (
-        <FieldRow label="Overlay source" value={activeOverlay?.source ?? "unknown"} />
+        <FieldRow label="Overlay source" value={activeOverlay?.source ?? "—"} />
       ) : null}
     </InspectorGroup>
   );

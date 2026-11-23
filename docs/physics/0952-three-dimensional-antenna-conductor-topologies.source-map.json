@@ -1,0 +1,255 @@
+{
+  "document": {
+    "path": "docs/physics/0952-three-dimensional-antenna-conductor-topologies.md",
+    "title": "Three-dimensional microwave antenna conductor topologies (MeanderAntennaLayout, InductiveLoopLayout, PiecewisePath3DLayout)",
+    "status": "accepted_contract_not_production_qualified",
+    "updated": "2026-11-22"
+  },
+  "backend_matrix": [
+    {
+      "solver": "FEM",
+      "device": "CPU",
+      "role": "OCC loft meshing, terminal markers, ohmic/Biot-Savart basis",
+      "status": "source_and_test_evidence_runtime_separate"
+    },
+    {
+      "solver": "FEM",
+      "device": "GPU",
+      "role": "consumes solved spatial antenna field basis",
+      "status": "not_runtime_qualified"
+    },
+    {
+      "solver": "FDM",
+      "device": "CPU",
+      "role": "native voxel conductor realization",
+      "status": "unsupported",
+      "reason": "Curved 3D OCC antenna layouts require the FEM geometry pipeline; FDM consumes projected field masks."
+    },
+    {
+      "solver": "FDM",
+      "device": "GPU",
+      "role": "native voxel conductor realization",
+      "status": "unsupported",
+      "reason": "Curved 3D OCC antenna layouts require the FEM geometry pipeline; FDM consumes projected field masks."
+    }
+  ],
+  "equations": [
+    {
+      "id": "meander-dominant-wavenumber",
+      "symbols": ["k_0", "p_pitch", "r_b", "w_s"],
+      "sources": ["py-meander", "rust-meander"]
+    },
+    {
+      "id": "inductive-loop-circumference",
+      "symbols": ["R_0", "R_in", "w_s", "L_loop", "N_t", "theta_gap", "g_f"],
+      "sources": ["py-loop", "rust-loop"]
+    },
+    {
+      "id": "path3d-bezier-fillet",
+      "symbols": ["B_m", "P_m", "P_m_in", "P_m_out", "tau_bez"],
+      "sources": ["py-path3d", "rust-path3d"]
+    },
+    {
+      "id": "bishop-parallel-transport",
+      "symbols": ["n_perp", "n_hat", "t_hat", "b_hat"],
+      "sources": ["py-strip-sections"]
+    },
+    {
+      "id": "occ-terminal-cap-predicate",
+      "symbols": ["n_Q", "u_Q", "v_Q", "c_Q", "x_pt", "u_max", "v_max", "tau_Q"],
+      "sources": ["occ-cap-frame", "occ-terminal-groups"]
+    }
+  ],
+  "symbols": [
+    {"id": "L_f", "latex": "$L_f$", "meaning": "długość pojedynczego palca meandra", "si_unit": "$\\mathrm{m}$"},
+    {"id": "w_s", "latex": "$w_s$", "meaning": "szerokość paska sygnałowego przewodnika", "si_unit": "$\\mathrm{m}$"},
+    {"id": "t_c", "latex": "$t_c$", "meaning": "grubość warstwy metalizacji przewodnika", "si_unit": "$\\mathrm{m}$"},
+    {"id": "N_f", "latex": "$N_f$", "meaning": "liczba palców grzebienia meandra", "si_unit": "$1$"},
+    {"id": "p_pitch", "latex": "$p$", "meaning": "podziałka (pitch) między środkami sąsiednich palców", "si_unit": "$\\mathrm{m}$"},
+    {"id": "r_b", "latex": "$r_b$", "meaning": "promień gięcia łuku meandra", "si_unit": "$\\mathrm{m}$"},
+    {"id": "k_0", "latex": "$k_0$", "meaning": "dominująca liczba falowa wzbudzenia meandra", "si_unit": "$\\mathrm{rad\\,m^{-1}}$"},
+    {"id": "R_in", "latex": "$R_{\\mathrm{in}}$", "meaning": "promień wewnętrzny pętli indukcyjnej", "si_unit": "$\\mathrm{m}$"},
+    {"id": "R_0", "latex": "$R_0$", "meaning": "promień linii centralnej pierwszego zwoju pętli", "si_unit": "$\\mathrm{m}$"},
+    {"id": "N_t", "latex": "$N_t$", "meaning": "liczba zwojów pętli indukcyjnej", "si_unit": "$1$"},
+    {"id": "g_f", "latex": "$g_f$", "meaning": "szerokość szczeliny zasilającej pętli", "si_unit": "$\\mathrm{m}$"},
+    {"id": "L_loop", "latex": "$L_{\\mathrm{loop}}$", "meaning": "obwód referencyjny pętli indukcyjnej", "si_unit": "$\\mathrm{m}$"},
+    {"id": "theta_gap", "latex": "$\\theta_{\\mathrm{gap}}$", "meaning": "kąt połówkowy rozwarcia szczeliny pętli", "si_unit": "$\\mathrm{rad}$"},
+    {"id": "P_m", "latex": "$\\mathbf P_m$", "meaning": "$m$-ty węzeł kontrolny ścieżki 3D", "si_unit": "$\\mathrm{m}$"},
+    {"id": "P_m_in", "latex": "$\\mathbf P_m^{-}$", "meaning": "punkt wejścia zaokrąglenia narożnika Béziera", "si_unit": "$\\mathrm{m}$"},
+    {"id": "P_m_out", "latex": "$\\mathbf P_m^{+}$", "meaning": "punkt wyjścia zaokrąglenia narożnika Béziera", "si_unit": "$\\mathrm{m}$"},
+    {"id": "B_m", "latex": "$\\mathbf B_m$", "meaning": "punkt na kwadratowym łuku narożnika Béziera", "si_unit": "$\\mathrm{m}$"},
+    {"id": "tau_bez", "latex": "$\\tau$", "meaning": "bezwymiarowy parametr krzywej Béziera", "si_unit": "$1$"},
+    {"id": "t_hat", "latex": "$\\hat{\\mathbf t}_i$", "meaning": "jednostkowy wektor styczny linii centralnej", "si_unit": "$1$"},
+    {"id": "n_hat", "latex": "$\\hat{\\mathbf n}_i$", "meaning": "transportowany wektor szerokości przekroju", "si_unit": "$1$"},
+    {"id": "n_perp", "latex": "$\\mathbf n_i^{\\perp}$", "meaning": "rzut poprzedniej normalnej na płaszczyznę przekroju", "si_unit": "$1$"},
+    {"id": "b_hat", "latex": "$\\hat{\\mathbf b}_i$", "meaning": "binormalny wektor grubości przekroju", "si_unit": "$1$"},
+    {"id": "c_Q", "latex": "$\\mathbf c_Q$", "meaning": "środek geometryczny czworokąta ściany terminalowej", "si_unit": "$\\mathrm{m}$"},
+    {"id": "u_Q", "latex": "$\\hat{\\mathbf u}_Q$", "meaning": "pierwsza oś styczna czworokąta terminalu", "si_unit": "$1$"},
+    {"id": "v_Q", "latex": "$\\hat{\\mathbf v}_Q$", "meaning": "druga oś styczna czworokąta terminalu", "si_unit": "$1$"},
+    {"id": "n_Q", "latex": "$\\hat{\\mathbf n}_Q$", "meaning": "jednostkowa normalna płaszczyzny terminalu", "si_unit": "$1$"},
+    {"id": "u_max", "latex": "$u_{\\max}$", "meaning": "połówkowy wymiar terminalu wzdłuż $\\hat{\\mathbf u}_Q$", "si_unit": "$\\mathrm{m}$"},
+    {"id": "v_max", "latex": "$v_{\\max}$", "meaning": "połówkowy wymiar terminalu wzdłuż $\\hat{\\mathbf v}_Q$", "si_unit": "$\\mathrm{m}$"},
+    {"id": "tau_Q", "latex": "$\\tau_Q$", "meaning": "skalowalna tolerancja geometryczna dopasowania ściany OCC", "si_unit": "$\\mathrm{m}$"},
+    {"id": "x_pt", "latex": "$\\mathbf x$", "meaning": "punkt kontrolny / wierzchołek ściany OCC", "si_unit": "$\\mathrm{m}$"}
+  ],
+  "sources": [
+    {
+      "id": "py-strip-sections",
+      "path": "packages/fullmag-py/src/fullmag/model/geometry.py",
+      "symbol": "_path_strip_sections",
+      "responsibility": "Parallel-transported rectangular strip cross-sections"
+    },
+    {
+      "id": "py-meander",
+      "path": "packages/fullmag-py/src/fullmag/model/geometry.py",
+      "symbol": "class MeanderAntennaLayout",
+      "responsibility": "Meander grating antenna geometry and wavenumber"
+    },
+    {
+      "id": "py-loop",
+      "path": "packages/fullmag-py/src/fullmag/model/geometry.py",
+      "symbol": "class InductiveLoopLayout",
+      "responsibility": "Inductive loop antenna geometry"
+    },
+    {
+      "id": "py-path3d",
+      "path": "packages/fullmag-py/src/fullmag/model/geometry.py",
+      "symbol": "class PiecewisePath3DLayout",
+      "responsibility": "Piecewise 3D path / air-bridge antenna geometry"
+    },
+    {
+      "id": "occ-cap-frame",
+      "path": "packages/fullmag-py/src/fullmag/meshing/_gmsh_waveguides.py",
+      "symbol": "_cap_frame_from_quad",
+      "responsibility": "OCC terminal cap quad frame and scale-covariant tolerance"
+    },
+    {
+      "id": "occ-terminal-groups",
+      "path": "packages/fullmag-py/src/fullmag/meshing/_gmsh_waveguides.py",
+      "symbol": "add_antenna_layout_terminal_physical_groups",
+      "responsibility": "OCC terminal physical group tagging"
+    },
+    {
+      "id": "rust-meander",
+      "path": "crates/fullmag-authoring/src/geometry.rs",
+      "symbol": "parse_meander_layout",
+      "responsibility": "Rust authoring validation for MeanderAntennaLayout"
+    },
+    {
+      "id": "rust-loop",
+      "path": "crates/fullmag-authoring/src/geometry.rs",
+      "symbol": "parse_inductive_loop_layout",
+      "responsibility": "Rust authoring validation for InductiveLoopLayout"
+    },
+    {
+      "id": "rust-path3d",
+      "path": "crates/fullmag-authoring/src/geometry.rs",
+      "symbol": "parse_piecewise_path_3d_layout",
+      "responsibility": "Rust authoring validation for PiecewisePath3DLayout"
+    }
+  ],
+  "public_api": {
+    "parameters": [
+      {
+        "python": "MeanderAntennaLayout.length_m",
+        "type": "float",
+        "default": "required",
+        "si_unit": "$\\mathrm{m}$",
+        "validation": "finite and > 0",
+        "meaning": "długość pojedynczego palca meandra",
+        "backend_support": "FEM OCC geometry pipeline",
+        "problem_ir": "geometry.entries[kind=meander].length_m"
+      },
+      {
+        "python": "MeanderAntennaLayout.finger_count",
+        "type": "int",
+        "default": "4",
+        "si_unit": "$1$",
+        "validation": "integer in [2, 64]",
+        "meaning": "liczba palców meandra",
+        "backend_support": "FEM OCC geometry pipeline",
+        "problem_ir": "geometry.entries[kind=meander].finger_count"
+      },
+      {
+        "python": "MeanderAntennaLayout.pitch_m",
+        "type": "float",
+        "default": "required",
+        "si_unit": "$\\mathrm{m}$",
+        "validation": "finite and > signal_width_m",
+        "meaning": "podziałka między palcami meandra",
+        "backend_support": "FEM OCC geometry pipeline",
+        "problem_ir": "geometry.entries[kind=meander].pitch_m"
+      },
+      {
+        "python": "MeanderAntennaLayout.bend_radius_m",
+        "type": "float",
+        "default": "0.0",
+        "si_unit": "$\\mathrm{m}$",
+        "validation": ">= 0 and 2*bend_radius_m + signal_width_m <= pitch_m",
+        "meaning": "promień zewnętrzny łuku U-turn",
+        "backend_support": "FEM OCC geometry pipeline",
+        "problem_ir": "geometry.entries[kind=meander].bend_radius_m"
+      },
+      {
+        "python": "InductiveLoopLayout.loop_shape",
+        "type": "str",
+        "default": "circular",
+        "si_unit": "$1$",
+        "validation": "circular, rectangular, or omega",
+        "meaning": "kształt geometryczny pętli indukcyjnej",
+        "backend_support": "FEM OCC geometry pipeline",
+        "problem_ir": "geometry.entries[kind=inductive_loop].loop_shape"
+      },
+      {
+        "python": "InductiveLoopLayout.inner_radius_m",
+        "type": "float",
+        "default": "required",
+        "si_unit": "$\\mathrm{m}$",
+        "validation": "finite and > 0",
+        "meaning": "promień wewnętrzny cewki",
+        "backend_support": "FEM OCC geometry pipeline",
+        "problem_ir": "geometry.entries[kind=inductive_loop].inner_radius_m"
+      },
+      {
+        "python": "InductiveLoopLayout.turns",
+        "type": "int",
+        "default": "1",
+        "si_unit": "$1$",
+        "validation": "integer in [1, 16]",
+        "meaning": "liczba zwojów cewki",
+        "backend_support": "FEM OCC geometry pipeline",
+        "problem_ir": "geometry.entries[kind=inductive_loop].turns"
+      },
+      {
+        "python": "InductiveLoopLayout.feed_gap_m",
+        "type": "float",
+        "default": "min(0.5*R_in, width)",
+        "si_unit": "$\\mathrm{m}$",
+        "validation": "> 0 and < 2 * inner_radius_m",
+        "meaning": "szerokość szczeliny zasilającej",
+        "backend_support": "FEM OCC geometry pipeline",
+        "problem_ir": "geometry.entries[kind=inductive_loop].feed_gap_m"
+      },
+      {
+        "python": "PiecewisePath3DLayout.waypoints",
+        "type": "Sequence[Path3DWaypoint]",
+        "default": "required",
+        "si_unit": "$\\mathrm{m}$",
+        "validation": ">= 2 consecutive distinct 3D points",
+        "meaning": "węzły linii centralnej przewodnika 3D",
+        "backend_support": "FEM OCC geometry pipeline",
+        "problem_ir": "geometry.entries[kind=piecewise_3d_path].waypoints"
+      },
+      {
+        "python": "PiecewisePath3DLayout.signal_width_m",
+        "type": "float",
+        "default": "required",
+        "si_unit": "$\\mathrm{m}$",
+        "validation": "finite and > 0",
+        "meaning": "domyślna szerokość przekroju ścieżki",
+        "backend_support": "FEM OCC geometry pipeline",
+        "problem_ir": "geometry.entries[kind=piecewise_3d_path].signal_width_m"
+      }
+    ]
+  }
+}

@@ -77,8 +77,8 @@ describe("topologicalChargeModel", () => {
   it("renders missing resources without pretending a charge is available", () => {
     const model = resolveTopologicalChargePanelModel("loading", null);
     expect(model.banner).toBeUndefined();
-    expect(model.rows).toContainEqual({ label: "Q", value: "unavailable" });
-    expect(model.rows).toContainEqual({ label: "Trust", value: "unavailable" });
+    expect(model.rows).toContainEqual({ label: "Q", value: "\u2014" });
+    expect(model.rows).toContainEqual({ label: "Trust", value: "\u2014" });
   });
 
   it("uses typed scientific status when a computation is unavailable", () => {

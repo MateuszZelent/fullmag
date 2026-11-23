@@ -1034,13 +1034,22 @@ impl ProblemIR {
                             ));
                         }
                     }
-                    InitialMagnetizationIR::PresetTexture { preset_kind, .. } => {
+                    InitialMagnetizationIR::PresetTexture {
+                        preset_kind,
+                        mapping,
+                        ..
+                    } => {
                         if preset_kind.trim().is_empty() {
                             errors.push(format!(
                                 "magnet '{}': preset_texture preset_kind must not be empty",
                                 magnet.name
                             ));
                         }
+                        validate_texture_mapping_axis_extent(
+                            mapping,
+                            &format!("magnet '{}': preset_texture mapping", magnet.name),
+                            &mut errors,
+                        );
                     }
                 }
             }
@@ -1868,13 +1877,49 @@ fn validate_initial_magnetization(
                 errors.push(format!("{path} sampled_field values must not be empty"));
             }
         }
-        InitialMagnetizationIR::PresetTexture { preset_kind, .. } => {
+        InitialMagnetizationIR::PresetTexture {
+            preset_kind,
+            mapping,
+            ..
+        } => {
             if preset_kind.trim().is_empty() {
                 errors.push(format!(
                     "{path} preset_texture preset_kind must not be empty"
                 ));
             }
+            validate_texture_mapping_axis_extent(
+                mapping,
+                &format!("{path} preset_texture mapping"),
+                errors,
+            );
         }
+    }
+}
+
+fn validate_texture_mapping_axis_extent(
+    mapping: &TextureMappingIR,
+    context: &str,
+    errors: &mut Vec<String>,
+) {
+    let raw_mode = mapping
+        .axis_extent_mode
+        .as_deref()
+        .map(str::trim)
+        .unwrap_or("");
+    if raw_mode.is_empty() || raw_mode.eq_ignore_ascii_case("uniform") {
+        return;
+    }
+    if raw_mode.eq_ignore_ascii_case("thickness") {
+        match mapping.axis_thickness_m {
+            Some(thickness) if thickness.is_finite() && thickness > 0.0 => {}
+            _ => errors.push(format!(
+                "{context}.axis_thickness_m must be finite and positive when axis_extent_mode == 'thickness'"
+            )),
+        }
+    } else {
+        errors.push(format!(
+            "{context}.axis_extent_mode '{raw_mode}' is unsupported; expected 'uniform' or 'thickness'"
+        ));
     }
 }
 

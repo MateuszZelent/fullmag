@@ -5,6 +5,8 @@ import { createPortal } from "react-dom";
 import { PanelChrome } from "@/shared/ui/PanelFrame";
 import {
   Activity,
+  ChartSpline,
+  ChevronDown,
   CircleAlert,
   Clipboard,
   ClipboardCheck,
@@ -26,6 +28,11 @@ import type { RequestDiagnosticEntry } from "@/kernel/api/RequestDiagnosticsCont
 import type { CommandDiagnosticEntry } from "@/kernel/commands/CommandDiagnosticsController";
 import { WorkspaceRenderProfiler } from "@/kernel/performance/reactRenderProfiler";
 import { useLayoutSelector } from "@/kernel/layout/useLayout";
+import {
+  setBottomDockExpanded,
+  toggleBottomDockExpanded,
+  useBottomDockExpanded,
+} from "@/kernel/layout/bottomDockPreference";
 import { useStageExecutionResource } from "@/kernel/resources/studyRuntimeResources";
 import { useSessionStatusSelector } from "@/kernel/resources/useSessionStatus";
 import type { ModuleProps } from "@/kernel/types";
@@ -33,6 +40,7 @@ import { QuickChartResourceView } from "@/shared/analysis-charts/QuickChartResou
 import { copyTextToClipboard } from "@/shared/browser/copyTextToClipboard";
 import { Button } from "@/shared/ui/Button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/shared/ui/Tabs";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/shared/ui/Tooltip";
 
 import {
   filterTransportEntries,
@@ -76,7 +84,9 @@ export default function FooterModule(props: ModuleProps) {
 
 function FooterModuleContent({ kernel }: ModuleProps) {
   const activeTab = useLayoutSelector((layout) => layout.activeBottomPanelTab);
+  const dockExpanded = useBottomDockExpanded();
   const tabList = useRef<HTMLDivElement>(null);
+  const previousTab = useRef(activeTab);
   const [telemetryNavigationHost, setTelemetryNavigationHost] = useState<HTMLDivElement | null>(null);
   const [telemetryStatusHost, setTelemetryStatusHost] = useState<HTMLDivElement | null>(null);
   const status = useSessionStatusSelector(selectFooterTelemetryStatus, {
@@ -113,6 +123,14 @@ function FooterModuleContent({ kernel }: ModuleProps) {
     });
   }, [kernel.bus, kernel.layout]);
 
+  // Any request for a dock tab (tab click, status bar, command, antenna
+  // auto-open) unfolds a collapsed dock, like picking a ribbon tab.
+  useEffect(() => {
+    if (previousTab.current === activeTab) return;
+    previousTab.current = activeTab;
+    setBottomDockExpanded(true);
+  }, [activeTab]);
+
   useEffect(() => {
     const selected = tabList.current?.querySelector<HTMLElement>('[aria-selected="true"]');
     if (selected && tabList.current) revealFooterTab(tabList.current, selected);
@@ -128,12 +146,19 @@ function FooterModuleContent({ kernel }: ModuleProps) {
         )
       }
       className="fm-footer"
+      data-expanded={dockExpanded}
     >
       <PanelChrome className="fm-footer__bar">
         <TabsList
           ref={tabList}
           className="fm-footer__tabs"
           aria-label="Bottom diagnostics"
+          onClick={(event) => {
+            // The open tab of a folded dock unfolds it (other tabs do via activeTab).
+            if (!dockExpanded && event.target instanceof Element && event.target.closest('[role="tab"]')) {
+              setBottomDockExpanded(true);
+            }
+          }}
           onFocus={(event) => {
             if (event.target instanceof HTMLElement && event.target.getAttribute("role") === "tab") {
               revealFooterTab(event.currentTarget, event.target);
@@ -142,37 +167,57 @@ function FooterModuleContent({ kernel }: ModuleProps) {
         >
           <TabsTrigger value="logs" className="fm-footer__tab" title="Command history and HTTP / WebSocket traffic">
             <Activity size={14} aria-hidden="true" />
-            Logs
+            <span className="fm-footer__tab-label">Logs</span>
           </TabsTrigger>
           <TabsTrigger value="telemetry" className="fm-footer__tab" title="Live simulation metrics and antenna progress">
             <Gauge size={14} aria-hidden="true" />
-            Telemetry
+            <span className="fm-footer__tab-label">Telemetry</span>
           </TabsTrigger>
           <TabsTrigger value="diagnostics" className="fm-footer__tab" title="Performance recorder and diagnostic export">
             <Cpu size={14} aria-hidden="true" />
-            Diagnostics
+            <span className="fm-footer__tab-label">Diagnostics</span>
           </TabsTrigger>
           <TabsTrigger value="engine" className="fm-footer__tab" title="Runtime logs, solver profile and hardware">
             <FileText size={14} aria-hidden="true" />
-            Engine
+            <span className="fm-footer__tab-label">Engine</span>
           </TabsTrigger>
           <TabsTrigger value="operations" className="fm-footer__tab" title="Simulation progress: steps, timings, commands and errors">
             <ListChecks size={14} aria-hidden="true" />
-            Operations
+            <span className="fm-footer__tab-label">Operations</span>
           </TabsTrigger>
           <TabsTrigger value="problems" className="fm-footer__tab" title="Errors, warnings and preparation issues">
             <CircleAlert size={14} aria-hidden="true" />
-            Problems
+            <span className="fm-footer__tab-label">Problems</span>
           </TabsTrigger>
           <TabsTrigger value="quick-chart" className="fm-footer__tab" title="Pinned scientific chart">
-            <Activity size={14} aria-hidden="true" />
-            Quick Chart
+            <ChartSpline size={14} aria-hidden="true" />
+            <span className="fm-footer__tab-label">Quick Chart</span>
           </TabsTrigger>
         </TabsList>
         <div className="fm-footer__telemetry-header" hidden={activeTab !== "telemetry"}>
           <div className="fm-footer__telemetry-status" ref={setTelemetryStatusHost} />
           <div className="fm-footer__telemetry-navigation" ref={setTelemetryNavigationHost} />
         </div>
+        <TooltipProvider delayDuration={300}>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                aria-expanded={dockExpanded}
+                aria-label={dockExpanded ? "Collapse dock" : "Expand dock"}
+                className="fm-footer__toggle"
+                size="icon"
+                type="button"
+                variant="ghost"
+                onClick={() => toggleBottomDockExpanded()}
+              >
+                <ChevronDown aria-hidden="true" size={15} />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent side="top">
+              {dockExpanded ? "Collapse dock to its tab strip" : "Expand dock"}
+            </TooltipContent>
+          </Tooltip>
+        </TooltipProvider>
       </PanelChrome>
 
       <TabsContent value="logs" className={FOOTER_CONTENT_CLASS_NAME}>

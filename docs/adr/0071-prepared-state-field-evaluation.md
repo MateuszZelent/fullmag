@@ -197,3 +197,24 @@ blokowała go aż do końca biegu. W efekcie UI nie mogło wybrać `H_demag`, `H
 Dowód wymagany przed scaleniem: bieg FEM w Docker DEV pokazuje `H_demag` i `H_eff` na obiekcie
 oraz `H_demag` w Universe między krokami i po zakończeniu biegu.
 
+
+## Wariant FDM CPU dla interaktywnego Docker DEV
+
+`Compute Fields` może obliczyć obserwacje przygotowanej magnetyzacji na już
+zbudowanej siatce single-grid FDM z jawną konfiguracją CPU. Komenda ocenia
+aktywny model w kroku 0 na początku czasu planu. Używa opublikowanego
+przygotowanego `m`, jeśli istnieje, albo materializuje je z aktualnej sceny.
+Bramka Compute pozostaje wstrzymana. Komenda nie tworzy RunIntent ani zadania
+solverowego. `Compute Energies` i adopcja obserwacji zakończonych biegów
+zachowują swoje dotychczasowe ścieżki.
+
+Ta lokalna operacja DEV korzysta z budżetu istniejącego kontenera backendu.
+Jeden proces potomny wykonuje obliczenia FDM CPU poza procesem serwera.
+Wejście i wyjście mają limit 64 MiB, siatka 65 536 komórek, a ewaluacja
+90 sekund. Ścieżka nie obsługuje obciętych obrazów okresowych ani innych
+torów wykonania. Wyniki są bieżącą publikacją pól, powiązaną z ramką
+przygotowanej magnetyzacji i sprawdzoną względem rewizji sceny, domeny
+i magnetyzacji przed adopcją. Serializację na potrzeby przeglądarki zachowuje
+istniejący binarny data plane. Przekroczenie limitu lub zmiana wejścia
+kończą polecenie błędem bez adopcji pól. Docelowy mechanizm z osobnym leasem
+i trwałym pakietem pozostaje opisany w sekcji Decision.

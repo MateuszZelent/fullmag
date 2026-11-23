@@ -209,6 +209,9 @@ pub struct CapabilityMap {
     pub preview_2d: bool,
     pub preview_3d: bool,
     pub algorithms_available: Vec<String>,
+    /// Supported file formats for field-state imports (`POST /v2/sessions/current/persistence/field-states/imports`).
+    #[serde(default)]
+    pub field_state_import_formats: Vec<String>,
     /// Planner-owned operation gating for the currently resolved execution lane.
     pub active_lane: ActiveLaneCapabilitySnapshot,
     #[serde(skip_serializing_if = "Option::is_none")]

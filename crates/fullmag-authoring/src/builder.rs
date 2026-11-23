@@ -570,6 +570,7 @@ pub enum ScriptBuilderMagneticInteractionKind {
     RotatedInterfacialDmi,
     BulkDmi,
     UniaxialAnisotropy,
+    CubicAnisotropy,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]

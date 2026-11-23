@@ -7,7 +7,8 @@ import { pathToFileURL } from "node:url";
 
 const sourceRoot = new URL("../src/", import.meta.url);
 const panelsRoot = new URL("modules/inspector/panels/", sourceRoot);
-const panelPath = new URL("ObjectMaterialPanel.tsx", panelsRoot);
+const liveMaterialSpecPath = new URL("modules/inspector/inspectors/objects/material/ObjectMaterialSpec.tsx", sourceRoot);
+const liveMaterialCommitPath = new URL("modules/inspector/inspectors/objects/material/materialPhysicsAutoActivation.ts", sourceRoot);
 
 export async function loadMaterialAssignmentDraftSources() {
   const hook = registerHooks({
@@ -419,31 +420,27 @@ const retryDraftRebase = model.rebaseMagneticParametersDraftAfterAssignment({
 });
 assert.equal(model.magneticParametersDraftDirty(retryDraftRebase, retryCommittedBase), false);
 
-const panelSource = await readFile(panelPath, "utf8");
-const updateDraftStart = panelSource.indexOf("function updateDraft(");
-const updateDraftEnd = panelSource.indexOf("\n  function rebaseAssignedMaterialDraft", updateDraftStart);
-const updateDraftSource = panelSource.slice(updateDraftStart, updateDraftEnd);
-assert.ok(updateDraftStart >= 0 && updateDraftEnd > updateDraftStart);
-assert.ok(updateDraftSource.includes("updateResolvedInspectorDraftState({"));
-assert.ok(updateDraftSource.includes("currentState: draftStateForResolution(current)"));
-assert.ok(!updateDraftSource.includes("draftStateForResolution.draft"),
-  "the first field edit must resolve the functional updater's current state");
-const createStart = panelSource.indexOf("async function createAndAssignMaterial");
-const createRebase = panelSource.indexOf("rebaseAssignedMaterialDraft(", createStart);
-const createCatch = panelSource.indexOf("\n    } catch (error)", createStart);
-assert.ok(createStart >= 0 && createRebase > createStart && createRebase < createCatch);
-const createFailureBranch = panelSource.slice(createCatch, panelSource.indexOf("finally", createCatch));
-assert.ok(!createFailureBranch.includes("rebaseAssignedMaterialDraft"),
-  "material creation without assignment ACK must not rebase as if assigned");
-
-const retryStart = panelSource.indexOf("async function retryFailedAssignment");
-const retryRebase = panelSource.indexOf("rebaseAssignedMaterialDraft(", retryStart);
-const retryCatch = panelSource.indexOf("\n    } catch (error)", retryStart);
-assert.ok(retryStart >= 0 && retryRebase > retryStart && retryRebase < retryCatch,
-  "successful retry must use the same acknowledged material rebase");
-const retryFailureBranch = panelSource.slice(retryCatch, panelSource.indexOf("finally", retryCatch));
-assert.ok(!retryFailureBranch.includes("rebaseAssignedMaterialDraft"),
-  "a failed retry must leave its draft unacknowledged");
+const liveSpecSource = await readFile(liveMaterialSpecPath, "utf8");
+const liveCommitSource = await readFile(liveMaterialCommitPath, "utf8");
+assert.ok(
+  liveSpecSource.includes("magneticParameterMaterialResourceFromSceneResource(activeSceneMatId, scene.data)"),
+  "live ObjectMaterialSpec must resolve acknowledged material parameters from committed scene resources",
+);
+assert.ok(
+  liveSpecSource.includes("createMaterialAssetThenAssign(") &&
+    liveSpecSource.includes("MaterialAssignmentAfterCreateError"),
+  "live ObjectMaterialSpec must preserve retryable MaterialAssignmentAfterCreateError recovery",
+);
+assert.ok(
+  liveSpecSource.includes("handleRetryFailedAssignment") &&
+    liveSpecSource.includes("pendingAssignmentError"),
+  "live ObjectMaterialSpec must expose retry recovery for failed post-create assignment",
+);
+assert.ok(
+  liveCommitSource.includes("assignToObjectId: objectId") &&
+    liveCommitSource.includes("MaterialAssignmentAfterCreateError"),
+  "live material commit helper must atomically assign magnetic bodies or surface retryable assignment errors",
+);
 
 const result = {
   schema: "fullmag.control-room.check-result.v1",

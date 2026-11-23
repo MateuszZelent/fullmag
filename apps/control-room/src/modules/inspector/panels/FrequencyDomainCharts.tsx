@@ -22,10 +22,11 @@ import type {
 import { eigenModeFieldAvailable } from "@/shared/domain/analysis/frequencyDomainChartModels";
 import { formatFrequencyHz } from "@/shared/domain/analysis/frequencyUnits";
 import { Button } from "@/shared/ui/Button";
+import { SegmentedControl } from "@/shared/ui/SegmentedControl";
 import { keyedOccurrences } from "@/shared/utils/keyedOccurrences";
 
 function formatNumber(value: number): string {
-  if (!Number.isFinite(value)) return "n/a";
+  if (!Number.isFinite(value)) return "—";
   if (Math.abs(value) >= 1e4 || (value !== 0 && Math.abs(value) < 1e-3)) {
     return value.toExponential(3);
   }
@@ -270,36 +271,27 @@ export function FrequencyDomainResponseChart({
       xLabel="frequency"
     >
       <div className="fm-frequency-domain-chart__controls">
-        <label className="fm-frequency-domain-chart__control">
+        <div className="fm-frequency-domain-chart__control">
           <span>Response component</span>
-          <select
+          <SegmentedControl
             aria-label="Response component"
-            className="fm-inspector-select"
+            options={observableOptions}
             value={effectiveObservable}
-            onChange={(event) => setSelectedObservable(event.target.value)}
-          >
-            {observableOptions.map((option) => (
-              <option key={option.value} value={option.value}>
-                {option.label}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label className="fm-frequency-domain-chart__control">
+            onValueChange={setSelectedObservable}
+          />
+        </div>
+        <div className="fm-frequency-domain-chart__control">
           <span>Chart quantity</span>
-          <select
+          <SegmentedControl
             aria-label="Chart quantity"
-            className="fm-inspector-select"
+            options={quantityOptions.map((option) => ({
+              label: `${option.label} [${option.unit}]`,
+              value: option.value,
+            }))}
             value={effectiveQuantity}
-            onChange={(event) => setSelectedQuantity(event.target.value)}
-          >
-            {quantityOptions.map((option) => (
-              <option key={option.value} value={option.value}>
-                {option.label} [{option.unit}]
-              </option>
-            ))}
-          </select>
-        </label>
+            onValueChange={setSelectedQuantity}
+          />
+        </div>
       </div>
       {keyedOccurrences(chartPoints, (point) => JSON.stringify([
         point.observableId,
@@ -332,7 +324,6 @@ export function FrequencyDomainResponseChart({
               className="fm-frequency-domain-chart__mode"
               disabled={!point.fieldId}
               size="sm"
-              title={point.fieldId ? "Load response field in 3D" : "Response field missing"}
               type="button"
               variant="secondary"
               onClick={() => onPlotPoint?.(point)}

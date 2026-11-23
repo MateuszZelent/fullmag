@@ -930,4 +930,17 @@ describe("orientation snaps after a damped orbit", () => {
     expect(() => clearOrientationCameraMomentum(controls)).toThrow("update failed");
     expect(controls.enableDamping).toBe(true);
   });
+
+  it("disables OrbitControls left-drag rotation in active texture gizmo modes while preserving wheel zoom and right-drag pan", () => {
+    const unlocked = resolveViewport3DCameraInteractionOptions({ rotateLocked: false });
+    expect(unlocked.enableRotate).toBe(true);
+    expect(unlocked.enablePan).toBe(true);
+    expect(unlocked.enableZoom).toBe(true);
+
+    const locked = resolveViewport3DCameraInteractionOptions({ rotateLocked: true });
+    expect(locked.enableRotate).toBe(false);
+    expect(locked.enablePan).toBe(true);
+    expect(locked.enableZoom).toBe(true);
+    expect(locked.enableDamping).toBe(true);
+  });
 });

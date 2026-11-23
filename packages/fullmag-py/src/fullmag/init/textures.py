@@ -128,6 +128,7 @@ class TextureTransform3D:
     rotation_quat: Quat = (0.0, 0.0, 0.0, 1.0)
     scale: Vec3 = (1.0, 1.0, 1.0)
     pivot: Vec3 = (0.0, 0.0, 0.0)
+    rotate_vectors: bool = True
 
     def translate(self, dx: float, dy: float, dz: float) -> "TextureTransform3D":
         tx, ty, tz = self.translation
@@ -162,27 +163,67 @@ class TextureTransform3D:
     def set_pivot(self, pivot: Sequence[float]) -> "TextureTransform3D":
         return replace(self, pivot=_vec3(pivot, "pivot"))
 
+    def set_rotate_vectors(self, rotate_vectors: bool) -> "TextureTransform3D":
+        if not isinstance(rotate_vectors, bool):
+            raise ValueError("rotate_vectors must be a boolean")
+        return replace(self, rotate_vectors=rotate_vectors)
+
     def to_ir(self) -> dict[str, object]:
         return {
             "translation": list(self.translation),
             "rotation_quat": list(self.rotation_quat),
             "scale": list(self.scale),
             "pivot": list(self.pivot),
+            "rotate_vectors": self.rotate_vectors,
         }
 
 
 @dataclass(frozen=True, slots=True)
 class TextureMapping:
-    space: Literal["object", "world"] = "object"
+    space: Literal["object", "region", "world"] = "object"
     projection: str = "object_local"
-    clamp_mode: Literal["clamp", "repeat", "mirror", "none"] = "none"
+    clamp_mode: Literal["clamp", "repeat", "mirror", "none", "background"] = "none"
+    tile_period: Vec3 | None = None
+    background_vector: Vec3 | None = None
+    axis_extent_mode: Literal["uniform", "thickness"] = "uniform"
+    axis_thickness_m: float | None = None
+
+    def __post_init__(self) -> None:
+        if self.axis_extent_mode not in ("uniform", "thickness"):
+            raise ValueError(
+                f"axis_extent_mode must be 'uniform' or 'thickness', got {self.axis_extent_mode!r}"
+            )
+        if self.axis_extent_mode == "thickness":
+            if self.axis_thickness_m is None:
+                raise ValueError(
+                    "axis_thickness_m is required when axis_extent_mode == 'thickness'"
+                )
+        if self.axis_thickness_m is not None:
+            if isinstance(self.axis_thickness_m, bool) or not isinstance(
+                self.axis_thickness_m, (int, float)
+            ):
+                raise ValueError("axis_thickness_m must be a positive finite number")
+            thickness = float(self.axis_thickness_m)
+            if not math.isfinite(thickness) or thickness <= 0.0:
+                raise ValueError("axis_thickness_m must be finite and positive")
 
     def to_ir(self) -> dict[str, object]:
-        return {
+        result: dict[str, object] = {
             "space": self.space,
             "projection": self.projection,
             "clamp_mode": self.clamp_mode,
         }
+        if self.tile_period is not None:
+            result["tile_period"] = list(_vec3(self.tile_period, "tile_period"))
+        if self.background_vector is not None:
+            result["background_vector"] = list(
+                _vec3(self.background_vector, "background_vector")
+            )
+        if self.axis_extent_mode != "uniform":
+            result["axis_extent_mode"] = self.axis_extent_mode
+        if self.axis_thickness_m is not None:
+            result["axis_thickness_m"] = float(self.axis_thickness_m)
+        return result
 
 
 @dataclass(frozen=True, slots=True)
@@ -230,21 +271,56 @@ class PresetTexture:
     def with_mapping(
         self,
         *,
-        space: Literal["object", "world"] | None = None,
+        space: Literal["object", "region", "world"] | None = None,
         projection: str | None = None,
-        clamp_mode: Literal["clamp", "repeat", "mirror"] | None = None,
+        clamp_mode: Literal["none", "clamp", "repeat", "mirror", "background"] | None = None,
+        tile_period: Sequence[float] | None = None,
+        background_vector: Sequence[float] | None = None,
+        axis_extent_mode: Literal["uniform", "thickness"] | None = None,
+        axis_thickness_m: float | None = None,
     ) -> "PresetTexture":
+        resolved_tile_period = (
+            _vec3(tile_period, "tile_period")
+            if tile_period is not None
+            else self.mapping.tile_period
+        )
+        resolved_background = (
+            _vec3(background_vector, "background_vector")
+            if background_vector is not None
+            else self.mapping.background_vector
+        )
+        resolved_axis_extent_mode = (
+            axis_extent_mode if axis_extent_mode is not None else self.mapping.axis_extent_mode
+        )
+        resolved_axis_thickness_m = (
+            float(axis_thickness_m)
+            if axis_thickness_m is not None
+            else self.mapping.axis_thickness_m
+        )
         return replace(
             self,
             mapping=TextureMapping(
                 space=space if space is not None else self.mapping.space,
                 projection=projection if projection is not None else self.mapping.projection,
                 clamp_mode=clamp_mode if clamp_mode is not None else self.mapping.clamp_mode,
+                tile_period=resolved_tile_period,
+                background_vector=resolved_background,
+                axis_extent_mode=resolved_axis_extent_mode,
+                axis_thickness_m=resolved_axis_thickness_m,
             ),
+        )
+
+    def with_thickness(self, axis_thickness_m: float) -> "PresetTexture":
+        return self.with_mapping(
+            axis_extent_mode="thickness",
+            axis_thickness_m=axis_thickness_m,
         )
 
     def with_pivot(self, pivot: Sequence[float]) -> "PresetTexture":
         return replace(self, transform=self.transform.set_pivot(pivot))
+
+    def with_rotate_vectors(self, rotate_vectors: bool) -> "PresetTexture":
+        return replace(self, transform=self.transform.set_rotate_vectors(rotate_vectors))
 
     def to_ir(self) -> dict[str, object]:
         return {
@@ -895,6 +971,163 @@ class texture:
                 "cone_axis": list(axis_vec),
                 "cone_angle_rad": angle_value,
                 "phase_rad": phase_value,
+            },
+            preview_proxy="box",
+        )
+
+    @staticmethod
+    def skyrmion_lattice(
+        lattice_constant: float,
+        radius: float,
+        wall_width: float,
+        lattice: Literal["hexagonal", "square"] = "hexagonal",
+        kind: Literal["bloch", "neel"] = "bloch",
+        chirality: int = 1,
+        core_polarity: int = -1,
+        plane: Literal["xy", "xz", "yz"] = "xy",
+        *,
+        preset_version: int = 2,
+    ) -> PresetTexture:
+        _require_v2_preset(preset_version, "skyrmion_lattice")
+        lattice_constant = _require_finite_positive(lattice_constant, "lattice_constant")
+        radius = _require_finite_positive(radius, "radius")
+        if lattice_constant <= 2.0 * radius:
+            raise ValueError("lattice_constant must be strictly greater than 2 * radius")
+        wall_width = _require_finite_positive(wall_width, "wall_width")
+        if lattice not in ("hexagonal", "square"):
+            raise ValueError("lattice must be 'hexagonal' or 'square'")
+        if kind not in ("bloch", "neel"):
+            raise ValueError("kind must be 'bloch' or 'neel'")
+        chirality = _require_sign(chirality, "chirality")
+        core_polarity = _require_sign(core_polarity, "core_polarity")
+        plane = _require_plane(plane)
+        return PresetTexture(
+            preset_version=2,
+            preset_kind="skyrmion_lattice",
+            params={
+                "lattice": lattice,
+                "lattice_constant": lattice_constant,
+                "radius": radius,
+                "wall_width": wall_width,
+                "kind": kind,
+                "chirality": chirality,
+                "core_polarity": core_polarity,
+                "plane": plane,
+            },
+            preview_proxy="disc",
+        )
+
+    @staticmethod
+    def spiral(
+        wavelength: float,
+        spiral_kind: Literal["cycloidal", "proper_screw", "custom_plane"] = "cycloidal",
+        propagation_axis: Sequence[float] = (1.0, 0.0, 0.0),
+        spin_plane_normal: Sequence[float] | None = None,
+        chirality: int = 1,
+        phase_rad: float = 0.0,
+        *,
+        preset_version: int = 2,
+    ) -> PresetTexture:
+        _require_v2_preset(preset_version, "spiral")
+        wavelength = _require_finite_positive(wavelength, "wavelength")
+        if spiral_kind not in ("cycloidal", "proper_screw", "custom_plane"):
+            raise ValueError("spiral_kind must be 'cycloidal', 'proper_screw', or 'custom_plane'")
+        q_hat = _normalized_vec3(_vec3(propagation_axis, "propagation_axis"), "propagation_axis")
+        if spin_plane_normal is None:
+            if spiral_kind == "proper_screw":
+                n_s = q_hat
+            else:
+                default_normal = (0.0, 1.0, 0.0) if abs(q_hat[1]) < 0.9 else (0.0, 0.0, 1.0)
+                n_s = _normalized_vec3(default_normal, "spin_plane_normal")
+        else:
+            n_s = _normalized_vec3(_vec3(spin_plane_normal, "spin_plane_normal"), "spin_plane_normal")
+        if spiral_kind == "cycloidal" and abs(_dot_vec3(n_s, q_hat)) > 1.0 - 1e-6:
+            raise ValueError(
+                "spin_plane_normal must not be parallel to propagation_axis for a cycloidal spiral"
+            )
+        chirality = _require_sign(chirality, "chirality")
+        phase_value = float(phase_rad)
+        if not math.isfinite(phase_value):
+            raise ValueError("phase_rad must be finite")
+        return PresetTexture(
+            preset_version=2,
+            preset_kind="spiral",
+            params={
+                "spiral_kind": spiral_kind,
+                "wavelength": wavelength,
+                "propagation_axis": list(q_hat),
+                "spin_plane_normal": list(n_s),
+                "chirality": chirality,
+                "phase_rad": phase_value,
+            },
+            preview_proxy="box",
+        )
+
+    @staticmethod
+    def bloch_point(
+        bp_kind: Literal["radial", "circulating", "hyperbolic"] = "circulating",
+        polarity: int = 1,
+        twist_rad: float | None = None,
+        core_radius: float = 1.0e-9,
+        *,
+        preset_version: int = 2,
+    ) -> PresetTexture:
+        """Create a 3D Bloch point singularity preset (v2).
+
+        ``core_radius`` is validated positive as the physical core-indicator /
+        preview proxy radius while the analytic magnetization field follows
+        ``docs/physics/0534`` (exact scale-invariant 3D unit-sphere hedgehog
+        with regular origin limit ``polarity * (0, 0, sz)`` for ``r <= 1e-15 m``).
+        """
+        _require_v2_preset(preset_version, "bloch_point")
+        if bp_kind not in ("radial", "circulating", "hyperbolic"):
+            raise ValueError("bp_kind must be 'radial', 'circulating', or 'hyperbolic'")
+        polarity = _require_sign(polarity, "polarity")
+        if twist_rad is None:
+            twist_value = math.pi / 2.0 if bp_kind == "circulating" else 0.0
+        else:
+            twist_value = float(twist_rad)
+            if not math.isfinite(twist_value):
+                raise ValueError("twist_rad must be finite")
+        core_radius = _require_finite_positive(core_radius, "core_radius")
+        return PresetTexture(
+            preset_version=2,
+            preset_kind="bloch_point",
+            params={
+                "bp_kind": bp_kind,
+                "polarity": polarity,
+                "twist_rad": twist_value,
+                "core_radius": core_radius,
+            },
+            preview_proxy="sphere",
+        )
+
+    @staticmethod
+    def artificial_spin_ice(
+        pitch: float,
+        lattice: Literal["square", "kagome"] = "square",
+        vertex_state: Literal["type_i_ground", "type_ii_polarized", "monopole_pair"] = "type_i_ground",
+        plane: Literal["xy", "xz", "yz"] = "xy",
+        *,
+        preset_version: int = 2,
+    ) -> PresetTexture:
+        _require_v2_preset(preset_version, "artificial_spin_ice")
+        pitch = _require_finite_positive(pitch, "pitch")
+        if lattice not in ("square", "kagome"):
+            raise ValueError("lattice must be 'square' or 'kagome'")
+        if vertex_state not in ("type_i_ground", "type_ii_polarized", "monopole_pair"):
+            raise ValueError(
+                "vertex_state must be 'type_i_ground', 'type_ii_polarized', or 'monopole_pair'"
+            )
+        plane = _require_plane(plane)
+        return PresetTexture(
+            preset_version=2,
+            preset_kind="artificial_spin_ice",
+            params={
+                "lattice": lattice,
+                "vertex_state": vertex_state,
+                "pitch": pitch,
+                "plane": plane,
             },
             preview_proxy="box",
         )

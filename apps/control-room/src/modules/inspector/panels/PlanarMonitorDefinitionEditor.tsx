@@ -1,14 +1,38 @@
 "use client";
 
-import type { PlanarLengthUnit, PlanarMonitor, PlanarMonitorDraft, PlanarMonitorOperator, PlanarMonitorTarget } from "@/kernel/workspace/crossSectionWorkspace";
+import { useId, type ReactNode } from "react";
+
+import type {
+  PlanarLengthUnit,
+  PlanarMonitor,
+  PlanarMonitorDraft,
+  PlanarMonitorOperator,
+  PlanarMonitorTarget,
+} from "@/kernel/workspace/crossSectionWorkspace";
 import { convertLength } from "@/kernel/workspace/crossSectionWorkspace";
 import { resolvePlanarMonitorPreviewSupport } from "@/kernel/workspace/planarMonitorFramePreview";
+import { Input } from "@/shared/ui/Input";
+import { SegmentedControl } from "@/shared/ui/SegmentedControl";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/shared/ui/Select";
 
 import { FieldRow } from "../primitives/FieldRow";
-import { FormField } from "../primitives/FormField";
 import { InspectorGroup } from "../primitives/InspectorGroup";
+import { InspectorPropertyRow } from "../primitives/InspectorPropertyRow";
 import { Vector3Field } from "../primitives/Vector3Field";
-import { type PlanarMonitorDefinitionAvailability, type TargetKind, TARGETS, type OperatorKind, OPERATORS, type Availability } from "./PlanarMonitorDefinitionEditor.model";
+import {
+  type Availability,
+  type OperatorKind,
+  OPERATORS,
+  type PlanarMonitorDefinitionAvailability,
+  type TargetKind,
+  TARGETS,
+} from "./PlanarMonitorDefinitionEditor.model";
 
 type ExtentKind = PlanarMonitor["frame"]["extent"]["kind"];
 
@@ -16,6 +40,7 @@ interface Props {
   availability: PlanarMonitorDefinitionAvailability;
   draft: PlanarMonitorDraft;
   mode?: "create" | "committed";
+  pickFaceSlot?: ReactNode;
   onChange: (draft: PlanarMonitorDraft) => void;
 }
 const EXTENTS: readonly ExtentKind[] = [
@@ -26,7 +51,103 @@ const EXTENTS: readonly ExtentKind[] = [
 ];
 const LENGTH_UNITS: readonly PlanarLengthUnit[] = ["m", "mm", "um", "nm"];
 
-export function PlanarMonitorDefinitionEditor({ availability, draft, mode = "create", onChange }: Props) {
+interface SelectOption<T extends string = string> {
+  readonly disabled?: boolean;
+  readonly label: string;
+  readonly value: T;
+}
+
+function PlanarTextField({
+  labelText,
+  onValueChange,
+  readOnly = false,
+  type = "text",
+  unit,
+  value,
+}: {
+  labelText: string;
+  onValueChange: (value: string) => void;
+  readOnly?: boolean;
+  type?: "text" | "number";
+  unit?: string;
+  value: string | number;
+}) {
+  const id = useId();
+  return (
+    <InspectorPropertyRow
+      className="fm-inspector-form-field"
+      label={
+        <label className="fm-inspector-form-field__label" htmlFor={id}>
+          {labelText}
+        </label>
+      }
+      layout="stacked"
+    >
+      <div className="fm-inspector-form-field__control">
+        <Input
+          aria-label={labelText}
+          id={id}
+          readOnly={readOnly}
+          type={type}
+          value={String(value)}
+          onChange={(event) => onValueChange(event.currentTarget.value)}
+          onInput={(event) => onValueChange(event.currentTarget.value)}
+        />
+        {unit ? <span className="fm-inspector-form-field__unit">{unit}</span> : null}
+      </div>
+    </InspectorPropertyRow>
+  );
+}
+
+function PlanarSelectField<T extends string>({
+  labelText,
+  onValueChange,
+  options,
+  value,
+}: {
+  labelText: string;
+  onValueChange: (value: T) => void;
+  options: readonly SelectOption<T>[];
+  value: T;
+}) {
+  const id = useId();
+  return (
+    <InspectorPropertyRow
+      className="fm-inspector-form-field"
+      label={
+        <label className="fm-inspector-form-field__label" htmlFor={id}>
+          {labelText}
+        </label>
+      }
+      layout="stacked"
+    >
+      <Select value={value} onValueChange={(next) => onValueChange(next as T)}>
+        <SelectTrigger aria-label={labelText} id={id}>
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent>
+          {options.map((option) => (
+            <SelectItem
+              disabled={option.disabled}
+              key={option.value}
+              value={option.value}
+            >
+              {option.label}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+    </InspectorPropertyRow>
+  );
+}
+
+export function PlanarMonitorDefinitionEditor({
+  availability,
+  draft,
+  mode = "create",
+  pickFaceSlot,
+  onChange,
+}: Props) {
   const { monitor, ui } = draft;
   const unit = ui.displayLengthUnit;
   const updateMonitor = (next: PlanarMonitor) => onChange({ ...draft, monitor: next });
@@ -55,104 +176,103 @@ export function PlanarMonitorDefinitionEditor({ availability, draft, mode = "cre
   return (
     <div className="fm-planar-monitor-definition-editor">
       <InspectorGroup title="Identity">
-        <FormField
-          label="Monitor ID"
+        <PlanarTextField
+          labelText="Monitor ID"
           readOnly={mode === "committed"}
-          type="text"
           value={monitor.id}
-          onChange={(event) => updateMonitor({ ...monitor, id: event.currentTarget.value })}
+          onValueChange={(next) => updateMonitor({ ...monitor, id: next })}
         />
-        <FormField
-          label="Name"
-          type="text"
+        <PlanarTextField
+          labelText="Name"
           value={monitor.name}
-          onChange={(event) => updateMonitor({ ...monitor, name: event.currentTarget.value })}
+          onValueChange={(next) => updateMonitor({ ...monitor, name: next })}
         />
-        <FormField
-          label="Length unit"
-          type="select"
+        <PlanarSelectField<PlanarLengthUnit>
+          labelText="Length unit"
+          options={LENGTH_UNITS.map((entry) => ({ label: entry, value: entry }))}
           value={unit}
-          onChange={(event) =>
+          onValueChange={(nextUnit) =>
             onChange({
               ...draft,
-              ui: { ...ui, displayLengthUnit: event.currentTarget.value as PlanarLengthUnit },
+              ui: { ...ui, displayLengthUnit: nextUnit },
             })
           }
-        >
-          {LENGTH_UNITS.map((entry) => <option key={entry} value={entry}>{entry}</option>)}
-        </FormField>
+        />
       </InspectorGroup>
 
       <InspectorGroup title="Target">
-        <FormField
-          label="Target kind"
-          type="select"
+        <PlanarSelectField<TargetKind>
+          labelText="Target kind"
+          options={TARGETS.map((kind) => ({
+            disabled: availability.targets?.[kind]?.available === false,
+            label: label(kind),
+            value: kind,
+          }))}
           value={monitor.target.kind}
-          onChange={(event) =>
+          onValueChange={(nextKind) =>
             updateMonitor({
               ...monitor,
-              target: targetForKind(event.currentTarget.value as TargetKind),
+              target: targetForKind(nextKind),
             })
           }
-        >
-          {TARGETS.map((kind) => (
-            <option
-              key={kind}
-              disabled={availability.targets?.[kind]?.available === false}
-              value={kind}
-            >
-              {label(kind)}
-            </option>
-          ))}
-        </FormField>
+        />
         {monitor.target.kind === "object" || monitor.target.kind === "region" ? (
-          <FormField
-            label="Object ID"
-            type="text"
+          <PlanarTextField
+            labelText="Object ID"
             value={monitor.target.object_id}
-            onChange={(event) => updateMonitor({
-              ...monitor,
-              target: monitor.target.kind === "region"
-                ? { ...monitor.target, object_id: event.currentTarget.value }
-                : { kind: "object", object_id: event.currentTarget.value },
-            })}
+            onValueChange={(next) =>
+              updateMonitor({
+                ...monitor,
+                target:
+                  monitor.target.kind === "region"
+                    ? { ...monitor.target, object_id: next }
+                    : { kind: "object", object_id: next },
+              })
+            }
           />
         ) : null}
         {monitor.target.kind === "region" ? (
-          <FormField
-            label="Region ID"
-            type="text"
+          <PlanarTextField
+            labelText="Region ID"
             value={monitor.target.region_id}
-            onChange={(event) => updateMonitor({
-              ...monitor,
-              target: {
-                kind: "region",
-                object_id: monitor.target.kind === "region" ? monitor.target.object_id : "",
-                region_id: event.currentTarget.value,
-              },
-            })}
+            onValueChange={(next) =>
+              updateMonitor({
+                ...monitor,
+                target: {
+                  kind: "region",
+                  object_id:
+                    monitor.target.kind === "region" ? monitor.target.object_id : "",
+                  region_id: next,
+                },
+              })
+            }
           />
         ) : null}
         <AvailabilityReasons entries={availability.targets} kinds={TARGETS} />
       </InspectorGroup>
 
       <InspectorGroup title="Frame">
-        <FormField
-          label="Frame preset"
-          type="select"
-          value={monitor.frame.preset ?? "arbitrary"}
-          onChange={(event) =>
-            updateFrame(frameForPreset(
-              event.currentTarget.value as "arbitrary" | "xy" | "xz" | "yz",
-              monitor.frame,
-            ))
-          }
+        <InspectorPropertyRow
+          className="fm-inspector-form-field"
+          label={<span className="fm-inspector-form-field__label">Frame preset</span>}
+          layout="stacked"
         >
-          <option value="xy">XY</option>
-          <option value="xz">XZ</option>
-          <option value="yz">YZ</option>
-          <option value="arbitrary">Arbitrary</option>
-        </FormField>
+          <SegmentedControl<"xy" | "xz" | "yz" | "arbitrary">
+            aria-label="Frame preset"
+            columns={4}
+            options={[
+              { value: "xy", label: "XY (+z)" },
+              { value: "xz", label: "XZ (+y)" },
+              { value: "yz", label: "YZ (+x)" },
+              { value: "arbitrary", label: "Arbitrary" },
+            ]}
+            value={monitor.frame.preset ?? "arbitrary"}
+            onValueChange={(nextPreset) =>
+              updateFrame(frameForPreset(nextPreset, monitor.frame))
+            }
+          />
+        </InspectorPropertyRow>
+        {pickFaceSlot}
         <Vector3Field
           label="Origin"
           unit={unit}
@@ -174,52 +294,49 @@ export function PlanarMonitorDefinitionEditor({ availability, draft, mode = "cre
           values={displayVector("v_axis")}
           onChange={(index, value) => updateVector("v_axis", index, value)}
         />
-        <FormField
-          label="Normalization version"
-          type="text"
+        <PlanarTextField
+          labelText="Normalization version"
           value={monitor.frame.normalization_version}
-          onChange={(event) => updateFrame({
-            ...monitor.frame,
-            normalization_version: event.currentTarget.value,
-          })}
+          onValueChange={(next) =>
+            updateFrame({
+              ...monitor.frame,
+              normalization_version: next,
+            })
+          }
         />
       </InspectorGroup>
 
       <InspectorGroup title="Extent">
-        <FormField
-          label="Extent kind"
-          type="select"
+        <PlanarSelectField<ExtentKind>
+          labelText="Extent kind"
+          options={EXTENTS.map((kind) => ({ label: label(kind), value: kind }))}
           value={monitor.frame.extent.kind}
-          onChange={(event) => updateFrame({
-            ...monitor.frame,
-            extent: extentForKind(event.currentTarget.value as ExtentKind),
-          })}
-        >
-          {EXTENTS.map((kind) => <option key={kind} value={kind}>{label(kind)}</option>)}
-        </FormField>
+          onValueChange={(nextKind) =>
+            updateFrame({
+              ...monitor.frame,
+              extent: extentForKind(nextKind),
+            })
+          }
+        />
         <ExtentFields draft={draft} onChange={onChange} />
       </InspectorGroup>
 
       <InspectorGroup title="Operator">
-        <FormField
-          label="Operator kind"
-          type="select"
+        <PlanarSelectField<OperatorKind>
+          labelText="Operator kind"
+          options={OPERATORS.map((kind) => ({
+            disabled: availability.operators?.[kind]?.available === false,
+            label: label(kind),
+            value: kind,
+          }))}
           value={monitor.operator.kind}
-          onChange={(event) => updateMonitor({
-            ...monitor,
-            operator: operatorForKind(event.currentTarget.value as OperatorKind),
-          })}
-        >
-          {OPERATORS.map((kind) => (
-            <option
-              key={kind}
-              disabled={availability.operators?.[kind]?.available === false}
-              value={kind}
-            >
-              {label(kind)}
-            </option>
-          ))}
-        </FormField>
+          onValueChange={(nextKind) =>
+            updateMonitor({
+              ...monitor,
+              operator: operatorForKind(nextKind),
+            })
+          }
+        />
         <OperatorFields availability={availability} draft={draft} onChange={onChange} />
         {previewSupport.status === "unavailable" ? (
           <FieldRow label="3D preview" value={previewSupport.reason} />
@@ -235,72 +352,101 @@ function ExtentFields({ draft, onChange }: Pick<Props, "draft" | "onChange">) {
   const extent = monitor.frame.extent;
   const unit = ui.displayLengthUnit;
   const update = (next: PlanarMonitor["frame"]["extent"]) =>
-    onChange({ ...draft, monitor: { ...monitor, frame: { ...monitor.frame, extent: next } } });
+    onChange({
+      ...draft,
+      monitor: { ...monitor, frame: { ...monitor.frame, extent: next } },
+    });
   const length = (value: number) => convertLength(value, "m", unit);
   const si = (value: string) => convertLength(Number(value), unit, "m");
   if (extent.kind !== "explicit") {
     return (
-      <FormField
-        label="Padding"
+      <PlanarTextField
+        labelText="Padding"
         type="number"
         unit={unit}
         value={length(extent.padding_m)}
-        onChange={(event) => update({ ...extent, padding_m: si(event.currentTarget.value) })}
+        onValueChange={(next) => update({ ...extent, padding_m: si(next) })}
       />
     );
   }
   return (
     <>
       {(["u_min_m", "u_max_m", "v_min_m", "v_max_m"] as const).map((key) => (
-        <FormField
+        <PlanarTextField
           key={key}
-          label={label(key)}
+          labelText={label(key)}
           type="number"
           unit={unit}
           value={length(extent[key])}
-          onChange={(event) => update({ ...extent, [key]: si(event.currentTarget.value) })}
+          onValueChange={(next) => update({ ...extent, [key]: si(next) })}
         />
       ))}
     </>
   );
 }
 
-function OperatorFields({ availability, draft, onChange }: Pick<Props, "availability" | "draft" | "onChange">) {
+function OperatorFields({
+  availability,
+  draft,
+  onChange,
+}: Pick<Props, "availability" | "draft" | "onChange">) {
   const { monitor, ui } = draft;
   const operator = monitor.operator;
   const update = (next: PlanarMonitorOperator) =>
     onChange({ ...draft, monitor: { ...monitor, operator: next } });
   if (operator.kind === "slab_average") {
     return (
-      <FormField
-        label="Slab thickness"
+      <PlanarTextField
+        labelText="Slab thickness"
         type="number"
         unit={ui.displayLengthUnit}
         value={convertLength(operator.thickness_m, "m", ui.displayLengthUnit)}
-        onChange={(event) => update({
-          kind: "slab_average",
-          thickness_m: convertLength(Number(event.currentTarget.value), ui.displayLengthUnit, "m"),
-        })}
+        onValueChange={(next) =>
+          update({
+            kind: "slab_average",
+            thickness_m: convertLength(Number(next), ui.displayLengthUnit, "m"),
+          })
+        }
       />
     );
   }
   if (operator.kind === "depth_projection") {
     return (
       <>
-        <FormField label="Reduction" type="select" value={operator.reduction} onChange={(event) => update({
-          ...operator,
-          reduction: event.currentTarget.value as typeof operator.reduction,
-        })}>
-          {(["mean_occupied", "thickness_integral", "rms", "min", "max", "abs_max"] as const)
-            .map((entry) => <option key={entry} value={entry}>{label(entry)}</option>)}
-        </FormField>
-        <FormField label="Empty policy" type="select" value={operator.empty_policy} onChange={(event) => update({
-          ...operator,
-          empty_policy: event.currentTarget.value as typeof operator.empty_policy,
-        })}>
-          <option value="exclude_empty">Exclude empty</option>
-          <option value="include_air_as_zero">Include air as zero</option>
-        </FormField>
+        <PlanarSelectField<typeof operator.reduction>
+          labelText="Reduction"
+          options={(
+            [
+              "mean_occupied",
+              "thickness_integral",
+              "rms",
+              "min",
+              "max",
+              "abs_max",
+            ] as const
+          ).map((entry) => ({ label: label(entry), value: entry }))}
+          value={operator.reduction}
+          onValueChange={(nextReduction) =>
+            update({
+              ...operator,
+              reduction: nextReduction,
+            })
+          }
+        />
+        <PlanarSelectField<typeof operator.empty_policy>
+          labelText="Empty policy"
+          options={[
+            { label: "Exclude empty", value: "exclude_empty" },
+            { label: "Include air as zero", value: "include_air_as_zero" },
+          ]}
+          value={operator.empty_policy}
+          onValueChange={(nextPolicy) =>
+            update({
+              ...operator,
+              empty_policy: nextPolicy,
+            })
+          }
+        />
       </>
     );
   }
@@ -308,35 +454,65 @@ function OperatorFields({ availability, draft, onChange }: Pick<Props, "availabi
   const boundary = operator.boundary;
   return (
     <>
-      <FormField label="Boundary selector" type="select" value={boundary.kind} onChange={(event) => update({
-        ...operator,
-        boundary: boundaryForKind(event.currentTarget.value as typeof boundary.kind),
-      })}>
-        {(["object_boundary", "region_boundary", "named_surface"] as const).map((kind) => (
-          <option key={kind} disabled={availability.surfaceBoundaries?.[kind]?.available === false} value={kind}>
-            {label(kind)}
-          </option>
-        ))}
-      </FormField>
+      <PlanarSelectField<typeof boundary.kind>
+        labelText="Boundary selector"
+        options={(
+          ["object_boundary", "region_boundary", "named_surface"] as const
+        ).map((kind) => ({
+          disabled: availability.surfaceBoundaries?.[kind]?.available === false,
+          label: label(kind),
+          value: kind,
+        }))}
+        value={boundary.kind}
+        onValueChange={(nextKind) =>
+          update({
+            ...operator,
+            boundary: boundaryForKind(nextKind),
+          })
+        }
+      />
       {boundary.kind === "region_boundary" ? (
-        <FormField label="Boundary region ID" type="text" value={boundary.region_id} onChange={(event) => update({
-          ...operator,
-          boundary: { ...boundary, region_id: event.currentTarget.value },
-        })} />
+        <PlanarTextField
+          labelText="Boundary region ID"
+          value={boundary.region_id}
+          onValueChange={(next) =>
+            update({
+              ...operator,
+              boundary: { ...boundary, region_id: next },
+            })
+          }
+        />
       ) : null}
       {boundary.kind === "named_surface" ? (
-        <FormField label="Surface ID" type="text" value={boundary.surface_id} onChange={(event) => update({
-          ...operator,
-          boundary: { ...boundary, surface_id: event.currentTarget.value },
-        })} />
+        <PlanarTextField
+          labelText="Surface ID"
+          value={boundary.surface_id}
+          onValueChange={(next) =>
+            update({
+              ...operator,
+              boundary: { ...boundary, surface_id: next },
+            })
+          }
+        />
       ) : null}
-      <FormField label="Visibility policy" type="select" value={operator.visibility_policy} onChange={(event) => update({
-        ...operator,
-        visibility_policy: event.currentTarget.value as typeof operator.visibility_policy,
-      })}>
-        {(["frontmost", "backmost", "nearest_to_origin", "area_weighted_overlap"] as const)
-          .map((entry) => <option key={entry} value={entry}>{label(entry)}</option>)}
-      </FormField>
+      <PlanarSelectField<typeof operator.visibility_policy>
+        labelText="Visibility policy"
+        options={(
+          [
+            "frontmost",
+            "backmost",
+            "nearest_to_origin",
+            "area_weighted_overlap",
+          ] as const
+        ).map((entry) => ({ label: label(entry), value: entry }))}
+        value={operator.visibility_policy}
+        onValueChange={(nextPolicy) =>
+          update({
+            ...operator,
+            visibility_policy: nextPolicy,
+          })
+        }
+      />
       <AvailabilityReasons
         entries={availability.surfaceBoundaries}
         kinds={["object_boundary", "region_boundary", "named_surface"]}
@@ -345,7 +521,10 @@ function OperatorFields({ availability, draft, onChange }: Pick<Props, "availabi
   );
 }
 
-function AvailabilityReasons<K extends string>({ entries, kinds }: {
+function AvailabilityReasons<K extends string>({
+  entries,
+  kinds,
+}: {
   entries?: Partial<Record<K, Availability>>;
   kinds: readonly K[];
 }) {
@@ -354,7 +533,13 @@ function AvailabilityReasons<K extends string>({ entries, kinds }: {
     return state?.available === false ? [`${label(kind)}: ${state.reason}`] : [];
   });
   if (unavailable.length === 0) return null;
-  return <div className="fm-help-text">{[...new Set(unavailable)].map((reason) => <p key={reason}>{reason}</p>)}</div>;
+  return (
+    <div className="fm-help-text">
+      {[...new Set(unavailable)].map((reason) => (
+        <p key={reason}>{reason}</p>
+      ))}
+    </div>
+  );
 }
 
 function targetForKind(kind: TargetKind): PlanarMonitorTarget {
@@ -371,16 +556,22 @@ function extentForKind(kind: ExtentKind): PlanarMonitor["frame"]["extent"] {
 
 function operatorForKind(kind: OperatorKind): PlanarMonitorOperator {
   if (kind === "slab_average") return { kind, thickness_m: 1e-9 };
-  if (kind === "depth_projection") return { kind, reduction: "mean_occupied", empty_policy: "exclude_empty" };
-  if (kind === "surface_projection") return {
-    kind,
-    boundary: { kind: "object_boundary" },
-    visibility_policy: "frontmost",
-  };
+  if (kind === "depth_projection") {
+    return { kind, reduction: "mean_occupied", empty_policy: "exclude_empty" };
+  }
+  if (kind === "surface_projection") {
+    return {
+      kind,
+      boundary: { kind: "object_boundary" },
+      visibility_policy: "frontmost",
+    };
+  }
   return { kind };
 }
 
-function boundaryForKind(kind: "object_boundary" | "region_boundary" | "named_surface") {
+function boundaryForKind(
+  kind: "object_boundary" | "region_boundary" | "named_surface",
+) {
   if (kind === "region_boundary") return { kind, region_id: "" } as const;
   if (kind === "named_surface") return { kind, surface_id: "" } as const;
   return { kind } as const;
@@ -392,14 +583,33 @@ function frameForPreset(
 ): PlanarMonitor["frame"] {
   if (preset === "arbitrary") return { ...frame, preset: null };
   const position = frame.origin_m[preset === "xy" ? 2 : preset === "xz" ? 1 : 0];
-  const basis = preset === "xy"
-    ? { origin_m: [0, 0, position], u_axis: [1, 0, 0], v_axis: [0, 1, 0], normal: [0, 0, 1] }
-    : preset === "xz"
-      ? { origin_m: [0, position, 0], u_axis: [1, 0, 0], v_axis: [0, 0, 1], normal: [0, -1, 0] }
-      : { origin_m: [position, 0, 0], u_axis: [0, 1, 0], v_axis: [0, 0, 1], normal: [1, 0, 0] };
+  const basis =
+    preset === "xy"
+      ? {
+          origin_m: [0, 0, position],
+          u_axis: [1, 0, 0],
+          v_axis: [0, 1, 0],
+          normal: [0, 0, 1],
+        }
+      : preset === "xz"
+        ? {
+            origin_m: [0, position, 0],
+            u_axis: [1, 0, 0],
+            v_axis: [0, 0, 1],
+            normal: [0, -1, 0],
+          }
+        : {
+            origin_m: [position, 0, 0],
+            u_axis: [0, 1, 0],
+            v_axis: [0, 0, 1],
+            normal: [1, 0, 0],
+          };
   return { ...frame, ...basis, preset } as PlanarMonitor["frame"];
 }
 
 function label(value: string): string {
-  return value.replace(/_m$/, " (min/max)").replaceAll("_", " ").replace(/^./, (entry) => entry.toUpperCase());
+  return value
+    .replace(/_m$/, " (min/max)")
+    .replaceAll("_", " ")
+    .replace(/^./, (entry) => entry.toUpperCase());
 }

@@ -4821,7 +4821,7 @@ kształtu payloadu nie dodaje surowego endpointu ani nowego transportu.
 | source-eigen-diagnostics-reference | `crates/fullmag-runner/src/fem/eigen_execution.rs` :: `execute_fem_eigen_inner` | Ręczny single-k reference writer publikuje tylko żądane sekcje z typed values i bez krawędzi poprzednika; Rust/GHA NOT VERIFIED. |
 | source-eigen-diagnostics-generic | `crates/fullmag-runner/src/eigen/artifacts/modal_manifest.rs` :: `write_frequency_domain_eigen_manifest_with_outputs` | Jawny output i requested-mode context dla v2; raw solver v1 pozostaje niezależny; Rust/GHA NOT VERIFIED. |
 | source-eigen-diagnostics-resource | `apps/control-room/src/kernel/resources/studyRuntimeResources.ts` :: `useFrequencyDomainEigenDiagnosticsResource` | Istniejący resource-first hook i endpoint; bez nowego endpointu. |
-| source-eigen-diagnostics-frontend-shape | `apps/control-room/src/modules/inspector/panels/frequency-domain/FrequencyDomainResultInspectors.tsx` :: `eigenDiagnosticTransportSummary` | Konsument oczekuje root-level transport fields, niezależnych od sekcji `dispersion`. |
+| source-eigen-diagnostics-frontend-shape | `apps/control-room/src/modules/inspector/panels/frequency-domain/frequencyDomainResultFormatting.ts` :: `eigenDiagnosticTransportSummary` | Konsument oczekuje root-level transport fields, niezależnych od sekcji `dispersion`. |
 
 ## Kanoniczna ścieżka benchmarku COMSOL — uwaga 4082209300
 

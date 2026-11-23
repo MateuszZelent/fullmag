@@ -6,11 +6,13 @@ import { Layers, Monitor, Settings2 } from "lucide-react";
 import type {
   PlanarCropState,
   PlanarFieldSource,
+  SceneResource,
   VisualizationStatePatch,
 } from "@/kernel/api/apiTypes";
 import { ControlRoomApiError } from "@/kernel/api/ControlRoomApi";
 import { useKernel } from "@/kernel/KernelContext";
 import { createCommandContext } from "@/kernel/commands/commandContext";
+import { useSceneResource } from "@/kernel/resources/geometryLifecycleResources";
 import {
   planarFieldQueryFromMeta,
   usePlanarFieldMetaResource,
@@ -18,13 +20,19 @@ import {
 } from "@/kernel/resources/planarFieldResources";
 import { usePlanarMonitorsResource } from "@/kernel/resources/planarMonitorResources";
 import { tensorProjectionOutputKind } from "@/kernel/api/tensorFieldProjection";
-import { quantityCatalogEntrySpatialProjections, quantityCatalogEntrySupportsAnySpatialVisualization } from "@/kernel/api/quantityIds";
+import {
+  quantityCatalogEntrySpatialProjections,
+  quantityCatalogEntrySupportsAnySpatialVisualization,
+  resolveCanonicalQuantityId,
+} from "@/kernel/api/quantityIds";
 import { useFieldCatalogResource, useQuantityCatalogResource } from "@/kernel/resources/studyRuntimeResources";
 import {
   formatSectionLength,
   planarGridResolutionPresets,
   planarSectionAxes,
   resolvePlanarSectionGeometryFromMeta,
+  type PlanarSectionAxis,
+  type PlanarSectionGeometry,
   type PlanarSectionPlane,
 } from "@/kernel/visualization/planarSectionModel";
 import { resolveSessionDiscretization } from "@/kernel/resources/sessionDiscretization";
@@ -50,6 +58,7 @@ import {
   type FieldMapCapability,
 } from "@/kernel/visualization/planarCapabilities";
 import type { Selection } from "@/kernel/selection/selectionTypes";
+import { resolveTargetBoundsMeters, type Vec3 } from "@/shared/domain/magnetization-texture/boundsResolver";
 import { SegmentedControl } from "@/shared/ui/SegmentedControl";
 
 import { useRegisterInspectorEditSession } from "../InspectorEditSession";
@@ -98,6 +107,159 @@ type PlanarPatch = NonNullable<VisualizationStatePatch["planar"]>;
 const PLANAR_COMPONENTS = [
   "x", "y", "z", "u", "v", "normal", "magnitude", "in_plane_magnitude", "orientation",
 ] as const;
+
+const AUTHORED_AXIS_INDEX: Record<PlanarSectionAxis, 0 | 1 | 2> = { x: 0, y: 1, z: 2 };
+
+function asAuthoredRecord(value: unknown): Record<string, unknown> | null {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
+function asAuthoredVec3(value: unknown): Vec3 | null {
+  if (!Array.isArray(value) || value.length < 3) return null;
+  const x = typeof value[0] === "number" && Number.isFinite(value[0]) ? value[0] : null;
+  const y = typeof value[1] === "number" && Number.isFinite(value[1]) ? value[1] : null;
+  const z = typeof value[2] === "number" && Number.isFinite(value[2]) ? value[2] : null;
+  return x !== null && y !== null && z !== null ? [x, y, z] : null;
+}
+
+function isAuthoredFieldFileAsset(asset: Record<string, unknown>): boolean {
+  const kind = typeof asset.kind === "string" ? asset.kind.trim().toLowerCase() : "";
+  if (kind === "sampled" || kind === "field_file" || kind === "field-file" || kind === "imported_field") {
+    return true;
+  }
+  return asset.source_mode === "field-file";
+}
+
+function authoredMagneticObjectIds(scene: SceneResource | null | undefined): string[] {
+  if (!scene || !Array.isArray(scene.objects)) return [];
+  const assets = Array.isArray(scene.magnetization_assets) ? scene.magnetization_assets : [];
+  const ids: string[] = [];
+  for (const rawObj of scene.objects) {
+    const obj = asAuthoredRecord(rawObj);
+    if (!obj || obj.visible === false) continue;
+    const role = typeof obj.role === "string" ? obj.role.trim().toLowerCase() : "";
+    if (role && role !== "magnet") continue;
+    const id = typeof obj.id === "string" && obj.id.trim().length > 0 ? obj.id.trim() : null;
+    if (!id) continue;
+    const regions = Array.isArray(obj.regions) ? obj.regions : [];
+    const hasRegionOverride = regions.some((rawRegion) => {
+      const region = asAuthoredRecord(rawRegion);
+      if (!region || region.enabled === false) return false;
+      const init = asAuthoredRecord(asAuthoredRecord(region.texture_override)?.initial_magnetization);
+      return Boolean(init && !isAuthoredFieldFileAsset(init));
+    });
+    const refId = typeof obj.magnetization_ref === "string" ? obj.magnetization_ref.trim() : "";
+    const hasObjectAsset = Boolean(
+      refId &&
+      assets.some((rawAsset) => {
+        const asset = asAuthoredRecord(rawAsset);
+        return Boolean(asset && asset.id === refId && !isAuthoredFieldFileAsset(asset));
+      }),
+    );
+    if (hasRegionOverride || hasObjectAsset) {
+      ids.push(id);
+    }
+  }
+  return ids;
+}
+
+function transformAuthoredCorner(pointLocal: Vec3, transform: Record<string, unknown> | null): Vec3 {
+  if (!transform) return pointLocal;
+  const scale = asAuthoredVec3(transform.scale) ?? [1, 1, 1];
+  const translation = asAuthoredVec3(transform.translation) ?? [0, 0, 0];
+  const pivot = asAuthoredVec3(transform.pivot) ?? [0, 0, 0];
+  const rawQuat = Array.isArray(transform.rotation_quat) ? transform.rotation_quat : null;
+  const quat: [number, number, number, number] =
+    rawQuat && rawQuat.length >= 4 && rawQuat.slice(0, 4).every((c) => typeof c === "number" && Number.isFinite(c))
+      ? [rawQuat[0] as number, rawQuat[1] as number, rawQuat[2] as number, rawQuat[3] as number]
+      : [0, 0, 0, 1];
+  const sx = (pointLocal[0] - pivot[0]) * scale[0];
+  const sy = (pointLocal[1] - pivot[1]) * scale[1];
+  const sz = (pointLocal[2] - pivot[2]) * scale[2];
+  const qLen = Math.hypot(quat[0], quat[1], quat[2], quat[3]);
+  let rx = sx;
+  let ry = sy;
+  let rz = sz;
+  if (Number.isFinite(qLen) && qLen > 1e-14) {
+    const qx = quat[0] / qLen;
+    const qy = quat[1] / qLen;
+    const qz = quat[2] / qLen;
+    const qw = quat[3] / qLen;
+    const tx = 2 * (qy * sz - qz * sy);
+    const ty = 2 * (qz * sx - qx * sz);
+    const tz = 2 * (qx * sy - qy * sx);
+    rx = sx + qw * tx + (qy * tz - qz * ty);
+    ry = sy + qw * ty + (qz * tx - qx * tz);
+    rz = sz + qw * tz + (qx * ty - qy * tx);
+  }
+  return [pivot[0] + rx + translation[0], pivot[1] + ry + translation[1], pivot[2] + rz + translation[2]];
+}
+
+function resolveAuthoredSectionFallback(
+  scene: SceneResource | null | undefined,
+  objectIds: readonly string[],
+  plane: PlanarSectionPlane,
+): { sectionGeometry: PlanarSectionGeometry | null; fullBounds: readonly [number, number, number, number] | null } {
+  if (!scene || objectIds.length === 0) {
+    return { sectionGeometry: null, fullBounds: null };
+  }
+  const minW: Vec3 = [Number.POSITIVE_INFINITY, Number.POSITIVE_INFINITY, Number.POSITIVE_INFINITY];
+  const maxW: Vec3 = [Number.NEGATIVE_INFINITY, Number.NEGATIVE_INFINITY, Number.NEGATIVE_INFINITY];
+  for (const objectId of objectIds) {
+    const bounds = resolveTargetBoundsMeters(scene, { kind: "object", objectId });
+    const obj = asAuthoredRecord(scene.objects?.find((entry) => entry.id === objectId));
+    const transform = asAuthoredRecord(obj?.transform);
+    for (let ix = 0; ix < 2; ix += 1) {
+      for (let iy = 0; iy < 2; iy += 1) {
+        for (let iz = 0; iz < 2; iz += 1) {
+          const world = transformAuthoredCorner(
+            [
+              ix === 0 ? bounds.localMin[0] : bounds.localMax[0],
+              iy === 0 ? bounds.localMin[1] : bounds.localMax[1],
+              iz === 0 ? bounds.localMin[2] : bounds.localMax[2],
+            ],
+            transform,
+          );
+          if (world[0] < minW[0]) minW[0] = world[0];
+          if (world[1] < minW[1]) minW[1] = world[1];
+          if (world[2] < minW[2]) minW[2] = world[2];
+          if (world[0] > maxW[0]) maxW[0] = world[0];
+          if (world[1] > maxW[1]) maxW[1] = world[1];
+          if (world[2] > maxW[2]) maxW[2] = world[2];
+        }
+      }
+    }
+  }
+  if (!minW.every(Number.isFinite) || !maxW.every(Number.isFinite)) {
+    return { sectionGeometry: null, fullBounds: null };
+  }
+  const axes = planarSectionAxes(plane);
+  const nIdx = AUTHORED_AXIS_INDEX[axes.normal];
+  const uIdx = AUTHORED_AXIS_INDEX[axes.u];
+  const vIdx = AUTHORED_AXIS_INDEX[axes.v];
+  const normalMin = minW[nIdx];
+  const normalMax = maxW[nIdx];
+  const sectionGeometry: PlanarSectionGeometry | null =
+    normalMax > normalMin
+      ? {
+          plane,
+          ...axes,
+          normalMin,
+          normalMax,
+          normalExtent: normalMax - normalMin,
+          layerCount: null,
+          layerSpacing: null,
+          nativeResolution: null,
+        }
+      : null;
+  const fullBounds: readonly [number, number, number, number] | null =
+    maxW[uIdx] > minW[uIdx] && maxW[vIdx] > minW[vIdx]
+      ? [minW[uIdx], maxW[uIdx], minW[vIdx], maxW[vIdx]]
+      : null;
+  return { sectionGeometry, fullBounds };
+}
 
 function capabilityReason(capability: FieldMapCapability): string | undefined {
   if (capability.enabled) return undefined;
@@ -175,6 +337,9 @@ export function PlanarVisualizationSection({ selection }: { selection: Selection
   );
   const fieldCatalog = useFieldCatalogResource({ enabled: coverage.supported });
   const quantityCatalog = useQuantityCatalogResource({ enabled: coverage.supported });
+  const scene = useSceneResource({ enabled: coverage.supported });
+  const authoredObjectIds = useMemo(() => authoredMagneticObjectIds(scene.data), [scene.data]);
+  const hasAuthoredMagnetization = authoredObjectIds.length > 0;
   const discretization = useSessionStatusSelector(
     (status) => resolveSessionDiscretization(status.data),
     { enabled: coverage.supported },
@@ -257,7 +422,7 @@ export function PlanarVisualizationSection({ selection }: { selection: Selection
       Boolean(quantityCatalog.data.quantities.find((entry) => entry.id === quantity.quantity_id &&
         quantityCatalogEntrySupportsAnySpatialVisualization(entry)))),
   );
-  const layerQuantities = availableQuantities.flatMap<PlanarFieldQuantityOption>((quantity) => {
+  const backendLayerQuantities = availableQuantities.flatMap<PlanarFieldQuantityOption>((quantity) => {
     const entry = quantityCatalog.data?.quantities.find((candidate) => candidate.id === quantity.quantity_id);
     const projections = quantityCatalogEntrySpatialProjections(entry);
     if (entry?.tensor != null) {
@@ -283,6 +448,20 @@ export function PlanarVisualizationSection({ selection }: { selection: Selection
       components: PLANAR_COMPONENTS.map((value) => ({ value, label: value.replaceAll("_", " ") })),
     }];
   });
+  const layerQuantities: PlanarFieldQuantityOption[] =
+    hasAuthoredMagnetization &&
+    !backendLayerQuantities.some((quantity) => resolveCanonicalQuantityId(quantity.id) === "m")
+      ? [
+          {
+            id: "m",
+            label: "Magnetization",
+            unit: "1",
+            vector: true,
+            components: PLANAR_COMPONENTS.map((value) => ({ value, label: value.replaceAll("_", " ") })),
+          },
+          ...backendLayerQuantities,
+        ]
+      : backendLayerQuantities;
 
   // Layer targets and labels.
   const airboxLabel = registryTargets?.airbox.label ?? "Airbox";
@@ -356,6 +535,15 @@ export function PlanarVisualizationSection({ selection }: { selection: Selection
   const selectedDescriptor = fieldCatalog.data?.quantities.find((quantity) => quantity.quantity_id === quantityId);
   const catalogQuantity = quantityCatalog.data?.quantities.find((entry) => entry.id === quantityId);
   const tensor = catalogQuantity?.tensor;
+  const liveMetaAvailable = resourceHasDisplayableData(meta);
+  const isMagnetizationBase = !quantityId || resolveCanonicalQuantityId(quantityId) === "m";
+  const authoredMetaFallback = hasAuthoredMagnetization && isMagnetizationBase && !liveMetaAvailable;
+  const effectiveDescriptor =
+    selectedDescriptor?.available
+      ? selectedDescriptor
+      : authoredMetaFallback
+        ? { available: true, components: 3, label: "Magnetization", location: "node", quantity_id: "m", unit: "1" }
+        : selectedDescriptor;
   const capabilities = resolvePlanarInspectorCapabilities({
     descriptor: meta.data
       ? {
@@ -366,11 +554,11 @@ export function PlanarVisualizationSection({ selection }: { selection: Selection
         }
       : null,
     discretization,
-    metaAvailable: resourceHasDisplayableData(meta),
-    metaErrorCode: meta.error instanceof ControlRoomApiError ? meta.error.code : null,
-    occupancyAvailable: resourceHasDisplayableData(mask),
+    metaAvailable: liveMetaAvailable || authoredMetaFallback,
+    metaErrorCode: authoredMetaFallback ? null : (meta.error instanceof ControlRoomApiError ? meta.error.code : null),
+    occupancyAvailable: resourceHasDisplayableData(mask) || authoredMetaFallback,
     component: quantityComponent,
-    quantity: selectedDescriptor,
+    quantity: effectiveDescriptor,
     tensor,
     catalogQuantity,
     scopeKind: planar.view_scope.kind,
@@ -380,15 +568,22 @@ export function PlanarVisualizationSection({ selection }: { selection: Selection
     ...(capabilities.points.enabled ? {} : { points: capabilityReason(capabilities.points) }),
   };
 
-  // Section geometry: the mounted surface publishes it; otherwise the base meta.
+  // Section geometry: the mounted surface publishes it; otherwise the base meta or authored scene fallback.
   const plane = planar.default_slice.plane as PlanarSectionPlane;
+  const authoredSectionFallback =
+    hasAuthoredMagnetization && !liveMetaAvailable
+      ? resolveAuthoredSectionFallback(scene.data, authoredObjectIds, plane)
+      : null;
   const sectionGeometry = publishedGeometry
-    ?? resolvePlanarSectionGeometryFromMeta(meta.data?.section, plane);
+    ?? resolvePlanarSectionGeometryFromMeta(meta.data?.section, plane)
+    ?? authoredSectionFallback?.sectionGeometry
+    ?? null;
   const axes = planarSectionAxes(plane);
   const fullBoundsRaw = meta.data?.frame.full_bounds_uv_m ?? meta.data?.frame.bounds_uv_m;
-  const fullBounds = fullBoundsRaw && fullBoundsRaw.length === 4 && fullBoundsRaw.every(Number.isFinite)
+  const liveFullBounds = fullBoundsRaw && fullBoundsRaw.length === 4 && fullBoundsRaw.every(Number.isFinite)
     ? [fullBoundsRaw[0]!, fullBoundsRaw[1]!, fullBoundsRaw[2]!, fullBoundsRaw[3]!] as const
     : null;
+  const fullBounds = liveFullBounds ?? authoredSectionFallback?.fullBounds ?? null;
   const resolutionPresets = source.kind === "default" ? planarGridResolutionPresets(sectionGeometry) : [];
 
   const visibleLayerCount = fieldLayers.filter(layerVisible).length;
@@ -400,7 +595,7 @@ export function PlanarVisualizationSection({ selection }: { selection: Selection
         ? "Error"
         : surfaceEvidence === "loading"
           ? "Loading frame"
-          : meta.status === "ready"
+          : meta.status === "ready" || authoredMetaFallback
             ? "2D view closed"
             : meta.status === "error"
               ? "Unavailable"

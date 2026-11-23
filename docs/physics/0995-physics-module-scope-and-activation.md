@@ -133,6 +133,7 @@ assert local.to_ir()["kind"] == "region"
 | Python | Typ | Domyślnie | Jednostka SI | Walidacja | Znaczenie | Backend | ProblemIR |
 |---|---|---|---|---|---|---|---|
 | `PhysicsScope.kind` | `Literal['global','object','region','interface','cross_object','unresolved']` | `required` | `$1$` | `one of the tagged scope variants; unknown values are unresolved` | `fizyczny zakres modułu` | `FEM/FDM wspólna semantyka; realizacja lane-specific` | `physics_graph.modules[].applies_to[].kind` |
+| `StudyStagesBuilder.set_spin_torque_enabled` | `module_id plus bool` | `required` | `$1$` | `exactly one typed and graph spin_torque identity; only active or inactive workflow states` | `stage-local inclusion of a named torque in executable physics` | `backend-neutral graph semantics with lane-specific planner checks` | `physics_graph.modules[].activation and incoming edges[].status` |
 
 (problem-ir)=
 ## 6. ProblemIR i lowering
@@ -158,6 +159,7 @@ status wszystkich krawędzi wchodzących na odpowiednio `active` albo
 zależności. Wyłączony torque nie może zalegalizować niezerowego solved-current
 transportu do magnetycznego sinku; wyjątek planera dotyczy wyłącznie pełnego
 zerowego zestawu terminali i służy relaksacji stanu początkowego.
+`StudyStagesBuilder.set_spin_torque_enabled` aktualizuje `physics_graph.modules[].activation and incoming edges[].status` przed wykonaniem dalszych etapów.
 
 `physics_graph.modules[].presentation` jest obowiązkowe w graphie
 znormalizowanym z `SceneDocument` i zachowuje jedynie `family` oraz `label`.
@@ -246,18 +248,18 @@ utworzeniu pozostać w stanie, który ponowiłby `POST`.
 | `apps/control-room/src/modules/explorer/builders/physicsGraphTree.ts` | `buildPhysicsGraphTree` | drzewo Explorera |
 | `apps/control-room/src/modules/explorer/explorerSelection.ts` | `selectionRefFromNode` | routing graphowego modułu do rodzinnego Inspectora po stabilnym ID |
 | `apps/control-room/src/kernel/resources/physicsGraphResources.ts` | `usePhysicsGraphResource` | resource hook |
-| `apps/control-room/src/modules/inspector/panels/PhysicsGraphModuleInspectorPanel.tsx` | `PhysicsGraphModuleInspectorPanel` | inspector semantyczny |
-| `apps/control-room/src/modules/inspector/panels/PhysicsInteractionPanel.tsx` | `PhysicsInteractionPanel` | przekazanie zaznaczonego obiektu/regionu do authoringu current transport |
-| `apps/control-room/src/modules/inspector/panels/TransportAuthoringInspector.tsx` | `CurrentTransportInspectorPanel` | wspólny responsywny Inspector i dokładny widok object/region scope dla authoringu prądu |
+| `apps/control-room/src/modules/inspector/inspectors/objects/physics/PhysicsModuleSpec.tsx` | `PhysicsModuleInspectorPanel` | inspector semantyczny |
+| `apps/control-room/src/modules/inspector/routes/modelPhysicsRoutes.tsx` | `MODEL_PHYSICS_ROUTES` | przekazanie zaznaczonego obiektu/regionu do authoringu current transport |
+| `apps/control-room/src/modules/inspector/panels/transport/CurrentTransportPanel.tsx` | `CurrentTransportInspectorPanel` | wspólny responsywny Inspector i dokładny widok object/region scope dla authoringu prądu |
 | `apps/control-room/src/modules/inspector/panels/TransportAuthoringInspectorModel.ts` | `currentTransportDraft` | bezstratna inicjalizacja object/region scope dla nowego źródła prądu |
 | `apps/control-room/src/modules/inspector/panels/TransportAuthoringInspectorModel.ts` | `currentTransportModelPatch` | zachowanie scope'u i usunięcie niedozwolonych pól legacy przy zmianie modelu |
-| `apps/control-room/src/modules/inspector/panels/TransportAuthoringInspector.tsx` | `SpinTransportInspectorPanel` | rodzinny draft Spin Transport/SHE z dokładnym początkowym zakresem obiektu lub regionu |
+| `apps/control-room/src/modules/inspector/panels/transport/SpinTransportPanel.tsx` | `SpinTransportInspectorPanel` | rodzinny draft Spin Transport/SHE z dokładnym początkowym zakresem obiektu lub regionu |
 | `apps/control-room/src/modules/inspector/panels/TransportAuthoringInspectorModel.ts` | `spinTransportDraft` | inicjalizacja edytowalnego domain nowego spin transport bez rozszerzania zaznaczonego scope'u |
 | `apps/control-room/src/modules/ribbon/ribbonCommands.ts` | `createSpinTransportFromCommand` | otwarcie draftu Spin Transport/SHE bez materializacji pustego węzła graphu |
 | `apps/control-room/src/modules/ribbon/ribbonCommands.ts` | `createSpinInterfaceFromCommand` | otwarcie fail-closed draftu interfejsu bez wymyślania owner spin transport |
-| `apps/control-room/src/modules/inspector/panels/SpinAuthoringInspector.tsx` | `SpinTorqueInspectorPanel` | dokładny object/region target dla nowego torque i wspólny Inspector |
-| `apps/control-room/src/modules/inspector/panels/SpinAuthoringInspector.tsx` | `OerstedFieldInspectorPanel` | globalny scope modułu Oersteda niezależny od lokalności źródła |
-| `apps/control-room/src/modules/inspector/panels/SpinAuthoringInspector.tsx` | `SpinAuthoringInspector` | fail-closed inicjalizacja targetu torque i pojedynczego źródła Oersteda zgodnego z zaznaczeniem |
+| `apps/control-room/src/modules/inspector/inspectors/objects/transport/SpinTorqueSpec.tsx` | `SpinTorqueInspectorPanel` | dokładny object/region target dla nowego torque i wspólny Inspector |
+| `apps/control-room/src/modules/inspector/panels/transport/OerstedFieldPanel.tsx` | `OerstedFieldInspectorPanel` | globalny scope modułu Oersteda niezależny od lokalności źródła |
+| `apps/control-room/src/modules/inspector/panels/SpinAuthoringInspector.model.ts` | `resolveOerstedCurrentSource` | wybór źródła Oersteda tylko przy jednym dopasowaniu do zaznaczonego zakresu |
 | `apps/control-room/src/modules/inspector/panels/SpinAuthoringInspectorModel.ts` | `currentSourceOptions` | typowane źródła z istniejących modułów transportu i bezstratne zachowanie niedostępnej zależności |
 | `apps/control-room/src/modules/inspector/panels/SpinAuthoringInspectorModel.ts` | `torqueCurrentBindingPatch` | wzajemnie wykluczające przejście między prescribed density i current transport |
 | `apps/control-room/src/modules/ribbon/ribbonCommands.ts` | `createFieldDriveFromCommand` | otwarcie jawnego globalnego draftu field drive bez materializacji w graphie |
@@ -268,6 +270,9 @@ utworzeniu pozostać w stanie, który ponowiłby `POST`.
 | `crates/fullmag-ir/src/lib.rs` | `is_supported_ir_version_for_read` | granica odczytu IR |
 | `crates/fullmag-ir/src/validation.rs` | `validate_oersted_energy_terms` | walidacja stabilnego ID Oersteda przy zachowaniu odczytu historycznego rekordu bez ID |
 | `packages/fullmag-py/src/fullmag/model/physics_scope.py` | `build_physics_graph` | lowering Python |
+| `packages/fullmag-py/src/fullmag/world.py` | `set_spin_torque_enabled` | publiczna akcja zmiany aktywności momentu obrotowego |
+| `crates/fullmag-application/src/script_stage_materialization.rs` | `apply_pipeline_set_spin_torque_enabled` | zmiana aktywności modułu i stanu krawędzi grafu |
+| `crates/fullmag-plan/src/spin_transport.rs` | `materialize_fdm_descriptor` | dopuszczenie nieaktywnego momentu tylko dla udokumentowanego przypadku zerowych prądów zaciskowych |
 | `crates/fullmag-runner/src/native_fem/steady_transport.rs` | `execute_native_fem_steady_transport_plans` | bounded FEM artifact provenance |
 | `crates/fullmag-runner/tests/physics_graph_runtime.rs` | `fdm_runtime_artifact_contains_concrete_graph_realization` | hostowy dowód zapisu certyfikatu FDM w artefakcie runnera |
 | `crates/fullmag-runner/tests/physics_graph_runtime.rs` | `fem_runtime_artifact_contains_concrete_graph_realization` | managed CPU FEM/MFEM dowód zapisu rzeczywistych markerów elementów w artefakcie runnera |

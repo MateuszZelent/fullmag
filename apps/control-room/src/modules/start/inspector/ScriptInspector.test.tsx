@@ -121,11 +121,11 @@ describe("ScriptInspector layout", () => {
     expect(html).toContain("cpu");
   });
 
-  it("says when no run is recorded and shows unknown facts as Unknown", () => {
+  it("says when no run is recorded and omits unverified facts instead of printing Unknown", () => {
     const html = render({ item: script({ id: "b", name: "bare", path: "/bare.py", useCount: 1 }) });
     expect(html).toContain("No run is recorded");
     expect(html).toContain("1 time");
-    expect(html).toContain("Unknown");
+    expect(html).not.toContain("Unknown");
     expect(html).not.toContain("Summary");
   });
 });

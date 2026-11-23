@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 
 import type { DiscoveredInstance } from "../api/apiTypes";
+import { notifyTabRouteAddressChanged } from "./tabRouteAddressStore";
 import { useInstanceDiscovery } from "../resources/instanceDiscoveryResources";
 import { useSessionCollection } from "../resources/useSessionCollection";
 import { homeView, useHomeViewOpen } from "./homeView";
@@ -117,6 +118,7 @@ export function TabRouteSync() {
     } else {
       window.history.replaceState(null, "", href);
     }
+    notifyTabRouteAddressChanged();
   }, [collection, currentSessionName, homeOpen, instances, requested, tabs.activePort, tabs.openPorts]);
 
   return null;

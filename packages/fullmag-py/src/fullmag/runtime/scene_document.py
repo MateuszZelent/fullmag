@@ -235,6 +235,7 @@ def _default_texture_transform() -> dict[str, object]:
         "rotation_quat": _identity_quat(),
         "scale": _one_vec3(),
         "pivot": _zero_vec3(),
+        "rotate_vectors": True,
     }
 
 
@@ -1458,6 +1459,7 @@ _INTERACTION_ORDER = (
     "interfacial_dmi",
     "bulk_dmi",
     "uniaxial_anisotropy",
+    "cubic_anisotropy",
 )
 
 
@@ -1486,12 +1488,37 @@ def _canonical_scene_stage(raw_stage: object) -> object:
 
 
 def _normalize_axis3(value: object) -> list[float]:
-    if isinstance(value, list) and len(value) == 3:
+    if isinstance(value, (list, tuple)) and len(value) == 3:
         try:
             return [float(value[0]), float(value[1]), float(value[2])]
         except (TypeError, ValueError):
             return [0.0, 0.0, 1.0]
     return [0.0, 0.0, 1.0]
+
+
+def _normalize_unit_axis3(
+    value: object,
+    *,
+    field: str,
+    fallback: tuple[float, float, float],
+) -> list[float]:
+    if value is None:
+        raw = list(fallback)
+    elif isinstance(value, (list, tuple)) and len(value) == 3:
+        raw = []
+        for idx, item in enumerate(value):
+            if isinstance(item, bool) or not isinstance(item, (int, float)):
+                raise ValueError(f"{field}[{idx}] must be a finite number")
+            numeric = float(item)
+            if not math.isfinite(numeric):
+                raise ValueError(f"{field}[{idx}] must be finite")
+            raw.append(numeric)
+    else:
+        raise ValueError(f"{field} must be a 3-element numeric vector")
+    norm = math.sqrt(raw[0] * raw[0] + raw[1] * raw[1] + raw[2] * raw[2])
+    if norm <= 1e-12:
+        raise ValueError(f"{field} must have nonzero norm")
+    return [raw[0] / norm, raw[1] / norm, raw[2] / norm]
 
 
 def _default_interaction_params(
@@ -1502,12 +1529,23 @@ def _default_interaction_params(
 ) -> dict[str, object] | None:
     if kind == "interfacial_dmi":
         dind = _number_or_none(material_dind)
-        return {"dind": dind if dind is not None else 1e-3}
+        return {
+            "dind": dind if dind is not None else 1e-3,
+            "interface_normal": [0.0, 0.0, 1.0],
+        }
     if kind == "bulk_dmi":
         dbulk = _number_or_none(material_dbulk)
         return {"dbulk": dbulk if dbulk is not None else 1e-3}
     if kind == "uniaxial_anisotropy":
-        return {"ku1": 0.0, "axis": [0.0, 0.0, 1.0]}
+        return {"ku1": 0.0, "ku2": 0.0, "axis": [0.0, 0.0, 1.0]}
+    if kind == "cubic_anisotropy":
+        return {
+            "kc1": 0.0,
+            "kc2": 0.0,
+            "kc3": 0.0,
+            "axis1": [1.0, 0.0, 0.0],
+            "axis2": [0.0, 1.0, 0.0],
+        }
     return None
 
 
@@ -1541,6 +1579,11 @@ def _normalize_interaction_entry(
         if dind is None:
             dind = _number_or_none(material_dind)
         params_map["dind"] = dind if dind is not None else 1e-3
+        params_map["interface_normal"] = _normalize_unit_axis3(
+            params_map.get("interface_normal"),
+            field="interfacial_dmi.interface_normal",
+            fallback=(0.0, 0.0, 1.0),
+        )
     elif kind == "bulk_dmi":
         dbulk = _number_or_none(params_map.get("dbulk"))
         if dbulk is None:
@@ -1548,8 +1591,35 @@ def _normalize_interaction_entry(
         params_map["dbulk"] = dbulk if dbulk is not None else 1e-3
     elif kind == "uniaxial_anisotropy":
         ku1 = _number_or_none(params_map.get("ku1"))
+        ku2 = _number_or_none(params_map.get("ku2"))
         params_map["ku1"] = ku1 if ku1 is not None else 0.0
+        params_map["ku2"] = ku2 if ku2 is not None else 0.0
         params_map["axis"] = _normalize_axis3(params_map.get("axis"))
+    elif kind == "cubic_anisotropy":
+        kc1 = _number_or_none(params_map.get("kc1"))
+        kc2 = _number_or_none(params_map.get("kc2"))
+        kc3 = _number_or_none(params_map.get("kc3"))
+        axis1 = _normalize_unit_axis3(
+            params_map.get("axis1"),
+            field="cubic_anisotropy.axis1",
+            fallback=(1.0, 0.0, 0.0),
+        )
+        axis2 = _normalize_unit_axis3(
+            params_map.get("axis2"),
+            field="cubic_anisotropy.axis2",
+            fallback=(0.0, 1.0, 0.0),
+        )
+        dot = axis1[0] * axis2[0] + axis1[1] * axis2[1] + axis1[2] * axis2[2]
+        if abs(dot) >= 1e-6:
+            raise ValueError(
+                "cubic_anisotropy axis1 and axis2 must be orthogonal "
+                "(|c1·c2| / (||c1|| ||c2||) < 1e-6)"
+            )
+        params_map["kc1"] = kc1 if kc1 is not None else 0.0
+        params_map["kc2"] = kc2 if kc2 is not None else 0.0
+        params_map["kc3"] = kc3 if kc3 is not None else 0.0
+        params_map["axis1"] = axis1
+        params_map["axis2"] = axis2
     return {
         "kind": kind,
         "enabled": bool(raw.get("enabled", True)),
@@ -1977,11 +2047,20 @@ def build_scene_document_from_builder(builder: dict[str, Any]) -> dict[str, Any]
     document["study"].update(_compute_resources_fields(builder, "builder"))
     visualization_hint = builder.get("visualization_hint")
     if isinstance(visualization_hint, Mapping):
+        study_viz_hint: dict[str, Any] = {}
         airbox_hint = visualization_hint.get("airbox")
         if airbox_hint is not None:
-            document["study"]["visualization_hint"] = {
-                "airbox": copy.deepcopy(airbox_hint)
-            }
+            study_viz_hint["airbox"] = copy.deepcopy(airbox_hint)
+        material_constitutive_hint = visualization_hint.get("material_constitutive")
+        if material_constitutive_hint is not None:
+            canonical_mc = canonical_material_constitutive_hint(
+                material_constitutive_hint,
+                context="builder.visualization_hint.material_constitutive",
+            )
+            if canonical_mc:
+                study_viz_hint["material_constitutive"] = canonical_mc
+        if study_viz_hint:
+            document["study"]["visualization_hint"] = study_viz_hint
     if "spin_torques" in builder:
         document["spin_torques"] = _canonical_spin_torques(
             builder["spin_torques"], scene_ids=True
@@ -1995,6 +2074,69 @@ def build_scene_document_from_builder(builder: dict[str, Any]) -> dict[str, Any]
             builder["oersted_terms"], scene_ids=True
         )
     return document
+
+
+def canonical_material_constitutive_hint(
+    raw: object,
+    *,
+    context: str = "SceneDocument.study.visualization_hint.material_constitutive",
+) -> dict[str, dict[str, Any]]:
+    """Validate and canonicalize ``visualization_hint.material_constitutive``."""
+    if not isinstance(raw, Mapping):
+        raise ValueError(f"{context} must be an object")
+    allowed_entry_keys = {
+        "gamma",
+        "lande_g",
+        "conductivity",
+        "density",
+        "magnetoelastic",
+    }
+    allowed_magnetoelastic_keys = {"enabled", "b1", "b2", "c11", "c12", "c44"}
+    canonical: dict[str, dict[str, Any]] = {}
+    for raw_key, raw_entry in raw.items():
+        if not isinstance(raw_key, str) or not raw_key.strip():
+            raise ValueError(f"{context} keys must be non-empty strings")
+        entry_ctx = f"{context}[{raw_key!r}]"
+        if not isinstance(raw_entry, Mapping):
+            raise ValueError(f"{entry_ctx} must be an object")
+        unknown = sorted(str(k) for k in set(raw_entry) - allowed_entry_keys)
+        if unknown:
+            raise ValueError(
+                f"{entry_ctx} has unsupported fields: {', '.join(unknown)}"
+            )
+        entry_out: dict[str, Any] = {}
+        for num_key in ("gamma", "lande_g", "conductivity", "density"):
+            if num_key in raw_entry and raw_entry[num_key] is not None:
+                entry_out[num_key] = _finite_number(
+                    raw_entry[num_key], f"{entry_ctx}.{num_key}"
+                )
+        if "magnetoelastic" in raw_entry and raw_entry["magnetoelastic"] is not None:
+            raw_me = raw_entry["magnetoelastic"]
+            me_ctx = f"{entry_ctx}.magnetoelastic"
+            if not isinstance(raw_me, Mapping):
+                raise ValueError(f"{me_ctx} must be an object")
+            unknown_me = sorted(
+                str(k) for k in set(raw_me) - allowed_magnetoelastic_keys
+            )
+            if unknown_me:
+                raise ValueError(
+                    f"{me_ctx} has unsupported fields: {', '.join(unknown_me)}"
+                )
+            me_out: dict[str, Any] = {}
+            if "enabled" in raw_me and raw_me["enabled"] is not None:
+                if not isinstance(raw_me["enabled"], bool):
+                    raise ValueError(f"{me_ctx}.enabled must be a boolean")
+                me_out["enabled"] = raw_me["enabled"]
+            for me_num_key in ("b1", "b2", "c11", "c12", "c44"):
+                if me_num_key in raw_me and raw_me[me_num_key] is not None:
+                    me_out[me_num_key] = _finite_number(
+                        raw_me[me_num_key], f"{me_ctx}.{me_num_key}"
+                    )
+            if me_out:
+                entry_out["magnetoelastic"] = me_out
+        if entry_out:
+            canonical[raw_key] = entry_out
+    return canonical
 
 
 def build_builder_from_scene_document(scene: dict[str, Any]) -> dict[str, Any]:
@@ -2078,7 +2220,13 @@ def build_builder_from_scene_document(scene: dict[str, Any]) -> dict[str, Any]:
         geometry = dict(obj.get("geometry") or {})
         geometry_params = dict(geometry.get("geometry_params") or {})
         transform = dict(obj.get("transform") or {})
-        if geometry.get("geometry_kind") in {"MicrostripAntennaLayout", "CPWAntennaLayout"}:
+        if geometry.get("geometry_kind") in {
+            "MicrostripAntennaLayout",
+            "CPWAntennaLayout",
+            "MeanderAntennaLayout",
+            "InductiveLoopLayout",
+            "PiecewisePath3DLayout",
+        }:
             geometry_params = _compose_antenna_owner_transform(geometry_params, transform, object_id)
         else:
             translation = _owner_frame_translation(transform, object_id)
@@ -2324,6 +2472,34 @@ def build_builder_from_scene_document(scene: dict[str, Any]) -> dict[str, Any]:
         builder["pbc"] = _scene_pbc_to_ir(study["pbc"])
     if "fdm" in study:
         builder["fdm"] = copy.deepcopy(study.get("fdm"))
+    if "visualization_hint" in study and study["visualization_hint"] is not None:
+        raw_viz_hint = study["visualization_hint"]
+        if not isinstance(raw_viz_hint, Mapping):
+            raise ValueError(
+                "SceneDocument.study.visualization_hint must be an object"
+            )
+        unsupported_viz_fields = sorted(
+            str(name)
+            for name in set(raw_viz_hint) - {"airbox", "material_constitutive"}
+        )
+        if unsupported_viz_fields:
+            names = ", ".join(unsupported_viz_fields)
+            raise ValueError(
+                "SceneDocument.study.visualization_hint has unsupported fields: "
+                f"{names}"
+            )
+        builder_viz_hint: dict[str, Any] = {}
+        if raw_viz_hint.get("airbox") is not None:
+            builder_viz_hint["airbox"] = copy.deepcopy(raw_viz_hint["airbox"])
+        if raw_viz_hint.get("material_constitutive") is not None:
+            canonical_mc = canonical_material_constitutive_hint(
+                raw_viz_hint["material_constitutive"],
+                context="SceneDocument.study.visualization_hint.material_constitutive",
+            )
+            if canonical_mc:
+                builder_viz_hint["material_constitutive"] = canonical_mc
+        if builder_viz_hint:
+            builder["visualization_hint"] = builder_viz_hint
     if "field_drives" in scene:
         field_drives = scene["field_drives"]
         if not isinstance(field_drives, Mapping):
@@ -2710,7 +2886,7 @@ def builder_overrides_from_scene_document(scene: dict[str, Any]) -> dict[str, An
                 )
             unsupported_visualization_fields = sorted(
                 str(name)
-                for name in set(visualization_hint) - {"airbox"}
+                for name in set(visualization_hint) - {"airbox", "material_constitutive"}
             )
             if unsupported_visualization_fields:
                 names = ", ".join(unsupported_visualization_fields)
@@ -2718,9 +2894,12 @@ def builder_overrides_from_scene_document(scene: dict[str, Any]) -> dict[str, An
                     "SceneDocument.study.visualization_hint has unsupported fields: "
                     f"{names}"
                 )
-            overrides["visualization_hint"] = copy.deepcopy(
-                dict(visualization_hint)
-            )
+            if "visualization_hint" in builder:
+                overrides["visualization_hint"] = copy.deepcopy(
+                    builder["visualization_hint"]
+                )
+            else:
+                overrides["visualization_hint"] = {}
     if isinstance(raw_study, Mapping) and "pbc" in raw_study:
         # Missing is no override; explicit null intentionally clears PBC.
         overrides["pbc"] = copy.deepcopy(builder["pbc"])

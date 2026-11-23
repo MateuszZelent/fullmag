@@ -6832,6 +6832,8 @@ export interface components {
             cell_fields: boolean;
             eigen_modes: boolean;
             explicit_topology: boolean;
+            /** @description Supported file formats for field-state imports (`POST /v2/sessions/current/persistence/field-states/imports`). */
+            field_state_import_formats?: string[];
             gpu_telemetry: boolean;
             node_fields: boolean;
             preview_2d: boolean;
@@ -8592,6 +8594,8 @@ export interface components {
         };
         FieldStateImportRequest: {
             artifact_ref: string;
+            format?: string | null;
+            interpolation?: string | null;
             mode?: string | null;
             quantity_id: string;
             target: components["schemas"]["FieldStateTargetRef"];
@@ -8623,6 +8627,7 @@ export interface components {
             /** Format: int64 */
             point_count: number;
             quantity_id: string;
+            source_grid_shape?: number[] | null;
             target: components["schemas"]["FieldStateTargetRef"];
             warnings: string[];
         };
@@ -12391,6 +12396,7 @@ export interface components {
         };
         /** @description Outputs of the latest recorded run. */
         OutputsSummary: {
+            fields?: string[] | null;
             /** Format: int64 */
             frames?: number | null;
             /** Format: int64 */
@@ -13607,6 +13613,7 @@ export interface components {
             /** Format: double */
             duration_seconds?: number | null;
             error?: string | null;
+            fields?: string[] | null;
             finished_at?: string | null;
             /** Format: int64 */
             frames?: number | null;
@@ -15468,15 +15475,21 @@ export interface components {
             surface_id: string;
         };
         SceneTextureMapping: {
+            axis_extent_mode?: string | null;
+            /** Format: double */
+            axis_thickness_m?: number | null;
+            background_vector?: number[] | null;
             clamp_mode?: string;
             projection?: string;
             space?: string;
+            tile_period?: number[] | null;
         };
         SceneTextureOverride: {
             initial_magnetization: components["schemas"]["SceneInitialMagnetization"];
         };
         SceneTextureTransform3D: {
             pivot?: number[];
+            rotate_vectors?: boolean;
             rotation_quat?: number[];
             scale?: number[];
             translation?: number[];
@@ -31171,7 +31184,7 @@ export interface operations {
             path: {
                 /** @description Canonical scene object id */
                 object_id: string;
-                /** @description Object interaction kind: exchange | demag | interfacial_dmi | bulk_dmi | uniaxial_anisotropy */
+                /** @description Object interaction kind: exchange | demag | interfacial_dmi | bulk_dmi | uniaxial_anisotropy | cubic_anisotropy */
                 interaction_kind: string;
             };
             cookie?: never;
@@ -31206,7 +31219,7 @@ export interface operations {
             path: {
                 /** @description Canonical scene object id */
                 object_id: string;
-                /** @description Object interaction kind: exchange | demag | interfacial_dmi | bulk_dmi | uniaxial_anisotropy */
+                /** @description Object interaction kind: exchange | demag | interfacial_dmi | bulk_dmi | uniaxial_anisotropy | cubic_anisotropy */
                 interaction_kind: string;
             };
             cookie?: never;

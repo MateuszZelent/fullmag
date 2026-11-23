@@ -76,7 +76,6 @@ function ProjectRunsPage({ projectId }: { projectId: string }) {
             aria-expanded={selectedRunId === run.run_id}
             className="h-auto max-w-full justify-start px-0 py-1 text-left"
             size="sm"
-            title={run.run_id}
             variant="ghost"
             onClick={() =>
               setSelectedRunId((current) =>
@@ -86,7 +85,7 @@ function ProjectRunsPage({ projectId }: { projectId: string }) {
           >
             <span className="truncate">{run.run_id}</span>
           </Button>
-          <div className="text-fm-xs text-fm-muted">
+          <div className="text-xs text-fm-muted">
             {run.catalog_state === "materialized"
               ? `${run.task_count} tasks`
               : "Pending materialization"}
@@ -100,21 +99,21 @@ function ProjectRunsPage({ projectId }: { projectId: string }) {
           {selectedRun.error ? <p role="alert">Could not load run details: {selectedRun.error.message}</p> : null}
           {selectedRun.data ? (
             <>
-              <div className="text-fm-xs text-fm-muted">
+              <div className="text-xs text-fm-muted">
                 {selectedRun.data.catalog_state === "materialized"
-                  ? `Task catalog revision ${selectedRun.data.catalog_revision ?? "unknown"}`
+                  ? `Task catalog revision ${selectedRun.data.catalog_revision ?? "—"}`
                   : "Task catalog has not been materialized"}
               </div>
               <div className="grid min-w-0 gap-1">
                 {selectedRun.data.tasks.map((task) => (
-                  <div className="grid min-w-0 gap-1 text-fm-xs" key={task.task_id}>
+                  <div className="grid min-w-0 gap-1 text-xs" key={task.task_id}>
                     <div>
                       <span className="font-medium text-fm-primary">{task.lifecycle}</span>
                       {task.readiness.state === "blocked"
                         ? ` · blocked: ${task.readiness.reason}`
                         : " · ready"}
                     </div>
-                    <div className="truncate text-fm-muted" title={task.task_id}>
+                    <div className="truncate text-fm-muted">
                       {task.task_id}
                     </div>
                     <TaskExecutionDetails task={task} />
@@ -174,7 +173,7 @@ function TaskExecutionDetails({ task }: { readonly task: unknown }) {
               Profile {execution.materialization.profile.id} v
               {execution.materialization.profile.version}
               {" · SHA-256 "}
-              <span title={execution.materialization.profile.sha256}>
+              <span className="font-mono">
                 {execution.materialization.profile.sha256.slice(0, 16)}…
               </span>
             </div>

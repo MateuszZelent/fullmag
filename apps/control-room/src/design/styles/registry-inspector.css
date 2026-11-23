@@ -1,10 +1,25 @@
 /* ── Registry Inspector Dialog ──────────────────────────────────────────── */
 
 .fm-registry-inspector.fm-dialog {
-  width: min(860px, calc(100vw - var(--fm-space-8)));
-  max-height: min(780px, calc(100vh - 80px));
+  width: min(860px, calc(100dvw - var(--fm-space-8)));
+  max-height: min(780px, calc(100dvh - 80px));
   grid-template-rows: auto auto 1fr;
   gap: 0;
+}
+
+.fm-registry-inspector__mutation-error {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--fm-space-2);
+  margin: var(--fm-space-2) var(--fm-space-5) 0;
+  padding: var(--fm-space-2) var(--fm-space-3);
+  border: 1px solid color-mix(in oklab, var(--fm-danger) 45%, var(--fm-border-control));
+  border-radius: var(--fm-radius-field);
+  background: color-mix(in oklab, var(--fm-danger) 12%, transparent);
+  color: var(--fm-danger-text);
+  font-size: var(--fm-text-xs);
 }
 
 .fm-registry-inspector__close {
@@ -196,16 +211,16 @@ details[open] > .fm-registry-tree__summary .fm-registry-tree__compact {
 }
 
 .fm-registry-tree__string {
-  color: var(--fm-success);
+  color: var(--fm-success-text);
   word-break: break-all;
 }
 
 .fm-registry-tree__number {
-  color: var(--fm-info);
+  color: var(--fm-info-text);
 }
 
 .fm-registry-tree__bool {
-  color: var(--fm-warning);
+  color: var(--fm-warning-text);
   font-weight: 600;
 }
 

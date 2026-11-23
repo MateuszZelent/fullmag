@@ -4,6 +4,9 @@ import { useMemo, useReducer } from "react";
 
 import { ControlRoomApiError } from "@/kernel/api/ControlRoomApi";
 import { Button } from "@/shared/ui/Button";
+import { Checkbox } from "@/shared/ui/Checkbox";
+import { Input } from "@/shared/ui/Input";
+import { Switch } from "@/shared/ui/Switch";
 
 import {
   buildComputeNodePolicyUpdate,
@@ -178,7 +181,7 @@ export function ComputeNodePolicyEditor({
 
           <label className="fm-start-compute-settings__policy-field">
             <span>Allowed logical CPU IDs</span>
-            <input
+            <Input
               autoComplete="off"
               disabled={saving}
               onChange={(event) => updateDraft("allowedCpuIds", event.currentTarget.value)}
@@ -192,7 +195,7 @@ export function ComputeNodePolicyEditor({
             <legend>Allowed GPU devices</legend>
             {deviceOptions.length ? deviceOptions.map(([uuid, name]) => (
               <label className="fm-start-compute-settings__policy-check" key={uuid}>
-                <input
+                <Checkbox
                   checked={allowedGpuUuids.has(uuid)}
                   disabled={saving}
                   onChange={(event) => {
@@ -201,7 +204,6 @@ export function ComputeNodePolicyEditor({
                     else selected.delete(uuid);
                     updateDraft("allowedGpuUuids", [...selected].sort());
                   }}
-                  type="checkbox"
                 />
                 <span>{name} · {uuid}</span>
               </label>
@@ -233,15 +235,15 @@ export function ComputeNodePolicyEditor({
             </fieldset>
           ) : null}
 
-          <label className="fm-start-compute-settings__policy-check">
-            <input
+          <div className="fm-start-compute-settings__policy-check">
+            <Switch
+              aria-label="Drain this node: block new admissions while existing work finishes"
               checked={draft.draining}
               disabled={saving}
-              onChange={(event) => updateDraft("draining", event.currentTarget.checked)}
-              type="checkbox"
+              onCheckedChange={(checked) => updateDraft("draining", checked)}
             />
             <span>Drain this node: block new admissions while existing work finishes</span>
-          </label>
+          </div>
 
           <p className="fm-start-compute-settings__reason">Priority order and allowed parallelism patterns are preserved from the current policy. The host validates reserves against configured capacity before saving. GPU sharing stays exclusive; OutputStorage remains a separate setting.</p>
           {error ? <p className="fm-start-compute-settings__error" role="alert">{error}</p> : null}
@@ -274,7 +276,7 @@ function NumberField({
   return (
     <label className="fm-start-compute-settings__policy-field">
       <span>{label}</span>
-      <input
+      <Input
         disabled={disabled}
         min="0"
         onChange={(event) => onChange(event.currentTarget.value)}

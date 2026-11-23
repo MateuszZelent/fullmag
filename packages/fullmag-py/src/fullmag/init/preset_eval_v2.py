@@ -62,6 +62,13 @@ def _sign(params: Mapping[str, object], key: str, default: int = 1) -> float:
     return float(value)
 
 
+def _string(params: Mapping[str, object], key: str, default: str | None = None) -> str:
+    raw = params.get(key, default)
+    if not isinstance(raw, str):
+        raise _invalid(key, "must be a string")
+    return raw
+
+
 def _vector(
     params: Mapping[str, object],
     key: str,
@@ -385,6 +392,22 @@ def _sech(value: float) -> float:
     return 1.0 / math.cosh(value)
 
 
+def _fallback_wall_direction(axis: Vec3, left: Vec3, kind: str) -> Vec3:
+    projected = _sub(axis, _scale(left, _dot(axis, left)))
+    preferred = projected if kind == "neel" else _cross(axis, left)
+    if _norm(preferred) > _EPSILON:
+        return preferred
+    helper: Vec3 = (
+        (1.0, 0.0, 0.0)
+        if abs(axis[0]) < 0.9
+        else (0.0, 1.0, 0.0)
+        if abs(axis[1]) < 0.9
+        else (0.0, 0.0, 1.0)
+    )
+    tangent_one = _normalize(_cross(axis, helper), "wall_center_direction")
+    return tangent_one if kind == "bloch" else _cross(tangent_one, axis)
+
+
 def _domain_wall(params: Mapping[str, object], point: Sequence[float]) -> Vec3:
     kind = params.get("kind", "neel")
     if not isinstance(kind, str) or kind not in {"bloch", "neel"}:
@@ -400,10 +423,7 @@ def _domain_wall(params: Mapping[str, object], point: Sequence[float]) -> Vec3:
     if "wall_center_direction" in params:
         wall_direction = _vector(params, "wall_center_direction")
     else:
-        projected = _sub(axis, _scale(left, _dot(axis, left)))
-        if _norm(projected) <= _EPSILON:
-            raise _invalid("wall_center_direction", "required when the derived wall direction is degenerate")
-        wall_direction = projected if kind == "neel" else _cross(axis, left)
+        wall_direction = _fallback_wall_direction(axis, left, kind)
     wall_direction = _normalize(wall_direction, "wall_center_direction")
     if abs(_dot(wall_direction, left)) > 1.0e-10:
         raise _invalid("wall_center_direction", "must be orthogonal to the domain direction")
@@ -482,6 +502,398 @@ def _bimeron(params: Mapping[str, object], point: Sequence[float]) -> Vec3:
     )
 
 
+def _wrap_metric_repeat(coord: float, period: float) -> float:
+    return ((coord + 0.5 * period) % period) - 0.5 * period
+
+
+def _wrap_metric_mirror(coord: float, period: float) -> float:
+    two_p = 2.0 * period
+    wrapped = (coord + 0.5 * period) % two_p
+    folded = wrapped if wrapped <= period else (two_p - wrapped)
+    return folded - 0.5 * period
+
+
+def _orthonormal_basis_from_normal(normal: Vec3) -> tuple[Vec3, Vec3]:
+    ref = (0.0, 0.0, 1.0) if abs(normal[2]) < 0.9 else (1.0, 0.0, 0.0)
+    e1 = _normalize(_cross(ref, normal), "spin_plane_normal")
+    e2 = _normalize(_cross(normal, e1), "spin_plane_normal")
+    return e1, e2
+
+
+def _skyrmion_lattice(params: Mapping[str, object], point: Sequence[float]) -> Vec3:
+    lattice = _string(params, "lattice", "hexagonal")
+    a = _positive(params, "lattice_constant")
+    radius = _positive(params, "radius")
+    if a <= 2.0 * radius:
+        raise _invalid("lattice_constant", "must be strictly greater than 2 * radius")
+    wall_type = _string(params, "kind", "bloch")
+    if wall_type not in {"bloch", "neel"}:
+        raise _invalid("kind", "must be 'bloch' or 'neel'")
+    u, v = point[0], point[1]
+    if lattice == "square":
+        u_ws = _wrap_metric_repeat(u, a)
+        v_ws = _wrap_metric_repeat(v, a)
+    elif lattice == "hexagonal":
+        sqrt3_half_a = 0.5 * math.sqrt(3.0) * a
+        f2 = v / sqrt3_half_a
+        f1 = (u - 0.5 * a * f2) / a
+        n1_0 = round(f1)
+        n2_0 = round(f2)
+        best_dist_sq = math.inf
+        u_ws = u
+        v_ws = v
+        for d1 in (-1, 0, 1):
+            for d2 in (-1, 0, 1):
+                n1 = n1_0 + d1
+                n2 = n2_0 + d2
+                du = u - (n1 * a + n2 * 0.5 * a)
+                dv = v - (n2 * sqrt3_half_a)
+                dist_sq = du * du + dv * dv
+                if dist_sq < best_dist_sq:
+                    best_dist_sq = dist_sq
+                    u_ws = du
+                    v_ws = dv
+    else:
+        raise _invalid("lattice", "must be 'hexagonal' or 'square'")
+    return _skyrmion(params, (u_ws, v_ws, point[2]), 1.0, wall_type)
+
+
+def _spiral(params: Mapping[str, object], point: Sequence[float]) -> Vec3:
+    spiral_kind = _string(params, "spiral_kind", "cycloidal")
+    if spiral_kind not in {"cycloidal", "proper_screw", "custom_plane"}:
+        raise _invalid("spiral_kind", "must be 'cycloidal', 'proper_screw', or 'custom_plane'")
+    wavelength = _positive(params, "wavelength")
+    q_hat = _normalize(_vector(params, "propagation_axis", (1.0, 0.0, 0.0)), "propagation_axis")
+    chirality = _sign(params, "chirality", 1)
+    phase_rad = _number(params, "phase_rad", 0.0)
+    if spiral_kind == "proper_screw":
+        n_s = q_hat
+        e1, e2 = _orthonormal_basis_from_normal(n_s)
+    elif spiral_kind == "cycloidal":
+        default_normal = (0.0, 1.0, 0.0) if abs(q_hat[1]) < 0.9 else (0.0, 0.0, 1.0)
+        raw_n = _normalize(_vector(params, "spin_plane_normal", default_normal), "spin_plane_normal")
+        proj = _dot(raw_n, q_hat)
+        if abs(proj) > 1.0 - 1.0e-6:
+            raise _invalid(
+                "spin_plane_normal",
+                "must not be parallel to propagation_axis for a cycloidal spiral",
+            )
+        n_s = _normalize(
+            (
+                raw_n[0] - proj * q_hat[0],
+                raw_n[1] - proj * q_hat[1],
+                raw_n[2] - proj * q_hat[2],
+            ),
+            "spin_plane_normal",
+        )
+        e1 = q_hat
+        e2 = _normalize(_cross(n_s, e1), "spin_plane_normal")
+    else:
+        n_s = _normalize(_vector(params, "spin_plane_normal", (0.0, 1.0, 0.0)), "spin_plane_normal")
+        e1, e2 = _orthonormal_basis_from_normal(n_s)
+    phase = chirality * (2.0 * math.pi / wavelength) * _dot(q_hat, point) + phase_rad
+    cos_phi = math.cos(phase)
+    sin_phi = math.sin(phase)
+    return _normalize(
+        (
+            e1[0] * cos_phi + e2[0] * sin_phi,
+            e1[1] * cos_phi + e2[1] * sin_phi,
+            e1[2] * cos_phi + e2[2] * sin_phi,
+        ),
+        "spiral",
+    )
+
+
+def _bloch_point(params: Mapping[str, object], point: Sequence[float]) -> Vec3:
+    """3D Bloch point hedgehog per docs/physics/0534 (texture-bloch-point-v2).
+
+    ``core_radius`` is validated positive as the physical core-marker / gizmo
+    indicator scale, while the continuum unit-vector magnetization field is the
+    exact scale-invariant 3D hedgehog with regular origin limit ``polarity * (0, 0, sz)``
+    for ``r <= 1e-15 m`` (aligned across Rust, Python, and TypeScript).
+    """
+    bp_kind = _string(params, "bp_kind", "circulating")
+    if bp_kind not in {"radial", "circulating", "hyperbolic"}:
+        raise _invalid("bp_kind", "must be 'radial', 'circulating', or 'hyperbolic'")
+    polarity = _sign(params, "polarity", 1)
+    default_twist = math.pi / 2.0 if bp_kind == "circulating" else 0.0
+    twist = _number(params, "twist_rad", default_twist)
+    _positive(params, "core_radius", 1.0e-9)
+    r = math.sqrt(point[0] * point[0] + point[1] * point[1] + point[2] * point[2])
+    if r <= 1.0e-15:
+        ux, uy, uz = 0.0, 0.0, 1.0
+    else:
+        ux, uy, uz = point[0] / r, point[1] / r, point[2] / r
+    sz = -1.0 if bp_kind == "hyperbolic" else 1.0
+    vx, vy, vz = ux, uy, sz * uz
+    cos_t = math.cos(twist)
+    sin_t = math.sin(twist)
+    return (
+        polarity * (cos_t * vx - sin_t * vy),
+        polarity * (sin_t * vx + cos_t * vy),
+        polarity * vz,
+    )
+
+
+def _nearest_int(value: float) -> int:
+    return math.floor(value + 0.5)
+
+
+def _artificial_spin_ice(params: Mapping[str, object], point: Sequence[float]) -> Vec3:
+    lattice = _string(params, "lattice", "square")
+    vertex_state = _string(params, "vertex_state", "type_i_ground")
+    if vertex_state not in {"type_i_ground", "type_ii_polarized", "monopole_pair"}:
+        raise _invalid(
+            "vertex_state",
+            "must be 'type_i_ground', 'type_ii_polarized', or 'monopole_pair'",
+        )
+    a = _positive(params, "pitch")
+    u, v = point[0], point[1]
+    if lattice == "square":
+        h_nu = math.floor(u / a)
+        h_nv = _nearest_int(v / a)
+        h_du = u - (h_nu + 0.5) * a
+        h_dv = v - h_nv * a
+        h_dist_sq = h_du * h_du + h_dv * h_dv
+
+        v_nu = _nearest_int(u / a)
+        v_nv = math.floor(v / a)
+        v_du = u - v_nu * a
+        v_dv = v - (v_nv + 0.5) * a
+        v_dist_sq = v_du * v_du + v_dv * v_dv
+
+        if h_dist_sq <= v_dist_sq:
+            if vertex_state == "type_ii_polarized":
+                sign_val = 1.0
+            else:
+                sign_val = 1.0 if (h_nu + h_nv) % 2 == 0 else -1.0
+                if vertex_state == "monopole_pair" and h_nu == 0 and h_nv == 0:
+                    sign_val = -sign_val
+            return (sign_val, 0.0, 0.0)
+        else:
+            if vertex_state == "type_ii_polarized":
+                sign_val = 1.0
+            else:
+                sign_val = -1.0 if (v_nu + v_nv) % 2 == 0 else 1.0
+            return (0.0, sign_val, 0.0)
+    if lattice == "kagome":
+        sqrt3 = math.sqrt(3.0)
+        b1 = (1.5 * a, 0.5 * sqrt3 * a)
+        b2 = (1.5 * a, -0.5 * sqrt3 * a)
+        # Inverse of [[1.5a, 1.5a], [0.5*sqrt3*a, -0.5*sqrt3*a]]
+        f_sum = u / (1.5 * a)
+        f_diff = v / (0.5 * sqrt3 * a)
+        f1 = 0.5 * (f_sum + f_diff)
+        f2 = 0.5 * (f_sum - f_diff)
+        i0 = round(f1)
+        j0 = round(f2)
+        bonds = (
+            (1.0, 0.0),
+            (-0.5, 0.5 * sqrt3),
+            (-0.5, -0.5 * sqrt3),
+        )
+        best_dist_sq = math.inf
+        best_i = i0
+        best_j = j0
+        best_k = 0
+        for di in (-1, 0, 1):
+            for dj in (-1, 0, 1):
+                ii = i0 + di
+                jj = j0 + dj
+                ax = ii * b1[0] + jj * b2[0]
+                ay = ii * b1[1] + jj * b2[1]
+                for k, (bx, by) in enumerate(bonds):
+                    mx = ax + 0.5 * a * bx
+                    my = ay + 0.5 * a * by
+                    dist_sq = (u - mx) ** 2 + (v - my) ** 2
+                    if dist_sq < best_dist_sq:
+                        best_dist_sq = dist_sq
+                        best_i = ii
+                        best_j = jj
+                        best_k = k
+        bx, by = bonds[best_k]
+        if vertex_state == "type_ii_polarized":
+            sign_val = 1.0 if best_k == 0 else -1.0
+        else:
+            out_bond = (best_i - best_j) % 3
+            sign_val = 1.0 if best_k == out_bond else -1.0
+            if vertex_state == "monopole_pair" and best_i == 0 and best_j == 0 and best_k == 0:
+                sign_val = -sign_val
+        return (sign_val * bx, sign_val * by, 0.0)
+    raise _invalid("lattice", "must be 'square' or 'kagome'")
+
+
+def _validate_axis_extent_v2(
+    axis_extent_mode: str,
+    axis_thickness_m: float | None,
+) -> float | None:
+    if not axis_extent_mode or axis_extent_mode == "uniform":
+        return None
+    if axis_extent_mode == "thickness":
+        if axis_thickness_m is None or isinstance(axis_thickness_m, bool):
+            raise _invalid(
+                "mapping.axis_thickness_m",
+                "positive axis_thickness_m is required when axis_extent_mode == 'thickness'",
+            )
+        try:
+            thickness = float(axis_thickness_m)
+        except (TypeError, ValueError) as exc:
+            raise _invalid("mapping.axis_thickness_m", "must be finite and positive") from exc
+        if not math.isfinite(thickness) or thickness <= _EPSILON:
+            raise _invalid("mapping.axis_thickness_m", "must be finite and positive")
+        return 0.5 * thickness
+    raise _invalid("mapping.axis_extent_mode", f"unsupported axis_extent_mode '{axis_extent_mode}'")
+
+
+def _resolve_slab_background_v2(
+    preset_kind: str,
+    params: Mapping[str, object],
+    frame: tuple[Vec3, Vec3, Vec3] | None,
+    background_vector: Vec3 | None,
+) -> Vec3:
+    if background_vector is not None:
+        return _normalize(background_vector, "mapping.background_vector")
+    if preset_kind in {"bloch_skyrmion", "neel_skyrmion", "antiskyrmion", "skyrmion_lattice"}:
+        polarity = _sign(params, "core_polarity", 1)
+        local_bg: Vec3 = (0.0, 0.0, -polarity)
+    elif preset_kind in {"skyrmionium", "hopfion"}:
+        bg_sign = _sign(params, "background_sign", 1)
+        local_bg = (0.0, 0.0, bg_sign)
+    elif preset_kind == "bimeron":
+        bg_sign = _sign(params, "background_sign", 1)
+        local_bg = (bg_sign, 0.0, 0.0)
+    elif preset_kind == "hopfion_compact_support":
+        local_bg = (0.0, 0.0, 1.0)
+    else:
+        local_bg = (0.0, 0.0, 1.0)
+    if frame is not None and preset_kind in _METRIC_PRESETS:
+        return _vector_to_world(local_bg, frame)
+    return local_bg
+
+
+def resolve_default_tile_period(
+    explicit_tile_period: Sequence[float] | None,
+    target_bounds_extent: Sequence[float] | None,
+    active_source_points: Sequence[Vec3],
+) -> Vec3 | None:
+    """Canonical default tile_period formula shared identically across Rust, Python, and TS.
+
+    1. Explicit ``tile_period`` wins when provided.
+    2. Explicit ``target_bounds_extent`` (domain/region AABB extents before
+       ``texture_transform``) is used when finite and positive on all 3 axes.
+    3. Otherwise compute the AABB extent over active source-space points before
+       ``texture_transform``, replacing any degenerate axis (<= _EPSILON) with
+       the maximum positive axis extent (failing closed with None when all axes
+       are degenerate).
+    """
+    if explicit_tile_period is not None:
+        return (
+            float(explicit_tile_period[0]),
+            float(explicit_tile_period[1]),
+            float(explicit_tile_period[2]),
+        )
+    if target_bounds_extent is not None:
+        ext = (
+            float(target_bounds_extent[0]),
+            float(target_bounds_extent[1]),
+            float(target_bounds_extent[2]),
+        )
+        if all(math.isfinite(e) and e > _EPSILON for e in ext):
+            return ext
+    if not active_source_points:
+        return None
+    min_x = min_y = min_z = math.inf
+    max_x = max_y = max_z = -math.inf
+    any_finite = False
+    for pt in active_source_points:
+        if math.isfinite(pt[0]) and math.isfinite(pt[1]) and math.isfinite(pt[2]):
+            any_finite = True
+            if pt[0] < min_x:
+                min_x = pt[0]
+            if pt[0] > max_x:
+                max_x = pt[0]
+            if pt[1] < min_y:
+                min_y = pt[1]
+            if pt[1] > max_y:
+                max_y = pt[1]
+            if pt[2] < min_z:
+                min_z = pt[2]
+            if pt[2] > max_z:
+                max_z = pt[2]
+    if not any_finite:
+        return None
+    raw = (max_x - min_x, max_y - min_y, max_z - min_z)
+    max_ext = max(raw)
+    if not math.isfinite(max_ext) or max_ext <= _EPSILON:
+        return None
+    return (
+        raw[0] if raw[0] > _EPSILON else max_ext,
+        raw[1] if raw[1] > _EPSILON else max_ext,
+        raw[2] if raw[2] > _EPSILON else max_ext,
+    )
+
+
+def _apply_clamp_mode_v2(
+    point: Vec3,
+    pivot: Vec3,
+    clamp_mode: str,
+    period: Vec3 | None,
+    background_vector: Vec3 | None,
+    frame: tuple[Vec3, Vec3, Vec3] | None,
+    is_metric: bool,
+) -> tuple[str, Vec3]:
+    if not clamp_mode or clamp_mode == "none":
+        return ("sample", point)
+    if period is None:
+        raise _invalid(
+            "mapping.tile_period",
+            "positive metric box/period [Px, Py, Pz] is required when clamp_mode != 'none'",
+        )
+    if any(not math.isfinite(p) or p <= _EPSILON for p in period):
+        raise _invalid("mapping.tile_period", "all period components must be finite and positive")
+    rel = (point[0] - pivot[0], point[1] - pivot[1], point[2] - pivot[2])
+    if clamp_mode == "clamp":
+        return (
+            "sample",
+            (
+                max(-0.5 * period[0], min(0.5 * period[0], rel[0])) + pivot[0],
+                max(-0.5 * period[1], min(0.5 * period[1], rel[1])) + pivot[1],
+                max(-0.5 * period[2], min(0.5 * period[2], rel[2])) + pivot[2],
+            ),
+        )
+    if clamp_mode == "repeat":
+        return (
+            "sample",
+            (
+                _wrap_metric_repeat(rel[0], period[0]) + pivot[0],
+                _wrap_metric_repeat(rel[1], period[1]) + pivot[1],
+                _wrap_metric_repeat(rel[2], period[2]) + pivot[2],
+            ),
+        )
+    if clamp_mode == "mirror":
+        return (
+            "sample",
+            (
+                _wrap_metric_mirror(rel[0], period[0]) + pivot[0],
+                _wrap_metric_mirror(rel[1], period[1]) + pivot[1],
+                _wrap_metric_mirror(rel[2], period[2]) + pivot[2],
+            ),
+        )
+    if clamp_mode == "background":
+        if any(abs(rel[i]) > 0.5 * period[i] for i in range(3)):
+            if background_vector is not None:
+                return ("background", _normalize(background_vector, "mapping.background_vector"))
+            default_local: Vec3 = (0.0, 0.0, 1.0)
+            resolved_bg = (
+                _vector_to_world(default_local, frame)
+                if (is_metric and frame is not None)
+                else default_local
+            )
+            return ("background", resolved_bg)
+        return ("sample", point)
+    raise _invalid("mapping.clamp_mode", f"unsupported clamp_mode '{clamp_mode}'")
+
+
 def _local(preset_kind: str, params: Mapping[str, object], point: Sequence[float]) -> Vec3:
     if preset_kind == "uniform":
         return _normalize(_vector(params, "direction"), "direction")
@@ -518,6 +930,14 @@ def _local(preset_kind: str, params: Mapping[str, object], point: Sequence[float
         return _helical(params, point)
     if preset_kind == "conical":
         return _conical(params, point)
+    if preset_kind == "skyrmion_lattice":
+        return _skyrmion_lattice(params, point)
+    if preset_kind == "spiral":
+        return _spiral(params, point)
+    if preset_kind == "bloch_point":
+        return _bloch_point(params, point)
+    if preset_kind == "artificial_spin_ice":
+        return _artificial_spin_ice(params, point)
     raise _invalid("preset_kind", f"unsupported preset '{preset_kind}'")
 
 
@@ -532,7 +952,16 @@ _METRIC_PRESETS = {
     "bimeron",
     "domain_wall",
     "two_domain",
+    "skyrmion_lattice",
+    "artificial_spin_ice",
 }
+
+_WAVE2_PRESETS = frozenset({
+    "skyrmion_lattice",
+    "spiral",
+    "bloch_point",
+    "artificial_spin_ice",
+})
 
 
 def evaluate_preset_texture_v2(
@@ -542,6 +971,15 @@ def evaluate_preset_texture_v2(
     *,
     projection: str | None = None,
     rotation_quat: Sequence[float] | None = None,
+    rotate_vectors: bool = True,
+    clamp_mode: str = "none",
+    tile_period: Sequence[float] | None = None,
+    background_vector: Sequence[float] | None = None,
+    axis_extent_mode: str = "uniform",
+    axis_thickness_m: float | None = None,
+    pivot: Sequence[float] = (0.0, 0.0, 0.0),
+    target_bounds_extent: Sequence[float] | None = None,
+    active_mask: Sequence[bool] | None = None,
 ) -> EvaluatedTextureV2:
     if projection is not None and projection not in {
         "object_local",
@@ -550,6 +988,8 @@ def evaluate_preset_texture_v2(
         "planar_yz",
     }:
         raise _invalid("projection", f"unsupported projection '{projection}'")
+    if not isinstance(rotate_vectors, bool):
+        raise _invalid("texture_transform.rotate_vectors", "must be a boolean")
     point_list: list[Vec3] = []
     for raw_point in points:
         try:
@@ -559,39 +999,99 @@ def evaluate_preset_texture_v2(
         if any(not math.isfinite(component) for component in point):
             raise _invalid("sample_point", "all components must be finite")
         point_list.append(point)
+    if active_mask is not None and len(active_mask) != len(point_list):
+        raise _invalid("active_mask", "length must match sample point count")
 
-    from fullmag._core import sample_preset_texture_v2
-
-    native_result = sample_preset_texture_v2(
-        preset_kind,
-        dict(params),
-        point_list,
-        projection=projection,
-        rotation_quat=list(rotation_quat) if rotation_quat is not None else None,
+    normalized_clamp = str(clamp_mode or "none").strip().lower()
+    normalized_axis_extent = str(axis_extent_mode or "uniform").strip().lower()
+    half_axis_thickness = _validate_axis_extent_v2(normalized_axis_extent, axis_thickness_m)
+    use_native = (
+        normalized_clamp == "none"
+        and half_axis_thickness is None
+        and rotate_vectors is True
+        and active_mask is None
+        and target_bounds_extent is None
+        and preset_kind not in _WAVE2_PRESETS
     )
-    if native_result is not None:
-        raw_values = native_result.get("values")
-        if not isinstance(raw_values, list):
-            raise ValueError("native v2 evaluator returned an invalid result")
-        return EvaluatedTextureV2(
-            values=[
-                (float(value[0]), float(value[1]), float(value[2]))
-                for value in raw_values
-            ]
+    if use_native:
+        from fullmag._core import sample_preset_texture_v2
+
+        native_result = sample_preset_texture_v2(
+            preset_kind,
+            dict(params),
+            point_list,
+            projection=projection,
+            rotation_quat=list(rotation_quat) if rotation_quat is not None else None,
         )
+        if native_result is not None:
+            raw_values = native_result.get("values")
+            if not isinstance(raw_values, list):
+                raise ValueError("native v2 evaluator returned an invalid result")
+            return EvaluatedTextureV2(
+                values=[
+                    (float(value[0]), float(value[1]), float(value[2]))
+                    for value in raw_values
+                ]
+            )
 
     frame = _resolve_frame(params, projection)
-    if preset_kind in {"hopfion", "hopfion_compact_support"} and frame is not None:
+    if preset_kind in {"hopfion", "hopfion_compact_support", "bloch_point"} and frame is not None:
         raise _invalid(
             "mapping.projection",
-            "the selected hopfion preset is three-dimensional and requires object_local projection",
+            "the selected three-dimensional preset requires object_local projection",
         )
-    quaternion = _normalized_quaternion(rotation_quat) if rotation_quat is not None else None
+    quaternion = _normalized_quaternion(rotation_quat) if (rotation_quat is not None and rotate_vectors) else None
+    pivot_vec: Vec3 = (float(pivot[0]), float(pivot[1]), float(pivot[2]))
+    period_vec: Vec3 | None = None
+    if normalized_clamp != "none":
+        active_points = (
+            [pt for pt, active in zip(point_list, active_mask) if active]
+            if active_mask is not None
+            else point_list
+        )
+        period_vec = resolve_default_tile_period(
+            tile_period,
+            target_bounds_extent,
+            active_points,
+        )
+    bg_vec: Vec3 | None = (
+        (float(background_vector[0]), float(background_vector[1]), float(background_vector[2]))
+        if background_vector is not None
+        else None
+    )
+
     _local(preset_kind, params, (0.0, 0.0, 0.0))
+    slab_bg_vec: Vec3 | None = (
+        _resolve_slab_background_v2(preset_kind, params, frame, bg_vec)
+        if half_axis_thickness is not None
+        else None
+    )
+    is_metric = preset_kind in _METRIC_PRESETS
     values: list[Vec3] = []
-    for point in point_list:
-        local_point = _coordinates(point, frame) if frame is not None and preset_kind in _METRIC_PRESETS else point
+    for idx, point in enumerate(point_list):
+        if active_mask is not None and not active_mask[idx]:
+            values.append((0.0, 0.0, 0.0))
+            continue
+        if half_axis_thickness is not None and slab_bg_vec is not None:
+            rel_z = _sub(point, pivot_vec)
+            z_normal = _dot(rel_z, frame[2]) if (is_metric and frame is not None) else rel_z[2]
+            if abs(z_normal) > half_axis_thickness * (1.0 + 1.0e-12):
+                values.append(_rotate(slab_bg_vec, quaternion) if quaternion is not None else slab_bg_vec)
+                continue
+        outcome_kind, outcome_vec = _apply_clamp_mode_v2(
+            point,
+            pivot_vec,
+            normalized_clamp,
+            period_vec,
+            bg_vec,
+            frame,
+            is_metric,
+        )
+        if outcome_kind == "background":
+            values.append(_rotate(outcome_vec, quaternion) if quaternion is not None else outcome_vec)
+            continue
+        local_point = _coordinates(outcome_vec, frame) if frame is not None and is_metric else outcome_vec
         local_vector = _local(preset_kind, params, local_point)
-        world_vector = _vector_to_world(local_vector, frame) if frame is not None and preset_kind in _METRIC_PRESETS else local_vector
+        world_vector = _vector_to_world(local_vector, frame) if frame is not None and is_metric else local_vector
         values.append(_rotate(world_vector, quaternion) if quaternion is not None else world_vector)
     return EvaluatedTextureV2(values=values)

@@ -1458,7 +1458,7 @@
     },
     {
       "id": "source-results-mode-field-inspector",
-      "path": "apps/control-room/src/modules/inspector/panels/frequency-domain/FrequencyDomainResultInspectors.tsx",
+      "path": "apps/control-room/src/modules/inspector/inspectors/results/frequency-domain/FrequencyDomainResourceSpecs.tsx",
       "symbol": "EigenModeFieldResourceInspectorPanel",
       "responsibility": "Inspect selected mode-field identity, availability and provenance in Results."
     },

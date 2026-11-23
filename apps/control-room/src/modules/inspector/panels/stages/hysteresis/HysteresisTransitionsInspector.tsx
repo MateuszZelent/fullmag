@@ -2,11 +2,11 @@
 
 import { useCallback, useMemo } from "react";
 
-import { createCommandContext } from "@/kernel/commands/commandContext";
 import { Button } from "@/shared/ui/Button";
 
 import { FieldRow } from "../../../primitives/FieldRow";
 import { InspectorGroup } from "../../../primitives/InspectorGroup";
+import { buildStudyCommandContext } from "../../study/useConnectedStudyAuthoring";
 import { hysteresisInitialStateActionPresentation } from "./HysteresisInspectorUtils";
 import type { HysteresisInspectorCommonProps } from "./HysteresisInspectorTypes";
 
@@ -21,7 +21,7 @@ export function HysteresisTransitionsInspector({
   "activePoint" | "kernel" | "points" | "progress" | "stageId"
 >) {
   const commandContext = useMemo(
-    () => createCommandContext("inspector", kernel),
+    () => buildStudyCommandContext(kernel),
     [kernel],
   );
   const selectedPoint =
@@ -95,12 +95,8 @@ export function HysteresisTransitionsInspector({
           size="sm"
           variant="secondary"
           disabled={!stageCompleted || !stageId}
+          disabledReason="Finish the hysteresis stage before continuing to another stage."
           onClick={continueToNextStage}
-          title={
-            stageCompleted
-              ? "Add an explicit run stage after this hysteresis stage."
-              : "Finish the hysteresis stage before continuing to another stage."
-          }
         >
           Continue to next stage
         </Button>
@@ -108,12 +104,8 @@ export function HysteresisTransitionsInspector({
           size="sm"
           variant="secondary"
           disabled={!stageCompleted || points.length === 0}
+          disabledReason="Finish the hysteresis stage before exporting the loop."
           onClick={exportLoopCsv}
-          title={
-            stageCompleted
-              ? "Export the completed hysteresis loop points as CSV."
-              : "Finish the hysteresis stage before exporting the loop."
-          }
         >
           Export loop CSV
         </Button>
@@ -121,8 +113,8 @@ export function HysteresisTransitionsInspector({
           size="sm"
           variant="secondary"
           disabled={initialStateAction.disabled}
+          disabledReason={initialStateAction.title}
           onClick={usePointAsInitialState}
-          title={initialStateAction.title}
         >
           Use selected point as initial
         </Button>

@@ -69,7 +69,7 @@ describe("Physics ribbon absorbing boundary", () => {
     }, { baseRevision: 7, sessionScopeKey: "session-one" });
     expect(test.resources.getRevision(MODEL_SCENE_PATH)).toBe(8);
     expect(test.selection.get()).toMatchObject({ kind: "object.absorbing-boundary", objectId: "body",
-      nodeId: "model:object:body:magnetic-parameters:absorbing-boundary" });
+      nodeId: "model:object:body:absorbing-boundary" });
     expect(test.showPanel).toHaveBeenCalledWith("right", true);
   });
 

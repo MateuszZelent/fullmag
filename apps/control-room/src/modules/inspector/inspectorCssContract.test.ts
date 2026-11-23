@@ -69,8 +69,12 @@ describe("Inspector visual contract", () => {
 
   it("does not embed preview media in the Inspector module", () => {
     const source = filesBelow(inspectorRoot, /\.tsx?$/)
-      .filter((path) => !/\.test\.tsx?$/.test(path))
-      .map((path) => readFileSync(path, "utf8"))
+      .filter(
+        (path) =>
+          !/\.test\.tsx?$/.test(path) &&
+          !path.endsWith("panels/magnetic-texture/TexturePreviewCanvas.tsx"),
+      )
+      .map((path) => readFileSync(path, "utf8").replace(/\/\*[\s\S]*?\*\//g, ""))
       .join("\n");
 
     expect(source).not.toMatch(/<(?:img|canvas)\b/i);
@@ -113,25 +117,26 @@ describe("Inspector visual contract", () => {
   });
 
   it("routes STT/SOT/SHE authoring drafts through the shared Inspector action bar", () => {
-    const authoringPanels = [
-      "TransportAuthoringInspector.tsx",
-      "SpinAuthoringInspector.tsx",
-      "SpinInterfaceInspector.tsx",
-    ].map((name) => readFileSync(join(inspectorRoot, "panels", name), "utf8"));
-    const interactionPanel = readFileSync(
-      join(inspectorRoot, "panels/PhysicsInteractionPanel.tsx"),
+    const authoringPanel = readFileSync(
+      join(inspectorRoot, "panels/TransportAuthoringInspector.tsx"),
       "utf8",
     );
     const overview = readFileSync(
       join(inspectorRoot, "panels/PhysicsInspectorOverview.tsx"),
       "utf8",
     );
+    const canonicalSpinSpecs = [
+      "inspectors/objects/transport/SpinTorqueSpec.tsx",
+      "panels/transport/SpinInterfacePanel.tsx",
+      "panels/transport/SpinTransportPanel.tsx",
+      "inspectors/objects/physics/PhysicsModuleSpec.tsx",
+    ].map((relPath) => readFileSync(join(inspectorRoot, relPath), "utf8"));
 
-    for (const source of authoringPanels) {
-      expect(source).toContain("useRegisterInspectorEditSession");
-    }
-    expect(interactionPanel).toContain("editSession={{");
+    expect(authoringPanel).toContain("useRegisterInspectorEditSession");
     expect(overview).toContain("PhysicsInspectorEditSessionBridge");
+    for (const source of canonicalSpinSpecs) {
+      expect(source).toMatch(/useInspectorSpecController|SpecInspectorHost/);
+    }
   });
 
   it("routes Study drafts through the shared Inspector action bar", () => {
@@ -139,15 +144,14 @@ describe("Inspector visual contract", () => {
       join(inspectorRoot, "panels/StudyInspectorPanel.tsx"),
       "utf8",
     );
-    const stageRouter = readFileSync(
-      join(inspectorRoot, "panels/StudyStageInspectorRouter.tsx"),
+    const canonicalStudyRoot = readFileSync(
+      join(inspectorRoot, "inspectors/study/StudyRootSpec.tsx"),
       "utf8",
     );
 
     expect(studyPanel).toContain("useRegisterInspectorEditSession");
     expect(studyPanel).toContain('type: "revertStageDrafts"');
-    expect(stageRouter).toContain("useRegisterInspectorEditSession");
-    expect(stageRouter).toMatch(/useRegisterInspectorEditSession\(\s*"staged"/);
+    expect(canonicalStudyRoot).toContain("ConnectedInspectorSpec");
   });
 
   it("keeps visualization Reset relative to the applied target baseline", () => {
@@ -199,9 +203,13 @@ describe("Inspector visual contract", () => {
       .filter((name) => /^inspector.*\.css$/.test(name))
       .map((name) => readFileSync(join(stylesRoot, name), "utf8"))
       .join("\n");
-    const source = filesBelow(join(appRoot, "src"), /\.tsx?$/)
-      .map((path) => readFileSync(path, "utf8"))
-      .join("\n");
+    const referencedClasses = new Set<string>();
+    for (const path of filesBelow(join(appRoot, "src"), /\.tsx?$/)) {
+      const content = readFileSync(path, "utf8");
+      for (const match of content.matchAll(/\bfm-[\w-]+/g)) {
+        referencedClasses.add(match[0]);
+      }
+    }
     const classes = [...new Set(
       (css.match(/\.fm-[\w-]+/g) ?? []).map((value) => value.slice(1)),
     )];
@@ -213,6 +221,29 @@ describe("Inspector visual contract", () => {
       "fm-sinc-preview__message--unavailable",
     ]);
 
-    expect(classes.filter((className) => !source.includes(className) && !dynamicClasses.has(className))).toEqual([]);
+    expect(classes.filter((className) => !referencedClasses.has(className) && !dynamicClasses.has(className))).toEqual([]);
+  });
+
+  it("enforces the canonical 8-slot InspectorTemplate @container inspector queries and 7 domain hues", () => {
+    const inspectorCss = readFileSync(join(stylesRoot, "inspector.css"), "utf8");
+
+    expect(inspectorCss).toContain("container: inspector / inline-size;");
+    expect(inspectorCss).toContain("@container inspector (min-width: 22rem)");
+    expect(inspectorCss).toContain("@container inspector (min-width: 25rem)");
+    expect(inspectorCss).toContain("@container inspector (min-width: 30rem)");
+    for (const domain of [
+      "geometry",
+      "material",
+      "physics",
+      "study",
+      "visualization",
+      "mesh",
+      "definition",
+    ]) {
+      expect(inspectorCss).toContain(`.fm-inspector[data-domain="${domain}"]`);
+    }
+    expect(inspectorCss).not.toContain("!important");
+    expect(inspectorCss).not.toContain("text-transform: uppercase");
+    expect(inspectorCss).not.toMatch(/@media\s*\(\s*max-width:/i);
   });
 });

@@ -1,6 +1,6 @@
 "use client";
 
-import { BookOpen, Plus, Save, Trash2, X } from "lucide-react";
+import { Archive, BookOpen, Database, Plus, RefreshCw, Save, Search, Trash2, X } from "lucide-react";
 import { useCallback, useEffect, useId, useLayoutEffect, useReducer, useRef, useState } from "react";
 
 import type {
@@ -472,7 +472,11 @@ function MaterialLibraryContent({
     if (!startPending(operationKey)) return;
     setFeedback(null);
     try {
-      if (onUseMaterial) await onUseMaterial(selection);
+      if (onUseMaterial) {
+        await onUseMaterial(selection);
+        onOpenChange(false);
+        return;
+      }
       else {
         if (!sessionScopeKey) throw new Error("Open a model before using a database material.");
         const materialId = `mat:${globalThis.crypto.randomUUID()}`;
@@ -580,47 +584,57 @@ function MaterialLibraryContent({
           event.preventDefault(); searchRef.current?.focus();
         }}
         onCloseAutoFocus={(event) => { event.preventDefault(); restoreReturnFocus(); }}>
-        <DialogHeader>
-          <DialogTitle>Material database</DialogTitle>
-          <DialogDescription id={fieldId("description")}>Shared across projects. Models keep independent copies of their parameters and sources.</DialogDescription>
-          <Button className="fm-material-library__close" size="icon" variant="ghost" type="button" aria-label="Close material database" onClick={() => requestNavigation({ kind: "close" })}><X aria-hidden="true" /></Button>
+        <DialogHeader className="fm-material-library__header">
+          <div className="fm-material-library__title-row">
+            <span className="fm-material-library__title-icon" aria-hidden="true">
+              <Database size={16} />
+            </span>
+            <div className="fm-material-library__title-copy">
+              <DialogTitle>Material database</DialogTitle>
+              <DialogDescription id={fieldId("description")}>Shared across projects. Models keep independent copies of their parameters and sources.</DialogDescription>
+            </div>
+          </div>
+          <Button className="fm-material-library__close" size="icon" variant="ghost" type="button" aria-label="Close material database" onClick={() => requestNavigation({ kind: "close" })}><X aria-hidden="true" size={16} /></Button>
         </DialogHeader>
         <div className="fm-material-library__layout" data-detail-open={detailVisible ? "true" : "false"}>
           <section className="fm-material-library__catalog" aria-label="Material catalog">
             <div className="fm-material-library__toolbar">
-              <label htmlFor={fieldId("search")}>Search materials</label>
-              <Input id={fieldId("search")} ref={searchRef} type="search" value={query} onChange={(event) => { if (!draftRef.current && !versionEditor) viewEpoch.current += 1; moveCatalog({ type: "query", query: event.target.value }); }} />
+              <label className="sr-only" htmlFor={fieldId("search")}>Search materials</label>
+              <div className="fm-material-library__search">
+                <Search className="fm-material-library__search-icon" aria-hidden="true" size={14} />
+                <Input id={fieldId("search")} ref={searchRef} type="search" placeholder="Search materials, families, or keys…" value={query} onChange={(event) => { if (!draftRef.current && !versionEditor) viewEpoch.current += 1; moveCatalog({ type: "query", query: event.target.value }); }} />
+              </div>
               <SegmentedControl aria-label="Material origin" columns={3} options={MATERIAL_CATALOG_FILTERS} value={filter} onValueChange={(value) => { if (!draftRef.current && !versionEditor) viewEpoch.current += 1; moveCatalog({ type: "filter", filter: value }); }} />
               <div className="fm-material-library__catalog-actions">
-                <Button size="sm" type="button" onClick={newCustom}><Plus data-icon="inline-start" aria-hidden="true" />New material</Button>
-                <Button size="sm" type="button" variant="ghost" onClick={() => library.refetch()}>Refresh</Button>
+                <Button size="sm" type="button" variant="primary" onClick={newCustom}><Plus data-icon="inline-start" aria-hidden="true" size={13} />New material</Button>
+                <Button size="sm" type="button" variant="ghost" onClick={() => library.refetch()}><RefreshCw data-icon="inline-start" aria-hidden="true" size={12} />Refresh</Button>
                 <Button size="sm" type="button" variant="ghost" aria-pressed={showArchived} onClick={() => {
                   moveCatalog({ type: "toggleArchived" });
-                }}>Show archived versions</Button>
+                }}><Archive data-icon="inline-start" aria-hidden="true" size={12} />Show archived versions</Button>
               </div>
-              {modelMaterial ? <Button size="sm" type="button" onClick={copyModel}>Save model copy to database</Button> : null}
+              {modelMaterial ? <Button className="fm-material-library__model-copy" size="sm" type="button" variant="secondary" onClick={copyModel}><Save data-icon="inline-start" aria-hidden="true" size={13} />Save model copy to database</Button> : null}
               <p className="fm-material-library__count">{filtered.length} {filtered.length === 1 ? "material" : "materials"}</p>
             </div>
-            {library.error || library.refreshError ? <div className="fm-material-library__notice" role="alert">Could not load the material database. {(library.error ?? library.refreshError)?.message}<Button type="button" size="sm" onClick={() => library.refetch()}>Retry</Button></div> : null}
+            {library.error || library.refreshError ? <div className="fm-material-library__notice fm-material-library__notice--sidebar" role="alert">Could not load the material database. {(library.error ?? library.refreshError)?.message}<Button type="button" size="sm" onClick={() => library.refetch()}>Retry</Button></div> : null}
             <div className="fm-material-library__list" aria-busy={library.status === "loading" || library.status === "stale"}>
               {catalog.groups.map(({ family, title, rows }) => (
-                <div key={family ?? rows[0]?.id} role={family ? "group" : undefined}
+                <div key={family ?? rows[0]?.id} className={family ? "fm-material-library__group" : undefined} role={family ? "group" : undefined}
                   aria-label={family ? `${title} materials` : undefined} data-material-family={family ?? undefined}>
                   {family ? <h3 className="fm-material-library__family">{title}</h3> : null}
                   {rows.map((row) => {
                     const published = "published" in row ? row.published : null;
                     const entry = "entry" in row ? row.entry : null;
                     const active = view === row.id && !draft && !versionEditor;
-                    return <button key={row.id} type="button" className="fm-material-library__item"
+                    return <Button key={row.id} type="button" variant="ghost" className="fm-material-library__item"
                       data-material-id={row.id} data-active={active ? "true" : undefined}
                       data-version={published ? "true" : undefined} aria-pressed={active}
                       onClick={() => requestNavigation({ kind: "select", id: row.id })}>
                       <span className="fm-material-library__item-title">
                         <strong>{published?.display_name ?? entry?.name}</strong>
-                        <Badge variant="secondary">{published ? (published.archived ? "Archived" : "Published") : entry && KIND_LABELS[entry.kind]}</Badge>
+                        <Badge variant={published ? (published.archived ? "default" : "accent") : "secondary"}>{published ? (published.archived ? "Archived" : "Published") : entry && KIND_LABELS[entry.kind]}</Badge>
                       </span>
-                      <span>{published ? publishedMaterialKey(published) : entry?.summary || `Revision ${entry?.revision}`}</span>
-                    </button>;
+                      <span className={published ? "fm-material-library__item-subtitle fm-material-library__item-subtitle--mono" : "fm-material-library__item-subtitle"}>{published ? publishedMaterialKey(published) : entry?.summary || `Revision ${entry?.revision}`}</span>
+                    </Button>;
                   })}
                 </div>
               ))}
@@ -629,169 +643,198 @@ function MaterialLibraryContent({
             </div>
           </section>
           <section className="fm-material-library__detail" aria-label={draft || versionEditor ? "Material editor" : "Material details"}>
-            <Button className="fm-material-library__back" type="button" size="sm" onClick={() => requestNavigation({ kind: "back" })}>Back to materials</Button>
-            {versionEditor ? (
-              <form id={fieldId("version-form")} className="fm-material-library__form"
-                onSubmit={(event) => { event.preventDefault(); void saveVersion(); }} aria-busy={savingVersion}>
-                <h3 className="fm-material-library__form-title">{versionEditor.kind === "publish" ? "Publish a material version" : "Manage published version"}</h3>
-                <p className="fm-material-library__note">
-                  {versionEditor.kind === "publish" ? "Publishing freezes these parameters and references under a stable key."
-                    : "The display name and archive status can change. The published key and snapshot stay fixed."}
-                </p>
-                <div className="fm-material-library__field">
-                  <label htmlFor={fieldId("version-display-name")}>Display name</label>
-                  <Input id={fieldId("version-display-name")} value={versionEditor.displayName} required disabled={savingVersion}
-                    aria-invalid={feedback?.field === "version-display-name" || undefined}
-                    aria-describedby={feedback?.field === "version-display-name" ? fieldId("feedback") : undefined}
-                    onChange={(event) => {
-                      setVersionEditor({ ...versionEditor, displayName: event.target.value });
-                      if (feedback?.field) setFeedback(null);
-                    }} />
+            <div className="fm-material-library__detail-body">
+              <Button className="fm-material-library__back" type="button" size="sm" onClick={() => requestNavigation({ kind: "back" })}>Back to materials</Button>
+              {versionEditor ? (
+                <form id={fieldId("version-form")} className="fm-material-library__form"
+                  onSubmit={(event) => { event.preventDefault(); void saveVersion(); }} aria-busy={savingVersion}>
+                  <div className="fm-material-library__detail-header">
+                    <h3 className="fm-material-library__form-title">{versionEditor.kind === "publish" ? "Publish a material version" : "Manage published version"}</h3>
+                    <p className="fm-material-library__note">
+                      {versionEditor.kind === "publish" ? "Publishing freezes these parameters and references under a stable key."
+                        : "The display name and archive status can change. The published key and snapshot stay fixed."}
+                    </p>
+                  </div>
+                  <div className="fm-material-library__card">
+                    <div className="fm-material-library__field">
+                      <label htmlFor={fieldId("version-display-name")}>Display name</label>
+                      <Input id={fieldId("version-display-name")} value={versionEditor.displayName} required disabled={savingVersion}
+                        aria-invalid={feedback?.field === "version-display-name" || undefined}
+                        aria-describedby={feedback?.field === "version-display-name" ? fieldId("feedback") : undefined}
+                        onChange={(event) => {
+                          setVersionEditor({ ...versionEditor, displayName: event.target.value });
+                          if (feedback?.field) setFeedback(null);
+                        }} />
+                    </div>
+                    {versionEditor.kind === "publish" ? <>
+                      <div className="fm-material-library__grid">
+                        <div className="fm-material-library__field">
+                          <label htmlFor={fieldId("family")}>Family key</label>
+                          <Input id={fieldId("family")} value={versionEditor.family} required disabled={savingVersion}
+                            pattern={MATERIAL_VERSION_KEY_PATTERN} list={fieldId("families")} aria-describedby={fieldId("key-hint")}
+                            autoCapitalize="none" spellCheck={false}
+                            onChange={(event) => setVersionEditor({ ...versionEditor, family: event.target.value })} />
+                          <datalist id={fieldId("families")}>{catalog.families.map((family) => <option key={family} value={family} />)}</datalist>
+                        </div>
+                        <div className="fm-material-library__field">
+                          <label htmlFor={fieldId("version")}>Version key</label>
+                          <Input id={fieldId("version")} value={versionEditor.version} required disabled={savingVersion}
+                            pattern={MATERIAL_VERSION_KEY_PATTERN} aria-describedby={fieldId("key-hint")}
+                            autoCapitalize="none" spellCheck={false}
+                            onChange={(event) => setVersionEditor({ ...versionEditor, version: event.target.value })} />
+                        </div>
+                      </div>
+                      <p id={fieldId("key-hint")} className="fm-material-library__note">Start each key with a lowercase ASCII letter. Use up to 48 lowercase letters, digits, and underscores.</p>
+                      {versionEditor.family && versionEditor.version ? <p className="fm-material-library__note">Python key <code className="fm-material-library__code">{`fm.materials.${versionEditor.family}.${versionEditor.version}`}</code></p> : null}
+                      {versionEditor.sourceProject ? <p className="fm-material-library__note">Copied from project <strong>{versionEditor.sourceProject}</strong></p> : null}
+                    </> : <>
+                      <p className="fm-material-library__note">Python key <code className="fm-material-library__code">{`fm.materials.${publishedMaterialKey(versionEditor.published)}`}</code></p>
+                      <label className="fm-material-library__check">
+                        <Checkbox checked={versionEditor.archived} disabled={savingVersion}
+                          onChange={(event) => setVersionEditor({ ...versionEditor, archived: event.target.checked })} />
+                        Archived
+                      </label>
+                      <p className="fm-material-library__note">Archived versions stay available to scripts and are hidden from the default catalog view.</p>
+                    </>}
+                  </div>
+                  {versionEditor.kind === "publish" ? <>
+                    <MaterialProperties properties={versionEditor.entry.properties} />
+                    <MaterialReferences references={versionEditor.entry.references ?? []} />
+                  </> : null}
+                </form>
+              ) : draft ? <form id={fieldId("editor-form")} className="fm-material-library__form" onSubmit={(event) => { event.preventDefault(); void saveDraft(); }} aria-busy={saving}>
+                <div className="fm-material-library__detail-header">
+                  <div className="fm-material-library__section-heading"><h3>{draft.mode === "edit" ? "Edit database entry" : "New database entry"}</h3><Badge variant="accent">{draft.source ? "Modified" : "Custom"}</Badge></div>
+                  <p className="fm-material-library__note">{dirty ? "Unsaved changes" : "Editing a database entry"}. Saving here does not change any model.</p>
                 </div>
-                {versionEditor.kind === "publish" ? <>
+                <div className="fm-material-library__card">
                   <div className="fm-material-library__grid">
-                    <div className="fm-material-library__field">
-                      <label htmlFor={fieldId("family")}>Family key</label>
-                      <Input id={fieldId("family")} value={versionEditor.family} required disabled={savingVersion}
-                        pattern={MATERIAL_VERSION_KEY_PATTERN} list={fieldId("families")} aria-describedby={fieldId("key-hint")}
-                        autoCapitalize="none" spellCheck={false}
-                        onChange={(event) => setVersionEditor({ ...versionEditor, family: event.target.value })} />
-                      <datalist id={fieldId("families")}>{catalog.families.map((family) => <option key={family} value={family} />)}</datalist>
-                    </div>
-                    <div className="fm-material-library__field">
-                      <label htmlFor={fieldId("version")}>Version key</label>
-                      <Input id={fieldId("version")} value={versionEditor.version} required disabled={savingVersion}
-                        pattern={MATERIAL_VERSION_KEY_PATTERN} aria-describedby={fieldId("key-hint")}
-                        autoCapitalize="none" spellCheck={false}
-                        onChange={(event) => setVersionEditor({ ...versionEditor, version: event.target.value })} />
-                    </div>
+                    <div className="fm-material-library__field fm-material-library__wide"><label htmlFor={fieldId("name")}>Material name</label><Input id={fieldId("name")} value={draft.name} aria-invalid={feedback?.field === "name" || undefined} aria-describedby={feedback?.field === "name" ? fieldId("feedback") : undefined} onChange={(event) => updateDraft({ name: event.target.value })} /></div>
+                    <div className="fm-material-library__field fm-material-library__wide"><label htmlFor={fieldId("summary")}>Summary</label><Textarea id={fieldId("summary")} value={draft.summary} onChange={(event) => updateDraft({ summary: event.target.value })} /></div>
+                    {MATERIAL_PROPERTY_FIELDS.map(({ key, label, unit }) => <div className="fm-material-library__field" key={key} data-invalid={feedback?.field === key || undefined}>
+                      <label htmlFor={fieldId(key)}>{label} ({unit})</label><Input id={fieldId(key)} inputMode="decimal" value={draft.properties[key]} aria-invalid={feedback?.field === key || undefined} aria-describedby={feedback?.field === key ? fieldId("feedback") : undefined} onChange={(event) => updateDraft({ properties: { ...draft.properties, [key]: event.target.value } })} />
+                    </div>)}
                   </div>
-                  <p id={fieldId("key-hint")} className="fm-material-library__note">Start each key with a lowercase ASCII letter. Use up to 48 lowercase letters, digits, and underscores.</p>
-                  {versionEditor.family && versionEditor.version ? <p className="fm-material-library__note">Python key <code>{`fm.materials.${versionEditor.family}.${versionEditor.version}`}</code></p> : null}
-                  {versionEditor.sourceProject ? <p className="fm-material-library__note">Copied from project <strong>{versionEditor.sourceProject}</strong></p> : null}
-                  <MaterialProperties properties={versionEditor.entry.properties} />
-                  <MaterialReferences references={versionEditor.entry.references ?? []} />
-                </> : <>
-                  <p className="fm-material-library__note">Python key <code>{`fm.materials.${publishedMaterialKey(versionEditor.published)}`}</code></p>
-                  <label className="fm-material-library__check">
-                    <Checkbox checked={versionEditor.archived} disabled={savingVersion}
-                      onChange={(event) => setVersionEditor({ ...versionEditor, archived: event.target.checked })} />
-                    Archived
-                  </label>
-                  <p className="fm-material-library__note">Archived versions stay available to scripts and are hidden from the default catalog view.</p>
-                </>}
-              </form>
-            ) : draft ? <form id={fieldId("editor-form")} className="fm-material-library__form" onSubmit={(event) => { event.preventDefault(); void saveDraft(); }} aria-busy={saving}>
-              <div className="fm-material-library__section-heading"><h3>{draft.mode === "edit" ? "Edit database entry" : "New database entry"}</h3><Badge variant="secondary">{draft.source ? "Modified" : "Custom"}</Badge></div>
-              <p className="fm-material-library__note">{dirty ? "Unsaved changes" : "Editing a database entry"}. Saving here does not change any model.</p>
-              <div className="fm-material-library__grid">
-                <div className="fm-material-library__field fm-material-library__wide"><label htmlFor={fieldId("name")}>Material name</label><Input id={fieldId("name")} value={draft.name} aria-invalid={feedback?.field === "name" || undefined} aria-describedby={feedback?.field === "name" ? fieldId("feedback") : undefined} onChange={(event) => updateDraft({ name: event.target.value })} /></div>
-                <div className="fm-material-library__field fm-material-library__wide"><label htmlFor={fieldId("summary")}>Summary</label><Textarea id={fieldId("summary")} value={draft.summary} onChange={(event) => updateDraft({ summary: event.target.value })} /></div>
-                {MATERIAL_PROPERTY_FIELDS.map(({ key, label, unit }) => <div className="fm-material-library__field" key={key} data-invalid={feedback?.field === key || undefined}>
-                  <label htmlFor={fieldId(key)}>{label} ({unit})</label><Input id={fieldId(key)} inputMode="decimal" value={draft.properties[key]} aria-invalid={feedback?.field === key || undefined} aria-describedby={feedback?.field === key ? fieldId("feedback") : undefined} onChange={(event) => updateDraft({ properties: { ...draft.properties, [key]: event.target.value } })} />
-                </div>)}
-              </div>
-              <p className="fm-material-library__note">Blank Ms, Aex, or DMI remains unset. Alpha is required; signed DMI is allowed.</p>
-              <fieldset className="fm-material-library__references"><legend>Literature references</legend>
-                {draft.references.map((reference, index) => <fieldset className="fm-material-library__reference" key={reference.key}><legend>Reference {index + 1}</legend>
-                  <div className="fm-material-library__grid">{(["label", "url", "citation"] as const).map((key) => <div className="fm-material-library__field fm-material-library__wide" key={key}>
-                    <label htmlFor={fieldId(`reference-${reference.key}-${key}`)}>{key === "url" ? "URL" : key === "label" ? "Label" : "Citation"} — reference {index + 1}</label>
-                    <Input id={fieldId(`reference-${reference.key}-${key}`)} value={reference[key]} aria-invalid={feedback?.field === `reference-${reference.key}-${key}` || undefined} aria-describedby={feedback?.field === `reference-${reference.key}-${key}` ? fieldId("feedback") : undefined} onChange={(event) => updateDraft({ references: draft.references.map((row) => row.key === reference.key ? { ...row, [key]: event.target.value } : row) })} />
-                  </div>)}</div>
-                  <Button size="sm" variant="ghost" type="button" onClick={() => updateDraft({ references: draft.references.filter((row) => row.key !== reference.key) })} aria-label={`Remove reference ${index + 1}`}><Trash2 data-icon="inline-start" aria-hidden="true" />Remove reference</Button>
-                </fieldset>)}
-                <Button size="sm" type="button" onClick={() => updateDraft({ references: [...draft.references, referenceDraft()] })}><Plus data-icon="inline-start" aria-hidden="true" />Add reference</Button>
-              </fieldset>
-              {(draft.conflicted || catalogChanged) ? <div className="fm-material-library__notice"><p>The catalog entry changed. Your draft is preserved. Reload before editing the current revision.</p><Button type="button" size="sm" onClick={reloadEntry}>Reload catalog entry</Button></div> : null}
-            </form> : selectedVersion ? <>
-              <div className="fm-material-library__section-heading">
-                <h3 id={fieldId("detail-heading")} tabIndex={-1}>{selectedVersion.display_name}</h3>
-                <Badge variant="secondary">{selectedVersion.archived ? "Archived" : "Published"}</Badge>
-              </div>
-              <p className="fm-material-library__note">Python key <code>{`fm.materials.${publishedMaterialKey(selectedVersion)}`}</code></p>
-              {selectedVersion.display_name !== selectedVersion.source.name ? <p className="fm-material-library__note">Published as <strong>{selectedVersion.source.name}</strong></p> : null}
-              {publishedSource?.version?.source_project ? <p className="fm-material-library__note">Copied from project <strong>{publishedSource.version.source_project}</strong></p> : null}
-              {publishedSource?.version?.copied_from_family ? <p className="fm-material-library__note">Copied from family <code>{publishedSource.version.copied_from_family}</code></p> : null}
-              <MaterialProperties properties={selectedVersion.source.properties} />
-              <MaterialReferences references={selectedVersion.source.references ?? []} />
-              {!selectedVersion.original ? <p className="fm-material-library__note">No original is available for this family.</p> : null}
-            </> : selected ? <>
-              <div className="fm-material-library__section-heading"><h3 id={fieldId("detail-heading")} tabIndex={-1}>{selected.name}</h3><Badge variant="secondary">{KIND_LABELS[selected.kind]}</Badge></div>
-              <p className="fm-material-library__note">Revision {selected.revision}{selected.kind === "builtin" ? " · Read-only original" : " · Shared database entry"}</p>
-              {selected.summary ? <p className="fm-material-library__summary">{selected.summary}</p> : null}
-              <MaterialProperties properties={selected.properties} />
-              {selected.properties.Ms == null || selected.properties.Aex == null ? <p className="fm-material-library__note">Incomplete parameters: {[selected.properties.Ms == null ? "Ms" : null, selected.properties.Aex == null ? "Aex" : null].filter(Boolean).join(", ")}. Model readiness is checked before Compute.</p> : null}
-              <MaterialReferences references={selected.references ?? []} />
-              {selected.kind === "builtin" ? <p className="fm-material-library__note">Seed parameters are starting values. Check them for your sample and experimental conditions.</p> : null}
-            </> : <EmptyState size="compact" icon={<BookOpen aria-hidden="true" />} heading="Choose a material" description="Browse reference parameters or create your own database entry." />}
-            {source ? <section className="fm-material-library__source" aria-label="Material source"><h4>{selectedVersion && !versionEditor ? `Compared with original · ${source.name}` : `Source: ${source.name}`}</h4><p className="fm-material-library__note">{KIND_LABELS[source.kind]} · revision {source.catalog_revision}</p>{!shownProperties ? <p className="fm-material-library__note">Enter valid SI values to compare this draft with its source.</p> : differences.length ? <ul className="fm-material-library__differences">{differences.map((change) => <li key={change.key}>{formatMaterialSourceChange(change)}</li>)}</ul> : <p className="fm-material-library__note">No parameter or reference changes from this source.</p>}<details><summary>Saved source parameters and references</summary><MaterialProperties properties={source.properties} /><MaterialReferences references={source.references ?? []} /></details></section> : null}
-            {feedback ? <p id={fieldId("feedback")} className="fm-material-library__feedback" data-kind={feedback.kind} role={feedback.kind === "error" ? "alert" : "status"} aria-live={feedback.kind === "error" ? "assertive" : "polite"}>{feedback.message}</p> : null}
-            {!draft && feedback?.conflict ? <Button type="button" size="sm" onClick={reloadEntry}>Reload catalog entry</Button> : null}
-            {versionEditor ? (
-              <div className="fm-material-library__actions">
-                <Button type="submit" form={fieldId("version-form")} variant="primary" disabled={savingVersion}>
-                  {savingVersion ? "Saving…" : versionEditor.kind === "publish" ? "Publish version" : "Save version details"}
-                </Button>
-                <Button type="button" onClick={() => requestNavigation({ kind: "cancel" })}>Cancel</Button>
-              </div>
-            ) : draft ? (
-              <div className="fm-material-library__actions">
-                <Button type="submit" form={fieldId("editor-form")} variant="primary" disabled={saving || draft.conflicted}>
-                  <Save data-icon="inline-start" aria-hidden="true" />
-                  {saving ? "Saving…" : "Save to database"}
-                </Button>
-                <Button type="button" disabled={saving || draft.conflicted} onClick={() => void saveDraft(true)}>
-                  Save and continue to publish
-                </Button>
-                <Button type="button" onClick={() => requestNavigation({ kind: "cancel" })}>
-                  Cancel editing
-                </Button>
-              </div>
-            ) : selectedVersion ? (
-              <div className="fm-material-library__actions">
-                {!selectedVersion.archived ? <>
-                  <Button type="button" variant="primary"
-                    disabled={pending.has(`use:${selectedVersion.source.catalog_id}`) || (!onUseMaterial && !sessionScopeKey)}
-                    disabledReason={!onUseMaterial && !sessionScopeKey ? "Open a model first." : undefined}
-                    onClick={() => void importIntoModel(selectedVersion)}>
-                    {pending.has(`use:${selectedVersion.source.catalog_id}`) ? "Using material…" : "Use in model"}
-                  </Button>
-                  <Button type="button" onClick={() => newVariant(selectedVersion)}>Create variant</Button>
-                </> : null}
-                <Button type="button" disabled={library.status !== "ready"} onClick={() => beginManage(selectedVersion)}>Manage version</Button>
-              </div>
-            ) : selected ? (
-              <>
-                <div className="fm-material-library__actions">
-                  <Button type="button" variant="primary"
-                    disabled={pending.has(`use:${selected.id}`) || (!onUseMaterial && !sessionScopeKey)}
-                    disabledReason={!onUseMaterial && !sessionScopeKey ? "Open a model first." : undefined}
-                    onClick={() => void importIntoModel(selected)}>
-                    {pending.has(`use:${selected.id}`) ? "Using material…" : "Use in model"}
-                  </Button>
-                  <Button type="button" onClick={() => newVariant(selected)}>Create variant</Button>
-                  {selected.kind !== "builtin" ? (
-                    <Button type="button" disabled={library.status !== "ready"}
-                      disabledReason="Wait for the current catalog revision." onClick={() => edit(selected)}>
-                      Edit entry
-                    </Button>
-                  ) : null}
-                  {selected.kind !== "builtin" ? (
-                    <Button type="button" disabled={library.status !== "ready" || publishBlock !== null}
-                      disabledReason={publishBlock?.message ?? "Wait for the current catalog revision."} onClick={() => beginPublish(selected)}>
-                      Publish version
-                    </Button>
-                  ) : null}
+                  <p className="fm-material-library__note">Blank Ms, Aex, or DMI remains unset. Alpha is required; signed DMI is allowed.</p>
                 </div>
-                {selected.kind !== "builtin" ? (
-                  <div className="fm-material-library__delete">
-                    <Button type="button" variant="danger" size="sm" disabled={pending.has(`delete:${selected.id}`)} onClick={() => confirmDelete(selected)}>
-                      <Trash2 data-icon="inline-start" aria-hidden="true" />Delete entry
-                    </Button>
-                    <span>Existing model copies are kept.</span>
+                <fieldset className="fm-material-library__references"><legend>Literature references</legend>
+                  {draft.references.map((reference, index) => <fieldset className="fm-material-library__reference" key={reference.key}><legend>Reference {index + 1}</legend>
+                    <div className="fm-material-library__grid">{(["label", "url", "citation"] as const).map((key) => <div className="fm-material-library__field fm-material-library__wide" key={key}>
+                      <label htmlFor={fieldId(`reference-${reference.key}-${key}`)}>{key === "url" ? "URL" : key === "label" ? "Label" : "Citation"} — reference {index + 1}</label>
+                      <Input id={fieldId(`reference-${reference.key}-${key}`)} value={reference[key]} aria-invalid={feedback?.field === `reference-${reference.key}-${key}` || undefined} aria-describedby={feedback?.field === `reference-${reference.key}-${key}` ? fieldId("feedback") : undefined} onChange={(event) => updateDraft({ references: draft.references.map((row) => row.key === reference.key ? { ...row, [key]: event.target.value } : row) })} />
+                    </div>)}</div>
+                    <Button size="sm" variant="ghost" type="button" onClick={() => updateDraft({ references: draft.references.filter((row) => row.key !== reference.key) })} aria-label={`Remove reference ${index + 1}`}><Trash2 data-icon="inline-start" aria-hidden="true" />Remove reference</Button>
+                  </fieldset>)}
+                  <Button size="sm" type="button" onClick={() => updateDraft({ references: [...draft.references, referenceDraft()] })}><Plus data-icon="inline-start" aria-hidden="true" />Add reference</Button>
+                </fieldset>
+                {(draft.conflicted || catalogChanged) ? <div className="fm-material-library__notice"><p>The catalog entry changed. Your draft is preserved. Reload before editing the current revision.</p><Button type="button" size="sm" onClick={reloadEntry}>Reload catalog entry</Button></div> : null}
+              </form> : selectedVersion ? <>
+                <div className="fm-material-library__detail-header">
+                  <div className="fm-material-library__section-heading">
+                    <h3 id={fieldId("detail-heading")} tabIndex={-1}>{selectedVersion.display_name}</h3>
+                    <Badge variant={selectedVersion.archived ? "default" : "accent"}>{selectedVersion.archived ? "Archived" : "Published"}</Badge>
                   </div>
+                  <div className="fm-material-library__meta-row">
+                    <span className="fm-material-library__note">Python key <code className="fm-material-library__code">{`fm.materials.${publishedMaterialKey(selectedVersion)}`}</code></span>
+                    {selectedVersion.display_name !== selectedVersion.source.name ? <span className="fm-material-library__note">Published as <strong>{selectedVersion.source.name}</strong></span> : null}
+                    {publishedSource?.version?.source_project ? <span className="fm-material-library__note">Copied from project <strong>{publishedSource.version.source_project}</strong></span> : null}
+                    {publishedSource?.version?.copied_from_family ? <span className="fm-material-library__note">Copied from family <code className="fm-material-library__code">{publishedSource.version.copied_from_family}</code></span> : null}
+                  </div>
+                </div>
+                <MaterialProperties properties={selectedVersion.source.properties} />
+                <MaterialReferences references={selectedVersion.source.references ?? []} />
+                {!selectedVersion.original ? <p className="fm-material-library__note">No original is available for this family.</p> : null}
+              </> : selected ? <>
+                <div className="fm-material-library__detail-header">
+                  <div className="fm-material-library__section-heading"><h3 id={fieldId("detail-heading")} tabIndex={-1}>{selected.name}</h3><Badge variant="secondary">{KIND_LABELS[selected.kind]}</Badge></div>
+                  <p className="fm-material-library__note">Revision {selected.revision}{selected.kind === "builtin" ? " · Read-only original" : " · Shared database entry"}</p>
+                  {selected.summary ? <p className="fm-material-library__summary">{selected.summary}</p> : null}
+                </div>
+                <MaterialProperties properties={selected.properties} />
+                {selected.properties.Ms == null || selected.properties.Aex == null ? <p className="fm-material-library__callout">Incomplete parameters: {[selected.properties.Ms == null ? "Ms" : null, selected.properties.Aex == null ? "Aex" : null].filter(Boolean).join(", ")}. Model readiness is checked before Compute.</p> : null}
+                <MaterialReferences references={selected.references ?? []} />
+                {selected.kind === "builtin" ? <p className="fm-material-library__note">Seed parameters are starting values. Check them for your sample and experimental conditions.</p> : null}
+              </> : <EmptyState size="compact" icon={<BookOpen aria-hidden="true" />} heading="Choose a material" description="Browse reference parameters or create your own database entry." />}
+              {source ? <section className="fm-material-library__source" aria-label="Material source">
+                <div className="fm-material-library__card-head">
+                  <h4>{selectedVersion && !versionEditor ? `Compared with original · ${source.name}` : `Source: ${source.name}`}</h4>
+                  <span className="fm-material-library__note">{KIND_LABELS[source.kind]} · revision {source.catalog_revision}</span>
+                </div>
+                {!shownProperties ? <p className="fm-material-library__note">Enter valid SI values to compare this draft with its source.</p> : differences.length ? <ul className="fm-material-library__differences">{differences.map((change) => <li key={change.key}>{formatMaterialSourceChange(change)}</li>)}</ul> : <p className="fm-material-library__note">No parameter or reference changes from this source.</p>}
+                <details><summary>Saved source parameters and references</summary><MaterialProperties properties={source.properties} /><MaterialReferences references={source.references ?? []} /></details>
+              </section> : null}
+              {feedback ? <p id={fieldId("feedback")} className="fm-material-library__feedback" data-kind={feedback.kind} role={feedback.kind === "error" ? "alert" : "status"} aria-live={feedback.kind === "error" ? "assertive" : "polite"}>{feedback.message}</p> : null}
+              {!draft && feedback?.conflict ? <Button type="button" size="sm" onClick={reloadEntry}>Reload catalog entry</Button> : null}
+            </div>
+            {(versionEditor || draft || selectedVersion || selected) ? (
+              <div className="fm-material-library__footer">
+                {versionEditor ? (
+                  <div className="fm-material-library__actions">
+                    <Button type="button" variant="ghost" onClick={() => requestNavigation({ kind: "cancel" })}>Cancel</Button>
+                    <Button type="submit" form={fieldId("version-form")} variant="primary" disabled={savingVersion}>
+                      {savingVersion ? "Saving…" : versionEditor.kind === "publish" ? "Publish version" : "Save version details"}
+                    </Button>
+                  </div>
+                ) : draft ? (
+                  <div className="fm-material-library__actions">
+                    <Button type="button" variant="ghost" onClick={() => requestNavigation({ kind: "cancel" })}>
+                      Cancel editing
+                    </Button>
+                    <Button type="button" disabled={saving || draft.conflicted} onClick={() => void saveDraft(true)}>
+                      Save and continue to publish
+                    </Button>
+                    <Button type="submit" form={fieldId("editor-form")} variant="primary" disabled={saving || draft.conflicted}>
+                      <Save data-icon="inline-start" aria-hidden="true" />
+                      {saving ? "Saving…" : "Save to database"}
+                    </Button>
+                  </div>
+                ) : selectedVersion ? (
+                  <div className="fm-material-library__actions">
+                    <Button type="button" disabled={library.status !== "ready"} onClick={() => beginManage(selectedVersion)}>Manage version</Button>
+                    {!selectedVersion.archived ? <>
+                      <Button type="button" onClick={() => newVariant(selectedVersion)}>Create variant</Button>
+                      <Button type="button" variant="primary"
+                        disabled={pending.has(`use:${selectedVersion.source.catalog_id}`) || (!onUseMaterial && !sessionScopeKey)}
+                        disabledReason={!onUseMaterial && !sessionScopeKey ? "Open a model first." : undefined}
+                        onClick={() => void importIntoModel(selectedVersion)}>
+                        {pending.has(`use:${selectedVersion.source.catalog_id}`) ? "Using material…" : "Use in model"}
+                      </Button>
+                    </> : null}
+                  </div>
+                ) : selected ? (
+                  <>
+                    {selected.kind !== "builtin" ? (
+                      <div className="fm-material-library__delete">
+                        <Button type="button" variant="danger" size="sm" disabled={pending.has(`delete:${selected.id}`)} onClick={() => confirmDelete(selected)}>
+                          <Trash2 data-icon="inline-start" aria-hidden="true" />Delete entry
+                        </Button>
+                        <span>Existing model copies are kept.</span>
+                      </div>
+                    ) : <span />}
+                    <div className="fm-material-library__actions">
+                      {selected.kind !== "builtin" ? (
+                        <Button type="button" disabled={library.status !== "ready"}
+                          disabledReason="Wait for the current catalog revision." onClick={() => edit(selected)}>
+                          Edit entry
+                        </Button>
+                      ) : null}
+                      {selected.kind !== "builtin" ? (
+                        <Button type="button" disabled={library.status !== "ready" || publishBlock !== null}
+                          disabledReason={publishBlock?.message ?? "Wait for the current catalog revision."} onClick={() => beginPublish(selected)}>
+                          Publish version
+                        </Button>
+                      ) : null}
+                      <Button type="button" onClick={() => newVariant(selected)}>Create variant</Button>
+                      <Button type="button" variant="primary"
+                        disabled={pending.has(`use:${selected.id}`) || (!onUseMaterial && !sessionScopeKey)}
+                        disabledReason={!onUseMaterial && !sessionScopeKey ? "Open a model first." : undefined}
+                        onClick={() => void importIntoModel(selected)}>
+                        {pending.has(`use:${selected.id}`) ? "Using material…" : "Use in model"}
+                      </Button>
+                    </div>
+                  </>
                 ) : null}
-              </>
+              </div>
             ) : null}
           </section>
         </div>
@@ -807,7 +850,15 @@ function MaterialLibraryContent({
 }
 
 function MaterialProperties({ properties }: { properties: Readonly<MaterialPropertiesResource> }) {
-  return <dl className="fm-material-library__properties">{MATERIAL_PROPERTY_FIELDS.map(({ key, label, unit }) => <div key={key}><dt>{label} <span>({unit})</span></dt><dd>{properties[key] == null ? <span className="fm-material-library__missing">Not set</span> : String(properties[key])}</dd></div>)}</dl>;
+  return (
+    <section className="fm-material-library__card" aria-label="Material parameters">
+      <div className="fm-material-library__card-head">
+        <h4>Micromagnetic parameters</h4>
+        <span className="fm-material-library__note">SI units</span>
+      </div>
+      <dl className="fm-material-library__properties">{MATERIAL_PROPERTY_FIELDS.map(({ key, label, unit }) => <div key={key}><dt>{label} <span>({unit})</span></dt><dd>{properties[key] == null ? <span className="fm-material-library__missing">Not set</span> : String(properties[key])}</dd></div>)}</dl>
+    </section>
+  );
 }
 function MaterialReferences({ references }: { references: readonly MaterialReferenceResource[] }) {
   const occurrences = new Map<string, number>();

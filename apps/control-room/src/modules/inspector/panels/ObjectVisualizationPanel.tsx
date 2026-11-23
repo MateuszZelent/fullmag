@@ -7,6 +7,7 @@ import { artifactFieldCatalogMatchesOwner, artifactFieldLocatorHasAcceptedGlobal
 import { useVisualizationFieldMeta } from "@/kernel/resources/useVisualizationFieldMeta";
 import { useSessionResourceIdentity } from "@/kernel/resources/useSessionStatus";
 import { Eye } from "lucide-react";
+import { Checkbox } from "@/shared/ui/Checkbox";
 import React, {
   useCallback,
   useEffect,
@@ -67,16 +68,35 @@ import {
 import {
   useVisualizationStateResource,
 } from "@/kernel/visualization/useVisualizationStateResource";
-import {
-  useMeshSharedDomainManifestResource,
-  useMeshRegionMembershipResource,
-  useSceneResource,
-  useDomainMetaResource,
-  useFdmRegionMembershipResource,
-  useFdmRegionMembershipBinaryResource,
-  useFdmMultilayerLayoutResource,
-  useFdmMultilayerLayerActiveMasksResource,
-} from "@/kernel/resources/geometryLifecycleResources";
+import * as geometryLifecycleResources from "@/kernel/resources/geometryLifecycleResources";
+
+const useMeshSharedDomainManifestResource =
+  geometryLifecycleResources.useMeshSharedDomainManifestResource;
+const useSceneResource = geometryLifecycleResources.useSceneResource;
+const useMeshRegionMembershipResource =
+  geometryLifecycleResources.useMeshRegionMembershipResource ??
+  (() => ({ data: null, error: null, revision: null, status: "idle" as const }));
+const useDomainMetaResource =
+  geometryLifecycleResources.useDomainMetaResource ??
+  (() => ({ data: null, error: null, revision: null, status: "idle" as const }));
+const useFdmRegionMembershipResource =
+  geometryLifecycleResources.useFdmRegionMembershipResource ??
+  (() => ({ data: null, error: null, revision: null, status: "idle" as const }));
+const useFdmRegionMembershipBinaryResource =
+  geometryLifecycleResources.useFdmRegionMembershipBinaryResource ??
+  (() => ({
+    availability: { reason: "loading" as const, status: "pending" as const },
+    data: null,
+    error: null,
+    revision: null,
+    status: "idle" as const,
+  }));
+const useFdmMultilayerLayoutResource =
+  geometryLifecycleResources.useFdmMultilayerLayoutResource ??
+  (() => ({ data: null, error: null, revision: null, status: "idle" as const }));
+const useFdmMultilayerLayerActiveMasksResource =
+  geometryLifecycleResources.useFdmMultilayerLayerActiveMasksResource ??
+  (() => ({ data: null, error: null, revision: null, status: "idle" as const }));
 import {
   canonicalVisualizationSceneObjectId,
   isVisualizationAirboxIdentity,
@@ -91,7 +111,7 @@ import type { InspectorPanelProps } from "../inspectorTypes";
 import { useRegisterInspectorEditSession } from "../InspectorEditSession";
 import { ViewportCameraControls } from "../visualization/ViewportCameraControls";
 import { ViewportClippingControls } from "../visualization/ViewportClippingControls";
-import { ScientificInspectorContext } from "../components/ScientificInspectorTemplate";
+import { ScientificInspectorContext } from "../components/InspectorContextGroups";
 import { FieldRow } from "../primitives/FieldRow";
 import { FeedbackBanner } from "../primitives/FeedbackBanner";
 import { InspectorGroup } from "../primitives/InspectorGroup";
@@ -131,13 +151,17 @@ import {
   resolveVisualizationPanelIdentityKey,
   shouldLoadObjectVisualizationFieldCatalog,
   shouldShowPrimitiveDisplayToggle,
+  queuePartVectorVisibilityPatch,
   queueTargetVectorVisibilityPatch,
+  resolveObjectVisualizationPanelTarget,
   resolveSelectedTargetVectorMeshPartRows,
   resolveObjectVisualizationPanelSelectionTarget,
   visualizationOverrideStateLabel,
   type VisualizationVectorBudgetRange,
   visualizationResetActionLabel,
   parseRegionVisualizationTargetId,
+  resolveSceneObjectAuthoredMagnetizationAvailable,
+  resolveSceneRegionAuthoredMagnetizationAvailable,
 } from "./ObjectVisualizationPanelModel";
 import {
   selectObjectVisualizationManifestStatus,
@@ -149,7 +173,7 @@ import {
 import { ObjectVisualizationOverview } from "./ObjectVisualizationOverview";
 import { PlanarVisualizationSection } from "../visualization/PlanarVisualizationSection";
 import {
-  VisualizationContextSwitchControl,
+  VisualizationViewSwitch,
   useVisualizationViewContext,
 } from "../visualization/VisualizationContextSwitch";
 import { planarPresentationPatchFromThreeDimensional } from "../visualization/presentationSemantics";
@@ -1009,10 +1033,29 @@ function useObjectVisualizationPanelState(
       visualizationState: displayVisualizationState,
     });
     if (scopedPartRows.length <= 1) return undefined;
+    const rawMeshParts = manifest.data?.mesh_parts ?? [];
     return scopedPartRows.map((part) => {
+      const matchedPart = rawMeshParts.find((candidate) => candidate.id === part.id);
+      const partTarget = matchedPart
+        ? resolveObjectVisualizationPanelTarget({
+            part: matchedPart,
+            sceneObjectIds,
+            visualizationState: displayVisualizationState,
+          })
+        : null;
+      const partSettings = partTarget
+        ? resolveTargetVisualization({
+            inheritedSettings: settings ?? undefined,
+            objectContext,
+            snapshot,
+            target: partTarget,
+            visualizationState: displayVisualizationState,
+          }).settings
+        : null;
       return {
         ...part,
-        vectorsVisible: settings?.vectorsVisible ?? false,
+        vectorsVisible:
+          partSettings?.vectorsVisible ?? settings?.vectorsVisible ?? false,
       };
     });
   })();
@@ -1141,8 +1184,22 @@ function useObjectVisualizationPanelState(
     (fdmTarget
       ? fdmMembership.data?.grid_fingerprint ?? null
       : manifest.data?.topology_fingerprint ?? null);
-  function onTogglePartVectors(visible: boolean) {
+  function onTogglePartVectors(partId: string, visible: boolean) {
     if (!resolvedTarget || !displayVisualizationState) return;
+    const matchedPart = manifest.data?.mesh_parts?.find(
+      (candidate) => candidate.id === partId,
+    );
+    if (matchedPart) {
+      queuePartVectorVisibilityPatch({
+        controller: visualization,
+        part: matchedPart,
+        sceneObjectIds,
+        state: displayVisualizationState,
+        sync: visualizationSync,
+        visible,
+      });
+      return;
+    }
     queueTargetVectorVisibilityPatch({
       controller: visualization,
       state: displayVisualizationState,
@@ -1409,9 +1466,7 @@ export function VisualizationTargetInspectorPanel({
   if (visualizationViewContext === "planar") {
     return (
       <div className="fm-inspector-panel fm-scientific-inspector" data-inspector-owner={owner.id}>
-        <InspectorGroup title="View">
-          <VisualizationContextSwitchControl onPlanarActivate={syncSharedQuiverIntent} />
-        </InspectorGroup>
+        <VisualizationViewSwitch onPlanarActivate={syncSharedQuiverIntent} />
         {artifactInspection ? <FeedbackBanner kind="warning" message="Historical carrier inspection requires the 3D view. No magnetic grid or planar field is substituted." /> : <PlanarVisualizationSection selection={selection} />}
         {artifactInspection && children ? <div className="fm-viz-nav-sections">{children}</div> : null}
         {scientificInspectorContext}
@@ -1421,9 +1476,7 @@ export function VisualizationTargetInspectorPanel({
 
   return (
     <div className="fm-inspector-panel fm-scientific-inspector" data-inspector-owner={owner.id}>
-      <InspectorGroup title="View">
-        <VisualizationContextSwitchControl onPlanarActivate={syncSharedQuiverIntent} />
-      </InspectorGroup>
+      <VisualizationViewSwitch onPlanarActivate={syncSharedQuiverIntent} />
       {children ? <div className="fm-viz-nav-sections">{children}</div> : null}
       <ObjectVisualizationPanelView
         key={visualizationTargetKey(stablePanel.target)}
@@ -1434,11 +1487,43 @@ export function VisualizationTargetInspectorPanel({
   );
 }
 
-export function ObjectVisualizationPanel({ selection, sceneOverride }: InspectorPanelProps & { sceneOverride?: ReturnType<typeof useSceneResource> }) {
+export function ObjectVisualizationPanel({
+  ownerOverride,
+  sceneOverride,
+  selection,
+}: InspectorPanelProps & {
+  ownerOverride?: VisualizationInspectorOwner;
+  sceneOverride?: ReturnType<typeof useSceneResource>;
+}) {
   const ownScene = useSceneResource({ enabled: !sceneOverride });
   const scene = sceneOverride ?? ownScene;
-  if (!scene.data) return <div className="fm-inspector-panel"><p role="status">Resolving visualization owner…</p></div>;
-  return <VisualizationTargetInspectorPanel owner={OBJECT_VISUALIZATION_OWNER} selection={selection} sceneOverride={scene} />;
+  if (!scene.data) {
+    if (scene.status === "error" || scene.error) {
+      return (
+        <div className="fm-inspector-panel">
+          <FeedbackBanner
+            kind="error"
+            message={
+              scene.error?.message ??
+              "Could not load model scene for visualization owner."
+            }
+          />
+        </div>
+      );
+    }
+    return (
+      <div className="fm-inspector-panel">
+        <p role="status">Resolving visualization owner…</p>
+      </div>
+    );
+  }
+  return (
+    <VisualizationTargetInspectorPanel
+      owner={ownerOverride ?? OBJECT_VISUALIZATION_OWNER}
+      selection={selection}
+      sceneOverride={scene}
+    />
+  );
 }
 
 function ObjectVisualizationPanelView({
@@ -1450,6 +1535,9 @@ function ObjectVisualizationPanelView({
   const shownAnalysisField = useRenderableAnalysisFieldOverlay(analysisFieldOverlay, {
     ignorePhase: true,
   });
+  // Scene data is needed to resolve whether the target has an authored
+  // magnetization texture (without touching useViewport3DSceneModel.ts).
+  const scene = useSceneResource({ enabled: !panel.artifactInspection });
   const {
     appliedBaseline: currentAppliedBaseline,
     airboxFieldCarrierIdentity,
@@ -1558,10 +1646,45 @@ function ObjectVisualizationPanelView({
       (fieldCatalog.status === "idle" && !fieldCatalog.data || quantityCatalog.status === "idle" && !quantityCatalog.data)
   );
   const quantityTargetKind = target.kind === "airbox" || isFdmUniverseOutsideSupportTarget(target) ? "airbox" : target.kind;
+  // Determine whether the selected object (or region) has a committed authored
+  // magnetization texture that is not an external field-file. When true the
+  // inspector injects "m" as a selectable quantity so the panel never shows
+  // "No compatible field available" for a texture already visible in 3D.
+  const authoredMagnetizationAvailable = !panel.artifactInspection && (() => {
+    if (target.kind === "object") {
+      const objectId = target.id.startsWith("object:") ? target.id.slice("object:".length) : target.id;
+      return resolveSceneObjectAuthoredMagnetizationAvailable(scene.data as Parameters<typeof resolveSceneObjectAuthoredMagnetizationAvailable>[0], objectId);
+    }
+    if (target.kind === "region") {
+      const parsed = parseRegionVisualizationTargetId(target.id);
+      if (!parsed) return false;
+      return resolveSceneRegionAuthoredMagnetizationAvailable(scene.data as Parameters<typeof resolveSceneRegionAuthoredMagnetizationAvailable>[0], parsed.objectId, parsed.regionId);
+    }
+    return false;
+  })();
+  const effectiveQuantityId =
+    authoredMagnetizationAvailable && !settings.activeQuantityId
+      ? "m"
+      : settings.activeQuantityId;
+  const quantitySectionSettings =
+    effectiveQuantityId !== settings.activeQuantityId
+      ? { ...settings, activeQuantityId: effectiveQuantityId }
+      : settings;
+  const surfaceSectionSettings =
+    effectiveQuantityId !== presentedSettings.activeQuantityId && !presentedSettings.activeQuantityId
+      ? { ...presentedSettings, activeQuantityId: effectiveQuantityId }
+      : presentedSettings;
   const quantitySelection = visualizationQuantitySelectionState({
-    activeQuantityId: settings.activeQuantityId,
-    items: visualizationQuantityItems(settings.activeQuantityId, quantityTargetKind, fieldCatalog.data,
-      quantityCatalog.data, targetFieldAvailability, panel.conductorQuantityScope),
+    activeQuantityId: effectiveQuantityId,
+    items: visualizationQuantityItems(
+      effectiveQuantityId,
+      quantityTargetKind,
+      fieldCatalog.data,
+      quantityCatalog.data,
+      targetFieldAvailability,
+      authoredMagnetizationAvailable,
+      panel.conductorQuantityScope,
+    ),
     loading: fieldCatalogLoading,
     error: fieldCatalogError,
     executionRequired,
@@ -1610,6 +1733,7 @@ function ObjectVisualizationPanelView({
               <>
                 <VisualizationDisplayPassesSection
               artifactInspection={panel.artifactInspection}
+              authoredMagnetizationAvailable={authoredMagnetizationAvailable}
               displaySettings={displaySettings}
               passControlsDisabled={passControlsDisabled}
               patch={patch}
@@ -1646,7 +1770,8 @@ function ObjectVisualizationPanelView({
                     onFieldCatalogRequest={onFieldCatalogRequest}
                     patch={patch}
                     isFieldPending={isFieldPending}
-                    settings={settings}
+                    settings={quantitySectionSettings}
+                    authoredMagnetizationAvailable={authoredMagnetizationAvailable}
                     targetKind={
                       target.kind === "airbox" ||
                       isFdmUniverseOutsideSupportTarget(target)
@@ -1681,12 +1806,14 @@ function ObjectVisualizationPanelView({
               fieldMetaTarget={fieldMetaTarget}
               onFieldCatalogRequest={onFieldCatalogRequest}
               regionCarrier={regionCarrier}
-              settings={presentedSettings}
+              settings={surfaceSectionSettings}
               target={target}
+              authoredMagnetizationAvailable={authoredMagnetizationAvailable}
               />
             )}
             vectors={capabilities.supportsVectors && !isScalarSpatialQuantityId(settings.activeQuantityId) ? (
               <VisualizationVectorsSection
+              authoredMagnetizationAvailable={authoredMagnetizationAvailable}
               inspectionPresentation={panel.artifactPresentation}
               artifactFieldBinding={analysisFieldShown ? undefined : artifactFieldBinding}
               fieldMetaOverride={analysisFieldShown ? undefined : panel.sharedArtifactFieldMeta ?? undefined}
@@ -1788,9 +1915,8 @@ function ObjectVisualizationPanelView({
               value={`${childRegionOverrideCount}/${childRegionTargets.length}`}
             />
             <label className="fm-visualization-part-toggle">
-              <input
+              <Checkbox
                 checked={patchChildRegions}
-                type="checkbox"
                 onChange={(event) => setPatchChildRegions(event.target.checked)}
               />
               <span>Apply edits to child regions</span>

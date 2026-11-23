@@ -1,0 +1,336 @@
+/* Status bar — one 26 px row that never overlaps or scrolls.
+   Left: lifecycle state, session, runtime, mesh (text fields that ellipsize).
+   Right: compact chips (realtime, status data, engine, method) and the
+   details trigger, whose popover lists every field in full.
+   Container tiers drop the least important fields first; nothing becomes
+   unreachable because the popover always carries the complete set.
+   Lives in fm-modules: in fm-base, Tailwind's preflight (layer `base`)
+   zeroed margins, padding and borders and the fields ran into each other. */
+.fm-status-bar {
+  container: fm-status-bar / inline-size;
+  display: flex;
+  height: 100%;
+  min-width: 0;
+  align-items: center;
+  gap: 0;
+  overflow: hidden;
+  padding-inline: var(--fm-space-3) var(--fm-space-1);
+  color: var(--fm-text-muted);
+  font-size: var(--fm-font-size-xs);
+  letter-spacing: 0;
+  user-select: none;
+  white-space: nowrap;
+}
+
+/* Text-only fields: a block box lets text-overflow draw the ellipsis
+   (an inline-flex box clips its anonymous text item mid-glyph). */
+.fm-status-bar__item {
+  display: block;
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 30ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The lifecycle word is the one field that must stay whole. */
+.fm-status-bar__item--state {
+  flex-shrink: 0;
+  color: var(--fm-text-secondary);
+  font-weight: 550;
+}
+
+.fm-status-bar__sep {
+  width: 1px;
+  height: var(--fm-space-3);
+  margin-inline: var(--fm-space-2);
+  background: var(--fm-border-default);
+  flex-shrink: 0;
+}
+
+.fm-status-bar__dot {
+  width: var(--fm-space-1-5);
+  height: var(--fm-space-1-5);
+  margin-inline-end: var(--fm-space-1);
+  border-radius: var(--fm-radius-pill);
+  background: var(--fm-text-muted);
+  flex-shrink: 0;
+  transition: background-color var(--fm-transition-normal);
+}
+
+.fm-status-bar__dot[data-status="ready"] { background: var(--fm-success); }
+.fm-status-bar__dot[data-status="loading"],
+.fm-status-bar__dot[data-status="pending"] { background: var(--fm-warning); }
+.fm-status-bar__dot[data-status="error"] { background: var(--fm-danger); }
+
+.fm-status-bar__spacer {
+  flex: 1 1 var(--fm-space-3);
+  min-width: var(--fm-space-3);
+}
+
+/* Shared chip shape for the right-hand cluster. */
+.fm-status-bar__axis,
+.fm-status-bar__engine {
+  display: inline-flex;
+  flex-shrink: 0;
+  height: var(--fm-chip-height);
+  min-width: 0;
+  align-items: center;
+  gap: var(--fm-space-1);
+  border: 1px solid var(--fm-border-default);
+  border-radius: var(--fm-radius-pill);
+  background: transparent;
+  color: var(--fm-text-secondary);
+  padding-inline: var(--fm-space-1-5);
+  white-space: nowrap;
+}
+
+.fm-status-bar__axis + .fm-status-bar__axis,
+.fm-status-bar__axis + .fm-status-bar__engine,
+.fm-status-bar__engine + .fm-status-bar__engine,
+.fm-status-bar__compute-cta + .fm-status-bar__engine,
+.fm-status-bar__engine + .fm-status-bar__compute-cta,
+.fm-status-bar__engine + [data-state] + .fm-status-bar__details-trigger,
+.fm-status-bar__details-trigger {
+  margin-inline-start: var(--fm-space-1);
+}
+
+.fm-status-bar__axis-icon {
+  flex: none;
+  color: var(--fm-text-muted);
+}
+
+.fm-status-bar__axis[data-state="connected"] .fm-status-bar__axis-icon,
+.fm-status-bar__axis[data-state="ready"] .fm-status-bar__axis-icon { color: var(--fm-success-text); }
+.fm-status-bar__axis[data-state="connecting"] .fm-status-bar__axis-icon,
+.fm-status-bar__axis[data-state="loading"] .fm-status-bar__axis-icon,
+.fm-status-bar__axis[data-state="stale"] .fm-status-bar__axis-icon { color: var(--fm-warning-text); }
+.fm-status-bar__axis[data-state="disconnected"] .fm-status-bar__axis-icon,
+.fm-status-bar__axis[data-state="error"] .fm-status-bar__axis-icon { color: var(--fm-danger-text); }
+
+.fm-status-bar__axis[data-state="connected"],
+.fm-status-bar__axis[data-state="ready"] {
+  border-color: color-mix(in srgb, var(--fm-success) 34%, var(--fm-border-default));
+}
+
+.fm-status-bar__axis[data-state="connecting"],
+.fm-status-bar__axis[data-state="loading"],
+.fm-status-bar__axis[data-state="stale"] {
+  border-color: color-mix(in srgb, var(--fm-warning) 54%, var(--fm-border-default));
+}
+
+.fm-status-bar__axis[data-state="disconnected"],
+.fm-status-bar__axis[data-state="error"] {
+  border-color: color-mix(in srgb, var(--fm-danger) 54%, var(--fm-border-default));
+}
+
+.fm-status-bar__engine {
+  max-width: min(44vw, 40ch);
+  font-family: var(--fm-font-ui);
+}
+
+.fm-status-bar__engine[data-state="resolved"] {
+  border-color: color-mix(in srgb, var(--fm-success) 34%, var(--fm-border-default));
+  color: var(--fm-text-primary);
+}
+
+.fm-status-bar__engine[data-state="active"] {
+  border-color: color-mix(in srgb, var(--fm-accent) 58%, var(--fm-border-default));
+  background: color-mix(in srgb, var(--fm-accent) 13%, transparent);
+  color: var(--fm-text-primary);
+}
+
+/* Resolved execution does not honour the requested intent (e.g. GPU → CPU). */
+.fm-status-bar__engine[data-tone="warning"] {
+  border-color: color-mix(in srgb, var(--fm-warning) 64%, var(--fm-border-default));
+  background: color-mix(in srgb, var(--fm-warning) 12%, transparent);
+}
+
+.fm-status-bar__engine[data-tone="warning"] .fm-status-bar__engine-label,
+.fm-status-bar__engine[data-tone="warning"] .fm-status-bar__engine-detail {
+  color: var(--fm-warning-text);
+}
+
+.fm-status-bar__engine-label {
+  color: var(--fm-accent-text);
+  font-weight: 650;
+}
+
+.fm-status-bar__engine-detail {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--fm-text-muted);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fm-status-bar__engine-label + .fm-status-bar__engine-detail {
+  border-inline-start: 1px solid var(--fm-border-default);
+  padding-inline-start: var(--fm-space-1);
+}
+
+.fm-status-bar__compute-cta {
+  flex-shrink: 0;
+  height: var(--fm-status-control-height);
+}
+
+.fm-status-bar__compute-cta[aria-disabled="true"] {
+  cursor: not-allowed;
+  border-color: var(--fm-border-disabled);
+  background: var(--fm-bg-disabled);
+  color: var(--fm-text-disabled);
+  box-shadow: none;
+}
+
+.fm-status-bar__button {
+  min-width: var(--fm-space-6);
+  min-height: var(--fm-status-control-height);
+  display: inline-flex;
+  align-items: center;
+  appearance: none;
+  font: inherit;
+}
+
+.fm-status-bar__button.fm-status-bar__item {
+  /* Block, not the button's inline-flex, so the label can ellipsize. */
+  display: block;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  padding: 0;
+  text-align: start;
+}
+
+.fm-status-bar__button.fm-status-bar__item--state {
+  color: var(--fm-text-secondary);
+}
+
+.fm-status-bar__button.fm-status-bar__preparation[data-tone="ready"] { color: var(--fm-success-text); }
+.fm-status-bar__button.fm-status-bar__preparation[data-tone="failed"] { color: var(--fm-danger-text); }
+
+.fm-status-bar__item--clickable {
+  cursor: pointer;
+  transition: color var(--fm-transition-fast);
+}
+
+.fm-status-bar__engine--clickable {
+  cursor: pointer;
+  transition: background var(--fm-transition-fast), border-color var(--fm-transition-fast);
+}
+
+@media (hover: hover) {
+  .fm-status-bar__item--clickable:hover { color: var(--fm-text-primary); }
+  .fm-status-bar__engine--clickable:hover {
+    background: color-mix(in srgb, var(--fm-text-muted) 8%, var(--fm-bg-panel-raised));
+    border-color: var(--fm-border-strong);
+  }
+  .fm-status-bar__details-trigger:hover {
+    background: color-mix(in srgb, var(--fm-text-primary) 7%, transparent);
+    color: var(--fm-text-primary);
+  }
+}
+
+.fm-status-bar__details-trigger {
+  display: inline-grid;
+  flex: none;
+  place-items: center;
+  width: var(--fm-status-control-height);
+  height: var(--fm-status-control-height);
+  min-width: var(--fm-status-control-height);
+  border: 0;
+  border-radius: var(--fm-radius-pill);
+  background: transparent;
+  color: var(--fm-text-muted);
+  cursor: pointer;
+  padding: 0;
+}
+
+.fm-status-bar__details-trigger[aria-expanded="true"] {
+  background: var(--fm-raised-bg);
+  box-shadow: var(--fm-elevation-sm);
+  color: var(--fm-accent);
+}
+
+.fm-status-bar button:focus-visible {
+  outline: 2px solid var(--fm-accent);
+  outline-offset: -2px;
+}
+
+/* Tiers, by the bar's own width. */
+@container fm-status-bar (max-width: 78rem) {
+  [data-priority="lowest"] { display: none; }
+}
+
+@container fm-status-bar (max-width: 64rem) {
+  .fm-status-bar__axis-text,
+  .fm-status-bar__engine-detail { display: none; }
+  .fm-status-bar__axis { padding-inline: var(--fm-space-1); }
+}
+
+@container fm-status-bar (max-width: 46rem) {
+  [data-priority="low"] { display: none; }
+}
+
+/* Details popover ("cloud"): the full picture, two columns, plus jumps
+   to the dock tabs that explain each part. */
+.fm-status-bar__details {
+  width: min(22rem, calc(100vw - var(--fm-space-4)));
+  padding: var(--fm-space-2);
+}
+
+.fm-status-bar__details-list {
+  display: grid;
+  gap: 1px;
+  margin: 0;
+}
+
+.fm-status-bar__details-row {
+  display: grid;
+  grid-template-columns: 7.5rem minmax(0, 1fr);
+  align-items: baseline;
+  gap: var(--fm-space-2);
+  border-radius: var(--fm-radius-field);
+  padding: var(--fm-space-1) var(--fm-space-2);
+  font-size: var(--fm-font-size-xs);
+}
+
+.fm-status-bar__details-row:nth-child(odd) {
+  background: var(--fm-field-bg);
+}
+
+.fm-status-bar__details-row dt {
+  color: var(--fm-text-muted);
+}
+
+.fm-status-bar__details-row dd {
+  min-width: 0;
+  margin: 0;
+  color: var(--fm-text-primary);
+  overflow-wrap: anywhere;
+  font-variant-numeric: tabular-nums;
+}
+
+.fm-status-bar__details-note {
+  display: block;
+  margin-top: 2px;
+  color: var(--fm-text-muted);
+  font-size: var(--fm-font-size-2xs);
+  line-height: 1.4;
+}
+
+.fm-status-bar__details-row[data-state="connected"] dd,
+.fm-status-bar__details-row[data-state="ready"] dd,
+.fm-status-bar__details-row[data-state="resolved"] dd { color: var(--fm-success-text); }
+.fm-status-bar__details-row[data-state="error"] dd,
+.fm-status-bar__details-row[data-state="disconnected"] dd { color: var(--fm-danger-text); }
+
+.fm-status-bar__details-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: var(--fm-space-1);
+  margin-top: var(--fm-space-2);
+  border-top: 1px solid var(--fm-border-subtle);
+  padding-top: var(--fm-space-2);
+}

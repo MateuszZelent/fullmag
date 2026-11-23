@@ -63,7 +63,7 @@ export function frequencyResponseSweepStatusSummary({
 
   return {
     badge: runtimeState,
-    complete: data?.complete === true ? "yes" : data?.complete === false ? "no" : "unknown",
+    complete: data?.complete === true ? "yes" : data?.complete === false ? "no" : "—",
     currentFrequency: formatFrequency(frequencyResponseCurrentFrequency(data)),
     frequencyRange: frequencyResponseProgressRangeSummary(data),
     latestManifest: data?.latest_artifact_manifest_path ?? "not available",
@@ -72,7 +72,7 @@ export function frequencyResponseSweepStatusSummary({
         ? "yes"
         : data?.partial_artifacts_available === false
           ? "no"
-          : "unknown",
+          : "—",
     progress,
     progressLabel: progress,
     progressPercent,

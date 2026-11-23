@@ -119,7 +119,6 @@ vi.mock("./AntennaExternalLeadInspectionPanel", () => ({
 }));
 
 import { AntennaCompositionPanel } from "./AntennaCompositionPanels";
-import { AntennaGeometryPanel } from "./AntennaGeometryPanel";
 
 function committedDriveAck(transaction: {
   base_revision: number;
@@ -1080,102 +1079,6 @@ describe("AntennaCompositionPanel runtime results", () => {
       expect(container.textContent).not.toContain("Station 1");
       expect(container.textContent).not.toContain("Return width");
       expect(mocks.commitTransaction).not.toHaveBeenCalled();
-    } finally {
-      await act(async () => root.unmount());
-      dom.restore();
-    }
-  });
-
-  it("keeps the Geometry Inspector stable while saving a width station", async () => {
-    const geometry = {
-      geometry_kind: "MicrostripAntennaLayout",
-      geometry_params: {
-        length_m: 1e-6, thickness_m: 10e-9, conductivity_s_per_m: 5.8e7,
-        return_width_m: 500e-9, return_offset_m: 30e-9,
-        stations: [{ s: 0, signal_width_m: 50e-9 }, { s: 1, signal_width_m: 25e-9 }],
-        transform: { rotation_matrix: [[0, -1, 0], [1, 0, 0], [0, 0, 1]] },
-      },
-    };
-    mocks.scene.data = { revision: 4, objects: [{ id: "antenna-1", geometry }] } as unknown as SceneResource;
-    let acknowledge: ((value: unknown) => void) | undefined;
-    mocks.commitTransaction.mockImplementation(() => new Promise((resolve) => { acknowledge = resolve; }));
-    const dom = installSimulationPreparationTestDom();
-    const container = dom.document.createElement("div");
-    const root = createRoot(container as unknown as Element);
-    const find = (tag: string, label: string): TestElement => {
-      const found: TestElement[] = [];
-      const visit = (node: TestNode) => {
-        if (node instanceof TestElement && node.tagName === tag &&
-          (node.getAttribute("aria-label") === label || node.textContent.includes(label))) found.push(node);
-        node.childNodes.forEach(visit);
-      };
-      visit(container);
-      if (!found[0]) throw new Error(`Missing ${label}`);
-      return found[0];
-    };
-    try {
-      await act(async () => root.render(<AntennaGeometryPanel selection={{ ...conductorSelection(), kind: "object.antenna.geometry" }} />));
-      const panel = find("DIV", "Antenna geometry");
-      const input = find("INPUT", "Station 1 signal width");
-      const unrelatedInput = find("INPUT", "Station 2 signal width");
-      Object.getOwnPropertyDescriptor(TestElement.prototype, "value")?.set?.call(input, "60e-9");
-      await act(async () => input.dispatchEvent(new TestEvent("input", { bubbles: true })));
-      await act(async () => find("BUTTON", "Save conductor authoring").dispatchEvent(new TestEvent("click", { bubbles: true })));
-      expect(mocks.commitTransaction).toHaveBeenCalledWith(expect.objectContaining({
-        kind: "patch_object_geometry", object_id: "antenna-1", base_revision: 4,
-        geometry: expect.objectContaining({ geometry_params: expect.objectContaining({
-          stations: [{ s: 0, signal_width_m: 60e-9 }, { s: 1, signal_width_m: 25e-9 }],
-        }) }),
-      }), { sessionScopeKey: "session=session-1&epoch=epoch-1&request_scope_epoch=instance-1%3A7" });
-      expect(find("DIV", "Antenna geometry")).toBe(panel);
-      expect(find("INPUT", "Station 1 signal width")).toBe(input);
-      expect(unrelatedInput.disabled).toBe(false);
-      await act(async () => acknowledge?.({ scene_revision: 5, committed_scene: { ...mocks.scene.data, revision: 5 } }));
-    } finally {
-      await act(async () => root.unmount());
-      dom.restore();
-    }
-  });
-
-  it("requires explicit rebase if server geometry changes during a local station edit", async () => {
-    const geometry = {
-      geometry_kind: "MicrostripAntennaLayout",
-      geometry_params: {
-        length_m: 1e-6, thickness_m: 10e-9, conductivity_s_per_m: 5.8e7,
-        return_width_m: 500e-9, return_offset_m: 30e-9,
-        stations: [{ s: 0, signal_width_m: 50e-9 }, { s: 1, signal_width_m: 25e-9 }],
-      },
-    };
-    mocks.scene.data = { revision: 4, objects: [{ id: "antenna-1", geometry }] } as unknown as SceneResource;
-    const dom = installSimulationPreparationTestDom();
-    const container = dom.document.createElement("div");
-    const root = createRoot(container as unknown as Element);
-    const find = (tag: string, label: string): TestElement => {
-      const found: TestElement[] = [];
-      const visit = (node: TestNode) => {
-        if (node instanceof TestElement && node.tagName === tag &&
-          (node.getAttribute("aria-label") === label || node.textContent.includes(label))) found.push(node);
-        node.childNodes.forEach(visit);
-      };
-      visit(container);
-      if (!found[0]) throw new Error(`Missing ${label}`);
-      return found[0];
-    };
-    try {
-      await act(async () => root.render(<AntennaGeometryPanel selection={{ ...conductorSelection(), kind: "object.antenna.geometry" }} />));
-      const input = find("INPUT", "Station 1 signal width");
-      Object.getOwnPropertyDescriptor(TestElement.prototype, "value")?.set?.call(input, "60e-9");
-      await act(async () => input.dispatchEvent(new TestEvent("input", { bubbles: true })));
-      mocks.scene.data = { revision: 5, objects: [{ id: "antenna-1", geometry: {
-        ...geometry, geometry_params: { ...geometry.geometry_params, return_width_m: 400e-9 },
-      } }] } as unknown as SceneResource;
-      await act(async () => root.render(<AntennaGeometryPanel selection={{ ...conductorSelection(), kind: "object.antenna.geometry" }} />));
-      expect(container.textContent).toContain("Conductor geometry changed on the server");
-      expect(find("BUTTON", "Save conductor authoring").disabled).toBe(true);
-      expect(mocks.commitTransaction).not.toHaveBeenCalled();
-      expect(input.value).toBe("60e-9");
-      await act(async () => find("BUTTON", "Rebase draft").dispatchEvent(new TestEvent("click", { bubbles: true })));
-      expect(find("BUTTON", "Save conductor authoring").disabled).toBe(false);
     } finally {
       await act(async () => root.unmount());
       dom.restore();

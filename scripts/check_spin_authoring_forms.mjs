@@ -87,7 +87,7 @@ check(rows.transportRows(spinDraft.boundaries)[0].normal_spin_flux_Apm2==="0., -
 const spinPayload=transport.buildSpinTransport(spinDraft);
 check(spinPayload.materials[0].material.theta_sh===-0.22&&spinPayload.boundaries[0].normal_spin_flux_Apm2.join() === "0,-0.2,1000","Actual spin payload builder normalizes scalar and vector SI text");
 check(assignments[0].material.theta_sh===-0.1,"Normalization never mutates source snapshot");
-const inspectorSource=await readFile(resolve(root,"apps/control-room/src/modules/inspector/panels/SpinInterfaceInspector.tsx"),"utf8");
-const validationDependencies=inspectorSource.match(/\}, \[(api, commands,[^\n]+validationKey)\]\);/);
+const inspectorSource=await readFile(resolve(root,"apps/control-room/src/modules/inspector/panels/transport/transportShared.tsx"),"utf8");
+const validationDependencies=inspectorSource.match(/\},\s*\[([\s\S]*?validationKey[\s\S]*?)\]\);/);
 check(Boolean(validationDependencies)&&!validationDependencies[1].split(",").some((item)=>item.trim()==="draft"),"Validation effect depends on canonical serialized intent, not transient draft object identity (source check only)");
 console.log(JSON.stringify({status:"passed",checks,verification:"interpreted production models; TypeScript/browser/runtime not verified"}));

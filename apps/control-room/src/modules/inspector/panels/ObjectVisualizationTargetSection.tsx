@@ -20,6 +20,7 @@ import { isFlowMajorTensorDescriptor, normalizeTensorProjection } from "@/kernel
 import { resolveCanonicalQuantityId, quantityUnitForColorbar, quantityCatalogEntrySpatialProjections } from "@/kernel/api/quantityIds";
 import { primitiveMonoColorForRole } from "@/kernel/visualization/primitiveSurfaceColor";
 import { Button } from "@/shared/ui/Button";
+import { Input } from "@/shared/ui/Input";
 import {
   SegmentedControl,
 } from "@/shared/ui/SegmentedControl";
@@ -45,6 +46,7 @@ import { useVisualizationFieldMeta } from "@/kernel/resources/useVisualizationFi
 import { artifactSurfaceRangeKey, type ArtifactInspectorFieldBinding } from "@/kernel/visualization/artifactFieldSelection";
 import { useViewport3DRenderedScalarRange } from "@/modules/viewport-3d/public";
 import {
+  AUTHORED_VECTOR_BUDGET_MAX,
   buildVisualizationPanelSections,
   displayPassTogglePatch,
   fieldMetaScopeQueryForVisualizationTarget,
@@ -94,11 +96,47 @@ import {
 } from "../visualization/VisualizationInspectorControls";
 import { surfaceFieldStatus } from "./ObjectVisualizationHelpers";
 import { FeedbackBanner } from "../primitives/FeedbackBanner";
-import { FormField } from "../primitives/FormField";
 import { FieldRow } from "../primitives/FieldRow";
 import { InspectorGroup } from "../primitives/InspectorGroup";
 import { colorValueLabel, computedRgbToHex, isThemeColorToken } from "@/shared/color/colorValueLabel";
 import { InspectorPropertyRow } from "../primitives/InspectorPropertyRow";
+
+function VisualizationSelectRow({
+  disabled,
+  items,
+  label,
+  onValueChange,
+  placeholder,
+  value,
+}: {
+  disabled?: boolean;
+  items: ReadonlyArray<{ label: string; value: string }>;
+  label: string;
+  onValueChange: (value: string) => void;
+  placeholder?: string;
+  value: string;
+}) {
+  return (
+    <InspectorPropertyRow label={label}>
+      <Select
+        disabled={disabled}
+        value={value || undefined}
+        onValueChange={onValueChange}
+      >
+        <SelectTrigger aria-label={label}>
+          <SelectValue placeholder={placeholder ?? "Select option"} />
+        </SelectTrigger>
+        <SelectContent>
+          {items.map((item) => (
+            <SelectItem key={item.value} value={item.value}>
+              {item.label}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+    </InspectorPropertyRow>
+  );
+}
 
 const GEOMETRY_SCOPES = [
   { label: "Surface", value: "surface" },
@@ -128,6 +166,7 @@ type SectionDisabled = (
 
 export function VisualizationDisplayPassesSection({
   artifactInspection = false,
+  authoredMagnetizationAvailable = false,
   displaySettings,
   passControlsDisabled,
   patch,
@@ -139,6 +178,7 @@ export function VisualizationDisplayPassesSection({
   presentationRole,
 }: {
   artifactInspection?: boolean;
+  authoredMagnetizationAvailable?: boolean;
   displaySettings: VisualizationTargetSettings;
   passControlsDisabled: boolean;
   patch: PatchVisualizationTarget;
@@ -150,6 +190,12 @@ export function VisualizationDisplayPassesSection({
   presentationRole?: string | null;
 }) {
   const capabilities = visualizationTargetCapabilities(target, artifactInspection);
+  const vectorsPressed =
+    (displaySettings.vectorsVisible ||
+      (authoredMagnetizationAvailable &&
+        target.kind !== "airbox" &&
+        settings.vectorsVisible)) &&
+    settings.visible;
   return (
     <div className="grid min-w-0 gap-0" data-slot="visualization-display-passes">
       {renderWarning ? (
@@ -196,7 +242,7 @@ export function VisualizationDisplayPassesSection({
                 icon: <ArrowRightLeft size={13} strokeWidth={1.75} aria-hidden="true" />,
                 id: "vectors",
                 label: "Vectors",
-                pressed: displaySettings.vectorsVisible && displaySettings.visible,
+                pressed: vectorsPressed,
                 onToggle: () => void patch(displayPassTogglePatch(settings, "vectorsVisible")),
               }]
             : []),
@@ -320,6 +366,7 @@ export function VisualizationSurfaceColoringSection({
   regionCarrier,
   settings,
   target,
+  authoredMagnetizationAvailable = false,
 }: {
   fieldMetaOverride?: ReturnType<typeof useVisualizationFieldMeta>;
   artifactFieldBinding?: ArtifactInspectorFieldBinding;
@@ -338,6 +385,8 @@ export function VisualizationSurfaceColoringSection({
   regionCarrier?: RegionVisualizationCarrier | null;
   settings: VisualizationTargetSettings;
   target: VisualizationTargetRef;
+  /** When true and the active quantity is "m" with no backend field, shows the authored texture status. */
+  authoredMagnetizationAvailable?: boolean;
 }) {
   const colorbarComponent = surfaceColorSourceFieldMetaComponent(
     settings.surfaceColorSource,
@@ -387,6 +436,9 @@ export function VisualizationSurfaceColoringSection({
     ...fieldMetaScopeQuery,
   });
   const fieldMeta = fieldMetaOverride ?? ownFieldMeta;
+  const surfaceColoringDisabled =
+    sectionDisabled("surface-coloring") &&
+    !(authoredMagnetizationAvailable && settings.visible && settings.shaderVisible);
   const surfaceSummary = settings.surfaceColorSource === "solid"
     ? "Solid color"
     : `By Quantity • ${settings.activeQuantityId ?? "H_eff"} (Auto)`;
@@ -405,47 +457,35 @@ export function VisualizationSurfaceColoringSection({
           message={regionFieldWarning}
         />
       ) : null}
-      <FormField
-        disabled={sectionDisabled("surface-coloring")}
+      <VisualizationSelectRow
+        disabled={surfaceColoringDisabled}
+        items={resolveSurfaceColorSourceItems(settings.activeQuantityId)}
         label="Color source"
-        type="select"
         value={settings.surfaceColorSource}
-        onChange={(event) => {
-          const surfaceColorSource = event.target.value as SurfaceColorSource;
+        onValueChange={(nextValue) => {
+          const surfaceColorSource = nextValue as SurfaceColorSource;
           if (surfaceColorSource !== "solid") {
             onFieldCatalogRequest();
           }
           void patch({ surfaceColorSource });
         }}
-      >
-        {resolveSurfaceColorSourceItems(settings.activeQuantityId).map((source) => (
-          <option key={source.value} value={source.value}>
-            {source.label}
-          </option>
-        ))}
-      </FormField>
-      <FormField
+      />
+      <VisualizationSelectRow
         disabled={
           isFieldPending("surfaceProjectionMode") ||
-          sectionDisabled("surface-coloring") ||
+          surfaceColoringDisabled ||
           settings.surfaceColorSource === "solid"
         }
+        items={SURFACE_FIELD_PROJECTION_ITEMS}
         label="Projection"
-        type="select"
         value={settings.surfaceProjectionMode}
-        onChange={(event) =>
-          void patch(surfaceFieldProjectionModePatch(event.target.value))
+        onValueChange={(nextValue) =>
+          void patch(surfaceFieldProjectionModePatch(nextValue))
         }
-      >
-        {SURFACE_FIELD_PROJECTION_ITEMS.map((item) => (
-          <option key={item.value} value={item.value}>
-            {item.label}
-          </option>
-        ))}
-      </FormField>
+      />
       {showFieldMeta ? (
         <ScalarColorbarControl
-          disabled={isFieldPending("scalarColorPalette") || sectionDisabled("surface-coloring")}
+          disabled={isFieldPending("scalarColorPalette") || surfaceColoringDisabled}
           fieldMeta={fieldMeta}
           palette={settings.scalarColorPalette}
           patch={patch}
@@ -461,7 +501,7 @@ export function VisualizationSurfaceColoringSection({
           <Switch
             aria-label="Add colorbar to viewport"
             checked={settings.viewportColorbarVisible}
-            disabled={isFieldPending("viewportColorbarVisible") || sectionDisabled("surface-coloring")}
+            disabled={isFieldPending("viewportColorbarVisible") || surfaceColoringDisabled}
             onCheckedChange={(checked: boolean) =>
               void patch({ viewportColorbarVisible: checked })
             }
@@ -470,14 +510,14 @@ export function VisualizationSurfaceColoringSection({
       ) : null}
       {settings.surfaceColorSource === "solid" ? (
         <ColorField
-          disabled={isFieldPending("shaderMonoColor") || sectionDisabled("surface-coloring")}
+          disabled={isFieldPending("shaderMonoColor") || surfaceColoringDisabled}
           label="Solid color"
           value={settings.shaderMonoColor}
           onChange={(value) => patchColor("shaderMonoColor", value)}
         />
       ) : null}
       <NumberField
-        disabled={isFieldPending("surfaceOpacityPercent") || sectionDisabled("surface-coloring")}
+        disabled={isFieldPending("surfaceOpacityPercent") || surfaceColoringDisabled}
         label="Surface opacity"
         max={100}
         min={0}
@@ -488,11 +528,15 @@ export function VisualizationSurfaceColoringSection({
       />
       <InspectorPropertyRow label="Field status">
         <span className="font-fm-mono text-fm-control text-fm-secondary">
-          {surfaceFieldStatus(
-            settings.surfaceColorSource,
-            fieldCatalog.data,
-            fieldCatalog.status,
-          )}
+          {authoredMagnetizationAvailable &&
+          resolveCanonicalQuantityId(settings.activeQuantityId) === "m" &&
+          !fieldCatalogQuantityAvailable(fieldCatalog.data, "m")
+            ? "Authored initial texture (m)"
+            : surfaceFieldStatus(
+                settings.surfaceColorSource,
+                fieldCatalog.data,
+                fieldCatalog.status,
+              )}
         </span>
       </InspectorPropertyRow>
     </InspectorGroup>
@@ -572,35 +616,23 @@ export function ScalarColorbarControl({
         : "loading field range";
   return (
     <div className="fm-inspector-colorbar-control">
-      <FormField
+      <VisualizationSelectRow
         disabled={disabled}
+        items={SCALAR_COLOR_PALETTE_ITEMS}
         label="Color map"
-        type="select"
         value={palette}
-        onChange={(event) => void patch(scalarColorPalettePatch(event.target.value))}
-      >
-        {SCALAR_COLOR_PALETTE_ITEMS.map((item) => (
-          <option key={item.value} value={item.value}>
-            {item.label}
-          </option>
-        ))}
-      </FormField>
+        onValueChange={(nextValue) => void patch(scalarColorPalettePatch(nextValue))}
+      />
       {supportsDisplayUnitToggle ? (
-        <FormField
+        <VisualizationSelectRow
           disabled={disabled}
+          items={displayUnitItems}
           label="Display unit"
-          type="select"
           value={effectiveDisplayUnit}
-          onChange={(event) =>
-            setDisplayUnit(event.target.value as ScalarColorbarDisplayUnit)
+          onValueChange={(nextValue) =>
+            setDisplayUnit(nextValue as ScalarColorbarDisplayUnit)
           }
-        >
-          {displayUnitItems.map((item) => (
-            <option key={item.value} value={item.value}>
-              {item.label}
-            </option>
-          ))}
-        </FormField>
+        />
       ) : null}
       <div role="img"
         className="fm-inspector-colorbar"
@@ -696,6 +728,7 @@ export function VisualizationQuantitySection({
   settings,
   targetFieldAvailability,
   targetKind,
+  authoredMagnetizationAvailable = false,
 }: {
   conductor?: boolean;
   executionRequired?: boolean;
@@ -710,9 +743,17 @@ export function VisualizationQuantitySection({
   settings: VisualizationTargetSettings;
   targetFieldAvailability?: ReadonlyMap<string, TargetFieldAvailability>;
   targetKind?: VisualizationTargetKind;
+  /** When true, injects "Magnetization (initial texture)" as a selectable item. */
+  authoredMagnetizationAvailable?: boolean;
 }) {
   const quantityItems = visualizationQuantityItems(
-    settings.activeQuantityId, targetKind, fieldCatalog, quantityCatalog, targetFieldAvailability, conductor,
+    settings.activeQuantityId,
+    targetKind,
+    fieldCatalog,
+    quantityCatalog,
+    targetFieldAvailability,
+    authoredMagnetizationAvailable,
+    conductor,
   );
   const { selectedValue, summary, status } = visualizationQuantitySelectionState({
     activeQuantityId: settings.activeQuantityId, items: quantityItems,
@@ -778,6 +819,9 @@ export function VisualizationQuantitySection({
       </div>
     </InspectorPropertyRow>
     {status === "selected" && selectedQuantity?.unit ? <FieldRow label="Field unit" value={selectedQuantity.unit} /> : null}
+    {status === "selected" && authoredMagnetizationAvailable && resolveCanonicalQuantityId(selectedValue ?? "") === "m" && !fieldCatalogQuantityAvailable(fieldCatalog, "m") ? (
+      <p role="status" className="fm-quantity-source-empty">Showing authored initial magnetization (m). Build the mesh or grid to materialize discretized solver fields.</p>
+    ) : null}
     {status === "execution-required" ? <p role="status" className="fm-quantity-source-empty">Select a source and execution above to load its field catalog. No simulation is started by this selection.</p> : null}
     {status === "unavailable" ? <p role="status">The selected quantity is not available for this target. Choose an available field or check its computation status.</p> : null}
     {status === "empty" ? <p role="status" className="fm-quantity-source-empty">
@@ -787,22 +831,17 @@ export function VisualizationQuantitySection({
     </p> : null}
     {isFlowMajorTensorDescriptor(descriptor) ? (
       <>
-      <FormField
+      <VisualizationSelectRow
         disabled={!settings.visible || isFieldPending("tensorProjection")}
-        inline
+        items={tensorOptions}
         label="Tensor projection"
-        type="select"
+        placeholder="Select tensor projection"
         value={settings.tensorProjection ?? ""}
-        onChange={(event) => {
-          const tensorProjection = normalizeTensorProjection(event.target.value);
+        onValueChange={(nextValue) => {
+          const tensorProjection = normalizeTensorProjection(nextValue);
           if (tensorProjection && tensorOptions.some((option) => option.value === tensorProjection)) void patch({ tensorProjection, surfaceColorSource: "colormap" });
         }}
-      >
-        <option disabled value="">Select tensor projection</option>
-        {tensorOptions.map((option) => (
-          <option key={option.value} value={option.value}>{option.label}</option>
-        ))}
-      </FormField>
+      />
       </>
     ) : null}
     </>
@@ -866,6 +905,7 @@ export function VisualizationWireframeSection({
 }
 
 export function VisualizationVectorsSection({
+  authoredMagnetizationAvailable = false,
   fieldMetaOverride,
   inspectionPresentation,
   artifactFieldBinding,
@@ -890,6 +930,7 @@ export function VisualizationVectorsSection({
   visualizationRevision,
   vectorTopologyHash,
 }: {
+  authoredMagnetizationAvailable?: boolean;
   fieldMetaOverride?: ReturnType<typeof useVisualizationFieldMeta>;
   artifactFieldBinding?: ArtifactInspectorFieldBinding;
   airboxFieldCarrierIdentity?: VisualizationVectorScopeIdentity | null;
@@ -902,7 +943,7 @@ export function VisualizationVectorsSection({
     label: string;
     vectorsVisible: boolean;
   }>;
-  onTogglePartVectors?: (visible: boolean) => void;
+  onTogglePartVectors?: (partId: string, visible: boolean) => void;
   patch: PatchVisualizationTarget;
   patchColor: (field: "vectorMonoColor", value: string) => void;
   patchNumber: (
@@ -976,8 +1017,23 @@ export function VisualizationVectorsSection({
     scopeId: fieldMetaScopeQuery.scope_id,
     scopeKind: viewportRenderedRangeScopeKind(fieldMetaScopeQuery.scope_kind),
   });
+  const authoredVectorsAvailable = Boolean(
+    authoredMagnetizationAvailable &&
+      targetKind !== "airbox" &&
+      settings.visible &&
+      settings.vectorsVisible,
+  );
+  const effectiveVectorBudgetRange: VisualizationVectorBudgetRange =
+    authoredVectorsAvailable && vectorBudgetRange.max === null
+      ? {
+          ...vectorBudgetRange,
+          max: AUTHORED_VECTOR_BUDGET_MAX,
+          min: 0,
+          step: 1,
+        }
+      : vectorBudgetRange;
   const budgetValues = resolveVisualizationVectorBudgetValues({
-    range: vectorBudgetRange,
+    range: effectiveVectorBudgetRange,
     requestedBudget: settings.vectorBudget,
     sceneCap,
   });
@@ -989,7 +1045,8 @@ export function VisualizationVectorsSection({
     target,
     airboxFieldCarrierIdentity,
   );
-  const vectorsUnavailable = sectionDisabled("vectors");
+  const vectorsUnavailable =
+    sectionDisabled("vectors") && !authoredVectorsAvailable;
   const vectorColorPending = isFieldPending("vectorColorMode");
 
   const vectorsSummary = settings.geometryScope
@@ -1069,8 +1126,8 @@ export function VisualizationVectorsSection({
           disabled={vectorsUnavailable || isFieldPending("vectorBudget") || vectorBudgetUnavailable}
           label="Arrow budget"
           max={vectorBudgetMax}
-          min={vectorBudgetRange.min}
-          step={vectorBudgetRange.step}
+          min={effectiveVectorBudgetRange.min}
+          step={effectiveVectorBudgetRange.step}
           value={vectorBudgetValue}
           onChange={(value) => patchNumber("vectorBudget", value)}
         />
@@ -1144,18 +1201,20 @@ export function VisualizationVectorsSection({
         <fieldset className="fm-visualization-part-toggles" aria-label="Object target vector visibility">
           <span className="fm-visualization-part-toggles__label">Object surfaces</span>
           {meshParts.map((part) => (
-            <label key={part.id} className="fm-visualization-part-toggle">
-              <input
-                type="checkbox"
+            <div key={part.id} className="fm-visualization-part-toggle flex items-center justify-between gap-2">
+              <div className="min-w-0">
+                <span className="block truncate">{part.label}</span>
+                <span className="fm-visualization-part-toggle__target block text-xs text-fm-muted">
+                  {part.actionTargetLabel}
+                </span>
+              </div>
+              <Switch
+                aria-label={`Toggle vectors on ${part.label}`}
                 checked={part.vectorsVisible}
                 disabled={vectorsUnavailable || isFieldPending("vectorsVisible")}
-                onChange={(e) => onTogglePartVectors(e.target.checked)}
+                onCheckedChange={(checked) => onTogglePartVectors(part.id, checked)}
               />
-              <span>{part.label}</span>
-              <span className="fm-visualization-part-toggle__target">
-                {part.actionTargetLabel}
-              </span>
-            </label>
+            </div>
           ))}
         </fieldset>
       )}
@@ -1359,7 +1418,7 @@ export function ColorField({
           ref={swatchRef}
           style={value ? { background: value } : undefined}
         />
-        <input
+        <Input
           aria-label={`${label} picker`}
           className="fm-viz-color-swatch h-fm-control-sm w-fm-control-sm shrink-0 cursor-pointer rounded-fm-control border border-fm-subtle bg-fm-canvas p-1 disabled:cursor-not-allowed disabled:border-fm-disabled-border disabled:bg-fm-disabled disabled:opacity-100"
           defaultValue={themeToken ? undefined : colorPickerInputValue(value)}
@@ -1371,7 +1430,7 @@ export function ColorField({
           onFocus={seedPicker}
           onPointerDown={seedPicker}
         />
-        <input
+        <Input
           aria-label={`${label} value`}
           className={cn(
             "min-w-0 flex-1 font-fm-mono",
@@ -1379,7 +1438,6 @@ export function ColorField({
           )}
           disabled={disabled}
           placeholder={colorValueLabel(value)}
-          title={value}
           type="text"
           value={themeToken ? "" : value}
           onChange={(event) => onChange(event.currentTarget.value)}
