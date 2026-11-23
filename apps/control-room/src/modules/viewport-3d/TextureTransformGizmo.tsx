@@ -2674,6 +2674,7 @@ export function Viewport3DTextureTransformLayer({
   savedViewportActive = false,
   getObjectSettings,
   liveFieldCoveredObjectIds,
+  fdmSurfaceObjectIds,
 }: {
   onGestureActiveChange?: (active: boolean) => void;
   primitiveModel: Viewport3DPrimitiveRenderModel | null;
@@ -2694,6 +2695,7 @@ export function Viewport3DTextureTransformLayer({
    * magnetization overlay is suppressed so it does not paint on top of live results.
    */
   liveFieldCoveredObjectIds?: ReadonlySet<string>;
+  fdmSurfaceObjectIds?: ReadonlySet<string>;
 }) {
   const bridge = useSyncExternalStore(
     subscribeTextureDraftBridge,
@@ -2739,8 +2741,18 @@ export function Viewport3DTextureTransformLayer({
     return textureTransformModel.getAuthoredDraft(selectedObject.objectId);
   }, [bindingMatchesObject, bridge.activeBinding, bridge.gizmoEnabled, selectedObject, textureTransformModel]);
 
+  const selectedSettings = selectedObject && getObjectSettings?.(selectedObject);
+  const selectedSurfaceVisible = !selectedSettings || (
+    selectedSettings.visible &&
+    (selectedSettings.shaderVisible || selectedSettings.primitiveVisible) &&
+    selectedSettings.surfaceColorSource !== "solid" &&
+    (!selectedSettings.activeQuantityId || resolveCanonicalQuantityId(selectedSettings.activeQuantityId) === "m")
+  );
   const showSurfacePreview = Boolean(
     selectedObject &&
+      selectedSurfaceVisible &&
+      !savedViewportActive &&
+      !fdmSurfaceObjectIds?.has(selectedObject.objectId) &&
       (bindingMatchesObject || bridge.gizmoEnabled) &&
       effectiveDraftAndBounds?.draft.sourceMode !== "field-file",
   );
@@ -2829,7 +2841,7 @@ export function Viewport3DTextureTransformLayer({
           if (obj.objectId === activeBindingObjectId) return false;
           if (!textureTransformModel.hasAuthoredMagnetization(obj.objectId)) return false;
           // Suppress static authored overlay when live solver results are displayed.
-          if (liveFieldCoveredObjectIds?.has(obj.objectId)) return false;
+          if (liveFieldCoveredObjectIds?.has(obj.objectId) || fdmSurfaceObjectIds?.has(obj.objectId)) return false;
           const s = getObjectSettings(obj);
           // Before a solver/mesh field exists, resolveViewport3DPrimitiveVisualizationSettings
           // turns shaderVisible off and sets primitiveVisible = true so shaded geometry stays visible.

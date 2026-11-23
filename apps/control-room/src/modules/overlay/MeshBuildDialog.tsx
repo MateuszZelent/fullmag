@@ -21,7 +21,8 @@ import {
   useMeshSummaryResource,
 } from "@/kernel/resources/geometryLifecycleResources";
 import { useSessionStatusSelector } from "@/kernel/resources/useSessionStatus";
-import { resolveActiveLaneOperation } from "@/kernel/resources/useActiveLaneCapabilities";
+import { resolveActiveLaneOperation, resolveFdmGridBuildOperation } from "@/kernel/resources/useActiveLaneCapabilities";
+import { useCommandQueueResource } from "@/kernel/resources/studyRuntimeResources";
 import { resolveSessionAuthoringDiscretization } from "@/kernel/resources/sessionDiscretization";
 import type { JsonObject } from "@/kernel/api/apiTypes";
 import type { KernelApi } from "@/kernel/types";
@@ -45,7 +46,7 @@ import {
   meshBuildDialogRuntimeStatusEquals,
   selectMeshBuildDialogRuntimeStatus,
 } from "./MeshBuildDialogRuntimeStatus";
-import { resolveMeshBuildDialogLane, shouldLoadMeshBuildDialogFemResources, meshBuildDialogUnavailableMessage } from "./MeshBuildDialog.model";
+import { fdmGridPreflightState, resolveMeshBuildDialogLane, shouldLoadMeshBuildDialogFemResources, meshBuildDialogUnavailableMessage } from "./MeshBuildDialog.model";
 
 function asRecord(value: unknown): JsonObject | null {
   return value && typeof value === "object" && !Array.isArray(value)
@@ -102,10 +103,16 @@ export function MeshBuildDialog({ kernel }: { kernel: KernelApi }) {
     runtimeStatus?.capabilities.active_lane ?? null,
     "shared_mesh_build",
   );
-  const fdmGridBuildOperation = resolveActiveLaneOperation(
-    runtimeStatus?.capabilities.active_lane ?? null,
-    "grid_build",
-  );
+  const activeLane = runtimeStatus?.capabilities.active_lane ?? null;
+  const isFdmGridBuildRequest =
+    lane === "fdm" &&
+    (state.request?.commandId === "grid.build-fdm" ||
+      state.acceptedCommandId === "grid.build-fdm");
+  const refreshingFdmPlan = isFdmGridBuildRequest && activeLane?.operations.grid_build?.state === "stale";
+  const commandQueue = useCommandQueueResource({
+    enabled: state.open && state.phase === "pre-build" && refreshingFdmPlan,
+  });
+  const fdmGridBuildOperation = resolveFdmGridBuildOperation(activeLane, commandQueue.data);
   const explicitFemLane = shouldLoadMeshBuildDialogFemResources(
     state.open,
     lane,
@@ -142,17 +149,14 @@ export function MeshBuildDialog({ kernel }: { kernel: KernelApi }) {
   const objectPolicy = useObjectMeshPolicyResource(objectId, { enabled: explicitFemLane && Boolean(objectId) });
   const universePolicy = useUniverseMeshPolicyResource({ enabled: explicitFemLane && !objectId });
   const sharedPolicy = useMeshSharedDomainPolicyResource({ enabled: explicitFemLane && !objectId });
-  const requestedPolicy = useMemo(
-    () =>
-      objectId
-        ? { override: objectPolicy.data?.config ?? null }
-        : {
-            shared_domain: sharedPolicy.data?.config ?? null,
-            universe: universePolicy.data?.config ?? null,
-          },
-    [objectId, objectPolicy.data?.config, sharedPolicy.data?.config, universePolicy.data?.config],
+  const requestedPolicyKey = JSON.stringify(
+    objectId
+      ? { override: objectPolicy.data?.config ?? null }
+      : {
+          shared_domain: sharedPolicy.data?.config ?? null,
+          universe: universePolicy.data?.config ?? null,
+        },
   );
-  const requestedPolicyKey = JSON.stringify(requestedPolicy);
   const resourceSceneRevision = typeof scene.data?.revision === "number"
     ? scene.data.revision
     : typeof scene.data?.scene_revision === "number"
@@ -165,16 +169,25 @@ export function MeshBuildDialog({ kernel }: { kernel: KernelApi }) {
   const sceneRevision = typeof statusSceneRevision === "number"
     ? Math.max(statusSceneRevision, resourceSceneRevision ?? statusSceneRevision)
     : resourceSceneRevision;
+  const requestedSceneRevision = typeof inputRecord?.scene_revision === "number"
+    ? inputRecord.scene_revision
+    : null;
+  const fdmPreflight = fdmGridPreflightState(
+    requestedSceneRevision,
+    resourceSceneRevision,
+    statusSceneRevision,
+  );
   const policyLoaded = objectId ? objectPolicy.status === "ready"
     : universePolicy.status === "ready" && sharedPolicy.status === "ready";
   const computedSnapshot = useMemo(() => {
     if (lane === "fdm") {
-      if (!state.request?.requestId || sceneRevision == null || !runtimeStatus) {
+      if (!state.request?.requestId || fdmPreflight !== "current" ||
+          requestedSceneRevision === null || !runtimeStatus) {
         return null;
       }
       return {
         requestId: state.request.requestId,
-        sceneRevision,
+        sceneRevision: requestedSceneRevision,
         meshRevision: runtimeStatus.resources.mesh_revision,
         policyKey: requestedPolicyKey,
         policy: null,
@@ -225,7 +238,7 @@ export function MeshBuildDialog({ kernel }: { kernel: KernelApi }) {
       meshRevision: runtimeStatus.resources.mesh_revision,
       policyKey: requestedPolicyKey,
       policy: asRecord(previousPolicy),
-      requestedPolicy: asRecord(structuredClone(requestedPolicy)),
+      requestedPolicy: JSON.parse(requestedPolicyKey) as JsonObject,
       stats: {
         build: latestBuild.status === "ready" ? asRecord(structuredClone(latestBuild.data)) : null,
         manifest: manifest.status === "ready" ? asRecord(structuredClone(manifest.data)) : null,
@@ -236,6 +249,8 @@ export function MeshBuildDialog({ kernel }: { kernel: KernelApi }) {
     lane,
     state.request,
     policyLoaded,
+    fdmPreflight,
+    requestedSceneRevision,
     sceneRevision,
     runtimeStatus,
     summary,
@@ -243,7 +258,6 @@ export function MeshBuildDialog({ kernel }: { kernel: KernelApi }) {
     manifest,
     sharedQuality,
     objectId,
-    requestedPolicy,
     requestedPolicyKey,
   ]);
   const stableSnapshotBefore = snapshotBefore ?? computedSnapshot;
@@ -305,9 +319,10 @@ export function MeshBuildDialog({ kernel }: { kernel: KernelApi }) {
       ? rawAuthoredFdmCell.filter((v): v is number => typeof v === "number")
       : null,
   );
-  const gridSpacing = tuple3(fdmDomain.data?.grid?.spacing) ?? authoredFdmCell;
+  const hasPendingAuthoredGrid = refreshingFdmPlan && authoredFdmCell !== null;
+  const gridSpacing = hasPendingAuthoredGrid ? authoredFdmCell : tuple3(fdmDomain.data?.grid?.spacing) ?? authoredFdmCell;
   const gridShape =
-    tuple3(fdmDomain.data?.grid?.shape) ??
+    (hasPendingAuthoredGrid ? null : tuple3(fdmDomain.data?.grid?.shape)) ??
     (geometryBounds && gridSpacing && gridSpacing.every((v) => v > 0)
       ? ([
           Math.max(1, Math.ceil((geometryBounds.max[0] - geometryBounds.min[0]) / gridSpacing[0] - 1e-9)),
@@ -393,15 +408,12 @@ export function MeshBuildDialog({ kernel }: { kernel: KernelApi }) {
     dispatch({ open: false, type: "open" });
   }
 
-  const isFdmGridBuildRequest =
-    lane === "fdm" &&
-    (state.request?.commandId === "grid.build-fdm" ||
-      state.acceptedCommandId === "grid.build-fdm");
   const activeBuildOperation = isFdmGridBuildRequest
     ? fdmGridBuildOperation
     : buildOperation;
 
-  const isStale = stableSnapshotBefore !== null && !snapshotCurrent;
+  const isStale = (stableSnapshotBefore !== null && !snapshotCurrent) ||
+    (isFdmGridBuildRequest && fdmPreflight === "stale");
   const isReady = snapshotCurrent && activeBuildOperation.enabled;
   const isRebuild = isFdmGridBuildRequest
     ? (fdmMembership.data?.region_membership_revision ?? 0) > 0
@@ -513,7 +525,7 @@ export function MeshBuildDialog({ kernel }: { kernel: KernelApi }) {
               objectsCount={scene.data?.objects?.length ?? 0}
               ready={snapshotCurrent && buildOperation.enabled}
               sceneRevision={sceneRevision}
-              stale={stableSnapshotBefore !== null && !snapshotCurrent}
+              stale={isStale}
               onRefresh={() => {
                 captureSnapshot(null);
                 if (state.request) dispatch({ type: "request", request: state.request });
@@ -555,7 +567,7 @@ export function MeshBuildDialog({ kernel }: { kernel: KernelApi }) {
               ready={snapshotCurrent && fdmGridBuildOperation.enabled}
               rendered={state.lastCommandStatus === "rendered"}
               sceneRevision={sceneRevision}
-              stale={stableSnapshotBefore !== null && !snapshotCurrent}
+              stale={isStale}
               totalCells={gridTotalCells}
             />
           ) : (

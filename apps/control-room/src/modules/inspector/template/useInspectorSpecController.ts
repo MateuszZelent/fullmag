@@ -76,6 +76,7 @@ export interface UseInspectorSpecControllerOptions<TDraft> {
   onApplied?: (draft: TDraft) => void;
   onLiveFieldChange?: <K extends keyof TDraft & string>(key: K, value: TDraft[K]) => void;
   appliedFlashMs?: number;
+  resetFieldInputsOnPatch?: boolean;
 }
 
 export interface InspectorSpecController<TDraft> {
@@ -94,6 +95,7 @@ export interface InspectorSpecController<TDraft> {
   readonly invalidFields: ReadonlyMap<string, string>;
   readonly valid: boolean;
   readonly touchedFields: ReadonlySet<string>;
+  readonly fieldResetTokens: ReadonlyMap<string, number>;
   readonly forceShowErrors: boolean;
   readonly applying: boolean;
   readonly appliedFlash: boolean;
@@ -147,6 +149,7 @@ interface ScopedEditState<TDraft> {
   liveOverrides: Partial<TDraft>;
   committedBaseline: { forSourceBaseline: TDraft; value: TDraft } | null;
   touchedFields: Set<string>;
+  fieldResetTokens: Map<string, number>;
   parseErrors: Map<string, string>;
   forceShowErrors: boolean;
   applyError: string | null;
@@ -162,6 +165,7 @@ function createEmptyScopedState<TDraft>(targetKey: string): ScopedEditState<TDra
     liveOverrides: {},
     committedBaseline: null,
     touchedFields: new Set(),
+    fieldResetTokens: new Map(),
     parseErrors: new Map(),
     forceShowErrors: false,
     applyError: null,
@@ -189,6 +193,7 @@ export function useInspectorSpecController<TDraft extends object>(
   const selectionTargetKey = resolveSelectionTargetKey(selection);
   const targetKey = `${selectionTargetKey}::${spec.id}`;
   const appliedFlashMs = options?.appliedFlashMs ?? 3000;
+  const resetFieldInputsOnPatch = options?.resetFieldInputsOnPatch ?? false;
 
   const [scopedState, setScopedState] = useState<ScopedEditState<TDraft>>(() =>
     createEmptyScopedState(targetKey),
@@ -460,7 +465,11 @@ export function useInspectorSpecController<TDraft extends object>(
         const nextStaged = { ...prev.stagedOverrides } as Record<string, unknown>;
         const nextBaseValues = { ...prev.stagedBaseValues } as Record<string, unknown>;
         const nextLive = { ...prev.liveOverrides } as Record<string, unknown>;
+        const nextFieldResetTokens = resetFieldInputsOnPatch ? new Map(prev.fieldResetTokens) : null;
+        const nextParseErrors = resetFieldInputsOnPatch ? new Map(prev.parseErrors) : null;
         for (const [key, value] of Object.entries(partial as Record<string, unknown>)) {
+          nextFieldResetTokens?.set(key, (nextFieldResetTokens.get(key) ?? 0) + 1);
+          nextParseErrors?.delete(key);
           if (liveFieldKeys.has(key)) {
             nextLive[key] = value;
           } else if (inspectorValuesEqual(value, baseRecord[key])) {
@@ -478,12 +487,14 @@ export function useInspectorSpecController<TDraft extends object>(
           stagedOverrides: nextStaged as Partial<TDraft>,
           stagedBaseValues: nextBaseValues as Partial<TDraft>,
           liveOverrides: nextLive as Partial<TDraft>,
+          fieldResetTokens: nextFieldResetTokens ?? prev.fieldResetTokens,
+          parseErrors: nextParseErrors ?? prev.parseErrors,
           appliedFlash: false,
           applyError: null,
         };
       });
     },
-    [clearAppliedTimer, effectiveBaseline, liveFieldKeys, updateScoped],
+    [clearAppliedTimer, effectiveBaseline, liveFieldKeys, resetFieldInputsOnPatch, updateScoped],
   );
 
   const revertField = useCallback(
@@ -970,6 +981,7 @@ export function useInspectorSpecController<TDraft extends object>(
     invalidFields,
     valid: invalidFields.size === 0,
     touchedFields: activeScoped.touchedFields,
+    fieldResetTokens: activeScoped.fieldResetTokens,
     forceShowErrors: activeScoped.forceShowErrors,
     applying,
     appliedFlash: activeScoped.appliedFlash,

@@ -22,6 +22,7 @@ LAYOUT_REFUSAL_SCHEMA = "fullmag.docker-resume-layout-refusal.v1"
 MOUNT_REFUSAL_SCHEMA = "fullmag.docker-resume-certificate-mount-refusal.v1"
 ACTIVATION_PREFLIGHT_SCHEMA = "fullmag.docker-activation-preflight-reconciliation.v1"
 TOOLCHAIN_CANCELED_SCHEMA = "fullmag.docker-toolchain-canceled-reconciliation.v1"
+INTERRUPTED_IDLE_RESTART_SCHEMA = "fullmag.docker-idle-restart-interrupted-reconciliation.v1"
 SHA = re.compile(r"[0-9a-f]{64}\Z")
 TOKEN = re.compile(r"[0-9a-f]{32}\Z")
 
@@ -313,9 +314,11 @@ def commit_script(control, root, request, journal_relative, result_sha, current_
     resume_failure = phase == "resume" and not publish_verified and request.get("schema") in (
         FRONTEND_FROZEN_SCHEMA, LAYOUT_REFUSAL_SCHEMA, MOUNT_REFUSAL_SCHEMA)
     require(activation or toolchain or resume_failure or (phase, publish_verified) in (("iteration", True), ("iteration", False), ("boris-reference", False)), "Closed reconciliation phase required")
-    require(phase != "iteration" or publish_verified
-            or request.get("schema") in (FAILED_BUILD_SCHEMA, PRESTART_SCHEMA, TERMINAL_PRESTART_SCHEMA, CGROUP_FAILURE_SCHEMA), "Failure-only publication requires its explicit schema")
-    require(not publish_verified or request.get("schema") not in (FAILED_BUILD_SCHEMA, PRESTART_SCHEMA, TERMINAL_PRESTART_SCHEMA, CGROUP_FAILURE_SCHEMA, FRONTEND_FROZEN_SCHEMA, LAYOUT_REFUSAL_SCHEMA, MOUNT_REFUSAL_SCHEMA),
+    iteration_failures = (FAILED_BUILD_SCHEMA, PRESTART_SCHEMA, TERMINAL_PRESTART_SCHEMA,
+                          CGROUP_FAILURE_SCHEMA, INTERRUPTED_IDLE_RESTART_SCHEMA)
+    require(phase != "iteration" or publish_verified or request.get("schema") in iteration_failures,
+            "Failure-only publication requires its explicit schema")
+    require(not publish_verified or request.get("schema") not in (*iteration_failures, FRONTEND_FROZEN_SCHEMA, LAYOUT_REFUSAL_SCHEMA, MOUNT_REFUSAL_SCHEMA),
             "A failed iteration cannot publish a verified success")
     phase = control.path(phase)
     targets = f"'{path}/receipt.json' '{phase}/current.json' " + (f"'{phase}/verified.json' " if publish_verified else "") + f"'{path}/terminal.json'"

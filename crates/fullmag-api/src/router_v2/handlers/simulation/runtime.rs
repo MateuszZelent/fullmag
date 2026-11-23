@@ -2335,15 +2335,17 @@ fn runtime_command_disabled_reason(
                 if has_active_compute_command(ledger) {
                     return Some("A runtime command is already active.".into());
                 }
+                if kind == "compute_fields"
+                    && crate::live_prepared_fdm_fields::uses_prepared_field_input(snapshot)
+                {
+                    return crate::live_prepared_fdm_fields::disabled_reason(snapshot)
+                        .err().map(str::to_owned);
+                }
                 if !snapshot
                     .run
                     .as_ref()
                     .is_some_and(|run| super::commands::is_terminal_run_status(&run.status))
                 {
-                    if kind == "compute_fields" {
-                        return crate::live_prepared_fdm_fields::disabled_reason(snapshot)
-                            .err().map(str::to_owned);
-                    }
                     return Some("Accepted observations require a terminal run.".into());
                 }
                 if snapshot.latest_fields.get("m").and_then(|m| m.get("state_object_ref")).is_none() {

@@ -355,6 +355,7 @@ export interface SimulationPreparationViewModel {
   readonly progressLabel: string | null;
   readonly reconnectingMessage: string | null;
   readonly reconnectingTitle: string | null;
+  readonly resourceErrorDetail?: string;
   readonly requestedExecutionLabel: string | null;
   readonly resolvedExecutionLabel: string | null;
   readonly stages: readonly SimulationPreparationStageView[];
@@ -730,6 +731,9 @@ function resolvePreparationResourceError(
     isVisible: true,
     kind: "resource-error",
     liveSummary: `Preparation status unavailable. ${detail}`,
+    resourceErrorDetail: status === null
+      ? "The preparation status request did not return an HTTP response."
+      : `The preparation status request returned HTTP ${status}.`,
     logEntries: [],
     preparation: null,
     progress: { kind: "terminal" },
