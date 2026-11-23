@@ -9,7 +9,7 @@ import { checkInspectors, loadInspectorMarkup } from "./lib/start-screen-inspect
 // of the semantic colour pairs in both themes. A rule-order or token
 // regression shows up here, where a screenshot would only show it by luck.
 
-const styleNames = ["tokens.css", "theme.css", "start-screen.tokens.css", "start-screen.css"];
+const styleNames = ["tokens.css", "theme.css", "start-screen.tokens.css", "inspector.css", "start-screen.css"];
 const styles = await Promise.all(
   styleNames.map((name) => readFile(new URL(`../src/design/styles/${name}`, import.meta.url), "utf8")),
 );
