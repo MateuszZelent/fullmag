@@ -214,6 +214,20 @@ describe("chart renderer owner", () => {
     expect(option.yAxis).toEqual(expect.arrayContaining([expect.objectContaining({ name: "Period [ns]" })]));
   });
 
+  it("uses the preferred frequency display unit without changing the original data", () => {
+    const option = chartRenderModelToEChartsOption({
+      ...model,
+      provenance: { dataRevision: 1, decimation: "none", displayUnits: { x: "GHz" }, query: "absorption", resourceKey: "absorption" },
+      series: [{ id: "rf", kind: "line", label: "RF drive", points: [{ rowIndex: 0, x: 6.162e9, y: 0.4e-15 }], unit: "W", yAxis: 0 }],
+      xAxis: { label: "Frequency [Hz]", unit: "Hz" },
+    });
+
+    expect(option.xAxis).toMatchObject({ name: "Frequency [GHz]" });
+    expect(option.series).toEqual(expect.arrayContaining([expect.objectContaining({
+      data: [[6.162e9, 0.4e-15, 0]],
+    })]));
+  });
+
   it("renders explicit branch gaps as null sentinels instead of connecting points", () => {
     const option = chartRenderModelToEChartsOption({
       ...model,

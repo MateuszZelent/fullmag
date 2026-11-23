@@ -116,7 +116,7 @@ export type ChartResultExportContext = Pick<
   | "runId"
   | "selectionRefs"
   | "stageId"
->;
+> & Partial<Pick<NonNullable<ChartRenderModel["provenance"]>, "decimation" | "provenance">>;
 
 export type ChartRendererEventName = "click" | "dblclick" | "dataZoom" | "legendselectchanged";
 
@@ -317,6 +317,7 @@ function computeXScale(model: ChartRenderModel): ChartDisplayTransform {
   return createChartDisplayTransform(
     model.xAxis.unit,
     chartValueExtrema(iterateXValues(model.series)),
+    model.provenance?.displayUnits?.x,
   );
 }
 

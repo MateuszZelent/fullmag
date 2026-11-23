@@ -30,12 +30,15 @@ export function analysisChartSurfaceIdentity(
       ...series[0]?.sourceIdentity,
       ...exportProvenance,
       dataRevision: series[0]?.dataRevision ?? null,
-      decimation: "minmax_lttb",
+      decimation: exportProvenance?.decimation ?? "minmax_lttb",
       descriptorId: descriptorId ?? `analysis:data-table:${series[0]?.source.tableId ?? "default"}`,
-      displayUnits: Object.fromEntries(series.flatMap((item) => {
-        const unit = displayUnits?.[item.quantity];
-        return unit ? [[`y:${item.id}`, unit]] : [];
-      })),
+      displayUnits: {
+        ...Object.fromEntries(series.flatMap((item) => {
+          const unit = displayUnits?.[item.quantity];
+          return unit ? [[`y:${item.id}`, unit]] : [];
+        })),
+        ...(displayUnits?.x ? { x: displayUnits.x } : {}),
+      },
       query: JSON.stringify({ xAxisLabel, series: series.map((item) => item.id) }),
       resourceKey: series[0]?.source.resourceKey ?? "data.table:default",
     },

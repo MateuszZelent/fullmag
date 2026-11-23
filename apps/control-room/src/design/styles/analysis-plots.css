@@ -1110,3 +1110,49 @@
   font-size: var(--fm-font-size-xs);
   font-variant-numeric: tabular-nums;
 }
+
+.fm-absorption-spectrum {
+  display: grid;
+  min-width: 0;
+  gap: var(--fm-space-2);
+}
+
+.fm-absorption-spectrum__import {
+  display: grid;
+  justify-items: start;
+  gap: var(--fm-space-1);
+  padding: var(--fm-space-2) var(--fm-space-3);
+  border: 1px solid var(--fm-border-subtle);
+  border-radius: var(--fm-radius-sm);
+  background: var(--fm-bg-surface);
+}
+
+.fm-absorption-spectrum__import input {
+  max-width: 100%;
+}
+
+.fm-absorption-spectrum__import p {
+  margin: 0;
+  color: var(--fm-text-muted);
+  font-size: var(--fm-font-size-xs);
+}
+
+.fm-absorption-spectrum__peaks caption,
+.fm-absorption-spectrum__peaks th,
+.fm-absorption-spectrum__peaks td {
+  padding: var(--fm-space-1) var(--fm-space-3);
+  text-align: start;
+}
+
+.fm-absorption-spectrum__peaks caption {
+  color: var(--fm-text-muted);
+}
+
+.fm-absorption-spectrum__peaks thead th {
+  border-bottom: 1px solid var(--fm-border-subtle);
+  font-weight: 600;
+}
+
+.fm-absorption-spectrum__peaks td {
+  font-variant-numeric: tabular-nums;
+}
