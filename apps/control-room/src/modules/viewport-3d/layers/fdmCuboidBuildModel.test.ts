@@ -1166,4 +1166,56 @@ describe("FDM cuboid realized membership", () => {
       }),
     ).toMatchObject({ hasAnyEffectivePass: true, needsSurfaceInstances: true });
   });
+
+  it("lifts single-cell-thick multilayer FDM vectors just above the top face so Z-buffer occlusion works without burying in-plane arrows", () => {
+    const thinFilmDomain = {
+      bounds: {
+        min: [-150e-9, -150e-9, 0] as [number, number, number],
+        max: [150e-9, 150e-9, 15e-9] as [number, number, number],
+      },
+      displayCellBudget: 16,
+      displayCellCount: 16,
+      kind: "fdm-grid" as const,
+      origin: [-150e-9, -150e-9, 0] as [number, number, number],
+      shape: [4, 4, 1] as [number, number, number],
+      spacing: [75e-9, 75e-9, 15e-9] as [number, number, number],
+      stride: 1,
+      totalCells: 16,
+    };
+    const result = buildViewport3DFdmCuboid({
+      cellSelection: "dense",
+      domain: thinFilmDomain,
+      maxVectorGlyphs: 16,
+      modelFieldVector: null,
+      nativeActiveMask: null,
+      realizedRegionIds: null,
+      vectorAnchorMode: "center",
+      vectorField: fieldVector(Array.from({ length: 16 }, () => [1, 0, 0]).flat()),
+      vectorGeometryScope: "surface",
+      vectorLengthScale: 1,
+      vectorScale: 18e-9,
+      vectorSurfaceOffsetEnabled: false,
+      vectorSurfaceOffsetScale: 0,
+      voxelFillRatio: 0.92,
+      voxelMagnitudeThreshold: 0,
+      voxelTopography: {
+        amplitudeCells: 0,
+        component: "magnitude",
+        enabled: false,
+      },
+    });
+
+    expect(result.vectorSegments).not.toBeNull();
+    const segments = result.vectorSegments!;
+    expect(segments.length).toBe(16 * 7);
+    // Every arrow sits cleanly above the layer top face (15 nm) and well below
+    // a 32.5 nm overlying layer so Z-buffer occlusion hides it behind upper layers.
+    for (let i = 0; i < 16; i += 1) {
+      const z0 = segments[i * 7 + 2]!;
+      const z1 = segments[i * 7 + 5]!;
+      expect(z0).toBeGreaterThan(15e-9);
+      expect(z0).toBeLessThan(25e-9);
+      expect(z1).toBeCloseTo(z0, 14);
+    }
+  });
 });

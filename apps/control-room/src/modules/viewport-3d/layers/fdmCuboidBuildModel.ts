@@ -715,6 +715,14 @@ function resolveFdmSurfaceAnchorNormal(
   };
   if (!targetAt(cellIndex)) return null;
 
+  // Single-cell-thick sheets (e.g. thin FDM layers with nz === 1) have both
+  // opposing faces exposed so +/- cancels to 0 on interior cells and side faces
+  // dominate perimeter cells; use the canonical outward sheet normal uniformly
+  // so surface glyphs sit cleanly above the sheet while obeying Z-buffer depth.
+  if (nz === 1 && nx > 1 && ny > 1) return [0, 0, 1];
+  if (ny === 1 && nx > 1 && nz > 1) return [0, 1, 0];
+  if (nx === 1 && ny > 1 && nz > 1) return [1, 0, 0];
+
   const ix = cellIndex % nx;
   const iy = Math.floor(cellIndex / nx) % ny;
   const iz = Math.floor(cellIndex / (nx * ny)) % nz;
@@ -729,7 +737,12 @@ function resolveFdmSurfaceAnchorNormal(
   if (iz === 0 || !targetAt(cellIndex - planeStride)) normalZ -= 1;
   if (iz === nz - 1 || !targetAt(cellIndex + planeStride)) normalZ += 1;
   const length = Math.hypot(normalX, normalY, normalZ);
-  if (length <= 0) return null;
+  if (length <= 0) {
+    if (iz === nz - 1 || !targetAt(cellIndex + planeStride)) return [0, 0, 1];
+    if (iy === ny - 1 || !targetAt(cellIndex + nx)) return [0, 1, 0];
+    if (ix === nx - 1 || !targetAt(cellIndex + 1)) return [1, 0, 0];
+    return null;
+  }
   return [normalX / length, normalY / length, normalZ / length];
 }
 
@@ -743,8 +756,11 @@ function offsetFdmVectorAnchor(
   cellSelection: FdmCuboidCellSelection | undefined,
   candidateCells: ReadonlySet<number> | null,
   offsetDistance: number,
+  cellSize?: readonly [number, number, number] | null,
+  baseSurfaceClearance = 0,
 ): [number, number, number] {
-  if (offsetDistance <= 0) return [x, y, z];
+  const needsLift = offsetDistance > 0 || baseSurfaceClearance > 0;
+  if (!needsLift) return [x, y, z];
   const normal = resolveFdmSurfaceAnchorNormal(
     cellIndex,
     gridShape,
@@ -753,10 +769,21 @@ function offsetFdmVectorAnchor(
     candidateCells,
   );
   if (!normal) return [x, y, z];
+  const halfCellExtent =
+    cellSize && cellSize.length === 3
+      ? 0.5 *
+        (Math.abs(normal[0]) * Math.max(cellSize[0], 0) +
+          Math.abs(normal[1]) * Math.max(cellSize[1], 0) +
+          Math.abs(normal[2]) * Math.max(cellSize[2], 0))
+      : 0;
+  const totalDistance =
+    offsetDistance > 0
+      ? halfCellExtent + offsetDistance
+      : halfCellExtent + Math.max(baseSurfaceClearance, halfCellExtent * 0.08);
   return [
-    x + normal[0] * offsetDistance,
-    y + normal[1] * offsetDistance,
-    z + normal[2] * offsetDistance,
+    x + normal[0] * totalDistance,
+    y + normal[1] * totalDistance,
+    z + normal[2] * totalDistance,
   ];
 }
 
@@ -1464,8 +1491,9 @@ export function buildFdmVectorSegmentsUncached(
   const scaleMagnitude = Math.max(maxMagnitude, 1e-12);
   const halfScale = effectiveScale / 2;
   const segments = new Float32Array(vectorCount * FDM_VECTOR_SEGMENT_STRIDE);
+  const needsSurfaceLift = options.geometryScope === "surface";
   const surfaceTargetCells =
-    options.geometryScope === "surface"
+    needsSurfaceLift
       && !hasExactFdmMembership(options.realizedRegionIds, model.gridShape)
       ? new Set(
           (options.instanceOrdinals ??
@@ -1476,9 +1504,10 @@ export function buildFdmVectorSegmentsUncached(
   const surfaceOffsetDistance = resolveFdmSurfaceOffsetDistance(
     effectiveScale,
     anchorMode,
-    options.surfaceOffsetEnabled === true && options.geometryScope === "surface",
+    options.surfaceOffsetEnabled === true && needsSurfaceLift,
     options.surfaceOffsetScale ?? 0,
   );
+  const baseSurfaceClearance = needsSurfaceLift ? effectiveScale * 0.14 : 0;
 
   for (let vector = 0; vector < vectorCount; vector += 1) {
     const instance = sampledInstances[vector] ?? 0;
@@ -1499,6 +1528,8 @@ export function buildFdmVectorSegmentsUncached(
       options.cellSelection,
       surfaceTargetCells,
       surfaceOffsetDistance,
+      model.cellSize,
+      baseSurfaceClearance,
     );
     const vx = fieldVector.values[valueOffset] ?? 0;
     const vy = fieldVector.values[valueOffset + 1] ?? 0;

@@ -1489,7 +1489,7 @@ function buildArray3DVectorGridPoints(
   }
 
   if (localAnchors.length === 0) {
-    return { positionsWorld: new Float32Array(0), pitch, count: 0, renderOnTop: true };
+    return { positionsWorld: new Float32Array(0), pitch, count: 0, renderOnTop: false };
   }
 
   const points: number[] = [];
@@ -1512,7 +1512,7 @@ function buildArray3DVectorGridPoints(
     positionsWorld: new Float32Array(points),
     pitch,
     count: points.length / 3,
-    renderOnTop: true,
+    renderOnTop: false,
   };
 }
 
@@ -1529,7 +1529,7 @@ export function buildAuthoredMagnetizationVectorGridPoints(
 ): AuthoredMagnetizationVectorGrid {
   const rawBudget = options.budget ?? AUTHORED_VECTOR_DEFAULT_BUDGET;
   if (!Number.isFinite(rawBudget) || rawBudget <= 0) {
-    return { positionsWorld: new Float32Array(0), pitch: 1e-9, count: 0, renderOnTop: true };
+    return { positionsWorld: new Float32Array(0), pitch: 1e-9, count: 0, renderOnTop: false };
   }
   const targetCount = Math.max(
     AUTHORED_VECTOR_BUDGET_MIN,
@@ -1658,7 +1658,7 @@ export function buildAuthoredMagnetizationVectorGridPoints(
           positionsWorld: new Float32Array(points),
           pitch,
           count: points.length / 3,
-          renderOnTop: true,
+          renderOnTop: false,
         };
       }
       // Thick cylinder: sample top/bottom caps + cylindrical mantle
@@ -1707,7 +1707,7 @@ export function buildAuthoredMagnetizationVectorGridPoints(
     const thinY = !thinZ && sy <= 0.35 * Math.max(sx, sz);
     const thinX = !thinZ && !thinY && sx <= 0.35 * Math.max(sy, sz);
     let computedPitch = maxSpan;
-    let renderOnTop = true;
+    const renderOnTop = false;
 
     if (thinZ) {
       const { na, nb, pitch } = resolveGrid2DCounts(sx, sy, targetCount);
@@ -1747,7 +1747,6 @@ export function buildAuthoredMagnetizationVectorGridPoints(
       }
     } else {
       // Thick 3D shape: distribute across all 6 AABB faces proportional to area
-      renderOnTop = false;
       const totalArea = 2 * (sx * sy + sy * sz + sz * sx);
       const basePitch = Math.max(1e-12, Math.sqrt(totalArea / targetCount));
       const lift = surfaceLift(basePitch);
@@ -1890,7 +1889,7 @@ export function buildAuthoredMagnetizationVectorGridPoints(
     positionsWorld: new Float32Array(points),
     pitch,
     count: points.length / 3,
-    renderOnTop: true,
+    renderOnTop: false,
   };
 }
 

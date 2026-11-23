@@ -1116,7 +1116,7 @@ export const FdmCuboidLayer = memo(function FdmCuboidLayer({
         materialProfile={materialProfile.glyphs}
         opacity={targetRenderPlan.vectors.opacity}
         sessionIdentity={sessionIdentity}
-        renderOnTop
+        renderOnTop={false}
         fieldBufferId={
           fieldVector
             ? `decoded:${fieldVector.quantityId}:${fieldVector.pointCount}:${fieldVector.values.byteLength}`

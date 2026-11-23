@@ -772,6 +772,9 @@ describe("TextureTransformGizmo & 3D surface preview synchronization", () => {
     expect(highGrid.count).toBeGreaterThanOrEqual(16);
 
     // Default thin-film surface lift sits cleanly above top face (+hz = 2.5 nm)
+    // and respects Z-buffer depth occlusion (renderOnTop = false) so lower-layer
+    // vectors never bleed through an upper layer in multilayer stacks.
+    expect(defaultGrid.renderOnTop).toBe(false);
     const defaultZ = defaultGrid.positionsWorld[2]!;
     const expectedMinLift = Math.max(defaultGrid.pitch * 0.16, 100e-9 * 0.006);
     expect(defaultZ).toBeCloseTo(2.5e-9 + expectedMinLift, 15);
