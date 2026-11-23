@@ -2428,6 +2428,72 @@ fn scene_geometry_entry(
                 depth,
             )
         }
+        "Array3D" => {
+            let raw_axes = params.get("axes").ok_or_else(|| {
+                ApiError::bad_request(format!(
+                    "Array3D object '{}' is missing 'axes' array of 3 axis specs",
+                    object_id
+                ))
+            })?;
+            let parsed_axes: [fullmag_authoring::SceneArrayAxisSpec; 3] =
+                serde_json::from_value(raw_axes.clone()).map_err(|error| {
+                    ApiError::bad_request(format!(
+                        "Array3D object '{}' has invalid 'axes': {error}",
+                        object_id
+                    ))
+                })?;
+            let (ordered_axes, total_instances) =
+                fullmag_authoring::validate_and_order_array_axes(&parsed_axes).map_err(|error| {
+                    ApiError::bad_request(format!("Array3D object '{}': {error}", object_id))
+                })?;
+            if total_instances > fullmag_ir::MAX_ARRAY_INSTANCES_FDM {
+                return Err(ApiError::bad_request(format!(
+                    "Array3D object '{}' total instances ({total_instances}) exceeds MAX_ARRAY_INSTANCES_FDM ({})",
+                    object_id,
+                    fullmag_ir::MAX_ARRAY_INSTANCES_FDM
+                )));
+            }
+            let child_geom = nested_scene_geometry_param_any(params, &["child", "base"], object_id)?;
+            let child_name = format!("{geometry_name}_child");
+            let mut lowered_child =
+                scene_geometry_entry(&child_geom, &child_name, object_id, depth + 1)?;
+            if let Some(raw_ct) = params.get("child_transform").filter(|v| !v.is_null()) {
+                let patch: fullmag_authoring::Transform3DPatch =
+                    serde_json::from_value(raw_ct.clone()).map_err(|error| {
+                        ApiError::bad_request(format!(
+                            "Array3D object '{}' has invalid 'child_transform': {error}",
+                            object_id
+                        ))
+                    })?;
+                let mut child_transform = fullmag_authoring::Transform3D::default();
+                child_transform.apply_patch(patch).map_err(|error| {
+                    ApiError::bad_request(format!(
+                        "Array3D object '{}' has invalid 'child_transform': {error}",
+                        object_id
+                    ))
+                })?;
+                lowered_child = wrap_geometry_with_transform(
+                    lowered_child,
+                    &child_transform,
+                    &child_name,
+                    object_id,
+                )?;
+            }
+            let merge_overlapping = params
+                .get("merge_overlapping")
+                .and_then(|value| value.as_bool())
+                .unwrap_or(false);
+            Ok(GeometryEntryIR::Array3D {
+                name: geometry_name.to_string(),
+                child: Box::new(lowered_child),
+                axes: [
+                    ordered_axes[0].to_ir(),
+                    ordered_axes[1].to_ir(),
+                    ordered_axes[2].to_ir(),
+                ],
+                merge_overlapping,
+            })
+        }
         "MicrostripAntenna" | "microstrip" | "CPWAntenna" | "cpw" => {
             Err(ApiError::bad_request(format!(
                 "antenna geometry object '{}' requires the conductor mesh planner; magnetic mesh lowering is not available in this command",

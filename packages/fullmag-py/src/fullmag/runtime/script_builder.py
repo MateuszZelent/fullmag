@@ -68,6 +68,8 @@ from fullmag.model.geometry import (
     ANTENNA_LAYOUT_TYPES,
     CPWAntennaLayout,
     ArchWaveguide,
+    Array3D,
+    ArrayAxisSpec,
     Box,
     Cone,
     Cylinder,
@@ -3054,6 +3056,84 @@ def _fold_fluent_csg(op: str, operand_exprs: list[str]) -> str:
     return acc
 
 
+def _render_array3d_suffix(
+    child_expr: str,
+    raw_axes: object,
+    *,
+    merge_overlapping: bool = False,
+) -> str:
+    if isinstance(raw_axes, (str, bytes)) or not isinstance(raw_axes, Sequence) or len(raw_axes) != 3:
+        raise ValueError("Array3D requires exactly 3 axis specifications (x, y, z).")
+    default_names = ("x", "y", "z")
+    parsed: dict[str, ArrayAxisSpec] = {}
+    for idx, raw_ax in enumerate(raw_axes):
+        if isinstance(raw_ax, ArrayAxisSpec):
+            spec = raw_ax
+        elif isinstance(raw_ax, Mapping):
+            spec = ArrayAxisSpec.from_ir(raw_ax, default_axis=default_names[idx])  # type: ignore[arg-type]
+        else:
+            raise ValueError(f"Array3D axes[{idx}] must be an ArrayAxisSpec or mapping.")
+        parsed[spec.axis] = spec
+    if set(parsed.keys()) != {"x", "y", "z"}:
+        raise ValueError("Array3D axes must cover 'x', 'y', and 'z'.")
+    ax_x, ax_y, ax_z = parsed["x"], parsed["y"], parsed["z"]
+    ordered = (ax_x, ax_y, ax_z)
+
+    def _vec3_lit(vals: tuple[float, float, float]) -> str:
+        return (
+            f"({_py_float_roundtrip(vals[0])}, "
+            f"{_py_float_roundtrip(vals[1])}, "
+            f"{_py_float_roundtrip(vals[2])})"
+        )
+
+    kwargs: list[str] = []
+    for n_key, d_key, ax in (("nx", "dx", ax_x), ("ny", "dy", ax_y), ("nz", "dz", ax_z)):
+        eff = ax.effective_count()
+        if eff > 1:
+            kwargs.append(f"{n_key}={eff}")
+        if ax.pitch_m != 0.0 or (eff > 1 and ax.spacing_mode == "lattice_step"):
+            kwargs.append(f"{d_key}={_py_float_roundtrip(ax.pitch_m)}")
+
+    dirs = tuple(ax.direction for ax in ordered)
+    if any(d != "positive" for d in dirs):
+        kwargs.append(f"direction=({_py_repr(dirs[0])}, {_py_repr(dirs[1])}, {_py_repr(dirs[2])})")
+
+    modes = tuple(ax.spacing_mode for ax in ordered)
+    if any(m != "lattice_step" for m in modes):
+        kwargs.append(f"spacing_mode=({_py_repr(modes[0])}, {_py_repr(modes[1])}, {_py_repr(modes[2])})")
+
+    gaps = tuple(ax.gap_m for ax in ordered)
+    if any(g != 0.0 for g in gaps):
+        kwargs.append(f"gap={_vec3_lit(gaps)}")
+
+    rels = tuple(ax.relative_factor for ax in ordered)
+    if any(r != 1.0 for r in rels):
+        kwargs.append(f"relative_factor={_vec3_lit(rels)}")
+
+    extras = tuple(ax.step_translation_extra_m for ax in ordered)
+    if any(any(c != 0.0 for c in vec) for vec in extras):
+        kwargs.append(
+            f"extra_step=({_vec3_lit(extras[0])}, {_vec3_lit(extras[1])}, {_vec3_lit(extras[2])})"
+        )
+
+    rots = tuple(ax.step_rotation_euler_deg for ax in ordered)
+    if any(any(c != 0.0 for c in vec) for vec in rots):
+        kwargs.append(
+            f"step_rot_deg=({_vec3_lit(rots[0])}, {_vec3_lit(rots[1])}, {_vec3_lit(rots[2])})"
+        )
+
+    scales = tuple(ax.step_scale_factor for ax in ordered)
+    if any(any(c != 1.0 for c in vec) for vec in scales):
+        kwargs.append(
+            f"step_scale=({_vec3_lit(scales[0])}, {_vec3_lit(scales[1])}, {_vec3_lit(scales[2])})"
+        )
+
+    if merge_overlapping:
+        kwargs.append("merge=True")
+
+    return f"{child_expr}.array_3d({', '.join(kwargs)})"
+
+
 def _render_shape_expression(entry: Mapping[str, object]) -> str:
     raw_kind = str(entry.get("geometry_kind") or entry.get("kind") or "").strip()
     kind = raw_kind.lower()
@@ -3316,6 +3396,19 @@ def _render_shape_expression(entry: Mapping[str, object]) -> str:
             f"origin=({_py_float_roundtrip(origin[0])}, {_py_float_roundtrip(origin[1])}, {_py_float_roundtrip(origin[2])}), "
             f"normal=({_py_float_roundtrip(normal[0])}, {_py_float_roundtrip(normal[1])}, {_py_float_roundtrip(normal[2])}), "
             f"keep={_py_repr(keep_side)})"
+        )
+    elif kind in {"array3d", "array_3d"}:
+        child = params.get("child") if isinstance(params.get("child"), Mapping) else params.get("base")
+        if not isinstance(child, Mapping):
+            raise ValueError("Array3D geometry requires a 'child' geometry.")
+        child_expr = _render_shape_expression(child)
+        child_transform = params.get("child_transform")
+        if isinstance(child_transform, Mapping):
+            child_expr = _render_transform_dict_suffix(child_expr, child_transform)
+        expression = _render_array3d_suffix(
+            child_expr,
+            params.get("axes"),
+            merge_overlapping=bool(params.get("merge_overlapping", False)),
         )
     elif csg_op is not None:
         raw_operands = params.get("operands")
@@ -12344,6 +12437,28 @@ def _render_geometry_expr_from_override(
             f"normal=({_py_float_roundtrip(normal[0])}, {_py_float_roundtrip(normal[1])}, {_py_float_roundtrip(normal[2])}), "
             f"keep={_py_repr(keep_side)})"
         )
+    elif normalized_kind in {"array3d", "array_3d"}:
+        raw_child = params.get("child") if params.get("child") is not None else params.get("base")
+        child_kind, child_params = _extract_override_child_geometry(
+            raw_child,
+            parent_kind="Array3D",
+            operand_name="child",
+            object_name=name,
+        )
+        child_expr = _render_geometry_expr_from_override(
+            child_kind,
+            child_params,
+            name=f"{name}_cell",
+            source_root=source_root,
+        )
+        child_transform = params.get("child_transform")
+        if isinstance(child_transform, Mapping):
+            child_expr = _render_transform_dict_suffix(child_expr, child_transform)
+        expr = _render_array3d_suffix(
+            child_expr,
+            params.get("axes"),
+            merge_overlapping=bool(params.get("merge_overlapping", False)),
+        )
     elif _normalize_csg_op(raw_kind, params) is not None:
         csg_op = _normalize_csg_op(raw_kind, params)
         assert csg_op is not None
@@ -12580,6 +12695,13 @@ def _render_geometry_expr(geometry: object, *, magnet_name: str, source_root: Pa
             f"origin=({_py_float_roundtrip(o[0])}, {_py_float_roundtrip(o[1])}, {_py_float_roundtrip(o[2])}), "
             f"normal=({_py_float_roundtrip(n[0])}, {_py_float_roundtrip(n[1])}, {_py_float_roundtrip(n[2])}), "
             f"keep={_py_repr(geometry.keep_side)})"
+        )
+    if isinstance(geometry, Array3D):
+        child = _render_geometry_expr(geometry.child, magnet_name=magnet_name, source_root=source_root)
+        return _render_array3d_suffix(
+            child,
+            geometry.axes,
+            merge_overlapping=geometry.merge_overlapping,
         )
     raise ValueError(f"unsupported geometry kind for canonical rewrite: {type(geometry).__name__}")
 
@@ -13540,6 +13662,15 @@ def _export_geometry_descriptor(
                 "plane_origin_m": list(geom.plane_origin),
                 "plane_normal": list(geom.plane_normal),
                 "keep_side": geom.keep_side,
+            },
+        }
+    if isinstance(geom, Array3D):
+        return {
+            "geometry_kind": "Array3D",
+            "geometry_params": {
+                "child": _export_geometry_descriptor(geom.child, flatten_translation=False),
+                "axes": [ax.to_ir() for ax in geom.axes],
+                "merge_overlapping": geom.merge_overlapping,
             },
         }
     return {"geometry_kind": type(geom).__name__, "geometry_params": {}}

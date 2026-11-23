@@ -1,3 +1,7 @@
+import {
+  array3DDimensionsLabel,
+  parseArray3DGeometry,
+} from "@/kernel/authoring/array3dModel";
 import { geometryOperandGhostKey } from "@/kernel/visualization/geometryGhostVisibilityStore";
 import type { ExplorerIconToken, ExplorerNode } from "../explorerTypes";
 
@@ -131,6 +135,8 @@ export function parseCompositeGeometry(geometry: unknown): ParsedCompositeGeomet
   if (op === "slice" || op === "array") {
     const child = asRecord(params.child);
     if (!child) return { op, operands: [], rawKind };
+    const parsedArray = op === "array" ? parseArray3DGeometry(record) : null;
+    const arrayDims = parsedArray ? array3DDimensionsLabel(parsedArray.axes) : null;
     return {
       op,
       operands: [
@@ -138,10 +144,12 @@ export function parseCompositeGeometry(geometry: unknown): ParsedCompositeGeomet
           enabled: true,
           geometry: child,
           index: 0,
-          label: asString(params.label) ?? defaultOperandLabel(child, 0),
+          label:
+            asString(params.label) ??
+            (arrayDims ? `Array 3D (${arrayDims})` : defaultOperandLabel(child, 0)),
           operandId: op === "slice" ? "slice-child" : "array-child",
           role: op,
-          roleBadge: roleBadgeForCompositeOp(op),
+          roleBadge: arrayDims ? `⊞ Array 3D (${arrayDims})` : roleBadgeForCompositeOp(op),
           total: 1,
         },
       ],

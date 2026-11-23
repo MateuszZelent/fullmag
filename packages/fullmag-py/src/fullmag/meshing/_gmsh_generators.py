@@ -12,6 +12,7 @@ from fullmag._progress import emit_progress
 from fullmag.model.geometry import (
     ANTENNA_LAYOUT_TYPES,
     ArchWaveguide,
+    Array3D,
     Box,
     CPWAntennaLayout,
     Cone,
@@ -22,6 +23,7 @@ from fullmag.model.geometry import (
     Geometry,
     ImportedGeometry,
     Intersection,
+    MAX_ARRAY_INSTANCES_FEM_OCC,
     MicrostripAntennaLayout,
     PolygonPrism,
     SinWaveguide,
@@ -406,6 +408,7 @@ def generate_mesh(
             Translate,
             Transform,
             SlicePlane,
+            Array3D,
             Ellipsoid,
             Ellipse,
             ArchWaveguide,
@@ -1008,6 +1011,50 @@ def _add_geometry_to_occ(
             gmsh.model.occ.translate(hs_tags, ox, oy, oz)
         result, _ = gmsh.model.occ.intersect(child_tags, hs_tags)
         return result
+    if isinstance(geometry, Array3D):
+        if geometry.total_instances > MAX_ARRAY_INSTANCES_FEM_OCC:
+            raise ValueError(
+                f"array_occ_instance_limit_exceeded: Array3D has {geometry.total_instances} "
+                f"instances, exceeding OCC limit {MAX_ARRAY_INSTANCES_FEM_OCC}"
+            )
+        proto_tags = _add_geometry_to_occ(gmsh, geometry.child, scale=scale)
+        if not proto_tags:
+            return []
+        bboxes = [gmsh.model.occ.getBoundingBox(dim, tag) for dim, tag in proto_tags]
+        child_extent = (
+            (max(b[3] for b in bboxes) - min(b[0] for b in bboxes)) / scale,
+            (max(b[4] for b in bboxes) - min(b[1] for b in bboxes)) / scale,
+            (max(b[5] for b in bboxes) - min(b[2] for b in bboxes)) / scale,
+        )
+        instance_groups: list[list[tuple[int, int]]] = []
+        for (tx, ty, tz), q, (sx, sy, sz) in geometry.instance_transforms(child_extent):
+            copied = [(int(d), int(t)) for d, t in gmsh.model.occ.copy(proto_tags)]
+            if sx != 1.0 or sy != 1.0 or sz != 1.0:
+                gmsh.model.occ.dilate(copied, 0.0, 0.0, 0.0, sx, sy, sz)
+            qx, qy, qz, qw = q
+            if qw < 0.0:
+                qx, qy, qz, qw = -qx, -qy, -qz, -qw
+            vec_norm = math.sqrt(qx * qx + qy * qy + qz * qz)
+            if vec_norm > 1e-15:
+                angle = 2.0 * math.atan2(vec_norm, qw)
+                if abs(angle) > 1e-15:
+                    gmsh.model.occ.rotate(
+                        copied, 0.0, 0.0, 0.0,
+                        qx / vec_norm, qy / vec_norm, qz / vec_norm,
+                        angle,
+                    )
+            dx_s, dy_s, dz_s = tx * scale, ty * scale, tz * scale
+            if dx_s != 0.0 or dy_s != 0.0 or dz_s != 0.0:
+                gmsh.model.occ.translate(copied, dx_s, dy_s, dz_s)
+            instance_groups.append(copied)
+        gmsh.model.occ.remove(proto_tags, recursive=True)
+        if geometry.merge_overlapping and len(instance_groups) > 1:
+            fused, _ = gmsh.model.occ.fuse(
+                instance_groups[0],
+                [dt for grp in instance_groups[1:] for dt in grp],
+            )
+            return list(fused)
+        return [dt for grp in instance_groups for dt in grp]
     if isinstance(geometry, ImportedGeometry):
         # Only CAD formats (STEP/IGES/BREP) can be loaded into the OCC kernel
         # via importShapes. STL and mesh files must go through the GEO pipeline

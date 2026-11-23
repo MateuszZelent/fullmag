@@ -2324,6 +2324,18 @@ pub enum AuthoringTransactionRequest {
         #[serde(default)]
         copy_regions: bool,
     },
+    #[serde(rename = "apply_array_3d")]
+    ApplyArray3d {
+        #[serde(default)]
+        base_revision: Option<u64>,
+        object_id: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        target_operand_id: Option<String>,
+        axes: [fullmag_authoring::SceneArrayAxisSpec; 3],
+        #[serde(default)]
+        merge_overlapping: bool,
+        realization: String,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]

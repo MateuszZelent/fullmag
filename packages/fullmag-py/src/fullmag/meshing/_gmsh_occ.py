@@ -7,6 +7,7 @@ import math
 from fullmag.model.geometry import (
     ANTENNA_LAYOUT_TYPES,
     ArchWaveguide,
+    Array3D,
     Box,
     CPWAntennaLayout,
     Cone,
@@ -18,6 +19,7 @@ from fullmag.model.geometry import (
     ImportedGeometry,
     InductiveLoopLayout,
     Intersection,
+    MAX_ARRAY_INSTANCES_FEM_OCC,
     MeanderAntennaLayout,
     MicrostripAntennaLayout,
     PiecewisePath3DLayout,
@@ -152,6 +154,12 @@ def is_occ_compatible(geometries: list[Geometry]) -> bool:
             if not is_occ_compatible([geometry.child]):
                 return False
             continue
+        if isinstance(geometry, Array3D):
+            if geometry.total_instances > MAX_ARRAY_INSTANCES_FEM_OCC:
+                return False
+            if not is_occ_compatible([geometry.child]):
+                return False
+            continue
         if isinstance(geometry, Difference):
             if not is_occ_compatible([geometry.base, geometry.tool]):
                 return False
@@ -177,7 +185,7 @@ def _contains_boolean_csg(geometry: Geometry) -> bool:
         return _contains_boolean_csg(geometry.geometry)
     if isinstance(geometry, Transform):
         return _contains_boolean_csg(geometry.child)
-    if isinstance(geometry, (Difference, Intersection, Union, Xor, SlicePlane)):
+    if isinstance(geometry, (Difference, Intersection, Union, Xor, SlicePlane, Array3D)):
         return True
     return False
 

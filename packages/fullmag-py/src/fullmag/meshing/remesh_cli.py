@@ -50,6 +50,8 @@ from fullmag.meshing._gmsh_types import (
 from fullmag.model.discretization import FEM
 from fullmag.model.geometry import (
     ArchWaveguide,
+    Array3D,
+    ArrayAxisSpec,
     Box,
     Cone,
     Cylinder,
@@ -221,6 +223,18 @@ def _geometry_from_ir(entry: dict[str, Any]) -> Any:
             plane_origin=tuple(float(v) for v in origin),
             plane_normal=tuple(float(v) for v in entry.get("plane_normal", (0.0, 0.0, 1.0))),
             keep_side=str(entry.get("keep_side", "positive")),
+            name=entry.get("name"),
+        )
+    if kind == "array_3d":
+        default_axes = ("x", "y", "z")
+        axes = [
+            ArrayAxisSpec.from_ir(ax, default_axis=default_axes[idx])
+            for idx, ax in enumerate(entry["axes"])
+        ]
+        return Array3D(
+            child=_geometry_from_ir(entry["child"]),
+            axes=axes,
+            merge_overlapping=bool(entry.get("merge_overlapping", False)),
             name=entry.get("name"),
         )
     raise ValueError(f"unsupported geometry kind for remesh: {kind!r}")

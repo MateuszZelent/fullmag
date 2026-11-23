@@ -3935,6 +3935,25 @@ fn apply_authoring_transaction(
             )?;
             Ok("duplicate_objects")
         }
+        AuthoringTransactionRequest::ApplyArray3d {
+            base_revision,
+            object_id,
+            target_operand_id,
+            axes,
+            merge_overlapping,
+            realization,
+        } => {
+            apply_array_3d_transaction(
+                current_scene,
+                base_revision,
+                &object_id,
+                target_operand_id.as_deref(),
+                &axes,
+                merge_overlapping,
+                &realization,
+            )?;
+            Ok("apply_array_3d")
+        }
     }
 }
 
@@ -7578,6 +7597,278 @@ fn apply_duplicate_objects_transaction(
     }
 
     Ok(())
+}
+
+fn build_array_3d_geometry(
+    existing: &SceneGeometry,
+    ordered_axes: &[fullmag_authoring::SceneArrayAxisSpec; 3],
+    merge_overlapping: bool,
+) -> Result<SceneGeometry, ApiError> {
+    let axes_value = serde_json::to_value(ordered_axes).map_err(|error| {
+        ApiError::internal(format!("failed to serialize Array3D axes: {error}"))
+    })?;
+    let (child_value, child_transform_value) = if existing.geometry_kind == "Array3D" {
+        if let Some(child) = existing.geometry_params.get("child") {
+            (
+                child.clone(),
+                existing
+                    .geometry_params
+                    .get("child_transform")
+                    .filter(|v| !v.is_null())
+                    .cloned(),
+            )
+        } else {
+            let child = serde_json::to_value(existing).map_err(|error| {
+                ApiError::internal(format!("failed to serialize Array3D child: {error}"))
+            })?;
+            (child, None)
+        }
+    } else {
+        let child = serde_json::to_value(existing).map_err(|error| {
+            ApiError::internal(format!("failed to serialize Array3D child: {error}"))
+        })?;
+        (child, None)
+    };
+    let mut params = serde_json::Map::new();
+    params.insert("child".to_string(), child_value);
+    if let Some(ct) = child_transform_value {
+        params.insert("child_transform".to_string(), ct);
+    }
+    params.insert("axes".to_string(), axes_value);
+    params.insert(
+        "merge_overlapping".to_string(),
+        Value::Bool(merge_overlapping),
+    );
+    Ok(SceneGeometry {
+        source_asset: None,
+        geometry_kind: "Array3D".to_string(),
+        geometry_params: Value::Object(params),
+        bounds_min: None,
+        bounds_max: None,
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
+fn apply_array_3d_transaction(
+    scene: &mut SceneDocument,
+    base_revision: Option<u64>,
+    object_id: &str,
+    target_operand_id: Option<&str>,
+    axes: &[fullmag_authoring::SceneArrayAxisSpec; 3],
+    merge_overlapping: bool,
+    realization: &str,
+) -> Result<(), ApiError> {
+    check_base_scene_revision(scene, base_revision)?;
+    let (ordered_axes, total_instances) =
+        fullmag_authoring::validate_and_order_array_axes(axes).map_err(ApiError::bad_request)?;
+
+    let target_index = scene
+        .objects
+        .iter()
+        .position(|entry| entry.id == object_id || entry.name == object_id)
+        .ok_or_else(|| ApiError::not_found(format!("object not found: {object_id}")))?;
+
+    match realization {
+        "modifier_in_object" => {
+            if total_instances > fullmag_ir::MAX_ARRAY_INSTANCES_FDM {
+                return Err(ApiError::bad_request(format!(
+                    "apply_array_3d total instances ({total_instances}) exceeds MAX_ARRAY_INSTANCES_FDM ({})",
+                    fullmag_ir::MAX_ARRAY_INSTANCES_FDM
+                )));
+            }
+            let target = &mut scene.objects[target_index];
+            if let Some(op_id) = target_operand_id {
+                let geometry_kind = match target.geometry.geometry_kind.as_str() {
+                    "Union" | "Difference" | "Intersection" | "Xor" => {
+                        target.geometry.geometry_kind.clone()
+                    }
+                    "Csg" => {
+                        let legacy_op = target
+                            .geometry
+                            .geometry_params
+                            .get("op")
+                            .and_then(Value::as_str)
+                            .unwrap_or("subtract");
+                        boolean_op_to_geometry_kind(legacy_op)?.to_string()
+                    }
+                    other => {
+                        return Err(ApiError::bad_request(format!(
+                            "object '{}' geometry kind '{other}' is not a boolean CSG node; cannot target operand '{op_id}'",
+                            target.id
+                        )));
+                    }
+                };
+                let mut operands = extract_boolean_operands(&target.geometry, &target.name)?;
+                let operand = operands
+                    .iter_mut()
+                    .find(|entry| entry.operand_id == op_id)
+                    .ok_or_else(|| {
+                        ApiError::not_found(format!("boolean operand not found: {op_id}"))
+                    })?;
+                operand.geometry =
+                    build_array_3d_geometry(&operand.geometry, &ordered_axes, merge_overlapping)?;
+                let operands_value = serde_json::to_value(&operands).map_err(|error| {
+                    ApiError::internal(format!("failed to serialize boolean operands: {error}"))
+                })?;
+                target.geometry = SceneGeometry {
+                    source_asset: None,
+                    geometry_kind,
+                    geometry_params: serde_json::json!({ "operands": operands_value }),
+                    bounds_min: None,
+                    bounds_max: None,
+                };
+            } else {
+                target.geometry =
+                    build_array_3d_geometry(&target.geometry, &ordered_axes, merge_overlapping)?;
+            }
+            mark_object_mesh_dirty(target);
+            Ok(())
+        }
+        "expand_to_objects" => {
+            if target_operand_id.is_some() {
+                return Err(ApiError::bad_request(
+                    "apply_array_3d(expand_to_objects) does not support target_operand_id; use modifier_in_object for boolean operands",
+                ));
+            }
+            if total_instances > fullmag_ir::MAX_EXPANDED_SCENE_OBJECTS {
+                return Err(ApiError::bad_request(format!(
+                    "apply_array_3d(expand_to_objects) total instances ({total_instances}) exceeds MAX_EXPANDED_SCENE_OBJECTS ({})",
+                    fullmag_ir::MAX_EXPANDED_SCENE_OBJECTS
+                )));
+            }
+            let source = scene.objects[target_index].clone();
+            let needs_bbox = ordered_axes.iter().any(|ax| {
+                ax.effective_count() > 1
+                    && ax.spacing_mode == fullmag_authoring::SceneArraySpacingMode::BoundingBoxGap
+            });
+            let child_extent = match fullmag_authoring::derive_scene_geometry_bounds(&source.geometry)
+            {
+                Some((cmin, cmax)) => [cmax[0] - cmin[0], cmax[1] - cmin[1], cmax[2] - cmin[2]],
+                None if needs_bbox => {
+                    return Err(ApiError::bad_request(
+                        "apply_array_3d(expand_to_objects) with bounding_box_gap requires finite derivable child bounds",
+                    ));
+                }
+                None => [0.0, 0.0, 0.0],
+            };
+            let mut step_vectors = [[0.0; 3]; 3];
+            for a in 0..3 {
+                let ax = &ordered_axes[a];
+                let delta = match ax.spacing_mode {
+                    fullmag_authoring::SceneArraySpacingMode::LatticeStep => ax.pitch_m,
+                    fullmag_authoring::SceneArraySpacingMode::BoundingBoxGap => {
+                        ax.relative_factor * child_extent[a] + ax.gap_m
+                    }
+                };
+                let mut v = ax.step_translation_extra_m;
+                v[a] += delta;
+                step_vectors[a] = v;
+            }
+            let idx_x = ordered_axes[0].canonical_indices();
+            let idx_y = ordered_axes[1].canonical_indices();
+            let idx_z = ordered_axes[2].canonical_indices();
+            let source_isotropic = is_isotropic_scale(source.transform.scale);
+
+            // Compute all expanded instances before mutating the scene so errors reject atomically.
+            let mut expanded: Vec<(usize, usize, usize, SceneGeometry, Transform3D)> =
+                Vec::with_capacity(total_instances);
+            for (ix, &kx) in idx_x.iter().enumerate() {
+                for (iy, &ky) in idx_y.iter().enumerate() {
+                    for (iz, &kz) in idx_z.iter().enumerate() {
+                        let ks = [kx, ky, kz];
+                        let mut trans = [0.0; 3];
+                        let mut rot_deg = [0.0; 3];
+                        let mut scale = [1.0; 3];
+                        for a in 0..3 {
+                            let k = ks[a];
+                            if k == 0.0 {
+                                continue;
+                            }
+                            for j in 0..3 {
+                                trans[j] += k * step_vectors[a][j];
+                                rot_deg[j] += k * ordered_axes[a].step_rotation_euler_deg[j];
+                                let sf = ordered_axes[a].step_scale_factor[j];
+                                if (sf - 1.0).abs() > 1e-15 {
+                                    scale[j] *= sf.powf(k);
+                                }
+                            }
+                        }
+                        let inst_transform = Transform3D {
+                            translation: trans,
+                            rotation_quat: fullmag_authoring::euler_xyz_deg_to_quat(rot_deg),
+                            scale,
+                            pivot: [0.0, 0.0, 0.0],
+                        };
+                        let (inst_geom, inst_world_transform) = if inst_transform.is_identity() {
+                            (source.geometry.clone(), source.transform.clone())
+                        } else if source_isotropic {
+                            (
+                                source.geometry.clone(),
+                                compose_transforms_isotropic(&source.transform, &inst_transform)?,
+                            )
+                        } else {
+                            let wrapped = SceneGeometry {
+                                source_asset: None,
+                                geometry_kind: "Transform".to_string(),
+                                geometry_params: serde_json::json!({
+                                    "child": source.geometry,
+                                    "transform": inst_transform,
+                                }),
+                                bounds_min: None,
+                                bounds_max: None,
+                            };
+                            (wrapped, source.transform.clone())
+                        };
+                        expanded.push((ix, iy, iz, inst_geom, inst_world_transform));
+                    }
+                }
+            }
+
+            let mut iter = expanded.into_iter();
+            if let Some((_ix, _iy, _iz, first_geom, first_transform)) = iter.next() {
+                let target = &mut scene.objects[target_index];
+                target.geometry = first_geom;
+                target.transform = first_transform;
+                mark_object_mesh_dirty(target);
+            }
+            for (ix, iy, iz, inst_geom, inst_transform) in iter {
+                let new_id = allocate_unique_object_id(
+                    scene,
+                    &format!("{}_arr_{}_{}_{}", source.id, ix, iy, iz),
+                );
+                let mut sibling = SceneObject {
+                    id: new_id,
+                    name: format!("{} [{ix},{iy},{iz}]", source.name),
+                    role: source.role.clone(),
+                    geometry: inst_geom,
+                    transform: inst_transform,
+                    material_ref: source.material_ref.clone(),
+                    region_name: None,
+                    magnetization_ref: source.magnetization_ref.clone(),
+                    region_overrides: Default::default(),
+                    physics_stack: source.physics_stack.clone(),
+                    object_mesh: source.object_mesh.clone(),
+                    mesh_override: source.mesh_override.clone(),
+                    regions: Vec::new(),
+                    allocated_region_ids: Vec::new(),
+                    material_parameter_fields: Vec::new(),
+                    absorbing_boundary: None,
+                    notes: None,
+                    visible: source.visible,
+                    locked: false,
+                    tags: Vec::new(),
+                    visualization_hint: source.visualization_hint.clone(),
+                };
+                mark_object_mesh_dirty(&mut sibling);
+                scene.objects.push(sibling);
+            }
+            mark_all_object_meshes_dirty(scene);
+            Ok(())
+        }
+        other => Err(ApiError::bad_request(format!(
+            "unsupported apply_array_3d realization '{other}'; expected modifier_in_object or expand_to_objects"
+        ))),
+    }
 }
 
 fn mark_object_mesh_dirty(object: &mut SceneObject) {

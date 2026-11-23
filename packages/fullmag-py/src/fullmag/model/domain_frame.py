@@ -5,6 +5,7 @@ from pathlib import Path
 
 from fullmag.model.geometry import (
     ArchWaveguide,
+    Array3D,
     CPWAntennaLayout,
     Box,
     Cone,
@@ -250,6 +251,62 @@ def geometry_bounds(
         )
     if isinstance(geometry, Difference):
         return geometry_bounds(geometry.base, source_root=source_root)
+    if isinstance(geometry, Array3D):
+        child_min, child_max = geometry_bounds(geometry.child, source_root=source_root)
+        if child_min is None or child_max is None:
+            return None, None
+        extent = (
+            child_max[0] - child_min[0],
+            child_max[1] - child_min[1],
+            child_max[2] - child_min[2],
+        )
+        if not geometry.has_step_rotation_or_scale:
+            # O(1) exact AABB from the 8 extremal index corners of the Bravais lattice
+            v0 = geometry.axes[0].step_vector(extent)
+            v1 = geometry.axes[1].step_vector(extent)
+            v2 = geometry.axes[2].step_vector(extent)
+            k_ranges = [
+                (min(ax.canonical_indices()), max(ax.canonical_indices()))
+                for ax in geometry.axes
+            ]
+            offsets = [
+                (
+                    kx * v0[0] + ky * v1[0] + kz * v2[0],
+                    kx * v0[1] + ky * v1[1] + kz * v2[1],
+                    kx * v0[2] + ky * v1[2] + kz * v2[2],
+                )
+                for kx in k_ranges[0]
+                for ky in k_ranges[1]
+                for kz in k_ranges[2]
+            ]
+            off_min = tuple(min(o[i] for o in offsets) for i in range(3))
+            off_max = tuple(max(o[i] for o in offsets) for i in range(3))
+            return (
+                tuple(child_min[i] + off_min[i] for i in range(3)),
+                tuple(child_max[i] + off_max[i] for i in range(3)),
+            )
+        corners = [
+            (x, y, z)
+            for x in (child_min[0], child_max[0])
+            for y in (child_min[1], child_max[1])
+            for z in (child_min[2], child_max[2])
+        ]
+        all_pts: list[tuple[float, float, float]] = []
+        for (tx, ty, tz), q, (sx, sy, sz) in geometry.instance_transforms(extent):
+            rot = rotation_matrix_from_quaternion(q)
+            for cx, cy, cz in corners:
+                lx, ly, lz = cx * sx, cy * sy, cz * sz
+                all_pts.append(
+                    (
+                        rot[0][0] * lx + rot[0][1] * ly + rot[0][2] * lz + tx,
+                        rot[1][0] * lx + rot[1][1] * ly + rot[1][2] * lz + ty,
+                        rot[2][0] * lx + rot[2][1] * ly + rot[2][2] * lz + tz,
+                    )
+                )
+        return (
+            tuple(min(pt[i] for pt in all_pts) for i in range(3)),
+            tuple(max(pt[i] for pt in all_pts) for i in range(3)),
+        )
     return None, None
 
 

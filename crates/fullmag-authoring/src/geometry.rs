@@ -466,6 +466,14 @@ pub fn geometry_capabilities(revision: u64) -> GeometryCapabilitiesResource {
                 GeometrySupportStatus::Production,
                 "Nested affine Transform (translation, rotation_quat, scale, pivot) on any solid operand.",
             ),
+            boolean(
+                "array_3d",
+                true,
+                true,
+                true,
+                GeometrySupportStatus::Production,
+                "Parametric 3D lattice Array3D (X/Y/Z counts, +/-/± directions, Bravais skew, step rotation/scale).",
+            ),
         ],
     }
 }
@@ -1346,6 +1354,16 @@ fn validate_geometry_node_depth(
                 diagnostics,
             );
         }
+        "Array3D" => {
+            validate_array_3d_node(
+                &geometry.geometry_params,
+                backend_target,
+                object_id,
+                path,
+                depth,
+                diagnostics,
+            );
+        }
         other => diagnostics.push(error(
             "GEOMETRY_KIND_UNSUPPORTED",
             format!("Unsupported geometry kind '{other}'."),
@@ -1741,6 +1759,106 @@ fn validate_slice_plane_node(
         diagnostics.push(error(
             "GEOMETRY_PARAM_INVALID",
             "SlicePlane geometry requires a valid 'child' geometry node.".to_string(),
+            Some(object_id.to_string()),
+            Some(path.to_string()),
+            &["realize_geometry", "build_mesh", "run_solver"],
+        ));
+    }
+}
+
+fn validate_array_3d_node(
+    params: &Value,
+    backend_target: &GeometryBackendTarget,
+    object_id: &str,
+    path: &str,
+    depth: usize,
+    diagnostics: &mut Vec<GeometryDiagnostic>,
+) {
+    let parsed_axes = params
+        .get("axes")
+        .and_then(|value| serde_json::from_value::<[crate::SceneArrayAxisSpec; 3]>(value.clone()).ok());
+    match parsed_axes {
+        Some(axes) => match crate::validate_and_order_array_axes(&axes) {
+            Ok((_ordered, total_instances)) => {
+                let budget = match backend_target {
+                    GeometryBackendTarget::Fem => fullmag_ir::MAX_ARRAY_INSTANCES_FEM_OCC,
+                    GeometryBackendTarget::Fdm => fullmag_ir::MAX_ARRAY_INSTANCES_FDM,
+                };
+                if total_instances > budget {
+                    diagnostics.push(error(
+                        "GEOMETRY_ARRAY3D_BUDGET_EXCEEDED",
+                        format!(
+                            "Array3D total instances ({total_instances}) exceeds {} backend limit ({budget}).",
+                            backend_target.as_str().to_uppercase()
+                        ),
+                        Some(object_id.to_string()),
+                        Some(path.to_string()),
+                        &["realize_geometry", "build_mesh", "run_solver"],
+                    ));
+                }
+            }
+            Err(message) => {
+                diagnostics.push(error(
+                    "GEOMETRY_PARAM_INVALID",
+                    message,
+                    Some(object_id.to_string()),
+                    Some(format!("{path}/axes")),
+                    &["realize_geometry", "build_mesh", "run_solver"],
+                ));
+            }
+        },
+        None => {
+            diagnostics.push(error(
+                "GEOMETRY_PARAM_INVALID",
+                "Array3D geometry requires an 'axes' array of 3 valid axis specifications (x, y, z)."
+                    .to_string(),
+                Some(object_id.to_string()),
+                Some(format!("{path}/axes")),
+                &["realize_geometry", "build_mesh", "run_solver"],
+            ));
+        }
+    }
+
+    if let Some(raw_ct) = params.get("child_transform") {
+        if !raw_ct.is_null() {
+            let valid = serde_json::from_value::<crate::Transform3DPatch>(raw_ct.clone())
+                .ok()
+                .and_then(|patch| {
+                    let mut t = Transform3D::default();
+                    t.apply_patch(patch).ok()?;
+                    Some(t)
+                })
+                .as_ref()
+                .is_some_and(transform_is_valid);
+            if !valid {
+                diagnostics.push(error(
+                    "GEOMETRY_TRANSFORM_INVALID",
+                    "Array3D 'child_transform' must be a valid Transform3D payload.".to_string(),
+                    Some(object_id.to_string()),
+                    Some(format!("{path}/child_transform")),
+                    &["realize_geometry", "build_mesh", "run_solver"],
+                ));
+            }
+        }
+    }
+
+    if let Some(child) = params
+        .get("child")
+        .or_else(|| params.get("base"))
+        .and_then(parse_geometry_value)
+    {
+        validate_geometry_node_depth(
+            &child,
+            backend_target,
+            object_id,
+            &format!("{path}/child"),
+            depth + 1,
+            diagnostics,
+        );
+    } else {
+        diagnostics.push(error(
+            "GEOMETRY_PARAM_INVALID",
+            "Array3D geometry requires a valid 'child' geometry node.".to_string(),
             Some(object_id.to_string()),
             Some(path.to_string()),
             &["realize_geometry", "build_mesh", "run_solver"],
@@ -2518,6 +2636,10 @@ fn piecewise_path_3d_layout_bounds(params: &Value) -> Option<([f64; 3], [f64; 3]
     ))
 }
 
+pub fn derive_scene_geometry_bounds(geometry: &SceneGeometry) -> Option<([f64; 3], [f64; 3])> {
+    derive_geometry_bounds(geometry)
+}
+
 fn derive_geometry_bounds(geometry: &SceneGeometry) -> Option<([f64; 3], [f64; 3])> {
     match geometry.geometry_kind.as_str() {
         "MicrostripAntennaLayout" => microstrip_layout_bounds(&geometry.geometry_params),
@@ -2760,6 +2882,117 @@ fn derive_geometry_bounds(geometry: &SceneGeometry) -> Option<([f64; 3], [f64; 3
                 .or_else(|| geometry.geometry_params.get("base"))
                 .and_then(parse_geometry_value)?;
             derive_geometry_bounds(&child)
+        }
+        "Array3D" => {
+            let child = geometry
+                .geometry_params
+                .get("child")
+                .or_else(|| geometry.geometry_params.get("base"))
+                .and_then(parse_geometry_value)?;
+            let (mut cmin, mut cmax) = derive_geometry_bounds(&child)?;
+            if let Some(raw_ct) = geometry
+                .geometry_params
+                .get("child_transform")
+                .filter(|v| !v.is_null())
+            {
+                let patch = serde_json::from_value::<crate::Transform3DPatch>(raw_ct.clone()).ok()?;
+                let mut t = Transform3D::default();
+                t.apply_patch(patch).ok()?;
+                (cmin, cmax) = transform_bounds_by_transform3d(cmin, cmax, &t)?;
+            }
+            let raw_axes = geometry.geometry_params.get("axes")?;
+            let axes = serde_json::from_value::<[crate::SceneArrayAxisSpec; 3]>(raw_axes.clone()).ok()?;
+            let (ordered, total) = crate::validate_and_order_array_axes(&axes).ok()?;
+            if total > fullmag_ir::MAX_ARRAY_INSTANCES_FDM {
+                return None;
+            }
+            let extent = [cmax[0] - cmin[0], cmax[1] - cmin[1], cmax[2] - cmin[2]];
+            let mut step_vectors = [[0.0; 3]; 3];
+            let mut k_ranges = [(0.0, 0.0); 3];
+            let mut has_rot_or_scale = false;
+            for a in 0..3 {
+                let ax = &ordered[a];
+                let delta = match ax.spacing_mode {
+                    crate::SceneArraySpacingMode::LatticeStep => ax.pitch_m,
+                    crate::SceneArraySpacingMode::BoundingBoxGap => {
+                        ax.relative_factor * extent[a] + ax.gap_m
+                    }
+                };
+                let mut v = ax.step_translation_extra_m;
+                v[a] += delta;
+                step_vectors[a] = v;
+                let n = ax.effective_count();
+                if n > 1 {
+                    let span = (n - 1) as f64;
+                    k_ranges[a] = match ax.direction {
+                        crate::SceneArrayDirection::Positive => (0.0, span),
+                        crate::SceneArrayDirection::Negative => (-span, 0.0),
+                        crate::SceneArrayDirection::Symmetric => (-0.5 * span, 0.5 * span),
+                    };
+                    if ax.step_rotation_euler_deg.iter().any(|r| r.abs() > 1e-12)
+                        || ax.step_scale_factor.iter().any(|s| (*s - 1.0).abs() > 1e-12)
+                    {
+                        has_rot_or_scale = true;
+                    }
+                }
+            }
+            if !has_rot_or_scale {
+                let mut tmin = [0.0; 3];
+                let mut tmax = [0.0; 3];
+                for a in 0..3 {
+                    let (klo, khi) = k_ranges[a];
+                    for j in 0..3 {
+                        let plo = klo * step_vectors[a][j];
+                        let phi = khi * step_vectors[a][j];
+                        tmin[j] += plo.min(phi);
+                        tmax[j] += plo.max(phi);
+                    }
+                }
+                return Some((
+                    [cmin[0] + tmin[0], cmin[1] + tmin[1], cmin[2] + tmin[2]],
+                    [cmax[0] + tmax[0], cmax[1] + tmax[1], cmax[2] + tmax[2]],
+                ));
+            }
+            let mut out_min = [f64::INFINITY; 3];
+            let mut out_max = [f64::NEG_INFINITY; 3];
+            let idx_x = ordered[0].canonical_indices();
+            let idx_y = ordered[1].canonical_indices();
+            let idx_z = ordered[2].canonical_indices();
+            for &kx in &idx_x {
+                for &ky in &idx_y {
+                    for &kz in &idx_z {
+                        let ks = [kx, ky, kz];
+                        let mut trans = [0.0; 3];
+                        let mut rot_deg = [0.0; 3];
+                        let mut scale = [1.0; 3];
+                        for a in 0..3 {
+                            let k = ks[a];
+                            if k == 0.0 {
+                                continue;
+                            }
+                            for j in 0..3 {
+                                trans[j] += k * step_vectors[a][j];
+                                rot_deg[j] += k * ordered[a].step_rotation_euler_deg[j];
+                                let sf = ordered[a].step_scale_factor[j];
+                                if (sf - 1.0).abs() > 1e-15 {
+                                    scale[j] *= sf.powf(k);
+                                }
+                            }
+                        }
+                        let inst_transform = Transform3D {
+                            translation: trans,
+                            rotation_quat: crate::euler_xyz_deg_to_quat(rot_deg),
+                            scale,
+                            pivot: [0.0, 0.0, 0.0],
+                        };
+                        let (imin, imax) =
+                            transform_bounds_by_transform3d(cmin, cmax, &inst_transform)?;
+                        out_min = min_vec3(out_min, imin);
+                        out_max = max_vec3(out_max, imax);
+                    }
+                }
+            }
+            Some((out_min, out_max))
         }
         "Difference" => {
             if let Some(operands) = geometry

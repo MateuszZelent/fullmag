@@ -123,25 +123,34 @@ export function PrimitiveObjectLayer({
           />
         </group>
       ) : null}
-      {primitiveModel.objects.map((object) => (
-        <PrimitiveObject
-          colors={colors}
-          key={object.geometryKey}
-          object={object}
-          onSelectObject={onSelectObject}
-          primitiveColorAssignments={primitiveColorAssignments}
-          materialProfile={materialProfile}
-          hasRealizedObjectGeometry={realizedObjectIds?.has(object.objectId) ?? false}
-          allowMeshReadyPreview={
-            object.kind === "imported-surface" ||
-            object.role === "antenna" ||
-            (isFerromagneticPrimitiveRole(object.role) &&
-              (meshReadyFallbackObjectIds?.has(object.objectId) ?? false))
-          }
-          settings={getObjectSettings(object)}
-          tracker={tracker}
-        />
-      ))}
+      {primitiveModel.objects.map((object) => {
+        // P1-FE-12: hide committed base mesh while a draft overlay for the same
+        // object is active to eliminate coplanar z-fighting.
+        const hiddenByDraftOverlay = Boolean(
+          primitiveModel.draftOverlay &&
+            primitiveModel.draftOverlay.objectId === object.objectId,
+        );
+        return (
+          <group key={object.geometryKey} visible={!hiddenByDraftOverlay}>
+            <PrimitiveObject
+              colors={colors}
+              object={object}
+              onSelectObject={onSelectObject}
+              primitiveColorAssignments={primitiveColorAssignments}
+              materialProfile={materialProfile}
+              hasRealizedObjectGeometry={realizedObjectIds?.has(object.objectId) ?? false}
+              allowMeshReadyPreview={
+                object.kind === "imported-surface" ||
+                object.role === "antenna" ||
+                (isFerromagneticPrimitiveRole(object.role) &&
+                  (meshReadyFallbackObjectIds?.has(object.objectId) ?? false))
+              }
+              settings={getObjectSettings(object)}
+              tracker={tracker}
+            />
+          </group>
+        );
+      })}
     </>
   );
 }

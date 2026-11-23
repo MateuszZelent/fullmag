@@ -5439,6 +5439,7 @@ describe("ribbon structure", () => {
       "geometry.boolean-intersect",
       "geometry.boolean-imprint-regions",
       "geometry.duplicate-objects",
+      "geometry.apply-array-3d",
       "geometry.split-by-plane",
       "geometry.extract-operand",
     ];

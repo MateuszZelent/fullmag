@@ -1,6 +1,6 @@
 "use client";
 
-import { ArrowDown, ArrowUp, Box, Eye, EyeOff, Layers, Scissors } from "lucide-react";
+import { ArrowDown, ArrowUp, Box, Eye, EyeOff, Grid3X3, Layers, Scissors } from "lucide-react";
 import { useCallback, useMemo, useState, useSyncExternalStore } from "react";
 
 import { MODEL_SCENE_PATH } from "@/kernel/api/apiPaths";
@@ -45,6 +45,8 @@ import {
   type InspectorFact,
   type InspectorSpec,
 } from "../../../template";
+
+import { Array3DLatticeTableSection } from "./Array3DLatticeTableSection";
 
 export interface GeometryNodeSpecDraft {
   exists: boolean;
@@ -578,6 +580,28 @@ export function GeometryNodeInspectorPanel({ selection }: InspectorPanelProps) {
             },
           ],
         },
+        {
+          id: "geometry-node-array-3d",
+          title: "Array 3D on operand",
+          icon: Grid3X3,
+          defaultOpen: false,
+          showWhen: (draft) => draft.exists,
+          rows: [
+            {
+              type: "custom",
+              wide: true,
+              render: (ctx) => (
+                <Array3DLatticeTableSection
+                  kernel={kernel}
+                  objectId={ctx.draft.objectId}
+                  sceneData={scene.data}
+                  sessionScopeKey={sessionScopeKey}
+                  targetOperandId={ctx.draft.operandId}
+                />
+              ),
+            },
+          ],
+        },
       ],
       commitBar: {
         mode: "staged",
@@ -616,9 +640,9 @@ export function GeometryNodeInspectorPanel({ selection }: InspectorPanelProps) {
       baseline.objectName,
       commitSceneResult,
       ghostVisible,
-      kernel.api,
+      kernel,
       runQuickAction,
-      scene.data?.objects,
+      scene.data,
       sceneRevision,
       sessionScopeKey,
     ],

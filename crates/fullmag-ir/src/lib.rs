@@ -2413,6 +2413,114 @@ fn validate_geometry_entry(geometry: &GeometryEntryIR, depth: usize, errors: &mu
             validate_geometry_entry(left, depth + 1, errors);
             validate_geometry_entry(right, depth + 1, errors);
         }
+        GeometryEntryIR::Array3D {
+            name,
+            child,
+            axes,
+            ..
+        } => {
+            if name.trim().is_empty() {
+                errors.push("array_3d geometry name must not be empty".to_string());
+            }
+            let expected_axes = ["x", "y", "z"];
+            let mut seen_axes = BTreeSet::new();
+            let mut total_instances: usize = 1;
+            let mut overflowed = false;
+            for (idx, axis_spec) in axes.iter().enumerate() {
+                let axis_lower = axis_spec.axis.trim().to_ascii_lowercase();
+                if !matches!(axis_lower.as_str(), "x" | "y" | "z") {
+                    errors.push(format!(
+                        "array_3d geometry '{}' axes[{}] has invalid axis '{}' (expected x, y, or z)",
+                        name, idx, axis_spec.axis
+                    ));
+                } else if !seen_axes.insert(axis_lower) {
+                    errors.push(format!(
+                        "array_3d geometry '{}' has duplicate axis '{}'",
+                        name, axis_spec.axis
+                    ));
+                }
+                if axis_spec.count == 0 || axis_spec.count > MAX_ARRAY_AXIS_COUNT {
+                    errors.push(format!(
+                        "array_3d geometry '{}' axis '{}' count ({}) must be in 1..={}",
+                        name, axis_spec.axis, axis_spec.count, MAX_ARRAY_AXIS_COUNT
+                    ));
+                }
+                if !axis_spec.pitch_m.is_finite() {
+                    errors.push(format!(
+                        "array_3d geometry '{}' axis '{}' pitch_m must be finite",
+                        name, axis_spec.axis
+                    ));
+                }
+                if !axis_spec.relative_factor.is_finite() {
+                    errors.push(format!(
+                        "array_3d geometry '{}' axis '{}' relative_factor must be finite",
+                        name, axis_spec.axis
+                    ));
+                }
+                if !axis_spec.gap_m.is_finite() {
+                    errors.push(format!(
+                        "array_3d geometry '{}' axis '{}' gap_m must be finite",
+                        name, axis_spec.axis
+                    ));
+                }
+                if axis_spec.step_translation_extra_m.iter().any(|v| !v.is_finite()) {
+                    errors.push(format!(
+                        "array_3d geometry '{}' axis '{}' step_translation_extra_m must contain finite values",
+                        name, axis_spec.axis
+                    ));
+                }
+                if axis_spec.step_rotation_euler_deg.iter().any(|v| !v.is_finite()) {
+                    errors.push(format!(
+                        "array_3d geometry '{}' axis '{}' step_rotation_euler_deg must contain finite values",
+                        name, axis_spec.axis
+                    ));
+                }
+                if axis_spec
+                    .step_scale_factor
+                    .iter()
+                    .any(|v| !v.is_finite() || *v <= 0.0)
+                {
+                    errors.push(format!(
+                        "array_3d geometry '{}' axis '{}' step_scale_factor components must be finite and positive",
+                        name, axis_spec.axis
+                    ));
+                }
+                let eff_count = if axis_spec.enabled {
+                    axis_spec.count.max(1) as usize
+                } else {
+                    1
+                };
+                if !overflowed {
+                    match total_instances.checked_mul(eff_count) {
+                        Some(next) => total_instances = next,
+                        None => {
+                            overflowed = true;
+                            errors.push(format!(
+                                "array_3d geometry '{}' total instance count overflowed",
+                                name
+                            ));
+                        }
+                    }
+                }
+            }
+            if seen_axes.len() == 3 {
+                for expected in expected_axes {
+                    if !seen_axes.contains(expected) {
+                        errors.push(format!(
+                            "array_3d geometry '{}' is missing axis '{}'",
+                            name, expected
+                        ));
+                    }
+                }
+            }
+            if !overflowed && total_instances > MAX_ARRAY_INSTANCES_FDM {
+                errors.push(format!(
+                    "array_3d geometry '{}' total instances ({}) exceeds MAX_ARRAY_INSTANCES_FDM ({})",
+                    name, total_instances, MAX_ARRAY_INSTANCES_FDM
+                ));
+            }
+            validate_geometry_entry(child, depth + 1, errors);
+        }
     }
 }
 

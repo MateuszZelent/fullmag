@@ -5,6 +5,8 @@ from typing import Literal
 from fullmag._validation import as_vector3
 from fullmag.model.geometry import (
     ArchWaveguide,
+    Array3D,
+    ArrayAxisSpec,
     AuthoredSelectionAffine,
     AuthoredSelectionGeometry,
     Box,
@@ -225,6 +227,19 @@ def slice_plane(
     )
 
 
+def array_3d(
+    geometry: Geometry,
+    nx: int = 1,
+    ny: int = 1,
+    nz: int = 1,
+    dx: float = 0.0,
+    dy: float = 0.0,
+    dz: float = 0.0,
+    **kwargs: object,
+) -> Array3D:
+    return geometry.array_3d(nx=nx, ny=ny, nz=nz, dx=dx, dy=dy, dz=dz, **kwargs)  # type: ignore[arg-type]
+
+
 def sphere(
     *,
     radius: float,
@@ -330,6 +345,7 @@ def imported(
 __all__ = [
     "affine",
     "arch_waveguide",
+    "array_3d",
     "box",
     "cone",
     "cylinder",

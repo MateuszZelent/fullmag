@@ -142,6 +142,8 @@ import {
 import { PostProcessingLayer } from "./PostProcessingLayer";
 import { resolveViewport3DTargetRenderPlan } from "./viewport3DTargetRenderPlan";
 import { shaderUsesVertexColors } from "./viewport3DLayerSettings";
+import { Array3DInstancedPreviewLayer } from "./Array3DInstancedPreviewLayer";
+import { GhostCutterOverlayLayer } from "./GhostCutterOverlayLayer";
 import { PrimitiveObjectLayer } from "./PrimitiveObjectLayer";
 import { FdmCuboidLayer, type FdmCuboidInstanceModel } from "./FdmCuboidLayer";
 import { createFdmInspectClearArbitrator } from "./FdmCuboidLayer.model";
@@ -193,7 +195,11 @@ import type { FdmAirboxPassPlan } from "./fdmAirboxPassPlan";
 import type { Viewport3DVectorBuildReference } from "../viewport3dRenderModel";
 import { FrozenSpinsOverlay } from "./FrozenSpinsOverlay";
 import { type FrozenSpinsOverlayModel } from "./FrozenSpinsOverlay.model";
-import { Viewport3DMoveToolLayer, type Translation3 } from "../MoveObjectGizmo";
+import {
+  Viewport3DMoveToolLayer,
+  type GizmoTransformPatch,
+  type Translation3,
+} from "../MoveObjectGizmo";
 import {
   Viewport3DTextureTransformLayer,
   type Viewport3DTextureTransformModel,
@@ -301,6 +307,12 @@ interface Viewport3DSceneProps {
     translation: Translation3,
     baseRevision: number,
   ) => Promise<boolean | void> | boolean | void;
+  onTransformPatchCommit?: (
+    objectId: string,
+    patch: GizmoTransformPatch,
+    baseRevision: number,
+  ) => Promise<boolean | void> | boolean | void;
+  selectedOperandId?: string | null;
   onBeginGesture?: () => boolean;
   onMoveGestureActiveChange?: (active: boolean) => void;
   moveToolObjectId: string | null;
@@ -1340,6 +1352,7 @@ function Viewport3DModelLayerStack({
   onInspectClear,
   onInspectSample,
   onMoveCommit,
+  onTransformPatchCommit,
   onBeginGesture,
   moveToolObjectId,
   moveDraftResetRevision,
@@ -1355,6 +1368,7 @@ function Viewport3DModelLayerStack({
   regionOverlayMode,
   regionOverlays,
   selectedObjectId,
+  selectedOperandId,
   selectedRegionId,
   textureTransformModel,
   topologyFreshness,
@@ -1407,6 +1421,8 @@ function Viewport3DModelLayerStack({
   | "onInspectClear"
   | "onInspectSample"
   | "onMoveCommit"
+  | "onTransformPatchCommit"
+  | "selectedOperandId"
   | "onBeginGesture"
   | "onMoveGestureActiveChange"
   | "moveToolObjectId"
@@ -1696,21 +1712,36 @@ function Viewport3DModelLayerStack({
       ) : null}
       {stageVisibility.primitiveObjects &&
       viewport3DPrimitiveObjectLayerEnabledFromBrowserConfig() ? (
-        <PrimitiveObjectLayer
-          colors={colors}
-          getObjectSettings={getObjectSettings}
-          materialProfile={materialProfile}
-          onSelectObject={onSelectObject}
-          primitiveModel={primitiveModel}
-          meshReadyFallbackObjectIds={meshReadyFallbackObjectIds}
-          realizedObjectIds={realizedObjectIds}
-          tracker={tracker}
-        />
+        <>
+          <PrimitiveObjectLayer
+            colors={colors}
+            getObjectSettings={getObjectSettings}
+            materialProfile={materialProfile}
+            onSelectObject={onSelectObject}
+            primitiveModel={primitiveModel}
+            meshReadyFallbackObjectIds={meshReadyFallbackObjectIds}
+            realizedObjectIds={realizedObjectIds}
+            tracker={tracker}
+          />
+          <Array3DInstancedPreviewLayer
+            colors={colors}
+            primitiveModel={primitiveModel}
+            tracker={tracker}
+          />
+          <GhostCutterOverlayLayer
+            colors={colors}
+            primitiveModel={primitiveModel}
+            selectedObjectId={selectedObjectId}
+            selectedOperandId={selectedOperandId}
+            tracker={tracker}
+          />
+        </>
       ) : null}
       <Viewport3DMoveToolLayer
         moveDraftResetRevision={moveDraftResetRevision}
         moveToolObjectId={moveToolObjectId}
         onCommit={onMoveCommit}
+        onTransformPatchCommit={onTransformPatchCommit}
         onBeginGesture={onBeginGesture}
         onGestureActiveChange={onMoveGestureActiveChange}
         primitiveModel={primitiveModel}
@@ -2100,6 +2131,7 @@ export function Viewport3DScene({
   rotationMode,
   selectionBounds,
   selectedObjectId,
+  selectedOperandId,
   selectedRegionId,
   textureTransformModel,
   tracker,
@@ -2117,6 +2149,7 @@ export function Viewport3DScene({
   onInspectClear,
   onInspectSample,
   onMoveCommit,
+  onTransformPatchCommit,
   onBeginGesture,
   onMoveGestureActiveChange,
   moveToolObjectId,
@@ -2577,6 +2610,8 @@ export function Viewport3DScene({
         onInspectClear={inspectClearArbitrator.clear}
         onInspectSample={handleArbitratedInspectSample}
         onMoveCommit={onMoveCommit}
+        onTransformPatchCommit={onTransformPatchCommit}
+        selectedOperandId={selectedOperandId}
         onBeginGesture={onBeginGesture}
         moveToolObjectId={moveToolObjectId}
         moveDraftResetRevision={moveDraftResetRevision}

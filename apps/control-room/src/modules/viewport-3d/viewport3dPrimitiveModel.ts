@@ -81,6 +81,7 @@ export interface Viewport3DPrimitiveObject {
   antennaPreview?: AuthoredAntennaGeometry;
   importedSurface?: ImportedSurfacePreview;
   objectId: string;
+  rawGeometry?: Record<string, unknown>;
   role?: string | null;
   sceneRevision: number;
   transform?: Viewport3DPrimitiveTransform;
@@ -1006,6 +1007,7 @@ export function buildViewport3DPrimitiveRenderModel(
         antennaPreview,
         importedSurface,
         objectId,
+        ...(geometry ? { rawGeometry: geometry } : {}),
         role: objectRole,
         sceneRevision,
         ...(primitiveTransform ? { transform: primitiveTransform } : {}),

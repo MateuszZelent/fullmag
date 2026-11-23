@@ -12,6 +12,7 @@ from fullmag.model.geometry import (
     ANTENNA_LAYOUT_TYPES,
     AntennaLayout,
     ArchWaveguide,
+    Array3D,
     Box,
     CPWAntennaLayout,
     Cone,
@@ -622,6 +623,48 @@ def _geometry_to_trimesh(
             normal = -normal
         origin = np.asarray(geometry.plane_origin, dtype=np.float64)
         return _slice_trimesh_halfspace(mesh, trimesh, plane_origin=origin, plane_normal=normal)
+    if isinstance(geometry, Array3D):
+        base_mesh = _geometry_to_trimesh(
+            geometry.child,
+            trimesh,
+            cylinder_sections,
+            surface_maximum_element_size=surface_maximum_element_size,
+            through_thickness_elements=through_thickness_elements,
+            through_thickness_distribution=through_thickness_distribution,
+            through_thickness_element_ratio=through_thickness_element_ratio,
+            through_thickness_symmetric=through_thickness_symmetric,
+        )
+        if base_mesh is None or len(base_mesh.faces) == 0:
+            return None
+        max_preview_triangles = 500_000
+        total_tris = len(base_mesh.faces) * geometry.total_instances
+        if total_tris > max_preview_triangles:
+            raise ValueError(
+                f"array_preview_triangle_budget_exceeded: Array3D preview would produce "
+                f"{total_tris} triangles (limit {max_preview_triangles})"
+            )
+        bounds = np.asarray(base_mesh.bounds, dtype=np.float64)
+        extent = (
+            float(bounds[1, 0] - bounds[0, 0]),
+            float(bounds[1, 1] - bounds[0, 1]),
+            float(bounds[1, 2] - bounds[0, 2]),
+        )
+        base_verts = np.asarray(base_mesh.vertices, dtype=np.float64)
+        base_faces = np.asarray(base_mesh.faces, dtype=np.int64)
+        n_v = len(base_verts)
+        all_verts: list[np.ndarray] = []
+        all_faces: list[np.ndarray] = []
+        for idx, ((tx, ty, tz), q, (sx, sy, sz)) in enumerate(geometry.instance_transforms(extent)):
+            rot = np.asarray(rotation_matrix_from_quaternion(q), dtype=np.float64)
+            s_vec = np.asarray((sx, sy, sz), dtype=np.float64)
+            t_vec = np.asarray((tx, ty, tz), dtype=np.float64)
+            all_verts.append((base_verts * s_vec) @ rot.T + t_vec)
+            all_faces.append(base_faces + idx * n_v)
+        return trimesh.Trimesh(
+            vertices=np.vstack(all_verts),
+            faces=np.vstack(all_faces),
+            process=False,
+        )
     raise TypeError(f"unsupported geometry for trimesh conversion: {type(geometry)!r}")
 
 

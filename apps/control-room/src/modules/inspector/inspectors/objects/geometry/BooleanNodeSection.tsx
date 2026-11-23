@@ -7,6 +7,7 @@ import {
   Combine,
   Eye,
   EyeOff,
+  Grid3X3,
   Plus,
   Scissors,
   Trash2,
@@ -14,11 +15,13 @@ import {
 import { useCallback, useState, useSyncExternalStore } from "react";
 
 import type { SceneResource } from "@/kernel/api/apiTypes";
+import { defaultArray3DAxes } from "@/kernel/authoring/array3dModel";
 import {
   acknowledgedAuthoringSceneRevision,
   invalidateAuthoringMutationDependents,
 } from "@/kernel/authoring/authoringMutationInvalidation";
 import {
+  applyArray3DTransaction,
   separateObjectTransaction,
   updateBooleanOperandsTransaction,
   type BooleanOperandOp,
@@ -290,6 +293,24 @@ export function BooleanNodeSection({
     );
   };
 
+  const handleArrayOperand = (operandId: string) => {
+    if (baseRevision === null) return;
+    void commitOperandUpdate(() =>
+      applyArray3DTransaction(
+        kernel.api,
+        {
+          axes: defaultArray3DAxes(),
+          base_revision: baseRevision,
+          merge_overlapping: false,
+          object_id: objectId,
+          realization: "modifier_in_object",
+          target_operand_id: operandId,
+        },
+        requestOptions,
+      ),
+    );
+  };
+
   const handleAddCutout = (kind: QuickCutoutKind) => {
     if (baseRevision === null) return;
     const geometry = buildQuickCutoutGeometry(kind, sceneObj.bounds);
@@ -439,6 +460,16 @@ export function BooleanNodeSection({
                   onClick={() => handleMoveOperand(index, 1)}
                 >
                   <ArrowDown size={13} />
+                </Button>
+                <Button
+                  aria-label={`Apply Array 3D to ${operand.label}`}
+                  disabled={busy || baseRevision === null}
+                  size="sm"
+                  type="button"
+                  variant="ghost"
+                  onClick={() => handleArrayOperand(operand.operandId)}
+                >
+                  <Grid3X3 size={13} />
                 </Button>
                 <Button
                   aria-label={`Extract ${operand.label}`}

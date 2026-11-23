@@ -1,4 +1,8 @@
 export {
+  Array3DLatticeTableSection,
+  type Array3DLatticeTableSectionProps,
+} from "./Array3DLatticeTableSection";
+export {
   BooleanNodeSection,
   buildQuickCutoutGeometry,
   computeCutoutHeightFromBounds,

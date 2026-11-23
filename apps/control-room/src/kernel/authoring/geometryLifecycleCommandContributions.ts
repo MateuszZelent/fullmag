@@ -54,6 +54,7 @@ import {
 } from "../visualization/ObjectVisualizationController";
 
 import {
+  applyArray3DTransaction,
   awaitMeshCommandTerminal,
   booleanCombineObjectsTransaction,
   createObjectTransaction,
@@ -64,6 +65,12 @@ import {
   type BooleanCombineOp,
   type BooleanRegionMergePolicy,
 } from "./geometryLifecycleCommands";
+import {
+  defaultArray3DAxes,
+  normalizeArrayAxisSpec,
+  type Array3DAxes,
+  type ArrayRealizationMode,
+} from "./array3dModel";
 import {
   primitiveDraftBaseName,
   resolveDraftObjectName,
@@ -2311,6 +2318,100 @@ export const GEOMETRY_LIFECYCLE_COMMANDS: CommandContribution[] = [
           : `Ghost wireframe hidden for ${operandId}.`,
         status: "completed",
       };
+    },
+  },
+  {
+    id: "geometry.apply-array-3d",
+    title: "Array 3D",
+    category: "Geometry",
+    group: "geometry",
+    scope: "selection",
+    isEnabled: (context) =>
+      Boolean(context.api) &&
+      Boolean(selectedObjectId(context)) &&
+      sceneBaseRevision(context) !== null,
+    disabledReason: (context) => {
+      if (!context.api) return "Control Room API is not available.";
+      if (!selectedObjectId(context)) {
+        return "Select a scene object or CSG operand to apply Array 3D.";
+      }
+      if (sceneBaseRevision(context) === null) {
+        return "The canonical scene revision is unavailable. Refetch the scene before applying Array 3D.";
+      }
+      return null;
+    },
+    run: async (context) => {
+      const obsolete = obsoleteSessionResult(context);
+      if (obsolete) return obsolete;
+      if (!context.api) {
+        return { message: "Control-room API is unavailable.", status: "failed" };
+      }
+      const { objectId, operandId } = resolveOperandContextInput(context);
+      if (!objectId) {
+        return { message: "Select a scene object to apply Array 3D.", status: "failed" };
+      }
+      const preparation = await prepareAuthoringMutation(context);
+      assertCurrentSessionScope(context);
+      const baseRevision =
+        typeof preparation.before?.revision === "number" &&
+        Number.isFinite(preparation.before.revision)
+          ? preparation.before.revision
+          : sceneBaseRevision(context);
+      if (baseRevision === null) {
+        return {
+          message: "The canonical scene revision is unavailable. Refetch the scene before applying Array 3D.",
+          status: "failed",
+        };
+      }
+      const input = asRecord(context.input);
+      const rawAxes = Array.isArray(input?.axes) ? input.axes : null;
+      const axes: Array3DAxes = rawAxes
+        ? [
+            normalizeArrayAxisSpec(rawAxes[0], "x"),
+            normalizeArrayAxisSpec(rawAxes[1], "y"),
+            normalizeArrayAxisSpec(rawAxes[2], "z"),
+          ]
+        : defaultArray3DAxes();
+      const targetOperandId =
+        asString(input?.target_operand_id) ??
+        asString(input?.targetOperandId) ??
+        operandId ??
+        undefined;
+      const realization: ArrayRealizationMode =
+        input?.realization === "expand_to_objects"
+          ? "expand_to_objects"
+          : "modifier_in_object";
+      const mergeOverlapping =
+        typeof input?.merge_overlapping === "boolean"
+          ? input.merge_overlapping
+          : typeof input?.mergeOverlapping === "boolean"
+            ? input.mergeOverlapping
+            : false;
+
+      const response = await applyArray3DTransaction(
+        context.api,
+        {
+          axes,
+          base_revision: baseRevision,
+          merge_overlapping: mergeOverlapping,
+          object_id: objectId,
+          realization,
+          ...(targetOperandId ? { target_operand_id: targetOperandId } : {}),
+        },
+        sessionRequestOptions(context),
+      );
+      const obsoleteAfterWrite = obsoleteSessionResult(context);
+      if (obsoleteAfterWrite) return obsoleteAfterWrite;
+      await recordAuthoringMutationHistory(
+        context,
+        `Apply Array 3D to ${targetOperandId ?? objectId}`,
+        preparation,
+        response.committed_scene,
+        captureAuthoringHistoryWorkspaceState(context),
+      );
+      assertCurrentSessionScope(context);
+      invalidateSceneAuthoringResources(context, response.scene_revision);
+      return { status: "completed" };
     },
   },
   {

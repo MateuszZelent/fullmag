@@ -9,6 +9,7 @@ from numpy.typing import NDArray
 
 from fullmag.model.geometry import (
     ArchWaveguide,
+    Array3D,
     Box,
     Cone,
     Cylinder,
@@ -18,6 +19,7 @@ from fullmag.model.geometry import (
     Geometry,
     ImportedGeometry,
     Intersection,
+    MAX_ARRAY_FDM_CANDIDATES_PER_QUERY,
     PolygonPrism,
     SinWaveguide,
     SlicePlane,
@@ -544,6 +546,59 @@ def _geometry_bounds(
                 f"empty_geometry_slice: SlicePlane '{geometry.geometry_name}' leaves zero-volume geometry"
             )
         return c_min, c_max
+    if isinstance(geometry, Array3D):
+        child_min, child_max = _geometry_bounds(geometry.child)
+        extent = (
+            child_max[0] - child_min[0],
+            child_max[1] - child_min[1],
+            child_max[2] - child_min[2],
+        )
+        if not geometry.has_step_rotation_or_scale:
+            v0 = geometry.axes[0].step_vector(extent)
+            v1 = geometry.axes[1].step_vector(extent)
+            v2 = geometry.axes[2].step_vector(extent)
+            k_ranges = [
+                (min(ax.canonical_indices()), max(ax.canonical_indices()))
+                for ax in geometry.axes
+            ]
+            offsets = [
+                (
+                    kx * v0[0] + ky * v1[0] + kz * v2[0],
+                    kx * v0[1] + ky * v1[1] + kz * v2[1],
+                    kx * v0[2] + ky * v1[2] + kz * v2[2],
+                )
+                for kx in k_ranges[0]
+                for ky in k_ranges[1]
+                for kz in k_ranges[2]
+            ]
+            off_min = tuple(min(o[i] for o in offsets) for i in range(3))
+            off_max = tuple(max(o[i] for o in offsets) for i in range(3))
+            return (
+                tuple(child_min[i] + off_min[i] for i in range(3)),
+                tuple(child_max[i] + off_max[i] for i in range(3)),
+            )
+        corners = [
+            (x, y, z)
+            for x in (child_min[0], child_max[0])
+            for y in (child_min[1], child_max[1])
+            for z in (child_min[2], child_max[2])
+        ]
+        all_pts: list[tuple[float, float, float]] = []
+        for (tx, ty, tz), q, (sx, sy, sz) in geometry.instance_transforms(extent):
+            rot = rotation_matrix_from_quaternion(q)
+            for cx, cy, cz in corners:
+                lx, ly, lz = cx * sx, cy * sy, cz * sz
+                all_pts.append(
+                    (
+                        rot[0][0] * lx + rot[0][1] * ly + rot[0][2] * lz + tx,
+                        rot[1][0] * lx + rot[1][1] * ly + rot[1][2] * lz + ty,
+                        rot[2][0] * lx + rot[2][1] * ly + rot[2][2] * lz + tz,
+                    )
+                )
+        return (
+            tuple(min(pt[i] for pt in all_pts) for i in range(3)),
+            tuple(max(pt[i] for pt in all_pts) for i in range(3)),
+        )
     if isinstance(geometry, ImportedGeometry):
         raise TypeError(
             "cannot compute bounding box for ImportedGeometry; "
@@ -708,7 +763,192 @@ def _contains(
         halfspace = signed >= 0.0 if geometry.keep_side == "positive" else signed <= 0.0
         return _contains(geometry.child, xx, yy, zz) & halfspace
 
+    if isinstance(geometry, Array3D):
+        return _contains_array3d(geometry, xx, yy, zz)
+
     raise TypeError(f"unsupported geometry type for containment test: {type(geometry)!r}")
+
+
+def _complete_orthonormal_basis(
+    active_columns: dict[int, NDArray[np.float64]],
+) -> NDArray[np.float64] | None:
+    """Complete a 3x3 basis matrix with Gram-Schmidt orthonormal vectors for inactive axes."""
+    basis = np.zeros((3, 3), dtype=np.float64)
+    orthonormal: list[NDArray[np.float64]] = []
+    for col_idx in sorted(active_columns.keys()):
+        vec = active_columns[col_idx]
+        basis[:, col_idx] = vec
+        # Gram-Schmidt check for linear independence of active lattice vectors
+        proj = vec.copy()
+        for prev in orthonormal:
+            proj = proj - float(np.dot(proj, prev)) * prev
+        norm_p = float(np.linalg.norm(proj))
+        norm_v = float(np.linalg.norm(vec))
+        if norm_v <= 0.0 or norm_p <= 1e-12 * norm_v:
+            return None
+        orthonormal.append(proj / norm_p)
+
+    # Fill inactive columns (N_a == 1) with an orthonormal complement
+    inactive = [idx for idx in (0, 1, 2) if idx not in active_columns]
+    unit_axes = [
+        np.array([1.0, 0.0, 0.0], dtype=np.float64),
+        np.array([0.0, 1.0, 0.0], dtype=np.float64),
+        np.array([0.0, 0.0, 1.0], dtype=np.float64),
+    ]
+    for col_idx in inactive:
+        chosen: NDArray[np.float64] | None = None
+        # Prefer standard axis matching col_idx first for well-conditioned diagonal blocks
+        candidates = [unit_axes[col_idx]] + [u for i, u in enumerate(unit_axes) if i != col_idx]
+        for cand in candidates:
+            proj = cand.copy()
+            for prev in orthonormal:
+                proj = proj - float(np.dot(proj, prev)) * prev
+            norm_p = float(np.linalg.norm(proj))
+            if norm_p > 1e-6:
+                chosen = proj / norm_p
+                break
+        if chosen is None:
+            return None
+        basis[:, col_idx] = chosen
+        orthonormal.append(chosen)
+    return basis
+
+
+def _contains_array3d(
+    geometry: Array3D,
+    xx: NDArray[np.float64],
+    yy: NDArray[np.float64],
+    zz: NDArray[np.float64],
+) -> NDArray[np.bool_]:
+    """O(1 + K * C) vectorized inverse lattice evaluator for Array3D."""
+    cmin, cmax = _geometry_bounds(geometry.child)
+    extent = (cmax[0] - cmin[0], cmax[1] - cmin[1], cmax[2] - cmin[2])
+
+    # Non-translational (stepped rotation/scale): direct instance evaluation
+    if geometry.has_step_rotation_or_scale:
+        result = np.zeros(xx.shape, dtype=np.bool_)
+        for (tx, ty, tz), q, (sx, sy, sz) in geometry.instance_transforms(extent):
+            inst = Transform(
+                child=geometry.child,
+                translation=(tx, ty, tz),
+                rotation_quat=q,
+                scale=(sx, sy, sz),
+            )
+            result |= _contains(inst, xx, yy, zz)
+        return result
+
+    counts = tuple(ax.effective_count() for ax in geometry.axes)
+    active_axes = [idx for idx in (0, 1, 2) if counts[idx] > 1]
+    if not active_axes:
+        return _contains(geometry.child, xx, yy, zz)
+
+    step_vecs = tuple(np.asarray(ax.step_vector(extent), dtype=np.float64) for ax in geometry.axes)
+    k_starts = tuple(ax.index_min_offset() for ax in geometry.axes)
+    o_base = (
+        k_starts[0] * step_vecs[0]
+        + k_starts[1] * step_vecs[1]
+        + k_starts[2] * step_vecs[2]
+    )
+    c_child = np.array(
+        [
+            0.5 * (cmin[0] + cmax[0]),
+            0.5 * (cmin[1] + cmax[1]),
+            0.5 * (cmin[2] + cmax[2]),
+        ],
+        dtype=np.float64,
+    )
+    h_child = np.array(
+        [0.5 * extent[0], 0.5 * extent[1], 0.5 * extent[2]],
+        dtype=np.float64,
+    )
+
+    basis = _complete_orthonormal_basis({idx: step_vecs[idx] for idx in active_axes})
+    if basis is None:
+        # Degenerate/collinear active lattice vectors: fall back only within candidate budget
+        if geometry.total_instances > MAX_ARRAY_FDM_CANDIDATES_PER_QUERY:
+            raise ValueError(
+                f"degenerate_array_basis: Array3D '{geometry.geometry_name}' has linearly dependent "
+                f"active lattice vectors with {geometry.total_instances} instances "
+                f"(exceeds fallback budget {MAX_ARRAY_FDM_CANDIDATES_PER_QUERY})"
+            )
+        result = np.zeros(xx.shape, dtype=np.bool_)
+        for (tx, ty, tz), _q, _s in geometry.instance_transforms(extent):
+            result |= _contains(geometry.child, xx - tx, yy - ty, zz - tz)
+        return result
+
+    b_inv = np.linalg.inv(basis)
+    radii = [
+        (
+            float(np.sum(np.abs(b_inv[a, :]) * h_child))
+            + 1e-9 * max(1.0, float(counts[a]))
+            if a in active_axes
+            else 0.0
+        )
+        for a in range(3)
+    ]
+
+    dx = xx - float(o_base[0] + c_child[0])
+    dy = yy - float(o_base[1] + c_child[1])
+    dz = zz - float(o_base[2] + c_child[2])
+
+    m_lo: list[NDArray[np.int64]] = []
+    m_hi: list[NDArray[np.int64]] = []
+    spans: list[NDArray[np.int64]] = []
+    for a in range(3):
+        if a in active_axes:
+            xi_a = b_inv[a, 0] * dx + b_inv[a, 1] * dy + b_inv[a, 2] * dz
+            lo_a = np.maximum(0, np.ceil(xi_a - radii[a]).astype(np.int64))
+            hi_a = np.minimum(counts[a] - 1, np.floor(xi_a + radii[a]).astype(np.int64))
+            m_lo.append(lo_a)
+            m_hi.append(hi_a)
+            spans.append(np.maximum(0, hi_a - lo_a + 1))
+        else:
+            zeros = np.zeros(xx.shape, dtype=np.int64)
+            m_lo.append(zeros)
+            m_hi.append(zeros)
+            spans.append(np.ones(xx.shape, dtype=np.int64))
+
+    cand_counts = spans[0] * spans[1] * spans[2]
+    max_cand = int(np.max(cand_counts)) if cand_counts.size else 0
+    if max_cand > MAX_ARRAY_FDM_CANDIDATES_PER_QUERY:
+        raise ValueError(
+            f"array_candidate_budget_exceeded: Array3D '{geometry.geometry_name}' requires up to "
+            f"{max_cand} candidates per query (limit {MAX_ARRAY_FDM_CANDIDATES_PER_QUERY})"
+        )
+    if max_cand == 0:
+        return np.zeros(xx.shape, dtype=np.bool_)
+
+    max_span_0 = int(np.max(spans[0]))
+    max_span_1 = int(np.max(spans[1]))
+    max_span_2 = int(np.max(spans[2]))
+    v0, v1, v2 = step_vecs
+    result = np.zeros(xx.shape, dtype=np.bool_)
+
+    for dm0 in range(max_span_0):
+        m0 = m_lo[0] + dm0
+        valid0 = m0 <= m_hi[0]
+        for dm1 in range(max_span_1):
+            m1 = m_lo[1] + dm1
+            valid01 = valid0 & (m1 <= m_hi[1])
+            for dm2 in range(max_span_2):
+                m2 = m_lo[2] + dm2
+                active = valid01 & (m2 <= m_hi[2]) & (~result)
+                if not np.any(active):
+                    continue
+                m0_a = m0[active].astype(np.float64)
+                m1_a = m1[active].astype(np.float64)
+                m2_a = m2[active].astype(np.float64)
+                ox = o_base[0] + m0_a * v0[0] + m1_a * v1[0] + m2_a * v2[0]
+                oy = o_base[1] + m0_a * v0[1] + m1_a * v1[1] + m2_a * v2[1]
+                oz = o_base[2] + m0_a * v0[2] + m1_a * v1[2] + m2_a * v2[2]
+                hit = _contains(
+                    geometry.child,
+                    xx[active] - ox,
+                    yy[active] - oy,
+                    zz[active] - oz,
+                )
+                result[active] |= hit
+    return result
 
 
 # ---------------------------------------------------------------------------

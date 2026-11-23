@@ -1,6 +1,6 @@
 "use client";
 
-import { Combine, Move3d, Shapes, Trash2 } from "lucide-react";
+import { Combine, Grid3X3, Move3d, Shapes, Trash2 } from "lucide-react";
 import {
   useCallback,
   useEffect,
@@ -50,6 +50,7 @@ import {
   type InspectorSpec,
 } from "../../../template";
 
+import { Array3DLatticeTableSection } from "./Array3DLatticeTableSection";
 import { BooleanNodeSection } from "./BooleanNodeSection";
 import {
   analyzeDeleteObjectImpact,
@@ -405,6 +406,28 @@ function SharedGeometrySpecPanel({
               wide: true,
               render: (ctx) => (
                 <BooleanNodeSection
+                  kernel={kernel}
+                  objectId={ctx.draft.objectId}
+                  sceneData={scene.data}
+                  sessionScopeKey={currentSessionScopeKey}
+                />
+              ),
+            },
+          ],
+        },
+        {
+          id: "geometry-array-3d-lattice",
+          modeTabId: "csg",
+          title: "Array 3D lattice",
+          icon: Grid3X3,
+          defaultOpen: false,
+          showWhen: (d) => d.mode === "committed",
+          rows: [
+            {
+              type: "custom",
+              wide: true,
+              render: (ctx) => (
+                <Array3DLatticeTableSection
                   kernel={kernel}
                   objectId={ctx.draft.objectId}
                   sceneData={scene.data}

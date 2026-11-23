@@ -393,6 +393,15 @@ export interface DuplicateObjectsRequest {
   copy_regions?: boolean;
 }
 
+export interface ApplyArray3DRequest {
+  base_revision: number;
+  object_id: string;
+  target_operand_id?: string;
+  axes: import("./array3dModel").Array3DAxes;
+  merge_overlapping?: boolean;
+  realization: import("./array3dModel").ArrayRealizationMode;
+}
+
 export function booleanCombineObjectsTransaction(
   api: GeometryTransactionApi,
   request: BooleanCombineObjectsRequest,
@@ -448,6 +457,21 @@ export function duplicateObjectsTransaction(
     {
       ...request,
       kind: "duplicate_objects",
+    } as unknown as AuthoringTransactionRequest,
+    options,
+  );
+}
+
+export function applyArray3DTransaction(
+  api: GeometryTransactionApi,
+  request: ApplyArray3DRequest,
+  options?: RequestOptions,
+): Promise<AuthoringTransactionResponse> {
+  return commitTransaction(
+    api,
+    {
+      ...request,
+      kind: "apply_array_3d",
     } as unknown as AuthoringTransactionRequest,
     options,
   );

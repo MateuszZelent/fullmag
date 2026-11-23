@@ -183,6 +183,7 @@ fn geometry_contains_point(entry: &GeometryEntryIR, point: [f64; 3]) -> Result<b
         | GeometryEntryIR::Cone { .. }
         | GeometryEntryIR::Torus { .. }
         | GeometryEntryIR::PolygonPrism { .. }
+        | GeometryEntryIR::Array3D { .. }
         | GeometryEntryIR::MicrostripAntenna { .. }
         | GeometryEntryIR::CpwAntenna { .. } => Err(format!(
             "antenna mask geometry kind '{}' is not executable yet; use Box/Cylinder/Difference/Translate",
@@ -257,6 +258,7 @@ fn entry_kind(entry: &GeometryEntryIR) -> &'static str {
         GeometryEntryIR::Torus { .. } => "torus",
         GeometryEntryIR::PolygonPrism { .. } => "polygon_prism",
         GeometryEntryIR::Xor { .. } => "xor",
+        GeometryEntryIR::Array3D { .. } => "array_3d",
         GeometryEntryIR::MicrostripAntenna { .. } => "microstrip",
         GeometryEntryIR::CpwAntenna { .. } => "cpw",
     }

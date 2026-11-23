@@ -3484,6 +3484,10 @@ pub(crate) fn plan_fdm(
             "CSG Xor voxelized to {}x{}x{} grid, {}/{} active cells",
             grid_cells[0], grid_cells[1], grid_cells[2], active_count, n_cells
         ),
+        GeometryShape::Array3D { .. } => format!(
+            "Array3D lattice voxelized to {}x{}x{} grid, {}/{} active cells",
+            grid_cells[0], grid_cells[1], grid_cells[2], active_count, n_cells
+        ),
     };
 
     let realized_size = [

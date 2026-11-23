@@ -337,10 +337,11 @@ const geometryTab: RibbonTabContent = {
     {
       id: "builder-modify",
       title: "Modify",
-      subtitle: "Duplicate & separate",
+      subtitle: "Duplicate, array & separate",
       tone: "authoring",
       actions: [
         { id: "geometry.duplicate-objects", icon: icon(Plus),     label: "Duplicate",       shortcut: "Ctrl+D", iconColor: "text-emerald-300" },
+        { id: "geometry.apply-array-3d",    icon: icon(Grid3X3),  label: "Array 3D",        iconColor: "text-cyan-300" },
         { id: "geometry.split-by-plane",    icon: icon(Scissors), label: "Split by Plane",  iconColor: "text-amber-300" },
         { id: "geometry.extract-operand",   icon: icon(Columns2), label: "Extract Operand", iconColor: "text-sky-300" },
       ],

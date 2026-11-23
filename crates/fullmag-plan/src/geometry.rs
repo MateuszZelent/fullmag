@@ -1,4 +1,8 @@
-use fullmag_ir::{FdmHintsIR, FdmMaterialIR, GeometryEntryIR};
+use fullmag_ir::{
+    ArrayAxisIR, ArrayDirectionIR, ArraySpacingModeIR, FdmHintsIR, FdmMaterialIR, GeometryEntryIR,
+    MAX_ARRAY_AXIS_COUNT, MAX_ARRAY_FDM_CANDIDATES_PER_QUERY, MAX_ARRAY_INSTANCES_FDM,
+    MAX_ARRAY_INSTANCES_FEM_OCC,
+};
 
 const TAU: f64 = std::f64::consts::PI * 2.0;
 
@@ -162,6 +166,11 @@ pub(crate) enum GeometryShape {
         left: std::boxed::Box<GeometryShape>,
         right: std::boxed::Box<GeometryShape>,
     },
+    Array3D {
+        child: std::boxed::Box<GeometryShape>,
+        axes: [ArrayAxisIR; 3],
+        merge_overlapping: bool,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -251,6 +260,16 @@ pub(crate) fn ir_to_shape(entry: &GeometryEntryIR) -> Result<GeometryShape, Stri
         GeometryEntryIR::Xor { left, right, .. } => Ok(GeometryShape::Xor {
             left: std::boxed::Box::new(ir_to_shape(left)?),
             right: std::boxed::Box::new(ir_to_shape(right)?),
+        }),
+        GeometryEntryIR::Array3D {
+            child,
+            axes,
+            merge_overlapping,
+            ..
+        } => Ok(GeometryShape::Array3D {
+            child: std::boxed::Box::new(ir_to_shape(child)?),
+            axes: normalize_array_axes(axes)?,
+            merge_overlapping: *merge_overlapping,
         }),
         GeometryEntryIR::Translate { base, by, .. } => Ok(GeometryShape::Translate {
             child: std::boxed::Box::new(ir_to_shape(base)?),
@@ -380,7 +399,8 @@ pub(crate) fn extract_multilayer_geometry(
         | GeometryEntryIR::Intersection { .. }
         | GeometryEntryIR::Xor { .. }
         | GeometryEntryIR::Transform { .. }
-        | GeometryEntryIR::SlicePlane { .. } => Ok(PlacedGeometry {
+        | GeometryEntryIR::SlicePlane { .. }
+        | GeometryEntryIR::Array3D { .. } => Ok(PlacedGeometry {
             name: entry.name().to_string(),
             shape: ir_to_shape(entry)?,
             translation: [0.0, 0.0, 0.0],
@@ -593,6 +613,10 @@ pub(crate) fn shape_local_bounds(shape: &GeometryShape) -> Option<([f64; 3], [f6
             let (c_min, c_max) = shape_local_bounds(child)?;
             clip_aabb_by_plane(c_min, c_max, *plane_origin, *plane_normal, keep_side)
         }
+        GeometryShape::Array3D { child, axes, .. } => {
+            let (c_min, c_max) = shape_local_bounds(child)?;
+            array_3d_local_bounds(c_min, c_max, axes)
+        }
         GeometryShape::Imported { .. } => None,
     }
 }
@@ -750,6 +774,16 @@ impl GeometryShape {
                 left: Box::new(left.to_geometry_entry()),
                 right: Box::new(right.to_geometry_entry()),
             },
+            Self::Array3D {
+                child,
+                axes,
+                merge_overlapping,
+            } => GeometryEntryIR::Array3D {
+                name: "fdm-array-3d".to_string(),
+                child: Box::new(child.to_geometry_entry()),
+                axes: axes.clone(),
+                merge_overlapping: *merge_overlapping,
+            },
         }
     }
 
@@ -761,7 +795,8 @@ impl GeometryShape {
             | Self::Cone { .. }
             | Self::Torus { .. }
             | Self::PolygonPrism { .. }
-            | Self::SlicePlane { .. } => true,
+            | Self::SlicePlane { .. }
+            | Self::Array3D { .. } => true,
             Self::Translate { child, .. } | Self::Transform { child, .. } => {
                 child.uses_custom_evaluator()
             }
@@ -848,6 +883,39 @@ pub(crate) enum CompiledGeometryShape {
         left: Box<CompiledGeometryShape>,
         right: Box<CompiledGeometryShape>,
     },
+    Array3D(Box<CompiledArray3D>),
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct CompiledArray3D {
+    child: CompiledGeometryShape,
+    global_min: [f64; 3],
+    global_max: [f64; 3],
+    mode: CompiledArray3DMode,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+enum CompiledArray3DMode {
+    InverseLattice {
+        counts: [usize; 3],
+        o_base: [f64; 3],
+        child_center: [f64; 3],
+        step_vectors: [[f64; 3]; 3],
+        b_inv: [[f64; 3]; 3],
+        lattice_half_extents: [f64; 3],
+    },
+    BoundedInstances {
+        instances: Vec<CompiledArrayInstance>,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq)]
+struct CompiledArrayInstance {
+    aabb_min: [f64; 3],
+    aabb_max: [f64; 3],
+    translation: [f64; 3],
+    rotation_quat: [f64; 4],
+    scale: [f64; 3],
 }
 
 impl CompiledGeometryShape {
@@ -965,6 +1033,9 @@ impl CompiledGeometryShape {
                 left: Box::new(Self::from_shape(left)?),
                 right: Box::new(Self::from_shape(right)?),
             }),
+            GeometryShape::Array3D { child, axes, .. } => {
+                Ok(Self::Array3D(Box::new(compile_array_3d(child, axes)?)))
+            }
             _ => Ok(Self::Canonical(GeometryPredicate::from_geometry_entry(
                 &shape.to_geometry_entry(),
                 AffineTransform3::identity(),
@@ -1068,6 +1139,592 @@ impl CompiledGeometryShape {
             Self::Union { a, b } => Ok(a.contains(point)? || b.contains(point)?),
             Self::Intersection { a, b } => Ok(a.contains(point)? && b.contains(point)?),
             Self::Xor { left, right } => Ok(left.contains(point)? ^ right.contains(point)?),
+            Self::Array3D(compiled) => contains_array_3d(compiled, point),
+        }
+    }
+}
+
+fn normalize_array_axes(axes: &[ArrayAxisIR; 3]) -> Result<[ArrayAxisIR; 3], String> {
+    let mut ordered: [Option<ArrayAxisIR>; 3] = [None, None, None];
+    let mut total_instances: usize = 1;
+    for (idx, ax) in axes.iter().enumerate() {
+        let axis_idx = match ax.axis.trim().to_ascii_lowercase().as_str() {
+            "x" => 0,
+            "y" => 1,
+            "z" => 2,
+            other => {
+                return Err(format!(
+                    "Array3D axes[{idx}] has invalid axis '{other}' (expected x, y, or z)"
+                ));
+            }
+        };
+        if ordered[axis_idx].is_some() {
+            return Err(format!("Array3D has duplicate axis '{}'", ax.axis));
+        }
+        if ax.count == 0 || ax.count > MAX_ARRAY_AXIS_COUNT {
+            return Err(format!(
+                "Array3D axis '{}' count ({}) must be in 1..={MAX_ARRAY_AXIS_COUNT}",
+                ax.axis, ax.count
+            ));
+        }
+        if !ax.pitch_m.is_finite()
+            || !ax.relative_factor.is_finite()
+            || !ax.gap_m.is_finite()
+            || ax.step_translation_extra_m.iter().any(|v| !v.is_finite())
+            || ax.step_rotation_euler_deg.iter().any(|v| !v.is_finite())
+            || ax
+                .step_scale_factor
+                .iter()
+                .any(|v| !v.is_finite() || *v <= 0.0)
+        {
+            return Err(format!(
+                "Array3D axis '{}' contains non-finite or non-positive scale parameters",
+                ax.axis
+            ));
+        }
+        let eff = if ax.enabled { ax.count as usize } else { 1 };
+        total_instances = total_instances
+            .checked_mul(eff)
+            .ok_or_else(|| "Array3D total instance count overflowed".to_string())?;
+        if total_instances > MAX_ARRAY_INSTANCES_FDM {
+            return Err(format!(
+                "Array3D total instances ({total_instances}) exceeds MAX_ARRAY_INSTANCES_FDM ({MAX_ARRAY_INSTANCES_FDM})"
+            ));
+        }
+        let mut normalized = ax.clone();
+        normalized.axis = ["x", "y", "z"][axis_idx].to_string();
+        ordered[axis_idx] = Some(normalized);
+    }
+    Ok([
+        ordered[0]
+            .take()
+            .ok_or_else(|| "Array3D is missing 'x' axis".to_string())?,
+        ordered[1]
+            .take()
+            .ok_or_else(|| "Array3D is missing 'y' axis".to_string())?,
+        ordered[2]
+            .take()
+            .ok_or_else(|| "Array3D is missing 'z' axis".to_string())?,
+    ])
+}
+
+fn array_axis_effective_count_and_kmin(ax: &ArrayAxisIR) -> (usize, f64, f64) {
+    let n = if ax.enabled { ax.count.max(1) as usize } else { 1 };
+    if n <= 1 {
+        return (1, 0.0, 0.0);
+    }
+    let span = (n - 1) as f64;
+    match ax.direction {
+        ArrayDirectionIR::Positive => (n, 0.0, span),
+        ArrayDirectionIR::Negative => (n, -span, 0.0),
+        ArrayDirectionIR::Symmetric => (n, -0.5 * span, 0.5 * span),
+    }
+}
+
+fn array_axis_step_vector(ax: &ArrayAxisIR, axis_idx: usize, child_extent: [f64; 3]) -> [f64; 3] {
+    let delta = match ax.spacing_mode {
+        ArraySpacingModeIR::LatticeStep => ax.pitch_m,
+        ArraySpacingModeIR::BoundingBoxGap => ax.relative_factor * child_extent[axis_idx] + ax.gap_m,
+    };
+    let mut v = ax.step_translation_extra_m;
+    v[axis_idx] += delta;
+    v
+}
+
+fn array_has_step_rot_or_scale(axes: &[ArrayAxisIR; 3]) -> bool {
+    axes.iter().any(|ax| {
+        ax.enabled
+            && ax.count > 1
+            && (ax.step_rotation_euler_deg.iter().any(|v| v.abs() > 1e-12)
+                || ax
+                    .step_scale_factor
+                    .iter()
+                    .any(|v| (*v - 1.0).abs() > 1e-12))
+    })
+}
+
+fn euler_xyz_deg_to_quat_plan(euler_xyz_deg: [f64; 3]) -> [f64; 4] {
+    let (sx, cx) = (euler_xyz_deg[0].to_radians() * 0.5).sin_cos();
+    let (sy, cy) = (euler_xyz_deg[1].to_radians() * 0.5).sin_cos();
+    let (sz, cz) = (euler_xyz_deg[2].to_radians() * 0.5).sin_cos();
+    let qx = sx * cy * cz - cx * sy * sz;
+    let qy = cx * sy * cz + sx * cy * sz;
+    let qz = cx * cy * sz - sx * sy * cz;
+    let qw = cx * cy * cz + sx * sy * sz;
+    let norm = (qx * qx + qy * qy + qz * qz + qw * qw).sqrt();
+    if norm > 1e-12 {
+        [qx / norm, qy / norm, qz / norm, qw / norm]
+    } else {
+        [0.0, 0.0, 0.0, 1.0]
+    }
+}
+
+fn array_3d_local_bounds(
+    child_min: [f64; 3],
+    child_max: [f64; 3],
+    axes: &[ArrayAxisIR; 3],
+) -> Option<([f64; 3], [f64; 3])> {
+    let child_extent = [
+        child_max[0] - child_min[0],
+        child_max[1] - child_min[1],
+        child_max[2] - child_min[2],
+    ];
+    let step_vectors = [
+        array_axis_step_vector(&axes[0], 0, child_extent),
+        array_axis_step_vector(&axes[1], 1, child_extent),
+        array_axis_step_vector(&axes[2], 2, child_extent),
+    ];
+    let (n0, k0_min, k0_max) = array_axis_effective_count_and_kmin(&axes[0]);
+    let (n1, k1_min, k1_max) = array_axis_effective_count_and_kmin(&axes[1]);
+    let (n2, k2_min, k2_max) = array_axis_effective_count_and_kmin(&axes[2]);
+    let total = n0.checked_mul(n1)?.checked_mul(n2)?;
+    if total > MAX_ARRAY_INSTANCES_FDM {
+        return None;
+    }
+
+    if !array_has_step_rot_or_scale(axes) {
+        let mut t_min = [0.0; 3];
+        let mut t_max = [0.0; 3];
+        let k_ranges = [(k0_min, k0_max), (k1_min, k1_max), (k2_min, k2_max)];
+        for a in 0..3 {
+            let (k_lo, k_hi) = k_ranges[a];
+            for j in 0..3 {
+                let p_lo = k_lo * step_vectors[a][j];
+                let p_hi = k_hi * step_vectors[a][j];
+                t_min[j] += p_lo.min(p_hi);
+                t_max[j] += p_lo.max(p_hi);
+            }
+        }
+        return Some((
+            [
+                child_min[0] + t_min[0],
+                child_min[1] + t_min[1],
+                child_min[2] + t_min[2],
+            ],
+            [
+                child_max[0] + t_max[0],
+                child_max[1] + t_max[1],
+                child_max[2] + t_max[2],
+            ],
+        ));
+    }
+
+    let mut out_min = [f64::INFINITY; 3];
+    let mut out_max = [f64::NEG_INFINITY; 3];
+    for m0 in 0..n0 {
+        let k0 = k0_min + m0 as f64;
+        for m1 in 0..n1 {
+            let k1 = k1_min + m1 as f64;
+            for m2 in 0..n2 {
+                let k2 = k2_min + m2 as f64;
+                let ks = [k0, k1, k2];
+                let (t, q, s) = array_instance_trs(axes, &step_vectors, ks);
+                for ix in 0..2 {
+                    for iy in 0..2 {
+                        for iz in 0..2 {
+                            let corner = [
+                                if ix == 0 { child_min[0] } else { child_max[0] },
+                                if iy == 0 { child_min[1] } else { child_max[1] },
+                                if iz == 0 { child_min[2] } else { child_max[2] },
+                            ];
+                            let w = apply_trs_forward(corner, t, q, s, [0.0, 0.0, 0.0]);
+                            for j in 0..3 {
+                                out_min[j] = out_min[j].min(w[j]);
+                                out_max[j] = out_max[j].max(w[j]);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    if out_min.iter().all(|v| v.is_finite()) && out_max.iter().all(|v| v.is_finite()) {
+        Some((out_min, out_max))
+    } else {
+        None
+    }
+}
+
+fn array_instance_trs(
+    axes: &[ArrayAxisIR; 3],
+    step_vectors: &[[f64; 3]; 3],
+    ks: [f64; 3],
+) -> ([f64; 3], [f64; 4], [f64; 3]) {
+    let mut t = [0.0; 3];
+    let mut rot_deg = [0.0; 3];
+    let mut scale = [1.0; 3];
+    for a in 0..3 {
+        let k = ks[a];
+        if k == 0.0 {
+            continue;
+        }
+        for j in 0..3 {
+            t[j] += k * step_vectors[a][j];
+            rot_deg[j] += k * axes[a].step_rotation_euler_deg[j];
+            let sf = axes[a].step_scale_factor[j];
+            if (sf - 1.0).abs() > 1e-15 {
+                scale[j] *= sf.powf(k);
+            }
+        }
+    }
+    let quat = euler_xyz_deg_to_quat_plan(rot_deg);
+    (t, quat, scale)
+}
+
+fn vec3_dot(a: [f64; 3], b: [f64; 3]) -> f64 {
+    a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
+}
+
+fn vec3_cross(a: [f64; 3], b: [f64; 3]) -> [f64; 3] {
+    [
+        a[1] * b[2] - a[2] * b[1],
+        a[2] * b[0] - a[0] * b[2],
+        a[0] * b[1] - a[1] * b[0],
+    ]
+}
+
+fn vec3_norm(v: [f64; 3]) -> f64 {
+    vec3_dot(v, v).sqrt()
+}
+
+fn try_build_inverse_lattice_basis(
+    counts: [usize; 3],
+    step_vectors: [[f64; 3]; 3],
+) -> Option<[[f64; 3]; 3]> {
+    let mut columns = [[0.0; 3]; 3];
+    let mut active_orthonormal: Vec<[f64; 3]> = Vec::with_capacity(3);
+    for a in 0..3 {
+        if counts[a] > 1 {
+            let v = step_vectors[a];
+            let norm = vec3_norm(v);
+            if !norm.is_finite() || norm <= 1e-15 {
+                return None;
+            }
+            columns[a] = v;
+            // Gram-Schmidt check that active vectors are linearly independent
+            let mut orth = [v[0] / norm, v[1] / norm, v[2] / norm];
+            for prev in &active_orthonormal {
+                let proj = vec3_dot(orth, *prev);
+                orth = [
+                    orth[0] - proj * prev[0],
+                    orth[1] - proj * prev[1],
+                    orth[2] - proj * prev[2],
+                ];
+            }
+            let orth_norm = vec3_norm(orth);
+            if !orth_norm.is_finite() || orth_norm <= 1e-9 {
+                return None;
+            }
+            active_orthonormal.push([
+                orth[0] / orth_norm,
+                orth[1] / orth_norm,
+                orth[2] / orth_norm,
+            ]);
+        }
+    }
+    // Complete inactive axes (N_a == 1) with orthonormal Gram-Schmidt vectors
+    let canonical = [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]];
+    for a in 0..3 {
+        if counts[a] <= 1 {
+            let mut chosen = None;
+            for shift in 0..3 {
+                let mut cand = canonical[(a + shift) % 3];
+                for prev in &active_orthonormal {
+                    let proj = vec3_dot(cand, *prev);
+                    cand = [
+                        cand[0] - proj * prev[0],
+                        cand[1] - proj * prev[1],
+                        cand[2] - proj * prev[2],
+                    ];
+                }
+                let n = vec3_norm(cand);
+                if n.is_finite() && n > 1e-6 {
+                    let unit = [cand[0] / n, cand[1] / n, cand[2] / n];
+                    active_orthonormal.push(unit);
+                    chosen = Some(unit);
+                    break;
+                }
+            }
+            columns[a] = chosen?;
+        }
+    }
+    let c0 = columns[0];
+    let c1 = columns[1];
+    let c2 = columns[2];
+    let r0 = vec3_cross(c1, c2);
+    let r1 = vec3_cross(c2, c0);
+    let r2 = vec3_cross(c0, c1);
+    let det = vec3_dot(c0, r0);
+    let norm_prod = vec3_norm(c0) * vec3_norm(c1) * vec3_norm(c2);
+    if !det.is_finite() || !norm_prod.is_finite() || norm_prod <= 1e-45 || det.abs() <= 1e-12 * norm_prod {
+        return None;
+    }
+    Some([
+        [r0[0] / det, r0[1] / det, r0[2] / det],
+        [r1[0] / det, r1[1] / det, r1[2] / det],
+        [r2[0] / det, r2[1] / det, r2[2] / det],
+    ])
+}
+
+fn compile_array_3d(
+    child: &GeometryShape,
+    axes: &[ArrayAxisIR; 3],
+) -> Result<CompiledArray3D, SelectionError> {
+    let (child_min, child_max) = shape_local_bounds(child).ok_or_else(|| {
+        SelectionError::new(
+            "array_3d_unbounded_child",
+            "Array3D child geometry must have finite local bounds",
+        )
+    })?;
+    let (global_min, global_max) = array_3d_local_bounds(child_min, child_max, axes).ok_or_else(|| {
+        SelectionError::new(
+            "array_3d_bounds_invalid",
+            "Array3D failed to compute finite bounds or exceeded instance budget",
+        )
+    })?;
+    let child_extent = [
+        child_max[0] - child_min[0],
+        child_max[1] - child_min[1],
+        child_max[2] - child_min[2],
+    ];
+    let child_center = [
+        0.5 * (child_min[0] + child_max[0]),
+        0.5 * (child_min[1] + child_max[1]),
+        0.5 * (child_min[2] + child_max[2]),
+    ];
+    let child_half = [
+        0.5 * child_extent[0],
+        0.5 * child_extent[1],
+        0.5 * child_extent[2],
+    ];
+    let step_vectors = [
+        array_axis_step_vector(&axes[0], 0, child_extent),
+        array_axis_step_vector(&axes[1], 1, child_extent),
+        array_axis_step_vector(&axes[2], 2, child_extent),
+    ];
+    let (n0, k0_min, _) = array_axis_effective_count_and_kmin(&axes[0]);
+    let (n1, k1_min, _) = array_axis_effective_count_and_kmin(&axes[1]);
+    let (n2, k2_min, _) = array_axis_effective_count_and_kmin(&axes[2]);
+    let counts = [n0, n1, n2];
+    let total = n0
+        .checked_mul(n1)
+        .and_then(|v| v.checked_mul(n2))
+        .ok_or_else(|| {
+            SelectionError::new(
+                "array_3d_count_overflow",
+                "Array3D instance count overflowed",
+            )
+        })?;
+    let compiled_child = CompiledGeometryShape::from_shape(child)?;
+
+    if !array_has_step_rot_or_scale(axes) {
+        if let Some(b_inv) = try_build_inverse_lattice_basis(counts, step_vectors) {
+            let o_base = [
+                k0_min * step_vectors[0][0]
+                    + k1_min * step_vectors[1][0]
+                    + k2_min * step_vectors[2][0],
+                k0_min * step_vectors[0][1]
+                    + k1_min * step_vectors[1][1]
+                    + k2_min * step_vectors[2][1],
+                k0_min * step_vectors[0][2]
+                    + k1_min * step_vectors[1][2]
+                    + k2_min * step_vectors[2][2],
+            ];
+            let lattice_half_extents = [0, 1, 2].map(|a| {
+                b_inv[a][0].abs() * child_half[0]
+                    + b_inv[a][1].abs() * child_half[1]
+                    + b_inv[a][2].abs() * child_half[2]
+                    + 1e-9
+            });
+            return Ok(CompiledArray3D {
+                child: compiled_child,
+                global_min,
+                global_max,
+                mode: CompiledArray3DMode::InverseLattice {
+                    counts,
+                    o_base,
+                    child_center,
+                    step_vectors,
+                    b_inv,
+                    lattice_half_extents,
+                },
+            });
+        }
+        if total > MAX_ARRAY_FDM_CANDIDATES_PER_QUERY {
+            return Err(SelectionError::new(
+                "array_3d_degenerate_basis",
+                format!(
+                    "Array3D lattice has degenerate/collinear step vectors with {total} instances (> {MAX_ARRAY_FDM_CANDIDATES_PER_QUERY} candidate budget)"
+                ),
+            ));
+        }
+    } else if total > MAX_ARRAY_INSTANCES_FEM_OCC {
+        return Err(SelectionError::new(
+            "array_3d_step_transform_budget_exceeded",
+            format!(
+                "Array3D with step rotation/scale has {total} instances (exceeds {MAX_ARRAY_INSTANCES_FEM_OCC} bounded instance limit)"
+            ),
+        ));
+    }
+
+    let mut instances = Vec::with_capacity(total);
+    for m0 in 0..n0 {
+        let k0 = k0_min + m0 as f64;
+        for m1 in 0..n1 {
+            let k1 = k1_min + m1 as f64;
+            for m2 in 0..n2 {
+                let k2 = k2_min + m2 as f64;
+                let (t, q, s) = array_instance_trs(axes, &step_vectors, [k0, k1, k2]);
+                let mut aabb_min = [f64::INFINITY; 3];
+                let mut aabb_max = [f64::NEG_INFINITY; 3];
+                for ix in 0..2 {
+                    for iy in 0..2 {
+                        for iz in 0..2 {
+                            let corner = [
+                                if ix == 0 { child_min[0] } else { child_max[0] },
+                                if iy == 0 { child_min[1] } else { child_max[1] },
+                                if iz == 0 { child_min[2] } else { child_max[2] },
+                            ];
+                            let w = apply_trs_forward(corner, t, q, s, [0.0, 0.0, 0.0]);
+                            for j in 0..3 {
+                                aabb_min[j] = aabb_min[j].min(w[j]);
+                                aabb_max[j] = aabb_max[j].max(w[j]);
+                            }
+                        }
+                    }
+                }
+                instances.push(CompiledArrayInstance {
+                    aabb_min,
+                    aabb_max,
+                    translation: t,
+                    rotation_quat: q,
+                    scale: s,
+                });
+            }
+        }
+    }
+
+    Ok(CompiledArray3D {
+        child: compiled_child,
+        global_min,
+        global_max,
+        mode: CompiledArray3DMode::BoundedInstances { instances },
+    })
+}
+
+fn contains_array_3d(compiled: &CompiledArray3D, point: [f64; 3]) -> Result<bool, SelectionError> {
+    let eps = 1e-12;
+    if (0..3).any(|j| point[j] < compiled.global_min[j] - eps || point[j] > compiled.global_max[j] + eps) {
+        return Ok(false);
+    }
+    match &compiled.mode {
+        CompiledArray3DMode::InverseLattice {
+            counts,
+            o_base,
+            child_center,
+            step_vectors,
+            b_inv,
+            lattice_half_extents,
+        } => {
+            let u = [
+                point[0] - o_base[0] - child_center[0],
+                point[1] - o_base[1] - child_center[1],
+                point[2] - o_base[2] - child_center[2],
+            ];
+            let mut lo = [0usize; 3];
+            let mut hi = [0usize; 3];
+            for a in 0..3 {
+                let xi = b_inv[a][0] * u[0] + b_inv[a][1] * u[1] + b_inv[a][2] * u[2];
+                let r = lattice_half_extents[a];
+                if counts[a] <= 1 {
+                    if xi.abs() > r {
+                        return Ok(false);
+                    }
+                    lo[a] = 0;
+                    hi[a] = 0;
+                } else {
+                    let max_idx = (counts[a] - 1) as f64;
+                    let f_lo = (xi - r).ceil();
+                    let f_hi = (xi + r).floor();
+                    if f_hi < 0.0 || f_lo > max_idx {
+                        return Ok(false);
+                    }
+                    lo[a] = f_lo.max(0.0) as usize;
+                    hi[a] = f_hi.min(max_idx) as usize;
+                    if lo[a] > hi[a] {
+                        return Ok(false);
+                    }
+                }
+            }
+            let candidates = (hi[0] - lo[0] + 1)
+                .checked_mul(hi[1] - lo[1] + 1)
+                .and_then(|v| v.checked_mul(hi[2] - lo[2] + 1));
+            if candidates.is_none() || candidates.unwrap() > MAX_ARRAY_FDM_CANDIDATES_PER_QUERY {
+                return Err(SelectionError::new(
+                    "array_3d_candidate_budget_exceeded",
+                    format!(
+                        "Array3D query exceeded per-query candidate budget ({MAX_ARRAY_FDM_CANDIDATES_PER_QUERY}); lattice spacing is too dense relative to child bounds"
+                    ),
+                ));
+            }
+            for m0 in lo[0]..=hi[0] {
+                let m0f = m0 as f64;
+                for m1 in lo[1]..=hi[1] {
+                    let m1f = m1 as f64;
+                    for m2 in lo[2]..=hi[2] {
+                        let m2f = m2 as f64;
+                        let local = [
+                            point[0]
+                                - (o_base[0]
+                                    + m0f * step_vectors[0][0]
+                                    + m1f * step_vectors[1][0]
+                                    + m2f * step_vectors[2][0]),
+                            point[1]
+                                - (o_base[1]
+                                    + m0f * step_vectors[0][1]
+                                    + m1f * step_vectors[1][1]
+                                    + m2f * step_vectors[2][1]),
+                            point[2]
+                                - (o_base[2]
+                                    + m0f * step_vectors[0][2]
+                                    + m1f * step_vectors[1][2]
+                                    + m2f * step_vectors[2][2]),
+                        ];
+                        if compiled.child.contains(local)? {
+                            return Ok(true);
+                        }
+                    }
+                }
+            }
+            Ok(false)
+        }
+        CompiledArray3DMode::BoundedInstances { instances } => {
+            let mut tested = 0usize;
+            for inst in instances {
+                if (0..3).any(|j| point[j] < inst.aabb_min[j] - eps || point[j] > inst.aabb_max[j] + eps) {
+                    continue;
+                }
+                tested += 1;
+                if tested > MAX_ARRAY_FDM_CANDIDATES_PER_QUERY {
+                    return Err(SelectionError::new(
+                        "array_3d_candidate_budget_exceeded",
+                        format!(
+                            "Array3D query exceeded per-query candidate budget ({MAX_ARRAY_FDM_CANDIDATES_PER_QUERY})"
+                        ),
+                    ));
+                }
+                let local = apply_trs_inverse(
+                    point,
+                    inst.translation,
+                    inst.rotation_quat,
+                    inst.scale,
+                    [0.0, 0.0, 0.0],
+                );
+                if compiled.child.contains(local)? {
+                    return Ok(true);
+                }
+            }
+            Ok(false)
         }
     }
 }
@@ -1615,7 +2272,8 @@ pub(crate) fn voxelize_shape(
         | GeometryShape::PolygonPrism { .. }
         | GeometryShape::Union { .. }
         | GeometryShape::Intersection { .. }
-        | GeometryShape::Xor { .. } => {
+        | GeometryShape::Xor { .. }
+        | GeometryShape::Array3D { .. } => {
             let Some((bounds_min, bounds_max)) = shape_local_bounds(shape) else {
                 errors.push(
                     "fdm_empty_geometry_bounds: CSG/sliced/transformed geometry has empty or unbounded support"

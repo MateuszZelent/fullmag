@@ -354,6 +354,199 @@ pub struct SceneBooleanOperand {
     pub source_object_id: Option<String>,
 }
 
+/// Canonical Etap C Array3D axis direction (`+`, `-`, `±` aliases accepted on read).
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default, utoipa::ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum SceneArrayDirection {
+    #[default]
+    #[serde(alias = "+")]
+    Positive,
+    #[serde(alias = "-")]
+    Negative,
+    #[serde(alias = "+-", alias = "±")]
+    Symmetric,
+}
+
+impl SceneArrayDirection {
+    pub fn to_ir(self) -> fullmag_ir::ArrayDirectionIR {
+        match self {
+            Self::Positive => fullmag_ir::ArrayDirectionIR::Positive,
+            Self::Negative => fullmag_ir::ArrayDirectionIR::Negative,
+            Self::Symmetric => fullmag_ir::ArrayDirectionIR::Symmetric,
+        }
+    }
+}
+
+/// Canonical Etap C Array3D spacing mode.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default, utoipa::ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum SceneArraySpacingMode {
+    #[default]
+    LatticeStep,
+    BoundingBoxGap,
+}
+
+impl SceneArraySpacingMode {
+    pub fn to_ir(self) -> fullmag_ir::ArraySpacingModeIR {
+        match self {
+            Self::LatticeStep => fullmag_ir::ArraySpacingModeIR::LatticeStep,
+            Self::BoundingBoxGap => fullmag_ir::ArraySpacingModeIR::BoundingBoxGap,
+        }
+    }
+}
+
+fn default_array_count() -> u32 {
+    1
+}
+
+fn default_array_relative_factor() -> f64 {
+    1.0
+}
+
+/// Canonical Etap C `ArrayAxisSpec` shared across `SceneGeometry { kind: "Array3D" }` and `apply_array_3d`.
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, utoipa::ToSchema)]
+pub struct SceneArrayAxisSpec {
+    pub axis: String,
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default = "default_array_count")]
+    pub count: u32,
+    #[serde(default)]
+    pub direction: SceneArrayDirection,
+    #[serde(default)]
+    pub spacing_mode: SceneArraySpacingMode,
+    #[serde(default)]
+    pub pitch_m: f64,
+    #[serde(default = "default_array_relative_factor")]
+    pub relative_factor: f64,
+    #[serde(default)]
+    pub gap_m: f64,
+    #[serde(default = "zero_vec3")]
+    pub step_translation_extra_m: [f64; 3],
+    #[serde(default = "zero_vec3")]
+    pub step_rotation_euler_deg: [f64; 3],
+    #[serde(default = "one_vec3")]
+    pub step_scale_factor: [f64; 3],
+}
+
+impl SceneArrayAxisSpec {
+    pub fn to_ir(&self) -> fullmag_ir::ArrayAxisIR {
+        fullmag_ir::ArrayAxisIR {
+            axis: self.axis.trim().to_ascii_lowercase(),
+            enabled: self.enabled,
+            count: self.count,
+            direction: self.direction.to_ir(),
+            spacing_mode: self.spacing_mode.to_ir(),
+            pitch_m: self.pitch_m,
+            relative_factor: self.relative_factor,
+            gap_m: self.gap_m,
+            step_translation_extra_m: self.step_translation_extra_m,
+            step_rotation_euler_deg: self.step_rotation_euler_deg,
+            step_scale_factor: self.step_scale_factor,
+        }
+    }
+
+    /// Canonical index sequence `k_a` preserving stable order (`negative` yields `[0, -1, ..., -(N-1)]`).
+    pub fn canonical_indices(&self) -> Vec<f64> {
+        let n = if self.enabled {
+            self.count.max(1) as usize
+        } else {
+            1
+        };
+        if n <= 1 {
+            return vec![0.0];
+        }
+        match self.direction {
+            SceneArrayDirection::Positive => (0..n).map(|i| i as f64).collect(),
+            SceneArrayDirection::Negative => (0..n).map(|i| -(i as f64)).collect(),
+            SceneArrayDirection::Symmetric => {
+                let half = (n - 1) as f64 * 0.5;
+                (0..n).map(|i| i as f64 - half).collect()
+            }
+        }
+    }
+
+    pub fn effective_count(&self) -> usize {
+        if self.enabled {
+            self.count.max(1) as usize
+        } else {
+            1
+        }
+    }
+}
+
+/// Validates and orders `[SceneArrayAxisSpec; 3]` into canonical `["x", "y", "z"]` order,
+/// returning `(ordered_axes, total_instances)`.
+pub fn validate_and_order_array_axes(
+    axes: &[SceneArrayAxisSpec; 3],
+) -> Result<([SceneArrayAxisSpec; 3], usize), String> {
+    let mut ordered: [Option<SceneArrayAxisSpec>; 3] = [None, None, None];
+    let mut total_instances: usize = 1;
+    for (idx, ax) in axes.iter().enumerate() {
+        let axis_idx = match ax.axis.trim().to_ascii_lowercase().as_str() {
+            "x" => 0,
+            "y" => 1,
+            "z" => 2,
+            other => {
+                return Err(format!(
+                    "Array3D axes[{idx}] has invalid axis '{other}'; expected 'x', 'y', or 'z'"
+                ));
+            }
+        };
+        if ordered[axis_idx].is_some() {
+            return Err(format!("Array3D has duplicate axis '{}'", ax.axis));
+        }
+        if ax.count == 0 || ax.count > fullmag_ir::MAX_ARRAY_AXIS_COUNT {
+            return Err(format!(
+                "Array3D axis '{}' count ({}) must be in 1..={}",
+                ax.axis,
+                ax.count,
+                fullmag_ir::MAX_ARRAY_AXIS_COUNT
+            ));
+        }
+        if !ax.pitch_m.is_finite()
+            || !ax.relative_factor.is_finite()
+            || !ax.gap_m.is_finite()
+            || ax.step_translation_extra_m.iter().any(|v| !v.is_finite())
+            || ax.step_rotation_euler_deg.iter().any(|v| !v.is_finite())
+        {
+            return Err(format!(
+                "Array3D axis '{}' contains non-finite numeric parameters",
+                ax.axis
+            ));
+        }
+        if ax
+            .step_scale_factor
+            .iter()
+            .any(|v| !v.is_finite() || *v <= 0.0)
+        {
+            return Err(format!(
+                "Array3D axis '{}' step_scale_factor components must be finite and positive",
+                ax.axis
+            ));
+        }
+        let eff = ax.effective_count();
+        total_instances = total_instances
+            .checked_mul(eff)
+            .ok_or_else(|| "Array3D total instance count overflowed".to_string())?;
+        let mut normalized = ax.clone();
+        normalized.axis = ["x", "y", "z"][axis_idx].to_string();
+        ordered[axis_idx] = Some(normalized);
+    }
+    let ordered_axes = [
+        ordered[0]
+            .take()
+            .ok_or_else(|| "Array3D is missing 'x' axis".to_string())?,
+        ordered[1]
+            .take()
+            .ok_or_else(|| "Array3D is missing 'y' axis".to_string())?,
+        ordered[2]
+            .take()
+            .ok_or_else(|| "Array3D is missing 'z' axis".to_string())?,
+    ];
+    Ok((ordered_axes, total_instances))
+}
+
 impl Transform3D {
     pub fn is_identity(&self) -> bool {
         self.translation.iter().all(|v| v.abs() <= 1e-18)

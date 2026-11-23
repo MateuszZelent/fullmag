@@ -1262,12 +1262,14 @@ const Viewport3DFrame = memo(function Viewport3DFrame({
     useState<string | null>(null);
   const [inspectHover, setInspectHover] =
     useState<Viewport3DInspectHover | null>(null);
+  const selectedOperandId = useSelectionSelector((state) =>
+    state.ref?.type === "scene-object" ? state.ref.operandId ?? null : null,
+  );
+  // P1-FE-13: unlock transform gizmo for all scene object roles (magnet, conductor, antenna, spacer).
   const moveTargetEligible = Boolean(
     sceneProps.selectedObjectId &&
       sceneProps.primitiveModel?.objects.some(
-        (object) =>
-          object.objectId === sceneProps.selectedObjectId &&
-          object.role === "magnet",
+        (object) => object.objectId === sceneProps.selectedObjectId,
       ),
   );
   const moveInteraction = useViewport3DObjectMoveInteraction({
@@ -2207,6 +2209,8 @@ const Viewport3DFrame = memo(function Viewport3DFrame({
             onInspectClear={clearInspectHover}
             onInspectSample={updateInspectHover}
             onMoveCommit={moveInteraction.commitMove}
+            onTransformPatchCommit={moveInteraction.commitTransformPatch}
+            selectedOperandId={selectedOperandId}
             onBeginGesture={moveInteraction.onBeginGesture}
             onMoveGestureActiveChange={moveInteraction.onGestureActiveChange}
             moveToolObjectId={moveInteraction.moveToolObjectId}
