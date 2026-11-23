@@ -316,6 +316,7 @@ oddzielny zakres. Kształt odpowiedzi OpenAPI pozostaje bez zmian.
 ## 3. Contract rules
 
 - `GET /v2/sessions/current/status` stays thin: summary, capabilities, and revision pointers only.
+- `resources.simulation_preparation_revision` points to the current preparation resource and is `0` when no preparation is published. Clearing the preparation does not reset the private monotonic revision counter used by realtime invalidation; that invalidation may carry the retained positive revision so clients clear/refetch the resource, whose HTTP route can then return `404`.
 - Heavy numerical payloads stay on resource data-plane routes, never in `status`.
 - All simulation-control operations go through `POST /v2/sessions/current/simulation/commands`.
 - `compute_fields` is a simulation command, not a preview/display mutation. It evaluates active field quantities for the current magnetization, refreshes `data/fields`, and must not advance time, run LLG/relaxation, or mutate magnetization.

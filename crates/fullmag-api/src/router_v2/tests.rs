@@ -27001,6 +27001,69 @@ async fn simulation_preparation_status_exposes_only_revision_pointer() {
     assert!(body["resources"].get("simulation_preparation").is_none());
 }
 
+#[tokio::test]
+async fn absent_simulation_preparation_has_no_status_pointer_but_keeps_realtime_fence() {
+    let state = test_app_state_with_live_session().await;
+    let snapshot = {
+        let mut guard = state.current_live_state.write().await;
+        let snapshot = guard.as_mut().expect("live snapshot");
+        assert!(snapshot.simulation_preparation.is_none());
+        snapshot.simulation_preparation_revision = 11;
+        snapshot.clone()
+    };
+
+    let app = build_v2_router().with_state(state.clone());
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/status")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = body_json(response).await;
+    assert_eq!(body["resources"]["simulation_preparation_revision"], 0);
+
+    let realtime =
+        crate::current_live_realtime_state_from_snapshot(&state, &snapshot, 0).await;
+    assert_eq!(realtime.revisions.simulation_preparation_revision, 11);
+    let mut previous = realtime.revisions.clone();
+    previous.simulation_preparation_revision = 10;
+    let changes = crate::current_live_realtime_changes_since(&realtime, Some(&previous));
+    assert!(changes.iter().any(|change| {
+        matches!(change.resource, RealtimeResourceName::Simulation)
+            && change.resource_id.as_deref() == Some("preparation")
+            && change.revision == 11
+    }));
+
+    let mut events = state.current_live_realtime_events.subscribe();
+    crate::publish_current_live_realtime_batch_changed(&state, &realtime, false, 0)
+        .await
+        .expect("absent preparation invalidation should publish");
+    let event = tokio::time::timeout(std::time::Duration::from_secs(1), events.recv())
+        .await
+        .expect("preparation invalidation event should arrive")
+        .expect("realtime channel should stay open");
+    let body: serde_json::Value =
+        serde_json::from_str(&event.json).expect("invalidation event should be JSON");
+    let change = body["payload"]["changes"]
+        .as_array()
+        .and_then(|changes| {
+            changes.iter().find(|change| {
+                change["resource"] == "simulation" && change["resource_id"] == "preparation"
+            })
+        })
+        .expect("preparation invalidation");
+    assert_eq!(change["revision"], 11);
+    assert_eq!(
+        change["recommended_fetch"],
+        "/v2/sessions/current/simulation/preparation"
+    );
+}
+
 #[test]
 fn simulation_preparation_openapi_registers_route_and_bounded_schemas() {
     let openapi = crate::openapi_v2::openapi_json();
