@@ -5878,6 +5878,7 @@ async fn commit_current_live_scene_document_with_context(
         let target = candidate.as_mut().unwrap_or(&mut *snapshot);
         if retired {
             if let Some(run) = target.run.as_mut() {
+                target.preclaim_cancelled_run_id = Some(run.run_id.clone());
                 run.status = "cancelled".into();
             }
             target.session.status = "awaiting_command".into();

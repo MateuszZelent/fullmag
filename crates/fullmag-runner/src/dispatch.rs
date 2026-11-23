@@ -5147,6 +5147,38 @@ mod tests {
         assert_eq!(provenance.recovered_field_energy_joules, None);
     }
 
+    #[test]
+    fn fem_demag_solver_policy_preserves_gpu_fem_bem() {
+        use crate::native_fem::resolved_native_fem_demag_solver_policy;
+        use fullmag_ir::ResolvedFemDemagIR::{FredkinKoehler, PoissonDirichlet, PoissonRobin};
+
+        let mut plan = tiny_fem_plan();
+        plan.enable_demag = true;
+        for (device, realization, expected_preconditioner) in [
+            ("cuda", PoissonRobin, "AMG"),
+            ("cuda", PoissonDirichlet, "AMG"),
+            ("cuda", FredkinKoehler, "JACOBI"),
+            ("cpu", FredkinKoehler, "AMG"),
+        ] {
+            plan.mfem_device_string = Some(device.to_string());
+            plan.demag_realization = Some(realization);
+            let policy = resolved_native_fem_demag_solver_policy(&plan);
+            assert_eq!(
+                policy.preconditioner, expected_preconditioner,
+                "{device} {realization:?}"
+            );
+        }
+
+        plan.mfem_device_string = Some("cuda".to_string());
+        plan.demag_realization = Some(PoissonRobin);
+        let explicit_policy = fullmag_ir::FemLinearSolverPolicy {
+            preconditioner: "JACOBI".to_string(),
+            ..Default::default()
+        };
+        plan.demag_solver_policy = Some(explicit_policy.clone());
+        assert_eq!(resolved_native_fem_demag_solver_policy(&plan), explicit_policy);
+    }
+
     #[cfg(feature = "fem-gpu")]
     #[test]
     fn fem_poisson_demag_provenance_records_resolved_gpu_default_policy() {
@@ -5159,7 +5191,7 @@ mod tests {
             .expect("poisson demag provenance should be present");
 
         assert_eq!(provenance.linear_solver, "CG");
-        assert_eq!(provenance.preconditioner, "JACOBI");
+        assert_eq!(provenance.preconditioner, "AMG");
         assert_eq!(provenance.rtol, 1e-8);
         assert_eq!(provenance.max_iterations, 500);
     }

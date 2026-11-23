@@ -29,6 +29,7 @@ import {
 } from "../api/apiPaths";
 import type {
   AuthoringTransactionRequest,
+  CommandQueueStatusResource,
   JsonObject,
   JsonValue,
   LiveStatusResource,
@@ -75,6 +76,7 @@ import { studyComputeDraftBlockedReason } from "./studyComputeDraftGuard";
 import { SESSION_STATUS_RESOURCE_KEY } from "../resources/useSessionStatus";
 import {
   resolveActiveLaneOperation,
+  resolveFdmGridBuildOperation,
 } from "../resources/useActiveLaneCapabilities";
 import { resolveSessionAuthoringDiscretization } from "../resources/sessionDiscretization";
 
@@ -308,7 +310,8 @@ function fdmGridBuildDisabledReason(context: CommandContext): string | null {
   if (lane === "fem") return FEM_GRID_COMMAND_NOT_APPLICABLE_REASON;
   if (lane === "unknown") return UNKNOWN_GRID_COMMAND_LANE_REASON;
   const status = resourceData(context, SESSION_STATUS_RESOURCE_KEY) as LiveStatusResource | null;
-  const operation = resolveActiveLaneOperation(status?.capabilities?.active_lane ?? null, "grid_build");
+  const queue = resourceData(context, SIMULATION_COMMANDS_PATH) as CommandQueueStatusResource | null;
+  const operation = resolveFdmGridBuildOperation(status?.capabilities?.active_lane ?? null, queue);
   if (!operation.enabled) return operation.reason;
   return sceneBaseRevision(context) === null
     ? "The canonical scene revision is unavailable. Refetch the scene before building the grid."
@@ -772,8 +775,10 @@ async function observeMeshBuildOperation(
   }
   const terminal = await awaitMeshCommandTerminal(api, commandId, {
     baseMeshRevision: operation.baseMeshRevision,
+    // FDM sizing assigns the mesh revision before materialization. The terminal
+    // command still has to attest publication at that revision or a later one.
     // The compound command separately checks which build owns the published domain.
-    allowSameMeshRevision: Boolean(context.meshBuildPin),
+    allowSameMeshRevision: operation.commandKind === "fdm_grid_refresh" || Boolean(context.meshBuildPin),
     requestOptions: operation.scopeKey ? { sessionScopeKey: operation.scopeKey } : undefined,
   });
   const obsoleteAfterPoll = obsoleteSessionResult(context);
@@ -1065,7 +1070,7 @@ export function runFdmGridRefreshOperation(
     `fdm-grid-refresh-${Date.now()}-${++fdmGridRefreshSequence}`;
   const operation: MeshBuildOperation = {
     announced: false,
-    baseMeshRevision: currentMeshRevision(context),
+    baseMeshRevision: request.precondition?.mesh_revision ?? currentMeshRevision(context),
     commandKind: "fdm_grid_refresh",
     key,
     observationPaused: false,

@@ -140,6 +140,13 @@ function SimulationPreparationWindow({
   }, [mode]);
   const progressValue =
     state.progress.kind === "determinate" ? state.progress.value : undefined;
+  const terminalProgressLabel =
+    state.kind === "resource-error" ? "Unavailable" : "Failed";
+  const detailsLabel = state.resourceErrorDetail
+    ? "View request details"
+    : state.failure
+      ? "View failure details"
+      : "View preparation details";
 
   return (
     <aside
@@ -240,7 +247,7 @@ function SimulationPreparationWindow({
               {state.progress.kind === "determinate"
                 ? `${state.progress.value}%`
                 : state.progress.kind === "terminal"
-                  ? "Failed"
+                  ? terminalProgressLabel
                   : state.activeStage?.stateLabel ??
                     state.progressLabel ??
                     "Connecting"}
@@ -257,20 +264,27 @@ function SimulationPreparationWindow({
         >
           <AccordionItem value="details">
             <AccordionTrigger className="fm-simulation-startup__details-trigger">
-              {state.failure || state.kind === "resource-error"
-                ? "View failure details"
-                : "View preparation details"}
+              {detailsLabel}
             </AccordionTrigger>
             <AccordionContent
               className="fm-simulation-startup__details"
               forceMount
             >
-              <div className="fm-simulation-startup__body">
-                <PreparationStageList stages={state.stages} />
-                <SimulationPreparationLog entries={state.logEntries} />
-              </div>
+              {state.resourceErrorDetail ? (
+                <p className="fm-simulation-startup__progress-detail">
+                  {state.resourceErrorDetail}
+                </p>
+              ) : (
+                <div className="fm-simulation-startup__body">
+                  <PreparationStageList stages={state.stages} />
+                  <SimulationPreparationLog entries={state.logEntries} />
+                </div>
+              )}
 
-              <details className="fm-simulation-startup__technical">
+              <details
+                className="fm-simulation-startup__technical"
+                hidden={Boolean(state.resourceErrorDetail)}
+              >
                 <summary>Execution and provenance</summary>
               {state.totalElapsedLabel ? (
                 <div className="fm-simulation-startup__elapsed">
@@ -369,16 +383,19 @@ function usePublishPreparationWindowSummary(
   preparationId: string,
   state: SimulationStartupOverlayState,
 ): void {
-  const failed = state.failure !== null || state.kind === "resource-error";
+  const unavailable = state.kind === "resource-error";
+  const failed = state.failure !== null || unavailable;
   const ready = !failed && state.preparation?.status === "ready";
   const tone = failed ? "failed" : ready ? "ready" : "running";
-  const label = failed
-    ? "Failed"
-    : ready
-      ? "Ready"
-      : state.progress.kind === "determinate"
-        ? `${state.progress.value}%`
-        : "Running";
+  const label = unavailable
+    ? "Unavailable"
+    : failed
+      ? "Failed"
+      : ready
+        ? "Ready"
+        : state.progress.kind === "determinate"
+          ? `${state.progress.value}%`
+          : "Running";
   const title = state.title;
 
   useEffect(() => {
