@@ -5159,7 +5159,7 @@ mod tests {
             .expect("poisson demag provenance should be present");
 
         assert_eq!(provenance.linear_solver, "CG");
-        assert_eq!(provenance.preconditioner, "JACOBI");
+        assert_eq!(provenance.preconditioner, "AMG");
         assert_eq!(provenance.rtol, 1e-8);
         assert_eq!(provenance.max_iterations, 500);
     }

@@ -67,21 +67,11 @@ pub(crate) fn resolved_native_fem_demag_solver_policy(
         return policy;
     }
 
-    let mut policy = fullmag_ir::FemLinearSolverPolicy::default();
-    if plan.enable_demag && native_fem_plan_requests_gpu_mfem_device(plan) {
-        policy.preconditioner = if plan.relaxation.as_ref().is_some_and(|control| {
-            matches!(
-                control.algorithm,
-                fullmag_ir::RelaxationAlgorithmIR::ProjectedGradientBb
-            )
-        }) {
-            "AMG"
-        } else {
-            "JACOBI"
-        }
-        .to_string();
-    }
-    policy
+    // An omitted policy resolves to the public CG/AMG default on every lane.
+    // The strict GPU lane used CG/JACOBI from 2026-06-05, chosen on a 258-node
+    // smoke; at 14 916 nodes CG/JACOBI no longer converged in 500 iterations
+    // (docs/physics/0532, update 2026-11-23).
+    fullmag_ir::FemLinearSolverPolicy::default()
 }
 
 #[allow(dead_code)]

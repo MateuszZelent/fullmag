@@ -9223,14 +9223,14 @@ mod tests {
     }
 
     #[test]
-    fn unresolved_gpu_demag_policy_prefers_jacobi_preconditioner_for_non_pgbb() {
+    fn unresolved_gpu_demag_policy_uses_public_amg_default_for_non_pgbb() {
         let mut plan = with_poisson_demag(make_exchange_only_plan());
         plan.mfem_device_string = Some("cuda".to_string());
 
         let policy = resolved_native_fem_demag_solver_policy(&plan);
 
         assert_eq!(policy.solver, "CG");
-        assert_eq!(policy.preconditioner, "JACOBI");
+        assert_eq!(policy.preconditioner, "AMG");
         assert_eq!(policy.rtol, 1e-8);
         assert_eq!(policy.max_iterations, 500);
     }
