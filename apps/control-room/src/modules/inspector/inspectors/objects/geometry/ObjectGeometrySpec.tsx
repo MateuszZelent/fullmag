@@ -36,7 +36,7 @@ import type { InspectorPanelProps } from "../../../inspectorTypes";
 import {
   rebaseGeometryObjectDraft,
   resolveGeometryObjectDraft,
-  summarizeGeometryValidationMessages,
+  summarizeGeometryOnlyValidationMessages,
 } from "../../../panels/geometryObjectPanelModel";
 import {
   buildObjectSelection,
@@ -192,7 +192,7 @@ function SharedGeometrySpecPanel({
   const validationMessages = useMemo(
     () =>
       baseline.mode === "committed"
-        ? summarizeGeometryValidationMessages(validation.data, baseline.objectId)
+        ? summarizeGeometryOnlyValidationMessages(validation.data, baseline.objectId)
         : [],
     [baseline.mode, baseline.objectId, validation.data],
   );

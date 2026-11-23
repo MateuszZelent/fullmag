@@ -101,8 +101,16 @@ function defaultOperandLabel(geometry: Record<string, unknown>, index: number): 
 }
 
 function iconForGeometry(geometry: Record<string, unknown>): ExplorerIconToken {
-  const kind = (geometryKindOf(geometry) ?? "").toLowerCase();
-  if (kind === "union" || kind === "difference" || kind === "intersection" || kind === "xor" || kind === "csg") {
+  const kind = (geometryKindOf(unwrapTransformGeometry(geometry)) ?? "").toLowerCase();
+  if (
+    kind === "union" ||
+    kind === "difference" ||
+    kind === "intersection" ||
+    kind === "xor" ||
+    kind === "csg" ||
+    kind === "array3d" ||
+    kind === "array_3d"
+  ) {
     return "layers";
   }
   if (kind === "sphere" || kind === "ellipsoid" || kind === "torus") return "circle";
@@ -113,13 +121,30 @@ function iconForGeometry(geometry: Record<string, unknown>): ExplorerIconToken {
 function unwrapTransformGeometry(
   geometry: Record<string, unknown>,
 ): Record<string, unknown> {
-  const kind = (geometryKindOf(geometry) ?? "").toLowerCase();
-  if (kind === "translate" || kind === "transform") {
-    const params = geometryParamsOf(geometry);
-    const child = asRecord(params.child);
-    if (child) return child;
+  let current = geometry;
+  for (let i = 0; i < 8; i += 1) {
+    const kind = (geometryKindOf(current) ?? "").toLowerCase();
+    if (kind !== "translate" && kind !== "transform") break;
+    const params = geometryParamsOf(current);
+    const child = asRecord(params.child) ?? asRecord(params.base);
+    if (!child) break;
+    current = child;
   }
-  return geometry;
+  return current;
+}
+
+function roleBadgeForOperandGeometry(
+  role: NormalizedGeometryOperand["role"],
+  childGeometry: Record<string, unknown>,
+): string {
+  const parsedArray = parseArray3DGeometry(unwrapTransformGeometry(childGeometry));
+  const arrayDims = parsedArray ? array3DDimensionsLabel(parsedArray.axes) : null;
+  if (arrayDims) {
+    return role === "base"
+      ? `⊞ Array 3D (${arrayDims})`
+      : `${roleBadgeForCompositeOp(role)} · ${arrayDims}`;
+  }
+  return roleBadgeForCompositeOp(role);
 }
 
 export function parseCompositeGeometry(geometry: unknown): ParsedCompositeGeometry {
@@ -133,10 +158,32 @@ export function parseCompositeGeometry(geometry: unknown): ParsedCompositeGeomet
   if (!op) return { op: null, operands: [], rawKind };
 
   if (op === "slice" || op === "array") {
-    const child = asRecord(params.child);
+    const child = asRecord(params.child) ?? asRecord(params.base);
     if (!child) return { op, operands: [], rawKind };
-    const parsedArray = op === "array" ? parseArray3DGeometry(record) : null;
-    const arrayDims = parsedArray ? array3DDimensionsLabel(parsedArray.axes) : null;
+    if (op === "array") {
+      const childKind = geometryKindOf(unwrapTransformGeometry(child));
+      const childTransform = asRecord(params.child_transform) ?? undefined;
+      return {
+        op,
+        operands: [
+          {
+            enabled: true,
+            geometry: child,
+            index: 0,
+            label:
+              asString(params.child_label) ??
+              asString(params.label) ??
+              (childKind ? `${childKind} (Unit)` : "Base Unit"),
+            operandId: "array-child",
+            role: "child",
+            roleBadge: "Base Unit",
+            total: 1,
+            ...(childTransform ? { transform: childTransform } : {}),
+          },
+        ],
+        rawKind,
+      };
+    }
     return {
       op,
       operands: [
@@ -144,12 +191,10 @@ export function parseCompositeGeometry(geometry: unknown): ParsedCompositeGeomet
           enabled: true,
           geometry: child,
           index: 0,
-          label:
-            asString(params.label) ??
-            (arrayDims ? `Array 3D (${arrayDims})` : defaultOperandLabel(child, 0)),
-          operandId: op === "slice" ? "slice-child" : "array-child",
-          role: op,
-          roleBadge: arrayDims ? `⊞ Array 3D (${arrayDims})` : roleBadgeForCompositeOp(op),
+          label: asString(params.label) ?? defaultOperandLabel(child, 0),
+          operandId: "slice-child",
+          role: "slice",
+          roleBadge: roleBadgeForCompositeOp("slice"),
           total: 1,
         },
       ],
@@ -179,7 +224,7 @@ export function parseCompositeGeometry(geometry: unknown): ParsedCompositeGeomet
         label,
         operandId,
         role,
-        roleBadge: roleBadgeForCompositeOp(role),
+        roleBadge: roleBadgeForOperandGeometry(role, childGeometry),
         ...(sourceObjectId ? { sourceObjectId } : {}),
         total,
         ...(transform ? { transform } : {}),
@@ -208,7 +253,7 @@ export function parseCompositeGeometry(geometry: unknown): ParsedCompositeGeomet
             label: defaultOperandLabel(first, 0),
             operandId: firstKey,
             role: "base",
-            roleBadge: roleBadgeForCompositeOp("base"),
+            roleBadge: roleBadgeForOperandGeometry("base", first),
             total: 2,
           },
           {
@@ -218,7 +263,7 @@ export function parseCompositeGeometry(geometry: unknown): ParsedCompositeGeomet
             label: defaultOperandLabel(second, 1),
             operandId: secondKey,
             role: op,
-            roleBadge: roleBadgeForCompositeOp(op),
+            roleBadge: roleBadgeForOperandGeometry(op, second),
             total: 2,
           },
         ],
@@ -234,68 +279,105 @@ export function isCompositeGeometry(geometry: unknown): boolean {
   return parseCompositeGeometry(geometry).operands.length > 0;
 }
 
+function resolveExplorerNodeLabel(
+  parsedOp: CompositeGeometryOp | null,
+  operand: NormalizedGeometryOperand,
+  parentLabel?: string,
+): string {
+  if (parsedOp !== "array") return operand.label;
+  const childKind = geometryKindOf(unwrapTransformGeometry(operand.geometry));
+  if (parentLabel && parentLabel.trim().length > 0) {
+    const cleanParent = parentLabel.trim();
+    if (!childKind) return `${cleanParent} (Unit)`;
+    const lowerParent = cleanParent.toLowerCase();
+    const lowerKind = childKind.toLowerCase();
+    if (lowerParent === lowerKind || lowerParent.includes(`(${lowerKind})`)) {
+      return `${childKind} (Unit)`;
+    }
+    return `${cleanParent} (${childKind})`;
+  }
+  return operand.label;
+}
+
 export function buildGeometryTreeExplorerNodes(
   objectId: string,
   parentId: string,
   geometry: unknown,
   ghostKeys?: ReadonlySet<string>,
   depth = 0,
+  parentPath = "",
+  parentLabel?: string,
 ): ExplorerNode[] {
   if (depth > 8) return [];
   const parsed = parseCompositeGeometry(geometry);
   if (parsed.operands.length === 0) return [];
 
+  const isTopLevelBoolean =
+    depth === 0 && parsed.op !== null && parsed.op !== "array" && parsed.op !== "slice";
+
   return parsed.operands.map((operand) => {
+    const geometryNodePath = parentPath
+      ? `${parentPath}/${operand.operandId}`
+      : operand.operandId;
     const nodeId = `${parentId}:${operand.operandId}`;
-    const ghostVisible = ghostKeys?.has(
-      geometryOperandGhostKey(objectId, operand.operandId),
-    ) ?? false;
+    const ghostVisible =
+      ghostKeys?.has(geometryOperandGhostKey(objectId, geometryNodePath)) ?? false;
     const activeToken = operand.enabled ? "●" : "○";
     const ghostToken = ghostVisible ? " · 👻" : "";
     const operandInput = {
       objectId,
-      operandId: operand.operandId,
+      operandId: geometryNodePath,
     };
+    const displayLabel = resolveExplorerNodeLabel(parsed.op, operand, parentLabel);
+    const unwrappedKind = geometryKindOf(unwrapTransformGeometry(operand.geometry));
     const children = buildGeometryTreeExplorerNodes(
       objectId,
       nodeId,
       operand.geometry,
       ghostKeys,
       depth + 1,
+      geometryNodePath,
+      displayLabel,
     );
 
     return {
       id: nodeId,
       kind: "object.geometry.node",
-      label: operand.label,
+      label: displayLabel,
       parentId,
       badge: `${operand.roleBadge} ${activeToken}${ghostToken}`,
       icon: iconForGeometry(operand.geometry),
       objectId,
-      geometryNodeId: operand.operandId,
+      geometryNodeId: geometryNodePath,
       operandId: operand.operandId,
       geometryNodeEnabled: operand.enabled,
       geometryNodeRole: operand.role,
       selectable: true,
       status: operand.enabled ? "ready" : "skipped",
       statusReason: operand.enabled
-        ? `${operand.roleBadge} operand (${geometryKindOf(operand.geometry) ?? "primitive"})${ghostVisible ? ", ghost wireframe visible" : ""}.`
+        ? `${operand.roleBadge} (${unwrappedKind ?? "primitive"})${ghostVisible ? ", ghost wireframe visible" : ""}.`
         : `${operand.roleBadge} operand is disabled and excluded from evaluation.`,
-      contextCommands: [
-        "geometry.operand-toggle",
-        "geometry.operand-toggle-ghost",
-        "geometry.operand-move-up",
-        "geometry.operand-move-down",
-        "geometry.extract-operand",
-        "workspace.focus-selection",
-      ],
-      contextCommandInputs: {
-        "geometry.operand-toggle": { ...operandInput, enabled: !operand.enabled },
-        "geometry.operand-toggle-ghost": operandInput,
-        "geometry.operand-move-up": operandInput,
-        "geometry.operand-move-down": operandInput,
-        "geometry.extract-operand": operandInput,
-      },
+      contextCommands: isTopLevelBoolean
+        ? [
+            "geometry.operand-toggle",
+            "geometry.operand-toggle-ghost",
+            "geometry.operand-move-up",
+            "geometry.operand-move-down",
+            "geometry.extract-operand",
+            "workspace.focus-selection",
+          ]
+        : ["geometry.operand-toggle-ghost", "workspace.focus-selection"],
+      contextCommandInputs: isTopLevelBoolean
+        ? {
+            "geometry.operand-toggle": { ...operandInput, enabled: !operand.enabled },
+            "geometry.operand-toggle-ghost": operandInput,
+            "geometry.operand-move-up": operandInput,
+            "geometry.operand-move-down": operandInput,
+            "geometry.extract-operand": operandInput,
+          }
+        : {
+            "geometry.operand-toggle-ghost": operandInput,
+          },
       ...(children.length > 0 ? { children } : {}),
     };
   });

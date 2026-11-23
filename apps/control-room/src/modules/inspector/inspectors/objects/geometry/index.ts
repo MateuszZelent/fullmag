@@ -19,11 +19,24 @@ export {
 } from "./DeleteObjectImpactDialog";
 export {
   buildGeometryNodeDraft,
+  buildGeometryNodeSelection,
   GeometryNodeInspectorPanel,
   patchOperandInCompositeGeometry,
   resolveSelectedOperandId,
   type GeometryNodeSpecDraft,
 } from "./GeometryNodeInspectorSpec";
+export {
+  extractTransformVectors,
+  formatGeometryUnitSummary,
+  parseGeometryNodePath,
+  patchGeometryNodeAtPath,
+  resolveGeometryNodeByPath,
+  type EditableNodePrimitiveKind,
+  type GeometryNodeAncestor,
+  type GeometryNodeContainerKind,
+  type GeometryNodePatch,
+  type ResolvedGeometryTreeNode,
+} from "./geometryNodeTreeOps";
 export {
   buildBaselineFromScene,
   mergeTransformPatch,

@@ -1,6 +1,16 @@
 "use client";
 
-import { ArrowDown, ArrowUp, Box, Eye, EyeOff, Grid3X3, Layers, Scissors } from "lucide-react";
+import {
+  ArrowDown,
+  ArrowRight,
+  ArrowUp,
+  Box,
+  Eye,
+  EyeOff,
+  Grid3X3,
+  Layers,
+  Scissors,
+} from "lucide-react";
 import { useCallback, useMemo, useState, useSyncExternalStore } from "react";
 
 import { MODEL_SCENE_PATH } from "@/kernel/api/apiPaths";
@@ -26,10 +36,7 @@ import {
   geometryGhostVisibilityStore,
   geometryOperandGhostKey,
 } from "@/kernel/visualization/geometryGhostVisibilityStore";
-import {
-  parseCompositeGeometry,
-  type NormalizedGeometryOperand,
-} from "@/modules/explorer/builders/geometryTreeExplorerNodes";
+import { parseCompositeGeometry } from "@/modules/explorer/builders/geometryTreeExplorerNodes";
 import { Button } from "@/shared/ui/Button";
 import { Switch } from "@/shared/ui/Switch";
 
@@ -47,15 +54,33 @@ import {
 } from "../../../template";
 
 import { Array3DLatticeTableSection } from "./Array3DLatticeTableSection";
+import {
+  extractTransformVectors,
+  parseGeometryNodePath,
+  patchGeometryNodeAtPath,
+  resolveGeometryNodeByPath,
+  type GeometryNodeAncestor,
+} from "./geometryNodeTreeOps";
+import { parseSymmetryAxis, validateTorusRadii } from "./geometryShared";
 
 export interface GeometryNodeSpecDraft {
   exists: boolean;
   objectId: string;
   objectName: string;
   operandId: string;
+  segmentId: string;
+  depth: number;
+  canEditOperandMeta: boolean;
+  isTopLevelBooleanOperand: boolean;
+  isEditablePrimitive: boolean;
+  isArray3D: boolean;
+  arrayUnitSummary: string | null;
+  arrayChildPath: string | null;
+  ancestors: readonly GeometryNodeAncestor[];
   label: string;
   roleBadge: string;
   primitiveKind: string;
+  symmetryAxis: "x" | "y" | "z";
   enabled: boolean;
   index: number;
   total: number;
@@ -64,7 +89,13 @@ export interface GeometryNodeSpecDraft {
   sizeZ: number;
   radius: number;
   height: number;
+  bottomRadius: number;
+  topRadius: number;
+  majorRadius: number;
+  minorRadius: number;
   translation: readonly [number, number, number];
+  eulerDeg: readonly [number, number, number];
+  scale: readonly [number, number, number];
 }
 
 function asRecord(value: unknown): Record<string, unknown> | null {
@@ -77,25 +108,46 @@ function numberOr(value: unknown, fallback: number): number {
   return typeof value === "number" && Number.isFinite(value) ? value : fallback;
 }
 
-function geometryKindOf(geometry: Record<string, unknown>): string {
-  const kind = geometry.geometry_kind ?? geometry.kind;
-  return typeof kind === "string" && kind.trim().length > 0 ? kind.trim() : "Box";
-}
-
 function geometryParamsOf(geometry: Record<string, unknown>): Record<string, unknown> {
   return asRecord(geometry.geometry_params) ?? asRecord(geometry.params) ?? {};
+}
+
+export function buildGeometryNodeSelection(
+  objectId: string,
+  nodePath: string,
+  label: string,
+): Omit<Selection, "moduleSource"> {
+  const segments = parseGeometryNodePath(nodePath);
+  const segmentId = segments.at(-1) ?? nodePath;
+  const nodeId = `model:object:${objectId}:geometry:${segments.join(":")}`;
+  return {
+    kind: "object.geometry.node",
+    label,
+    nodeId,
+    objectId,
+    ref: {
+      geometryNodeId: nodePath,
+      kind: "object.geometry.node",
+      nodeId,
+      objectId,
+      operandId: segmentId,
+      type: "scene-object",
+      visualizationTargetId: `object:${objectId}`,
+    },
+  };
 }
 
 export function resolveSelectedOperandId(
   selection: InspectorPanelProps["selection"],
 ): string | null {
   if (selection.ref?.type === "scene-object") {
-    if (selection.ref.operandId) return selection.ref.operandId;
     if (selection.ref.geometryNodeId) return selection.ref.geometryNodeId;
+    if (selection.ref.operandId) return selection.ref.operandId;
   }
   const parts = selection.nodeId?.split(":geometry:");
-  if (parts && parts.length > 1) {
-    return parts[1]?.split(":").at(-1) ?? null;
+  if (parts && parts.length > 1 && parts[1]) {
+    const tail = parts[1].trim();
+    return tail.length > 0 ? tail.split(":").join("/") : null;
   }
   return null;
 }
@@ -108,22 +160,29 @@ export function buildGeometryNodeDraft(
     selection.ref?.type === "scene-object"
       ? selection.ref.objectId
       : selection.objectId ?? "";
-  const operandId = resolveSelectedOperandId(selection) ?? "";
+  const nodePath = resolveSelectedOperandId(selection) ?? "";
   const sceneObj = scene?.objects?.find((obj) => obj.id === objectId) ?? null;
-  const parsed = parseCompositeGeometry(sceneObj?.geometry);
-  const operand: NormalizedGeometryOperand | undefined = parsed.operands.find(
-    (entry) => entry.operandId === operandId,
-  );
+  const resolved = sceneObj && nodePath ? resolveGeometryNodeByPath(sceneObj.geometry, nodePath) : null;
 
-  if (!sceneObj || !operand) {
+  if (!sceneObj || !resolved) {
     return {
       exists: false,
       objectId,
       objectName: objectId || "Object",
-      operandId,
+      operandId: nodePath,
+      segmentId: parseGeometryNodePath(nodePath).at(-1) ?? nodePath,
+      depth: 0,
+      canEditOperandMeta: false,
+      isTopLevelBooleanOperand: false,
+      isEditablePrimitive: false,
+      isArray3D: false,
+      arrayUnitSummary: null,
+      arrayChildPath: null,
+      ancestors: [],
       label: selection.label ?? "Operand",
       roleBadge: "Node",
       primitiveKind: "Box",
+      symmetryAxis: "z",
       enabled: true,
       index: 0,
       total: 0,
@@ -132,58 +191,54 @@ export function buildGeometryNodeDraft(
       sizeZ: 10e-9,
       radius: 25e-9,
       height: 20e-9,
+      bottomRadius: 50e-9,
+      topRadius: 25e-9,
+      majorRadius: 80e-9,
+      minorRadius: 20e-9,
       translation: [0, 0, 0],
+      eulerDeg: [0, 0, 0],
+      scale: [1, 1, 1],
     };
   }
 
-  const kind = geometryKindOf(operand.geometry);
-  const params = geometryParamsOf(operand.geometry);
+  const params = geometryParamsOf(resolved.geometry);
   const size = Array.isArray(params.size) ? params.size : null;
   const radii = Array.isArray(params.radii) ? params.radii : null;
-  const tx = asRecord(operand.transform);
-  const tr = Array.isArray(tx?.translation) ? tx.translation : [0, 0, 0];
+  const txVecs = extractTransformVectors(resolved.transform);
 
   return {
     exists: true,
     objectId,
     objectName: typeof sceneObj.name === "string" && sceneObj.name ? sceneObj.name : objectId,
-    operandId: operand.operandId,
-    label: operand.label,
-    roleBadge: operand.roleBadge,
-    primitiveKind: kind,
-    enabled: operand.enabled,
-    index: operand.index,
-    total: operand.total,
+    operandId: resolved.path,
+    segmentId: resolved.segmentId,
+    depth: resolved.depth,
+    canEditOperandMeta: resolved.canEditOperandMeta,
+    isTopLevelBooleanOperand: resolved.isTopLevelBooleanOperand,
+    isEditablePrimitive: resolved.isEditablePrimitive,
+    isArray3D: resolved.isArray3D,
+    arrayUnitSummary: resolved.arrayUnitSummary,
+    arrayChildPath: resolved.arrayChildPath,
+    ancestors: resolved.ancestors,
+    label: resolved.label,
+    roleBadge: resolved.roleBadge,
+    primitiveKind: resolved.geometryKind,
+    symmetryAxis: parseSymmetryAxis(params.axis),
+    enabled: resolved.enabled,
+    index: resolved.index,
+    total: resolved.total,
     sizeX: size ? numberOr(size[0], 100e-9) : radii ? numberOr(radii[0], 50e-9) * 2 : 100e-9,
     sizeY: size ? numberOr(size[1], 100e-9) : radii ? numberOr(radii[1], 50e-9) * 2 : 100e-9,
     sizeZ: size ? numberOr(size[2], 10e-9) : radii ? numberOr(radii[2], 10e-9) * 2 : 10e-9,
     radius: numberOr(params.radius ?? params.radius_bottom ?? params.major_radius, 25e-9),
     height: numberOr(params.height ?? params.length ?? params.thickness, 20e-9),
-    translation: [numberOr(tr[0], 0), numberOr(tr[1], 0), numberOr(tr[2], 0)],
-  };
-}
-
-function patchChildPrimitiveGeometry(
-  childGeom: Record<string, unknown>,
-  draft: GeometryNodeSpecDraft,
-): Record<string, unknown> {
-  const childParams = asRecord(childGeom.geometry_params) ?? {};
-  const kind = geometryKindOf(childGeom);
-  const nextParams: Record<string, unknown> = { ...childParams };
-  if (kind === "Box") {
-    nextParams.size = [draft.sizeX, draft.sizeY, draft.sizeZ];
-  } else if (kind === "Ellipsoid") {
-    nextParams.radii = [draft.sizeX / 2, draft.sizeY / 2, draft.sizeZ / 2];
-    nextParams.size = [draft.sizeX, draft.sizeY, draft.sizeZ];
-  } else if (kind === "Cylinder") {
-    nextParams.radius = draft.radius;
-    nextParams.height = draft.height;
-  } else if (kind === "Sphere") {
-    nextParams.radius = draft.radius;
-  }
-  return {
-    ...childGeom,
-    geometry_params: nextParams,
+    bottomRadius: numberOr(params.radius_bottom ?? params.bottom_radius, 50e-9),
+    topRadius: numberOr(params.radius_top ?? params.top_radius, 25e-9),
+    majorRadius: numberOr(params.major_radius, 80e-9),
+    minorRadius: numberOr(params.minor_radius, 20e-9),
+    translation: txVecs.translation,
+    eulerDeg: txVecs.eulerDeg,
+    scale: txVecs.scale,
   };
 }
 
@@ -191,75 +246,23 @@ export function patchOperandInCompositeGeometry(
   rawGeometry: unknown,
   draft: GeometryNodeSpecDraft,
 ): JsonObject | null {
-  const geom = asRecord(rawGeometry);
-  if (!geom) return null;
-  const params = asRecord(geom.geometry_params);
-  if (!params) return null;
-
-  if (Array.isArray(params.operands)) {
-    const updatedOperands = params.operands.map((entry, idx) => {
-      const rec = asRecord(entry);
-      if (!rec) return entry;
-      const id = typeof rec.operand_id === "string" ? rec.operand_id : `operand-${idx}`;
-      if (id !== draft.operandId) return entry;
-      const childGeom = asRecord(rec.geometry) ?? {};
-      const prevTransform = asRecord(rec.transform) ?? {};
-      return {
-        ...rec,
-        enabled: draft.enabled,
-        geometry: patchChildPrimitiveGeometry(childGeom, draft),
-        label: draft.label.trim() || rec.label,
-        transform: {
-          ...prevTransform,
-          translation: [draft.translation[0], draft.translation[1], draft.translation[2]],
-        },
-      };
-    });
-
-    return {
-      ...geom,
-      geometry_params: {
-        ...params,
-        operands: updatedOperands,
-      },
-    } as JsonObject;
-  }
-
-  // Backward-compatible legacy 2-operand dicts: { base, tool }, { a, b }, { left, right }
-  const legacyPairs: readonly (readonly [string, string])[] = [
-    ["base", "tool"],
-    ["a", "b"],
-    ["left", "right"],
-  ];
-  for (const [firstKey, secondKey] of legacyPairs) {
-    const first = asRecord(params[firstKey]);
-    const second = asRecord(params[secondKey]);
-    if (!first || !second) continue;
-    if (draft.operandId !== firstKey && draft.operandId !== secondKey) {
-      return null;
-    }
-    const targetRaw = draft.operandId === firstKey ? first : second;
-    const patchedChild = patchChildPrimitiveGeometry(targetRaw, draft);
-    const hasTranslation = draft.translation.some((v) => Math.abs(v) > 1e-15);
-    const updatedEntry = hasTranslation
-      ? {
-          geometry_kind: "Translate",
-          geometry_params: {
-            child: patchedChild,
-            offset: [draft.translation[0], draft.translation[1], draft.translation[2]],
-          },
-        }
-      : patchedChild;
-    return {
-      ...geom,
-      geometry_params: {
-        ...params,
-        [draft.operandId]: updatedEntry,
-      },
-    } as JsonObject;
-  }
-
-  return null;
+  return patchGeometryNodeAtPath(rawGeometry, draft.operandId, {
+    label: draft.canEditOperandMeta ? draft.label : undefined,
+    enabled: draft.canEditOperandMeta ? draft.enabled : undefined,
+    symmetryAxis: draft.symmetryAxis,
+    sizeX: draft.sizeX,
+    sizeY: draft.sizeY,
+    sizeZ: draft.sizeZ,
+    radius: draft.radius,
+    height: draft.height,
+    bottomRadius: draft.bottomRadius,
+    topRadius: draft.topRadius,
+    majorRadius: draft.majorRadius,
+    minorRadius: draft.minorRadius,
+    translation: draft.translation,
+    eulerDeg: draft.eulerDeg,
+    scale: draft.scale,
+  });
 }
 
 export function GeometryNodeInspectorPanel({ selection }: InspectorPanelProps) {
@@ -286,6 +289,13 @@ export function GeometryNodeInspectorPanel({ selection }: InspectorPanelProps) {
     typeof scene.data?.revision === "number" && Number.isFinite(scene.data.revision)
       ? scene.data.revision
       : null;
+
+  const handleSelectNode = useCallback(
+    (next: Omit<Selection, "moduleSource">) => {
+      kernel.selection.set(next, "inspector");
+    },
+    [kernel.selection],
+  );
 
   const commitSceneResult = useCallback(
     (response: { committed_scene?: SceneResource; scene_revision?: number }) => {
@@ -350,6 +360,15 @@ export function GeometryNodeInspectorPanel({ selection }: InspectorPanelProps) {
               baseline.objectName,
             ),
           },
+          ...baseline.ancestors.map((ancestor, idx) => ({
+            id: `ancestor-${idx}`,
+            label: ancestor.label,
+            selection: buildGeometryNodeSelection(
+              baseline.objectId,
+              ancestor.path,
+              ancestor.label,
+            ),
+          })),
           {
             id: "node",
             label: baseline.label,
@@ -359,8 +378,12 @@ export function GeometryNodeInspectorPanel({ selection }: InspectorPanelProps) {
       },
       identity: {
         domain: "geometry",
-        icon: Layers,
-        kindLabel: "CSG geometry operand",
+        icon: baseline.isArray3D ? Grid3X3 : Layers,
+        kindLabel: baseline.isArray3D
+          ? "Array 3D modifier node"
+          : baseline.depth > 0
+            ? "Nested geometry node"
+            : "CSG geometry operand",
         statePill: (draft) =>
           !draft.exists
             ? { label: "Missing", tone: "warn" }
@@ -373,8 +396,15 @@ export function GeometryNodeInspectorPanel({ selection }: InspectorPanelProps) {
         draft.exists
           ? [
               { id: "role", label: "Role", value: draft.roleBadge },
-              { id: "primitive", label: "Primitive", value: draft.primitiveKind },
-              { id: "stack", label: "Stack", value: `#${draft.index + 1} / ${draft.total}` },
+              { id: "primitive", label: "Geometry", value: draft.primitiveKind },
+              {
+                id: "stack",
+                label: draft.depth > 0 ? "Depth" : "Stack",
+                value:
+                  draft.depth > 0
+                    ? `Level ${draft.depth + 1} (#${draft.index + 1}/${draft.total})`
+                    : `#${draft.index + 1} / ${draft.total}`,
+              },
               { id: "state", label: "State", value: draft.enabled ? "Active" : "Disabled" },
             ]
           : [{ id: "status", label: "Status", value: "Node missing" }],
@@ -384,20 +414,25 @@ export function GeometryNodeInspectorPanel({ selection }: InspectorPanelProps) {
           title: "Operand state & stack",
           icon: Layers,
           defaultOpen: true,
+          showWhen: (draft) =>
+            !draft.exists || draft.canEditOperandMeta || draft.isTopLevelBooleanOperand,
           rows: [
             {
               key: "label",
               type: "text",
               label: "Operand label",
+              showWhen: (draft) => draft.canEditOperandMeta,
             },
             {
               key: "enabled",
               type: "switch",
               label: "Include operand in CSG evaluation",
+              showWhen: (draft) => draft.canEditOperandMeta,
             },
             {
               type: "custom",
               wide: true,
+              showWhen: (draft) => draft.isTopLevelBooleanOperand,
               render: (ctx) => (
                 <div className="flex flex-col gap-2">
                   <div className="flex items-center justify-between gap-2">
@@ -534,18 +569,35 @@ export function GeometryNodeInspectorPanel({ selection }: InspectorPanelProps) {
         },
         {
           id: "geometry-node-dimensions",
-          title: "Operand primitive & local offset",
+          title: "Primitive dimensions & local transform",
           icon: Box,
           defaultOpen: true,
           showWhen: (draft) => draft.exists,
           rows: [
+            {
+              key: "symmetryAxis",
+              type: "segmented",
+              label: "Principal axis",
+              showWhen: (d) =>
+                d.primitiveKind === "Cylinder" ||
+                d.primitiveKind === "Cone" ||
+                d.primitiveKind === "Torus",
+              options: [
+                { value: "x", label: "X" },
+                { value: "y", label: "Y" },
+                { value: "z", label: "Z" },
+              ],
+            },
             {
               key: "sizeX",
               type: "quantity",
               label: "Extent X",
               units: LENGTH_UNITS,
               defaultDisplayUnit: "nm",
+              min: 0,
+              minExclusive: true,
               showWhen: (d) => d.primitiveKind === "Box" || d.primitiveKind === "Ellipsoid",
+              validate: (v) => (v > 0 ? null : "Extent X must be strictly positive."),
             },
             {
               key: "sizeY",
@@ -553,7 +605,10 @@ export function GeometryNodeInspectorPanel({ selection }: InspectorPanelProps) {
               label: "Extent Y",
               units: LENGTH_UNITS,
               defaultDisplayUnit: "nm",
+              min: 0,
+              minExclusive: true,
               showWhen: (d) => d.primitiveKind === "Box" || d.primitiveKind === "Ellipsoid",
+              validate: (v) => (v > 0 ? null : "Extent Y must be strictly positive."),
             },
             {
               key: "sizeZ",
@@ -561,7 +616,10 @@ export function GeometryNodeInspectorPanel({ selection }: InspectorPanelProps) {
               label: "Thickness Z",
               units: LENGTH_UNITS,
               defaultDisplayUnit: "nm",
+              min: 0,
+              minExclusive: true,
               showWhen: (d) => d.primitiveKind === "Box" || d.primitiveKind === "Ellipsoid",
+              validate: (v) => (v > 0 ? null : "Thickness Z must be strictly positive."),
             },
             {
               key: "radius",
@@ -569,7 +627,62 @@ export function GeometryNodeInspectorPanel({ selection }: InspectorPanelProps) {
               label: "Radius",
               units: LENGTH_UNITS,
               defaultDisplayUnit: "nm",
+              min: 0,
+              minExclusive: true,
               showWhen: (d) => d.primitiveKind === "Cylinder" || d.primitiveKind === "Sphere",
+              validate: (v) => (v > 0 ? null : "Radius must be strictly positive."),
+            },
+            {
+              key: "bottomRadius",
+              type: "quantity",
+              label: "Bottom radius",
+              units: LENGTH_UNITS,
+              defaultDisplayUnit: "nm",
+              min: 0,
+              showWhen: (d) => d.primitiveKind === "Cone",
+              validate: (v, d) =>
+                v < 0
+                  ? "Bottom radius must be non-negative."
+                  : v + d.topRadius <= 0
+                    ? "At least one cone radius must be strictly positive."
+                    : null,
+            },
+            {
+              key: "topRadius",
+              type: "quantity",
+              label: "Top radius",
+              units: LENGTH_UNITS,
+              defaultDisplayUnit: "nm",
+              min: 0,
+              showWhen: (d) => d.primitiveKind === "Cone",
+              validate: (v, d) =>
+                v < 0
+                  ? "Top radius must be non-negative."
+                  : d.bottomRadius + v <= 0
+                    ? "At least one cone radius must be strictly positive."
+                    : null,
+            },
+            {
+              key: "majorRadius",
+              type: "quantity",
+              label: "Major radius",
+              units: LENGTH_UNITS,
+              defaultDisplayUnit: "nm",
+              min: 0,
+              minExclusive: true,
+              showWhen: (d) => d.primitiveKind === "Torus",
+              validate: (v, d) => validateTorusRadii(v, d.minorRadius),
+            },
+            {
+              key: "minorRadius",
+              type: "quantity",
+              label: "Minor radius",
+              units: LENGTH_UNITS,
+              defaultDisplayUnit: "nm",
+              min: 0,
+              minExclusive: true,
+              showWhen: (d) => d.primitiveKind === "Torus",
+              validate: (v, d) => validateTorusRadii(d.majorRadius, v),
             },
             {
               key: "height",
@@ -577,7 +690,10 @@ export function GeometryNodeInspectorPanel({ selection }: InspectorPanelProps) {
               label: "Height",
               units: LENGTH_UNITS,
               defaultDisplayUnit: "nm",
-              showWhen: (d) => d.primitiveKind === "Cylinder",
+              min: 0,
+              minExclusive: true,
+              showWhen: (d) => d.primitiveKind === "Cylinder" || d.primitiveKind === "Cone",
+              validate: (v) => (v > 0 ? null : "Height must be strictly positive."),
             },
             {
               key: "translation",
@@ -586,18 +702,80 @@ export function GeometryNodeInspectorPanel({ selection }: InspectorPanelProps) {
               units: LENGTH_UNITS,
               defaultDisplayUnit: "nm",
             },
+            {
+              key: "eulerDeg",
+              type: "vector3",
+              label: "Rotation (Euler XYZ)",
+              unitSuffix: "\u00b0",
+              axisPresets: true,
+            },
+            {
+              key: "scale",
+              type: "vector3",
+              label: "Scale (sx, sy, sz)",
+              validate: (vec) =>
+                vec.some((c) => !Number.isFinite(c) || c <= 0)
+                  ? "All scale factors must be strictly positive."
+                  : null,
+            },
           ],
         },
         {
           id: "geometry-node-array-3d",
-          title: "Array 3D on operand",
+          title: baseline.isArray3D ? "Array 3D modifier & base unit" : "Array 3D on operand",
           icon: Grid3X3,
-          defaultOpen: false,
-          showWhen: (draft) => draft.exists,
+          defaultOpen: baseline.isArray3D,
+          showWhen: (draft) =>
+            draft.exists && (draft.isTopLevelBooleanOperand || draft.isArray3D),
           rows: [
             {
               type: "custom",
               wide: true,
+              showWhen: (draft) => draft.isArray3D && Boolean(draft.arrayChildPath),
+              render: (ctx) => (
+                <div
+                  className="flex flex-wrap items-center justify-between gap-2 rounded border border-[var(--fm-border-subtle)] bg-[var(--fm-surface-subtle)] px-2.5 py-2"
+                  data-slot="array3d-unit-jump-bar"
+                >
+                  <div className="min-w-0 flex-1">
+                    <div className="text-xs font-medium text-[var(--fm-text-primary)]">
+                      Unit: {ctx.draft.arrayUnitSummary ?? "Base Unit"}
+                    </div>
+                    <div className="text-xs text-[var(--fm-text-muted)]">
+                      Edit dimensions or transform on the repeated unit geometry directly.
+                    </div>
+                  </div>
+                  <Button
+                    className="shrink-0 whitespace-nowrap"
+                    size="sm"
+                    type="button"
+                    variant="primary"
+                    onClick={() => {
+                      const childPath = ctx.draft.arrayChildPath;
+                      if (!childPath) return;
+                      const obj = scene.data?.objects?.find(
+                        (item) => item.id === ctx.draft.objectId,
+                      );
+                      const childResolved = resolveGeometryNodeByPath(obj?.geometry, childPath);
+                      handleSelectNode(
+                        buildGeometryNodeSelection(
+                          ctx.draft.objectId,
+                          childPath,
+                          childResolved?.label ?? "Unit Geometry",
+                        ),
+                      );
+                    }}
+                  >
+                    <span>Edit Unit Geometry</span>
+                    <ArrowRight aria-hidden="true" size={13} />
+                  </Button>
+                </div>
+              ),
+            },
+            {
+              type: "custom",
+              wide: true,
+              showWhen: (draft) => draft.isTopLevelBooleanOperand,
               render: (ctx) => (
                 <Array3DLatticeTableSection
                   kernel={kernel}
@@ -613,18 +791,18 @@ export function GeometryNodeInspectorPanel({ selection }: InspectorPanelProps) {
       ],
       commitBar: {
         mode: "staged",
-        cleanMessage: () => "Operand matches committed CSG tree",
+        cleanMessage: () => "Geometry node matches committed CSG tree",
         lockReason: (d) =>
           !d.exists
-            ? "Select an existing CSG operand node in the Geometry Tree."
+            ? "Select an existing geometry node in the Geometry Tree."
             : sceneRevision === null
-              ? "Refetch the scene before editing operands."
+              ? "Refetch the scene before editing geometry nodes."
               : null,
         onApply: async (draft) => {
           const obj = scene.data?.objects?.find((item) => item.id === draft.objectId);
           const nextGeometry = patchOperandInCompositeGeometry(obj?.geometry, draft);
           if (!nextGeometry || sceneRevision === null) {
-            throw new Error("Could not patch operand in parent composite geometry.");
+            throw new Error("Could not patch geometry node in parent composite tree.");
           }
           const response = await patchObjectGeometryTransaction(
             kernel.api,
@@ -642,12 +820,16 @@ export function GeometryNodeInspectorPanel({ selection }: InspectorPanelProps) {
     }),
     [
       actionBusy,
+      baseline.ancestors,
+      baseline.depth,
       baseline.exists,
+      baseline.isArray3D,
       baseline.label,
       baseline.objectId,
       baseline.objectName,
       commitSceneResult,
       ghostVisible,
+      handleSelectNode,
       kernel,
       runQuickAction,
       scene.data,
@@ -657,12 +839,6 @@ export function GeometryNodeInspectorPanel({ selection }: InspectorPanelProps) {
   );
 
   const controller = useInspectorSpecController(spec, selection, baseline);
-  const handleSelectNode = useCallback(
-    (next: Omit<Selection, "moduleSource">) => {
-      kernel.selection.set(next, "inspector");
-    },
-    [kernel.selection],
-  );
 
   return (
     <InspectorTemplate
