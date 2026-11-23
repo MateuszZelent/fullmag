@@ -4544,9 +4544,7 @@ pub(crate) async fn inspect_field_state_with_context(
     Json(req): Json<FieldStateInspectRequest>,
     request_context: Option<&crate::types::CurrentLiveRequestContext>,
 ) -> Result<Json<FieldStateInspectResponse>, ApiError> {
-    if let Some(format) = req.format.as_deref() {
-        validate_field_state_import_format(format)?;
-    }
+    let detected_format = field_state_import_format(&req.artifact_ref, req.format.as_deref())?;
     let _transition = if request_context.is_some() {
         Some(state.current_live_session_transition.lock().await)
     } else {
@@ -4568,11 +4566,6 @@ pub(crate) async fn inspect_field_state_with_context(
                 .load(std::sync::atomic::Ordering::Acquire),
         )?;
     }
-    let detected_format = req
-        .format
-        .as_deref()
-        .map(normalize_field_state_import_format)
-        .unwrap_or_else(|| infer_field_state_import_format(&req.artifact_ref));
     let artifact =
         read_field_state_artifact(&state.repo_root, snapshot, &req.artifact_ref, &req.target)?;
     let mut warnings = Vec::new();
@@ -4646,6 +4639,7 @@ pub(crate) async fn import_field_state_with_context(
     Json(req): Json<FieldStateImportRequest>,
     request_context: Option<&crate::types::CurrentLiveRequestContext>,
 ) -> Result<Json<FieldStateImportResponse>, ApiError> {
+    field_state_import_format(&req.artifact_ref, req.format.as_deref())?;
     let mode = req
         .mode
         .clone()
@@ -4732,9 +4726,6 @@ pub(crate) async fn import_field_state_with_context(
                 .current_live_session_epoch
                 .load(std::sync::atomic::Ordering::Acquire),
         )?;
-    }
-    if let Some(format) = req.format.as_deref() {
-        validate_field_state_import_format(format)?;
     }
     let artifact =
         read_field_state_artifact(&state.repo_root, snapshot, &req.artifact_ref, &req.target)?;
@@ -5844,17 +5835,28 @@ fn infer_field_state_import_format(artifact_ref: &str) -> String {
     }
 }
 
-fn validate_field_state_import_format(format: &str) -> Result<(), ApiError> {
-    let normalized = normalize_field_state_import_format(format);
-    if matches!(
-        normalized.as_str(),
-        "field_state_json" | "ovf" | "npz" | "npy" | "zarr" | "h5"
-    ) {
-        return Ok(());
+fn field_state_import_format(
+    artifact_ref: &str,
+    requested_format: Option<&str>,
+) -> Result<String, ApiError> {
+    let inferred = infer_field_state_import_format(artifact_ref);
+    if let Some(requested) = requested_format {
+        let normalized = normalize_field_state_import_format(requested);
+        if !matches!(
+            normalized.as_str(),
+            "field_state_json" | "ovf" | "npz" | "npy" | "zarr" | "h5"
+        ) {
+            return Err(ApiError::bad_request(format!(
+                "unsupported field-state import format '{requested}'; expected field_state_json, ovf, npz, npy, zarr, or h5"
+            )));
+        }
+        if normalized != inferred {
+            return Err(ApiError::bad_request(format!(
+                "field-state format '{normalized}' does not match the artifact format '{inferred}'"
+            )));
+        }
     }
-    Err(ApiError::bad_request(format!(
-        "unsupported field-state import format '{format}'; expected field_state_json, ovf, npz, npy, zarr, or h5"
-    )))
+    Ok(inferred)
 }
 
 #[derive(Debug, Clone)]
@@ -6280,33 +6282,40 @@ fn read_field_state_artifact(
     target: &FieldStateTargetRef,
 ) -> Result<FieldStateJsonArtifact, ApiError> {
     let artifact_path = resolve_session_artifact_ref(snapshot, artifact_ref)?;
-    let raw = std::fs::read(&artifact_path)
-        .map_err(|error| ApiError::not_found(format!("field-state artifact not found: {error}")))?;
-    let lower_name = artifact_path
-        .file_name()
-        .and_then(|value| value.to_str())
-        .unwrap_or_default()
-        .to_ascii_lowercase();
-    if lower_name.ends_with(".ovf") || lower_name.ends_with(".omf") {
-        return parse_ovf_bytes(&raw, target).map_err(ApiError::bad_request);
-    }
-    let artifact: FieldStateJsonArtifact = match serde_json::from_slice(&raw) {
-        Ok(artifact) => artifact,
-        Err(json_error) if field_state_path_needs_python_loader(&artifact_path) => {
-            let mut loaded = convert_field_state_with_python(repo_root, &artifact_path).map_err(|error| {
-                ApiError::bad_request(format!("{error}; JSON parse error was: {json_error}"))
+    let format = infer_field_state_import_format(artifact_ref);
+    let artifact: FieldStateJsonArtifact = match format.as_str() {
+        "field_state_json" | "ovf" => {
+            let raw = std::fs::read(&artifact_path).map_err(|error| {
+                ApiError::not_found(format!("field-state artifact not found: {error}"))
             })?;
-            if loaded.target.kind == "unknown" || loaded.target.id == "unknown" || loaded.target.id == "body" {
+            if format == "ovf" {
+                return parse_ovf_bytes(&raw, target).map_err(ApiError::bad_request);
+            }
+            match serde_json::from_slice(&raw) {
+                Ok(artifact) => artifact,
+                Err(json_error) => {
+                    return read_hysteresis_snapshot_as_field_state(&raw, target).map_err(
+                        |snapshot_error| {
+                            ApiError::bad_request(format!(
+                                "invalid field-state artifact: {json_error}; hysteresis snapshot parse error was: {snapshot_error}"
+                            ))
+                        },
+                    );
+                }
+            }
+        }
+        _ => {
+            if !artifact_path.exists() {
+                return Err(ApiError::not_found("field-state artifact not found"));
+            }
+            let mut loaded = convert_field_state_with_python(repo_root, &artifact_path)
+                .map_err(ApiError::bad_request)?;
+            if matches!(loaded.target.id.as_str(), "unknown" | "body")
+                || loaded.target.kind == "unknown"
+            {
                 loaded.target = target.clone();
             }
             loaded
-        }
-        Err(json_error) => {
-            return read_hysteresis_snapshot_as_field_state(&raw, target).map_err(|snapshot_error| {
-                ApiError::bad_request(format!(
-                    "invalid field-state artifact: {json_error}; hysteresis snapshot parse error was: {snapshot_error}"
-                ))
-            });
         }
     };
     if artifact.fullmag_kind != "field_state" || artifact.schema_version != 1 {
@@ -6346,22 +6355,6 @@ fn read_hysteresis_snapshot_as_field_state(
         grid_spacing: None,
         origin_explicit: Some(false),
     })
-}
-
-fn field_state_path_needs_python_loader(path: &std::path::Path) -> bool {
-    let name = path
-        .file_name()
-        .and_then(|value| value.to_str())
-        .unwrap_or_default()
-        .to_ascii_lowercase();
-    name.ends_with(".h5")
-        || name.ends_with(".hdf5")
-        || name.ends_with(".zarr")
-        || name.ends_with(".zarr.zip")
-        || name.ends_with(".npz")
-        || name.ends_with(".npy")
-        || name.ends_with(".ovf")
-        || name.ends_with(".omf")
 }
 
 fn read_ovf_line<'a>(raw: &'a [u8], cursor: &mut usize) -> Option<&'a [u8]> {

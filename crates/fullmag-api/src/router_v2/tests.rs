@@ -32520,6 +32520,37 @@ async fn field_state_export_inspect_and_apply_round_trips_live_magnetization() {
         .expect("field-state export should include artifact_ref")
         .to_string();
 
+    for endpoint in [
+        "/v2/sessions/current/persistence/field-states/imports/inspections",
+        "/v2/sessions/current/persistence/field-states/imports",
+    ] {
+        let rejected = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(endpoint)
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::json!({
+                            "artifact_ref": artifact_ref,
+                            "target": { "kind": "object", "id": "body" },
+                            "quantity_id": "m",
+                            "format": "ovf",
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(rejected.status(), StatusCode::BAD_REQUEST);
+        assert!(body_json(rejected).await["message"]
+            .as_str()
+            .unwrap()
+            .contains("does not match the artifact format 'h5'"));
+    }
+
     let inspect_response = app
         .clone()
         .oneshot(
