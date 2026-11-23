@@ -25,7 +25,7 @@ use crate::host_allocation::HostTaskPlacement;
 #[derive(Debug, PartialEq, Eq)]
 pub enum ComputeNodeAdmissionFailure {
     /// A sample with matching runtime, inventory-owner and boot identities aged out.
-    Stale(String),
+    SampleNotCurrent(String),
     /// The sample is missing or its identity or validity could not be confirmed.
     Unavailable(String),
 }
@@ -33,7 +33,7 @@ pub enum ComputeNodeAdmissionFailure {
 impl std::fmt::Display for ComputeNodeAdmissionFailure {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Stale(reason) | Self::Unavailable(reason) => f.write_str(reason),
+            Self::SampleNotCurrent(reason) | Self::Unavailable(reason) => f.write_str(reason),
         }
     }
 }
@@ -428,7 +428,7 @@ mod recovery_tests {
     }
 
     #[test]
-    fn stale_compute_node_sample_defers_host_admission() {
+    fn stale_compute_node_sample_defers_admission_until_a_fresh_publication() {
         let fixture = recovery_fixture_without_sample();
         let now = chrono::Utc::now();
         let mut snapshot = crate::compute_node_probe::sample_compute_node_for_owner(
@@ -452,7 +452,7 @@ mod recovery_tests {
             .compute_snapshot_admission_failure()
             .unwrap()
             .unwrap();
-        let ComputeNodeAdmissionFailure::Stale(reason) = reason else {
+        let ComputeNodeAdmissionFailure::SampleNotCurrent(reason) = reason else {
             panic!("an aged sample with matching identities must be classified as stale");
         };
         assert!(fixture.context.required_current_compute_node_snapshot()
@@ -460,6 +460,20 @@ mod recovery_tests {
         assert!(reason.contains("freshness is Stale"));
         assert!(reason.contains("collected_at="));
         assert!(reason.contains("observed_at="));
+
+        let fresh = crate::compute_node_probe::sample_compute_node_for_owner(
+            &fixture.ledger,
+            fixture.inventory_owner.descriptor(),
+            Some(&snapshot),
+        )
+        .unwrap();
+        fixture
+            .ledger
+            .publish_compute_node_snapshot_with_owner(&fixture.inventory_owner, &fresh)
+            .unwrap();
+
+        assert_eq!(fixture.context.compute_snapshot_admission_failure().unwrap(), None);
+        assert_eq!(fixture.context.required_current_compute_node_snapshot().unwrap(), fresh);
     }
 
     fn seed_ready_queued_catalog(fixture: &RecoveryFixture, ownership_epoch: Option<u64>) {
@@ -1237,7 +1251,10 @@ impl HostRuntimeAdmission {
             now.to_rfc3339()
         );
         let failure = match freshness {
-            SampleFreshness::Stale => ComputeNodeAdmissionFailure::Stale(reason),
+            SampleFreshness::Stale
+            | SampleFreshness::Unavailable(
+                fullmag_session::compute_node_snapshot::UnavailableReason::ProbeFailed,
+            ) => ComputeNodeAdmissionFailure::SampleNotCurrent(reason),
             _ => ComputeNodeAdmissionFailure::Unavailable(reason),
         };
         Ok(Err(failure))
