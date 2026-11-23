@@ -23089,7 +23089,7 @@ disk.anisU = (0, 0, 1)
 disk.Dind = 1.8e-3
 disk.alpha = 0.03
 disk.m = fm.texture.neel_skyrmion(radius=48e-9, wall_width=15e-9)
-study.stages.add_relax(stage_id="relax")
+study.stages.add_relax(stage_id="relax", dt_initial=5e-14, max_err=1e-5, dt_min=1e-16, dt_max=1e-11)
 "#).unwrap();
     let scene = crate::script::load_scene_document_state(
         &state.repo_root, workspace.path(), &source,
