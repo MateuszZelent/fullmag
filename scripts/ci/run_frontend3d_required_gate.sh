@@ -25,6 +25,7 @@ run_gate() {
     rust-quantity-api-cli-contracts)
       cargo test -p fullmag-quantities --no-fail-fast
       cargo test -p fullmag-plan --test magnetization_textures_v2_parity --test mumax3_texture_compatibility --no-fail-fast
+      cargo test -p fullmag-plan --lib texture_object_space_tests --no-fail-fast
       cargo test -p fullmag-runner quantities --no-fail-fast
       cargo test -p fullmag-runner closed_loop_identity_v2::affinity_tests --lib --no-fail-fast
       cargo test -p fullmag-api --bin fullmag-api quantities::tests --no-fail-fast
@@ -37,6 +38,7 @@ run_gate() {
       # Debug-build router tests hold very large async futures on the stack;
       # the default 2 MiB test-thread stack overflows.
       RUST_MIN_STACK=16777216 cargo test -p fullmag-api router_v2 --no-fail-fast
+      RUST_MIN_STACK=16777216 cargo test -p fullmag-api --bin fullmag-api live_command_journal::tests --no-fail-fast
       cargo test -p fullmag-cli interactive_runtime_host --no-fail-fast
       ;;
     generated-api-determinism)

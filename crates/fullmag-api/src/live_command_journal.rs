@@ -1,7 +1,8 @@
 use std::collections::{HashSet, VecDeque};
 use std::sync::atomic::Ordering;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+use anyhow::Context as _;
 use serde::{Deserialize, Serialize};
 
 use crate::error::ApiError;
@@ -13,6 +14,7 @@ use crate::types::{
 const LIVE_COMMAND_JOURNAL_SCHEMA: &str = "fullmag.live_command_journal.v1";
 const MAX_LIVE_COMMAND_RECORDS: usize = 256;
 const RESTART_FAILURE: &str = "api_restarted_before_terminal_command_ack";
+const LIVE_COMMAND_JOURNAL_WRITER_WAIT: Duration = Duration::from_secs(5);
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 struct LiveCommandJournalIdentity {
@@ -85,10 +87,69 @@ fn validate_document(document: &LiveCommandJournalDocument) -> Result<(), ApiErr
     Ok(())
 }
 
-fn persist_candidate(
+fn open_live_command_journal_store(
+    root: &std::path::Path,
+) -> anyhow::Result<fullmag_session::SessionStore> {
+    let cas_shard_root = root.join("objects").join("sha256");
+    match std::fs::symlink_metadata(cas_shard_root) {
+        Ok(_) => fullmag_session::SessionStore::open_existing(root),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            // Preserve lazy initialization for an empty store, while avoiding
+            // `SessionStore::open`'s unrelated writer lease on initialized stores.
+            fullmag_session::SessionStore::open(root)
+        }
+        Err(error) => Err(error.into()),
+    }
+}
+
+fn live_command_journal_write_error(error: anyhow::Error) -> ApiError {
+    if is_store_writer_busy(&error) {
+        tracing::warn!(error = %error, "live command journal publication deferred by a busy session-store writer");
+        ApiError::with_status_and_code(
+            axum::http::StatusCode::SERVICE_UNAVAILABLE,
+            "session_store_writer_busy",
+            "Session-store writer busy; journal unchanged. Re-read command status before retrying.",
+        )
+    } else {
+        ApiError::internal(format!(
+            "live command journal publication failed: {error:#}"
+        ))
+    }
+}
+
+fn is_store_writer_busy(error: &anyhow::Error) -> bool {
+    error
+        .chain()
+        .any(|cause| cause.is::<fullmag_session::StoreWriterBusy>())
+}
+
+async fn retry_live_command_journal_writer<T>(
+    wait: Duration,
+    mut operation: impl FnMut() -> anyhow::Result<T>,
+) -> anyhow::Result<T> {
+    let deadline = Instant::now() + wait;
+    let mut attempt = 0_u64;
+    loop {
+        match operation() {
+            Ok(value) => return Ok(value),
+            // StoreWriterBusy is raised while acquiring the writer, before
+            // commit_live_command_journal creates or publishes a generation.
+            Err(error) if is_store_writer_busy(&error) && Instant::now() < deadline => {
+                let delay = Duration::from_millis(5 + attempt % 31);
+                attempt = attempt.saturating_add(1);
+                tokio::time::sleep(delay.min(deadline.saturating_duration_since(Instant::now())))
+                    .await;
+            }
+            Err(error) => return Err(error),
+        }
+    }
+}
+
+async fn persist_candidate(
     state: &AppState,
     snapshot: &SessionStateResponse,
     records: &VecDeque<TrackedCommandRecord>,
+    writer_wait: Duration,
 ) -> Result<u64, ApiError> {
     let revision = state
         .current_command_journal_revision
@@ -106,18 +167,20 @@ fn persist_candidate(
         let bytes = serde_json::to_vec_pretty(&document).map_err(|error| {
             ApiError::internal(format!("serializing live command journal: {error}"))
         })?;
-        let store = fullmag_session::SessionStore::open(store_root).map_err(|error| {
-            ApiError::internal(format!("opening live command journal store: {error}"))
-        })?;
-        store
-            .commit_live_command_journal(&document.identity.session_id, &bytes)
-            .map_err(|error| {
-                ApiError::internal(format!("publishing live command journal: {error}"))
-            })?;
+        let store_root = store_root.clone();
+        let session_id = document.identity.session_id.clone();
+        let result = retry_live_command_journal_writer(writer_wait, || {
+            let store = open_live_command_journal_store(&store_root)
+                .context("opening live command journal store")?;
+            store
+                .commit_live_command_journal(&session_id, &bytes)
+                .context("publishing live command journal")
+        })
+        .await;
+        if let Err(error) = result {
+            return Err(live_command_journal_write_error(error));
+        }
     }
-    state
-        .current_command_journal_revision
-        .store(revision, Ordering::Release);
     Ok(revision)
 }
 
@@ -129,12 +192,28 @@ pub(crate) async fn mutate<R>(
     snapshot: &SessionStateResponse,
     update: impl FnOnce(&mut VecDeque<TrackedCommandRecord>) -> Result<(R, bool), ApiError>,
 ) -> Result<R, ApiError> {
+    mutate_with_writer_wait(state, snapshot, update, LIVE_COMMAND_JOURNAL_WRITER_WAIT).await
+}
+
+async fn mutate_with_writer_wait<R>(
+    state: &AppState,
+    snapshot: &SessionStateResponse,
+    update: impl FnOnce(&mut VecDeque<TrackedCommandRecord>) -> Result<(R, bool), ApiError>,
+    writer_wait: Duration,
+) -> Result<R, ApiError> {
     let mut current = state.current_command_ledger.lock().await;
     let mut candidate = current.clone();
     let (result, changed) = update(&mut candidate)?;
     if changed {
-        persist_candidate(state, snapshot, &candidate)?;
+        let revision = persist_candidate(state, snapshot, &candidate, writer_wait).await?;
+        // The only suspension before persistence is a typed writer-busy retry,
+        // which happens before the store's publication barrier. After commit
+        // returns, publish the matching RAM state without another await so a
+        // cancelled caller cannot leave the journal and ledger out of sync.
         *current = candidate;
+        state
+            .current_command_journal_revision
+            .store(revision, Ordering::Release);
     }
     Ok(result)
 }
@@ -350,6 +429,18 @@ mod tests {
     use crate::router_v2::tests::test_app_state_with_live_session;
     use crate::types::SessionCommand;
 
+    #[test]
+    fn command_journal_store_initializes_an_existing_empty_root() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let root = directory.path().join("empty-store");
+        std::fs::create_dir(&root).expect("create empty store root");
+
+        let store = open_live_command_journal_store(&root).expect("initialize empty store");
+
+        assert!(store.root().join("objects/sha256").is_dir());
+        assert!(store.root().join("live_command_journals").is_dir());
+    }
+
     fn command(sequence: u64, command_id: &str) -> SessionCommand {
         serde_json::from_value(serde_json::json!({
             "seq": sequence,
@@ -400,6 +491,108 @@ mod tests {
         let ledger = state.current_command_ledger.lock().await;
         assert_eq!(ledger.len(), 1);
         assert_eq!(ledger[0].error.as_deref(), Some("worker failure"));
+    }
+
+    #[tokio::test]
+    async fn writer_contention_returns_retryable_unavailable_without_accepting_command() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let store_root = directory.path().join("store");
+        let mut state = test_app_state_with_live_session().await;
+        Arc::get_mut(&mut state)
+            .expect("fixture should be uniquely owned")
+            .current_command_journal_store_root = Some(store_root.clone());
+        let snapshot = state
+            .current_live_state
+            .read()
+            .await
+            .as_ref()
+            .expect("fixture should have a live snapshot")
+            .clone();
+
+        let initial_document = LiveCommandJournalDocument {
+            schema_version: LIVE_COMMAND_JOURNAL_SCHEMA.to_string(),
+            identity: identity(&snapshot),
+            revision: 1,
+            records: Vec::new(),
+        };
+        let initial_bytes = serde_json::to_vec(&initial_document).expect("initial journal bytes");
+        let initialized_store = fullmag_session::SessionStore::open(&store_root)
+            .expect("initialize command journal store");
+        initialized_store
+            .commit_live_command_journal(&snapshot.session.session_id, &initial_bytes)
+            .expect("publish baseline command journal");
+        state
+            .current_command_journal_revision
+            .store(1, Ordering::Release);
+        let journal_root = store_root
+            .join("live_command_journals")
+            .join(&snapshot.session.session_id);
+        let current_path = journal_root.join("CURRENT");
+        let before_current = std::fs::read_to_string(&current_path).expect("baseline CURRENT");
+        let before_payload = fullmag_session::SessionStore::open_existing(&store_root)
+            .expect("open journal reader")
+            .read_live_command_journal(&snapshot.session.session_id)
+            .expect("read baseline journal")
+            .expect("baseline journal exists");
+
+        let (writer_ready_tx, writer_ready_rx) = std::sync::mpsc::sync_channel(0);
+        let (release_writer_tx, release_writer_rx) = std::sync::mpsc::sync_channel(0);
+        let holder_root = store_root.clone();
+        let writer_thread = std::thread::spawn(move || {
+            let holder = fullmag_session::SessionStore::open_existing(&holder_root)
+                .expect("open writer holder on its own thread");
+            let _writer = holder
+                .write_transaction()
+                .expect("hold the shared session-store writer");
+            writer_ready_tx.send(()).expect("signal held writer");
+            release_writer_rx.recv().expect("wait for writer release");
+        });
+        writer_ready_rx.recv().expect("writer is held");
+
+        let result = mutate_with_writer_wait(
+            &state,
+            &snapshot,
+            |records| {
+                records.push_back(TrackedCommandRecord {
+                    command: command(1, "busy-command"),
+                    request_id: Some("busy-request".into()),
+                    status: CommandLifecycleState::Accepted,
+                    dispatched_at_unix_ms: None,
+                    completed_at_unix_ms: None,
+                    completion_status: None,
+                    error: None,
+                });
+                Ok(((), true))
+            },
+            Duration::from_millis(60),
+        )
+        .await;
+        release_writer_tx.send(()).expect("release held writer");
+        writer_thread.join().expect("writer thread should finish");
+        let error = result.expect_err("a held writer must reject publication after retry");
+
+        assert_eq!(error.status, axum::http::StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(error.code.as_deref(), Some("session_store_writer_busy"));
+        assert!(state.current_command_ledger.lock().await.is_empty());
+        assert_eq!(
+            state
+                .current_command_journal_revision
+                .load(Ordering::Acquire),
+            1
+        );
+        let probe = fullmag_session::SessionStore::open_existing(&store_root)
+            .expect("inspect command journal store");
+        assert_eq!(
+            std::fs::read_to_string(&current_path).expect("current after busy attempt"),
+            before_current
+        );
+        assert_eq!(
+            probe
+                .read_live_command_journal(&snapshot.session.session_id)
+                .expect("read journal")
+                .expect("baseline journal remains"),
+            before_payload
+        );
     }
 
     #[tokio::test]

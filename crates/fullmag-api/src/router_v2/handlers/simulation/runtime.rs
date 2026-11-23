@@ -2335,8 +2335,11 @@ fn runtime_command_disabled_reason(
                 if has_active_compute_command(ledger) {
                     return Some("A runtime command is already active.".into());
                 }
-                if !snapshot.run.as_ref().is_some_and(|run|
-                    matches!(run.status.as_str(), "completed" | "failed" | "cancelled")) {
+                if !snapshot
+                    .run
+                    .as_ref()
+                    .is_some_and(|run| super::commands::is_terminal_run_status(&run.status))
+                {
                     if kind == "compute_fields" {
                         return crate::live_prepared_fdm_fields::disabled_reason(snapshot)
                             .err().map(str::to_owned);

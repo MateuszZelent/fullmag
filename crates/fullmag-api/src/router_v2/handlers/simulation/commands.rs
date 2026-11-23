@@ -446,6 +446,15 @@ async fn validate_optional_request_context(
     Ok(())
 }
 
+pub(super) fn is_terminal_run_status(status: &str) -> bool {
+    matches!(
+        crate::session::accepted_runtime_lifecycle_state(status),
+        crate::types::RuntimeLifecycleState::Completed
+            | crate::types::RuntimeLifecycleState::Failed
+            | crate::types::RuntimeLifecycleState::Cancelled
+    )
+}
+
 async fn enforce_session_command_admission(
     state: &Arc<AppState>,
     accepted_observations: bool,
@@ -470,9 +479,10 @@ async fn enforce_session_command_admission(
             .into_iter()
             .find(|status| matches!(*status, "completed" | "failed" | "cancelled" | "closed"))
             .map(str::to_string);
-        let run_terminal = snapshot.run.as_ref().is_some_and(|run| {
-            matches!(run.status.as_str(), "completed" | "failed" | "cancelled")
-        });
+        let run_terminal = snapshot
+            .run
+            .as_ref()
+            .is_some_and(|run| is_terminal_run_status(&run.status));
         if accepted_observations && !run_terminal && allow_prepared_fields {
             crate::live_prepared_fdm_fields::disabled_reason(snapshot).map_err(|reason| {
                 ApiError::conflict_with_code("prepared_field_evaluation_unavailable", reason)
@@ -632,9 +642,10 @@ async fn publish_materialized_fields_under_transition(
     crate::ensure_current_live_request_context(&snapshot, context,
         state.current_live_session_epoch.load(std::sync::atomic::Ordering::Acquire))?;
     let prepared = command.kind == "compute_fields"
-        && !snapshot.run.as_ref().is_some_and(|run| {
-            matches!(run.status.as_str(), "completed" | "failed" | "cancelled")
-        });
+        && !snapshot
+            .run
+            .as_ref()
+            .is_some_and(|run| is_terminal_run_status(&run.status));
     if prepared {
         crate::live_prepared_fdm_fields::disabled_reason(&snapshot).map_err(ApiError::conflict)?;
     } else if command.kind == "compute_fields" {
@@ -4071,6 +4082,22 @@ mod tests {
             vec!["m", "H_demag", "spin_current_tensor"],
             "all runner-resolved spatial fields may be materialized; scalar resources must stay out"
         );
+    }
+
+    #[test]
+    fn compute_fields_classifies_all_terminal_run_statuses_consistently() {
+        for status in ["completed", "succeeded", "failed", "cancelled", "stopped"] {
+            assert!(
+                is_terminal_run_status(status),
+                "{status} must use accepted field materialization"
+            );
+        }
+        for status in ["waiting_for_compute", "waiting_for_solve", "running", "paused"] {
+            assert!(
+                !is_terminal_run_status(status),
+                "{status} must remain on the prepared-field path"
+            );
+        }
     }
 
     #[test]

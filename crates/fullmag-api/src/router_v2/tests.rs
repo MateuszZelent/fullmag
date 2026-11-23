@@ -4180,12 +4180,18 @@ async fn status_exposes_planner_owned_active_lane_capability_snapshot() {
         active_lane["operations"]["region_membership"]["state"],
         "semantic_only"
     );
+    for operation in [
+        "initial_magnetization.preset_v2",
+        "initial_magnetization.sampled_field",
+    ] {
+        assert_eq!(active_lane["operations"][operation]["state"], "supported");
+    }
     assert_eq!(
         active_lane["operations"]
             .as_object()
             .expect("operation capability map")
             .len(),
-        34
+        crate::router_v2::handlers::sessions::status::ACTIVE_LANE_OPERATION_IDS.len()
     );
     assert!(active_lane["operations"]["study.frequency_response"]["reason"].is_string());
     assert!(active_lane["operations"]["study.frequency_response"]["requires"].is_array());
@@ -57033,11 +57039,13 @@ async fn readiness_routes_missing_object_assignments_to_the_object() {
             "algorithm": "projected_gradient_bb", "stage_id": "relax-1"
         }));
         scene.study.requested_backend = "fem".into();
+        scene.study.demag_enabled = false;
+        scene.study.exchange_enabled = false;
         scene.objects[0].magnetization_ref = None;
         scene.objects[0].physics_stack.clear();
         snapshot.scene_document = Some(scene);
     }
-    let response = build_v2_router().with_state(state).oneshot(
+    let response = build_v2_router().with_state(state.clone()).oneshot(
         Request::builder().uri("/v2/sessions/current/model/readiness").body(Body::empty()).unwrap()
     ).await.unwrap();
     assert_eq!(response.status(), StatusCode::OK);
@@ -57047,6 +57055,26 @@ async fn readiness_routes_missing_object_assignments_to_the_object() {
         assert_eq!(check["state"], "blocked");
         assert_eq!(check["target_resource"], "model/objects/body");
     }
+
+    state
+        .current_live_state
+        .write()
+        .await
+        .as_mut()
+        .unwrap()
+        .scene_document
+        .as_mut()
+        .unwrap()
+        .study
+        .demag_enabled = true;
+    let response = build_v2_router().with_state(state).oneshot(
+        Request::builder().uri("/v2/sessions/current/model/readiness").body(Body::empty()).unwrap()
+    ).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = body_json(response).await;
+    let interactions = body["checks"].as_array().unwrap().iter()
+        .find(|check| check["id"] == "interactions").unwrap();
+    assert_eq!(interactions["state"], "complete");
 }
 
 
