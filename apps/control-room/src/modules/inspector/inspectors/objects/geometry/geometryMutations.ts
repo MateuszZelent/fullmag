@@ -37,6 +37,7 @@ import {
 } from "./geometryShared";
 
 export interface ApplyGeometryDraftParams {
+  baseline?: ObjectGeometrySpecDraft | null;
   draft: ObjectGeometrySpecDraft;
   kernel: KernelApi;
   selection: InspectorPanelProps["selection"];
@@ -59,6 +60,7 @@ export interface ApplyGeometryDraftParams {
 }
 
 export async function applyGeometryDraftMutation({
+  baseline,
   draft,
   kernel,
   selection,
@@ -77,7 +79,21 @@ export async function applyGeometryDraftMutation({
   onRevisionConflict,
 }: ApplyGeometryDraftParams): Promise<boolean> {
   const geometry = serializeGeometryPayload(draft);
-  const transform = serializeTransformPayload(draft);
+  const committedObject =
+    draft.mode === "committed"
+      ? sceneData?.objects?.find((item) => item.id === draft.objectId) ?? null
+      : null;
+  const existingTransform =
+    committedObject?.transform &&
+    typeof committedObject.transform === "object" &&
+    !Array.isArray(committedObject.transform)
+      ? (committedObject.transform as Record<string, unknown>)
+      : null;
+  const transform = serializeTransformPayload(
+    draft,
+    existingTransform,
+    baseline ?? null,
+  );
   const capturedScopeKey = resolveActiveScopeKey();
   const capturedCommandScopeKey = kernel.commands?.getSessionScopeKey?.();
   const historyGeneration = kernel.authoringHistory?.getGeneration?.();

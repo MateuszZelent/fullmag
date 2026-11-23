@@ -2104,41 +2104,78 @@ pub(crate) fn study_universe_for_problem_patch(
     Ok(Some(value))
 }
 
+const MAX_LOWERING_DEPTH: usize = 16;
+const MAX_LOWERING_OPERANDS: usize = 256;
+
 pub(crate) fn scene_object_geometry_entry(
     object: &SceneObject,
     geometry_name: &str,
 ) -> Result<GeometryEntryIR, ApiError> {
-    if !is_identity_quat(object.transform.rotation_quat) {
+    let base = scene_geometry_entry(&object.geometry, geometry_name, &object.id, 0)?;
+    wrap_geometry_with_transform(base, &object.transform, geometry_name, &object.id)
+}
+
+fn wrap_geometry_with_transform(
+    child: GeometryEntryIR,
+    transform: &fullmag_authoring::Transform3D,
+    geometry_name: &str,
+    object_id: &str,
+) -> Result<GeometryEntryIR, ApiError> {
+    if !transform.translation.iter().all(|v| v.is_finite())
+        || !transform.pivot.iter().all(|v| v.is_finite())
+        || !transform.rotation_quat.iter().all(|v| v.is_finite())
+        || transform.scale.iter().any(|v| !v.is_finite() || *v <= 0.0)
+    {
         return Err(ApiError::bad_request(format!(
-            "mesh build cannot lower rotated object '{}' into ProblemIR yet",
-            object.id
+            "object '{}' has invalid non-finite or non-positive transform parameters",
+            object_id
         )));
     }
-    if !is_unit_scale(object.transform.scale) {
+    let q = transform.rotation_quat;
+    let q_norm = (q[0] * q[0] + q[1] * q[1] + q[2] * q[2] + q[3] * q[3]).sqrt();
+    if !q_norm.is_finite() || q_norm <= 1e-12 {
         return Err(ApiError::bad_request(format!(
-            "mesh build cannot lower scaled object '{}' into ProblemIR yet",
-            object.id
+            "object '{}' transform rotation_quat must have non-zero norm",
+            object_id
         )));
     }
-
-    let base = scene_geometry_entry(&object.geometry, geometry_name, &object.id)?;
-
-    if is_zero_vec3(object.transform.translation) {
-        Ok(base)
-    } else {
-        Ok(GeometryEntryIR::Translate {
-            base: Box::new(base),
-            by: object.transform.translation,
-            name: geometry_name.to_string(),
-        })
+    let norm_quat = [q[0] / q_norm, q[1] / q_norm, q[2] / q_norm, q[3] / q_norm];
+    let has_rot = !is_identity_quat(norm_quat);
+    let has_scale = !is_unit_scale(transform.scale);
+    let has_pivot = !is_zero_vec3(transform.pivot);
+    let has_trans = !is_zero_vec3(transform.translation);
+    if !has_rot && !has_scale && !has_pivot {
+        if has_trans {
+            return Ok(GeometryEntryIR::Translate {
+                base: Box::new(child),
+                by: transform.translation,
+                name: geometry_name.to_string(),
+            });
+        }
+        return Ok(child);
     }
+    Ok(GeometryEntryIR::Transform {
+        name: geometry_name.to_string(),
+        child: Box::new(child),
+        translation: transform.translation,
+        rotation_quat: norm_quat,
+        scale: transform.scale,
+        pivot: transform.pivot,
+    })
 }
 
 fn scene_geometry_entry(
     geometry: &SceneGeometry,
     geometry_name: &str,
     object_id: &str,
+    depth: usize,
 ) -> Result<GeometryEntryIR, ApiError> {
+    if depth > MAX_LOWERING_DEPTH {
+        return Err(ApiError::bad_request(format!(
+            "geometry tree for object '{}' exceeds maximum nesting depth ({MAX_LOWERING_DEPTH})",
+            object_id
+        )));
+    }
     let params = &geometry.geometry_params;
     match geometry.geometry_kind.as_str() {
         "ImportedGeometry" => {
@@ -2170,6 +2207,66 @@ fn scene_geometry_entry(
             radius: number_param(params, "radius", object_id)?,
             axis: cylinder_axis_param(params, object_id)?,
         }),
+        "Cone" => Ok(GeometryEntryIR::Cone {
+            name: geometry_name.to_string(),
+            radius_bottom: number_param(params, "radius_bottom", object_id)?,
+            radius_top: number_param(params, "radius_top", object_id)?,
+            height: match optional_number_param(params, "height") {
+                Some(h) => h,
+                None => number_param(params, "length", object_id)?,
+            },
+            axis: cylinder_axis_param(params, object_id)?,
+        }),
+        "Torus" => Ok(GeometryEntryIR::Torus {
+            name: geometry_name.to_string(),
+            major_radius: number_param(params, "major_radius", object_id)?,
+            minor_radius: number_param(params, "minor_radius", object_id)?,
+            axis: cylinder_axis_param(params, object_id)?,
+        }),
+        "PolygonPrism" => {
+            let raw_vertices = params
+                .get("vertices_xy")
+                .and_then(|value| value.as_array())
+                .ok_or_else(|| {
+                    ApiError::bad_request(format!(
+                        "PolygonPrism object '{}' is missing 'vertices_xy' array",
+                        object_id
+                    ))
+                })?;
+            let mut vertices_xy = Vec::with_capacity(raw_vertices.len());
+            for item in raw_vertices {
+                let pair = item.as_array().ok_or_else(|| {
+                    ApiError::bad_request(format!(
+                        "PolygonPrism object '{}' vertices_xy entries must be [x, y] pairs",
+                        object_id
+                    ))
+                })?;
+                if pair.len() != 2 {
+                    return Err(ApiError::bad_request(format!(
+                        "PolygonPrism object '{}' vertices_xy entries must have 2 coordinates",
+                        object_id
+                    )));
+                }
+                let x = finite_json_number(&pair[0]).ok_or_else(|| {
+                    ApiError::bad_request(format!(
+                        "PolygonPrism object '{}' vertices_xy must contain finite numbers",
+                        object_id
+                    ))
+                })?;
+                let y = finite_json_number(&pair[1]).ok_or_else(|| {
+                    ApiError::bad_request(format!(
+                        "PolygonPrism object '{}' vertices_xy must contain finite numbers",
+                        object_id
+                    ))
+                })?;
+                vertices_xy.push([x, y]);
+            }
+            Ok(GeometryEntryIR::PolygonPrism {
+                name: geometry_name.to_string(),
+                vertices_xy,
+                thickness: number_param(params, "thickness", object_id)?,
+            })
+        }
         "SinWaveguide" => Ok(GeometryEntryIR::SinWaveguide {
             amplitude: number_param(params, "amplitude", object_id)?,
             height: number_param(params, "height", object_id)?,
@@ -2214,22 +2311,122 @@ fn scene_geometry_entry(
                 ],
             },
         }),
-        "Difference" => {
-            let base = nested_scene_geometry_param(params, "base", object_id)?;
-            let tool = nested_scene_geometry_param(params, "tool", object_id)?;
-            Ok(GeometryEntryIR::Difference {
+        "Translate" => {
+            let offset = vec3_param(params, "offset")
+                .or_else(|| vec3_param(params, "by"))
+                .ok_or_else(|| {
+                    ApiError::bad_request(format!(
+                        "Translate object '{}' is missing finite 3-vector 'offset'/'by'",
+                        object_id
+                    ))
+                })?;
+            let child_geom = nested_scene_geometry_param_any(params, &["child", "base"], object_id)?;
+            let child = scene_geometry_entry(
+                &child_geom,
+                &format!("{geometry_name}_child"),
+                object_id,
+                depth + 1,
+            )?;
+            Ok(GeometryEntryIR::Translate {
                 name: geometry_name.to_string(),
-                base: Box::new(scene_geometry_entry(
-                    &base,
-                    &format!("{geometry_name}_base"),
-                    object_id,
-                )?),
-                tool: Box::new(scene_geometry_entry(
-                    &tool,
-                    &format!("{geometry_name}_tool"),
-                    object_id,
-                )?),
+                base: Box::new(child),
+                by: offset,
             })
+        }
+        "Transform" => {
+            let patch: fullmag_authoring::Transform3DPatch = if let Some(raw) = params.get("transform") {
+                serde_json::from_value(raw.clone()).map_err(|error| {
+                    ApiError::bad_request(format!(
+                        "Transform object '{}' has invalid 'transform': {error}",
+                        object_id
+                    ))
+                })?
+            } else {
+                serde_json::from_value(params.clone()).map_err(|error| {
+                    ApiError::bad_request(format!(
+                        "Transform object '{}' has invalid transform parameters: {error}",
+                        object_id
+                    ))
+                })?
+            };
+            let mut transform = fullmag_authoring::Transform3D::default();
+            transform.apply_patch(patch).map_err(|error| {
+                ApiError::bad_request(format!(
+                    "Transform object '{}' has invalid transform: {error}",
+                    object_id
+                ))
+            })?;
+            let child_geom = nested_scene_geometry_param_any(params, &["child", "base"], object_id)?;
+            let child = scene_geometry_entry(
+                &child_geom,
+                &format!("{geometry_name}_child"),
+                object_id,
+                depth + 1,
+            )?;
+            wrap_geometry_with_transform(child, &transform, geometry_name, object_id)
+        }
+        "SlicePlane" => {
+            let origin = vec3_param(params, "plane_origin_m")
+                .or_else(|| vec3_param(params, "plane_origin"))
+                .ok_or_else(|| {
+                    ApiError::bad_request(format!(
+                        "SlicePlane object '{}' is missing finite 'plane_origin_m'",
+                        object_id
+                    ))
+                })?;
+            let raw_normal = vec3_param(params, "plane_normal").ok_or_else(|| {
+                ApiError::bad_request(format!(
+                    "SlicePlane object '{}' is missing finite 'plane_normal'",
+                    object_id
+                ))
+            })?;
+            let normal_norm = (raw_normal[0] * raw_normal[0]
+                + raw_normal[1] * raw_normal[1]
+                + raw_normal[2] * raw_normal[2])
+                .sqrt();
+            if !normal_norm.is_finite() || normal_norm <= 1e-12 {
+                return Err(ApiError::bad_request(format!(
+                    "SlicePlane object '{}' 'plane_normal' must have non-zero norm (> 1e-12)",
+                    object_id
+                )));
+            }
+            let keep_side = params
+                .get("keep_side")
+                .and_then(|value| value.as_str())
+                .unwrap_or("positive");
+            if !matches!(keep_side, "positive" | "negative") {
+                return Err(ApiError::bad_request(format!(
+                    "SlicePlane object '{}' 'keep_side' must be 'positive' or 'negative'",
+                    object_id
+                )));
+            }
+            let child_geom = nested_scene_geometry_param_any(params, &["child", "base"], object_id)?;
+            let child = scene_geometry_entry(
+                &child_geom,
+                &format!("{geometry_name}_child"),
+                object_id,
+                depth + 1,
+            )?;
+            Ok(GeometryEntryIR::SlicePlane {
+                name: geometry_name.to_string(),
+                child: Box::new(child),
+                plane_origin: origin,
+                plane_normal: [
+                    raw_normal[0] / normal_norm,
+                    raw_normal[1] / normal_norm,
+                    raw_normal[2] / normal_norm,
+                ],
+                keep_side: keep_side.to_string(),
+            })
+        }
+        "Union" | "Difference" | "Intersection" | "Xor" | "Csg" => {
+            lower_boolean_geometry_entry(
+                geometry.geometry_kind.as_str(),
+                params,
+                geometry_name,
+                object_id,
+                depth,
+            )
         }
         "MicrostripAntenna" | "microstrip" | "CPWAntenna" | "cpw" => {
             Err(ApiError::bad_request(format!(
@@ -2244,23 +2441,164 @@ fn scene_geometry_entry(
     }
 }
 
-fn nested_scene_geometry_param(
+fn lower_boolean_geometry_entry(
+    kind: &str,
     params: &serde_json::Value,
-    key: &str,
+    geometry_name: &str,
+    object_id: &str,
+    depth: usize,
+) -> Result<GeometryEntryIR, ApiError> {
+    let resolved_op = if kind == "Csg" {
+        match params
+            .get("op")
+            .and_then(|value| value.as_str())
+            .unwrap_or("")
+        {
+            "union" => "Union",
+            "subtract" | "difference" => "Difference",
+            "intersect" | "intersection" => "Intersection",
+            "xor" => "Xor",
+            other => {
+                return Err(ApiError::bad_request(format!(
+                    "Csg object '{}' uses unsupported operation '{}'",
+                    object_id, other
+                )));
+            }
+        }
+    } else {
+        kind
+    };
+
+    let mut enabled_specs: Vec<(usize, SceneGeometry, Option<fullmag_authoring::Transform3D>)> =
+        Vec::new();
+    if let Some(raw_operands) = params
+        .get("operands")
+        .or_else(|| params.get("children"))
+        .and_then(|value| value.as_array())
+    {
+        if raw_operands.len() > MAX_LOWERING_OPERANDS {
+            return Err(ApiError::bad_request(format!(
+                "{resolved_op} object '{}' exceeds maximum operand count ({MAX_LOWERING_OPERANDS})",
+                object_id
+            )));
+        }
+        for (index, raw_operand) in raw_operands.iter().enumerate() {
+            if let Ok(operand) =
+                serde_json::from_value::<fullmag_authoring::SceneBooleanOperand>(raw_operand.clone())
+            {
+                if !operand.enabled {
+                    continue;
+                }
+                enabled_specs.push((index, operand.geometry, operand.transform));
+            } else {
+                let child_geom: SceneGeometry =
+                    serde_json::from_value(raw_operand.clone()).map_err(|error| {
+                        ApiError::bad_request(format!(
+                            "{resolved_op} object '{}' has invalid operand[{index}]: {error}",
+                            object_id
+                        ))
+                    })?;
+                enabled_specs.push((index, child_geom, None));
+            }
+        }
+    } else {
+        let (left_keys, right_keys): (&[&str], &[&str]) = match resolved_op {
+            "Difference" => (&["base"], &["tool"]),
+            "Xor" => (&["left", "a", "base"], &["right", "b", "tool"]),
+            _ => (&["a", "base", "left"], &["b", "tool", "right"]),
+        };
+        let left = nested_scene_geometry_param_any(params, left_keys, object_id)?;
+        let right = nested_scene_geometry_param_any(params, right_keys, object_id)?;
+        enabled_specs.push((0, left, None));
+        enabled_specs.push((1, right, None));
+    }
+
+    if enabled_specs.is_empty() {
+        return Err(ApiError::bad_request(format!(
+            "{resolved_op} object '{}' has no enabled operands",
+            object_id
+        )));
+    }
+
+    if enabled_specs.len() == 1 {
+        let (_, child_geom, child_transform) = enabled_specs.into_iter().next().unwrap();
+        let child = scene_geometry_entry(&child_geom, geometry_name, object_id, depth + 1)?;
+        return match child_transform.as_ref() {
+            Some(transform) => {
+                wrap_geometry_with_transform(child, transform, geometry_name, object_id)
+            }
+            None => Ok(child),
+        };
+    }
+
+    let mut lowered_operands: Vec<GeometryEntryIR> = Vec::with_capacity(enabled_specs.len());
+    for (index, child_geom, child_transform) in enabled_specs {
+        let op_name = format!("{geometry_name}_op{index}");
+        let child = scene_geometry_entry(&child_geom, &op_name, object_id, depth + 1)?;
+        let placed = match child_transform.as_ref() {
+            Some(transform) => wrap_geometry_with_transform(child, transform, &op_name, object_id)?,
+            None => child,
+        };
+        lowered_operands.push(placed);
+    }
+
+    let mut iter = lowered_operands.into_iter();
+    let mut acc = iter.next().unwrap();
+    let remaining: Vec<GeometryEntryIR> = iter.collect();
+    let last_index = remaining.len() - 1;
+    for (step, rhs) in remaining.into_iter().enumerate() {
+        let node_name = if step == last_index {
+            geometry_name.to_string()
+        } else {
+            format!("{geometry_name}_step{step}")
+        };
+        acc = match resolved_op {
+            "Union" => GeometryEntryIR::Union {
+                name: node_name,
+                a: Box::new(acc),
+                b: Box::new(rhs),
+            },
+            "Difference" => GeometryEntryIR::Difference {
+                name: node_name,
+                base: Box::new(acc),
+                tool: Box::new(rhs),
+            },
+            "Intersection" => GeometryEntryIR::Intersection {
+                name: node_name,
+                a: Box::new(acc),
+                b: Box::new(rhs),
+            },
+            "Xor" => GeometryEntryIR::Xor {
+                name: node_name,
+                left: Box::new(acc),
+                right: Box::new(rhs),
+            },
+            _ => unreachable!(),
+        };
+    }
+    Ok(acc)
+}
+
+fn nested_scene_geometry_param_any(
+    params: &serde_json::Value,
+    keys: &[&str],
     object_id: &str,
 ) -> Result<SceneGeometry, ApiError> {
-    let value = params.get(key).ok_or_else(|| {
-        ApiError::bad_request(format!(
-            "Difference object '{}' is missing '{}' geometry",
-            object_id, key
-        ))
-    })?;
-    serde_json::from_value(value.clone()).map_err(|error| {
-        ApiError::bad_request(format!(
-            "Difference object '{}' has invalid '{}' geometry: {error}",
-            object_id, key
-        ))
-    })
+    for key in keys {
+        if let Some(value) = params.get(*key) {
+            return serde_json::from_value(value.clone()).map_err(|error| {
+                ApiError::bad_request(format!(
+                    "CSG object '{}' has invalid '{}' geometry: {error}",
+                    object_id, key
+                ))
+            });
+        }
+    }
+    Err(ApiError::bad_request(format!(
+        "CSG object '{}' is missing '{}' geometry",
+        object_id,
+        keys.join("'/'")
+    )))
 }
 
 fn initial_magnetization_for_object(

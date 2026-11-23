@@ -21177,7 +21177,7 @@ async fn authoring_geometry_realization_reports_blocked_csg() {
     let mut scene = sample_scene_document();
     scene.objects[0].geometry.geometry_kind = "Csg".to_string();
     scene.objects[0].geometry.geometry_params = serde_json::json!({
-        "op": "union",
+        "op": "fillet",
         "children": []
     });
     if let Some(snapshot) = state.current_live_state.write().await.as_mut() {

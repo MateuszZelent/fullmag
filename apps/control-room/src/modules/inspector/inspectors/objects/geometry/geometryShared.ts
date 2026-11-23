@@ -173,6 +173,7 @@ export function normalizePrimitiveKind(raw: string | null | undefined): Canonica
     case "archwaveguide":
       return "ArchWaveguide";
     case "polygonextrusion":
+    case "polygonprism":
     case "extrudedpolygon":
     case "polygon":
       return "PolygonExtrusion";
@@ -190,7 +191,17 @@ export function resolveDefaultDraftBaseName(
   primitiveKind: CanonicalPrimitiveKind,
 ): string {
   const slug = (selection.nodeId?.split(":").at(-1) ?? "").toLowerCase();
-  if (slug === "box" || slug === "cylinder" || slug === "sphere" || slug === "thin-film") {
+  if (
+    slug === "box" ||
+    slug === "cylinder" ||
+    slug === "sphere" ||
+    slug === "thin-film" ||
+    slug === "ellipsoid" ||
+    slug === "cone" ||
+    slug === "torus" ||
+    slug === "polygon-prism" ||
+    slug === "polygon_prism"
+  ) {
     return primitiveDraftBaseName(selection.nodeId);
   }
   const trimmedLabel = selection.label?.trim();

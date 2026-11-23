@@ -20,6 +20,7 @@ import {
   parseImportedMeshUnitScale,
   parseSymmetryAxis,
   resolveDefaultDraftBaseName,
+  vec3ApproxEqual,
   type ObjectGeometrySpecDraft,
   type PolygonVertexRow,
 } from "./geometryShared";
@@ -86,18 +87,20 @@ export function serializeGeometryPayload(draft: ObjectGeometrySpecDraft): JsonOb
         },
       };
       break;
-    case "Cone":
+    case "Cone": {
+      const { bottom_radius: _legacyBottom, top_radius: _legacyTop, ...coneBaseParams } = baseParams;
       primitiveDescriptor = {
         geometry_kind: "Cone",
         geometry_params: {
-          ...baseParams,
-          bottom_radius: draft.bottomRadius,
-          top_radius: draft.topRadius,
+          ...coneBaseParams,
+          radius_bottom: draft.bottomRadius,
+          radius_top: draft.topRadius,
           height: draft.height,
-          axis: draft.symmetryAxis,
+          axis: axisVectorFromSymmetryAxis(draft.symmetryAxis),
         },
       };
       break;
+    }
     case "Torus":
       primitiveDescriptor = {
         geometry_kind: "Torus",
@@ -105,7 +108,7 @@ export function serializeGeometryPayload(draft: ObjectGeometrySpecDraft): JsonOb
           ...baseParams,
           major_radius: draft.majorRadius,
           minor_radius: draft.minorRadius,
-          axis: draft.symmetryAxis,
+          axis: axisVectorFromSymmetryAxis(draft.symmetryAxis),
         },
       };
       break;
@@ -134,17 +137,23 @@ export function serializeGeometryPayload(draft: ObjectGeometrySpecDraft): JsonOb
       };
       break;
     }
-    case "PolygonExtrusion":
+    case "PolygonExtrusion": {
+      const {
+        vertices: _legacyVerts,
+        height: _legacyHeight,
+        axis: _legacyAxis,
+        ...prismBaseParams
+      } = baseParams;
       primitiveDescriptor = {
-        geometry_kind: "PolygonExtrusion",
+        geometry_kind: "PolygonPrism",
         geometry_params: {
-          ...baseParams,
-          height: draft.height,
-          axis: draft.symmetryAxis,
-          vertices: draft.polygonVertices.map((v) => [v.x_m, v.y_m]),
+          ...prismBaseParams,
+          vertices_xy: draft.polygonVertices.map((v) => [v.x_m, v.y_m]),
+          thickness: draft.height,
         },
       };
       break;
+    }
     case "ImportedMesh":
       primitiveDescriptor = {
         geometry_kind: "ImportedMesh",
@@ -180,7 +189,36 @@ export function serializeGeometryPayload(draft: ObjectGeometrySpecDraft): JsonOb
   };
 }
 
-export function serializeTransformPayload(draft: ObjectGeometrySpecDraft): JsonObject {
+/**
+ * Merge a partial Transform3D patch onto an existing committed transform without
+ * zeroing omitted components (`translation`, `rotation_quat`, `scale`, `pivot`,
+ * `euler_xyz_deg`, or backend extension keys).
+ */
+export function mergeTransformPatch(
+  existingTransform: Record<string, unknown> | null | undefined,
+  patch: Record<string, unknown>,
+): JsonObject {
+  const base =
+    existingTransform && typeof existingTransform === "object" && !Array.isArray(existingTransform)
+      ? existingTransform
+      : {};
+  const merged: Record<string, unknown> = { ...base };
+  for (const [key, value] of Object.entries(patch)) {
+    if (value !== undefined) {
+      merged[key] = value;
+    }
+  }
+  return merged as JsonObject;
+}
+
+export function serializeTransformPayload(
+  draft: ObjectGeometrySpecDraft,
+  existingTransform?: Record<string, unknown> | null,
+  baselineDraft?: Pick<
+    ObjectGeometrySpecDraft,
+    "translation" | "eulerDeg" | "scale" | "pivotMode" | "pivotCustom"
+  > | null,
+): JsonObject {
   const quat = eulerDegToQuat(draft.eulerDeg);
   const [tx, ty, tz] = draft.translation;
   const pivot: [number, number, number] =
@@ -193,13 +231,44 @@ export function serializeTransformPayload(draft: ObjectGeometrySpecDraft): JsonO
       : draft.pivotMode === "origin"
         ? [normalizeZero(-tx), normalizeZero(-ty), normalizeZero(-tz)]
         : [0, 0, 0];
-  return {
+
+  const serialized: JsonObject = {
     translation: [normalizeZero(tx), normalizeZero(ty), normalizeZero(tz)],
     rotation_quat: quat,
     scale: [draft.scale[0], draft.scale[1], draft.scale[2]],
     pivot,
     ...(draft.pivotMode !== "centroid" ? { pivot_mode: draft.pivotMode } : {}),
   };
+
+  if (!existingTransform) {
+    return serialized;
+  }
+
+  const patch: Record<string, unknown> = {};
+  if (!baselineDraft || !vec3ApproxEqual(draft.translation, baselineDraft.translation)) {
+    patch.translation = serialized.translation;
+  }
+  if (!baselineDraft || !vec3ApproxEqual(draft.eulerDeg, baselineDraft.eulerDeg, 1e-9)) {
+    patch.rotation_quat = serialized.rotation_quat;
+  }
+  if (!baselineDraft || !vec3ApproxEqual(draft.scale, baselineDraft.scale)) {
+    patch.scale = serialized.scale;
+  }
+  const pivotChanged =
+    !baselineDraft ||
+    draft.pivotMode !== baselineDraft.pivotMode ||
+    (draft.pivotMode === "custom" &&
+      !vec3ApproxEqual(draft.pivotCustom, baselineDraft.pivotCustom)) ||
+    (draft.pivotMode === "origin" &&
+      !vec3ApproxEqual(draft.translation, baselineDraft.translation));
+  if (pivotChanged) {
+    patch.pivot = serialized.pivot;
+    if (draft.pivotMode !== "centroid") {
+      patch.pivot_mode = draft.pivotMode;
+    }
+  }
+
+  return mergeTransformPatch(existingTransform, patch);
 }
 
 export function resolvePreviewOverlayDraft(
@@ -619,7 +688,11 @@ export function buildBaselineFromScene(
     }
   }
 
-  const rawVerts = Array.isArray(params.vertices) ? params.vertices : null;
+  const rawVerts = Array.isArray(params.vertices_xy)
+    ? params.vertices_xy
+    : Array.isArray(params.vertices)
+      ? params.vertices
+      : null;
   const parsedVerts: readonly PolygonVertexRow[] =
     rawVerts && rawVerts.length >= 3
       ? rawVerts.map((pair, idx) => {
@@ -669,11 +742,26 @@ export function buildBaselineFromScene(
           ? rawRadii[2] * 2
           : 10e-9,
     radius: typeof params.radius === "number" ? params.radius : 50e-9,
-    height: typeof params.height === "number" ? params.height : 10e-9,
+    height:
+      typeof params.height === "number"
+        ? params.height
+        : typeof params.thickness === "number"
+          ? params.thickness
+          : 10e-9,
     innerRadius: typeof params.inner_radius === "number" ? params.inner_radius : 20e-9,
     outerRadius: typeof params.outer_radius === "number" ? params.outer_radius : 50e-9,
-    bottomRadius: typeof params.bottom_radius === "number" ? params.bottom_radius : 50e-9,
-    topRadius: typeof params.top_radius === "number" ? params.top_radius : 25e-9,
+    bottomRadius:
+      typeof params.radius_bottom === "number"
+        ? params.radius_bottom
+        : typeof params.bottom_radius === "number"
+          ? params.bottom_radius
+          : 50e-9,
+    topRadius:
+      typeof params.radius_top === "number"
+        ? params.radius_top
+        : typeof params.top_radius === "number"
+          ? params.top_radius
+          : 25e-9,
     majorRadius: typeof params.major_radius === "number" ? params.major_radius : 80e-9,
     minorRadius: typeof params.minor_radius === "number" ? params.minor_radius : 20e-9,
     archProfile:

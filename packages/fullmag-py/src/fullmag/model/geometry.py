@@ -18,7 +18,7 @@ from fullmag._validation import (
 # Mixin for CSG operator overloads
 # ---------------------------------------------------------------------------
 class _GeometryOps:
-    """Mixin providing ``-``, ``+``, ``&`` operators for CSG boolean ops."""
+    """Mixin providing CSG operators (``|``, ``+``, ``-``, ``&``, ``^``) and fluent methods."""
 
     def __sub__(self, other: "Geometry") -> "Difference":
         return Difference(base=self, tool=other)  # type: ignore[arg-type]
@@ -26,11 +26,140 @@ class _GeometryOps:
     def __add__(self, other: "Geometry") -> "Union":
         return Union(a=self, b=other)  # type: ignore[arg-type]
 
+    def __or__(self, other: "Geometry") -> "Union":
+        return Union(a=self, b=other)  # type: ignore[arg-type]
+
     def __and__(self, other: "Geometry") -> "Intersection":
         return Intersection(a=self, b=other)  # type: ignore[arg-type]
 
+    def __xor__(self, other: "Geometry") -> "Xor":
+        return Xor(left=self, right=other)  # type: ignore[arg-type]
+
+    def union(self, other: "Geometry", *, name: str | None = None) -> "Union":
+        if name is None:
+            return Union(a=self, b=other)  # type: ignore[arg-type]
+        return Union(a=self, b=other, name=name)  # type: ignore[arg-type]
+
+    def subtract(self, other: "Geometry", *, name: str | None = None) -> "Difference":
+        if name is None:
+            return Difference(base=self, tool=other)  # type: ignore[arg-type]
+        return Difference(base=self, tool=other, name=name)  # type: ignore[arg-type]
+
+    def intersect(self, other: "Geometry", *, name: str | None = None) -> "Intersection":
+        if name is None:
+            return Intersection(a=self, b=other)  # type: ignore[arg-type]
+        return Intersection(a=self, b=other, name=name)  # type: ignore[arg-type]
+
+    def xor(self, other: "Geometry", *, name: str | None = None) -> "Xor":
+        if name is None:
+            return Xor(left=self, right=other)  # type: ignore[arg-type]
+        return Xor(left=self, right=other, name=name)  # type: ignore[arg-type]
+
     def translate(self, offset: tuple[float, float, float]) -> "Translate":
         return Translate(geometry=self, offset=offset)  # type: ignore[arg-type]
+
+    def rotate(
+        self,
+        *,
+        euler_deg: tuple[float, float, float] | None = None,
+        axis: tuple[float, float, float] | None = None,
+        angle_deg: float | None = None,
+        quat: tuple[float, float, float, float] | None = None,
+        pivot: tuple[float, float, float] = (0.0, 0.0, 0.0),
+        name: str | None = None,
+    ) -> "Transform":
+        specified = sum(
+            1
+            for provided in (
+                euler_deg is not None,
+                axis is not None or angle_deg is not None,
+                quat is not None,
+            )
+            if provided
+        )
+        if specified != 1:
+            raise ValueError(
+                "rotate() requires exactly one of euler_deg, (axis and angle_deg), or quat"
+            )
+        if euler_deg is not None:
+            rotation_quat = quaternion_from_euler_xyz_deg(euler_deg)
+        elif quat is not None:
+            rotation_quat = normalize_quaternion(quat, "quat")
+        else:
+            if axis is None or angle_deg is None:
+                raise ValueError("rotate() requires both axis and angle_deg together")
+            rotation_quat = quaternion_from_axis_angle_deg(axis, angle_deg)
+        return Transform(
+            child=self,  # type: ignore[arg-type]
+            rotation_quat=rotation_quat,
+            pivot=pivot,
+            name=name,
+        )
+
+    def scale(
+        self,
+        sx: float | tuple[float, float, float],
+        sy: float | None = None,
+        sz: float | None = None,
+        *,
+        pivot: tuple[float, float, float] = (0.0, 0.0, 0.0),
+        name: str | None = None,
+    ) -> "Transform":
+        if isinstance(sx, (tuple, list)):
+            if sy is not None or sz is not None:
+                raise ValueError("scale() accepts either a 3-tuple or scalar components")
+            factors = as_vector3(sx, "scale")  # type: ignore[arg-type]
+        elif sy is None and sz is None:
+            s = _require_finite(float(sx), "scale")
+            factors = (s, s, s)
+        elif sy is not None and sz is not None:
+            factors = (
+                _require_finite(float(sx), "sx"),
+                _require_finite(float(sy), "sy"),
+                _require_finite(float(sz), "sz"),
+            )
+        else:
+            raise ValueError("scale() requires either 1 uniform factor or 3 (sx, sy, sz) factors")
+        return Transform(
+            child=self,  # type: ignore[arg-type]
+            scale=factors,
+            pivot=pivot,
+            name=name,
+        )
+
+    def transform(
+        self,
+        *,
+        translation: tuple[float, float, float] = (0.0, 0.0, 0.0),
+        rotation_quat: tuple[float, float, float, float] = (0.0, 0.0, 0.0, 1.0),
+        scale: tuple[float, float, float] = (1.0, 1.0, 1.0),
+        pivot: tuple[float, float, float] = (0.0, 0.0, 0.0),
+        name: str | None = None,
+    ) -> "Transform":
+        return Transform(
+            child=self,  # type: ignore[arg-type]
+            translation=translation,
+            rotation_quat=rotation_quat,
+            scale=scale,
+            pivot=pivot,
+            name=name,
+        )
+
+    def slice_plane(
+        self,
+        origin: tuple[float, float, float] = (0.0, 0.0, 0.0),
+        normal: tuple[float, float, float] = (0.0, 0.0, 1.0),
+        keep: Literal["positive", "negative"] = "positive",
+        *,
+        name: str | None = None,
+    ) -> "SlicePlane":
+        return SlicePlane(
+            child=self,  # type: ignore[arg-type]
+            plane_origin=origin,
+            plane_normal=normal,
+            keep_side=keep,
+            name=name,
+        )
 
 
 def _normalize_unit_vector3(value: tuple[float, float, float], field: str) -> tuple[float, float, float]:
@@ -39,6 +168,68 @@ def _normalize_unit_vector3(value: tuple[float, float, float], field: str) -> tu
     if not math.isfinite(norm) or norm <= 0.0:
         raise ValueError(f"{field} must be a non-zero finite vector")
     return tuple(component / norm for component in vector)
+
+
+def normalize_quaternion(
+    value: Sequence[float],
+    field: str = "rotation_quat",
+) -> tuple[float, float, float, float]:
+    if isinstance(value, (str, bytes)) or not isinstance(value, Sequence) or len(value) != 4:
+        raise ValueError(f"{field} must be a 4-component (x, y, z, w) quaternion")
+    components = tuple(_require_finite(float(c), f"{field}[{i}]") for i, c in enumerate(value))
+    norm = math.sqrt(sum(c * c for c in components))
+    if not math.isfinite(norm) or norm <= 0.0:
+        raise ValueError(f"{field} must be a non-zero finite quaternion")
+    return (
+        components[0] / norm,
+        components[1] / norm,
+        components[2] / norm,
+        components[3] / norm,
+    )
+
+
+def quaternion_from_euler_xyz_deg(
+    euler_deg: Sequence[float],
+) -> tuple[float, float, float, float]:
+    """Convert extrinsic XYZ Euler angles in degrees to unit quaternion ``(x, y, z, w)``."""
+    rx_deg, ry_deg, rz_deg = as_vector3(euler_deg, "euler_deg")  # type: ignore[arg-type]
+    rx, ry, rz = math.radians(rx_deg), math.radians(ry_deg), math.radians(rz_deg)
+    cx, sx = math.cos(0.5 * rx), math.sin(0.5 * rx)
+    cy, sy = math.cos(0.5 * ry), math.sin(0.5 * ry)
+    cz, sz = math.cos(0.5 * rz), math.sin(0.5 * rz)
+    return normalize_quaternion(
+        (
+            sx * cy * cz - cx * sy * sz,
+            cx * sy * cz + sx * cy * sz,
+            cx * cy * sz - sx * sy * cz,
+            cx * cy * cz + sx * sy * sz,
+        ),
+        "euler_deg",
+    )
+
+
+def quaternion_from_axis_angle_deg(
+    axis: Sequence[float],
+    angle_deg: float,
+) -> tuple[float, float, float, float]:
+    """Convert an axis and angle in degrees to unit quaternion ``(x, y, z, w)``."""
+    ux, uy, uz = _normalize_unit_vector3(axis, "axis")  # type: ignore[arg-type]
+    half = 0.5 * math.radians(_require_finite(float(angle_deg), "angle_deg"))
+    s = math.sin(half)
+    c = math.cos(half)
+    return normalize_quaternion((ux * s, uy * s, uz * s, c), "axis_angle")
+
+
+def rotation_matrix_from_quaternion(
+    quat: Sequence[float],
+) -> tuple[tuple[float, float, float], tuple[float, float, float], tuple[float, float, float]]:
+    """Convert unit quaternion ``(x, y, z, w)`` to a 3x3 rotation matrix."""
+    x, y, z, w = normalize_quaternion(quat, "rotation_quat")
+    return (
+        (1.0 - 2.0 * (y * y + z * z), 2.0 * (x * y - z * w), 2.0 * (x * z + y * w)),
+        (2.0 * (x * y + z * w), 1.0 - 2.0 * (x * x + z * z), 2.0 * (y * z - x * w)),
+        (2.0 * (x * z - y * w), 2.0 * (y * z + x * w), 1.0 - 2.0 * (x * x + y * y)),
+    )
 
 
 def _format_translation_component(value: float) -> str:
@@ -53,10 +244,47 @@ def _derived_translate_name(base_name: str, offset: tuple[float, float, float]) 
     return f"{base_name}__translate_{components}"
 
 
+def _derived_transform_name(
+    base_name: str,
+    translation: tuple[float, float, float],
+    rotation_quat: tuple[float, float, float, float],
+    scale: tuple[float, float, float],
+    pivot: tuple[float, float, float],
+) -> str:
+    parts = [base_name, "transform"]
+    if any(c != 0.0 for c in translation):
+        parts.append("t_" + "_".join(_format_translation_component(c) for c in translation))
+    if rotation_quat != (0.0, 0.0, 0.0, 1.0):
+        parts.append("q_" + "_".join(_format_translation_component(c) for c in rotation_quat))
+    if scale != (1.0, 1.0, 1.0):
+        parts.append("s_" + "_".join(_format_translation_component(c) for c in scale))
+    if any(c != 0.0 for c in pivot):
+        parts.append("p_" + "_".join(_format_translation_component(c) for c in pivot))
+    return "__".join(parts)
+
+
+def _derived_slice_plane_name(
+    base_name: str,
+    plane_origin: tuple[float, float, float],
+    plane_normal: tuple[float, float, float],
+    keep_side: str,
+) -> str:
+    orig = "_".join(_format_translation_component(c) for c in plane_origin)
+    norm = "_".join(_format_translation_component(c) for c in plane_normal)
+    return f"{base_name}__slice_{keep_side}_o_{orig}_n_{norm}"
+
+
 def _require_finite(value: float, field: str) -> float:
     normalized = float(value)
     if not math.isfinite(normalized):
         raise ValueError(f"{field} must be finite")
+    return normalized
+
+
+def _require_non_negative(value: float, field: str) -> float:
+    normalized = _require_finite(value, field)
+    if normalized < 0.0:
+        raise ValueError(f"{field} must be non-negative, got {normalized}")
     return normalized
 
 
@@ -1821,6 +2049,141 @@ class Ellipse(_GeometryOps):
         }
 
 
+@dataclass(frozen=True, slots=True)
+class Cone(_GeometryOps):
+    """Right circular cone or frustum centered at origin along ``axis``."""
+
+    radius_bottom: float
+    radius_top: float
+    height: float
+    axis: tuple[float, float, float] = (0.0, 0.0, 1.0)
+    name: str = "cone"
+
+    def __init__(
+        self,
+        radius_bottom: float,
+        radius_top: float,
+        height: float,
+        axis: tuple[float, float, float] = (0.0, 0.0, 1.0),
+        name: str = "cone",
+    ) -> None:
+        rb = _require_non_negative(radius_bottom, "radius_bottom")
+        rt = _require_non_negative(radius_top, "radius_top")
+        if rb <= 0.0 and rt <= 0.0:
+            raise ValueError("Cone requires at least one positive radius (radius_bottom or radius_top)")
+        object.__setattr__(self, "radius_bottom", rb)
+        object.__setattr__(self, "radius_top", rt)
+        object.__setattr__(self, "height", require_positive(height, "height"))
+        object.__setattr__(self, "axis", _normalize_unit_vector3(axis, "axis"))
+        object.__setattr__(self, "name", require_non_empty(name, "name"))
+
+    @property
+    def geometry_name(self) -> str:
+        return self.name
+
+    def to_ir(self) -> dict[str, object]:
+        return {
+            "name": self.name,
+            "kind": "cone",
+            "radius_bottom": self.radius_bottom,
+            "radius_top": self.radius_top,
+            "height": self.height,
+            "axis": list(self.axis),
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class Torus(_GeometryOps):
+    """Torus centered at origin with symmetry axis ``axis``."""
+
+    major_radius: float
+    minor_radius: float
+    axis: tuple[float, float, float] = (0.0, 0.0, 1.0)
+    name: str = "torus"
+
+    def __init__(
+        self,
+        major_radius: float,
+        minor_radius: float,
+        axis: tuple[float, float, float] = (0.0, 0.0, 1.0),
+        name: str = "torus",
+    ) -> None:
+        r_maj = require_positive(major_radius, "major_radius")
+        r_min = require_positive(minor_radius, "minor_radius")
+        if r_min >= r_maj:
+            raise ValueError(
+                f"Torus requires minor_radius < major_radius (got minor_radius={r_min}, major_radius={r_maj})"
+            )
+        object.__setattr__(self, "major_radius", r_maj)
+        object.__setattr__(self, "minor_radius", r_min)
+        object.__setattr__(self, "axis", _normalize_unit_vector3(axis, "axis"))
+        object.__setattr__(self, "name", require_non_empty(name, "name"))
+
+    @property
+    def geometry_name(self) -> str:
+        return self.name
+
+    def to_ir(self) -> dict[str, object]:
+        return {
+            "name": self.name,
+            "kind": "torus",
+            "major_radius": self.major_radius,
+            "minor_radius": self.minor_radius,
+            "axis": list(self.axis),
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class PolygonPrism(_GeometryOps):
+    """2D simple polygon extruded symmetrically along Z in ``[-thickness/2, +thickness/2]``."""
+
+    vertices_xy: tuple[tuple[float, float], ...]
+    thickness: float
+    name: str = "polygon_prism"
+
+    def __init__(
+        self,
+        vertices_xy: Sequence[Sequence[float]],
+        thickness: float,
+        name: str = "polygon_prism",
+    ) -> None:
+        if isinstance(vertices_xy, (str, bytes)) or not isinstance(vertices_xy, Sequence) or len(vertices_xy) < 3:
+            raise ValueError("PolygonPrism requires at least 3 2D vertices")
+        pts: list[tuple[float, float]] = []
+        for idx, raw_pt in enumerate(vertices_xy):
+            if isinstance(raw_pt, (str, bytes)) or not isinstance(raw_pt, Sequence) or len(raw_pt) != 2:
+                raise ValueError(f"PolygonPrism vertices_xy[{idx}] must be a 2-tuple (x, y)")
+            pts.append(
+                (
+                    _require_finite(float(raw_pt[0]), f"vertices_xy[{idx}][0]"),
+                    _require_finite(float(raw_pt[1]), f"vertices_xy[{idx}][1]"),
+                )
+            )
+        area2 = 0.0
+        n = len(pts)
+        for i in range(n):
+            x0, y0 = pts[i]
+            x1, y1 = pts[(i + 1) % n]
+            area2 += x0 * y1 - x1 * y0
+        if abs(area2) <= 0.0:
+            raise ValueError("PolygonPrism vertices_xy must have non-zero area")
+        object.__setattr__(self, "vertices_xy", tuple(pts))
+        object.__setattr__(self, "thickness", require_positive(thickness, "thickness"))
+        object.__setattr__(self, "name", require_non_empty(name, "name"))
+
+    @property
+    def geometry_name(self) -> str:
+        return self.name
+
+    def to_ir(self) -> dict[str, object]:
+        return {
+            "name": self.name,
+            "kind": "polygon_prism",
+            "vertices_xy": [[x, y] for x, y in self.vertices_xy],
+            "thickness": self.thickness,
+        }
+
+
 # ---------------------------------------------------------------------------
 # CSG boolean operations
 # ---------------------------------------------------------------------------
@@ -1977,6 +2340,152 @@ class Translate(_GeometryOps):
         }
 
 
+@dataclass(frozen=True, slots=True)
+class Xor(_GeometryOps):
+    """CSG symmetric difference (XOR): points in ``left`` or ``right`` but not both."""
+
+    left: "Geometry"
+    right: "Geometry"
+    name: str = "xor"
+
+    def __init__(
+        self,
+        left: "Geometry",
+        right: "Geometry",
+        name: str = "xor",
+    ) -> None:
+        object.__setattr__(self, "left", left)
+        object.__setattr__(self, "right", right)
+        object.__setattr__(self, "name", require_non_empty(name, "name"))
+
+    @property
+    def geometry_name(self) -> str:
+        return self.name
+
+    def to_ir(self) -> dict[str, object]:
+        return {
+            "name": self.name,
+            "kind": "xor",
+            "left": self.left.to_ir(),
+            "right": self.right.to_ir(),
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class Transform(_GeometryOps):
+    """Affine TRS transform ``M = T(translation + pivot) R(rotation_quat) S(scale) T(-pivot)``."""
+
+    child: "Geometry"
+    translation: tuple[float, float, float] = (0.0, 0.0, 0.0)
+    rotation_quat: tuple[float, float, float, float] = (0.0, 0.0, 0.0, 1.0)
+    scale: tuple[float, float, float] = (1.0, 1.0, 1.0)
+    pivot: tuple[float, float, float] = (0.0, 0.0, 0.0)
+    name: str | None = None
+
+    def __init__(
+        self,
+        child: "Geometry",
+        translation: tuple[float, float, float] = (0.0, 0.0, 0.0),
+        rotation_quat: tuple[float, float, float, float] = (0.0, 0.0, 0.0, 1.0),
+        scale: tuple[float, float, float] = (1.0, 1.0, 1.0),
+        pivot: tuple[float, float, float] = (0.0, 0.0, 0.0),
+        name: str | None = None,
+    ) -> None:
+        norm_t = as_vector3(translation, "translation")
+        norm_q = normalize_quaternion(rotation_quat, "rotation_quat")
+        norm_s = as_vector3(scale, "scale")
+        for idx, comp in enumerate(norm_s):
+            if comp <= 0.0:
+                raise ValueError(f"Transform scale[{idx}] must be positive, got {comp}")
+        norm_p = as_vector3(pivot, "pivot")
+        object.__setattr__(self, "child", child)
+        object.__setattr__(self, "translation", norm_t)
+        object.__setattr__(self, "rotation_quat", norm_q)
+        object.__setattr__(self, "scale", norm_s)
+        object.__setattr__(self, "pivot", norm_p)
+        if name is not None:
+            object.__setattr__(self, "name", require_non_empty(name, "name"))
+        else:
+            object.__setattr__(self, "name", None)
+
+    @property
+    def geometry_name(self) -> str:
+        if self.name is not None:
+            return self.name
+        return _derived_transform_name(
+            self.child.geometry_name,
+            self.translation,
+            self.rotation_quat,
+            self.scale,
+            self.pivot,
+        )
+
+    def to_ir(self) -> dict[str, object]:
+        return {
+            "name": self.geometry_name,
+            "kind": "transform",
+            "child": self.child.to_ir(),
+            "translation": list(self.translation),
+            "rotation_quat": list(self.rotation_quat),
+            "scale": list(self.scale),
+            "pivot": list(self.pivot),
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class SlicePlane(_GeometryOps):
+    """Clip a solid geometry against an oriented half-space plane."""
+
+    child: "Geometry"
+    plane_origin: tuple[float, float, float] = (0.0, 0.0, 0.0)
+    plane_normal: tuple[float, float, float] = (0.0, 0.0, 1.0)
+    keep_side: Literal["positive", "negative"] = "positive"
+    name: str | None = None
+
+    def __init__(
+        self,
+        child: "Geometry",
+        plane_origin: tuple[float, float, float] = (0.0, 0.0, 0.0),
+        plane_normal: tuple[float, float, float] = (0.0, 0.0, 1.0),
+        keep_side: Literal["positive", "negative"] = "positive",
+        name: str | None = None,
+    ) -> None:
+        norm_origin = as_vector3(plane_origin, "plane_origin")
+        norm_normal = _normalize_unit_vector3(plane_normal, "plane_normal")
+        side = str(keep_side).strip().lower()
+        if side not in {"positive", "negative"}:
+            raise ValueError(f"keep_side must be 'positive' or 'negative', got {keep_side!r}")
+        object.__setattr__(self, "child", child)
+        object.__setattr__(self, "plane_origin", norm_origin)
+        object.__setattr__(self, "plane_normal", norm_normal)
+        object.__setattr__(self, "keep_side", side)
+        if name is not None:
+            object.__setattr__(self, "name", require_non_empty(name, "name"))
+        else:
+            object.__setattr__(self, "name", None)
+
+    @property
+    def geometry_name(self) -> str:
+        if self.name is not None:
+            return self.name
+        return _derived_slice_plane_name(
+            self.child.geometry_name,
+            self.plane_origin,
+            self.plane_normal,
+            self.keep_side,
+        )
+
+    def to_ir(self) -> dict[str, object]:
+        return {
+            "name": self.geometry_name,
+            "kind": "slice_plane",
+            "child": self.child.to_ir(),
+            "plane_origin": list(self.plane_origin),
+            "plane_normal": list(self.plane_normal),
+            "keep_side": self.keep_side,
+        }
+
+
 # ---------------------------------------------------------------------------
 # Type alias
 # ---------------------------------------------------------------------------
@@ -1988,10 +2497,16 @@ Geometry: TypeAlias = (
     | ArchWaveguide
     | Ellipsoid
     | Ellipse
+    | Cone
+    | Torus
+    | PolygonPrism
     | Difference
     | Union
     | Intersection
+    | Xor
     | Translate
+    | Transform
+    | SlicePlane
     | MicrostripAntennaLayout
     | CPWAntennaLayout
     | MeanderAntennaLayout

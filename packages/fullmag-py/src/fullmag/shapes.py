@@ -8,17 +8,23 @@ from fullmag.model.geometry import (
     AuthoredSelectionAffine,
     AuthoredSelectionGeometry,
     Box,
+    Cone,
     Cylinder,
     Ellipse,
     Ellipsoid,
     Geometry,
     ImportedGeometry,
+    PolygonPrism,
     SinWaveguide,
     SelectionAffine,
     SelectionCylinder,
     SelectionThroughObjectDisk,
+    SlicePlane,
     Sphere,
     ThroughObjectExtrusion,
+    Torus,
+    Transform,
+    _GeometryOps,
 )
 
 
@@ -86,14 +92,22 @@ def disk(
 
 
 def affine(
-    geometry: AuthoredSelectionGeometry,
+    geometry: AuthoredSelectionGeometry | Geometry,
     *,
     translation: tuple[float, float, float] = (0.0, 0.0, 0.0),
     quaternion: tuple[float, float, float, float] = (0.0, 0.0, 0.0, 1.0),
     scale: tuple[float, float, float] = (1.0, 1.0, 1.0),
     pivot: tuple[float, float, float] = (0.0, 0.0, 0.0),
-) -> AuthoredSelectionGeometry:
-    """Build a serializable affine selection predicate without evaluating it."""
+) -> AuthoredSelectionGeometry | Transform:
+    """Build a serializable affine geometry or selection predicate."""
+    if isinstance(geometry, _GeometryOps):
+        return Transform(
+            child=geometry,  # type: ignore[arg-type]
+            translation=translation,
+            rotation_quat=quaternion,
+            scale=scale,
+            pivot=pivot,
+        )
     fields = {
         "geometry": geometry,
         "translation_m": translation,
@@ -105,27 +119,110 @@ def affine(
         return SelectionAffine(**fields)
     if type(geometry) in (SelectionThroughObjectDisk, AuthoredSelectionAffine):
         return AuthoredSelectionAffine(**fields)
-    raise TypeError("geometry must be an exact AuthoredSelectionGeometry node")
+    raise TypeError("geometry must be an exact AuthoredSelectionGeometry or Geometry node")
 
 
 def rotate(
-    geometry: AuthoredSelectionGeometry,
+    geometry: AuthoredSelectionGeometry | Geometry,
     *,
-    quaternion: tuple[float, float, float, float],
+    quaternion: tuple[float, float, float, float] | None = None,
+    euler_deg: tuple[float, float, float] | None = None,
+    axis: tuple[float, float, float] | None = None,
+    angle_deg: float | None = None,
     pivot: tuple[float, float, float] = (0.0, 0.0, 0.0),
-) -> AuthoredSelectionGeometry:
-    """Build a rotation-only affine selection predicate."""
+) -> AuthoredSelectionGeometry | Transform:
+    """Build a rotation-only transform for a solid Geometry or selection predicate."""
+    if isinstance(geometry, _GeometryOps):
+        return geometry.rotate(
+            euler_deg=euler_deg,
+            axis=axis,
+            angle_deg=angle_deg,
+            quat=quaternion,
+            pivot=pivot,
+        )
+    if quaternion is None:
+        raise ValueError("quaternion is required for AuthoredSelectionGeometry rotation")
     return affine(geometry, quaternion=quaternion, pivot=pivot)
 
 
 def scale(
-    geometry: AuthoredSelectionGeometry,
+    geometry: AuthoredSelectionGeometry | Geometry,
     *,
     factors: tuple[float, float, float],
     pivot: tuple[float, float, float] = (0.0, 0.0, 0.0),
-) -> AuthoredSelectionGeometry:
-    """Build a scale-only affine selection predicate."""
+) -> AuthoredSelectionGeometry | Transform:
+    """Build a scale-only transform for a solid Geometry or selection predicate."""
     return affine(geometry, scale=factors, pivot=pivot)
+
+
+def cone(
+    *,
+    radius_bottom: float,
+    radius_top: float = 0.0,
+    height: float,
+    axis: tuple[float, float, float] = (0.0, 0.0, 1.0),
+    center: tuple[float, float, float] | None = None,
+    name: str = "cone",
+) -> Geometry:
+    return _with_center(
+        Cone(
+            radius_bottom=radius_bottom,
+            radius_top=radius_top,
+            height=height,
+            axis=axis,
+            name=name,
+        ),
+        center,
+    )
+
+
+def torus(
+    *,
+    major_radius: float,
+    minor_radius: float,
+    axis: tuple[float, float, float] = (0.0, 0.0, 1.0),
+    center: tuple[float, float, float] | None = None,
+    name: str = "torus",
+) -> Geometry:
+    return _with_center(
+        Torus(
+            major_radius=major_radius,
+            minor_radius=minor_radius,
+            axis=axis,
+            name=name,
+        ),
+        center,
+    )
+
+
+def polygon_prism(
+    *,
+    vertices_xy: list[tuple[float, float]] | tuple[tuple[float, float], ...],
+    thickness: float,
+    center: tuple[float, float, float] | None = None,
+    name: str = "polygon_prism",
+) -> Geometry:
+    return _with_center(
+        PolygonPrism(vertices_xy=vertices_xy, thickness=thickness, name=name),
+        center,
+    )
+
+
+def slice_plane(
+    geometry: Geometry,
+    *,
+    origin: tuple[float, float, float] = (0.0, 0.0, 0.0),
+    normal: tuple[float, float, float] = (0.0, 0.0, 1.0),
+    keep: Literal["positive", "negative"] = "positive",
+    name: str | None = None,
+) -> SlicePlane:
+    return SlicePlane(
+        child=geometry,
+        plane_origin=origin,
+        plane_normal=normal,
+        keep_side=keep,
+        name=name,
+    )
 
 
 def sphere(
@@ -234,13 +331,17 @@ __all__ = [
     "affine",
     "arch_waveguide",
     "box",
+    "cone",
     "cylinder",
     "disk",
     "ellipse",
     "ellipsoid",
     "imported",
+    "polygon_prism",
     "rotate",
     "scale",
     "sin_waveguide",
+    "slice_plane",
     "sphere",
+    "torus",
 ]

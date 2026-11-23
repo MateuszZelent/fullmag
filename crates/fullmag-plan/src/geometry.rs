@@ -90,6 +90,25 @@ pub(crate) enum GeometryShape {
     Ellipsoid {
         radii: [f64; 3],
     },
+    Ellipse {
+        radii: [f64; 2],
+        height: f64,
+    },
+    Cone {
+        radius_bottom: f64,
+        radius_top: f64,
+        height: f64,
+        axis: [f64; 3],
+    },
+    Torus {
+        major_radius: f64,
+        minor_radius: f64,
+        axis: [f64; 3],
+    },
+    PolygonPrism {
+        vertices_xy: Vec<[f64; 2]>,
+        thickness: f64,
+    },
     SinWaveguide {
         length: f64,
         width: f64,
@@ -114,6 +133,19 @@ pub(crate) enum GeometryShape {
         child: std::boxed::Box<GeometryShape>,
         by: [f64; 3],
     },
+    Transform {
+        child: std::boxed::Box<GeometryShape>,
+        translation: [f64; 3],
+        rotation_quat: [f64; 4],
+        scale: [f64; 3],
+        pivot: [f64; 3],
+    },
+    SlicePlane {
+        child: std::boxed::Box<GeometryShape>,
+        plane_origin: [f64; 3],
+        plane_normal: [f64; 3],
+        keep_side: String,
+    },
     Difference {
         base: std::boxed::Box<GeometryShape>,
         tool: std::boxed::Box<GeometryShape>,
@@ -125,6 +157,10 @@ pub(crate) enum GeometryShape {
     Intersection {
         a: std::boxed::Box<GeometryShape>,
         b: std::boxed::Box<GeometryShape>,
+    },
+    Xor {
+        left: std::boxed::Box<GeometryShape>,
+        right: std::boxed::Box<GeometryShape>,
     },
 }
 
@@ -212,9 +248,58 @@ pub(crate) fn ir_to_shape(entry: &GeometryEntryIR) -> Result<GeometryShape, Stri
             a: std::boxed::Box::new(ir_to_shape(a)?),
             b: std::boxed::Box::new(ir_to_shape(b)?),
         }),
+        GeometryEntryIR::Xor { left, right, .. } => Ok(GeometryShape::Xor {
+            left: std::boxed::Box::new(ir_to_shape(left)?),
+            right: std::boxed::Box::new(ir_to_shape(right)?),
+        }),
         GeometryEntryIR::Translate { base, by, .. } => Ok(GeometryShape::Translate {
             child: std::boxed::Box::new(ir_to_shape(base)?),
             by: *by,
+        }),
+        GeometryEntryIR::Transform {
+            child,
+            translation,
+            rotation_quat,
+            scale,
+            pivot,
+            ..
+        } => {
+            let norm = (rotation_quat[0] * rotation_quat[0]
+                + rotation_quat[1] * rotation_quat[1]
+                + rotation_quat[2] * rotation_quat[2]
+                + rotation_quat[3] * rotation_quat[3])
+                .sqrt();
+            if !norm.is_finite() || norm <= 1e-12 {
+                return Err("Transform geometry rotation_quat must be finite and non-zero".to_string());
+            }
+            if scale.iter().any(|component| !component.is_finite() || *component <= 0.0) {
+                return Err("Transform geometry scale components must be finite and positive".to_string());
+            }
+            Ok(GeometryShape::Transform {
+                child: std::boxed::Box::new(ir_to_shape(child)?),
+                translation: *translation,
+                rotation_quat: [
+                    rotation_quat[0] / norm,
+                    rotation_quat[1] / norm,
+                    rotation_quat[2] / norm,
+                    rotation_quat[3] / norm,
+                ],
+                scale: *scale,
+                pivot: *pivot,
+            })
+        }
+        GeometryEntryIR::SlicePlane {
+            child,
+            plane_origin,
+            plane_normal,
+            keep_side,
+            ..
+        } => Ok(GeometryShape::SlicePlane {
+            child: std::boxed::Box::new(ir_to_shape(child)?),
+            plane_origin: *plane_origin,
+            plane_normal: normalize_selection_axis(*plane_normal)
+                .map_err(|error| error.to_string())?,
+            keep_side: keep_side.clone(),
         }),
         GeometryEntryIR::Ellipsoid { radii, .. } => {
             if (radii[0] - radii[1]).abs() <= 1e-15 * radii[0].abs()
@@ -225,10 +310,40 @@ pub(crate) fn ir_to_shape(entry: &GeometryEntryIR) -> Result<GeometryShape, Stri
                 Ok(GeometryShape::Ellipsoid { radii: *radii })
             }
         }
-        GeometryEntryIR::Ellipse { name, .. } => Err(format!(
-            "geometry '{}' (Ellipse) is not yet supported by the FDM planner; use Box or Cylinder",
-            name
-        )),
+        GeometryEntryIR::Ellipse { radii, height, .. } => Ok(GeometryShape::Ellipse {
+            radii: *radii,
+            height: *height,
+        }),
+        GeometryEntryIR::Cone {
+            radius_bottom,
+            radius_top,
+            height,
+            axis,
+            ..
+        } => Ok(GeometryShape::Cone {
+            radius_bottom: *radius_bottom,
+            radius_top: *radius_top,
+            height: *height,
+            axis: normalize_selection_axis(*axis).map_err(|error| error.to_string())?,
+        }),
+        GeometryEntryIR::Torus {
+            major_radius,
+            minor_radius,
+            axis,
+            ..
+        } => Ok(GeometryShape::Torus {
+            major_radius: *major_radius,
+            minor_radius: *minor_radius,
+            axis: normalize_selection_axis(*axis).map_err(|error| error.to_string())?,
+        }),
+        GeometryEntryIR::PolygonPrism {
+            vertices_xy,
+            thickness,
+            ..
+        } => Ok(GeometryShape::PolygonPrism {
+            vertices_xy: vertices_xy.clone(),
+            thickness: *thickness,
+        }),
         GeometryEntryIR::MicrostripAntenna { name, .. }
         | GeometryEntryIR::CpwAntenna { name, .. } => Err(format!(
             "geometry '{}' (antenna layout) requires the conductor mesh planner; it is not an FDM magnetic body",
@@ -253,22 +368,29 @@ pub(crate) fn extract_multilayer_geometry(
         | GeometryEntryIR::Cylinder { .. }
         | GeometryEntryIR::Sphere { .. }
         | GeometryEntryIR::Ellipsoid { .. }
+        | GeometryEntryIR::Ellipse { .. }
+        | GeometryEntryIR::Cone { .. }
+        | GeometryEntryIR::Torus { .. }
+        | GeometryEntryIR::PolygonPrism { .. }
         | GeometryEntryIR::SinWaveguide { .. }
         | GeometryEntryIR::ArchWaveguide { .. }
         | GeometryEntryIR::ImportedGeometry { .. }
         | GeometryEntryIR::Difference { .. }
         | GeometryEntryIR::Union { .. }
-        | GeometryEntryIR::Intersection { .. } => Ok(PlacedGeometry {
+        | GeometryEntryIR::Intersection { .. }
+        | GeometryEntryIR::Xor { .. }
+        | GeometryEntryIR::Transform { .. }
+        | GeometryEntryIR::SlicePlane { .. } => Ok(PlacedGeometry {
             name: entry.name().to_string(),
-            shape: ir_to_shape(entry).map_err(|e| e)?,
+            shape: ir_to_shape(entry)?,
             translation: [0.0, 0.0, 0.0],
         }),
-        GeometryEntryIR::Ellipse { .. }
-        | GeometryEntryIR::MicrostripAntenna { .. }
-        | GeometryEntryIR::CpwAntenna { .. } => Err(format!(
-            "geometry '{}' is not yet supported by the public multilayer planner; use Box/Cylinder/Difference with optional Translate",
-            entry.name()
-        )),
+        GeometryEntryIR::MicrostripAntenna { .. } | GeometryEntryIR::CpwAntenna { .. } => Err(
+            format!(
+                "geometry '{}' is not yet supported by the public multilayer planner; use Box/Cylinder/Difference with optional Translate",
+                entry.name()
+            ),
+        ),
     }
 }
 
@@ -294,6 +416,59 @@ pub(crate) fn shape_local_bounds(shape: &GeometryShape) -> Option<([f64; 3], [f6
         }
         GeometryShape::Sphere { radius } => Some(([-*radius; 3], [*radius; 3])),
         GeometryShape::Ellipsoid { radii } => Some(([-radii[0], -radii[1], -radii[2]], *radii)),
+        GeometryShape::Ellipse { radii, height } => Some((
+            [-radii[0], -radii[1], -height * 0.5],
+            [radii[0], radii[1], height * 0.5],
+        )),
+        GeometryShape::Cone {
+            radius_bottom,
+            radius_top,
+            height,
+            axis,
+        } => {
+            let half_h = *height * 0.5;
+            let mut bounds_min = [0.0; 3];
+            let mut bounds_max = [0.0; 3];
+            for index in 0..3 {
+                let radial_proj = (1.0 - axis[index] * axis[index]).max(0.0).sqrt();
+                let top_center = half_h * axis[index];
+                let bot_center = -half_h * axis[index];
+                bounds_min[index] = (top_center - *radius_top * radial_proj)
+                    .min(bot_center - *radius_bottom * radial_proj);
+                bounds_max[index] = (top_center + *radius_top * radial_proj)
+                    .max(bot_center + *radius_bottom * radial_proj);
+            }
+            Some((bounds_min, bounds_max))
+        }
+        GeometryShape::Torus {
+            major_radius,
+            minor_radius,
+            axis,
+        } => {
+            let extents = [0, 1, 2].map(|index| {
+                let radial_proj = (1.0 - axis[index] * axis[index]).max(0.0).sqrt();
+                *major_radius * radial_proj + *minor_radius
+            });
+            Some(([-extents[0], -extents[1], -extents[2]], extents))
+        }
+        GeometryShape::PolygonPrism {
+            vertices_xy,
+            thickness,
+        } => {
+            let first = *vertices_xy.first()?;
+            let mut min_x = first[0];
+            let mut max_x = first[0];
+            let mut min_y = first[1];
+            let mut max_y = first[1];
+            for vertex in vertices_xy.iter().skip(1) {
+                min_x = min_x.min(vertex[0]);
+                max_x = max_x.max(vertex[0]);
+                min_y = min_y.min(vertex[1]);
+                max_y = max_y.max(vertex[1]);
+            }
+            let half_t = *thickness * 0.5;
+            Some(([min_x, min_y, -half_t], [max_x, max_y, half_t]))
+        }
         GeometryShape::SinWaveguide {
             length,
             width,
@@ -325,7 +500,7 @@ pub(crate) fn shape_local_bounds(shape: &GeometryShape) -> Option<([f64; 3], [f6
             ))
         }
         GeometryShape::Difference { base, .. } => shape_local_bounds(base),
-        GeometryShape::Union { a, b } => {
+        GeometryShape::Union { a, b } | GeometryShape::Xor { left: a, right: b } => {
             let (a_min, a_max) = shape_local_bounds(a)?;
             let (b_min, b_max) = shape_local_bounds(b)?;
             Some((
@@ -375,6 +550,49 @@ pub(crate) fn shape_local_bounds(shape: &GeometryShape) -> Option<([f64; 3], [f6
                 ],
             ))
         }
+        GeometryShape::Transform {
+            child,
+            translation,
+            rotation_quat,
+            scale,
+            pivot,
+        } => {
+            let (c_min, c_max) = shape_local_bounds(child)?;
+            let mut out_min = [f64::INFINITY; 3];
+            let mut out_max = [f64::NEG_INFINITY; 3];
+            for ix in 0..2 {
+                for iy in 0..2 {
+                    for iz in 0..2 {
+                        let corner = [
+                            if ix == 0 { c_min[0] } else { c_max[0] },
+                            if iy == 0 { c_min[1] } else { c_max[1] },
+                            if iz == 0 { c_min[2] } else { c_max[2] },
+                        ];
+                        let world = apply_trs_forward(
+                            corner,
+                            *translation,
+                            *rotation_quat,
+                            *scale,
+                            *pivot,
+                        );
+                        for axis in 0..3 {
+                            out_min[axis] = out_min[axis].min(world[axis]);
+                            out_max[axis] = out_max[axis].max(world[axis]);
+                        }
+                    }
+                }
+            }
+            Some((out_min, out_max))
+        }
+        GeometryShape::SlicePlane {
+            child,
+            plane_origin,
+            plane_normal,
+            keep_side,
+        } => {
+            let (c_min, c_max) = shape_local_bounds(child)?;
+            clip_aabb_by_plane(c_min, c_max, *plane_origin, *plane_normal, keep_side)
+        }
         GeometryShape::Imported { .. } => None,
     }
 }
@@ -407,6 +625,41 @@ impl GeometryShape {
             Self::Ellipsoid { radii } => GeometryEntryIR::Ellipsoid {
                 name: "fdm-canonical-ellipsoid".to_string(),
                 radii: *radii,
+            },
+            Self::Ellipse { radii, height } => GeometryEntryIR::Ellipse {
+                name: "fdm-ellipse".to_string(),
+                radii: *radii,
+                height: *height,
+            },
+            Self::Cone {
+                radius_bottom,
+                radius_top,
+                height,
+                axis,
+            } => GeometryEntryIR::Cone {
+                name: "fdm-cone".to_string(),
+                radius_bottom: *radius_bottom,
+                radius_top: *radius_top,
+                height: *height,
+                axis: *axis,
+            },
+            Self::Torus {
+                major_radius,
+                minor_radius,
+                axis,
+            } => GeometryEntryIR::Torus {
+                name: "fdm-torus".to_string(),
+                major_radius: *major_radius,
+                minor_radius: *minor_radius,
+                axis: *axis,
+            },
+            Self::PolygonPrism {
+                vertices_xy,
+                thickness,
+            } => GeometryEntryIR::PolygonPrism {
+                name: "fdm-polygon-prism".to_string(),
+                vertices_xy: vertices_xy.clone(),
+                thickness: *thickness,
             },
             Self::SinWaveguide {
                 length,
@@ -451,6 +704,32 @@ impl GeometryShape {
                 base: Box::new(child.to_geometry_entry()),
                 by: *by,
             },
+            Self::Transform {
+                child,
+                translation,
+                rotation_quat,
+                scale,
+                pivot,
+            } => GeometryEntryIR::Transform {
+                name: "fdm-canonical-transform".to_string(),
+                child: Box::new(child.to_geometry_entry()),
+                translation: *translation,
+                rotation_quat: *rotation_quat,
+                scale: *scale,
+                pivot: *pivot,
+            },
+            Self::SlicePlane {
+                child,
+                plane_origin,
+                plane_normal,
+                keep_side,
+            } => GeometryEntryIR::SlicePlane {
+                name: "fdm-slice-plane".to_string(),
+                child: Box::new(child.to_geometry_entry()),
+                plane_origin: *plane_origin,
+                plane_normal: *plane_normal,
+                keep_side: keep_side.clone(),
+            },
             Self::Difference { base, tool } => GeometryEntryIR::Difference {
                 name: "fdm-canonical-difference".to_string(),
                 base: Box::new(base.to_geometry_entry()),
@@ -466,18 +745,33 @@ impl GeometryShape {
                 a: Box::new(a.to_geometry_entry()),
                 b: Box::new(b.to_geometry_entry()),
             },
+            Self::Xor { left, right } => GeometryEntryIR::Xor {
+                name: "fdm-canonical-xor".to_string(),
+                left: Box::new(left.to_geometry_entry()),
+                right: Box::new(right.to_geometry_entry()),
+            },
         }
     }
 
-    fn has_legacy_waveguide(&self) -> bool {
+    fn uses_custom_evaluator(&self) -> bool {
         match self {
-            Self::SinWaveguide { .. } | Self::ArchWaveguide { .. } => true,
-            Self::Translate { child, .. } => child.has_legacy_waveguide(),
+            Self::SinWaveguide { .. }
+            | Self::ArchWaveguide { .. }
+            | Self::Ellipse { .. }
+            | Self::Cone { .. }
+            | Self::Torus { .. }
+            | Self::PolygonPrism { .. }
+            | Self::SlicePlane { .. } => true,
+            Self::Translate { child, .. } | Self::Transform { child, .. } => {
+                child.uses_custom_evaluator()
+            }
             Self::Difference { base, tool }
             | Self::Union { a: base, b: tool }
-            | Self::Intersection { a: base, b: tool } => {
-                base.has_legacy_waveguide() || tool.has_legacy_waveguide()
-            }
+            | Self::Intersection { a: base, b: tool }
+            | Self::Xor {
+                left: base,
+                right: tool,
+            } => base.uses_custom_evaluator() || tool.uses_custom_evaluator(),
             _ => false,
         }
     }
@@ -486,6 +780,25 @@ impl GeometryShape {
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) enum CompiledGeometryShape {
     Canonical(GeometryPredicate),
+    Ellipse {
+        radii: [f64; 2],
+        height: f64,
+    },
+    Cone {
+        radius_bottom: f64,
+        radius_top: f64,
+        height: f64,
+        axis: [f64; 3],
+    },
+    Torus {
+        major_radius: f64,
+        minor_radius: f64,
+        axis: [f64; 3],
+    },
+    PolygonPrism {
+        vertices_xy: Vec<[f64; 2]>,
+        thickness: f64,
+    },
     SinWaveguide {
         length: f64,
         width: f64,
@@ -506,6 +819,19 @@ pub(crate) enum CompiledGeometryShape {
         child: Box<CompiledGeometryShape>,
         by: [f64; 3],
     },
+    Transform {
+        child: Box<CompiledGeometryShape>,
+        translation: [f64; 3],
+        rotation_quat: [f64; 4],
+        scale: [f64; 3],
+        pivot: [f64; 3],
+    },
+    SlicePlane {
+        child: Box<CompiledGeometryShape>,
+        plane_origin: [f64; 3],
+        plane_normal: [f64; 3],
+        keep_positive: bool,
+    },
     Difference {
         base: Box<CompiledGeometryShape>,
         tool: Box<CompiledGeometryShape>,
@@ -518,11 +844,15 @@ pub(crate) enum CompiledGeometryShape {
         a: Box<CompiledGeometryShape>,
         b: Box<CompiledGeometryShape>,
     },
+    Xor {
+        left: Box<CompiledGeometryShape>,
+        right: Box<CompiledGeometryShape>,
+    },
 }
 
 impl CompiledGeometryShape {
     fn from_shape(shape: &GeometryShape) -> Result<Self, SelectionError> {
-        if !shape.has_legacy_waveguide() {
+        if !shape.uses_custom_evaluator() {
             return Ok(Self::Canonical(GeometryPredicate::from_geometry_entry(
                 &shape.to_geometry_entry(),
                 AffineTransform3::identity(),
@@ -530,6 +860,37 @@ impl CompiledGeometryShape {
             )?));
         }
         match shape {
+            GeometryShape::Ellipse { radii, height } => Ok(Self::Ellipse {
+                radii: *radii,
+                height: *height,
+            }),
+            GeometryShape::Cone {
+                radius_bottom,
+                radius_top,
+                height,
+                axis,
+            } => Ok(Self::Cone {
+                radius_bottom: *radius_bottom,
+                radius_top: *radius_top,
+                height: *height,
+                axis: *axis,
+            }),
+            GeometryShape::Torus {
+                major_radius,
+                minor_radius,
+                axis,
+            } => Ok(Self::Torus {
+                major_radius: *major_radius,
+                minor_radius: *minor_radius,
+                axis: *axis,
+            }),
+            GeometryShape::PolygonPrism {
+                vertices_xy,
+                thickness,
+            } => Ok(Self::PolygonPrism {
+                vertices_xy: vertices_xy.clone(),
+                thickness: *thickness,
+            }),
             GeometryShape::SinWaveguide {
                 length,
                 width,
@@ -564,6 +925,30 @@ impl CompiledGeometryShape {
                 child: Box::new(Self::from_shape(child)?),
                 by: *by,
             }),
+            GeometryShape::Transform {
+                child,
+                translation,
+                rotation_quat,
+                scale,
+                pivot,
+            } => Ok(Self::Transform {
+                child: Box::new(Self::from_shape(child)?),
+                translation: *translation,
+                rotation_quat: *rotation_quat,
+                scale: *scale,
+                pivot: *pivot,
+            }),
+            GeometryShape::SlicePlane {
+                child,
+                plane_origin,
+                plane_normal,
+                keep_side,
+            } => Ok(Self::SlicePlane {
+                child: Box::new(Self::from_shape(child)?),
+                plane_origin: *plane_origin,
+                plane_normal: *plane_normal,
+                keep_positive: keep_side != "negative",
+            }),
             GeometryShape::Difference { base, tool } => Ok(Self::Difference {
                 base: Box::new(Self::from_shape(base)?),
                 tool: Box::new(Self::from_shape(tool)?),
@@ -576,6 +961,10 @@ impl CompiledGeometryShape {
                 a: Box::new(Self::from_shape(a)?),
                 b: Box::new(Self::from_shape(b)?),
             }),
+            GeometryShape::Xor { left, right } => Ok(Self::Xor {
+                left: Box::new(Self::from_shape(left)?),
+                right: Box::new(Self::from_shape(right)?),
+            }),
             _ => Ok(Self::Canonical(GeometryPredicate::from_geometry_entry(
                 &shape.to_geometry_entry(),
                 AffineTransform3::identity(),
@@ -587,6 +976,28 @@ impl CompiledGeometryShape {
     pub(crate) fn contains(&self, point: [f64; 3]) -> Result<bool, SelectionError> {
         match self {
             Self::Canonical(predicate) => contains_point(predicate, point),
+            Self::Ellipse { radii, height } => Ok(contains_ellipse(point, *radii, *height)),
+            Self::Cone {
+                radius_bottom,
+                radius_top,
+                height,
+                axis,
+            } => Ok(contains_cone(
+                point,
+                *radius_bottom,
+                *radius_top,
+                *height,
+                *axis,
+            )),
+            Self::Torus {
+                major_radius,
+                minor_radius,
+                axis,
+            } => Ok(contains_torus(point, *major_radius, *minor_radius, *axis)),
+            Self::PolygonPrism {
+                vertices_xy,
+                thickness,
+            } => Ok(contains_polygon_prism(point, vertices_xy, *thickness)),
             Self::SinWaveguide {
                 length,
                 width,
@@ -618,11 +1029,254 @@ impl CompiledGeometryShape {
             Self::Translate { child, by } => {
                 child.contains([point[0] - by[0], point[1] - by[1], point[2] - by[2]])
             }
+            Self::Transform {
+                child,
+                translation,
+                rotation_quat,
+                scale,
+                pivot,
+            } => {
+                let local = apply_trs_inverse(
+                    point,
+                    *translation,
+                    *rotation_quat,
+                    *scale,
+                    *pivot,
+                );
+                child.contains(local)
+            }
+            Self::SlicePlane {
+                child,
+                plane_origin,
+                plane_normal,
+                keep_positive,
+            } => {
+                let signed_dist = (point[0] - plane_origin[0]) * plane_normal[0]
+                    + (point[1] - plane_origin[1]) * plane_normal[1]
+                    + (point[2] - plane_origin[2]) * plane_normal[2];
+                let side_ok = if *keep_positive {
+                    signed_dist >= -1e-12
+                } else {
+                    signed_dist <= 1e-12
+                };
+                if !side_ok {
+                    return Ok(false);
+                }
+                child.contains(point)
+            }
             Self::Difference { base, tool } => Ok(base.contains(point)? && !tool.contains(point)?),
             Self::Union { a, b } => Ok(a.contains(point)? || b.contains(point)?),
             Self::Intersection { a, b } => Ok(a.contains(point)? && b.contains(point)?),
+            Self::Xor { left, right } => Ok(left.contains(point)? ^ right.contains(point)?),
         }
     }
+}
+
+fn rotate_vec3_by_quat(v: [f64; 3], q: [f64; 4]) -> [f64; 3] {
+    let [qx, qy, qz, qw] = q;
+    let tx = 2.0 * (qy * v[2] - qz * v[1]);
+    let ty = 2.0 * (qz * v[0] - qx * v[2]);
+    let tz = 2.0 * (qx * v[1] - qy * v[0]);
+    [
+        v[0] + qw * tx + (qy * tz - qz * ty),
+        v[1] + qw * ty + (qz * tx - qx * tz),
+        v[2] + qw * tz + (qx * ty - qy * tx),
+    ]
+}
+
+fn apply_trs_forward(
+    p: [f64; 3],
+    translation: [f64; 3],
+    rotation_quat: [f64; 4],
+    scale: [f64; 3],
+    pivot: [f64; 3],
+) -> [f64; 3] {
+    let scaled = [
+        (p[0] - pivot[0]) * scale[0],
+        (p[1] - pivot[1]) * scale[1],
+        (p[2] - pivot[2]) * scale[2],
+    ];
+    let rotated = rotate_vec3_by_quat(scaled, rotation_quat);
+    [
+        rotated[0] + pivot[0] + translation[0],
+        rotated[1] + pivot[1] + translation[1],
+        rotated[2] + pivot[2] + translation[2],
+    ]
+}
+
+fn apply_trs_inverse(
+    p: [f64; 3],
+    translation: [f64; 3],
+    rotation_quat: [f64; 4],
+    scale: [f64; 3],
+    pivot: [f64; 3],
+) -> [f64; 3] {
+    let shifted = [
+        p[0] - translation[0] - pivot[0],
+        p[1] - translation[1] - pivot[1],
+        p[2] - translation[2] - pivot[2],
+    ];
+    let inv_quat = [
+        -rotation_quat[0],
+        -rotation_quat[1],
+        -rotation_quat[2],
+        rotation_quat[3],
+    ];
+    let unrotated = rotate_vec3_by_quat(shifted, inv_quat);
+    [
+        unrotated[0] / scale[0] + pivot[0],
+        unrotated[1] / scale[1] + pivot[1],
+        unrotated[2] / scale[2] + pivot[2],
+    ]
+}
+
+fn clip_aabb_by_plane(
+    min: [f64; 3],
+    max: [f64; 3],
+    plane_origin: [f64; 3],
+    plane_normal: [f64; 3],
+    keep_side: &str,
+) -> Option<([f64; 3], [f64; 3])> {
+    let sign = if keep_side == "negative" { -1.0 } else { 1.0 };
+    let corners = [
+        [min[0], min[1], min[2]],
+        [max[0], min[1], min[2]],
+        [min[0], max[1], min[2]],
+        [max[0], max[1], min[2]],
+        [min[0], min[1], max[2]],
+        [max[0], min[1], max[2]],
+        [min[0], max[1], max[2]],
+        [max[0], max[1], max[2]],
+    ];
+    let dists = corners.map(|c| {
+        sign * ((c[0] - plane_origin[0]) * plane_normal[0]
+            + (c[1] - plane_origin[1]) * plane_normal[1]
+            + (c[2] - plane_origin[2]) * plane_normal[2])
+    });
+    let edges: [(usize, usize); 12] = [
+        (0, 1), (2, 3), (4, 5), (6, 7),
+        (0, 2), (1, 3), (4, 6), (5, 7),
+        (0, 4), (1, 5), (2, 6), (3, 7),
+    ];
+    let mut kept_points = Vec::with_capacity(16);
+    for (index, corner) in corners.iter().enumerate() {
+        if dists[index] >= -1e-12 {
+            kept_points.push(*corner);
+        }
+    }
+    for (u, v) in edges {
+        let du = dists[u];
+        let dv = dists[v];
+        if (du < 0.0 && dv > 0.0) || (du > 0.0 && dv < 0.0) {
+            let t = du / (du - dv);
+            let a = corners[u];
+            let b = corners[v];
+            kept_points.push([
+                a[0] + t * (b[0] - a[0]),
+                a[1] + t * (b[1] - a[1]),
+                a[2] + t * (b[2] - a[2]),
+            ]);
+        }
+    }
+    if kept_points.is_empty() {
+        return None;
+    }
+    let mut out_min = [f64::INFINITY; 3];
+    let mut out_max = [f64::NEG_INFINITY; 3];
+    for p in kept_points {
+        for axis in 0..3 {
+            out_min[axis] = out_min[axis].min(p[axis]);
+            out_max[axis] = out_max[axis].max(p[axis]);
+        }
+    }
+    if (0..3).any(|axis| out_max[axis] <= out_min[axis] + 1e-18) {
+        return None;
+    }
+    Some((out_min, out_max))
+}
+
+fn contains_ellipse(point: [f64; 3], radii: [f64; 2], height: f64) -> bool {
+    let half_h = height * 0.5;
+    if point[2].abs() > half_h * (1.0 + 1e-12) {
+        return false;
+    }
+    let nx = point[0] / radii[0];
+    let ny = point[1] / radii[1];
+    nx * nx + ny * ny <= 1.0 + 1e-12
+}
+
+fn contains_cone(
+    point: [f64; 3],
+    radius_bottom: f64,
+    radius_top: f64,
+    height: f64,
+    axis: [f64; 3],
+) -> bool {
+    let half_h = height * 0.5;
+    let tol = 1e-12 * height.max(radius_bottom.max(radius_top)).max(1.0e-12);
+    let h_proj = point[0] * axis[0] + point[1] * axis[1] + point[2] * axis[2];
+    if h_proj < -half_h - tol || h_proj > half_h + tol {
+        return false;
+    }
+    let t = ((h_proj + half_h) / height).clamp(0.0, 1.0);
+    let local_r = radius_bottom + t * (radius_top - radius_bottom);
+    let p_sq = point[0] * point[0] + point[1] * point[1] + point[2] * point[2];
+    let radial_sq = (p_sq - h_proj * h_proj).max(0.0);
+    let limit = local_r + tol;
+    radial_sq <= limit * limit
+}
+
+fn contains_torus(
+    point: [f64; 3],
+    major_radius: f64,
+    minor_radius: f64,
+    axis: [f64; 3],
+) -> bool {
+    let tol = 1e-12 * major_radius.max(1.0e-12);
+    let z_proj = point[0] * axis[0] + point[1] * axis[1] + point[2] * axis[2];
+    let p_sq = point[0] * point[0] + point[1] * point[1] + point[2] * point[2];
+    let rho = (p_sq - z_proj * z_proj).max(0.0).sqrt();
+    let dr = rho - major_radius;
+    let limit = minor_radius + tol;
+    dr * dr + z_proj * z_proj <= limit * limit
+}
+
+fn contains_polygon_prism(point: [f64; 3], vertices_xy: &[[f64; 2]], thickness: f64) -> bool {
+    if vertices_xy.len() < 3 {
+        return false;
+    }
+    let half_t = thickness * 0.5;
+    if point[2].abs() > half_t * (1.0 + 1e-12) {
+        return false;
+    }
+    let px = point[0];
+    let py = point[1];
+    let n = vertices_xy.len();
+    let mut inside = false;
+    let mut j = n - 1;
+    for i in 0..n {
+        let [xi, yi] = vertices_xy[i];
+        let [xj, yj] = vertices_xy[j];
+        let dx = xj - xi;
+        let dy = yj - yi;
+        let edge_len_sq = dx * dx + dy * dy;
+        if edge_len_sq > 0.0 {
+            let t = (((px - xi) * dx + (py - yi) * dy) / edge_len_sq).clamp(0.0, 1.0);
+            let cx = xi + t * dx;
+            let cy = yi + t * dy;
+            let dist_sq = (px - cx) * (px - cx) + (py - cy) * (py - cy);
+            if dist_sq <= 1e-24 * edge_len_sq.max(1.0e-18) {
+                return true;
+            }
+        }
+        let intersects = ((yi > py) != (yj > py))
+            && (px < (xj - xi) * (py - yi) / (yj - yi) + xi);
+        if intersects {
+            inside = !inside;
+        }
+        j = i;
+    }
+    inside
 }
 
 fn compile_shape_for_mask(
@@ -953,11 +1607,21 @@ pub(crate) fn voxelize_shape(
             (bbox, Some(mask), [nx, ny, nz], bounds_min)
         }
         GeometryShape::Translate { .. }
+        | GeometryShape::Transform { .. }
+        | GeometryShape::SlicePlane { .. }
+        | GeometryShape::Ellipse { .. }
+        | GeometryShape::Cone { .. }
+        | GeometryShape::Torus { .. }
+        | GeometryShape::PolygonPrism { .. }
         | GeometryShape::Union { .. }
-        | GeometryShape::Intersection { .. } => {
+        | GeometryShape::Intersection { .. }
+        | GeometryShape::Xor { .. } => {
             let Some((bounds_min, bounds_max)) = shape_local_bounds(shape) else {
-                errors.push("CSG/translated geometry requires bounded child shapes".to_string());
-                return ([1.0, 1.0, 1.0], None, [1, 1, 1], [-0.5, -0.5, -0.5]);
+                errors.push(
+                    "fdm_empty_geometry_bounds: CSG/sliced/transformed geometry has empty or unbounded support"
+                        .to_string(),
+                );
+                return ([1.0, 1.0, 1.0], Some(vec![false]), [1, 1, 1], [-0.5, -0.5, -0.5]);
             };
             let bbox = [
                 bounds_max[0] - bounds_min[0],

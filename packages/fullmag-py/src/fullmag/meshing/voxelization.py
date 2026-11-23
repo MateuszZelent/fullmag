@@ -10,6 +10,7 @@ from numpy.typing import NDArray
 from fullmag.model.geometry import (
     ArchWaveguide,
     Box,
+    Cone,
     Cylinder,
     Difference,
     Ellipse,
@@ -17,9 +18,15 @@ from fullmag.model.geometry import (
     Geometry,
     ImportedGeometry,
     Intersection,
+    PolygonPrism,
     SinWaveguide,
+    SlicePlane,
+    Torus,
+    Transform,
     Translate,
     Union,
+    Xor,
+    rotation_matrix_from_quaternion,
 )
 
 
@@ -411,6 +418,28 @@ def _geometry_bounds(
     if isinstance(geometry, Ellipse):
         half_height = geometry.height / 2.0
         return (-geometry.rx, -geometry.ry, -half_height), (geometry.rx, geometry.ry, half_height)
+    if isinstance(geometry, Cone):
+        half_height = geometry.height / 2.0
+        mins = []
+        maxs = []
+        for comp in geometry.axis:
+            perp = float(np.sqrt(max(0.0, 1.0 - comp * comp)))
+            c_bot = -half_height * comp
+            c_top = half_height * comp
+            mins.append(min(c_bot - geometry.radius_bottom * perp, c_top - geometry.radius_top * perp))
+            maxs.append(max(c_bot + geometry.radius_bottom * perp, c_top + geometry.radius_top * perp))
+        return tuple(mins), tuple(maxs)
+    if isinstance(geometry, Torus):
+        extents = tuple(
+            geometry.major_radius * float(np.sqrt(max(0.0, 1.0 - comp * comp))) + geometry.minor_radius
+            for comp in geometry.axis
+        )
+        return tuple(-v for v in extents), extents
+    if isinstance(geometry, PolygonPrism):
+        xs = [pt[0] for pt in geometry.vertices_xy]
+        ys = [pt[1] for pt in geometry.vertices_xy]
+        half_t = geometry.thickness / 2.0
+        return (min(xs), min(ys), -half_t), (max(xs), max(ys), half_t)
     if isinstance(geometry, Difference):
         return _geometry_bounds(geometry.base)
     if isinstance(geometry, Union):
@@ -420,13 +449,23 @@ def _geometry_bounds(
             tuple(min(a_min[i], b_min[i]) for i in range(3)),
             tuple(max(a_max[i], b_max[i]) for i in range(3)),
         )
+    if isinstance(geometry, Xor):
+        l_min, l_max = _geometry_bounds(geometry.left)
+        r_min, r_max = _geometry_bounds(geometry.right)
+        return (
+            tuple(min(l_min[i], r_min[i]) for i in range(3)),
+            tuple(max(l_max[i], r_max[i]) for i in range(3)),
+        )
     if isinstance(geometry, Intersection):
         a_min, a_max = _geometry_bounds(geometry.a)
         b_min, b_max = _geometry_bounds(geometry.b)
-        return (
-            tuple(max(a_min[i], b_min[i]) for i in range(3)),
-            tuple(min(a_max[i], b_max[i]) for i in range(3)),
-        )
+        c_min = tuple(max(a_min[i], b_min[i]) for i in range(3))
+        c_max = tuple(min(a_max[i], b_max[i]) for i in range(3))
+        if any(c_max[i] <= c_min[i] for i in range(3)):
+            raise ValueError(
+                f"empty_geometry_intersection: Intersection '{geometry.geometry_name}' operands do not overlap"
+            )
+        return c_min, c_max
     if isinstance(geometry, Translate):
         inner_min, inner_max = _geometry_bounds(geometry.geometry)
         ox, oy, oz = geometry.offset
@@ -439,6 +478,72 @@ def _geometry_bounds(
             inner_max[1] + oy,
             inner_max[2] + oz,
         )
+    if isinstance(geometry, Transform):
+        child_min, child_max = _geometry_bounds(geometry.child)
+        rot = rotation_matrix_from_quaternion(geometry.rotation_quat)
+        tx, ty, tz = geometry.translation
+        sx, sy, sz = geometry.scale
+        px, py, pz = geometry.pivot
+        pts: list[tuple[float, float, float]] = []
+        for x in (child_min[0], child_max[0]):
+            for y in (child_min[1], child_max[1]):
+                for z in (child_min[2], child_max[2]):
+                    lx = (x - px) * sx
+                    ly = (y - py) * sy
+                    lz = (z - pz) * sz
+                    pts.append(
+                        (
+                            rot[0][0] * lx + rot[0][1] * ly + rot[0][2] * lz + px + tx,
+                            rot[1][0] * lx + rot[1][1] * ly + rot[1][2] * lz + py + ty,
+                            rot[2][0] * lx + rot[2][1] * ly + rot[2][2] * lz + pz + tz,
+                        )
+                    )
+        return (
+            tuple(min(pt[i] for pt in pts) for i in range(3)),
+            tuple(max(pt[i] for pt in pts) for i in range(3)),
+        )
+    if isinstance(geometry, SlicePlane):
+        child_min, child_max = _geometry_bounds(geometry.child)
+        ox, oy, oz = geometry.plane_origin
+        nx, ny, nz = geometry.plane_normal
+        sign = 1.0 if geometry.keep_side == "positive" else -1.0
+        corners = [
+            (x, y, z)
+            for x in (child_min[0], child_max[0])
+            for y in (child_min[1], child_max[1])
+            for z in (child_min[2], child_max[2])
+        ]
+        signed = [
+            sign * ((pt[0] - ox) * nx + (pt[1] - oy) * ny + (pt[2] - oz) * nz)
+            for pt in corners
+        ]
+        kept = [pt for pt, d in zip(corners, signed) if d >= -1e-18]
+        for i in range(8):
+            for bit in (1, 2, 4):
+                j = i ^ bit
+                if j > i:
+                    di, dj = signed[i], signed[j]
+                    if (di < 0.0 < dj) or (dj < 0.0 < di):
+                        t = di / (di - dj)
+                        pi, pj = corners[i], corners[j]
+                        kept.append(
+                            (
+                                pi[0] + t * (pj[0] - pi[0]),
+                                pi[1] + t * (pj[1] - pi[1]),
+                                pi[2] + t * (pj[2] - pi[2]),
+                            )
+                        )
+        if not kept:
+            raise ValueError(
+                f"empty_geometry_slice: SlicePlane '{geometry.geometry_name}' clips the entire geometry"
+            )
+        c_min = tuple(min(pt[i] for pt in kept) for i in range(3))
+        c_max = tuple(max(pt[i] for pt in kept) for i in range(3))
+        if any(c_max[i] <= c_min[i] for i in range(3)):
+            raise ValueError(
+                f"empty_geometry_slice: SlicePlane '{geometry.geometry_name}' leaves zero-volume geometry"
+            )
+        return c_min, c_max
     if isinstance(geometry, ImportedGeometry):
         raise TypeError(
             "cannot compute bounding box for ImportedGeometry; "
@@ -518,6 +623,48 @@ def _contains(
         rx, ry, h = geometry.rx, geometry.ry, geometry.height
         return ((xx / rx) ** 2 + (yy / ry) ** 2 <= 1.0) & (np.abs(zz) <= h / 2.0)
 
+    if isinstance(geometry, Cone):
+        half_h = geometry.height / 2.0
+        ax, ay, az = geometry.axis
+        axial = xx * ax + yy * ay + zz * az
+        radial_sq = np.maximum(0.0, (xx * xx + yy * yy + zz * zz) - axial * axial)
+        t = (axial + half_h) / geometry.height
+        r_at_t = geometry.radius_bottom * (1.0 - t) + geometry.radius_top * t
+        return (np.abs(axial) <= half_h) & (radial_sq <= r_at_t * r_at_t)
+
+    if isinstance(geometry, Torus):
+        ax, ay, az = geometry.axis
+        axial = xx * ax + yy * ay + zz * az
+        radial = np.sqrt(np.maximum(0.0, (xx * xx + yy * yy + zz * zz) - axial * axial))
+        return (radial - geometry.major_radius) ** 2 + axial * axial <= geometry.minor_radius ** 2
+
+    if isinstance(geometry, PolygonPrism):
+        in_z = np.abs(zz) <= geometry.thickness / 2.0
+        inside = np.zeros(xx.shape, dtype=np.bool_)
+        on_edge = np.zeros(xx.shape, dtype=np.bool_)
+        verts = geometry.vertices_xy
+        n_verts = len(verts)
+        scale_ref = max(max(abs(x), abs(y)) for x, y in verts)
+        edge_tol_sq = (max(scale_ref, 1.0) * 1e-12) ** 2
+        for i in range(n_verts):
+            x1, y1 = verts[i]
+            x2, y2 = verts[(i + 1) % n_verts]
+            # Ray-casting crossing test
+            cond = (y1 > yy) != (y2 > yy)
+            dy = y2 - y1
+            if dy != 0.0:
+                x_intersect = x1 + (yy - y1) * (x2 - x1) / dy
+                inside ^= cond & (xx < x_intersect)
+            # Point-on-segment boundary test
+            dx_e = x2 - x1
+            dy_e = y2 - y1
+            len_sq = dx_e * dx_e + dy_e * dy_e
+            if len_sq > 0.0:
+                proj = np.clip(((xx - x1) * dx_e + (yy - y1) * dy_e) / len_sq, 0.0, 1.0)
+                dist_sq = (xx - (x1 + proj * dx_e)) ** 2 + (yy - (y1 + proj * dy_e)) ** 2
+                on_edge |= dist_sq <= edge_tol_sq
+        return in_z & (inside | on_edge)
+
     if isinstance(geometry, Difference):
         base_mask = _contains(geometry.base, xx, yy, zz)
         tool_mask = _contains(geometry.tool, xx, yy, zz)
@@ -529,9 +676,37 @@ def _contains(
     if isinstance(geometry, Intersection):
         return _contains(geometry.a, xx, yy, zz) & _contains(geometry.b, xx, yy, zz)
 
+    if isinstance(geometry, Xor):
+        return _contains(geometry.left, xx, yy, zz) ^ _contains(geometry.right, xx, yy, zz)
+
     if isinstance(geometry, Translate):
         ox, oy, oz = geometry.offset
         return _contains(geometry.geometry, xx - ox, yy - oy, zz - oz)
+
+    if isinstance(geometry, Transform):
+        # Exact inverse of M = T(t + p) R S T(-p):
+        # q_local = p + S^{-1} * (R^T @ (q_world - t - p))
+        rot = rotation_matrix_from_quaternion(geometry.rotation_quat)
+        tx, ty, tz = geometry.translation
+        px, py, pz = geometry.pivot
+        sx, sy, sz = geometry.scale
+        dx = xx - (tx + px)
+        dy = yy - (ty + py)
+        dz = zz - (tz + pz)
+        rx = rot[0][0] * dx + rot[1][0] * dy + rot[2][0] * dz
+        ry = rot[0][1] * dx + rot[1][1] * dy + rot[2][1] * dz
+        rz = rot[0][2] * dx + rot[1][2] * dy + rot[2][2] * dz
+        lx = px + rx / sx
+        ly = py + ry / sy
+        lz = pz + rz / sz
+        return _contains(geometry.child, lx, ly, lz)
+
+    if isinstance(geometry, SlicePlane):
+        ox, oy, oz = geometry.plane_origin
+        nx, ny, nz = geometry.plane_normal
+        signed = (xx - ox) * nx + (yy - oy) * ny + (zz - oz) * nz
+        halfspace = signed >= 0.0 if geometry.keep_side == "positive" else signed <= 0.0
+        return _contains(geometry.child, xx, yy, zz) & halfspace
 
     raise TypeError(f"unsupported geometry type for containment test: {type(geometry)!r}")
 
@@ -556,6 +731,10 @@ def voxelize_geometry(
     sx = bounds_max[0] - bounds_min[0]
     sy = bounds_max[1] - bounds_min[1]
     sz = bounds_max[2] - bounds_min[2]
+    if sx <= 0.0 or sy <= 0.0 or sz <= 0.0:
+        raise ValueError(
+            f"empty_geometry_bounds: geometry '{geometry.geometry_name}' has non-positive bounding box ({sx}, {sy}, {sz})"
+        )
     dx, dy, dz = cell_size
     nx = max(1, int(round(sx / dx)))
     ny = max(1, int(round(sy / dy)))
@@ -575,6 +754,11 @@ def voxelize_geometry(
     ).copy()
 
     mask = _contains(geometry, xx, yy, zz)
+    if not np.any(mask):
+        raise ValueError(
+            f"empty_voxel_mask: geometry '{geometry.geometry_name}' produced zero active cells "
+            f"at cell_size={cell_size}"
+        )
 
     return VoxelMaskData(
         mask=mask,

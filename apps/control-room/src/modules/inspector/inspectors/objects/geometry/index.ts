@@ -1,5 +1,27 @@
 export {
+  BooleanNodeSection,
+  buildQuickCutoutGeometry,
+  computeCutoutHeightFromBounds,
+  type BooleanNodeSectionProps,
+  type QuickCutoutKind,
+} from "./BooleanNodeSection";
+export {
+  analyzeDeleteObjectImpact,
+  DeleteObjectImpactDialog,
+  type DeleteObjectImpactCategory,
+  type DeleteObjectImpactDialogProps,
+  type DeleteObjectImpactSummary,
+} from "./DeleteObjectImpactDialog";
+export {
+  buildGeometryNodeDraft,
+  GeometryNodeInspectorPanel,
+  patchOperandInCompositeGeometry,
+  resolveSelectedOperandId,
+  type GeometryNodeSpecDraft,
+} from "./GeometryNodeInspectorSpec";
+export {
   buildBaselineFromScene,
+  mergeTransformPatch,
   resolveMeshStatusFromObject,
   resolvePreviewOverlayDraft,
   serializeGeometryPayload,

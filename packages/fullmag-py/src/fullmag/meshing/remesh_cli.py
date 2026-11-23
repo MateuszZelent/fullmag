@@ -51,15 +51,21 @@ from fullmag.model.discretization import FEM
 from fullmag.model.geometry import (
     ArchWaveguide,
     Box,
+    Cone,
     Cylinder,
     Difference,
     Ellipse,
     Ellipsoid,
     ImportedGeometry,
     Intersection,
+    PolygonPrism,
     SinWaveguide,
+    SlicePlane,
+    Torus,
+    Transform,
     Translate,
     Union,
+    Xor,
 )
 
 _DEFAULT_INLINE_TOPOLOGY_MAX_BYTES = 8 * 1024 * 1024
@@ -170,6 +176,51 @@ def _geometry_from_ir(entry: dict[str, Any]) -> Any:
         return Translate(
             geometry=_geometry_from_ir(entry["base"]),
             offset=(by[0], by[1], by[2]),
+            name=entry.get("name"),
+        )
+    if kind == "cone":
+        return Cone(
+            radius_bottom=float(entry["radius_bottom"]),
+            radius_top=float(entry["radius_top"]),
+            height=float(entry.get("height", entry.get("length"))),
+            axis=tuple(float(v) for v in entry.get("axis", (0.0, 0.0, 1.0))),
+            name=entry.get("name", "cone"),
+        )
+    if kind == "torus":
+        return Torus(
+            major_radius=float(entry["major_radius"]),
+            minor_radius=float(entry["minor_radius"]),
+            axis=tuple(float(v) for v in entry.get("axis", (0.0, 0.0, 1.0))),
+            name=entry.get("name", "torus"),
+        )
+    if kind == "polygon_prism":
+        return PolygonPrism(
+            vertices_xy=[(float(pt[0]), float(pt[1])) for pt in entry["vertices_xy"]],
+            thickness=float(entry["thickness"]),
+            name=entry.get("name", "polygon_prism"),
+        )
+    if kind == "xor":
+        return Xor(
+            left=_geometry_from_ir(entry["left"]),
+            right=_geometry_from_ir(entry["right"]),
+            name=entry.get("name", "xor"),
+        )
+    if kind == "transform":
+        return Transform(
+            child=_geometry_from_ir(entry["child"]),
+            translation=tuple(float(v) for v in entry.get("translation", (0.0, 0.0, 0.0))),
+            rotation_quat=tuple(float(v) for v in entry.get("rotation_quat", (0.0, 0.0, 0.0, 1.0))),
+            scale=tuple(float(v) for v in entry.get("scale", (1.0, 1.0, 1.0))),
+            pivot=tuple(float(v) for v in entry.get("pivot", (0.0, 0.0, 0.0))),
+            name=entry.get("name"),
+        )
+    if kind == "slice_plane":
+        origin = entry.get("plane_origin", entry.get("plane_origin_m", (0.0, 0.0, 0.0)))
+        return SlicePlane(
+            child=_geometry_from_ir(entry["child"]),
+            plane_origin=tuple(float(v) for v in origin),
+            plane_normal=tuple(float(v) for v in entry.get("plane_normal", (0.0, 0.0, 1.0))),
+            keep_side=str(entry.get("keep_side", "positive")),
             name=entry.get("name"),
         )
     raise ValueError(f"unsupported geometry kind for remesh: {kind!r}")

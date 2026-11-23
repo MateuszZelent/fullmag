@@ -340,6 +340,119 @@ export function deleteObjectTransaction(
   );
 }
 
+export type BooleanCombineOp =
+  | "union"
+  | "subtract"
+  | "intersect"
+  | "xor"
+  | "imprint_regions";
+
+export type BooleanOperandOp = "union" | "subtract" | "intersect" | "xor";
+
+export type BooleanRegionMergePolicy =
+  | "keep_target_only"
+  | "promote_tools_to_regions";
+
+export interface BooleanCombineObjectsRequest {
+  base_revision: number;
+  op: BooleanCombineOp;
+  target_object_id: string;
+  tool_object_ids: readonly string[];
+  keep_tools?: boolean;
+  region_merge_policy?: BooleanRegionMergePolicy;
+}
+
+export interface UpdateBooleanOperandsRequest {
+  base_revision: number;
+  object_id: string;
+  op?: BooleanOperandOp;
+  reorder_operand_ids?: readonly string[];
+  toggle_operand?: { operand_id: string; enabled: boolean };
+  remove_operand_id?: string;
+  add_operand?: {
+    label: string;
+    geometry: Record<string, unknown>;
+    transform?: Record<string, unknown>;
+  };
+}
+
+export interface SeparateObjectRequest {
+  base_revision: number;
+  object_id: string;
+  mode: "extract_operand" | "split_by_plane";
+  operand_id?: string;
+  keep_in_boolean?: boolean;
+  plane_origin_m?: readonly [number, number, number];
+  plane_normal?: readonly [number, number, number];
+}
+
+export interface DuplicateObjectsRequest {
+  base_revision: number;
+  object_ids: readonly string[];
+  offset_m?: readonly [number, number, number];
+  copy_regions?: boolean;
+}
+
+export function booleanCombineObjectsTransaction(
+  api: GeometryTransactionApi,
+  request: BooleanCombineObjectsRequest,
+  options?: RequestOptions,
+): Promise<AuthoringTransactionResponse> {
+  return commitTransaction(
+    api,
+    {
+      ...request,
+      kind: "boolean_combine_objects",
+    } as unknown as AuthoringTransactionRequest,
+    options,
+  );
+}
+
+export function updateBooleanOperandsTransaction(
+  api: GeometryTransactionApi,
+  request: UpdateBooleanOperandsRequest,
+  options?: RequestOptions,
+): Promise<AuthoringTransactionResponse> {
+  return commitTransaction(
+    api,
+    {
+      ...request,
+      kind: "update_boolean_operands",
+    } as unknown as AuthoringTransactionRequest,
+    options,
+  );
+}
+
+export function separateObjectTransaction(
+  api: GeometryTransactionApi,
+  request: SeparateObjectRequest,
+  options?: RequestOptions,
+): Promise<AuthoringTransactionResponse> {
+  return commitTransaction(
+    api,
+    {
+      ...request,
+      kind: "separate_object",
+    } as unknown as AuthoringTransactionRequest,
+    options,
+  );
+}
+
+export function duplicateObjectsTransaction(
+  api: GeometryTransactionApi,
+  request: DuplicateObjectsRequest,
+  options?: RequestOptions,
+): Promise<AuthoringTransactionResponse> {
+  return commitTransaction(
+    api,
+    {
+      ...request,
+      kind: "duplicate_objects",
+    } as unknown as AuthoringTransactionRequest,
+    options,
+  );
+}
+
 export function submitObjectMeshBuild(
   api: SimulationCommandApi,
   objectId: string,

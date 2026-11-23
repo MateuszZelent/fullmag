@@ -9,6 +9,7 @@ from fullmag.model.geometry import (
     ArchWaveguide,
     Box,
     CPWAntennaLayout,
+    Cone,
     Cylinder,
     Difference,
     Ellipse,
@@ -20,8 +21,14 @@ from fullmag.model.geometry import (
     MeanderAntennaLayout,
     MicrostripAntennaLayout,
     PiecewisePath3DLayout,
+    PolygonPrism,
+    SinWaveguide,
+    SlicePlane,
+    Torus,
+    Transform,
     Translate,
     Union,
+    Xor,
 )
 from ._gmsh_types import MeshData, SharedDomainMeshResult
 from ._gmsh_infra import _quality_volumes_in_si
@@ -128,13 +135,21 @@ def is_occ_compatible(geometries: list[Geometry]) -> bool:
                 Box,
                 Ellipsoid,
                 Ellipse,
+                Cone,
+                Torus,
+                PolygonPrism,
                 ArchWaveguide,
+                SinWaveguide,
                 *ANTENNA_LAYOUT_TYPES,
             ),
         ):
             continue
         if isinstance(geometry, Translate):
             if not is_occ_compatible([geometry.geometry]):
+                return False
+            continue
+        if isinstance(geometry, (Transform, SlicePlane)):
+            if not is_occ_compatible([geometry.child]):
                 return False
             continue
         if isinstance(geometry, Difference):
@@ -149,6 +164,10 @@ def is_occ_compatible(geometries: list[Geometry]) -> bool:
             if not is_occ_compatible([geometry.a, geometry.b]):
                 return False
             continue
+        if isinstance(geometry, Xor):
+            if not is_occ_compatible([geometry.left, geometry.right]):
+                return False
+            continue
         return False
     return True
 
@@ -156,7 +175,9 @@ def is_occ_compatible(geometries: list[Geometry]) -> bool:
 def _contains_boolean_csg(geometry: Geometry) -> bool:
     if isinstance(geometry, Translate):
         return _contains_boolean_csg(geometry.geometry)
-    if isinstance(geometry, (Difference, Intersection, Union)):
+    if isinstance(geometry, Transform):
+        return _contains_boolean_csg(geometry.child)
+    if isinstance(geometry, (Difference, Intersection, Union, Xor, SlicePlane)):
         return True
     return False
 

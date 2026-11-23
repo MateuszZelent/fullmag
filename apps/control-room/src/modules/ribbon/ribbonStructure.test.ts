@@ -5422,19 +5422,36 @@ describe("ribbon structure", () => {
     expect(thinFilmAction).not.toHaveProperty("disabled");
   });
 
+  it("exposes enabled Etap B primitives, Boolean CSG, and Modify actions in Geometry tab", () => {
+    const actions = ALL_TAB_CONTENT.geometry.groups.flatMap((group) => group.actions);
+    const enabledIds = [
+      "geometry.add-box",
+      "geometry.add-thin-film",
+      "geometry.add-cylinder",
+      "geometry.add-sphere",
+      "geometry.add-ellipsoid",
+      "geometry.add-cone",
+      "geometry.add-torus",
+      "geometry.add-polygon-prism",
+      "geometry.import-stl",
+      "geometry.boolean-union",
+      "geometry.boolean-subtract",
+      "geometry.boolean-intersect",
+      "geometry.boolean-imprint-regions",
+      "geometry.duplicate-objects",
+      "geometry.split-by-plane",
+      "geometry.extract-operand",
+    ];
+    for (const id of enabledIds) {
+      const action = actions.find((item) => item.id === id);
+      expect(action, id).toBeDefined();
+      expect(action?.disabled, id).not.toBe(true);
+      expect(action?.preview, id).not.toBe(true);
+    }
+  });
+
   it("keeps unsupported Geometry builder controls explicitly disabled", () => {
     const unsupportedIds = new Set([
-      "builder-add-ellipsoid",
-      "builder-add-disk",
-      "builder-add-pillar",
-      "builder-add-nanowire",
-      "builder-add-ring",
-      "builder-add-triangular_prism",
-      "builder-add-cone",
-      "builder-add-capsule",
-      "builder-add-tube",
-      "builder-add-wedge",
-      "builder-add-polygon_prism",
       "builder-tool-rotate",
       "builder-tool-scale",
       "builder-mode-camera",

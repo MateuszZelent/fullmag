@@ -239,7 +239,7 @@ def test_p0_py_04_csg_and_translate_roundtrip_via_override_renderer(tmp_path: Pa
         assert isinstance(op_geom, cls)
 
 
-@pytest.mark.parametrize("unsupported_kind", ["Cone", "Torus", "PolygonPrism", "MysterySolid"])
+@pytest.mark.parametrize("unsupported_kind", ["MysterySolid", "UnknownPrimitive", "LegacyBogusShape"])
 def test_p0_py_04_unrecognized_geometry_raises_instead_of_silent_box(
     tmp_path: Path, unsupported_kind: str
 ) -> None:

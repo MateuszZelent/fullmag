@@ -300,7 +300,7 @@ const definitionsTab: RibbonTabContent = {
 const geometryTab: RibbonTabContent = {
   tabId: "geometry",
   groups: [
-    // â”€â”€ Create Object / Shape â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // ── Create Object / Shape ───────────────────────────────────────────────
     {
       id: "builder-create",
       title: "Create Object / Shape",
@@ -308,34 +308,41 @@ const geometryTab: RibbonTabContent = {
       tone: "authoring",
       actions: [
         { id: "geometry.add-box",          icon: icon(Box),      label: "Box",            iconColor: "text-emerald-400", splitButton: true, menu: menu("geometry-box", "Box primitive", ["Block", "Thin film", "Cuboid from bounds"]) },
+        { id: "geometry.add-thin-film",    icon: icon(Box),      label: "Thin Film",      iconColor: "text-lime-300" },
         { id: "geometry.add-cylinder",     icon: icon(Cylinder), label: "Cylinder",       iconColor: "text-cyan-400" },
         { id: "geometry.add-sphere",       icon: icon(Circle),   label: "Sphere",         iconColor: "text-violet-400" },
+        { id: "geometry.add-ellipsoid",    icon: icon(Circle),   label: "Ellipsoid",      iconColor: "text-purple-300" },
+        { id: "geometry.add-cone",         icon: icon(Triangle), label: "Cone",           iconColor: "text-yellow-300" },
+        { id: "geometry.add-torus",        icon: icon(Disc),     label: "Torus",          iconColor: "text-sky-400" },
+        { id: "geometry.add-polygon-prism", icon: icon(Hexagon), label: "Polygon Prism",  iconColor: "text-indigo-300" },
+        { id: "geometry.import-stl",       icon: icon(Upload),   label: "Import STL…",    iconColor: "text-amber-300" },
         { id: "geometry.add-microstrip-antenna", icon: icon(RadioTower), label: "Microstrip", iconColor: "text-rose-300" },
-        { id: "geometry.add-cpw-antenna", icon: icon(RadioTower), label: "CPW", iconColor: "text-sky-400" },
-        { id: "builder-add-ellipsoid",     icon: icon(Circle),   label: "Ellipsoid",      preview: true, disabled: true, iconColor: "text-purple-300" },
-        { id: "builder-add-disk",          icon: icon(Disc),     label: "Disk",           preview: true, disabled: true, iconColor: "text-sky-400" },
-        { id: "geometry.add-thin-film",    icon: icon(Box),      label: "Thin Film",      iconColor: "text-lime-300" },
-        { id: "builder-add-pillar",        icon: icon(Cylinder), label: "Pillar",         preview: true, disabled: true, iconColor: "text-fuchsia-300" },
-        { id: "builder-add-nanowire",      icon: icon(Minus),    label: "Nanowire",       preview: true, disabled: true, iconColor: "text-rose-300" },
-        { id: "builder-add-ring",          icon: icon(Circle),   label: "Ring",           preview: true, disabled: true, iconColor: "text-amber-300" },
-        { id: "builder-add-triangular_prism", icon: icon(Triangle), label: "Tri. Prism",  preview: true, disabled: true, iconColor: "text-orange-300" },
-        { id: "builder-add-cone",          icon: icon(Triangle), label: "Cone",           preview: true, disabled: true, iconColor: "text-yellow-300" },
-        { id: "builder-add-capsule",       icon: icon(Disc),     label: "Capsule",        preview: true, disabled: true, iconColor: "text-teal-300" },
-        { id: "builder-add-tube",          icon: icon(Circle),   label: "Tube",           preview: true, disabled: true, iconColor: "text-blue-300" },
-        { id: "builder-add-wedge",         icon: icon(Box),      label: "Wedge",          preview: true, disabled: true, iconColor: "text-stone-300" },
-        { id: "builder-add-polygon_prism", icon: icon(Circle),   label: "Polygon Prism",  preview: true, disabled: true, iconColor: "text-indigo-300" },
+        { id: "geometry.add-cpw-antenna",  icon: icon(RadioTower), label: "CPW",          iconColor: "text-sky-400" },
       ],
     },
-    // â”€â”€ Boolean â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // ── Boolean CSG ─────────────────────────────────────────────────────────
     {
       id: "builder-boolean",
       title: "Boolean",
       subtitle: "Compose object geometry",
       tone: "authoring",
       actions: [
-        { id: "builder-boolean-union",     icon: icon(Combine), label: "Union",     preview: true, disabled: true, iconColor: "text-emerald-400" },
-        { id: "builder-boolean-subtract",  icon: icon(Minus),   label: "Subtract",  preview: true, disabled: true, iconColor: "text-amber-400" },
-        { id: "builder-boolean-intersect", icon: icon(Plus),    label: "Intersect", preview: true, disabled: true, iconColor: "text-slate-400" },
+        { id: "geometry.boolean-union",           icon: icon(Combine), label: "Union A ∪ B",     iconColor: "text-emerald-400" },
+        { id: "geometry.boolean-subtract",        icon: icon(Minus),   label: "Subtract A − B",  iconColor: "text-amber-400" },
+        { id: "geometry.boolean-intersect",       icon: icon(Blend),   label: "Intersect A ∩ B", iconColor: "text-cyan-400" },
+        { id: "geometry.boolean-imprint-regions", icon: icon(Layers3), label: "Imprint Regions", iconColor: "text-violet-300" },
+      ],
+    },
+    // ── Modify ──────────────────────────────────────────────────────────────
+    {
+      id: "builder-modify",
+      title: "Modify",
+      subtitle: "Duplicate & separate",
+      tone: "authoring",
+      actions: [
+        { id: "geometry.duplicate-objects", icon: icon(Plus),     label: "Duplicate",       shortcut: "Ctrl+D", iconColor: "text-emerald-300" },
+        { id: "geometry.split-by-plane",    icon: icon(Scissors), label: "Split by Plane",  iconColor: "text-amber-300" },
+        { id: "geometry.extract-operand",   icon: icon(Columns2), label: "Extract Operand", iconColor: "text-sky-300" },
       ],
     },
     // â”€â”€ Transform â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€

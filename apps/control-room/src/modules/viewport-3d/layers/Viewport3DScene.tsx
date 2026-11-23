@@ -285,7 +285,10 @@ interface Viewport3DSceneProps {
   onCameraInteractionEnd?: (epoch?: number) => void;
   onCameraInteractionStart?: (epoch?: number) => void;
   onCaptureFrameReady?: () => void;
-  onSelectObject: (object: Viewport3DPrimitiveObject) => void;
+  onSelectObject: (
+    object: Viewport3DPrimitiveObject,
+    modifiers?: { ctrlKey?: boolean; metaKey?: boolean; shiftKey?: boolean },
+  ) => void;
   onSelectPlanarMonitor: (monitorId: string, isDraft: boolean) => void;
   onSelectRegion: (selection: RegionOverlaySelection) => void;
   onSelectDomain: () => void;

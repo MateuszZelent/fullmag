@@ -1012,6 +1012,8 @@ use utoipa::OpenApi;
         fullmag_authoring::SceneOerstedField,
         crate::schemas::authoring::AuthoringTransactionRequest,
         crate::schemas::authoring::AuthoringTransactionResponse,
+        crate::schemas::authoring::BooleanOperandToggle,
+        crate::schemas::authoring::BooleanOperandInput,
         crate::schemas::authoring::MagnetizationApplyRequest,
         crate::schemas::authoring::MagnetizationApplyTarget,
         crate::schemas::authoring::MagnetizationApplyScope,

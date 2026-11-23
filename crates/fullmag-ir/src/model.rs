@@ -139,6 +139,59 @@ pub enum GeometryEntryIR {
         base: std::boxed::Box<GeometryEntryIR>,
         by: [f64; 3],
     },
+    Transform {
+        name: String,
+        child: std::boxed::Box<GeometryEntryIR>,
+        #[serde(default)]
+        translation: [f64; 3],
+        #[serde(default = "default_texture_rotation_quat")]
+        rotation_quat: [f64; 4],
+        #[serde(default = "default_texture_scale")]
+        scale: [f64; 3],
+        #[serde(default = "default_texture_pivot")]
+        pivot: [f64; 3],
+    },
+    SlicePlane {
+        name: String,
+        child: std::boxed::Box<GeometryEntryIR>,
+        plane_origin: [f64; 3],
+        plane_normal: [f64; 3],
+        #[serde(default = "default_slice_keep_side")]
+        keep_side: String,
+    },
+    Cone {
+        name: String,
+        radius_bottom: f64,
+        radius_top: f64,
+        height: f64,
+        #[serde(default = "default_geometry_z_axis")]
+        axis: [f64; 3],
+    },
+    Torus {
+        name: String,
+        major_radius: f64,
+        minor_radius: f64,
+        #[serde(default = "default_geometry_z_axis")]
+        axis: [f64; 3],
+    },
+    PolygonPrism {
+        name: String,
+        vertices_xy: Vec<[f64; 2]>,
+        thickness: f64,
+    },
+    Xor {
+        name: String,
+        left: std::boxed::Box<GeometryEntryIR>,
+        right: std::boxed::Box<GeometryEntryIR>,
+    },
+}
+
+fn default_geometry_z_axis() -> [f64; 3] {
+    [0.0, 0.0, 1.0]
+}
+
+fn default_slice_keep_side() -> String {
+    "positive".to_string()
 }
 
 impl GeometryEntryIR {
@@ -157,7 +210,13 @@ impl GeometryEntryIR {
             | Self::Difference { name, .. }
             | Self::Union { name, .. }
             | Self::Intersection { name, .. }
-            | Self::Translate { name, .. } => name,
+            | Self::Translate { name, .. }
+            | Self::Transform { name, .. }
+            | Self::SlicePlane { name, .. }
+            | Self::Cone { name, .. }
+            | Self::Torus { name, .. }
+            | Self::PolygonPrism { name, .. }
+            | Self::Xor { name, .. } => name,
         }
     }
 }

@@ -59,6 +59,10 @@ import {
   MODEL_SCENE_PATH,
   VISUALIZATION_STATE_PATH,
 } from "@/kernel/api/apiPaths";
+import {
+  geometryGhostVisibilityStore,
+  geometryOperandGhostKey,
+} from "@/kernel/visualization/geometryGhostVisibilityStore";
 import { useVisualizationStateResource } from "@/kernel/visualization/useVisualizationStateResource";
 import type { KernelApi, ModuleId } from "@/kernel/types";
 import { CommandDetailDialog } from "@/shared/runtime/CommandDetailDialog";
@@ -73,7 +77,12 @@ import {
 
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/shared/ui/Tooltip";
 
-import { selectExplorerNode } from "./explorerSelection";
+import {
+  orderedSelectedObjectIds,
+  selectionRoleBadgeForObject,
+} from "@/kernel/selection/selectionTypes";
+import { useSelectionSelector } from "@/kernel/selection/useSelection";
+import { selectExplorerNode, selectionFromExplorerNode } from "./explorerSelection";
 import { explorerStatusClassName, explorerStatusLabel } from "./explorerStatusClass";
 import { cn } from "@/shared/utils/className";
 import {
@@ -432,10 +441,13 @@ const ExplorerTreeRow = memo(function ExplorerTreeRow({
   hasChildren,
   kernel,
   moduleId,
+  multiSelected,
   node,
   resourceData,
+  roleBadge,
   rowIds,
   tabId,
+  visibleObjectIds,
 }: {
   active: boolean;
   depth: number;
@@ -444,17 +456,51 @@ const ExplorerTreeRow = memo(function ExplorerTreeRow({
   hasChildren: boolean;
   kernel: KernelApi;
   moduleId: ModuleId;
+  multiSelected: boolean;
   node: ExplorerNode;
   resourceData: Readonly<Record<string, unknown>>;
+  roleBadge: string | null;
   rowIds: readonly string[];
   tabId: ExplorerTabId;
+  visibleObjectIds: readonly string[];
 }) {
   const statusReasonId = useId();
   const [selectedCommandId, setSelectedCommandId] = useState<string | null>(null);
   const commandDetail = useCommandDetailResource(selectedCommandId);
+  const pointerSelectedRef = useRef(false);
   const selectable = node.selectable !== false;
 
-  function handleSelect(): void {
+  function handleSelect(modifiers?: {
+    ctrlKey?: boolean;
+    metaKey?: boolean;
+    shiftKey?: boolean;
+  }): void {
+    const canMultiSelect =
+      (node.kind === "object.root" || node.kind === "object.geometry") &&
+      Boolean(node.objectId);
+    if (canMultiSelect && node.objectId && modifiers?.shiftKey) {
+      kernel.selection.rangeSelectObjects(
+        visibleObjectIds,
+        node.objectId,
+        selectionFromExplorerNode(node),
+        moduleId,
+      );
+      setExplorerKeyboardRow(node.id);
+      return;
+    }
+    if (
+      canMultiSelect &&
+      node.objectId &&
+      (modifiers?.ctrlKey || modifiers?.metaKey)
+    ) {
+      kernel.selection.toggleObjectSelection(
+        node.objectId,
+        selectionFromExplorerNode(node),
+        moduleId,
+      );
+      setExplorerKeyboardRow(node.id);
+      return;
+    }
     selectExplorerNode(kernel, node, moduleId);
     setExplorerKeyboardRow(node.id);
   }
@@ -466,6 +512,33 @@ const ExplorerTreeRow = memo(function ExplorerTreeRow({
   }
 
   function handleKeyDown(event: KeyboardEvent<HTMLDivElement>): void {
+    if (
+      event.altKey &&
+      (event.key === "ArrowUp" || event.key === "ArrowDown") &&
+      node.kind === "object.geometry.node" &&
+      node.objectId &&
+      node.operandId
+    ) {
+      const commandId =
+        event.key === "ArrowUp"
+          ? "geometry.operand-move-up"
+          : "geometry.operand-move-down";
+      const command = kernel.commands.get(commandId);
+      if (command) {
+        event.preventDefault();
+        const context = commandContextForNode(
+          kernel,
+          node,
+          commandId,
+          resourceData,
+        );
+        if (kernel.commands.isEnabled(commandId, context)) {
+          void kernel.commands.execute(commandId, context);
+        }
+        return;
+      }
+    }
+
     const navigationTarget = resolveExplorerKeyboardTargetRowId({
       currentNodeId: node.id,
       key: event.key,
@@ -500,6 +573,7 @@ const ExplorerTreeRow = memo(function ExplorerTreeRow({
   }
 
   const tooltipParts: string[] = [node.label];
+  if (roleBadge) tooltipParts.push(`[${roleBadge}]`);
   if (node.status && node.status !== "ready") tooltipParts.push(`[${explorerStatusLabel(node.status)}]`);
   if (node.activeAnalysisField) tooltipParts.push("Active field");
   if (node.badge) tooltipParts.push(`— ${node.badge}`);
@@ -513,6 +587,7 @@ const ExplorerTreeRow = memo(function ExplorerTreeRow({
         explorerStatusClassName(node.status),
       )}
       data-active={active}
+      data-multi-selected={multiSelected ? "true" : undefined}
       data-active-analysis-field={node.activeAnalysisField ? "true" : undefined}
       data-node-id={node.id}
       data-status={statusLabel(node.status)}
@@ -522,8 +597,22 @@ const ExplorerTreeRow = memo(function ExplorerTreeRow({
       aria-level={depth + 1}
       aria-describedby={tooltipParts.length > 1 ? statusReasonId : undefined}
       aria-expanded={hasChildren ? expanded : undefined}
-      aria-selected={selectable ? active : undefined}
-      onClick={selectable ? handleSelect : undefined}
+      aria-selected={selectable ? active || multiSelected : undefined}
+      onClick={
+        selectable
+          ? (event) => {
+              if (pointerSelectedRef.current) {
+                pointerSelectedRef.current = false;
+                return;
+              }
+              handleSelect({
+                ctrlKey: event.ctrlKey,
+                metaKey: event.metaKey,
+                shiftKey: event.shiftKey,
+              });
+            }
+          : undefined
+      }
       onPointerDown={
         selectable
           ? (event) => {
@@ -534,6 +623,11 @@ const ExplorerTreeRow = memo(function ExplorerTreeRow({
               ) {
                 return;
               }
+              if (event.ctrlKey || event.metaKey || event.shiftKey) {
+                pointerSelectedRef.current = false;
+                return;
+              }
+              pointerSelectedRef.current = true;
               handleSelect();
             }
           : undefined
@@ -587,6 +681,11 @@ const ExplorerTreeRow = memo(function ExplorerTreeRow({
         ) : null}
         {node.activeAnalysisField ? (
           <span className="fm-explorer-tree-row__active-field"><Eye size={12} /><span className="fm-explorer-tree-row__active-text">active</span></span>
+        ) : null}
+        {roleBadge ? (
+          <span className="fm-explorer-tree-row__badge" data-selection-role={roleBadge}>
+            {roleBadge}
+          </span>
         ) : null}
         {node.badge ? <span className="fm-explorer-tree-row__badge">{node.badge}</span> : null}
       </span>
@@ -660,9 +759,30 @@ export function ExplorerTreeView({
     }),
     [runtimeResourceData, sceneResourceData, sharedCommandResources, visualizationState.data],
   );
+  const selectedObjectIds = useSelectionSelector(orderedSelectedObjectIds, {
+    isEqual: (previous, next) =>
+      previous.length === next.length &&
+      previous.every((value, index) => value === next[index]),
+  });
+  const ghostOperandKeys = useSyncExternalStore(
+    geometryGhostVisibilityStore.subscribe,
+    geometryGhostVisibilityStore.getSnapshot,
+    geometryGhostVisibilityStore.getServerSnapshot,
+  );
+  const selectedObjectIdSet = useMemo(
+    () => new Set(selectedObjectIds),
+    [selectedObjectIds],
+  );
   const rows = useMemo(
     () => flattenVisibleExplorerRows(nodes, expandedIds),
     [expandedIds, nodes],
+  );
+  const visibleObjectIds = useMemo(
+    () =>
+      rows
+        .filter((row) => row.node.kind === "object.root" && Boolean(row.node.objectId))
+        .map((row) => row.node.objectId as string),
+    [rows],
   );
   const virtualized = rows.length > EXPLORER_VIRTUALIZATION_THRESHOLD;
   const visibleRows = useMemo(
@@ -753,22 +873,45 @@ export function ExplorerTreeView({
             style={{ height: visibleRows.topPadding }}
           />
         ) : null}
-        {visibleRows.rows.map(({ depth, expanded, hasChildren, node }) => (
-          <ExplorerTreeRow
-            key={node.id}
-            active={activeNodeId === node.id}
-            depth={depth}
-            expanded={expanded}
-            focusable={focusableRowId === node.id}
-            hasChildren={hasChildren}
-            kernel={kernel}
-            moduleId={moduleId}
-            node={node}
-            resourceData={commandResourceData}
-            rowIds={visibleRowIds}
-            tabId={tabId}
-          />
-        ))}
+        {visibleRows.rows.map(({ depth, expanded, hasChildren, node }) => {
+          const isObjectRoot = node.kind === "object.root" && Boolean(node.objectId);
+          const multiSelected =
+            isObjectRoot &&
+            selectedObjectIds.length >= 2 &&
+            selectedObjectIdSet.has(node.objectId as string);
+          const roleBadge = isObjectRoot
+            ? selectionRoleBadgeForObject(
+                { objectId: selectedObjectIds[0] ?? null, selectedObjectIds },
+                node.objectId,
+              )
+            : node.kind === "object.geometry.node" &&
+                node.objectId &&
+                node.operandId &&
+                ghostOperandKeys.has(
+                  geometryOperandGhostKey(node.objectId, node.operandId),
+                )
+              ? "Ghost"
+              : null;
+          return (
+            <ExplorerTreeRow
+              key={node.id}
+              active={activeNodeId === node.id}
+              depth={depth}
+              expanded={expanded}
+              focusable={focusableRowId === node.id}
+              hasChildren={hasChildren}
+              kernel={kernel}
+              moduleId={moduleId}
+              multiSelected={multiSelected}
+              node={node}
+              resourceData={commandResourceData}
+              roleBadge={roleBadge}
+              rowIds={visibleRowIds}
+              tabId={tabId}
+              visibleObjectIds={visibleObjectIds}
+            />
+          );
+        })}
         {visibleRows.bottomPadding > 0 ? (
           <div
             aria-hidden="true"

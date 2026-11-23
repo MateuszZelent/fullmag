@@ -39,7 +39,11 @@ import type {
 import type { CommandDetailResource, StructuredCommandRequest } from "../api/apiTypes";
 import type { CommandContext, CommandContribution, CommandResult } from "../commands/commandTypes";
 import { assertCurrentSessionScope, obsoleteSessionResult } from "../commands/commandSessionScope";
-import type { Selection } from "../selection/selectionTypes";
+import {
+  orderedSelectedObjectIds,
+  type Selection,
+} from "../selection/selectionTypes";
+import { geometryGhostVisibilityStore } from "../visualization/geometryGhostVisibilityStore";
 import {
   meshEditorCapabilityBlocks,
   resolveMeshEditorCapabilities,
@@ -51,8 +55,14 @@ import {
 
 import {
   awaitMeshCommandTerminal,
+  booleanCombineObjectsTransaction,
   createObjectTransaction,
   deleteObjectTransaction,
+  duplicateObjectsTransaction,
+  separateObjectTransaction,
+  updateBooleanOperandsTransaction,
+  type BooleanCombineOp,
+  type BooleanRegionMergePolicy,
 } from "./geometryLifecycleCommands";
 import {
   primitiveDraftBaseName,
@@ -358,9 +368,23 @@ function isCapabilityEntryDisabled(
   return false;
 }
 
+export type PrimitiveDraftAuthoringKind =
+  | "box"
+  | "cylinder"
+  | "sphere"
+  | "ellipsoid"
+  | "cone"
+  | "torus"
+  | "polygon_prism";
+
+export type PrimitiveDraftIdentity =
+  | PrimitiveDraftAuthoringKind
+  | "thin-film"
+  | "polygon-prism";
+
 export function primitiveCapabilityDisabled(
   context: CommandContext,
-  primitiveKind: "box" | "cylinder" | "sphere",
+  primitiveKind: PrimitiveDraftAuthoringKind,
 ): boolean {
   const capabilities = resourceData(context, MODEL_GEOMETRY_CAPABILITIES_PATH);
   const primitiveKey = primitiveKind.toLowerCase();
@@ -458,7 +482,7 @@ export function csgCapabilityDisabled(
 }
 
 function primitiveCapabilityDisabledReason(
-  primitiveKind: "box" | "cylinder" | "sphere",
+  primitiveKind: PrimitiveDraftAuthoringKind,
 ): string {
   return `Backend does not expose ${primitiveKind} geometry authoring.`;
 }
@@ -1241,8 +1265,8 @@ function qualityRefinementMeshOptions(input: unknown): JsonObject | null {
 
 function openPrimitiveDraft(
   context: CommandContext,
-  primitiveKind: "box" | "cylinder" | "sphere",
-  draftIdentity: "box" | "thin-film" | "cylinder" | "sphere" = primitiveKind,
+  primitiveKind: PrimitiveDraftAuthoringKind,
+  draftIdentity: PrimitiveDraftIdentity = primitiveKind,
 ): void {
   context.selection?.set(
     {
@@ -1261,9 +1285,20 @@ function openPrimitiveDraft(
 
 function primitiveKindFromDraftSelection(
   selection: Selection | null | undefined,
-): "box" | "cylinder" | "sphere" {
+): PrimitiveDraftAuthoringKind {
   const suffix = selection?.nodeId?.split(":").at(-1);
-  if (suffix === "cylinder" || suffix === "sphere") return suffix;
+  if (
+    suffix === "cylinder" ||
+    suffix === "sphere" ||
+    suffix === "ellipsoid" ||
+    suffix === "cone" ||
+    suffix === "torus"
+  ) {
+    return suffix;
+  }
+  if (suffix === "polygon-prism" || suffix === "polygon_prism") {
+    return "polygon_prism";
+  }
   return "box";
 }
 
@@ -1277,7 +1312,7 @@ function sceneObjects(scene: unknown): JsonObject[] {
 }
 
 function defaultPrimitiveGeometry(
-  primitiveKind: "box" | "cylinder" | "sphere",
+  primitiveKind: PrimitiveDraftAuthoringKind,
 ): JsonObject {
   if (primitiveKind === "cylinder") {
     const geometryParams: JsonObject = { height: 1e-8, radius: 5e-8 };
@@ -1290,6 +1325,52 @@ function defaultPrimitiveGeometry(
     const geometryParams: JsonObject = { radius: 5e-8 };
     return {
       geometry_kind: "Sphere",
+      geometry_params: geometryParams,
+    };
+  }
+  if (primitiveKind === "ellipsoid") {
+    const geometryParams: JsonObject = { radii: [6e-8, 4e-8, 2e-8] };
+    return {
+      geometry_kind: "Ellipsoid",
+      geometry_params: geometryParams,
+    };
+  }
+  if (primitiveKind === "cone") {
+    const geometryParams: JsonObject = {
+      axis: [0, 0, 1],
+      height: 4e-8,
+      radius_bottom: 4e-8,
+      radius_top: 1.5e-8,
+    };
+    return {
+      geometry_kind: "Cone",
+      geometry_params: geometryParams,
+    };
+  }
+  if (primitiveKind === "torus") {
+    const geometryParams: JsonObject = {
+      axis: [0, 0, 1],
+      major_radius: 5e-8,
+      minor_radius: 1.5e-8,
+    };
+    return {
+      geometry_kind: "Torus",
+      geometry_params: geometryParams,
+    };
+  }
+  if (primitiveKind === "polygon_prism") {
+    const geometryParams: JsonObject = {
+      thickness: 1e-8,
+      vertices_xy: [
+        [-5e-8, -3e-8],
+        [5e-8, -3e-8],
+        [6e-8, 2e-8],
+        [0, 5e-8],
+        [-6e-8, 2e-8],
+      ],
+    };
+    return {
+      geometry_kind: "PolygonPrism",
       geometry_params: geometryParams,
     };
   }
@@ -1556,8 +1637,8 @@ function meshNavigationCommand(
 function primitiveDraftCommand(
   id: string,
   title: string,
-  primitiveKind: "box" | "cylinder" | "sphere",
-  draftIdentity: "box" | "thin-film" | "cylinder" | "sphere" = primitiveKind,
+  primitiveKind: PrimitiveDraftAuthoringKind,
+  draftIdentity: PrimitiveDraftIdentity = primitiveKind,
 ): CommandContribution {
   return {
     id,
@@ -1578,11 +1659,660 @@ function primitiveDraftCommand(
   };
 }
 
+function selectedObjectIdsFromContext(
+  context: Pick<CommandContext, "input" | "selection">,
+): readonly string[] {
+  const input = asRecord(context.input);
+  if (Array.isArray(input?.objectIds)) {
+    const explicit = input.objectIds.filter(
+      (id): id is string => typeof id === "string" && id.trim().length > 0,
+    );
+    if (explicit.length > 0) return explicit;
+  }
+  const selection = context.selection?.get();
+  return selection ? orderedSelectedObjectIds(selection) : [];
+}
+
+function csgCapabilityOpKey(op: BooleanCombineOp): string {
+  if (op === "subtract") return "difference";
+  if (op === "intersect") return "intersection";
+  return op;
+}
+
+function booleanCombineDisabledReason(
+  context: CommandContext,
+  op: BooleanCombineOp,
+): string | null {
+  if (!context.api) return "Control Room API is not available.";
+  if (csgCapabilityDisabled(context, csgCapabilityOpKey(op))) {
+    return `Backend does not expose ${op} boolean authoring.`;
+  }
+  const ids = selectedObjectIdsFromContext(context);
+  if (ids.length < 2) {
+    return "Select at least two scene objects (Base A, then Tool B) to run a boolean operation.";
+  }
+  if (sceneBaseRevision(context) === null) {
+    return "The canonical scene revision is unavailable. Refetch the scene before applying boolean operations.";
+  }
+  return null;
+}
+
+function booleanCombineCommand(
+  id: string,
+  title: string,
+  op: BooleanCombineOp,
+): CommandContribution {
+  return {
+    id,
+    title,
+    category: "Geometry",
+    group: "geometry",
+    scope: "selection",
+    isEnabled: (context) => booleanCombineDisabledReason(context, op) === null,
+    disabledReason: (context) => booleanCombineDisabledReason(context, op),
+    run: async (context) => {
+      const obsolete = obsoleteSessionResult(context);
+      if (obsolete) return obsolete;
+      const reason = booleanCombineDisabledReason(context, op);
+      if (reason) return { message: reason, status: "failed" };
+      if (!context.api) {
+        return { message: "Control-room API is unavailable.", status: "failed" };
+      }
+
+      const input = asRecord(context.input);
+      const selectedIds = selectedObjectIdsFromContext(context);
+      const targetObjectId =
+        asString(input?.targetObjectId) ??
+        asString(input?.target_object_id) ??
+        selectedIds[0];
+      const toolObjectIds = Array.isArray(input?.toolObjectIds)
+        ? input.toolObjectIds.filter((item): item is string => typeof item === "string" && item.length > 0)
+        : Array.isArray(input?.tool_object_ids)
+          ? input.tool_object_ids.filter((item): item is string => typeof item === "string" && item.length > 0)
+          : selectedIds.slice(1);
+      if (!targetObjectId || toolObjectIds.length === 0) {
+        return {
+          message: "Select at least two scene objects (Base A and Tool B).",
+          status: "failed",
+        };
+      }
+
+      const preparation = await prepareAuthoringMutation(context);
+      assertCurrentSessionScope(context);
+      const baseRevision =
+        typeof preparation.before?.revision === "number" &&
+        Number.isFinite(preparation.before.revision)
+          ? preparation.before.revision
+          : sceneBaseRevision(context);
+      if (baseRevision === null) {
+        return {
+          message: "The canonical scene revision is unavailable. Refetch the scene before committing.",
+          status: "failed",
+        };
+      }
+
+      const keepTools =
+        typeof input?.keepTools === "boolean"
+          ? input.keepTools
+          : typeof input?.keep_tools === "boolean"
+            ? input.keep_tools
+            : false;
+      const rawPolicy =
+        asString(input?.regionMergePolicy) ?? asString(input?.region_merge_policy);
+      const regionMergePolicy: BooleanRegionMergePolicy =
+        rawPolicy === "promote_tools_to_regions"
+          ? "promote_tools_to_regions"
+          : op === "imprint_regions"
+            ? "promote_tools_to_regions"
+            : "keep_target_only";
+
+      const response = await booleanCombineObjectsTransaction(
+        context.api,
+        {
+          base_revision: baseRevision,
+          keep_tools: keepTools,
+          op,
+          region_merge_policy: regionMergePolicy,
+          target_object_id: targetObjectId,
+          tool_object_ids: toolObjectIds,
+        },
+        sessionRequestOptions(context),
+      );
+      const obsoleteAfterWrite = obsoleteSessionResult(context);
+      if (obsoleteAfterWrite) return obsoleteAfterWrite;
+
+      selectCommittedObject(context, targetObjectId, targetObjectId);
+      await recordAuthoringMutationHistory(
+        context,
+        `${title}: ${targetObjectId}`,
+        preparation,
+        response.committed_scene,
+        captureAuthoringHistoryWorkspaceState(context),
+      );
+      assertCurrentSessionScope(context);
+      invalidateSceneAuthoringResources(context, response.scene_revision);
+      return { status: "completed" };
+    },
+  };
+}
+
+function resolveOperandContextInput(
+  context: Pick<CommandContext, "input" | "selection">,
+): { objectId: string | null; operandId: string | null } {
+  const input = asRecord(context.input);
+  const selection = context.selection?.get();
+  const ref = selection?.ref;
+  const objectId =
+    asString(input?.objectId) ??
+    asString(input?.object_id) ??
+    selectedObjectId(context);
+  const operandId =
+    asString(input?.operandId) ??
+    asString(input?.operand_id) ??
+    (ref?.type === "scene-object" ? ref.operandId ?? null : null);
+  return { objectId, operandId };
+}
+
+const LEGACY_CSG_OPERAND_PAIRS: readonly (readonly [string, string])[] = [
+  ["base", "tool"],
+  ["a", "b"],
+  ["left", "right"],
+];
+
+function readSceneObjectOperandIds(
+  scene: unknown,
+  objectId: string,
+): string[] {
+  const obj = sceneObjects(scene).find((item) => {
+    const id = asString(item.object_id) ?? asString(item.id);
+    return id === objectId;
+  });
+  const geom = asRecord(obj?.geometry);
+  const params = asRecord(geom?.geometry_params);
+  if (Array.isArray(params?.operands)) {
+    return params.operands
+      .map((entry, index) => {
+        const record = asRecord(entry);
+        return asString(record?.operand_id) ?? `operand-${index}`;
+      });
+  }
+  if (params) {
+    for (const [firstKey, secondKey] of LEGACY_CSG_OPERAND_PAIRS) {
+      if (asRecord(params[firstKey]) && asRecord(params[secondKey])) {
+        return [firstKey, secondKey];
+      }
+    }
+  }
+  return [];
+}
+
+function readSceneObjectOperandEnabled(
+  scene: unknown,
+  objectId: string,
+  operandId: string,
+): boolean | null {
+  const obj = sceneObjects(scene).find((item) => {
+    const id = asString(item.object_id) ?? asString(item.id);
+    return id === objectId;
+  });
+  const geom = asRecord(obj?.geometry);
+  const params = asRecord(geom?.geometry_params);
+  if (Array.isArray(params?.operands)) {
+    for (let index = 0; index < params.operands.length; index += 1) {
+      const record = asRecord(params.operands[index]);
+      const id = asString(record?.operand_id) ?? `operand-${index}`;
+      if (id === operandId) {
+        return typeof record?.enabled === "boolean" ? record.enabled : true;
+      }
+    }
+    return null;
+  }
+  if (params) {
+    for (const [firstKey, secondKey] of LEGACY_CSG_OPERAND_PAIRS) {
+      if (asRecord(params[firstKey]) && asRecord(params[secondKey])) {
+        if (operandId === firstKey || operandId === secondKey) return true;
+      }
+    }
+  }
+  return null;
+}
+
+function vector3FromUnknown(
+  raw: unknown,
+  fallback: readonly [number, number, number],
+): readonly [number, number, number] {
+  if (
+    Array.isArray(raw) &&
+    raw.length === 3 &&
+    raw.every((value) => typeof value === "number" && Number.isFinite(value))
+  ) {
+    return [raw[0] as number, raw[1] as number, raw[2] as number];
+  }
+  return fallback;
+}
+
 export const GEOMETRY_LIFECYCLE_COMMANDS: CommandContribution[] = [
   primitiveDraftCommand("geometry.add-box", "Add Box", "box"),
   primitiveDraftCommand("geometry.add-thin-film", "Add Thin Film", "box", "thin-film"),
   primitiveDraftCommand("geometry.add-cylinder", "Add Cylinder", "cylinder"),
   primitiveDraftCommand("geometry.add-sphere", "Add Sphere", "sphere"),
+  primitiveDraftCommand("geometry.add-ellipsoid", "Add Ellipsoid", "ellipsoid"),
+  primitiveDraftCommand("geometry.add-cone", "Add Cone", "cone"),
+  primitiveDraftCommand("geometry.add-torus", "Add Torus", "torus"),
+  primitiveDraftCommand("geometry.add-polygon-prism", "Add Polygon Prism", "polygon_prism", "polygon-prism"),
+  booleanCombineCommand("geometry.boolean-union", "Boolean Union", "union"),
+  booleanCombineCommand("geometry.boolean-subtract", "Boolean Subtract", "subtract"),
+  booleanCombineCommand("geometry.boolean-intersect", "Boolean Intersect", "intersect"),
+  booleanCombineCommand("geometry.boolean-imprint-regions", "Imprint Regions", "imprint_regions"),
+  {
+    id: "geometry.duplicate-objects",
+    title: "Duplicate Selected",
+    category: "Geometry",
+    group: "geometry",
+    shortcut: "Ctrl+D",
+    scope: "selection",
+    isEnabled: (context) =>
+      Boolean(context.api) &&
+      selectedObjectIdsFromContext(context).length >= 1 &&
+      sceneBaseRevision(context) !== null,
+    disabledReason: (context) => {
+      if (!context.api) return "Control Room API is not available.";
+      if (selectedObjectIdsFromContext(context).length < 1) {
+        return "Select at least one scene object to duplicate.";
+      }
+      if (sceneBaseRevision(context) === null) {
+        return "The canonical scene revision is unavailable. Refetch the scene before duplicating.";
+      }
+      return null;
+    },
+    run: async (context) => {
+      const obsolete = obsoleteSessionResult(context);
+      if (obsolete) return obsolete;
+      if (!context.api) {
+        return { message: "Control-room API is unavailable.", status: "failed" };
+      }
+      const objectIds = selectedObjectIdsFromContext(context);
+      if (objectIds.length === 0) {
+        return { message: "No scene object selected.", status: "failed" };
+      }
+      const preparation = await prepareAuthoringMutation(context);
+      assertCurrentSessionScope(context);
+      const baseRevision =
+        typeof preparation.before?.revision === "number" &&
+        Number.isFinite(preparation.before.revision)
+          ? preparation.before.revision
+          : sceneBaseRevision(context);
+      if (baseRevision === null) {
+        return {
+          message: "The canonical scene revision is unavailable. Refetch the scene before duplicating.",
+          status: "failed",
+        };
+      }
+      const input = asRecord(context.input);
+      const offsetM = vector3FromUnknown(
+        input?.offset_m ?? input?.offsetM,
+        [2e-8, 0, 0],
+      );
+      const copyRegions =
+        typeof input?.copy_regions === "boolean"
+          ? input.copy_regions
+          : typeof input?.copyRegions === "boolean"
+            ? input.copyRegions
+            : true;
+      const response = await duplicateObjectsTransaction(
+        context.api,
+        {
+          base_revision: baseRevision,
+          copy_regions: copyRegions,
+          object_ids: objectIds,
+          offset_m: offsetM,
+        },
+        sessionRequestOptions(context),
+      );
+      const obsoleteAfterWrite = obsoleteSessionResult(context);
+      if (obsoleteAfterWrite) return obsoleteAfterWrite;
+      await recordAuthoringMutationHistory(
+        context,
+        `Duplicate ${objectIds.join(", ")}`,
+        preparation,
+        response.committed_scene,
+        captureAuthoringHistoryWorkspaceState(context),
+      );
+      assertCurrentSessionScope(context);
+      invalidateSceneAuthoringResources(context, response.scene_revision);
+      return { status: "completed" };
+    },
+  },
+  {
+    id: "geometry.split-by-plane",
+    title: "Split by Plane",
+    category: "Geometry",
+    group: "geometry",
+    scope: "selection",
+    isEnabled: (context) =>
+      Boolean(context.api) &&
+      Boolean(selectedObjectId(context)) &&
+      sceneBaseRevision(context) !== null,
+    disabledReason: (context) => {
+      if (!context.api) return "Control Room API is not available.";
+      if (!selectedObjectId(context)) return "Select a scene object to split by plane.";
+      if (sceneBaseRevision(context) === null) {
+        return "The canonical scene revision is unavailable. Refetch the scene before splitting.";
+      }
+      return null;
+    },
+    run: async (context) => {
+      const obsolete = obsoleteSessionResult(context);
+      if (obsolete) return obsolete;
+      if (!context.api) {
+        return { message: "Control-room API is unavailable.", status: "failed" };
+      }
+      const objectId = selectedObjectId(context);
+      if (!objectId) return { message: "No scene object selected.", status: "failed" };
+      const preparation = await prepareAuthoringMutation(context);
+      assertCurrentSessionScope(context);
+      const baseRevision =
+        typeof preparation.before?.revision === "number" &&
+        Number.isFinite(preparation.before.revision)
+          ? preparation.before.revision
+          : sceneBaseRevision(context);
+      if (baseRevision === null) {
+        return {
+          message: "The canonical scene revision is unavailable. Refetch the scene before splitting.",
+          status: "failed",
+        };
+      }
+      const input = asRecord(context.input);
+      const planeOrigin = vector3FromUnknown(
+        input?.plane_origin_m ?? input?.planeOriginM,
+        [0, 0, 0],
+      );
+      const planeNormal = vector3FromUnknown(
+        input?.plane_normal ?? input?.planeNormal,
+        [1, 0, 0],
+      );
+      const response = await separateObjectTransaction(
+        context.api,
+        {
+          base_revision: baseRevision,
+          mode: "split_by_plane",
+          object_id: objectId,
+          plane_normal: planeNormal,
+          plane_origin_m: planeOrigin,
+        },
+        sessionRequestOptions(context),
+      );
+      const obsoleteAfterWrite = obsoleteSessionResult(context);
+      if (obsoleteAfterWrite) return obsoleteAfterWrite;
+      await recordAuthoringMutationHistory(
+        context,
+        `Split ${objectId} by plane`,
+        preparation,
+        response.committed_scene,
+        captureAuthoringHistoryWorkspaceState(context),
+      );
+      assertCurrentSessionScope(context);
+      invalidateSceneAuthoringResources(context, response.scene_revision);
+      return { status: "completed" };
+    },
+  },
+  {
+    id: "geometry.extract-operand",
+    title: "Extract Operand",
+    category: "Geometry",
+    group: "geometry",
+    scope: "selection",
+    isEnabled: (context) => {
+      const { objectId, operandId } = resolveOperandContextInput(context);
+      return Boolean(context.api && objectId && operandId && sceneBaseRevision(context) !== null);
+    },
+    disabledReason: (context) => {
+      if (!context.api) return "Control Room API is not available.";
+      const { objectId, operandId } = resolveOperandContextInput(context);
+      if (!objectId || !operandId) {
+        return "Select a CSG operand in the Geometry Tree to extract it as an object.";
+      }
+      if (sceneBaseRevision(context) === null) {
+        return "The canonical scene revision is unavailable. Refetch the scene before extracting.";
+      }
+      return null;
+    },
+    run: async (context) => {
+      const obsolete = obsoleteSessionResult(context);
+      if (obsolete) return obsolete;
+      if (!context.api) {
+        return { message: "Control-room API is unavailable.", status: "failed" };
+      }
+      const { objectId, operandId } = resolveOperandContextInput(context);
+      if (!objectId || !operandId) {
+        return { message: "Select a CSG operand to extract.", status: "failed" };
+      }
+      const preparation = await prepareAuthoringMutation(context);
+      assertCurrentSessionScope(context);
+      const baseRevision =
+        typeof preparation.before?.revision === "number" &&
+        Number.isFinite(preparation.before.revision)
+          ? preparation.before.revision
+          : sceneBaseRevision(context);
+      if (baseRevision === null) {
+        return {
+          message: "The canonical scene revision is unavailable. Refetch the scene before extracting.",
+          status: "failed",
+        };
+      }
+      const input = asRecord(context.input);
+      const keepInBoolean =
+        typeof input?.keep_in_boolean === "boolean"
+          ? input.keep_in_boolean
+          : typeof input?.keepInBoolean === "boolean"
+            ? input.keepInBoolean
+            : false;
+      const response = await separateObjectTransaction(
+        context.api,
+        {
+          base_revision: baseRevision,
+          keep_in_boolean: keepInBoolean,
+          mode: "extract_operand",
+          object_id: objectId,
+          operand_id: operandId,
+        },
+        sessionRequestOptions(context),
+      );
+      const obsoleteAfterWrite = obsoleteSessionResult(context);
+      if (obsoleteAfterWrite) return obsoleteAfterWrite;
+      await recordAuthoringMutationHistory(
+        context,
+        `Extract operand ${operandId} from ${objectId}`,
+        preparation,
+        response.committed_scene,
+        captureAuthoringHistoryWorkspaceState(context),
+      );
+      assertCurrentSessionScope(context);
+      invalidateSceneAuthoringResources(context, response.scene_revision);
+      return { status: "completed" };
+    },
+  },
+  {
+    id: "geometry.operand-toggle",
+    title: "Toggle Operand Active",
+    category: "Geometry",
+    group: "geometry",
+    scope: "selection",
+    isEnabled: (context) => {
+      const { objectId, operandId } = resolveOperandContextInput(context);
+      return Boolean(context.api && objectId && operandId && sceneBaseRevision(context) !== null);
+    },
+    disabledReason: (context) => {
+      const { objectId, operandId } = resolveOperandContextInput(context);
+      if (!context.api) return "Control Room API is not available.";
+      if (!objectId || !operandId) return "Select a CSG operand in the Geometry Tree.";
+      if (sceneBaseRevision(context) === null) return "The canonical scene revision is unavailable.";
+      return null;
+    },
+    run: async (context) => {
+      const obsolete = obsoleteSessionResult(context);
+      if (obsolete) return obsolete;
+      if (!context.api) {
+        return { message: "Control-room API is unavailable.", status: "failed" };
+      }
+      const { objectId, operandId } = resolveOperandContextInput(context);
+      if (!objectId || !operandId) {
+        return { message: "Select a CSG operand first.", status: "failed" };
+      }
+      const preparation = await prepareAuthoringMutation(context);
+      assertCurrentSessionScope(context);
+      const scene = preparation.before ?? resourceData(context, MODEL_SCENE_PATH);
+      const baseRevision =
+        typeof preparation.before?.revision === "number" &&
+        Number.isFinite(preparation.before.revision)
+          ? preparation.before.revision
+          : sceneBaseRevision(context);
+      if (baseRevision === null) {
+        return { message: "The canonical scene revision is unavailable.", status: "failed" };
+      }
+      const input = asRecord(context.input);
+      const currentEnabled = readSceneObjectOperandEnabled(scene, objectId, operandId);
+      const nextEnabled =
+        typeof input?.enabled === "boolean"
+          ? input.enabled
+          : currentEnabled === null
+            ? false
+            : !currentEnabled;
+      const response = await updateBooleanOperandsTransaction(
+        context.api,
+        {
+          base_revision: baseRevision,
+          object_id: objectId,
+          toggle_operand: { enabled: nextEnabled, operand_id: operandId },
+        },
+        sessionRequestOptions(context),
+      );
+      const obsoleteAfterWrite = obsoleteSessionResult(context);
+      if (obsoleteAfterWrite) return obsoleteAfterWrite;
+      await recordAuthoringMutationHistory(
+        context,
+        `${nextEnabled ? "Enable" : "Disable"} operand ${operandId}`,
+        preparation,
+        response.committed_scene,
+        captureAuthoringHistoryWorkspaceState(context),
+      );
+      assertCurrentSessionScope(context);
+      invalidateSceneAuthoringResources(context, response.scene_revision);
+      return { status: "completed" };
+    },
+  },
+  ...(["up", "down"] as const).map((direction): CommandContribution => ({
+    id: direction === "up" ? "geometry.operand-move-up" : "geometry.operand-move-down",
+    title: direction === "up" ? "Move Operand Up" : "Move Operand Down",
+    category: "Geometry",
+    group: "geometry",
+    shortcut: direction === "up" ? "Alt+ArrowUp" : "Alt+ArrowDown",
+    scope: "selection",
+    isEnabled: (context) => {
+      const { objectId, operandId } = resolveOperandContextInput(context);
+      if (!context.api || !objectId || !operandId || sceneBaseRevision(context) === null) {
+        return false;
+      }
+      const ids = readSceneObjectOperandIds(
+        resourceData(context, MODEL_SCENE_PATH),
+        objectId,
+      );
+      const index = ids.indexOf(operandId);
+      if (index < 0) return false;
+      return direction === "up" ? index > 0 : index < ids.length - 1;
+    },
+    disabledReason: (context) => {
+      const { objectId, operandId } = resolveOperandContextInput(context);
+      if (!context.api) return "Control Room API is not available.";
+      if (!objectId || !operandId) return "Select a CSG operand in the Geometry Tree.";
+      if (sceneBaseRevision(context) === null) return "The canonical scene revision is unavailable.";
+      return direction === "up"
+        ? "Operand is already first in the stack."
+        : "Operand is already last in the stack.";
+    },
+    run: async (context) => {
+      const obsolete = obsoleteSessionResult(context);
+      if (obsolete) return obsolete;
+      if (!context.api) {
+        return { message: "Control-room API is unavailable.", status: "failed" };
+      }
+      const { objectId, operandId } = resolveOperandContextInput(context);
+      if (!objectId || !operandId) {
+        return { message: "Select a CSG operand first.", status: "failed" };
+      }
+      const preparation = await prepareAuthoringMutation(context);
+      assertCurrentSessionScope(context);
+      const scene = preparation.before ?? resourceData(context, MODEL_SCENE_PATH);
+      const ids = readSceneObjectOperandIds(scene, objectId);
+      const index = ids.indexOf(operandId);
+      const swapIndex = direction === "up" ? index - 1 : index + 1;
+      if (index < 0 || swapIndex < 0 || swapIndex >= ids.length) {
+        return { message: "Operand cannot move further in that direction.", status: "failed" };
+      }
+      const reordered = [...ids];
+      const [moved] = reordered.splice(index, 1);
+      reordered.splice(swapIndex, 0, moved);
+      const baseRevision =
+        typeof preparation.before?.revision === "number" &&
+        Number.isFinite(preparation.before.revision)
+          ? preparation.before.revision
+          : sceneBaseRevision(context);
+      if (baseRevision === null) {
+        return { message: "The canonical scene revision is unavailable.", status: "failed" };
+      }
+      const response = await updateBooleanOperandsTransaction(
+        context.api,
+        {
+          base_revision: baseRevision,
+          object_id: objectId,
+          reorder_operand_ids: reordered,
+        },
+        sessionRequestOptions(context),
+      );
+      const obsoleteAfterWrite = obsoleteSessionResult(context);
+      if (obsoleteAfterWrite) return obsoleteAfterWrite;
+      await recordAuthoringMutationHistory(
+        context,
+        `Reorder operand ${operandId} ${direction}`,
+        preparation,
+        response.committed_scene,
+        captureAuthoringHistoryWorkspaceState(context),
+      );
+      assertCurrentSessionScope(context);
+      invalidateSceneAuthoringResources(context, response.scene_revision);
+      return { status: "completed" };
+    },
+  })),
+  {
+    id: "geometry.operand-toggle-ghost",
+    title: "Toggle Ghost Wireframe",
+    category: "Geometry",
+    group: "geometry",
+    scope: "selection",
+    isEnabled: (context) => {
+      const { objectId, operandId } = resolveOperandContextInput(context);
+      return Boolean(objectId && operandId);
+    },
+    disabledReason: (context) => {
+      const { objectId, operandId } = resolveOperandContextInput(context);
+      return objectId && operandId
+        ? null
+        : "Select a CSG operand in the Geometry Tree.";
+    },
+    run: (context) => {
+      const { objectId, operandId } = resolveOperandContextInput(context);
+      if (!objectId || !operandId) {
+        return { message: "Select a CSG operand first.", status: "failed" };
+      }
+      const visible = geometryGhostVisibilityStore.toggle(objectId, operandId);
+      return {
+        message: visible
+          ? `Ghost wireframe shown for ${operandId}.`
+          : `Ghost wireframe hidden for ${operandId}.`,
+        status: "completed",
+      };
+    },
+  },
   {
     id: "geometry.import-stl",
     title: "Import STL Surface",

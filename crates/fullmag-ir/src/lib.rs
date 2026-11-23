@@ -2180,6 +2180,239 @@ fn validate_geometry_entry(geometry: &GeometryEntryIR, depth: usize, errors: &mu
             }
             validate_geometry_entry(base, depth + 1, errors);
         }
+        GeometryEntryIR::Transform {
+            name,
+            child,
+            translation,
+            rotation_quat,
+            scale,
+            pivot,
+        } => {
+            if name.trim().is_empty() {
+                errors.push("transform geometry name must not be empty".to_string());
+            }
+            if translation.iter().any(|component| !component.is_finite()) {
+                errors.push(format!(
+                    "transform geometry '{}' translation must contain finite values",
+                    name
+                ));
+            }
+            if rotation_quat.iter().any(|component| !component.is_finite()) {
+                errors.push(format!(
+                    "transform geometry '{}' rotation_quat must contain finite values",
+                    name
+                ));
+            } else {
+                let q_norm_sq = rotation_quat[0] * rotation_quat[0]
+                    + rotation_quat[1] * rotation_quat[1]
+                    + rotation_quat[2] * rotation_quat[2]
+                    + rotation_quat[3] * rotation_quat[3];
+                if !q_norm_sq.is_finite() || q_norm_sq <= 1e-24 {
+                    errors.push(format!(
+                        "transform geometry '{}' rotation_quat must be non-zero",
+                        name
+                    ));
+                }
+            }
+            if scale
+                .iter()
+                .any(|component| !component.is_finite() || *component <= 0.0)
+            {
+                errors.push(format!(
+                    "transform geometry '{}' scale components must be finite and positive",
+                    name
+                ));
+            }
+            if pivot.iter().any(|component| !component.is_finite()) {
+                errors.push(format!(
+                    "transform geometry '{}' pivot must contain finite values",
+                    name
+                ));
+            }
+            validate_geometry_entry(child, depth + 1, errors);
+        }
+        GeometryEntryIR::SlicePlane {
+            name,
+            child,
+            plane_origin,
+            plane_normal,
+            keep_side,
+        } => {
+            if name.trim().is_empty() {
+                errors.push("slice_plane geometry name must not be empty".to_string());
+            }
+            if plane_origin.iter().any(|component| !component.is_finite()) {
+                errors.push(format!(
+                    "slice_plane geometry '{}' plane_origin must contain finite values",
+                    name
+                ));
+            }
+            if plane_normal.iter().any(|component| !component.is_finite()) {
+                errors.push(format!(
+                    "slice_plane geometry '{}' plane_normal must contain finite values",
+                    name
+                ));
+            } else {
+                let norm_sq = plane_normal[0] * plane_normal[0]
+                    + plane_normal[1] * plane_normal[1]
+                    + plane_normal[2] * plane_normal[2];
+                if !norm_sq.is_finite() || norm_sq <= 1e-24 {
+                    errors.push(format!(
+                        "slice_plane geometry '{}' plane_normal must be non-zero",
+                        name
+                    ));
+                }
+            }
+            if !matches!(keep_side.as_str(), "positive" | "negative") {
+                errors.push(format!(
+                    "slice_plane geometry '{}' keep_side must be 'positive' or 'negative'",
+                    name
+                ));
+            }
+            validate_geometry_entry(child, depth + 1, errors);
+        }
+        GeometryEntryIR::Cone {
+            name,
+            radius_bottom,
+            radius_top,
+            height,
+            axis,
+        } => {
+            if name.trim().is_empty() {
+                errors.push("cone geometry name must not be empty".to_string());
+            }
+            if !radius_bottom.is_finite() || *radius_bottom < 0.0 {
+                errors.push(format!(
+                    "cone geometry '{}' radius_bottom must be finite and >= 0",
+                    name
+                ));
+            }
+            if !radius_top.is_finite() || *radius_top < 0.0 {
+                errors.push(format!(
+                    "cone geometry '{}' radius_top must be finite and >= 0",
+                    name
+                ));
+            }
+            if radius_bottom.is_finite()
+                && radius_top.is_finite()
+                && *radius_bottom <= 0.0
+                && *radius_top <= 0.0
+            {
+                errors.push(format!(
+                    "cone geometry '{}' requires at least one positive radius",
+                    name
+                ));
+            }
+            if !height.is_finite() || *height <= 0.0 {
+                errors.push(format!(
+                    "cone geometry '{}' height must be finite and positive",
+                    name
+                ));
+            }
+            if axis.iter().any(|component| !component.is_finite()) {
+                errors.push(format!(
+                    "cone geometry '{}' axis must contain finite values",
+                    name
+                ));
+            } else {
+                let norm_sq = axis[0] * axis[0] + axis[1] * axis[1] + axis[2] * axis[2];
+                if !norm_sq.is_finite() || norm_sq <= 1e-24 {
+                    errors.push(format!("cone geometry '{}' axis must be non-zero", name));
+                }
+            }
+        }
+        GeometryEntryIR::Torus {
+            name,
+            major_radius,
+            minor_radius,
+            axis,
+        } => {
+            if name.trim().is_empty() {
+                errors.push("torus geometry name must not be empty".to_string());
+            }
+            if !major_radius.is_finite() || *major_radius <= 0.0 {
+                errors.push(format!(
+                    "torus geometry '{}' major_radius must be finite and positive",
+                    name
+                ));
+            }
+            if !minor_radius.is_finite() || *minor_radius <= 0.0 {
+                errors.push(format!(
+                    "torus geometry '{}' minor_radius must be finite and positive",
+                    name
+                ));
+            }
+            if major_radius.is_finite()
+                && minor_radius.is_finite()
+                && *minor_radius >= *major_radius
+            {
+                errors.push(format!(
+                    "torus geometry '{}' minor_radius must be strictly less than major_radius",
+                    name
+                ));
+            }
+            if axis.iter().any(|component| !component.is_finite()) {
+                errors.push(format!(
+                    "torus geometry '{}' axis must contain finite values",
+                    name
+                ));
+            } else {
+                let norm_sq = axis[0] * axis[0] + axis[1] * axis[1] + axis[2] * axis[2];
+                if !norm_sq.is_finite() || norm_sq <= 1e-24 {
+                    errors.push(format!("torus geometry '{}' axis must be non-zero", name));
+                }
+            }
+        }
+        GeometryEntryIR::PolygonPrism {
+            name,
+            vertices_xy,
+            thickness,
+        } => {
+            if name.trim().is_empty() {
+                errors.push("polygon_prism geometry name must not be empty".to_string());
+            }
+            if vertices_xy.len() < 3 {
+                errors.push(format!(
+                    "polygon_prism geometry '{}' requires at least 3 vertices",
+                    name
+                ));
+            }
+            let all_finite = vertices_xy
+                .iter()
+                .all(|vertex| vertex[0].is_finite() && vertex[1].is_finite());
+            if !all_finite {
+                errors.push(format!(
+                    "polygon_prism geometry '{}' vertices_xy must contain finite coordinates",
+                    name
+                ));
+            } else if vertices_xy.len() >= 3 {
+                let mut doubled_area = 0.0;
+                for index in 0..vertices_xy.len() {
+                    let a = vertices_xy[index];
+                    let b = vertices_xy[(index + 1) % vertices_xy.len()];
+                    doubled_area += a[0] * b[1] - b[0] * a[1];
+                }
+                if !doubled_area.is_finite() || doubled_area.abs() <= 1e-30 {
+                    errors.push(format!(
+                        "polygon_prism geometry '{}' vertices_xy must enclose non-zero area",
+                        name
+                    ));
+                }
+            }
+            if !thickness.is_finite() || *thickness <= 0.0 {
+                errors.push(format!(
+                    "polygon_prism geometry '{}' thickness must be finite and positive",
+                    name
+                ));
+            }
+        }
+        GeometryEntryIR::Xor { name, left, right } => {
+            if name.trim().is_empty() {
+                errors.push("xor geometry name must not be empty".to_string());
+            }
+            validate_geometry_entry(left, depth + 1, errors);
+            validate_geometry_entry(right, depth + 1, errors);
+        }
     }
 }
 

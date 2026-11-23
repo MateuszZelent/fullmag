@@ -48,6 +48,12 @@ import {
 import { createAntennaPrimitiveTextures } from "./antennaPrimitiveTextures";
 import { eventIntersectsRegionOverlay } from "./regionOverlayPicking";
 
+export interface Viewport3DPickModifiers {
+  ctrlKey?: boolean;
+  metaKey?: boolean;
+  shiftKey?: boolean;
+}
+
 export function PrimitiveObjectLayer({
   colors,
   getObjectSettings,
@@ -61,7 +67,10 @@ export function PrimitiveObjectLayer({
   colors: Viewport3DColors;
   getObjectSettings: (object: Viewport3DPrimitiveObject) => VisualizationTargetSettings;
   materialProfile: Viewport3DMaterialProfile;
-  onSelectObject: (object: Viewport3DPrimitiveObject) => void;
+  onSelectObject: (
+    object: Viewport3DPrimitiveObject,
+    modifiers?: Viewport3DPickModifiers,
+  ) => void;
   meshReadyFallbackObjectIds?: ReadonlySet<string>;
   primitiveModel: Viewport3DPrimitiveRenderModel | null;
   realizedObjectIds?: ReadonlySet<string>;
@@ -153,7 +162,10 @@ function PrimitiveObject({
   allowMeshReadyPreview: boolean;
   materialProfile: Viewport3DMaterialProfile;
   object: Viewport3DPrimitiveObject;
-  onSelectObject: (object: Viewport3DPrimitiveObject) => void;
+  onSelectObject: (
+    object: Viewport3DPrimitiveObject,
+    modifiers?: Viewport3DPickModifiers,
+  ) => void;
   primitiveColorAssignments: ReadonlyMap<string, number>;
   settings: VisualizationTargetSettings;
   tracker: Viewport3DResourceTracker;
@@ -195,7 +207,10 @@ function RenderablePrimitiveObject({
   materialProfile: Viewport3DMaterialProfile;
   object: Viewport3DPrimitiveObject;
   allowMeshReadyPreview?: boolean;
-  onSelectObject: (object: Viewport3DPrimitiveObject) => void;
+  onSelectObject: (
+    object: Viewport3DPrimitiveObject,
+    modifiers?: Viewport3DPickModifiers,
+  ) => void;
   primitiveColorAssignments: ReadonlyMap<string, number>;
   settings: VisualizationTargetSettings;
   tracker: Viewport3DResourceTracker;
@@ -257,7 +272,13 @@ function RenderablePrimitiveObject({
   const handlePointerDown = (event: ThreeEvent<PointerEvent>) => {
     if (eventIntersectsRegionOverlay(event)) return;
     event.stopPropagation();
-    onSelectObject(object);
+    const native = event.nativeEvent;
+    const modifiers: Viewport3DPickModifiers = {
+      ctrlKey: Boolean(native?.ctrlKey ?? event.ctrlKey),
+      metaKey: Boolean(native?.metaKey ?? event.metaKey),
+      shiftKey: Boolean(native?.shiftKey ?? event.shiftKey),
+    };
+    onSelectObject(object, modifiers);
   };
   const renderPlan = resolveViewport3DTargetRenderPlan(
     renderSettings,

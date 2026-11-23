@@ -1,6 +1,6 @@
 "use client";
 
-import { Combine, Move3d, Shapes } from "lucide-react";
+import { Combine, Move3d, Shapes, Trash2 } from "lucide-react";
 import {
   useCallback,
   useEffect,
@@ -28,6 +28,8 @@ import {
 import { sessionRequestScopeKey } from "@/kernel/resources/sessionResourceIdentity";
 import { useSessionScopedResourceKey } from "@/kernel/resources/useSessionScopedResourceKey";
 import type { Selection } from "@/kernel/selection/selectionTypes";
+import { parseCompositeGeometry } from "@/modules/explorer/builders/geometryTreeExplorerNodes";
+import { Button } from "@/shared/ui/Button";
 
 import type { InspectorPanelProps } from "../../../inspectorTypes";
 import {
@@ -48,6 +50,11 @@ import {
   type InspectorSpec,
 } from "../../../template";
 
+import { BooleanNodeSection } from "./BooleanNodeSection";
+import {
+  analyzeDeleteObjectImpact,
+  DeleteObjectImpactDialog,
+} from "./DeleteObjectImpactDialog";
 import { applyGeometryDraftMutation } from "./geometryMutations";
 import {
   buildBaselineFromScene,
@@ -102,6 +109,8 @@ function SharedGeometrySpecPanel({
 
   const [lastOriginPivotObjectId, setLastOriginPivotObjectId] = useState<string | null>(null);
   const [ownCreatePending, setOwnCreatePending] = useState(false);
+  const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
+  const [deletingObject, setDeletingObject] = useState(false);
 
   /* ── 409 Revision Conflict State (Derived During Render — Zero Effect Cascades) ── */
   const [revisionConflictPhase, setRevisionConflictPhase] =
@@ -379,6 +388,63 @@ function SharedGeometrySpecPanel({
         },
         ...buildGeometryShapeSections({ materialOptions }),
         ...buildGeometryTransformAndCsgSections({ otherObjects }),
+        {
+          id: "geometry-csg-operand-stack",
+          modeTabId: "csg",
+          title: "Boolean operand stack",
+          icon: Combine,
+          defaultOpen: true,
+          showWhen: (d) => {
+            if (d.mode !== "committed") return false;
+            const obj = scene.data?.objects?.find((item) => item.id === d.objectId);
+            return parseCompositeGeometry(obj?.geometry).operands.length > 0;
+          },
+          rows: [
+            {
+              type: "custom",
+              wide: true,
+              render: (ctx) => (
+                <BooleanNodeSection
+                  kernel={kernel}
+                  objectId={ctx.draft.objectId}
+                  sceneData={scene.data}
+                  sessionScopeKey={currentSessionScopeKey}
+                />
+              ),
+            },
+          ],
+        },
+        {
+          id: "geometry-object-danger-actions",
+          modeTabId: "shape",
+          title: "Object lifecycle",
+          icon: Trash2,
+          defaultOpen: false,
+          showWhen: (d) => d.mode === "committed",
+          rows: [
+            {
+              type: "custom",
+              wide: true,
+              render: () => (
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-xs text-[var(--fm-text-muted)]">
+                    Inspect dependent couplings, regions, and CSG links before deletion.
+                  </span>
+                  <Button
+                    disabled={Boolean(sceneMutationLockReason) || deletingObject}
+                    size="sm"
+                    type="button"
+                    variant="danger"
+                    onClick={() => setDeleteDialogOpen(true)}
+                  >
+                    <Trash2 size={13} />
+                    <span>Delete Object…</span>
+                  </Button>
+                </div>
+              ),
+            },
+          ],
+        },
       ],
       commitBar: {
         mode: "staged",
@@ -415,6 +481,7 @@ function SharedGeometrySpecPanel({
         },
         onApply: (draft) =>
           applyGeometryDraftMutation({
+            baseline,
             draft,
             kernel,
             selection,
@@ -451,11 +518,14 @@ function SharedGeometrySpecPanel({
       },
     }),
     [
+      baseline,
       baseline.draftName,
       baseline.mode,
       baseline.objectId,
       canonicalSessionDraft,
       createDraftSlugId,
+      currentSessionScopeKey,
+      deletingObject,
       editIdentity,
       forceBuilderMode,
       handleRebaseConflict,
@@ -685,6 +755,28 @@ function SharedGeometrySpecPanel({
     }
   }, [codePreview]);
 
+  const deleteImpact = useMemo(
+    () => analyzeDeleteObjectImpact(scene.data, baseline.objectId),
+    [baseline.objectId, scene.data],
+  );
+
+  const handleConfirmDeleteObject = useCallback(async () => {
+    if (deletingObject || baseline.mode !== "committed") return;
+    setDeletingObject(true);
+    try {
+      await kernel.commands.execute(
+        "geometry.delete-object",
+        createCommandContext("inspector", kernel, {
+          resourceData: { [MODEL_SCENE_PATH]: scene.data },
+          sessionScopeKey: currentSessionScopeKey,
+        }),
+      );
+      setDeleteDialogOpen(false);
+    } finally {
+      setDeletingObject(false);
+    }
+  }, [baseline.mode, currentSessionScopeKey, deletingObject, kernel, scene.data]);
+
   return (
     <>
       {controller.draft.mode === "draft-new" ? (
@@ -740,6 +832,18 @@ function SharedGeometrySpecPanel({
         onClose={() => setCodePreview(null)}
         onCopy={handleCopyCodePreview}
       />
+
+      {baseline.mode === "committed" ? (
+        <DeleteObjectImpactDialog
+          deleting={deletingObject}
+          impact={deleteImpact}
+          open={deleteDialogOpen}
+          onConfirmDelete={() => {
+            void handleConfirmDeleteObject();
+          }}
+          onOpenChange={setDeleteDialogOpen}
+        />
+      ) : null}
     </>
   );
 }

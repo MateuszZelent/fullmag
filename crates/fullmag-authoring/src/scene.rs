@@ -323,6 +323,124 @@ impl Default for Transform3D {
     }
 }
 
+/// Merge-safe partial patch for [`Transform3D`].
+/// Any omitted (`None`) field preserves the existing component value.
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Default)]
+pub struct Transform3DPatch {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub translation: Option<[f64; 3]>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rotation_quat: Option<[f64; 4]>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub euler_xyz_deg: Option<[f64; 3]>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scale: Option<[f64; 3]>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pivot: Option<[f64; 3]>,
+}
+
+/// Canonical Etap B CSG boolean operand entry inside `SceneGeometry.geometry_params["operands"]`.
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+pub struct SceneBooleanOperand {
+    pub operand_id: String,
+    #[serde(default)]
+    pub label: String,
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    pub geometry: SceneGeometry,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub transform: Option<Transform3D>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_object_id: Option<String>,
+}
+
+impl Transform3D {
+    pub fn is_identity(&self) -> bool {
+        self.translation.iter().all(|v| v.abs() <= 1e-18)
+            && self.rotation_quat[0].abs() <= 1e-12
+            && self.rotation_quat[1].abs() <= 1e-12
+            && self.rotation_quat[2].abs() <= 1e-12
+            && (self.rotation_quat[3].abs() - 1.0).abs() <= 1e-12
+            && self.scale.iter().all(|v| (*v - 1.0).abs() <= 1e-12)
+            && self.pivot.iter().all(|v| v.abs() <= 1e-18)
+    }
+
+    pub fn is_pure_translation(&self) -> bool {
+        self.rotation_quat[0].abs() <= 1e-12
+            && self.rotation_quat[1].abs() <= 1e-12
+            && self.rotation_quat[2].abs() <= 1e-12
+            && (self.rotation_quat[3].abs() - 1.0).abs() <= 1e-12
+            && self.scale.iter().all(|v| (*v - 1.0).abs() <= 1e-12)
+            && self.pivot.iter().all(|v| v.abs() <= 1e-18)
+    }
+
+    pub fn apply_patch(&mut self, patch: Transform3DPatch) -> Result<(), String> {
+        if let Some(translation) = patch.translation {
+            if !translation.iter().all(|v| v.is_finite()) {
+                return Err("transform.translation must contain finite numbers".to_string());
+            }
+            self.translation = translation;
+        }
+        if let Some(rotation_quat) = patch.rotation_quat {
+            if !rotation_quat.iter().all(|v| v.is_finite()) {
+                return Err("transform.rotation_quat must contain finite numbers".to_string());
+            }
+            let norm = (rotation_quat[0] * rotation_quat[0]
+                + rotation_quat[1] * rotation_quat[1]
+                + rotation_quat[2] * rotation_quat[2]
+                + rotation_quat[3] * rotation_quat[3])
+                .sqrt();
+            if !norm.is_finite() || norm <= 1e-12 {
+                return Err("transform.rotation_quat must have non-zero norm".to_string());
+            }
+            self.rotation_quat = [
+                rotation_quat[0] / norm,
+                rotation_quat[1] / norm,
+                rotation_quat[2] / norm,
+                rotation_quat[3] / norm,
+            ];
+        } else if let Some(euler_xyz_deg) = patch.euler_xyz_deg {
+            if !euler_xyz_deg.iter().all(|v| v.is_finite()) {
+                return Err("transform.euler_xyz_deg must contain finite numbers".to_string());
+            }
+            self.rotation_quat = euler_xyz_deg_to_quat(euler_xyz_deg);
+        }
+        if let Some(scale) = patch.scale {
+            if scale.iter().any(|v| !v.is_finite() || *v <= 0.0) {
+                return Err("transform.scale must contain finite positive numbers".to_string());
+            }
+            self.scale = scale;
+        }
+        if let Some(pivot) = patch.pivot {
+            if !pivot.iter().all(|v| v.is_finite()) {
+                return Err("transform.pivot must contain finite numbers".to_string());
+            }
+            self.pivot = pivot;
+        }
+        Ok(())
+    }
+}
+
+pub fn euler_xyz_deg_to_quat(euler_xyz_deg: [f64; 3]) -> [f64; 4] {
+    let half_x = euler_xyz_deg[0].to_radians() * 0.5;
+    let half_y = euler_xyz_deg[1].to_radians() * 0.5;
+    let half_z = euler_xyz_deg[2].to_radians() * 0.5;
+    let (sx, cx) = half_x.sin_cos();
+    let (sy, cy) = half_y.sin_cos();
+    let (sz, cz) = half_z.sin_cos();
+    // Intrinsic/extrinsic XYZ rotation R = Rz(z) * Ry(y) * Rx(x) -> [qx, qy, qz, qw]
+    let qx = sx * cy * cz - cx * sy * sz;
+    let qy = cx * sy * cz + sx * cy * sz;
+    let qz = cx * cy * sz - sx * sy * cz;
+    let qw = cx * cy * cz + sx * sy * sz;
+    let norm = (qx * qx + qy * qy + qz * qz + qw * qw).sqrt();
+    if norm > 1e-12 {
+        [qx / norm, qy / norm, qz / norm, qw / norm]
+    } else {
+        [0.0, 0.0, 0.0, 1.0]
+    }
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 pub struct SceneMaterialAsset {
     pub id: String,
