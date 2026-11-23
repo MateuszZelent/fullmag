@@ -21,7 +21,8 @@ import {
   useMeshSummaryResource,
 } from "@/kernel/resources/geometryLifecycleResources";
 import { useSessionStatusSelector } from "@/kernel/resources/useSessionStatus";
-import { resolveActiveLaneOperation } from "@/kernel/resources/useActiveLaneCapabilities";
+import { resolveActiveLaneOperation, resolveFdmGridBuildOperation } from "@/kernel/resources/useActiveLaneCapabilities";
+import { useCommandQueueResource } from "@/kernel/resources/studyRuntimeResources";
 import { resolveSessionAuthoringDiscretization } from "@/kernel/resources/sessionDiscretization";
 import type { JsonObject } from "@/kernel/api/apiTypes";
 import type { KernelApi } from "@/kernel/types";
@@ -102,10 +103,16 @@ export function MeshBuildDialog({ kernel }: { kernel: KernelApi }) {
     runtimeStatus?.capabilities.active_lane ?? null,
     "shared_mesh_build",
   );
-  const fdmGridBuildOperation = resolveActiveLaneOperation(
-    runtimeStatus?.capabilities.active_lane ?? null,
-    "grid_build",
-  );
+  const activeLane = runtimeStatus?.capabilities.active_lane ?? null;
+  const isFdmGridBuildRequest =
+    lane === "fdm" &&
+    (state.request?.commandId === "grid.build-fdm" ||
+      state.acceptedCommandId === "grid.build-fdm");
+  const refreshingFdmPlan = isFdmGridBuildRequest && activeLane?.operations.grid_build?.state === "stale";
+  const commandQueue = useCommandQueueResource({
+    enabled: state.open && state.phase === "pre-build" && refreshingFdmPlan,
+  });
+  const fdmGridBuildOperation = resolveFdmGridBuildOperation(activeLane, commandQueue.data);
   const explicitFemLane = shouldLoadMeshBuildDialogFemResources(
     state.open,
     lane,
@@ -305,9 +312,10 @@ export function MeshBuildDialog({ kernel }: { kernel: KernelApi }) {
       ? rawAuthoredFdmCell.filter((v): v is number => typeof v === "number")
       : null,
   );
-  const gridSpacing = tuple3(fdmDomain.data?.grid?.spacing) ?? authoredFdmCell;
+  const hasPendingAuthoredGrid = refreshingFdmPlan && authoredFdmCell !== null;
+  const gridSpacing = hasPendingAuthoredGrid ? authoredFdmCell : tuple3(fdmDomain.data?.grid?.spacing) ?? authoredFdmCell;
   const gridShape =
-    tuple3(fdmDomain.data?.grid?.shape) ??
+    (hasPendingAuthoredGrid ? null : tuple3(fdmDomain.data?.grid?.shape)) ??
     (geometryBounds && gridSpacing && gridSpacing.every((v) => v > 0)
       ? ([
           Math.max(1, Math.ceil((geometryBounds.max[0] - geometryBounds.min[0]) / gridSpacing[0] - 1e-9)),
@@ -393,10 +401,6 @@ export function MeshBuildDialog({ kernel }: { kernel: KernelApi }) {
     dispatch({ open: false, type: "open" });
   }
 
-  const isFdmGridBuildRequest =
-    lane === "fdm" &&
-    (state.request?.commandId === "grid.build-fdm" ||
-      state.acceptedCommandId === "grid.build-fdm");
   const activeBuildOperation = isFdmGridBuildRequest
     ? fdmGridBuildOperation
     : buildOperation;

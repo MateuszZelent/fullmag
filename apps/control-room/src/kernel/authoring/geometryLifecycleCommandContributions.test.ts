@@ -34,6 +34,7 @@ import {
   MODEL_REGION_DIAGNOSTICS_PATH,
   MODEL_SCENE_PATH,
   MODEL_UNIVERSE_PATH,
+  SIMULATION_COMMANDS_PATH,
   SIMULATION_PREPARATION_PATH,
 } from "../api/apiPaths";
 import type { CommandContext } from "../commands/commandTypes";
@@ -2110,6 +2111,39 @@ describe("geometry lifecycle command contributions", () => {
       precondition: { scene_revision: 17 },
       reason: "explicit_build_grid",
     });
+  });
+
+  it("admits Build Grid using the runtime control after an FDM edit retires the resolved plan", () => {
+    const registry = registryWithLifecycleCommands();
+    const status = sessionStatus("fdm")[SESSION_STATUS_RESOURCE_KEY];
+    const activeLane = status.capabilities.active_lane;
+    const stale = {
+      ...status,
+      capabilities: { active_lane: {
+        ...activeLane,
+        resolved: null,
+        operations: {
+          ...activeLane.operations,
+          grid_build: { state: "stale", reason: "Execution lane is unresolved." },
+        },
+      } },
+    };
+    const context = (enabled: boolean, canAcceptCommands = true) => ({
+      source: "test" as const,
+      api: { commands: {} } as never,
+      resourceData: {
+        [SESSION_STATUS_RESOURCE_KEY]: stale,
+        [MODEL_SCENE_PATH]: { revision: 2 },
+        [SIMULATION_COMMANDS_PATH]: {
+          can_accept_commands: canAcceptCommands,
+          runtime_controls: [{ kind: "fdm_grid_refresh", enabled, reason: "Grid refresh blocked" }],
+        },
+      },
+    });
+
+    expect(registry.isEnabled("grid.build-fdm", context(true))).toBe(true);
+    expect(registry.get("grid.build-fdm")?.disabledReason?.(context(false))).toBe("Grid refresh blocked");
+    expect(registry.isEnabled("grid.build-fdm", context(true, false))).toBe(false);
   });
 
   it("exposes Build Grid only for a resolved FDM lane with a canonical scene", () => {

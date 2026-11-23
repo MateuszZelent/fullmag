@@ -3,6 +3,7 @@
 import { Compass, Grid3x3, Ruler, Settings2 } from "lucide-react";
 import { useCallback, useMemo, useState, type ReactNode } from "react";
 
+import { SIMULATION_COMMANDS_PATH } from "@/kernel/api/apiPaths";
 import type { SceneResource } from "@/kernel/api/apiTypes";
 import { createCommandContext } from "@/kernel/commands/commandContext";
 import { useKernel } from "@/kernel/KernelContext";
@@ -193,11 +194,15 @@ export function MeshRootInspectorSpecPanel({ selection }: InspectorPanelProps): 
             void sessionStatusRefetch();
           }
         }
+        const queue = nextSessionStatus?.capabilities?.active_lane?.operations?.grid_build?.state === "stale"
+          ? await kernel.api.commands?.list?.(sessionScopeKey ? { sessionScopeKey } : undefined)
+          : undefined;
         const result = await kernel.commands.execute(
           "grid.build-fdm",
           createCommandContext("inspector", kernel, {
             resourceData: {
               ...(nextSessionStatus ? { [SESSION_STATUS_KEY]: nextSessionStatus } : {}),
+              ...(queue ? { [SIMULATION_COMMANDS_PATH]: queue } : {}),
               ...(latestScene
                 ? { [geometryLifecycleResources.SCENE_RESOURCE_KEY]: latestScene }
                 : {}),
