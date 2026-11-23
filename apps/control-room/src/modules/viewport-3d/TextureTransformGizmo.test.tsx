@@ -1525,4 +1525,196 @@ describe("TextureTransformGizmo & 3D surface preview synchronization", () => {
       ),
     ).not.toThrow();
   });
+
+  it("renders live preview vectors for uncommitted brand-new textures and overrides liveFieldCoveredObjectIds with non-zero instancedMesh count", () => {
+    // Brand-new object with NO committed magnetization_ref
+    const scene = {
+      version: "scene.v2",
+      revision: 1,
+      objects: [
+        {
+          id: "brand-new-film",
+          name: "Brand new film",
+          role: "magnet",
+          geometry: {
+            geometry_kind: "Box",
+            geometry_params: { size: [300e-9, 300e-9, 15e-9] },
+          },
+          transform: { position: [0, 0, 7.5e-9] },
+        },
+      ],
+      magnetization_assets: [],
+    } as unknown as SceneResource;
+
+    const primitiveModel = buildViewport3DPrimitiveRenderModel(scene, null);
+    const model = createViewport3DTextureTransformModel(scene);
+    expect(model.hasAuthoredMagnetization("brand-new-film")).toBe(false);
+
+    const bounds = resolveTargetBoundsMeters(scene, {
+      kind: "object",
+      objectId: "brand-new-film",
+    });
+    const baseDraft = createDefaultMagneticTextureDraft("object", bounds);
+    const skyrmionDraft = {
+      ...baseDraft,
+      ...switchDraftPresetPatch(baseDraft, "bloch_skyrmion", bounds),
+    };
+    const owner = Symbol("new-texture-vectors-test");
+    registerTextureInspectorBinding(owner, {
+      bounds,
+      draft: skyrmionDraft,
+      fitCharacteristicSize: () => {},
+      patchDraft: () => {},
+      resetTransform: () => {},
+      target: { kind: "object", objectId: "brand-new-film" },
+    });
+
+    // Even when liveFieldCoveredObjectIds includes the object AND activeQuantityId is H_demag,
+    // an active live analytical texture binding MUST render its live vector preview!
+    const markup = renderToStaticMarkup(
+      createElement(Viewport3DTextureTransformLayer, {
+        getObjectSettings: () => ({
+          ...DEFAULT_OBJECT_VISUALIZATION,
+          activeQuantityId: "H_demag",
+          geometryScope: "full",
+          shaderVisible: true,
+          surfaceOpacityPercent: 100,
+          vectorBudget: 25,
+          vectorsVisible: true,
+          visible: true,
+        }),
+        liveFieldCoveredObjectIds: new Set(["brand-new-film"]),
+        primitiveModel,
+        savedViewportActive: false,
+        selectedObjectId: "brand-new-film",
+        textureTransformModel: model,
+      }),
+    );
+
+    const instancedMatches = markup.match(/<instancedMesh\b[^>]*>/g) ?? [];
+    expect(instancedMatches.length).toBe(2);
+    // Declarative count must reflect glyphCount (never 0, which would wipe instances on re-render)
+    for (const tag of instancedMatches) {
+      expect(tag).not.toContain('count="0"');
+      expect(tag).toMatch(/count="[1-9]\d*"/);
+    }
+    // Live surface preview uses positive polygonOffset (+0.5) so depth-tested arrows never hide behind it
+    expect(markup).not.toContain('polygonOffsetFactor="-1"');
+
+    // Switching the live draft preset immediately updates sampled vectors
+    const grid = buildAuthoredMagnetizationVectorGridPoints(primitiveModel.objects[0]!, {
+      budget: 25,
+      geometryScope: "full",
+      surfaceOpaque: true,
+    });
+    const uniformXDraft = {
+      ...baseDraft,
+      ...switchDraftPresetPatch(baseDraft, "uniform", bounds),
+      direction: [1, 0, 0] as [number, number, number],
+    };
+    const uniformZDraft = {
+      ...baseDraft,
+      ...switchDraftPresetPatch(baseDraft, "uniform", bounds),
+      direction: [0, 0, -1] as [number, number, number],
+    };
+    const sampledX = model.sampleVectors({
+      liveBinding: {
+        bounds,
+        draft: uniformXDraft,
+        fitCharacteristicSize: () => {},
+        patchDraft: () => {},
+        resetTransform: () => {},
+        target: { kind: "object", objectId: "brand-new-film" },
+      },
+      objectId: "brand-new-film",
+      positionsWorld: grid.positionsWorld,
+    });
+    const sampledZ = model.sampleVectors({
+      liveBinding: {
+        bounds,
+        draft: uniformZDraft,
+        fitCharacteristicSize: () => {},
+        patchDraft: () => {},
+        resetTransform: () => {},
+        target: { kind: "object", objectId: "brand-new-film" },
+      },
+      objectId: "brand-new-film",
+      positionsWorld: grid.positionsWorld,
+    });
+    expect(sampledX).not.toBeNull();
+    expect(sampledZ).not.toBeNull();
+    expect(sampledX![0]).toBeCloseTo(1, 4);
+    expect(sampledX![2]).toBeCloseTo(0, 4);
+    expect(sampledZ![0]).toBeCloseTo(0, 4);
+    expect(sampledZ![2]).toBeCloseTo(-1, 4);
+  });
+
+  it("lifts single-sheet thin-film vectors above opaque surfaces in full geometryScope while keeping thick 3D volumes interior", () => {
+    const thinFilm = {
+      bounds: {
+        center: [0, 0, 7.5e-9] as [number, number, number],
+        radius: 215e-9,
+        size: [300e-9, 300e-9, 15e-9] as [number, number, number],
+      },
+      csgPreview: null,
+      fallbackLabel: "primitive",
+      geometryKey: "bottom-layer:Box",
+      kind: "box" as const,
+      label: "BottomLayer",
+      magnetizationTexturePreview: null,
+      meshState: "primitive-only" as const,
+      objectId: "bottom-layer",
+      role: "magnet",
+      sceneRevision: 1,
+    };
+
+    const liftedFull = buildAuthoredMagnetizationVectorGridPoints(thinFilm, {
+      budget: 64,
+      geometryScope: "full",
+      surfaceOpaque: true,
+    });
+    expect(liftedFull.count).toBeGreaterThanOrEqual(16);
+    expect(liftedFull.renderOnTop).toBe(false);
+    // Top face of BottomLayer is 15 nm; every lifted arrow sits cleanly above 15 nm and below 32.5 nm TopLayer
+    for (let i = 0; i < liftedFull.count; i += 1) {
+      const z = liftedFull.positionsWorld[i * 3 + 2]!;
+      expect(z).toBeGreaterThan(15e-9);
+      expect(z).toBeLessThan(30e-9);
+    }
+
+    // Without opaque surface, full mode keeps anchors at sheet center (z = 7.5 nm)
+    const unliftedFull = buildAuthoredMagnetizationVectorGridPoints(thinFilm, {
+      budget: 64,
+      geometryScope: "full",
+      surfaceOpaque: false,
+    });
+    expect(unliftedFull.positionsWorld[2]).toBeCloseTo(7.5e-9, 15);
+
+    // Thick 3D cube in full mode with opaque surface keeps interior volume anchors
+    const thickCube = {
+      ...thinFilm,
+      bounds: {
+        center: [0, 0, 0] as [number, number, number],
+        radius: 87e-9,
+        size: [100e-9, 100e-9, 100e-9] as [number, number, number],
+      },
+      objectId: "thick-cube",
+    };
+    const thickFull = buildAuthoredMagnetizationVectorGridPoints(thickCube, {
+      budget: 64,
+      geometryScope: "full",
+      surfaceOpaque: true,
+    });
+    let minZ = Infinity;
+    let maxZ = -Infinity;
+    for (let i = 0; i < thickFull.count; i += 1) {
+      const z = thickFull.positionsWorld[i * 3 + 2]!;
+      minZ = Math.min(minZ, z);
+      maxZ = Math.max(maxZ, z);
+    }
+    expect(minZ).toBeGreaterThan(-50e-9);
+    expect(minZ).toBeLessThan(0);
+    expect(maxZ).toBeGreaterThan(0);
+    expect(maxZ).toBeLessThan(50e-9);
+  });
 });

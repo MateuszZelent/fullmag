@@ -1235,6 +1235,8 @@ export interface AuthoredMagnetizationVectorGridOptions {
   readonly geometryScope?: "surface" | "full";
   readonly surfaceOffsetEnabled?: boolean;
   readonly surfaceOffsetScale?: number;
+  /** When true, single-sheet thin films in "full" scope lift arrows above their opaque top face. */
+  readonly surfaceOpaque?: boolean;
 }
 
 export interface AuthoredMagnetizationVectorGrid {
@@ -1393,6 +1395,7 @@ function buildArray3DVectorGridPoints(
   geometryScope: "surface" | "full",
   surfaceOffsetEnabled: boolean,
   surfaceOffsetScale: number,
+  surfaceOpaque: boolean,
 ): AuthoredMagnetizationVectorGrid | null {
   if (!object.rawGeometry) return null;
   const descriptor = extractArray3DPreviewDescriptors([object])[0];
@@ -1431,9 +1434,12 @@ function buildArray3DVectorGridPoints(
   let pitch = cMaxSpan;
 
   if (perInstanceTarget === 1) {
-    const lift = geometryScope === "surface" ? childSurfaceLift(cMaxSpan) : 0;
-    const testZ = geometryScope === "surface" ? cCenter[2] + chz - inset : cCenter[2];
-    const emitZ = geometryScope === "surface" ? cCenter[2] + chz + lift : cCenter[2];
+    const liftSingle =
+      geometryScope === "surface" ||
+      (surfaceOpaque && csz <= 0.35 * Math.max(csx, csy));
+    const lift = liftSingle ? childSurfaceLift(cMaxSpan) : 0;
+    const testZ = liftSingle ? cCenter[2] + chz - inset : cCenter[2];
+    const emitZ = liftSingle ? cCenter[2] + chz + lift : cCenter[2];
     if (childTester([cCenter[0], cCenter[1], testZ])) {
       localAnchors.push([cCenter[0], cCenter[1], emitZ]);
     } else {
@@ -1474,14 +1480,27 @@ function buildArray3DVectorGridPoints(
     const ny = Math.max(1, Math.round(csy / h));
     const nz = Math.max(1, Math.round(csz / h));
     pitch = Math.max(1e-12, Math.min(csx / nx, csy / ny, csz / nz));
+    const liftThinZ =
+      surfaceOpaque && nz === 1 && (nx > 1 || ny > 1 || csz <= 0.35 * Math.max(csx, csy));
+    const liftThinY =
+      surfaceOpaque && !liftThinZ && ny === 1 && (nx > 1 || nz > 1 || csy <= 0.35 * Math.max(csx, csz));
+    const liftThinX =
+      surfaceOpaque && !liftThinZ && !liftThinY && nx === 1 && (ny > 1 || nz > 1 || csx <= 0.35 * Math.max(csy, csz));
+    const sheetLift = liftThinZ || liftThinY || liftThinX ? childSurfaceLift(pitch) : 0;
     for (let iz = 0; iz < nz; iz += 1) {
-      const lz = cCenter[2] - chz + ((iz + 0.5) / nz) * csz;
+      const baseZ = cCenter[2] - chz + ((iz + 0.5) / nz) * csz;
+      const testZ = liftThinZ ? cCenter[2] + chz - inset : baseZ;
+      const emitZ = liftThinZ ? cCenter[2] + chz + sheetLift : baseZ;
       for (let iy = 0; iy < ny; iy += 1) {
-        const ly = cCenter[1] - chy + ((iy + 0.5) / ny) * csy;
+        const baseY = cCenter[1] - chy + ((iy + 0.5) / ny) * csy;
+        const testY = liftThinY ? cCenter[1] + chy - inset : baseY;
+        const emitY = liftThinY ? cCenter[1] + chy + sheetLift : baseY;
         for (let ix = 0; ix < nx; ix += 1) {
-          const lx = cCenter[0] - chx + ((ix + 0.5) / nx) * csx;
-          if (childTester([lx, ly, lz])) {
-            localAnchors.push([lx, ly, lz]);
+          const baseX = cCenter[0] - chx + ((ix + 0.5) / nx) * csx;
+          const testX = liftThinX ? cCenter[0] + chx - inset : baseX;
+          const emitX = liftThinX ? cCenter[0] + chx + sheetLift : baseX;
+          if (childTester([testX, testY, testZ])) {
+            localAnchors.push([emitX, emitY, emitZ]);
           }
         }
       }
@@ -1540,6 +1559,7 @@ export function buildAuthoredMagnetizationVectorGridPoints(
   const surfaceOffsetScale = Number.isFinite(options.surfaceOffsetScale)
     ? Math.max(0, options.surfaceOffsetScale ?? 0)
     : 0;
+  const surfaceOpaque = Boolean(options.surfaceOpaque);
 
   if (object.kind === "array3d" && object.rawGeometry) {
     const arrayed = buildArray3DVectorGridPoints(
@@ -1548,6 +1568,7 @@ export function buildAuthoredMagnetizationVectorGridPoints(
       geometryScope,
       surfaceOffsetEnabled,
       surfaceOffsetScale,
+      surfaceOpaque,
     );
     if (arrayed) return arrayed;
   }
@@ -1608,11 +1629,12 @@ export function buildAuthoredMagnetizationVectorGridPoints(
     (object.kind === "cylinder" || object.kind === "cylinder-cylinder-difference") &&
     (!object.cylinderParams || Math.abs(object.cylinderParams.axis[2]) >= 0.999);
 
+  const surfaceLift = (pitch: number): number =>
+    surfaceOffsetEnabled
+      ? Math.max(pitch * (0.28 + surfaceOffsetScale * 0.55), maxSpan * 0.012)
+      : Math.max(pitch * 0.16, maxSpan * 0.006);
+
   if (geometryScope === "surface") {
-    const surfaceLift = (pitch: number): number =>
-      surfaceOffsetEnabled
-        ? Math.max(pitch * (0.28 + surfaceOffsetScale * 0.55), maxSpan * 0.012)
-        : Math.max(pitch * 0.16, maxSpan * 0.006);
 
     if (object.kind === "sphere") {
       const approxArea = 4 * Math.PI * ((hx * hy + hy * hz + hz * hx) / 3);
@@ -1856,26 +1878,6 @@ export function buildAuthoredMagnetizationVectorGridPoints(
     else nz -= 1;
   }
 
-  for (let iz = 0; iz < nz; iz += 1) {
-    const dz = -hz + ((iz + 0.5) / nz) * sz;
-    for (let iy = 0; iy < ny; iy += 1) {
-      const dy = -hy + ((iy + 0.5) / ny) * sy;
-      for (let ix = 0; ix < nx; ix += 1) {
-        const dx = -hx + ((ix + 0.5) / nx) * sx;
-        if (!localContainment) {
-          if (isZAlignedCylinder && !insideCylinderCrossSection(dx, dy)) {
-            continue;
-          }
-          if (object.kind === "sphere" && !insideEllipsoid(dx, dy, dz)) {
-            continue;
-          }
-        }
-        const pt: Vec3 = [cx + dx, cy + dy, cz + dz];
-        emitPoint(pt, pt);
-      }
-    }
-  }
-
   const activeSpacings: number[] = [];
   if (nx > 1) activeSpacings.push(sx / nx);
   if (ny > 1) activeSpacings.push(sy / ny);
@@ -1884,6 +1886,42 @@ export function buildAuthoredMagnetizationVectorGridPoints(
     1e-12,
     activeSpacings.length > 0 ? Math.min(...activeSpacings) : maxSpan,
   );
+
+  // When "full" volume sampling degenerates to a single sheet on an opaque thin
+  // film/disk (e.g. nz === 1), lift anchors just above the top face so arrows
+  // are not buried inside the opaque texture surface under depthTest: true.
+  const liftThinZ =
+    surfaceOpaque && nz === 1 && (nx > 1 || ny > 1 || sz <= 0.35 * Math.max(sx, sy));
+  const liftThinY =
+    surfaceOpaque && !liftThinZ && ny === 1 && (nx > 1 || nz > 1 || sy <= 0.35 * Math.max(sx, sz));
+  const liftThinX =
+    surfaceOpaque && !liftThinZ && !liftThinY && nx === 1 && (ny > 1 || nz > 1 || sx <= 0.35 * Math.max(sy, sz));
+  const sheetLift = liftThinZ || liftThinY || liftThinX ? surfaceLift(pitch) : 0;
+
+  for (let iz = 0; iz < nz; iz += 1) {
+    const dz = -hz + ((iz + 0.5) / nz) * sz;
+    const testZ = liftThinZ ? cz + hz - inset : cz + dz;
+    const emitZ = liftThinZ ? cz + hz + sheetLift : cz + dz;
+    for (let iy = 0; iy < ny; iy += 1) {
+      const dy = -hy + ((iy + 0.5) / ny) * sy;
+      const testY = liftThinY ? cy + hy - inset : cy + dy;
+      const emitY = liftThinY ? cy + hy + sheetLift : cy + dy;
+      for (let ix = 0; ix < nx; ix += 1) {
+        const dx = -hx + ((ix + 0.5) / nx) * sx;
+        const testX = liftThinX ? cx + hx - inset : cx + dx;
+        const emitX = liftThinX ? cx + hx + sheetLift : cx + dx;
+        if (!localContainment) {
+          if (isZAlignedCylinder && !insideCylinderCrossSection(dx, dy)) {
+            continue;
+          }
+          if (object.kind === "sphere" && !insideEllipsoid(dx, dy, dz)) {
+            continue;
+          }
+        }
+        emitPoint([testX, testY, testZ], [emitX, emitY, emitZ]);
+      }
+    }
+  }
 
   return {
     positionsWorld: new Float32Array(points),
@@ -3189,7 +3227,8 @@ export function Viewport3DTextureTransformLayer({
         )
       : [];
 
-  // Persistent authored magnetization 3D vector arrows for objects not covered by live solver fields.
+  // Persistent authored magnetization 3D vector arrows for objects not covered by live solver fields,
+  // plus live analytical draft preview vectors (which always override stale solver vectors while editing).
   const persistentVectorObjects =
     !savedViewportActive && getObjectSettings && primitiveModel
       ? primitiveModel.objects.filter((obj) => {
@@ -3199,10 +3238,14 @@ export function Viewport3DTextureTransformLayer({
           if (!isLiveBound && !textureTransformModel.hasAuthoredMagnetization(obj.objectId)) {
             return false;
           }
-          if (liveFieldCoveredObjectIds?.has(obj.objectId)) return false;
+          if (!isLiveBound && liveFieldCoveredObjectIds?.has(obj.objectId)) return false;
           const s = getObjectSettings(obj);
           if (!s.visible || !s.vectorsVisible) return false;
-          if (s.activeQuantityId && resolveCanonicalQuantityId(s.activeQuantityId) !== "m") {
+          if (
+            !isLiveBound &&
+            s.activeQuantityId &&
+            resolveCanonicalQuantityId(s.activeQuantityId) !== "m"
+          ) {
             return false;
           }
           return true;
@@ -3308,8 +3351,8 @@ export function Viewport3DTextureTransformLayer({
               depthWrite={!liveSurfaceTransparent}
               opacity={liveSurfaceOpacity}
               polygonOffset
-              polygonOffsetFactor={-1}
-              polygonOffsetUnits={-1}
+              polygonOffsetFactor={0.5}
+              polygonOffsetUnits={0.5}
               toneMapped={false}
               transparent={liveSurfaceTransparent}
               vertexColors
@@ -3449,8 +3492,8 @@ function AuthoredMagnetizationPersistentSurface({
         depthWrite={!isTransparent}
         opacity={opacity}
         polygonOffset
-        polygonOffsetFactor={-1}
-        polygonOffsetUnits={-1}
+        polygonOffsetFactor={0.5}
+        polygonOffsetUnits={0.5}
         toneMapped={false}
         transparent={isTransparent}
         vertexColors
@@ -3572,6 +3615,11 @@ function AuthoredMagnetizationPersistentVectors({
   const headRef = useRef<InstancedMesh>(null);
   const glyphPolicy = RENDER_POLICIES.glyphs;
 
+  const hasLiveBinding = Boolean(liveBinding);
+  const surfaceOpaque =
+    (settings.shaderVisible || Boolean(settings.primitiveVisible) || hasLiveBinding) &&
+    (settings.surfaceOpacityPercent ?? 100) >= 99;
+
   const grid = useMemo(
     () =>
       buildAuthoredMagnetizationVectorGridPoints(object, {
@@ -3579,6 +3627,7 @@ function AuthoredMagnetizationPersistentVectors({
         geometryScope: settings.geometryScope,
         surfaceOffsetEnabled: settings.vectorSurfaceOffsetEnabled,
         surfaceOffsetScale: settings.vectorSurfaceOffsetScale,
+        surfaceOpaque,
       }),
     [
       object,
@@ -3586,6 +3635,7 @@ function AuthoredMagnetizationPersistentVectors({
       settings.vectorBudget,
       settings.vectorSurfaceOffsetEnabled,
       settings.vectorSurfaceOffsetScale,
+      surfaceOpaque,
     ],
   );
 
@@ -3734,7 +3784,7 @@ function AuthoredMagnetizationPersistentVectors({
     };
   }, [capacity, isRendered]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     syncAuthoredVectorMaterial(material, {
       opacity,
       transparent: glyphPolicy.transparent || opacity < 0.99,
@@ -3753,7 +3803,7 @@ function AuthoredMagnetizationPersistentVectors({
     tracker,
   ]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     const shaft = shaftRef.current;
     const head = headRef.current;
     if (!isRendered || !glyphData || !shaft || !head) return;
@@ -3785,7 +3835,7 @@ function AuthoredMagnetizationPersistentVectors({
     <>
       <instancedMesh
         args={[shaftGeometry, material, capacity]}
-        count={0}
+        count={glyphCount}
         frustumCulled={false}
         key={`authored-vector-shaft-${capacity}`}
         material-depthTest={depthPolicy.depthTest}
@@ -3799,7 +3849,7 @@ function AuthoredMagnetizationPersistentVectors({
       />
       <instancedMesh
         args={[headGeometry, material, capacity]}
-        count={0}
+        count={glyphCount}
         frustumCulled={false}
         key={`authored-vector-head-${capacity}`}
         material-depthTest={depthPolicy.depthTest}

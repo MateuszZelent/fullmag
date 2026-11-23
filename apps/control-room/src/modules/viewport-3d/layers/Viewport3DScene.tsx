@@ -49,6 +49,7 @@ import {
   type PerspectiveCamera as ThreePerspectiveCamera,
 } from "three";
 
+import { visualizationObjectIdForMeshPartLike } from "@/kernel/selection/selectionTypes";
 import {
   AIRBOX_VISUALIZATION_TARGET,
   type VisualizationTargetRef,
@@ -1209,6 +1210,28 @@ export function hasActiveViewport3DFemFieldData(
   return false;
 }
 
+export function suppressVisualizationSettingsForLiveTextureEdit(
+  settings: VisualizationTargetSettings,
+  objectId: string | null | undefined,
+  liveEditingTextureObjectId: string | null,
+): VisualizationTargetSettings {
+  if (
+    !liveEditingTextureObjectId ||
+    !objectId ||
+    objectId !== liveEditingTextureObjectId
+  ) {
+    return settings;
+  }
+  if (!settings.shaderVisible && !settings.vectorsVisible) {
+    return settings;
+  }
+  return {
+    ...settings,
+    shaderVisible: false,
+    vectorsVisible: false,
+  };
+}
+
 export function resolveViewport3DLiveFieldCoveredObjectIds({
   fdmCuboidLayerEnabled,
   fdmNativeLayerViews,
@@ -1241,9 +1264,8 @@ export function resolveViewport3DLiveFieldCoveredObjectIds({
     }
     for (const view of fdmNativeLayerViews) {
       if (
-        (view.surfaceColors || view.vectorSegments?.length) &&
-        view.model &&
-        view.model.count > 0
+        (view.surfaceColors && view.model && view.model.count > 0) ||
+        Boolean(view.vectorSegments?.length)
       ) {
         ids.add(view.domain.objectId);
       }
@@ -1281,7 +1303,20 @@ export function resolveViewport3DRealizedFdmObjectIds({
     // The layout can arrive before the asynchronous native cuboid build. Keep
     // the primitive preview until the replacement has a non-empty model to
     // render; otherwise the primitive disappears during the build handoff.
-    if (view.model && view.model.count > 0) {
+    // Once the user hides the layer or switches to vectors-only (Surface/
+    // Wireframe/Points all off), the native layer still owns this object so
+    // turning Surface off does not pop the authored primitive/texture back in.
+    const surfaceGeometryRequested = view.settings
+      ? view.settings.visible &&
+        (view.settings.shaderVisible ||
+          view.settings.wireframeVisible ||
+          view.settings.pointsVisible)
+      : true;
+    if (
+      (view.model && view.model.count > 0) ||
+      Boolean(view.vectorSegments?.length) ||
+      !surfaceGeometryRequested
+    ) {
       objectIds.add(view.domain.objectId);
     }
   }
@@ -1333,8 +1368,8 @@ function Viewport3DModelLayerStack({
   fdmAirboxVectorSegments,
   fdmMultilayerAirboxView,
   fdmLaneActive,
-  fdmNativeLayerViews,
-  fdmTargetViews,
+  fdmNativeLayerViews: rawFdmNativeLayerViews,
+  fdmTargetViews: rawFdmTargetViews,
   fieldModel,
   hysteresisReplayGlyphModel,
   getObjectSettings,
@@ -1501,6 +1536,73 @@ function Viewport3DModelLayerStack({
   }, []);
   const topologyLayerEnabled = !savedViewportActive && !fdmLaneActive &&
     viewport3DTopologyMeshLayerEnabledFromBrowserConfig();
+  const activeLiveTextureSurfaceKey = useSyncExternalStore(
+    subscribeTextureDraftBridge,
+    getActiveLiveTextureSurfaceKey,
+    getActiveLiveTextureSurfaceKey,
+  );
+  const liveEditingTextureObjectId =
+    !savedViewportActive &&
+    activeLiveTextureSurfaceKey &&
+    activeLiveTextureSurfaceKey !== "__selected__"
+      ? activeLiveTextureSurfaceKey
+      : null;
+
+  // When an analytical live Magnetic Texture draft is open on an object,
+  // suppress stale discretized FDM/FEM surfaces and vectors on that object so
+  // ONLY the live texture surface preview + live texture vectors render (keeping
+  // GPU buffers mounted for zero-cost restore when editing ends).
+  const fdmNativeLayerViews = useMemo(
+    () =>
+      !liveEditingTextureObjectId
+        ? rawFdmNativeLayerViews
+        : rawFdmNativeLayerViews.map((view) =>
+            view.domain.objectId === liveEditingTextureObjectId
+              ? {
+                  ...view,
+                  settings: suppressVisualizationSettingsForLiveTextureEdit(
+                    view.settings,
+                    view.domain.objectId,
+                    liveEditingTextureObjectId,
+                  ),
+                }
+              : view,
+          ),
+    [liveEditingTextureObjectId, rawFdmNativeLayerViews],
+  );
+  const fdmTargetViews = useMemo(
+    () =>
+      !liveEditingTextureObjectId
+        ? rawFdmTargetViews
+        : rawFdmTargetViews.map((view) => {
+            const targetObjectId =
+              view.ownerTarget.kind === "object" &&
+              view.ownerTarget.id.startsWith("object:")
+                ? view.ownerTarget.id.slice("object:".length)
+                : null;
+            return targetObjectId === liveEditingTextureObjectId
+              ? {
+                  ...view,
+                  settings: suppressVisualizationSettingsForLiveTextureEdit(
+                    view.settings,
+                    targetObjectId,
+                    liveEditingTextureObjectId,
+                  ),
+                }
+              : view;
+          }),
+    [liveEditingTextureObjectId, rawFdmTargetViews],
+  );
+  const effectiveGetPartSettings = useCallback(
+    (part: Viewport3DMeshPart) =>
+      suppressVisualizationSettingsForLiveTextureEdit(
+        getPartSettings(part),
+        visualizationObjectIdForMeshPartLike(part),
+        liveEditingTextureObjectId,
+      ),
+    [getPartSettings, liveEditingTextureObjectId],
+  );
+
   const realizedObjectIds = useMemo(() => {
     const ids = new Set(resolveViewport3DRealizedTopologyObjectIds({
       enabled: topologyLayerEnabled && stageVisibility.baseGeometry,
@@ -1511,12 +1613,13 @@ function Viewport3DModelLayerStack({
     }));
     if (fdmCuboidLayerEnabled && stageVisibility.baseGeometry) {
       for (const id of resolveViewport3DRealizedFdmObjectIds({
-        fdmNativeLayerViews, fdmTargetViews,
+        fdmNativeLayerViews: rawFdmNativeLayerViews,
+        fdmTargetViews: rawFdmTargetViews,
       })) ids.add(id);
     }
     return ids;
   }, [committedTopologyParts, topologyLayerEnabled, stageVisibility.baseGeometry, primitiveModel, topologyModel,
-    topologyFreshness, fdmCuboidLayerEnabled, fdmNativeLayerViews, fdmTargetViews]);
+    topologyFreshness, fdmCuboidLayerEnabled, rawFdmNativeLayerViews, rawFdmTargetViews]);
 
   // Set of objectIds currently covered by an active live discretized solver field.
   // Used by Viewport3DTextureTransformLayer to suppress the static authored
@@ -1525,19 +1628,13 @@ function Viewport3DModelLayerStack({
     () =>
       resolveViewport3DLiveFieldCoveredObjectIds({
         fdmCuboidLayerEnabled,
-        fdmNativeLayerViews,
-        fdmTargetViews,
+        fdmNativeLayerViews: rawFdmNativeLayerViews,
+        fdmTargetViews: rawFdmTargetViews,
         fieldModel,
         primitiveModel,
         savedViewportActive,
       }),
-    [fdmCuboidLayerEnabled, fdmTargetViews, fdmNativeLayerViews, fieldModel, savedViewportActive, primitiveModel],
-  );
-
-  const activeLiveTextureSurfaceKey = useSyncExternalStore(
-    subscribeTextureDraftBridge,
-    getActiveLiveTextureSurfaceKey,
-    getActiveLiveTextureSurfaceKey,
+    [fdmCuboidLayerEnabled, rawFdmTargetViews, rawFdmNativeLayerViews, fieldModel, savedViewportActive, primitiveModel],
   );
 
   const authoredTextureSurfaceObjectIds = useMemo(
@@ -1615,7 +1712,8 @@ function Viewport3DModelLayerStack({
               settings={view.settings}
               surfaceColors={view.surfaceColors}
               tracker={tracker}
-              vectorColorMode={vectorColorMode}
+              vectorBuildReference={view.vectorBuildReference}
+              vectorColorMode={view.settings.vectorColorMode ?? vectorColorMode}
               vectorGlyphColors={view.vectorGlyphColors?.colors ?? null}
               vectorSegments={view.vectorSegments}
               vectorStyle={vectorStyle}
@@ -1800,7 +1898,7 @@ function Viewport3DModelLayerStack({
             primitiveModel={primitiveModel}
             sessionIdentity={sessionIdentity}
             fieldModel={fieldModel}
-            getPartSettings={getPartSettings}
+            getPartSettings={effectiveGetPartSettings}
             materialProfile={materialProfile}
             magnetizationTexturePreviews={magnetizationTexturePreviews}
             meshQualityColors={meshQualityColors}
