@@ -79,10 +79,10 @@ STUDY_STAGE_RERUN_SOURCES = {
 }
 STUDY_STAGE_MATERIAL_SOURCES = {
     "object_nodes": "apps/control-room/src/modules/explorer/builders/objectExplorerNodes.ts",
-    "material_panel": "apps/control-room/src/modules/inspector/panels/ObjectMaterialPanel.tsx",
+    "material_panel": "apps/control-room/src/modules/inspector/inspectors/objects/material/ObjectMaterialSpec.tsx",
     "material_panel_model": "apps/control-room/src/modules/inspector/panels/ObjectMaterialPanelModel.ts",
     "material_edit_session": "apps/control-room/src/modules/inspector/panels/ObjectMaterialPanelEditSession.ts",
-    "material_edit_session_bridge": "apps/control-room/src/modules/inspector/panels/ObjectMaterialPanelEditSessionBridge.tsx",
+    "material_edit_session_bridge": "apps/control-room/src/modules/inspector/InspectorEditSession.tsx",
     "authoring_history": "apps/control-room/src/kernel/authoring/authoringHistoryMutation.ts",
     "api_client": "apps/control-room/src/kernel/api/ControlRoomApi.ts",
     "api_paths": "apps/control-room/src/kernel/api/apiPaths.ts",
@@ -98,11 +98,11 @@ STUDY_STAGE_FDM_CELL_SOURCES = {
 }
 STUDY_STAGE_TEXTURE_SOURCES = {
     "texture_helper": "apps/control-room/scripts/lib/study-texture-browser-qa.mjs",
-    "stage_inspector_router": "apps/control-room/src/modules/inspector/panels/StudyStageInspectorRouter.tsx",
+    "stage_inspector_router": "apps/control-room/src/modules/inspector/inspectors/study/StudyStagesSpec.tsx",
     "texture_editor": "apps/control-room/src/modules/inspector/panels/stages/StageTextureAssignmentsEditor.tsx",
     "stage_authoring_model": "apps/control-room/src/modules/inspector/panels/StudyStageAuthoringModel.ts",
     "study_inspector_panel": "apps/control-room/src/modules/inspector/panels/StudyInspectorPanel.tsx",
-    "initial_state_selector": "apps/control-room/src/modules/inspector/panels/stages/StageInitialStateSelector.tsx",
+    "initial_state_selector": "apps/control-room/src/modules/inspector/panels/stages/StageSharedControls.tsx",
     "initial_state_model": "apps/control-room/src/kernel/runtime/studyStageInitialState.ts",
     "api_client": "apps/control-room/src/kernel/api/ControlRoomApi.ts",
 }

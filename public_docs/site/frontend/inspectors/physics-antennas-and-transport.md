@@ -62,12 +62,14 @@ upstream dependency readiness) and enforces optimistic `scene_revision` concurre
 
 | Responsibility | Repository path | Stable symbol |
 |---|---|---|
-| Local/global interaction panel | `apps/control-room/src/modules/inspector/panels/PhysicsInteractionPanel.tsx` | `PhysicsInteractionPanel` |
+| Local/global interaction panel | `apps/control-room/src/modules/inspector/inspectors/objects/physics/ObjectPhysicsSpec.tsx` | `ObjectPhysicsInspectorPanel` |
 | Shared physics overview & dependency header | `apps/control-room/src/modules/inspector/panels/PhysicsInspectorOverview.tsx` | `PhysicsInspectorOverview` |
 | Regional field drives & sinc preview | `apps/control-room/src/modules/inspector/panels/RegionalFieldDrivePanel.tsx` | `RegionalFieldDrivePanel` |
-| Explicit inter-object/region couplings | `apps/control-room/src/modules/inspector/panels/CouplingInspectorPanel.tsx` | `CouplingInspectorPanel` |
+| Explicit inter-object/region couplings | `apps/control-room/src/modules/inspector/inspectors/objects/physics/DemagAndCouplingSpecs.tsx` | `CouplingInspectorPanel` |
 | Frozen spins constraints & selection rules | `apps/control-room/src/modules/inspector/panels/constraint/FrozenSpinsInspectorPanel.tsx` | `FrozenSpinsInspectorPanel` |
 | Antenna RF & waveform authoring | `apps/control-room/src/modules/inspector/panels/AntennaObjectPanel.tsx` | `AntennaObjectPanel` |
-| Current & spin transport closures | `apps/control-room/src/modules/inspector/panels/TransportAuthoringInspector.tsx` | `TransportAuthoringInspector` |
-| Spin torque & Oersted inspectors | `apps/control-room/src/modules/inspector/panels/SpinAuthoringInspector.tsx` | `SpinTorqueInspectorPanel`, `OerstedFieldInspectorPanel` |
-| Spin interface & tet4 orientation proof | `apps/control-room/src/modules/inspector/panels/SpinInterfaceInspector.tsx` | `SpinInterfaceInspectorPanel` |
+| Current transport closures | `apps/control-room/src/modules/inspector/panels/transport/CurrentTransportPanel.tsx` | `CurrentTransportInspectorPanel` |
+| Spin transport closures | `apps/control-room/src/modules/inspector/panels/transport/SpinTransportPanel.tsx` | `SpinTransportInspectorPanel` |
+| Spin torque | `apps/control-room/src/modules/inspector/inspectors/objects/transport/SpinTorqueSpec.tsx` | `SpinTorqueInspectorPanel` |
+| Oersted field | `apps/control-room/src/modules/inspector/panels/transport/OerstedFieldPanel.tsx` | `OerstedFieldInspectorPanel` |
+| Spin interface & tet4 orientation proof | `apps/control-room/src/modules/inspector/panels/transport/SpinInterfacePanel.tsx` | `SpinInterfaceInspectorPanel` |
