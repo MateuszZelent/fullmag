@@ -382,7 +382,7 @@ test("ABL editor updates the live FDM damping field and canonical script", async
       const layers = scene.objects[0].absorbing_boundary.layers;
       expect(layers).toEqual(response.request().postDataJSON().absorbing_boundary.layers);
       expect(new Set(layers.map((item: { layer_id: string }) => item.layer_id)).size).toBe(expectedCount);
-      expect(layers[0]).toMatchObject({ name: "Left plane", geometry: { kind: "plane", normal: [-1, 0, 0], origin: [expect.any(Number), 0, 0] } });
+      expect(layers[0]).toMatchObject({ name: "Left plane", enabled: true, geometry: { kind: "plane", normal: [-1, 0, 0], origin: [expect.any(Number), 0, 0] } });
       expect(layers[0].geometry.origin[0] * 1e9).toBeCloseTo(expectedCount === 2 ? -80 : -60, 10);
       if (expectedCount === 2) {
         expect(layers[1]).toMatchObject({ name: "Interior plane", enabled: expected.length === 2,
@@ -419,9 +419,16 @@ test("ABL editor updates the live FDM damping field and canonical script", async
   } finally {
     await page.unroute(objectUrl);
   }
+  await expect(page.getByRole("button", { name: "Interior plane", exact: true }))
+    .toHaveAttribute("aria-pressed", "true");
+  await expect(field("Reference origin / center x")).toHaveValue("40");
   await page.getByRole("switch", { name: "Enable absorbing layer", exact: true }).click();
   await saveLayers("interior-plane-disabled", [left], 2);
+  await expect(page.getByRole("button", { name: "Interior plane (disabled)", exact: true }))
+    .toHaveAttribute("aria-pressed", "true");
   await page.getByRole("button", { name: "Remove active layer" }).click();
+  await expect(page.getByRole("button", { name: "Left plane", exact: true }))
+    .toHaveAttribute("aria-pressed", "true");
   // Reposition the remaining plane so its field changes after removal as well.
   await field("Reference origin / center x").fill("-60");
   await saveLayers("interior-plane-removed", [{ ...left, boundaryNm: -60 }], 1);

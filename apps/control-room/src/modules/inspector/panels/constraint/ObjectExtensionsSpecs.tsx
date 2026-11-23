@@ -397,9 +397,11 @@ export function ObjectAbsorbingBoundaryInspectorPanel({ selection }: InspectorPa
 
   const baseRevision = sceneResourceRevision(scene.data);
   const [acknowledgedBase, setAcknowledgedBase] = useState<{
+    activeLayerId: string | null;
     draft: AbsorbingBoundaryDraft;
     objectId: string;
     revision: number;
+    sessionScopeKey: string | null;
   } | null>(null);
   const [conflictNotice, setConflictNotice] = useState<string | null>(null);
   const applyInFlightRef = useRef(false);
@@ -408,11 +410,16 @@ export function ObjectAbsorbingBoundaryInspectorPanel({ selection }: InspectorPa
     () => absorbingBoundaryDraftFromObject(sceneObj),
     [sceneObj],
   );
-  const resourceRevision = baseRevision ?? -1;
+  const objectAcknowledgement =
+    acknowledgedBase?.objectId === objectId &&
+    acknowledgedBase.sessionScopeKey === effectiveScopeKey
+      ? acknowledgedBase
+      : null;
   const effectiveModelBase =
-    acknowledgedBase?.objectId === objectId && resourceRevision < acknowledgedBase.revision
-      ? acknowledgedBase.draft
+    objectAcknowledgement && (baseRevision ?? -1) < objectAcknowledgement.revision
+      ? objectAcknowledgement.draft
       : parsedSceneDraft;
+  const savedActiveLayerId = objectAcknowledgement?.activeLayerId;
 
   const baseAlpha = useMemo(() => {
     const matRef = sceneObj?.material_ref;
@@ -441,6 +448,7 @@ export function ObjectAbsorbingBoundaryInspectorPanel({ selection }: InspectorPa
 
   const baseline = useMemo<AbsorbingBoundarySpecDraft>(() => {
     const layers = effectiveModelBase.layers.map(layerDraftToSpecItem);
+    const activeLayerIndex = Math.max(0, layers.findIndex((layer) => layer._layerId === savedActiveLayerId));
     return {
       objectId,
       objectName: sceneObj?.name?.trim() || objectId || "Object",
@@ -448,11 +456,11 @@ export function ObjectAbsorbingBoundaryInspectorPanel({ selection }: InspectorPa
       salConfigured: effectiveModelBase.enabled,
       legacy: effectiveModelBase.legacy,
       baseAlpha,
-      activeLayerIndex: 0,
+      activeLayerIndex,
       layers,
-      ...hydrateActiveLayerFields(layers, 0),
+      ...hydrateActiveLayerFields(layers, activeLayerIndex),
     };
-  }, [baseAlpha, effectiveModelBase, objectId, sceneObj]);
+  }, [baseAlpha, effectiveModelBase, objectId, savedActiveLayerId, sceneObj]);
 
   const targetRegionOptions = useMemo(() => {
     const known = new Set(regionIds);
@@ -692,6 +700,7 @@ export function ObjectAbsorbingBoundaryInspectorPanel({ selection }: InspectorPa
                     const isEnabled = isSelected ? ctx.draft.layerEnabled : layer.enabled;
                     return (
                       <Button
+                        aria-pressed={isSelected}
                         key={layer._layerId}
                         size="sm"
                         type="button"
@@ -1149,7 +1158,13 @@ export function ObjectAbsorbingBoundaryInspectorPanel({ selection }: InspectorPa
             const savedObject = response.objects?.find((c) => c.id === objectId);
             const acknowledged = absorbingBoundaryDraftFromObject(savedObject ?? precheck.patch);
             if (revNum !== null) {
-              setAcknowledgedBase({ objectId, revision: revNum, draft: acknowledged });
+              setAcknowledgedBase({
+                activeLayerId: draft.layers[draft.activeLayerIndex]?._layerId ?? null,
+                draft: acknowledged,
+                objectId,
+                revision: revNum,
+                sessionScopeKey: requestScopeKey,
+              });
             }
             const rev = fallbackRevision(response.revision ?? revNum);
             publishCommittedSceneResource(

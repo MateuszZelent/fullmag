@@ -216,6 +216,69 @@ describe("ObjectAbsorbingBoundaryInspectorPanel parity", () => {
     expect(mounted.host.textContent).not.toMatch(/\b(unknown|unavailable)\b/i);
   });
 
+  it("keeps editing the saved layer when the scene acknowledges a collection change", async () => {
+    const selection: Selection = {
+      kind: "object.absorbing-boundary",
+      label: "Absorbing Boundary",
+      moduleSource: "explorer",
+      nodeId: "model:object:strip-1:absorbing-boundary",
+      objectId: "strip-1",
+      ref: {
+        kind: "object.absorbing-boundary",
+        nodeId: "model:object:strip-1:absorbing-boundary",
+        objectId: "strip-1",
+        type: "scene-object",
+      },
+    };
+    const originalScene = mocks.sceneData;
+    const originalObject = originalScene.objects[0]!;
+    const first = { ...originalObject.absorbing_boundary.layers[0]!, region_id: "edge" };
+    const interior = {
+      ...first,
+      layer_id: "sal-interior",
+      name: "Interior plane",
+      geometry: { ...first.geometry, origin: [40e-9, 0, 0] },
+    };
+    const object = { ...originalObject, absorbing_boundary: { layers: [first, interior] } };
+    mocks.sceneData = { ...originalScene, objects: [object] };
+    mocks.patchObject.mockImplementationOnce(async (_id, patch: {
+      absorbing_boundary: typeof object.absorbing_boundary;
+    }) => {
+      const scene = {
+        ...mocks.sceneData,
+        revision: 6,
+        objects: [{ ...object, absorbing_boundary: patch.absorbing_boundary }],
+      };
+      mocks.sceneData = scene;
+      return scene;
+    });
+
+    try {
+      mounted = mountWave4TestElement(<ObjectAbsorbingBoundaryInspectorPanel selection={selection} />);
+      const host = mounted.host;
+      const button = (name: string) =>
+        findElement(host, (element) => element.tagName === "BUTTON" && element.textContent?.trim() === name);
+      const field = (key: string) =>
+        findElement(host, (element) => Boolean(element.getAttribute("id")?.endsWith(`-${key}`)), key);
+      act(() => button("Interior plane").click());
+      expect(field("layerName").value).toBe("Interior plane");
+      act(() => field("layerEnabled").click());
+      const apply = findElement(host, (element) =>
+        element.tagName === "BUTTON" && Boolean(element.textContent?.trim().startsWith("Apply")),
+      );
+      expect(apply).not.toBeNull();
+      await act(async () => apply?.click());
+      expect(mocks.patchObject).toHaveBeenCalledOnce();
+      expect(field("layerName").value).toBe("Interior plane");
+      const origin = findElement(host, (element) => element.getAttribute("aria-label") === "Reference origin / center x", "plane origin x");
+      expect(origin.value).toBe("40");
+      expect(mocks.sceneData.objects[0]?.absorbing_boundary.layers[0]?.geometry.origin).toEqual(first.geometry.origin);
+      expect(mocks.sceneData.objects[0]?.absorbing_boundary.layers[1]?.enabled).toBe(false);
+    } finally {
+      mocks.sceneData = originalScene;
+    }
+  });
+
   it("guards SAL delete against stale response when session switches or closes mid-flight", async () => {
     const selection: Selection = {
       kind: "object.absorbing-boundary",
