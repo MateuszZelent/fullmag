@@ -3299,6 +3299,7 @@ class ProblemApiTests(unittest.TestCase):
                     "rotation_quat": [0.0, 0.0, 0.0, 1.0],
                     "scale": [1.0, 1.0, 1.0],
                     "pivot": [0.0, 0.0, 0.0],
+                    "rotate_vectors": True,
                 },
                 "ui_label": None,
                 "preview_proxy": "none",
