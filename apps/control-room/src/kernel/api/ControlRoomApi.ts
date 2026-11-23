@@ -2893,7 +2893,13 @@ export class ControlRoomApi {
       try {
         response = await submit();
       } catch (error) {
-        if (!(error instanceof ControlRoomApiError) || error.code !== API_UNAVAILABLE_CODE) throw error;
+        if (!(error instanceof ControlRoomApiError) ||
+          (error.code !== API_UNAVAILABLE_CODE &&
+            !(error.status === 503 && error.code === "accepted_held_supersession_pending"))) {
+          throw error;
+        }
+        // The scheduler may still be recording retirement of the held run.
+        // Replay the pinned transaction so the same cancellation and Apply are observed.
         options.signal?.throwIfAborted();
         await delayRetry(this.retryDelayMs, options.signal);
         response = await submit();
