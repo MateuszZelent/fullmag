@@ -113,6 +113,9 @@ jobs:
           python3 -B scripts/ci/run_exact_cargo_test.py --locked -p fullmag-runner --lib artifact_pipeline::tests::zarr_field_sample_indexes_survive_interleaved_buffer_flushes -- --exact | tee "$RUNNER_TEMP/zarr-sample-index-test.log"
           grep -F "test result: ok. 1 passed" "$RUNNER_TEMP/zarr-sample-index-test.log"
 
+      - name: Check FEM demag solver policy resolution
+        run: python3 -B scripts/ci/run_exact_cargo_test.py --locked -p fullmag-runner --lib dispatch::tests::fem_demag_solver_policy_preserves_gpu_fem_bem -- --exact
+
       - name: Check FEM CPU runner contracts
         # Type-check the CPU native lane independently of fem-gpu, including
         # its tests. This does not link or qualify the MFEM runtime.
