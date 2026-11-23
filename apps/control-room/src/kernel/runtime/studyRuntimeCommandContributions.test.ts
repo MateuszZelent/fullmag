@@ -3177,7 +3177,6 @@ describe("study runtime command contributions", () => {
     });
     expect(inspectImport).toHaveBeenCalledWith({
       artifact_ref: "field-states/body-m.field-state.json",
-      format: "field_state_json",
       quantity_id: "m",
       target: { id: "body", kind: "object" },
     }, {
@@ -3252,7 +3251,7 @@ describe("study runtime command contributions", () => {
       compatibility: "compatible",
       component_count: 3,
       default_mode: "apply",
-      format: "field_state_json",
+      format: "h5",
       point_count: 2,
       quantity_id: "m",
       target: { id: "body", kind: "object" },
@@ -3301,7 +3300,6 @@ describe("study runtime command contributions", () => {
     });
     expect(inspectImport).toHaveBeenCalledWith({
       artifact_ref: "imports/body-m.h5",
-      format: "field_state_json",
       quantity_id: "m",
       target: { id: "body", kind: "object" },
     }, {
@@ -3338,7 +3336,7 @@ describe("study runtime command contributions", () => {
       compatibility: "compatible",
       component_count: 3,
       default_mode: "attach",
-      format: "field_state_json",
+      format: "h5",
       point_count: 4,
       quantity_id: "H_eff",
       target: { id: "airbox", kind: "airbox" },
@@ -3380,7 +3378,6 @@ describe("study runtime command contributions", () => {
     });
     expect(inspectImport).toHaveBeenCalledWith({
       artifact_ref: "imports/airbox-h-eff.h5",
-      format: "field_state_json",
       quantity_id: "H_eff",
       target: { id: "airbox", kind: "airbox" },
     }, {

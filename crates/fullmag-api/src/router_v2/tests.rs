@@ -32783,8 +32783,7 @@ async fn uploaded_h5_field_state_can_be_inspected_and_applied() {
                             "kind": "object",
                             "id": "body"
                         },
-                        "quantity_id": "m",
-                        "format": "field_state_json"
+                        "quantity_id": "m"
                     })
                     .to_string(),
                 ))
@@ -32802,6 +32801,7 @@ async fn uploaded_h5_field_state_can_be_inspected_and_applied() {
     );
     assert_eq!(inspected["compatibility"], "compatible");
     assert_eq!(inspected["point_count"], 2);
+    assert_eq!(inspected["format"], "h5");
 
     let import_response = app
         .oneshot(
