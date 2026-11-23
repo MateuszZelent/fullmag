@@ -567,7 +567,7 @@ function useFieldMapModuleController() {
         resolveCanonicalQuantityId(layer.quantity_id) === "m",
     ) ?? null;
   }, [hasLayerModelOverlays, overlayLayers, selectedFieldContext.target]);
-  const authoredQuantityEligible = hasLayerModelOverlays
+  const authoredQuantityEligible = metaOnlyBase
     ? authoredOverlay !== null
     : !plan.quantityId || plan.quantityId === "m" || resolveCanonicalQuantityId(plan.quantityId) === "m";
   const backendPlanarUnavailable =

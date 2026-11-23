@@ -1107,6 +1107,16 @@ describe("FieldMapModule planar state ownership", () => {
         expect(mocks.renderModel).not.toHaveBeenCalled();
       }
 
+      mocks.visualization.data = {
+        planar: { ...planar, field_overlays: [] },
+      };
+      mocks.renderModel.mockClear();
+      await act(async () => root.render(<FieldMapModule />));
+      expect(mocks.renderModel).not.toHaveBeenCalled();
+
+      mocks.visualization.data = {
+        planar: { ...planar, field_overlays: [allOverlay] },
+      };
       // As soon as real backend solver data is ready, backend data takes precedence
       mocks.metaError = null;
       mocks.renderReady = true;
