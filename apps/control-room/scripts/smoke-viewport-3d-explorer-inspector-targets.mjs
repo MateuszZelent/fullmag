@@ -510,12 +510,19 @@ async function verifyAirboxIndependentVisualization(browser, url) {
       throw new Error(`Airbox inspector must expose an enabled Color map control; found ${await palette.count()}.`);
     }
     const paletteTransitions = [];
-    for (const paletteName of ["plasma", "cividis", "turbo", "grayscale", "rdbu"]) {
+    for (const [paletteName, optionLabel] of [
+      ["plasma", "Plasma"],
+      ["cividis", "Cividis"],
+      ["turbo", "Turbo"],
+      ["grayscale", "Grayscale"],
+      ["rdbu", "RdBu"],
+    ]) {
       const baseline = await sampleViewportPixels(page, 1);
       const patchesBefore = countVisualizationPatches(fixture);
+      await palette.click();
       await Promise.all([
         page.waitForResponse((response) => response.request().method() === "PATCH" && response.url().endsWith("/visualization/state")),
-        palette.selectOption(paletteName),
+        page.getByRole("option", { name: optionLabel, exact: true }).click(),
       ]);
       await waitForVisualizationMutationSettled(page, panel);
       const delta = await waitForViewportPixelDelta(

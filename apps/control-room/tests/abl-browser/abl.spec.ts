@@ -242,7 +242,7 @@ test("ABL editor updates the live FDM damping field and canonical script", async
   const parent = page.locator(`[data-node-id="${parentId}"]`);
   const child = page.locator(`[data-node-id="${parentId}:absorbing-boundary"]`);
   const enabled = page.getByRole("switch", { name: "Toggle Absorbing boundary (SAL)", exact: true });
-  const save = page.getByRole("button", { name: "Apply", exact: true });
+  const save = page.locator('[data-slot="inspector-commit-bar"]').getByRole("button", { name: /^Apply\b/ });
   const field = (name: string) => page.locator("input,textarea").and(page.getByLabel(name, { exact: true }));
   const select = async (name: string, option: string) => {
     await page.getByRole("combobox", { name, exact: true }).click();

@@ -171,7 +171,7 @@ test("Material alpha follows the two ends and the region-clipped cylinder after 
   await expect(page.getByRole("combobox", { name: "Contour geometry", exact: true }))
     .toHaveText("Cylindrical radial shell");
   await expect(page.getByRole("combobox", { name: "Target region", exact: true }))
-    .toHaveText("Upper half");
+    .toHaveText("Upper half (upper-half)");
   await expect(page.getByRole("textbox", { name: "Layer name", exact: true })).toHaveValue("Upper semicircle");
   await page.screenshot({ path: info.outputPath("semicircle-inspector.png") });
   const before = await page.evaluate(() => window.ablFemProbe.sequence);
@@ -184,7 +184,7 @@ test("Material alpha follows the two ends and the region-clipped cylinder after 
         expect(saved.revision).toBeGreaterThan(scene.revision);
       }),
     nextAlphaTransfer(initialEtag),
-    page.getByRole("button", { name: "Apply", exact: true }).click(),
+    page.locator('[data-slot="inspector-commit-bar"]').getByRole("button", { name: /^Apply\b/ }).click(),
   ]);
   const updated = await checkMap(0.12, updatedRequest.url());
   const updatedDraw = await verifyDraw(updated, before);
