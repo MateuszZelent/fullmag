@@ -1223,6 +1223,11 @@ export class ControlRoomApiError extends Error {
   }
 }
 
+function isHeldStudyRetirementPending(error: unknown): boolean {
+  return error instanceof ControlRoomApiError &&
+    error.status === 503 && error.code === "accepted_held_supersession_pending";
+}
+
 export class ControlRoomApi {
   /** Unique cache namespace for this API client instance. */
   readonly resourceCacheScope = createRequestId();
@@ -2862,15 +2867,27 @@ export class ControlRoomApi {
           { path: { monitor_id: monitorId } },
         ),
     },
-    commitTransaction: (
+    commitTransaction: async (
       transaction: AuthoringTransactionRequest,
       options?: RequestOptions,
-    ) =>
-      this.postJson<AuthoringTransactionResponse, AuthoringTransactionRequest>(
-        MODEL_TRANSACTIONS_PATH,
-        transaction,
-        options,
-      ),
+    ) => {
+      const pinned = transaction.kind === "replace_scene" &&
+        typeof transaction.base_revision === "number" && Boolean(options?.sessionScopeKey);
+      const request = pinned ? structuredClone(transaction) : transaction;
+      const submit = () => this.postJson<AuthoringTransactionResponse, AuthoringTransactionRequest>(
+        MODEL_TRANSACTIONS_PATH, request, options,
+      );
+      try {
+        return await submit();
+      } catch (error) {
+        // This specific response is returned before scene publication. Keep the
+        // same request scope and scene CAS while the durable retirement settles.
+        if (!pinned || !isHeldStudyRetirementPending(error)) throw error;
+        options?.signal?.throwIfAborted();
+        await delayRetry(this.retryDelayMs, options?.signal);
+        return submit();
+      }
+    },
     applyMagnetization: async (
       target: MagnetizationApplyTarget,
       options: RequestOptions & { baseRevision: number; sessionScopeKey: string },
@@ -2895,7 +2912,7 @@ export class ControlRoomApi {
       } catch (error) {
         if (!(error instanceof ControlRoomApiError) ||
           (error.code !== API_UNAVAILABLE_CODE &&
-            !(error.status === 503 && error.code === "accepted_held_supersession_pending"))) {
+            !isHeldStudyRetirementPending(error))) {
           throw error;
         }
         // The scheduler may still be recording retirement of the held run.

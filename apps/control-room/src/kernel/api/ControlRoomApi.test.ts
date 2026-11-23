@@ -6431,6 +6431,35 @@ describe("ControlRoomApi", () => {
     },
   );
 
+  it("replays a revision-pinned scene write when a held Study is still retiring", async () => {
+    const writes: Array<{ scope: string | null; body: unknown }> = [];
+    const api = new ControlRoomApi({
+      baseUrl: "http://127.0.0.1:8765",
+      retryDelayMs: 0,
+      fetchImpl: async (_url, init) => {
+        writes.push({
+          scope: new Headers(init?.headers).get("x-fullmag-session-scope"),
+          body: parseRequestBody(init?.body),
+        });
+        return writes.length === 1
+          ? jsonResponse({ code: "accepted_held_supersession_pending" }, { status: 503 })
+          : jsonResponse({ scene_revision: 11, transaction_kind: "replace_scene" });
+      },
+    });
+    const sessionScopeKey = "session=A&epoch=1&request_scope_epoch=1";
+    const transaction = {
+      kind: "replace_scene" as const,
+      base_revision: 10,
+      scene: { study: { fdm: { default_cell: [2.5e-9, 2.5e-9, 5e-9] } } },
+    };
+    await expect(api.model.commitTransaction(transaction, { sessionScopeKey }))
+      .resolves.toMatchObject({ scene_revision: 11 });
+    expect(writes).toEqual([
+      { scope: sessionScopeKey, body: transaction },
+      { scope: sessionScopeKey, body: transaction },
+    ]);
+  });
+
   it("commits object region and coupling writes through model transactions", async () => {
     const requests: Array<{ body: unknown; method: string | undefined; url: string }> = [];
     const api = new ControlRoomApi({
