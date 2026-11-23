@@ -13,7 +13,7 @@
   display: grid;
   position: relative;
   grid-template-rows:
-    var(--fm-menu-height)
+    minmax(calc(var(--fm-menu-height) + var(--fm-space-1)), auto)
     minmax(var(--fm-ribbon-height), max-content)
     minmax(0, 1fr)
     var(--fm-status-height);
@@ -29,11 +29,26 @@
 
 .fm-workspace-shell:has(> .fm-runtime-degraded-banner) {
   grid-template-rows:
-    var(--fm-menu-height)
+    minmax(calc(var(--fm-menu-height) + var(--fm-space-1)), auto)
     minmax(var(--fm-ribbon-height), max-content)
     auto
     minmax(0, 1fr)
     var(--fm-status-height);
+}
+
+/* When a visible ribbon sits directly under the header, merge both into one
+   continuous rounded glass card matching the workspace dock and footer. */
+.fm-workspace-shell:not(:has(> .fm-home-overlay)):has(> .fm-slot[data-slot-id="ribbon"])
+  > .fm-slot[data-slot-id="app-menu"] {
+  border-bottom-color: var(--fm-border-muted);
+  border-end-start-radius: 0;
+  border-end-end-radius: 0;
+}
+
+/* Embedded workspaces without the host tab strip keep a top gutter above the
+   rounded header card. */
+.fm-workspace-frame:not(:has(> .fm-instance-tabs)) .fm-slot[data-slot-id="app-menu"] {
+  margin-top: var(--fm-space-1);
 }
 
 .fm-runtime-degraded-banner {
@@ -43,7 +58,9 @@
   grid-column: 1;
   grid-row: 3;
   min-width: 0;
-  border-bottom: 1px solid color-mix(in srgb, var(--fm-danger) 42%, var(--fm-border-subtle));
+  margin: var(--fm-space-2) var(--fm-space-1) 0;
+  border: 1px solid color-mix(in srgb, var(--fm-danger) 42%, var(--fm-border-subtle));
+  border-radius: var(--fm-radius-section);
   background: color-mix(in srgb, var(--fm-danger) 12%, var(--fm-bg-surface));
   padding: var(--fm-space-2) var(--fm-space-3);
   font-size: var(--fm-font-size-2xs);
@@ -87,6 +104,7 @@
   grid-template-rows: minmax(0, 1fr);
   min-height: 0;
   min-width: 0;
+  padding-top: var(--fm-space-2);
 }
 
 .fm-start-host[data-state="home-session-reconnecting"] {
@@ -135,7 +153,8 @@
   grid-template-rows: minmax(0, 1fr);
   min-height: 0;
   min-width: 0;
-  background: var(--fm-page-bg, var(--fm-bg-app));
+  padding-top: var(--fm-space-2);
+  background: transparent;
 }
 
 /* Keep the mounted workspace children on their original tracks while the overlay spans them. */
@@ -167,7 +186,7 @@
 
 .fm-workspace-shell:has(> .fm-home-overlay):has(> .fm-runtime-degraded-banner) {
   grid-template-rows:
-    var(--fm-menu-height)
+    minmax(calc(var(--fm-menu-height) + var(--fm-space-1)), auto)
     minmax(var(--fm-ribbon-height), max-content)
     auto
     minmax(0, 1fr)

@@ -1,19 +1,30 @@
 /* Home, this instance's session and one tab per other Fullmag instance on the
-   host (ADR 0069). The strip sits above the workspace frame; other instances
-   render in frames over the mounted workspace. */
+   host (ADR 0069). Styled as a Chrome-like browser tab strip resting on the
+   page backdrop whose active tab fuses seamlessly into the rounded glass
+   header card below it. */
 .fm-instance-tabs {
+  --fm-chrome-tab-surface: var(--fm-bg-panel-raised);
+  position: relative;
+  z-index: 2;
   display: flex;
   flex: none;
   align-items: flex-end;
   min-width: 0;
-  border-bottom: 1px solid var(--fm-border-muted);
-  /* One top-chrome surface with the menu and ribbon bars below it. */
-  background: color-mix(in srgb, var(--fm-bg-chrome) 70%, transparent);
-  padding: var(--fm-space-1) var(--fm-space-2) 0;
+  border-bottom: 0;
+  background: transparent;
+  padding: var(--fm-space-1-5) calc(var(--fm-space-1) + var(--fm-radius-section)) 0;
+}
+
+/* Overlap the header card's top 1px hairline border + 1px inner glass highlight
+   directly beneath the strip so the active tab fuses seamlessly into the card. */
+.fm-instance-tabs:has(+ .fm-instance-stage) {
+  margin-bottom: -2px;
 }
 
 .fm-instance-tabs > [data-orientation] {
+  display: flex;
   min-width: 0;
+  max-width: 100%;
 }
 
 .fm-instance-tabs__popout {
@@ -21,46 +32,160 @@
   flex: none;
   align-items: center;
   gap: var(--fm-space-1);
-  margin: 0 0 var(--fm-space-1) auto;
+  margin: 0 0 var(--fm-space-1-5) auto;
+  padding: var(--fm-space-1) var(--fm-space-2);
+  border-radius: var(--fm-radius-pill);
   color: var(--fm-text-secondary);
   font-size: var(--fm-font-size-2xs);
   text-decoration: none;
+  transition:
+    background-color var(--fm-duration-micro) var(--fm-ease-out-soft),
+    color var(--fm-duration-micro) var(--fm-ease-out-soft);
 }
 
 .fm-instance-tabs__popout:hover,
 .fm-instance-tabs__popout:focus-visible {
-  color: var(--fm-accent);
+  background: color-mix(in srgb, var(--fm-text-primary) 7%, transparent);
+  color: var(--fm-accent-text);
 }
 
+/* Horizontal strip with 10px side padding so the active tab's 10px concave
+   Chrome corner flares never clip at the scrollport edge. */
 .fm-instance-tabs__list {
+  display: flex;
+  align-items: flex-end;
   gap: var(--fm-space-1);
+  min-height: 0;
+  padding-inline: 10px;
+  scroll-padding-inline: 10px;
   overflow-x: auto;
+  overflow-y: hidden;
   border-bottom: 0;
-  scrollbar-width: thin;
+  scrollbar-width: none;
+}
+
+.fm-instance-tabs__list::-webkit-scrollbar {
+  display: none;
 }
 
 .fm-instance-tabs__item {
+  position: relative;
   display: flex;
   flex: none;
   align-items: center;
+  border: 1px solid transparent;
+  border-bottom: 0;
+  border-radius: var(--fm-radius-field) var(--fm-radius-field) 0 0;
+  background: transparent;
+  transition: background-color var(--fm-duration-micro) var(--fm-ease-out-soft);
+}
+
+.fm-instance-tabs__item:hover:not(:has(> .fm-instance-tabs__tab[data-state="active"])) {
+  background: color-mix(in srgb, var(--fm-glass-strong) 48%, transparent);
 }
 
 .fm-instance-tabs__tab {
-  gap: var(--fm-space-1);
+  position: relative;
+  gap: var(--fm-space-1-5);
+  height: 31px;
+  min-height: 31px;
   max-width: 240px;
-  border-bottom-left-radius: 0;
-  border-bottom-right-radius: 0;
+  padding-inline: var(--fm-space-3);
+  border: 1px solid transparent;
+  border-bottom: 0;
+  border-radius: var(--fm-radius-field) var(--fm-radius-field) 0 0;
+  background: transparent;
+  box-shadow: none;
+  color: var(--fm-text-muted);
+  font-size: var(--fm-font-size-xs);
+  font-weight: var(--fm-font-weight-medium);
+  transition:
+    background-color var(--fm-duration-micro) var(--fm-ease-out-soft),
+    color var(--fm-duration-micro) var(--fm-ease-out-soft);
 }
 
+.fm-instance-tabs__list > .fm-instance-tabs__tab:hover:not([data-state="active"]) {
+  background: color-mix(in srgb, var(--fm-glass-strong) 48%, transparent);
+  color: var(--fm-text-primary);
+}
+
+/* Paired instance tab + close button share the outer Chrome tab shell. */
 .fm-instance-tabs__item .fm-instance-tabs__tab {
-  padding-right: var(--fm-space-2);
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  padding-inline: var(--fm-space-3) var(--fm-space-1-5);
+}
+
+.fm-instance-tabs__item .fm-instance-tabs__tab:hover:not(:disabled) {
+  background: transparent;
+}
+
+.fm-instance-tabs__item .fm-instance-tabs__tab[data-state="active"]:not(:disabled) {
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+  color: var(--fm-text-primary);
+  font-weight: var(--fm-font-weight-medium);
+}
+
+/* Active Chrome tab: rises out of the rounded header card with matching border,
+   surface fill, inner highlight and smooth concave bottom corner flares.
+   Font weight and box metrics stay identical to inactive tabs so switching
+   never shifts adjacent tabs. */
+.fm-instance-tabs__list > .fm-instance-tabs__tab[data-state="active"]:not(:disabled),
+.fm-instance-tabs__item:has(> .fm-instance-tabs__tab[data-state="active"]) {
+  z-index: 2;
+  border-color: var(--fm-glass-line);
+  border-bottom: 0;
+  background: var(--fm-chrome-tab-surface);
+  box-shadow: inset 0 1px 0 var(--fm-glass-highlight);
+  color: var(--fm-text-primary);
+  font-weight: var(--fm-font-weight-medium);
+}
+
+.fm-instance-tabs__list > .fm-instance-tabs__tab[data-state="active"]::before,
+.fm-instance-tabs__list > .fm-instance-tabs__tab[data-state="active"]::after,
+.fm-instance-tabs__item:has(> .fm-instance-tabs__tab[data-state="active"])::before,
+.fm-instance-tabs__item:has(> .fm-instance-tabs__tab[data-state="active"])::after {
+  position: absolute;
+  bottom: 1px;
+  width: 10px;
+  height: 10px;
+  pointer-events: none;
+  content: "";
+}
+
+.fm-instance-tabs__list > .fm-instance-tabs__tab[data-state="active"]::before,
+.fm-instance-tabs__item:has(> .fm-instance-tabs__tab[data-state="active"])::before {
+  left: -10px;
+  background: radial-gradient(
+    circle at 0 0,
+    transparent 8.5px,
+    var(--fm-glass-line) 9px,
+    var(--fm-glass-line) 9.8px,
+    var(--fm-chrome-tab-surface) 10.2px
+  );
+}
+
+.fm-instance-tabs__list > .fm-instance-tabs__tab[data-state="active"]::after,
+.fm-instance-tabs__item:has(> .fm-instance-tabs__tab[data-state="active"])::after {
+  right: -10px;
+  background: radial-gradient(
+    circle at 100% 0,
+    transparent 8.5px,
+    var(--fm-glass-line) 9px,
+    var(--fm-glass-line) 9.8px,
+    var(--fm-chrome-tab-surface) 10.2px
+  );
 }
 
 .fm-instance-tabs__close {
-  width: var(--fm-control-height-compact);
-  height: var(--fm-control-height-compact);
+  width: 22px;
+  height: 22px;
   flex: none;
-  margin-left: 0;
+  margin-inline: 0 var(--fm-space-1-5);
+  border-radius: var(--fm-radius-pill);
 }
 
 .fm-instance-tabs__name {
@@ -103,8 +228,29 @@
   color: var(--fm-text-muted);
 }
 
+@media (prefers-reduced-transparency: reduce) {
+  .fm-instance-tabs {
+    --fm-chrome-tab-surface: var(--fm-bg-panel);
+  }
+}
+
+@media (forced-colors: active) {
+  .fm-instance-tabs__list > .fm-instance-tabs__tab[data-state="active"]:not(:disabled),
+  .fm-instance-tabs__item:has(> .fm-instance-tabs__tab[data-state="active"]) {
+    border-color: Highlight;
+  }
+
+  .fm-instance-tabs__list > .fm-instance-tabs__tab[data-state="active"]::before,
+  .fm-instance-tabs__list > .fm-instance-tabs__tab[data-state="active"]::after,
+  .fm-instance-tabs__item:has(> .fm-instance-tabs__tab[data-state="active"])::before,
+  .fm-instance-tabs__item:has(> .fm-instance-tabs__tab[data-state="active"])::after {
+    display: none;
+  }
+}
+
 .fm-instance-stage {
   position: relative;
+  z-index: 1;
   display: flex;
   flex: 1 1 0%;
   flex-direction: column;
@@ -113,8 +259,11 @@
 
 .fm-instance-frames {
   position: absolute;
-  inset: 0;
+  inset: 0 var(--fm-space-1) var(--fm-space-1);
   z-index: var(--fm-z-panel);
+  overflow: hidden;
+  border: 1px solid var(--fm-glass-line);
+  border-radius: var(--fm-radius-section);
   background: var(--fm-bg-app);
 }
 

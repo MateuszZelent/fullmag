@@ -1,11 +1,11 @@
 .fm-header {
   display: flex;
   height: 100%;
-  min-height: var(--fm-menu-height);
+  min-height: calc(var(--fm-menu-height) + var(--fm-space-1));
   align-items: center;
   gap: var(--fm-space-1);
   border-bottom: 0;
-  /* The app-menu slot draws the translucent chrome surface. */
+  /* The app-menu slot draws the floating rounded glass card surface. */
   background: transparent;
   padding-inline: var(--fm-space-3);
   min-width: 0;
