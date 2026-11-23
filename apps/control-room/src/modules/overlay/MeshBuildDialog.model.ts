@@ -26,3 +26,17 @@ export function meshBuildDialogUnavailableMessage(
   if (lane === "unknown") return UNKNOWN_MESH_COMMAND_LANE_REASON;
   return null;
 }
+
+export function fdmGridPreflightState(
+  requestedRevision: number | null,
+  sceneRevision: number | null,
+  statusRevision: number | null | undefined,
+): "pending" | "current" | "stale" {
+  if (requestedRevision === null) return "pending";
+  if ((sceneRevision ?? -1) > requestedRevision || (statusRevision ?? -1) > requestedRevision) {
+    return "stale";
+  }
+  return sceneRevision === requestedRevision && statusRevision === requestedRevision
+    ? "current"
+    : "pending";
+}

@@ -46,7 +46,7 @@ import {
   meshBuildDialogRuntimeStatusEquals,
   selectMeshBuildDialogRuntimeStatus,
 } from "./MeshBuildDialogRuntimeStatus";
-import { resolveMeshBuildDialogLane, shouldLoadMeshBuildDialogFemResources, meshBuildDialogUnavailableMessage } from "./MeshBuildDialog.model";
+import { fdmGridPreflightState, resolveMeshBuildDialogLane, shouldLoadMeshBuildDialogFemResources, meshBuildDialogUnavailableMessage } from "./MeshBuildDialog.model";
 
 function asRecord(value: unknown): JsonObject | null {
   return value && typeof value === "object" && !Array.isArray(value)
@@ -149,17 +149,14 @@ export function MeshBuildDialog({ kernel }: { kernel: KernelApi }) {
   const objectPolicy = useObjectMeshPolicyResource(objectId, { enabled: explicitFemLane && Boolean(objectId) });
   const universePolicy = useUniverseMeshPolicyResource({ enabled: explicitFemLane && !objectId });
   const sharedPolicy = useMeshSharedDomainPolicyResource({ enabled: explicitFemLane && !objectId });
-  const requestedPolicy = useMemo(
-    () =>
-      objectId
-        ? { override: objectPolicy.data?.config ?? null }
-        : {
-            shared_domain: sharedPolicy.data?.config ?? null,
-            universe: universePolicy.data?.config ?? null,
-          },
-    [objectId, objectPolicy.data?.config, sharedPolicy.data?.config, universePolicy.data?.config],
+  const requestedPolicyKey = JSON.stringify(
+    objectId
+      ? { override: objectPolicy.data?.config ?? null }
+      : {
+          shared_domain: sharedPolicy.data?.config ?? null,
+          universe: universePolicy.data?.config ?? null,
+        },
   );
-  const requestedPolicyKey = JSON.stringify(requestedPolicy);
   const resourceSceneRevision = typeof scene.data?.revision === "number"
     ? scene.data.revision
     : typeof scene.data?.scene_revision === "number"
@@ -172,16 +169,25 @@ export function MeshBuildDialog({ kernel }: { kernel: KernelApi }) {
   const sceneRevision = typeof statusSceneRevision === "number"
     ? Math.max(statusSceneRevision, resourceSceneRevision ?? statusSceneRevision)
     : resourceSceneRevision;
+  const requestedSceneRevision = typeof inputRecord?.scene_revision === "number"
+    ? inputRecord.scene_revision
+    : null;
+  const fdmPreflight = fdmGridPreflightState(
+    requestedSceneRevision,
+    resourceSceneRevision,
+    statusSceneRevision,
+  );
   const policyLoaded = objectId ? objectPolicy.status === "ready"
     : universePolicy.status === "ready" && sharedPolicy.status === "ready";
   const computedSnapshot = useMemo(() => {
     if (lane === "fdm") {
-      if (!state.request?.requestId || sceneRevision == null || !runtimeStatus) {
+      if (!state.request?.requestId || fdmPreflight !== "current" ||
+          requestedSceneRevision === null || !runtimeStatus) {
         return null;
       }
       return {
         requestId: state.request.requestId,
-        sceneRevision,
+        sceneRevision: requestedSceneRevision,
         meshRevision: runtimeStatus.resources.mesh_revision,
         policyKey: requestedPolicyKey,
         policy: null,
@@ -232,7 +238,7 @@ export function MeshBuildDialog({ kernel }: { kernel: KernelApi }) {
       meshRevision: runtimeStatus.resources.mesh_revision,
       policyKey: requestedPolicyKey,
       policy: asRecord(previousPolicy),
-      requestedPolicy: asRecord(structuredClone(requestedPolicy)),
+      requestedPolicy: JSON.parse(requestedPolicyKey) as JsonObject,
       stats: {
         build: latestBuild.status === "ready" ? asRecord(structuredClone(latestBuild.data)) : null,
         manifest: manifest.status === "ready" ? asRecord(structuredClone(manifest.data)) : null,
@@ -243,6 +249,8 @@ export function MeshBuildDialog({ kernel }: { kernel: KernelApi }) {
     lane,
     state.request,
     policyLoaded,
+    fdmPreflight,
+    requestedSceneRevision,
     sceneRevision,
     runtimeStatus,
     summary,
@@ -250,7 +258,6 @@ export function MeshBuildDialog({ kernel }: { kernel: KernelApi }) {
     manifest,
     sharedQuality,
     objectId,
-    requestedPolicy,
     requestedPolicyKey,
   ]);
   const stableSnapshotBefore = snapshotBefore ?? computedSnapshot;
@@ -405,7 +412,8 @@ export function MeshBuildDialog({ kernel }: { kernel: KernelApi }) {
     ? fdmGridBuildOperation
     : buildOperation;
 
-  const isStale = stableSnapshotBefore !== null && !snapshotCurrent;
+  const isStale = (stableSnapshotBefore !== null && !snapshotCurrent) ||
+    (isFdmGridBuildRequest && fdmPreflight === "stale");
   const isReady = snapshotCurrent && activeBuildOperation.enabled;
   const isRebuild = isFdmGridBuildRequest
     ? (fdmMembership.data?.region_membership_revision ?? 0) > 0
@@ -517,7 +525,7 @@ export function MeshBuildDialog({ kernel }: { kernel: KernelApi }) {
               objectsCount={scene.data?.objects?.length ?? 0}
               ready={snapshotCurrent && buildOperation.enabled}
               sceneRevision={sceneRevision}
-              stale={stableSnapshotBefore !== null && !snapshotCurrent}
+              stale={isStale}
               onRefresh={() => {
                 captureSnapshot(null);
                 if (state.request) dispatch({ type: "request", request: state.request });
@@ -559,7 +567,7 @@ export function MeshBuildDialog({ kernel }: { kernel: KernelApi }) {
               ready={snapshotCurrent && fdmGridBuildOperation.enabled}
               rendered={state.lastCommandStatus === "rendered"}
               sceneRevision={sceneRevision}
-              stale={stableSnapshotBefore !== null && !snapshotCurrent}
+              stale={isStale}
               totalCells={gridTotalCells}
             />
           ) : (
