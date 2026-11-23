@@ -41,6 +41,27 @@ fn validate_grid(cells: [u32; 3]) -> Result<(), &'static str> {
     Ok(())
 }
 
+// An edited scene can retire its held RunIntent after publishing a qualified M0.
+// That display is still authored input even when the historical run is terminal.
+pub(crate) fn uses_prepared_field_input(snapshot: &SessionStateResponse) -> bool {
+    use crate::types::RuntimeLifecycleState;
+
+    snapshot.run.as_ref().is_none_or(|run| {
+        match crate::session::accepted_runtime_lifecycle_state(&run.status) {
+            RuntimeLifecycleState::Completed | RuntimeLifecycleState::Failed => false,
+            RuntimeLifecycleState::Cancelled => retired_authoring_input_is_current(snapshot),
+            _ => true,
+        }
+    })
+}
+
+fn retired_authoring_input_is_current(snapshot: &SessionStateResponse) -> bool {
+    snapshot.run.as_ref().is_some_and(|run| run.status == "cancelled")
+        && snapshot.session.status == "awaiting_command"
+        && snapshot.stage_execution.is_none()
+        && crate::live_authored_initial_state::current_publication(snapshot).is_some()
+}
+
 pub(crate) fn disabled_reason(snapshot: &SessionStateResponse) -> Result<(), &'static str> {
     if snapshot.runtime_status.code == "imported_read_only" || snapshot.session.status == "closed" {
         return Err("This session is read-only.");
@@ -49,10 +70,11 @@ pub(crate) fn disabled_reason(snapshot: &SessionStateResponse) -> Result<(), &'s
         crate::session::effective_runtime_status_code(snapshot).as_str(),
         "awaiting_command" | "waiting_for_compute" | "waiting_for_solve"
     ) || snapshot.run.as_ref().is_some_and(|run| {
-        !matches!(
+        !(matches!(
             run.status.as_str(),
             "awaiting_command" | "waiting_for_compute" | "waiting_for_solve"
-        ) || crate::router_v2::handlers::sessions::status::accepted_solver_steps(
+        ) || retired_authoring_input_is_current(snapshot))
+            || crate::router_v2::handlers::sessions::status::accepted_solver_steps(
             snapshot,
             &run.run_id,
         ) != 0
@@ -527,6 +549,27 @@ mod tests {
             disabled_reason(&snapshot),
             Err("Commit a scene before computing fields.")
         );
+        snapshot.session.status = "awaiting_command".into();
+        snapshot.run.as_mut().unwrap().status = "cancelled".into();
+        assert!(!uses_prepared_field_input(&snapshot));
+        snapshot.authored_initial_state = Some(crate::live_authored_initial_state::AuthoredInitialStatePublication::new(
+            &snapshot,
+            crate::schemas::common::AuthoredInitialStateOrigin {
+                preparation_id: "prepared-edit".into(),
+                plan_fingerprint: "plan".into(),
+                scene_revision: 2,
+                initial_state_revision: 1,
+                values_sha256: "state".into(),
+            },
+            0.0,
+        ));
+        assert!(uses_prepared_field_input(&snapshot));
+        assert_eq!(
+            disabled_reason(&snapshot),
+            Err("Commit a scene before computing fields."),
+        );
+        snapshot.run.as_mut().unwrap().status = "failed".into();
+        assert!(!uses_prepared_field_input(&snapshot));
         snapshot.run.as_mut().unwrap().status = "running".into();
         assert_eq!(
             disabled_reason(&snapshot),
