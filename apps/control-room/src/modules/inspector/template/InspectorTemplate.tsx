@@ -557,6 +557,32 @@ export function InspectorTemplate<TDraft>({
     }
   }, [baseline, draft, onApply, onConfirmApply, spec.commitBar]);
 
+  useEffect(() => {
+    const controllerHooks = getRegisteredControllerApplyHooks(onApply);
+    if (!controllerHooks) return;
+    return controllerHooks.registerPendingConfirmPresenter((confirmSpec) => {
+      openPendingConfirm({
+        title: confirmSpec.title,
+        description: confirmSpec.description,
+        confirmLabel: confirmSpec.confirmLabel,
+        destructive: confirmSpec.destructive,
+        onConfirm: runConfirmedApply,
+        onCancel: () => {
+          if (onCancelConfirmApply) {
+            onCancelConfirmApply();
+          } else {
+            getRegisteredControllerApplyHooks(onApply)?.cancelPendingApply();
+          }
+        },
+      });
+    });
+  }, [
+    onApply,
+    onCancelConfirmApply,
+    openPendingConfirm,
+    runConfirmedApply,
+  ]);
+
   const canCleanApply =
     spec.commitBar.mode === "staged" &&
     Boolean(
@@ -580,21 +606,24 @@ export function InspectorTemplate<TDraft>({
       const confirmSpec = spec.commitBar.confirmApply?.(draft, baseline) ?? null;
       if (confirmSpec) {
         const controllerHooks = getRegisteredControllerApplyHooks(onApply);
-        controllerHooks?.stagePendingConfirm(confirmSpec);
-        openPendingConfirm({
-          title: confirmSpec.title,
-          description: confirmSpec.description,
-          confirmLabel: confirmSpec.confirmLabel,
-          destructive: confirmSpec.destructive,
-          onConfirm: runConfirmedApply,
-          onCancel: () => {
-            if (onCancelConfirmApply) {
-              onCancelConfirmApply();
-            } else {
-              getRegisteredControllerApplyHooks(onApply)?.cancelPendingApply();
-            }
-          },
-        });
+        const presentedByController =
+          controllerHooks?.stagePendingConfirm(confirmSpec) === true;
+        if (!presentedByController) {
+          openPendingConfirm({
+            title: confirmSpec.title,
+            description: confirmSpec.description,
+            confirmLabel: confirmSpec.confirmLabel,
+            destructive: confirmSpec.destructive,
+            onConfirm: runConfirmedApply,
+            onCancel: () => {
+              if (onCancelConfirmApply) {
+                onCancelConfirmApply();
+              } else {
+                getRegisteredControllerApplyHooks(onApply)?.cancelPendingApply();
+              }
+            },
+          });
+        }
         return;
       }
     }

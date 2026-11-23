@@ -82,6 +82,7 @@ interface PendingTransition {
   nodeTitleSnapshot: string | null;
   relatedLinkKey?: string;
   resolveBuild?: (confirmed: boolean) => void;
+  awaitingConfirmation?: boolean;
   running: boolean;
   scope: string | null;
   session: InspectorEditSession;
@@ -155,6 +156,24 @@ export function InspectorDirtySelectionGuard({
         if (pendingRef.current === transition) dismiss();
         return;
       }
+      if (transition.awaitingConfirmation) {
+        const activeV2Session = transition.v2Session
+          ? editSessions?.getSessionV2(transition.v2Session.sessionKey) ??
+            transition.v2Session
+          : null;
+        if (
+          activeV2Session?.pendingConfirmation ||
+          transition.session.applying
+        ) {
+          return;
+        }
+        transition.awaitingConfirmation = false;
+        if (transition.session.dirty) {
+          transition.acknowledged = false;
+          setBusy(false);
+          return;
+        }
+      }
       if (!transition.acknowledged || transition.session.applying) return;
       if (transition.session.dirty) {
         transition.acknowledged = false;
@@ -211,7 +230,7 @@ export function InspectorDirtySelectionGuard({
         }
       }
     },
-    [controller, dismiss, isCurrent, kernel],
+    [controller, dismiss, editSessions, isCurrent, kernel],
   );
 
   const continueAfterEditSessionChange = useEffectEvent(() => {
@@ -372,7 +391,18 @@ export function InspectorDirtySelectionGuard({
         if (pendingRef.current === transition) dismiss();
         return;
       }
-      if (!accepted) return;
+      if (!accepted) {
+        const activeV2Session = transition.v2Session
+          ? editSessions?.getSessionV2(transition.v2Session.sessionKey) ??
+            transition.v2Session
+          : null;
+        if (apply && activeV2Session?.pendingConfirmation) {
+          transition.awaitingConfirmation = true;
+          transition.acknowledged = true;
+          setBusy(false);
+        }
+        return;
+      }
       // The imperative selection controller must see the committed React draft,
       // including any edits made during Apply. Flush only this explicit decision.
       flushSync(() => setBusy(false));

@@ -1,4 +1,5 @@
-import { act, type ReactNode } from "react";
+import { Magnet } from "lucide-react";
+import { act, useMemo, type ReactNode } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -26,6 +27,10 @@ import {
 } from "@/modules/viewport-3d/public";
 import { Input } from "@/shared/ui/Input";
 
+import type { InspectorSpec } from "./template/types";
+import { InspectorTemplate } from "./template/InspectorTemplate";
+import { useInspectorSpecController } from "./template/useInspectorSpecController";
+
 // Render Radix AlertDialog inline inside the lightweight node test DOM while preserving
 // role="alertdialog" and real button click handlers.
 vi.mock("@/shared/ui/AlertDialog", () => ({
@@ -45,6 +50,20 @@ vi.mock("@/shared/ui/AlertDialog", () => ({
   AlertDialogDescription: ({ children }: { children: ReactNode }) => (
     <div data-slot="alert-dialog-description">{children}</div>
   ),
+  AlertDialogAction: ({
+    children,
+    onClick,
+  }: {
+    children: ReactNode;
+    onClick?: () => void;
+  }) => <button type="button" onClick={onClick}>{children}</button>,
+  AlertDialogCancel: ({
+    children,
+    onClick,
+  }: {
+    children: ReactNode;
+    onClick?: () => void;
+  }) => <button type="button" onClick={onClick}>{children}</button>,
   AlertDialogFooter: ({ children }: { children: ReactNode }) => (
     <footer data-slot="alert-dialog-footer">{children}</footer>
   ),
@@ -55,6 +74,45 @@ vi.mock("@/shared/ui/AlertDialog", () => ({
     <h2 data-slot="alert-dialog-title">{children}</h2>
   ),
 }));
+
+vi.mock("@/shared/ui/Tooltip", () => {
+  const PassThrough = ({ children }: { children?: ReactNode }) => <>{children}</>;
+  return {
+    Tooltip: PassThrough,
+    TooltipContent: PassThrough,
+    TooltipProvider: PassThrough,
+    TooltipTrigger: PassThrough,
+  };
+});
+
+vi.mock("@/shared/ui/Collapsible", () => ({
+  Collapsible: ({ children }: { children?: ReactNode }) => <div>{children}</div>,
+  CollapsibleContent: ({ children }: { children?: ReactNode }) => <div>{children}</div>,
+  CollapsibleTrigger: ({ children }: { children?: ReactNode }) => <div>{children}</div>,
+}));
+
+vi.mock("@/shared/ui/DropdownMenu", () => {
+  const PassThrough = ({ children }: { children?: ReactNode }) => <>{children}</>;
+  return {
+    DropdownMenu: PassThrough,
+    DropdownMenuContent: PassThrough,
+    DropdownMenuGroup: PassThrough,
+    DropdownMenuItem: PassThrough,
+    DropdownMenuLabel: PassThrough,
+    DropdownMenuSeparator: () => null,
+    DropdownMenuTrigger: PassThrough,
+  };
+});
+
+vi.mock("@/shared/ui/Tabs", () => {
+  const PassThrough = ({ children }: { children?: ReactNode }) => <>{children}</>;
+  return {
+    Tabs: PassThrough,
+    TabsContent: PassThrough,
+    TabsList: PassThrough,
+    TabsTrigger: PassThrough,
+  };
+});
 
 vi.mock("@/kernel/resources/useSessionStatus", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/kernel/resources/useSessionStatus")>()),
@@ -75,7 +133,6 @@ vi.mock("@/modules/viewport-3d/public", async (importOriginal) => {
 });
 
 import * as inspectorRegistry from "./inspectorRegistry";
-import { useInspectorEditSessionV2Controller } from "./InspectorEditSession";
 import InspectorModule from "./InspectorModule";
 
 const FILM_SELECTION: Selection = {
@@ -174,43 +231,109 @@ describe("InspectorDirtySelectionGuard top-level protection", () => {
     const applySpy = vi.fn(async () => true);
 
     function FakeMaterialPanel({ selection }: { selection: Selection }) {
-      const controller = useInspectorEditSessionV2Controller<{
-        alpha: number;
-        ms: number;
-      }>({
-        baseline: { alpha: 0.008, ms: 800 },
-        fieldLabels: {
-          alpha: "Gilbert damping (alpha)",
-          ms: "Saturation magnetization (Ms)",
-        },
-        mode: "staged",
-        nodeTitle: selection.label ?? "Selection",
-        onApply: applySpy,
-        selectionKey: selection.nodeId ?? "unknown",
-        specId: "object.material",
-      });
+      type MaterialDraft = { alpha: number; ms: number };
+      const spec = useMemo<InspectorSpec<MaterialDraft>>(
+        () => ({
+          id: "object.material",
+          header: { breadcrumbs: [], searchable: false },
+          identity: {
+            domain: "material",
+            icon: Magnet,
+            title: () => selection.label ?? "Material",
+            kindLabel: "Material",
+            statePill: () => ({ tone: "ok", label: "Draft" }),
+          },
+          facts: () => [],
+          sections: [
+            {
+              id: "material",
+              title: "Material",
+              icon: Magnet,
+              defaultOpen: true,
+              rows: [
+                {
+                  key: "ms",
+                  type: "custom",
+                  label: "Saturation magnetization (Ms)",
+                  render: (ctx) => (
+                    <Input
+                      aria-label="Ms"
+                      value={String(ctx.draft.ms)}
+                      onChange={(event) => {
+                        ctx.setField("ms", Number(event.currentTarget.value));
+                      }}
+                      onInput={(event) => {
+                        ctx.setField("ms", Number(event.currentTarget.value));
+                      }}
+                    />
+                  ),
+                },
+                {
+                  key: "alpha",
+                  type: "custom",
+                  label: "Gilbert damping (alpha)",
+                  render: (ctx) => (
+                    <Input
+                      aria-label="Alpha"
+                      value={String(ctx.draft.alpha)}
+                      onChange={(event) => {
+                        ctx.setField("alpha", Number(event.currentTarget.value));
+                      }}
+                      onInput={(event) => {
+                        ctx.setField("alpha", Number(event.currentTarget.value));
+                      }}
+                    />
+                  ),
+                },
+              ],
+            },
+          ],
+          commitBar: {
+            mode: "staged",
+            confirmApply: () => ({
+              title: "Confirm costly material Apply",
+              description: "This material change rebuilds dependent data.",
+              confirmLabel: "Confirm material Apply",
+            }),
+            onApply: applySpy,
+          },
+        }),
+        [selection.label],
+      );
+      const controller = useInspectorSpecController(
+        spec,
+        selection,
+        { alpha: 0.008, ms: 800 },
+      );
 
       return (
         <div data-panel-selection={selection.objectId ?? ""}>
-          <Input
-            aria-label="Ms"
-            value={String(controller.draft.ms)}
-            onChange={(event) => {
-              controller.setField("ms", Number(event.currentTarget.value));
-            }}
-            onInput={(event) => {
-              controller.setField("ms", Number(event.currentTarget.value));
-            }}
-          />
-          <Input
-            aria-label="Alpha"
-            value={String(controller.draft.alpha)}
-            onChange={(event) => {
-              controller.setField("alpha", Number(event.currentTarget.value));
-            }}
-            onInput={(event) => {
-              controller.setField("alpha", Number(event.currentTarget.value));
-            }}
+          <InspectorTemplate
+            activeModeTabId={controller.activeModeTabId}
+            animationKey={controller.animationKey}
+            appliedFlash={controller.appliedFlash}
+            applyError={controller.applyError}
+            applying={controller.applying}
+            baseline={controller.baseline}
+            dirtyFields={controller.dirtyFields}
+            displayUnits={controller.displayUnits}
+            draft={controller.draft}
+            forceShowErrors={controller.forceShowErrors}
+            invalidFields={controller.invalidFields}
+            selection={selection}
+            spec={spec}
+            touchedFields={controller.touchedFields}
+            onActiveModeTabChange={controller.setActiveModeTabId}
+            onApply={controller.requestApply}
+            onDisplayUnitChange={controller.setDisplayUnit}
+            onFieldChange={controller.setField}
+            onFieldTouch={controller.touchField}
+            onFocusField={(key) => controller.focusField(key)}
+            onParseErrorChange={controller.setParseError}
+            onPatchDraft={controller.patchDraft}
+            onResetDisplay={controller.resetDisplay}
+            onRevertAll={controller.revertAll}
+            onRevertField={controller.revertField}
           />
         </div>
       );
@@ -329,7 +452,7 @@ describe("InspectorDirtySelectionGuard top-level protection", () => {
       expect(kernel.selection.get().objectId).toBe("film");
       expect(msInput.value).toBe("840");
 
-      // 2) Switch to 3D View again, trigger tree selection, and choose "Apply and continue".
+      // 2) Apply and continue opens the Inspector's shared costly-apply dialog.
       await act(async () => {
         setViewport3DInspectorContext("view");
       });
@@ -340,9 +463,48 @@ describe("InspectorDirtySelectionGuard top-level protection", () => {
       const applyContinueBtn = findElement(
         container,
         (el) => el.tagName === "BUTTON" && el.textContent.trim() === "Apply and continue",
-      );
+      )!;
       await act(async () => {
         applyContinueBtn.click();
+      });
+      let costlyConfirmation = findElement(
+        container,
+        (el) =>
+          el.getAttribute("role") === "alertdialog" &&
+          el.textContent.includes("Confirm costly material Apply"),
+      )!;
+      expect(costlyConfirmation).not.toBeNull();
+      expect(applySpy).not.toHaveBeenCalled();
+      const cancelCostlyApply = findElement(
+        costlyConfirmation,
+        (el) => el.tagName === "BUTTON" && el.textContent.trim() === "Cancel",
+      )!;
+      await act(async () => {
+        cancelCostlyApply.click();
+      });
+      expect(kernel.selection.get().objectId).toBe("film");
+      expect(applySpy).not.toHaveBeenCalled();
+      expect(findElements(container, (el) => el.getAttribute("role") === "alertdialog")).toHaveLength(1);
+
+      const retryApplyContinueBtn = findElement(
+        container,
+        (el) => el.tagName === "BUTTON" && el.textContent.trim() === "Apply and continue",
+      )!;
+      await act(async () => {
+        retryApplyContinueBtn.click();
+      });
+      costlyConfirmation = findElement(
+        container,
+        (el) =>
+          el.getAttribute("role") === "alertdialog" &&
+          el.textContent.includes("Confirm costly material Apply"),
+      )!;
+      const confirmCostlyApply = findElement(
+        costlyConfirmation,
+        (el) => el.tagName === "BUTTON" && el.textContent.trim() === "Confirm material Apply",
+      )!;
+      await act(async () => {
+        confirmCostlyApply.click();
       });
       expect(applySpy).toHaveBeenCalledOnce();
       expect(kernel.selection.get().objectId).toBe("waveguide");

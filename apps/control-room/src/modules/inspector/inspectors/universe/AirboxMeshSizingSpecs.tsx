@@ -107,7 +107,7 @@ export function AirboxMeshParametersInspectorSpecPanel({
   // Listen for build-history draft restoration requests on kernel bus
   useEffect(() => {
     if (!kernel?.bus?.on) return undefined;
-    return kernel.bus.on("mesh:build-history-restore-requested", (event) => {
+    const unsubscribe = kernel.bus.on("mesh:build-history-restore-requested", (event) => {
       const target = String(event.meshTarget ?? "");
       if (
         !/^(study_domain|shared_domain|universe|airbox)$/.test(target) ||
@@ -127,6 +127,7 @@ export function AirboxMeshParametersInspectorSpecPanel({
         `Build ${event.buildId ?? event.entryId} restored into Airbox mesh draft. Click Apply to commit before rebuilding.`,
       );
     });
+    return () => unsubscribe();
   }, [kernel.bus, policyRes.data?.effective_config]);
 
   useEffect(() => {

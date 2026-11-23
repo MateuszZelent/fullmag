@@ -63,6 +63,7 @@ export interface InspectorEditSessionV2 {
   readonly mode: InspectorEditSessionModeV2;
   readonly applying: boolean;
   readonly dirty: boolean;
+  readonly pendingConfirmation?: boolean;
   readonly dirtyFields: ReadonlySet<string>;
   readonly dirtyFieldLabels: readonly string[];
   readonly invalidFields: ReadonlyMap<string, string>;
@@ -536,6 +537,9 @@ export function useRegisterInspectorEditSessionV2(
       get nodeTitle() {
         return sessionRef.current?.nodeTitle;
       },
+      get pendingConfirmation() {
+        return sessionRef.current?.pendingConfirmation ?? false;
+      },
       revertAll: () => sessionRef.current?.revertAll(),
       revertField: (fieldKey: string) => sessionRef.current?.revertField(fieldKey),
       sessionKey,
@@ -548,6 +552,7 @@ export function useRegisterInspectorEditSessionV2(
   const sessionMode = session?.mode ?? null;
   const sessionDirty = session?.dirty ?? false;
   const sessionApplying = session?.applying ?? false;
+  const sessionPendingConfirmation = session?.pendingConfirmation ?? false;
   const sessionValid = session?.valid ?? true;
   const sessionLockReason = session?.lockReason ?? null;
   const sessionApplyBlockReason = session?.applyBlockReason ?? null;
@@ -582,6 +587,7 @@ export function useRegisterInspectorEditSessionV2(
     sessionLockReason,
     sessionMode,
     sessionNodeTitle,
+    sessionPendingConfirmation,
     sessionValid,
     store,
   ]);
@@ -861,58 +867,55 @@ export function useInspectorEditSessionV2Controller<
 
   const setField = useCallback(
     <K extends keyof TDraft & string>(key: K, value: TDraft[K]) => {
-      setState((prev) => {
-        if (areInspectorFieldValuesEqual(prev.draft[key], value)) {
-          return prev;
-        }
-        const nextDraft = { ...prev.draft, [key]: value };
-        const nextDirty = new Set(prev.dirtyFields);
-        if (areInspectorFieldValuesEqual(value, prev.baseline[key])) {
-          nextDirty.delete(key);
-        } else {
-          nextDirty.add(key);
-        }
-        const dirtySet = nextDirty.size > 0 ? nextDirty : EMPTY_STRING_SET;
-        runtimeRef.current.draft = nextDraft;
-        runtimeRef.current.dirtyFields = dirtySet;
-        runtimeRef.current.stagedDirty = dirtySet.size > 0;
-        runtimeRef.current.dirty = dirtySet.size > 0;
-        return {
-          ...prev,
-          appliedFlash: false,
-          dirtyFields: dirtySet,
-          draft: nextDraft,
-          rejected: false,
-        };
-      });
-    },
-    [],
-  );
+      const current = runtimeRef.current;
+      if (areInspectorFieldValuesEqual(current.draft[key], value)) return;
 
-  const patchDraft = useCallback((partial: Partial<TDraft>) => {
-    setState((prev) => {
-      const nextDraft = { ...prev.draft, ...partial };
-      const nextDirty = new Set(prev.dirtyFields);
-      for (const key of Object.keys(partial)) {
-        if (areInspectorFieldValuesEqual(nextDraft[key], prev.baseline[key])) {
-          nextDirty.delete(key);
-        } else {
-          nextDirty.add(key);
-        }
+      const nextDraft = { ...current.draft, [key]: value };
+      const nextDirty = new Set(current.dirtyFields);
+      if (areInspectorFieldValuesEqual(value, current.baseline[key])) {
+        nextDirty.delete(key);
+      } else {
+        nextDirty.add(key);
       }
       const dirtySet = nextDirty.size > 0 ? nextDirty : EMPTY_STRING_SET;
       runtimeRef.current.draft = nextDraft;
       runtimeRef.current.dirtyFields = dirtySet;
       runtimeRef.current.stagedDirty = dirtySet.size > 0;
       runtimeRef.current.dirty = dirtySet.size > 0;
-      return {
+      setState((prev) => ({
         ...prev,
         appliedFlash: false,
         dirtyFields: dirtySet,
         draft: nextDraft,
         rejected: false,
-      };
-    });
+      }));
+    },
+    [],
+  );
+
+  const patchDraft = useCallback((partial: Partial<TDraft>) => {
+    const current = runtimeRef.current;
+    const nextDraft = { ...current.draft, ...partial };
+    const nextDirty = new Set(current.dirtyFields);
+    for (const key of Object.keys(partial)) {
+      if (areInspectorFieldValuesEqual(nextDraft[key], current.baseline[key])) {
+        nextDirty.delete(key);
+      } else {
+        nextDirty.add(key);
+      }
+    }
+    const dirtySet = nextDirty.size > 0 ? nextDirty : EMPTY_STRING_SET;
+    runtimeRef.current.draft = nextDraft;
+    runtimeRef.current.dirtyFields = dirtySet;
+    runtimeRef.current.stagedDirty = dirtySet.size > 0;
+    runtimeRef.current.dirty = dirtySet.size > 0;
+    setState((prev) => ({
+      ...prev,
+      appliedFlash: false,
+      dirtyFields: dirtySet,
+      draft: nextDraft,
+      rejected: false,
+    }));
   }, []);
 
   const markTouched = useCallback((key: keyof TDraft & string) => {
@@ -925,18 +928,20 @@ export function useInspectorEditSessionV2Controller<
   }, []);
 
   const revertField = useCallback((fieldKey: keyof TDraft & string) => {
+    const current = runtimeRef.current;
+    if (!current.dirtyFields.has(fieldKey)) return;
+
+    const nextDraft = { ...current.draft, [fieldKey]: current.baseline[fieldKey] };
+    const nextDirty = new Set(current.dirtyFields);
+    nextDirty.delete(fieldKey);
+    const dirtySet = nextDirty.size > 0 ? nextDirty : EMPTY_STRING_SET;
+    runtimeRef.current.draft = nextDraft;
+    runtimeRef.current.dirtyFields = dirtySet;
+    runtimeRef.current.stagedDirty = dirtySet.size > 0;
+    runtimeRef.current.dirty = dirtySet.size > 0;
     setState((prev) => {
-      if (!prev.dirtyFields.has(fieldKey)) return prev;
-      const nextDraft = { ...prev.draft, [fieldKey]: prev.baseline[fieldKey] };
-      const nextDirty = new Set(prev.dirtyFields);
-      nextDirty.delete(fieldKey);
       const nextTouched = new Set(prev.touchedFields);
       nextTouched.delete(fieldKey);
-      const dirtySet = nextDirty.size > 0 ? nextDirty : EMPTY_STRING_SET;
-      runtimeRef.current.draft = nextDraft;
-      runtimeRef.current.dirtyFields = dirtySet;
-      runtimeRef.current.stagedDirty = dirtySet.size > 0;
-      runtimeRef.current.dirty = dirtySet.size > 0;
       return {
         ...prev,
         dirtyFields: dirtySet,
@@ -1038,24 +1043,31 @@ export function useInspectorEditSessionV2Controller<
 
       // Preserve any concurrent edits made while the write was in flight.
       runtimeRef.current.applying = false;
+      const nextDirty = new Set<string>();
+      for (const key of Object.keys(runtimeRef.current.draft)) {
+        if (!areInspectorFieldValuesEqual(runtimeRef.current.draft[key], submittedDraft[key])) {
+          nextDirty.add(key);
+        }
+      }
+      const dirtySet = nextDirty.size > 0 ? nextDirty : EMPTY_STRING_SET;
+      runtimeRef.current.baseline = submittedDraft;
+      runtimeRef.current.dirtyFields = dirtySet;
+      runtimeRef.current.stagedDirty = dirtySet.size > 0;
+      runtimeRef.current.dirty = dirtySet.size > 0;
       setState((prev) => {
-        const nextDirty = new Set<string>();
+        const pendingDirty = new Set<string>();
         for (const key of Object.keys(prev.draft)) {
           if (!areInspectorFieldValuesEqual(prev.draft[key], submittedDraft[key])) {
-            nextDirty.add(key);
+            pendingDirty.add(key);
           }
         }
-        const dirtySet = nextDirty.size > 0 ? nextDirty : EMPTY_STRING_SET;
-        runtimeRef.current.baseline = submittedDraft;
-        runtimeRef.current.dirtyFields = dirtySet;
-        runtimeRef.current.stagedDirty = dirtySet.size > 0;
-        runtimeRef.current.dirty = dirtySet.size > 0;
+        const pendingDirtySet = pendingDirty.size > 0 ? pendingDirty : EMPTY_STRING_SET;
         return {
           ...prev,
-          appliedFlash: dirtySet.size === 0,
+          appliedFlash: pendingDirtySet.size === 0,
           applying: false,
           baseline: submittedDraft,
-          dirtyFields: dirtySet,
+          dirtyFields: pendingDirtySet,
           rejected: false,
           touchedFields: EMPTY_STRING_SET,
         };

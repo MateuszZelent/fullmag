@@ -47,10 +47,17 @@ export type InspectorRequestApplyHandler = (options?: {
   confirmed?: boolean;
 }) => Promise<boolean>;
 
+export type InspectorPendingConfirmPresenter = (
+  confirmSpec: InspectorConfirmApplyState,
+) => void;
+
 export interface RegisteredControllerApplyHooks {
   confirmPendingApply: () => Promise<boolean>;
   cancelPendingApply: () => void;
-  stagePendingConfirm: (confirmSpec: InspectorConfirmApplyState) => void;
+  registerPendingConfirmPresenter: (
+    presenter: InspectorPendingConfirmPresenter,
+  ) => () => void;
+  stagePendingConfirm: (confirmSpec: InspectorConfirmApplyState) => boolean;
 }
 
 const controllerApplyHooksRegistry = new WeakMap<
@@ -190,6 +197,11 @@ export function useInspectorSpecController<TDraft extends object>(
     scopedState.targetKey === targetKey ? scopedState : createEmptyScopedState<TDraft>(targetKey);
 
   const [applying, setApplying] = useState(false);
+  const pendingConfirmRef = useRef<InspectorConfirmApplyState | null>(null);
+  const pendingConfirmPresenterRef = useRef<InspectorPendingConfirmPresenter | null>(null);
+  useLayoutEffect(() => {
+    pendingConfirmRef.current = activeScoped.pendingConfirm;
+  }, [activeScoped.pendingConfirm]);
   const [focusRequest, setFocusRequest] = useState<{
     key: keyof TDraft & string;
     seq: number;
@@ -608,6 +620,7 @@ export function useInspectorSpecController<TDraft extends object>(
     const submittedBaseline = baseline;
     const submittedOverrides = { ...activeScoped.stagedOverrides } as Record<string, unknown>;
 
+    pendingConfirmRef.current = null;
     setApplying(true);
     updateScoped((prev) => ({
       ...prev,
@@ -722,9 +735,25 @@ export function useInspectorSpecController<TDraft extends object>(
         : spec.commitBar.allowCleanApply,
     );
 
+  const registerPendingConfirmPresenter = useCallback(
+    (presenter: InspectorPendingConfirmPresenter) => {
+      pendingConfirmPresenterRef.current = presenter;
+      return () => {
+        if (pendingConfirmPresenterRef.current === presenter) {
+          pendingConfirmPresenterRef.current = null;
+        }
+      };
+    },
+    [],
+  );
+
   const stagePendingConfirm = useCallback(
-    (confirmSpec: InspectorConfirmApplyState) => {
+    (confirmSpec: InspectorConfirmApplyState): boolean => {
+      pendingConfirmRef.current = confirmSpec;
       updateScoped((prev) => ({ ...prev, pendingConfirm: confirmSpec }));
+      const presenter = pendingConfirmPresenterRef.current;
+      presenter?.(confirmSpec);
+      return presenter !== null;
     },
     [updateScoped],
   );
@@ -735,6 +764,7 @@ export function useInspectorSpecController<TDraft extends object>(
       return false;
     }
     if (invalidFields.size > 0) {
+      pendingConfirmRef.current = null;
       updateScoped((prev) => ({
         ...prev,
         pendingConfirm: null,
@@ -755,6 +785,7 @@ export function useInspectorSpecController<TDraft extends object>(
   ]);
 
   const cancelPendingApply = useCallback(() => {
+    pendingConfirmRef.current = null;
     updateScoped((prev) => ({ ...prev, pendingConfirm: null }));
   }, [updateScoped]);
 
@@ -800,9 +831,16 @@ export function useInspectorSpecController<TDraft extends object>(
     controllerApplyHooksRegistry.set(requestApply, {
       confirmPendingApply,
       cancelPendingApply,
+      registerPendingConfirmPresenter,
       stagePendingConfirm,
     });
-  }, [cancelPendingApply, confirmPendingApply, requestApply, stagePendingConfirm]);
+  }, [
+    cancelPendingApply,
+    confirmPendingApply,
+    registerPendingConfirmPresenter,
+    requestApply,
+    stagePendingConfirm,
+  ]);
 
   const resetDisplay = useCallback(async (): Promise<void> => {
     if (spec.commitBar.mode !== "liveViewport") return;
@@ -879,6 +917,9 @@ export function useInspectorSpecController<TDraft extends object>(
       mode: isStagedSpec ? "staged" : effectiveCommitMode,
       applying,
       dirty: isStagedSpec ? dirtyFields.size > 0 : phase === "liveOverridden",
+      get pendingConfirmation() {
+        return pendingConfirmRef.current !== null;
+      },
       dirtyFields,
       dirtyFieldLabels,
       invalidFields,

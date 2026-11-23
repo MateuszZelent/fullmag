@@ -729,11 +729,9 @@ describe("Task 23 — Hysteresis 3x P0 fixes, <=2 HTTP resource hooks, and 4-col
         <HysteresisStageDraftFields
           draft={draftState}
           onUpdate={(patch) => {
-            setDraftState((prev) => {
-              const next = { ...prev, ...patch };
-              latestDraft = next;
-              return next;
-            });
+            const next = { ...latestDraft, ...patch };
+            latestDraft = next;
+            setDraftState(next);
           }}
         />
       );
