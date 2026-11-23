@@ -4,29 +4,32 @@ import {
   ArrowDown,
   ArrowUp,
   ArrowUpDown,
+  ChevronDown,
+  ChevronRight,
   Combine,
+  ExternalLink,
   Eye,
   EyeOff,
   Grid3X3,
+  MoreVertical,
   Plus,
   Scissors,
   Trash2,
 } from "lucide-react";
-import { useCallback, useState, useSyncExternalStore } from "react";
+import { useCallback, useMemo, useState, useSyncExternalStore } from "react";
 
-import type { SceneResource } from "@/kernel/api/apiTypes";
-import { defaultArray3DAxes } from "@/kernel/authoring/array3dModel";
+import type { JsonObject, SceneResource } from "@/kernel/api/apiTypes";
 import {
-  acknowledgedAuthoringSceneRevision,
-  invalidateAuthoringMutationDependents,
-} from "@/kernel/authoring/authoringMutationInvalidation";
+  array3DDimensionsLabel,
+  defaultArray3DAxes,
+  parseArray3DGeometry,
+} from "@/kernel/authoring/array3dModel";
 import {
   applyArray3DTransaction,
   separateObjectTransaction,
   updateBooleanOperandsTransaction,
   type BooleanOperandOp,
 } from "@/kernel/authoring/geometryLifecycleCommands";
-import { publishCommittedSceneResource } from "@/kernel/resources/geometryLifecycleResources";
 import type { KernelApi } from "@/kernel/types";
 import {
   geometryGhostVisibilityStore,
@@ -39,7 +42,22 @@ import {
 import { computeSceneGeometryBoundsMeters } from "@/shared/domain/geometry/sceneGeometryBounds";
 import { Badge } from "@/shared/ui/Badge";
 import { Button } from "@/shared/ui/Button";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/shared/ui/DropdownMenu";
+import { SegmentedControl } from "@/shared/ui/SegmentedControl";
 import { Switch } from "@/shared/ui/Switch";
+import { cn } from "@/shared/utils/className";
+
+import type { DisplayLengthUnit } from "./Array3DLatticeTableSection";
+import { commitGeometryStackTransaction } from "./geometryHistoryRunner";
+import { formatGeometryUnitSummary } from "./geometryNodeTreeOps";
+import type { InlineOperandEditPatch } from "./geometryShared";
+import { InlineNodeFields } from "./InlineNodeFields";
 
 export type QuickCutoutKind = "Cylinder" | "Box" | "Sphere";
 
@@ -90,7 +108,7 @@ export function computeCutoutHeightFromBounds(
 export function buildQuickCutoutGeometry(
   kind: QuickCutoutKind,
   bounds: unknown,
-): Record<string, unknown> {
+): JsonObject {
   const rec = asRecord(bounds);
   const size = Array.isArray(rec?.size) ? rec.size : null;
   const lx = (size ? finitePositive(size[0]) : null) ?? 100e-9;
@@ -125,11 +143,40 @@ export function buildQuickCutoutGeometry(
   };
 }
 
+function summarizeOperandSubtitle(
+  operand: NormalizedGeometryOperand,
+  patch: InlineOperandEditPatch | undefined,
+): string | null {
+  const existingArray = parseArray3DGeometry(operand.geometry);
+  const effectiveArray =
+    patch?.array3dConfig !== undefined
+      ? patch.array3dConfig
+      : existingArray
+        ? { axes: existingArray.axes }
+        : null;
+
+  const baseGeometry = existingArray ? existingArray.child : operand.geometry;
+  const baseSummary = formatGeometryUnitSummary(baseGeometry);
+  if (effectiveArray) {
+    const dimsLabel = array3DDimensionsLabel(effectiveArray.axes);
+    return baseSummary ? `${baseSummary} \u00b7 ${dimsLabel}` : dimsLabel;
+  }
+  return baseSummary;
+}
+
 export interface BooleanNodeSectionProps {
   kernel: KernelApi;
   objectId: string;
   sceneData: SceneResource | null | undefined;
   sessionScopeKey: string | null;
+  inlineNodePatches?: Readonly<Record<string, InlineOperandEditPatch>>;
+  onPatchNode?: (targetPath: string, patch: Partial<InlineOperandEditPatch>) => void;
+  hasDirtyDraft?: boolean;
+  onFlushDraft?: () => Promise<boolean>;
+  initialExpandedOperandId?: string | null;
+  onExpandedOperandConsumed?: () => void;
+  unit?: DisplayLengthUnit;
+  onUnitChange?: (unit: DisplayLengthUnit) => void;
 }
 
 export function BooleanNodeSection({
@@ -137,9 +184,40 @@ export function BooleanNodeSection({
   objectId,
   sceneData,
   sessionScopeKey,
+  inlineNodePatches,
+  onPatchNode,
+  hasDirtyDraft = false,
+  onFlushDraft,
+  initialExpandedOperandId = null,
+  onExpandedOperandConsumed,
+  unit: controlledUnit,
+  onUnitChange,
 }: BooleanNodeSectionProps) {
   const [busy, setBusy] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [expandedOperandId, setExpandedOperandId] = useState<string | null>(
+    initialExpandedOperandId,
+  );
+  const [autoFocusOperandId, setAutoFocusOperandId] = useState<string | null>(
+    initialExpandedOperandId,
+  );
+  const [prevInitialExpanded, setPrevInitialExpanded] = useState<string | null>(
+    initialExpandedOperandId,
+  );
+  const [fallbackUnit, setFallbackUnit] = useState<DisplayLengthUnit>("nm");
+
+  if (initialExpandedOperandId !== prevInitialExpanded) {
+    setPrevInitialExpanded(initialExpandedOperandId);
+    if (initialExpandedOperandId) {
+      setExpandedOperandId(initialExpandedOperandId);
+      setAutoFocusOperandId(initialExpandedOperandId);
+      onExpandedOperandConsumed?.();
+    }
+  }
+
+  const unit = controlledUnit ?? fallbackUnit;
+  const handleUnitChange = onUnitChange ?? setFallbackUnit;
+
   const ghostKeys = useSyncExternalStore(
     geometryGhostVisibilityStore.subscribe,
     geometryGhostVisibilityStore.getSnapshot,
@@ -147,43 +225,53 @@ export function BooleanNodeSection({
   );
 
   const sceneObj = sceneData?.objects?.find((obj) => obj.id === objectId) ?? null;
-  const parsed = parseCompositeGeometry(sceneObj?.geometry);
+  const parsed = useMemo(
+    () => parseCompositeGeometry(sceneObj?.geometry),
+    [sceneObj?.geometry],
+  );
   const baseRevision =
     typeof sceneData?.revision === "number" && Number.isFinite(sceneData.revision)
       ? sceneData.revision
       : null;
 
+  const baseThicknessM = useMemo(() => {
+    const firstOperand = parsed.operands[0];
+    if (!firstOperand) return null;
+    const bounds = computeSceneGeometryBoundsMeters(firstOperand.geometry);
+    return bounds?.size[2] ?? null;
+  }, [parsed.operands]);
+
   const commitOperandUpdate = useCallback(
     async (
-      mutation: () => Promise<{ committed_scene?: SceneResource; scene_revision?: number }>,
+      label: string,
+      mutation: (rev: number) => Promise<{ committed_scene?: SceneResource; scene_revision?: number }>,
     ) => {
-      if (busy || baseRevision === null) return;
+      if (busy || baseRevision === null) return null;
       setBusy(true);
       setErrorMessage(null);
       try {
-        const response = await mutation();
-        const rev = acknowledgedAuthoringSceneRevision(response);
-        if (response.committed_scene) {
-          publishCommittedSceneResource(
-            kernel.resources,
-            response.committed_scene,
-            rev,
-            undefined,
-            false,
-            sessionScopeKey,
-            kernel.api.resourceCacheScope,
-          );
+        if (hasDirtyDraft && onFlushDraft) {
+          const flushed = await onFlushDraft();
+          if (!flushed) return null;
         }
-        invalidateAuthoringMutationDependents(kernel.resources, "geometry", rev);
+        return await commitGeometryStackTransaction({
+          kernel,
+          label,
+          sceneData,
+          sessionScopeKey,
+          execute: ({ baseRevision: historyRev }) =>
+            mutation(historyRev ?? baseRevision),
+        });
       } catch (error) {
         setErrorMessage(
           error instanceof Error ? error.message : "Could not update boolean operand stack.",
         );
+        return null;
       } finally {
         setBusy(false);
       }
     },
-    [baseRevision, busy, kernel.api.resourceCacheScope, kernel.resources, sessionScopeKey],
+    [baseRevision, busy, hasDirtyDraft, kernel, onFlushDraft, sceneData, sessionScopeKey],
   );
 
   if (!sceneObj || parsed.operands.length === 0) {
@@ -201,27 +289,33 @@ export function BooleanNodeSection({
 
   const handleChangeOp = (nextOp: BooleanOperandOp) => {
     if (baseRevision === null || nextOp === currentOp) return;
-    void commitOperandUpdate(() =>
+    void commitOperandUpdate(`Change Boolean operation to ${nextOp}`, (rev) =>
       updateBooleanOperandsTransaction(
         kernel.api,
-        { base_revision: baseRevision, object_id: objectId, op: nextOp },
+        { base_revision: rev, object_id: objectId, op: nextOp },
         requestOptions,
       ),
     );
   };
 
   const handleToggleOperand = (operand: NormalizedGeometryOperand, enabled: boolean) => {
+    if (onPatchNode) {
+      onPatchNode(operand.operandId, { enabled });
+      return;
+    }
     if (baseRevision === null) return;
-    void commitOperandUpdate(() =>
-      updateBooleanOperandsTransaction(
-        kernel.api,
-        {
-          base_revision: baseRevision,
-          object_id: objectId,
-          toggle_operand: { enabled, operand_id: operand.operandId },
-        },
-        requestOptions,
-      ),
+    void commitOperandUpdate(
+      `${enabled ? "Enable" : "Disable"} operand ${operand.label}`,
+      (rev) =>
+        updateBooleanOperandsTransaction(
+          kernel.api,
+          {
+            base_revision: rev,
+            object_id: objectId,
+            toggle_operand: { enabled, operand_id: operand.operandId },
+          },
+          requestOptions,
+        ),
     );
   };
 
@@ -232,16 +326,18 @@ export function BooleanNodeSection({
     const nextIds = parsed.operands.map((item) => item.operandId);
     const [moved] = nextIds.splice(index, 1);
     nextIds.splice(targetIndex, 0, moved);
-    void commitOperandUpdate(() =>
-      updateBooleanOperandsTransaction(
-        kernel.api,
-        {
-          base_revision: baseRevision,
-          object_id: objectId,
-          reorder_operand_ids: nextIds,
-        },
-        requestOptions,
-      ),
+    void commitOperandUpdate(
+      `Move operand ${parsed.operands[index]?.label ?? ""} ${delta < 0 ? "up" : "down"}`,
+      (rev) =>
+        updateBooleanOperandsTransaction(
+          kernel.api,
+          {
+            base_revision: rev,
+            object_id: objectId,
+            reorder_operand_ids: nextIds,
+          },
+          requestOptions,
+        ),
     );
   };
 
@@ -251,11 +347,11 @@ export function BooleanNodeSection({
     const first = nextIds[0];
     nextIds[0] = nextIds[1];
     nextIds[1] = first;
-    void commitOperandUpdate(() =>
+    void commitOperandUpdate("Swap Boolean base and tool operands", (rev) =>
       updateBooleanOperandsTransaction(
         kernel.api,
         {
-          base_revision: baseRevision,
+          base_revision: rev,
           object_id: objectId,
           reorder_operand_ids: nextIds,
         },
@@ -264,57 +360,69 @@ export function BooleanNodeSection({
     );
   };
 
-  const handleRemoveOperand = (operandId: string) => {
+  const handleRemoveOperand = (operand: NormalizedGeometryOperand) => {
     if (baseRevision === null || parsed.operands.length <= 1) return;
-    void commitOperandUpdate(() =>
+    void commitOperandUpdate(`Remove operand ${operand.label}`, (rev) =>
       updateBooleanOperandsTransaction(
         kernel.api,
         {
-          base_revision: baseRevision,
+          base_revision: rev,
           object_id: objectId,
-          remove_operand_id: operandId,
+          remove_operand_id: operand.operandId,
         },
         requestOptions,
       ),
     );
   };
 
-  const handleExtractOperand = (operandId: string) => {
+  const handleExtractOperand = (operand: NormalizedGeometryOperand) => {
     if (baseRevision === null) return;
-    void commitOperandUpdate(() =>
+    void commitOperandUpdate(`Extract ${operand.label} as object`, (rev) =>
       separateObjectTransaction(
         kernel.api,
         {
-          base_revision: baseRevision,
+          base_revision: rev,
           keep_in_boolean: false,
           mode: "extract_operand",
           object_id: objectId,
-          operand_id: operandId,
+          operand_id: operand.operandId,
         },
         requestOptions,
       ),
     );
   };
 
-  const handleArrayOperand = (operandId: string) => {
+  const handleArrayOperand = (operand: NormalizedGeometryOperand) => {
+    if (onPatchNode) {
+      onPatchNode(operand.operandId, {
+        array3dConfig: {
+          axes: defaultArray3DAxes(),
+          mergeOverlapping: false,
+          realization: "modifier_in_object",
+        },
+      });
+      setExpandedOperandId(operand.operandId);
+      setAutoFocusOperandId(null);
+      return;
+    }
     if (baseRevision === null) return;
-    void commitOperandUpdate(() =>
+    void commitOperandUpdate(`Apply Array 3D to ${operand.label}`, (rev) =>
       applyArray3DTransaction(
         kernel.api,
         {
           axes: defaultArray3DAxes(),
-          base_revision: baseRevision,
+          base_revision: rev,
           merge_overlapping: false,
           object_id: objectId,
           realization: "modifier_in_object",
-          target_operand_id: operandId,
+          target_operand_id: operand.operandId,
         },
         requestOptions,
       ),
     );
   };
 
-  const handleAddCutout = (kind: QuickCutoutKind) => {
+  const handleAddCutout = async (kind: QuickCutoutKind) => {
     if (baseRevision === null) return;
     const objRec = asRecord(sceneObj);
     const geomRec = asRecord(objRec?.geometry);
@@ -327,7 +435,9 @@ export function BooleanNodeSection({
         : asRecord(geomRec?.geometry_params));
     const geometry = buildQuickCutoutGeometry(kind, boundsSource);
     const label = `${kind} cutout ${parsed.operands.length}`;
-    void commitOperandUpdate(() =>
+    const existingIds = new Set(parsed.operands.map((op) => op.operandId));
+
+    const response = await commitOperandUpdate(`Add ${kind} cutout to ${objectId}`, (rev) =>
       updateBooleanOperandsTransaction(
         kernel.api,
         {
@@ -335,12 +445,20 @@ export function BooleanNodeSection({
             geometry,
             label,
           },
-          base_revision: baseRevision,
+          base_revision: rev,
           object_id: objectId,
         },
         requestOptions,
       ),
     );
+
+    const updatedObj = response?.committed_scene?.objects?.find((item) => item.id === objectId);
+    const nextOperands = parseCompositeGeometry(updatedObj?.geometry).operands;
+    const addedOperand = nextOperands.find((op) => !existingIds.has(op.operandId));
+    if (addedOperand) {
+      setExpandedOperandId(addedOperand.operandId);
+      setAutoFocusOperandId(addedOperand.operandId);
+    }
   };
 
   const handleInspectOperand = (operand: NormalizedGeometryOperand) => {
@@ -365,152 +483,214 @@ export function BooleanNodeSection({
     );
   };
 
+  const patches = inlineNodePatches ?? {};
+
   return (
     <div className="flex flex-col gap-3" data-slot="boolean-node-section">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <div className="flex items-center gap-1.5 text-xs font-medium text-[var(--fm-text-secondary)]">
-          <Combine size={14} />
-          <span>Boolean Operation</span>
-        </div>
-        <div className="flex flex-wrap gap-1">
-          {BOOLEAN_OP_OPTIONS.map((option) => (
+      <div className="flex flex-col gap-1.5">
+        <div className="flex items-center justify-between gap-2">
+          <div className="flex items-center gap-1.5 text-xs font-medium text-[var(--fm-text-secondary)]">
+            <Combine aria-hidden="true" size={14} />
+            <span>Boolean Operation</span>
+          </div>
+          {parsed.operands.length >= 2 ? (
             <Button
-              key={option.value}
               disabled={busy || baseRevision === null}
               size="sm"
               type="button"
-              variant={currentOp === option.value ? "primary" : "secondary"}
-              onClick={() => handleChangeOp(option.value)}
+              variant="ghost"
+              onClick={handleSwapBaseTool}
             >
-              {option.label}
+              <ArrowUpDown aria-hidden="true" size={13} />
+              <span>Swap Base \u2194 Tool</span>
             </Button>
-          ))}
+          ) : null}
         </div>
+        <SegmentedControl
+          aria-label="Boolean operation"
+          columns={4}
+          disabled={busy || baseRevision === null}
+          options={BOOLEAN_OP_OPTIONS}
+          value={currentOp}
+          onValueChange={handleChangeOp}
+        />
       </div>
-
-      {parsed.operands.length >= 2 ? (
-        <div className="flex items-center justify-between gap-2">
-          <span className="text-xs text-[var(--fm-text-muted)]">
-            Base [A] is index 0; tools [B1..Bk] follow in stack order.
-          </span>
-          <Button
-            disabled={busy || baseRevision === null}
-            size="sm"
-            type="button"
-            variant="ghost"
-            onClick={handleSwapBaseTool}
-          >
-            <ArrowUpDown size={13} />
-            <span>Swap Base ↔ Tool</span>
-          </Button>
-        </div>
-      ) : null}
 
       <div className="flex flex-col gap-1.5" role="list" aria-label="Boolean CSG operands">
         {parsed.operands.map((operand, index) => {
           const ghostVisible = ghostKeys.has(
             geometryOperandGhostKey(objectId, operand.operandId),
           );
+          const operandPatch = patches[operand.operandId];
+          const effectiveEnabled = operandPatch?.enabled ?? operand.enabled;
+          const isExpanded = expandedOperandId === operand.operandId;
+          const subtitle = summarizeOperandSubtitle(operand, operandPatch);
+          const canExpandInline = Boolean(onPatchNode);
+
           return (
             <div
               key={operand.operandId}
-              className="flex flex-wrap items-center justify-between gap-2 rounded border border-[var(--fm-border-subtle)] bg-[var(--fm-surface-subtle)] px-2.5 py-2"
+              className="flex flex-col rounded border border-[var(--fm-border-subtle)] bg-[var(--fm-surface-subtle)] px-2.5 py-2"
+              data-expanded={isExpanded ? "true" : "false"}
               data-operand-id={operand.operandId}
               role="listitem"
             >
-              <div className="flex min-w-0 items-center gap-2">
-                <Switch
-                  aria-label={`Toggle ${operand.label}`}
-                  checked={operand.enabled}
-                  disabled={busy || baseRevision === null}
-                  onCheckedChange={(checked) =>
-                    handleToggleOperand(operand, Boolean(checked))
-                  }
+              <div className="flex items-center justify-between gap-1.5">
+                <div className="flex min-w-0 flex-1 items-center gap-1.5">
+                  <Switch
+                    aria-label={`Toggle ${operand.label}`}
+                    checked={effectiveEnabled}
+                    disabled={busy || baseRevision === null}
+                    onCheckedChange={(checked) =>
+                      handleToggleOperand(operand, Boolean(checked))
+                    }
+                  />
+                  <Button
+                    aria-expanded={canExpandInline ? isExpanded : undefined}
+                    className="min-w-0 flex-1 justify-start gap-1.5 px-1.5 text-left"
+                    size="sm"
+                    type="button"
+                    variant="ghost"
+                    onClick={() => {
+                      if (canExpandInline) {
+                        setAutoFocusOperandId(null);
+                        setExpandedOperandId((current) =>
+                          current === operand.operandId ? null : operand.operandId,
+                        );
+                      } else {
+                        handleInspectOperand(operand);
+                      }
+                    }}
+                  >
+                    {canExpandInline ? (
+                      isExpanded ? (
+                        <ChevronDown aria-hidden="true" className="shrink-0" size={13} />
+                      ) : (
+                        <ChevronRight aria-hidden="true" className="shrink-0" size={13} />
+                      )
+                    ) : null}
+                    <Badge variant={operand.role === "base" ? "accent" : "secondary"}>
+                      {operand.roleBadge}
+                    </Badge>
+                    <span className="truncate text-xs font-medium text-[var(--fm-text-primary)]">
+                      {operand.label}
+                    </span>
+                    {subtitle ? (
+                      <span className="hidden truncate font-mono text-xs text-[var(--fm-text-muted)] sm:inline">
+                        {subtitle}
+                      </span>
+                    ) : null}
+                  </Button>
+                </div>
+
+                <div className="flex shrink-0 items-center gap-1">
+                  <Button
+                    aria-label={`Toggle ghost wireframe for ${operand.label}`}
+                    aria-pressed={ghostVisible}
+                    className={cn(
+                      ghostVisible &&
+                        "border border-[var(--fm-accent)] bg-[var(--fm-surface-1)] text-[var(--fm-text-primary)]",
+                    )}
+                    data-active={ghostVisible ? "true" : undefined}
+                    size="icon"
+                    type="button"
+                    variant="ghost"
+                    onClick={() =>
+                      geometryGhostVisibilityStore.toggle(objectId, operand.operandId)
+                    }
+                  >
+                    {ghostVisible ? (
+                      <Eye aria-hidden="true" size={13} />
+                    ) : (
+                      <EyeOff aria-hidden="true" size={13} />
+                    )}
+                  </Button>
+
+                  <DropdownMenu>
+                    <DropdownMenuTrigger asChild>
+                      <Button
+                        aria-label={`Actions for ${operand.label}`}
+                        disabled={busy || baseRevision === null}
+                        size="icon"
+                        type="button"
+                        variant="ghost"
+                      >
+                        <MoreVertical aria-hidden="true" size={13} />
+                      </Button>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="end">
+                      <DropdownMenuItem onSelect={() => handleInspectOperand(operand)}>
+                        <ExternalLink aria-hidden="true" size={13} />
+                        <span>Open in Node Inspector</span>
+                      </DropdownMenuItem>
+                      <DropdownMenuSeparator />
+                      <DropdownMenuItem
+                        disabled={busy || index === 0 || baseRevision === null}
+                        onSelect={() => handleMoveOperand(index, -1)}
+                      >
+                        <ArrowUp aria-hidden="true" size={13} />
+                        <span>Move Up</span>
+                      </DropdownMenuItem>
+                      <DropdownMenuItem
+                        disabled={
+                          busy || index === parsed.operands.length - 1 || baseRevision === null
+                        }
+                        onSelect={() => handleMoveOperand(index, 1)}
+                      >
+                        <ArrowDown aria-hidden="true" size={13} />
+                        <span>Move Down</span>
+                      </DropdownMenuItem>
+                      <DropdownMenuItem
+                        disabled={busy || baseRevision === null}
+                        onSelect={() => handleArrayOperand(operand)}
+                      >
+                        <Grid3X3 aria-hidden="true" size={13} />
+                        <span>Apply Array 3D</span>
+                      </DropdownMenuItem>
+                      <DropdownMenuItem
+                        disabled={busy || baseRevision === null}
+                        onSelect={() => handleExtractOperand(operand)}
+                      >
+                        <Scissors aria-hidden="true" size={13} />
+                        <span>Extract as Object</span>
+                      </DropdownMenuItem>
+                      <DropdownMenuSeparator />
+                      <DropdownMenuItem
+                        className="text-[var(--fm-danger)]"
+                        disabled={
+                          busy || parsed.operands.length <= 1 || baseRevision === null
+                        }
+                        onSelect={() => handleRemoveOperand(operand)}
+                      >
+                        <Trash2 aria-hidden="true" size={13} />
+                        <span>Remove Operand</span>
+                      </DropdownMenuItem>
+                    </DropdownMenuContent>
+                  </DropdownMenu>
+                </div>
+              </div>
+
+              {canExpandInline && isExpanded && onPatchNode ? (
+                <InlineNodeFields
+                  autoFocusPrimaryField={autoFocusOperandId === operand.operandId}
+                  disabled={busy}
+                  nodePath={operand.operandId}
+                  parentBaseThicknessM={operand.role === "base" ? null : baseThicknessM}
+                  patches={patches}
+                  rootGeometry={sceneObj.geometry}
+                  sceneObj={sceneObj}
+                  unit={unit}
+                  onPatchNode={onPatchNode}
+                  onUnitChange={handleUnitChange}
                 />
-                <Badge variant={operand.role === "base" ? "accent" : "secondary"}>
-                  {operand.roleBadge}
-                </Badge>
-                <Button
-                  size="sm"
-                  type="button"
-                  variant="ghost"
-                  onClick={() => handleInspectOperand(operand)}
-                >
-                  <span className="truncate text-xs font-medium">{operand.label}</span>
-                </Button>
-              </div>
-              <div className="flex items-center gap-1">
-                <Button
-                  aria-label={`Toggle ghost wireframe for ${operand.label}`}
-                  size="sm"
-                  type="button"
-                  variant={ghostVisible ? "primary" : "ghost"}
-                  onClick={() =>
-                    geometryGhostVisibilityStore.toggle(objectId, operand.operandId)
-                  }
-                >
-                  {ghostVisible ? <Eye size={13} /> : <EyeOff size={13} />}
-                </Button>
-                <Button
-                  aria-label={`Move ${operand.label} up`}
-                  disabled={busy || index === 0 || baseRevision === null}
-                  size="sm"
-                  type="button"
-                  variant="ghost"
-                  onClick={() => handleMoveOperand(index, -1)}
-                >
-                  <ArrowUp size={13} />
-                </Button>
-                <Button
-                  aria-label={`Move ${operand.label} down`}
-                  disabled={
-                    busy || index === parsed.operands.length - 1 || baseRevision === null
-                  }
-                  size="sm"
-                  type="button"
-                  variant="ghost"
-                  onClick={() => handleMoveOperand(index, 1)}
-                >
-                  <ArrowDown size={13} />
-                </Button>
-                <Button
-                  aria-label={`Apply Array 3D to ${operand.label}`}
-                  disabled={busy || baseRevision === null}
-                  size="sm"
-                  type="button"
-                  variant="ghost"
-                  onClick={() => handleArrayOperand(operand.operandId)}
-                >
-                  <Grid3X3 size={13} />
-                </Button>
-                <Button
-                  aria-label={`Extract ${operand.label}`}
-                  disabled={busy || baseRevision === null}
-                  size="sm"
-                  type="button"
-                  variant="ghost"
-                  onClick={() => handleExtractOperand(operand.operandId)}
-                >
-                  <Scissors size={13} />
-                </Button>
-                <Button
-                  aria-label={`Remove ${operand.label}`}
-                  disabled={busy || parsed.operands.length <= 1 || baseRevision === null}
-                  size="sm"
-                  type="button"
-                  variant="ghost"
-                  onClick={() => handleRemoveOperand(operand.operandId)}
-                >
-                  <Trash2 size={13} />
-                </Button>
-              </div>
+              ) : null}
             </div>
           );
         })}
       </div>
 
       <div className="flex flex-wrap items-center gap-1.5 border-t border-[var(--fm-border-subtle)] pt-2">
-        <span className="text-xs text-[var(--fm-text-muted)]">Add cutout (1.2 × Lz):</span>
+        <span className="text-xs text-[var(--fm-text-muted)]">Add cutout (1.2 &times; Lz):</span>
         {(["Cylinder", "Box", "Sphere"] as const).map((kind) => (
           <Button
             key={kind}
@@ -518,9 +698,11 @@ export function BooleanNodeSection({
             size="sm"
             type="button"
             variant="secondary"
-            onClick={() => handleAddCutout(kind)}
+            onClick={() => {
+              void handleAddCutout(kind);
+            }}
           >
-            <Plus size={12} />
+            <Plus aria-hidden="true" size={12} />
             <span>{kind}</span>
           </Button>
         ))}

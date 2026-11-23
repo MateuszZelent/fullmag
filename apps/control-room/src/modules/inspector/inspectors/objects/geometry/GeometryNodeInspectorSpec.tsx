@@ -11,24 +11,23 @@ import {
   Layers,
   Scissors,
 } from "lucide-react";
-import { useCallback, useMemo, useState, useSyncExternalStore } from "react";
+import { useCallback, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 
 import { MODEL_SCENE_PATH } from "@/kernel/api/apiPaths";
 import type { JsonObject, SceneResource } from "@/kernel/api/apiTypes";
 import {
-  acknowledgedAuthoringSceneRevision,
-  invalidateAuthoringMutationDependents,
-} from "@/kernel/authoring/authoringMutationInvalidation";
+  computeArray3DBudgetStatus,
+  computeArray3DInstanceCount,
+  defaultArray3DAxes,
+  parseArray3DGeometry,
+} from "@/kernel/authoring/array3dModel";
 import {
   patchObjectGeometryTransaction,
   separateObjectTransaction,
   updateBooleanOperandsTransaction,
 } from "@/kernel/authoring/geometryLifecycleCommands";
 import { useKernel } from "@/kernel/KernelContext";
-import {
-  publishCommittedSceneResource,
-  useSceneResource,
-} from "@/kernel/resources/geometryLifecycleResources";
+import { useSceneResource } from "@/kernel/resources/geometryLifecycleResources";
 import { sessionRequestScopeKey } from "@/kernel/resources/sessionResourceIdentity";
 import { useSessionScopedResourceKey } from "@/kernel/resources/useSessionScopedResourceKey";
 import type { Selection } from "@/kernel/selection/selectionTypes";
@@ -53,7 +52,12 @@ import {
   type InspectorSpec,
 } from "../../../template";
 
-import { Array3DLatticeTableSection } from "./Array3DLatticeTableSection";
+import {
+  Array3DLatticeTableSection,
+  resolveArray3DChildBoundsMeters,
+  type DisplayLengthUnit,
+} from "./Array3DLatticeTableSection";
+import { commitGeometryStackTransaction } from "./geometryHistoryRunner";
 import {
   extractTransformVectors,
   parseGeometryNodePath,
@@ -61,7 +65,11 @@ import {
   resolveGeometryNodeByPath,
   type GeometryNodeAncestor,
 } from "./geometryNodeTreeOps";
-import { parseSymmetryAxis, validateTorusRadii } from "./geometryShared";
+import {
+  parseSymmetryAxis,
+  validateTorusRadii,
+  type Array3DDraftConfig,
+} from "./geometryShared";
 
 export interface GeometryNodeSpecDraft {
   exists: boolean;
@@ -96,6 +104,7 @@ export interface GeometryNodeSpecDraft {
   translation: readonly [number, number, number];
   eulerDeg: readonly [number, number, number];
   scale: readonly [number, number, number];
+  array3dConfig: Array3DDraftConfig | null;
 }
 
 function asRecord(value: unknown): Record<string, unknown> | null {
@@ -198,6 +207,7 @@ export function buildGeometryNodeDraft(
       translation: [0, 0, 0],
       eulerDeg: [0, 0, 0],
       scale: [1, 1, 1],
+      array3dConfig: null,
     };
   }
 
@@ -205,6 +215,7 @@ export function buildGeometryNodeDraft(
   const size = Array.isArray(params.size) ? params.size : null;
   const radii = Array.isArray(params.radii) ? params.radii : null;
   const txVecs = extractTransformVectors(resolved.transform);
+  const parsedArray = resolved.isArray3D ? parseArray3DGeometry(resolved.geometry) : null;
 
   return {
     exists: true,
@@ -239,6 +250,13 @@ export function buildGeometryNodeDraft(
     translation: txVecs.translation,
     eulerDeg: txVecs.eulerDeg,
     scale: txVecs.scale,
+    array3dConfig: parsedArray
+      ? {
+          axes: parsedArray.axes,
+          mergeOverlapping: parsedArray.mergeOverlapping,
+          realization: "modifier_in_object",
+        }
+      : null,
   };
 }
 
@@ -246,6 +264,8 @@ export function patchOperandInCompositeGeometry(
   rawGeometry: unknown,
   draft: GeometryNodeSpecDraft,
 ): JsonObject | null {
+  const shouldPatchArray =
+    draft.isArray3D || (draft.array3dConfig !== null && draft.array3dConfig !== undefined);
   return patchGeometryNodeAtPath(rawGeometry, draft.operandId, {
     label: draft.canEditOperandMeta ? draft.label : undefined,
     enabled: draft.canEditOperandMeta ? draft.enabled : undefined,
@@ -262,6 +282,7 @@ export function patchOperandInCompositeGeometry(
     translation: draft.translation,
     eulerDeg: draft.eulerDeg,
     scale: draft.scale,
+    ...(shouldPatchArray ? { array3dConfig: draft.array3dConfig } : {}),
   });
 }
 
@@ -270,6 +291,7 @@ export function GeometryNodeInspectorPanel({ selection }: InspectorPanelProps) {
   const { sessionIdentity } = useSessionScopedResourceKey(MODEL_SCENE_PATH);
   const scene = useSceneResource();
   const [actionBusy, setActionBusy] = useState(false);
+  const [arrayUnit, setArrayUnit] = useState<DisplayLengthUnit>("nm");
   const ghostKeys = useSyncExternalStore(
     geometryGhostVisibilityStore.subscribe,
     geometryGhostVisibilityStore.getSnapshot,
@@ -290,6 +312,25 @@ export function GeometryNodeInspectorPanel({ selection }: InspectorPanelProps) {
       ? scene.data.revision
       : null;
 
+  const sceneObj = useMemo(
+    () => scene.data?.objects?.find((item) => item.id === baseline.objectId) ?? null,
+    [baseline.objectId, scene.data?.objects],
+  );
+  const resolvedTargetNode = useMemo(
+    () =>
+      sceneObj && baseline.operandId
+        ? resolveGeometryNodeByPath(sceneObj.geometry, baseline.operandId)
+        : null,
+    [baseline.operandId, sceneObj],
+  );
+  const arrayChildBounds = useMemo(
+    () => resolveArray3DChildBoundsMeters(sceneObj, resolvedTargetNode?.geometry ?? sceneObj?.geometry),
+    [resolvedTargetNode?.geometry, sceneObj],
+  );
+
+  const dirtyRef = useRef(false);
+  const requestApplyRef = useRef<() => Promise<boolean>>(async () => false);
+
   const handleSelectNode = useCallback(
     (next: Omit<Selection, "moduleSource">) => {
       kernel.selection.set(next, "inspector");
@@ -297,39 +338,30 @@ export function GeometryNodeInspectorPanel({ selection }: InspectorPanelProps) {
     [kernel.selection],
   );
 
-  const commitSceneResult = useCallback(
-    (response: { committed_scene?: SceneResource; scene_revision?: number }) => {
-      const rev = acknowledgedAuthoringSceneRevision(response);
-      if (response.committed_scene) {
-        publishCommittedSceneResource(
-          kernel.resources,
-          response.committed_scene,
-          rev,
-          undefined,
-          false,
-          sessionScopeKey,
-          kernel.api.resourceCacheScope,
-        );
-      }
-      invalidateAuthoringMutationDependents(kernel.resources, "geometry", rev);
-    },
-    [kernel.api.resourceCacheScope, kernel.resources, sessionScopeKey],
-  );
-
   const runQuickAction = useCallback(
     async (
-      op: () => Promise<{ committed_scene?: SceneResource; scene_revision?: number }>,
+      label: string,
+      op: (rev: number) => Promise<{ committed_scene?: SceneResource; scene_revision?: number }>,
     ) => {
       if (actionBusy || sceneRevision === null) return;
       setActionBusy(true);
       try {
-        const response = await op();
-        commitSceneResult(response);
+        if (dirtyRef.current) {
+          const flushed = await requestApplyRef.current();
+          if (!flushed) return;
+        }
+        await commitGeometryStackTransaction({
+          kernel,
+          label,
+          sceneData: scene.data,
+          sessionScopeKey,
+          execute: ({ baseRevision }) => op(baseRevision ?? sceneRevision),
+        });
       } finally {
         setActionBusy(false);
       }
     },
-    [actionBusy, commitSceneResult, sceneRevision],
+    [actionBusy, kernel, scene.data, sceneRevision, sessionScopeKey],
   );
 
   const spec = useMemo<InspectorSpec<GeometryNodeSpecDraft>>(
@@ -456,86 +488,48 @@ export function GeometryNodeInspectorPanel({ selection }: InspectorPanelProps) {
                     </div>
                   </div>
                   <div className="flex flex-wrap gap-1.5">
-                    <Button
-                      disabled={
-                        actionBusy ||
-                        !ctx.draft.exists ||
-                        ctx.draft.index === 0 ||
-                        sceneRevision === null
-                      }
-                      size="sm"
-                      type="button"
-                      variant="secondary"
-                      onClick={() => {
-                        const obj = scene.data?.objects?.find(
-                          (item) => item.id === ctx.draft.objectId,
-                        );
-                        const ids = parseCompositeGeometry(obj?.geometry).operands.map(
-                          (item) => item.operandId,
-                        );
-                        if (ctx.draft.index <= 0 || sceneRevision === null) return;
-                        const nextIds = [...ids];
-                        const [moved] = nextIds.splice(ctx.draft.index, 1);
-                        nextIds.splice(ctx.draft.index - 1, 0, moved);
-                        void runQuickAction(() =>
-                          updateBooleanOperandsTransaction(
-                            kernel.api,
-                            {
-                              base_revision: sceneRevision,
-                              object_id: ctx.draft.objectId,
-                              reorder_operand_ids: nextIds,
-                            },
-                            sessionScopeKey ? { sessionScopeKey } : undefined,
-                          ),
-                        );
-                      }}
-                    >
-                      <ArrowUp size={13} />
-                      <span>Move Up</span>
-                    </Button>
-                    <Button
-                      disabled={
-                        actionBusy ||
-                        !ctx.draft.exists ||
-                        ctx.draft.index >= ctx.draft.total - 1 ||
-                        sceneRevision === null
-                      }
-                      size="sm"
-                      type="button"
-                      variant="secondary"
-                      onClick={() => {
-                        const obj = scene.data?.objects?.find(
-                          (item) => item.id === ctx.draft.objectId,
-                        );
-                        const ids = parseCompositeGeometry(obj?.geometry).operands.map(
-                          (item) => item.operandId,
-                        );
-                        if (
-                          ctx.draft.index < 0 ||
-                          ctx.draft.index >= ids.length - 1 ||
-                          sceneRevision === null
-                        ) {
-                          return;
-                        }
-                        const nextIds = [...ids];
-                        const [moved] = nextIds.splice(ctx.draft.index, 1);
-                        nextIds.splice(ctx.draft.index + 1, 0, moved);
-                        void runQuickAction(() =>
-                          updateBooleanOperandsTransaction(
-                            kernel.api,
-                            {
-                              base_revision: sceneRevision,
-                              object_id: ctx.draft.objectId,
-                              reorder_operand_ids: nextIds,
-                            },
-                            sessionScopeKey ? { sessionScopeKey } : undefined,
-                          ),
-                        );
-                      }}
-                    >
-                      <ArrowDown size={13} />
-                      <span>Move Down</span>
-                    </Button>
+                    {([-1, 1] as const).map((delta) => {
+                      const isUp = delta < 0;
+                      const Icon = isUp ? ArrowUp : ArrowDown;
+                      const outOfBounds = isUp
+                        ? ctx.draft.index <= 0
+                        : ctx.draft.index >= ctx.draft.total - 1;
+                      return (
+                        <Button
+                          key={delta}
+                          disabled={actionBusy || !ctx.draft.exists || outOfBounds || sceneRevision === null}
+                          size="sm"
+                          type="button"
+                          variant="secondary"
+                          onClick={() => {
+                            const ids = parseCompositeGeometry(sceneObj?.geometry).operands.map(
+                              (item) => item.operandId,
+                            );
+                            const nextIdx = ctx.draft.index + delta;
+                            if (nextIdx < 0 || nextIdx >= ids.length || sceneRevision === null) return;
+                            const nextIds = [...ids];
+                            const [moved] = nextIds.splice(ctx.draft.index, 1);
+                            nextIds.splice(nextIdx, 0, moved);
+                            void runQuickAction(
+                              `Move operand ${ctx.draft.label} ${isUp ? "up" : "down"}`,
+                              (rev) =>
+                                updateBooleanOperandsTransaction(
+                                  kernel.api,
+                                  {
+                                    base_revision: rev,
+                                    object_id: ctx.draft.objectId,
+                                    reorder_operand_ids: nextIds,
+                                  },
+                                  sessionScopeKey ? { sessionScopeKey } : undefined,
+                                ),
+                            );
+                          }}
+                        >
+                          <Icon size={13} />
+                          <span>{isUp ? "Move Up" : "Move Down"}</span>
+                        </Button>
+                      );
+                    })}
                     <Button
                       disabled={actionBusy || !ctx.draft.exists || sceneRevision === null}
                       size="sm"
@@ -543,18 +537,20 @@ export function GeometryNodeInspectorPanel({ selection }: InspectorPanelProps) {
                       variant="secondary"
                       onClick={() => {
                         if (sceneRevision === null) return;
-                        void runQuickAction(() =>
-                          separateObjectTransaction(
-                            kernel.api,
-                            {
-                              base_revision: sceneRevision,
-                              keep_in_boolean: false,
-                              mode: "extract_operand",
-                              object_id: ctx.draft.objectId,
-                              operand_id: ctx.draft.operandId,
-                            },
-                            sessionScopeKey ? { sessionScopeKey } : undefined,
-                          ),
+                        void runQuickAction(
+                          `Extract ${ctx.draft.label} as object`,
+                          (rev) =>
+                            separateObjectTransaction(
+                              kernel.api,
+                              {
+                                base_revision: rev,
+                                keep_in_boolean: false,
+                                mode: "extract_operand",
+                                object_id: ctx.draft.objectId,
+                                operand_id: ctx.draft.operandId,
+                              },
+                              sessionScopeKey ? { sessionScopeKey } : undefined,
+                            ),
                         );
                       }}
                     >
@@ -569,7 +565,9 @@ export function GeometryNodeInspectorPanel({ selection }: InspectorPanelProps) {
         },
         {
           id: "geometry-node-dimensions",
-          title: "Primitive dimensions & local transform",
+          title: baseline.isArray3D
+            ? "Modifier local transform"
+            : "Primitive dimensions & local transform",
           icon: Box,
           defaultOpen: true,
           showWhen: (draft) => draft.exists,
@@ -749,7 +747,7 @@ export function GeometryNodeInspectorPanel({ selection }: InspectorPanelProps) {
                     className="shrink-0 whitespace-nowrap"
                     size="sm"
                     type="button"
-                    variant="primary"
+                    variant="secondary"
                     onClick={() => {
                       const childPath = ctx.draft.arrayChildPath;
                       if (!childPath) return;
@@ -773,18 +771,54 @@ export function GeometryNodeInspectorPanel({ selection }: InspectorPanelProps) {
               ),
             },
             {
+              key: "array3dConfig",
+              label: "Array 3D lattice",
               type: "custom",
               wide: true,
-              showWhen: (draft) => draft.isTopLevelBooleanOperand,
-              render: (ctx) => (
-                <Array3DLatticeTableSection
-                  kernel={kernel}
-                  objectId={ctx.draft.objectId}
-                  sceneData={scene.data}
-                  sessionScopeKey={sessionScopeKey}
-                  targetOperandId={ctx.draft.operandId}
-                />
-              ),
+              showWhen: (draft) => draft.isTopLevelBooleanOperand || draft.isArray3D,
+              validate: (cfg) => {
+                const typed = cfg as Array3DDraftConfig | null;
+                if (!typed) return null;
+                const count = computeArray3DInstanceCount(typed.axes);
+                const status = computeArray3DBudgetStatus(count, typed.realization);
+                return status.level === "error" ? status.message : null;
+              },
+              render: (ctx) =>
+                ctx.draft.array3dConfig ? (
+                  <Array3DLatticeTableSection
+                    childBounds={arrayChildBounds}
+                    disableExpandToObjects
+                    disabled={actionBusy}
+                    unit={arrayUnit}
+                    value={ctx.draft.array3dConfig}
+                    onChange={(nextCfg) => ctx.setField("array3dConfig", nextCfg)}
+                    onRemoveModifier={() => ctx.setField("array3dConfig", null)}
+                    onUnitChange={setArrayUnit}
+                  />
+                ) : (
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-xs text-[var(--fm-text-muted)]">
+                      Repeat this operand along a 1D, 2D, or 3D lattice.
+                    </span>
+                    <Button
+                      className="shrink-0 whitespace-nowrap"
+                      disabled={actionBusy || sceneRevision === null}
+                      size="sm"
+                      type="button"
+                      variant="secondary"
+                      onClick={() =>
+                        ctx.setField("array3dConfig", {
+                          axes: defaultArray3DAxes(),
+                          mergeOverlapping: false,
+                          realization: "modifier_in_object",
+                        })
+                      }
+                    >
+                      <Grid3X3 aria-hidden="true" size={13} />
+                      <span>Add Array 3D Modifier</span>
+                    </Button>
+                  </div>
+                ),
             },
           ],
         },
@@ -804,22 +838,30 @@ export function GeometryNodeInspectorPanel({ selection }: InspectorPanelProps) {
           if (!nextGeometry || sceneRevision === null) {
             throw new Error("Could not patch geometry node in parent composite tree.");
           }
-          const response = await patchObjectGeometryTransaction(
-            kernel.api,
-            draft.objectId,
-            {
-              base_revision: sceneRevision,
-              geometry: nextGeometry,
-            },
-            sessionScopeKey ? { sessionScopeKey } : undefined,
-          );
-          commitSceneResult(response);
+          await commitGeometryStackTransaction({
+            kernel,
+            label: `Edit geometry node ${draft.label}`,
+            sceneData: scene.data,
+            sessionScopeKey,
+            execute: ({ baseRevision }) =>
+              patchObjectGeometryTransaction(
+                kernel.api,
+                draft.objectId,
+                {
+                  base_revision: baseRevision ?? sceneRevision,
+                  geometry: nextGeometry,
+                },
+                sessionScopeKey ? { sessionScopeKey } : undefined,
+              ),
+          });
           return true;
         },
       },
     }),
     [
       actionBusy,
+      arrayChildBounds,
+      arrayUnit,
       baseline.ancestors,
       baseline.depth,
       baseline.exists,
@@ -827,18 +869,23 @@ export function GeometryNodeInspectorPanel({ selection }: InspectorPanelProps) {
       baseline.label,
       baseline.objectId,
       baseline.objectName,
-      commitSceneResult,
       ghostVisible,
       handleSelectNode,
       kernel,
       runQuickAction,
       scene.data,
+      sceneObj,
       sceneRevision,
       sessionScopeKey,
     ],
   );
 
   const controller = useInspectorSpecController(spec, selection, baseline);
+
+  useLayoutEffect(() => {
+    dirtyRef.current = controller.dirty;
+    requestApplyRef.current = controller.requestApply;
+  }, [controller.dirty, controller.requestApply]);
 
   return (
     <InspectorTemplate

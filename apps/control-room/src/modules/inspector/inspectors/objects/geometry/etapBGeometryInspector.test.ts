@@ -8,9 +8,11 @@ import { resolveArray3DChildBoundsMeters } from "./Array3DLatticeTableSection";
 import { computeDraftSummaryMetrics } from "./geometrySerialization";
 import {
   analyzeDeleteObjectImpact,
+  bakeScaleIntoDraft,
   buildBaselineFromScene,
   buildGeometryNodeDraft,
   buildQuickCutoutGeometry,
+  canBakeScaleIntoDraft,
   computeCutoutHeightFromBounds,
   mergeTransformPatch,
   patchOperandInCompositeGeometry,
@@ -380,6 +382,190 @@ describe("Etap B Geometry Inspector models: BooleanNode, GeometryNode, Transform
       new URL("./ObjectGeometrySpec.tsx", import.meta.url),
       "utf8",
     );
-    expect(objectGeometrySource).toContain("whitespace-nowrap");
+    expect(objectGeometrySource).toContain("deleteAction:");
+
+    const modifiersBarSource = readFileSync(
+      new URL("./PrimitiveModifiersBar.tsx", import.meta.url),
+      "utf8",
+    );
+    expect(modifiersBarSource).toContain("whitespace-nowrap");
+  });
+
+  it("blocks Bake Scale on composite objects and auto-assigns the first scene material for new primitive drafts", () => {
+    const sceneWithMaterials = {
+      materials: [
+        { id: "mat_py", name: "Permalloy", properties: { Ms: 8e5 } },
+        { id: "mat_cofeb", name: "CoFeB", properties: { Ms: 1.2e6 } },
+      ],
+      objects: [
+        {
+          geometry: {
+            geometry_kind: "Difference",
+            geometry_params: {
+              operands: [
+                {
+                  enabled: true,
+                  geometry: { geometry_kind: "Box", geometry_params: { size: [400e-9, 400e-9, 20e-9] } },
+                  label: "Film",
+                  operand_id: "op_film",
+                },
+                {
+                  enabled: true,
+                  geometry: { geometry_kind: "Cylinder", geometry_params: { height: 24e-9, radius: 25e-9 } },
+                  label: "Hole",
+                  operand_id: "op_hole",
+                },
+              ],
+            },
+          },
+          id: "film_diff",
+          name: "FilmDiff",
+          transform: { scale: [2, 2, 1], translation: [0, 0, 0] },
+        },
+      ],
+      revision: 8,
+    } as unknown as SceneResource;
+
+    const newDraft = buildBaselineFromScene(
+      {
+        kind: "builder.primitive",
+        label: "New box",
+        moduleSource: "ribbon",
+        nodeId: "builder:primitive:box",
+        objectId: null,
+        ref: null,
+      },
+      sceneWithMaterials,
+      true,
+    );
+    expect(newDraft.materialRef).toBe("mat_py");
+
+    const newDraftNoMaterials = buildBaselineFromScene(
+      {
+        kind: "builder.primitive",
+        label: "New box",
+        moduleSource: "ribbon",
+        nodeId: "builder:primitive:box",
+        objectId: null,
+        ref: null,
+      },
+      { materials: [], objects: [], revision: 1 } as unknown as SceneResource,
+      true,
+    );
+    expect(newDraftNoMaterials.materialRef).toBeNull();
+
+    const compositeDraft = buildBaselineFromScene(
+      {
+        kind: "object.geometry",
+        label: "FilmDiff",
+        moduleSource: "explorer",
+        nodeId: "model:object:film_diff:geometry",
+        objectId: "film_diff",
+        ref: null,
+      },
+      sceneWithMaterials,
+      false,
+    );
+    expect(canBakeScaleIntoDraft(compositeDraft)).toEqual({
+      ok: false,
+      reason: "Bake Scale applies to primitive solids only.",
+    });
+    expect(bakeScaleIntoDraft(compositeDraft)).toEqual({});
+  });
+
+  it("serializes staged inline operand edits + controlled Array 3D lattice edits atomically into composite geometry", () => {
+    const initialAxes: [
+      ReturnType<typeof defaultArrayAxisSpec>,
+      ReturnType<typeof defaultArrayAxisSpec>,
+      ReturnType<typeof defaultArrayAxisSpec>,
+    ] = [
+      defaultArrayAxisSpec("x", { count: 3, direction: "symmetric", enabled: true, pitch_m: 100e-9 }),
+      defaultArrayAxisSpec("y", { count: 3, direction: "symmetric", enabled: true, pitch_m: 100e-9 }),
+      defaultArrayAxisSpec("z", { count: 1, direction: "positive", enabled: false, pitch_m: 100e-9 }),
+    ];
+    const nextAxes: [
+      ReturnType<typeof defaultArrayAxisSpec>,
+      ReturnType<typeof defaultArrayAxisSpec>,
+      ReturnType<typeof defaultArrayAxisSpec>,
+    ] = [
+      defaultArrayAxisSpec("x", { count: 4, direction: "symmetric", enabled: true, pitch_m: 110e-9 }),
+      defaultArrayAxisSpec("y", { count: 4, direction: "symmetric", enabled: true, pitch_m: 110e-9 }),
+      defaultArrayAxisSpec("z", { count: 1, direction: "positive", enabled: false, pitch_m: 100e-9 }),
+    ];
+    const diffWithArrayHole = {
+      geometry_kind: "Difference",
+      geometry_params: {
+        operands: [
+          {
+            enabled: true,
+            geometry: { geometry_kind: "Box", geometry_params: { size: [500e-9, 500e-9, 20e-9] } },
+            label: "Film",
+            operand_id: "op_film",
+          },
+          {
+            enabled: true,
+            geometry: {
+              geometry_kind: "Array3D",
+              geometry_params: {
+                axes: initialAxes,
+                child: {
+                  geometry_kind: "Cylinder",
+                  geometry_params: { axis: [0, 0, 1], height: 24e-9, radius: 25e-9 },
+                },
+                merge_overlapping: false,
+              },
+            },
+            label: "Hole",
+            operand_id: "op_hole",
+          },
+        ],
+      },
+    };
+    const scene = {
+      objects: [{ geometry: diffWithArrayHole, id: "film_1", name: "Film" }],
+      revision: 12,
+    } as unknown as SceneResource;
+
+    const baseline = buildBaselineFromScene(
+      {
+        kind: "object.geometry",
+        label: "Film",
+        moduleSource: "explorer",
+        nodeId: "model:object:film_1:geometry",
+        objectId: "film_1",
+        ref: null,
+      },
+      scene,
+      false,
+    );
+
+    const serialized = serializeGeometryPayload({
+      ...baseline,
+      inlineNodePatches: {
+        op_hole: {
+          array3dConfig: {
+            axes: nextAxes,
+            mergeOverlapping: true,
+            realization: "modifier_in_object",
+          },
+          enabled: false,
+        },
+        "op_hole/array-child": {
+          radius: 35e-9,
+        },
+      },
+    });
+
+    const operands = (serialized.geometry_params as { operands: Array<Record<string, unknown>> })
+      .operands;
+    expect(operands[1]?.enabled).toBe(false);
+    const holeArrayParams = (
+      operands[1]?.geometry as { geometry_params: Record<string, unknown> }
+    ).geometry_params;
+    expect(holeArrayParams.axes).toEqual(nextAxes);
+    expect(holeArrayParams.merge_overlapping).toBe(true);
+    expect(
+      (holeArrayParams.child as { geometry_params: { radius: number } }).geometry_params.radius,
+    ).toBe(35e-9);
   });
 });

@@ -9,7 +9,6 @@ import { Input } from "@/shared/ui/Input";
 import {
   ANGLE_UNITS,
   formatLengthAuto,
-  formatSpanAuto,
   LENGTH_UNITS,
 } from "../../../panels/model-roots/SpecInspectorHost";
 import type { InspectorSectionSpec } from "../../../template";
@@ -98,61 +97,6 @@ export function buildGeometryShapeSections({
   materialOptions,
 }: GeometryShapeSectionOptions): InspectorSectionSpec<ObjectGeometrySpecDraft>[] {
   return [
-    {
-      id: "geometry-composite-overview",
-      modeTabId: "shape",
-      title: "Composite geometry overview",
-      icon: Shapes,
-      defaultOpen: true,
-      showWhen: (d) => d.mode === "committed" && Boolean(d.compositeSummary),
-      summary: (d) => d.compositeSummary?.displayLabel ?? "",
-      rows: [
-        {
-          type: "readonly",
-          label: "Operation",
-          format: (d) => d.compositeSummary?.displayLabel ?? "Composite",
-        },
-        {
-          type: "readonly",
-          label: "Lattice instances",
-          mono: true,
-          showWhen: (d) => d.compositeSummary?.op === "array",
-          format: (d) =>
-            d.compositeSummary?.instanceCount !== null && d.compositeSummary?.instanceCount !== undefined
-              ? `${d.compositeSummary.instanceCount.toLocaleString()} (${d.compositeSummary.dimensionsLabel ?? "1×1×1"})`
-              : "1",
-        },
-        {
-          type: "readonly",
-          label: "Operands",
-          mono: true,
-          showWhen: (d) => Boolean(d.compositeSummary && d.compositeSummary.op !== "array"),
-          format: (d) =>
-            d.compositeSummary
-              ? `${d.compositeSummary.enabledOperandCount} active / ${d.compositeSummary.operandCount} total`
-              : "0",
-        },
-        {
-          type: "readonly",
-          label: "Bounding span (AABB)",
-          mono: true,
-          format: (d) => {
-            const size = d.compositeSummary?.boundsMeters?.size;
-            return size ? formatSpanAuto([size[0], size[1], size[2]]) ?? "—" : "—";
-          },
-        },
-        {
-          type: "custom",
-          wide: true,
-          render: () => (
-            <p className="text-xs text-[var(--fm-text-muted)]">
-              Edit Boolean operands, cutouts, or Array 3D lattice axes in the Boolean CSG tab or by
-              selecting child geometry nodes in the Explorer tree.
-            </p>
-          ),
-        },
-      ],
-    },
     {
       id: "geometry-shape-kind",
       modeTabId: "shape",

@@ -1,4 +1,5 @@
 import type { JsonObject, SceneResource } from "@/kernel/api/apiTypes";
+import { parseArray3DGeometry } from "@/kernel/authoring/array3dModel";
 import type { PrimitiveDraft } from "@/kernel/authoring/geometryLifecycleCommands";
 import { resolveDraftObjectName } from "@/kernel/authoring/uniqueObjectName";
 
@@ -12,6 +13,10 @@ import {
 } from "../../../panels/model-roots/SpecInspectorHost";
 import type { InspectorTone } from "../../../template";
 
+import {
+  applyArray3DConfigToGeometry,
+  applyInlineNodePatchesToGeometry,
+} from "./geometryNodeTreeOps";
 import {
   axisVectorFromSymmetryAxis,
   buildCompositeGeometrySummary,
@@ -30,7 +35,16 @@ import {
 
 export function serializeGeometryPayload(draft: ObjectGeometrySpecDraft): JsonObject {
   if (draft.compositeSummary && draft.preservedRawGeometry && draft.csgOperation === "none") {
-    return draft.preservedRawGeometry;
+    let next = applyInlineNodePatchesToGeometry(
+      draft.preservedRawGeometry,
+      draft.inlineNodePatches,
+    );
+    if (draft.array3dConfig === null && draft.compositeSummary.op === "array") {
+      next = applyArray3DConfigToGeometry(next, null) as JsonObject;
+    } else if (draft.array3dConfig && draft.array3dConfig.realization === "modifier_in_object") {
+      next = applyArray3DConfigToGeometry(next, draft.array3dConfig) as JsonObject;
+    }
+    return next;
   }
 
   const rawGeomParams = draft.preservedRawGeometry?.geometry_params;
@@ -188,10 +202,14 @@ export function serializeGeometryPayload(draft: ObjectGeometrySpecDraft): JsonOb
       csg_tree: draft.preservedComplexCsg,
     };
   }
-  return {
+  const baseResult: JsonObject = {
     ...(draft.preservedRawGeometry ?? {}),
     ...primitiveDescriptor,
   };
+  if (draft.array3dConfig && draft.array3dConfig.realization === "modifier_in_object") {
+    return applyArray3DConfigToGeometry(baseResult, draft.array3dConfig) as JsonObject;
+  }
+  return baseResult;
 }
 
 /**
@@ -528,6 +546,50 @@ export function buildBaselineFromScene(
     createPolygonVertexRow(-50e-9, 30e-9, "vtx-3"),
   ];
 
+  const defaultBase: Omit<
+    ObjectGeometrySpecDraft,
+    "mode" | "objectId" | "draftName" | "materialRef" | "primitiveKind" | "meshStatusPill"
+  > = {
+    regionName: "",
+    compositeSummary: null,
+    symmetryAxis: "z",
+    sizeX: 100e-9,
+    sizeY: 100e-9,
+    sizeZ: 10e-9,
+    radius: 50e-9,
+    height: 10e-9,
+    innerRadius: 20e-9,
+    outerRadius: 50e-9,
+    bottomRadius: 50e-9,
+    topRadius: 25e-9,
+    majorRadius: 80e-9,
+    minorRadius: 20e-9,
+    archProfile: "parabolic_arch",
+    length: 500e-9,
+    width: 100e-9,
+    archHeight: 30e-9,
+    z0: 0,
+    archRadius: 150e-9,
+    archAngleRad: Math.PI / 3,
+    polygonVertices: defaultPolygon,
+    meshAssetPath: "",
+    meshUnitScale: 1e-9,
+    translation: [0, 0, 0],
+    eulerDeg: [0, 0, 0],
+    pivotMode: "centroid",
+    pivotCustom: [0, 0, 0],
+    uniformScale: true,
+    scale: [1, 1, 1],
+    csgOperation: "none",
+    csgToolObjectId: "",
+    csgKeepTool: false,
+    array3dConfig: null,
+    inlineNodePatches: {},
+    preservedComplexCsg: null,
+    preservedRawGeometry: null,
+    hasRealizedOrDirtyMesh: false,
+  };
+
   if (forceBuilderMode || selection.kind === "builder.primitive") {
     const slug = selection.nodeId?.split(":").at(-1) ?? "box";
     const primitiveKind = normalizePrimitiveKind(slug);
@@ -538,47 +600,12 @@ export function buildBaselineFromScene(
       scene,
     );
     return {
+      ...defaultBase,
       mode: "draft-new",
       objectId: "draft",
       draftName,
-      materialRef: null,
-      regionName: "",
+      materialRef: scene?.materials?.[0]?.id ?? null,
       primitiveKind,
-      compositeSummary: null,
-      symmetryAxis: "z",
-      sizeX: 100e-9,
-      sizeY: 100e-9,
-      sizeZ: 10e-9,
-      radius: 50e-9,
-      height: 10e-9,
-      innerRadius: 20e-9,
-      outerRadius: 50e-9,
-      bottomRadius: 50e-9,
-      topRadius: 25e-9,
-      majorRadius: 80e-9,
-      minorRadius: 20e-9,
-      archProfile: "parabolic_arch",
-      length: 500e-9,
-      width: 100e-9,
-      archHeight: 30e-9,
-      z0: 0,
-      archRadius: 150e-9,
-      archAngleRad: Math.PI / 3,
-      polygonVertices: defaultPolygon,
-      meshAssetPath: "",
-      meshUnitScale: 1e-9,
-      translation: [0, 0, 0],
-      eulerDeg: [0, 0, 0],
-      pivotMode: "centroid",
-      pivotCustom: [0, 0, 0],
-      uniformScale: true,
-      scale: [1, 1, 1],
-      csgOperation: "none",
-      csgToolObjectId: "",
-      csgKeepTool: false,
-      preservedComplexCsg: null,
-      preservedRawGeometry: null,
-      hasRealizedOrDirtyMesh: false,
       meshStatusPill: { tone: "info", label: "New draft" },
     };
   }
@@ -590,47 +617,12 @@ export function buildBaselineFromScene(
   const sceneObj = scene?.objects?.find((o) => o.id === objectId);
   if (!sceneObj) {
     return {
+      ...defaultBase,
       mode: "missing",
       objectId: objectId || "none",
       draftName: selection.label ?? "Geometry",
       materialRef: null,
-      regionName: "",
       primitiveKind: "Box",
-      compositeSummary: null,
-      symmetryAxis: "z",
-      sizeX: 100e-9,
-      sizeY: 100e-9,
-      sizeZ: 10e-9,
-      radius: 50e-9,
-      height: 10e-9,
-      innerRadius: 20e-9,
-      outerRadius: 50e-9,
-      bottomRadius: 50e-9,
-      topRadius: 25e-9,
-      majorRadius: 80e-9,
-      minorRadius: 20e-9,
-      archProfile: "parabolic_arch",
-      length: 500e-9,
-      width: 100e-9,
-      archHeight: 30e-9,
-      z0: 0,
-      archRadius: 150e-9,
-      archAngleRad: Math.PI / 3,
-      polygonVertices: defaultPolygon,
-      meshAssetPath: "",
-      meshUnitScale: 1e-9,
-      translation: [0, 0, 0],
-      eulerDeg: [0, 0, 0],
-      pivotMode: "centroid",
-      pivotCustom: [0, 0, 0],
-      uniformScale: true,
-      scale: [1, 1, 1],
-      csgOperation: "none",
-      csgToolObjectId: "",
-      csgKeepTool: false,
-      preservedComplexCsg: null,
-      preservedRawGeometry: null,
-      hasRealizedOrDirtyMesh: false,
       meshStatusPill: { tone: "warn", label: "Not found" },
     };
   }
@@ -712,6 +704,7 @@ export function buildBaselineFromScene(
         })
       : defaultPolygon;
 
+  const parsedRootArray = parseArray3DGeometry(geom);
   const csgOpRec = (geom?.csg_operation ?? null) as Record<string, unknown> | null;
   const csgTreeRec = (geom?.csg_tree ?? null) as JsonObject | null;
   const tags = Array.isArray(sceneObj.tags) ? sceneObj.tags : [];
@@ -801,6 +794,14 @@ export function buildBaselineFromScene(
         : "none",
     csgToolObjectId: typeof csgOpRec?.tool_object_id === "string" ? csgOpRec.tool_object_id : "",
     csgKeepTool: Boolean(csgOpRec?.keep_tool),
+    array3dConfig: parsedRootArray
+      ? {
+          axes: parsedRootArray.axes,
+          mergeOverlapping: parsedRootArray.mergeOverlapping,
+          realization: "modifier_in_object",
+        }
+      : null,
+    inlineNodePatches: {},
     preservedComplexCsg: csgTreeRec,
     preservedRawGeometry: geom,
     hasRealizedOrDirtyMesh,

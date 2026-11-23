@@ -1,16 +1,14 @@
 "use client";
 
-import { ChevronDown, ChevronRight, Grid3X3 } from "lucide-react";
+import { ChevronDown, ChevronRight, X } from "lucide-react";
 import { useCallback, useMemo, useState } from "react";
 
-import type { SceneResource } from "@/kernel/api/apiTypes";
 import {
   applyArray3DPreset,
   axisSpanM,
   computeArray3DBudgetStatus,
   computeArray3DInstanceCount,
   computeArray3DWorldBounds,
-  defaultArray3DAxes,
   MAX_ARRAY_AXIS_COUNT,
   MAX_EXPANDED_SCENE_OBJECTS,
   parseArray3DGeometry,
@@ -21,21 +19,16 @@ import {
   type ArrayRealizationMode,
   type Vec3Tuple,
 } from "@/kernel/authoring/array3dModel";
-import {
-  acknowledgedAuthoringSceneRevision,
-  invalidateAuthoringMutationDependents,
-} from "@/kernel/authoring/authoringMutationInvalidation";
-import { applyArray3DTransaction } from "@/kernel/authoring/geometryLifecycleCommands";
-import { publishCommittedSceneResource } from "@/kernel/resources/geometryLifecycleResources";
-import type { KernelApi } from "@/kernel/types";
-import { parseCompositeGeometry } from "@/modules/explorer/builders/geometryTreeExplorerNodes";
 import { computeSceneGeometryBoundsMeters } from "@/shared/domain/geometry/sceneGeometryBounds";
 import { Badge } from "@/shared/ui/Badge";
 import { Button } from "@/shared/ui/Button";
 import { Input } from "@/shared/ui/Input";
+import { SegmentedControl } from "@/shared/ui/SegmentedControl";
 import { Switch } from "@/shared/ui/Switch";
 
-type DisplayLengthUnit = "nm" | "um" | "mm";
+import type { Array3DDraftConfig } from "./geometryShared";
+
+export type DisplayLengthUnit = "nm" | "um" | "mm";
 
 const UNIT_SCALE_M: Record<DisplayLengthUnit, number> = {
   mm: 1e-3,
@@ -49,6 +42,12 @@ const UNIT_LABELS: Record<DisplayLengthUnit, string> = {
   um: "\u00b5m",
 };
 
+const UNIT_OPTIONS: readonly { label: string; value: DisplayLengthUnit }[] = [
+  { label: "nm", value: "nm" },
+  { label: "\u00b5m", value: "um" },
+  { label: "mm", value: "mm" },
+];
+
 const PRESET_ITEMS: readonly { id: Array3DPresetId; label: string }[] = [
   { id: "rectangular_xy", label: "Rectangular XY" },
   { id: "hexagonal_xy", label: "Hexagonal XY" },
@@ -56,10 +55,14 @@ const PRESET_ITEMS: readonly { id: Array3DPresetId; label: string }[] = [
   { id: "stripe_1d", label: "1D Stripe" },
 ];
 
-const DIRECTION_ITEMS: readonly { label: string; value: ArrayDirection }[] = [
-  { label: "+", value: "positive" },
-  { label: "\u2212", value: "negative" },
-  { label: "\u00b1", value: "symmetric" },
+const DIRECTION_OPTIONS: readonly {
+  accessibleLabel: string;
+  label: string;
+  value: ArrayDirection;
+}[] = [
+  { accessibleLabel: "Positive direction", label: "+", value: "positive" },
+  { accessibleLabel: "Negative direction", label: "\u2212", value: "negative" },
+  { accessibleLabel: "Symmetric direction", label: "\u00b1", value: "symmetric" },
 ];
 
 function asRecord(value: unknown): Record<string, unknown> | null {
@@ -137,62 +140,46 @@ function parseDisplayNumber(raw: string, fallback: number): number {
 }
 
 export interface Array3DLatticeTableSectionProps {
-  kernel: KernelApi;
-  objectId: string;
-  sceneData: SceneResource | null | undefined;
-  sessionScopeKey: string | null;
-  targetOperandId?: string;
+  value: Array3DDraftConfig;
+  onChange: (next: Array3DDraftConfig) => void;
+  childBounds: { max: Vec3Tuple; min: Vec3Tuple; size: Vec3Tuple };
+  unit?: DisplayLengthUnit;
+  onUnitChange?: (unit: DisplayLengthUnit) => void;
+  disableExpandToObjects?: boolean;
+  disabled?: boolean;
+  onRemoveModifier?: () => void;
 }
 
+/**
+ * Controlled Array 3D lattice editor. All edits stage into the enclosing
+ * inspector draft and commit exclusively through the single footer CommitBar.
+ */
 export function Array3DLatticeTableSection({
-  kernel,
-  objectId,
-  sceneData,
-  sessionScopeKey,
-  targetOperandId,
+  value,
+  onChange,
+  childBounds,
+  unit: controlledUnit,
+  onUnitChange,
+  disableExpandToObjects = false,
+  disabled = false,
+  onRemoveModifier,
 }: Array3DLatticeTableSectionProps) {
-  const sceneObj = sceneData?.objects?.find((item) => item.id === objectId) ?? null;
-  const sceneGeometry = sceneObj?.geometry ?? null;
-  const targetGeometry = useMemo(() => {
-    if (!sceneGeometry) return null;
-    if (!targetOperandId) return sceneGeometry;
-    const composite = parseCompositeGeometry(sceneGeometry);
-    return (
-      composite.operands.find((op) => op.operandId === targetOperandId)?.geometry ?? null
-    );
-  }, [sceneGeometry, targetOperandId]);
-  const parsedExisting = useMemo(
-    () => parseArray3DGeometry(targetGeometry),
-    [targetGeometry],
-  );
-  const childBounds = useMemo(
-    () => resolveArray3DChildBoundsMeters(sceneObj, targetGeometry),
-    [sceneObj, targetGeometry],
-  );
-
-  const targetKey = `${objectId}:${targetOperandId ?? ""}`;
-  const [prevTargetKey, setPrevTargetKey] = useState(targetKey);
-  const [axes, setAxes] = useState<Array3DAxes>(
-    () => parsedExisting?.axes ?? defaultArray3DAxes(),
-  );
-  const [unit, setUnit] = useState<DisplayLengthUnit>("nm");
-  const [realization, setRealization] = useState<ArrayRealizationMode>("modifier_in_object");
-  const [mergeOverlapping, setMergeOverlapping] = useState<boolean>(
-    () => parsedExisting?.mergeOverlapping ?? false,
-  );
-  if (prevTargetKey !== targetKey) {
-    setPrevTargetKey(targetKey);
-    setAxes(parsedExisting?.axes ?? defaultArray3DAxes());
-    setMergeOverlapping(parsedExisting?.mergeOverlapping ?? false);
-  }
+  const [fallbackUnit, setFallbackUnit] = useState<DisplayLengthUnit>("nm");
   const [showAdvancedTable, setShowAdvancedTable] = useState(false);
-  const [busy, setBusy] = useState(false);
-  const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
-  const baseRevision =
-    typeof sceneData?.revision === "number" && Number.isFinite(sceneData.revision)
-      ? sceneData.revision
-      : null;
+  const unit = controlledUnit ?? fallbackUnit;
+  const handleUnitChange = useCallback(
+    (nextUnit: DisplayLengthUnit) => {
+      if (onUnitChange) {
+        onUnitChange(nextUnit);
+      } else {
+        setFallbackUnit(nextUnit);
+      }
+    },
+    [onUnitChange],
+  );
+
+  const { axes, mergeOverlapping, realization } = value;
 
   const totalInstances = useMemo(() => computeArray3DInstanceCount(axes), [axes]);
   const budget = useMemo(
@@ -206,13 +193,11 @@ export function Array3DLatticeTableSection({
 
   const updateAxis = useCallback(
     (index: 0 | 1 | 2, patch: Partial<ArrayAxisSpec>) => {
-      setAxes((current) => {
-        const next: Array3DAxes = [current[0], current[1], current[2]];
-        next[index] = { ...current[index], ...patch };
-        return next;
-      });
+      const nextAxes: Array3DAxes = [axes[0], axes[1], axes[2]];
+      nextAxes[index] = { ...axes[index], ...patch };
+      onChange({ ...value, axes: nextAxes });
     },
-    [],
+    [axes, onChange, value],
   );
 
   const updateAxisTuple = useCallback(
@@ -220,75 +205,36 @@ export function Array3DLatticeTableSection({
       index: 0 | 1 | 2,
       field: "step_translation_extra_m" | "step_rotation_euler_deg" | "step_scale_factor",
       component: 0 | 1 | 2,
-      value: number,
+      nextComponentValue: number,
     ) => {
-      setAxes((current) => {
-        const next: Array3DAxes = [current[0], current[1], current[2]];
-        const tuple: Vec3Tuple = [...current[index][field]];
-        tuple[component] = value;
-        next[index] = { ...current[index], [field]: tuple };
-        return next;
-      });
+      const nextAxes: Array3DAxes = [axes[0], axes[1], axes[2]];
+      const tuple: Vec3Tuple = [...axes[index][field]];
+      tuple[component] = nextComponentValue;
+      nextAxes[index] = { ...axes[index], [field]: tuple };
+      onChange({ ...value, axes: nextAxes });
     },
-    [],
+    [axes, onChange, value],
   );
 
   const handleApplyPreset = useCallback(
     (presetId: Array3DPresetId) => {
       const pitchRef = Math.max(childBounds.size[0], childBounds.size[1], 100e-9);
-      setAxes(applyArray3DPreset(presetId, pitchRef));
+      onChange({ ...value, axes: applyArray3DPreset(presetId, pitchRef) });
     },
-    [childBounds.size],
+    [childBounds.size, onChange, value],
   );
 
-  const handleApplyArray = useCallback(async () => {
-    if (busy || baseRevision === null || budget.level === "error") return;
-    setBusy(true);
-    setErrorMessage(null);
-    try {
-      const response = await applyArray3DTransaction(
-        kernel.api,
-        {
-          axes,
-          base_revision: baseRevision,
-          merge_overlapping: mergeOverlapping,
-          object_id: objectId,
-          realization,
-          ...(targetOperandId ? { target_operand_id: targetOperandId } : {}),
-        },
-        sessionScopeKey ? { sessionScopeKey } : undefined,
-      );
-      const rev = acknowledgedAuthoringSceneRevision(response);
-      publishCommittedSceneResource(
-        kernel.resources,
-        response.committed_scene,
-        rev,
-        undefined,
-        false,
-        sessionScopeKey,
-        kernel.api.resourceCacheScope,
-      );
-      invalidateAuthoringMutationDependents(kernel.resources, "geometry", rev);
-    } catch (error) {
-      setErrorMessage(
-        error instanceof Error ? error.message : "Could not apply Array 3D lattice.",
-      );
-    } finally {
-      setBusy(false);
-    }
-  }, [
-    axes,
-    baseRevision,
-    budget.level,
-    busy,
-    kernel.api,
-    kernel.resources,
-    mergeOverlapping,
-    objectId,
-    realization,
-    sessionScopeKey,
-    targetOperandId,
-  ]);
+  const realizationOptions = useMemo(
+    () => [
+      { label: "Modifier in Object", value: "modifier_in_object" as ArrayRealizationMode },
+      {
+        disabled: !budget.canExpandToObjects || disableExpandToObjects,
+        label: `Expand to Objects (\u2264 ${MAX_EXPANDED_SCENE_OBJECTS})`,
+        value: "expand_to_objects" as ArrayRealizationMode,
+      },
+    ],
+    [budget.canExpandToObjects, disableExpandToObjects],
+  );
 
   const unitScale = UNIT_SCALE_M[unit];
 
@@ -303,6 +249,7 @@ export function Array3DLatticeTableSection({
           {PRESET_ITEMS.map((preset) => (
             <Button
               key={preset.id}
+              disabled={disabled}
               size="sm"
               type="button"
               variant="secondary"
@@ -312,18 +259,28 @@ export function Array3DLatticeTableSection({
             </Button>
           ))}
         </div>
-        <div className="flex items-center gap-1" role="group" aria-label="Lattice length unit">
-          {(["nm", "um", "mm"] as const).map((candidate) => (
+        <div className="flex items-center gap-1.5">
+          <SegmentedControl
+            aria-label="Lattice length unit"
+            className="w-28"
+            columns={3}
+            options={UNIT_OPTIONS}
+            value={unit}
+            onValueChange={handleUnitChange}
+          />
+          {onRemoveModifier ? (
             <Button
-              key={candidate}
+              aria-label="Remove Array 3D modifier"
+              disabled={disabled}
               size="sm"
               type="button"
-              variant={unit === candidate ? "primary" : "ghost"}
-              onClick={() => setUnit(candidate)}
+              variant="ghost"
+              onClick={onRemoveModifier}
             >
-              {UNIT_LABELS[candidate]}
+              <X aria-hidden="true" size={13} />
+              <span>Remove</span>
             </Button>
-          ))}
+          ) : null}
         </div>
       </div>
 
@@ -353,6 +310,7 @@ export function Array3DLatticeTableSection({
               const axisUpper = spec.axis.toUpperCase();
               const isGap = spec.spacing_mode === "bounding_box_gap";
               const spanMeters = axisSpanM(spec, childBounds.size);
+              const axisDisabled = disabled || !spec.enabled;
               return (
                 <tr
                   key={spec.axis}
@@ -369,6 +327,7 @@ export function Array3DLatticeTableSection({
                     <Switch
                       aria-label={`Enable ${axisUpper} axis`}
                       checked={spec.enabled}
+                      disabled={disabled}
                       onCheckedChange={(checked) =>
                         updateAxis(idx, {
                           count: checked && spec.count < 2 ? 2 : spec.count,
@@ -381,7 +340,7 @@ export function Array3DLatticeTableSection({
                     <Input
                       aria-label={`${axisUpper} count`}
                       className="fm-array3d-input--count w-16"
-                      disabled={!spec.enabled}
+                      disabled={axisDisabled}
                       max={MAX_ARRAY_AXIS_COUNT}
                       min={1}
                       step={1}
@@ -400,30 +359,24 @@ export function Array3DLatticeTableSection({
                     />
                   </td>
                   <td className="fm-array3d-cell px-2 py-1.5" data-label="Direction">
-                    <div className="flex items-center gap-0.5">
-                      {DIRECTION_ITEMS.map((dir) => (
-                        <Button
-                          key={dir.value}
-                          aria-label={`${axisUpper} direction ${dir.value}`}
-                          disabled={!spec.enabled}
-                          size="sm"
-                          type="button"
-                          variant={spec.direction === dir.value ? "primary" : "ghost"}
-                          onClick={() => updateAxis(idx, { direction: dir.value })}
-                        >
-                          {dir.label}
-                        </Button>
-                      ))}
-                    </div>
+                    <SegmentedControl
+                      aria-label={`${axisUpper} direction`}
+                      className="w-24"
+                      columns={3}
+                      disabled={axisDisabled}
+                      options={DIRECTION_OPTIONS}
+                      value={spec.direction}
+                      onValueChange={(nextDir) => updateAxis(idx, { direction: nextDir })}
+                    />
                   </td>
                   <td
                     className="fm-array3d-cell px-2 py-1.5"
-                    data-label={`${isGap ? "Gap g" : "Pitch Δ"} (${UNIT_LABELS[unit]})`}
+                    data-label={`${isGap ? "Gap g" : "Pitch \u0394"} (${UNIT_LABELS[unit]})`}
                   >
                     <div className="fm-array3d-pitch-group flex items-center gap-1">
                       <Button
                         aria-label={`Toggle ${axisUpper} spacing mode`}
-                        disabled={!spec.enabled}
+                        disabled={axisDisabled}
                         size="sm"
                         type="button"
                         variant="secondary"
@@ -438,7 +391,7 @@ export function Array3DLatticeTableSection({
                       <Input
                         aria-label={`${axisUpper} ${isGap ? "gap" : "pitch"} (${UNIT_LABELS[unit]})`}
                         className="fm-array3d-input--pitch w-20"
-                        disabled={!spec.enabled}
+                        disabled={axisDisabled}
                         step="any"
                         type="number"
                         value={formatInUnit(isGap ? spec.gap_m : spec.pitch_m, unit)}
@@ -502,6 +455,7 @@ export function Array3DLatticeTableSection({
                 {([0, 1, 2] as const).map((idx) => {
                   const spec = axes[idx];
                   const axisUpper = spec.axis.toUpperCase();
+                  const axisDisabled = disabled || !spec.enabled;
                   return (
                     <tr
                       key={spec.axis}
@@ -523,7 +477,7 @@ export function Array3DLatticeTableSection({
                               key={c}
                               aria-label={`${axisUpper} extra offset ${["x", "y", "z"][c]}`}
                               className="w-14"
-                              disabled={!spec.enabled}
+                              disabled={axisDisabled}
                               step="any"
                               type="number"
                               value={formatInUnit(spec.step_translation_extra_m[c], unit)}
@@ -541,7 +495,7 @@ export function Array3DLatticeTableSection({
                       </td>
                       <td
                         className="fm-array3d-cell fm-array3d-cell--stacked px-2 py-1.5"
-                        data-label="Step Rotation (°)"
+                        data-label="Step Rotation (\u00b0)"
                       >
                         <div className="fm-array3d-tuple-grid flex items-center gap-1">
                           {([0, 1, 2] as const).map((c) => (
@@ -549,7 +503,7 @@ export function Array3DLatticeTableSection({
                               key={c}
                               aria-label={`${axisUpper} step rotation ${["x", "y", "z"][c]}`}
                               className="w-14"
-                              disabled={!spec.enabled}
+                              disabled={axisDisabled}
                               step="any"
                               type="number"
                               value={spec.step_rotation_euler_deg[c]}
@@ -574,7 +528,7 @@ export function Array3DLatticeTableSection({
                               key={c}
                               aria-label={`${axisUpper} step scale ${["x", "y", "z"][c]}`}
                               className="w-14"
-                              disabled={!spec.enabled}
+                              disabled={axisDisabled}
                               min={0.01}
                               step={0.05}
                               type="number"
@@ -604,36 +558,31 @@ export function Array3DLatticeTableSection({
 
       {/* Realization Mode & Merge Overlapping */}
       <div className="flex flex-wrap items-center justify-between gap-2 rounded border border-[var(--fm-border-subtle)] bg-[var(--fm-surface-subtle)] p-2">
-        <div className="flex flex-wrap items-center gap-1">
-          <Button
-            size="sm"
-            type="button"
-            variant={realization === "modifier_in_object" ? "primary" : "secondary"}
-            onClick={() => setRealization("modifier_in_object")}
-          >
-            Modifier in Object
-          </Button>
-          <Button
-            disabled={!budget.canExpandToObjects || Boolean(targetOperandId)}
-            size="sm"
-            type="button"
-            variant={realization === "expand_to_objects" ? "primary" : "secondary"}
-            onClick={() => setRealization("expand_to_objects")}
-          >
-            Expand to Objects (&le; {MAX_EXPANDED_SCENE_OBJECTS})
-          </Button>
-        </div>
+        <SegmentedControl
+          aria-label="Array 3D realization mode"
+          className="min-w-0 flex-1"
+          columns={2}
+          disabled={disabled}
+          options={realizationOptions}
+          value={realization}
+          onValueChange={(nextRealization) =>
+            onChange({ ...value, realization: nextRealization })
+          }
+        />
         <div className="flex items-center gap-2 text-xs text-[var(--fm-text-secondary)]">
           <span>Merge overlapping</span>
           <Switch
             aria-label="Merge overlapping instances"
             checked={mergeOverlapping}
-            onCheckedChange={(checked) => setMergeOverlapping(Boolean(checked))}
+            disabled={disabled}
+            onCheckedChange={(checked) =>
+              onChange({ ...value, mergeOverlapping: Boolean(checked) })
+            }
           />
         </div>
       </div>
 
-      {/* Lattice Summary Bar */}
+      {/* Lattice Summary Bar (staged into footer CommitBar — no nested Apply button) */}
       <div
         className="flex flex-wrap items-center justify-between gap-2 rounded border border-[var(--fm-border-subtle)] px-2.5 py-2 text-xs"
         data-slot="array3d-lattice-summary"
@@ -656,27 +605,9 @@ export function Array3DLatticeTableSection({
             {formatInUnit(worldBounds.size[2], unit)} {UNIT_LABELS[unit]}
           </span>
         </div>
-        <Button
-          disabled={busy || baseRevision === null || budget.level === "error"}
-          size="sm"
-          type="button"
-          variant="primary"
-          onClick={() => {
-            void handleApplyArray();
-          }}
-        >
-          <Grid3X3 size={13} />
-          <span>{busy ? "Applying…" : "Apply Array 3D"}</span>
-        </Button>
       </div>
 
       <p className="text-xs text-[var(--fm-text-muted)]">{budget.message}</p>
-
-      {errorMessage ? (
-        <p className="text-xs text-[var(--fm-danger)]" role="alert">
-          {errorMessage}
-        </p>
-      ) : null}
     </div>
   );
 }

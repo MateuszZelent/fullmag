@@ -6,6 +6,7 @@ import {
   invalidateAuthoringMutationDependents,
 } from "@/kernel/authoring/authoringMutationInvalidation";
 import {
+  applyArray3DTransaction,
   createObjectTransaction,
   patchObjectGeometryTransaction,
   primitiveDraftOverlayStore,
@@ -243,21 +244,38 @@ export async function applyGeometryDraftMutation({
     );
   }
 
+  const expandArrayToObjects =
+    draft.array3dConfig?.realization === "expand_to_objects";
+
   try {
     const response = await runAuthoringMutationWithHistory(
       historyContext,
-      `Edit geometry and placement ${draft.draftName}`,
+      expandArrayToObjects
+        ? `Expand Array 3D ${draft.draftName}`
+        : `Edit geometry and placement ${draft.draftName}`,
       ({ baseRevision }) =>
-        patchObjectGeometryTransaction(
-          kernel.api,
-          draft.objectId,
-          {
-            base_revision: baseRevision ?? sceneRevision,
-            geometry,
-            transform,
-          },
-          requestOptions,
-        ),
+        expandArrayToObjects && draft.array3dConfig
+          ? applyArray3DTransaction(
+              kernel.api,
+              {
+                axes: draft.array3dConfig.axes,
+                base_revision: baseRevision ?? sceneRevision ?? 0,
+                merge_overlapping: draft.array3dConfig.mergeOverlapping,
+                object_id: draft.objectId,
+                realization: "expand_to_objects",
+              },
+              requestOptions,
+            )
+          : patchObjectGeometryTransaction(
+              kernel.api,
+              draft.objectId,
+              {
+                base_revision: baseRevision ?? sceneRevision,
+                geometry,
+                transform,
+              },
+              requestOptions,
+            ),
       undefined,
       sceneRevision !== null ? { expectedSceneRevision: sceneRevision } : undefined,
     );

@@ -14,6 +14,8 @@ import {
   normalizeZero,
   parseSymmetryAxis,
   vec3ApproxEqual,
+  type Array3DDraftConfig,
+  type InlineOperandEditPatch,
 } from "./geometryShared";
 
 export type EditableNodePrimitiveKind =
@@ -84,6 +86,7 @@ export interface GeometryNodePatch {
   readonly translation?: readonly [number, number, number];
   readonly eulerDeg?: readonly [number, number, number];
   readonly scale?: readonly [number, number, number];
+  readonly array3dConfig?: Array3DDraftConfig | null;
 }
 
 export interface ExtractedTransformVectors {
@@ -439,6 +442,62 @@ function mergeNodeTransform(
   return next;
 }
 
+export function applyArray3DConfigToGeometry(
+  rawGeom: Record<string, unknown>,
+  array3dConfig: Array3DDraftConfig | null | undefined,
+): Record<string, unknown> {
+  if (array3dConfig === undefined) return rawGeom;
+
+  if (isTransformWrapper(rawGeom)) {
+    const paramsKey = geometryParamsKeyOf(rawGeom);
+    const params = geometryParamsOf(rawGeom);
+    const childKey = wrapperChildKey(params);
+    if (!childKey) return rawGeom;
+    const child = asRecord(params[childKey]);
+    if (!child) return rawGeom;
+    return {
+      ...rawGeom,
+      [paramsKey]: {
+        ...params,
+        [childKey]: applyArray3DConfigToGeometry(child, array3dConfig),
+      },
+    };
+  }
+
+  const kind = geometryKindOf(rawGeom).trim().toLowerCase();
+  const isArray = kind === "array3d" || kind === "array_3d";
+
+  if (array3dConfig === null) {
+    if (!isArray) return rawGeom;
+    const params = geometryParamsOf(rawGeom);
+    const childKey = wrapperChildKey(params);
+    const child = childKey ? asRecord(params[childKey]) : null;
+    return child ?? rawGeom;
+  }
+
+  if (isArray) {
+    const paramsKey = geometryParamsKeyOf(rawGeom);
+    const params = geometryParamsOf(rawGeom);
+    return {
+      ...rawGeom,
+      [paramsKey]: {
+        ...params,
+        axes: array3dConfig.axes,
+        merge_overlapping: array3dConfig.mergeOverlapping,
+      },
+    };
+  }
+
+  return {
+    geometry_kind: "Array3D",
+    geometry_params: {
+      axes: array3dConfig.axes,
+      child: rawGeom,
+      merge_overlapping: array3dConfig.mergeOverlapping,
+    },
+  };
+}
+
 function patchPrimitiveGeometry(
   rawGeom: Record<string, unknown>,
   patch: GeometryNodePatch,
@@ -460,7 +519,9 @@ function patchPrimitiveGeometry(
   }
 
   const editableKind = normalizeEditablePrimitiveKind(geometryKindOf(rawGeom));
-  if (!editableKind) return rawGeom;
+  if (!editableKind) {
+    return applyArray3DConfigToGeometry(rawGeom, patch.array3dConfig);
+  }
 
   const paramsKey = geometryParamsKeyOf(rawGeom);
   const prevParams = geometryParamsOf(rawGeom);
@@ -531,10 +592,11 @@ function patchPrimitiveGeometry(
       break;
   }
 
-  return {
+  const patchedPrimitive: Record<string, unknown> = {
     ...rawGeom,
     [paramsKey]: nextParams,
   };
+  return applyArray3DConfigToGeometry(patchedPrimitive, patch.array3dConfig);
 }
 
 function patchWrappedGeometryAndTransform(
@@ -766,4 +828,28 @@ export function patchGeometryNodeAtPath(
   if (segments.length === 0) return null;
   const updated = patchAtSegments(rootRecord, segments, patch);
   return updated ? (updated as JsonObject) : null;
+}
+
+/**
+ * Apply a map of staged inline node patches (keyed by node path) to a composite
+ * geometry tree, deepest paths first so child edits survive parent Array3D updates.
+ */
+export function applyInlineNodePatchesToGeometry(
+  rootGeometry: JsonObject,
+  patches: Readonly<Record<string, InlineOperandEditPatch>>,
+): JsonObject {
+  const entries = Object.entries(patches).filter(([, patch]) => Object.keys(patch).length > 0);
+  if (entries.length === 0) return rootGeometry;
+  entries.sort(
+    ([pathA], [pathB]) =>
+      parseGeometryNodePath(pathB).length - parseGeometryNodePath(pathA).length,
+  );
+  let current: JsonObject = rootGeometry;
+  for (const [nodePath, patch] of entries) {
+    const next = patchGeometryNodeAtPath(current, nodePath, patch);
+    if (next) {
+      current = next;
+    }
+  }
+  return current;
 }

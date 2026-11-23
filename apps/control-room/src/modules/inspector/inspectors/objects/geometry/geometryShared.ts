@@ -3,6 +3,8 @@ import {
   array3DDimensionsLabel,
   computeArray3DInstanceCount,
   parseArray3DGeometry,
+  type Array3DAxes,
+  type ArrayRealizationMode,
 } from "@/kernel/authoring/array3dModel";
 import type { GeometryObjectDraft } from "@/kernel/authoring/object-edit/objectEditTypes";
 import { parseDraftQuantityField } from "@/kernel/authoring/object-edit/quantityDraftFields";
@@ -107,6 +109,31 @@ export function buildCompositeGeometrySummary(
   };
 }
 
+export interface Array3DDraftConfig {
+  readonly axes: Array3DAxes;
+  readonly mergeOverlapping: boolean;
+  readonly realization: ArrayRealizationMode;
+}
+
+export interface InlineOperandEditPatch {
+  readonly enabled?: boolean;
+  readonly label?: string;
+  readonly symmetryAxis?: "x" | "y" | "z";
+  readonly sizeX?: number;
+  readonly sizeY?: number;
+  readonly sizeZ?: number;
+  readonly radius?: number;
+  readonly height?: number;
+  readonly bottomRadius?: number;
+  readonly topRadius?: number;
+  readonly majorRadius?: number;
+  readonly minorRadius?: number;
+  readonly translation?: readonly [number, number, number];
+  readonly eulerDeg?: readonly [number, number, number];
+  readonly scale?: readonly [number, number, number];
+  readonly array3dConfig?: Array3DDraftConfig | null;
+}
+
 export interface ObjectGeometrySpecDraft {
   mode: "committed" | "draft-new" | "missing";
   objectId: string;
@@ -152,10 +179,12 @@ export interface ObjectGeometrySpecDraft {
   pivotCustom: readonly [number, number, number];
   uniformScale: boolean;
   scale: readonly [number, number, number];
-  // Boolean CSG
+  // Boolean CSG & Staged Modifiers / Inline Stack Edits
   csgOperation: CsgOperationMode;
   csgToolObjectId: string;
   csgKeepTool: boolean;
+  array3dConfig: Array3DDraftConfig | null;
+  inlineNodePatches: Readonly<Record<string, InlineOperandEditPatch>>;
   preservedComplexCsg: JsonObject | null;
   preservedRawGeometry: JsonObject | null;
   hasRealizedOrDirtyMesh: boolean;
@@ -478,8 +507,16 @@ export function isUniformPositiveScale(
 }
 
 export function canBakeScaleIntoDraft(
-  draft: Pick<ObjectGeometrySpecDraft, "primitiveKind" | "scale">,
+  draft: Pick<ObjectGeometrySpecDraft, "primitiveKind" | "scale"> & {
+    compositeSummary?: CompositeGeometrySummary | null;
+  },
 ): { ok: true } | { ok: false; reason: string } {
+  if (draft.compositeSummary != null) {
+    return {
+      ok: false,
+      reason: "Bake Scale applies to primitive solids only.",
+    };
+  }
   if (draft.scale.some((c) => !Number.isFinite(c) || c <= 0)) {
     return {
       ok: false,
@@ -498,6 +535,9 @@ export function canBakeScaleIntoDraft(
 export function bakeScaleIntoDraft(
   draft: ObjectGeometrySpecDraft,
 ): Partial<ObjectGeometrySpecDraft> {
+  if (draft.compositeSummary != null) {
+    return {};
+  }
   const [sx, sy, sz] = draft.scale;
   if (!Number.isFinite(sx) || !Number.isFinite(sy) || !Number.isFinite(sz)) {
     return {};
