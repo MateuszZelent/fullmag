@@ -17,7 +17,8 @@ use crate::current_transport::{
 use crate::error::PlanError;
 use crate::mesh::{
     build_air_box_config, build_mesh_parts_from_segments, compatible_fem_material,
-    geometry_object_translation, initial_vectors_for_magnet, load_mesh_from_source,
+    geometry_object_translation, geometry_texture_target_bounds_in_object_space,
+    initial_vectors_for_magnet, load_mesh_from_source,
     merge_fem_meshes, mesh_bounds, object_space_sample_points, reject_unsupported_mixed_topology,
     resolve_fem_domain_mesh_asset, resolve_object_region_marker, resolved_domain_mesh_mode,
     study_universe_planner_note, MagnetPlanningEntry, AIR_OBJECT_SEGMENT_ID,
@@ -236,10 +237,14 @@ fn fem_magnet_planning_entries(problem: &ProblemIR) -> Result<Vec<MagnetPlanning
                         magnet.name, geometry_name
                     )],
                 })?;
+            let texture_target_bounds =
+                geometry_texture_target_bounds_in_object_space(geometry_entry);
             Ok(MagnetPlanningEntry {
                 magnet_name: magnet.name.clone(),
                 geometry_name: geometry_name.to_string(),
                 object_translation: geometry_object_translation(geometry_entry),
+                texture_region_center_object: texture_target_bounds.map(|(center, _)| center),
+                texture_target_bounds_extent: texture_target_bounds.map(|(_, extent)| extent),
                 initial_magnetization: magnet.initial_magnetization.clone(),
             })
         })
@@ -657,6 +662,8 @@ mod fem_region_texture_tests {
             magnet_name: "strip".to_string(),
             geometry_name: "strip".to_string(),
             object_translation: [0.0; 3],
+            texture_region_center_object: None,
+            texture_target_bounds_extent: None,
             initial_magnetization: None,
         }];
 
@@ -3337,6 +3344,8 @@ pub(crate) fn assign_domain_initial_for_segments(
         sample_points.len(),
         Some(&sample_points),
         Some(&sample_points_object),
+        entry.texture_region_center_object,
+        entry.texture_target_bounds_extent,
     )
     .map_err(|message| PlanError {
         reasons: vec![message],
@@ -4294,10 +4303,14 @@ pub(crate) fn plan_fem(
         }
         magnet_materials.insert(magnet.name.clone(), material.clone());
 
+        let texture_target_bounds =
+            geometry_texture_target_bounds_in_object_space(geometry_entry);
         magnet_entries.push(MagnetPlanningEntry {
             magnet_name: magnet.name.clone(),
             geometry_name: geometry_name.to_string(),
             object_translation: geometry_object_translation(geometry_entry),
+            texture_region_center_object: texture_target_bounds.map(|(center, _)| center),
+            texture_target_bounds_extent: texture_target_bounds.map(|(_, extent)| extent),
             initial_magnetization: magnet.initial_magnetization.clone(),
         });
 
@@ -4362,6 +4375,8 @@ pub(crate) fn plan_fem(
             mesh.nodes.len(),
             Some(&mesh.nodes),
             Some(&sample_points_object),
+            texture_target_bounds.map(|(center, _)| center),
+            texture_target_bounds.map(|(_, extent)| extent),
         ) {
             Ok(initial_magnetization) => merged_initial_magnetization.extend(initial_magnetization),
             Err(message) => errors.push(message),
@@ -6068,10 +6083,14 @@ pub(crate) fn plan_fem_eigen(
             selected_material = Some(material.clone());
         }
 
+        let texture_target_bounds =
+            geometry_texture_target_bounds_in_object_space(geometry_entry);
         magnet_entries.push(MagnetPlanningEntry {
             magnet_name: magnet.name.clone(),
             geometry_name: geometry_name.to_string(),
             object_translation: geometry_object_translation(geometry_entry),
+            texture_region_center_object: texture_target_bounds.map(|(center, _)| center),
+            texture_target_bounds_extent: texture_target_bounds.map(|(_, extent)| extent),
             initial_magnetization: magnet.initial_magnetization.clone(),
         });
 
@@ -6136,6 +6155,8 @@ pub(crate) fn plan_fem_eigen(
             mesh.nodes.len(),
             Some(&mesh.nodes),
             Some(&sample_points_object),
+            texture_target_bounds.map(|(center, _)| center),
+            texture_target_bounds.map(|(_, extent)| extent),
         ) {
             Ok(values) => merged_equilibrium.extend(values),
             Err(message) => errors.push(message),

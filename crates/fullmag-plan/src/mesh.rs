@@ -11,7 +11,7 @@ use std::path::Path;
 use std::sync::{Mutex, OnceLock};
 
 use crate::magnetization_textures::TextureSamplePoint;
-use crate::magnetization_textures_v2::sample_preset_texture_versioned;
+use crate::magnetization_textures_v2::sample_preset_texture_versioned_with_bounds;
 use crate::util::{generate_random_unit_vectors, study_universe_metadata, StudyUniverseMetadata};
 
 pub(crate) const AIR_OBJECT_SEGMENT_ID: &str = "__air__";
@@ -277,6 +277,8 @@ pub(crate) struct MagnetPlanningEntry {
     pub magnet_name: String,
     pub geometry_name: String,
     pub object_translation: [f64; 3],
+    pub texture_region_center_object: Option<[f64; 3]>,
+    pub texture_target_bounds_extent: Option<[f64; 3]>,
     pub initial_magnetization: Option<InitialMagnetizationIR>,
 }
 
@@ -290,6 +292,69 @@ pub(crate) fn geometry_object_translation(entry: &fullmag_ir::GeometryEntryIR) -
         current = base.as_ref();
     }
     translation
+}
+
+pub(crate) fn shape_texture_target_bounds_in_object_space(
+    shape: &crate::geometry::GeometryShape,
+    object_translation: [f64; 3],
+) -> Option<([f64; 3], [f64; 3])> {
+    // This is the local AABB midpoint used by the inspector's
+    // TargetMetricBounds.localCenter; object-space samples subtract only the
+    // top-level translation, so the bounds must use that same frame.
+    let (bounds_min, bounds_max) = crate::geometry::shape_local_bounds(shape)?;
+    let center = std::array::from_fn(|axis| {
+        0.5 * (bounds_min[axis] + bounds_max[axis]) - object_translation[axis]
+    });
+    let extent = std::array::from_fn(|axis| {
+        (bounds_max[axis] - bounds_min[axis]).max(1.0e-12)
+    });
+    Some((center, extent))
+}
+
+pub(crate) fn shape_texture_region_center_in_object_space(
+    shape: &crate::geometry::GeometryShape,
+    object_translation: [f64; 3],
+) -> Option<[f64; 3]> {
+    shape_texture_target_bounds_in_object_space(shape, object_translation)
+        .map(|(center, _)| center)
+}
+
+pub(crate) fn geometry_texture_target_bounds_in_object_space(
+    entry: &fullmag_ir::GeometryEntryIR,
+) -> Option<([f64; 3], [f64; 3])> {
+    let shape = crate::geometry::ir_to_shape(entry).ok()?;
+    shape_texture_target_bounds_in_object_space(&shape, geometry_object_translation(entry))
+}
+
+fn sample_points_object_aabb_center(points: &[TextureSamplePoint]) -> Option<[f64; 3]> {
+    let mut bounds_min = [f64::INFINITY; 3];
+    let mut bounds_max = [f64::NEG_INFINITY; 3];
+    let mut any_active = false;
+    for point in points.iter().filter(|point| point.active) {
+        if point.position_object.iter().any(|value| !value.is_finite()) {
+            return None;
+        }
+        any_active = true;
+        for axis in 0..3 {
+            bounds_min[axis] = bounds_min[axis].min(point.position_object[axis]);
+            bounds_max[axis] = bounds_max[axis].max(point.position_object[axis]);
+        }
+    }
+    any_active.then(|| {
+        std::array::from_fn(|axis| 0.5 * (bounds_min[axis] + bounds_max[axis]))
+    })
+}
+
+pub(crate) fn set_texture_sample_region_positions(
+    points: &mut [TextureSamplePoint],
+    target_center_object: Option<[f64; 3]>,
+) {
+    let center = target_center_object.or_else(|| sample_points_object_aabb_center(points));
+    for point in points {
+        point.position_region = center.map(|center| {
+            std::array::from_fn(|axis| point.position_object[axis] - center[axis])
+        });
+    }
 }
 
 pub(crate) fn object_space_sample_points(
@@ -327,6 +392,8 @@ pub(crate) fn initial_vectors_for_magnet(
     n_nodes: usize,
     sample_points_world: Option<&[[f64; 3]]>,
     sample_points_object: Option<&[[f64; 3]]>,
+    texture_region_center_object: Option<[f64; 3]>,
+    texture_target_bounds_extent: Option<[f64; 3]>,
 ) -> Result<Vec<[f64; 3]>, String> {
     Ok(match initial {
         Some(InitialMagnetizationIR::Uniform { value }) => vec![*value; n_nodes],
@@ -406,7 +473,7 @@ pub(crate) fn initial_vectors_for_magnet(
                     object.len()
                 ));
             }
-            let points = world
+            let mut points = world
                 .iter()
                 .zip(object.iter())
                 .map(|(w, o)| TextureSamplePoint {
@@ -416,13 +483,17 @@ pub(crate) fn initial_vectors_for_magnet(
                     active: true,
                 })
                 .collect::<Vec<_>>();
-            sample_preset_texture_versioned(
+            if mapping.space.eq_ignore_ascii_case("region") {
+                set_texture_sample_region_positions(&mut points, texture_region_center_object);
+            }
+            sample_preset_texture_versioned_with_bounds(
                 preset_kind,
                 *preset_version,
                 &preset_params,
                 mapping,
                 texture_transform,
                 &points,
+                texture_target_bounds_extent,
             )
             .map_err(|error| error.to_string())?
         }
@@ -2982,7 +3053,9 @@ mod tests {
 #[cfg(test)]
 mod texture_object_space_tests {
     use super::*;
-    use fullmag_ir::{TextureMappingIR, TextureProjectionMode, TextureTransform3DIR};
+    use fullmag_ir::{
+        GeometryEntryIR, TextureMappingIR, TextureProjectionMode, TextureTransform3DIR,
+    };
 
     #[test]
     fn translated_fem_samples_are_mapped_back_to_object_space() {
@@ -3022,9 +3095,153 @@ mod texture_object_space_tests {
             1,
             Some(&world),
             Some(&object),
+            None,
+            None,
         )
         .unwrap();
         assert!(sampled[0][0] > 0.99);
         assert!(sampled[0][1].abs() < 1.0e-12);
+    }
+
+    #[test]
+    fn asymmetric_target_region_texture_matches_fdm_and_fem_coordinates() {
+        let geometry = GeometryEntryIR::Translate {
+            name: "asymmetric".to_string(),
+            base: Box::new(GeometryEntryIR::Union {
+                name: "asymmetric_body".to_string(),
+                a: Box::new(GeometryEntryIR::Box {
+                    name: "left".to_string(),
+                    size: [4.0e-9, 2.0e-9, 2.0e-9],
+                }),
+                b: Box::new(GeometryEntryIR::Translate {
+                    name: "right".to_string(),
+                    base: Box::new(GeometryEntryIR::Box {
+                        name: "right_body".to_string(),
+                        size: [4.0e-9, 2.0e-9, 2.0e-9],
+                    }),
+                    by: [3.0e-9, 0.0, 0.0],
+                }),
+            }),
+            by: [10.0e-9, 0.0, 0.0],
+        };
+        let (center, target_bounds_extent) =
+            geometry_texture_target_bounds_in_object_space(&geometry).unwrap();
+        assert!((center[0] - 1.5e-9).abs() < 1.0e-24);
+        assert!(center[1].abs() < 1.0e-24);
+        assert!(center[2].abs() < 1.0e-24);
+        let fdm_shape = crate::geometry::ir_to_shape(&geometry).unwrap();
+        let fdm_center = shape_texture_region_center_in_object_space(
+            &fdm_shape,
+            geometry_object_translation(&geometry),
+        )
+        .unwrap();
+        assert!((fdm_center[0] - center[0]).abs() < 1.0e-24);
+        assert!((fdm_center[1] - center[1]).abs() < 1.0e-24);
+        assert!((fdm_center[2] - center[2]).abs() < 1.0e-24);
+
+        let world = vec![[11.5e-9, 0.0, 0.0]];
+        let object = object_space_sample_points(&world, [10.0e-9, 0.0, 0.0]).unwrap();
+        let mapping = TextureMappingIR {
+            space: "region".to_string(),
+            projection: TextureProjectionMode::ObjectLocal,
+            clamp_mode: "none".to_string(),
+            tile_period: None,
+            background_vector: None,
+            axis_extent_mode: None,
+            axis_thickness_m: None,
+        };
+        let params = BTreeMap::from([
+            ("radius".to_string(), serde_json::json!(0.5e-9)),
+            ("wall_width".to_string(), serde_json::json!(0.1e-9)),
+            ("chirality".to_string(), serde_json::json!(1)),
+            ("core_polarity".to_string(), serde_json::json!(-1)),
+        ]);
+        let mut fdm_points = vec![TextureSamplePoint {
+            position_world: world[0],
+            position_object: object[0],
+            position_region: None,
+            active: true,
+        }];
+        set_texture_sample_region_positions(&mut fdm_points, Some(fdm_center));
+        let fdm_values = sample_preset_texture_versioned_with_bounds(
+            "neel_skyrmion",
+            2,
+            &params,
+            &mapping,
+            &TextureTransform3DIR::default(),
+            &fdm_points,
+            Some(target_bounds_extent),
+        )
+        .unwrap();
+        let fem_values = initial_vectors_for_magnet(
+            "asymmetric",
+            "asymmetric_mesh",
+            Some(&InitialMagnetizationIR::PresetTexture {
+                preset_kind: "neel_skyrmion".to_string(),
+                preset_version: 2,
+                preset_params: params,
+                mapping,
+                texture_transform: TextureTransform3DIR::default(),
+            }),
+            1,
+            Some(&world),
+            Some(&object),
+            Some(center),
+            Some(target_bounds_extent),
+        )
+        .unwrap();
+
+        assert_eq!(fdm_values, fem_values);
+        assert!((fdm_values[0][2] + 1.0).abs() < 1.0e-12);
+    }
+
+    #[test]
+    fn fem_default_clamp_period_uses_target_bounds_not_sample_subset() {
+        let initial = InitialMagnetizationIR::PresetTexture {
+            preset_kind: "neel_skyrmion".to_string(),
+            preset_version: 2,
+            preset_params: BTreeMap::from([
+                ("radius".to_string(), serde_json::json!(0.5e-9)),
+                ("wall_width".to_string(), serde_json::json!(0.1e-9)),
+                ("chirality".to_string(), serde_json::json!(1)),
+                ("core_polarity".to_string(), serde_json::json!(-1)),
+            ]),
+            mapping: TextureMappingIR {
+                space: "object".to_string(),
+                projection: TextureProjectionMode::ObjectLocal,
+                clamp_mode: "repeat".to_string(),
+                tile_period: None,
+                background_vector: None,
+                axis_extent_mode: None,
+                axis_thickness_m: None,
+            },
+            texture_transform: TextureTransform3DIR::default(),
+        };
+        let target_bounds_extent = Some([10.0e-9, 10.0e-9, 10.0e-9]);
+        let narrow_subset = [[4.0e-9, 0.0, 0.0], [6.0e-9, 0.0, 0.0]];
+        let broad_subset = [
+            [0.0, 0.0, 0.0],
+            [6.0e-9, 0.0, 0.0],
+            [10.0e-9, 0.0, 0.0],
+        ];
+
+        let sample = |points: &[[f64; 3]]| {
+            initial_vectors_for_magnet(
+                "body",
+                "subset_mesh",
+                Some(&initial),
+                points.len(),
+                Some(points),
+                Some(points),
+                None,
+                target_bounds_extent,
+            )
+            .unwrap()
+        };
+        let narrow_values = sample(&narrow_subset);
+        let broad_values = sample(&broad_subset);
+
+        assert_eq!(narrow_values[1], broad_values[1]);
+        assert!(narrow_values[1][2] > 0.99);
     }
 }

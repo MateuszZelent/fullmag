@@ -28,6 +28,9 @@ use crate::geometry::{
 };
 use crate::magnetization_textures::TextureSamplePoint;
 use crate::magnetization_textures_v2::sample_preset_texture_versioned_with_bounds;
+use crate::mesh::{
+    set_texture_sample_region_positions, shape_texture_region_center_in_object_space,
+};
 use crate::oersted::{resolve_fdm_oersted_term, ResolvedOerstedTerm};
 use crate::region_conflict::{resolve_region_conflict, RegionConflictCandidate};
 use crate::region_textures::sample_region_initial_on_mask_with_bounds;
@@ -3073,13 +3076,19 @@ pub(crate) fn plan_fdm(
                 texture_transform.scale[1],
                 texture_transform.scale[2],
             );
-            let points = grid_sample_points(
+            let mut points = grid_sample_points(
                 grid_cells,
                 cell_size,
                 native_origin,
                 top_level_translation,
                 active_mask.as_ref(),
             );
+            if mapping.space.eq_ignore_ascii_case("region") {
+                set_texture_sample_region_positions(
+                    &mut points,
+                    shape_texture_region_center_in_object_space(&shape, top_level_translation),
+                );
+            }
             let target_bounds_extent = shape_local_bounds(&shape)
                 .map(|(min_b, max_b)| {
                     [
@@ -5013,13 +5022,22 @@ pub(crate) fn plan_fdm_multilayer(
                 texture_transform,
                 preset_version,
             }) => {
-                let points = grid_sample_points(
+                let mut points = grid_sample_points(
                     grid_cells,
                     cell_size,
                     native_origin,
                     placed.translation,
                     active_mask.as_ref(),
                 );
+                if mapping.space.eq_ignore_ascii_case("region") {
+                    set_texture_sample_region_positions(
+                        &mut points,
+                        shape_texture_region_center_in_object_space(
+                            &placed.shape,
+                            [0.0; 3],
+                        ),
+                    );
+                }
                 let target_bounds_extent = shape_local_bounds(&placed.shape)
                     .map(|(min_b, max_b)| {
                         [
