@@ -263,7 +263,8 @@ test("ABL editor updates the live FDM damping field and canonical script", async
   const activatedScene = await readScene();
   expect(activatedScene.revision).toBeGreaterThan(revision);
   revision = activatedScene.revision;
-  expect(activatedScene.objects[0].absorbing_boundary.faces).toContain("x+");
+  const [initialLayer] = activatedScene.objects[0].absorbing_boundary.layers;
+  expect(initialLayer.geometry).toEqual({ kind: "faces", faces: ["x+"] });
   await expect(parent).toHaveAttribute("aria-expanded", "true");
   await expect(child).toBeVisible();
   await child.click();
@@ -274,9 +275,18 @@ test("ABL editor updates the live FDM damping field and canonical script", async
   const panel = await group.elementHandle();
   const apply = async (step: string, layer: Layer | null) => {
     await readScene();
-    const patch = layer ? { total_width_m: 40e-9, ramp_width_m: 20e-9, max_damping: layer.amplitude,
-      profile: layer.profile, frame: "universe", faces: [layer.face],
-      ...(layer.profile === "custom" ? { expression: "u**3" } : {}) } : null;
+    const patch = layer ? { layers: [{
+      layer_id: initialLayer.layer_id,
+      name: initialLayer.name,
+      enabled: true,
+      geometry: { kind: "faces", faces: [layer.face] },
+      total_width_m: 40e-9,
+      ramp_width_m: 20e-9,
+      max_damping: layer.amplitude,
+      profile: layer.profile,
+      frame: "universe",
+      ...(layer.profile === "custom" ? { expression: "u**3" } : {}),
+    }] } : null;
     await observeChange(step, layer, async () => {
       const [saved] = await Promise.all([
         page.waitForResponse((r) => r.url() === objectUrl && r.request().method() === "PATCH", { timeout }),
@@ -304,8 +314,9 @@ test("ABL editor updates the live FDM damping field and canonical script", async
       const calls = source.split("\n").filter((line: string) => line.includes(".alpha.absorbing_boundary("));
       expect(calls).toHaveLength(layer ? 1 : 0);
       if (layer) {
-        expect(calls[0]).toContain('expression="u**3"');
-        expect(calls[0]).toContain('faces=("x-",)');
+        expect(calls[0]).toContain("layers=[");
+        expect(source).toContain("expression='u**3'");
+        expect(source).toContain("geometry=fm.AbsorbingGeometry.faces(faces=['x-'])");
       }
       await writeFile(info.outputPath(step + "-export.py"), source);
     }
@@ -431,7 +442,14 @@ test("ABL editor updates the live FDM damping field and canonical script", async
   expect(created.status()).toBe(200);
   const ribbonScene = await readScene();
   expect(ribbonScene.revision).toBeGreaterThan(revision);
-  expect(ribbonScene.objects[0].absorbing_boundary).toEqual(activatedScene.objects[0].absorbing_boundary);
+  expect(ribbonScene.objects[0].absorbing_boundary).toEqual({
+    faces: initialLayer.geometry.faces,
+    frame: initialLayer.frame,
+    profile: initialLayer.profile,
+    total_width_m: initialLayer.total_width_m,
+    ramp_width_m: initialLayer.ramp_width_m,
+    max_damping: initialLayer.max_damping,
+  });
   await expect(child).toHaveAttribute("aria-selected", "true");
   await expect(group).toBeVisible();
   await page.screenshot({ path: info.outputPath("ribbon-created-absorber.png") });

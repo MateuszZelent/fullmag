@@ -100,7 +100,10 @@ import {
   type SceneObjectItem as SceneObject,
   SpecInspectorHost,
 } from "../model-roots/SpecInspectorHost";
-import { initialAbsorbingBoundary } from "@/shared/domain/physics/absorbingBoundary";
+import {
+  buildAbsorbingBoundaryPatch,
+  createLayerDraft,
+} from "../ObjectAbsorbingBoundaryPanelModel";
 import {
   objectEditMetadataEquals,
   rebaseDirtyDraftOntoUnchangedObject,
@@ -692,12 +695,18 @@ export function ObjectOverviewInspectorPanel({ selection }: InspectorPanelProps)
         `${enabled ? "Enable" : "Disable"} absorbing boundary ${objectId}`,
         async ({ baseRevision: capturedRev }) => {
           const commitRev = capturedRev ?? baseRevision;
+          const result = buildAbsorbingBoundaryPatch(
+            {
+              enabled,
+              legacy: false,
+              layers: [createLayerDraft("layer-1", "Layer 1")],
+            },
+            commitRev,
+          );
+          if ("error" in result) throw new Error(result.error);
           return kernel.api.model.patchObject(
             objectId,
-            {
-              base_revision: commitRev,
-              absorbing_boundary: enabled ? initialAbsorbingBoundary() : null,
-            },
+            result.patch,
             authoringWriteOptions(commitRev, currentSessionScopeKey),
           );
         },
