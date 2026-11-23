@@ -230,10 +230,7 @@ export function resolveMagneticTextureCapabilityGate(
   if (!activeLane?.operations) return null;
   if (draft.inheritanceMode === "inherit") return null;
 
-  const ops = activeLane.operations as Record<
-    string,
-    { state?: string; reason?: string | null } | undefined
-  >;
+  const ops = activeLane.operations;
 
   let opKey: string;
   if (draft.sourceMode === "field-file") {
@@ -253,6 +250,19 @@ export function resolveMagneticTextureCapabilityGate(
 
   const entry = ops[opKey];
   if (!entry) return null;
+  if (
+    draft.sourceMode === "preset" &&
+    activeLane.source?.kind === "planner" &&
+    activeLane.authored?.discretization === "fdm" &&
+    !activeLane.resolved &&
+    entry.state === "stale" &&
+    entry.reason_code === "capability_stale" &&
+    entry.requires?.includes("resolved_lane_identity")
+  ) {
+    // An analytical Apply edits the authored scene. The scoped backend mutation
+    // validates the preset and plans it on the published domain.
+    return { enabled: true, reason: null };
+  }
   if (opKey === "initial_magnetization.uniform" || opKey === "initial_magnetization.vortex") {
     const res = resolveActiveLaneOperation(activeLane, opKey);
     return { enabled: res.enabled, reason: res.reason ?? null };

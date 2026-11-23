@@ -1005,6 +1005,39 @@ describe("MagneticTextureInspectorPanel & StageTextureAssignmentsEditor on 8-slo
     }
   });
 
+  it("lets the backend validate analytical FDM texture authoring after the held lane is retired", () => {
+    const unavailable = {
+      state: "stale",
+      reason_code: "capability_stale",
+      reason: "Execution lane is unresolved.",
+      requires: ["resolved_lane_identity"],
+    };
+    const lane = {
+      source: { kind: "planner" },
+      authored: { discretization: "fdm" },
+      resolved: null,
+      operations: {
+        "initial_magnetization.preset_v2": unavailable,
+        "initial_magnetization.sampled_field": unavailable,
+      },
+    };
+    const draft = { inheritanceMode: "override", sourceMode: "preset", presetKind: "neel_skyrmion" };
+    expect(resolveMagneticTextureCapabilityGate(lane as never, draft as never)?.enabled).toBe(true);
+    expect(resolveMagneticTextureCapabilityGate(
+      lane as never, { ...draft, sourceMode: "field-file" } as never,
+    )?.enabled).toBe(false);
+    expect(resolveMagneticTextureCapabilityGate(
+      { ...lane, authored: { discretization: "auto" } } as never, draft as never,
+    )?.enabled).toBe(false);
+    expect(resolveMagneticTextureCapabilityGate(
+      { ...lane, resolved: { discretization: "fdm" } } as never, draft as never,
+    )?.enabled).toBe(false);
+    expect(resolveMagneticTextureCapabilityGate(
+      { ...lane, operations: { "initial_magnetization.preset_v2": { state: "unsupported" } } } as never,
+      draft as never,
+    )?.enabled).toBe(false);
+  });
+
   it("evaluates MT-15 capability gates dynamically against live draft (uniform, vortex, preset_v2 with fallback, and sampled_field)", async () => {
     const laneWithPresetV2Blocked = {
       operations: {
