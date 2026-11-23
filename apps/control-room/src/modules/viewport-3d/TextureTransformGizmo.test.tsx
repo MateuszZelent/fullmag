@@ -14,6 +14,7 @@ import {
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { SceneResource } from "@/kernel/api/apiTypes";
+import { defaultArrayAxisSpec } from "@/kernel/authoring/array3dModel";
 import { resolveTargetBoundsMeters } from "@/shared/domain/magnetization-texture/boundsResolver";
 import { createDefaultMagneticTextureDraft } from "@/shared/domain/magnetization-texture/presetDefaults";
 import {
@@ -40,12 +41,16 @@ import {
   createViewport3DTextureTransformModel,
   installTextureGizmoKeyboardShortcuts,
   pickTextureGizmoHandleFromGroup,
+  resolveActiveAuthoredTextureSurfaceObjectIds,
   resolveTextureGizmoWorldPose,
   sampleAuthoredMagnetizationVectors,
   Viewport3DTextureTransformLayer,
 } from "./TextureTransformGizmo";
 import { magnetizationHslLinearRgb } from "./orientation/magnetizationColor";
-import { sampleViewport3DSurfaceHslColors } from "./viewport3dPrimitiveModel";
+import {
+  buildViewport3DPrimitiveRenderModel,
+  sampleViewport3DSurfaceHslColors,
+} from "./viewport3dPrimitiveModel";
 
 vi.mock("./viewport3dBatchedInvalidate", () => ({
   useBatchedInvalidate: () => vi.fn(),
@@ -1046,5 +1051,278 @@ describe("TextureTransformGizmo & 3D surface preview synchronization", () => {
       }),
     );
     expect(otherQuantityMarkup).toBe("");
+  });
+
+  it("renders perforated ExtrudeGeometry surface preview (zero triangles inside holes) and filters vector arrows out of 3x3 antidot holes", () => {
+    const holeRadius = 16e-9;
+    const holePitch = 80e-9;
+    const holeCenters: readonly [number, number][] = [
+      [-holePitch, -holePitch],
+      [0, -holePitch],
+      [holePitch, -holePitch],
+      [-holePitch, 0],
+      [0, 0],
+      [holePitch, 0],
+      [-holePitch, holePitch],
+      [0, holePitch],
+      [holePitch, holePitch],
+    ];
+
+    const scene = {
+      version: "scene.v2",
+      revision: 12,
+      objects: [
+        {
+          id: "film",
+          name: "Film",
+          role: "magnet",
+          magnetization_ref: "mag:film:dw",
+          geometry: {
+            geometry_kind: "Difference",
+            geometry_params: {
+              operands: [
+                {
+                  enabled: true,
+                  geometry: {
+                    geometry_kind: "Box",
+                    geometry_params: { size: [300e-9, 300e-9, 20e-9] },
+                  },
+                  label: "Base Film",
+                  operand_id: "op:base",
+                },
+                {
+                  enabled: true,
+                  geometry: {
+                    geometry_kind: "Array3D",
+                    geometry_params: {
+                      axes: [
+                        defaultArrayAxisSpec("x", {
+                          count: 3,
+                          direction: "symmetric",
+                          enabled: true,
+                          pitch_m: holePitch,
+                        }),
+                        defaultArrayAxisSpec("y", {
+                          count: 3,
+                          direction: "symmetric",
+                          enabled: true,
+                          pitch_m: holePitch,
+                        }),
+                        defaultArrayAxisSpec("z", { count: 1, enabled: false, pitch_m: 100e-9 }),
+                      ],
+                      child: {
+                        geometry_kind: "Cylinder",
+                        geometry_params: { axis: [0, 0, 1], height: 24e-9, radius: holeRadius },
+                      },
+                      merge_overlapping: false,
+                    },
+                  },
+                  label: "Antidot 3x3",
+                  operand_id: "op:holes",
+                },
+              ],
+            },
+          },
+        },
+      ],
+      magnetization_assets: [
+        {
+          id: "mag:film:dw",
+          kind: "preset_texture",
+          preset_kind: "domain_wall",
+          preset_version: 2,
+          preset_params: { wall_width_m: 20e-9, normal_axis: "x" },
+        },
+      ],
+    } as unknown as SceneResource;
+
+    // Bounds resolver must return exact 300 x 300 x 20 nm (not 100nm default)
+    const resolvedBounds = resolveTargetBoundsMeters(scene, { kind: "object", objectId: "film" });
+    expect(resolvedBounds.source).toBe("object-primitive");
+    expect(resolvedBounds.size[0]).toBeCloseTo(300e-9, 15);
+    expect(resolvedBounds.size[1]).toBeCloseTo(300e-9, 15);
+    expect(resolvedBounds.size[2]).toBeCloseTo(20e-9, 15);
+
+    const primitiveModel = buildViewport3DPrimitiveRenderModel(scene, null);
+    const filmObj = primitiveModel.objects[0]!;
+    expect(filmObj.kind).toBe("composite");
+
+    // 1. Subdivided surface preview must use perforated ExtrudeGeometry with 9 holes
+    const surface = buildSubdividedSurfacePreviewData(filmObj, 32);
+    expect(surface.sourceGeometryType).toBe("ExtrudeGeometry");
+    expect(surface.analyticalHoleCount).toBe(9);
+    expect(surface.positionsWorld.length / 3).toBeGreaterThan(800);
+    expect(surface.indices.length / 3).toBeGreaterThan(1200);
+
+    // Zero vertices and zero triangle centroids may fall strictly inside any of the 9 holes
+    const innerTol = holeRadius - 1e-9;
+    let vertexViolations = 0;
+    for (let i = 0; i < surface.positionsWorld.length; i += 3) {
+      const vx = surface.positionsWorld[i]!;
+      const vy = surface.positionsWorld[i + 1]!;
+      for (const [hx, hy] of holeCenters) {
+        if (Math.hypot(vx - hx, vy - hy) < innerTol) vertexViolations += 1;
+      }
+    }
+    expect(vertexViolations).toBe(0);
+
+    let centroidViolations = 0;
+    for (let t = 0; t + 2 < surface.indices.length; t += 3) {
+      const i0 = surface.indices[t]! * 3;
+      const i1 = surface.indices[t + 1]! * 3;
+      const i2 = surface.indices[t + 2]! * 3;
+      const cx =
+        (surface.positionsWorld[i0]! +
+          surface.positionsWorld[i1]! +
+          surface.positionsWorld[i2]!) /
+        3;
+      const cy =
+        (surface.positionsWorld[i0 + 1]! +
+          surface.positionsWorld[i1 + 1]! +
+          surface.positionsWorld[i2 + 1]!) /
+        3;
+      for (const [hx, hy] of holeCenters) {
+        if (Math.hypot(cx - hx, cy - hy) < innerTol) centroidViolations += 1;
+      }
+    }
+    expect(centroidViolations).toBe(0);
+
+    // 2. Vector arrow grids (both surface and full) must place ZERO arrows inside any of the 9 holes
+    for (const scope of ["surface", "full"] as const) {
+      const grid = buildAuthoredMagnetizationVectorGridPoints(filmObj, {
+        budget: 400,
+        geometryScope: scope,
+      });
+      expect(grid.count, scope).toBeGreaterThan(100);
+      for (let i = 0; i < grid.count; i += 1) {
+        const ax = grid.positionsWorld[i * 3]!;
+        const ay = grid.positionsWorld[i * 3 + 1]!;
+        for (const [hx, hy] of holeCenters) {
+          expect(Math.hypot(ax - hx, ay - hy), `${scope} arrow ${i}`).toBeGreaterThan(
+            holeRadius - 1e-12,
+          );
+        }
+      }
+    }
+
+    // 3. Z-fighting suppression marks film as texture-covered when persistent or live surface is active
+    const textureTransformModel = createViewport3DTextureTransformModel(scene);
+    const suppressedPersistent = resolveActiveAuthoredTextureSurfaceObjectIds({
+      activeLiveSurfaceKey: null,
+      getObjectSettings: () => ({
+        ...DEFAULT_OBJECT_VISUALIZATION,
+        primitiveVisible: true,
+        shaderVisible: false,
+        surfaceColorSource: "orientation",
+        visible: true,
+      }),
+      liveFieldCoveredObjectIds: new Set(),
+      primitiveModel,
+      savedViewportActive: false,
+      selectedObjectId: null,
+      textureTransformModel,
+    });
+    expect(suppressedPersistent.has("film")).toBe(true);
+
+    // Wireframe-only or live-field-covered objects are NOT suppressed
+    const notSuppressedLiveField = resolveActiveAuthoredTextureSurfaceObjectIds({
+      activeLiveSurfaceKey: null,
+      getObjectSettings: () => DEFAULT_OBJECT_VISUALIZATION,
+      liveFieldCoveredObjectIds: new Set(["film"]),
+      primitiveModel,
+      savedViewportActive: false,
+      selectedObjectId: null,
+      textureTransformModel,
+    });
+    expect(notSuppressedLiveField.has("film")).toBe(false);
+
+    // Active live binding suppresses base primitive solid
+    const suppressedLiveDraft = resolveActiveAuthoredTextureSurfaceObjectIds({
+      activeLiveSurfaceKey: "film",
+      getObjectSettings: () => ({
+        ...DEFAULT_OBJECT_VISUALIZATION,
+        surfaceColorSource: "solid",
+      }),
+      liveFieldCoveredObjectIds: new Set(),
+      primitiveModel,
+      savedViewportActive: false,
+      selectedObjectId: "film",
+      textureTransformModel,
+    });
+    expect(suppressedLiveDraft.has("film")).toBe(true);
+  });
+
+  it("renders Magnetic Texture preview and vector arrows across ALL top-level Array3D instances with zero vertices or arrows in inter-dot gaps", () => {
+    const dotRadius = 20e-9;
+    const pitch = 120e-9;
+    const scene = {
+      version: "scene.v2",
+      revision: 13,
+      objects: [
+        {
+          id: "dot_array",
+          name: "Dot Array",
+          role: "magnet",
+          magnetization_ref: "mag:dots:vortex",
+          geometry: {
+            geometry_kind: "Array3D",
+            geometry_params: {
+              axes: [
+                defaultArrayAxisSpec("x", { count: 2, direction: "symmetric", enabled: true, pitch_m: pitch }),
+                defaultArrayAxisSpec("y", { count: 2, direction: "symmetric", enabled: true, pitch_m: pitch }),
+                defaultArrayAxisSpec("z", { count: 1, enabled: false, pitch_m: 100e-9 }),
+              ],
+              child: {
+                geometry_kind: "Cylinder",
+                geometry_params: { axis: [0, 0, 1], height: 15e-9, radius: dotRadius },
+              },
+              merge_overlapping: false,
+            },
+          },
+        },
+      ],
+      magnetization_assets: [
+        {
+          id: "mag:dots:vortex",
+          kind: "preset_texture",
+          preset_kind: "vortex",
+          preset_version: 2,
+          preset_params: { core_radius_m: 10e-9 },
+        },
+      ],
+    } as unknown as SceneResource;
+
+    const primitiveModel = buildViewport3DPrimitiveRenderModel(scene, null);
+    const arrayObj = primitiveModel.objects[0]!;
+    expect(arrayObj.kind).toBe("array3d");
+
+    const surface = buildSubdividedSurfacePreviewData(arrayObj, 24);
+    expect(surface.instanceCount).toBe(4);
+    expect(surface.positionsWorld.length / 3).toBeGreaterThan(100);
+    // Every vertex must belong to one of the 4 cylinders at (±60nm, ±60nm) — never in the gap at (0,0)
+    const centers: readonly [number, number][] = [
+      [-60e-9, -60e-9],
+      [60e-9, -60e-9],
+      [-60e-9, 60e-9],
+      [60e-9, 60e-9],
+    ];
+    for (let i = 0; i < surface.positionsWorld.length; i += 3) {
+      const vx = surface.positionsWorld[i]!;
+      const vy = surface.positionsWorld[i + 1]!;
+      const minDist = Math.min(...centers.map(([cx, cy]) => Math.hypot(vx - cx, vy - cy)));
+      expect(minDist).toBeLessThanOrEqual(dotRadius + 1e-9);
+    }
+
+    const arrows = buildAuthoredMagnetizationVectorGridPoints(arrayObj, {
+      budget: 64,
+      geometryScope: "surface",
+    });
+    expect(arrows.count).toBeGreaterThanOrEqual(4);
+    for (let i = 0; i < arrows.count; i += 1) {
+      const ax = arrows.positionsWorld[i * 3]!;
+      const ay = arrows.positionsWorld[i * 3 + 1]!;
+      const minDist = Math.min(...centers.map(([cx, cy]) => Math.hypot(ax - cx, ay - cy)));
+      expect(minDist).toBeLessThanOrEqual(dotRadius + 1e-9);
+    }
   });
 });

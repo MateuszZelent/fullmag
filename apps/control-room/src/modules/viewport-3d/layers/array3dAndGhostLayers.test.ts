@@ -14,6 +14,10 @@ import {
   resolveGizmoShortcutUpdate,
 } from "../MoveObjectGizmo.model";
 import {
+  buildAuthoredMagnetizationVectorGridPoints,
+  buildSubdividedSurfacePreviewData,
+} from "../TextureTransformGizmo";
+import {
   buildViewport3DPrimitiveRenderModel,
   type Viewport3DPrimitiveObject,
 } from "../viewport3dPrimitiveModel";
@@ -575,5 +579,26 @@ describe("Viewport 3D Etap D: Array3D InstancedMesh, GhostCutterOverlay, and Tra
     expect(geo.userData.analyticalHoleCount).toBe(9);
     expect(geo.getAttribute("position").count).toBeGreaterThan(500);
     geo.dispose();
+
+    // Magnetic Texture surface preview must also use perforated ExtrudeGeometry (not BoxGeometry)
+    const texSurface = buildSubdividedSurfacePreviewData(antidotObj, 24);
+    expect(texSurface.sourceGeometryType).toBe("ExtrudeGeometry");
+    expect(texSurface.analyticalHoleCount).toBe(9);
+    expect(texSurface.positionsWorld.length / 3).toBeGreaterThan(500);
+    // Vector arrows must skip all 9 hole interiors (radius 25nm at {-120, 0, +120}nm)
+    const arrows = buildAuthoredMagnetizationVectorGridPoints(antidotObj, {
+      budget: 256,
+      geometryScope: "surface",
+    });
+    expect(arrows.count).toBeGreaterThan(50);
+    for (let i = 0; i < arrows.count; i += 1) {
+      const x = arrows.positionsWorld[i * 3]!;
+      const y = arrows.positionsWorld[i * 3 + 1]!;
+      for (const hx of [-120e-9, 0, 120e-9]) {
+        for (const hy of [-120e-9, 0, 120e-9]) {
+          expect(Math.hypot(x - hx, y - hy)).toBeGreaterThan(25e-9 - 1e-12);
+        }
+      }
+    }
   });
 });

@@ -201,6 +201,8 @@ import {
   type Translation3,
 } from "../MoveObjectGizmo";
 import {
+  getActiveLiveTextureSurfaceKey,
+  resolveActiveAuthoredTextureSurfaceObjectIds,
   Viewport3DTextureTransformLayer,
   type Viewport3DTextureTransformModel,
 } from "../TextureTransformGizmo";
@@ -1532,6 +1534,34 @@ function Viewport3DModelLayerStack({
     [fdmCuboidLayerEnabled, fdmTargetViews, fdmNativeLayerViews, fieldModel, savedViewportActive, primitiveModel],
   );
 
+  const activeLiveTextureSurfaceKey = useSyncExternalStore(
+    subscribeTextureDraftBridge,
+    getActiveLiveTextureSurfaceKey,
+    getActiveLiveTextureSurfaceKey,
+  );
+
+  const authoredTextureSurfaceObjectIds = useMemo(
+    () =>
+      resolveActiveAuthoredTextureSurfaceObjectIds({
+        activeLiveSurfaceKey: activeLiveTextureSurfaceKey,
+        getObjectSettings,
+        liveFieldCoveredObjectIds,
+        primitiveModel,
+        savedViewportActive,
+        selectedObjectId,
+        textureTransformModel,
+      }),
+    [
+      activeLiveTextureSurfaceKey,
+      getObjectSettings,
+      liveFieldCoveredObjectIds,
+      primitiveModel,
+      savedViewportActive,
+      selectedObjectId,
+      textureTransformModel,
+    ],
+  );
+
   if (!sceneLayersEnabled) return null;
 
   const authoredRegionOverlaysVisible = resolveAuthoredRegionOverlayVisibility({
@@ -1721,11 +1751,13 @@ function Viewport3DModelLayerStack({
             primitiveModel={primitiveModel}
             meshReadyFallbackObjectIds={meshReadyFallbackObjectIds}
             realizedObjectIds={realizedObjectIds}
+            suppressedSolidObjectIds={authoredTextureSurfaceObjectIds}
             tracker={tracker}
           />
           <Array3DInstancedPreviewLayer
             colors={colors}
             primitiveModel={primitiveModel}
+            suppressedSolidObjectIds={authoredTextureSurfaceObjectIds}
             tracker={tracker}
           />
           <GhostCutterOverlayLayer
@@ -1749,6 +1781,7 @@ function Viewport3DModelLayerStack({
       />
       <Viewport3DTextureTransformLayer
         onGestureActiveChange={onMoveGestureActiveChange}
+        onSelectObject={onSelectObject}
         primitiveModel={primitiveModel}
         selectedObjectId={selectedObjectId}
         textureTransformModel={textureTransformModel}

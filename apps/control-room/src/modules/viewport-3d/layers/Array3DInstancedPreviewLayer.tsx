@@ -218,15 +218,22 @@ function Array3DInstancedItem({
 export function Array3DInstancedPreviewLayer({
   colors,
   primitiveModel,
+  suppressedSolidObjectIds,
   tracker,
 }: {
   colors: Viewport3DColors;
   primitiveModel: Viewport3DPrimitiveRenderModel | null;
+  suppressedSolidObjectIds?: ReadonlySet<string>;
   tracker: Viewport3DResourceTracker;
 }) {
   const descriptors = useMemo(
-    () => extractArray3DPreviewDescriptors(primitiveModel?.objects ?? []),
-    [primitiveModel?.objects],
+    () =>
+      extractArray3DPreviewDescriptors(primitiveModel?.objects ?? []).filter(
+        (descriptor) =>
+          descriptor.isCutter ||
+          !(suppressedSolidObjectIds?.has(descriptor.objectId) ?? false),
+      ),
+    [primitiveModel?.objects, suppressedSolidObjectIds],
   );
 
   if (descriptors.length === 0) return null;

@@ -62,6 +62,7 @@ export function PrimitiveObjectLayer({
   primitiveModel,
   meshReadyFallbackObjectIds,
   realizedObjectIds,
+  suppressedSolidObjectIds,
   tracker,
 }: {
   colors: Viewport3DColors;
@@ -74,6 +75,7 @@ export function PrimitiveObjectLayer({
   meshReadyFallbackObjectIds?: ReadonlySet<string>;
   primitiveModel: Viewport3DPrimitiveRenderModel | null;
   realizedObjectIds?: ReadonlySet<string>;
+  suppressedSolidObjectIds?: ReadonlySet<string>;
   tracker: Viewport3DResourceTracker;
 }) {
   const invalidate = useBatchedInvalidate();
@@ -146,6 +148,7 @@ export function PrimitiveObjectLayer({
                   (meshReadyFallbackObjectIds?.has(object.objectId) ?? false))
               }
               settings={getObjectSettings(object)}
+              surfaceFillSuppressed={suppressedSolidObjectIds?.has(object.objectId) ?? false}
               tracker={tracker}
             />
           </group>
@@ -164,6 +167,7 @@ function PrimitiveObject({
   onSelectObject,
   primitiveColorAssignments,
   settings,
+  surfaceFillSuppressed = false,
   tracker,
 }: {
   colors: Viewport3DColors;
@@ -177,6 +181,7 @@ function PrimitiveObject({
   ) => void;
   primitiveColorAssignments: ReadonlyMap<string, number>;
   settings: VisualizationTargetSettings;
+  surfaceFillSuppressed?: boolean;
   tracker: Viewport3DResourceTracker;
 }) {
   if (!shouldRenderPrimitiveObject(
@@ -197,6 +202,7 @@ function PrimitiveObject({
       onSelectObject={onSelectObject}
       primitiveColorAssignments={primitiveColorAssignments}
       settings={settings}
+      surfaceFillSuppressed={surfaceFillSuppressed}
       tracker={tracker}
     />
   );
@@ -210,6 +216,7 @@ function RenderablePrimitiveObject({
   onSelectObject,
   primitiveColorAssignments,
   settings,
+  surfaceFillSuppressed = false,
   tracker,
 }: {
   colors: Viewport3DColors;
@@ -222,6 +229,7 @@ function RenderablePrimitiveObject({
   ) => void;
   primitiveColorAssignments: ReadonlyMap<string, number>;
   settings: VisualizationTargetSettings;
+  surfaceFillSuppressed?: boolean;
   tracker: Viewport3DResourceTracker;
 }) {
   const antennaTextures = useMemo(() => {
@@ -333,7 +341,7 @@ function RenderablePrimitiveObject({
         primitive: true,
       }}
     >
-      {renderPlan.primitive.visible && !isInstancedArrayRoot && hasVertexData ? (
+      {renderPlan.primitive.visible && !surfaceFillSuppressed && !isInstancedArrayRoot && hasVertexData ? (
         <mesh
           castShadow={surfaceMaterialPlan.castShadow}
           onPointerDown={handlePointerDown}
