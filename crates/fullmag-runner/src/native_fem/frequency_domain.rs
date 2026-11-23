@@ -2683,12 +2683,13 @@ fn solve_native_modal_eigen_impl(
                 if let Err(reason) = runtime_identity {
                     error.push_str(&format!("; runtime manifest: {reason}"));
                 }
-                let diagnostics = ffi_string(result_v20.scientific_result_v18.diagnostics_json);
-                if let Ok(value) = serde_json::from_str::<serde_json::Value>(&diagnostics) {
-                    if let Some(evidence) = value.get("gpu_execution_attestation") {
-                        error.push_str(&format!("; native GPU evidence: {evidence}"));
-                    }
-                }
+                let native = &result_v20.scientific_result_v18;
+                append_modal_gpu_failure_context(
+                    &mut error,
+                    map_contract_status(native.status),
+                    &ffi_string(native.error_message),
+                    &ffi_string(native.diagnostics_json),
+                );
                 unsafe { ffi::fullmag_fem_frequency_domain_result_v20_destroy(&mut result_v20) };
                 return Err(error);
             }
@@ -3443,6 +3444,33 @@ pub(crate) fn measured_modal_gpu_attestation_fixture() -> NativeModalGpuAttestat
     }
 }
 
+#[cfg(any(feature = "fem-gpu", test))]
+fn append_modal_gpu_failure_context(
+    error: &mut String,
+    native_status: NativeFrequencyDomainStatus,
+    native_error: &str,
+    native_diagnostics: &str,
+) {
+    if native_status != NativeFrequencyDomainStatus::Ok {
+        error.push_str(&format!("; native solve status: {native_status:?}"));
+        if !native_error.is_empty() {
+            error.push_str(&format!("; native solve error: {native_error}"));
+        }
+    }
+    if let Ok(value) = serde_json::from_str::<serde_json::Value>(native_diagnostics) {
+        if native_status != NativeFrequencyDomainStatus::Ok {
+            if let Some(reason) = value.get("reason").and_then(serde_json::Value::as_str) {
+                if reason != native_error {
+                    error.push_str(&format!("; native solve reason: {reason}"));
+                }
+            }
+        }
+        if let Some(evidence) = value.get("gpu_execution_attestation") {
+            error.push_str(&format!("; native GPU evidence: {evidence}"));
+        }
+    }
+}
+
 #[cfg_attr(not(any(feature = "fem-native", feature = "fem-gpu", test)), expect(dead_code, reason = "native FEM calls this parser for GPU attestation ABI results"))]
 fn parse_modal_gpu_attestation_snapshot(
     snapshot: NativeModalGpuAttestationSnapshot,
@@ -4071,6 +4099,23 @@ mod tests {
             target_rebuild_count: 31,
             invalidation_flags: 37,
         }
+    }
+
+    #[test]
+    fn modal_gpu_attestation_failure_keeps_the_native_solve_reason() {
+        let mut error = "k0_poisson_airbox_gpu_attestation_unavailable".to_owned();
+        append_modal_gpu_failure_context(
+            &mut error,
+            NativeFrequencyDomainStatus::SolveError,
+            "native projected solve failed",
+            r#"{"reason":"cudss_ritz_projected_eigensolve_failed","gpu_execution_attestation":{"measurement_state":"unavailable"}}"#,
+        );
+
+        assert!(error.starts_with("k0_poisson_airbox_gpu_attestation_unavailable"));
+        assert!(error.contains("native solve status: SolveError"));
+        assert!(error.contains("native solve error: native projected solve failed"));
+        assert!(error.contains("native solve reason: cudss_ritz_projected_eigensolve_failed"));
+        assert!(error.contains("native GPU evidence:"));
     }
 
     #[test]
