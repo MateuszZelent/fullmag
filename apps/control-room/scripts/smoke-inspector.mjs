@@ -1044,26 +1044,22 @@ try {
   const disabledFile = "visualization-overview-light-disabled-416.png";
   await panel.screenshot({ path: resolve(outputDir, disabledFile) });
   screenshotFiles.push(disabledFile);
-  if ((await resetButton.count()) > 0 && !(await resetButton.isDisabled())) {
-    await resetButton.click();
-  }
-  const resetDeadline = Date.now() + 3_000;
-  while (
-    (await resetButton.count()) > 0 &&
-    !(await resetButton.isDisabled()) &&
-    Date.now() < resetDeadline
-  ) {
-    await page.waitForTimeout(100);
-  }
-  const resetRemainingCount = await resetButton.count();
-  const resetState =
-    resetRemainingCount === 0
-      ? { ariaDisabled: "true", disabled: true, unmountedWhenClean: true }
-      : await resetButton.evaluate((button) => ({
+  const currentResetState = () => resetButton.evaluateAll(([button]) =>
+    button
+      ? {
           ariaDisabled: button.getAttribute("aria-disabled"),
           disabled: button.disabled,
           unmountedWhenClean: false,
-        }));
+        }
+      : { ariaDisabled: "true", disabled: true, unmountedWhenClean: true },
+  );
+  if (!(await currentResetState()).disabled) await resetButton.click();
+  const resetDeadline = Date.now() + 3_000;
+  let resetState = await currentResetState();
+  while (!resetState.disabled && Date.now() < resetDeadline) {
+    await page.waitForTimeout(100);
+    resetState = await currentResetState();
+  }
   assert(
     resetState.disabled,
     `Visualization Reset did not restore the applied baseline: ${JSON.stringify({
