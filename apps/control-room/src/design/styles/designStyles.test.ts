@@ -634,6 +634,23 @@ describe("control-room design styles", () => {
     expect(instanceTabsCss).toContain("@media (prefers-reduced-transparency: reduce)");
   });
 
+  it("minimizes header and ribbon in workspace full-screen mode with accessible toggle states", () => {
+    const headerCss = readAppFile("src/design/styles/header.css");
+    const layoutCss = readAppFile("src/design/styles/layout.css");
+    const instanceTabsCss = readAppFile("src/design/styles/instance-tabs.css");
+
+    expect(layoutCss).toContain(
+      '.fm-workspace-frame[data-workspace-fullscreen="true"]',
+    );
+    expect(layoutCss).toContain('> .fm-slot[data-slot-id="app-menu"]');
+    expect(layoutCss).toContain('> .fm-slot[data-slot-id="ribbon"]');
+    expect(instanceTabsCss).toContain(".fm-instance-tabs__actions");
+    expect(headerCss).toContain('.fm-header__fullscreen-toggle[aria-pressed="true"]');
+    expect(headerCss).toContain("min-inline-size:");
+    expect(headerCss).toContain("@media (pointer: coarse)");
+    expect(headerCss).toContain("@media (forced-colors: active)");
+  });
+
   it("defines every shared CSS custom property used by design styles", () => {
     const defined = new Set<string>();
     const used = new Set<string>();

@@ -49,6 +49,68 @@
   color: var(--fm-accent-text);
 }
 
+.fm-instance-tabs__actions {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: var(--fm-space-1);
+  margin-inline-start: auto;
+  margin-block-end: var(--fm-space-1);
+  -webkit-app-region: no-drag;
+}
+
+.fm-workspace-frame:not(:has(.fm-workspace-shell > .fm-workspace-body)) .fm-instance-tabs__actions {
+  display: none;
+}
+
+/* In full-screen workspace mode the header card collapses away, so the top
+   instance tab strip becomes a slim pill bar with a right-side exit toggle. */
+.fm-workspace-frame[data-workspace-fullscreen="true"]:has(.fm-workspace-shell > .fm-workspace-body):not(:has(.fm-workspace-shell > .fm-home-overlay))
+  > .fm-instance-tabs {
+  align-items: center;
+  margin-bottom: 0;
+  padding: var(--fm-space-1) var(--fm-space-2) 0;
+}
+
+.fm-workspace-frame[data-workspace-fullscreen="true"]:has(.fm-workspace-shell > .fm-workspace-body):not(:has(.fm-workspace-shell > .fm-home-overlay))
+  > .fm-instance-tabs .fm-instance-tabs__actions {
+  margin-block-end: 0;
+}
+
+.fm-workspace-frame[data-workspace-fullscreen="true"]:has(.fm-workspace-shell > .fm-workspace-body):not(:has(.fm-workspace-shell > .fm-home-overlay))
+  > .fm-instance-tabs .fm-instance-tabs__list {
+  align-items: center;
+  padding-inline: 0;
+  scroll-padding-inline: 0;
+}
+
+.fm-workspace-frame[data-workspace-fullscreen="true"]:has(.fm-workspace-shell > .fm-workspace-body):not(:has(.fm-workspace-shell > .fm-home-overlay))
+  > .fm-instance-tabs .fm-instance-tabs__tab {
+  height: var(--fm-control-height-compact);
+  min-height: var(--fm-control-height-compact);
+  border-radius: var(--fm-radius-pill);
+  border-bottom: 1px solid transparent;
+}
+
+.fm-workspace-frame[data-workspace-fullscreen="true"]:has(.fm-workspace-shell > .fm-workspace-body):not(:has(.fm-workspace-shell > .fm-home-overlay))
+  > .fm-instance-tabs .fm-instance-tabs__list > .fm-instance-tabs__tab[data-state="active"]:not(:disabled),
+.fm-workspace-frame[data-workspace-fullscreen="true"]:has(.fm-workspace-shell > .fm-workspace-body):not(:has(.fm-workspace-shell > .fm-home-overlay))
+  > .fm-instance-tabs .fm-instance-tabs__item:has(> .fm-instance-tabs__tab[data-state="active"]) {
+  border-radius: var(--fm-radius-pill);
+  border-bottom: 1px solid var(--fm-glass-line);
+}
+
+.fm-workspace-frame[data-workspace-fullscreen="true"]:has(.fm-workspace-shell > .fm-workspace-body):not(:has(.fm-workspace-shell > .fm-home-overlay))
+  > .fm-instance-tabs .fm-instance-tabs__list > .fm-instance-tabs__tab[data-state="active"]::before,
+.fm-workspace-frame[data-workspace-fullscreen="true"]:has(.fm-workspace-shell > .fm-workspace-body):not(:has(.fm-workspace-shell > .fm-home-overlay))
+  > .fm-instance-tabs .fm-instance-tabs__list > .fm-instance-tabs__tab[data-state="active"]::after,
+.fm-workspace-frame[data-workspace-fullscreen="true"]:has(.fm-workspace-shell > .fm-workspace-body):not(:has(.fm-workspace-shell > .fm-home-overlay))
+  > .fm-instance-tabs .fm-instance-tabs__item:has(> .fm-instance-tabs__tab[data-state="active"])::before,
+.fm-workspace-frame[data-workspace-fullscreen="true"]:has(.fm-workspace-shell > .fm-workspace-body):not(:has(.fm-workspace-shell > .fm-home-overlay))
+  > .fm-instance-tabs .fm-instance-tabs__item:has(> .fm-instance-tabs__tab[data-state="active"])::after {
+  display: none;
+}
+
 /* Horizontal strip with 10px side padding so the active tab's 10px concave
    Chrome corner flares never clip at the scrollport edge. */
 .fm-instance-tabs__list {

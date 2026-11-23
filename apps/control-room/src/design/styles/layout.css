@@ -451,3 +451,59 @@
   --fm-ribbon-height: 40px;
 }
 
+/* Workspace full-screen mode: hide top header + ribbon chrome so the left
+   (Model), center (Viewport) and right (Inspector) panels expand to full
+   height while the bottom dock folds down to its compact tab strip. */
+.fm-workspace-frame[data-workspace-fullscreen="true"]
+  .fm-workspace-shell:has(> .fm-workspace-body):not(:has(> .fm-home-overlay))
+  > .fm-slot[data-slot-id="app-menu"],
+.fm-workspace-frame[data-workspace-fullscreen="true"]
+  .fm-workspace-shell:has(> .fm-workspace-body):not(:has(> .fm-home-overlay))
+  > .fm-slot[data-slot-id="ribbon"] {
+  display: none;
+}
+
+.fm-workspace-frame[data-workspace-fullscreen="true"]
+  .fm-workspace-shell:has(> .fm-workspace-body):has(> .fm-slot[data-slot-id="status-bar"]):not(:has(> .fm-home-overlay)) {
+  grid-template-rows: minmax(0, 1fr) var(--fm-status-height);
+}
+
+.fm-workspace-frame[data-workspace-fullscreen="true"]
+  .fm-workspace-shell:has(> .fm-workspace-body):has(> .fm-slot[data-slot-id="status-bar"]):has(> .fm-runtime-degraded-banner):not(:has(> .fm-home-overlay)) {
+  grid-template-rows: auto minmax(0, 1fr) var(--fm-status-height);
+}
+
+.fm-workspace-frame[data-workspace-fullscreen="true"]
+  .fm-workspace-shell:has(> .fm-workspace-body):not(:has(> .fm-slot[data-slot-id="status-bar"])):not(:has(> .fm-home-overlay)) {
+  grid-template-rows: auto minmax(0, 1fr);
+}
+
+.fm-workspace-frame[data-workspace-fullscreen="true"]
+  .fm-workspace-shell:has(> .fm-workspace-body):not(:has(> .fm-slot[data-slot-id="status-bar"])):has(> .fm-runtime-degraded-banner):not(:has(> .fm-home-overlay)) {
+  grid-template-rows: auto auto minmax(0, 1fr);
+}
+
+.fm-workspace-frame[data-workspace-fullscreen="true"]
+  .fm-workspace-shell:has(> .fm-workspace-body):not(:has(> .fm-home-overlay))
+  > .fm-runtime-degraded-banner {
+  grid-row: auto;
+  margin-top: var(--fm-space-1);
+}
+
+.fm-workspace-frame[data-workspace-fullscreen="true"]
+  .fm-workspace-shell:has(> .fm-workspace-body):not(:has(> .fm-home-overlay))
+  > .fm-workspace-body {
+  padding-top: var(--fm-space-1);
+}
+
+.fm-workspace-fullscreen-exit {
+  position: absolute;
+  top: var(--fm-space-2);
+  right: var(--fm-space-2);
+  z-index: var(--fm-z-overlay);
+}
+
+.fm-workspace-frame:not(:has(.fm-workspace-shell > .fm-workspace-body)) .fm-workspace-fullscreen-exit {
+  display: none;
+}
+

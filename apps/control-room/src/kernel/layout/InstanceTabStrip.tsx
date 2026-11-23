@@ -11,6 +11,8 @@ import { useSessionTabAddress } from "./useSessionTabAddress";
 import { homeView, useHomeViewOpen } from "./homeView";
 import { instanceTabLabel, sessionTone } from "./instanceTabModel";
 import { instanceOrigin, instanceTabs, useInstanceTabs, usePageLocation } from "./instanceTabs";
+import { WorkspaceFullscreenButton } from "./WorkspaceFullscreenButton";
+import { useWorkspaceFullscreen } from "./workspaceFullscreenPreference";
 
 const HOME_TAB = "home";
 const SESSION_TAB = "session";
@@ -46,6 +48,7 @@ export function InstanceTabStrip() {
   const sessions = useSessionCollection();
   const tabs = useInstanceTabs();
   const homeOpen = useHomeViewOpen();
+  const workspaceFullscreen = useWorkspaceFullscreen();
   const sessionTabAddress = useSessionTabAddress();
   const location = usePageLocation();
   const current = sessions.resource.data?.sessions.find((entry) => entry.current) ?? null;
@@ -142,6 +145,10 @@ export function InstanceTabStrip() {
           <ExternalLink aria-hidden="true" size={12} />
           Open in window
         </a>
+      ) : workspaceFullscreen && !homeOpen ? (
+        <div className="fm-instance-tabs__actions">
+          <WorkspaceFullscreenButton variant="strip" />
+        </div>
       ) : null}
     </nav>
   );
