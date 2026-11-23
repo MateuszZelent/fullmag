@@ -257,9 +257,15 @@ export default function RibbonModule({ kernel }: ModuleProps) {
       activeTab === "automation" ||
       needsGuideMeshResources,
   });
+  const isTargetScopedTab =
+    activeTab === "view" ||
+    activeTab === "geometry" ||
+    activeTab === "materials" ||
+    activeTab === "physics" ||
+    activeTab === "mesh";
   const fdmMultilayerLayout = useFdmMultilayerLayoutResource({
     enabled:
-      activeTab === "view" &&
+      isTargetScopedTab &&
       sessionStatusData?.domain?.discretization === "fdm",
   });
   const ribbonSceneObjects = useMemo(
@@ -316,12 +322,23 @@ export default function RibbonModule({ kernel }: ModuleProps) {
   const visualizationTarget = useMemo(
     () =>
       resolveRibbonVisualizationTarget({
+        discretization: resolvedDiscretization,
+        fdmMultilayerLayout: fdmMultilayerLayout.data,
         sceneObjectIds,
         selectedMeshPart,
         selection,
+        sessionStatus: sessionStatusData,
         visualizationState: visualizationState.data,
       }),
-    [sceneObjectIds, selectedMeshPart, selection, visualizationState.data],
+    [
+      fdmMultilayerLayout.data,
+      resolvedDiscretization,
+      sceneObjectIds,
+      selectedMeshPart,
+      selection,
+      sessionStatusData,
+      visualizationState.data,
+    ],
   );
 
   const commandContext = useMemo(
@@ -561,28 +578,33 @@ export default function RibbonModule({ kernel }: ModuleProps) {
             if (tabId === stripActiveTab) toggleRibbonExpanded();
           }}
         />
-        <RibbonTargetBarControl
-          activeTab={activeTab}
-          discretization={resolvedDiscretization}
-          sceneObjects={ribbonSceneObjects}
-          selection={selection}
-          visualizationTarget={visualizationTarget}
-          onAction={handleAction}
-        />
-        {ribbonExpanded ? (
-          <RibbonDensityControl density={ribbonDensity} onChange={setRibbonDensity} />
-        ) : null}
-        <button
-          aria-controls="fm-ribbon-tabpanel"
-          aria-expanded={ribbonExpanded}
-          aria-label={ribbonExpanded ? "Collapse ribbon" : "Expand ribbon"}
-          className="fm-ribbon__toggle"
-          title={ribbonExpanded ? "Collapse ribbon (Ctrl+F1)" : "Expand ribbon (Ctrl+F1)"}
-          type="button"
-          onClick={() => toggleRibbonExpanded()}
-        >
-          <ChevronUp aria-hidden="true" size={15} />
-        </button>
+        <div className="fm-ribbon__chrome">
+          {isTargetScopedTab ? (
+            <RibbonTargetBarControl
+              activeTab={activeTab}
+              discretization={resolvedDiscretization}
+              fdmMultilayerLayout={fdmMultilayerLayout.data}
+              sceneObjects={ribbonSceneObjects}
+              selection={selection}
+              visualizationTarget={visualizationTarget}
+              onAction={handleAction}
+            />
+          ) : null}
+          {ribbonExpanded ? (
+            <RibbonDensityControl density={ribbonDensity} onChange={setRibbonDensity} />
+          ) : null}
+          <button
+            aria-controls="fm-ribbon-tabpanel"
+            aria-expanded={ribbonExpanded}
+            aria-label={ribbonExpanded ? "Collapse ribbon" : "Expand ribbon"}
+            className="fm-ribbon__toggle"
+            title={ribbonExpanded ? "Collapse ribbon (Ctrl+F1)" : "Expand ribbon (Ctrl+F1)"}
+            type="button"
+            onClick={() => toggleRibbonExpanded()}
+          >
+            <ChevronUp aria-hidden="true" size={15} />
+          </button>
+        </div>
       </div>
       <RibbonGroupsRow
         groups={groups}

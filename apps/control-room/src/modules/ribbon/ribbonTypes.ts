@@ -52,14 +52,6 @@ export interface RibbonAction {
    * entire button area opens the dropdown.
    */
   splitButton?: boolean;
-  /**
-   * Renders the action as a compact horizontal target-context selector pill
-   * showing the active scope/entity clearly before downstream ribbon actions.
-   */
-  contextMeta?: {
-    badge: string;
-    detail?: string;
-  };
 }
 
 export type RibbonActionStatus =

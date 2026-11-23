@@ -10,6 +10,7 @@ import type { CommandContext } from "@/kernel/commands/commandTypes";
 import { EventBus } from "@/kernel/events/EventBus";
 import type { KernelEventMap } from "@/kernel/events/eventTypes";
 import { LayoutController } from "@/kernel/layout/LayoutController";
+import { activeLaneCapabilityFixture } from "@/kernel/resources/activeLaneCapabilityFixture.testSupport";
 import { SESSION_STATUS_RESOURCE_KEY } from "@/kernel/resources/useSessionStatus";
 import { SelectionController } from "@/kernel/selection/SelectionController";
 import {
@@ -30,6 +31,7 @@ import {
   RIBBON_INSPECTOR_OPEN_AIRBOX_SETTINGS_COMMAND,
   RIBBON_INSPECTOR_OPEN_MAGNETIC_TEXTURE_COMMAND,
   RIBBON_INSPECTOR_OPEN_VISUALIZATION_COMMAND,
+  RIBBON_PHYSICS_SELECT_INTERACTION_COMMAND,
   RIBBON_SELECTION_SELECT_TARGET_COMMAND,
   RIBBON_VISUALIZATION_APPLY_GLOBAL_QUANTITY_COMMAND,
   RIBBON_VISUALIZATION_PATCH_DEFAULTS_COMMAND,
@@ -552,6 +554,21 @@ describe("Ribbon target visualization and inspector commands", () => {
     const context: CommandContext = {
       layout,
       resourceData: {
+        [SESSION_STATUS_RESOURCE_KEY]: {
+          capabilities: {
+            active_lane: {
+              ...activeLaneCapabilityFixture(),
+              operations: {
+                "interaction.exchange": {
+                  state: "supported",
+                  reason: "Exchange is supported.",
+                  requires: [],
+                },
+              },
+            },
+          },
+          domain: { discretization: "fdm" },
+        },
         [MODEL_SCENE_PATH]: {
           objects: [
             { id: "BottomLayer", name: "BottomLayer", role: "magnet" },
@@ -624,6 +641,61 @@ describe("Ribbon target visualization and inspector commands", () => {
       kind: "object.magnetic-texture",
       nodeId: "model:object:BottomLayer:magnetic-texture",
       objectId: "BottomLayer",
+    });
+
+    // Switching Target via the single top-bar selector routes Physics interactions to the selected object.
+    const selectPhysicsTarget = await registry.execute(
+      RIBBON_SELECTION_SELECT_TARGET_COMMAND,
+      context,
+      selectRibbonTargetCommandInput({
+        objectId: "TopLayer",
+        objectLabel: "TopLayer",
+        objectRole: "magnet",
+        tab: "physics",
+        targetKind: "object",
+      }),
+    );
+    expect(selectPhysicsTarget).toEqual({ status: "completed" });
+    const selectExchange = await registry.execute(
+      RIBBON_PHYSICS_SELECT_INTERACTION_COMMAND,
+      context,
+      { interactionId: "exchange" },
+    );
+    expect(selectExchange).toEqual({ status: "completed" });
+    expect(selection.get()).toMatchObject({
+      kind: "object.physics",
+      nodeId: "model:object:TopLayer:physics:exchange",
+      objectId: "TopLayer",
+    });
+
+    // Selecting Airbox then All Objects updates selection cleanly for the single top-bar Target control.
+    const selectAirbox = await registry.execute(
+      RIBBON_SELECTION_SELECT_TARGET_COMMAND,
+      context,
+      selectRibbonTargetCommandInput({ targetKind: "airbox", tab: "view" }),
+    );
+    expect(selectAirbox).toEqual({ status: "completed" });
+    expect(selection.get()).toMatchObject({
+      kind: "airbox.visualization",
+      nodeId: "model:airbox:visualization",
+      objectId: null,
+    });
+
+    const selectAll = await registry.execute(
+      RIBBON_SELECTION_SELECT_TARGET_COMMAND,
+      context,
+      selectRibbonTargetCommandInput({ targetKind: "all", tab: "view" }),
+    );
+    expect(selectAll).toEqual({ status: "completed" });
+    expect(selection.get()).toMatchObject({
+      kind: "objects.root",
+      objectId: null,
+      ref: {
+        kind: "objects.root",
+        nodeId: "model:objects",
+        scopeId: "objects",
+        type: "model-scope",
+      },
     });
   });
 });

@@ -48,6 +48,7 @@ import {
   visualizationStatePatchFromDefaultTargetPatch,
   visualizationTargetKey,
   visualizationTargetUnsupportedPatchFields,
+  type ViewportTargetRenderingPreferences,
   type VisualizationTargetKind,
   type VisualizationTargetPatch,
   type VisualizationTargetRef,
@@ -157,7 +158,7 @@ export function globalQuantityCommandInput(
 
 export function visualizationDefaultsCommandInput(
   patch: VisualizationTargetPatch,
-  targetKinds: VisualizationTargetKind[] = ["object", "part"],
+  targetKinds: VisualizationTargetKind[] = ["object", "part", "fdm-native-layer"],
   options: { clearConflictingOverrides?: boolean } = {},
 ): PatchDefaultsInput {
   return {
@@ -760,20 +761,31 @@ async function patchVisualizationDefaultsFromCommand(
   }
 
   const localPatch = airboxLocalVisualizationPatchFromTargetPatch(input.patch);
+  const localFields = Object.keys(localPatch) as Array<
+    keyof ViewportTargetRenderingPreferences
+  >;
   const persistentPatch = persistentVisualizationTargetPatch(input.patch);
   const patchedFields = Object.keys(persistentPatch) as Array<
     keyof VisualizationTargetPatch
   >;
   for (const kind of input.targetKinds) {
-    if (Object.keys(localPatch).length > 0) {
+    if (localFields.length > 0) {
       context.visualization.patchViewportPreferenceDefaults(kind, localPatch);
     }
     if (patchedFields.length > 0) {
       context.visualization.patchDefaults(kind, persistentPatch);
     }
   }
-  if (input.clearConflictingOverrides && patchedFields.length > 0) {
-    clearLocalObjectOverridesForFields(context, input.targetKinds, patchedFields);
+  if (
+    input.clearConflictingOverrides &&
+    (patchedFields.length > 0 || localFields.length > 0)
+  ) {
+    clearLocalObjectOverridesForFields(
+      context,
+      input.targetKinds,
+      patchedFields,
+      localFields,
+    );
   }
   const statePatch = visualizationStatePatchFromDefaultTargetPatch(persistentPatch);
   const state = visualizationStateFromContext(context);
@@ -804,15 +816,19 @@ function clearLocalObjectOverridesForFields(
   context: CommandContext,
   targetKinds: readonly VisualizationTargetKind[],
   fields: readonly (keyof VisualizationTargetPatch)[],
+  localFields: readonly (keyof ViewportTargetRenderingPreferences)[] = [],
 ): void {
   const visualization = context.visualization;
   if (!visualization) return;
   const allowObject = targetKinds.includes("object");
   const allowPart = targetKinds.includes("part");
+  const allowFdmNativeLayer = targetKinds.includes("fdm-native-layer");
+  const allowRegion = targetKinds.includes("region");
   const snapshot = visualization.getSnapshot();
   const keys = new Set([
     ...Object.keys(snapshot.overrides),
     ...Object.keys(snapshot.pendingOverrides ?? {}),
+    ...Object.keys(snapshot.viewportPreferences ?? {}),
   ]);
   for (const key of keys) {
     if (key === "airbox") continue;
@@ -821,10 +837,17 @@ function clearLocalObjectOverridesForFields(
       target = { id: key, kind: "object" };
     } else if (key.startsWith("part:") && allowPart) {
       target = { id: key, kind: "part" };
+    } else if (key.startsWith("fdm-native-layer:") && allowFdmNativeLayer) {
+      target = { id: key, kind: "fdm-native-layer" };
+    } else if (key.startsWith("region:") && allowRegion) {
+      target = { id: key, kind: "region" };
     }
     if (!target) continue;
     for (const field of fields) {
       visualization.removeTargetOverrideField(target, field);
+    }
+    for (const localField of localFields) {
+      visualization.removeTargetViewportPreferenceField(target, localField);
     }
   }
 }
@@ -837,13 +860,23 @@ function clearRemoteObjectOverridesForFields(
   const scopes = new Set<string>();
   if (targetKinds.includes("object")) scopes.add("object");
   if (targetKinds.includes("part")) scopes.add("part");
+  if (targetKinds.includes("fdm-native-layer")) scopes.add("fdm_native_layer");
+  if (targetKinds.includes("region")) scopes.add("region");
   let nextOverrides = overrides;
   let changed = false;
   for (const entry of overrides) {
     if (!scopes.has(entry.scope)) continue;
+    const kind: VisualizationTargetKind =
+      entry.scope === "part"
+        ? "part"
+        : entry.scope === "fdm_native_layer"
+          ? "fdm-native-layer"
+          : entry.scope === "region"
+            ? "region"
+            : "object";
     const target: VisualizationTargetRef = {
       id: entry.scope_id,
-      kind: entry.scope === "part" ? "part" : "object",
+      kind,
     };
     for (const field of fields) {
       const updated = removeTargetOverrideField(nextOverrides, target, field);
@@ -1788,6 +1821,7 @@ export function isVisualizationTargetKind(
   return (
     value === "airbox" ||
     value === "fdm-domain" ||
+    value === "fdm-native-layer" ||
     value === "object" ||
     value === "part" ||
     value === "region"

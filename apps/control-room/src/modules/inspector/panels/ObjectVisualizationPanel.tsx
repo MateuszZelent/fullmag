@@ -1,6 +1,7 @@
 "use client";
 
 import { isTransportConductorRole } from "@/shared/domain/physics/objectMagneticModel";
+import { hasSessionAcDcAntennaModule } from "@/kernel/resources/sessionPhysicsModules";
 import { isScalarSpatialQuantityId, resolveCanonicalQuantityId } from "@/kernel/api/quantityIds";
 
 import { artifactFieldCatalogMatchesOwner, artifactFieldLocatorHasAcceptedGlobalSampling, type ArtifactFieldSelection, artifactCarrierPresentationKey, artifactInspectionQuantity, artifactInspectorFieldBinding } from "@/kernel/visualization/artifactFieldSelection";
@@ -1091,7 +1092,18 @@ function useObjectVisualizationPanelState(
             resolvedTarget.id ===
             `fdm-native-layer:${encodeURIComponent(layer.layer_id)}`,
         )
-      : null;
+      : resolvedTarget?.kind === "object"
+        ? fdmMultilayerLayout.data?.layers.find((layer) => {
+            const rawObjectId = resolvedTarget.id.startsWith("object:")
+              ? resolvedTarget.id.slice("object:".length)
+              : resolvedTarget.id;
+            return (
+              layer.object_id === rawObjectId ||
+              canonicalVisualizationSceneObjectId(layer.object_id) ===
+                canonicalVisualizationSceneObjectId(rawObjectId)
+            );
+          })
+        : null;
   const nativeLayerCapacity = nativeLayer
     ? {
         activeCellCount: nativeLayer.active_cell_count,
@@ -1705,6 +1717,9 @@ function ObjectVisualizationPanelView({
     effectiveQuantityId !== presentedSettings.activeQuantityId && !presentedSettings.activeQuantityId
       ? { ...presentedSettings, activeQuantityId: effectiveQuantityId }
       : presentedSettings;
+  const acDcModuleActive =
+    panel.artifactInspection ||
+    hasSessionAcDcAntennaModule({ scene: scene.data });
   const quantitySelection = visualizationQuantitySelectionState({
     activeQuantityId: effectiveQuantityId,
     items: visualizationQuantityItems(
@@ -1715,6 +1730,7 @@ function ObjectVisualizationPanelView({
       targetFieldAvailability,
       authoredMagnetizationAvailable,
       panel.conductorQuantityScope,
+      acDcModuleActive,
     ),
     loading: fieldCatalogLoading,
     error: fieldCatalogError,
@@ -1770,14 +1786,23 @@ function ObjectVisualizationPanelView({
       {artifactQuantity && !artifactOwnerReady ? <p role="status" className="fm-artifact-inspection-owner-required">Select the field inspection source and execution in the viewport.</p> : null}
       <ObjectVisualizationOverview
             context={target.kind === "airbox" ? (
-              <InspectorGroup title="Universe sampling domain">
-                <FieldRow label="Role" value="Field observation in the space around objects" />
-                <FieldRow label="Oersted field H" value="A/m · sampled in Universe" />
-                <FieldRow label="Current density J" value="A/m² · conductor mesh, under Antenna" />
-                <FieldRow label="Electric potential V" value="V · conductor mesh, under Antenna" />
-                <FieldRow label="Mesh source" value={panel.artifactInspection ? "Selected result’s saved Global mesh, when available" : "Current session’s Universe mesh, when available"} />
-                <p className="fm-universe-sampling-help">The mesh defines where a field is sampled. It does not create current, magnetization, or field values. To inspect the Oersted field, select an antenna execution with a computed field on this domain, then enable Vectors.</p>
-              </InspectorGroup>
+              acDcModuleActive ? (
+                <InspectorGroup title="Universe sampling domain">
+                  <FieldRow label="Role" value="Field observation in the space around objects" />
+                  <FieldRow label="Oersted field H" value="A/m · sampled in Universe" />
+                  <FieldRow label="Current density J" value="A/m² · conductor mesh, under Antenna" />
+                  <FieldRow label="Electric potential V" value="V · conductor mesh, under Antenna" />
+                  <FieldRow label="Mesh source" value={panel.artifactInspection ? "Selected result’s saved Global mesh, when available" : "Current session’s Universe mesh, when available"} />
+                  <p className="fm-universe-sampling-help">The mesh defines where a field is sampled. It does not create current, magnetization, or field values. To inspect the Oersted field, select an antenna execution with a computed field on this domain, then enable Vectors.</p>
+                </InspectorGroup>
+              ) : (
+                <InspectorGroup title="Universe sampling domain">
+                  <FieldRow label="Role" value="Stray-field observation in the space around magnetic objects" />
+                  <FieldRow label="Stray field" value="H_demag (A/m) · sampled in Airbox / Universe" />
+                  <FieldRow label="Mesh source" value="Current session’s Universe mesh, when available" />
+                  <p className="fm-universe-sampling-help">The Airbox defines where stray and demagnetizing fields outside magnetic objects are sampled. Enable Vectors or Wireframe to inspect the computed field in the air gap and exterior space.</p>
+                </InspectorGroup>
+              )
             ) : null}
             advanced={
               <>
@@ -1824,6 +1849,7 @@ function ObjectVisualizationPanelView({
                   target.kind === "airbox" ||
                   isFdmUniverseOutsideSupportTarget(target)) ? (
                   <VisualizationQuantitySection
+                    acDcActive={acDcModuleActive}
                     conductor={panel.conductorQuantityScope}
                     fieldCatalog={fieldCatalog.data}
                     fieldCatalogLoading={fieldCatalogLoading}

@@ -52,7 +52,6 @@ function RibbonActionButton({
   commandId,
   commandInput,
   splitButton,
-  contextMeta,
   onAction,
   onCommandDetail,
 }: {
@@ -73,7 +72,6 @@ function RibbonActionButton({
   commandId?: string;
   commandInput?: unknown;
   splitButton?: boolean;
-  contextMeta?: RibbonGroupData["actions"][number]["contextMeta"];
   onAction?: (actionId: string, input?: unknown) => void;
   onCommandDetail?: (commandId: string) => void;
 }) {
@@ -84,33 +82,9 @@ function RibbonActionButton({
     splitButton,
   });
   const resolvedIconColor = active ? undefined : resolveRibbonIconColor(iconColor);
-  const isContextSelector = Boolean(contextMeta);
-  const shellStyle: CSSProperties | undefined = isContextSelector
-    ? { width: "auto", minWidth: "136px", maxWidth: "236px" }
+  const style = resolvedIconColor
+    ? ({ "--fm-ribbon-icon-color": resolvedIconColor } as CSSProperties)
     : undefined;
-  const buttonStyle: CSSProperties | undefined = isContextSelector
-    ? ({
-        ...(resolvedIconColor
-          ? { "--fm-ribbon-icon-color": resolvedIconColor }
-          : {}),
-        width: "100%",
-        minWidth: "136px",
-        maxWidth: "236px",
-        flexDirection: "row",
-        justifyContent: "flex-start",
-        alignItems: "center",
-        gap: "var(--fm-space-2)",
-        padding: hasMenu
-          ? "4px var(--fm-space-4) 4px var(--fm-space-2)"
-          : "4px var(--fm-space-2)",
-        border: "1px solid var(--fm-border-default)",
-        background: "var(--fm-bg-panel-raised)",
-        color: "var(--fm-text-primary)",
-        textAlign: "left",
-      } as CSSProperties)
-    : resolvedIconColor
-      ? ({ "--fm-ribbon-icon-color": resolvedIconColor } as CSSProperties)
-      : undefined;
   const statusText = statusLabel(status);
   const shellClassName = `fm-ribbon-action-shell${size === "large" || accent ? " fm-ribbon-action-shell--large" : ""}`;
   const tooltipText = [tooltip ?? label, shortcut].filter(Boolean).join(" · ");
@@ -163,9 +137,8 @@ function RibbonActionButton({
       aria-keyshortcuts={shortcut ? toAriaKeyShortcut(shortcut) : undefined}
       data-ribbon-toolbar-item="true"
       data-ribbon-action-id={id}
-      data-context-selector={isContextSelector ? "true" : undefined}
       tabIndex={-1}
-      style={buttonStyle}
+      style={style}
       title={tooltipText}
       type="button"
       onClick={triggerState.runsActionFromButton ? runAction : undefined}
@@ -179,63 +152,7 @@ function RibbonActionButton({
       <span className="fm-ribbon-action__icon">
         {icon}
       </span>
-      {contextMeta ? (
-        <span
-          style={{
-            display: "flex",
-            flexDirection: "column",
-            minWidth: 0,
-            flex: "1 1 auto",
-            gap: "1px",
-            lineHeight: 1.15,
-          }}
-        >
-          <span
-            style={{
-              fontSize: "var(--fm-font-size-2xs)",
-              color: "var(--fm-text-muted)",
-              fontWeight: 600,
-              letterSpacing: "0.02em",
-              overflow: "hidden",
-              textOverflow: "ellipsis",
-              whiteSpace: "nowrap",
-            }}
-          >
-            {contextMeta.badge}
-          </span>
-          <span
-            className="fm-ribbon-action__label"
-            style={{
-              display: "block",
-              textAlign: "left",
-              fontWeight: 600,
-              fontSize: "var(--fm-font-size-xs)",
-              color: "var(--fm-text-primary)",
-              overflow: "hidden",
-              textOverflow: "ellipsis",
-              whiteSpace: "nowrap",
-              WebkitLineClamp: 1,
-            }}
-          >
-            {label}
-          </span>
-          {contextMeta.detail ? (
-            <span
-              style={{
-                fontSize: "var(--fm-font-size-2xs)",
-                color: "var(--fm-text-secondary)",
-                overflow: "hidden",
-                textOverflow: "ellipsis",
-                whiteSpace: "nowrap",
-              }}
-            >
-              {contextMeta.detail}
-            </span>
-          ) : null}
-        </span>
-      ) : (
-        <span className="fm-ribbon-action__label">{label}</span>
-      )}
+      <span className="fm-ribbon-action__label">{label}</span>
       {status ? (
         <>
           <span aria-hidden="true" className="fm-ribbon-action__status" />
@@ -285,7 +202,7 @@ function RibbonActionButton({
       {content}
     </DisabledReason>
   ) : (
-    <span className={shellClassName} style={shellStyle} title={tooltipText}>
+    <span className={shellClassName} title={tooltipText}>
       {content}
     </span>
   );
@@ -380,7 +297,6 @@ function RibbonGroup({
               id={action.id}
               commandId={action.commandId}
               commandInput={action.commandInput}
-              contextMeta={action.contextMeta}
               iconColor={action.iconColor}
               label={action.label}
               size={action.size}

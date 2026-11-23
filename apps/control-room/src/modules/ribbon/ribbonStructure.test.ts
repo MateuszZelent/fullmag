@@ -3775,21 +3775,32 @@ describe("ribbon structure", () => {
       },
       {
         layers: { vectors: { density: 2048 } },
-        sampling: { max_glyphs: 2048 },
         vector_density: 2048,
       },
     ]);
     expect(context.visualization.getDefaultSettings("object")).toMatchObject({
       geometryScope: "surface",
+      vectorBudget: 2048,
       vectorCenteringEnabled: false,
       vectorSurfaceOffsetEnabled: true,
     });
     expect(context.visualization.getDefaultSettings("part")).toMatchObject({
       geometryScope: "surface",
+      vectorBudget: 2048,
+      vectorCenteringEnabled: false,
+      vectorSurfaceOffsetEnabled: true,
+    });
+    expect(context.visualization.getDefaultSettings("fdm-native-layer")).toMatchObject({
+      geometryScope: "surface",
+      vectorBudget: 2048,
       vectorCenteringEnabled: false,
       vectorSurfaceOffsetEnabled: true,
     });
     expect(context.visualization.getSnapshot().viewportPreferenceDefaults).toEqual({
+      "fdm-native-layer": {
+        vectorCenteringEnabled: false,
+        vectorSurfaceOffsetEnabled: true,
+      },
       object: {
         vectorCenteringEnabled: false,
         vectorSurfaceOffsetEnabled: true,
@@ -4410,11 +4421,7 @@ describe("ribbon structure", () => {
         mesh_summary: { node_count: 9, element_count: 8 },
       } as never,
     });
-    expect(mesh?.groups.map((group) => group.id)).toEqual([
-      "mesh-target-context",
-      "build",
-      "mesh-view",
-    ]);
+    expect(mesh?.groups.map((group) => group.id)).toEqual(["build", "mesh-view"]);
     expect(
       mesh?.groups
         .find((group) => group.id === "build")
@@ -4487,10 +4494,7 @@ describe("ribbon structure", () => {
         ?.actions.find((action) => action.id === "mesh.build-selected"),
     ).toBeUndefined();
     const mesh = buildRibbonTabContent("mesh", context);
-    expect(mesh?.groups.map((group) => group.id)).toEqual([
-      "mesh-target-context",
-      "mesh-view",
-    ]);
+    expect(mesh?.groups.map((group) => group.id)).toEqual(["mesh-view"]);
     expect(
       mesh?.groups.flatMap((group) =>
         group.actions.flatMap((action) =>
@@ -4515,10 +4519,7 @@ describe("ribbon structure", () => {
     expect(geometry?.groups.find((group) => group.id === "builder-lifecycle")?.actions
       .some((action) => action.id === "mesh.build-selected")).not.toBe(true);
     const mesh = buildRibbonTabContent("mesh", context);
-    expect(mesh?.groups.map((group) => group.id)).toEqual([
-      "mesh-target-context",
-      "mesh-view",
-    ]);
+    expect(mesh?.groups.map((group) => group.id)).toEqual(["mesh-view"]);
   });
 
   it("exposes FEM meshing before the initial FDM domain is replaced", () => {
@@ -5435,14 +5436,21 @@ describe("ribbon structure", () => {
     ]);
   });
 
-  it("exposes microstrip antenna creation from the Geometry create group", () => {
+  it("separates microstrip and CPW antennas into their dedicated AC/DC Antennas group in Geometry", () => {
     const createGroup = ALL_TAB_CONTENT.geometry.groups.find(
       (group) => group.id === "builder-create",
     );
+    const acDcGroup = ALL_TAB_CONTENT.geometry.groups.find(
+      (group) => group.id === "builder-acdc-antennas",
+    );
 
-    expect(createGroup?.actions.map((action) => action.id)).toEqual(
+    expect(createGroup?.actions.map((action) => action.id)).not.toEqual(
       expect.arrayContaining(["geometry.add-microstrip-antenna"]),
     );
+    expect(acDcGroup?.actions.map((action) => action.id)).toEqual([
+      "geometry.add-microstrip-antenna",
+      "geometry.add-cpw-antenna",
+    ]);
   });
 
   it("routes Thin Film to the enabled geometry command", () => {
@@ -5921,7 +5929,38 @@ describe("Ribbon explicit Target Context & routing", () => {
         visualizationTarget: null,
       }),
     );
+    expect(allHtml).toContain("fm-ribbon-target");
+    expect(allHtml).not.toContain("Target:");
     expect(allHtml).toContain("All Objects");
+    expect(allHtml).toContain('data-target-kind="all"');
+
+    const objectHtml = renderToStaticMarkup(
+      createElement(RibbonTargetBarControl, {
+        activeTab: "view",
+        discretization: "fdm",
+        onAction: () => undefined,
+        sceneObjects,
+        selection: {
+          kind: "object.root",
+          label: "BottomLayer",
+          moduleSource: "explorer",
+          nodeId: "model:object:BottomLayer",
+          objectId: "BottomLayer",
+          ref: {
+            kind: "object.root",
+            nodeId: "model:object:BottomLayer",
+            objectId: "BottomLayer",
+            objectRole: "magnet",
+            type: "scene-object",
+            visualizationTargetId: "object:BottomLayer",
+          },
+        },
+        visualizationTarget: { id: "object:BottomLayer", kind: "object", label: "BottomLayer" },
+      }),
+    );
+    expect(objectHtml).not.toContain("Target:");
+    expect(objectHtml).toContain("BottomLayer");
+    expect(objectHtml).toContain('data-target-kind="object"');
 
     const airboxHtml = renderToStaticMarkup(
       createElement(RibbonTargetBarControl, {
@@ -5945,7 +5984,8 @@ describe("Ribbon explicit Target Context & routing", () => {
         visualizationTarget: AIRBOX_VISUALIZATION_TARGET,
       }),
     );
-    expect(airboxHtml).toContain("Airbox (Universe)");
+    expect(airboxHtml).toContain("Airbox");
+    expect(airboxHtml).toContain('data-target-kind="airbox"');
 
     const csgHtml = renderToStaticMarkup(
       createElement(RibbonTargetBarControl, {
@@ -5965,10 +6005,11 @@ describe("Ribbon explicit Target Context & routing", () => {
         visualizationTarget: { id: "object:TopLayer", kind: "object", label: "TopLayer" },
       }),
     );
-    expect(csgHtml).toContain("Base [A]: TopLayer · Tools [B]: BottomLayer");
+    expect(csgHtml).toContain("TopLayer · BottomLayer");
+    expect(csgHtml).toContain('data-target-kind="multi"');
   });
 
-  it("routes View tab Vectors and Surface controls to Airbox and surfaces FDM Multilayer Airbox Settings shortcut", () => {
+  it("routes View tab Vectors and Surface controls to Airbox and places compact Viz/Airbox Settings utilities inside Display without a duplicate Target group", () => {
     const visualization = new ObjectVisualizationController();
     const content = buildRibbonTabContent("view", {
       commands: createRibbonCommandRegistry(),
@@ -5999,16 +6040,18 @@ describe("Ribbon explicit Target Context & routing", () => {
       visualizationSnapshot: visualization.getSnapshot(),
     });
 
-    const targetGroup = content?.groups[0];
-    expect(targetGroup?.id).toBe("view-target-context");
-    expect(targetGroup?.actions.map((a) => a.id)).toEqual([
-      "view-target-selector",
-      "view-target-airbox-shortcut",
-      "view-open-target-inspector",
-      "view-open-airbox-settings",
-    ]);
+    expect(content?.groups.some((g) => g.id === "view-target-context")).toBe(false);
+    expect(content?.groups[0]?.id).toBe("view-global-display");
     const displayGroup = content?.groups.find((g) => g.id === "view-global-display");
     expect(displayGroup?.subtitle).toBe("Airbox");
+    expect(displayGroup?.actions.some((a) => a.id === "view-target-selector")).toBe(false);
+    expect(displayGroup?.actions.some((a) => a.id === "view-target-airbox-shortcut")).toBe(false);
+    expect(displayGroup?.actions.find((a) => a.id === "view-open-target-inspector")?.label).toBe(
+      "Airbox Viz",
+    );
+    expect(displayGroup?.actions.find((a) => a.id === "view-open-airbox-settings")?.label).toBe(
+      "Airbox Settings",
+    );
     const vectorsAction = displayGroup?.actions.find((a) => a.id === "view-vectors");
     expect(vectorsAction?.splitButton).toBe(true);
     expect(vectorsAction?.commandId).toBe(RIBBON_VISUALIZATION_PATCH_TARGET_COMMAND);
@@ -6017,9 +6060,42 @@ describe("Ribbon explicit Target Context & routing", () => {
     expect(wireframeNode).toMatchObject({
       commandId: RIBBON_VISUALIZATION_PATCH_TARGET_COMMAND,
     });
+
+    const objectView = buildRibbonTabContent("view", {
+      commands: createRibbonCommandRegistry(),
+      scene: sampleScene as unknown as Parameters<typeof buildRibbonTabContent>[1] extends { scene?: infer T } ? T : never,
+      selection: {
+        kind: "object.root",
+        label: "BottomLayer",
+        moduleSource: "explorer",
+        nodeId: "model:object:BottomLayer",
+        objectId: "BottomLayer",
+        ref: {
+          kind: "object.root",
+          nodeId: "model:object:BottomLayer",
+          objectId: "BottomLayer",
+          objectRole: "magnet",
+          type: "scene-object",
+          visualizationTargetId: "object:BottomLayer",
+        },
+      },
+      sessionStatus: {
+        capabilities: { active_lane: ribbonActiveLane("fdm") },
+        domain: { discretization: "fdm" },
+        resources: { field_revision: 0, fields_revision: 0 },
+      },
+      visualization,
+      visualizationSnapshot: visualization.getSnapshot(),
+    });
+    const objectDisplay = objectView?.groups.find((g) => g.id === "view-global-display");
+    expect(objectDisplay?.subtitle).toBe("BottomLayer");
+    expect(objectDisplay?.actions.find((a) => a.id === "view-open-target-inspector")?.label).toBe(
+      "Object Viz",
+    );
+    expect(objectDisplay?.actions.some((a) => a.id === "view-open-airbox-settings")).toBe(false);
   });
 
-  it("shows Base [A] / Tools [B] in Geometry Target, active Inspector in Materials, Local Target in Physics, and Scope in Mesh", () => {
+  it("omits duplicate Target dropdown groups across View, Geometry, Materials, Physics, and Mesh while preserving target routing", () => {
     const visualization = new ObjectVisualizationController();
     const commands = createControlRoomCommandRegistry();
     const multiSelection = {
@@ -6061,31 +6137,178 @@ describe("Ribbon explicit Target Context & routing", () => {
       visualizationSnapshot: visualization.getSnapshot(),
     };
 
+    const duplicateTargetGroupIds = new Set([
+      "view-target-context",
+      "geometry-target-context",
+      "materials-target-context",
+      "physics-target-context",
+      "mesh-target-context",
+    ]);
+    const duplicateTargetActionIds = new Set([
+      "view-target-selector",
+      "view-target-airbox-shortcut",
+      "geometry-target-selector",
+      "materials-target-selector",
+      "physics-target-selector",
+      "mesh-scope-selector",
+    ]);
+
+    for (const tabId of ["view", "geometry", "materials", "physics", "mesh"] as const) {
+      const tab = buildRibbonTabContent(tabId, baseContext);
+      expect(tab?.groups.some((g) => duplicateTargetGroupIds.has(g.id))).toBe(false);
+      expect(
+        tab?.groups.some((g) => g.actions.some((a) => duplicateTargetActionIds.has(a.id))),
+      ).toBe(false);
+    }
+
     const geometry = buildRibbonTabContent("geometry", baseContext);
-    expect(geometry?.groups[0].id).toBe("geometry-target-context");
-    expect(geometry?.groups[0].actions[0].label).toBe(
-      "Base [A]: TopLayer · Tools [B]: BottomLayer",
-    );
+    expect(geometry?.groups[0].id).toBe("builder-create");
+    expect(
+      geometry?.groups.find((g) => g.id === "builder-boolean")?.actions.map((a) => a.id),
+    ).toEqual([
+      "geometry.boolean-union",
+      "geometry.boolean-subtract",
+      "geometry.boolean-intersect",
+      "geometry.boolean-imprint-regions",
+    ]);
 
     const materials = buildRibbonTabContent("materials", baseContext);
-    expect(materials?.groups[0].id).toBe("materials-target-context");
-    expect(materials?.groups[0].actions[0].label).toBe("TopLayer");
-    const matInspector = materials?.groups
-      .find((g) => g.id === "materials-magnetization")
-      ?.actions.find((a) => a.id === "mat-texture-inspector");
+    expect(materials?.groups[0].id).toBe("materials-magnetization");
+    const matGroup = materials?.groups.find((g) => g.id === "materials-magnetization");
+    expect(matGroup?.subtitle).toBe("applies to TopLayer");
+    const matInspector = matGroup?.actions.find((a) => a.id === "mat-texture-inspector");
     expect(matInspector?.disabled).toBe(false);
     expect(matInspector?.commandId).toBe("ribbon.inspector.open-magnetic-texture");
-    const uniformPreset = materials?.groups
-      .find((g) => g.id === "materials-magnetization")
-      ?.actions.find((a) => a.id === "magnetization-texture.assign-uniform");
+    const uniformPreset = matGroup?.actions.find(
+      (a) => a.id === "magnetization-texture.assign-uniform",
+    );
     expect(uniformPreset?.tooltip).toContain("TopLayer");
 
     const physics = buildRibbonTabContent("physics", baseContext);
-    expect(physics?.groups[0].id).toBe("physics-target-context");
-    expect(physics?.groups[0].actions[0].label).toBe("TopLayer");
+    expect(physics?.groups[0].id).toBe("physics-core");
+    expect(physics?.groups[0].subtitle).toBe("TopLayer · Global: Demag");
+    expect(
+      physics?.groups[0].actions.find((a) => a.id === "physics-interactions")?.tooltip,
+    ).toContain("TopLayer");
 
     const mesh = buildRibbonTabContent("mesh", baseContext);
-    expect(mesh?.groups[0].id).toBe("mesh-target-context");
-    expect(mesh?.groups[0].actions[0].label).toBe("Shared FDM Grid");
+    expect(mesh?.groups[0].id).toBe("build");
+  });
+
+  it("resolves FDM multilayer selected objects to canonical fdm-native-layer targets and clears fdm_native_layer + viewportPreferences on global Ribbon edits", async () => {
+    const fdmMultilayerLayout = {
+      available: true,
+      domain_generation_id: "gen-1",
+      layout_revision: 1,
+      layers: [
+        {
+          active_cell_count: 5141,
+          active_mask_present: true,
+          inactive_cell_count: 484,
+          layer_id: "layer:TopLayer",
+          magnet_name: "TopLayer",
+          native_cell_size: [4e-9, 4e-9, 15e-9],
+          native_grid: [75, 75, 1],
+          native_origin: [-150e-9, -150e-9, 32.5e-9],
+          object_id: "toplayer-mwtopvuc",
+          transfer_kind: "fft",
+        },
+      ],
+    } as unknown as NonNullable<Parameters<typeof resolveRibbonVisualizationTarget>[0]["fdmMultilayerLayout"]>;
+
+    const target = resolveRibbonVisualizationTarget({
+      discretization: "fdm",
+      fdmMultilayerLayout,
+      sceneObjectIds: new Set(["toplayer-mwtopvuc"]),
+      selectedMeshPart: null,
+      selection: {
+        kind: "object.visualization",
+        label: "TopLayer",
+        moduleSource: "explorer",
+        nodeId: "model:object:toplayer-mwtopvuc:visualization",
+        objectId: "toplayer-mwtopvuc",
+        ref: {
+          kind: "object.visualization",
+          nodeId: "model:object:toplayer-mwtopvuc:visualization",
+          objectId: "toplayer-mwtopvuc",
+          objectRole: "magnet",
+          type: "scene-object",
+          visualizationTargetId: "object:toplayer-mwtopvuc",
+        },
+      },
+      visualizationState: null,
+    });
+    expect(target).toEqual({
+      id: "fdm-native-layer:layer%3ATopLayer",
+      kind: "fdm-native-layer",
+      label: "TopLayer",
+    });
+
+    const { context, patches } = createVisualizationRibbonContext({
+      layers: { vectors: { density: 50, visible: true } },
+      overrides: [
+        {
+          display: {
+            geometry_scope: "surface",
+            vectors: { visible: true },
+          },
+          scope: "fdm_native_layer",
+          scope_id: "layer:TopLayer",
+          style: {
+            vector_budget: 5141,
+          },
+        },
+      ],
+      sampling: { max_glyphs: 16384 },
+    });
+    const nativeTarget = {
+      id: "fdm-native-layer:layer%3ATopLayer",
+      kind: "fdm-native-layer" as const,
+      label: "TopLayer",
+    };
+    context.visualization.patchViewportPreferences(nativeTarget, {
+      vectorSurfaceOffsetEnabled: true,
+      vectorSurfaceOffsetScale: 0.4,
+    });
+    context.fdmMultilayerLayout = fdmMultilayerLayout;
+
+    const content = buildRibbonTabContent("view", context);
+    const vectorsAction = content?.groups
+      .find((group) => group.id === "view-global-display")
+      ?.actions.find((action) => action.id === "view-vectors");
+    const densityNode = vectorsAction?.menu?.find(
+      (node) => node.type === "slider" && node.id === "vectors:density",
+    );
+    const placementNode = vectorsAction?.menu?.find(
+      (node) => node.type === "submenu" && node.id === "vectors:placement",
+    );
+    const surfaceOffsetNode = placementNode?.type === "submenu"
+      ? placementNode.nodes.find(
+          (node) =>
+            node.type === "checkbox" && node.id === "vectors:surface-offset",
+        )
+      : undefined;
+
+    expect(densityNode).toMatchObject({ max: 16384, step: 1, value: 50 });
+    if (
+      densityNode?.type !== "slider" ||
+      surfaceOffsetNode?.type !== "checkbox"
+    ) {
+      throw new Error("Expected density slider and surface offset checkbox");
+    }
+
+    await runRibbonNode(densityNode, 5141, context);
+    await runRibbonNode(surfaceOffsetNode, false, context);
+
+    expect(patches[0]).toMatchObject({
+      layers: { vectors: { density: 5141 } },
+      vector_density: 5141,
+    });
+    expect(patches[0]?.overrides?.[0]?.style?.vector_budget).toBeUndefined();
+    expect(
+      context.visualization.getSnapshot().viewportPreferences?.[
+        "fdm-native-layer:layer%3ATopLayer"
+      ]?.vectorSurfaceOffsetEnabled,
+    ).toBeUndefined();
   });
 });

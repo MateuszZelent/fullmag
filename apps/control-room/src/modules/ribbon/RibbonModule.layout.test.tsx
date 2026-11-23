@@ -16,6 +16,7 @@ import {
 import { SelectionController } from "@/kernel/selection/SelectionController";
 import type { KernelApi } from "@/kernel/types";
 
+import { ObjectVisualizationController } from "@/kernel/visualization/ObjectVisualizationController";
 import {
   RIBBON_ANALYSIS_SHOW_CHART_AND_FIELD_COMMAND,
   RIBBON_ANALYSIS_SHOW_CHART_COMMAND,
@@ -129,7 +130,7 @@ vi.mock(
     >();
     return {
       ...actual,
-      useObjectVisualizationController: () => ({} as never),
+      useObjectVisualizationController: () => new ObjectVisualizationController(),
       useObjectVisualizationSelector: <T,>(
         selector: (snapshot: typeof actual.EMPTY_OBJECT_VISUALIZATION_SNAPSHOT) => T,
       ) => selector(actual.EMPTY_OBJECT_VISUALIZATION_SNAPSHOT),
@@ -239,6 +240,171 @@ describe("RibbonModule layout-driven active actions", () => {
         activeState("analysis-show-field"),
         activeState("analysis-show-chart-and-field"),
       ]).toEqual(["false", "false", "true"]);
+    } finally {
+      await act(async () => root.unmount());
+      restoreToolbarQuerySelectorAll();
+      dom.restore();
+    }
+  });
+
+  it("renders exactly ONE Target selector (in the top tab bar) with zero duplicate Target groups across View, Geometry, Materials, Physics, and Mesh", async () => {
+    const dom = installSimulationPreparationTestDom();
+    const restoreToolbarQuerySelectorAll =
+      installRibbonToolbarQuerySelectorAll();
+    const container = dom.document.createElement("div");
+    dom.document.body.appendChild(container);
+
+    const bus = new EventBus<KernelEventMap>();
+    const layout = new LayoutController(bus);
+    const selection = new SelectionController(bus);
+    selection.set(
+      {
+        kind: "object.root",
+        label: "BottomLayer",
+        nodeId: "model:object:BottomLayer",
+        objectId: "BottomLayer",
+        ref: {
+          kind: "object.root",
+          nodeId: "model:object:BottomLayer",
+          objectId: "BottomLayer",
+          objectRole: "magnet",
+          type: "scene-object",
+          visualizationTargetId: "object:BottomLayer",
+        },
+      },
+      "ribbon-layout-test",
+    );
+
+    const commands = new CommandRegistry();
+    for (const command of RIBBON_COMMANDS) {
+      commands.register(command);
+    }
+
+    const kernel = {
+      api: { visualization: {} },
+      analysisFieldOverlay: {},
+      bus,
+      commands,
+      layout,
+      objectMoveTool: {
+        getSnapshot: () => null,
+        subscribe: () => () => undefined,
+      },
+      resources: {},
+      selection,
+      visualization: new ObjectVisualizationController(),
+    } as unknown as KernelApi;
+    const root = createRoot(container as unknown as Element);
+
+    try {
+      await act(async () =>
+        root.render(
+          <KernelContext.Provider value={kernel}>
+            <RibbonModule
+              config={{}}
+              kernel={kernel}
+              moduleId="ribbon"
+              setConfig={() => undefined}
+              slotId="ribbon"
+            />
+          </KernelContext.Provider>,
+        ),
+      );
+
+      for (const nonTargetTab of ["home", "study", "results"] as const) {
+        await act(async () => layout.setActiveTab(nonTargetTab));
+        const hiddenTargetBars = findElements(
+          container,
+          (element) => element.getAttribute("data-ribbon-target-bar") === "true",
+        );
+        expect(hiddenTargetBars).toHaveLength(0);
+      }
+
+      for (const tabId of ["view", "geometry", "materials", "physics", "mesh"] as const) {
+        await act(async () => layout.setActiveTab(tabId));
+
+        const tabbar = findElement(
+          container,
+          (element) =>
+            (element.getAttribute("class") ?? "").split(/\s+/).includes("fm-ribbon__tabbar"),
+          "ribbon tabbar",
+        );
+        const targetBars = findElements(
+          container,
+          (element) => element.getAttribute("data-ribbon-target-bar") === "true",
+        );
+        expect(targetBars).toHaveLength(1);
+        expect(
+          findElements(
+            tabbar,
+            (element) => element.getAttribute("data-ribbon-target-bar") === "true",
+          ),
+        ).toHaveLength(1);
+        expect(targetBars[0]?.textContent).not.toContain("Target:");
+        expect(targetBars[0]?.textContent).toContain("BottomLayer");
+        expect(targetBars[0]?.getAttribute("data-target-kind")).toBe("object");
+
+        const duplicateTargetGroups = findElements(container, (element) =>
+          (element.getAttribute("data-group-id") ?? "").endsWith("-target-context"),
+        );
+        expect(duplicateTargetGroups).toHaveLength(0);
+
+        const duplicateTargetActions = findElements(container, (element) => {
+          const actionId = element.getAttribute("data-action-id") ?? "";
+          return (
+            element.getAttribute("data-context-selector") === "true" ||
+            actionId.endsWith("-target-selector") ||
+            actionId === "mesh-scope-selector" ||
+            actionId === "view-target-airbox-shortcut"
+          );
+        });
+        expect(duplicateTargetActions).toHaveLength(0);
+
+        if (tabId === "view") {
+          const displayGroup = findElement(
+            container,
+            (element) => element.getAttribute("data-group-id") === "view-global-display",
+            "Display group",
+          );
+          const vizButtons = findElements(
+            displayGroup,
+            (element) =>
+              element.getAttribute("data-action-id") === "view-open-target-inspector",
+          );
+          expect(vizButtons).toHaveLength(1);
+          expect(vizButtons[0]?.textContent).toContain("Object Viz");
+        }
+      }
+
+      await act(async () => {
+        layout.setActiveTab("geometry");
+        selection.set(
+          {
+            kind: "object.root",
+            label: "TopLayer",
+            nodeId: "model:object:TopLayer",
+            objectId: "TopLayer",
+            ref: {
+              kind: "object.root",
+              nodeId: "model:object:TopLayer",
+              objectId: "TopLayer",
+              objectRole: "magnet",
+              type: "scene-object",
+              visualizationTargetId: "object:TopLayer",
+            },
+            selectedObjectIds: ["TopLayer", "BottomLayer"],
+          },
+          "ribbon-layout-test",
+        );
+      });
+
+      const multiTargetBars = findElements(
+        container,
+        (element) => element.getAttribute("data-ribbon-target-bar") === "true",
+      );
+      expect(multiTargetBars).toHaveLength(1);
+      expect(multiTargetBars[0]?.getAttribute("data-target-kind")).toBe("multi");
+      expect(multiTargetBars[0]?.textContent).toContain("TopLayer · BottomLayer");
     } finally {
       await act(async () => root.unmount());
       restoreToolbarQuerySelectorAll();

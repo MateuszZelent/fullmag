@@ -90,9 +90,10 @@ import {
   resolveActiveLaneOperation,
   type ActiveLaneCapabilitySnapshot,
 } from "@/kernel/resources/useActiveLaneCapabilities";
-import type {
-  Selection,
-  VisualizationMeshPartLike,
+import {
+  canonicalVisualizationSceneObjectId,
+  type Selection,
+  type VisualizationMeshPartLike,
 } from "@/kernel/selection/selectionTypes";
 import { resolveVisualizationTargetForMeshPart } from "@/kernel/selection/visualizationTargetResolver";
 import {
@@ -107,6 +108,7 @@ import {
   resolveTargetVisualization,
   resolveVisualizationTargetFromSelection,
   isFdmUniverseOutsideSupportTarget,
+  targetForFdmNativeLayer,
   visualizationTargetCapabilities,
   type ObjectVisualizationController,
   type ObjectVisualizationSnapshot,
@@ -114,6 +116,7 @@ import {
   type VisualizationColorMode,
   type VisualizationGeometryScope,
   type VisualizationRenderMode,
+  type VisualizationTargetKind,
   type VisualizationTargetPatch,
   type VisualizationTargetRef,
 } from "@/kernel/visualization/ObjectVisualizationController";
@@ -169,13 +172,11 @@ import {
 } from "./ribbonCommands";
 import {
   activeViewTargetSummary,
-  buildGeometryTargetContextGroup,
-  buildMaterialsTargetContextGroup,
-  buildMeshTargetContextGroup,
-  buildPhysicsTargetContextGroup,
-  buildViewTargetContextGroup,
+  buildViewTargetUtilityActions,
   extractRibbonSceneObjects,
   isAirboxLikeVisualizationTarget,
+  resolveMaterialsTargetContext,
+  resolvePhysicsTargetLabel,
 } from "./ribbonTargetContext";
 
 type RibbonVisualizationApi = Pick<
@@ -331,6 +332,15 @@ const geometryTab: RibbonTabContent = {
         { id: "geometry.add-torus",        icon: icon(Disc),     label: "Torus",          iconColor: "text-sky-400" },
         { id: "geometry.add-polygon-prism", icon: icon(Hexagon), label: "Polygon Prism",  iconColor: "text-indigo-300" },
         { id: "geometry.import-stl",       icon: icon(Upload),   label: "Import STL…",    iconColor: "text-amber-300" },
+      ],
+    },
+    // ── AC/DC · Microwave Antennas (optional physics module) ────────────────
+    {
+      id: "builder-acdc-antennas",
+      title: "AC/DC · Antennas",
+      subtitle: "Microwave conductors",
+      tone: "authoring",
+      actions: [
         { id: "geometry.add-microstrip-antenna", icon: icon(RadioTower), label: "Microstrip", iconColor: "text-rose-300" },
         { id: "geometry.add-cpw-antenna",  icon: icon(RadioTower), label: "CPW",          iconColor: "text-sky-400" },
       ],
@@ -932,14 +942,6 @@ function buildGeometryTabContent(
   context: RibbonBuildContext,
 ): RibbonTabContent {
   const discretization = ribbonDiscretization(context);
-  const sceneObjects = extractRibbonSceneObjects(
-    context.scene,
-    context.commandContext,
-  );
-  const targetGroup = buildGeometryTargetContextGroup({
-    sceneObjects,
-    selection: context.selection,
-  });
   const baseGroups =
     discretization === "fem"
       ? content.groups
@@ -958,7 +960,7 @@ function buildGeometryTabContent(
 
   return {
     ...content,
-    groups: [targetGroup, ...baseGroups],
+    groups: baseGroups,
   };
 }
 
@@ -971,7 +973,7 @@ function buildMaterialsTabContent(
     ? extractRibbonSceneObjects(context.scene, context.commandContext)
     : [];
   const targetContext = context
-    ? buildMaterialsTargetContextGroup({
+    ? resolveMaterialsTargetContext({
         sceneObjects,
         selection: context.selection,
       })
@@ -1057,9 +1059,7 @@ function buildMaterialsTabContent(
 
   return {
     ...content,
-    groups: targetContext
-      ? [targetContext.group, ...updatedGroups]
-      : updatedGroups,
+    groups: updatedGroups,
   };
 }
 
@@ -1072,69 +1072,75 @@ function buildPhysicsTabContent(
     context.scene,
     context.commandContext,
   );
-  const { group: targetGroup, targetLabel } = buildPhysicsTargetContextGroup({
+  const targetLabel = resolvePhysicsTargetLabel({
     sceneObjects,
-    selection: context.selection ?? {
-      kind: null,
-      label: null,
-      moduleSource: null,
-      nodeId: null,
-      objectId: null,
-      ref: null,
-    },
+    selection: context.selection ?? null,
   });
   return {
     ...content,
-    groups: [
-      targetGroup,
-      ...content.groups.map((group) =>
-        group.id === "physics-core"
-          ? {
-              ...group,
-              subtitle: targetLabel
-                ? `${targetLabel} · Global: Demag`
-                : "Global: Demag",
-              actions: group.actions.map((action) =>
-                action.id === "physics-interactions"
+    groups: content.groups.map((group) =>
+      group.id === "physics-core"
+        ? {
+            ...group,
+            subtitle: targetLabel
+              ? `${targetLabel} · Global: Demag`
+              : "Global: Demag",
+            actions: group.actions.map((action) =>
+              action.id === "physics-interactions"
+                ? {
+                    ...action,
+                    tooltip: targetLabel
+                      ? `Configure local Hamiltonian terms (Exchange, Anisotropy, DMI) on ${targetLabel}`
+                      : "Select a magnetic object in Target to configure local Hamiltonian terms (Exchange, Anisotropy, DMI)",
+                    menu: physicsInteractionMenu(
+                      discretization,
+                      context.sessionStatus?.capabilities?.active_lane ?? null,
+                    ),
+                  }
+                : action.id === "physics-global"
                   ? {
                       ...action,
-                      tooltip: targetLabel
-                        ? `Configure local Hamiltonian terms (Exchange, Anisotropy, DMI) on ${targetLabel}`
-                        : "Select a magnetic object in Target to configure local Hamiltonian terms (Exchange, Anisotropy, DMI)",
+                      tooltip:
+                        "Configure global model terms (Demag, External Field, Field Drives) across the whole scene",
                       menu: physicsInteractionMenu(
                         discretization,
                         context.sessionStatus?.capabilities?.active_lane ?? null,
+                        "global",
                       ),
                     }
-                  : action.id === "physics-global"
-                    ? {
-                        ...action,
-                        tooltip:
-                          "Configure global model terms (Demag, External Field, Field Drives) across the whole scene",
-                        menu: physicsInteractionMenu(
-                          discretization,
-                          context.sessionStatus?.capabilities?.active_lane ?? null,
-                          "global",
-                        ),
-                      }
-                    : action,
-              ),
-            }
-          : group,
-      ),
-    ],
+                  : action,
+            ),
+          }
+        : group,
+    ),
   };
 }
 
+const GLOBAL_OBJECT_TARGET_KINDS: VisualizationTargetKind[] = [
+  "object",
+  "part",
+  "fdm-native-layer",
+];
+
 export function resolveRibbonVisualizationTarget({
+  discretization,
+  fdmMultilayerLayout,
   sceneObjectIds = new Set(),
   selectedMeshPart,
   selection,
+  sessionStatus,
   visualizationState,
 }: Pick<
   RibbonBuildContext,
-  "sceneObjectIds" | "selectedMeshPart" | "selection" | "visualizationState"
->): VisualizationTargetRef | null {
+  | "fdmMultilayerLayout"
+  | "sceneObjectIds"
+  | "selectedMeshPart"
+  | "selection"
+  | "sessionStatus"
+  | "visualizationState"
+> & {
+  discretization?: "fdm" | "fem" | "unknown";
+}): VisualizationTargetRef | null {
   if (selection.ref?.type === "mesh-part" && selectedMeshPart) {
     return resolveVisualizationTargetForMeshPart({
       part: selectedMeshPart,
@@ -1151,7 +1157,36 @@ export function resolveRibbonVisualizationTarget({
     };
   }
 
-  return resolveVisualizationTargetFromSelection(selection);
+  const resolved = resolveVisualizationTargetFromSelection(selection);
+  const effectiveDiscretization =
+    discretization ??
+    (sessionStatus
+      ? resolveSessionDiscretization(sessionStatus) ?? "unknown"
+      : "unknown");
+  if (
+    resolved?.kind === "object" &&
+    effectiveDiscretization === "fdm" &&
+    fdmMultilayerLayout?.layers?.length
+  ) {
+    const rawObjectId = resolved.id.startsWith("object:")
+      ? resolved.id.slice("object:".length)
+      : resolved.id;
+    const canonicalObjectId = canonicalVisualizationSceneObjectId(rawObjectId);
+    const nativeLayer = fdmMultilayerLayout.layers.find(
+      (layer) =>
+        layer.object_id === rawObjectId ||
+        canonicalVisualizationSceneObjectId(layer.object_id) ===
+          canonicalObjectId,
+    );
+    if (nativeLayer) {
+      return targetForFdmNativeLayer(
+        nativeLayer.layer_id,
+        nativeLayer.magnet_name,
+      );
+    }
+  }
+
+  return resolved;
 }
 
 function resultsQuantityCommandInput(quantityId: string) {
@@ -1263,36 +1298,21 @@ export function buildRibbonTabContent(
   }
 
   if (tabId === "view" && context) {
-    const discretization = ribbonDiscretization(context);
-    const sceneObjects = extractRibbonSceneObjects(
-      context.scene,
-      context.commandContext,
-    );
-    const activeTarget = resolveRibbonVisualizationTarget(context);
-    const targetContextGroup = buildViewTargetContextGroup({
-      discretization,
-      fdmMultilayerLayout: context.fdmMultilayerLayout,
-      sceneObjects,
-      target: activeTarget,
-    });
     resolvedContent = {
       ...content,
-      groups: [
-        targetContextGroup,
-        ...content.groups.map((group) =>
-          group.id === "view-global-display"
-            ? buildViewGlobalDisplayGroup(group, context)
-            : group.id === "view-orientation-tools"
-              ? buildViewOrientationGroup(group, context)
-            : group.id === "view-manipulate"
-              ? buildViewManipulateGroup(group, context)
-            : group.id === "view-display"
-              ? buildViewDisplayGroup(group, context)
-            : group.id === "view-selected-display"
-              ? buildSelectedVisualizationGroup(context)
-              : group,
-        ),
-      ],
+      groups: content.groups.map((group) =>
+        group.id === "view-global-display"
+          ? buildViewGlobalDisplayGroup(group, context)
+          : group.id === "view-orientation-tools"
+            ? buildViewOrientationGroup(group, context)
+          : group.id === "view-manipulate"
+            ? buildViewManipulateGroup(group, context)
+          : group.id === "view-display"
+            ? buildViewDisplayGroup(group, context)
+          : group.id === "view-selected-display"
+            ? buildSelectedVisualizationGroup(context)
+            : group,
+      ),
     };
   }
 
@@ -1591,28 +1611,8 @@ function buildMeshTabContent(
   context: RibbonBuildContext,
 ): RibbonTabContent {
   const discretization = ribbonDiscretization(context);
-  const sceneObjects = extractRibbonSceneObjects(
-    context.scene,
-    context.commandContext,
-  );
-  const scopeGroup = buildMeshTargetContextGroup({
-    discretization,
-    sceneObjects,
-    selection: context.selection ?? {
-      kind: null,
-      label: null,
-      moduleSource: null,
-      nodeId: null,
-      objectId: null,
-      ref: null,
-    },
-  });
   if (discretization !== "fem") {
-    const nonFem = buildNonFemMeshTabContent(content, discretization);
-    return {
-      ...nonFem,
-      groups: [scopeGroup, ...nonFem.groups],
-    };
+    return buildNonFemMeshTabContent(content, discretization);
   }
 
   const status = meshBuildStatus(context);
@@ -1625,9 +1625,7 @@ function buildMeshTabContent(
 
   return {
     ...content,
-    groups: [
-      scopeGroup,
-      ...content.groups.map((group) => {
+    groups: content.groups.map((group) => {
       if (group.id === "build") {
         const actions = group.actions.filter(
           (action) => action.id !== "grid.build-fdm",
@@ -1863,7 +1861,6 @@ function buildMeshTabContent(
       }
       return group;
     }),
-    ],
   };
 }
 
@@ -2252,6 +2249,12 @@ function buildViewGlobalDisplayGroup(
   const activeTarget = resolveRibbonVisualizationTarget(context);
   const targetSummary = activeViewTargetSummary(activeTarget, sceneObjects);
   const discretization = ribbonDiscretization(context);
+  const utilityActions = buildViewTargetUtilityActions({
+    discretization,
+    fdmMultilayerLayout: context.fdmMultilayerLayout,
+    sceneObjects,
+    target: activeTarget,
+  });
 
   return {
     ...group,
@@ -2262,8 +2265,8 @@ function buildViewGlobalDisplayGroup(
         // Airbox visualization is a public target on both FEM and FDM lanes;
         // fail closed only while the discretization lane is unresolved.
         return discretization !== "unknown"
-          ? [buildAirboxAction(context)]
-          : [];
+          ? [buildAirboxAction(context), ...utilityActions]
+          : utilityActions;
       }
       if (action.id === "view-surface") return [buildSurfaceAction(context)];
       if (action.id === "view-texture") return [buildTextureAction(context)];
@@ -2671,7 +2674,11 @@ function resolveActiveRibbonTargetAndSettings(context: RibbonBuildContext) {
   const rawTarget = resolveRibbonVisualizationTarget(context);
   const isAirbox = isAirboxLikeVisualizationTarget(rawTarget);
   const target = isAirbox ? AIRBOX_VISUALIZATION_TARGET : rawTarget;
-  const summary = activeViewTargetSummary(target, sceneObjects);
+  const summary = activeViewTargetSummary(
+    target,
+    sceneObjects,
+    context.fdmMultilayerLayout,
+  );
   if (!target) {
     const baseSettings = context.visualizationState
       ? resolveGlobalObjectVisualizationSettings(context.visualizationState)
@@ -2730,7 +2737,7 @@ function buildSurfaceAction(
           target,
           withVisibleIfEnabling(settings.visible, enablingPass, patch),
         )
-      : visualizationDefaultsCommandInput(patch, ["object", "part"], {
+      : visualizationDefaultsCommandInput(patch, GLOBAL_OBJECT_TARGET_KINDS, {
           clearConflictingOverrides: true,
         });
 
@@ -2881,7 +2888,7 @@ function buildTextureAction(
   const patch = (patchValue: VisualizationTargetPatch) =>
     target
       ? visualizationTargetCommandInput(target, patchValue)
-      : visualizationDefaultsCommandInput(patchValue, ["object", "part"], {
+      : visualizationDefaultsCommandInput(patchValue, GLOBAL_OBJECT_TARGET_KINDS, {
           clearConflictingOverrides: true,
         });
 
@@ -3103,10 +3110,31 @@ function buildVectorsAction(
     : vectorLayer?.visible ?? state?.vector_glyphs ?? objectVectorSettings.vectorsVisible;
   const density = target
     ? settings.vectorBudget
-    : state?.sampling?.max_glyphs ??
-      vectorLayer?.density ??
+    : vectorLayer?.density ??
       state?.vector_density ??
+      state?.sampling?.max_glyphs ??
+      objectVectorSettings.vectorBudget ??
       1200;
+  const targetNativeLayer =
+    target?.kind === "fdm-native-layer"
+      ? context.fdmMultilayerLayout?.layers?.find(
+          (layer) =>
+            target.id ===
+            `fdm-native-layer:${encodeURIComponent(layer.layer_id)}`,
+        ) ?? null
+      : null;
+  const maxNativeLayerCells = (context.fdmMultilayerLayout?.layers ?? []).reduce(
+    (highest, layer) => Math.max(highest, layer.active_cell_count ?? 0),
+    0,
+  );
+  const densityMax = targetNativeLayer
+    ? Math.max(1, targetNativeLayer.active_cell_count)
+    : Math.max(
+        4096,
+        maxNativeLayerCells,
+        state?.sampling?.max_glyphs ?? 0,
+        density,
+      );
   const component = state?.field_component ?? state?.quantity?.field_component ?? "3D";
   const toggleCommandId = target
     ? RIBBON_VISUALIZATION_PATCH_TARGET_COMMAND
@@ -3121,13 +3149,15 @@ function buildVectorsAction(
         )
       : visualizationDefaultsCommandInput(
           { vectorsVisible: checked },
-          ["object", "part"],
+          GLOBAL_OBJECT_TARGET_KINDS,
           { clearConflictingOverrides: true },
         );
   const targetPatchInput = (patch: VisualizationTargetPatch) =>
     target
       ? visualizationTargetCommandInput(target, patch)
-      : visualizationDefaultsCommandInput(patch, ["object", "part"]);
+      : visualizationDefaultsCommandInput(patch, GLOBAL_OBJECT_TARGET_KINDS, {
+          clearConflictingOverrides: true,
+        });
 
   return {
     id: "view-vectors",
@@ -3164,21 +3194,15 @@ function buildVectorsAction(
         id: "vectors:density",
         label: "Vector glyph budget",
         value: density,
-        min: 8,
-        max: 4096,
-        step: 8,
+        min: 0,
+        max: densityMax,
+        step: 1,
         disabled: !target && !context.api,
         commandId: target
           ? RIBBON_VISUALIZATION_PATCH_TARGET_COMMAND
-          : RIBBON_VISUALIZATION_PATCH_STATE_COMMAND,
+          : RIBBON_VISUALIZATION_PATCH_DEFAULTS_COMMAND,
         commandInput: (value: number) =>
-          target
-            ? visualizationTargetCommandInput(target, { vectorBudget: value })
-            : visualizationStateCommandInput({
-                layers: { vectors: { density: value } },
-                sampling: { max_glyphs: value },
-                vector_density: value,
-              }),
+          targetPatchInput({ vectorBudget: value }),
       },
       {
         type: "radio-group",
@@ -3288,15 +3312,11 @@ function buildVectorsAction(
             step: 0.1,
             commandId: target
               ? RIBBON_VISUALIZATION_PATCH_TARGET_COMMAND
-              : RIBBON_VISUALIZATION_PATCH_STATE_COMMAND,
+              : RIBBON_VISUALIZATION_PATCH_DEFAULTS_COMMAND,
             commandInput: (value: number) =>
-              target
-                ? visualizationTargetCommandInput(target, {
-                    vectorLengthScale: value,
-                  })
-                : visualizationStateCommandInput({
-                    vector_style: { length_scale: value },
-                  }),
+              targetPatchInput({
+                vectorLengthScale: value,
+              }),
           },
           {
             type: "slider",
@@ -3308,15 +3328,11 @@ function buildVectorsAction(
             step: 0.1,
             commandId: target
               ? RIBBON_VISUALIZATION_PATCH_TARGET_COMMAND
-              : RIBBON_VISUALIZATION_PATCH_STATE_COMMAND,
+              : RIBBON_VISUALIZATION_PATCH_DEFAULTS_COMMAND,
             commandInput: (value: number) =>
-              target
-                ? visualizationTargetCommandInput(target, {
-                    vectorThickness: value,
-                  })
-                : visualizationStateCommandInput({
-                    vector_style: { thickness: value },
-                  }),
+              targetPatchInput({
+                vectorThickness: value,
+              }),
           },
           {
             type: "slider",
@@ -3330,15 +3346,11 @@ function buildVectorsAction(
             step: 0.05,
             commandId: target
               ? RIBBON_VISUALIZATION_PATCH_TARGET_COMMAND
-              : RIBBON_VISUALIZATION_PATCH_STATE_COMMAND,
+              : RIBBON_VISUALIZATION_PATCH_DEFAULTS_COMMAND,
             commandInput: (value: number) =>
-              target
-                ? visualizationTargetCommandInput(target, {
-                    vectorAlphaPercent: Math.round(value * 100),
-                  })
-                : visualizationStateCommandInput({
-                    vector_style: { alpha: value },
-                  }),
+              targetPatchInput({
+                vectorAlphaPercent: Math.round(value * 100),
+              }),
           },
         ],
       },
@@ -3369,15 +3381,11 @@ function buildVectorsAction(
         disabled: !target && !context.api,
         commandId: target
           ? RIBBON_VISUALIZATION_PATCH_TARGET_COMMAND
-          : RIBBON_VISUALIZATION_PATCH_STATE_COMMAND,
+          : RIBBON_VISUALIZATION_PATCH_DEFAULTS_COMMAND,
         commandInput: (value: string) =>
-          target
-            ? visualizationTargetCommandInput(target, {
-                vectorColorMode: value as VisualizationColorMode,
-              })
-            : visualizationStateCommandInput({
-                vector_style: { color_mode: value as VectorColorModePatch },
-              }),
+          targetPatchInput({
+            vectorColorMode: value as VisualizationColorMode,
+          }),
       },
       {
         type: "color",

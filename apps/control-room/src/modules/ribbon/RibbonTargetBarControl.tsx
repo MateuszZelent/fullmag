@@ -1,7 +1,8 @@
 "use client";
 
-import { Box, ChevronDown, Crosshair, Eye, Settings2, Sparkles, Target } from "lucide-react";
+import { Box, ChevronDown, Crosshair, Eye, Layers, Settings2, Sparkles } from "lucide-react";
 
+import type { FdmMultilayerLayoutResource } from "@/kernel/api/apiTypes";
 import type { Selection } from "@/kernel/selection/selectionTypes";
 import type { VisualizationTargetRef } from "@/kernel/visualization/ObjectVisualizationController";
 import { Button } from "@/shared/ui/Button";
@@ -50,6 +51,7 @@ function targetTabForCommand(
 export function RibbonTargetBarControl({
   activeTab,
   discretization,
+  fdmMultilayerLayout,
   sceneObjects,
   selection,
   visualizationTarget,
@@ -57,6 +59,7 @@ export function RibbonTargetBarControl({
 }: {
   activeTab: RibbonTabId;
   discretization: "fdm" | "fem" | "unknown";
+  fdmMultilayerLayout?: FdmMultilayerLayoutResource | null;
   sceneObjects: readonly RibbonSceneObjectEntry[];
   selection: Selection;
   visualizationTarget: VisualizationTargetRef | null;
@@ -76,7 +79,11 @@ export function RibbonTargetBarControl({
     ? orderedIds.slice(1).map((id) => resolveSceneObjectLabel(id, sceneObjects) ?? id)
     : [];
 
-  const viewSummary = activeViewTargetSummary(visualizationTarget, sceneObjects);
+  const viewSummary = activeViewTargetSummary(
+    visualizationTarget,
+    sceneObjects,
+    fdmMultilayerLayout,
+  );
   const selectedObject =
     !viewSummary.isAirbox && selection.objectId
       ? sceneObjects.find((entry) => entry.id === selection.objectId) ?? {
@@ -88,15 +95,10 @@ export function RibbonTargetBarControl({
   const regionId =
     selection.ref?.type === "scene-object" ? selection.ref.regionId ?? null : null;
 
-  const prefix = isMulti
-    ? "CSG"
-    : activeTab === "mesh" && discretization === "fdm" && !selectedObject && !viewSummary.isAirbox
-      ? "Scope"
-      : "Target";
   const displayValue = isMulti
-    ? `Base [A]: ${baseLabel} · Tools [B]: ${toolLabels.join(", ")}`
+    ? `${baseLabel} · ${toolLabels.join(", ")}`
     : viewSummary.isAirbox
-      ? "Airbox (Universe)"
+      ? "Airbox"
       : selectedObject
         ? regionId
           ? `${selectedObject.label} / ${regionId}`
@@ -105,17 +107,25 @@ export function RibbonTargetBarControl({
           ? "Shared FDM Grid"
           : "All Objects";
 
-  const radioValue = viewSummary.isAirbox
-    ? "airbox"
-    : selectedObject
-      ? `object:${selectedObject.id}`
-      : "__all__";
+  const radioValue = isMulti
+    ? "__multi__"
+    : viewSummary.isAirbox
+      ? "airbox"
+      : selectedObject
+        ? `object:${selectedObject.id}`
+        : "__all__";
 
+  const targetKind = isMulti
+    ? "multi"
+    : viewSummary.isAirbox
+      ? "airbox"
+      : selectedObject
+        ? "object"
+        : "all";
   const tabScope = targetTabForCommand(activeTab);
-  const TriggerIcon = isMulti ? Crosshair : viewSummary.isAirbox ? Box : Target;
   const titleText = isMulti
-    ? `Active Boolean CSG operands — Base [A]: ${baseLabel} · Tools [B]: ${toolLabels.join(", ")}`
-    : `Active ribbon target: ${displayValue}. Click to switch target for View, Geometry, Materials, Physics, and Mesh.`;
+    ? `Active CSG operands — Base [A]: ${baseLabel} · Tools [B]: ${toolLabels.join(", ")}`
+    : `Active scope: ${displayValue}. Click to switch target for View, Geometry, Materials, Physics, and Mesh.`;
 
   const handleSelectValue = (value: string) => {
     if (value === "__all__") {
@@ -153,51 +163,25 @@ export function RibbonTargetBarControl({
       <DropdownMenuTrigger asChild>
         <Button
           aria-label={`Active ribbon target: ${displayValue}`}
-          className="fm-ribbon-density"
+          className="fm-ribbon-target"
           data-ribbon-target-bar="true"
-          data-target-kind={
-            isMulti
-              ? "multi"
-              : viewSummary.isAirbox
-                ? "airbox"
-                : selectedObject
-                  ? "object"
-                  : "all"
-          }
+          data-target-kind={targetKind}
           size="sm"
-          style={{
-            maxWidth: "240px",
-            border: "1px solid var(--fm-border-default)",
-            background: "var(--fm-bg-panel-raised)",
-          }}
           title={titleText}
           type="button"
           variant="ghost"
         >
-          <TriggerIcon
-            aria-hidden="true"
-            size={15}
-            style={{
-              flexShrink: 0,
-              color: viewSummary.isAirbox
-                ? "var(--fm-category-runtime)"
-                : isMulti
-                  ? "var(--fm-category-solver)"
-                  : "var(--fm-accent-strong)",
-            }}
-          />
-          <span style={{ flexShrink: 0 }}>{prefix}:</span>
-          <span
-            className="fm-ribbon-density__value"
-            style={{
-              overflow: "hidden",
-              textOverflow: "ellipsis",
-              whiteSpace: "nowrap",
-            }}
-          >
-            {displayValue}
-          </span>
-          <ChevronDown aria-hidden="true" size={14} style={{ flexShrink: 0 }} />
+          {isMulti ? (
+            <Crosshair aria-hidden="true" className="fm-ribbon-target__icon" size={13} />
+          ) : viewSummary.isAirbox ? (
+            <Box aria-hidden="true" className="fm-ribbon-target__icon" size={13} />
+          ) : selectedObject ? (
+            <span aria-hidden="true" className="fm-ribbon-target__dot" />
+          ) : (
+            <Layers aria-hidden="true" className="fm-ribbon-target__icon" size={13} />
+          )}
+          <span className="fm-ribbon-target__label">{displayValue}</span>
+          <ChevronDown aria-hidden="true" className="fm-ribbon-target__chevron" size={13} />
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="fm-ribbon-menu">
