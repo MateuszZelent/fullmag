@@ -17594,7 +17594,7 @@ mod tests {
         progress.remove("linear_ksp_type:gmres");
         progress.insert("linear_ksp_type:cg".to_string(), 1.0);
         progress.insert("max_linear_iterations".to_string(), 256.0);
-        let detail = fem_eigen_linear_progress_detail(&progress).expect("GPU Poisson detail");
+        let detail = super::fem_eigen_linear_progress_detail(&progress).expect("GPU Poisson detail");
         assert!(detail.contains("linear_iteration=12/256"), "{detail}");
         assert!(detail.contains("linear_ksp_type=cg"), "{detail}");
     }
