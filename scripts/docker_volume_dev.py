@@ -3847,7 +3847,13 @@ else:
     if prepared:
         preparation=get("/v2/sessions/current/simulation/preparation")
         stages=get("/v2/sessions/current/simulation/stages/execution")
-        commands=get("/v2/sessions/current/simulation/commands")
+        commands=get("/v2/sessions/current/simulation/commands").get("commands")
+        nonadvancing_commands=isinstance(commands,list) and all(
+            isinstance(command,dict)
+            and command.get("kind") in {"fdm_grid_refresh","compute_fields"}
+            and command.get("status") in {"completed","failed","rejected","cancelled"}
+            for command in commands)
+        run_summary=status.get("run",{})
         if (preparation.get("status")!="ready" or preparation.get("failure") is not None
                 or status.get("resources",{}).get("mesh_revision",0)<=0
                 or stages.get("run_id")!=run_id
@@ -3856,7 +3862,8 @@ else:
                 or len(stages["stage_statuses"])!=stages.get("total_stages")
                 or stages.get("completed_stage_indexes")!=[]
                 or any(value!="pending" for value in stages["stage_statuses"])
-                or commands.get("commands")!=[]):
+                or not nonadvancing_commands
+                or run_summary.get("solver_steps")!=0 or run_summary.get("solver_time")!=0):
             raise RuntimeError("prepared restart requires a ready mesh and a never-started Study")
     if runtime.get("configured") is not True or runtime.get("state")!="ready":
         raise RuntimeError("terminal restart requires a live native runtime for drain")

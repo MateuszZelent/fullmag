@@ -283,6 +283,7 @@ export interface InspectorTemplateProps<TDraft> {
   forceShowErrors?: boolean;
   animationKey?: string;
   className?: string;
+  fieldResetTokens?: ReadonlyMap<string, number>;
 }
 
 export function InspectorTemplate<TDraft>({
@@ -317,6 +318,7 @@ export function InspectorTemplate<TDraft>({
   activeModeTabId: controlledModeTabId,
   onActiveModeTabChange,
   displayUnits: controlledDisplayUnits,
+  fieldResetTokens,
   onDisplayUnitChange,
   applying: controlledApplying = false,
   appliedFlash = false,
@@ -1366,6 +1368,7 @@ export function InspectorTemplate<TDraft>({
                 ctx={actionContext}
                 dirtyFields={dirtyFields}
                 displayUnits={displayUnits}
+                fieldResetTokens={fieldResetTokens}
                 filterQuery={searchQuery}
                 flashFieldKey={flashState?.fieldKey ?? null}
                 flashKind={flashState?.kind}

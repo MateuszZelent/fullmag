@@ -1,6 +1,6 @@
 "use client";
 
-import type { LiveStatusResource } from "../api/apiTypes";
+import type { CommandQueueStatusResource, LiveStatusResource } from "../api/apiTypes";
 
 import { useSessionStatusSelector } from "./useSessionStatus";
 
@@ -109,6 +109,21 @@ export function resolveActiveLaneOperation(
     ...operation,
     enabled: operation.state === "supported",
   };
+}
+
+export function resolveFdmGridBuildOperation(
+  snapshot: ActiveLaneCapabilitySnapshot | null,
+  queue: CommandQueueStatusResource | null | undefined,
+): Pick<ActiveLaneOperationResolution, "enabled" | "reason"> {
+  const operation = resolveActiveLaneOperation(snapshot, "grid_build");
+  if (operation.state !== "stale" || snapshot?.source.kind !== "planner" || snapshot.resolved) {
+    return operation;
+  }
+  // Saving FDM sizing retires the resolved plan. The server can still admit
+  // the grid refresh that resolves the plan again for the current scene.
+  const control = queue?.runtime_controls?.find(item => item.kind === "fdm_grid_refresh");
+  if (queue?.can_accept_commands && control?.enabled) return { enabled: true, reason: "" };
+  return { enabled: false, reason: control?.reason ?? operation.reason };
 }
 
 export function selectActiveLaneCapabilitySnapshot(

@@ -6384,45 +6384,80 @@ describe("ControlRoomApi", () => {
     });
   });
 
-  it("replays only the same scoped magnetization Apply after a lost HTTP response", async () => {
-    const writes: { operation: string; scope: string | null; body: unknown }[] = [];
+  it.each(["lost response", "held Study retirement"] as const)(
+    "replays only the same scoped magnetization Apply after %s",
+    async (interruption) => {
+      const writes: { operation: string; scope: string | null; body: unknown }[] = [];
+      const api = new ControlRoomApi({
+        baseUrl: "http://127.0.0.1:8765",
+        retryDelayMs: 0,
+        fetchImpl: async (_url, init) => {
+          const headers = new Headers(init?.headers);
+          const operation = headers.get("idempotency-key") ?? "";
+          const body = parseRequestBody(init?.body);
+          writes.push({ operation, scope: headers.get("x-fullmag-session-scope"), body });
+          if (writes.length === 1) {
+            if (interruption === "lost response") throw new TypeError("response lost");
+            return jsonResponse({ code: "accepted_held_supersession_pending" }, { status: 503 });
+          }
+          return jsonResponse({
+            committed_scene: { objects: [], revision: 11 },
+            scene_revision: 11,
+            magnetization_apply: {
+              operation_id: operation, scene_revision: 11,
+              scopes: [{ object_id: "body", region_id: "core" }],
+              status: "initial_state_pending", reason: "Build the grid.",
+            },
+          });
+        },
+      });
+      const target = {
+        kind: "region", object_id: "body", region_id: "core",
+        texture_override: { initial_magnetization: { kind: "uniform", value: [1, 0, 0] } },
+      } as const;
+      const sessionScopeKey = "session=A&epoch=1&request_scope_epoch=1";
+      await expect(api.model.applyMagnetization({
+        ...target, texture_override: { initial_magnetization: { kind: "uniform", value: [1, 0, 0] } },
+      }, { baseRevision: 10, sessionScopeKey })).resolves.toMatchObject({
+        magnetization_apply: { status: "initial_state_pending" },
+      });
+      expect(writes).toHaveLength(2);
+      expect(writes[0].operation).toMatch(/^[a-f0-9]{32}$/);
+      expect(writes[0].scope).toBe(sessionScopeKey);
+      expect(writes[0].body).toEqual({
+        kind: "apply_magnetization", base_revision: 10, operation_id: writes[0].operation, target,
+      });
+      expect(writes[1]).toEqual(writes[0]);
+    },
+  );
+
+  it("replays a revision-pinned scene write when a held Study is still retiring", async () => {
+    const writes: Array<{ scope: string | null; body: unknown }> = [];
     const api = new ControlRoomApi({
       baseUrl: "http://127.0.0.1:8765",
       retryDelayMs: 0,
       fetchImpl: async (_url, init) => {
-        const headers = new Headers(init?.headers);
-        const operation = headers.get("idempotency-key") ?? "";
-        const body = parseRequestBody(init?.body);
-        writes.push({ operation, scope: headers.get("x-fullmag-session-scope"), body });
-        if (writes.length === 1) throw new TypeError("response lost");
-        return jsonResponse({
-          committed_scene: { objects: [], revision: 11 },
-          scene_revision: 11,
-          magnetization_apply: {
-            operation_id: operation, scene_revision: 11,
-            scopes: [{ object_id: "body", region_id: "core" }],
-            status: "initial_state_pending", reason: "Build the grid.",
-          },
+        writes.push({
+          scope: new Headers(init?.headers).get("x-fullmag-session-scope"),
+          body: parseRequestBody(init?.body),
         });
+        return writes.length === 1
+          ? jsonResponse({ code: "accepted_held_supersession_pending" }, { status: 503 })
+          : jsonResponse({ scene_revision: 11, transaction_kind: "replace_scene" });
       },
     });
-    const target = {
-      kind: "region", object_id: "body", region_id: "core",
-      texture_override: { initial_magnetization: { kind: "uniform", value: [1, 0, 0] } },
-    } as const;
     const sessionScopeKey = "session=A&epoch=1&request_scope_epoch=1";
-    await expect(api.model.applyMagnetization({
-      ...target, texture_override: { initial_magnetization: { kind: "uniform", value: [1, 0, 0] } },
-    }, { baseRevision: 10, sessionScopeKey })).resolves.toMatchObject({
-      magnetization_apply: { status: "initial_state_pending" },
-    });
-    expect(writes).toHaveLength(2);
-    expect(writes[0].operation).toMatch(/^[a-f0-9]{32}$/);
-    expect(writes[0].scope).toBe(sessionScopeKey);
-    expect(writes[0].body).toEqual({
-      kind: "apply_magnetization", base_revision: 10, operation_id: writes[0].operation, target,
-    });
-    expect(writes[1]).toEqual(writes[0]);
+    const transaction = {
+      kind: "replace_scene" as const,
+      base_revision: 10,
+      scene: { study: { fdm: { default_cell: [2.5e-9, 2.5e-9, 5e-9] } } },
+    };
+    await expect(api.model.commitTransaction(transaction, { sessionScopeKey }))
+      .resolves.toMatchObject({ scene_revision: 11 });
+    expect(writes).toEqual([
+      { scope: sessionScopeKey, body: transaction },
+      { scope: sessionScopeKey, body: transaction },
+    ]);
   });
 
   it("commits object region and coupling writes through model transactions", async () => {

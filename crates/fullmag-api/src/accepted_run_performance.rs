@@ -122,6 +122,21 @@ fn is_terminal_task_lifecycle(lifecycle: FmsTaskLifecycle) -> bool {
         | FmsTaskLifecycle::Cancelled | FmsTaskLifecycle::Interrupted)
 }
 
+/// A pre-claim cancellation has no worker attempt or any remaining claim,
+/// coordinator, observation, or output identity. Partial authority is not a
+/// missing-attempt case and must continue through strict attempt validation.
+fn is_unclaimed_cancelled_task(task: &fullmag_session::FmsTaskCatalogEntry) -> bool {
+    task.lifecycle == FmsTaskLifecycle::Cancelled
+        && task.attempt_id.is_none()
+        && task.ownership_epoch.is_none()
+        && task.resolved_input_fingerprint.is_none()
+        && task.artifact_ids.is_empty()
+        && task.resource_id.is_none()
+        && task.coordinator_watermark.is_none()
+        && task.coordinator_genesis.is_none()
+        && task.observation.is_none()
+}
+
 fn selected_attempt(
     run_id: &str,
     stage_index: u32,
@@ -173,10 +188,16 @@ fn select_attempt(
     // For a terminal run only, retain the latest accepted task's terminal
     // telemetry. Do not skip a newer terminal task whose identity is missing
     // and accidentally fall back to an older stage.
-    stage_tasks.into_iter()
+    let Some((stage_index, step_id, task)) = stage_tasks
+        .into_iter()
         .max_by_key(|(stage_index, _, _)| *stage_index)
-        .map(|(stage_index, step_id, task)| selected_attempt(run_id, stage_index, step_id, task))
-        .transpose()
+    else {
+        return Ok(None);
+    };
+    if is_unclaimed_cancelled_task(task) {
+        return Ok(None);
+    }
+    selected_attempt(run_id, stage_index, step_id, task).map(Some)
 }
 
 fn resource_attempt(resource: &RunPerformanceResource) -> Option<SelectedAttempt> {
@@ -558,6 +579,78 @@ mod tests {
         assert_eq!(selected.step_id, "stage-1");
         assert_eq!(selected.attempt_id, "attempt-1");
         assert_eq!(selected.ownership_epoch, 2);
+    }
+
+    #[test]
+    fn terminal_preclaim_cancellation_has_no_performance_attempt() {
+        let catalog = run_catalog(vec![task_entry(
+            "run",
+            "stage-0",
+            FmsTaskLifecycle::Cancelled,
+            None,
+            None,
+        )]);
+
+        assert_eq!(
+            select_attempt("run", &[(0, "stage-0".into())], &catalog, true).unwrap(),
+            None,
+        );
+    }
+
+    #[test]
+    fn terminal_preclaim_cancellation_loads_unavailable_and_revalidates() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = SessionStore::open(directory.path().join("store")).unwrap();
+        store
+            .commit_run_catalog(&run_catalog(vec![task_entry(
+                "run",
+                "stage-0",
+                FmsTaskLifecycle::Cancelled,
+                None,
+                None,
+            )]))
+            .unwrap();
+
+        let stages = [(0, "stage-0".into())];
+        let resource = load(store.root(), "run", &stages, true).unwrap();
+        assert_eq!(resource.state, "unavailable");
+        assert_eq!(resource.run_id.as_deref(), Some("run"));
+        assert!(resource.attempt_id.is_none());
+
+        assert!(matches!(
+            revalidate_attempt(store.root(), "run", &stages, true, &resource).unwrap(),
+            AttemptRevalidation::Current(_),
+        ));
+    }
+
+    #[test]
+    fn terminal_failure_without_attempt_is_still_an_integrity_error() {
+        let catalog = run_catalog(vec![task_entry(
+            "run",
+            "stage-0",
+            FmsTaskLifecycle::Failed,
+            None,
+            None,
+        )]);
+
+        let error = select_attempt("run", &[(0, "stage-0".into())], &catalog, true)
+            .expect_err("a failed task without an attempt is malformed");
+        assert!(format!("{error:#}").contains("performance attempt missing"));
+    }
+
+    #[test]
+    fn terminal_cancelled_task_with_partial_authority_is_not_unavailable() {
+        let mut task = task_entry(
+            "run",
+            "stage-0",
+            FmsTaskLifecycle::Cancelled,
+            None,
+            None,
+        );
+        task.resource_id = Some("resource-1".into());
+        let catalog = run_catalog(vec![task]);
+
+        assert!(select_attempt("run", &[(0, "stage-0".into())], &catalog, true).is_err());
     }
 
     #[test]

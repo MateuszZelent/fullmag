@@ -9,6 +9,7 @@ import type { VisualizationStateResource } from "@/kernel/api/apiTypes";
 import type { PlanarMonitorFramePreview } from "@/kernel/workspace/planarMonitorFramePreview";
 import type { SessionResourceIdentity } from "@/kernel/resources/sessionResourceIdentity";
 import type { DecodedFieldVector, DecodedTopology } from "@/kernel/api/codecs";
+import { resolveCanonicalQuantityId } from "@/kernel/api/quantityIds";
 import {
   viewport3DAirboxLayerEnabledFromBrowserConfig,
   viewport3DBoundsLayersEnabledFromBrowserConfig,
@@ -143,8 +144,8 @@ import { PostProcessingLayer } from "./PostProcessingLayer";
 import { resolveViewport3DTargetRenderPlan } from "./viewport3DTargetRenderPlan";
 import { shaderUsesVertexColors } from "./viewport3DLayerSettings";
 import { PrimitiveObjectLayer } from "./PrimitiveObjectLayer";
-import { FdmCuboidLayer, type FdmCuboidInstanceModel } from "./FdmCuboidLayer";
-import { createFdmInspectClearArbitrator } from "./FdmCuboidLayer.model";
+import { buildFdmPointPositions, FdmCuboidLayer, type FdmCuboidInstanceModel } from "./FdmCuboidLayer";
+import { createFdmInspectClearArbitrator, resolveFdmCuboidGeometryScopeInstanceOrdinals } from "./FdmCuboidLayer.model";
 import { resolveFdmCuboidPassPlan } from "./fdmCuboidPasses";
 import { VectorGlyphDerivedBufferCacheProvider } from "./vectorGlyphDerivedBufferRuntime";
 import { ArtifactFieldLayer } from "./ArtifactFieldLayer";
@@ -202,6 +203,7 @@ import {
   getTextureDraftBridgeSnapshot,
   isTextureGizmoHandleModeActive,
   subscribeTextureDraftBridge,
+  type TextureInspectorDraftBinding,
 } from "@/shared/domain/magnetization-texture/textureDraftBridge";
 
 const EMPTY_REGION_OVERLAYS: readonly RegionOverlayInput[] = [];
@@ -1245,6 +1247,81 @@ export function resolveViewport3DLiveFieldCoveredObjectIds({
   return ids;
 }
 
+function visibleFdmSurface(settings: VisualizationTargetSettings): boolean {
+  return settings.visible && settings.shaderVisible && settings.surfaceOpacityPercent > 0;
+}
+
+function fdmTargetObjectId(view: Viewport3DFdmTargetRenderView): string | null {
+  const owner = view.ownerTarget;
+  return owner.kind === "object" && owner.id.startsWith("object:")
+    ? owner.id.slice("object:".length)
+    : null;
+}
+
+function fdmTargetSurfaceOrdinals(view: Viewport3DFdmTargetRenderView): Uint32Array {
+  return resolveFdmCuboidGeometryScopeInstanceOrdinals(
+    view.settings.geometryScope,
+    view.instanceOrdinals,
+    view.surfaceInstanceOrdinals,
+  ) ?? view.instanceOrdinals;
+}
+
+export function resolveViewport3DFdmSurfaceObjectIds(
+  nativeViews: readonly FdmNativeLayerRenderView[],
+  targetViews: readonly Viewport3DFdmTargetRenderView[],
+): ReadonlySet<string> {
+  const ids = new Set<string>();
+  for (const view of nativeViews) {
+    if (view.model && view.model.count > 0 && visibleFdmSurface(view.settings)) {
+      ids.add(view.domain.objectId);
+    }
+  }
+  for (const view of targetViews) {
+    const objectId = fdmTargetObjectId(view);
+    if (objectId && visibleFdmSurface(view.settings) && fdmTargetSurfaceOrdinals(view).length) {
+      ids.add(objectId);
+    }
+  }
+  return ids;
+}
+
+export function resolveViewport3DFdmTextureColors({
+  binding,
+  model,
+  objectId,
+  ordinals,
+  settings,
+  surfaceColors,
+  textureModel,
+}: {
+  binding: TextureInspectorDraftBinding | null;
+  model: FdmCuboidInstanceModel | null;
+  objectId: string | null;
+  ordinals?: Uint32Array;
+  settings: VisualizationTargetSettings;
+  surfaceColors: ScalarColorBuffer | null;
+  textureModel: Viewport3DTextureTransformModel;
+}): ScalarColorBuffer | null {
+  if (
+    !objectId || !visibleFdmSurface(settings) ||
+    resolveCanonicalQuantityId(settings.activeQuantityId) !== "m" ||
+    settings.surfaceColorSource !== "orientation" || settings.shaderColorMode !== "orientation"
+  ) {
+    return surfaceColors;
+  }
+  const liveBinding = binding?.previewDraft && binding.target.objectId === objectId &&
+    binding.draft.sourceMode !== "field-file" ? binding : null;
+  if (!liveBinding && (surfaceColors || !textureModel.hasAuthoredMagnetization(objectId))) {
+    return surfaceColors;
+  }
+  const positionsWorld = buildFdmPointPositions(model, "full", ordinals);
+  if (!positionsWorld) return surfaceColors;
+  const colors = textureModel.sampleSurfaceColors({ liveBinding, objectId, positionsWorld });
+  return colors
+    ? { colors, colorMode: "orientation", quantityId: "m", range: { min: -1, max: 1 } }
+    : surfaceColors;
+}
+
 export function resolveViewport3DRealizedFdmObjectIds({
   fdmNativeLayerViews,
   fdmTargetViews,
@@ -1513,6 +1590,35 @@ function Viewport3DModelLayerStack({
     [fdmCuboidLayerEnabled, fdmTargetViews, fdmNativeLayerViews, fieldModel, savedViewportActive, primitiveModel],
   );
 
+  const textureBinding = useSyncExternalStore(
+    subscribeTextureDraftBridge,
+    () => getTextureDraftBridgeSnapshot().activeBinding,
+    () => null,
+  );
+  const showFdmSurfaces = fdmCuboidLayerEnabled && stageVisibility.baseGeometry && !savedViewportActive;
+  const fdmSurfaceObjectIds = useMemo(() => showFdmSurfaces
+    ? resolveViewport3DFdmSurfaceObjectIds(fdmNativeLayerViews, fdmTargetViews)
+    : undefined,
+  [showFdmSurfaces, fdmNativeLayerViews, fdmTargetViews]);
+  const fdmTextureColors = useMemo(() => {
+    const colorsByTarget = new Map<string, ScalarColorBuffer | null>();
+    if (!showFdmSurfaces) return colorsByTarget;
+    for (const view of fdmNativeLayerViews) {
+      colorsByTarget.set(view.target.id, resolveViewport3DFdmTextureColors({
+        binding: textureBinding, model: view.model, objectId: view.domain.objectId,
+        settings: view.settings, surfaceColors: view.surfaceColors, textureModel: textureTransformModel,
+      }));
+    }
+    for (const view of fdmTargetViews) {
+      colorsByTarget.set(view.target.id, resolveViewport3DFdmTextureColors({
+        binding: textureBinding, model: view.sourceModel, objectId: fdmTargetObjectId(view),
+        ordinals: fdmTargetSurfaceOrdinals(view), settings: view.settings,
+        surfaceColors: view.surfaceColors, textureModel: textureTransformModel,
+      }));
+    }
+    return colorsByTarget;
+  }, [showFdmSurfaces, fdmNativeLayerViews, fdmTargetViews, textureBinding, textureTransformModel]);
+
   if (!sceneLayersEnabled) return null;
 
   const authoredRegionOverlaysVisible = resolveAuthoredRegionOverlayVisibility({
@@ -1564,7 +1670,7 @@ function Viewport3DModelLayerStack({
               selectedObjectId={selectedObjectId}
               selectedRegionId={selectedRegionId}
               settings={view.settings}
-              surfaceColors={view.surfaceColors}
+              surfaceColors={fdmTextureColors.get(view.target.id) ?? view.surfaceColors}
               tracker={tracker}
               vectorColorMode={vectorColorMode}
               vectorGlyphColors={view.vectorGlyphColors?.colors ?? null}
@@ -1635,7 +1741,7 @@ function Viewport3DModelLayerStack({
               selectedObjectId={selectedObjectId}
               selectedRegionId={selectedRegionId}
               settings={view.settings}
-              surfaceColors={view.surfaceColors}
+              surfaceColors={fdmTextureColors.get(view.target.id) ?? view.surfaceColors}
               tracker={tracker}
               vectorColorMode={vectorColorMode}
               vectorBuildReference={view.vectorBuildReference}
@@ -1722,6 +1828,7 @@ function Viewport3DModelLayerStack({
         savedViewportActive={savedViewportActive}
         getObjectSettings={getObjectSettings}
         liveFieldCoveredObjectIds={liveFieldCoveredObjectIds}
+        fdmSurfaceObjectIds={fdmSurfaceObjectIds}
       />
       {topologyLayerEnabled ? (
         <group visible={stageVisibility.baseGeometry}>

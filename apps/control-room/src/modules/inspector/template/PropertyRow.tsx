@@ -278,14 +278,15 @@ function QuantityNumberField({
     resetToken,
   });
 
-  // Sync display text when external value, display unit, or explicit reset changes while unfocused.
+  // Sync display text on value/unit changes while unfocused, or whenever an explicit reset arrives.
   useEffect(() => {
     const prev = prevSyncedRef.current;
     const changed =
       prev.formattedDisplay !== formattedDisplay ||
       prev.unit !== activeUnit.unit ||
       prev.resetToken !== resetToken;
-    if (!focusedRef.current && changed) {
+    const explicitlyReset = prev.resetToken !== resetToken;
+    if (changed && (!focusedRef.current || explicitlyReset)) {
       prevSyncedRef.current = { formattedDisplay, unit: activeUnit.unit, resetToken };
       setRawText(formattedDisplay);
       setLocalParseError(null);
@@ -974,6 +975,7 @@ export interface PropertyRowProps<TDraft> {
   onTouchField?: (fieldKey: string) => void;
   forceShowErrors?: boolean;
   externalError?: string | null;
+  fieldResetToken?: number;
   flash?: "applied" | "live" | "focus";
   onParseErrorChange?: (fieldKey: string, error: string | null) => void;
 }
@@ -988,6 +990,7 @@ export function PropertyRow<TDraft>({
   onTouchField,
   forceShowErrors = false,
   externalError = null,
+  fieldResetToken = 0,
   flash,
   onParseErrorChange,
 }: PropertyRowProps<TDraft>): ReactNode {
@@ -996,6 +999,7 @@ export function PropertyRow<TDraft>({
   const [localTouched, setLocalTouched] = useState(false);
   const [parseError, setParseError] = useState<string | null>(null);
   const [resetToken, setResetToken] = useState(0);
+  const effectiveResetToken = resetToken + fieldResetToken;
 
   const key = row.key;
   const controlId = `${ctx.specId}-${key ?? generatedId}`;
@@ -1110,7 +1114,7 @@ export function PropertyRow<TDraft>({
           id={controlId}
           invalid={showErr}
           label={row.label ?? key ?? "Quantity"}
-          resetToken={resetToken}
+          resetToken={effectiveResetToken}
           units={row.units}
           value={numericValue}
           onBlurField={handleFieldTouch}
@@ -1133,7 +1137,7 @@ export function PropertyRow<TDraft>({
           integer={row.integer}
           invalid={showErr}
           label={row.label ?? key ?? "Number"}
-          resetToken={resetToken}
+          resetToken={effectiveResetToken}
           unitSuffix={row.unitSuffix}
           value={numericValue}
           onBlurField={handleFieldTouch}

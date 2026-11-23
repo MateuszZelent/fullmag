@@ -118,6 +118,51 @@ afterEach(() => {
 });
 
 describe("useInspectorSpecController", () => {
+  it("clears parse errors only for fields explicitly replaced by a draft patch", () => {
+    const env = installSimulationPreparationTestDom();
+    restoreDom = env.restore;
+    const container = env.document.createElement("div");
+    env.document.body.appendChild(container);
+    const root = createRoot(container as unknown as Element);
+
+    const spec = createMaterialSpec(async () => true);
+    let latest!: InspectorSpecController<MaterialDraft>;
+
+    function Harness() {
+      latest = useInspectorSpecController(spec, SELECTION_A, {
+        ms: 8e5,
+        alpha: 0.008,
+        showVectors: true,
+      }, undefined, { resetFieldInputsOnPatch: true });
+      return null;
+    }
+
+    act(() => {
+      root.render(<Harness />);
+    });
+    act(() => {
+      latest.setParseError("ms", "Enter a valid number.");
+      latest.setParseError("alpha", "Enter a valid number.");
+    });
+    expect(latest.invalidFields.has("ms")).toBe(true);
+    expect(latest.invalidFields.has("alpha")).toBe(true);
+
+    // Preset replacement can intentionally write the same numeric value as the baseline.
+    act(() => {
+      latest.patchDraft({ ms: 8e5 });
+    });
+
+    expect(latest.invalidFields.has("ms")).toBe(false);
+    expect(latest.invalidFields.has("alpha")).toBe(true);
+    expect(latest.draft.ms).toBe(8e5);
+    expect(latest.fieldResetTokens.get("ms")).toBe(1);
+    expect(latest.fieldResetTokens.has("alpha")).toBe(false);
+
+    act(() => {
+      root.unmount();
+    });
+  });
+
   it("rebases clean fields on incoming baseline updates while keeping dirty fields and animationKey stable", () => {
     const env = installSimulationPreparationTestDom();
     restoreDom = env.restore;
