@@ -64,6 +64,8 @@ export async function installInspectorCommitTrace(page) {
             changedHooks,
           });
         }
+        // Root commits can update other workspace modules without rendering Inspector.
+        if (changes.length === 0 && !changesTruncated && pending.length === 0) return;
         if (trace.commits.length >= 64) {
           trace.commits.shift();
           trace.dropped++;
