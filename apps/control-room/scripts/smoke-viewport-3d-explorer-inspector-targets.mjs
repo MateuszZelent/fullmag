@@ -435,7 +435,8 @@ async function verifyAirboxIndependentVisualization(browser, url) {
     if (await quantity.count() !== 1) {
       throw new Error(`Airbox inspector must expose one Quantity Source control; found ${await quantity.count()}.`);
     }
-    await quantity.scrollIntoViewIfNeeded();
+    // Settle any actionability scroll before sampling the Inspector.
+    await quantity.click({ trial: true });
     await quantity.focus();
     await waitForInspectorNoOpacityAnimation(page, panel);
     const inspectorBefore = await captureInspectorMutationProbe(page);
@@ -452,13 +453,15 @@ async function verifyAirboxIndependentVisualization(browser, url) {
     const quantityResponse = page.waitForResponse((response) => response.request().method() === "PATCH" && response.url().endsWith("/visualization/state"));
     // Attach rejection handling immediately so failure cleanup cannot mask the assertion.
     void quantityResponse.catch(() => {});
-    await quantity.click();
+    // The trigger already has focus. Opening with the keyboard avoids the
+    // test driver's automatic scrolling before a locator click.
+    await page.keyboard.press("Enter");
     await page.getByRole("option", { name: "Effective Field", exact: true }).click();
     await waitForDeferred(ackStarted.promise, "Airbox H_eff display PATCH", timeoutMs);
     await waitForAnimationFrame(page);
     await waitForAnimationFrame(page);
     await assertTarget(page, "airbox");
-    await quantity.press("Enter");
+    await page.keyboard.press("Enter");
     if (await page.getByRole("option").count() !== 0) throw new Error("Pending quantity reopened its menu.");
     const inspectorPending = await captureInspectorMutationProbe(page);
     assertInspectorMutationStable(inspectorBefore, inspectorPending, "while the Airbox quantity ACK is delayed");
@@ -547,7 +550,7 @@ async function verifyAirboxIndependentVisualization(browser, url) {
     await selectVisualizationNode(page, "fem-owned");
     const objectPanel = page.locator(".fm-inspector-panel").last();
     const objectQuantity = objectPanel.getByRole("combobox", { name: "Quantity source", exact: true });
-    await objectQuantity.scrollIntoViewIfNeeded();
+    await objectQuantity.click({ trial: true });
     await objectQuantity.focus();
     await page.evaluate(() => { delete window.__airboxIndependentInspectorRoot; });
     const objectBefore = await captureInspectorMutationProbe(page);
@@ -557,7 +560,7 @@ async function verifyAirboxIndependentVisualization(browser, url) {
     fixture.nextVisualizationAck = { released: objectAckReleased, started: objectAckStarted };
     const objectResponse = page.waitForResponse((response) => response.request().method() === "PATCH" && response.url().endsWith("/visualization/state"));
     void objectResponse.catch(() => {});
-    await objectQuantity.click();
+    await page.keyboard.press("Enter");
     await page.getByRole("option", { name: /^External field$/i }).click();
     await waitForDeferred(objectAckStarted.promise, "Object quantity PATCH", timeoutMs);
     await waitForAnimationFrame(page);
