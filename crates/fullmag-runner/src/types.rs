@@ -4162,6 +4162,27 @@ pub struct FemGpuMinimizerExecutionReceipt {
 
 impl FemGpuMinimizerExecutionReceipt {
     pub fn validate_strict_device(&self) -> Result<(), &'static str> {
+        self.validate_identity()?;
+        self.accounting.validate_strict_device()
+    }
+
+    pub(crate) fn validate_strict_initial_equilibrium(&self) -> Result<(), &'static str> {
+        let field_operator_mask = self.accounting.required_operator_mask & !self.validate_identity()?;
+        let reduction_operator = 1_u64 << 8;
+        if self.accounting.accepted_step_count != 0
+            || self.accounting.failed_attempt_count != 0
+            || field_operator_mask & reduction_operator == 0
+        {
+            return Err("fem_gpu_initial_equilibrium_observation_invalid");
+        }
+        crate::fem::execution_receipt::validate_strict_fem_gpu_initial_equilibrium_receipt(
+            &self.accounting,
+            field_operator_mask,
+        )
+        .map_err(|error| error.token())
+    }
+
+    fn validate_identity(&self) -> Result<u64, &'static str> {
         let algorithm_bit = match self.algorithm.as_str() {
             "projected_gradient_bb" => 1_u64 << 10,
             "nonlinear_cg" => 1_u64 << 11,
@@ -4180,7 +4201,7 @@ impl FemGpuMinimizerExecutionReceipt {
         {
             return Err("fem_gpu_minimizer_receipt_identity_mismatch");
         }
-        receipt.validate_strict_device()
+        Ok(algorithm_bit)
     }
 }
 
@@ -4241,6 +4262,35 @@ mod fem_gpu_execution_receipt_contract_tests {
         let mut raw = serde_json::to_value(receipt).expect("serialize receipt");
         raw["future_field"] = serde_json::json!(true);
         assert!(serde_json::from_value::<FemGpuExecutionReceipt>(raw).is_err());
+    }
+
+    #[test]
+    fn strict_initial_equilibrium_requires_observed_device_fields_and_zero_steps() {
+        let mut accounting = strict_device_receipt_fixture();
+        let field_mask = (1_u64 << 0) | (1_u64 << 8);
+        let algorithm_mask = 1_u64 << 10;
+        accounting.integrator = "not_used".into();
+        accounting.executed = "cuda_fem_initial_equilibrium".into();
+        accounting.required_operator_mask = field_mask | algorithm_mask;
+        accounting.resolved_device_operator_mask = accounting.required_operator_mask;
+        accounting.executed_device_operator_mask = field_mask;
+        accounting.accepted_step_count = 0;
+        let mut receipt = FemGpuMinimizerExecutionReceipt {
+            schema_version: "fullmag.fem.gpu.minimizer-execution-receipt.v1".into(),
+            algorithm: "projected_gradient_bb".into(),
+            accounting,
+        };
+        assert!(receipt.validate_strict_initial_equilibrium().is_ok());
+        assert!(receipt.validate_strict_device().is_err());
+
+        receipt.accounting.executed_device_operator_mask = 0;
+        assert!(receipt.validate_strict_initial_equilibrium().is_err());
+        receipt.accounting.executed_device_operator_mask = field_mask;
+        receipt.accounting.fallback_count = 1;
+        assert!(receipt.validate_strict_initial_equilibrium().is_err());
+        receipt.accounting.fallback_count = 0;
+        receipt.accounting.accepted_step_count = 1;
+        assert!(receipt.validate_strict_initial_equilibrium().is_err());
     }
 
     fn strict_device_receipt_fixture() -> FemGpuExecutionReceipt {

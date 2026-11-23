@@ -1537,9 +1537,9 @@ void PublishesCanonicalResidualFieldsAndSolverReasons()
 void FrequencyWindowPublishesSelectedSearchStabilityWithoutCount()
 {
     const WindowSpectrumFixture fixture = make_window_spectrum_fixture(
-        {0.25e9, 1.0e9, 2.0e9, 3.0e9});
+        {1.0e9, 2.0e9, 3.0e9, 4.0e9});
     const fd::PoissonAirboxEigenBlockProblem problem = fixture.problem(
-        0.5e9,
+        1.0,
         2.5e9,
         2);
 
@@ -1564,6 +1564,13 @@ void FrequencyWindowPublishesSelectedSearchStabilityWithoutCount()
           "selected-search certificate must account for every subwindow");
     check(result.window_failed_subwindow_count == 0u,
           "selected-search certificate must report no failed subwindows");
+    const char *refinement_schedule = std::strstr(
+        result.window_certificate_json, "\"refinement_schedule\":{");
+    const double first_shift_hz = json_number_after(result.executed_subwindows_json,
+        "\"pass\":\"refinement\",\"subwindow_index\":0,\"shift_frequency_hz\":");
+    check(first_shift_hz > 0.0 && first_shift_hz < problem.frequency_min_hz &&
+              first_shift_hz == json_number_after(refinement_schedule, "\"first_shift_hz\":"),
+          "CPU must execute the reported positive lower exterior refinement shift");
     check(contains(
               result.diagnostics_json,
               "\"operator_context_scope\":\"frequency_window\""),

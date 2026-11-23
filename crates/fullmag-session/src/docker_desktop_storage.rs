@@ -619,17 +619,6 @@ fn current_executable_sha256() -> Result<String> {
 }
 
 #[cfg(target_os = "linux")]
-fn read_json_document(path: &str, label: &str) -> Result<serde_json::Value> {
-    let bytes = read_bounded_regular_file(Path::new(path), MAX_EVIDENCE_BYTES)?;
-    let value: serde_json::Value =
-        serde_json::from_slice(&bytes).with_context(|| format!("decoding {label}"))?;
-    if !value.is_object() {
-        bail!("{label} must contain a JSON object");
-    }
-    Ok(value)
-}
-
-#[cfg(target_os = "linux")]
 fn required_json_string<'a>(
     document: &'a serde_json::Value,
     field: &str,
@@ -662,7 +651,19 @@ fn validate_development_runtime_identity(
         bail!("development delegation group identity differs from the Compose project");
     }
 
-    let provenance = read_json_document(&delegation.provenance_path, "runtime provenance")?;
+    validated_development_runtime_manifest(expected_commit, &toolchain_image_id)?;
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+fn validated_development_runtime_manifest(
+    expected_commit: &str,
+    toolchain_image_id: &str,
+) -> Result<([u8; 32], serde_json::Value, serde_json::Value)> {
+    let bytes =
+        read_bounded_regular_file(Path::new(DEVELOPMENT_PROVENANCE_PATH), MAX_EVIDENCE_BYTES)?;
+    let provenance: serde_json::Value =
+        serde_json::from_slice(&bytes).context("decoding runtime provenance")?;
     if required_json_string(&provenance, "schema", "runtime provenance")?
         != "fullmag.docker-all-image.v1"
         || required_json_string(&provenance, "state", "runtime provenance")? != "succeeded"
@@ -683,7 +684,7 @@ fn validate_development_runtime_identity(
     }
     if required_json_string(&provenance, "cargo_profile", "runtime provenance")? != "backend-dev"
         || required_json_string(&provenance, "toolchain_image_id", "runtime provenance")?
-            != toolchain_image_id.as_str()
+            != toolchain_image_id
     {
         bail!("runtime provenance build identity differs from the delegation");
     }
@@ -762,9 +763,7 @@ fn validate_development_runtime_identity(
     let toolchain = receipt
         .get("toolchain")
         .ok_or_else(|| anyhow::anyhow!("backend build receipt has no toolchain identity"))?;
-    if required_json_string(toolchain, "image_id", "backend build receipt")?
-        != toolchain_image_id.as_str()
-    {
+    if required_json_string(toolchain, "image_id", "backend build receipt")? != toolchain_image_id {
         bail!("backend build receipt toolchain differs from the delegation");
     }
 
@@ -789,7 +788,127 @@ fn validate_development_runtime_identity(
     if expected_hash != current_executable_sha256()? {
         bail!("current executable hash differs from runtime provenance");
     }
-    Ok(())
+    Ok((Sha256::digest(&bytes).into(), provenance, receipt))
+}
+
+/// Bind the managed Docker DEV manifest to a symbol in the loaded FEM library.
+#[cfg(target_os = "linux")]
+pub fn verified_fem_gpu_runtime_manifest_sha256(
+    expected_commit: &str,
+    expected_snapshot: &str,
+    native_symbol: usize,
+) -> Result<[u8; 32]> {
+    use std::ffi::{c_void, CStr};
+    use std::os::unix::{ffi::OsStrExt, fs::MetadataExt};
+
+    let toolchain_image_id = env::var("FULLMAG_TOOLCHAIN_IMAGE_ID")
+        .context("managed DEV toolchain image identity is unavailable")?;
+    validate_image_id(&toolchain_image_id, "managed DEV toolchain image identity")?;
+    let (sha256, manifest, receipt) =
+        validated_development_runtime_manifest(expected_commit, &toolchain_image_id)?;
+    let runtime_image_id = env::var("FULLMAG_RUNTIME_IMAGE_ID")
+        .context("managed DEV runtime image identity is unavailable")?;
+    validate_image_id(&runtime_image_id, "managed DEV runtime image identity")?;
+    if required_json_string(&manifest, "image_id", "runtime provenance")? != runtime_image_id
+        || required_json_string(&manifest, "source_snapshot_sha256", "runtime provenance")?
+            != expected_snapshot
+    {
+        bail!("runtime provenance differs from the executing source snapshot or image");
+    }
+
+    let mut info: libc::Dl_info = unsafe { std::mem::zeroed() };
+    if unsafe { libc::dladdr(native_symbol as *const c_void, &mut info) } == 0
+        || info.dli_fname.is_null()
+    {
+        bail!("cannot identify the loaded FEM library");
+    }
+    let loaded_path = Path::new(std::ffi::OsStr::from_bytes(unsafe {
+        CStr::from_ptr(info.dli_fname).to_bytes()
+    }));
+    let path = loaded_path
+        .canonicalize()
+        .context("resolving loaded FEM library path")?;
+    let relative = path
+        .strip_prefix(DEVELOPMENT_PACKAGE_ROOT)
+        .context("loaded FEM library is outside the managed package")?;
+    if relative.parent() != Some(Path::new("lib"))
+        || !relative
+            .file_name()
+            .and_then(|value| value.to_str())
+            .is_some_and(|name| name.starts_with("libfullmag_fem.so"))
+    {
+        bail!("loaded library is not the managed FEM library artifact");
+    }
+    if manifest.get("artifacts") != receipt.get("artifacts") {
+        bail!("runtime provenance and build receipt list different package artifacts");
+    }
+    let artifacts = receipt
+        .get("artifacts")
+        .and_then(serde_json::Value::as_array)
+        .context("runtime provenance has no package artifacts")?;
+    let relative_name = relative.to_str().context("invalid FEM library path")?;
+    let mut matches = artifacts.iter().filter(|record| {
+        record.get("path").and_then(serde_json::Value::as_str) == Some(relative_name)
+    });
+    let artifact = matches
+        .next()
+        .context("runtime provenance omits the loaded FEM library")?;
+    if matches.next().is_some() {
+        bail!("runtime provenance repeats the loaded FEM library artifact");
+    }
+    let expected_library_sha256 = required_json_string(artifact, "sha256", "FEM library artifact")?;
+    let mut file = open_regular_nofollow(&path)?;
+    let metadata = file.metadata()?;
+    let mapped = fs::read_to_string("/proc/self/maps")?
+        .lines()
+        .find_map(|line| {
+            let mut fields = line.split_whitespace();
+            let (start, end) = fields.next()?.split_once('-')?;
+            let start = usize::from_str_radix(start, 16).ok()?;
+            let end = usize::from_str_radix(end, 16).ok()?;
+            if !(start..end).contains(&native_symbol) {
+                return None;
+            }
+            fields.next()?; // Permissions.
+            fields.next()?; // Offset.
+            let (major, minor) = fields.next()?.split_once(':')?;
+            let major = u32::from_str_radix(major, 16).ok()?;
+            let minor = u32::from_str_radix(minor, 16).ok()?;
+            let inode = fields.next()?.parse::<u64>().ok()?;
+            Some((libc::makedev(major, minor), inode))
+        });
+    if mapped != Some((metadata.dev(), metadata.ino())) {
+        bail!("FEM library on disk differs from the loaded image");
+    }
+    let mut hasher = Sha256::new();
+    let mut buffer = [0u8; 64 * 1024];
+    loop {
+        let count = file.read(&mut buffer)?;
+        if count == 0 {
+            break;
+        }
+        hasher.update(&buffer[..count]);
+    }
+    let after = file.metadata()?;
+    if artifact.get("size").and_then(serde_json::Value::as_u64) != Some(metadata.len())
+        || (
+            metadata.len(),
+            metadata.mtime(),
+            metadata.mtime_nsec(),
+            metadata.ctime(),
+            metadata.ctime_nsec(),
+        ) != (
+            after.len(),
+            after.mtime(),
+            after.mtime_nsec(),
+            after.ctime(),
+            after.ctime_nsec(),
+        )
+        || format!("{:x}", hasher.finalize()) != expected_library_sha256
+    {
+        bail!("loaded FEM library hash differs from runtime provenance");
+    }
+    Ok(sha256)
 }
 
 #[cfg(target_os = "linux")]

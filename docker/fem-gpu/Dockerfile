@@ -319,9 +319,11 @@ RUN git clone --depth 1 --branch ${PETSC_REF} https://gitlab.com/petsc/petsc.git
     python3 /usr/local/sbin/fullmag-write-petsc-build-metadata.py \
       --prefix "${INSTALL_PREFIX}" --require MUMPS METIS SCALAPACK OPENBLAS
 
+COPY docker/fem-gpu/patches/slepc-3.24.3-krylov-residual-work.diff /tmp/build/slepc-3.24.3-krylov-residual-work.diff
 RUN git clone --depth 1 --branch ${SLEPC_REF} https://gitlab.com/slepc/slepc.git /tmp/build/slepc && \
     test "$(git -C /tmp/build/slepc rev-parse HEAD)" = "${SLEPC_SOURCE_COMMIT}" && \
     cd /tmp/build/slepc && \
+    git apply /tmp/build/slepc-3.24.3-krylov-residual-work.diff && \
     PETSC_DIR=${INSTALL_PREFIX} python3 ./configure --prefix=${INSTALL_PREFIX} && \
     make SLEPC_DIR=/tmp/build/slepc PETSC_DIR=${INSTALL_PREFIX} -j"$(nproc)" all && \
     make SLEPC_DIR=/tmp/build/slepc PETSC_DIR=${INSTALL_PREFIX} install
@@ -533,6 +535,35 @@ RUN set -eu; \
     FULLMAG_CUPTI_LIBRARY_SHA256="${cupti_library_sha256}" \
     python3 -c 'import json,os,sys; from pathlib import Path; p=Path(sys.argv[1]); value=json.loads(p.read_text()); declared=value.setdefault("declared", {}); actual=value.setdefault("actual", {}); declared["cupti"]={"version":os.environ["FULLMAG_CUPTI_VERSION"],"api_version":int(os.environ["FULLMAG_CUPTI_API_VERSION"]),"redistribution_url":os.environ["FULLMAG_CUPTI_REDIST_URL"],"redistribution_archive_sha256":os.environ["FULLMAG_CUPTI_REDIST_SHA256"]}; actual["cupti"]={"version":os.environ["FULLMAG_CUPTI_VERSION"],"api_version":int(os.environ["FULLMAG_CUPTI_API_VERSION"]),"library_path":os.environ["FULLMAG_CUPTI_LIBRARY_PATH"],"library_sha256":os.environ["FULLMAG_CUPTI_LIBRARY_SHA256"]}; p.write_text(json.dumps(value,indent=2,sort_keys=True)+chr(10))' \
       "${INSTALL_PREFIX}/share/fullmag/dependency-versions.json"
+
+# Private CUDA 12 cuDSS SDK for the native sparse FEM shift factorization.
+ENV FULLMAG_CUDSS_ROOT=/opt/fullmag-cudss/0.8.0.10
+COPY docker/fem-gpu/record_cudss_dependency.py /usr/local/sbin/fullmag-record-cudss-dependency.py
+RUN set -eu; \
+    case "$(dpkg --print-architecture)" in \
+      amd64) cudss_arch=linux-x86_64; cudss_size=174512356; cudss_sha256=29716a05c64b28531309afcb7a9dd5044081a43197e72bdd0fbf29e9b4ee4707 ;; \
+      arm64) cudss_arch=linux-sbsa; cudss_size=174240460; cudss_sha256=949426015c986897df7677435b450d2740e8849d16b07cdc13db27ea32ebb18b ;; \
+      *) echo "Unsupported cuDSS architecture: $(dpkg --print-architecture)" >&2; exit 2 ;; \
+    esac; \
+    cudss_version=0.8.0.10; \
+    cudss_filename="libcudss-${cudss_arch}-${cudss_version}_cuda12-archive.tar.xz"; \
+    cudss_url="https://developer.download.nvidia.com/compute/cudss/redist/libcudss/${cudss_arch}/${cudss_filename}"; \
+    cudss_archive="/tmp/${cudss_filename}"; \
+    curl -fsSL --connect-timeout 30 --max-time 600 --retry 2 --retry-connrefused \
+      --output "${cudss_archive}" "${cudss_url}"; \
+    test "$(stat -c %s "${cudss_archive}")" = "${cudss_size}"; \
+    printf '%s  %s\n' "${cudss_sha256}" "${cudss_archive}" | sha256sum --check; \
+    mkdir -p "${FULLMAG_CUDSS_ROOT}"; \
+    tar -xJf "${cudss_archive}" -C "${FULLMAG_CUDSS_ROOT}" --strip-components=1 --no-same-owner --no-same-permissions; \
+    rm -f "${cudss_archive}"; \
+    test -r "${FULLMAG_CUDSS_ROOT}/LICENSE"; \
+    test -r "${FULLMAG_CUDSS_ROOT}/include/cudss.h"; \
+    cudss_library="$(readlink -f "${FULLMAG_CUDSS_ROOT}/lib/libcudss.so")"; \
+    test -r "${cudss_library}"; \
+    printf '%s\n' "${FULLMAG_CUDSS_ROOT}/lib" > /etc/ld.so.conf.d/fullmag-cudss.conf; \
+    ldconfig; \
+    python3 /usr/local/sbin/fullmag-record-cudss-dependency.py \
+      "${INSTALL_PREFIX}/share/fullmag/dependency-versions.json" "${cudss_version}" "${cudss_url}" "${cudss_sha256}" "${cudss_library}"
 
 ARG FULLMAG_HYPRE_MEMORY_VARIANT="baseline"
 ENV FULLMAG_HYPRE_MEMORY_VARIANT=${FULLMAG_HYPRE_MEMORY_VARIANT}

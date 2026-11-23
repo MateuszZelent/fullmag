@@ -3897,6 +3897,52 @@ int main()
     check(film_air_result.a_qq.row_count == 2u && film_air_result.a_qq.values.size() > 0u,
           "magnetic+airbox importer compacts native magnetic exchange to declared classes");
 
+    auto expect_open_identity_rejection = [&](
+        const FullmagFemModalSharedDomainPayload &candidate,
+        const char *reason,
+        const char *message) {
+        fd::PoissonAirboxSharedDomainAssemblyResult candidate_result{};
+        check(fd::assemble_poisson_airbox_shared_domain_payload(
+                  candidate, &candidate_result) == fd::FrequencyDomainStatus::validation_error,
+              message);
+        check(std::strstr(candidate_result.error_message, reason) != nullptr,
+              "open-airbox identity rejection must use the expected reason");
+        check(candidate_result.a_qq.row_count == 0u && candidate_result.a_qq.values.empty() &&
+                  candidate_result.a_qphi.row_count == 0u && candidate_result.a_qphi.values.empty() &&
+                  candidate_result.a_phiq.row_count == 0u && candidate_result.a_phiq.values.empty() &&
+                  candidate_result.p.row_count == 0u && candidate_result.p.values.empty() &&
+                  candidate_result.b_qq.row_count == 0u && candidate_result.b_qq.values.empty(),
+              "rejected open-airbox identity must not publish operator blocks");
+    };
+    FullmagFemModalSharedDomainPayload zero_pair_periodic_payload = film_air_payload;
+    zero_pair_periodic_payload.magnetic_pair_count = 0u;
+    zero_pair_periodic_payload.airbox_pair_count = 0u;
+    expect_open_identity_rejection(
+        zero_pair_periodic_payload,
+        "incomplete periodic/open-airbox pair identity",
+        "zero pair counts must not reclassify a mesh that still carries periodic pair maps");
+
+    fullmag_fem_mesh_desc no_pair_map_mesh = film_air_mesh;
+    no_pair_map_mesh.periodic_node_pairs = nullptr;
+    no_pair_map_mesh.periodic_node_pairs_len = 0u;
+    no_pair_map_mesh.periodic_boundary_pair_markers = nullptr;
+    no_pair_map_mesh.periodic_boundary_pair_markers_len = 0u;
+    FullmagFemModalSharedDomainPayload open_with_periodic_certificate =
+        zero_pair_periodic_payload;
+    open_with_periodic_certificate.mesh = &no_pair_map_mesh;
+    expect_open_identity_rejection(
+        open_with_periodic_certificate,
+        "periodic_mesh_certificate_v6_relation_missing_from_mesh_pair_map",
+        "zero pair counts must not reuse a v6 certificate that binds periodic identity relations");
+
+    FullmagFemModalSharedDomainPayload open_without_robin = zero_pair_periodic_payload;
+    open_without_robin.mesh = &no_pair_map_mesh;
+    open_without_robin.boundary_kind = "dirichlet";
+    expect_open_identity_rejection(
+        open_without_robin,
+        "incomplete periodic/open-airbox pair identity",
+        "open-airbox identity must require a Robin boundary kind");
+
     // The payload adapter forwards descriptor alpha into its private request,
     // but the default false opt-in keeps the production Ignore operator intact.
     FullmagFemModalLinearizationDescriptor film_air_without_alpha_descriptor =

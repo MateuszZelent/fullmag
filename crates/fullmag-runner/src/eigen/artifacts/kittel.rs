@@ -710,6 +710,7 @@ fn solver_model_from_bias_field_sweep(spectrum: &Value, diagnostics: &Value) -> 
     match name {
         "k0_poisson_airbox_gpu_petsc_slepc"
         | "k0_poisson_airbox_gpu_modal_device_krylov"
+        | "k0_poisson_airbox_gpu_augmented_cudss"
         | "gpu_modal_device_krylov" => EigenSolverModel::ProductionGpuModalDeviceKrylov,
         "gpu_dense_k0_macrospin_modal_eigen" => EigenSolverModel::ProductionGpuDenseK0Macrospin,
         "k0_poisson_airbox_cpu_schur_slepc" | "slepc_multi_shift_invert_production_cpu_dense" => {

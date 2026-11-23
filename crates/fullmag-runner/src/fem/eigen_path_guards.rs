@@ -59,10 +59,35 @@ pub(super) fn gpu_modal_k0_kittel_path_supported(plan: &FemEigenPlanIR) -> bool 
         fullmag_ir::EigenTargetIR::Lowest => false,
     };
 
-    periodic_airbox_k0_runtime_supported(plan)
+    (periodic_airbox_k0_runtime_supported(plan) || open_airbox_k0_runtime_supported(plan))
         && plan.count > 0
         && plan.count <= 32
         && positive_frequency_target
+}
+
+pub(super) fn open_airbox_k0_runtime_supported(plan: &FemEigenPlanIR) -> bool {
+    if !crate::fem::eigen_policy::open_airbox_k0_modal_requested(plan)
+        || !fem_eigen::native_shared_domain_magnetic_assembly_available(plan)
+        || plan.count == 0
+        || plan.count > 32
+    {
+        return false;
+    }
+    match plan.target {
+        fullmag_ir::EigenTargetIR::Nearest { frequency_hz } => {
+            frequency_hz.is_finite() && frequency_hz > 0.0
+        }
+        fullmag_ir::EigenTargetIR::FrequencyWindow {
+            frequency_min_hz,
+            frequency_max_hz,
+        } => {
+            frequency_min_hz.is_finite()
+                && frequency_max_hz.is_finite()
+                && frequency_min_hz >= 0.0
+                && frequency_max_hz > frequency_min_hz
+        }
+        fullmag_ir::EigenTargetIR::Lowest => false,
+    }
 }
 
 pub(super) fn periodic_airbox_k0_runtime_supported(plan: &FemEigenPlanIR) -> bool {

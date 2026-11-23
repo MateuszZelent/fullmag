@@ -142,6 +142,8 @@ void gpu_execution_receipt_note_unknown(
     uint64_t operator_mask);
 void gpu_execution_receipt_note_fallback(FemGpuExecutionReceiptRuntimeState &state);
 void gpu_execution_receipt_commit_attempt(FemGpuExecutionReceiptRuntimeState &state);
+bool gpu_execution_receipt_commit_equilibrium_observation(
+    FemGpuExecutionReceiptRuntimeState &state);
 void gpu_execution_receipt_reject_attempt(FemGpuExecutionReceiptRuntimeState &state);
 void gpu_execution_receipt_fail_attempt(FemGpuExecutionReceiptRuntimeState &state);
 FemGpuExecutionSnapshot gpu_execution_receipt_snapshot(

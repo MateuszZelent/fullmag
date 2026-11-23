@@ -68,7 +68,7 @@ pub(crate) use frequency_domain::{
     NativeModalEigenFloquetPeriodicPair, NativeModalEigenMfemOperatorProblem,
     NativeModalEigenPoissonAirboxBlockProblem, NativeModalEigenRequest,
     NativeModalEigenSharedDomainProblem, NativeModalEigenSparseOperatorProblem, NativeModalEigenTypedResult,
-    NativeModalExecutionTarget, NativeModalGpuAttestation,
+    NativeModalExecutionTarget, NativeModalGpuAttestation, NativeModalGpuOperatorKind,
 };
 #[allow(unused_imports)]
 #[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
@@ -152,6 +152,18 @@ use std::sync::Arc;
 mod mesh_preparation;
 #[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
 pub use mesh_preparation::prepare_fem_mesh_space;
+
+/// Release the process-owned GPU modal runtime after the last native job.
+#[cfg(feature = "fem-gpu")]
+pub fn finalize_native_fem_gpu_modal_runtime() -> Result<(), i32> {
+    // SAFETY: the caller invokes this at its process boundary, after its
+    // native jobs complete. The native API serializes teardown with solves.
+    let status = unsafe { ffi::fullmag_fem_modal_eigen_gpu_runtime_finalize() };
+    match status {
+        ffi::FULLMAG_FEM_OK | ffi::FULLMAG_FEM_ERR_UNAVAILABLE => Ok(()),
+        error => Err(error),
+    }
+}
 
 #[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
 fn checked_native_finite(label: &str, value: f64) -> Result<f64, RunError> {

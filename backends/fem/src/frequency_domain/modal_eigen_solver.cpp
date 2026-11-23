@@ -13,6 +13,10 @@
 #include "cpu/frequency_domain/modal_shared_domain_provider_status.hpp"
 #include "cpu/frequency_domain/slepc_modal_eigen.hpp"
 #include "frequency_domain/modal_gpu_krylov.hpp"
+#if FULLMAG_FEM_CUDSS_SHIFT_ENABLED
+#include "fem_common.hpp"
+#include "gpu/frequency_domain/modal_augmented_window.hpp"
+#endif
 #include "cpu/frequency_domain/window_partition.hpp"
 #include "frequency_domain/solver_progress.hpp"
 #include "frequency_domain/linearized_dynamic_pencil.hpp"
@@ -2665,6 +2669,9 @@ FrequencyDomainContractResult solve_modal_eigen_contract(
                 (std::strcmp(problem.assembly_kind, "mfem_weak_form_shared_domain") == 0
                      ? "k0_poisson_airbox_cpu_schur_slepc"
                      : "k0_poisson_airbox_cpu_full_coupled_slepc");
+        if (request.execution_target == ModalExecutionTarget::production_gpu) {
+            problem.test_id = "pa_e2_poisson_airbox_modal_eigen_gpu_petsc_slepc";
+        }
         // Zero is the public ABI sentinel for an omitted residual policy.
         // Keep the Poisson problem's existing default; explicit nonzero values,
         // including invalid ones, remain subject to the adapter validator.
@@ -2940,6 +2947,17 @@ FrequencyDomainContractResult solve_modal_eigen_contract(
         PoissonAirboxModalEigenResult &poisson_result =
             *poisson_result_storage;
         FrequencyDomainStatus status = FrequencyDomainStatus::unavailable;
+        const char *gpu_adapter = "k0_poisson_airbox_gpu_petsc_slepc";
+#if FULLMAG_FEM_CUDSS_SHIFT_ENABLED
+        const bool augmented_robin =
+            request.execution_target == ModalExecutionTarget::production_gpu &&
+            std::strcmp(problem.demag_kind, "open_airbox_k0") == 0;
+        if (augmented_robin) {
+            gpu_adapter = kAugmentedRobinGpuAdapter;
+            status = solve_poisson_airbox_modal_eigen_gpu_augmented_robin(
+                problem, fullmag::fem::kMu0, &poisson_result);
+        } else
+#endif
 #if FULLMAG_HAS_CUDA_RUNTIME && FULLMAG_FEM_WITH_SLEPC
         if (request.execution_target == ModalExecutionTarget::production_gpu) {
             status = solve_poisson_airbox_modal_eigen_gpu_petsc_slepc(
@@ -3061,6 +3079,10 @@ FrequencyDomainContractResult solve_modal_eigen_contract(
         result.diagnostics_json = append_json_field(
             std::move(result.diagnostics_json),
             k0_demag_probe_json);
+        if (requested_gpu) {
+            result.modal_gpu_attestation =
+                poisson_result.gpu_execution_attestation;
+        }
         result.modal_gpu_attestation.hypre_policy_observed =
             poisson_result.hypre_device_policy_observed;
         result.modal_gpu_attestation.hypre_policy_configured =
@@ -3079,6 +3101,10 @@ FrequencyDomainContractResult solve_modal_eigen_contract(
             poisson_result.hypre_first_error_code;
         result.modal_gpu_attestation.hypre_failure_reason =
             poisson_result.hypre_failure_reason;
+        if (requested_gpu && problem.boundary_gauge_digest != nullptr) {
+            result.modal_gpu_attestation.boundary_gauge_digest =
+                problem.boundary_gauge_digest;
+        }
         const char *modal_status_text =
             status == FrequencyDomainStatus::ok ? "ok" :
             status == FrequencyDomainStatus::interrupted ? "interrupted" :
@@ -3089,7 +3115,7 @@ FrequencyDomainContractResult solve_modal_eigen_contract(
             "solve_error";
         const char *requested_execution = requested_gpu ? "production_gpu" : "production_cpu";
         const char *requested_solver_adapter = requested_gpu
-            ? "k0_poisson_airbox_gpu_petsc_slepc"
+            ? gpu_adapter
             : "k0_poisson_airbox_cpu_full_coupled_slepc";
         const bool resolves_to_cpu_schur =
             !requested_gpu &&
@@ -3098,7 +3124,7 @@ FrequencyDomainContractResult solve_modal_eigen_contract(
               std::strcmp(problem.gauge_policy, "mean_zero_augmented") == 0));
         const char *resolved_solver_adapter = requested_gpu || resolves_to_cpu_schur
             ? (requested_gpu
-                   ? "k0_poisson_airbox_gpu_petsc_slepc"
+                   ? gpu_adapter
                    : "k0_poisson_airbox_cpu_schur_slepc")
             : "k0_poisson_airbox_cpu_full_coupled_slepc";
         set_modal_execution(
@@ -3150,7 +3176,17 @@ FrequencyDomainContractResult solve_modal_eigen_contract(
                             "production_cpu") +
             "\","
             "\"demag_kind\":\"" +
-            std::string(problem.demag_kind) +
+            escape_json_string(problem.demag_kind != nullptr ? problem.demag_kind : "") +
+            "\",\"boundary_gauge_digest\":\"" +
+            escape_json_string(
+                problem.boundary_gauge_digest != nullptr
+                    ? problem.boundary_gauge_digest
+                    : "") +
+            "\",\"outer_boundary_kind\":\"" +
+            escape_json_string(
+                problem.outer_boundary_kind != nullptr
+                    ? problem.outer_boundary_kind
+                    : "") +
             "\","
             "\"accepted_mode_count\":" +
             std::to_string(poisson_result.accepted_mode_count) +

@@ -3,7 +3,7 @@ use super::eigen_constants::SHARED_DOMAIN_K0_RUNTIME_UNAVAILABLE_REASON;
 use super::eigen_policy::{
     k_sampling_is_single_k0, native_cpu_modal_window_has_bloch_floquet_payload_path,
     native_cpu_modal_window_has_periodic_k0_runner_operator_path, native_modal_target_frequency_hz,
-    shared_domain_k0_modal_requested,
+    open_airbox_k0_modal_requested, shared_domain_k0_modal_requested,
 };
 use super::eigen_reduction::{is_gamma_k_sampling, k_sampling_contains_nonzero};
 use super::eigen_shared_domain::native_shared_domain_magnetic_assembly_available;
@@ -34,13 +34,15 @@ pub(super) fn modal_solver_policy_native_path_supported(
 }
 
 pub(super) fn native_gpu_shared_domain_modal_supported(plan: &FemEigenPlanIR) -> bool {
+    let periodic_k0 = matches!(plan.spin_wave_bc.kind(), SpinWaveBoundaryKindIR::Periodic)
+        && is_gamma_k_sampling(plan.k_sampling.as_ref());
+    let open_k0 = open_airbox_k0_modal_requested(plan);
     plan.precision == fullmag_ir::ExecutionPrecision::Double
         && plan.enable_demag
         && plan.operator.include_demag
         && matches!(plan.operator.kind, fullmag_ir::EigenOperatorIR::Full2x2)
         && matches!(plan.damping_policy, EigenDampingPolicyIR::Ignore)
-        && matches!(plan.spin_wave_bc.kind(), SpinWaveBoundaryKindIR::Periodic)
-        && is_gamma_k_sampling(plan.k_sampling.as_ref())
+        && (periodic_k0 || open_k0)
         && plan.air_box_config.is_some()
         && native_shared_domain_mesh_metadata_valid(plan)
         && native_shared_domain_magnetic_assembly_available(plan)

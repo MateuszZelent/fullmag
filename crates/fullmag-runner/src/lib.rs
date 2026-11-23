@@ -180,6 +180,8 @@ mod native_fem_cuda_trace;
 pub use native_fem_cuda_trace::{fem_cuda_trace_available, FemCudaTrace, FemCudaTraceEnd, FemCudaTraceStats};
 #[cfg(feature = "fem-native")]
 pub use native_fem::prepare_fem_mesh_space;
+#[cfg(feature = "fem-gpu")]
+pub use native_fem::finalize_native_fem_gpu_modal_runtime;
 mod observation;
 mod observation_runtime;
 mod physics_graph_execution;
@@ -3954,6 +3956,9 @@ fn fem_eigen_progress_update(
             "linear_iteration".to_string(),
             linear_solve.linear_iteration as f64,
         );
+        if let Some(limit) = linear_solve.max_linear_iterations {
+            progress_scalars.insert("max_linear_iterations".to_string(), limit as f64);
+        }
         if let Some(residual_norm) = linear_solve
             .linear_residual_norm
             .filter(|value| value.is_finite() && *value >= 0.0)
@@ -3966,7 +3971,7 @@ fn fem_eigen_progress_update(
                 1.0,
             );
         }
-        if let Some(ksp_type @ ("gmres" | "fgmres" | "preonly")) = linear_solve.linear_ksp_type {
+        if let Some(ksp_type @ ("cg" | "gmres" | "fgmres" | "preonly")) = linear_solve.linear_ksp_type {
             progress_scalars.insert(format!("linear_ksp_type:{ksp_type}"), 1.0);
         }
         progress_scalars.insert("residual_source:ksp_norm".to_string(), 1.0);
@@ -7369,6 +7374,7 @@ mod tests {
                 total_subwindows: Some(50),
                 linear_solve: Some(crate::fem::eigen_progress::FemEigenLinearProgress {
                     linear_iteration: 12,
+                    max_linear_iterations: Some(256),
                     linear_residual_norm: Some(4.5e-8),
                     linear_solver_role: "poisson",
                     linear_ksp_type: Some("gmres"),
@@ -7396,6 +7402,7 @@ mod tests {
         assert_eq!(progress["linear_residual_norm"], 4.5e-8);
         assert_eq!(progress["linear_solver_role:poisson"], 1.0);
         assert_eq!(progress["linear_ksp_type:gmres"], 1.0);
+        assert_eq!(progress["max_linear_iterations"], 256.0);
         assert_eq!(progress["residual_source:ksp_norm"], 1.0);
         assert!(!progress.contains_key("residual"));
         assert_eq!(update.stats.max_h_eff, 0.0);

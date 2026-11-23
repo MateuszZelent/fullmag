@@ -1,0 +1,145 @@
+diff --git a/include/slepc/private/epsimpl.h b/include/slepc/private/epsimpl.h
+--- a/include/slepc/private/epsimpl.h
++++ b/include/slepc/private/epsimpl.h
+@@ -134,6 +134,7 @@
+   PetscInt       *perm;            /* permutation for eigenvalue ordering */
+   PetscInt       nwork;            /* number of work vectors */
+   Vec            *work;            /* work vectors */
++  Vec            krylov_residual_work[5]; /* Ritz vectors and residual work */
+   void           *data;            /* placeholder for solver-specific stuff */
+
+   /* ----------------------- Status variables --------------------------*/
+@@ -527,6 +528,8 @@
+
+ SLEPC_INTERN PetscErrorCode EPSDelayedArnoldi(EPS,PetscScalar*,PetscInt,PetscInt,PetscInt*,PetscReal*,PetscBool*);
+ SLEPC_INTERN PetscErrorCode EPSDelayedArnoldi1(EPS,PetscScalar*,PetscInt,PetscInt,PetscInt*,PetscReal*,PetscBool*);
++SLEPC_INTERN PetscErrorCode EPSKrylovSetUpResidualWork(EPS);
++SLEPC_INTERN PetscErrorCode EPSKrylovResetResidualWork(EPS);
+ SLEPC_INTERN PetscErrorCode EPSKrylovConvergence(EPS,PetscBool,PetscInt,PetscInt,PetscReal,PetscReal,PetscReal,PetscInt*);
+ SLEPC_INTERN PetscErrorCode EPSPseudoLanczos(EPS,PetscReal*,PetscReal*,PetscReal*,PetscInt,PetscInt*,PetscBool*,PetscBool*,PetscReal*,Vec);
+ SLEPC_INTERN PetscErrorCode EPSBuildBalance_Krylov(EPS);
+diff --git a/src/eps/impls/krylov/epskrylov.c b/src/eps/impls/krylov/epskrylov.c
+--- a/src/eps/impls/krylov/epskrylov.c
++++ b/src/eps/impls/krylov/epskrylov.c
+@@ -188,6 +188,35 @@
+   PetscFunctionReturn(PETSC_SUCCESS);
+ }
+
++PetscErrorCode EPSKrylovSetUpResidualWork(EPS eps)
++{
++  PetscInt       i;
++  Vec            workspace;
++
++  PetscFunctionBegin;
++  for (i=0;i<5;i++) {
++#if defined(PETSC_USE_COMPLEX)
++    if (i==3) continue; /* no imaginary residual work vector */
++#endif
++    if (!eps->krylov_residual_work[i]) {
++      PetscCall(BVCreateVec(eps->V,&workspace));
++      eps->krylov_residual_work[i] = workspace;
++      /* Materialize device storage before using the vector in convergence. */
++      PetscCall(VecSet(workspace,0.0));
++    }
++  }
++  PetscFunctionReturn(PETSC_SUCCESS);
++}
++
++PetscErrorCode EPSKrylovResetResidualWork(EPS eps)
++{
++  PetscInt       i;
++
++  PetscFunctionBegin;
++  for (i=0;i<5;i++) PetscCall(VecDestroy(&eps->krylov_residual_work[i]));
++  PetscFunctionReturn(PETSC_SUCCESS);
++}
++
+ /*
+    EPSKrylovConvergence - Implements the loop that checks for convergence
+    in Krylov methods.
+@@ -211,7 +240,7 @@
+   PetscScalar    re,im,*Zr,*Zi,*X;
+   PetscReal      resnorm,gamma,lerrest;
+   PetscBool      isshift,isfilter,refined,istrivial;
+-  Vec            x=NULL,y=NULL,w[3];
++  Vec            x=NULL,y=NULL,*w=NULL;
+
+   PetscFunctionBegin;
+   if (PetscUnlikely(eps->which == EPS_ALL)) {
+@@ -224,15 +253,10 @@
+   }
+   PetscCall(RGIsTrivial(eps->rg,&istrivial));
+   if (PetscUnlikely(eps->trueres)) {
+-    PetscCall(BVCreateVec(eps->V,&x));
+-    PetscCall(BVCreateVec(eps->V,&y));
+-    PetscCall(BVCreateVec(eps->V,&w[0]));
+-    PetscCall(BVCreateVec(eps->V,&w[2]));
+-#if !defined(PETSC_USE_COMPLEX)
+-    PetscCall(BVCreateVec(eps->V,&w[1]));
+-#else
+-    w[1] = NULL;
+-#endif
++    PetscCall(EPSKrylovSetUpResidualWork(eps));
++    x = eps->krylov_residual_work[0];
++    y = eps->krylov_residual_work[1];
++    w = eps->krylov_residual_work+2;
+   }
+   PetscCall(DSGetLeadingDimension(eps->ds,&ld));
+   PetscCall(DSGetRefined(eps->ds,&refined));
+@@ -283,15 +307,6 @@
+   }
+   if (marker!=-1) k = marker;
+   *kout = k;
+-  if (PetscUnlikely(eps->trueres)) {
+-    PetscCall(VecDestroy(&x));
+-    PetscCall(VecDestroy(&y));
+-    PetscCall(VecDestroy(&w[0]));
+-    PetscCall(VecDestroy(&w[2]));
+-#if !defined(PETSC_USE_COMPLEX)
+-    PetscCall(VecDestroy(&w[1]));
+-#endif
+-  }
+   PetscFunctionReturn(PETSC_SUCCESS);
+ }
+
+diff --git a/src/eps/impls/krylov/krylovschur/krylovschur.c b/src/eps/impls/krylov/krylovschur/krylovschur.c
+--- a/src/eps/impls/krylov/krylovschur/krylovschur.c
++++ b/src/eps/impls/krylov/krylovschur/krylovschur.c
+@@ -155,6 +155,7 @@
+   }
+   switch (variant) {
+     case EPS_KS_DEFAULT:
++      if (eps->trueres) PetscCall(EPSKrylovSetUpResidualWork(eps));
+       eps->ops->solve = EPSSolve_KrylovSchur_Default;
+       eps->ops->computevectors = EPSComputeVectors_Schur;
+       PetscCall(DSSetType(eps->ds,DSNHEP));
+diff --git a/src/eps/interface/epsbasic.c b/src/eps/interface/epsbasic.c
+--- a/src/eps/interface/epsbasic.c
++++ b/src/eps/interface/epsbasic.c
+@@ -315,6 +315,7 @@
+   PetscTryTypeMethod(eps,reset);
+   if (eps->st) PetscCall(STReset(eps->st));
+   PetscCall(VecDestroy(&eps->D));
++  PetscCall(EPSKrylovResetResidualWork(eps));
+   PetscCall(BVDestroy(&eps->V));
+   PetscCall(BVDestroy(&eps->W));
+   PetscCall(VecDestroyVecs(eps->nwork,&eps->work));
+@@ -577,6 +578,7 @@
+   PetscValidHeaderSpecific(eps,EPS_CLASSID,1);
+   PetscValidHeaderSpecific(V,BV_CLASSID,2);
+   PetscCheckSameComm(eps,1,V,2);
++  if (eps->V != V) PetscCall(EPSKrylovResetResidualWork(eps));
+   PetscCall(PetscObjectReference((PetscObject)V));
+   PetscCall(BVDestroy(&eps->V));
+   eps->V = V;
+diff --git a/src/eps/interface/epssetup.c b/src/eps/interface/epssetup.c
+--- a/src/eps/interface/epssetup.c
++++ b/src/eps/interface/epssetup.c
+@@ -748,6 +748,7 @@
+   /* allocate V */
+   if (!eps->V) PetscCall(EPSGetBV(eps,&eps->V));
+   if (!oldsize) {
++    PetscCall(EPSKrylovResetResidualWork(eps));
+     if (!((PetscObject)eps->V)->type_name) PetscCall(BVSetType(eps->V,BVMAT));
+     PetscCall(STMatCreateVecsEmpty(eps->st,&t,NULL));
+     PetscCall(BVSetSizesFromVec(eps->V,t,requested));

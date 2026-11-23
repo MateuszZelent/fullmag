@@ -2412,6 +2412,7 @@ typedef enum {
     FULLMAG_FEM_MODAL_OPERATOR_UNSPECIFIED = 0,
     FULLMAG_FEM_MODAL_OPERATOR_MATRIX_FREE_SCHUR_CUDA = 1,
     FULLMAG_FEM_MODAL_OPERATOR_MATERIALIZED_VALIDATION_CUDA = 2,
+    FULLMAG_FEM_MODAL_OPERATOR_AUGMENTED_ROBIN_CUDSS_CUDA = 3,
 } FullmagFemModalOperatorKind;
 
 typedef enum {
@@ -3915,6 +3916,9 @@ FULLMAG_FEM_API int fullmag_fem_modal_eigen_solve_v20(
 FULLMAG_FEM_API void fullmag_fem_frequency_domain_result_v20_destroy(
     FullmagFemFrequencyDomainResultV20 *result
 );
+/* Finalize after the last modal job and before process teardown. If Fullmag
+ * initialized SLEPc, call on the runtime owner thread. An externally managed
+ * SLEPc runtime remains owned by the caller. */
 FULLMAG_FEM_API int fullmag_fem_modal_eigen_gpu_runtime_finalize(void);
 FULLMAG_FEM_API FullmagFemFrequencyDomainResult fullmag_fem_driven_response_solve(
     const FullmagFemDrivenResponseRequest *request

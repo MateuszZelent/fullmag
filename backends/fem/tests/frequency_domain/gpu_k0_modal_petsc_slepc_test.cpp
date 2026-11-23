@@ -1,8 +1,10 @@
 #include "cpu/frequency_domain/poisson_airbox_modal_eigen.hpp"
 #include "frequency_domain/modal_gpu_krylov.hpp"
+#include "frequency_domain/modal_frequency_window_shift_bounds.hpp"
 
 #include <slepceps.h>
 
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -296,6 +298,10 @@ struct WindowProgressControl {
     bool saw_first_base_position = false;
     bool saw_first_refinement_position = false;
     bool saw_timed_completion = false;
+    bool saw_gpu_poisson_ksp = false;
+    bool saw_gpu_shift_ksp = false;
+    bool saw_gpu_outer_iteration = false;
+    bool saw_overflowed_gpu_iteration = false;
 };
 
 int window_cancel_requested(void *user_data)
@@ -309,6 +315,20 @@ void window_progress(void *user_data, const char *progress_json)
     auto *control = static_cast<WindowProgressControl *>(user_data);
     if (control == nullptr || progress_json == nullptr) {
         return;
+    }
+    if (contains(progress_json, "\"solver_phase\":\"solving_eigensystem\"")) {
+        control->saw_gpu_outer_iteration = true;
+        control->saw_overflowed_gpu_iteration = control->saw_overflowed_gpu_iteration ||
+            contains(progress_json, "\"outer_iteration\":4294967295");
+    }
+    if (contains(progress_json, "\"residual_source\":\"ksp_norm\"") &&
+        contains(progress_json, "\"outer_iteration\":null")) {
+        control->saw_gpu_poisson_ksp = control->saw_gpu_poisson_ksp ||
+            (contains(progress_json, "\"linear_solver_role\":\"poisson\"") &&
+             contains(progress_json, "\"linear_ksp_type\":\"cg\""));
+        control->saw_gpu_shift_ksp = control->saw_gpu_shift_ksp ||
+            (contains(progress_json, "\"linear_solver_role\":\"shift_invert\"") &&
+             contains(progress_json, "\"linear_ksp_type\":\"gmres\""));
     }
     if (control->cancel_after_base &&
         contains(progress_json, "\"solver_phase\":\"frequency_window_base_complete\"")) {
@@ -361,12 +381,46 @@ void check_two_pass_schedule(const fd::PoissonAirboxModalEigenResult &result)
           "GPU refinement must execute a numerically larger nev");
 }
 
+void GpuWindowPositiveLowerBoundUsesPositiveExteriorProbe()
+{
+    double first_shift_hz = 0.0;
+    double last_shift_hz = 0.0;
+    check(fd::compute_modal_window_refinement_shift_bounds(
+              1.0,
+              8.0e9,
+              32u,
+              &first_shift_hz,
+              &last_shift_hz),
+          "GPU refinement probes must be representable for a positive window");
+    check(first_shift_hz > 0.0 && first_shift_hz < 1.0 &&
+              last_shift_hz > 8.0e9,
+          "positive-frequency window must use a strictly positive lower exterior probe");
+
+    check(fd::compute_modal_window_refinement_shift_bounds(
+              0.0,
+              8.0e9,
+              32u,
+              &first_shift_hz,
+              &last_shift_hz),
+          "GPU refinement probes must preserve the zero-lower-bound window");
+    check(first_shift_hz < 0.0,
+          "zero-lower-bound window must retain its historical negative exterior probe");
+
+    check(!fd::compute_modal_window_refinement_shift_bounds(
+              std::numeric_limits<double>::denorm_min(),
+              1.0,
+              32u,
+              &first_shift_hz,
+              &last_shift_hz),
+          "GPU refinement must fail closed when no positive exterior value is representable");
+}
+
 void FrequencyWindowPublishesSelectedSearchWithoutCount()
 {
     const WindowSpectrumFixture fixture = make_window_spectrum_fixture(
-        {0.25e9, 1.0e9, 2.0e9, 3.0e9});
+        {1.0e9, 2.0e9, 2.25e9, 4.0e9});
     fd::PoissonAirboxEigenBlockProblem problem = fixture.problem(
-        0.5e9,
+        1.0,
         2.5e9,
         2u);
     WindowProgressControl control{};
@@ -391,9 +445,29 @@ void FrequencyWindowPublishesSelectedSearchWithoutCount()
           "GPU window must publish the canonical refinement method");
     check(contains(result.window_certificate_json, "\"cluster_ranks\":[1,1]"),
           "separated GPU modes must publish two rank-one clusters");
+    const char *first_base_probe = std::strstr(
+        result.executed_subwindows_json, "\"pass\":\"base\",\"subwindow_index\":0,");
+    check(json_number_after(first_base_probe, "\"accepted_mode_count\":") == 3.0,
+          "the base probe must retain all three in-window modes for cluster selection");
+    check(json_number_after(first_base_probe, "\"raw_ritz_in_window_count\":") >= 3.0,
+          "the base probe must count in-window Ritz candidates before certification");
+    check(result.accepted_mode_count == 2u,
+          "only global cluster selection may enforce the two-mode publication cap");
     check(json_number_after(result.window_certificate_json, "\"lower\":") > 0.0 &&
               json_number_after(result.window_certificate_json, "\"upper\":") > 0.0,
           "GPU window certificate must publish positive coverage margins");
+    const char *refinement_schedule = std::strstr(
+        result.window_certificate_json, "\"refinement_schedule\":{");
+    const double first_shift_hz = json_number_after(result.executed_subwindows_json,
+        "\"pass\":\"refinement\",\"subwindow_index\":0,\"shift_frequency_hz\":");
+    const double last_shift_hz = json_number_after(result.executed_subwindows_json,
+        "\"pass\":\"refinement\",\"subwindow_index\":33,\"shift_frequency_hz\":");
+    check(first_shift_hz > 0.0 && first_shift_hz < problem.frequency_min_hz &&
+              last_shift_hz > problem.frequency_max_hz,
+          "GPU must execute exterior shifts with a strictly positive lower probe");
+    check(first_shift_hz == json_number_after(refinement_schedule, "\"first_shift_hz\":") &&
+              last_shift_hz == json_number_after(refinement_schedule, "\"last_shift_hz\":"),
+          "GPU executed exterior shifts must agree with the window certificate");
     check(json_number_after(result.window_certificate_json,
                             "\"min_subspace_overlap\":") >= 1.0 - 1.0e-6,
           "GPU window certificate must prove stable invariant subspaces");
@@ -623,6 +697,7 @@ void PersistentGpuTargetUpdateAcceptsDifferentSparsePatterns()
 
 int run_n3_w1_focused_tests()
 {
+    GpuWindowPositiveLowerBoundUsesPositiveExteriorProbe();
     PersistentGpuTargetUpdateAcceptsDifferentSparsePatterns();
     FrequencyWindowPublishesSelectedSearchWithoutCount();
     FrequencyWindowCertifiesDegenerateGpuSubspace();
@@ -986,6 +1061,56 @@ void ProductionGpuRequiresCompleteCanonicalIdentityBeforeAllocation()
                      "\"reason\":\"gpu_k0_scope_mismatch\"") &&
             mixed_result.setup_h2d_transfer_count == 0u,
         "CSR identity fallback must reject a non-synthetic validation scope before allocation");
+
+    auto expect_demag_identity_rejection = [&](
+        const fd::PoissonAirboxEigenBlockProblem &candidate,
+        const char *message) {
+        fd::PoissonAirboxModalEigenResult rejected{};
+        check(
+            fd::solve_poisson_airbox_modal_eigen_gpu_petsc_slepc(
+                candidate, &rejected) == fd::FrequencyDomainStatus::validation_error &&
+                contains(rejected.diagnostics_json,
+                         "\"reason\":\"gpu_k0_scope_mismatch\"") &&
+                rejected.setup_h2d_transfer_count == 0u,
+            message);
+    };
+    fd::PoissonAirboxEigenBlockProblem periodic_without_pairs = production;
+    periodic_without_pairs.magnetic_pair_count = 0u;
+    periodic_without_pairs.airbox_pair_count = 0u;
+    expect_demag_identity_rejection(
+        periodic_without_pairs,
+        "periodic GPU K0 must retain nonzero magnetic and airbox pair counts");
+
+    fd::PoissonAirboxEigenBlockProblem open_with_pairs = production;
+    open_with_pairs.demag_kind = "open_airbox_k0";
+    expect_demag_identity_rejection(
+        open_with_pairs,
+        "open-airbox GPU K0 must reject periodic pair counts");
+
+    fd::PoissonAirboxEigenBlockProblem open_without_robin = production;
+    open_without_robin.demag_kind = "open_airbox_k0";
+    open_without_robin.magnetic_pair_count = 0u;
+    open_without_robin.airbox_pair_count = 0u;
+    open_without_robin.outer_boundary_kind = "poisson_dirichlet";
+    expect_demag_identity_rejection(
+        open_without_robin,
+        "open-airbox GPU K0 must require an exterior Robin boundary");
+
+    fd::PoissonAirboxEigenBlockProblem open_with_old_certificate = open_without_robin;
+    open_with_old_certificate.outer_boundary_kind = "poisson_robin";
+    open_with_old_certificate.periodic_mesh_certificate_schema =
+        "periodic_mesh_certificate.v5";
+    expect_demag_identity_rejection(
+        open_with_old_certificate,
+        "open-airbox GPU K0 must require the accepted v6 identity certificate");
+
+    fd::PoissonAirboxEigenBlockProblem synthetic_open = nearest_problem(fixture);
+    synthetic_open.demag_kind = "open_airbox_k0";
+    synthetic_open.magnetic_pair_count = 0u;
+    synthetic_open.airbox_pair_count = 0u;
+    expect_demag_identity_rejection(
+        synthetic_open,
+        "synthetic validation-only matrices must not claim open-airbox production identity");
 }
 
 struct CallbackLifetimeControl {
@@ -1141,6 +1266,8 @@ int run_n3_w2_focused_tests()
 
 int run_production_scale_focused_test()
 {
+    GpuWindowPositiveLowerBoundUsesPositiveExteriorProbe();
+    FrequencyWindowPublishesSelectedSearchWithoutCount();
     constexpr std::uint64_t default_block_count = 513u;
     // Keep the adapter-scale gate away from an exact synthetic eigenvalue.
     // STSINVERT is singular when the requested shift lands on a mode; the
@@ -1177,6 +1304,7 @@ int run_production_scale_focused_test()
     problem.validation_only_adapter = false;
     problem.production_shared_domain = true;
     problem.assembly_kind = "mfem_weak_form_shared_domain";
+    problem.test_id = "synthetic_gpu_adapter_scale_fixture";
     problem.mesh_generation_identity = "gpu-scale-mesh-generation-v1";
     problem.equilibrium_digest = "gpu-scale-equilibrium-v1";
     problem.bias_field_sample_signature = "gpu-scale-bias-v1";
@@ -1210,9 +1338,97 @@ int run_production_scale_focused_test()
               result.hot_loop_h2d_bytes == 0u &&
               result.hot_loop_d2h_bytes == 0u,
           "production GPU scale gate must preserve zero self-reported hot-loop traffic");
+
+    fd::PoissonAirboxEigenBlockProblem open_problem = problem;
+    open_problem.demag_kind = "open_airbox_k0";
+    open_problem.magnetic_pair_count = 0u;
+    open_problem.airbox_pair_count = 0u;
+    constexpr double scale_fixture_first_frequency_hz = 1.0e9;
+    constexpr double scale_fixture_frequency_step_hz = 5.0e6;
+    const double open_expected_frequency_hz = scale_fixture_first_frequency_hz +
+        scale_fixture_frequency_step_hz * static_cast<double>(block_count - 1u);
+    // The last block is uncoupled from phi and has this exact positive
+    // generalized eigenfrequency.  Shift above the fixture's full range so
+    // the nearest-frequency search has a deterministic analytical target.
+    open_problem.target_frequency_hz = open_expected_frequency_hz + 1.0e9;
+    open_problem.boundary_gauge_digest =
+        "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    open_problem.operator_input_digest =
+        "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+    open_problem.test_id = "synthetic_gpu_adapter_scale_open_airbox";
+    WindowProgressControl open_progress{};
+    open_problem.progress_user_data = &open_progress;
+    open_problem.progress_callback = &window_progress;
+    fd::PoissonAirboxModalEigenResult open_result{};
+    const fd::FrequencyDomainStatus open_status =
+        fd::solve_poisson_airbox_modal_eigen_gpu_petsc_slepc(
+            open_problem, &open_result);
+    if (open_status != fd::FrequencyDomainStatus::ok) {
+        std::fprintf(stderr, "GPU open-airbox adapter diagnostics: %s\n",
+                     open_result.diagnostics_json);
+    }
+    check(open_status == fd::FrequencyDomainStatus::ok, open_result.error_message);
+    check(open_progress.saw_gpu_poisson_ksp && open_progress.saw_gpu_shift_ksp,
+          "GPU Robin progress must identify Poisson CG and shift-invert GMRES separately");
+    check(open_progress.saw_gpu_outer_iteration && !open_progress.saw_overflowed_gpu_iteration,
+          "GPU EPS progress must report its own iteration without signed PetscInt overflow");
+    check(open_result.device_residency_verified && open_result.full_residual_certified,
+          "open-airbox GPU adapter must retain device residency and full residual certification");
+    check(open_result.q_dof_count > 1024u,
+          "open-airbox GPU scale gate must exceed 1024 magnetic DOFs");
+    const auto &device_uuid = open_result.gpu_execution_attestation.device_uuid;
+    check(std::any_of(device_uuid.begin(), device_uuid.end(),
+                  [](std::uint8_t byte) { return byte != 0u; }),
+          "the native modal adapter must capture the selected CUDA device UUID");
+#if defined(__linux__)
+    const auto &phases = open_result.gpu_execution_attestation.host_phase_boundaries;
+    check(phases.setup_begin_ns > 0u &&
+              phases.setup_begin_ns <= phases.eps_begin_ns &&
+              phases.eps_begin_ns < phases.eps_end_ns &&
+              phases.eps_end_ns <= phases.first_export_begin_ns &&
+              phases.first_export_begin_ns < phases.last_export_end_ns,
+          "physical device solve and export must expose ordered host phase boundaries");
+#endif
+    check(open_result.accepted_mode_count > 0u &&
+              open_result.full_residual_accepted_count > 0u,
+          "open-airbox GPU scale gate must retain at least one fully certified mode");
+    check(std::abs(open_result.frequency_hz - open_expected_frequency_hz) <=
+              1.0e-6 * open_expected_frequency_hz,
+          "open-airbox GPU scale gate must recover the exact nearest uncoupled fixture frequency");
+    check(contains(open_result.diagnostics_json,
+                   "\"test_id\":\"synthetic_gpu_adapter_scale_open_airbox\"") &&
+              contains(open_result.diagnostics_json,
+                       "\"demag_kind\":\"open_airbox_k0\"") &&
+              contains(open_result.diagnostics_json,
+                       "\"magnetostatic_bc\":\"open_airbox_k0\"") &&
+              contains(open_result.diagnostics_json,
+                       "\"outer_boundary_kind\":\"poisson_robin\"") &&
+              contains(open_result.diagnostics_json,
+                       "\"periodic_mesh_certificate_schema\":\"periodic_mesh_certificate.v6\"") &&
+              contains(open_result.diagnostics_json, "\"magnetic_pair_count\":0") &&
+              contains(open_result.diagnostics_json, "\"airbox_pair_count\":0") &&
+              contains(open_result.diagnostics_json,
+                       "\"boundary_gauge_digest\":\"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"") &&
+              contains(open_result.diagnostics_json, "\"cpu_fallback\":\"disabled\"") &&
+              contains(open_result.diagnostics_json, "\"fallback_used\":false"),
+          "open-airbox adapter diagnostics must publish the actual Robin identity and no fallback");
     std::fprintf(
         stderr,
-        "GPU production-scale summary: q=%llu phi=%llu augmented=%llu accepted=%u "
+        "GPU open-airbox adapter-scale summary: q=%llu phi=%llu augmented=%llu accepted=%u "
+        "certified=%u frequency_hz=%.17g expected_frequency_hz=%.17g "
+        "full_residual=%.17g operator_applies=%llu\n",
+        static_cast<unsigned long long>(open_result.q_dof_count),
+        static_cast<unsigned long long>(open_result.phi_dof_count),
+        static_cast<unsigned long long>(open_result.augmented_dof_count),
+        open_result.accepted_mode_count,
+        open_result.full_residual_accepted_count,
+        open_result.frequency_hz,
+        open_expected_frequency_hz,
+        open_result.full_residual_reconstruction_relative_error,
+        static_cast<unsigned long long>(open_result.operator_apply_count));
+    std::fprintf(
+        stderr,
+        "GPU production-scale adapter summary: q=%llu phi=%llu augmented=%llu accepted=%u "
         "frequency_hz=%.17g full_residual=%.17g operator_applies=%llu\n",
         static_cast<unsigned long long>(result.q_dof_count),
         static_cast<unsigned long long>(result.phi_dof_count),
@@ -1230,9 +1446,18 @@ int run_production_scale_focused_test()
 
 } // namespace
 
+void verify_gpu_projected_pencil();
+void verify_gpu_augmented_modal_pencil();
+
 int main()
 {
+    if (std::getenv("FULLMAG_GPU_PROJECTED_PENCIL_FOCUSED") != nullptr) {
+        verify_gpu_projected_pencil();
+        return 0;
+    }
     if (std::getenv("FULLMAG_GPU_PRODUCTION_SCALE_FOCUSED") != nullptr) {
+        verify_gpu_projected_pencil();
+        verify_gpu_augmented_modal_pencil();
         return run_production_scale_focused_test();
     }
     if (std::getenv("FULLMAG_GPU_TEARDOWN_LIFECYCLE_FOCUSED") != nullptr) {

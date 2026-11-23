@@ -415,7 +415,25 @@ pub(crate) fn finalize_native_fem_relaxation(
             }) {
                 let receipt = native_receipt.into_minimizer_provenance(receipt_request)?;
                 if receipt_request == "strict_device" {
-                    receipt.validate_strict_device().map_err(|error| RunError {
+                    let initial_torque_convergence = final_stats.step == 0
+                        && finalization.terminal_stats.as_ref().is_some_and(|stats| stats.step == 0)
+                        && finalization.backend_completion.as_ref().is_some_and(|completion| {
+                            completion.status == "completed"
+                                && completion.converged
+                                && completion.reason == Some(fullmag_ir::StageStopReason::Torque)
+                                && completion.metric == Some(fullmag_ir::StageMetricKind::MaxTorqueApm)
+                                && completion.metric_value.zip(completion.threshold).is_some_and(
+                                    |(value, threshold)| value.is_finite()
+                                        && threshold.is_finite()
+                                        && value <= threshold,
+                                )
+                        });
+                    let validation = if initial_torque_convergence {
+                        receipt.validate_strict_initial_equilibrium()
+                    } else {
+                        receipt.validate_strict_device()
+                    };
+                    validation.map_err(|error| RunError {
                         message: format!("strict native FEM GPU minimizer receipt rejected: {error}"),
                     })?;
                 }

@@ -5,6 +5,7 @@
 #include "cpu/frequency_domain/modal_krylov_tuning.hpp"
 #include "cpu/frequency_domain/modal_poisson_lu.hpp"
 #include "cpu/frequency_domain/operators/poisson_airbox_shared_domain.hpp"
+#include "frequency_domain/modal_frequency_window_shift_bounds.hpp"
 #include "frequency_domain/mode_kinematics.hpp"
 #include "frequency_domain/real_frequency_rotated_pencil.hpp"
 
@@ -4140,10 +4141,21 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_cpu_schur(
             window_width / static_cast<double>(refinement_partition_count);
         const double base_spacing =
             window_width / static_cast<double>(base_subwindow_count);
-        const double refinement_first_shift_hz =
-            problem.frequency_min_hz - 0.5 * refinement_spacing;
-        const double refinement_last_shift_hz =
-            problem.frequency_max_hz + 0.5 * refinement_spacing;
+        double refinement_first_shift_hz = 0.0;
+        double refinement_last_shift_hz = 0.0;
+        if (!compute_modal_window_refinement_shift_bounds(
+                problem.frequency_min_hz,
+                problem.frequency_max_hz,
+                refinement_partition_count,
+                &refinement_first_shift_hz,
+                &refinement_last_shift_hz)) {
+            return fail_production_schur(
+                problem,
+                out_result,
+                FrequencyDomainStatus::validation_error,
+                "CPU K0 frequency window cannot represent exterior refinement shifts",
+                "cpu_frequency_window_refinement_bounds_unrepresentable");
+        }
         const double lower_coverage_margin_hz =
             problem.frequency_min_hz - refinement_first_shift_hz;
         const double upper_coverage_margin_hz =
@@ -4180,9 +4192,13 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_cpu_schur(
                         (static_cast<double>(subwindow_index) + 0.5) *
                             window_width /
                             static_cast<double>(base_subwindow_count)
-                    : problem.frequency_min_hz +
-                        (static_cast<double>(subwindow_index) - 0.5) *
-                            refinement_spacing;
+                    : modal_window_refinement_shift_hz(
+                        problem.frequency_min_hz,
+                        refinement_spacing,
+                        subwindow_index,
+                        refinement_partition_count,
+                        refinement_first_shift_hz,
+                        refinement_last_shift_hz);
                 const std::uint32_t maximum_subwindow_requested_mode_count =
                     pass_index == 0u
                         ? problem.requested_mode_count

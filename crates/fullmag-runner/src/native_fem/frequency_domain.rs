@@ -1124,6 +1124,9 @@ fn validate_native_modal_request_payload_ownership_with_provider(
     Ok(())
 }
 
+// Scientific result v18 uses a different discriminant than the v20 GPU evidence.
+const MODAL_RESOLVED_FALLBACK_NONE: u32 = 0;
+
 pub(crate) fn validate_planned_modal_execution_attestation(
     planned_engine: fullmag_ir::FemEigenEngineIR,
     requested_target: NativeModalExecutionTarget,
@@ -1152,6 +1155,7 @@ pub(crate) fn validate_planned_modal_execution_attestation(
             &[
                 "gpu_modal_device_krylov",
                 "k0_poisson_airbox_gpu_petsc_slepc",
+                "k0_poisson_airbox_gpu_augmented_cudss",
             ],
         ),
     };
@@ -1165,7 +1169,7 @@ pub(crate) fn validate_planned_modal_execution_attestation(
             "native_modal_execution_target_mismatch: planned_engine={planned_engine:?} requested_target={requested_target_value} resolved_target={resolved_target:?}"
         ));
     }
-    if resolved_fallback_state != 0 {
+    if resolved_fallback_state != MODAL_RESOLVED_FALLBACK_NONE {
         return Err(format!(
             "native_modal_runtime_fallback_forbidden: resolved_fallback_state={resolved_fallback_state}"
         ));
@@ -1779,6 +1783,33 @@ fn solve_native_driven_frequency_response_impl(
 ) -> Result<NativeDrivenFrequencyResponseResult, String> {
     let _ = request;
     Err("native FEM frequency response requires the fem-gpu feature".to_string())
+}
+
+/// Mint a scope for one admitted execution, bound to the actual manifest and
+/// certified inputs. A replay of the same scientific inputs has its own owner.
+#[cfg(all(target_os = "linux", any(feature = "fem-gpu", feature = "fem-native")))]
+fn scoped_modal_gpu_stage_sha256(
+    nonce: &uuid::Uuid,
+    manifest: &[u8; 32],
+    request: &NativeModalEigenRequest<'_>,
+    shared_domain: &NativeModalEigenSharedDomainProblem<'_>,
+) -> [u8; 32] {
+    use sha2::{Digest, Sha256};
+    let mut digest = Sha256::new();
+    digest.update(b"fullmag.fem.modal_gpu_stage_scope.v1\0");
+    for item in [
+        nonce.as_bytes().as_slice(),
+        manifest.as_slice(),
+        request.mesh_asset_id.as_bytes(),
+        shared_domain.mesh_generation_identity.as_bytes(),
+        shared_domain.equilibrium_digest.as_bytes(),
+        shared_domain.linearization_state_digest.as_bytes(),
+        shared_domain.canonical_preimage_sha256.as_bytes(),
+    ] {
+        digest.update((item.len() as u64).to_le_bytes());
+        digest.update(item);
+    }
+    digest.finalize().into()
 }
 
 #[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
@@ -2584,8 +2615,51 @@ fn solve_native_modal_eigen_impl(
             scientific_result_v18: NativeFrequencyDomainContractFfiResult::default().inner,
             gpu_attestation: std::ptr::null_mut(),
         };
-        let status =
-            unsafe { ffi::fullmag_fem_modal_eigen_solve_v20(&ffi_request, &mut result_v20) };
+        #[cfg(target_os = "linux")]
+        let runtime_identity = {
+            let build = fullmag_build_info::identity();
+            fullmag_session::verified_fem_gpu_runtime_manifest_sha256(
+                build.git_commit,
+                build.source_snapshot_sha256,
+                ffi::fullmag_fem_modal_eigen_solve_v20 as *const () as usize,
+            )
+            .map_err(|error| format!("{error:#}"))
+        };
+        #[cfg(not(target_os = "linux"))]
+        let runtime_identity: Result<[u8; 32], String> =
+            Err("managed FEM GPU runtime identity unavailable on this platform".to_string());
+        #[cfg(target_os = "linux")]
+        let session_identity = runtime_identity.as_ref().ok().and_then(|manifest| {
+            let shared_domain = request.shared_domain_problem.as_ref()?;
+            Some(scoped_modal_gpu_stage_sha256(
+                &uuid::Uuid::new_v4(),
+                manifest,
+                &request,
+                shared_domain,
+            ))
+        });
+        #[cfg(not(target_os = "linux"))]
+        let session_identity: Option<[u8; 32]> = None;
+        let status = match (runtime_identity.as_ref(), session_identity.as_ref()) {
+            #[cfg(target_os = "linux")]
+            (Ok(digest), Some(scope)) => unsafe {
+                ffi::fullmag_fem_modal_eigen_solve_v20_with_runtime_scope(
+                    &ffi_request,
+                    &mut result_v20,
+                    digest.as_ptr(),
+                    scope.as_ptr(),
+                )
+            },
+            #[cfg(target_os = "linux")]
+            (Ok(digest), None) => unsafe {
+                ffi::fullmag_fem_modal_eigen_solve_v20_with_runtime_identity(
+                    &ffi_request,
+                    &mut result_v20,
+                    digest.as_ptr(),
+                )
+            },
+            _ => unsafe { ffi::fullmag_fem_modal_eigen_solve_v20(&ffi_request, &mut result_v20) },
+        };
         if status != 0 {
             unsafe { ffi::fullmag_fem_frequency_domain_result_v20_destroy(&mut result_v20) };
             return Err(format!(
@@ -2595,8 +2669,26 @@ fn solve_native_modal_eigen_impl(
         let attestation = match unsafe {
             validate_modal_gpu_attestation_v1(result_v20.gpu_attestation)
         } {
-            Ok(attestation) => attestation,
-            Err(error) => {
+            Ok(attestation)
+                if runtime_identity.as_ref().ok() == Some(&attestation.runtime_manifest_sha256)
+                    && session_identity.as_ref() == Some(&attestation.session_context_sha256) =>
+            {
+                attestation
+            }
+            Ok(_) => {
+                unsafe { ffi::fullmag_fem_frequency_domain_result_v20_destroy(&mut result_v20) };
+                return Err("k0_poisson_airbox_gpu_attestation_runtime_or_stage_scope_mismatch".into());
+            }
+            Err(mut error) => {
+                if let Err(reason) = runtime_identity {
+                    error.push_str(&format!("; runtime manifest: {reason}"));
+                }
+                let diagnostics = ffi_string(result_v20.scientific_result_v18.diagnostics_json);
+                if let Ok(value) = serde_json::from_str::<serde_json::Value>(&diagnostics) {
+                    if let Some(evidence) = value.get("gpu_execution_attestation") {
+                        error.push_str(&format!("; native GPU evidence: {evidence}"));
+                    }
+                }
                 unsafe { ffi::fullmag_fem_frequency_domain_result_v20_destroy(&mut result_v20) };
                 return Err(error);
             }
@@ -2619,7 +2711,7 @@ fn solve_native_modal_eigen_impl(
     let mut owned = ffi_result.to_owned_result();
     owned.modal_gpu_attestation = modal_gpu_attestation;
     if request.execution_target == NativeModalExecutionTarget::ProductionGpu
-        && owned.resolved_fallback_state != MODAL_GPU_FALLBACK_NONE
+        && owned.resolved_fallback_state != MODAL_RESOLVED_FALLBACK_NONE
     {
         return Err("k0_poisson_airbox_gpu_attestation_fallback_forbidden".to_string());
     }
@@ -2919,6 +3011,7 @@ const MODAL_GPU_MEASUREMENT_FAILED: u32 = 3;
 const MODAL_GPU_FALLBACK_NONE: u32 = 1;
 #[cfg_attr(not(any(feature = "fem-native", feature = "fem-gpu", test)), expect(dead_code, reason = "native FEM validates these stable GPU attestation ABI values"))]
 const MODAL_GPU_OPERATOR_MATRIX_FREE_SCHUR_CUDA: u32 = 1;
+const MODAL_GPU_OPERATOR_AUGMENTED_ROBIN_CUDSS_CUDA: u32 = 3;
 #[cfg_attr(not(any(feature = "fem-native", feature = "fem-gpu", test)), expect(dead_code, reason = "native FEM validates these stable GPU attestation ABI values"))]
 const MODAL_GPU_HYPRE_MEMORY_DEVICE: u32 = 2;
 #[cfg_attr(not(any(feature = "fem-native", feature = "fem-gpu", test)), expect(dead_code, reason = "native FEM validates these stable GPU attestation ABI values"))]
@@ -2956,18 +3049,21 @@ pub(crate) enum NativeModalGpuFallbackState {
 #[cfg_attr(not(any(feature = "fem-native", feature = "fem-gpu", test)), expect(dead_code, reason = "native FEM constructs this state while validating GPU attestation"))]
 pub(crate) enum NativeModalGpuOperatorKind {
     MatrixFreeSchurCuda,
+    AugmentedRobinCudssCuda,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(not(any(feature = "fem-native", feature = "fem-gpu", test)), expect(dead_code, reason = "native FEM constructs this state while validating GPU attestation"))]
 pub(crate) enum NativeModalGpuHypreMemoryLocation {
     Device,
+    NotUsed,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(not(any(feature = "fem-native", feature = "fem-gpu", test)), expect(dead_code, reason = "native FEM constructs this state while validating GPU attestation"))]
 pub(crate) enum NativeModalGpuHypreExecutionPolicy {
     Device,
+    NotUsed,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -3146,6 +3242,39 @@ fn prefixed_hex(bytes: &[u8]) -> String {
 
 impl NativeModalGpuAttestation {
     pub(crate) fn artifact_json(&self) -> serde_json::Value {
+        let (operator_kind, runtime, object_graph) = match self.operator_kind {
+            NativeModalGpuOperatorKind::MatrixFreeSchurCuda => (
+                "matrix_free_schur_cuda",
+                serde_json::json!({
+                    "mfem_version": self.mfem_version,
+                    "hypre_version": self.hypre_version,
+                    "petsc_version": self.petsc_version,
+                    "slepc_version": self.slepc_version,
+                }),
+                serde_json::json!({
+                    "petsc_vec_type": self.petsc_vec_type,
+                    "petsc_matrix_type": self.petsc_matrix_type,
+                    "matshell_vec_type": self.matshell_vec_type,
+                    "slepc_bv_type": self.slepc_bv_type,
+                    "eps_type": self.eps_type,
+                    "st_type": self.st_type,
+                    "ksp_type": self.ksp_type,
+                    "poisson_pc_type": self.poisson_pc_type,
+                    "shift_pc_type": self.shift_pc_type,
+                    "sha256": prefixed_hex(&self.object_graph_sha256),
+                }),
+            ),
+            NativeModalGpuOperatorKind::AugmentedRobinCudssCuda => (
+                "augmented_robin_cudss_cuda",
+                serde_json::json!({ "mfem_version": self.mfem_version }),
+                serde_json::json!({
+                    "factorization": "cudss",
+                    "sparse_application": "cusparse",
+                    "projection": "complex_block_rayleigh_ritz",
+                    "sha256": prefixed_hex(&self.object_graph_sha256),
+                }),
+            ),
+        };
         serde_json::json!({
             "schema_version": "fem_modal_gpu_attestation.v1",
             "measurement_state": "measured",
@@ -3154,9 +3283,15 @@ impl NativeModalGpuAttestation {
             "production_shared_domain": self.production_shared_domain,
             "validation_only": self.validation_only,
             "fallback_state": "none",
-            "operator_kind": "matrix_free_schur_cuda",
-            "hypre_memory_location": "device",
-            "hypre_execution_policy": "device",
+            "operator_kind": operator_kind,
+            "hypre_memory_location": match self.hypre_memory_location {
+                NativeModalGpuHypreMemoryLocation::Device => Some("device"),
+                NativeModalGpuHypreMemoryLocation::NotUsed => None,
+            },
+            "hypre_execution_policy": match self.hypre_execution_policy {
+                NativeModalGpuHypreExecutionPolicy::Device => Some("device"),
+                NativeModalGpuHypreExecutionPolicy::NotUsed => None,
+            },
             "device": {
                 "uuid": prefixed_hex(&self.device_uuid),
                 "name": self.device_name,
@@ -3165,24 +3300,8 @@ impl NativeModalGpuAttestation {
                 "cuda_driver_version": self.cuda_driver_version,
                 "cuda_runtime_version": self.cuda_runtime_version,
             },
-            "runtime": {
-                "mfem_version": self.mfem_version,
-                "hypre_version": self.hypre_version,
-                "petsc_version": self.petsc_version,
-                "slepc_version": self.slepc_version,
-            },
-            "object_graph": {
-                "petsc_vec_type": self.petsc_vec_type,
-                "petsc_matrix_type": self.petsc_matrix_type,
-                "matshell_vec_type": self.matshell_vec_type,
-                "slepc_bv_type": self.slepc_bv_type,
-                "eps_type": self.eps_type,
-                "st_type": self.st_type,
-                "ksp_type": self.ksp_type,
-                "poisson_pc_type": self.poisson_pc_type,
-                "shift_pc_type": self.shift_pc_type,
-                "sha256": prefixed_hex(&self.object_graph_sha256),
-            },
+            "runtime": runtime,
+            "object_graph": object_graph,
             "bindings": {
                 "native_trace_sha256": prefixed_hex(&self.native_trace_sha256),
                 "source_snapshot_sha256": prefixed_hex(&self.source_snapshot_sha256),
@@ -3359,21 +3478,10 @@ fn parse_modal_gpu_attestation_snapshot(
     if snapshot.fallback_state != MODAL_GPU_FALLBACK_NONE {
         return Err("k0_poisson_airbox_gpu_attestation_fallback_forbidden".to_string());
     }
-    if snapshot.operator_kind != MODAL_GPU_OPERATOR_MATRIX_FREE_SCHUR_CUDA {
-        return Err("k0_poisson_airbox_gpu_attestation_operator_kind_invalid".to_string());
-    }
     if snapshot.operator_dimension == 0 {
         return Err("k0_poisson_airbox_gpu_attestation_operator_dimension_invalid".to_string());
     }
-    if snapshot.hypre_memory_location != MODAL_GPU_HYPRE_MEMORY_DEVICE {
-        return Err("k0_poisson_airbox_gpu_attestation_hypre_memory_not_device".to_string());
-    }
-    if snapshot.hypre_execution_policy != MODAL_GPU_HYPRE_EXECUTION_DEVICE {
-        return Err("k0_poisson_airbox_gpu_attestation_hypre_execution_not_device".to_string());
-    }
-    let required_identity_strings = [
-        snapshot.device_name.as_str(),
-        snapshot.mfem_version.as_str(),
+    let petsc_identity = [
         snapshot.hypre_version.as_str(),
         snapshot.petsc_version.as_str(),
         snapshot.slepc_version.as_str(),
@@ -3387,12 +3495,49 @@ fn parse_modal_gpu_attestation_snapshot(
         snapshot.poisson_pc_type.as_str(),
         snapshot.shift_pc_type.as_str(),
     ];
+    let (operator_kind, hypre_memory_location, hypre_execution_policy) = match snapshot
+        .operator_kind
+    {
+        MODAL_GPU_OPERATOR_MATRIX_FREE_SCHUR_CUDA => {
+            if snapshot.hypre_memory_location != MODAL_GPU_HYPRE_MEMORY_DEVICE {
+                return Err("k0_poisson_airbox_gpu_attestation_hypre_memory_not_device".to_string());
+            }
+            if snapshot.hypre_execution_policy != MODAL_GPU_HYPRE_EXECUTION_DEVICE {
+                return Err(
+                    "k0_poisson_airbox_gpu_attestation_hypre_execution_not_device".to_string(),
+                );
+            }
+            if petsc_identity.iter().any(|value| value.is_empty()) {
+                return Err("k0_poisson_airbox_gpu_attestation_device_identity_missing".to_string());
+            }
+            (
+                NativeModalGpuOperatorKind::MatrixFreeSchurCuda,
+                NativeModalGpuHypreMemoryLocation::Device,
+                NativeModalGpuHypreExecutionPolicy::Device,
+            )
+        }
+        MODAL_GPU_OPERATOR_AUGMENTED_ROBIN_CUDSS_CUDA => {
+            if snapshot.hypre_memory_location != 0
+                || snapshot.hypre_execution_policy != 0
+                || petsc_identity.iter().any(|value| !value.is_empty())
+            {
+                return Err(
+                    "k0_poisson_airbox_gpu_attestation_cudss_has_petsc_identity".to_string()
+                );
+            }
+            (
+                NativeModalGpuOperatorKind::AugmentedRobinCudssCuda,
+                NativeModalGpuHypreMemoryLocation::NotUsed,
+                NativeModalGpuHypreExecutionPolicy::NotUsed,
+            )
+        }
+        _ => return Err("k0_poisson_airbox_gpu_attestation_operator_kind_invalid".to_string()),
+    };
     if snapshot.compute_capability_major == 0
         || snapshot.cuda_driver_version == 0
         || snapshot.cuda_runtime_version == 0
-        || required_identity_strings
-            .iter()
-            .any(|value| value.is_empty())
+        || snapshot.device_name.is_empty()
+        || snapshot.mfem_version.is_empty()
     {
         return Err("k0_poisson_airbox_gpu_attestation_device_identity_missing".to_string());
     }
@@ -3457,9 +3602,6 @@ fn parse_modal_gpu_attestation_snapshot(
     let production_shared_domain = snapshot.production_shared_domain == 1;
     let validation_only = snapshot.validation_only != 0;
     let fallback_state = NativeModalGpuFallbackState::None;
-    let operator_kind = NativeModalGpuOperatorKind::MatrixFreeSchurCuda;
-    let hypre_memory_location = NativeModalGpuHypreMemoryLocation::Device;
-    let hypre_execution_policy = NativeModalGpuHypreExecutionPolicy::Device;
 
     Ok(NativeModalGpuAttestation {
         measurement_state: NativeModalGpuMeasurementState::Measured,
@@ -3978,6 +4120,65 @@ mod tests {
         assert_eq!(parsed.operator_key_sha256, [16; 32]);
         assert_eq!(parsed.target_key_sha256, [17; 32]);
         assert_eq!(parsed.session_context_sha256, [18; 32]);
+    }
+
+    fn complete_cudss_gpu_attestation_snapshot() -> NativeModalGpuAttestationSnapshot {
+        let mut snapshot = complete_measured_gpu_attestation_snapshot();
+        snapshot.operator_kind = MODAL_GPU_OPERATOR_AUGMENTED_ROBIN_CUDSS_CUDA;
+        snapshot.hypre_memory_location = 0;
+        snapshot.hypre_execution_policy = 0;
+        for text in [
+            &mut snapshot.hypre_version,
+            &mut snapshot.petsc_version,
+            &mut snapshot.slepc_version,
+            &mut snapshot.petsc_vec_type,
+            &mut snapshot.petsc_matrix_type,
+            &mut snapshot.matshell_vec_type,
+            &mut snapshot.slepc_bv_type,
+            &mut snapshot.eps_type,
+            &mut snapshot.st_type,
+            &mut snapshot.ksp_type,
+            &mut snapshot.poisson_pc_type,
+            &mut snapshot.shift_pc_type,
+        ] {
+            text.clear();
+        }
+        snapshot
+    }
+
+    #[test]
+    fn measured_cudss_attestation_uses_a_distinct_operator_and_object_graph() {
+        let attested =
+            parse_modal_gpu_attestation_snapshot(complete_cudss_gpu_attestation_snapshot())
+                .unwrap();
+        let artifact = attested.artifact_json();
+        assert_eq!(
+            attested.operator_kind,
+            NativeModalGpuOperatorKind::AugmentedRobinCudssCuda
+        );
+        assert_eq!(artifact["operator_kind"], "augmented_robin_cudss_cuda");
+        assert!(artifact["hypre_memory_location"].is_null());
+        assert!(artifact["runtime"].get("petsc_version").is_none());
+        assert_eq!(artifact["object_graph"]["factorization"], "cudss");
+        assert!(artifact["object_graph"].get("petsc_vec_type").is_none());
+    }
+
+    #[test]
+    fn measured_cudss_attestation_refuses_petsc_identity_and_hot_loop_host_transfer() {
+        let mut snapshot = complete_cudss_gpu_attestation_snapshot();
+        snapshot.petsc_version = "3.24.3".to_owned();
+        assert_eq!(
+            parse_modal_gpu_attestation_snapshot(snapshot).unwrap_err(),
+            "k0_poisson_airbox_gpu_attestation_cudss_has_petsc_identity"
+        );
+
+        let mut snapshot = complete_cudss_gpu_attestation_snapshot();
+        snapshot.hot_loop_computational_h2d_count = 2;
+        snapshot.hot_loop_computational_h2d_bytes = 16;
+        assert_eq!(
+            parse_modal_gpu_attestation_snapshot(snapshot).unwrap_err(),
+            "k0_poisson_airbox_gpu_transfer_audit_failed"
+        );
     }
 
     #[test]
@@ -4726,6 +4927,7 @@ mod tests {
         for engine_id in [
             "gpu_modal_device_krylov",
             "k0_poisson_airbox_gpu_petsc_slepc",
+            "k0_poisson_airbox_gpu_augmented_cudss",
         ] {
             validate_planned_modal_execution_attestation(
                 fullmag_ir::FemEigenEngineIR::GpuModalDeviceKrylov,
