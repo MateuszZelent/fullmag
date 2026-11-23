@@ -137,12 +137,15 @@ class DockerDevelopmentShellBoundaryTests(unittest.TestCase):
                 self.assertEqual(result.returncode, 2, result.stderr)
                 self.assertFalse(result.stdout.strip())
 
-    def test_gpu_bb_contract_up_dispatches_without_weakening_the_allowlist(self):
-        contract = "fem-cuda-bb-exchange-mass"
-        result = self.dispatch(self.recipe(source_root="/selected/worktree",
-            suffix=" --native-contract '" + contract + "'"))
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(json.loads(result.stdout)[-2:], ["--native-contract", contract])
+    def test_cuda_contracts_up_dispatch_without_weakening_the_allowlist(self):
+        for contract in ("fem-cuda-bb-exchange-mass", "fem-k0-modal-gpu-adapter-scale"):
+            with self.subTest(contract=contract):
+                result = self.dispatch(self.recipe(
+                    source_root="/selected/worktree",
+                    suffix=" --native-contract '" + contract + "'",
+                ))
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(json.loads(result.stdout)[-2:], ["--native-contract", contract])
 
     def test_rejects_retired_host_receipt_recreate_recipe(self):
         recipe = ('python "/ignored/checkout/scripts/docker_dev.py" --repo-root "/ignored/checkout" '

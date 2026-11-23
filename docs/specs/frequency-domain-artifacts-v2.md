@@ -1884,6 +1884,43 @@ The allowed statuses are `not_certified`, `certified`,
 `linear_solve_failed`, `residual_not_met`, `cancelled`,
 `capability_missing`, or `operator_invalid`), never a generic `completed`.
 
+### Guarded inertia for the FEM GPU Robin window
+
+The CUDA cuDSS adapter uses the complex coupled descriptor for exact $k=0$
+on an open Robin airbox. A successful frequency-window result includes
+`window_certificate.schema_version =
+"poisson_airbox_augmented_inertia_window_certificate.v1"`. The certificate
+carries the exact requested endpoints in Hz, the certified positive mode
+count and the negative inertia at zero and at both endpoints. Each endpoint
+is checked on both sides of its uncertainty guard. Perturbed pivots or a
+change of inertia across the guard leave the count unavailable.
+
+The ordered `partition` contains every certified interval, including empty
+intervals. Each interval has `lower_hz`, `upper_hz`,
+`negative_at_lower`, `negative_at_upper` and `accepted_count`. Consecutive
+intervals share a boundary frequency and its inertia. For each interval, the
+difference of negative indices equals the number of converged modes that
+pass the original magnetic and Poisson residual checks within its bounds.
+The count is checked against the published spectrum when all modes are saved.
+
+The window uses `policy = "certified_count"` and
+`certification_method = "guarded_hermitian_inertia"`. With all modes saved,
+`status = "certified"`. The certified count stays available when the output
+limit truncates the published spectrum, which uses
+`status = "truncated_by_requested_count"`.
+
+Native GPU provenance binds the loaded operator and shift schedule to the
+session, device, runtime manifest and measured iteration trace. Setup and
+vector export are measured at the native tensor boundaries. GPU memory
+values are observations of device usage at setup, before iteration and
+after release. The iteration trace covers the computational interval between
+those boundaries and includes reconstruction and original-block residuals.
+An activity labeled as stream synchronization only counts as nonblocking
+polling when its correlation ID and time bounds match a successful or
+not-ready `cudaStreamQuery` call. Both records remain in the trace digest.
+An incomplete trace or failed resource release leaves the strict GPU result
+unavailable.
+
 ## response/diagnostics/solver.v1.json
 
 Driven solver diagnostics live at `response/diagnostics/solver.v1.json` and

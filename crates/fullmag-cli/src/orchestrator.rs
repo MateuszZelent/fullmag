@@ -2413,7 +2413,11 @@ fn fem_eigen_linear_progress_detail(
 
     let mut fields = Vec::with_capacity(4);
     if let Some(iteration) = fem_eigen_progress_counter(progress, "linear_iteration") {
-        fields.push(format!("linear_iteration={iteration}"));
+        if let Some(limit) = fem_eigen_progress_counter(progress, "max_linear_iterations") {
+            fields.push(format!("linear_iteration={iteration}/{limit}"));
+        } else {
+            fields.push(format!("linear_iteration={iteration}"));
+        }
     }
     if let Some(norm) = progress
         .get("linear_residual_norm")
@@ -2430,7 +2434,7 @@ fn fem_eigen_linear_progress_detail(
     if let Some(ksp_type) = fem_eigen_progress_tagged_value(
         progress,
         "linear_ksp_type:",
-        &["gmres", "fgmres", "preonly"],
+        &["cg", "gmres", "fgmres", "preonly"],
     ) {
         fields.push(format!("linear_ksp_type={ksp_type}"));
     }
@@ -12139,7 +12143,12 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                 None
             }
         } else { None };
-        let mut stage_result = match if use_live_callback {
+        let modal_cuda_trace = crate::modal_cuda_trace::ModalCudaTrace::start(
+            args.headless,
+            &execution_plan,
+            &current_stage_artifact_dir,
+        )?;
+        let stage_execution_result = if use_live_callback {
             if supports_dynamic_live_preview(&execution_plan.backend_plan) {
                 let mut live_cadence = LiveProgressCadence::default();
                 let display_selection = || display_selection_handle.display_selection_snapshot();
@@ -12310,7 +12319,16 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                 &current_stage_artifact_dir,
                 Some(&current_stage_id),
             )
-        } {
+        };
+        if let Some(trace) = modal_cuda_trace {
+            if let Err(error) = trace.finish(&run_id, &current_stage_id) {
+                if stage_execution_result.is_ok() {
+                    return Err(error);
+                }
+                eprintln!("[fullmag] could not save CUDA activity trace: {error:#}");
+            }
+        }
+        let mut stage_result = match stage_execution_result {
             Ok(result) => result,
             Err(error) => {
                 if let Some(mut heartbeat) = stage_heartbeat.take() {
@@ -17568,6 +17586,17 @@ mod tests {
         assert_eq!(line.matches("ksp_norm=").count(), 1, "{line}");
         assert!(!line.contains("relres="), "{line}");
         assert!(!line.contains("residual=5.000e-2"), "{line}");
+    }
+
+    #[test]
+    fn gpu_poisson_progress_line_formats_cg_limit_separately() {
+        let mut progress = tagged_ksp_progress_for_cli();
+        progress.remove("linear_ksp_type:gmres");
+        progress.insert("linear_ksp_type:cg".to_string(), 1.0);
+        progress.insert("max_linear_iterations".to_string(), 256.0);
+        let detail = super::fem_eigen_linear_progress_detail(&progress).expect("GPU Poisson detail");
+        assert!(detail.contains("linear_iteration=12/256"), "{detail}");
+        assert!(detail.contains("linear_ksp_type=cg"), "{detail}");
     }
 
     #[test]

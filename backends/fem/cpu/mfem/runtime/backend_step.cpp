@@ -727,8 +727,21 @@ int run_backend_relaxation_step(
         const bool terminal_observation =
             ctx.state.step_count == step_before &&
             ctx.relaxation.accepted_steps == accepted_steps_before;
-        if (!accepted_step && terminal_observation) {
-            gpu_execution_receipt_reject_attempt(ctx.gpu_state.execution_receipt);
+        if (terminal_observation) {
+            const bool initial_torque_observation = strict_gpu_request &&
+                step_before == 0 && accepted_steps_before == 0 &&
+                relaxation_torque_confirmation_pending(ctx, out_stats.max_torque_Apm);
+            if (!initial_torque_observation) {
+                gpu_execution_receipt_reject_attempt(ctx.gpu_state.execution_receipt);
+                return FULLMAG_FEM_OK;
+            }
+            if (!gpu_execution_receipt_commit_equilibrium_observation(
+                    ctx.gpu_state.execution_receipt)) {
+                set_stage_completion(
+                    ctx, FULLMAG_FEM_STAGE_STOP_REASON_BACKEND_ERROR, nullptr, 0.0, 0.0);
+                error = "strict FEM GPU initial torque observation lacks complete device field accounting";
+                return FULLMAG_FEM_ERR_INTERNAL;
+            }
             return FULLMAG_FEM_OK;
         }
         if (!accepted_step) {

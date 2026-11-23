@@ -1,6 +1,7 @@
 #pragma once
 
 #include "frequency_domain/modal_eigen_request.hpp"
+#include "frequency_domain/modal_eigen_result.hpp"
 
 #include <chrono>
 #include <complex>
@@ -416,6 +417,7 @@ inline void poisson_airbox_modal_emit_progress(
 struct PoissonAirboxModalEigenResult {
     FrequencyDomainStatus status = FrequencyDomainStatus::unavailable;
     char error_message[256]{};
+    ModalGpuExecutionAttestation gpu_execution_attestation{};
 
     std::uint64_t q_dof_count = 0;
     bool split_dof_count_available = false;

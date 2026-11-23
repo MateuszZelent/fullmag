@@ -1,4 +1,17 @@
 #include "frequency_domain/modal_gpu_krylov.hpp"
+#if FULLMAG_FEM_CUDSS_SHIFT_ENABLED
+#include "gpu/frequency_domain/modal_augmented_trace.hpp"
+#include <cudss.h>
+#include <iomanip>
+#include <locale>
+#include <sstream>
+#include <thread>
+#endif
+#include "frequency_domain/modal_gpu_attestation_runtime_identity.hpp"
+#include "frequency_domain/modal_frequency_window_shift_bounds.hpp"
+#include "cpu/mfem/runtime/runtime_build_info.hpp"
+#include "frequency_domain/canonical_digest.hpp"
+#include "gpu/cuda/runtime/cuda_activity_trace.hpp"
 #include "core/petsc_slepc_runtime.hpp"
 #include "frequency_domain/nonfinite_json_sanitizer.hpp"
 
@@ -18,6 +31,9 @@ extern "C" PetscErrorCode PetscObjectGetId(PetscObject, PetscObjectId *);
 #endif
 #if FULLMAG_HAS_MFEM_STACK
 #include <mfem.hpp>
+#endif
+#if FULLMAG_HAS_CUDA_RUNTIME
+#include <cuda_runtime_api.h>
 #endif
 
 // Keep the managed PETSc 3.15 runtime and current development PETSc on one
@@ -47,6 +63,7 @@ extern "C" PetscErrorCode PetscObjectGetId(PetscObject, PetscObjectId *);
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <chrono>
 #include <cstdlib>
 #include <cmath>
@@ -66,7 +83,6 @@ namespace {
 using Complex = std::complex<double>;
 
 bool destroy_cached_gpu_context_locked() noexcept;
-void destroy_cached_gpu_context_at_exit() noexcept;
 #if PETSC_VERSION_LT(3, 13, 0)
 PetscErrorCode set_mat_shell_vec_type_compat(Mat, VecType)
 {
@@ -244,13 +260,6 @@ FrequencyDomainStatus finalize_owned_slepc_locked() noexcept
     return FrequencyDomainStatus::ok;
 }
 
-void finalize_owned_slepc() noexcept
-{
-    const std::lock_guard<std::mutex> lock(
-        fullmag::fem::runtime::petsc_slepc_process_mutex());
-    (void)finalize_owned_slepc_locked();
-}
-
 bool ensure_slepc_initialized(char error_message[256]) noexcept
 {
     if (fullmag::fem::runtime::petsc_slepc_process_is_unsafe_locked()) {
@@ -290,26 +299,15 @@ bool ensure_slepc_initialized(char error_message[256]) noexcept
         copy_message(error_message, 256, "GPU K0 SLEPc initialization failed");
         return false;
     }
+    // The host calls the explicit finalizer before C++ process teardown. A
+    // late atexit callback can run after PETSc has destroyed its lazy pools.
+    owns_slepc_initialization() = true;
 #if !PETSC_VERSION_LT(3, 17, 0)
     if (PetscDeviceInitialize(PETSC_DEVICE_CUDA) != PETSC_SUCCESS) {
         copy_message(error_message, 256, "GPU K0 CUDA device initialization failed");
         return false;
     }
 #endif
-    owns_slepc_initialization() = true;
-    if (std::atexit(finalize_owned_slepc) != 0) {
-        copy_message(error_message, 256, "GPU K0 could not register SLEPc finalization");
-        if (!fullmag::fem::runtime::petsc_slepc_process_is_unsafe_locked()) {
-            PetscBool finalized = PETSC_FALSE;
-            if (PetscFinalized(&finalized) == PETSC_SUCCESS &&
-                finalized == PETSC_FALSE &&
-                fullmag::fem::runtime::petsc_slepc_global_finalization_allowed_locked() &&
-                SlepcFinalize() == PETSC_SUCCESS) {
-                owns_slepc_initialization() = false;
-            }
-        }
-        return false;
-    }
     return true;
 }
 
@@ -526,6 +524,13 @@ std::uint64_t next_solve_control_generation() noexcept
     return ++generation;
 }
 
+std::uint32_t gpu_progress_count(PetscInt value) noexcept
+{
+    return static_cast<std::uint32_t>(std::min<std::uint64_t>(
+        static_cast<std::uint64_t>(std::max<PetscInt>(0, value)),
+        std::numeric_limits<std::uint32_t>::max()));
+}
+
 struct GpuSolveControl {
     // PETSc/SLEPc keep this address in persistent callback registrations.  The
     // current request's callable state is copied in only while the synchronous
@@ -535,6 +540,7 @@ struct GpuSolveControl {
     std::uint32_t monitor_iteration_count = 0;
     std::uint32_t last_converged_count = 0;
     double last_error_estimate = 0.0;
+    std::chrono::steady_clock::time_point callback_started_at{};
     bool armed = false;
     bool cancel_poll_enabled = false;
     bool progress_enabled = false;
@@ -550,6 +556,12 @@ struct GpuSolveControl {
         callback_problem.cancel_requested = problem.cancel_requested;
         callback_problem.progress_user_data = problem.progress_user_data;
         callback_problem.progress_callback = problem.progress_callback;
+        callback_problem.progress_window_phase = problem.progress_window_phase;
+        callback_problem.progress_current_subwindow = problem.progress_current_subwindow;
+        callback_problem.progress_total_subwindows = problem.progress_total_subwindows;
+        callback_problem.progress_subwindow_elapsed_seconds = problem.progress_subwindow_elapsed_seconds;
+        callback_problem.progress_window_elapsed_seconds = problem.progress_window_elapsed_seconds;
+        callback_started_at = std::chrono::steady_clock::now();
         generation = next_solve_control_generation();
         monitor_iteration_count = 0u;
         last_converged_count = 0u;
@@ -582,6 +594,7 @@ struct GpuSolveControlArm {
 
 struct GpuKspConvergenceContext {
     GpuSolveControl *solve_control = nullptr;
+    PoissonAirboxModalLinearSolverRole role = PoissonAirboxModalLinearSolverRole::unknown;
     void *default_context = nullptr;
     PoissonAirboxModalProgressThrottle progress_throttle{};
 };
@@ -627,7 +640,8 @@ PetscErrorCode destroy_gpu_modal_ksp_convergence_context(void **raw_context)
 
 PetscErrorCode install_gpu_modal_ksp_convergence_test(
     KSP ksp,
-    GpuSolveControl *solve_control)
+    GpuSolveControl *solve_control,
+    PoissonAirboxModalLinearSolverRole role)
 {
     PetscFunctionBeginUser;
     PetscCheck(ksp != nullptr && solve_control != nullptr,
@@ -640,6 +654,7 @@ PetscErrorCode install_gpu_modal_ksp_convergence_test(
                PETSC_ERR_MEM,
                "failed to allocate GPU modal KSP convergence context");
     context->solve_control = solve_control;
+    context->role = role;
     PetscErrorCode status = KSPConvergedDefaultCreate(&context->default_context);
     if (status == PETSC_SUCCESS) {
         status = KSPSetConvergenceTest(
@@ -670,13 +685,22 @@ void gpu_modal_emit_progress(
     std::uint32_t candidate_mode_count,
     std::uint32_t linear_iteration,
     double residual_relative,
-    const char *stop_reason = nullptr) noexcept
+    const char *stop_reason = nullptr,
+    const PoissonAirboxModalLinearProgress *linear_progress = nullptr,
+    std::uint32_t max_linear_iterations = 0u) noexcept
 {
     if (!control.armed || !control.progress_enabled) {
         return;
     }
-    poisson_airbox_modal_emit_progress(
+    auto progress = poisson_airbox_modal_progress_with_elapsed(
         control.callback_problem,
+        std::chrono::duration<double>(
+            std::chrono::steady_clock::now() - control.callback_started_at).count());
+    if (linear_progress != nullptr) {
+        progress.max_linear_iterations = max_linear_iterations;
+    }
+    poisson_airbox_modal_emit_progress(
+        progress,
         solver_phase,
         "production_gpu",
         outer_iteration,
@@ -684,7 +708,8 @@ void gpu_modal_emit_progress(
         0,
         linear_iteration,
         residual_relative,
-        stop_reason);
+        stop_reason,
+        linear_progress);
 }
 
 PetscErrorCode gpu_modal_ksp_convergence_test(
@@ -701,18 +726,31 @@ PetscErrorCode gpu_modal_ksp_convergence_test(
                PETSC_COMM_SELF, PETSC_ERR_ARG_NULL,
                "missing GPU modal solve control");
     GpuSolveControl *control = context->solve_control;
+    const auto emit_linear_progress = [&](const char *phase, const char *stop_reason) noexcept {
+        if (!control->armed || !control->progress_enabled) {
+            return;
+        }
+        const char *ksp_type = nullptr;
+        if (KSPGetType(ksp, &ksp_type) != PETSC_SUCCESS) {
+            ksp_type = nullptr;
+        }
+        PetscInt max_iterations = 0;
+        if (KSPGetTolerances(ksp, nullptr, nullptr, nullptr, &max_iterations) != PETSC_SUCCESS) {
+            max_iterations = 0;
+        }
+        const PoissonAirboxModalLinearProgress linear{
+            context->role, ksp_type, gpu_progress_count(iteration),
+            static_cast<double>(residual_norm)};
+        gpu_modal_emit_progress(
+            *control, phase, control->monitor_iteration_count,
+            control->last_converged_count, linear.linear_iteration, 0.0,
+            stop_reason, &linear, gpu_progress_count(max_iterations));
+    };
     if (gpu_modal_cancel_requested(*control)) {
         if (reason != nullptr) {
             *reason = KSP_DIVERGED_USER;
         }
-        gpu_modal_emit_progress(
-            *control,
-            "cancelling_shift_invert",
-            static_cast<std::uint32_t>(std::max<PetscInt>(0, iteration)),
-            0,
-            static_cast<std::uint32_t>(std::max<PetscInt>(0, iteration)),
-            static_cast<double>(residual_norm),
-            "cancel_requested");
+        emit_linear_progress("cancelling_shift_invert", "cancel_requested");
         PetscFunctionReturn(PETSC_SUCCESS);
     }
     PetscCall(KSPConvergedDefault(
@@ -720,13 +758,7 @@ PetscErrorCode gpu_modal_ksp_convergence_test(
     if (!context->progress_throttle.should_emit()) {
         PetscFunctionReturn(PETSC_SUCCESS);
     }
-    gpu_modal_emit_progress(
-        *control,
-        "solving_shift_invert",
-        static_cast<std::uint32_t>(std::max<PetscInt>(0, iteration)),
-        0,
-        static_cast<std::uint32_t>(std::max<PetscInt>(0, iteration)),
-        static_cast<double>(residual_norm));
+    emit_linear_progress("solving_shift_invert", nullptr);
     PetscFunctionReturn(PETSC_SUCCESS);
 }
 
@@ -749,12 +781,8 @@ PetscErrorCode gpu_modal_eps_monitor(
     if (!control->armed) {
         PetscFunctionReturn(PETSC_SUCCESS);
     }
-    control->monitor_iteration_count = static_cast<std::uint32_t>(
-        std::min<PetscInt>(std::max<PetscInt>(0, iteration),
-                           static_cast<PetscInt>(std::numeric_limits<std::uint32_t>::max())));
-    control->last_converged_count = static_cast<std::uint32_t>(
-        std::min<PetscInt>(std::max<PetscInt>(0, converged),
-                           static_cast<PetscInt>(std::numeric_limits<std::uint32_t>::max())));
+    control->monitor_iteration_count = gpu_progress_count(iteration);
+    control->last_converged_count = gpu_progress_count(converged);
     if (error_estimates != nullptr && estimate_count > 0 &&
         std::isfinite(static_cast<double>(error_estimates[0]))) {
         control->last_error_estimate = static_cast<double>(error_estimates[0]);
@@ -798,8 +826,8 @@ PetscErrorCode gpu_modal_eps_stopping_test(
         gpu_modal_emit_progress(
             *control,
             "cancelling_eigensystem",
-            static_cast<std::uint32_t>(std::max<PetscInt>(0, iteration)),
-            static_cast<std::uint32_t>(std::max<PetscInt>(0, converged)),
+            gpu_progress_count(iteration),
+            gpu_progress_count(converged),
             0,
             control->last_error_estimate,
             "cancel_requested");
@@ -1280,6 +1308,9 @@ struct GpuOperatorIdentity {
     bool canonical_shared_domain_identity = false;
 };
 
+GpuOperatorIdentity modal_operator_identity(
+    const PoissonAirboxEigenBlockProblem &problem);
+
 struct GpuSolverObjectIds {
     PetscObjectId shell = 0;
     PetscObjectId mass = 0;
@@ -1315,6 +1346,7 @@ struct GpuSolverState {
     double operator_scale = 1.0;
     double target_eigenvalue = 0.0;
     double target_omega = 0.0;
+    std::array<std::uint8_t, 32> target_key_sha256{};
     std::uint64_t generation = 0u;
     GpuSolverObjectIds last_successful_object_ids{};
     bool exact_shifted_preconditioner = false;
@@ -1406,7 +1438,29 @@ struct GpuPersistentContext {
     GpuOperatorIdentity identity{};
     std::uint64_t operator_signature = 0;
     std::uint64_t operator_generation = 0u;
+    std::array<std::uint8_t, 32> operator_key_sha256{};
+    std::array<std::uint8_t, 32> stage_session_sha256{};
+    std::uint64_t stage_owner_token = 0u;
 };
+
+struct ModalGpuNativeScopeState {
+    std::uint64_t token = 0u;
+    std::array<std::uint8_t, 32> session_context_sha256{};
+    std::array<std::uint8_t, 32> operator_key_sha256{};
+    std::uint64_t operator_state_generation = 0u;
+    std::uint64_t target_state_generation = 0u;
+    std::uint64_t operator_reuse_count = 0u;
+    std::uint64_t target_rebuild_count = 0u;
+    std::uint64_t subsolve_count = 0u;
+    bool gpu_context_acquired = false;
+    bool operator_key_seen = false;
+    bool operator_identity_consistent = true;
+    bool target_schedule_valid = true;
+    CanonicalDigestBuilder target_schedule_digest{"modal_gpu_native_target_schedule.v1"};
+};
+
+thread_local std::unique_ptr<ModalGpuNativeScopeState> active_modal_gpu_native_scope{};
+std::atomic<std::uint64_t> g_modal_gpu_native_scope_token{1u};
 
 bool destroy_gpu_persistent_context_resources_locked(GpuPersistentContext *context) noexcept
 {
@@ -1513,6 +1567,356 @@ bool same_gpu_solver_object_graph(
         previous.xr == current.xr &&
         previous.xi == current.xi &&
         previous.residual_workspace == current.residual_workspace;
+}
+
+bool decode_sha256_hex(
+    const char *hex,
+    std::array<std::uint8_t, 32> *out) noexcept
+{
+    if (hex == nullptr || out == nullptr || std::strlen(hex) != 64u) {
+        return false;
+    }
+    const auto nibble = [](char value) noexcept -> int {
+        if (value >= '0' && value <= '9') return value - '0';
+        if (value >= 'a' && value <= 'f') return value - 'a' + 10;
+        if (value >= 'A' && value <= 'F') return value - 'A' + 10;
+        return -1;
+    };
+    for (std::size_t index = 0u; index < out->size(); ++index) {
+        const int high = nibble(hex[2u * index]);
+        const int low = nibble(hex[2u * index + 1u]);
+        if (high < 0 || low < 0) {
+            *out = {};
+            return false;
+        }
+        (*out)[index] = static_cast<std::uint8_t>((high << 4) | low);
+    }
+    return true;
+}
+
+bool gpu_object_graph_digest(
+    const GpuSolverObjectIds &ids,
+    std::uint64_t dimension,
+    const char *shell_type,
+    const char *matrix_type,
+    const char *vector_type,
+    const char *shell_vector_type,
+    const char *basis_vector_type,
+    const char *slepc_bv_type,
+    const char *eps_type,
+    const char *st_type,
+    const char *ksp_type,
+    const char *poisson_pc_type,
+    const char *shift_pc_type,
+    std::array<std::uint8_t, 32> *out) noexcept
+{
+    if (!ids.valid || dimension == 0u || shell_type == nullptr ||
+        matrix_type == nullptr || vector_type == nullptr ||
+        shell_vector_type == nullptr || basis_vector_type == nullptr ||
+        slepc_bv_type == nullptr ||
+        eps_type == nullptr || st_type == nullptr || ksp_type == nullptr ||
+        poisson_pc_type == nullptr || shift_pc_type == nullptr || out == nullptr) {
+        return false;
+    }
+    try {
+        CanonicalDigestBuilder digest("petsc_slepc_gpu_modal_object_graph.v1");
+        digest.add_u64("dimension", dimension);
+        digest.add_u64("shell_id", static_cast<std::uint64_t>(ids.shell));
+        digest.add_u64("mass_id", static_cast<std::uint64_t>(ids.mass));
+        digest.add_u64("preconditioner_id", static_cast<std::uint64_t>(ids.preconditioner));
+        digest.add_u64("eps_id", static_cast<std::uint64_t>(ids.eps));
+        digest.add_u64("st_id", static_cast<std::uint64_t>(ids.st));
+        digest.add_u64("ksp_id", static_cast<std::uint64_t>(ids.ksp));
+        digest.add_u64("pc_id", static_cast<std::uint64_t>(ids.pc));
+        digest.add_u64("basis_id", static_cast<std::uint64_t>(ids.basis));
+        digest.add_u64("xr_id", static_cast<std::uint64_t>(ids.xr));
+        digest.add_u64("xi_id", static_cast<std::uint64_t>(ids.xi));
+        digest.add_u64(
+            "residual_workspace_id",
+            static_cast<std::uint64_t>(ids.residual_workspace));
+        digest.add_string("shell_type", shell_type);
+        digest.add_string("matrix_type", matrix_type);
+        digest.add_string("vector_type", vector_type);
+        digest.add_string("shell_vector_type", shell_vector_type);
+        digest.add_string("basis_vector_type", basis_vector_type);
+        digest.add_string("slepc_bv_type", slepc_bv_type);
+        digest.add_string("eps_type", eps_type);
+        digest.add_string("st_type", st_type);
+        digest.add_string("ksp_type", ksp_type);
+        digest.add_string("poisson_pc_type", poisson_pc_type);
+        digest.add_string("shift_pc_type", shift_pc_type);
+        const std::string hash = digest.sha256_hex();
+        return hash.size() == 64u && decode_sha256_hex(hash.c_str(), out);
+    } catch (...) {
+        *out = {};
+        return false;
+    }
+}
+
+bool digest_builder_to_sha256(
+    const CanonicalDigestBuilder &digest,
+    std::array<std::uint8_t, 32> *out) noexcept
+{
+    if (out == nullptr) return false;
+    try {
+        const std::string hash = digest.sha256_hex();
+        return hash.size() == 64u && decode_sha256_hex(hash.c_str(), out);
+    } catch (...) {
+        *out = {};
+        return false;
+    }
+}
+
+void add_csr_shape(
+    CanonicalDigestBuilder *digest,
+    std::string_view name,
+    const CsrMatrixView &matrix)
+{
+    if (digest == nullptr) return;
+    std::string field(name.data(), name.size());
+    field += ".rows";
+    digest->add_u64(field, matrix.row_count);
+    field.assign(name.data(), name.size());
+    field += ".columns";
+    digest->add_u64(field, matrix.column_count);
+    field.assign(name.data(), name.size());
+    field += ".row_offsets_len";
+    digest->add_u64(field, matrix.row_offsets_len);
+    field.assign(name.data(), name.size());
+    field += ".column_indices_len";
+    digest->add_u64(field, matrix.column_indices_len);
+    field.assign(name.data(), name.size());
+    field += ".values_len";
+    digest->add_u64(field, matrix.values_len);
+}
+
+bool modal_gpu_operator_key_sha256(
+    const PoissonAirboxEigenBlockProblem &problem,
+    std::array<std::uint8_t, 32> *out) noexcept
+{
+    if (out == nullptr) return false;
+    *out = {};
+    try {
+        const GpuOperatorIdentity identity = modal_operator_identity(problem);
+        if (!identity.canonical_shared_domain_identity &&
+            identity.validation_content_signature == 0u) {
+            return false;
+        }
+        CanonicalDigestBuilder digest("modal_gpu_operator_key.v1");
+        digest.add_u64("q_dof_count", problem.q_dof_count);
+        digest.add_u64("phi_dof_count", problem.phi_dof_count);
+        digest.add_string(
+            "mesh_generation_identity",
+            identity.mesh_generation_identity);
+        digest.add_string("equilibrium_digest", identity.equilibrium_digest);
+        digest.add_string(
+            "bias_field_sample_signature",
+            identity.bias_field_sample_signature);
+        digest.add_string("boundary_gauge_digest", identity.boundary_gauge_digest);
+        digest.add_string("operator_input_digest", identity.operator_input_digest);
+        digest.add_u64(
+            "validation_content_signature",
+            identity.validation_content_signature);
+        digest.add_string("demag_kind", problem.demag_kind != nullptr
+            ? problem.demag_kind
+            : "");
+        digest.add_string("assembly_kind", problem.assembly_kind != nullptr
+            ? problem.assembly_kind
+            : "");
+        digest.add_string("outer_boundary_kind", problem.outer_boundary_kind != nullptr
+            ? problem.outer_boundary_kind
+            : "");
+        digest.add_double("robin_beta", problem.robin_beta);
+        digest.add_string("gauge_policy", problem.gauge_policy != nullptr
+            ? problem.gauge_policy
+            : "");
+        digest.add_string("gauge_reason", problem.gauge_reason != nullptr
+            ? problem.gauge_reason
+            : "");
+        digest.add_u64("magnetic_pair_count", problem.magnetic_pair_count);
+        digest.add_u64("airbox_pair_count", problem.airbox_pair_count);
+        digest.add_string(
+            "periodic_mesh_certificate_schema",
+            problem.periodic_mesh_certificate_schema != nullptr
+                ? problem.periodic_mesh_certificate_schema
+                : "");
+        digest.add_u64("k0_only", problem.k0_only);
+        digest.add_u64("alpha_zero_required", problem.alpha_zero_required);
+        digest.add_u64(
+            "symmetric_mesh_certificate_required",
+            problem.symmetric_mesh_certificate_required);
+        digest.add_u64(
+            "periodic_mesh_certificate_required",
+            problem.periodic_mesh_certificate_required);
+        digest.add_u64("real_fem_blocks", problem.real_fem_blocks);
+        digest.add_u64("production_shared_domain", problem.production_shared_domain);
+        digest.add_u64("validation_only_adapter", problem.validation_only_adapter);
+        add_csr_shape(&digest, "A_qq", problem.A_qq);
+        add_csr_shape(&digest, "A_qphi", problem.A_qphi);
+        add_csr_shape(&digest, "A_phiq", problem.A_phiq);
+        add_csr_shape(&digest, "A_phiphi", problem.A_phiphi);
+        add_csr_shape(&digest, "B_qq", problem.B_qq);
+        digest.add_u64("phi_mean_weights_count", problem.phi_mean_weights_count);
+        digest.add_u64("petsc_scalar_size", sizeof(PetscScalar));
+        digest.add_u64("petsc_real_size", sizeof(PetscReal));
+        return digest_builder_to_sha256(digest, out);
+    } catch (...) {
+        *out = {};
+        return false;
+    }
+}
+
+bool modal_gpu_target_key_sha256(
+    const PoissonAirboxEigenBlockProblem &problem,
+    std::array<std::uint8_t, 32> *out) noexcept
+{
+    if (out == nullptr) return false;
+    *out = {};
+    try {
+        CanonicalDigestBuilder digest("modal_gpu_actual_target_key.v1");
+        digest.add_string("target_kind", problem.target_kind != nullptr
+            ? problem.target_kind
+            : "");
+        digest.add_double("target_frequency_hz", problem.target_frequency_hz);
+        digest.add_double("frequency_min_hz", problem.frequency_min_hz);
+        digest.add_double("frequency_max_hz", problem.frequency_max_hz);
+        digest.add_double(
+            "expected_reference_frequency_hz",
+            problem.expected_reference_frequency_hz);
+        digest.add_double("residual_tolerance", problem.residual_tolerance);
+        digest.add_u64("requested_mode_count", problem.requested_mode_count);
+        digest.add_u64("max_outer_iterations", problem.max_outer_iterations);
+        digest.add_u64("max_linear_iterations", problem.max_linear_iterations);
+        digest.add_string("solver_adapter", problem.solver_adapter != nullptr
+            ? problem.solver_adapter
+            : "");
+        digest.add_u64(
+            "retain_window_discovery_pool",
+            problem.retain_window_discovery_pool);
+        digest.add_string("eigenvalue_convention", problem.eigenvalue_convention != nullptr
+            ? problem.eigenvalue_convention
+            : "");
+        digest.add_string("phasor_convention", problem.phasor_convention != nullptr
+            ? problem.phasor_convention
+            : "");
+        return digest_builder_to_sha256(digest, out);
+    } catch (...) {
+        *out = {};
+        return false;
+    }
+}
+
+void observe_modal_gpu_native_subsolve(
+    const PoissonAirboxEigenBlockProblem &problem,
+    const GpuPersistentContext &persistent,
+    const std::array<std::uint8_t, 32> &target_key_sha256,
+    std::uint64_t target_generation,
+    bool operator_context_reused) noexcept
+{
+    ModalGpuNativeScopeState *scope = active_modal_gpu_native_scope.get();
+    if (scope == nullptr) return;
+    if (scope->token == 0u || persistent.stage_owner_token != scope->token ||
+        persistent.stage_session_sha256 != scope->session_context_sha256) {
+        scope->operator_identity_consistent = false;
+        scope->target_schedule_valid = false;
+        return;
+    }
+    std::array<std::uint8_t, 32> actual_operator_key{};
+    if (!modal_gpu_operator_key_sha256(problem, &actual_operator_key) ||
+        actual_operator_key != persistent.operator_key_sha256) {
+        scope->operator_identity_consistent = false;
+    } else if (!scope->operator_key_seen) {
+        scope->operator_key_sha256 = actual_operator_key;
+        scope->operator_state_generation = persistent.operator_generation;
+        scope->operator_key_seen = true;
+    } else if (scope->operator_key_sha256 != actual_operator_key) {
+        scope->operator_identity_consistent = false;
+    }
+    if (target_generation == 0u || scope->subsolve_count >= 65536u ||
+        std::all_of(
+            target_key_sha256.begin(),
+            target_key_sha256.end(),
+            [](std::uint8_t byte) { return byte == 0u; })) {
+        scope->target_schedule_valid = false;
+        return;
+    }
+    try {
+        scope->target_schedule_digest.add_u64("subsolve_index", scope->subsolve_count);
+        scope->target_schedule_digest.add_bytes(
+            "target_key_sha256",
+            target_key_sha256.data(),
+            target_key_sha256.size());
+        scope->target_schedule_digest.add_u64(
+            "target_state_generation",
+            target_generation);
+        if (scope->target_state_generation != target_generation) {
+            ++scope->target_rebuild_count;
+        }
+        scope->target_state_generation = target_generation;
+        scope->operator_reuse_count += operator_context_reused ? 1u : 0u;
+        ++scope->subsolve_count;
+    } catch (...) {
+        scope->target_schedule_valid = false;
+    }
+}
+
+void capture_gpu_device_identity(
+    ModalGpuExecutionAttestation *attestation) noexcept
+{
+    if (attestation == nullptr) {
+        return;
+    }
+#if FULLMAG_HAS_CUDA_RUNTIME
+    int device = -1;
+    cudaDeviceProp properties{};
+    int driver_version = 0;
+    int runtime_version = 0;
+    if (cudaGetDevice(&device) != cudaSuccess || device < 0 ||
+        cudaGetDeviceProperties(&properties, device) != cudaSuccess ||
+        cudaDriverGetVersion(&driver_version) != cudaSuccess ||
+        cudaRuntimeGetVersion(&runtime_version) != cudaSuccess) {
+        return;
+    }
+    attestation->device_name = properties.name;
+    static_assert(sizeof(properties.uuid.bytes) ==
+        std::tuple_size_v<decltype(attestation->device_uuid)>);
+    std::memcpy(attestation->device_uuid.data(), properties.uuid.bytes, sizeof(properties.uuid.bytes));
+    attestation->compute_capability_major =
+        static_cast<std::uint32_t>(std::max(properties.major, 0));
+    attestation->compute_capability_minor =
+        static_cast<std::uint32_t>(std::max(properties.minor, 0));
+    attestation->cuda_driver_version =
+        static_cast<std::uint32_t>(std::max(driver_version, 0));
+    attestation->cuda_runtime_version =
+        static_cast<std::uint32_t>(std::max(runtime_version, 0));
+#endif
+}
+
+void capture_gpu_library_versions(
+    ModalGpuExecutionAttestation *attestation) noexcept
+{
+    if (attestation == nullptr) {
+        return;
+    }
+    try {
+        fullmag_fem_runtime_build_info_v2 runtime_info{};
+        if (fullmag::fem::runtime_build_info_v2(runtime_info)) {
+            attestation->mfem_version = runtime_info.mfem_version;
+            attestation->hypre_version = runtime_info.hypre_version;
+        }
+        char petsc_version[128]{};
+        if (PetscGetVersion(petsc_version, sizeof(petsc_version)) == PETSC_SUCCESS &&
+            petsc_version[0] != '\0') {
+            attestation->petsc_version = petsc_version;
+        }
+        char slepc_version[128]{};
+        if (SlepcGetVersion(slepc_version, sizeof(slepc_version)) == PETSC_SUCCESS &&
+            slepc_version[0] != '\0') {
+            attestation->slepc_version = slepc_version;
+        }
+    } catch (...) {
+        // Runtime evidence stays empty if allocation or version lookup fails.
+    }
 }
 
 GpuPersistentContext *&cached_gpu_context() noexcept
@@ -1785,17 +2189,6 @@ bool destroy_cached_gpu_context_locked() noexcept
     return true;
 }
 
-void destroy_cached_gpu_context_at_exit() noexcept
-{
-    const std::lock_guard<std::mutex> lock(
-        fullmag::fem::runtime::petsc_slepc_process_mutex());
-    if (!destroy_cached_gpu_context_locked()) {
-        // The shared unsafe latch prevents the separately registered SLEPc
-        // finalizer from finalizing a runtime with a retained PETSc graph.
-        fullmag::fem::runtime::mark_petsc_slepc_process_unsafe_locked();
-    }
-}
-
 GpuPersistentContext *acquire_cached_gpu_context(
     const PoissonAirboxEigenBlockProblem &problem,
     bool *reused,
@@ -1809,19 +2202,47 @@ GpuPersistentContext *acquire_cached_gpu_context(
     }
     const GpuOperatorIdentity identity = modal_operator_identity(problem);
     const std::uint64_t signature = identity.aggregate;
+    std::array<std::uint8_t, 32> operator_key_sha256{};
+    const bool operator_key_available =
+        modal_gpu_operator_key_sha256(problem, &operator_key_sha256);
+    ModalGpuNativeScopeState *active_scope = active_modal_gpu_native_scope.get();
+    if (active_scope != nullptr && !operator_key_available) {
+        if (invalidation_reason != nullptr) {
+            *invalidation_reason = "native_gpu_operator_key_unavailable";
+        }
+        return nullptr;
+    }
     auto *cached = cached_gpu_context();
-    if (cached != nullptr && same_operator_identity(cached->identity, identity)) {
+    const bool cached_owner_matches = cached != nullptr &&
+        (active_scope == nullptr
+            ? cached->stage_owner_token == 0u
+            : cached->stage_owner_token == active_scope->token &&
+                cached->stage_session_sha256 == active_scope->session_context_sha256);
+    const bool cached_operator_key_matches = cached != nullptr &&
+        (operator_key_available
+            ? cached->operator_key_sha256 == operator_key_sha256
+            : active_scope == nullptr);
+    if (cached != nullptr && cached_owner_matches &&
+        cached_operator_key_matches &&
+        same_operator_identity(cached->identity, identity)) {
         if (reused != nullptr) {
             *reused = true;
         }
         if (invalidation_reason != nullptr) {
             *invalidation_reason = "none";
         }
+        if (active_scope != nullptr) {
+            active_scope->gpu_context_acquired = true;
+        }
         return cached;
     }
     if (cached != nullptr) {
         if (invalidation_reason != nullptr) {
-            *invalidation_reason = operator_invalidation_reason(cached->identity, identity);
+            *invalidation_reason = !cached_owner_matches
+                ? "native_gpu_stage_scope_changed"
+                : cached_operator_key_matches
+                    ? operator_invalidation_reason(cached->identity, identity)
+                    : "native_gpu_operator_key_changed";
         }
         if (!destroy_cached_gpu_context_locked()) {
             return nullptr;
@@ -1842,6 +2263,15 @@ GpuPersistentContext *acquire_cached_gpu_context(
         return nullptr;
     }
     auto *created = new (std::nothrow) GpuPersistentContext{};
+    if (created != nullptr) {
+        created->identity = identity;
+        created->operator_signature = signature;
+        created->operator_key_sha256 = operator_key_sha256;
+        if (active_scope != nullptr) {
+            created->stage_owner_token = active_scope->token;
+            created->stage_session_sha256 = active_scope->session_context_sha256;
+        }
+    }
     if (created == nullptr ||
         !configure_schur_context(
             problem,
@@ -1866,13 +2296,10 @@ GpuPersistentContext *acquire_cached_gpu_context(
         }
         return nullptr;
     }
-    created->identity = identity;
-    created->operator_signature = signature;
     created->operator_generation = next_operator_context_generation();
     cached_gpu_context() = created;
-    static bool cleanup_registered = false;
-    if (!cleanup_registered) {
-        cleanup_registered = std::atexit(destroy_cached_gpu_context_at_exit) == 0;
+    if (active_scope != nullptr) {
+        active_scope->gpu_context_acquired = true;
     }
     return created;
 }
@@ -2246,7 +2673,8 @@ bool configure_gpu_solver_request(
         (apply_options || !state.convergence_callbacks_installed)) {
         configured =
             install_gpu_modal_ksp_convergence_test(
-                state.st_ksp, &persistent->solve_control) == PETSC_SUCCESS;
+                state.st_ksp, &persistent->solve_control,
+                PoissonAirboxModalLinearSolverRole::shift_invert) == PETSC_SUCCESS;
         state.convergence_callbacks_installed = configured;
     }
     if (configured &&
@@ -2254,8 +2682,8 @@ bool configure_gpu_solver_request(
          !persistent->schur.convergence_callback_installed)) {
         configured =
             install_gpu_modal_ksp_convergence_test(
-                persistent->schur.poisson_ksp,
-                &persistent->solve_control) == PETSC_SUCCESS;
+                persistent->schur.poisson_ksp, &persistent->solve_control,
+                PoissonAirboxModalLinearSolverRole::poisson) == PETSC_SUCCESS;
         persistent->schur.convergence_callback_installed = configured;
     }
     return configured;
@@ -2336,6 +2764,9 @@ FrequencyDomainStatus fail(
     double observed_positive_max_hz = 0.0) noexcept
 {
     result->status = status;
+    if (reason != result->stop_reason) {
+        copy_message(result->stop_reason, sizeof(result->stop_reason), reason);
+    }
     copy_message(result->error_message, sizeof(result->error_message), message);
     const GpuPersistenceSnapshot &persistence = latest_persistence_snapshot();
     std::snprintf(
@@ -2509,19 +2940,35 @@ bool validate_problem(
         problem.requested_mode_count <= 64u;
     const bool valid_iteration_budgets = problem.max_outer_iterations > 0u &&
         problem.max_linear_iterations > 0u;
+    const bool certificate_v6 =
+        string_equals(problem.periodic_mesh_certificate_schema, "periodic_mesh_certificate.v6");
+    const bool periodic_demag_identity =
+        string_equals(problem.demag_kind, "periodic_airbox_k0") &&
+        (production_scope || validation_scope) &&
+        problem.magnetic_pair_count > 0u && problem.airbox_pair_count > 0u;
+    // The isolated open-airbox K0 lane is production-only. The shared-domain
+    // importer has already accepted the certificate-bound identity maps,
+    // rejected periodic pair/seam metadata, and bound the exterior Robin
+    // boundary before this adapter receives its operator blocks.
+    const bool open_demag_identity =
+        string_equals(problem.demag_kind, "open_airbox_k0") &&
+        production_scope && !problem.validation_only_adapter && certificate_v6 &&
+        problem.magnetic_pair_count == 0u && problem.airbox_pair_count == 0u &&
+        string_equals(problem.outer_boundary_kind, "poisson_robin");
+    const bool valid_demag_identity =
+        periodic_demag_identity || open_demag_identity;
     const bool structural_invalid =
         problem.abi_version != kPoissonAirboxEigenBlockProblemAbiVersion ||
         problem.struct_size < sizeof(PoissonAirboxEigenBlockProblem) ||
         (!production_scope && !validation_scope) ||
-        !string_equals(problem.demag_kind, "periodic_airbox_k0") ||
-        !string_equals(problem.periodic_mesh_certificate_schema, "periodic_mesh_certificate.v6") ||
+        !valid_demag_identity || !certificate_v6 ||
         !string_equals(problem.outer_boundary_kind, "poisson_robin") ||
+        !std::isfinite(problem.robin_beta) || problem.robin_beta <= 0.0 ||
         !string_equals(problem.gauge_policy, "none") ||
         !string_equals(problem.gauge_reason, "coercive_outer_boundary") ||
         problem.q_dof_count < 2u || problem.phi_dof_count == 0u ||
         problem.q_dof_count > static_cast<std::uint64_t>(std::numeric_limits<PetscInt>::max()) / 2u ||
         problem.phi_dof_count > static_cast<std::uint64_t>(std::numeric_limits<PetscInt>::max()) ||
-        problem.magnetic_pair_count == 0u || problem.airbox_pair_count == 0u ||
         !std::isfinite(problem.residual_tolerance) || problem.residual_tolerance <= 0.0 ||
         !valid_csr(problem.A_qq, problem.q_dof_count, problem.q_dof_count) ||
         !valid_csr(problem.A_qphi, problem.q_dof_count, problem.phi_dof_count) ||
@@ -2619,7 +3066,12 @@ void write_success_diagnostics(
         "\"requested_execution\":\"production_gpu\","
         "\"resolved_execution\":\"production_gpu\","
         "\"assembly_kind\":\"%s\","
-        "\"demag_kind\":\"periodic_airbox_k0\","
+        "\"test_id\":\"%s\","
+        "\"demag_kind\":\"%s\","
+        "\"boundary_gauge_digest\":\"%s\","
+        "\"periodic_mesh_certificate_schema\":\"%s\","
+        "\"magnetic_pair_count\":%llu,"
+        "\"airbox_pair_count\":%llu,"
         "\"production_implication\":%s,"
         "\"production_shared_domain\":%s,"
         "\"validation_only\":%s,"
@@ -2723,7 +3175,7 @@ void write_success_diagnostics(
             "\"certification_tolerance\":%.17g,"
             "\"certified\":%s},"
         "\"boundary_gauge\":{"
-            "\"magnetostatic_bc\":\"periodic_airbox_k0\","
+            "\"magnetostatic_bc\":\"%s\","
             "\"outer_boundary_kind\":\"%s\","
             "\"robin_beta\":%.17g,"
             "\"robin_beta_unit\":\"1/m\","
@@ -2740,6 +3192,14 @@ void write_success_diagnostics(
         static_cast<unsigned long long>(result.phi_dof_count),
         static_cast<unsigned long long>(result.augmented_dof_count),
         problem.assembly_kind,
+        problem.test_id != nullptr ? problem.test_id : "",
+        problem.demag_kind != nullptr ? problem.demag_kind : "",
+        problem.boundary_gauge_digest != nullptr ? problem.boundary_gauge_digest : "",
+        problem.periodic_mesh_certificate_schema != nullptr
+            ? problem.periodic_mesh_certificate_schema
+            : "",
+        static_cast<unsigned long long>(problem.magnetic_pair_count),
+        static_cast<unsigned long long>(problem.airbox_pair_count),
         production_implication ? "true" : "false",
         problem.production_shared_domain ? "true" : "false",
         validation_only ? "true" : "false",
@@ -2830,6 +3290,7 @@ void write_success_diagnostics(
         result.full_residual_reconstruction_relative_error,
         problem.residual_tolerance,
         result.full_residual_certified ? "true" : "false",
+        problem.demag_kind != nullptr ? problem.demag_kind : "",
         problem.outer_boundary_kind != nullptr ? problem.outer_boundary_kind : "",
         problem.robin_beta,
         problem.gauge_policy != nullptr ? problem.gauge_policy : "",
@@ -3058,10 +3519,24 @@ FrequencyDomainStatus solve_gpu_frequency_window(
         problem.frequency_max_hz - problem.frequency_min_hz;
     const double refinement_spacing =
         window_width / static_cast<double>(refinement_partition_count);
-    const double refinement_first_shift_hz =
-        problem.frequency_min_hz - 0.5 * refinement_spacing;
-    const double refinement_last_shift_hz =
-        problem.frequency_max_hz + 0.5 * refinement_spacing;
+    double refinement_first_shift_hz = 0.0;
+    double refinement_last_shift_hz = 0.0;
+    if (!compute_modal_window_refinement_shift_bounds(
+            problem.frequency_min_hz,
+            problem.frequency_max_hz,
+            refinement_partition_count,
+            &refinement_first_shift_hz,
+            &refinement_last_shift_hz)) {
+        copy_message(
+            out_result->stop_reason,
+            sizeof(out_result->stop_reason),
+            "gpu_frequency_window_refinement_bounds_unrepresentable");
+        return fail(
+            out_result,
+            FrequencyDomainStatus::validation_error,
+            "GPU K0 frequency window cannot represent positive exterior refinement shifts",
+            out_result->stop_reason);
+    }
     const double lower_coverage_margin_hz =
         problem.frequency_min_hz - refinement_first_shift_hz;
     const double upper_coverage_margin_hz =
@@ -3116,11 +3591,14 @@ FrequencyDomainStatus solve_gpu_frequency_window(
                     (static_cast<double>(subwindow_index) + 0.5) *
                         window_width /
                         static_cast<double>(base_subwindow_count)
-                : problem.frequency_min_hz +
-                    (static_cast<double>(subwindow_index) - 0.5) *
-                        refinement_spacing;
-            shifted.frequency_min_hz = 0.0;
-            shifted.frequency_max_hz = 0.0;
+                : modal_window_refinement_shift_hz(
+                    problem.frequency_min_hz,
+                    refinement_spacing,
+                    subwindow_index,
+                    refinement_partition_count,
+                    refinement_first_shift_hz,
+                    refinement_last_shift_hz);
+            shifted.retain_window_discovery_pool = true;
             shifted.requested_mode_count = pass_index == 0u
                 ? problem.requested_mode_count
                 : refined_requested_mode_count;
@@ -3217,7 +3695,25 @@ FrequencyDomainStatus solve_gpu_frequency_window(
                     mode_index == 0u ? "" : ",",
                     in_window_modes[mode_index]->frequency_hz);
             }
-            append_schedule("%s", "]}");
+            const auto &attestation = shifted_result.gpu_execution_attestation;
+            const auto &phases = attestation.host_phase_boundaries;
+            append_schedule(
+                "],\"host_phase_boundaries\":{\"setup_begin_ns\":%llu,"
+                "\"eps_begin_ns\":%llu,\"eps_end_ns\":%llu,"
+                "\"first_export_begin_ns\":%llu,\"last_export_end_ns\":%llu},"
+                "\"native_eps_trace\":{\"complete\":%s,\"flags\":%llu,"
+                "\"phase_coverage\":%llu,\"counter_coverage\":%llu,"
+                "\"observed_activity_records\":%llu}}",
+                static_cast<unsigned long long>(phases.setup_begin_ns),
+                static_cast<unsigned long long>(phases.eps_begin_ns),
+                static_cast<unsigned long long>(phases.eps_end_ns),
+                static_cast<unsigned long long>(phases.first_export_begin_ns),
+                static_cast<unsigned long long>(phases.last_export_end_ns),
+                attestation.native_trace_complete ? "true" : "false",
+                static_cast<unsigned long long>(attestation.native_trace_flags),
+                static_cast<unsigned long long>(attestation.native_trace_phase_coverage),
+                static_cast<unsigned long long>(attestation.native_trace_counter_coverage),
+                static_cast<unsigned long long>(attestation.native_trace_observed_activity_records));
             if (shifted_status != FrequencyDomainStatus::ok) {
                 if (shifted_status == FrequencyDomainStatus::interrupted) {
                     window_interrupted = true;
@@ -3714,6 +4210,23 @@ FrequencyDomainStatus solve_gpu_frequency_window(
         aggregate.hypre_failure_reason,
         sizeof(aggregate.hypre_failure_reason),
         totals.hypre_failure_reason.c_str());
+    // The aggregate inherits problem metadata from the first successful
+    // subsolve. Its timing and activity cannot attest the other shifts.
+    auto &window_attestation = aggregate.gpu_execution_attestation;
+    window_attestation.host_phase_boundaries = {};
+    window_attestation.native_trace_complete = false;
+    window_attestation.native_trace_sha256 = {};
+    window_attestation.native_trace_flags =
+        fullmag::fem::cuda_trace::modal_eps_trace_unavailable;
+    window_attestation.native_trace_phase_coverage = 0u;
+    window_attestation.native_trace_counter_coverage = 0u;
+    window_attestation.native_trace_start_ns = 0u;
+    window_attestation.native_trace_end_ns = 0u;
+    window_attestation.native_trace_observed_activity_records = 0u;
+    window_attestation.native_trace_unavailable_reason =
+        "aggregate_eps_trace_unavailable_see_subwindows";
+    window_attestation.measurement_coverage_flags &=
+        ~static_cast<std::uint64_t>(FULLMAG_FEM_MODAL_GPU_COVERAGE_FULLMAG_HOT_LOOP);
     aggregate.window_subwindow_count =
         base_subwindow_count + refinement_subwindow_count;
     aggregate.window_completed_subwindow_count =
@@ -3904,6 +4417,346 @@ FrequencyDomainStatus solve_gpu_frequency_window(
 
 } // namespace
 
+bool begin_modal_gpu_native_scope_v1(
+    const std::uint8_t *session_context_sha256,
+    std::uint64_t *token) noexcept
+{
+    if (token == nullptr) return false;
+    *token = 0u;
+    if (session_context_sha256 == nullptr || active_modal_gpu_native_scope != nullptr ||
+        std::all_of(
+            session_context_sha256,
+            session_context_sha256 + 32u,
+            [](std::uint8_t byte) { return byte == 0u; })) {
+        return false;
+    }
+    try {
+        auto scope = std::make_unique<ModalGpuNativeScopeState>();
+        scope->token = g_modal_gpu_native_scope_token.fetch_add(
+            1u, std::memory_order_relaxed);
+        if (scope->token == 0u) {
+            scope->token = g_modal_gpu_native_scope_token.fetch_add(
+                1u, std::memory_order_relaxed);
+        }
+        std::copy(
+            session_context_sha256,
+            session_context_sha256 + scope->session_context_sha256.size(),
+            scope->session_context_sha256.begin());
+        *token = scope->token;
+        active_modal_gpu_native_scope = std::move(scope);
+        return true;
+    } catch (...) {
+        return false;
+    }
+}
+
+bool finish_modal_gpu_native_scope_v1(
+    std::uint64_t token,
+    ModalGpuNativeScopeReportV1 *report) noexcept
+{
+    if (report == nullptr) return false;
+    *report = {};
+    ModalGpuNativeScopeState *scope = active_modal_gpu_native_scope.get();
+    if (token == 0u || scope == nullptr || scope->token != token) return false;
+
+    report->scope_completed = true;
+    report->gpu_context_acquired = scope->gpu_context_acquired;
+    report->operator_identity_consistent =
+        scope->operator_key_seen && scope->operator_identity_consistent;
+    report->operator_state_generation = scope->operator_state_generation;
+    report->target_state_generation = scope->target_state_generation;
+    report->operator_reuse_count = scope->operator_reuse_count;
+    report->target_rebuild_count = scope->target_rebuild_count;
+    report->subsolve_count = scope->subsolve_count;
+    if (scope->operator_key_seen && scope->operator_identity_consistent) {
+        report->operator_key_sha256 = scope->operator_key_sha256;
+    }
+    if (scope->target_schedule_valid && scope->subsolve_count > 0u) {
+        (void)digest_builder_to_sha256(
+            scope->target_schedule_digest,
+            &report->target_key_sha256);
+    }
+
+    {
+        const std::lock_guard<std::mutex> lock(
+            fullmag::fem::runtime::petsc_slepc_process_mutex());
+        GpuPersistentContext *cached = cached_gpu_context();
+        if (cached != nullptr && cached->stage_owner_token == token) {
+            if (!destroy_cached_gpu_context_locked()) {
+                fullmag::fem::runtime::mark_petsc_slepc_process_unsafe_locked();
+            } else {
+                report->resources_released = true;
+            }
+        } else {
+            report->resources_released = true;
+        }
+    }
+    if (report->gpu_context_acquired && report->resources_released) {
+        report->session_context_sha256 = scope->session_context_sha256;
+    }
+    active_modal_gpu_native_scope.reset();
+    return report->resources_released;
+}
+
+#if FULLMAG_FEM_CUDSS_SHIFT_ENABLED
+FrequencyDomainStatus solve_poisson_airbox_modal_eigen_gpu_augmented_robin(
+    const PoissonAirboxEigenBlockProblem &problem, double mu0,
+    PoissonAirboxModalEigenResult *result) noexcept
+{
+    if (result == nullptr) {
+        return FrequencyDomainStatus::validation_error;
+    }
+    const auto report_failure = [&](FrequencyDomainStatus status, const char *reason) {
+        result->status = status;
+        std::snprintf(result->error_message, sizeof(result->error_message), "%s", reason);
+        std::snprintf(result->diagnostics_json, sizeof(result->diagnostics_json),
+            "{\"schema_version\":\"frequency_domain_modal_diagnostics.v1\","
+            "\"study_product\":\"modal_eigen\",\"status\":\"%s\",\"complete\":false,"
+            "\"reason\":\"%s\",\"execution_lane\":\"production_gpu\","
+            "\"solver_adapter\":\"%s\",\"fallback_used\":false}",
+            status == FrequencyDomainStatus::interrupted ? "interrupted" : "failed",
+            reason, kAugmentedRobinGpuAdapter);
+        return result->status;
+    };
+    try {
+        const char *failure = nullptr;
+        if (!string_equals(problem.demag_kind, "open_airbox_k0") ||
+            !std::isfinite(mu0) || mu0 <= 0.0 || !validate_problem(problem, result, &failure)) {
+            return report_failure(FrequencyDomainStatus::validation_error,
+                failure != nullptr ? failure : "cudss_robin_problem_invalid");
+        }
+        if (!gpu_operator_scaling(problem, &result->descriptor_mass_norm, &result->descriptor_operator_norm,
+                                  &result->angular_frequency_scale, &result->mass_scale, &result->operator_scale)) {
+            return report_failure(FrequencyDomainStatus::operator_error, "cudss_robin_scaling_invalid");
+        }
+
+        // CUPTI tags are process-wide. Keep the public solve and its CUDA
+        // observations within one native stage even for two API callers.
+        static std::mutex stage_mutex;
+        std::unique_lock<std::mutex> exclusive(stage_mutex, std::defer_lock);
+        while (!exclusive.try_lock()) {
+            if (poisson_airbox_modal_cancel_requested(problem)) {
+                return report_failure(FrequencyDomainStatus::interrupted, "cudss_robin_cancelled");
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        }
+        const auto setup_begin = fullmag::fem::cuda_trace::host_activity_timestamp_ns();
+        const bool is_window = string_equals(problem.target_kind, "frequency_window");
+        const auto solve = is_window ? gpu::solve_open_airbox_augmented_window :
+                                       gpu::solve_open_airbox_augmented_nearest;
+        auto solved = solve(problem, result->operator_scale, result->mass_scale,
+                            result->angular_frequency_scale, mu0, &failure);
+        if (!solved) {
+            return report_failure(
+                poisson_airbox_modal_cancel_requested(problem)
+                    ? FrequencyDomainStatus::interrupted : FrequencyDomainStatus::solve_error,
+                failure != nullptr ? failure : "cudss_robin_solve_failed");
+        }
+
+        auto &evidence = result->gpu_execution_attestation;
+        evidence.operator_kind = FULLMAG_FEM_MODAL_OPERATOR_AUGMENTED_ROBIN_CUDSS_CUDA;
+        evidence.production_shared_domain = true;
+        evidence.operator_dimension = result->augmented_dof_count;
+        evidence.host_phase_boundaries.setup_begin_ns = setup_begin;
+        capture_gpu_device_identity(&evidence);
+        fullmag_fem_runtime_build_info_v2 build_info{};
+        if (fullmag::fem::runtime_build_info_v2(build_info)) {
+            evidence.mfem_version = build_info.mfem_version;
+        }
+
+        int cudss_major = -1, cudss_minor = -1, cudss_patch = -1;
+        const bool library_identified =
+            cudssGetProperty(MAJOR_VERSION, &cudss_major) == CUDSS_STATUS_SUCCESS &&
+            cudssGetProperty(MINOR_VERSION, &cudss_minor) == CUDSS_STATUS_SUCCESS &&
+            cudssGetProperty(PATCH_LEVEL, &cudss_patch) == CUDSS_STATUS_SUCCESS &&
+            cudss_major >= 0 && cudss_minor >= 0 && cudss_patch >= 0;
+        CanonicalDigestBuilder graph("modal_gpu_augmented_robin_device_graph.v1");
+        if (library_identified) {
+            graph.add_u64("cudss_major", static_cast<std::uint64_t>(cudss_major));
+            graph.add_u64("cudss_minor", static_cast<std::uint64_t>(cudss_minor));
+            graph.add_u64("cudss_patch", static_cast<std::uint64_t>(cudss_patch));
+        }
+        graph.add_u64("dimension", evidence.operator_dimension);
+        graph.add_u64("complex_scalar_width", sizeof(std::complex<double>));
+        graph.add_bytes("device_uuid", evidence.device_uuid.data(), evidence.device_uuid.size());
+        bool resources_observed = !solved->subsolves.empty() && library_identified;
+        bool memory_sampled = !solved->subsolves.empty();
+        for (const auto &shift : solved->subsolves) {
+            const auto &observed = shift.measurements;
+            resources_observed = resources_observed && observed.checked_release && observed.qualified_graph_nodes > 0;
+            memory_sampled = memory_sampled && observed.memory_sampled;
+            graph.add_double("shift_hz", shift.shift_hz);
+            graph.add_u64("block_columns", static_cast<std::uint64_t>(shift.block_columns));
+            graph.add_u64("qualified_cuda_graph_nodes", observed.qualified_graph_nodes);
+            evidence.setup_h2d_count += observed.setup_host_upload_count;
+            evidence.setup_h2d_bytes += observed.setup_host_upload_bytes;
+            evidence.export_d2h_count += observed.vector_export_count;
+            evidence.export_d2h_bytes += observed.vector_export_bytes;
+            if (&shift == &solved->subsolves.front()) {
+                evidence.device_memory_baseline_bytes = observed.memory_at_setup_bytes;
+                evidence.host_phase_boundaries.first_export_begin_ns = observed.first_export_ns;
+            }
+            evidence.device_memory_final_bytes = observed.memory_after_release_bytes;
+            evidence.device_memory_peak_bytes = std::max({evidence.device_memory_peak_bytes,
+                observed.memory_at_setup_bytes, observed.memory_before_iteration_bytes, observed.memory_after_release_bytes});
+            evidence.host_phase_boundaries.last_export_end_ns = observed.last_export_ns;
+        }
+        if (resources_observed && digest_builder_to_sha256(graph, &evidence.object_graph_sha256)) {
+            evidence.measurement_coverage_flags |= FULLMAG_FEM_MODAL_GPU_COVERAGE_OBJECT_GRAPH;
+            evidence.device_residency_verified =
+                std::any_of(evidence.device_uuid.begin(), evidence.device_uuid.end(), [](std::uint8_t byte) { return byte != 0u; });
+        }
+        if (resources_observed && memory_sampled && evidence.setup_h2d_count > 0) {
+            evidence.measurement_coverage_flags |= FULLMAG_FEM_MODAL_GPU_COVERAGE_SETUP;
+        }
+        if (resources_observed && evidence.export_d2h_count > 0) {
+            evidence.measurement_coverage_flags |= FULLMAG_FEM_MODAL_GPU_COVERAGE_EXPORT;
+        }
+        const bool trace_bound = gpu::bind_augmented_iteration_trace(*solved, evidence);
+        if (trace_bound) {
+            evidence.host_phase_boundaries.eps_begin_ns = evidence.native_trace_start_ns;
+            evidence.host_phase_boundaries.eps_end_ns = evidence.native_trace_end_ns;
+        } else {
+            evidence.measurement_unavailable_reason = evidence.native_trace_unavailable_reason;
+        }
+
+        // The existing V20 scope binds the actual schedule to the stage's
+        // session digest. This adapter owns one local factor per shift and no
+        // PETSc cached context. Record the scope only after checked teardown.
+        auto *scope = active_modal_gpu_native_scope.get();
+        if (scope != nullptr && resources_observed && evidence.device_residency_verified &&
+            scope->subsolve_count == 0 && !scope->gpu_context_acquired) {
+            CanonicalDigestBuilder op("modal_gpu_augmented_robin_operator_key.v1");
+            op.add_string("mesh_generation_identity", problem.mesh_generation_identity);
+            op.add_string("equilibrium_digest", problem.equilibrium_digest);
+            op.add_string("bias_field_sample_signature", problem.bias_field_sample_signature);
+            op.add_string("boundary_gauge_digest", problem.boundary_gauge_digest);
+            op.add_string("operator_input_digest", problem.operator_input_digest);
+            op.add_double("mu0", mu0);
+            op.add_double("operator_scale", result->operator_scale);
+            op.add_double("mass_scale", result->mass_scale);
+            op.add_u64("magnetic_dofs", problem.q_dof_count);
+            op.add_u64("potential_dofs", problem.phi_dof_count);
+            if (digest_builder_to_sha256(op, &scope->operator_key_sha256)) {
+                scope->target_schedule_digest.add_string("target_kind", problem.target_kind);
+                scope->target_schedule_digest.add_double("target_hz", problem.target_frequency_hz);
+                scope->target_schedule_digest.add_double("lower_hz", problem.frequency_min_hz);
+                scope->target_schedule_digest.add_double("upper_hz", problem.frequency_max_hz);
+                for (const auto &shift : solved->subsolves) {
+                    scope->target_schedule_digest.add_double("interval_lower_hz", shift.lower_hz);
+                    scope->target_schedule_digest.add_double("interval_upper_hz", shift.upper_hz);
+                    scope->target_schedule_digest.add_double("executed_shift_hz", shift.shift_hz);
+                    scope->target_schedule_digest.add_u64("ritz_block_columns", static_cast<std::uint64_t>(shift.block_columns));
+                    ++scope->subsolve_count;
+                }
+                scope->gpu_context_acquired = true;
+                scope->operator_key_seen = true;
+                scope->operator_state_generation = scope->token;
+                scope->target_state_generation = scope->subsolve_count;
+                scope->target_rebuild_count = scope->subsolve_count;
+            }
+        }
+
+        result->accepted_modes = std::move(solved->modes);
+        result->accepted_mode_count = static_cast<std::uint32_t>(result->accepted_modes.size());
+        result->window_complete = is_window && !solved->truncated_by_requested_count;
+        result->positive_frequency_branch_found = !result->accepted_modes.empty();
+        result->full_residual_certified = true;
+        if (!result->accepted_modes.empty()) {
+            const auto &mode = result->accepted_modes.front();
+            result->eigenvalue_real = mode.eigenvalue_real;
+            result->eigenvalue_imag = mode.eigenvalue_imag;
+            result->frequency_hz = mode.frequency_hz;
+            result->omega_rad_s = mode.omega_rad_s;
+            result->magnetic_block_backward_error = mode.magnetic_block_backward_error;
+            result->poisson_block_backward_error = mode.poisson_block_backward_error;
+            result->poisson_constraint_relative_residual = mode.poisson_block_backward_error;
+            if (std::isfinite(problem.expected_reference_frequency_hz) && problem.expected_reference_frequency_hz > 0.0) {
+                result->relative_reference_frequency_error =
+                    std::abs(mode.frequency_hz / problem.expected_reference_frequency_hz - 1.0);
+            }
+        }
+        evidence.eps_iteration_count =
+            static_cast<std::uint64_t>(problem.max_outer_iterations) * solved->subsolves.size();
+        evidence.operator_apply_count = evidence.eps_iteration_count;
+        result->status = FrequencyDomainStatus::ok;
+        const char *spectrum_completeness = !is_window ? "selected_only" :
+            result->window_complete ? "certified_window" : "incomplete_window";
+        std::snprintf(result->diagnostics_json, sizeof(result->diagnostics_json),
+            "{\"schema_version\":\"frequency_domain_modal_diagnostics.v1\",\"study_product\":\"modal_eigen\","
+            "\"status\":\"ok\",\"complete\":true,\"execution_lane\":\"production_gpu\","
+            "\"solver_adapter\":\"%s\",\"engine_id\":\"native_fem.frequency_domain.%s.v1\","
+            "\"solve_succeeded\":true,\"fields_available\":%s,"
+            "\"spectrum_completeness\":\"%s\",\"window_complete\":%s,"
+            "\"demag_kind\":\"open_airbox_k0\","
+            "\"assembly_kind\":\"mfem_weak_form_shared_domain\",\"outer_boundary_kind\":\"poisson_robin\","
+            "\"robin_beta\":%.17g,\"gauge_policy\":\"none\",\"gauge_reason\":\"coercive_outer_boundary\","
+            "\"target_kind\":\"%s\",\"frequency_window_complete\":%s,\"certified_mode_count\":%llu,"
+            "\"accepted_mode_count\":%u,\"truncated_by_requested_count\":%s,"
+            "\"magnetic_block_backward_error\":%.17g,\"poisson_block_backward_error\":%.17g,"
+            "\"gauge_constraint_backward_error\":0,\"residual_tolerance\":%.17g,\"full_residual_certified\":true,"
+            "\"production_solver_available\":true,\"production_native_solver_available\":true,"
+            "\"production_implication\":true,\"production_shared_domain\":true,\"validation_only\":false,"
+            "\"fallback_used\":false,\"cpu_fallback\":\"disabled\","
+            "\"eigensolver_operator_kind\":\"augmented_robin_cudss_cuda\","
+            "\"device_residency_verified\":%s,"
+            "\"gpu_device_resident_modal_eigensolver\":%s,\"persistent_solver_context\":%s,"
+            "\"scalable_selected_spectrum\":true,\"host_ritz_extraction\":false}",
+            kAugmentedRobinGpuAdapter, kAugmentedRobinGpuAdapter,
+            result->positive_frequency_branch_found ? "true" : "false",
+            spectrum_completeness, result->window_complete ? "true" : "false",
+            problem.robin_beta, problem.target_kind, result->window_complete ? "true" : "false",
+            static_cast<unsigned long long>(solved->certified_mode_count), result->accepted_mode_count,
+            solved->truncated_by_requested_count ? "true" : "false", result->magnetic_block_backward_error,
+            result->poisson_block_backward_error, problem.residual_tolerance,
+            evidence.device_residency_verified ? "true" : "false", evidence.device_residency_verified ? "true" : "false",
+            resources_observed ? "true" : "false");
+        if (is_window) {
+            std::ostringstream diagnostics;
+            diagnostics.imbue(std::locale::classic());
+            diagnostics << std::setprecision(std::numeric_limits<double>::max_digits10);
+            const std::string_view base(result->diagnostics_json);
+            diagnostics << base.substr(0, base.size() - 1)
+                << ",\"window_certificate\":{"
+                   "\"schema_version\":\"poisson_airbox_augmented_inertia_window_certificate.v1\","
+                   "\"status\":\"certified\",\"window_complete\":"
+                << (result->window_complete ? "true" : "false")
+                << ",\"requested_min_hz\":" << problem.frequency_min_hz << ",\"requested_max_hz\":" << problem.frequency_max_hz
+                << ",\"negative_at_origin\":" << solved->negative_at_origin
+                << ",\"negative_at_lower\":" << solved->negative_at_lower
+                << ",\"negative_at_upper\":" << solved->negative_at_upper
+                << ",\"certified_count\":" << solved->certified_mode_count
+                << ",\"partition\":[";
+            bool first = true;
+            for (const auto &leaf : solved->certified_intervals) {
+                if (!first) {
+                    diagnostics << ',';
+                }
+                first = false;
+                diagnostics << "{\"lower_hz\":" << leaf.lower_hz << ",\"upper_hz\":" << leaf.upper_hz
+                    << ",\"negative_at_lower\":" << leaf.inertia_below
+                    << ",\"negative_at_upper\":" << leaf.inertia_above
+                    << ",\"accepted_count\":" << leaf.accepted_count << '}';
+            }
+            diagnostics << "]},\"window_completeness\":{\"policy\":\"certified_count\","
+                           "\"certification_method\":\"guarded_hermitian_inertia\",\"status\":"
+                << (solved->truncated_by_requested_count ? "\"truncated_by_requested_count\"" : "\"certified\"")
+                << ",\"certified_modes_in_window\":" << solved->certified_mode_count
+                << ",\"additional_modes_may_exist\":"
+                << (solved->truncated_by_requested_count ? "true" : "false") << "}}";
+            const std::string encoded = diagnostics.str();
+            if (encoded.size() >= sizeof(result->diagnostics_json)) {
+                return report_failure(FrequencyDomainStatus::artifact_error, "cudss_window_certificate_size_exceeded");
+            }
+            std::memcpy(result->diagnostics_json, encoded.c_str(), encoded.size() + 1);
+        }
+        return result->status;
+    } catch (...) {
+        return report_failure(FrequencyDomainStatus::operator_error, "cudss_robin_native_exception");
+    }
+}
+#endif
+
 FrequencyDomainStatus solve_poisson_airbox_modal_eigen_gpu_petsc_slepc(
     const PoissonAirboxEigenBlockProblem &problem,
     PoissonAirboxModalEigenResult *out_result) noexcept
@@ -3949,6 +4802,8 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_gpu_petsc_slepc(
             "GPU K0 PETSc/SLEPc runtime is quarantined after a cleanup failure",
             "petsc_slepc_runtime_unsafe");
     }
+    auto &host_phases = out_result->gpu_execution_attestation.host_phase_boundaries;
+    host_phases.setup_begin_ns = fullmag::fem::cuda_trace::host_activity_timestamp_ns();
     if (!ensure_slepc_initialized(out_result->error_message)) {
         return fail(
             out_result,
@@ -4057,6 +4912,13 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_gpu_petsc_slepc(
             : schur->setup_h2d_transfer_count;
         const PetscInt base = schur->q_count;
         const PetscInt dimension = 2 * base;
+        std::array<std::uint8_t, 32> target_key_sha256{};
+        const bool target_key_available =
+            modal_gpu_target_key_sha256(problem, &target_key_sha256);
+        if (!target_key_available) {
+            out_result->gpu_execution_attestation.measurement_unavailable_reason =
+                "native_actual_target_key_unavailable";
+        }
         const double target_omega =
             2.0 * 3.14159265358979323846264338327950288 * problem.target_frequency_hz;
         double mass_norm = 0.0;
@@ -4085,7 +4947,9 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_gpu_petsc_slepc(
         const PetscInt nev = requested_gpu_nev(problem, dimension);
         bool solver_reused = persistent->solver.ready;
         const bool target_reconfigured = solver_reused &&
-            (persistent->solver.target_omega != target_omega ||
+            (!target_key_available ||
+             persistent->solver.target_key_sha256 != target_key_sha256 ||
+             persistent->solver.target_omega != target_omega ||
              persistent->solver.target_eigenvalue != target_eigenvalue);
         if (solver_reused &&
             (persistent->solver.dimension != dimension ||
@@ -4166,6 +5030,15 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_gpu_petsc_slepc(
         persistent->solver.st_ksp = configured_st_ksp;
         persistent->solver.st_pc = configured_st_pc;
         persistent->solver.basis = configured_basis;
+        PetscInt eps_max_iterations = 0;
+        if (EPSGetTolerances(persistent->solver.eps, nullptr, &eps_max_iterations) != PETSC_SUCCESS) {
+            eps_max_iterations = 0;
+        }
+        persistent->solve_control.callback_problem.max_outer_iterations =
+            gpu_progress_count(eps_max_iterations);
+        persistent->solver.target_key_sha256 = target_key_available
+            ? target_key_sha256
+            : std::array<std::uint8_t, 32>{};
         persistence.solver_context_generation = persistent->solver.generation;
         persistence.solver_context_reused = solver_reused;
         persistence.persistence_verified = false;
@@ -4173,6 +5046,12 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_gpu_petsc_slepc(
         out_result->persistent_context_verified = false;
 
         GpuSolverState &solver = persistent->solver;
+        observe_modal_gpu_native_subsolve(
+            problem,
+            *persistent,
+            target_key_sha256,
+            solver.generation,
+            context_reused);
         shell = solver.shell;
         mass = solver.mass;
         eps = solver.eps;
@@ -4208,11 +5087,107 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_gpu_petsc_slepc(
                 "GPU K0 PETSc error handler installation failed",
                 "gpu_slepc_error_handler_failed");
         }
+        // Prepare the Krylov basis and true-residual workspace before tracing EPSSolve.
+        const PetscErrorCode eps_setup_status = EPSSetUp(eps);
+        if (eps_setup_status != PETSC_SUCCESS) {
+            const PetscErrorCode pop_status = PetscPopErrorHandler();
+            const bool interrupted = persistent->solve_control.cancellation_observed ||
+                poisson_airbox_modal_cancel_requested(problem);
+            out_result->eps_cancellation_observed = interrupted;
+            cleanup();
+            return fail_after_solver_cleanup(
+                out_result,
+                interrupted ? FrequencyDomainStatus::interrupted : FrequencyDomainStatus::solve_error,
+                pop_status != PETSC_SUCCESS
+                    ? "GPU K0 PETSc error handler restoration failed"
+                    : interrupted
+                        ? "GPU K0 SLEPc CUDA setup was cancelled"
+                        : "GPU K0 SLEPc CUDA setup failed before the iteration",
+                pop_status != PETSC_SUCCESS
+                    ? "gpu_slepc_error_handler_failed"
+                    : interrupted ? "cancel_requested" : "gpu_slepc_setup_failed");
+        }
+        fullmag::fem::cuda_trace::PhaseTokenV1 eps_trace_token{};
+        fullmag::fem::cuda_trace::ModalEpsSolveTraceV1 eps_trace{};
+        bool eps_trace_started = false;
+        if (dimension > 0 &&
+            static_cast<std::uint64_t>(dimension) <=
+                std::numeric_limits<std::uint64_t>::max() / sizeof(PetscScalar)) {
+            fullmag::fem::cuda_trace::ModalEpsSolveTraceConfigV1 trace_config{};
+            trace_config.scalar_telemetry_bytes = sizeof(PetscScalar);
+            trace_config.full_vector_bytes =
+                static_cast<std::uint64_t>(dimension) * sizeof(PetscScalar);
+            eps_trace_started =
+                fullmag::fem::cuda_trace::begin_modal_eps_solve_v1(
+                    trace_config,
+                    &eps_trace_token);
+        }
+        host_phases.eps_begin_ns = fullmag::fem::cuda_trace::host_activity_timestamp_ns();
         const PetscErrorCode eps_solve_status =
             std::getenv("FULLMAG_N3_W2_FOCUSED") != nullptr &&
                 std::getenv("FULLMAG_N3_W2_TEST_EPSSOLVE_ERROR") != nullptr
             ? PETSC_ERR_USER
             : EPSSolve(eps);
+        host_phases.eps_end_ns = fullmag::fem::cuda_trace::host_activity_timestamp_ns();
+        const bool eps_trace_completed = eps_trace_started &&
+            fullmag::fem::cuda_trace::end_modal_eps_solve_v1(
+                eps_trace_token,
+                &eps_trace);
+        ModalGpuExecutionAttestation &gpu_attestation =
+            out_result->gpu_execution_attestation;
+        if (eps_trace_started) {
+            gpu_attestation.native_trace_flags = eps_trace.flags;
+            gpu_attestation.native_trace_phase_coverage = eps_trace.phase_coverage;
+            gpu_attestation.native_trace_counter_coverage = eps_trace.counter_coverage;
+            gpu_attestation.native_trace_start_ns = eps_trace.start_ns;
+            gpu_attestation.native_trace_end_ns = eps_trace.end_ns;
+            gpu_attestation.native_trace_observed_activity_records =
+                eps_trace.observed_activity_records;
+        }
+        if (eps_trace_completed &&
+            eps_trace.flags ==
+                fullmag::fem::cuda_trace::modal_eps_trace_complete) {
+            const bool native_trace_digest_decoded = decode_sha256_hex(
+                eps_trace.native_trace_sha256,
+                &gpu_attestation.native_trace_sha256);
+            gpu_attestation.native_trace_complete = native_trace_digest_decoded &&
+                std::any_of(
+                    gpu_attestation.native_trace_sha256.begin(),
+                    gpu_attestation.native_trace_sha256.end(),
+                    [](std::uint8_t byte) { return byte != 0u; });
+            if (gpu_attestation.native_trace_complete) {
+                gpu_attestation.native_trace_kernel_records = eps_trace.kernel_records;
+                gpu_attestation.native_trace_kernel_duration_ns =
+                    eps_trace.kernel_duration_ns;
+                gpu_attestation.native_trace_h2d_count = eps_trace.h2d_count;
+                gpu_attestation.native_trace_h2d_bytes = eps_trace.h2d_bytes;
+                gpu_attestation.native_trace_d2h_count = eps_trace.d2h_count;
+                gpu_attestation.native_trace_d2h_bytes = eps_trace.d2h_bytes;
+                gpu_attestation.native_trace_d2d_count = eps_trace.d2d_count;
+                gpu_attestation.native_trace_d2d_bytes = eps_trace.d2d_bytes;
+                gpu_attestation.native_trace_allocation_count = eps_trace.allocation_count;
+                gpu_attestation.native_trace_allocation_bytes = eps_trace.allocation_bytes;
+                gpu_attestation.native_trace_release_count = eps_trace.release_count;
+                gpu_attestation.native_trace_release_bytes = eps_trace.release_bytes;
+                gpu_attestation.native_trace_host_sync_count = eps_trace.host_sync_count;
+                gpu_attestation.native_trace_host_sync_duration_ns =
+                    eps_trace.host_sync_duration_ns;
+                gpu_attestation.measurement_coverage_flags |=
+                    FULLMAG_FEM_MODAL_GPU_COVERAGE_FULLMAG_HOT_LOOP;
+            } else {
+                gpu_attestation.measurement_unavailable_reason =
+                    "native_eps_trace_digest_missing";
+                gpu_attestation.native_trace_unavailable_reason =
+                    "native_eps_trace_digest_missing";
+            }
+        } else {
+            gpu_attestation.measurement_unavailable_reason = eps_trace_started
+                ? "native_eps_trace_window_incomplete"
+                : "native_eps_trace_capture_unavailable";
+            gpu_attestation.native_trace_unavailable_reason = eps_trace_started
+                ? "native_eps_trace_window_incomplete"
+                : "native_eps_trace_capture_unavailable";
+        }
         const bool solve_interrupted = persistent->solve_control.cancellation_observed ||
             poisson_airbox_modal_cancel_requested(problem);
         if (eps_solve_status != PETSC_SUCCESS) {
@@ -4386,6 +5361,10 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_gpu_petsc_slepc(
         };
         std::vector<Candidate> candidates;
         candidates.reserve(static_cast<std::size_t>(std::max<PetscInt>(0, converged)));
+        const auto in_discovery_window = [&problem](double frequency_hz) {
+            return frequency_hz >= problem.frequency_min_hz &&
+                frequency_hz <= problem.frequency_max_hz;
+        };
         double best_action_residual = std::numeric_limits<double>::infinity();
         double observed_positive_min_hz = std::numeric_limits<double>::infinity();
         double observed_positive_max_hz = 0.0;
@@ -4417,10 +5396,9 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_gpu_petsc_slepc(
                 observed_positive_min_hz, kinematics.frequency_hz);
             observed_positive_max_hz = std::max(
                 observed_positive_max_hz, kinematics.frequency_hz);
-            if (string_equals(problem.target_kind, "frequency_window") &&
-                (kinematics.frequency_hz < problem.frequency_min_hz ||
-                 kinematics.frequency_hz > problem.frequency_max_hz)) {
-                continue;
+            if (problem.retain_window_discovery_pool &&
+                in_discovery_window(kinematics.frequency_hz)) {
+                ++out_result->raw_ritz_in_window_count;
             }
 
             PetscReal action_norm = 0.0;
@@ -4539,6 +5517,22 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_gpu_petsc_slepc(
             return std::abs(left.omega - target_omega) < std::abs(right.omega - target_omega);
         });
 
+        std::size_t publication_limit = problem.requested_mode_count;
+        if (problem.retain_window_discovery_pool) {
+            const auto outside_window = [&](const Candidate &candidate) {
+                return !in_discovery_window(candidate.frequency);
+            };
+            if (std::all_of(candidates.begin(), candidates.end(), outside_window)) {
+                // A guard probe can converge without finding any interior mode.
+                publication_limit = 1u;
+            } else {
+                candidates.erase(
+                    std::remove_if(candidates.begin(), candidates.end(), outside_window),
+                    candidates.end());
+                publication_limit = candidates.size();
+            }
+        }
+
         struct DeviceComplexBasisVector {
             Vec real = nullptr;
             Vec imag = nullptr;
@@ -4576,8 +5570,8 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_gpu_petsc_slepc(
         };
         std::vector<DeviceComplexBasisVector> selected_basis;
         std::vector<Candidate> independent_candidates;
-        selected_basis.reserve(problem.requested_mode_count);
-        independent_candidates.reserve(problem.requested_mode_count);
+        selected_basis.reserve(publication_limit);
+        independent_candidates.reserve(publication_limit);
         for (const Candidate &candidate : candidates) {
             PetscScalar candidate_kr = 0.0;
             PetscScalar candidate_ki = 0.0;
@@ -4669,7 +5663,7 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_gpu_petsc_slepc(
             }
             selected_basis.push_back(std::move(basis));
             independent_candidates.push_back(candidate);
-            if (independent_candidates.size() >= problem.requested_mode_count) {
+            if (independent_candidates.size() >= publication_limit) {
                 break;
             }
         }
@@ -4703,6 +5697,10 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_gpu_petsc_slepc(
             std::vector<double> q_imag;
             std::vector<double> phi_real;
             std::vector<double> phi_imag;
+            if (host_phases.first_export_begin_ns == 0u) {
+                host_phases.first_export_begin_ns =
+                    fullmag::fem::cuda_trace::host_activity_timestamp_ns();
+            }
             if (!copy_cuda_vector_to_host(
                     split->q_real,
                     &q_real,
@@ -4726,6 +5724,8 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_gpu_petsc_slepc(
                     "GPU K0 accepted mode host export failed",
                     "gpu_final_mode_host_export_failed");
             }
+            host_phases.last_export_end_ns =
+                fullmag::fem::cuda_trace::host_activity_timestamp_ns();
             PoissonAirboxModalEigenResult::AcceptedMode mode{};
             mode.eigenpair_index = static_cast<std::uint32_t>(candidate.index);
             mode.eigenvalue_imag = candidate.omega;
@@ -4792,29 +5792,144 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_gpu_petsc_slepc(
         copy_message(out_result->error_message, sizeof(out_result->error_message), "");
         const char *matrix_type = nullptr;
         const char *vector_type = nullptr;
-        const char *basis_type = nullptr;
+        std::array<char, 64> basis_type{};
+        const char *shell_type = nullptr;
+        const char *eps_type = nullptr;
+        const char *st_type = nullptr;
+        const char *ksp_type = nullptr;
+        const char *slepc_bv_type = nullptr;
         const char *poisson_pc_type = nullptr;
         const char *shift_pc_type = nullptr;
+        std::array<char, 64> shell_domain_type{};
+        std::array<char, 64> shell_range_type{};
+        Vec shell_domain = nullptr;
+        Vec shell_range = nullptr;
+        MatGetType(shell, &shell_type);
         MatGetType(mass, &matrix_type);
         VecGetType(xr, &vector_type);
         PC poisson_pc = nullptr;
         KSPGetPC(schur->poisson_ksp, &poisson_pc);
         PCGetType(poisson_pc, &poisson_pc_type);
         PCGetType(st_pc, &shift_pc_type);
+        EPSGetType(eps, &eps_type);
+        if (solver.st != nullptr) STGetType(solver.st, &st_type);
+        if (st_ksp != nullptr) KSPGetType(st_ksp, &ksp_type);
         BV basis = nullptr;
         Vec basis_column = nullptr;
         if (EPSGetBV(eps, &basis) == PETSC_SUCCESS) {
             solver.basis = basis;
+            BVGetType(basis, &slepc_bv_type);
         }
         if (basis != nullptr &&
             BVGetColumn(basis, 0, &basis_column) == PETSC_SUCCESS) {
-            VecGetType(basis_column, &basis_type);
-            BVRestoreColumn(basis, 0, &basis_column);
+            const char *type = nullptr;
+            if (VecGetType(basis_column, &type) == PETSC_SUCCESS) {
+                copy_message(basis_type.data(), basis_type.size(), type);
+            }
+            if (BVRestoreColumn(basis, 0, &basis_column) != PETSC_SUCCESS) {
+                basis_type.fill('\0');
+            }
         }
-        out_result->device_residency_verified =
+        if (MatCreateVecs(shell, &shell_domain, &shell_range) == PETSC_SUCCESS &&
+            shell_domain != nullptr && shell_range != nullptr) {
+            // PETSc owns these type names and frees them with the vectors.
+            const char *domain_type = nullptr;
+            const char *range_type = nullptr;
+            if (VecGetType(shell_domain, &domain_type) == PETSC_SUCCESS &&
+                VecGetType(shell_range, &range_type) == PETSC_SUCCESS) {
+                copy_message(shell_domain_type.data(), shell_domain_type.size(), domain_type);
+                copy_message(shell_range_type.data(), shell_range_type.size(), range_type);
+            }
+        }
+        const bool shell_vectors_released =
+            destroy_petsc_handle_checked(shell_domain, VecDestroy) &&
+            destroy_petsc_handle_checked(shell_range, VecDestroy);
+
+        gpu_attestation.device_residency_verified =
+            shell_vectors_released &&
             string_equals(matrix_type, "seqaijcusparse") &&
             string_equals(vector_type, "seqcuda") &&
-            string_equals(basis_type, "seqcuda");
+            string_equals(basis_type.data(), "seqcuda") &&
+            string_equals(shell_domain_type.data(), "seqcuda") &&
+            string_equals(shell_range_type.data(), "seqcuda");
+        gpu_attestation.production_shared_domain =
+            problem.production_shared_domain &&
+            string_equals(problem.assembly_kind, "mfem_weak_form_shared_domain");
+        gpu_attestation.validation_only = problem.validation_only_adapter;
+        gpu_attestation.operator_kind = materialized_shifted_operator
+            ? FULLMAG_FEM_MODAL_OPERATOR_MATERIALIZED_VALIDATION_CUDA
+            : FULLMAG_FEM_MODAL_OPERATOR_MATRIX_FREE_SCHUR_CUDA;
+        gpu_attestation.hypre_memory_location =
+            out_result->hypre_memory_location_device
+                ? FULLMAG_FEM_MODAL_HYPRE_MEMORY_DEVICE
+                : FULLMAG_FEM_MODAL_HYPRE_MEMORY_UNSPECIFIED;
+        gpu_attestation.hypre_execution_policy =
+            out_result->hypre_execution_policy_device
+                ? FULLMAG_FEM_MODAL_HYPRE_EXEC_DEVICE
+                : FULLMAG_FEM_MODAL_HYPRE_EXEC_UNSPECIFIED;
+        if (shell_type != nullptr) gpu_attestation.matshell_vec_type = shell_domain_type.data();
+        if (matrix_type != nullptr) gpu_attestation.petsc_matrix_type = matrix_type;
+        if (vector_type != nullptr) gpu_attestation.petsc_vec_type = vector_type;
+        if (slepc_bv_type != nullptr) gpu_attestation.slepc_bv_type = slepc_bv_type;
+        if (eps_type != nullptr) gpu_attestation.eps_type = eps_type;
+        if (st_type != nullptr) gpu_attestation.st_type = st_type;
+        if (ksp_type != nullptr) gpu_attestation.ksp_type = ksp_type;
+        if (poisson_pc_type != nullptr) gpu_attestation.poisson_pc_type = poisson_pc_type;
+        if (shift_pc_type != nullptr) gpu_attestation.shift_pc_type = shift_pc_type;
+        gpu_attestation.operator_dimension = static_cast<std::uint64_t>(dimension);
+        gpu_attestation.setup_h2d_count = out_result->setup_h2d_transfer_count;
+        gpu_attestation.operator_apply_count = out_result->operator_apply_count;
+        gpu_attestation.poisson_solve_count = out_result->poisson_solve_count;
+        gpu_attestation.poisson_iteration_count = out_result->poisson_iteration_count;
+        gpu_attestation.eps_iteration_count =
+            static_cast<std::uint64_t>(std::max<PetscInt>(0, iterations));
+        gpu_attestation.eps_converged_reason = static_cast<std::int64_t>(eps_reason);
+        gpu_attestation.export_d2h_count = out_result->final_d2h_transfer_count;
+        gpu_attestation.operator_state_generation =
+            persistence.operator_context_generation;
+        gpu_attestation.target_state_generation = solver.generation;
+        gpu_attestation.operator_reuse_count =
+            persistence.operator_context_reused ? 1u : 0u;
+        gpu_attestation.target_rebuild_count = solver_reused ? 0u : 1u;
+        gpu_attestation.operator_key_sha256 = persistent->operator_key_sha256;
+        gpu_attestation.target_key_sha256 = solver.target_key_sha256;
+        gpu_attestation.last_invalidation_reason =
+            persistence.invalidation_reason != nullptr
+                ? persistence.invalidation_reason
+                : "unavailable";
+        capture_gpu_device_identity(&gpu_attestation);
+        capture_gpu_library_versions(&gpu_attestation);
+        const bool object_graph_measured = gpu_object_graph_digest(
+            current_object_ids,
+            static_cast<std::uint64_t>(dimension),
+            shell_type,
+            matrix_type,
+            vector_type,
+            shell_domain_type.data(),
+            basis_type.data(),
+            slepc_bv_type,
+            eps_type,
+            st_type,
+            ksp_type,
+            poisson_pc_type,
+            shift_pc_type,
+            &gpu_attestation.object_graph_sha256);
+        if (object_graph_measured) {
+            gpu_attestation.measurement_coverage_flags |=
+                FULLMAG_FEM_MODAL_GPU_COVERAGE_OBJECT_GRAPH;
+        }
+        gpu_attestation.measurement_coverage_flags |=
+            FULLMAG_FEM_MODAL_GPU_COVERAGE_SETUP;
+        if (out_result->final_d2h_transfer_count > 0u) {
+            gpu_attestation.measurement_coverage_flags |=
+                FULLMAG_FEM_MODAL_GPU_COVERAGE_EXPORT;
+        }
+        if (gpu_attestation.measurement_unavailable_reason.empty()) {
+            gpu_attestation.measurement_unavailable_reason =
+                "session_scoped_gpu_context_identity_unavailable";
+        }
+        out_result->device_residency_verified =
+            gpu_attestation.device_residency_verified;
         if (!out_result->device_residency_verified) {
             cleanup();
             return fail(
@@ -4828,7 +5943,7 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_gpu_petsc_slepc(
             *out_result,
             matrix_type,
             vector_type,
-            basis_type,
+            basis_type.data(),
             poisson_pc_type,
             shift_pc_type,
             materialized_shifted_operator

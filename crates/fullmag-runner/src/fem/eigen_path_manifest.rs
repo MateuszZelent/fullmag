@@ -148,12 +148,20 @@ pub(super) fn build_eigen_path_frequency_domain_manifest(
     let production_gpu_k0_kittel =
         result.solver_model == crate::eigen::EigenSolverModel::ProductionGpuDenseK0Macrospin;
     let production_periodic_airbox_k0 = periodic_airbox_k0_runtime_supported(plan);
+    let production_open_airbox_k0 = open_airbox_k0_runtime_supported(plan);
     let production_periodic_airbox_gpu =
         production_periodic_airbox_k0 && engine == FemEngine::NativeGpu;
     let production_periodic_airbox_cpu =
         production_periodic_airbox_k0 && engine == FemEngine::CpuNative;
+    let production_open_airbox_gpu =
+        production_open_airbox_k0 && engine == FemEngine::NativeGpu;
+    let production_open_airbox_cpu =
+        production_open_airbox_k0 && engine == FemEngine::CpuNative;
     let production_native_solver =
-        production_shift_invert || production_gpu_k0_kittel || production_periodic_airbox_k0;
+        production_shift_invert
+            || production_gpu_k0_kittel
+            || production_periodic_airbox_k0
+            || production_open_airbox_k0;
     let transport_geometry = crate::fem::eigen_output::modal_tangent_transport_diagnostics(plan);
     let execution_provenance =
         eigen_path_sample_execution_provenance(result, Some(&transport_geometry));
@@ -169,7 +177,10 @@ pub(super) fn build_eigen_path_frequency_domain_manifest(
         eigen_path_nested_string(native_diagnostics, "requested_execution", "solver_method")
             .or_else(|| {
                 (!execution_provenance.requested_solver_method_present).then(|| {
-                    if production_periodic_airbox_k0 || production_shift_invert {
+                    if production_periodic_airbox_k0
+                        || production_open_airbox_k0
+                        || production_shift_invert
+                    {
                         "targeted_spectrum".to_string()
                     } else {
                         "auto".to_string()
@@ -324,7 +335,7 @@ pub(super) fn build_eigen_path_frequency_domain_manifest(
             "ui_mode": "auto",
             "operator": "linearized_llg",
             "solver_family": "modal_eigen",
-            "solve_equation": if production_periodic_airbox_k0 { "L_eff q = lambda B_qq q; phi(q) = -P^-1 A_phiq q" } else if production_native_solver { "A q = lambda B q; lambda = i omega" } else { "K u = lambda M u; omega_rad_s = gamma0 * max(lambda, 0)" },
+            "solve_equation": if production_periodic_airbox_k0 || production_open_airbox_k0 { "L_eff q = lambda B_qq q; phi(q) = -P^-1 A_phiq q" } else if production_native_solver { "A q = lambda B q; lambda = i omega" } else { "K u = lambda M u; omega_rad_s = gamma0 * max(lambda, 0)" },
             "include_demag": plan.operator.include_demag,
             "damping_policy": format!("{:?}", plan.damping_policy).to_lowercase(),
             "equilibrium_source": format!("{:?}", plan.equilibrium).to_lowercase(),
@@ -436,9 +447,14 @@ pub(super) fn build_eigen_path_frequency_domain_manifest(
             "production_native_solver_available": production_native_solver,
             "validation_artifact": !production_native_solver && engine == FemEngine::CpuNative,
             "dispersion": eigen_path_dispersion_capabilities(
-                production_shift_invert || production_periodic_airbox_cpu,
-                production_gpu_k0_kittel || production_periodic_airbox_gpu,
+                production_shift_invert
+                    || production_periodic_airbox_cpu
+                    || production_open_airbox_cpu,
+                production_gpu_k0_kittel
+                    || production_periodic_airbox_gpu
+                    || production_open_airbox_gpu,
                 production_periodic_airbox_k0,
+                production_open_airbox_k0,
             ),
         },
     });
@@ -883,17 +899,22 @@ pub(super) fn eigen_path_dispersion_capabilities(
     production_shift_invert: bool,
     production_gpu: bool,
     production_periodic_airbox_k0: bool,
+    production_open_airbox_k0: bool,
 ) -> serde_json::Value {
     let reference_reason =
         "reference/MVP FEM modal k-path dispersion emits spectrum, branches, dispersion.csv, and mode-field artifacts on the CPU reference lane";
-    let production_cpu_reason = if production_periodic_airbox_k0 && production_shift_invert {
+    let production_cpu_reason = if production_open_airbox_k0 && production_shift_invert {
+        "managed native CPU open-airbox K0 selected-spectrum lane uses the certified no-seam identity classes and exterior Robin boundary"
+    } else if production_periodic_airbox_k0 && production_shift_invert {
         "managed native CPU K0 periodic-airbox selected-spectrum lane is executable for the bounded K0-3 field-sweep scope"
     } else if production_shift_invert {
         "managed native CPU selected-spectrum no-demag Full2x2 Floquet k-path dispersion is executable for the labelled Bloch/Floquet tangent payload slice; dynamic demag-k, broader sparse/matrix-free validation, and production GPU remain gated"
     } else {
         "native CPU selected-spectrum modal k-path is not the resolved lane for this artifact; production evidence must come from the managed selected-spectrum gate"
     };
-    let production_gpu_reason = if production_periodic_airbox_k0 && production_gpu {
+    let production_gpu_reason = if production_open_airbox_k0 && production_gpu {
+        "managed native GPU open-airbox K0 selected-spectrum lane uses the device-resident Arnoldi shift-invert engine and the certified exterior Robin identity"
+    } else if production_periodic_airbox_k0 && production_gpu {
         "managed native GPU K0 periodic-airbox modal lane uses the device-resident Arnoldi shift-invert engine; executed-device physics and parity qualification remain evidence-gated"
     } else if production_gpu {
         "managed native GPU K0 no-demag macrospin/Kittel modal slice is executable through cuSolverDN dense generalized solve; nonzero-k Floquet, demag-k, and broad sparse/matrix-free GPU modal eigensolve remain gated"
@@ -917,6 +938,26 @@ pub(super) fn eigen_path_dispersion_capabilities(
         "k_path": eigen_path_capability("reference_executable", "runner FEM eigen path emits dispersion.csv"),
         "branch_tracking": eigen_path_capability("reference_executable", "runner FEM eigen path emits branches.v2 artifacts"),
     })
+}
+
+#[cfg(test)]
+mod open_airbox_path_tests {
+    use super::eigen_path_dispersion_capabilities;
+
+    #[test]
+    fn open_airbox_path_capability_does_not_claim_periodic_validation() {
+        let capabilities = eigen_path_dispersion_capabilities(true, true, false, true);
+        let cpu_reason = capabilities["production_cpu"]["reason"]
+            .as_str()
+            .expect("CPU capability reason must be text");
+        let gpu_reason = capabilities["production_gpu"]["reason"]
+            .as_str()
+            .expect("GPU capability reason must be text");
+        assert!(cpu_reason.contains("open-airbox K0"));
+        assert!(gpu_reason.contains("open-airbox K0"));
+        assert!(!cpu_reason.contains("periodic-airbox"));
+        assert!(!gpu_reason.contains("periodic-airbox"));
+    }
 }
 
 pub(super) fn eigen_path_mode_field_storage_format(

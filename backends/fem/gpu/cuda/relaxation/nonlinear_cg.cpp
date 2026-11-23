@@ -1341,6 +1341,7 @@ int gpu_relax_nonlinear_cg_step(
             error = reason;
             return FULLMAG_FEM_ERR_INTERNAL;
         }
+        gpu_rk_note_completed_final_reductions(ctx);
         out_stats.max_rhs_amplitude = 0.0;
         return FULLMAG_FEM_OK;
     }

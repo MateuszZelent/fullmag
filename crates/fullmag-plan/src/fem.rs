@@ -5779,9 +5779,8 @@ fn validate_open_airbox_k0_plan_inputs(
     }
 }
 
-/// CPU-only resolution for `open_airbox_k0`. The GPU modal lane requires the
-/// periodic v6 certificate, so an explicit GPU request fails without fallback
-/// and `auto` resolves to CPU with a visible selection reason.
+/// Keep auto on the CPU and route an explicit GPU request to modal Krylov.
+/// Both devices solve the same open-domain Robin problem.
 fn resolve_open_airbox_k0_execution(
     problem: &ProblemIR,
 ) -> Result<FemEigenExecutionResolutionIR, PlanError> {
@@ -5808,29 +5807,99 @@ fn resolve_open_airbox_k0_execution(
             .and_then(serde_json::Value::as_str),
         "runtime_selection",
     )?;
-    let selection_reason = match requested_device {
-        fullmag_ir::ExecutionDevice::Cpu => "fem_eigen.open_airbox_k0.explicit_cpu",
-        fullmag_ir::ExecutionDevice::Gpu => {
-            return Err(PlanError {
-                reasons: vec![
-                    "fem_eigen.open_airbox_k0_gpu_unavailable: the GPU modal lane requires a periodic v6 mesh certificate; request device='cpu' for this stage; fallback=none"
-                        .to_string(),
-                ],
-            });
-        }
-        fullmag_ir::ExecutionDevice::Auto => "fem_eigen.open_airbox_k0.auto_cpu_only_lane",
+    use fullmag_ir::ExecutionDevice;
+    let (resolved_device, resolved_engine, selection_reason) = match requested_device {
+        ExecutionDevice::Cpu => (
+            ExecutionDevice::Cpu,
+            FemEigenEngineIR::K0PoissonAirboxCpuSchurSlepc,
+            "fem_eigen.open_airbox_k0.explicit_cpu",
+        ),
+        ExecutionDevice::Gpu => (
+            ExecutionDevice::Gpu,
+            FemEigenEngineIR::GpuModalDeviceKrylov,
+            "fem_eigen.open_airbox_k0.explicit_gpu",
+        ),
+        ExecutionDevice::Auto => (
+            ExecutionDevice::Cpu,
+            FemEigenEngineIR::K0PoissonAirboxCpuSchurSlepc,
+            "fem_eigen.open_airbox_k0.auto_default_cpu",
+        ),
     };
     Ok(FemEigenExecutionResolutionIR {
         requested_device,
-        resolved_device: fullmag_ir::ExecutionDevice::Cpu,
+        resolved_device,
         requested_precision: problem.backend_policy.execution_precision,
         resolved_precision: ExecutionPrecision::Double,
         requested_engine: FemEigenEngineIR::Auto,
-        resolved_engine: FemEigenEngineIR::K0PoissonAirboxCpuSchurSlepc,
+        resolved_engine,
         fallback_used: false,
         fallback_reason: None,
         selection_reason: selection_reason.to_string(),
     })
+}
+
+#[cfg(test)]
+mod open_airbox_modal_execution_tests {
+    use super::*;
+    use fullmag_ir::{ExecutionDevice, ExecutionMode};
+
+    #[test]
+    fn selects_explicit_gpu_and_preserves_cpu_default() {
+        let mut problem = ProblemIR::bootstrap_example();
+        problem.validation_profile.execution_mode = ExecutionMode::Strict;
+        problem.backend_policy.execution_precision = ExecutionPrecision::Double;
+
+        for (requested, expected_device, expected_engine, reason) in [
+            (
+                "gpu",
+                ExecutionDevice::Gpu,
+                FemEigenEngineIR::GpuModalDeviceKrylov,
+                "fem_eigen.open_airbox_k0.explicit_gpu",
+            ),
+            (
+                "cpu",
+                ExecutionDevice::Cpu,
+                FemEigenEngineIR::K0PoissonAirboxCpuSchurSlepc,
+                "fem_eigen.open_airbox_k0.explicit_cpu",
+            ),
+            (
+                "auto",
+                ExecutionDevice::Cpu,
+                FemEigenEngineIR::K0PoissonAirboxCpuSchurSlepc,
+                "fem_eigen.open_airbox_k0.auto_default_cpu",
+            ),
+        ] {
+            problem.problem_meta.runtime_metadata.insert(
+                "runtime_selection".into(),
+                serde_json::json!({ "device": requested }),
+            );
+            let resolution = resolve_open_airbox_k0_execution(&problem).unwrap();
+            assert_eq!(resolution.resolved_device, expected_device);
+            assert_eq!(resolution.resolved_engine, expected_engine);
+            assert_eq!(resolution.resolved_precision, ExecutionPrecision::Double);
+            assert_eq!(resolution.selection_reason, reason);
+            assert!(!resolution.fallback_used);
+            assert!(resolution.fallback_reason.is_none());
+        }
+    }
+
+    #[test]
+    fn explicit_gpu_rejects_unsupported_mode_and_precision() {
+        let mut problem = ProblemIR::bootstrap_example();
+        problem.problem_meta.runtime_metadata.insert(
+            "runtime_selection".into(),
+            serde_json::json!({ "device": "gpu" }),
+        );
+        problem.validation_profile.execution_mode = ExecutionMode::Extended;
+        problem.backend_policy.execution_precision = ExecutionPrecision::Double;
+        let error = resolve_open_airbox_k0_execution(&problem).unwrap_err();
+        assert!(error.reasons[0].contains("open_airbox_k0_requires_strict_execution_mode"));
+
+        problem.validation_profile.execution_mode = ExecutionMode::Strict;
+        problem.backend_policy.execution_precision = ExecutionPrecision::Single;
+        let error = resolve_open_airbox_k0_execution(&problem).unwrap_err();
+        assert!(error.reasons[0].contains("open_airbox_k0_requires_double_precision"));
+    }
 }
 
 pub(crate) fn plan_fem_eigen(

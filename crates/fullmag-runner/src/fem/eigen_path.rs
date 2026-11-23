@@ -3958,10 +3958,15 @@ pub(crate) fn execute_fem_eigen_path_with_producer_identity_and_parallel_policy(
         })
     };
     path_result.k0_kittel_periodic_airbox_demag = adapter.periodic_airbox_k0_metrics.into_inner();
-    if path_result.k0_kittel_periodic_airbox_demag.is_some() && engine == FemEngine::CpuNative {
+    let open_airbox_k0_runtime = open_airbox_k0_runtime_supported(plan);
+    if (path_result.k0_kittel_periodic_airbox_demag.is_some() || open_airbox_k0_runtime)
+        && engine == FemEngine::CpuNative
+    {
         path_result.solver_model = crate::eigen::EigenSolverModel::ProductionCpuShiftInvert;
     }
-    if periodic_airbox_k0_runtime_supported(plan) && engine == FemEngine::NativeGpu {
+    if (periodic_airbox_k0_runtime_supported(plan) || open_airbox_k0_runtime)
+        && engine == FemEngine::NativeGpu
+    {
         path_result.solver_model = crate::eigen::EigenSolverModel::ProductionGpuModalDeviceKrylov;
     }
     let selection = if pool_interruption.is_some() || direct_interruption.is_some() {

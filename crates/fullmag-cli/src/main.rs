@@ -23,6 +23,7 @@ mod formatting;
 mod interactive_runtime_host;
 mod live_publisher_diagnostics;
 mod live_workspace;
+mod modal_cuda_trace;
 mod nvtx_range;
 mod orchestrator;
 mod python_bridge;
@@ -61,7 +62,18 @@ fn main() -> Result<()> {
         let script_mode = std::thread::Builder::new()
             .name("fullmag-script-mode".to_string())
             .stack_size(SCRIPT_MODE_STACK_SIZE_BYTES)
-            .spawn(move || script_launch::run_script_entry(raw_args))
+            .spawn(move || {
+                let outcome = script_launch::run_script_entry(raw_args);
+                #[cfg(feature = "fem-gpu")]
+                if let Err(status) = fullmag_runner::finalize_native_fem_gpu_modal_runtime() {
+                    let error = anyhow!("failed to finalize the FEM GPU modal runtime (status {status})");
+                    if outcome.0.is_ok() {
+                        return (Err(error), None);
+                    }
+                    eprintln!("Error: {error:#}");
+                }
+                outcome
+            })
             .context("failed to spawn script-mode worker")?;
         let (result, exit_code) = script_mode
             .join()

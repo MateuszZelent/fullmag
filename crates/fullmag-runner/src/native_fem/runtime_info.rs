@@ -459,6 +459,13 @@ impl NativeFemGpuExecutionReceipt {
         };
         let mut accounting = self.into_provenance(requested);
         accounting.integrator = "not_used".into();
+        let field_operator_mask = accounting.required_operator_mask & !mask;
+        if accounting.accepted_step_count == 0
+            && field_operator_mask != 0
+            && accounting.executed_device_operator_mask == field_operator_mask
+        {
+            accounting.executed = "cuda_fem_initial_equilibrium".into();
+        }
         Ok(FemGpuMinimizerExecutionReceipt {
             schema_version: "fullmag.fem.gpu.minimizer-execution-receipt.v1".into(),
             algorithm: algorithm.into(),

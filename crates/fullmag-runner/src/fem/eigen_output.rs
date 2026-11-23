@@ -1989,6 +1989,7 @@ fn production_k0_publication_adapter(adapter: Option<&str>) -> bool {
             | Some("k0_poisson_airbox_cpu_schur_slepc")
             | Some("k0_poisson_airbox_gpu_petsc_slepc")
             | Some("k0_poisson_airbox_gpu_modal_device_krylov")
+            | Some("k0_poisson_airbox_gpu_augmented_cudss")
     )
 }
 

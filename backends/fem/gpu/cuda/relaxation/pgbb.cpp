@@ -705,6 +705,7 @@ int gpu_relax_projected_gradient_bb_step(
             error = reason;
             return FULLMAG_FEM_ERR_INTERNAL;
         }
+        gpu_rk_note_completed_final_reductions(ctx);
         out_stats.step = ctx.state.step_count;
         out_stats.time_seconds = 0.0;
         out_stats.dt_seconds = 0.0;

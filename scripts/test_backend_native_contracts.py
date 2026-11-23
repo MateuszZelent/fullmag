@@ -180,6 +180,21 @@ class BackendNativeContractsTests(unittest.TestCase):
         self._assert_performance_contract_binding(
             "fem-cuda-bb-exchange-mass", "fem_cuda_bb_exchange_mass_contract")
 
+    def test_gpu_modal_adapter_scale_runs_the_focused_device_contract(self):
+        name = "fem-k0-modal-gpu-adapter-scale"
+        binary = self.build_fem / "fem_gpu_k0_modal_petsc_slepc_contract"
+        binary.write_bytes(b"focused CUDA modal contract")
+        runner, calls = self._runner(outcomes=[0, 0])
+        with runner:
+            self._prepare([name])
+            report = self._run_prepared([name])
+        self.assertEqual(calls[0][0][4], binary.name)
+        self.assertEqual(calls[1][0], [str(binary)])
+        self.assertEqual(calls[1][1]["env"]["FULLMAG_GPU_PRODUCTION_SCALE_FOCUSED"], "1")
+        self.assertTrue(receipt_satisfies(
+            report, requested=[name], source_snapshot_sha256=SNAPSHOT,
+            package_root=self.package_root))
+
     def test_combined_contract_request_is_refused_before_any_command(self):
         runner, calls = self._runner()
         with runner, self.assertRaises(ValueError):

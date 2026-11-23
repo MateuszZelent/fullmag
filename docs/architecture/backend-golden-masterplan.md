@@ -616,6 +616,16 @@ oraz hostowego dot/norm/axpy, Arnoldi/Hessenberg i preconditioner state. Custom
 Krylov może powstać dopiero po zapisanym benchmarku/profilerze pokazującym, że
 stos PETSc/SLEPc/hypre/libCEED nie spełnia kontraktu.
 
+Dla modalnego $k=0$ w otwartym airboxie Robin pełny rzadki deskryptor
+rozwiązuje adapter CUDA cuDSS. Każde przesunięcie ma własną faktoryzację
+przechowywaną przez iterację blokową. Graf CUDA wielokrotnie rozwiązuje
+układ z tym samym przesunięciem. cuSPARSE stosuje macierz żyrotropową,
+cuSOLVER wykonuje faktoryzację QR, a projekcja i kontrola residuów
+oryginalnych bloków odbywają się na GPU. Guardy inercji wyznaczają liczność
+całego okna przed publikacją profili. Zakres i poświadczenie opisuje
+[ADR 0084](../adr/0084-accepted-fem-eigenmodes.md).
+
+
 `gpu_operator_host_krylov` pozostaje uczciwą osobną nazwą: operator może być
 CUDA, ale vectors, Krylov state, orthogonalization, residual control i redukcje
 są hostowe. Nie wolno raportować go jako `gpu_device_krylov`.

@@ -3,6 +3,7 @@ use crate::types::{LiveParallelExecutionTelemetry, StepAction};
 #[derive(Debug, Clone, Default)]
 pub(crate) struct FemEigenLinearProgress {
     pub linear_iteration: u64,
+    pub max_linear_iterations: Option<u64>,
     pub linear_residual_norm: Option<f64>,
     pub linear_solver_role: &'static str,
     pub linear_ksp_type: Option<&'static str>,
@@ -130,6 +131,7 @@ pub(super) fn native_modal_progress_event(
                     .get("linear_ksp_type")
                     .and_then(serde_json::Value::as_str)
                     .and_then(|ksp_type| match ksp_type {
+                        "cg" => Some("cg"),
                         "gmres" => Some("gmres"),
                         "fgmres" => Some("fgmres"),
                         "preonly" => Some("preonly"),
@@ -137,6 +139,10 @@ pub(super) fn native_modal_progress_event(
                     });
                 Some(FemEigenLinearProgress {
                     linear_iteration,
+                    max_linear_iterations: object
+                        .get("max_linear_iterations")
+                        .and_then(serde_json::Value::as_u64)
+                        .filter(|limit| *limit > 0),
                     linear_residual_norm,
                     linear_solver_role,
                     linear_ksp_type,
@@ -343,6 +349,33 @@ mod tests {
         assert_eq!(linear.linear_residual_norm, Some(4.5e-8));
         assert_eq!(linear.linear_solver_role, "shift_invert");
         assert_eq!(linear.linear_ksp_type, Some("fgmres"));
+    }
+
+    #[test]
+    fn native_gpu_poisson_progress_keeps_actual_cg_iteration_limit() {
+        let event = native_modal_progress_event(
+            r#"{
+                "solver_phase":"solving_shift_invert",
+                "outer_iteration":null,
+                "residual_source":"ksp_norm",
+                "linear_iteration":37,
+                "max_linear_iterations":256,
+                "linear_residual_norm":1.2e-9,
+                "linear_solver_role":"poisson",
+                "linear_ksp_type":"cg"
+            }"#,
+            "gpu_modal_device_krylov",
+            625,
+            1250,
+            1,
+        )
+        .expect("valid CUDA Poisson KSP progress");
+        assert_eq!(event.iteration, None);
+        assert_eq!(event.residual, None);
+        let linear = event.linear_solve.expect("typed CUDA KSP progress");
+        assert_eq!(linear.linear_iteration, 37);
+        assert_eq!(linear.max_linear_iterations, Some(256));
+        assert_eq!(linear.linear_ksp_type, Some("cg"));
     }
 
     #[test]

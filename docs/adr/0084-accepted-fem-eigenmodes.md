@@ -48,6 +48,32 @@ Wzorem [ADR 0082](0082-accepted-fem-driven-response.md) wprowadzamy pełny, typo
    - Rozróżniamy `requested` i `resolved` backend/device/engine; wymuszone GPU nie dostaje CPU lease ani cichego fallbacku.
    - Dla modeli okresowych K0/Floquet etap poprzedzającej relaksacji FEM pozostaje zablokowany w `accepted_fem_study_worker.rs:598-607` do czasu wyeksportowania atestacji `FemStaticPbcLane` (albo użycia już certyfikowanego wejścia równowagi z CAS) — nie znosimy tej strażnicy bez dowodu native PBC.
 
+## Poświadczenie adaptera CUDA dla otwartego airboxa Robin
+
+Dla FEM GPU FP64, niedyssypatywnego dokładnego $k=0$ i otwartego airboxa Robin
+rozszerzony układ rzadki cuDSS jest osobną realizacją tego samego problemu
+modalnego. Dobór urządzenia, certyfikat równowagi i typowane wektory modów
+pozostają w istniejącym Python DSL, ProblemIR i artefakcie częstotliwościowym.
+Rozwiązany adapter `k0_poisson_airbox_gpu_augmented_cudss` obowiązuje
+wyłącznie dla tego typu granicy. Zażądany tryb GPU nie dopuszcza wykonania
+na CPU. Istniejący wariant Schura PETSc/SLEPc zachowuje własną tożsamość.
+
+Wynik V20 odróżnia realizacje po typie operatora. Dla cuDSS wymagane są
+rzeczywiste identyfikatory urządzenia, pakietu, operatora i harmonogramu
+przesunięć oraz poświadczenie wejść i śladu iteracji. Pola opisujące
+PETSc/SLEPc i politykę hypre są nieużywane. Runner odrzuca niespójność
+między typem operatora, nazwą adaptera i granicą z planu. Nadal obowiązuje
+bramka zerowych transferów obliczeniowych i alokacji w iteracji. Zliczanie
+na krańcach należy do przygotowania, a zapis wybranych wektorów do eksportu.
+Przechodzenie przez okno może obejmować więcej modów niż żądany limit
+zapisanych wektorów. Diagnostyka informuje oddzielnie o obu licznościach.
+
+Przed włączeniem publicznego dispatchu wymagany jest test natywnego zakresu
+życia zasobów i pomiar CUPTI pełnej iteracji w grupie Docker DEV. Próba
+z checkpointu 8006 sprawdza pełną liczność okna i pierwsze dziesięć modów.
+Kampania Kittela używa tych samych danych wejściowych w parze CPU/GPU
+dla każdego zagęszczenia siatki i rozmiaru airboxa.
+
 ## Obowiązki i weryfikacja
 
 - Wdrożenie wymaga osobnej aktualizacji istniejących testów źródłowych i kontraktowych blokujących `FemEigen` (pełna lista w [sekcji 9 specyfikacji](../specs/accepted-fem-eigenmodes-v1.md#9-testy-blokujące-obecne-zachowanie-i-plan-ich-aktualizacji)) bez osłabiania ich ochrony dla nieobsługiwanych kroków i nieprawidłowych portów.
