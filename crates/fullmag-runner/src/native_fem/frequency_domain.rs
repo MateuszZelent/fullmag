@@ -3444,7 +3444,7 @@ pub(crate) fn measured_modal_gpu_attestation_fixture() -> NativeModalGpuAttestat
     }
 }
 
-#[cfg(any(feature = "fem-gpu", test))]
+#[cfg(any(feature = "fem-native", feature = "fem-gpu", test))]
 fn append_modal_gpu_failure_context(
     error: &mut String,
     native_status: NativeFrequencyDomainStatus,
