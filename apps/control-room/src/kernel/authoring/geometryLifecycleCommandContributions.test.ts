@@ -2015,7 +2015,7 @@ describe("geometry lifecycle command contributions", () => {
     expect(submit).toHaveBeenCalledOnce();
   });
 
-  it("observes an FDM grid refresh through its terminal command and invalidates the published grid", async () => {
+  it("observes FDM grid publication at the mesh revision already assigned to the sizing edit", async () => {
     const bus = new EventBus<KernelEventMap>();
     const resources = new ResourceInvalidationController(bus);
     const submit = vi.fn(async () => ({ accepted: true, command_id: "cmd-fdm-grid" }));
@@ -2033,18 +2033,21 @@ describe("geometry lifecycle command contributions", () => {
       api: { commands: { submit, detail } } as never,
       bus,
       resources,
+      resourceData: {
+        [SESSION_STATUS_RESOURCE_KEY]: { resources: { mesh_revision: 14 } },
+      },
       source: "test",
     };
 
     await expect(runFdmGridRefreshOperation(context, {
       kind: "fdm_grid_refresh",
       reason: "test_policy_commit",
-      precondition: { scene_revision: 9 },
+      precondition: { scene_revision: 9, mesh_revision: 14 },
     })).resolves.toEqual({ commandId: "cmd-fdm-grid", status: "completed" });
     expect(submit).toHaveBeenCalledWith({
       client_intent_id: expect.stringMatching(/^fdm-grid-refresh-/),
       kind: "fdm_grid_refresh",
-      precondition: { scene_revision: 9 },
+      precondition: { scene_revision: 9, mesh_revision: 14 },
       reason: "test_policy_commit",
     });
     expect(resources.getRevision(MESHING_SHARED_DOMAIN_MANIFEST_PATH)).toBe(14);
