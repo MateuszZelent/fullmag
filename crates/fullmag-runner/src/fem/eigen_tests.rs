@@ -10328,8 +10328,13 @@ fn native_modal_artifact_limitations_follow_executed_operator_payload() {
     let open_gpu_diagnostics = |window_complete, spectrum_completeness| {
         serde_json::json!({
             "solver_adapter": "k0_poisson_airbox_gpu_augmented_cudss",
+            "engine_id": "native_fem.frequency_domain.k0_poisson_airbox_gpu_augmented_cudss.v1",
             "demag_kind": "open_airbox_k0",
             "execution_lane": "production_gpu",
+            "solve_succeeded": true,
+            "fields_available": false,
+            "equilibrium_artifact_sha256": format!("sha256:{}", "1".repeat(64)),
+            "source_mesh_topology_sha256": plan.mesh.mixed_topology_fingerprint_v3().unwrap(),
             "window_complete": window_complete,
             "spectrum_completeness": spectrum_completeness,
         })
