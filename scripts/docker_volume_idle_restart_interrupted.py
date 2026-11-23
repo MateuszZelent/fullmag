@@ -45,9 +45,11 @@ def validate_restart(receipt, previous, drain, *, token, project, volume, source
                 and started > original_start,
                 "Both restarted service incarnations must be durably pinned")
     process = drain.get("process_receipt", {})
+    # The native runtime writes sorted compact JSON with ASCII escapes and a trailing newline.
+    process_raw = (json.dumps(process, sort_keys=True, separators=(",", ":")) + "\n").encode()
     require(drain.get("schema") == "fullmag.docker-idle-restart-drain.v1"
             and drain.get("backend_container_id") == receipt["backend_container"]
-            and SHA.fullmatch(drain.get("process_receipt_sha256", ""))
+            and drain.get("process_receipt_sha256") == digest(process_raw)
             and process.get("schema") == "fullmag.docker-process-tree.v1"
             and process.get("state") == "drained" and process.get("api_exit_code") in (0, -15)
             and process.get("terminal_service_owner", {}).get("state") == "drained",

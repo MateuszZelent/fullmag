@@ -1,4 +1,6 @@
 import copy
+import hashlib
+import json
 import unittest
 
 from docker_build_control import BuildControlError
@@ -34,6 +36,8 @@ class InterruptedIdleRestartTests(unittest.TestCase):
                 "terminal_service_owner": {"state": "drained"},
             },
         }
+        raw = (json.dumps(self.drain["process_receipt"], sort_keys=True, separators=(",", ":")) + "\n").encode()
+        self.drain["process_receipt_sha256"] = hashlib.sha256(raw).hexdigest()
 
     def test_requires_original_graceful_drain_and_two_new_service_incarnations(self):
         validate_restart(self.receipt, self.previous, self.drain, **self.scope)
@@ -45,10 +49,11 @@ class InterruptedIdleRestartTests(unittest.TestCase):
         }.items():
             with self.subTest(key=key), self.assertRaises(BuildControlError):
                 validate_restart({**self.receipt, key: value}, self.previous, self.drain, **self.scope)
-        drain = copy.deepcopy(self.drain)
-        drain["process_receipt"]["terminal_service_owner"]["state"] = "ready"
-        with self.assertRaises(BuildControlError):
-            validate_restart(self.receipt, self.previous, drain, **self.scope)
+        for field, value in (("api_exit_code", 1), ("api_pid", 42)):
+            drain = copy.deepcopy(self.drain)
+            drain["process_receipt"][field] = value
+            with self.subTest(field=field), self.assertRaises(BuildControlError):
+                validate_restart(self.receipt, self.previous, drain, **self.scope)
 
     def test_interruption_may_publish_failure_but_cannot_replace_verified_success(self):
         class Control:
