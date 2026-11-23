@@ -41,6 +41,33 @@ fn validate_grid(cells: [u32; 3]) -> Result<(), &'static str> {
     Ok(())
 }
 
+// An edited scene can retire its held RunIntent after publishing a qualified M0.
+// That display is still authored input even when the historical run is terminal.
+pub(crate) fn uses_prepared_field_input(snapshot: &SessionStateResponse) -> bool {
+    use crate::types::RuntimeLifecycleState;
+
+    snapshot.run.as_ref().is_none_or(|run| {
+        match crate::session::accepted_runtime_lifecycle_state(&run.status) {
+            RuntimeLifecycleState::Completed | RuntimeLifecycleState::Failed => false,
+            RuntimeLifecycleState::Cancelled => retired_authoring_input_is_current(snapshot),
+            _ => true,
+        }
+    })
+}
+
+fn retired_authoring_input_is_current(snapshot: &SessionStateResponse) -> bool {
+    let Some(run) = snapshot.run.as_ref() else {
+        return false;
+    };
+    run.status == "cancelled"
+        && snapshot.session.status == "awaiting_command"
+        && snapshot.preclaim_cancelled_run_id.as_deref() == Some(run.run_id.as_str())
+        && snapshot.stage_execution.as_ref().is_none_or(|execution| {
+            execution.runtime_state == crate::types::RuntimeLifecycleState::Cancelled
+        })
+        && crate::live_authored_initial_state::current_publication(snapshot).is_some()
+}
+
 pub(crate) fn disabled_reason(snapshot: &SessionStateResponse) -> Result<(), &'static str> {
     if snapshot.runtime_status.code == "imported_read_only" || snapshot.session.status == "closed" {
         return Err("This session is read-only.");
@@ -49,10 +76,11 @@ pub(crate) fn disabled_reason(snapshot: &SessionStateResponse) -> Result<(), &'s
         crate::session::effective_runtime_status_code(snapshot).as_str(),
         "awaiting_command" | "waiting_for_compute" | "waiting_for_solve"
     ) || snapshot.run.as_ref().is_some_and(|run| {
-        !matches!(
+        !(matches!(
             run.status.as_str(),
             "awaiting_command" | "waiting_for_compute" | "waiting_for_solve"
-        ) || crate::router_v2::handlers::sessions::status::accepted_solver_steps(
+        ) || retired_authoring_input_is_current(snapshot))
+            || crate::router_v2::handlers::sessions::status::accepted_solver_steps(
             snapshot,
             &run.run_id,
         ) != 0
@@ -527,6 +555,53 @@ mod tests {
             disabled_reason(&snapshot),
             Err("Commit a scene before computing fields.")
         );
+        snapshot.session.status = "awaiting_command".into();
+        snapshot.run.as_mut().unwrap().status = "cancelled".into();
+        assert!(!uses_prepared_field_input(&snapshot));
+        snapshot.authored_initial_state = Some(crate::live_authored_initial_state::AuthoredInitialStatePublication::new(
+            &snapshot,
+            crate::schemas::common::AuthoredInitialStateOrigin {
+                preparation_id: "prepared-edit".into(),
+                plan_fingerprint: "plan".into(),
+                scene_revision: 2,
+                initial_state_revision: 1,
+                values_sha256: "state".into(),
+            },
+            0.0,
+        ));
+        assert!(!uses_prepared_field_input(&snapshot));
+        snapshot.preclaim_cancelled_run_id = Some("held-run".into());
+        assert!(uses_prepared_field_input(&snapshot));
+        assert_eq!(
+            disabled_reason(&snapshot),
+            Err("Commit a scene before computing fields."),
+        );
+        use crate::types::{RuntimeLifecycleState, StageLifecycleState};
+        let stage = crate::session::accepted_stage_record(
+            "relax",
+            Some("relaxation".into()),
+            StageLifecycleState::Cancelled,
+        );
+        snapshot.stage_execution = Some(crate::session::accepted_stage_execution_state(
+            vec![stage],
+            RuntimeLifecycleState::Cancelled,
+        ));
+        snapshot.preclaim_cancelled_run_id = None;
+        assert!(!uses_prepared_field_input(&snapshot));
+        snapshot.preclaim_cancelled_run_id = Some("another-run".into());
+        assert!(!uses_prepared_field_input(&snapshot));
+        snapshot.preclaim_cancelled_run_id = Some("held-run".into());
+        assert!(uses_prepared_field_input(&snapshot));
+        assert_eq!(
+            disabled_reason(&snapshot),
+            Err("Commit a scene before computing fields.")
+        );
+
+        snapshot.stage_execution.as_mut().unwrap().runtime_state = RuntimeLifecycleState::Running;
+        assert!(!uses_prepared_field_input(&snapshot));
+
+        snapshot.run.as_mut().unwrap().status = "failed".into();
+        assert!(!uses_prepared_field_input(&snapshot));
         snapshot.run.as_mut().unwrap().status = "running".into();
         assert_eq!(
             disabled_reason(&snapshot),

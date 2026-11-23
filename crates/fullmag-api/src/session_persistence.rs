@@ -357,6 +357,7 @@ impl From<PersistedCurrentLiveSnapshot> for SessionStateResponse {
                 .or_insert(generation.sequence);
         }
         SessionStateResponse {
+            preclaim_cancelled_run_id: None,
             session_protocol_version: value.session_protocol_version,
             capability_profile_version: value.capability_profile_version,
             session: value.session,

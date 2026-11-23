@@ -2,11 +2,17 @@ import { readFileSync } from "node:fs";
 
 import { describe, expect, it, vi } from "vitest";
 import { OrthographicCamera, PerspectiveCamera, Vector3 } from "three";
+import { DEFAULT_OBJECT_VISUALIZATION } from "@/kernel/visualization/ObjectVisualizationController";
+import type { TextureInspectorDraftBinding } from "@/shared/domain/magnetization-texture/textureDraftBridge";
+import type { Viewport3DTextureTransformModel } from "../TextureTransformGizmo";
+import type { FdmCuboidInstanceModel } from "./FdmCuboidLayer";
 
 import {
   applyViewport3DPerspectiveCameraPose,
   applyViewport3DOrthographicCameraPose,
   hasActiveViewport3DFemFieldData,
+  resolveViewport3DFdmSurfaceObjectIds,
+  resolveViewport3DFdmTextureColors,
   resolveViewport3DLiveFieldCoveredObjectIds,
   resolveViewport3DProjectionCameraClip,
   shouldApplyViewport3DProjectionCameraClip,
@@ -104,6 +110,69 @@ describe("Viewport3DScene scale helpers", () => {
         fdmTargetViews: [],
       }),
     ).toEqual(new Set());
+  });
+
+  it("replaces the analytic surface as soon as the visible FDM surface is available", () => {
+    const disk = {
+      ownerTarget: { id: "object:disk", kind: "object" },
+      settings: DEFAULT_OBJECT_VISUALIZATION,
+      instanceOrdinals: new Uint32Array([0, 1, 2]),
+      surfaceInstanceOrdinals: new Uint32Array([0, 2]),
+      surfaceColors: null,
+    };
+    expect(resolveViewport3DFdmSurfaceObjectIds([], [disk] as never)).toEqual(new Set(["disk"]));
+    expect(resolveViewport3DFdmSurfaceObjectIds([], [{
+      ...disk, surfaceInstanceOrdinals: new Uint32Array(),
+    }] as never)).toEqual(new Set());
+    expect(resolveViewport3DFdmSurfaceObjectIds([], [{
+      ...disk, settings: { ...disk.settings, shaderVisible: false, wireframeVisible: true },
+    }] as never)).toEqual(new Set());
+  });
+
+  it("samples authored and draft texture at the newly displayed cell centers in render order", () => {
+    const model = {
+      count: 3,
+      centers: new Float32Array([0, 0, 0, 2, 0, 0, 4, 0, 0]),
+    } as FdmCuboidInstanceModel;
+    const colors = new Float32Array([1, 0, 0, 0, 1, 0]);
+    const sampleSurfaceColors = vi.fn(() => colors);
+    const textureModel = {
+      sampleSurfaceColors,
+      hasAuthoredMagnetization: () => true,
+    } as Viewport3DTextureTransformModel;
+    const args = {
+      binding: null,
+      model,
+      objectId: "disk",
+      ordinals: new Uint32Array([2, 0]),
+      settings: DEFAULT_OBJECT_VISUALIZATION,
+      surfaceColors: null,
+      textureModel,
+    };
+    const result = resolveViewport3DFdmTextureColors(args);
+    expect(result?.colors).toBe(colors);
+    expect(sampleSurfaceColors).toHaveBeenLastCalledWith({
+      liveBinding: null,
+      objectId: "disk",
+      positionsWorld: new Float32Array([4, 0, 0, 0, 0, 0]),
+    });
+
+    expect(resolveViewport3DFdmTextureColors({ ...args, surfaceColors: result })).toBe(result);
+    expect(sampleSurfaceColors).toHaveBeenCalledTimes(1);
+    const binding = {
+      target: { kind: "object", objectId: "disk" },
+      previewDraft: true,
+      draft: { sourceMode: "preset" },
+    } as TextureInspectorDraftBinding;
+    expect(resolveViewport3DFdmTextureColors({
+      ...args, binding, surfaceColors: result,
+      settings: { ...args.settings, activeQuantityId: "M" },
+    })).not.toBe(result);
+    expect(sampleSurfaceColors).toHaveBeenLastCalledWith(expect.objectContaining({ liveBinding: binding }));
+    expect(resolveViewport3DFdmTextureColors({
+      ...args, binding, settings: { ...args.settings, activeQuantityId: "B_demag" },
+    })).toBeNull();
+    expect(sampleSurfaceColors).toHaveBeenCalledTimes(2);
   });
 
   it("wires ordinary OrbitControls into the camera registry interaction lifecycle", () => {
@@ -1394,6 +1463,8 @@ describe("Viewport3DScene region overlay visibility", () => {
     expect(hasActiveViewport3DFemFieldData(emptyFieldModel)).toBe(false);
     expect(
       resolveViewport3DLiveFieldCoveredObjectIds({
+        fdmCuboidLayerEnabled: false,
+        fdmNativeLayerViews: [],
         fdmTargetViews: [],
         fieldModel: emptyFieldModel,
         primitiveModel,
@@ -1426,6 +1497,8 @@ describe("Viewport3DScene region overlay visibility", () => {
       expect(hasActiveViewport3DFemFieldData(fieldModel as never)).toBe(true);
       expect(
         resolveViewport3DLiveFieldCoveredObjectIds({
+          fdmCuboidLayerEnabled: false,
+          fdmNativeLayerViews: [],
           fdmTargetViews: [],
           fieldModel: fieldModel as never,
           primitiveModel,
@@ -1435,6 +1508,8 @@ describe("Viewport3DScene region overlay visibility", () => {
       // Saved viewport snapshots must not suppress authored overlays
       expect(
         resolveViewport3DLiveFieldCoveredObjectIds({
+          fdmCuboidLayerEnabled: false,
+          fdmNativeLayerViews: [],
           fdmTargetViews: [],
           fieldModel: fieldModel as never,
           primitiveModel,

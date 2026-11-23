@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   UNKNOWN_MESH_COMMAND_LANE_REASON,
 } from "@/kernel/authoring/geometryLifecycleCommandContributions";
-import { meshBuildDialogUnavailableMessage, resolveMeshBuildDialogLane, shouldLoadMeshBuildDialogFemResources } from "./MeshBuildDialog.model";
+import { fdmGridPreflightState, meshBuildDialogUnavailableMessage, resolveMeshBuildDialogLane, shouldLoadMeshBuildDialogFemResources } from "./MeshBuildDialog.model";
 import {
   meshBuildDialogRuntimeStatusEquals,
   selectMeshBuildDialogRuntimeStatus,
@@ -11,6 +11,18 @@ import {
 import { openMeshBuildDiagnostics } from "./meshBuildDiagnosticsNavigation";
 
 describe("MeshBuildDialog", () => {
+  it("waits for the saved FDM scene and its matching status before capturing the preflight", () => {
+    expect(fdmGridPreflightState(3, 2, 2)).toBe("pending");
+    expect(fdmGridPreflightState(3, 3, 2)).toBe("pending");
+    expect(fdmGridPreflightState(3, 2, 3)).toBe("pending");
+    expect(fdmGridPreflightState(3, 3, 3)).toBe("current");
+  });
+
+  it("requires a new FDM confirmation when another edit supersedes the requested revision", () => {
+    expect(fdmGridPreflightState(3, 4, 3)).toBe("stale");
+    expect(fdmGridPreflightState(3, 3, 4)).toBe("stale");
+  });
+
   it("re-renders when the resolved lane changes even if mesh revisions are stable", () => {
     const statusForLane = (lane: string) =>
       selectMeshBuildDialogRuntimeStatus({
