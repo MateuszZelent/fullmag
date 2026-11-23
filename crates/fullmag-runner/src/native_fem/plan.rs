@@ -59,7 +59,7 @@ pub(super) fn native_fem_gpu_demag_mode(plan: &fullmag_ir::FemPlanIR) -> i32 {
     }
 }
 
-#[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
+#[cfg(any(test, feature = "fem-gpu", feature = "fem-native"))]
 pub(crate) fn resolved_native_fem_demag_solver_policy(
     plan: &fullmag_ir::FemPlanIR,
 ) -> fullmag_ir::FemLinearSolverPolicy {
@@ -67,11 +67,27 @@ pub(crate) fn resolved_native_fem_demag_solver_policy(
         return policy;
     }
 
-    // An omitted policy resolves to the public CG/AMG default on every lane.
-    // The strict GPU lane used CG/JACOBI from 2026-06-05, chosen on a 258-node
-    // smoke; at 14 916 nodes CG/JACOBI no longer converged in 500 iterations
-    // (docs/physics/0532, update 2026-11-23).
-    fullmag_ir::FemLinearSolverPolicy::default()
+    let mut policy = fullmag_ir::FemLinearSolverPolicy::default();
+    let non_poisson_demag = plan
+        .demag_realization
+        .is_some_and(|realization| !realization.is_poisson());
+    let projected_gradient_bb = plan.relaxation.as_ref().is_some_and(|control| {
+        matches!(
+            control.algorithm,
+            fullmag_ir::RelaxationAlgorithmIR::ProjectedGradientBb
+        )
+    });
+
+    // Poisson GPU configures a device-resident AMG coarse solve. Preserve the
+    // existing default for other GPU demag realizations.
+    if plan.enable_demag
+        && non_poisson_demag
+        && native_fem_plan_requests_gpu_mfem_device(plan)
+        && !projected_gradient_bb
+    {
+        policy.preconditioner = "JACOBI".to_string();
+    }
+    policy
 }
 
 #[allow(dead_code)]

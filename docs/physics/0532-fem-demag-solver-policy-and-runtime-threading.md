@@ -137,9 +137,10 @@ When omitted, the canonical default remains:
 - `print_level = 0`
 
 For strict native FEM GPU Poisson demag, an omitted solver policy resolves to the
-public `CG/AMG` default with the same tolerance and iteration defaults, exactly as
-on the CPU lane (update 2026-11-23). Explicit user-provided `FemLinearSolverPolicy`
-values are not rewritten.
+public `CG/AMG` default with the same tolerance and iteration defaults as
+the CPU lane (update 2026-11-23). GPU Fredkin–Koehler FEM/BEM retains its existing
+policy: `CG/JACOBI` for ordinary time evolution and `CG/AMG` for
+`projected_gradient_bb`. An explicit `FemLinearSolverPolicy` is preserved.
 
 ### 3.3 Hybrid
 
@@ -151,7 +152,7 @@ this as a common physics setting.
 | Solver family | Device | Contract in this note | Evidence boundary |
 |---|---|---|---|
 | FEM | CPU | Native FEM Poisson solver policy and CPU host-thread setup are source-visible. The public policy default is CG/AMG; an omitted policy resolves to that default on the CPU lane. | This page documents source contracts and tests; it does not claim a new CPU runtime qualification. |
-| FEM | GPU | The same explicit FEM policy is passed to native execution. If omitted, runtime resolution selects the public CG/AMG default on every strict GPU path (update 2026-11-23); explicit values are not rewritten. | [A separate 50 fs diagnostic observed coarse relaxation type 18 through the native getter](0913-fem-gpu-amg-coarse-residency.md). That narrow result does not qualify FEM CPU, all FEM GPU workloads, or full SP4. |
+| FEM | GPU | The same explicit FEM policy is passed to native execution. If omitted, strict GPU Poisson uses CG/AMG. GPU Fredkin–Koehler FEM/BEM retains its existing default for each workflow. | [A separate 50 fs diagnostic observed coarse relaxation type 18 through the native getter](0913-fem-gpu-amg-coarse-residency.md). That narrow result does not qualify FEM CPU, all FEM GPU workloads, or full SP4. |
 | FDM | CPU | Not applicable: `FemLinearSolverPolicy` belongs to FEM discretization hints; FDM uses its own demag solver surfaces. | No cross-backend fallback is implied. |
 | FDM | GPU | Not applicable for the same reason; this policy does not configure FDM GPU demag. | No cross-backend fallback is implied. |
 
@@ -281,10 +282,10 @@ validation runs again on reload.
 
 Requested intent consists of the authored backend/device/precision/mode and
 any explicitly authored policy fields. Resolved execution is selected later:
-an explicit policy is preserved, while an omitted policy resolves to the
-public CG/AMG defaults on every lane, strict FEM GPU included (update
-2026-11-23); this is runtime selection, not a change to Python
-defaults. Runtime telemetry must identify the solver, preconditioner, and
+an explicit policy is preserved. For Poisson, an omitted runtime policy uses
+the public CG/AMG defaults on CPU and strict GPU (update 2026-11-23).
+GPU Fredkin–Koehler FEM/BEM retains its existing workflow-specific policy.
+Runtime telemetry must identify the solver, preconditioner, and
 observed solve state rather than inferring them from the request.
 
 Validation errors are raised when the policy fields fail their Python domain
@@ -903,7 +904,7 @@ The managed `OMIT` smoke after rebuilding the runtime bundle confirms that an
 omitted PGBB demag policy now reports resolved `AMG` in runtime metadata for
 both CPU and strict GPU rows.
 
-**Update 2026-11-23: an omitted strict GPU policy resolves to `CG/AMG` for every path.** The 2026-06-05 choice of
+**Update 2026-11-23: an omitted strict GPU Poisson policy resolves to `CG/AMG`.** The 2026-06-05 choice of
 `CG/JACOBI` was qualified on a 258-node smoke. Jacobi's iteration count grows with mesh size; a measurement on a
 200×200×20 nm box with airbox (Poisson Robin, Heun, `dt = 2e-14 s`, no authored policy) measured:
 - 3 644 nodes: `CG/JACOBI` converged (389 PCG iterations per step);
@@ -911,10 +912,11 @@ both CPU and strict GPU rows.
   against `rtol = 1e-8`);
 - 14 911 to 89 732 nodes: `CG/AMG` ran.
 
-An omitted policy must not make an ordinary mid-size script fail. The GPU lane therefore now uses the same public
-default as the CPU lane, and the PGBB special case becomes redundant. Explicit user policies, including
-`CG/JACOBI` for very small meshes, are not rewritten. Runtime logs and provenance keep reporting the resolved
-policy. On 3 644 nodes the CG/AMG default costs +8.9 % step time (175.6 → 191.2 ms per step) with 78 % fewer PCG
+Omitted GPU Poisson policies now use the same public preconditioner as the CPU lane. This includes Robin and
+Dirichlet airboxes. The Poisson implementation selects and verifies AMG coarse relaxation type 18 on device.
+Fredkin–Koehler uses a separate AMG setup, so its omitted policy retains the previous selection.
+Explicit user policies are preserved, and runtime logs and provenance report the resolved policy.
+On 3 644 nodes the CG/AMG default costs +8.9 % step time (175.6 → 191.2 ms per step) with 78 % fewer PCG
 iterations (389 → 84 per step), and `m_final` agrees with the CG/JACOBI run to 5.6e-11; explicit `CG/JACOBI`
 remains available for very small meshes.
 
@@ -1059,7 +1061,7 @@ managed-runtime qualification.
 | Canonical FEM hints | `crates/fullmag-ir/src/mesh_hints.rs` | `FemHintsIR` | Carries optional `demag_solver_policy` in `ProblemIR`. | FEM CPU/GPU planning | Source-visible. | [source](https://github.com/MateuszZelent/fullmag/blob/51466dfe5d97738859ed8db47fe0c1293845bd30/crates/fullmag-ir/src/mesh_hints.rs#L1074) |
 | FEM execution plan | `crates/fullmag-ir/src/plan.rs` | `FemPlanIR` | Carries the selected policy into the executable plan. | FEM CPU/GPU planning | Source-visible. | [source](https://github.com/MateuszZelent/fullmag/blob/51466dfe5d97738859ed8db47fe0c1293845bd30/crates/fullmag-ir/src/plan.rs#L1424) |
 | Omitted-policy resolution | `crates/fullmag-runner/src/native_fem/plan.rs` | `resolved_native_fem_demag_solver_policy` | Preserves explicit values; resolves omitted CPU/GPU values. | FEM CPU/GPU | Resolver tests cover CPU default, GPU non-PGBB/PGBB defaults, and explicit preservation. | [source](https://github.com/MateuszZelent/fullmag/blob/51466dfe5d97738859ed8db47fe0c1293845bd30/crates/fullmag-runner/src/native_fem/plan.rs#L63) |
-| General strict GPU default test | `crates/fullmag-runner/src/native_fem.rs` | `unresolved_gpu_demag_policy_uses_public_amg_default_for_non_pgbb` | Checks that the omitted-policy non-PGBB strict GPU default is the public CG/AMG default. | FEM GPU | Resolver regression test, renamed from `unresolved_gpu_demag_policy_prefers_jacobi_preconditioner_for_non_pgbb` in update 2026-11-23; not compiled or run for this change. The link shows that predecessor at the reviewed revision. | [source](https://github.com/MateuszZelent/fullmag/blob/51466dfe5d97738859ed8db47fe0c1293845bd30/crates/fullmag-runner/src/native_fem.rs#L8641) |
+| General strict GPU default test | `crates/fullmag-runner/src/native_fem.rs` | `unresolved_gpu_demag_policy_uses_public_amg_default_for_non_pgbb` | Checks that the omitted-policy non-PGBB strict GPU Poisson default is CG/AMG. | FEM GPU | Resolver regression test, renamed from `unresolved_gpu_demag_policy_prefers_jacobi_preconditioner_for_non_pgbb` in update 2026-11-23; not compiled or run for this change. The link shows that predecessor at the reviewed revision. | [source](https://github.com/MateuszZelent/fullmag/blob/51466dfe5d97738859ed8db47fe0c1293845bd30/crates/fullmag-runner/src/native_fem.rs#L8641) |
 | PGBB strict GPU default test | `crates/fullmag-runner/src/native_fem.rs` | `unresolved_gpu_demag_policy_prefers_amg_preconditioner_for_pgbb` | Checks the omitted-policy PGBB strict GPU default. | FEM GPU | Existing resolver regression test; not run for this documentation change. | [source](https://github.com/MateuszZelent/fullmag/blob/51466dfe5d97738859ed8db47fe0c1293845bd30/crates/fullmag-runner/src/native_fem.rs#L8654) |
 | CPU Poisson solver | `backends/fem/cpu/mfem/interactions/demag_poisson_hypre.cpp` | `solve_demag_poisson_hypre` | Configures Hypre solver/preconditioner and validates the attempted solve. | FEM CPU | Source-visible; this page does not claim a fresh CPU runtime qualification. | [source](https://github.com/MateuszZelent/fullmag/blob/51466dfe5d97738859ed8db47fe0c1293845bd30/backends/fem/cpu/mfem/interactions/demag_poisson_hypre.cpp#L211) |
 | GPU Poisson residual validation | `backends/fem/gpu/cuda/demag_poisson/hypre_device_solver.cpp` | `validate_demag_poisson_hypre_device_solve` | Independently certifies Euclidean RHS and residual norms after every device-HYPRE solve. | FEM GPU | Native RED/GREEN and seven-step full-Zarr OFF parity passed; see section 5.1. | [source](https://github.com/MateuszZelent/fullmag/blob/51466dfe5d97738859ed8db47fe0c1293845bd30/backends/fem/gpu/cuda/demag_poisson/hypre_device_solver.cpp#L452) |

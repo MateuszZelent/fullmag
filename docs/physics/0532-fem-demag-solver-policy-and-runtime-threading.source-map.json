@@ -191,7 +191,7 @@
       "id": "gpu-default-test",
       "path": "crates/fullmag-runner/src/native_fem.rs",
       "symbol": "unresolved_gpu_demag_policy_uses_public_amg_default_for_non_pgbb",
-      "responsibility": "Tests that the omitted strict GPU policy resolves to the public CG/AMG default for non-PGBB execution."
+      "responsibility": "Tests that the omitted strict GPU Poisson policy resolves to the public CG/AMG default for non-PGBB execution."
     },
     {
       "id": "pgbb-default-test",

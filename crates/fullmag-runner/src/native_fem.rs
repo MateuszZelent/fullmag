@@ -71,7 +71,7 @@ pub(crate) use frequency_domain::{
     NativeModalExecutionTarget, NativeModalGpuAttestation, NativeModalGpuOperatorKind,
 };
 #[allow(unused_imports)]
-#[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
+#[cfg(any(test, feature = "fem-gpu", feature = "fem-native"))]
 pub(crate) use plan::resolved_native_fem_demag_solver_policy;
 #[allow(unused_imports)]
 pub(crate) use plan::{
