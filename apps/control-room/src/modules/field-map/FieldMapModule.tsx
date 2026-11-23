@@ -537,42 +537,38 @@ function useFieldMapModuleController() {
   const hasLayerModelOverlays = metaOnlyBase && Boolean(overlayLayers && overlayLayers.length > 0);
   const authoredOverlay = useMemo(() => {
     if (!hasLayerModelOverlays || !overlayLayers) return null;
-    const visible = overlayLayers.filter(layerVisible);
-    if (visible.length === 0) return null;
     const target = selectedFieldContext.target;
-    if (target?.kind === "region") {
-      const exact = visible.find(
-        (layer) =>
-          layer.view_scope.kind === "region" &&
-          visualizationTargetIdForSceneObject(
-            layer.view_scope.scope_id,
-            layer.view_scope.region_id,
-          ) === target.id &&
-          resolveCanonicalQuantityId(layer.quantity_id) === "m",
-      );
-      if (exact) return exact;
+    const targetLayer = target?.kind === "region"
+      ? overlayLayers.find(
+          (layer) =>
+            layer.view_scope.kind === "region" &&
+            visualizationTargetIdForSceneObject(
+              layer.view_scope.scope_id,
+              layer.view_scope.region_id,
+            ) === target.id,
+        )
+      : target?.kind === "object"
+        ? overlayLayers.find(
+            (layer) =>
+              layer.view_scope.kind === "object" &&
+              visualizationTargetIdForSceneObject(layer.view_scope.scope_id) === target.id,
+          )
+        : undefined;
+    if (targetLayer) {
+      return layerVisible(targetLayer) &&
+        resolveCanonicalQuantityId(targetLayer.quantity_id) === "m"
+        ? targetLayer
+        : null;
     }
-    if (target?.kind === "object") {
-      const exact = visible.find(
-        (layer) =>
-          layer.view_scope.kind === "object" &&
-          `object:${layer.view_scope.scope_id}` === target.id &&
-          resolveCanonicalQuantityId(layer.quantity_id) === "m",
-      );
-      if (exact) return exact;
-    }
-    return visible.find((layer) => resolveCanonicalQuantityId(layer.quantity_id) === "m") ?? null;
+    return overlayLayers.find(
+      (layer) =>
+        layerVisible(layer) &&
+        layer.view_scope.kind === "monitor_target" &&
+        resolveCanonicalQuantityId(layer.quantity_id) === "m",
+    ) ?? null;
   }, [hasLayerModelOverlays, overlayLayers, selectedFieldContext.target]);
-  const hasAnyAuthoredOverlay = useMemo(
-    () =>
-      Boolean(
-        hasLayerModelOverlays &&
-        overlayLayers?.some((layer) => resolveCanonicalQuantityId(layer.quantity_id) === "m"),
-      ),
-    [hasLayerModelOverlays, overlayLayers],
-  );
   const authoredQuantityEligible = hasLayerModelOverlays
-    ? authoredOverlay !== null || hasAnyAuthoredOverlay
+    ? authoredOverlay !== null
     : !plan.quantityId || plan.quantityId === "m" || resolveCanonicalQuantityId(plan.quantityId) === "m";
   const backendPlanarUnavailable =
     freshSample === null &&

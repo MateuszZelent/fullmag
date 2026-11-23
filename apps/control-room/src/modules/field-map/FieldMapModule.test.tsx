@@ -1077,6 +1077,36 @@ describe("FieldMapModule planar state ownership", () => {
         rasterOpacity: 0.55,
       }));
 
+      const otherRegionOverlay = {
+        ...allOverlay,
+        id: "other-region-layer",
+        view_scope: { kind: "region", scope_id: "other-object", region_id: "region-1" },
+        component: "y",
+        colormap: "plasma",
+        raster_opacity: 0.25,
+      };
+      mocks.visualization.data = {
+        planar: { ...planar, field_overlays: [otherRegionOverlay, allOverlay] },
+      };
+      await act(async () => root.render(<FieldMapModule />));
+      expect(mocks.renderModel).toHaveBeenLastCalledWith(expect.objectContaining({
+        colormap: "coolwarm",
+        component: "z",
+        rasterOpacity: 0.9,
+      }));
+
+      for (const ownOverlay of [
+        { ...regionOverlay, quantity_id: "h_eff" },
+        { ...regionOverlay, visible: false },
+      ]) {
+        mocks.visualization.data = {
+          planar: { ...planar, field_overlays: [allOverlay, ownOverlay] },
+        };
+        mocks.renderModel.mockClear();
+        await act(async () => root.render(<FieldMapModule />));
+        expect(mocks.renderModel).not.toHaveBeenCalled();
+      }
+
       // As soon as real backend solver data is ready, backend data takes precedence
       mocks.metaError = null;
       mocks.renderReady = true;
