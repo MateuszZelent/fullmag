@@ -1101,129 +1101,133 @@ export function sampleAuthoredMagnetizationVectors({
       : resolveTargetBoundsMeters(scene, objectTarget);
   const objectTransform = asAuthoredRecord(objectRec?.transform);
 
-  let objectSpec: PresetTextureSpecV2 | null = null;
-  if (liveBinding?.target.kind === "object" && liveBinding.target.objectId === objectId) {
-    if (liveBinding.draft.sourceMode !== "field-file") {
-      objectSpec = buildPresetSpecFromDraft(liveBinding.draft, objectBounds);
+  try {
+    let objectSpec: PresetTextureSpecV2 | null = null;
+    if (liveBinding?.target.kind === "object" && liveBinding.target.objectId === objectId) {
+      if (liveBinding.draft.sourceMode !== "field-file") {
+        objectSpec = buildPresetSpecFromDraft(liveBinding.draft, objectBounds);
+      }
+    } else if (sceneRec && objectRec) {
+      const refId = asAuthoredString(objectRec.magnetization_ref);
+      const asset =
+        refId && Array.isArray(sceneRec.magnetization_assets)
+          ? sceneRec.magnetization_assets
+              .map(asAuthoredRecord)
+              .find((entry) => entry && asAuthoredString(entry.id) === refId) ?? null
+          : null;
+      if (asset && !isAuthoredFieldFileAsset(asset)) {
+        const draft = hydrateMagneticTextureDraftFromInitializer(asset, objectBounds, "object");
+        objectSpec = buildPresetSpecFromDraft(draft, objectBounds);
+      }
     }
-  } else if (sceneRec && objectRec) {
-    const refId = asAuthoredString(objectRec.magnetization_ref);
-    const asset =
-      refId && Array.isArray(sceneRec.magnetization_assets)
-        ? sceneRec.magnetization_assets
-            .map(asAuthoredRecord)
-            .find((entry) => entry && asAuthoredString(entry.id) === refId) ?? null
-        : null;
-    if (asset && !isAuthoredFieldFileAsset(asset)) {
-      const draft = hydrateMagneticTextureDraftFromInitializer(asset, objectBounds, "object");
-      objectSpec = buildPresetSpecFromDraft(draft, objectBounds);
-    }
-  }
 
-  const regionLayers: CompiledAuthoredRegionLayer[] = [];
-  const rawRegions = Array.isArray(objectRec?.regions) ? objectRec.regions : [];
-  for (const rawRegion of rawRegions) {
-    const reg = asAuthoredRecord(rawRegion);
-    if (!reg || reg.enabled === false) continue;
-    const regionId = asAuthoredString(reg.region_id);
-    if (!regionId) continue;
-    const priority = asAuthoredNumber(reg.priority) ?? 0;
-    const regBounds =
-      liveBinding?.target.kind === "region" &&
-      liveBinding.target.objectId === objectId &&
-      liveBinding.target.regionId === regionId
-        ? liveBinding.bounds
-        : resolveTargetBoundsMeters(scene, { kind: "region", objectId, regionId });
+    const regionLayers: CompiledAuthoredRegionLayer[] = [];
+    const rawRegions = Array.isArray(objectRec?.regions) ? objectRec.regions : [];
+    for (const rawRegion of rawRegions) {
+      const reg = asAuthoredRecord(rawRegion);
+      if (!reg || reg.enabled === false) continue;
+      const regionId = asAuthoredString(reg.region_id);
+      if (!regionId) continue;
+      const priority = asAuthoredNumber(reg.priority) ?? 0;
+      const regBounds =
+        liveBinding?.target.kind === "region" &&
+        liveBinding.target.objectId === objectId &&
+        liveBinding.target.regionId === regionId
+          ? liveBinding.bounds
+          : resolveTargetBoundsMeters(scene, { kind: "region", objectId, regionId });
 
-    if (
-      liveBinding?.target.kind === "region" &&
-      liveBinding.target.objectId === objectId &&
-      liveBinding.target.regionId === regionId
-    ) {
       if (
-        liveBinding.draft.inheritanceMode === "override" &&
-        liveBinding.draft.sourceMode !== "field-file"
+        liveBinding?.target.kind === "region" &&
+        liveBinding.target.objectId === objectId &&
+        liveBinding.target.regionId === regionId
       ) {
+        if (
+          liveBinding.draft.inheritanceMode === "override" &&
+          liveBinding.draft.sourceMode !== "field-file"
+        ) {
+          regionLayers.push({
+            regionId,
+            priority,
+            regionRecord: reg,
+            spec: buildPresetSpecFromDraft(liveBinding.draft, regBounds),
+            regionBounds: regBounds,
+          });
+        }
+        continue;
+      }
+
+      const init = asAuthoredRecord(asAuthoredRecord(reg.texture_override)?.initial_magnetization);
+      if (init && !isAuthoredFieldFileAsset(init)) {
+        const regDraft = hydrateMagneticTextureDraftFromInitializer(init, regBounds, "region", {
+          inherited: false,
+        });
         regionLayers.push({
           regionId,
           priority,
           regionRecord: reg,
-          spec: buildPresetSpecFromDraft(liveBinding.draft, regBounds),
+          spec: buildPresetSpecFromDraft(regDraft, regBounds),
           regionBounds: regBounds,
         });
       }
-      continue;
     }
 
-    const init = asAuthoredRecord(asAuthoredRecord(reg.texture_override)?.initial_magnetization);
-    if (init && !isAuthoredFieldFileAsset(init)) {
-      const regDraft = hydrateMagneticTextureDraftFromInitializer(init, regBounds, "region", {
-        inherited: false,
-      });
-      regionLayers.push({
-        regionId,
-        priority,
-        regionRecord: reg,
-        spec: buildPresetSpecFromDraft(regDraft, regBounds),
-        regionBounds: regBounds,
-      });
+    regionLayers.sort((left, right) => right.priority - left.priority);
+
+    if (!objectSpec && regionLayers.length === 0) {
+      return null;
     }
-  }
 
-  regionLayers.sort((left, right) => right.priority - left.priority);
+    const outVectors = new Float32Array(pointCount * 3);
+    for (let i = 0; i < pointCount; i += 1) {
+      const base = i * 3;
+      const worldPt: Vec3 = [
+        positionsWorld[base]!,
+        positionsWorld[base + 1]!,
+        positionsWorld[base + 2]!,
+      ];
+      const positionObject: Vec3 = [
+        worldPt[0] - objectBounds.worldCenter[0],
+        worldPt[1] - objectBounds.worldCenter[1],
+        worldPt[2] - objectBounds.worldCenter[2],
+      ];
 
-  if (!objectSpec && regionLayers.length === 0) {
+      let chosenSpec: PresetTextureSpecV2 | null = objectSpec;
+      let chosenBounds: TargetMetricBounds = objectBounds;
+      for (const layer of regionLayers) {
+        if (pointInsideRegionShape(positionObject, layer.regionRecord, objectTransform)) {
+          chosenSpec = layer.spec;
+          chosenBounds = layer.regionBounds;
+          break;
+        }
+      }
+
+      const positionRegion: Vec3 = [
+        worldPt[0] - chosenBounds.worldCenter[0],
+        worldPt[1] - chosenBounds.worldCenter[1],
+        worldPt[2] - chosenBounds.worldCenter[2],
+      ];
+
+      const spin = chosenSpec
+        ? samplePresetTextureV2Client(
+            chosenSpec,
+            {
+              positionObject,
+              positionRegion,
+              positionWorld: worldPt,
+            },
+            chosenBounds,
+          )
+        : ([1, 0, 0] as const);
+
+      outVectors[base] = spin[0];
+      outVectors[base + 1] = spin[1];
+      outVectors[base + 2] = spin[2];
+    }
+
+    return outVectors;
+  } catch {
     return null;
   }
-
-  const outVectors = new Float32Array(pointCount * 3);
-  for (let i = 0; i < pointCount; i += 1) {
-    const base = i * 3;
-    const worldPt: Vec3 = [
-      positionsWorld[base]!,
-      positionsWorld[base + 1]!,
-      positionsWorld[base + 2]!,
-    ];
-    const positionObject: Vec3 = [
-      worldPt[0] - objectBounds.worldCenter[0],
-      worldPt[1] - objectBounds.worldCenter[1],
-      worldPt[2] - objectBounds.worldCenter[2],
-    ];
-
-    let chosenSpec: PresetTextureSpecV2 | null = objectSpec;
-    let chosenBounds: TargetMetricBounds = objectBounds;
-    for (const layer of regionLayers) {
-      if (pointInsideRegionShape(positionObject, layer.regionRecord, objectTransform)) {
-        chosenSpec = layer.spec;
-        chosenBounds = layer.regionBounds;
-        break;
-      }
-    }
-
-    const positionRegion: Vec3 = [
-      worldPt[0] - chosenBounds.worldCenter[0],
-      worldPt[1] - chosenBounds.worldCenter[1],
-      worldPt[2] - chosenBounds.worldCenter[2],
-    ];
-
-    const spin = chosenSpec
-      ? samplePresetTextureV2Client(
-          chosenSpec,
-          {
-            positionObject,
-            positionRegion,
-            positionWorld: worldPt,
-          },
-          chosenBounds,
-        )
-      : ([1, 0, 0] as const);
-
-    outVectors[base] = spin[0];
-    outVectors[base + 1] = spin[1];
-    outVectors[base + 2] = spin[2];
-  }
-
-  return outVectors;
 }
 
 export interface AuthoredMagnetizationVectorGridOptions {
@@ -2326,10 +2330,18 @@ export function createViewport3DTextureTransformModel(scene: SceneResource | nul
       return asset.source_mode !== "field-file";
     },
     sampleSurfaceColors(options: Omit<SampleViewport3DSurfaceHslOptions, "scene">) {
-      return sampleViewport3DSurfaceHslColors({ ...options, scene });
+      try {
+        return sampleViewport3DSurfaceHslColors({ ...options, scene });
+      } catch {
+        return null;
+      }
     },
     sampleVectors(options: Omit<SampleAuthoredMagnetizationVectorsOptions, "scene">) {
-      return sampleAuthoredMagnetizationVectors({ ...options, scene });
+      try {
+        return sampleAuthoredMagnetizationVectors({ ...options, scene });
+      } catch {
+        return null;
+      }
     },
   };
 }
@@ -3090,11 +3102,15 @@ export function Viewport3DTextureTransformLayer({
 
   const surfaceColors = useMemo(() => {
     if (!selectedObject || !subdividedMeshData || !showSurfacePreview) return null;
-    return textureTransformModel.sampleSurfaceColors({
-      objectId: selectedObject.objectId,
-      positionsWorld: subdividedMeshData.positionsWorld,
-      liveBinding: bindingMatchesObject ? bridge.activeBinding : null,
-    });
+    try {
+      return textureTransformModel.sampleSurfaceColors({
+        objectId: selectedObject.objectId,
+        positionsWorld: subdividedMeshData.positionsWorld,
+        liveBinding: bindingMatchesObject ? bridge.activeBinding : null,
+      });
+    } catch {
+      return null;
+    }
   }, [
     bindingMatchesObject,
     bridge.activeBinding,
@@ -3378,11 +3394,15 @@ function AuthoredMagnetizationPersistentSurface({
 
   const surfaceColors = useMemo(() => {
     if (!draftAndBounds || !subdividedMeshData) return null;
-    return textureTransformModel.sampleSurfaceColors({
-      objectId: object.objectId,
-      positionsWorld: subdividedMeshData.positionsWorld,
-      liveBinding: null,
-    });
+    try {
+      return textureTransformModel.sampleSurfaceColors({
+        objectId: object.objectId,
+        positionsWorld: subdividedMeshData.positionsWorld,
+        liveBinding: null,
+      });
+    } catch {
+      return null;
+    }
   }, [draftAndBounds, object.objectId, subdividedMeshData, textureTransformModel]);
 
   const surfaceGeometry = useMemo(() => {
@@ -3572,11 +3592,17 @@ function AuthoredMagnetizationPersistentVectors({
 
   const sampledVectors = useMemo(() => {
     if (grid.count <= 0) return null;
-    return textureTransformModel.sampleVectors?.({
-      objectId: object.objectId,
-      positionsWorld: grid.positionsWorld,
-      liveBinding,
-    }) ?? null;
+    try {
+      return (
+        textureTransformModel.sampleVectors?.({
+          objectId: object.objectId,
+          positionsWorld: grid.positionsWorld,
+          liveBinding,
+        }) ?? null
+      );
+    } catch {
+      return null;
+    }
   }, [grid.count, grid.positionsWorld, liveBinding, object.objectId, textureTransformModel]);
 
   const glyphData = useMemo(() => {

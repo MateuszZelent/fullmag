@@ -1229,122 +1229,126 @@ export function sampleViewport3DSurfaceHslColors({
       : resolveTargetBoundsMeters(scene, objectTarget);
   const objectTransform = asRecord(objectRec?.transform);
 
-  let objectSpec: PresetTextureSpecV2 | null = null;
-  if (liveBinding?.target.kind === "object" && liveBinding.target.objectId === objectId) {
-    if (liveBinding.draft.sourceMode !== "field-file") {
-      objectSpec = buildPresetSpecFromDraft(liveBinding.draft, objectBounds);
+  try {
+    let objectSpec: PresetTextureSpecV2 | null = null;
+    if (liveBinding?.target.kind === "object" && liveBinding.target.objectId === objectId) {
+      if (liveBinding.draft.sourceMode !== "field-file") {
+        objectSpec = buildPresetSpecFromDraft(liveBinding.draft, objectBounds);
+      }
+    } else if (sceneRec && objectRec) {
+      const asset = magnetizationAssetById(sceneRec, asString(objectRec.magnetization_ref));
+      if (asset && asString(asset.kind) !== "sampled") {
+        const draft = hydrateMagneticTextureDraftFromInitializer(asset, objectBounds, "object");
+        objectSpec = buildPresetSpecFromDraft(draft, objectBounds);
+      }
     }
-  } else if (sceneRec && objectRec) {
-    const asset = magnetizationAssetById(sceneRec, asString(objectRec.magnetization_ref));
-    if (asset && asString(asset.kind) !== "sampled") {
-      const draft = hydrateMagneticTextureDraftFromInitializer(asset, objectBounds, "object");
-      objectSpec = buildPresetSpecFromDraft(draft, objectBounds);
-    }
-  }
 
-  const regionLayers: CompiledRegionLayer[] = [];
-  const rawRegions = Array.isArray(objectRec?.regions) ? objectRec.regions : [];
-  for (const rawRegion of rawRegions) {
-    const reg = asRecord(rawRegion);
-    if (!reg || reg.enabled === false) continue;
-    const regionId = asString(reg.region_id);
-    if (!regionId) continue;
-    const priority = asNumber(reg.priority) ?? 0;
-    const regBounds =
-      liveBinding?.target.kind === "region" &&
-      liveBinding.target.objectId === objectId &&
-      liveBinding.target.regionId === regionId
-        ? liveBinding.bounds
-        : resolveTargetBoundsMeters(scene, { kind: "region", objectId, regionId });
+    const regionLayers: CompiledRegionLayer[] = [];
+    const rawRegions = Array.isArray(objectRec?.regions) ? objectRec.regions : [];
+    for (const rawRegion of rawRegions) {
+      const reg = asRecord(rawRegion);
+      if (!reg || reg.enabled === false) continue;
+      const regionId = asString(reg.region_id);
+      if (!regionId) continue;
+      const priority = asNumber(reg.priority) ?? 0;
+      const regBounds =
+        liveBinding?.target.kind === "region" &&
+        liveBinding.target.objectId === objectId &&
+        liveBinding.target.regionId === regionId
+          ? liveBinding.bounds
+          : resolveTargetBoundsMeters(scene, { kind: "region", objectId, regionId });
 
-    if (
-      liveBinding?.target.kind === "region" &&
-      liveBinding.target.objectId === objectId &&
-      liveBinding.target.regionId === regionId
-    ) {
       if (
-        liveBinding.draft.inheritanceMode === "override" &&
-        liveBinding.draft.sourceMode !== "field-file"
+        liveBinding?.target.kind === "region" &&
+        liveBinding.target.objectId === objectId &&
+        liveBinding.target.regionId === regionId
       ) {
+        if (
+          liveBinding.draft.inheritanceMode === "override" &&
+          liveBinding.draft.sourceMode !== "field-file"
+        ) {
+          regionLayers.push({
+            regionId,
+            priority,
+            regionRecord: reg,
+            spec: buildPresetSpecFromDraft(liveBinding.draft, regBounds),
+            regionBounds: regBounds,
+          });
+        }
+        continue;
+      }
+
+      const init = asRecord(asRecord(reg.texture_override)?.initial_magnetization);
+      if (init && asString(init.kind) !== "sampled") {
+        const regDraft = hydrateMagneticTextureDraftFromInitializer(init, regBounds, "region", {
+          inherited: false,
+        });
         regionLayers.push({
           regionId,
           priority,
           regionRecord: reg,
-          spec: buildPresetSpecFromDraft(liveBinding.draft, regBounds),
+          spec: buildPresetSpecFromDraft(regDraft, regBounds),
           regionBounds: regBounds,
         });
       }
-      continue;
     }
 
-    const init = asRecord(asRecord(reg.texture_override)?.initial_magnetization);
-    if (init && asString(init.kind) !== "sampled") {
-      const regDraft = hydrateMagneticTextureDraftFromInitializer(init, regBounds, "region", {
-        inherited: false,
-      });
-      regionLayers.push({
-        regionId,
-        priority,
-        regionRecord: reg,
-        spec: buildPresetSpecFromDraft(regDraft, regBounds),
-        regionBounds: regBounds,
-      });
+    regionLayers.sort((left, right) => right.priority - left.priority);
+
+    if (!objectSpec && regionLayers.length === 0) {
+      return null;
     }
-  }
 
-  regionLayers.sort((left, right) => right.priority - left.priority);
+    const outColors = new Float32Array(vertexCount * 3);
+    for (let i = 0; i < vertexCount; i += 1) {
+      const base = i * 3;
+      const worldPt: [number, number, number] = [
+        positionsWorld[base]!,
+        positionsWorld[base + 1]!,
+        positionsWorld[base + 2]!,
+      ];
+      const positionObject: [number, number, number] = [
+        worldPt[0] - objectBounds.worldCenter[0],
+        worldPt[1] - objectBounds.worldCenter[1],
+        worldPt[2] - objectBounds.worldCenter[2],
+      ];
 
-  if (!objectSpec && regionLayers.length === 0) {
+      let chosenSpec: PresetTextureSpecV2 | null = objectSpec;
+      let chosenBounds: TargetMetricBounds = objectBounds;
+      for (const layer of regionLayers) {
+        if (pointInsideRegionShape(positionObject, layer.regionRecord, objectTransform)) {
+          chosenSpec = layer.spec;
+          chosenBounds = layer.regionBounds;
+          break;
+        }
+      }
+
+      const positionRegion: [number, number, number] = [
+        worldPt[0] - chosenBounds.worldCenter[0],
+        worldPt[1] - chosenBounds.worldCenter[1],
+        worldPt[2] - chosenBounds.worldCenter[2],
+      ];
+
+      const spin = chosenSpec
+        ? samplePresetTextureV2Client(
+            chosenSpec,
+            {
+              positionObject,
+              positionRegion,
+              positionWorld: worldPt,
+            },
+            chosenBounds,
+          )
+        : ([1, 0, 0] as const);
+
+      const [r, g, b] = magnetizationHslRgb(spin[0], spin[1], spin[2]);
+      outColors[base] = r;
+      outColors[base + 1] = g;
+      outColors[base + 2] = b;
+    }
+
+    return outColors;
+  } catch {
     return null;
   }
-
-  const outColors = new Float32Array(vertexCount * 3);
-  for (let i = 0; i < vertexCount; i += 1) {
-    const base = i * 3;
-    const worldPt: [number, number, number] = [
-      positionsWorld[base]!,
-      positionsWorld[base + 1]!,
-      positionsWorld[base + 2]!,
-    ];
-    const positionObject: [number, number, number] = [
-      worldPt[0] - objectBounds.worldCenter[0],
-      worldPt[1] - objectBounds.worldCenter[1],
-      worldPt[2] - objectBounds.worldCenter[2],
-    ];
-
-    let chosenSpec: PresetTextureSpecV2 | null = objectSpec;
-    let chosenBounds: TargetMetricBounds = objectBounds;
-    for (const layer of regionLayers) {
-      if (pointInsideRegionShape(positionObject, layer.regionRecord, objectTransform)) {
-        chosenSpec = layer.spec;
-        chosenBounds = layer.regionBounds;
-        break;
-      }
-    }
-
-    const positionRegion: [number, number, number] = [
-      worldPt[0] - chosenBounds.worldCenter[0],
-      worldPt[1] - chosenBounds.worldCenter[1],
-      worldPt[2] - chosenBounds.worldCenter[2],
-    ];
-
-    const spin = chosenSpec
-      ? samplePresetTextureV2Client(
-          chosenSpec,
-          {
-            positionObject,
-            positionRegion,
-            positionWorld: worldPt,
-          },
-          chosenBounds,
-        )
-      : ([1, 0, 0] as const);
-
-    const [r, g, b] = magnetizationHslRgb(spin[0], spin[1], spin[2]);
-    outColors[base] = r;
-    outColors[base + 1] = g;
-    outColors[base + 2] = b;
-  }
-
-  return outColors;
 }

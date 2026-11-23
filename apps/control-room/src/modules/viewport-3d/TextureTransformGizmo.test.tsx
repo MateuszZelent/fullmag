@@ -16,7 +16,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SceneResource } from "@/kernel/api/apiTypes";
 import { defaultArrayAxisSpec } from "@/kernel/authoring/array3dModel";
 import { resolveTargetBoundsMeters } from "@/shared/domain/magnetization-texture/boundsResolver";
-import { createDefaultMagneticTextureDraft } from "@/shared/domain/magnetization-texture/presetDefaults";
+import { samplePresetTextureV2Client } from "@/shared/domain/magnetization-texture/evaluateV2Client";
+import {
+  buildPresetSpecFromDraft,
+  computeRelativePresetDefaults,
+  createDefaultMagneticTextureDraft,
+  switchDraftPresetPatch,
+} from "@/shared/domain/magnetization-texture/presetDefaults";
+import { MAGNETIZATION_TEXTURE_PRESETS } from "@/shared/domain/magnetization-texture/texturePresets";
 import {
   getTextureDraftBridgeSnapshot,
   patchActiveTextureDraft,
@@ -1324,5 +1331,195 @@ describe("TextureTransformGizmo & 3D surface preview synchronization", () => {
       const minDist = Math.min(...centers.map(([cx, cy]) => Math.hypot(ax - cx, ay - cy)));
       expect(minDist).toBeLessThanOrEqual(dotRadius + 1e-9);
     }
+  });
+
+  it("evaluates every preset default cleanly on 300x300x20 nm bounds (including skyrmion_lattice) via samplePresetTextureV2Client", () => {
+    const scene = {
+      version: "scene.v2",
+      revision: 1,
+      objects: [
+        {
+          id: "film_300",
+          name: "Film 300nm",
+          role: "magnet",
+          geometry: {
+            geometry_kind: "Box",
+            geometry_params: { size: [300e-9, 300e-9, 20e-9] },
+          },
+        },
+      ],
+    } as unknown as SceneResource;
+
+    const bounds = resolveTargetBoundsMeters(scene, { kind: "object", objectId: "film_300" });
+    expect(bounds.size).toEqual([300e-9, 300e-9, 20e-9]);
+
+    let switchedDraft = createDefaultMagneticTextureDraft("uniform", bounds, "object");
+    for (const preset of MAGNETIZATION_TEXTURE_PRESETS) {
+      const freshDraft = createDefaultMagneticTextureDraft(preset.id, bounds, "object");
+      const freshSpec = buildPresetSpecFromDraft(freshDraft, bounds);
+      const freshVec = samplePresetTextureV2Client(freshSpec, [0, 0, 0], bounds);
+      expect(Math.hypot(freshVec[0], freshVec[1], freshVec[2]), preset.id).toBeCloseTo(1, 9);
+
+      switchedDraft = {
+        ...switchedDraft,
+        ...switchDraftPresetPatch(switchedDraft, preset.id, bounds),
+      };
+      const switchedSpec = buildPresetSpecFromDraft(switchedDraft, bounds);
+      const switchedVec = samplePresetTextureV2Client(switchedSpec, [10e-9, -10e-9, 0], bounds);
+      expect(Math.hypot(switchedVec[0], switchedVec[1], switchedVec[2]), `${preset.id} switch`).toBeCloseTo(1, 9);
+
+      const relParams = computeRelativePresetDefaults(preset.id, bounds);
+      const relVec = samplePresetTextureV2Client(
+        {
+          preset_kind: preset.id,
+          preset_version: 2,
+          preset_params: relParams,
+        },
+        [0, 0, 0],
+        bounds,
+      );
+      expect(Math.hypot(relVec[0], relVec[1], relVec[2]), `${preset.id} relative`).toBeCloseTo(1, 9);
+    }
+
+    const skyrmionLatticeDraft = createDefaultMagneticTextureDraft("skyrmion_lattice", bounds, "object");
+    expect(skyrmionLatticeDraft.latticeConstantM).toBeGreaterThan(2 * skyrmionLatticeDraft.radiusM);
+  });
+
+  it("isolates transient invalid draft parameters in viewport 3D samplers without silencing samplePresetTextureV2Client", () => {
+    const scene = {
+      version: "scene.v2",
+      revision: 2,
+      magnetization_assets: [
+        {
+          id: "mag:invalid_lattice",
+          kind: "preset_texture",
+          preset_kind: "skyrmion_lattice",
+          preset_version: 2,
+          preset_params: {
+            plane: "xy",
+            lattice: "hexagonal",
+            lattice_constant: 40e-9,
+            radius: 30e-9,
+            wall_width: 5e-9,
+            kind: "bloch",
+            core_polarity: -1,
+            chirality: 1,
+          },
+        },
+      ],
+      objects: [
+        {
+          id: "film_300",
+          name: "Film 300nm",
+          role: "magnet",
+          magnetization_ref: "mag:invalid_lattice",
+          geometry: {
+            geometry_kind: "Box",
+            geometry_params: { size: [300e-9, 300e-9, 20e-9] },
+          },
+        },
+      ],
+    } as unknown as SceneResource;
+
+    const bounds = resolveTargetBoundsMeters(scene, { kind: "object", objectId: "film_300" });
+    const invalidDraft = {
+      ...createDefaultMagneticTextureDraft("skyrmion_lattice", bounds, "object"),
+      latticeConstantM: 40e-9,
+      radiusM: 30e-9, // violates lattice_constant > 2 * radius
+    };
+    const invalidSpec = buildPresetSpecFromDraft(invalidDraft, bounds);
+
+    // Direct evaluator remains strict fail-closed
+    expect(() => samplePresetTextureV2Client(invalidSpec, [0, 0, 0], bounds)).toThrow(
+      /must be strictly greater than 2 \* radius/,
+    );
+
+    const positionsWorld = new Float32Array([0, 0, 0, 10e-9, 0, 0]);
+    const liveBinding = {
+      target: { kind: "object" as const, objectId: "film_300" },
+      draft: invalidDraft,
+      bounds,
+      patchDraft: vi.fn(),
+      fitCharacteristicSize: vi.fn(),
+      resetTransform: vi.fn(),
+    };
+
+    // Viewport 3D HSL surface and vector samplers isolate errors and return null
+    expect(
+      sampleViewport3DSurfaceHslColors({
+        scene,
+        objectId: "film_300",
+        positionsWorld,
+        liveBinding,
+      }),
+    ).toBeNull();
+    expect(
+      sampleViewport3DSurfaceHslColors({
+        scene,
+        objectId: "film_300",
+        positionsWorld,
+      }),
+    ).toBeNull();
+
+    expect(
+      sampleAuthoredMagnetizationVectors({
+        scene,
+        objectId: "film_300",
+        positionsWorld,
+        liveBinding,
+      }),
+    ).toBeNull();
+    expect(
+      sampleAuthoredMagnetizationVectors({
+        scene,
+        objectId: "film_300",
+        positionsWorld,
+      }),
+    ).toBeNull();
+
+    const model = createViewport3DTextureTransformModel(scene);
+    expect(
+      model.sampleSurfaceColors({
+        objectId: "film_300",
+        positionsWorld,
+        liveBinding,
+      }),
+    ).toBeNull();
+    expect(
+      model.sampleVectors({
+        objectId: "film_300",
+        positionsWorld,
+        liveBinding,
+      }),
+    ).toBeNull();
+
+    // Rendering Viewport3DTextureTransformLayer with invalid activeBinding does not throw
+    const primitiveModel = buildViewport3DPrimitiveRenderModel(scene, null);
+    const owner = Symbol("invalid-draft-render-test");
+    registerTextureInspectorBinding(owner, liveBinding);
+    toggleTextureGizmo(true);
+
+    expect(() =>
+      renderToStaticMarkup(
+        createElement(Viewport3DTextureTransformLayer, {
+          colors: {
+            accent: "#38bdf8",
+            background: "#0f172a",
+            field: "#22d3ee",
+            grid: "#334155",
+            muted: "#64748b",
+            selection: "#fbbf24",
+            surface: "#1e293b",
+          } as never,
+          getObjectSettings: () => ({
+            ...DEFAULT_OBJECT_VISUALIZATION,
+            vectorsVisible: true,
+          }),
+          primitiveModel,
+          selectedObject: primitiveModel.objects[0] ?? null,
+          textureTransformModel: model,
+        }),
+      ),
+    ).not.toThrow();
   });
 });
