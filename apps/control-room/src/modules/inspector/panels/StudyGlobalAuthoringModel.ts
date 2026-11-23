@@ -357,7 +357,9 @@ export function validateStudyGlobalDraft(
     });
   }
   if (draft.parallelExecution.mode === "adaptive") {
-    validateAdaptiveWorkflow(issues, capabilities?.studyStages, capabilities?.studyStageDrafts);
+    issues.push(
+      ...validateAdaptiveWorkflow(capabilities?.studyStages, capabilities?.studyStageDrafts),
+    );
   }
   validateSolverDraft(issues, draft.solver, draft, capabilities);
   const explicitFdm = isExplicitFdmStudy({
@@ -430,11 +432,11 @@ function validateRawAdaptiveStages(
   }
 }
 
-function validateAdaptiveWorkflow(
-  issues: StudyGlobalDraftValidation[],
+export function validateAdaptiveWorkflow(
   rawStages: unknown,
   previewStages?: readonly StudyStageDraft[],
-): void {
+): StudyGlobalDraftValidation[] {
+  const issues: StudyGlobalDraftValidation[] = [];
   validateRawAdaptiveStages(issues, rawStages);
   const stages = Array.isArray(previewStages)
     ? previewStages
@@ -462,6 +464,7 @@ function validateAdaptiveWorkflow(
   if (!hasSolverStage) {
     issues.push({ message: "Adaptive parallel execution requires a known Relax or Eigen workflow.", severity: "error" });
   }
+  return issues;
 }
 
 function fdmDemagStrategyForDraft(draft: StudyGlobalDraft): string {

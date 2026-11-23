@@ -8,6 +8,7 @@ const SESSION_EPOCH = "adaptive-study-epoch";
 const REQUEST_SCOPE_EPOCH = "adaptive-study-request-scope";
 const SCENE_PATH = "/v2/sessions/current/model/scene";
 const TRANSACTIONS_PATH = "/v2/sessions/current/model/transactions";
+const VISUALIZATION_PATH = "/v2/sessions/current/visualization/state";
 const PREPARATION_PATH = "/v2/sessions/current/simulation/preparation";
 const EVENTS_PATH = "/v2/sessions/current/events/ws";
 const API_INSTANCE_HEADER = "x-fullmag-api-instance";
@@ -240,6 +241,7 @@ function makeFixture(stage) {
     mutations: [],
     sceneReadRevisions: [],
     statusSnapshots: [],
+    visualization: { schema_version: 1, revision: 0, overrides: [] },
     unknownGets: [],
     unknownMutations: [],
   };
@@ -363,6 +365,17 @@ async function openStudyInspector(browser, { id, stage, realtime = false }) {
       });
       return fulfillJson(route, status);
     }
+    if (path === VISUALIZATION_PATH) {
+      if (method === "GET") return fulfillJson(route, fixture.visualization);
+      if (method === "PATCH" && body?.camera && Object.keys(body).length === 1) {
+        fixture.visualization = {
+          ...fixture.visualization,
+          camera: clone(body.camera),
+          revision: fixture.visualization.revision + 1,
+        };
+        return fulfillJson(route, fixture.visualization);
+      }
+    }
     if (method === "GET" && path === SCENE_PATH) {
       fixture.sceneReadRevisions.push(fixture.scene.revision);
       return fulfillJson(route, clone(fixture.scene));
@@ -396,7 +409,7 @@ async function openStudyInspector(browser, { id, stage, realtime = false }) {
       });
     }
     if (method !== "GET") {
-      fixture.unknownMutations.push(method + " " + path);
+      fixture.unknownMutations.push({ method, path, body });
       return fulfillJson(
         route,
         { code: "fixture_mutation_not_available", message: "Unexpected fixture mutation." },
@@ -415,11 +428,6 @@ async function openStudyInspector(browser, { id, stage, realtime = false }) {
     waitUntil: "domcontentloaded",
     timeout: 90_000,
   });
-  await page.locator(".fm-inspector").waitFor({
-    state: "visible",
-    timeout: 60_000,
-  });
-
   const modelTab = page
     .locator('.fm-side-rail[data-side="left"] [data-rail-item="model"]');
   if (
@@ -428,13 +436,20 @@ async function openStudyInspector(browser, { id, stage, realtime = false }) {
   ) {
     if ((await modelTab.getAttribute("data-active")) !== "true") await modelTab.click();
   }
-  const studyNode = page.locator('[data-node-id="model:study"]').first();
-  await studyNode.waitFor({ state: "visible", timeout: 60_000 });
-  await studyNode.click();
+  const studyNode = page.locator('[data-node-id="model:study"]');
+  await studyNode.waitFor({ state: "visible", timeout: 60_000 }).catch(async (error) => {
+    const state = (await page.locator("body").innerText()).slice(0, 1200);
+    throw new Error(id + " did not open the study model: " + state, { cause: error });
+  });
+  if ((await studyNode.getAttribute("aria-expanded")) === "false") {
+    await studyNode.locator(".fm-explorer-tree-row__branch").click();
+  }
+  await page.locator('[data-node-id="model:study:execution"]').click();
 
-  const inspector = page.locator(".fm-inspector").first();
+  const inspector = page.locator('[data-slot="inspector-root"]').filter({
+    has: page.getByRole("heading", { name: "Execution", exact: true }),
+  });
   await inspector
-    .getByRole("heading", { name: "Global Study Settings", exact: true })
     .waitFor({ state: "visible", timeout: 60_000 });
   await page.locator(".fm-simulation-startup").waitFor({
     state: "detached",
@@ -494,21 +509,28 @@ async function openStudyInspector(browser, { id, stage, realtime = false }) {
 }
 
 async function prepareAdaptiveDraft(scenario) {
-  const mode = scenario.page.getByRole("combobox", {
-    name: "Independent k points",
+  const mode = scenario.inspector.getByRole("radio", {
+    name: "Adaptive pool",
     exact: true,
   });
-  const maxCpu = scenario.inspector.getByRole("textbox", {
-    name: "Maximum CPU target (%)",
+  await mode.click();
+  const maxCpu = scenario.inspector.getByRole("slider", {
+    name: "Max CPU share",
     exact: true,
   });
-  await mode.selectOption("adaptive");
-  await maxCpu.fill("73");
+  await maxCpu.press("End");
+  for (let step = 0; step < 5; step += 1) await maxCpu.press("ArrowLeft");
   return { mode, maxCpu };
 }
 
-function visibleValidationText(page) {
-  return page.locator(".fm-inspector-validation-list li").allTextContents();
+function applyButton(inspector) {
+  return inspector.locator('[data-slot="inspector-commit-bar"]').getByRole("button", {
+    name: /^Apply\b/,
+  });
+}
+
+function validationText(inspector) {
+  return inspector.locator('[data-slot="inspector-commit-bar"] .fm-inspector__commit-text');
 }
 
 async function waitForRealtimeSocket(scenario) {
@@ -536,22 +558,22 @@ async function runRejectedCase(browser, testCase) {
   try {
     const panelHandle = await scenario.inspector.elementHandle();
     const { mode } = await prepareAdaptiveDraft(scenario);
-    const validation = scenario.page.locator(".fm-inspector-validation-list li");
+    const validation = validationText(scenario.inspector).filter({ hasText: testCase.expected });
     await validation.first().waitFor({ state: "visible", timeout: 15_000 });
-    const messages = await visibleValidationText(scenario.page);
+    const messages = await validation.allTextContents();
     assert(
       messages.some((message) => message.includes(testCase.expected)),
       testCase.id + " did not show the expected adaptive workflow rejection: " + messages.join(" | "),
     );
-    assert.equal(await mode.inputValue(), "adaptive");
+    assert.equal(await mode.getAttribute("aria-checked"), "true");
     assert.equal(
-      await scenario.page.getByRole("button", { name: "Save globals", exact: true }).isDisabled(),
+      await applyButton(scenario.inspector).isDisabled(),
       true,
-      testCase.id + " left Save globals enabled for an unsupported workflow.",
+      testCase.id + " left Apply enabled for an unsupported workflow.",
     );
     assert.equal(
       await scenario.page.evaluate(
-        (panel) => panel.isConnected && document.querySelector(".fm-inspector") === panel,
+        (panel) => panel.isConnected && document.querySelector('[data-slot="inspector-root"]') === panel,
         panelHandle,
       ),
       true,
@@ -579,18 +601,8 @@ async function runLegalSaveCase(browser, testCase) {
   });
   try {
     const { mode } = await prepareAdaptiveDraft(scenario);
-    const validation = scenario.page.locator(".fm-inspector-validation-list li");
-    assert.equal(
-      await validation.count(),
-      0,
-      testCase.id + " unexpectedly rejected a supported CPU workflow: " +
-        (await visibleValidationText(scenario.page)).join(" | "),
-    );
-    assert.equal(await mode.inputValue(), "adaptive");
-    const save = scenario.page.getByRole("button", {
-      name: "Save globals",
-      exact: true,
-    });
+    assert.equal(await mode.getAttribute("aria-checked"), "true");
+    const save = applyButton(scenario.inspector);
     assert.equal(await save.isEnabled(), true);
 
     const responsePromise = scenario.page.waitForResponse(
@@ -617,7 +629,8 @@ async function runLegalSaveCase(browser, testCase) {
       transaction.merge_patch.study.parallel_execution.mode,
       "adaptive",
     );
-    assert.equal(transaction.merge_patch.study.requested_device, "cpu");
+    assert.equal(transaction.merge_patch.study.parallel_execution.max_cpu_percent, 75);
+    assert.equal(scenario.fixture.scene.study.requested_device, "cpu");
     assert.equal("stages" in transaction.merge_patch.study, false);
     assert.equal(scenario.fixture.scene.revision, 2);
     assert.deepEqual(scenario.fixture.unknownMutations, []);
@@ -628,7 +641,7 @@ async function runLegalSaveCase(browser, testCase) {
       base_revision: transaction.base_revision,
       mutation_count: scenario.fixture.mutations.length,
       parallel_mode: transaction.merge_patch.study.parallel_execution.mode,
-      requested_device: transaction.merge_patch.study.requested_device,
+      requested_device: scenario.fixture.scene.study.requested_device,
       response_status: response.status(),
     };
   } finally {
@@ -645,12 +658,8 @@ async function runStaleSceneCase(browser) {
   try {
     const panelHandle = await scenario.inspector.elementHandle();
     const { mode, maxCpu } = await prepareAdaptiveDraft(scenario);
-    const save = scenario.page.getByRole("button", {
-      name: "Save globals",
-      exact: true,
-    });
+    const save = applyButton(scenario.inspector);
     assert.equal(await save.isEnabled(), true);
-    assert.equal((await visibleValidationText(scenario.page)).length, 0);
 
     const maxCpuHandle = await maxCpu.elementHandle();
     await maxCpu.focus();
@@ -704,21 +713,15 @@ async function runStaleSceneCase(browser) {
     assert.equal(freshScene.revision, 2);
     assert.equal(freshScene.study.stages[0].kind, "run");
 
-    await scenario.page.waitForFunction(
-      () =>
-        [...document.querySelectorAll(".fm-inspector-validation-list li")]
-          .some((item) => item.textContent?.includes("unavailable for run stages")),
-      undefined,
-      { timeout: 15_000 },
-    );
-
-    const validationMessages = await visibleValidationText(scenario.page);
+    const validation = validationText(scenario.inspector).filter({ hasText: "unavailable for run stages" });
+    await validation.waitFor({ state: "visible", timeout: 15_000 });
+    const validationMessages = await validation.allTextContents();
     assert(
       validationMessages.some((message) => message.includes("unavailable for run stages")),
       "Fresh run stage was not used to revalidate the existing adaptive draft.",
     );
-    assert.equal(await mode.inputValue(), "adaptive");
-    assert.equal(await maxCpu.inputValue(), "73");
+    assert.equal(await mode.getAttribute("aria-checked"), "true");
+    assert.equal(await maxCpu.getAttribute("aria-valuenow"), "75");
     assert.equal(await maxCpu.isEnabled(), true);
     assert.equal(
       await maxCpu.evaluate((input) => getComputedStyle(input).opacity),
@@ -727,7 +730,7 @@ async function runStaleSceneCase(browser) {
     assert.equal(await maxCpu.evaluate((input) => document.activeElement === input), true);
     assert.equal(
       await scenario.page.evaluate(
-        (panel) => panel.isConnected && document.querySelector(".fm-inspector") === panel,
+        (panel) => panel.isConnected && document.querySelector('[data-slot="inspector-root"]') === panel,
         panelHandle,
       ),
       true,
@@ -735,7 +738,7 @@ async function runStaleSceneCase(browser) {
     );
     assert.equal(
       await scenario.page.evaluate(
-        (input) => input.isConnected && document.querySelector(".fm-inspector input[aria-label=\"Maximum CPU target (%)\"]") === input,
+        (input) => input.isConnected && document.querySelector('[role="slider"][aria-label="Max CPU share"]') === input,
         maxCpuHandle,
       ),
       true,
@@ -748,8 +751,8 @@ async function runStaleSceneCase(browser) {
 
     return {
       fresh_revision: freshScene.revision,
-      preserved_cpu_target: await maxCpu.inputValue(),
-      preserved_parallel_mode: await mode.inputValue(),
+      preserved_cpu_target: Number(await maxCpu.getAttribute("aria-valuenow")),
+      preserved_parallel_mode: "adaptive",
       rejection_visible: true,
       save_disabled_after_fresh_read: true,
       mutation_count: scenario.fixture.mutations.length,

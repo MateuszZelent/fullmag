@@ -22,7 +22,11 @@ import { ProjectRunsSection } from "../../panels/ProjectRunsSection";
 import type {
   StudyExecutionProfileAssignment,
 } from "../../panels/StudyExecutionProfileModel";
-import type { StudyGlobalDraft } from "../../panels/StudyGlobalAuthoringModel";
+import {
+  type StudyGlobalDraft,
+  validateAdaptiveWorkflow,
+} from "../../panels/StudyGlobalAuthoringModel";
+import { rawStudyStages } from "../../panels/studyInspectorShared";
 import type { StudyStageDraft } from "../../panels/StudyStageAuthoringModel";
 import {
   ConnectedInspectorSpec,
@@ -177,6 +181,10 @@ function StudyExecutionInspectorPanelView({
     [testSnapshot],
   );
   const baseline = hydratedBaseline ?? fallbackBaseline;
+  const adaptiveWorkflowError = useMemo(
+    () => (sceneData ? validateAdaptiveWorkflow(rawStudyStages(sceneData))[0]?.message ?? null : null),
+    [sceneData],
+  );
 
   const requestedBackendHint =
     globalDraftForPreview?.requestedBackend?.trim().toLowerCase() ?? null;
@@ -726,6 +734,8 @@ function StudyExecutionInspectorPanelView({
       ],
       commitBar: {
         mode: "staged",
+        lockReason: (draft) =>
+          draft.parallelMode === "adaptive" ? adaptiveWorkflowError : null,
         onApply: async (draft) => {
           if (onCommitExecution) {
             return onCommitExecution(draft);
@@ -735,6 +745,7 @@ function StudyExecutionInspectorPanelView({
       },
     }),
     [
+      adaptiveWorkflowError,
       baseline.executionProfileBound,
       baseline.sessionDiscretization,
       canSubscribeResources,
