@@ -31,6 +31,7 @@ import { RibbonGroupsRow } from "./RibbonGroupsRow";
 import { resolveRibbonActionTriggerState, resolveRibbonIconColor } from "./RibbonGroupsRow.model";
 import { RIBBON_TABS, type RibbonMenuNode, type RibbonTabContent } from "./ribbonTypes";
 import { RibbonTabStrip } from "./RibbonTabStrip";
+import { RibbonTargetBarControl } from "./RibbonTargetBarControl";
 import {
   MESHING_CAPABILITIES_PATH,
   MODEL_GEOMETRY_VALIDATION_PATH,
@@ -1884,7 +1885,7 @@ describe("ribbon structure", () => {
     });
   });
 
-  it("fails closed for unresolved physics lanes and hides FEM airbox controls from FDM", () => {
+  it("fails closed for unresolved physics and airbox lanes while exposing Airbox on resolved FDM", () => {
     const baseContext = {
       commands: createRibbonCommandRegistry(),
       sessionStatus: null,
@@ -1911,6 +1912,13 @@ describe("ribbon structure", () => {
       }),
     ]);
 
+    const unresolvedView = buildRibbonTabContent("view", baseContext);
+    expect(
+      unresolvedView?.groups
+        .find((group) => group.id === "view-global-display")
+        ?.actions.some((action) => action.id === "view-airbox"),
+    ).toBe(false);
+
     const fdmView = buildRibbonTabContent("view", {
       ...baseContext,
       sessionStatus: {
@@ -1923,14 +1931,14 @@ describe("ribbon structure", () => {
       fdmView?.groups
         .find((group) => group.id === "view-global-display")
         ?.actions.some((action) => action.id === "view-airbox"),
-    ).toBe(false);
+    ).toBe(true);
   });
 
-  it("rejects every FEM airbox command in an explicit FDM lane", async () => {
+  it("rejects airbox commands only while discretization lane is unresolved", async () => {
     const visualization = new ObjectVisualizationController();
     const before = visualization.getSettings(AIRBOX_VISUALIZATION_TARGET);
     const patches: VisualizationStatePatch[] = [];
-    const commandContext = {
+    const unresolvedContext = {
       api: {
         visualization: {
           patch: async (patch: VisualizationStatePatch) => {
@@ -1940,9 +1948,7 @@ describe("ribbon structure", () => {
         },
       },
       resourceData: {
-        [SESSION_STATUS_RESOURCE_KEY]: {
-          data: { capabilities: { active_lane: ribbonActiveLane("fdm") }, domain: { discretization: "fdm" } },
-        },
+        [SESSION_STATUS_RESOURCE_KEY]: null,
       },
       selection: {
         get: () => ({ objectId: null }),
@@ -1958,9 +1964,9 @@ describe("ribbon structure", () => {
       [RIBBON_VISUALIZATION_RESET_AIRBOX_COMMAND, undefined],
       [RIBBON_SELECTION_FOCUS_AIRBOX_COMMAND, undefined],
     ] as const) {
-      const result = await registry.execute(commandId, commandContext, input);
+      const result = await registry.execute(commandId, unresolvedContext, input);
       expect(result).toMatchObject({ status: "failed" });
-      expect(result.message).toMatch(/FDM|not applicable|unresolved/i);
+      expect(result.message).toMatch(/unresolved/i);
     }
 
     expect(patches).toEqual([]);
@@ -3234,6 +3240,12 @@ describe("ribbon structure", () => {
         label: "Airbox Visualization",
         nodeId: "model:airbox:visualization",
         objectId: null,
+        ref: {
+          kind: "airbox.visualization",
+          nodeId: "model:airbox:visualization",
+          type: "airbox",
+          visualizationTargetId: "airbox",
+        },
       },
       "ribbon",
     );
@@ -4398,7 +4410,11 @@ describe("ribbon structure", () => {
         mesh_summary: { node_count: 9, element_count: 8 },
       } as never,
     });
-    expect(mesh?.groups.map((group) => group.id)).toEqual(["build", "mesh-view"]);
+    expect(mesh?.groups.map((group) => group.id)).toEqual([
+      "mesh-target-context",
+      "build",
+      "mesh-view",
+    ]);
     expect(
       mesh?.groups
         .find((group) => group.id === "build")
@@ -4471,7 +4487,10 @@ describe("ribbon structure", () => {
         ?.actions.find((action) => action.id === "mesh.build-selected"),
     ).toBeUndefined();
     const mesh = buildRibbonTabContent("mesh", context);
-    expect(mesh?.groups.map((group) => group.id)).toEqual(["mesh-view"]);
+    expect(mesh?.groups.map((group) => group.id)).toEqual([
+      "mesh-target-context",
+      "mesh-view",
+    ]);
     expect(
       mesh?.groups.flatMap((group) =>
         group.actions.flatMap((action) =>
@@ -4496,7 +4515,10 @@ describe("ribbon structure", () => {
     expect(geometry?.groups.find((group) => group.id === "builder-lifecycle")?.actions
       .some((action) => action.id === "mesh.build-selected")).not.toBe(true);
     const mesh = buildRibbonTabContent("mesh", context);
-    expect(mesh?.groups.map((group) => group.id)).toEqual(["mesh-view"]);
+    expect(mesh?.groups.map((group) => group.id)).toEqual([
+      "mesh-target-context",
+      "mesh-view",
+    ]);
   });
 
   it("exposes FEM meshing before the initial FDM domain is replaced", () => {
@@ -4524,7 +4546,7 @@ describe("ribbon structure", () => {
     const geometryBuildAction = geometry?.groups
       .find((group) => group.id === "builder-lifecycle")
       ?.actions.find((action) => action.id === "mesh.build-selected");
-    expect(geometryBuildAction?.label).toBe("Build Mesh");
+    expect(geometryBuildAction?.label).toBe("Mesh Selected");
 
     const mesh = buildRibbonTabContent("mesh", context);
     const buildGroup = mesh?.groups.find((group) => group.id === "build");
@@ -4943,12 +4965,11 @@ describe("ribbon structure", () => {
     expect(matchedIds).toEqual(unsupportedIds);
   });
 
-  it("keeps unsupported Materials edit workflows disabled while enabling Magnetic Texture presets and transform tools", () => {
+  it("keeps unsupported Materials edit workflows disabled while enabling Magnetic Texture Inspector, presets, and transform tools", () => {
     const unsupportedIds = new Set([
       "mat-params",
       "mat-dmi",
       "mat-ku",
-      "mat-texture-inspector",
     ]);
     const matchedIds = new Set<string>();
 
@@ -4965,6 +4986,16 @@ describe("ribbon structure", () => {
     const magGroup = ALL_TAB_CONTENT.materials.groups.find(
       (group) => group.id === "materials-magnetization",
     );
+    const inspectorAction = magGroup?.actions.find(
+      (action) => action.id === "mat-texture-inspector",
+    );
+    expect(inspectorAction).toMatchObject({
+      commandId: "ribbon.inspector.open-magnetic-texture",
+      id: "mat-texture-inspector",
+      label: "Inspector",
+    });
+    expect(inspectorAction?.disabled).not.toBe(true);
+    expect(inspectorAction?.preview).not.toBe(true);
     const transformGroup = ALL_TAB_CONTENT.materials.groups.find(
       (group) => group.id === "materials-transform",
     );
@@ -5387,17 +5418,21 @@ describe("ribbon structure", () => {
     expect(importCommand?.shortcut).toBe("Ctrl+Shift+O");
   });
 
-  it("exposes object draft commit from the Geometry lifecycle group", () => {
+  it("keeps Geometry lifecycle labels distinct and free of redundant Apply Draft", () => {
     const lifecycleGroup = ALL_TAB_CONTENT.geometry.groups.find(
       (group) => group.id === "builder-lifecycle",
     );
 
-    expect(lifecycleGroup?.actions.map((action) => action.id)).toEqual(
-      expect.arrayContaining([
-        "geometry.commit-object-draft",
-        "mesh.build-selected",
-      ]),
-    );
+    expect(lifecycleGroup?.actions.map((action) => action.id)).toEqual([
+      "builder-build-geometry",
+      "mesh.build-selected",
+      "builder-validate",
+    ]);
+    expect(lifecycleGroup?.actions.map((action) => action.label)).toEqual([
+      "Realize Geometry",
+      "Mesh Selected",
+      "Validate",
+    ]);
   });
 
   it("exposes microstrip antenna creation from the Geometry create group", () => {
@@ -5491,7 +5526,7 @@ describe("ribbon structure", () => {
 
     expect(actions.find((action) => action.id === "builder-build-geometry")).toMatchObject({
       id: "builder-build-geometry",
-      label: "Build Geometry",
+      label: "Realize Geometry",
     });
     expect(actions.find((action) => action.id === "builder-validate")).toMatchObject({
       id: "builder-validate",
@@ -5852,5 +5887,205 @@ describe("stripRibbonPlaceholders", () => {
     if (radioGroup && radioGroup.type === "radio-group") {
       expect(radioGroup.items.map((item) => item.value)).toEqual(["x", "z"]);
     }
+  });
+});
+
+describe("Ribbon explicit Target Context & routing", () => {
+  const sampleScene = {
+    objects: [
+      { id: "BottomLayer", name: "BottomLayer", role: "magnet" },
+      { id: "TopLayer", name: "TopLayer", role: "magnet" },
+    ],
+    revision: 5,
+  };
+
+  it("renders the top-bar Target selector across All Objects, Airbox, single object, and Boolean CSG multi-selection", () => {
+    const sceneObjects = [
+      { id: "BottomLayer", label: "BottomLayer", role: "magnet" as const },
+      { id: "TopLayer", label: "TopLayer", role: "magnet" as const },
+    ];
+    const allHtml = renderToStaticMarkup(
+      createElement(RibbonTargetBarControl, {
+        activeTab: "view",
+        discretization: "fdm",
+        onAction: () => undefined,
+        sceneObjects,
+        selection: {
+          kind: null,
+          label: null,
+          moduleSource: null,
+          nodeId: null,
+          objectId: null,
+          ref: null,
+        },
+        visualizationTarget: null,
+      }),
+    );
+    expect(allHtml).toContain("All Objects");
+
+    const airboxHtml = renderToStaticMarkup(
+      createElement(RibbonTargetBarControl, {
+        activeTab: "view",
+        discretization: "fdm",
+        onAction: () => undefined,
+        sceneObjects,
+        selection: {
+          kind: "airbox.visualization",
+          label: "Airbox Visualization",
+          moduleSource: "ribbon",
+          nodeId: "model:airbox:visualization",
+          objectId: null,
+          ref: {
+            kind: "airbox.visualization",
+            nodeId: "model:airbox:visualization",
+            type: "airbox",
+            visualizationTargetId: "airbox",
+          },
+        },
+        visualizationTarget: AIRBOX_VISUALIZATION_TARGET,
+      }),
+    );
+    expect(airboxHtml).toContain("Airbox (Universe)");
+
+    const csgHtml = renderToStaticMarkup(
+      createElement(RibbonTargetBarControl, {
+        activeTab: "geometry",
+        discretization: "fdm",
+        onAction: () => undefined,
+        sceneObjects,
+        selection: {
+          kind: "object.root",
+          label: "TopLayer",
+          moduleSource: "explorer",
+          nodeId: "model:object:TopLayer",
+          objectId: "TopLayer",
+          ref: null,
+          selectedObjectIds: ["TopLayer", "BottomLayer"],
+        },
+        visualizationTarget: { id: "object:TopLayer", kind: "object", label: "TopLayer" },
+      }),
+    );
+    expect(csgHtml).toContain("Base [A]: TopLayer · Tools [B]: BottomLayer");
+  });
+
+  it("routes View tab Vectors and Surface controls to Airbox and surfaces FDM Multilayer Airbox Settings shortcut", () => {
+    const visualization = new ObjectVisualizationController();
+    const content = buildRibbonTabContent("view", {
+      commands: createRibbonCommandRegistry(),
+      fdmMultilayerLayout: {
+        airbox: null,
+        layers: [{ id: "layer-0", name: "BottomLayer" }],
+      } as unknown as Parameters<typeof buildRibbonTabContent>[1] extends { fdmMultilayerLayout?: infer T } ? T : never,
+      scene: sampleScene as unknown as Parameters<typeof buildRibbonTabContent>[1] extends { scene?: infer T } ? T : never,
+      selection: {
+        kind: "airbox.visualization",
+        label: "Airbox Visualization",
+        moduleSource: "ribbon",
+        nodeId: "model:airbox:visualization",
+        objectId: null,
+        ref: {
+          kind: "airbox.visualization",
+          nodeId: "model:airbox:visualization",
+          type: "airbox",
+          visualizationTargetId: "airbox",
+        },
+      },
+      sessionStatus: {
+        capabilities: { active_lane: ribbonActiveLane("fdm") },
+        domain: { discretization: "fdm" },
+        resources: { field_revision: 0, fields_revision: 0 },
+      },
+      visualization,
+      visualizationSnapshot: visualization.getSnapshot(),
+    });
+
+    const targetGroup = content?.groups[0];
+    expect(targetGroup?.id).toBe("view-target-context");
+    expect(targetGroup?.actions.map((a) => a.id)).toEqual([
+      "view-target-selector",
+      "view-target-airbox-shortcut",
+      "view-open-target-inspector",
+      "view-open-airbox-settings",
+    ]);
+    const displayGroup = content?.groups.find((g) => g.id === "view-global-display");
+    expect(displayGroup?.subtitle).toBe("Airbox");
+    const vectorsAction = displayGroup?.actions.find((a) => a.id === "view-vectors");
+    expect(vectorsAction?.splitButton).toBe(true);
+    expect(vectorsAction?.commandId).toBe(RIBBON_VISUALIZATION_PATCH_TARGET_COMMAND);
+    const surfaceAction = displayGroup?.actions.find((a) => a.id === "view-surface");
+    const wireframeNode = surfaceAction?.menu?.find((n) => n.id === "surface:wireframe");
+    expect(wireframeNode).toMatchObject({
+      commandId: RIBBON_VISUALIZATION_PATCH_TARGET_COMMAND,
+    });
+  });
+
+  it("shows Base [A] / Tools [B] in Geometry Target, active Inspector in Materials, Local Target in Physics, and Scope in Mesh", () => {
+    const visualization = new ObjectVisualizationController();
+    const commands = createControlRoomCommandRegistry();
+    const multiSelection = {
+      kind: "object.root" as const,
+      label: "TopLayer",
+      moduleSource: "explorer" as const,
+      nodeId: "model:object:TopLayer",
+      objectId: "TopLayer",
+      ref: {
+        kind: "object.root" as const,
+        nodeId: "model:object:TopLayer",
+        objectId: "TopLayer",
+        objectRole: "magnet" as const,
+        type: "scene-object" as const,
+        visualizationTargetId: "object:TopLayer" as const,
+      },
+      selectedObjectIds: ["TopLayer", "BottomLayer"],
+    };
+    const baseContext = {
+      api: { visualization: { patch: vi.fn() } },
+      commandContext: {
+        api: {} as unknown as CommandContext["api"],
+        resourceData: { [MODEL_SCENE_PATH]: sampleScene },
+        selection: {
+          get: () => multiSelection,
+          set: vi.fn(),
+        } as unknown as CommandContext["selection"],
+        source: "ribbon" as const,
+      },
+      commands,
+      scene: sampleScene as unknown as Parameters<typeof buildRibbonTabContent>[1] extends { scene?: infer T } ? T : never,
+      selection: multiSelection,
+      sessionStatus: {
+        capabilities: { active_lane: ribbonActiveLane("fdm") },
+        domain: { discretization: "fdm" as const },
+        resources: { field_revision: 0, fields_revision: 0 },
+      },
+      visualization,
+      visualizationSnapshot: visualization.getSnapshot(),
+    };
+
+    const geometry = buildRibbonTabContent("geometry", baseContext);
+    expect(geometry?.groups[0].id).toBe("geometry-target-context");
+    expect(geometry?.groups[0].actions[0].label).toBe(
+      "Base [A]: TopLayer · Tools [B]: BottomLayer",
+    );
+
+    const materials = buildRibbonTabContent("materials", baseContext);
+    expect(materials?.groups[0].id).toBe("materials-target-context");
+    expect(materials?.groups[0].actions[0].label).toBe("TopLayer");
+    const matInspector = materials?.groups
+      .find((g) => g.id === "materials-magnetization")
+      ?.actions.find((a) => a.id === "mat-texture-inspector");
+    expect(matInspector?.disabled).toBe(false);
+    expect(matInspector?.commandId).toBe("ribbon.inspector.open-magnetic-texture");
+    const uniformPreset = materials?.groups
+      .find((g) => g.id === "materials-magnetization")
+      ?.actions.find((a) => a.id === "magnetization-texture.assign-uniform");
+    expect(uniformPreset?.tooltip).toContain("TopLayer");
+
+    const physics = buildRibbonTabContent("physics", baseContext);
+    expect(physics?.groups[0].id).toBe("physics-target-context");
+    expect(physics?.groups[0].actions[0].label).toBe("TopLayer");
+
+    const mesh = buildRibbonTabContent("mesh", baseContext);
+    expect(mesh?.groups[0].id).toBe("mesh-target-context");
+    expect(mesh?.groups[0].actions[0].label).toBe("Shared FDM Grid");
   });
 });

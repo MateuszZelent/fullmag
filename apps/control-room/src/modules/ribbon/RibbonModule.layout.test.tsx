@@ -69,6 +69,7 @@ vi.mock(
     const loading = { data: null, status: "loading" } as never;
     return {
       ...actual,
+      useFdmMultilayerLayoutResource: () => loading,
       useGeometryCapabilitiesResource: () => loading,
       useGeometryValidationResource: () => loading,
       useMeshBuildCurrent: () => loading,

@@ -10,7 +10,11 @@ import type {
   CommandContribution,
   CommandResult,
 } from "@/kernel/commands/commandTypes";
-import type { Selection } from "@/kernel/selection/selectionTypes";
+import {
+  visualizationTargetIdForSceneObject,
+  type Selection,
+} from "@/kernel/selection/selectionTypes";
+import type { SceneObjectPresentationRole } from "@/shared/domain/physics/objectMagneticModel";
 import {
   MODEL_FROZEN_SPIN_PATH,
   MODEL_FROZEN_SPINS_PATH,
@@ -38,9 +42,11 @@ import {
   hasVisualizationStatePatch,
   mergeVisualizationStateTargetOverride,
   persistentVisualizationTargetPatch,
+  removeTargetOverrideField,
   resetAirboxVisualizationState,
   visualizationStateOverrideMatchesTarget,
   visualizationStatePatchFromDefaultTargetPatch,
+  visualizationTargetKey,
   visualizationTargetUnsupportedPatchFields,
   type VisualizationTargetKind,
   type VisualizationTargetPatch,
@@ -66,6 +72,14 @@ export const RIBBON_VISUALIZATION_RESET_AIRBOX_COMMAND =
   "ribbon.visualization.reset-airbox";
 export const RIBBON_SELECTION_FOCUS_AIRBOX_COMMAND =
   "ribbon.selection.focus-airbox";
+export const RIBBON_SELECTION_SELECT_TARGET_COMMAND =
+  "ribbon.selection.select-target";
+export const RIBBON_INSPECTOR_OPEN_VISUALIZATION_COMMAND =
+  "ribbon.inspector.open-visualization";
+export const RIBBON_INSPECTOR_OPEN_AIRBOX_SETTINGS_COMMAND =
+  "ribbon.inspector.open-airbox-settings";
+export const RIBBON_INSPECTOR_OPEN_MAGNETIC_TEXTURE_COMMAND =
+  "ribbon.inspector.open-magnetic-texture";
 export const RIBBON_PHYSICS_SELECT_INTERACTION_COMMAND =
   "ribbon.physics.select-interaction";
 export const RIBBON_PHYSICS_CREATE_FIELD_DRIVE_COMMAND =
@@ -83,8 +97,30 @@ export const RIBBON_CROSS_SECTION_BEGIN_DRAFT_COMMAND =
 export const RIBBON_GEOMETRY_MOVE_SELECTED_COMMAND = "geometry.move-selected";
 
 interface PatchDefaultsInput {
+  clearConflictingOverrides?: boolean;
   patch: VisualizationTargetPatch;
   targetKinds: VisualizationTargetKind[];
+}
+
+export interface RibbonSelectTargetInput {
+  objectId?: string;
+  objectLabel?: string;
+  objectRole?: SceneObjectPresentationRole;
+  tab?: "view" | "geometry" | "materials" | "physics" | "mesh";
+  targetKind: "all" | "airbox" | "object";
+}
+
+export interface RibbonOpenVisualizationInspectorInput {
+  objectId?: string;
+  objectLabel?: string;
+  objectRole?: SceneObjectPresentationRole;
+  targetKind: "airbox" | "object";
+}
+
+export interface RibbonOpenMagneticTextureInspectorInput {
+  objectId?: string;
+  objectLabel?: string;
+  objectRole?: SceneObjectPresentationRole;
 }
 
 interface PatchTargetInput {
@@ -122,8 +158,31 @@ export function globalQuantityCommandInput(
 export function visualizationDefaultsCommandInput(
   patch: VisualizationTargetPatch,
   targetKinds: VisualizationTargetKind[] = ["object", "part"],
+  options: { clearConflictingOverrides?: boolean } = {},
 ): PatchDefaultsInput {
-  return { patch, targetKinds };
+  return {
+    patch,
+    targetKinds,
+    ...(options.clearConflictingOverrides ? { clearConflictingOverrides: true } : {}),
+  };
+}
+
+export function selectRibbonTargetCommandInput(
+  input: RibbonSelectTargetInput,
+): RibbonSelectTargetInput {
+  return input;
+}
+
+export function openVisualizationInspectorCommandInput(
+  input: RibbonOpenVisualizationInspectorInput,
+): RibbonOpenVisualizationInspectorInput {
+  return input;
+}
+
+export function openMagneticTextureInspectorCommandInput(
+  input: RibbonOpenMagneticTextureInspectorInput = {},
+): RibbonOpenMagneticTextureInspectorInput {
+  return input;
 }
 
 export function visualizationTargetCommandInput(
@@ -285,7 +344,7 @@ export const RIBBON_COMMANDS: CommandContribution[] = [
     group: "ribbon-visualization",
     category: "View",
     scope: "workspace",
-    isEnabled: (context) => ribbonInteractionDiscretization(context) === "fem",
+    isEnabled: (context) => airboxCommandDisabledReason(context) === null,
     disabledReason: airboxCommandDisabledReason,
     run: patchAirboxVisualizationFromCommand,
   },
@@ -295,7 +354,7 @@ export const RIBBON_COMMANDS: CommandContribution[] = [
     group: "ribbon-visualization",
     category: "View",
     scope: "workspace",
-    isEnabled: (context) => ribbonInteractionDiscretization(context) === "fem",
+    isEnabled: (context) => airboxCommandDisabledReason(context) === null,
     disabledReason: airboxCommandDisabledReason,
     run: resetAirboxVisualizationFromCommand,
   },
@@ -306,12 +365,55 @@ export const RIBBON_COMMANDS: CommandContribution[] = [
     category: "View",
     scope: "workspace",
     isEnabled: (context) =>
-      Boolean(context.selection) && ribbonInteractionDiscretization(context) === "fem",
+      Boolean(context.selection) && airboxCommandDisabledReason(context) === null,
     disabledReason: (context) =>
       context.selection
         ? airboxCommandDisabledReason(context)
         : "Selection controller is not available.",
     run: focusAirboxFromCommand,
+  },
+  {
+    id: RIBBON_SELECTION_SELECT_TARGET_COMMAND,
+    title: "Select Ribbon Target",
+    group: "ribbon-selection",
+    category: "View",
+    scope: "workspace",
+    isEnabled: (context) => Boolean(context.selection),
+    disabledReason: (context) =>
+      context.selection ? null : "Selection controller is not available.",
+    run: selectRibbonTargetFromCommand,
+  },
+  {
+    id: RIBBON_INSPECTOR_OPEN_VISUALIZATION_COMMAND,
+    title: "Open Target Visualization Inspector",
+    group: "ribbon-selection",
+    category: "View",
+    scope: "workspace",
+    isEnabled: (context) => Boolean(context.selection),
+    disabledReason: (context) =>
+      context.selection ? null : "Selection controller is not available.",
+    run: openVisualizationInspectorFromCommand,
+  },
+  {
+    id: RIBBON_INSPECTOR_OPEN_AIRBOX_SETTINGS_COMMAND,
+    title: "Open Airbox Settings",
+    group: "ribbon-selection",
+    category: "View",
+    scope: "workspace",
+    isEnabled: (context) => Boolean(context.selection),
+    disabledReason: (context) =>
+      context.selection ? null : "Selection controller is not available.",
+    run: openAirboxSettingsFromCommand,
+  },
+  {
+    id: RIBBON_INSPECTOR_OPEN_MAGNETIC_TEXTURE_COMMAND,
+    title: "Open Magnetic Texture Inspector",
+    group: "ribbon-selection",
+    category: "Materials",
+    scope: "selection",
+    isEnabled: (context) => openMagneticTextureInspectorDisabledReason(context) === null,
+    disabledReason: openMagneticTextureInspectorDisabledReason,
+    run: openMagneticTextureInspectorFromCommand,
   },
   {
     id: RIBBON_CROSS_SECTION_BEGIN_DRAFT_COMMAND,
@@ -659,15 +761,36 @@ async function patchVisualizationDefaultsFromCommand(
 
   const localPatch = airboxLocalVisualizationPatchFromTargetPatch(input.patch);
   const persistentPatch = persistentVisualizationTargetPatch(input.patch);
+  const patchedFields = Object.keys(persistentPatch) as Array<
+    keyof VisualizationTargetPatch
+  >;
   for (const kind of input.targetKinds) {
     if (Object.keys(localPatch).length > 0) {
       context.visualization.patchViewportPreferenceDefaults(kind, localPatch);
     }
-    if (Object.keys(persistentPatch).length > 0) {
+    if (patchedFields.length > 0) {
       context.visualization.patchDefaults(kind, persistentPatch);
     }
   }
+  if (input.clearConflictingOverrides && patchedFields.length > 0) {
+    clearLocalObjectOverridesForFields(context, input.targetKinds, patchedFields);
+  }
   const statePatch = visualizationStatePatchFromDefaultTargetPatch(persistentPatch);
+  const state = visualizationStateFromContext(context);
+  if (
+    input.clearConflictingOverrides &&
+    patchedFields.length > 0 &&
+    state?.overrides?.length
+  ) {
+    const nextOverrides = clearRemoteObjectOverridesForFields(
+      state.overrides,
+      input.targetKinds,
+      patchedFields,
+    );
+    if (nextOverrides !== null) {
+      statePatch.overrides = nextOverrides;
+    }
+  }
   if (
     (context.visualizationSync || context.api) &&
     hasVisualizationStatePatch(statePatch)
@@ -675,6 +798,62 @@ async function patchVisualizationDefaultsFromCommand(
     await patchVisualizationState(context, statePatch);
   }
   return { status: "completed" };
+}
+
+function clearLocalObjectOverridesForFields(
+  context: CommandContext,
+  targetKinds: readonly VisualizationTargetKind[],
+  fields: readonly (keyof VisualizationTargetPatch)[],
+): void {
+  const visualization = context.visualization;
+  if (!visualization) return;
+  const allowObject = targetKinds.includes("object");
+  const allowPart = targetKinds.includes("part");
+  const snapshot = visualization.getSnapshot();
+  const keys = new Set([
+    ...Object.keys(snapshot.overrides),
+    ...Object.keys(snapshot.pendingOverrides ?? {}),
+  ]);
+  for (const key of keys) {
+    if (key === "airbox") continue;
+    let target: VisualizationTargetRef | null = null;
+    if (key.startsWith("object:") && allowObject) {
+      target = { id: key, kind: "object" };
+    } else if (key.startsWith("part:") && allowPart) {
+      target = { id: key, kind: "part" };
+    }
+    if (!target) continue;
+    for (const field of fields) {
+      visualization.removeTargetOverrideField(target, field);
+    }
+  }
+}
+
+function clearRemoteObjectOverridesForFields(
+  overrides: VisualizationStateResource["overrides"],
+  targetKinds: readonly VisualizationTargetKind[],
+  fields: readonly (keyof VisualizationTargetPatch)[],
+): VisualizationStateResource["overrides"] | null {
+  const scopes = new Set<string>();
+  if (targetKinds.includes("object")) scopes.add("object");
+  if (targetKinds.includes("part")) scopes.add("part");
+  let nextOverrides = overrides;
+  let changed = false;
+  for (const entry of overrides) {
+    if (!scopes.has(entry.scope)) continue;
+    const target: VisualizationTargetRef = {
+      id: entry.scope_id,
+      kind: entry.scope === "part" ? "part" : "object",
+    };
+    for (const field of fields) {
+      const updated = removeTargetOverrideField(nextOverrides, target, field);
+      if (updated !== nextOverrides) {
+        nextOverrides = updated;
+        changed = true;
+      }
+    }
+  }
+  return changed ? nextOverrides : null;
 }
 
 async function patchVisualizationTargetFromCommand(
@@ -686,8 +865,6 @@ async function patchVisualizationTargetFromCommand(
   }
 
   if (input.target.kind === "airbox") {
-    const guard = requireFemAirboxLane(context);
-    if (guard) return guard;
     return patchAirboxVisualization(context, input.patch);
   }
 
@@ -708,6 +885,15 @@ async function patchVisualizationTargetFromCommand(
   }
   const persistentPatch = persistentVisualizationTargetPatch(input.patch);
   if (Object.keys(persistentPatch).length > 0) {
+    const state = visualizationStateFromContext(context);
+    if (!context.visualizationSync && !context.api) {
+      context.visualization.patchTarget(input.target, persistentPatch);
+      return { status: "completed" };
+    }
+    if (!state) {
+      context.visualization.patchTarget(input.target, persistentPatch);
+      return { status: "completed" };
+    }
     const patched = await patchTargetOverrideResource(
       context,
       input.target,
@@ -743,7 +929,7 @@ async function clearVisualizationTargetFromCommand(
 async function patchAirboxVisualizationFromCommand(
   context: CommandContext,
 ): Promise<CommandResult> {
-  const guard = requireFemAirboxLane(context);
+  const guard = requireResolvedAirboxLane(context);
   if (guard) return guard;
   const patch = asRecord(context.input) as VisualizationTargetPatch | null;
   if (!patch) {
@@ -755,7 +941,7 @@ async function patchAirboxVisualizationFromCommand(
 async function resetAirboxVisualizationFromCommand(
   context: CommandContext,
 ): Promise<CommandResult> {
-  const guard = requireFemAirboxLane(context);
+  const guard = requireResolvedAirboxLane(context);
   if (guard) return guard;
   if (context.visualizationSync || context.api) {
     await patchVisualizationState(
@@ -770,7 +956,7 @@ async function resetAirboxVisualizationFromCommand(
 }
 
 function focusAirboxFromCommand(context: CommandContext): CommandResult {
-  const guard = requireFemAirboxLane(context);
+  const guard = requireResolvedAirboxLane(context);
   if (guard) return guard;
   context.selection?.set(
     {
@@ -778,6 +964,256 @@ function focusAirboxFromCommand(context: CommandContext): CommandResult {
       label: "Airbox Visualization",
       nodeId: "model:airbox:visualization",
       objectId: null,
+      ref: {
+        kind: "airbox.visualization",
+        nodeId: "model:airbox:visualization",
+        type: "airbox",
+        visualizationTargetId: "airbox",
+      },
+    },
+    context.source,
+  );
+  return { status: "completed" };
+}
+
+function selectRibbonTargetFromCommand(context: CommandContext): CommandResult {
+  if (!context.selection) {
+    return { message: "Selection controller is not available.", status: "failed" };
+  }
+  const input = asRibbonSelectTargetInput(context.input);
+  if (!input) {
+    return { message: "Target selection input is missing.", status: "failed" };
+  }
+  if (input.targetKind === "all") {
+    context.selection.set(
+      {
+        kind: "objects.root",
+        label: "Objects",
+        nodeId: "model:objects",
+        objectId: null,
+        ref: {
+          kind: "objects.root",
+          nodeId: "model:objects",
+          scopeId: "objects",
+          type: "model-scope",
+        },
+      },
+      context.source,
+    );
+    return { status: "completed" };
+  }
+  if (input.targetKind === "airbox") {
+    context.selection.set(
+      {
+        kind: "airbox.visualization",
+        label: "Airbox Visualization",
+        nodeId: "model:airbox:visualization",
+        objectId: null,
+        ref: {
+          kind: "airbox.visualization",
+          nodeId: "model:airbox:visualization",
+          type: "airbox",
+          visualizationTargetId: "airbox",
+        },
+      },
+      context.source,
+    );
+    return { status: "completed" };
+  }
+  if (!input.objectId) {
+    return { message: "Target object ID is missing.", status: "failed" };
+  }
+  const current = context.selection.get() as Selection | undefined;
+  const objectRole =
+    input.objectRole ?? resolveSceneObjectRole(context, input.objectId) ?? "magnet";
+  const label = input.objectLabel || input.objectId;
+  let kind: "object.root" | "object.visualization" | "object.magnetic-texture" | "object.physics" =
+    "object.root";
+  let nodeId = `model:object:${input.objectId}`;
+  if (input.tab === "materials" && current?.kind?.startsWith("object.magnetic-texture")) {
+    kind = "object.magnetic-texture";
+    nodeId = `model:object:${input.objectId}:magnetic-texture`;
+  } else if (input.tab === "view" && current?.kind === "object.visualization") {
+    kind = "object.visualization";
+    nodeId = `model:object:${input.objectId}:visualization`;
+  } else if (input.tab === "physics" && current?.kind === "object.physics") {
+    kind = "object.physics";
+    nodeId = `model:object:${input.objectId}:physics`;
+  }
+  context.selection.set(
+    {
+      kind,
+      label,
+      nodeId,
+      objectId: input.objectId,
+      ref: {
+        kind,
+        nodeId,
+        objectId: input.objectId,
+        objectRole,
+        type: "scene-object",
+        visualizationTargetId: visualizationTargetIdForSceneObject(input.objectId),
+      },
+    },
+    context.source,
+  );
+  return { status: "completed" };
+}
+
+function openVisualizationInspectorFromCommand(context: CommandContext): CommandResult {
+  if (!context.selection) {
+    return { message: "Selection controller is not available.", status: "failed" };
+  }
+  const input = asOpenVisualizationInspectorInput(context.input);
+  if (!input) {
+    return { message: "Visualization inspector target is missing.", status: "failed" };
+  }
+  context.layout?.setPanelVisible("right", true);
+  if (input.targetKind === "airbox") {
+    context.selection.set(
+      {
+        kind: "airbox.visualization",
+        label: "Airbox Visualization",
+        nodeId: "model:airbox:visualization",
+        objectId: null,
+        ref: {
+          kind: "airbox.visualization",
+          nodeId: "model:airbox:visualization",
+          type: "airbox",
+          visualizationTargetId: "airbox",
+        },
+      },
+      context.source,
+    );
+    return { status: "completed" };
+  }
+  if (!input.objectId) {
+    return { message: "Select a magnetic object or Airbox first.", status: "failed" };
+  }
+  const objectRole =
+    input.objectRole ?? resolveSceneObjectRole(context, input.objectId) ?? "magnet";
+  const nodeId = `model:object:${input.objectId}:visualization`;
+  context.selection.set(
+    {
+      kind: "object.visualization",
+      label: input.objectLabel ? `${input.objectLabel} · Visualization` : "Visualization",
+      nodeId,
+      objectId: input.objectId,
+      ref: {
+        kind: "object.visualization",
+        nodeId,
+        objectId: input.objectId,
+        objectRole,
+        type: "scene-object",
+        visualizationTargetId: visualizationTargetIdForSceneObject(input.objectId),
+      },
+    },
+    context.source,
+  );
+  return { status: "completed" };
+}
+
+function openAirboxSettingsFromCommand(context: CommandContext): CommandResult {
+  if (!context.selection) {
+    return { message: "Selection controller is not available.", status: "failed" };
+  }
+  context.layout?.setPanelVisible("right", true);
+  context.selection.set(
+    {
+      kind: "airbox.root",
+      label: "Airbox",
+      nodeId: "model:airbox",
+      objectId: null,
+      ref: {
+        kind: "airbox.root",
+        nodeId: "model:airbox",
+        type: "airbox",
+        visualizationTargetId: "airbox",
+      },
+    },
+    context.source,
+  );
+  return { status: "completed" };
+}
+
+function resolveMagneticTextureTargetObject(
+  context: CommandContext,
+): { objectId: string; objectLabel: string; objectRole: SceneObjectPresentationRole } | null {
+  const input = asRecord(context.input);
+  const inputObjectId =
+    typeof input?.objectId === "string" && input.objectId.trim()
+      ? input.objectId.trim()
+      : null;
+  const current = context.selection?.get() as Selection | undefined;
+  const objectId = inputObjectId ?? current?.objectId ?? null;
+  const scene = asRecord(context.resourceData?.[MODEL_SCENE_PATH]);
+  const objects = Array.isArray(scene?.objects) ? scene.objects : [];
+
+  if (objectId) {
+    const matched = objects.find(
+      (candidate) => asRecord(candidate)?.id === objectId,
+    );
+    const matchedRecord = asRecord(matched);
+    const role = asSceneObjectRole(input?.objectRole ?? matchedRecord?.role) ?? "magnet";
+    if (role !== "magnet") return null;
+    const label =
+      (typeof input?.objectLabel === "string" && input.objectLabel.trim()) ||
+      (typeof matchedRecord?.name === "string" && matchedRecord.name.trim()) ||
+      objectId;
+    return { objectId, objectLabel: label, objectRole: role };
+  }
+
+  for (const candidate of objects) {
+    const record = asRecord(candidate);
+    const id = typeof record?.id === "string" ? record.id : null;
+    const role = asSceneObjectRole(record?.role) ?? "magnet";
+    if (id && role === "magnet") {
+      const label =
+        typeof record?.name === "string" && record.name.trim() ? record.name.trim() : id;
+      return { objectId: id, objectLabel: label, objectRole: role };
+    }
+  }
+  return null;
+}
+
+function openMagneticTextureInspectorDisabledReason(
+  context: CommandContext,
+): string | null {
+  if (!context.selection) return "Selection controller is not available.";
+  const target = resolveMagneticTextureTargetObject(context);
+  if (!target) {
+    return "Select a magnetic object to open Magnetic Texture Inspector.";
+  }
+  return null;
+}
+
+function openMagneticTextureInspectorFromCommand(
+  context: CommandContext,
+): CommandResult {
+  const reason = openMagneticTextureInspectorDisabledReason(context);
+  const target = resolveMagneticTextureTargetObject(context);
+  if (reason || !target || !context.selection) {
+    return {
+      message: reason ?? "Select a magnetic object to open Magnetic Texture Inspector.",
+      status: "failed",
+    };
+  }
+  context.layout?.setPanelVisible("right", true);
+  const nodeId = `model:object:${target.objectId}:magnetic-texture`;
+  context.selection.set(
+    {
+      kind: "object.magnetic-texture",
+      label: "Magnetic Texture",
+      nodeId,
+      objectId: target.objectId,
+      ref: {
+        kind: "object.magnetic-texture",
+        nodeId,
+        objectId: target.objectId,
+        objectRole: target.objectRole,
+        type: "scene-object",
+        visualizationTargetId: visualizationTargetIdForSceneObject(target.objectId),
+      },
     },
     context.source,
   );
@@ -1045,7 +1481,7 @@ async function patchAirboxVisualization(
   context: CommandContext,
   patch: VisualizationTargetPatch,
 ): Promise<CommandResult> {
-  const guard = requireFemAirboxLane(context);
+  const guard = requireResolvedAirboxLane(context);
   if (guard) return guard;
   const localPatch = airboxLocalVisualizationPatchFromTargetPatch(patch);
   if (Object.keys(localPatch).length > 0) {
@@ -1072,7 +1508,9 @@ async function patchAirboxVisualization(
     return { status: "completed" };
   }
 
-  const receipt = await patchVisualizationState(context, statePatch);
+  const receipt = await patchVisualizationState(context, statePatch, {
+    targetIds: [visualizationTargetKey(AIRBOX_VISUALIZATION_TARGET)],
+  });
   const revision = state?.revision;
   if (typeof revision === "number" && receipt) {
     context.visualization?.patchTargetPending(
@@ -1081,6 +1519,11 @@ async function patchAirboxVisualization(
       revision,
       receipt.transactionId,
     );
+  } else {
+    context.visualization?.patchTarget(
+      AIRBOX_VISUALIZATION_TARGET,
+      persistentVisualizationTargetPatch(patch),
+    );
   }
   return { status: "completed" };
 }
@@ -1088,10 +1531,10 @@ async function patchAirboxVisualization(
 async function patchVisualizationState(
   context: CommandContext,
   patch: VisualizationStatePatch,
-  options: { flush?: boolean } = {},
+  options: { flush?: boolean; targetIds?: readonly string[] } = {},
 ): Promise<{ transactionId: string } | null> {
   if (context.visualizationSync) {
-    const receipt = context.visualizationSync.queuePatch(patch);
+    const receipt = context.visualizationSync.queuePatch(patch, options.targetIds);
     if (options.flush) {
       await context.visualizationSync.flushNow();
     }
@@ -1123,13 +1566,25 @@ async function patchTargetOverrideResource(
     return false;
   }
 
-  await patchVisualizationState(context, {
-    overrides: mergeVisualizationStateTargetOverride(
-      state.overrides ?? [],
+  const receipt = await patchVisualizationState(
+    context,
+    {
+      overrides: mergeVisualizationStateTargetOverride(
+        state.overrides ?? [],
+        target,
+        patch,
+      ),
+    },
+    { targetIds: [visualizationTargetKey(target)] },
+  );
+  if (receipt && typeof state.revision === "number") {
+    context.visualization?.patchTargetPending(
       target,
       patch,
-    ),
-  });
+      state.revision,
+      receipt.transactionId,
+    );
+  }
   return true;
 }
 
@@ -1142,11 +1597,16 @@ async function clearTargetOverrideResource(
     return false;
   }
 
-  await patchVisualizationState(context, {
-    overrides: (state.overrides ?? []).filter(
-      (entry) => !visualizationStateOverrideMatchesTarget(entry, target),
-    ),
-  });
+  await patchVisualizationState(
+    context,
+    {
+      overrides: (state.overrides ?? []).filter(
+        (entry) => !visualizationStateOverrideMatchesTarget(entry, target),
+      ),
+    },
+    { targetIds: [visualizationTargetKey(target)] },
+  );
+  context.visualization?.clearPendingTarget(target);
   return true;
 }
 
@@ -1164,7 +1624,91 @@ function asPatchDefaultsInput(value: unknown): PatchDefaultsInput | null {
   if (!record || !Array.isArray(record.targetKinds)) return null;
   const targetKinds = record.targetKinds.filter(isVisualizationTargetKind);
   const patch = asRecord(record.patch) as VisualizationTargetPatch | null;
-  return targetKinds.length > 0 && patch ? { patch, targetKinds } : null;
+  return targetKinds.length > 0 && patch
+    ? {
+        patch,
+        targetKinds,
+        ...(record.clearConflictingOverrides === true
+          ? { clearConflictingOverrides: true }
+          : {}),
+      }
+    : null;
+}
+
+function asSceneObjectRole(value: unknown): SceneObjectPresentationRole | undefined {
+  return value === "antenna" ||
+    value === "magnet" ||
+    value === "conductor" ||
+    value === "electrode" ||
+    value === "auxiliary"
+    ? value
+    : undefined;
+}
+
+function resolveSceneObjectRole(
+  context: CommandContext,
+  objectId: string,
+): SceneObjectPresentationRole | undefined {
+  const scene = asRecord(context.resourceData?.[MODEL_SCENE_PATH]);
+  const objects = Array.isArray(scene?.objects) ? scene.objects : [];
+  for (const candidate of objects) {
+    const record = asRecord(candidate);
+    if (record?.id === objectId) {
+      return asSceneObjectRole(record.role);
+    }
+  }
+  return undefined;
+}
+
+function asRibbonSelectTargetInput(value: unknown): RibbonSelectTargetInput | null {
+  const record = asRecord(value);
+  if (!record) return null;
+  const targetKind = record.targetKind;
+  if (targetKind !== "all" && targetKind !== "airbox" && targetKind !== "object") {
+    return null;
+  }
+  const tab =
+    record.tab === "view" ||
+    record.tab === "geometry" ||
+    record.tab === "materials" ||
+    record.tab === "physics" ||
+    record.tab === "mesh"
+      ? record.tab
+      : undefined;
+  return {
+    targetKind,
+    ...(typeof record.objectId === "string" && record.objectId.trim()
+      ? { objectId: record.objectId.trim() }
+      : {}),
+    ...(typeof record.objectLabel === "string" && record.objectLabel.trim()
+      ? { objectLabel: record.objectLabel.trim() }
+      : {}),
+    ...(asSceneObjectRole(record.objectRole)
+      ? { objectRole: asSceneObjectRole(record.objectRole) }
+      : {}),
+    ...(tab ? { tab } : {}),
+  };
+}
+
+function asOpenVisualizationInspectorInput(
+  value: unknown,
+): RibbonOpenVisualizationInspectorInput | null {
+  const record = asRecord(value);
+  if (!record) return null;
+  const targetKind = record.targetKind;
+  if (targetKind !== "airbox" && targetKind !== "object") return null;
+  return {
+    targetKind,
+    ...(typeof record.objectId === "string" && record.objectId.trim()
+      ? { objectId: record.objectId.trim() }
+      : {}),
+    ...(typeof record.objectLabel === "string" && record.objectLabel.trim()
+      ? { objectLabel: record.objectLabel.trim() }
+      : {}),
+    ...(asSceneObjectRole(record.objectRole)
+      ? { objectRole: asSceneObjectRole(record.objectRole) }
+      : {}),
+  };
 }
 
 function asPatchTargetInput(value: unknown): PatchTargetInput | null {
@@ -1271,16 +1815,13 @@ function ribbonInteractionDiscretization(
 
 function airboxCommandDisabledReason(context: CommandContext): string | null {
   const lane = ribbonInteractionDiscretization(context);
-  if (lane === "fdm") {
-    return "FEM airbox visualization is not applicable to FDM; use the structured universe/grid extent.";
-  }
   if (lane === "unknown") {
-    return "Discretization lane is unresolved; FEM airbox visualization is disabled.";
+    return "Discretization lane is unresolved; airbox visualization is disabled.";
   }
   return null;
 }
 
-function requireFemAirboxLane(context: CommandContext): CommandResult | null {
+function requireResolvedAirboxLane(context: CommandContext): CommandResult | null {
   const reason = airboxCommandDisabledReason(context);
   return reason ? { message: reason, status: "failed" } : null;
 }
