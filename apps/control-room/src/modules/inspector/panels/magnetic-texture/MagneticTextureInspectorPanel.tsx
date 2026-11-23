@@ -1446,6 +1446,7 @@ export function MagneticTextureInspectorPanel({ selection }: InspectorPanelProps
   ]);
 
   const controller = useInspectorSpecController(spec, selection, baselineDraft, undefined, {
+    resetFieldInputsOnPatch: true,
     initialModeTabId:
       isLoadSelection || baselineDraft.sourceMode === "field-file" ? "field-file" : "preset",
   });
@@ -1525,6 +1526,7 @@ export function MagneticTextureInspectorPanel({ selection }: InspectorPanelProps
       target,
       draft: controller.draft,
       bounds,
+      previewDraft: controller.dirty && controller.valid,
       patchDraft: (partial: Partial<MagneticTextureDraft>) =>
         controllerActionsRef.current.patchDraft(partial),
       fitCharacteristicSize: () =>
@@ -1545,9 +1547,11 @@ export function MagneticTextureInspectorPanel({ selection }: InspectorPanelProps
   }, [
     bindingOwner,
     bounds,
+    controller.dirty,
     controller.draft,
     controller.patchDraft,
     controller.revertAll,
+    controller.valid,
     target,
   ]);
 
@@ -1577,6 +1581,7 @@ export function MagneticTextureInspectorPanel({ selection }: InspectorPanelProps
       dirtyFields={controller.dirtyFields}
       displayUnits={controller.displayUnits}
       draft={controller.draft}
+      fieldResetTokens={controller.fieldResetTokens}
       forceShowErrors={controller.forceShowErrors}
       invalidFields={controller.invalidFields}
       selection={selection}

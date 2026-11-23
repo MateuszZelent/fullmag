@@ -65,6 +65,7 @@ export interface InspectorSectionProps<TDraft> {
   onOpenChange: (nextOpen: boolean) => void;
   filterQuery?: string;
   displayUnits?: Readonly<Record<string, string>>;
+  fieldResetTokens?: ReadonlyMap<string, number>;
   onDisplayUnitChange?: (fieldKey: string, unit: string) => void;
   dirtyFields: ReadonlySet<string>;
   touchedFields: ReadonlySet<string>;
@@ -84,6 +85,7 @@ export function InspectorSection<TDraft>({
   onOpenChange,
   filterQuery = "",
   displayUnits,
+  fieldResetTokens,
   onDisplayUnitChange,
   dirtyFields,
   touchedFields,
@@ -147,6 +149,7 @@ export function InspectorSection<TDraft>({
             key={resolveStableRowKey(section.id, row)}
             ctx={ctx}
             externalError={row.key ? (invalidFields.get(row.key) ?? null) : null}
+            fieldResetToken={row.key ? fieldResetTokens?.get(row.key) : undefined}
             forceShowErrors={forceShowErrors}
             liveRow={isLiveSection}
             row={row}
@@ -223,6 +226,7 @@ export function InspectorSection<TDraft>({
                   ctx={ctx}
                   displayUnit={rowKey ? displayUnits?.[rowKey] : undefined}
                   externalError={rowKey ? (invalidFields.get(rowKey) ?? null) : null}
+                  fieldResetToken={rowKey ? fieldResetTokens?.get(rowKey) : undefined}
                   flash={rowKey && flashFieldKey === rowKey ? flashKind : undefined}
                   forceShowErrors={forceShowErrors}
                   liveRow={isLiveSection}

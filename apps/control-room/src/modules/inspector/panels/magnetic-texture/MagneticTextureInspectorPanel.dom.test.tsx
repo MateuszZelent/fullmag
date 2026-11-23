@@ -620,6 +620,132 @@ describe("MagneticTextureInspectorPanel & StageTextureAssignmentsEditor on 8-slo
     }
   });
 
+  it("replaces a same-value invalid radius when switching texture presets after focusing the field error", async () => {
+    const vortexScene = createTestScene() as unknown as {
+      magnetization_assets: Array<{
+        preset_kind: string;
+        preset_params: Record<string, unknown>;
+      }>;
+    };
+    vortexScene.magnetization_assets[0]!.preset_kind = "vortex";
+    vortexScene.magnetization_assets[0]!.preset_params = {
+      plane: "xy",
+      circulation: 1,
+      core_polarity: 1,
+      core_radius: 6e-9,
+    };
+    mockSceneState.data = vortexScene as unknown as SceneResource;
+
+    const dom = installSimulationPreparationTestDom();
+    const container = dom.document.createElement("div");
+    dom.document.body.appendChild(container);
+    const root = createRoot(container as unknown as Element);
+    const { applyMagnetization, kernel } = createKernelMock();
+    const selection: Selection = {
+      kind: "object.magnetic-texture",
+      label: "Magnetic texture",
+      moduleSource: "explorer",
+      nodeId: "model:object:nanodisk:magnetic-texture",
+      objectId: "nanodisk",
+      ref: {
+        kind: "object.magnetic-texture",
+        nodeId: "model:object:nanodisk:magnetic-texture",
+        objectId: "nanodisk",
+        type: "scene-object",
+        visualizationTargetId: "object:nanodisk",
+      },
+    };
+
+    try {
+      await act(async () => {
+        root.render(
+          <KernelContext.Provider value={kernel as never}>
+            <InspectorEditSessionProvider>
+              <MagneticTextureInspectorPanel selection={selection} />
+            </InspectorEditSessionProvider>
+          </KernelContext.Provider>,
+        );
+      });
+
+      const blochTile = findElement(
+        container,
+        (el) => el.getAttribute("data-preset-tile") === "bloch_skyrmion",
+        "Bloch skyrmion tile",
+      );
+      await act(async () => blochTile.click());
+
+      const radiusRow = findElement(
+        container,
+        (el) => el.getAttribute("data-row") === "radiusM",
+        "characteristic radius row",
+      );
+      const radiusInput = findElement(
+        radiusRow,
+        (el) => el.tagName === "INPUT",
+        "characteristic radius input",
+      );
+      expect(radiusInput.value).toBe("25");
+
+      await act(async () => {
+        attachReactInputShim(radiusInput);
+        radiusInput.focus();
+        radiusInput.dispatchEvent(new TestEvent("focusin", { bubbles: true }));
+      });
+      await act(async () => setInputValue(radiusInput, "bad"));
+      await act(async () => {
+        radiusInput.dispatchEvent(new TestEvent("focusout", { bubbles: true }));
+      });
+      expect(radiusInput.getAttribute("aria-invalid")).toBe("true");
+
+      const fixFieldButton = findElement(
+        container,
+        (el) => el.tagName === "BUTTON" && el.textContent.includes("Fix 1 field to apply"),
+        "Fix 1 field to apply button",
+      );
+      await act(async () => fixFieldButton.click());
+
+      const neelTile = findElement(
+        container,
+        (el) => el.getAttribute("data-preset-tile") === "neel_skyrmion",
+        "Néel skyrmion tile",
+      );
+      await act(async () => neelTile.click());
+
+      const resetRadiusInput = findElement(
+        findElement(
+          container,
+          (el) => el.getAttribute("data-row") === "radiusM",
+          "reset characteristic radius row",
+        ),
+        (el) => el.tagName === "INPUT",
+        "reset characteristic radius input",
+      );
+      expect(resetRadiusInput.value).toBe("25");
+      expect(container.textContent).not.toContain("Fix 1 field to apply");
+
+      const applyButton = findElement(
+        container,
+        (el) => el.tagName === "BUTTON" && el.textContent.includes("Apply Texture"),
+        "Apply Texture button",
+      );
+      expect(applyButton.disabled).toBe(false);
+      await act(async () => applyButton.click());
+
+      expect(applyMagnetization).toHaveBeenCalledTimes(1);
+      expect(applyMagnetization.mock.calls[0]?.[0]).toMatchObject({
+        kind: "object",
+        object_id: "nanodisk",
+        asset: {
+          preset_kind: "neel_skyrmion",
+          preset_params: { radius: 25e-9 },
+        },
+      });
+    } finally {
+      await act(async () => root.unmount());
+      dom.restore();
+    }
+  });
+
   it("switches region from Override to Inherit from Object and commits applyMagnetization with texture_override: null", async () => {
     const dom = installSimulationPreparationTestDom();
     const container = dom.document.createElement("div");
