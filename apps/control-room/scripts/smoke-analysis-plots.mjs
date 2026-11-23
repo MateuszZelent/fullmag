@@ -221,14 +221,9 @@ async function assertNoVisibleResourceErrors(page, errors) {
   if (errors.length > 0) {
     throw new Error(`Browser page errors before screenshot capture: ${errors.join(" | ")}`);
   }
-  const errorNotifications = page.locator(
-    '.fm-notifications__toast[data-kind="error"], .fm-toast[data-variant="error"]',
-  );
-  const visibleErrors = [];
-  for (let index = 0; index < await errorNotifications.count(); index += 1) {
-    const notification = errorNotifications.nth(index);
-    if (await notification.isVisible()) visibleErrors.push(await notification.innerText());
-  }
+  const visibleErrors = await page.locator(
+    '.fm-notifications__toast[data-kind="error"]:visible, .fm-toast[data-variant="error"]:visible',
+  ).allTextContents();
   if (visibleErrors.length > 0) {
     throw new Error(
       `Visible resource error notification before screenshot capture: ${visibleErrors.join(" | ")}`,
@@ -2383,6 +2378,15 @@ async function installAnalysisDatasetFixtureRoutes(page, frequencyDomainFixture 
           total_count: 0,
           unsupported_reason: "no validated result dataset artifacts are published",
         }),
+        contentType: "application/json",
+        headers: cors,
+        status: 200,
+      });
+      return;
+    }
+    if (url.pathname === "/v2/sessions/current/data/fields") {
+      await route.fulfill({
+        body: JSON.stringify({ domain_generation_id: "0", quantities: [], revision: 0 }),
         contentType: "application/json",
         headers: cors,
         status: 200,
