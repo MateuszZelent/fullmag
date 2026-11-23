@@ -2958,7 +2958,7 @@ def _parser() -> argparse.ArgumentParser:
                                  help="Fresh Linux master only: bind the exact successful diagnostic-stop terminal when host state is lost")
     recreate_volume.add_argument("--fresh-state", action="store_true", help="Preserve the previous session and archive its runtime state before starting an empty session")
     recreate_volume.add_argument("--fresh-storage-root", type=Path,
-                                 help="Start the fresh replacement on this operator-registered storage root")
+                                 help="One-time root for this fresh replacement start; configure FULLMAG_PROJECT_STORAGE_ROOT in the main checkout or environment for later starts")
     recreate_volume.set_defaults(profile="dev", image=None, toolchain_image=None, source_manifest=None,
                                  include_untracked=None, script=None)
 
