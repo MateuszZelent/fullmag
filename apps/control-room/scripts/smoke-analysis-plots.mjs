@@ -557,19 +557,21 @@ async function verifyPointSelection(page) {
 }
 
 async function verifyAnalysisInspectorSummary(page, datasetRef) {
-  const inspector = page.locator(".fm-inspector-panel");
-  await inspector.getByText("Analysis chart", { exact: true }).waitFor({
+  const inspector = page.locator('[data-slot="inspector-root"][data-inspector-owner="chart-point"]');
+  const chart = inspector.locator('[data-section-id="analysis-parent-chart"]');
+  await chart.getByText("Analysis Chart", { exact: true }).waitFor({
     state: "visible",
     timeout: timeoutMs,
   });
-  const text = await inspector.innerText();
+  const text = await chart.innerText();
   for (const required of ["Surface", "Dataset", datasetRef, "X axis", "Range", "Series"]) {
     if (!text.includes(required)) {
       throw new Error(`Analysis Inspector is missing ${required}: ${text}`);
     }
   }
+  const inspectorText = await inspector.innerText();
   for (const forbidden of ["Chart controls", "Following", "Resume live chart updates", "Pause live chart updates"]) {
-    if (text.includes(forbidden)) {
+    if (inspectorText.includes(forbidden)) {
       throw new Error(`Analysis Inspector still exposes Live Chart control ${forbidden}.`);
     }
   }

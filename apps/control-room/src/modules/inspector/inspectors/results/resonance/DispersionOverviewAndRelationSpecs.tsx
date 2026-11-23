@@ -3,6 +3,7 @@
 import {
   Box,
   Compass,
+  GitCommitHorizontal,
   LineChart,
   Waves,
 } from "lucide-react";
@@ -448,6 +449,8 @@ function DispersionRelationResultView({
     );
   }, [kernel, selectedPoint]);
 
+  const provenanceRows = useMemo(() => buildRefProvenanceRows(selection), [selection]);
+
   const fBounds = useMemo(
     () => minMaxFinite(points.map((p) => p.frequencyHz)),
     [points],
@@ -653,6 +656,15 @@ function DispersionRelationResultView({
               },
             ]
           : []),
+        ...(provenanceRows.length
+          ? [{
+              id: "dispersion-provenance",
+              title: "Provenance",
+              icon: GitCommitHorizontal,
+              defaultOpen: false,
+              rows: provenanceRows,
+            }]
+          : []),
       ],
       commitBar: { mode: "readOnly" },
     }),
@@ -664,6 +676,7 @@ function DispersionRelationResultView({
       kernel,
       onSelectDispersionSelection,
       points,
+      provenanceRows,
       selectedPoint,
       selectedVg,
       selection,
