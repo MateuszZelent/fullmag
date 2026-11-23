@@ -1,4 +1,5 @@
 #include "fullmag_fem_cuda_trace.h"
+#include "../gpu/cuda/runtime/cuda_activity_trace.hpp"
 
 #include <cerrno>
 #include <atomic>
@@ -155,6 +156,23 @@ bool run_cuda_workload() {
     return ok;
 }
 
+bool run_cuda_window_workload() {
+    constexpr size_t kBytes = 4096;
+    unsigned char host[kBytes]{};
+    unsigned char *device = nullptr;
+    cudaStream_t stream = nullptr;
+    bool ok = cudaStreamCreate(&stream) == cudaSuccess;
+    if (ok) ok = cudaMalloc(reinterpret_cast<void **>(&device), kBytes) == cudaSuccess;
+    if (ok) ok = cudaMemcpyAsync(device, host, kBytes, cudaMemcpyHostToDevice, stream) == cudaSuccess;
+    if (ok) ok = cudaMemsetAsync(device, 0x2a, kBytes, stream) == cudaSuccess;
+    if (ok) ok = cudaMemcpyAsync(host, device, kBytes, cudaMemcpyDeviceToHost, stream) == cudaSuccess;
+    if (ok) ok = cudaStreamSynchronize(stream) == cudaSuccess;
+    if (ok) ok = launch_probe_kernel();
+    if (device != nullptr && cudaFree(device) != cudaSuccess) ok = false;
+    if (stream != nullptr && cudaStreamDestroy(stream) != cudaSuccess) ok = false;
+    return ok;
+}
+
 int buffer_refusal_contract() {
     fullmag::fem::CuptiLibrary api;
     if (!api.load() || api.version != 28) return fail("buffer refusal requires verified CUPTI API 28");
@@ -230,6 +248,38 @@ bool file_contains_cuda_event_metadata(const char *path) {
             line.find("\"stream_id\":null") == std::string::npos) return true;
     }
     return false;
+}
+
+bool is_lower_sha256(const char *value) {
+    if (value == nullptr || std::strlen(value) != 64) return false;
+    for (size_t index = 0; index < 64; ++index) {
+        const char ch = value[index];
+        if (!((ch >= '0' && ch <= '9') || (ch >= 'a' && ch <= 'f'))) return false;
+    }
+    return true;
+}
+
+void print_modal_phase_report(const fullmag::fem::cuda_trace::ModalEpsSolveTraceV1 &report) {
+    std::cerr << "cuda_activity_trace_contract: phase=tagged_window"
+              << " flags=" << report.flags
+              << " coverage=" << report.phase_coverage
+              << " counter_coverage=" << report.counter_coverage
+              << " start_ns=" << report.start_ns
+              << " end_ns=" << report.end_ns
+              << " activity_records=" << report.observed_activity_records
+              << " kernels=" << report.kernel_records
+              << " h2d_count=" << report.h2d_count
+              << " h2d_bytes=" << report.h2d_bytes
+              << " d2h_count=" << report.d2h_count
+              << " d2h_bytes=" << report.d2h_bytes
+              << " allocations=" << report.allocation_count
+              << " releases=" << report.release_count
+              << " host_sync_count=" << report.host_sync_count
+              << " scalar_telemetry_d2h_count=" << report.scalar_telemetry_d2h_count
+              << " scalar_telemetry_d2h_bytes=" << report.scalar_telemetry_d2h_bytes
+              << " full_vector_crossings=" << report.full_vector_crossings
+              << " digest=" << (report.native_trace_sha256[0] != '\0' ? "present" : "absent")
+              << '\n' << std::flush;
 }
 
 bool stats_match_file_size(int fd, uint64_t bytes_written) {
@@ -515,10 +565,77 @@ int enabled_contract() {
         return fail("complete named kernel NDJSON record was not delivered before stop");
     }
 
-    if (!run_cuda_workload()) {
+    fullmag::fem::cuda_trace::ModalEpsSolveTraceConfigV1 phase_config{};
+    phase_config.scalar_telemetry_bytes = sizeof(double);
+    phase_config.full_vector_bytes = 4096;
+    fullmag::fem::cuda_trace::PhaseTokenV1 phase_token{};
+    if (!fullmag::fem::cuda_trace::begin_modal_eps_solve_v1(phase_config, &phase_token)) {
+        fullmag_fem_cuda_trace_stats_v1 ignored{};
+        fullmag_fem_cuda_trace_stop_v1(token, &ignored);
+        return fail("tagged CUPTI phase did not begin while capture was active");
+    }
+    if (!run_cuda_window_workload()) {
         fullmag_fem_cuda_trace_stats_v1 ignored{};
         fullmag_fem_cuda_trace_stop_v1(token, &ignored);
         return fail("CUDA test workload failed");
+    }
+    fullmag::fem::cuda_trace::ModalEpsSolveTraceV1 phase_report{};
+    const bool phase_complete =
+        fullmag::fem::cuda_trace::end_modal_eps_solve_v1(phase_token, &phase_report);
+    print_modal_phase_report(phase_report);
+    constexpr std::uint64_t required_phase_coverage =
+        fullmag::fem::cuda_trace::modal_eps_coverage_kernel |
+        fullmag::fem::cuda_trace::modal_eps_coverage_memcpy |
+        fullmag::fem::cuda_trace::modal_eps_coverage_memory |
+        fullmag::fem::cuda_trace::modal_eps_coverage_synchronization;
+    constexpr std::uint64_t required_counter_coverage =
+        fullmag::fem::cuda_trace::modal_eps_counter_coverage_transfers |
+        fullmag::fem::cuda_trace::modal_eps_counter_coverage_allocations |
+        fullmag::fem::cuda_trace::modal_eps_counter_coverage_host_sync |
+        fullmag::fem::cuda_trace::modal_eps_counter_coverage_full_vector_crossings;
+    if (!phase_complete || phase_report.flags != fullmag::fem::cuda_trace::modal_eps_trace_complete ||
+        phase_report.start_ns == 0 || phase_report.end_ns <= phase_report.start_ns ||
+        (phase_report.phase_coverage & required_phase_coverage) != required_phase_coverage ||
+        (phase_report.counter_coverage & required_counter_coverage) != required_counter_coverage ||
+        (phase_report.counter_coverage &
+         fullmag::fem::cuda_trace::modal_eps_counter_coverage_scalar_telemetry_d2h) != 0 ||
+        phase_report.kernel_records == 0 || phase_report.h2d_count == 0 ||
+        phase_report.h2d_bytes < 4096 || phase_report.d2h_count == 0 ||
+        phase_report.d2h_bytes < 4096 || phase_report.allocation_count == 0 ||
+        phase_report.release_count == 0 || phase_report.host_sync_count == 0 ||
+        phase_report.full_vector_crossings != 2 ||
+        !is_lower_sha256(phase_report.native_trace_sha256)) {
+        fullmag_fem_cuda_trace_stats_v1 ignored{};
+        fullmag_fem_cuda_trace_stop_v1(token, &ignored);
+        return fail("tagged CUPTI phase report is incomplete or lacks observed GPU events");
+    }
+
+    // A window eigensolve issues multiple EPSSolve calls under one capture.
+    // Completing one interval must never grant the old token access to the next.
+    fullmag::fem::cuda_trace::PhaseTokenV1 next_phase_token{};
+    if (!fullmag::fem::cuda_trace::begin_modal_eps_solve_v1(phase_config, &next_phase_token) ||
+        next_phase_token.capture_token != phase_token.capture_token ||
+        next_phase_token.value == phase_token.value) {
+        fullmag_fem_cuda_trace_stats_v1 ignored{};
+        fullmag_fem_cuda_trace_stop_v1(token, &ignored);
+        return fail("could not open a distinct second modal phase in the same capture");
+    }
+    fullmag::fem::cuda_trace::ModalEpsSolveTraceV1 stale_report{};
+    if (fullmag::fem::cuda_trace::end_modal_eps_solve_v1(phase_token, &stale_report) ||
+        stale_report.flags != fullmag::fem::cuda_trace::modal_eps_trace_unsupported) {
+        fullmag_fem_cuda_trace_stats_v1 ignored{};
+        fullmag_fem_cuda_trace_stop_v1(token, &ignored);
+        return fail("a stale token affected the next modal phase");
+    }
+    fullmag::fem::cuda_trace::ModalEpsSolveTraceV1 next_report{};
+    if (!run_cuda_window_workload() ||
+        !fullmag::fem::cuda_trace::end_modal_eps_solve_v1(next_phase_token, &next_report) ||
+        next_report.start_ns < phase_report.end_ns ||
+        next_report.full_vector_crossings != phase_report.full_vector_crossings ||
+        !is_lower_sha256(next_report.native_trace_sha256)) {
+        fullmag_fem_cuda_trace_stats_v1 ignored{};
+        fullmag_fem_cuda_trace_stop_v1(token, &ignored);
+        return fail("second modal phase evidence is incomplete or includes the first window");
     }
 
     fullmag_fem_cuda_trace_stats_v1 stats{};
@@ -646,6 +763,67 @@ int enabled_contract() {
         (stats.limit_flags & FULLMAG_FEM_CUDA_TRACE_LIMIT_DURATION) == 0)
         return fail("duration limit was exceeded or not reported");
 
+    // The modal consumer must still measure a later solve even after the
+    // diagnostic NDJSON prefix has exhausted either of its budgets.
+    for (const bool time_budget : {false, true}) {
+        if (!trace.reset()) return fail("could not reset modal sample output");
+        const uint64_t sample_bytes = time_budget ? FULLMAG_FEM_CUDA_TRACE_MAX_BYTES : 4096;
+        const uint32_t sample_ms = time_budget ? 1 : 30000;
+        const uint64_t expected_limit = time_budget
+            ? FULLMAG_FEM_CUDA_TRACE_LIMIT_DURATION : FULLMAG_FEM_CUDA_TRACE_LIMIT_BYTES;
+        token = 0;
+        if (fullmag_fem_cuda_trace_start_modal_v1(trace.fd, sample_bytes, sample_ms, &token) !=
+            FULLMAG_FEM_OK || token == 0) return fail("independent modal capture did not start");
+        if (!time_budget) {
+            for (int index = 0; index < 8; ++index) {
+                if (!run_cuda_window_workload()) return fail("modal sample warmup failed");
+            }
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        fullmag::fem::cuda_trace::PhaseTokenV1 later_phase{};
+        fullmag::fem::cuda_trace::ModalEpsSolveTraceV1 later_report{};
+        if (!fullmag::fem::cuda_trace::begin_modal_eps_solve_v1(phase_config, &later_phase) ||
+            !run_cuda_window_workload() ||
+            !fullmag::fem::cuda_trace::end_modal_eps_solve_v1(later_phase, &later_report) ||
+            later_report.kernel_records == 0 || later_report.full_vector_crossings != 2 ||
+            !is_lower_sha256(later_report.native_trace_sha256))
+            return fail("the NDJSON budget interrupted a later native modal phase");
+        if (fullmag_fem_cuda_trace_stop_v1(token, &stats) != FULLMAG_FEM_OK ||
+            (stats.limit_flags & expected_limit) == 0 || stats.dropped_records != 0 ||
+            stats.bytes_written > sample_bytes || !stats_match_file_size(trace.fd, stats.bytes_written))
+            return fail("modal sample caps must preserve loss accounting and file bounds");
+    }
+
+    if (!trace.reset()) return fail("could not reset the long modal sample");
+    token = 0;
+    if (fullmag_fem_cuda_trace_start_modal_v1(trace.fd, 4096, 30000, &token) !=
+        FULLMAG_FEM_OK || token == 0) return fail("long modal capture did not start");
+    unsigned char *long_phase_device = nullptr;
+    if (cudaMalloc(reinterpret_cast<void **>(&long_phase_device), 4096) != cudaSuccess)
+        return fail("long modal capture allocation failed");
+    fullmag::fem::cuda_trace::PhaseTokenV1 long_phase{};
+    if (!fullmag::fem::cuda_trace::begin_modal_eps_solve_v1(phase_config, &long_phase))
+        return fail("long modal phase did not begin");
+    constexpr int kLongPhaseOperations = 32769;
+    for (int index = 0; index < kLongPhaseOperations; ++index) {
+        if (cudaMemsetAsync(long_phase_device, index & 255, 4096) != cudaSuccess)
+            return fail("CUDA memset failed during the long modal phase");
+        if (index % 128 == 127) {
+            if (cudaDeviceSynchronize() != cudaSuccess)
+                return fail("CUDA workload synchronization failed");
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
+    }
+    if (!launch_probe_kernel()) return fail("CUDA kernel failed during the long modal phase");
+    fullmag::fem::cuda_trace::ModalEpsSolveTraceV1 long_report{};
+    if (!fullmag::fem::cuda_trace::end_modal_eps_solve_v1(long_phase, &long_report) ||
+        long_report.observed_activity_records <= 32768u ||
+        !is_lower_sha256(long_report.native_trace_sha256))
+        return fail("long modal phase lacked complete counters beyond the former record cap");
+    if (cudaFree(long_phase_device) != cudaSuccess ||
+        fullmag_fem_cuda_trace_stop_v1(token, &stats) != FULLMAG_FEM_OK || stats.dropped_records != 0)
+        return fail("long modal capture did not close with zero lost records");
+
     unsigned char *prompt_stop_device = nullptr;
     if (cudaMalloc(reinterpret_cast<void **>(&prompt_stop_device), 4096) != cudaSuccess)
         return fail("prompt-stop device allocation failed");
@@ -687,6 +865,15 @@ int main(int argc, char **argv) {
 #if !defined(FULLMAG_FEM_CUDA_TRACE_TEST_ENABLED)
     if (fullmag_fem_cuda_trace_available_v1() != 0)
         return fail("unsupported build reported CUPTI tracing available");
+    fullmag::fem::cuda_trace::ModalEpsSolveTraceConfigV1 config{};
+    fullmag::fem::cuda_trace::PhaseTokenV1 phase_token{};
+    if (fullmag::fem::cuda_trace::begin_modal_eps_solve_v1(config, &phase_token) ||
+        phase_token.flags != fullmag::fem::cuda_trace::modal_eps_trace_unavailable)
+        return fail("unsupported build did not fail closed for tagged CUPTI phase begin");
+    fullmag::fem::cuda_trace::ModalEpsSolveTraceV1 phase_report{};
+    if (fullmag::fem::cuda_trace::end_modal_eps_solve_v1(phase_token, &phase_report) ||
+        phase_report.flags != fullmag::fem::cuda_trace::modal_eps_trace_unavailable)
+        return fail("unsupported build did not fail closed for tagged CUPTI phase end");
     uint64_t token = 0;
     if (fullmag_fem_cuda_trace_start_v1(-1, 4096, 1, &token) !=
         FULLMAG_FEM_ERR_UNAVAILABLE)

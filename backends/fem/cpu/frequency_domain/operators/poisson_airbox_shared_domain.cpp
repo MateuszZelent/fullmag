@@ -1566,9 +1566,9 @@ bool recompute_shared_domain_static_demag_p1(
     const mfem::SparseMatrix &p_full = form.SpMat();
     mfem::SparseMatrix p_reduced(reduced_count, reduced_count);
     {
-        const int *row_offsets = p_full.GetI();
-        const int *columns = p_full.GetJ();
-        const double *values = p_full.GetData();
+        const int *row_offsets = p_full.HostReadI();
+        const int *columns = p_full.HostReadJ();
+        const double *values = p_full.HostReadData();
         for (int row = 0; row < p_full.Height(); ++row) {
             const int reduced_row = static_cast<int>(scalar_reduced_node[row]);
             for (int cursor = row_offsets[row]; cursor < row_offsets[row + 1]; ++cursor) {
@@ -1582,7 +1582,8 @@ bool recompute_shared_domain_static_demag_p1(
     p_reduced.Finalize();
 
     mfem::Vector rhs(reduced_count);
-    rhs = 0.0;
+    double *rhs_host = rhs.HostWrite();
+    std::fill_n(rhs_host, reduced_count, 0.0);
     mfem::Array<int> dofs;
     mfem::Vector shape;
     mfem::DenseMatrix dshape;
@@ -1613,7 +1614,7 @@ bool recompute_shared_domain_static_demag_p1(
             }
             for (int local = 0; local < dofs.Size(); ++local) {
                 const int node = node_of(dofs[local]);
-                rhs[static_cast<int>(scalar_reduced_node[node])] += weight *
+                rhs_host[static_cast<int>(scalar_reduced_node[node])] += weight *
                     (magnetization[0] * dshape(local, 0) +
                      magnetization[1] * dshape(local, 1) +
                      magnetization[2] * dshape(local, 2));
@@ -1631,7 +1632,7 @@ bool recompute_shared_domain_static_demag_p1(
         }
         for (const int reduced : reduced_essential) {
             p_reduced.EliminateRowCol(reduced);
-            rhs[reduced] = 0.0;
+            rhs_host[reduced] = 0.0;
         }
     } else if (boundary_kind == PoissonAirboxBoundaryKind::pure_neumann) {
         // The constant kernel of P is orthogonal to a consistent charge source;
@@ -1655,6 +1656,9 @@ bool recompute_shared_domain_static_demag_p1(
         return false;
     }
 
+    // CG can leave the current potential on the device even though this
+    // magnetic projection is assembled on the host.
+    const double *potential_host = potential.HostRead();
     std::vector<double> field_accumulator(3u * static_cast<std::size_t>(node_count), 0.0);
     std::vector<double> mass_accumulator(static_cast<std::size_t>(node_count), 0.0);
     for (int element = 0; element < mesh->GetNE(); ++element) {
@@ -1676,7 +1680,7 @@ bool recompute_shared_domain_static_demag_p1(
             double gradient[3] = {0.0, 0.0, 0.0};
             for (int local = 0; local < dofs.Size(); ++local) {
                 const double value =
-                    potential[static_cast<int>(scalar_reduced_node[node_of(dofs[local])])];
+                    potential_host[scalar_reduced_node[node_of(dofs[local])]];
                 for (int axis = 0; axis < 3; ++axis) {
                     gradient[axis] += value * dshape(local, axis);
                 }
@@ -2025,7 +2029,16 @@ FrequencyDomainStatus validate_modal_shared_domain_payload_contract(
         const bool open_airbox_identity =
             payload.magnetic_pair_count == 0u && payload.airbox_pair_count == 0u &&
             payload.mesh->periodic_node_pairs_len == 0u &&
-            payload.mesh->periodic_boundary_pair_markers_len == 0u;
+            payload.mesh->periodic_boundary_pair_markers_len == 0u &&
+            payload.boundary_kind != nullptr &&
+            std::strcmp(payload.boundary_kind, "robin") == 0;
+        const bool periodic_airbox_identity =
+            payload.magnetic_pair_count > 0u && payload.airbox_pair_count > 0u;
+        if (!open_airbox_identity && !periodic_airbox_identity) {
+            copy_error(error_message,
+                       "shared-domain payload has incomplete periodic/open-airbox pair identity");
+            return FrequencyDomainStatus::validation_error;
+        }
         if ((!open_airbox_identity &&
              (payload.mesh->periodic_node_pairs == nullptr ||
               payload.mesh->periodic_node_pairs_len < 2u ||
@@ -2068,21 +2081,30 @@ FrequencyDomainStatus validate_modal_shared_domain_payload_contract(
         }
         bool has_periodic_face = false;
         bool has_open_z_face = false;
+        bool has_exterior_face = false;
+        bool every_exterior_face_is_robin = true;
         for (std::uint64_t index = 0u; index < payload.mesh->facet_roles_len; ++index) {
             const std::uint32_t role = payload.mesh->facet_roles[index];
             const std::uint32_t marker = payload.mesh->facet_markers[index];
             if (role == FULLMAG_FEM_FACET_ROLE_PERIODIC_SEAM) {
                 has_periodic_face = true;
             }
-            if (role == FULLMAG_FEM_FACET_ROLE_EXTERIOR && marker == payload.boundary_marker) {
-                has_open_z_face = true;
+            if (role == FULLMAG_FEM_FACET_ROLE_EXTERIOR) {
+                has_exterior_face = true;
+                if (marker == payload.boundary_marker) {
+                    has_open_z_face = true;
+                } else {
+                    every_exterior_face_is_robin = false;
+                }
             }
         }
-        if ((open_airbox_identity ? has_periodic_face : !has_periodic_face) ||
-            !has_open_z_face) {
+        const bool open_boundary_invalid = open_airbox_identity &&
+            (has_periodic_face || !has_exterior_face || !every_exterior_face_is_robin);
+        if ((open_airbox_identity && open_boundary_invalid) ||
+            (!open_airbox_identity && (!has_periodic_face || !has_open_z_face))) {
             copy_error(error_message,
                        open_airbox_identity
-                           ? "open_airbox_k0 payload has periodic seams or no exterior Robin boundary"
+                           ? "open_airbox_k0 payload requires identity maps, no periodic seams, and Robin on every exterior face"
                            : "shared-domain payload periodic seams or open-z boundary are not mapped");
             return FrequencyDomainStatus::validation_error;
         }

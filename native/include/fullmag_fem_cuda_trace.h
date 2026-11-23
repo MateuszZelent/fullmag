@@ -38,6 +38,13 @@ FULLMAG_FEM_API int fullmag_fem_cuda_trace_start_v1(
     uint64_t max_bytes,
     uint32_t max_duration_ms,
     uint64_t *token);
+// The limits bound the NDJSON sample. Tagged modal phases keep collecting
+// until stop, with real collector loss still reported in dropped_records.
+FULLMAG_FEM_API int fullmag_fem_cuda_trace_start_modal_v1(
+    int fd,
+    uint64_t max_bytes,
+    uint32_t max_duration_ms,
+    uint64_t *token);
 FULLMAG_FEM_API int fullmag_fem_cuda_trace_stop_v1(
     uint64_t token,
     fullmag_fem_cuda_trace_stats_v1 *stats);

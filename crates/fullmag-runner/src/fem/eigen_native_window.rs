@@ -648,6 +648,15 @@ pub(super) fn execute_native_modal_window(
     } else {
         None
     };
+    let open_airbox_boundary_identity = if open_airbox_k0_modal_requested(plan) {
+        Some(native_open_airbox_boundary_identity(
+            shared_domain_problem.as_ref().ok_or_else(|| RunError {
+                message: "open_airbox_k0 requires the certified shared-domain payload".to_string(),
+            })?,
+        )?)
+    } else {
+        None
+    };
     if shared_domain_problem.is_some() && runner_operator.is_some() {
         return Err(RunError {
             message: "native shared-domain modal production must not assemble or transport a runner operator"
@@ -670,6 +679,33 @@ pub(super) fn execute_native_modal_window(
             "runner_operator_transport": "disabled",
         })
     };
+    if let (Some(identity), Some(object)) = (
+        open_airbox_boundary_identity.as_ref(),
+        operator_diagnostics_value.as_object_mut(),
+    ) {
+        object.insert("demag_kind".to_string(), serde_json::json!("open_airbox_k0"));
+        object.insert(
+            "magnetostatic_bc".to_string(),
+            serde_json::json!("open_airbox_k0"),
+        );
+        object.insert(
+            "outer_boundary_kind".to_string(),
+            serde_json::json!("poisson_robin"),
+        );
+        object.insert("boundary_kind".to_string(), serde_json::json!("robin"));
+        object.insert(
+            "boundary_marker".to_string(),
+            serde_json::json!(identity.boundary_marker),
+        );
+        object.insert(
+            "robin_beta".to_string(),
+            serde_json::json!(identity.robin_beta),
+        );
+        object.insert(
+            "boundary_gauge_digest".to_string(),
+            serde_json::json!(identity.boundary_gauge_digest),
+        );
+    }
     // The explicit runner operator is also used by real non-Floquet lanes
     // (free, pinned and ordinary periodic boundaries).  This provenance
     // record is intentionally scoped to the actual Floquet boundary kind;
@@ -1010,6 +1046,30 @@ pub(super) fn execute_native_modal_window(
             ),
         });
     }
+    if let Some(identity) = open_airbox_boundary_identity.as_ref() {
+        let gpu_attestation = native_result.modal_gpu_attestation.as_ref();
+        if execution_target == native_fem::NativeModalExecutionTarget::ProductionGpu
+            && gpu_attestation.is_none()
+        {
+            return Err(RunError {
+                message: "k0_poisson_airbox_gpu_attestation_missing".to_string(),
+            });
+        }
+        super::eigen_native_result::validate_native_open_airbox_k0_result_identity(
+            &native_result.result_json,
+            Some(&native_result.diagnostics_json),
+            &identity.boundary_gauge_digest,
+            identity.boundary_marker,
+            identity.robin_beta,
+            gpu_attestation,
+        )?;
+    }
+    let native_diagnostics_json = match open_airbox_boundary_identity.as_ref() {
+        Some(identity) => {
+            verified_open_airbox_diagnostics_json(&native_result.diagnostics_json, identity)?
+        }
+        None => native_result.diagnostics_json.clone(),
+    };
     let mut terminal_state = NativeModalTerminalState::resolve(
         native_interrupted,
         NativeModalControlRequest::from_atomic_value(requested_control.load(Ordering::Relaxed)),
@@ -1046,7 +1106,7 @@ pub(super) fn execute_native_modal_window(
     };
     let mut solver_diagnostics = native_solver_diagnostics_json_with_expected_digest(
         plan,
-        &native_result.diagnostics_json,
+        &native_diagnostics_json,
         Some(&native_result.result_json),
         native_result.modal_gpu_attestation.as_ref(),
         runner_magnetic_pencil
@@ -2753,6 +2813,77 @@ struct NativePoissonAirboxExecutionContract {
     validated_scope: Option<&'static str>,
 }
 
+#[derive(Debug, Clone)]
+struct NativeOpenAirboxBoundaryIdentity {
+    boundary_gauge_digest: String,
+    boundary_marker: u32,
+    robin_beta: f64,
+}
+
+fn native_open_airbox_boundary_identity(
+    problem: &native_fem::NativeModalEigenSharedDomainProblem<'_>,
+) -> Result<NativeOpenAirboxBoundaryIdentity, RunError> {
+    let binding = &problem.certificate_binding_v6;
+    if !problem.mesh.periodic_node_pairs.is_empty()
+        || !problem.mesh.periodic_boundary_pairs.is_empty()
+        || problem.magnetic_pair_count != 0
+        || problem.airbox_pair_count != 0
+        || problem.boundary_kind != "robin"
+        || binding.boundary_kind != "robin"
+        || problem.boundary_marker != binding.boundary_marker
+        || problem.robin_beta.to_bits() != binding.robin_beta.to_bits()
+        || !problem.robin_beta.is_finite()
+        || problem.robin_beta <= 0.0
+        || !binding.boundary_gauge_digest.starts_with("sha256:")
+        || binding.boundary_gauge_digest.len() != 71
+    {
+        return Err(RunError {
+            message: "open_airbox_k0 runner v6 boundary identity is incomplete or contradictory"
+                .to_string(),
+        });
+    }
+    Ok(NativeOpenAirboxBoundaryIdentity {
+        boundary_gauge_digest: binding.boundary_gauge_digest.clone(),
+        boundary_marker: problem.boundary_marker,
+        robin_beta: problem.robin_beta,
+    })
+}
+
+fn verified_open_airbox_diagnostics_json(
+    raw: &str,
+    identity: &NativeOpenAirboxBoundaryIdentity,
+) -> Result<String, RunError> {
+    let mut diagnostics = serde_json::from_str::<serde_json::Value>(raw).map_err(|error| {
+        RunError {
+            message: format!("failed to parse native open-airbox diagnostics JSON: {error}"),
+        }
+    })?;
+    let object = diagnostics.as_object_mut().ok_or_else(|| RunError {
+        message: "native open-airbox diagnostics JSON must be an object".to_string(),
+    })?;
+    // The result JSON and, on GPU, the attestation have already matched this
+    // accepted v6 identity. Populate details that the native result binds
+    // inside the digest but intentionally omits as standalone result fields.
+    for (key, value) in [
+        ("demag_kind", serde_json::json!("open_airbox_k0")),
+        ("magnetostatic_bc", serde_json::json!("open_airbox_k0")),
+        ("outer_boundary_kind", serde_json::json!("poisson_robin")),
+        ("boundary_kind", serde_json::json!("robin")),
+        (
+            "boundary_marker",
+            serde_json::json!(identity.boundary_marker),
+        ),
+        ("robin_beta", serde_json::json!(identity.robin_beta)),
+        (
+            "boundary_gauge_digest",
+            serde_json::json!(identity.boundary_gauge_digest),
+        ),
+    ] {
+        object.entry(key.to_string()).or_insert(value);
+    }
+    Ok(diagnostics.to_string())
+}
+
 fn is_native_k0_poisson_airbox_modal_adapter(adapter: &str) -> bool {
     matches!(
         adapter,
@@ -2760,6 +2891,7 @@ fn is_native_k0_poisson_airbox_modal_adapter(adapter: &str) -> bool {
             | "k0_poisson_airbox_cpu_schur_slepc"
             | "k0_poisson_airbox_gpu_petsc_slepc"
             | "k0_poisson_airbox_gpu_modal_device_krylov"
+            | "k0_poisson_airbox_gpu_augmented_cudss"
     )
 }
 
@@ -2797,15 +2929,21 @@ fn native_poisson_airbox_execution_contract(
         }
         let cpu_schur = adapter == "k0_poisson_airbox_cpu_schur_slepc";
         if open_airbox_k0_modal_requested(plan) {
-            if gpu || !cpu_schur {
+            let expected_gpu_adapter = matches!(adapter, "k0_poisson_airbox_gpu_petsc_slepc" | "k0_poisson_airbox_gpu_augmented_cudss");
+            if (gpu && !expected_gpu_adapter) || (!gpu && !cpu_schur) {
                 return Err(RunError {
-                    message: "native_open_airbox_k0_requires_cpu_schur_adapter".to_string(),
+                    message: "native_open_airbox_k0_adapter_mismatch".to_string(),
                 });
             }
             return Ok(NativePoissonAirboxExecutionContract {
                 magnetostatic_bc: "open_airbox_k0",
                 production_periodic_airbox_claim: false,
                 validated_scope: None,
+            });
+        }
+        if adapter == "k0_poisson_airbox_gpu_augmented_cudss" {
+            return Err(RunError {
+                message: "native_open_airbox_k0_adapter_mismatch".to_string(),
             });
         }
         return Ok(NativePoissonAirboxExecutionContract {
@@ -2818,6 +2956,26 @@ fn native_poisson_airbox_execution_contract(
     Err(RunError {
         message: format!("native_poisson_airbox_unknown_adapter={adapter}"),
     })
+}
+
+fn require_poisson_airbox_gpu_operator(
+    adapter: &str,
+    attestation: Option<&native_fem::NativeModalGpuAttestation>,
+) -> Result<(), RunError> {
+    let typed = attestation.ok_or_else(|| RunError {
+        message: "k0_poisson_airbox_gpu_attestation_missing".to_string(),
+    })?;
+    let expected = if adapter == "k0_poisson_airbox_gpu_augmented_cudss" {
+        native_fem::NativeModalGpuOperatorKind::AugmentedRobinCudssCuda
+    } else {
+        native_fem::NativeModalGpuOperatorKind::MatrixFreeSchurCuda
+    };
+    if typed.operator_kind != expected {
+        return Err(RunError {
+            message: "k0_poisson_airbox_gpu_attestation_solver_adapter_mismatch".to_string(),
+        });
+    }
+    Ok(())
 }
 
 fn insert_native_poisson_airbox_execution_provenance(
@@ -2837,14 +2995,13 @@ fn insert_native_poisson_airbox_execution_provenance(
     }
     let gpu = matches!(
         adapter.as_str(),
-        "k0_poisson_airbox_gpu_petsc_slepc" | "k0_poisson_airbox_gpu_modal_device_krylov"
+        "k0_poisson_airbox_gpu_petsc_slepc" | "k0_poisson_airbox_gpu_modal_device_krylov" | "k0_poisson_airbox_gpu_augmented_cudss"
     );
     let contract = native_poisson_airbox_execution_contract(plan, &adapter, gpu)?;
-    if gpu && gpu_attestation.is_none() {
-        return Err(RunError {
-            message: "k0_poisson_airbox_gpu_attestation_missing".to_string(),
-        });
+    if gpu {
+        require_poisson_airbox_gpu_operator(&adapter, gpu_attestation)?;
     }
+    let cudss = adapter == "k0_poisson_airbox_gpu_augmented_cudss";
 
     let mut requested = diagnostics
         .get("requested_execution")
@@ -2890,7 +3047,9 @@ fn insert_native_poisson_airbox_execution_provenance(
         resolved_object
             .entry("engine".to_string())
             .or_insert_with(|| {
-                serde_json::json!(if gpu {
+                serde_json::json!(if cudss {
+                    "gpu_cudss_augmented_robin_cuda"
+                } else if gpu {
                     "gpu_petsc_slepc_cuda"
                 } else {
                     "cpu_slepc_schur_targeted"
@@ -2924,10 +3083,22 @@ fn insert_native_poisson_airbox_execution_provenance(
     }
     diagnostics.insert("resolved_execution".to_string(), resolved);
     if let Some(attestation) = gpu_attestation {
-        diagnostics.insert(
-            "gpu_execution_attestation".to_string(),
-            attestation.artifact_json(),
-        );
+        let mut artifact = attestation.artifact_json();
+        if cudss {
+            let observed = diagnostics
+                .get("gpu_execution_attestation")
+                .and_then(serde_json::Value::as_object)
+                .ok_or_else(|| RunError {
+                    message: "native cuDSS execution observations are missing".to_string(),
+                })?;
+            for key in ["native_trace_window", "native_scope"] {
+                let value = observed.get(key).ok_or_else(|| RunError {
+                    message: format!("native cuDSS execution observations are missing {key}"),
+                })?;
+                artifact[key] = value.clone();
+            }
+        }
+        diagnostics.insert("gpu_execution_attestation".to_string(), artifact);
     }
     Ok(())
 }
@@ -3026,14 +3197,13 @@ fn insert_native_poisson_airbox_hardened_contract(
     }
     let gpu = matches!(
         adapter.as_str(),
-        "k0_poisson_airbox_gpu_petsc_slepc" | "k0_poisson_airbox_gpu_modal_device_krylov"
+        "k0_poisson_airbox_gpu_petsc_slepc" | "k0_poisson_airbox_gpu_modal_device_krylov" | "k0_poisson_airbox_gpu_augmented_cudss"
     );
     let contract = native_poisson_airbox_execution_contract(plan, &adapter, gpu)?;
-    if gpu && gpu_attestation.is_none() {
-        return Err(RunError {
-            message: "k0_poisson_airbox_gpu_attestation_missing".to_string(),
-        });
+    if gpu {
+        require_poisson_airbox_gpu_operator(&adapter, gpu_attestation)?;
     }
+    let cudss = adapter == "k0_poisson_airbox_gpu_augmented_cudss";
     let cpu_schur = adapter == "k0_poisson_airbox_cpu_schur_slepc";
     let eps_q = diagnostics_number(diagnostics, "magnetic_block_backward_error");
     let eps_phi = diagnostics_number(diagnostics, "poisson_block_backward_error");
@@ -3069,14 +3239,18 @@ fn insert_native_poisson_airbox_hardened_contract(
     let target_omega = diagnostics_number(diagnostics, "target_omega_rad_s")
         .unwrap_or_else(|| native_modal_target_frequency_hz(&plan.target) * std::f64::consts::TAU);
     let requested_device = if gpu { "gpu" } else { "cpu" };
-    let engine = if gpu {
+    let engine = if cudss {
+        "gpu_cudss_augmented_robin_cuda"
+    } else if gpu {
         "gpu_petsc_slepc_cuda"
     } else if cpu_schur {
         "cpu_slepc_schur_targeted"
     } else {
         "cpu_slepc_shift_invert"
     };
-    let solver_library = if gpu {
+    let solver_library = if cudss {
+        "cuDSS/cuSPARSE/cuSOLVER/cuBLAS"
+    } else if gpu {
         "SLEPc/PETSc/hypre CUDA"
     } else {
         "SLEPc/PETSc"
@@ -3234,7 +3408,7 @@ fn insert_native_poisson_airbox_hardened_contract(
         serde_json::json!({
             "spectral_transform": spectral_transform,
             "spectral_pencil_kind": spectral_pencil_kind,
-            "spectral_scalar_mode": "real_split",
+            "spectral_scalar_mode": if cudss { "complex" } else { "real_split" },
             "target_representation": target_representation,
             "tau_rad_per_s": target_tau_rad_s,
         }),

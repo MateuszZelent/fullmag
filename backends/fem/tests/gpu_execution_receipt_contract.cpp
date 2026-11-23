@@ -217,6 +217,50 @@ void rejected_attempt_does_not_publish_partial_masks() {
     check(receipt.rejected_attempt_count == 1, "rejected attempt count mismatch");
 }
 
+void initial_torque_observation_records_device_fields_without_a_step() {
+    constexpr uint64_t field_operators =
+        FEM_GPU_OPERATOR_EXCHANGE | FEM_GPU_OPERATOR_REDUCTIONS;
+    constexpr uint64_t minimizer = FEM_GPU_OPERATOR_PROJECTED_GRADIENT_BB;
+    constexpr uint64_t required = field_operators | minimizer;
+
+    FemGpuExecutionReceiptRuntimeState state{};
+    gpu_execution_receipt_resolve_plan(
+        state, required, required, 0, 0,
+        FemGpuExecutionClass::DeviceResident, 0,
+        FULLMAG_FEM_PRECISION_DOUBLE, FULLMAG_FEM_INTEGRATOR_HEUN);
+    gpu_execution_receipt_begin_attempt(state);
+    gpu_execution_receipt_note_device(state, field_operators);
+    check(gpu_execution_receipt_commit_equilibrium_observation(state),
+          "complete device field evaluation must admit initial equilibrium");
+    const auto initial = gpu_execution_receipt_snapshot(state);
+    check(initial.accounting_valid &&
+              initial.executed_device_operator_mask == field_operators &&
+              initial.accepted_step_count == 0 &&
+              initial.rejected_attempt_count == 0,
+          "initial observation must preserve the exact device field mask and step counters");
+
+    gpu_execution_receipt_begin_attempt(state);
+    gpu_execution_receipt_note_device(state, required);
+    gpu_execution_receipt_commit_attempt(state);
+    const auto committed = gpu_execution_receipt_snapshot(state);
+    check(committed.accounting_valid &&
+              committed.executed_device_operator_mask == required &&
+              committed.accepted_step_count == 1,
+          "a subsequent accepted step must publish the complete minimizer mask");
+
+    FemGpuExecutionReceiptRuntimeState incomplete{};
+    gpu_execution_receipt_resolve_plan(
+        incomplete, required, required, 0, 0,
+        FemGpuExecutionClass::DeviceResident, 0,
+        FULLMAG_FEM_PRECISION_DOUBLE, FULLMAG_FEM_INTEGRATOR_HEUN);
+    gpu_execution_receipt_begin_attempt(incomplete);
+    gpu_execution_receipt_note_device(incomplete, FEM_GPU_OPERATOR_EXCHANGE);
+    check(!gpu_execution_receipt_commit_equilibrium_observation(incomplete),
+          "an observation missing a field operator must fail closed");
+    check(!gpu_execution_receipt_snapshot(incomplete).accounting_valid,
+          "failure must invalidate the incomplete observation");
+}
+
 void failed_attempt_does_not_publish_partial_masks() {
     FemGpuExecutionReceiptRuntimeState state{};
     gpu_execution_receipt_resolve_plan(
@@ -712,6 +756,7 @@ int main() {
     late_outer_attempt_transfer_is_rejected_before_commit();
     explicit_hybrid_publishes_device_and_host_masks();
     rejected_attempt_does_not_publish_partial_masks();
+    initial_torque_observation_records_device_fields_without_a_step();
     failed_attempt_does_not_publish_partial_masks();
     invalid_plan_masks_fail_closed();
     incomplete_or_ambiguous_commit_fails_closed();

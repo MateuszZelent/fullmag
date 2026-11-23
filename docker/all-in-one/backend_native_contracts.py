@@ -22,7 +22,9 @@ SCHEMA = "fullmag.backend-native-contracts.v1"
 CONTRACT_REVISION = 1
 FEM_DEMAG_POISSON = "fem-demag-poisson"
 FEM_CUDA_ACTIVITY_TRACE = "fem-cuda-activity-trace"
+FEM_K0_MODAL_GPU_ADAPTER_SCALE = "fem-k0-modal-gpu-adapter-scale"
 CONTRACT_TARGETS = {
+    FEM_K0_MODAL_GPU_ADAPTER_SCALE: "fem_gpu_k0_modal_petsc_slepc_contract",
     "fem-cuda-bb-exchange-mass": "fem_cuda_bb_exchange_mass_contract",
     FEM_DEMAG_POISSON: "fem_demag_poisson_contract",
     FEM_CUDA_ACTIVITY_TRACE: "fem_cuda_activity_trace_contract",
@@ -718,6 +720,8 @@ def run_contracts(
         test_argv = [str(test_binary)]
         build_lib_dir = native_root / BUILD_LIBRARY_RELATIVE_PATH.parent
         command_environment = dict(environment)
+        if contract_id == FEM_K0_MODAL_GPU_ADAPTER_SCALE:
+            command_environment["FULLMAG_GPU_PRODUCTION_SCALE_FOCUSED"] = "1"
         prior_library_path = command_environment.get("LD_LIBRARY_PATH", "")
         command_environment["LD_LIBRARY_PATH"] = (
             str(build_lib_dir) + (os.pathsep + prior_library_path if prior_library_path else "")

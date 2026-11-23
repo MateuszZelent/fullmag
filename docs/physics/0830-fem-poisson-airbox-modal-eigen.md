@@ -475,6 +475,11 @@ strict numerical parallel-field guard instead of inventing one.
 | $\min$, $\max$, $\lfloor\cdot\rfloor$, $\lceil\cdot\rceil$ | selection and integer-rounding operators used by the deterministic window schedule | $1$ |
 | $\beta$ | Robin coefficient | $\mathrm{m^{-1}}$ |
 | $\mu_0$ | vacuum permeability | $\mathrm{T\,m\,A^{-1}}$ |
+| $\mathcal K$, $\mathcal K_{j\ell}$ | augmented Hermitian matrix and numerical coefficients after SI substitution | $1$ |
+| $\rho$ | equivalent Poisson row multiplier | $\mathrm{T\,s\,m^{-2}\,A^{-1}}$ |
+| $D$, $D_{jj}$ | two-sided numerical diagonal scaling and one diagonal entry | $1$ |
+| $y$ | scaled numerical solution coordinates | $1$ |
+| $j$, $\ell$ | row and column indices in the augmented matrix | $1$ |
 | $P$ | scalar Poisson stiffness block | $\mathrm{m}$ |
 | $C_{\phi q}$, $A_{\phi q}$ | magnetic-to-potential coupling blocks | $\mathrm{A\,m}$ |
 | $A_{q\phi}$ | potential-to-magnetic coupling block | $\mathrm{m^3\,A^{-1}\,s^{-1}}$ |
@@ -712,12 +717,15 @@ partitions plus one guard shift on each side of the requested interval:
 ```{math}
 :label: eq-poisson-airbox-window-refinement-schedule
 \Delta f=\frac{f_{\max}-f_{\min}}{32}, \qquad
-\left[f_{\min}-\frac{\Delta f}{2},\,
+\left[f_{\min}-\min\!\left(\frac{f_{\min}}{2},\frac{\Delta f}{2}\right),\,
       f_{\max}+\frac{\Delta f}{2}\right].
 ```
 
-Both reported edge-coverage margins therefore equal $\Delta f/2$ and must be
-strictly positive. The refinement
+This rule applies to a strictly positive $f_{\min}$ in CPU and GPU. If the
+computed lower guard rounds onto the boundary, the solver uses the preceding
+representable frequency and requires it to be positive. Both margins must be
+strictly positive. The bounds in the report are the shifts passed to the
+solver. The refinement
 nearest-frequency requests twice the requested mode count, subject to the same
 descriptor-dimension guard; its resolved `nev` must be greater than the base
 `nev`.
@@ -960,8 +968,13 @@ matching request-v19/result-v18 managed GPU execution, so these are source
 claims only.
 For `target="frequency_window"`, the source-level GPU adapter uses the same
 16-midpoint base schedule and 32-half-step plus two-guard refinement schedule
-as the CPU lane. It compares q-space cluster ranks and invariant-subspace
-overlap, requires positive edge-coverage margins, and fails closed on a failed
+as the CPU lane. A shifted solve retains all independent, residual-certified
+modes it found inside the requested interval for global cluster selection.
+An empty guard probe retains one certified exterior mode as evidence of a
+successful solve. The window solver applies the requested mode count after
+constructing the clusters. It compares q-space cluster ranks and
+invariant-subspace overlap, requires positive edge-coverage margins, and
+fails closed on a failed
 subwindow, cancellation, truncation, or refinement disagreement. This
 source-level certificate does not by itself prove runtime execution or GPU
 residency.
@@ -1446,7 +1459,22 @@ null for the production CPU/GPU readiness cells.
 ### 9.1 K0-G0–K0-G9 qualification gates
 
 These gates are cumulative. A source symbol, a declared zero counter or a
-materialized oracle cannot replace measured managed-runtime evidence.
+materialized oracle cannot replace measured managed-runtime evidence. Host
+boundaries for native modal setup, `EPSSolve` and final vector export use the
+same monotonic clock as CUPTI. The vector-export envelope starts at the first
+host copy and ends at the last completed host copy. It can include the device
+reconstruction of intervening modes. These boundaries remain useful when the
+raw capture reaches its size or duration limit. They locate phases in the raw
+trace and do not establish transfer coverage. In headless modal capture,
+`fullmag_fem_cuda_trace_start_modal_v1` applies the size and duration budgets
+to the NDJSON sample. Tagged native phase collection continues until the
+collector closes. A sample cut-off preserves the real collector loss counters.
+Activity loss and incomplete native phase coverage still invalidate the
+measurement. Runtime qualification of this capture mode is pending.
+The collector aggregates timed records as they arrive and chains bounded
+groups into the versioned phase digest. The solve interval is half-open. A
+device fence after the recorded end lets CUPTI deliver pending activity
+without adding that fence to the interval counters.
 
 | Gate | Required evidence and threshold |
 |---|---|
@@ -1531,6 +1559,8 @@ managed manifest, not these links alone.
 
 | Equation/claim | Lane | Repository path + stable symbol | Responsibility | Tests | Evidence status | Immutable link |
 |---|---|---|---|---|---|---|
+| source-gpu-window-discovery | FEM GPU | `backends/fem/gpu/frequency_domain/modal_petsc_slepc.cpp` + `solve_gpu_frequency_window` | Forward independent interior modes for global selection. | three-mode discovery with two-mode publication | native regression pending | source checkpoint pending |
+| source-gpu-window-discovery-regression | FEM GPU | `backends/fem/tests/frequency_domain/gpu_k0_modal_petsc_slepc_test.cpp` + `main` | Execute the frequency-window discovery regression. | FrequencyWindowPublishesSelectedSearchWithoutCount | native execution pending | source checkpoint pending |
 | source-nearest-ksp-shared-consumer | FEM CPU | `scripts/de_shifted_ksp_trial.py` + `_validate_shifted_solve_diagnostics` | Shared strict true-residual configuration/count/criterion validation for nearest and window; no synthetic window or recursive residual substitution. | interpreted regression | source/fixtures only; managed nearest NOT VERIFIED | current task checkpoint required |
 | source-nearest-ksp-selection-consumer | FEM CPU | `scripts/de_shifted_ksp_trial.py` + `validate_shifted_ksp_trial` | Single nonzero indexed Floquet nearest metadata, target, restart and EPS-dimensions binding; selected-only result, no spectrum completeness. | interpreted regression | source/fixtures only; managed nearest NOT VERIFIED | current task checkpoint required |
 | source-nearest-ksp-driver-admission | FEM CPU | `scripts/run_de_100nm_pilot.py` + `_validate_shifted_ksp_trial_request` | Admit explicit native single-nonzero DE/BV nearest trial; reject dense/Gamma/grouped selection. | interpreted regression | source/fixtures only; managed nearest NOT VERIFIED | current task checkpoint required |
@@ -2224,6 +2254,99 @@ real-split, tym samym, którego używa macierz masy pencilu ($\mathcal B$). Skal
 $s=m_s/a$ i $m_s$ są tymi samymi skalami deskryptora, których używa operator
 EPS, więc $K_{\hat\tau}$ odtwarza dokładnie operator przesunięty widziany przez ST.
 
+### Zespolony układ rozszerzony FEM GPU dla otwartego airboxa Robin
+
+W trybie ścisłym FEM GPU zapisany stan początkowy może spełnić warunek
+równowagi już w kroku zero. Natywny pomiar momentu musi obejmować każdy
+wymagany operator pola i redukcji na urządzeniu, z zerową liczbą transferów
+obliczeniowych na host i bez zmiany ścieżki wykonania. Wynik
+`cuda_fem_initial_equilibrium` zapisuje zero zaakceptowanych kroków i maskę
+zaobserwowanych operatorów. Potwierdzenie `cuda_fem` dla przebiegu
+minimizacji wymaga zaakceptowanego kroku. Solver modalny może dzięki temu
+użyć zapisanej równowagi z zachowaniem tego samego pola magnetyzacji.
+Odpowiednie punkty kodu to
+`gpu_execution_receipt_commit_equilibrium_observation` i
+`FemGpuMinimizerExecutionReceipt::validate_strict_initial_equilibrium`.
+
+Złożenie rzadkiej macierzy do blokowej iteracji CUDA używa tych samych wejściowych
+bloków FEM. Natywna słaba forma ma $A_{q\phi}=-\mu_0 A_{\phi q}^{\mathsf T}$.
+Mnożnik wierszy potencjału $\rho=-s\mu_0$ zachowuje równanie Poissona i daje
+postać hermitowską dla $B_{qq}^{\mathsf T}=-B_{qq}$. Macierz do faktoryzacji
+otrzymuje dodatkowo obustronną diagonalną ekwilibrację.
+
+```{math}
+:label: eq-poisson-airbox-gpu-hermitian-augmented-shift
+\mathcal K=
+\begin{bmatrix}
+s A_{qq}-\mathrm{i}\hat\tau m_s B_{qq} & s A_{q\phi}\\
+\rho A_{\phi q} & \rho P
+\end{bmatrix},
+\quad
+D_{jj}=\left(\sum_\ell |\mathcal K_{j\ell}|\right)^{-1/2},
+\quad
+(D\mathcal K D)y=D\begin{bmatrix}b\\0\end{bmatrix},
+\quad
+Dy=\begin{bmatrix}q\\\phi\end{bmatrix}.
+```
+
+Pozostałe bloki, $b$, $s$, $m_s$ oraz $\hat\tau$ mają definicje z
+{eq}`eq-poisson-airbox-augmented-shift`. Przed obliczeniem skali współczynniki
+czyta się w ustalonych jednostkach SI. Kod sprawdza skończoność, indeksy CSR,
+zgodność par sprzężonych i dodatnie normy wierszy. Dotyczy to wyłącznie
+otwartego airboxa Robin bez zmiennej cechowania. Obecny kontrakt obejmuje
+złożenie macierzy w `gpu::assemble_open_airbox_augmented_pencil` i
+faktoryzację cuDSS w zarządzanym runtime. Kwalifikacja wymaga dowodu
+wykonania i zgodności widma dla danego układu.
+
+Blok rozwiązania przesuniętego ma w przeskalowanych współrzędnych część
+magnetyczną $X$ i część potencjału $\Psi$. Gdy $X=QR$ i $R$ jest odwracalna,
+prawe rozwiązanie trójkątne przenosi oba bloki do tej samej bazy. Kolejność
+operacji zachowuje $R$ do momentu obliczenia potencjału.
+
+```{math}
+:label: eq-poisson-airbox-gpu-lifted-qr
+\begin{bmatrix}Q\\ \Psi R^{-1}\end{bmatrix}
+=\begin{bmatrix}X\\ \Psi\end{bmatrix}R^{-1},
+\qquad
+\Pi_{\phi}(D\mathcal K D)\begin{bmatrix}Q\\ \Psi R^{-1}\end{bmatrix}=0.
+```
+
+$X,\Psi,Q,R$ są tu bezwymiarowymi blokami numerycznymi po podstawieniu SI.
+Do projekcji nieprzesuniętego hesjanu wystarczy zastosować $D\mathcal K D$
+do tej bazy i dodać człon przesunięcia w wierszach magnetycznych. Zależność
+eliminuje dodatkową faktoryzację Poissona. Wewnętrzny solver blokowy wykonuje na CUDA akcje operatorów, projekcję
+i rekonstrukcję wektorów. Współrzędne fizyczne odzyskuje przez przemnożenie
+przez $D$. W akceptacji używa maksimum względnych residuów oryginalnych
+bloków magnetycznego i Poissona. Każdy mianownik zawiera sumę norm osobnych
+członów danego wiersza blokowego, zgodnie z normą pełnego deskryptora.
+
+Liczność modów dodatnich wyznacza różnica indeksów bezwładności przy obu
+końcach okna. Dla koercywnego bloku Poissona Robin stabilny problem ma w
+zerze dokładnie tyle ujemnych kierunków, ile wynosi wymiar bloku potencjału. Przez kongruencję eliminującą
+potencjał wzrost indeksu przy dodatnim przesunięciu odpowiada przejściu
+przez dodatnią częstotliwość własną. Dwa przesunięcia po obu stronach
+każdego niezerowego krańca sprawdzają stabilność tego zliczenia. Zmieniony
+indeks lub perturbacja pivota uniemożliwia certyfikację takiego krańca.
+
+Zatwierdzony przedział musi zawierać tyle kandydatów spełniających próg
+oryginalnego residuum, ile wskazała faktoryzacja. Nierozstrzygnięty
+przedział można podzielić i sprawdzić oba rozłączne podprzedziały.
+Dla wyszukiwania najbliższych częstotliwości poszerza się symetryczne okno
+wokół celu, a przy zerze obcina dolną granicę do zera. Gdy ma ono
+dostateczną poświadczoną liczność, tryb wybiera mody według odległości od
+celu. Próba pełnego publicznego wejścia eigensolve GPU i pomiar transferów
+natywnej iteracji pozostają **NOT VERIFIED**.
+
+| Source ID | Path + symbol | Odpowiedzialność i dowód |
+| --- | --- | --- |
+| source-gpu-initial-equilibrium-receipt | backends/fem/gpu/cuda/runtime/execution_receipt.cpp + gpu_execution_receipt_commit_equilibrium_observation | Natywne potwierdzenie równowagi z kroku zero. |
+| source-gpu-initial-equilibrium-validation | crates/fullmag-runner/src/types.rs + validate_strict_initial_equilibrium | Walidacja właściwej maski operatorów bez zaakceptowanego kroku minimizacji. |
+| source-gpu-augmented-ritz | backends/fem/gpu/frequency_domain/modal_augmented_ritz.cu + solve_open_airbox_augmented_ritz | Jedno przesunięcie, projekcja i residua kandydatów na CUDA; NOT VERIFIED runtime |
+| source-gpu-augmented-window-count | backends/fem/gpu/frequency_domain/modal_augmented_window_count.cpp + count_open_airbox_augmented_window | Zliczanie przez inercję i bramki krańców; NOT VERIFIED natywny runtime |
+| source-gpu-augmented-window | backends/fem/gpu/frequency_domain/modal_augmented_window.cpp + solve_open_airbox_augmented_window | Porównanie liczności z residuami modów i wybór zatwierdzonego prefiksu; NOT VERIFIED natywny runtime |
+| source-gpu-lifted-qr | backends/fem/gpu/frequency_domain/modal_augmented_qr.hpp + class AugmentedModalQr | QR na CUDA i odzyskanie potencjału ze wspólnego rozwiązania; NOT VERIFIED runtime |
+| source-gpu-augmented-pencil-test | backends/fem/tests/frequency_domain/gpu_augmented_modal_pencil_contract.cpp + verify_gpu_augmented_modal_pencil | Kontrola ortogonalności i równania Poissona; NOT VERIFIED runtime |
+
 Realizacja: jedna faktoryzacja LU macierzy $K_{\hat\tau}$ (MUMPS, porządkowanie
 METIS `ICNTL(7)=5`, progowe częściowe pivotowanie) na każde przesunięcie,
 podana jako prawy preconditioner `PCSHELL` metody FGMRES
@@ -2355,6 +2478,8 @@ a residuum deskryptora jest certyfikowane.
 | Source ID | Path + symbol | Odpowiedzialność i dowód |
 | --- | --- | --- |
 | source-augmented-shift-solver | backends/fem/cpu/frequency_domain/modal_augmented_shift_solver.hpp + create_augmented_shift_solver | Składanie i faktoryzacja $K_{\hat\tau}$, akcja bloku $q$; runtime zmierzony w Docker DEV (headless) |
+| source-gpu-augmented-pencil | backends/fem/gpu/frequency_domain/modal_augmented_pencil.hpp + assemble_open_airbox_augmented_pencil | Bind the native reciprocal Robin blocks to one scaled Hermitian complex CSR. source_visible; native_build_NOT_VERIFIED |
+| source-gpu-augmented-pencil-test | backends/fem/tests/frequency_domain/gpu_augmented_modal_pencil_contract.cpp + verify_gpu_augmented_modal_pencil | Check the shifted signs and scales entry-wise and reject invalid Robin inputs. source_visible; native_build_NOT_VERIFIED |
 | source-cpu-schur-augmented-shift | backends/fem/cpu/frequency_domain/poisson_airbox_schur_matshell.cpp + solve_poisson_airbox_modal_eigen_cpu_schur | Wybór preconditionera shift-invert i ścieżka zapasowa |
 
 ## Wymiar bazy Krylova dla pojedynczego przesunięcia
@@ -2416,10 +2541,11 @@ strojenia pod model. Na małym modelu z gęstą dokładną odwrotnością
 
 ## Otwarte pudełko powietrza bez periodyczności (`open_airbox_k0`)
 
-Status: rozszerzenie zakresu ścieżki FEM CPU K0 Schur/SLEPc na izolowany
-obiekt magnetyczny w pudełku powietrza z brzegiem Robin na wszystkich
-ścianach zewnętrznych. Źródło i runtime headless w Docker DEV: patrz tabela
-dowodów niżej. Qualification, GPU i run zaakceptowany przez API DEV:
+Status: otwarta domena FEM K0 obejmuje izolowany obiekt magnetyczny w pudełku
+powietrza z brzegiem Robin na wszystkich ścianach zewnętrznych. Runtime CPU
+headless w Docker DEV opisuje tabela dowodów niżej. Ścieżka GPU korzysta z
+tej samej linearyzacji i wymaga dowodu wykonania CUDA oraz parytetu.
+Kwalifikacja GPU i run zaakceptowany przez API DEV pozostają
 **NOT VERIFIED**. Równania {eq}`eq-poisson-airbox-strong-form`,
 {eq}`eq-poisson-airbox-weak-form` i {eq}`eq-poisson-airbox-modal-block` nie
 zmieniają się. Zmienia się tylko dziedzina brzegowa: zbiór szwów
@@ -2462,9 +2588,9 @@ zbiór par jest pusty, więc odwzorowanie jest tożsamością:
 \kappa_m(i)=i,\quad i=0,\dots,N_m-1,
 ```
 
-gdzie węzły magnetyczne tworzą prefiks numeracji siatki. Certyfikat
-symetrii periodycznej nie istnieje, więc ładunek natywny zamiast niego niesie
-schemat `open_airbox_identity.v1`. Importer natywny sprawdza wtedy: brak par
+gdzie węzły magnetyczne tworzą prefiks numeracji siatki. Ładunek
+natywny niesie tożsamościowy wariant certyfikatu `periodic_mesh_certificate.v6`
+z pustym zbiorem relacji periodycznych. Importer natywny sprawdza wtedy: brak par
 periodycznych w siatce, brak ścian `PERIODIC_SEAM`, istnienie ściany
 `EXTERIOR` z markerem $\Gamma_{\mathrm{open}}$, tożsamościowe klasy
 {eq}`eq-open-airbox-k0-identity-classes` i zerowe liczniki par. Każde inne
@@ -2517,20 +2643,21 @@ ani trasy. Walidacja Pythona i IR odrzuca `open_airbox_k0` z
 `open_airbox_k0`. Planner przepisuje ten token do
 `FemEigenPlanIR.magnetostatic_bc` (pominięty w serializacji dla `open`, więc
 istniejące plany są bajtowo niezmienione) i rozwiązuje wykonanie przez
-`resolve_k0_periodic_airbox_execution` z powodem wyboru
-`fem_eigen.open_airbox_k0.*`. Jawne `gpu` kończy się błędem planowania
-`fem_eigen.open_airbox_k0_gpu_unavailable` (bez fallbacku), a `auto`
-rozwiązuje się do CPU z widocznym powodem w provenance.
+`resolve_open_airbox_k0_execution` z powodem wyboru
+`fem_eigen.open_airbox_k0.*`. Jawne `gpu` wybiera `gpu_modal_device_krylov`
+i adapter PETSc/SLEPc CUDA. Brak GPU lub niespełniony kontrakt natywny kończy
+jawne żądanie błędem bez fallbacku. `auto` domyślnie wybiera CPU i zapisuje
+tę decyzję w provenance.
 
 Runner traktuje plan `open_airbox_k0` jak żądanie shared-domain K0
 (`shared_domain_k0_modal_requested`), buduje ładunek z tożsamościowymi
-klasami, zerowymi licznikami par i schematem `open_airbox_identity.v1`, a
+klasami, zerowymi licznikami par i tożsamościowym certyfikatem v6, a
 `demag_kind` natywnego problemu i wyniku ma wartość `open_airbox_k0`.
 
 | Solver | Urządzenie | Stan | Uzasadnienie |
 | --- | --- | --- | --- |
 | FEM | CPU | `source_visible`; runtime headless Docker DEV — patrz dowody | Schur/SLEPc z tożsamościowymi klasami i Robinem na całym $\partial D$ |
-| FEM | GPU | nieobsługiwane, błąd planowania bez fallbacku | `gpu_modal_device_krylov` wymaga certyfikatu periodycznego; odroczone |
+| FEM | GPU | `source_visible / unvalidated` | CUDA Schur/Krylov z tożsamościowymi klasami i Robinem na całym $\partial D$ |
 | FDM | CPU | nie dotyczy | FDM ma osobnego właściciela demagnetyzacji |
 | FDM | GPU | nie dotyczy | FDM ma osobnego właściciela demagnetyzacji |
 
@@ -2541,9 +2668,18 @@ klasami, zerowymi licznikami par i schematem `open_airbox_identity.v1`, a
 - Przypadek buckyballa `examples/buckyball/eigen_k0_open_airbox.py`
   (relaksacja, potem eigen CPU) jest uruchomieniem użytkowym, nie
   kwalifikacją: siatka 64 nm jest grubsza niż długość wymiany.
-- Odroczone: lane GPU, uruchomienie przez API DEV (brak workera modalnego
-  w zaakceptowanej ścieżce), zbieżność względem rozmiaru pudełka i
-  $c_\beta$, okna częstotliwości dla wielu modów na dużej siatce.
+- Porównanie CPU/GPU obejmuje te same dane materiałowe i siatkę, residua
+  pełnego problemu, częstotliwość Kittela, zespolone profile z ważeniem
+  masowym i zbieżność przy zmianie siatki oraz rozmiaru airboxa.
+- Ścieżki API DEV oraz kwalifikacja zbieżności i pokrycia okna wymagają
+  osobnych zapisanych przebiegów.
+- Przy ściśle dodatnim $f_{\min}$ pierwsza sonda refinamentu GPU ma
+  częstotliwość $f_{\min}-\min(f_{\min}/2,\Delta f/2)$ w Hz. Gdy odjęcie
+  zaokrągla się do brzegu, solver wybiera najbliższą reprezentowalną liczbę
+  poniżej $f_{\min}$ i wymaga, aby była dodatnia. Ostatnia sonda nadal
+  leży powyżej $f_{\max}$. Obie sondy są wykonywane z przesunięciami
+  raportowanymi w harmonogramie. Jest to kontrola pokrycia przeszukiwania.
+  Pełna liczność dodatnich modów wymaga niezależnego certyfikatu.
 
 | Source ID | Path + symbol | Odpowiedzialność i dowód |
 | --- | --- | --- |
@@ -2551,6 +2687,7 @@ klasami, zerowymi licznikami par i schematem `open_airbox_identity.v1`, a
 | source-open-airbox-k0-plan | crates/fullmag-plan/src/fem.rs + open_airbox_k0_execution_requested | Rozwiązanie wykonania CPU i błąd GPU bez fallbacku |
 | source-open-airbox-k0-runner | crates/fullmag-runner/src/fem/eigen_policy.rs + shared_domain_k0_modal_requested | Trasa shared-domain K0 dla planu otwartego |
 | source-open-airbox-k0-native | backends/fem/cpu/frequency_domain/operators/poisson_airbox_shared_domain.cpp + assemble_poisson_airbox_shared_domain_payload | Walidacja tożsamościowych klas i brzegu Robin bez par |
+| source-modal-window-refinement-shifts | backends/fem/include/frequency_domain/modal_frequency_window_shift_bounds.hpp + compute_modal_window_refinement_shift_bounds | Regresje CPU i GPU sprawdzają zgodność wykonanych przesunięć z harmonogramem dla dolnego brzegu 1 Hz. |
 
 ## Brzeg zewnętrzny filmu periodycznego k=0 (korekta 2026-11-19)
 

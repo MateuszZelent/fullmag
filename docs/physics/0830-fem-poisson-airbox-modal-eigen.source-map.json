@@ -552,6 +552,31 @@
         "source-static-film-gauge-pin",
         "source-static-film-periodic-rhs"
       ]
+    },
+    {
+      "id": "eq-poisson-airbox-gpu-hermitian-augmented-shift",
+      "symbols": [
+        "gpu_augmented_matrix",
+        "gpu_potential_row_scale",
+        "gpu_equilibration",
+        "gpu_augmented_coordinate",
+        "gpu_augmented_indices",
+        "Aqq",
+        "mass_blocks",
+        "scaled_shift",
+        "descriptor_scales",
+        "complex_operators",
+        "magnetic_to_potential",
+        "potential_to_magnetic",
+        "P",
+        "shift_rhs",
+        "q",
+        "potential"
+      ],
+      "sources": [
+        "source-gpu-augmented-pencil",
+        "source-gpu-augmented-pencil-test"
+      ]
     }
   ],
   "symbols": [
@@ -1226,6 +1251,36 @@
       "latex": "$i_\\star$",
       "meaning": "indeks stopnia swobody potencjału przypiętego do cechowania",
       "si_unit": "$1$"
+    },
+    {
+      "id": "gpu_augmented_matrix",
+      "latex": "$\\mathcal K$, $\\mathcal K_{j\\ell}$",
+      "meaning": "augmented Hermitian matrix and numerical coefficients after SI substitution",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "gpu_potential_row_scale",
+      "latex": "$\\rho$",
+      "meaning": "equivalent Poisson row multiplier",
+      "si_unit": "$\\mathrm{T\\,s\\,m^{-2}\\,A^{-1}}$"
+    },
+    {
+      "id": "gpu_equilibration",
+      "latex": "$D$, $D_{jj}$",
+      "meaning": "two-sided numerical diagonal scaling and one diagonal entry",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "gpu_augmented_coordinate",
+      "latex": "$y$",
+      "meaning": "scaled numerical solution coordinates",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "gpu_augmented_indices",
+      "latex": "$j$, $\\ell$",
+      "meaning": "row and column indices in the augmented matrix",
+      "si_unit": "$1$"
     }
   ],
   "sources": [
@@ -1330,6 +1385,25 @@
       "path": "backends/fem/include/frequency_domain/modal_gpu_krylov.hpp",
       "symbol": "solve_poisson_airbox_modal_eigen_gpu_petsc_slepc",
       "responsibility": "Implement the source-visible GPU PETSc/SLEPc shared-domain modal adapter."
+    },
+    {
+      "id": "source-modal-window-refinement-shifts",
+      "path": "backends/fem/include/frequency_domain/modal_frequency_window_shift_bounds.hpp",
+      "symbol": "compute_modal_window_refinement_shift_bounds",
+      "responsibility": "Resolve executable exterior refinement shifts shared by CPU and GPU, including a positive lower guard for a positive-frequency window."
+    },
+    {
+      "id": "source-gpu-window-discovery",
+      "path": "backends/fem/gpu/frequency_domain/modal_petsc_slepc.cpp",
+      "symbol": "solve_gpu_frequency_window",
+      "responsibility": "Retain certified interior modes from shifted GPU solves for global cluster selection."
+    },
+    {
+      "id": "source-gpu-window-discovery-regression",
+      "path": "backends/fem/tests/frequency_domain/gpu_k0_modal_petsc_slepc_test.cpp",
+      "symbol": "main",
+      "entrypoint": "FrequencyWindowPublishesSelectedSearchWithoutCount",
+      "responsibility": "Check that a base probe discovers three interior modes when the window publishes two modes."
     },
     {
       "id": "source-gpu-solver-state",
@@ -1950,6 +2024,62 @@
       "symbol": "solve_demag_periodic_poisson_reduced",
       "responsibility": "Zero the reduced right-hand side of eliminated classes before the CPU reduced CG solve.",
       "evidence_status": "source_visible; runtime_NOT_VERIFIED"
+    },
+    {
+      "id": "source-gpu-augmented-pencil",
+      "path": "backends/fem/gpu/frequency_domain/modal_augmented_pencil.hpp",
+      "symbol": "assemble_open_airbox_augmented_pencil",
+      "responsibility": "Bind the native reciprocal Robin blocks to one scaled Hermitian complex CSR.",
+      "evidence_status": "source_visible; native_build_NOT_VERIFIED"
+    },
+    {
+      "id": "source-gpu-augmented-ritz",
+      "path": "backends/fem/gpu/frequency_domain/modal_augmented_ritz.cu",
+      "symbol": "solve_open_airbox_augmented_ritz",
+      "responsibility": "Apply the shifted Robin operator, lift the QR basis and return Ritz candidates with original-equation residuals.",
+      "evidence_status": "source_visible; native_runtime_NOT_VERIFIED"
+    },
+    {
+      "id": "source-gpu-augmented-window-count",
+      "path": "backends/fem/gpu/frequency_domain/modal_augmented_window_count.cpp",
+      "symbol": "count_open_airbox_augmented_window",
+      "responsibility": "Certify the number of positive modes by guarded differences of CUDA factor inertia.",
+      "evidence_status": "source_visible; native_runtime_NOT_VERIFIED"
+    },
+    {
+      "id": "source-gpu-augmented-window",
+      "path": "backends/fem/gpu/frequency_domain/modal_augmented_window.cpp",
+      "symbol": "solve_open_airbox_augmented_window",
+      "responsibility": "Accept a complete window only when independently certified counts and solved modes agree.",
+      "evidence_status": "source_visible; native_runtime_NOT_VERIFIED"
+    },
+    {
+      "id": "source-gpu-lifted-qr",
+      "path": "backends/fem/gpu/frequency_domain/modal_augmented_qr.hpp",
+      "symbol": "class AugmentedModalQr",
+      "responsibility": "Normalize the magnetic block while preserving the shared potential lift.",
+      "evidence_status": "source_visible; native_runtime_NOT_VERIFIED"
+    },
+    {
+      "id": "source-gpu-augmented-pencil-test",
+      "path": "backends/fem/tests/frequency_domain/gpu_augmented_modal_pencil_contract.cpp",
+      "symbol": "verify_gpu_augmented_modal_pencil",
+      "responsibility": "Check shifted signs and scales, reject invalid Robin inputs, and verify magnetic orthogonality and potential consistency after QR.",
+      "evidence_status": "source_visible; native_build_NOT_VERIFIED"
+    },
+    {
+      "id": "source-gpu-initial-equilibrium-receipt",
+      "path": "backends/fem/gpu/cuda/runtime/execution_receipt.cpp",
+      "symbol": "gpu_execution_receipt_commit_equilibrium_observation",
+      "responsibility": "Commit a complete native field and reduction observation for the zero-step equilibrium handoff.",
+      "evidence_status": "source_visible"
+    },
+    {
+      "id": "source-gpu-initial-equilibrium-validation",
+      "path": "crates/fullmag-runner/src/types.rs",
+      "symbol": "validate_strict_initial_equilibrium",
+      "responsibility": "Require complete device field provenance and zero accepted steps before admitting a saved GPU equilibrium.",
+      "evidence_status": "source_visible"
     }
   ],
   "public_api": {

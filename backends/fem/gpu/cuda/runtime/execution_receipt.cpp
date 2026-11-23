@@ -257,6 +257,46 @@ void gpu_execution_receipt_commit_attempt(FemGpuExecutionReceiptRuntimeState &st
     clear_attempt(state);
 }
 
+bool gpu_execution_receipt_commit_equilibrium_observation(
+    FemGpuExecutionReceiptRuntimeState &state) {
+    std::lock_guard<std::mutex> lock(state.mutex);
+    constexpr uint64_t minimizer_mask =
+        FEM_GPU_OPERATOR_PROJECTED_GRADIENT_BB | FEM_GPU_OPERATOR_NONLINEAR_CG;
+    const uint64_t algorithm = state.required_operator_mask & minimizer_mask;
+    const uint64_t field_operators = state.required_operator_mask & ~minimizer_mask;
+    const bool valid = state.attempt_active && state.plan_resolved &&
+        state.accounting_valid &&
+        state.execution_class == FemGpuExecutionClass::DeviceResident &&
+        state.accepted_step_count == 0 && state.failed_attempt_count == 0 &&
+        (algorithm == FEM_GPU_OPERATOR_PROJECTED_GRADIENT_BB ||
+         algorithm == FEM_GPU_OPERATOR_NONLINEAR_CG) &&
+        (field_operators & FEM_GPU_OPERATOR_REDUCTIONS) != 0 &&
+        state.resolved_device_operator_mask == state.required_operator_mask &&
+        state.resolved_host_operator_mask == 0 &&
+        state.resolved_unknown_operator_mask == 0 &&
+        state.attempt_device_operator_mask == field_operators &&
+        state.attempt_host_operator_mask == 0 &&
+        state.attempt_unknown_operator_mask == 0 &&
+        state.fallback_count == 0 && state.attempt_fallback_count == 0 &&
+        state.attempt_transfer_valid &&
+        state.attempt_transfer_h2d_bytes == 0 &&
+        state.attempt_transfer_d2h_bytes == 0 &&
+        state.attempt_transfer_host_sync_count == 0;
+    if (!valid) {
+        ++state.failed_attempt_count;
+        state.fallback_count += state.attempt_fallback_count;
+        state.accounting_valid = false;
+        state.execution_class = FemGpuExecutionClass::Unknown;
+        clear_attempt(state);
+        return false;
+    }
+
+    // This was a field/torque evaluation at the existing endpoint.
+    state.executed_device_operator_mask = field_operators;
+    clear_attempt(state);
+    return true;
+}
+
 void gpu_execution_receipt_reject_attempt(FemGpuExecutionReceiptRuntimeState &state) {
     std::lock_guard<std::mutex> lock(state.mutex);
     if (!state.attempt_active) {

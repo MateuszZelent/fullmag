@@ -37,6 +37,16 @@ use fullmag_ir::OutputIR;
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 
+pub(super) fn native_shared_domain_k0_artifact_capability(
+    demag_kind: Option<&str>,
+) -> Option<&'static str> {
+    match demag_kind {
+        Some("open_airbox_k0") => Some("open_airbox_k0"),
+        Some("periodic_airbox_k0") => Some("k0_periodic_airbox"),
+        _ => None,
+    }
+}
+
 pub(super) fn native_modal_block_residuals(
     mode: &NativeModalEigenpair,
     solver_adapter: Option<&str>,
@@ -601,17 +611,37 @@ pub(super) fn native_modal_artifacts_with_selection_binding(
     let solver_adapter_name = solver_diagnostics
         .get("solver_adapter")
         .and_then(|value| value.as_str());
-    let pa_e2_cpu_periodic_airbox_k0 = matches!(
+    let pa_e2_cpu_shared_domain_k0 = matches!(
         solver_adapter_name,
         Some("k0_poisson_airbox_cpu_full_coupled_slepc")
             | Some("k0_poisson_airbox_cpu_schur_slepc")
     );
-    let pa_e2_gpu_periodic_airbox_k0 = matches!(
+    let pa_e2_gpu_shared_domain_adapter = matches!(
         solver_adapter_name,
         Some("k0_poisson_airbox_gpu_petsc_slepc")
             | Some("k0_poisson_airbox_gpu_modal_device_krylov")
+            | Some("k0_poisson_airbox_gpu_augmented_cudss")
     );
-    if pa_e2_cpu_periodic_airbox_k0 || pa_e2_gpu_periodic_airbox_k0 {
+    let demag_kind = solver_diagnostics
+        .get("demag_kind")
+        .and_then(|value| value.as_str());
+    let shared_domain_k0_capability =
+        native_shared_domain_k0_artifact_capability(demag_kind);
+    let open_airbox_k0 = shared_domain_k0_capability == Some("open_airbox_k0");
+    let periodic_airbox_k0 = shared_domain_k0_capability == Some("k0_periodic_airbox");
+    let pa_e2_cpu_periodic_airbox_k0 =
+        pa_e2_cpu_shared_domain_k0 && periodic_airbox_k0;
+    let pa_e2_gpu_periodic_airbox_k0 =
+        pa_e2_gpu_shared_domain_adapter && periodic_airbox_k0;
+    let pa_e2_cpu_open_airbox_k0 = pa_e2_cpu_shared_domain_k0 && open_airbox_k0;
+    let pa_e2_gpu_open_airbox_k0 = pa_e2_gpu_shared_domain_adapter && open_airbox_k0;
+    let pa_e2_gpu_shared_domain_k0 =
+        pa_e2_gpu_periodic_airbox_k0 || pa_e2_gpu_open_airbox_k0;
+    let pa_e2_shared_domain_k0 = pa_e2_cpu_periodic_airbox_k0
+        || pa_e2_gpu_periodic_airbox_k0
+        || pa_e2_cpu_open_airbox_k0
+        || pa_e2_gpu_open_airbox_k0;
+    if pa_e2_cpu_shared_domain_k0 || pa_e2_gpu_shared_domain_adapter {
         let valid_fe_mass = node_mass_weights.is_some_and(|weights| {
             weights.len() == reduction.active_nodes.len()
                 && weights
@@ -628,13 +658,13 @@ pub(super) fn native_modal_artifacts_with_selection_binding(
     let gpu_scalable_selected_spectrum = solver_diagnostics
         .get("scalable_selected_spectrum")
         .and_then(|value| value.as_bool())
-        .unwrap_or(pa_e2_gpu_periodic_airbox_k0);
+        .unwrap_or(pa_e2_gpu_shared_domain_k0);
     let mode_phasor_convention = if pa_e2_cpu_periodic_airbox_k0 {
         "exp_plus_i_omega_t"
     } else {
         "exp_plus_i_omega_t"
     };
-    let mode_eigenvalue_mapping = if pa_e2_cpu_periodic_airbox_k0 || pa_e2_gpu_periodic_airbox_k0 {
+    let mode_eigenvalue_mapping = if pa_e2_shared_domain_k0 {
         "lambda_imag_positive_frequency"
     } else {
         "lambda_eq_i_omega"
@@ -651,15 +681,24 @@ pub(super) fn native_modal_artifacts_with_selection_binding(
         Some("sparse_csr" | "floquet_shared_domain_sparse_matshell") => Some(false),
         _ => None,
     };
-    let gpu_k0_backend = pa_e2_gpu_periodic_airbox_k0
+    let gpu_k0_backend = pa_e2_gpu_shared_domain_k0
         || (execution_lane == "production_gpu" && solver_kind == NATIVE_GPU_K0_KITTEL_SOLVER_KIND);
-    let gpu_shared_domain_backend = pa_e2_gpu_periodic_airbox_k0;
+    let gpu_shared_domain_backend = pa_e2_gpu_shared_domain_k0;
+    let shared_domain_k0_capability = shared_domain_k0_capability.unwrap_or("k0_periodic_airbox");
     let solver_notes = if gpu_k0_backend {
         if gpu_shared_domain_backend {
             if gpu_scalable_selected_spectrum {
-                "native FEM production GPU K0 shared-domain demag modal eigensolver using device-resident Arnoldi/Ritz shift-invert"
+                if open_airbox_k0 {
+                    "native FEM production GPU open-airbox K0 shared-domain demag modal eigensolver using device-resident Arnoldi/Ritz shift-invert"
+                } else {
+                    "native FEM production GPU K0 shared-domain demag modal eigensolver using device-resident Arnoldi/Ritz shift-invert"
+                }
             } else {
-                "native FEM GPU K0 bounded dense device validation path; scalable selected-spectrum qualification is unavailable"
+                if open_airbox_k0 {
+                    "native FEM GPU open-airbox K0 bounded dense device validation path; scalable selected-spectrum qualification is unavailable"
+                } else {
+                    "native FEM GPU K0 bounded dense device validation path; scalable selected-spectrum qualification is unavailable"
+                }
             }
         } else {
             "native FEM production GPU K0 macrospin modal eigensolver using cuSolverDN dense generalized solve"
@@ -676,14 +715,14 @@ pub(super) fn native_modal_artifacts_with_selection_binding(
                 "production_gpu",
                 "device_resident_krylov",
                 "shared_domain_dynamic_demag",
-                "k0_periodic_airbox",
+                shared_domain_k0_capability,
             ]
         } else if gpu_shared_domain_backend {
             vec![
                 "native_modal_eigen",
                 "gpu_device_validation",
                 "shared_domain_dynamic_demag",
-                "k0_periodic_airbox",
+                shared_domain_k0_capability,
             ]
         } else if gpu_k0_backend {
             vec![
@@ -709,12 +748,21 @@ pub(super) fn native_modal_artifacts_with_selection_binding(
         };
     let solver_limitations: Vec<&'static str> =
         if gpu_shared_domain_backend && gpu_scalable_selected_spectrum {
-            vec![
+            let mut limitations = vec![
                 "k0_only",
                 "uniform_alpha_zero_scope",
                 "anisotropy_and_dmi_tangent_terms_not_certified",
-                "frequency_window_completeness_pending",
-            ]
+            ];
+            let window_requested = matches!(
+                plan.target,
+                fullmag_ir::EigenTargetIR::FrequencyWindow { .. }
+            );
+            let window_certified = solver_diagnostics["window_complete"].as_bool() == Some(true)
+                && solver_diagnostics["spectrum_completeness"].as_str() == Some("certified_window");
+            if !open_airbox_k0 || (window_requested && !window_certified) {
+                limitations.push("frequency_window_completeness_pending");
+            }
+            limitations
         } else if gpu_shared_domain_backend {
             vec![
                 "k0_only",
@@ -774,6 +822,8 @@ pub(super) fn native_modal_artifacts_with_selection_binding(
         mode_provenance_value("relax_to_eigen_source_mesh_topology_sha256");
     let mode_source_mesh_topology = serde_json::json!(modal_source_mesh_topology.clone());
     let mode_assembly_kind = mode_provenance_value("assembly_kind");
+    let mode_demag_kind = mode_provenance_value("demag_kind");
+    let mode_boundary_gauge_digest = mode_provenance_value("boundary_gauge_digest");
 
     for (mode_index, mode) in modes.iter().enumerate() {
         let (real, imag, amplitude, phase, max_amplitude) =
@@ -886,6 +936,8 @@ pub(super) fn native_modal_artifacts_with_selection_binding(
             "k_vector": k_vector_json(plan.k_sampling.as_ref()),
             "external_field_a_per_m": plan.external_field,
             "assembly_kind": mode_assembly_kind.clone(),
+            "demag_kind": mode_demag_kind.clone(),
+            "boundary_gauge_digest": mode_boundary_gauge_digest.clone(),
             "operator_input_signature_sha256": mode_operator_input_signature.clone(),
             "phase_constraint_sha256": mode_phase_constraint.clone(),
             "equilibrium_artifact_sha256": mode_equilibrium_artifact.clone(),
@@ -953,6 +1005,8 @@ pub(super) fn native_modal_artifacts_with_selection_binding(
                 "k_vector": k_vector_json(plan.k_sampling.as_ref()),
                 "external_field_a_per_m": plan.external_field,
                 "assembly_kind": mode_assembly_kind,
+                "demag_kind": mode_demag_kind,
+                "boundary_gauge_digest": mode_boundary_gauge_digest,
                 "operator_input_signature_sha256": mode_operator_input_signature,
                 "phase_constraint_sha256": mode_phase_constraint,
                 "equilibrium_artifact_sha256": mode_equilibrium_artifact,

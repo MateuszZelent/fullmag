@@ -43,6 +43,15 @@ pub struct FemCudaTrace {
 
 impl FemCudaTrace {
     pub fn start(file: &File, max_bytes: u64, max_duration_ms: u32) -> Result<Self, String> {
+        Self::start_capture(file, max_bytes, max_duration_ms, false)
+    }
+
+    /// Keep the tagged native solve measurements active after the file sample fills.
+    pub fn start_modal_sample(file: &File, max_bytes: u64, max_duration_ms: u32) -> Result<Self, String> {
+        Self::start_capture(file, max_bytes, max_duration_ms, true)
+    }
+
+    fn start_capture(file: &File, max_bytes: u64, max_duration_ms: u32, modal: bool) -> Result<Self, String> {
         if !(4096..=536870912).contains(&max_bytes) || !(1..=120000).contains(&max_duration_ms) {
             return Err("CUDA trace byte/time budget is invalid".into());
         }
@@ -50,8 +59,12 @@ impl FemCudaTrace {
         {
             use std::os::fd::AsRawFd;
             let mut token = 0;
-            let status = unsafe { fullmag_fem_sys::cuda_trace::fullmag_fem_cuda_trace_start_v1(
-                file.as_raw_fd(), max_bytes, max_duration_ms, &mut token) };
+            let start = if modal {
+                fullmag_fem_sys::cuda_trace::fullmag_fem_cuda_trace_start_modal_v1
+            } else {
+                fullmag_fem_sys::cuda_trace::fullmag_fem_cuda_trace_start_v1
+            };
+            let status = unsafe { start(file.as_raw_fd(), max_bytes, max_duration_ms, &mut token) };
             if status != fullmag_fem_sys::FULLMAG_FEM_OK || token == 0 {
                 return Err(format!("native CUDA trace startup failed: status={status}, token={token}"));
             }
@@ -59,7 +72,7 @@ impl FemCudaTrace {
         }
         #[cfg(not(all(unix, any(feature = "fem-native", feature = "fem-gpu"))))]
         {
-            let _ = file;
+            let _ = (file, modal);
             Err("CUDA activity tracing is unavailable in this runtime".into())
         }
     }

@@ -5,7 +5,9 @@ use super::eigen_solve::{
     normalize_complex_vector_with_scale,
 };
 use super::eigen_types::{NativeBlochFloquetDensePayload, SharedDomainModeContext};
-use crate::native_fem::{NativeModalComplex64, NativeModalEigenTypedResult};
+use crate::native_fem::{
+    NativeModalComplex64, NativeModalEigenTypedResult, NativeModalGpuAttestation,
+};
 use crate::types::RunError;
 use fullmag_ir::EigenNormalizationIR;
 use fullmag_ir::FemEigenPlanIR;
@@ -539,7 +541,9 @@ pub(super) fn merge_poisson_airbox_modal_result_diagnostics(
         solver_adapter,
         Some("k0_poisson_airbox_gpu_petsc_slepc")
             | Some("k0_poisson_airbox_gpu_modal_device_krylov")
+            | Some("k0_poisson_airbox_gpu_augmented_cudss")
     );
+    let cudss = solver_adapter == Some("k0_poisson_airbox_gpu_augmented_cudss");
     let floquet_cpu_schur = solver_adapter == Some("floquet_airbox_cpu_schur_slepc");
     let cpu_schur =
         floquet_cpu_schur || solver_adapter == Some("k0_poisson_airbox_cpu_schur_slepc");
@@ -558,7 +562,9 @@ pub(super) fn merge_poisson_airbox_modal_result_diagnostics(
     );
     diagnostics.insert(
         "resolved_solver_family".to_string(),
-        serde_json::json!(if gpu {
+        serde_json::json!(if cudss {
+            "device_resident_block_ritz_shift_invert"
+        } else if gpu {
             if gpu_scalable_selected_spectrum {
                 "device_resident_arnoldi_shift_invert"
             } else {
@@ -584,9 +590,9 @@ pub(super) fn merge_poisson_airbox_modal_result_diagnostics(
     );
     diagnostics.insert(
         "algebraic_form".to_string(),
-        serde_json::json!(if gpu {
-            "schur_reduced_descriptor"
-        } else if cpu_schur {
+        serde_json::json!(if cudss {
+            "full_coupled_descriptor"
+        } else if gpu || cpu_schur {
             "schur_reduced_descriptor"
         } else {
             "full_coupled_poisson_airbox_augmented_gauge"
@@ -600,7 +606,9 @@ pub(super) fn merge_poisson_airbox_modal_result_diagnostics(
     }
     diagnostics.insert(
         "matrix_equation".to_string(),
-        serde_json::json!(if gpu || cpu_schur {
+        serde_json::json!(if cudss {
+            "A x = lambda B x; x = [q, phi]"
+        } else if gpu || cpu_schur {
             "L_eff q = lambda B_qq q; phi(q) = -P^-1 A_phiq q"
         } else {
             "A_full x = lambda B_full x"
@@ -617,6 +625,11 @@ pub(super) fn merge_poisson_airbox_modal_result_diagnostics(
     let fields = [
         ("solver_adapter", &["solver_adapter"][..]),
         ("demag_kind", &["demag_kind"][..]),
+        ("outer_boundary_kind", &["outer_boundary_kind"][..]),
+        ("boundary_kind", &["boundary_kind"][..]),
+        ("boundary_marker", &["boundary_marker"][..]),
+        ("robin_beta", &["robin_beta"][..]),
+        ("boundary_gauge_digest", &["boundary_gauge_digest"][..]),
         ("gauge_policy", &["gauge_policy"][..]),
         ("q_dof_count", &["q_dof_count"][..]),
         ("phi_dof_count", &["phi_dof_count"][..]),
@@ -677,6 +690,186 @@ pub(super) fn merge_poisson_airbox_modal_result_diagnostics(
     Ok(())
 }
 
+/// Verify the native result against the runner's v6 open-airbox boundary
+/// identity. The result carries the actual demag kind, Robin boundary and
+/// signed digest; the GPU attestation independently binds the digest bytes.
+pub(super) fn validate_native_open_airbox_k0_result_identity(
+    result_raw: &str,
+    diagnostics_raw: Option<&str>,
+    expected_boundary_gauge_digest: &str,
+    expected_boundary_marker: u32,
+    expected_robin_beta: f64,
+    gpu_attestation: Option<&NativeModalGpuAttestation>,
+) -> Result<(), RunError> {
+    let expected_digest = parse_prefixed_sha256(expected_boundary_gauge_digest).ok_or_else(|| {
+        RunError {
+            message: "native open-airbox expected boundary gauge digest is invalid".to_string(),
+        }
+    })?;
+    if !expected_robin_beta.is_finite() || expected_robin_beta <= 0.0 {
+        return Err(RunError {
+            message: "native open-airbox expected Robin beta is invalid".to_string(),
+        });
+    }
+    let result = serde_json::from_str::<serde_json::Value>(result_raw).map_err(|error| {
+        RunError {
+            message: format!("failed to parse native open-airbox result JSON: {error}"),
+        }
+    })?;
+    let result_object = result.as_object().ok_or_else(|| RunError {
+        message: "native open-airbox result JSON must be an object".to_string(),
+    })?;
+    require_open_airbox_result_identity_fields(result_object, expected_boundary_gauge_digest)?;
+    validate_optional_open_airbox_identity_fields(
+        result_object,
+        "result_json",
+        expected_boundary_gauge_digest,
+        expected_boundary_marker,
+        expected_robin_beta,
+    )?;
+    if let Some(diagnostics_raw) = diagnostics_raw {
+        let diagnostics =
+            serde_json::from_str::<serde_json::Value>(diagnostics_raw).map_err(|error| {
+                RunError {
+                    message: format!("failed to parse native open-airbox diagnostics JSON: {error}"),
+                }
+            })?;
+        if let Some(diagnostics_object) = diagnostics.as_object() {
+            validate_optional_open_airbox_identity_fields(
+                diagnostics_object,
+                "diagnostics_json",
+                expected_boundary_gauge_digest,
+                expected_boundary_marker,
+                expected_robin_beta,
+            )?;
+            if gpu_attestation.is_some()
+                && (diagnostics_object
+                    .get("production_implication")
+                    .and_then(serde_json::Value::as_bool)
+                    != Some(true)
+                    || diagnostics_object
+                        .get("production_shared_domain")
+                        .and_then(serde_json::Value::as_bool)
+                        != Some(true)
+                    || diagnostics_object
+                        .get("validation_only")
+                        .and_then(serde_json::Value::as_bool)
+                        != Some(false)
+                    || diagnostics_object
+                        .get("execution_lane")
+                        .and_then(serde_json::Value::as_str)
+                        != Some("production_gpu")
+                    || diagnostics_object
+                        .get("scalable_selected_spectrum")
+                        .and_then(serde_json::Value::as_bool)
+                        != Some(true)
+                )
+            {
+                return Err(RunError {
+                    message: "k0_poisson_airbox_gpu_open_identity_requires_production_selected_spectrum"
+                        .to_string(),
+                });
+            }
+        }
+    }
+    if let Some(attestation) = gpu_attestation {
+        if attestation.boundary_sha256 != expected_digest {
+            return Err(RunError {
+                message:
+                    "k0_poisson_airbox_gpu_attestation_boundary_identity_mismatch".to_string(),
+            });
+        }
+    }
+    Ok(())
+}
+
+fn require_open_airbox_result_identity_fields(
+    object: &serde_json::Map<String, serde_json::Value>,
+    expected_boundary_gauge_digest: &str,
+) -> Result<(), RunError> {
+    for (key, expected) in [
+        ("demag_kind", "open_airbox_k0"),
+        ("outer_boundary_kind", "poisson_robin"),
+        ("boundary_gauge_digest", expected_boundary_gauge_digest),
+    ] {
+        let value = object.get(key).and_then(serde_json::Value::as_str);
+        if value != Some(expected) {
+            return Err(RunError {
+                message: format!(
+                    "native open-airbox result_json identity mismatch: expected {key}={expected:?}, got {value:?}"
+                ),
+            });
+        }
+    }
+    Ok(())
+}
+
+fn validate_optional_open_airbox_identity_fields(
+    object: &serde_json::Map<String, serde_json::Value>,
+    source: &str,
+    expected_boundary_gauge_digest: &str,
+    expected_boundary_marker: u32,
+    expected_robin_beta: f64,
+) -> Result<(), RunError> {
+    for (key, expected) in [
+        ("demag_kind", "open_airbox_k0"),
+        ("outer_boundary_kind", "poisson_robin"),
+        ("boundary_gauge_digest", expected_boundary_gauge_digest),
+        ("boundary_kind", "robin"),
+    ] {
+        if let Some(value) = object.get(key) {
+            if value.as_str() != Some(expected) {
+                return Err(RunError {
+                    message: format!(
+                        "native open-airbox {source} identity mismatch: expected {key}={expected:?}, got {value:?}"
+                    ),
+                });
+            }
+        }
+    }
+    if let Some(value) = object.get("boundary_marker") {
+        if value.as_u64() != Some(u64::from(expected_boundary_marker)) {
+            return Err(RunError {
+                message: format!(
+                    "native open-airbox {source} identity mismatch: expected boundary_marker={expected_boundary_marker}, got {value:?}"
+                ),
+            });
+        }
+    }
+    if let Some(value) = object.get("robin_beta") {
+        let robin_beta = value.as_f64().unwrap_or(f64::NAN);
+        let relative_error = (robin_beta - expected_robin_beta).abs()
+            / robin_beta
+                .abs()
+                .max(expected_robin_beta.abs())
+                .max(f64::MIN_POSITIVE);
+        if !robin_beta.is_finite() || robin_beta <= 0.0 || relative_error > 1.0e-12 {
+            return Err(RunError {
+                message: format!(
+                    "native open-airbox {source} identity mismatch: expected robin_beta approximately {expected_robin_beta:?}, got {robin_beta:?}"
+                ),
+            });
+        }
+    }
+    Ok(())
+}
+
+fn parse_prefixed_sha256(value: &str) -> Option<[u8; 32]> {
+    let hex = value.strip_prefix("sha256:")?;
+    if hex.len() != 64
+        || !hex
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    {
+        return None;
+    }
+    let mut digest = [0_u8; 32];
+    for (index, byte) in digest.iter_mut().enumerate() {
+        *byte = u8::from_str_radix(&hex[index * 2..index * 2 + 2], 16).ok()?;
+    }
+    Some(digest)
+}
+
 pub(super) fn is_native_poisson_airbox_modal_adapter(adapter: Option<&str>) -> bool {
     matches!(
         adapter,
@@ -685,6 +878,7 @@ pub(super) fn is_native_poisson_airbox_modal_adapter(adapter: Option<&str>) -> b
             | Some("k0_poisson_airbox_cpu_schur_slepc")
             | Some("k0_poisson_airbox_gpu_petsc_slepc")
             | Some("k0_poisson_airbox_gpu_modal_device_krylov")
+            | Some("k0_poisson_airbox_gpu_augmented_cudss")
     )
 }
 
@@ -695,6 +889,7 @@ fn is_native_k0_poisson_airbox_modal_adapter(adapter: Option<&str>) -> bool {
             | Some("k0_poisson_airbox_cpu_schur_slepc")
             | Some("k0_poisson_airbox_gpu_petsc_slepc")
             | Some("k0_poisson_airbox_gpu_modal_device_krylov")
+            | Some("k0_poisson_airbox_gpu_augmented_cudss")
     )
 }
 
@@ -727,10 +922,10 @@ pub(crate) fn native_poisson_airbox_k0_metrics_from_result_json(
         .ok_or_else(|| RunError {
             message: "native Poisson-airbox modal result JSON is missing demag_kind".to_string(),
         })?;
-    if demag_kind != "periodic_airbox_k0" && demag_kind != "open_airbox_k0" {
+    if demag_kind != "periodic_airbox_k0" {
         return Err(RunError {
             message: format!(
-                "native Poisson-airbox modal result demag_kind must be periodic_airbox_k0 or open_airbox_k0, got {demag_kind}"
+                "native periodic Poisson-airbox modal metrics require demag_kind=periodic_airbox_k0, got {demag_kind}"
             ),
         });
     }

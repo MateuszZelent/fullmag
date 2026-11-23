@@ -457,6 +457,34 @@ endfunction()
 add_library(fullmag_fem SHARED ${FEM_SOURCES})
 fullmag_configure_runtime_source_snapshot(fullmag_fem)
 target_compile_definitions(fullmag_fem PRIVATE FULLMAG_FEM_BUILD_SHARED=1)
+
+set(FULLMAG_CUDSS_ROOT "$ENV{FULLMAG_CUDSS_ROOT}" CACHE PATH
+    "Private CUDA 12 cuDSS SDK for the native open-airbox modal factor")
+set(FULLMAG_FEM_CUDSS_SHIFT_SUPPORTED FALSE)
+if(UNIX AND NOT APPLE AND FULLMAG_USE_MFEM_STACK AND FULLMAG_ENABLE_CUDA AND
+   FULLMAG_ENABLE_FEM_GPU AND FULLMAG_FEM_WITH_SLEPC AND FULLMAG_CUDSS_ROOT)
+    unset(FULLMAG_CUDSS_INCLUDE_DIR)
+    unset(FULLMAG_CUDSS_INCLUDE_DIR CACHE)
+    unset(FULLMAG_CUDSS_LIBRARY)
+    unset(FULLMAG_CUDSS_LIBRARY CACHE)
+    find_path(FULLMAG_CUDSS_INCLUDE_DIR cudss.h
+        PATHS "${FULLMAG_CUDSS_ROOT}/include" NO_DEFAULT_PATH REQUIRED)
+    find_library(FULLMAG_CUDSS_LIBRARY cudss
+        PATHS "${FULLMAG_CUDSS_ROOT}/lib" NO_DEFAULT_PATH REQUIRED)
+    target_sources(fullmag_fem PRIVATE
+        gpu/frequency_domain/modal_cudss_shift.cpp
+        gpu/frequency_domain/modal_cudss_device_graph.cpp
+        gpu/frequency_domain/modal_augmented_ritz.cu
+        gpu/frequency_domain/modal_augmented_window.cpp
+        gpu/frequency_domain/modal_augmented_window_count.cpp
+    )
+    target_include_directories(fullmag_fem PRIVATE "${FULLMAG_CUDSS_INCLUDE_DIR}")
+    target_link_libraries(fullmag_fem PRIVATE
+        "${FULLMAG_CUDSS_LIBRARY}" CUDA::cublas CUDA::cusparse CUDA::cusolver
+    )
+    target_compile_definitions(fullmag_fem PRIVATE FULLMAG_FEM_CUDSS_SHIFT_ENABLED=1)
+    set(FULLMAG_FEM_CUDSS_SHIFT_SUPPORTED TRUE)
+endif()
 if(FULLMAG_FEM_CUPTI_TRACE_SUPPORTED)
     target_compile_definitions(fullmag_fem PRIVATE FULLMAG_FEM_CUPTI_TRACE_ENABLED=1
         FULLMAG_FEM_CUPTI_LIBRARY_PATH="${FULLMAG_CUPTI_LIBRARY_REALPATH}")
@@ -1247,11 +1275,14 @@ if(FULLMAG_USE_MFEM_STACK AND FULLMAG_ENABLE_CUDA AND FULLMAG_FEM_WITH_SLEPC)
     add_executable(
         fem_gpu_k0_modal_petsc_slepc_contract
         tests/frequency_domain/gpu_k0_modal_petsc_slepc_test.cpp
+        tests/frequency_domain/gpu_projected_pencil_test.cu
+        tests/frequency_domain/gpu_augmented_modal_pencil_contract.cpp
     )
     target_link_libraries(
         fem_gpu_k0_modal_petsc_slepc_contract
         PRIVATE
             fullmag_fem
+            CUDA::cudart
             PETSC::petsc
             SLEPC::slepc
             MPI::MPI_CXX
@@ -1269,9 +1300,23 @@ if(FULLMAG_USE_MFEM_STACK AND FULLMAG_ENABLE_CUDA AND FULLMAG_FEM_WITH_SLEPC)
     target_compile_options(
         fem_gpu_k0_modal_petsc_slepc_contract
         PRIVATE
-            $<$<CXX_COMPILER_ID:GNU,Clang>:-fno-inline>
-            $<$<CXX_COMPILER_ID:MSVC>:/Ob0>
+            $<$<COMPILE_LANG_AND_ID:CXX,GNU,Clang>:-fno-inline>
+            $<$<COMPILE_LANG_AND_ID:CXX,MSVC>:/Ob0>
     )
+    if(FULLMAG_FEM_CUDSS_SHIFT_SUPPORTED)
+        target_link_libraries(fem_gpu_k0_modal_petsc_slepc_contract PRIVATE CUDA::cublas CUDA::cusolver)
+        if(TARGET MFEM::mfem)
+            target_link_libraries(fem_gpu_k0_modal_petsc_slepc_contract PRIVATE MFEM::mfem)
+        else()
+            target_link_libraries(fem_gpu_k0_modal_petsc_slepc_contract PRIVATE mfem)
+        endif()
+        target_compile_definitions(fem_gpu_k0_modal_petsc_slepc_contract
+            PRIVATE FULLMAG_FEM_CUDSS_SHIFT_ENABLED=1)
+        if(FULLMAG_FEM_CUPTI_TRACE_SUPPORTED)
+            target_compile_definitions(fem_gpu_k0_modal_petsc_slepc_contract
+                PRIVATE FULLMAG_FEM_CUDSS_TRACE_CONTRACT=1)
+        endif()
+    endif()
     add_test(
         NAME fem_gpu_k0_modal_petsc_slepc_contract
         COMMAND fem_gpu_k0_modal_petsc_slepc_contract

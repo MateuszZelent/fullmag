@@ -37,6 +37,9 @@
 #include "frequency_domain/linearization_state.hpp"
 #include "frequency_domain/modal_gpu_krylov.hpp"
 #include "frequency_domain/modal_eigen_solver.hpp"
+#include "frequency_domain/canonical_digest.hpp"
+#include "frequency_domain/modal_gpu_attestation_policy.hpp"
+#include "frequency_domain/modal_gpu_attestation_runtime_identity.hpp"
 #include "frequency_domain/mesh_symmetry_certificate.hpp"
 #include "frequency_domain/operator_terms.hpp"
 #include "frequency_domain/tangent_frame.hpp"
@@ -79,6 +82,7 @@
 #include <memory>
 #include <new>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -3457,6 +3461,7 @@ static FullmagFemFrequencyDomainResult fullmag_fem_modal_eigen_solve_impl(
         const bool open_airbox_identity =
             payload->magnetic_pair_count == 0u && payload->airbox_pair_count == 0u &&
             payload->mesh != nullptr && payload->mesh->periodic_node_pairs_len == 0u &&
+            payload->mesh->periodic_boundary_pair_markers_len == 0u &&
             payload->boundary_kind != nullptr &&
             std::strcmp(payload->boundary_kind, "robin") == 0;
         if ((!open_airbox_identity &&
@@ -4576,9 +4581,11 @@ FullmagFemFrequencyDomainResult fullmag_fem_modal_eigen_solve(
     return fullmag_fem_modal_eigen_solve_impl(request, false, nullptr);
 }
 
-int fullmag_fem_modal_eigen_solve_v20(
+int fullmag_fem_modal_eigen_solve_v20_with_runtime_scope(
     const FullmagFemModalEigenRequest *request,
-    FullmagFemFrequencyDomainResultV20 *out_result
+    FullmagFemFrequencyDomainResultV20 *out_result,
+    const std::uint8_t *runtime_manifest_sha256,
+    const std::uint8_t *stage_session_sha256
 )
 {
     if (out_result == nullptr ||
@@ -4589,84 +4596,824 @@ int fullmag_fem_modal_eigen_solve_v20(
 
     const std::uint32_t caller_abi_version = out_result->abi_version;
     const std::uint32_t caller_struct_size = out_result->struct_size;
+    out_result->gpu_attestation = nullptr;
     fullmag::fem::frequency_domain::ModalGpuExecutionAttestation gpu_snapshot{};
-    out_result->scientific_result_v18 =
-        fullmag_fem_modal_eigen_solve_impl(request, true, &gpu_snapshot);
+    std::uint64_t native_scope_token = 0u;
+    bool native_scope_started = false;
+    bool native_result_initialized = false;
     const bool gpu_requested = request != nullptr &&
         request->struct_size >=
             offsetof(FullmagFemModalEigenRequest, execution_target) +
                 sizeof(request->execution_target) &&
         request->execution_target == FULLMAG_FEM_MODAL_EXECUTION_PRODUCTION_GPU;
-    if (!gpu_requested) {
-        out_result->gpu_attestation = nullptr;
-        out_result->abi_version = caller_abi_version;
-        out_result->struct_size = caller_struct_size;
-        return FULLMAG_FEM_OK;
-    }
-    out_result->gpu_attestation = new (std::nothrow) FullmagFemModalGpuAttestationV1{};
-    if (out_result->gpu_attestation == nullptr) {
-        fullmag_fem_frequency_domain_result_destroy(&out_result->scientific_result_v18);
-        out_result->abi_version = caller_abi_version;
-        out_result->struct_size = caller_struct_size;
-        return FULLMAG_FEM_ERR_INTERNAL;
-    }
-    out_result->gpu_attestation->abi_version =
-        FULLMAG_FEM_MODAL_GPU_ATTESTATION_V1_ABI_VERSION;
-    out_result->gpu_attestation->struct_size = sizeof(FullmagFemModalGpuAttestationV1);
-    out_result->gpu_attestation->measurement_state =
-        FULLMAG_FEM_MODAL_GPU_MEASUREMENT_UNAVAILABLE;
-    out_result->gpu_attestation->fallback_state =
-        FULLMAG_FEM_MODAL_GPU_FALLBACK_NONE;
-    if (gpu_snapshot.hypre_policy_observed) {
-        out_result->gpu_attestation->measurement_coverage_flags |=
-            FULLMAG_FEM_MODAL_GPU_COVERAGE_SETUP;
-    }
-    if (gpu_snapshot.hypre_memory_location_device) {
-        out_result->gpu_attestation->hypre_memory_location =
-            FULLMAG_FEM_MODAL_HYPRE_MEMORY_DEVICE;
-    }
-    if (gpu_snapshot.hypre_execution_policy_device) {
-        out_result->gpu_attestation->hypre_execution_policy =
-            FULLMAG_FEM_MODAL_HYPRE_EXEC_DEVICE;
-    }
-    out_result->gpu_attestation->last_invalidation_reason = duplicate_c_string(
-        gpu_snapshot.hypre_failure_reason.empty()
-            ? "full_gpu_measurement_incomplete"
-            : gpu_snapshot.hypre_failure_reason.c_str());
-    if (out_result->gpu_attestation->last_invalidation_reason == nullptr) {
-        fullmag_fem_frequency_domain_result_v20_destroy(out_result);
-        out_result->abi_version = caller_abi_version;
-        out_result->struct_size = caller_struct_size;
-        return FULLMAG_FEM_ERR_INTERNAL;
-    }
-    if (out_result->scientific_result_v18.status == FULLMAG_FEM_FD_OK) {
-        out_result->scientific_result_v18.status = FULLMAG_FEM_FD_UNAVAILABLE;
-        delete[] out_result->scientific_result_v18.error_message;
-        delete[] out_result->scientific_result_v18.diagnostics_json;
-        delete[] out_result->scientific_result_v18.result_json;
-        out_result->scientific_result_v18.error_message = duplicate_c_string(
-            "strict production GPU execution attestation is incomplete");
-        out_result->scientific_result_v18.diagnostics_json = duplicate_c_string(
-            "{\"schema_version\":\"frequency_domain_modal_diagnostics.v1\","
-            "\"study_product\":\"modal_eigen\",\"status\":\"unavailable\","
-            "\"complete\":false,\"reason\":"
-            "\"k0_poisson_airbox_gpu_transfer_measurement_unavailable\"}");
-        out_result->scientific_result_v18.result_json = duplicate_c_string(
-            "{\"schema_version\":\"frequency_domain_modal_result.v1\","
-            "\"study_product\":\"modal_eigen\",\"status\":\"unavailable\","
-            "\"complete\":false}");
-        if (out_result->scientific_result_v18.error_message == nullptr ||
-            out_result->scientific_result_v18.diagnostics_json == nullptr ||
-            out_result->scientific_result_v18.result_json == nullptr) {
+    try {
+#if defined(FULLMAG_HAS_MFEM_STACK) && FULLMAG_HAS_MFEM_STACK && \
+    defined(FULLMAG_HAS_CUDA_RUNTIME) && FULLMAG_HAS_CUDA_RUNTIME && \
+    defined(FULLMAG_FEM_WITH_SLEPC) && FULLMAG_FEM_WITH_SLEPC
+        if (gpu_requested && stage_session_sha256 != nullptr) {
+            native_scope_started =
+                fullmag::fem::frequency_domain::begin_modal_gpu_native_scope_v1(
+                    stage_session_sha256,
+                    &native_scope_token);
+        }
+#endif
+        out_result->scientific_result_v18 =
+            fullmag_fem_modal_eigen_solve_impl(request, true, &gpu_snapshot);
+        native_result_initialized = true;
+        if (runtime_manifest_sha256 != nullptr) {
+            bool any_nonzero = false;
+            for (std::size_t index = 0u; index < 32u; ++index) {
+                any_nonzero = any_nonzero || runtime_manifest_sha256[index] != 0u;
+            }
+            if (any_nonzero) {
+                std::memcpy(
+                    gpu_snapshot.runtime_manifest_sha256.data(),
+                    runtime_manifest_sha256,
+                    gpu_snapshot.runtime_manifest_sha256.size());
+            }
+        }
+#if defined(FULLMAG_HAS_MFEM_STACK) && FULLMAG_HAS_MFEM_STACK && \
+    defined(FULLMAG_HAS_CUDA_RUNTIME) && FULLMAG_HAS_CUDA_RUNTIME && \
+    defined(FULLMAG_FEM_WITH_SLEPC) && FULLMAG_FEM_WITH_SLEPC
+        if (gpu_requested) {
+            gpu_snapshot.session_context_sha256 = {};
+            gpu_snapshot.operator_key_sha256 = {};
+            gpu_snapshot.target_key_sha256 = {};
+            gpu_snapshot.operator_state_generation = 0u;
+            gpu_snapshot.target_state_generation = 0u;
+            gpu_snapshot.operator_reuse_count = 0u;
+            gpu_snapshot.target_rebuild_count = 0u;
+        }
+        fullmag::fem::frequency_domain::ModalGpuNativeScopeReportV1 native_scope_report{};
+        if (native_scope_started) {
+            const bool native_scope_finished =
+                fullmag::fem::frequency_domain::finish_modal_gpu_native_scope_v1(
+                    native_scope_token,
+                    &native_scope_report);
+            native_scope_started = false;
+            gpu_snapshot.native_scope_completed = native_scope_report.scope_completed;
+            gpu_snapshot.native_scope_gpu_context_acquired =
+                native_scope_report.gpu_context_acquired;
+            gpu_snapshot.native_scope_operator_identity_consistent =
+                native_scope_report.operator_identity_consistent;
+            gpu_snapshot.native_scope_resources_released =
+                native_scope_report.resources_released;
+            gpu_snapshot.native_scope_subsolve_count =
+                native_scope_report.subsolve_count;
+            if (native_scope_report.gpu_context_acquired &&
+                native_scope_report.resources_released) {
+                gpu_snapshot.session_context_sha256 =
+                    native_scope_report.session_context_sha256;
+                gpu_snapshot.operator_key_sha256 =
+                    native_scope_report.operator_key_sha256;
+                gpu_snapshot.target_key_sha256 =
+                    native_scope_report.target_key_sha256;
+                gpu_snapshot.operator_state_generation =
+                    native_scope_report.operator_state_generation;
+                gpu_snapshot.target_state_generation =
+                    native_scope_report.target_state_generation;
+                gpu_snapshot.operator_reuse_count =
+                    native_scope_report.operator_reuse_count;
+                gpu_snapshot.target_rebuild_count =
+                    native_scope_report.target_rebuild_count;
+            }
+            if (!native_scope_finished) {
+                gpu_snapshot.measurement_unavailable_reason =
+                    "native_gpu_stage_scope_cleanup_failed";
+            } else if (!native_scope_report.gpu_context_acquired) {
+                gpu_snapshot.measurement_unavailable_reason =
+                    "native_gpu_stage_scope_context_not_acquired";
+            } else if (!native_scope_report.operator_identity_consistent) {
+                gpu_snapshot.measurement_unavailable_reason =
+                    "native_gpu_stage_scope_operator_identity_mismatch";
+            } else if (std::all_of(
+                           native_scope_report.target_key_sha256.begin(),
+                           native_scope_report.target_key_sha256.end(),
+                           [](std::uint8_t value) { return value == 0u; })) {
+                gpu_snapshot.measurement_unavailable_reason =
+                    "native_gpu_stage_scope_target_schedule_unavailable";
+            }
+        } else if (gpu_requested && stage_session_sha256 != nullptr) {
+            gpu_snapshot.measurement_unavailable_reason =
+                "native_gpu_stage_scope_start_failed";
+        } else if (gpu_requested) {
+            gpu_snapshot.measurement_unavailable_reason =
+                "native_gpu_stage_scope_binding_unavailable";
+        }
+#else
+        if (gpu_requested) {
+            gpu_snapshot.measurement_unavailable_reason =
+                "native_gpu_stage_scope_unavailable_in_this_build";
+        }
+#endif
+        if (!gpu_requested) {
+            out_result->gpu_attestation = nullptr;
+            out_result->abi_version = caller_abi_version;
+            out_result->struct_size = caller_struct_size;
+            return FULLMAG_FEM_OK;
+        }
+        out_result->gpu_attestation = new (std::nothrow) FullmagFemModalGpuAttestationV1{};
+        if (out_result->gpu_attestation == nullptr) {
+            fullmag_fem_frequency_domain_result_destroy(&out_result->scientific_result_v18);
+            out_result->abi_version = caller_abi_version;
+            out_result->struct_size = caller_struct_size;
+            return FULLMAG_FEM_ERR_INTERNAL;
+        }
+        out_result->gpu_attestation->abi_version =
+            FULLMAG_FEM_MODAL_GPU_ATTESTATION_V1_ABI_VERSION;
+        out_result->gpu_attestation->struct_size = sizeof(FullmagFemModalGpuAttestationV1);
+        const auto copy_sha256_hex = [](
+            std::string_view value,
+            std::uint8_t *destination) noexcept {
+            if (destination == nullptr) {
+                return false;
+            }
+            std::size_t first = 0u;
+            if (value.size() == 71u && value.substr(0u, 7u) == "sha256:") {
+                first = 7u;
+            } else if (value.size() != 64u) {
+                return false;
+            }
+            const auto nibble = [](char character) noexcept -> int {
+                if (character >= '0' && character <= '9') return character - '0';
+                if (character >= 'a' && character <= 'f') return character - 'a' + 10;
+                if (character >= 'A' && character <= 'F') return character - 'A' + 10;
+                return -1;
+            };
+            for (std::size_t index = 0u; index < 32u; ++index) {
+                const int high = nibble(value[first + 2u * index]);
+                const int low = nibble(value[first + 2u * index + 1u]);
+                if (high < 0 || low < 0) {
+                    std::memset(destination, 0, 32u);
+                    return false;
+                }
+                destination[index] = static_cast<std::uint8_t>((high << 4) | low);
+            }
+            return true;
+        };
+        const auto digest_builder_to_bytes = [&](const auto &builder,
+                                                   std::uint8_t *destination) {
+            const std::string hex = builder.sha256_hex();
+            return copy_sha256_hex(hex, destination);
+        };
+        const auto add_optional_text = [](auto &builder,
+                                          const char *name,
+                                          const char *value) {
+            builder.add_string(name, value != nullptr ? value : "");
+        };
+        const char *source_snapshot =
+            fullmag::fem::runtime_source_snapshot_sha256();
+        if (source_snapshot != nullptr) {
+            (void)copy_sha256_hex(
+                source_snapshot,
+                gpu_snapshot.source_snapshot_sha256.data());
+        }
+        if (!gpu_snapshot.boundary_gauge_digest.empty()) {
+            (void)copy_sha256_hex(
+                gpu_snapshot.boundary_gauge_digest,
+                gpu_snapshot.boundary_sha256.data());
+        }
+
+        constexpr std::size_t kRequestSharedPayloadEnd =
+            offsetof(FullmagFemModalEigenRequest, shared_domain_payload) +
+            sizeof(((FullmagFemModalEigenRequest *)nullptr)->shared_domain_payload);
+        constexpr std::size_t kPayloadV19AcceptanceEnd =
+            offsetof(FullmagFemModalSharedDomainPayload, acceptance_certificate_sha256) +
+            sizeof(((FullmagFemModalSharedDomainPayload *)nullptr)->acceptance_certificate_sha256);
+        if (out_result->scientific_result_v18.status == FULLMAG_FEM_FD_OK &&
+            request != nullptr && request->struct_size >= kRequestSharedPayloadEnd &&
+            request->shared_domain_payload != nullptr) {
+            const FullmagFemModalSharedDomainPayload &payload =
+                *request->shared_domain_payload;
+            if (payload.abi_version >= FULLMAG_FEM_FREQUENCY_DOMAIN_ABI_VERSION &&
+                payload.struct_size >= kPayloadV19AcceptanceEnd &&
+                payload.linearization_descriptor != nullptr &&
+                payload.exchange_material_view != nullptr) {
+                (void)copy_sha256_hex(
+                    payload.mesh_certificate_map_binding_digest != nullptr
+                        ? payload.mesh_certificate_map_binding_digest
+                        : "",
+                    gpu_snapshot.mesh_identity_sha256.data());
+                (void)copy_sha256_hex(
+                    payload.equilibrium_digest != nullptr ? payload.equilibrium_digest : "",
+                    gpu_snapshot.equilibrium_sha256.data());
+                (void)copy_sha256_hex(
+                    payload.mesh_certificate_digest != nullptr
+                        ? payload.mesh_certificate_digest
+                        : "",
+                    gpu_snapshot.certificate_sha256.data());
+                (void)copy_sha256_hex(
+                    payload.linearization_state_digest != nullptr
+                        ? payload.linearization_state_digest
+                        : "",
+                    gpu_snapshot.linearization_sha256.data());
+                (void)copy_sha256_hex(
+                    payload.boundary_gauge_digest != nullptr
+                        ? payload.boundary_gauge_digest
+                        : "",
+                    gpu_snapshot.boundary_sha256.data());
+
+                const FullmagFemModalLinearizationDescriptor &linearization =
+                    *payload.linearization_descriptor;
+                const FullmagFemModalExchangeMaterialView &material =
+                    *payload.exchange_material_view;
+                fullmag::fem::frequency_domain::CanonicalDigestBuilder terms_digest(
+                    "modal_gpu_operator_terms_identity.v1");
+                terms_digest.add_u64("term_presence_mask", linearization.term_presence_mask);
+                add_optional_text(terms_digest, "exchange_term_digest", linearization.exchange_term_digest);
+                add_optional_text(terms_digest, "field_term_digest", linearization.field_term_digest);
+                add_optional_text(terms_digest, "anisotropy_term_digest", linearization.anisotropy_term_digest);
+                add_optional_text(terms_digest, "dmi_term_digest", linearization.dmi_term_digest);
+                add_optional_text(terms_digest, "demag_term_digest", linearization.demag_term_digest);
+                add_optional_text(terms_digest, "operator_input_digest", linearization.operator_input_digest);
+                add_optional_text(terms_digest, "demag_provider_signature", linearization.demag_provider_signature);
+                (void)digest_builder_to_bytes(
+                    terms_digest,
+                    gpu_snapshot.operator_terms_sha256.data());
+
+                fullmag::fem::frequency_domain::CanonicalDigestBuilder physics_digest(
+                    "modal_gpu_physics_identity.v1");
+                add_optional_text(physics_digest, "physics_snapshot_id", payload.physics_snapshot_id);
+                add_optional_text(physics_digest, "demag_model", payload.demag_model);
+                physics_digest.add_u64("term_presence_mask", linearization.term_presence_mask);
+                add_optional_text(physics_digest, "operator_input_digest", linearization.operator_input_digest);
+                add_optional_text(physics_digest, "demag_provider_signature", linearization.demag_provider_signature);
+                (void)digest_builder_to_bytes(
+                    physics_digest,
+                    gpu_snapshot.physics_sha256.data());
+
+                fullmag::fem::frequency_domain::CanonicalDigestBuilder material_digest(
+                    "modal_gpu_material_identity.v1");
+                add_optional_text(material_digest, "material_snapshot_id", payload.material_snapshot_id);
+                add_optional_text(material_digest, "material_schema", material.schema_version);
+                material_digest.add_u64("material_kind", material.material_kind);
+                material_digest.add_double(
+                    "exchange_stiffness_j_per_m",
+                    material.exchange_stiffness_j_per_m);
+                material_digest.add_double(
+                    "uniform_saturation_magnetisation_a_per_m",
+                    payload.uniform_saturation_magnetisation_a_per_m);
+                material_digest.add_u64(
+                    "saturation_magnetisation_count",
+                    payload.saturation_magnetisation_count);
+                if (payload.saturation_magnetisation_a_per_m != nullptr) {
+                    for (std::uint64_t index = 0u;
+                         index < payload.saturation_magnetisation_count;
+                         ++index) {
+                        material_digest.add_double(
+                            "saturation_magnetisation_a_per_m",
+                            payload.saturation_magnetisation_a_per_m[index]);
+                    }
+                }
+                (void)digest_builder_to_bytes(
+                    material_digest,
+                    gpu_snapshot.material_sha256.data());
+
+                fullmag::fem::frequency_domain::CanonicalDigestBuilder gauge_digest(
+                    "modal_gpu_boundary_gauge_identity.v1");
+                add_optional_text(gauge_digest, "boundary_kind", payload.boundary_kind);
+                add_optional_text(
+                    gauge_digest,
+                    "outer_boundary_kind",
+                    request->poisson_airbox_outer_boundary_kind);
+                add_optional_text(gauge_digest, "gauge_policy", request->poisson_airbox_gauge_policy);
+                add_optional_text(gauge_digest, "gauge_reason", request->poisson_airbox_gauge_reason);
+                gauge_digest.add_double("robin_beta", payload.robin_beta);
+                gauge_digest.add_u64("boundary_marker", payload.boundary_marker);
+                (void)digest_builder_to_bytes(
+                    gauge_digest,
+                    gpu_snapshot.gauge_sha256.data());
+
+                fullmag::fem::frequency_domain::CanonicalDigestBuilder solver_policy_digest(
+                    "modal_gpu_requested_solver_policy.v1");
+                add_optional_text(
+                    solver_policy_digest,
+                    "target_kind",
+                    request->target_kind);
+                solver_policy_digest.add_double(
+                    "target_frequency_hz",
+                    request->target_frequency_hz);
+                solver_policy_digest.add_double(
+                    "frequency_min_hz",
+                    request->frequency_min_hz);
+                solver_policy_digest.add_double(
+                    "frequency_max_hz",
+                    request->frequency_max_hz);
+                solver_policy_digest.add_double(
+                    "residual_tolerance",
+                    request->residual_tolerance);
+                solver_policy_digest.add_u64(
+                    "requested_mode_count",
+                    static_cast<std::uint64_t>(std::max(request->requested_mode_count, 0)));
+                solver_policy_digest.add_u64(
+                    "max_outer_iterations",
+                    static_cast<std::uint64_t>(std::max(request->max_outer_iterations, 0)));
+                solver_policy_digest.add_u64(
+                    "max_linear_iterations",
+                    static_cast<std::uint64_t>(std::max(request->max_linear_iterations, 0)));
+                solver_policy_digest.add_u64(
+                    "spectral_transform_kind",
+                    static_cast<std::uint64_t>(request->spectral_transform_kind));
+                solver_policy_digest.add_u64(
+                    "eigensolver_family",
+                    static_cast<std::uint64_t>(request->eigensolver_family));
+                solver_policy_digest.add_u64(
+                    "completeness_policy",
+                    static_cast<std::uint64_t>(request->completeness_policy));
+                add_optional_text(
+                    solver_policy_digest,
+                    "demag_kind",
+                    payload.demag_model);
+                solver_policy_digest.add_u64(
+                    "magnetic_pair_count",
+                    payload.magnetic_pair_count);
+                solver_policy_digest.add_u64(
+                    "airbox_pair_count",
+                    payload.airbox_pair_count);
+                (void)digest_builder_to_bytes(
+                    solver_policy_digest,
+                    gpu_snapshot.solver_policy_sha256.data());
+
+                fullmag::fem::frequency_domain::CanonicalDigestBuilder certificate_digest(
+                    "modal_gpu_certificate_identity.v1");
+                add_optional_text(
+                    certificate_digest,
+                    "mesh_certificate_digest",
+                    payload.mesh_certificate_digest);
+                add_optional_text(
+                    certificate_digest,
+                    "acceptance_certificate_sha256",
+                    payload.acceptance_certificate_sha256);
+                add_optional_text(
+                    certificate_digest,
+                    "certificate_binding_v6_digest",
+                    payload.canonical_preimage_sha256);
+                (void)digest_builder_to_bytes(
+                    certificate_digest,
+                    gpu_snapshot.certificate_sha256.data());
+            }
+        }
+
+        // The augmented Robin adapter supplies typed native measurements.
+        // Only this boundary can bind them to the validated input and runtime
+        // digests before making the result visible to the caller.
+        bool measured = false;
+        const char *augmented_robin_failure = nullptr;
+        if (out_result->scientific_result_v18.status == FULLMAG_FEM_FD_OK &&
+            gpu_snapshot.operator_kind == FULLMAG_FEM_MODAL_OPERATOR_AUGMENTED_ROBIN_CUDSS_CUDA) {
+            augmented_robin_failure =
+                fullmag::fem::frequency_domain::augmented_robin_attestation_failure(gpu_snapshot);
+            measured = augmented_robin_failure == nullptr;
+            if (measured) {
+                gpu_snapshot.measurement_state = FULLMAG_FEM_MODAL_GPU_MEASUREMENT_MEASURED;
+                gpu_snapshot.measurement_unavailable_reason.clear();
+            }
+        }
+        auto &attestation = *out_result->gpu_attestation;
+        attestation.measurement_state = gpu_snapshot.measurement_state;
+        attestation.fallback_state = FULLMAG_FEM_MODAL_GPU_FALLBACK_NONE;
+        attestation.measurement_coverage_flags = gpu_snapshot.measurement_coverage_flags;
+        attestation.device_residency_verified = gpu_snapshot.device_residency_verified ? 1u : 0u;
+        attestation.production_shared_domain = gpu_snapshot.production_shared_domain ? 1u : 0u;
+        attestation.validation_only = gpu_snapshot.validation_only ? 1u : 0u;
+        attestation.operator_kind = gpu_snapshot.operator_kind;
+        attestation.hypre_memory_location = gpu_snapshot.hypre_memory_location;
+        attestation.hypre_execution_policy = gpu_snapshot.hypre_execution_policy;
+        attestation.compute_capability_major = gpu_snapshot.compute_capability_major;
+        attestation.compute_capability_minor = gpu_snapshot.compute_capability_minor;
+        attestation.cuda_driver_version = gpu_snapshot.cuda_driver_version;
+        attestation.cuda_runtime_version = gpu_snapshot.cuda_runtime_version;
+        const auto copy_attestation_text = [](char **destination,
+                                             const std::string &value) noexcept {
+            if (destination == nullptr || value.empty()) return true;
+            *destination = duplicate_c_string(value.c_str());
+            return *destination != nullptr;
+        };
+        bool attestation_allocations_ok = true;
+        attestation_allocations_ok = copy_attestation_text(
+            &attestation.device_name, gpu_snapshot.device_name) && attestation_allocations_ok;
+        attestation_allocations_ok = copy_attestation_text(
+            &attestation.mfem_version, gpu_snapshot.mfem_version) && attestation_allocations_ok;
+        attestation_allocations_ok = copy_attestation_text(
+            &attestation.hypre_version, gpu_snapshot.hypre_version) && attestation_allocations_ok;
+        attestation_allocations_ok = copy_attestation_text(
+            &attestation.petsc_version, gpu_snapshot.petsc_version) && attestation_allocations_ok;
+        attestation_allocations_ok = copy_attestation_text(
+            &attestation.slepc_version, gpu_snapshot.slepc_version) && attestation_allocations_ok;
+        attestation_allocations_ok = copy_attestation_text(
+            &attestation.petsc_vec_type, gpu_snapshot.petsc_vec_type) && attestation_allocations_ok;
+        attestation_allocations_ok = copy_attestation_text(
+            &attestation.petsc_matrix_type, gpu_snapshot.petsc_matrix_type) && attestation_allocations_ok;
+        attestation_allocations_ok = copy_attestation_text(
+            &attestation.matshell_vec_type, gpu_snapshot.matshell_vec_type) && attestation_allocations_ok;
+        attestation_allocations_ok = copy_attestation_text(
+            &attestation.slepc_bv_type, gpu_snapshot.slepc_bv_type) && attestation_allocations_ok;
+        attestation_allocations_ok = copy_attestation_text(
+            &attestation.eps_type, gpu_snapshot.eps_type) && attestation_allocations_ok;
+        attestation_allocations_ok = copy_attestation_text(
+            &attestation.st_type, gpu_snapshot.st_type) && attestation_allocations_ok;
+        attestation_allocations_ok = copy_attestation_text(
+            &attestation.ksp_type, gpu_snapshot.ksp_type) && attestation_allocations_ok;
+        attestation_allocations_ok = copy_attestation_text(
+            &attestation.poisson_pc_type, gpu_snapshot.poisson_pc_type) && attestation_allocations_ok;
+        attestation_allocations_ok = copy_attestation_text(
+            &attestation.shift_pc_type, gpu_snapshot.shift_pc_type) && attestation_allocations_ok;
+        attestation_allocations_ok = copy_attestation_text(
+            &attestation.last_invalidation_reason,
+            gpu_snapshot.last_invalidation_reason) && attestation_allocations_ok;
+        if (!attestation_allocations_ok) {
             fullmag_fem_frequency_domain_result_v20_destroy(out_result);
             out_result->abi_version = caller_abi_version;
             out_result->struct_size = caller_struct_size;
             return FULLMAG_FEM_ERR_INTERNAL;
         }
+
+    #define FULLMAG_COPY_GPU_ATTESTATION_BYTES(field) \
+        std::copy(gpu_snapshot.field.begin(), gpu_snapshot.field.end(), attestation.field)
+        FULLMAG_COPY_GPU_ATTESTATION_BYTES(device_uuid);
+        FULLMAG_COPY_GPU_ATTESTATION_BYTES(object_graph_sha256);
+        FULLMAG_COPY_GPU_ATTESTATION_BYTES(native_trace_sha256);
+        FULLMAG_COPY_GPU_ATTESTATION_BYTES(source_snapshot_sha256);
+        FULLMAG_COPY_GPU_ATTESTATION_BYTES(runtime_manifest_sha256);
+        FULLMAG_COPY_GPU_ATTESTATION_BYTES(mesh_identity_sha256);
+        FULLMAG_COPY_GPU_ATTESTATION_BYTES(equilibrium_sha256);
+        FULLMAG_COPY_GPU_ATTESTATION_BYTES(certificate_sha256);
+        FULLMAG_COPY_GPU_ATTESTATION_BYTES(linearization_sha256);
+        FULLMAG_COPY_GPU_ATTESTATION_BYTES(material_sha256);
+        FULLMAG_COPY_GPU_ATTESTATION_BYTES(physics_sha256);
+        FULLMAG_COPY_GPU_ATTESTATION_BYTES(boundary_sha256);
+        FULLMAG_COPY_GPU_ATTESTATION_BYTES(gauge_sha256);
+        FULLMAG_COPY_GPU_ATTESTATION_BYTES(operator_terms_sha256);
+        FULLMAG_COPY_GPU_ATTESTATION_BYTES(solver_policy_sha256);
+        FULLMAG_COPY_GPU_ATTESTATION_BYTES(operator_key_sha256);
+        FULLMAG_COPY_GPU_ATTESTATION_BYTES(target_key_sha256);
+        FULLMAG_COPY_GPU_ATTESTATION_BYTES(session_context_sha256);
+    #undef FULLMAG_COPY_GPU_ATTESTATION_BYTES
+        attestation.setup_h2d_count = gpu_snapshot.setup_h2d_count;
+        attestation.setup_h2d_bytes = gpu_snapshot.setup_h2d_bytes;
+        attestation.hot_loop_computational_h2d_count =
+            gpu_snapshot.hot_loop_computational_h2d_count;
+        attestation.hot_loop_computational_h2d_bytes =
+            gpu_snapshot.hot_loop_computational_h2d_bytes;
+        attestation.hot_loop_computational_d2h_count =
+            gpu_snapshot.hot_loop_computational_d2h_count;
+        attestation.hot_loop_computational_d2h_bytes =
+            gpu_snapshot.hot_loop_computational_d2h_bytes;
+        attestation.hot_loop_scalar_telemetry_d2h_count =
+            gpu_snapshot.hot_loop_scalar_telemetry_d2h_count;
+        attestation.hot_loop_scalar_telemetry_d2h_bytes =
+            gpu_snapshot.hot_loop_scalar_telemetry_d2h_bytes;
+        attestation.hot_loop_full_vector_crossings =
+            gpu_snapshot.hot_loop_full_vector_crossings;
+        attestation.hot_loop_computational_host_syncs =
+            gpu_snapshot.hot_loop_computational_host_syncs;
+        attestation.hot_loop_scalar_telemetry_syncs =
+            gpu_snapshot.hot_loop_scalar_telemetry_syncs;
+        attestation.hot_loop_allocations = gpu_snapshot.hot_loop_allocations;
+        attestation.export_d2h_count = gpu_snapshot.export_d2h_count;
+        attestation.export_d2h_bytes = gpu_snapshot.export_d2h_bytes;
+        attestation.device_memory_baseline_bytes = gpu_snapshot.device_memory_baseline_bytes;
+        attestation.device_memory_peak_bytes = gpu_snapshot.device_memory_peak_bytes;
+        attestation.device_memory_final_bytes = gpu_snapshot.device_memory_final_bytes;
+        attestation.operator_dimension = gpu_snapshot.operator_dimension;
+        attestation.operator_apply_count = gpu_snapshot.operator_apply_count;
+        attestation.poisson_solve_count = gpu_snapshot.poisson_solve_count;
+        attestation.poisson_iteration_count = gpu_snapshot.poisson_iteration_count;
+        attestation.eps_iteration_count = gpu_snapshot.eps_iteration_count;
+        attestation.eps_restart_count = gpu_snapshot.eps_restart_count;
+        attestation.eps_converged_reason = gpu_snapshot.eps_converged_reason;
+        attestation.operator_state_generation = gpu_snapshot.operator_state_generation;
+        attestation.target_state_generation = gpu_snapshot.target_state_generation;
+        attestation.operator_reuse_count = gpu_snapshot.operator_reuse_count;
+        attestation.target_rebuild_count = gpu_snapshot.target_rebuild_count;
+        attestation.invalidation_flags = gpu_snapshot.invalidation_flags;
+
+        std::string unavailable_reason =
+            gpu_snapshot.measurement_unavailable_reason.empty()
+                ? "gpu_measurement_evidence_incomplete"
+                : gpu_snapshot.measurement_unavailable_reason;
+        if (std::all_of(
+                gpu_snapshot.runtime_manifest_sha256.begin(),
+                gpu_snapshot.runtime_manifest_sha256.end(),
+                [](std::uint8_t value) { return value == 0u; })) {
+            unavailable_reason = "managed_runtime_manifest_identity_missing";
+        } else if (std::all_of(
+                       gpu_snapshot.session_context_sha256.begin(),
+                       gpu_snapshot.session_context_sha256.end(),
+                       [](std::uint8_t value) { return value == 0u; })) {
+            unavailable_reason = "session_scoped_gpu_context_identity_unavailable";
+        } else if (!gpu_snapshot.native_scope_completed ||
+                   !gpu_snapshot.native_scope_gpu_context_acquired ||
+                   !gpu_snapshot.native_scope_operator_identity_consistent ||
+                   !gpu_snapshot.native_scope_resources_released ||
+                   gpu_snapshot.native_scope_subsolve_count == 0u) {
+            unavailable_reason = gpu_snapshot.measurement_unavailable_reason.empty()
+                ? "native_gpu_stage_scope_incomplete"
+                : gpu_snapshot.measurement_unavailable_reason;
+        } else if (std::all_of(
+                       gpu_snapshot.operator_key_sha256.begin(),
+                       gpu_snapshot.operator_key_sha256.end(),
+                       [](std::uint8_t value) { return value == 0u; }) ||
+                   std::all_of(
+                       gpu_snapshot.target_key_sha256.begin(),
+                       gpu_snapshot.target_key_sha256.end(),
+                       [](std::uint8_t value) { return value == 0u; })) {
+            unavailable_reason = "native_operator_or_target_key_unavailable";
+        } else if (gpu_snapshot.target_state_generation == 0u) {
+            unavailable_reason = "target_state_generation_unavailable";
+        } else if ((gpu_snapshot.measurement_coverage_flags &
+                    (FULLMAG_FEM_MODAL_GPU_COVERAGE_SETUP |
+                     FULLMAG_FEM_MODAL_GPU_COVERAGE_FULLMAG_HOT_LOOP |
+                     FULLMAG_FEM_MODAL_GPU_COVERAGE_OBJECT_GRAPH |
+                     FULLMAG_FEM_MODAL_GPU_COVERAGE_SCALAR_TELEMETRY |
+                     FULLMAG_FEM_MODAL_GPU_COVERAGE_EXPORT)) !=
+                   (FULLMAG_FEM_MODAL_GPU_COVERAGE_SETUP |
+                    FULLMAG_FEM_MODAL_GPU_COVERAGE_FULLMAG_HOT_LOOP |
+                    FULLMAG_FEM_MODAL_GPU_COVERAGE_OBJECT_GRAPH |
+                    FULLMAG_FEM_MODAL_GPU_COVERAGE_SCALAR_TELEMETRY |
+                    FULLMAG_FEM_MODAL_GPU_COVERAGE_EXPORT)) {
+            unavailable_reason = "gpu_measurement_coverage_incomplete";
+        }
+        if (augmented_robin_failure != nullptr && gpu_snapshot.measurement_unavailable_reason.empty()) {
+            unavailable_reason = augmented_robin_failure;
+        }
+        if (measured) {
+            unavailable_reason.clear();
+        }
+        const auto json_escape_string = [](std::string_view text) {
+            std::string escaped;
+            escaped.reserve(text.size() + 8u);
+            for (const unsigned char character : text) {
+                switch (character) {
+                    case '"': escaped += "\\\""; break;
+                    case '\\': escaped += "\\\\"; break;
+                    case '\b': escaped += "\\b"; break;
+                    case '\f': escaped += "\\f"; break;
+                    case '\n': escaped += "\\n"; break;
+                    case '\r': escaped += "\\r"; break;
+                    case '\t': escaped += "\\t"; break;
+                    default:
+                        if (character < 0x20u) {
+                            constexpr char digits[] = "0123456789abcdef";
+                            escaped += "\\u00";
+                            escaped += digits[(character >> 4u) & 0x0fu];
+                            escaped += digits[character & 0x0fu];
+                        } else {
+                            escaped += static_cast<char>(character);
+                        }
+                }
+            }
+            return escaped;
+        };
+        const auto native_trace_sha256_hex = [&]() {
+            constexpr char digits[] = "0123456789abcdef";
+            std::string hash;
+            hash.reserve(64u);
+            for (const std::uint8_t byte : gpu_snapshot.native_trace_sha256) {
+                hash += digits[(byte >> 4u) & 0x0fu];
+                hash += digits[byte & 0x0fu];
+            }
+            return hash;
+        };
+        const auto sha256_bytes_hex = [](const std::uint8_t *bytes, std::size_t size) {
+            constexpr char digits[] = "0123456789abcdef";
+            std::string hash;
+            hash.reserve(2u * size);
+            if (bytes == nullptr) return hash;
+            for (std::size_t index = 0u; index < size; ++index) {
+                hash += digits[(bytes[index] >> 4u) & 0x0fu];
+                hash += digits[bytes[index] & 0x0fu];
+            }
+            return hash;
+        };
+        const auto append_gpu_attestation_json = [&](char **json) {
+            if (json == nullptr || *json == nullptr) return false;
+            std::string value(*json);
+            if (value.empty() || value.back() != '}') return false;
+            value.pop_back();
+            if (value.size() > 1u) value.push_back(',');
+            value += "\"gpu_execution_attestation\":{";
+            value += "\"measurement_state\":\"";
+            value += measured ? "measured\"," : "unavailable\",";
+            value += "\"measurement_coverage_flags\":" +
+                std::to_string(gpu_snapshot.measurement_coverage_flags) +
+                ",\"measurement_unavailable_reason\":\"" +
+                json_escape_string(unavailable_reason) + "\",\"native_trace_window\":{";
+            value += "\"status\":\"";
+            value += gpu_snapshot.native_trace_complete ? "complete\"" : "unavailable\"";
+            value += ",\"flags\":" + std::to_string(gpu_snapshot.native_trace_flags) +
+                ",\"phase_coverage\":" +
+                    std::to_string(gpu_snapshot.native_trace_phase_coverage) +
+                ",\"counter_coverage\":" +
+                    std::to_string(gpu_snapshot.native_trace_counter_coverage) +
+                ",\"start_ns\":" + std::to_string(gpu_snapshot.native_trace_start_ns) +
+                ",\"end_ns\":" + std::to_string(gpu_snapshot.native_trace_end_ns) +
+                ",\"observed_activity_records\":" +
+                    std::to_string(gpu_snapshot.native_trace_observed_activity_records);
+            if (gpu_snapshot.native_trace_complete) {
+                value += ",\"kernel_records\":" +
+                        std::to_string(gpu_snapshot.native_trace_kernel_records) +
+                    ",\"kernel_duration_ns\":" +
+                        std::to_string(gpu_snapshot.native_trace_kernel_duration_ns) +
+                    ",\"h2d_count\":" + std::to_string(gpu_snapshot.native_trace_h2d_count) +
+                    ",\"h2d_bytes\":" + std::to_string(gpu_snapshot.native_trace_h2d_bytes) +
+                    ",\"d2h_count\":" + std::to_string(gpu_snapshot.native_trace_d2h_count) +
+                    ",\"d2h_bytes\":" + std::to_string(gpu_snapshot.native_trace_d2h_bytes) +
+                    ",\"d2d_count\":" + std::to_string(gpu_snapshot.native_trace_d2d_count) +
+                    ",\"d2d_bytes\":" + std::to_string(gpu_snapshot.native_trace_d2d_bytes) +
+                    ",\"allocation_count\":" +
+                        std::to_string(gpu_snapshot.native_trace_allocation_count) +
+                    ",\"allocation_bytes\":" +
+                        std::to_string(gpu_snapshot.native_trace_allocation_bytes) +
+                    ",\"release_count\":" +
+                        std::to_string(gpu_snapshot.native_trace_release_count) +
+                    ",\"release_bytes\":" +
+                        std::to_string(gpu_snapshot.native_trace_release_bytes) +
+                    ",\"host_sync_count\":" +
+                        std::to_string(gpu_snapshot.native_trace_host_sync_count) +
+                    ",\"host_sync_duration_ns\":" +
+                        std::to_string(gpu_snapshot.native_trace_host_sync_duration_ns) +
+                    ",\"native_trace_sha256\":\"" + native_trace_sha256_hex() + "\"";
+            } else if (!gpu_snapshot.native_trace_unavailable_reason.empty()) {
+                value += ",\"unavailable_reason\":\"" +
+                    json_escape_string(gpu_snapshot.native_trace_unavailable_reason) + "\"";
+            }
+            value += "}";
+            const auto &phases = gpu_snapshot.host_phase_boundaries;
+            if (phases.setup_begin_ns != 0u) {
+                value += ",\"host_phase_boundaries\":{\"clock\":\"clock_monotonic\","
+                    "\"setup_begin_ns\":" + std::to_string(phases.setup_begin_ns) +
+                    ",\"eps_begin_ns\":" + std::to_string(phases.eps_begin_ns) +
+                    ",\"eps_end_ns\":" + std::to_string(phases.eps_end_ns) +
+                    ",\"first_export_begin_ns\":" +
+                        std::to_string(phases.first_export_begin_ns) +
+                    ",\"last_export_end_ns\":" +
+                        std::to_string(phases.last_export_end_ns) + "}";
+            }
+            value += ",\"native_scope\":{";
+            value += "\"schema\":\"modal_gpu_native_scope.v1\",\"status\":\"";
+            const bool native_scope_verified =
+                gpu_snapshot.native_scope_completed &&
+                gpu_snapshot.native_scope_gpu_context_acquired &&
+                gpu_snapshot.native_scope_operator_identity_consistent &&
+                gpu_snapshot.native_scope_resources_released &&
+                gpu_snapshot.native_scope_subsolve_count > 0u &&
+                std::any_of(
+                    gpu_snapshot.session_context_sha256.begin(),
+                    gpu_snapshot.session_context_sha256.end(),
+                    [](std::uint8_t value) { return value != 0u; }) &&
+                std::any_of(
+                    gpu_snapshot.operator_key_sha256.begin(),
+                    gpu_snapshot.operator_key_sha256.end(),
+                    [](std::uint8_t value) { return value != 0u; }) &&
+                std::any_of(
+                    gpu_snapshot.target_key_sha256.begin(),
+                    gpu_snapshot.target_key_sha256.end(),
+                    [](std::uint8_t value) { return value != 0u; });
+            value += native_scope_verified ? "complete\"" : "unavailable\"";
+            value += ",\"reason\":\"" +
+                json_escape_string(gpu_snapshot.measurement_unavailable_reason) + "\"";
+            value += ",\"completed\":";
+            value += gpu_snapshot.native_scope_completed ? "true" : "false";
+            value += ",\"gpu_context_acquired\":";
+            value += gpu_snapshot.native_scope_gpu_context_acquired ? "true" : "false";
+            value += ",\"operator_identity_consistent\":";
+            value += gpu_snapshot.native_scope_operator_identity_consistent ? "true" : "false";
+            value += ",\"resources_released\":";
+            value += gpu_snapshot.native_scope_resources_released ? "true" : "false";
+            value += ",\"subsolve_count\":" +
+                std::to_string(gpu_snapshot.native_scope_subsolve_count);
+            value += ",\"operator_state_generation\":" +
+                std::to_string(gpu_snapshot.operator_state_generation);
+            value += ",\"target_state_generation\":" +
+                std::to_string(gpu_snapshot.target_state_generation);
+            value += ",\"operator_reuse_count\":" +
+                std::to_string(gpu_snapshot.operator_reuse_count);
+            value += ",\"target_rebuild_count\":" +
+                std::to_string(gpu_snapshot.target_rebuild_count);
+            value += ",\"session_context_sha256\":\"" +
+                sha256_bytes_hex(
+                    gpu_snapshot.session_context_sha256.data(),
+                    gpu_snapshot.session_context_sha256.size()) + "\"";
+            value += ",\"operator_key_sha256\":\"" +
+                sha256_bytes_hex(
+                    gpu_snapshot.operator_key_sha256.data(),
+                    gpu_snapshot.operator_key_sha256.size()) + "\"";
+            value += ",\"target_key_sha256\":\"" +
+                sha256_bytes_hex(
+                    gpu_snapshot.target_key_sha256.data(),
+                    gpu_snapshot.target_key_sha256.size()) + "\"}}}";
+            char *replacement_json = duplicate_c_string(value.c_str());
+            if (replacement_json == nullptr) return false;
+            delete[] *json;
+            *json = replacement_json;
+            return true;
+        };
+        if (!measured && out_result->scientific_result_v18.status == FULLMAG_FEM_FD_OK) {
+            out_result->scientific_result_v18.status = FULLMAG_FEM_FD_UNAVAILABLE;
+            const std::string strict_error_message =
+                std::string("strict production GPU attestation is incomplete: ") +
+                unavailable_reason;
+            char *strict_error_message_copy =
+                duplicate_c_string(strict_error_message.c_str());
+            if (strict_error_message_copy == nullptr) {
+                fullmag_fem_frequency_domain_result_v20_destroy(out_result);
+                out_result->abi_version = caller_abi_version;
+                out_result->struct_size = caller_struct_size;
+                return FULLMAG_FEM_ERR_INTERNAL;
+            }
+            delete[] out_result->scientific_result_v18.error_message;
+            out_result->scientific_result_v18.error_message = strict_error_message_copy;
+            const auto preserve_unavailable_json = [&](char **json) {
+                if (json == nullptr || *json == nullptr) return false;
+                std::string value(*json);
+                const auto replace_once = [&](const char *needle, const char *replacement) {
+                    const std::size_t position = value.find(needle);
+                    if (position != std::string::npos) {
+                        value.replace(position, std::strlen(needle), replacement);
+                    }
+                };
+                replace_once("\"status\":\"ok\"", "\"status\":\"unavailable\"");
+                replace_once("\"complete\":true", "\"complete\":false");
+                if (value.empty() || value.back() != '}') return false;
+                value.pop_back();
+                value.push_back('}');
+                char *replacement_json = duplicate_c_string(value.c_str());
+                if (replacement_json == nullptr) return false;
+                delete[] *json;
+                *json = replacement_json;
+                return true;
+            };
+            const bool json_ok = preserve_unavailable_json(
+                    &out_result->scientific_result_v18.diagnostics_json) &&
+                preserve_unavailable_json(&out_result->scientific_result_v18.result_json) &&
+                append_gpu_attestation_json(
+                    &out_result->scientific_result_v18.diagnostics_json) &&
+                append_gpu_attestation_json(&out_result->scientific_result_v18.result_json);
+            if (out_result->scientific_result_v18.error_message == nullptr || !json_ok) {
+                fullmag_fem_frequency_domain_result_v20_destroy(out_result);
+                out_result->abi_version = caller_abi_version;
+                out_result->struct_size = caller_struct_size;
+                return FULLMAG_FEM_ERR_INTERNAL;
+            }
+        } else {
+            const bool json_ok =
+                (out_result->scientific_result_v18.diagnostics_json == nullptr ||
+                 append_gpu_attestation_json(
+                     &out_result->scientific_result_v18.diagnostics_json)) &&
+                (out_result->scientific_result_v18.result_json == nullptr ||
+                 append_gpu_attestation_json(
+                     &out_result->scientific_result_v18.result_json));
+            if (!json_ok) {
+                fullmag_fem_frequency_domain_result_v20_destroy(out_result);
+                out_result->abi_version = caller_abi_version;
+                out_result->struct_size = caller_struct_size;
+                return FULLMAG_FEM_ERR_INTERNAL;
+            }
+        }
+        out_result->abi_version = caller_abi_version;
+        out_result->struct_size = caller_struct_size;
+        return 0;
+    } catch (...) {
+#if defined(FULLMAG_HAS_MFEM_STACK) && FULLMAG_HAS_MFEM_STACK && \
+    defined(FULLMAG_HAS_CUDA_RUNTIME) && FULLMAG_HAS_CUDA_RUNTIME && \
+    defined(FULLMAG_FEM_WITH_SLEPC) && FULLMAG_FEM_WITH_SLEPC
+        if (native_scope_started) {
+            fullmag::fem::frequency_domain::ModalGpuNativeScopeReportV1 ignored{};
+            (void)fullmag::fem::frequency_domain::finish_modal_gpu_native_scope_v1(
+                native_scope_token,
+                &ignored);
+        }
+#endif
+        if (native_result_initialized) {
+            fullmag_fem_frequency_domain_result_v20_destroy(out_result);
+        }
+        out_result->abi_version = caller_abi_version;
+        out_result->struct_size = caller_struct_size;
+        return FULLMAG_FEM_ERR_INTERNAL;
     }
-    out_result->abi_version = caller_abi_version;
-    out_result->struct_size = caller_struct_size;
-    return 0;
+}
+
+int fullmag_fem_modal_eigen_solve_v20_with_runtime_identity(
+    const FullmagFemModalEigenRequest *request,
+    FullmagFemFrequencyDomainResultV20 *out_result,
+    const std::uint8_t *runtime_manifest_sha256
+)
+{
+    return fullmag_fem_modal_eigen_solve_v20_with_runtime_scope(
+        request,
+        out_result,
+        runtime_manifest_sha256,
+        nullptr);
+}
+
+int fullmag_fem_modal_eigen_solve_v20(
+    const FullmagFemModalEigenRequest *request,
+    FullmagFemFrequencyDomainResultV20 *out_result
+)
+{
+    return fullmag_fem_modal_eigen_solve_v20_with_runtime_identity(
+        request, out_result, nullptr);
 }
 
 void fullmag_fem_frequency_domain_result_v20_destroy(

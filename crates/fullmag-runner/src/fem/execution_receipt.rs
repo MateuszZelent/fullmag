@@ -89,12 +89,33 @@ impl FemGpuExecutionReceiptValidationError {
 pub(crate) fn validate_strict_fem_gpu_execution_receipt(
     receipt: &FemGpuExecutionReceipt,
 ) -> Result<(), FemGpuExecutionReceiptValidationError> {
+    validate_strict_device_accounting(receipt, "cuda_fem", receipt.required_operator_mask, true)
+}
+
+pub(crate) fn validate_strict_fem_gpu_initial_equilibrium_receipt(
+    receipt: &FemGpuExecutionReceipt,
+    field_operator_mask: u64,
+) -> Result<(), FemGpuExecutionReceiptValidationError> {
+    validate_strict_device_accounting(
+        receipt,
+        "cuda_fem_initial_equilibrium",
+        field_operator_mask,
+        false,
+    )
+}
+
+fn validate_strict_device_accounting(
+    receipt: &FemGpuExecutionReceipt,
+    expected_execution: &str,
+    expected_executed_mask: u64,
+    needs_accepted_step: bool,
+) -> Result<(), FemGpuExecutionReceiptValidationError> {
     if !receipt.accounting_valid {
         return Err(FemGpuExecutionReceiptValidationError::AccountingInvalid);
     }
     if receipt.execution_class != FemGpuExecutionClass::DeviceResident
         || receipt.resolved != "device_resident"
-        || receipt.executed != "cuda_fem"
+        || receipt.executed != expected_execution
     {
         return Err(FemGpuExecutionReceiptValidationError::ExecutionClassMismatch);
     }
@@ -110,16 +131,16 @@ pub(crate) fn validate_strict_fem_gpu_execution_receipt(
     if receipt.executed_unknown_operator_mask != 0 {
         return Err(FemGpuExecutionReceiptValidationError::UnknownOperatorExecuted);
     }
-    if receipt.required_operator_mask == 0
+    if expected_executed_mask == 0
         || receipt.resolved_device_operator_mask != receipt.required_operator_mask
-        || receipt.executed_device_operator_mask != receipt.required_operator_mask
+        || receipt.executed_device_operator_mask != expected_executed_mask
     {
         return Err(FemGpuExecutionReceiptValidationError::RequiredOperatorMissing);
     }
     if receipt.fallback_count != 0 {
         return Err(FemGpuExecutionReceiptValidationError::FallbackObserved);
     }
-    if receipt.accepted_step_count == 0 {
+    if needs_accepted_step && receipt.accepted_step_count == 0 {
         return Err(FemGpuExecutionReceiptValidationError::NoAcceptedStep);
     }
     if receipt.hot_loop_compute_h2d_bytes != 0

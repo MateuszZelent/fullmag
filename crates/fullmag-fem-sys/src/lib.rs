@@ -3534,6 +3534,19 @@ extern "C" {
         request: *const FullmagFemModalEigenRequest,
         out_result: *mut FullmagFemFrequencyDomainResultV20,
     ) -> i32;
+    #[cfg(target_os = "linux")]
+    pub fn fullmag_fem_modal_eigen_solve_v20_with_runtime_identity(
+        request: *const FullmagFemModalEigenRequest,
+        out_result: *mut FullmagFemFrequencyDomainResultV20,
+        runtime_manifest_sha256: *const u8,
+    ) -> i32;
+    #[cfg(target_os = "linux")]
+    pub fn fullmag_fem_modal_eigen_solve_v20_with_runtime_scope(
+        request: *const FullmagFemModalEigenRequest,
+        out_result: *mut FullmagFemFrequencyDomainResultV20,
+        runtime_manifest_sha256: *const u8,
+        stage_session_sha256: *const u8,
+    ) -> i32;
     pub fn fullmag_fem_frequency_domain_result_v20_destroy(
         result: *mut FullmagFemFrequencyDomainResultV20,
     );

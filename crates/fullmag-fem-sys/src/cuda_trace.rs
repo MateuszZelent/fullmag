@@ -26,6 +26,9 @@ unsafe extern "C" {
     pub fn fullmag_fem_cuda_trace_start_v1(
         output_fd: i32, max_bytes: u64, max_duration_ms: u32, token: *mut u64,
     ) -> i32;
+    pub fn fullmag_fem_cuda_trace_start_modal_v1(
+        output_fd: i32, max_bytes: u64, max_duration_ms: u32, token: *mut u64,
+    ) -> i32;
     pub fn fullmag_fem_cuda_trace_stop_v1(
         token: u64, stats: *mut fullmag_fem_cuda_trace_stats_v1,
     ) -> i32;

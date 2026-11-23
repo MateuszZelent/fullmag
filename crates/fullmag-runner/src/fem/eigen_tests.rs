@@ -4129,6 +4129,18 @@ fn bounded_k0_execution_plan() -> FemEigenPlanIR {
     plan
 }
 
+fn bounded_open_airbox_k0_execution_plan() -> FemEigenPlanIR {
+    let mut plan = bounded_k0_execution_plan();
+    plan.domain_mesh_mode = fullmag_ir::FemDomainMeshModeIR::SharedDomainMeshWithAir;
+    plan.mesh.periodic_node_pairs.clear();
+    plan.mesh.periodic_boundary_pairs.clear();
+    plan.mesh_name = plan.mesh.mesh_name.clone();
+    plan.spin_wave_bc = SpinWaveBoundaryConditionIR::Legacy(SpinWaveBoundaryKindIR::Free);
+    plan.magnetostatic_bc = fullmag_ir::MagnetostaticBoundaryConditionIR::OpenAirboxK0;
+    plan.demag_realization = Some(fullmag_ir::ResolvedFemDemagIR::PoissonRobin);
+    plan
+}
+
 fn bounded_floquet_dynamic_demag_execution_plan() -> FemEigenPlanIR {
     let mut plan = bounded_k0_execution_plan();
     plan.domain_mesh_mode = fullmag_ir::FemDomainMeshModeIR::SharedDomainMeshWithAir;
@@ -7491,6 +7503,70 @@ fn native_poisson_airbox_result_maps_to_k0_kittel_metrics() {
 }
 
 #[test]
+fn native_open_airbox_result_binds_v6_boundary_digest_and_gpu_selected_spectrum() {
+    let digest = format!("sha256:{}", "0c".repeat(32));
+    let result_raw = serde_json::json!({
+        "demag_kind": "open_airbox_k0",
+        "outer_boundary_kind": "poisson_robin",
+        "boundary_gauge_digest": digest,
+    })
+    .to_string();
+    let diagnostics_raw = serde_json::json!({
+        "demag_kind": "open_airbox_k0",
+        "outer_boundary_kind": "poisson_robin",
+        "boundary_gauge_digest": format!("sha256:{}", "0c".repeat(32)),
+        "robin_beta": 1.5,
+        "production_implication": true,
+        "production_shared_domain": true,
+        "validation_only": false,
+        "execution_lane": "production_gpu",
+        "scalable_selected_spectrum": true,
+    })
+    .to_string();
+    let mut attestation = native_fem::measured_modal_gpu_attestation_fixture();
+    attestation.boundary_sha256 = [12; 32];
+
+    validate_native_open_airbox_k0_result_identity(
+        &result_raw,
+        Some(&diagnostics_raw),
+        &format!("sha256:{}", "0c".repeat(32)),
+        99,
+        1.5,
+        Some(&attestation),
+    )
+    .expect("native output's actual result shape and typed digest should bind");
+
+    attestation.boundary_sha256 = [13; 32];
+    let err = validate_native_open_airbox_k0_result_identity(
+        &result_raw,
+        Some(&diagnostics_raw),
+        &format!("sha256:{}", "0c".repeat(32)),
+        99,
+        1.5,
+        Some(&attestation),
+    )
+    .expect_err("GPU boundary identity must match the exact v6 digest bytes");
+    assert!(err.message.contains("boundary_identity_mismatch"));
+
+    let periodic_result = serde_json::json!({
+        "demag_kind": "periodic_airbox_k0",
+        "outer_boundary_kind": "poisson_robin",
+        "boundary_gauge_digest": format!("sha256:{}", "0c".repeat(32)),
+    })
+    .to_string();
+    let err = validate_native_open_airbox_k0_result_identity(
+        &periodic_result,
+        Some(&diagnostics_raw),
+        &format!("sha256:{}", "0c".repeat(32)),
+        99,
+        1.5,
+        None,
+    )
+    .expect_err("open request must reject a periodic native result");
+    assert!(err.message.contains("demag_kind"));
+}
+
+#[test]
 fn native_poisson_airbox_metrics_reject_wrong_solver_adapter() {
     let raw = serde_json::json!({
         "schema_version": "frequency_domain_modal_result.v1",
@@ -7542,6 +7618,27 @@ fn native_poisson_airbox_k0_metrics_reject_floquet_adapter_even_with_k0_demag_ki
     .expect_err("Floquet adapter must never populate K0-only metrics");
 
     assert!(err.message.contains("solver_adapter"));
+}
+
+#[test]
+fn native_open_airbox_result_never_populates_periodic_kittel_metrics() {
+    let raw = serde_json::json!({
+        "solver_adapter": "k0_poisson_airbox_gpu_petsc_slepc",
+        "demag_kind": "open_airbox_k0",
+    })
+    .to_string();
+    let err = native_poisson_airbox_k0_metrics_from_result_json(
+        &raw,
+        NativePoissonAirboxK0MetricsInput {
+            mesh_resolution_m: 10.0e-9,
+            airbox_size_m: 400.0e-9,
+            magnetic_pair_count: 0,
+            airbox_pair_count: 0,
+            effective_magnetisation_a_per_m: 800_000.0,
+        },
+    )
+    .expect_err("open-airbox output is not K0 periodic validation evidence");
+    assert!(err.message.contains("demag_kind=periodic_airbox_k0"));
 }
 
 #[test]
@@ -8474,6 +8571,68 @@ fn native_gpu_shared_domain_requires_operator_demag_flag() {
     assert!(native_gpu_shared_domain_modal_supported(&plan));
     plan.operator.include_demag = false;
     assert!(!native_gpu_shared_domain_modal_supported(&plan));
+}
+
+#[test]
+fn native_gpu_shared_domain_admits_only_double_open_airbox_k0_without_seams() {
+    let mut plan = bounded_open_airbox_k0_execution_plan();
+    assert!(open_airbox_k0_modal_requested(&plan));
+    assert!(native_shared_domain_magnetic_assembly_available(&plan));
+    assert!(native_gpu_shared_domain_modal_supported(&plan));
+
+    plan.precision = fullmag_ir::ExecutionPrecision::Single;
+    assert!(!native_gpu_shared_domain_modal_supported(&plan));
+
+    let mut periodic_seam = bounded_open_airbox_k0_execution_plan();
+    periodic_seam
+        .mesh
+        .periodic_node_pairs
+        .push(fullmag_ir::MeshPeriodicNodePairIR {
+            pair_id: "unexpected".to_string(),
+            node_a: 0,
+            node_b: 1,
+        });
+    assert!(!native_gpu_shared_domain_modal_supported(&periodic_seam));
+}
+
+#[test]
+fn native_open_airbox_gpu_contract_never_makes_periodic_validation_claim() {
+    let plan = bounded_open_airbox_k0_execution_plan();
+    let contract = native_poisson_airbox_execution_contract(
+        &plan,
+        "k0_poisson_airbox_gpu_petsc_slepc",
+        true,
+    )
+    .expect("the existing PETSc/SLEPc GPU adapter is the open-airbox K0 route");
+    assert_eq!(contract.magnetostatic_bc, "open_airbox_k0");
+    assert!(!contract.production_periodic_airbox_claim);
+    assert_eq!(contract.validated_scope, None);
+    assert!(native_poisson_airbox_execution_contract(
+        &plan,
+        "k0_poisson_airbox_gpu_modal_device_krylov",
+        true,
+    )
+    .is_err());
+}
+
+#[test]
+fn open_and_periodic_native_artifacts_keep_distinct_capability_identity() {
+    assert_eq!(
+        super::eigen_native_artifacts::native_shared_domain_k0_artifact_capability(
+            Some("open_airbox_k0")
+        ),
+        Some("open_airbox_k0")
+    );
+    assert_eq!(
+        super::eigen_native_artifacts::native_shared_domain_k0_artifact_capability(
+            Some("periodic_airbox_k0")
+        ),
+        Some("k0_periodic_airbox")
+    );
+    assert_eq!(
+        super::eigen_native_artifacts::native_shared_domain_k0_artifact_capability(None),
+        None
+    );
 }
 
 #[test]
@@ -10094,7 +10253,9 @@ fn native_modal_artifact_limitations_follow_executed_operator_payload() {
         node_phases: Vec::new(),
         complex_reduction: false,
     };
-    let build_summary = |solver_diagnostics: serde_json::Value| {
+    let build_summary_for_target = |solver_diagnostics: serde_json::Value, target| {
+        let mut plan = plan.clone();
+        plan.target = target;
         let artifacts = super::eigen_native_artifacts::native_modal_artifacts(
             &plan,
             &[OutputIR::EigenSpectrum {
@@ -10105,7 +10266,7 @@ fn native_modal_artifact_limitations_follow_executed_operator_payload() {
             &reduction,
             &[],
             &[],
-            None,
+            Some(&[]),
             solver_diagnostics,
             0,
             None,
@@ -10122,6 +10283,9 @@ fn native_modal_artifact_limitations_follow_executed_operator_payload() {
             .expect("native modal artifacts should include an eigen summary");
         serde_json::from_slice::<serde_json::Value>(&summary.bytes)
             .expect("eigen summary should be JSON")
+    };
+    let build_summary = |solver_diagnostics| {
+        build_summary_for_target(solver_diagnostics, plan.target.clone())
     };
     let has_limitation = |summary: &serde_json::Value, limitation: &str| {
         summary["solver_limitations"]
@@ -10180,6 +10344,36 @@ fn native_modal_artifact_limitations_follow_executed_operator_payload() {
         unknown["solver_diagnostics"]["mfem_operator_payload"],
         "future_operator_payload"
     );
+
+    let open_gpu_diagnostics = |window_complete, spectrum_completeness| {
+        serde_json::json!({
+            "solver_adapter": "k0_poisson_airbox_gpu_augmented_cudss",
+            "demag_kind": "open_airbox_k0",
+            "execution_lane": "production_gpu",
+            "window_complete": window_complete,
+            "spectrum_completeness": spectrum_completeness,
+        })
+    };
+    let window = fullmag_ir::EigenTargetIR::FrequencyWindow {
+        frequency_min_hz: 1.0,
+        frequency_max_hz: 8e9,
+    };
+    let pending = "frequency_window_completeness_pending";
+    assert!(!has_limitation(
+        &build_summary_for_target(open_gpu_diagnostics(true, "certified_window"), window.clone()),
+        pending
+    ));
+    assert!(has_limitation(
+        &build_summary_for_target(open_gpu_diagnostics(false, "incomplete_window"), window),
+        pending
+    ));
+    assert!(!has_limitation(
+        &build_summary_for_target(
+            open_gpu_diagnostics(false, "selected_only"),
+            fullmag_ir::EigenTargetIR::Nearest { frequency_hz: 3e9 }
+        ),
+        pending
+    ));
 }
 
 #[test]
