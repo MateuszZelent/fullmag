@@ -774,6 +774,7 @@ pub(crate) async fn test_app_state_with_live_session() -> Arc<AppState> {
     };
 
     let snapshot = SessionStateResponse {
+        preclaim_cancelled_run_id: None,
         session_protocol_version: "1.0.0".into(),
         capability_profile_version: "1.0.0".into(),
         session,
@@ -3161,6 +3162,7 @@ async fn test_router_with_session_state_and_artifact_dir() -> (axum::Router, Arc
     };
 
     let snapshot = SessionStateResponse {
+        preclaim_cancelled_run_id: None,
         session_protocol_version: "1.0.0".into(),
         capability_profile_version: "1.0.0".into(),
         session,
@@ -3340,6 +3342,7 @@ async fn test_router_with_session_store_state() -> (axum::Router, Arc<AppState>,
     };
 
     let snapshot = SessionStateResponse {
+        preclaim_cancelled_run_id: None,
         session_protocol_version: "1.0.0".into(),
         capability_profile_version: "1.0.0".into(),
         session,

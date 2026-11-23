@@ -56,23 +56,14 @@ pub(crate) fn uses_prepared_field_input(snapshot: &SessionStateResponse) -> bool
 }
 
 fn retired_authoring_input_is_current(snapshot: &SessionStateResponse) -> bool {
-    use crate::types::{RuntimeLifecycleState, StageLifecycleState};
-
-    snapshot.run.as_ref().is_some_and(|run| run.status == "cancelled")
+    let Some(run) = snapshot.run.as_ref() else {
+        return false;
+    };
+    run.status == "cancelled"
         && snapshot.session.status == "awaiting_command"
+        && snapshot.preclaim_cancelled_run_id.as_deref() == Some(run.run_id.as_str())
         && snapshot.stage_execution.as_ref().is_none_or(|execution| {
-            // The accepted projector can retain the cancelled, unstarted stages
-            // after authoring retires the held Study.
-            execution.runtime_state == RuntimeLifecycleState::Cancelled
-                && execution.active_stage_index.is_none()
-                && execution.completed_stage_indexes.is_empty()
-                && execution.stages.iter().all(|stage| {
-                    stage.status == StageLifecycleState::Cancelled
-                        && stage.started_at_unix_ms.is_none()
-                        && stage.applied_step.is_none_or(|step| step == 0)
-                        && stage.completed_step.is_none_or(|step| step == 0)
-                        && stage.applied_time_seconds.is_none_or(|time| time == 0.0)
-                })
+            execution.runtime_state == crate::types::RuntimeLifecycleState::Cancelled
         })
         && crate::live_authored_initial_state::current_publication(snapshot).is_some()
 }
@@ -578,6 +569,8 @@ mod tests {
             },
             0.0,
         ));
+        assert!(!uses_prepared_field_input(&snapshot));
+        snapshot.preclaim_cancelled_run_id = Some("held-run".into());
         assert!(uses_prepared_field_input(&snapshot));
         assert_eq!(
             disabled_reason(&snapshot),
@@ -593,18 +586,17 @@ mod tests {
             vec![stage],
             RuntimeLifecycleState::Cancelled,
         ));
+        snapshot.preclaim_cancelled_run_id = None;
+        assert!(!uses_prepared_field_input(&snapshot));
+        snapshot.preclaim_cancelled_run_id = Some("another-run".into());
+        assert!(!uses_prepared_field_input(&snapshot));
+        snapshot.preclaim_cancelled_run_id = Some("held-run".into());
         assert!(uses_prepared_field_input(&snapshot));
         assert_eq!(
             disabled_reason(&snapshot),
             Err("Commit a scene before computing fields.")
         );
 
-        snapshot.stage_execution.as_mut().unwrap().stages[0].applied_step = Some(1);
-        assert!(!uses_prepared_field_input(&snapshot));
-        snapshot.stage_execution.as_mut().unwrap().stages[0].applied_step = None;
-        snapshot.stage_execution.as_mut().unwrap().stages[0].started_at_unix_ms = Some(1);
-        assert!(!uses_prepared_field_input(&snapshot));
-        snapshot.stage_execution.as_mut().unwrap().stages[0].started_at_unix_ms = None;
         snapshot.stage_execution.as_mut().unwrap().runtime_state = RuntimeLifecycleState::Running;
         assert!(!uses_prepared_field_input(&snapshot));
 

@@ -3760,6 +3760,15 @@ async fn apply_projection(
     let previous_status = next.session.status.clone();
     let terminal = matches!(projection.status, "completed" | "failed" | "cancelled");
     let mut changed = profile_changed;
+
+    // These cancellations were validated against every unclaimed task in
+    // this run's durable catalog. Missing journal details alone prove nothing.
+    let preclaim_cancelled_run_id = (!projection.preclaim_cancellations.is_empty())
+        .then(|| context.run_id.clone());
+    if next.preclaim_cancelled_run_id != preclaim_cancelled_run_id {
+        next.preclaim_cancelled_run_id = preclaim_cancelled_run_id;
+        changed = true;
+    }
     let mut scalar_sample_advanced = false;
     if let Some(run) = next.run.as_mut() {
         if let Some(root) = projection.frequency_response_root.as_ref().or(projection.transport_fields_root.as_ref()) {
@@ -6506,6 +6515,10 @@ mod tests {
         let snapshot = current.as_ref().unwrap();
         assert_eq!(snapshot.session.status, "awaiting_command");
         assert_eq!(snapshot.run.as_ref().unwrap().status, "cancelled");
+        assert_eq!(
+            snapshot.preclaim_cancelled_run_id.as_deref(),
+            Some(context.run_id.as_str())
+        );
         assert_eq!(snapshot.runtime_status.code, "awaiting_command");
         assert_eq!(snapshot.session.finished_at_unix_ms, 0);
         let ledger = state.current_command_ledger.lock().await;
