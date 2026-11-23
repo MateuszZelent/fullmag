@@ -3397,7 +3397,7 @@
     },
     {
       "id": "source-eigen-diagnostics-frontend-shape",
-      "path": "apps/control-room/src/modules/inspector/panels/frequency-domain/FrequencyDomainResultInspectors.tsx",
+      "path": "apps/control-room/src/modules/inspector/panels/frequency-domain/frequencyDomainResultFormatting.ts",
       "symbol": "eigenDiagnosticTransportSummary",
       "evidence_status": "source_visible",
       "responsibility": "Consume root-level transport fields independently of the dispersion subsection."

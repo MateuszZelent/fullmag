@@ -796,7 +796,7 @@ hidden change to `alpha`.
 | `packages/fullmag-py/src/fullmag/model/spin_torque.py` | `class SlonczewskiSTT` | Public Python authoring surface |
 | `packages/fullmag-py/src/fullmag/model/spin_torque.py` | `class ZhangLiSTT` | Public canonical Zhang–Li identity, target, operator and Landé factor |
 | `crates/fullmag-authoring/src/validation.rs` | `validate_spin_torque` | SceneDocument validation and lossless canonical/legacy boundary |
-| `apps/control-room/src/modules/inspector/panels/SpinAuthoringInspector.tsx` | `buildTorque` | UI mutation payload preserving canonical Zhang–Li fields |
+| `apps/control-room/src/modules/inspector/inspectors/objects/transport/transportResourceBuilder.ts` | `buildSpinTorqueResource` | UI mutation payload preserving canonical Zhang–Li fields |
 | `packages/fullmag-py/src/fullmag/model/spin_torque.py` | `class PrescribedSpinOrbitTorque` | Canonical Python SOT class preserving target, tagged drive, efficiencies, and ferromagnetic thickness |
 | `packages/fullmag-py/src/fullmag/model/spin_torque.py` | `class SignedScalarDrive` | Signed scalar current, polarization axis, and optional envelope authoring |
 | `packages/fullmag-py/src/fullmag/model/spin_torque.py` | `class VectorCurrentDrive` | Vector current-source binding with explicit drive and interface axes |

@@ -454,7 +454,7 @@ still rejected by the execution planner.
 | Formula language | `crates/fullmag-expr/src/function.rs:compile_function` | parse and evaluate profile (`FunctionKind::Profile`) and distance (`FunctionKind::Distance`) formulas |
 | Python formula front end | `packages/fullmag-py/src/fullmag/model/mask_function.py:compile_formula` | check a formula with the antenna syntax-tree rules and evaluate the checked tree |
 | FDM/FEM lowering | `crates/fullmag-plan/src/spatial_absorber.rs:apply_absorbing_boundary_layer` | cell/node alpha-field materialization |
-| UI authoring | `apps/control-room/src/modules/inspector/panels/ObjectAbsorbingBoundaryPanel.tsx:ObjectAbsorbingBoundaryPanel` | v2 scene-resource editing |
+| UI authoring | `apps/control-room/src/modules/inspector/panels/constraint/ObjectExtensionsSpecs.tsx:ObjectAbsorbingBoundaryInspectorPanel` | v2 scene-resource editing |
 
 ### 4.5 Planner and capability-matrix impact
 
@@ -560,7 +560,7 @@ parameter, backend lane, and implementation symbol cited here:
 | `crates/fullmag-plan/src/fem.rs` | `build_region_material_fields` | FEM material-field handoff |
 | `crates/fullmag-plan/src/tests.rs` | `fdm_absorbing_boundary_uses_magnetic_support` | Masked single-grid and multilayer alpha, including explicit universe faces. |
 | `crates/fullmag-plan/src/tests.rs` | `fdm_cuda_absorbing_boundary_plans_cellwise_damping` | Single-grid FDM CUDA planner regression |
-| `apps/control-room/src/modules/inspector/panels/ObjectAbsorbingBoundaryPanel.tsx` | `ObjectAbsorbingBoundaryPanel` | UI authoring and persistence |
+| `apps/control-room/src/modules/inspector/panels/constraint/ObjectExtensionsSpecs.tsx` | `ObjectAbsorbingBoundaryInspectorPanel` | UI authoring and persistence |
 | `crates/fullmag-plan/src/tests/material_audit_fem.rs` | `fem_absorber_uses_the_union_of_conformal_owner_segments` | Mapa alpha nie zależy od podziału ownera na markery ani ich kolejności. |
 | `packages/fullmag-py/src/fullmag/model/absorbing_boundary.py` | `class SpatialAbsorbingLayer` | Validate immutable layer identity, geometry and profile. |
 | `packages/fullmag-py/src/fullmag/model/absorbing_boundary.py` | `class AbsorbingGeometry` | Validate named distance geometries and their SI parameters. |

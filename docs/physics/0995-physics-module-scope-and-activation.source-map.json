@@ -193,19 +193,19 @@
     },
     {
       "id": "physics-graph-inspector",
-      "path": "apps/control-room/src/modules/inspector/panels/PhysicsGraphModuleInspectorPanel.tsx",
-      "symbol": "PhysicsGraphModuleInspectorPanel",
+      "path": "apps/control-room/src/modules/inspector/inspectors/objects/physics/PhysicsModuleSpec.tsx",
+      "symbol": "PhysicsModuleInspectorPanel",
       "responsibility": "Present graph scope, activation, dependency and execution provenance as a read-only semantic inspector."
     },
     {
       "id": "current-transport-selection-scope",
-      "path": "apps/control-room/src/modules/inspector/panels/PhysicsInteractionPanel.tsx",
-      "symbol": "PhysicsInteractionPanel",
+      "path": "apps/control-room/src/modules/inspector/routes/modelPhysicsRoutes.tsx",
+      "symbol": "MODEL_PHYSICS_ROUTES",
       "responsibility": "Route selected current, torque and Oersted authoring through their family Inspector panels while preserving the selection scope."
     },
     {
       "id": "current-transport-scoped-inspector",
-      "path": "apps/control-room/src/modules/inspector/panels/TransportAuthoringInspector.tsx",
+      "path": "apps/control-room/src/modules/inspector/panels/transport/CurrentTransportPanel.tsx",
       "symbol": "CurrentTransportInspectorPanel",
       "responsibility": "Use the shared responsive physics Inspector template and expose exact object or region scope for new current authoring."
     },
@@ -223,7 +223,7 @@
     },
     {
       "id": "spin-transport-scoped-inspector",
-      "path": "apps/control-room/src/modules/inspector/panels/TransportAuthoringInspector.tsx",
+      "path": "apps/control-room/src/modules/inspector/panels/transport/SpinTransportPanel.tsx",
       "symbol": "SpinTransportInspectorPanel",
       "responsibility": "Open the typed Spin Transport and SHE authoring surface with an exact initial object or region scope."
     },
@@ -247,21 +247,21 @@
     },
     {
       "id": "spin-torque-scoped-inspector",
-      "path": "apps/control-room/src/modules/inspector/panels/SpinAuthoringInspector.tsx",
+      "path": "apps/control-room/src/modules/inspector/inspectors/objects/transport/SpinTorqueSpec.tsx",
       "symbol": "SpinTorqueInspectorPanel",
       "responsibility": "Initialize a new torque with the exact selected object or region target while preserving existing-resource identity and scope."
     },
     {
       "id": "oersted-global-inspector",
-      "path": "apps/control-room/src/modules/inspector/panels/SpinAuthoringInspector.tsx",
+      "path": "apps/control-room/src/modules/inspector/panels/transport/OerstedFieldPanel.tsx",
       "symbol": "OerstedFieldInspectorPanel",
       "responsibility": "Present Oersted as a global field module while keeping source locality in the current-transport dependency."
     },
     {
       "id": "spin-authoring-scope-initialization",
-      "path": "apps/control-room/src/modules/inspector/panels/SpinAuthoringInspector.tsx",
-      "symbol": "SpinAuthoringInspector",
-      "responsibility": "Initialize a new torque target or solved-current Oersted binding from selection only when the mapping is exact and unambiguous."
+      "path": "apps/control-room/src/modules/inspector/panels/SpinAuthoringInspector.model.ts",
+      "symbol": "resolveOerstedCurrentSource",
+      "responsibility": "Resolve the Oersted current binding only when a single source matches the selected scope."
     },
     {
       "id": "spin-authoring-current-source-options",
@@ -308,12 +308,12 @@
     {
       "id": "stage-torque-python",
       "path": "packages/fullmag-py/src/fullmag/world.py",
-      "symbol": "StudyStagesBuilder.set_spin_torque_enabled",
+      "symbol": "set_spin_torque_enabled",
       "responsibility": "Capture an exact typed spin-torque activation mutation as an ordered public study-pipeline action."
     },
     {
       "id": "stage-torque-materializer",
-      "path": "crates/fullmag-cli/src/step_utils.rs",
+      "path": "crates/fullmag-application/src/script_stage_materialization.rs",
       "symbol": "apply_pipeline_set_spin_torque_enabled",
       "responsibility": "Validate typed and graph identity and atomically mutate torque activation plus incoming edge status."
     },
