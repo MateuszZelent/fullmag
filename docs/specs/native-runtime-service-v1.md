@@ -425,6 +425,14 @@ Dowód bieżącej ścieżki Docker dotyczy Linux `CLOCK_BOOTTIME`. Native Window
 boot identity i tick-source pozostają osobną kwalifikacją; ten kontrakt nie
 ogłasza ich równoważności bez takiego dowodu.
 
+Jeżeli zweryfikowana próbka z bieżącego bootu przekroczy limit wieku, ledger
+odracza przyjmowanie nowych zadań do następnej świeżej próbki. Nadzorca nadal
+sprawdza oba schedulery i publikuje heartbeat, więc aktywny worker może dokończyć
+etap i przekazać wynik. Log nadzorcy rejestruje wejście w oczekiwanie na próbkę
+i powrót świeżej obserwacji. Brak próbki, niezgodne powiązanie właściciela
+inwentarza, inny boot i inne przyczyny niedostępności nadal podlegają ograniczonemu
+czasowi oczekiwania. Twarde błędy tożsamości i odczytu pozostają błędami.
+
 ## Kontrolowane odzyskanie po utracie exit receiptu workera
 
 Decyzja [ADR 0062](../adr/0062-worker-orphan-namespace-teardown.md) dodaje dwa

@@ -45,6 +45,7 @@ use fullmag_session::{
     FMS_PREPARATION_RESOURCE_POOL_SCHEMA, FMS_SCHEDULER_RESOURCE_POOL_SCHEMA,
 };
 use serde::{Deserialize, Serialize};
+use fullmag_runtime_control::host_runtime::ComputeNodeAdmissionFailure;
 use std::{
     collections::{BTreeMap, BTreeSet},
     ffi::OsString,
@@ -183,9 +184,40 @@ fn record_sample_store_writer_busy(consecutive: &mut u32) {
     *consecutive = consecutive.saturating_add(1);
 }
 
-fn host_admission_deferral_within_budget(deferred_at: &mut Option<Instant>, now: Instant) -> bool {
-    let started_at = deferred_at.get_or_insert(now);
-    now.duration_since(*started_at) < HOST_ADMISSION_DEFERRAL_BUDGET
+#[derive(Default)]
+struct HostAdmissionDeferral {
+    unavailable_since: Option<Instant>,
+    saw_stale_sample: bool,
+}
+
+impl HostAdmissionDeferral {
+    fn allows_owner_heartbeat(
+        &mut self,
+        failure: Option<&ComputeNodeAdmissionFailure>,
+        now: Instant,
+    ) -> bool {
+        match failure {
+            Some(ComputeNodeAdmissionFailure::Unavailable(_)) => {
+                let started_at = self.unavailable_since.get_or_insert(now);
+                now.duration_since(*started_at) < HOST_ADMISSION_DEFERRAL_BUDGET
+            }
+            Some(ComputeNodeAdmissionFailure::Stale(reason)) => {
+                if !self.saw_stale_sample {
+                    eprintln!("compute-node admission waiting for a fresh sample: {reason}");
+                }
+                self.saw_stale_sample = true;
+                self.unavailable_since = None;
+                true
+            }
+            None => {
+                if self.saw_stale_sample {
+                    eprintln!("compute-node admission has a fresh sample again");
+                }
+                *self = Self::default();
+                true
+            }
+        }
+    }
 }
 
 impl SchedulerChild {
@@ -2627,43 +2659,16 @@ fn publish_service_heartbeat(
     config: &ServiceConfig,
     pools: (u64, u64),
     children: Vec<RuntimeServiceChild>,
-    host_admission: Option<&fullmag_runtime_control::host_runtime::HostRuntimeAdmission>,
-    admission_deferred_at: &mut Option<Instant>,
+    admission_observation: Result<Option<ComputeNodeAdmissionFailure>>,
+    admission_deferral: &mut HostAdmissionDeferral,
     admission_unknown: &mut bool,
 ) -> Result<()> {
-    if let Some(admission) = host_admission {
-        match admission.compute_snapshot_admission_failure() {
-            Ok(None) => *admission_deferred_at = None,
-            Ok(Some(reason)) => {
-                if !host_admission_deferral_within_budget(
-                    admission_deferred_at,
-                    Instant::now(),
-                ) {
-                    *admission_unknown = true;
-                    owner.publish(
-                        RuntimeServiceState::Unknown,
-                        Some(pools.0),
-                        Some(pools.1),
-                        children.clone(),
-                    )?;
-                    bail!(
-                        "host compute-node freshness or topology admission was lost: {reason}"
-                    );
-                }
-                // The ledger still refuses reservations. Continue
-                // pool validation and owner heartbeat so a live
-                // service is not mistaken for an expired owner.
-                tracing::debug!(%reason, "host compute-node admission deferred");
-            }
-            Err(error) if is_store_writer_busy(&error) => {
-                // Contention is not evidence of a failed owner.
-                // Reservations still require a fresh snapshot;
-                // keep validating pools and publishing liveness.
-                // Do not consume the separate stale/topology
-                // observation budget without an observation.
-                tracing::warn!(error = ?error, "host admission observation deferred while the ledger writer is busy");
-            }
-            Err(error) => {
+    match admission_observation {
+        Ok(failure) => {
+            // Admission independently requires a current sample. A stale
+            // sample with matching identities cannot expire a live owner.
+            if !admission_deferral.allows_owner_heartbeat(failure.as_ref(), Instant::now()) {
+                let reason = failure.expect("a refused heartbeat must have an admission failure");
                 *admission_unknown = true;
                 owner.publish(
                     RuntimeServiceState::Unknown,
@@ -2671,8 +2676,31 @@ fn publish_service_heartbeat(
                     Some(pools.1),
                     children.clone(),
                 )?;
-                bail!("host compute-node admission observation failed: {error:#}");
+                bail!(
+                    "host compute-node freshness or topology admission was lost: {reason}"
+                );
             }
+            if let Some(reason) = failure {
+                tracing::debug!(%reason, "host compute-node admission deferred");
+            }
+        }
+        Err(error) if is_store_writer_busy(&error) => {
+            // Contention is not evidence of a failed owner.
+            // Reservations still require a fresh snapshot;
+            // keep validating pools and publishing liveness.
+            // Do not consume the separate stale/topology
+            // observation budget without an observation.
+            tracing::warn!(error = ?error, "host admission observation deferred while the ledger writer is busy");
+        }
+        Err(error) => {
+            *admission_unknown = true;
+            owner.publish(
+                RuntimeServiceState::Unknown,
+                Some(pools.0),
+                Some(pools.1),
+                children.clone(),
+            )?;
+            bail!("host compute-node admission observation failed: {error:#}");
         }
     }
     let compute = store
@@ -2895,7 +2923,7 @@ fn run_service(path: PathBuf) -> Result<()> {
             let mut last_compute_node_sample = Instant::now();
             let mut pending_compute_node_sample: Option<ComputeNodeSampleFuture> = None;
             let mut consecutive_busy_samples = 0_u32;
-            let mut admission_deferred_at = None;
+            let mut admission_deferral = HostAdmissionDeferral::default();
             // A drain or control error observed while a sample is in flight
             // cannot make us leave the loop: doing so would drop the future
             // while its spawn_blocking worker continued to own the ledger.
@@ -3046,22 +3074,25 @@ fn run_service(path: PathBuf) -> Result<()> {
                     let host_admission = host_admission.clone();
                     let config_for_worker = config.clone();
                     let store_for_worker = Arc::clone(&store);
+                    let mut next_deferral = std::mem::take(&mut admission_deferral);
                     let pending = tokio::task::spawn_blocking(move || {
-                        let mut admission_deferred_at = admission_deferred_at;
                         let mut admission_unknown = admission_unknown;
+                        let admission_observation = host_admission.as_ref().map_or(Ok(None), |admission| {
+                            admission.compute_snapshot_admission_failure()
+                        });
                         let result = publish_service_heartbeat(
                             &mut owner, &store_for_worker, &config_for_worker, pools,
-                            children, host_admission.as_ref(),
-                            &mut admission_deferred_at, &mut admission_unknown,
+                            children, admission_observation,
+                            &mut next_deferral, &mut admission_unknown,
                         );
-                        (owner, result, admission_deferred_at, admission_unknown)
+                        (owner, result, next_deferral, admission_unknown)
                     });
                     let (completed, control) =
                         await_heartbeat_with_control(pending, &listener, &descriptor, &config, &store).await;
                     let (owner, result, deferred_at, unknown) =
                         completed.context("runtime heartbeat worker failed")?;
                     owner_slot = Some(owner);
-                    admission_deferred_at = deferred_at;
+                    admission_deferral = deferred_at;
                     admission_unknown = unknown;
                     result?;
                     if let ControlObservation::Drain(confirmation) = control? {
@@ -3309,19 +3340,102 @@ mod tests {
     #[test]
     fn admission_deferral_uses_a_monotonic_sixty_second_budget() {
         let started = Instant::now();
-        let mut deferred_at = None;
-        assert!(host_admission_deferral_within_budget(
-            &mut deferred_at,
-            started,
-        ));
-        assert!(host_admission_deferral_within_budget(
-            &mut deferred_at,
+        let unavailable = ComputeNodeAdmissionFailure::Unavailable("boot changed".into());
+        let mut deferral = HostAdmissionDeferral::default();
+        assert!(deferral.allows_owner_heartbeat(Some(&unavailable), started));
+        assert!(deferral.allows_owner_heartbeat(
+            Some(&unavailable),
             started + HOST_ADMISSION_DEFERRAL_BUDGET - Duration::from_nanos(1),
         ));
-        assert!(!host_admission_deferral_within_budget(
-            &mut deferred_at,
+        assert!(!deferral.allows_owner_heartbeat(
+            Some(&unavailable),
             started + HOST_ADMISSION_DEFERRAL_BUDGET,
         ));
+    }
+
+    #[test]
+    fn stale_sample_does_not_expire_supervisor_liveness() {
+        let start = Instant::now();
+        let stale = ComputeNodeAdmissionFailure::Stale("sample aged out".into());
+        let mut deferral = HostAdmissionDeferral::default();
+
+        assert!(deferral.allows_owner_heartbeat(Some(&stale), start));
+        assert!(deferral.allows_owner_heartbeat(
+            Some(&stale),
+            start + HOST_ADMISSION_DEFERRAL_BUDGET * 2,
+        ));
+        assert!(deferral.allows_owner_heartbeat(
+            None,
+            start + HOST_ADMISSION_DEFERRAL_BUDGET * 3,
+        ));
+    }
+
+    #[test]
+    fn identity_failure_has_its_own_bounded_grace_after_staleness() {
+        let start = Instant::now();
+        let stale = ComputeNodeAdmissionFailure::Stale("sample aged out".into());
+        let unavailable = ComputeNodeAdmissionFailure::Unavailable("boot changed".into());
+        let mut deferral = HostAdmissionDeferral::default();
+
+        assert!(deferral.allows_owner_heartbeat(Some(&stale), start));
+        let identity_failure_at = start + HOST_ADMISSION_DEFERRAL_BUDGET;
+        assert!(deferral.allows_owner_heartbeat(Some(&unavailable), identity_failure_at));
+        assert!(!deferral.allows_owner_heartbeat(
+            Some(&unavailable),
+            identity_failure_at + HOST_ADMISSION_DEFERRAL_BUDGET,
+        ));
+        let recovered_at = identity_failure_at + HOST_ADMISSION_DEFERRAL_BUDGET;
+        assert!(deferral.allows_owner_heartbeat(None, recovered_at));
+        assert!(deferral.allows_owner_heartbeat(Some(&unavailable), recovered_at));
+    }
+
+    #[test]
+    fn stale_inventory_keeps_the_pinned_owner_ready_but_still_validates_pools() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = SessionStore::open(directory.path().join("store")).unwrap();
+        let config = config();
+        let mut owner = RuntimeServiceOwner::acquire(&store, &config.target_id).unwrap();
+        owner.set_control_address(Some("127.0.0.1:40000".into())).unwrap();
+        owner.set_execution_identity(
+            &"a".repeat(40),
+            &"b".repeat(64),
+            &config.compute_pool_id,
+            &config.preparation_pool_id,
+        ).unwrap();
+        store.commit_scheduler_resource_pool(0, &FmsSchedulerResourcePool {
+            schema_version: FMS_SCHEDULER_RESOURCE_POOL_SCHEMA.into(),
+            pool_id: config.compute_pool_id.clone(),
+            generation: 1,
+            resources: config.compute_resources.clone(),
+        }).unwrap();
+        store.commit_preparation_resource_pool(0, &FmsPreparationResourcePool {
+            schema_version: FMS_PREPARATION_RESOURCE_POOL_SCHEMA.into(),
+            pool_id: config.preparation_pool_id.clone(),
+            generation: 1,
+            resources: config.preparation_resources.clone(),
+        }).unwrap();
+        let children = vec![
+            RuntimeServiceChild { role: "compute".into(), pid: 201, status: "running".into() },
+            RuntimeServiceChild { role: "preparation".into(), pid: 202, status: "running".into() },
+        ];
+        let observation = || Ok(Some(ComputeNodeAdmissionFailure::Stale("sample aged out".into())));
+        let mut deferral = HostAdmissionDeferral::default();
+        let mut unknown = false;
+        publish_service_heartbeat(
+            &mut owner, &store, &config, (1, 1), children.clone(),
+            observation(), &mut deferral, &mut unknown,
+        ).unwrap();
+
+        assert_eq!(owner.descriptor().state, RuntimeServiceState::Ready);
+        assert_eq!(owner.descriptor().children, children);
+        assert!(!unknown);
+        for generations in [(2, 1), (1, 2)] {
+            let error = publish_service_heartbeat(
+                &mut owner, &store, &config, generations, children.clone(),
+                observation(), &mut deferral, &mut unknown,
+            ).unwrap_err();
+            assert!(error.to_string().contains("service-owned resource pool changed"));
+        }
     }
 
     #[test]

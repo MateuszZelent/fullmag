@@ -7,7 +7,7 @@ use std::sync::{Arc, OnceLock};
 use anyhow::{bail, Context, Result};
 use fullmag_application::TaskClaim;
 use fullmag_session::compute_node_snapshot::{
-    ComputeNodeSnapshot, Reported, UnavailableReason, COMPUTE_NODE_SNAPSHOT_SCHEMA_V2,
+    ComputeNodeSnapshot, Reported, SampleFreshness, UnavailableReason, COMPUTE_NODE_SNAPSHOT_SCHEMA_V2,
 };
 use fullmag_session::host_resource_ledger::HostResourceLedger;
 use fullmag_session::host_resource_ledger::{
@@ -20,6 +20,23 @@ use fullmag_session::{
 };
 
 use crate::host_allocation::HostTaskPlacement;
+
+/// Why a verified runtime cannot use its current host inventory for new work.
+#[derive(Debug, PartialEq, Eq)]
+pub enum ComputeNodeAdmissionFailure {
+    /// A sample with matching runtime, inventory-owner and boot identities aged out.
+    Stale(String),
+    /// The sample is missing or its identity or validity could not be confirmed.
+    Unavailable(String),
+}
+
+impl std::fmt::Display for ComputeNodeAdmissionFailure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Stale(reason) | Self::Unavailable(reason) => f.write_str(reason),
+        }
+    }
+}
 
 /// One immutable projection shared by the service's scheduler and supervisors.
 /// The durable ledger remains the owner of every reservation and transition.
@@ -302,7 +319,9 @@ mod recovery_tests {
         assert!(fixture.context.current_compute_node_snapshot().unwrap().is_none());
         assert_eq!(
             fixture.context.compute_snapshot_admission_failure().unwrap(),
-            Some("compute-node snapshot is missing".into())
+            Some(ComputeNodeAdmissionFailure::Unavailable(
+                "compute-node snapshot is missing".into(),
+            ))
         );
     }
 
@@ -379,7 +398,9 @@ mod recovery_tests {
         assert!(fixture.context.current_compute_node_snapshot().unwrap().is_none());
         assert_eq!(
             fixture.context.compute_snapshot_admission_failure().unwrap(),
-            Some("shared host inventory owner is not active".into())
+            Some(ComputeNodeAdmissionFailure::Unavailable(
+                "shared host inventory owner is not active".into(),
+            ))
         );
     }
 
@@ -400,6 +421,10 @@ mod recovery_tests {
 
         assert!(!fixture.context.has_current_compute_snapshot().unwrap());
         assert!(fixture.context.current_compute_node_snapshot().unwrap().is_none());
+        assert!(matches!(
+            fixture.context.compute_snapshot_admission_failure().unwrap(),
+            Some(ComputeNodeAdmissionFailure::Unavailable(reason)) if reason.contains("boot differs")
+        ));
     }
 
     #[test]
@@ -427,6 +452,11 @@ mod recovery_tests {
             .compute_snapshot_admission_failure()
             .unwrap()
             .unwrap();
+        let ComputeNodeAdmissionFailure::Stale(reason) = reason else {
+            panic!("an aged sample with matching identities must be classified as stale");
+        };
+        assert!(fixture.context.required_current_compute_node_snapshot()
+            .unwrap_err().is::<ComputeNodeSampleNotCurrent>());
         assert!(reason.contains("freshness is Stale"));
         assert!(reason.contains("collected_at="));
         assert!(reason.contains("observed_at="));
@@ -1118,7 +1148,7 @@ impl HostRuntimeAdmission {
 
     /// Report the reason from the same observation that gates admission.
     /// This does not refresh a sample, acquire an inventory owner, or relax freshness.
-    pub fn compute_snapshot_admission_failure(&self) -> Result<Option<String>> {
+    pub fn compute_snapshot_admission_failure(&self) -> Result<Option<ComputeNodeAdmissionFailure>> {
         Ok(self.current_compute_snapshot_or_failure()?.err())
     }
 
@@ -1145,14 +1175,16 @@ impl HostRuntimeAdmission {
 
     fn current_compute_snapshot_or_failure(
         &self,
-    ) -> Result<std::result::Result<fullmag_session::compute_node_snapshot::ComputeNodeSnapshot, String>> {
+    ) -> Result<std::result::Result<ComputeNodeSnapshot, ComputeNodeAdmissionFailure>> {
         if let Some(expected) = self.runtime_generation_sha256.as_deref() {
             crate::retry_store_writer_busy(|| self.ledger.validate_runtime_generation(expected))?;
         }
         let Some(snapshot) =
             crate::retry_store_writer_busy(|| self.ledger.read_compute_node_snapshot())?
         else {
-            return Ok(Err("compute-node snapshot is missing".into()));
+            return Ok(Err(ComputeNodeAdmissionFailure::Unavailable(
+                "compute-node snapshot is missing".into(),
+            )));
         };
         snapshot.validate()?;
         if snapshot.node_id != self.ledger.node_id()
@@ -1163,45 +1195,52 @@ impl HostRuntimeAdmission {
         }
 
         if snapshot.schema_version != COMPUTE_NODE_SNAPSHOT_SCHEMA_V2 {
-            return Ok(Err(format!(
+            return Ok(Err(ComputeNodeAdmissionFailure::Unavailable(format!(
                 "compute-node snapshot schema is {}, expected {}",
                 snapshot.schema_version, COMPUTE_NODE_SNAPSHOT_SCHEMA_V2
-            )));
+            ))));
         }
         let Some(active_owner) =
             crate::retry_store_writer_busy(|| self.ledger.active_inventory_owner())?
         else {
-            return Ok(Err("shared host inventory owner is not active".into()));
+            return Ok(Err(ComputeNodeAdmissionFailure::Unavailable(
+                "shared host inventory owner is not active".into(),
+            )));
         };
         if snapshot.host_owner_id.as_deref() != Some(active_owner.host_owner_id.as_str())
             || snapshot.host_owner_epoch != Some(active_owner.host_owner_epoch)
         {
-            return Ok(Err(format!(
+            return Ok(Err(ComputeNodeAdmissionFailure::Unavailable(format!(
                 "compute-node inventory owner differs: sample_id={:?}, sample_epoch={:?}, active_id={}, active_epoch={}",
                 snapshot.host_owner_id,
                 snapshot.host_owner_epoch,
                 active_owner.host_owner_id,
                 active_owner.host_owner_epoch
-            )));
+            ))));
         }
 
         let now = chrono::Utc::now();
         let current_boot_id = crate::compute_node_probe::current_host_boot_id(now.clone())?;
         if snapshot.boot_id != current_boot_id {
-            return Ok(Err(format!(
+            return Ok(Err(ComputeNodeAdmissionFailure::Unavailable(format!(
                 "compute-node boot differs: sample={}, current={}",
                 snapshot.boot_id, current_boot_id
-            )));
+            ))));
         }
-        if snapshot.is_current_at(now.clone())? {
+        let freshness = snapshot.sample.freshness_at(now);
+        if freshness == SampleFreshness::Current {
             return Ok(Ok(snapshot));
         }
-        Ok(Err(format!(
-            "compute-node sample freshness is {:?}: collected_at={}, observed_at={}",
-            snapshot.sample.freshness_at(now.clone()),
+        let reason = format!(
+            "compute-node sample freshness is {freshness:?}: collected_at={}, observed_at={}",
             snapshot.sample.collected_at.to_rfc3339(),
             now.to_rfc3339()
-        )))
+        );
+        let failure = match freshness {
+            SampleFreshness::Stale => ComputeNodeAdmissionFailure::Stale(reason),
+            _ => ComputeNodeAdmissionFailure::Unavailable(reason),
+        };
+        Ok(Err(failure))
     }
 
     pub fn solver_placement(&self, resource_id: &str) -> Result<&HostTaskPlacement> {
