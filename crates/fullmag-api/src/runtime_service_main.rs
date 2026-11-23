@@ -93,9 +93,13 @@ fn compute_node_refresh_failure(
     freshness: SampleFreshness,
     gpus: &Reported<Vec<GpuDeviceSnapshot>>,
     requires_gpu_inventory: bool,
+    cpu_pinning_blocked: bool,
 ) -> Option<String> {
     if freshness != SampleFreshness::Current {
         return Some(format!("compute-node sample freshness is {freshness:?}"));
+    }
+    if cpu_pinning_blocked {
+        return Some("current CPU topology or allowed CPU set is unavailable".into());
     }
     match (requires_gpu_inventory, gpus) {
         (true, Reported::Unavailable { reason, .. }) => {
@@ -205,12 +209,17 @@ async fn publish_compute_node_sample(
                 )
             })?;
 
+            let policy = ledger.policy();
+            let cpu_pinning_blocked = !policy.allowed_cpu_ids.is_empty()
+                && (!snapshot.cpu.topology.is_available()
+                    || !snapshot.cpu.os_constraints.allowed_logical_cpu_ids.is_available());
             Ok(Some(PublishedComputeNodeSample {
                 owner: inventory_owner,
                 refresh_failure: compute_node_refresh_failure(
                     snapshot.sample.freshness_at(chrono::Utc::now()),
                     &snapshot.gpus,
-                    !ledger.policy().gpu_vram_bytes_by_uuid.is_empty(),
+                    !policy.gpu_vram_bytes_by_uuid.is_empty(),
+                    cpu_pinning_blocked,
                 ),
             }))
         })();
@@ -3444,23 +3453,37 @@ mod tests {
             last_known: Some(Vec::new()),
         };
         assert_eq!(
-            compute_node_refresh_failure(SampleFreshness::Current, &warm_inventory, true)
+            compute_node_refresh_failure(SampleFreshness::Current, &warm_inventory, true, false)
                 .as_deref(),
             Some("current GPU inventory is unavailable: ProbeFailed"),
         );
         assert_eq!(
-            compute_node_refresh_failure(SampleFreshness::Current, &warm_inventory, false),
+            compute_node_refresh_failure(SampleFreshness::Current, &warm_inventory, false, false),
             None,
         );
 
         let empty_inventory = Reported::Available { value: Vec::new() };
         assert_eq!(
-            compute_node_refresh_failure(SampleFreshness::Current, &empty_inventory, true)
+            compute_node_refresh_failure(SampleFreshness::Current, &empty_inventory, true, false)
                 .as_deref(),
             Some("current GPU inventory is empty"),
         );
-        assert!(compute_node_refresh_failure(SampleFreshness::Stale, &warm_inventory, false)
+        assert!(compute_node_refresh_failure(SampleFreshness::Stale, &warm_inventory, false, false)
             .is_some());
+    }
+
+    #[test]
+    fn fresh_sample_with_unavailable_cpu_pinning_is_an_incomplete_refresh() {
+        let no_gpu = Reported::Available { value: Vec::new() };
+        assert_eq!(
+            compute_node_refresh_failure(SampleFreshness::Current, &no_gpu, false, true)
+                .as_deref(),
+            Some("current CPU topology or allowed CPU set is unavailable"),
+        );
+        assert_eq!(
+            compute_node_refresh_failure(SampleFreshness::Current, &no_gpu, false, false),
+            None,
+        );
     }
 
     #[test]

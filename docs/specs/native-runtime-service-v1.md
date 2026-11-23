@@ -225,8 +225,9 @@ błędy blokady lub I/O. Odczyty tej samej próbki przez heartbeat i cykle,
 w których próbkę publikuje inny owner, nie zwiększają licznika. Na hoście
 z budżetem GPU świeża próbka zawierająca tylko ostatni znany inwentarz GPU
 nadal liczy się jako nieudane odświeżenie, ponieważ ledger wciąż odmawia
-rezerwacji GPU. Świeża próbka z bieżącym inwentarzem wymaganym przez profil
-zeruje licznik.
+rezerwacji GPU. Przy przypięciu CPU odświeżenie wymaga też aktualnej topologii
+i zbioru CPU dostępnych dla procesu. Świeża próbka z bieżącym inwentarzem
+wymaganym przez profil zeruje licznik.
 
 Pierwsza próbka pozostaje warunkiem startu. Istniejący budżet 60 s dotyczy
 niepotwierdzonej tożsamości, np. niezgodności aktywnego ownera. Błędy schematu,
