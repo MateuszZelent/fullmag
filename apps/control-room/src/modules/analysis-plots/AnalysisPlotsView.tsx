@@ -1,6 +1,6 @@
 "use client";
 
-import { memo, useMemo } from "react";
+import { memo, useMemo, useState } from "react";
 
 import type { KernelApi } from "@/kernel/types";
 import {
@@ -14,6 +14,8 @@ import { descriptorForSurface } from "@/shared/domain/analysis/analysisSurfaceDe
 import { HysteresisChart } from "@/shared/domain/study/HysteresisChart";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/shared/ui/Select";
 
+import type { AbsorptionSpectrum } from "./absorptionSpectrumModel";
+import { AbsorptionSpectrumSurface } from "./components/AbsorptionSpectrumSurface";
 import { buildScalarChartSeries } from "./chartTableModel";
 import { AnalysisFrequencySurface } from "./components/AnalysisFrequencySurface";
 import {
@@ -88,6 +90,7 @@ const EMPTY_SURFACE_PROVENANCE: Partial<Record<AnalysisSurface, string>> =
   Object.freeze({});
 export const AnalysisPlotsView = memo(function AnalysisPlotsView(props: AnalysisPlotsViewInput) {
   const { activeSubview: requestedActiveSubview, activeSurface, datasetRefs = EMPTY_STRING_LIST, descriptorId = null, displayUnits = EMPTY_DISPLAY_UNITS, dynamicStructureFactor = null, dynamicStructureFactorStatus = "idle", frequencyDomainCalculationMode, frequencyDomainComparisonModel, frequencyDomainProvenance = null, frequencyDomainSeries = EMPTY_CHART_SERIES, frequencyDomainStatus = "idle", frequencyDomainTitle = "Frequency domain", frequencyDomainUnavailableReason = null, kernel, onDatasetRefChange = () => undefined, onSubviewChange = () => undefined, range = null, resultProjection, selectedDatasetRef = null, selectedPoint = null, selectedSeriesIds = EMPTY_STRING_LIST, selectedStageId = null, spinWaveGamma = null, spinWaveGammaStatus = "idle", surfaceProvenance = EMPTY_SURFACE_PROVENANCE, table = null, tableStatus = "idle", tableUnsupportedReason = null, xAxisId: selectedXAxisId = null } = props;
+  const [absorptionSpectrum, setAbsorptionSpectrum] = useState<AbsorptionSpectrum | null>(null);
   const onPointSelect = props.onPointSelect ?? ignorePointSelection;
   const onDisplayUnitsChange = props.onDisplayUnitsChange ?? ignoreDisplayUnitsChange;
   const onRangeChange = props.onRangeChange ?? ignoreRangeSelection;
@@ -157,8 +160,21 @@ export const AnalysisPlotsView = memo(function AnalysisPlotsView(props: Analysis
         }
       : undefined;
 
+  const surfaceHeader = <AnalysisSurfaceHeader
+    active={surface}
+    activeSubview={activeSubview}
+    onSubviewChange={onSubviewChange}
+    subviews={subviews}
+  />;
+  if (activeSubview === "resonance.absorption") {
+    return <div className="fm-analysis-plots">
+      {surfaceHeader}
+      <AbsorptionSpectrumSurface onImport={setAbsorptionSpectrum} spectrum={absorptionSpectrum} />
+    </div>;
+  }
+
   return <div className="fm-analysis-plots">
-    <AnalysisSurfaceHeader active={surface} activeSubview={activeSubview} onSubviewChange={onSubviewChange} subviews={subviews} />
+    {surfaceHeader}
     {resultProjection ? <AnalysisResultProjectionSurface {...resultProjection} /> : null}
     <section
       className="fm-analysis-plots__panel fm-analysis-plots__panel--primary"

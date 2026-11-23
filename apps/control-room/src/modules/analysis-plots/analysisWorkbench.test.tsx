@@ -432,6 +432,22 @@ describe("Analysis workbench", () => {
     expect(html).not.toContain('data-analysis-panel="dynamics.s-k-f"');
   });
 
+  it("opens the CSV absorption view independently of a simulation dataset", () => {
+    const html = renderToStaticMarkup(
+      <AnalysisPlotsView
+        {...props}
+        activeSurface="resonance-fmr"
+        activeSubview="resonance.absorption"
+        selectedDatasetRef="table-a"
+      />,
+    );
+
+    expect(html).toContain('data-analysis-subview="resonance.absorption"');
+    expect(html).toContain("Import absorption CSV");
+    expect(html).toContain('type="file"');
+    expect(html).not.toContain("Analysis dataset");
+  });
+
   it("filters custom subviews to the active surface before choosing one", () => {
     const html = renderToStaticMarkup(
       <AnalysisPlotsView

@@ -61,11 +61,10 @@ export function useAnalysisPlotsController(kernel: KernelApi) {
   const subviews = ANALYSIS_SUBVIEWS[activeSurface];
   const dataset = useAnalysisDatasetData({ datasetRef: selectedDatasetRef, enabled: activeSurface === "dynamics" });
   useEffect(() => { analysisWorkspaceStore.setVisibleDatasetRevision(dataset.visibleRevision); }, [dataset.visibleRevision]);
-  const frequency = useAnalysisFrequencyData(
-    activeSurface === "resonance-fmr" || activeSurface === "dispersion" ? activeSurface : "idle",
-    activeSubview,
-  );
-  const frequencyChartId = (activeSurface === "resonance-fmr" || activeSurface === "dispersion") && frequency.frequencyDomainSeries[0]
+  const isNativeFrequencyView = activeSurface === "dispersion" ||
+    (activeSurface === "resonance-fmr" && activeSubview !== "resonance.absorption");
+  const frequency = useAnalysisFrequencyData(isNativeFrequencyView ? activeSurface : "idle", activeSubview);
+  const frequencyChartId = isNativeFrequencyView && frequency.frequencyDomainSeries[0]
     ? `${activeSurface}:${frequency.frequencyDomainSeries[0].source.resourceKey}`
     : null;
   useEffect(() => {

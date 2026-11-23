@@ -17,14 +17,15 @@ export type AnalysisSubview =
   | "hysteresis.loop"
   | "resonance.eigenmodes"
   | "resonance.frequency-response"
-  | "resonance.modal-driven";
+  | "resonance.modal-driven"
+  | "resonance.absorption";
 
 export const ANALYSIS_SUBVIEWS = Object.freeze({
   comparison: ["comparison.sources"],
   dispersion: ["dispersion.modal", "dispersion.driven-map", "dispersion.branches"],
   dynamics: ["dynamics.time-traces", "dynamics.temporal-fft", "dynamics.s-k-f"],
   hysteresis: ["hysteresis.loop", "hysteresis.branches"],
-  "resonance-fmr": ["resonance.eigenmodes", "resonance.frequency-response", "resonance.modal-driven"],
+  "resonance-fmr": ["resonance.eigenmodes", "resonance.frequency-response", "resonance.modal-driven", "resonance.absorption"],
 } as const satisfies Readonly<Record<AnalysisSurface, readonly AnalysisSubview[]>>);
 
 export type AnalysisActiveSubviews = Record<AnalysisSurface, AnalysisSubview>;

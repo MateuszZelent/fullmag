@@ -20,6 +20,7 @@ const SUBVIEW_LABELS: Readonly<Record<AnalysisSubview, string>> = {
   "resonance.eigenmodes": "Eigenmodes",
   "resonance.frequency-response": "Frequency Response",
   "resonance.modal-driven": "Modal–Driven",
+  "resonance.absorption": "Absorption Spectrum",
 };
 
 /**
