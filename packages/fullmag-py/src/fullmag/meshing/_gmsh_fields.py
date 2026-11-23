@@ -278,12 +278,14 @@ def _apply_mesh_options(
             opts.boundary_layer_target_surface_selectors,
             dimension=2,
             component_surface_tags=component_surface_tags,
+            coord_scale=hscale,
         )
         selected_curve_tags, curve_reports = resolve_entity_selectors(
             gmsh,
             opts.boundary_layer_target_curve_selectors,
             dimension=1,
             component_surface_tags=component_surface_tags,
+            coord_scale=hscale,
         )
         selector_resolution.extend(surface_reports)
         selector_resolution.extend(curve_reports)

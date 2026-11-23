@@ -515,6 +515,13 @@ describe("flattenVisibleExplorerRows", () => {
     const css = readSource(fileURLToPath(explorerCssUrl));
     expect(css).toContain('.fm-explorer-tree-row[data-status="completed"]');
     expect(css).toContain("var(--fm-success)");
+    const genericStatusRuleIndex = css.indexOf(".fm-explorer-tree-row[data-status] {");
+    const completedRuleIndex = css.indexOf('.fm-explorer-tree-row[data-status="completed"]');
+    const blockedRuleIndex = css.indexOf('.fm-explorer-tree-row[data-status="validation-blocked"]');
+    expect(genericStatusRuleIndex).toBeGreaterThanOrEqual(0);
+    expect(genericStatusRuleIndex).toBeLessThan(completedRuleIndex);
+    expect(genericStatusRuleIndex).toBeLessThan(blockedRuleIndex);
+    expect(css.lastIndexOf(".fm-explorer-tree-row[data-status] {")).toBe(genericStatusRuleIndex);
   });
 
   it("keeps result labels readable when the explorer is docked narrowly", () => {

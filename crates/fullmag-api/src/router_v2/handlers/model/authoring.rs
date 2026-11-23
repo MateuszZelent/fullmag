@@ -1250,6 +1250,7 @@ pub async fn create_authoring_object(
         req.base_revision,
         req.object_id,
         req.name,
+        req.role,
         req.geometry,
         req.transform,
         req.material_ref,
@@ -2114,6 +2115,8 @@ fn authored_region_resources(scene: &SceneDocument) -> Vec<RegionResource> {
                     canonical_region_id_for_object(object, override_region_id);
                 if represented_region_ids.iter().any(|region_id| {
                     region_id == override_region_id || region_id == &canonical_region_id
+                }) || object.allocated_region_ids.iter().any(|allocated_id| {
+                    allocated_id == override_region_id || allocated_id == &canonical_region_id
                 }) {
                     continue;
                 }
@@ -3661,6 +3664,7 @@ fn apply_authoring_transaction(
             base_revision,
             object_id,
             name,
+            role,
             geometry,
             transform,
             material_ref,
@@ -3676,6 +3680,7 @@ fn apply_authoring_transaction(
                 base_revision,
                 object_id,
                 name,
+                role,
                 geometry,
                 transform,
                 material_ref,
@@ -4210,6 +4215,7 @@ fn apply_create_object_transaction(
     base_revision: Option<u64>,
     object_id: String,
     name: String,
+    role: Option<String>,
     geometry_value: Value,
     transform_value: Option<Value>,
     material_ref: Option<String>,
@@ -4225,6 +4231,17 @@ fn apply_create_object_transaction(
     if object_id.is_empty() {
         return Err(ApiError::bad_request("object_id must not be empty"));
     }
+    let role = match role {
+        Some(raw) => {
+            let trimmed = raw.trim();
+            if trimmed.is_empty() {
+                return Err(ApiError::bad_request("object role must not be empty"));
+            }
+            trimmed.to_string()
+        }
+        None => "magnet".to_string(),
+    };
+    let is_magnet = role == "magnet";
     if scene
         .objects
         .iter()
@@ -4275,15 +4292,23 @@ fn apply_create_object_transaction(
         .transpose()?;
     let material_ref = material_ref
         .or_else(|| material_asset.as_ref().map(|material| material.id.clone()))
-        .or_else(|| scene.materials.first().map(|material| material.id.clone()))
+        .or_else(|| {
+            is_magnet
+                .then(|| scene.materials.first().map(|material| material.id.clone()))
+                .flatten()
+        })
         .unwrap_or_default();
     let magnetization_ref = magnetization_ref
         .or_else(|| magnetization_asset.as_ref().map(|asset| asset.id.clone()))
         .or_else(|| {
-            scene
-                .magnetization_assets
-                .first()
-                .map(|asset| asset.id.clone())
+            is_magnet
+                .then(|| {
+                    scene
+                        .magnetization_assets
+                        .first()
+                        .map(|asset| asset.id.clone())
+                })
+                .flatten()
         });
     if let Some(material_asset) = material_asset {
         upsert_material_asset(scene, material_asset);
@@ -4300,7 +4325,7 @@ fn apply_create_object_transaction(
     let mut object = SceneObject {
         id: object_id,
         name: name.trim().to_string(),
-        role: "magnet".to_string(),
+        role,
         geometry,
         transform,
         material_ref,
@@ -4395,6 +4420,11 @@ fn apply_create_material_transaction(
             alpha: properties.alpha,
             dind: properties.dind,
             dbulk: properties.dbulk,
+            ku1: None,
+            ku2: None,
+            kc1: None,
+            kc2: None,
+            kc3: None,
         },
         references,
         source,
@@ -4619,9 +4649,7 @@ fn apply_delete_object_transaction(
     scene
         .objects
         .retain(|object| object.id != removed_object.id);
-    scene.couplings.retain(|coupling| {
-        !coupling_references_object(coupling, &removed_object.id, &removed_object.name)
-    });
+    cascade_cleanup_deleted_object_references(scene, &removed_object.id, &removed_object.name);
     mark_all_object_meshes_dirty(scene);
     Ok(())
 }
@@ -4719,10 +4747,18 @@ fn apply_patch_object_region_transaction(
         ));
     }
 
+    let (canonical_object_id, object_name) = {
+        let object = scene
+            .objects
+            .iter()
+            .find(|entry| entry.id == object_id || entry.name == object_id)
+            .ok_or_else(|| ApiError::not_found(format!("object not found: {object_id}")))?;
+        (object.id.clone(), object.name.clone())
+    };
     if patch.enabled == Some(false) {
-        ensure_region_has_no_active_couplings(scene, object_id, region_id)?;
+        ensure_region_has_no_active_couplings(scene, &canonical_object_id, &object_name, region_id)?;
     }
-    let object = find_scene_object_mut(scene, object_id)?;
+    let object = find_scene_object_mut(scene, &canonical_object_id)?;
     if let Some(region_name) = &patch.name {
         if object
             .regions
@@ -4829,7 +4865,7 @@ fn apply_delete_object_region_transaction(
     region_id: &str,
 ) -> Result<(), ApiError> {
     check_base_scene_revision(scene, base_revision)?;
-    {
+    let (canonical_object_id, object_name) = {
         let object = find_scene_object_mut(scene, object_id)?;
         let before = object.regions.len();
         object.regions.retain(|entry| entry.region_id != region_id);
@@ -4838,14 +4874,51 @@ fn apply_delete_object_region_transaction(
                 "object region not found: {region_id}"
             )));
         }
+        // Preserve tombstone so the deleted region ID is never reused.
+        if !object
+            .allocated_region_ids
+            .iter()
+            .any(|allocated_id| allocated_id == region_id)
+        {
+            object.allocated_region_ids.push(region_id.to_string());
+        }
+        let canonical_region_id = canonical_region_id_for_object(object, region_id);
+        let override_keys_to_remove: Vec<String> = object
+            .region_overrides
+            .keys()
+            .filter(|override_key| {
+                override_key.as_str() == region_id
+                    || override_key.as_str() == canonical_region_id
+                    || canonical_region_id_for_object(object, override_key) == canonical_region_id
+            })
+            .cloned()
+            .collect();
+        for key in override_keys_to_remove {
+            object.region_overrides.remove(&key);
+        }
         object
             .material_parameter_fields
             .retain(|field| field.region_id.as_deref() != Some(region_id));
+        if let Some(fullmag_ir::AbsorbingBoundaryIR::Layers(config)) =
+            object.absorbing_boundary.as_mut()
+        {
+            config.layers.retain(|layer| {
+                layer.region_id.as_deref() != Some(region_id)
+                    && !matches!(
+                        &layer.geometry,
+                        fullmag_ir::SpatialAbsorbingGeometryIR::RegionBoundary {
+                            region_id: boundary_region_id
+                        } if boundary_region_id == region_id
+                    )
+            });
+            if config.layers.is_empty() {
+                object.absorbing_boundary = None;
+            }
+        }
         mark_object_mesh_dirty(object);
-    }
-    scene
-        .couplings
-        .retain(|coupling| !coupling_references_region(coupling, object_id, region_id));
+        (object.id.clone(), object.name.clone())
+    };
+    cascade_cleanup_deleted_region_references(scene, &canonical_object_id, &object_name, region_id);
     Ok(())
 }
 
@@ -5566,10 +5639,11 @@ fn canonical_region_id_for_object(object: &SceneObject, requested_region_id: &st
 fn coupling_references_region(
     coupling: &fullmag_authoring::SceneCoupling,
     object_id: &str,
+    object_name: &str,
     region_id: &str,
 ) -> bool {
-    endpoint_references_region(&coupling.source, object_id, region_id)
-        || endpoint_references_region(&coupling.target, object_id, region_id)
+    endpoint_references_region(&coupling.source, object_id, object_name, region_id)
+        || endpoint_references_region(&coupling.target, object_id, object_name, region_id)
 }
 
 fn coupling_references_object(
@@ -5584,13 +5658,14 @@ fn coupling_references_object(
 fn ensure_region_has_no_active_couplings(
     scene: &SceneDocument,
     object_id: &str,
+    object_name: &str,
     region_id: &str,
 ) -> Result<(), ApiError> {
     if let Some(coupling) = scene
         .couplings
         .iter()
         .filter(|coupling| coupling.enabled)
-        .find(|coupling| coupling_references_region(coupling, object_id, region_id))
+        .find(|coupling| coupling_references_region(coupling, object_id, object_name, region_id))
     {
         let coupling_id = &coupling.coupling_id;
         return Err(ApiError::conflict(format!(
@@ -5640,13 +5715,14 @@ fn ensure_active_coupling_targets_enabled_regions(
 fn endpoint_references_region(
     endpoint: &fullmag_authoring::SceneCouplingEndpoint,
     object_id: &str,
+    object_name: &str,
     region_id: &str,
 ) -> bool {
     match endpoint {
         fullmag_authoring::SceneCouplingEndpoint::Region {
             object,
             region_id: r_id,
-        } => object == object_id && r_id == region_id,
+        } => (object == object_id || object == object_name) && r_id == region_id,
         _ => false,
     }
 }
@@ -5663,6 +5739,789 @@ fn endpoint_references_object(
             object == object_id || object == object_name
         }
     }
+}
+
+fn matches_deleted_object(candidate: &str, object_id: &str, object_name: &str) -> bool {
+    candidate == object_id || candidate == object_name
+}
+
+fn field_target_matches(
+    target: &fullmag_ir::FieldTargetIR,
+    object_id: &str,
+    object_name: &str,
+    region_id: Option<&str>,
+) -> bool {
+    match (target, region_id) {
+        (fullmag_ir::FieldTargetIR::Object { object_id: id }, None) => {
+            matches_deleted_object(id, object_id, object_name)
+        }
+        (
+            fullmag_ir::FieldTargetIR::Region {
+                object_id: id,
+                region_id: r_id,
+            },
+            None,
+        ) => matches_deleted_object(id, object_id, object_name) || r_id == object_id,
+        (
+            fullmag_ir::FieldTargetIR::Region {
+                object_id: id,
+                region_id: r_id,
+            },
+            Some(target_region_id),
+        ) => matches_deleted_object(id, object_id, object_name) && r_id == target_region_id,
+        _ => false,
+    }
+}
+
+fn monitor_target_matches(
+    target: &fullmag_ir::MonitorTargetIR,
+    object_id: &str,
+    object_name: &str,
+    region_id: Option<&str>,
+) -> bool {
+    match (target, region_id) {
+        (fullmag_ir::MonitorTargetIR::Object { object_id: id }, None) => {
+            matches_deleted_object(id, object_id, object_name)
+        }
+        (
+            fullmag_ir::MonitorTargetIR::Region {
+                object_id: id,
+                region_id: _,
+            },
+            None,
+        ) => matches_deleted_object(id, object_id, object_name),
+        (
+            fullmag_ir::MonitorTargetIR::Region {
+                object_id: id,
+                region_id: r_id,
+            },
+            Some(target_region_id),
+        ) => matches_deleted_object(id, object_id, object_name) && r_id == target_region_id,
+        _ => false,
+    }
+}
+
+fn selection_scalar_matches(
+    scalar: &fullmag_ir::SelectionScalarExprIR,
+    object_id: &str,
+    object_name: &str,
+) -> bool {
+    match scalar {
+        fullmag_ir::SelectionScalarExprIR::Coordinate {
+            frame: fullmag_ir::SelectionFrameIR::Object { object_id: id },
+            ..
+        } => matches_deleted_object(id, object_id, object_name),
+        fullmag_ir::SelectionScalarExprIR::Abs { value } => {
+            selection_scalar_matches(value, object_id, object_name)
+        }
+        _ => false,
+    }
+}
+
+fn selection_expr_matches(
+    expr: &fullmag_ir::SelectionExprIR,
+    object_id: &str,
+    object_name: &str,
+    region_id: Option<&str>,
+    removed_selection_ids: &std::collections::BTreeSet<String>,
+) -> bool {
+    match expr {
+        fullmag_ir::SelectionExprIR::AllMagnetic {} => false,
+        fullmag_ir::SelectionExprIR::InObject { object_id: id } => {
+            region_id.is_none() && matches_deleted_object(id, object_id, object_name)
+        }
+        fullmag_ir::SelectionExprIR::InRegion {
+            object_id: id,
+            region_id: r_id,
+        } => {
+            matches_deleted_object(id, object_id, object_name)
+                && region_id.map_or(true, |target_region| r_id == target_region)
+        }
+        fullmag_ir::SelectionExprIR::InsideGeometry {
+            frame: fullmag_ir::SelectionFrameIR::Object { object_id: id },
+            ..
+        } => region_id.is_none() && matches_deleted_object(id, object_id, object_name),
+        fullmag_ir::SelectionExprIR::InsideGeometry { .. } => false,
+        fullmag_ir::SelectionExprIR::Compare { lhs, rhs, .. } => {
+            region_id.is_none()
+                && (selection_scalar_matches(lhs, object_id, object_name)
+                    || selection_scalar_matches(rhs, object_id, object_name))
+        }
+        fullmag_ir::SelectionExprIR::Approx { value, target, .. } => {
+            region_id.is_none()
+                && (selection_scalar_matches(value, object_id, object_name)
+                    || selection_scalar_matches(target, object_id, object_name))
+        }
+        fullmag_ir::SelectionExprIR::Between { value, .. } => {
+            region_id.is_none() && selection_scalar_matches(value, object_id, object_name)
+        }
+        fullmag_ir::SelectionExprIR::And { expressions }
+        | fullmag_ir::SelectionExprIR::Or { expressions }
+        | fullmag_ir::SelectionExprIR::Xor { expressions } => expressions.iter().any(|child| {
+            selection_expr_matches(child, object_id, object_name, region_id, removed_selection_ids)
+        }),
+        fullmag_ir::SelectionExprIR::Not { expression } => selection_expr_matches(
+            expression,
+            object_id,
+            object_name,
+            region_id,
+            removed_selection_ids,
+        ),
+        fullmag_ir::SelectionExprIR::Ref { selection_id } => {
+            removed_selection_ids.contains(selection_id)
+        }
+    }
+}
+
+fn scene_region_ref_matches(
+    reference: &fullmag_authoring::SceneRegionRef,
+    object_id: &str,
+    object_name: &str,
+    region_id: Option<&str>,
+) -> bool {
+    if !matches_deleted_object(&reference.object_id, object_id, object_name) {
+        return false;
+    }
+    match region_id {
+        None => true,
+        Some(target_region) => reference.region_id.as_deref() == Some(target_region),
+    }
+}
+
+fn scene_surface_ref_matches(
+    surface: &fullmag_authoring::SceneSurfaceRef,
+    object_id: &str,
+    object_name: &str,
+) -> bool {
+    matches_deleted_object(&surface.object_id, object_id, object_name)
+}
+
+fn current_transport_matches(
+    transport: &SceneCurrentTransport,
+    object_id: &str,
+    object_name: &str,
+    region_id: Option<&str>,
+) -> bool {
+    let Some(known) = transport.known() else {
+        return false;
+    };
+    if region_id.is_none()
+        && known
+            .solve_region
+            .as_deref()
+            .is_some_and(|region| matches_deleted_object(region, object_id, object_name))
+    {
+        return true;
+    }
+    if known
+        .domain
+        .iter()
+        .any(|entry| scene_region_ref_matches(entry, object_id, object_name, region_id))
+    {
+        return true;
+    }
+    if known
+        .materials
+        .iter()
+        .any(|entry| scene_region_ref_matches(&entry.region, object_id, object_name, region_id))
+    {
+        return true;
+    }
+    if region_id.is_none()
+        && known.boundaries.iter().any(|boundary| {
+            let surfaces = match boundary {
+                fullmag_authoring::SceneChargeBoundary::EquipotentialCurrentTerminal {
+                    surfaces,
+                    ..
+                }
+                | fullmag_authoring::SceneChargeBoundary::VoltageElectrode { surfaces, .. }
+                | fullmag_authoring::SceneChargeBoundary::NormalCurrentElectrode {
+                    surfaces, ..
+                }
+                | fullmag_authoring::SceneChargeBoundary::Insulating { surfaces, .. } => surfaces,
+            };
+            surfaces
+                .iter()
+                .any(|surface| scene_surface_ref_matches(surface, object_id, object_name))
+        })
+    {
+        return true;
+    }
+    if let Some(fullmag_authoring::SceneStructuredCurrentClosure::ClosedGeometry {
+        source_cuts,
+        ..
+    }) = &known.structured_current_closure
+    {
+        if source_cuts
+            .iter()
+            .any(|cut| scene_region_ref_matches(&cut.region, object_id, object_name, region_id))
+        {
+            return true;
+        }
+    }
+    false
+}
+
+fn spin_transport_matches(
+    transport: &SceneSpinTransport,
+    object_id: &str,
+    object_name: &str,
+    region_id: Option<&str>,
+    removed_current_transports: &std::collections::BTreeSet<String>,
+) -> bool {
+    let Some(known) = transport.known() else {
+        return false;
+    };
+    if removed_current_transports.contains(&known.current_source_id) {
+        return true;
+    }
+    if known
+        .domain
+        .iter()
+        .any(|entry| scene_region_ref_matches(entry, object_id, object_name, region_id))
+    {
+        return true;
+    }
+    if known
+        .materials
+        .iter()
+        .any(|entry| scene_region_ref_matches(&entry.region, object_id, object_name, region_id))
+    {
+        return true;
+    }
+    if known.interfaces.iter().any(|interface| match interface {
+        SceneSpinInterface::Transparent { side_a, side_b, .. } => {
+            scene_region_ref_matches(side_a, object_id, object_name, region_id)
+                || scene_region_ref_matches(side_b, object_id, object_name, region_id)
+        }
+        SceneSpinInterface::MixingConductance {
+            normal_side,
+            ferromagnet_side,
+            normal_surface,
+            ferromagnet_surface,
+            ..
+        } => {
+            scene_region_ref_matches(normal_side, object_id, object_name, region_id)
+                || scene_region_ref_matches(ferromagnet_side, object_id, object_name, region_id)
+                || (region_id.is_none()
+                    && (normal_surface.as_ref().is_some_and(|surface| {
+                        scene_surface_ref_matches(surface, object_id, object_name)
+                    }) || ferromagnet_surface.as_ref().is_some_and(|surface| {
+                        scene_surface_ref_matches(surface, object_id, object_name)
+                    })))
+        }
+    }) {
+        return true;
+    }
+    if region_id.is_none()
+        && known.boundaries.iter().any(|boundary| match boundary {
+            fullmag_authoring::SceneSpinBoundary::HomogeneousSpinPotentialGradient {
+                surfaces,
+                ..
+            }
+            | fullmag_authoring::SceneSpinBoundary::SpinInsulating { surfaces, .. }
+            | fullmag_authoring::SceneSpinBoundary::SpinSink { surfaces, .. }
+            | fullmag_authoring::SceneSpinBoundary::SpecifiedSpinPotential { surfaces, .. }
+            | fullmag_authoring::SceneSpinBoundary::SpecifiedSpinFlux { surfaces, .. } => surfaces
+                .iter()
+                .any(|surface| scene_surface_ref_matches(surface, object_id, object_name)),
+            fullmag_authoring::SceneSpinBoundary::PeriodicSpin {
+                minus_surface,
+                plus_surface,
+                ..
+            } => {
+                scene_surface_ref_matches(minus_surface, object_id, object_name)
+                    || scene_surface_ref_matches(plus_surface, object_id, object_name)
+            }
+        })
+    {
+        return true;
+    }
+    false
+}
+
+fn spin_torque_matches(
+    torque: &SceneSpinTorque,
+    object_id: &str,
+    object_name: &str,
+    region_id: Option<&str>,
+    removed_current_transports: &std::collections::BTreeSet<String>,
+    removed_spin_transports: &std::collections::BTreeSet<String>,
+) -> bool {
+    let SceneSpinTorque::Known(known) = torque else {
+        return false;
+    };
+    match known {
+        fullmag_authoring::KnownSceneSpinTorque::Slonczewski {
+            target,
+            current_source,
+            ..
+        }
+        | fullmag_authoring::KnownSceneSpinTorque::ZhangLi {
+            target,
+            current_source,
+            ..
+        } => {
+            target
+                .as_ref()
+                .is_some_and(|t| scene_region_ref_matches(t, object_id, object_name, region_id))
+                || current_source
+                    .as_deref()
+                    .is_some_and(|src| removed_current_transports.contains(src))
+        }
+        fullmag_authoring::KnownSceneSpinTorque::PrescribedSot { target, drive, .. } => {
+            let drive_matches = match drive {
+                fullmag_authoring::ScenePrescribedSotDrive::VectorCurrentSource {
+                    current_source_id,
+                    ..
+                }
+                | fullmag_authoring::ScenePrescribedSotDrive::LegacyCurrentSourceNorm {
+                    current_source_id,
+                } => removed_current_transports.contains(current_source_id),
+                _ => false,
+            };
+            drive_matches
+                || target
+                    .as_ref()
+                    .is_some_and(|t| scene_region_ref_matches(t, object_id, object_name, region_id))
+        }
+        fullmag_authoring::KnownSceneSpinTorque::DriftDiffusionSpinTorque {
+            solve_id,
+            target,
+            ..
+        } => {
+            removed_spin_transports.contains(solve_id)
+                || scene_region_ref_matches(target, object_id, object_name, region_id)
+        }
+    }
+}
+
+fn staged_drive_payload_matches(
+    drive_value: Option<&Value>,
+    object_id: &str,
+    object_name: &str,
+    region_id: Option<&str>,
+) -> bool {
+    let Some(drive_value) = drive_value else {
+        return false;
+    };
+    if let Ok(mask_drive) = serde_json::from_value::<fullmag_ir::MaskFieldDriveIR>(drive_value.clone())
+    {
+        return field_target_matches(&mask_drive.target, object_id, object_name, region_id);
+    }
+    if let Ok(regional_drive) =
+        serde_json::from_value::<fullmag_ir::RegionalFieldDriveIR>(drive_value.clone())
+    {
+        return field_target_matches(&regional_drive.target, object_id, object_name, region_id)
+            || (region_id.is_none()
+                && matches!(
+                    &regional_drive.spatial_profile,
+                    fullmag_ir::FieldSpatialProfileIR::GeometryMask { object_id: mask_obj, .. }
+                        if matches_deleted_object(mask_obj, object_id, object_name)
+                ));
+    }
+    if let Some(target) = drive_value.get("target") {
+        if let Ok(parsed) = serde_json::from_value::<fullmag_ir::FieldTargetIR>(target.clone()) {
+            return field_target_matches(&parsed, object_id, object_name, region_id);
+        }
+    }
+    false
+}
+
+fn cleanup_pipeline_nodes_for_deleted_target(
+    nodes: &mut Vec<fullmag_authoring::StudyPipelineNode>,
+    object_id: &str,
+    object_name: &str,
+    region_id: Option<&str>,
+    removed_antenna_stage_ids: &std::collections::BTreeSet<String>,
+) {
+    nodes.retain_mut(|node| match node {
+        fullmag_authoring::StudyPipelineNode::Primitive(primitive) => {
+            if matches!(
+                primitive.stage_kind,
+                fullmag_authoring::StudyPrimitiveStageKind::AddFieldDrive
+                    | fullmag_authoring::StudyPrimitiveStageKind::AddMaskFieldDrive
+            ) && staged_drive_payload_matches(
+                primitive.payload.get("drive"),
+                object_id,
+                object_name,
+                region_id,
+            ) {
+                return false;
+            }
+            if primitive.stage_kind
+                == fullmag_authoring::StudyPrimitiveStageKind::AntennaFieldSolve
+            {
+                if primitive
+                    .payload
+                    .get("stage_id")
+                    .and_then(Value::as_str)
+                    .is_some_and(|stage_id| removed_antenna_stage_ids.contains(stage_id))
+                    || primitive
+                        .payload
+                        .get("antenna_stage_id")
+                        .and_then(Value::as_str)
+                        .is_some_and(|stage_id| removed_antenna_stage_ids.contains(stage_id))
+                {
+                    return false;
+                }
+            }
+            if region_id.is_none() {
+                let binds_deleted_object = ["object_id", "object", "magnet_name"]
+                    .iter()
+                    .any(|key| {
+                        primitive
+                            .payload
+                            .get(*key)
+                            .and_then(Value::as_str)
+                            .is_some_and(|value| {
+                                matches_deleted_object(value, object_id, object_name)
+                            })
+                    });
+                if binds_deleted_object {
+                    return false;
+                }
+            }
+            true
+        }
+        fullmag_authoring::StudyPipelineNode::Group(group) => {
+            cleanup_pipeline_nodes_for_deleted_target(
+                &mut group.children,
+                object_id,
+                object_name,
+                region_id,
+                removed_antenna_stage_ids,
+            );
+            true
+        }
+        fullmag_authoring::StudyPipelineNode::Macro(_) => true,
+    });
+}
+
+fn cascade_cleanup_scene_references(
+    scene: &mut SceneDocument,
+    object_id: &str,
+    object_name: &str,
+    region_id: Option<&str>,
+) {
+    // 1. Couplings
+    if let Some(target_region_id) = region_id {
+        scene.couplings.retain(|coupling| {
+            !coupling_references_region(coupling, object_id, object_name, target_region_id)
+        });
+    } else {
+        scene
+            .couplings
+            .retain(|coupling| !coupling_references_object(coupling, object_id, object_name));
+    }
+
+    // 2. Regional & mask field drives
+    scene.field_drives.drives.retain(|drive| {
+        let target_hit = field_target_matches(&drive.target, object_id, object_name, region_id);
+        let mask_hit = region_id.is_none()
+            && matches!(
+                &drive.spatial_profile,
+                fullmag_ir::FieldSpatialProfileIR::GeometryMask { object_id: mask_obj, .. }
+                    if matches_deleted_object(mask_obj, object_id, object_name)
+            );
+        !target_hit && !mask_hit
+    });
+    scene
+        .field_drives
+        .mask_drives
+        .retain(|drive| !field_target_matches(&drive.target, object_id, object_name, region_id));
+
+    // 3. Planar monitors
+    scene
+        .monitors
+        .planar
+        .retain(|monitor| !monitor_target_matches(&monitor.target, object_id, object_name, region_id));
+
+    // 4. Selections & frozen spins (magnetization_constraints), with transitive Ref cleanup
+    let mut removed_selection_ids = std::collections::BTreeSet::new();
+    loop {
+        let before = removed_selection_ids.len();
+        for selection in &scene.selections {
+            if !removed_selection_ids.contains(&selection.id)
+                && selection_expr_matches(
+                    &selection.expression,
+                    object_id,
+                    object_name,
+                    region_id,
+                    &removed_selection_ids,
+                )
+            {
+                removed_selection_ids.insert(selection.id.clone());
+            }
+        }
+        if removed_selection_ids.len() == before {
+            break;
+        }
+    }
+    scene
+        .selections
+        .retain(|selection| !removed_selection_ids.contains(&selection.id));
+    scene.magnetization_constraints.retain(|constraint| {
+        !selection_expr_matches(
+            &constraint.frozen_spins().selector,
+            object_id,
+            object_name,
+            region_id,
+            &removed_selection_ids,
+        )
+    });
+
+    // 5. Current transports -> spin transports -> spin torques & oersted fields
+    let mut removed_current_transports = std::collections::BTreeSet::new();
+    scene.current_transports.retain(|transport| {
+        if current_transport_matches(transport, object_id, object_name, region_id) {
+            if let Some(name) = transport.name() {
+                removed_current_transports.insert(name.to_string());
+            }
+            false
+        } else {
+            true
+        }
+    });
+    let mut removed_spin_transports = std::collections::BTreeSet::new();
+    scene.spin_transports.retain(|transport| {
+        if spin_transport_matches(
+            transport,
+            object_id,
+            object_name,
+            region_id,
+            &removed_current_transports,
+        ) {
+            if let Some(id) = transport.id() {
+                removed_spin_transports.insert(id.to_string());
+            }
+            false
+        } else {
+            true
+        }
+    });
+    scene.spin_torques.retain(|torque| {
+        !spin_torque_matches(
+            torque,
+            object_id,
+            object_name,
+            region_id,
+            &removed_current_transports,
+            &removed_spin_transports,
+        )
+    });
+    scene.oersted_fields.retain(|field| {
+        !matches!(
+            field,
+            SceneOerstedField::Known(fullmag_authoring::KnownSceneOerstedField::OerstedField {
+                source,
+                ..
+            }) if removed_current_transports.contains(source)
+        )
+    });
+
+    // 6. Antenna port modes -> field solve stages -> target projections -> solved drives / spectra
+    let mut removed_port_mode_ids = std::collections::BTreeSet::new();
+    scene.antenna_port_modes.retain(|port_mode| {
+        let hit = (region_id.is_none()
+            && matches_deleted_object(&port_mode.source_object_id, object_id, object_name))
+            || removed_current_transports.contains(&port_mode.current_transport_id);
+        if hit {
+            removed_port_mode_ids.insert(port_mode.id.clone());
+            false
+        } else {
+            true
+        }
+    });
+    let mut removed_antenna_stage_ids = std::collections::BTreeSet::new();
+    scene.antenna_field_solve_stages.retain_mut(|stage| {
+        let hit = (region_id.is_none()
+            && matches_deleted_object(&stage.source_object_id, object_id, object_name))
+            || removed_current_transports.contains(&stage.current_transport_id)
+            || stage
+                .port_mode_ids
+                .iter()
+                .any(|port_id| removed_port_mode_ids.contains(port_id))
+            || field_target_matches(
+                &stage.field_sampling_domain,
+                object_id,
+                object_name,
+                region_id,
+            );
+        if hit {
+            removed_antenna_stage_ids.insert(stage.id.clone());
+            return false;
+        }
+        let had_targets = !stage.target_refs.is_empty();
+        stage
+            .target_refs
+            .retain(|target| !field_target_matches(target, object_id, object_name, region_id));
+        if had_targets && stage.target_refs.is_empty() {
+            removed_antenna_stage_ids.insert(stage.id.clone());
+            false
+        } else {
+            true
+        }
+    });
+    let mut removed_projection_ids = std::collections::BTreeSet::new();
+    scene.antenna_target_projections.retain(|projection| {
+        let hit = removed_antenna_stage_ids.contains(projection.solution.stage_id())
+            || field_target_matches(&projection.target, object_id, object_name, region_id);
+        if hit {
+            removed_projection_ids.insert(projection.id.clone());
+            false
+        } else {
+            true
+        }
+    });
+    scene.solved_antenna_drives.retain(|drive| {
+        !removed_projection_ids.contains(&drive.projection_ref)
+            && !removed_port_mode_ids.contains(&drive.port_mode_id)
+    });
+    scene.antenna_spectrum_requests.retain(|request| {
+        let stage_hit = removed_antenna_stage_ids.contains(request.solution_ref.stage_id());
+        let port_hit = request
+            .port_mode_id
+            .as_deref()
+            .is_some_and(|port_id| removed_port_mode_ids.contains(port_id));
+        let target_hit = field_target_matches(&request.target, object_id, object_name, region_id);
+        !stage_hit && !port_hit && !target_hit
+    });
+
+    // 7. Study stages & study pipeline bindings
+    scene.study.stages.retain(|stage| {
+        if matches!(
+            stage.kind.as_str(),
+            "add_field_drive" | "add_mask_field_drive"
+        ) && staged_drive_payload_matches(
+            stage.extra.get("drive"),
+            object_id,
+            object_name,
+            region_id,
+        ) {
+            return false;
+        }
+        if stage.kind == "antenna_field_solve"
+            && (stage
+                .extra
+                .get("stage_id")
+                .and_then(Value::as_str)
+                .is_some_and(|id| removed_antenna_stage_ids.contains(id))
+                || stage
+                    .extra
+                    .get("antenna_stage_id")
+                    .and_then(Value::as_str)
+                    .is_some_and(|id| removed_antenna_stage_ids.contains(id)))
+        {
+            return false;
+        }
+        if region_id.is_none() {
+            let binds_deleted_object = ["object_id", "object", "magnet_name"].iter().any(|key| {
+                stage
+                    .extra
+                    .get(*key)
+                    .and_then(Value::as_str)
+                    .is_some_and(|value| matches_deleted_object(value, object_id, object_name))
+            });
+            if binds_deleted_object {
+                return false;
+            }
+        }
+        true
+    });
+    if let Some(pipeline) = scene.study.study_pipeline.as_mut() {
+        cleanup_pipeline_nodes_for_deleted_target(
+            &mut pipeline.nodes,
+            object_id,
+            object_name,
+            region_id,
+            &removed_antenna_stage_ids,
+        );
+    }
+}
+
+fn cascade_cleanup_deleted_object_references(
+    scene: &mut SceneDocument,
+    object_id: &str,
+    object_name: &str,
+) {
+    cascade_cleanup_scene_references(scene, object_id, object_name, None);
+
+    // Study per-object FDM grid (BKG-028)
+    if let Some(fdm) = scene.study.fdm.as_mut() {
+        fdm.per_object_grid
+            .retain(|key, _| !matches_deleted_object(key, object_id, object_name));
+    }
+
+    // Study rotated interfacial DMI scope
+    if let Some(ids) = scene.study.rotated_interfacial_dmi_object_ids.as_mut() {
+        ids.retain(|id| !matches_deleted_object(id, object_id, object_name));
+        if ids.is_empty() {
+            scene.study.rotated_interfacial_dmi_object_ids = None;
+        }
+    }
+
+    // Study mesh interfaces referencing the deleted object
+    scene.study.mesh_interfaces.retain(|interface| {
+        !matches_deleted_object(&interface.owner_a, object_id, object_name)
+            && !matches_deleted_object(&interface.owner_b, object_id, object_name)
+    });
+
+    // Study initial state targeting the deleted object
+    if scene
+        .study
+        .initial_state
+        .as_ref()
+        .and_then(|state| state.magnet_name.as_deref())
+        .is_some_and(|name| matches_deleted_object(name, object_id, object_name))
+    {
+        scene.study.initial_state = None;
+    }
+
+    // Editor view/selection state referencing the deleted object
+    if scene
+        .editor
+        .selected_object_id
+        .as_deref()
+        .is_some_and(|id| matches_deleted_object(id, object_id, object_name))
+    {
+        scene.editor.selected_object_id = None;
+    }
+    if scene
+        .editor
+        .selected_entity_id
+        .as_deref()
+        .is_some_and(|id| matches_deleted_object(id, object_id, object_name))
+    {
+        scene.editor.selected_entity_id = None;
+    }
+    if scene
+        .editor
+        .focused_entity_id
+        .as_deref()
+        .is_some_and(|id| matches_deleted_object(id, object_id, object_name))
+    {
+        scene.editor.focused_entity_id = None;
+    }
+    scene
+        .editor
+        .mesh_entity_view_state
+        .retain(|key, _| !matches_deleted_object(key, object_id, object_name));
+    for preset in &mut scene.editor.visualization_presets {
+        preset
+            .fem
+            .mesh_entity_view_state
+            .retain(|key, _| !matches_deleted_object(key, object_id, object_name));
+    }
+}
+
+fn cascade_cleanup_deleted_region_references(
+    scene: &mut SceneDocument,
+    object_id: &str,
+    object_name: &str,
+    region_id: &str,
+) {
+    cascade_cleanup_scene_references(scene, object_id, object_name, Some(region_id));
 }
 
 fn mark_object_mesh_dirty(object: &mut SceneObject) {

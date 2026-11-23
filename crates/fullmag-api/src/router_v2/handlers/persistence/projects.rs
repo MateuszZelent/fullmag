@@ -2951,7 +2951,8 @@ fn known_omitted_scene_default(path: &[&str], value: &Value) -> bool {
         ["magnetization_assets", "*"] => value.is_null() && matches!(*field,
             "dataset" | "preset_kind" | "preset_params" | "preset_version"
             | "sample_index" | "seed" | "source_format" | "source_path" | "ui_label"),
-        ["materials", "*", "properties"] => value.is_null() && matches!(*field, "Dbulk" | "Dind"),
+        ["materials", "*", "properties"] => value.is_null()
+            && matches!(*field, "Dbulk" | "Dind" | "Ku1" | "Ku2" | "Kc1" | "Kc2" | "Kc3"),
         ["objects", "*", "physics_stack", "*"] => value.is_null() && *field == "params",
         ["study", "stages", "*"] => value.as_str() == Some("")
             && matches!(*field, "energy_tolerance" | "until_seconds"),

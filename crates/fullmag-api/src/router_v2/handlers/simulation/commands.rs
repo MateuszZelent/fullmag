@@ -1982,14 +1982,45 @@ fn scene_problem_patch_for_mesh(scene: &SceneDocument) -> Result<serde_json::Val
             let ir: ObjectRegionIR = region.clone().into();
             object_regions.push(ir);
         }
+        let uniaxial_entry = object.physics_stack.iter().find(|entry| {
+            entry.enabled
+                && entry.kind == fullmag_authoring::ScriptBuilderMagneticInteractionKind::UniaxialAnisotropy
+        });
+        let uniaxial_params = uniaxial_entry.and_then(|entry| entry.params.as_ref());
+        let uniaxial_anisotropy = uniaxial_params
+            .and_then(|params| optional_number_param(params, "ku1"))
+            .or(material_asset.properties.ku1);
+        let uniaxial_anisotropy_k2 = uniaxial_params
+            .and_then(|params| optional_number_param(params, "ku2"))
+            .filter(|value| *value != 0.0)
+            .or(material_asset.properties.ku2);
+        let anisotropy_axis = uniaxial_params.and_then(|params| vec3_param(params, "axis"));
+
+        let cubic_entry = object.physics_stack.iter().find(|entry| {
+            entry.enabled
+                && entry.kind == fullmag_authoring::ScriptBuilderMagneticInteractionKind::CubicAnisotropy
+        });
+        let cubic_params = cubic_entry.and_then(|entry| entry.params.as_ref());
+        let cubic_anisotropy_kc1 = cubic_params
+            .and_then(|params| optional_number_param(params, "kc1"))
+            .or(material_asset.properties.kc1);
+        let cubic_anisotropy_kc2 = cubic_params
+            .and_then(|params| optional_number_param(params, "kc2"))
+            .or(material_asset.properties.kc2);
+        let cubic_anisotropy_kc3 = cubic_params
+            .and_then(|params| optional_number_param(params, "kc3"))
+            .or(material_asset.properties.kc3);
+        let cubic_anisotropy_axis1 = cubic_params.and_then(|params| vec3_param(params, "axis1"));
+        let cubic_anisotropy_axis2 = cubic_params.and_then(|params| vec3_param(params, "axis2"));
+
         materials.push(MaterialIR {
             alpha_field: None,
             a_field: None,
-            cubic_anisotropy_axis1: None,
-            cubic_anisotropy_axis2: None,
-            cubic_anisotropy_kc1: None,
-            cubic_anisotropy_kc2: None,
-            cubic_anisotropy_kc3: None,
+            cubic_anisotropy_axis1,
+            cubic_anisotropy_axis2,
+            cubic_anisotropy_kc1,
+            cubic_anisotropy_kc2,
+            cubic_anisotropy_kc3,
             damping: material_asset.properties.alpha,
             exchange_stiffness: material.exchange_stiffness,
             kc1_field: None,
@@ -2000,9 +2031,9 @@ fn scene_problem_patch_for_mesh(scene: &SceneDocument) -> Result<serde_json::Val
             ms_field: None,
             name: material_name.clone(),
             saturation_magnetisation: material.saturation_magnetisation,
-            uniaxial_anisotropy: None,
-            uniaxial_anisotropy_k2: None,
-            anisotropy_axis: None,
+            uniaxial_anisotropy,
+            uniaxial_anisotropy_k2,
+            anisotropy_axis,
             interfacial_dmi: material_asset.properties.dind,
             bulk_dmi: material_asset.properties.dbulk,
             dind_field: None,
@@ -2137,7 +2168,7 @@ fn scene_geometry_entry(
             height: number_param(params, "height", object_id)?,
             name: geometry_name.to_string(),
             radius: number_param(params, "radius", object_id)?,
-            axis: [0.0, 0.0, 1.0],
+            axis: cylinder_axis_param(params, object_id)?,
         }),
         "SinWaveguide" => Ok(GeometryEntryIR::SinWaveguide {
             amplitude: number_param(params, "amplitude", object_id)?,
@@ -2159,11 +2190,14 @@ fn scene_geometry_entry(
         }),
         "Ellipsoid" => Ok(GeometryEntryIR::Ellipsoid {
             name: geometry_name.to_string(),
-            radii: vec3_param(params, "radii").unwrap_or([
-                number_param(params, "rx", object_id)?,
-                number_param(params, "ry", object_id)?,
-                number_param(params, "rz", object_id)?,
-            ]),
+            radii: match vec3_param(params, "radii") {
+                Some(radii) => radii,
+                None => [
+                    number_param(params, "rx", object_id)?,
+                    number_param(params, "ry", object_id)?,
+                    number_param(params, "rz", object_id)?,
+                ],
+            },
         }),
         "Sphere" => Ok(GeometryEntryIR::Sphere {
             name: geometry_name.to_string(),
@@ -2172,10 +2206,13 @@ fn scene_geometry_entry(
         "Ellipse" => Ok(GeometryEntryIR::Ellipse {
             height: number_param(params, "height", object_id)?,
             name: geometry_name.to_string(),
-            radii: vec2_param(params, "radii").unwrap_or([
-                number_param(params, "rx", object_id)?,
-                number_param(params, "ry", object_id)?,
-            ]),
+            radii: match vec2_param(params, "radii") {
+                Some(radii) => radii,
+                None => [
+                    number_param(params, "rx", object_id)?,
+                    number_param(params, "ry", object_id)?,
+                ],
+            },
         }),
         "Difference" => {
             let base = nested_scene_geometry_param(params, "base", object_id)?;
@@ -2334,6 +2371,41 @@ fn vec3_param(params: &serde_json::Value, key: &str) -> Option<[f64; 3]> {
         .get(key)
         .and_then(|value| value.as_array())
         .and_then(|values| vec3_from_json_slice(values))
+}
+
+fn cylinder_axis_param(params: &serde_json::Value, object_id: &str) -> Result<[f64; 3], ApiError> {
+    let Some(raw) = params.get("axis") else {
+        return Ok([0.0, 0.0, 1.0]);
+    };
+    if raw.is_null() {
+        return Ok([0.0, 0.0, 1.0]);
+    }
+    let values = raw.as_array().ok_or_else(|| {
+        ApiError::bad_request(format!(
+            "Cylinder object '{}' geometry parameter 'axis' must be a 3-element array of finite numbers",
+            object_id
+        ))
+    })?;
+    if values.len() != 3 {
+        return Err(ApiError::bad_request(format!(
+            "Cylinder object '{}' geometry parameter 'axis' must have exactly 3 components",
+            object_id
+        )));
+    }
+    let axis = vec3_from_json_slice(values).ok_or_else(|| {
+        ApiError::bad_request(format!(
+            "Cylinder object '{}' geometry parameter 'axis' must contain finite numbers",
+            object_id
+        ))
+    })?;
+    let norm = (axis[0] * axis[0] + axis[1] * axis[1] + axis[2] * axis[2]).sqrt();
+    if !norm.is_finite() || norm <= 1e-12 {
+        return Err(ApiError::bad_request(format!(
+            "Cylinder object '{}' geometry parameter 'axis' must have non-zero norm (> 1e-12)",
+            object_id
+        )));
+    }
+    Ok([axis[0] / norm, axis[1] / norm, axis[2] / norm])
 }
 
 fn vec2_param(params: &serde_json::Value, key: &str) -> Option<[f64; 2]> {

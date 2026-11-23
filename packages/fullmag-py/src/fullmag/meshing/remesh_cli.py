@@ -123,8 +123,16 @@ def _geometry_from_ir(entry: dict[str, Any]) -> Any:
         r = entry["radius"]
         return Ellipsoid(r, r, r, name=entry.get("name", "sphere"))  # Sphere → Ellipsoid with equal radii
     if kind == "ellipse":
-        radii = entry["radii"]
-        return Ellipse(radii[0], radii[1], entry["height"], name=entry.get("name", "ellipse"))
+        radii = entry.get("radii")
+        if isinstance(radii, (list, tuple)) and len(radii) == 2:
+            rx, ry = float(radii[0]), float(radii[1])
+        elif "rx" in entry and "ry" in entry:
+            rx, ry = float(entry["rx"]), float(entry["ry"])
+        else:
+            raise ValueError(
+                "ellipse geometry IR requires 'radii' ([rx, ry]) or legacy 'rx'/'ry'"
+            )
+        return Ellipse(rx, ry, float(entry["height"]), name=entry.get("name", "ellipse"))
     if kind == "imported_geometry":
         raw_scale = entry.get("scale", 1.0)
         # Rust serializes ImportedGeometryScaleIR as {"Uniform": f} or {"Anisotropic": [x,y,z]}

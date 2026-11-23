@@ -265,10 +265,20 @@ export function resolvePreviewOverlayDraft(
         : "Box";
 
   let dims: [number, number, number] | null = null;
+  let cylinderDraft: PrimitiveDraft["cylinder"] | undefined;
   if (draft.primitiveKind === "Cylinder") {
     const r = positiveValue(draft.radius, lastValid?.radius, "radius", "Radius");
     const h = positiveValue(draft.height, lastValid?.height, "height", "Height");
-    dims = r !== null && h !== null ? [2 * r, h, 2 * r] : null;
+    const axis = axisVectorFromSymmetryAxis(draft.symmetryAxis);
+    if (r !== null && h !== null) {
+      const absAxis = axis.map(Math.abs);
+      dims = [
+        2 * (absAxis[0]! * (h * 0.5) + r * Math.sqrt(Math.max(0, 1 - absAxis[0]! * absAxis[0]!))),
+        2 * (absAxis[1]! * (h * 0.5) + r * Math.sqrt(Math.max(0, 1 - absAxis[1]! * absAxis[1]!))),
+        2 * (absAxis[2]! * (h * 0.5) + r * Math.sqrt(Math.max(0, 1 - absAxis[2]! * absAxis[2]!))),
+      ];
+      cylinderDraft = { axis, height: h, radius: r };
+    }
   } else if (draft.primitiveKind === "Sphere") {
     const r = positiveValue(draft.radius, lastValid?.radius, "radius", "Radius");
     dims = r !== null ? [2 * r, 2 * r, 2 * r] : null;
@@ -374,6 +384,7 @@ export function resolvePreviewOverlayDraft(
   const tz = finiteValue(draft.translation[2], fbTrans?.[2], "translation.2", "Position Z");
 
   return {
+    ...(cylinderDraft ? { cylinder: cylinderDraft } : {}),
     kind,
     dimensions: dims,
     translation: tx !== null && ty !== null && tz !== null ? [tx, ty, tz] : null,

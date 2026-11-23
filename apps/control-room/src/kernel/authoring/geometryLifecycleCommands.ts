@@ -45,6 +45,11 @@ interface SimulationCommandApi {
 export type PrimitiveDraftKind = "Box" | "Cylinder" | "Sphere";
 
 export interface PrimitiveDraft {
+  cylinder?: {
+    axis: [number, number, number];
+    height: number;
+    radius: number;
+  };
   dimensions: [number, number, number] | null;
   errors: Readonly<Record<string, string>>;
   kind: PrimitiveDraftKind;

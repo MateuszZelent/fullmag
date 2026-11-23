@@ -3,14 +3,23 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it, vi } from "vitest";
 
 import {
+  DATA_DOMAIN_FDM_MULTILAYER_LAYOUT_PATH,
+  DATA_FDM_REGION_MEMBERSHIP_BINARY_PATH,
+  DATA_FDM_REGION_MEMBERSHIPS_PATH,
   DATA_FIELDS_PATH,
   DATA_FIELD_META_PATH,
   DATA_FIELD_VECTOR_PATH,
+  DATA_MESH_REGION_MEMBERSHIPS_PATH,
   DATA_OBSERVATION_FRAMES_PATH,
   MESHING_BUILDS_CURRENT_PATH,
   MESHING_BUILDS_LATEST_SUCCESSFUL_PATH,
   MESHING_SHARED_DOMAIN_MANIFEST_PATH,
+  MODEL_COUPLINGS_PATH,
   MODEL_READINESS_PATH,
+  MODEL_REALIZED_REGIONS_PATH,
+  MODEL_REGION_DIAGNOSTICS_PATH,
+  MODEL_REGIONS_PATH,
+  MODEL_UNIVERSE_PATH,
   SIMULATION_PREPARATION_PATH,
   SIMULATION_STAGES_EXECUTION_PATH,
   SIMULATION_STAGES_RESULTS_PATH,
@@ -136,4 +145,34 @@ describe("authoring mutation readiness invalidation", () => {
       );
     },
   );
+
+  it("invalidates regions, couplings, universe, and FDM/FEM membership resources after geometry mutations (P1-FE-14)", () => {
+    for (const path of [
+      MODEL_UNIVERSE_PATH,
+      MODEL_REGIONS_PATH,
+      MODEL_REALIZED_REGIONS_PATH,
+      MODEL_REGION_DIAGNOSTICS_PATH,
+      MODEL_COUPLINGS_PATH,
+      DATA_DOMAIN_FDM_MULTILAYER_LAYOUT_PATH,
+      DATA_FDM_REGION_MEMBERSHIPS_PATH,
+      DATA_FDM_REGION_MEMBERSHIP_BINARY_PATH,
+      DATA_MESH_REGION_MEMBERSHIPS_PATH,
+    ]) {
+      expect(AUTHORING_MUTATION_DEPENDENTS.geometry).toContain(path);
+    }
+
+    const resources = new ResourceInvalidationController(new EventBus<KernelEventMap>());
+    const fdmMembershipCb = vi.fn();
+    const meshMembershipCb = vi.fn();
+    const multilayerCb = vi.fn();
+    resources.subscribe(`${DATA_FDM_REGION_MEMBERSHIP_BINARY_PATH}/reg-1`, fdmMembershipCb);
+    resources.subscribe("/v2/sessions/current/data/mesh-region-membership/reg-1", meshMembershipCb);
+    resources.subscribe("/v2/sessions/current/data/domain/fdm-multilayer-layers/layer-0/active-mask", multilayerCb);
+
+    invalidateAuthoringMutationDependents(resources, "geometry", 23);
+
+    expect(fdmMembershipCb).toHaveBeenCalledWith("scene:23");
+    expect(meshMembershipCb).toHaveBeenCalledWith("scene:23");
+    expect(multilayerCb).toHaveBeenCalledWith("scene:23");
+  });
 });

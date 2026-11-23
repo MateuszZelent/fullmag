@@ -49,6 +49,7 @@ export interface ApplyGeometryDraftParams {
   canonicalSessionDraft: GeometryObjectDraft | null;
   createDraftSlugId: (draft: ObjectGeometrySpecDraft) => string;
   onSyncEditVersion: (editVersion: number) => void;
+  onAcknowledgeCommitted?: () => void;
   onSetOwnCreatePending: (pending: boolean) => void;
   onCommittedSuccess: (originPivotObjectId: string | null) => void;
   onRevisionConflict: (
@@ -70,6 +71,7 @@ export async function applyGeometryDraftMutation({
   canonicalSessionDraft,
   createDraftSlugId,
   onSyncEditVersion,
+  onAcknowledgeCommitted,
   onSetOwnCreatePending,
   onCommittedSuccess,
   onRevisionConflict,
@@ -162,6 +164,7 @@ export async function applyGeometryDraftMutation({
             requestOptions,
           );
           if (isCurrentSessionScope()) {
+            onAcknowledgeCommitted?.();
             kernel.selection.set(
               buildObjectSelection(newId, "object.root", createName),
               "geometry-authoring",

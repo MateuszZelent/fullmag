@@ -401,10 +401,15 @@ fn discretization_check(
     let backend = scene.study.requested_backend.to_ascii_lowercase();
     match backend.as_str() {
         "fdm" => {
-            let configured =
-                scene.study.fdm.as_ref().is_some_and(|fdm| {
-                    fdm.default_cell.is_some() || !fdm.per_object_grid.is_empty()
-                });
+            let configured = scene.study.fdm.as_ref().is_some_and(|fdm| {
+                fdm.default_cell.is_some()
+                    || fdm.per_object_grid.keys().any(|object_key| {
+                        scene
+                            .objects
+                            .iter()
+                            .any(|object| object.id == *object_key || object.name == *object_key)
+                    })
+            });
             presence_check(
                 "discretization",
                 "Discretization",

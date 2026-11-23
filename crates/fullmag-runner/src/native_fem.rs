@@ -1322,7 +1322,28 @@ fn flatten_native_geometry_mask(
             let mut node = blank(1, 0, 0); node.size_m = *size; node
         }
         GeometryEntryIR::Cylinder { radius, height, axis, .. } => {
-            let mut node = blank(2, 0, 0); node.radius_m = *radius; node.height_m = *height; node.axis = *axis; node
+            if !axis.iter().all(|component| component.is_finite()) {
+                return Err(RunError {
+                    message: format!(
+                        "FEM regional field drive geometry mask '{}' cylinder axis must contain finite values",
+                        geometry.name()
+                    ),
+                });
+            }
+            let norm = (axis[0] * axis[0] + axis[1] * axis[1] + axis[2] * axis[2]).sqrt();
+            if !norm.is_finite() || norm <= 1e-12 {
+                return Err(RunError {
+                    message: format!(
+                        "FEM regional field drive geometry mask '{}' cylinder axis must have non-zero norm (> 1e-12)",
+                        geometry.name()
+                    ),
+                });
+            }
+            let mut node = blank(2, 0, 0);
+            node.radius_m = *radius;
+            node.height_m = *height;
+            node.axis = [axis[0] / norm, axis[1] / norm, axis[2] / norm];
+            node
         }
         GeometryEntryIR::Translate { base, by, .. } => {
             let child = flatten_native_geometry_mask(base, nodes)?;

@@ -42,7 +42,10 @@ def _normalize_unit_vector3(value: tuple[float, float, float], field: str) -> tu
 
 
 def _format_translation_component(value: float) -> str:
-    return f"{value:.6g}"
+    normalized = float(value)
+    if normalized == 0.0:
+        return "0"
+    return repr(normalized)
 
 
 def _derived_translate_name(base_name: str, offset: tuple[float, float, float]) -> str:
@@ -1813,9 +1816,8 @@ class Ellipse(_GeometryOps):
         return {
             "name": self.name,
             "kind": "ellipse",
-            "rx": self.rx,
-            "ry": self.ry,
-            "height": self.height,
+            "radii": [float(self.rx), float(self.ry)],
+            "height": float(self.height),
         }
 
 

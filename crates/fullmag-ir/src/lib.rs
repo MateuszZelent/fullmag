@@ -1103,252 +1103,7 @@ impl ProblemIR {
         }
 
         for geometry in &self.geometry.entries {
-            match geometry {
-                GeometryEntryIR::ImportedGeometry {
-                    name,
-                    source,
-                    format,
-                    scale,
-                } => {
-                    if name.trim().is_empty() {
-                        errors.push("imported geometry name must not be empty".to_string());
-                    }
-                    if source.trim().is_empty() {
-                        errors.push(format!("geometry '{}' source must not be empty", name));
-                    }
-                    if !scale.is_positive() {
-                        errors.push(format!("geometry '{}' scale must be positive", name));
-                    }
-                    if format.trim().is_empty() {
-                        errors.push(format!("geometry '{}' format must not be empty", name));
-                    }
-                }
-                GeometryEntryIR::Box { name, size } => {
-                    if name.trim().is_empty() {
-                        errors.push("box geometry name must not be empty".to_string());
-                    }
-                    if size.iter().any(|component| *component <= 0.0) {
-                        errors.push(format!(
-                            "box geometry '{}' size components must be positive",
-                            name
-                        ));
-                    }
-                }
-                GeometryEntryIR::Cylinder {
-                    name,
-                    radius,
-                    height,
-                    axis,
-                } => {
-                    if name.trim().is_empty() {
-                        errors.push("cylinder geometry name must not be empty".to_string());
-                    }
-                    if *radius <= 0.0 {
-                        errors.push(format!(
-                            "cylinder geometry '{}' radius must be positive",
-                            name
-                        ));
-                    }
-                    if *height <= 0.0 {
-                        errors.push(format!(
-                            "cylinder geometry '{}' height must be positive",
-                            name
-                        ));
-                    }
-                    if axis.iter().any(|component| !component.is_finite()) {
-                        errors.push(format!(
-                            "cylinder geometry '{}' axis must contain finite values",
-                            name
-                        ));
-                    } else {
-                        let norm_sq = axis[0] * axis[0] + axis[1] * axis[1] + axis[2] * axis[2];
-                        if norm_sq <= 1e-30 {
-                            errors.push(format!(
-                                "cylinder geometry '{}' axis must be non-zero",
-                                name
-                            ));
-                        }
-                    }
-                }
-                GeometryEntryIR::SinWaveguide {
-                    name,
-                    length,
-                    width,
-                    height,
-                    period,
-                    amplitude,
-                    phase,
-                    z0,
-                } => {
-                    if name.trim().is_empty() {
-                        errors.push("sin_waveguide geometry name must not be empty".to_string());
-                    }
-                    if *length <= 0.0 {
-                        errors.push(format!(
-                            "sin_waveguide geometry '{}' length must be positive",
-                            name
-                        ));
-                    }
-                    if *width <= 0.0 {
-                        errors.push(format!(
-                            "sin_waveguide geometry '{}' width must be positive",
-                            name
-                        ));
-                    }
-                    if *height <= 0.0 {
-                        errors.push(format!(
-                            "sin_waveguide geometry '{}' height must be positive",
-                            name
-                        ));
-                    }
-                    if *period <= 0.0 {
-                        errors.push(format!(
-                            "sin_waveguide geometry '{}' period must be positive",
-                            name
-                        ));
-                    }
-                    if !amplitude.is_finite() {
-                        errors.push(format!(
-                            "sin_waveguide geometry '{}' amplitude must be finite",
-                            name
-                        ));
-                    }
-                    if !phase.is_finite() {
-                        errors.push(format!(
-                            "sin_waveguide geometry '{}' phase must be finite",
-                            name
-                        ));
-                    }
-                    if !z0.is_finite() {
-                        errors.push(format!(
-                            "sin_waveguide geometry '{}' z0 must be finite",
-                            name
-                        ));
-                    }
-                }
-                GeometryEntryIR::ArchWaveguide {
-                    name,
-                    length,
-                    width,
-                    height,
-                    arch_height,
-                    z0,
-                } => {
-                    if name.trim().is_empty() {
-                        errors.push("arch_waveguide geometry name must not be empty".to_string());
-                    }
-                    if *length <= 0.0 {
-                        errors.push(format!(
-                            "arch_waveguide geometry '{}' length must be positive",
-                            name
-                        ));
-                    }
-                    if *width <= 0.0 {
-                        errors.push(format!(
-                            "arch_waveguide geometry '{}' width must be positive",
-                            name
-                        ));
-                    }
-                    if *height <= 0.0 {
-                        errors.push(format!(
-                            "arch_waveguide geometry '{}' height must be positive",
-                            name
-                        ));
-                    }
-                    if !arch_height.is_finite() {
-                        errors.push(format!(
-                            "arch_waveguide geometry '{}' arch_height must be finite",
-                            name
-                        ));
-                    }
-                    if !z0.is_finite() {
-                        errors.push(format!(
-                            "arch_waveguide geometry '{}' z0 must be finite",
-                            name
-                        ));
-                    }
-                }
-                GeometryEntryIR::MicrostripAntenna {
-                    r#loop,
-                    name,
-                    length_m,
-                    thickness_m,
-                    conductivity_s_per_m,
-                    transform,
-                    stations,
-                    return_width_m,
-                    return_offset_m,
-                    conductors,
-                    terminal_faces,
-                } => {
-                    if let Some(loop_geometry) = r#loop {
-                        errors.extend(loop_geometry.validation_errors());
-                        if *return_offset_m<=0.0 {errors.push("closed microstrip loop requires positive return offset".into());}
-                        if let (Some(inlet),Some(outlet))=(stations.first(),stations.last()) {
-                            for (width,offset,signal_width) in [(loop_geometry.inlet_connection_width_m,loop_geometry.inlet_connection_offset_v_m,inlet.signal_width_m),
-                                (loop_geometry.outlet_connection_width_m,loop_geometry.outlet_connection_offset_v_m,outlet.signal_width_m)] {
-                                if [signal_width,*return_width_m].iter().any(|target| (offset+width/2.0).min(*target/2.0)<=(offset-width/2.0).max(-*target/2.0)) {
-                                    errors.push("microstrip bridge must contact signal and return with positive area".into());
-                                }
-                            }
-                        }
-
-                        if loop_geometry.inlet_connection_part_id==loop_geometry.outlet_connection_part_id || conductors.iter().any(|part| part.id==loop_geometry.inlet_connection_part_id || part.id==loop_geometry.outlet_connection_part_id) {
-                            errors.push("microstrip bridge IDs must be distinct from signal and return".into());
-                        }
-                    }
-                    antenna::validate_microstrip_geometry(
-                    name,
-                    *length_m,
-                    *thickness_m,
-                    *conductivity_s_per_m,
-                    transform,
-                    stations,
-                    *return_width_m,
-                    *return_offset_m,
-                    conductors,
-                    terminal_faces,
-                    &mut errors,
-                );
-                },
-                GeometryEntryIR::CpwAntenna {
-                    name,
-                    length_m,
-                    thickness_m,
-                    conductivity_s_per_m,
-                    transform,
-                    stations,
-                    conductors,
-                    terminal_faces,
-                } => antenna::validate_cpw_geometry(
-                    name,
-                    *length_m,
-                    *thickness_m,
-                    *conductivity_s_per_m,
-                    transform,
-                    stations,
-                    conductors,
-                    terminal_faces,
-                    &mut errors,
-                ),
-                GeometryEntryIR::Difference { name, base, tool } => {
-                    if name.trim().is_empty() {
-                        errors.push("difference geometry name must not be empty".to_string());
-                    }
-                    let _ = (base, tool);
-                }
-                // CSG compounds and transforms: validate name only
-                GeometryEntryIR::Ellipsoid { name, .. }
-                | GeometryEntryIR::Sphere { name, .. }
-                | GeometryEntryIR::Ellipse { name, .. }
-                | GeometryEntryIR::Union { name, .. }
-                | GeometryEntryIR::Intersection { name, .. }
-                | GeometryEntryIR::Translate { name, .. } => {
-                    if name.trim().is_empty() {
-                        errors.push("geometry name must not be empty".to_string());
-                    }
-                }
-            }
+            validate_geometry_entry(geometry, 0, &mut errors);
         }
 
         let geometry_names: BTreeSet<&str> = self
@@ -2074,6 +1829,356 @@ fn validate_object_region_shape(index: usize, shape: &RegionShapeIR, errors: &mu
                     "object_regions[{index}] csg expression name must not be empty"
                 ));
             }
+            validate_geometry_entry(expression, 0, errors);
+        }
+    }
+}
+
+fn validate_geometry_entry(geometry: &GeometryEntryIR, depth: usize, errors: &mut Vec<String>) {
+    if depth > 64 {
+        errors.push(format!(
+            "geometry '{}' exceeds maximum CSG nesting depth (64)",
+            geometry.name()
+        ));
+        return;
+    }
+    match geometry {
+        GeometryEntryIR::ImportedGeometry {
+            name,
+            source,
+            format,
+            scale,
+        } => {
+            if name.trim().is_empty() {
+                errors.push("imported geometry name must not be empty".to_string());
+            }
+            if source.trim().is_empty() {
+                errors.push(format!("geometry '{}' source must not be empty", name));
+            }
+            if !scale.is_positive() {
+                errors.push(format!("geometry '{}' scale must be positive", name));
+            }
+            if format.trim().is_empty() {
+                errors.push(format!("geometry '{}' format must not be empty", name));
+            }
+        }
+        GeometryEntryIR::Box { name, size } => {
+            if name.trim().is_empty() {
+                errors.push("box geometry name must not be empty".to_string());
+            }
+            if size
+                .iter()
+                .any(|component| !component.is_finite() || *component <= 0.0)
+            {
+                errors.push(format!(
+                    "box geometry '{}' size components must be finite and positive",
+                    name
+                ));
+            }
+        }
+        GeometryEntryIR::Cylinder {
+            name,
+            radius,
+            height,
+            axis,
+        } => {
+            if name.trim().is_empty() {
+                errors.push("cylinder geometry name must not be empty".to_string());
+            }
+            if !radius.is_finite() || *radius <= 0.0 {
+                errors.push(format!(
+                    "cylinder geometry '{}' radius must be finite and positive",
+                    name
+                ));
+            }
+            if !height.is_finite() || *height <= 0.0 {
+                errors.push(format!(
+                    "cylinder geometry '{}' height must be finite and positive",
+                    name
+                ));
+            }
+            if axis.iter().any(|component| !component.is_finite()) {
+                errors.push(format!(
+                    "cylinder geometry '{}' axis must contain finite values",
+                    name
+                ));
+            } else {
+                let norm_sq = axis[0] * axis[0] + axis[1] * axis[1] + axis[2] * axis[2];
+                if !norm_sq.is_finite() || norm_sq <= 1e-30 {
+                    errors.push(format!(
+                        "cylinder geometry '{}' axis must be non-zero",
+                        name
+                    ));
+                }
+            }
+        }
+        GeometryEntryIR::SinWaveguide {
+            name,
+            length,
+            width,
+            height,
+            period,
+            amplitude,
+            phase,
+            z0,
+        } => {
+            if name.trim().is_empty() {
+                errors.push("sin_waveguide geometry name must not be empty".to_string());
+            }
+            if !length.is_finite() || *length <= 0.0 {
+                errors.push(format!(
+                    "sin_waveguide geometry '{}' length must be finite and positive",
+                    name
+                ));
+            }
+            if !width.is_finite() || *width <= 0.0 {
+                errors.push(format!(
+                    "sin_waveguide geometry '{}' width must be finite and positive",
+                    name
+                ));
+            }
+            if !height.is_finite() || *height <= 0.0 {
+                errors.push(format!(
+                    "sin_waveguide geometry '{}' height must be finite and positive",
+                    name
+                ));
+            }
+            if !period.is_finite() || *period <= 0.0 {
+                errors.push(format!(
+                    "sin_waveguide geometry '{}' period must be finite and positive",
+                    name
+                ));
+            }
+            if !amplitude.is_finite() {
+                errors.push(format!(
+                    "sin_waveguide geometry '{}' amplitude must be finite",
+                    name
+                ));
+            }
+            if !phase.is_finite() {
+                errors.push(format!(
+                    "sin_waveguide geometry '{}' phase must be finite",
+                    name
+                ));
+            }
+            if !z0.is_finite() {
+                errors.push(format!(
+                    "sin_waveguide geometry '{}' z0 must be finite",
+                    name
+                ));
+            }
+        }
+        GeometryEntryIR::ArchWaveguide {
+            name,
+            length,
+            width,
+            height,
+            arch_height,
+            z0,
+        } => {
+            if name.trim().is_empty() {
+                errors.push("arch_waveguide geometry name must not be empty".to_string());
+            }
+            if !length.is_finite() || *length <= 0.0 {
+                errors.push(format!(
+                    "arch_waveguide geometry '{}' length must be finite and positive",
+                    name
+                ));
+            }
+            if !width.is_finite() || *width <= 0.0 {
+                errors.push(format!(
+                    "arch_waveguide geometry '{}' width must be finite and positive",
+                    name
+                ));
+            }
+            if !height.is_finite() || *height <= 0.0 {
+                errors.push(format!(
+                    "arch_waveguide geometry '{}' height must be finite and positive",
+                    name
+                ));
+            }
+            if !arch_height.is_finite() {
+                errors.push(format!(
+                    "arch_waveguide geometry '{}' arch_height must be finite",
+                    name
+                ));
+            }
+            if !z0.is_finite() {
+                errors.push(format!(
+                    "arch_waveguide geometry '{}' z0 must be finite",
+                    name
+                ));
+            }
+        }
+        GeometryEntryIR::MicrostripAntenna {
+            r#loop,
+            name,
+            length_m,
+            thickness_m,
+            conductivity_s_per_m,
+            transform,
+            stations,
+            return_width_m,
+            return_offset_m,
+            conductors,
+            terminal_faces,
+        } => {
+            if let Some(loop_geometry) = r#loop {
+                errors.extend(loop_geometry.validation_errors());
+                if !return_offset_m.is_finite() || *return_offset_m <= 0.0 {
+                    errors.push("closed microstrip loop requires positive return offset".into());
+                }
+                if let (Some(inlet), Some(outlet)) = (stations.first(), stations.last()) {
+                    for (width, offset, signal_width) in [
+                        (
+                            loop_geometry.inlet_connection_width_m,
+                            loop_geometry.inlet_connection_offset_v_m,
+                            inlet.signal_width_m,
+                        ),
+                        (
+                            loop_geometry.outlet_connection_width_m,
+                            loop_geometry.outlet_connection_offset_v_m,
+                            outlet.signal_width_m,
+                        ),
+                    ] {
+                        if [signal_width, *return_width_m].iter().any(|target| {
+                            (offset + width / 2.0).min(*target / 2.0)
+                                <= (offset - width / 2.0).max(-*target / 2.0)
+                        }) {
+                            errors.push(
+                                "microstrip bridge must contact signal and return with positive area"
+                                    .into(),
+                            );
+                        }
+                    }
+                }
+
+                if loop_geometry.inlet_connection_part_id == loop_geometry.outlet_connection_part_id
+                    || conductors.iter().any(|part| {
+                        part.id == loop_geometry.inlet_connection_part_id
+                            || part.id == loop_geometry.outlet_connection_part_id
+                    })
+                {
+                    errors.push(
+                        "microstrip bridge IDs must be distinct from signal and return".into(),
+                    );
+                }
+            }
+            antenna::validate_microstrip_geometry(
+                name,
+                *length_m,
+                *thickness_m,
+                *conductivity_s_per_m,
+                transform,
+                stations,
+                *return_width_m,
+                *return_offset_m,
+                conductors,
+                terminal_faces,
+                errors,
+            );
+        }
+        GeometryEntryIR::CpwAntenna {
+            name,
+            length_m,
+            thickness_m,
+            conductivity_s_per_m,
+            transform,
+            stations,
+            conductors,
+            terminal_faces,
+        } => antenna::validate_cpw_geometry(
+            name,
+            *length_m,
+            *thickness_m,
+            *conductivity_s_per_m,
+            transform,
+            stations,
+            conductors,
+            terminal_faces,
+            errors,
+        ),
+        GeometryEntryIR::Ellipsoid { name, radii } => {
+            if name.trim().is_empty() {
+                errors.push("ellipsoid geometry name must not be empty".to_string());
+            }
+            if radii
+                .iter()
+                .any(|component| !component.is_finite() || *component <= 0.0)
+            {
+                errors.push(format!(
+                    "ellipsoid geometry '{}' radii must be finite and positive",
+                    name
+                ));
+            }
+        }
+        GeometryEntryIR::Sphere { name, radius } => {
+            if name.trim().is_empty() {
+                errors.push("sphere geometry name must not be empty".to_string());
+            }
+            if !radius.is_finite() || *radius <= 0.0 {
+                errors.push(format!(
+                    "sphere geometry '{}' radius must be finite and positive",
+                    name
+                ));
+            }
+        }
+        GeometryEntryIR::Ellipse {
+            name,
+            radii,
+            height,
+        } => {
+            if name.trim().is_empty() {
+                errors.push("ellipse geometry name must not be empty".to_string());
+            }
+            if radii
+                .iter()
+                .any(|component| !component.is_finite() || *component <= 0.0)
+            {
+                errors.push(format!(
+                    "ellipse geometry '{}' radii must be finite and positive",
+                    name
+                ));
+            }
+            if !height.is_finite() || *height <= 0.0 {
+                errors.push(format!(
+                    "ellipse geometry '{}' height must be finite and positive",
+                    name
+                ));
+            }
+        }
+        GeometryEntryIR::Difference { name, base, tool } => {
+            if name.trim().is_empty() {
+                errors.push("difference geometry name must not be empty".to_string());
+            }
+            validate_geometry_entry(base, depth + 1, errors);
+            validate_geometry_entry(tool, depth + 1, errors);
+        }
+        GeometryEntryIR::Union { name, a, b } => {
+            if name.trim().is_empty() {
+                errors.push("union geometry name must not be empty".to_string());
+            }
+            validate_geometry_entry(a, depth + 1, errors);
+            validate_geometry_entry(b, depth + 1, errors);
+        }
+        GeometryEntryIR::Intersection { name, a, b } => {
+            if name.trim().is_empty() {
+                errors.push("intersection geometry name must not be empty".to_string());
+            }
+            validate_geometry_entry(a, depth + 1, errors);
+            validate_geometry_entry(b, depth + 1, errors);
+        }
+        GeometryEntryIR::Translate { name, base, by } => {
+            if name.trim().is_empty() {
+                errors.push("translate geometry name must not be empty".to_string());
+            }
+            if by.iter().any(|component| !component.is_finite()) {
+                errors.push(format!(
+                    "translate geometry '{}' translation vector must contain finite values",
+                    name
+                ));
+            }
+            validate_geometry_entry(base, depth + 1, errors);
         }
     }
 }

@@ -39,6 +39,7 @@ import {
   buildPrimitiveTransformGizmoSegments,
   releasePrimitiveObjectGeometry,
   primitiveObjectSurfaceColor,
+  resolvePrimitiveGroupTransform,
   resolvePrimitiveObjectRenderSettings,
   shouldRenderPrimitiveObject,
   shouldRenderPrimitiveTransformGizmo,
@@ -274,10 +275,18 @@ function RenderablePrimitiveObject({
     primitiveColorAssignments,
   );
 
+  const groupTransform = useMemo(
+    () => resolvePrimitiveGroupTransform(object),
+    [object],
+  );
+  const boundsBoxSize = object.localSize ?? object.bounds.size;
+
   return (
     <group
       onPointerDown={handlePointerDown}
-      position={object.bounds.center}
+      position={groupTransform.position}
+      quaternion={groupTransform.quaternion}
+      scale={groupTransform.scale}
       userData={{
         fallbackLabel: object.fallbackLabel,
         objectId: object.objectId,
@@ -379,9 +388,9 @@ function RenderablePrimitiveObject({
         >
           <boxGeometry
             args={[
-              Math.max(object.bounds.size[0], 1e-9),
-              Math.max(object.bounds.size[1], 1e-9),
-              Math.max(object.bounds.size[2], 1e-9),
+              Math.max(boundsBoxSize[0], 1e-9),
+              Math.max(boundsBoxSize[1], 1e-9),
+              Math.max(boundsBoxSize[2], 1e-9),
             ]}
           />
           <meshBasicMaterial

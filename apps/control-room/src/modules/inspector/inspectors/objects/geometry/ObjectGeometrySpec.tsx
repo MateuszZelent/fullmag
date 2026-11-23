@@ -218,6 +218,7 @@ function SharedGeometrySpecPanel({
   const lastSyncedEditVersionRef = useRef<number>(-1);
   const lastSyncedTargetKeyRef = useRef<string | null>(null);
   const requestApplyRef = useRef<() => Promise<boolean>>(async () => false);
+  const acknowledgeCommittedRef = useRef<() => void>(() => undefined);
 
   const handleRefetchConflict = useCallback(() => {
     setRefreshSawLoading(false);
@@ -428,6 +429,9 @@ function SharedGeometrySpecPanel({
             onSyncEditVersion: (editVersion) => {
               lastSyncedEditVersionRef.current = editVersion;
             },
+            onAcknowledgeCommitted: () => {
+              acknowledgeCommittedRef.current();
+            },
             onSetOwnCreatePending: setOwnCreatePending,
             onCommittedSuccess: (originPivotObjectId) => {
               setLastOriginPivotObjectId(originPivotObjectId);
@@ -475,7 +479,8 @@ function SharedGeometrySpecPanel({
 
   useLayoutEffect(() => {
     requestApplyRef.current = controller.requestApply;
-  }, [controller.requestApply]);
+    acknowledgeCommittedRef.current = controller.acknowledgeCommitted;
+  }, [controller.acknowledgeCommitted, controller.requestApply]);
 
   /* ── Activate & Reconcile objectEditSession + Sync 3D Gizmo Translation Into Controller ── */
   const controllerDraftRef = useRef(controller.draft);

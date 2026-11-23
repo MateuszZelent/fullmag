@@ -2985,9 +2985,29 @@ class Problem:
             if any(not isinstance(value, expected) for value in values):
                 raise TypeError(f"Problem.{name} must contain {expected.__name__} objects")
             ensure_unique_names((value.id for value in values), f"{name} ids")
+        magnet_by_object_id = {
+            magnet.object_id: magnet
+            for magnet in self.magnets
+            if magnet.object_id is not None
+        }
+        magnet_by_name = {magnet.name: magnet for magnet in self.magnets}
+
+        def _resolve_magnet_owner_key(owner: str) -> str:
+            owner_magnet = magnet_by_object_id.get(owner)
+            if owner_magnet is None:
+                owner_magnet = magnet_by_name.get(owner)
+            if owner_magnet is None:
+                return owner
+            return (
+                owner_magnet.object_id
+                if owner_magnet.object_id is not None
+                else owner_magnet.name
+            )
+
         magnetic_object_ids = {magnet.name for magnet in self.magnets}
         region_ids = {
-            (region.owner_object, region.region_id) for region in self._collect_object_regions()
+            (_resolve_magnet_owner_key(region.owner_object), region.region_id)
+            for region in self._collect_object_regions()
         }
         geometry_ids = {
             getattr(geometry, "geometry_name", "") for geometry in self._collect_geometries()
@@ -3002,18 +3022,24 @@ class Problem:
                     f"mask_target_unknown: antenna {antenna.id!r} target "
                     f"{target.object_id!r} is not a magnet"
                 )
-            if target.kind == "region" and (target.object_id, target.region_id) not in region_ids:
+            if target.kind == "region" and (
+                _resolve_magnet_owner_key(target.object_id),
+                target.region_id,
+            ) not in region_ids:
                 raise ValueError(
                     f"mask_target_unknown: antenna {antenna.id!r} target region "
                     f"{target.object_id!r}/{target.region_id!r} does not exist"
                 )
         for drive in self.field_drives:
             target = drive.target
-            if target.kind in {"object", "region"} and target.object_id not in magnetic_object_ids:
+            if target.kind in {"object", "region"} and target.object_id not in magnet_aliases:
                 raise ValueError(
                     f"field drive {drive.id!r} target object {target.object_id!r} is not magnetic"
                 )
-            if target.kind == "region" and (target.object_id, target.region_id) not in region_ids:
+            if target.kind == "region" and (
+                _resolve_magnet_owner_key(target.object_id),
+                target.region_id,
+            ) not in region_ids:
                 raise ValueError(
                     f"field drive {drive.id!r} target region {target.region_id!r} does not exist"
                 )
@@ -3308,16 +3334,26 @@ class Problem:
                 }
                 for magnet in self.magnets
             }
-            owner_geometry_names = {
+            owner_geometry_by_object_id = {
+                magnet.object_id: magnet.geometry.geometry_name
+                for magnet in self.magnets
+                if magnet.object_id is not None
+            }
+            owner_geometry_by_name = {
                 magnet.name: magnet.geometry.geometry_name for magnet in self.magnets
             }
             object_region_mesh_specs = []
             for region in object_regions:
                 payload = region.to_ir()
-                payload["owner_geometry_name"] = owner_geometry_names.get(
-                    region.owner_object,
-                    "",
+                owner_geometry_name = owner_geometry_by_object_id.get(
+                    region.owner_object
                 )
+                if owner_geometry_name is None:
+                    owner_geometry_name = owner_geometry_by_name.get(
+                        region.owner_object,
+                        "",
+                    )
+                payload["owner_geometry_name"] = owner_geometry_name
                 object_region_mesh_specs.append(payload)
             geometry_assets = build_geometry_assets_for_request(
                 requested_backend=runtime.backend_target,

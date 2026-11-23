@@ -1602,6 +1602,8 @@ pub struct ObjectCreateRequest {
     pub base_revision: Option<u64>,
     pub object_id: String,
     pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub role: Option<String>,
     #[schema(value_type = Object)]
     pub geometry: Value,
     #[schema(value_type = Object, nullable)]
@@ -2134,6 +2136,8 @@ pub enum AuthoringTransactionRequest {
         base_revision: Option<u64>,
         object_id: String,
         name: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        role: Option<String>,
         #[schema(value_type = Object)]
         geometry: Value,
         #[schema(value_type = Object, nullable)]

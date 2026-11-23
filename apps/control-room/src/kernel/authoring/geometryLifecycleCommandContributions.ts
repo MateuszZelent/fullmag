@@ -338,16 +338,44 @@ function disabledWithoutApi(context: CommandContext): string | null {
   return context.api ? null : "Control Room API is not available.";
 }
 
-function primitiveCapabilityDisabled(
+function isCapabilityEntryDisabled(
+  record: JsonRecord,
+  lane: MeshCommandLane,
+): boolean {
+  const status = asString(record.status)?.toLowerCase();
+  if (status === "unsupported") return true;
+
+  const supported =
+    record.supported ?? record.enabled ?? record.available ?? record.capable;
+  if (typeof supported === "boolean" && !supported) return true;
+
+  const fem = typeof record.fem === "boolean" ? record.fem : null;
+  const fdm = typeof record.fdm === "boolean" ? record.fdm : null;
+  if (lane === "fem" && fem === false) return true;
+  if (lane === "fdm" && fdm === false) return true;
+  if (fem === false && fdm === false) return true;
+
+  return false;
+}
+
+export function primitiveCapabilityDisabled(
   context: CommandContext,
   primitiveKind: "box" | "cylinder" | "sphere",
 ): boolean {
   const capabilities = resourceData(context, MODEL_GEOMETRY_CAPABILITIES_PATH);
   const primitiveKey = primitiveKind.toLowerCase();
+  const lane = meshCommandLane(context);
   let disabled = false;
 
   const visit = (value: unknown, keyHint = ""): void => {
-    if (disabled) return;
+    if (disabled || value === null || value === undefined) return;
+    if (Array.isArray(value)) {
+      for (const item of value) {
+        visit(item, keyHint);
+      }
+      return;
+    }
+
     const key = keyHint.toLowerCase();
     if (typeof value === "boolean" && key === primitiveKey) {
       disabled = !value;
@@ -357,14 +385,70 @@ function primitiveCapabilityDisabled(
     const record = asRecord(value);
     if (!record) return;
 
-    const supported =
-      record.supported ?? record.enabled ?? record.available ?? record.capable;
-    if (key === primitiveKey && typeof supported === "boolean") {
-      disabled = !supported;
-      return;
+    const entryId = (
+      asString(record.id) ??
+      asString(record.primitive) ??
+      asString(record.kind) ??
+      asString(record.name)
+    )?.toLowerCase();
+    if (entryId === primitiveKey || key === primitiveKey) {
+      if (isCapabilityEntryDisabled(record, lane)) {
+        disabled = true;
+        return;
+      }
     }
 
     for (const [childKey, child] of Object.entries(record)) {
+      if (childKey.toLowerCase() === "csg_capabilities") continue;
+      visit(child, childKey);
+    }
+  };
+
+  visit(capabilities);
+  return disabled;
+}
+
+export function csgCapabilityDisabled(
+  context: CommandContext,
+  op: "union" | "difference" | "intersection" | string,
+): boolean {
+  const capabilities = resourceData(context, MODEL_GEOMETRY_CAPABILITIES_PATH);
+  const opKey = op.toLowerCase();
+  const lane = meshCommandLane(context);
+  let disabled = false;
+
+  const visit = (value: unknown, keyHint = ""): void => {
+    if (disabled || value === null || value === undefined) return;
+    if (Array.isArray(value)) {
+      for (const item of value) {
+        visit(item, keyHint);
+      }
+      return;
+    }
+
+    const key = keyHint.toLowerCase();
+    if (typeof value === "boolean" && key === opKey) {
+      disabled = !value;
+      return;
+    }
+
+    const record = asRecord(value);
+    if (!record) return;
+
+    const entryOp = (
+      asString(record.op) ??
+      asString(record.id) ??
+      asString(record.kind)
+    )?.toLowerCase();
+    if (entryOp === opKey || key === opKey) {
+      if (isCapabilityEntryDisabled(record, lane)) {
+        disabled = true;
+        return;
+      }
+    }
+
+    for (const [childKey, child] of Object.entries(record)) {
+      if (childKey.toLowerCase() === "primitive_capabilities") continue;
       visit(child, childKey);
     }
   };
@@ -1769,17 +1853,114 @@ export const GEOMETRY_LIFECYCLE_COMMANDS: CommandContribution[] = [
     group: "geometry",
     shortcut: "Ctrl+Enter",
     scope: "selection",
-    isEnabled: (context) =>
-      context.selection?.get().kind === "builder.primitive" &&
-      sceneBaseRevision(context) !== null,
-    disabledReason: (context) =>
-      context.selection?.get().kind !== "builder.primitive"
-        ? "Open a primitive draft before committing."
-        : "The canonical scene revision is unavailable. Refetch the scene before committing.",
+    isEnabled: (context) => {
+      const selectionKind = context.selection?.get().kind;
+      if (selectionKind !== "builder.primitive" && selectionKind !== "object.geometry") {
+        return false;
+      }
+      if (sceneBaseRevision(context) === null) return false;
+
+      const activeForm = context.pendingForms?.current() ?? null;
+      if (activeForm) {
+        const matchesSelection =
+          activeForm.mode === "staged" &&
+          (!activeForm.sessionKey ||
+            activeForm.sessionKey.includes(
+              selectionKind === "builder.primitive"
+                ? "::builder.primitive::"
+                : "::object.geometry::",
+            ));
+        if (matchesSelection) {
+          return Boolean(context.pendingForms?.canApply());
+        }
+        const forms = context.pendingForms?.getTransitionSnapshot();
+        if (forms && (forms.dirtyOwnerCount > 0 || forms.applyingOwnerCount > 0 || forms.guarded || forms.preparing)) {
+          return false;
+        }
+      }
+      return selectionKind === "builder.primitive";
+    },
+    disabledReason: (context) => {
+      const selectionKind = context.selection?.get().kind;
+      if (selectionKind !== "builder.primitive" && selectionKind !== "object.geometry") {
+        return "Open a primitive draft before committing.";
+      }
+      if (sceneBaseRevision(context) === null) {
+        return "The canonical scene revision is unavailable. Refetch the scene before committing.";
+      }
+      const activeForm = context.pendingForms?.current() ?? null;
+      if (activeForm) {
+        const matchesSelection =
+          activeForm.mode === "staged" &&
+          (!activeForm.sessionKey ||
+            activeForm.sessionKey.includes(
+              selectionKind === "builder.primitive"
+                ? "::builder.primitive::"
+                : "::object.geometry::",
+            ));
+        if (matchesSelection) {
+          if (context.pendingForms?.canApply()) return null;
+          if (activeForm.lockReason) return activeForm.lockReason;
+          if (activeForm.applyBlockReason) return activeForm.applyBlockReason;
+          if (activeForm.applying) return "Inspector changes are already being applied.";
+          if (!activeForm.valid) return "Resolve Inspector validation errors before applying.";
+          return "There are no unapplied Inspector changes.";
+        }
+        const forms = context.pendingForms?.getTransitionSnapshot();
+        if (forms && (forms.dirtyOwnerCount > 0 || forms.applyingOwnerCount > 0 || forms.guarded || forms.preparing)) {
+          return "Apply or revert pending Inspector changes before committing.";
+        }
+      }
+      return selectionKind === "object.geometry"
+        ? "Open the object geometry editor before committing."
+        : null;
+    },
     run: async (context) => {
       const obsolete = obsoleteSessionResult(context);
       if (obsolete) return obsolete;
       const selection = context.selection?.get();
+      const selectionKind = selection?.kind;
+      if (selectionKind !== "builder.primitive" && selectionKind !== "object.geometry") {
+        return { message: "Open a primitive draft before committing.", status: "failed" };
+      }
+
+      const activeForm = context.pendingForms?.current() ?? null;
+      if (activeForm && context.pendingForms) {
+        const matchesSelection =
+          activeForm.mode === "staged" &&
+          (!activeForm.sessionKey ||
+            activeForm.sessionKey.includes(
+              selectionKind === "builder.primitive"
+                ? "::builder.primitive::"
+                : "::object.geometry::",
+            ));
+        if (matchesSelection) {
+          if (sceneBaseRevision(context) === null) {
+            return {
+              message: "The canonical scene revision is unavailable. Refetch the scene before committing.",
+              status: "failed",
+            };
+          }
+          const applied = await context.pendingForms.apply();
+          const obsoleteAfterApply = obsoleteSessionResult(context);
+          if (obsoleteAfterApply) return obsoleteAfterApply;
+          return applied.status === "completed"
+            ? { status: "completed" }
+            : { message: applied.message, status: applied.status };
+        }
+        const forms = context.pendingForms.getTransitionSnapshot();
+        if (forms.dirtyOwnerCount > 0 || forms.applyingOwnerCount > 0 || forms.guarded || forms.preparing) {
+          return {
+            message: "Apply or revert pending Inspector changes before committing.",
+            status: "failed",
+          };
+        }
+      }
+
+      if (selectionKind !== "builder.primitive") {
+        return { message: "Open the object geometry editor before committing.", status: "failed" };
+      }
+
       const primitiveKind = primitiveKindFromDraftSelection(selection);
       const objectId = draftObjectId(primitiveKind);
       const baseName = primitiveDraftBaseName(selection?.nodeId);
