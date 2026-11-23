@@ -6,7 +6,8 @@ import { isScalarSpatialQuantityId, resolveCanonicalQuantityId } from "@/kernel/
 import { artifactFieldCatalogMatchesOwner, artifactFieldLocatorHasAcceptedGlobalSampling, type ArtifactFieldSelection, artifactCarrierPresentationKey, artifactInspectionQuantity, artifactInspectorFieldBinding } from "@/kernel/visualization/artifactFieldSelection";
 import { useVisualizationFieldMeta } from "@/kernel/resources/useVisualizationFieldMeta";
 import { useSessionResourceIdentity } from "@/kernel/resources/useSessionStatus";
-import { Eye } from "lucide-react";
+import { Eye, TriangleAlert } from "lucide-react";
+import { Button } from "@/shared/ui/Button";
 import { Checkbox } from "@/shared/ui/Checkbox";
 import React, {
   useCallback,
@@ -1227,10 +1228,38 @@ function useObjectVisualizationPanelState(
               : "Ready"
           : "Ready";
 
+  const fdmMultilayerAirboxCarrierMissing =
+    resolvedTarget?.kind === "airbox" &&
+    !artifactInspection &&
+    fdmMultilayerLayout.data?.available === true &&
+    fdmMultilayerLayout.data.airbox?.carrier_available === false &&
+    (!fdmMultilayerLayout.data.airbox.unavailable_reason ||
+      fdmMultilayerLayout.data.airbox.unavailable_reason === "airbox_carrier_missing");
+
+  const onConfigureAirboxExtent = useCallback(() => {
+    kernel.selection?.set(
+      {
+        kind: "airbox.root",
+        label: "Airbox",
+        nodeId: "model:airbox",
+        objectId: null,
+        ref: {
+          kind: "airbox.root",
+          nodeId: "model:airbox",
+          type: "airbox",
+          visualizationTargetId: "airbox",
+        },
+      },
+      "inspector",
+    );
+  }, [kernel]);
+
   return {
     lane,
     visualizationState,
     meshState,
+    fdmMultilayerAirboxCarrierMissing,
+    onConfigureAirboxExtent,
     artifactInspection,
     catalogOwnerReady,
     artifactExecutionSelected: Boolean(artifactInspectionOwner),
@@ -1546,12 +1575,14 @@ function ObjectVisualizationPanelView({
     childRegionTargets,
     dataState,
     feedback,
+    fdmMultilayerAirboxCarrierMissing,
     fdmNotice,
     fdmTarget,
     lane,
     fieldCatalog,
     quantityCatalog,
     hasTargetOverride,
+    onConfigureAirboxExtent,
     onFieldCatalogRequest,
     onTogglePartVectors,
     passControlsDisabled,
@@ -1702,6 +1733,40 @@ function ObjectVisualizationPanelView({
       className="fm-inspector-panel grid min-w-0 gap-fm-inspector-group"
       data-visualization-revision={revision}
     >
+      {fdmMultilayerAirboxCarrierMissing ? (
+        <div
+          className="fm-inspector-notice"
+          data-notice-id="airbox-carrier-missing"
+          data-slot="inspector-notice"
+          data-tone="warn"
+          role="status"
+        >
+          <TriangleAlert
+            aria-hidden="true"
+            className="fm-inspector-notice__icon"
+            size={16}
+          />
+          <div className="fm-inspector-notice__body">
+            <p className="fm-inspector-notice__title">
+              Airbox carrier not computed in FDM Multilayer
+            </p>
+            <p className="fm-inspector-notice__text">
+              FDM Multilayer only computes magnetic layers by default. To display Wireframe and H_demag vectors in the air gap, switch Airbox Extent to Manual Box in Universe &gt; Airbox, then Build Grid and run Compute.
+            </p>
+            <div className="fm-inspector-notice__actions">
+              <Button
+                data-testid="configure-airbox-extent-btn"
+                size="sm"
+                type="button"
+                variant="secondary"
+                onClick={onConfigureAirboxExtent}
+              >
+                Configure Airbox Extent →
+              </Button>
+            </div>
+          </div>
+        </div>
+      ) : null}
       {artifactQuantity && !artifactOwnerReady ? <p role="status" className="fm-artifact-inspection-owner-required">Select the field inspection source and execution in the viewport.</p> : null}
       <ObjectVisualizationOverview
             context={target.kind === "airbox" ? (

@@ -18,6 +18,28 @@ import { StageTextureAssignmentsEditor } from "@/modules/inspector/panels/stages
 import { observationSourceWorkspaceStore } from "@/kernel/workspace/observationSourceWorkspace";
 import { resetTextureDraftBridgeForTests } from "@/shared/domain/magnetization-texture/textureDraftBridge";
 
+vi.mock("@radix-ui/react-dialog", () => ({
+  Root: ({ children, open }: { children?: ReactNode; open?: boolean }) =>
+    open ? <div data-slot="mock-dialog-root">{children}</div> : null,
+  Trigger: ({ children }: { children?: ReactNode }) => <>{children}</>,
+  Portal: ({ children }: { children?: ReactNode }) => <>{children}</>,
+  Overlay: () => <div data-slot="mock-dialog-overlay" />,
+  Content: ({
+    children,
+    role,
+  }: {
+    children?: ReactNode;
+    role?: string;
+  }) => (
+    <div data-slot="mock-dialog-content" role={role ?? "dialog"}>
+      {children}
+    </div>
+  ),
+  Title: ({ children }: { children?: ReactNode }) => <h2>{children}</h2>,
+  Description: ({ children }: { children?: ReactNode }) => <p>{children}</p>,
+  Close: ({ children }: { children?: ReactNode }) => <>{children}</>,
+}));
+
 vi.mock("@radix-ui/react-tooltip", () => ({
   Provider: ({ children }: { children?: ReactNode }) => <>{children}</>,
   Root: ({ children }: { children?: ReactNode }) => <>{children}</>,
@@ -333,6 +355,12 @@ import {
   MagneticTextureInspectorPanel,
   resolveMagneticTextureCapabilityGate,
 } from "./MagneticTextureInspectorPanel";
+import { applyCoupledDraftFieldChange } from "./MagneticTextureCoreSections";
+import {
+  createDefaultMagneticTextureDraft,
+  validateMagneticTextureDraft,
+} from "@/shared/domain/magnetization-texture/presetDefaults";
+import type { TargetMetricBounds } from "@/shared/domain/magnetization-texture/boundsResolver";
 
 function createTestScene(): SceneResource {
   return {
@@ -988,20 +1016,49 @@ describe("MagneticTextureInspectorPanel & StageTextureAssignmentsEditor on 8-slo
     }
   });
 
-  it("supports clean Reapply Texture, post-apply Show initial magnetization preview, and Clear (asset: null)", async () => {
+  it("keeps CommitBar clean (allowCleanApply: false), offers Re-evaluate m₀ via menu/notice, supports Show initial magnetization preview, and confirms Clear Texture… in overflow menu", async () => {
     const dom = installSimulationPreparationTestDom();
     const container = dom.document.createElement("div");
     dom.document.body.appendChild(container);
     const root = createRoot(container as unknown as Element);
+    let callCount = 0;
+    const applyMagnetization = vi.fn(async (target: unknown) => {
+      callCount += 1;
+      const isPendingFirst = callCount === 1;
+      return {
+        committed_scene: { ...createTestScene(), revision: 12 + callCount },
+        magnetization_apply: {
+          operation_id: `op-${callCount}`,
+          scene_revision: 12 + callCount,
+          scopes: [
+            {
+              object_id: "nanodisk",
+              region_id: (target as { region_id?: string }).region_id ?? null,
+            },
+          ],
+          status: isPendingFirst ? "saved_scene_only" : "initial_state_ready",
+          prepared_initial_state: isPendingFirst
+            ? null
+            : {
+                scene_revision: 12 + callCount,
+                initial_state_revision: 2,
+                publication_id: "pub-14",
+                observation_frame_id: "frame-14",
+                domain_generation_id: "mesh-14",
+                values_sha256: "b".repeat(64),
+              },
+        },
+        scene_revision: 12 + callCount,
+      };
+    });
     const {
-      applyMagnetization,
       clearSavedFieldPresentation,
       closePlayback,
       kernel,
       preparedMagnetization,
       setActiveViewportMainModule,
       setArtifactFieldSelection,
-    } = createKernelMock();
+    } = createKernelMock({ applyMagnetization });
     const selection: Selection = {
       kind: "object.magnetic-texture",
       label: "Magnetic texture",
@@ -1028,16 +1085,28 @@ describe("MagneticTextureInspectorPanel & StageTextureAssignmentsEditor on 8-slo
         );
       });
 
-      // Item 4: Clean Reapply Texture is visible & enabled when dirtyFields is empty
-      const reapplyBtn = findElement(
+      // Clean CommitBar: allowCleanApply is false -> no lit Reapply Texture button
+      const stagedActions = findElement(
         container,
-        (el) => el.tagName === "BUTTON" && el.textContent.includes("Reapply Texture"),
-        "Reapply Texture button",
+        (el) => el.getAttribute("data-slot") === "commit-bar-staged-actions",
+        "commit-bar-staged-actions",
       );
-      expect(reapplyBtn.disabled).toBe(false);
+      expect(stagedActions.getAttribute("data-visible")).toBe("false");
+      expect(container.textContent).not.toContain("Reapply Texture");
 
+      // Embedded top-level Clear button is removed
+      expect(
+        findElements(container, (el) => el.getAttribute("data-testid") === "clear-magnetization-btn"),
+      ).toHaveLength(0);
+
+      // Subtle "Re-evaluate m₀" in overflow menu triggers evaluation
+      const reevaluateMenuItem = findElement(
+        container,
+        (el) => el.getAttribute("role") === "menuitem" && el.textContent.includes("Re-evaluate m₀"),
+        "Re-evaluate m₀ menuitem",
+      );
       await act(async () => {
-        reapplyBtn.click();
+        reevaluateMenuItem.click();
       });
 
       expect(applyMagnetization).toHaveBeenCalledTimes(1);
@@ -1050,7 +1119,18 @@ describe("MagneticTextureInspectorPanel & StageTextureAssignmentsEditor on 8-slo
         },
       });
 
-      // Item 1: Post-apply "Show initial magnetization" button probes preparedMagnetization and opens 3D preview
+      // Receipt status !== "initial_state_ready" renders contextual Re-evaluate m₀ notice quickFix
+      const reevaluateNoticeBtn = findElement(
+        container,
+        (el) => el.tagName === "BUTTON" && el.textContent.trim() === "Re-evaluate m₀",
+        "Re-evaluate m₀ notice button",
+      );
+      await act(async () => {
+        reevaluateNoticeBtn.click();
+      });
+      expect(applyMagnetization).toHaveBeenCalledTimes(2);
+
+      // Post-apply "Show initial magnetization" button probes preparedMagnetization and opens 3D preview
       const showInitialBtn = findElement(
         container,
         (el) => el.tagName === "BUTTON" && el.textContent.trim() === "Show initial magnetization",
@@ -1069,27 +1149,223 @@ describe("MagneticTextureInspectorPanel & StageTextureAssignmentsEditor on 8-slo
         objectId: "nanodisk",
         regionId: null,
         source: {
-          publication_id: "pub-13",
-          scene_revision: 13,
+          publication_id: "pub-14",
+          scene_revision: 14,
         },
       });
 
-      // Item 2: Clear button commits { kind: "object", object_id, asset: null }
-      const clearBtn = findElement(
+      // Clear Texture… in header overflow menu opens confirmation AlertDialog before clearing
+      const clearMenuItem = findElement(
         container,
-        (el) => el.getAttribute("data-testid") === "clear-magnetization-btn",
-        "Clear magnetization button",
+        (el) => el.getAttribute("role") === "menuitem" && el.textContent.includes("Clear Texture…"),
+        "Clear Texture… menuitem",
       );
       await act(async () => {
-        clearBtn.click();
+        clearMenuItem.click();
       });
 
+      // Not cleared until confirmed in AlertDialog
       expect(applyMagnetization).toHaveBeenCalledTimes(2);
-      expect(applyMagnetization.mock.calls[1]?.[0]).toEqual({
+      const alertDialog = findElement(
+        container,
+        (el) => el.getAttribute("role") === "alertdialog",
+        "Clear Texture confirmation alertdialog",
+      );
+      const confirmClearBtn = findElement(
+        alertDialog,
+        (el) => el.getAttribute("data-slot") === "alert-dialog-action",
+        "Confirm Clear Texture button",
+      );
+      await act(async () => {
+        confirmClearBtn.click();
+      });
+
+      expect(applyMagnetization).toHaveBeenCalledTimes(3);
+      expect(applyMagnetization.mock.calls[2]?.[0]).toEqual({
         kind: "object",
         object_id: "nanodisk",
         asset: null,
       });
+    } finally {
+      await act(async () => root.unmount());
+      dom.restore();
+    }
+  });
+
+  it("renders gallery-first layout with Preview slice label, single compact 3D bar, collapsed Placement/Mapping, non-dirtying tab browsing, secondary Load File, and coupled auto-clamping", async () => {
+    const dom = installSimulationPreparationTestDom();
+    const container = dom.document.createElement("div");
+    dom.document.body.appendChild(container);
+    const root = createRoot(container as unknown as Element);
+    const { kernel } = createKernelMock();
+    const selection: Selection = {
+      kind: "object.magnetic-texture",
+      label: "Magnetic texture",
+      moduleSource: "explorer",
+      nodeId: "model:object:nanodisk:magnetic-texture",
+      objectId: "nanodisk",
+      ref: {
+        kind: "object.magnetic-texture",
+        nodeId: "model:object:nanodisk:magnetic-texture",
+        objectId: "nanodisk",
+        type: "scene-object",
+        visualizationTargetId: "object:nanodisk",
+      },
+    };
+
+    try {
+      await act(async () => {
+        root.render(
+          <KernelContext.Provider value={kernel as never}>
+            <InspectorEditSessionProvider>
+              <MagneticTextureInspectorPanel selection={selection} />
+            </InspectorEditSessionProvider>
+          </KernelContext.Provider>,
+        );
+      });
+
+      // Gallery-first: texture-preset is the very first section; object-assignment is gone
+      const sections = findElements(
+        container,
+        (el) => el.getAttribute("data-section-id") !== null,
+      );
+      expect(sections.map((el) => el.getAttribute("data-section-id"))).toEqual([
+        "texture-preset",
+        "preset-parameters",
+        "placement-transform",
+        "coordinate-mapping",
+        "__details",
+      ]);
+
+      // Placement & transform and Coordinate mapping, bounds & asset ID are collapsed by default
+      const placementSection = sections.find(
+        (el) => el.getAttribute("data-section-id") === "placement-transform",
+      )!;
+      const mappingSection = sections.find(
+        (el) => el.getAttribute("data-section-id") === "coordinate-mapping",
+      )!;
+      expect(placementSection.getAttribute("data-state")).toBe("closed");
+      expect(mappingSection.getAttribute("data-state")).toBe("closed");
+      expect(placementSection.textContent).toContain("Offset (0, 0, 0) nm");
+      expect(mappingSection.textContent).toContain("Coordinate mapping, bounds & asset ID");
+
+      // Preview slice label is distinct from Texture plane parameter
+      const previewSliceLabel = findElement(
+        container,
+        (el) => el.getAttribute("data-slot") === "preview-slice-label",
+        "preview-slice-label",
+      );
+      expect(previewSliceLabel.textContent.trim()).toBe("Preview slice:");
+      expect(container.textContent).toContain("Texture plane");
+
+      // Single compact 3D action bar below 2D preview: 3D Gizmo (T), Center, Fit to Object
+      const actionBar = findElement(
+        container,
+        (el) => el.getAttribute("data-slot") === "texture-preview-3d-actions",
+        "texture-preview-3d-actions",
+      );
+      expect(actionBar.textContent).toContain("3D Gizmo (T)");
+      expect(actionBar.textContent).toContain("Center");
+      expect(actionBar.textContent).toContain("Fit to Object");
+      expect(
+        findElements(container, (el) => el.textContent.includes("Fit characteristic size")),
+      ).toHaveLength(0);
+
+      // Switching tabs (Analytical preset <-> Field file) does NOT dirty draft.sourceMode
+      const fieldFileTab = findElement(
+        container,
+        (el) => el.getAttribute("role") === "tab" && el.textContent.includes("Field file"),
+        "Field file tab",
+      );
+      await act(async () => {
+        fieldFileTab.click();
+      });
+
+      const stagedActions = findElement(
+        container,
+        (el) => el.getAttribute("data-slot") === "commit-bar-staged-actions",
+        "commit-bar-staged-actions after tab browse",
+      );
+      expect(stagedActions.getAttribute("data-visible")).toBe("false");
+
+      // Load File button uses variant="secondary" (never variant="primary")
+      const loadBtn = findElement(
+        container,
+        (el) => el.getAttribute("data-testid") === "load-field-state-btn",
+        "Load File button",
+      );
+      expect(loadBtn.className).toContain("fm-button--secondary");
+      expect(loadBtn.className).not.toContain("fm-button--primary");
+
+      // Coupled auto-clamping: skyrmion_lattice & skyrmionium keep invariants valid
+      const testBounds: TargetMetricBounds = {
+        size: [200e-9, 200e-9, 10e-9],
+        localCenter: [0, 0, 0],
+        worldCenter: [0, 0, 0],
+        source: "geometry_params",
+      };
+      const latticeDraft = createDefaultMagneticTextureDraft("skyrmion_lattice", testBounds, "object");
+      const raisedRadiusPatch = applyCoupledDraftFieldChange(
+        latticeDraft,
+        "radiusM",
+        60e-9,
+        testBounds,
+      );
+      expect(raisedRadiusPatch.radiusM).toBeCloseTo(60e-9, 15);
+      expect(raisedRadiusPatch.latticeConstantM).toBeCloseTo(60e-9 * 2.1, 15);
+      expect(validateMagneticTextureDraft({ ...latticeDraft, ...raisedRadiusPatch }).size).toBe(0);
+
+      const loweredLatticePatch = applyCoupledDraftFieldChange(
+        { ...latticeDraft, radiusM: 40e-9, latticeConstantM: 100e-9 },
+        "latticeConstantM",
+        50e-9,
+        testBounds,
+      );
+      expect(loweredLatticePatch.latticeConstantM).toBeCloseTo(50e-9, 15);
+      expect(loweredLatticePatch.radiusM).toBeCloseTo(50e-9 * 0.45, 15);
+      expect(
+        validateMagneticTextureDraft({
+          ...latticeDraft,
+          radiusM: 40e-9,
+          latticeConstantM: 100e-9,
+          ...loweredLatticePatch,
+        }).size,
+      ).toBe(0);
+
+      const skyrmioniumDraft = createDefaultMagneticTextureDraft("skyrmionium", testBounds, "object");
+      const raisedInnerPatch = applyCoupledDraftFieldChange(
+        { ...skyrmioniumDraft, innerRadiusM: 15e-9, outerRadiusM: 30e-9 },
+        "innerRadiusM",
+        35e-9,
+        testBounds,
+      );
+      expect(raisedInnerPatch.innerRadiusM).toBeCloseTo(35e-9, 15);
+      expect(raisedInnerPatch.outerRadiusM).toBeCloseTo(35e-9 * 1.1, 15);
+      expect(
+        validateMagneticTextureDraft({
+          ...skyrmioniumDraft,
+          innerRadiusM: 15e-9,
+          outerRadiusM: 30e-9,
+          ...raisedInnerPatch,
+        }).size,
+      ).toBe(0);
+
+      const loweredOuterPatch = applyCoupledDraftFieldChange(
+        { ...skyrmioniumDraft, innerRadiusM: 25e-9, outerRadiusM: 40e-9 },
+        "outerRadiusM",
+        22e-9,
+        testBounds,
+      );
+      expect(loweredOuterPatch.outerRadiusM).toBeCloseTo(22e-9, 15);
+      expect(loweredOuterPatch.innerRadiusM).toBeCloseTo(22e-9 / 1.1, 15);
+      expect(
+        validateMagneticTextureDraft({
+          ...skyrmioniumDraft,
+          innerRadiusM: 25e-9,
+          outerRadiusM: 40e-9,
+          ...loweredOuterPatch,
+        }).size,
+      ).toBe(0);
     } finally {
       await act(async () => root.unmount());
       dom.restore();
