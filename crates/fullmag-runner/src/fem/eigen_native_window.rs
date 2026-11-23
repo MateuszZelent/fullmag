@@ -3443,3 +3443,30 @@ fn insert_native_poisson_airbox_hardened_contract(
     );
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::native_poisson_airbox_execution_contract;
+    use crate::fem::eigen_tests::bounded_open_airbox_k0_execution_plan;
+
+    #[test]
+    fn native_open_airbox_gpu_contract_never_makes_periodic_validation_claim() {
+        let plan = bounded_open_airbox_k0_execution_plan();
+        for adapter in [
+            "k0_poisson_airbox_gpu_petsc_slepc",
+            "k0_poisson_airbox_gpu_augmented_cudss",
+        ] {
+            let contract = native_poisson_airbox_execution_contract(&plan, adapter, true)
+                .expect("GPU adapter should bind the open-airbox K0 result");
+            assert_eq!(contract.magnetostatic_bc, "open_airbox_k0");
+            assert!(!contract.production_periodic_airbox_claim);
+            assert_eq!(contract.validated_scope, None);
+        }
+        assert!(native_poisson_airbox_execution_contract(
+            &plan,
+            "k0_poisson_airbox_gpu_modal_device_krylov",
+            true,
+        )
+        .is_err());
+    }
+}

@@ -4129,7 +4129,7 @@ fn bounded_k0_execution_plan() -> FemEigenPlanIR {
     plan
 }
 
-fn bounded_open_airbox_k0_execution_plan() -> FemEigenPlanIR {
+pub(super) fn bounded_open_airbox_k0_execution_plan() -> FemEigenPlanIR {
     let mut plan = bounded_k0_execution_plan();
     plan.domain_mesh_mode = fullmag_ir::FemDomainMeshModeIR::SharedDomainMeshWithAir;
     plan.mesh.periodic_node_pairs.clear();
@@ -8593,26 +8593,6 @@ fn native_gpu_shared_domain_admits_only_double_open_airbox_k0_without_seams() {
             node_b: 1,
         });
     assert!(!native_gpu_shared_domain_modal_supported(&periodic_seam));
-}
-
-#[test]
-fn native_open_airbox_gpu_contract_never_makes_periodic_validation_claim() {
-    let plan = bounded_open_airbox_k0_execution_plan();
-    let contract = native_poisson_airbox_execution_contract(
-        &plan,
-        "k0_poisson_airbox_gpu_petsc_slepc",
-        true,
-    )
-    .expect("the existing PETSc/SLEPc GPU adapter is the open-airbox K0 route");
-    assert_eq!(contract.magnetostatic_bc, "open_airbox_k0");
-    assert!(!contract.production_periodic_airbox_claim);
-    assert_eq!(contract.validated_scope, None);
-    assert!(native_poisson_airbox_execution_contract(
-        &plan,
-        "k0_poisson_airbox_gpu_modal_device_krylov",
-        true,
-    )
-    .is_err());
 }
 
 #[test]
