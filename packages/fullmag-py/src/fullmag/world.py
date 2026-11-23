@@ -10680,22 +10680,45 @@ def _uniform_material_dmi_coefficient(
 def _uniform_material_dmi_interface_normal(
     magnets: Sequence[MagnetHandle],
 ) -> tuple[float, float, float] | None:
-    """Return a shared InterfacialDMI interface_normal when authored on handles."""
-    normals = [
-        as_vector3(magnet.dmi_interface_normal, "dmi_interface_normal")
-        for magnet in magnets
-        if magnet.dmi_interface_normal is not None
-    ]
-    if not normals:
+    """Resolve one shared interface normal, including the default +z on every handle."""
+    if not magnets:
         return None
-    first = normals[0]
-    for other in normals[1:]:
-        if any(abs(a - b) > 1e-12 for a, b in zip(first, other)):
-            raise ValueError(
-                "legacy study-level InterfacialDMI interface_normal lowering requires "
-                "all magnets to agree on dmi_interface_normal"
-            )
-    return first
+
+    default_normal = (0.0, 0.0, 1.0)
+    effective_normals: list[tuple[float, float, float]] = []
+    authored_normals: list[tuple[float, float, float]] = []
+    for magnet in magnets:
+        if magnet.dmi_interface_normal is None:
+            effective_normals.append(default_normal)
+            continue
+
+        raw_normal = as_vector3(magnet.dmi_interface_normal, "dmi_interface_normal")
+        if any(not math.isfinite(component) for component in raw_normal):
+            raise ValueError("dmi_interface_normal must contain finite values")
+        norm = math.hypot(*raw_normal)
+        if not math.isfinite(norm) or norm <= 1.0e-15:
+            raise ValueError("dmi_interface_normal must be non-zero")
+        effective_normals.append(tuple(component / norm for component in raw_normal))
+        authored_normals.append(raw_normal)
+
+    if not authored_normals:
+        return None
+
+    reference = effective_normals[0]
+    if any(
+        abs(reference[axis] - normal[axis]) > 1e-12
+        for normal in effective_normals[1:]
+        for axis in range(3)
+    ):
+        details = ", ".join(
+            f"{magnet._object_id or magnet._name}={normal!r}"
+            for magnet, normal in zip(magnets, effective_normals)
+        )
+        raise ValueError(
+            "legacy study-level InterfacialDMI interface_normal lowering requires "
+            f"all magnets to agree on the effective normal; values: {details}"
+        )
+    return authored_normals[0]
 
 
 # ---------------------------------------------------------------------------

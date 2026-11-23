@@ -3982,6 +3982,42 @@ class ProblemApiTests(unittest.TestCase):
         self.assertEqual(problem.magnets[0].material.Kc1, 48e3)
         self.assertEqual(problem.to_ir()["materials"][0]["cubic_anisotropy_kc1"], 48e3)
 
+    def test_study_interfacial_dmi_rejects_mixed_effective_interface_normals(self) -> None:
+        fm.reset()
+        study = fm.study("study_dmi_normal_conflict")
+        explicit = study.geometry(fm.Box(size=(20e-9, 10e-9, 5e-9)), name="explicit")
+        defaulted = study.geometry(fm.Box(size=(20e-9, 10e-9, 5e-9)), name="defaulted")
+        for body in (explicit, defaulted):
+            body.Ms = 800e3
+            body.Aex = 13e-12
+            body.Dind = 3e-3
+        explicit.dmi_interface_normal = (1.0, 0.0, 0.0)
+
+        with self.assertRaisesRegex(ValueError, "effective normal"):
+            flat_world._build_problem()
+
+    def test_study_interfacial_dmi_preserves_default_and_equivalent_normals(self) -> None:
+        fm.reset()
+        study = fm.study("study_dmi_normal_default")
+        first = study.geometry(fm.Box(size=(20e-9, 10e-9, 5e-9)), name="first")
+        second = study.geometry(fm.Box(size=(20e-9, 10e-9, 5e-9)), name="second")
+        for body in (first, second):
+            body.Ms = 800e3
+            body.Aex = 13e-12
+            body.Dind = 3e-3
+
+        problem = flat_world._build_problem()
+        default_term = next(term for term in problem.energy if isinstance(term, fm.InterfacialDMI))
+        self.assertIsNone(default_term.interface_normal)
+
+        first.dmi_interface_normal = (0.0, 0.0, 3.0)
+        second.dmi_interface_normal = (0.0, 0.0, 1.0)
+        problem = flat_world._build_problem()
+        equivalent_term = next(
+            term for term in problem.energy if isinstance(term, fm.InterfacialDMI)
+        )
+        self.assertEqual(equivalent_term.interface_normal, (0.0, 0.0, 3.0))
+
     def test_load_problem_from_study_script_preserves_universe_metadata(self) -> None:
         with TemporaryDirectory() as tmp_dir:
             tmp_path = Path(tmp_dir)
