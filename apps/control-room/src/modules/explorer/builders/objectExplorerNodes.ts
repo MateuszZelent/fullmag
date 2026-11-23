@@ -93,7 +93,10 @@ export function buildObjectExplorerNode(
         "explorer.expand-all",
         "explorer.collapse-all",
       ],
-      contextCommandInputs: { "planar-monitor.create": createObjectMonitorInput },
+      contextCommandInputs: {
+        "geometry.delete-object": { objectId },
+        "planar-monitor.create": createObjectMonitorInput,
+      },
       children: [
         {
           id: `${parentId}:geometry`,
@@ -206,7 +209,10 @@ export function buildObjectExplorerNode(
       "explorer.expand-all",
       "explorer.collapse-all",
     ],
-    contextCommandInputs: { "planar-monitor.create": createObjectMonitorInput },
+    contextCommandInputs: {
+      "geometry.delete-object": { objectId },
+      "planar-monitor.create": createObjectMonitorInput,
+    },
     children: compactExplorerNodes([
       {
         id: `${parentId}:geometry`,

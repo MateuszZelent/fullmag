@@ -1,6 +1,10 @@
 "use client";
 
+import { useEffect, useMemo, useSyncExternalStore } from "react";
+
 import type { SceneResource } from "@/kernel/api/apiTypes";
+import { deleteObjectDialogStore } from "@/kernel/authoring/deleteObjectDialogStore";
+import { useSceneResource } from "@/kernel/resources/geometryLifecycleResources";
 import { parseCompositeGeometry } from "@/modules/explorer/builders/geometryTreeExplorerNodes";
 import {
   AlertDialog,
@@ -249,5 +253,50 @@ export function DeleteObjectImpactDialog({
         </AlertDialogFooter>
       </AlertDialogContent>
     </AlertDialog>
+  );
+}
+
+/**
+ * Workspace-level host that presents `DeleteObjectImpactDialog` whenever
+ * `geometry.delete-object` is triggered from any surface (Explorer context menu,
+ * Ribbon, keyboard shortcut, Command Palette, or Inspector).
+ */
+export function DeleteObjectImpactDialogHost() {
+  const request = useSyncExternalStore(
+    deleteObjectDialogStore.subscribe,
+    deleteObjectDialogStore.getSnapshot,
+    deleteObjectDialogStore.getServerSnapshot,
+  );
+
+  useEffect(() => deleteObjectDialogStore.registerHost(), []);
+
+  const liveScene = useSceneResource({ enabled: Boolean(request) });
+  const sceneForImpact = liveScene.data ?? request?.scene ?? null;
+
+  const impact = useMemo(
+    () =>
+      request
+        ? analyzeDeleteObjectImpact(sceneForImpact, request.objectId)
+        : null,
+    [request, sceneForImpact],
+  );
+
+  if (!request || !impact) {
+    return null;
+  }
+
+  return (
+    <DeleteObjectImpactDialog
+      impact={impact}
+      open
+      onConfirmDelete={() => {
+        deleteObjectDialogStore.confirm(request.requestId);
+      }}
+      onOpenChange={(open) => {
+        if (!open) {
+          deleteObjectDialogStore.cancel(request.requestId);
+        }
+      }}
+    />
   );
 }

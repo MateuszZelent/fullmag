@@ -18,6 +18,7 @@ import {
   buildAuthoredCpwGeometry,
   type AuthoredAntennaGeometry,
 } from "@/shared/domain/geometry/authoredMicrostripGeometry";
+import { computeSceneGeometryBoundsMeters } from "@/shared/domain/geometry/sceneGeometryBounds";
 import {
   pointInsideRegionShape,
   resolveTargetBoundsMeters,
@@ -43,6 +44,8 @@ type Viewport3DPrimitiveKind =
   | "cylinder-cylinder-difference"
   | "cylinder"
   | "sphere"
+  | "composite"
+  | "array3d"
   | "microstrip"
   | "cpw"
   | "imported-surface"
@@ -274,7 +277,42 @@ export function planeAxesForCardinalAxis(axisIndex: 0 | 1 | 2): [0 | 1 | 2, 0 | 
 }
 
 function lowerGeometryKind(value: unknown): Viewport3DPrimitiveKind {
-  const kind = asString(value)?.toLowerCase() ?? "";
+  const kind = asString(value)?.trim().toLowerCase() ?? "";
+  if (kind === "array3d" || kind === "array_3d") {
+    return "array3d";
+  }
+  if (
+    kind === "union" ||
+    kind === "difference" ||
+    kind === "subtract" ||
+    kind === "intersection" ||
+    kind === "intersect" ||
+    kind === "xor" ||
+    kind === "sliceplane" ||
+    kind === "slice_plane" ||
+    kind === "translate" ||
+    kind === "transform" ||
+    kind === "csg" ||
+    kind === "ellipsoid" ||
+    kind === "cone" ||
+    kind === "frustum" ||
+    kind === "tube" ||
+    kind === "ring" ||
+    kind === "hollowcylinder" ||
+    kind === "torus" ||
+    kind === "polygonprism" ||
+    kind === "polygon_prism" ||
+    kind === "polygonextrusion" ||
+    kind === "extrudedpolygon" ||
+    kind === "polygon" ||
+    kind === "ellipse" ||
+    kind === "sinwaveguide" ||
+    kind === "sin_waveguide" ||
+    kind === "archwaveguide" ||
+    kind === "arch_waveguide"
+  ) {
+    return "composite";
+  }
   if (kind.includes("box") || kind.includes("film") || kind.includes("cuboid")) {
     return "box";
   }
@@ -572,6 +610,16 @@ function boundsFromGeometry(
   const csgFallbackBounds = csgPreview
     ? null
     : cylinderDifferenceFallbackBounds(geometry);
+  const directPrimitiveSize =
+    !csgPreview && !csgFallbackBounds
+      ? boundsSizeFromParams(geometry, params)
+      : null;
+  if (!csgPreview && !csgFallbackBounds && !directPrimitiveSize) {
+    const recursiveBounds = computeSceneGeometryBoundsMeters(geometry, transform);
+    if (recursiveBounds) {
+      return boundsFromMinMax(recursiveBounds.min, recursiveBounds.max);
+    }
+  }
   const csgSize = csgPreview?.kind === "box-cylinder-difference"
     ? csgPreview.boxSize
     : csgPreview?.kind === "cylinder-cylinder-difference"
@@ -580,7 +628,7 @@ function boundsFromGeometry(
   const size =
     csgSize ??
     csgFallbackBounds?.size ??
-    boundsSizeFromParams(geometry, params) ??
+    directPrimitiveSize ??
     [1, 1, 1];
   const objectTranslation = asVec3(transform?.translation) ?? [0, 0, 0];
   const geometryCenter = csgPreview?.kind === "cylinder-cylinder-difference"
@@ -980,7 +1028,11 @@ export function buildViewport3DPrimitiveRenderModel(
           }
         : undefined;
     const localSize: [number, number, number] | undefined =
-      !importedSurface && !antennaPreview && !csgPreview
+      !importedSurface &&
+      !antennaPreview &&
+      !csgPreview &&
+      resolvedKind !== "composite" &&
+      resolvedKind !== "array3d"
         ? boundsSizeFromParams(geometry, params) ?? undefined
         : undefined;
     const primitiveTransform =

@@ -1,7 +1,16 @@
 "use client";
 
 import { useEffect, useLayoutEffect, useMemo, useRef, useSyncExternalStore } from "react";
-import { EdgesGeometry, type LineSegments, Matrix4, Quaternion, Vector3 } from "three";
+import {
+  BufferAttribute,
+  type ColorRepresentation,
+  EdgesGeometry,
+  LineDashedMaterial,
+  type LineSegments,
+  Matrix4,
+  Quaternion,
+  Vector3,
+} from "three";
 
 import {
   geometryGhostVisibilityStore,
@@ -96,6 +105,59 @@ export function resolveGhostCutterDescriptors(
   return descriptors;
 }
 
+export function createGhostCutterEdgesGeometry(
+  geometry: ReturnType<typeof createPreviewChildBufferGeometry>,
+): EdgesGeometry {
+  // Three.js EdgesGeometry quantizes vertices at 1e-4 precision, which collapses
+  // nanometer-scale coordinates (~1e-9 m) to zero. Normalize to unit radius before
+  // extracting edges, then rescale back to physical SI meters.
+  geometry.computeBoundingSphere();
+  const radius = geometry.boundingSphere?.radius ?? 0;
+  let edges: EdgesGeometry;
+  if (radius > 0 && radius < 1e-2) {
+    const scaledClone = geometry.clone();
+    const inv = 1 / radius;
+    scaledClone.scale(inv, inv, inv);
+    edges = new EdgesGeometry(scaledClone);
+    edges.scale(radius, radius, radius);
+    scaledClone.dispose();
+  } else {
+    edges = new EdgesGeometry(geometry);
+  }
+
+  const pos = edges.getAttribute("position");
+  if (pos && pos.count >= 2) {
+    const distances = new Float32Array(pos.count);
+    let running = 0;
+    const start = new Vector3();
+    const end = new Vector3();
+    for (let i = 0; i + 1 < pos.count; i += 2) {
+      start.fromBufferAttribute(pos, i);
+      end.fromBufferAttribute(pos, i + 1);
+      distances[i] = running;
+      running += start.distanceTo(end);
+      distances[i + 1] = running;
+    }
+    edges.setAttribute("lineDistance", new BufferAttribute(distances, 1));
+  }
+  return edges;
+}
+
+export function createGhostCutterDashedMaterial(
+  color: ColorRepresentation,
+  dashUnit: number,
+): LineDashedMaterial {
+  const safeDash = Math.max(dashUnit, 1e-12);
+  return new LineDashedMaterial({
+    color,
+    dashSize: safeDash,
+    depthWrite: false,
+    gapSize: safeDash * 0.65,
+    opacity: 0.85,
+    transparent: true,
+  });
+}
+
 function GhostCutterMesh({
   colors,
   descriptor,
@@ -114,9 +176,29 @@ function GhostCutterMesh({
   }, [descriptor.geometry, tracker]);
 
   const edgesGeometry = useMemo(() => {
-    const next = new EdgesGeometry(geometry);
+    const next = createGhostCutterEdgesGeometry(geometry);
     return tracker.track("geometry", next);
   }, [geometry, tracker]);
+
+  const dashUnit = useMemo(() => {
+    geometry.computeBoundingSphere();
+    const radius = geometry.boundingSphere?.radius ?? 50e-9;
+    return Math.max(radius * 0.12, 1e-12);
+  }, [geometry]);
+
+  const strokeColor = colors.antenna ?? colors.danger ?? colors.accent;
+
+  const dashedMaterial = useMemo(() => {
+    const next = createGhostCutterDashedMaterial(strokeColor, dashUnit);
+    return tracker.track("material", next);
+  }, [dashUnit, strokeColor, tracker]);
+
+  useEffect(
+    () => () => {
+      tracker.release("material", dashedMaterial);
+    },
+    [dashedMaterial, tracker],
+  );
 
   useEffect(
     () => () => {
@@ -129,13 +211,7 @@ function GhostCutterMesh({
   useLayoutEffect(() => {
     lineRef.current?.computeLineDistances();
     invalidate();
-  }, [edgesGeometry, invalidate]);
-
-  const dashUnit = useMemo(() => {
-    geometry.computeBoundingSphere();
-    const radius = geometry.boundingSphere?.radius ?? 50e-9;
-    return Math.max(radius * 0.12, 1e-12);
-  }, [geometry]);
+  }, [edgesGeometry, dashedMaterial, invalidate]);
 
   return (
     <group
@@ -152,22 +228,13 @@ function GhostCutterMesh({
     >
       <mesh geometry={geometry}>
         <meshBasicMaterial
-          color={colors.antenna ?? colors.danger ?? colors.accent}
+          color={strokeColor}
           depthWrite={false}
           opacity={0.16}
           transparent
         />
       </mesh>
-      <lineSegments ref={lineRef} geometry={edgesGeometry}>
-        <lineDashedMaterial
-          color={colors.antenna ?? colors.danger ?? colors.accent}
-          dashSize={dashUnit}
-          depthWrite={false}
-          gapSize={dashUnit * 0.65}
-          opacity={0.85}
-          transparent
-        />
-      </lineSegments>
+      <lineSegments ref={lineRef} geometry={edgesGeometry} material={dashedMaterial} />
     </group>
   );
 }

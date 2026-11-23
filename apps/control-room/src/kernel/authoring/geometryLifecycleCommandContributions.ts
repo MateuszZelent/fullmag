@@ -35,6 +35,7 @@ import type {
   MeshCapabilitiesResource,
   RequestOptions,
   RuntimeCommandPrecondition,
+  SceneResource,
 } from "../api/apiTypes";
 import type { CommandDetailResource, StructuredCommandRequest } from "../api/apiTypes";
 import type { CommandContext, CommandContribution, CommandResult } from "../commands/commandTypes";
@@ -87,6 +88,7 @@ import {
   STL_LENGTH_UNITS,
   type StlLengthUnit,
 } from "./importedStlImport";
+import { deleteObjectDialogStore } from "./deleteObjectDialogStore";
 import { awaitMeshBuildConfirmation, type MeshBuildConfirmCommandId } from "./meshBuildConfirmation";
 import { studyComputeDraftBlockedReason } from "./studyComputeDraftGuard";
 import { SESSION_STATUS_RESOURCE_KEY } from "../resources/useSessionStatus";
@@ -2849,12 +2851,20 @@ export const GEOMETRY_LIFECYCLE_COMMANDS: CommandContribution[] = [
     category: "Geometry",
     group: "geometry",
     scope: "selection",
-    isEnabled: (context) => Boolean(selectedObjectId(context)) && !deleteObjectBlockedReason(context),
-    disabledReason: (context) => selectedObjectDisabledReason(context) ?? deleteObjectBlockedReason(context),
+    isEnabled: (context) => {
+      const targetId = asString(asRecord(context.input)?.objectId) ?? selectedObjectId(context);
+      return Boolean(targetId) && !deleteObjectBlockedReason(context);
+    },
+    disabledReason: (context) => {
+      const targetId = asString(asRecord(context.input)?.objectId) ?? selectedObjectId(context);
+      return (targetId ? null : "Select a scene object to use this command.") ??
+        deleteObjectBlockedReason(context);
+    },
     run: async (context) => {
       const obsolete = obsoleteSessionResult(context);
       if (obsolete) return obsolete;
-      const objectId = selectedObjectId(context);
+      const inputRecord = asRecord(context.input);
+      const objectId = asString(inputRecord?.objectId) ?? selectedObjectId(context);
       if (!objectId) {
         return { message: "No scene object selected.", status: "failed" };
       }
@@ -2864,6 +2874,22 @@ export const GEOMETRY_LIFECYCLE_COMMANDS: CommandContribution[] = [
 
       const blocked = deleteObjectBlockedReason(context);
       if (blocked) return { message: blocked, status: "failed" };
+
+      if (inputRecord?.confirmed !== true && deleteObjectDialogStore.hasHost()) {
+        const sceneSnapshot = asRecord(resourceData(context, MODEL_SCENE_PATH)) as SceneResource | null;
+        const confirmed = await deleteObjectDialogStore.requestConfirmation({
+          objectId,
+          scene: sceneSnapshot,
+        });
+        if (!confirmed) {
+          return { message: "Object deletion cancelled.", status: "cancelled" };
+        }
+        const obsoleteAfterConfirm = obsoleteSessionResult(context);
+        if (obsoleteAfterConfirm) return obsoleteAfterConfirm;
+        const blockedAfterConfirm = deleteObjectBlockedReason(context);
+        if (blockedAfterConfirm) return { message: blockedAfterConfirm, status: "failed" };
+      }
+
       const controller = context.objectEditSession;
       const lease = controller?.beginSceneMutation(context.sessionScopeKey ?? null, objectId) ?? null;
       if (controller && lease === null) {

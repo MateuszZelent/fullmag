@@ -29,6 +29,7 @@ import { applyArray3DTransaction } from "@/kernel/authoring/geometryLifecycleCom
 import { publishCommittedSceneResource } from "@/kernel/resources/geometryLifecycleResources";
 import type { KernelApi } from "@/kernel/types";
 import { parseCompositeGeometry } from "@/modules/explorer/builders/geometryTreeExplorerNodes";
+import { computeSceneGeometryBoundsMeters } from "@/shared/domain/geometry/sceneGeometryBounds";
 import { Badge } from "@/shared/ui/Badge";
 import { Button } from "@/shared/ui/Button";
 import { Input } from "@/shared/ui/Input";
@@ -67,11 +68,24 @@ function asRecord(value: unknown): Record<string, unknown> | null {
     : null;
 }
 
-function readChildBounds(
+export function resolveArray3DChildBoundsMeters(
   sceneObj: unknown,
+  targetGeometry: unknown,
 ): { max: Vec3Tuple; min: Vec3Tuple; size: Vec3Tuple } {
+  const existingArray = parseArray3DGeometry(targetGeometry);
+  const childGeom = existingArray ? existingArray.child : targetGeometry;
+  const childTx = existingArray?.childTransform;
+  const computed = computeSceneGeometryBoundsMeters(childGeom, childTx);
+  if (computed) {
+    return {
+      max: [...computed.max],
+      min: [...computed.min],
+      size: [...computed.size],
+    };
+  }
+
   const objRec = asRecord(sceneObj);
-  const geomRec = asRecord(objRec?.geometry);
+  const geomRec = asRecord(targetGeometry) ?? asRecord(objRec?.geometry);
   const rec = asRecord(objRec?.bounds) ?? geomRec;
   const rawMin = Array.isArray(rec?.min)
     ? rec.min
@@ -151,7 +165,10 @@ export function Array3DLatticeTableSection({
     () => parseArray3DGeometry(targetGeometry),
     [targetGeometry],
   );
-  const childBounds = useMemo(() => readChildBounds(sceneObj), [sceneObj]);
+  const childBounds = useMemo(
+    () => resolveArray3DChildBoundsMeters(sceneObj, targetGeometry),
+    [sceneObj, targetGeometry],
+  );
 
   const targetKey = `${objectId}:${targetOperandId ?? ""}`;
   const [prevTargetKey, setPrevTargetKey] = useState(targetKey);
@@ -277,7 +294,7 @@ export function Array3DLatticeTableSection({
 
   return (
     <div
-      className="flex flex-col gap-3 @container"
+      className="fm-array3d-section flex min-w-0 flex-col gap-3"
       data-slot="array3d-lattice-section"
     >
       {/* 1-click Presets & Display Unit */}
@@ -311,8 +328,8 @@ export function Array3DLatticeTableSection({
       </div>
 
       {/* Primary Semantic Table: X / Y / Z Lattice Axes */}
-      <div className="overflow-x-auto rounded border border-[var(--fm-border-subtle)]">
-        <table className="w-full border-collapse text-left text-xs">
+      <div className="fm-array3d-table-wrap overflow-x-auto rounded border border-[var(--fm-border-subtle)]">
+        <table className="fm-array3d-table w-full border-collapse text-left text-xs">
           <caption className="sr-only">
             Array 3D lattice axes configuration (X, Y, Z)
           </caption>
@@ -339,13 +356,16 @@ export function Array3DLatticeTableSection({
               return (
                 <tr
                   key={spec.axis}
-                  className="border-b border-[var(--fm-border-subtle)] last:border-b-0"
+                  className="fm-array3d-row border-b border-[var(--fm-border-subtle)] last:border-b-0"
                   data-array-axis={spec.axis}
                 >
-                  <th scope="row" className="px-2 py-1.5 font-semibold text-[var(--fm-text-primary)]">
+                  <th
+                    scope="row"
+                    className="fm-array3d-axis-cell px-2 py-1.5 font-semibold text-[var(--fm-text-primary)]"
+                  >
                     {axisUpper}
                   </th>
-                  <td className="px-2 py-1.5">
+                  <td className="fm-array3d-cell px-2 py-1.5" data-label="Active">
                     <Switch
                       aria-label={`Enable ${axisUpper} axis`}
                       checked={spec.enabled}
@@ -357,10 +377,10 @@ export function Array3DLatticeTableSection({
                       }
                     />
                   </td>
-                  <td className="px-2 py-1.5">
+                  <td className="fm-array3d-cell px-2 py-1.5" data-label="Count N">
                     <Input
                       aria-label={`${axisUpper} count`}
-                      className="w-16"
+                      className="fm-array3d-input--count w-16"
                       disabled={!spec.enabled}
                       max={MAX_ARRAY_AXIS_COUNT}
                       min={1}
@@ -379,7 +399,7 @@ export function Array3DLatticeTableSection({
                       }}
                     />
                   </td>
-                  <td className="px-2 py-1.5">
+                  <td className="fm-array3d-cell px-2 py-1.5" data-label="Direction">
                     <div className="flex items-center gap-0.5">
                       {DIRECTION_ITEMS.map((dir) => (
                         <Button
@@ -396,8 +416,11 @@ export function Array3DLatticeTableSection({
                       ))}
                     </div>
                   </td>
-                  <td className="px-2 py-1.5">
-                    <div className="flex items-center gap-1">
+                  <td
+                    className="fm-array3d-cell px-2 py-1.5"
+                    data-label={`${isGap ? "Gap g" : "Pitch Δ"} (${UNIT_LABELS[unit]})`}
+                  >
+                    <div className="fm-array3d-pitch-group flex items-center gap-1">
                       <Button
                         aria-label={`Toggle ${axisUpper} spacing mode`}
                         disabled={!spec.enabled}
@@ -414,7 +437,7 @@ export function Array3DLatticeTableSection({
                       </Button>
                       <Input
                         aria-label={`${axisUpper} ${isGap ? "gap" : "pitch"} (${UNIT_LABELS[unit]})`}
-                        className="w-20"
+                        className="fm-array3d-input--pitch w-20"
                         disabled={!spec.enabled}
                         step="any"
                         type="number"
@@ -430,7 +453,10 @@ export function Array3DLatticeTableSection({
                       />
                     </div>
                   </td>
-                  <td className="px-2 py-1.5 font-mono text-[var(--fm-text-secondary)]">
+                  <td
+                    className="fm-array3d-cell px-2 py-1.5 font-mono text-[var(--fm-text-secondary)]"
+                    data-label={`Axis Span (${UNIT_LABELS[unit]})`}
+                  >
                     {formatInUnit(spanMeters, unit)} {UNIT_LABELS[unit]}
                   </td>
                 </tr>
@@ -453,8 +479,8 @@ export function Array3DLatticeTableSection({
         </Button>
 
         {showAdvancedTable ? (
-          <div className="overflow-x-auto rounded border border-[var(--fm-border-subtle)]">
-            <table className="w-full border-collapse text-left text-xs">
+          <div className="fm-array3d-table-wrap overflow-x-auto rounded border border-[var(--fm-border-subtle)]">
+            <table className="fm-array3d-table fm-array3d-table--advanced w-full border-collapse text-left text-xs">
               <caption className="sr-only">
                 Bravais skew extra offset, step rotation, and step scale per lattice axis
               </caption>
@@ -479,13 +505,19 @@ export function Array3DLatticeTableSection({
                   return (
                     <tr
                       key={spec.axis}
-                      className="border-b border-[var(--fm-border-subtle)] last:border-b-0"
+                      className="fm-array3d-row border-b border-[var(--fm-border-subtle)] last:border-b-0"
                     >
-                      <th scope="row" className="px-2 py-1.5 font-semibold text-[var(--fm-text-primary)]">
+                      <th
+                        scope="row"
+                        className="fm-array3d-axis-cell px-2 py-1.5 font-semibold text-[var(--fm-text-primary)]"
+                      >
                         {axisUpper}
                       </th>
-                      <td className="px-2 py-1.5">
-                        <div className="flex items-center gap-1">
+                      <td
+                        className="fm-array3d-cell fm-array3d-cell--stacked px-2 py-1.5"
+                        data-label={`Extra Offset [${UNIT_LABELS[unit]}]`}
+                      >
+                        <div className="fm-array3d-tuple-grid flex items-center gap-1">
                           {([0, 1, 2] as const).map((c) => (
                             <Input
                               key={c}
@@ -507,8 +539,11 @@ export function Array3DLatticeTableSection({
                           ))}
                         </div>
                       </td>
-                      <td className="px-2 py-1.5">
-                        <div className="flex items-center gap-1">
+                      <td
+                        className="fm-array3d-cell fm-array3d-cell--stacked px-2 py-1.5"
+                        data-label="Step Rotation (°)"
+                      >
+                        <div className="fm-array3d-tuple-grid flex items-center gap-1">
                           {([0, 1, 2] as const).map((c) => (
                             <Input
                               key={c}
@@ -529,8 +564,11 @@ export function Array3DLatticeTableSection({
                           ))}
                         </div>
                       </td>
-                      <td className="px-2 py-1.5">
-                        <div className="flex items-center gap-1">
+                      <td
+                        className="fm-array3d-cell fm-array3d-cell--stacked px-2 py-1.5"
+                        data-label="Step Scale (sx, sy, sz)"
+                      >
+                        <div className="fm-array3d-tuple-grid flex items-center gap-1">
                           {([0, 1, 2] as const).map((c) => (
                             <Input
                               key={c}

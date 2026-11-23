@@ -36,6 +36,7 @@ import {
   parseCompositeGeometry,
   type NormalizedGeometryOperand,
 } from "@/modules/explorer/builders/geometryTreeExplorerNodes";
+import { computeSceneGeometryBoundsMeters } from "@/shared/domain/geometry/sceneGeometryBounds";
 import { Badge } from "@/shared/ui/Badge";
 import { Button } from "@/shared/ui/Button";
 import { Switch } from "@/shared/ui/Switch";
@@ -317,7 +318,9 @@ export function BooleanNodeSection({
     if (baseRevision === null) return;
     const objRec = asRecord(sceneObj);
     const geomRec = asRecord(objRec?.geometry);
+    const computedBounds = computeSceneGeometryBoundsMeters(geomRec);
     const boundsSource =
+      computedBounds ??
       objRec?.bounds ??
       (geomRec?.bounds_min && geomRec?.bounds_max
         ? { max: geomRec.bounds_max, min: geomRec.bounds_min }

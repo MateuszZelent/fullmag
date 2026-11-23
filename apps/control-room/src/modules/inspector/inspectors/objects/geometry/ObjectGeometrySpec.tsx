@@ -11,6 +11,7 @@ import {
 } from "react";
 
 import { MODEL_SCENE_PATH } from "@/kernel/api/apiPaths";
+import { deleteObjectDialogStore } from "@/kernel/authoring/deleteObjectDialogStore";
 import { geometryObjectEditSessionTargetKey } from "@/kernel/authoring/object-edit/objectEditDraftModel";
 import { ObjectEditSessionController } from "@/kernel/authoring/object-edit/ObjectEditSessionController";
 import type { GeometryObjectDraft } from "@/kernel/authoring/object-edit/objectEditTypes";
@@ -293,15 +294,43 @@ function SharedGeometrySpecPanel({
         domain: "geometry",
         icon: Shapes,
         title: (draft) =>
-          draft.mode === "draft-new" ? draft.draftName : `${draft.primitiveKind} Geometry`,
+          draft.mode === "draft-new"
+            ? draft.draftName
+            : draft.compositeSummary
+              ? draft.compositeSummary.displayLabel
+              : `${draft.primitiveKind} Geometry`,
         renameFieldKey: baseline.mode === "draft-new" ? "draftName" : undefined,
         kindLabel:
-          baseline.mode === "draft-new" ? "Primitive builder draft" : "Parametric solid geometry",
+          baseline.mode === "draft-new"
+            ? "Primitive builder draft"
+            : baseline.compositeSummary
+              ? baseline.compositeSummary.op === "array"
+                ? "Array 3D lattice geometry"
+                : "Composite CSG geometry"
+              : "Parametric solid geometry",
         entityId: baseline.mode === "committed" ? baseline.objectId : undefined,
         statePill: (draft) => draft.meshStatusPill,
       },
       facts: (draft): readonly InspectorFact[] => {
         const metrics = computeDraftSummaryMetrics(draft);
+        if (draft.compositeSummary) {
+          const summary = draft.compositeSummary;
+          return [
+            { id: "kind", label: "Geometry", value: summary.kind },
+            summary.op === "array"
+              ? {
+                  id: "instances",
+                  label: "Instances",
+                  value: `${(summary.instanceCount ?? 1).toLocaleString()} (${summary.dimensionsLabel ?? "1×1×1"})`,
+                }
+              : {
+                  id: "operands",
+                  label: "Operands",
+                  value: `${summary.enabledOperandCount} / ${summary.operandCount}`,
+                },
+            { id: "span", label: "Bounding span", value: metrics.spanText },
+          ];
+        }
         return [
           { id: "kind", label: "Primitive", value: draft.primitiveKind },
           { id: "span", label: "Bounding span", value: metrics.spanText },
@@ -454,11 +483,25 @@ function SharedGeometrySpecPanel({
                     Inspect dependent couplings, regions, and CSG links before deletion.
                   </span>
                   <Button
+                    className="shrink-0 whitespace-nowrap"
                     disabled={Boolean(sceneMutationLockReason) || deletingObject}
                     size="sm"
                     type="button"
                     variant="danger"
-                    onClick={() => setDeleteDialogOpen(true)}
+                    onClick={() => {
+                      if (deleteObjectDialogStore.hasHost()) {
+                        void kernel.commands.execute(
+                          "geometry.delete-object",
+                          createCommandContext("inspector", kernel, {
+                            input: { objectId: baseline.objectId },
+                            resourceData: { [MODEL_SCENE_PATH]: scene.data },
+                            sessionScopeKey: currentSessionScopeKey,
+                          }),
+                        );
+                      } else {
+                        setDeleteDialogOpen(true);
+                      }
+                    }}
                   >
                     <Trash2 size={13} />
                     <span>Delete Object…</span>
@@ -787,6 +830,7 @@ function SharedGeometrySpecPanel({
       await kernel.commands.execute(
         "geometry.delete-object",
         createCommandContext("inspector", kernel, {
+          input: { confirmed: true, objectId: baseline.objectId },
           resourceData: { [MODEL_SCENE_PATH]: scene.data },
           sessionScopeKey: currentSessionScopeKey,
         }),
@@ -795,7 +839,7 @@ function SharedGeometrySpecPanel({
     } finally {
       setDeletingObject(false);
     }
-  }, [baseline.mode, currentSessionScopeKey, deletingObject, kernel, scene.data]);
+  }, [baseline.mode, baseline.objectId, currentSessionScopeKey, deletingObject, kernel, scene.data]);
 
   return (
     <>

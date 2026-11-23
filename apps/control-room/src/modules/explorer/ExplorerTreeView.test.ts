@@ -379,7 +379,7 @@ describe("flattenVisibleExplorerRows", () => {
       "const selectable = node.selectable !== false",
     );
     expect(explorerTreeViewSource).toContain(
-      "aria-selected={selectable ? active : undefined}",
+      "aria-selected={selectable ? active || multiSelected : undefined}",
     );
     expect(explorerTreeViewSource).toContain(
       "onSelectNode={selectable ? handleSelect : undefined}",

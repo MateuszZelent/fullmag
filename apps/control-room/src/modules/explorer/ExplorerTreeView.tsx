@@ -81,7 +81,6 @@ import {
   orderedSelectedObjectIds,
   selectionRoleBadgeForObject,
 } from "@/kernel/selection/selectionTypes";
-import { useSelectionSelector } from "@/kernel/selection/useSelection";
 import { selectExplorerNode, selectionFromExplorerNode } from "./explorerSelection";
 import { explorerStatusClassName, explorerStatusLabel } from "./explorerStatusClass";
 import { cn } from "@/shared/utils/className";
@@ -683,7 +682,10 @@ const ExplorerTreeRow = memo(function ExplorerTreeRow({
           <span className="fm-explorer-tree-row__active-field"><Eye size={12} /><span className="fm-explorer-tree-row__active-text">active</span></span>
         ) : null}
         {roleBadge ? (
-          <span className="fm-explorer-tree-row__badge" data-selection-role={roleBadge}>
+          <span
+            className="fm-explorer-tree-row__badge fm-explorer-tree-row__badge--selection-role"
+            data-selection-role={roleBadge}
+          >
             {roleBadge}
           </span>
         ) : null}
@@ -759,11 +761,24 @@ export function ExplorerTreeView({
     }),
     [runtimeResourceData, sceneResourceData, sharedCommandResources, visualizationState.data],
   );
-  const selectedObjectIds = useSelectionSelector(orderedSelectedObjectIds, {
-    isEqual: (previous, next) =>
-      previous.length === next.length &&
-      previous.every((value, index) => value === next[index]),
-  });
+  const subscribeSelection = useCallback(
+    (listener: () => void) =>
+      kernel.selection?.subscribe ? kernel.selection.subscribe(listener) : () => undefined,
+    [kernel.selection],
+  );
+  const getSelectionSnapshot = useCallback(
+    () => (kernel.selection?.get ? kernel.selection.get() : null),
+    [kernel.selection],
+  );
+  const currentSelection = useSyncExternalStore(
+    subscribeSelection,
+    getSelectionSnapshot,
+    () => null,
+  );
+  const selectedObjectIds = useMemo(
+    () => (currentSelection ? orderedSelectedObjectIds(currentSelection) : []),
+    [currentSelection],
+  );
   const ghostOperandKeys = useSyncExternalStore(
     geometryGhostVisibilityStore.subscribe,
     geometryGhostVisibilityStore.getSnapshot,

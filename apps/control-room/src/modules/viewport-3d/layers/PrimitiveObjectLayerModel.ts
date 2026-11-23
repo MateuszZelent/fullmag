@@ -4,11 +4,7 @@ import {
   BufferGeometry,
   CylinderGeometry,
   Euler,
-  ExtrudeGeometry,
-  Matrix4,
-  Path,
   Quaternion,
-  Shape,
   SphereGeometry,
   Vector3,
 } from "three";
@@ -19,13 +15,12 @@ import type { PrimitiveDraft } from "@/kernel/authoring/geometryLifecycleCommand
 
 import type { Viewport3DResourceTracker } from "../viewport3dDiagnostics";
 import type { Viewport3DColors } from "../viewport3dTypes";
+import type { Viewport3DPrimitiveObject } from "../viewport3dPrimitiveModel";
 import {
-  cardinalAxisIndex,
-  planeAxesForCardinalAxis,
-  type Viewport3DBoxCylinderDifferencePreview,
-  type Viewport3DCylinderCylinderDifferencePreview,
-  type Viewport3DPrimitiveObject,
-} from "../viewport3dPrimitiveModel";
+  createBoxCylinderDifferenceGeometry,
+  createCylinderCylinderDifferenceGeometry,
+  createScenePreviewBufferGeometry,
+} from "./previewGeometryBuilder";
 
 export function primitiveDraftOverlayObject(
   draft: PrimitiveDraft,
@@ -80,7 +75,10 @@ export function resolvePrimitiveGroupTransform(
   const tx = object.transform;
   if (!tx) {
     return {
-      position: object.bounds.center,
+      position:
+        object.kind === "composite" || object.kind === "array3d"
+          ? object.translation ?? [0, 0, 0]
+          : object.bounds.center,
       quaternion: [0, 0, 0, 1],
       scale: [1, 1, 1],
     };
@@ -248,6 +246,12 @@ export function createPrimitiveObjectGeometry(
   ) {
     return createCylinderCylinderDifferenceGeometry(object.csgPreview);
   }
+  if (object.kind === "composite" && object.rawGeometry) {
+    return createScenePreviewBufferGeometry(object.rawGeometry);
+  }
+  if (object.kind === "array3d") {
+    return new BufferGeometry();
+  }
 
   const [x, y, z] = object.localSize ?? object.bounds.size;
   if (object.kind === "sphere") {
@@ -300,113 +304,6 @@ export function primitiveObjectSurfaceColor(
   if (resolved.source === "magnetic-theme") return colors.accent;
   if (resolved.source === "object-theme") return colors.mesh;
   return resolved.color;
-}
-
-function createBoxCylinderDifferenceGeometry(
-  preview: Viewport3DBoxCylinderDifferencePreview,
-): BufferGeometry {
-  const [x, y, z] = preview.boxSize;
-  const axisIndex = cardinalAxisIndex(preview.cylinderAxis);
-  if (axisIndex === null) {
-    return new BoxGeometry(x, y, z);
-  }
-
-  const planeAxes = planeAxesForCardinalAxis(axisIndex);
-  const depth = Math.max(preview.boxSize[axisIndex], 1e-12);
-  const planeWidth = Math.max(preview.boxSize[planeAxes[0]], 1e-12);
-  const planeHeight = Math.max(preview.boxSize[planeAxes[1]], 1e-12);
-  const halfWidth = planeWidth / 2;
-  const halfHeight = planeHeight / 2;
-  const radius = Math.min(
-    Math.max(preview.cylinderRadius, 1e-12),
-    Math.max(Math.min(halfWidth, halfHeight) * 0.98, 1e-12),
-  );
-  const centerX = preview.cylinderCenter[planeAxes[0]];
-  const centerY = preview.cylinderCenter[planeAxes[1]];
-  const shape = new Shape();
-  shape.moveTo(-halfWidth, -halfHeight);
-  shape.lineTo(halfWidth, -halfHeight);
-  shape.lineTo(halfWidth, halfHeight);
-  shape.lineTo(-halfWidth, halfHeight);
-  shape.lineTo(-halfWidth, -halfHeight);
-
-  const hole = new Path();
-  hole.absarc(centerX, centerY, radius, 0, Math.PI * 2, true);
-  shape.holes.push(hole);
-
-  const geometry = new ExtrudeGeometry(shape, {
-    bevelEnabled: false,
-    curveSegments: 64,
-    depth,
-  });
-  geometry.translate(0, 0, -depth / 2);
-  if (axisIndex !== 2) {
-    remapExtrudedCardinalAxisGeometry(geometry, axisIndex);
-  }
-  return geometry;
-}
-
-function createCylinderCylinderDifferenceGeometry(
-  preview: Viewport3DCylinderCylinderDifferencePreview,
-): BufferGeometry {
-  const axisIndex = cardinalAxisIndex(preview.cylinderAxis);
-  if (axisIndex === null) {
-    const [x, y, z] = preview.boundsSize;
-    return new BoxGeometry(x, y, z);
-  }
-
-  const planeAxes = planeAxesForCardinalAxis(axisIndex);
-  const innerCenterX =
-    preview.innerCenter[planeAxes[0]] - preview.outerCenter[planeAxes[0]];
-  const innerCenterY =
-    preview.innerCenter[planeAxes[1]] - preview.outerCenter[planeAxes[1]];
-  const shape = new Shape();
-  shape.absarc(0, 0, preview.outerRadius, 0, Math.PI * 2, false);
-  const hole = new Path();
-  hole.absarc(
-    innerCenterX,
-    innerCenterY,
-    preview.innerRadius,
-    0,
-    Math.PI * 2,
-    true,
-  );
-  shape.holes.push(hole);
-
-  const geometry = new ExtrudeGeometry(shape, {
-    bevelEnabled: false,
-    curveSegments: 64,
-    depth: preview.outerHeight,
-  });
-  geometry.translate(0, 0, -preview.outerHeight / 2);
-  if (axisIndex !== 2) {
-    remapExtrudedCardinalAxisGeometry(geometry, axisIndex);
-  }
-  return geometry;
-}
-
-function remapExtrudedCardinalAxisGeometry(
-  geometry: BufferGeometry,
-  axisIndex: 0 | 1,
-): void {
-  // Rotate normals together with positions. Both maps preserve handedness;
-  // swapping only Y/Z would invert the winding of an extrusion along Y.
-  const rotation = axisIndex === 0
-    ? new Matrix4().set(
-        0, 0, 1, 0,
-        1, 0, 0, 0,
-        0, 1, 0, 0,
-        0, 0, 0, 1,
-      )
-    : new Matrix4().set(
-        1, 0, 0, 0,
-        0, 0, -1, 0,
-        0, 1, 0, 0,
-        0, 0, 0, 1,
-      );
-  geometry.applyMatrix4(rotation);
-  geometry.computeBoundingBox();
-  geometry.computeBoundingSphere();
 }
 
 export function shouldRenderPrimitiveObject(

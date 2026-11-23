@@ -310,6 +310,16 @@ function RenderablePrimitiveObject({
     [object],
   );
   const boundsBoxSize = object.localSize ?? object.bounds.size;
+  const hasVertexData = (geometry.getAttribute("position")?.count ?? 0) > 0;
+  const isInstancedArrayRoot = object.kind === "array3d";
+  const boundsLocalCenter: [number, number, number] =
+    object.kind === "composite" || object.kind === "array3d"
+      ? [
+          object.bounds.center[0] - groupTransform.position[0],
+          object.bounds.center[1] - groupTransform.position[1],
+          object.bounds.center[2] - groupTransform.position[2],
+        ]
+      : [0, 0, 0];
 
   return (
     <group
@@ -323,7 +333,7 @@ function RenderablePrimitiveObject({
         primitive: true,
       }}
     >
-      {renderPlan.primitive.visible ? (
+      {renderPlan.primitive.visible && !isInstancedArrayRoot && hasVertexData ? (
         <mesh
           castShadow={surfaceMaterialPlan.castShadow}
           onPointerDown={handlePointerDown}
@@ -375,7 +385,7 @@ function RenderablePrimitiveObject({
           ) : null}
         </mesh>
       ) : null}
-      {renderPlan.wireframe.visible && edgeGeometry ? (
+      {renderPlan.wireframe.visible && !isInstancedArrayRoot && edgeGeometry && hasVertexData ? (
         <lineSegments
           geometry={edgeGeometry}
           onPointerDown={handlePointerDown}
@@ -393,7 +403,7 @@ function RenderablePrimitiveObject({
           />
         </lineSegments>
       ) : null}
-      {renderPlan.points.visible ? (
+      {renderPlan.points.visible && !isInstancedArrayRoot && hasVertexData ? (
         <points
           geometry={geometry}
           renderOrder={RENDER_POLICIES.points.renderOrder}
@@ -410,6 +420,7 @@ function RenderablePrimitiveObject({
       {renderPlan.bounds.visible ? (
         <mesh
           onPointerDown={handlePointerDown}
+          position={boundsLocalCenter}
           userData={{
             fallbackLabel: object.fallbackLabel,
             objectId: object.objectId,

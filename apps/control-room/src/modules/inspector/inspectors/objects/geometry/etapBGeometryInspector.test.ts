@@ -1,6 +1,11 @@
+import { readFileSync } from "node:fs";
+
 import { describe, expect, it } from "vitest";
 
 import type { SceneResource } from "@/kernel/api/apiTypes";
+import { defaultArrayAxisSpec } from "@/kernel/authoring/array3dModel";
+import { resolveArray3DChildBoundsMeters } from "./Array3DLatticeTableSection";
+import { computeDraftSummaryMetrics } from "./geometrySerialization";
 import {
   analyzeDeleteObjectImpact,
   buildBaselineFromScene,
@@ -282,5 +287,99 @@ describe("Etap B Geometry Inspector models: BooleanNode, GeometryNode, Transform
     ]);
     expect(impact.categories.find((c) => c.kind === "field_drives")?.count).toBe(2);
     expect(impact.categories.find((c) => c.kind === "planar_monitors")?.count).toBe(1);
+  });
+
+  it("summarizes composite CSG and Array3D objects with real recursive AABB bounds and preserves raw geometry on serialize", () => {
+    const diffFilm = {
+      geometry_kind: "Difference",
+      geometry_params: {
+        operands: [
+          {
+            enabled: true,
+            geometry: { geometry_kind: "Box", geometry_params: { size: [500e-9, 500e-9, 20e-9] } },
+            label: "Film",
+            operand_id: "op:1",
+          },
+          {
+            enabled: true,
+            geometry: { geometry_kind: "Cylinder", geometry_params: { height: 24e-9, radius: 50e-9 } },
+            label: "Hole",
+            operand_id: "op:2",
+          },
+        ],
+      },
+    };
+    const arrayGeom = {
+      geometry_kind: "Array3D",
+      geometry_params: {
+        axes: [
+          defaultArrayAxisSpec("x", { count: 3, enabled: true, pitch_m: 600e-9 }),
+          defaultArrayAxisSpec("y", { count: 2, enabled: true, pitch_m: 600e-9 }),
+          defaultArrayAxisSpec("z", { count: 1, enabled: false, pitch_m: 100e-9 }),
+        ],
+        child: diffFilm,
+        merge_overlapping: false,
+      },
+    };
+    const scene = {
+      objects: [
+        { geometry: diffFilm, id: "film_diff", name: "FilmDiff" },
+        { geometry: arrayGeom, id: "film_arr", name: "FilmArr" },
+      ],
+      revision: 6,
+    } as unknown as SceneResource;
+
+    const diffDraft = buildBaselineFromScene(
+      { kind: "object.geometry", label: "FilmDiff", moduleSource: "explorer", nodeId: "model:object:film_diff:geometry", objectId: "film_diff", ref: null },
+      scene,
+      false,
+    );
+    expect(diffDraft.compositeSummary).toMatchObject({
+      displayLabel: "Boolean Difference",
+      enabledOperandCount: 2,
+      kind: "Difference",
+      operandCount: 2,
+    });
+    expect(diffDraft.compositeSummary?.boundsMeters?.size).toEqual([500e-9, 500e-9, 20e-9]);
+    expect(computeDraftSummaryMetrics(diffDraft).spanText).toContain("500");
+    expect(computeDraftSummaryMetrics(diffDraft).spanText).not.toContain("100 × 100 × 10");
+    expect(serializeGeometryPayload(diffDraft)).toEqual(diffFilm);
+
+    const arrDraft = buildBaselineFromScene(
+      { kind: "object.geometry", label: "FilmArr", moduleSource: "explorer", nodeId: "model:object:film_arr:geometry", objectId: "film_arr", ref: null },
+      scene,
+      false,
+    );
+    expect(arrDraft.compositeSummary).toMatchObject({
+      dimensionsLabel: "3×2×1",
+      displayLabel: "Array 3D Lattice",
+      instanceCount: 6,
+      kind: "Array3D",
+    });
+    expect(arrDraft.compositeSummary?.boundsMeters?.size[0]).toBeCloseTo(1700e-9, 14);
+    expect(resolveArray3DChildBoundsMeters(scene.objects[0], diffFilm).size).toEqual([500e-9, 500e-9, 20e-9]);
+    expect(resolveArray3DChildBoundsMeters(scene.objects[1], arrayGeom).size).toEqual([500e-9, 500e-9, 20e-9]);
+  });
+
+  it("keeps Array3DLatticeTableSection responsive, Explorer selection-role badges unclipped, and Delete Object button unwrapped", () => {
+    const widgetsCss = readFileSync(
+      new URL("../../../../../design/styles/inspector-widgets.css", import.meta.url),
+      "utf8",
+    );
+    expect(widgetsCss).toContain("@container fm-array3d (max-width: 460px)");
+
+    const explorerCss = readFileSync(
+      new URL("../../../../../design/styles/explorer.css", import.meta.url),
+      "utf8",
+    );
+    expect(explorerCss).toContain(".fm-explorer-tree-row__badge--selection-role");
+    expect(explorerCss).toContain("flex-shrink: 0;");
+    expect(explorerCss).toContain(".fm-explorer-tree-row__badge:not([data-selection-role])");
+
+    const objectGeometrySource = readFileSync(
+      new URL("./ObjectGeometrySpec.tsx", import.meta.url),
+      "utf8",
+    );
+    expect(objectGeometrySource).toContain("whitespace-nowrap");
   });
 });

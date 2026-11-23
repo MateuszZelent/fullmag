@@ -12,6 +12,7 @@ export {
 export {
   analyzeDeleteObjectImpact,
   DeleteObjectImpactDialog,
+  DeleteObjectImpactDialogHost,
   type DeleteObjectImpactCategory,
   type DeleteObjectImpactDialogProps,
   type DeleteObjectImpactSummary,

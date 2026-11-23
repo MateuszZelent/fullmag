@@ -385,8 +385,19 @@
   transform: rotate(90deg);
 }
 
+.fm-explorer-tree-row[data-multi-selected="true"],
+.fm-explorer-tree-row:has([data-selection-role]) {
+  grid-template-columns: var(--fm-space-4) var(--fm-icon-sm) minmax(0, 1fr) auto;
+}
+
+.fm-explorer-tree-row[data-multi-selected="true"] .fm-explorer-tree-row__metadata,
+.fm-explorer-tree-row:has([data-selection-role]) .fm-explorer-tree-row__metadata {
+  max-width: none;
+}
+
 .fm-explorer-tree-row__label {
   min-width: 0;
+  min-inline-size: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -457,6 +468,22 @@
   font-family: var(--fm-font-mono);
   font-size: var(--fm-font-size-2xs);
   white-space: nowrap;
+}
+
+/* Multi-selection role badge ([A · Base], [B1]) stays pinned and unclipped. */
+.fm-explorer-tree-row__badge--selection-role,
+.fm-explorer-tree-row__badge[data-selection-role] {
+  display: inline-flex;
+  align-items: center;
+  flex: 0 0 auto;
+  flex-shrink: 0;
+  max-width: none;
+  overflow: visible;
+  text-overflow: clip;
+  border-color: color-mix(in srgb, var(--fm-accent) 52%, var(--fm-border-subtle));
+  background: color-mix(in srgb, var(--fm-accent) 14%, transparent);
+  color: var(--fm-accent-text);
+  font-weight: 600;
 }
 
 /* Active field badge */
@@ -598,13 +625,13 @@
     display: none;
   }
 
-  .fm-explorer-tree-row__badge {
+  .fm-explorer-tree-row__badge:not([data-selection-role]) {
     max-width: 9ch;
   }
 }
 
 @container fm-explorer-panel (max-width: 319px) {
-  .fm-explorer-tree-row__badge {
+  .fm-explorer-tree-row__badge:not([data-selection-role]) {
     display: none;
   }
 }

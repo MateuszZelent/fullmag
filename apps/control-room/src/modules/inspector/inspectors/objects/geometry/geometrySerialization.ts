@@ -14,6 +14,7 @@ import type { InspectorTone } from "../../../template";
 
 import {
   axisVectorFromSymmetryAxis,
+  buildCompositeGeometrySummary,
   createPolygonVertexRow,
   normalizePrimitiveKind,
   normalizeZero,
@@ -28,6 +29,10 @@ import {
 /* ── Serialization & Parsing ── */
 
 export function serializeGeometryPayload(draft: ObjectGeometrySpecDraft): JsonObject {
+  if (draft.compositeSummary && draft.preservedRawGeometry && draft.csgOperation === "none") {
+    return draft.preservedRawGeometry;
+  }
+
   const rawGeomParams = draft.preservedRawGeometry?.geometry_params;
   const baseParams: Record<string, unknown> =
     rawGeomParams && typeof rawGeomParams === "object" && !Array.isArray(rawGeomParams)
@@ -539,6 +544,7 @@ export function buildBaselineFromScene(
       materialRef: null,
       regionName: "",
       primitiveKind,
+      compositeSummary: null,
       symmetryAxis: "z",
       sizeX: 100e-9,
       sizeY: 100e-9,
@@ -590,6 +596,7 @@ export function buildBaselineFromScene(
       materialRef: null,
       regionName: "",
       primitiveKind: "Box",
+      compositeSummary: null,
       symmetryAxis: "z",
       sizeX: 100e-9,
       sizeY: 100e-9,
@@ -722,6 +729,7 @@ export function buildBaselineFromScene(
         : null,
     regionName: typeof sceneObj.region_name === "string" ? sceneObj.region_name : "",
     primitiveKind,
+    compositeSummary: buildCompositeGeometrySummary(geom),
     symmetryAxis: parseSymmetryAxis(params.axis),
     sizeX:
       typeof rawSize?.[0] === "number"
@@ -827,6 +835,13 @@ export function computeDraftSummaryMetrics(draft: ObjectGeometrySpecDraft): {
   spanText: string | null;
   volumeText: string | null;
 } {
+  if (draft.compositeSummary) {
+    const size = draft.compositeSummary.boundsMeters?.size;
+    return {
+      spanText: size ? formatSpanAuto([size[0], size[1], size[2]]) : null,
+      volumeText: null,
+    };
+  }
   switch (draft.primitiveKind) {
     case "Box":
       return {

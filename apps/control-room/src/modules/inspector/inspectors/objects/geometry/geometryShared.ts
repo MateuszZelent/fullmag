@@ -1,7 +1,17 @@
 import type { JsonObject } from "@/kernel/api/apiTypes";
+import {
+  array3DDimensionsLabel,
+  computeArray3DInstanceCount,
+  parseArray3DGeometry,
+} from "@/kernel/authoring/array3dModel";
 import type { GeometryObjectDraft } from "@/kernel/authoring/object-edit/objectEditTypes";
 import { parseDraftQuantityField } from "@/kernel/authoring/object-edit/quantityDraftFields";
 import { primitiveDraftBaseName } from "@/kernel/authoring/uniqueObjectName";
+import { parseCompositeGeometry } from "@/modules/explorer/builders/geometryTreeExplorerNodes";
+import {
+  computeSceneGeometryBoundsMeters,
+  type SceneGeometryBoundsMeters,
+} from "@/shared/domain/geometry/sceneGeometryBounds";
 
 import type { InspectorPanelProps } from "../../../inspectorTypes";
 import { formatLengthAuto } from "../../../panels/model-roots/SpecInspectorHost";
@@ -36,6 +46,67 @@ export interface PolygonVertexRow {
   readonly y_m: number;
 }
 
+export interface CompositeGeometrySummary {
+  readonly boundsMeters: SceneGeometryBoundsMeters | null;
+  readonly dimensionsLabel: string | null;
+  readonly displayLabel: string;
+  readonly enabledOperandCount: number;
+  readonly instanceCount: number | null;
+  readonly kind: string;
+  readonly op: "union" | "subtract" | "intersect" | "xor" | "slice" | "array";
+  readonly operandCount: number;
+}
+
+export function buildCompositeGeometrySummary(
+  geometry: unknown,
+): CompositeGeometrySummary | null {
+  const parsed = parseCompositeGeometry(geometry);
+  if (!parsed.op) return null;
+
+  const boundsMeters = computeSceneGeometryBoundsMeters(geometry);
+  if (parsed.op === "array") {
+    const parsedArray = parseArray3DGeometry(geometry);
+    const instanceCount = parsedArray ? computeArray3DInstanceCount(parsedArray.axes) : 1;
+    const dimensionsLabel = parsedArray ? array3DDimensionsLabel(parsedArray.axes) : "1×1×1";
+    return {
+      boundsMeters,
+      dimensionsLabel,
+      displayLabel: "Array 3D Lattice",
+      enabledOperandCount: 1,
+      instanceCount,
+      kind: "Array3D",
+      op: "array",
+      operandCount: 1,
+    };
+  }
+
+  const labelByOp: Record<Exclude<CompositeGeometrySummary["op"], "array">, string> = {
+    intersect: "Boolean Intersection",
+    slice: "Slice Plane Geometry",
+    subtract: "Boolean Difference",
+    union: "Boolean Union",
+    xor: "Boolean XOR",
+  };
+  const kindByOp: Record<Exclude<CompositeGeometrySummary["op"], "array">, string> = {
+    intersect: "Intersection",
+    slice: "SlicePlane",
+    subtract: "Difference",
+    union: "Union",
+    xor: "Xor",
+  };
+
+  return {
+    boundsMeters,
+    dimensionsLabel: null,
+    displayLabel: labelByOp[parsed.op],
+    enabledOperandCount: parsed.operands.filter((op) => op.enabled).length,
+    instanceCount: null,
+    kind: parsed.rawKind ?? kindByOp[parsed.op],
+    op: parsed.op,
+    operandCount: parsed.operands.length,
+  };
+}
+
 export interface ObjectGeometrySpecDraft {
   mode: "committed" | "draft-new" | "missing";
   objectId: string;
@@ -43,6 +114,7 @@ export interface ObjectGeometrySpecDraft {
   materialRef: string | null;
   regionName: string;
   primitiveKind: CanonicalPrimitiveKind;
+  compositeSummary: CompositeGeometrySummary | null;
   symmetryAxis: "x" | "y" | "z";
   // Box / Ellipsoid
   sizeX: number;
