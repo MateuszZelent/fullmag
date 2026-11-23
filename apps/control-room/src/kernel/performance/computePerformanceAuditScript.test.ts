@@ -101,7 +101,10 @@ describe("compute performance audit script", () => {
     expect(auditScript).toContain("selectMeshDetailsRuntimeStatus");
     expect(auditScript).toContain("meshDetailsRuntimeStatusEquals");
     expect(auditScript).toContain("checkAirboxInspectorPanelsResourceOwnership");
-    expect(auditScript).toContain("AirboxMeshBuildPanel build gates");
+    expect(auditScript).toContain("checkAirboxMeshBuildSpecResourceGates");
+    expect(auditScript).toContain("AirboxMeshBuildSpec build gates");
+    expect(auditScript).toContain("mesh build resources require FEM lane and active runtime gate");
+    expect(auditScript).toContain("useSafeMeshBuildCurrent");
     expect(auditScript).toContain("shouldLoadRuntimeMeshBuild");
     expect(auditScript).toContain("shouldLoadRuntimeMeshSummary");
     expect(auditScript).toContain("shouldLoadRuntimeMeshManifest");

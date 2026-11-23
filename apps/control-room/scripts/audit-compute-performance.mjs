@@ -340,6 +340,7 @@ export function runComputePerformanceAudit() {
   checkObjectVisualizationPanelNumberFieldCommitBoundary();
   checkMeshDetailsPanelSessionStatusSelector();
   checkAirboxInspectorPanelsResourceOwnership();
+  checkAirboxMeshBuildSpecResourceGates();
   checkStudyInspectorPanelSessionStatusSelector();
   checkMeshBuildDialogSessionStatusSelector();
   checkShellSelectorHooks();
@@ -939,6 +940,32 @@ function checkAirboxInspectorPanelsResourceOwnership() {
     "import { useSessionStatus }",
     "const sessionStatus = useSessionStatus()",
     "useMeshSharedDomainTopologyResource",
+  ]);
+}
+
+function checkAirboxMeshBuildSpecResourceGates() {
+  const source = readFileSync(
+    path.join(airboxInspectorPanelsPath, "AirboxMeshBuildSpec.tsx"),
+    "utf8",
+  );
+  requirePatterns(source, "AirboxMeshBuildSpec build gates", [
+    [/const\s+femEnabled\s*=\s*lane\s*!==\s*"fdm"/, "FEM resources exclude the FDM lane"],
+    [
+      /const\s+buildEnabled\s*=\s*femEnabled\s*&&\s*shouldLoadRuntimeMeshBuild\s*\(\s*true\s*,\s*runtimeStatus\s*\)/,
+      "mesh build resources require FEM lane and active runtime gate",
+    ],
+    [
+      /useSafeMeshBuildCurrent\s*\(\s*\{\s*enabled:\s*buildEnabled\s*\}\s*\)/,
+      "current mesh build uses buildEnabled",
+    ],
+    [
+      /useSafeMeshBuildLatestSuccessful\s*\(\s*\{\s*enabled:\s*buildEnabled\s*\}\s*\)/,
+      "latest successful mesh build uses buildEnabled",
+    ],
+    [
+      /useMeshUniverseReportResource\s*\(\s*\{\s*enabled:\s*femEnabled\s*&&\s*shouldLoadRuntimeMeshSummary\s*\(\s*true\s*,\s*runtimeStatus\s*\)\s*,?\s*\}\s*\)/s,
+      "universe report is enabled only for active FEM summary",
+    ],
   ]);
 }
 
