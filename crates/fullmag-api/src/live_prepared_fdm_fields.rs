@@ -56,9 +56,24 @@ pub(crate) fn uses_prepared_field_input(snapshot: &SessionStateResponse) -> bool
 }
 
 fn retired_authoring_input_is_current(snapshot: &SessionStateResponse) -> bool {
+    use crate::types::{RuntimeLifecycleState, StageLifecycleState};
+
     snapshot.run.as_ref().is_some_and(|run| run.status == "cancelled")
         && snapshot.session.status == "awaiting_command"
-        && snapshot.stage_execution.is_none()
+        && snapshot.stage_execution.as_ref().is_none_or(|execution| {
+            // The accepted projector can retain the cancelled, unstarted stages
+            // after authoring retires the held Study.
+            execution.runtime_state == RuntimeLifecycleState::Cancelled
+                && execution.active_stage_index.is_none()
+                && execution.completed_stage_indexes.is_empty()
+                && execution.stages.iter().all(|stage| {
+                    stage.status == StageLifecycleState::Cancelled
+                        && stage.started_at_unix_ms.is_none()
+                        && stage.applied_step.is_none_or(|step| step == 0)
+                        && stage.completed_step.is_none_or(|step| step == 0)
+                        && stage.applied_time_seconds.is_none_or(|time| time == 0.0)
+                })
+        })
         && crate::live_authored_initial_state::current_publication(snapshot).is_some()
 }
 
@@ -568,6 +583,31 @@ mod tests {
             disabled_reason(&snapshot),
             Err("Commit a scene before computing fields."),
         );
+        use crate::types::{RuntimeLifecycleState, StageLifecycleState};
+        let stage = crate::session::accepted_stage_record(
+            "relax",
+            Some("relaxation".into()),
+            StageLifecycleState::Cancelled,
+        );
+        snapshot.stage_execution = Some(crate::session::accepted_stage_execution_state(
+            vec![stage],
+            RuntimeLifecycleState::Cancelled,
+        ));
+        assert!(uses_prepared_field_input(&snapshot));
+        assert_eq!(
+            disabled_reason(&snapshot),
+            Err("Commit a scene before computing fields.")
+        );
+
+        snapshot.stage_execution.as_mut().unwrap().stages[0].applied_step = Some(1);
+        assert!(!uses_prepared_field_input(&snapshot));
+        snapshot.stage_execution.as_mut().unwrap().stages[0].applied_step = None;
+        snapshot.stage_execution.as_mut().unwrap().stages[0].started_at_unix_ms = Some(1);
+        assert!(!uses_prepared_field_input(&snapshot));
+        snapshot.stage_execution.as_mut().unwrap().stages[0].started_at_unix_ms = None;
+        snapshot.stage_execution.as_mut().unwrap().runtime_state = RuntimeLifecycleState::Running;
+        assert!(!uses_prepared_field_input(&snapshot));
+
         snapshot.run.as_mut().unwrap().status = "failed".into();
         assert!(!uses_prepared_field_input(&snapshot));
         snapshot.run.as_mut().unwrap().status = "running".into();
