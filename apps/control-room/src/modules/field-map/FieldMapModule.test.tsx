@@ -933,6 +933,22 @@ describe("FieldMapModule planar state ownership", () => {
             geometry_kind: "box",
             geometry_params: { size: [100e-9, 100e-9, 20e-9] },
           },
+          regions: [
+            {
+              region_id: "region-1",
+              enabled: true,
+              priority: 1,
+              frame: "object",
+              shape: { kind: "box", center: [0, 0, 0], size: [100e-9, 100e-9, 20e-9] },
+              texture_override: {
+                initial_magnetization: {
+                  kind: "preset_texture",
+                  preset_kind: "uniform",
+                  preset_params: { direction: [1, 0, 0] },
+                },
+              },
+            },
+          ],
         },
       ],
     } as SceneResource;
@@ -1037,6 +1053,29 @@ describe("FieldMapModule planar state ownership", () => {
         normalMin: -10e-9,
         normalMax: 10e-9,
       });
+
+      const planar = mocks.visualization.data!.planar as {
+        field_overlays: Array<Record<string, unknown>>;
+      };
+      const allOverlay = planar.field_overlays[0]!;
+      const regionOverlay = {
+        ...allOverlay,
+        id: "region-1-layer",
+        view_scope: { kind: "region", scope_id: "free-layer", region_id: "region-1" },
+        component: "x",
+        colormap: "magma",
+        raster_opacity: 0.55,
+      };
+      mocks.visualization.data = {
+        planar: { ...planar, field_overlays: [...planar.field_overlays, regionOverlay] },
+      };
+      mocks.selection = regionSelection("free-layer", "region-1");
+      await act(async () => root.render(<FieldMapModule />));
+      expect(mocks.renderModel).toHaveBeenLastCalledWith(expect.objectContaining({
+        colormap: "magma",
+        component: "x",
+        rasterOpacity: 0.55,
+      }));
 
       // As soon as real backend solver data is ready, backend data takes precedence
       mocks.metaError = null;

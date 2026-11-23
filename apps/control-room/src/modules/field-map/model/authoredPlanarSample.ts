@@ -804,6 +804,7 @@ function compileAuthoredObjects(
       if (scopedRegionId && regionId === scopedRegionId) {
         scopedRegionRecord = reg;
       }
+      if (scopedRegionId && regionId !== scopedRegionId) continue;
       const init = asRecord(asRecord(reg.texture_override)?.initial_magnetization);
       if (!init || isFieldFileAsset(init)) continue;
       const regBounds = resolveTargetBoundsMeters(scene, {

@@ -368,4 +368,85 @@ describe("buildAuthoredPlanarSample", () => {
     expect(sample!.scalar[centerIdx]).toBeCloseTo(1, 5);
     expect(sample!.scalar[0]).toBeCloseTo(-1, 5);
   });
+
+  it("keeps a region-scoped authored fallback on the selected region texture", () => {
+    const scene = {
+      revision: 5,
+      magnetization_assets: [
+        {
+          id: "mag-bg",
+          kind: "preset_texture",
+          name: "Down",
+          preset_kind: "uniform",
+          preset_version: 2,
+          preset_params: { direction: [0, 0, -1] },
+        },
+      ],
+      objects: [
+        {
+          id: "film-1",
+          role: "magnet",
+          visible: true,
+          magnetization_ref: "mag-bg",
+          geometry: {
+            geometry_kind: "box",
+            geometry_params: { size: [100e-9, 100e-9, 10e-9] },
+          },
+          regions: [
+            {
+              region_id: "selected",
+              enabled: true,
+              priority: 1,
+              frame: "object",
+              shape: { kind: "box", center: [0, 0, 0], size: [30e-9, 30e-9, 10e-9] },
+              texture_override: {
+                initial_magnetization: {
+                  kind: "preset_texture",
+                  preset_kind: "uniform",
+                  preset_params: { direction: [0, 0, 1] },
+                },
+              },
+            },
+            {
+              region_id: "higher-priority-overlap",
+              enabled: true,
+              priority: 10,
+              frame: "object",
+              shape: { kind: "box", center: [0, 0, 0], size: [30e-9, 30e-9, 10e-9] },
+              texture_override: {
+                initial_magnetization: {
+                  kind: "preset_texture",
+                  preset_kind: "uniform",
+                  preset_params: { direction: [0, 1, 0] },
+                },
+              },
+            },
+          ],
+        },
+      ],
+    } as unknown as SceneResource;
+
+    const selectedRegionSample = buildAuthoredPlanarSample({
+      scene,
+      plane: "xy",
+      positionFraction: 0.5,
+      resolution: [40, 40],
+      component: "z",
+      viewScope: { kind: "region", scope_id: "film-1", region_id: "selected" },
+    });
+    const objectSample = buildAuthoredPlanarSample({
+      scene,
+      plane: "xy",
+      positionFraction: 0.5,
+      resolution: [40, 40],
+      component: "z",
+      viewScope: { kind: "object", scope_id: "film-1" },
+    });
+
+    expect(selectedRegionSample).not.toBeNull();
+    expect(objectSample).not.toBeNull();
+    const centerIdx = 20 * 40 + 20;
+    expect(selectedRegionSample!.scalar[centerIdx]).toBeCloseTo(1, 5);
+    expect(objectSample!.scalar[centerIdx]).toBeCloseTo(0, 5);
+  });
 });

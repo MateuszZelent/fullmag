@@ -36,6 +36,7 @@ import { useSessionStatusSelector } from "@/kernel/resources/useSessionStatus";
 import { useSessionScopedResourceKey } from "@/kernel/resources/useSessionScopedResourceKey";
 import { sessionRequestScopeKey } from "@/kernel/resources/sessionResourceIdentity";
 import { useSelectionSelector } from "@/kernel/selection/useSelection";
+import { visualizationTargetIdForSceneObject } from "@/kernel/selection/selectionTypes";
 import { resolveVisualizationTargetFromSelection } from "@/kernel/visualization/ObjectVisualizationController";
 import {
   planarTargetPresentationReason,
@@ -539,6 +540,18 @@ function useFieldMapModuleController() {
     const visible = overlayLayers.filter(layerVisible);
     if (visible.length === 0) return null;
     const target = selectedFieldContext.target;
+    if (target?.kind === "region") {
+      const exact = visible.find(
+        (layer) =>
+          layer.view_scope.kind === "region" &&
+          visualizationTargetIdForSceneObject(
+            layer.view_scope.scope_id,
+            layer.view_scope.region_id,
+          ) === target.id &&
+          resolveCanonicalQuantityId(layer.quantity_id) === "m",
+      );
+      if (exact) return exact;
+    }
     if (target?.kind === "object") {
       const exact = visible.find(
         (layer) =>
