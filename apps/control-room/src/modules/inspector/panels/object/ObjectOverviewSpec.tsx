@@ -100,10 +100,7 @@ import {
   type SceneObjectItem as SceneObject,
   SpecInspectorHost,
 } from "../model-roots/SpecInspectorHost";
-import {
-  buildAbsorbingBoundaryPatch,
-  createLayerDraft,
-} from "../ObjectAbsorbingBoundaryPanelModel";
+import { initialAbsorbingBoundary } from "@/shared/domain/physics/absorbingBoundary";
 import {
   objectEditMetadataEquals,
   rebaseDirtyDraftOntoUnchangedObject,
@@ -689,40 +686,33 @@ export function ObjectOverviewInspectorPanel({ selection }: InspectorPanelProps)
     async (enabled: boolean) => {
       if (!objectId || sceneMutationLockReason) return;
       const baseRevision = scene.data?.revision ?? null;
-      const built = buildAbsorbingBoundaryPatch(
-        {
-          enabled,
-          legacy: false,
-          layers: [createLayerDraft("layer-1", "Layer 1")],
-        },
-        baseRevision,
-      );
-      if ("error" in built) return;
-
       const context = buildAuthoringContext();
       const updated = await runAuthoringMutationWithHistory(
         context,
         `${enabled ? "Enable" : "Disable"} absorbing boundary ${objectId}`,
         async ({ baseRevision: capturedRev }) => {
           const commitRev = capturedRev ?? baseRevision;
-          const nextBuilt = buildAbsorbingBoundaryPatch(
-            {
-              enabled,
-              legacy: false,
-              layers: [createLayerDraft("layer-1", "Layer 1")],
-            },
-            commitRev,
-          );
-          if ("error" in nextBuilt) throw new Error(nextBuilt.error);
           return kernel.api.model.patchObject(
             objectId,
-            nextBuilt.patch,
+            {
+              base_revision: commitRev,
+              absorbing_boundary: enabled ? initialAbsorbingBoundary() : null,
+            },
             authoringWriteOptions(commitRev, currentSessionScopeKey),
           );
         },
       );
+      if (context.isCurrentSessionScope?.() === false) return;
       const rev = fallbackRevision(updated.revision ?? baseRevision);
-      publishCommittedSceneResource(kernel.resources, updated, rev);
+      publishCommittedSceneResource(
+        kernel.resources,
+        updated,
+        rev,
+        undefined,
+        false,
+        currentSessionScopeKey,
+        kernel.api.resourceCacheScope,
+      );
       if (typeof rev === "number") {
         invalidateAuthoringMutationDependents(kernel.resources, "material", rev);
       } else {
@@ -733,6 +723,7 @@ export function ObjectOverviewInspectorPanel({ selection }: InspectorPanelProps)
       buildAuthoringContext,
       currentSessionScopeKey,
       kernel.api.model,
+      kernel.api.resourceCacheScope,
       kernel.resources,
       objectId,
       scene.data?.revision,

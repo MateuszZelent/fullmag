@@ -95,7 +95,7 @@ async function addAbsorbingBoundary(context: CommandContext): Promise<CommandRes
   if (selection.get() !== sourceSelection || pendingEditReason(context)) {
     return { status: "completed", message: "Absorbing boundary saved." };
   }
-  const nodeId = `model:object:${objectId}:magnetic-parameters:absorbing-boundary`;
+  const nodeId = `model:object:${objectId}:absorbing-boundary`;
   selection.set({
     kind: "object.absorbing-boundary", label: "Absorbing Boundary", nodeId, objectId,
     ref: { type: "scene-object", kind: "object.absorbing-boundary", nodeId, objectId,

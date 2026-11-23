@@ -954,7 +954,7 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
 
   useEffect(() => {
     if (!modelTabActive || selectedRef?.type !== "scene-object" ||
-      selectedRef.kind !== "object.magnetic-parameters") {
+      selectedRef.kind !== "object.root") {
       parentWithoutAbsorbingBoundary.current = null;
       return;
     }
