@@ -13,15 +13,18 @@ vi.mock("./FallbackTopologyMeshLayer", () => ({
 }));
 
 vi.mock("./MeshPartLayer", () => ({
-  MeshPartLayer: ({ modeCompositionSnapshot, partModel, renderVisible }: {
+  MeshPartLayer: ({ modeCompositionSnapshot, partModel, renderVisible, settings }: {
     modeCompositionSnapshot?: { status: string } | null;
     renderVisible?: boolean;
     partModel: { part: { id: string } };
+    settings: { shaderVisible: boolean; wireframeVisible: boolean };
   }) => (
     <span
       data-mode-status={modeCompositionSnapshot?.status ?? "none"}
       data-part-id={partModel.part.id}
       data-render-visible={renderVisible ?? true}
+      data-wireframe-visible={settings.wireframeVisible}
+      data-shader-visible={settings.shaderVisible}
     />
   ),
 }));
@@ -62,6 +65,56 @@ describe("TopologyMeshLayer", () => {
     }
   });
 
+
+  it("lets the authored texture own the solid while preserving the FEM wireframe", () => {
+    const part = (id: string, objectId: string) => ({
+      part: { id, object_id: objectId },
+      surfaceIndices: new Uint32Array([0, 1, 2]),
+    });
+    const topologyModel = {
+      positions: new Float32Array(9),
+      magneticParts: [part("part:disk", "disk_geom"), part("part:other", "other")],
+    } as never;
+    const primitiveModel = {
+      objects: [{ objectId: "disk", role: "magnet" }],
+    } as never;
+    for (const authoredTextureSurfaceObjectIds of [undefined, new Set(["disk"])]) {
+      const markup = renderToStaticMarkup(
+        <TopologyMeshLayer
+          authoredTextureSurfaceObjectIds={authoredTextureSurfaceObjectIds}
+          colors={{} as never}
+          fieldModel={null}
+          getPartSettings={() => ({
+            ...DEFAULT_OBJECT_VISUALIZATION,
+            visible: true,
+            shaderVisible: true,
+            wireframeVisible: true,
+            surfaceColorSource: "orientation",
+            activeQuantityId: "m",
+          })}
+          materialProfile={{} as never}
+          magnetizationTexturePreviews={new Map()}
+          meshQualityColors={null}
+          meshQualityOverlayVisible={false}
+          onSelectPart={() => undefined}
+          primitiveModel={primitiveModel}
+          topologyFreshness="current"
+          topologyModel={topologyModel}
+          tracker={new Viewport3DResourceTracker()}
+          vectorColorMode="orientation"
+          vectorScale={1}
+          vectorStyle={{}}
+        />,
+      );
+      expect(markup).toContain(
+        'data-part-id="part:disk" data-render-visible="true" data-wireframe-visible="true" ' +
+          'data-shader-visible="' + String(authoredTextureSurfaceObjectIds === undefined) + '"',
+      );
+      expect(markup).toContain(
+        'data-part-id="part:other" data-render-visible="true" data-wireframe-visible="true" data-shader-visible="true"',
+      );
+    }
+  });
 
   it("fails closed instead of rendering global FEM topology without magnetic carriers", () => {
     const markup = renderToStaticMarkup(
