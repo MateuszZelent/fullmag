@@ -20,7 +20,7 @@ import { combineViewport3DBounds, type Viewport3DBounds } from "./viewport3dRend
 
 const materialProfile = resolveViewport3DMaterialProfile(
   getViewport3DVisualProfile(DEFAULT_VIEWPORT_3D_VISUAL_PROFILE_ID),
-  { lightingMode: "flat" },
+  { lightingMode: "studio" },
 );
 const authoredGeometrySettings = { ...DEFAULT_OBJECT_VISUALIZATION, primitiveVisible: true };
 const previewSettings = () => authoredGeometrySettings;
@@ -76,6 +76,8 @@ export function SessionPreviewViewport({ scene }: { scene: SceneResource }) {
       <Viewport3DErrorBoundary diagnosticRecorder={previewDiagnostics}>
         <Viewport3DCanvas className="min-h-0 flex-1" data-session-preview-viewport="" frameloop="demand">
           <Viewport3DBackground colors={colors} mode="solid" strength={0} tracker={tracker} />
+          <hemisphereLight args={["#ffffff", "#8c99b0", 1.2]} />
+          <directionalLight intensity={2} position={[3, -4, 6]} />
           <PreviewCamera bounds={bounds} />
           <PrimitiveObjectLayer colors={colors} getObjectSettings={previewSettings}
             materialProfile={materialProfile} onSelectObject={ignorePick} primitiveModel={model} tracker={tracker} />
