@@ -316,9 +316,11 @@ memory.
    `DIRECT_SOLVE` without `DEMAG_SOLVE` fail closed), `fem_gpu_strict_execution_contract` (the planner requires the
    bit of the realization the workspace reports, both plans pass strict validation, the ABI query returns the same
    value and `UNAVAILABLE` for hybrid CPU Poisson), and the `fullmag-runner` tests for the receipt parser, the header
-   mirror, the provenance field and the demag runtime metadata. The two strict film relaxations are **NOT VERIFIED**:
-   the managed package could not be rebuilt, because `just docker-dev` refuses a backend whose health is not
-   `healthy`, and the API of this group stays diagnostic-only after the previous rebuild.
+   mirror, the provenance field and the demag runtime metadata. With the managed package built from `2af98abd3`, two strict 50-step relaxations of the prism film mesh
+   (36 576 nodes) pass: CG/AMG commits required and executed masks `0x70f` with `resolved_linear_solver`
+   `hypre_krylov` (`runtime_solver=HyprePCG`); cuDSS commits `0x150f` with `cudss_direct` (`runtime_solver=CudssDirect`).
+   The CG/AMG table at step 50 is bit-identical to the run before this change; the cuDSS table differs from its
+   earlier run by at most $2\times10^{-11}$ relative (factorization round-off).
 7. Memory preflight. `fem_cudss_poisson_budget_contract` passes: a 200-row SPD matrix factors within the budget
    (estimated peak 437 884 bytes) and solves to $1.2\times10^{-11}$, and a 1-byte cap rejects it after the analysis,
    before the factorization. The tetrahedral film (4 082 076 rows, two steps, with the override) was run as a
@@ -331,6 +333,9 @@ memory.
    started.` The estimated factor nonzeros match the $7.43\times10^{9}$ measured before. After the analysis
    `cudaMemGetInfo` reported no free device memory; device memory use peaked 6 043 MiB above the baseline
    (`nvidia-smi`, 5 s samples) and the process tree peaked at 22.8 GB of host memory.
+   The same case with the managed package (4 089 322 rows after remeshing) stopped with the same error after 600 s
+   including meshing. The 89 732-node, 723 115-row case of the earlier measurements still runs with cuDSS: estimated
+   device peak 5 079 730 404 bytes against a budget of 5 276 434 432 bytes, 20 strict LLG steps, receipt `0x11df`.
 
 (limitations)=
 ## Limitations
