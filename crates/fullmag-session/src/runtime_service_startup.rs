@@ -29,6 +29,26 @@ pub struct RuntimeServiceStartupGuard {
 }
 
 impl RuntimeServiceStartupGuard {
+    /// Recovery preview may lock an existing gate, never initialize it.
+    pub fn try_acquire_existing(root: &Path) -> Result<Option<Self>> {
+        crate::writer::require_local_filesystem(root)?;
+        let path = checked_path(root, RUNTIME_SERVICE_STARTUP_GATE_LOCK_PATH)?;
+        reject_link(&path)?;
+        let mut file = lock_file_options().open(&path)?;
+        validate_lock_file(&file)?;
+        match file.try_lock() {
+            Ok(()) => {},
+            Err(TryLockError::WouldBlock) => return Ok(None),
+            Err(TryLockError::Error(error)) => return Err(error.into()),
+        }
+        reject_link(&path)?;
+        #[cfg(unix)]
+        { use std::os::unix::fs::MetadataExt;let held=file.metadata()?;let named=fs::symlink_metadata(&path)?;
+          if held.dev()!=named.dev() || held.ino()!=named.ino() || held.nlink()!=1 {bail!("runtime startup gate inode changed");} }
+        validate_existing_descriptor(&mut file)?;
+        Ok(Some(Self { _lock: file }))
+    }
+
     /// Try to reserve startup and owner publication for this session store.
     ///
     /// `None` means another process currently holds the native reservation.

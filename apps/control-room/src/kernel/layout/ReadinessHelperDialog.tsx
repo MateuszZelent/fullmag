@@ -8,6 +8,7 @@ import { resolveScratchAuthoringAction } from "@/kernel/authoring/scratchAuthori
 import { toChecklist } from "@/kernel/authoring/scratchAuthoringReadiness";
 import type { CommandContext } from "@/kernel/commands/commandTypes";
 import { useModelReadinessResource } from "@/kernel/resources/studyRuntimeResources";
+import { useSessionStatusSelector } from "@/kernel/resources/useSessionStatus";
 import type { KernelApi } from "@/kernel/types";
 import { FemMeshReadinessGuideCard } from "@/modules/inspector/public";
 import { Button } from "@/shared/ui/Button";
@@ -30,6 +31,9 @@ export function ReadinessHelperHeaderControl({
 }) {
   const [open, setOpen] = useState(false);
   const readiness = useModelReadinessResource({ enabled: true });
+  const sceneRevision = useSessionStatusSelector(
+    (status) => status.data?.resources?.scene_revision ?? null,
+  );
   const checks = readiness.data ? toChecklist(readiness.data) : [];
   const incompleteChecks = checks.filter((check) => check.state !== "complete");
   const incompleteCount = incompleteChecks.length;
@@ -39,6 +43,9 @@ export function ReadinessHelperHeaderControl({
     : null;
 
   const isReady = Boolean(readiness.data?.ready_to_run && incompleteCount === 0);
+  const preparationOwnsMesh = isReady &&
+    readiness.data?.preparation_owns_mesh === true &&
+    readiness.data.scene_revision === sceneRevision;
   const helperStatus: "attention" | "loading" | "ready" = isReady
     ? "ready"
     : readiness.data
@@ -103,7 +110,9 @@ export function ReadinessHelperHeaderControl({
                   readiness={readiness}
                   onCloseModal={() => setOpen(false)}
                 />
-                <FemMeshReadinessGuideCard onNavigate={() => setOpen(false)} />
+                {!preparationOwnsMesh ? (
+                  <FemMeshReadinessGuideCard onNavigate={() => setOpen(false)} />
+                ) : null}
               </>
             ) : null}
           </div>

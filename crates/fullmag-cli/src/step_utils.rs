@@ -488,6 +488,9 @@ pub(crate) fn initial_step_update(
     };
 
     match backend_plan {
+        BackendPlanIR::AntennaRetainedCurrentFieldInspection(_) | BackendPlanIR::AntennaRetainedDirectFieldInspection(_) | BackendPlanIR::AntennaRetainedPreparationFieldInspection(_) => {
+            antenna_inspection_step_update(stats, false)
+        }
         BackendPlanIR::AntennaFieldOnly(_) => fullmag_runner::StepUpdate {
             coupled_checkpoint: None, stats, grid: [0, 0, 0], fem_mesh_generation_id,
             magnetization: None, preview_field: None, cached_preview_fields: None,
@@ -690,6 +693,7 @@ pub(crate) fn final_stage_step_update(
         .expect("single step should offset");
 
     Some(match backend_plan {
+        BackendPlanIR::AntennaRetainedCurrentFieldInspection(_) | BackendPlanIR::AntennaRetainedDirectFieldInspection(_) | BackendPlanIR::AntennaRetainedPreparationFieldInspection(_) => return None,
         BackendPlanIR::AntennaFieldOnly(_) => return None,
         BackendPlanIR::AntennaExternalLeadInspection(_) => {
             antenna_inspection_step_update(stats, finished)
@@ -799,6 +803,9 @@ pub(crate) fn snapshot_step_update_from_stats(
     finished: bool,
 ) -> fullmag_runner::StepUpdate {
     match backend_plan {
+        BackendPlanIR::AntennaRetainedCurrentFieldInspection(_) | BackendPlanIR::AntennaRetainedDirectFieldInspection(_) | BackendPlanIR::AntennaRetainedPreparationFieldInspection(_) => {
+            antenna_inspection_step_update(stats, finished)
+        }
         BackendPlanIR::AntennaFieldOnly(_) => {
             let mut update = initial_step_update(backend_plan, fem_mesh_generation_id);
             update.stats = stats;
@@ -970,6 +977,7 @@ pub(crate) fn validate_imported_magnetization(
     let plan = fullmag_plan::plan(&candidate)
         .map_err(|error| anyhow::anyhow!(error.to_string()))?;
     let expected_vectors = match &plan.backend_plan {
+        BackendPlanIR::AntennaRetainedCurrentFieldInspection(_) | BackendPlanIR::AntennaRetainedDirectFieldInspection(_) | BackendPlanIR::AntennaRetainedPreparationFieldInspection(_) => bail!("retained-current H-only inspection cannot import magnetic state"),
         BackendPlanIR::AntennaFieldOnly(_) => bail!("field_only cannot import magnetic state"),
         BackendPlanIR::AntennaExternalLeadInspection(_) => {
             bail!("antenna inspection does not accept a magnetization import")
@@ -1140,6 +1148,7 @@ pub(crate) fn apply_continuation_initial_state(
 fn planned_fem_mesh_node_count(problem: &ProblemIR) -> Result<Option<usize>> {
     let plan = fullmag_plan::plan(problem).map_err(|error| anyhow::anyhow!(error.to_string()))?;
     Ok(match plan.backend_plan {
+        BackendPlanIR::AntennaRetainedCurrentFieldInspection(_) | BackendPlanIR::AntennaRetainedDirectFieldInspection(_) | BackendPlanIR::AntennaRetainedPreparationFieldInspection(_) => None,
         BackendPlanIR::AntennaFieldOnly(_) => None,
         BackendPlanIR::Fem(fem) => Some(fem.mesh.nodes.len()),
         BackendPlanIR::FemEigen(fem) => Some(fem.mesh.nodes.len()),
@@ -1206,6 +1215,9 @@ pub(crate) fn continuation_source_from_backend_plan(
     backend_plan: &BackendPlanIR,
 ) -> ContinuationSource {
     match backend_plan {
+        BackendPlanIR::AntennaRetainedCurrentFieldInspection(_) | BackendPlanIR::AntennaRetainedDirectFieldInspection(_) | BackendPlanIR::AntennaRetainedPreparationFieldInspection(_) => ContinuationSource::Unsupported(
+            "retained-current H-only inspection has no magnetic continuation state".to_string(),
+        ),
         BackendPlanIR::AntennaFieldOnly(_) => ContinuationSource::Unsupported("field_only has no magnetic continuation state".to_string()),
         BackendPlanIR::AntennaExternalLeadInspection(_) => ContinuationSource::Unsupported(
             "antenna inspection does not define a magnetic continuation carrier".to_string(),
@@ -1284,6 +1296,7 @@ pub(crate) fn resample_continuation_if_cross_backend(
         .map_err(|e| anyhow::anyhow!("pre-plan for cross-backend transfer failed: {}", e))?;
 
     match (source, &next_plan.backend_plan) {
+        (_, BackendPlanIR::AntennaRetainedCurrentFieldInspection(_) | BackendPlanIR::AntennaRetainedDirectFieldInspection(_) | BackendPlanIR::AntennaRetainedPreparationFieldInspection(_)) => bail!("retained-current H-only inspection cannot receive magnetic continuation state"),
         (_, BackendPlanIR::AntennaFieldOnly(_)) => bail!("field_only cannot receive magnetic continuation state"),
         (ContinuationSource::Fdm(_), BackendPlanIR::Fem(_))
         | (ContinuationSource::Fdm(_), BackendPlanIR::FemEigen(_))
@@ -1707,6 +1720,19 @@ pub(crate) fn build_interactive_command_stage(
     base_problem: &ProblemIR,
     command: &crate::types::SessionCommand,
 ) -> Result<Option<ResolvedScriptStage>> {
+    if matches!(command.kind.as_str(), "run" | "relax" | "solve")
+        && base_problem.antenna_field_solve_stages.iter().any(|stage| {
+            stage.retained_current_source.is_some()
+                && match &base_problem.study {
+                    fullmag_ir::StudyIR::AntennaFieldSolve { selection: Some(selection), .. } => selection.stage_id == stage.id,
+                    fullmag_ir::StudyIR::FieldOnly { .. } => base_problem.problem_meta.runtime_metadata
+                        .get("active_stage_id").and_then(serde_json::Value::as_str) == Some(stage.id.as_str()),
+                    _ => false,
+                }
+        })
+    {
+        bail!("retained-current H-only inspection requires its typed accepted worker; generic magnetic run/relax/solve is forbidden");
+    }
     match command.kind.as_str() {
         "close" => Ok(None),
         "solve" if !matches!(&base_problem.study, fullmag_ir::StudyIR::Relaxation { .. }) => {

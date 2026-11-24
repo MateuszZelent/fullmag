@@ -404,5 +404,7 @@ def prepare(control, operation, source_root: str | os.PathLike[str], *,
     except Exception as error:
         raise GroupStorageError("Private group storage preparation failed closed") from error
     if getattr(result, "returncode", 1) != 0:
-        raise GroupStorageError("Private group storage initializer failed; existing data retained")
+        detail = getattr(result, "stderr", b"")
+        detail = detail.decode("utf-8", "replace") if isinstance(detail, bytes) else str(detail)
+        raise GroupStorageError("Private group storage initializer failed; existing data retained: " + detail[-4096:])
     return manifest

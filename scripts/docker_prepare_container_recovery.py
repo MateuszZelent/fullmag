@@ -68,18 +68,25 @@ def _read_retained_run_inputs(terminal_path, held_path):
 def prepare(
     control, pins, compose, *,
     retained_terminal_runs=None, retained_held_manual_runs=None, retained_attempt_histories=None,
-    bootstrap_stop_reference=None, publish=False
+    bootstrap_stop_reference=None,
+    retained_pending_inboxes=None, retained_absent_inboxes=None, publish=False
 ):
     """Return proof/auth references; publish only after a second frozen read."""
     if retained_held_manual_runs is not None and retained_terminal_runs is None:
         raise BuildControlError("V4 held-manual pins require --retained-terminal-runs, including an empty array")
     if retained_attempt_histories is not None and retained_held_manual_runs is None:
         raise BuildControlError("V5 attempt history requires both retained-run arrays")
+    if retained_absent_inboxes is not None and retained_pending_inboxes is None:
+        recovery._fail("v7 requires pending inbox pins")
+    if retained_pending_inboxes is not None and retained_attempt_histories is None:
+        raise BuildControlError("V6 pending inbox pins require retained attempt histories")
     proof = recovery.prepare_abrupt_stop_proof(
         control, pins, compose, retained_terminal_runs=retained_terminal_runs,
         retained_held_manual_runs=retained_held_manual_runs,
         **({"retained_attempt_histories": retained_attempt_histories} if retained_attempt_histories is not None else {}),
         **({"bootstrap_stop_reference": bootstrap_stop_reference} if bootstrap_stop_reference is not None else {}),
+        **({"retained_absent_inboxes": retained_absent_inboxes} if retained_absent_inboxes is not None else {}),
+        **({"retained_pending_inboxes": retained_pending_inboxes} if retained_pending_inboxes is not None else {}),
     )
     proof_raw = recovery._canonical(proof)
     root = recovery.RECOVERY_RELATIVE_ROOT + "/" + pins["request_id"]
@@ -121,6 +128,8 @@ def prepare(
             retained_held_manual_runs=retained_held_manual_runs,
             **({"retained_attempt_histories": retained_attempt_histories} if retained_attempt_histories is not None else {}),
             **({"bootstrap_stop_reference": bootstrap_stop_reference} if bootstrap_stop_reference is not None else {}),
+            **({"retained_absent_inboxes": retained_absent_inboxes} if retained_absent_inboxes is not None else {}),
+        **({"retained_pending_inboxes": retained_pending_inboxes} if retained_pending_inboxes is not None else {}),
         )
         if recovery._canonical(fresh) != proof_raw:
             raise BuildControlError("Abrupt-stop evidence changed before publication")
@@ -144,6 +153,8 @@ def main(argv=None):
     parser.add_argument("--retained-attempt-histories", type=Path)
     parser.add_argument("--bootstrap-stop-reference", type=Path,
                         help="Explicit JSON {attempt, sha256} of a successful diagnostic bootstrap stop; terminal recovery only")
+    parser.add_argument("--retained-pending-inboxes", type=Path)
+    parser.add_argument("--retained-absent-inboxes", type=Path)
     parser.add_argument("--publish", action="store_true", help="Publish evidence and operator capability under the group lease; never start services")
     args = parser.parse_args(argv)
     terminal_pins, held_pins = _read_retained_run_inputs(
@@ -158,6 +169,24 @@ def main(argv=None):
         history_pins = json.loads(raw, object_pairs_hook=_unique_object)
         if not isinstance(history_pins, list):
             raise BuildControlError("Retained attempt histories input must be an array")
+    pending_pins = None
+    if args.retained_pending_inboxes is not None:
+        if history_pins is None:
+            raise BuildControlError("--retained-pending-inboxes requires --retained-attempt-histories")
+        from docker_volume_dev import _session_host
+        raw = _session_host().read_owned_regular(args.retained_pending_inboxes.absolute(), MAX_INPUT_BYTES)
+        pending_pins = json.loads(raw, object_pairs_hook=_unique_object)
+        if not isinstance(pending_pins, list):
+            raise BuildControlError("Retained pending inbox input must be an array")
+    absent_pins = None
+    if args.retained_absent_inboxes is not None:
+        if pending_pins is None:
+            raise BuildControlError("--retained-absent-inboxes requires --retained-pending-inboxes")
+        from docker_volume_dev import _session_host
+        raw = _session_host().read_owned_regular(args.retained_absent_inboxes.absolute(), MAX_INPUT_BYTES)
+        absent_pins = json.loads(raw, object_pairs_hook=_unique_object)
+        if not isinstance(absent_pins, list):
+            raise BuildControlError("Retained absent inbox input must be an array")
     source = select_checkout(args.repo_root.resolve(strict=True), args.source_root).resolve(strict=True)
     layout = storage.resolve_layout(source)
     identity = compose_project_identity(layout)
@@ -175,7 +204,8 @@ def main(argv=None):
         raise BuildControlError("Retained Compose bytes differ from the operator pin")
     print(json.dumps(prepare(control, pins, compose, retained_terminal_runs=terminal_pins,
                              retained_held_manual_runs=held_pins, retained_attempt_histories=history_pins,
-                             bootstrap_stop_reference=bootstrap_stop_reference, publish=args.publish), indent=2))
+                             bootstrap_stop_reference=bootstrap_stop_reference,
+                             retained_pending_inboxes=pending_pins, retained_absent_inboxes=absent_pins, publish=args.publish), indent=2))
     return 0
 
 

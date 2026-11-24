@@ -1,6 +1,6 @@
 //! Presentation of a pinned sampling domain, separate from the current source.
 use fullmag_ir::{
-    AntennaFieldOnlyPlanIR, BackendPlanIR, ExecutionPlanIR, FieldTargetIR, ProblemIR,
+    AntennaFieldSamplingPlanIR, BackendPlanIR, ExecutionPlanIR, FieldTargetIR, ProblemIR,
 };
 use fullmag_runner::{FemMeshPartPayload, FemMeshPayload};
 use sha2::{Digest, Sha256};
@@ -12,14 +12,33 @@ fn invalid(message: impl Into<String>) -> ApiError {
     ApiError::conflict_with_code("accepted_preparation_sampling_mesh_invalid", message)
 }
 
-pub(super) fn pinned_global_mesh(
+pub(super) fn pinned_sampling_mesh(
     problem: &ProblemIR,
     execution: &ExecutionPlanIR,
 ) -> Result<Option<FemMeshPayload>, ApiError> {
-    let BackendPlanIR::AntennaFieldOnly(plan) = &execution.backend_plan else {
-        return Ok(None);
+    let (source_object_id, field_sampling) = match &execution.backend_plan {
+        BackendPlanIR::AntennaFieldOnly(plan) => (&plan.source_object_id, &plan.field_sampling),
+        BackendPlanIR::AntennaRetainedCurrentFieldInspection(plan) => {
+            if !matches!(plan.field_sampling.domain, FieldTargetIR::Global {}) {
+                return pinned_retained_object_mesh(problem, &plan.field_sampling);
+            }
+            (&plan.stage.source_object_id, &plan.field_sampling)
+        }
+        BackendPlanIR::AntennaRetainedDirectFieldInspection(plan) => {
+            if !matches!(plan.field_sampling.domain, FieldTargetIR::Global {}) {
+                return pinned_retained_object_mesh(problem, &plan.field_sampling);
+            }
+            (&plan.stage.source_object_id, &plan.field_sampling)
+        }
+        BackendPlanIR::AntennaRetainedPreparationFieldInspection(plan) => {
+            if !matches!(plan.field_sampling.domain, FieldTargetIR::Global {}) {
+                return pinned_retained_object_mesh(problem, &plan.field_sampling);
+            }
+            (&plan.stage.source_object_id, &plan.field_sampling)
+        }
+        _ => return Ok(None),
     };
-    if !matches!(plan.field_sampling.domain, FieldTargetIR::Global {}) {
+    if !matches!(field_sampling.domain, FieldTargetIR::Global {}) {
         return Ok(None);
     }
     let asset = problem
@@ -40,11 +59,11 @@ pub(super) fn pinned_global_mesh(
                 .map_err(|error| invalid(format!("cannot hash sampling mesh: {error}")))?
         )
     );
-    if plan.field_sampling.carrier_kind != "fem_domain_mesh_asset"
-        || plan.field_sampling.location != "node"
-        || plan.field_sampling.topology_digest != digest
-        || plan.field_sampling.positions_xyz_m != mesh.nodes
-        || plan.field_sampling.cells != mesh.cells
+    if field_sampling.carrier_kind != "fem_domain_mesh_asset"
+        || field_sampling.location != "node"
+        || field_sampling.topology_digest != digest
+        || field_sampling.positions_xyz_m != mesh.nodes
+        || field_sampling.cells != mesh.cells
     {
         return Err(invalid(
             "pinned Global mesh differs from the accepted sampling carrier",
@@ -57,7 +76,7 @@ pub(super) fn pinned_global_mesh(
     }
     // Payload parts use contiguous ranges. Keep every owned marker run in
     // sampling order rather than repacking the Global topology.
-    let owners = domain_owners(problem, plan, asset)?;
+    let owners = domain_owners(problem, source_object_id, asset)?;
     let mut facets_by_nodes = BTreeMap::<[u32; 3], Vec<u32>>::new();
     for index in 0..mesh.facets.len() {
         let Some(face) = mesh.facets.item_nodes(index) else {
@@ -186,7 +205,7 @@ pub(super) fn pinned_global_mesh(
 /// modules. A presentation type never activates magnetization or transport.
 fn domain_owners(
     problem: &ProblemIR,
-    plan: &AntennaFieldOnlyPlanIR,
+    source_object_id: &str,
     asset: &fullmag_ir::FemDomainMeshAssetIR,
 ) -> Result<BTreeMap<u32, (String, String, String)>, ApiError> {
     let explicit = fullmag_ir::physics_object_geometry_bindings_v03(problem)
@@ -210,7 +229,7 @@ fn domain_owners(
         objects.insert(id.to_owned(), geometry.to_owned());
         magnetic.insert(id.to_owned());
     }
-    let mut conducting = BTreeSet::from([plan.source_object_id.clone()]);
+    let mut conducting = BTreeSet::from([source_object_id.to_owned()]);
     for module in &problem.current_modules {
         if let fullmag_ir::CurrentModuleIR::CurrentTransport {
             definition: Some(definition),
@@ -303,9 +322,145 @@ fn domain_owners(
 }
 
 pub(super) fn global_publication_binding(
-    plan: &AntennaFieldOnlyPlanIR,
+    sampling: &AntennaFieldSamplingPlanIR,
     mesh: &FemMeshPayload,
 ) -> serde_json::Value {
-    serde_json::json!({"sampling_topology_digest": plan.field_sampling.topology_digest,
+    serde_json::json!({"sampling_topology_digest": sampling.topology_digest,
         "mesh_generation_id": mesh.generation_id, "mesh_name": mesh.mesh_name})
+}
+
+
+/// Publish the actual immutable target asset, never the retained conductor's mesh.
+fn pinned_retained_object_mesh(
+    problem: &ProblemIR, sampling: &AntennaFieldSamplingPlanIR,
+) -> Result<Option<FemMeshPayload>, ApiError> {
+    let FieldTargetIR::Object { object_id } = &sampling.domain else {
+        return Err(invalid("retained sampling requires a Global or Object Tet4 carrier"));
+    };
+    let geometry = fullmag_ir::geometry_name_for_physics_object_v03(problem, object_id)
+        .map_err(|errors| invalid(errors.join("; ")))?;
+    let asset = problem.geometry_assets.as_ref().and_then(|assets|
+        assets.fem_mesh_assets.iter().find(|asset| asset.geometry_name == geometry))
+        .ok_or_else(|| invalid("pinned retained Object sampling asset is missing"))?;
+    let mesh = asset.mesh.as_ref().ok_or_else(|| invalid("pinned Object sampling has no inline mesh"))?;
+    let encoded = serde_json::to_vec(mesh).map_err(|error| invalid(error.to_string()))?;
+    if sampling.carrier_kind != format!("fem_mesh_asset:{geometry}") || sampling.location != "node"
+        || sampling.topology_digest != format!("sha256:{:x}", Sha256::digest(&encoded))
+        || sampling.positions_xyz_m != mesh.nodes || sampling.cells != mesh.cells {
+        return Err(invalid("pinned Object mesh differs from the accepted sampling carrier"));
+    }
+    fullmag_ir::validate_mesh_for_execution(mesh).map_err(|errors| invalid(errors.join("; ")))?;
+    mesh.cells.require_tet4().map_err(invalid)?;
+    if mesh.nodes.is_empty() || mesh.cells.is_empty() {return Err(invalid("empty retained sampling mesh"));}
+    let count = |value: usize| u32::try_from(value).map_err(|_| invalid("retained sampling count exceeds u32"));
+    let node_count = count(mesh.nodes.len())?;
+    let cell_count = count(mesh.cells.len())?;
+    let facet_count = count(mesh.facets.len())?;
+    let mut min = [f64::INFINITY;3]; let mut max = [f64::NEG_INFINITY;3];
+    for node in &mesh.nodes {for axis in 0..3 {min[axis]=min[axis].min(node[axis]);max[axis]=max[axis].max(node[axis]);}}
+    let conducting = problem.current_modules.iter().any(|module| matches!(module,
+        fullmag_ir::CurrentModuleIR::CurrentTransport {definition:Some(definition), ..}
+            if definition.domain.iter().any(|region| &region.object_id == object_id)));
+    let generation = format!("{:x}", Sha256::digest(serde_json::to_vec(asset).map_err(|error| invalid(error.to_string()))?));
+    Ok(Some(FemMeshPayload {
+        mesh_name:mesh.mesh_name.clone(), mesh_id:format!("{}:{generation}",mesh.mesh_name),
+        nodes:mesh.nodes.clone(), cells:mesh.cells.clone(), element_markers:mesh.element_markers.clone(),
+        facets:mesh.facets.clone(), boundary_markers:mesh.boundary_markers.clone(),
+        periodic_boundary_pairs:mesh.periodic_boundary_pairs.clone(), periodic_node_pairs:mesh.periodic_node_pairs.clone(),
+        object_segments:vec![fullmag_runner::FemMeshObjectSegment {object_id:object_id.clone(),geometry_id:Some(geometry.into()),
+            node_start:0,node_count,element_start:0,element_count:cell_count,boundary_face_start:0,boundary_face_count:facet_count}],
+        mesh_parts:vec![FemMeshPartPayload {id:format!("sampling:{object_id}"),label:object_id.clone(),
+            role:if conducting {"conductor".into()} else {"geometry".into()},object_id:Some(object_id.clone()),geometry_id:Some(geometry.into()),
+            material_id:None,element_start:0,element_count:cell_count,boundary_face_start:0,boundary_face_count:facet_count,
+            boundary_face_indices:(0..facet_count).collect(),facet_global_ordinals:mesh.facets.global_ordinals.clone(),
+            node_start:0,node_count,node_indices:(0..node_count).collect(),bounds_min:Some(min),bounds_max:Some(max)}],
+        domain_mesh_mode:None,domain_frame:None,generation_id:Some(generation),
+        per_domain_quality:mesh.per_domain_quality.iter().map(|(marker,quality)|(*marker,quality.into())).collect(),
+        build_report:None,
+    }))
+}
+
+
+#[cfg(test)]
+mod retained_tests {
+    use super::*;
+    use serde_json::{json, Value};
+
+    fn fixture(global: bool) -> (ProblemIR, ExecutionPlanIR) {
+        // Carrier integrity only: this fixture does not prove retained-parent authority.
+        let fixture: Value = serde_json::from_str(include_str!(
+            "../../../../tests/fixtures/runtime/antenna-standalone-pipeline.json")).unwrap();
+        let mut wire = fixture["ir"].clone();
+        wire["study"]["selection"] = json!({"stage_id":"inspect_antenna", "port_mode_id":"port"});
+        let stage = &mut wire["antenna_field_solve_stages"][0];
+        stage["retained_current_source"] = json!({"kind":"published_inspection","project_id":"project-parent",
+            "run_id":"run-parent","task_id":"task-parent","attempt_id":"attempt-parent",
+            "ownership_epoch":"1","artifact_id":"artifact-parent","object_ref":"a".repeat(64)});
+        stage["oersted_realization"] = "analytic_rt0_surface".into();
+        stage["surface_field_policy"] = json!({"policy_version":fullmag_ir::ANTENNA_SURFACE_FIELD_POLICY_VERSION,
+            "limits":{"total":vec![1_000_000_u64;14],"per_target":vec![100_000_u64;14],
+                "maximum_raw_integer_bits":8192,"maximum_reduced_fraction_bits":8192,
+                "maximum_lifetime_peak_rss_bytes":268435456,"guard_interval_events":128,
+                "maximum_total_seconds":600.0,"maximum_target_seconds":120.0},
+            "tolerances":{"absolute_field_apm":1e-9,"relative_field":1e-5,"cancellation_floor_apm":1e-6,
+                "scalar_relative_80":1e-45,"scalar_relative_120":1e-55,"angle_relative_80":1e-45,"angle_relative_120":1e-55,
+                "binary_scalar_epsilon_factor":16.0,"binary_roundoff_epsilon_factor":64.0,
+                "binary_cancellation_limit":1e8,"highprecision_cancellation_limit":1e40}});
+        if global {
+            stage["field_sampling_domain"] = json!({"kind":"global"});
+            stage["target_refs"] = json!([{"kind":"global"}]);
+            let mut mesh = wire["geometry_assets"]["fem_mesh_assets"][1]["mesh"].clone();
+            mesh["element_markers"] = json!([0]);
+            wire["geometry_assets"]["fem_domain_mesh_asset"] = json!({"mesh":mesh,"region_markers":[]});
+        }
+        let problem: ProblemIR = serde_json::from_value(wire).unwrap();
+        let plan = fullmag_plan::plan(&problem).unwrap();
+        (problem, plan)
+    }
+
+    #[test]
+    fn retained_object_sampling_uses_the_target_not_the_conductor() {
+        let (mut problem, plan) = fixture(false);
+        let mesh = pinned_sampling_mesh(&problem, &plan).unwrap().unwrap();
+        assert_eq!(mesh.nodes.len(), 4);
+        assert_eq!(mesh.cells.len(), 1);
+        assert_eq!(mesh.object_segments[0].object_id, "probe");
+        assert_eq!(mesh.mesh_parts[0].role, "geometry");
+        assert!(mesh.mesh_parts.iter().all(|part| part.object_id.as_deref() != Some("antenna")));
+        assert!(mesh.domain_mesh_mode.is_none());
+        problem.geometry_assets.as_mut().unwrap().fem_mesh_assets.retain(|asset| asset.geometry_name == "probe");
+        let without_source = pinned_sampling_mesh(&problem, &plan).unwrap().unwrap();
+        assert_eq!(mesh.mesh_id, without_source.mesh_id);
+        assert_eq!(mesh.nodes, without_source.nodes);
+    }
+
+    #[test]
+    fn retained_global_sampling_keeps_the_real_air_mesh_and_binding() {
+        let (problem, plan) = fixture(true);
+        let mesh = pinned_sampling_mesh(&problem, &plan).unwrap().unwrap();
+        let asset = problem.geometry_assets.as_ref().unwrap().fem_domain_mesh_asset.as_ref().unwrap().mesh.as_ref().unwrap();
+        assert_eq!(mesh.nodes, asset.nodes);
+        assert_eq!(mesh.cells, asset.cells);
+        assert_eq!(mesh.mesh_parts[0].role, "air");
+        assert!(mesh.mesh_parts[0].object_id.is_none());
+        let BackendPlanIR::AntennaRetainedCurrentFieldInspection(retained) = &plan.backend_plan else {panic!()};
+        let binding = global_publication_binding(&retained.field_sampling, &mesh);
+        assert_eq!(binding["sampling_topology_digest"], retained.field_sampling.topology_digest);
+    }
+
+    #[test]
+    fn retained_sampling_rejects_changed_carrier_and_mutable_mesh_source() {
+        for global in [false,true] {
+            let (problem, plan) = fixture(global);
+            let mut changed = plan.clone();
+            let BackendPlanIR::AntennaRetainedCurrentFieldInspection(retained) = &mut changed.backend_plan else {panic!()};
+            retained.field_sampling.positions_xyz_m[0][0] += 0.125;
+            assert!(pinned_sampling_mesh(&problem, &changed).is_err());
+            let mut changed = problem;
+            let assets = changed.geometry_assets.as_mut().unwrap();
+            if global {let asset=assets.fem_domain_mesh_asset.as_mut().unwrap();asset.mesh=None;asset.mesh_source=Some("mutable.json".into());}
+            else {let asset=assets.fem_mesh_assets.iter_mut().find(|asset|asset.geometry_name=="probe").unwrap();asset.mesh=None;asset.mesh_source=Some("mutable.json".into());}
+            assert!(pinned_sampling_mesh(&changed, &plan).is_err());
+        }
+    }
 }

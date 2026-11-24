@@ -313,19 +313,65 @@ pub(crate) fn resolve_spatial_parameter_excluding_regions(
     object_translation: [f64; 3],
     excluded_region_ids: &BTreeSet<String>,
 ) -> Result<Vec<f64>, String> {
+    let owner = problem.magnets.iter().find(|magnet| magnet.name == owner_object_id)
+        .and_then(|magnet| magnet.object_id.as_deref()).unwrap_or(owner_object_id);
+    resolve_spatial_parameter_for_owners_excluding_regions(
+        problem,
+        owner_object_id,
+        &[owner],
+        parameter,
+        base_value,
+        points,
+        sampling,
+        object_translation,
+        excluded_region_ids,
+    )
+}
+
+pub(crate) fn resolve_spatial_parameter_for_owners(
+    problem: &ProblemIR,
+    magnet_name: &str,
+    owner_names: &[&str],
+    parameter: MaterialParameterNameIR,
+    base_value: f64,
+    points: &[[f64; 3]],
+    sampling: MaterialSampling<'_>,
+    object_translation: [f64; 3],
+) -> Result<Vec<f64>, String> {
+    resolve_spatial_parameter_for_owners_excluding_regions(
+        problem,
+        magnet_name,
+        owner_names,
+        parameter,
+        base_value,
+        points,
+        sampling,
+        object_translation,
+        &BTreeSet::new(),
+    )
+}
+
+fn resolve_spatial_parameter_for_owners_excluding_regions(
+    problem: &ProblemIR,
+    magnet_name: &str,
+    owner_names: &[&str],
+    parameter: MaterialParameterNameIR,
+    base_value: f64,
+    points: &[[f64; 3]],
+    sampling: MaterialSampling<'_>,
+    object_translation: [f64; 3],
+    excluded_region_ids: &BTreeSet<String>,
+) -> Result<Vec<f64>, String> {
     if let MaterialSampling::Nodes { spacings } = sampling {
         if spacings.len() != points.len() {
             return Err("material sampling spacing count must match sample points".to_string());
         }
     }
-    // Solvers identify a magnet by its name; region ownership uses its immutable ID.
-    let owner_object_id = problem.magnets.iter().find(|magnet| magnet.name == owner_object_id)
-        .and_then(|magnet| magnet.object_id.as_deref()).unwrap_or(owner_object_id);
     // Gather active object regions for this owner
     let enabled_regions = problem
         .object_regions
         .iter()
-        .filter(|r| r.enabled && r.owner_object == owner_object_id)
+        .filter(|r| r.enabled && owner_names.contains(&r.owner_object.as_str()))
         .collect::<Vec<_>>();
 
     let mut overrides = Vec::new();
@@ -350,7 +396,7 @@ pub(crate) fn resolve_spatial_parameter_excluding_regions(
 
     // Material parameter fields matching owner and parameter
     for field in &problem.material_parameter_fields {
-        if field.owner_object == owner_object_id && field.parameter == parameter {
+        if owner_names.contains(&field.owner_object.as_str()) && field.parameter == parameter {
             if field
                 .region_id
                 .as_ref()
@@ -523,9 +569,11 @@ pub(crate) fn resolve_spatial_parameter_excluding_regions(
         resolved_values
     };
     if parameter == MaterialParameterNameIR::Alpha {
+        let owner = problem.magnets.iter().find(|magnet| magnet.name == magnet_name)
+            .and_then(|magnet| magnet.object_id.as_deref()).unwrap_or(magnet_name);
         apply_absorbing_boundary_layer(
             problem,
-            owner_object_id,
+            owner,
             &mut resolved_values,
             points,
             sampling.active_mask(),
@@ -603,6 +651,15 @@ pub(crate) fn build_material_field_plans(
     owner_id: &str,
     location: MaterialFieldLocationIR,
 ) -> Vec<MaterialFieldPlan> {
+    build_material_field_plans_for_owners(problem, owner_id, &[owner_id], location)
+}
+
+pub(crate) fn build_material_field_plans_for_owners(
+    problem: &ProblemIR,
+    owner_id: &str,
+    owner_names: &[&str],
+    location: MaterialFieldLocationIR,
+) -> Vec<MaterialFieldPlan> {
     let mut plans = Vec::new();
     let parameters = [
         MaterialParameterNameIR::Ms,
@@ -613,7 +670,7 @@ pub(crate) fn build_material_field_plans(
     let enabled_regions = problem
         .object_regions
         .iter()
-        .filter(|r| r.enabled && r.owner_object == owner_id)
+        .filter(|r| r.enabled && owner_names.contains(&r.owner_object.as_str()))
         .collect::<Vec<_>>();
 
     for param in parameters {
@@ -623,7 +680,7 @@ pub(crate) fn build_material_field_plans(
         let has_assignments = problem
             .material_parameter_fields
             .iter()
-            .any(|f| f.owner_object == owner_id && f.parameter == param);
+            .any(|f| owner_names.contains(&f.owner_object.as_str()) && f.parameter == param);
 
         if has_overrides || has_assignments {
             let mut source_kind = MaterialFieldSourceKind::Override;
@@ -656,7 +713,7 @@ pub(crate) fn build_material_field_plans(
                 }
             }
             for f in &problem.material_parameter_fields {
-                if f.owner_object == owner_id && f.parameter == param {
+                if owner_names.contains(&f.owner_object.as_str()) && f.parameter == param {
                     if !matches!(f.value, MaterialParameterFieldIR::Constant { .. }) {
                         source_kind = MaterialFieldSourceKind::Gradient;
                         requires_sampling = true;

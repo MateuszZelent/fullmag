@@ -397,6 +397,23 @@ wyłączone z `target_boundaries_unavailable`. `FMFG` nie może być interpretow
 jako `FMCS`, prostokąt monitora ani dokładna topologia granicy targetu. Surface
 folds or overlaps remain visible degraded diagnostics.
 
+### 5.1 Jawne powiększenie osi zapisanego przekroju anteny
+
+Zapisany przekrój H anteny domyślnie zachowuje jednakową skalę fizyczną
+obu osi. Dla bardzo cienkiej domeny użytkownik może jawnie wybrać lokalne
+powiększenie osi pionowej ×10 lub ×100. Widoczny podpis i opis dostępności
+podają współczynnik i ograniczenie do prezentacji. Współrzędne osi i sondy,
+zakres SI, próbki, maska, wektory źródłowe oraz tożsamość zapytania pozostają
+bez zmian. Kąt strzałki uwzględnia transformację osi ekranu; jej norma,
+klasyfikacja składowej normalnej i przypisana próbka pozostają fizyczne.
+Przełącznik nie rozpoczyna obliczeń, nie tworzy nowego zasobu i nie zmienia
+Universe ani siatki. Ustawienia przekroju (płaszczyzna, pozycja, składowa, strzałki,
+powiększenie pionowe oraz pan/zoom) należą do prezentacji dokładnie wybranego
+zapisanego datasetu. Przetrwają odmontowanie karty 2D i powrót z 3D; wybór
+innej rewizji datasetu przywraca wartości domyślne. Nie utrzymują ukrytego
+renderera, nie przechowują payloadów i nie rozszerzają sesyjnego profilu planar
+ani kontraktu Python/ProblemIR.
+
 ## 6. Tests
 
 Required tests:

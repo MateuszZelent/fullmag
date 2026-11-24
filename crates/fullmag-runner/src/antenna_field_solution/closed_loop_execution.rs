@@ -2,9 +2,9 @@
 use super::closed_loop_v2::invalid;
 use crate::types::{AuxiliaryArtifact, RunError};
 use crate::solver_profile::{SolverProfileConfig, SolverProfileOperationOutcome, SolverProfileState};
-#[cfg(feature = "fem-gpu")]
+#[cfg(feature = "fem-native")]
 use crate::native_fem::NativeFemSurfaceRt0Profile;
-#[cfg(not(feature = "fem-gpu"))]
+#[cfg(not(feature = "fem-native"))]
 #[derive(Default)]
 struct NativeFemSurfaceRt0Profile {
     available: bool,
@@ -244,7 +244,7 @@ fn execute_closed_loop(input: &ResolvedAntennaClosedLoopCurrentInputIR,
     execute_native(input, output_id, cancelled, native_failure, native_profile, observer)
 }
 
-#[cfg(feature = "fem-gpu")]
+#[cfg(feature = "fem-native")]
 fn execute_native(input: &ResolvedAntennaClosedLoopCurrentInputIR, output_id: &str,
     cancelled: Option<&AtomicBool>, native_failure: Option<&mut Option<KnownNativeCallFailure>>,
     native_profile: Option<&mut NativeFemSurfaceRt0Profile>,
@@ -401,7 +401,7 @@ fn execute_native(input: &ResolvedAntennaClosedLoopCurrentInputIR, output_id: &s
     Ok(artifacts)
 }
 
-#[cfg(not(feature = "fem-gpu"))]
+#[cfg(not(feature = "fem-native"))]
 fn execute_native(_input: &ResolvedAntennaClosedLoopCurrentInputIR, _output_id: &str,
     cancelled: Option<&AtomicBool>, _native_failure: Option<&mut Option<KnownNativeCallFailure>>,
     _native_profile: Option<&mut NativeFemSurfaceRt0Profile>,

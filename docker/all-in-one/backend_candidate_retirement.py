@@ -779,7 +779,7 @@ def _validate_archive_contents(
         _fail(b, "archived candidate receipt is not source-manifest-bound")
     toolchain = _candidate_toolchain(b, receipt)
     cargo_profile = marker.get("cargo_profile")
-    if not b._package_source_matches_fresh_live_manifest(
+    if not b._package_matches_source_identity(
         receipt,
         source_path,
         toolchain,
@@ -1434,6 +1434,7 @@ def _create_archive(
         staged_manifest = dict(staged_manifest)
         staged_manifest["archive"] = str(temporary)
         _validate_archive_contents(b, temporary, staged_manifest)
+        _validate_candidate_source_binding(b, spec, temporary)
         os.rename(temporary, target)
         temporary = Path()
         b._fsync_directory(staging_root, "candidate retirement staging namespace")

@@ -545,6 +545,11 @@ fn prepare_manual_interactive_remesh(
     backend_override: Option<BackendTarget>,
     prepare_runtime: bool,
 ) -> Result<PreparedRemeshPublication> {
+    if stage_execution_plans.iter().any(|plan| matches!(
+        &plan.backend_plan, BackendPlanIR::AntennaRetainedCurrentFieldInspection(_) | BackendPlanIR::AntennaRetainedDirectFieldInspection(_) | BackendPlanIR::AntennaRetainedPreparationFieldInspection(_)
+    )) {
+        bail!("retained-current H-only inspection requires explicit owned target rebinding; generic interactive remeshing is forbidden");
+    }
     if command.kind == "fdm_grid_refresh" {
         return prepare_fdm_grid_refresh(
             command,

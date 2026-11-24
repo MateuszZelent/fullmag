@@ -3376,12 +3376,13 @@ impl<'a> ArchiveWalker<'a> {
             self.report.file_refs.insert(record.archive_path.clone());
             detached.insert(record.archive_path.clone(), bytes.into_owned());
         }
-        manifest.validate_detached_records_with_cas(&detached, |object_ref| {
-            self.bounded_archive_object(
-                object_ref,
-                crate::archive_document::MAX_CONTROL_DOCUMENT_BYTES,
-            )
-        })?;
+        manifest.validate_detached_records_with_cas_and_ranges(
+            &detached,
+            |object_ref| self.bounded_archive_object(
+                object_ref, crate::archive_document::MAX_CONTROL_DOCUMENT_BYTES,
+            ),
+            |object_ref, offset, length| self.bounded_archive_object_range(object_ref, offset, length),
+        )?;
 
         for object in &manifest.cas_objects {
             self.report.object_refs.insert(object.object_ref.clone());
@@ -4023,6 +4024,40 @@ impl<'a> ArchiveWalker<'a> {
             &relative,
         )?;
         Ok(historical)
+    }
+
+    /// Stream the same file through canonical CAS verification while retaining only a bounded slice.
+    fn bounded_archive_object_range(
+        &self, object_ref: &str, offset: u64, length: u64,
+    ) -> Result<Option<crate::cas::VerifiedCasRange>> {
+        validate_object_ref(object_ref)?;
+        let maximum = crate::archive_document::MAX_CONTROL_DOCUMENT_BYTES;
+        if length == 0 || length > maximum {
+            bail!("archive CAS range exceeds its positive metadata budget");
+        }
+        let end = offset.checked_add(length).context("archive CAS range overflow")?;
+        let relative = format!("objects/sha256/{object_ref}");
+        let file_root = self.cas_root.or_else(|| match &self.documents {
+            ArchiveDocuments::Files { root, .. }
+            | ArchiveDocuments::FilesWithInline { root, .. } => Some(*root),
+            ArchiveDocuments::Memory(_) => None,
+        });
+        if let Some(root) = file_root {
+            let path = crate::repository_path::checked_path(root, &relative)?;
+            if !path.exists() { return Ok(None); }
+            reject_link_chain(root, &relative)?;
+            return crate::cas::verified_file_range(&path, object_ref, offset, length, maximum).map(Some);
+        }
+        let Some(data) = self.documents.read(&relative)? else { return Ok(None); };
+        let object_length = u64::try_from(data.len())?;
+        if end > object_length || crate::cas::hex_sha256(&data) != object_ref {
+            bail!("archive CAS range is missing or differs from the complete object hash");
+        }
+        let begin = usize::try_from(offset)?;
+        let end = usize::try_from(end)?;
+        Ok(Some(crate::cas::VerifiedCasRange {
+            bytes: data[begin..end].to_vec(), object_length,
+        }))
     }
 
     fn bounded_archive_object(&self, object_ref: &str, max_bytes: u64) -> Result<Option<Vec<u8>>> {
@@ -6341,5 +6376,52 @@ mod tests {
         )
         .expect_err("archive walker accepted missing historical owner");
         assert!(archive_error.to_string().contains("historical"));
+    }
+}
+
+
+#[cfg(test)]
+mod retained_evidence_range_tests {
+    use super::*;
+
+    fn walker<'a>(documents: &'a HashMap<String, Vec<u8>>, root: Option<&'a Path>) -> ArchiveWalker<'a> {
+        ArchiveWalker {
+            documents: ArchiveDocuments::Memory(documents), cas_root: root,
+            mode: ReachabilityMode::Export, report: ReachabilityReport::new(),
+            seen_checkpoints: HashSet::new(), tensor_descriptor_cache: None,
+            namespace_files: HashSet::new(), unclassified_paths: HashSet::new(),
+        }
+    }
+
+    #[test]
+    fn retained_range_verifies_complete_large_object_without_returning_the_payload() {
+        let bytes = vec![37u8; crate::archive_document::MAX_CONTROL_DOCUMENT_BYTES as usize + 32];
+        let hash = crate::cas::hex_sha256(&bytes);
+        let relative = format!("objects/sha256/{hash}");
+        let mut documents = HashMap::from([(relative.clone(), bytes.clone())]);
+        let memory = walker(&documents, None);
+        assert!(memory.bounded_archive_object(&hash, crate::archive_document::MAX_CONTROL_DOCUMENT_BYTES).is_err());
+        let range = memory.bounded_archive_object_range(&hash, 0, 16).unwrap().unwrap();
+        assert_eq!(range.bytes, bytes[..16]);
+        assert_eq!(range.object_length, bytes.len() as u64);
+        assert!(memory.bounded_archive_object_range(&hash, bytes.len() as u64, 1).is_err());
+        assert!(memory.bounded_archive_object_range(&hash, 0, 0).is_err());
+        let root = tempfile::tempdir().unwrap();
+        let object = root.path().join(&relative);
+        fs::create_dir_all(object.parent().unwrap()).unwrap();
+        fs::write(&object, &bytes).unwrap();
+        let files = walker(&documents, Some(root.path()));
+        let disk = files.bounded_archive_object_range(&hash, 0, 16).unwrap().unwrap();
+        assert_eq!(disk.bytes, range.bytes);
+        assert_eq!(disk.object_length, range.object_length);
+        let mut damaged = bytes;
+        *damaged.last_mut().unwrap() ^= 1;
+        fs::write(&object, &damaged).unwrap();
+        // Corruption outside the requested slice must still fail whole-object CAS verification.
+        assert!(files.bounded_archive_object_range(&hash, 0, 16).is_err());
+        drop(files);
+        drop(memory);
+        documents.insert(relative, damaged);
+        assert!(walker(&documents, None).bounded_archive_object_range(&hash, 0, 16).is_err());
     }
 }

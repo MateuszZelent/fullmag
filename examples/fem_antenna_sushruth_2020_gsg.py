@@ -15,6 +15,10 @@ conductor_width_m = 200e-9
 gap_m = 250e-9
 metal_thickness_m = 90e-9
 insulator_thickness_m = 30e-9
+# Contiguous magnetic Ni/Co stack: 21 * (0.6 + 0.2) + 0.6 nm.
+magnetic_thickness_m = 17.4e-9
+# Cu(2.5)/Ta(2.5) above the magnetic stack, below the SiO2.
+cap_thickness_m = 5e-9
 
 # Additional authored assumptions, not reported experimental source parameters:
 # 20 um is the published conduit width; here it defines a finite source window.
@@ -27,7 +31,7 @@ signal_current_a = 1e-3
 mesh_size_m = 100e-9
 sampling_length_m = 4e-6
 sampling_width_m = 100e-9
-sampling_depth_m = 10e-9
+sampling_depth_m = magnetic_thickness_m
 branch_weights = (("signal", 1.0), ("ground_left", -0.5), ("ground_right", -0.5))
 
 
@@ -42,7 +46,8 @@ study.objects.mesh.defaults(
 
 
 # %% World x follows propagation; the signal current follows world +y
-# z=0 is the nominal magnetic surface. Metal occupies z=30..120 nm.
+# z=0 is the top of the capped multilayer, not the magnetic surface.
+# Metal occupies z=30..120 nm; magnetic Ni/Co occupies z=-22.4..-5 nm.
 # Local u -> world +y, local v -> world -x is a proper rotation.
 study.antenna_object(
     fm.CPWAntennaLayout(
@@ -58,11 +63,13 @@ study.antenna_object(
         ),
     ), name="GSG antenna", object_id="antenna",
 )
-# A field-only volume just below z=0; this is not a Co/Ni material model.
+# Central observation window spanning the actual magnetic thickness.
+# The 4 um x 100 nm window is authored, not the full 20 um-wide conduit.
+# No material/LLG is activated by this field-sampling geometry.
 study.geometry_object(
     fm.Box(sampling_length_m, sampling_width_m, sampling_depth_m, name="sampling").translate(
-        (0.0, 0.0, -0.5 * sampling_depth_m)
-    ), name="Field sampling", object_id="sampling", type="geometry",
+        (0.0, 0.0, -cap_thickness_m - 0.5 * sampling_depth_m)
+    ), name="Co/Ni field sampling", object_id="sampling", type="geometry",
 )
 
 

@@ -171,6 +171,8 @@ mod canonical_relaxation_time_tests {
             current_transport_id: "current".into(),
             port_mode_ids: vec!["port".into()],
             conservative_current_view_ref: None,
+            retained_current_source: None,
+            retained_source_preparation: None,
             model: fullmag_ir::AntennaFieldModelIR::QuasistaticConductionBiotSavart3d,
             oersted_realization: fullmag_ir::AntennaOerstedRealizationIR::DirectTetraQuadrature,
             surface_field_policy: None,
@@ -270,6 +272,79 @@ mod canonical_relaxation_time_tests {
         assert!(stages[0].ir.antenna_field_solve_stages.is_empty());
         config.antenna_inventory.antenna_field_solve_stages.push(solve_declaration("solve"));
         assert!(materialize_script_stages_with_output_policy(config, fullmag_ir::configure_project_autosave_policy).unwrap_err().to_string().contains("duplicate antenna_field_solve_stages declaration id"));
+    }
+
+    #[test]
+    fn primitive_execution_intent_applies_before_materialization() {
+        let inventory = ScriptAntennaAuthoringInventory::default();
+        let mut problem = ProblemIR::bootstrap_example();
+        let flags = BTreeMap::from([
+            ("interactive_session_requested".into(), serde_json::json!(false)),
+            ("wait_for_solve".into(), serde_json::json!(true)),
+        ]);
+        let stage = materialize_pipeline_primitive(&mut problem, &inventory, "run", &flags, Some(1e-12))
+            .unwrap().unwrap();
+        assert_eq!(stage.ir.problem_meta.runtime_metadata["interactive_session_requested"], false);
+        assert_eq!(stage.ir.problem_meta.runtime_metadata["wait_for_solve"], true);
+        let action = BTreeMap::from([
+            ("interactive_session_requested".into(), serde_json::json!(true)),
+            ("wait_for_solve".into(), serde_json::json!(false)),
+            ("current_density".into(), serde_json::json!(2.0)),
+        ]);
+        assert!(materialize_pipeline_primitive(&mut problem, &inventory, "set_current", &action, None).unwrap().is_none());
+        assert_eq!(problem.problem_meta.runtime_metadata["interactive_session_requested"], true);
+        assert_eq!(problem.problem_meta.runtime_metadata["wait_for_solve"], false);
+        let inherited = materialize_pipeline_primitive(&mut problem, &inventory, "run", &BTreeMap::new(), Some(2e-12))
+            .unwrap().unwrap();
+        assert_eq!(inherited.ir.problem_meta.runtime_metadata["interactive_session_requested"], true);
+        assert_eq!(inherited.ir.problem_meta.runtime_metadata["wait_for_solve"], false);
+    }
+
+    #[test]
+    fn primitive_execution_intent_failure_restores_previous_metadata() {
+        for initial in [None, Some(serde_json::json!("legacy raw value")), Some(serde_json::json!(true))] {
+            for (kind, extra_key, extra_value) in [
+                ("unknown_stage", "until_seconds", serde_json::json!(1e-12)),
+                ("run", "unknown_payload_key", serde_json::json!(1)),
+                ("run", "wait_for_solve", serde_json::json!(null)),
+                ("antenna_field_solve", "stage_id", serde_json::json!("missing")),
+            ] {
+                let mut problem = ProblemIR::bootstrap_example();
+                problem.problem_meta.runtime_metadata.remove("wait_for_solve");
+                problem.problem_meta.runtime_metadata.remove("interactive_session_requested");
+                if let Some(value) = &initial {
+                    problem.problem_meta.runtime_metadata.insert("interactive_session_requested".into(), value.clone());
+                }
+                let before = problem.problem_meta.runtime_metadata.clone();
+                let mut payload = BTreeMap::from([
+                    ("interactive_session_requested".into(), serde_json::json!(false)),
+                    ("wait_for_solve".into(), serde_json::json!(true)),
+                ]);
+                payload.insert(extra_key.into(), extra_value);
+                assert!(materialize_pipeline_primitive(&mut problem, &ScriptAntennaAuthoringInventory::default(),
+                    kind, &payload, Some(1e-12)).is_err(), "{kind}");
+                assert_eq!(problem.problem_meta.runtime_metadata, before, "{kind}");
+            }
+        }
+    }
+
+    #[test]
+    fn disabled_primitive_does_not_change_execution_intent() {
+        let mut disabled = relax_primitive("disabled");
+        let StudyPipelineNode::Primitive { enabled, payload, .. } = &mut disabled else { unreachable!() };
+        *enabled = false;
+        payload.insert("interactive_session_requested".into(), serde_json::json!(true));
+        payload.insert("wait_for_solve".into(), serde_json::json!(true));
+        let mut config = pipeline_config(vec![StudyPipelineNode::Group {
+            id: "group".into(), label: "group".into(), enabled: true, notes: None, source: None,
+            collapsed: false, children: vec![disabled, relax_primitive("enabled")],
+        }]);
+        config.ir.problem_meta.runtime_metadata.insert("interactive_session_requested".into(), serde_json::json!(false));
+        config.ir.problem_meta.runtime_metadata.insert("wait_for_solve".into(), serde_json::json!(false));
+        let stages = materialize_script_stages_with_output_policy(config, fullmag_ir::configure_project_autosave_policy).unwrap();
+        assert_eq!(stages.len(), 1);
+        assert_eq!(stages[0].ir.problem_meta.runtime_metadata["interactive_session_requested"], false);
+        assert_eq!(stages[0].ir.problem_meta.runtime_metadata["wait_for_solve"], false);
     }
 
     #[test]
@@ -854,6 +929,13 @@ fn classify_stage_transition(
 
 fn classify_action_stage_transition(action: &ResolvedScriptStageAction) -> StageTransitionMetadata {
     match action {
+        ResolvedScriptStageAction::AntennaRetainedDirectInspection { .. }
+        | ResolvedScriptStageAction::AntennaRetainedPreparationInspection { .. }
+        | ResolvedScriptStageAction::AntennaRetainedCurrentInspection { .. } => StageTransitionMetadata::boundary(
+            StageTransitionKind::AntennaRetainedCurrentInspection,
+            StageTransitionReason::AntennaRetainedCurrentInspection,
+            None,
+        ),
         ResolvedScriptStageAction::AntennaClosedLoopInspection { .. } => StageTransitionMetadata::boundary(
             StageTransitionKind::AntennaClosedLoopInspection,
             StageTransitionReason::AntennaClosedLoopInspection,
@@ -1017,6 +1099,27 @@ fn resolve_antenna_field_solve_action(
     stage_id: &str,
     port_mode_id: &str,
 ) -> Result<ResolvedScriptStageAction> {
+    if ir.antenna_field_solve_stages.iter().any(|stage| stage.id == stage_id
+        && (stage.retained_source_preparation.is_some() || stage.retained_current_source.is_some())
+        && stage.oersted_realization == fullmag_ir::AntennaOerstedRealizationIR::DirectTetraQuadrature) {
+        let plan = fullmag_plan::plan_retained_direct_field_inspection(ir, stage_id, port_mode_id)
+            .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+        return Ok(ResolvedScriptStageAction::AntennaRetainedDirectInspection { plan });
+    }
+    if ir.antenna_field_solve_stages.iter().any(|stage| {
+        stage.id == stage_id && stage.retained_source_preparation.is_some()
+    }) {
+        let plan = fullmag_plan::plan_retained_preparation_field_inspection(ir, stage_id, port_mode_id)
+            .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+        return Ok(ResolvedScriptStageAction::AntennaRetainedPreparationInspection { plan });
+    }
+    if ir.antenna_field_solve_stages.iter().any(|stage| {
+        stage.id == stage_id && stage.retained_current_source.is_some()
+    }) {
+        let plan = fullmag_plan::plan_retained_current_field_inspection(ir, stage_id, port_mode_id)
+            .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+        return Ok(ResolvedScriptStageAction::AntennaRetainedCurrentInspection { plan });
+    }
     let plan = fullmag_plan::plan_antenna_field_solve_execution(ir, stage_id, port_mode_id)
         .map_err(|error| anyhow::anyhow!(error.to_string()))?;
     Ok(match plan {
@@ -1516,83 +1619,136 @@ fn materialize_pipeline_primitive(
     payload: &BTreeMap<String, Value>,
     default_until_seconds: Option<f64>,
 ) -> Result<Option<ResolvedScriptStage>> {
-    let normalized_kind = stage_kind.trim().to_ascii_lowercase();
-    let captured_base = if let Some(field) = payload.get("external_field") {
-        if source != Some("script_imported") || !matches!(normalized_kind.as_str(), "run" | "relax") {
-            bail!("stage external_field requires a script-imported Run or Relax");
-        }
-        let mut ir = current_ir.clone();
-        apply_stage_external_field(&mut ir, field)?;
-        Some(ir)
+    const EXECUTION_KEYS: [&str; 2] = ["interactive_session_requested", "wait_for_solve"];
+    // Validate both fields before changing mutable workspace metadata. Keep raw
+    // previous values so any parser/materializer refusal restores them exactly.
+    let flags = EXECUTION_KEYS
+        .iter()
+        .filter_map(|key| payload.get(*key).map(|value| (*key, value)))
+        .map(|(key, value)| {
+            value
+                .as_bool()
+                .with_context(|| {
+                    format!("study pipeline primitive payload.{key} must be a boolean")
+                })
+                .map(|value| (key, value))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let previous = flags
+        .iter()
+        .map(|(key, _)| {
+            (
+                (*key).to_string(),
+                current_ir.problem_meta.runtime_metadata.get(*key).cloned(),
+            )
+        })
+        .collect::<Vec<_>>();
+    let filtered;
+    let payload = if flags.is_empty() {
+        payload
     } else {
-        None
+        filtered = payload
+            .iter()
+            .filter(|(key, _)| !EXECUTION_KEYS.contains(&key.as_str()))
+            .map(|(key, value)| (key.clone(), value.clone()))
+            .collect::<BTreeMap<_, _>>();
+        &filtered
     };
-    match normalized_kind.as_str() {
-        "antenna_field_solve" => {
-            materialize_pipeline_antenna_field_solve(current_ir, payload, antenna_inventory).map(Some)
-        }
-        "antenna_source_spectrum" => {
-            materialize_pipeline_antenna_source_spectrum(current_ir, payload, antenna_inventory).map(Some)
-        }
-        "add_solved_antenna_drive" => {
-            materialize_pipeline_add_solved_antenna_drive(current_ir, payload, antenna_inventory).map(Some)
-        }
-        "run" => {
-            let script_imported = source == Some("script_imported");
-            validate_pipeline_run_primitive_payload(payload, script_imported)?;
-            let base = captured_base.as_ref().unwrap_or(current_ir);
-            let mut stage = materialize_pipeline_run(base, payload, default_until_seconds)?;
-            if script_imported {
-                apply_imported_run_capture(&mut stage.ir, payload)?;
-            }
-            Ok(Some(stage))
-        }
-        "relax" => {
-            let base = captured_base.as_ref().unwrap_or(current_ir);
-            materialize_pipeline_relax(base, payload).map(Some)
-        }
-        "eigenmodes" => materialize_pipeline_eigenmodes(current_ir, payload).map(Some),
-        "frequency_response" => {
-            materialize_pipeline_frequency_response(current_ir, payload).map(Some)
-        }
-        "set_field" => {
-            apply_pipeline_set_field(current_ir, payload)?;
-            Ok(None)
-        }
-        "set_current" => {
-            apply_pipeline_set_current(current_ir, payload)?;
-            Ok(None)
-        }
-        "set_transport_current" => {
-            apply_pipeline_set_transport_current(current_ir, payload)?;
-            Ok(None)
-        }
-        "set_spin_torque_enabled" => {
-            apply_pipeline_set_spin_torque_enabled(current_ir, payload)?;
-            Ok(None)
-        }
-        "save_state" => materialize_pipeline_save_state(current_ir, payload).map(Some),
-        "load_state" => materialize_pipeline_load_state(current_ir, payload).map(Some),
-        "export" => materialize_pipeline_export(current_ir, payload).map(Some),
-        "change_device" => materialize_pipeline_change_device(current_ir, payload).map(Some),
-        "add_field_drive" => materialize_pipeline_add_field_drive(current_ir, payload).map(Some),
-        "add_mask_field_drive" => {
-            materialize_pipeline_add_mask_field_drive(current_ir, payload).map(Some)
-        }
-        "update_mask_field_drive" => {
-            materialize_pipeline_update_mask_field_drive(current_ir, payload).map(Some)
-        }
-        "remove_field_drive" => {
-            materialize_pipeline_remove_field_drive(current_ir, payload).map(Some)
-        }
-        "table_autosave" => materialize_pipeline_table_autosave(current_ir, payload).map(Some),
-        "autosave" => materialize_pipeline_autosave(current_ir, payload).map(Some),
-        "fft_response" => materialize_pipeline_fft_response(current_ir, payload).map(Some),
-        other => bail!(
-            "study pipeline primitive stage '{}' is not yet executable by the runtime; materialize it into explicit stages first",
-            other
-        ),
+    for (key, value) in flags {
+        current_ir
+            .problem_meta
+            .runtime_metadata
+            .insert(key.into(), Value::Bool(value));
     }
+    let result = (|| {
+        let normalized_kind = stage_kind.trim().to_ascii_lowercase();
+        let captured_base = if let Some(field) = payload.get("external_field") {
+            if source != Some("script_imported") || !matches!(normalized_kind.as_str(), "run" | "relax") {
+                bail!("stage external_field requires a script-imported Run or Relax");
+            }
+            let mut ir = current_ir.clone();
+            apply_stage_external_field(&mut ir, field)?;
+            Some(ir)
+        } else {
+            None
+        };
+        match normalized_kind.as_str() {
+            "antenna_field_solve" => {
+                materialize_pipeline_antenna_field_solve(current_ir, payload, antenna_inventory).map(Some)
+            }
+            "antenna_source_spectrum" => {
+                materialize_pipeline_antenna_source_spectrum(current_ir, payload, antenna_inventory).map(Some)
+            }
+            "add_solved_antenna_drive" => {
+                materialize_pipeline_add_solved_antenna_drive(current_ir, payload, antenna_inventory).map(Some)
+            }
+            "run" => {
+                let script_imported = source == Some("script_imported");
+                validate_pipeline_run_primitive_payload(payload, script_imported)?;
+                let base = captured_base.as_ref().unwrap_or(current_ir);
+                let mut stage = materialize_pipeline_run(base, payload, default_until_seconds)?;
+                if script_imported {
+                    apply_imported_run_capture(&mut stage.ir, payload)?;
+                }
+                Ok(Some(stage))
+            }
+            "relax" => {
+                let base = captured_base.as_ref().unwrap_or(current_ir);
+                materialize_pipeline_relax(base, payload).map(Some)
+            }
+            "eigenmodes" => materialize_pipeline_eigenmodes(current_ir, payload).map(Some),
+            "frequency_response" => {
+                materialize_pipeline_frequency_response(current_ir, payload).map(Some)
+            }
+            "set_field" => {
+                apply_pipeline_set_field(current_ir, payload)?;
+                Ok(None)
+            }
+            "set_current" => {
+                apply_pipeline_set_current(current_ir, payload)?;
+                Ok(None)
+            }
+            "set_transport_current" => {
+                apply_pipeline_set_transport_current(current_ir, payload)?;
+                Ok(None)
+            }
+            "set_spin_torque_enabled" => {
+                apply_pipeline_set_spin_torque_enabled(current_ir, payload)?;
+                Ok(None)
+            }
+            "save_state" => materialize_pipeline_save_state(current_ir, payload).map(Some),
+            "load_state" => materialize_pipeline_load_state(current_ir, payload).map(Some),
+            "export" => materialize_pipeline_export(current_ir, payload).map(Some),
+            "change_device" => materialize_pipeline_change_device(current_ir, payload).map(Some),
+            "add_field_drive" => materialize_pipeline_add_field_drive(current_ir, payload).map(Some),
+            "add_mask_field_drive" => {
+                materialize_pipeline_add_mask_field_drive(current_ir, payload).map(Some)
+            }
+            "update_mask_field_drive" => {
+                materialize_pipeline_update_mask_field_drive(current_ir, payload).map(Some)
+            }
+            "remove_field_drive" => {
+                materialize_pipeline_remove_field_drive(current_ir, payload).map(Some)
+            }
+            "table_autosave" => materialize_pipeline_table_autosave(current_ir, payload).map(Some),
+            "autosave" => materialize_pipeline_autosave(current_ir, payload).map(Some),
+            "fft_response" => materialize_pipeline_fft_response(current_ir, payload).map(Some),
+            other => bail!(
+                "study pipeline primitive stage '{}' is not yet executable by the runtime; materialize it into explicit stages first",
+                other
+            ),
+        }
+    })();
+    if result.is_err() {
+        for (key, value) in previous {
+            if let Some(value) = value {
+                current_ir.problem_meta.runtime_metadata.insert(key, value);
+            } else {
+                current_ir.problem_meta.runtime_metadata.remove(&key);
+            }
+        }
+    }
+    result
 }
 
 fn check_antenna_declaration<T: PartialEq>(
@@ -1663,19 +1819,29 @@ fn standalone_antenna_study(stage_id: &str, port_mode_id: &str) -> fullmag_ir::S
 pub(crate) fn parse_antenna_solve_selection(
     payload: &BTreeMap<String, Value>,
 ) -> Result<(String, String)> {
+    // Snapshot coverage and retained-source admission also call this parser
+    // directly, without the primitive materializer's execution-flag filtering.
+    for key in ["interactive_session_requested", "wait_for_solve"] {
+        if let Some(value) = payload.get(key) {
+            if !value.is_boolean() {
+                bail!("study pipeline primitive payload.{key} must be a boolean");
+            }
+        }
+    }
     let unsupported = payload
         .keys()
         .filter(|key| {
             !matches!(
                 key.as_str(),
                 "kind" | "stage_id" | "port_mode_id" | "port_mode_ids" | "entrypoint_kind"
+                    | "interactive_session_requested" | "wait_for_solve"
             )
         })
         .cloned()
         .collect::<Vec<_>>();
     if !unsupported.is_empty() {
         bail!(
-            "antenna_field_solve accepts only stage_id, port_mode_id(s), and entrypoint_kind; unsupported payload keys: {}",
+            "antenna_field_solve accepts only stage_id, port_mode_id(s), entrypoint_kind, and boolean execution flags; unsupported payload keys: {}",
             unsupported.join(", ")
         );
     }

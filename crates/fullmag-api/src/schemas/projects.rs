@@ -285,7 +285,7 @@ pub(crate) struct ProjectRunResource {
 pub(crate) struct ProjectRunListQuery {
     /// Page size, from 1 to 100; defaults to 50.
     pub limit: Option<u32>,
-    /// Last RunId returned on the previous page.
+    /// Opaque next_cursor returned on the previous page.
     pub cursor: Option<String>,
 }
 

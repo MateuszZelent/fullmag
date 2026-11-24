@@ -687,6 +687,9 @@ impl InteractiveRuntimeHost {
         plan: &ExecutionPlanIR,
         live_workspace: &LocalLiveWorkspace,
     ) -> Result<PreparedInteractiveBase> {
+        if matches!(&plan.backend_plan, BackendPlanIR::AntennaRetainedCurrentFieldInspection(_) | BackendPlanIR::AntennaRetainedDirectFieldInspection(_) | BackendPlanIR::AntennaRetainedPreparationFieldInspection(_)) {
+            anyhow::bail!("retained-current H-only inspection requires its typed accepted worker; no interactive magnetic runtime may be prepared");
+        }
         let mut plan = plan.clone();
         materialize_antenna_consumer_plan(&base_problem, &mut plan, live_workspace)?;
         let backend_plan = &plan.backend_plan;
@@ -1071,6 +1074,7 @@ impl InteractiveRuntimeHost {
 
 fn supports_dynamic_idle_preview(problem: &ProblemIR, backend_plan: &BackendPlanIR) -> bool {
     match backend_plan {
+        BackendPlanIR::AntennaRetainedCurrentFieldInspection(_) | BackendPlanIR::AntennaRetainedDirectFieldInspection(_) | BackendPlanIR::AntennaRetainedPreparationFieldInspection(_) => false,
         BackendPlanIR::AntennaFieldOnly(_) => false,
         BackendPlanIR::Fem(fem) => {
             fem.domain_mesh_mode != FemDomainMeshModeIR::SharedDomainMeshWithAir

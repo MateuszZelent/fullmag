@@ -21,6 +21,55 @@ import test_backend_candidate_recovery as recovery_tests
 
 
 class RecoveryBuildTests(unittest.TestCase):
+    def frontend_cache_inventory(self):
+        root = '/var/lib/docker/volumes/group/_data'
+        profile = {'group_volume': True, 'build_subpath': 'private/backend',
+                   'volume_names': {'build': 'group', 'control': 'group', 'package': 'packages'},
+                   'volume_documents': {'build': {'Name': 'group', 'Mountpoint': root},
+                                        'package': {'Name': 'packages', 'Mountpoint': '/var/lib/docker/volumes/packages/_data'}}}
+        frontend = {'Id': 'frontend', 'State': {'Running': True},
+                    'Config': {'Labels': {'com.docker.compose.project': 'project', 'com.docker.compose.service': 'frontend'}},
+                    'Mounts': [{'Type': 'volume', 'Name': 'group', 'Source': root, 'Destination': target, 'RW': writable}
+                               for target, writable in [('/state/development', True), ('/opt/fullmag/control', False)]],
+                    'HostConfig': {'Binds': None, 'Mounts': [
+                        {'Type': 'volume', 'Source': 'group', 'Target': target,
+                         'VolumeOptions': {'NoCopy': True, 'Subpath': subpath}}
+                        for target, subpath in [('/state/development', 'private/frontend'), ('/opt/fullmag/control', 'frontend')]]}}
+        return profile, frontend
+
+    def test_exact_pinned_frontend_subpaths_do_not_consume_backend_cache(self):
+        profile, frontend = self.frontend_cache_inventory()
+        repair.validate_repair_cache_consumers([frontend], profile, 'backend', 'frontend', 'project')
+
+    def test_root_unknown_overlap_extra_alias_or_foreign_frontend_is_refused(self):
+        import copy
+        profile, original = self.frontend_cache_inventory()
+        for change in ('root', 'unknown', 'backend', 'ledger', 'readonly-root', 'package', 'foreign-id', 'foreign-project',
+                       'extra-alias', 'conflict', 'bind-alias', 'host-extra', 'writable-control', 'bind-declaration'):
+            frontend = copy.deepcopy(original)
+            if change in {'root', 'unknown', 'backend', 'ledger'}:
+                options = frontend['HostConfig']['Mounts'][0]['VolumeOptions']
+                if change == 'unknown': options.pop('Subpath')
+                else: options['Subpath'] = {'root': '', 'backend': 'private/backend', 'ledger': 'private/ledger'}[change]
+            elif change == 'readonly-root': frontend['HostConfig']['Mounts'][1]['VolumeOptions']['Subpath'] = ''
+            elif change == 'package': frontend['Mounts'][0]['Name'] = 'packages'
+            elif change == 'foreign-id': frontend['Id'] = 'other'
+            elif change == 'foreign-project': frontend['Config']['Labels']['com.docker.compose.project'] = 'other'
+            elif change == 'extra-alias': frontend['Mounts'].append({**frontend['Mounts'][0], 'Destination': '/build'})
+            elif change == 'conflict': frontend['Mounts'][0]['SubPath'] = 'private/backend'
+            elif change == 'bind-alias': frontend['Mounts'].append({'Type': 'bind', 'Source': '/var/lib/docker/volumes/group/_data/private/backend', 'Destination': '/other'})
+            elif change == 'host-extra': frontend['HostConfig']['Mounts'].append({'Type': 'volume', 'Source': 'group', 'Target': '/ledger'})
+            elif change == 'writable-control': frontend['Mounts'][1]['RW'] = True
+            elif change == 'bind-declaration': frontend['HostConfig']['Binds'] = ['/var/lib/docker/volumes/group/_data:/other:ro']
+            with self.subTest(change=change), self.assertRaises((ValueError, RuntimeError)):
+                repair.validate_repair_cache_consumers([frontend], profile, 'backend', 'frontend', 'project')
+
+    def test_unrelated_bind_alias_to_package_cache_is_refused(self):
+        profile, _ = self.frontend_cache_inventory()
+        row = {'Id': 'other', 'Mounts': [{'Type': 'bind', 'Source': '/var/lib/docker/volumes/packages/_data', 'Destination': '/cache'}]}
+        with self.assertRaisesRegex(ValueError, 'bind aliases'):
+            repair.validate_repair_cache_consumers([row], profile, 'backend', 'frontend', 'project')
+
     def terminal(self):
         return ({'schema': 'fullmag.docker-process-tree.v1', 'state': 'shutdown_unknown',
                  'api_pid': 101, 'api_exit_code': 101},
@@ -727,6 +776,78 @@ class RecoveryBuildShellTests(unittest.TestCase):
             result=self.dispatch(suffix)
             self.assertEqual(result.returncode,2,result.stderr)
             self.assertFalse(result.stdout)
+
+
+class SucceededWorkerBuildProofTests(unittest.TestCase):
+    @contextlib.contextmanager
+    def fixture(self):
+        import copy
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory); store=root/'store'; run=store/'runs/run-demo'
+            claim=dict(run_id='run-demo',task_id='task-demo',attempt_id='attempt-demo',ownership_epoch=1,lease_token='lease-demo')
+            identity=dict(store_id='sha256:'+'f'*64,run_id='run-demo',task_id='task-demo',resource_id='cpu',lease_token='lease-demo',owner=dict(kind='solver',attempt_id='attempt-demo',ownership_epoch=1))
+            reservation=dict(identity=identity,state='quarantined',budget={'cpu_millis':1000},runtime_generation_sha256='a'*64,worker_launch_gate={'state':'consumed'})
+            proof=dict(schema='fullmag.succeeded-worker-build-proof.v1',**claim,store_id=identity['store_id'],lease_heartbeat_sequence=0,documents={})
+            docs={}
+            def save(path,value):
+                path.parent.mkdir(parents=True,exist_ok=True)
+                data=value if isinstance(value,bytes) else json.dumps(value,sort_keys=True,separators=(',',':')).encode()
+                path.write_bytes(data);proof['documents'][str(path)]=hashlib.sha256(data).hexdigest();docs[str(path)]=value
+            lease=dict(schema_version='resource_lease.v1',**claim,state='active',resource_id='cpu',heartbeat_sequence=0,budget=reservation['budget'],host_launch_binding={'runtime_generation_sha256':'a'*64})
+            save(run/'resource_leases/cpu/lease-demo.json',lease)
+            task=dict(task_id='task-demo',attempt_id='attempt-demo',ownership_epoch=1,lifecycle='succeeded',resource_id='cpu',coordinator_watermark={'command_sequence':2,'event_sequence':1},artifact_ids=['bundle','manifest'])
+            save(run/'run_catalog.json',dict(schema_version='run_catalog.v1',run_id='run-demo',tasks=[task]))
+            save(run/'worker_process_exit_receipts/exit.json',dict(schema_version='worker_process_exit_receipt.v1',**claim,status_success=True,exit_code=0,timed_out=False,stop_requested=False,resource_id='cpu',lease_heartbeat_sequence=0,process_id=999999999,process_start_token="linux-starttime-1"))
+            applied=[]
+            for sequence,kind in enumerate(['prepare','start'],1):
+                envelope=dict(claim=claim,command={'kind':kind},sequence=sequence,message_id='c'+str(sequence))
+                applied.append(envelope)
+                body={'message':{'direction':'command','envelope':envelope}}
+                save(run/('coordinator_journal/command/c'+str(sequence)+'.json'),dict(schema_version='coordinator_journal.v1',**claim,direction='command',sequence=sequence,entry_id=envelope['message_id'],terminal=False,payload=body,payload_sha256=hashlib.sha256(json.dumps(body,sort_keys=True,separators=(',',':')).encode()).hexdigest()))
+            body=dict(message={'direction':'event','envelope':dict(claim=claim,event={'kind':'completed'},sequence=1,message_id='e1')},checkpoint=dict(task={'lifecycle':'succeeded'},claim={'lease':{'heartbeat_sequence':0}},command_sequence=2,event_sequence=1))
+            save(run/'coordinator_journal/event/e1.json',dict(schema_version='coordinator_journal.v1',**claim,direction='event',sequence=1,entry_id='e1',terminal=True,payload=body,payload_sha256=hashlib.sha256(json.dumps(body,sort_keys=True,separators=(',',':')).encode()).hexdigest()))
+            inbox=dict(schema_version='worker_inbox.v1',claim=claim,pending=None,applied=applied)
+            save(run/'worker_inbox/inbox.json',dict(payload=inbox,payload_sha256=hashlib.sha256(json.dumps(inbox,sort_keys=True,separators=(',',':')).encode()).hexdigest()))
+            bundle=b'scientific output';digest=hashlib.sha256(bundle).hexdigest();save(store/'objects/sha256'/digest,bundle)
+            output=dict(artifact_id='bundle',object_ref=digest,content_sha256=digest,codec_id='fullmag.antenna.closed_loop_bundle',codec_version='v1')
+            manifest=dict(schema_version='study_output_manifest.v3',**{k:claim[k] for k in ('run_id','task_id','attempt_id','ownership_epoch')},outputs=[output]);raw=json.dumps(manifest,sort_keys=True,separators=(',',':')).encode();md=hashlib.sha256(raw).hexdigest();save(store/'objects/sha256'/md,manifest)
+            entries=[dict(task_id='task-demo',attempt_id='attempt-demo',ownership_epoch=1,artifact_id=a,artifact_type=t,object_ref=h,content_sha256=h,status='published',required=True) for a,t,h in [('bundle','artifact',digest),('manifest','study_output_manifest',md)]]
+            save(run/'artifact_catalog.json',dict(schema_version='artifact_catalog.v1',run_id='run-demo',entries=entries))
+            proof_path=Path('/opt/fullmag/control/verification/test-succeeded-proof.json')
+            request=dict(diagnostic_api_only=True,succeeded_worker_proof=str(proof_path))
+            def read(path):
+                return json.dumps(proof).encode() if path==proof_path else path.read_bytes()
+            namespace=dict(Path=Path,os=os,stat=stat,re=__import__('re'),json=json,hashlib=hashlib,require=repair.require,read=read,backend=SimpleNamespace(_assert_no_links=lambda *a:None))
+            node=next(n for n in ast.parse(repair.RUNTIME).body if isinstance(n,ast.FunctionDef) and n.name=='succeeded_worker_build_evidence')
+            exec(compile(ast.Module(body=[node],type_ignores=[]),'<succeeded-proof>','exec'),namespace)
+            def check():
+                request['succeeded_worker_proof_sha256']=hashlib.sha256(read(proof_path)).hexdigest()
+                return namespace['succeeded_worker_build_evidence'](request,SimpleNamespace(store=store),[reservation])
+            yield SimpleNamespace(check=check,proof=proof,request=request,reservation=reservation,run=run,save=save,docs=docs)
+
+    def test_success_is_read_only_and_returns_every_pin(self):
+        with self.fixture() as f:
+            before={p:p.read_bytes() for p in f.run.rglob('*.json')}
+            self.assertEqual(len(f.check()),len(f.proof['documents'])+1)
+            self.assertEqual(before,{p:p.read_bytes() for p in before})
+
+    def test_changed_evidence_missing_pins_and_foreign_reservation_refuse(self):
+        for mutation in ('digest','missing','extra','reservation','epoch','heartbeat','mode'):
+            with self.subTest(mutation=mutation),self.fixture() as f:
+                if mutation=='digest':(f.run/'run_catalog.json').write_text('{}')
+                elif mutation=='missing':f.proof['documents'].pop(str(f.run/'run_catalog.json'))
+                elif mutation=='extra':f.proof['documents']['/unexpected']='0'*64
+                elif mutation=='reservation':f.reservation['identity']['owner']['attempt_id']='foreign'
+                elif mutation=='epoch':f.proof['ownership_epoch']=2
+                elif mutation=='heartbeat':f.proof['lease_heartbeat_sequence']=1
+                else:f.request['diagnostic_api_only']=False
+                with self.assertRaises(ValueError):f.check()
+
+    def test_pinned_non_success_exit_pending_and_missing_completed_refuse(self):
+        for name,key,value in [('worker_process_exit_receipts/exit.json','exit_code',1),('run_catalog.json','tasks',[]),('worker_inbox/inbox.json','payload',{'pending':{'kind':'start'}}),('coordinator_journal/event/e1.json','terminal',False)]:
+            with self.subTest(name=name),self.fixture() as f:
+                path=f.run/name;doc=f.docs[str(path)];doc[key]=value;f.save(path,doc)
+                with self.assertRaises(ValueError):f.check()
 
 
 if __name__ == '__main__':

@@ -5790,6 +5790,8 @@ mod tests {
             current_transport_id: "charge".into(),
             port_mode_ids: vec!["strip_port".into()],
             conservative_current_view_ref: Some("charge:rt0".into()),
+            retained_current_source: None,
+            retained_source_preparation: None,
             model: AntennaFieldModelIR::QuasistaticConductionBiotSavart3d,
             oersted_realization: AntennaOerstedRealizationIR::DirectTetraQuadrature,
             surface_field_policy: None,

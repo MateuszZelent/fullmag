@@ -75,6 +75,72 @@ pub struct AntennaFieldSamplingPlanIR {
     pub cells: FemConnectivityIR,
 }
 
+pub const ANTENNA_RETAINED_CURRENT_FIELD_PLAN_SCHEMA: &str = "antenna_retained_current_field_plan.v1";
+
+/// Unauthenticated H-only intent. Durable preparation must load and bind the parent source.
+/// There is deliberately no source mesh, RT0 data or native preparation certificate here.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct AntennaRetainedCurrentFieldPlanIR {
+    #[serde(deserialize_with = "deserialize_retained_current_field_plan_schema")]
+    pub schema_version: String,
+    pub stage: crate::AntennaFieldSolveStageIR,
+    pub field_sampling: AntennaFieldSamplingPlanIR,
+    pub requested_execution: crate::RequestedTransportExecutionIR,
+}
+
+fn deserialize_retained_current_field_plan_schema<'de, D: Deserializer<'de>>(
+    deserializer: D,
+) -> Result<String, D::Error> {
+    let version = String::deserialize(deserializer)?;
+    if version != ANTENNA_RETAINED_CURRENT_FIELD_PLAN_SCHEMA {
+        return Err(serde::de::Error::custom("unsupported retained-current field plan schema"));
+    }
+    Ok(version)
+}
+
+pub const ANTENNA_RETAINED_DIRECT_FIELD_PLAN_SCHEMA_V2: &str = "antenna_retained_direct_field_plan.v2";
+
+/// Direct inspection intent, never interchangeable with the surface v1 plan.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct AntennaRetainedDirectFieldPlanV2 {
+    #[serde(deserialize_with = "deserialize_retained_direct_field_plan_schema")]
+    pub schema_version: String,
+    pub stage: crate::AntennaFieldSolveStageIR,
+    pub field_sampling: AntennaFieldSamplingPlanIR,
+    pub requested_execution: crate::RequestedTransportExecutionIR,
+    pub preparation_asset: crate::AntennaSourcePreparationAssetRefIR,
+}
+fn deserialize_retained_direct_field_plan_schema<'de, D: Deserializer<'de>>(deserializer: D) -> Result<String, D::Error> {
+    let version = String::deserialize(deserializer)?;
+    if version != ANTENNA_RETAINED_DIRECT_FIELD_PLAN_SCHEMA_V2 {
+        return Err(serde::de::Error::custom("unsupported retained direct field plan schema"));
+    }
+    Ok(version)
+}
+
+pub const ANTENNA_RETAINED_PREPARATION_FIELD_PLAN_SCHEMA: &str = "antenna_retained_preparation_field_plan.v1";
+
+/// Frozen input-asset intent, separate from the original retained-current plan contract.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct AntennaRetainedPreparationFieldPlanIR {
+    #[serde(deserialize_with = "deserialize_retained_preparation_field_plan_schema")]
+    pub schema_version: String,
+    pub stage: crate::AntennaFieldSolveStageIR,
+    pub field_sampling: AntennaFieldSamplingPlanIR,
+    pub requested_execution: crate::RequestedTransportExecutionIR,
+    pub preparation_asset: crate::AntennaSourcePreparationAssetRefIR,
+}
+fn deserialize_retained_preparation_field_plan_schema<'de, D: Deserializer<'de>>(deserializer: D) -> Result<String, D::Error> {
+    let version = String::deserialize(deserializer)?;
+    if version != ANTENNA_RETAINED_PREPARATION_FIELD_PLAN_SCHEMA {
+        return Err(serde::de::Error::custom("unsupported retained-preparation field plan schema"));
+    }
+    Ok(version)
+}
+
 /// Session carriers for a selected static antenna action, without magnetic DOFs.
 /// Numerical execution remains owned by the resolved antenna action.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -343,6 +409,9 @@ fn resolved_frozen_mask_sha256(mask: &[bool]) -> String {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum BackendPlanIR {
+    AntennaRetainedCurrentFieldInspection(AntennaRetainedCurrentFieldPlanIR),
+    AntennaRetainedPreparationFieldInspection(AntennaRetainedPreparationFieldPlanIR),
+    AntennaRetainedDirectFieldInspection(AntennaRetainedDirectFieldPlanV2),
     AntennaFieldOnly(AntennaFieldOnlyPlanIR),
     AntennaExternalLeadInspection(AntennaExternalLeadInspectionBackendPlanIR),
     Fdm(FdmPlanIR),

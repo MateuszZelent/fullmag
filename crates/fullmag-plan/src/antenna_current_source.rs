@@ -1,4 +1,9 @@
 //! Checked mesh-exact input materialization; public execution remains gated.
+mod authored_input;
+mod retained_preparation;
+pub use retained_preparation::validate_retained_preparation_authored_source;
+pub use authored_input::{antenna_closed_loop_authored_input_preimage, validate_retained_current_authored_source};
+use authored_input::exact_ids;
 use crate::PlanError;
 use fullmag_ir::antenna_current_source::*;
 use fullmag_ir::{
@@ -1314,6 +1319,8 @@ mod tests {
             current_transport_id: port.current_transport_id.clone(),
             port_mode_ids: vec![port.id.clone()],
             conservative_current_view_ref: None,
+            retained_current_source: None,
+            retained_source_preparation: None,
             model: AntennaFieldModelIR::QuasistaticConductionBiotSavart3d,
             oersted_realization: AntennaOerstedRealizationIR::DirectTetraQuadrature,
             surface_field_policy: None,
@@ -2486,14 +2493,30 @@ pub fn materialize_antenna_closed_loop_current_input(
         "prepared loop requires exact original cell order and full canonical mesh v3 identity")?;
     let geometry=problem.geometry.entries.iter().find(|geometry| geometry.name()==source.geometry_id)
         .ok_or_else(|| fail("prepared source geometry owner is missing"))?;
-    let fullmag_ir::GeometryEntryIR::MicrostripAntenna {conductors, conductivity_s_per_m, r#loop:Some(loop_geometry), ..}=geometry
-        else { return Err(fail("prepared source requires explicit complete microstrip loop geometry")); };
-    require(loop_geometry.enabled && conductors.len()==2 && conductors[0].kind=="signal" && conductors[1].kind=="return",
-        "prepared source requires explicit signal/return and two bridge parts")?;
-    let parts=[(conductors[0].id.as_str(),*conductivity_s_per_m),(conductors[1].id.as_str(),*conductivity_s_per_m),
-        (loop_geometry.inlet_connection_part_id.as_str(),loop_geometry.inlet_connection_conductivity_s_per_m),
-        (loop_geometry.outlet_connection_part_id.as_str(),loop_geometry.outlet_connection_conductivity_s_per_m)];
-    require(definition.materials.len()==1 || definition.materials.len()==4, "prepared source materials must be whole-object or four disjoint parts")?;
+    let (conductors, parts) = match geometry {
+        fullmag_ir::GeometryEntryIR::MicrostripAntenna {conductors, conductivity_s_per_m, r#loop:Some(loop_geometry), ..} => {
+            require(loop_geometry.enabled && conductors.len()==2 && conductors[0].kind=="signal" && conductors[1].kind=="return",
+                "prepared microstrip requires explicit signal/return and two bridge parts")?;
+            (conductors, vec![(conductors[0].id.as_str(),*conductivity_s_per_m),(conductors[1].id.as_str(),*conductivity_s_per_m),
+                (loop_geometry.inlet_connection_part_id.as_str(),loop_geometry.inlet_connection_conductivity_s_per_m),
+                (loop_geometry.outlet_connection_part_id.as_str(),loop_geometry.outlet_connection_conductivity_s_per_m)])
+        },
+        fullmag_ir::GeometryEntryIR::CpwAntenna {conductors, conductivity_s_per_m, r#loop:Some(loop_geometry), ..} => {
+            require(loop_geometry.enabled && conductors.len()==3 && conductors[0].kind=="signal"
+                && conductors[1].kind=="ground_left" && conductors[2].kind=="ground_right",
+                "prepared GSG requires explicit signal/two grounds and two bridge parts")?;
+            (conductors, vec![(conductors[0].id.as_str(),*conductivity_s_per_m),(conductors[1].id.as_str(),*conductivity_s_per_m),
+                (conductors[2].id.as_str(),*conductivity_s_per_m),
+                (loop_geometry.inlet_connection_part_id.as_str(),loop_geometry.inlet_connection_conductivity_s_per_m),
+                (loop_geometry.outlet_connection_part_id.as_str(),loop_geometry.outlet_connection_conductivity_s_per_m)])
+        },
+        _ => return Err(fail("prepared source requires explicit complete microstrip or GSG loop geometry")),
+    };
+    let branch_count=conductors.len();
+    require(source.material_parts.len()==parts.len() && source.terminal_observations.len()==2*branch_count,
+        "prepared source topology must match its authored geometry")?;
+    require(definition.materials.len()==1 || definition.materials.len()==parts.len(),
+        "prepared source materials must be whole-object or cover all authored parts")?;
     let whole=definition.materials.len()==1 && definition.materials[0].region.region_id.is_none();
     let mut material_indices=BTreeSet::new();
     let mut owners=vec![None;mesh.cell_count()];
@@ -2519,14 +2542,6 @@ pub fn materialize_antenna_closed_loop_current_input(
     }
     require(owners.iter().all(Option::is_some) && material_indices.len()==definition.materials.len(),
         "prepared source material parts must cover every cell and assignment exactly")?;
-    fn exact_ids(value:&mut Value, field:Option<&str>) {
-        match value {
-            Value::Object(map)=>for (key,value) in map {exact_ids(value,Some(key));},
-            Value::Array(values)=>for value in values {exact_ids(value,field);},
-            Value::Number(number) if matches!(field,Some("stable_vertex_ids"|"face_vertex_ids"|"minus_face_vertex_ids"|"plus_face_vertex_ids"|"element_ordinals"|"part_cell_ordinal"|"bridge_cell_ordinal")) => {*value=Value::String(number.to_string());},
-            _=>{},
-        }
-    }
     let tagged=|value:&Value| fullmag_ir::transport_identity::tagged_json_digest(value).map_err(|cause|fail(cause.to_string()));
     let mut mapping=serde_json::to_value(&source.material_parts).map_err(|cause|fail(cause.to_string()))?;exact_ids(&mut mapping,None);
     require(tagged(&serde_json::json!({"schema":"antenna_coincident_material_binding.v2","assignments":definition.materials,
@@ -2577,8 +2592,8 @@ pub fn materialize_antenna_closed_loop_current_input(
     let mut observation_ids=BTreeSet::new();let mut observed_faces=BTreeSet::new();
     for observation in &source.terminal_observations {
         require(observation_ids.insert(observation.id.as_str()),"prepared observation IDs must be unique")?;
-        let part_index=parts.iter().position(|(id,_)|*id==observation.part_id).filter(|index|*index<2).ok_or_else(||fail("observation must bind actual signal or return part"))?;
-        let bridge_index=if observation.selector=="local_u_min" {2} else {3};
+        let part_index=parts.iter().position(|(id,_)|*id==observation.part_id).filter(|index|*index<branch_count).ok_or_else(||fail("observation must bind an actual conductor part"))?;
+        let bridge_index=if observation.selector=="local_u_min" {branch_count} else {branch_count+1};
         let expected=incidence.iter().filter(|(_,cells)|cells.len()==2 && ((owners[cells[0]]==Some(part_index)&&owners[cells[1]]==Some(bridge_index)) || (owners[cells[1]]==Some(part_index)&&owners[cells[0]]==Some(bridge_index))))
             .map(|(face,_)|*face).collect::<BTreeSet<_>>();
         let declared=observation.faces.iter().map(|face|key(face.face_vertex_ids)).collect::<BTreeSet<_>>();
@@ -2598,33 +2613,14 @@ pub fn materialize_antenna_closed_loop_current_input(
         }
     }
     let branch_refs=port.branches.iter().flat_map(|branch|[branch.inlet_terminal_ref.as_str(),branch.outlet_terminal_ref.as_str()]).collect::<BTreeSet<_>>();
-    require(port.branches.len()==2 && branch_refs.len()==4 && port.branches.iter().all(|branch| {
+    require(port.branches.len()==branch_count && branch_refs.len()==2*branch_count
+        && port.branches.iter().map(|branch|branch.id.as_str()).collect::<BTreeSet<_>>() == conductors.iter().map(|part|part.id.as_str()).collect::<BTreeSet<_>>()
+        && port.branches.iter().all(|branch| {
         let inlet=source.terminal_observations.iter().find(|obs|obs.id==branch.inlet_terminal_ref);
         let outlet=source.terminal_observations.iter().find(|obs|obs.id==branch.outlet_terminal_ref);
-        branch.signed_weight.is_finite() && matches!((inlet,outlet),(Some(a),Some(b)) if a.part_id==b.part_id && a.selector=="local_u_min" && b.selector=="local_u_max")
-    }),"prepared port must reference four actual internal observations on paired parts")?;
-    let receipts=problem.problem_meta.runtime_metadata.get("antenna_coincident_preparations").and_then(Value::as_array).ok_or_else(||fail("prepared source authored intent receipt is missing"))?;
-    let matches=receipts.iter().filter(|receipt|receipt.get("current_transport_id").and_then(Value::as_str)==Some(stage.current_transport_id.as_str())
-        && receipt.get("object_id").and_then(Value::as_str)==Some(source.object_id.as_str()) && receipt.get("geometry_id").and_then(Value::as_str)==Some(source.geometry_id.as_str())).collect::<Vec<_>>();
-    require(matches.len()==1,"prepared source authored receipt is missing or ambiguous")?;
-    let authored=matches[0].pointer("/preparation/authored_intent").ok_or_else(||fail("prepared source lost its authored closure"))?;
-    let mut closure=serde_json::to_value(&source.closure).map_err(|cause|fail(cause.to_string()))?;
-    let object=closure.as_object_mut().ok_or_else(||fail("prepared closure shape"))?;object.remove("revision");object.remove("digest");exact_ids(&mut closure,None);
-    let mut stable=serde_json::json!(source.stable_vertex_ids);exact_ids(&mut stable,Some("stable_vertex_ids"));
-    let mut observations=serde_json::to_value(&source.terminal_observations).map_err(|cause|fail(cause.to_string()))?;exact_ids(&mut observations,None);
-    let mesh_workflow=matches[0].pointer("/preparation/prepared_mesh_workflow").filter(|value|value.is_object()).ok_or_else(||fail("prepared source mesh policy intent missing"))?;
-    let recipes=matches[0].pointer("/preparation/prepared_per_object_recipes").filter(|value|value.is_object()).ok_or_else(||fail("prepared source per-object mesh recipes missing"))?;
-    // Python FEM.to_ir retains the authored optional mesh as null; restore
-    // that canonical shape rather than hashing a Rust serialization omission.
-    let mut backend_policy=serde_json::to_value(&problem.backend_policy).map_err(|cause|fail(cause.to_string()))?;
-    if let Some(fem)=backend_policy.pointer_mut("/discretization_hints/fem").and_then(Value::as_object_mut) {
-        fem.entry("mesh".to_string()).or_insert(Value::Null);
-    }
-    let selection=problem.problem_meta.runtime_metadata.get("runtime_selection").ok_or_else(||fail("prepared source requested execution identity missing"))?;
-    let authored_input_preimage=serde_json::json!({"schema":"antenna_coincident_prepared_input.v2","object_id":source.object_id,"geometry":geometry,
-        "authored_closure":authored,"mesh_digest":source.mesh_digest,"stable_vertex_ids":stable,"closure":closure,"materials_digest":source.materials_digest,
-        "material_parts":mapping,"terminal_observations":observations,"port":port,"gauge":definition.gauge,"solver":solver,
-        "requested_execution":selection,"backend_policy":backend_policy,"validation_profile":problem.validation_profile,"mesh_workflow":mesh_workflow,"per_object_recipes":recipes});
+        branch.signed_weight.is_finite() && matches!((inlet,outlet),(Some(a),Some(b)) if a.part_id==branch.id && b.part_id==branch.id && a.selector=="local_u_min" && b.selector=="local_u_max")
+    }),"prepared port must reference every actual internal observation on its authored conductor parts")?;
+    let authored_input_preimage=antenna_closed_loop_authored_input_preimage(problem,definition,stage,port)?;
     require(tagged(&authored_input_preimage)?==source.authored_input_digest,
         "prepared source authored input digest does not bind actual geometry, closure, carrier, materials and intent")?;
     let boundary_roles=topology.exterior.keys().map(|face|fullmag_ir::ConservativeCurrentBoundaryFaceIR{face_vertex_ids:*face,

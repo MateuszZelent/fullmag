@@ -736,6 +736,7 @@ mod tests {
         use fullmag_authoring::{SceneGeometry, SceneImportedGeometryAssetRef};
 
         let geometry = |kind: &str, params: serde_json::Value, source_asset| SceneGeometry {
+            geometry_name: None,
             geometry_kind: kind.to_owned(),
             geometry_params: params,
             source_asset,

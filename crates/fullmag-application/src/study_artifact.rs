@@ -20,6 +20,11 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 
+use fullmag_antenna_artifacts::retained_current::{
+    decode_retained_current_field_bundle, RetainedCurrentFieldBundle,
+    RETAINED_CURRENT_FIELD_CODEC_ID, RETAINED_CURRENT_FIELD_CODEC_VERSION,
+};
+
 pub use fullmag_antenna_artifacts::solution::AntennaExternalLeadSolutionArtifact as AntennaInspectionArtifact;
 
 pub const STUDY_MAGNETIZATION_CODEC_ID: &str = "fullmag.runner.field_json";
@@ -221,6 +226,8 @@ pub enum DecodedStudyArtifact {
     FrozenMagnetizationState(FrozenMagnetizationStateArtifact),
     Scalar(StudyScalarArtifact),
     AntennaClosedLoopInspection(AntennaInspectionBundle),
+    RetainedCurrentField(RetainedCurrentFieldBundle),
+    RetainedDirectField(fullmag_antenna_artifacts::retained_current::RetainedCurrentFieldBundleV2),
     AntennaInspection(AntennaInspectionArtifact),
     FemDrivenResponseIndex(FrequencyResponseBundle),
     FemDrivenResponsePoint(FrequencyResponseBundle),
@@ -343,6 +350,18 @@ pub fn decode_study_artifact(
         ("artifact", ANTENNA_INSPECTION_BUNDLE_CODEC_ID, ANTENNA_INSPECTION_BUNDLE_CODEC_VERSION) => {
             decode_antenna_inspection_bundle(bytes, ANTENNA_INSPECTION_BUNDLE_MAX_BYTES)
                 .map(DecodedStudyArtifact::AntennaClosedLoopInspection)
+        }
+        ("artifact", RETAINED_CURRENT_FIELD_CODEC_ID, fullmag_antenna_artifacts::retained_current::RETAINED_CURRENT_FIELD_CODEC_VERSION_V2) => {
+            fullmag_antenna_artifacts::retained_current::decode_retained_current_field_bundle_v2(bytes,
+                fullmag_antenna_artifacts::retained_current::MAX_PACKAGE_BYTES as usize)
+                .map(DecodedStudyArtifact::RetainedDirectField)
+                .map_err(|error| invalid(format!("decode retained direct field package: {error}")))
+        }
+        ("artifact", RETAINED_CURRENT_FIELD_CODEC_ID, RETAINED_CURRENT_FIELD_CODEC_VERSION) => {
+            decode_retained_current_field_bundle(bytes,
+                fullmag_antenna_artifacts::retained_current::MAX_PACKAGE_BYTES as usize)
+                .map(DecodedStudyArtifact::RetainedCurrentField)
+                .map_err(|error| invalid(format!("decode retained-current field package: {error}")))
         }
         ("artifact", STUDY_ANTENNA_INSPECTION_CODEC_ID, STUDY_ANTENNA_INSPECTION_CODEC_VERSION) => {
             // CAS verifies the exact package bytes; the neutral decoder checks
@@ -1172,4 +1191,24 @@ mod tests {
         let error = decode_study_artifact(&descriptor, b"not an inspection package").unwrap_err();
         assert!(error.to_string().contains("manifest CAS digest"));
     }
+    #[test]
+    fn retained_current_codec_is_separate_and_checks_cas_before_framing() {
+        let bytes = b"not a retained-current field package";
+        let error = decode_bytes("artifact", RETAINED_CURRENT_FIELD_CODEC_ID,
+            RETAINED_CURRENT_FIELD_CODEC_VERSION, bytes).unwrap_err();
+        assert!(error.to_string().contains("decode retained-current field package"));
+        for kind in ["state", "initial_state", "field", "scalar", "mesh"] {
+            let error = decode_bytes(kind, RETAINED_CURRENT_FIELD_CODEC_ID,
+                RETAINED_CURRENT_FIELD_CODEC_VERSION, bytes).unwrap_err();
+            assert!(error.to_string().contains("unsupported study artifact codec"));
+        }
+        assert!(decode_bytes("artifact", RETAINED_CURRENT_FIELD_CODEC_ID, "v2", bytes).is_err());
+        let descriptor = ResolvedStudyArtifact { artifact_id: "retained-field".into(),
+            object_ref: "0".repeat(64), data_kind: "artifact".into(),
+            codec_id: RETAINED_CURRENT_FIELD_CODEC_ID.into(),
+            codec_version: RETAINED_CURRENT_FIELD_CODEC_VERSION.into() };
+        let error = decode_study_artifact(&descriptor, bytes).unwrap_err();
+        assert!(error.to_string().contains("manifest CAS digest"));
+    }
+
 }

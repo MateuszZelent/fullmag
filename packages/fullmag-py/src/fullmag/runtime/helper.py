@@ -273,6 +273,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     render_scene.add_argument("--scene-json", required=True, help="Path to SceneDocument JSON.")
     render_scene.add_argument("--output", required=True, help="Atomic output path for the Python script.")
+    render_scene.add_argument("--source-preparation-assets-json", help="Resolved immutable source capture records supplied by the owner.")
     render_scene.add_argument(
         "--allow-incomplete",
         action="store_true",
@@ -284,6 +285,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="Lower a SceneDocument through the canonical Python DSL and print ProblemIR.",
     )
     export_scene_ir.add_argument("--scene-json", required=True, help="Path to SceneDocument JSON.")
+    export_scene_ir.add_argument("--source-preparation-assets-json", help="Resolved immutable source capture records supplied by the owner.")
     export_scene_ir.add_argument("--backend", choices=[target.value for target in BackendTarget], required=True)
     export_scene_ir.add_argument("--device", choices=["auto", "cpu", "gpu"], required=True)
     export_scene_ir.add_argument("--precision", choices=[precision.value for precision in ExecutionPrecision], required=True)
@@ -295,6 +297,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="Lower a SceneDocument into canonical ProblemIR and ordered script stages.",
     )
     export_scene_config.add_argument("--scene-json", required=True, help="Path to SceneDocument JSON.")
+    export_scene_config.add_argument("--source-preparation-assets-json", help="Resolved immutable source capture records supplied by the owner.")
     export_scene_config.add_argument("--backend", choices=[target.value for target in BackendTarget], required=True)
     export_scene_config.add_argument("--device", choices=["auto", "cpu", "gpu"], required=True)
     export_scene_config.add_argument("--precision", choices=[precision.value for precision in ExecutionPrecision], required=True)
@@ -348,6 +351,20 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _read_source_preparation_assets(path):
+    if path is None:
+        return None
+    from fullmag.runtime.antenna_source_preparation import MAX_ASSET_BYTES, _pairs
+    with Path(path).open("rb") as stream:
+        payload = stream.read(MAX_ASSET_BYTES + 1)
+    if not payload or len(payload) > MAX_ASSET_BYTES:
+        raise ValueError("source preparation capture handoff exceeds 8 MiB")
+    records = json.loads(payload, object_pairs_hook=_pairs)
+    if not isinstance(records, dict):
+        raise ValueError("source preparation capture handoff requires an asset ID map")
+    return records
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(list(argv) if argv is not None else None)
@@ -392,6 +409,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.command in {"export-scene-ir", "export-scene-config"}:
         emit_progress("Lowering SceneDocument through the canonical Python DSL")
         scene_document = json.loads(Path(args.scene_json).read_text(encoding="utf-8"))
+        source_preparation_assets = _read_source_preparation_assets(args.source_preparation_assets_json)
+        source_preparation_kwargs = (
+            {"source_preparation_assets": source_preparation_assets}
+            if source_preparation_assets is not None
+            else {}
+        )
         if args.command == "export-scene-config":
             accepted_preparation = None
             if args.accepted_preparation_json:
@@ -409,6 +432,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 source_root=args.asset_root,
                 materialize_geometry_assets=args.materialize_geometry_assets,
                 _accepted_preparation=accepted_preparation,
+                **source_preparation_kwargs,
             )
             _write_json(execution_config)
             emit_progress("SceneDocument execution config export completed")
@@ -420,6 +444,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 requested_precision=args.precision,
                 requested_mode=args.mode,
                 source_root=args.asset_root,
+                **source_preparation_kwargs,
             )
             _write_json(problem_ir)
             emit_progress("SceneDocument ProblemIR export completed")
@@ -567,7 +592,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         emit_progress("Rendering canonical Python from SceneDocument")
         output_path = Path(args.output)
         try:
-            source = render_scene_document_as_script(scene_document)
+            source = render_scene_document_as_script(scene_document,
+                source_preparation_assets=_read_source_preparation_assets(args.source_preparation_assets_json))
         except IncompletePhysicsError:
             if not args.allow_incomplete:
                 raise

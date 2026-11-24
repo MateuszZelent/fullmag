@@ -15,6 +15,7 @@ chrono = { version = "0.4", features = ["serde"] }
 uuid = { version = "1", features = ["v4", "serde"] }
 tracing.workspace = true
 libc = "0.2"
+fullmag-antenna-artifacts = { path = "../fullmag-antenna-artifacts" }
 fullmag-authoring = { path = "../fullmag-authoring" }
 fullmag-ir = { path = "../fullmag-ir" }
 fullmag-quantities = { path = "../fullmag-quantities" }

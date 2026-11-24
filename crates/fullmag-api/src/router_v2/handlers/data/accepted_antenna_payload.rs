@@ -50,6 +50,42 @@ pub(super) fn validate_publication_query(
     Ok(())
 }
 
+// The new evidence name belongs only to accepted H-only results, not the Live families.
+fn validate_accepted_payload_kind(kind: &str) -> Result<(), ApiError> {
+    if kind == "evidence" { return Ok(()); }
+    super::antenna_inspection::validate_family_payload_kind(kind)
+}
+
+fn retained_payload_descriptor<'a>(
+    payloads: &'a fullmag_antenna_artifacts::retained_current::RetainedCurrentPayloads,
+    kind: &str,
+) -> Result<&'a fullmag_antenna_artifacts::retained_current::RetainedCurrentPayloadRef, ApiError> {
+    match kind {
+        "sample_xyz" => Ok(&payloads.sample_xyz),
+        "sample_cells" => Ok(&payloads.sample_cells),
+        "h_raw" => Ok(&payloads.h_raw),
+        "evidence" => Ok(&payloads.evidence),
+        _ => Err(ApiError::bad_request("unknown retained-current H-only payload kind")),
+    }
+}
+
+fn select_retained_payload(
+    mut loaded: fullmag_antenna_artifacts::retained_current::RetainedCurrentFieldBundleAny,
+    kind: &str,
+) -> Result<(String, Vec<u8>), ApiError> {
+    let descriptor = retained_payload_descriptor(loaded.manifest().payloads(), kind)?.clone();
+    let payloads = match &mut loaded {
+        fullmag_antenna_artifacts::retained_current::RetainedCurrentFieldBundleAny::SurfaceV1(bundle) => &mut bundle.payloads,
+        fullmag_antenna_artifacts::retained_current::RetainedCurrentFieldBundleAny::DirectV2(bundle) => &mut bundle.payloads,
+    };
+    let bytes = payloads.remove(kind)
+        .ok_or_else(|| ApiError::internal("verified retained-current payload is missing"))?;
+    if bytes.len() as u64 != descriptor.byte_count || format!("{:x}", Sha256::digest(&bytes)) != descriptor.sha256 {
+        return Err(ApiError::internal("verified retained-current payload identity differs"));
+    }
+    Ok((descriptor.sha256.clone(), bytes))
+}
+
 #[utoipa::path(
     get,
     path = "/v2/persistence/projects/{project_id}/runs/{run_id}/antenna-inspections/{step_id}/payloads/{payload_kind}",
@@ -57,7 +93,7 @@ pub(super) fn validate_publication_query(
         ("project_id" = String, Path, description = "Pinned project identity"),
         ("run_id" = String, Path, description = "Accepted durable run identity"),
         ("step_id" = String, Path, description = "Exact accepted Study step ID, not the native stage ID"),
-        ("payload_kind" = String, Path, description = "Same verified V/J/H and geometry payload kinds as the Live inspection API"),
+        ("payload_kind" = String, Path, description = "Verified payload kind for the accepted family; H-only permits sample_xyz, sample_cells, h_raw and evidence"),
         ("attempt_id" = String, Query, description = "Required current successful task attempt"),
         ("ownership_epoch" = u64, Query, description = "Required current task ownership epoch"),
         ("package_object_ref" = String, Query, description = "Required package CAS SHA-256 from the published artifact catalog"),
@@ -88,7 +124,7 @@ pub async fn get_accepted_antenna_payload(
         .map_err(|e| ApiError::bad_request(format!("invalid project_id: {e}")))?;
     let run_id =
         RunId::parse(run_id).map_err(|e| ApiError::bad_request(format!("invalid run_id: {e}")))?;
-    super::antenna_inspection::validate_family_payload_kind(&payload_kind)?;
+    validate_accepted_payload_kind(&payload_kind)?;
     validate_publication_query(&step_id, &query)?;
     let permit = Arc::clone(&state.quantity_data_plane.accepted_inspection_admission)
         .acquire_owned().await
@@ -112,6 +148,8 @@ pub async fn get_accepted_antenna_payload(
             }
             AcceptedAntennaInspectionData::ClosedLoop { loaded, .. } =>
                 super::antenna_inspection::select_closed_payload(loaded, &payload_kind)?,
+            AcceptedAntennaInspectionData::RetainedCurrent { loaded, .. } =>
+                select_retained_payload(loaded, &payload_kind)?,
         };
         // The cache identity includes ownership, not just numerical content.
         let token = serde_json::to_vec(&(
@@ -150,6 +188,25 @@ pub async fn get_accepted_antenna_payload(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn retained_dtq_v2_payload_allowlist_stays_four() {
+        use fullmag_antenna_artifacts::retained_current::{RetainedCurrentPayloadRef, RetainedCurrentPayloads};
+        // Descriptor routing fixture only, never physical evidence.
+        let descriptor = RetainedCurrentPayloadRef { sha256: "a".repeat(64), byte_count: 24,
+            layout: "sample_xyz_f64_le".into(), unit: "A/m".into() };
+        let payloads = RetainedCurrentPayloads { sample_xyz: descriptor.clone(), sample_cells: descriptor.clone(),
+            h_raw: descriptor.clone(), evidence: descriptor };
+        for kind in ["sample_xyz", "sample_cells", "h_raw", "evidence"] {
+            assert!(retained_payload_descriptor(&payloads, kind).is_ok());
+            assert!(validate_accepted_payload_kind(kind).is_ok());
+        }
+        for kind in ["v_raw", "j_local_raw", "h_per_a", "m", "H_ant_basis", "direct_evidence", "source_preimage", "bundle", "unknown"] {
+            assert!(retained_payload_descriptor(&payloads, kind).is_err(), "{kind}");
+        }
+        assert!(super::super::antenna_inspection::validate_family_payload_kind("evidence").is_err());
+        assert!(validate_accepted_payload_kind("unknown").is_err());
+    }
 
     #[test]
     fn publication_query_requires_exact_nonempty_lowercase_cas_identity() {

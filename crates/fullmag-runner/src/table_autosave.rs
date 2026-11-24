@@ -170,7 +170,9 @@ impl TableStore {
                 let next_sample_t = self
                     .next_sample_t
                     .expect("time cadence owns next sample time");
-                let eps = sample_period_s.abs() * 1e-9;
+                // Keep samples already admitted by the canonical output clock.
+                let eps =
+                    (sample_period_s.abs() * 1e-9).max(crate::schedules::OUTPUT_TIME_TOLERANCE);
                 if stats.time + eps < next_sample_t {
                     return Ok(false);
                 }
@@ -643,6 +645,36 @@ mod tests {
             window.rows[1].sample_policy.as_deref(),
             Some("coalesced_to_step")
         );
+    }
+
+    #[test]
+    fn table_store_preserves_long_presampled_picosecond_trace() {
+        let mut store = TableStore::new(config(2e-12));
+        let mut time = 0.0;
+        for step in 0..=24_000 {
+            if step % 2 == 0 {
+                assert!(
+                    store.append_if_due(&stats(step, time)).unwrap(),
+                    "scheduled scalar sample at step {step} must be retained"
+                );
+            }
+            time += 1e-12;
+        }
+        assert_eq!(store.revision(), 12_001);
+    }
+
+    #[test]
+    fn table_store_uses_output_clock_tolerance_without_interpolating() {
+        let mut store = TableStore::new(config(2e-12));
+        assert!(store.append_if_due(&stats(0, 0.0)).unwrap());
+        assert!(!store.append_if_due(&stats(1, 1e-12)).unwrap());
+        let scheduled_time = 2e-12 - crate::schedules::OUTPUT_TIME_TOLERANCE * 0.5;
+        assert!(store.append_if_due(&stats(2, scheduled_time)).unwrap());
+        assert!(!store.append_if_due(&stats(2, scheduled_time)).unwrap());
+        let window = store.window_after(None, None);
+        assert_eq!(window.rows.len(), 2);
+        assert_eq!(window.rows[1].values[1], scheduled_time);
+        assert_eq!(window.rows[1].sample_policy, None);
     }
 
     #[test]

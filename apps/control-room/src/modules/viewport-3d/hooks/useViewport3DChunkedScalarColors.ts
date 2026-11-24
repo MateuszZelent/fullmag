@@ -34,6 +34,7 @@ import type {
 } from "../viewport3dRenderModel";
 
 interface ChunkedScalarColorState {
+  ownerKey?: string;
   buildKey: string;
   colorPalette: string;
   fieldVector: object;
@@ -115,6 +116,7 @@ export interface Viewport3DFieldColorBuildReferenceInput {
 }
 
 export interface ChunkedScalarColorCompatibilityRequest {
+  ownerKey?: string;
   colorPalette: string;
   enabled: boolean;
   fieldPointCount: number | null;
@@ -326,6 +328,7 @@ export function chunkedScalarColorStateIsCompatible(
   current: ChunkedScalarColorState | null,
   request: ChunkedScalarColorCompatibilityRequest,
 ): boolean {
+  if (current?.ownerKey !== request.ownerKey) return false;
   if (
     current &&
     request.enabled &&
@@ -796,6 +799,10 @@ export function useViewport3DChunkedScalarColors({
   const combinedDisplayModesKey = requestedPartDisplayModesKey
     ? `${displayModesKey}||${requestedPartDisplayModesKey}`
     : displayModesKey;
+  const ownerKey = JSON.stringify([
+    buildSessionId ?? "current",
+    buildDomainId ?? topology?.meshGenerationId ?? "viewport-3d",
+  ]);
   const chunkedColorStateStore = useMemo(
     () => createChunkedScalarColorStateStore(),
     [],
@@ -809,6 +816,7 @@ export function useViewport3DChunkedScalarColors({
   const activeBuildIdRef = useRef(0);
   const activeControllerRef = useRef<AbortController | null>(null);
   const activeTokenRef = useRef<object | null>(null);
+  const activeOwnerKeyRef = useRef(ownerKey);
   const fieldColorTarget = useMemo(
     () => resolveViewport3DChunkedFieldColorTarget(topology, fieldVector),
     [fieldVector, topology],
@@ -841,6 +849,7 @@ export function useViewport3DChunkedScalarColors({
       partBuildSpecs.length > 0);
   const compatibilityRequest = useMemo<ChunkedScalarColorCompatibilityRequest>(
     () => ({
+      ownerKey,
       colorPalette,
       enabled,
       fieldPointCount: buildIdentityFieldVector?.pointCount ?? null,
@@ -852,6 +861,7 @@ export function useViewport3DChunkedScalarColors({
     [
       buildTargetKind,
       buildIdentityFieldVector?.pointCount,
+      ownerKey,
       colorPalette,
       combinedDisplayModesKey,
       enabled,
@@ -869,6 +879,17 @@ export function useViewport3DChunkedScalarColors({
       activeTokenRef.current = null;
     };
   }, []);
+
+  useEffect(() => {
+    if (activeOwnerKeyRef.current === ownerKey) return;
+    activeOwnerKeyRef.current = ownerKey;
+    activeBuildIdRef.current += 1;
+    activeControllerRef.current?.abort();
+    activeControllerRef.current = null;
+    releaseChunkedScalarColorToken(activeTokenRef.current);
+    activeTokenRef.current = null;
+    transitionChunkedColorState({ type: "reset" });
+  }, [ownerKey, transitionChunkedColorState]);
 
   useEffect(() => {
     // Only displayed colors can be stale. Resetting a pending build that has
@@ -898,6 +919,8 @@ export function useViewport3DChunkedScalarColors({
       topology: topology ?? null,
     };
     if (
+      (chunkedColorState.chunkedState !== null &&
+        chunkedColorState.chunkedState.ownerKey !== ownerKey) ||
       !shouldStartChunkedScalarColorBuild({
         builtBuildKey: chunkedColorState.chunkedState?.buildKey ?? null,
         builtFieldVector: chunkedColorState.chunkedState?.fieldVector ?? null,
@@ -974,6 +997,7 @@ export function useViewport3DChunkedScalarColors({
         activeTokenRef.current = token;
         transitionChunkedColorState({
           chunkedState: {
+            ownerKey,
             buildKey: combinedModesKey,
             colorPalette,
             fieldVector: buildIdentityFieldVector,
@@ -1186,6 +1210,7 @@ export function useViewport3DChunkedScalarColors({
     buildTargetKind,
     modes,
     needsChunking,
+    ownerKey,
     partBuildSpecs,
     partScalarColorModes,
     targetVisualizationRevision,

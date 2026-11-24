@@ -40,7 +40,7 @@ try {
     for (const call of value.calls.filter((call) => call.method === "POST" || call.path.endsWith("/model/scene"))) assert.ok(call.scope?.includes("request_scope_epoch="), "Missing confirmed scope");
     workflows.push({ label, ...value }); };
 
-  for (const scenario of ["malformed-source", "structured-v3"]) {
+  for (const scenario of ["malformed-source", "structured-v3", "missing-transport"]) {
     await boot(scenario);
     const inlet = terminal("Branch 1 inlet terminal");
     assert.equal(await inlet.inputValue(), "signal-in");
@@ -48,13 +48,28 @@ try {
     assert.equal(await inlet.locator("option:not([disabled])").count(), 0, "Unavailable observations must never borrow valid boundary IDs");
     assert.ok((await editor.innerText()).includes("No selectable terminal inventory"));
     assert.equal(writes(await read()).length, 0);
-    if (scenario === "malformed-source") {
+    if (scenario === "missing-transport") {
+      const transport = terminal("Current transport");
+      assert.equal(await transport.inputValue(), "lost");
+      assert.equal(await transport.locator('option[value="lost"]').isDisabled(), true);
+      assert.ok((await transport.locator('option[value="lost"]').textContent()).includes("unavailable"));
+    }
+    if (scenario === "malformed-source" || scenario === "missing-transport") {
       await field("Branch 1 ID").fill("invalid-source-draft");
       assert.equal(await button("Apply port").isDisabled(), true);
     }
     checks.push({ name: `${scenario}: selected reference is preserved without borrowing boundary terminals`, passed: true });
     await screenshot(scenario);
   }
+  await boot("transport-picker");
+  const transportChoices = terminal("Current transport");
+  assert.deepEqual(await transportChoices.locator("option:not([disabled])").allTextContents(), ["transport", "alternative"]);
+  await transportChoices.selectOption("alternative");
+  assert.equal(await terminal("Branch 1 inlet terminal").inputValue(), "signal-in");
+  assert.equal(writes(await read()).length, 0);
+  await screenshot("transport-picker");
+  await budget("existing transport inventory");
+  checks.push({ name: "Existing port transport picker excludes foreign, coupled, timed and duplicate resources; selecting a transport never rewrites terminals or writes automatically", passed: true });
   await boot();
   const original = await read(), unrelated = original.scene.antenna_port_modes[1];
   await field("Branch 1 signed weight").fill("0");
@@ -79,24 +94,19 @@ try {
   assert.equal(await field("Branch 3 signed weight").inputValue(), "");
   assert.equal(await button("Apply port").isDisabled(), true);
   await click("Remove port branch 3");
-  await field("Current transport").fill("missing-transport");
-  assert.equal(await button("Apply port").isDisabled(), true);
-  assert.equal(await inlet.inputValue(), "signal-in", "Missing inventory must not rewrite the draft");
-  assert.equal(await inlet.locator('option[value="signal-in"]').isDisabled(), true);
-  assert.ok((await inlet.locator('option[value="signal-in"]').textContent()).includes("unavailable"));
-  await field("Current transport").fill("alternative");
+  await terminal("Current transport").selectOption("alternative");
   checks.push({ name: "invalid weights/missing terminals/explicit empty branch block writes", passed: true });
 
   await field("Branch 1 ID").fill("edited-signal");
   await page.getByTestId("port-unrelated").fill("retained draft");
   await page.evaluate(() => {
     const root = document.querySelector('[data-testid="port-editor"] [data-slot="inspector-group"]');
-    const input = root.querySelectorAll("input")[1], scroll = document.querySelector('[data-testid="port-scroll"]');
+    const input = root.querySelector('input[aria-label="Branch 1 ID"]'), scroll = document.querySelector('[data-testid="port-scroll"]');
     scroll.scrollTop = 70; input.focus({ preventScroll: true });
     const unrelated = document.querySelector('[data-testid="port-unrelated"]');
     const proof = { root, input, scroll, scrollTop: scroll.scrollTop,
       disabled: input.disabled, opacity: getComputedStyle(input).opacity,
-      controls: [input, unrelated].map((element) => ({ element, disabled: element.disabled, opacity: getComputedStyle(element).opacity })),
+      controls: [input, unrelated, root.querySelector('select[aria-label="Current transport"]')].map((element) => ({ element, disabled: element.disabled, opacity: getComputedStyle(element).opacity })),
       rootChanges: 0, controlChanges: 0, disabledChanges: 0, opacityChanges: 0, opacityAnimations: 0 };
     const sample = () => {
       if (document.querySelector('[data-testid="port-editor"] [data-slot="inspector-group"]') !== root) proof.rootChanges++;
@@ -122,11 +132,13 @@ try {
   assert.equal(pending.body.merge_patch.antenna_port_modes[0].current_transport_id, "alternative");
   assert.equal(await field("Branch 1 ID").isDisabled(), false);
   await field("Branch 1 ID").fill("newer-signal");
+  await terminal("Current transport").selectOption("transport");
   // Restore focus without scrolling after Playwright's fill; measure pending/ACK, not test navigation.
   await page.evaluate(() => { const saved = window.__portEditorStable; saved.scroll.scrollTop = saved.scrollTop; saved.input.focus({ preventScroll: true }); });
   await screenshot("02-pending-newer-draft"); await release();
   await wait(() => [...document.querySelectorAll('[data-testid="port-editor"] button')].some((button) => button.textContent === "Apply port" && !button.disabled));
   assert.equal(await field("Branch 1 ID").inputValue(), "newer-signal");
+  assert.equal(await terminal("Current transport").inputValue(), "transport", "Older ACK must preserve a newer transport selection");
   assert.equal(await page.getByTestId("port-dirty").textContent(), "true");
   const stable = await page.evaluate(() => { const saved = window.__portEditorStable; saved.sample(); saved.observer.disconnect(); return {
     root: document.querySelector('[data-testid="port-editor"] [data-slot="inspector-group"]') === saved.root,
@@ -140,7 +152,10 @@ try {
   assert.deepEqual(stable, { root: true, input: true, focus: true, disabled: true, opacity: true, scroll: true, animations: 0,
     rootChanges: 0, controlChanges: 0, disabledChanges: 0, opacityChanges: 0, opacityAnimations: 0 });
   assert.equal(await page.getByTestId("port-unrelated").inputValue(), "retained draft");
-  await apply(); assert.equal(writes(await read())[1].body.base_revision, 2); await release();
+  await apply();
+  assert.equal(writes(await read())[1].body.base_revision, 2);
+  assert.equal(writes(await read())[1].body.merge_patch.antenna_port_modes[0].current_transport_id, "transport");
+  await release();
   await wait(() => document.querySelector('[data-testid="port-dirty"]')?.textContent === "false");
   const committed = await read(); assert.equal(committed.scene.antenna_port_modes[0].branches[0].id, "newer-signal");
   assert.deepEqual(committed.scene.antenna_port_modes[1], unrelated); assert.equal(committed.canUndo, true);
@@ -220,13 +235,15 @@ try {
   assert.equal(await preparedInlet.locator('option[value="signal-in"]').isDisabled(), false);
   assert.equal(await preparedInlet.locator('option[value="return2-in"]').count(), 0, "v3 pickers must use actual source observations, never unrelated boundary IDs");
   assert.equal(await preparedInlet.locator("option:not([disabled])").count(), 4);
-  await field("Branch 1 ID").fill("v3-submitted-draft");
+  // Prepared observations bind branch IDs to conductor parts; vary a valid
+  // observation weight instead of inventing a new conductor-part identity.
+  await field("Branch 1 signed weight").fill("0");
   await page.getByTestId("port-unrelated").fill("v3-unrelated-draft");
   await page.evaluate(() => {
     window.__antennaPortEditorFixture.watchSceneCache();
     window.__antennaPortEditorFixture.malformedNext("source_cut");
     const root = document.querySelector('[data-testid="port-editor"] [data-slot="inspector-group"]');
-    const input = root.querySelectorAll("input")[1], scroll = document.querySelector('[data-testid="port-scroll"]');
+    const input = root.querySelector('input[aria-label="Branch 1 signed weight"]'), scroll = document.querySelector('[data-testid="port-scroll"]');
     const unrelated = document.querySelector('[data-testid="port-unrelated"]');
     scroll.scrollTop = 70; input.focus({ preventScroll: true });
     const proof = { root, input, scroll, top: scroll.scrollTop, rootChanges: 0, controlChanges: 0,
@@ -246,12 +263,12 @@ try {
     window.__v3BadAckStable = { proof, sample, observer }; sample();
   });
   await apply();
-  await field("Branch 1 ID").fill("v3-newer-draft");
+  await field("Branch 1 signed weight").fill("0.25");
   await page.evaluate(() => { const { proof } = window.__v3BadAckStable; proof.scroll.scrollTop = proof.top; proof.input.focus({ preventScroll: true }); });
   await release();
   await button("Rebase port").waitFor({ timeout });
   await editor.getByText(/Port ACK omitted or changed the submitted scene/).waitFor({ timeout });
-  assert.equal(await field("Branch 1 ID").inputValue(), "v3-newer-draft");
+  assert.equal(await field("Branch 1 signed weight").inputValue(), "0.25");
   assert.equal(await page.getByTestId("port-unrelated").inputValue(), "v3-unrelated-draft");
   assert.equal(await page.getByTestId("port-dirty").textContent(), "true");
   assert.equal(await button("Apply port").isDisabled(), true);
@@ -268,7 +285,7 @@ try {
     const { proof, sample, observer } = window.__v3BadAckStable; sample(); observer.disconnect();
     window.__antennaPortEditorFixture.stopWatchingSceneCache();
     return { root: document.querySelector('[data-testid="port-editor"] [data-slot="inspector-group"]') === proof.root,
-      input: proof.input.isConnected && proof.root.querySelectorAll("input")[1] === proof.input,
+      input: proof.input.isConnected && proof.root.querySelector('input[aria-label="Branch 1 signed weight"]') === proof.input,
       focus: document.activeElement === proof.input, scroll: proof.scroll.scrollTop === proof.top,
       rootChanges: proof.rootChanges, controlChanges: proof.controlChanges, disabledChanges: proof.disabledChanges,
       opacityChanges: proof.opacityChanges, opacityAnimations: proof.opacityAnimations };

@@ -41,6 +41,22 @@ impl Display for SceneDocumentValidationError {
 
 impl std::error::Error for SceneDocumentValidationError {}
 
+fn validate_stage_execution_intent(
+    values: &BTreeMap<String, Value>,
+    path: &str,
+) -> Result<(), SceneDocumentValidationError> {
+    for key in ["interactive_session_requested", "wait_for_solve"] {
+        if let Some(value) = values.get(key) {
+            if !value.is_boolean() {
+                return Err(SceneDocumentValidationError::new(format!(
+                    "{path}.{key} must be a boolean"
+                )));
+            }
+        }
+    }
+    Ok(())
+}
+
 fn validate_execution_profile_intent(
     study: &crate::SceneStudyState,
 ) -> Result<(), SceneDocumentValidationError> {
@@ -316,6 +332,7 @@ fn validate_scene_document_with_mode(
         ));
     }
     for (index, stage) in scene.study.stages.iter().enumerate() {
+        validate_stage_execution_intent(&stage.extra, &format!("study.stages[{index}]"))?;
         let builder_stage = stage.to_script_builder();
         validate_stage_solver_state(&builder_stage, index)?;
     }
@@ -364,7 +381,27 @@ fn validate_scene_document_with_mode(
         }
     }
 
+    if let Some(source) = scene.study.shared_domain_mesh_source.as_ref() {
+        if matches!(source, crate::ScriptBuilderSharedDomainMeshSource::Explicit { .. })
+            && scene.study.requested_backend == "fdm" {
+            return Err(SceneDocumentValidationError::new("explicit shared domain source requires FEM"));
+        }
+        crate::validate_shared_domain_mesh_source(source, &scene.objects)?;
+    }
+    let mut geometry_keys = std::collections::BTreeSet::new();
     for object in &scene.objects {
+        let key = object.geometry.geometry_name.clone().unwrap_or_else(|| {
+            if object.role == "magnet" {
+                format!("{}_geom", crate::adapters::builder_geometry_name_for_object(object))
+            } else {
+                crate::adapters::builder_geometry_name_for_object(object)
+            }
+        });
+        if key.is_empty() || key.trim() != key || !geometry_keys.insert(key.clone()) {
+            return Err(SceneDocumentValidationError::new(format!(
+                "empty, whitespace or duplicate geometry key '{key}'"
+            )));
+        }
         if let Some(layer) = &object.absorbing_boundary {
             let mut errors = Vec::new();
             fullmag_ir::validate_absorbing_boundary_config(
@@ -2414,8 +2451,9 @@ fn validate_scene_closed_loop_owner(
     let object = scene.objects.iter().find(|object| &object.id == owner)
         .ok_or_else(|| SceneDocumentValidationError::new(format!("{prefix} closed-loop owner is missing")))?;
     let params = &object.geometry.geometry_params;
-    if object.geometry.geometry_kind != "MicrostripAntennaLayout" || params.pointer("/loop/enabled").and_then(Value::as_bool) != Some(true) {
-        return Err(SceneDocumentValidationError::new(format!("{prefix} closed loop requires an explicitly enabled MicrostripAntennaLayout loop")));
+    let cpw = object.geometry.geometry_kind == "CPWAntennaLayout";
+    if (!cpw && object.geometry.geometry_kind != "MicrostripAntennaLayout") || params.pointer("/loop/enabled").and_then(Value::as_bool) != Some(true) {
+        return Err(SceneDocumentValidationError::new(format!("{prefix} closed loop requires an explicitly enabled MicrostripAntennaLayout or CPWAntennaLayout loop")));
     }
     let geometry = crate::validate_geometry_scene(scene, crate::GeometryBackendTarget::Fem);
     if let Some(error) = geometry.diagnostics.iter().find(|diagnostic|
@@ -2426,13 +2464,37 @@ fn validate_scene_closed_loop_owner(
     let conductor_id = |kind: &str| params.get("conductors").and_then(Value::as_array)
         .and_then(|parts| parts.iter().find(|part| part.get("kind").and_then(Value::as_str) == Some(kind)))
         .and_then(|part| part.get("id")).and_then(Value::as_str).unwrap_or(kind).to_string();
-    let parts = [conductor_id("signal"), conductor_id("return"),
-        loop_params["inlet_connection_part_id"].as_str().unwrap_or("").to_string(),
-        loop_params["outlet_connection_part_id"].as_str().unwrap_or("").to_string()];
-    let conductivity = [params["conductivity_s_per_m"].as_f64(), params["conductivity_s_per_m"].as_f64(),
-        loop_params["inlet_connection_conductivity_s_per_m"].as_f64(), loop_params["outlet_connection_conductivity_s_per_m"].as_f64()];
-    if parts.iter().any(|part| part.trim().is_empty()) || parts.iter().collect::<BTreeSet<_>>().len() != 4 {
-        return Err(SceneDocumentValidationError::new(format!("{prefix} closed-loop geometry requires four distinct part IDs")));
+    let mut parts = if cpw {
+        vec![conductor_id("signal"), conductor_id("ground_left"), conductor_id("ground_right")]
+    } else {
+        vec![conductor_id("signal"), conductor_id("return")]
+    };
+    let inlet_index = parts.len();
+    let mut conductivity = vec![params["conductivity_s_per_m"].as_f64(); parts.len()];
+    for side in ["inlet", "outlet"] {
+        parts.push(loop_params[format!("{side}_connection_part_id")].as_str().unwrap_or("").to_string());
+        conductivity.push(loop_params[format!("{side}_connection_conductivity_s_per_m")].as_f64());
+    }
+    if parts.iter().any(|part| part.trim().is_empty()) || parts.iter().collect::<BTreeSet<_>>().len() != parts.len() {
+        return Err(SceneDocumentValidationError::new(format!("{prefix} closed-loop geometry requires distinct part IDs for every conductor and connection")));
+    }
+    if cpw {
+        // The CPW preview geometry parser does not validate the finite end connections.
+        serde_json::from_value::<fullmag_ir::CpwClosedLoopIR>(loop_params.clone())
+            .map_err(|error| SceneDocumentValidationError::new(format!("{prefix} CPW loop: {error}")))?;
+        for side in ["inlet", "outlet"] {
+            let length = loop_params[format!("{side}_connection_length_m")].as_f64().unwrap_or(f64::NAN);
+            let crossbar = loop_params[format!("{side}_crossbar_length_m")].as_f64().unwrap_or(f64::NAN);
+            let sigma = loop_params[format!("{side}_connection_conductivity_s_per_m")].as_f64().unwrap_or(f64::NAN);
+            if !length.is_finite() || !crossbar.is_finite() || !sigma.is_finite()
+                || !(length > crossbar && crossbar > 0.0 && sigma > 0.0) {
+                return Err(SceneDocumentValidationError::new(format!("{prefix} CPW loop requires finite positive connections, positive-length necks and conductivity")));
+            }
+        }
+    }
+    if transport.materials.len() != parts.len()
+        && !(transport.materials.len() == 1 && transport.materials[0].region.region_id.is_none()) {
+        return Err(SceneDocumentValidationError::new(format!("{prefix} materials must cover exactly the authored closed-loop parts or the whole owner")));
     }
     for (part, sigma) in parts.iter().zip(conductivity) {
         let assignments: Vec<_> = transport.materials.iter().filter(|assignment|
@@ -2443,11 +2505,19 @@ fn validate_scene_closed_loop_owner(
     }
     if let Some(SceneStructuredCurrentClosure::ClosedGeometry { source_cuts, .. }) = &transport.structured_current_closure {
         let cut = &source_cuts[0]; // Canonical v2 closure validation requires one cut.
-        let thickness = params["thickness_m"].as_f64().unwrap_or(f64::NAN);
-        let gap = params["return_offset_m"].as_f64().unwrap_or(f64::NAN);
-        if cut.region.object_id != *owner || cut.region.region_id.as_ref() != Some(&parts[2])
-            || !(cut.plane.offset_m > -thickness / 2.0 - gap && cut.plane.offset_m < -thickness / 2.0) {
-            return Err(SceneDocumentValidationError::new(format!("{prefix} source cut must lie strictly in the inlet bridge clearance of the complete owner")));
+        let (axis, lower, upper) = if cpw {
+            (crate::SceneStructuredCutAxis::X,
+             -loop_params["inlet_connection_length_m"].as_f64().unwrap_or(f64::NAN)
+                 + loop_params["inlet_crossbar_length_m"].as_f64().unwrap_or(f64::NAN), 0.0)
+        } else {
+            let thickness = params["thickness_m"].as_f64().unwrap_or(f64::NAN);
+            let gap = params["return_offset_m"].as_f64().unwrap_or(f64::NAN);
+            (crate::SceneStructuredCutAxis::Z, -thickness / 2.0 - gap, -thickness / 2.0)
+        };
+        if cut.region.object_id != *owner || cut.region.region_id.as_ref() != Some(&parts[inlet_index])
+            || cut.plane.axis != axis
+            || !(cut.plane.offset_m > lower && cut.plane.offset_m < upper) {
+            return Err(SceneDocumentValidationError::new(format!("{prefix} source cut must match the inlet axis and lie strictly in the inlet bridge clearance or central GSG neck of the complete owner")));
         }
     }
     if let Some(source) = &transport.conservative_current_source {
@@ -3118,10 +3188,10 @@ fn validate_scene_charge_contract(
             )));
         }
     }
-    let complete_loop_materials = closed_loop && (assigned == domain || assigned.len() == 4 && assigned.iter().all(|(_, part)| part.is_some()));
+    let complete_loop_materials = closed_loop && (assigned == domain || matches!(assigned.len(), 4 | 5) && assigned.iter().all(|(_, part)| part.is_some()));
     if closed_loop && !complete_loop_materials || !closed_loop && assigned != domain {
         return Err(SceneDocumentValidationError::new(format!(
-            "{prefix}.materials must map every domain region exactly once (closed loop: one whole-owner or four distinct parts)"
+            "{prefix}.materials must map every domain region exactly once (closed loop: one whole-owner or four microstrip/five GSG distinct parts)"
         )));
     }
 
@@ -3914,6 +3984,10 @@ fn validate_study_pipeline_nodes(
     for node in nodes {
         match node {
             StudyPipelineNode::Primitive(node) => {
+                validate_stage_execution_intent(
+                    &node.payload,
+                    &format!("study pipeline primitive '{}'.payload", node.id),
+                )?;
                 if node.id.trim().is_empty() {
                     return Err(SceneDocumentValidationError::new(
                         "study pipeline primitive node ids must not be empty",
@@ -3979,6 +4053,63 @@ fn validate_study_pipeline_nodes(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn stage_execution_intent_validates_flat_and_nested_payloads() {
+        for require_solve_refs in [false, true] {
+            for key in ["interactive_session_requested", "wait_for_solve"] {
+                for invalid in [Value::Null, serde_json::json!("false"), serde_json::json!(0),
+                                serde_json::json!([]), serde_json::json!({})] {
+                    let mut flat = serde_json::json!({"kind": "run", "entrypoint_kind": "study", "until_seconds": 1e-9, "enabled": false});
+                    flat[key] = invalid.clone();
+                    let scene: SceneDocument = serde_json::from_value(serde_json::json!({
+                        "version": "scene.v2", "study": {"stages": [flat]}
+                    })).unwrap();
+                    let error = validate_scene_document_with_mode(&scene, require_solve_refs).unwrap_err();
+                    assert!(error.message.contains(key), "{}", error.message);
+                    assert!(error.message.contains("study.stages[0]"), "{}", error.message);
+                    for enabled in [false, true] {
+                        let mut payload = serde_json::json!({"kind": "run", "until_seconds": 1e-9});
+                        payload[key] = invalid.clone();
+                        let scene: SceneDocument = serde_json::from_value(serde_json::json!({
+                            "version": "scene.v2", "study": {"study_pipeline": {"nodes": [{
+                                "node_kind": "group", "id": "outer", "label": "Outer", "enabled": enabled,
+                                "children": [{"node_kind": "group", "id": "inner", "label": "Inner", "children": [{
+                                    "node_kind": "primitive", "id": "run", "label": "Run", "enabled": enabled,
+                                    "stage_kind": "run", "payload": payload
+                                }]}]
+                            }]}}
+                        })).unwrap();
+                        let error = validate_scene_document_with_mode(&scene, require_solve_refs).unwrap_err();
+                        assert!(error.message.contains(key), "{}", error.message);
+                        assert!(error.message.contains("primitive 'run'"), "{}", error.message);
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn stage_execution_intent_accepts_missing_and_boolean_values() {
+        for values in [serde_json::json!({}),
+                       serde_json::json!({"interactive_session_requested": false, "wait_for_solve": true}),
+                       serde_json::json!({"interactive_session_requested": true, "wait_for_solve": false})] {
+            let mut flat = values.clone();
+            flat["kind"] = serde_json::json!("run");
+            flat["entrypoint_kind"] = serde_json::json!("study");
+            flat["until_seconds"] = serde_json::json!(1e-9);
+            let scene: SceneDocument = serde_json::from_value(serde_json::json!({
+                "version": "scene.v2", "study": {"stages": [flat], "study_pipeline": {"nodes": [{
+                    "node_kind": "group", "id": "outer", "label": "Outer", "enabled": false,
+                    "children": [{"node_kind": "primitive", "id": "run", "label": "Run", "enabled": false,
+                                  "stage_kind": "run", "payload": values}]
+                }]}}
+            })).unwrap();
+            for require_solve_refs in [false, true] {
+                validate_scene_document_with_mode(&scene, require_solve_refs).unwrap();
+            }
+        }
+    }
 
     fn pipeline_with_nodes(nodes: Value) -> StudyPipelineDocument {
         serde_json::from_value(serde_json::json!({

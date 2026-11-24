@@ -45,6 +45,8 @@ export interface ScreenGlyphLayoutInput {
   scale?: number;
   /** "uniform": direction only (mumax3); "magnitude": length ∝ |v| / max |v|. */
   lengthMode?: string;
+  /** Display-only v-axis expansion; never changes vector values or norms. */
+  verticalExaggeration?: number;
   /** Occupancy codes aligned with the raster (0 occupied, 1 empty, ...); empty cells get no glyph. */
   mask?: ArrayLike<number> | null;
   maxGlyphs?: number;
@@ -142,7 +144,7 @@ export function layoutScreenGlyphs(input: ScreenGlyphLayoutInput): ScreenGlyph[]
         const projected = magnitudeMode ? inPlane / maxMagnitude : inPlane / magnitude;
         glyphs.push({
           ...base,
-          angle: Math.atan2(-vv, vu),
+          angle: Math.atan2(-vv * (input.verticalExaggeration ?? 1), vu),
           kind: "arrow",
           length: Math.max(GLYPH_MIN_LENGTH_PX, fullLength * projected),
         });

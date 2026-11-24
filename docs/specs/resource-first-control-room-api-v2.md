@@ -2023,6 +2023,33 @@ topology/support fingerprints, liczności oraz hashe i długości projekcji.
 Nie zawiera arrays topologii ani wartości pola. Brak geometrii daje 404;
 obcy lub zmieniony binding daje konflikt, uszkodzenie CAS błąd integralności.
 
+Dla zapisanego raw H-only `fullmag.retained-current-field@1` metadane mogą
+na jawne żądanie zawierać `antenna_source_context`. Parametr
+`include_antenna_source_context` jest opcjonalny i domyślnie równy `false`.
+Bez parametru lub przy `false` JSON i koszt podstawowego odczytu geometrii
+pozostają bez zmian; nie następuje odczyt zależności rodzica.
+
+Przy `true` API uwierzytelnia pakiet dziecka, jego dokładnego historycznego
+właściciela oraz zachowane dowody rodzica. Odpowiedź zawiera wyłącznie
+`purpose=historical_geometry_only`, artifact/CAS/byte count pakietu dziecka
+i dokładne piny project/run/task/attempt/epoch/stage oraz pakietu rodzica.
+Nie zawiera V/J/H ani topologii przewodnika. To nie jest uprawnienie do
+wykonania, baza na amper ani kwalifikacja źródła. Zachowany wynik H z próby
+`Failed` może mieć ten kontekst, ale jego historia i bramka accepted
+inspection wymagająca `Succeeded` pozostają bez zmian.
+
+Loader kontekstu korzysta z tego samego typowanego klienta i osobnego żądania
+`true`. Odmowa provenance (409) wyłącza tylko kontekst; domyślny loader H
+pozostaje niezależny. Błędy sieci i 5xx pozostają błędami zasobu. Dokładny
+przewodnik jest odkrywany przez istniejący Saved Results, z limitem 64 żądań
+metadanych i kontrolą kursorów, manifestów, ownerów oraz package CAS.
+Pobierana jest geometria i topologia V rodzica, bez jego wartości.
+Nie ma dopasowania po nazwie, podmiany sceną live ani kopiowania V/J do dziecka.
+Odczyty binary topology/support i przekrojów nie uruchamiają nowej walidacji
+rodzica. Pierwsze jawne `true` może strumieniowo hashować historyczne CAS;
+nie należy go odpytywać cyklicznie. Potwierdzenie runtime pozostaje wymagane
+po każdym wdrożeniu tego kontraktu.
+
 `/saved-field-geometry/topology` zwraca istniejący FMMT v2;
 `/saved-field-geometry/support` zwraca FMSP v1 w canonical-node order.
 FMSP ma 24-bajtowy header: magic, u16 LE wersja 1, u16 LE flags 0,
@@ -2345,3 +2372,34 @@ utworzeniem sesji. Capabilities pustej sesji opisują żądaną konfigurację.
 Pierwsze przygotowanie sprawdza możliwości topologii, solvera i urządzenia.
 Jawne żądanie GPU zachowuje tryb strict i nie przełącza wykonania na CPU.
 Dołączany runtime CLI odczytuje precyzję z kanonicznego skryptu sesji.
+
+## Gotowość świeżo autorowanej anteny bez stanu magnetycznego
+
+`GET /v2/sessions/current/model/readiness` może addytywnie zwrócić opcjonalne
+`preparation_owns_mesh: true`. Oznacza to, że istniejące przygotowanie przy
+`Solve` ma utworzyć siatkę przewodnika i domeny próbkowania. Nie oznacza
+istnienia siatki ani gotowego wyniku. Pole dotyczy wyłącznie rewizji wskazanej
+przez `scene_revision`; klient wymaga także `ready_to_run: true`.
+
+Backend publikuje tę decyzję wyłącznie dla poprawnej sceny FEM bez obiektów
+rozwiązywanych magnetycznie i bez wcześniejszych siatek, przygotowania ani
+planu wykonania. Kanoniczny pipeline musi zawierać co najmniej jeden aktywny
+`antenna_field_solve`; wszystkie aktywne liście muszą być takimi etapami,
+powiązanymi z istniejącym źródłem, portami i transportem zamkniętego obwodu
+`structured_current_closure.v2`. Nazwa i prezentacyjny typ obiektu nie
+aktywują fizyki. Etap LLG/relaksacji, aktywne makro, błędne wiązanie lub
+częściowe wcześniejsze przygotowanie zachowują dotychczasowe odmowy.
+
+Frontend pomija wymaganie istniejącej wspólnej siatki tylko w wykonawcy
+`study.run`/`Solve` po tej jawnej, aktualnej decyzji. Nadal odczytuje bieżącą
+scenę i przygotowanie, sprawdza rewizję oraz zakres sesji. Niegotowe
+przygotowanie blokuje komendę. Brak pola, wartość inna niż logiczne `true`,
+stara rewizja lub brak gotowości zachowują wcześniejszą bramkę FEM.
+`Compute Fields` i `Compute Energies` zachowują własne wymagania siatki.
+
+Jest to rozszerzenie odpowiedzi, bez nowego endpointu ani alternatywnego
+przygotowania. Starszy klient ignoruje dodatkowe pole, lecz może nadal
+blokować ten przypadek; pełna naprawa wymaga spójnego nowego API i frontendu.
+Generowany OpenAPI, typy i klienci powstają przez `just docker-dev-codegen`
+z rzeczywiście zbudowanego API; nie wolno dopisywać pola ręcznie wyłącznie
+w wygenerowanym schemacie.

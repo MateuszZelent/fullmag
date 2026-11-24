@@ -70,6 +70,32 @@ class TerminalContainerRecoveryTests(unittest.TestCase):
             result[key]=request[key]
         return result
 
+    def test_capability_probe_accepts_large_provenance_and_keeps_stable_read(self):
+        for change_during_probe in (False, True):
+            with self.subTest(change=change_during_probe), tempfile.TemporaryDirectory() as directory:
+                paths,context,cap,_=self.fixture(Path(directory))
+                original=paths.provenance.read_bytes()
+                paths.provenance.write_bytes(original+b" "*(297879-len(original)))
+                original_owner=(paths.runtime_services/"OWNER.json").read_bytes()
+                provenance_sha=r._sha256_bytes(paths.provenance.read_bytes())
+                raw=json.dumps(cap).encode()
+                def cli(paths,args,*,timeout,cli,raw_output=None):
+                    if tuple(args)!=("runtime","service-container-recovery-capabilities"):
+                        raise AssertionError("capability probe must not invoke a mutator")
+                    raw_output.append(raw)
+                    if change_during_probe:
+                        paths.provenance.write_bytes(paths.provenance.read_bytes()+b" ")
+                    return cap
+                with mock.patch.object(r,"_run_cli",side_effect=cli):
+                    if change_during_probe:
+                        with self.assertRaisesRegex(r.RuntimeServiceError,"provenance changed"):
+                            r._probe_container_recovery_capabilities(paths,context,cli=None,timeout=30)
+                    else:
+                        proof=r._probe_container_recovery_capabilities(paths,context,cli=None,timeout=30)
+                        self.assertEqual(proof["provenance_sha256"],provenance_sha)
+                        self.assertEqual(proof["build_identity"]["git_commit"],"a"*40)
+                self.assertEqual((paths.runtime_services/"OWNER.json").read_bytes(),original_owner)
+
     def test_valid_v3_probe_precedes_native_mutator_and_publishes_exact_binary_and_raw_sha(self):
         with tempfile.TemporaryDirectory() as directory:
             paths,context,cap,_=self.fixture(Path(directory)); calls=[]

@@ -9,6 +9,9 @@ import tempfile
 from pathlib import Path
 from typing import Mapping, Sequence, cast
 
+from fullmag.runtime.execution_intent import (
+    EXECUTION_INTENT_KEYS, copy_execution_intent, validate_execution_intent_fields,
+)
 from fullmag.runtime.thermal_noise_authoring import canonical_thermal_noise
 
 from fullmag._validation import (
@@ -322,6 +325,7 @@ def export_builder_draft(
         pbc_ir = FdmPbc(tuple(bool(value) for value in pbc)).to_ir()
 
     draft = {
+        **copy_execution_intent(authored_problem.runtime_metadata),
         "revision": 1,
         "study_name": base_problem.name,
         "backend": base_problem.runtime.backend_target.value,
@@ -436,7 +440,7 @@ def export_builder_draft(
             mode.to_ir() for mode in base_problem.antenna_port_modes
         ],
         "antenna_field_solve_stages": [
-            stage.to_ir() for stage in authored_problem.antenna_field_solve_stages
+            stage.to_ir(source_root=source_root) for stage in authored_problem.antenna_field_solve_stages
         ],
         "antenna_target_projections": [
             projection.to_ir() for projection in authored_problem.antenna_target_projections
@@ -464,6 +468,13 @@ def export_builder_draft(
         ],
         "excitation_analysis": _export_excitation_analysis(base_problem),
     }
+    hidden_object_ids = authored_problem.runtime_metadata.get("hidden_scene_object_ids")
+    if hidden_object_ids:
+        draft["hidden_scene_object_ids"] = hidden_object_ids
+    from fullmag.runtime.domain_mesh_source import source_from_problem
+    shared_source = source_from_problem(base_problem)
+    if shared_source is not None:
+        draft["shared_domain_mesh_source"] = shared_source
     material_metadata = base_problem.runtime_metadata.get("material_assets")
     if material_metadata is not None:
         from fullmag.runtime.material_assets import (
@@ -588,7 +599,9 @@ def render_loaded_problem_as_script(
     loaded: LoadedProblem,
     *,
     overrides: dict[str, object] | None = None,
+    source_preparation_assets=None,
 ) -> str:
+    source_preparation_assets = source_preparation_assets if source_preparation_assets is not None else _source_preparation_capture_records(loaded)
     overrides = _normalize_mapping(overrides)
     actual_stages = loaded.stages
     stages = actual_stages or (
@@ -837,6 +850,7 @@ def render_loaded_problem_as_script(
         region_vars=region_vars,
         source_root=source_root,
         mask_renderer=mask_renderer,
+        source_preparation_assets=source_preparation_assets,
     )
     if stage_lines:
         lines.append("")
@@ -845,10 +859,11 @@ def render_loaded_problem_as_script(
     authored_problem = loaded.workspace_problem or loaded.problem
     declaration_lines = _render_antenna_inventory_declarations(
         {
-            collection: [item.to_ir() for item in getattr(authored_problem, collection)]
+            collection: [(item.to_ir(source_root=source_root) if collection == "antenna_field_solve_stages" else item.to_ir()) for item in getattr(authored_problem, collection)]
             for collection in _ANTENNA_SCENE_COLLECTIONS[1:]
         },
         [stage.action for stage in stages if isinstance(stage.action, dict)],
+        source_preparation_assets=source_preparation_assets,
     )
     if declaration_lines:
         lines.append("")
@@ -858,6 +873,7 @@ def render_loaded_problem_as_script(
     if authored_pipeline is not None:
         lines.append(f"fm.runtime_metadata('study_pipeline', {_py_literal(authored_pipeline)})")
 
+    lines.extend(_render_execution_intent(authored_problem.runtime_metadata, overrides=overrides, surface=surface))
     material_metadata = overrides.get("material_assets", base_problem.runtime_metadata.get("material_assets"))
     if material_metadata is not None:
         from fullmag.runtime.material_assets import canonical_material_assets
@@ -890,6 +906,12 @@ def render_loaded_problem_as_script(
                 f"fm.runtime_metadata('material_constitutive', {_py_literal(canonical_mc)})"
             )
 
+    hidden_object_ids = overrides.get(
+        "hidden_scene_object_ids", authored_problem.runtime_metadata.get("hidden_scene_object_ids")
+    )
+    if hidden_object_ids:
+        lines.append(f"fm.runtime_metadata('hidden_scene_object_ids', {_py_literal(hidden_object_ids)})")
+
     normalized = "\n".join(lines).rstrip() + "\n"
     return normalized
 
@@ -908,6 +930,7 @@ def render_scene_document_as_script(
     include_authored_stages: bool = True,
     include_legacy_relax_stages: bool = True,
     _source_root: str | Path | None = None,
+    source_preparation_assets=None,
 ) -> str:
     """Render a canonical Python script directly from a SceneDocument.
 
@@ -941,6 +964,7 @@ def render_scene_document_as_script(
         builder,
         include_authored_stages=include_authored_stages,
         include_legacy_relax_stages=include_legacy_relax_stages,
+        source_preparation_assets=source_preparation_assets,
     )
     scene_for_render = copy.deepcopy(scene)
     if include_authored_stages:
@@ -955,10 +979,18 @@ def render_scene_document_as_script(
     with tempfile.TemporaryDirectory(prefix="fullmag-scene-export-") as temporary:
         script_path = Path(temporary) / "scene_document.py"
         script_path.write_text(bootstrap, encoding="utf-8")
-        loaded = load_problem_from_script(script_path, lightweight_assets=True)
+        if source_preparation_assets:
+            roots = {_source_preparation_from_capture({"asset_id": key, "content_sha256": record["sha256"]}, source_preparation_assets)[1]
+                     for key, record in source_preparation_assets.items()}
+            if len(roots) != 1:
+                raise ValueError("source preparation export requires one observed source closure")
+            script_path = next(iter(roots)) / "scene_document.py"
+            loaded = load_problem_from_script(script_path, lightweight_assets=True, source_bytes=bootstrap.encode("utf-8"))
+        else:
+            loaded = load_problem_from_script(script_path, lightweight_assets=True)
         for collection in _ANTENNA_SCENE_COLLECTIONS:
             if collection in builder:
-                actual = [item.to_ir() for item in getattr(
+                actual = [(item.to_ir(source_root=script_path.parent) if collection == "antenna_field_solve_stages" else item.to_ir()) for item in getattr(
                     loaded.workspace_problem or loaded.problem, collection
                 )]
                 if actual != builder[collection]:
@@ -982,6 +1014,7 @@ def render_scene_document_as_script(
         return render_loaded_problem_as_script(
             loaded,
             overrides=overrides,
+            source_preparation_assets=source_preparation_assets,
         )
 
 
@@ -1061,7 +1094,8 @@ def _reject_unrendered_scene_stage_fields(
     kind: str,
     rendered_fields: set[str],
 ) -> None:
-    common_fields = {"kind", "entrypoint_kind", "stage_id"}
+    validate_execution_intent_fields(stage, context=f"SceneDocument {kind} stage")
+    common_fields = {"kind", "entrypoint_kind", "stage_id", *EXECUTION_INTENT_KEYS}
     unsupported = sorted(
         key
         for key, value in stage.items()
@@ -1356,6 +1390,7 @@ def _render_scene_document_bootstrap(
     *,
     include_authored_stages: bool = False,
     include_legacy_relax_stages: bool = True,
+    source_preparation_assets=None,
 ) -> str:
     """Build a minimal capture script that realizes the scene's typed objects."""
     profile, layers = _execution_profile_values(builder, context="builder")
@@ -1417,10 +1452,21 @@ def _render_scene_document_bootstrap(
     )
     if demag_policy is not None:
         lines.append(_render_fem_demag_solver_call(demag_policy, surface="study"))
+    lines.extend(_render_execution_intent({}, overrides=builder, surface="study"))
     bb_policy = _validate_fem_bb_preconditioner(builder.get("fem_bb_preconditioner"))
     if bb_policy is not None:
         lines.append(f"study.fem_bb_preconditioner({bb_policy!r})")
     lines.extend(_render_output_storage(builder.get("output_storage"), surface="study"))
+    if "shared_domain_mesh_source" in builder:
+        from fullmag.runtime.domain_mesh_source import normalize_shared_domain_mesh_source
+        source = normalize_shared_domain_mesh_source(builder["shared_domain_mesh_source"])
+        if source["kind"] == "explicit":
+            config = {"domain_mesh_source": source["source"], "domain_region_markers": source["region_markers"],
+                      "domain_marker_owners": source["marker_owners"]}
+            if "object_region_markers" in source:
+                config["domain_object_region_markers"] = source["object_region_markers"]
+            lines.append(_render_domain_mesh_call("study", config, source_root=Path.cwd()))
+
 
     solver = builder.get("solver")
     if isinstance(solver, Mapping):
@@ -1464,6 +1510,8 @@ def _render_scene_document_bootstrap(
         if not isinstance(raw_object, Mapping):
             raise ValueError(f"SceneDocument geometry {index} must be an object.")
         role = str(raw_object.get("role") or "magnet").lower()
+        key = raw_object.get("geometry_name")
+        key_arg = f", geometry_name={_python_literal(key)}" if key is not None else ""
         if role != "magnet":
             name = str(raw_object.get("name") or raw_object.get("id") or f"object_{index}")
             object_id = str(raw_object.get("object_id") or raw_object.get("id") or name)
@@ -1472,13 +1520,13 @@ def _render_scene_document_bootstrap(
             if role == "antenna":
                 lines.append(
                     f"{auxiliary} = study.antenna_object({shape}, "
-                    f"name={_python_literal(name)}, object_id={_python_literal(object_id)})"
+                    f"name={_python_literal(name)}, object_id={_python_literal(object_id)}{key_arg})"
                 )
             else:
                 lines.append(
                     f"{auxiliary} = study.geometry_object({shape}, "
                     f"name={_python_literal(name)}, type={_python_literal(role)}, "
-                    f"object_id={_python_literal(object_id)})"
+                    f"object_id={_python_literal(object_id)}{key_arg})"
                 )
             mesh = raw_object.get("mesh")
             if isinstance(mesh, Mapping):
@@ -1490,7 +1538,7 @@ def _render_scene_document_bootstrap(
         shape = _render_shape_expression(raw_object)
         lines.append(
             f"{handle} = study.geometry({shape}, name={_python_literal(name)}, "
-            f"object_id={_python_literal(object_id)})"
+            f"object_id={_python_literal(object_id)}{key_arg})"
         )
         handles.append(handle)
         snapshot_handles[name] = handle
@@ -1657,6 +1705,7 @@ def _render_scene_document_bootstrap(
     for mode in builder.get("antenna_port_modes") or []:
         lines.append(_render_antenna_port_mode_payload_line(mode))
 
+    active_execution_intent = validate_execution_intent_fields(builder, context="builder")
     # Region references are also used by object-scoped damping, even before a stage is added.
     field_function_names: set[str] = set()
     region_lines, region_vars = _render_region_owned_authoring_from_override(
@@ -1682,6 +1731,8 @@ def _render_scene_document_bootstrap(
         )
         lines.extend(_render_mask_field_drives(whole_study_mask_payloads, mask_renderer))
         for index, stage in enumerate(enabled_stages):
+            active_execution_intent.update(validate_execution_intent_fields(stage, context="SceneDocument stage"))
+            lines.extend(_render_execution_intent(None, overrides=active_execution_intent, surface="study"))
             payload = dict(stage)
             kind = payload.get("kind")
             if "external_field" in payload and kind not in {"relax", "run"}:
@@ -1704,7 +1755,7 @@ def _render_scene_document_bootstrap(
                 raise ValueError("gilbert_damping_by_object requires a run stage")
             stage_lines = _render_scene_stage_bootstrap(
                 payload, index=index, solver=solver, magnet_vars=snapshot_handles,
-                mask_renderer=mask_renderer,
+                mask_renderer=mask_renderer, source_preparation_assets=source_preparation_assets,
             )
             lines.extend(_with_run_damping(stage_lines, damping, snapshot_handles_by_id))
         _render_external_field_change(lines, active_field, base_field, "legacy")
@@ -1712,10 +1763,13 @@ def _render_scene_document_bootstrap(
         for stage in raw_stages:
             if not isinstance(stage, Mapping) or str(stage.get("kind") or "relax") != "relax":
                 continue
+            active_execution_intent.update(validate_execution_intent_fields(stage, context="SceneDocument stage"))
+            lines.extend(_render_execution_intent(None, overrides=active_execution_intent, surface="study"))
             kwargs = _scene_relax_stage_kwargs(stage, solver=solver)
             lines.append(f"study.stages.add_relax({_python_keyword_args(kwargs)})")
 
-    lines.extend(_render_antenna_inventory_declarations(builder, authored_stages))
+    lines.extend(_render_antenna_inventory_declarations(builder, authored_stages, source_preparation_assets=source_preparation_assets))
+    lines.extend(_render_execution_intent({}, overrides=builder, surface="study"))
     lines.append("")
     return "\n".join(lines) + "\n"
 
@@ -1897,7 +1951,7 @@ def _scene_antenna_stage_sequence(builder: Mapping[str, object]) -> list[dict[st
 
 
 def _render_antenna_inventory_declarations(
-    inventory: Mapping[str, object], actions: Sequence[object]
+    inventory: Mapping[str, object], actions: Sequence[object], *, source_preparation_assets=None
 ) -> list[str]:
     used = {collection: set() for collection in _ANTENNA_SCENE_COLLECTIONS[1:]}
     for action in actions:
@@ -1936,7 +1990,8 @@ def _render_antenna_inventory_declarations(
             if not isinstance(entry, dict):
                 raise ValueError(f"{collection} declarations must be objects")
             if entry.get("id") not in used[collection]:
-                lines.append(f"study.{method}({parameter}={render(entry)})")
+                expression = render(entry, source_preparation_assets=source_preparation_assets) if collection == "antenna_field_solve_stages" else render(entry)
+                lines.append(f"study.{method}({parameter}={expression})")
     return lines
 
 
@@ -2034,6 +2089,7 @@ def _render_scene_stage_bootstrap(
     solver: object,
     magnet_vars: dict[str, str],
     mask_renderer: "_MaskAntennaRenderer | None" = None,
+    source_preparation_assets=None,
 ) -> list[str]:
     """Capture SceneDocument stage intent through the public DSL for final rendering."""
     kind = str(stage.get("kind") or "relax").strip().lower()
@@ -2048,7 +2104,7 @@ def _render_scene_stage_bootstrap(
     if kind == "antenna_field_solve":
         _reject_unrendered_scene_stage_fields(stage, kind=kind, rendered_fields={"definition", "port_mode_ids"})
         definition = stage["definition"]
-        return [f"study.stages.add_antenna_field_solve(id={_py_literal(definition['id'])}, definition={_render_antenna_field_solve_definition_expr(definition)})"]
+        return [f"study.stages.add_antenna_field_solve(id={_py_literal(definition['id'])}, definition={_render_antenna_field_solve_definition_expr(definition, source_preparation_assets=source_preparation_assets)})"]
     if kind == "antenna_source_spectrum":
         _reject_unrendered_scene_stage_fields(stage, kind=kind, rendered_fields={"request"})
         return [f"study.add_antenna_spectrum_request(request={_render_antenna_spectrum_request_expr(stage['request'])})"]
@@ -2939,6 +2995,8 @@ def _normalize_csg_op(raw_kind: str, params: Mapping[str, object]) -> str | None
 def _render_transform_dict_suffix(
     expr: str,
     transform: Mapping[str, object],
+    *,
+    name: str | None = None,
 ) -> str:
     """Append fluent ``.translate(...)`` / ``.rotate(...)`` / ``.scale(...)`` / ``.transform(...)``."""
     raw_t = transform.get("translation")
@@ -2992,7 +3050,7 @@ def _render_transform_dict_suffix(
     has_s = any(abs(v - 1.0) > 1e-15 for v in scale)
     has_p = any(v != 0.0 for v in pivot)
 
-    if not (has_t or has_q or has_s or has_p):
+    if name is None and not (has_t or has_q or has_s or has_p):
         return expr
 
     def _vec3(vals: tuple[float, float, float]) -> str:
@@ -3010,14 +3068,15 @@ def _render_transform_dict_suffix(
             f"{_py_float_roundtrip(vals[3])})"
         )
 
-    if has_t and not (has_q or has_s or has_p):
+    name_kw = f", name={_py_repr(name)}" if name is not None else ""
+    if name is None and has_t and not (has_q or has_s or has_p):
         return f"{expr}.translate({_vec3(translation)})"
     if has_q and not (has_t or has_s):
         pivot_kw = f", pivot={_vec3(pivot)}" if has_p else ""
-        return f"{expr}.rotate(quat={_vec4(rotation_quat)}{pivot_kw})"
+        return f"{expr}.rotate(quat={_vec4(rotation_quat)}{pivot_kw}{name_kw})"
     if has_s and not (has_t or has_q):
         pivot_kw = f", pivot={_vec3(pivot)}" if has_p else ""
-        return f"{expr}.scale({_vec3(scale)}{pivot_kw})"
+        return f"{expr}.scale({_vec3(scale)}{pivot_kw}{name_kw})"
 
     kwargs: list[str] = []
     if has_t:
@@ -3028,6 +3087,8 @@ def _render_transform_dict_suffix(
         kwargs.append(f"scale={_vec3(scale)}")
     if has_p:
         kwargs.append(f"pivot={_vec3(pivot)}")
+    if name is not None:
+        kwargs.append(f"name={_py_repr(name)}")
     return f"{expr}.transform({', '.join(kwargs)})"
 
 
@@ -3043,7 +3104,19 @@ def _render_polygon_vertices_literal(raw_vertices: object, *, context: str) -> s
     return "[" + ", ".join(rendered) + "]"
 
 
-def _fold_fluent_csg(op: str, operand_exprs: list[str]) -> str:
+def _render_translate_suffix(
+    expr: str,
+    offset: tuple[float, float, float],
+    *,
+    name: str | None = None,
+) -> str:
+    offset_args = ", ".join(_py_float_roundtrip(value) for value in offset)
+    if name is not None:
+        return f"fm.Translate({expr}, ({offset_args}), name={_py_repr(name)})"
+    return f"{expr}.translate(({offset_args}))"
+
+
+def _fold_fluent_csg(op: str, operand_exprs: list[str], *, name: str | None = None) -> str:
     method = {
         "union": "union",
         "difference": "subtract",
@@ -3051,8 +3124,9 @@ def _fold_fluent_csg(op: str, operand_exprs: list[str]) -> str:
         "xor": "xor",
     }[op]
     acc = operand_exprs[0]
-    for rhs in operand_exprs[1:]:
-        acc = f"{acc}.{method}({rhs})"
+    for index, rhs in enumerate(operand_exprs[1:], start=1):
+        name_kw = f", name={_py_repr(name)}" if name is not None and index == len(operand_exprs) - 1 else ""
+        acc = f"{acc}.{method}({rhs}{name_kw})"
     return acc
 
 
@@ -3061,6 +3135,7 @@ def _render_array3d_suffix(
     raw_axes: object,
     *,
     merge_overlapping: bool = False,
+    name: str | None = None,
 ) -> str:
     if isinstance(raw_axes, (str, bytes)) or not isinstance(raw_axes, Sequence) or len(raw_axes) != 3:
         raise ValueError("Array3D requires exactly 3 axis specifications (x, y, z).")
@@ -3130,6 +3205,8 @@ def _render_array3d_suffix(
 
     if merge_overlapping:
         kwargs.append("merge=True")
+    if name is not None:
+        kwargs.append(f"name={_py_repr(name)}")
 
     return f"{child_expr}.array_3d({', '.join(kwargs)})"
 
@@ -3140,6 +3217,9 @@ def _render_shape_expression(entry: Mapping[str, object]) -> str:
     object_label = str(entry.get("name") or entry.get("object_id") or "").strip()
     params = entry.get("geometry_params")
     params = params if isinstance(params, Mapping) else {}
+    name = params.get("name")
+    explicit_name = name if isinstance(name, str) and name else None
+    name_kw = f", name={_py_repr(explicit_name)}" if explicit_name is not None else ""
     csg_op = _normalize_csg_op(raw_kind, params)
 
     if kind == "box":
@@ -3337,7 +3417,7 @@ def _render_shape_expression(entry: Mapping[str, object]) -> str:
         expression = _render_antenna_layout_expr(
             str(params.get("kind") or raw_kind),
             params,
-            name=str(entry.get("name") or params.get("name") or "antenna"),
+            name=str(explicit_name or entry.get("geometry_name") or entry.get("name") or "antenna"),
         )
     elif kind in {"importedgeometry", "imported_geometry"}:
         source = params.get("source")
@@ -3360,12 +3440,7 @@ def _render_shape_expression(entry: Mapping[str, object]) -> str:
         translation = _scene_float_sequence(raw_translation, count=3)
         if not isinstance(base, Mapping) or translation is None:
             raise ValueError("Translate geometry requires a child/base and three finite coordinates.")
-        return (
-            f"({_render_shape_expression(base)}).translate("
-            f"({_py_float_roundtrip(translation[0])}, "
-            f"{_py_float_roundtrip(translation[1])}, "
-            f"{_py_float_roundtrip(translation[2])}))"
-        )
+        return _render_translate_suffix(_render_shape_expression(base), translation, name=explicit_name)
     elif kind == "transform":
         child = params.get("child") if isinstance(params.get("child"), Mapping) else params.get("base")
         if not isinstance(child, Mapping):
@@ -3378,6 +3453,7 @@ def _render_shape_expression(entry: Mapping[str, object]) -> str:
         return _render_transform_dict_suffix(
             f"({_render_shape_expression(child)})",
             transform_payload,
+            name=explicit_name,
         )
     elif kind in {"sliceplane", "slice_plane"}:
         child = params.get("child") if isinstance(params.get("child"), Mapping) else params.get("base")
@@ -3395,7 +3471,7 @@ def _render_shape_expression(entry: Mapping[str, object]) -> str:
             f"({_render_shape_expression(child)}).slice_plane("
             f"origin=({_py_float_roundtrip(origin[0])}, {_py_float_roundtrip(origin[1])}, {_py_float_roundtrip(origin[2])}), "
             f"normal=({_py_float_roundtrip(normal[0])}, {_py_float_roundtrip(normal[1])}, {_py_float_roundtrip(normal[2])}), "
-            f"keep={_py_repr(keep_side)})"
+            f"keep={_py_repr(keep_side)}{name_kw})"
         )
     elif kind in {"array3d", "array_3d"}:
         child = params.get("child") if isinstance(params.get("child"), Mapping) else params.get("base")
@@ -3409,6 +3485,7 @@ def _render_shape_expression(entry: Mapping[str, object]) -> str:
             child_expr,
             params.get("axes"),
             merge_overlapping=bool(params.get("merge_overlapping", False)),
+            name=explicit_name,
         )
     elif csg_op is not None:
         raw_operands = params.get("operands")
@@ -3427,7 +3504,7 @@ def _render_shape_expression(entry: Mapping[str, object]) -> str:
                 active_exprs.append(op_expr)
             if not active_exprs:
                 raise ValueError(f"{raw_kind} geometry requires at least one enabled operand.")
-            expression = _fold_fluent_csg(csg_op, active_exprs)
+            expression = _fold_fluent_csg(csg_op, active_exprs, name=explicit_name)
         else:
             if csg_op == "difference":
                 operand_keys = ("base", "tool")
@@ -3441,13 +3518,19 @@ def _render_shape_expression(entry: Mapping[str, object]) -> str:
                 if not isinstance(child, Mapping):
                     raise ValueError(f"{raw_kind} geometry requires a '{operand}' operand.")
                 rendered_operands.append(_render_shape_expression(child))
-            expression = _fold_fluent_csg(csg_op, rendered_operands)
+            expression = _fold_fluent_csg(csg_op, rendered_operands, name=explicit_name)
     else:
         if object_label:
             raise ValueError(
                 f"SceneDocument export does not support geometry kind '{raw_kind}' for object '{object_label}'."
             )
         raise ValueError(f"SceneDocument export does not support geometry kind '{raw_kind}'.")
+    if explicit_name is not None and kind in {
+        "box", "cylinder", "sphere", "ellipsoid", "ellipse", "cone", "torus",
+        "polygonprism", "polygon_prism", "archwaveguide", "arch_waveguide",
+        "sinwaveguide", "sin_waveguide",
+    }:
+        expression = f"{expression[:-1]}{name_kw})"
     raw_translation = params.get("translation")
     if raw_translation is None:
         raw_translation = params.get("translate")
@@ -3805,6 +3888,7 @@ def _export_stage_draft_with_identity(
     stage: LoadedStage, base_damping: Mapping[str, float], base_field: list[float] | None,
 ) -> dict[str, object]:
     payload = _export_stage_draft(stage)
+    payload.update(copy_execution_intent(stage.problem.runtime_metadata))
     if _has_captured_uniform_field(stage):
         field = _problem_external_field(stage.problem)
         if field != base_field:
@@ -3846,6 +3930,7 @@ def _export_study_pipeline_node(
         definition = cast(dict[str, object], draft["definition"])
         # The executor resolves the definition from the canonical problem model.
         draft = {
+            **copy_execution_intent(stage.problem.runtime_metadata),
             "kind": "antenna_field_solve",
             "entrypoint_kind": stage.entrypoint_kind,
             "stage_id": definition["id"],
@@ -4443,6 +4528,22 @@ def _fdm_number(value: object, label: str) -> float | None:
     return number
 
 
+def _render_execution_intent(
+    metadata: Mapping[str, object] | None,
+    *,
+    overrides: Mapping[str, object],
+    surface: str,
+) -> list[str]:
+    values = copy_execution_intent(metadata) if metadata is not None else {}
+    values.update(validate_execution_intent_fields(overrides, context="execution intent override"))
+    values = validate_execution_intent_fields(values, context="runtime_metadata")
+    return [
+        f"{_surface_call(surface, method)}({values[key]!r})"
+        for key, method in (("interactive_session_requested", "interactive"), ("wait_for_solve", "wait_for_solve"))
+        if key in values
+    ]
+
+
 def _render_runtime(
     problem: Problem,
     *,
@@ -4746,10 +4847,7 @@ def _render_runtime(
                 lines.append(
                     f"{_surface_call(surface, 'universe')}.mesh({', '.join(universe_mesh_kwargs)})"
                 )
-    if runtime_metadata.get("interactive_session_requested") is True:
-        lines.append(f"{_surface_call(surface, 'interactive')}(True)")
-    if runtime_metadata.get("wait_for_solve") is True:
-        lines.append(f"{_surface_call(surface, 'wait_for_solve')}(True)")
+    lines.extend(_render_execution_intent(runtime_metadata, overrides=overrides, surface=surface))
     visualization_hint = _normalize_mapping(runtime_metadata.get("visualization_hint"))
     scene_visualization_hint = overrides.get("visualization_hint")
     if scene_visualization_hint is not None:
@@ -5119,8 +5217,14 @@ def _render_geometry_and_materials(
             if magnet.object_id is not None
             else ""
         )
+        geometry_key = magnet.geometry.geometry_name
+        geometry_key_arg = (
+            f", geometry_name={_py_repr(geometry_key)}"
+            if geometry_key != f"{magnet.name}_geom"
+            else ""
+        )
         lines.append(
-            f"{var_name} = {_surface_call(surface, 'geometry')}({_render_geometry_expr(magnet.geometry, magnet_name=magnet.name, source_root=source_root)}, name={_py_repr(magnet.name)}{object_id_arg})"
+            f"{var_name} = {_surface_call(surface, 'geometry')}({_render_geometry_expr(magnet.geometry, magnet_name=magnet.name, source_root=source_root)}, name={_py_repr(magnet.name)}{object_id_arg}{geometry_key_arg})"
         )
         if canonical_fdm and fdm is not None and fdm.per_magnet:
             grid = fdm.per_magnet.get(magnet.name)
@@ -5207,7 +5311,7 @@ def _render_geometry_and_materials(
             constructor = "geometry_object"
             type_suffix = f", type={_py_repr(role)}"
         lines.append(
-            f"{_safe_identifier(geometry.geometry_name)} = {_surface_call(surface, constructor)}({_render_geometry_expr(geometry, magnet_name=geometry.geometry_name, source_root=source_root)}, name={_py_repr(geometry.geometry_name)}{type_suffix}, object_id={_py_repr(object_id)})"
+            f"{_safe_identifier(geometry.geometry_name)} = {_surface_call(surface, constructor)}({_render_geometry_expr(geometry, magnet_name=geometry.geometry_name, source_root=source_root)}, name={_py_repr(problem.auxiliary_geometry_names.get(geometry.geometry_name, geometry.geometry_name))}{type_suffix}, object_id={_py_repr(object_id)}, geometry_name={_py_repr(geometry.geometry_name)})"
         )
         lines.append("")
     if lines[-1] == "":
@@ -5895,6 +5999,9 @@ def _render_geometries_from_override(
             if isinstance(object_id, str) and object_id
             else ""
         )
+        geometry_key = g.get("geometry_name")
+        if geometry_key is not None:
+            object_id_arg += f", geometry_name={_py_repr(geometry_key)}"
         if role != "magnet":
             if role == "antenna":
                 lines.append(
@@ -7230,7 +7337,59 @@ def _render_field_target_payload_expr(value: object) -> str:
     return f"fm.FieldTarget(**{_py_literal(target)})"
 
 
-def _render_antenna_field_solve_definition_expr(definition: dict[str, object]) -> str:
+def _source_preparation_capture_records(loaded: LoadedProblem) -> dict[str, dict[str, object]]:
+    records = {}
+    root = loaded.source_path.parent
+    problems = [loaded.problem, loaded.workspace_problem, *(stage.problem for stage in loaded.stages)]
+    for problem in problems:
+        if problem is None:
+            continue
+        for stage in problem.antenna_field_solve_stages:
+            asset = stage.retained_source_preparation
+            if asset is not None:
+                path = asset.resolved_source(root)
+                reference = asset.to_ir(source_root=root)
+                records[reference["asset_id"]] = {"asset_id": reference["asset_id"],
+                    "relative_path": "source/" + path.relative_to(root).as_posix(),
+                    "absolute_path": str(path), "sha256": asset.content_sha256}
+    return records
+
+
+def _source_preparation_from_capture(reference, records):
+    import hashlib
+    from fullmag.model.antenna import AntennaSourcePreparationAsset
+    from fullmag.runtime.antenna_source_preparation import MAX_ASSET_BYTES
+    if not isinstance(reference, dict) or set(reference) != {"asset_id", "content_sha256"}:
+        raise ValueError("source preparation export requires an exact immutable asset reference")
+    record = (records or {}).get(reference["asset_id"])
+    if not isinstance(record, Mapping):
+        raise ValueError("source preparation export requires its immutable input closure")
+    relative = record.get("relative_path")
+    if (not isinstance(relative, str) or not relative.startswith("source/")
+            or any(part in {"", ".", ".."} for part in relative.split("/"))
+            or record.get("asset_id") != reference["asset_id"]
+            or record.get("sha256") != reference["content_sha256"]
+            or "script-file-" + hashlib.sha256(relative.encode()).hexdigest() != reference["asset_id"]):
+        raise ValueError("source preparation export closure identity differs")
+    source = record.get("absolute_path")
+    if not isinstance(source, str):
+        raise ValueError("source preparation export requires a resolved input path")
+    path = Path(source)
+    suffix = Path(relative.removeprefix("source/"))
+    root = path
+    for _ in suffix.parts:
+        root = root.parent
+    asset = AntennaSourcePreparationAsset(path, reference["content_sha256"])
+    if asset.to_ir(source_root=root) != reference or path.relative_to(root).as_posix() != suffix.as_posix():
+        raise ValueError("source preparation export path differs from immutable closure")
+    with path.open("rb") as handle:
+        data = handle.read(MAX_ASSET_BYTES + 1)
+    if not data or len(data) > MAX_ASSET_BYTES or hashlib.sha256(data).hexdigest() != asset.content_sha256:
+        raise ValueError("source preparation export bytes differ from immutable closure")
+    return asset, root
+
+
+def _render_antenna_field_solve_definition_expr(definition: dict[str, object], *, source_preparation_assets=None) -> str:
     scalar_fields = (
         "id", "source_object_id", "current_transport_id", "port_mode_ids",
         "model", "oersted_realization", "conductor_mesh_policy", "solver_policy",
@@ -7239,6 +7398,13 @@ def _render_antenna_field_solve_definition_expr(definition: dict[str, object]) -
     if definition.get("surface_field_policy") is not None:
         args.append("surface_field_policy=fm.AntennaSurfaceFieldPolicy(**"
                     + _py_literal(_normalize_mapping(definition["surface_field_policy"])) + ")")
+    if definition.get("retained_current_source") is not None:
+        args.append("retained_current_source=fm.AntennaRetainedCurrentSource(**"
+                    + _py_literal(_normalize_mapping(definition["retained_current_source"])) + ")")
+    if definition.get("retained_source_preparation") is not None:
+        asset, _ = _source_preparation_from_capture(definition["retained_source_preparation"], source_preparation_assets)
+        args.append("retained_source_preparation=fm.AntennaSourcePreparationAsset("
+                    f"source={_py_literal(str(asset.source))}, content_sha256={_py_literal(asset.content_sha256)})")
     if definition.get("conservative_current_view_ref") is not None:
         args.append(
             "conservative_current_view_ref="
@@ -9649,6 +9815,21 @@ def _study_global_mesh_config(problem: Problem, overrides: dict[str, object]) ->
                 continue
             config[key] = value
 
+    if mesh_workflow.get("domain_marker_owners") is not None:
+        config["domain_marker_owners"] = copy.deepcopy(mesh_workflow["domain_marker_owners"])
+    if "shared_domain_mesh_source" in overrides:
+        from fullmag.runtime.domain_mesh_source import normalize_shared_domain_mesh_source
+        source = normalize_shared_domain_mesh_source(overrides["shared_domain_mesh_source"])
+        for key in ("domain_mesh_source", "domain_region_markers", "domain_object_region_markers", "domain_marker_owners"):
+            config.pop(key, None)
+        config["domain_mesh_mode"] = source["kind"]
+        if source["kind"] == "explicit":
+            config["build_target"] = "domain"
+            config["domain_mesh_source"] = source["source"]
+            config["domain_region_markers"] = source["region_markers"]
+            config["domain_marker_owners"] = source["marker_owners"]
+            if "object_region_markers" in source:
+                config["domain_object_region_markers"] = source["object_region_markers"]
     return config
 
 
@@ -9717,14 +9898,15 @@ def _render_study_mesh_workflow(
         if not _mesh_entry_requires_explicit_render(mesh_config):
             continue
         target_var = magnet_vars.get(magnet_name)
-        if magnet_name in problem.auxiliary_geometry_object_ids or target_var is None:
-            object_id = problem.auxiliary_geometry_object_ids.get(magnet_name, magnet_name)
-            geometries_override = overrides.get("geometries")
-            if isinstance(geometries_override, list):
-                for geometry in geometries_override:
-                    if isinstance(geometry, Mapping) and geometry.get("name") == magnet_name:
-                        object_id = str(geometry.get("object_id") or magnet_name)
-                        break
+        geometries_override = overrides.get("geometries")
+        geometry_override = next((
+            geometry for geometry in geometries_override
+            if isinstance(geometry, Mapping) and geometry.get("name") == magnet_name
+        ), {}) if isinstance(geometries_override, list) else {}
+        is_auxiliary = geometry_override.get("role", "magnet") != "magnet"
+        if is_auxiliary or magnet_name in problem.auxiliary_geometry_object_ids or target_var is None:
+            object_id = str(geometry_override.get("object_id") or
+                            problem.auxiliary_geometry_object_ids.get(magnet_name, magnet_name))
             lines.extend(_render_object_id_mesh_workflow(object_id, mesh_config, source_root=source_root))
             continue
         mesh_call = _render_geometry_mesh_call(
@@ -9922,7 +10104,7 @@ def _render_domain_mesh_call(
     if not isinstance(source_value, str) or not source_value.strip():
         return None
     raw_markers = mesh_config.get("domain_region_markers")
-    if not isinstance(raw_markers, list) or not raw_markers:
+    if not isinstance(raw_markers, list):
         return None
     rendered_markers = {}
     for raw_entry in raw_markers:
@@ -9934,14 +10116,14 @@ def _render_domain_mesh_call(
         if not isinstance(marker, (int, float)):
             continue
         rendered_markers[geometry_name] = int(marker)
-    if not rendered_markers:
+    if raw_markers and not rendered_markers:
         return None
     kwargs = [
         f"source={_py_repr(_relativize_path(source_value, source_root))}",
-        f"region_markers={_py_literal(rendered_markers)}",
+        f"region_markers={_py_literal(rendered_markers if raw_markers else [])}",
     ]
     raw_object_region_markers = mesh_config.get("domain_object_region_markers")
-    if isinstance(raw_object_region_markers, list) and raw_object_region_markers:
+    if isinstance(raw_object_region_markers, list):
         rendered_object_region_markers = {}
         for raw_entry in raw_object_region_markers:
             entry = _normalize_mapping(raw_entry)
@@ -9952,10 +10134,21 @@ def _render_domain_mesh_call(
             if not isinstance(marker, (int, float)):
                 continue
             rendered_object_region_markers[geometry_name] = int(marker)
-        if rendered_object_region_markers:
+        if rendered_object_region_markers or not raw_object_region_markers:
             kwargs.append(
-                f"object_region_markers={_py_literal(rendered_object_region_markers)}"
+                f"object_region_markers={_py_literal(rendered_object_region_markers if raw_object_region_markers else [])}"
             )
+    if "domain_marker_owners" in mesh_config:
+        owners = []
+        for owner in mesh_config["domain_marker_owners"]:
+            target = owner["target"]
+            target_args = f"object_id={_py_repr(target['object_id'])}"
+            if "region_id" in target:
+                target_args += f", region_id={_py_repr(target['region_id'])}"
+            fields = ", ".join(f"{_py_repr(key)}: {_py_literal(owner[key])}"
+                               for key in ("table", "geometry_name", "marker"))
+            owners.append("{" + fields + f", 'target': fm.RegionRef({target_args})" + "}")
+        kwargs.append("marker_owners=[" + ", ".join(owners) + "]")
     return f"{_surface_call(surface, 'domain_mesh')}({', '.join(kwargs)})"
 
 
@@ -10350,6 +10543,7 @@ def _render_stages(
     region_vars: dict[tuple[str, str], str],
     source_root: Path,
     mask_renderer: "_MaskAntennaRenderer | None" = None,
+    source_preparation_assets=None,
 ) -> list[str]:
     if not stages:
         return []
@@ -10373,6 +10567,8 @@ def _render_stages(
     previous_dynamics_signature: dict[str, object] | None = None
     active_field = initial_field
     for index, stage in enumerate(stages):
+        stage_override = _stage_override_for(stage_overrides, index=index, stage=stage)
+        lines.extend(_render_execution_intent(stage.problem.runtime_metadata, overrides=stage_override, surface=surface))
         for assignment in stage.magnetization_assignments:
             initializer = assignment.initializer
             if isinstance(initializer, SampledMagnetization) and initializer.source_path and assignment.region_id is None:
@@ -10408,7 +10604,7 @@ def _render_stages(
                 lines.append(
                     "study.stages.add_antenna_field_solve("
                     f"id={_py_literal(definition['id'])}, "
-                    f"definition={_render_antenna_field_solve_definition_expr(definition)})"
+                    f"definition={_render_antenna_field_solve_definition_expr(definition, source_preparation_assets=source_preparation_assets)})"
                 )
                 continue
             if action_kind == "antenna_source_spectrum":
@@ -10680,7 +10876,6 @@ def _render_stages(
         active_field = _render_external_field_change(
             lines, active_field, stage_fields.get(index, base_field), surface,
         )
-        stage_override = _stage_override_for(stage_overrides, index=index, stage=stage)
         if isinstance(study, Hysteresis):
             if not is_study_surface:
                 raise ValueError("canonical hysteresis rewrite requires the study API surface")
@@ -12047,13 +12242,13 @@ def _render_antenna_layout_expr(
     ]
     if transform_kw is not None:
         kwargs.append(transform_kw)
+    loop = params.get("loop")
+    if isinstance(loop, Mapping) and loop.get("enabled") is True:
+        kwargs.append("closed_loop=True")
+        for key, value in loop.items():
+            if key != "enabled":
+                kwargs.append(f"{key}={_py_repr(value)}")
     if constructor == "fm.MicrostripAntennaLayout":
-        loop = params.get("loop")
-        if isinstance(loop, Mapping) and loop.get("enabled") is True:
-            kwargs.append("closed_loop=True")
-            for key, value in loop.items():
-                if key != "enabled":
-                    kwargs.append(f"{key}={_py_repr(value)}")
         kwargs.extend([
             f"return_width_m={number('return_width_m', 'return_width')}",
             f"return_offset_m={number('return_offset_m', 'return_gap_m')}",
@@ -12094,7 +12289,7 @@ def _extract_override_child_geometry(
         child_params = {
             key: value
             for key, value in child.items()
-            if key not in {"geometry_kind", "kind", "name"}
+            if key not in {"geometry_kind", "kind"}
         }
     return child_kind, child_params
 
@@ -12108,6 +12303,10 @@ def _render_geometry_expr_from_override(
 ) -> str:
     raw_kind = str(kind or "").strip()
     normalized_kind = raw_kind.lower()
+    raw_name = params.get("name")
+    explicit_name = raw_name if isinstance(raw_name, str) and raw_name else None
+    name = explicit_name or name
+    name_kw = f", name={_py_repr(explicit_name)}" if explicit_name is not None else ""
 
     if normalized_kind == "box":
         size = params.get("size") if params.get("size") is not None else params.get("dimensions")
@@ -12374,12 +12573,20 @@ def _render_geometry_expr_from_override(
             operand_name="child" if params.get("child") is not None else "base",
             object_name=name,
         )
-        expr = _render_geometry_expr_from_override(
+        base_expr = _render_geometry_expr_from_override(
             base_kind,
             base_params,
             name=name,
             source_root=source_root,
         )
+        for key in ("offset", "translation", "translate", "by"):
+            raw_offset = params.get(key)
+            if raw_offset is not None:
+                break
+        offset = _scene_float_sequence(raw_offset, count=3)
+        if offset is None:
+            raise ValueError(f"Translate geometry for object {name!r} requires three finite coordinates")
+        return _render_translate_suffix(base_expr, offset, name=explicit_name)
     elif normalized_kind == "transform":
         raw_child = params.get("child") if params.get("child") is not None else params.get("base")
         child_kind, child_params = _extract_override_child_geometry(
@@ -12399,8 +12606,7 @@ def _render_geometry_expr_from_override(
             if isinstance(params.get("transform"), Mapping)
             else params
         )
-        expr = _render_transform_dict_suffix(child_expr, transform_payload)
-        return expr
+        return _render_transform_dict_suffix(child_expr, transform_payload, name=explicit_name)
     elif normalized_kind in {"sliceplane", "slice_plane"}:
         raw_child = params.get("child") if params.get("child") is not None else params.get("base")
         child_kind, child_params = _extract_override_child_geometry(
@@ -12435,7 +12641,7 @@ def _render_geometry_expr_from_override(
             f"{child_expr}.slice_plane("
             f"origin=({_py_float_roundtrip(origin[0])}, {_py_float_roundtrip(origin[1])}, {_py_float_roundtrip(origin[2])}), "
             f"normal=({_py_float_roundtrip(normal[0])}, {_py_float_roundtrip(normal[1])}, {_py_float_roundtrip(normal[2])}), "
-            f"keep={_py_repr(keep_side)})"
+            f"keep={_py_repr(keep_side)}{name_kw})"
         )
     elif normalized_kind in {"array3d", "array_3d"}:
         raw_child = params.get("child") if params.get("child") is not None else params.get("base")
@@ -12458,6 +12664,7 @@ def _render_geometry_expr_from_override(
             child_expr,
             params.get("axes"),
             merge_overlapping=bool(params.get("merge_overlapping", False)),
+            name=explicit_name,
         )
     elif _normalize_csg_op(raw_kind, params) is not None:
         csg_op = _normalize_csg_op(raw_kind, params)
@@ -12502,7 +12709,7 @@ def _render_geometry_expr_from_override(
                 raise ValueError(
                     f"{raw_kind} geometry for object {name!r} requires at least one enabled operand"
                 )
-            expr = _fold_fluent_csg(csg_op, active_exprs)
+            expr = _fold_fluent_csg(csg_op, active_exprs, name=explicit_name)
         else:
             if csg_op == "difference":
                 left_operand, right_operand = "base", "tool"
@@ -12538,7 +12745,7 @@ def _render_geometry_expr_from_override(
                 name=f"{name}_{'rhs' if csg_op != 'difference' else 'tool'}",
                 source_root=source_root,
             )
-            expr = _fold_fluent_csg(csg_op, [left_expr, right_expr])
+            expr = _fold_fluent_csg(csg_op, [left_expr, right_expr], name=explicit_name)
     else:
         raise ValueError(
             f"unsupported geometry kind {raw_kind!r} for object {name!r}"
@@ -12658,23 +12865,26 @@ def _render_geometry_expr(geometry: object, *, magnet_name: str, source_root: Pa
     if isinstance(geometry, Difference):
         base = _render_geometry_expr(geometry.base, magnet_name=magnet_name, source_root=source_root)
         tool = _render_geometry_expr(geometry.tool, magnet_name=magnet_name, source_root=source_root)
-        return f"{base}.subtract({tool})"
+        name_kw = f", name={_py_repr(geometry.name)}" if geometry.name != "difference" else ""
+        return f"{base}.subtract({tool}{name_kw})"
     if isinstance(geometry, Union):
         a = _render_geometry_expr(geometry.a, magnet_name=magnet_name, source_root=source_root)
         b = _render_geometry_expr(geometry.b, magnet_name=magnet_name, source_root=source_root)
-        return f"{a}.union({b})"
+        name_kw = f", name={_py_repr(geometry.name)}" if geometry.name != "union" else ""
+        return f"{a}.union({b}{name_kw})"
     if isinstance(geometry, Intersection):
         a = _render_geometry_expr(geometry.a, magnet_name=magnet_name, source_root=source_root)
         b = _render_geometry_expr(geometry.b, magnet_name=magnet_name, source_root=source_root)
-        return f"{a}.intersect({b})"
+        name_kw = f", name={_py_repr(geometry.name)}" if geometry.name != "intersection" else ""
+        return f"{a}.intersect({b}{name_kw})"
     if isinstance(geometry, Xor):
         left = _render_geometry_expr(geometry.left, magnet_name=magnet_name, source_root=source_root)
         right = _render_geometry_expr(geometry.right, magnet_name=magnet_name, source_root=source_root)
-        return f"{left}.xor({right})"
+        name_kw = f", name={_py_repr(geometry.name)}" if geometry.name != "xor" else ""
+        return f"{left}.xor({right}{name_kw})"
     if isinstance(geometry, Translate):
         base = _render_geometry_expr(geometry.geometry, magnet_name=magnet_name, source_root=source_root)
-        offset = ", ".join(_py_float_roundtrip(value) for value in geometry.offset)
-        return f"{base}.translate(({offset}))"
+        return _render_translate_suffix(base, geometry.offset, name=geometry.name)
     if isinstance(geometry, Transform):
         child = _render_geometry_expr(geometry.child, magnet_name=magnet_name, source_root=source_root)
         return _render_transform_dict_suffix(
@@ -12685,16 +12895,18 @@ def _render_geometry_expr(geometry: object, *, magnet_name: str, source_root: Pa
                 "scale": list(geometry.scale),
                 "pivot": list(geometry.pivot),
             },
+            name=geometry.name,
         )
     if isinstance(geometry, SlicePlane):
         child = _render_geometry_expr(geometry.child, magnet_name=magnet_name, source_root=source_root)
         o = geometry.plane_origin
         n = geometry.plane_normal
+        name_kw = f", name={_py_repr(geometry.name)}" if geometry.name is not None else ""
         return (
             f"{child}.slice_plane("
             f"origin=({_py_float_roundtrip(o[0])}, {_py_float_roundtrip(o[1])}, {_py_float_roundtrip(o[2])}), "
             f"normal=({_py_float_roundtrip(n[0])}, {_py_float_roundtrip(n[1])}, {_py_float_roundtrip(n[2])}), "
-            f"keep={_py_repr(geometry.keep_side)})"
+            f"keep={_py_repr(geometry.keep_side)}{name_kw})"
         )
     if isinstance(geometry, Array3D):
         child = _render_geometry_expr(geometry.child, magnet_name=magnet_name, source_root=source_root)
@@ -12702,6 +12914,7 @@ def _render_geometry_expr(geometry: object, *, magnet_name: str, source_root: Pa
             child,
             geometry.axes,
             merge_overlapping=geometry.merge_overlapping,
+            name=geometry.name,
         )
     raise ValueError(f"unsupported geometry kind for canonical rewrite: {type(geometry).__name__}")
 
@@ -12983,6 +13196,9 @@ def _export_global_mesh_state(problem: Problem) -> dict[str, object]:
             _number_or_none(adaptive_mesh.get("error_tolerance"))
         ),
     }
+    for key in ("algorithm_2d", "algorithm_3d", "compute_quality", "per_element_quality"):
+        if key not in mesh_options:
+            mesh_state.pop(key, None)
     for key in (
         "domain_mesh_mode",
         "domain_mesh_source",
@@ -13208,7 +13424,9 @@ def _export_geometry_entry(
     mat = magnet.material
 
     # --- Geometry kind + params ---
-    geometry_kind, geometry_params = _export_geometry_kind_params(geom)
+    geometry_kind, geometry_params = _export_geometry_kind_params(
+        geom, registration_name=f"{magnet.name}_geom",
+    )
     bounds_min, bounds_max = _geometry_bounds(geom, source_root=source_root)
 
     # --- Material ---
@@ -13338,10 +13556,13 @@ def _export_geometry_entry(
             }
 
     # --- Per-geometry mesh ---
-    per_mesh = _export_geometry_mesh_entry(magnet.name, problem)
+    mesh_key = (geom.geometry_name if _mesh_workflow_per_geometry_entry(problem, geom.geometry_name)
+                else magnet.name)
+    per_mesh = _export_geometry_mesh_entry(mesh_key, problem)
 
     return {
         "name": magnet.name,
+        "geometry_name": geom.geometry_name,
         "object_id": magnet.object_id or magnet.name,
         "region_name": magnet.region_name,
         "geometry_kind": geometry_kind,
@@ -13378,7 +13599,8 @@ def _export_auxiliary_geometry_entry(
     geometry_hints = _normalize_mapping(visualization_hint.get("geometry_hints"))
     hint = _normalize_mapping(geometry_hints.get(name))
     return {
-        "name": name,
+        "name": problem.auxiliary_geometry_names.get(name, name),
+        "geometry_name": name,
         "object_id": problem.auxiliary_geometry_object_ids.get(name, name),
         "role": str(
             problem.auxiliary_geometry_roles.get(name)
@@ -13486,13 +13708,39 @@ def _export_spin_torque_entry(module: object) -> dict[str, object]:
     raise ValueError(f"unsupported spin torque module kind: {type(module).__name__}")
 
 
-def _export_geometry_kind_params(geom: object) -> tuple[str, dict[str, object]]:
-    """Extract kind string and parameter dict from a geometry object."""
-    descriptor = _export_geometry_descriptor(geom, flatten_translation=True)
+def _export_geometry_kind_params(
+    geom: object, *, registration_name: str | None = None,
+) -> tuple[str, dict[str, object]]:
+    """Extract the geometry descriptor, composing a chain of anonymous translations."""
+    flatten_translation = (
+        isinstance(geom, Translate)
+        and isinstance(geom.geometry, Translate)
+        and geom.name in (None, registration_name)
+    )
+    if flatten_translation:
+        child = geom.geometry
+        while isinstance(child, Translate):
+            if child.name is not None:
+                flatten_translation = False
+                break
+            child = child.geometry
+    descriptor = _export_geometry_descriptor(geom, flatten_translation=flatten_translation)
     return str(descriptor["geometry_kind"]), _normalize_mapping(descriptor["geometry_params"])
 
 
 def _export_geometry_descriptor(
+    geom: object,
+    *,
+    flatten_translation: bool,
+) -> dict[str, object]:
+    descriptor = _export_geometry_descriptor_without_name(geom, flatten_translation=flatten_translation)
+    name = getattr(geom, "name", None)
+    if name is not None and not (flatten_translation and isinstance(geom, Translate)):
+        descriptor["geometry_params"] = {**_normalize_mapping(descriptor["geometry_params"]), "name": name}
+    return descriptor
+
+
+def _export_geometry_descriptor_without_name(
     geom: object,
     *,
     flatten_translation: bool,
@@ -13512,7 +13760,7 @@ def _export_geometry_descriptor(
                 "source": geom.source,
                 "scale": geom.scale,
                 "volume": geom.volume,
-                "name": geom.name,
+                "name": geom.geometry_name,
             },
         }
     if isinstance(geom, Box):
@@ -15231,6 +15479,7 @@ def _stage_signature(problem: Problem, *, ignore_uniform_field: bool = False) ->
             *[_geometry_signature(geometry) for geometry in problem.auxiliary_geometries],
         ],
         "auxiliary_geometry_roles": dict(problem.auxiliary_geometry_roles),
+        "auxiliary_geometry_names": dict(problem.auxiliary_geometry_names),
         "auxiliary_geometry_object_ids": {
             name: problem.auxiliary_geometry_object_ids.get(name, name)
             for name in problem.auxiliary_geometry_roles
@@ -15257,8 +15506,6 @@ def _stage_signature(problem: Problem, *, ignore_uniform_field: bool = False) ->
         "discretization": problem.discretization.to_ir() if problem.discretization else None,
         "mesh_workflow": runtime_metadata.get("mesh_workflow"),
         "output_storage": runtime_metadata.get("output_storage"),
-        "interactive": runtime_metadata.get("interactive_session_requested"),
-        "wait_for_solve": runtime_metadata.get("wait_for_solve"),
         "domain_frame": runtime_metadata.get("domain_frame"),
         "study_universe": runtime_metadata.get("study_universe"),
     }

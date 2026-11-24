@@ -480,6 +480,10 @@ export const ANTENNA_GEOMETRY_LAYOUT_SECTIONS: readonly InspectorSectionSpec<Ant
         },
 ];
 
+function circuitGeometryKind({ topology }: AntennaGeometryAndPlacementDraft): string {
+  return topology === "straight_microstrip" ? "MicrostripAntennaLayout" : "CPWAntennaLayout";
+}
+
 export const ANTENNA_GEOMETRY_CLOSED_LOOP_SECTION: InspectorSectionSpec<AntennaGeometryAndPlacementDraft> =
         {
           defaultOpen: true,
@@ -489,9 +493,9 @@ export const ANTENNA_GEOMETRY_CLOSED_LOOP_SECTION: InspectorSectionSpec<AntennaG
           rows: [
             {
               disabledReason: (d) =>
-                d.topology !== "straight_microstrip"
-                  ? "Closed-loop bridge closure applies to Straight Microstrip signal + return layouts."
-                  : null,
+                ["straight_microstrip", "cpw", "gsg"].includes(d.topology)
+                  ? null
+                  : "Closed-loop closure applies to straight microstrip and coplanar layouts.",
               key: "closedLoopEnabled",
               label: "Enable closed 3D conducting loop",
               structural: true,
@@ -513,31 +517,33 @@ export const ANTENNA_GEOMETRY_CLOSED_LOOP_SECTION: InspectorSectionSpec<AntennaG
             {
               defaultDisplayUnit: "nm",
               key: "sourceCutOffsetM",
-              label: "Source-cut Z offset",
+              label: "Object-local source-cut offset",
+              hint: "Use local Z in the microstrip signal/return clearance or local X in the coplanar inlet neck.",
               showWhen: (d) => d.closedLoopEnabled,
-              symbol: (
-                <>
-                  z<sub>cut</sub>
-                </>
-              ),
               type: "quantity",
               units: LENGTH_UNITS,
               validate: (val, d) => {
                 if (!d.closedLoopEnabled) return null;
-                const upper = -d.thicknessM / 2;
-                const lower = -d.thicknessM / 2 - d.returnOffsetM;
-                if (!(val > lower && val < upper)) {
-                  return "Source-cut Z offset must lie strictly inside the signal/return clearance.";
+                if (circuitGeometryKind(d) === "CPWAntennaLayout") {
+                  const length = Number(d.loopParameters.inlet_connection_length_m);
+                  const crossbar = Number(d.loopParameters.inlet_crossbar_length_m);
+                  return val > -length + crossbar && val < 0
+                    ? null
+                    : "Source-cut X offset must lie strictly inside the inlet neck.";
                 }
-                return null;
+                const upper = -d.thicknessM / 2;
+                const lower = upper - d.returnOffsetM;
+                return val > lower && val < upper
+                  ? null
+                  : "Source-cut Z offset must lie strictly inside the signal/return clearance.";
               },
             },
             {
               key: "sourceCutNormal",
               label: "Source-cut normal",
               options: [
-                { label: "+Z local", value: "positive_axis" },
-                { label: "−Z local", value: "negative_axis" },
+                { label: "Positive local axis", value: "positive_axis" },
+                { label: "Negative local axis", value: "negative_axis" },
               ],
               showWhen: (d) => d.closedLoopEnabled,
               type: "segmented",
@@ -547,16 +553,16 @@ export const ANTENNA_GEOMETRY_CLOSED_LOOP_SECTION: InspectorSectionSpec<AntennaG
               label: "Closed-loop bridge connections",
               render: (ctx) => (
                 <ClosedLoopBridgeFieldsEditor
+                  geometryKind={circuitGeometryKind(ctx.draft)}
                   parameters={ctx.draft.loopParameters}
                   onChange={(next) => ctx.setField("loopParameters", next)}
                 />
               ),
-              showWhen: (d) =>
-                d.topology === "straight_microstrip" && d.closedLoopEnabled,
+              showWhen: (d) => d.closedLoopEnabled,
               type: "custom",
               validate: (_val, d) =>
-                d.topology === "straight_microstrip" && d.closedLoopEnabled
-                  ? validateLoopParametersDraft(d.loopParameters)
+                d.closedLoopEnabled
+                  ? validateLoopParametersDraft(d.loopParameters, circuitGeometryKind(d))
                   : null,
               wide: true,
             },

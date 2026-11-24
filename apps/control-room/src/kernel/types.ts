@@ -1,3 +1,4 @@
+import type { SavedRunController } from "./saved-results/SavedRunController";
 import type { SavedResultsPlaybackController } from "./saved-results/SavedResultsPlaybackController";
 import type { ComponentType } from "react";
 
@@ -73,6 +74,7 @@ export interface ModuleManifest {
 }
 
 export interface KernelApi {
+  readonly savedRun?: SavedRunController;
   readonly savedResultsPlayback?: SavedResultsPlaybackController;
   readonly api: ControlRoomApi;
   readonly analysisFieldOverlay: AnalysisFieldOverlayController;

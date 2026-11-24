@@ -413,6 +413,7 @@ pub(crate) fn diagnose_initial_backend_plan(
     resolved_runtime: &fullmag_runner::RuntimeEngineInfo,
 ) -> Result<InitialStateDiagnostic> {
     match backend_plan {
+        BackendPlanIR::AntennaRetainedCurrentFieldInspection(_) | BackendPlanIR::AntennaRetainedDirectFieldInspection(_) | BackendPlanIR::AntennaRetainedPreparationFieldInspection(_) => anyhow::bail!("retained-current H-only inspection has no magnetic initial state; execution requires its typed accepted worker"),
         BackendPlanIR::AntennaFieldOnly(_) => anyhow::bail!("field_only has no magnetic initial state to diagnose"),
         BackendPlanIR::AntennaExternalLeadInspection(_) => {
             anyhow::bail!("standalone antenna inspection has no magnetic initial-state diagnostic")

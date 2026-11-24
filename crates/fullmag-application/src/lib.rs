@@ -18,6 +18,8 @@ mod file_repository;
 mod legacy_live_execution;
 mod preparation;
 mod closed_loop_preparation;
+mod retained_current_preparation;
+mod retained_asset_field_preparation;
 mod script_pipeline_acceptance;
 mod project;
 mod repository;
@@ -72,6 +74,8 @@ pub use declared_execution::bind_declared_execution;
 pub use execution::{
     FrozenStageContextRefV1, FrozenStageSourceManifestRef,
     TERMINAL_RESOLVED_TASK_INPUT_SCHEMA, TERMINAL_WORKER_PROTOCOL_SCHEMA,
+    RETAINED_CURRENT_RESOLVED_TASK_INPUT_SCHEMA, RETAINED_CURRENT_WORKER_PROTOCOL_SCHEMA,
+    RETAINED_ASSET_FIELD_RESOLVED_TASK_INPUT_SCHEMA, RETAINED_ASSET_FIELD_WORKER_PROTOCOL_SCHEMA,
     resolved_inputs_sha256, study_task_input_fingerprint, AttemptId, ClaimIdentity, ExecutionError,
     LeaseToken, ObservationState, OwnershipEpoch, ProtocolDisposition, ResolvedInput,
     ResolvedStudyArtifact, ResolvedTaskInput, ResourceBudget, ResourceKind, ResourceLease,
@@ -93,6 +97,10 @@ pub use legacy_live_execution::{
 };
 pub use file_repository::{FileProjectRepository, FileRepositoryError};
 pub use closed_loop_preparation::{AcceptedPreparationProof, AcceptedPreparationReceipt, ClosedLoopPreparationPlan, ClosedLoopPreparationReceipt, CLOSED_LOOP_PREPARATION_SCHEMA, CLOSED_LOOP_PREPARATION_BINDING_SCHEMA};
+pub use retained_current_preparation::{RetainedCurrentPreparationPlan, RetainedCurrentPreparationReceipt, RETAINED_CURRENT_PREPARATION_SCHEMA, RETAINED_CURRENT_PREPARATION_PLAN_SCHEMA, RETAINED_CURRENT_PREPARATION_BINDING_SCHEMA};
+pub use retained_asset_field_preparation::{RetainedAssetFieldPreparationPlan, RetainedAssetFieldPreparationReceipt,
+    RETAINED_ASSET_FIELD_PREPARATION_PLAN_SCHEMA, RETAINED_ASSET_FIELD_PREPARATION_SCHEMA,
+    RETAINED_ASSET_FIELD_PREPARATION_BINDING_SCHEMA};
 pub use script_pipeline_acceptance::{bind_scene_study_authored_initial_state_ports, bind_scene_study_authored_initial_states, bind_scene_study_physical_state_flow, compile_accepted_closed_loop_pipeline, validate_accepted_script_pipeline_source, validate_script_source_assets, AcceptedScriptPipeline, SCRIPT_PIPELINE_SOURCE_ASSET_ID, SCRIPT_PIPELINE_SOURCE_SCHEMA};
 pub use preparation::{
     materialize_antenna_external_lead_inspection_preparation_from_problem,

@@ -15,6 +15,8 @@ pub const LEGACY_RESOLVED_TASK_INPUT_SCHEMA: &str = "resolved_task_input.v2";
 pub const RESOLVED_TASK_INPUT_SCHEMA: &str = "resolved_task_input.v3";
 pub const CLOSED_LOOP_RESOLVED_TASK_INPUT_SCHEMA: &str = "resolved_task_input.v4";
 pub const TERMINAL_RESOLVED_TASK_INPUT_SCHEMA: &str = "resolved_task_input.v5";
+pub const RETAINED_CURRENT_RESOLVED_TASK_INPUT_SCHEMA: &str = "resolved_task_input.v6";
+pub const RETAINED_ASSET_FIELD_RESOLVED_TASK_INPUT_SCHEMA: &str = "resolved_task_input.v7";
 
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
 #[serde(transparent)]
@@ -301,6 +303,8 @@ impl ClaimIdentity {
 pub const WORKER_PROTOCOL_SCHEMA: &str = "worker_protocol.v3";
 pub const CLOSED_LOOP_WORKER_PROTOCOL_SCHEMA: &str = "worker_protocol.v4";
 pub const TERMINAL_WORKER_PROTOCOL_SCHEMA: &str = "worker_protocol.v5";
+pub const RETAINED_CURRENT_WORKER_PROTOCOL_SCHEMA: &str = "worker_protocol.v6";
+pub const RETAINED_ASSET_FIELD_WORKER_PROTOCOL_SCHEMA: &str = "worker_protocol.v7";
 
 /// Commands are at-least-once transport messages.  The ledger below makes a
 /// repeated message idempotent, while a new command must advance its sequence.
@@ -342,6 +346,14 @@ impl WorkerCommandEnvelope {
                     != (resolved_input.schema_version == TERMINAL_RESOLVED_TASK_INPUT_SCHEMA)
                 {
                     return Err(ExecutionError::Invalid("terminal worker/input versions differ".into()));
+                }
+                if (self.schema_version == RETAINED_CURRENT_WORKER_PROTOCOL_SCHEMA)
+                    != (resolved_input.schema_version == RETAINED_CURRENT_RESOLVED_TASK_INPUT_SCHEMA) {
+                    return Err(ExecutionError::Invalid("retained-current worker/input versions differ".into()));
+                }
+                if (self.schema_version == RETAINED_ASSET_FIELD_WORKER_PROTOCOL_SCHEMA)
+                    != (resolved_input.schema_version == RETAINED_ASSET_FIELD_RESOLVED_TASK_INPUT_SCHEMA) {
+                    return Err(ExecutionError::Invalid("retained-asset field worker/input versions differ".into()));
                 }
                 if resolved_input.run_id != self.claim.run_id
                     || resolved_input.task_id != self.claim.task_id
@@ -1165,6 +1177,62 @@ impl TaskRecord {
         Ok(resolved)
     }
 
+    /// Resolve canonical stored H-only pins. Durable parent/source admission is
+    /// repeated by preparation and worker owners; this does not evaluate H.
+    pub fn resolved_retained_current_study_input(
+        &self,
+        claim: &TaskClaim,
+        specification: &RunSpecification,
+        step: &fullmag_plan::StudyStepExecutionPlan,
+        problem: &fullmag_ir::ProblemIR,
+        receipt: &crate::retained_current_preparation::RetainedCurrentPreparationReceipt,
+    ) -> Result<ResolvedTaskInput, ExecutionError> {
+        if claim.lease.kind != ResourceKind::Cpu || claim.lease.budget.gpu_memory_bytes != 0 {
+            return Err(ExecutionError::Invalid("retained-current H-only requires its CPU lease without GPU memory".into()));
+        }
+        receipt.validate_for_accepted_input(specification, self.task_id.as_str(), step, problem)
+            .map_err(|error| ExecutionError::Invalid(error.to_string()))?;
+        let fingerprint = study_task_input_fingerprint(specification, step)?;
+        let preparation = receipt.binding().map_err(|error| ExecutionError::Invalid(error.to_string()))?;
+        let mut resolved = self.resolve_input_with_fingerprint(
+            claim, specification, &fingerprint,
+            receipt.plan.carrier_fingerprint.trim_start_matches("sha256:"),
+            preparation, BTreeMap::new(),
+        )?;
+        resolved.schema_version = RETAINED_CURRENT_RESOLVED_TASK_INPUT_SCHEMA.into();
+        resolved.requested_execution = specification.requested_execution.for_problem(problem)
+            .map_err(|error| ExecutionError::Invalid(error.to_string()))?;
+        resolved.validate()?;
+        Ok(resolved)
+    }
+
+    pub fn resolved_retained_asset_field_study_input(
+        &self,
+        claim: &TaskClaim,
+        specification: &RunSpecification,
+        step: &fullmag_plan::StudyStepExecutionPlan,
+        problem: &fullmag_ir::ProblemIR,
+        receipt: &crate::retained_asset_field_preparation::RetainedAssetFieldPreparationReceipt,
+    ) -> Result<ResolvedTaskInput, ExecutionError> {
+        if claim.lease.kind != ResourceKind::Cpu || claim.lease.budget.gpu_memory_bytes != 0 {
+            return Err(ExecutionError::Invalid("retained-asset field H-only requires its CPU lease without GPU memory".into()));
+        }
+        receipt.validate_for_accepted_input(specification, self.task_id.as_str(), step, problem)
+            .map_err(|error| ExecutionError::Invalid(error.to_string()))?;
+        let fingerprint = study_task_input_fingerprint(specification, step)?;
+        let preparation = receipt.binding().map_err(|error| ExecutionError::Invalid(error.to_string()))?;
+        let mut resolved = self.resolve_input_with_fingerprint(
+            claim, specification, &fingerprint,
+            receipt.plan.carrier_fingerprint.trim_start_matches("sha256:"),
+            preparation, BTreeMap::new(),
+        )?;
+        resolved.schema_version = RETAINED_ASSET_FIELD_RESOLVED_TASK_INPUT_SCHEMA.into();
+        resolved.requested_execution = specification.requested_execution.for_problem(problem)
+            .map_err(|error| ExecutionError::Invalid(error.to_string()))?;
+        resolved.validate()?;
+        Ok(resolved)
+    }
+
     /// For run-wide tasks. Materialized study tasks use resolved_study_input.
     pub fn resolved_input(
         &self,
@@ -1307,6 +1375,10 @@ fn is_supported_study_artifact_codec(data_kind: &str, codec_id: &str, version: &
         || (data_kind == "artifact"
             && codec_id == crate::antenna_inspection_bundle::ANTENNA_INSPECTION_BUNDLE_CODEC_ID
             && version == crate::antenna_inspection_bundle::ANTENNA_INSPECTION_BUNDLE_CODEC_VERSION)
+        || (data_kind == "artifact"
+            && codec_id == fullmag_antenna_artifacts::retained_current::RETAINED_CURRENT_FIELD_CODEC_ID
+            && matches!(version, fullmag_antenna_artifacts::retained_current::RETAINED_CURRENT_FIELD_CODEC_VERSION
+                | fullmag_antenna_artifacts::retained_current::RETAINED_CURRENT_FIELD_CODEC_VERSION_V2))
         || (data_kind == "artifact"
             && codec_id == crate::study_artifact::STUDY_ANTENNA_INSPECTION_CODEC_ID
             && version == crate::study_artifact::STUDY_ANTENNA_INSPECTION_CODEC_VERSION)
@@ -1530,6 +1602,8 @@ impl ResolvedTaskInput {
             && self.schema_version != LEGACY_RESOLVED_TASK_INPUT_SCHEMA
             && self.schema_version != CLOSED_LOOP_RESOLVED_TASK_INPUT_SCHEMA
             && self.schema_version != TERMINAL_RESOLVED_TASK_INPUT_SCHEMA
+            && self.schema_version != RETAINED_CURRENT_RESOLVED_TASK_INPUT_SCHEMA
+            && self.schema_version != RETAINED_ASSET_FIELD_RESOLVED_TASK_INPUT_SCHEMA
         {
             return Err(ExecutionError::Invalid(format!(
                 "schema_version must be {RESOLVED_TASK_INPUT_SCHEMA} or {LEGACY_RESOLVED_TASK_INPUT_SCHEMA}"
@@ -1548,6 +1622,28 @@ impl ResolvedTaskInput {
             != (self.preparation.schema_version == crate::closed_loop_preparation::CLOSED_LOOP_PREPARATION_BINDING_SCHEMA)
         {
             return Err(ExecutionError::Invalid("resolved input and preparation operation versions differ".into()));
+        }
+        if (self.schema_version == RETAINED_CURRENT_RESOLVED_TASK_INPUT_SCHEMA)
+            != (self.preparation.schema_version == crate::retained_current_preparation::RETAINED_CURRENT_PREPARATION_BINDING_SCHEMA) {
+            return Err(ExecutionError::Invalid("resolved input and retained-current preparation versions differ".into()));
+        }
+        if self.schema_version == RETAINED_CURRENT_RESOLVED_TASK_INPUT_SCHEMA
+            && (!self.inputs.is_empty() || self.requested_execution.backend != "fem"
+                || self.requested_execution.device != "cpu" || self.requested_execution.precision != "double"
+                || self.requested_execution.mode != "strict"
+                || self.requested_execution.minimum_resources.as_ref().is_some_and(|budget| budget.gpu_memory_bytes != 0)) {
+            return Err(ExecutionError::Invalid("retained-current H-only requires static FEM CPU strict double without state inputs or GPU memory".into()));
+        }
+        if (self.schema_version == RETAINED_ASSET_FIELD_RESOLVED_TASK_INPUT_SCHEMA)
+            != (self.preparation.schema_version == crate::retained_asset_field_preparation::RETAINED_ASSET_FIELD_PREPARATION_BINDING_SCHEMA) {
+            return Err(ExecutionError::Invalid("resolved input and retained-asset field preparation versions differ".into()));
+        }
+        if self.schema_version == RETAINED_ASSET_FIELD_RESOLVED_TASK_INPUT_SCHEMA
+            && (!self.inputs.is_empty() || self.requested_execution.backend != "fem"
+                || self.requested_execution.device != "cpu" || self.requested_execution.precision != "double"
+                || self.requested_execution.mode != "strict"
+                || self.requested_execution.minimum_resources.as_ref().is_some_and(|budget| budget.gpu_memory_bytes != 0)) {
+            return Err(ExecutionError::Invalid("retained-asset field H-only requires static FEM CPU strict double without state inputs or GPU memory".into()));
         }
         match &self.frozen_stage_context {
             Some(context) if self.schema_version == TERMINAL_RESOLVED_TASK_INPUT_SCHEMA => {
@@ -1637,7 +1733,7 @@ fn validate_protocol_identity(
 ) -> Result<(), ExecutionError> {
     if !matches!(
         schema_version,
-        "worker_protocol.v2" | WORKER_PROTOCOL_SCHEMA | CLOSED_LOOP_WORKER_PROTOCOL_SCHEMA | TERMINAL_WORKER_PROTOCOL_SCHEMA
+        "worker_protocol.v2" | WORKER_PROTOCOL_SCHEMA | CLOSED_LOOP_WORKER_PROTOCOL_SCHEMA | TERMINAL_WORKER_PROTOCOL_SCHEMA | RETAINED_CURRENT_WORKER_PROTOCOL_SCHEMA | RETAINED_ASSET_FIELD_WORKER_PROTOCOL_SCHEMA
     ) {
         return Err(ExecutionError::Invalid(format!(
             "schema_version must be worker_protocol.v2 or {WORKER_PROTOCOL_SCHEMA}"
@@ -2272,6 +2368,151 @@ mod tests {
         resolved.schema_version=CLOSED_LOOP_RESOLVED_TASK_INPUT_SCHEMA.into();assert!(resolved.validate().is_err());
         resolved.preparation.schema_version=crate::CLOSED_LOOP_PREPARATION_BINDING_SCHEMA.into();resolved.validate().unwrap();
         resolved.schema_version=RESOLVED_TASK_INPUT_SCHEMA.into();assert!(resolved.validate().is_err());
+    }
+
+    fn retained_resolved_shape() -> (TaskClaim, ResolvedTaskInput) {
+        // Protocol shape only: no accepted parent, preparation publication or solve.
+        let mut spec=specification("retained-protocol");
+        spec.requested_execution.backend="fem".into();
+        let mut task=TaskRecord::new(spec.run_id.clone(),spec.fingerprint().unwrap()).unwrap();
+        task.queue().unwrap();
+        let claim=task.claim(ResourceLease::new("cpu",ResourceKind::Cpu,ResourceBudget {
+            cpu_millis:100,memory_bytes:1,gpu_memory_bytes:0,storage_bytes:1}).unwrap()).unwrap();
+        let binding=PreparationBinding {schema_version:crate::RETAINED_CURRENT_PREPARATION_BINDING_SCHEMA.into(),
+            preparation_id:"prep-retained".into(),plan_fingerprint:format!("sha256:{}","e".repeat(64)),
+            receipt_sha256:format!("sha256:{}","f".repeat(64))};
+        let mut resolved=task.resolved_input(&claim,&spec,"c".repeat(64),binding,Default::default()).unwrap();
+        resolved.schema_version=RETAINED_CURRENT_RESOLVED_TASK_INPUT_SCHEMA.into();
+        resolved.validate().unwrap();
+        (claim,resolved)
+    }
+
+    #[test]
+    fn retained_input_requires_exact_cpu_static_request_and_own_binding() {
+        let (_,original)=retained_resolved_shape();
+        for case in ["binding","state","backend","device","precision","mode","gpu_budget"] {
+            let mut value=original.clone();
+            match case {
+                "binding"=>value.preparation.schema_version=crate::CLOSED_LOOP_PREPARATION_BINDING_SCHEMA.into(),
+                "state"=>{value.inputs.insert("initial".into(),ResolvedInput {source:"authored_initial_state".into(),
+                    content_sha256:"a".repeat(64),study_artifact:None});},
+                "backend"=>value.requested_execution.backend="fdm".into(),
+                "device"=>value.requested_execution.device="auto".into(),
+                "precision"=>value.requested_execution.precision="single".into(),
+                "mode"=>value.requested_execution.mode="extended".into(),
+                "gpu_budget"=>value.requested_execution.minimum_resources.as_mut().unwrap().gpu_memory_bytes=1,
+                _=>unreachable!(),
+            }
+            assert!(value.validate().is_err(),"{case}");
+        }
+        for version in [LEGACY_RESOLVED_TASK_INPUT_SCHEMA,RESOLVED_TASK_INPUT_SCHEMA,
+            CLOSED_LOOP_RESOLVED_TASK_INPUT_SCHEMA,TERMINAL_RESOLVED_TASK_INPUT_SCHEMA] {
+            let mut value=original.clone();value.schema_version=version.into();
+            assert!(value.validate().is_err(),"{version}");
+        }
+    }
+
+    #[test]
+    fn retained_prepare_cannot_mix_any_older_protocol_or_input_binding() {
+        let (claim,resolved)=retained_resolved_shape();
+        let prepare=WorkerCommandEnvelope {schema_version:RETAINED_CURRENT_WORKER_PROTOCOL_SCHEMA.into(),
+            message_id:"retained-prepare".into(),sequence:1,claim:claim.identity(),
+            command:WorkerCommand::Prepare {resolved_input:resolved}};
+        prepare.validate_for_claim(&claim.identity()).unwrap();
+        for version in ["worker_protocol.v2",WORKER_PROTOCOL_SCHEMA,CLOSED_LOOP_WORKER_PROTOCOL_SCHEMA,TERMINAL_WORKER_PROTOCOL_SCHEMA] {
+            let mut older=prepare.clone();older.schema_version=version.into();
+            assert!(older.validate_for_claim(&claim.identity()).is_err(),"{version}");
+        }
+        let encoded=serde_json::to_vec(&prepare).unwrap();
+        let decoded:WorkerCommandEnvelope=serde_json::from_slice(&encoded).unwrap();
+        assert_eq!(decoded,prepare);
+    }
+
+    #[test]
+    fn retained_v6_none_wire_golden_is_unchanged_by_v7_support() {
+        // Fixed existing v6 wire: None fields remain absent and field order is stable.
+        let bytes = br#"{"schema_version":"resolved_task_input.v6","run_id":"run-legacy","task_id":"task-legacy","attempt_id":"attempt-legacy","ownership_epoch":1,"specification_fingerprint":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","plan_fingerprint":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","requested_execution":{"backend":"fem","device":"cpu","precision":"double","mode":"strict"},"preparation":{"schema_version":"retained_current_preparation_binding.v1","preparation_id":"prep-task-legacy","plan_fingerprint":"sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc","receipt_sha256":"sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"},"inputs":{}}"#;
+        let decoded: ResolvedTaskInput = serde_json::from_slice(bytes).unwrap();
+        decoded.validate().unwrap();
+        assert_eq!(serde_json::to_vec(&decoded).unwrap(), bytes);
+        assert_eq!(format!("{:x}", Sha256::digest(bytes)), "36a7262ba6d4ec42b63c9473a5516d8deed44e4701bd0075635889cd57c71add");
+    }
+
+    #[test]
+    fn retained_asset_v7_golden_bytes_remain_exact() {
+        // Fixed v7 DTO bytes; baseline CI must independently confirm the historical serializer.
+        let input = br#"{"schema_version":"resolved_task_input.v7","run_id":"run-legacy","task_id":"task-legacy","attempt_id":"attempt-legacy","ownership_epoch":1,"specification_fingerprint":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","plan_fingerprint":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","requested_execution":{"backend":"fem","device":"cpu","precision":"double","mode":"strict"},"preparation":{"schema_version":"retained_asset_field_preparation_binding.v1","preparation_id":"prep-task-legacy","plan_fingerprint":"sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc","receipt_sha256":"sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"},"inputs":{}}"#;
+        let decoded: ResolvedTaskInput = serde_json::from_slice(input).unwrap(); decoded.validate().unwrap();
+        assert_eq!(serde_json::to_vec(&decoded).unwrap(), input);
+        assert_eq!(format!("{:x}", Sha256::digest(input)), "cf408e30d89c803e2210641918889a21d0b07e59d95b329943f2816bf23c23a0");
+        let command = br#"{"schema_version":"worker_protocol.v7","message_id":"asset-prepare","sequence":1,"claim":{"run_id":"run-legacy","task_id":"task-legacy","attempt_id":"attempt-legacy","ownership_epoch":1,"lease_token":"lease-golden"},"command":{"kind":"prepare","resolved_input":{"schema_version":"resolved_task_input.v7","run_id":"run-legacy","task_id":"task-legacy","attempt_id":"attempt-legacy","ownership_epoch":1,"specification_fingerprint":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","plan_fingerprint":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","requested_execution":{"backend":"fem","device":"cpu","precision":"double","mode":"strict"},"preparation":{"schema_version":"retained_asset_field_preparation_binding.v1","preparation_id":"prep-task-legacy","plan_fingerprint":"sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc","receipt_sha256":"sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"},"inputs":{}}}}"#;
+        let decoded: WorkerCommandEnvelope = serde_json::from_slice(command).unwrap();
+        decoded.validate_for_claim(&decoded.claim).unwrap();
+        assert_eq!(serde_json::to_vec(&decoded).unwrap(), command);
+        assert_eq!(format!("{:x}", Sha256::digest(command)), "bc02e9aba41e852ee0955e359164d79d4d67d3f790ebf60886f7f1e97a877440");
+    }
+
+    #[test]
+    fn retained_asset_v7_rejects_cross_family_relabeling() {
+        let (claim, legacy) = retained_resolved_shape();
+        let mut resolved = legacy.clone();
+        resolved.schema_version = RETAINED_ASSET_FIELD_RESOLVED_TASK_INPUT_SCHEMA.into();
+        resolved.preparation.schema_version = crate::RETAINED_ASSET_FIELD_PREPARATION_BINDING_SCHEMA.into();
+        resolved.validate().unwrap();
+        let prepare = WorkerCommandEnvelope { schema_version: RETAINED_ASSET_FIELD_WORKER_PROTOCOL_SCHEMA.into(),
+            message_id: "asset-prepare".into(), sequence: 1, claim: claim.identity(),
+            command: WorkerCommand::Prepare { resolved_input: resolved.clone() } };
+        prepare.validate_for_claim(&claim.identity()).unwrap();
+        for version in ["worker_protocol.v2", WORKER_PROTOCOL_SCHEMA, CLOSED_LOOP_WORKER_PROTOCOL_SCHEMA,
+            TERMINAL_WORKER_PROTOCOL_SCHEMA, RETAINED_CURRENT_WORKER_PROTOCOL_SCHEMA] {
+            let mut wrong = prepare.clone(); wrong.schema_version = version.into();
+            assert!(wrong.validate_for_claim(&claim.identity()).is_err());
+        }
+        let mut old_input = prepare.clone();
+        old_input.command = WorkerCommand::Prepare { resolved_input: legacy };
+        assert!(old_input.validate_for_claim(&claim.identity()).is_err());
+        for version in [LEGACY_RESOLVED_TASK_INPUT_SCHEMA, RESOLVED_TASK_INPUT_SCHEMA,
+            CLOSED_LOOP_RESOLVED_TASK_INPUT_SCHEMA, TERMINAL_RESOLVED_TASK_INPUT_SCHEMA, RETAINED_CURRENT_RESOLVED_TASK_INPUT_SCHEMA] {
+            let mut wrong = resolved.clone(); wrong.schema_version = version.into();
+            assert!(wrong.validate().is_err());
+        }
+        for case in ["state", "gpu", "fdm", "auto", "single", "extended"] {
+            let mut wrong = resolved.clone();
+            match case {
+                "state" => { wrong.inputs.insert("initial".into(), ResolvedInput { source:"authored_initial_state".into(), content_sha256:"a".repeat(64), study_artifact:None }); },
+                "gpu" => wrong.requested_execution.minimum_resources.as_mut().unwrap().gpu_memory_bytes = 1,
+                "fdm" => wrong.requested_execution.backend = "fdm".into(),
+                "auto" => wrong.requested_execution.device = "auto".into(),
+                "single" => wrong.requested_execution.precision = "single".into(),
+                _ => wrong.requested_execution.mode = "extended".into(),
+            }
+            assert!(wrong.validate().is_err(), "{case}");
+        }
+        let mut ledger = WorkerProtocolLedger::new(&claim);
+        ledger.accept_command(&prepare).unwrap();
+        let before = ledger.watermarks();
+        let mixed = WorkerCommandEnvelope { schema_version: RETAINED_CURRENT_WORKER_PROTOCOL_SCHEMA.into(),
+            message_id:"asset-wrong-start".into(), sequence:2, claim:claim.identity(), command:WorkerCommand::Start };
+        assert!(ledger.accept_command(&mixed).is_err());
+        assert_eq!(ledger.watermarks(), before);
+    }
+
+    #[test]
+    fn retained_stream_rejects_version_change_without_advancing_watermarks() {
+        let (claim,resolved)=retained_resolved_shape();
+        let prepare=WorkerCommandEnvelope {schema_version:RETAINED_CURRENT_WORKER_PROTOCOL_SCHEMA.into(),
+            message_id:"retained-prepare".into(),sequence:1,claim:claim.identity(),
+            command:WorkerCommand::Prepare {resolved_input:resolved}};
+        let mut ledger=WorkerProtocolLedger::new(&claim);
+        ledger.accept_command(&prepare).unwrap();let before=ledger.watermarks();
+        for version in [WORKER_PROTOCOL_SCHEMA,CLOSED_LOOP_WORKER_PROTOCOL_SCHEMA,TERMINAL_WORKER_PROTOCOL_SCHEMA] {
+            let wrong=WorkerCommandEnvelope {schema_version:version.into(),message_id:"wrong-start".into(),
+                sequence:2,claim:claim.identity(),command:WorkerCommand::Start};
+            assert!(ledger.accept_command(&wrong).is_err());assert_eq!(ledger.watermarks(),before);
+        }
+        assert_eq!(ledger.accept_command(&prepare).unwrap(),ProtocolDisposition::Replayed);
+        let restored=WorkerProtocolLedger::restore(&claim,&[prepare],&[]).unwrap();
+        assert_eq!(restored.watermarks(),before);
     }
 
 }

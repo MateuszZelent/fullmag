@@ -86,9 +86,13 @@ class PreparedContract(unittest.TestCase):
             self.assertEqual(storage,b'sentinel')
     def test_prepared_alias_admission_precedes_header_resets(self):
         source=(ROOT/'backends/fem/cpu/mfem/transport/steady_transport_c_api.cpp').read_text(encoding='utf-8')
-        for name in ('fullmag_fem_solve_prepared_closed_loop_rt0_v2','fullmag_fem_solve_prepared_closed_loop_rt0_oersted_v2'):
-            body=source[source.index('extern "C" int '+name):]
+        for signature in ('extern "C" int fullmag_fem_solve_prepared_closed_loop_rt0_v2(', 'static int solve_prepared_closed_loop_rt0_oersted('):
+            body=source[source.index(signature):]
             self.assertLess(body.index('prepared_output_ranges_are_disjoint'),body.index('return call_with_prepared_closed_loop'))
+        for name, observer in (('v2', 'nullptr'), ('observed_v1', 'observer')):
+            start=source.index('extern "C" int fullmag_fem_solve_prepared_closed_loop_rt0_oersted_'+name+'(')
+            wrapper=source[start:source.index('\n}', start)]
+            self.assertIn('return solve_prepared_closed_loop_rt0_oersted(request,result,charge,quadrature,source,'+observer+');', wrapper)
         helper=source[source.index('bool prepared_output_ranges_are_disjoint'):source.index('template<typename Result, typename Solve>')]
         self.assertNotIn('set_error',helper)
         self.assertNotIn('std::copy',helper)

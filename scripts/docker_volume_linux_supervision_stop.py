@@ -25,6 +25,229 @@ MAX_BYTES = 16 * 1024 * 1024
 MAX_FILES = 8192
 
 
+# Additive preservation-only profile. Existing v1 limits/readers are unchanged.
+PROFILE_V2 = 'retained-scientific-preservation.v2'
+SCHEMA_V2 = 'fullmag.docker-linux-supervision-stop-proof.v2'
+PROFILE_V2_LIMITS = {
+    'inventory_entries': 32768, 'metadata_file_bytes': 16 * 1024 * 1024,
+    'metadata_total_bytes': 128 * 1024 * 1024, 'total_io_bytes': 1024 * 1024 * 1024,
+    'model_object_bytes': 256 * 1024 * 1024, 'study_object_bytes': 16 * 1024 * 1024,
+    'bundle_bytes': 512 * 1024 * 1024, 'stream_chunk_bytes': 1024 * 1024,
+}
+
+
+def profile_pin(profile):
+    require(profile in ('v1', PROFILE_V2), 'unknown preservation profile')
+    if profile == 'v1':
+        return None
+    value = {'schema': 'fullmag.retained-preservation-profile.v2',
+             'profile_id': PROFILE_V2, 'limits': dict(PROFILE_V2_LIMITS)}
+    return dict(value, sha256=sha(canonical(value)))
+
+
+def profile_from_journal(journal):
+    pin, proof = journal.get('preservation_profile'), journal.get('supervision_probe', {})
+    if pin is None:
+        require(proof.get('schema') == SCHEMA and 'preservation_profile' not in proof,
+                'v1 proof cannot select a scientific preservation profile')
+        return 'v1'
+    require(pin == profile_pin(PROFILE_V2) and proof.get('schema') == SCHEMA_V2
+            and proof.get('preservation_profile') == pin, 'preservation profile/proof changed or downgraded')
+    return PROFILE_V2
+
+
+def file_identity(info):
+    return [info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns, info.st_ctime_ns]
+
+
+class PreservationBudget:
+    def __init__(self):
+        self.total = self.metadata = self.entries = 0
+        self.cache = {}
+
+    def charge(self, size, *, metadata=False):
+        require(type(size) is int and size >= 0, 'invalid preservation byte count')
+        require(self.total + size <= PROFILE_V2_LIMITS['total_io_bytes'], 'v2 preservation IO budget exceeded')
+        if metadata:
+            require(size <= MAX_BYTES and self.metadata + size <= PROFILE_V2_LIMITS['metadata_total_bytes'],
+                    'v2 metadata byte budget exceeded')
+            self.metadata += size
+        self.total += size
+
+    @staticmethod
+    def recheck_path(path, pin):
+        fd = open_existing(path, os.O_RDONLY)
+        try:
+            require(pin == file_identity(os.fstat(fd)), 'preservation path changed')
+        finally:
+            os.close(fd)
+
+    def record(self, path):
+        fd = open_existing(path, os.O_RDONLY)
+        with os.fdopen(fd, 'rb') as stream:
+            before = os.fstat(stream.fileno())
+            require(stat.S_ISREG(before.st_mode) and before.st_nlink == 1,
+                    'unbounded/nonregular evidence')
+            self.charge(before.st_size, metadata=True)
+            pin = file_identity(before)
+            raw = stream.read(before.st_size + 1)
+            require(len(raw) == before.st_size and pin == file_identity(os.fstat(stream.fileno())),
+                    'preservation metadata changed during read')
+            self.recheck_path(path, pin)
+            return raw
+
+    def entry(self):
+        self.entries += 1
+        require(self.entries <= PROFILE_V2_LIMITS['inventory_entries'], 'v2 store inventory too large')
+
+    def stream(self, path, maximum, *, expected=None, magic=None, allow_alias=False):
+        fd = open_existing(path, os.O_RDONLY)
+        with os.fdopen(fd, 'rb') as stream:
+            before = os.fstat(stream.fileno())
+            require(stat.S_ISREG(before.st_mode) and (allow_alias or before.st_nlink == 1) and 0 < before.st_size <= maximum,
+                    'v2 payload exceeds its typed bound or is aliased/nonregular')
+            pin, key = file_identity(before), str(path)
+            cached = self.cache.get(key)
+            if cached is not None:
+                require(cached['identity'] == pin, 'cached preservation source changed')
+                require(expected is None or cached['sha256'] == expected, 'immutable CAS object differs')
+                self.recheck_path(path, pin)
+                return cached
+            self.charge(before.st_size)
+            if magic is not None:
+                header_bytes = 20 if magic == b'FMACLB01' else 16
+                self.charge(header_bytes)
+                header = stream.read(header_bytes)
+                require(len(header) == header_bytes and header[:8] == magic, 'unknown scientific bundle framing')
+                manifest_bytes = int.from_bytes(header[8:16], 'little')
+                require(0 < manifest_bytes <= MAX_BYTES and header_bytes + manifest_bytes <= before.st_size,
+                        'scientific bundle manifest header exceeds canonical bounds')
+                if header_bytes == 20:
+                    require(0 < int.from_bytes(header[16:20], 'little') <= 256, 'scientific bundle payload count exceeds canonical bounds')
+                else:
+                    require(16 + manifest_bytes + 4 * 8 <= before.st_size, 'retained field header exceeds package')
+                stream.seek(0)
+            digest, count = hashlib.sha256(), 0
+            while True:
+                chunk = stream.read(min(PROFILE_V2_LIMITS['stream_chunk_bytes'], before.st_size - count + 1))
+                if not chunk:
+                    break
+                count += len(chunk)
+                require(count <= before.st_size, 'scientific payload grew during observation')
+                digest.update(chunk)
+            after = os.fstat(stream.fileno())
+            require(count == before.st_size and pin == file_identity(after), 'scientific payload changed during observation')
+            self.recheck_path(path, pin)
+            actual = digest.hexdigest()
+            require(expected is None or actual == expected, 'immutable CAS object differs')
+            result = {'sha256': actual, 'byte_count': count, 'identity': pin}
+            self.cache[key] = result
+            return result
+
+
+def scientific_bundle_binding(store, relative, budget):
+    parts = Path(relative).parts
+    require(len(parts) == 6 and parts[1] == 'worker-attempts'
+            and all(re.fullmatch('[A-Za-z0-9_.-]+', value) and value not in ('.', '..')
+                    for value in (parts[0], parts[2], parts[3]))
+            and re.fullmatch('epoch-[1-9][0-9]*', parts[4]), 'unknown scientific bundle owner path')
+    run, _, task, attempt, epoch_text, name = parts
+    epoch = int(epoch_text[6:])
+    families = {'antenna-inspection.bundle': (b'FMACLB01', {'worker_protocol.v4'}),
+                'antenna-retained-current-field.bundle': (b'FMARCF1\0', {'worker_protocol.v6', 'worker_protocol.v7'})}
+    require(name in families, 'unknown scientific bundle family')
+    magic, protocols = families[name]
+    attempt_root = Path(store) / 'runs' / Path(*parts[:-1])
+    started = decode(budget.record(attempt_root / 'worker_execution_started.v1.json'))
+    identity = started.get('identity', {})
+    claim = identity.get('claim', {})
+    lease = claim.get('lease', {})
+    require(identity.get('schema_version') == 'fullmag.accepted_worker_execution.v1'
+            and identity.get('case_id') == 'default' and re.fullmatch('[0-9a-f]{64}', identity.get('plan_fingerprint', ''))
+            and claim.get('run_id') == run and claim.get('task_id') == task
+            and claim.get('attempt_id') == attempt and claim.get('ownership_epoch') == epoch,
+            'scientific bundle Started identity differs')
+    admission = decode(budget.record(Path(store) / 'runs' / run / 'task_admissions' / task / (attempt + '.json')))
+    admitted = admission.get('lease', {})
+    require(admission.get('schema_version') == 'task_admission.v1'
+            and admitted.get('run_id') == run and admitted.get('task_id') == task
+            and admitted.get('attempt_id') == attempt and admitted.get('ownership_epoch') == epoch
+            and admission.get('task', {}).get('task_id') == task and admission.get('task', {}).get('attempt_id') == attempt
+            and admission.get('task', {}).get('ownership_epoch') == epoch
+            and admitted.get('state') == 'active' and admitted.get('heartbeat_sequence') == 0,
+            'scientific bundle admission identity differs')
+    for key in ('resource_id', 'kind', 'budget', 'lease_token'):
+        require(lease.get(key) == admitted.get(key), 'scientific bundle claim/admission differs: ' + key)
+    require(lease.get('kind') == 'cpu', 'scientific bundle requires its original CPU admission')
+    resource, token = admitted.get('resource_id'), admitted.get('lease_token')
+    require(all(isinstance(v, str) and re.fullmatch('[A-Za-z0-9_.-]+', v) and v not in ('.', '..')
+                for v in (resource, token)), 'invalid scientific lease path')
+    released = decode(budget.record(Path(store) / 'runs' / run / 'resource_leases' / resource / (token + '.json')))
+    require(released.get('schema_version') == 'resource_lease.v1' and released.get('state') == 'released'
+            and all(released.get(key) == admitted.get(key) for key in
+                    ('run_id', 'task_id', 'attempt_id', 'ownership_epoch', 'resource_id', 'kind', 'budget', 'lease_token', 'host_launch_binding')),
+            'scientific bundle does not bind its original released lease')
+    message_id = identity.get('start_message_id', '')
+    require(re.fullmatch('[A-Za-z0-9_.-]+', message_id) and message_id not in ('.', '..'), 'invalid scientific Start path')
+    journal = decode(budget.record(Path(store) / 'runs' / run / 'coordinator_journal/command' / (message_id + '.json')))
+    envelope = journal.get('payload', {}).get('message', {}).get('envelope', {})
+    expected_claim = {'run_id': run, 'task_id': task, 'attempt_id': attempt, 'ownership_epoch': epoch, 'lease_token': token}
+    require(journal.get('run_id') == run and journal.get('task_id') == task
+            and journal.get('attempt_id') == attempt and journal.get('ownership_epoch') == epoch
+            and journal.get('entry_id') == message_id and journal.get('direction') == 'command'
+            and journal.get('lease_token') == token and journal.get('sequence') == identity.get('start_sequence')
+            and envelope.get('schema_version') in protocols and envelope.get('message_id') == message_id
+            and envelope.get('sequence') == identity.get('start_sequence') and type(envelope.get('sequence')) is int
+            and envelope.get('sequence') >= 2 and envelope.get('claim') == expected_claim
+            and envelope.get('command') == {'kind': 'start'}, 'scientific bundle Start/codec owner differs')
+    reserve = lease.get('budget', {})
+    require(all(type(reserve.get(k)) is int and reserve[k] > 0 for k in ('storage_bytes', 'memory_bytes'))
+            and reserve.get('gpu_memory_bytes') == 0 and type(reserve.get('cpu_millis')) is int
+            and reserve['cpu_millis'] > 0, 'scientific bundle admission budget invalid')
+    return min(reserve['storage_bytes'], reserve['memory_bytes'] // 16, PROFILE_V2_LIMITS['bundle_bytes']), magic
+
+
+def tree_v2(root, store, budget):
+    root = Path(root)
+    records, directories, identities = {}, [], {}
+    def walk(path):
+        budget.entry()
+        fd = open_existing(path, os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            before = os.fstat(fd)
+            names = sorted(os.listdir(fd))
+            relative = str(path.relative_to(root))
+            directories.append(relative)
+            identities[relative] = [before.st_dev, before.st_ino, before.st_mtime_ns, before.st_ctime_ns]
+            require(budget.entries + len(names) <= PROFILE_V2_LIMITS['inventory_entries'], 'v2 store inventory too large')
+            for name in names:
+                child = path / name
+                metadata = os.stat(name, dir_fd=fd, follow_symlinks=False)
+                if stat.S_ISDIR(metadata.st_mode):
+                    walk(child)
+                else:
+                    budget.entry()
+                    relative = str(child.relative_to(root))
+                    if child.suffix == '.bundle':
+                        maximum, magic = scientific_bundle_binding(store, relative, budget)
+                        records[relative] = budget.stream(child, maximum, magic=magic)
+                    else:
+                        raw = budget.record(child)
+                        records[relative] = {'sha256': sha(raw), 'byte_count': len(raw), 'identity': file_identity(metadata)}
+                        require(file_identity(metadata) == file_identity(os.stat(child, follow_symlinks=False)), 'metadata path changed during inventory')
+            after = os.fstat(fd)
+            current = os.stat(path, follow_symlinks=False)
+            require(stat.S_ISDIR(current.st_mode)
+                    and (before.st_dev, before.st_ino, before.st_mtime_ns, before.st_ctime_ns)
+                    == (after.st_dev, after.st_ino, after.st_mtime_ns, after.st_ctime_ns)
+                    == (current.st_dev, current.st_ino, current.st_mtime_ns, current.st_ctime_ns),
+                    'directory changed during scientific inventory')
+        finally:
+            os.close(fd)
+    walk(root)
+    return {'directories': directories, 'files': records, 'directory_identities': identities}
+
+
 def require(value, message):
     if not value:
         raise ValueError('Linux supervision stop: ' + message)
@@ -143,7 +366,7 @@ def tree(root, *, terminal_only=False, retained_run=None):
     return {'directories': directories, 'files': records}
 
 
-def observe_store(store, ledger, store_id, *, terminal_only=False, prepared_target=None):
+def observe_store(store, ledger, store_id, *, terminal_only=False, prepared_target=None, profile='v1', audit_budget=None):
     """Pin admission evidence under the ledger and store writer locks."""
     store, ledger = Path(store), Path(ledger)
     for name in ('temp', 'recovery'):
@@ -152,6 +375,11 @@ def observe_store(store, ledger, store_id, *, terminal_only=False, prepared_targ
             require(not os.listdir(fd), 'pending transactions exist')
         finally:
             os.close(fd)
+    pin = profile_pin(profile)
+    require(not terminal_only or pin is None, 'terminal-only observation cannot use the scientific preservation profile')
+    budget = (audit_budget if audit_budget is not None else PreservationBudget()) if pin is not None else None
+    record = budget.record if budget is not None else read
+    require(prepared_target is None or pin is None, 'prepared observation cannot use the scientific preservation profile')
     if prepared_target is not None:
         require(not terminal_only and isinstance(prepared_target, dict), 'conflicting prepared observation modes')
         require(all(isinstance(prepared_target.get(k), str)
@@ -160,15 +388,16 @@ def observe_store(store, ledger, store_id, *, terminal_only=False, prepared_targ
                 and re.fullmatch('[0-9a-f]{64}', prepared_target.get('source_sha256', ''))
                 and type(prepared_target.get('session_epoch')) is int
                 and prepared_target['session_epoch'] > 0, 'prepared target pins are incomplete')
-    inventory = tree(store / 'runs', terminal_only=terminal_only or prepared_target is not None,
-                     retained_run=prepared_target['run_id'] if prepared_target else None)
+    inventory = (tree_v2(store / 'runs', store, budget) if budget is not None else
+                 tree(store / 'runs', terminal_only=terminal_only or prepared_target is not None,
+                      retained_run=prepared_target['run_id'] if prepared_target else None))
     require(all('/' in key for key in inventory['files']), 'unknown file at runs root')
     terminal, held, catalogs, leases, cas = [], [], {}, [], {}
     run_ids = sorted(name for name in inventory['directories'] if '/' not in name and name != '.')
     for run_id in run_ids:
         root = store / 'runs' / run_id
-        intent = decode(read(root / 'run_intent.json'))
-        catalog = decode(read(root / 'run_catalog.json'))
+        intent = decode(record(root / 'run_intent.json'))
+        catalog = decode(record(root / 'run_catalog.json'))
         tasks = catalog.get('tasks')
         require(intent.get('run_id') == run_id and catalog.get('run_id') == run_id
                 and isinstance(tasks, list) and tasks, 'run/catalog identity differs')
@@ -177,11 +406,15 @@ def observe_store(store, ledger, store_id, *, terminal_only=False, prepared_targ
                       specification.get('study', {}).get('plan_sha256'), specification.get('study_catalog_sha256')]
         for digest in references:
             require(isinstance(digest, str) and re.fullmatch('[0-9a-f]{64}', digest), 'immutable run CAS pin missing')
-            if digest not in cas:
-                path = store / 'objects/sha256' / digest
-                actual = binary_sha(path, single_link=True) if terminal_only else sha(read(path))
-                require(actual == digest, 'immutable run CAS object differs')
-                cas[digest] = actual
+            if budget is None:
+                if digest not in cas:
+                    path = store / 'objects/sha256' / digest
+                    actual = binary_sha(path, single_link=True) if terminal_only else sha(read(path))
+                    require(actual == digest, 'immutable run CAS object differs')
+                    cas[digest] = actual
+            else:
+                maximum = PROFILE_V2_LIMITS['study_object_bytes' if digest == references[1] else 'model_object_bytes']
+                cas[digest] = budget.stream(store / 'objects/sha256' / digest, maximum, expected=digest)
         require(all(isinstance(t, dict) for t in tasks), 'invalid task record')
         catalogs[run_id] = tasks
         terminal_task = lambda t: t.get('lifecycle') in {'succeeded', 'failed', 'cancelled', 'interrupted'}
@@ -198,10 +431,10 @@ def observe_store(store, ledger, store_id, *, terminal_only=False, prepared_targ
         for relative in inventory['files']:
             if relative.startswith(run_id + '/') and any('/' + kind + '/' in '/' + relative for kind in
                     ('resource_leases', 'preparation_resource_leases')):
-                lease = decode(read(store / 'runs' / relative))
+                lease = decode(record(store / 'runs' / relative))
                 require(lease.get('state') == 'released', 'active lease remains')
                 leases.append({'path': relative, 'record': lease})
-    ledger_raw = read(ledger / 'HOST_RESOURCE_LEDGER.json')
+    ledger_raw = record(ledger / 'HOST_RESOURCE_LEDGER.json')
     document = decode(ledger_raw)
     rows = document.get('reservations')
     require(isinstance(rows, list) and len(rows) <= MAX_FILES, 'ledger reservations unavailable')
@@ -210,7 +443,7 @@ def observe_store(store, ledger, store_id, *, terminal_only=False, prepared_targ
         require(row.get('state') == 'released', 'active host reservation remains')
         digest = row.get('release_proof_sha256', '')
         require(isinstance(digest, str) and re.fullmatch('[0-9a-f]{64}', digest), 'missing release proof')
-        raw = read(ledger / 'proofs' / (digest + '.json'))
+        raw = record(ledger / 'proofs' / (digest + '.json'))
         proof = decode(raw)
         require(sha(raw) == digest and proof.get('schema_version') in
                 {'host_resource_release_proof.v1', 'host_resource_release_proof.v2'}
@@ -356,9 +589,12 @@ def _prepared_release(store, ledger, rows, store_id, target):
 
 
 def observe(state, control_root, ledger, image_id, *, stopped=False, proc_root='/proc',
-            binary='/opt/fullmag/package/bin/fullmag-runtime-service', prepared_target=None, terminal_only=False):
+            binary='/opt/fullmag/package/bin/fullmag-runtime-service', prepared_target=None, terminal_only=False, profile='v1'):
     """Image-owned read-only observation; all locks are existing and scoped."""
     import fcntl
+    pin = profile_pin(profile)
+    budget = PreservationBudget() if pin is not None else None
+    record = budget.record if budget is not None else read
     state, control_root, ledger = Path(state), Path(control_root), Path(ledger)
     store = state / 'runs/docker-all/session-store'
     owners = control_root / 'runtime-services'
@@ -371,9 +607,9 @@ def observe(state, control_root, ledger, image_id, *, stopped=False, proc_root='
             require(stat.S_ISREG(os.fstat(fd).st_mode) and os.fstat(fd).st_nlink == 1, 'invalid lock inode')
             fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
             descriptors.append((path, fd))
-        receipt_raw = read(control_root / 'runtime-service/process-tree.json')
+        receipt_raw = record(control_root / 'runtime-service/process-tree.json')
         receipt = decode(receipt_raw)
-        owner_raw = read(owners / 'OWNER.json')
+        owner_raw = record(owners / 'OWNER.json')
         owner = decode(owner_raw)
         pin = receipt.get('service_owner')
         require(receipt.get('schema') == 'fullmag.docker-process-tree.v1'
@@ -394,7 +630,7 @@ def observe(state, control_root, ledger, image_id, *, stopped=False, proc_root='
                 == [(c.get('role'), c.get('pid')) for c in pin.get('children', [])], 'Failed owner differs from exact Ready pin')
         token = pin.get('owner_token', '')
         require(str(uuid.UUID(token)) == token, 'owner token is invalid')
-        require(decode(read(owners / ('docker-client-' + token + '.json'))) == pin, 'immutable Ready pin differs')
+        require(decode(record(owners / ('docker-client-' + token + '.json'))) == pin, 'immutable Ready pin differs')
         pids = [owner.get('pid'), *[c.get('pid') for c in children]]
         require(all(type(pid) is int and pid > 0 for pid in pids) and len(set(pids)) == 3
                 and not any((Path(proc_root) / str(pid)).exists() for pid in pids), 'native consumer is live or ambiguous')
@@ -403,7 +639,7 @@ def observe(state, control_root, ledger, image_id, *, stopped=False, proc_root='
         fence_path = Path(receipt.get('api_failure_fence', ''))
         require(fence_path.parent == control_root / 'runtime-service'
                 and re.fullmatch('api-failure-[0-9a-f]{32}.json', fence_path.name), 'diagnostic fence escapes runtime control')
-        fence_raw = read(fence_path)
+        fence_raw = record(fence_path)
         fence = decode(fence_raw)
         require(receipt.get('api_diagnostic_only') is True
                 and fence.get('schema') == 'fullmag.api-runtime-failure-fence.v1'
@@ -430,9 +666,9 @@ def observe(state, control_root, ledger, image_id, *, stopped=False, proc_root='
             if executable.startswith(str(Path(binary).parent) + '/') and Path(executable).name.startswith('fullmag'):
                 require(not stopped and int(entry.name) == api_pid and Path(executable).name == 'fullmag-api',
                         'unexpected native consumer remains live')
-        cert_raw = read(state / 'linux-native-host.json')
+        cert_raw = record(state / 'linux-native-host.json')
         cert = decode(cert_raw)
-        require(cert == decode(read(state / '.fullmag-linux-native-owner.json'))
+        require(cert == decode(record(state / '.fullmag-linux-native-owner.json'))
                 and cert.get('schema') == 'fullmag.linux-native-host.v1' and cert.get('storage_profile') == 'linux-native-v1'
                 and cert.get('role') == 'session' and cert.get('owner_scope') == 'docker-linux'
                 and cert.get('restart_verified') is True and cert.get('image_id') == image_id
@@ -442,11 +678,11 @@ def observe(state, control_root, ledger, image_id, *, stopped=False, proc_root='
         require(isinstance(owner_token, str) and re.fullmatch('[0-9a-f]{32}', owner_token)
                 and isinstance(engine, str) and engine, 'Linux stable store identity is incomplete')
         sentinel = (owner_token + ':' + image_id).encode()
-        require(read(state / '.linux-native-sentinel') == sentinel and read(state / '.linux-native-restart') == sentinel
+        require(record(state / '.linux-native-sentinel') == sentinel and record(state / '.linux-native-restart') == sentinel
                 and cert.get('restart_expected_sha256') == sha(sentinel), 'Linux restart sentinel differs')
         identity = {'schema': 'fullmag.linux-native-store-identity.v1', 'engine_id': engine,
                     'owner_token': owner_token, 'relative_state_path': 'runs/docker-all/session-store'}
-        store_proof = observe_store(store, ledger, 'sha256:' + sha(canonical(identity)), prepared_target=prepared_target, terminal_only=terminal_only)
+        store_proof = observe_store(store, ledger, 'sha256:' + sha(canonical(identity)), prepared_target=prepared_target, terminal_only=terminal_only, profile=profile, audit_budget=budget)
         if prepared_target is not None:
             prep_pid = store_proof['prepared_unclaimed']['preparation_pid']
             require(prep_pid not in [api_pid, *pids] and not (Path(proc_root) / str(prep_pid)).exists(),
@@ -454,34 +690,40 @@ def observe(state, control_root, ledger, image_id, *, stopped=False, proc_root='
         for path, fd in descriptors:
             require((os.fstat(fd).st_dev, os.fstat(fd).st_ino) ==
                     (path.stat().st_dev, path.stat().st_ino), 'lock inode changed')
-        config_raw = read(control_root / 'runtime-service/docker-all.json')
+        config_raw = record(control_root / 'runtime-service/docker-all.json')
         config = decode(config_raw)
         require(config.get('store_root') == str(store), 'native config selects another store')
-        return {'schema': PREPARED_SCHEMA if prepared_target is not None else SCHEMA,
+        native_binary_sha256 = (budget.stream(binary, 512 * 1024 * 1024, allow_alias=True)['sha256']
+                                if budget is not None else binary_sha(binary))
+        result = {'schema': PREPARED_SCHEMA if prepared_target is not None else SCHEMA,
                 **({'application_build_commit': owner.get('build_commit'),
                     'application_build_snapshot': owner.get('build_snapshot')} if prepared_target is not None else {}),
                 'process_receipt_sha256': sha(receipt_raw), 'owner_sha256': sha(owner_raw),
                 'config_sha256': sha(canonical(config)), 'config_raw_sha256': sha(config_raw),
                 'certificate_sha256': sha(cert_raw),
                 'api_failure_fence_sha256': sha(fence_raw), 'ready_pin_sha256': sha(canonical(pin)),
-                'api_pid': api_pid, 'store': store_proof, 'native_binary_sha256': binary_sha(binary)}
+                'api_pid': api_pid, 'store': store_proof, 'native_binary_sha256': native_binary_sha256}
+        pin = profile_pin(profile)
+        if pin is not None:
+            result.update(schema=SCHEMA_V2, preservation_profile=pin)
+        return result
 
 
-def _script(image_id, stopped, prepared_target=None, terminal_only=False):
+def _script(image_id, stopped, prepared_target=None, terminal_only=False, profile='v1'):
     # This module is stdlib-only until the orchestration functions are called.
     source = Path(__file__).read_text()
-    return source + '\nprint(json.dumps(observe("/state", "/opt/fullmag/runtime-control", "/host-ledger/ledger", ' + repr(image_id) + ', stopped=' + repr(stopped) + ', prepared_target=' + repr(prepared_target) + ', terminal_only=' + repr(terminal_only) + ')))\n'
+    return source + '\nprint(json.dumps(observe("/state", "/opt/fullmag/runtime-control", "/host-ledger/ledger", ' + repr(image_id) + ', stopped=' + repr(stopped) + ', prepared_target=' + repr(prepared_target) + ', terminal_only=' + repr(terminal_only) + ', profile=' + repr(profile) + ')))\n'
 
 
-def _probe(control, actual, image_id, *, stopped=False, prepared_target=None, terminal_only=False):
+def _probe(control, actual, image_id, *, stopped=False, prepared_target=None, terminal_only=False, profile='v1'):
     from docker_build_control import docker_capture, bounded_capture
     if not stopped:
-        result = docker_capture('exec', actual['Id'], '/usr/local/bin/python3', '-B', '-c', _script(image_id, False, prepared_target, terminal_only), timeout=90)
+        result = docker_capture('exec', actual['Id'], '/usr/local/bin/python3', '-B', '-c', _script(image_id, False, prepared_target, terminal_only, profile), timeout=90)
     else:
         import copy
         require(actual.get('Image') == image_id and re.fullmatch('sha256:[0-9a-f]{64}', image_id),
                 'readonly probe requires the exact immutable backend image')
-        script = '/usr/local/bin/python3 -B -c ' + shlex.quote(_script(image_id, True, prepared_target, terminal_only))
+        script = '/usr/local/bin/python3 -B -c ' + shlex.quote(_script(image_id, True, prepared_target, terminal_only, profile))
         # The CUDA base used by generic control reads need not contain Python.
         # This exact image already ran the pre-stop Python observation above.
         probe_control = copy.copy(control)
@@ -588,6 +830,8 @@ class LinuxSupervisionContext(dict):
 
 
 def stop(args, selected, identity, actual):
+    profile = getattr(args, 'preservation_profile', 'v1')
+    requested_profile_pin = profile_pin(profile)
     from docker_build_control import BuildControl, toolchain_configuration, docker_capture
     from docker_volume_dev import _validate_retained_service, _assert_private_restart_network, _retained_certificate
     from docker_volume_reconcile import fingerprint
@@ -630,7 +874,8 @@ def stop(args, selected, identity, actual):
              'image_id': args.image_id, 'started_at': actual['State']['StartedAt'], 'backend_fingerprint': fingerprint(actual)}
     path = 'verification/stop-failed-' + args.container_id + '.json'
     with control.operation('stop-failed-runtime', {'source_root': str(selected), 'attempt': attempt,
-            'container_id': args.container_id, 'image_id': args.image_id, 'config_sha256': config_sha}) as operation:
+            'container_id': args.container_id, 'image_id': args.image_id, 'config_sha256': config_sha,
+            **({'preservation_profile': requested_profile_pin} if requested_profile_pin else {})}) as operation:
         require(control.read(path, optional=True) is None, 'stop journal already exists')
         def recheck():
             require(control.read('development/current.json') == previous and control.read(base + '/terminal.json') == previous
@@ -639,7 +884,7 @@ def stop(args, selected, identity, actual):
             pair = services()
             _assert_private_restart_network(pair, ids, control.project)
             _retained_certificate(Path(previous['state_root']), document)
-            obs = _probe(control, pair['backend'], args.image_id, terminal_only=bool(getattr(args,'terminal_only',False)))
+            obs = _probe(control, pair['backend'], args.image_id, terminal_only=bool(getattr(args,'terminal_only',False)), profile=profile)
             require(obs['process_receipt_sha256'] == args.process_receipt_sha256, 'pinned process receipt differs')
             return obs, cancellation(control, scope, obs)
         before, cancelled = recheck()
@@ -657,6 +902,8 @@ def stop(args, selected, identity, actual):
                    'operation_attempt': operation['receipt']['attempt']}
         if getattr(args,'terminal_only',False):
             journal['terminal_only']=True
+        if requested_profile_pin is not None:
+            journal['preservation_profile'] = requested_profile_pin
         control.write(path, journal)
         require(recheck() == (before, cancelled), 'final stop evidence changed')
         operation['daemon_pending'] = True
@@ -666,7 +913,7 @@ def stop(args, selected, identity, actual):
             require(value['State'].get('Running') is False and value['State'].get('Pid') == 0
                     and value['State'].get('OOMKilled') is False and type(value['State'].get('ExitCode')) is int,
                     'service namespace stop is unconfirmed: ' + name)
-        after = _probe(control, pair['backend'], args.image_id, stopped=True, terminal_only=bool(getattr(args,'terminal_only',False)))
+        after = _probe(control, pair['backend'], args.image_id, stopped=True, terminal_only=bool(getattr(args,'terminal_only',False)), profile=profile)
         _same_retained(before, after)
         require(cancellation(control, scope, after, original_process_sha256=before['process_receipt_sha256']) == cancelled,
                 'cancellation proof changed after stop')
@@ -1165,14 +1412,84 @@ def pin_prepared_fresh_archive(control, operation, witness):
     _publish_cas(control, PREPARED_QUARANTINE, updated, expected_raw=raw)
 
 
-def retained_context(control, previous, journal, journal_raw, backend_id, fresh_state, *,
-                     removed_container_proof=None, retained_services=None):
+def _removed_services(control, previous, journal, journal_raw, backend_id, proof, actual):
+    """Authenticate frozen app snapshots from the exact completed recreation."""
+    from docker_build_control import docker_capture
+    from docker_volume_reconcile import fingerprint
+    require(isinstance(proof, dict) and proof.get('schema') == 'fullmag.docker-removed-recreation-container.v1',
+            'invalid completed recreation proof')
+    token = proof.get('recreation_operation_id', '')
+    require(isinstance(token, str) and re.fullmatch('[0-9a-f]{32}', token) and uuid.UUID(token).int,
+            'invalid completed recreation attempt')
+    require(all(isinstance(proof.get(key), str) and re.fullmatch('[0-9a-f]{64}', proof[key])
+                for key in ('recreation_terminal_sha256', 'retained_snapshot_sha256',
+                            'prior_terminal_sha256', 'prior_compose_sha256')),
+            'completed recreation record digests are missing/invalid')
+    ids = {'backend': backend_id, 'frontend': previous.get('frontend_container')}
+    require(all(isinstance(value, str) and re.fullmatch('[0-9a-f]{64}', value) for value in ids.values())
+            and len(set(ids.values())) == 2 and proof.get('container_id') == backend_id
+            and proof.get('frontend_container') == ids['frontend'] and previous.get('backend_container') == backend_id,
+            'completed recreation app identities differ')
+    def record(path, digest=None):
+        raw = control.read_bytes(path)
+        value = decode(raw)
+        require(raw == canonical(value) + b'\n' and (digest is None or sha(raw) == digest),
+                'completed recreation record CAS differs: ' + path)
+        return raw, value
+    operation_root = 'recreate-services/attempts/' + token
+    terminal_raw, terminal = record(operation_root + '/terminal.json', proof.get('recreation_terminal_sha256'))
+    require(record(operation_root + '/receipt.json')[0] == terminal_raw, 'completed recreation receipt changed')
+    _, snapshot = record(operation_root + '/retained-containers.json', proof.get('retained_snapshot_sha256'))
+    _, retained_previous = record('development/attempts/' + previous['attempt'] + '/terminal.json',
+                                  proof.get('prior_terminal_sha256'))
+    _, document = record('development/attempts/' + previous['attempt'] + '/compose.json', proof.get('prior_compose_sha256'))
+    require(retained_previous == previous and control.read('development/current.json') == previous
+            and control.read('development/verified.json') == previous, 'retained development authority changed')
+    require(control.read_bytes('verification/stop-failed-' + backend_id + '.json') == journal_raw
+            and decode(journal_raw) == journal, 'retained stop journal changed')
+    require(terminal.get('schema') == 'fullmag.docker-build-operation.v1'
+            and terminal.get('phase') == 'recreate-services' and terminal.get('state') == 'succeeded'
+            and terminal.get('attempt') == token and terminal.get('compose_project') == control.project
+            and terminal.get('control_volume') == control.volume and terminal.get('fresh_state') is False
+            and terminal.get('removed_containers') == [ids['backend'], ids['frontend']]
+            and terminal.get('previous_state_root') == previous.get('state_root')
+            and terminal.get('retained_volumes') == previous.get('backend_volumes')
+            and terminal.get('retained_frontend_volume') == previous.get('frontend_volume')
+            and terminal.get('inputs', {}).get('attempt') == previous['attempt']
+            and terminal.get('inputs', {}).get('config_sha256') == previous['config_sha256'],
+            'completed recreation terminal scope differs')
+    require(document.get('name') == control.project and sha(canonical(document)) == previous['config_sha256']
+            and proof.get('image_id') == journal['image_id'] == previous['inputs']['image_id'],
+            'completed recreation Compose/image differs')
+    require(isinstance(snapshot, dict) and set(snapshot) == {'backend', 'frontend'} and snapshot == actual,
+            'completed recreation frozen snapshots differ')
+    for name, identifier in ids.items():
+        observed = snapshot[name]
+        state = observed.get('State', {})
+        require(observed.get('Id') == identifier and observed.get('Image') == journal['image_id']
+                and state.get('Running') is False and state.get('Pid') == 0
+                and state.get('OOMKilled') is False and type(state.get('ExitCode')) is int
+                and [state.get('StartedAt'), fingerprint(observed)] == list(journal['service_pins'][name]),
+                'completed recreation stopped service pin differs: ' + name)
+        absent = docker_capture('ps', '--all', '--quiet', '--no-trunc', '--filter', 'id=' + identifier, timeout=60)
+        require(absent.returncode == 0 and not absent.stdout.split(), 'removed app-container absence is unconfirmed: ' + name)
+    state = snapshot['backend']['State']
+    require(proof.get('container_state') == {'id': backend_id, 'image': journal['image_id'],
+            'started_at': state['StartedAt'], 'finished_at': state.get('FinishedAt'), 'exit_code': state['ExitCode']}
+            and state['ExitCode'] == journal.get('exit_code')
+            and state['StartedAt'] == journal.get('stopped_started_at'), 'completed recreation backend stop state differs')
+    return snapshot
+
+
+def retained_context(control, previous, journal, journal_raw, backend_id, fresh_state, *, removed_container_proof=None, actual=None):
     from docker_build_control import docker_capture
     from docker_volume_reconcile import fingerprint
     from docker_volume_dev import _assert_private_restart_network, _retained_certificate
     require(not fresh_state and (removed_container_proof is None
-            or removed_container_proof.get('schema') == 'fullmag.docker-removed-recreation-container.v1'),
+            or (isinstance(removed_container_proof, dict)
+                and removed_container_proof.get('schema') == 'fullmag.docker-removed-recreation-container.v1')),
             'requires exact stopped retained namespace')
+    profile = profile_from_journal(journal)
     require(journal.get('failure_kind') == KIND and journal.get('state') == 'stopped-confirmed'
             and journal.get('schema') == 'fullmag.stop-failed-admission.v1' and journal.get('container_id') == backend_id
             and journal.get('image_id') == previous.get('inputs', {}).get('image_id')
@@ -1183,24 +1500,17 @@ def retained_context(control, previous, journal, journal_raw, backend_id, fresh_
     require(control.read('development/current.json') == previous and control.read('development/verified.json') == previous,
             'retained development authority changed')
     if removed_container_proof is not None:
-        # The recreation validator has authenticated the stopped snapshots
-        # against its terminal receipt and proved both exact IDs absent.
-        require(removed_container_proof.get('container_id') == backend_id
-                and removed_container_proof.get('frontend_container') == previous.get('frontend_container')
-                and removed_container_proof.get('image_id') == journal['image_id']
-                and isinstance(retained_services, dict) and set(retained_services) == {'backend', 'frontend'},
-                'removed Linux supervision evidence differs')
-    services = {}
-    for service, identifier in (('backend', backend_id), ('frontend', previous.get('frontend_container'))):
-        observed = (retained_services[service] if removed_container_proof is not None
-                    else json.loads(docker_capture('inspect', identifier).stdout)[0])
-        pin = journal['service_pins'][service]
-        require(observed.get('Id') == identifier and observed['State'].get('Running') is False
-                and observed['State'].get('Pid') == 0 and observed['State'].get('OOMKilled') is False
-                and [observed['State']['StartedAt'], fingerprint(observed)] == list(pin), 'stopped service pin changed')
-        services[service] = observed
-        if service == 'backend':
-            actual = observed
+        services = _removed_services(control, previous, journal, journal_raw, backend_id,
+                                     removed_container_proof, actual)
+    else:
+        services = {}
+        for service, identifier in (('backend', backend_id), ('frontend', previous.get('frontend_container'))):
+            observed = json.loads(docker_capture('inspect', identifier).stdout)[0]
+            pin = journal['service_pins'][service]
+            require(observed.get('Id') == identifier and observed['State'].get('Running') is False
+                    and observed['State'].get('Pid') == 0 and observed['State'].get('OOMKilled') is False
+                    and [observed['State']['StartedAt'], fingerprint(observed)] == list(pin), 'stopped service pin changed')
+            services[service] = observed
     base = 'development/attempts/' + previous['attempt']
     document = control.read(base + '/compose.json')
     require(control.read(base + '/terminal.json') == previous
@@ -1209,13 +1519,18 @@ def retained_context(control, previous, journal, journal_raw, backend_id, fresh_
         _assert_private_restart_network(services, {name: item['Id'] for name, item in services.items()}, control.project)
     _retained_certificate(Path(previous['state_root']), document)
     require(type(journal.get('terminal_only',False)) is bool, 'Invalid terminal observation mode')
-    after = _probe(control, actual, journal['image_id'], stopped=True, terminal_only=journal.get('terminal_only',False))
+    after = _probe(control, services['backend'], journal['image_id'], stopped=True,
+                   terminal_only=journal.get('terminal_only', False), profile=profile)
     _same_retained(journal['supervision_probe'], after)
     require(after['process_receipt_sha256'] == journal['terminal_process_receipt_sha256']
             and after['config_raw_sha256'] == journal['previous_config_sha256'], 'terminal process/config evidence changed')
     require(cancellation(control, journal['scope'], after,
                          original_process_sha256=journal['supervision_probe']['process_receipt_sha256']) == journal['cancellation'],
             'retained cancellation proof changed')
+    if removed_container_proof is not None:
+        require(_removed_services(control, previous, journal, journal_raw, backend_id,
+                                  removed_container_proof, services) == services,
+                'completed recreation evidence changed during retained probe')
     return LinuxSupervisionContext(previous_config_sha256=after['config_raw_sha256'], native_restart_metadata={
         'schema': 'fullmag.docker-native-failed-stop-recreate.v1', 'failure_kind': KIND,
         'journal_sha256': sha(journal_raw), 'container_id': backend_id, 'image_id': journal['image_id'],

@@ -10,6 +10,8 @@ import re
 from docker_build_control import BuildControl, BuildControlError, docker_capture
 
 SCHEMA = "fullmag.docker-startup-diagnostic-inspection.v1"
+READY_SCHEMA = "fullmag.docker-startup-diagnostic-inspection.v2"
+READY_FAILURE_REASON = "container recovery receipt is complete but the current owner is not its failed owner"
 
 PROBE = r'''import hashlib,json,os,pathlib,re,sys,urllib.error,urllib.request,uuid
 sys.path.insert(0,"/opt/fullmag")
@@ -85,13 +87,35 @@ if (config.get("schema_version")!="runtime_service_config.v2"
     raise RuntimeError("unexpected managed runtime configuration")
 owner_path=paths.store/"runtime-services/OWNER.json"
 owner_raw=read(owner_path,"historical owner",256*1024);owner=obj(owner_raw)
-runtime._validate_terminal_owner(owner,state="failed",name="historical Failed owner",allowed_child_statuses=("exited_success","exited_failure"))
 history_path=runtime.process_receipt_path(paths);history_raw=read(history_path,"historical process receipt")
-if (owner.get("schema_version")!="runtime_service_owner.v1" or owner.get("state")!="failed"
-        or owner.get("target_id")!="docker-all" or len(owner.get("children",[]))!=2
-        or {child.get("role") for child in owner["children"]}!={"compute","preparation"}
-        or any(child.get("status") not in {"exited_success","exited_failure"} for child in owner["children"])):
-    raise RuntimeError("historical owner lacks terminal Failed scheduler evidence")
+historical_ready=owner.get("state")=="ready"
+if historical_ready:
+    if fence.get("reason")!="container recovery receipt is complete but the current owner is not its failed owner":
+        raise RuntimeError("historical Ready requires the exact completed-recovery startup refusal")
+else:
+    runtime._validate_terminal_owner(owner,state="failed",name="historical Failed owner",allowed_child_statuses=("exited_success","exited_failure"))
+    if (owner.get("schema_version")!="runtime_service_owner.v1" or owner.get("state")!="failed"
+            or owner.get("target_id")!="docker-all" or len(owner.get("children",[]))!=2
+            or {child.get("role") for child in owner["children"]}!={"compute","preparation"}
+            or any(child.get("status") not in {"exited_success","exited_failure"} for child in owner["children"])):
+        raise RuntimeError("historical owner lacks terminal Failed scheduler evidence")
+def terminal_catalog(catalog,run_id):
+    tasks=catalog.get("tasks")
+    if (catalog.get("run_id")!=run_id or not isinstance(tasks,list) or not tasks
+            or any(not isinstance(task,dict) or not isinstance(task.get("task_id"),str)
+                   or not task["task_id"] or task.get("lifecycle") not in {"succeeded","failed","cancelled"}
+                   for task in tasks)
+            or len({task["task_id"] for task in tasks})!=len(tasks)):
+        raise RuntimeError("run contains nonterminal or ambiguous tasks")
+def catalog_digests():
+    result={}
+    for run in sorted((paths.store/"runs").iterdir()):
+        if len(result)>=10000 or run.is_symlink() or not run.is_dir():
+            raise RuntimeError("invalid or unbounded run catalog inventory")
+        path=run/"run_catalog.json";raw=read(path,"terminal run catalog",4*1024*1024)
+        terminal_catalog(obj(raw),run.name);result[str(path.relative_to(paths.store))]=sha(raw)
+    return result
+catalogs=catalog_digests() if historical_ready else None
 owner_pids=[owner["pid"],*(child["pid"] for child in owner["children"])]
 if any(type(pid) is not int or pid<=0 or pathlib.Path("/proc",str(pid)).exists() for pid in owner_pids):
     raise RuntimeError("historical owner or scheduler process is still present")
@@ -138,9 +162,13 @@ if (proc(api_pid)!=api_proc or proc(supervisor["pid"])!=supervisor
         or read(paths.config,"runtime configuration",256*1024)!=config_raw
         or read(fence_path,"startup failure fence",256*1024)!=fence_raw
         or read(ledger_path,"host ledger",4*1024*1024)!=ledger_raw
-        or read(history_path,"historical process receipt")!=history_raw):
+        or read(history_path,"historical process receipt")!=history_raw
+        or historical_ready and catalog_digests()!=catalogs):
     raise RuntimeError("startup diagnostic identity changed during inspection")
-print(json.dumps({"schema":"fullmag.docker-startup-diagnostic-guest.v1",
+ready_evidence=({"historical_process_receipt":obj(history_raw),"live_pids":sorted(pid for pid in by_pid if pid!=os.getpid()),
+                 "terminal_catalog_digests":catalogs} if historical_ready else {})
+print(json.dumps({"schema":("fullmag.docker-startup-diagnostic-guest.v2" if historical_ready
+                           else "fullmag.docker-startup-diagnostic-guest.v1"),
     "api":api_proc,"supervisor":supervisor,"api_instance_id":instance,
     "api_instance_evidence":"live matching health/openapi/status headers; PID binds fence through process environment",
     "fence_path":str(fence_path),"fence_sha256":sha(fence_raw),"fence":fence,
@@ -148,8 +176,47 @@ print(json.dumps({"schema":"fullmag.docker-startup-diagnostic-guest.v1",
     "historical_process_receipt_sha256":sha(history_raw),
     "ledger_sha256":sha(ledger_raw),"local_lease_digests":lease_digests,
     "provenance_sha256":sha(provenance_raw),"build_commit":commit,"build_snapshot":snapshot,
-    "active_reservations":0,"active_local_leases":0,"historical_process_receipt_used_as_current":False},sort_keys=True))
+    "active_reservations":0,"active_local_leases":0,"historical_process_receipt_used_as_current":False,**ready_evidence},sort_keys=True))
 '''
+
+
+def ready_validator_sha256():
+    return hashlib.sha256(Path(__file__).with_name("docker_volume_stop_failed.py").read_bytes()).hexdigest()
+
+
+def validate_ready_guest(guest):
+    from docker_volume_stop_failed import _validate_native_ready_owner
+    owner = _validate_native_ready_owner(guest.get("owner"))
+    history = guest.get("historical_process_receipt", {})
+    previous = _validate_native_ready_owner(history.get("service_owner"))
+    if (history.get("schema") != "fullmag.docker-process-tree.v1" or history.get("state") != "ready"
+            or {key: value for key, value in owner.items() if key != "heartbeat_at"}
+            != {key: value for key, value in previous.items() if key != "heartbeat_at"}):
+        raise BuildControlError("Historical Ready owner/process receipt identity differs")
+    old_pids = [owner["pid"], history.get("api_pid"), *(child["pid"] for child in owner["children"])]
+    live = guest.get("live_pids")
+    if (not isinstance(live, list) or any(type(pid) is not int or pid <= 0 for pid in live)
+            or any(type(pid) is not int or pid <= 0 or pid in live for pid in old_pids)):
+        raise BuildControlError("Historical Ready processes are present or ambiguous")
+    if (guest.get("fence", {}).get("reason") != READY_FAILURE_REASON
+            or guest.get("active_reservations") != 0 or guest.get("active_local_leases") != 0
+            or guest.get("historical_process_receipt_used_as_current") is not False
+            or not isinstance(guest.get("terminal_catalog_digests"), dict)):
+        raise BuildControlError("Ready diagnostic lacks exact fenced/terminal resource evidence")
+    return guest
+
+
+def capture_probe(backend_id, *, expected_owner_state=None):
+    result = docker_capture("exec", backend_id, "python3", "-B", "-c", PROBE, timeout=60)
+    guest = json.loads(result.stdout)
+    ready = guest.get("schema") == "fullmag.docker-startup-diagnostic-guest.v2"
+    if not ready and guest.get("schema") != "fullmag.docker-startup-diagnostic-guest.v1":
+        raise BuildControlError("Unexpected startup diagnostic probe result")
+    if expected_owner_state is not None and guest.get("owner", {}).get("state") != expected_owner_state:
+        raise BuildControlError("Historical owner state differs from stop request")
+    if ready:
+        validate_ready_guest(guest)
+    return guest
 
 
 def validate_options(args):
@@ -172,14 +239,11 @@ def inspect(args):
     control = BuildControl(identity, args.image_id)
     before = inspect_one("container", args.backend_container_id)
     validate_backend(before, identity, args.backend_container_id, args.image_id)
-    result = docker_capture("exec", args.backend_container_id, "python3", "-B", "-c", PROBE, timeout=60)
-    guest = json.loads(result.stdout)
-    if guest.get("schema") != "fullmag.docker-startup-diagnostic-guest.v1":
-        raise BuildControlError("Unexpected startup diagnostic probe result")
+    guest = capture_probe(args.backend_container_id)
     after = inspect_one("container", args.backend_container_id)
     if fingerprint(before) != fingerprint(after):
         raise BuildControlError("Backend incarnation changed during inspection")
-    report = {"schema": SCHEMA, "state": "inspected", "source_root": str(selected),
+    report = {"schema": READY_SCHEMA if guest.get("schema", "").endswith(".v2") else SCHEMA, "state": "inspected", "source_root": str(selected),
               "compose_project": control.project, "backend_container_id": args.backend_container_id,
               "image_id": args.image_id, "backend_started_at": before["State"]["StartedAt"],
               "container_fingerprint": fingerprint(before), "guest": guest,
@@ -188,6 +252,8 @@ def inspect(args):
               "justfile_sha256": hashlib.sha256((selected / "justfile").read_bytes()).hexdigest(),
               "storage_wrapper_sha256": hashlib.sha256((selected / "scripts/just_storage_shell.sh").read_bytes()).hexdigest(),
               "stop_authorized": False, "stop_applied": False, "new_solve": False}
+    if report["schema"] == READY_SCHEMA:
+        report["ready_owner_validator_sha256"] = ready_validator_sha256()
     if control.read(args.report, optional=True) is not None:
         raise BuildControlError("Inspection report already exists; choose a fresh evidence path")
     control.write(args.report, report)

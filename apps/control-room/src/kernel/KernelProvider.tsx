@@ -1,5 +1,8 @@
 "use client";
 
+import { useSavedRunSelection } from "./saved-results/useSavedRun";
+import { SavedRunController } from "./saved-results/SavedRunController";
+import { openSavedRun } from "./saved-results/openSavedRun";
 import { SavedResultsPlaybackController } from "./saved-results/SavedResultsPlaybackController";
 import { homeView } from "./layout/homeView";
 import { sessionPreviewSelection } from "./layout/sessionPreviewSelection";
@@ -142,6 +145,7 @@ function createKernel(): KernelApi {
     diagnostics,
   });
   const savedResultsPlayback = new SavedResultsPlaybackController();
+  const savedRun = new SavedRunController();
   const projectDocument = new ProjectDocumentController(api);
   const commands = new CommandRegistry();
   commands.attachSessionScopeSource(
@@ -269,6 +273,17 @@ function createKernel(): KernelApi {
     },
   });
 
+  commands.register({
+    id: "workspace.open-saved-run", title: "Open Saved Run", group: "workspace-document",
+    category: "File", scope: "global", requiresInput: true, isEnabled: () => true,
+    run: async (context) => {
+      const input = context.input as { projectId?: string; runId?: string } | undefined;
+      if (!input?.projectId || !input.runId) return { status: "failed", message: "Project ID and run ID are required." };
+      await openSavedRun({ savedRun, api, pendingForms, objectEditSession, savedResultsPlayback, visualization, selection, layout }, { projectId: input.projectId, runId: input.runId });
+      return { status: "completed", message: "Saved run opened read only." };
+    },
+  });
+
   // Register modules and auto-register their contributed commands.
   for (const manifest of resolveControlRoomModules()) {
     modules.register(manifest);
@@ -280,6 +295,7 @@ function createKernel(): KernelApi {
   }
 
   return {
+    savedRun,
     savedResultsPlayback,
     api,
     analysisFieldOverlay,
@@ -548,6 +564,8 @@ function ProjectWorkspaceShortcutConnector({
 
 function SessionRuntimeConnectors({ kernel }: { kernel: KernelApi }) {
   const sessions = useSessionCollection();
+  const savedRun = useSavedRunSelection();
+  if (savedRun) return <ProjectWorkspaceShortcutConnector kernel={kernel} canCreateSession={false} />;
   if (sessions.state !== "ready") {
     return <ProjectWorkspaceShortcutConnector kernel={kernel} canCreateSession={sessions.state === "no-session"} />;
   }

@@ -570,21 +570,35 @@ def _merge_frozen_magnetic_submesh_with_air_mesh(
     magnetic_mesh = frozen.mesh
     frozen_nodes = np.asarray(magnetic_mesh.nodes, dtype=np.float64)
     merged_nodes: list[np.ndarray] = [np.array(node, copy=True) for node in frozen_nodes]
-    coordinate_to_node: dict[tuple[int, int, int], int] = {
-        _quantized_coordinate_key(node, coordinate_quantization_m=coordinate_quantization_m): index
-        for index, node in enumerate(frozen_nodes)
-    }
+    coordinate_to_nodes: dict[tuple[int, int, int], list[int]] = {}
+    for index, node in enumerate(frozen_nodes):
+        key = _quantized_coordinate_key(
+            node, coordinate_quantization_m=coordinate_quantization_m,
+        )
+        coordinate_to_nodes.setdefault(key, []).append(index)
     air_node_map = np.empty(air_mesh.n_nodes, dtype=np.int32)
     for index, node in enumerate(np.asarray(air_mesh.nodes, dtype=np.float64)):
         key = _quantized_coordinate_key(
             node,
             coordinate_quantization_m=coordinate_quantization_m,
         )
-        merged_index = coordinate_to_node.get(key)
-        if merged_index is None:
+        candidates = coordinate_to_nodes.get(key)
+        if candidates is None:
             merged_index = len(merged_nodes)
-            coordinate_to_node[key] = merged_index
+            coordinate_to_nodes[key] = [merged_index]
             merged_nodes.append(np.array(node, copy=True))
+        elif len(candidates) == 1:
+            merged_index = candidates[0]
+        else:
+            exact_matches = [
+                candidate for candidate in candidates
+                if np.array_equal(node, merged_nodes[candidate])
+            ]
+            if len(exact_matches) != 1:
+                raise ValueError(
+                    f"ambiguous frozen magnetic node match for air node {index}"
+                )
+            merged_index = exact_matches[0]
         air_node_map[index] = int(merged_index)
 
     remapped_air_cell_nodes = air_node_map[air_mesh.cell_nodes]
@@ -2796,6 +2810,7 @@ def _realize_fem_domain_mesh_asset_from_components_impl(
             frozen_payload,
             air_mesh,
         )
+        merged_mesh.validate_strict()
         mesh_options = _mesh_options_from_runtime_metadata(
             mesh_workflow,
             geometries=geometries,

@@ -2277,6 +2277,17 @@ fn cpw_layout_bounds(params: &Value) -> Option<([f64; 3], [f64; 3])> {
     let mut min = [f64::INFINITY; 3];
     let mut max = [f64::NEG_INFINITY; 3];
     for station in layout.stations {
+        let mut positions = vec![station.s * layout.length_m];
+        if params.pointer("/loop/enabled").and_then(Value::as_bool) == Some(true) {
+            let side = if station.s == 0.0 { Some("inlet") }
+                else if station.s == 1.0 { Some("outlet") } else { None };
+            if let Some(side) = side {
+                let length = number_param(&params["loop"], &format!("{side}_connection_length_m"))
+                    .filter(|value| value.is_finite() && *value > 0.0)?;
+                // The crossbar reaches both outer ground edges at this endpoint.
+                positions.push(if side == "inlet" { -length } else { layout.length_m + length });
+            }
+        }
         let half_signal = station.signal_width_m / 2.0;
         for (left, right) in [
             (-half_signal, half_signal),
@@ -2287,13 +2298,15 @@ fn cpw_layout_bounds(params: &Value) -> Option<([f64; 3], [f64; 3])> {
         ] {
             for y in [left, right] {
                 for z in [-layout.thickness_m / 2.0, layout.thickness_m / 2.0] {
-                    let local = [station.s * layout.length_m, y, z];
-                    for axis in 0..3 {
-                        let world = (0..3)
-                            .map(|component| layout.rotation[axis][component] * local[component])
-                            .sum::<f64>() + layout.translation[axis];
-                        min[axis] = min[axis].min(world);
-                        max[axis] = max[axis].max(world);
+                    for &u in &positions {
+                        let local = [u, y, z];
+                        for axis in 0..3 {
+                            let world = (0..3)
+                                .map(|component| layout.rotation[axis][component] * local[component])
+                                .sum::<f64>() + layout.translation[axis];
+                            min[axis] = min[axis].min(world);
+                            max[axis] = max[axis].max(world);
+                        }
                     }
                 }
             }
@@ -3566,6 +3579,7 @@ mod tests {
     #[test]
     fn imported_stl_is_a_real_fem_source_without_an_explicit_mesh_waiver() {
         let mut scene = scene_with_object(SceneGeometry {
+            geometry_name: None,
             source_asset: None,
             geometry_kind: "ImportedGeometry".to_string(),
             geometry_params: json!({"source": "body.stl", "scale": 1e-6, "volume": "full"}),
@@ -3586,6 +3600,7 @@ mod tests {
     fn auxiliary_geometry_preserves_mesh_body_without_magnetic_references() {
         for role in ["antenna", "conductor", "geometry"] {
             let mut scene = scene_with_object(SceneGeometry {
+                geometry_name: None,
                 source_asset: None,
                 geometry_kind: "Box".to_string(),
                 geometry_params: json!({ "size": [1.0, 2.0, 3.0] }),
@@ -3622,6 +3637,7 @@ mod tests {
     #[test]
     fn auxiliary_geometry_rejects_explicit_dangling_magnetic_references() {
         let mut scene = scene_with_object(SceneGeometry {
+            geometry_name: None,
             source_asset: None,
             geometry_kind: "Box".to_string(),
             geometry_params: json!({ "size": [1.0, 2.0, 3.0] }),
@@ -3639,6 +3655,7 @@ mod tests {
     #[test]
     fn box_scene_realizes_with_bounds_and_dirty_state() {
         let scene = scene_with_object(SceneGeometry {
+            geometry_name: None,
             source_asset: None,
             geometry_kind: "Box".to_string(),
             geometry_params: json!({ "size": [1.0, 2.0, 3.0] }),
@@ -3657,6 +3674,7 @@ mod tests {
     #[test]
     fn arch_waveguide_scene_realizes_with_python_ir_bounds() {
         let scene = scene_with_object(SceneGeometry {
+            geometry_name: None,
             source_asset: None,
             geometry_kind: "ArchWaveguide".to_string(),
             geometry_params: json!({
@@ -3692,6 +3710,7 @@ mod tests {
     #[test]
     fn microstrip_scene_derives_bounds_from_stations_not_stale_stored_bounds() {
         let scene = scene_with_object(SceneGeometry {
+            geometry_name: None,
             source_asset: None,
             geometry_kind: "MicrostripAntennaLayout".to_string(),
             geometry_params: json!({
@@ -3734,6 +3753,7 @@ mod tests {
     #[test]
     fn microstrip_scene_rejects_unordered_stations_and_nonrigid_transform() {
         let mut scene = scene_with_object(SceneGeometry {
+            geometry_name: None,
             source_asset: None,
             geometry_kind: "MicrostripAntennaLayout".to_string(),
             geometry_params: json!({
@@ -3788,6 +3808,7 @@ mod tests {
     #[test]
     fn cpw_scene_uses_all_station_bounds_and_rejects_fdm() {
         let mut scene = scene_with_object(SceneGeometry {
+            geometry_name: None,
             source_asset: None,
             geometry_kind: "CPWAntennaLayout".to_string(),
             geometry_params: cpw_params(),
@@ -3809,6 +3830,30 @@ mod tests {
         assert!(body.magnetization_ref.is_none());
         assert!(validate_geometry_scene(&scene, GeometryBackendTarget::Fdm).diagnostics
             .iter().any(|diagnostic| diagnostic.code == "GEOMETRY_KIND_UNSUPPORTED"));
+    }
+
+    #[test]
+    fn cpw_closed_loop_bounds_include_transformed_end_connections() {
+        let mut params = cpw_params();
+        params["loop"] = json!({
+            "enabled": true,
+            "inlet_connection_length_m": 0.2e-6,
+            "outlet_connection_length_m": 0.3e-6
+        });
+        let (min, max) = cpw_layout_bounds(&params).unwrap();
+        for (actual, expected) in min.into_iter().zip([1.2e-6, -0.7e-6, 15e-9]) {
+            assert!((actual - expected).abs() < 1e-18);
+        }
+        for (actual, expected) in max.into_iter().zip([2.6e-6, 0.8e-6, 25e-9]) {
+            assert!((actual - expected).abs() < 1e-18);
+        }
+        params["loop"]["enabled"] = json!(false);
+        let (min, max) = cpw_layout_bounds(&params).unwrap();
+        assert!((min[1] + 0.5e-6).abs() < 1e-18);
+        assert!((max[1] - 0.5e-6).abs() < 1e-18);
+        params["loop"]["enabled"] = json!(true);
+        params["loop"]["inlet_connection_length_m"] = json!(-1.0);
+        assert!(cpw_layout_bounds(&params).is_none());
     }
 
     #[test]
@@ -3887,6 +3932,7 @@ mod tests {
     #[test]
     fn unsupported_csg_blocks_mesh_build() {
         let scene = scene_with_object(SceneGeometry {
+            geometry_name: None,
             source_asset: None,
             geometry_kind: "Csg".to_string(),
             geometry_params: json!({ "op": "union", "children": [] }),
@@ -3900,6 +3946,7 @@ mod tests {
     #[test]
     fn workspace_body_ids_are_stable_when_object_order_changes() {
         let mut scene = scene_with_object(SceneGeometry {
+            geometry_name: None,
             source_asset: None,
             geometry_kind: "Box".to_string(),
             geometry_params: json!({ "size": [1.0, 1.0, 1.0] }),
@@ -3933,6 +3980,7 @@ mod tests {
     #[test]
     fn rotated_box_bounds_are_conservative_world_aabb() {
         let mut scene = scene_with_object(SceneGeometry {
+            geometry_name: None,
             source_asset: None,
             geometry_kind: "Box".to_string(),
             geometry_params: json!({ "size": [2.0, 4.0, 2.0] }),
@@ -3952,6 +4000,7 @@ mod tests {
     #[test]
     fn duplicate_region_and_overlap_emit_diagnostics() {
         let mut scene = scene_with_object(SceneGeometry {
+            geometry_name: None,
             source_asset: None,
             geometry_kind: "Box".to_string(),
             geometry_params: json!({ "size": [1.0, 1.0, 1.0] }),
@@ -3979,6 +4028,7 @@ mod tests {
     #[test]
     fn tiny_feature_below_mesh_size_warns() {
         let mut scene = scene_with_object(SceneGeometry {
+            geometry_name: None,
             source_asset: None,
             geometry_kind: "Box".to_string(),
             geometry_params: json!({ "size": [1.0, 1.0, 0.1] }),
@@ -3996,6 +4046,7 @@ mod tests {
     #[test]
     fn manual_universe_outside_blocks_mesh_and_solver_but_auto_does_not() {
         let mut scene = scene_with_object(SceneGeometry {
+            geometry_name: None,
             source_asset: None,
             geometry_kind: "Box".into(),
             geometry_params: json!({"size": [2.0, 2.0, 2.0]}),
@@ -4039,6 +4090,7 @@ mod tests {
     #[test]
     fn manual_universe_requires_finite_positive_size_even_without_geometry() {
         let mut scene = scene_with_object(SceneGeometry {
+            geometry_name: None,
             source_asset: None,
             geometry_kind: "Box".into(),
             geometry_params: json!({"size": [1.0, 1.0, 1.0]}),

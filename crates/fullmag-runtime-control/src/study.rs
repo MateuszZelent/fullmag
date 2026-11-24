@@ -21,6 +21,9 @@ use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 
+#[path = "study_retained_current_publication.rs"]
+mod study_retained_current_publication;
+
 pub struct AcceptedStudySnapshot {
     pub run: crate::AcceptedRunSnapshot,
     pub study: StudyPlan,
@@ -333,6 +336,9 @@ impl AcceptedStudySnapshot {
             AcceptedPreparationReceipt::ClosedLoop(_) => {
                 bail!("closed-loop inspection receipt is not a solver preparation receipt")
             }
+            AcceptedPreparationReceipt::RetainedCurrent(_) | AcceptedPreparationReceipt::RetainedAssetField(_) => {
+                bail!("retained-current H-only receipt is not a solver preparation receipt")
+            }
         }
     }
 
@@ -356,6 +362,35 @@ impl AcceptedStudySnapshot {
             bail!("preparation receipt has another canonical accepted task identity");
         }
 
+        if matches!(step.kind, fullmag_authoring::StudyStepKind::RetainedCurrentFieldInspection { .. }) {
+            durable.validate().context("retained-current durable preparation envelope is invalid")?;
+            if matches!(step.execution_plan.as_ref().map(|plan| &plan.backend_plan),
+                Some(fullmag_ir::BackendPlanIR::AntennaRetainedPreparationFieldInspection(_)
+                    | fullmag_ir::BackendPlanIR::AntennaRetainedDirectFieldInspection(_))) {
+                let receipt: fullmag_application::RetainedAssetFieldPreparationReceipt = serde_json::from_value(durable.payload.clone())
+                    .context("retained-asset field readiness is not its strict receipt")?;
+                let entry = self.catalog.entries().iter().find(|entry| entry.step_id() == step.step_id)
+                    .context("retained-asset field readiness has no captured ProblemIR")?;
+                receipt.validate_for_accepted_input(&self.run.specification, &expected_task_id, step, entry.problem())?;
+                if durable.preparation_id != receipt.preparation_id || durable.plan_fingerprint != receipt.plan_fingerprint
+                    || durable.input_fingerprint != fullmag_application::study_task_input_fingerprint(&self.run.specification, step)? {
+                    bail!("retained-asset field readiness differs from its durable task envelope");
+                }
+                return Ok(AcceptedPreparationReceipt::RetainedAssetField(receipt));
+            }
+            let receipt: fullmag_application::RetainedCurrentPreparationReceipt = serde_json::from_value(durable.payload.clone())
+                .context("retained-current readiness is not its strict parent-bound receipt")?;
+            let entry = self.catalog.entries().iter().find(|entry| entry.step_id() == step.step_id)
+                .context("retained-current readiness has no captured ProblemIR")?;
+            // Stored pins are checked here; durable parent admission is repeated
+            // by the preparation and worker owners, never inferred from this DTO.
+            receipt.validate_for_accepted_input(&self.run.specification, &expected_task_id, step, entry.problem())?;
+            if durable.preparation_id != receipt.preparation_id || durable.plan_fingerprint != receipt.plan_fingerprint
+                || durable.input_fingerprint != fullmag_application::study_task_input_fingerprint(&self.run.specification, step)? {
+                bail!("retained-current readiness differs from its durable task envelope");
+            }
+            return Ok(AcceptedPreparationReceipt::RetainedCurrent(receipt));
+        }
         if !matches!(step.kind, fullmag_authoring::StudyStepKind::ClosedLoopInspection { .. }) {
             let receipt: PreparationReceipt = serde_json::from_value(durable.payload.clone())
                 .context("durable task preparation payload is not an application receipt")?;
@@ -410,9 +445,30 @@ impl AcceptedStudySnapshot {
     ) -> Result<ClosedLoopPreparationReceipt> {
         match self.validate_task_preparation_envelope(durable, task_id)? {
             AcceptedPreparationReceipt::ClosedLoop(receipt) => Ok(receipt),
-            AcceptedPreparationReceipt::Solver(_) => {
+            AcceptedPreparationReceipt::Solver(_) | AcceptedPreparationReceipt::RetainedCurrent(_) | AcceptedPreparationReceipt::RetainedAssetField(_) => {
                 bail!("inspection readiness requires a typed closed-loop step")
             }
+        }
+    }
+
+    /// Validate stored H-only readiness pins, without granting parent admission.
+    /// The preparer and worker must independently revalidate the durable parent.
+    pub fn bind_retained_current_preparation(
+        &self, durable: &FmsTaskPreparationReceipt, task_id: &str,
+    ) -> Result<fullmag_application::RetainedCurrentPreparationReceipt> {
+        match self.validate_task_preparation_envelope(durable, task_id)? {
+            AcceptedPreparationReceipt::RetainedCurrent(receipt) => Ok(receipt),
+            _ => bail!("retained-current readiness requires its exact typed H-only step"),
+        }
+    }
+
+    /// Bind the distinct frozen-asset family; parent and input projection remain independently authenticated.
+    pub fn bind_retained_asset_field_preparation(
+        &self, durable: &FmsTaskPreparationReceipt, task_id: &str,
+    ) -> Result<fullmag_application::RetainedAssetFieldPreparationReceipt> {
+        match self.validate_task_preparation_envelope(durable, task_id)? {
+            AcceptedPreparationReceipt::RetainedAssetField(receipt) => Ok(receipt),
+            _ => bail!("retained-asset field readiness requires its exact typed carrier"),
         }
     }
 
@@ -523,6 +579,18 @@ impl AcceptedStudySnapshot {
                 let step = self.lowered.steps.iter().find(|step| step.step_id == step_id).context("inspection step is missing")?;
                 let entry = self.catalog.entries().iter().find(|entry| entry.step_id() == step_id).context("inspection ProblemIR is missing")?;
                 task.resolved_closed_loop_study_input(claim, &self.run.specification, step, entry.problem(), receipt)?
+            }
+            AcceptedPreparationReceipt::RetainedCurrent(receipt) => {
+                if !resolved_inputs.is_empty() { bail!("retained-current H-only cannot consume solver state inputs"); }
+                let step = self.lowered.steps.iter().find(|step| step.step_id == step_id).context("retained-current step is missing")?;
+                let entry = self.catalog.entries().iter().find(|entry| entry.step_id() == step_id).context("retained-current ProblemIR is missing")?;
+                task.resolved_retained_current_study_input(claim, &self.run.specification, step, entry.problem(), receipt)?
+            }
+            AcceptedPreparationReceipt::RetainedAssetField(receipt) => {
+                if !resolved_inputs.is_empty() { bail!("retained-asset field H-only cannot consume solver state inputs"); }
+                let step = self.lowered.steps.iter().find(|step| step.step_id == step_id).context("retained-asset field step is missing")?;
+                let entry = self.catalog.entries().iter().find(|entry| entry.step_id() == step_id).context("retained-asset field ProblemIR is missing")?;
+                task.resolved_retained_asset_field_study_input(claim, &self.run.specification, step, entry.problem(), receipt)?
             }
         };
         Ok((receipt, resolved_input))
@@ -1913,6 +1981,14 @@ fn publish_study_outputs_internal(
         .iter()
         .find(|step| step.step_id == step_id)
         .with_context(|| format!("accepted study has no step `{step_id}`"))?;
+    let retained_current = matches!(step.kind, fullmag_authoring::StudyStepKind::RetainedCurrentFieldInspection { .. });
+    let _retained_publication = if retained_current {
+        if outputs.len() != 1 || accepted_state_ref.is_some() || observation_source.is_some() || terminal.is_some() {
+            bail!("retained-current H-only publication requires one Artifact and cannot contain magnetic state");
+        }
+        // Re-entrant with the worker's publication lease; all parent and child writes share this fence.
+        Some(store.write_transaction()?)
+    } else { None };
     let run_catalog = store
         .read_run_catalog(run_id)?
         .context("study output publication requires a durable run catalog")?;
@@ -1988,7 +2064,17 @@ fn publish_study_outputs_internal(
                 )
             })?;
         let data_kind = study_port_data_kind_label(&declared.data_kind);
-        if output.codec_id==fullmag_application::ANTENNA_INSPECTION_BUNDLE_CODEC_ID {
+        if retained_current {
+            study_retained_current_publication::validate_output_identity(
+                &output.codec_id, &output.codec_version, &output.port_id, &output.case_id, data_kind)?;
+            let bundle = validate_retained_current_publication_output(store, accepted, claim, step,
+                &output.bytes, crate::study_inspection::inspection_bundle_budget(claim)?)?;
+            if bundle.manifest().codec_version() != output.codec_version {
+                bail!("retained publication codec differs from its typed validated package");
+            }
+        } else if output.codec_id == fullmag_antenna_artifacts::retained_current::RETAINED_CURRENT_FIELD_CODEC_ID {
+            bail!("retained-current H-only codec cannot be published by another study operation");
+        } else if output.codec_id==fullmag_application::ANTENNA_INSPECTION_BUNDLE_CODEC_ID {
             if accepted_state_ref.is_some() || observation_source.is_some() || output.port_id!="inspection" || output.case_id!="default" { bail!("inspection output cannot fabricate magnetic state or another case"); }
             let problem=accepted.catalog.entries().iter().find(|entry|entry.step_id()==step_id).context("inspection publication ProblemIR missing")?.problem();
             crate::study_inspection::validate_accepted_inspection_bytes(problem,step,&output.bytes,crate::study_inspection::inspection_bundle_budget(claim)?)?;
@@ -2277,18 +2363,25 @@ pub(crate) fn validate_study_task_completion_for_snapshot(
     claim: &TaskClaim,
     accepted: &AcceptedStudySnapshot,
 ) -> Result<()> {
+    let retained_current = accepted.study.steps.iter().any(|step|
+        matches!(step.kind, fullmag_authoring::StudyStepKind::RetainedCurrentFieldInspection { .. })
+            && fullmag_session::task_id_for_study_step(claim.run_id.as_str(), &step.step_id)
+                .is_ok_and(|task_id| task_id == claim.task_id.as_str()));
+    // Validation-only callers may already own EX. Keep H-only's entire completion
+    // under a real re-entrant writer fence; shared cold readers use the custom callback below.
+    let _retained_completion = if retained_current { Some(store.write_transaction()?) } else { None };
     read_study_task_completion_for_snapshot(store, claim, accepted, false).map(|_| ())
 }
 
 /// Immutable readers are released only after every completion fence succeeds.
 /// Fields stay private so callers cannot manufacture a verified completion.
-pub(crate) struct VerifiedStudyCompletion {
-    inspections: Vec<(String, usize, Option<fullmag_runner::LoadedAntennaClosedLoopInspection>)>,
+pub(crate) struct VerifiedStudyCompletion<T = Option<fullmag_runner::LoadedAntennaClosedLoopInspection>> {
+    inspections: Vec<(String, usize, T)>,
 }
 
-impl VerifiedStudyCompletion {
+impl<T> VerifiedStudyCompletion<T> {
     pub(crate) fn into_inspection(self, expected_object: &str)
-        -> Result<(usize, Option<fullmag_runner::LoadedAntennaClosedLoopInspection>)> {
+        -> Result<(usize, T)> {
         let mut inspections = self.inspections.into_iter();
         let (object, byte_count, loaded) = inspections.next().context("completion has no verified inspection")?;
         if inspections.next().is_some() || object != expected_object {
@@ -2298,12 +2391,76 @@ impl VerifiedStudyCompletion {
     }
 }
 
+/// Validation-only H-only calls require the writer fence owned by the wrapper above.
+/// SH cold readers must use `read_study_task_completion_with_inspection` and their own decoder.
 pub(crate) fn read_study_task_completion_for_snapshot(
     store: &SessionStore,
     claim: &TaskClaim,
     accepted: &AcceptedStudySnapshot,
     retain_inspection: bool,
 ) -> Result<VerifiedStudyCompletion> {
+    read_study_task_completion_with_inspection(store, claim, accepted, |problem, step, bytes, maximum| {
+        if matches!(step.kind, fullmag_authoring::StudyStepKind::RetainedCurrentFieldInspection { .. }) {
+            // The validation-only wrapper owns EX; never acquire SH under its writer fence.
+            validate_retained_current_publication_output(store, accepted, claim, step, bytes, maximum)?;
+            return Ok(None);
+        }
+        if retain_inspection {
+            crate::study_inspection::load_accepted_inspection_bytes(problem, step, bytes, maximum).map(Some)
+        } else {
+            crate::study_inspection::validate_accepted_inspection_bytes(problem, step, bytes, maximum)?;
+            Ok(None)
+        }
+    })
+}
+
+/// Publication/tensor owners already hold EX; use the same canonical parent/content gate without SH.
+pub(crate) fn validate_retained_current_publication_output(
+    store: &SessionStore, accepted: &AcceptedStudySnapshot, claim: &TaskClaim,
+    step: &StudyStep, bytes: &[u8], maximum: usize,
+) -> Result<fullmag_antenna_artifacts::retained_current::RetainedCurrentFieldBundleAny> {
+    if accepted.lowered.steps.iter().any(|entry| entry.step_id == step.step_id
+        && matches!(entry.execution_plan.as_ref().map(|plan| &plan.backend_plan),
+            Some(fullmag_ir::BackendPlanIR::AntennaRetainedDirectFieldInspection(_)))) {
+        return study_retained_current_publication::validate_direct_output(store, accepted, claim, step, bytes, maximum, true);
+    }
+    if accepted.lowered.steps.iter().any(|entry| entry.step_id == step.step_id
+        && matches!(entry.execution_plan.as_ref().map(|plan| &plan.backend_plan),
+            Some(fullmag_ir::BackendPlanIR::AntennaRetainedPreparationFieldInspection(_)))) {
+        study_retained_current_publication::validate_retained_preparation_field_publication_output(store, accepted, claim, step, bytes, maximum)
+    } else {
+        study_retained_current_publication::validate_output(store, accepted, claim, step, bytes, maximum, true)
+    }.map(fullmag_antenna_artifacts::retained_current::RetainedCurrentFieldBundleAny::SurfaceV1)
+}
+
+/// Child cold readers may retain this result; it never passes through the full V/J/H source decoder.
+/// Caller must keep its existing shared snapshot while validating the surrounding completion fences.
+pub(crate) fn validate_retained_current_completion_output(
+    store: &SessionStore, accepted: &AcceptedStudySnapshot, claim: &TaskClaim,
+    step: &StudyStep, bytes: &[u8], maximum: usize,
+) -> Result<fullmag_antenna_artifacts::retained_current::RetainedCurrentFieldBundleAny> {
+    if accepted.lowered.steps.iter().any(|entry| entry.step_id == step.step_id
+        && matches!(entry.execution_plan.as_ref().map(|plan| &plan.backend_plan),
+            Some(fullmag_ir::BackendPlanIR::AntennaRetainedDirectFieldInspection(_)))) {
+        return study_retained_current_publication::validate_direct_output(store, accepted, claim, step, bytes, maximum, false);
+    }
+    if accepted.lowered.steps.iter().any(|entry| entry.step_id == step.step_id
+        && matches!(entry.execution_plan.as_ref().map(|plan| &plan.backend_plan),
+            Some(fullmag_ir::BackendPlanIR::AntennaRetainedPreparationFieldInspection(_)))) {
+        study_retained_current_publication::validate_retained_preparation_field_completion_output(store, accepted, claim, step, bytes, maximum)
+    } else {
+        study_retained_current_publication::validate_output(store, accepted, claim, step, bytes, maximum, false)
+    }.map(fullmag_antenna_artifacts::retained_current::RetainedCurrentFieldBundleAny::SurfaceV1)
+}
+
+/// The callback owns physical decoding; its private result cannot escape before
+/// all original terminal, catalog and typed artifact fences have succeeded.
+pub(crate) fn read_study_task_completion_with_inspection<T>(
+    store: &SessionStore,
+    claim: &TaskClaim,
+    accepted: &AcceptedStudySnapshot,
+    mut decode_inspection: impl FnMut(&fullmag_ir::ProblemIR, &StudyStep, &[u8], usize) -> Result<T>,
+) -> Result<VerifiedStudyCompletion<T>> {
     let mut inspections = Vec::new();
     let run_id = claim.run_id.as_str();
     let current_intent = store.read_run_intent(run_id)?;
@@ -2329,6 +2486,8 @@ pub(crate) fn read_study_task_completion_for_snapshot(
     }
     let source_step =
         source_step.context("completed study task is not a step in the accepted plan")?;
+    let retained_current = matches!(source_step.kind,
+        fullmag_authoring::StudyStepKind::RetainedCurrentFieldInspection { .. });
     let run_catalog = store
         .read_run_catalog(run_id)?
         .context("study completion requires a durable run catalog")?;
@@ -2497,7 +2656,7 @@ pub(crate) fn read_study_task_completion_for_snapshot(
         {
             bail!("study completion manifest entry differs from its published artifact");
         }
-        let inspection=matches!(source_step.kind,fullmag_authoring::StudyStepKind::ClosedLoopInspection { .. });
+        let inspection=retained_current || matches!(source_step.kind,fullmag_authoring::StudyStepKind::ClosedLoopInspection { .. });
         let maximum=if inspection { Some(crate::study_inspection::inspection_bundle_budget(claim)?) } else {None};
         let output_bytes = if let Some(maximum)=maximum {
             store.cas().get_bounded(&output.object_ref,maximum as u64)?
@@ -2508,15 +2667,32 @@ pub(crate) fn read_study_task_completion_for_snapshot(
             )
         })?;
         if let Some(maximum)=maximum {
-            if output.codec_id!=fullmag_application::ANTENNA_INSPECTION_BUNDLE_CODEC_ID || output.codec_version!=fullmag_application::ANTENNA_INSPECTION_BUNDLE_CODEC_VERSION || output.case_id!="default" || manifest.accepted_state_ref.is_some() || manifest.observation_source.is_some() { bail!("inspection completion cannot accept solver outputs or state"); }
+            if manifest.accepted_state_ref.is_some() || manifest.observation_source.is_some() {
+                bail!("inspection completion cannot accept solver outputs or state");
+            }
+            if retained_current {
+                if manifest.outputs.len() != 1 || source_step.outputs.len() != 1 {
+                    bail!("retained-current completion requires exactly one output");
+                }
+                study_retained_current_publication::validate_output_identity(&output.codec_id,
+                    &output.codec_version, &output.port_id, &output.case_id, &output.data_kind)?;
+                let direct = accepted.lowered.steps.iter().any(|entry| entry.step_id == source_step.step_id
+                    && matches!(entry.execution_plan.as_ref().map(|plan| &plan.backend_plan),
+                        Some(fullmag_ir::BackendPlanIR::AntennaRetainedDirectFieldInspection(_))));
+                if output.codec_version != if direct { "v2" } else { "v1" } {
+                    bail!("retained completion codec differs from accepted typed operation");
+                }
+            } else if output.codec_id!=fullmag_application::ANTENNA_INSPECTION_BUNDLE_CODEC_ID
+                || output.codec_version!=fullmag_application::ANTENNA_INSPECTION_BUNDLE_CODEC_VERSION
+                || output.case_id!="default" {
+                bail!("inspection completion cannot accept another codec or case");
+            }
             let problem=accepted.catalog.entries().iter().find(|entry|entry.step_id()==source_step.step_id).context("inspection completion ProblemIR missing")?.problem();
-            let loaded = if retain_inspection {
-                Some(crate::study_inspection::load_accepted_inspection_bytes(problem,source_step,&output_bytes,maximum)?)
-            } else {
-                crate::study_inspection::validate_accepted_inspection_bytes(problem,source_step,&output_bytes,maximum)?;
-                None
-            };
+            let loaded = decode_inspection(problem, source_step, &output_bytes, maximum)?;
             inspections.push((output.object_ref.clone(), output_bytes.len(), loaded));
+        }
+        if !retained_current && output.codec_id == fullmag_antenna_artifacts::retained_current::RETAINED_CURRENT_FIELD_CODEC_ID {
+            bail!("retained-current H-only completion codec belongs to another operation");
         }
         let resolved_artifact = fullmag_application::ResolvedStudyArtifact {
             artifact_id: output.artifact_id.clone(),
@@ -4051,6 +4227,77 @@ pub fn validate_requested_execution(
         }
 
         let planned_precision = match &execution.backend_plan {
+            fullmag_ir::BackendPlanIR::AntennaRetainedCurrentFieldInspection(operation) => {
+                let fullmag_authoring::StudyStepKind::RetainedCurrentFieldInspection {
+                    stage_id, port_mode_id, output_id,
+                } = &step.kind else {
+                    bail!("retained-current H-only carrier requires its exact typed accepted operation");
+                };
+                let canonical = fullmag_plan::validate_retained_current_field_operation(
+                    problem, stage_id, port_mode_id, output_id)?;
+                let intent = &operation.requested_execution;
+                if operation != &canonical
+                    || step_requested.backend != "fem" || step_requested.device != "cpu"
+                    || step_requested.precision != "double" || step_requested.mode != "strict"
+                    || intent.discretization != BackendTarget::Fem || intent.device != ExecutionDevice::Cpu
+                    || intent.precision != ExecutionPrecision::Double || intent.execution_mode != ExecutionMode::Strict
+                    || execution.common.resolved_backend != BackendTarget::Fem
+                    || step.until_seconds.is_some() || !step.inputs.is_empty()
+                    || step.outputs.len() != 1
+                    || step.outputs[0].port_id != fullmag_authoring::ANTENNA_INSPECTION_OUTPUT_PORT_ID
+                    || step.outputs[0].data_kind != fullmag_authoring::StudyPortDataKind::Artifact
+                {
+                    bail!("retained-current H-only accepted operation differs from its canonical plan or explicit FEM CPU double strict static request");
+                }
+                Some(intent.precision)
+            }            fullmag_ir::BackendPlanIR::AntennaRetainedPreparationFieldInspection(operation) => {
+                let fullmag_authoring::StudyStepKind::RetainedCurrentFieldInspection {
+                    stage_id, port_mode_id, output_id,
+                } = &step.kind else {
+                    bail!("retained-asset field H-only carrier requires its exact typed accepted operation");
+                };
+                let canonical = fullmag_plan::validate_retained_preparation_field_operation(
+                    problem, stage_id, port_mode_id, output_id)?;
+                let intent = &operation.requested_execution;
+                if operation != &canonical
+                    || step_requested.backend != "fem" || step_requested.device != "cpu"
+                    || step_requested.precision != "double" || step_requested.mode != "strict"
+                    || intent.discretization != BackendTarget::Fem || intent.device != ExecutionDevice::Cpu
+                    || intent.precision != ExecutionPrecision::Double || intent.execution_mode != ExecutionMode::Strict
+                    || execution.common.resolved_backend != BackendTarget::Fem
+                    || step.until_seconds.is_some() || !step.inputs.is_empty()
+                    || step.outputs.len() != 1
+                    || step.outputs[0].port_id != fullmag_authoring::ANTENNA_INSPECTION_OUTPUT_PORT_ID
+                    || step.outputs[0].data_kind != fullmag_authoring::StudyPortDataKind::Artifact
+                {
+                    bail!("retained-asset field H-only accepted operation differs from its canonical plan or explicit FEM CPU double strict static request");
+                }
+                Some(intent.precision)
+            }
+            fullmag_ir::BackendPlanIR::AntennaRetainedDirectFieldInspection(operation) => {
+                let fullmag_authoring::StudyStepKind::RetainedCurrentFieldInspection {
+                    stage_id, port_mode_id, output_id,
+                } = &step.kind else {
+                    bail!("retained-asset field H-only carrier requires its exact typed accepted operation");
+                };
+                let canonical = fullmag_plan::validate_retained_direct_field_operation(
+                    problem, stage_id, port_mode_id, output_id)?;
+                let intent = &operation.requested_execution;
+                if operation != &canonical
+                    || step_requested.backend != "fem" || step_requested.device != "cpu"
+                    || step_requested.precision != "double" || step_requested.mode != "strict"
+                    || intent.discretization != BackendTarget::Fem || intent.device != ExecutionDevice::Cpu
+                    || intent.precision != ExecutionPrecision::Double || intent.execution_mode != ExecutionMode::Strict
+                    || execution.common.resolved_backend != BackendTarget::Fem
+                    || step.until_seconds.is_some() || !step.inputs.is_empty()
+                    || step.outputs.len() != 1
+                    || step.outputs[0].port_id != fullmag_authoring::ANTENNA_INSPECTION_OUTPUT_PORT_ID
+                    || step.outputs[0].data_kind != fullmag_authoring::StudyPortDataKind::Artifact
+                {
+                    bail!("retained-asset field H-only accepted operation differs from its canonical plan or explicit FEM CPU double strict static request");
+                }
+                Some(intent.precision)
+            }
             fullmag_ir::BackendPlanIR::AntennaFieldOnly(_) => Some(fullmag_ir::ExecutionPrecision::Double),
             fullmag_ir::BackendPlanIR::AntennaExternalLeadInspection(inspection) => {
                 let intent = &inspection.requested_execution;

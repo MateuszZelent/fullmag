@@ -130,6 +130,8 @@ pub(crate) struct AppState {
     pub repo_root: PathBuf,
     /// Managed, project-owned run storage resolved before this API starts.
     pub submit_store_root: Option<PathBuf>,
+    /// Immutable read authority only; never consulted by submission or execution.
+    pub readonly_result_archive: Option<crate::readonly_result_archive::ReadonlyResultArchive>,
     /// Global durable bound for accepted runs that have not reached a terminal
     /// task catalog. Replays do not consume another backlog slot.
     pub submit_backlog_limit: NonZeroUsize,
@@ -2286,6 +2288,9 @@ mod tests {
 
     fn sample_builder() -> ScriptBuilderState {
         ScriptBuilderState {
+            shared_domain_mesh_source: None,
+            interactive_session_requested: None,
+            wait_for_solve: None,
             material_assets: None,
             revision: 3,
             compute_resources: None,
@@ -2321,8 +2326,8 @@ mod tests {
                 ..fullmag_authoring::ScriptBuilderSolverState::default()
             },
             mesh: fullmag_authoring::ScriptBuilderMeshState {
-                algorithm_2d: 6,
-                algorithm_3d: 1,
+                algorithm_2d: Some(6),
+                algorithm_3d: Some(1),
                 size_mode: Some("predefined".to_string()),
                 hmax: String::new(),
                 hmin: String::new(),
@@ -2343,8 +2348,8 @@ mod tests {
                 smoothing_steps: 1,
                 optimize: String::new(),
                 optimize_iterations: 1,
-                compute_quality: false,
-                per_element_quality: false,
+                compute_quality: Some(false),
+                per_element_quality: Some(false),
                 interface_hmax: None,
                 interface_thickness: None,
                 transition_distance: None,
@@ -2373,8 +2378,10 @@ mod tests {
             output_storage: None,
             initial_state: None,
             geometries: vec![fullmag_authoring::ScriptBuilderGeometryEntry {
+                geometry_name: None,
                 source_asset: None,
                 name: "body".to_string(),
+                object_id: None,
                 region_name: None,
                 geometry_kind: "Box".to_string(),
                 geometry_params: serde_json::json!({ "size": [1.0, 1.0, 1.0] }),

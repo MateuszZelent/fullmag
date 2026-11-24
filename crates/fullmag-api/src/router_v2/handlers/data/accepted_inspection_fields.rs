@@ -9,7 +9,26 @@ fn invalid(message: impl ToString) -> ApiError {
     ApiError::conflict_with_code("accepted_inspection_owner_invalid", message.to_string())
 }
 
+#[derive(Clone, Copy)]
+enum InspectionKind { ClosedLoop, RetainedCurrent }
+
+impl InspectionKind {
+    fn for_step(kind: &fullmag_authoring::StudyStepKind) -> Option<Self> {
+        match kind {
+            fullmag_authoring::StudyStepKind::ClosedLoopInspection { .. } => Some(Self::ClosedLoop),
+            fullmag_authoring::StudyStepKind::RetainedCurrentFieldInspection { .. } => Some(Self::RetainedCurrent),
+            _ => None,
+        }
+    }
+}
+
+enum InspectionData {
+    ClosedLoop(fullmag_runner::LoadedAntennaClosedLoopInspection),
+    RetainedCurrent(fullmag_antenna_artifacts::retained_current::RetainedCurrentFieldBundleAny),
+}
+
 struct InspectionBinding {
+    kind: InspectionKind,
     artifact: AcceptedInspectionArtifactOwner,
     runtime_stage_id: String,
 }
@@ -19,7 +38,7 @@ fn discover(root: PathBuf, run_id: &str, closure: Option<&str>) -> Result<Vec<In
     let store = fullmag_session::SessionStore::open_existing(root).map_err(invalid)?;
     let run = RunId::parse(run_id).map_err(invalid)?;
     let (accepted, tasks, imported_artifacts) = if let Some(closure) = closure {
-        let Some(evidence) = fullmag_runtime_control::load_imported_study_evidence(&store, &run, closure).map_err(invalid)? else { return Ok(Vec::new()); };
+        let Some(evidence) = fullmag_runtime_control::load_imported_study_evidence_for_inspection(&store, &run, closure).map_err(invalid)? else { return Ok(Vec::new()); };
         (evidence.accepted, evidence.catalog, evidence.artifacts)
     } else {
         let Some(intent) = store.read_run_intent(run_id).map_err(invalid)? else { return Ok(Vec::new()); };
@@ -33,7 +52,7 @@ fn discover(root: PathBuf, run_id: &str, closure: Option<&str>) -> Result<Vec<In
     };
     let mut has_inspection = false;
     for step in &accepted.study.steps {
-        if step.enabled && matches!(&step.kind, fullmag_authoring::StudyStepKind::ClosedLoopInspection { .. }) {
+        if step.enabled && InspectionKind::for_step(&step.kind).is_some() {
             let task_id = fullmag_session::task_id_for_study_step(run_id, &step.step_id).map_err(invalid)?;
             has_inspection |= tasks.tasks.iter().any(|task| task.task_id == task_id
                 && task.lifecycle == fullmag_session::FmsTaskLifecycle::Succeeded);
@@ -44,7 +63,8 @@ fn discover(root: PathBuf, run_id: &str, closure: Option<&str>) -> Result<Vec<In
         .ok_or_else(|| invalid("accepted artifact catalog absent"))?;
     let mut owners = Vec::new();
     for step in &accepted.study.steps {
-        if !step.enabled || !matches!(&step.kind, fullmag_authoring::StudyStepKind::ClosedLoopInspection { .. }) { continue; }
+        if !step.enabled { continue; }
+        let Some(kind) = InspectionKind::for_step(&step.kind) else { continue; };
         let task_id = fullmag_session::task_id_for_study_step(run_id, &step.step_id).map_err(invalid)?;
         let Some(task) = tasks.tasks.iter().find(|task| task.task_id == task_id) else { continue; };
         if task.lifecycle != fullmag_session::FmsTaskLifecycle::Succeeded { continue; }
@@ -59,7 +79,7 @@ fn discover(root: PathBuf, run_id: &str, closure: Option<&str>) -> Result<Vec<In
         let artifact = outputs[0];
         let object = artifact.object_ref.as_ref().ok_or_else(|| invalid("inspection CAS reference absent"))?;
         if object != &artifact.content_sha256 { return Err(invalid("inspection artifact CAS digest differs")); }
-        owners.push(InspectionBinding { runtime_stage_id: step.step_id.clone(),
+        owners.push(InspectionBinding { kind, runtime_stage_id: step.step_id.clone(),
             artifact: AcceptedInspectionArtifactOwner { project_id: accepted.run.specification.snapshot.project_id.as_str().into(),
             task_id, attempt_id: attempt.into(), ownership_epoch: epoch.to_string(),
             artifact_id: artifact.artifact_id.clone(), object_ref: object.clone() } });
@@ -146,27 +166,55 @@ pub(super) async fn load(state: &Arc<AppState>, requested_stage: Option<&str>)
         let project = ProjectId::parse(&accepted.project_id).map_err(invalid)?;
         let run = RunId::parse(&run_id).map_err(invalid)?;
         let ownership_epoch = accepted.ownership_epoch.parse::<u64>().map_err(invalid)?;
-        let (evidence, loaded) = if let Some(closure) = closure.as_deref() {
-            fullmag_runtime_control::load_imported_inspection(&store, &run, closure,
-                &accepted.task_id, &accepted.attempt_id, ownership_epoch, &accepted.object_ref)
-        } else {
-            fullmag_runtime_control::load_saved_inspection(&store, &project, &run,
-                &accepted.task_id, &accepted.attempt_id, ownership_epoch, &accepted.object_ref)
-        }.map_err(invalid)?;
+        let (evidence, loaded) = match binding.kind {
+            InspectionKind::ClosedLoop => {
+                let (evidence, loaded) = if let Some(closure) = closure.as_deref() {
+                    fullmag_runtime_control::load_imported_inspection(&store, &run, closure,
+                        &accepted.task_id, &accepted.attempt_id, ownership_epoch, &accepted.object_ref)
+                } else {
+                    fullmag_runtime_control::load_saved_inspection(&store, &project, &run,
+                        &accepted.task_id, &accepted.attempt_id, ownership_epoch, &accepted.object_ref)
+                }.map_err(invalid)?;
+                (evidence, InspectionData::ClosedLoop(loaded))
+            }
+            InspectionKind::RetainedCurrent => {
+                let (evidence, loaded) = if let Some(closure) = closure.as_deref() {
+                    fullmag_runtime_control::load_imported_retained_current_field_inspection(&store, &run, closure,
+                        &accepted.task_id, &accepted.attempt_id, ownership_epoch, &accepted.object_ref)
+                } else {
+                    fullmag_runtime_control::load_saved_retained_current_field_inspection(&store, &project, &run,
+                        &accepted.task_id, &accepted.attempt_id, ownership_epoch, &accepted.object_ref)
+                }.map_err(invalid)?;
+                (evidence, InspectionData::RetainedCurrent(loaded))
+            }
+        };
         if evidence["artifact_id"].as_str() != Some(accepted.artifact_id.as_str()) { return Err(invalid("inspection artifact changed during cold read")); }
-        let text = |path: &[&str]| -> Result<String, ApiError> {
-            let mut value = &loaded.metadata; for key in path { value = &value[*key]; }
-            value.as_str().filter(|s| !s.trim().is_empty() && s.len() <= 4096 && !s.contains('\0'))
-                .map(str::to_owned).ok_or_else(|| invalid("verified inspection owner label absent"))
+        let (authored_stage_id, module_id, object_id, output_id, source_digest,
+            content_digest, native_mesh_identity, native_topology_identity) = match &loaded {
+            InspectionData::ClosedLoop(loaded) => {
+                let text = |path: &[&str]| -> Result<String, ApiError> {
+                    let mut value = &loaded.metadata; for key in path { value = &value[*key]; }
+                    value.as_str().filter(|s| !s.trim().is_empty() && s.len() <= 4096 && !s.contains('\0'))
+                        .map(str::to_owned).ok_or_else(|| invalid("verified inspection owner label absent"))
+                };
+                (text(&["stage_id"])?, text(&["current_transport_id"])?, text(&["source_object_id"])?,
+                    text(&["solution_id"])?, text(&["source", "accepted_source_state_digest"])?,
+                    text(&["content_digest"])?, text(&["resolved_execution", "mesh_revision"])?,
+                    text(&["resolved_execution", "topology_revision"])?)
+            }
+            InspectionData::RetainedCurrent(loaded) => {
+                let m = loaded.manifest();
+                (m.stage_id().to_owned(), m.current_transport_id().to_owned(), m.source_object_id().to_owned(),
+                    m.output_id().to_owned(), m.parent().source.accepted_source_state_digest.clone(),
+                    m.content_digest().to_owned(), m.sample_carrier().topology_digest.clone(),
+                    m.sample_carrier().topology_digest.clone())
+            }
         };
         let owner = ArtifactFieldOwnerBinding { session_id: session, session_epoch: epoch, request_scope_epoch: scope,
-            run_id, runtime_stage_id: binding.runtime_stage_id, authored_stage_id: text(&["stage_id"] )?,
-            module_id: text(&["current_transport_id"] )?, object_id: text(&["source_object_id"] )?,
-            output_id: text(&["solution_id"] )?, source_digest: text(&["source", "accepted_source_state_digest"] )?,
-            content_digest: text(&["content_digest"] )?, observation_mesh_revision: mesh_revision,
+            run_id, runtime_stage_id: binding.runtime_stage_id, authored_stage_id, module_id, object_id,
+            output_id, source_digest, content_digest, observation_mesh_revision: mesh_revision,
             observation_topology_revision: topology_revision, historical_inspection: true,
-            native_mesh_identity: text(&["resolved_execution", "mesh_revision"] )?,
-            native_topology_identity: text(&["resolved_execution", "topology_revision"] )?, accepted_artifact: Some(accepted) };
+            native_mesh_identity, native_topology_identity, accepted_artifact: Some(accepted) };
         // Fresh durable completion/preparation/CAS validation above is never skipped on a cache hit.
         // Cache only the expensive derived geometry for this exact immutable owner and observation.
         let key_bytes = serde_json::to_vec(&("accepted-inspection-fields-v1", &owner, revision))
@@ -176,7 +224,10 @@ pub(super) async fn load(state: &Arc<AppState>, requested_stage: Option<&str>)
             .map_err(|_| ApiError::internal("inspection cache poisoned"))?.get(&key) {
             return Ok(Some(cached));
         }
-        let fields = Arc::new(super::inspection_field_provider::from_closed(owner, loaded, revision)?);
+        let fields = Arc::new(match loaded {
+            InspectionData::ClosedLoop(loaded) => super::inspection_field_provider::from_closed(owner, loaded, revision)?,
+            InspectionData::RetainedCurrent(loaded) => super::inspection_field_provider::from_retained(owner, loaded, revision)?,
+        });
         if fields.retained_bytes > 128 * 1024 * 1024 - 4096 {
             return Err(invalid("accepted inspection field views exceed the 128 MiB admission budget"));
         }

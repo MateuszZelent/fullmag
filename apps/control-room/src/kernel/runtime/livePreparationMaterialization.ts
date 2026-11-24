@@ -1,6 +1,6 @@
 import { resolveArtifactAssessment } from "@/shared/domain/mesh/artifactAssessment";
 
-import { SIMULATION_PREPARATION_PATH } from "../api/apiPaths";
+import { MODEL_READINESS_PATH, SIMULATION_PREPARATION_PATH } from "../api/apiPaths";
 import { ControlRoomApiError } from "../api/ControlRoomApi";
 import type {
   LivePreparationMaterializationResource,
@@ -177,7 +177,18 @@ export function requiresSharedDomainMeshForLivePreparation(
     laneStatus as Parameters<typeof hasSessionActiveLaneDeclaration>[0];
   const laneDeclared = hasSessionActiveLaneDeclaration(typedStatus);
   const lane = resolveSessionAuthoringDiscretization(typedStatus);
-  return laneDeclared
+  const requiresMesh = laneDeclared
     ? lane === "fem"
     : capabilities?.explicit_topology === true || lane === "fem";
+  if (!requiresMesh) return false;
+
+  const readinessResource = asRecord(context.resourceData?.[MODEL_READINESS_PATH]);
+  const readiness = asRecord(readinessResource?.data ?? readinessResource);
+  const sceneRevision = finiteRevision(asRecord(laneStatus?.resources)?.scene_revision);
+  const preparationOwnsMesh =
+    sceneRevision !== null &&
+    readiness?.scene_revision === sceneRevision &&
+    readiness.ready_to_run === true &&
+    readiness.preparation_owns_mesh === true;
+  return !preparationOwnsMesh;
 }

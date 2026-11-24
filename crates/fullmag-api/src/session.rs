@@ -2165,7 +2165,7 @@ fn is_antenna_field_only(current: &SessionStateResponse) -> bool {
         .and_then(|value| value.get("backend_plan"))
         .and_then(|value| value.get("kind"))
         .and_then(Value::as_str)
-        == Some("antenna_field_only")
+        .is_some_and(|kind| matches!(kind, "antenna_field_only" | "antenna_retained_current_field_inspection"))
 }
 
 /// Remove inherited magnetic/unqualified carriers at preparation publication.
@@ -8489,6 +8489,32 @@ mod tests {
         let revisions = (current.mesh_revision, current.field_catalog_revision, current.field_samples_revision);
         finalize_current_live_apply(&mut current, CurrentLiveApplyFlags::default()).unwrap();
         assert_eq!(revisions, (current.mesh_revision, current.field_catalog_revision, current.field_samples_revision));
+    }
+
+    #[test]
+    fn retained_current_snapshot_keeps_sampling_mesh_and_clears_magnetic_state() {
+        let mut current = test_current_snapshot();
+        current.fem_mesh = Some(domain_fem_mesh("h-only-target").into());
+        current.latest_fields = serde_json::from_value(json!({
+            "m":{"values":[[1.0,0.0,0.0]]},
+            "frozen_spins":{"values":[1.0]},
+            "mat_ms":{"values":[800_000.0]},
+            "H_eff":{"values":[[0.0,1.0,0.0]]},
+        })).unwrap();
+        current.preview_cache.insert(preview_field("m"));
+        current.live_state = Some(live_state_with_magnetization(4, vec![1.0,0.0,0.0]));
+        let profile = serde_json::to_value(&current.solver_profile).unwrap();
+        let request: CurrentLiveSnapshotRequest = serde_json::from_value(json!({
+            "session_id":"test-session", "metadata":{"execution_plan":{"backend_plan":{
+                "kind":"antenna_retained_current_field_inspection"}}},
+        })).unwrap();
+        apply_current_live_snapshot(&mut current, request).unwrap();
+        assert_eq!(current.fem_mesh.as_ref().unwrap().generation_id.as_deref(), Some("h-only-target"));
+        assert!(current.live_state.is_none());
+        assert_eq!(current.latest_fields.len(), 0);
+        assert!(current.preview_cache.is_empty());
+        assert!(current.quantities.is_empty());
+        assert_eq!(serde_json::to_value(&current.solver_profile).unwrap(), profile);
     }
 
     #[test]

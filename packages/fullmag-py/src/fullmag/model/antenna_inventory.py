@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 from fullmag.model.antenna import (
@@ -24,10 +25,10 @@ class AntennaAuthoringInventory:
     solved_antenna_drives: tuple[SolvedAntennaDrive, ...] = ()
     antenna_spectrum_requests: tuple[AntennaSpectrumRequest, ...] = ()
 
-    def to_ir(self) -> dict[str, list[dict[str, object]]]:
+    def to_ir(self, *, source_root: str | Path | None = None) -> dict[str, list[dict[str, object]]]:
         """Serialize declarations separately from active ProblemIR collections."""
         return {
-            collection: [item.to_ir() for item in getattr(self, collection)]
+            collection: [(item.to_ir(source_root=source_root) if collection == "antenna_field_solve_stages" else item.to_ir()) for item in getattr(self, collection)]
             for collection in self.__dataclass_fields__
         }
 

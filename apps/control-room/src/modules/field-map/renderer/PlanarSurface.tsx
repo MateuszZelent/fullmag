@@ -51,6 +51,8 @@ export interface PlanarProfileSegment {
 
 interface PlanarSurfaceProps {
   model: FieldMapRenderModel;
+  /** Explicit display-only expansion; physical bounds and samples stay unchanged. */
+  verticalExaggeration?: 1 | 10 | 100;
   onInteraction?: (interaction: PlanarInteraction) => void;
   onPin?: (u: number, v: number) => void;
   /** Shift + drag draws a line-profile segment; Escape clears it (F6 B1). */
@@ -87,6 +89,7 @@ function measuredCanvasSize(canvas: HTMLCanvasElement): { height: number; width:
 
 export function PlanarSurface({
   model,
+  verticalExaggeration = 1,
   onInteraction,
   onPin,
   onProfileSegment,
@@ -130,7 +133,7 @@ export function PlanarSurface({
     overlayRef,
     plotSize,
     renderStateRef,
-  } = usePlanarSurfaceRenderer(model, onRenderEvidence);
+  } = usePlanarSurfaceRenderer(model, onRenderEvidence, verticalExaggeration);
   const axisFrame = useMemo(() => ({
     normal: model.frame.normal,
     origin: model.frame.origin,
@@ -168,9 +171,9 @@ export function PlanarSurface({
     drawOverlayRef.current();
   }, [drawOverlayRef, model.layers.probes, renderStateRef]);
 
-  // The plot area is a size container so the canvas keeps the physical
-  // u:v aspect ratio whichever dimension (width or height) is limiting.
-  const aspect = Math.abs((model.bounds[1] - model.bounds[0]) / (model.bounds[3] - model.bounds[2])) || 1;
+  // Keep physical u:v proportions unless the user explicitly expands v.
+  // Only the canvas aspect and displayed arrow angles change.
+  const aspect = (Math.abs((model.bounds[1] - model.bounds[0]) / (model.bounds[3] - model.bounds[2])) || 1) / verticalExaggeration;
   const summaryId = useId();
   const length = (metres: number) =>
     formatValueWithUnit(metres * axes.displayLengthUnit.scale, axes.displayLengthUnit.symbol);
@@ -202,6 +205,7 @@ export function PlanarSurface({
       : model.range
         ? `colour range ${formatValueWithUnit(model.range.min * model.display.probeScale, model.display.legendUnit)} to ${formatValueWithUnit(model.range.max * model.display.probeScale, model.display.legendUnit)}`
         : "colour range unavailable",
+    verticalExaggeration === 1 ? "Equal physical axis scales" : `Vertical axis ×${verticalExaggeration}; display only`,
     "Arrow keys pan, plus and minus zoom, 0 fits, Enter pins a probe or applies a crop, Shift and drag draws a line profile, Escape cancels the current tool.",
   ].join("; ");
   return (
@@ -223,6 +227,7 @@ export function PlanarSurface({
           className="fm-field-map__canvas"
           role="img"
           data-probes-enabled={String(model.layers.probes)}
+          data-vertical-exaggeration={verticalExaggeration}
           // Keyboard pan, zoom and fit must stay reachable without probes.
           tabIndex={0}
           onClick={(event) => {

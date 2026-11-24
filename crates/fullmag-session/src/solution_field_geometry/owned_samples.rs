@@ -39,10 +39,18 @@ fn decimal_id(value: &str) -> Result<u64> {
     Ok(id)
 }
 
+fn supported_owned_sample_producer(producer: &str, version: &str,
+    role: OwnedSampleGeometryRole, quantity: QuantityId) -> bool {
+    (producer == "fullmag.closed-loop-inspection" && version == "2")
+        || (producer == "fullmag.retained-current-field" && version == "1"
+            && role == OwnedSampleGeometryRole::SampleNodes && quantity == QuantityId::HAnt)
+}
+
 impl SavedOwnedSampleFieldGeometry {
     pub fn validate(&self) -> Result<()> {
         if self.schema_version != OWNED_SAMPLE_GEOMETRY_SCHEMA || self.coordinate_unit != "m"
-            || self.producer_id != "fullmag.closed-loop-inspection" || self.producer_version != "2"
+            || !supported_owned_sample_producer(&self.producer_id, &self.producer_version,
+                self.role, self.descriptor.quantity_id)
             || self.mesh.nodes.is_empty() || self.mesh.nodes.len() > MAX_FEM_P1_GEOMETRY_BYTES as usize / 64
             || self.mesh.cells.len() > MAX_FEM_P1_GEOMETRY_BYTES as usize / 16
             || self.mesh.facets.len() > MAX_FEM_P1_GEOMETRY_BYTES as usize / 12
@@ -202,4 +210,30 @@ pub fn read_pinned_solution_owned_sample_geometry(store: &SessionStore, pinned: 
     let geometry = read_saved_owned_sample_geometry(store.cas(), &manifest.geometry)?;
     validate_saved_owned_sample_tensor(&geometry, &resolved.tensor)?;
     Ok(Some((manifest, geometry)))
+}
+
+#[cfg(test)]
+mod retained_current_producer_tests {
+    use super::*;
+    #[test]
+    fn retained_current_geometry_grant_is_only_raw_h_sample_nodes() {
+        assert!(supported_owned_sample_producer("fullmag.retained-current-field", "1",
+            OwnedSampleGeometryRole::SampleNodes, QuantityId::HAnt));
+        for role in [OwnedSampleGeometryRole::SourceNodes, OwnedSampleGeometryRole::Tet4CellLocalNodes] {
+            assert!(!supported_owned_sample_producer("fullmag.retained-current-field", "1", role, QuantityId::HAnt));
+        }
+        for quantity in [QuantityId::VElectric, QuantityId::JCharge, QuantityId::M] {
+            assert!(!supported_owned_sample_producer("fullmag.retained-current-field", "1",
+                OwnedSampleGeometryRole::SampleNodes, quantity));
+        }
+        for (producer, version) in [("fullmag.retained-current-field", "2"), ("unknown", "1"),
+            ("fullmag.closed-loop-inspection", "1")] {
+            assert!(!supported_owned_sample_producer(producer, version, OwnedSampleGeometryRole::SampleNodes, QuantityId::HAnt));
+        }
+        for (role, quantity) in [(OwnedSampleGeometryRole::SourceNodes, QuantityId::VElectric),
+            (OwnedSampleGeometryRole::Tet4CellLocalNodes, QuantityId::JCharge),
+            (OwnedSampleGeometryRole::SampleNodes, QuantityId::HAnt)] {
+            assert!(supported_owned_sample_producer("fullmag.closed-loop-inspection", "2", role, quantity));
+        }
+    }
 }

@@ -163,6 +163,7 @@ describe("existing antenna port editor transactions", () => {
     Object.assign(scene.current_transports![0], { conservative_current_source: {
       schema_version: "conservative_current_source.v2", kind: "closed_geometry_potential_jump", object_id: "signal",
       closure: { kind: "closed_geometry", source_cuts: [{ id: "cut" }] },
+      material_parts: ["signal", "return", "inlet", "outlet"].map(part_id => ({ part_id })),
       terminal_observations: ["signal", "return"].flatMap(part => [
         { id: `${part}-in`, part_id: part, selector: "local_u_min" },
         { id: `${part}-out`, part_id: part, selector: "local_u_max" },

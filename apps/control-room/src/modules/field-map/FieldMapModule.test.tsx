@@ -44,13 +44,19 @@ const mocks = vi.hoisted(() => ({
   },
 }));
 
-vi.mock("@/kernel/KernelContext", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("@/kernel/KernelContext")>()),
-  useKernel: () => ({
-    layout: { get: () => ({ activeViewportMainModuleId: "field-map" }) },
-    visualizationSync: { queuePatch: mocks.queuePatch },
-  }),
-}));
+vi.mock("@/kernel/KernelContext", async (importOriginal) => {
+  const { ObjectVisualizationController } = await import("@/kernel/visualization/ObjectVisualizationController");
+  const visualization = new ObjectVisualizationController();
+  return {
+    ...(await importOriginal<typeof import("@/kernel/KernelContext")>()),
+    useKernel: () => ({
+      api: { resourceCacheScope: "field-map-test" },
+      layout: { get: () => ({ activeViewportMainModuleId: "field-map" }) },
+      visualization,
+      visualizationSync: { queuePatch: mocks.queuePatch },
+    }),
+  };
+});
 
 // The toolbar renders the command registry; PlanarToolbar.test.tsx covers it.
 vi.mock("./components/PlanarToolbar", () => ({

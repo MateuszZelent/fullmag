@@ -453,8 +453,12 @@ def test_live_run_stage_sends_only_the_run_primitive_keys(server) -> None:
     fm.run(1e-10)
     nodes = server.scene["study"]["study_pipeline"]["nodes"]
     run_payload = next(node["payload"] for node in nodes if node["stage_kind"] == "run")
+    # The shared primitive also carries the exact execution-control snapshot.
     assert set(run_payload) <= {
         "kind", "entrypoint_kind", "stage_id", "until_seconds",
+        "interactive_session_requested", "wait_for_solve",
         "output_every_seconds", "autosave", "magnetization_assignments",
     }
+    assert run_payload["interactive_session_requested"] is False
+    assert run_payload["wait_for_solve"] is False
     assert float(run_payload["until_seconds"]) == pytest.approx(1e-10)

@@ -20,6 +20,7 @@ import { SlotHost } from "./SlotHost";
 import { ViewportTabHost } from "./ViewportTabHost";
 import { WorkspaceSideRail } from "./WorkspaceSideRail";
 import { useWorkspaceContentScope } from "./WorkspaceContentScope";
+import { useSavedFieldPresentation } from "../visualization/useObjectVisualization";
 import { useKernel } from "../KernelContext";
 import type { SavedResultsPlaybackSelection } from "../saved-results/SavedResultsPlaybackController";
 import { useSavedResultsPlaybackSelection } from "../saved-results/useSavedResultsPlayback";
@@ -56,10 +57,12 @@ function WorkspaceColumnContent({
 }) {
   const scope = useWorkspaceContentScope();
   const kernel = useKernel();
+  const savedField = useSavedFieldPresentation();
   if (slotId === "viewport-main") {
     if (playbackSelection) {
       return <SlotHost moduleManifest={kernel.modules.get("viewport-3d") ?? null} slotId="viewport-main" />;
     }
+    if (scope === "project" && savedField.projectMatches) return <ViewportTabHost savedOnly />;
     return scope === "project" ? (
       <section className="grid flex-1 place-items-center p-6" aria-label="Saved field preview" data-project-results-preview="unavailable">
         <div className="grid max-w-sm gap-2 text-center">

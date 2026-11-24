@@ -10,6 +10,7 @@ import { artifactUniverseCatalogHasExplicitLiveQuantity, artifactUniverseInspect
 import { useSceneResource } from "@/kernel/resources/geometryLifecycleResources";
 import { ArtifactInspectionSource, useArtifactInspectionSource } from "../ArtifactInspectionSource";
 import type { InspectorPanelProps } from "../../inspectorTypes";
+import { RecordedAirboxField } from "./RecordedAirboxField";
 import {
   VisualizationTargetInspectorPanel,
   type VisualizationInspectorOwner,
@@ -73,6 +74,7 @@ function CurrentAirboxVisualizationPanel({ selection }: InspectorPanelProps) {
       quantityCatalogOverride={(hasInspectionContext || activeQuantityId === "H_ant") && !artifactInspection ? liveCatalog : undefined}
     >
       {hasInspectionContext ? <ArtifactInspectionSource source={source} universe /> : null}
+      {source.retainedOwner ? <RecordedAirboxField owner={source.retainedOwner} /> : null}
     </VisualizationTargetInspectorPanel>
   );
 }

@@ -15,6 +15,8 @@ import uuid
 from docker_build_control import (BuildControl, BuildControlError, ControlOutcomeUnknown,
                                   canonical, docker_capture, toolchain_configuration)
 from docker_volume_reconcile import fingerprint, write_immutable
+from docker_group_ledger import GroupLedgerError
+from docker_group_storage import GroupStorageError
 
 NATIVE_SCHEMA='runtime_service_failed_no_spawn_cancellation.v1'
 SCHEMA='fullmag.docker-no-spawn-cancellation.v1'
@@ -248,6 +250,48 @@ def guest(container,body,inputs):
     return obj(result.stdout,'guest result')
 
 
+def validate_group_ledger(control,document,actual,image_id):
+    from docker_group_ledger import retained_profile,validate_container
+    from docker_group_storage import role_subpath
+    expected=retained_profile(document,image_id)
+    require(expected['compose_project']==control.project,'ledger belongs to another group')
+    if expected.get('ledger_subpath'):
+        require(expected['volume_name']==control.volume
+                and expected['ledger_subpath']==role_subpath(control,'ledger'),
+                'private ledger differs from the authenticated control namespace')
+    # The retained Compose and actual declaration must both preserve nocopy
+    # and writable access; the shared validator authenticates volume/subpath.
+    mounts=[m for m in actual.get('HostConfig',{}).get('Mounts',[])
+            if isinstance(m,dict) and m.get('Target')=='/host-ledger']
+    require(len(mounts)==1 and mounts[0].get('ReadOnly',False) is False
+            and isinstance(mounts[0].get('VolumeOptions'),dict)
+            and mounts[0]['VolumeOptions'].get('NoCopy') is True,
+            'ledger requires one writable nocopy volume declaration')
+    def checked_docker(*arguments):
+        result=docker_capture(*arguments)
+        require(result.returncode==0,'group ledger attestation failed')
+        return result.stdout
+    return validate_container(actual,expected,checked_docker)
+
+
+def read_operator_request(args,control):
+    host=getattr(args,'request',None)
+    relative=getattr(args,'control_request_relative_path',None)
+    require((host is None)!=(relative is None),'exactly one operator request source is required')
+    if relative is not None:
+        require(control.path(relative)=='/control/'+relative,'operator request key must be canonical')
+        require(not relative.startswith('namespaces/'),'operator request must use a logical control key')
+        raw=control.read_bytes(relative,maximum=256*1024)
+    else:
+        request_path=host.absolute()
+        require(request_path.resolve(strict=True)==request_path,'linked request path')
+        raw=request_path.read_bytes()
+    require(sha(raw)==args.request_sha256,'operator request SHA differs')
+    request=obj(raw,'operator request')
+    validate_request_shape(request)
+    return raw,request
+
+
 def cancel(args):
     from docker_development_inputs import select_checkout
     from docker_dev_host import require_host
@@ -259,9 +303,7 @@ def cancel(args):
     identity=compose_project_identity(storage.resolve_layout(selected,'docker-all-gpu'))
     configured=toolchain_configuration(selected,identity)
     control=BuildControl(identity,configured['services']['fem-gpu-toolchain']['build']['args']['FULLMAG_CUDA_BASE_IMAGE'])
-    request_path=args.request.absolute();require(request_path.resolve(strict=True)==request_path,'linked request path')
-    raw=request_path.read_bytes();require(sha(raw)==args.request_sha256,'operator request SHA differs')
-    request=obj(raw,'operator request');validate_request_shape(request)
+    raw,request=read_operator_request(args,control)
     previous_raw=control.read_bytes('development/current.json');previous=obj(previous_raw,'development terminal')
     attempt=previous.get('attempt');require(isinstance(attempt,str) and re.fullmatch('[0-9a-f]{32}',attempt),'invalid development attempt')
     base='development/attempts/'+attempt;compose_raw=control.read_bytes(base+'/compose.json');document=obj(compose_raw,'Compose')
@@ -280,13 +322,7 @@ def cancel(args):
         actual=actual[0];validate_source_labels(actual,identity)
         require(actual.get('Image')==args.image_id and actual.get('State',{}).get('Running')is True,'backend is not the retained running image')
         _validate_retained_service(document,actual,'backend',image['Config'])
-        try:
-            ledger = docker_group_ledger.retained_profile(document, args.image_id)
-            require(not ledger.get('ledger_subpath') or ledger['volume_name'] == control.volume,
-                    'private DEV ledger does not belong to the selected control volume')
-            docker_group_ledger.validate_container(actual, ledger, docker_text)
-        except docker_group_ledger.GroupLedgerError as error:
-            raise BuildControlError('No-spawn cancellation: ' + str(error)) from error
+        validate_group_ledger(control,document,actual,args.image_id)
         if first is not None:require((actual['State']['StartedAt'],fingerprint(actual))==first,'backend restarted or changed')
         require(control.read_bytes('development/current.json')==previous_raw
                 and control.read_bytes(base+'/terminal.json')==previous_raw
@@ -342,7 +378,10 @@ def main():
     p.add_argument('--repo-root',type=Path,default=Path(__file__).resolve().parent.parent)
     p.add_argument('--source-root',type=Path,required=True)
     p.add_argument('--backend-container-id',required=True);p.add_argument('--image-id',required=True)
-    p.add_argument('--process-receipt-sha256',required=True);p.add_argument('--request',type=Path,required=True)
+    p.add_argument('--process-receipt-sha256',required=True)
+    source=p.add_mutually_exclusive_group(required=True)
+    source.add_argument('--request',type=Path)
+    source.add_argument('--control-request-relative-path')
     p.add_argument('--request-sha256',required=True);p.add_argument('--apply',action='store_true')
     p.add_argument('--reconcile-loader-failure');p.add_argument('--failed-receipt-sha256')
     args=p.parse_args()
@@ -353,7 +392,7 @@ def main():
         require(re.fullmatch(r'[0-9a-f]{32}',args.reconcile_loader_failure)
                 and SHA.fullmatch(args.failed_receipt_sha256),'invalid loader reconciliation pins')
     try:print(json.dumps(cancel(args),indent=2))
-    except (ValueError,OSError,BuildControlError) as error:p.exit(2,str(error)+'\n')
+    except (ValueError,OSError,BuildControlError,GroupLedgerError,GroupStorageError) as error:p.exit(2,str(error)+'\n')
 
 
 if __name__=='__main__':main()

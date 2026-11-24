@@ -18,7 +18,7 @@ import {
 import type { MaterializedDatasetResource } from "@/kernel/api/apiTypes";
 import { KernelContext } from "@/kernel/KernelContext";
 import { createCommandContext } from "@/kernel/commands/commandContext";
-import { useProjectDocumentSnapshot } from "@/kernel/persistence/ProjectDocumentStatus";
+import { useSavedResultScope } from "@/kernel/saved-results/useSavedRun";
 import { useMaterializedDatasetResource } from "@/kernel/resources/solutionSetResources";
 import { useFieldMetaResource } from "@/kernel/resources/studyRuntimeResources";
 import {
@@ -30,10 +30,7 @@ import { Badge } from "@/shared/ui/Badge";
 import { Button } from "@/shared/ui/Button";
 import type { InspectorPanelProps } from "../../../inspectorTypes";
 import type { InspectorSpec } from "../../../template";
-import {
-  materializedDatasetSelection,
-  materializedDatasetSelectionMatchesProject,
-} from "../../../panels/MaterializedDatasetInspectorPanel.model";
+import { materializedDatasetSelection } from "../../../panels/MaterializedDatasetInspectorPanel.model";
 import { MaterializedDatasetValues } from "../../../panels/MaterializedDatasetValues";
 import { SavedFieldVisualizationPanel } from "../../../panels/SavedFieldVisualizationPanel";
 import { savedFieldPresentationForDataset } from "../../../panels/SavedFieldVisualizationPanel.model";
@@ -51,6 +48,7 @@ export function MaterializedDatasetTemplateInspectorPanel(
     <MaterializedDatasetTemplateView
       {...props}
       activeProjectId={null}
+      activeRunId={null}
       dataset={null}
       errorMessage={null}
       matRef={materializedDatasetSelection(props.selection)}
@@ -65,13 +63,9 @@ export function MaterializedDatasetTemplateInspectorPanel(
 function ConnectedMaterializedDatasetTemplatePanel(props: InspectorPanelProps) {
   const kernel = useContext(KernelContext);
   const matRef = materializedDatasetSelection(props.selection);
-  const project = useProjectDocumentSnapshot();
+  const scope = useSavedResultScope();
   const { presentation } = useSavedFieldPresentation();
-  const activeProjectId =
-    project.state === "ready" ? project.resource.project_id : null;
-  const projectMatches =
-    matRef !== null &&
-    materializedDatasetSelectionMatchesProject(matRef, activeProjectId);
+  const projectMatches = scope.matches(matRef);
   const resource = useMaterializedDatasetResource(
     matRef?.projectId,
     matRef?.runId,
@@ -88,7 +82,8 @@ function ConnectedMaterializedDatasetTemplatePanel(props: InspectorPanelProps) {
   return (
     <MaterializedDatasetTemplateView
       {...props}
-      activeProjectId={activeProjectId}
+      activeProjectId={scope.projectId}
+      activeRunId={scope.runId}
       dataset={resource.data ?? null}
       errorMessage={resource.error?.message ?? null}
       matRef={matRef}
@@ -118,6 +113,7 @@ function formatDatasetFunctionSpace(
 
 function MaterializedDatasetTemplateView({
   activeProjectId,
+  activeRunId,
   dataset,
   errorMessage,
   matRef,
@@ -129,6 +125,7 @@ function MaterializedDatasetTemplateView({
   selection,
 }: InspectorPanelProps & {
   activeProjectId: string | null;
+  activeRunId: string | null;
   dataset: MaterializedDatasetResource | null;
   errorMessage: string | null;
   matRef: ReturnType<typeof materializedDatasetSelection>;
@@ -150,6 +147,9 @@ function MaterializedDatasetTemplateView({
       return kernel ? "Pinned dataset selection is missing." : null;
     }
     if (!projectMatches) {
+      if (activeRunId) {
+        return `The pinned dataset belongs to run ${matRef.runId} in project ${matRef.projectId}. Open that saved run to inspect it.`;
+      }
       return `The pinned dataset belongs to project ${matRef.projectId}, but the active project is ${activeProjectId ?? "not open"}. Open the owning project to inspect it.`;
     }
     if (errorMessage) {
@@ -159,7 +159,7 @@ function MaterializedDatasetTemplateView({
       return "The returned manifest does not match the selected immutable identity.";
     }
     return null;
-  }, [activeProjectId, errorMessage, identityMismatch, kernel, matRef, projectMatches]);
+  }, [activeProjectId, activeRunId, errorMessage, identityMismatch, kernel, matRef, projectMatches]);
 
   const statusNotice = useMemo(() => {
     if (alertMessage || !matRef || !kernel) return null;
@@ -234,11 +234,18 @@ function MaterializedDatasetTemplateView({
           ? [{ id: "mat-status", tone: "info" as const, text: statusNotice }]
           : []),
       ],
+      modeTabs: [
+        { id: "overview", label: "Overview" },
+        { id: "data", label: "Data" },
+        { id: "provenance", label: "Provenance" },
+        { id: "diagnostics", label: "Diagnostics" },
+      ],
       sections: [
         ...(validDataset && savedPresentation
           ? [
               {
                 id: "saved-field-3d",
+                modeTabId: "overview",
                 title: "Saved Field 3D Visualization",
                 icon: Layers,
                 defaultOpen: true,
@@ -261,6 +268,7 @@ function MaterializedDatasetTemplateView({
           : []),
         {
           id: "pinned-identity",
+          modeTabId: "provenance",
           title: "Pinned Identity",
           icon: GitCommit,
           defaultOpen: true,
@@ -318,6 +326,7 @@ function MaterializedDatasetTemplateView({
           ? [
               {
                 id: "dataset-status",
+                modeTabId: "diagnostics",
                 title: "Dataset Status & Assessment",
                 icon: Activity,
                 defaultOpen: true,
@@ -332,7 +341,7 @@ function MaterializedDatasetTemplateView({
                           Availability {validDataset.dataset.status.availability}
                         </Badge>
                         <Badge variant="secondary">
-                          Execution {validDataset.owner_execution_status}
+                          Owner revision execution {validDataset.owner_execution_status}
                         </Badge>
                         <Badge variant="secondary">
                           Assessment {validDataset.owner_scientific_assessment.status}
@@ -370,6 +379,7 @@ function MaterializedDatasetTemplateView({
               },
               {
                 id: "field-semantics",
+                modeTabId: "overview",
                 title: "Field Semantics",
                 icon: Sigma,
                 defaultOpen: true,
@@ -432,6 +442,7 @@ function MaterializedDatasetTemplateView({
               },
               {
                 id: "coverage-provenance",
+                modeTabId: "provenance",
                 title: "Zarr Coverage, Chunks & Provenance",
                 icon: Database,
                 defaultOpen: true,
@@ -488,6 +499,15 @@ function MaterializedDatasetTemplateView({
                     mono: true,
                     format: () => validDataset.source.tensor_object_ref,
                   },
+                ],
+              },
+              {
+                id: "windowed-values",
+                modeTabId: "data",
+                title: "Windowed Values",
+                icon: Database,
+                defaultOpen: true,
+                rows: [
                   {
                     type: "custom" as const,
                     label: "Windowed values",

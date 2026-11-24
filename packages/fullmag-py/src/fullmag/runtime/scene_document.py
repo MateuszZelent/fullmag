@@ -5,6 +5,7 @@ import math
 from collections.abc import Mapping, Sequence
 from typing import Any
 
+from fullmag.runtime.execution_intent import validate_execution_intent_fields
 from fullmag.runtime.material_assets import (
     canonical_material_assets,
     material_assets_from_scene,
@@ -1772,6 +1773,22 @@ def _validated_rotated_dmi_object_ids(
     return list(term.object_ids or ())
 
 
+def _validate_stage_execution_intent(stages: object, pipeline: object) -> None:
+    for index, stage in enumerate(stages if isinstance(stages, list) else []):
+        if isinstance(stage, Mapping):
+            validate_execution_intent_fields(stage, context=f"study.stages[{index}]")
+
+    def visit(nodes: object) -> None:
+        for node in nodes if isinstance(nodes, list) else []:
+            if isinstance(node, Mapping):
+                payload = node.get("payload")
+                if isinstance(payload, Mapping):
+                    validate_execution_intent_fields(payload, context="study.study_pipeline.payload")
+                visit(node.get("children"))
+    if isinstance(pipeline, Mapping):
+        visit(pipeline.get("nodes"))
+
+
 def _scene_field_drives(builder: Mapping[str, object]) -> dict[str, object]:
     """Regional drives and mask antennas of the builder (mask list omitted when empty)."""
     state: dict[str, object] = {"drives": copy.deepcopy(builder.get("field_drives") or [])}
@@ -1782,6 +1799,8 @@ def _scene_field_drives(builder: Mapping[str, object]) -> dict[str, object]:
 
 
 def build_scene_document_from_builder(builder: dict[str, Any]) -> dict[str, Any]:
+    execution_intent = validate_execution_intent_fields(builder, context="builder")
+    _validate_stage_execution_intent(builder.get("stages"), builder.get("study_pipeline"))
     geometries = builder.get("geometries") or []
     rotated_dmi_object_ids = _validated_rotated_dmi_object_ids(
         builder.get("rotated_interfacial_dmi_object_ids"),
@@ -1800,6 +1819,7 @@ def build_scene_document_from_builder(builder: dict[str, Any]) -> dict[str, Any]
     material_assignments = material_metadata["assignments"] if material_metadata is not None else {}
     object_ids = material_metadata["object_ids"] if material_metadata is not None else {}
     magnetization_assets: list[dict[str, Any]] = []
+    hidden_object_ids = set(builder.get("hidden_scene_object_ids") or [])
 
     for geometry in geometries:
         name = str(geometry.get("name", "object"))
@@ -1835,6 +1855,7 @@ def build_scene_document_from_builder(builder: dict[str, Any]) -> dict[str, Any]
                 "name": name,
                 "role": role,
                 "geometry": {
+                    **({"geometry_name": geometry["geometry_name"]} if "geometry_name" in geometry else {}),
                     **imported_geometry_source_asset_fields(geometry),
                     "geometry_kind": str(geometry.get("geometry_kind", "")),
                     "geometry_params": geometry_params,
@@ -1858,7 +1879,7 @@ def build_scene_document_from_builder(builder: dict[str, Any]) -> dict[str, Any]
                 "allocated_region_ids": allocated_region_ids,
                 "material_parameter_fields": geometry.get("material_parameter_fields") or [],
                 "visualization_hint": geometry.get("visualization_hint") or {},
-                "visible": True,
+                "visible": object_id not in hidden_object_ids,
                 "locked": False,
                 "tags": [f"role:{role}"] if is_auxiliary else [],
             }
@@ -2014,8 +2035,14 @@ def build_scene_document_from_builder(builder: dict[str, Any]) -> dict[str, Any]
             "active_transform_scope": None,
         },
     }
+    document["study"].update(execution_intent)
     if rotated_dmi_object_ids is not None:
         document["study"]["rotated_interfacial_dmi_object_ids"] = rotated_dmi_object_ids
+    if "shared_domain_mesh_source" in builder:
+        from fullmag.runtime.domain_mesh_source import validate_scene_domain_marker_owners
+        document["study"]["shared_domain_mesh_source"] = validate_scene_domain_marker_owners(
+            builder["shared_domain_mesh_source"], document["objects"]
+        )
     if builder.get("fem_domain_mesh") is not None:
         fem_domain_mesh = validate_fem_domain_mesh_reference(
             builder["fem_domain_mesh"], context="builder.fem_domain_mesh"
@@ -2178,6 +2205,7 @@ def build_builder_from_scene_document(scene: dict[str, Any]) -> dict[str, Any]:
 
     object_ids: set[str] = set()
     geometry_names: set[str] = set()
+    geometry_keys: set[str] = set()
     magnetic_aliases = {
         str(obj.get("name") or "").strip() or str(obj.get("id") or "")
         for obj in scene.get("objects") or []
@@ -2197,6 +2225,16 @@ def build_builder_from_scene_document(scene: dict[str, Any]) -> dict[str, Any]:
             raise ValueError("geometry name must be a string")
         name = raw_name.strip() or object_id
         is_auxiliary = role != "magnet"
+        raw_geometry_key = (obj.get("geometry") or {}).get("geometry_name")
+        if raw_geometry_key is not None and (
+            not isinstance(raw_geometry_key, str) or not raw_geometry_key
+            or raw_geometry_key.strip() != raw_geometry_key
+        ):
+            raise ValueError("geometry_name must be nonempty without surrounding whitespace")
+        geometry_key = raw_geometry_key or (name if is_auxiliary else name + "_geom")
+        if geometry_key in geometry_keys:
+            raise ValueError(f"duplicate geometry key {geometry_key!r}")
+        geometry_keys.add(geometry_key)
         if object_id in object_ids:
             raise ValueError(f"duplicate immutable object ID '{object_id}'")
         if name in geometry_names:
@@ -2275,6 +2313,7 @@ def build_builder_from_scene_document(scene: dict[str, Any]) -> dict[str, Any]:
             "name": name,
             "role": role,
             "region_name": obj.get("region_name"),
+            **({"geometry_name": geometry["geometry_name"]} if "geometry_name" in geometry else {}),
             **imported_geometry_source_asset_fields(geometry),
             "geometry_kind": str(geometry.get("geometry_kind", "")),
             "geometry_params": geometry_params,
@@ -2295,6 +2334,8 @@ def build_builder_from_scene_document(scene: dict[str, Any]) -> dict[str, Any]:
         geometries.append(entry)
 
     study = dict(scene.get("study") or {})
+    execution_intent = validate_execution_intent_fields(study, context="SceneDocument.study")
+    _validate_stage_execution_intent(study.get("stages"), study.get("study_pipeline"))
     output_storage = study.get("output_storage")
     if output_storage is not None:
         if not isinstance(output_storage, Mapping):
@@ -2450,11 +2491,21 @@ def build_builder_from_scene_document(scene: dict[str, Any]) -> dict[str, Any]:
         "output_storage": study.get("output_storage"),
         "initial_state": study.get("initial_state"),
         "geometries": geometries,
+        "hidden_scene_object_ids": sorted(
+            obj["id"] for obj in scene.get("objects") or [] if obj.get("visible") is False
+        ),
         "material_assets": material_assets_from_scene(scene),
         "couplings": scene.get("couplings") or [],
         "current_modules": [*antenna_modules, *transports],
         "excitation_analysis": excitation_analysis,
     }
+    builder.update(execution_intent)
+    if "shared_domain_mesh_source" in study:
+        from fullmag.runtime.domain_mesh_source import validate_scene_domain_marker_owners
+        source = validate_scene_domain_marker_owners(study["shared_domain_mesh_source"], scene.get("objects") or [])
+        if source["kind"] == "explicit" and builder.get("requested_backend", builder.get("backend")) == "fdm":
+            raise ValueError("shared_domain_mesh_source requires FEM")
+        builder["shared_domain_mesh_source"] = source
     fem_domain_mesh = study.get("fem_domain_mesh")
     if fem_domain_mesh is not None:
         builder["fem_domain_mesh"] = validate_fem_domain_mesh_reference(
@@ -2577,8 +2628,10 @@ def build_builder_from_scene_document(scene: dict[str, Any]) -> dict[str, Any]:
             builder[collection] = copy.deepcopy(value)
             if collection == "antenna_field_solve_stages":
                 for stage in builder[collection]:
-                    if isinstance(stage, dict) and stage.get("conservative_current_view_ref") is None:
-                        stage.pop("conservative_current_view_ref", None)
+                    if isinstance(stage, dict):
+                        for key in ("conservative_current_view_ref", "retained_current_source"):
+                            if stage.get(key) is None:
+                                stage.pop(key, None)
     return builder
 
 
@@ -2785,6 +2838,7 @@ def builder_overrides_from_scene_document(scene: dict[str, Any]) -> dict[str, An
         "universe": builder.get("universe"),
         "stages": [
             {
+                **validate_execution_intent_fields(stage, context="SceneDocument.study.stages"),
                 "kind": stage.get("kind"),
                 "entrypoint_kind": stage.get("entrypoint_kind"),
                 "integrator": stage.get("integrator") or stage.get("solver") or None,
@@ -2855,6 +2909,7 @@ def builder_overrides_from_scene_document(scene: dict[str, Any]) -> dict[str, An
         "output_storage": builder.get("output_storage"),
         "initial_state": builder.get("initial_state"),
         "geometries": builder.get("geometries") or [],
+        "hidden_scene_object_ids": builder["hidden_scene_object_ids"],
         "material_assets": builder.get("material_assets"),
         "couplings": builder.get("couplings") or [],
         "field_drives": builder.get("field_drives") or [],
@@ -2863,6 +2918,8 @@ def builder_overrides_from_scene_document(scene: dict[str, Any]) -> dict[str, An
         "current_modules": builder.get("current_modules") or [],
         "excitation_analysis": builder.get("excitation_analysis"),
     }
+    if "shared_domain_mesh_source" in builder:
+        overrides["shared_domain_mesh_source"] = copy.deepcopy(builder["shared_domain_mesh_source"])
     mesh_override = overrides["mesh"]
     for key in (
         "domain_mesh_mode",
@@ -2938,6 +2995,7 @@ def builder_overrides_from_scene_document(scene: dict[str, Any]) -> dict[str, An
                         for key, value in raw_grid.items()
                     }
         overrides["fdm"] = fdm
+    overrides.update(validate_execution_intent_fields(builder, context="SceneDocument.study"))
     overrides.update(_execution_profile_fields(builder, "SceneDocument.study"))
     overrides.update(_compute_resources_fields(builder, "SceneDocument.study"))
     return overrides

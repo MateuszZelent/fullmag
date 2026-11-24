@@ -181,7 +181,17 @@ pub(crate) fn submit_run_request(request: &Value, api_url: &str, submit_only: bo
             .post(runs_url.clone())
             .json(&request)
             .send()
-            .with_context(|| format!("POST {runs_url}"))?,
+            .with_context(|| {
+                format!(
+                    "POST {runs_url}: Submit outcome is unconfirmed for project `{project_id}`, \
+                 run `{run_id}`, payload fingerprint `{fingerprint}`. This command has not \
+                 retried Submit. Before submitting again, GET {run_url} and verify \
+                 project_id, run_id and payload_fingerprint; a transport error alone \
+                 does not show whether the backend accepted the run",
+                    project_id = project_id.as_str(),
+                    run_id = run_id.as_str(),
+                )
+            })?,
         &[StatusCode::OK, StatusCode::CREATED],
     )?;
     validate_run_receipt(run_id, &fingerprint, &submit)

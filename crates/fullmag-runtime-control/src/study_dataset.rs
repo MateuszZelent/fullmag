@@ -47,10 +47,14 @@ pub(crate) fn attach_recorded_datasets(
                     let tensor = fullmag_session::solution_tensor_source::read_solution_tensor_artifact(store.cas(), artifact)?;
                     if tensor.field_binding.as_ref().is_some_and(|binding|
                         binding.descriptor.quantity_id != fullmag_quantities::QuantityId::M) {
-                        if let Some(geometry) = crate::study_inspection_sample_geometry::build(
-                            store, solution, member, artifact, &tensor)? {
-                            additions.push((member_index, geometry));
-                        }
+                        let geometry = if tensor.field_binding.as_ref().is_some_and(|binding|
+                            binding.producer_id == crate::solution_set::retained_current_tensor::PRODUCER_ID) {
+                            crate::solution_set::retained_current_tensor::build_geometry(
+                                store, solution, member, artifact, &tensor)?
+                        } else {
+                            crate::study_inspection_sample_geometry::build(store, solution, member, artifact, &tensor)?
+                        };
+                        if let Some(geometry) = geometry { additions.push((member_index, geometry)); }
                         continue;
                     }
                     if semantics.is_none() {

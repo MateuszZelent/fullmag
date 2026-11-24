@@ -1244,6 +1244,22 @@ fn current_live_metadata(
     plan: &ExecutionPlanIR,
     status: &str,
 ) -> serde_json::Value {
+    if matches!(&plan.backend_plan, BackendPlanIR::AntennaRetainedCurrentFieldInspection(_) | BackendPlanIR::AntennaRetainedDirectFieldInspection(_) | BackendPlanIR::AntennaRetainedPreparationFieldInspection(_)) {
+        return serde_json::json!({
+            "problem_name": &problem.problem_meta.name,
+            "ir_version": &problem.ir_version,
+            "source_hash": &problem.problem_meta.source_hash,
+            "execution_plan": plan,
+            "inspection_carrier_only": true,
+            "magnetic_state_present": false,
+            "runtime_engine": null,
+            "resolved_execution": null,
+            "execution_status": "requires_typed_accepted_worker",
+            "qualification": "NOT VERIFIED",
+            "artifact_layout": current_artifact_layout(problem, plan),
+            "status": status,
+        });
+    }
     if antenna_external_lead_inspection::is_carrier(plan) {
         let closed_loop = plan.provenance.notes.iter().any(|note| note == "antenna_closed_loop_inspection_carrier_only:no_llg_execution");
         let inspection_family = if closed_loop { "antenna_closed_loop_inspection" } else { "antenna_external_lead_inspection" };
@@ -3416,6 +3432,11 @@ fn session_runtime_selection_for_problem(
         requested_mode,
         requested_cpu_threads,
     );
+    if plan.is_some_and(|plan| matches!(
+        &plan.backend_plan, BackendPlanIR::AntennaRetainedCurrentFieldInspection(_) | BackendPlanIR::AntennaRetainedDirectFieldInspection(_) | BackendPlanIR::AntennaRetainedPreparationFieldInspection(_)
+    )) {
+        return selection;
+    }
     if plan.is_some_and(antenna_external_lead_inspection::is_carrier) {
         selection.resolved_backend = Some("fem".into());
         selection.resolved_device = Some("cpu".into());
@@ -3469,6 +3490,7 @@ fn fem_mesh_payload_from_backend_plan(
     backend_plan: &BackendPlanIR,
 ) -> Option<fullmag_runner::FemMeshPayload> {
     match backend_plan {
+        BackendPlanIR::AntennaRetainedCurrentFieldInspection(_) | BackendPlanIR::AntennaRetainedDirectFieldInspection(_) | BackendPlanIR::AntennaRetainedPreparationFieldInspection(_) => None,
         BackendPlanIR::AntennaFieldOnly(plan) => Some(fullmag_runner::StageFemMeshAsset::build_from_antenna_field_only_plan(plan).payload),
         BackendPlanIR::Fem(fem) => Some(fullmag_runner::FemMeshPayload::from(fem)),
         BackendPlanIR::FemEigen(fem) => Some(fullmag_runner::FemMeshPayload::from(fem)),
@@ -3502,6 +3524,9 @@ fn initial_live_state_manifest_from_backend_plan(
     continuation_magnetization: Option<&[[f64; 3]]>,
 ) -> anyhow::Result<(LiveStateManifest, Option<fullmag_runner::FemMeshPayload>)> {
     let mut live_state = live_state_manifest_from_update(update.clone());
+    if matches!(backend_plan, BackendPlanIR::AntennaRetainedCurrentFieldInspection(_) | BackendPlanIR::AntennaRetainedDirectFieldInspection(_) | BackendPlanIR::AntennaRetainedPreparationFieldInspection(_)) {
+        bail!("retained-current H-only live state requires its typed accepted worker; generic magnetic-state publication is forbidden");
+    }
     if matches!(backend_plan, BackendPlanIR::AntennaFieldOnly(_)) {
         if continuation_magnetization.is_some_and(|values| !values.is_empty()) {
             bail!("field_only cannot inherit magnetic continuation state");
@@ -3756,6 +3781,7 @@ fn adaptive_remesh_legality_reason(problem: &ProblemIR) -> Option<&'static str> 
 
 fn adaptive_remesh_backend_legality_reason(backend_plan: &BackendPlanIR) -> Option<&'static str> {
     let domain_mesh_mode = match backend_plan {
+        BackendPlanIR::AntennaRetainedCurrentFieldInspection(_) | BackendPlanIR::AntennaRetainedDirectFieldInspection(_) | BackendPlanIR::AntennaRetainedPreparationFieldInspection(_) => return Some("retained_current_h_only_requires_owned_target_rebinding"),
         BackendPlanIR::AntennaFieldOnly(_) => return Some("field_only_remesh_requires_explicit_source_rebinding"),
         BackendPlanIR::Fem(plan) => Some(plan.domain_mesh_mode),
         BackendPlanIR::FemEigen(plan) => Some(plan.domain_mesh_mode),
@@ -4037,6 +4063,10 @@ fn refresh_materialized_stage_execution_plans(
 }
 
 fn plan_materialized_stage_snapshot(stage: &ResolvedScriptStage) -> Result<ExecutionPlanIR> {
+    if matches!(&stage.action, Some(ResolvedScriptStageAction::AntennaRetainedCurrentInspection { .. }
+        | ResolvedScriptStageAction::AntennaRetainedDirectInspection { .. } | ResolvedScriptStageAction::AntennaRetainedPreparationInspection { .. })) {
+        bail!("retained-current H-only inspection requires the accepted task preparation and worker; the legacy CLI stage executor cannot load its durable parent or start fresh current transport");
+    }
     if let Some(ResolvedScriptStageAction::AntennaClosedLoopInspection {
         input, requested_execution, output_id,
     }) = &stage.action {
@@ -4066,7 +4096,11 @@ fn plan_materialized_stage_snapshot(stage: &ResolvedScriptStage) -> Result<Execu
             )
         });
     }
-    fullmag_plan::plan(&planning_ir).map_err(|error| anyhow!(error.to_string()))
+    let plan = fullmag_plan::plan(&planning_ir).map_err(|error| anyhow!(error.to_string()))?;
+    if matches!(&plan.backend_plan, BackendPlanIR::AntennaRetainedCurrentFieldInspection(_) | BackendPlanIR::AntennaRetainedDirectFieldInspection(_) | BackendPlanIR::AntennaRetainedPreparationFieldInspection(_)) {
+        bail!("retained-current H-only inspection requires its typed accepted preparation and worker; the legacy CLI stage executor cannot load its durable parent or start fresh current transport");
+    }
+    Ok(plan)
 }
 
 /// Re-resolve the dedicated conductor solve solely to calculate the current
@@ -4142,6 +4176,9 @@ pub(super) fn prepare_solved_antenna_drive_activation(
         BackendPlanIR::Fem(_) | BackendPlanIR::Fdm(_) => {}
         BackendPlanIR::FdmMultilayer(_) => {
             bail!("solved antenna drives are not supported by the FDM multilayer lane")
+        }
+        BackendPlanIR::AntennaRetainedCurrentFieldInspection(_) | BackendPlanIR::AntennaRetainedDirectFieldInspection(_) | BackendPlanIR::AntennaRetainedPreparationFieldInspection(_) => {
+            bail!("retained-current H-only inspection is not a qualified solved LLG drive basis")
         }
         BackendPlanIR::AntennaFieldOnly(_) | BackendPlanIR::FemEigen(_) | BackendPlanIR::FemFrequencyResponse(_) => {
             bail!("solved antenna drives are supported only by the FEM time-evolution LLG lane")
@@ -4247,7 +4284,8 @@ pub(super) fn attach_solved_antenna_drive_bases(
             fullmag_runner::materialize_fdm_solved_antenna_drives_v03(problem, plan, &assets)
                 .map_err(|error| anyhow!("materialize solved antenna drives: {}", error.message))
         }
-        BackendPlanIR::AntennaFieldOnly(_)
+        BackendPlanIR::AntennaRetainedCurrentFieldInspection(_) | BackendPlanIR::AntennaRetainedDirectFieldInspection(_) | BackendPlanIR::AntennaRetainedPreparationFieldInspection(_)
+        | BackendPlanIR::AntennaFieldOnly(_)
         | BackendPlanIR::AntennaExternalLeadInspection(_)
         | BackendPlanIR::FdmMultilayer(_)
         | BackendPlanIR::FemEigen(_)
@@ -6028,6 +6066,15 @@ fn attach_stage_antenna_solve_identity(
         return;
     };
     record.antenna_solve_stage_id = match action {
+        Some(ResolvedScriptStageAction::AntennaRetainedDirectInspection { plan }) => {
+            Some(plan.stage.id.clone())
+        }
+        Some(ResolvedScriptStageAction::AntennaRetainedPreparationInspection { plan }) => {
+            Some(plan.stage.id.clone())
+        }
+        Some(ResolvedScriptStageAction::AntennaRetainedCurrentInspection { plan }) => {
+            Some(plan.stage.id.clone())
+        }
         Some(ResolvedScriptStageAction::AntennaClosedLoopInspection { input, .. }) => {
             Some(input.stage.id.clone())
         }
@@ -7516,6 +7563,9 @@ impl fullmag_session::CheckpointSnapshotProvider for PauseCheckpointProvider {
 
 fn checkpoint_resume_error_for_backend_plan(backend_plan: &BackendPlanIR) -> Option<String> {
     match backend_plan {
+        BackendPlanIR::AntennaRetainedCurrentFieldInspection(_) | BackendPlanIR::AntennaRetainedDirectFieldInspection(_) | BackendPlanIR::AntennaRetainedPreparationFieldInspection(_) => Some(
+            "retained-current H-only inspection has no magnetic pause/resume checkpoint".to_string(),
+        ),
         BackendPlanIR::Fdm(fdm) => {
             fullmag_runner::validate_fdm_transport_checkpoint_resume_support(fdm)
                 .err()
@@ -7587,6 +7637,9 @@ fn pause_checkpoint_compatibility(
 
 fn backend_plan_family(backend_plan: &BackendPlanIR) -> &'static str {
     match backend_plan {
+        BackendPlanIR::AntennaRetainedCurrentFieldInspection(_) => "antenna_retained_current_field_inspection",
+        BackendPlanIR::AntennaRetainedDirectFieldInspection(_) => "antenna_retained_direct_field_inspection",
+        BackendPlanIR::AntennaRetainedPreparationFieldInspection(_) => "antenna_retained_preparation_field_inspection",
         BackendPlanIR::AntennaFieldOnly(_) => "fem",
         BackendPlanIR::AntennaExternalLeadInspection(_) => "antenna_external_lead_inspection",
         BackendPlanIR::Fdm(_) => "fdm",
@@ -7947,13 +8000,14 @@ fn current_stage_magnetization_vectors(
     continuation_magnetization: Option<&[[f64; 3]]>,
     backend_plan: &BackendPlanIR,
 ) -> Vec<[f64; 3]> {
-    if matches!(backend_plan, BackendPlanIR::AntennaFieldOnly(_)) {
+    if matches!(backend_plan, BackendPlanIR::AntennaFieldOnly(_) | BackendPlanIR::AntennaRetainedCurrentFieldInspection(_) | BackendPlanIR::AntennaRetainedDirectFieldInspection(_) | BackendPlanIR::AntennaRetainedPreparationFieldInspection(_)) {
         return Vec::new();
     }
     if let Some(current) = continuation_magnetization {
         return current.to_vec();
     }
     match backend_plan {
+        BackendPlanIR::AntennaRetainedCurrentFieldInspection(_) | BackendPlanIR::AntennaRetainedDirectFieldInspection(_) | BackendPlanIR::AntennaRetainedPreparationFieldInspection(_) => Vec::new(),
         BackendPlanIR::AntennaFieldOnly(_) => Vec::new(),
         BackendPlanIR::AntennaExternalLeadInspection(_) => Vec::new(),
         BackendPlanIR::Fdm(fdm) => fdm.initial_magnetization.clone(),
@@ -8517,6 +8571,10 @@ fn execute_synthetic_stage_with_interrupt(
     >,
 ) -> Result<SyntheticStageOutcome> {
     match action {
+        ResolvedScriptStageAction::AntennaRetainedCurrentInspection { .. }
+        | ResolvedScriptStageAction::AntennaRetainedDirectInspection { .. } | ResolvedScriptStageAction::AntennaRetainedPreparationInspection { .. } => {
+            bail!("retained-current H-only inspection requires its accepted parent-bound preparation and worker; synthetic execution and fresh current transport are forbidden");
+        }
         ResolvedScriptStageAction::AntennaClosedLoopInspection {
             input, requested_execution, output_id,
         } => antenna_closed_loop_inspection::execute(
@@ -12428,7 +12486,8 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                     fdm.common_cells[1],
                     fdm.common_cells[2],
                 ],
-                BackendPlanIR::AntennaFieldOnly(_)
+                BackendPlanIR::AntennaRetainedCurrentFieldInspection(_) | BackendPlanIR::AntennaRetainedDirectFieldInspection(_) | BackendPlanIR::AntennaRetainedPreparationFieldInspection(_)
+                | BackendPlanIR::AntennaFieldOnly(_)
                 | BackendPlanIR::AntennaExternalLeadInspection(_)
                 | BackendPlanIR::Fem(_)
                 | BackendPlanIR::FemEigen(_)
@@ -14578,7 +14637,8 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                         fdm.common_cells[1],
                         fdm.common_cells[2],
                     ],
-                    BackendPlanIR::AntennaFieldOnly(_)
+                    BackendPlanIR::AntennaRetainedCurrentFieldInspection(_) | BackendPlanIR::AntennaRetainedDirectFieldInspection(_) | BackendPlanIR::AntennaRetainedPreparationFieldInspection(_)
+                    | BackendPlanIR::AntennaFieldOnly(_)
                     | BackendPlanIR::AntennaExternalLeadInspection(_)
                     | BackendPlanIR::Fem(_)
                     | BackendPlanIR::FemEigen(_)

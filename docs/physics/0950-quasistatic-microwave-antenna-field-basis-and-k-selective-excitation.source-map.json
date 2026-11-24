@@ -1918,6 +1918,678 @@
       "latex": "$C_p,\\operatorname{fl}_p,\\operatorname{fl}_{p,\\Sigma}$",
       "meaning": "Konwersja, zaokrąglenie najbliższe z ties-to-even i sekwencyjny iloczyn skalarny bez FMA.",
       "si_unit": "$1$"
+    },
+    {
+      "id": "retained-h-only-tetrahedron",
+      "latex": "$T$",
+      "meaning": "Prosty element Tet4 zachowanego przewodnika, zarazem domena całki",
+      "si_unit": "$\\mathrm{m^3}$ dla miary objętości"
+    },
+    {
+      "id": "retained-h-only-local-index",
+      "latex": "$i$",
+      "meaning": "Lokalny indeks wierzchołka i przeciwległej ściany, $0,1,2,3$",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "retained-h-only-vertices",
+      "latex": "$\\mathbf v_i$",
+      "meaning": "Zachowany lokalny wierzchołek",
+      "si_unit": "$\\mathrm m$"
+    },
+    {
+      "id": "retained-h-only-edge-matrix",
+      "latex": "$B_T$",
+      "meaning": "Macierz krawędzi od wierzchołka zerowego",
+      "si_unit": "$\\mathrm m$"
+    },
+    {
+      "id": "retained-h-only-determinant",
+      "latex": "$\\det B_T$",
+      "meaning": "Dodatni wyznacznik; sześciokrotność objętości",
+      "si_unit": "$\\mathrm{m^3}$"
+    },
+    {
+      "id": "retained-h-only-face-flux",
+      "latex": "$\\Phi_i$",
+      "meaning": "Całka prądu przez ścianę z normalną ustaloną rosnącymi stable IDs",
+      "si_unit": "$\\mathrm A$"
+    },
+    {
+      "id": "retained-h-only-orientation",
+      "latex": "$s_i$",
+      "meaning": "Znak przejścia normalnej kanonicznej na zewnętrzną",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "retained-h-only-coefficient",
+      "latex": "$c_i$",
+      "meaning": "Generyczny lokalny współczynnik MFEM RT0 ze znakiem",
+      "si_unit": "$\\mathrm A$"
+    },
+    {
+      "id": "retained-h-only-positions",
+      "latex": "$\\mathbf x,\\mathbf r$",
+      "meaning": "Punkt źródłowy i nowy punkt obserwacji",
+      "si_unit": "$\\mathrm m$"
+    },
+    {
+      "id": "retained-h-only-current",
+      "latex": "$\\mathbf J_T$",
+      "meaning": "Prąd RT0 w elemencie",
+      "si_unit": "$\\mathrm{A\\,m^{-2}}$"
+    },
+    {
+      "id": "retained-h-only-field",
+      "latex": "$\\mathbf H$",
+      "meaning": "Pole Oersteda; bez mnożnika przenikalności próżni",
+      "si_unit": "$\\mathrm{A\\,m^{-1}}$"
+    },
+    {
+      "id": "retained-h-only-pi",
+      "latex": "$\\pi$",
+      "meaning": "Stała kołowa",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "retained-h-only-measure",
+      "latex": "$\\mathrm dV$",
+      "meaning": "Miara objętości źródła",
+      "si_unit": "$\\mathrm{m^3}$"
+    },
+    {
+      "id": "surface-count-source-cells",
+      "latex": "$N_{\\mathrm s}$",
+      "meaning": "Liczba komórek Tet4 zachowanego źródła",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "surface-count-targets",
+      "latex": "$N_{\\mathrm t}$",
+      "meaning": "Liczba uporządkowanych punktów oceny",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "surface-sqrt-target-minimum",
+      "latex": "$W_{\\sqrt{},\\mathrm{target}}^{\\min}$",
+      "meaning": "Dolna granica liczby jawnych sqrt na target",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "surface-sqrt-total-minimum",
+      "latex": "$W_{\\sqrt{},\\mathrm{total}}^{\\min}$",
+      "meaning": "Dolna granica liczby jawnych sqrt w całym wywołaniu",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "gsg-convergence-levels",
+      "latex": "$h,c,m,f$",
+      "meaning": "Indeks poziomu oraz coarse/medium/fine, nie numer kroku LLG.",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "gsg-convergence-indices",
+      "latex": "$a,b$",
+      "meaning": "Dwa poziomy porównywanego przyrostu.",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "gsg-convergence-current",
+      "latex": "$I_h$",
+      "meaning": "Podpisany prąd przekroju tego samego zaakceptowanego źródła.",
+      "si_unit": "$\\mathrm A$"
+    },
+    {
+      "id": "gsg-convergence-field",
+      "latex": "$\\mathbf H_h$",
+      "meaning": "Pełny wektor pola przy tym prądzie, na danym węźle.",
+      "si_unit": "$\\mathrm{A\\,m^{-1}}$"
+    },
+    {
+      "id": "gsg-convergence-per-amp",
+      "latex": "$\\mathbf K_h$",
+      "meaning": "Pole na amper, z zachowaniem znaku prądu.",
+      "si_unit": "$\\mathrm{m^{-1}}$"
+    },
+    {
+      "id": "gsg-convergence-delta-current",
+      "latex": "$\\Delta I_{fm},\\Delta I_{mc}$",
+      "meaning": "Bezwzględne zmiany prądu.",
+      "si_unit": "$\\mathrm A$"
+    },
+    {
+      "id": "gsg-convergence-delta-field",
+      "latex": "$\\Delta H_{ab}$",
+      "meaning": "Norma zmiany pełnego wektora pola.",
+      "si_unit": "$\\mathrm{A\\,m^{-1}}$"
+    },
+    {
+      "id": "gsg-convergence-delta-per-amp",
+      "latex": "$\\Delta K_{ab}$",
+      "meaning": "Norma zmiany wektora pola na amper.",
+      "si_unit": "$\\mathrm{m^{-1}}$"
+    },
+    {
+      "id": "gsg-convergence-metric",
+      "latex": "$X,\\Delta X_{fm},\\Delta X_{mc},a_X$",
+      "meaning": "Wybór wielkości, jej przyrosty i odpowiadająca podłoga.",
+      "si_unit": "Odpowiednio $\\mathrm A$, $\\mathrm{A\\,m^{-1}}$ albo $\\mathrm{m^{-1}}$."
+    },
+    {
+      "id": "gsg-convergence-current-floor",
+      "latex": "$a_I$",
+      "meaning": "Bezwzględna podłoga prądu, $10^{-18}$ A.",
+      "si_unit": "$\\mathrm A$"
+    },
+    {
+      "id": "gsg-convergence-relative-current",
+      "latex": "$r_I$",
+      "meaning": "Względna tolerancja prądu, $0{,}01$.",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "gsg-convergence-field-floor",
+      "latex": "$a_H$",
+      "meaning": "Bezwzględna podłoga pola, $5\\times10^{-4}$ A/m.",
+      "si_unit": "$\\mathrm{A\\,m^{-1}}$"
+    },
+    {
+      "id": "gsg-convergence-relative-field",
+      "latex": "$r_H$",
+      "meaning": "Względna tolerancja H i K, $5\\times10^{-4}$.",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "gsg-convergence-per-amp-floor",
+      "latex": "$a_K$",
+      "meaning": "Podłoga pola na amper; nie niezależne dopasowanie.",
+      "si_unit": "$\\mathrm{m^{-1}}$"
+    },
+    {
+      "id": "gsg-convergence-eta",
+      "latex": "$\\eta_h$",
+      "meaning": "Właściwa względna korekta weighted-L2 RT0/H1 z równania `antenna-loop-prereg-independent-h1-rt0`.",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "gsg-convergence-cells",
+      "latex": "$T,N$",
+      "meaning": "Indeks komórki i pełna liczba źródłowych Tet4.",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "gsg-convergence-precision",
+      "latex": "$p$",
+      "meaning": "binary64,80 lub120 cyfr; binary64 może wymagać jawnego fallback do wysokiej precyzji.",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "gsg-convergence-sum-field",
+      "latex": "$\\mathbf H_T^{(p)},\\mathbf H^{(p)}$",
+      "meaning": "Wkład komórki oraz jego suma we wskazanej precyzji.",
+      "si_unit": "$\\mathrm{A\\,m^{-1}}$"
+    },
+    {
+      "id": "gsg-convergence-local-error",
+      "latex": "$e_{p,T},e_{s,T}$",
+      "meaning": "Istniejące lokalne budżety precyzji i whole-face/fan dla komórki.",
+      "si_unit": "$\\mathrm{A\\,m^{-1}}$"
+    },
+    {
+      "id": "gsg-convergence-sum-error",
+      "latex": "$E_p,E_s$",
+      "meaning": "Sumy tych budżetów po wszystkich komórkach.",
+      "si_unit": "$\\mathrm{A\\,m^{-1}}$"
+    },
+    {
+      "id": "gsg-convergence-whole",
+      "latex": "$\\mathbf H_w^{(120)}$",
+      "meaning": "Suma alternatywnej postaci whole-face w120 cyfrach.",
+      "si_unit": "$\\mathrm{A\\,m^{-1}}$"
+    },
+    {
+      "id": "gsg-convergence-norm-sum",
+      "latex": "$S$",
+      "meaning": "Suma norm lokalnych wkładów ścian zwrócona przez istniejącą referencję.",
+      "si_unit": "$\\mathrm{A\\,m^{-1}}$"
+    },
+    {
+      "id": "gsg-convergence-gate",
+      "latex": "$\\tau$",
+      "meaning": "Niezmieniona globalna tolerancja precyzji i formuły.",
+      "si_unit": "$\\mathrm{A\\,m^{-1}}$"
+    },
+    {
+      "id": "gsg-convergence-cancellation",
+      "latex": "$\\kappa$",
+      "meaning": "Globalny wskaźnik cancellation, z istniejącą podłogą pola.",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "gsg-convergence-native",
+      "latex": "$\\mathbf H_n$",
+      "meaning": "Pełny wektor natywny przy tym samym podpisanym prądzie.",
+      "si_unit": "$\\mathrm{A\\,m^{-1}}$"
+    },
+    {
+      "id": "gsg-current-correction-symbol-1",
+      "latex": "$T,i$",
+      "meaning": "Komórka Tet4 i lokalny indeks wierzchołka.",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "gsg-current-correction-symbol-2",
+      "latex": "$\\mathbf e_{T,i}$",
+      "meaning": "Krawędź od lokalnego wierzchołka zerowego do i.",
+      "si_unit": "$\\mathrm m$"
+    },
+    {
+      "id": "gsg-current-correction-symbol-3",
+      "latex": "$d_T,\\lvert T\\rvert$",
+      "meaning": "Dodatni wyznacznik krawędzi i objętość d_T/6.",
+      "si_unit": "$\\mathrm{m^3}$"
+    },
+    {
+      "id": "gsg-current-correction-symbol-4",
+      "latex": "$\\mathbf b_{T,i}$",
+      "meaning": "Gradient lokalnej funkcji P1 dla i od1 do3.",
+      "si_unit": "$\\mathrm{m^{-1}}$"
+    },
+    {
+      "id": "gsg-current-correction-symbol-5",
+      "latex": "$V_{T,i}$",
+      "meaning": "Surowy potencjał o właściwym stable ID na elemencie.",
+      "si_unit": "$\\mathrm V$"
+    },
+    {
+      "id": "gsg-current-correction-symbol-6",
+      "latex": "$\\sigma_T$",
+      "meaning": "Dodatnia skalarna przewodność komórki.",
+      "si_unit": "$\\mathrm{S\\,m^{-1}}$"
+    },
+    {
+      "id": "gsg-current-correction-symbol-7",
+      "latex": "$\\mathbf j_T$",
+      "meaning": "Stały prąd H1 odtworzony z gradientu potencjału.",
+      "si_unit": "$\\mathrm{A\\,m^{-2}}$"
+    },
+    {
+      "id": "gsg-current-correction-symbol-8",
+      "latex": "$\\mathbf J_{T,i}^{\\mathrm{RT0}},\\mathbf q_{T,i}$",
+      "meaning": "Lokalny ślad RT0 i jego różnica względem H1.",
+      "si_unit": "$\\mathrm{A\\,m^{-2}}$"
+    },
+    {
+      "id": "gsg-current-correction-symbol-9",
+      "latex": "$N_\\eta,D_\\eta$",
+      "meaning": "Ważone całki kwadratu korekty i prądu H1.",
+      "si_unit": "$\\mathrm W$"
+    },
+    {
+      "id": "gsg-current-correction-symbol-10",
+      "latex": "$\\eta$",
+      "meaning": "Względna norma korekty; nie residual liniowego solve.",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "gsg-current-correction-partition-part",
+      "latex": "$p$",
+      "meaning": "Część jawnej partycji komórek źródła.",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "gsg-current-correction-partition-energies",
+      "latex": "$N_p,D_p$",
+      "meaning": "Te same całki korekty i H1, ograniczone do części p.",
+      "si_unit": "$\\mathrm W$"
+    },
+    {
+      "id": "gsg-current-correction-partition-eta",
+      "latex": "$\\eta_p$",
+      "meaning": "Względna norma korekty na części; wymaga dodatniego D_p.",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "gsg-current-correction-partition-fraction",
+      "latex": "$f_p$",
+      "meaning": "Udział części w liczniku; niezdefiniowany dla N_eta=0.",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "rt0_stored_point_positions",
+      "latex": "$\\mathbf x_i,x_{i,a},c_a$",
+      "meaning": "zapisane wierzchołki i składowa zapisanego środka",
+      "si_unit": "$\\mathrm m$"
+    },
+    {
+      "id": "rt0_stored_point_determinant",
+      "latex": "$D_K$",
+      "meaning": "dodatni dokładny wyznacznik krawędzi Tet4",
+      "si_unit": "$\\mathrm{m^3}$"
+    },
+    {
+      "id": "rt0_stored_point_flux",
+      "latex": "$\\Phi_i^{\\mathrm{out}}$",
+      "meaning": "kanoniczny moment ściany po konwersji sorted-ID na outward, naprzeciw i",
+      "si_unit": "$\\mathrm A$"
+    },
+    {
+      "id": "rt0_stored_point_values",
+      "latex": "$J^\\star_a,\\widehat J_{i,a},\\widehat J_{c,a}$",
+      "meaning": "kanoniczne RT0 i zachowane próbki",
+      "si_unit": "$\\mathrm{A\\,m^{-2}}$"
+    },
+    {
+      "id": "rt0_stored_point_scale",
+      "latex": "$s_a,\\tau_a$",
+      "meaning": "dotychczasowa skala osiowa i budżet porównania",
+      "si_unit": "$\\mathrm{A\\,m^{-2}}$"
+    },
+    {
+      "id": "rt0_stored_point_indices",
+      "latex": "$i,a,\\varepsilon_{64}$",
+      "meaning": "indeksy wierzchołka/osi i epsilon binary64",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "saved_admissibility_domain",
+      "latex": "$D,\\Gamma^+,\\Gamma^-,\\Gamma_0$",
+      "meaning": "Domena przewodnika po przecięciu, jego wyższa/niższa strona i brzeg izolacyjny",
+      "si_unit": "$\\mathrm{m}$ jako współrzędna geometrii"
+    },
+    {
+      "id": "saved_admissibility_potential",
+      "latex": "$v,V,\\Delta V$",
+      "meaning": "Dopuszczalny potencjał próbny, dokładny potencjał i zadany stały skok",
+      "si_unit": "$\\mathrm{V}$"
+    },
+    {
+      "id": "saved_admissibility_current",
+      "latex": "$\\mathbf q,\\mathbf J$",
+      "meaning": "Próbny i dokładny prąd objętościowy",
+      "si_unit": "$\\mathrm{A\\,m^{-2}}$"
+    },
+    {
+      "id": "saved_admissibility_normal",
+      "latex": "$\\mathbf n,q_n^+,q_n^-$",
+      "meaning": "Zewnętrzna normalna i sparowane ślady normalne prądu",
+      "si_unit": "$1$ dla normalnej; $\\mathrm{A\\,m^{-2}}$ dla śladów"
+    },
+    {
+      "id": "saved_admissibility_sigma",
+      "latex": "$\\sigma$",
+      "meaning": "Dodatnia skalarna przewodność; brak modelu RF w tej analizie",
+      "si_unit": "$\\mathrm{S\\,m^{-1}}$"
+    },
+    {
+      "id": "saved_admissibility_I",
+      "latex": "$I(\\mathbf q)$",
+      "meaning": "Signed prąd przez źródło, zgodny ze skokiem potencjału",
+      "si_unit": "$\\mathrm{A}$"
+    },
+    {
+      "id": "saved_admissibility_power",
+      "latex": "$P_v,P_q,E_{\\mathrm{def}}$",
+      "meaning": "Moc pól próbnych i wymiarowy defekt energetyczny",
+      "si_unit": "$\\mathrm{W}$"
+    },
+    {
+      "id": "saved_admissibility_G",
+      "latex": "$G$",
+      "meaning": "Konduktancja rzeczywistej domeny wielościennej",
+      "si_unit": "$\\mathrm{S}$"
+    },
+    {
+      "id": "saved_admissibility_measures",
+      "latex": "$\\nabla,\\nabla\\cdot,d^3x,dS$",
+      "meaning": "Gradient, dywergencja oraz miary objętości i powierzchni",
+      "si_unit": "$\\mathrm{m^{-1}},\\mathrm{m^{-1}},\\mathrm{m^3},\\mathrm{m^2}$"
+    },
+    {
+      "id": "saved_admissibility_indices",
+      "latex": "$K,F,p,a,b,c,d$",
+      "meaning": "Komórka Tet4, ściana, indeks pary przekroju, trzy kanoniczne wierzchołki i wierzchołek przeciwny",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "saved_admissibility_xyz",
+      "latex": "$\\mathbf x_a,\\mathbf x_b,\\mathbf x_c,\\mathbf x_d$",
+      "meaning": "Zachowane współrzędne binary64 traktowane jako dokładne liczby wymierne",
+      "si_unit": "$\\mathrm{m}$"
+    },
+    {
+      "id": "saved_admissibility_area",
+      "latex": "$\\mathbf A_F$",
+      "meaning": "Kanoniczny wektor powierzchni",
+      "si_unit": "$\\mathrm{m^2}$"
+    },
+    {
+      "id": "saved_admissibility_sign",
+      "latex": "$s_{KF},\\operatorname{sgn}$",
+      "meaning": "Znak outward incidence i funkcja znaku",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "saved_admissibility_flux",
+      "latex": "$f_F,f_{F_p^+}^{\\mathrm{out}},f_{F_p^-}^{\\mathrm{out}}$",
+      "meaning": "Kanoniczny i outward fizyczny strumień przez ścianę",
+      "si_unit": "$\\mathrm{A}$"
+    },
+    {
+      "id": "saved_admissibility_residual",
+      "latex": "$r_K,r_{\\Gamma,p}$",
+      "meaning": "Dokładne lokalne reszty bilansu komórki i pary źródła",
+      "si_unit": "$\\mathrm{A}$"
+    },
+    {
+      "id": "gsg-z-domain",
+      "latex": "$\\Omega_0,\\omega,\\Omega,K$",
+      "meaning": "Nominalna domena3D, footprint2D, zapisana domena3D i Tet4",
+      "si_unit": "$\\mathrm m^3,\\mathrm m^2,\\mathrm m^3,\\mathrm m^3$"
+    },
+    {
+      "id": "gsg-z-coordinates",
+      "latex": "$x,y,z,z_0,z_1,\\mathbf r$",
+      "meaning": "Współrzędne world, granice grubości i punkt",
+      "si_unit": "$\\mathrm m$"
+    },
+    {
+      "id": "gsg-z-potential",
+      "latex": "$V_0,v,V_h$",
+      "meaning": "Potencjał continuum3D, reprezentacja2D i zapisany P1",
+      "si_unit": "$\\mathrm V$"
+    },
+    {
+      "id": "gsg-z-sigma",
+      "latex": "$\\sigma$",
+      "meaning": "Dodatnia skalarna przewodność",
+      "si_unit": "$\\mathrm{S\\,m^{-1}}$"
+    },
+    {
+      "id": "gsg-z-current",
+      "latex": "$J_{0,z},J_k^s,J^h,J^{RT},J^{\\delta}$",
+      "meaning": "Prąd continuumZ, składowa oraz reprezentacje H1, lokalnego RT0 i różnicy",
+      "si_unit": "$\\mathrm{A\\,m^{-2}}$"
+    },
+    {
+      "id": "gsg-z-power",
+      "latex": "$P_k^s$",
+      "meaning": "Całka składowej prądu ważona przez odwrotność sigma",
+      "si_unit": "$\\mathrm W$"
+    },
+    {
+      "id": "gsg-z-affine",
+      "latex": "$q,q_a$",
+      "meaning": "Afiniczna składowa prądu i wartości wierzchołkowe",
+      "si_unit": "$\\mathrm{A\\,m^{-2}}$"
+    },
+    {
+      "id": "gsg-z-volume",
+      "latex": "$|K|,\\mathrm d^3r$",
+      "meaning": "Objętość komórki i miara objętości",
+      "si_unit": "$\\mathrm m^3$"
+    },
+    {
+      "id": "gsg-z-indices",
+      "latex": "$a,k,s$",
+      "meaning": "Indeks wierzchołka, kierunku i reprezentacji",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "gsg-z-ratios",
+      "latex": "$\\rho_z^s,\\eta_k,\\eta$",
+      "meaning": "Ilorazy norm składowychZ i istniejącej korekty",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "gsg-sheet-symbol-0",
+      "latex": "$\\mathbf K_s$",
+      "meaning": "Prąd powierzchniowy po scałkowaniu przez grubość",
+      "si_unit": "$\\mathrm{A\\,m^{-1}}$"
+    },
+    {
+      "id": "gsg-sheet-symbol-1",
+      "latex": "$t,\\ell_e,d_e$",
+      "meaning": "Grubość metalu, długość wspólnej krawędzi FV i odległość środków",
+      "si_unit": "$\\mathrm m$"
+    },
+    {
+      "id": "gsg-sheet-symbol-2",
+      "latex": "$v,v_i,v_j,E_e,\\Delta V$",
+      "meaning": "Potencjały komórek i skok idealnego źródła",
+      "si_unit": "$\\mathrm V$"
+    },
+    {
+      "id": "gsg-sheet-symbol-3",
+      "latex": "$\\sigma$",
+      "meaning": "Skalarna przewodność niezależna od Z",
+      "si_unit": "$\\mathrm{S\\,m^{-1}}$"
+    },
+    {
+      "id": "gsg-sheet-symbol-4",
+      "latex": "$g_e,L$",
+      "meaning": "Przewodność połączenia i macierz przewodności",
+      "si_unit": "$\\mathrm S$"
+    },
+    {
+      "id": "gsg-sheet-symbol-5",
+      "latex": "$F_e,I_s,I_s^{\\mathrm{rectangle}}$",
+      "meaning": "Prąd połączenia, suma przez źródło i prąd analitycznego prostokąta",
+      "si_unit": "$\\mathrm A$"
+    },
+    {
+      "id": "gsg-sheet-symbol-6",
+      "latex": "$n_x,n_y$",
+      "meaning": "Liczby kwadratowych komórek w szerokości i długości prostokąta kontrolnego",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "gsg-sheet-symbol-7",
+      "latex": "$P_s$",
+      "meaning": "Całkowita moc Joule'a",
+      "si_unit": "$\\mathrm W$"
+    },
+    {
+      "id": "gsg-sheet-symbol-8",
+      "latex": "$e,i,j,C,\\mathbf e_i,\\mathbf e_j$",
+      "meaning": "Indeksy połączenia i komórek, zbiór źródła i wektory jednostkowe",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "gsg-sheet-symbol-9",
+      "latex": "$\\nabla_{xy}$",
+      "meaning": "Pochodna w nominalnym footprintcie",
+      "si_unit": "$\\mathrm{m^{-1}}$"
+    },
+    {
+      "id": "gsg-sheet-field-symbol-0",
+      "latex": "$\\mathbf J,J_x,J_y,J_z,J_L,J_R,J_B,J_T,J_f$",
+      "meaning": "Gęstość prądu i globalnie skierowane wartości na ścianach",
+      "si_unit": "$\\mathrm{A\\,m^{-2}}$"
+    },
+    {
+      "id": "gsg-sheet-field-symbol-1",
+      "latex": "$F_f$",
+      "meaning": "Fizyczny strumień prądu przez ścianę",
+      "si_unit": "$\\mathrm A$"
+    },
+    {
+      "id": "gsg-sheet-field-symbol-2",
+      "latex": "$x,y,z,\\xi,\\eta,z',x_c,y_c,h,t,z_0,z_1,u_i,R_i,\\mathbf R$",
+      "meaning": "Współrzędne, rozmiar komórki, grubość i odległości",
+      "si_unit": "$\\mathrm m$"
+    },
+    {
+      "id": "gsg-sheet-field-symbol-3",
+      "latex": "$\\alpha,\\beta,i$",
+      "meaning": "Współrzędne lokalne i indeks dolnej lub górnej powierzchni",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "gsg-sheet-field-symbol-4",
+      "latex": "$\\rho^2$",
+      "meaning": "Kwadrat poprzecznej odległości od punktu źródłowego",
+      "si_unit": "$\\mathrm{m^2}$"
+    },
+    {
+      "id": "gsg-sheet-field-symbol-5",
+      "latex": "$C_z$",
+      "meaning": "Pomocniczy racjonalizowany iloraz geometryczny",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "gsg-sheet-field-symbol-6",
+      "latex": "$A_z$",
+      "meaning": "Scałkowane po grubości jądro składowych poprzecznych",
+      "si_unit": "$\\mathrm{m^{-1}}$"
+    },
+    {
+      "id": "gsg-sheet-field-symbol-7",
+      "latex": "$B_z$",
+      "meaning": "Scałkowane po grubości jądro składowej normalnej",
+      "si_unit": "$\\mathrm{m^{-2}}$"
+    },
+    {
+      "id": "gsg-sheet-field-symbol-8",
+      "latex": "$\\mathbf H,H_x,H_y,H_z$",
+      "meaning": "Natężenie pola Oersteda w punktach obserwacji",
+      "si_unit": "$\\mathrm{A\\,m^{-1}}$"
+    },
+    {
+      "id": "gsg-sheet-field-symbol-9",
+      "latex": "$\\Omega_{xy},d\\xi\\,d\\eta$",
+      "meaning": "Nominalny footprint i miara całkowania XY",
+      "si_unit": "$\\mathrm{m^2}$"
+    },
+    {
+      "id": "gsg-retained-dtq-work-symbol-0",
+      "latex": "$N_{\\mathrm{pair}}$",
+      "meaning": "Liczba par komórka źródła–punkt obserwacji",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "gsg-retained-dtq-work-symbol-1",
+      "latex": "$N_{\\mathrm{cell}}$",
+      "meaning": "Liczba zachowanych komórek źródła;85980",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "gsg-retained-dtq-work-symbol-2",
+      "latex": "$N_{\\mathrm{target}}$",
+      "meaning": "Liczba punktów żądanej obserwacji",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "gsg-retained-dtq-work-symbol-3",
+      "latex": "$N_{\\mathrm{kernel,base}}^{\\mathrm{obs}}$",
+      "meaning": "Ekstrapolacja pracy bazowej z zapisanej niezagęszczonej regularnej gałęzi",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "gsg-retained-dtq-work-symbol-4",
+      "latex": "$q_{\\mathrm{regular}}^{\\mathrm{obs}}$",
+      "meaning": "Zaobserwowane38ocen jądra na niezagęszczoną regularną parę",
+      "si_unit": "$1$"
     }
   ],
   "equations": [
@@ -3619,6 +4291,645 @@
         "antenna-mpfr-work-normalized-model",
         "antenna-mpfr-work-binary-model",
         "antenna-mpfr-work-face"
+      ]
+    },
+    {
+      "id": "antenna-retained-current-coefficients",
+      "symbols": [
+        "retained-h-only-tetrahedron",
+        "retained-h-only-local-index",
+        "retained-h-only-vertices",
+        "retained-h-only-edge-matrix",
+        "retained-h-only-determinant",
+        "retained-h-only-face-flux",
+        "retained-h-only-orientation",
+        "retained-h-only-coefficient",
+        "retained-h-only-positions",
+        "retained-h-only-current",
+        "retained-h-only-field",
+        "retained-h-only-pi",
+        "retained-h-only-measure"
+      ],
+      "sources": [
+        "retained-h-only-moments",
+        "retained-h-only-freeze"
+      ]
+    },
+    {
+      "id": "antenna-retained-current-field",
+      "symbols": [
+        "retained-h-only-tetrahedron",
+        "retained-h-only-local-index",
+        "retained-h-only-vertices",
+        "retained-h-only-edge-matrix",
+        "retained-h-only-determinant",
+        "retained-h-only-face-flux",
+        "retained-h-only-orientation",
+        "retained-h-only-coefficient",
+        "retained-h-only-positions",
+        "retained-h-only-current",
+        "retained-h-only-field",
+        "retained-h-only-pi",
+        "retained-h-only-measure"
+      ],
+      "sources": [
+        "retained-h-only-operator",
+        "retained-h-only-abi"
+      ]
+    },
+    {
+      "id": "antenna-surface-mandatory-sqrt-work",
+      "symbols": [
+        "surface-count-source-cells",
+        "surface-count-targets",
+        "surface-sqrt-target-minimum",
+        "surface-sqrt-total-minimum"
+      ],
+      "sources": [
+        "surface-mandatory-work-preflight",
+        "surface-budget-source-regression"
+      ]
+    },
+    {
+      "id": "antenna-gsg-convergence-increments",
+      "symbols": [
+        "gsg-convergence-levels",
+        "gsg-convergence-indices",
+        "gsg-convergence-current",
+        "gsg-convergence-field",
+        "gsg-convergence-per-amp",
+        "gsg-convergence-delta-current",
+        "gsg-convergence-delta-field",
+        "gsg-convergence-delta-per-amp"
+      ],
+      "sources": [
+        "gsg-convergence-numeric-analysis",
+        "gsg-convergence-numeric-analysis-tests"
+      ]
+    },
+    {
+      "id": "antenna-gsg-convergence-acceptance",
+      "symbols": [
+        "gsg-convergence-current",
+        "gsg-convergence-field",
+        "gsg-convergence-per-amp",
+        "gsg-convergence-delta-current",
+        "gsg-convergence-delta-field",
+        "gsg-convergence-delta-per-amp",
+        "gsg-convergence-current-floor",
+        "gsg-convergence-field-floor",
+        "gsg-convergence-relative-current",
+        "gsg-convergence-relative-field"
+      ],
+      "sources": [
+        "gsg-convergence-numeric-analysis",
+        "gsg-convergence-numeric-analysis-tests"
+      ]
+    },
+    {
+      "id": "antenna-gsg-convergence-contraction",
+      "symbols": [
+        "gsg-convergence-metric",
+        "gsg-convergence-per-amp-floor",
+        "gsg-convergence-field-floor",
+        "gsg-convergence-current"
+      ],
+      "sources": [
+        "gsg-convergence-numeric-analysis",
+        "gsg-convergence-numeric-analysis-tests"
+      ]
+    },
+    {
+      "id": "antenna-gsg-reference-global-field",
+      "symbols": [
+        "gsg-convergence-cells",
+        "gsg-convergence-precision",
+        "gsg-convergence-sum-field",
+        "gsg-convergence-local-error",
+        "gsg-convergence-sum-error",
+        "gsg-convergence-gate"
+      ],
+      "sources": [
+        "gsg-reference-global-sum",
+        "gsg-reference-global-sum-tests"
+      ]
+    },
+    {
+      "id": "antenna-gsg-reference-global-gates",
+      "symbols": [
+        "gsg-convergence-sum-field",
+        "gsg-convergence-sum-error",
+        "gsg-convergence-whole",
+        "gsg-convergence-norm-sum",
+        "gsg-convergence-gate",
+        "gsg-convergence-cancellation"
+      ],
+      "sources": [
+        "gsg-reference-global-sum",
+        "gsg-reference-global-sum-tests"
+      ]
+    },
+    {
+      "id": "antenna-gsg-reference-native-comparison",
+      "symbols": [
+        "gsg-convergence-sum-field",
+        "gsg-convergence-native"
+      ],
+      "sources": [
+        "gsg-reference-global-sum",
+        "gsg-reference-global-sum-tests"
+      ]
+    },
+    {
+      "id": "antenna-gsg-current-correction-discrete",
+      "symbols": [
+        "gsg-current-correction-symbol-1",
+        "gsg-current-correction-symbol-2",
+        "gsg-current-correction-symbol-3",
+        "gsg-current-correction-symbol-4",
+        "gsg-current-correction-symbol-5",
+        "gsg-current-correction-symbol-6",
+        "gsg-current-correction-symbol-7",
+        "gsg-current-correction-symbol-8",
+        "gsg-current-correction-symbol-9",
+        "gsg-current-correction-symbol-10"
+      ],
+      "sources": [
+        "gsg-current-correction",
+        "gsg-current-correction-tests"
+      ]
+    },
+    {
+      "id": "antenna-gsg-current-correction-exact-integral",
+      "symbols": [
+        "gsg-current-correction-symbol-1",
+        "gsg-current-correction-symbol-2",
+        "gsg-current-correction-symbol-3",
+        "gsg-current-correction-symbol-4",
+        "gsg-current-correction-symbol-5",
+        "gsg-current-correction-symbol-6",
+        "gsg-current-correction-symbol-7",
+        "gsg-current-correction-symbol-8",
+        "gsg-current-correction-symbol-9",
+        "gsg-current-correction-symbol-10"
+      ],
+      "sources": [
+        "gsg-current-correction",
+        "gsg-current-correction-tests"
+      ]
+    },
+    {
+      "id": "antenna-gsg-current-correction-partition-identity",
+      "symbols": [
+        "gsg-current-correction-partition-part",
+        "gsg-current-correction-partition-energies",
+        "gsg-current-correction-partition-eta",
+        "gsg-current-correction-partition-fraction",
+        "gsg-current-correction-symbol-9",
+        "gsg-current-correction-symbol-10"
+      ],
+      "sources": [
+        "gsg-current-correction",
+        "gsg-current-correction-partition",
+        "gsg-current-correction-partition-tests"
+      ]
+    },
+    {
+      "id": "antenna-rt0-stored-point-reference",
+      "symbols": [
+        "rt0_stored_point_positions",
+        "rt0_stored_point_determinant",
+        "rt0_stored_point_flux",
+        "rt0_stored_point_values",
+        "rt0_stored_point_scale",
+        "rt0_stored_point_indices"
+      ],
+      "sources": [
+        "rt0-stored-point-export",
+        "rt0-stored-point-native",
+        "rt0-stored-point-arithmetic",
+        "rt0-stored-point-context",
+        "rt0-stored-point-regression"
+      ]
+    },
+    {
+      "id": "antenna-rt0-stored-point-gate",
+      "symbols": [
+        "rt0_stored_point_positions",
+        "rt0_stored_point_determinant",
+        "rt0_stored_point_flux",
+        "rt0_stored_point_values",
+        "rt0_stored_point_scale",
+        "rt0_stored_point_indices"
+      ],
+      "sources": [
+        "rt0-stored-point-verifier",
+        "rt0-stored-point-arithmetic",
+        "rt0-stored-point-context",
+        "rt0-stored-point-regression"
+      ]
+    },
+    {
+      "id": "antenna-saved-admissibility-boundary",
+      "symbols": [
+        "saved_admissibility_domain",
+        "saved_admissibility_potential",
+        "saved_admissibility_current",
+        "saved_admissibility_normal",
+        "saved_admissibility_sigma",
+        "saved_admissibility_I",
+        "saved_admissibility_power",
+        "saved_admissibility_G",
+        "saved_admissibility_measures",
+        "saved_admissibility_indices",
+        "saved_admissibility_xyz",
+        "saved_admissibility_area",
+        "saved_admissibility_sign",
+        "saved_admissibility_flux",
+        "saved_admissibility_residual"
+      ],
+      "sources": [
+        "saved-admissibility-theory",
+        "saved-admissibility-orientation",
+        "saved-admissibility-tolerance",
+        "saved-admissibility-energy",
+        "saved-admissibility-jump",
+        "saved-admissibility-tests"
+      ]
+    },
+    {
+      "id": "antenna-saved-admissibility-bounds",
+      "symbols": [
+        "saved_admissibility_domain",
+        "saved_admissibility_potential",
+        "saved_admissibility_current",
+        "saved_admissibility_normal",
+        "saved_admissibility_sigma",
+        "saved_admissibility_I",
+        "saved_admissibility_power",
+        "saved_admissibility_G",
+        "saved_admissibility_measures",
+        "saved_admissibility_indices",
+        "saved_admissibility_xyz",
+        "saved_admissibility_area",
+        "saved_admissibility_sign",
+        "saved_admissibility_flux",
+        "saved_admissibility_residual"
+      ],
+      "sources": [
+        "saved-admissibility-theory",
+        "saved-admissibility-orientation",
+        "saved-admissibility-tolerance",
+        "saved-admissibility-energy"
+      ]
+    },
+    {
+      "id": "antenna-saved-admissibility-defect",
+      "symbols": [
+        "saved_admissibility_domain",
+        "saved_admissibility_potential",
+        "saved_admissibility_current",
+        "saved_admissibility_normal",
+        "saved_admissibility_sigma",
+        "saved_admissibility_I",
+        "saved_admissibility_power",
+        "saved_admissibility_G",
+        "saved_admissibility_measures",
+        "saved_admissibility_indices",
+        "saved_admissibility_xyz",
+        "saved_admissibility_area",
+        "saved_admissibility_sign",
+        "saved_admissibility_flux",
+        "saved_admissibility_residual"
+      ],
+      "sources": [
+        "saved-admissibility-theory",
+        "saved-admissibility-orientation",
+        "saved-admissibility-tolerance",
+        "saved-admissibility-energy"
+      ]
+    },
+    {
+      "id": "antenna-saved-flux-incidence",
+      "symbols": [
+        "saved_admissibility_domain",
+        "saved_admissibility_potential",
+        "saved_admissibility_current",
+        "saved_admissibility_normal",
+        "saved_admissibility_sigma",
+        "saved_admissibility_I",
+        "saved_admissibility_power",
+        "saved_admissibility_G",
+        "saved_admissibility_measures",
+        "saved_admissibility_indices",
+        "saved_admissibility_xyz",
+        "saved_admissibility_area",
+        "saved_admissibility_sign",
+        "saved_admissibility_flux",
+        "saved_admissibility_residual"
+      ],
+      "sources": [
+        "saved-admissibility-theory",
+        "saved-admissibility-orientation",
+        "saved-admissibility-tolerance",
+        "saved-admissibility-energy",
+        "saved-admissibility-fluxes",
+        "saved-admissibility-tests"
+      ]
+    },
+    {
+      "id": "antenna-gsg-thickness-continuum",
+      "symbols": [
+        "gsg-z-domain",
+        "gsg-z-coordinates",
+        "gsg-z-potential",
+        "gsg-z-sigma",
+        "gsg-z-current",
+        "gsg-z-power",
+        "gsg-z-affine",
+        "gsg-z-volume",
+        "gsg-z-indices",
+        "gsg-z-ratios"
+      ],
+      "sources": [
+        "gsg-z-note",
+        "gsg-z-moments",
+        "gsg-z-tests",
+        "gsg-z-reader",
+        "gsg-z-geometry",
+        "gsg-z-periodic-source"
+      ]
+    },
+    {
+      "id": "antenna-gsg-current-component-energy",
+      "symbols": [
+        "gsg-z-domain",
+        "gsg-z-coordinates",
+        "gsg-z-potential",
+        "gsg-z-sigma",
+        "gsg-z-current",
+        "gsg-z-power",
+        "gsg-z-affine",
+        "gsg-z-volume",
+        "gsg-z-indices",
+        "gsg-z-ratios"
+      ],
+      "sources": [
+        "gsg-z-note",
+        "gsg-z-moments",
+        "gsg-z-tests",
+        "gsg-z-reader",
+        "gsg-z-geometry",
+        "gsg-z-periodic-source"
+      ]
+    },
+    {
+      "id": "antenna-gsg-affine-component-moment",
+      "symbols": [
+        "gsg-z-domain",
+        "gsg-z-coordinates",
+        "gsg-z-potential",
+        "gsg-z-sigma",
+        "gsg-z-current",
+        "gsg-z-power",
+        "gsg-z-affine",
+        "gsg-z-volume",
+        "gsg-z-indices",
+        "gsg-z-ratios"
+      ],
+      "sources": [
+        "gsg-z-note",
+        "gsg-z-moments",
+        "gsg-z-tests",
+        "gsg-z-reader",
+        "gsg-z-geometry",
+        "gsg-z-periodic-source"
+      ]
+    },
+    {
+      "id": "antenna-gsg-component-energy-ratios",
+      "symbols": [
+        "gsg-z-domain",
+        "gsg-z-coordinates",
+        "gsg-z-potential",
+        "gsg-z-sigma",
+        "gsg-z-current",
+        "gsg-z-power",
+        "gsg-z-affine",
+        "gsg-z-volume",
+        "gsg-z-indices",
+        "gsg-z-ratios"
+      ],
+      "sources": [
+        "gsg-z-note",
+        "gsg-z-moments",
+        "gsg-z-tests",
+        "gsg-z-reader",
+        "gsg-z-geometry",
+        "gsg-z-periodic-source"
+      ]
+    },
+    {
+      "id": "antenna-gsg-sheet-ohm",
+      "symbols": [
+        "gsg-sheet-symbol-0",
+        "gsg-sheet-symbol-1",
+        "gsg-sheet-symbol-2",
+        "gsg-sheet-symbol-3",
+        "gsg-sheet-symbol-4",
+        "gsg-sheet-symbol-5",
+        "gsg-sheet-symbol-6",
+        "gsg-sheet-symbol-7",
+        "gsg-sheet-symbol-8",
+        "gsg-sheet-symbol-9"
+      ],
+      "sources": [
+        "gsg-sheet-note",
+        "gsg-sheet-solve_network",
+        "gsg-sheet-nominal_network",
+        "gsg-sheet-self_checks",
+        "gsg-sheet-main"
+      ]
+    },
+    {
+      "id": "antenna-gsg-sheet-face-current",
+      "symbols": [
+        "gsg-sheet-symbol-0",
+        "gsg-sheet-symbol-1",
+        "gsg-sheet-symbol-2",
+        "gsg-sheet-symbol-3",
+        "gsg-sheet-symbol-4",
+        "gsg-sheet-symbol-5",
+        "gsg-sheet-symbol-6",
+        "gsg-sheet-symbol-7",
+        "gsg-sheet-symbol-8",
+        "gsg-sheet-symbol-9"
+      ],
+      "sources": [
+        "gsg-sheet-note",
+        "gsg-sheet-solve_network",
+        "gsg-sheet-nominal_network",
+        "gsg-sheet-self_checks",
+        "gsg-sheet-main"
+      ]
+    },
+    {
+      "id": "antenna-gsg-sheet-network-balance",
+      "symbols": [
+        "gsg-sheet-symbol-0",
+        "gsg-sheet-symbol-1",
+        "gsg-sheet-symbol-2",
+        "gsg-sheet-symbol-3",
+        "gsg-sheet-symbol-4",
+        "gsg-sheet-symbol-5",
+        "gsg-sheet-symbol-6",
+        "gsg-sheet-symbol-7",
+        "gsg-sheet-symbol-8",
+        "gsg-sheet-symbol-9"
+      ],
+      "sources": [
+        "gsg-sheet-note",
+        "gsg-sheet-solve_network",
+        "gsg-sheet-nominal_network",
+        "gsg-sheet-self_checks",
+        "gsg-sheet-main"
+      ]
+    },
+    {
+      "id": "antenna-gsg-sheet-rectangle-reference",
+      "symbols": [
+        "gsg-sheet-symbol-0",
+        "gsg-sheet-symbol-1",
+        "gsg-sheet-symbol-2",
+        "gsg-sheet-symbol-3",
+        "gsg-sheet-symbol-4",
+        "gsg-sheet-symbol-5",
+        "gsg-sheet-symbol-6",
+        "gsg-sheet-symbol-7",
+        "gsg-sheet-symbol-8",
+        "gsg-sheet-symbol-9"
+      ],
+      "sources": [
+        "gsg-sheet-note",
+        "gsg-sheet-solve_network",
+        "gsg-sheet-nominal_network",
+        "gsg-sheet-self_checks",
+        "gsg-sheet-main"
+      ]
+    },
+    {
+      "id": "antenna-gsg-sheet-field-reconstruction",
+      "symbols": [
+        "gsg-sheet-field-symbol-0",
+        "gsg-sheet-field-symbol-1",
+        "gsg-sheet-field-symbol-2",
+        "gsg-sheet-field-symbol-3",
+        "gsg-sheet-field-symbol-4",
+        "gsg-sheet-field-symbol-5",
+        "gsg-sheet-field-symbol-6",
+        "gsg-sheet-field-symbol-7",
+        "gsg-sheet-field-symbol-8",
+        "gsg-sheet-field-symbol-9"
+      ],
+      "sources": [
+        "gsg-sheet-field-note",
+        "gsg-sheet-field-read_inputs",
+        "gsg-sheet-field-reconstruct_faces",
+        "gsg-sheet-field-z_kernels",
+        "gsg-sheet-field-field_gauss",
+        "gsg-sheet-field-self_checks",
+        "gsg-sheet-field-assess_fields",
+        "gsg-sheet-field-main"
+      ]
+    },
+    {
+      "id": "antenna-gsg-sheet-field-z-kernels",
+      "symbols": [
+        "gsg-sheet-field-symbol-0",
+        "gsg-sheet-field-symbol-1",
+        "gsg-sheet-field-symbol-2",
+        "gsg-sheet-field-symbol-3",
+        "gsg-sheet-field-symbol-4",
+        "gsg-sheet-field-symbol-5",
+        "gsg-sheet-field-symbol-6",
+        "gsg-sheet-field-symbol-7",
+        "gsg-sheet-field-symbol-8",
+        "gsg-sheet-field-symbol-9"
+      ],
+      "sources": [
+        "gsg-sheet-field-note",
+        "gsg-sheet-field-read_inputs",
+        "gsg-sheet-field-reconstruct_faces",
+        "gsg-sheet-field-z_kernels",
+        "gsg-sheet-field-field_gauss",
+        "gsg-sheet-field-self_checks",
+        "gsg-sheet-field-assess_fields",
+        "gsg-sheet-field-main"
+      ]
+    },
+    {
+      "id": "antenna-gsg-sheet-field-axis-limit",
+      "symbols": [
+        "gsg-sheet-field-symbol-0",
+        "gsg-sheet-field-symbol-1",
+        "gsg-sheet-field-symbol-2",
+        "gsg-sheet-field-symbol-3",
+        "gsg-sheet-field-symbol-4",
+        "gsg-sheet-field-symbol-5",
+        "gsg-sheet-field-symbol-6",
+        "gsg-sheet-field-symbol-7",
+        "gsg-sheet-field-symbol-8",
+        "gsg-sheet-field-symbol-9"
+      ],
+      "sources": [
+        "gsg-sheet-field-note",
+        "gsg-sheet-field-read_inputs",
+        "gsg-sheet-field-reconstruct_faces",
+        "gsg-sheet-field-z_kernels",
+        "gsg-sheet-field-field_gauss",
+        "gsg-sheet-field-self_checks",
+        "gsg-sheet-field-assess_fields",
+        "gsg-sheet-field-main"
+      ]
+    },
+    {
+      "id": "antenna-gsg-sheet-field-integral",
+      "symbols": [
+        "gsg-sheet-field-symbol-0",
+        "gsg-sheet-field-symbol-1",
+        "gsg-sheet-field-symbol-2",
+        "gsg-sheet-field-symbol-3",
+        "gsg-sheet-field-symbol-4",
+        "gsg-sheet-field-symbol-5",
+        "gsg-sheet-field-symbol-6",
+        "gsg-sheet-field-symbol-7",
+        "gsg-sheet-field-symbol-8",
+        "gsg-sheet-field-symbol-9"
+      ],
+      "sources": [
+        "gsg-sheet-field-note",
+        "gsg-sheet-field-read_inputs",
+        "gsg-sheet-field-reconstruct_faces",
+        "gsg-sheet-field-z_kernels",
+        "gsg-sheet-field-field_gauss",
+        "gsg-sheet-field-self_checks",
+        "gsg-sheet-field-assess_fields",
+        "gsg-sheet-field-main"
+      ]
+    },
+    {
+      "id": "antenna-retained-dtq-work-counts",
+      "symbols": [
+        "gsg-retained-dtq-work-symbol-0",
+        "gsg-retained-dtq-work-symbol-1",
+        "gsg-retained-dtq-work-symbol-2",
+        "gsg-retained-dtq-work-symbol-3",
+        "gsg-retained-dtq-work-symbol-4"
+      ],
+      "sources": [
+        "gsg-retained-dtq-reuse-note",
+        "gsg-retained-dtq-cost-audit",
+        "gsg-retained-dtq-common-evaluation"
       ]
     }
   ],
@@ -6404,9 +7715,9 @@
     },
     {
       "id": "antenna-sample-carrier-provenance",
-      "path": "crates/fullmag-runner/src/antenna_field_solution.rs",
+      "path": "crates/fullmag-antenna-artifacts/src/sample_carrier.rs",
       "symbol": "AntennaSampleCarrier",
-      "responsibility": "Zapis domeny, rodzaju nośnika, lokalizacji węzłowej i digestu siatki z planu w niezmiennym manifeście; nie stanowi certyfikatu adopcji do viewportu.",
+      "responsibility": "Wspólny backend-neutralny DTO nośnika; runner zachowuje reexport tej samej serializacji.",
       "evidence_status": "source_only"
     },
     {
@@ -8981,6 +10292,1919 @@
       "symbol": "bind_declared_execution",
       "responsibility": "Zachowanie authored execution w producerze accepted; brak zmiany fizyki i brak kwalifikacji solvera.",
       "evidence_status": "implementation_unqualified"
+    },
+    {
+      "id": "sushruth-coni-sampling-example",
+      "path": "examples/fem_antenna_sushruth_2020_gsg.py",
+      "symbol": "study",
+      "responsibility": "Domena obserwacji w magnetycznej grubości stosu pod Cu/Ta; bez aktywacji LLG.",
+      "evidence_status": "implementation_unqualified"
+    },
+    {
+      "id": "sushruth-coni-sampling-regression",
+      "path": "scripts/test_compare_sushruth_2020_gsg.py",
+      "symbol": "test_old_sampling_slab_is_rejected_before_field_comparison",
+      "responsibility": "Odmowa dawnego zakresu z; nie dowód wykonania solvera.",
+      "evidence_status": "implementation_unqualified"
+    },
+    {
+      "id": "gsg-closed-plan-geometry",
+      "path": "packages/fullmag-py/src/fullmag/model/geometry.py",
+      "symbol": "class CPWAntennaLayout",
+      "responsibility": "Authoring zamkniętego GSG; konstruktor, IR i eksport wyrażenia sprawdzone interpretowanymi testami; bez pełnego solve.",
+      "evidence_status": "implementation_unqualified"
+    },
+    {
+      "id": "gsg-closed-plan-source",
+      "path": "crates/fullmag-ir/src/antenna_current_source.rs",
+      "symbol": "PreparedAntennaClosedLoopSourceIR",
+      "responsibility": "Walidacja liczności wariantów 4/4 i 5/6 w kodzie Rust; bez dowodu kompilacji i wykonania.",
+      "evidence_status": "implementation_unqualified"
+    },
+    {
+      "id": "gsg-closed-plan-material",
+      "path": "packages/fullmag-py/src/fullmag/runtime/antenna_coincident_materialization.py",
+      "symbol": "_material_binding",
+      "responsibility": "Sprawdzone pełne i rozłączne przypisanie materiałów pięciu części rzeczywistej siatki GSG; bez native solve.",
+      "evidence_status": "implementation_unqualified"
+    },
+    {
+      "id": "gsg-closed-plan-cut",
+      "path": "packages/fullmag-py/src/fullmag/meshing/_antenna_coincident_cut.py",
+      "symbol": "prepare_antenna_coincident_loop",
+      "responsibility": "Sprawdzone przygotowanie centralnego przekroju GSG, orientacja, obrót i odmowy błędnych wejść; bez native solve.",
+      "evidence_status": "implementation_unqualified"
+    },
+    {
+      "id": "gsg-closed-plan-plane",
+      "path": "packages/fullmag-py/src/fullmag/model/current_transport.py",
+      "symbol": "class StructuredCutPlane",
+      "responsibility": "Authoring osi x/z; konkretna geometria ogranicza dozwoloną oś i położenie źródła.",
+      "evidence_status": "implementation_unqualified"
+    },
+    {
+      "id": "gsg-closed-layout-test",
+      "path": "packages/fullmag-py/tests/test_cpw_closed_loop_layout.py",
+      "symbol": "test_round_trip_preserves_connections_without_inventing_port_branches",
+      "responsibility": "Wykonany round-trip geometrii i eksportu Python; brak dodatkowych gałęzi.",
+      "evidence_status": "implementation_unqualified"
+    },
+    {
+      "id": "gsg-closed-mesh-test",
+      "path": "packages/fullmag-py/tests/test_cpw_closed_loop_mesh.py",
+      "symbol": "test_five_parts_six_contacts_and_central_source_cut",
+      "responsibility": "Rzeczywisty OCC: objętości pięciu części, sześć kontaktów, jeden centralny przekrój i dodatnie Tet4; bez solve.",
+      "evidence_status": "implementation_unqualified"
+    },
+    {
+      "id": "gsg-closed-cut-rejection-test",
+      "path": "packages/fullmag-py/tests/test_cpw_closed_loop_mesh.py",
+      "symbol": "test_source_on_crossbar_is_rejected",
+      "responsibility": "Wykonana odmowa źródła na poprzeczce.",
+      "evidence_status": "implementation_unqualified"
+    },
+    {
+      "id": "gsg-closed-typed-ir",
+      "path": "crates/fullmag-ir/src/antenna.rs",
+      "symbol": "CpwClosedLoopIR",
+      "responsibility": "Nowy typowany kontrakt geometrii Rust; jeszcze bez kompilacji i runtime.",
+      "evidence_status": "implementation_unqualified"
+    },
+    {
+      "id": "gsg-public-roundtrip-test",
+      "path": "packages/fullmag-py/tests/test_cpw_closed_loop_mesh.py",
+      "symbol": "test_public_execution_lowering_preserves_authored_gsg",
+      "responsibility": "Sprawdzony lowering, cache oraz round-trip Python i sceny z etapem pola; bez wykonania solve.",
+      "evidence_status": "implementation_unqualified"
+    },
+    {
+      "id": "gsg-rotated-source-test",
+      "path": "packages/fullmag-py/tests/test_cpw_closed_loop_mesh.py",
+      "symbol": "test_rotated_source_contacts_and_stale_plane_rejection",
+      "responsibility": "Sprawdzone sześć kontaktów po obrocie i translacji oraz odmowa nieaktualnej płaszczyzny.",
+      "evidence_status": "implementation_unqualified"
+    },
+    {
+      "id": "gsg-closed-validity-gap",
+      "path": "crates/fullmag-plan/src/antenna_validity.rs",
+      "symbol": "conductor_metrics_for_drive",
+      "responsibility": "Potwierdzona luka: metryki nominalnych pasków pomijają zamknięcia i ich przewodności; status nie kwalifikuje pełnego obwodu.",
+      "evidence_status": "implementation_unqualified"
+    },
+    {
+      "id": "gsg-closed-public-example",
+      "path": "examples/fem_antenna_sushruth_2020_closed_gsg.py",
+      "symbol": "study",
+      "responsibility": "Osobny publiczny przykład z pięcioma częściami, napięciowym źródłem i niemagnetycznym targetem; native solve NOT VERIFIED.",
+      "evidence_status": "implementation_unqualified"
+    },
+    {
+      "id": "gsg-closed-public-example-test",
+      "path": "packages/fullmag-py/tests/test_sushruth_closed_gsg_example.py",
+      "symbol": "test_voltage_driven_closed_circuit_and_separate_nonmagnetic_sample",
+      "responsibility": "Test authoringu i round-trip publicznego przykładu zamkniętego GSG; nie jest dowodem wykonania solvera.",
+      "evidence_status": "implementation_unqualified"
+    },
+    {
+      "id": "retained-h-only-moments",
+      "path": "crates/fullmag-runner/src/antenna_field_solution/closed_loop_identity_v2.rs",
+      "symbol": "verify_rt0_sample_moments",
+      "responsibility": "Kanoniczny dodatni Tet4, orientacja i momenty.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "retained-h-only-freeze",
+      "path": "crates/fullmag-runner/src/native_fem/retained_rt0_source.rs",
+      "symbol": "freeze_cell",
+      "responsibility": "Przejście c_i=2*s_i*Phi_i bez center-J fit.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "retained-h-only-operator",
+      "path": "backends/fem/cpu/mfem/interactions/oersted/surface_rt0.cpp",
+      "symbol": "evaluate_surface_rt0",
+      "responsibility": "Istniejący operator pola bez solve charge.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "retained-h-only-abi",
+      "path": "native/include/fullmag_fem.h",
+      "symbol": "fullmag_fem_evaluate_frozen_rt0_surface_observed_v1",
+      "responsibility": "Addytywna deklaracja C ABI i jego layout; wykonanie i autoryzacja wymagają oddzielnych bramek.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "retained-h-only-io",
+      "path": "backends/fem/cpu/mfem/workflows/antenna_field_solve/surface_rt0_io.cpp",
+      "symbol": "validate_request",
+      "responsibility": "Wspólne IO, parametry i guards starego i nowego adaptera.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "retained-h-only-wrapper",
+      "path": "crates/fullmag-runner/src/native_fem/retained_surface_rt0.rs",
+      "symbol": "evaluate_retained_rt0_surface",
+      "responsibility": "Żywotność buforów, digest affinity i opt-in profiler/observer.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "retained-h-only-accepted-owner",
+      "path": "crates/fullmag-runtime-control/src/study_inspection_integrity.rs",
+      "symbol": "load_saved_inspection",
+      "responsibility": "Wspólna dotychczasowa granica durable read; H-only używa tego samego read_saved_inspection przez typowany callback. Publiczny accepted stage jeszcze niepodłączony.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "retained-h-only-ranges",
+      "path": "backends/fem/cpu/mfem/workflows/antenna_field_solve/frozen_surface_rt0.cpp",
+      "symbol": "validate_ranges",
+      "responsibility": "Walidacja zakresów buforów przed jakąkolwiek mutacją wyjścia.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "retained-public-locator",
+      "path": "packages/fullmag-py/src/fullmag/model/antenna.py",
+      "symbol": "class AntennaRetainedCurrentSource",
+      "responsibility": "Immutable locator i canonical source pins, nie auth.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "retained-public-script-export",
+      "path": "packages/fullmag-py/src/fullmag/runtime/script_builder.py",
+      "symbol": "_render_antenna_field_solve_definition_expr",
+      "responsibility": "Eksport typed constructor zachowuje pins.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "retained-public-ir-locator",
+      "path": "crates/fullmag-ir/src/antenna.rs",
+      "symbol": "AntennaRetainedCurrentSourceIR",
+      "responsibility": "Enum published_inspection i walidacja kształtu.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "retained-child-manifest",
+      "path": "crates/fullmag-antenna-artifacts/src/retained_current/manifest.rs",
+      "symbol": "RetainedCurrentFieldManifest",
+      "responsibility": "Source/field provenance i bounded payload descriptors.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "retained-child-capsule",
+      "path": "crates/fullmag-antenna-artifacts/src/retained_current/parent_evidence.rs",
+      "symbol": "ParentEvidenceCapsule",
+      "responsibility": "Jawne typed dependency edges, bez runtime authority.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "retained-child-encode",
+      "path": "crates/fullmag-antenna-artifacts/src/retained_current/package.rs",
+      "symbol": "encode_retained_current_field_bundle",
+      "responsibility": "Framing exact4 i bounded allocation.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "retained-child-decode",
+      "path": "crates/fullmag-antenna-artifacts/src/retained_current/package.rs",
+      "symbol": "decode_retained_current_field_bundle",
+      "responsibility": "Framing/hash/length i trailing refusal.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "retained-source-content-verifier",
+      "path": "crates/fullmag-runner/src/antenna_field_solution/closed_loop_v2.rs",
+      "symbol": "verify_and_decode_source",
+      "responsibility": "Pełna weryfikacja v2 z zachowaniem źródła.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "retained-field-producer",
+      "path": "crates/fullmag-runner/src/antenna_field_solution/retained_current_execution.rs",
+      "symbol": "execute_retained_current_field_inspection",
+      "responsibility": "H-only bez charge; publiczny worker i opt-in profile integracja nadal niewykonane.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "retained-parent-field-family",
+      "path": "crates/fullmag-runner/src/antenna_field_solution/retained_current_execution.rs",
+      "symbol": "validate_parent_field_realization",
+      "responsibility": "Zachowanie rzeczywistego direct-v2 oraz surface rodzica; mieszane provenance odmawia.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "retained-current-canonical-source-read",
+      "path": "crates/fullmag-runtime-control/src/study_retained_current.rs",
+      "symbol": "load_saved_retained_current",
+      "responsibility": "Dokładny locator artifact ID i CAS, jedna istniejąca blokada odczytu, pełny prywatny RT0; bez nowej autoryzacji execution.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "retained-current-completion-callback",
+      "path": "crates/fullmag-runtime-control/src/study.rs",
+      "symbol": "read_study_task_completion_with_inspection",
+      "responsibility": "Wynik callbacku dostępny dopiero po wszystkich dotychczasowych bramkach completion i katalogu.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "retained-current-source-content-verifier",
+      "path": "crates/fullmag-runner/src/antenna_field_solution/retained_current_execution.rs",
+      "symbol": "verify_retained_current_source_content",
+      "responsibility": "Jedna pełna weryfikacja starego v2 i zachowanie źródła; wspólne envelope/budget/identity z HTTP.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "retained-current-source-evidence-binding",
+      "path": "crates/fullmag-runtime-control/src/study_retained_current.rs",
+      "symbol": "bind_evidence",
+      "responsibility": "Konsumpcja prywatnego readera i dokładne wiązanie kapsuły z ownerem oraz digestami; portable closure nadal osobną bramką.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "retained-current-shared-authored-preimage",
+      "path": "crates/fullmag-plan/src/antenna_current_source/authored_input.rs",
+      "symbol": "antenna_closed_loop_authored_input_preimage",
+      "responsibility": "Ten sam source preimage v2 w pierwotnym materializerze i H-only; normalizacja stable IDs i null FEM.mesh bez zmiany.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "retained-current-authored-source-invalidation",
+      "path": "crates/fullmag-plan/src/antenna_current_source/authored_input.rs",
+      "symbol": "validate_retained_current_authored_source",
+      "responsibility": "Porównanie source preimage i ponowne przeliczenie material binding z bieżących assignments oraz zweryfikowanej przewodności; bez charge.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "retained-current-private-source-intent",
+      "path": "crates/fullmag-runner/src/antenna_field_solution/retained_current_execution.rs",
+      "symbol": "validate_verified_source_intent",
+      "responsibility": "Wyłącznie prywatny zweryfikowany preimage/σ; ten sam comparator przed kernel H i weryfikacją publikacji.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "retained-current-pure-plan-type",
+      "path": "crates/fullmag-ir/src/plan.rs",
+      "symbol": "AntennaRetainedCurrentFieldPlanIR",
+      "responsibility": "Plan zamiaru z dokładnym stage, nowym sampling i requested execution; bez źródłowego mesh, RT0 lub autoryzacji.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "retained-current-pure-planner",
+      "path": "crates/fullmag-plan/src/antenna_retained_current.rs",
+      "symbol": "plan_retained_current_field_inspection",
+      "responsibility": "Osobny czysty planer H-only bez transportu; pełna walidacja IR, jawna realizacja CPU i oddzielny nowy sampling.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "retained-current-shared-sampling-resolver",
+      "path": "crates/fullmag-plan/src/antenna_field_solve.rs",
+      "symbol": "resolve_field_sampling",
+      "responsibility": "Wspólny resolver Global/Object Tet4, zachowana odmowa Region; nie odtwarza źródła prądu.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "retained-current-inspection-basis-refusal",
+      "path": "crates/fullmag-ir/src/antenna.rs",
+      "symbol": "antenna_solution_source_is_basis",
+      "responsibility": "Wspólna bramka projekcji i source spectrum odmawia retained inspection niezależnie od tokenu H_ant_basis.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "retained-current-planner-source-test",
+      "path": "crates/fullmag-plan/src/antenna_retained_current/tests.rs",
+      "symbol": "plans_new_target_without_a_source_mesh_or_authorization_claim",
+      "responsibility": "Test źródłowy czystego planu i trwałej odmowy legacy fresh charge; kompilacja/wykonanie NOT RUN.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "retained-current-session-carrier-route",
+      "path": "crates/fullmag-plan/src/antenna_field_only.rs",
+      "symbol": "plan_antenna_field_only_carrier",
+      "responsibility": "Retained stage wybiera własny BackendPlanIR przed legacy charge; dotychczasowe plany zachowane.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "retained-current-sampling-presentation",
+      "path": "crates/fullmag-api/src/live_scene_preparation/antenna_domain.rs",
+      "symbol": "pinned_sampling_mesh",
+      "responsibility": "Global/Object prezentują rzeczywisty immutable sampling zgodny z target positions/cells/digest; nie odtwarzają źródła.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "retained-current-object-sampling-presentation",
+      "path": "crates/fullmag-api/src/live_scene_preparation/antenna_domain.rs",
+      "symbol": "pinned_retained_object_mesh",
+      "responsibility": "Object payload zachowuje własność targetu, pełną topologię, geometry role i brak syntetycznego magnetic state.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "retained-current-nonmagnetic-domain-publication",
+      "path": "crates/fullmag-api/src/live_scene_preparation.rs",
+      "symbol": "prepared_domain_publication",
+      "responsibility": "Publikacja własnego H sampling i czyszczenie odziedziczonych magnetic metadata; bez m.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "retained-current-runner-layout",
+      "path": "crates/fullmag-runner/src/artifacts.rs",
+      "symbol": "retained_current_field_layout",
+      "responsibility": "Sampling counts i digest odrębne od nieznanych source counts oraz trwałej autoryzacji.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "retained-current-canonical-route-tests",
+      "path": "crates/fullmag-plan/src/antenna_retained_current/tests.rs",
+      "symbol": "canonical_standalone_and_field_only_planning_preserve_the_typed_operation",
+      "responsibility": "Testy źródłowe obu kanonicznych dróg i wire; nie skompilowano ani nie uruchomiono.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "retained-current-api-target-test",
+      "path": "crates/fullmag-api/src/live_scene_preparation/antenna_domain.rs",
+      "symbol": "retained_object_sampling_uses_the_target_not_the_conductor",
+      "responsibility": "Test integralności rzeczywistego Object targetu i niezależności od mesh assetu źródła; NOT RUN.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "retained-current-nonmagnetic-snapshot",
+      "path": "crates/fullmag-api/src/session.rs",
+      "symbol": "is_antenna_field_only",
+      "responsibility": "Rozpoznanie retained inspection uruchamia wspólną kontrolę odziedziczonych carrierów magnetycznych.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "retained-current-nonmagnetic-snapshot-test",
+      "path": "crates/fullmag-api/src/session.rs",
+      "symbol": "retained_current_snapshot_keeps_sampling_mesh_and_clears_magnetic_state",
+      "responsibility": "Regresja rzeczywistego apply snapshot: zachowany target mesh, usunięte m/frozen_spins i stary H_eff, profil niezmienny; NOT RUN.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "retained-current-accepted-kind",
+      "path": "crates/fullmag-authoring/src/study_contract.rs",
+      "symbol": "StudyStepKind",
+      "responsibility": "V4-only kind H-only i zachowanie starych odmów.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "retained-current-accepted-validator",
+      "path": "crates/fullmag-plan/src/study_lowering.rs",
+      "symbol": "validate_retained_current_field_operation",
+      "responsibility": "Pełna zgodność canonical carrier/pure operation, selektorów i statycznego kontraktu.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "retained-current-script-action",
+      "path": "crates/fullmag-application/src/script_stage_materialization.rs",
+      "symbol": "resolve_antenna_field_solve_action",
+      "responsibility": "Retained source wybiera własną akcję przed świeżym transportem.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "retained-current-accepted-compiler",
+      "path": "crates/fullmag-application/src/script_pipeline_acceptance.rs",
+      "symbol": "compile_accepted_closed_loop_pipeline",
+      "responsibility": "Własny kind, immutable source/catalog i completion order bez magnetycznego State.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "retained-current-accepted-source",
+      "path": "crates/fullmag-application/src/script_pipeline_acceptance.rs",
+      "symbol": "validate_accepted_script_pipeline_source",
+      "responsibility": "Cold source wymaga tego samego primitive antenna i dokładnych selektorów.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "retained-current-accepted-sequence-test",
+      "path": "crates/fullmag-application/src/script_pipeline_acceptance.rs",
+      "symbol": "retained_compiler_preserves_completion_order_without_state_ports",
+      "responsibility": "Regresja źródłowa zachowania dwóch etapów; NOT RUN.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "retained-current-accepted-source-test",
+      "path": "crates/fullmag-application/src/script_pipeline_acceptance.rs",
+      "symbol": "cold_retained_source_refuses_changed_authored_kind_or_selectors",
+      "responsibility": "Regresja źródłowa podmiany typu lub selektorów; NOT RUN.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "retained-current-accepted-request",
+      "path": "crates/fullmag-runtime-control/src/study.rs",
+      "symbol": "validate_requested_execution",
+      "responsibility": "Statyczny snapshot porównuje pełny plan i explicit CPU strict double; nie daje claim.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "retained-current-accepted-ui-identity",
+      "path": "crates/fullmag-api/src/live_accepted_projection.rs",
+      "symbol": "build_stage_execution",
+      "responsibility": "Zachowanie authored stage ID bez zmyślonego progresu lub artefaktów.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "retained-parent-snapshot",
+      "path": "crates/fullmag-runtime-control/src/study_retained_current.rs",
+      "symbol": "load_saved_retained_current_with_evidence",
+      "responsibility": "J i owned provenance z jednej SH transakcji; brak zapisów i wykonania.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "retained-parent-evidence-context",
+      "path": "crates/fullmag-runtime-control/src/study_retained_current.rs",
+      "symbol": "validate_evidence_context",
+      "responsibility": "Rzeczywisty store binding i dokładny run; publiczny capture context nie daje uprawnień.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "retained-parent-evidence-capture",
+      "path": "crates/fullmag-runtime-control/src/study_retained_current.rs",
+      "symbol": "capture_parent_evidence",
+      "responsibility": "Pełna typed closure, bounded metadane, brak kopii dużych payloadów.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "retained-parent-evidence-owner",
+      "path": "crates/fullmag-runtime-control/src/study_retained_current.rs",
+      "symbol": "validate_parent_closure_owner",
+      "responsibility": "Actual accepted intent/task, application preparation, output i codec w jednym snapshot.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "retained-parent-record-budget",
+      "path": "crates/fullmag-session/src/accepted_provenance.rs",
+      "symbol": "plan_accepted_provenance_with_record_budget",
+      "responsibility": "Osobny bounded wariant kanonicznego planera, bez nowego agregatu starego eksportera.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "retained-parent-record-reader",
+      "path": "crates/fullmag-session/src/accepted_provenance.rs",
+      "symbol": "ControlRecordReader",
+      "responsibility": "Ograniczenie direct records count/bytes przed alokacją; osobne granice CAS pozostają.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "retained-parent-record-budget-test",
+      "path": "crates/fullmag-session/src/accepted_provenance.rs",
+      "symbol": "bounded_planner_accepts_exact_record_total_without_charging_verification_twice",
+      "responsibility": "Regresja źródłowa exact total/parity/overflow; NOT RUN.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "retained-parent-context-test",
+      "path": "crates/fullmag-runtime-control/src/study_retained_current.rs",
+      "symbol": "evidence_context_refuses_foreign_run_or_store_before_corrupt_read_fence",
+      "responsibility": "Regresja źródłowa obcego context przed SH; NOT RUN.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "retained-parent-metadata-test",
+      "path": "crates/fullmag-runtime-control/src/study_retained_current.rs",
+      "symbol": "metadata_serializer_refuses_overflow_during_write",
+      "responsibility": "Regresja źródłowa bounded serializer; NOT RUN.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "retained-preparation-receipt",
+      "path": "crates/fullmag-application/src/retained_current_preparation.rs",
+      "symbol": "RetainedCurrentPreparationReceipt",
+      "responsibility": "Pełny własny receipt i parent pins, bez źródłowego native evidence.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "retained-preparation-external-parent",
+      "path": "crates/fullmag-application/src/retained_current_preparation.rs",
+      "symbol": "validate_for",
+      "responsibility": "Niezależny expected_parent, nie autoryzacja przez self DTO.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "retained-preparation-stored-pins",
+      "path": "crates/fullmag-application/src/retained_current_preparation.rs",
+      "symbol": "validate_for_accepted_input",
+      "responsibility": "Kanoniczna zgodność przechowywanych pinów; nie trwałe source auth.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "retained-preparation-task-input",
+      "path": "crates/fullmag-application/src/execution.rs",
+      "symbol": "resolved_retained_current_study_input",
+      "responsibility": "Własny input v6, fingerprint, CPU lease i brak magnetic State.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "retained-preparation-protocol-pairing",
+      "path": "crates/fullmag-application/src/execution.rs",
+      "symbol": "WorkerCommandEnvelope",
+      "responsibility": "Ścisłe pairing v6 i zachowane claim/version fences.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "retained-preparation-runtime-read",
+      "path": "crates/fullmag-runtime-control/src/study.rs",
+      "symbol": "bind_retained_current_preparation",
+      "responsibility": "Typed readiness powiązane z accepted immutable kind i canonical input.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "retained-preparation-api-read",
+      "path": "crates/fullmag-api/src/live_scene_preparation.rs",
+      "symbol": "validate_retained_current_against_accepted_store",
+      "responsibility": "Exact durable typed payload do prezentacji; bez źródłowego auth i H wykonania.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "retained-preparation-session-envelope",
+      "path": "crates/fullmag-session/src/types.rs",
+      "symbol": "validate_retained_current_preparation_payload_identity",
+      "responsibility": "Session envelope identity bez dependencies solvera i bez fizycznego dowodu.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "retained-preparation-parent-pin-test",
+      "path": "crates/fullmag-application/src/retained_current_preparation.rs",
+      "symbol": "recomputing_own_hash_does_not_authorize_changed_parent_evidence",
+      "responsibility": "Regresja pięciu source pins i capsule/package bytecounts po rehash; NOT RUN.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "retained-preparation-stream-test",
+      "path": "crates/fullmag-application/src/execution.rs",
+      "symbol": "retained_stream_rejects_version_change_without_advancing_watermarks",
+      "responsibility": "Regresja zakazu zmiany wersji strumienia bez skutku ubocznego; NOT RUN.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "retained-pinned-exact-cas",
+      "path": "crates/fullmag-session/src/accepted_provenance.rs",
+      "symbol": "validate_exact_detached_records",
+      "responsibility": "Dokładny derived CAS set i wymagane typed metadata w addytywnym wejściu; stare zachowanie zachowane.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "retained-pinned-common-cas",
+      "path": "crates/fullmag-session/src/accepted_provenance.rs",
+      "symbol": "validate_accepted_detached_records",
+      "responsibility": "Wspólna typowana walidacja i role closure bez duplikacji wyprowadzenia.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "retained-pinned-loader",
+      "path": "crates/fullmag-runtime-control/src/study_retained_current.rs",
+      "symbol": "load_saved_retained_current_with_pinned_evidence",
+      "responsibility": "Bieżący source auth i przypięta historyczna kapsuła w jednej SH; bez ponownego source solve.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "retained-pinned-reader",
+      "path": "crates/fullmag-runtime-control/src/study_retained_current.rs",
+      "symbol": "read_pinned_parent_evidence",
+      "responsibility": "Bounded odczyt capsule/manifest/records oraz streaming hash/bytes CAS.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "retained-pinned-preparation-context",
+      "path": "crates/fullmag-runtime-control/src/study_inspection_integrity.rs",
+      "symbol": "SavedInspectionReadContext",
+      "responsibility": "Porównanie historycznego preparation z rzeczywistym wybranym source receipt pod tą samą SH.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "retained-store-v2-context",
+      "path": "crates/fullmag-session/src/accepted_provenance.rs",
+      "symbol": "AcceptedStoreProvenanceContext",
+      "responsibility": "Prawdziwy kontekst accepted-store bez tożsamości UI.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "retained-store-v2-manifest",
+      "path": "crates/fullmag-session/src/accepted_provenance.rs",
+      "symbol": "AcceptedStoreProvenanceManifest",
+      "responsibility": "Jawny manifest v2 z zachowaniem nagłówka i serializacji v1.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "retained-store-v2-dispatch",
+      "path": "crates/fullmag-session/src/accepted_provenance.rs",
+      "symbol": "AcceptedEvidenceManifest",
+      "responsibility": "Ścisły dispatch oryginalnych bytes v1/v2 bez normalizacji JSON.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "retained-store-v2-planner",
+      "path": "crates/fullmag-session/src/accepted_provenance.rs",
+      "symbol": "plan_accepted_store_provenance_with_record_budget",
+      "responsibility": "Wspólny typowany inventory i budżet, bez fikcyjnego v1.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "retained-store-v2-capture",
+      "path": "crates/fullmag-runtime-control/src/study_retained_current.rs",
+      "symbol": "load_saved_retained_current_with_store_evidence",
+      "responsibility": "Actual store/run i jedna SH dla przechwycenia source evidence.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "retained-store-v2-preparer",
+      "path": "crates/fullmag-api/src/accepted_fem_preparer.rs",
+      "symbol": "prepare_retained_current_task",
+      "responsibility": "Własny parent-bound receipt, świeże v2 lub historyczny pinned replay.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "retained-field-content-gate",
+      "path": "crates/fullmag-runtime-control/src/study_retained_current_field.rs",
+      "symbol": "validate_retained_current_field_output",
+      "responsibility": "Wspólna walidacja dokładnych positions/topology/parent/field bytes.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "retained-field-cold-read",
+      "path": "crates/fullmag-runtime-control/src/study_retained_current_field.rs",
+      "symbol": "load_saved_retained_current_field_inspection",
+      "responsibility": "Osobny child cold-read z jedną wspólną walidacją completion.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "retained-field-header-range",
+      "path": "crates/fullmag-antenna-artifacts/src/retained_current/package.rs",
+      "symbol": "retained_current_field_manifest_length",
+      "responsibility": "Bounded header przed odczytem manifestu bez alokacji payloadów.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "retained-field-worker-v6",
+      "path": "crates/fullmag-api/src/accepted_retained_current_worker.rs",
+      "symbol": "validate_protocol",
+      "responsibility": "Własny statyczny kontrakt v6 CPU bez stanu m i nowego transportu.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "retained-source-capture-write-refusal",
+      "path": "packages/fullmag-py/src/fullmag/runtime/accepted_source_capture.py",
+      "symbol": "audit_event",
+      "responsibility": "Chroniona odmowa zapisów podczas eksportu wejścia H-only; rzeczywista próba zatrzymała się przed Submit.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "retained-source-mesh-cache-creation",
+      "path": "packages/fullmag-py/src/fullmag/model/problem.py",
+      "symbol": "_fem_mesh_cache_dir",
+      "responsibility": "Zlokalizowana próba mkdir wymagająca jawnych zamrożonych wejść w readonly capture, bez wyłączenia ochrony.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "retained-field-api-child-adapter",
+      "path": "crates/fullmag-api/src/router_v2/handlers/data/inspection_field_provider.rs",
+      "symbol": "from_retained",
+      "responsibility": "Wyłącznie H_ant A/m na własnej siatce próbkowania i z właścicielem dziecka; bez V/J/m/per-A.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "retained-field-api-kind-dispatch",
+      "path": "crates/fullmag-api/src/router_v2/handlers/data/accepted_inspection_fields.rs",
+      "symbol": "InspectionKind",
+      "responsibility": "Jawny wybór czytnika pełnej inspekcji lub H-only przed cache; osobny właściciel oraz target topology.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "retained-field-import-reader",
+      "path": "crates/fullmag-runtime-control/src/study_imported_retained_current_field.rs",
+      "symbol": "load_imported_retained_current_field_inspection",
+      "responsibility": "Import evidence-only z dokładną closure, bez aktywowania historii i bez odczytu aktywnego storage źródła.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "retained-field-import-parent-content",
+      "path": "crates/fullmag-runtime-control/src/study_imported_retained_current_field.rs",
+      "symbol": "load_detached_parent_content",
+      "responsibility": "Ponowna fizyczna weryfikacja oryginalnego prądu ClosedLoop przez nieprzezroczysty wynik.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "retained-field-shared-content-gate",
+      "path": "crates/fullmag-runtime-control/src/study_retained_current_field.rs",
+      "symbol": "validate_retained_current_field_content",
+      "responsibility": "Wspólna weryfikacja H, nośnika i numerycznych dowodów z uwierzytelnionym parent content.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "retained-field-accepted-rest-resource",
+      "path": "crates/fullmag-api/src/router_v2/handlers/data/accepted_antenna_resource.rs",
+      "symbol": "AcceptedRetainedCurrentInspectionResource",
+      "responsibility": "Cienkie metadane H-only i osobne capability display bez current_density/per-A/FFT/LLG.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "retained-field-accepted-rest-payload",
+      "path": "crates/fullmag-api/src/router_v2/handlers/data/accepted_antenna_payload.rs",
+      "symbol": "select_retained_payload",
+      "responsibility": "Własne cztery payloady; istniejące owner-bound ETag i responder zakresów bez aliasowania evidence.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "retained-field-accepted-rest-discovery",
+      "path": "crates/fullmag-api/src/router_v2/handlers/data/accepted_antenna_inspection.rs",
+      "symbol": "with_accepted_antenna_publications",
+      "responsibility": "Wybór dokładnego kodeka dla H-only przy zachowaniu trwałej walidacji publikacji i fence katalogów.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "source-preparation-input-dto",
+      "path": "crates/fullmag-antenna-artifacts/src/source_preparation.rs",
+      "symbol": "AntennaSourcePreparationAssetDocument",
+      "responsibility": "Zamknięty input-only dokument do 8 MiB; bez autoryzacji prądu.",
+      "evidence_status": "production_cli_validation_passed"
+    },
+    {
+      "id": "source-preparation-python-input",
+      "path": "packages/fullmag-py/src/fullmag/model/antenna.py",
+      "symbol": "class AntennaSourcePreparationAsset",
+      "responsibility": "Jawna ścieżka wejściowa i hash całych bajtów.",
+      "evidence_status": "production_cli_validation_passed"
+    },
+    {
+      "id": "source-preparation-python-freeze",
+      "path": "packages/fullmag-py/src/fullmag/runtime/antenna_source_preparation.py",
+      "symbol": "resolve_source_preparations",
+      "responsibility": "Odczyt frozen source mesh przed materializacją geometrii, bez cache źródła.",
+      "evidence_status": "production_cli_validation_passed"
+    },
+    {
+      "id": "source-preparation-python-materialize",
+      "path": "packages/fullmag-py/src/fullmag/runtime/antenna_source_preparation.py",
+      "symbol": "materialize_source_preparations",
+      "responsibility": "Osobne historyczne przygotowanie i aktualna authored closure oraz Universe.",
+      "evidence_status": "production_cli_validation_passed"
+    },
+    {
+      "id": "source-preparation-ir-ref",
+      "path": "crates/fullmag-ir/src/antenna_source_preparation.rs",
+      "symbol": "AntennaSourcePreparationAssetRefIR",
+      "responsibility": "Typowane asset_id i bare SHA256 bez ścieżki hosta.",
+      "evidence_status": "production_cli_validation_passed"
+    },
+    {
+      "id": "source-preparation-plan",
+      "path": "crates/fullmag-plan/src/antenna_retained_preparation.rs",
+      "symbol": "plan_retained_preparation_field_inspection",
+      "responsibility": "Osobny plan statycznego H-only z zamrożonego nośnika.",
+      "evidence_status": "production_cli_validation_passed"
+    },
+    {
+      "id": "source-preparation-export",
+      "path": "crates/fullmag-runtime-control/src/study_source_preparation.rs",
+      "symbol": "encode_saved_antenna_source_preparation",
+      "responsibility": "Projekcja kanonicznych wejść po pełnym odczycie rodzica; bez nowego Solve.",
+      "evidence_status": "production_cli_validation_passed"
+    },
+    {
+      "id": "source-preparation-cli",
+      "path": "crates/fullmag-cli/src/export_antenna_source_preparation.rs",
+      "symbol": "export",
+      "responsibility": "Input-only eksport; odmowa istniejącego outputu i zapisu do accepted store.",
+      "evidence_status": "production_cli_validation_passed"
+    },
+    {
+      "id": "source-preparation-cas-binding",
+      "path": "crates/fullmag-runtime-control/src/study_source_preparation_binding.rs",
+      "symbol": "load_retained_source_preparation_binding",
+      "responsibility": "Rzeczywisty CAS, closure RunSpec/intent i zgodność z autentyczną projekcją.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "source-preparation-application-receipt",
+      "path": "crates/fullmag-application/src/retained_asset_field_preparation.rs",
+      "symbol": "RetainedAssetFieldPreparationReceipt",
+      "responsibility": "Osobny receipt wiąże rodzica, sampling i dziewięć historycznych pinów.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "source-preparation-api-prepare",
+      "path": "crates/fullmag-api/src/accepted_retained_preparation_preparer.rs",
+      "symbol": "prepare",
+      "responsibility": "Managed resume634 i rzeczywiste przygotowanie task0dc36: exit0, heartbeat15; worker H nie wystartował z powodu whitelisty inbox. Brak kwalifikacji H/LLG.",
+      "evidence_status": "production_preparation_validation_passed"
+    },
+    {
+      "id": "source-preparation-api-worker",
+      "path": "crates/fullmag-api/src/accepted_retained_preparation_worker.rs",
+      "symbol": "validate_protocol",
+      "responsibility": "Dokładny statyczny kontrakt v7 CPU, Artifact/default.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "source-preparation-publication",
+      "path": "crates/fullmag-runtime-control/src/study_retained_current_publication.rs",
+      "symbol": "validate_retained_preparation_field_publication_output",
+      "responsibility": "Dokładny historyczny claim/admission, asset, rodzic, receipt i field-content.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "source-preparation-field-content",
+      "path": "crates/fullmag-runtime-control/src/study_retained_current_field.rs",
+      "symbol": "validate_retained_preparation_field_bundle",
+      "responsibility": "Kanoniczny plan i fizyczna walidacja H na nowym sampling.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "antenna-allair-world-domain",
+      "path": "packages/fullmag-py/src/fullmag/world.py",
+      "symbol": "_normalize_domain_region_marker_table",
+      "responsibility": "Jawna pusta mapa tylko składniowo; końcowa intencja pozostaje walidowana.",
+      "evidence_status": "interpreted_checks_passed"
+    },
+    {
+      "id": "antenna-allair-final-intent",
+      "path": "packages/fullmag-py/src/fullmag/model/problem.py",
+      "symbol": "_validate_explicit_domain_marker_intent",
+      "responsibility": "Końcowa niemagnetyczna intencja niezależna od kolejności deklaracji.",
+      "evidence_status": "interpreted_checks_passed"
+    },
+    {
+      "id": "antenna-allair-script-roundtrip",
+      "path": "packages/fullmag-py/src/fullmag/runtime/script_builder.py",
+      "symbol": "_render_domain_mesh_call",
+      "responsibility": "Eksport zachowuje jawny domain mesh i pustą mapę regionów.",
+      "evidence_status": "interpreted_checks_passed"
+    },
+    {
+      "id": "source-preparation-public-producer",
+      "path": "crates/fullmag-application/src/script_stage_materialization.rs",
+      "symbol": "resolve_antenna_field_solve_action",
+      "responsibility": "Wybór jawnej rodziny retained preparation przed dawnym planerem H-only.",
+      "evidence_status": "production_cli_validation_passed"
+    },
+    {
+      "id": "source-preparation-accepted-producer",
+      "path": "crates/fullmag-application/src/script_pipeline_acceptance.rs",
+      "symbol": "compile_accepted_closed_loop_pipeline",
+      "responsibility": "Typowana operacja Artifact bez portów State i bez magnetic continuation.",
+      "evidence_status": "production_cli_validation_passed"
+    },
+    {
+      "id": "source-preparation-store-evidence",
+      "path": "crates/fullmag-runtime-control/src/study_source_preparation.rs",
+      "symbol": "load_saved_retained_current_source_preparation_with_store_evidence",
+      "responsibility": "Pełna autentykacja rodzica/capture provenance; rzeczywisty preparer po naprawie SH przeszedł z heartbeat15. To odbiór tego zadania, nie wszystkich cold-readerów.",
+      "evidence_status": "production_preparation_validation_passed"
+    },
+    {
+      "id": "source-preparation-deferred-read",
+      "path": "crates/fullmag-runtime-control/src/study_inspection_integrity.rs",
+      "symbol": "with_deferred_source_inspection",
+      "responsibility": "Unix-only capture/weryfikacja/recheck: build634 i postęp konkretnego nadzorowanego preparera PASS; zewnętrzny cold-reader nadal poza zakresem, brak native H.",
+      "evidence_status": "production_preparation_validation_passed"
+    },
+    {
+      "id": "source-preparation-deferred-read-regression",
+      "path": "crates/fullmag-runtime-control/src/study_inspection_integrity.rs",
+      "symbol": "deferred_source_validation_longer_than_heartbeat_deadline_allows_native_writers",
+      "responsibility": "Źródło regresji >5 sekund walidacji z równoległym native writerem; test niekompilowany i niewykonany.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "source-preparation-inbox-v7-gate",
+      "path": "crates/fullmag-session/src/worker_inbox.rs",
+      "symbol": "FmsWorkerInboxRecord",
+      "responsibility": "Whitelist validate przyjmuje v7 dopiero w niezbudowanej poprawce77ad; istniejące claim/identity/sequence checks bez zmian. Zbudowany snapshot5db4 odmówił przed worker launch.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "source-preparation-inbox-v7-positive-regression",
+      "path": "crates/fullmag-session/src/worker_inbox.rs",
+      "symbol": "v7_inbox_preserves_pending_prepare_start_and_applied_publication",
+      "responsibility": "Źródło regresji pending Prepare/Start i applied v7; niekompilowane i niewykonane.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "source-preparation-inbox-v7-negative-regression",
+      "path": "crates/fullmag-session/src/worker_inbox.rs",
+      "symbol": "v7_inbox_rejects_unknown_mixed_protocol_claim_and_sequence_changes",
+      "responsibility": "Źródło odmów unknown/mixed protocol i zmiany claim/sequence; niekompilowane i niewykonane.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "surface-mandatory-work-preflight",
+      "path": "backends/fem/cpu/mfem/interactions/oersted/surface_rt0.cpp",
+      "symbol": "void validate_surface_rt0_work_minimums",
+      "responsibility": "Wspólny preflight koniecznych liczników, w tym 100 sqrt na parę; source-only do managed weryfikacji.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "surface-work-counter-refusal",
+      "path": "backends/fem/cpu/mfem/interactions/oersted/surface_rt0.cpp",
+      "symbol": "Work",
+      "responsibility": "Odmowa z nazwą, zakresem, wartością i limitem; nie publikuje częściowego pola.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "surface-budget-source-regression",
+      "path": "scripts/test_surface_rt0_budget_admission_source.py",
+      "symbol": "class SurfaceRt0BudgetAdmissionSourceTests",
+      "responsibility": "Lekka regresja źródłowego spięcia preflight/ABI i diagnostyki; nie dowodzi wykonania C++.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "surface-gsg-policy-python-version",
+      "path": "packages/fullmag-py/src/fullmag/model/antenna.py",
+      "symbol": "ANTENNA_GSG_UNIVERSE_SURFACE_FIELD_POLICY_VERSION",
+      "responsibility": "Drugi dokładny identyfikator jawnej polityki; wspólne bramki bez zmiany, bez wyboru limitów.",
+      "evidence_status": "interpreted_tests_passed"
+    },
+    {
+      "id": "surface-gsg-policy-ir-version",
+      "path": "crates/fullmag-ir/src/antenna.rs",
+      "symbol": "ANTENNA_GSG_UNIVERSE_SURFACE_FIELD_POLICY_VERSION",
+      "responsibility": "Addytywny identyfikator ProblemIR; źródło, managed runtime nowego tokenu jeszcze niewykonany.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "surface-gsg-policy-roundtrip",
+      "path": "packages/fullmag-py/tests/test_antenna_surface_policy.py",
+      "symbol": "test_gsg_universe_profile_preserves_explicit_limits_and_round_trip",
+      "responsibility": "Dokładne parametry zatwierdzonego profilu i Python/scene round-trip bez Solve; RED przed poprawką, GREEN po.",
+      "evidence_status": "interpreted_tests_passed"
+    },
+    {
+      "id": "surface-gsg-policy-refusals",
+      "path": "packages/fullmag-py/tests/test_antenna_surface_policy.py",
+      "symbol": "test_gsg_version_does_not_admit_unknown_versions_or_weaken_guards",
+      "responsibility": "Nieznane tokeny i wspólne odmowy niewłaściwych limitów/tolerancji dla obu wersji; test interpretowany.",
+      "evidence_status": "interpreted_tests_passed"
+    },
+    {
+      "id": "gsg-convergence-reference-profile",
+      "path": "scripts/antenna_gsg_convergence_reference.py",
+      "symbol": "class GsgSourceConvergenceBudget",
+      "responsibility": "Jawny profil dziewięciu kontroli z jednym budżetem i kluczem źródło/XYZ; brak autoryzacji danych lub kwalifikacji bazy.",
+      "evidence_status": "interpreted_tests_passed"
+    },
+    {
+      "id": "gsg-convergence-reference-budget-regressions",
+      "path": "scripts/test_antenna_gsg_convergence_reference.py",
+      "symbol": "class GsgConvergenceBudgetTests",
+      "responsibility": "9 regresji limitów, odmów, czasu, RAM, dokładnych bitów i współpracy z istniejącą referencją RT0.",
+      "evidence_status": "interpreted_tests_passed"
+    },
+    {
+      "id": "gsg-reference-default-equivalence",
+      "path": "scripts/test_antenna_triangle_surface_oracle.py",
+      "symbol": "test_measurement_only_preserves_existing_math_and_budget_ast",
+      "responsibility": "Oryginalny hash AST równań, wartości i bramek po normalizacji wyłącznie nowego wyboru limitów.",
+      "evidence_status": "interpreted_tests_passed"
+    },
+    {
+      "id": "gsg-readonly-cache-directory",
+      "path": "packages/fullmag-py/src/fullmag/model/problem.py",
+      "symbol": "_fem_mesh_cache_dir",
+      "responsibility": "Pominięcie zbędnego mkdir dla istniejącego cache; ochrona capture i fizyka bez zmian.",
+      "evidence_status": "interpreted_tests_passed"
+    },
+    {
+      "id": "gsg-readonly-cache-regressions",
+      "path": "packages/fullmag-py/tests/test_mesh_cache_readonly_directory.py",
+      "symbol": "class MeshCacheReadonlyDirectoryTests",
+      "responsibility": "Cztery interpretowane regresje: readonly, brak katalogu, wyłączenie cache i istniejący plik.",
+      "evidence_status": "interpreted_tests_passed"
+    },
+    {
+      "id": "gsg-convergence-numeric-analysis",
+      "path": "scripts/compare_gsg_source_convergence.py",
+      "symbol": "compare_source_convergence",
+      "responsibility": "Stałe kryteria I/H/HperA i opcjonalnego właściwego eta na dokładnym nośniku20; brak kwalifikacji źródła.",
+      "evidence_status": "interpreted_tests_passed"
+    },
+    {
+      "id": "gsg-convergence-numeric-analysis-tests",
+      "path": "scripts/test_compare_gsg_source_convergence.py",
+      "symbol": "class GsgSourceConvergenceTests",
+      "responsibility": "12 regresji przyrostów, podłóg, znaków, normalizacji, braków i nośnika.",
+      "evidence_status": "interpreted_tests_passed"
+    },
+    {
+      "id": "gsg-reference-global-sum",
+      "path": "scripts/antenna_gsg_convergence_reference.py",
+      "symbol": "evaluate_retained_field",
+      "responsibility": "Sumowanie istniejącego kernela RT0, globalne sumy błędów i cancellation, wspólny budżet, bez Solve.",
+      "evidence_status": "interpreted_tests_passed"
+    },
+    {
+      "id": "gsg-reference-global-sum-tests",
+      "path": "scripts/test_antenna_gsg_field_reference_sum.py",
+      "symbol": "class GsgFieldReferenceSumTests",
+      "responsibility": "11 regresji na małych danych matematycznych; niepełny/nadmiarowy nośnik, sumy błędów, cancellation i postęp.",
+      "evidence_status": "interpreted_tests_passed"
+    },
+    {
+      "id": "gsg-current-correction",
+      "path": "scripts/antenna_gsg_current_correction.py",
+      "symbol": "weighted_rt0_h1_correction",
+      "responsibility": "Dokładna całka degree2 Tet4 ważonej różnicy RT0/H1 z surowego V i sigma; bez Solve lub kwalifikacji.",
+      "evidence_status": "interpreted_tests_passed"
+    },
+    {
+      "id": "gsg-current-correction-tests",
+      "path": "scripts/test_antenna_gsg_current_correction.py",
+      "symbol": "class GsgCurrentCorrectionTests",
+      "responsibility": "Analityczne testy i odmowy, pełny gradient, znaki, stable ID na przekroju, wagi i dokładna całka.",
+      "evidence_status": "interpreted_tests_passed"
+    },
+    {
+      "id": "gsg-frozen-config-check",
+      "path": "scripts/verify_frozen_gsg_export.py",
+      "symbol": "verify_frozen_gsg_config",
+      "responsibility": "Cały config trzech przypiętych wejść i jawna transformacja metadanych flat; bez usuwania nieznanych pól lub native prepare.",
+      "evidence_status": "retained_real_configs_matched"
+    },
+    {
+      "id": "gsg-frozen-config-tests",
+      "path": "scripts/test_verify_frozen_gsg_export.py",
+      "symbol": "class FrozenGsgExportTests",
+      "responsibility": "Mutacje źródła, siatki, stage, backendu, metadanych, typu liczb i brak pinu; nie dowód native admission.",
+      "evidence_status": "interpreted_tests_passed"
+    },
+    {
+      "id": "gsg-frozen-config-exporter",
+      "path": "packages/fullmag-py/src/fullmag/runtime/run_config_export.py",
+      "symbol": "export_run_config",
+      "responsibility": "Istniejący kanoniczny producent config i shared assets; bez uruchamiania solvera.",
+      "evidence_status": "source_mapped"
+    },
+    {
+      "id": "gsg-frozen-config-stage-producer",
+      "path": "packages/fullmag-py/src/fullmag/runtime/loader.py",
+      "symbol": "class LoadedStage",
+      "responsibility": "LoadedStage.to_ir: istniejący producent metadanych aktywnego etapu, czasu startu i źródłowej lokalizacji wyników.",
+      "evidence_status": "source_mapped"
+    },
+    {
+      "id": "gsg-current-correction-partition",
+      "path": "scripts/antenna_gsg_current_correction.py",
+      "symbol": "partitioned_weighted_rt0_h1_correction",
+      "responsibility": "Kompletna rozłączna partycja komórek, sumy N/D i udziały bez wygładzania śladów przekroju; bez Solve.",
+      "evidence_status": "interpreted_tests_passed"
+    },
+    {
+      "id": "gsg-current-correction-partition-tests",
+      "path": "scripts/test_antenna_gsg_current_correction.py",
+      "symbol": "class PartitionedCurrentCorrectionTests",
+      "responsibility": "Niezależne ważenie dwóch części, nieciągła partycja, lokalne sourcecut IDs, odmowy braków i nadmiaru oraz ograniczone iteratory.",
+      "evidence_status": "interpreted_tests_passed"
+    },
+    {
+      "id": "gsg-reference-full-sum",
+      "path": "scripts/antenna_gsg_convergence_reference.py",
+      "symbol": "evaluate_retained_field",
+      "responsibility": "Pełna suma zachowanego RT0 i globalne bramki precyzji oraz porównania, bez Solve.",
+      "evidence_status": "interpreted_tests_passed"
+    },
+    {
+      "id": "gsg-reference-full-sum-tests",
+      "path": "scripts/test_antenna_gsg_field_reference_sum.py",
+      "symbol": "class GsgFieldReferenceSumTests",
+      "responsibility": "11 interpretowanych regresji sumowania, odmów i wspólnego budżetu.",
+      "evidence_status": "interpreted_tests_passed"
+    },
+    {
+      "id": "gsg-reference-input-owner",
+      "path": "scripts/run_gsg_source_convergence_reference.py",
+      "symbol": "load_case",
+      "responsibility": "Uwierzytelnienie CAS/IR i zgodność pełnych V/J/H z publicznym zachowanym wynikiem; rzeczywisty preflight oczekuje.",
+      "evidence_status": "implementation_unqualified"
+    },
+    {
+      "id": "gsg-reference-single-start",
+      "path": "scripts/run_gsg_source_convergence_reference.py",
+      "symbol": "claim_once",
+      "responsibility": "Jednorazowy trwały marker serii bez automatycznych ponowień.",
+      "evidence_status": "interpreted_tests_passed"
+    },
+    {
+      "id": "gsg-reference-input-tests",
+      "path": "scripts/test_run_gsg_source_convergence_reference.py",
+      "symbol": "class ReferenceInputTests",
+      "responsibility": "Regresje uszkodzeń payloadu, właścicieli, nośników oraz drugiego startu; bez kwalifikacji fizyki.",
+      "evidence_status": "interpreted_tests_passed"
+    },
+    {
+      "id": "rt0-stored-point-export",
+      "path": "backends/fem/cpu/mfem/transport/closed_loop_source_snapshot.hpp",
+      "symbol": "export_closed_loop_source_snapshot",
+      "responsibility": "Próbkuje RT0 w zapisanym środku i wiąże bity.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "rt0-stored-point-native",
+      "path": "backends/fem/cpu/mfem/transport/affine_rt0_element.cpp",
+      "symbol": "AffineRt0Element::retained_current_at",
+      "responsibility": "Dokładna ocena RT0 w fizycznym punkcie.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "rt0-stored-point-verifier",
+      "path": "crates/fullmag-runner/src/antenna_field_solution/closed_loop_identity_v2.rs",
+      "symbol": "verify_center_current",
+      "responsibility": "Dokładne porównanie RT0 w zapisanym punkcie; CI/runtime oczekują.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "rt0-stored-point-arithmetic",
+      "path": "examples/sushruth_2020_closed_gsg/stored_point_validation_20261108/stored_point_policy_audit.py",
+      "symbol": "exact_field",
+      "responsibility": "Wykonany dokładny odczyt komórki, bez solvera.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "rt0-stored-point-context",
+      "path": "crates/fullmag-runner/src/antenna_field_solution/closed_loop_identity_v2.rs",
+      "symbol": "ExactRt0MomentCell",
+      "responsibility": "Jeden dokładny kontekst geometrii i momentów dla środka i12 próbek nodalnych.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "rt0-stored-point-regression",
+      "path": "crates/fullmag-runner/src/antenna_field_solution/closed_loop_identity_v2_affinity_tests.rs",
+      "symbol": "stored_point_center_accepts_actual_28881",
+      "responsibility": "Rzeczywisty RED komórki28881; oczekuje GREEN nowego predykatu.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "gsg-corner12p5-realization",
+      "path": "scripts/docker_gsg_mesh_preparation.py",
+      "symbol": "corner12p5_refinement_report",
+      "responsibility": "Pomiar wszystkich krawędzi Tet4 przy8narożach; odbiór przed Submit, bez dowodu błędu H.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "gsg-corner12p5-script",
+      "path": "scripts/docker_gsg_mesh_preparation.py",
+      "symbol": "verify_corner12p5_script",
+      "responsibility": "Dokładna tożsamość zatwierdzonego skryptu, bez zmiany fizyki.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "gsg-corner12p5-profile",
+      "path": "scripts/antenna_gsg_current_correction.py",
+      "symbol": "SOURCE_CELL_LIMITS",
+      "responsibility": "Zamknięty profil80k; default72911 zachowany.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "gsg-corner12p5-regressions",
+      "path": "scripts/test_docker_gsg_mesh_preparation.py",
+      "symbol": "test_corner12p5_changes_only_mesh_refinement_and_study_output_identity",
+      "responsibility": "Test AST, pinów i raportowania krawędzi na fixture; nie native Gmsh.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "gsg-publication-metadata-reader",
+      "path": "crates/fullmag-api/src/accepted_study_worker.rs",
+      "symbol": "read_completed_worker_receipt_for_publication",
+      "responsibility": "Krótki writer guard i istniejący typed retry wyłącznie przy publikacji; guard kończy się przed wspólnym CAS.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "gsg-shared-completed-reader-regression",
+      "path": "crates/fullmag-api/src/accepted_study_worker.rs",
+      "symbol": "completed_receipt_read_preserves_existing_shared_transaction",
+      "responsibility": "Rzeczywiste dwa uchwyty i held ReadTransaction; RED w CI przed poprawką, bez120s oczekiwania.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "gsg-publication-call-site-regression",
+      "path": "crates/fullmag-api/src/router_v2/tests/project_documents.rs",
+      "symbol": "explicit_project_run_submit_is_durable_and_replays_without_live_session",
+      "responsibility": "Istniejący publiczny round-trip FDM z test-only licznikiem wejść do launchera; nie jest kwalifikacją FEM.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "gsg-fine-source-binding",
+      "path": "scripts/run_gsg_junction_reference.py",
+      "symbol": "validate_binding",
+      "responsibility": "Zamknięty binding jednego zachowanego źródła80k; nie jest nowym publicznym API.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "gsg-fine-http-readback",
+      "path": "scripts/run_gsg_junction_reference.py",
+      "symbol": "load_source",
+      "responsibility": "Odczyt całego V/J/H/IR i pełnych payloadów przez istniejące API; fixtures nie kwalifikują pola.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "gsg-fine-shared-budget",
+      "path": "scripts/run_gsg_junction_reference.py",
+      "symbol": "run_checks",
+      "responsibility": "Trzy targety0/8/16, wspólny budżet i pierwsza odmowa bez retry.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "gsg-fine-dual-evidence",
+      "path": "scripts/run_gsg_junction_reference.py",
+      "symbol": "write_evidence",
+      "responsibility": "Identyczne, ograniczone JSON w control i przy skrypcie.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "gsg-fine-managed-request",
+      "path": "scripts/docker_gsg_reference.py",
+      "symbol": "make_fine_request",
+      "responsibility": "Przypięta wewnętrzna koperta trzech kontroli jednego źródła.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "gsg-fine-managed-exit-test",
+      "path": "scripts/test_docker_gsg_reference.py",
+      "symbol": "test_real_fine_wrapper_reaps_fixture_child_and_refuses_repeat",
+      "responsibility": "Rzeczywisty child fixture, reaped exit i odmowa powtórzenia; bez referencji naukowej.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "gsg-fine-partial-refusal-test",
+      "path": "scripts/test_run_gsg_junction_reference.py",
+      "symbol": "test_second_failed_gate_retains_completed_values_and_failure_counts",
+      "responsibility": "Zachowanie wcześniejszego wyniku i pierwszej niezaliczonej kontroli.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "gsg-local-family-comparison",
+      "path": "scripts/compare_gsg_source_convergence.py",
+      "symbol": "compare_junction_source_convergence",
+      "responsibility": "Metadane lokalnej serii z niezmienionymi kryteriami i bez promocji globalnego FAIL.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "gsg-local-family-comparison-tests",
+      "path": "scripts/test_compare_gsg_source_convergence.py",
+      "symbol": "class GsgJunctionConvergenceTests",
+      "responsibility": "Fixture lokalnej rodziny, odmowa słabej kontrakcji oraz braku estymatora; nie jest wynikiem naukowym.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "saved-admissibility-theory",
+      "path": "docs/physics/0950-quasistatic-microwave-antenna-field-basis-and-k-selective-excitation.md",
+      "symbol": "DOC-ANCHOR:gsg-saved-flux-admissibility",
+      "responsibility": "Warunki dopuszczalności i własne wyprowadzenie zasad energii na sparowanym przecięciu.",
+      "evidence_status": "planned_contract"
+    },
+    {
+      "id": "saved-admissibility-orientation",
+      "path": "backends/fem/cpu/mfem/transport/conservative_current_view.cpp",
+      "symbol": "int canonical_outward_sign",
+      "responsibility": "Kanoniczna orientacja strumienia względem komórki.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "saved-admissibility-tolerance",
+      "path": "backends/fem/cpu/mfem/transport/conservative_current_view.cpp",
+      "symbol": "PhysicalCertificate integrate_physical_certificate",
+      "responsibility": "Rozróżnienie tolerancji produkcyjnej i dokładnych zer.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "saved-admissibility-energy",
+      "path": "scripts/antenna_gsg_current_correction.py",
+      "symbol": "weighted_rt0_h1_correction",
+      "responsibility": "Energia dotychczasowego interpolantu zaokrąglonych wartości J.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "saved-admissibility-reader",
+      "path": "scripts/antenna_saved_flux_admissibility.py",
+      "symbol": "read_selected_bundle",
+      "responsibility": "Strumieniowy odczyt wszystkich SHA pakietu; zatrzymuje wyłącznie pięć nośników.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "saved-admissibility-fluxes",
+      "path": "scripts/antenna_saved_flux_admissibility.py",
+      "symbol": "audit_fluxes",
+      "responsibility": "Dokładne wymierne bilanse komórek i sparowanych ścian, bez naprawy strumieni.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "saved-admissibility-jump",
+      "path": "scripts/antenna_saved_flux_admissibility.py",
+      "symbol": "audit_cut_potential",
+      "responsibility": "Dokładna geometryczna bijekcja i skok potencjału na przecięciu.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "saved-admissibility-pinned-run",
+      "path": "scripts/antenna_saved_flux_admissibility.py",
+      "symbol": "run_saved_audit",
+      "responsibility": "Ograniczony odczyt jednego rzeczywistego przypiętego wyniku; nie oblicza granicy błędu H.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "saved-admissibility-tests",
+      "path": "scripts/test_antenna_saved_flux_admissibility.py",
+      "symbol": "class SavedFluxAdmissibilityTests",
+      "responsibility": "Niezależne fixture geometrii, arytmetyki, integralności payloadów i rzeczywisty odczyt corner25.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "gsg-retained86k-cache",
+      "path": "scripts/docker_gsg_mesh_preparation.py",
+      "symbol": "verify_retained_fine_cache_mesh",
+      "responsibility": "Odczyt identycznego zachowanego cache i wszystkich85980Tet4 bez Gmsh.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "gsg-retained86k-inventory",
+      "path": "scripts/docker_gsg_mesh_preparation.py",
+      "symbol": "verify_retained_fine_inventory",
+      "responsibility": "Przypięcie skryptu/nośnika/NPZ i odmowa obcego aliasu.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "gsg-retained86k-request",
+      "path": "scripts/docker_gsg_mesh_preparation.py",
+      "symbol": "verify_retained_fine_request",
+      "responsibility": "Publiczny request z dokładnym count, storage i resources.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "gsg-retained86k-budget",
+      "path": "scripts/antenna_gsg_convergence_reference.py",
+      "symbol": "class GsgJunctionFineBudget",
+      "responsibility": "Jawny zamknięty work_profile z większym wyłącznie pairs_target.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "gsg-retained86k-driver",
+      "path": "scripts/run_gsg_junction_reference.py",
+      "symbol": "fine_cell_profile",
+      "responsibility": "Zachowanie default80k i jawna propagacja wybranego profilu86k.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "gsg-retained86k-tests",
+      "path": "scripts/test_docker_gsg_mesh_preparation.py",
+      "symbol": "class JunctionPreparationTests",
+      "responsibility": "Regresje cache-only i całej rzeczywistej geometrii bez Solve.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "gsg-retained86k-physics-guard",
+      "path": "scripts/docker_gsg_mesh_preparation.py",
+      "symbol": "verify_retained_fine_physics",
+      "responsibility": "Porównanie wyeksportowanego etapu pola, gauge, operatora, tolerancji, portu i field-only.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "gsg-retained86k-capture-test",
+      "path": "scripts/test_docker_gsg_mesh_preparation.py",
+      "symbol": "test_retained_fine_real_capture_refuses_cache_miss_before_meshing",
+      "responsibility": "Rzeczywisty publiczny capture bez NPZ odmawia przed mesherem, bez zapisu.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "gsg-retained86k-sticky-test",
+      "path": "scripts/test_docker_gsg_mesh_preparation.py",
+      "symbol": "test_real_capture_keeps_refusal_when_authoring_catches_exception",
+      "responsibility": "Przechwycenie wyjątku importu nie usuwa odmowy capture.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "gsg-z-note",
+      "path": "docs/physics/0950-quasistatic-microwave-antenna-field-basis-and-k-selective-excitation.md",
+      "responsibility": "Warunki nominalnej redukcji continuum i granica dowodu geometrycznego.",
+      "symbol": "DOC-ANCHOR:antenna-gsg-z-invariance-diagnostic",
+      "evidence_status": "planned_contract"
+    },
+    {
+      "id": "gsg-z-moments",
+      "path": "examples/sushruth_2020_closed_gsg/corner12p5_20261112/verification/audit_fine86k_component_energies.py",
+      "symbol": "component_integrals",
+      "responsibility": "Dokładny moment stopnia2 dla zachowanych afinicznych składowych."
+    },
+    {
+      "id": "gsg-z-tests",
+      "path": "examples/sushruth_2020_closed_gsg/corner12p5_20261112/verification/audit_fine86k_component_energies.py",
+      "symbol": "exact_fixtures",
+      "responsibility": "Dokładne monomiale i permutacje Fraction."
+    },
+    {
+      "id": "gsg-z-reader",
+      "path": "examples/sushruth_2020_closed_gsg/corner12p5_20261112/verification/audit_fine86k_component_energies.py",
+      "symbol": "main",
+      "responsibility": "Pełne piny, Decimal120 i porównanie z istniejącym bilansem; przed wykonaniem source_only."
+    },
+    {
+      "id": "gsg-z-geometry",
+      "path": "packages/fullmag-py/src/fullmag/model/geometry.py",
+      "symbol": "class CPWAntennaLayout",
+      "responsibility": "Nominalna geometria wspólnej grubości, nie dowód dokładnej reprezentacji bitowej siatki."
+    },
+    {
+      "id": "gsg-z-periodic-source",
+      "path": "backends/fem/cpu/mfem/transport/periodic_charge_potential.cpp",
+      "symbol": "PeriodicChargePotentialSolver::Solve",
+      "responsibility": "Istniejący skok potencjału plus-minus."
+    },
+    {
+      "id": "gsg-z-comparison",
+      "path": "examples/sushruth_2020_closed_gsg/corner12p5_20261112/verification/compare_saved_current_components.py",
+      "symbol": "main",
+      "responsibility": "Odczytowy trend tych samych momentów na zachowanych medium40728 i fine85980; bez nowego solve."
+    },
+    {
+      "id": "gsg-sheet-note",
+      "path": "docs/physics/0950-quasistatic-microwave-antenna-field-basis-and-k-selective-excitation.md",
+      "symbol": "DOC-ANCHOR:antenna-gsg-sheet-reference",
+      "responsibility": "Przedwynikowe założenia, parametry i bramki samodzielnej referencji FV.",
+      "evidence_status": "planned_contract"
+    },
+    {
+      "id": "gsg-sheet-solve_network",
+      "path": "examples/sushruth_2020_closed_gsg/corner12p5_20261112/verification/independent_gsg_sheet_current.py",
+      "symbol": "solve_network",
+      "responsibility": "Niezależna referencja matematyczna; bez kodu wykonawczego Fullmaga."
+    },
+    {
+      "id": "gsg-sheet-nominal_network",
+      "path": "examples/sushruth_2020_closed_gsg/corner12p5_20261112/verification/independent_gsg_sheet_current.py",
+      "symbol": "nominal_network",
+      "responsibility": "Niezależna referencja matematyczna; bez kodu wykonawczego Fullmaga."
+    },
+    {
+      "id": "gsg-sheet-self_checks",
+      "path": "examples/sushruth_2020_closed_gsg/corner12p5_20261112/verification/independent_gsg_sheet_current.py",
+      "symbol": "self_checks",
+      "responsibility": "Niezależna referencja matematyczna; bez kodu wykonawczego Fullmaga."
+    },
+    {
+      "id": "gsg-sheet-main",
+      "path": "examples/sushruth_2020_closed_gsg/corner12p5_20261112/verification/independent_gsg_sheet_current.py",
+      "symbol": "main",
+      "responsibility": "Niezależna referencja matematyczna; bez kodu wykonawczego Fullmaga."
+    },
+    {
+      "id": "gsg-sheet-field-note",
+      "path": "docs/physics/0950-quasistatic-microwave-antenna-field-basis-and-k-selective-excitation.md",
+      "symbol": "DOC-ANCHOR:antenna-gsg-sheet-field-reference",
+      "responsibility": "Przedwynikowe równania i progi niezależnego H z zachowanego FV.",
+      "evidence_status": "planned_contract"
+    },
+    {
+      "id": "gsg-sheet-field-read_inputs",
+      "path": "examples/sushruth_2020_closed_gsg/corner12p5_20261112/verification/independent_gsg_sheet_field.py",
+      "symbol": "read_inputs",
+      "responsibility": "Samodzielna referencja matematyczna bez Fullmag Solve, API lub zmiany IR."
+    },
+    {
+      "id": "gsg-sheet-field-reconstruct_faces",
+      "path": "examples/sushruth_2020_closed_gsg/corner12p5_20261112/verification/independent_gsg_sheet_field.py",
+      "symbol": "reconstruct_faces",
+      "responsibility": "Samodzielna referencja matematyczna bez Fullmag Solve, API lub zmiany IR."
+    },
+    {
+      "id": "gsg-sheet-field-z_kernels",
+      "path": "examples/sushruth_2020_closed_gsg/corner12p5_20261112/verification/independent_gsg_sheet_field.py",
+      "symbol": "z_kernels",
+      "responsibility": "Samodzielna referencja matematyczna bez Fullmag Solve, API lub zmiany IR."
+    },
+    {
+      "id": "gsg-sheet-field-field_gauss",
+      "path": "examples/sushruth_2020_closed_gsg/corner12p5_20261112/verification/independent_gsg_sheet_field.py",
+      "symbol": "field_gauss",
+      "responsibility": "Samodzielna referencja matematyczna bez Fullmag Solve, API lub zmiany IR."
+    },
+    {
+      "id": "gsg-sheet-field-self_checks",
+      "path": "examples/sushruth_2020_closed_gsg/corner12p5_20261112/verification/independent_gsg_sheet_field.py",
+      "symbol": "self_checks",
+      "responsibility": "Samodzielna referencja matematyczna bez Fullmag Solve, API lub zmiany IR."
+    },
+    {
+      "id": "gsg-sheet-field-assess_fields",
+      "path": "examples/sushruth_2020_closed_gsg/corner12p5_20261112/verification/independent_gsg_sheet_field.py",
+      "symbol": "assess_fields",
+      "responsibility": "Samodzielna referencja matematyczna bez Fullmag Solve, API lub zmiany IR."
+    },
+    {
+      "id": "gsg-sheet-field-main",
+      "path": "examples/sushruth_2020_closed_gsg/corner12p5_20261112/verification/independent_gsg_sheet_field.py",
+      "symbol": "main",
+      "responsibility": "Samodzielna referencja matematyczna bez Fullmag Solve, API lub zmiany IR."
+    },
+    {
+      "id": "gsg-dense-observation-note",
+      "path": "docs/physics/0950-quasistatic-microwave-antenna-field-basis-and-k-selective-excitation.md",
+      "symbol": "DOC-ANCHOR:antenna-dense-observation-carrier",
+      "responsibility": "Jawne pasywne okno i granice dowodu; bez zmiany domeny magnetycznej.",
+      "evidence_status": "planned_contract"
+    },
+    {
+      "id": "gsg-dense-observation-main",
+      "path": "examples/sushruth_2020_closed_gsg/dense_field_20261113/verification/prepare_dense_field_carrier.py",
+      "symbol": "main",
+      "responsibility": "Kanoniczny zapis/readback i kontrola kosztu bez Solve."
+    },
+    {
+      "id": "gsg-dense-observation-topology",
+      "path": "examples/sushruth_2020_closed_gsg/dense_field_20261113/verification/prepare_dense_field_carrier.py",
+      "symbol": "structured_mesh",
+      "responsibility": "Conforming Tet4 z kontrolą manifold i geometrii."
+    },
+    {
+      "id": "gsg-retained-dtq-reuse-note",
+      "path": "docs/physics/0950-quasistatic-microwave-antenna-field-basis-and-k-selective-excitation.md",
+      "symbol": "DOC-ANCHOR:antenna-retained-dtq-reuse",
+      "responsibility": "Granica prywatnego kandydata i kosztu gęstej mapy bez odblokowania publicznego H-only.",
+      "evidence_status": "planned_contract"
+    },
+    {
+      "id": "gsg-retained-dtq-cost-audit",
+      "path": "examples/sushruth_2020_closed_gsg/dense_field_20261113/verification/audit_retained_dtq_cost.py",
+      "symbol": "main",
+      "responsibility": "Bitowe binding H/XYZ/normalizacji oraz domknięcie liczników istniejącego wyniku."
+    },
+    {
+      "id": "gsg-retained-dtq-evidence-decoder",
+      "path": "crates/fullmag-runner/src/antenna_field_solution/direct_quadrature_v2.rs",
+      "symbol": "DirectQuadratureEvidenceV2",
+      "responsibility": "Istniejący binarny dowód DTQ v2."
+    },
+    {
+      "id": "gsg-retained-dtq-common-evaluation",
+      "path": "backends/fem/cpu/mfem/interactions/oersted/direct_tetra_quadrature.cpp",
+      "symbol": "DirectTetraQuadrature::EvaluateField",
+      "responsibility": "Istniejące wspólne całkowanie, ledger, admission i observer."
+    },
+    {
+      "id": "gsg-frozen-full-source-note",
+      "path": "docs/physics/0950-quasistatic-microwave-antenna-field-basis-and-k-selective-excitation.md",
+      "symbol": "DOC-ANCHOR:antenna-frozen-rt0-full-source-check",
+      "responsibility": "Z góry ustalona kontrola pełnego zachowanego prądu, bez nowego Solve.",
+      "evidence_status": "planned_contract"
+    },
+    {
+      "id": "gsg-frozen-full-source-moments",
+      "path": "crates/fullmag-runner/src/native_fem/retained_rt0_source.rs",
+      "symbol": "freeze_cell",
+      "responsibility": "Istniejące znaki i dokładna normalizacja fizycznych momentów na generyczne współczynniki."
+    },
+    {
+      "id": "gsg-frozen-full-source-main",
+      "path": "examples/sushruth_2020_closed_gsg/dense_field_20261113/verification/verify_frozen_source_mapping.py",
+      "symbol": "main",
+      "responsibility": "Pełna kontrola85980komórek i1289700składowych bez nowego Solve."
+    },
+    {
+      "id": "gsg-frozen-full-source-exact",
+      "path": "examples/sushruth_2020_closed_gsg/dense_field_20261113/verification/verify_frozen_source_mapping.py",
+      "symbol": "exact_samples",
+      "responsibility": "Niezależna arytmetyka dyadyczna tego samego równania RT0."
+    },
+    {
+      "id": "gsg-frozen-full-source-moment-checker",
+      "path": "examples/sushruth_2020_closed_gsg/dense_field_20261113/verification/verify_frozen_source_mapping.py",
+      "symbol": "recover_coefficients",
+      "responsibility": "Kanoniczne normalne i generyczna normalizacja fizycznych momentów."
+    },
+    {
+      "id": "retained-dtq-public-v2-contract",
+      "path": "docs/physics/0950-quasistatic-microwave-antenna-field-basis-and-k-selective-excitation.md",
+      "symbol": "DOC-ANCHOR:antenna-retained-dtq-public-v2",
+      "responsibility": "Zatwierdzony kontrakt istniejącej metody DTQ w publicznym H-only, zachowanie v1/v7 i brak nowej kwalifikacji.",
+      "evidence_status": "planned_contract"
+    },
+    {
+      "id": "retained-dtq-v2-manifest",
+      "path": "crates/fullmag-antenna-artifacts/src/retained_current/manifest_v2.rs",
+      "symbol": "RetainedCurrentFieldManifestV2",
+      "responsibility": "Zamknięta metadana DTQ v2; sam parser nie kwalifikuje źródła ani numeryki.",
+      "evidence_status": "ci_verified_artifact_contract"
+    },
+    {
+      "id": "retained-dtq-v2-codec",
+      "path": "crates/fullmag-antenna-artifacts/src/retained_current/package_v2.rs",
+      "symbol": "decode_retained_current_field_bundle_v2",
+      "responsibility": "Osobny framing i cztery payloady DTQ v2, bez reinterpretacji surface v1.",
+      "evidence_status": "ci_verified_artifact_contract"
+    },
+    {
+      "id": "retained-dtq-versioned-dispatch",
+      "path": "crates/fullmag-antenna-artifacts/src/retained_current/versioned.rs",
+      "symbol": "RetainedCurrentFieldManifestAny",
+      "responsibility": "Jawny wspólny widok wersji bez przepisywania historycznych bajtów.",
+      "evidence_status": "ci_verified_artifact_contract"
+    },
+    {
+      "id": "retained-rt0-shared-freeze",
+      "path": "crates/fullmag-runner/src/native_fem/retained_rt0_source.rs",
+      "symbol": "freeze_verified_source",
+      "responsibility": "Jeden freeze momentów źródła dla dotychczasowej ścieżki surface i nowego adaptera DTQ.",
+      "evidence_status": "source_reviewed_ci_pending"
+    },
+    {
+      "id": "retained-dtq-numeric-adapter",
+      "path": "crates/fullmag-runner/src/native_fem/retained_direct_rt0.rs",
+      "symbol": "evaluate_retained_rt0_direct",
+      "responsibility": "Wywołanie numerycznego CPU/double ABI; wymaga wcześniej uwierzytelnionego rodzica.",
+      "evidence_status": "source_reviewed_ci_pending"
+    },
+    {
+      "id": "retained-dtq-numeric-binding",
+      "path": "crates/fullmag-runner/src/antenna_field_solution/retained_dtq_binding.rs",
+      "symbol": "verify_retained_dtq_binding",
+      "responsibility": "Ten sam pełny error+roundoff i bitowy source/certificate/signedI/budget/XYZ/H binder; mechaniczne przeniesienie do neutralnego modułu, przegląd integracji i CI nadal wymagane.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "retained-dtq-numeric-abi",
+      "path": "native/include/fullmag_fem.h",
+      "symbol": "fullmag_fem_evaluate_frozen_rt0_direct_observed_v1",
+      "responsibility": "Addytywna deklaracja numerycznego CPU/double C ABI, bez digestów i autorytetu źródła.",
+      "evidence_status": "source_reviewed_ci_pending"
+    },
+    {
+      "id": "retained-dtq-workflow-memory-guard",
+      "path": "backends/fem/cpu/mfem/workflows/antenna_field_solve/frozen_direct_rt0.cpp",
+      "symbol": "validate_ranges",
+      "responsibility": "Właściciel workflow ABI: kontrola nagłówków, zakresów pamięci i rozłączności przed mutacją buforów.",
+      "evidence_status": "source_reviewed_ci_pending"
+    },
+    {
+      "id": "retained-dtq-python-stage",
+      "path": "packages/fullmag-py/src/fullmag/model/antenna.py",
+      "symbol": "class AntennaFieldSolveStage",
+      "responsibility": "Istniejący constructor/to_ir dopuszcza retained+direct wyłącznie z jawnym source preparation asset; testy Python nie dowodzą autentycznego source capture.",
+      "evidence_status": "source_reviewed_ci_pending"
+    },
+    {
+      "id": "retained-dtq-typed-plan",
+      "path": "crates/fullmag-ir/src/plan.rs",
+      "symbol": "AntennaRetainedDirectFieldPlanV2",
+      "responsibility": "Zamknięty osobny plan v2, bez nowych pól protokołu v7.",
+      "evidence_status": "source_reviewed_ci_pending"
+    },
+    {
+      "id": "retained-dtq-typed-planner",
+      "path": "crates/fullmag-plan/src/antenna_retained_direct.rs",
+      "symbol": "plan_retained_direct_field_inspection",
+      "responsibility": "Wyłącznie explicit FEM CPU strict double, zamknięte profile i H-only Artifact bez fresh transport.",
+      "evidence_status": "source_reviewed_ci_pending"
+    },
+    {
+      "id": "retained-dtq-study-validator",
+      "path": "crates/fullmag-plan/src/study_lowering.rs",
+      "symbol": "validate_retained_direct_field_operation",
+      "responsibility": "Powiązanie selektorów etapu z dokładnym typed planem; root reexport naprawiony po review.",
+      "evidence_status": "source_reviewed_ci_pending"
+    },
+    {
+      "id": "retained-dtq-accepted-action",
+      "path": "crates/fullmag-application/src/script_stage_materialization.rs",
+      "symbol": "resolve_antenna_field_solve_action",
+      "responsibility": "Wybór istniejącej rodziny etapu i nowej typowanej akcji direct.",
+      "evidence_status": "source_reviewed_ci_pending"
+    },
+    {
+      "id": "retained-dtq-accepted-replay",
+      "path": "crates/fullmag-application/src/script_pipeline_acceptance.rs",
+      "symbol": "compile_accepted_closed_loop_pipeline",
+      "responsibility": "Kompilacja accepted descriptor i replay bez nowego wariantu StudyStepKind.",
+      "evidence_status": "source_reviewed_ci_pending"
+    },
+    {
+      "id": "retained-dtq-neutral-preparation",
+      "path": "crates/fullmag-application/src/retained_asset_field_preparation.rs",
+      "symbol": "RetainedAssetFieldPreparationReceipt",
+      "responsibility": "Method-neutral receipt v1 z odciskiem konkretnego planu, nie opakowania BackendPlanIR.",
+      "evidence_status": "source_reviewed_ci_pending"
+    },
+    {
+      "id": "retained-dtq-worker-source-gate",
+      "path": "crates/fullmag-api/src/accepted_retained_preparation_worker.rs",
+      "symbol": "execute",
+      "responsibility": "Walidacja v7 i pełne powiązanie trwałego rodzica/assetu/source przed producentem.",
+      "evidence_status": "source_reviewed_ci_pending"
+    },
+    {
+      "id": "retained-dtq-worker-output-contract",
+      "path": "crates/fullmag-api/src/accepted_study_worker.rs",
+      "symbol": "WorkerOutputContract",
+      "responsibility": "Typed direct v7 wybiera kodek v2; surface v7 zachowuje v1.",
+      "evidence_status": "source_reviewed_ci_pending"
+    },
+    {
+      "id": "retained-dtq-public-producer",
+      "path": "crates/fullmag-runner/src/antenna_field_solution/retained_current_execution/retained_direct_execution.rs",
+      "symbol": "execute_retained_direct_field_inspection_observed_typed",
+      "responsibility": "Orkiestracja istniejącego adaptera, pełny parent/source binding i cztery surowe payloady v2; bez nowego transportu.",
+      "evidence_status": "source_reviewed_ci_pending"
+    },
+    {
+      "id": "retained-dtq-artifact-registry",
+      "path": "crates/fullmag-application/src/study_artifact.rs",
+      "symbol": "decode_study_artifact",
+      "responsibility": "Jawny dispatch kodeka v2 w istniejącym rejestrze; samo dekodowanie nie uwierzytelnia źródła.",
+      "evidence_status": "source_reviewed_ci_pending"
+    },
+    {
+      "id": "retained-dtq-durable-field-gate",
+      "path": "crates/fullmag-runtime-control/src/study_retained_current_field.rs",
+      "symbol": "validate_retained_direct_field_bundle",
+      "responsibility": "Wersjonowany bounded decode i pełny opaque parent gate dla v2.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "retained-dtq-publication-source-binding",
+      "path": "crates/fullmag-runner/src/antenna_field_solution/retained_current_execution/retained_direct_execution.rs",
+      "symbol": "verify_retained_direct_field_for_publication",
+      "responsibility": "Source/target/capsule/typed plan binding; bez nowego obliczenia.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "retained-dtq-publication-accepted-owner",
+      "path": "crates/fullmag-runtime-control/src/study_retained_current_publication.rs",
+      "symbol": "validate_direct_output",
+      "responsibility": "Exact accepted claim/admission oraz autentyczny source asset/receipt.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "retained-dtq-detached-field-reader",
+      "path": "crates/fullmag-runtime-control/src/study_imported_retained_current_field.rs",
+      "symbol": "load_imported_retained_current_field_inspection",
+      "responsibility": "Detached import z oryginalnymi receipt i dziewięcioma historical pins; bez starej aktywnej sesji.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "retained-dtq-detached-parent-content",
+      "path": "crates/fullmag-runtime-control/src/study_imported_retained_current_field.rs",
+      "symbol": "load_detached_parent_content",
+      "responsibility": "Pełny kanoniczny source reader rodzica i exact record closure z CAS importu.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "retained-dtq-parent-closure-any",
+      "path": "crates/fullmag-session/src/accepted_provenance_retained.rs",
+      "symbol": "validate_retained_current_parent_evidence_any",
+      "responsibility": "Jawna wersja i dokładny graf rodzica, metadata charges i odmowa cyklu.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "retained-dtq-parent-closure-walk",
+      "path": "crates/fullmag-session/src/accepted_provenance_retained.rs",
+      "symbol": "RetainedClosureWalk",
+      "responsibility": "Iteracyjny bounded walk exact obiektów/rekordów; bez traktowania H-only jako źródła prądu.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "retained-dtq-raw-tensor-descriptor",
+      "path": "crates/fullmag-runtime-control/src/study_retained_current_tensor.rs",
+      "symbol": "metadata_descriptor",
+      "responsibility": "Tensor raw H w A/m na Node/child carrier; brak normowania do bazy LLG.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "retained-dtq-quantity-catalog-gate",
+      "path": "crates/fullmag-api/src/quantities.rs",
+      "symbol": "build_quantities",
+      "responsibility": "Retained direct/preparation korzystają z inspection facade, bez katalogu m.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "retained-dtq-public-materialization-admission",
+      "path": "crates/fullmag-api/src/router_v2/handlers/data/inspection_field_provider.rs",
+      "symbol": "retained_view_admission",
+      "responsibility": "Niezmieniony checked limit128MiB i rezerwa2MiB przed materializacją.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "retained-dtq-raw-quantity-facade",
+      "path": "crates/fullmag-api/src/router_v2/handlers/data/inspection_field_provider.rs",
+      "symbol": "from_retained",
+      "responsibility": "Jedna raw H_ant A/m na target carrier dziecka; bez V/J/bazy.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "retained-dtq-saved-parent-version-parser",
+      "path": "apps/control-room/src/kernel/resources/savedAntennaSourceContextResources.ts",
+      "symbol": "loadRetainedParentDataset",
+      "responsibility": "Ścisłe source-package@v1/@v2 przy zachowaniu tożsamości rodzica i bounded queries.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "retained-dtq-saved-inspector-raw-mode",
+      "path": "apps/control-room/src/modules/inspector/panels/SavedFieldVisualizationPanel.tsx",
+      "symbol": "SavedFieldVisualizationPanel",
+      "responsibility": "Jawne raw A/m; brak pozornego H/I oraz promocji do qualified basis.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "retained-dtq-raw-normalization-rejection-test",
+      "path": "crates/fullmag-api/src/router_v2/handlers/data/inspection_field_provider.rs",
+      "symbol": "retained_dtq_raw_display_does_not_bypass_invalid_signed_normalization",
+      "responsibility": "Źródłowa regresja niedopuszczalnego I/skali; test niewykonany.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "retained-dtq-payload-four-test",
+      "path": "crates/fullmag-api/src/router_v2/handlers/data/accepted_antenna_payload.rs",
+      "symbol": "retained_dtq_v2_payload_allowlist_stays_four",
+      "responsibility": "Źródłowa regresja zamkniętej allowlisty czterech payloadów; bez HTTP proof.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "private-full-gsg-pack",
+      "path": "tools/gsg_surface_native_probe.py",
+      "symbol": "pack_rt0",
+      "responsibility": "Pełne pakowanie fizycznych momentów RT0 bez autoryzacji accepted.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "private-full-gsg-inputs",
+      "path": "tools/gsg_surface_native_probe.py",
+      "symbol": "load_inputs",
+      "responsibility": "Piny pełnego źródła, IR i niezależnych referencji.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "private-full-gsg-package",
+      "path": "tools/gsg_surface_native_probe.py",
+      "symbol": "package_binding",
+      "responsibility": "Związanie biblioteki ze źródłami i rzeczywistym pakietem.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "private-full-gsg-call",
+      "path": "tools/gsg_surface_native_probe.py",
+      "symbol": "evaluate_once",
+      "responsibility": "Jednorazowy prywatny frozen call, pomiar i zachowanie rzeczywistej odmowy.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "private-full-gsg-evidence",
+      "path": "tools/gsg_surface_native_probe.py",
+      "symbol": "validate_evidence",
+      "responsibility": "Pełne H i dziewięć rekordów precyzji; bez H po odmowie.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "private-full-gsg-comparison",
+      "path": "tools/gsg_surface_native_probe.py",
+      "symbol": "compare_reference",
+      "responsibility": "Niezmienny próg porównania raw H bez dopasowania.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "private-full-gsg-controller",
+      "path": "scripts/docker_gsg_surface_reference.py",
+      "symbol": "execute",
+      "responsibility": "Odrębne tryby zarządzanej diagnostyki, bez zmiany dawnych fence.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "private-full-gsg-reaping",
+      "path": "scripts/docker_gsg_surface_reference.py",
+      "symbol": "worker_exit",
+      "responsibility": "Potwierdzenie końca własnego procesu przed zwolnieniem zasobów.",
+      "evidence_status": "source_only"
     }
   ],
   "public_api": {
@@ -10500,7 +13724,7 @@
         "type": "str",
         "default": "required",
         "si_unit": "$1$",
-        "validation": "dokładnie caller_supplied_rt0_surface.inspection.v1",
+        "validation": "dokładnie caller_supplied_rt0_surface.inspection.v1 albo caller_supplied_rt0_surface.gsg_universe_275.v1; pozostałe identyfikatory odrzucane, bez domyślnych limitów",
         "meaning": "jawna wersja parametrów bez ukrytych defaults",
         "backend_support": "prepared FEM CPU double strict inspection; GPU/FDM unsupported",
         "problem_ir": "surface_field_policy.policy_version"
@@ -10544,6 +13768,156 @@
         "meaning": "jawny, niezmieniany plik wejściowy ownera",
         "backend_support": "FEM CPU: kandydat authoring; FEM GPU/FDM CPU/FDM GPU: brak kwalifikacji tego przekazania",
         "problem_ir": "problem_meta.runtime_metadata.mesh_workflow.per_geometry[].source oraz geometry_assets.fem_mesh_assets[]"
+      },
+      {
+        "python": "AntennaRetainedCurrentSource.project_id",
+        "type": "str",
+        "default": "required",
+        "si_unit": "$1$",
+        "validation": "Niepusty canonical ID, bez trim i znaków sterujących; błędny typ/kształt odmawia.",
+        "meaning": "Projekt źródła; constructor nie odczytuje storage i nie nadaje auth.",
+        "backend_support": "FEM CPU: authoring i serializacja; runtime NOT VERIFIED. FEM GPU/FDM CPU/FDM GPU unsupported.",
+        "problem_ir": "antenna_field_solve_stages[].retained_current_source.project_id"
+      },
+      {
+        "python": "AntennaRetainedCurrentSource.run_id",
+        "type": "str",
+        "default": "required",
+        "si_unit": "$1$",
+        "validation": "Niepusty canonical ID, bez trim i znaków sterujących; błędny typ/kształt odmawia.",
+        "meaning": "Zakończony run źródła; constructor nie odczytuje storage i nie nadaje auth.",
+        "backend_support": "FEM CPU: authoring i serializacja; runtime NOT VERIFIED. FEM GPU/FDM CPU/FDM GPU unsupported.",
+        "problem_ir": "antenna_field_solve_stages[].retained_current_source.run_id"
+      },
+      {
+        "python": "AntennaRetainedCurrentSource.task_id",
+        "type": "str",
+        "default": "required",
+        "si_unit": "$1$",
+        "validation": "Niepusty canonical ID, bez trim i znaków sterujących; błędny typ/kształt odmawia.",
+        "meaning": "Dokładne zadanie źródła; constructor nie odczytuje storage i nie nadaje auth.",
+        "backend_support": "FEM CPU: authoring i serializacja; runtime NOT VERIFIED. FEM GPU/FDM CPU/FDM GPU unsupported.",
+        "problem_ir": "antenna_field_solve_stages[].retained_current_source.task_id"
+      },
+      {
+        "python": "AntennaRetainedCurrentSource.attempt_id",
+        "type": "str",
+        "default": "required",
+        "si_unit": "$1$",
+        "validation": "Niepusty canonical ID, bez trim i znaków sterujących; błędny typ/kształt odmawia.",
+        "meaning": "Dokładna próba źródła; constructor nie odczytuje storage i nie nadaje auth.",
+        "backend_support": "FEM CPU: authoring i serializacja; runtime NOT VERIFIED. FEM GPU/FDM CPU/FDM GPU unsupported.",
+        "problem_ir": "antenna_field_solve_stages[].retained_current_source.attempt_id"
+      },
+      {
+        "python": "AntennaRetainedCurrentSource.artifact_id",
+        "type": "str",
+        "default": "required",
+        "si_unit": "$1$",
+        "validation": "Niepusty canonical ID, bez trim i znaków sterujących; błędny typ/kształt odmawia.",
+        "meaning": "Dokładny opublikowany artefakt źródła; constructor nie odczytuje storage i nie nadaje auth.",
+        "backend_support": "FEM CPU: authoring i serializacja; runtime NOT VERIFIED. FEM GPU/FDM CPU/FDM GPU unsupported.",
+        "problem_ir": "antenna_field_solve_stages[].retained_current_source.artifact_id"
+      },
+      {
+        "python": "AntennaRetainedCurrentSource.kind",
+        "type": "str",
+        "default": "published_inspection",
+        "si_unit": "$1$",
+        "validation": "Dokładnie published_inspection; inne warianty ValueError.",
+        "meaning": "Wyłącznie referencja opublikowanej inspekcji.",
+        "backend_support": "FEM CPU: authoring i serializacja; runtime NOT VERIFIED. FEM GPU/FDM CPU/FDM GPU unsupported.",
+        "problem_ir": "antenna_field_solve_stages[].retained_current_source.kind"
+      },
+      {
+        "python": "AntennaRetainedCurrentSource.ownership_epoch",
+        "type": "str",
+        "default": "required",
+        "si_unit": "$1$",
+        "validation": "Kanoniczny dodatni ASCII decimal u64, bez zer wiodących; maks. 18446744073709551615.",
+        "meaning": "Zachowana epoka właściciela bez konwersji przez float.",
+        "backend_support": "FEM CPU: authoring i serializacja; runtime NOT VERIFIED. FEM GPU/FDM CPU/FDM GPU unsupported.",
+        "problem_ir": "antenna_field_solve_stages[].retained_current_source.ownership_epoch"
+      },
+      {
+        "python": "AntennaRetainedCurrentSource.object_ref",
+        "type": "str",
+        "default": "required",
+        "si_unit": "$1$",
+        "validation": "Dokładnie 64 małe cyfry hex; bez prefiksu sha256:.",
+        "meaning": "CAS całego oryginalnego pakietu rodzica.",
+        "backend_support": "FEM CPU: authoring i serializacja; runtime NOT VERIFIED. FEM GPU/FDM CPU/FDM GPU unsupported.",
+        "problem_ir": "antenna_field_solve_stages[].retained_current_source.object_ref"
+      },
+      {
+        "python": "AntennaFieldSolveStage.retained_current_source",
+        "type": "AntennaRetainedCurrentSource | None",
+        "default": "None",
+        "si_unit": "$1$",
+        "validation": "Przy obecności wyłącznie analytic_rt0_surface z jawną policy i bez legacy current view.",
+        "meaning": "Nowe H z zachowanego prądu; wykonanie wymaga osobnej typed accepted operation.",
+        "backend_support": "FEM CPU: authoring i serializacja; runtime NOT VERIFIED. FEM GPU/FDM CPU/FDM GPU unsupported.",
+        "problem_ir": "antenna_field_solve_stages[].retained_current_source"
+      },
+      {
+        "python": "AntennaSourcePreparationAsset.source",
+        "type": "str albo Path",
+        "default": "required",
+        "si_unit": "$1$",
+        "validation": "Niepusta ścieżka regularnego pliku do 8 MiB; bez sieci, meshera i cache.",
+        "meaning": "Regularny input-only plik w observed source closure.",
+        "backend_support": "FEM CPU strict/double: managed build i publiczne przygotowanie PASS; native H NOT STARTED, FFT/LLG niekwalifikowane. FEM GPU/FDM CPU/FDM GPU unsupported.",
+        "problem_ir": "antenna_field_solve_stages[].retained_source_preparation.asset_id przez canonical source capture"
+      },
+      {
+        "python": "AntennaSourcePreparationAsset.content_sha256",
+        "type": "str",
+        "default": "required",
+        "si_unit": "$1$",
+        "validation": "Dokładnie 64 małe cyfry hex; zgodność z całymi odczytanymi bajtami.",
+        "meaning": "Hash całych bajtów wejścia, bez nadawania autoryzacji prądu.",
+        "backend_support": "FEM CPU strict/double: managed build i publiczne przygotowanie PASS; native H NOT STARTED, FFT/LLG niekwalifikowane. FEM GPU/FDM CPU/FDM GPU unsupported.",
+        "problem_ir": "antenna_field_solve_stages[].retained_source_preparation.content_sha256"
+      },
+      {
+        "python": "AntennaFieldSolveStage.retained_source_preparation",
+        "type": "AntennaSourcePreparationAsset albo None",
+        "default": "None",
+        "si_unit": "$1$",
+        "validation": "Tylko z retained_current_source i analytic_rt0_surface; ref i source kind zgodne dwukierunkowo; None pomijane.",
+        "meaning": "Zachowanie przygotowania źródła przy niezależnej siatce pola.",
+        "backend_support": "FEM CPU strict/double: managed build i publiczne przygotowanie PASS; native H NOT STARTED, FFT/LLG niekwalifikowane. FEM GPU/FDM CPU/FDM GPU unsupported.",
+        "problem_ir": "antenna_field_solve_stages[].retained_source_preparation oraz current_modules[].definition.conservative_current_source"
+      },
+      {
+        "python": "study.domain_mesh.source",
+        "type": "str albo Path",
+        "default": "required",
+        "si_unit": "$1$",
+        "validation": "Jawne wejście siatki; accepted capture przypina jego bajty. W tej ścieżce pustej mapy wymagany jest odczytany, niepusty all-air asset.",
+        "meaning": "Niezależny nośnik obserwacji, ścieżka rozwiązywana względem przechwyconego skryptu.",
+        "backend_support": "FEM CPU: kontrole Python, pełne H-only NOT VERIFIED. FEM GPU/FDM CPU/FDM GPU unsupported w tym przepływie.",
+        "problem_ir": "geometry_assets.fem_domain_mesh_asset.mesh i mesh_source; nie jest siatką źródła prądu"
+      },
+      {
+        "python": "study.domain_mesh.region_markers",
+        "type": "mapping albo sequence",
+        "default": "required",
+        "si_unit": "$1$",
+        "validation": "Dodatnie, unikalne markery i geometrie; jawne [] tylko dla końcowego niemagnetycznego field-only i rzeczywistego all-air 0.",
+        "meaning": "Mapowanie regionów; [] jawnie oznacza brak regionów magnetycznych.",
+        "backend_support": "FEM CPU: kontrole Python, pełne H-only NOT VERIFIED. FEM GPU/FDM CPU/FDM GPU unsupported w tym przepływie.",
+        "problem_ir": "geometry_assets.fem_domain_mesh_asset.region_markers"
+      },
+      {
+        "python": "study.domain_mesh.object_region_markers",
+        "type": "mapping albo sequence albo None",
+        "default": "None",
+        "si_unit": "$1$",
+        "validation": "Przy obecności niepuste dodatnie, unikalne markery, bez kolizji z region_markers; w pustej all-air ścieżce brak tych map.",
+        "meaning": "Istniejące jawne mapowanie podregionów obiektów.",
+        "backend_support": "FEM CPU: kontrole Python, pełne H-only NOT VERIFIED. FEM GPU/FDM CPU/FDM GPU unsupported w tym przepływie.",
+        "problem_ir": "geometry_assets.fem_domain_mesh_asset.object_region_markers"
       }
     ]
   }

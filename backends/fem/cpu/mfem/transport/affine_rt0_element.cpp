@@ -167,6 +167,7 @@ AffineRt0Element::AffineRt0Element(const mfem::FiniteElementSpace &space, int el
             }
         }
     }
+    signed_dof_map_available_ = true;
 }
 
 AffineRt0Element::AffineRt0Element(const mfem::GridFunction &field, int element)
@@ -179,6 +180,22 @@ AffineRt0Element::AffineRt0Element(const mfem::GridFunction &field, int element)
         require(std::isfinite(coefficient), "affine RT0 coefficient must be finite");
         signed_coefficients_[local] = sign(signed_dofs_[local]) * coefficient;
     }
+    coefficients_frozen_ = true;
+}
+
+
+AffineRt0Element::AffineRt0Element(const FrozenInput &input)
+    : vertices_(input.vertices_m), signed_coefficients_(input.signed_coefficients_a)
+{
+    std::array<ExactPoint, 4> exact_vertices;
+    for (int local = 0; local < 4; ++local) {
+        exact_vertices[local] = exact_point(vertices_[local]);
+        require(std::isfinite(signed_coefficients_[local]),
+            "affine RT0 coefficient must be finite");
+    }
+    determinant_m3_ = determinant(exact_vertices).convert_to<long double>();
+    require(std::isfinite(determinant_m3_) && determinant_m3_ > 0.0L,
+        "affine RT0 determinant is not representable");
     coefficients_frozen_ = true;
 }
 
@@ -261,6 +278,7 @@ double AffineRt0Element::face_moment(const Face &face_points) const
 
 double AffineRt0Element::signed_face_weight(const Face &face_points, int local) const
 {
+    require(signed_dof_map_available_, "affine RT0 signed face weight requires an MFEM DOF map");
     require(local >= 0 && local < 4, "affine RT0 basis index is invalid");
     const Exact weight = sign(signed_dofs_[local]) * geometric_face_weights(vertices_, face_points)[local];
     const double result = weight.convert_to<double>();
