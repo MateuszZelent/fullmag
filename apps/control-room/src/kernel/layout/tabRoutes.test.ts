@@ -55,6 +55,7 @@ describe("tab addresses", () => {
   it("addresses independent preview tabs by ID and falls back after close", () => {
     const id = `preview-${"a".repeat(32)}`;
     const route = { kind: "preview", id } as const;
+    expect(tabRouteHref(route, "")).toBe(`/model-preview/${id}`);
     const context = { currentSessionName: "Running", instances: null };
     expect(parseTabRoute(formatTabRoute(route), "")).toEqual(route);
     expect(resolveTabRoute(route, { ...context, previewIds: new Set([id]) })).toEqual(route);

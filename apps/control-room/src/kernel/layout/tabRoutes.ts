@@ -9,7 +9,7 @@ import type { DiscoveredInstance } from "../api/apiTypes";
  * - `/session/<slug>` — this instance's session;
  * - `/session/<slug>?port=<port>` — the session of another instance's tab;
  * - `/instance/<port>` — another instance's tab while it has no session.
- * - `/preview/<id>` — an independent read-only model preview.
+ * - `/model-preview/<id>` — an independent read-only model preview.
  *
  * `/` and `/workspace` are aliases that resolve to whichever tab is in front.
  * Every address serves the same page; switching tabs never reloads it.
@@ -46,7 +46,7 @@ export function sessionSlug(name: string): string {
 export function parseTabRoute(pathname: string, search: string): TabRoute {
   const segments = pathname.split("/").filter(Boolean);
   if (segments.length === 1 && segments[0] === "home") return { kind: "home" };
-  if (segments.length === 2 && segments[0] === "preview" && /^preview-[0-9a-f]{32}$/.test(segments[1])) {
+  if (segments.length === 2 && segments[0] === "model-preview" && /^preview-[0-9a-f]{32}$/.test(segments[1])) {
     return { kind: "preview", id: segments[1] };
   }
   if (segments.length === 2 && segments[0] === "instance") {
@@ -71,7 +71,7 @@ export function formatTabRoute(route: Exclude<TabRoute, { kind: "default" }>): s
     case "home":
       return "/home";
     case "preview":
-      return `/preview/${encodeURIComponent(route.id)}`;
+      return `/model-preview/${encodeURIComponent(route.id)}`;
     case "instance":
       return `/instance/${route.port}`;
     case "session":
