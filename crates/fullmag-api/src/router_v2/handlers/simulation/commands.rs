@@ -484,9 +484,9 @@ async fn enforce_session_command_admission(
             .as_ref()
             .is_some_and(|run| is_terminal_run_status(&run.status));
         if accepted_observations && allow_prepared_fields
-            && crate::live_prepared_fdm_fields::uses_prepared_field_input(snapshot)
+            && crate::live_prepared_fields::uses_prepared_field_input(snapshot)
         {
-            crate::live_prepared_fdm_fields::disabled_reason(snapshot).map_err(|reason| {
+            crate::live_prepared_fields::disabled_reason(snapshot).map_err(|reason| {
                 ApiError::conflict_with_code("prepared_field_evaluation_unavailable", reason)
             })?;
             return Ok(());
@@ -644,9 +644,9 @@ async fn publish_materialized_fields_under_transition(
     crate::ensure_current_live_request_context(&snapshot, context,
         state.current_live_session_epoch.load(std::sync::atomic::Ordering::Acquire))?;
     let prepared = command.kind == "compute_fields"
-        && crate::live_prepared_fdm_fields::uses_prepared_field_input(&snapshot);
+        && crate::live_prepared_fields::uses_prepared_field_input(&snapshot);
     if prepared {
-        crate::live_prepared_fdm_fields::disabled_reason(&snapshot).map_err(ApiError::conflict)?;
+        crate::live_prepared_fields::disabled_reason(&snapshot).map_err(ApiError::conflict)?;
     } else if command.kind == "compute_fields" {
         command.field_materialization_requirements =
             compute_fields_materialization_requirements(&snapshot);
@@ -685,7 +685,7 @@ async fn publish_materialized_fields_under_transition(
     let task_command_id = command_id.clone();
     tokio::spawn(async move {
         let outcome = if prepared {
-            crate::live_prepared_fdm_fields::evaluate_and_publish(
+            crate::live_prepared_fields::evaluate_and_publish(
                 &task_state, &task_context, snapshot, &task_command_id,
             ).await
         } else {
