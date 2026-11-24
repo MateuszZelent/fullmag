@@ -36,7 +36,7 @@ import {
 } from "@/kernel/resources/studyRuntimeResources";
 import { useSessionStatusSelector } from "@/kernel/resources/useSessionStatus";
 import { useSimulationPreparation } from "@/kernel/resources/useSimulationPreparation";
-import { buildProblemsProjection } from "@/modules/footer/operationsProblemsModel";
+import { buildProblemsProjection } from "@/modules/footer/public";
 import { Badge } from "@/shared/ui/Badge";
 import { Button } from "@/shared/ui/Button";
 
