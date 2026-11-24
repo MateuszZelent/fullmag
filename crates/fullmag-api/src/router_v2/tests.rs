@@ -7155,9 +7155,10 @@ async fn prepared_fem_demag_is_readable_in_airbox_without_a_solver_run() {
         }));
         crate::session::apply_current_live_authored_initial_state(snapshot, publication, initial)
             .unwrap();
+        let demag_vectors = [1.25, -2.5, 5.0].repeat(8);
         let mut fields = crate::types::LatestFields::default();
         fields.insert("H_demag".into(), serde_json::json!({
-            "values": [1.25, -2.5, 5.0].repeat(8), "n_comp": 3, "layout": layout,
+            "values": demag_vectors, "n_comp": 3, "layout": layout,
             "source_step": 0, "source_time_seconds": 0.0, "spatial_kind": "fem_nodes",
             "provenance": { "source": crate::prepared_observation_adoption::PROVENANCE_SOURCE }
         }));
