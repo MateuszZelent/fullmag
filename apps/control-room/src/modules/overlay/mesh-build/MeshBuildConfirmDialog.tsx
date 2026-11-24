@@ -24,12 +24,94 @@ function findSummaryValue(
   return found?.value ?? null;
 }
 
+export interface MeshBuildConfirmFooterProps {
+  mode?: "pre-build" | "submitting" | "waiting" | "post-build" | "error";
+  ready?: boolean;
+  stale?: boolean;
+  onApplyBuild: () => void;
+  onCancel: () => void;
+  onOpenMeshJobs: () => void;
+  onRefresh?: () => void;
+  onResumeObservation?: () => void;
+}
+
+export function MeshBuildConfirmFooter({
+  mode,
+  onApplyBuild,
+  onCancel,
+  onOpenMeshJobs,
+  onRefresh,
+  onResumeObservation,
+  ready = true,
+  stale = false,
+}: MeshBuildConfirmFooterProps) {
+  const phase = mode ?? "pre-build";
+  const buildButtonLabel =
+    phase === "submitting" ? "Build in progress" : "Accept & Build";
+
+  return (
+    <>
+      <div className="fm-mesh-build-confirm__footer-group">
+        <Button size="sm" type="button" variant="ghost" onClick={onCancel}>
+          {phase === "pre-build" ? "Cancel" : "Close"}
+        </Button>
+        {stale && phase === "pre-build" ? (
+          <Button size="sm" type="button" variant="secondary" onClick={onRefresh}>
+            Refresh preflight
+          </Button>
+        ) : null}
+        {phase === "waiting" ? (
+          <Button
+            size="sm"
+            type="button"
+            variant="secondary"
+            onClick={onResumeObservation}
+          >
+            Resume observation
+          </Button>
+        ) : null}
+      </div>
+      <div className="fm-mesh-build-confirm__footer-group">
+        <Button
+          size="sm"
+          type="button"
+          variant="secondary"
+          onClick={onOpenMeshJobs}
+        >
+          Open Mesh Jobs
+        </Button>
+        {phase !== "pre-build" && phase !== "submitting" ? null : (
+          <Button
+            disabled={phase === "submitting" || !ready}
+            size="sm"
+            type="button"
+            variant="primary"
+            onClick={onApplyBuild}
+          >
+            {phase === "submitting" ? (
+              <Loader2
+                aria-hidden="true"
+                className="animate-spin"
+                size={13}
+              />
+            ) : (
+              <Play aria-hidden="true" size={12} />
+            )}
+            <span>{buildButtonLabel}</span>
+          </Button>
+        )}
+      </div>
+    </>
+  );
+}
+
 export function MeshBuildConfirmDialogContent({
   commandId,
   currentSummary,
   diffRows,
   errorMessage,
   globalHmaxLabel,
+  hideFooter = false,
   mode,
   objectsCount,
   ready = true,
@@ -51,6 +133,7 @@ export function MeshBuildConfirmDialogContent({
   diffRows: readonly MeshPolicyDiffRow[];
   errorMessage?: string | null;
   globalHmaxLabel?: string | null;
+  hideFooter?: boolean;
   mode?: "pre-build" | "submitting" | "waiting" | "post-build" | "error";
   objectsCount?: number | null;
   ready?: boolean;
@@ -67,8 +150,6 @@ export function MeshBuildConfirmDialogContent({
   targetLabel: string;
 }) {
   const phase = mode ?? "pre-build";
-  const buildButtonLabel =
-    phase === "submitting" ? "Build in progress" : "Accept & Build";
   const requestsExactLayeredPrism = diffRows.some(
     (row) =>
       (row.path === "topology" && row.draftValue === "prismatic") ||
@@ -119,9 +200,9 @@ export function MeshBuildConfirmDialogContent({
         {kpis.map((kpi) => (
           <div
             key={kpi.label}
-            className="flex min-w-0 flex-col gap-1 rounded-md border border-[var(--fm-border-subtle)] bg-[var(--fm-bg-panel)] px-3 py-2.5"
+            className="flex min-w-0 flex-col gap-1 rounded-[var(--fm-radius-field)] border border-[var(--fm-border-subtle)] bg-[var(--fm-section-bg)] px-3 py-2.5"
           >
-            <span className="truncate text-[var(--fm-font-size-xs)] font-medium uppercase tracking-wider text-[var(--fm-text-muted)]">
+            <span className="truncate text-[var(--fm-font-size-2xs)] font-semibold uppercase tracking-wider text-[var(--fm-text-muted)]">
               {kpi.label}
             </span>
             <span className="truncate font-mono text-sm font-semibold tabular-nums text-[var(--fm-text-primary)]">
@@ -215,9 +296,9 @@ export function MeshBuildConfirmDialogContent({
       {currentSummary.length > 0 ? (
         <section
           aria-label="Current mesh summary"
-          className="overflow-hidden rounded-md border border-[var(--fm-border-subtle)] bg-[var(--fm-bg-panel)]"
+          className="overflow-hidden rounded-[var(--fm-radius-field)] border border-[var(--fm-border-subtle)] bg-[var(--fm-section-bg)]"
         >
-          <div className="border-b border-[var(--fm-border-subtle)] bg-[var(--fm-bg-elevated)] px-3.5 py-2">
+          <div className="border-b border-[var(--fm-border-subtle)] bg-[color-mix(in_oklab,var(--fm-raised-bg)_58%,transparent)] px-3.5 py-2">
             <h3 className="m-0 text-xs font-semibold text-[var(--fm-text-primary)]">
               Current Mesh Summary
             </h3>
@@ -243,9 +324,9 @@ export function MeshBuildConfirmDialogContent({
       {filteredNewSummary.length > 0 ? (
         <section
           aria-label="New mesh request"
-          className="overflow-hidden rounded-md border border-[var(--fm-border-subtle)] bg-[var(--fm-bg-panel)]"
+          className="overflow-hidden rounded-[var(--fm-radius-field)] border border-[var(--fm-border-subtle)] bg-[var(--fm-section-bg)]"
         >
-          <div className="flex items-center justify-between gap-2 border-b border-[var(--fm-border-subtle)] bg-[var(--fm-bg-elevated)] px-3.5 py-2">
+          <div className="flex items-center justify-between gap-2 border-b border-[var(--fm-border-subtle)] bg-[color-mix(in_oklab,var(--fm-raised-bg)_58%,transparent)] px-3.5 py-2">
             <h3 className="m-0 text-xs font-semibold text-[var(--fm-text-primary)]">
               New Mesh Request
             </h3>
@@ -276,59 +357,21 @@ export function MeshBuildConfirmDialogContent({
         {commandId ?? "mesh.build"} · {targetLabel}
       </p>
 
-      {/* Polished Footer Actions */}
-      <div className="mt-1 flex flex-wrap items-center justify-between gap-2 border-t border-[var(--fm-border-subtle)] pt-3.5">
-        <div className="flex flex-wrap items-center gap-2">
-          <Button size="sm" type="button" variant="ghost" onClick={onCancel}>
-            {phase === "pre-build" ? "Cancel" : "Close"}
-          </Button>
-          {stale && phase === "pre-build" ? (
-            <Button size="sm" type="button" variant="secondary" onClick={onRefresh}>
-              Refresh preflight
-            </Button>
-          ) : null}
-          {phase === "waiting" ? (
-            <Button
-              size="sm"
-              type="button"
-              variant="secondary"
-              onClick={onResumeObservation}
-            >
-              Resume observation
-            </Button>
-          ) : null}
+      {/* Inline footer fallback when rendered standalone outside DialogFooter */}
+      {!hideFooter ? (
+        <div className="mt-1 flex flex-wrap items-center justify-between gap-2 border-t border-[var(--fm-border-subtle)] pt-3.5">
+          <MeshBuildConfirmFooter
+            mode={mode}
+            ready={ready}
+            stale={stale}
+            onApplyBuild={onApplyBuild}
+            onCancel={onCancel}
+            onOpenMeshJobs={onOpenMeshJobs}
+            onRefresh={onRefresh}
+            onResumeObservation={onResumeObservation}
+          />
         </div>
-        <div className="flex flex-wrap items-center gap-2">
-          <Button
-            size="sm"
-            type="button"
-            variant="secondary"
-            onClick={onOpenMeshJobs}
-          >
-            Open Mesh Jobs
-          </Button>
-          {phase !== "pre-build" && phase !== "submitting" ? null : (
-            <Button
-              disabled={phase === "submitting" || !ready}
-              size="sm"
-              type="button"
-              variant="primary"
-              onClick={onApplyBuild}
-            >
-              {phase === "submitting" ? (
-                <Loader2
-                  aria-hidden="true"
-                  className="animate-spin"
-                  size={13}
-                />
-              ) : (
-                <Play aria-hidden="true" size={12} />
-              )}
-              <span>{buildButtonLabel}</span>
-            </Button>
-          )}
-        </div>
-      </div>
+      ) : null}
     </div>
   );
 }

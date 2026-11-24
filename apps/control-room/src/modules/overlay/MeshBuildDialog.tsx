@@ -1,5 +1,6 @@
 "use client";
 
+import { X } from "lucide-react";
 import { useEffect, useMemo, useReducer, useRef } from "react";
 
 import { createCommandContext } from "@/kernel/commands/commandContext";
@@ -31,15 +32,23 @@ import { buildMeshSnapshotRows } from "@/shared/domain/mesh/meshBuildSnapshots";
 import { authoredObjectBounds } from "@/shared/domain/mesh/domainPresentation";
 import {
   Dialog,
+  DialogClose,
   DialogContent,
   DialogDescription,
+  DialogFooter,
   DialogHeader,
   DialogTitle,
 } from "@/shared/ui/Dialog";
 import { Badge } from "@/shared/ui/Badge";
 import { Button } from "@/shared/ui/Button";
-import { MeshBuildConfirmDialogContent } from "./mesh-build/MeshBuildConfirmDialog";
-import { FdmGridBuildConfirmContent } from "./mesh-build/FdmGridBuildConfirmContent";
+import {
+  MeshBuildConfirmDialogContent,
+  MeshBuildConfirmFooter,
+} from "./mesh-build/MeshBuildConfirmDialog";
+import {
+  FdmGridBuildConfirmContent,
+  FdmGridBuildConfirmFooter,
+} from "./mesh-build/FdmGridBuildConfirmContent";
 import { buildRegionMeshBuildReasonRows } from "./mesh-build/meshBuildRegionReasons";
 import { openMeshBuildDiagnostics } from "./meshBuildDiagnosticsNavigation";
 import {
@@ -445,17 +454,28 @@ export function MeshBuildDialog({ kernel }: { kernel: KernelApi }) {
   const femGlobalHmaxLabel = useMemo(() => {
     if (!explicitFemLane) return null;
     const rawHmax =
-      (objectId ? asRecord(objectPolicy.data?.config)?.maximum_element_size : null) ??
+      (objectId
+        ? asRecord(objectPolicy.data?.config)?.maximum_element_size ??
+          asRecord(objectPolicy.data?.config)?.hmax
+        : null) ??
       asRecord(sharedPolicy.data?.config)?.maximum_element_size ??
+      asRecord(sharedPolicy.data?.config)?.hmax ??
       asRecord(universePolicy.data?.config)?.airbox_hmax ??
-      asRecord(universePolicy.data?.config)?.maximum_element_size;
-    if (typeof rawHmax !== "number" || !Number.isFinite(rawHmax) || rawHmax <= 0) {
+      asRecord(universePolicy.data?.config)?.maximum_element_size ??
+      asRecord(universePolicy.data?.config)?.hmax;
+    const numericHmax =
+      typeof rawHmax === "number"
+        ? rawHmax
+        : typeof rawHmax === "string" && rawHmax.trim() !== ""
+          ? Number(rawHmax)
+          : NaN;
+    if (!Number.isFinite(numericHmax) || numericHmax <= 0) {
       return null;
     }
-    if (rawHmax < 1e-6) return `${Number((rawHmax * 1e9).toFixed(2))} nm`;
-    if (rawHmax < 1e-3) return `${Number((rawHmax * 1e6).toFixed(2))} µm`;
-    if (rawHmax < 1) return `${Number((rawHmax * 1e3).toFixed(2))} mm`;
-    return `${Number(rawHmax.toFixed(3))} m`;
+    if (numericHmax < 1e-6) return `${Number((numericHmax * 1e9).toFixed(2))} nm`;
+    if (numericHmax < 1e-3) return `${Number((numericHmax * 1e6).toFixed(2))} µm`;
+    if (numericHmax < 1) return `${Number((numericHmax * 1e3).toFixed(2))} mm`;
+    return `${Number(numericHmax.toFixed(3))} m`;
   }, [explicitFemLane, objectId, objectPolicy.data?.config, sharedPolicy.data?.config, universePolicy.data?.config]);
 
   function confirmBuild(): void {
@@ -479,30 +499,42 @@ export function MeshBuildDialog({ kernel }: { kernel: KernelApi }) {
             : "fm-mesh-build-confirm-dialog"
         }
       >
-        <DialogHeader className="border-b border-[var(--fm-border-subtle)] pb-3.5">
+        <DialogHeader>
           <div className="flex items-center justify-between gap-3">
-            <DialogTitle>
-              {isFdmGridBuildRequest
-                ? state.phase === "post-build"
-                  ? "FDM Grid Build Complete"
+            <div className="flex min-w-0 items-center gap-2.5">
+              <DialogTitle>
+                {isFdmGridBuildRequest
+                  ? state.phase === "post-build"
+                    ? "FDM Grid Build Complete"
+                    : state.phase === "error"
+                      ? "FDM Grid Build Failed"
+                      : "FDM Grid Build Confirmation"
+                  : !explicitFemLane
+                  ? lane === "fdm"
+                    ? "FDM Grid & Mask Refresh"
+                    : "FEM Mesh Controls Unavailable"
+                  : state.phase === "post-build"
+                  ? "Mesh Build Complete"
                   : state.phase === "error"
-                    ? "FDM Grid Build Failed"
-                    : "FDM Grid Build Confirmation"
-                : !explicitFemLane
-                ? lane === "fdm"
-                  ? "FDM Grid & Mask Refresh"
-                  : "FEM Mesh Controls Unavailable"
-                : state.phase === "post-build"
-                ? "Mesh Build Complete"
-                : state.phase === "error"
-                  ? "Mesh Build Failed"
-                  : "Mesh Build Confirmation"}
-            </DialogTitle>
-            {headerStatusBadge ? (
-              <Badge className="shrink-0" variant={headerStatusBadge.variant}>
-                {headerStatusBadge.label}
-              </Badge>
-            ) : null}
+                    ? "Mesh Build Failed"
+                    : "Mesh Build Confirmation"}
+              </DialogTitle>
+              {headerStatusBadge ? (
+                <Badge className="shrink-0" variant={headerStatusBadge.variant}>
+                  {headerStatusBadge.label}
+                </Badge>
+              ) : null}
+            </div>
+            <DialogClose asChild>
+              <Button
+                aria-label="Close mesh build dialog"
+                size="icon"
+                type="button"
+                variant="ghost"
+              >
+                <X aria-hidden="true" size={15} />
+              </Button>
+            </DialogClose>
           </div>
           <DialogDescription id="fm-mesh-build-dialog-description">
             {isFdmGridBuildRequest
@@ -521,6 +553,7 @@ export function MeshBuildDialog({ kernel }: { kernel: KernelApi }) {
               diffRows={diffRows}
               errorMessage={state.errorMessage}
               globalHmaxLabel={femGlobalHmaxLabel}
+              hideFooter
               mode={state.phase}
               objectsCount={scene.data?.objects?.length ?? 0}
               ready={snapshotCurrent && buildOperation.enabled}
@@ -542,7 +575,10 @@ export function MeshBuildDialog({ kernel }: { kernel: KernelApi }) {
                 void confirmBuild();
               }}
               onCancel={closeDialog}
-              onOpenMeshJobs={() => openMeshBuildDiagnostics(kernel)}
+              onOpenMeshJobs={() => {
+                closeDialog();
+                openMeshBuildDiagnostics(kernel);
+              }}
             />
           ) : isFdmGridBuildRequest ? (
             <FdmGridBuildConfirmContent
@@ -553,6 +589,7 @@ export function MeshBuildDialog({ kernel }: { kernel: KernelApi }) {
               gridMemoryMB={gridMemoryMB}
               gridShape={gridShape}
               gridSpacing={gridSpacing}
+              hideFooter
               membershipRevision={fdmMembership.data?.region_membership_revision ?? null}
               mode={state.phase}
               objectsCount={scene.data?.objects?.length ?? 0}
@@ -599,19 +636,56 @@ export function MeshBuildDialog({ kernel }: { kernel: KernelApi }) {
                   mesh policy controls for them.
                 </p>
               ) : null}
-              <div className="fm-mesh-build-confirm__actions">
-                <Button
-                  size="sm"
-                  type="button"
-                  variant="ghost"
-                  onClick={closeDialog}
-                >
-                  Close
-                </Button>
-              </div>
             </section>
           )}
         </div>
+        <DialogFooter className="fm-mesh-build-confirm__footer">
+          {explicitFemLane ? (
+            <MeshBuildConfirmFooter
+              mode={state.phase}
+              ready={snapshotCurrent && buildOperation.enabled}
+              stale={isStale}
+              onApplyBuild={() => {
+                void confirmBuild();
+              }}
+              onCancel={closeDialog}
+              onOpenMeshJobs={() => {
+                closeDialog();
+                openMeshBuildDiagnostics(kernel);
+              }}
+              onRefresh={() => {
+                captureSnapshot(null);
+                if (state.request) dispatch({ type: "request", request: state.request });
+              }}
+              onResumeObservation={() => {
+                dispatch({ type: "submitting" });
+                void resumeMeshBuildObservation(createCommandContext(state.request?.source ?? "inspector", kernel));
+              }}
+            />
+          ) : isFdmGridBuildRequest ? (
+            <FdmGridBuildConfirmFooter
+              mode={state.phase}
+              ready={snapshotCurrent && fdmGridBuildOperation.enabled}
+              onApplyBuild={() => {
+                void confirmBuild();
+              }}
+              onCancel={closeDialog}
+              onOpenMeshOverview={() => {
+                closeDialog();
+                openMeshBuildDiagnostics(kernel);
+              }}
+            />
+          ) : (
+            <Button
+              size="sm"
+              type="button"
+              variant="secondary"
+              onClick={closeDialog}
+            >
+              Close
+            </Button>
+          )}
+        </DialogFooter>
       </DialogContent>
     </Dialog>
   );

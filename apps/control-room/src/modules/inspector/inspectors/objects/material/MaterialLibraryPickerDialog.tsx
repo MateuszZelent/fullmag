@@ -208,7 +208,7 @@ export function MaterialLibraryPickerDialog({
           className="gap-0 p-0 sm:max-w-2xl w-[min(672px,calc(100vw-2rem))]"
           data-slot="reference-materials-popover"
         >
-          <DialogHeader className="relative border-b border-[var(--fm-border-subtle)] bg-[var(--fm-bg-panel)] px-5 py-4 pr-12">
+          <DialogHeader className="relative border-b border-[var(--fm-border-subtle)] bg-[var(--fm-section-bg)] px-5 py-4 pr-12">
             <div className="flex items-center gap-2">
               <Sparkles
                 aria-hidden="true"

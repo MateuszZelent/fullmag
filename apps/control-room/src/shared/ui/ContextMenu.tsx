@@ -51,13 +51,15 @@ function ContextMenuSubContent({
   ...props
 }: ComponentPropsWithRef<typeof ContextMenuPrimitive.SubContent>) {
   return (
-    <ContextMenuPrimitive.SubContent
-      ref={ref}
-      collisionPadding={collisionPadding}
-      data-slot="context-menu-sub-content"
-      className={cn("fm-context-menu-content", className)}
-      {...props}
-    />
+    <ContextMenuPrimitive.Portal>
+      <ContextMenuPrimitive.SubContent
+        ref={ref}
+        collisionPadding={collisionPadding}
+        data-slot="context-menu-sub-content"
+        className={cn("fm-context-menu-content", className)}
+        {...props}
+      />
+    </ContextMenuPrimitive.Portal>
   );
 }
 ContextMenuSubContent.displayName = ContextMenuPrimitive.SubContent.displayName;

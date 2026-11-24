@@ -6,12 +6,13 @@
 
 .fm-command-input-wrap {
   display: flex;
-  height: var(--fm-inspector-tab-height);
+  height: calc(var(--fm-inspector-tab-height) + var(--fm-space-1));
   align-items: center;
   gap: var(--fm-space-2);
   border-bottom: 1px solid var(--fm-border-subtle);
+  background: var(--fm-section-bg);
   color: var(--fm-text-muted);
-  padding-inline: var(--fm-space-3);
+  padding-inline: var(--fm-space-4);
 }
 
 .fm-command-input {
@@ -31,13 +32,14 @@
 .fm-command-list {
   max-height: min(440px, 58vh);
   overflow-y: auto;
+  overscroll-behavior: contain;
   padding: var(--fm-space-2);
 }
 
 .fm-command-empty {
   color: var(--fm-text-muted);
   font-size: var(--fm-font-size-sm);
-  padding: var(--fm-space-4);
+  padding: var(--fm-space-5);
   text-align: center;
 }
 
@@ -47,26 +49,30 @@
 
 .fm-command-group [cmdk-group-heading] {
   color: var(--fm-text-muted);
-  font-size: var(--fm-font-size-xs);
-  font-weight: 700;
-  padding: var(--fm-space-2);
+  font-size: var(--fm-font-size-2xs);
+  font-weight: 650;
+  letter-spacing: 0.06em;
+  padding: var(--fm-space-2) var(--fm-space-3) var(--fm-space-1);
   text-transform: uppercase;
 }
 
 .fm-command-item {
   display: flex;
-  min-height: var(--fm-control-height-regular);
+  min-height: calc(var(--fm-control-height-regular) + var(--fm-space-1));
   align-items: center;
   justify-content: space-between;
   gap: var(--fm-space-3);
-  border-radius: var(--fm-radius-sm);
+  border-radius: var(--fm-radius-field);
   color: var(--fm-text-secondary);
   cursor: pointer;
   font-size: var(--fm-font-size-sm);
-  padding: 0 var(--fm-space-2);
+  padding: 0 var(--fm-space-3);
+  transition:
+    background-color var(--fm-duration-micro) var(--fm-ease-out-soft),
+    color var(--fm-duration-micro) var(--fm-ease-out-soft);
 }
 
 .fm-command-item[data-selected="true"] {
-  background: var(--fm-bg-selected);
+  background: color-mix(in oklab, var(--fm-bg-selected) 85%, transparent);
   color: var(--fm-text-primary);
 }

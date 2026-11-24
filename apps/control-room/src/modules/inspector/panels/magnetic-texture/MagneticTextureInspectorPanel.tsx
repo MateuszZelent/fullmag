@@ -1441,12 +1441,14 @@ export function MagneticTextureInspectorPanel({ selection }: InspectorPanelProps
         ),
       commitBar: {
         mode: "staged",
-        allowCleanApply: false,
+        allowCleanApply: !domainModel.asset && target.kind === "object",
         applyLabel: "Apply Texture",
         cleanMessage: () =>
-          domainModel.baseRevision !== null
-            ? `Up to date with scene revision ${domainModel.baseRevision}`
-            : "Up to date",
+          !domainModel.asset && target.kind === "object"
+            ? "Unassigned — click Apply Texture to commit this initial magnetization"
+            : domainModel.baseRevision !== null
+              ? `Up to date with scene revision ${domainModel.baseRevision}`
+              : "Up to date",
         lockReason: (draft) => {
           if (!objectRec) return "Select a committed magnetic object in the scene.";
           if (target.kind === "region" && !domainModel.authoredRegion) {

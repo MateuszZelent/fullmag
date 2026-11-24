@@ -31,6 +31,7 @@ import {
   setViewport3DInspectorContext,
   useViewport3DInspectorContext,
 } from "@/modules/viewport-3d/public";
+import { useSessionErrorCount } from "../diagnostics/sessionErrorStore";
 import { useKernel } from "../KernelContext";
 import { useLayoutSelector } from "./useLayout";
 
@@ -51,6 +52,7 @@ const INSPECTOR_TAB_ICONS: Record<string, LucideIcon> = {
 interface RailItem {
   active: boolean;
   dirtyCount?: number;
+  errorCount?: number;
   icon: LucideIcon;
   id: string;
   label: string;
@@ -66,6 +68,7 @@ export function WorkspaceSideRail({ side }: { side: "left" | "right" }) {
   const kernel = useKernel();
   const panelVisible = useLayoutSelector((layout) => layout.panelVisible);
   const explorerTab = useExplorerStoreSelector((explorer) => explorer.activeTab);
+  const sessionErrorCount = useSessionErrorCount();
   const inspectorTab = useInspectorActiveTab();
   const inspectorTabs = useInspectorTabs();
   const stagedDirtyCount = useInspectorStagedDirtyCount();
@@ -85,7 +88,14 @@ export function WorkspaceSideRail({ side }: { side: "left" | "right" }) {
   const items: RailItem[] = side === "left"
     ? EXPLORER_TABS.map(({ icon, id, label }) => {
         const active = explorerTab === id;
-        return { active, icon, id, label, onSelect: choose(active, () => setExplorerActiveTab(id)) };
+        return {
+          active,
+          errorCount: id === "errors" && sessionErrorCount > 0 ? sessionErrorCount : undefined,
+          icon,
+          id,
+          label,
+          onSelect: choose(active, () => setExplorerActiveTab(id)),
+        };
       })
     : [
         {
@@ -130,10 +140,12 @@ export function WorkspaceSideRail({ side }: { side: "left" | "right" }) {
       data-open={open}
       data-side={side}
     >
-      {items.map(({ active, dirtyCount, icon: Icon, id, label, onSelect }, index) => {
+      {items.map(({ active, dirtyCount, errorCount, icon: Icon, id, label, onSelect }, index) => {
         const accessibleLabel = dirtyCount
           ? `${label} (${dirtyCount} unapplied ${dirtyCount === 1 ? "change" : "changes"})`
-          : label;
+          : errorCount
+            ? `${label} (${errorCount} ${errorCount === 1 ? "error" : "errors"} recorded)`
+            : label;
         return (
           <button
             // The first item is where focus lands when its panel is hidden.
@@ -143,6 +155,7 @@ export function WorkspaceSideRail({ side }: { side: "left" | "right" }) {
             className="fm-side-rail__item"
             data-active={active}
             data-dirty-fields-count={dirtyCount}
+            data-error-count={errorCount}
             data-rail-item={id}
             key={id}
             title={accessibleLabel}
@@ -152,6 +165,11 @@ export function WorkspaceSideRail({ side }: { side: "left" | "right" }) {
             <Icon aria-hidden="true" size={18} strokeWidth={1.75} />
             {dirtyCount ? (
               <span aria-hidden="true" className="fm-side-rail__dirty-dot" />
+            ) : null}
+            {errorCount ? (
+              <span aria-hidden="true" className="fm-side-rail__error-badge">
+                {errorCount > 99 ? "99+" : errorCount}
+              </span>
             ) : null}
             <span className="sr-only">{accessibleLabel}</span>
           </button>

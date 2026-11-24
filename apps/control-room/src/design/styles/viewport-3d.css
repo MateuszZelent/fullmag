@@ -22,8 +22,7 @@
 
 .fm-viewport-3d__appearance-dialog {
   width: min(42rem, calc(100vw - 2rem));
-  max-height: min(90dvh, 60rem);
-  overflow-y: auto;
+  max-height: min(88dvh, 56rem);
 }
 
 .fm-viewport-3d__settings-section {
@@ -31,9 +30,10 @@
   gap: var(--fm-space-3);
   min-inline-size: 0;
   margin: 0;
-  padding: var(--fm-space-3);
+  padding: var(--fm-space-3) var(--fm-space-4);
   border: 1px solid var(--fm-border-subtle);
-  border-radius: var(--fm-radius-md);
+  border-radius: var(--fm-radius-section);
+  background: var(--fm-section-bg);
 }
 
 .fm-viewport-3d__settings-section legend {
@@ -667,8 +667,11 @@
   display: grid;
   gap: var(--fm-space-4);
   min-width: 0;
+  flex: 1 1 auto;
+  min-height: 0;
   overflow: auto;
-  padding: 0 var(--fm-space-5);
+  overscroll-behavior: contain;
+  padding: var(--fm-space-4) var(--fm-space-5);
 }
 
 .fm-viewport-camera-dialog__live {
@@ -796,8 +799,13 @@
 .fm-viewport-3d__settings-body {
   display: flex;
   flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
   gap: var(--fm-space-3);
-  margin-top: var(--fm-space-3);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+  padding: var(--fm-space-4) var(--fm-space-5);
 }
 
 .fm-viewport-3d__settings-toggle {

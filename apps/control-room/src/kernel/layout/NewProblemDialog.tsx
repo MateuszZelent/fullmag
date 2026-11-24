@@ -113,6 +113,25 @@ export function NewProblemDialog({
   const disabled = pending || browsing || creationAccepted;
   const canCreate = !disabled && Boolean(base) && Boolean(name.trim()) && !outputError && !folderError && !tempError
     && formatAvailable && (!mustConfirmReplacement || replaceConfirmed) && projectDocument.state !== "loading";
+  const blockingFooterHint = creationAccepted
+    ? "Simulation created"
+    : defaults.status === "error"
+      ? "Storage settings could not be loaded. Use Try again above."
+      : defaults.status === "loading" && !base
+        ? "Loading storage settings…"
+        : !name.trim()
+          ? "Enter a simulation name."
+          : outputError
+            ? outputError
+            : folderError
+              ? folderError
+              : tempError
+                ? tempError
+                : !formatAvailable && base
+                  ? "Choose a supported data format."
+                  : mustConfirmReplacement && !replaceConfirmed
+                    ? "Confirm replacing the active simulation to continue."
+                    : "You can refine the model after creation.";
   const update = <K extends keyof OutputStorageDefaultsRequest>(key: K, value: OutputStorageDefaultsRequest[K]) => {
     setOverrides((current) => ({ ...current, [key]: value }));
   };
@@ -194,6 +213,10 @@ export function NewProblemDialog({
         </DialogHeader>
         <form className="fm-new-problem__form" onSubmit={(event) => { event.preventDefault(); void create(); }}>
           <div className="fm-dialog__body fm-new-problem__body">
+            {defaults.status === "loading" && !base ? <p className="fm-new-problem__notice" role="status">Loading your storage settings…</p> : null}
+            {defaults.status === "error" ? <div className="fm-new-problem__notice" role="alert">Unable to load storage settings. <Button size="sm" type="button" variant="ghost" disabled={disabled} onClick={() => defaults.refetch()}>Try again</Button></div> : null}
+            {!formatAvailable && base ? <p className="fm-new-problem__notice" role="alert">The selected data format is unavailable in this runtime. Choose a supported format.</p> : null}
+            {error ? <p className="fm-new-problem__error" role="alert">{error}</p> : null}
             <div className="fm-new-problem__fields">
               <section className="fm-new-problem__section" aria-label="Simulation setup">
                 <label className="fm-new-problem__field" htmlFor="fm-new-problem-name">
@@ -278,14 +301,10 @@ export function NewProblemDialog({
               <div className="fm-new-problem__destination"><span>Temporary files</span><code>{tempParent || "Choose a temporary directory"}</code><p className="fm-new-problem__hint">{settings.cleanup === "on_success" ? "Removed after success. Kept if a run fails." : settings.cleanup === "always" ? "Removed after a run finishes, including failures." : "Kept until you remove them."}</p></div>
               <div className="fm-new-problem__assurance"><ShieldCheck size={16} aria-hidden="true" /><p>Results are kept. Cleanup removes only temporary folders created by Fullmag.</p></div>
             </aside>
-            {defaults.status === "loading" && !base ? <p className="fm-new-problem__notice" role="status">Loading your storage settings…</p> : null}
-            {defaults.status === "error" ? <div className="fm-new-problem__notice" role="alert">Unable to load storage settings. <Button size="sm" type="button" variant="ghost" disabled={disabled} onClick={() => defaults.refetch()}>Try again</Button></div> : null}
-            {!formatAvailable && base ? <p className="fm-new-problem__notice" role="alert">The selected data format is unavailable in this runtime. Choose a supported format.</p> : null}
             {mustConfirmReplacement && !creationAccepted ? <label className="fm-new-problem__check fm-new-problem__replacement"><Checkbox checked={replaceConfirmed} disabled={disabled} onChange={(event) => setReplaceConfirmed(event.target.checked)} /><span>Replace the active simulation and its unsaved project changes.</span></label> : null}
-            {error ? <p className="fm-new-problem__error" role="alert">{error}</p> : null}
           </div>
           <DialogFooter className="fm-new-problem__footer">
-            <span className="fm-new-problem__footer-note">{creationAccepted ? "Simulation created" : "You can refine the model after creation."}</span>
+            <span className="fm-new-problem__footer-note">{blockingFooterHint}</span>
             <DialogClose asChild><Button disabled={pending || browsing} size="sm" type="button" variant="ghost">{creationAccepted ? "Close" : "Cancel"}</Button></DialogClose>
             <Button disabled={!canCreate} size="sm" type="submit">{pending ? "Creating…" : "Create simulation"}</Button>
           </DialogFooter>

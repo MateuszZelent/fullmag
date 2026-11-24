@@ -3,30 +3,16 @@
 import { useRef, type KeyboardEvent, type Ref } from "react";
 
 import type { StartSection } from "../model/startScreenState";
-import type { ComputeNodeInventorySummary, ComputeProbeState } from "../model/types";
 
-import { ComputeEnvironmentWidget } from "./ComputeEnvironmentWidget";
 import { RAIL_SECTIONS } from "./StartRail.model";
 
 export interface StartRailProps {
-  readonly compute: ComputeProbeState;
-  readonly nodeInventory?: ComputeNodeInventorySummary;
-  readonly refreshing?: boolean;
-  readonly stale?: boolean;
-  readonly computeError?: string | null;
-  readonly onRefreshCompute?: () => void;
   readonly onRunCommand: (commandId: string) => void;
   readonly ref?: Ref<HTMLDivElement>;
   readonly section: StartSection;
 }
 
 export function StartRail({
-  compute,
-  nodeInventory,
-  refreshing = false,
-  stale = false,
-  computeError = null,
-  onRefreshCompute,
   onRunCommand,
   ref,
   section,
@@ -89,16 +75,6 @@ export function StartRail({
           })}
         </ul>
       </nav>
-      <div aria-hidden="true" className="fm-start-rail__sep" />
-      <ComputeEnvironmentWidget
-        compute={compute}
-        nodeInventory={nodeInventory}
-        error={computeError}
-        onConfigure={() => onRunCommand("start.section.settings")}
-        onRefresh={onRefreshCompute}
-        refreshing={refreshing}
-        stale={stale}
-      />
     </div>
   );
 }

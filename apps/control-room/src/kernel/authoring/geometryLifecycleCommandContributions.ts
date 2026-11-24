@@ -1703,7 +1703,7 @@ function booleanCombineDisabledReason(
   }
   const ids = selectedObjectIdsFromContext(context);
   if (ids.length < 2) {
-    return "Select at least two scene objects (Base A, then Tool B) to run a boolean operation.";
+    return "Ctrl+Click at least two objects in the Model tree (Base A, then Tool B) to run a boolean operation.";
   }
   if (sceneBaseRevision(context) === null) {
     return "The canonical scene revision is unavailable. Refetch the scene before applying boolean operations.";
