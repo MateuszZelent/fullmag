@@ -1998,6 +1998,7 @@ function Viewport3DModelLayerStack({
       {topologyLayerEnabled ? (
         <group visible={stageVisibility.baseGeometry}>
           <TopologyMeshLayer
+            authoredTextureSurfaceObjectIds={authoredTextureSurfaceObjectIds}
             onGeometryReady={onTopologyGeometryReady}
             replacementObjectIds={realizedObjectIds}
             adoptionRegistry={adoptionRegistry}

@@ -228,6 +228,8 @@ jobs:
           cargo test -p fullmag-api --bin fullmag-api accepted_fem_study_worker::source_contract_tests
           cargo test -p fullmag-api --bin fullmag-api-accepted-worker accepted_fem_study_worker::source_contract_tests
           cargo test -p fullmag-api --bin fullmag-api live_scene_preparation::tests
+          python3 -B scripts/ci/run_exact_cargo_test.py --locked -p fullmag-plan --lib fem::fem_segment_remap_accepts_authored_geometry_with_a_distinct_object_id -- --exact
+          python3 -B scripts/ci/run_exact_cargo_test.py --locked -p fullmag-api --bin fullmag-api router_v2::tests::prepared_fem_demag_is_readable_in_airbox_without_a_solver_run -- --exact
           cargo test -p fullmag-api --bin fullmag-api-accepted-fem-preparation-scheduler --no-fail-fast
           cargo test -p fullmag-api --bin fullmag-api accepted_preparation_completion_keeps_reserved_record_after_mesh_revision_moves
           cargo test -p fullmag-api --bin fullmag-api preparation_failure_and_stop_terminalize_only_their_reserved_records
