@@ -31,6 +31,7 @@
 namespace fullmag::fem {
 
 struct Context;
+struct GpuDemagCudssDirectSolver;
 
 struct DeviceCsrTriple {
     uint64_t rows = 0;
@@ -101,6 +102,9 @@ struct GpuDemagPoissonWorkspace {
     std::unique_ptr<mfem::HypreParVector> x_par;
     std::unique_ptr<mfem::HypreParVector> residual;
 #endif
+    // Opt-in cuDSS factor (docs/physics/0997); null on the default CG path.
+    // shared_ptr keeps the deleter, so the type may stay incomplete here.
+    std::shared_ptr<GpuDemagCudssDirectSolver> direct_solver;
     uint64_t device_bytes = 0;
     uint64_t solver_setup_count = 0;
     uint64_t fresh_zero_guess_count = 0;

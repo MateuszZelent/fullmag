@@ -208,6 +208,7 @@ set(FEM_SOURCES
     cpu/frequency_domain/production_cpu_driven_response.cpp
     cpu/frequency_domain/slepc_modal_eigen.cpp
     cpu/frequency_domain/spectral_transform.cpp
+    gpu/cuda/demag_poisson/cudss_direct_solver.cpp
     gpu/cuda/demag_poisson/hypre_device_solver.cpp
     gpu/cuda/demag_poisson/hypre_validation_policy.cpp
     gpu/cuda/runtime/hypre_device_policy.cpp
@@ -482,7 +483,8 @@ if(UNIX AND NOT APPLE AND FULLMAG_USE_MFEM_STACK AND FULLMAG_ENABLE_CUDA AND
     target_link_libraries(fullmag_fem PRIVATE
         "${FULLMAG_CUDSS_LIBRARY}" CUDA::cublas CUDA::cusparse CUDA::cusolver
     )
-    target_compile_definitions(fullmag_fem PRIVATE FULLMAG_FEM_CUDSS_SHIFT_ENABLED=1)
+    target_compile_definitions(fullmag_fem PRIVATE FULLMAG_FEM_CUDSS_SHIFT_ENABLED=1
+        FULLMAG_FEM_CUDSS_POISSON_ENABLED=1)
     set(FULLMAG_FEM_CUDSS_SHIFT_SUPPORTED TRUE)
 endif()
 if(FULLMAG_FEM_CUPTI_TRACE_SUPPORTED)

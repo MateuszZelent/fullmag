@@ -107,10 +107,12 @@ bool gpu_demag_poisson_initialize(Context &ctx, std::string &error)
     }
 
     workspace->ready = true;
+    // Includes the cuDSS factor when the direct-solve override is active.
+    const uint64_t workspace_device_bytes = workspace->device_bytes;
     ctx.poisson_demag.gpu_workspace = workspace.release();
     ctx.poisson_demag.gpu_workspace_ready = true;
-    ctx.poisson_demag.gpu_workspace_device_bytes = device_bytes;
-    ctx.gpu_state.device.lifecycle.device_bytes += device_bytes;
+    ctx.poisson_demag.gpu_workspace_device_bytes = workspace_device_bytes;
+    ctx.gpu_state.device.lifecycle.device_bytes += workspace_device_bytes;
     return true;
 #else
     (void)ctx;

@@ -19,6 +19,7 @@
 #include "gpu/cuda/runtime/hypre_device_policy.hpp"
 #include "gpu/cuda/runtime/performance_counters.hpp"
 #include "gpu/cuda/transfer/transfer_audit.hpp"
+#include "gpu/cuda/demag_poisson/cudss_direct_solver.hpp"
 #include "gpu/cuda/demag_poisson/demag_kernels.hpp"
 #include "gpu/cuda/demag_poisson/hypre_validation_policy.hpp"
 
@@ -36,6 +37,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
 #include <memory>
 #include <string>
 #include <utility>
@@ -204,6 +206,41 @@ bool configure_demag_poisson_hypre_solver(
         return false;
     }
 }
+
+// Opt-in cuDSS realization (docs/physics/0997): factor the boundary-conditioned
+// matrix once instead of building the HYPRE Krylov solver and preconditioner.
+bool initialize_demag_poisson_cudss_direct_solver(
+    Context &ctx,
+    GpuDemagPoissonWorkspace &workspace,
+    const mfem::SparseMatrix &matrix,
+    std::string &error)
+{
+    if (demag_periodic_poisson_reduction_requested(ctx)) {
+        error = "FULLMAG_FEM_DEMAG_GPU_DIRECT_SOLVER=cudss does not support the periodic "
+                "reduced Poisson operator";
+        return false;
+    }
+    const auto setup_start = FemSteadyClock::now();
+    GpuDemagCudssDirectStats stats;
+    if (!create_demag_cudss_direct_solver(matrix, workspace.direct_solver, stats, error)) {
+        return false;
+    }
+    workspace.device_bytes += stats.device_bytes;
+    ctx.poisson_demag.last_setup_wall_time_ns = elapsed_ns(setup_start);
+    std::fprintf(stderr,
+                 "fullmag: FEM GPU Poisson demag uses the cuDSS direct solve "
+                 "(FULLMAG_FEM_DEMAG_GPU_DIRECT_SOLVER=cudss): rows=%lld lower_nnz=%lld "
+                 "factor_nnz=%lld device_bytes=%llu analysis_ms=%.1f factorization_ms=%.1f\n",
+                 static_cast<long long>(stats.rows), static_cast<long long>(stats.lower_nnz),
+                 static_cast<long long>(stats.factor_nnz),
+                 static_cast<unsigned long long>(stats.device_bytes), stats.analysis_ms,
+                 stats.factorization_ms);
+    workspace.solver_setup_count += 1;
+    ctx.poisson_demag.setup_count = workspace.solver_setup_count;
+    ctx.poisson_demag.setup_count_current_step += 1;
+    workspace.solver_setup_complete = true;
+    return true;
+}
 #endif
 
 } // namespace
@@ -222,6 +259,9 @@ bool read_device_demag_amg_coarse_relax_type(
         return true;
     }
     const GpuDemagPoissonWorkspace *workspace = workspace_ptr(ctx);
+    if (workspace != nullptr && workspace->direct_solver != nullptr) {
+        return true;  // No AMG under the cuDSS override: report no observation.
+    }
     if (workspace == nullptr || !workspace->ready || workspace->preconditioner == nullptr) {
         error = "GPU Poisson demag AMG context is marked initialized but has no "
             "ready Hypre preconditioner";
@@ -304,6 +344,9 @@ bool initialize_demag_poisson_hypre_device_solver(
         true);
     workspace.residual = std::make_unique<mfem::HypreParVector>(
         fullmag_serial_comm(), glob_size, workspace.row_starts);
+    if (demag_gpu_direct_solver_requested()) {
+        return initialize_demag_poisson_cudss_direct_solver(ctx, workspace, *A_bc, error);
+    }
     if (!configure_demag_poisson_hypre_preconditioner(ctx, workspace, error) ||
         !configure_demag_poisson_hypre_solver(ctx, workspace, error)) {
         return false;
@@ -336,6 +379,19 @@ bool prepare_demag_poisson_hypre_device_solver_apply(
     std::string &error)
 {
 #if FULLMAG_HAS_MFEM_STACK && defined(MFEM_USE_MPI)
+    if (workspace.direct_solver != nullptr) {
+        // A direct solve has no initial iterate; keep the warm/fresh counters.
+        if (workspace.A_par == nullptr || !workspace.solver_setup_complete) {
+            error = "GPU Poisson demag apply requires a completed cuDSS factorization";
+            return false;
+        }
+        if (fresh_zero) {
+            workspace.fresh_zero_guess_count += 1;
+        } else {
+            workspace.warm_start_count += 1;
+        }
+        return true;
+    }
     if (workspace.A_par == nullptr || workspace.solver == nullptr ||
         workspace.preconditioner == nullptr || !workspace.solver_setup_complete) {
         error = "GPU Poisson demag apply requires a completed persistent Hypre setup";
@@ -364,6 +420,9 @@ bool set_demag_poisson_hypre_solver_iterative_mode(
     std::string &error)
 {
 #if FULLMAG_HAS_MFEM_STACK && defined(MFEM_USE_MPI)
+    if (workspace.direct_solver != nullptr) {
+        return true;  // No Krylov iterate to configure under the cuDSS override.
+    }
     if (workspace.solver == nullptr) {
         error = "GPU Poisson demag Hypre solver is not initialized";
         return false;
@@ -419,6 +478,12 @@ void read_demag_poisson_hypre_solver_stats(
     residual = 0.0;
     solver_reported_converged = false;
 #if FULLMAG_HAS_MFEM_STACK && defined(MFEM_USE_MPI)
+    if (workspace.direct_solver != nullptr) {
+        // One factor application; the caller certifies the residual independently.
+        iterations = 1;
+        solver_reported_converged = true;
+        return;
+    }
     mfem::real_t raw_residual = 0.0;
     switch (ctx.demag.solver.solver) {
     case FULLMAG_FEM_LINEAR_SOLVER_CG: {
@@ -564,8 +629,11 @@ bool validate_demag_poisson_hypre_device_solve(
 #endif
     }
 
+    const bool direct = workspace.direct_solver != nullptr;
     DemagLinearSolveResult result;
-    result.solver_kind = ctx.demag.solver.solver == FULLMAG_FEM_LINEAR_SOLVER_GMRES
+    result.solver_kind = direct
+        ? "gpu_poisson_cudss/direct"
+        : ctx.demag.solver.solver == FULLMAG_FEM_LINEAR_SOLVER_GMRES
         ? "gpu_poisson_hypre/gmres"
         : "gpu_poisson_hypre/cg";
     result.solver_reported_converged = solver_reported_converged;
@@ -585,6 +653,9 @@ bool validate_demag_poisson_hypre_device_solve(
         return false;
     }
     if (gpu_execution_receipt_attempt_active(ctx.gpu_state.execution_receipt)) {
+        // The required operator mask follows the requested CG/AMG policy, so the
+        // cuDSS factor, applied in place of the preconditioned solve, keeps the
+        // PRECONDITIONER bit (docs/physics/0997, limitations).
         gpu_execution_receipt_note_device(
             ctx.gpu_state.execution_receipt,
             FEM_GPU_OPERATOR_DEMAG_SOLVE | FEM_GPU_OPERATOR_PRECONDITIONER);
