@@ -8650,6 +8650,18 @@
         ],
         "type": "object"
       },
+      "CreateSessionPreviewRequest": {
+        "properties": {
+          "scene_document": {
+            "description": "A captured authored SceneDocument (scene.v2).",
+            "type": "object"
+          }
+        },
+        "required": [
+          "scene_document"
+        ],
+        "type": "object"
+      },
       "CreateSessionRequest": {
         "properties": {
           "backend": {
@@ -75682,6 +75694,146 @@
         },
         "tags": [
           "workspace"
+        ]
+      }
+    },
+    "/v2/sessions/previews": {
+      "post": {
+        "operationId": "sessions_post_sessions_previews",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateSessionPreviewRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionSummaryResource"
+                }
+              }
+            },
+            "description": "Read-only session preview created"
+          },
+          "400": {
+            "description": "Invalid authored scene"
+          },
+          "413": {
+            "description": "Preview scene exceeds 8 MiB"
+          },
+          "429": {
+            "description": "Preview capacity exhausted"
+          }
+        },
+        "tags": [
+          "sessions"
+        ]
+      }
+    },
+    "/v2/sessions/previews/from-script": {
+      "post": {
+        "operationId": "sessions_post_sessions_previews_from_script",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProjectFromScriptRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionSummaryResource"
+                }
+              }
+            },
+            "description": "Model preview created after explicit consent to evaluate Python"
+          },
+          "400": {
+            "description": "Missing consent, source or valid model"
+          },
+          "413": {
+            "description": "Script or preview scene exceeds its size bound"
+          },
+          "422": {
+            "description": "The helper could not export an authored scene"
+          },
+          "429": {
+            "description": "Preview capacity exhausted"
+          }
+        },
+        "tags": [
+          "sessions"
+        ]
+      }
+    },
+    "/v2/sessions/previews/{session_id}": {
+      "delete": {
+        "operationId": "sessions_delete_sessions_previews_session_id",
+        "parameters": [
+          {
+            "description": "Read-only preview session ID",
+            "in": "path",
+            "name": "session_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Preview session closed"
+          },
+          "404": {
+            "description": "Preview session not found"
+          }
+        },
+        "tags": [
+          "sessions"
+        ]
+      },
+      "get": {
+        "operationId": "sessions_get_sessions_previews_session_id",
+        "parameters": [
+          {
+            "description": "Read-only preview session ID",
+            "in": "path",
+            "name": "session_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SceneResource"
+                }
+              }
+            },
+            "description": "Authored preview scene"
+          },
+          "404": {
+            "description": "Preview session not found"
+          }
+        },
+        "tags": [
+          "sessions"
         ]
       }
     },

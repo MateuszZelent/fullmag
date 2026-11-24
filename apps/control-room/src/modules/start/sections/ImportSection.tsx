@@ -26,6 +26,7 @@ export interface ImportSectionProps {
   readonly scriptSaver?: ScriptSaver | null;
   /** Creates a project from reviewed Python source after consent; null without a project document service. */
   readonly projectCreator?: ProjectCreator | null;
+  readonly previewCreator?: ProjectCreator | null;
   readonly onImportStl: (file: File, units: StlLengthUnit, scale: number) => Promise<string | null>;
   readonly onCreateFemWorkspace: () => Promise<string | null>;
   readonly stlWorkspaceState: "active" | "none" | "unconfirmed";
@@ -71,6 +72,7 @@ export function ImportSection({
   openDisabledReason,
   scriptSaver = null,
   projectCreator = null,
+  previewCreator = null,
   onImportStl,
   onCreateFemWorkspace,
   stlWorkspaceState,
@@ -355,10 +357,12 @@ export function ImportSection({
           <h2 className="fm-start-report__title">Review: {pythonSource.fileName}</h2>
           <p className="fm-start-inspector__note">
             Self-contained scripts only. Companion files and relative assets are not included.
-            Reading this file does not execute it. Create project asks for consent before running it.
+            You can review the source here. Opening a preview or creating a project requires consent to evaluate it.
           </p>
           <pre aria-label="Python source" className="fm-start-report__source" style={{ maxHeight: "24rem", overflow: "auto" }} tabIndex={0}><code>{pythonSource.text}</code></pre>
           <CreateProjectAction creator={projectCreator} disabled={busy} source={pythonSource} />
+          <CreateProjectAction creator={previewCreator} disabled={busy} label="Open model preview…"
+            preview source={pythonSource} variant="secondary" />
           <Button onClick={() => dispatch({ type: "clear" })} type="button" variant="ghost">Discard</Button>
         </section>
       ) : null}

@@ -2,6 +2,7 @@
 
 import { SavedResultsPlaybackController } from "./saved-results/SavedResultsPlaybackController";
 import { homeView } from "./layout/homeView";
+import { sessionPreviewSelection } from "./layout/sessionPreviewSelection";
 
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 
@@ -452,6 +453,7 @@ function CommandShortcutConnector({ kernel }: { kernel: KernelApi }) {
 
   useEffect(() => {
     function handleKeyDown(event: KeyboardEvent): void {
+      if (sessionPreviewSelection.getSnapshot() !== null) return;
       const context = createCommandContext("shortcut", kernel, {
         resourceData: runtimeResourceDataRef.current,
         sessionScopeKey,
@@ -483,6 +485,7 @@ function ProjectWorkspaceShortcutConnector({
       execute: (id: string, context: Parameters<typeof kernel.commands.execute>[1]) => kernel.commands.execute(id, context),
     };
     const handleKeyDown = (event: KeyboardEvent) => {
+      if (sessionPreviewSelection.getSnapshot() !== null) return;
       dispatchShortcutCommand(commands, event, createCommandContext("shortcut", kernel, {
         sessionScopeKey: null,
         sourceDetail: "project-workspace",

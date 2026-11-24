@@ -32,6 +32,7 @@ export interface ScriptProjectSource {
 }
 
 export type ScriptProjectOutcome =
+  | { readonly kind: "preview" }
   | { readonly kind: "created"; readonly projectName: string; readonly fidelity: ScriptFidelityResource }
   | { readonly kind: "failed"; readonly message: string };
 

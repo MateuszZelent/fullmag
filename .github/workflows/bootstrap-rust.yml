@@ -159,6 +159,15 @@ jobs:
           python3 -B scripts/ci/run_exact_cargo_test.py --locked -p fullmag-runtime-control --lib claim::scoped_store_io_classification_tests::raw_enodata_is_not_a_global_transient_store_error -- --exact
           cargo test -p fullmag-api --bin fullmag-api router_v2::handlers::data::antenna_inspection::tests
 
+      - name: Run read-only session preview contracts
+        env:
+          RUST_MIN_STACK: 16777216
+        run: |
+          python3 -B scripts/ci/run_exact_cargo_test.py --locked -p fullmag-api --bin fullmag-api router_v2::tests::session_previews_coexist_with_live_run_and_close_independently -- --exact
+          python3 -B scripts/ci/run_exact_cargo_test.py --locked -p fullmag-api --bin fullmag-api router_v2::tests::opening_scene_preview_from_python_requires_explicit_consent -- --exact
+          python3 -B scripts/ci/run_exact_cargo_test.py --locked -p fullmag-api --bin fullmag-api router_v2::tests::opening_scene_preview_from_python_captures_only_the_authored_model -- --exact
+          python3 -B scripts/ci/run_exact_cargo_test.py --locked -p fullmag-api --bin fullmag-api router_v2::handlers::sessions::preview::tests::script_capture_admission_is_bounded -- --exact
+
       - name: Run terminal Docker recovery contracts
         run: cargo test -p fullmag-session --lib runtime_service::retained_terminal_runs::tests --no-fail-fast
 

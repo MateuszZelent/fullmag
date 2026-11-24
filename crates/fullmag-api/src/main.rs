@@ -2661,6 +2661,7 @@ async fn run_api_server() {
         current_command_journal_store_root: Some(current_command_journal_store_root),
         current_command_journal_revision: Arc::new(AtomicU64::new(0)),
         current_live_state: Arc::new(RwLock::new(None)),
+        session_previews: Default::default(),
         accepted_run_reattach_identity: Arc::new(RwLock::new(None)),
         current_live_session_transition: Arc::new(Mutex::new(())),
         request_scope_instance_id: router_v2::middleware::version::instance_id().to_string(),

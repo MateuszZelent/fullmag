@@ -26,6 +26,29 @@ Version vocabulary has two deliberately separate axes:
 The older public `/v1/live/current/...` tree has been removed. Only
 `/v1/internal/live/current/...` may remain as a backend-only runtime bridge; it is not browser API.
 
+### Równoległy podgląd sesji
+
+`GET /v2/sessions` zwraca workspace wykonawczy (`current: true`) oraz
+otwarte podglądy (`current: false`, `status: "preview"`). Control Room
+otwiera podglądy w kartach identyfikowanych przez `session_id`.
+
+`POST /v2/sessions/previews` przyjmuje przechwycony `scene.v2` w polu
+`scene_document`. `GET /v2/sessions/previews/{session_id}` udostępnia
+istniejącą projekcję `SceneResource`. `DELETE` pod tym adresem zwalnia
+wyłącznie dany podgląd. Podgląd trwa do zamknięcia lub restartu API.
+Jedna scena ma limit 8 MiB, a proces może zachować do 16 scen i do 32 MiB
+ich projekcji JSON. Po osiągnięciu limitu API zwraca 429, a istniejące
+podglądy pozostają dostępne.
+
+Podgląd pokazuje geometrię autorską tworzoną parametrycznie. Powierzchnie STL
+są dostępne w workspace’ie autorskim. Endpointy `/v2/sessions/current`
+pozostają przypisane do workspace’u wykonawczego. Podgląd nie tworzy runu,
+zadania, siatki solvera ani rezerwacji zasobów. Walidacja gotowości solvera
+odbywa się przy pracy w sesji wykonawczej. Import Pythona w Control
+Roomie korzysta z `POST /v2/sessions/previews/from-script`, wymaga jawnej
+zgody na ewaluację i przechwytuje scenę w katalogu tymczasowym. API obsługuje
+do dwóch równoczesnych przechwyceń Pythona i sygnalizuje zajęte miejsca kodem 429.
+
 ## 2. Canonical route families
 
 ### Dostępność API po błędzie wykonania (2026-10-22)

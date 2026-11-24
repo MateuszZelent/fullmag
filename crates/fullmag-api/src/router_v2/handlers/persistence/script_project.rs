@@ -30,7 +30,7 @@ use super::projects::{encode_current, resource_from_application};
 use crate::error::ApiError;
 use crate::imported_geometry_sources;
 use crate::schemas::projects::{
-    ProjectFromScriptRequest, ProjectFromScriptResource, ProjectScriptImportResource,
+    ProjectFromScriptRequest, ProjectFromScriptResource, ProjectFromScriptSource, ProjectScriptImportResource,
     ScriptFidelityResource, ScriptRoundTripState, PROJECT_ARCHIVE_MAX_BYTES,
     SCRIPT_IMPORT_MAX_BYTES,
 };
@@ -58,53 +58,9 @@ const MAX_STDERR_CHARS: usize = 2000;
 )]
 pub async fn from_script(
     State(state): State<Arc<AppState>>,
-    Json(request): Json<ProjectFromScriptRequest>,
+    Json(mut request): Json<ProjectFromScriptRequest>,
 ) -> Result<(StatusCode, Json<ProjectFromScriptResource>), ApiError> {
-    if !request
-        .consent
-        .as_ref()
-        .is_some_and(|consent| consent.executed_by_user)
-    {
-        return Err(ApiError::with_status_and_code(
-            StatusCode::BAD_REQUEST,
-            "consent_required",
-            "creating a project from a script executes the script; \
-             consent.executed_by_user must be true",
-        ));
-    }
-    if request.script_item_id.is_some() {
-        return Err(ApiError::with_status_and_code(
-            StatusCode::BAD_REQUEST,
-            "script_item_unsupported",
-            "script_item_id is not supported by the API; send the script text as source",
-        ));
-    }
-    let source = request.source.ok_or_else(|| {
-        ApiError::with_status_and_code(
-            StatusCode::BAD_REQUEST,
-            "source_required",
-            "source {name, text} is required",
-        )
-    })?;
-    if source.name.trim().is_empty() {
-        return Err(ApiError::bad_request("source.name must not be empty"));
-    }
-    if source.text.len() > SCRIPT_IMPORT_MAX_BYTES {
-        return Err(ApiError::with_status_and_code(
-            StatusCode::PAYLOAD_TOO_LARGE,
-            "script_too_large",
-            format!(
-                "script text is {} bytes; the limit is {} bytes",
-                source.text.len(),
-                SCRIPT_IMPORT_MAX_BYTES
-            ),
-        ));
-    }
-    if source.text.contains('\0') {
-        return Err(ApiError::bad_request(
-            "source.text must not contain NUL characters",
-        ));
-    }
+    let source = validate_script_source(&mut request)?;
     let origin = request
         .origin
         .map(|value| value.trim().to_string())
@@ -134,6 +90,76 @@ pub async fn from_script(
     .await
     .map_err(|error| ApiError::internal(format!("script project task failed: {error}")))??;
     Ok((StatusCode::CREATED, Json(resource)))
+}
+
+fn validate_script_source(
+    request: &mut ProjectFromScriptRequest,
+) -> Result<ProjectFromScriptSource, ApiError> {
+    if !request
+        .consent
+        .as_ref()
+        .is_some_and(|consent| consent.executed_by_user)
+    {
+        return Err(ApiError::with_status_and_code(
+            StatusCode::BAD_REQUEST,
+            "consent_required",
+            "loading the model executes the script; \
+             consent.executed_by_user must be true",
+        ));
+    }
+    if request.script_item_id.is_some() {
+        return Err(ApiError::with_status_and_code(
+            StatusCode::BAD_REQUEST,
+            "script_item_unsupported",
+            "script_item_id is not supported by the API; send the script text as source",
+        ));
+    }
+    let source = request.source.take().ok_or_else(|| {
+        ApiError::with_status_and_code(
+            StatusCode::BAD_REQUEST,
+            "source_required",
+            "source {name, text} is required",
+        )
+    })?;
+    if source.name.trim().is_empty() {
+        return Err(ApiError::bad_request("source.name must not be empty"));
+    }
+    if source.text.len() > SCRIPT_IMPORT_MAX_BYTES {
+        return Err(ApiError::with_status_and_code(
+            StatusCode::PAYLOAD_TOO_LARGE,
+            "script_too_large",
+            format!(
+                "script text is {} bytes; the limit is {} bytes",
+                source.text.len(),
+                SCRIPT_IMPORT_MAX_BYTES
+            ),
+        ));
+    }
+    if source.text.contains('\0') {
+        return Err(ApiError::bad_request(
+            "source.text must not contain NUL characters",
+        ));
+    }
+    Ok(source)
+}
+
+/// Evaluate only the authored scene in a request-owned temporary directory.
+pub(crate) async fn capture_script_preview(
+    state: &AppState,
+    mut request: ProjectFromScriptRequest,
+    capture_slot: tokio::sync::OwnedSemaphorePermit,
+) -> Result<SceneDocument, ApiError> {
+    let source = validate_script_source(&mut request)?;
+    let repo_root = state.repo_root.clone();
+    let workspace_root = state.current_workspace_root.clone();
+    tokio::task::spawn_blocking(move || {
+        // Keep the slot until Python exits, even if the HTTP request is cancelled.
+        let _capture_slot = capture_slot;
+        let files = ScriptCaptureFiles::stage(&workspace_root, &source.name, source.text.as_bytes())?;
+        parse_exported_script_scene(export_script_scene(&repo_root, &files)?)
+    })
+    .await
+    .map_err(|error| ApiError::internal(format!("script preview task failed: {error}")))?
 }
 
 /// File stem of a user-supplied name, reduced to a safe project name.
@@ -270,6 +296,66 @@ fn run_script_helper(
     }
 }
 
+struct ScriptCaptureFiles {
+    directory: PrivateDirGuard,
+    script_path: PathBuf,
+    source_snapshot: PathBuf,
+}
+
+impl ScriptCaptureFiles {
+    fn stage(workspace: &FsPath, name: &str, bytes: &[u8]) -> Result<Self, ApiError> {
+        fs::create_dir_all(workspace).map_err(|error| {
+            ApiError::internal(format!("failed to prepare script import workspace: {error}"))
+        })?;
+        let path = workspace.join(format!(".fullmag-script-import-{}", uuid::Uuid::new_v4().simple()));
+        fs::create_dir(&path).map_err(|error| {
+            ApiError::internal(format!("failed to create private script import directory: {error}"))
+        })?;
+        let directory = PrivateDirGuard(path);
+        let script_path = directory.0.join(safe_script_file_name(name));
+        fs::write(&script_path, bytes).map_err(|error| {
+            ApiError::internal(format!("failed to write the private script copy: {error}"))
+        })?;
+        // Each helper reads the same accepted bytes. The script path is its logical origin.
+        let source_snapshot = directory.0.join(".fullmag-source-snapshot.bin");
+        fs::write(&source_snapshot, bytes).map_err(|error| {
+            ApiError::internal(format!("failed to write the private source snapshot: {error}"))
+        })?;
+        Ok(Self { directory, script_path, source_snapshot })
+    }
+}
+
+fn export_script_scene(repo_root: &FsPath, files: &ScriptCaptureFiles) -> Result<Value, ApiError> {
+    let source_snapshot = files.source_snapshot.display().to_string();
+    let args = helper_args(
+        "export-scene-document",
+        &files.script_path,
+        &["--source-snapshot", &source_snapshot],
+    );
+    match run_script_helper(repo_root, &files.directory.0, &args, "scene export")? {
+        Ok(value) => Ok(value),
+        Err(stderr) => Err(ApiError::unprocessable_with_code(
+            "script_export_failed",
+            format!("the script could not be exported to a scene document: {stderr}"),
+        )),
+    }
+}
+
+fn parse_exported_script_scene(value: Value) -> Result<SceneDocument, ApiError> {
+    if value.get("version").and_then(Value::as_str) != Some("scene.v2") {
+        return Err(ApiError::unprocessable_with_code(
+            "script_export_failed",
+            "the helper did not return a scene.v2 document",
+        ));
+    }
+    serde_json::from_value(value).map_err(|error| {
+        ApiError::unprocessable_with_code(
+            "script_export_failed",
+            format!("the exported scene document is not valid: {error}"),
+        )
+    })
+}
+
 fn build_project_from_script(
     repo_root: &FsPath,
     workspace_root: &FsPath,
@@ -278,70 +364,17 @@ fn build_project_from_script(
     project_name: &str,
     origin: &str,
 ) -> Result<ProjectFromScriptResource, ApiError> {
-    fs::create_dir_all(workspace_root).map_err(|error| {
-        ApiError::internal(format!("failed to prepare script import workspace: {error}"))
-    })?;
-    let private_dir = workspace_root.join(format!(".fullmag-script-import-{}", crate::uuid_v4_hex()));
-    fs::create_dir(&private_dir).map_err(|error| {
-        ApiError::internal(format!("failed to create private script import directory: {error}"))
-    })?;
-    let _guard = PrivateDirGuard(private_dir.clone());
-    let script_path = private_dir.join(safe_script_file_name(script_name));
-    fs::write(&script_path, &script_bytes).map_err(|error| {
-        ApiError::internal(format!("failed to write the private script copy: {error}"))
-    })?;
-    // Both evaluations of the original read these accepted bytes, so a script
-    // that rewrites its own file cannot change what the second helper runs.
-    // `--script` stays the logical origin (asset root, `__file__`).
-    let source_snapshot = private_dir.join(".fullmag-source-snapshot.bin");
-    fs::write(&source_snapshot, &script_bytes).map_err(|error| {
-        ApiError::internal(format!("failed to write the private source snapshot: {error}"))
-    })?;
-    let source_snapshot_arg = source_snapshot.display().to_string();
-
-    // 1. Export the scene. This executes the script: failure keeps nothing.
-    let export_args = helper_args(
-        "export-scene-document",
-        &script_path,
-        &["--source-snapshot", &source_snapshot_arg],
-    );
-    let mut scene_value = match run_script_helper(
-        repo_root,
-        &private_dir,
-        &export_args,
-        "scene export",
-    )? {
-        Ok(value) => value,
-        Err(stderr) => {
-            return Err(ApiError::with_status_and_code(
-                StatusCode::UNPROCESSABLE_ENTITY,
-                "script_export_failed",
-                format!("the script could not be exported to a scene document: {stderr}"),
-            ));
-        }
-    };
-    if scene_value.get("version").and_then(Value::as_str) != Some("scene.v2") {
-        return Err(ApiError::with_status_and_code(
-            StatusCode::UNPROCESSABLE_ENTITY,
-            "script_export_failed",
-            "the helper did not return a scene.v2 document",
-        ));
-    }
-    let mut scene_document: SceneDocument =
-        serde_json::from_value(scene_value.clone()).map_err(|error| {
-            ApiError::with_status_and_code(
-                StatusCode::UNPROCESSABLE_ENTITY,
-                "script_export_failed",
-                format!("the exported scene document is not valid: {error}"),
-            )
-        })?;
+    let files = ScriptCaptureFiles::stage(workspace_root, script_name, &script_bytes)?;
+    let private_dir = &files.directory.0;
+    let mut scene_value = export_script_scene(repo_root, &files)?;
+    let mut scene_document = parse_exported_script_scene(scene_value.clone())?;
 
     // 2. Fidelity: a verdict, never an assumption.
     let mut fidelity = check_round_trip(
         repo_root,
-        &private_dir,
-        &script_path,
-        &source_snapshot,
+        private_dir,
+        &files.script_path,
+        &files.source_snapshot,
         &scene_document,
     );
     if let Err(error) = validate_scene_document_for_authoring(&scene_document) {

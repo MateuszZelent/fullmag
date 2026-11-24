@@ -263,6 +263,8 @@ import {
   workspaceItemArchiveUrl,
   workspaceItemThumbnailUrl,
   SESSIONS_PATH,
+  SESSION_PREVIEW_PATH,
+  SESSION_PREVIEW_FROM_SCRIPT_PATH,
   SESSION_EVENTS_COMMUNICATION_POLICY_PATH,
   SESSION_STATUS_PATH,
   SIMULATION_COMMAND_DETAIL_PATH,
@@ -1246,6 +1248,18 @@ export class ControlRoomApi {
   private readonly meshFreshnessRequests = new Map<string, Promise<boolean>>();
 
   readonly sessions = {
+    previews: {
+      fromScript: (request: ProjectFromScriptRequest, options?: RequestOptions) =>
+        this.postJson<components["schemas"]["SessionSummaryResource"], ProjectFromScriptRequest>(
+          SESSION_PREVIEW_FROM_SCRIPT_PATH,
+          request,
+          options,
+        ),
+      scene: (sessionId: string, options?: RequestOptions) =>
+        this.requestJson<SceneResource>(SESSION_PREVIEW_PATH, options, { path: { session_id: sessionId } }),
+      close: (sessionId: string, options?: RequestOptions) =>
+        this.deleteJson<void>(SESSION_PREVIEW_PATH, options, { path: { session_id: sessionId } }),
+    },
     list: (options?: RequestOptions) =>
       this.requestJson<SessionListResource>(SESSIONS_PATH, options),
     create: (input: CreateSessionRequest, options?: RequestOptions) =>

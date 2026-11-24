@@ -18,6 +18,12 @@ describe("InstanceTabStrip helpers", () => {
     expect(instanceTabLabel({ port: 3210, api_instance_id: "b", is_self: false, sessions: [] })).toBe(
       "No session",
     );
+    expect(instanceTabLabel({
+      port: 3210,
+      api_instance_id: "preview-only",
+      is_self: false,
+      sessions: [{ session_id: "p1", name: "Preview", status: "preview", current: false }],
+    })).toBe("No session");
     expect(instanceTabLabel(undefined)).toBe("Unavailable");
   });
 

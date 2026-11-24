@@ -368,7 +368,7 @@ export function instanceTabPortsClientValue(value: string | undefined): string {
  * export has no rewrites; its server answers unknown paths with the root
  * page, which renders the same workspace.
  */
-export const TAB_ROUTE_SOURCES = ["/home", "/session/:slug", "/instance/:port"] as const;
+export const TAB_ROUTE_SOURCES = ["/home", "/session/:slug", "/instance/:port", "/preview/:id"] as const;
 
 function securityHeaders() {
   return [

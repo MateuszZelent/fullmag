@@ -90,6 +90,21 @@ pub fn build_v2_router() -> Router<Arc<AppState>> {
             get(list_sessions).post(handlers::sessions::create),
         )
         .route(
+            "/v2/sessions/previews",
+            post(handlers::sessions::preview::create_preview)
+                .layer(axum::extract::DefaultBodyLimit::max(handlers::sessions::preview::MAX_SCENE_BYTES)),
+        )
+        .route(
+            "/v2/sessions/previews/from-script",
+            post(handlers::sessions::preview::create_preview_from_script)
+                .layer(axum::extract::DefaultBodyLimit::max(handlers::sessions::preview::MAX_SCENE_BYTES)),
+        )
+        .route(
+            "/v2/sessions/previews/:session_id",
+            get(handlers::sessions::preview::get_preview)
+                .delete(handlers::sessions::preview::close_preview),
+        )
+        .route(
             "/v2/sessions/current",
             get(get_current_session).patch(patch_current_session),
         )
@@ -1495,18 +1510,16 @@ mod runtime_binding_tests {
 async fn list_sessions(
     State(state): State<Arc<AppState>>,
 ) -> Json<crate::schemas::sessions::SessionListResource> {
-    let guard = state.current_live_state.read().await;
-    let sessions = guard
-        .as_ref()
-        .map(|snapshot| {
-            vec![crate::schemas::sessions::SessionSummaryResource {
-                session_id: snapshot.session.session_id.clone(),
-                name: snapshot.session.problem_name.clone(),
-                status: snapshot.session.status.clone(),
-                current: true,
-            }]
-        })
-        .unwrap_or_default();
+    let mut sessions = Vec::new();
+    if let Some(snapshot) = state.current_live_state.read().await.as_ref() {
+        sessions.push(crate::schemas::sessions::SessionSummaryResource {
+            session_id: snapshot.session.session_id.clone(),
+            name: snapshot.session.problem_name.clone(),
+            status: snapshot.session.status.clone(),
+            current: true,
+        });
+    }
+    sessions.extend(state.session_previews.summaries().await);
     Json(crate::schemas::sessions::SessionListResource {
         schema_version: "2.0.0".to_string(),
         sessions,

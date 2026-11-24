@@ -14,7 +14,7 @@ export type SessionCollectionState = "error" | "loading" | "no-session" | "ready
 export function resolveSessionCollectionState(
   collection: SessionListResource,
 ): Exclude<SessionCollectionState, "error" | "loading"> {
-  return collection.sessions.length > 0 ? "ready" : "no-session";
+  return collection.sessions.some((session) => session.current) ? "ready" : "no-session";
 }
 
 /**

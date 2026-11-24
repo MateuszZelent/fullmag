@@ -23,6 +23,6 @@ export function sessionTone(status: string | undefined): SessionTone {
 }
 
 export function instanceTabLabel(instance: DiscoveredInstance | undefined): string {
-  const session = instance?.sessions.find((entry) => entry.current) ?? instance?.sessions[0];
+  const session = instance?.sessions.find((entry) => entry.current);
   return session?.name || (instance ? "No session" : "Unavailable");
 }
