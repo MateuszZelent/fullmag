@@ -587,6 +587,9 @@ button.fm-inspector__breadcrumb:hover {
   grid-auto-flow: column;
   grid-auto-columns: minmax(0, 1fr);
   width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
   padding: 3px;
   border: 1px solid var(--fm-border-subtle);
   border-radius: var(--fm-radius-pill);
@@ -599,7 +602,9 @@ button.fm-inspector__breadcrumb:hover {
   justify-content: center;
   gap: var(--fm-space-1);
   min-width: 0;
+  max-width: 100%;
   min-block-size: 28px;
+  overflow: hidden;
   padding: 0 var(--fm-space-2);
   border: 0;
   border-radius: var(--fm-radius-pill);
@@ -612,6 +617,17 @@ button.fm-inspector__breadcrumb:hover {
     background-color var(--fm-duration-micro) var(--fm-ease-out-soft),
     color var(--fm-duration-micro) var(--fm-ease-out-soft),
     box-shadow var(--fm-duration-micro) var(--fm-ease-out-soft);
+}
+
+.fm-inspector__mode-tab > svg {
+  flex-shrink: 0;
+}
+
+.fm-inspector__mode-tab > span:not(.fm-inspector__mode-tab-badge) {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .fm-inspector__mode-tab[data-state="active"] {

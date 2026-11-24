@@ -772,6 +772,17 @@
   overflow-x: clip;
 }
 
+.fm-explorer-helper .fm-helper-guide {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.fm-explorer-helper .fm-helper-guide__header {
+  flex-direction: column;
+  align-items: stretch;
+  gap: var(--fm-space-1-5);
+}
+
 .fm-explorer-helper .fm-helper-guide__actions {
   flex-wrap: wrap;
   flex-shrink: 1;
@@ -815,7 +826,11 @@
 
 .fm-explorer-errors__summary {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: var(--fm-space-2);
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
   padding: var(--fm-space-3);
   border: 1px solid var(--fm-glass-line);
   border-radius: var(--fm-radius-section);
@@ -825,20 +840,25 @@
 
 .fm-explorer-errors__summary-head {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
-  gap: var(--fm-space-2);
+  gap: var(--fm-space-1-5);
+  min-width: 0;
 }
 
 .fm-explorer-errors__counts,
 .fm-explorer-errors__summary-tools {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: var(--fm-space-1);
+  min-width: 0;
 }
 
 .fm-explorer-errors__copy-report {
   width: 100%;
+  max-width: 100%;
 }
 
 .fm-explorer-errors__filters {
@@ -942,6 +962,7 @@
 
 .fm-explorer-errors__card {
   display: grid;
+  flex: 0 0 auto;
   grid-template-columns: minmax(0, 1fr);
   gap: var(--fm-space-1-5);
   min-width: 0;
