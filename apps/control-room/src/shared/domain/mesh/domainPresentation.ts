@@ -11,6 +11,7 @@ import {
   FMRM_INACTIVE_REGION_ID,
   type DecodedTopology,
 } from "@/kernel/api/codecs";
+import { computeSceneGeometryBoundsMeters } from "@/shared/domain/geometry/sceneGeometryBounds";
 
 export { FMRM_INACTIVE_REGION_ID };
 
@@ -340,6 +341,17 @@ export function authoredObjectBounds(value: unknown): DomainBounds3 | null {
   const geometryMax = finiteTuple3Unknown(geometry?.bounds_max);
   if (geometryMin && geometryMax) {
     return { min: geometryMin, max: geometryMax };
+  }
+
+  const recursiveBounds = computeSceneGeometryBoundsMeters(
+    geometry,
+    object.transform,
+  );
+  if (recursiveBounds) {
+    return {
+      min: recursiveBounds.min,
+      max: recursiveBounds.max,
+    };
   }
 
   const params = recordValue(geometry?.geometry_params);

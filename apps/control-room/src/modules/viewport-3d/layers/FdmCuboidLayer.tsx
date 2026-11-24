@@ -236,6 +236,7 @@ export function useFdmCuboidBuildResult({
   vectorAnchorMode,
   vectorField,
   vectorGeometryScope,
+  liftThinSheetAboveSurface,
   vectorOnly,
   vectorScale,
   vectorSurfaceOffsetEnabled,
@@ -257,6 +258,7 @@ export function useFdmCuboidBuildResult({
             vectorAnchorMode,
             vectorField,
             vectorGeometryScope: vectorGeometryScope ?? "full",
+            liftThinSheetAboveSurface: liftThinSheetAboveSurface ?? false,
             vectorOnly: vectorOnly ?? null,
             vectorScale,
             vectorSurfaceOffsetEnabled: vectorSurfaceOffsetEnabled ?? false,
@@ -270,6 +272,7 @@ export function useFdmCuboidBuildResult({
       cellSelection,
       domain,
       enabled,
+      liftThinSheetAboveSurface,
       maxVectorGlyphs,
       modelFieldVector,
       realizedRegionIds,
@@ -1116,7 +1119,7 @@ export const FdmCuboidLayer = memo(function FdmCuboidLayer({
         materialProfile={materialProfile.glyphs}
         opacity={targetRenderPlan.vectors.opacity}
         sessionIdentity={sessionIdentity}
-        renderOnTop
+        renderOnTop={false}
         fieldBufferId={
           fieldVector
             ? `decoded:${fieldVector.quantityId}:${fieldVector.pointCount}:${fieldVector.values.byteLength}`

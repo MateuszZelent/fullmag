@@ -3,20 +3,35 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it, vi } from "vitest";
 
 import {
+  DATA_DOMAIN_FDM_MULTILAYER_LAYOUT_PATH,
+  DATA_DOMAIN_FDM_MULTILAYER_LAYER_ACTIVE_MASK_PATH,
+  DATA_FDM_REGION_MEMBERSHIP_BINARY_PATH,
+  DATA_FDM_REGION_MEMBERSHIPS_PATH,
   DATA_FIELDS_PATH,
   DATA_FIELD_META_PATH,
   DATA_FIELD_VECTOR_PATH,
+  DATA_MESH_REGION_MEMBERSHIPS_PATH,
   DATA_OBSERVATION_FRAMES_PATH,
   MESHING_BUILDS_CURRENT_PATH,
   MESHING_BUILDS_LATEST_SUCCESSFUL_PATH,
   MESHING_SHARED_DOMAIN_MANIFEST_PATH,
+  MODEL_COUPLINGS_PATH,
   MODEL_READINESS_PATH,
+  MODEL_REALIZED_REGIONS_PATH,
+  MODEL_REGION_DIAGNOSTICS_PATH,
+  MODEL_REGIONS_PATH,
+  MODEL_UNIVERSE_PATH,
   SIMULATION_PREPARATION_PATH,
   SIMULATION_STAGES_EXECUTION_PATH,
   SIMULATION_STAGES_RESULTS_PATH,
 } from "@/kernel/api/apiPaths";
 import { EventBus } from "@/kernel/events/EventBus";
 import type { KernelEventMap } from "@/kernel/events/eventTypes";
+import {
+  meshRegionMembershipResourceKey,
+  resolveFdmRegionMembershipBinaryResourceKey,
+  resolveMeshRegionMembershipsResourceKey,
+} from "@/kernel/resources/geometryLifecycleResources";
 import { ResourceInvalidationController } from "@/kernel/resources/ResourceInvalidationController";
 import { SESSION_STATUS_RESOURCE_KEY } from "@/kernel/resources/useSessionStatus";
 
@@ -136,4 +151,40 @@ describe("authoring mutation readiness invalidation", () => {
       );
     },
   );
+
+  it("invalidates regions, couplings, universe, and FDM/FEM membership resources after geometry mutations (P1-FE-14)", () => {
+    for (const path of [
+      MODEL_UNIVERSE_PATH,
+      MODEL_REGIONS_PATH,
+      MODEL_REALIZED_REGIONS_PATH,
+      MODEL_REGION_DIAGNOSTICS_PATH,
+      MODEL_COUPLINGS_PATH,
+      DATA_DOMAIN_FDM_MULTILAYER_LAYOUT_PATH,
+      DATA_FDM_REGION_MEMBERSHIPS_PATH,
+      DATA_FDM_REGION_MEMBERSHIP_BINARY_PATH,
+      DATA_MESH_REGION_MEMBERSHIPS_PATH,
+    ]) {
+      expect(AUTHORING_MUTATION_DEPENDENTS.geometry).toContain(path);
+    }
+
+    const resources = new ResourceInvalidationController(new EventBus<KernelEventMap>());
+    const resourceKeys = [
+      resolveFdmRegionMembershipBinaryResourceKey(null, "generation-1"),
+      resolveFdmRegionMembershipBinaryResourceKey("reg-1", "generation-1", "object-1"),
+      meshRegionMembershipResourceKey("object-1", "reg-1"),
+      resolveMeshRegionMembershipsResourceKey(["reg-1", "reg-2"]),
+      `${DATA_DOMAIN_FDM_MULTILAYER_LAYER_ACTIVE_MASK_PATH}:layout:2:layer-0:mask-1`,
+    ];
+    const callbacks = resourceKeys.map((key) => {
+      const callback = vi.fn();
+      resources.subscribe(`session=session-1&epoch=1|${key}`, callback);
+      return callback;
+    });
+
+    invalidateAuthoringMutationDependents(resources, "geometry", 23);
+
+    for (const callback of callbacks) {
+      expect(callback).toHaveBeenCalledExactlyOnceWith("scene:23");
+    }
+  });
 });

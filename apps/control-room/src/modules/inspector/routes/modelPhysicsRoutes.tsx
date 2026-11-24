@@ -15,6 +15,7 @@ import {
   CurrentTransportInspectorPanel,
   FieldDriveInspectorPanel,
   FrozenSpinsInspectorPanel,
+  GeometryNodeInspectorPanel,
   GeometryObjectInspectorPanel,
   ObjectAbsorbingBoundaryInspectorPanel,
   ObjectMaterialInspectorPanel,
@@ -106,6 +107,12 @@ export const MODEL_PHYSICS_ROUTES: readonly InspectorRoute[] = [
     id: "geometry-object",
     selectionKinds: ["object.geometry"],
     title: "Geometry",
+  }),
+  defineInspectorRoute({
+    component: GeometryNodeInspectorPanel,
+    id: "geometry-node",
+    selectionKinds: ["object.geometry.node"],
+    title: "Geometry Operand",
   }),
   defineInspectorRoute({
     component: BuilderPrimitiveInspectorPanel,

@@ -149,6 +149,8 @@ export interface InspectorModeTab {
 export interface InspectorNotice<TDraft> {
   id: string;
   tone: "info" | "warn" | "err";
+  /** Places mutable follow-up information after the form so it does not shift the current scroll position. */
+  placement?: "after-content";
   title?: string;
   text: string;
   /** Jumps directly to the associated field (switches tab, opens section, scrolls, focuses). */

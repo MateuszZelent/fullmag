@@ -30,6 +30,7 @@ import { homeView, useHomeViewOpen } from "./homeView";
 import { useLayoutSelector } from "./useLayout";
 import { useRealtimeConnection } from "../realtime/useRealtimeConnection";
 import { useSessionTabAddress } from "./useSessionTabAddress";
+import { DeleteObjectImpactDialogHost } from "@/modules/inspector/public";
 
 export function WorkspaceShellClient() {
   const savedPlayback = useSavedResultsPlaybackSelection();
@@ -337,6 +338,7 @@ function ActiveWorkspaceShell() {
       <div className="fm-workspace-overlay-host">
         <SlotHost slotId="overlay" />
         <SimulationStartupOverlayView state={startupState} />
+        <DeleteObjectImpactDialogHost />
       </div>
       <CommandFeedbackPresenter />
     </>

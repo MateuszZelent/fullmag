@@ -28,6 +28,7 @@ import {
   resolveViewport3DRealizedFdmObjectIds,
   resolveViewport3DRealizedTopologyObjectIds,
   scheduleViewport3DProjectionRenderFrames,
+  suppressVisualizationSettingsForLiveTextureEdit,
   VIEWPORT_3D_MODEL_LAYER_FINAL_STAGE,
 } from "./Viewport3DScene";
 
@@ -110,6 +111,51 @@ describe("Viewport3DScene scale helpers", () => {
         fdmTargetViews: [],
       }),
     ).toEqual(new Set());
+  });
+
+  it("keeps vectors-only or surface-hidden native multilayer layers realized and live-field covered without popping primitives back", () => {
+    const vectorsOnlyView = {
+      domain: { objectId: "layer_top" },
+      model: null,
+      settings: {
+        visible: true,
+        shaderVisible: false,
+        wireframeVisible: false,
+        pointsVisible: false,
+        vectorsVisible: true,
+      },
+      surfaceColors: null,
+      vectorSegments: new Float32Array([0, 0, 0, 1, 0, 0, 1]),
+    };
+    const fullyHiddenView = {
+      domain: { objectId: "layer_bottom" },
+      model: null,
+      settings: {
+        visible: false,
+        shaderVisible: true,
+        wireframeVisible: false,
+        pointsVisible: false,
+        vectorsVisible: false,
+      },
+      surfaceColors: null,
+      vectorSegments: null,
+    };
+    expect(
+      resolveViewport3DRealizedFdmObjectIds({
+        fdmNativeLayerViews: [vectorsOnlyView, fullyHiddenView] as never,
+        fdmTargetViews: [],
+      }),
+    ).toEqual(new Set(["layer_top", "layer_bottom"]));
+    expect(
+      resolveViewport3DLiveFieldCoveredObjectIds({
+        fdmCuboidLayerEnabled: true,
+        fdmNativeLayerViews: [vectorsOnlyView, fullyHiddenView] as never,
+        fdmTargetViews: [],
+        fieldModel: null,
+        primitiveModel: null,
+        savedViewportActive: false,
+      }),
+    ).toEqual(new Set(["layer_top"]));
   });
 
   it("replaces the analytic surface as soon as the visible FDM surface is available", () => {
@@ -1517,5 +1563,48 @@ describe("Viewport3DScene region overlay visibility", () => {
         }),
       ).toEqual(new Set());
     }
+  });
+
+  it("suppresses stale FDM/FEM shaderVisible and vectorsVisible ONLY for the actively live-edited texture object", () => {
+    const baseSettings = {
+      activeQuantityId: "m",
+      boundsVisible: true,
+      pointsVisible: false,
+      shaderVisible: true,
+      vectorsVisible: true,
+      visible: true,
+      wireframeVisible: true,
+    } as never;
+
+    const suppressed = suppressVisualizationSettingsForLiveTextureEdit(
+      baseSettings,
+      "bottom-layer",
+      "bottom-layer",
+    );
+    expect(suppressed).toMatchObject({
+      boundsVisible: true,
+      shaderVisible: false,
+      vectorsVisible: false,
+      visible: true,
+      wireframeVisible: true,
+    });
+
+    // Non-matching objects remain untouched (same object reference)
+    expect(
+      suppressVisualizationSettingsForLiveTextureEdit(
+        baseSettings,
+        "top-layer",
+        "bottom-layer",
+      ),
+    ).toBe(baseSettings);
+
+    // No active live edit leaves settings untouched
+    expect(
+      suppressVisualizationSettingsForLiveTextureEdit(
+        baseSettings,
+        "bottom-layer",
+        null,
+      ),
+    ).toBe(baseSettings);
   });
 });

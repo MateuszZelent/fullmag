@@ -13,7 +13,15 @@ import {
 } from "@/kernel/authoring/object-edit/objectEditDraftModel";
 import { updateQuantityFieldSI } from "@/kernel/authoring/object-edit/quantityDraftFields";
 import type { GeometryObjectDraft } from "@/kernel/authoring/object-edit/objectEditTypes";
-import { useSceneResource } from "@/kernel/resources/geometryLifecycleResources";
+import {
+  acknowledgedAuthoringSceneRevision,
+  invalidateAuthoringMutationDependents,
+} from "@/kernel/authoring/authoringMutationInvalidation";
+import { commitObjectTransformTransaction } from "@/kernel/authoring/geometryLifecycleCommands";
+import {
+  publishCommittedSceneResource,
+  useSceneResource,
+} from "@/kernel/resources/geometryLifecycleResources";
 import {
   sessionRequestScopeKey,
   sessionResourceIdentityKey,
@@ -29,7 +37,10 @@ import {
   type MoveCommitLockToken,
   type MoveCommitHandler,
 } from "./moveCommitLock";
-import { Viewport3DMoveToolLayer } from "./MoveObjectGizmo";
+import {
+  Viewport3DMoveToolLayer,
+  type GizmoTransformPatch,
+} from "./MoveObjectGizmo";
 import {
   buildViewport3DPrimitiveRenderModel,
   withObjectPlacementDraftPreview,
@@ -413,8 +424,44 @@ export function useViewport3DObjectMoveInteraction({
     commitMoveRef.current = commitMove;
   }, [commitMove]);
 
+  const commitTransformPatch = useCallback(
+    async (
+      objectId: string,
+      patch: GizmoTransformPatch,
+      baseRevision: number,
+    ): Promise<boolean> => {
+      const current = currentContextRef.current;
+      if (!current?.sessionScopeKey || current.selectedObjectId !== objectId) {
+        return false;
+      }
+      const response = await commitObjectTransformTransaction(
+        kernel.api,
+        objectId,
+        {
+          base_revision: baseRevision,
+          transform: patch as unknown as Record<string, unknown>,
+        } as unknown as Parameters<typeof commitObjectTransformTransaction>[2],
+        { sessionScopeKey: current.sessionScopeKey },
+      );
+      const rev = acknowledgedAuthoringSceneRevision(response);
+      publishCommittedSceneResource(
+        kernel.resources,
+        response.committed_scene,
+        rev,
+        undefined,
+        false,
+        current.sessionScopeKey,
+        kernel.api.resourceCacheScope,
+      );
+      invalidateAuthoringMutationDependents(kernel.resources, "geometry", rev);
+      return true;
+    },
+    [kernel.api, kernel.resources],
+  );
+
   return {
     commitMove,
+    commitTransformPatch,
     onBeginGesture,
     onGestureActiveChange,
     moveDraftResetRevision: NO_MOVE_DRAFT_RESET,

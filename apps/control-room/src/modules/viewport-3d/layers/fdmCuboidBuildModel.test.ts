@@ -1166,4 +1166,191 @@ describe("FDM cuboid realized membership", () => {
       }),
     ).toMatchObject({ hasAnyEffectivePass: true, needsSurfaceInstances: true });
   });
+
+  it("lifts single-cell-thick multilayer FDM vectors just above the top face so Z-buffer occlusion works without burying in-plane arrows", () => {
+    const thinFilmDomain = {
+      bounds: {
+        min: [-150e-9, -150e-9, 0] as [number, number, number],
+        max: [150e-9, 150e-9, 15e-9] as [number, number, number],
+      },
+      displayCellBudget: 16,
+      displayCellCount: 16,
+      kind: "fdm-grid" as const,
+      origin: [-150e-9, -150e-9, 0] as [number, number, number],
+      shape: [4, 4, 1] as [number, number, number],
+      spacing: [75e-9, 75e-9, 15e-9] as [number, number, number],
+      stride: 1,
+      totalCells: 16,
+    };
+    const result = buildViewport3DFdmCuboid({
+      cellSelection: "dense",
+      domain: thinFilmDomain,
+      maxVectorGlyphs: 16,
+      modelFieldVector: null,
+      nativeActiveMask: null,
+      realizedRegionIds: null,
+      vectorAnchorMode: "center",
+      vectorField: fieldVector(Array.from({ length: 16 }, () => [1, 0, 0]).flat()),
+      vectorGeometryScope: "surface",
+      vectorLengthScale: 1,
+      vectorScale: 18e-9,
+      vectorSurfaceOffsetEnabled: false,
+      vectorSurfaceOffsetScale: 0,
+      voxelFillRatio: 0.92,
+      voxelMagnitudeThreshold: 0,
+      voxelTopography: {
+        amplitudeCells: 0,
+        component: "magnitude",
+        enabled: false,
+      },
+    });
+
+    expect(result.vectorSegments).not.toBeNull();
+    const segments = result.vectorSegments!;
+    expect(segments.length).toBe(16 * 7);
+    // Every arrow sits cleanly above the layer top face (15 nm) and well below
+    // a 32.5 nm overlying layer so Z-buffer occlusion hides it behind upper layers.
+    for (let i = 0; i < 16; i += 1) {
+      const z0 = segments[i * 7 + 2]!;
+      const z1 = segments[i * 7 + 5]!;
+      expect(z0).toBeGreaterThan(15e-9);
+      expect(z0).toBeLessThan(25e-9);
+      expect(z1).toBeCloseTo(z0, 14);
+    }
+  });
+
+  it("lifts single-layer bilayer sheets in full geometryScope only when liftThinSheetAboveSurface is true and keeps thick 3D volumes interior", () => {
+    const bottomLayerDomain = {
+      bounds: {
+        min: [-150e-9, -150e-9, 0] as [number, number, number],
+        max: [150e-9, 150e-9, 15e-9] as [number, number, number],
+      },
+      displayCellBudget: 64,
+      displayCellCount: 64,
+      kind: "fdm-grid" as const,
+      origin: [-150e-9, -150e-9, 0] as [number, number, number],
+      shape: [8, 8, 1] as [number, number, number],
+      spacing: [37.5e-9, 37.5e-9, 15e-9] as [number, number, number],
+      stride: 1,
+      totalCells: 64,
+    };
+    const topLayerDomain = {
+      ...bottomLayerDomain,
+      bounds: {
+        min: [-150e-9, -150e-9, 32.5e-9] as [number, number, number],
+        max: [150e-9, 150e-9, 47.5e-9] as [number, number, number],
+      },
+      origin: [-150e-9, -150e-9, 32.5e-9] as [number, number, number],
+    };
+    const uniformField = fieldVector(Array.from({ length: 64 }, () => [1, 0, 0]).flat());
+
+    // Default (liftThinSheetAboveSurface omitted/false) in full scope stays at exact cell center
+    const unlifted = buildViewport3DFdmCuboid({
+      cellSelection: "dense",
+      domain: bottomLayerDomain,
+      maxVectorGlyphs: 64,
+      modelFieldVector: null,
+      nativeActiveMask: null,
+      realizedRegionIds: null,
+      vectorAnchorMode: "center",
+      vectorField: uniformField,
+      vectorGeometryScope: "full",
+      vectorLengthScale: 1,
+      vectorScale: 18e-9,
+      vectorSurfaceOffsetEnabled: false,
+      vectorSurfaceOffsetScale: 0,
+      voxelFillRatio: 0.92,
+      voxelMagnitudeThreshold: 0,
+      voxelTopography: { amplitudeCells: 0, component: "magnitude", enabled: false },
+    });
+    expect(unlifted.vectorSegments?.[2]).toBeCloseTo(7.5e-9, 15);
+
+    // With liftThinSheetAboveSurface: true in full scope, BottomLayer lifts cleanly above 15 nm and well below 32.5 nm TopLayer
+    const bottomLifted = buildViewport3DFdmCuboid({
+      cellSelection: "dense",
+      domain: bottomLayerDomain,
+      liftThinSheetAboveSurface: true,
+      maxVectorGlyphs: 64,
+      modelFieldVector: null,
+      nativeActiveMask: null,
+      realizedRegionIds: null,
+      vectorAnchorMode: "center",
+      vectorField: uniformField,
+      vectorGeometryScope: "full",
+      vectorLengthScale: 1,
+      vectorScale: 18e-9,
+      vectorSurfaceOffsetEnabled: false,
+      vectorSurfaceOffsetScale: 0,
+      voxelFillRatio: 0.92,
+      voxelMagnitudeThreshold: 0,
+      voxelTopography: { amplitudeCells: 0, component: "magnitude", enabled: false },
+    });
+    const topLifted = buildViewport3DFdmCuboid({
+      cellSelection: "dense",
+      domain: topLayerDomain,
+      liftThinSheetAboveSurface: true,
+      maxVectorGlyphs: 64,
+      modelFieldVector: null,
+      nativeActiveMask: null,
+      realizedRegionIds: null,
+      vectorAnchorMode: "center",
+      vectorField: uniformField,
+      vectorGeometryScope: "full",
+      vectorLengthScale: 1,
+      vectorScale: 18e-9,
+      vectorSurfaceOffsetEnabled: false,
+      vectorSurfaceOffsetScale: 0,
+      voxelFillRatio: 0.92,
+      voxelMagnitudeThreshold: 0,
+      voxelTopography: { amplitudeCells: 0, component: "magnitude", enabled: false },
+    });
+    expect(bottomLifted.vectorSegments).not.toBeNull();
+    expect(topLifted.vectorSegments).not.toBeNull();
+    for (let i = 0; i < 64; i += 1) {
+      const bz = bottomLifted.vectorSegments![i * 7 + 2]!;
+      const tz = topLifted.vectorSegments![i * 7 + 2]!;
+      expect(bz).toBeGreaterThan(15e-9);
+      expect(bz).toBeLessThan(25e-9);
+      expect(tz).toBeGreaterThan(47.5e-9);
+      expect(tz).toBeLessThan(57.5e-9);
+    }
+
+    // Thick 3D block (4x4x4) in full scope with liftThinSheetAboveSurface: true stays at interior cell centers
+    const thickDomain = {
+      bounds: {
+        min: [0, 0, 0] as [number, number, number],
+        max: [40e-9, 40e-9, 40e-9] as [number, number, number],
+      },
+      displayCellBudget: 64,
+      displayCellCount: 64,
+      kind: "fdm-grid" as const,
+      origin: [0, 0, 0] as [number, number, number],
+      shape: [4, 4, 4] as [number, number, number],
+      spacing: [10e-9, 10e-9, 10e-9] as [number, number, number],
+      stride: 1,
+      totalCells: 64,
+    };
+    const thickResult = buildViewport3DFdmCuboid({
+      cellSelection: "dense",
+      domain: thickDomain,
+      liftThinSheetAboveSurface: true,
+      maxVectorGlyphs: 64,
+      modelFieldVector: null,
+      nativeActiveMask: null,
+      realizedRegionIds: null,
+      vectorAnchorMode: "center",
+      vectorField: uniformField,
+      vectorGeometryScope: "full",
+      vectorLengthScale: 1,
+      vectorScale: 6e-9,
+      vectorSurfaceOffsetEnabled: false,
+      vectorSurfaceOffsetScale: 0,
+      voxelFillRatio: 0.92,
+      voxelMagnitudeThreshold: 0,
+      voxelTopography: { amplitudeCells: 0, component: "magnitude", enabled: false },
+    });
+    expect(thickResult.vectorSegments).not.toBeNull();
+    // First cell (0,0,0) center is at z = 5 nm (strictly inside [0, 40 nm], not lifted outside)
+    expect(thickResult.vectorSegments![2]).toBeCloseTo(5e-9, 15);
+  });
 });

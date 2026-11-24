@@ -33,8 +33,11 @@ import {
   toggleBottomDockExpanded,
   useBottomDockExpanded,
 } from "@/kernel/layout/bottomDockPreference";
+import { useSceneResource } from "@/kernel/resources/geometryLifecycleResources";
+import { resolveSessionPhysicsModules } from "@/kernel/resources/sessionPhysicsModules";
 import { useStageExecutionResource } from "@/kernel/resources/studyRuntimeResources";
 import { useSessionStatusSelector } from "@/kernel/resources/useSessionStatus";
+import type { SceneResource } from "@/kernel/api/apiTypes";
 import type { ModuleProps } from "@/kernel/types";
 import { QuickChartResourceView } from "@/shared/analysis-charts/QuickChartResourceView";
 import { copyTextToClipboard } from "@/shared/browser/copyTextToClipboard";
@@ -56,7 +59,7 @@ import {
 import { CommandAuditTable } from "./CommandAuditTable";
 import { FooterDiagnostics } from "./FooterDiagnostics";
 import { FooterTelemetry } from "./FooterTelemetry";
-import { footerTelemetryStatusEquals, resolveFooterAntennaStage, selectFooterTelemetryStatus } from "./FooterTelemetry.model";
+import { footerTelemetryStatusEquals, resolveFooterAntennaStage, resolveFooterEigensolveStage, selectFooterTelemetryStatus } from "./FooterTelemetry.model";
 import { DiagnosticRecorderFooterPanel } from "./DiagnosticRecorderFooterPanel";
 import { ProblemsPanel } from "./OperationsProblemsPanel";
 import { RunProgressPanel } from "./RunProgressPanel";
@@ -67,12 +70,21 @@ const FOOTER_PANEL_CLASS_NAME =
 const FOOTER_CONTENT_CLASS_NAME =
   "fm-footer__content flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden";
 
-const telemetryNavigation = (
-  <TabsList aria-label="Telemetry views" className="fm-footer-telemetry-tabs__list" presentation="segmented">
-    <TabsTrigger value="overview">Overview</TabsTrigger>
-    <TabsTrigger value="antenna">Antenna</TabsTrigger>
-  </TabsList>
-);
+type FooterTelemetryTab = "overview" | "antenna" | "eigensolve";
+
+function FooterSceneModuleBridge({
+  enabled,
+  onSceneChange,
+}: {
+  enabled: boolean;
+  onSceneChange: (scene: SceneResource | null) => void;
+}) {
+  const scene = useSceneResource({ enabled });
+  useEffect(() => {
+    onSceneChange(scene.data ?? null);
+  }, [onSceneChange, scene.data]);
+  return null;
+}
 
 export default function FooterModule(props: ModuleProps) {
   return (
@@ -89,33 +101,74 @@ function FooterModuleContent({ kernel }: ModuleProps) {
   const previousTab = useRef(activeTab);
   const [telemetryNavigationHost, setTelemetryNavigationHost] = useState<HTMLDivElement | null>(null);
   const [telemetryStatusHost, setTelemetryStatusHost] = useState<HTMLDivElement | null>(null);
+  const [sceneSnapshot, setSceneSnapshot] = useState<SceneResource | null>(null);
   const status = useSessionStatusSelector(selectFooterTelemetryStatus, {
     isEqual: footerTelemetryStatusEquals,
   });
   // The footer owns one execution subscription even when another dock tab is active.
   const stageExecution = useStageExecutionResource({ enabled: Boolean(status) });
   const antennaStage = resolveFooterAntennaStage(status, stageExecution.data);
+  const eigensolveStage = resolveFooterEigensolveStage(status, stageExecution.data);
+  const physicsModules = useMemo(
+    () =>
+      resolveSessionPhysicsModules({
+        hasActiveAntennaStage: Boolean(antennaStage),
+        hasActiveEigensolveStage: Boolean(eigensolveStage),
+        scene: sceneSnapshot,
+        stageExecution: stageExecution.data,
+      }),
+    [antennaStage, eigensolveStage, sceneSnapshot, stageExecution.data],
+  );
   const sessionKey = status
     ? JSON.stringify([status.sessionId, status.sessionEpoch, status.requestScopeEpoch])
     : null;
   const [telemetrySelection, setTelemetrySelection] = useState<{
-    sessionKey: string | null; tab: "overview" | "antenna";
+    sessionKey: string | null; tab: FooterTelemetryTab;
   }>({ sessionKey: null, tab: "overview" });
-  const telemetryTab = telemetrySelection.sessionKey === sessionKey ? telemetrySelection.tab : "overview";
+  const requestedTelemetryTab: FooterTelemetryTab =
+    telemetrySelection.sessionKey === sessionKey ? telemetrySelection.tab : "overview";
+  const telemetryTab: FooterTelemetryTab =
+    requestedTelemetryTab === "antenna" && !physicsModules.acDcActive
+      ? "overview"
+      : requestedTelemetryTab === "eigensolve" && !physicsModules.eigensolveActive
+        ? "overview"
+        : requestedTelemetryTab;
+  const telemetryNavigation =
+    physicsModules.acDcActive || physicsModules.eigensolveActive ? (
+      <TabsList aria-label="Telemetry views" className="fm-footer-telemetry-tabs__list" presentation="segmented">
+        <TabsTrigger value="overview">Overview</TabsTrigger>
+        {physicsModules.acDcActive ? (
+          <TabsTrigger value="antenna">Antenna</TabsTrigger>
+        ) : null}
+        {physicsModules.eigensolveActive ? (
+          <TabsTrigger value="eigensolve">Eigensolve</TabsTrigger>
+        ) : null}
+      </TabsList>
+    ) : null;
   const navigation = useRef<{ sessionKey: string | null; seen: Set<string> }>({
     sessionKey: null, seen: new Set(),
   });
   const runningAntennaIdentity = antennaStage?.active ? antennaStage.identityKey : null;
+  const runningEigensolveIdentity = eigensolveStage?.active
+    ? `eigensolve:${eigensolveStage.identityKey}`
+    : null;
 
   useEffect(() => {
     if (navigation.current.sessionKey !== sessionKey) {
       navigation.current = { sessionKey, seen: new Set() };
     }
-    if (!runningAntennaIdentity || navigation.current.seen.has(runningAntennaIdentity)) return;
-    navigation.current.seen.add(runningAntennaIdentity);
-    setTelemetrySelection({ sessionKey, tab: "antenna" });
-    kernel.layout.openBottomPanel("telemetry");
-  }, [kernel.layout, runningAntennaIdentity, sessionKey]);
+    if (runningAntennaIdentity && !navigation.current.seen.has(runningAntennaIdentity)) {
+      navigation.current.seen.add(runningAntennaIdentity);
+      setTelemetrySelection({ sessionKey, tab: "antenna" });
+      kernel.layout.openBottomPanel("telemetry");
+      return;
+    }
+    if (runningEigensolveIdentity && !navigation.current.seen.has(runningEigensolveIdentity)) {
+      navigation.current.seen.add(runningEigensolveIdentity);
+      setTelemetrySelection({ sessionKey, tab: "eigensolve" });
+      kernel.layout.openBottomPanel("telemetry");
+    }
+  }, [kernel.layout, runningAntennaIdentity, runningEigensolveIdentity, sessionKey]);
 
   useEffect(() => {
     return kernel.bus.subscribe("footer:tab-requested", ({ tab }) => {
@@ -137,6 +190,13 @@ function FooterModuleContent({ kernel }: ModuleProps) {
   }, [activeTab]);
 
   return (
+    <>
+      {kernel.resources ? (
+        <FooterSceneModuleBridge
+          enabled={Boolean(status)}
+          onSceneChange={setSceneSnapshot}
+        />
+      ) : null}
     <Tabs
       value={activeTab}
       activationMode="manual"
@@ -169,7 +229,7 @@ function FooterModuleContent({ kernel }: ModuleProps) {
             <Activity size={14} aria-hidden="true" />
             <span className="fm-footer__tab-label">Logs</span>
           </TabsTrigger>
-          <TabsTrigger value="telemetry" className="fm-footer__tab" title="Live simulation metrics and antenna progress">
+          <TabsTrigger value="telemetry" className="fm-footer__tab" title={physicsModules.acDcActive || physicsModules.eigensolveActive ? "Live simulation metrics and active physics module progress" : "Live simulation metrics"}>
             <Gauge size={14} aria-hidden="true" />
             <span className="fm-footer__tab-label">Telemetry</span>
           </TabsTrigger>
@@ -229,15 +289,21 @@ function FooterModuleContent({ kernel }: ModuleProps) {
           <Tabs
             value={telemetryTab}
             onValueChange={(value) => {
-              if (value === "overview" || value === "antenna") {
+              if (
+                value === "overview" ||
+                (value === "antenna" && physicsModules.acDcActive) ||
+                (value === "eigensolve" && physicsModules.eigensolveActive)
+              ) {
                 setTelemetrySelection({ sessionKey, tab: value });
               }
             }}
             className="fm-footer-telemetry-tabs"
           >
-            {telemetryNavigationHost
-              ? createPortal(telemetryNavigation, telemetryNavigationHost)
-              : telemetryNavigation}
+            {telemetryNavigation
+              ? telemetryNavigationHost
+                ? createPortal(telemetryNavigation, telemetryNavigationHost)
+                : telemetryNavigation
+              : null}
             <TabsContent value={telemetryTab} className="fm-footer-telemetry-tabs__content">
               <FooterTelemetry
                 bus={kernel.bus}
@@ -296,6 +362,7 @@ function FooterModuleContent({ kernel }: ModuleProps) {
         ) : null}
       </TabsContent>
     </Tabs>
+    </>
   );
 }
 

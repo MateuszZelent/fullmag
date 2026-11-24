@@ -18,6 +18,7 @@ import { createCommandContext } from "@/kernel/commands/commandContext";
 import { useLayoutActions, useLayoutSelector } from "@/kernel/layout/useLayout";
 import { WorkspaceRenderProfiler } from "@/kernel/performance/reactRenderProfiler";
 import {
+  useFdmMultilayerLayoutResource,
   useGeometryCapabilitiesResource,
   useGeometryValidationResource,
   useMeshBuildCurrent,
@@ -49,8 +50,8 @@ import {
   SESSION_STATUS_RESOURCE_KEY,
   useSessionStatusSelector,
 } from "@/kernel/resources/useSessionStatus";
+import { resolveSessionDiscretization } from "@/kernel/resources/sessionDiscretization";
 import { useSelectionSelector } from "@/kernel/selection/useSelection";
-import { EMPTY_SELECTION } from "@/kernel/selection/selectionTypes";
 import { useAnalysisFieldOverlay } from "@/kernel/visualization/AnalysisFieldOverlayController";
 
 import { ANALYSIS_FEATURE_MANIFESTS } from "@/kernel/analysis-modules/analysisModuleManifests";
@@ -89,6 +90,8 @@ import {
 import { RibbonGroupsRow } from "./RibbonGroupsRow";
 import { RibbonDensityControl } from "./RibbonDensityControl";
 import { RibbonTabStrip } from "./RibbonTabStrip";
+import { RibbonTargetBarControl } from "./RibbonTargetBarControl";
+import { extractRibbonSceneObjects } from "./ribbonTargetContext";
 import {
   getRibbonDensity,
   getServerRibbonDensity,
@@ -167,11 +170,7 @@ export default function RibbonModule({ kernel }: ModuleProps) {
     (layout) => layout.viewportCompanion ?? null,
   );
   const { setActiveTab } = useLayoutActions();
-  const selection = useSelectionSelector((currentSelection) =>
-    activeTab === "view" || activeTab === "geometry" || activeTab === "mesh" || activeTab === "physics"
-      ? currentSelection
-      : EMPTY_SELECTION,
-  );
+  const selection = useSelectionSelector((currentSelection) => currentSelection);
   const visualization = useObjectVisualizationController();
   const visualizationSnapshot = useObjectVisualizationSelector((snapshot) =>
     activeTab === "view" ? snapshot : EMPTY_OBJECT_VISUALIZATION_SNAPSHOT,
@@ -246,12 +245,37 @@ export default function RibbonModule({ kernel }: ModuleProps) {
   });
   const scene = useSceneResource({
     enabled:
+      activeTab === "home" ||
+      activeTab === "view" ||
+      activeTab === "definitions" ||
       activeTab === "geometry" ||
+      activeTab === "materials" ||
       activeTab === "mesh" ||
       activeTab === "physics" ||
-      needsGuideMeshResources ||
-      (activeTab === "view" && selection.ref?.type === "mesh-part"),
+      activeTab === "study" ||
+      activeTab === "results" ||
+      activeTab === "automation" ||
+      needsGuideMeshResources,
   });
+  const isTargetScopedTab =
+    activeTab === "view" ||
+    activeTab === "geometry" ||
+    activeTab === "materials" ||
+    activeTab === "physics" ||
+    activeTab === "mesh";
+  const fdmMultilayerLayout = useFdmMultilayerLayoutResource({
+    enabled:
+      isTargetScopedTab &&
+      sessionStatusData?.domain?.discretization === "fdm",
+  });
+  const ribbonSceneObjects = useMemo(
+    () => extractRibbonSceneObjects(scene.data),
+    [scene.data],
+  );
+  const resolvedDiscretization =
+    sessionStatusData === null
+      ? "unknown"
+      : resolveSessionDiscretization(sessionStatusData) ?? "unknown";
   const sceneObjectIds = useMemo(
     () => visualizationSceneObjectIds(scene.data),
     [scene.data],
@@ -298,12 +322,23 @@ export default function RibbonModule({ kernel }: ModuleProps) {
   const visualizationTarget = useMemo(
     () =>
       resolveRibbonVisualizationTarget({
+        discretization: resolvedDiscretization,
+        fdmMultilayerLayout: fdmMultilayerLayout.data,
         sceneObjectIds,
         selectedMeshPart,
         selection,
+        sessionStatus: sessionStatusData,
         visualizationState: visualizationState.data,
       }),
-    [sceneObjectIds, selectedMeshPart, selection, visualizationState.data],
+    [
+      fdmMultilayerLayout.data,
+      resolvedDiscretization,
+      sceneObjectIds,
+      selectedMeshPart,
+      selection,
+      sessionStatusData,
+      visualizationState.data,
+    ],
   );
 
   const commandContext = useMemo(
@@ -445,6 +480,7 @@ export default function RibbonModule({ kernel }: ModuleProps) {
         commandFeedback: commandFeedbackNotices,
         commandQueue: commandQueue.data ?? null,
         commands: kernel.commands,
+        fdmMultilayerLayout: fdmMultilayerLayout.data,
         fieldCatalog: fieldCatalog.data,
         quantityCatalog: quantityCatalog.data,
         meshBuildCurrent: meshBuildCurrent.data,
@@ -453,6 +489,7 @@ export default function RibbonModule({ kernel }: ModuleProps) {
         meshSemantics: meshSemantics.data,
         meshSummary: meshSummary.data,
         resources: kernel.resources,
+        scene: scene.data,
         selection,
         sceneObjectIds,
         selectedMeshPart,
@@ -475,6 +512,7 @@ export default function RibbonModule({ kernel }: ModuleProps) {
       commandContext,
       commandVersion,
       objectMoveToolState,
+      fdmMultilayerLayout.data,
       fieldCatalog.data,
       quantityCatalog.data,
       kernel.api,
@@ -485,6 +523,7 @@ export default function RibbonModule({ kernel }: ModuleProps) {
       meshCapabilities.data,
       meshSemantics.data,
       meshSummary.data,
+      scene.data,
       selection,
       sceneObjectIds,
       selectedMeshPart,
@@ -539,20 +578,33 @@ export default function RibbonModule({ kernel }: ModuleProps) {
             if (tabId === stripActiveTab) toggleRibbonExpanded();
           }}
         />
-        {ribbonExpanded ? (
-          <RibbonDensityControl density={ribbonDensity} onChange={setRibbonDensity} />
-        ) : null}
-        <button
-          aria-controls="fm-ribbon-tabpanel"
-          aria-expanded={ribbonExpanded}
-          aria-label={ribbonExpanded ? "Collapse ribbon" : "Expand ribbon"}
-          className="fm-ribbon__toggle"
-          title={ribbonExpanded ? "Collapse ribbon (Ctrl+F1)" : "Expand ribbon (Ctrl+F1)"}
-          type="button"
-          onClick={() => toggleRibbonExpanded()}
-        >
-          <ChevronUp aria-hidden="true" size={15} />
-        </button>
+        <div className="fm-ribbon__chrome">
+          {isTargetScopedTab ? (
+            <RibbonTargetBarControl
+              activeTab={activeTab}
+              discretization={resolvedDiscretization}
+              fdmMultilayerLayout={fdmMultilayerLayout.data}
+              sceneObjects={ribbonSceneObjects}
+              selection={selection}
+              visualizationTarget={visualizationTarget}
+              onAction={handleAction}
+            />
+          ) : null}
+          {ribbonExpanded ? (
+            <RibbonDensityControl density={ribbonDensity} onChange={setRibbonDensity} />
+          ) : null}
+          <button
+            aria-controls="fm-ribbon-tabpanel"
+            aria-expanded={ribbonExpanded}
+            aria-label={ribbonExpanded ? "Collapse ribbon" : "Expand ribbon"}
+            className="fm-ribbon__toggle"
+            title={ribbonExpanded ? "Collapse ribbon (Ctrl+F1)" : "Expand ribbon (Ctrl+F1)"}
+            type="button"
+            onClick={() => toggleRibbonExpanded()}
+          >
+            <ChevronUp aria-hidden="true" size={15} />
+          </button>
+        </div>
       </div>
       <RibbonGroupsRow
         groups={groups}

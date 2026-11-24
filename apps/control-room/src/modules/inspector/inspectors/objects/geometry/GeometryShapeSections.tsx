@@ -103,6 +103,7 @@ export function buildGeometryShapeSections({
       title: "Primitive family",
       icon: Shapes,
       defaultOpen: true,
+      showWhen: (d) => !d.compositeSummary,
       summary: (d) => d.primitiveKind,
       rows: [
         {
@@ -182,6 +183,7 @@ export function buildGeometryShapeSections({
       title: "Parametric dimensions",
       icon: Box,
       defaultOpen: true,
+      showWhen: (d) => !d.compositeSummary,
       rows: [
         /* Box & Ellipsoid */
         {

@@ -15,6 +15,7 @@ import type {
 import { antennaPortValidationMessages } from "@/shared/domain/physics/antennaPortValidation";
 import { antennaStageValidationMessages } from "@/shared/domain/physics/antennaStageValidation";
 
+import { buildGeometryTreeExplorerNodes } from "./geometryTreeExplorerNodes";
 import { buildPhysicsGraphObjectNode } from "./physicsGraphTree";
 import {
   compactExplorerNodes,
@@ -92,7 +93,10 @@ export function buildObjectExplorerNode(
         "explorer.expand-all",
         "explorer.collapse-all",
       ],
-      contextCommandInputs: { "planar-monitor.create": createObjectMonitorInput },
+      contextCommandInputs: {
+        "geometry.delete-object": { objectId },
+        "planar-monitor.create": createObjectMonitorInput,
+      },
       children: [
         {
           id: `${parentId}:geometry`,
@@ -178,6 +182,11 @@ export function buildObjectExplorerNode(
   const badge = conductor
     ? (object.objectRole === "electrode" ? "Electrode" : "Conductor")
     : object.geometryKind ?? "object";
+  const geometryTreeChildren = buildGeometryTreeExplorerNodes(
+    objectId,
+    `${parentId}:geometry`,
+    object.geometry,
+  );
 
   return {
     id: parentId,
@@ -192,24 +201,35 @@ export function buildObjectExplorerNode(
     contextCommands: [
       "planar-monitor.create",
       "geometry.focus-primitive",
+      "geometry.duplicate-objects",
+      "geometry.split-by-plane",
       "geometry.delete-object",
       "mesh.build-selected",
       "workspace.focus-selection",
       "explorer.expand-all",
       "explorer.collapse-all",
     ],
-    contextCommandInputs: { "planar-monitor.create": createObjectMonitorInput },
+    contextCommandInputs: {
+      "geometry.delete-object": { objectId },
+      "planar-monitor.create": createObjectMonitorInput,
+    },
     children: compactExplorerNodes([
       {
         id: `${parentId}:geometry`,
         kind: "object.geometry",
         label: "Geometry",
         parentId,
-        badge: object.geometryKind ?? "unresolved",
+        badge:
+          geometryTreeChildren.length > 0
+            ? `${object.geometryKind ?? "CSG"} (${geometryTreeChildren.length})`
+            : object.geometryKind ?? "unresolved",
         icon: "braces",
         objectId,
         status: "ready",
         contextCommands: ["workspace.focus-selection"],
+        ...(geometryTreeChildren.length > 0
+          ? { children: geometryTreeChildren }
+          : {}),
       },
       regionsNode(parentId, object, resources, magnetic),
       ...(magnetic

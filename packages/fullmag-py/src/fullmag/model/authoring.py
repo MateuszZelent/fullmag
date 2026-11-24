@@ -438,6 +438,19 @@ class ModelDefinition:
             raise TypeError("problem must be a fullmag.model.problem.Problem")
 
         object_regions = tuple(problem._collect_object_regions())
+        magnet_by_object_id = {
+            magnet.object_id: magnet
+            for magnet in problem.magnets
+            if magnet.object_id is not None
+        }
+        magnet_by_name = {magnet.name: magnet for magnet in problem.magnets}
+
+        def _region_owner_magnet(owner_object: str) -> object | None:
+            owner = magnet_by_object_id.get(owner_object)
+            if owner is not None:
+                return owner
+            return magnet_by_name.get(owner_object)
+
         graph = build_physics_graph(problem)
         graph_modules = tuple(graph.modules)
         components: list[ComponentDefinition] = []
@@ -448,7 +461,9 @@ class ModelDefinition:
                 raise ValueError(f"duplicate component_id: {component_id!r}")
             component_ids.add(component_id)
             owned_regions = tuple(
-                region for region in object_regions if region.owner_object == magnet.name
+                region
+                for region in object_regions
+                if _region_owner_magnet(region.owner_object) is magnet
             )
             region_payloads = [region.to_ir() for region in owned_regions]
             region_ids = tuple(str(payload["region_id"]) for payload in region_payloads)

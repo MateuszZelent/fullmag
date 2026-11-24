@@ -5,8 +5,10 @@ from pathlib import Path
 
 from fullmag.model.geometry import (
     ArchWaveguide,
+    Array3D,
     CPWAntennaLayout,
     Box,
+    Cone,
     Cylinder,
     Difference,
     Ellipse,
@@ -14,9 +16,15 @@ from fullmag.model.geometry import (
     ImportedGeometry,
     Intersection,
     MicrostripAntennaLayout,
+    PolygonPrism,
     SinWaveguide,
+    SlicePlane,
+    Torus,
+    Transform,
     Translate,
     Union,
+    Xor,
+    rotation_matrix_from_quaternion,
 )
 
 Vec3 = tuple[float, float, float]
@@ -125,6 +133,30 @@ def geometry_bounds(
             geometry.ry,
             half_height,
         )
+    if isinstance(geometry, Cone):
+        half_height = 0.5 * geometry.height
+        ax, ay, az = geometry.axis
+        mins = []
+        maxs = []
+        for comp in (ax, ay, az):
+            perp = math.sqrt(max(0.0, 1.0 - comp * comp))
+            c_bot = -half_height * comp
+            c_top = half_height * comp
+            mins.append(min(c_bot - geometry.radius_bottom * perp, c_top - geometry.radius_top * perp))
+            maxs.append(max(c_bot + geometry.radius_bottom * perp, c_top + geometry.radius_top * perp))
+        return tuple(mins), tuple(maxs)
+    if isinstance(geometry, Torus):
+        extents = tuple(
+            geometry.major_radius * math.sqrt(max(0.0, 1.0 - component * component))
+            + geometry.minor_radius
+            for component in geometry.axis
+        )
+        return tuple(-value for value in extents), extents
+    if isinstance(geometry, PolygonPrism):
+        xs = [pt[0] for pt in geometry.vertices_xy]
+        ys = [pt[1] for pt in geometry.vertices_xy]
+        half_t = 0.5 * geometry.thickness
+        return (min(xs), min(ys), -half_t), (max(xs), max(ys), half_t)
     if isinstance(geometry, Translate):
         bounds_min, bounds_max = geometry_bounds(geometry.geometry, source_root=source_root)
         if bounds_min is None or bounds_max is None:
@@ -133,10 +165,80 @@ def geometry_bounds(
             tuple(bounds_min[i] + geometry.offset[i] for i in range(3)),
             tuple(bounds_max[i] + geometry.offset[i] for i in range(3)),
         )
+    if isinstance(geometry, Transform):
+        child_min, child_max = geometry_bounds(geometry.child, source_root=source_root)
+        if child_min is None or child_max is None:
+            return None, None
+        rot = rotation_matrix_from_quaternion(geometry.rotation_quat)
+        tx, ty, tz = geometry.translation
+        sx, sy, sz = geometry.scale
+        px, py, pz = geometry.pivot
+        transformed: list[tuple[float, float, float]] = []
+        for x in (child_min[0], child_max[0]):
+            for y in (child_min[1], child_max[1]):
+                for z in (child_min[2], child_max[2]):
+                    lx = (x - px) * sx
+                    ly = (y - py) * sy
+                    lz = (z - pz) * sz
+                    wx = rot[0][0] * lx + rot[0][1] * ly + rot[0][2] * lz + px + tx
+                    wy = rot[1][0] * lx + rot[1][1] * ly + rot[1][2] * lz + py + ty
+                    wz = rot[2][0] * lx + rot[2][1] * ly + rot[2][2] * lz + pz + tz
+                    transformed.append((wx, wy, wz))
+        return (
+            tuple(min(pt[i] for pt in transformed) for i in range(3)),
+            tuple(max(pt[i] for pt in transformed) for i in range(3)),
+        )
+    if isinstance(geometry, SlicePlane):
+        child_min, child_max = geometry_bounds(geometry.child, source_root=source_root)
+        if child_min is None or child_max is None:
+            return None, None
+        ox, oy, oz = geometry.plane_origin
+        nx, ny, nz = geometry.plane_normal
+        sign = 1.0 if geometry.keep_side == "positive" else -1.0
+        corners = [
+            (x, y, z)
+            for x in (child_min[0], child_max[0])
+            for y in (child_min[1], child_max[1])
+            for z in (child_min[2], child_max[2])
+        ]
+        signed = [
+            sign * ((pt[0] - ox) * nx + (pt[1] - oy) * ny + (pt[2] - oz) * nz)
+            for pt in corners
+        ]
+        kept: list[tuple[float, float, float]] = [
+            pt for pt, d in zip(corners, signed) if d >= -1e-18
+        ]
+        # Edges of the 8-corner cube differ in exactly 1 bit
+        for i in range(8):
+            for bit in (1, 2, 4):
+                j = i ^ bit
+                if j > i:
+                    di, dj = signed[i], signed[j]
+                    if (di < 0.0 < dj) or (dj < 0.0 < di):
+                        t = di / (di - dj)
+                        pi, pj = corners[i], corners[j]
+                        kept.append(
+                            (
+                                pi[0] + t * (pj[0] - pi[0]),
+                                pi[1] + t * (pj[1] - pi[1]),
+                                pi[2] + t * (pj[2] - pi[2]),
+                            )
+                        )
+        if not kept:
+            return None, None
+        return _normalize_bounds_pair(
+            tuple(min(pt[i] for pt in kept) for i in range(3)),
+            tuple(max(pt[i] for pt in kept) for i in range(3)),
+        )
     if isinstance(geometry, Union):
         return _combine_bounds_union(
             geometry_bounds(geometry.a, source_root=source_root),
             geometry_bounds(geometry.b, source_root=source_root),
+        )
+    if isinstance(geometry, Xor):
+        return _combine_bounds_union(
+            geometry_bounds(geometry.left, source_root=source_root),
+            geometry_bounds(geometry.right, source_root=source_root),
         )
     if isinstance(geometry, Intersection):
         a_min, a_max = geometry_bounds(geometry.a, source_root=source_root)
@@ -149,6 +251,62 @@ def geometry_bounds(
         )
     if isinstance(geometry, Difference):
         return geometry_bounds(geometry.base, source_root=source_root)
+    if isinstance(geometry, Array3D):
+        child_min, child_max = geometry_bounds(geometry.child, source_root=source_root)
+        if child_min is None or child_max is None:
+            return None, None
+        extent = (
+            child_max[0] - child_min[0],
+            child_max[1] - child_min[1],
+            child_max[2] - child_min[2],
+        )
+        if not geometry.has_step_rotation_or_scale:
+            # O(1) exact AABB from the 8 extremal index corners of the Bravais lattice
+            v0 = geometry.axes[0].step_vector(extent)
+            v1 = geometry.axes[1].step_vector(extent)
+            v2 = geometry.axes[2].step_vector(extent)
+            k_ranges = [
+                (min(ax.canonical_indices()), max(ax.canonical_indices()))
+                for ax in geometry.axes
+            ]
+            offsets = [
+                (
+                    kx * v0[0] + ky * v1[0] + kz * v2[0],
+                    kx * v0[1] + ky * v1[1] + kz * v2[1],
+                    kx * v0[2] + ky * v1[2] + kz * v2[2],
+                )
+                for kx in k_ranges[0]
+                for ky in k_ranges[1]
+                for kz in k_ranges[2]
+            ]
+            off_min = tuple(min(o[i] for o in offsets) for i in range(3))
+            off_max = tuple(max(o[i] for o in offsets) for i in range(3))
+            return (
+                tuple(child_min[i] + off_min[i] for i in range(3)),
+                tuple(child_max[i] + off_max[i] for i in range(3)),
+            )
+        corners = [
+            (x, y, z)
+            for x in (child_min[0], child_max[0])
+            for y in (child_min[1], child_max[1])
+            for z in (child_min[2], child_max[2])
+        ]
+        all_pts: list[tuple[float, float, float]] = []
+        for (tx, ty, tz), q, (sx, sy, sz) in geometry.instance_transforms(extent):
+            rot = rotation_matrix_from_quaternion(q)
+            for cx, cy, cz in corners:
+                lx, ly, lz = cx * sx, cy * sy, cz * sz
+                all_pts.append(
+                    (
+                        rot[0][0] * lx + rot[0][1] * ly + rot[0][2] * lz + tx,
+                        rot[1][0] * lx + rot[1][1] * ly + rot[1][2] * lz + ty,
+                        rot[2][0] * lx + rot[2][1] * ly + rot[2][2] * lz + tz,
+                    )
+                )
+        return (
+            tuple(min(pt[i] for pt in all_pts) for i in range(3)),
+            tuple(max(pt[i] for pt in all_pts) for i in range(3)),
+        )
     return None, None
 
 

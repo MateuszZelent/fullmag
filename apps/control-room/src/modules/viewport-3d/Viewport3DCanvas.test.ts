@@ -17,6 +17,7 @@ describe("Viewport3DCanvas", () => {
 
     expect(registration).toContain("OrthographicCamera,");
     expect(registration).toContain("PerspectiveCamera,");
+    expect(registration).toContain("LineDashedMaterial,");
   });
 
   it("passes only stable R3F size keys to root.configure", () => {

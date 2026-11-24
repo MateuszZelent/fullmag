@@ -22,6 +22,7 @@ import type { AnalysisResultSelectionRef } from "@/shared/domain/analysis/result
 type ObjectSelectionKind =
   | "object.root"
   | "object.geometry"
+  | "object.geometry.node"
   | "object.antenna"
   | "object.antenna.geometry"
   | "object.antenna.regional"
@@ -441,6 +442,8 @@ export type SelectionRef =
         | "drive"
         | "spectrum";
       extensionId?: string;
+      geometryNodeId?: string;
+      operandId?: string;
       regionId?: string;
       type: "scene-object";
       visualizationTargetId: `object:${string}` | RegionVisualizationTargetId;
@@ -886,6 +889,8 @@ export function pinnedMaterializedDatasetSelectionRef(
 export interface Selection {
   /** Selected scene object ID (geometry body, mesh region, etc.) */
   objectId: string | null;
+  /** Ordered multi-selection of scene object IDs (index 0 = Base [A], 1..k = Tools [B1..Bk]). */
+  selectedObjectIds?: readonly string[];
   /** Selected explorer tree node ID */
   nodeId: string | null;
   /** Typed semantic kind for inspector and command gating. */
@@ -896,6 +901,27 @@ export interface Selection {
   ref: SelectionRef | null;
   /** Module that last set the selection */
   moduleSource: ModuleId | null;
+}
+
+export function orderedSelectedObjectIds(
+  selection: Pick<Selection, "objectId" | "selectedObjectIds">,
+): readonly string[] {
+  if (selection.selectedObjectIds && selection.selectedObjectIds.length > 0) {
+    return selection.selectedObjectIds;
+  }
+  return selection.objectId ? [selection.objectId] : [];
+}
+
+export function selectionRoleBadgeForObject(
+  selection: Pick<Selection, "objectId" | "selectedObjectIds">,
+  objectId: string | null | undefined,
+): string | null {
+  if (!objectId) return null;
+  const ids = orderedSelectedObjectIds(selection);
+  if (ids.length < 2) return null;
+  const index = ids.indexOf(objectId);
+  if (index < 0) return null;
+  return index === 0 ? "A · Base" : `B${index}`;
 }
 
 export const EMPTY_SELECTION: Selection = {
@@ -1164,6 +1190,8 @@ export function selectionRefEquals(
         nullableStringEquals(left.antennaResourceId, right.antennaResourceId) &&
         left.antennaResourceKind === right.antennaResourceKind &&
         nullableStringEquals(left.extensionId, right.extensionId) &&
+        nullableStringEquals(left.geometryNodeId, right.geometryNodeId) &&
+        nullableStringEquals(left.operandId, right.operandId) &&
         nullableStringEquals(left.regionId, right.regionId) &&
         nullableStringEquals(left.carrierPartId, right.carrierPartId) &&
         (left.boundaryFaceIndex ?? null) ===
@@ -1530,6 +1558,10 @@ export function selectionSnapshotEquals(
     previous.kind === next.kind &&
     previous.label === next.label &&
     previous.objectId === next.objectId &&
+    arrayEquals(
+      orderedSelectedObjectIds(previous),
+      orderedSelectedObjectIds(next),
+    ) &&
     previous.nodeId === next.nodeId &&
     previous.moduleSource === next.moduleSource &&
     selectionRefEquals(previous.ref, next.ref)

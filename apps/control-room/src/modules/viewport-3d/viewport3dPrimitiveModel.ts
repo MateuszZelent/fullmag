@@ -18,6 +18,7 @@ import {
   buildAuthoredCpwGeometry,
   type AuthoredAntennaGeometry,
 } from "@/shared/domain/geometry/authoredMicrostripGeometry";
+import { computeSceneGeometryBoundsMeters } from "@/shared/domain/geometry/sceneGeometryBounds";
 import {
   pointInsideRegionShape,
   resolveTargetBoundsMeters,
@@ -43,6 +44,8 @@ type Viewport3DPrimitiveKind =
   | "cylinder-cylinder-difference"
   | "cylinder"
   | "sphere"
+  | "composite"
+  | "array3d"
   | "microstrip"
   | "cpw"
   | "imported-surface"
@@ -53,20 +56,38 @@ type Viewport3DPrimitiveMeshState =
   | "mesh-failed"
   | "mesh-ready";
 
+export interface Viewport3DCylinderParams {
+  axis: [number, number, number];
+  height: number;
+  radius: number;
+}
+
+export interface Viewport3DPrimitiveTransform {
+  pivot?: [number, number, number];
+  rotation?: [number, number, number];
+  rotationQuat?: [number, number, number, number];
+  scale?: [number, number, number];
+  translation: [number, number, number];
+}
+
 export interface Viewport3DPrimitiveObject {
   bounds: Viewport3DBounds;
   csgPreview: Viewport3DPrimitiveCsgPreview | null;
+  cylinderParams?: Viewport3DCylinderParams;
   fallbackLabel: string;
   geometryKey: string;
   kind: Viewport3DPrimitiveKind;
   label: string;
+  localSize?: [number, number, number];
   magnetizationTexturePreview: Viewport3DMagnetizationTexturePreview | null;
   meshState: Viewport3DPrimitiveMeshState;
   antennaPreview?: AuthoredAntennaGeometry;
   importedSurface?: ImportedSurfacePreview;
   objectId: string;
+  rawGeometry?: Record<string, unknown>;
   role?: string | null;
   sceneRevision: number;
+  transform?: Viewport3DPrimitiveTransform;
   translation?: [number, number, number];
 }
 
@@ -148,6 +169,94 @@ function asVec3(value: unknown): [number, number, number] | null {
   return null;
 }
 
+function asVec4(value: unknown): [number, number, number, number] | null {
+  if (
+    Array.isArray(value) &&
+    value.length === 4 &&
+    value.every((entry) => typeof entry === "number" && Number.isFinite(entry))
+  ) {
+    return [value[0], value[1], value[2], value[3]];
+  }
+  return null;
+}
+
+function normalizeAxisVec3(
+  axis: readonly [number, number, number],
+): [number, number, number] {
+  const norm = Math.hypot(axis[0], axis[1], axis[2]);
+  return norm > 1e-12
+    ? [axis[0] / norm, axis[1] / norm, axis[2] / norm]
+    : [0, 0, 1];
+}
+
+function cylinderBoundsSize(
+  radius: number,
+  height: number,
+  axis: readonly [number, number, number],
+): [number, number, number] {
+  const unitAxis = normalizeAxisVec3(axis);
+  const absAxis = unitAxis.map(Math.abs);
+  return [
+    Math.max(
+      2 * (absAxis[0]! * (height * 0.5) + radius * Math.sqrt(Math.max(0, 1 - absAxis[0]! * absAxis[0]!))),
+      1e-12,
+    ),
+    Math.max(
+      2 * (absAxis[1]! * (height * 0.5) + radius * Math.sqrt(Math.max(0, 1 - absAxis[1]! * absAxis[1]!))),
+      1e-12,
+    ),
+    Math.max(
+      2 * (absAxis[2]! * (height * 0.5) + radius * Math.sqrt(Math.max(0, 1 - absAxis[2]! * absAxis[2]!))),
+      1e-12,
+    ),
+  ];
+}
+
+function extractPrimitiveTransform(
+  transform: JsonRecord | null,
+): Viewport3DPrimitiveTransform | undefined {
+  if (!transform) return undefined;
+  const translation = asVec3(transform.translation) ?? [0, 0, 0];
+  const rotationQuat = asVec4(transform.rotation_quat) ?? undefined;
+  const rotation = asVec3(transform.rotation) ?? undefined;
+  const scale = asVec3(transform.scale) ?? undefined;
+  const pivot = asVec3(transform.pivot) ?? undefined;
+
+  const hasNonIdentityQuat = Boolean(
+    rotationQuat &&
+      (Math.abs(rotationQuat[0]) > 1e-12 ||
+        Math.abs(rotationQuat[1]) > 1e-12 ||
+        Math.abs(rotationQuat[2]) > 1e-12 ||
+        Math.abs(Math.abs(rotationQuat[3]) - 1) > 1e-12),
+  );
+  const hasNonZeroEuler = Boolean(
+    !rotationQuat && rotation && rotation.some((v) => Math.abs(v) > 1e-12),
+  );
+  const hasNonUnitScale = Boolean(
+    scale && scale.some((v) => Math.abs(v - 1) > 1e-12),
+  );
+  const hasNonZeroPivot = Boolean(
+    pivot && pivot.some((v) => Math.abs(v) > 1e-15),
+  );
+
+  if (
+    !hasNonIdentityQuat &&
+    !hasNonZeroEuler &&
+    !hasNonUnitScale &&
+    !hasNonZeroPivot
+  ) {
+    return undefined;
+  }
+
+  return {
+    ...(pivot ? { pivot } : {}),
+    ...(rotation ? { rotation } : {}),
+    ...(rotationQuat ? { rotationQuat } : {}),
+    ...(scale ? { scale } : {}),
+    translation,
+  };
+}
+
 export function cardinalAxisIndex(axis: readonly [number, number, number]): 0 | 1 | 2 | null {
   const abs = axis.map((value) => Math.abs(value)) as [number, number, number];
   const max = Math.max(...abs);
@@ -168,7 +277,42 @@ export function planeAxesForCardinalAxis(axisIndex: 0 | 1 | 2): [0 | 1 | 2, 0 | 
 }
 
 function lowerGeometryKind(value: unknown): Viewport3DPrimitiveKind {
-  const kind = asString(value)?.toLowerCase() ?? "";
+  const kind = asString(value)?.trim().toLowerCase() ?? "";
+  if (kind === "array3d" || kind === "array_3d") {
+    return "array3d";
+  }
+  if (
+    kind === "union" ||
+    kind === "difference" ||
+    kind === "subtract" ||
+    kind === "intersection" ||
+    kind === "intersect" ||
+    kind === "xor" ||
+    kind === "sliceplane" ||
+    kind === "slice_plane" ||
+    kind === "translate" ||
+    kind === "transform" ||
+    kind === "csg" ||
+    kind === "ellipsoid" ||
+    kind === "cone" ||
+    kind === "frustum" ||
+    kind === "tube" ||
+    kind === "ring" ||
+    kind === "hollowcylinder" ||
+    kind === "torus" ||
+    kind === "polygonprism" ||
+    kind === "polygon_prism" ||
+    kind === "polygonextrusion" ||
+    kind === "extrudedpolygon" ||
+    kind === "polygon" ||
+    kind === "ellipse" ||
+    kind === "sinwaveguide" ||
+    kind === "sin_waveguide" ||
+    kind === "archwaveguide" ||
+    kind === "arch_waveguide"
+  ) {
+    return "composite";
+  }
   if (kind.includes("box") || kind.includes("film") || kind.includes("cuboid")) {
     return "box";
   }
@@ -433,10 +577,13 @@ function boundsSizeFromParams(
 ): [number, number, number] | null {
   const kind = lowerGeometryKind(geometry.geometry_kind ?? geometry.kind);
   const radius = asNumber(params?.radius);
-  const height = asNumber(params?.height);
+  const height = asNumber(params?.height ?? params?.length);
   if (kind === "cylinder" && radius !== null && height !== null) {
-    const diameter = Math.max(radius * 2, 1e-12);
-    return [diameter, diameter, Math.max(height, 1e-12)];
+    return cylinderBoundsSize(
+      Math.max(radius, 1e-12),
+      Math.max(height, 1e-12),
+      asVec3(params?.axis) ?? [0, 0, 1],
+    );
   }
   if (kind === "sphere" && radius !== null) {
     const diameter = Math.max(radius * 2, 1e-12);
@@ -463,6 +610,16 @@ function boundsFromGeometry(
   const csgFallbackBounds = csgPreview
     ? null
     : cylinderDifferenceFallbackBounds(geometry);
+  const directPrimitiveSize =
+    !csgPreview && !csgFallbackBounds
+      ? boundsSizeFromParams(geometry, params)
+      : null;
+  if (!csgPreview && !csgFallbackBounds && !directPrimitiveSize) {
+    const recursiveBounds = computeSceneGeometryBoundsMeters(geometry, transform);
+    if (recursiveBounds) {
+      return boundsFromMinMax(recursiveBounds.min, recursiveBounds.max);
+    }
+  }
   const csgSize = csgPreview?.kind === "box-cylinder-difference"
     ? csgPreview.boxSize
     : csgPreview?.kind === "cylinder-cylinder-difference"
@@ -471,7 +628,7 @@ function boundsFromGeometry(
   const size =
     csgSize ??
     csgFallbackBounds?.size ??
-    boundsSizeFromParams(geometry, params) ??
+    directPrimitiveSize ??
     [1, 1, 1];
   const objectTranslation = asVec3(transform?.translation) ?? [0, 0, 0];
   const geometryCenter = csgPreview?.kind === "cylinder-cylinder-difference"
@@ -848,16 +1005,52 @@ export function buildViewport3DPrimitiveRenderModel(
         return [];
       }
     }
+    const resolvedKind: Viewport3DPrimitiveKind = importedSurface
+      ? "imported-surface"
+      : antennaPreview
+        ? geometry.geometry_kind === "CPWAntennaLayout"
+          ? "cpw"
+          : "microstrip"
+        : primitiveKindFromGeometry(geometry, transform);
+    const params = asRecord(geometry.geometry_params);
+    const cylinderRadius = asNumber(params?.radius);
+    const cylinderHeight = asNumber(params?.height ?? params?.length);
+    const cylinderParams: Viewport3DCylinderParams | undefined =
+      resolvedKind === "cylinder" &&
+      cylinderRadius !== null &&
+      cylinderRadius > 0 &&
+      cylinderHeight !== null &&
+      cylinderHeight > 0
+        ? {
+            axis: normalizeAxisVec3(asVec3(params?.axis) ?? [0, 0, 1]),
+            height: cylinderHeight,
+            radius: cylinderRadius,
+          }
+        : undefined;
+    const localSize: [number, number, number] | undefined =
+      !importedSurface &&
+      !antennaPreview &&
+      !csgPreview &&
+      resolvedKind !== "composite" &&
+      resolvedKind !== "array3d"
+        ? boundsSizeFromParams(geometry, params) ?? undefined
+        : undefined;
+    const primitiveTransform =
+      !importedSurface && !antennaPreview
+        ? extractPrimitiveTransform(transform)
+        : undefined;
     return [
       {
         bounds: importedSurface ? importedSurface.bounds : antennaPreview
           ? boundsFromMinMax(antennaPreview.boundsMin, antennaPreview.boundsMax)
           : boundsFromGeometry(geometry, transform),
         csgPreview,
+        ...(cylinderParams ? { cylinderParams } : {}),
         fallbackLabel: fallbackLabel(state),
         geometryKey: `${geometryKey(objectId, geometry, transform)}${importedSurface ? `:surface=${importedSurface.surfaceId}` : ""}`,
-        kind: importedSurface ? "imported-surface" : antennaPreview ? geometry.geometry_kind === "CPWAntennaLayout" ? "cpw" : "microstrip" : primitiveKindFromGeometry(geometry, transform),
+        kind: resolvedKind,
         label: asString(object.name) ?? objectId,
+        ...(localSize ? { localSize } : {}),
         magnetizationTexturePreview: magnetizationTexturePreview(
           sceneRecord,
           object,
@@ -866,8 +1059,10 @@ export function buildViewport3DPrimitiveRenderModel(
         antennaPreview,
         importedSurface,
         objectId,
+        ...(geometry ? { rawGeometry: geometry } : {}),
         role: objectRole,
         sceneRevision,
+        ...(primitiveTransform ? { transform: primitiveTransform } : {}),
         translation: asVec3(transform?.translation) ?? [0, 0, 0],
       },
     ];
@@ -949,6 +1144,14 @@ export function withObjectPlacementDraftPreview(
       ) as [number, number, number],
     },
     geometryKey: `${object.geometryKey}|placement-draft:${translatedValues.join(",")}`,
+    ...(object.transform
+      ? {
+          transform: {
+            ...object.transform,
+            translation: translatedValues,
+          },
+        }
+      : {}),
     translation: translatedValues,
   };
 
@@ -1026,122 +1229,126 @@ export function sampleViewport3DSurfaceHslColors({
       : resolveTargetBoundsMeters(scene, objectTarget);
   const objectTransform = asRecord(objectRec?.transform);
 
-  let objectSpec: PresetTextureSpecV2 | null = null;
-  if (liveBinding?.target.kind === "object" && liveBinding.target.objectId === objectId) {
-    if (liveBinding.draft.sourceMode !== "field-file") {
-      objectSpec = buildPresetSpecFromDraft(liveBinding.draft, objectBounds);
+  try {
+    let objectSpec: PresetTextureSpecV2 | null = null;
+    if (liveBinding?.target.kind === "object" && liveBinding.target.objectId === objectId) {
+      if (liveBinding.draft.sourceMode !== "field-file") {
+        objectSpec = buildPresetSpecFromDraft(liveBinding.draft, objectBounds);
+      }
+    } else if (sceneRec && objectRec) {
+      const asset = magnetizationAssetById(sceneRec, asString(objectRec.magnetization_ref));
+      if (asset && asString(asset.kind) !== "sampled") {
+        const draft = hydrateMagneticTextureDraftFromInitializer(asset, objectBounds, "object");
+        objectSpec = buildPresetSpecFromDraft(draft, objectBounds);
+      }
     }
-  } else if (sceneRec && objectRec) {
-    const asset = magnetizationAssetById(sceneRec, asString(objectRec.magnetization_ref));
-    if (asset && asString(asset.kind) !== "sampled") {
-      const draft = hydrateMagneticTextureDraftFromInitializer(asset, objectBounds, "object");
-      objectSpec = buildPresetSpecFromDraft(draft, objectBounds);
-    }
-  }
 
-  const regionLayers: CompiledRegionLayer[] = [];
-  const rawRegions = Array.isArray(objectRec?.regions) ? objectRec.regions : [];
-  for (const rawRegion of rawRegions) {
-    const reg = asRecord(rawRegion);
-    if (!reg || reg.enabled === false) continue;
-    const regionId = asString(reg.region_id);
-    if (!regionId) continue;
-    const priority = asNumber(reg.priority) ?? 0;
-    const regBounds =
-      liveBinding?.target.kind === "region" &&
-      liveBinding.target.objectId === objectId &&
-      liveBinding.target.regionId === regionId
-        ? liveBinding.bounds
-        : resolveTargetBoundsMeters(scene, { kind: "region", objectId, regionId });
+    const regionLayers: CompiledRegionLayer[] = [];
+    const rawRegions = Array.isArray(objectRec?.regions) ? objectRec.regions : [];
+    for (const rawRegion of rawRegions) {
+      const reg = asRecord(rawRegion);
+      if (!reg || reg.enabled === false) continue;
+      const regionId = asString(reg.region_id);
+      if (!regionId) continue;
+      const priority = asNumber(reg.priority) ?? 0;
+      const regBounds =
+        liveBinding?.target.kind === "region" &&
+        liveBinding.target.objectId === objectId &&
+        liveBinding.target.regionId === regionId
+          ? liveBinding.bounds
+          : resolveTargetBoundsMeters(scene, { kind: "region", objectId, regionId });
 
-    if (
-      liveBinding?.target.kind === "region" &&
-      liveBinding.target.objectId === objectId &&
-      liveBinding.target.regionId === regionId
-    ) {
       if (
-        liveBinding.draft.inheritanceMode === "override" &&
-        liveBinding.draft.sourceMode !== "field-file"
+        liveBinding?.target.kind === "region" &&
+        liveBinding.target.objectId === objectId &&
+        liveBinding.target.regionId === regionId
       ) {
+        if (
+          liveBinding.draft.inheritanceMode === "override" &&
+          liveBinding.draft.sourceMode !== "field-file"
+        ) {
+          regionLayers.push({
+            regionId,
+            priority,
+            regionRecord: reg,
+            spec: buildPresetSpecFromDraft(liveBinding.draft, regBounds),
+            regionBounds: regBounds,
+          });
+        }
+        continue;
+      }
+
+      const init = asRecord(asRecord(reg.texture_override)?.initial_magnetization);
+      if (init && asString(init.kind) !== "sampled") {
+        const regDraft = hydrateMagneticTextureDraftFromInitializer(init, regBounds, "region", {
+          inherited: false,
+        });
         regionLayers.push({
           regionId,
           priority,
           regionRecord: reg,
-          spec: buildPresetSpecFromDraft(liveBinding.draft, regBounds),
+          spec: buildPresetSpecFromDraft(regDraft, regBounds),
           regionBounds: regBounds,
         });
       }
-      continue;
     }
 
-    const init = asRecord(asRecord(reg.texture_override)?.initial_magnetization);
-    if (init && asString(init.kind) !== "sampled") {
-      const regDraft = hydrateMagneticTextureDraftFromInitializer(init, regBounds, "region", {
-        inherited: false,
-      });
-      regionLayers.push({
-        regionId,
-        priority,
-        regionRecord: reg,
-        spec: buildPresetSpecFromDraft(regDraft, regBounds),
-        regionBounds: regBounds,
-      });
+    regionLayers.sort((left, right) => right.priority - left.priority);
+
+    if (!objectSpec && regionLayers.length === 0) {
+      return null;
     }
-  }
 
-  regionLayers.sort((left, right) => right.priority - left.priority);
+    const outColors = new Float32Array(vertexCount * 3);
+    for (let i = 0; i < vertexCount; i += 1) {
+      const base = i * 3;
+      const worldPt: [number, number, number] = [
+        positionsWorld[base]!,
+        positionsWorld[base + 1]!,
+        positionsWorld[base + 2]!,
+      ];
+      const positionObject: [number, number, number] = [
+        worldPt[0] - objectBounds.worldCenter[0],
+        worldPt[1] - objectBounds.worldCenter[1],
+        worldPt[2] - objectBounds.worldCenter[2],
+      ];
 
-  if (!objectSpec && regionLayers.length === 0) {
+      let chosenSpec: PresetTextureSpecV2 | null = objectSpec;
+      let chosenBounds: TargetMetricBounds = objectBounds;
+      for (const layer of regionLayers) {
+        if (pointInsideRegionShape(positionObject, layer.regionRecord, objectTransform)) {
+          chosenSpec = layer.spec;
+          chosenBounds = layer.regionBounds;
+          break;
+        }
+      }
+
+      const positionRegion: [number, number, number] = [
+        worldPt[0] - chosenBounds.worldCenter[0],
+        worldPt[1] - chosenBounds.worldCenter[1],
+        worldPt[2] - chosenBounds.worldCenter[2],
+      ];
+
+      const spin = chosenSpec
+        ? samplePresetTextureV2Client(
+            chosenSpec,
+            {
+              positionObject,
+              positionRegion,
+              positionWorld: worldPt,
+            },
+            chosenBounds,
+          )
+        : ([1, 0, 0] as const);
+
+      const [r, g, b] = magnetizationHslRgb(spin[0], spin[1], spin[2]);
+      outColors[base] = r;
+      outColors[base + 1] = g;
+      outColors[base + 2] = b;
+    }
+
+    return outColors;
+  } catch {
     return null;
   }
-
-  const outColors = new Float32Array(vertexCount * 3);
-  for (let i = 0; i < vertexCount; i += 1) {
-    const base = i * 3;
-    const worldPt: [number, number, number] = [
-      positionsWorld[base]!,
-      positionsWorld[base + 1]!,
-      positionsWorld[base + 2]!,
-    ];
-    const positionObject: [number, number, number] = [
-      worldPt[0] - objectBounds.worldCenter[0],
-      worldPt[1] - objectBounds.worldCenter[1],
-      worldPt[2] - objectBounds.worldCenter[2],
-    ];
-
-    let chosenSpec: PresetTextureSpecV2 | null = objectSpec;
-    let chosenBounds: TargetMetricBounds = objectBounds;
-    for (const layer of regionLayers) {
-      if (pointInsideRegionShape(positionObject, layer.regionRecord, objectTransform)) {
-        chosenSpec = layer.spec;
-        chosenBounds = layer.regionBounds;
-        break;
-      }
-    }
-
-    const positionRegion: [number, number, number] = [
-      worldPt[0] - chosenBounds.worldCenter[0],
-      worldPt[1] - chosenBounds.worldCenter[1],
-      worldPt[2] - chosenBounds.worldCenter[2],
-    ];
-
-    const spin = chosenSpec
-      ? samplePresetTextureV2Client(
-          chosenSpec,
-          {
-            positionObject,
-            positionRegion,
-            positionWorld: worldPt,
-          },
-          chosenBounds,
-        )
-      : ([1, 0, 0] as const);
-
-    const [r, g, b] = magnetizationHslRgb(spin[0], spin[1], spin[2]);
-    outColors[base] = r;
-    outColors[base + 1] = g;
-    outColors[base + 2] = b;
-  }
-
-  return outColors;
 }

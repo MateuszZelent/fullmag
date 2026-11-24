@@ -35,6 +35,11 @@ import {
 
 import type { SceneResource } from "@/kernel/api/apiTypes";
 import { resolveCanonicalQuantityId } from "@/kernel/api/quantityIds";
+import { computeSceneGeometryBoundsMeters } from "@/shared/domain/geometry/sceneGeometryBounds";
+import {
+  compileSceneGeometryContainment,
+  type SceneGeometryContainmentTester,
+} from "@/shared/domain/geometry/sceneGeometryContainment";
 import type { TargetMetricBounds, Vec3 } from "@/shared/domain/magnetization-texture/boundsResolver";
 import {
   pointInsideRegionShape,
@@ -71,6 +76,18 @@ import { canonicalPresetKind } from "@/shared/domain/magnetization-texture/textu
 import { scalarColorRgb } from "@/shared/visualization/scalarColorPalette";
 
 import { useViewport3DColors } from "./hooks/useViewport3DColors";
+import {
+  buildArray3DInstanceMatrices,
+  extractArray3DPreviewDescriptors,
+} from "./layers/Array3DInstancedPreviewLayer";
+import type { Viewport3DPickModifiers } from "./layers/PrimitiveObjectLayer";
+import { eventIntersectsRegionOverlay } from "./layers/regionOverlayPicking";
+import {
+  buildTopologySurfacePreviewData,
+  composePrimitiveObjectWorldMatrix,
+  sampleCompositeSurfaceVectorAnchors,
+  type SubdividedSurfacePreviewData,
+} from "./layers/textureSurfacePreviewGeometry";
 import {
   ensureWhiteVertexColorAttribute,
   resolveVectorGlyphDepthPolicy,
@@ -513,135 +530,16 @@ export function buildCharacteristicProxyWireframeSegments(
 }
 
 /**
- * Generates a subdivided 32×32 surface preview mesh in world coordinates so
- * smooth analytical spin textures (skyrmions, vortices, helices) are crisp even
- * on unmeshed authoring primitives.
+ * Generates a subdivided surface preview mesh in world coordinates honoring the
+ * exact CSG / composite / primitive / Array3D topology of `object` so analytical
+ * spin textures (skyrmions, vortices, domain walls, helices) stay crisp around
+ * cut-out holes and across all arrayed instances without covering holes.
  */
 export function buildSubdividedSurfacePreviewData(
   object: Viewport3DPrimitiveObject,
   gridRes = SURFACE_PREVIEW_GRID_RES,
-): { positionsWorld: Float32Array; indices: Uint32Array } {
-  const n = Math.max(4, Math.min(64, Math.floor(gridRes)));
-  const [cx, cy, cz] = object.bounds.center;
-  const [sx, sy, sz] = object.bounds.size;
-  const positions: number[] = [];
-  const indices: number[] = [];
-
-  if (object.kind === "cylinder" || object.kind === "cylinder-cylinder-difference") {
-    const rx = Math.max(sx * 0.5, 1e-12);
-    const ry = Math.max(sy * 0.5, 1e-12);
-    const halfZ = sz * 0.5;
-    // Top cap polar grid (r × theta) + side mantle
-    const rings = Math.max(4, Math.floor(n / 2));
-    const segs = n;
-    for (const zSign of [1, -1] as const) {
-      const baseIdx = positions.length / 3;
-      const z = cz + zSign * halfZ;
-      for (let ir = 0; ir <= rings; ir += 1) {
-        const frac = ir / rings;
-        for (let it = 0; it <= segs; it += 1) {
-          const theta = (2 * Math.PI * it) / segs;
-          positions.push(
-            cx + rx * frac * Math.cos(theta),
-            cy + ry * frac * Math.sin(theta),
-            z,
-          );
-        }
-      }
-      const stride = segs + 1;
-      for (let ir = 0; ir < rings; ir += 1) {
-        for (let it = 0; it < segs; it += 1) {
-          const a = baseIdx + ir * stride + it;
-          const b = a + 1;
-          const c = a + stride;
-          const d = c + 1;
-          if (zSign > 0) {
-            indices.push(a, b, d, a, d, c);
-          } else {
-            indices.push(a, d, b, a, c, d);
-          }
-        }
-      }
-    }
-  } else if (object.kind === "sphere") {
-    const rx = Math.max(sx * 0.5, 1e-12);
-    const ry = Math.max(sy * 0.5, 1e-12);
-    const rz = Math.max(sz * 0.5, 1e-12);
-    const stacks = Math.max(8, Math.floor(n / 2));
-    const slices = n;
-    for (let is = 0; is <= stacks; is += 1) {
-      const phi = (Math.PI * is) / stacks;
-      const sinPhi = Math.sin(phi);
-      const cosPhi = Math.cos(phi);
-      for (let it = 0; it <= slices; it += 1) {
-        const theta = (2 * Math.PI * it) / slices;
-        positions.push(
-          cx + rx * sinPhi * Math.cos(theta),
-          cy + ry * sinPhi * Math.sin(theta),
-          cz + rz * cosPhi,
-        );
-      }
-    }
-    const stride = slices + 1;
-    for (let is = 0; is < stacks; is += 1) {
-      for (let it = 0; it < slices; it += 1) {
-        const a = is * stride + it;
-        const b = a + 1;
-        const c = a + stride;
-        const d = c + 1;
-        indices.push(a, c, b, b, c, d);
-      }
-    }
-  } else {
-    // Subdivided 6-face box shell (32×32 on primary face, 8×32 on thin side faces)
-    const hx = Math.max(sx * 0.5, 1e-12);
-    const hy = Math.max(sy * 0.5, 1e-12);
-    const hz = Math.max(sz * 0.5, 1e-12);
-    const addPatch = (
-      origin: Vec3,
-      uVec: Vec3,
-      vVec: Vec3,
-      nu: number,
-      nv: number,
-    ) => {
-      const base = positions.length / 3;
-      for (let iv = 0; iv <= nv; iv += 1) {
-        const tv = iv / nv;
-        for (let iu = 0; iu <= nu; iu += 1) {
-          const tu = iu / nu;
-          positions.push(
-            cx + origin[0] + uVec[0] * tu + vVec[0] * tv,
-            cy + origin[1] + uVec[1] * tu + vVec[1] * tv,
-            cz + origin[2] + uVec[2] * tu + vVec[2] * tv,
-          );
-        }
-      }
-      const stride = nu + 1;
-      for (let iv = 0; iv < nv; iv += 1) {
-        for (let iu = 0; iu < nu; iu += 1) {
-          const a = base + iv * stride + iu;
-          const b = a + 1;
-          const c = a + stride;
-          const d = c + 1;
-          indices.push(a, b, d, a, d, c);
-        }
-      }
-    };
-    const thinSteps = Math.max(2, Math.min(8, Math.floor(n / 4)));
-    // +Z and -Z faces (n × n)
-    addPatch([-hx, -hy, hz], [2 * hx, 0, 0], [0, 2 * hy, 0], n, n);
-    addPatch([hx, -hy, -hz], [-2 * hx, 0, 0], [0, 2 * hy, 0], n, n);
-    // ±Y and ±X faces
-    addPatch([-hx, -hy, -hz], [2 * hx, 0, 0], [0, 0, 2 * hz], n, thinSteps);
-    addPatch([hx, hy, -hz], [-2 * hx, 0, 0], [0, 0, 2 * hz], n, thinSteps);
-    addPatch([hx, -hy, -hz], [0, 2 * hy, 0], [0, 0, 2 * hz], thinSteps, thinSteps);
-    addPatch([-hx, hy, -hz], [0, -2 * hy, 0], [0, 0, 2 * hz], thinSteps, thinSteps);
-  }
-
-  return {
-    positionsWorld: new Float32Array(positions),
-    indices: new Uint32Array(indices),
-  };
+): SubdividedSurfacePreviewData {
+  return buildTopologySurfacePreviewData(object, gridRes);
 }
 
 export type GizmoHandleMode = Exclude<TextureGizmoMode, "view">;
@@ -1203,129 +1101,133 @@ export function sampleAuthoredMagnetizationVectors({
       : resolveTargetBoundsMeters(scene, objectTarget);
   const objectTransform = asAuthoredRecord(objectRec?.transform);
 
-  let objectSpec: PresetTextureSpecV2 | null = null;
-  if (liveBinding?.target.kind === "object" && liveBinding.target.objectId === objectId) {
-    if (liveBinding.draft.sourceMode !== "field-file") {
-      objectSpec = buildPresetSpecFromDraft(liveBinding.draft, objectBounds);
+  try {
+    let objectSpec: PresetTextureSpecV2 | null = null;
+    if (liveBinding?.target.kind === "object" && liveBinding.target.objectId === objectId) {
+      if (liveBinding.draft.sourceMode !== "field-file") {
+        objectSpec = buildPresetSpecFromDraft(liveBinding.draft, objectBounds);
+      }
+    } else if (sceneRec && objectRec) {
+      const refId = asAuthoredString(objectRec.magnetization_ref);
+      const asset =
+        refId && Array.isArray(sceneRec.magnetization_assets)
+          ? sceneRec.magnetization_assets
+              .map(asAuthoredRecord)
+              .find((entry) => entry && asAuthoredString(entry.id) === refId) ?? null
+          : null;
+      if (asset && !isAuthoredFieldFileAsset(asset)) {
+        const draft = hydrateMagneticTextureDraftFromInitializer(asset, objectBounds, "object");
+        objectSpec = buildPresetSpecFromDraft(draft, objectBounds);
+      }
     }
-  } else if (sceneRec && objectRec) {
-    const refId = asAuthoredString(objectRec.magnetization_ref);
-    const asset =
-      refId && Array.isArray(sceneRec.magnetization_assets)
-        ? sceneRec.magnetization_assets
-            .map(asAuthoredRecord)
-            .find((entry) => entry && asAuthoredString(entry.id) === refId) ?? null
-        : null;
-    if (asset && !isAuthoredFieldFileAsset(asset)) {
-      const draft = hydrateMagneticTextureDraftFromInitializer(asset, objectBounds, "object");
-      objectSpec = buildPresetSpecFromDraft(draft, objectBounds);
-    }
-  }
 
-  const regionLayers: CompiledAuthoredRegionLayer[] = [];
-  const rawRegions = Array.isArray(objectRec?.regions) ? objectRec.regions : [];
-  for (const rawRegion of rawRegions) {
-    const reg = asAuthoredRecord(rawRegion);
-    if (!reg || reg.enabled === false) continue;
-    const regionId = asAuthoredString(reg.region_id);
-    if (!regionId) continue;
-    const priority = asAuthoredNumber(reg.priority) ?? 0;
-    const regBounds =
-      liveBinding?.target.kind === "region" &&
-      liveBinding.target.objectId === objectId &&
-      liveBinding.target.regionId === regionId
-        ? liveBinding.bounds
-        : resolveTargetBoundsMeters(scene, { kind: "region", objectId, regionId });
+    const regionLayers: CompiledAuthoredRegionLayer[] = [];
+    const rawRegions = Array.isArray(objectRec?.regions) ? objectRec.regions : [];
+    for (const rawRegion of rawRegions) {
+      const reg = asAuthoredRecord(rawRegion);
+      if (!reg || reg.enabled === false) continue;
+      const regionId = asAuthoredString(reg.region_id);
+      if (!regionId) continue;
+      const priority = asAuthoredNumber(reg.priority) ?? 0;
+      const regBounds =
+        liveBinding?.target.kind === "region" &&
+        liveBinding.target.objectId === objectId &&
+        liveBinding.target.regionId === regionId
+          ? liveBinding.bounds
+          : resolveTargetBoundsMeters(scene, { kind: "region", objectId, regionId });
 
-    if (
-      liveBinding?.target.kind === "region" &&
-      liveBinding.target.objectId === objectId &&
-      liveBinding.target.regionId === regionId
-    ) {
       if (
-        liveBinding.draft.inheritanceMode === "override" &&
-        liveBinding.draft.sourceMode !== "field-file"
+        liveBinding?.target.kind === "region" &&
+        liveBinding.target.objectId === objectId &&
+        liveBinding.target.regionId === regionId
       ) {
+        if (
+          liveBinding.draft.inheritanceMode === "override" &&
+          liveBinding.draft.sourceMode !== "field-file"
+        ) {
+          regionLayers.push({
+            regionId,
+            priority,
+            regionRecord: reg,
+            spec: buildPresetSpecFromDraft(liveBinding.draft, regBounds),
+            regionBounds: regBounds,
+          });
+        }
+        continue;
+      }
+
+      const init = asAuthoredRecord(asAuthoredRecord(reg.texture_override)?.initial_magnetization);
+      if (init && !isAuthoredFieldFileAsset(init)) {
+        const regDraft = hydrateMagneticTextureDraftFromInitializer(init, regBounds, "region", {
+          inherited: false,
+        });
         regionLayers.push({
           regionId,
           priority,
           regionRecord: reg,
-          spec: buildPresetSpecFromDraft(liveBinding.draft, regBounds),
+          spec: buildPresetSpecFromDraft(regDraft, regBounds),
           regionBounds: regBounds,
         });
       }
-      continue;
     }
 
-    const init = asAuthoredRecord(asAuthoredRecord(reg.texture_override)?.initial_magnetization);
-    if (init && !isAuthoredFieldFileAsset(init)) {
-      const regDraft = hydrateMagneticTextureDraftFromInitializer(init, regBounds, "region", {
-        inherited: false,
-      });
-      regionLayers.push({
-        regionId,
-        priority,
-        regionRecord: reg,
-        spec: buildPresetSpecFromDraft(regDraft, regBounds),
-        regionBounds: regBounds,
-      });
+    regionLayers.sort((left, right) => right.priority - left.priority);
+
+    if (!objectSpec && regionLayers.length === 0) {
+      return null;
     }
-  }
 
-  regionLayers.sort((left, right) => right.priority - left.priority);
+    const outVectors = new Float32Array(pointCount * 3);
+    for (let i = 0; i < pointCount; i += 1) {
+      const base = i * 3;
+      const worldPt: Vec3 = [
+        positionsWorld[base]!,
+        positionsWorld[base + 1]!,
+        positionsWorld[base + 2]!,
+      ];
+      const positionObject: Vec3 = [
+        worldPt[0] - objectBounds.worldCenter[0],
+        worldPt[1] - objectBounds.worldCenter[1],
+        worldPt[2] - objectBounds.worldCenter[2],
+      ];
 
-  if (!objectSpec && regionLayers.length === 0) {
+      let chosenSpec: PresetTextureSpecV2 | null = objectSpec;
+      let chosenBounds: TargetMetricBounds = objectBounds;
+      for (const layer of regionLayers) {
+        if (pointInsideRegionShape(positionObject, layer.regionRecord, objectTransform)) {
+          chosenSpec = layer.spec;
+          chosenBounds = layer.regionBounds;
+          break;
+        }
+      }
+
+      const positionRegion: Vec3 = [
+        worldPt[0] - chosenBounds.worldCenter[0],
+        worldPt[1] - chosenBounds.worldCenter[1],
+        worldPt[2] - chosenBounds.worldCenter[2],
+      ];
+
+      const spin = chosenSpec
+        ? samplePresetTextureV2Client(
+            chosenSpec,
+            {
+              positionObject,
+              positionRegion,
+              positionWorld: worldPt,
+            },
+            chosenBounds,
+          )
+        : ([1, 0, 0] as const);
+
+      outVectors[base] = spin[0];
+      outVectors[base + 1] = spin[1];
+      outVectors[base + 2] = spin[2];
+    }
+
+    return outVectors;
+  } catch {
     return null;
   }
-
-  const outVectors = new Float32Array(pointCount * 3);
-  for (let i = 0; i < pointCount; i += 1) {
-    const base = i * 3;
-    const worldPt: Vec3 = [
-      positionsWorld[base]!,
-      positionsWorld[base + 1]!,
-      positionsWorld[base + 2]!,
-    ];
-    const positionObject: Vec3 = [
-      worldPt[0] - objectBounds.worldCenter[0],
-      worldPt[1] - objectBounds.worldCenter[1],
-      worldPt[2] - objectBounds.worldCenter[2],
-    ];
-
-    let chosenSpec: PresetTextureSpecV2 | null = objectSpec;
-    let chosenBounds: TargetMetricBounds = objectBounds;
-    for (const layer of regionLayers) {
-      if (pointInsideRegionShape(positionObject, layer.regionRecord, objectTransform)) {
-        chosenSpec = layer.spec;
-        chosenBounds = layer.regionBounds;
-        break;
-      }
-    }
-
-    const positionRegion: Vec3 = [
-      worldPt[0] - chosenBounds.worldCenter[0],
-      worldPt[1] - chosenBounds.worldCenter[1],
-      worldPt[2] - chosenBounds.worldCenter[2],
-    ];
-
-    const spin = chosenSpec
-      ? samplePresetTextureV2Client(
-          chosenSpec,
-          {
-            positionObject,
-            positionRegion,
-            positionWorld: worldPt,
-          },
-          chosenBounds,
-        )
-      : ([1, 0, 0] as const);
-
-    outVectors[base] = spin[0];
-    outVectors[base + 1] = spin[1];
-    outVectors[base + 2] = spin[2];
-  }
-
-  return outVectors;
 }
 
 export interface AuthoredMagnetizationVectorGridOptions {
@@ -1333,6 +1235,8 @@ export interface AuthoredMagnetizationVectorGridOptions {
   readonly geometryScope?: "surface" | "full";
   readonly surfaceOffsetEnabled?: boolean;
   readonly surfaceOffsetScale?: number;
+  /** When true, single-sheet thin films in "full" scope lift arrows above their opaque top face. */
+  readonly surfaceOpaque?: boolean;
 }
 
 export interface AuthoredMagnetizationVectorGrid {
@@ -1366,10 +1270,277 @@ function resolveGrid2DCounts(
   return { na, nb, pitch };
 }
 
+interface ObjectLocalContainment {
+  readonly localBounds: { center: Vec3; size: Vec3 };
+  readonly tester: SceneGeometryContainmentTester;
+  readonly worldMatrix: Matrix4;
+}
+
+function resolveObjectLocalContainment(
+  object: Viewport3DPrimitiveObject,
+): ObjectLocalContainment | null {
+  const worldMatrix = composePrimitiveObjectWorldMatrix(object);
+  if (object.rawGeometry) {
+    const tester = compileSceneGeometryContainment(object.rawGeometry);
+    const computed = computeSceneGeometryBoundsMeters(object.rawGeometry);
+    const localSize = computed?.size ?? object.localSize ?? object.bounds.size;
+    const localCenter = computed?.center ?? ([0, 0, 0] as Vec3);
+    return {
+      localBounds: {
+        center: [localCenter[0], localCenter[1], localCenter[2]],
+        size: [
+          Math.max(localSize[0], 1e-12),
+          Math.max(localSize[1], 1e-12),
+          Math.max(localSize[2], 1e-12),
+        ],
+      },
+      tester,
+      worldMatrix,
+    };
+  }
+  if (object.csgPreview?.kind === "box-cylinder-difference") {
+    const p = object.csgPreview;
+    const synth: Record<string, unknown> = {
+      geometry_kind: "Difference",
+      geometry_params: {
+        operands: [
+          {
+            enabled: true,
+            geometry: { geometry_kind: "Box", geometry_params: { size: p.boxSize } },
+          },
+          {
+            enabled: true,
+            geometry: {
+              geometry_kind: "Cylinder",
+              geometry_params: {
+                axis: p.cylinderAxis,
+                center: p.cylinderCenter,
+                height: p.cylinderHeight,
+                radius: p.cylinderRadius,
+              },
+            },
+          },
+        ],
+      },
+    };
+    return {
+      localBounds: {
+        center: [0, 0, 0],
+        size: [
+          Math.max(p.boxSize[0], 1e-12),
+          Math.max(p.boxSize[1], 1e-12),
+          Math.max(p.boxSize[2], 1e-12),
+        ],
+      },
+      tester: compileSceneGeometryContainment(synth),
+      worldMatrix,
+    };
+  }
+  if (object.csgPreview?.kind === "cylinder-cylinder-difference") {
+    const p = object.csgPreview;
+    const innerRel: Vec3 = [
+      p.innerCenter[0] - p.outerCenter[0],
+      p.innerCenter[1] - p.outerCenter[1],
+      p.innerCenter[2] - p.outerCenter[2],
+    ];
+    const synth: Record<string, unknown> = {
+      geometry_kind: "Difference",
+      geometry_params: {
+        operands: [
+          {
+            enabled: true,
+            geometry: {
+              geometry_kind: "Cylinder",
+              geometry_params: {
+                axis: p.cylinderAxis,
+                height: p.outerHeight,
+                radius: p.outerRadius,
+              },
+            },
+          },
+          {
+            enabled: true,
+            geometry: {
+              geometry_kind: "Cylinder",
+              geometry_params: {
+                axis: p.cylinderAxis,
+                center: innerRel,
+                height: p.innerHeight,
+                radius: p.innerRadius,
+              },
+            },
+          },
+        ],
+      },
+    };
+    return {
+      localBounds: {
+        center: [0, 0, 0],
+        size: [
+          Math.max(p.boundsSize[0], 1e-12),
+          Math.max(p.boundsSize[1], 1e-12),
+          Math.max(p.boundsSize[2], 1e-12),
+        ],
+      },
+      tester: compileSceneGeometryContainment(synth),
+      worldMatrix,
+    };
+  }
+  return null;
+}
+
+function buildArray3DVectorGridPoints(
+  object: Viewport3DPrimitiveObject,
+  targetCount: number,
+  geometryScope: "surface" | "full",
+  surfaceOffsetEnabled: boolean,
+  surfaceOffsetScale: number,
+  surfaceOpaque: boolean,
+): AuthoredMagnetizationVectorGrid | null {
+  if (!object.rawGeometry) return null;
+  const descriptor = extractArray3DPreviewDescriptors([object])[0];
+  if (!descriptor) return null;
+  const matrices = buildArray3DInstanceMatrices(descriptor);
+  if (matrices.length === 0) return null;
+
+  const childTester = compileSceneGeometryContainment(descriptor.childGeometry);
+  const childBounds = computeSceneGeometryBoundsMeters(descriptor.childGeometry);
+  const cCenter: Vec3 = childBounds ? [...childBounds.center] : [0, 0, 0];
+  const cSize: Vec3 = childBounds
+    ? [
+        Math.max(childBounds.size[0], 1e-12),
+        Math.max(childBounds.size[1], 1e-12),
+        Math.max(childBounds.size[2], 1e-12),
+      ]
+    : [
+        Math.max(descriptor.childSize[0], 1e-12),
+        Math.max(descriptor.childSize[1], 1e-12),
+        Math.max(descriptor.childSize[2], 1e-12),
+      ];
+  const [csx, csy, csz] = cSize;
+  const chx = csx * 0.5;
+  const chy = csy * 0.5;
+  const chz = csz * 0.5;
+  const cMaxSpan = Math.max(csx, csy, csz);
+  const inset = Math.min(csx, csy, csz) * 1e-4;
+  const childSurfaceLift = (pitch: number): number =>
+    surfaceOffsetEnabled
+      ? Math.max(pitch * (0.28 + surfaceOffsetScale * 0.55), cMaxSpan * 0.012)
+      : Math.max(pitch * 0.16, cMaxSpan * 0.006);
+
+  // Sample local candidate anchors inside one child instance
+  const perInstanceTarget = Math.max(1, Math.floor(targetCount / matrices.length));
+  const localAnchors: Vec3[] = [];
+  let pitch = cMaxSpan;
+
+  if (perInstanceTarget === 1) {
+    const liftSingle =
+      geometryScope === "surface" ||
+      (surfaceOpaque && csz <= 0.35 * Math.max(csx, csy));
+    const lift = liftSingle ? childSurfaceLift(cMaxSpan) : 0;
+    const testZ = liftSingle ? cCenter[2] + chz - inset : cCenter[2];
+    const emitZ = liftSingle ? cCenter[2] + chz + lift : cCenter[2];
+    if (childTester([cCenter[0], cCenter[1], testZ])) {
+      localAnchors.push([cCenter[0], cCenter[1], emitZ]);
+    } else {
+      // Child center may sit inside a hole; scan a 5x5 local grid for a solid point
+      outer: for (let iy = 0; iy < 5; iy += 1) {
+        const ly = cCenter[1] - chy + ((iy + 0.5) / 5) * csy;
+        for (let ix = 0; ix < 5; ix += 1) {
+          const lx = cCenter[0] - chx + ((ix + 0.5) / 5) * csx;
+          if (childTester([lx, ly, testZ])) {
+            localAnchors.push([lx, ly, emitZ]);
+            break outer;
+          }
+        }
+      }
+    }
+    pitch = Math.max(
+      1e-12,
+      Math.min(cMaxSpan, Math.max(...object.bounds.size, 1e-12) / Math.sqrt(Math.max(1, targetCount))),
+    );
+  } else if (geometryScope === "surface") {
+    const g = resolveGrid2DCounts(csx, csy, perInstanceTarget);
+    pitch = g.pitch;
+    const lift = childSurfaceLift(g.pitch);
+    const testZ = cCenter[2] + chz - inset;
+    const emitZ = cCenter[2] + chz + lift;
+    for (let iy = 0; iy < g.nb; iy += 1) {
+      const ly = cCenter[1] - chy + ((iy + 0.5) / g.nb) * csy;
+      for (let ix = 0; ix < g.na; ix += 1) {
+        const lx = cCenter[0] - chx + ((ix + 0.5) / g.na) * csx;
+        if (childTester([lx, ly, testZ])) {
+          localAnchors.push([lx, ly, emitZ]);
+        }
+      }
+    }
+  } else {
+    const h = Math.cbrt((csx * csy * csz) / perInstanceTarget);
+    const nx = Math.max(1, Math.round(csx / h));
+    const ny = Math.max(1, Math.round(csy / h));
+    const nz = Math.max(1, Math.round(csz / h));
+    pitch = Math.max(1e-12, Math.min(csx / nx, csy / ny, csz / nz));
+    const liftThinZ =
+      surfaceOpaque && nz === 1 && (nx > 1 || ny > 1 || csz <= 0.35 * Math.max(csx, csy));
+    const liftThinY =
+      surfaceOpaque && !liftThinZ && ny === 1 && (nx > 1 || nz > 1 || csy <= 0.35 * Math.max(csx, csz));
+    const liftThinX =
+      surfaceOpaque && !liftThinZ && !liftThinY && nx === 1 && (ny > 1 || nz > 1 || csx <= 0.35 * Math.max(csy, csz));
+    const sheetLift = liftThinZ || liftThinY || liftThinX ? childSurfaceLift(pitch) : 0;
+    for (let iz = 0; iz < nz; iz += 1) {
+      const baseZ = cCenter[2] - chz + ((iz + 0.5) / nz) * csz;
+      const testZ = liftThinZ ? cCenter[2] + chz - inset : baseZ;
+      const emitZ = liftThinZ ? cCenter[2] + chz + sheetLift : baseZ;
+      for (let iy = 0; iy < ny; iy += 1) {
+        const baseY = cCenter[1] - chy + ((iy + 0.5) / ny) * csy;
+        const testY = liftThinY ? cCenter[1] + chy - inset : baseY;
+        const emitY = liftThinY ? cCenter[1] + chy + sheetLift : baseY;
+        for (let ix = 0; ix < nx; ix += 1) {
+          const baseX = cCenter[0] - chx + ((ix + 0.5) / nx) * csx;
+          const testX = liftThinX ? cCenter[0] + chx - inset : baseX;
+          const emitX = liftThinX ? cCenter[0] + chx + sheetLift : baseX;
+          if (childTester([testX, testY, testZ])) {
+            localAnchors.push([emitX, emitY, emitZ]);
+          }
+        }
+      }
+    }
+  }
+
+  if (localAnchors.length === 0) {
+    return { positionsWorld: new Float32Array(0), pitch, count: 0, renderOnTop: false };
+  }
+
+  const points: number[] = [];
+  const v = new Vector3();
+  const maxInstToSample =
+    matrices.length > targetCount ? targetCount : matrices.length;
+  for (let i = 0; i < maxInstToSample; i += 1) {
+    const instIdx =
+      matrices.length > targetCount
+        ? Math.floor((i * matrices.length) / targetCount)
+        : i;
+    const mat = matrices[instIdx]!;
+    for (const anchor of localAnchors) {
+      v.set(anchor[0], anchor[1], anchor[2]).applyMatrix4(mat);
+      points.push(v.x, v.y, v.z);
+    }
+  }
+
+  return {
+    positionsWorld: new Float32Array(points),
+    pitch,
+    count: points.length / 3,
+    renderOnTop: false,
+  };
+}
+
 /**
- * Samples an evenly spaced 3D grid of anchor points across a primitive object's
- * bounds for authored magnetization vector arrows, honoring `vectorBudget`
- * (clamped 16..2000 when > 0, default 196), `geometryScope` ("surface" vs "full"), and shape.
+ * Samples an evenly spaced 3D grid of anchor points across a primitive or CSG
+ * object's true geometry for authored magnetization vector arrows, honoring
+ * `vectorBudget` (clamped 16..2000 when > 0, default 196), `geometryScope`
+ * ("surface" vs "full"), `Array3D` instances, and point-in-CSG containment so
+ * arrows never float inside cut-out holes or outside solid bounds.
  */
 export function buildAuthoredMagnetizationVectorGridPoints(
   object: Viewport3DPrimitiveObject,
@@ -1377,7 +1548,7 @@ export function buildAuthoredMagnetizationVectorGridPoints(
 ): AuthoredMagnetizationVectorGrid {
   const rawBudget = options.budget ?? AUTHORED_VECTOR_DEFAULT_BUDGET;
   if (!Number.isFinite(rawBudget) || rawBudget <= 0) {
-    return { positionsWorld: new Float32Array(0), pitch: 1e-9, count: 0, renderOnTop: true };
+    return { positionsWorld: new Float32Array(0), pitch: 1e-9, count: 0, renderOnTop: false };
   }
   const targetCount = Math.max(
     AUTHORED_VECTOR_BUDGET_MIN,
@@ -1388,16 +1559,53 @@ export function buildAuthoredMagnetizationVectorGridPoints(
   const surfaceOffsetScale = Number.isFinite(options.surfaceOffsetScale)
     ? Math.max(0, options.surfaceOffsetScale ?? 0)
     : 0;
+  const surfaceOpaque = Boolean(options.surfaceOpaque);
 
-  const [cx, cy, cz] = object.bounds.center;
-  const sx = Math.max(object.bounds.size[0], 1e-12);
-  const sy = Math.max(object.bounds.size[1], 1e-12);
-  const sz = Math.max(object.bounds.size[2], 1e-12);
+  if (object.kind === "array3d" && object.rawGeometry) {
+    const arrayed = buildArray3DVectorGridPoints(
+      object,
+      targetCount,
+      geometryScope,
+      surfaceOffsetEnabled,
+      surfaceOffsetScale,
+      surfaceOpaque,
+    );
+    if (arrayed) return arrayed;
+  }
+
+  const localContainment = resolveObjectLocalContainment(object);
+  const [cx, cy, cz] = localContainment ? localContainment.localBounds.center : object.bounds.center;
+  const sx = Math.max(
+    localContainment ? localContainment.localBounds.size[0] : object.bounds.size[0],
+    1e-12,
+  );
+  const sy = Math.max(
+    localContainment ? localContainment.localBounds.size[1] : object.bounds.size[1],
+    1e-12,
+  );
+  const sz = Math.max(
+    localContainment ? localContainment.localBounds.size[2] : object.bounds.size[2],
+    1e-12,
+  );
   const hx = sx * 0.5;
   const hy = sy * 0.5;
   const hz = sz * 0.5;
   const maxSpan = Math.max(sx, sy, sz);
+  const inset = Math.min(sx, sy, sz) * 1e-4;
   const points: number[] = [];
+  const scratchVec = new Vector3();
+
+  const emitPoint = (testPt: Vec3, emitPt: Vec3): void => {
+    if (localContainment) {
+      if (!localContainment.tester(testPt)) return;
+      scratchVec
+        .set(emitPt[0], emitPt[1], emitPt[2])
+        .applyMatrix4(localContainment.worldMatrix);
+      points.push(scratchVec.x, scratchVec.y, scratchVec.z);
+    } else {
+      points.push(emitPt[0], emitPt[1], emitPt[2]);
+    }
+  };
 
   const innerRingRadiusSq =
     object.kind === "cylinder-cylinder-difference" &&
@@ -1417,12 +1625,16 @@ export function buildAuthoredMagnetizationVectorGridPoints(
     const nz = dz / hz;
     return nx * nx + ny * ny + nz * nz <= 1.0001;
   };
+  const isZAlignedCylinder =
+    (object.kind === "cylinder" || object.kind === "cylinder-cylinder-difference") &&
+    (!object.cylinderParams || Math.abs(object.cylinderParams.axis[2]) >= 0.999);
+
+  const surfaceLift = (pitch: number): number =>
+    surfaceOffsetEnabled
+      ? Math.max(pitch * (0.28 + surfaceOffsetScale * 0.55), maxSpan * 0.012)
+      : Math.max(pitch * 0.16, maxSpan * 0.006);
 
   if (geometryScope === "surface") {
-    const surfaceLift = (pitch: number): number =>
-      surfaceOffsetEnabled
-        ? Math.max(pitch * (0.28 + surfaceOffsetScale * 0.55), maxSpan * 0.012)
-        : Math.max(pitch * 0.16, maxSpan * 0.006);
 
     if (object.kind === "sphere") {
       const approxArea = 4 * Math.PI * ((hx * hy + hy * hz + hz * hx) / 3);
@@ -1435,32 +1647,32 @@ export function buildAuthoredMagnetizationVectorGridPoints(
         const theta = goldenAngle * i;
         const ux = Math.cos(theta) * r;
         const uz = Math.sin(theta) * r;
-        points.push(
-          cx + ux * (hx + lift),
-          cy + y * (hy + lift),
-          cz + uz * (hz + lift),
+        emitPoint(
+          [cx + ux * (hx - inset), cy + y * (hy - inset), cz + uz * (hz - inset)],
+          [cx + ux * (hx + lift), cy + y * (hy + lift), cz + uz * (hz + lift)],
         );
       }
       return {
         positionsWorld: new Float32Array(points),
         pitch,
-        count: targetCount,
+        count: points.length / 3,
         renderOnTop: false,
       };
     }
 
-    if (object.kind === "cylinder" || object.kind === "cylinder-cylinder-difference") {
+    if (isZAlignedCylinder) {
       const isThinDisk = sz <= 0.35 * Math.max(sx, sy);
       if (isThinDisk) {
         const { na, nb, pitch } = resolveGrid2DCounts(sx, sy, Math.round(targetCount * (4 / Math.PI)));
         const lift = surfaceLift(pitch);
-        const z = cz + hz + lift;
+        const testZ = cz + hz - inset;
+        const emitZ = cz + hz + lift;
         for (let iy = 0; iy < nb; iy += 1) {
           const dy = -hy + ((iy + 0.5) / nb) * sy;
           for (let ix = 0; ix < na; ix += 1) {
             const dx = -hx + ((ix + 0.5) / na) * sx;
             if (insideCylinderCrossSection(dx, dy)) {
-              points.push(cx + dx, cy + dy, z);
+              emitPoint([cx + dx, cy + dy, testZ], [cx + dx, cy + dy, emitZ]);
             }
           }
         }
@@ -1468,7 +1680,7 @@ export function buildAuthoredMagnetizationVectorGridPoints(
           positionsWorld: new Float32Array(points),
           pitch,
           count: points.length / 3,
-          renderOnTop: true,
+          renderOnTop: false,
         };
       }
       // Thick cylinder: sample top/bottom caps + cylindrical mantle
@@ -1480,13 +1692,14 @@ export function buildAuthoredMagnetizationVectorGridPoints(
       const pitch = Math.min(capGrid.pitch, mantleGrid.pitch);
       const lift = surfaceLift(pitch);
       for (const zSign of [1, -1] as const) {
-        const z = cz + zSign * (hz + lift);
+        const testZ = cz + zSign * (hz - inset);
+        const emitZ = cz + zSign * (hz + lift);
         for (let iy = 0; iy < capGrid.nb; iy += 1) {
           const dy = -hy + ((iy + 0.5) / capGrid.nb) * sy;
           for (let ix = 0; ix < capGrid.na; ix += 1) {
             const dx = -hx + ((ix + 0.5) / capGrid.na) * sx;
             if (insideCylinderCrossSection(dx, dy)) {
-              points.push(cx + dx, cy + dy, z);
+              emitPoint([cx + dx, cy + dy, testZ], [cx + dx, cy + dy, emitZ]);
             }
           }
         }
@@ -1497,7 +1710,10 @@ export function buildAuthoredMagnetizationVectorGridPoints(
           const theta = (2 * Math.PI * it) / mantleGrid.na;
           const cosT = Math.cos(theta);
           const sinT = Math.sin(theta);
-          points.push(cx + cosT * (hx + lift), cy + sinT * (hy + lift), z);
+          emitPoint(
+            [cx + cosT * (hx - inset), cy + sinT * (hy - inset), z],
+            [cx + cosT * (hx + lift), cy + sinT * (hy + lift), z],
+          );
         }
       }
       return {
@@ -1508,108 +1724,120 @@ export function buildAuthoredMagnetizationVectorGridPoints(
       };
     }
 
-    // Box / general primitive surface sampling
+    // Box / CSG / general primitive surface sampling
     const thinZ = sz <= 0.35 * Math.max(sx, sy);
     const thinY = !thinZ && sy <= 0.35 * Math.max(sx, sz);
     const thinX = !thinZ && !thinY && sx <= 0.35 * Math.max(sy, sz);
+    let computedPitch = maxSpan;
+    const renderOnTop = false;
+
     if (thinZ) {
       const { na, nb, pitch } = resolveGrid2DCounts(sx, sy, targetCount);
-      const z = cz + hz + surfaceLift(pitch);
+      computedPitch = pitch;
+      const testZ = cz + hz - inset;
+      const emitZ = cz + hz + surfaceLift(pitch);
       for (let iy = 0; iy < nb; iy += 1) {
         const y = cy - hy + ((iy + 0.5) / nb) * sy;
         for (let ix = 0; ix < na; ix += 1) {
           const x = cx - hx + ((ix + 0.5) / na) * sx;
-          points.push(x, y, z);
+          emitPoint([x, y, testZ], [x, y, emitZ]);
         }
       }
-      return {
-        positionsWorld: new Float32Array(points),
-        pitch,
-        count: points.length / 3,
-        renderOnTop: true,
-      };
-    }
-    if (thinY) {
+    } else if (thinY) {
       const { na, nb, pitch } = resolveGrid2DCounts(sx, sz, targetCount);
-      const y = cy + hy + surfaceLift(pitch);
+      computedPitch = pitch;
+      const testY = cy + hy - inset;
+      const emitY = cy + hy + surfaceLift(pitch);
       for (let iz = 0; iz < nb; iz += 1) {
         const z = cz - hz + ((iz + 0.5) / nb) * sz;
         for (let ix = 0; ix < na; ix += 1) {
           const x = cx - hx + ((ix + 0.5) / na) * sx;
-          points.push(x, y, z);
+          emitPoint([x, testY, z], [x, emitY, z]);
         }
       }
-      return {
-        positionsWorld: new Float32Array(points),
-        pitch,
-        count: points.length / 3,
-        renderOnTop: true,
-      };
-    }
-    if (thinX) {
+    } else if (thinX) {
       const { na, nb, pitch } = resolveGrid2DCounts(sy, sz, targetCount);
-      const x = cx + hx + surfaceLift(pitch);
+      computedPitch = pitch;
+      const testX = cx + hx - inset;
+      const emitX = cx + hx + surfaceLift(pitch);
       for (let iz = 0; iz < nb; iz += 1) {
         const z = cz - hz + ((iz + 0.5) / nb) * sz;
         for (let iy = 0; iy < na; iy += 1) {
           const y = cy - hy + ((iy + 0.5) / na) * sy;
-          points.push(x, y, z);
+          emitPoint([testX, y, z], [emitX, y, z]);
         }
       }
-      return {
-        positionsWorld: new Float32Array(points),
-        pitch,
-        count: points.length / 3,
-        renderOnTop: true,
-      };
-    }
-
-    // Thick 3D box: distribute across all 6 faces proportional to area
-    const totalArea = 2 * (sx * sy + sy * sz + sz * sx);
-    const basePitch = Math.max(1e-12, Math.sqrt(totalArea / targetCount));
-    const lift = surfaceLift(basePitch);
-    const nx = Math.max(1, Math.round(sx / basePitch));
-    const ny = Math.max(1, Math.round(sy / basePitch));
-    const nz = Math.max(1, Math.round(sz / basePitch));
-    const pitch = Math.max(1e-12, Math.min(sx / nx, sy / ny, sz / nz));
-    // ±Z faces
-    for (const zSign of [1, -1] as const) {
-      const z = cz + zSign * (hz + lift);
-      for (let iy = 0; iy < ny; iy += 1) {
-        const y = cy - hy + ((iy + 0.5) / ny) * sy;
-        for (let ix = 0; ix < nx; ix += 1) {
-          const x = cx - hx + ((ix + 0.5) / nx) * sx;
-          points.push(x, y, z);
-        }
-      }
-    }
-    // ±Y faces
-    for (const ySign of [1, -1] as const) {
-      const y = cy + ySign * (hy + lift);
-      for (let iz = 0; iz < nz; iz += 1) {
-        const z = cz - hz + ((iz + 0.5) / nz) * sz;
-        for (let ix = 0; ix < nx; ix += 1) {
-          const x = cx - hx + ((ix + 0.5) / nx) * sx;
-          points.push(x, y, z);
-        }
-      }
-    }
-    // ±X faces
-    for (const xSign of [1, -1] as const) {
-      const x = cx + xSign * (hx + lift);
-      for (let iz = 0; iz < nz; iz += 1) {
-        const z = cz - hz + ((iz + 0.5) / nz) * sz;
+    } else {
+      // Thick 3D shape: distribute across all 6 AABB faces proportional to area
+      const totalArea = 2 * (sx * sy + sy * sz + sz * sx);
+      const basePitch = Math.max(1e-12, Math.sqrt(totalArea / targetCount));
+      const lift = surfaceLift(basePitch);
+      const nx = Math.max(1, Math.round(sx / basePitch));
+      const ny = Math.max(1, Math.round(sy / basePitch));
+      const nz = Math.max(1, Math.round(sz / basePitch));
+      computedPitch = Math.max(1e-12, Math.min(sx / nx, sy / ny, sz / nz));
+      // ±Z faces
+      for (const zSign of [1, -1] as const) {
+        const testZ = cz + zSign * (hz - inset);
+        const emitZ = cz + zSign * (hz + lift);
         for (let iy = 0; iy < ny; iy += 1) {
           const y = cy - hy + ((iy + 0.5) / ny) * sy;
-          points.push(x, y, z);
+          for (let ix = 0; ix < nx; ix += 1) {
+            const x = cx - hx + ((ix + 0.5) / nx) * sx;
+            emitPoint([x, y, testZ], [x, y, emitZ]);
+          }
+        }
+      }
+      // ±Y faces
+      for (const ySign of [1, -1] as const) {
+        const testY = cy + ySign * (hy - inset);
+        const emitY = cy + ySign * (hy + lift);
+        for (let iz = 0; iz < nz; iz += 1) {
+          const z = cz - hz + ((iz + 0.5) / nz) * sz;
+          for (let ix = 0; ix < nx; ix += 1) {
+            const x = cx - hx + ((ix + 0.5) / nx) * sx;
+            emitPoint([x, testY, z], [x, emitY, z]);
+          }
+        }
+      }
+      // ±X faces
+      for (const xSign of [1, -1] as const) {
+        const testX = cx + xSign * (hx - inset);
+        const emitX = cx + xSign * (hx + lift);
+        for (let iz = 0; iz < nz; iz += 1) {
+          const z = cz - hz + ((iz + 0.5) / nz) * sz;
+          for (let iy = 0; iy < ny; iy += 1) {
+            const y = cy - hy + ((iy + 0.5) / ny) * sy;
+            emitPoint([testX, y, z], [emitX, y, z]);
+          }
         }
       }
     }
+
+    // For curved/stepped 3D composites (Torus, Cone, Ellipsoid, non-Z Cylinder, stepped Union)
+    // where AABB outer faces miss most of the true surface, sample the triangulated surface directly.
+    const minAcceptableFaceCount = Math.min(8, Math.max(1, Math.floor(targetCount * 0.25)));
+    if (
+      points.length / 3 < minAcceptableFaceCount &&
+      (object.kind === "composite" ||
+        (object.kind === "cylinder" && !isZAlignedCylinder))
+    ) {
+      const fallback = sampleCompositeSurfaceVectorAnchors(object, targetCount, surfaceLift);
+      if (fallback && fallback.count > points.length / 3) {
+        return {
+          positionsWorld: fallback.positionsWorld,
+          pitch: fallback.pitch,
+          count: fallback.count,
+          renderOnTop: false,
+        };
+      }
+    }
+
     return {
       positionsWorld: new Float32Array(points),
-      pitch,
+      pitch: computedPitch,
       count: points.length / 3,
-      renderOnTop: false,
+      renderOnTop,
     };
   }
 
@@ -1650,26 +1878,6 @@ export function buildAuthoredMagnetizationVectorGridPoints(
     else nz -= 1;
   }
 
-  for (let iz = 0; iz < nz; iz += 1) {
-    const dz = -hz + ((iz + 0.5) / nz) * sz;
-    for (let iy = 0; iy < ny; iy += 1) {
-      const dy = -hy + ((iy + 0.5) / ny) * sy;
-      for (let ix = 0; ix < nx; ix += 1) {
-        const dx = -hx + ((ix + 0.5) / nx) * sx;
-        if (
-          (object.kind === "cylinder" || object.kind === "cylinder-cylinder-difference") &&
-          !insideCylinderCrossSection(dx, dy)
-        ) {
-          continue;
-        }
-        if (object.kind === "sphere" && !insideEllipsoid(dx, dy, dz)) {
-          continue;
-        }
-        points.push(cx + dx, cy + dy, cz + dz);
-      }
-    }
-  }
-
   const activeSpacings: number[] = [];
   if (nx > 1) activeSpacings.push(sx / nx);
   if (ny > 1) activeSpacings.push(sy / ny);
@@ -1679,11 +1887,47 @@ export function buildAuthoredMagnetizationVectorGridPoints(
     activeSpacings.length > 0 ? Math.min(...activeSpacings) : maxSpan,
   );
 
+  // When "full" volume sampling degenerates to a single sheet on an opaque thin
+  // film/disk (e.g. nz === 1), lift anchors just above the top face so arrows
+  // are not buried inside the opaque texture surface under depthTest: true.
+  const liftThinZ =
+    surfaceOpaque && nz === 1 && (nx > 1 || ny > 1 || sz <= 0.35 * Math.max(sx, sy));
+  const liftThinY =
+    surfaceOpaque && !liftThinZ && ny === 1 && (nx > 1 || nz > 1 || sy <= 0.35 * Math.max(sx, sz));
+  const liftThinX =
+    surfaceOpaque && !liftThinZ && !liftThinY && nx === 1 && (ny > 1 || nz > 1 || sx <= 0.35 * Math.max(sy, sz));
+  const sheetLift = liftThinZ || liftThinY || liftThinX ? surfaceLift(pitch) : 0;
+
+  for (let iz = 0; iz < nz; iz += 1) {
+    const dz = -hz + ((iz + 0.5) / nz) * sz;
+    const testZ = liftThinZ ? cz + hz - inset : cz + dz;
+    const emitZ = liftThinZ ? cz + hz + sheetLift : cz + dz;
+    for (let iy = 0; iy < ny; iy += 1) {
+      const dy = -hy + ((iy + 0.5) / ny) * sy;
+      const testY = liftThinY ? cy + hy - inset : cy + dy;
+      const emitY = liftThinY ? cy + hy + sheetLift : cy + dy;
+      for (let ix = 0; ix < nx; ix += 1) {
+        const dx = -hx + ((ix + 0.5) / nx) * sx;
+        const testX = liftThinX ? cx + hx - inset : cx + dx;
+        const emitX = liftThinX ? cx + hx + sheetLift : cx + dx;
+        if (!localContainment) {
+          if (isZAlignedCylinder && !insideCylinderCrossSection(dx, dy)) {
+            continue;
+          }
+          if (object.kind === "sphere" && !insideEllipsoid(dx, dy, dz)) {
+            continue;
+          }
+        }
+        emitPoint([testX, testY, testZ], [emitX, emitY, emitZ]);
+      }
+    }
+  }
+
   return {
     positionsWorld: new Float32Array(points),
     pitch,
     count: points.length / 3,
-    renderOnTop: true,
+    renderOnTop: false,
   };
 }
 
@@ -2123,10 +2367,18 @@ export function createViewport3DTextureTransformModel(scene: SceneResource | nul
       return asset.source_mode !== "field-file";
     },
     sampleSurfaceColors(options: Omit<SampleViewport3DSurfaceHslOptions, "scene">) {
-      return sampleViewport3DSurfaceHslColors({ ...options, scene });
+      try {
+        return sampleViewport3DSurfaceHslColors({ ...options, scene });
+      } catch {
+        return null;
+      }
     },
     sampleVectors(options: Omit<SampleAuthoredMagnetizationVectorsOptions, "scene">) {
-      return sampleAuthoredMagnetizationVectors({ ...options, scene });
+      try {
+        return sampleAuthoredMagnetizationVectors({ ...options, scene });
+      } catch {
+        return null;
+      }
     },
   };
 }
@@ -2665,8 +2917,145 @@ function TextureGizmoInteractiveHandles({
   );
 }
 
+/**
+ * Returns a primitive selector key describing which object currently has an
+ * active live Magnetic Texture draft/gizmo surface, without changing reference
+ * on every 60 FPS drag frame.
+ */
+export function getActiveLiveTextureSurfaceKey(): string | null {
+  const snapshot = getTextureDraftBridgeSnapshot();
+  if (
+    snapshot.activeBinding &&
+    snapshot.activeBinding.draft.sourceMode !== "field-file"
+  ) {
+    return snapshot.activeBinding.target.objectId;
+  }
+  return snapshot.gizmoEnabled ? "__selected__" : null;
+}
+
+/**
+ * Shared predicate deciding whether a primitive object renders a persistent
+ * authored magnetization HSL surface (outside live solver coverage and saved playback).
+ */
+export function isPersistentAuthoredTextureSurfaceEligible(
+  object: Viewport3DPrimitiveObject,
+  options: {
+    readonly activeBindingObjectId: string | null;
+    readonly fdmSurfaceObjectIds?: ReadonlySet<string>;
+    readonly getObjectSettings?: (object: Viewport3DPrimitiveObject) => VisualizationTargetSettings;
+    readonly liveFieldCoveredObjectIds?: ReadonlySet<string>;
+    readonly savedViewportActive?: boolean;
+    readonly textureTransformModel: Viewport3DTextureTransformModel;
+  },
+): boolean {
+  if (options.savedViewportActive || !options.getObjectSettings) return false;
+  if (object.objectId === options.activeBindingObjectId) return false;
+  if (!options.textureTransformModel.hasAuthoredMagnetization(object.objectId)) return false;
+  if (
+    options.liveFieldCoveredObjectIds?.has(object.objectId) ||
+    options.fdmSurfaceObjectIds?.has(object.objectId)
+  ) {
+    return false;
+  }
+  const s = options.getObjectSettings(object);
+  // Before a solver/mesh field exists, resolveViewport3DPrimitiveVisualizationSettings
+  // turns shaderVisible off and sets primitiveVisible = true so shaded geometry stays visible.
+  // Honor BOTH flags so the authored magnetization surface renders on shaded primitives
+  // while still hiding cleanly in Wireframe/Off modes or when Solid color is chosen.
+  const surfaceVisible = s.shaderVisible || Boolean(s.primitiveVisible);
+  if (!s.visible || !surfaceVisible || s.surfaceColorSource === "solid") return false;
+  // Hide authored m overlay when the user has selected a different quantity.
+  if (s.activeQuantityId && resolveCanonicalQuantityId(s.activeQuantityId) !== "m") return false;
+  return true;
+}
+
+/**
+ * Computes the set of objectIds whose surface is currently rendered by
+ * `Viewport3DTextureTransformLayer` (either live draft or persistent authored texture),
+ * allowing `PrimitiveObjectLayer` and `Array3DInstancedPreviewLayer` to suppress
+ * their coplanar base solid fill and prevent z-fighting.
+ */
+export function resolveActiveAuthoredTextureSurfaceObjectIds({
+  activeLiveSurfaceKey,
+  getObjectSettings,
+  liveFieldCoveredObjectIds,
+  primitiveModel,
+  savedViewportActive = false,
+  selectedObjectId,
+  textureTransformModel,
+}: {
+  readonly activeLiveSurfaceKey: string | null;
+  readonly getObjectSettings?: (object: Viewport3DPrimitiveObject) => VisualizationTargetSettings;
+  readonly liveFieldCoveredObjectIds?: ReadonlySet<string>;
+  readonly primitiveModel: Viewport3DPrimitiveRenderModel | null;
+  readonly savedViewportActive?: boolean;
+  readonly selectedObjectId: string | null;
+  readonly textureTransformModel: Viewport3DTextureTransformModel;
+}): ReadonlySet<string> {
+  const covered = new Set<string>();
+  if (!primitiveModel?.objects.length) return covered;
+
+  const activeBindingObjectId =
+    activeLiveSurfaceKey && activeLiveSurfaceKey !== "__selected__"
+      ? activeLiveSurfaceKey
+      : null;
+
+  if (activeBindingObjectId) {
+    const targetId = selectedObjectId ?? activeBindingObjectId;
+    if (
+      targetId === activeBindingObjectId &&
+      primitiveModel.objects.some((obj) => obj.objectId === activeBindingObjectId)
+    ) {
+      covered.add(activeBindingObjectId);
+    }
+  } else if (activeLiveSurfaceKey === "__selected__" && selectedObjectId) {
+    const selectedObj = primitiveModel.objects.find((obj) => obj.objectId === selectedObjectId);
+    if (selectedObj) {
+      const authored = textureTransformModel.getAuthoredDraft(selectedObj.objectId);
+      if (authored && authored.draft.sourceMode !== "field-file") {
+        covered.add(selectedObj.objectId);
+      }
+    }
+  }
+
+  for (const obj of primitiveModel.objects) {
+    if (
+      isPersistentAuthoredTextureSurfaceEligible(obj, {
+        activeBindingObjectId,
+        getObjectSettings,
+        liveFieldCoveredObjectIds,
+        savedViewportActive,
+        textureTransformModel,
+      })
+    ) {
+      covered.add(obj.objectId);
+    }
+  }
+
+  return covered;
+}
+
+function forwardTextureSurfacePick(
+  object: Viewport3DPrimitiveObject,
+  onSelectObject:
+    | ((object: Viewport3DPrimitiveObject, modifiers?: Viewport3DPickModifiers) => void)
+    | undefined,
+  event: ThreeEvent<PointerEvent>,
+): void {
+  if (!onSelectObject) return;
+  if (eventIntersectsRegionOverlay(event)) return;
+  event.stopPropagation();
+  const native = event.nativeEvent;
+  onSelectObject(object, {
+    ctrlKey: Boolean(native?.ctrlKey ?? event.ctrlKey),
+    metaKey: Boolean(native?.metaKey ?? event.metaKey),
+    shiftKey: Boolean(native?.shiftKey ?? event.shiftKey),
+  });
+}
+
 export function Viewport3DTextureTransformLayer({
   onGestureActiveChange,
+  onSelectObject,
   primitiveModel,
   selectedObjectId,
   textureTransformModel,
@@ -2677,6 +3066,10 @@ export function Viewport3DTextureTransformLayer({
   fdmSurfaceObjectIds,
 }: {
   onGestureActiveChange?: (active: boolean) => void;
+  onSelectObject?: (
+    object: Viewport3DPrimitiveObject,
+    modifiers?: Viewport3DPickModifiers,
+  ) => void;
   primitiveModel: Viewport3DPrimitiveRenderModel | null;
   selectedObjectId: string | null;
   textureTransformModel: Viewport3DTextureTransformModel;
@@ -2764,11 +3157,15 @@ export function Viewport3DTextureTransformLayer({
 
   const surfaceColors = useMemo(() => {
     if (!selectedObject || !subdividedMeshData || !showSurfacePreview) return null;
-    return textureTransformModel.sampleSurfaceColors({
-      objectId: selectedObject.objectId,
-      positionsWorld: subdividedMeshData.positionsWorld,
-      liveBinding: bindingMatchesObject ? bridge.activeBinding : null,
-    });
+    try {
+      return textureTransformModel.sampleSurfaceColors({
+        objectId: selectedObject.objectId,
+        positionsWorld: subdividedMeshData.positionsWorld,
+        liveBinding: bindingMatchesObject ? bridge.activeBinding : null,
+      });
+    } catch {
+      return null;
+    }
   }, [
     bindingMatchesObject,
     bridge.activeBinding,
@@ -2837,25 +3234,20 @@ export function Viewport3DTextureTransformLayer({
   const activeBindingObjectId = bridge.activeBinding?.target.objectId ?? null;
   const persistentOverlayObjects =
     !savedViewportActive && getObjectSettings && primitiveModel
-      ? primitiveModel.objects.filter((obj) => {
-          if (obj.objectId === activeBindingObjectId) return false;
-          if (!textureTransformModel.hasAuthoredMagnetization(obj.objectId)) return false;
-          // Suppress static authored overlay when live solver results are displayed.
-          if (liveFieldCoveredObjectIds?.has(obj.objectId) || fdmSurfaceObjectIds?.has(obj.objectId)) return false;
-          const s = getObjectSettings(obj);
-          // Before a solver/mesh field exists, resolveViewport3DPrimitiveVisualizationSettings
-          // turns shaderVisible off and sets primitiveVisible = true so shaded geometry stays visible.
-          // Honor BOTH flags so the authored magnetization surface renders on shaded primitives
-          // while still hiding cleanly in Wireframe/Off modes or when Solid color is chosen.
-          const surfaceVisible = s.shaderVisible || Boolean(s.primitiveVisible);
-          if (!s.visible || !surfaceVisible || s.surfaceColorSource === "solid") return false;
-          // Hide authored m overlay when the user has selected a different quantity.
-          if (s.activeQuantityId && resolveCanonicalQuantityId(s.activeQuantityId) !== "m") return false;
-          return true;
-        })
+      ? primitiveModel.objects.filter((obj) =>
+          isPersistentAuthoredTextureSurfaceEligible(obj, {
+            activeBindingObjectId,
+            fdmSurfaceObjectIds,
+            getObjectSettings,
+            liveFieldCoveredObjectIds,
+            savedViewportActive,
+            textureTransformModel,
+          }),
+        )
       : [];
 
-  // Persistent authored magnetization 3D vector arrows for objects not covered by live solver fields.
+  // Persistent authored magnetization 3D vector arrows for objects not covered by live solver fields,
+  // plus live analytical draft preview vectors (which always override stale solver vectors while editing).
   const persistentVectorObjects =
     !savedViewportActive && getObjectSettings && primitiveModel
       ? primitiveModel.objects.filter((obj) => {
@@ -2865,10 +3257,14 @@ export function Viewport3DTextureTransformLayer({
           if (!isLiveBound && !textureTransformModel.hasAuthoredMagnetization(obj.objectId)) {
             return false;
           }
-          if (liveFieldCoveredObjectIds?.has(obj.objectId)) return false;
+          if (!isLiveBound && liveFieldCoveredObjectIds?.has(obj.objectId)) return false;
           const s = getObjectSettings(obj);
           if (!s.visible || !s.vectorsVisible) return false;
-          if (s.activeQuantityId && resolveCanonicalQuantityId(s.activeQuantityId) !== "m") {
+          if (
+            !isLiveBound &&
+            s.activeQuantityId &&
+            resolveCanonicalQuantityId(s.activeQuantityId) !== "m"
+          ) {
             return false;
           }
           return true;
@@ -2883,12 +3279,13 @@ export function Viewport3DTextureTransformLayer({
       <>
         {persistentOverlayObjects.map((obj) => {
           const opacity = getObjectSettings
-            ? Math.max(0, Math.min(1, (getObjectSettings(obj).surfaceOpacityPercent ?? 92) / 100))
-            : 0.92;
+            ? Math.max(0, Math.min(1, (getObjectSettings(obj).surfaceOpacityPercent ?? 100) / 100))
+            : 1;
           return (
             <AuthoredMagnetizationPersistentSurface
               key={obj.objectId}
               object={obj}
+              onSelectObject={onSelectObject}
               opacity={opacity}
               textureTransformModel={textureTransformModel}
               tracker={tracker}
@@ -2914,17 +3311,22 @@ export function Viewport3DTextureTransformLayer({
 
   const { draft, bounds } = effectiveDraftAndBounds;
   const pose = resolveTextureGizmoWorldPose(draft, bounds);
+  const liveSurfaceOpacity = getObjectSettings
+    ? Math.max(0, Math.min(1, (getObjectSettings(selectedObject).surfaceOpacityPercent ?? 100) / 100))
+    : 0.92;
+  const liveSurfaceTransparent = liveSurfaceOpacity < 0.99;
 
   return (
     <>
       {persistentOverlayObjects.map((obj) => {
         const opacity = getObjectSettings
-          ? Math.max(0, Math.min(1, (getObjectSettings(obj).surfaceOpacityPercent ?? 92) / 100))
-          : 0.92;
+          ? Math.max(0, Math.min(1, (getObjectSettings(obj).surfaceOpacityPercent ?? 100) / 100))
+          : 1;
         return (
           <AuthoredMagnetizationPersistentSurface
             key={obj.objectId}
             object={obj}
+            onSelectObject={onSelectObject}
             opacity={opacity}
             textureTransformModel={textureTransformModel}
             tracker={tracker}
@@ -2951,19 +3353,27 @@ export function Viewport3DTextureTransformLayer({
         {surfaceGeometry ? (
           <mesh
             geometry={surfaceGeometry}
-            renderOrder={RENDER_POLICIES.selectionShell.renderOrder - 1}
+            onPointerDown={(event) =>
+              forwardTextureSurfacePick(selectedObject, onSelectObject, event)
+            }
+            renderOrder={
+              liveSurfaceTransparent
+                ? RENDER_POLICIES.contextSurface.renderOrder
+                : RENDER_POLICIES.solidSurface.renderOrder
+            }
             userData={{
               gizmo: "texture-surface-preview",
               objectId: selectedObject.objectId,
             }}
           >
             <meshBasicMaterial
-              opacity={0.92}
+              depthWrite={!liveSurfaceTransparent}
+              opacity={liveSurfaceOpacity}
               polygonOffset
-              polygonOffsetFactor={-1}
-              polygonOffsetUnits={-1}
+              polygonOffsetFactor={0.5}
+              polygonOffsetUnits={0.5}
               toneMapped={false}
-              transparent
+              transparent={liveSurfaceTransparent}
               vertexColors
             />
           </mesh>
@@ -3017,11 +3427,16 @@ export function Viewport3DTextureTransformLayer({
  */
 function AuthoredMagnetizationPersistentSurface({
   object,
-  opacity = 0.92,
+  onSelectObject,
+  opacity = 1,
   textureTransformModel,
   tracker,
 }: {
   object: Viewport3DPrimitiveObject;
+  onSelectObject?: (
+    object: Viewport3DPrimitiveObject,
+    modifiers?: Viewport3DPickModifiers,
+  ) => void;
   opacity?: number;
   textureTransformModel: Viewport3DTextureTransformModel;
   tracker?: Viewport3DResourceTracker;
@@ -3040,11 +3455,15 @@ function AuthoredMagnetizationPersistentSurface({
 
   const surfaceColors = useMemo(() => {
     if (!draftAndBounds || !subdividedMeshData) return null;
-    return textureTransformModel.sampleSurfaceColors({
-      objectId: object.objectId,
-      positionsWorld: subdividedMeshData.positionsWorld,
-      liveBinding: null,
-    });
+    try {
+      return textureTransformModel.sampleSurfaceColors({
+        objectId: object.objectId,
+        positionsWorld: subdividedMeshData.positionsWorld,
+        liveBinding: null,
+      });
+    } catch {
+      return null;
+    }
   }, [draftAndBounds, object.objectId, subdividedMeshData, textureTransformModel]);
 
   const surfaceGeometry = useMemo(() => {
@@ -3070,24 +3489,32 @@ function AuthoredMagnetizationPersistentSurface({
   }, [invalidate, surfaceGeometry, tracker]);
 
   if (!surfaceGeometry) return null;
+  const isTransparent = opacity < 0.99;
 
   return (
     <mesh
       geometry={surfaceGeometry}
-      renderOrder={RENDER_POLICIES.solidSurface.renderOrder + 1}
+      onPointerDown={(event) =>
+        forwardTextureSurfacePick(object, onSelectObject, event)
+      }
+      renderOrder={
+        isTransparent
+          ? RENDER_POLICIES.contextSurface.renderOrder
+          : RENDER_POLICIES.solidSurface.renderOrder
+      }
       userData={{
         gizmo: "texture-surface-preview",
         objectId: object.objectId,
       }}
     >
       <meshBasicMaterial
-        depthWrite={false}
+        depthWrite={!isTransparent}
         opacity={opacity}
         polygonOffset
-        polygonOffsetFactor={-1}
-        polygonOffsetUnits={-1}
+        polygonOffsetFactor={0.5}
+        polygonOffsetUnits={0.5}
         toneMapped={false}
-        transparent
+        transparent={isTransparent}
         vertexColors
       />
     </mesh>
@@ -3207,6 +3634,11 @@ function AuthoredMagnetizationPersistentVectors({
   const headRef = useRef<InstancedMesh>(null);
   const glyphPolicy = RENDER_POLICIES.glyphs;
 
+  const hasLiveBinding = Boolean(liveBinding);
+  const surfaceOpaque =
+    (settings.shaderVisible || Boolean(settings.primitiveVisible) || hasLiveBinding) &&
+    (settings.surfaceOpacityPercent ?? 100) >= 99;
+
   const grid = useMemo(
     () =>
       buildAuthoredMagnetizationVectorGridPoints(object, {
@@ -3214,6 +3646,7 @@ function AuthoredMagnetizationPersistentVectors({
         geometryScope: settings.geometryScope,
         surfaceOffsetEnabled: settings.vectorSurfaceOffsetEnabled,
         surfaceOffsetScale: settings.vectorSurfaceOffsetScale,
+        surfaceOpaque,
       }),
     [
       object,
@@ -3221,16 +3654,23 @@ function AuthoredMagnetizationPersistentVectors({
       settings.vectorBudget,
       settings.vectorSurfaceOffsetEnabled,
       settings.vectorSurfaceOffsetScale,
+      surfaceOpaque,
     ],
   );
 
   const sampledVectors = useMemo(() => {
     if (grid.count <= 0) return null;
-    return textureTransformModel.sampleVectors?.({
-      objectId: object.objectId,
-      positionsWorld: grid.positionsWorld,
-      liveBinding,
-    }) ?? null;
+    try {
+      return (
+        textureTransformModel.sampleVectors?.({
+          objectId: object.objectId,
+          positionsWorld: grid.positionsWorld,
+          liveBinding,
+        }) ?? null
+      );
+    } catch {
+      return null;
+    }
   }, [grid.count, grid.positionsWorld, liveBinding, object.objectId, textureTransformModel]);
 
   const glyphData = useMemo(() => {
@@ -3363,7 +3803,7 @@ function AuthoredMagnetizationPersistentVectors({
     };
   }, [capacity, isRendered]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     syncAuthoredVectorMaterial(material, {
       opacity,
       transparent: glyphPolicy.transparent || opacity < 0.99,
@@ -3382,7 +3822,7 @@ function AuthoredMagnetizationPersistentVectors({
     tracker,
   ]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     const shaft = shaftRef.current;
     const head = headRef.current;
     if (!isRendered || !glyphData || !shaft || !head) return;
@@ -3414,7 +3854,7 @@ function AuthoredMagnetizationPersistentVectors({
     <>
       <instancedMesh
         args={[shaftGeometry, material, capacity]}
-        count={0}
+        count={glyphCount}
         frustumCulled={false}
         key={`authored-vector-shaft-${capacity}`}
         material-depthTest={depthPolicy.depthTest}
@@ -3428,7 +3868,7 @@ function AuthoredMagnetizationPersistentVectors({
       />
       <instancedMesh
         args={[headGeometry, material, capacity]}
-        count={0}
+        count={glyphCount}
         frustumCulled={false}
         key={`authored-vector-head-${capacity}`}
         material-depthTest={depthPolicy.depthTest}

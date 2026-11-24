@@ -390,7 +390,8 @@ export function resolveVisualizationVectorCapacityDescriptor({
       ? source.inactiveCellCount
       : target.kind === "fdm-domain"
         ? source.activeCellCount
-        : target.kind === "fdm-native-layer"
+        : target.kind === "fdm-native-layer" ||
+            (target.kind === "object" && source.kind === "fdm-native-layer")
           ? source.activeCellCount
         : 0;
   const canResolveSurface = Boolean(selected);
