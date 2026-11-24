@@ -84,7 +84,7 @@ mod live_command_journal;
 mod live_compute_request;
 mod live_execution_binding;
 mod live_geometry_mesh_build;
-mod live_prepared_fdm_fields;
+mod live_prepared_fields;
 mod accepted_field_materialization;
 mod accepted_field_materialization_worker;
 mod live_accepted_continuation;

@@ -1,9 +1,9 @@
-//! Bounded observation of the authored initial state on the published FDM grid.
+//! Bounded observation of the authored initial state on the published grid or mesh.
 
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 
-use fullmag_ir::{BackendPlanIR, ExecutionPlanIR, ProblemIR};
+use fullmag_ir::{BackendPlanIR, ExecutionPlanIR, ExecutionPrecision, ProblemIR};
 use fullmag_runner::{
     AcceptedMaterializationLane, PreparedMaterializationBatch, PreparedMaterializationRequest,
     PreparedStateIdentity,
@@ -21,8 +21,14 @@ use crate::types::{
     SessionStateResponse,
 };
 
+// Retain the existing private command-line spelling for installed callers.
 pub(crate) const WORKER_ARGUMENT: &str = "--evaluate-prepared-fdm-fields";
 const MAX_CELLS: u64 = 65_536;
+const MAX_FEM_NODES: usize = 65_536;
+const MAX_FEM_ELEMENTS: usize = 262_144;
+const FEM_PREPARATION_REQUIRED: &str =
+    "Build the current shared-domain FEM mesh before computing fields.";
+const FEM_ORDER_REQUIRED: &str = "Prepared Compute Fields requires a first-order FEM mesh.";
 const MAX_MESSAGE_BYTES: u64 = 64 * 1024 * 1024;
 const WORKER_TIMEOUT: Duration = Duration::from_secs(90);
 static EVALUATOR_SLOT: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(1);
@@ -39,6 +45,147 @@ fn validate_grid(cells: [u32; 3]) -> Result<(), &'static str> {
         return Err("Prepared Compute Fields supports at most 65,536 FDM cells.");
     }
     Ok(())
+}
+
+fn validate_fem_size(nodes: usize, elements: usize) -> Result<(), &'static str> {
+    if nodes == 0 || elements == 0 {
+        return Err(FEM_PREPARATION_REQUIRED);
+    }
+    if nodes > MAX_FEM_NODES || elements > MAX_FEM_ELEMENTS {
+        return Err(
+            "Prepared Compute Fields supports at most 65,536 FEM nodes and 262,144 elements.",
+        );
+    }
+    Ok(())
+}
+
+fn uses_geometry_only_mesh(snapshot: &SessionStateResponse) -> bool {
+    snapshot.mesh_workspace.as_ref().is_some_and(|workspace| {
+        workspace
+            .pointer("/mesh_summary/source_kind")
+            .and_then(serde_json::Value::as_str)
+            == Some("geometry_only_shared_domain")
+    })
+}
+
+fn pending_apply_covers_scene(
+    snapshot: &SessionStateResponse,
+    scene: &fullmag_authoring::SceneDocument,
+) -> bool {
+    let Some(apply) = snapshot.magnetization_applies.pending.as_ref() else {
+        return true;
+    };
+    // An object-scoped overlay may depend on a prior field. A full authored
+    // texture reset can be materialized directly on the new geometry.
+    fullmag_authoring::scene_solve_objects(scene).all(|object| {
+        apply
+            .receipt
+            .scopes
+            .iter()
+            .any(|scope| scope.object_id == object.id && scope.region_id.is_none())
+    })
+}
+
+fn plan_on_geometry_mesh(
+    repo: &std::path::Path,
+    workspace: &std::path::Path,
+    store_root: Option<&std::path::Path>,
+    context: &CurrentLiveRequestContext,
+    snapshot: &SessionStateResponse,
+    scene: &fullmag_authoring::SceneDocument,
+) -> Result<PublishedDomainPlan, ApiError> {
+    use crate::live_geometry_mesh_build as geometry;
+    let unavailable = || ApiError::conflict(FEM_PREPARATION_REQUIRED);
+    let reference =
+        geometry::geometry_reuse_reference(snapshot, context).ok_or_else(unavailable)?;
+    let store = fullmag_session::SessionStore::open_existing(store_root.ok_or_else(unavailable)?)
+        .map_err(|error| ApiError::internal(format!("Open FEM mesh store: {error}")))?;
+    let mesh_asset =
+        geometry::load_geometry_reuse_asset(&store, scene, &reference)?.ok_or_else(unavailable)?;
+    if !geometry::can_qualify_live_geometry_reuse(scene, &mesh_asset) {
+        return Err(ApiError::unprocessable(
+            "This FEM geometry is unavailable for prepared Compute Fields.",
+        ));
+    }
+    let execution = fullmag_application::RequestedExecution {
+        backend: scene.study.requested_backend.clone(),
+        device: scene.study.requested_device.clone(),
+        precision: scene.study.requested_precision.clone(),
+        mode: scene.study.requested_mode.clone(),
+        minimum_resources: None,
+    };
+    let source = std::path::Path::new(&snapshot.session.script_path);
+    let asset_root = source.is_absolute().then(|| source.parent()).flatten();
+    let mut problem = crate::script::scene_document_to_preparation_problem_ir_with_asset_root(
+        repo, workspace, asset_root, scene, &execution,
+    )?;
+    geometry::bind_geometry_for_prepared_fields(
+        &mut problem,
+        scene,
+        mesh_asset,
+        &reference.provenance(),
+    )?;
+    let problem = fullmag_application::bind_declared_execution(
+        &problem,
+        scene.study.execution_layers.clone(),
+    )
+    .map_err(|error| ApiError::unprocessable(format!("Bind authored FEM field plan: {error}")))?;
+    let plan = fullmag_plan::plan(&problem)
+        .map_err(|error| ApiError::unprocessable(format!("Plan authored FEM fields: {error}")))?;
+    let BackendPlanIR::Fem(fem) = &plan.backend_plan else {
+        return Err(ApiError::conflict(
+            "The published mesh did not resolve a FEM field plan.",
+        ));
+    };
+    let plan_topology =
+        fullmag_runner::fem_mesh_topology_fingerprint(&fullmag_runner::FemMeshPayload::from(fem));
+    if snapshot
+        .fem_mesh
+        .as_ref()
+        .is_none_or(|mesh| mesh.topology_fingerprint() != plan_topology)
+    {
+        return Err(ApiError::conflict(
+            "The FEM field plan differs from the published mesh topology.",
+        ));
+    }
+    let layout = fullmag_runner::study_magnetization_layout_for_plan(&plan)
+        .map_err(|error| ApiError::unprocessable(error.message))?;
+    Ok(PublishedDomainPlan::Ready {
+        problem,
+        plan,
+        layout,
+    })
+}
+
+fn prepared_plan_input(
+    plan: &ExecutionPlanIR,
+) -> Result<(AcceptedMaterializationLane, &[[f64; 3]]), &'static str> {
+    match &plan.backend_plan {
+        BackendPlanIR::Fdm(fdm) => {
+            validate_grid(fdm.grid.cells)?;
+            if fdm.resolved_periodic_images.is_some() {
+                return Err("Prepared Compute Fields does not support truncated periodic images.");
+            }
+            Ok((
+                AcceptedMaterializationLane::FdmCpu,
+                &fdm.initial_magnetization,
+            ))
+        }
+        BackendPlanIR::Fem(fem) => {
+            if fem.precision != ExecutionPrecision::Double {
+                return Err("Prepared Compute Fields requires double precision for FEM.");
+            }
+            if fem.fe_order != 1 {
+                return Err(FEM_ORDER_REQUIRED);
+            }
+            validate_fem_size(fem.mesh.nodes.len(), fem.mesh.cell_count())?;
+            Ok((
+                AcceptedMaterializationLane::FemCpu,
+                &fem.initial_magnetization,
+            ))
+        }
+        _ => Err("Prepared Compute Fields requires a single FDM grid or a first-order FEM mesh."),
+    }
 }
 
 // An edited scene can retire its held RunIntent after publishing a qualified M0.
@@ -81,9 +228,9 @@ pub(crate) fn disabled_reason(snapshot: &SessionStateResponse) -> Result<(), &'s
             "awaiting_command" | "waiting_for_compute" | "waiting_for_solve"
         ) || retired_authoring_input_is_current(snapshot))
             || crate::router_v2::handlers::sessions::status::accepted_solver_steps(
-            snapshot,
-            &run.run_id,
-        ) != 0
+                snapshot,
+                &run.run_id,
+            ) != 0
     }) {
         return Err("Prepared Compute Fields requires an idle, unstarted Study.");
     }
@@ -91,8 +238,10 @@ pub(crate) fn disabled_reason(snapshot: &SessionStateResponse) -> Result<(), &'s
         .scene_document
         .as_ref()
         .ok_or("Commit a scene before computing fields.")?;
-    if scene.study.requested_backend != "fdm" || scene.study.requested_device != "cpu" {
-        return Err("Prepared Compute Fields requires FDM with CPU explicitly selected.");
+    if !matches!(scene.study.requested_backend.as_str(), "fdm" | "fem")
+        || scene.study.requested_device != "cpu"
+    {
+        return Err("Prepared Compute Fields requires FDM or FEM with CPU explicitly selected.");
     }
     if fullmag_authoring::scene_solve_objects(scene)
         .next()
@@ -103,14 +252,70 @@ pub(crate) fn disabled_reason(snapshot: &SessionStateResponse) -> Result<(), &'s
     if fullmag_authoring::scene_document_has_unresolved_solve_prerequisites(scene) {
         return Err("Assign material and initial magnetization to every magnetic object.");
     }
-    if snapshot.magnetization_applies.pending.is_some() {
+    let geometry_only = scene.study.requested_backend == "fem" && uses_geometry_only_mesh(snapshot);
+    if snapshot.magnetization_applies.pending.is_some()
+        && (!geometry_only || !pending_apply_covers_scene(snapshot, scene))
+    {
         return Err("Initial magnetization preparation is pending.");
     }
     let layout = snapshot
         .metadata
         .as_ref()
-        .and_then(|metadata| metadata.get("artifact_layout"))
-        .ok_or("Build the current FDM grid before computing fields.")?;
+        .and_then(|metadata| metadata.get("artifact_layout"));
+    if scene.study.requested_backend == "fem" {
+        if !cfg!(feature = "fem-native") {
+            return Err("Prepared Compute Fields requires the native FEM backend.");
+        }
+        if scene.study.requested_precision != "double" {
+            return Err("Prepared Compute Fields requires double precision for FEM.");
+        }
+        if geometry_only {
+            let mesh = snapshot.fem_mesh.as_ref().ok_or(FEM_PREPARATION_REQUIRED)?;
+            validate_fem_size(mesh.nodes.len(), mesh.cell_count())?;
+            if snapshot
+                .mesh_workspace
+                .as_ref()
+                .and_then(|workspace| {
+                    workspace.get(crate::live_geometry_mesh_build::GEOMETRY_REUSE_KEY)
+                })
+                .is_none()
+            {
+                return Err(FEM_PREPARATION_REQUIRED);
+            }
+            if crate::live_geometry_mesh_build::bound_geometry_mesh_is_current(snapshot, scene)
+                != Some(true)
+            {
+                return Err(FEM_PREPARATION_REQUIRED);
+            }
+            if mesh
+                .cells
+                .types
+                .iter()
+                .any(|kind| *kind != fullmag_ir::FemCellTypeIR::Tet4)
+            {
+                return Err(FEM_ORDER_REQUIRED);
+            }
+            return Ok(());
+        }
+        let layout = layout
+            .filter(|layout| layout["backend"] == "fem")
+            .ok_or(FEM_PREPARATION_REQUIRED)?;
+        let mesh = snapshot.fem_mesh.as_ref().ok_or(FEM_PREPARATION_REQUIRED)?;
+        let accepted_workspace = snapshot.mesh_workspace.as_ref().is_some_and(|workspace| {
+            workspace["accepted_step_id"].as_str().is_some()
+                && snapshot.run.as_ref().is_some_and(|run| {
+                    workspace["accepted_run_id"].as_str() == Some(run.run_id.as_str())
+                })
+        });
+        if !accepted_workspace {
+            return Err(FEM_PREPARATION_REQUIRED);
+        }
+        if layout["fe_order"].as_u64() != Some(1) {
+            return Err(FEM_ORDER_REQUIRED);
+        }
+        return validate_fem_size(mesh.nodes.len(), mesh.cell_count());
+    }
+    let layout = layout.ok_or("Build the current FDM grid before computing fields.")?;
     if layout["backend"] != "fdm" {
         return Err("Prepared Compute Fields requires a single FDM grid.");
     }
@@ -149,9 +354,6 @@ struct EvaluationInput {
 }
 
 fn evaluate(input: EvaluationInput) -> Result<PreparedMaterializationBatch, String> {
-    let BackendPlanIR::Fdm(plan) = &input.plan.backend_plan else {
-        return Err("Prepared Compute Fields requires a single FDM grid.".into());
-    };
     if input
         .problem
         .problem_meta
@@ -163,10 +365,7 @@ fn evaluate(input: EvaluationInput) -> Result<PreparedMaterializationBatch, Stri
     {
         return Err("Prepared Compute Fields requires an explicit CPU request.".into());
     }
-    validate_grid(plan.grid.cells)?;
-    if plan.resolved_periodic_images.is_some() {
-        return Err("Prepared Compute Fields does not support truncated periodic images.".into());
-    }
+    let (lane, values) = prepared_plan_input(&input.plan)?;
     let layout = fullmag_runner::study_magnetization_layout_for_plan(&input.plan)
         .map_err(|error| error.to_string())?;
     let mut batch =
@@ -174,8 +373,8 @@ fn evaluate(input: EvaluationInput) -> Result<PreparedMaterializationBatch, Stri
             plan: &input.plan,
             problem: &input.problem,
             identity: &input.identity,
-            lane: AcceptedMaterializationLane::FdmCpu,
-            values: &plan.initial_magnetization,
+            lane,
+            values,
             layout: &layout,
             requested_quantity_ids: &[],
         })?;
@@ -259,26 +458,43 @@ pub(crate) async fn evaluate_and_publish(
     let store = state.submit_store_root.clone();
     let worker_context = context.clone();
     let id = command_id.to_owned();
-    let (identity, magnetization, input) = tokio::task::spawn_blocking(move || {
+    let (identity, lane, magnetization, input) = tokio::task::spawn_blocking(move || {
         let scene = snapshot
             .scene_document
             .as_ref()
             .ok_or_else(|| ApiError::conflict("The input scene is no longer available."))?;
+        let domain_plan =
+            if scene.study.requested_backend == "fem" && uses_geometry_only_mesh(&snapshot) {
+                plan_on_geometry_mesh(
+                    &repo,
+                    &workspace,
+                    store.as_deref(),
+                    &worker_context,
+                    &snapshot,
+                    scene,
+                )?
+            } else {
+                plan_on_published_domain(
+                    &repo,
+                    &workspace,
+                    store.as_deref(),
+                    &worker_context,
+                    &snapshot,
+                    scene,
+                )?
+            };
         let PublishedDomainPlan::Ready {
             problem,
             mut plan,
             layout,
-        } = plan_on_published_domain(
-            &repo,
-            &workspace,
-            store.as_deref(),
-            &worker_context,
-            &snapshot,
-            scene,
-        )?
+        } = domain_plan
         else {
             return Err(ApiError::conflict(
-                "Build the current FDM grid before computing fields.",
+                if scene.study.requested_backend == "fem" {
+                    FEM_PREPARATION_REQUIRED
+                } else {
+                    "Build the current FDM grid before computing fields."
+                },
             ));
         };
         let existing = crate::live_authored_initial_state::current_publication(&snapshot);
@@ -297,18 +513,8 @@ pub(crate) async fn evaluate_and_publish(
                 ));
             }
         }
-        let BackendPlanIR::Fdm(fdm) = &plan.backend_plan else {
-            return Err(ApiError::unprocessable(
-                "Prepared Compute Fields requires a single FDM grid.",
-            ));
-        };
-        validate_grid(fdm.grid.cells).map_err(ApiError::unprocessable)?;
-        let flattened = fdm
-            .initial_magnetization
-            .iter()
-            .flatten()
-            .copied()
-            .collect::<Vec<_>>();
+        let (lane, values) = prepared_plan_input(&plan).map_err(ApiError::unprocessable)?;
+        let flattened = values.iter().flatten().copied().collect::<Vec<_>>();
         let magnetization_values_sha256 = fullmag_runner::live_preview_values_sha256(&flattened);
         if existing
             .and_then(|publication| publication.frame.authored_initial_state.as_ref())
@@ -347,7 +553,7 @@ pub(crate) async fn evaluate_and_publish(
                 "Prepared field input exceeds the byte budget.",
             ));
         }
-        Ok::<_, ApiError>((identity, magnetization, input))
+        Ok::<_, ApiError>((identity, lane, magnetization, input))
     })
     .await
     .map_err(|error| ApiError::internal(error.to_string()))??;
@@ -360,7 +566,7 @@ pub(crate) async fn evaluate_and_publish(
         })?;
         let batch = batch.map_err(ApiError::unprocessable)?;
         if batch.identity != identity
-            || batch.lane != AcceptedMaterializationLane::FdmCpu
+            || batch.lane != lane
             || batch.clock.accepted_step != 0
             || batch.fields.is_empty()
         {
@@ -409,7 +615,7 @@ pub(crate) async fn evaluate_and_publish(
     disabled_reason(&latest).map_err(ApiError::conflict)?;
     if InputFence::capture(&latest).as_ref() != Some(&fence) {
         return Err(ApiError::conflict(
-            "The scene, grid or magnetization changed while computing fields.",
+            "The scene, spatial domain or magnetization changed while computing fields.",
         ));
     }
     let mut candidate = latest;
@@ -473,6 +679,14 @@ pub(crate) async fn evaluate_and_publish(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn fem_worker_bounds_both_mesh_dimensions() {
+        assert_eq!(validate_fem_size(MAX_FEM_NODES, MAX_FEM_ELEMENTS), Ok(()));
+        assert_eq!(validate_fem_size(0, 1), Err(FEM_PREPARATION_REQUIRED));
+        assert!(validate_fem_size(MAX_FEM_NODES + 1, MAX_FEM_ELEMENTS).is_err());
+        assert!(validate_fem_size(MAX_FEM_NODES, MAX_FEM_ELEMENTS + 1).is_err());
+    }
 
     #[test]
     fn fdm_demag_and_effective_field_are_observed_at_step_zero() {
@@ -558,17 +772,19 @@ mod tests {
         snapshot.session.status = "awaiting_command".into();
         snapshot.run.as_mut().unwrap().status = "cancelled".into();
         assert!(!uses_prepared_field_input(&snapshot));
-        snapshot.authored_initial_state = Some(crate::live_authored_initial_state::AuthoredInitialStatePublication::new(
-            &snapshot,
-            crate::schemas::common::AuthoredInitialStateOrigin {
-                preparation_id: "prepared-edit".into(),
-                plan_fingerprint: "plan".into(),
-                scene_revision: 2,
-                initial_state_revision: 1,
-                values_sha256: "state".into(),
-            },
-            0.0,
-        ));
+        snapshot.authored_initial_state = Some(
+            crate::live_authored_initial_state::AuthoredInitialStatePublication::new(
+                &snapshot,
+                crate::schemas::common::AuthoredInitialStateOrigin {
+                    preparation_id: "prepared-edit".into(),
+                    plan_fingerprint: "plan".into(),
+                    scene_revision: 2,
+                    initial_state_revision: 1,
+                    values_sha256: "state".into(),
+                },
+                0.0,
+            ),
+        );
         assert!(!uses_prepared_field_input(&snapshot));
         snapshot.preclaim_cancelled_run_id = Some("held-run".into());
         assert!(uses_prepared_field_input(&snapshot));

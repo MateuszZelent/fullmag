@@ -2336,9 +2336,9 @@ fn runtime_command_disabled_reason(
                     return Some("A runtime command is already active.".into());
                 }
                 if kind == "compute_fields"
-                    && crate::live_prepared_fdm_fields::uses_prepared_field_input(snapshot)
+                    && crate::live_prepared_fields::uses_prepared_field_input(snapshot)
                 {
-                    return crate::live_prepared_fdm_fields::disabled_reason(snapshot)
+                    return crate::live_prepared_fields::disabled_reason(snapshot)
                         .err().map(str::to_owned);
                 }
                 if !snapshot
