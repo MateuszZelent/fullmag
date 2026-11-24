@@ -5,6 +5,7 @@ import math
 from pathlib import Path
 import shutil
 from typing import Any
+import uuid
 
 import numpy as np
 
@@ -398,6 +399,80 @@ def export_geometry_to_stl(
     return target
 
 
+def _is_missing_boolean_backend_error(exc: Exception) -> bool:
+    """Return True when trimesh rejected a CSG boolean due to missing manifold3d/blender."""
+    if isinstance(exc, ImportError):
+        return True
+    if isinstance(exc, ValueError):
+        message = str(exc).lower()
+        return (
+            "boolean backend" in message
+            or "manifold3d" in message
+            or "blender" in message
+        )
+    return False
+
+
+def _gmsh_boolean_surface_to_trimesh(
+    geometry: Geometry,
+    trimesh: Any,
+    *,
+    surface_maximum_element_size: float | None = None,
+) -> Any:
+    """Fallback CSG boolean surface triangulation via Gmsh OCC when trimesh has no boolean backend."""
+    from ._gmsh_generators import _add_geometry_to_occ
+    from ._gmsh_infra import _configure_gmsh_threads, _import_gmsh
+
+    scale = 1e6  # SI m -> um for OCC numerical robustness
+    gmsh = _import_gmsh()
+    was_initialized = bool(gmsh.isInitialized())
+    prev_model = gmsh.model.getCurrent() if was_initialized else None
+    if not was_initialized:
+        gmsh.initialize()
+        gmsh.option.setNumber("General.Terminal", 0)
+
+    model_name = f"fullmag_surface_bool_{uuid.uuid4().hex[:8]}"
+    try:
+        _configure_gmsh_threads(gmsh)
+        gmsh.model.add(model_name)
+        _add_geometry_to_occ(gmsh, geometry, scale=scale)
+        gmsh.model.occ.synchronize()
+
+        xmin, ymin, zmin, xmax, ymax, zmax = gmsh.model.getBoundingBox(-1, -1)
+        span = max(xmax - xmin, ymax - ymin, zmax - zmin, 1e-6)
+        lc = span / 16.0
+        if surface_maximum_element_size is not None and surface_maximum_element_size > 0.0:
+            lc = min(lc, float(surface_maximum_element_size) * scale)
+        lc = max(min(lc, span / 8.0), span / 120.0)
+        gmsh.option.setNumber("Mesh.CharacteristicLengthMin", lc * 0.5)
+        gmsh.option.setNumber("Mesh.CharacteristicLengthMax", lc)
+        gmsh.option.setNumber("Mesh.MeshSizeFromCurvature", 16)
+
+        gmsh.model.mesh.generate(2)
+        node_tags, coords, _ = gmsh.model.mesh.getNodes()
+        _elem_tags, elem_node_tags = gmsh.model.mesh.getElementsByType(2)
+        if len(elem_node_tags) == 0:
+            raise ValueError("Gmsh OCC boolean surface fallback produced no triangles.")
+
+        raw_nodes = np.asarray(coords, dtype=np.float64).reshape(-1, 3) / scale
+        tag_to_index = {int(tag): idx for idx, tag in enumerate(node_tags)}
+        tri_tags = np.asarray(elem_node_tags, dtype=np.int64).reshape(-1, 3)
+        faces = np.vectorize(tag_to_index.__getitem__, otypes=[np.int64])(tri_tags)
+        used_indices, inverse = np.unique(faces.reshape(-1), return_inverse=True)
+        vertices = raw_nodes[used_indices]
+        remapped_faces = inverse.reshape(-1, 3)
+        return trimesh.Trimesh(vertices=vertices, faces=remapped_faces, process=True)
+    finally:
+        if was_initialized:
+            try:
+                gmsh.model.remove()
+            finally:
+                if prev_model:
+                    gmsh.model.setCurrent(prev_model)
+        else:
+            gmsh.finalize()
+
+
 def _geometry_to_trimesh(
     geometry: Geometry,
     trimesh: Any,
@@ -499,7 +574,16 @@ def _geometry_to_trimesh(
             through_thickness_element_ratio=through_thickness_element_ratio,
             through_thickness_symmetric=through_thickness_symmetric,
         )
-        return base.difference(tool)
+        try:
+            return base.difference(tool)
+        except Exception as exc:
+            if not _is_missing_boolean_backend_error(exc):
+                raise
+            return _gmsh_boolean_surface_to_trimesh(
+                geometry,
+                trimesh,
+                surface_maximum_element_size=surface_maximum_element_size,
+            )
     if isinstance(geometry, Union):
         a = _geometry_to_trimesh(
             geometry.a,
@@ -523,8 +607,17 @@ def _geometry_to_trimesh(
         )
         try:
             return a.union(b)
-        except ImportError:
-            return trimesh.util.concatenate([a, b])
+        except Exception as exc:
+            if not _is_missing_boolean_backend_error(exc):
+                raise
+            try:
+                return _gmsh_boolean_surface_to_trimesh(
+                    geometry,
+                    trimesh,
+                    surface_maximum_element_size=surface_maximum_element_size,
+                )
+            except Exception:
+                return trimesh.util.concatenate([a, b])
     if isinstance(geometry, Intersection):
         a = _geometry_to_trimesh(
             geometry.a,
@@ -546,7 +639,16 @@ def _geometry_to_trimesh(
             through_thickness_element_ratio=through_thickness_element_ratio,
             through_thickness_symmetric=through_thickness_symmetric,
         )
-        return a.intersection(b)
+        try:
+            return a.intersection(b)
+        except Exception as exc:
+            if not _is_missing_boolean_backend_error(exc):
+                raise
+            return _gmsh_boolean_surface_to_trimesh(
+                geometry,
+                trimesh,
+                surface_maximum_element_size=surface_maximum_element_size,
+            )
     if isinstance(geometry, Translate):
         mesh = _geometry_to_trimesh(
             geometry.geometry,
@@ -586,7 +688,16 @@ def _geometry_to_trimesh(
             a_only = left.difference(right)
             b_only = right.difference(left)
             return a_only.union(b_only)
-        except Exception:
+        except Exception as exc:
+            if _is_missing_boolean_backend_error(exc):
+                try:
+                    return _gmsh_boolean_surface_to_trimesh(
+                        geometry,
+                        trimesh,
+                        surface_maximum_element_size=surface_maximum_element_size,
+                    )
+                except Exception:
+                    pass
             return trimesh.util.concatenate([left, right])
     if isinstance(geometry, Transform):
         mesh = _geometry_to_trimesh(

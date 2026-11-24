@@ -571,3 +571,36 @@ def test_voxelization_rejects_disjoint_intersection_and_empty_masks() -> None:
             a.slice_plane(origin=(100e-9, 0.0, 0.0), normal=(1.0, 0.0, 0.0), keep="positive"),
             (2e-9, 2e-9, 2e-9),
         )
+
+
+def test_surface_preview_difference_and_intersection_fallback_when_manifold3d_missing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When trimesh lacks manifold3d/blender, CSG Difference and Intersection fall back to Gmsh OCC."""
+    pytest.importorskip("gmsh")
+    trimesh = pytest.importorskip("trimesh")
+
+    from fullmag.meshing.surface_assets import _geometry_to_trimesh
+
+    def _raise_missing_backend(self, other, *args, **kwargs):  # type: ignore[no-untyped-def]
+        raise ValueError("No boolean backend: 'pip install manifold3d' or install 'blender'")
+
+    monkeypatch.setattr(trimesh.Trimesh, "difference", _raise_missing_backend)
+    monkeypatch.setattr(trimesh.Trimesh, "intersection", _raise_missing_backend)
+
+    film = fm.Box(1000e-9, 500e-9, 10e-9, name="Py_Film")
+    hole = fm.Cylinder(radius=100e-9, height=40e-9, axis=(0.0, 0.0, 1.0), name="Hole_Cutter")
+    perforated = film - hole
+
+    diff_mesh = _geometry_to_trimesh(perforated, trimesh)
+    assert len(diff_mesh.vertices) > 0
+    assert len(diff_mesh.faces) > 0
+    bmin, bmax = diff_mesh.bounds
+    assert np.allclose(bmax - bmin, [1000e-9, 500e-9, 10e-9], rtol=1e-3, atol=1e-12)
+
+    overlap = film & hole
+    inter_mesh = _geometry_to_trimesh(overlap, trimesh)
+    assert len(inter_mesh.vertices) > 0
+    assert len(inter_mesh.faces) > 0
+    imin, imax = inter_mesh.bounds
+    assert np.allclose(imax - imin, [200e-9, 200e-9, 10e-9], rtol=2e-2, atol=1e-12)

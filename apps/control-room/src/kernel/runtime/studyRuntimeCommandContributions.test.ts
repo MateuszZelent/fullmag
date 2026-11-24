@@ -1012,13 +1012,94 @@ describe("study runtime command contributions", () => {
     expect(stage).not.toHaveProperty("torque_tolerance");
     expect(stage).not.toHaveProperty("energy_tolerance_j");
     expect(stage).not.toHaveProperty("fixed_timestep");
-    expect(stage).not.toHaveProperty("integrator");
     expect(stage).not.toHaveProperty("max_relaxation_time_s");
     expect(stage?.torque_tolerance_apm).toBeCloseTo(1e-4, 12);
     expect(stage).toMatchObject({
+      adaptive_timestep: {
+        atol: 1e-5,
+        dt_initial: 5e-14,
+        dt_max: 1e-11,
+        dt_min: 1e-16,
+        rtol: 0,
+        tolerance_mode: "max_error",
+      },
       algorithm: "llg_overdamped",
+      integrator: "rk23",
       max_steps: "50000",
     });
+  });
+
+  it("equips relax quick-add with fixed timestep on FDM GPU/single lanes and adaptive RK23 on FEM", async () => {
+    const registry = registryWithStudyRuntimeCommands();
+
+    const femCommit = vi.fn(async () => ({ scene_revision: 4 }));
+    await registry.execute("study.add-relax-stage", {
+      api: {
+        model: {
+          scene: vi.fn(async () => ({
+            scene_revision: 3,
+            study: {
+              requested_backend: "fem",
+              requested_device: "cpu",
+              requested_precision: "double",
+              stages: [],
+            },
+          })),
+          commitTransaction: femCommit,
+        },
+      } as never,
+      resourceData: runtimeResourceData({ discretization: "fem" }),
+      source: "test",
+    });
+    const femStage = (
+      femCommit.mock.calls as unknown as [[
+        { merge_patch?: { study?: { stages?: Array<Record<string, unknown>> } } },
+      ]]
+    )[0]?.[0]?.merge_patch?.study?.stages?.[0];
+    expect(femStage).toMatchObject({
+      adaptive_timestep: {
+        atol: 1e-5,
+        dt_initial: 5e-14,
+        dt_max: 1e-11,
+        dt_min: 1e-16,
+        rtol: 0,
+        tolerance_mode: "max_error",
+      },
+      algorithm: "llg_overdamped",
+      integrator: "rk23",
+    });
+    expect(femStage).not.toHaveProperty("fixed_timestep");
+
+    const fdmGpuCommit = vi.fn(async () => ({ scene_revision: 4 }));
+    await registry.execute("study.add-relax-stage", {
+      api: {
+        model: {
+          scene: vi.fn(async () => ({
+            scene_revision: 3,
+            study: {
+              requested_backend: "fdm",
+              requested_device: "gpu",
+              requested_precision: "single",
+              stages: [],
+            },
+          })),
+          commitTransaction: fdmGpuCommit,
+        },
+      } as never,
+      resourceData: runtimeResourceData({ discretization: "fdm" }),
+      source: "test",
+    });
+    const fdmGpuStage = (
+      fdmGpuCommit.mock.calls as unknown as [[
+        { merge_patch?: { study?: { stages?: Array<Record<string, unknown>> } } },
+      ]]
+    )[0]?.[0]?.merge_patch?.study?.stages?.[0];
+    expect(fdmGpuStage).toMatchObject({
+      algorithm: "llg_overdamped",
+      fixed_timestep: "5e-14",
+      integrator: "rk23",
+    });
+    expect(fdmGpuStage).not.toHaveProperty("adaptive_timestep");
   });
 
   it("fails closed when a stage mutation cannot obtain the scene revision", async () => {

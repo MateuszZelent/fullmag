@@ -232,7 +232,7 @@ RUN if [ "${FULLMAG_FEM_CPU_WITH_SLEPC}" = ON ]; then \
     fi
 
 RUN pip3 install --no-cache-dir cmake==3.30.5
-RUN pip3 install --no-cache-dir numpy gmsh meshio trimesh scipy h5py zarr
+RUN pip3 install --no-cache-dir numpy gmsh meshio trimesh 'manifold3d>=3,<4' scipy h5py zarr
 RUN curl https://sh.rustup.rs -sSf | bash -s -- -y --default-toolchain stable
 RUN corepack enable && corepack prepare pnpm@10.8.1 --activate
 

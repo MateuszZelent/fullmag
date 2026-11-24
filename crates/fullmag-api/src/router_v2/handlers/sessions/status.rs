@@ -691,7 +691,7 @@ pub(crate) const ACTIVE_LANE_OPERATION_IDS: [&str; 36] = [
     "study.fft",
 ];
 
-fn active_lane_capability_snapshot(
+pub(crate) fn active_lane_capability_snapshot(
     snapshot: &SessionStateResponse,
     is_fem: bool,
 ) -> ActiveLaneCapabilitySnapshot {

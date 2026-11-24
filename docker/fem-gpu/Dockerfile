@@ -475,7 +475,7 @@ RUN python_archive="Python-${PYTHON_VERSION}.tar.xz" && \
     rm -rf /tmp/python-build "/tmp/${python_archive}"
 
 RUN python3 -m pip install --no-cache-dir cmake==3.30.5
-RUN python3 -m pip install --no-cache-dir numpy gmsh meshio trimesh scipy h5py zarr
+RUN python3 -m pip install --no-cache-dir numpy gmsh meshio trimesh 'manifold3d>=3,<4' scipy h5py zarr
 RUN curl https://sh.rustup.rs -sSf | bash -s -- -y --default-toolchain nightly
 RUN corepack enable && corepack prepare pnpm@${PNPM_VERSION} --activate
 
