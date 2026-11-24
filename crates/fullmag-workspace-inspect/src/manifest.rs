@@ -32,7 +32,6 @@ const RUN_ARTIFACT_ATTESTATION_SCHEMA: &str = "fullmag.run_artifact_attestation.
 const RUN_MANIFEST_WRITER_LOCK_FILE: &str = ".fullmag-run-manifest.writer.lock";
 
 const METADATA_RELATIVE_PATH: &str = "artifacts/metadata.json";
-const MAX_METADATA_ARTIFACT_BYTES: u64 = 16 * 1024 * 1024;
 const MAX_RUN_ARTIFACT_ATTESTATION_BYTES: u64 = 64 * 1024;
 static TEMPORARY_FILE_COUNTER: AtomicUsize = AtomicUsize::new(0);
 
@@ -422,7 +421,7 @@ fn build_artifact_attestation(
     manifest_bytes: &[u8],
 ) -> io::Result<ArtifactAttestationCandidate> {
     let artifacts_root = results_dir.join("artifacts");
-    let (metadata_bytes, generation_fence) = match capture_generation(&artifacts_root)? {
+    let (metadata_sha256, generation_fence) = match capture_generation(&artifacts_root)? {
         Some(generation) => {
             let producer = generation.commit.content.producer.as_ref();
             if generation.is_immutable() && producer.is_none() {
@@ -437,19 +436,15 @@ fn build_artifact_attestation(
                     "frequency-domain generation producer run does not match run manifest",
                 ));
             }
-            let bytes = generation.read_member_bounded(
-                &artifacts_root,
-                "metadata.json",
-                MAX_METADATA_ARTIFACT_BYTES,
-            )?;
-            (bytes, Some((artifacts_root, generation)))
+            let member = generation.verify_member(&artifacts_root, "metadata.json")?;
+            let hash = member.sha256.strip_prefix("sha256:").ok_or_else(|| {
+                io::Error::new(io::ErrorKind::InvalidData, "generation member has no SHA-256 digest")
+            })?;
+            (hash.to_owned(), Some((artifacts_root, generation)))
         }
         None => {
             let metadata_path = results_dir.join(METADATA_RELATIVE_PATH);
-            (
-                read_bounded_regular_file(&metadata_path, MAX_METADATA_ARTIFACT_BYTES)?,
-                None,
-            )
+            (hash_regular_file_snapshot(&metadata_path)?, None)
         }
     };
 
@@ -470,7 +465,7 @@ fn build_artifact_attestation(
         session_id: session_id.into(),
         source_sha256: source_sha256.into(),
         metadata_relative_path: METADATA_RELATIVE_PATH.into(),
-        metadata_sha256: sha256_hex(&metadata_bytes),
+        metadata_sha256,
         manifest_sha256: sha256_hex(manifest_bytes),
     };
     let bytes = serde_json::to_vec_pretty(&attestation)
@@ -588,28 +583,53 @@ fn read_optional_bounded_file(path: &Path, maximum: u64) -> io::Result<Option<Ve
 }
 
 fn read_bounded_regular_file(path: &Path, maximum: u64) -> io::Result<Vec<u8>> {
-    let (mut file, before, opened) = open_verified_regular_file(path, maximum)?;
+    let (mut file, opened) = open_verified_regular_file(path, maximum)?;
     let mut bytes = Vec::new();
     Read::take(&mut file, maximum.saturating_add(1)).read_to_end(&mut bytes)?;
+    if bytes.len() as u64 > maximum {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "run artifact exceeded its byte limit",
+        ));
+    }
+    verify_file_snapshot(path, &file, &opened)?;
+    Ok(bytes)
+}
+
+fn hash_regular_file_snapshot(path: &Path) -> io::Result<String> {
+    let (mut file, opened) = open_verified_regular_file(path, u64::MAX)?;
+    // A run can embed a large execution plan in its metadata. Hash only the
+    // original file length and check the handle and path again after reading.
+    let mut digest = Sha256::new();
+    let hashed = io::copy(&mut Read::take(&mut file, opened.len()), &mut digest)?;
+    if hashed != opened.len() {
+        return Err(io::Error::new(
+            io::ErrorKind::UnexpectedEof,
+            "run artifact was truncated while it was hashed",
+        ));
+    }
+    verify_file_snapshot(path, &file, &opened)?;
+    Ok(format!("{:x}", digest.finalize()))
+}
+
+fn verify_file_snapshot(path: &Path, file: &File, opened: &fs::Metadata) -> io::Result<()> {
+    reject_reparse_ancestors(path)?;
     let after = file.metadata()?;
     let path_after = fs::symlink_metadata(path)?;
-    if bytes.len() as u64 > maximum
-        || is_link_or_reparse(&path_after)
+    if is_link_or_reparse(&path_after)
         || !path_after.is_file()
-        || !same_file_snapshot(&opened, &after)?
+        || !same_file_snapshot(opened, &after)?
         || !same_file_snapshot(&after, &path_after)?
     {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
-            "run artifact changed or exceeded its byte limit",
+            "run artifact changed while it was read",
         ));
     }
     #[cfg(unix)]
     {
         use std::os::unix::fs::MetadataExt;
-        if before.dev() != opened.dev()
-            || before.ino() != opened.ino()
-            || opened.dev() != after.dev()
+        if opened.dev() != after.dev()
             || opened.ino() != after.ino()
             || after.dev() != path_after.dev()
             || after.ino() != path_after.ino()
@@ -620,13 +640,13 @@ fn read_bounded_regular_file(path: &Path, maximum: u64) -> io::Result<Vec<u8>> {
             ));
         }
     }
-    Ok(bytes)
+    Ok(())
 }
 
 fn open_verified_regular_file(
     path: &Path,
     maximum: u64,
-) -> io::Result<(File, fs::Metadata, fs::Metadata)> {
+) -> io::Result<(File, fs::Metadata)> {
     reject_reparse_ancestors(path)?;
     let before = fs::symlink_metadata(path)?;
     if is_link_or_reparse(&before) || !before.is_file() || before.len() > maximum {
@@ -709,7 +729,7 @@ fn open_verified_regular_file(
             ));
         }
     }
-    Ok((file, before, opened))
+    Ok((file, opened))
 }
 
 fn same_file_snapshot(left: &fs::Metadata, right: &fs::Metadata) -> io::Result<bool> {
@@ -1246,7 +1266,7 @@ mod tests {
         let replacement = dir.path().join("replacement.json");
         std::fs::write(&path, b"original metadata").unwrap();
         std::fs::write(&replacement, b"replacement metadata").unwrap();
-        let (opened, _, _) = open_verified_regular_file(&path, 1024).unwrap();
+        let (opened, _) = open_verified_regular_file(&path, 1024).unwrap();
 
         assert!(std::fs::rename(&replacement, &path).is_err());
         assert_eq!(std::fs::read(&path).unwrap(), b"original metadata");
@@ -1282,6 +1302,40 @@ mod tests {
             manifest_bytes
         );
         assert_eq!(std::fs::read(attestation_path).unwrap(), attestation_bytes);
+    }
+
+    #[test]
+    fn terminal_attestation_hashes_large_run_metadata() {
+        let dir = tempfile::tempdir().unwrap();
+        let terminal = successful_sample();
+        let mut running = terminal.clone();
+        running.status = "running".into();
+        running.exit_code = None;
+        running.finished_at = None;
+        write_run_manifest(dir.path(), &running).unwrap();
+
+        let mut metadata = br#"{"execution_plan":""#.to_vec();
+        metadata.resize(17 * 1024 * 1024, b'x');
+        metadata.extend_from_slice(br#""}"#);
+        write_metadata(dir.path(), &metadata);
+
+        write_run_manifest(dir.path(), &terminal).unwrap();
+        let attestation_path = dir.path().join(RUN_ARTIFACT_ATTESTATION_FILE);
+        let stamp = std::fs::read(attestation_path).unwrap();
+        let attestation: RunArtifactAttestation = serde_json::from_slice(&stamp).unwrap();
+        assert_eq!(attestation.metadata_sha256, sha256_hex(&metadata));
+        assert_eq!(
+            read_run_manifest(dir.path()).unwrap().unwrap().status,
+            "completed"
+        );
+        write_run_manifest(dir.path(), &terminal).unwrap();
+
+        metadata[1024] = b'y';
+        write_metadata(dir.path(), &metadata);
+        assert_eq!(
+            write_run_manifest(dir.path(), &terminal).unwrap_err().kind(),
+            io::ErrorKind::PermissionDenied,
+        );
     }
 
     #[test]
