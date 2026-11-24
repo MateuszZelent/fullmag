@@ -4653,9 +4653,6 @@
       ],
       "sources": [
         "gsg-z-note",
-        "gsg-z-moments",
-        "gsg-z-tests",
-        "gsg-z-reader",
         "gsg-z-geometry",
         "gsg-z-periodic-source"
       ]
@@ -4676,9 +4673,6 @@
       ],
       "sources": [
         "gsg-z-note",
-        "gsg-z-moments",
-        "gsg-z-tests",
-        "gsg-z-reader",
         "gsg-z-geometry",
         "gsg-z-periodic-source"
       ]
@@ -4699,9 +4693,6 @@
       ],
       "sources": [
         "gsg-z-note",
-        "gsg-z-moments",
-        "gsg-z-tests",
-        "gsg-z-reader",
         "gsg-z-geometry",
         "gsg-z-periodic-source"
       ]
@@ -4722,9 +4713,6 @@
       ],
       "sources": [
         "gsg-z-note",
-        "gsg-z-moments",
-        "gsg-z-tests",
-        "gsg-z-reader",
         "gsg-z-geometry",
         "gsg-z-periodic-source"
       ]
@@ -4744,11 +4732,7 @@
         "gsg-sheet-symbol-9"
       ],
       "sources": [
-        "gsg-sheet-note",
-        "gsg-sheet-solve_network",
-        "gsg-sheet-nominal_network",
-        "gsg-sheet-self_checks",
-        "gsg-sheet-main"
+        "gsg-sheet-note"
       ]
     },
     {
@@ -4766,11 +4750,7 @@
         "gsg-sheet-symbol-9"
       ],
       "sources": [
-        "gsg-sheet-note",
-        "gsg-sheet-solve_network",
-        "gsg-sheet-nominal_network",
-        "gsg-sheet-self_checks",
-        "gsg-sheet-main"
+        "gsg-sheet-note"
       ]
     },
     {
@@ -4788,11 +4768,7 @@
         "gsg-sheet-symbol-9"
       ],
       "sources": [
-        "gsg-sheet-note",
-        "gsg-sheet-solve_network",
-        "gsg-sheet-nominal_network",
-        "gsg-sheet-self_checks",
-        "gsg-sheet-main"
+        "gsg-sheet-note"
       ]
     },
     {
@@ -4810,11 +4786,7 @@
         "gsg-sheet-symbol-9"
       ],
       "sources": [
-        "gsg-sheet-note",
-        "gsg-sheet-solve_network",
-        "gsg-sheet-nominal_network",
-        "gsg-sheet-self_checks",
-        "gsg-sheet-main"
+        "gsg-sheet-note"
       ]
     },
     {
@@ -4832,14 +4804,7 @@
         "gsg-sheet-field-symbol-9"
       ],
       "sources": [
-        "gsg-sheet-field-note",
-        "gsg-sheet-field-read_inputs",
-        "gsg-sheet-field-reconstruct_faces",
-        "gsg-sheet-field-z_kernels",
-        "gsg-sheet-field-field_gauss",
-        "gsg-sheet-field-self_checks",
-        "gsg-sheet-field-assess_fields",
-        "gsg-sheet-field-main"
+        "gsg-sheet-field-note"
       ]
     },
     {
@@ -4857,14 +4822,7 @@
         "gsg-sheet-field-symbol-9"
       ],
       "sources": [
-        "gsg-sheet-field-note",
-        "gsg-sheet-field-read_inputs",
-        "gsg-sheet-field-reconstruct_faces",
-        "gsg-sheet-field-z_kernels",
-        "gsg-sheet-field-field_gauss",
-        "gsg-sheet-field-self_checks",
-        "gsg-sheet-field-assess_fields",
-        "gsg-sheet-field-main"
+        "gsg-sheet-field-note"
       ]
     },
     {
@@ -4882,14 +4840,7 @@
         "gsg-sheet-field-symbol-9"
       ],
       "sources": [
-        "gsg-sheet-field-note",
-        "gsg-sheet-field-read_inputs",
-        "gsg-sheet-field-reconstruct_faces",
-        "gsg-sheet-field-z_kernels",
-        "gsg-sheet-field-field_gauss",
-        "gsg-sheet-field-self_checks",
-        "gsg-sheet-field-assess_fields",
-        "gsg-sheet-field-main"
+        "gsg-sheet-field-note"
       ]
     },
     {
@@ -4907,14 +4858,7 @@
         "gsg-sheet-field-symbol-9"
       ],
       "sources": [
-        "gsg-sheet-field-note",
-        "gsg-sheet-field-read_inputs",
-        "gsg-sheet-field-reconstruct_faces",
-        "gsg-sheet-field-z_kernels",
-        "gsg-sheet-field-field_gauss",
-        "gsg-sheet-field-self_checks",
-        "gsg-sheet-field-assess_fields",
-        "gsg-sheet-field-main"
+        "gsg-sheet-field-note"
       ]
     },
     {
@@ -4928,7 +4872,6 @@
       ],
       "sources": [
         "gsg-retained-dtq-reuse-note",
-        "gsg-retained-dtq-cost-audit",
         "gsg-retained-dtq-common-evaluation"
       ]
     }
@@ -4937,7 +4880,7 @@
     {
       "id": "antenna-universe-volume-native-binding",
       "path": "crates/fullmag-runner/src/native_fem/steady_transport.rs",
-      "symbol": "solve_native_fem_prepared_closed_loop",
+      "symbol": "solve_native_fem_prepared_closed_loop_classified",
       "responsibility": "Sprawdza requested/resolved policy oraz rzeczywistą liczbę par przed wywołaniem natywnym.",
       "evidence_status": "source_only"
     },
@@ -8348,8 +8291,8 @@
     {
       "id": "antenna-loop-qualified-refusal",
       "path": "crates/fullmag-runner/src/antenna_field_solution/closed_loop_v2.rs",
-      "symbol": "require_qualified",
-      "responsibility": "Unqualified v2 zawsze odmawia qualified consumer admission.",
+      "symbol": "verify_and_decode_source",
+      "responsibility": "Weryfikuje integralność pakietu v2 do inspekcji. Kwalifikacja do sterowania dynamiką pozostaje odrębnym kontraktem.",
       "evidence_status": "source_only"
     },
     {
@@ -11715,24 +11658,6 @@
       "evidence_status": "planned_contract"
     },
     {
-      "id": "gsg-z-moments",
-      "path": "examples/sushruth_2020_closed_gsg/corner12p5_20261112/verification/audit_fine86k_component_energies.py",
-      "symbol": "component_integrals",
-      "responsibility": "Dokładny moment stopnia2 dla zachowanych afinicznych składowych."
-    },
-    {
-      "id": "gsg-z-tests",
-      "path": "examples/sushruth_2020_closed_gsg/corner12p5_20261112/verification/audit_fine86k_component_energies.py",
-      "symbol": "exact_fixtures",
-      "responsibility": "Dokładne monomiale i permutacje Fraction."
-    },
-    {
-      "id": "gsg-z-reader",
-      "path": "examples/sushruth_2020_closed_gsg/corner12p5_20261112/verification/audit_fine86k_component_energies.py",
-      "symbol": "main",
-      "responsibility": "Pełne piny, Decimal120 i porównanie z istniejącym bilansem; przed wykonaniem source_only."
-    },
-    {
       "id": "gsg-z-geometry",
       "path": "packages/fullmag-py/src/fullmag/model/geometry.py",
       "symbol": "class CPWAntennaLayout",
@@ -11745,41 +11670,11 @@
       "responsibility": "Istniejący skok potencjału plus-minus."
     },
     {
-      "id": "gsg-z-comparison",
-      "path": "examples/sushruth_2020_closed_gsg/corner12p5_20261112/verification/compare_saved_current_components.py",
-      "symbol": "main",
-      "responsibility": "Odczytowy trend tych samych momentów na zachowanych medium40728 i fine85980; bez nowego solve."
-    },
-    {
       "id": "gsg-sheet-note",
       "path": "docs/physics/0950-quasistatic-microwave-antenna-field-basis-and-k-selective-excitation.md",
       "symbol": "DOC-ANCHOR:antenna-gsg-sheet-reference",
       "responsibility": "Przedwynikowe założenia, parametry i bramki samodzielnej referencji FV.",
       "evidence_status": "planned_contract"
-    },
-    {
-      "id": "gsg-sheet-solve_network",
-      "path": "examples/sushruth_2020_closed_gsg/corner12p5_20261112/verification/independent_gsg_sheet_current.py",
-      "symbol": "solve_network",
-      "responsibility": "Niezależna referencja matematyczna; bez kodu wykonawczego Fullmaga."
-    },
-    {
-      "id": "gsg-sheet-nominal_network",
-      "path": "examples/sushruth_2020_closed_gsg/corner12p5_20261112/verification/independent_gsg_sheet_current.py",
-      "symbol": "nominal_network",
-      "responsibility": "Niezależna referencja matematyczna; bez kodu wykonawczego Fullmaga."
-    },
-    {
-      "id": "gsg-sheet-self_checks",
-      "path": "examples/sushruth_2020_closed_gsg/corner12p5_20261112/verification/independent_gsg_sheet_current.py",
-      "symbol": "self_checks",
-      "responsibility": "Niezależna referencja matematyczna; bez kodu wykonawczego Fullmaga."
-    },
-    {
-      "id": "gsg-sheet-main",
-      "path": "examples/sushruth_2020_closed_gsg/corner12p5_20261112/verification/independent_gsg_sheet_current.py",
-      "symbol": "main",
-      "responsibility": "Niezależna referencja matematyczna; bez kodu wykonawczego Fullmaga."
     },
     {
       "id": "gsg-sheet-field-note",
@@ -11789,48 +11684,6 @@
       "evidence_status": "planned_contract"
     },
     {
-      "id": "gsg-sheet-field-read_inputs",
-      "path": "examples/sushruth_2020_closed_gsg/corner12p5_20261112/verification/independent_gsg_sheet_field.py",
-      "symbol": "read_inputs",
-      "responsibility": "Samodzielna referencja matematyczna bez Fullmag Solve, API lub zmiany IR."
-    },
-    {
-      "id": "gsg-sheet-field-reconstruct_faces",
-      "path": "examples/sushruth_2020_closed_gsg/corner12p5_20261112/verification/independent_gsg_sheet_field.py",
-      "symbol": "reconstruct_faces",
-      "responsibility": "Samodzielna referencja matematyczna bez Fullmag Solve, API lub zmiany IR."
-    },
-    {
-      "id": "gsg-sheet-field-z_kernels",
-      "path": "examples/sushruth_2020_closed_gsg/corner12p5_20261112/verification/independent_gsg_sheet_field.py",
-      "symbol": "z_kernels",
-      "responsibility": "Samodzielna referencja matematyczna bez Fullmag Solve, API lub zmiany IR."
-    },
-    {
-      "id": "gsg-sheet-field-field_gauss",
-      "path": "examples/sushruth_2020_closed_gsg/corner12p5_20261112/verification/independent_gsg_sheet_field.py",
-      "symbol": "field_gauss",
-      "responsibility": "Samodzielna referencja matematyczna bez Fullmag Solve, API lub zmiany IR."
-    },
-    {
-      "id": "gsg-sheet-field-self_checks",
-      "path": "examples/sushruth_2020_closed_gsg/corner12p5_20261112/verification/independent_gsg_sheet_field.py",
-      "symbol": "self_checks",
-      "responsibility": "Samodzielna referencja matematyczna bez Fullmag Solve, API lub zmiany IR."
-    },
-    {
-      "id": "gsg-sheet-field-assess_fields",
-      "path": "examples/sushruth_2020_closed_gsg/corner12p5_20261112/verification/independent_gsg_sheet_field.py",
-      "symbol": "assess_fields",
-      "responsibility": "Samodzielna referencja matematyczna bez Fullmag Solve, API lub zmiany IR."
-    },
-    {
-      "id": "gsg-sheet-field-main",
-      "path": "examples/sushruth_2020_closed_gsg/corner12p5_20261112/verification/independent_gsg_sheet_field.py",
-      "symbol": "main",
-      "responsibility": "Samodzielna referencja matematyczna bez Fullmag Solve, API lub zmiany IR."
-    },
-    {
       "id": "gsg-dense-observation-note",
       "path": "docs/physics/0950-quasistatic-microwave-antenna-field-basis-and-k-selective-excitation.md",
       "symbol": "DOC-ANCHOR:antenna-dense-observation-carrier",
@@ -11838,29 +11691,11 @@
       "evidence_status": "planned_contract"
     },
     {
-      "id": "gsg-dense-observation-main",
-      "path": "examples/sushruth_2020_closed_gsg/dense_field_20261113/verification/prepare_dense_field_carrier.py",
-      "symbol": "main",
-      "responsibility": "Kanoniczny zapis/readback i kontrola kosztu bez Solve."
-    },
-    {
-      "id": "gsg-dense-observation-topology",
-      "path": "examples/sushruth_2020_closed_gsg/dense_field_20261113/verification/prepare_dense_field_carrier.py",
-      "symbol": "structured_mesh",
-      "responsibility": "Conforming Tet4 z kontrolą manifold i geometrii."
-    },
-    {
       "id": "gsg-retained-dtq-reuse-note",
       "path": "docs/physics/0950-quasistatic-microwave-antenna-field-basis-and-k-selective-excitation.md",
       "symbol": "DOC-ANCHOR:antenna-retained-dtq-reuse",
       "responsibility": "Granica prywatnego kandydata i kosztu gęstej mapy bez odblokowania publicznego H-only.",
       "evidence_status": "planned_contract"
-    },
-    {
-      "id": "gsg-retained-dtq-cost-audit",
-      "path": "examples/sushruth_2020_closed_gsg/dense_field_20261113/verification/audit_retained_dtq_cost.py",
-      "symbol": "main",
-      "responsibility": "Bitowe binding H/XYZ/normalizacji oraz domknięcie liczników istniejącego wyniku."
     },
     {
       "id": "gsg-retained-dtq-evidence-decoder",
@@ -11886,24 +11721,6 @@
       "path": "crates/fullmag-runner/src/native_fem/retained_rt0_source.rs",
       "symbol": "freeze_cell",
       "responsibility": "Istniejące znaki i dokładna normalizacja fizycznych momentów na generyczne współczynniki."
-    },
-    {
-      "id": "gsg-frozen-full-source-main",
-      "path": "examples/sushruth_2020_closed_gsg/dense_field_20261113/verification/verify_frozen_source_mapping.py",
-      "symbol": "main",
-      "responsibility": "Pełna kontrola85980komórek i1289700składowych bez nowego Solve."
-    },
-    {
-      "id": "gsg-frozen-full-source-exact",
-      "path": "examples/sushruth_2020_closed_gsg/dense_field_20261113/verification/verify_frozen_source_mapping.py",
-      "symbol": "exact_samples",
-      "responsibility": "Niezależna arytmetyka dyadyczna tego samego równania RT0."
-    },
-    {
-      "id": "gsg-frozen-full-source-moment-checker",
-      "path": "examples/sushruth_2020_closed_gsg/dense_field_20261113/verification/verify_frozen_source_mapping.py",
-      "symbol": "recover_coefficients",
-      "responsibility": "Kanoniczne normalne i generyczna normalizacja fizycznych momentów."
     },
     {
       "id": "retained-dtq-public-v2-contract",

@@ -2,10 +2,12 @@ import { readFileSync } from "node:fs";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { RequestDiagnosticsController } from "@/kernel/api/RequestDiagnosticsController";
 import { recordVisualizationDebugResourceCounts } from "@/kernel/performance/visualizationDebugPerformanceProbe";
 
 import {
   buildViewport3DDiagnostics,
+  observeViewport3DIdle,
   Viewport3DResourceTracker,
 } from "./viewport3dDiagnostics";
 
@@ -15,6 +17,54 @@ describe("viewport3dDiagnostics", () => {
   afterEach(() => {
     delete testWindow.__FULLMAG_VISUALIZATION_DEBUG_PERFORMANCE__;
     vi.unstubAllGlobals();
+    vi.useRealTimers();
+  });
+
+  it("observes committed frames only after the render details settle", () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
+    const tracker = { getCommittedFrameCount: vi.fn().mockReturnValue(1) };
+    const diagnostics = new RequestDiagnosticsController();
+    const onComplete = vi.fn();
+
+    observeViewport3DIdle(tracker, diagnostics, onComplete);
+    vi.advanceTimersByTime(499);
+    expect(tracker.getCommittedFrameCount).not.toHaveBeenCalled();
+
+    tracker.getCommittedFrameCount.mockReturnValue(5);
+    vi.advanceTimersByTime(1);
+    expect(tracker.getCommittedFrameCount).toHaveBeenCalledOnce();
+
+    tracker.getCommittedFrameCount.mockReturnValue(8);
+    diagnostics.record({
+      detail: "frame window",
+      method: "measure",
+      outcome: "ok",
+      path: "fullmag.viewport3d.frame-window",
+      requestId: "frame",
+    });
+    vi.advanceTimersByTime(1999);
+    expect(onComplete).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(1);
+
+    expect(onComplete).toHaveBeenCalledExactlyOnceWith({
+      frames: 3,
+      elapsedMs: 2000,
+      lastFrameWindow: "frame window",
+    });
+  });
+
+  it.each([100, 600])("cancels idle observation %d ms after opening render details", (elapsedMs) => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
+    const tracker = { getCommittedFrameCount: vi.fn().mockReturnValue(2) };
+    const onComplete = vi.fn();
+
+    const cancel = observeViewport3DIdle(tracker, new RequestDiagnosticsController(), onComplete);
+    vi.advanceTimersByTime(elapsedMs);
+    cancel();
+
+    expect(vi.getTimerCount()).toBe(0);
+    vi.advanceTimersByTime(3000);
+    expect(onComplete).not.toHaveBeenCalled();
   });
 
   it("subscribes build-engine diagnostics into the diagnostic recorder", () => {

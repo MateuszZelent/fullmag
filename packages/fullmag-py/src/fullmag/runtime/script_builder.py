@@ -13711,13 +13711,10 @@ def _export_spin_torque_entry(module: object) -> dict[str, object]:
 def _export_geometry_kind_params(
     geom: object, *, registration_name: str | None = None,
 ) -> tuple[str, dict[str, object]]:
-    """Extract the geometry descriptor, composing a chain of anonymous translations."""
-    flatten_translation = (
-        isinstance(geom, Translate)
-        and isinstance(geom.geometry, Translate)
-        and geom.name in (None, registration_name)
-    )
-    if flatten_translation:
+    """Keep anonymous top-level translations in the scene object's transform."""
+    flatten_translation = False
+    if isinstance(geom, Translate) and geom.name in (None, registration_name):
+        flatten_translation = True
         child = geom.geometry
         while isinstance(child, Translate):
             if child.name is not None:

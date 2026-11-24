@@ -130,8 +130,10 @@ import { planViewport3DColorbars, resolveViewport3DColorbarRangeStates, type Vie
 export { resolveViewport3DColorbarRangeStates } from "./model/viewport3DColorbarPlan";
 
 import {
+  observeViewport3DIdle,
   useViewport3DResourceCounts,
   useViewport3DResourceTracker,
+  type Viewport3DIdleObservation,
 } from "./viewport3dDiagnostics";
 import { useViewport3DWorkerRuntime } from "./viewport3dWorkerRuntime";
 import { createViewport3DEventManager } from "./viewport3dEventManager";
@@ -1201,27 +1203,10 @@ const Viewport3DFrame = memo(function Viewport3DFrame({
   );
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const [renderDetailsOpen, setRenderDetailsOpen] = useState(false);
-  const [idleInspection, setIdleInspection] = useState<{ frames: number; elapsedMs: number; lastFrameWindow: string | null } | null>(null);
+  const [idleInspection, setIdleInspection] = useState<Viewport3DIdleObservation | null>(null);
   useEffect(() => {
     if (!renderDetailsOpen) return;
-    // Let opening the panel settle before observing; never invalidate the canvas.
-    let sampleTimer: ReturnType<typeof setTimeout> | undefined;
-    const settleTimer = setTimeout(() => {
-      const initialFrames = sceneProps.tracker.getCommittedFrameCount();
-      const startedAt = performance.now();
-      sampleTimer = setTimeout(() => {
-        setIdleInspection({
-          frames: sceneProps.tracker.getCommittedFrameCount() - initialFrames,
-          elapsedMs: performance.now() - startedAt,
-          lastFrameWindow: sceneProps.requestDiagnostics.listNewestFirst()
-            .find(entry => entry.path === "fullmag.viewport3d.frame-window")?.detail ?? null,
-        });
-      }, 2000);
-    }, 500);
-    return () => {
-      clearTimeout(settleTimer);
-      clearTimeout(sampleTimer);
-    };
+    return observeViewport3DIdle(sceneProps.tracker, sceneProps.requestDiagnostics, setIdleInspection);
   }, [renderDetailsOpen, sceneProps.tracker, sceneProps.requestDiagnostics]);
   const [webglInspection, setWebglInspection] = useState<{
     contextLost: boolean; width: number; height: number;

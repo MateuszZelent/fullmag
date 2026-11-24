@@ -2063,7 +2063,7 @@ nie usuwa obowiązku niezależnej oceny zbieżności siatki i kwadratury.
 | packages/fullmag-py/src/fullmag/world.py | class StudyUniverseConfig | Walidacja i serializacja pierwotnej konfiguracji Universe, bez magnetycznego stanu. | source_only |
 | packages/fullmag-py/src/fullmag/world.py | _build_explicit_mesh_assets | Żądanie budowy wspólnej domeny; capture zachowuje odrębność deklaracji i topologii. | source_only |
 | examples/antenna_universe/fem_antenna_closed_loop_universe.py | study | Niemagnetyczny Universe i jawny volume_inspection_v1; diagnostyczna siatka 1154 węzły/6487 Tet4; wykonanie H nadal oczekuje na weryfikację. | source_only |
-| crates/fullmag-runner/src/native_fem/steady_transport.rs | solve_native_fem_prepared_closed_loop | Sprawdza requested/resolved policy oraz rzeczywistą liczbę par przed wywołaniem natywnym. | source_only |
+| crates/fullmag-runner/src/native_fem/steady_transport.rs | solve_native_fem_prepared_closed_loop_classified | Sprawdza requested/resolved policy oraz rzeczywistą liczbę par przed wywołaniem natywnym. | source_only |
 | crates/fullmag-runner/src/antenna_field_solution/direct_quadrature_v2.rs | verify_policy_binding | Cold v2 wiąże dokładny tuple budżetu ze snapshotem i requested/resolved provenance; legacy bez nowych pól wymaga starego profilu. | source_only |
 | backends/fem/cpu/mfem/interactions/oersted/direct_tetra_quadrature.cpp | DirectTetraQuadrature::ResolveWorkLimits | Zamknięty selektor legacy 1..1M lub dokładnie 4M; wyznacza globalne limity kernel i ledger bez zmiany ABI. | source_only |
 | backends/fem/cpu/mfem/interactions/oersted/direct_tetra_quadrature.cpp | WorkBudget | Wspólny licznik kernel/ledger całego zapytania, obejmujący wszystkie targety i adaptację. | source_only |
@@ -10241,7 +10241,7 @@ Uzupełnienie E9b (mapping implementacji; build Windows i API50 nie stanowią kw
 
 | Path | Symbol / anchor | Responsibility / evidence |
 |---|---|---|
-| `crates/fullmag-runner/src/native_fem/steady_transport.rs` | `solve_native_fem_prepared_closed_loop` | Sprawdza requested/resolved policy oraz rzeczywistą liczbę par przed wywołaniem natywnym. FEM CPU/double; source_only, runtime pending. |
+| `crates/fullmag-runner/src/native_fem/steady_transport.rs` | `solve_native_fem_prepared_closed_loop_classified` | Sprawdza requested/resolved policy oraz rzeczywistą liczbę par przed wywołaniem natywnym. FEM CPU/double; source_only, runtime pending. |
 | `crates/fullmag-runner/src/antenna_field_solution/direct_quadrature_v2.rs` | `verify_policy_binding` | Cold v2 wiąże dokładny tuple budżetu ze snapshotem i requested/resolved provenance; legacy bez nowych pól wymaga starego profilu. FEM CPU/double; source_only, runtime pending. |
 | `backends/fem/cpu/mfem/interactions/oersted/direct_tetra_quadrature.cpp` | `DirectTetraQuadrature::ResolveWorkLimits` | Zamknięty selektor legacy 1..1M lub dokładnie 4M; wyznacza globalne limity kernel i ledger bez zmiany ABI. FEM CPU/double; source_only, runtime pending. |
 | `backends/fem/cpu/mfem/interactions/oersted/direct_tetra_quadrature.cpp` | `WorkBudget` | Wspólny licznik kernel/ledger całego zapytania, obejmujący wszystkie targety i adaptację. FEM CPU/double; source_only, runtime pending. |
@@ -10375,7 +10375,7 @@ Uzupełnienie E9b (mapping implementacji; build Windows i API50 nie stanowią kw
 | `crates/fullmag-cli/src/orchestrator/antenna_closed_loop_inspection.rs` | `write_record` | Jedyny terminal commit named hard_link; precommit cancellation bez handoff, postcommit result immutable. |
 | `crates/fullmag-runner/src/antenna_field_solution/closed_loop_v2.rs` | `verify` | Cold payload/provenance/current/direct-evidence source verifier, nie runtime proof. |
 | `crates/fullmag-runner/src/antenna_field_solution/closed_loop_identity_v2.rs` | `verify` | Exact BE preimages i compact provenance maps plus authoring tagged rehash, geometry/gauge/affine RT0. |
-| `crates/fullmag-runner/src/antenna_field_solution/closed_loop_v2.rs` | `require_qualified` | Unqualified v2 zawsze odmawia qualified consumer admission. |
+| `crates/fullmag-runner/src/antenna_field_solution/closed_loop_v2.rs` | `verify_and_decode_source` | Weryfikuje integralność pakietu v2 do inspekcji. Kwalifikacja do sterowania dynamiką pozostaje odrębnym kontraktem. |
 | `crates/fullmag-cli/src/orchestrator/antenna_closed_loop_inspection.rs` | `execute` | Public inspection stage i immutable stage record bez fake m/spin. |
 | `crates/fullmag-cli/src/orchestrator.rs` | `publish_antenna_artifacts_atomically` | Generic atomic immutable publication całego artifact bundle. |
 | `packages/fullmag-py/src/fullmag/model/problem.py` | `class Problem` | Istniejący authoring/to_ir; wykonawcze lowering pętli i zachowanie intent wymagają implementacji; source-only |
@@ -15599,9 +15599,6 @@ nie tolerancja produkcyjna ani granica błędu fizycznego.
 | Geometria nominalna stałej grubości | `packages/fullmag-py/src/fullmag/model/geometry.py::class CPWAntennaLayout` | publiczna geometria źródła, bez nowej fizyki |
 | Izolacja zewnętrznych ścian | `crates/fullmag-plan/src/antenna_current_source.rs::materialize_antenna_closed_loop_current_input` | istniejące przypisanie InsulatingOuter |
 | Skok potencjału i orientacja | `backends/fem/cpu/mfem/transport/periodic_charge_potential.cpp::PeriodicChargePotentialSolver::Solve` | istniejący skok plus-minus i kontrola jego zgodności |
-| Momenty składowych | `examples/sushruth_2020_closed_gsg/corner12p5_20261112/verification/audit_fine86k_component_energies.py::component_integrals` | dokładna całka stopnia2 dla zapisanych danych |
-| Testy momentów | `examples/sushruth_2020_closed_gsg/corner12p5_20261112/verification/audit_fine86k_component_energies.py::exact_fixtures` | Fraction;96przypadków przed odczytem |
-| Piny i pełna suma | `examples/sushruth_2020_closed_gsg/corner12p5_20261112/verification/audit_fine86k_component_energies.py::main` | nowa analiza, status wymaga rzeczywistego wykonania |
 
 Bibliografia główna pozostaje wspólna. Nominalne wymiary200/250/90nm
 odnosimy do Sushruth i in., PRResearch2,043203(2020), Sec.IV.A, DOI
@@ -15629,7 +15626,6 @@ bilansy, nie liczy nowego V/J/H ani nie zmienia istniejących tolerancji.
 
 | Twierdzenie | Ścieżka + symbol | Odpowiedzialność / stan |
 |---|---|---|
-| Trend zachowanych składowych | examples/sushruth_2020_closed_gsg/corner12p5_20261112/verification/compare_saved_current_components.py | main | Odczyt dwóch poziomów, przed wykonaniem NOT VERIFIED. |
 
 (antenna-gsg-sheet-reference)=
 ### Niezależna referencja transportu nominalnego GSG — prerejestracja 13.11.2026
@@ -15747,10 +15743,6 @@ Sec.IV.A; końcowe połączenia i idealny cut są jawnym przybliżeniem zadania.
 | Twierdzenie | Ścieżka + symbol | Stan |
 |---|---|---|
 | Niezależna referencja i jej bramki | docs/physics/0950-quasistatic-microwave-antenna-field-basis-and-k-selective-excitation.md | DOC-ANCHOR:antenna-gsg-sheet-reference | Prerejestracja, jeszcze bez danych FV. |
-| Referencja FV | examples/sushruth_2020_closed_gsg/corner12p5_20261112/verification/independent_gsg_sheet_current.py | solve_network | Stan wymaga odbioru rzeczywistego wykonania; nie kwalifikacja Fullmaga. |
-| Referencja FV | examples/sushruth_2020_closed_gsg/corner12p5_20261112/verification/independent_gsg_sheet_current.py | nominal_network | Stan wymaga odbioru rzeczywistego wykonania; nie kwalifikacja Fullmaga. |
-| Referencja FV | examples/sushruth_2020_closed_gsg/corner12p5_20261112/verification/independent_gsg_sheet_current.py | self_checks | Stan wymaga odbioru rzeczywistego wykonania; nie kwalifikacja Fullmaga. |
-| Referencja FV | examples/sushruth_2020_closed_gsg/corner12p5_20261112/verification/independent_gsg_sheet_current.py | main | Stan wymaga odbioru rzeczywistego wykonania; nie kwalifikacja Fullmaga. |
 
 #### Rzeczywisty wynik referencji FV — 13.11.2026
 
@@ -15904,13 +15896,6 @@ DOI10.1103/PhysRevResearch.2.043203. Nie jest to implementacja ich nieopublikowa
 | Twierdzenie | Ścieżka | Symbol/anchor | Stan |
 |---|---|---|---|
 | Prerejestracja H z FV | docs/physics/0950-quasistatic-microwave-antenna-field-basis-and-k-selective-excitation.md | DOC-ANCHOR:antenna-gsg-sheet-field-reference | Plan; brak wyniku H w momencie zapisu. |
-| Odczyt pinowanych danych | examples/sushruth_2020_closed_gsg/corner12p5_20261112/verification/independent_gsg_sheet_field.py | read_inputs | Wymaga implementacji i sprawdzenia. |
-| Rekonstrukcja prądu | examples/sushruth_2020_closed_gsg/corner12p5_20261112/verification/independent_gsg_sheet_field.py | reconstruct_faces | Wymaga implementacji i sprawdzenia. |
-| Redukcja po Z | examples/sushruth_2020_closed_gsg/corner12p5_20261112/verification/independent_gsg_sheet_field.py | z_kernels | Wymaga implementacji i sprawdzenia. |
-| Całkowanie pola | examples/sushruth_2020_closed_gsg/corner12p5_20261112/verification/independent_gsg_sheet_field.py | field_gauss | Wymaga implementacji i sprawdzenia. |
-| Niezależne małe sprawdzenia | examples/sushruth_2020_closed_gsg/corner12p5_20261112/verification/independent_gsg_sheet_field.py | self_checks | Wymaga implementacji i sprawdzenia. |
-| Zestawienie i progi | examples/sushruth_2020_closed_gsg/corner12p5_20261112/verification/independent_gsg_sheet_field.py | assess_fields | Wymaga implementacji i sprawdzenia. |
-| Jedna seria | examples/sushruth_2020_closed_gsg/corner12p5_20261112/verification/independent_gsg_sheet_field.py | main | Wymaga implementacji i sprawdzenia. |
 
 #### Rzeczywisty wynik niezależnego pola FV — 13.11.2026
 
@@ -15983,8 +15968,6 @@ Pełna kwalifikacja pola na próbce i gęsta mapa pozostają otwarte.
 | Twierdzenie | Ścieżka | Symbol | Stan |
 |---|---|---|---|
 | Zakres okna | docs/physics/0950-quasistatic-microwave-antenna-field-basis-and-k-selective-excitation.md | DOC-ANCHOR:antenna-dense-observation-carrier | Przygotowanie, nie wynik H. |
-| Generacja i readback | examples/sushruth_2020_closed_gsg/dense_field_20261113/verification/prepare_dense_field_carrier.py | main | PASS kanonicznego zapisu i pełnego odczytu; nie wynik H. |
-| Podział cegieł i kontrola granicy | examples/sushruth_2020_closed_gsg/dense_field_20261113/verification/prepare_dense_field_carrier.py | structured_mesh | PASS dodatnich Tet4, manifold i kompletnej granicy. |
 | Walidowany zapis | packages/fullmag-py/src/fullmag/meshing/persistence.py | save_mesh_artifact | Istniejący format danych. |
 | Pełny odczyt | packages/fullmag-py/src/fullmag/meshing/persistence.py | load_mesh_artifact | Istniejący format danych. |
 | Sampling w planie | crates/fullmag-plan/src/antenna_field_solve.rs | resolve_field_sampling | Nie omija admission operatora. |
@@ -16105,7 +16088,6 @@ pełnej próbki, source qualification ani porównania z publikacją.
 
 | Twierdzenie | Ścieżka | Symbol | Stan |
 |---|---|---|---|
-| Odczyt liczników i powiązań | examples/sushruth_2020_closed_gsg/dense_field_20261113/verification/audit_retained_dtq_cost.py | main | Wykonany odczyt zachowanego wyniku, bez nowego H. |
 | Format binarny dowodu | crates/fullmag-runner/src/antenna_field_solution/direct_quadrature_v2.rs | DirectQuadratureEvidenceV2 | Istniejący kontrakt. |
 | Lokalna reprezentacja matematyczna | backends/fem/cpu/mfem/transport/affine_rt0_element.hpp | class AffineRt0Element | Obecny FrozenInput ma tylko eksport; import jest kandydatem. |
 | To samo całkowanie i admission | backends/fem/cpu/mfem/interactions/oersted/direct_tetra_quadrature.cpp | DirectTetraQuadrature::EvaluateField | Istniejący algorytm, bez zmiany równań. |
@@ -16193,9 +16175,6 @@ Nowy publiczny C ABI/adapter, gęsta mapa H i publikacja pozostają otwarte.
 
 | Twierdzenie | Ścieżka | Symbol | Stan |
 |---|---|---|---|
-| Pełna zgodność zachowanego źródła | examples/sushruth_2020_closed_gsg/dense_field_20261113/verification/verify_frozen_source_mapping.py | main |85980komórek,0różnic, bez nowego pola.|
-| Dokładna arytmetyka próbek | examples/sushruth_2020_closed_gsg/dense_field_20261113/verification/verify_frozen_source_mapping.py | exact_samples |Dyadyczne ints/Fraction z końcowym zaokrągleniem binary64.|
-| Znaki i normalizacja momentów | examples/sushruth_2020_closed_gsg/dense_field_20261113/verification/verify_frozen_source_mapping.py | recover_coefficients |Bez pobierania współczynników z Jlocal.|
 
 
 (antenna-retained-dtq-public-v2)=

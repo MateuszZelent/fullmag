@@ -4,6 +4,7 @@
 - Last updated: 2026-11-23
 - Related physics: [harmonic RF antenna CPW](0952-harmonic-rf-antenna-cpw.md)
 
+(fullwave-fit-problem-statement)=
 ## 1. Problem statement
 
 Compute complex electric and magnetic near fields of a driven antenna from a
@@ -15,6 +16,7 @@ The paper reports CST FIT. Port, termination, enclosure details, mesh,
 materials omitted from its description, monitor settings and normalization
 must remain explicit reconstruction uncertainties.
 
+(fullwave-fit-governing-equations)=
 ## 2. Physical model and units
 
 Use peak phasors and time convention exp(+iωt). A primal edge voltage e is a
@@ -33,11 +35,25 @@ R□, using σ = 1/(R□ t) is an explicit material-model choice. A gold run
 records independent provenance and has no claim to match the copper CST case.
 
 With oriented primal node-edge G, edge-face C and face-cell S incidence,
-Faraday is Ce = −iωb and Ampère is Cᵀh = j + iωd. The identities CG = 0
-and SC = 0 are independent of metric and material. The constitutive matrices
-are d = Mεe, j = Mσe and h = Mνb, where ν = 1/μ. Eliminating b gives
+```{math}
+:label: eq-fit-maxwell
+Ce = -i\omega b,\qquad C^\mathsf{T}h = j + i\omega d,\qquad CG = 0,\qquad SC = 0.
+```
 
-`(Cᵀ Mν C + iω Mσ − ω² Mε) e = 0`
+The incidence identities are independent of metric and material. The
+constitutive matrices use reluctivity ν = 1/μ.
+
+```{math}
+:label: eq-fit-metrics
+d=M_\varepsilon e,\qquad j=M_\sigma e,\qquad h=M_\nu b.
+```
+
+Eliminating b gives
+
+```{math}
+:label: eq-fit-wave-operator
+\big(C^\mathsf{T} M_\nu C + i\omega M_\sigma - \omega^2 M_\varepsilon\big)e = 0.
+```
 
 in the field interior. An impressed dual-face current jₐ on the right-hand
 side of Ampère would give −iωjₐ on the right-hand side of this second-order
@@ -45,6 +61,27 @@ system. Terminal reactions use Mσ + iωMε and current positive into the field
 domain. In each conductor cell, reconstruct J from its local σ and E.
 Report conduction and displacement currents separately where applicable.
 
+
+(fullwave-fit-symbols-and-si-units)=
+### Symbols and SI units
+
+| Symbol | Meaning | SI unit |
+| --- | --- | --- |
+| $e$ | Primal edge voltage | $\mathrm{V}$ |
+| $b$ | Primal face magnetic flux | $\mathrm{Wb}$ |
+| $d$ | Dual-face electric displacement integral | $\mathrm{C}$ |
+| $j$ | Dual-face electric current integral | $\mathrm{A}$ |
+| $h$ | Dual-edge magnetic circulation | $\mathrm{A}$ |
+| $\omega$ | Angular frequency | $\mathrm{rad\,s^{-1}}$ |
+| $i$ | Imaginary unit | $1$ |
+| $G$ | Node-to-edge incidence matrix | $1$ |
+| $C$ | Edge-to-face incidence matrix | $1$ |
+| $S$ | Face-to-cell incidence matrix | $1$ |
+| $M_\varepsilon$ | Permittivity metric | $\mathrm{F}$ |
+| $M_\sigma$ | Conductivity metric | $\mathrm{S}$ |
+| $M_\nu$ | Reluctivity metric | $\mathrm{H^{-1}}$ |
+
+(fullwave-fit-discrete-realization)=
 ## 3. Discretization and backend
 
 The CPU double-precision reference uses orthogonal, nonuniform hexahedra.
@@ -65,6 +102,9 @@ existing FEM comparison. The tied GSG return with a passive load is the
 default comparison. This enclosure is a controlled boundary condition with
 its own provenance. A waveguide eigenmode port and open boundaries require
 their own qualification.
+
+(fullwave-fit-implementation-mapping)=
+### Frequency-domain implementation
 
 Use a cotree on the primal graph with all boundary nodes contracted. Write
 the field as a sparse curl-carrying cotree part minus a nodal gradient that
@@ -90,13 +130,37 @@ record both grids, the projection error, the reference current and both
 quadratures. No GPU FIT implementation or browser execution capability is
 implied by this CPU reference.
 
+(fullwave-fit-python-api)=
 ## 4. API, runtime and provenance
+
+The CPU reference has a research CLI and internal Python interface. From
+the repository root, the following constructs a vacuum grid and checks its
+incidence identities without solving a driven field.
+
+```python
+# %%
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path("scripts").resolve()))
+from rf_fit_reference import assemble
+
+axes_m = ([0.0, 1e-3],) * 3
+fit = assemble(axes_m, conductivity_spm=0.0, relative_permittivity=1.0, frequency_hz=1e9)
+
+# %%
+assert (fit.curl @ fit.gradient).nnz == 0
+assert (fit.divergence @ fit.curl).nnz == 0
+```
 
 The reference launches from a research CLI and writes field arrays, probe
 coordinates, material and circuit configuration, terminal reactions, power
 and residuals. Record the solver family and backend, equation convention,
 grid and input hashes, active boundary model, coordinate tie convention and
 the actual complex current used for normalization.
+
+(fullwave-fit-problem-ir)=
+### Proposed native ProblemIR contract
 
 A qualified native realization should use the single antenna field stage
 described in 0952. The Python DSL should author physical geometry, materials,
@@ -108,6 +172,13 @@ The planner checks supported boundary models, connectivity, material domains
 and positive frequency. The runtime publishes stage completion and the
 accepted complex H and J with numerical provenance.
 
+(fullwave-fit-round-trip-and-failure-semantics)=
+### Round-trip and failure semantics
+
+The reference records requested intent and resolved execution in its run
+configuration. Invalid axes, material values and frequencies raise
+validation errors. Unsupported combinations remain explicit in the reference limits.
+
 Native integration will expose capabilities and measurements via the existing
 resource-first v2 session artifacts, mesh and field catalogs. Heavy vectors
 use binary transport. The unified workspace gains an EM mesh and result
@@ -115,6 +186,7 @@ representation through the same adapter and generated client. UI-authored
 port, frequency and execution intent must round-trip to the Python DSL. The
 reference phase has no public contract changes.
 
+(fullwave-fit-validation)=
 ## 5. Validation
 
 1. Verify CG and SC exactly and test geometric weights in uniform media and
@@ -152,6 +224,8 @@ reference phase has no public contract changes.
 - [ ] Native execution, Python/ProblemIR, planner, API, UI and regression tests
 - [ ] CST input provenance and independent comparison of absolute amplitudes
 
+(fullwave-fit-assumptions-and-validity)=
+(fullwave-fit-limitations)=
 ## 7. Limits and deferred work
 
 Initial support is restricted to orthogonal Cartesian, aligned materials and
@@ -161,6 +235,7 @@ coupling are separate validation stages. CST's additional algorithms and
 configuration choices affect its numerical result. Using FIT removes one
 methodological difference in the controlled benchmark.
 
+(fullwave-fit-scientific-bibliography)=
 ## 8. References
 
 - Clemens and Weiland, *Discrete Electromagnetism with the Finite Integration
@@ -182,3 +257,17 @@ methodological difference in the controlled benchmark.
 
 Use these repositories as independent method and test references, alongside
 the original FIT equations and existing Palace FEM runs.
+
+(0953-fullwave-fit-antenna-source-code-index)=
+## Source-code index
+
+| Repository path | Symbol | Role |
+| --- | --- | --- |
+| scripts/rf_fit_reference.py | _topology | Build the oriented primal incidences. |
+| scripts/rf_fit_reference.py | _material_weights | Apply the dual-volume permittivity, conductivity and reluctivity measures. |
+| scripts/rf_fit_reference.py | assemble | Validate the orthogonal grid, material values and harmonic frequency. |
+| scripts/rf_fit_reference.py | solve_ece | Solve the frequency-domain cotree system with the CPW circuit boundary. |
+| scripts/rf_fit_reference.py | sample | Recover electric and magnetic components from the edge and face integrals. |
+| scripts/test_rf_fit_reference.py | test_driven_ece_current_balance_and_local_passive_load | Check the driven circuit, terminal currents and power balance. |
+| scripts/test_rf_fit_reference.py | test_tangential_pec_cavity_discrete_eigenmode | Check the operator against a discrete cavity eigenmode. |
+| scripts/run_rf_fit_cpw.py | solve | Record the solved benchmark and configuration with the field readout. |
