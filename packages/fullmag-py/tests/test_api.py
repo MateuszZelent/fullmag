@@ -4557,7 +4557,7 @@ class ProblemApiTests(unittest.TestCase):
         study.engine("fem")
         study.domain_mesh(
             "prebuilt_domain.json",
-            region_markers={"left": 1, "right": 2},
+            region_markers={"left_geom": 1, "right_geom": 2},
             object_region_markers={"left:skyrmion_core": 3},
         )
         left = study.geometry(fm.Box(20e-9, 20e-9, 10e-9), name="left")
@@ -4565,6 +4565,12 @@ class ProblemApiTests(unittest.TestCase):
         left.Aex = 13e-12
         left.alpha = 0.1
         left.m = fm.texture.uniform(1, 0, 0)
+        left.add_region(
+            "skyrmion_core",
+            fm.Cylinder(radius=5e-9, height=10e-9),
+            region_id="left:skyrmion_core",
+            realization_policy="conformal",
+        )
         right = study.geometry(fm.Box(20e-9, 20e-9, 10e-9).translate((30e-9, 0, 0)), name="right")
         right.Ms = 800e3
         right.Aex = 13e-12
@@ -4585,8 +4591,8 @@ class ProblemApiTests(unittest.TestCase):
         self.assertEqual(
             workflow["domain_region_markers"],
             [
-                {"geometry_name": "left", "marker": 1},
-                {"geometry_name": "right", "marker": 2},
+                {"geometry_name": "left_geom", "marker": 1},
+                {"geometry_name": "right_geom", "marker": 2},
             ],
         )
         self.assertEqual(
@@ -4622,8 +4628,8 @@ class ProblemApiTests(unittest.TestCase):
         self.assertEqual(
             ir["geometry_assets"]["fem_domain_mesh_asset"]["region_markers"],
             [
-                {"geometry_name": "left", "marker": 1},
-                {"geometry_name": "right", "marker": 2},
+                {"geometry_name": "left_geom", "marker": 1},
+                {"geometry_name": "right_geom", "marker": 2},
             ],
         )
         self.assertEqual(
@@ -4633,11 +4639,20 @@ class ProblemApiTests(unittest.TestCase):
             ],
         )
 
-        rewritten = rewrite_loaded_problem_script(loaded)["rendered_source"]
-        self.assertIn(
-            'study.domain_mesh(source="prebuilt_domain.json", region_markers={"left": 1, "right": 2}, object_region_markers={"left:skyrmion_core": 3})',
-            rewritten,
+        self.assertEqual(
+            [owner["target"] for owner in workflow["domain_marker_owners"]],
+            [{"object_id": "left"}, {"object_id": "right"},
+             {"object_id": "left", "region_id": "left:skyrmion_core"}],
         )
+        rewritten = rewrite_loaded_problem_script(loaded)["rendered_source"]
+        with TemporaryDirectory() as tmp_dir:
+            path = Path(tmp_dir) / "canonical_explicit_domain_mesh.py"
+            path.write_text(rewritten, encoding="utf-8")
+            replayed = fm.load_problem_from_script(path, lightweight_assets=True)
+        replayed_workflow = replayed.problem.runtime_metadata["mesh_workflow"]
+        for field in ("domain_mesh_source", "domain_region_markers", "domain_object_region_markers",
+                      "domain_marker_owners"):
+            self.assertEqual(replayed_workflow[field], workflow[field])
 
     def test_study_domain_mesh_rejects_object_region_marker_collisions(self) -> None:
         fm.reset()

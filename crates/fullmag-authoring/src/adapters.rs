@@ -248,7 +248,7 @@ pub fn scene_document_to_script_builder(
         shared_domain_mesh_source: normalized_scene.study.shared_domain_mesh_source.clone(),
         interactive_session_requested: normalized_scene.study.interactive_session_requested,
         wait_for_solve: normalized_scene.study.wait_for_solve,
-        material_assets: Some(material_assets_metadata(scene)),
+        material_assets: (!scene.materials.is_empty()).then(|| material_assets_metadata(scene)),
         revision: scene.revision,
         backend: normalized_scene.study.backend.clone(),
         requested_backend: Some(normalized_scene.study.requested_backend.clone()),
@@ -649,7 +649,7 @@ pub fn scene_document_to_script_builder_overrides(
         geometries.push(value);
     }
     let mut overrides = serde_json::json!({
-        "material_assets": material_assets_metadata(scene),
+        "material_assets": builder.material_assets.as_ref(),
         "runtime_selection": {
             "backend": scene.study.requested_backend,
             "device": scene.study.requested_device,

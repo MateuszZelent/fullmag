@@ -2494,7 +2494,7 @@ def build_builder_from_scene_document(scene: dict[str, Any]) -> dict[str, Any]:
         "hidden_scene_object_ids": sorted(
             obj["id"] for obj in scene.get("objects") or [] if obj.get("visible") is False
         ),
-        "material_assets": material_assets_from_scene(scene),
+        "material_assets": material_assets_from_scene(scene) if materials else None,
         "couplings": scene.get("couplings") or [],
         "current_modules": [*antenna_modules, *transports],
         "excitation_analysis": excitation_analysis,
